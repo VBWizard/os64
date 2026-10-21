@@ -139,6 +139,7 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_USER_SELECT] = {"user-select", false, true},
     [GARB_WORD_BREAK] = {"word-break", true, true},
     [GARB_OVERFLOW_WRAP] = {"overflow-wrap", true, true},
+    [GARB_LETTER_SPACING] = {"letter-spacing", true, true},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -489,7 +490,7 @@ static const char *const kDirection[] = {"normal", "reverse", "alternate", "alte
                                          NULL};
 static const char *const kPlayState[] = {"running", "paused", NULL};
 static const char *const kFillMode[] = {"none", "forwards", "backwards", "both", NULL};
-// CSS UI 4 § 5.2: the shapes a cursor names.
+// CSS UI 4 § 5.1.1: the shapes a cursor names.
 static const char *const kCursor[] = {
     "auto", "default", "none", "context-menu", "help", "pointer", "progress", "wait", "cell",
     "crosshair", "text", "vertical-text", "alias", "copy", "move", "no-drop", "not-allowed",
@@ -498,8 +499,8 @@ static const char *const kCursor[] = {
     "nwse-resize", "col-resize", "row-resize", "all-scroll", "zoom-in", "zoom-out", NULL};
 // CSS UI 4 § 6.1.
 static const char *const kUserSelect[] = {"auto", "text", "none", "contain", "all", NULL};
-// CSS Text 3 § 5.2 (`break-word` is its legacy value, read as `normal`
-// beside `overflow-wrap: anywhere`) and § 5.5.
+// CSS Text 3 § 5.1 (`break-word` is its legacy value, read as `normal`
+// beside `overflow-wrap: anywhere`) and § 5.4.
 static const char *const kWordBreak[] = {"normal", "keep-all", "break-all", "break-word", NULL};
 static const char *const kOverflowWrap[] = {"normal", "break-word", "anywhere", NULL};
 // The identifiers a <custom-ident> may not be (Values 4 § 4.2): the
@@ -1970,6 +1971,7 @@ typedef enum {
     G_ANIM_KEYWORD,
     G_WILL_CHANGE,          // auto | <animateable-feature>#
     G_CURSOR,               // [[<url> | image-set()] [<x> <y>]?,]* <keyword>
+    G_SPACING_TEXT,         // normal | <length>, a unitless one in quirks
 } Grammar;
 
 typedef struct {
@@ -2050,6 +2052,9 @@ static const Longhand kLonghands[] = {
     {GARB_WILL_CHANGE, G_WILL_CHANGE, NULL},
     {GARB_CURSOR, G_CURSOR, kCursor}, {GARB_USER_SELECT, G_KEYWORDS, kUserSelect},
     {GARB_WORD_BREAK, G_KEYWORDS, kWordBreak}, {GARB_OVERFLOW_WRAP, G_KEYWORDS, kOverflowWrap},
+    // Text 3 § 7.2; the Quirks standard's unitless lengths include it (§
+    // 3.2). Text 4's percentage of the font size is not read.
+    {GARB_LETTER_SPACING, G_SPACING_TEXT, NULL},
 };
 
 static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out);
@@ -2752,7 +2757,7 @@ static bool layered(const Longhand *l)
            l->g == G_EASING || l->g == G_ITERATIONS || l->g == G_ANIM_KEYWORD;
 }
 
-// `cursor` (CSS UI 4 § 5.2): pictures to try, each a url or an image-set()
+// `cursor` (CSS UI 4 § 5.1.1): pictures to try, each a url or an image-set()
 // with an optional hotspot of two numbers and a comma after it, then the
 // keyword the pointer falls back to. The pictures are read and dropped:
 // what is kept is the keyword.
@@ -3051,6 +3056,8 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
     case G_ITERATIONS: return iterations(s, c, out);
     case G_WILL_CHANGE: return will_change(s, c, out);
     case G_CURSOR: return cursor(s, c, l->words, out);
+    case G_SPACING_TEXT:
+        return kw_or_dim(s, c, kNormal, ACCEPT_LENGTH, true, true, out);
     }
     return false;
 }
@@ -3477,7 +3484,7 @@ static const struct {
     const char *name, *twin;
     bool modern;
 } kAliases[] = {
-    {"word-wrap", "overflow-wrap", true},       // Text 3 § 5.5
+    {"word-wrap", "overflow-wrap", true},       // Text 3 § 5.4
     {"-webkit-background-clip", "background-clip", false},
     {"-webkit-transform", "transform", false},
     {"-webkit-transform-origin", "transform-origin", false},

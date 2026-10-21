@@ -104,15 +104,17 @@ typedef enum {
     // Will Change 1 § 2: the KEYWORD auto, or what it names, each a STRING
     // in lowercase (a list, as the animations' are).
     GARB_WILL_CHANGE,
-    // CSS UI 4 § 5.2: the KEYWORD a pointer over the box is shaped as; the
+    // CSS UI 4 § 5.1.1: the KEYWORD a pointer over the box is shaped as; the
     // pictures and their hotspots written before it are read, and only the
     // keyword they fall back to is kept.
     GARB_CURSOR,
     // CSS UI 4 § 6.1: a KEYWORD.
     GARB_USER_SELECT,
-    // CSS Text 3 § 5.2 and § 5.5, each a KEYWORD; `word-wrap` is the
+    // CSS Text 3 § 5.1 and § 5.4, each a KEYWORD; `word-wrap` is the
     // second's legacy name.
     GARB_WORD_BREAK, GARB_OVERFLOW_WRAP,
+    // CSS Text 3 § 7.2: the KEYWORD normal, or a LENGTH.
+    GARB_LETTER_SPACING,
     GARB_NPROPS
 } garb_prop_t;
 

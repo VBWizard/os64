@@ -1080,7 +1080,7 @@ OUT: invalid
 IN: will-change: 3px
 OUT: invalid
 
-# ── cursor (CSS UI 4 § 5.2): the keyword a pointer falls back to, the
+# ── cursor (CSS UI 4 § 5.1.1): the keyword a pointer falls back to, the
 # pictures before it read and not kept ──
 IN: cursor: pointer
 OUT: cursor: pointer
@@ -1123,7 +1123,7 @@ OUT: invalid
 IN: user-select: visible
 OUT: invalid
 
-# ── word-break and overflow-wrap (Text 3 § 5.2, § 5.5) ──
+# ── word-break and overflow-wrap (Text 3 § 5.1, § 5.4) ──
 IN: word-break: break-all
 OUT: word-break: break-all
 IN: word-break: Keep-All
@@ -1140,8 +1140,28 @@ IN: overflow-wrap: break-word
 OUT: overflow-wrap: break-word
 IN: overflow-wrap: break-all
 OUT: invalid
-# word-wrap is overflow-wrap's legacy name (Text 3 § 5.5).
+# word-wrap is overflow-wrap's legacy name (Text 3 § 5.4).
 IN: word-wrap: break-word
 OUT: overflow-wrap: break-word
 IN: word-wrap: anywhere anywhere
+OUT: invalid
+
+# ── letter-spacing (Text 3 § 7.2: Text 4's percentage is not read) ──
+IN: letter-spacing: normal
+OUT: letter-spacing: normal
+IN: letter-spacing: 0
+OUT: letter-spacing: 0px
+IN: letter-spacing: -0.05em
+OUT: letter-spacing: -0.05em
+IN: letter-spacing: 10%
+OUT: invalid
+IN: letter-spacing: calc(2px + 1em)
+OUT: letter-spacing: calc(2px + 1em)
+IN: letter-spacing: 2
+OUT: invalid
+IN: quirks letter-spacing: 2
+OUT: letter-spacing: 2px
+IN: letter-spacing: normal 10px
+OUT: invalid
+IN: letter-spacing: auto
 OUT: invalid
