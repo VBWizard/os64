@@ -3,12 +3,35 @@
 # [excluded] are written by hand; tools/test_yonder_wpt_host.sh css/cssom-view --update
 # rewrites [passing].
 [required]
+# Slice 1b: the view's scroll members and scrollingElement. Each fails with
+# the switch off.
+HTMLBody-ScrollArea_quirksmode.html	document.scrollingElement should be body element in quirks.
+HTMLBody-ScrollArea_quirksmode.html	scrollingElement in quirks should be body if any of document and body has a visible overflow.
+HTMLBody-ScrollArea_quirksmode.html	scrollingElement in quirks should be null when body is potentially scrollable.
+scroll-overflow-clip-quirks-001.html	CSSOM scrollingElement reflects the propagated scroll to viewport correctly
+window-scroll-arguments.html	scroll with a valid ScrollToOptions argument
+window-scroll-arguments.html	scrollBy with a valid ScrollToOptions argument
+window-scroll-arguments.html	scrollTo with 0 arguments
+window-scroll-arguments.html	scrollTo with a valid ScrollToOptions argument
 [excluded]
+MediaQueryList-addListener-handleEvent.html	needs iframe: resources/matchMedia.js makes each list in one and changes it by resizing it (the lists' events are proved by the DOM and scripted-page hosts)
+MediaQueryList-addListener-removeListener.html	needs iframe: each list is made in one and changed by resizing it
+MediaQueryList-change-event-matches-value.html	needs iframe: each list is made in one and changed by resizing it
+MediaQueryList-extends-EventTarget-interop.html	needs iframe: each list is made in one and changed by resizing it
+MediaQueryList-extends-EventTarget.html	needs iframe: each list is made in one and changed by resizing it
+MediaQueryListEvent.html	needs iframe: its change events come from resizing one
+matchMedia-display-none-iframe.html	needs iframe
+matchMedia.html	needs iframe: half its tests ask an iframe's window, so the page never ends (its first five, on window, pass)
+scrollingElement.html	needs iframe: every case is a document in one
 [passing]
 GetBoundingRect.html	getBoundingClientRect
 HTMLBody-ScrollArea_quirksmode.html	Ensure that body element is loaded.
 HTMLBody-ScrollArea_quirksmode.html	Ensure that style.overflowY can be set properly.
+HTMLBody-ScrollArea_quirksmode.html	document.scrollingElement should be body element in quirks.
+HTMLBody-ScrollArea_quirksmode.html	scrollingElement in quirks should be body if any of document and body has a visible overflow.
+HTMLBody-ScrollArea_quirksmode.html	scrollingElement in quirks should be null when body is potentially scrollable.
 client-props-inline-list-item.html	client* returns the same for non-replaced inlines regardless of list-item-ness
+client-props-root.html	client* properties on the root element
 client-props-zoom.html	Client properties for elements with css zoom
 client-props-zoom.html	Client properties for elements with css zoom 1
 cssom-geometryutils-element-types.html	getBoxQuads() returns quads for exposed CSSPseudoElement objects
@@ -83,6 +106,8 @@ offsetTopLeftInScrollableParent.html	Margins on child and parent, border on chil
 offsetTopLeftInScrollableParent.html	Margins on child and parent, border on child and parent
 offsetTopLeftInScrollableParent.html	Margins on child and parent, border on child and parent, padding on child
 offsetTopLeftInScrollableParent.html	Margins on child and parent, border on child and parent, padding on child and parent
+scroll-overflow-clip-quirks-001.html	CSSOM scrollingElement reflects the propagated scroll to viewport correctly
+scroll-overflow-clip-quirks-002.html	CSSOM scrollingElement reflects the propagated scroll to viewport correctly
 scroll-zoom.html	scroll properties for elements with css zoom
 scrollWidthHeight-contain-layout.html	scroll{Width,Height} should match with contain: layout for display: block, overflow: auto, padding: 0, border: 0
 scrollWidthHeight-contain-layout.html	scroll{Width,Height} should match with contain: layout for display: block, overflow: auto, padding: 0, border: 3px solid
@@ -222,3 +247,9 @@ table-offset-props.html	Bottom caption
 table-offset-props.html	Overall test to make sure there are no exceptions
 table-offset-props.html	Table with padding
 table-scroll-props.html	Overall test to make sure there are no exceptions
+window-scroll-arguments.html	scroll with 0 arguments
+window-scroll-arguments.html	scroll with a valid ScrollToOptions argument
+window-scroll-arguments.html	scrollBy with 0 arguments
+window-scroll-arguments.html	scrollBy with a valid ScrollToOptions argument
+window-scroll-arguments.html	scrollTo with 0 arguments
+window-scroll-arguments.html	scrollTo with a valid ScrollToOptions argument

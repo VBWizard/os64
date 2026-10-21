@@ -3,5 +3,137 @@
 # [excluded] are written by hand; tools/test_yonder_wpt_host.sh css/mediaqueries --update
 # rewrites [passing].
 [required]
+# Slice 1b: matchMedia, its lists' media as CSSOM serialises them and
+# their matches. Each fails with the switch off.
+aspect-ratio-serialization.html	<ratio> serializes with spaces around the integer.
+match-media-parsing.html	Test parsing '   all   ' with matchMedia
+match-media-parsing.html	Test parsing '  color ), ( color' with matchMedia
+match-media-parsing.html	Test parsing ' ( color  )  ' with matchMedia
+match-media-parsing.html	Test parsing ' foo,' with matchMedia
+match-media-parsing.html	Test parsing '' with matchMedia
+match-media-parsing.html	Test parsing '(color' with matchMedia
+match-media-parsing.html	Test parsing '(resolution: 600dpi)' with matchMedia
+match-media-parsing.html	Test parsing ',,' with matchMedia
+match-media-parsing.html	Test parsing 'all,all' with matchMedia
+match-media-parsing.html	Test parsing 'color)' with matchMedia
+prefers-color-scheme.html	Check that prefer-color-scheme evaluates to true in the boolean context
+prefers-reduced-motion.html	Check that no-preference evaluates to false in the boolean context
 [excluded]
 [passing]
+aspect-ratio-serialization.html	<ratio> serializes with spaces around the integer.
+display-mode.html	Check that display-mode evaluates to true in the boolean context
+display-mode.html	Should be unknown: '(display-mode: 0)'
+display-mode.html	Should be unknown: '(display-mode: 1%)'
+display-mode.html	Should be unknown: '(display-mode: 10px)'
+display-state.tentative.html	Should be unknown: '(display-state: 0)'
+display-state.tentative.html	Should be unknown: '(display-state: 1%)'
+display-state.tentative.html	Should be unknown: '(display-state: 10px)'
+display-state.tentative.html	Should be unknown: '(display-state: none)'
+display-state.tentative.html	Should be unknown: '(display-state: random)'
+dynamic-range.html	Check that dynamic-range always matches 'standard'
+dynamic-range.html	Check that dynamic-range evaluates to true in the boolean context
+dynamic-range.html	Check that video-dynamic-range is not 'invalid'
+dynamic-range.html	Should be unknown: '(dynamic-range: 0)'
+dynamic-range.html	Should be unknown: '(dynamic-range: 10px)'
+dynamic-range.html	Should be unknown: '(video-dynamic-range: 0)'
+dynamic-range.html	Should be unknown: '(video-dynamic-range: 10px)'
+dynamic-range.html	Should be unknown: '(video-dynamic-range: invalid)'
+forced-colors.html	Check that none evaluates to false in the boolean context
+forced-colors.html	Should be unknown: '(forced-colors: 0)'
+forced-colors.html	Should be unknown: '(forced-colors: 10px)'
+forced-colors.html	Should be unknown: '(forced-colors: active 0)'
+forced-colors.html	Should be unknown: '(forced-colors: active/none)'
+forced-colors.html	Should be unknown: '(forced-colors: none active)'
+inverted-colors.html	Check that invalid evaluates to false
+inverted-colors.html	Check that none evaluates to false in the boolean context
+inverted-colors.html	Should be unknown: '(inverted-colors: 0)'
+inverted-colors.html	Should be unknown: '(inverted-colors: 10px)'
+inverted-colors.html	Should be unknown: '(inverted-colors: none inverted)'
+inverted-colors.html	Should be unknown: '(inverted-colors: none/inverted)'
+match-media-parsing.html	Test parsing '   all   ' with matchMedia
+match-media-parsing.html	Test parsing '  ,  ,  ' with matchMedia
+match-media-parsing.html	Test parsing '  color ), ( color' with matchMedia
+match-media-parsing.html	Test parsing '  color)' with matchMedia
+match-media-parsing.html	Test parsing ' ' with matchMedia
+match-media-parsing.html	Test parsing ' ( color   ' with matchMedia
+match-media-parsing.html	Test parsing ' ( color  )  ' with matchMedia
+match-media-parsing.html	Test parsing ' (color)' with matchMedia
+match-media-parsing.html	Test parsing ' , ' with matchMedia
+match-media-parsing.html	Test parsing ' all , all ' with matchMedia
+match-media-parsing.html	Test parsing ' all' with matchMedia
+match-media-parsing.html	Test parsing ' foo ' with matchMedia
+match-media-parsing.html	Test parsing ' foo,' with matchMedia
+match-media-parsing.html	Test parsing '' with matchMedia
+match-media-parsing.html	Test parsing '(color' with matchMedia
+match-media-parsing.html	Test parsing '(color)' with matchMedia
+match-media-parsing.html	Test parsing '(max-resolution: 7x)' with matchMedia
+match-media-parsing.html	Test parsing '(min-resolution: 1x)' with matchMedia
+match-media-parsing.html	Test parsing '(resolution: 2dppx)' with matchMedia
+match-media-parsing.html	Test parsing '(resolution: 2x)' with matchMedia
+match-media-parsing.html	Test parsing '(resolution: 600dpi)' with matchMedia
+match-media-parsing.html	Test parsing '(resolution: 77dpcm)' with matchMedia
+match-media-parsing.html	Test parsing ',' with matchMedia
+match-media-parsing.html	Test parsing ',,' with matchMedia
+match-media-parsing.html	Test parsing 'all' with matchMedia
+match-media-parsing.html	Test parsing 'all,all' with matchMedia
+match-media-parsing.html	Test parsing 'color)' with matchMedia
+navigation-controls.tentative.html	Should be unknown: '(navigation-controls: back-button/none)'
+navigation-controls.tentative.html	Should be unknown: '(navigation-controls: none back-button)'
+overflow-media-features.html	Check that overflow-block: none doesn't match non printing documents
+overflow-media-features.html	Check that overflow-block: paged doesn't match non printing documents
+overflow-media-features.html	Check that overflow-block: scroll always matches non printing documents
+overflow-media-features.html	Check that overflow-inline: none doesn't match non printing documents
+overflow-media-features.html	Check that overflow-inline: scroll always matches non printing documents
+overflow-media-features.html	Should be unknown: '(overflow-block: 0)'
+overflow-media-features.html	Should be unknown: '(overflow-block: 10px)'
+overflow-media-features.html	Should be unknown: '(overflow-block: ?)'
+overflow-media-features.html	Should be unknown: '(overflow-inline: 0)'
+overflow-media-features.html	Should be unknown: '(overflow-inline: 10px)'
+overflow-media-features.html	Should be unknown: '(overflow-inline: ?)'
+overflow-media-features.html	Should be unknown: 'overflow-block'
+overflow-media-features.html	Should be unknown: 'overflow-inline'
+prefers-color-scheme.html	Check that prefer-color-scheme evaluates to true in the boolean context
+prefers-color-scheme.html	Should be unknown: '(prefers-color-scheme: 0)'
+prefers-color-scheme.html	Should be unknown: '(prefers-color-scheme: 10px)'
+prefers-color-scheme.html	Should be unknown: '(prefers-color-scheme: dark 0)'
+prefers-color-scheme.html	Should be unknown: '(prefers-color-scheme: dark light)'
+prefers-color-scheme.html	Should be unknown: '(prefers-color-scheme: light/dark)'
+prefers-contrast.html	Check boolean context evaluation.
+prefers-contrast.html	Should be unknown: '(prefers-contrast > increase)'
+prefers-contrast.html	Should be unknown: '(prefers-contrast: forced high)'
+prefers-contrast.html	Should be unknown: '(prefers-contrast: forced low)'
+prefers-contrast.html	Should be unknown: '(prefers-decreased-contrast)'
+prefers-contrast.html	Should be unknown: '(prefers-increased-contrast)'
+prefers-reduced-data.html	Check that invalid evaluates to false
+prefers-reduced-data.html	Should be unknown: '(prefers-reduced-data: 0)'
+prefers-reduced-data.html	Should be unknown: '(prefers-reduced-data: 10px)'
+prefers-reduced-data.html	Should be unknown: '(prefers-reduced-data: no-preference reduce)'
+prefers-reduced-data.html	Should be unknown: '(prefers-reduced-data: no-preference/reduce)'
+prefers-reduced-data.html	Should be unknown: '(prefers-reduced-data: none)'
+prefers-reduced-data.html	Should be unknown: '(prefers-reduced-data: reduced)'
+prefers-reduced-motion.html	Check that no-preference evaluates to false in the boolean context
+prefers-reduced-motion.html	Should be unknown: '(prefers-reduced-motion: 0)'
+prefers-reduced-motion.html	Should be unknown: '(prefers-reduced-motion: 10px)'
+prefers-reduced-motion.html	Should be unknown: '(prefers-reduced-motion: no-preference reduce)'
+prefers-reduced-motion.html	Should be unknown: '(prefers-reduced-motion: no-preference/reduce)'
+prefers-reduced-transparency.html	Check that invalid evaluates to false
+prefers-reduced-transparency.html	Check that no-preference evaluates to false in the boolean context
+prefers-reduced-transparency.html	Should be unknown: '(prefers-reduced-transparency: 0)'
+prefers-reduced-transparency.html	Should be unknown: '(prefers-reduced-transparency: 10px)'
+prefers-reduced-transparency.html	Should be unknown: '(prefers-reduced-transparency: no-preference reduce)'
+prefers-reduced-transparency.html	Should be unknown: '(prefers-reduced-transparency: no-preference/reduce)'
+resizable.tentative.html	Should be unknown: '(resizable: 0)'
+resizable.tentative.html	Should be unknown: '(resizable: 1%)'
+resizable.tentative.html	Should be unknown: '(resizable: 1)'
+resizable.tentative.html	Should be unknown: '(resizable: 10px)'
+resizable.tentative.html	Should be unknown: '(resizable: none)'
+resizable.tentative.html	Should be unknown: '(resizable: random)'
+scripting.html	Should be unknown: '(scripting: 0)'
+scripting.html	Should be unknown: '(scripting: 10px)'
+update-media-feature.html	Check that update always matches non printing documents
+update-media-feature.html	Check that update: fast always matches fast displays
+update-media-feature.html	Check that update: none doesn't match fast displays
+update-media-feature.html	Check that update: slow doesn't match fast displays
+update-media-feature.html	Should be unknown: '(update: 0)'
+update-media-feature.html	Should be unknown: '(update: 10px)'
+update-media-feature.html	Should be unknown: '(update: ?)'

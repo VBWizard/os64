@@ -3,9 +3,39 @@
 # [excluded] are written by hand; tools/test_yonder_wpt_host.sh css/cssom --update
 # rewrites [passing].
 [required]
+# Slice 1b: getComputedStyle's declaration: live, read-only, empty for a
+# detached element, in CSSOM's order, resolved values. Each fails with the
+# switch off.
+computed-style-001.html	inherited_property_values
+computed-style-001.html	property_values
+computed-style-001.html	relative_property_values
+computed-style-005.html	absolute_computed_left_and_right
+computed-style-005.html	absolute_computed_margins
+computed-style-005.html	relative_computed_left_and_right
+computed-style-005.html	relative_computed_margins
+cssstyledeclaration-csstext.html	cssText on computed style declaration returns the empty string
+getComputedStyle-basic.html	Sanity check
+getComputedStyle-basic.html	cssText
+getComputedStyle-detached-subtree.html	getComputedStyle returns no style for detached element
+getComputedStyle-important.html	getComputedStyle should return !important stylesheet value over inline style
+getComputedStyle-line-height.html	line-height: 1
+getComputedStyle-line-height.html	line-height: 10px
+getComputedStyle-line-height.html	line-height: normal
+getComputedStyle-live.html	getComputedStyle() returns live values
+getComputedStyle-math-function-percentage.html	getComputedStyle() returns computed value for width: 50%
+getComputedStyle-mutations.html	Assigning to attribute updates the computed style
+getComputedStyle-property-order.html	Computed style properties should be sorted lexicographically
 [excluded]
 [passing]
 StyleSheet-properties.html	StyleSheet and CSSStyleSheet properties
+computed-style-001.html	inherited_property_values
+computed-style-001.html	property_values
+computed-style-001.html	relative_property_values
+computed-style-005.html	absolute_computed_left_and_right
+computed-style-005.html	absolute_computed_margins
+computed-style-005.html	relative_computed_left_and_right
+computed-style-005.html	relative_computed_margins
+computed-style-set-property.html	Computed style parent (should be null)
 css-style-attr-decl-block.html	Changes to style attribute should reflect on CSS declaration block
 css-style-attr-decl-block.html	Expansion of all:unset and all:revert treated identically
 css-style-attr-decl-block.html	Style attribute should create CSS declaration block based on its content
@@ -95,11 +125,112 @@ cssstyledeclaration-all-shorthand.html	getPropertyValue('all') returns empty str
 cssstyledeclaration-all-shorthand.html	removeProperty('all') removes an 'all' declaration
 cssstyledeclaration-csstext-all-shorthand.html	all:initial should not exclude custom from cssText
 cssstyledeclaration-csstext-final-delimiter.html	inline style - text - delimiters - zero declarations
+cssstyledeclaration-csstext.html	cssText on computed style declaration returns the empty string
 cssstyledeclaration-csstext.html	uppercase property
 cssstyledeclaration-mutability.html	HTMLElement's CSSStyleDeclaration is mutable
 cssstyledeclaration-removeProperty-all.html	CSSStyleDeclaration.removeProperty("all") 1
 cssstyledeclaration-setter-attr.html	Setting an invalid property via the declaration setter doesn't create a declaration
 cssstyledeclaration-setter-attr.html	Setting an invalid value via the declaration setter doesn't create a declaration
+cssstyledeclaration-setter-form-controls.html	button element
+cssstyledeclaration-setter-form-controls.html	button input element
+cssstyledeclaration-setter-form-controls.html	checkbox input element
+cssstyledeclaration-setter-form-controls.html	radio input element
+cssstyledeclaration-setter-form-controls.html	select element
+cssstyledeclaration-setter-form-controls.html	submit input element
+cssstyledeclaration-setter-form-controls.html	text input element
+cssstyledeclaration-setter-form-controls.html	textarea element
+getComputedStyle-basic.html	Sanity check
+getComputedStyle-basic.html	cssText
+getComputedStyle-detached-subtree.html	getComputedStyle returns no style for detached element
+getComputedStyle-getter-v-properties.tentative.html	font-size
+getComputedStyle-getter-v-properties.tentative.html	margin-top
+getComputedStyle-getter-v-properties.tentative.html	max-width
+getComputedStyle-getter-v-properties.tentative.html	width
+getComputedStyle-important.html	getComputedStyle should return !important stylesheet value over inline style
+getComputedStyle-important.html	getComputedStyle should return !important stylesheet value rather than the subsequent stylesheet value
+getComputedStyle-layout-dependent-removed-ib-sibling.html	getComputedStyle() should return the correct used value for nodes that have had an IB-split sibling removed
+getComputedStyle-layout-dependent-replaced-into-ib-split.html	getComputedStyle() should return used value correctly for nodes just inserted into the document, even if they're in an IB-split
+getComputedStyle-line-height.html	line-height: 1
+getComputedStyle-line-height.html	line-height: 10px
+getComputedStyle-line-height.html	line-height: normal
+getComputedStyle-live.html	getComputedStyle() returns live values
+getComputedStyle-math-function-percentage.html	getComputedStyle() returns computed value for font-size: calc(100% + 20px)
+getComputedStyle-math-function-percentage.html	getComputedStyle() returns computed value for font-size: calc(50% + 1rem)
+getComputedStyle-math-function-percentage.html	getComputedStyle() returns computed value for margin-left: calc(50% - 0.5rem)
+getComputedStyle-math-function-percentage.html	getComputedStyle() returns computed value for width: 50%
+getComputedStyle-math-function-percentage.html	getComputedStyle() returns computed value for width: calc(100% - 1em)
+getComputedStyle-math-function-percentage.html	getComputedStyle() returns computed value for width: calc(100% - 1rem)
+getComputedStyle-math-function-percentage.html	getComputedStyle() returns computed value for width: calc(2rem + 8px)
+getComputedStyle-mutations.html	Assigning to attribute updates the computed style
+getComputedStyle-mutations.html	Emptying an element updates the computed style
+getComputedStyle-mutations.html	Initial style value
+getComputedStyle-mutations.html	Inserting an element updates the computed style
+getComputedStyle-mutations.html	Removing an attribute updates the computed style
+getComputedStyle-mutations.html	Removing an element updates the computed style
+getComputedStyle-mutations.html	Replacing an element updates the computed style
+getComputedStyle-mutations.html	Setting an attribute updates the computed style
+getComputedStyle-pointerEvents.html	Body element has the initial value for pointerEvents
+getComputedStyle-pointerEvents.html	Child element inherits the pointerEvents value from its parent
+getComputedStyle-pointerEvents.html	Parent element returns the directly specified value for pointerEvents
+getComputedStyle-property-order.html	Computed style properties should be sorted lexicographically
+getComputedStyle-pseudo-checkmark.html	Resolution of width is correct when pseudo-element argument is ignored (due to no colon)
+getComputedStyle-pseudo-checkmark.html	Resolution of width is correct when pseudo-element argument is ignored (due to single-colon)
+getComputedStyle-pseudo-class.html	getComputedStyle should return the default style, not :hover style
+getComputedStyle-pseudo-picker-icon.html	Resolution of width is correct when pseudo-element argument is ignored (due to single-colon)
+getComputedStyle-pseudo-picker.html	Invalid pseudo-element should return empty style: ::picker
+getComputedStyle-pseudo-picker.html	Invalid pseudo-element should return empty style: ::picker( )
+getComputedStyle-pseudo-picker.html	Invalid pseudo-element should return empty style: ::picker()
+getComputedStyle-pseudo-picker.html	Invalid pseudo-element should return empty style: ::picker(div)
+getComputedStyle-pseudo-picker.html	Invalid pseudo-element should return empty style: ::picker(select)a
+getComputedStyle-pseudo-picker.html	Invalid pseudo-element should return empty style: :picker(select)
+getComputedStyle-pseudo-shadow.html	getComputedStyle() returns an empty declaration for ::part(foo)
+getComputedStyle-pseudo-shadow.html	getComputedStyle() returns an empty declaration for ::slotted(foo)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::before(test)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::highlight
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::highlight (name)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::highlight(
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::highlight($)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::highlight()
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::highlight(1)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::highlight(name)a
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::view-transition-group(*)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::view-transition-image-pair(*)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::view-transition-new(*)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::view-transition-old(*)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: :highlight(name)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: :view-transition-group(name)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: :view-transition-image-pair(name)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: :view-transition-new(name)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: :view-transition-old(name)
+getComputedStyle-pseudo.html	Prefixed ::-webkit-file-upload-button does not resolve in getComputedStyle
+getComputedStyle-pseudo.html	Resolution of width is correct when pseudo-element argument is ignored (due to no colon)
+getComputedStyle-pseudo.html	Resolution of width is correct when pseudo-element argument is invalid (due to a trailing token)
+getComputedStyle-pseudo.html	Unknown pseudo-elements
+getComputedStyle-resolved-colors.html	The resolved value for 'background-color' is the used value
+getComputedStyle-resolved-colors.html	The resolved value for 'border-bottom-color' is the used value
+getComputedStyle-resolved-colors.html	The resolved value for 'border-left-color' is the used value
+getComputedStyle-resolved-colors.html	The resolved value for 'border-right-color' is the used value
+getComputedStyle-resolved-colors.html	The resolved value for 'border-top-color' is the used value
+getComputedStyle-resolved-colors.html	The resolved value for 'color' is the used value
+getComputedStyle-resolved-min-max-clamping.html	Resolved value of width / height when there's no used value isn't clamped by min/max properties
+getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="block-with-degenerate-aspect-ratio"
+getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="block-with-two-part-degenerate-aspect-ratio"
+getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="block-with-two-part-valid-aspect-ratio"
+getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="block-with-valid-aspect-ratio"
+getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="flex-item-column"
+getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="flex-item-row"
+getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="grid-item"
+getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="inline-with-degenerate-aspect-ratio"
+getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="inline-with-valid-aspect-ratio"
+getComputedStyle-style-element-updates.html	Removing the inserted CSS element updates the computed style back to original value
+getComputedStyle-style-element-updates.html	Sanity check: getComputedStyle works as expected
+getComputedStyle-visibility-nominal-case.html	Real check: getComputedStyle returns hidden visibility
+getComputedStyle-visibility-nominal-case.html	Sanity check: getComputedStyle returns apparent visibility
+getComputedStyle-visibility-override.html	Sanity check: Parent is actually visibly hidden
+getComputedStyle-visibility-override.html	computed visibility can be visible even if the parent is not
+getComputedStyle-visibility-unset.html	Sanity check: Parent is actually visibly hidden
+getComputedStyle-visibility-unset.html	computed visibility gets unset and inherits from parent
+getComputedStyle-width-scroll.tentative.html	getComputedStyle() round-trips in presence of scrollbars
 historical.html	Historical CSSStyleDeclaration member: getPropertyCSSValue
 historical.html	Historical CSSStyleDeclaration member: setPropertyPriority
 historical.html	Historical CSSStyleDeclaration member: setPropertyValue
@@ -115,8 +246,21 @@ historical.html	Historical interface: RGBColor
 historical.html	Historical interface: Rect
 inline-style-001.html	CSSStyleDeclaration_accessible
 inline-style-001.html	read
+mediaquery-sort-dedup.html	Media queries are not deduplicated
+mediaquery-sort-dedup.html	Media queries are not sorted lexicographically
 serialization-CSSDeclaration-with-important.html	Inline style declaration without whitespace between '!' and 'important'.
 serialization-CSSDeclaration-with-important.html	Style set dynamically via cssText without whitespace between '!' and 'important'.
+serialize-all-longhands.html	Computed style
+serialize-custom-props.html	z-index can take a 12-digit integer
+serialize-custom-props.html	z-index can take a 25-digit integer
+serialize-custom-props.html	z-index can take a 4-digit integer
+serialize-custom-props.html	z-index can take a 6-digit integer
+serialize-custom-props.html	z-index can take a 8-digit integer
+serialize-custom-props.html	z-index can take a custom property set to a 12-digit integer
+serialize-custom-props.html	z-index can take a custom property set to a 25-digit integer
+serialize-custom-props.html	z-index can take a custom property set to a 4-digit integer
+serialize-custom-props.html	z-index can take a custom property set to a 6-digit integer
+serialize-custom-props.html	z-index can take a custom property set to a 8-digit integer
 serialize-values.html	background-color: black
 serialize-values.html	background-color: inherit
 serialize-values.html	background-color: red
@@ -461,6 +605,13 @@ style-background-repeat.html	1 value
 style-background-repeat.html	Sanity check
 style-backgroundcolor-table-row.html	CSSOM: Setting style.backgroundColor on table rows
 style-backgroundimage-lineargradient.html	CSSOM: Setting style.backgroundImage
+style-color-values.html	Color keyword
+style-color-values.html	Global keyword
+style-color-values.html	Sanity check
 style-color.html	Setting a color with a decimal transparency should update the style
 style-color.html	Setting a mixed percent and value color should NOT update the style
+style-element-insertion-removal-computed.html	Styles should be recomputed correctly after a <style> element is removed.
 style-global-variable.html	Setting CSS global variables
+system-color-inherit.html	Dynamically override inherited color
+system-color-inherit.html	Test color inheritance
+system-color-lowercase.html	Color with upper cased kelvin sign
