@@ -1,0 +1,10 @@
+# WPT's user-timing in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh user-timing --update
+# rewrites [passing].
+[required]
+[excluded]
+[passing]
+invoke_without_parameter.html	window.performance.mark() throws a TypeError exception when invoke without a parameter.
+invoke_without_parameter.html	window.performance.measure() throws a TypeError exception when invoke without a parameter.
+mark_exceptions.html	window.performance.mark() throws a TypeError exception.
