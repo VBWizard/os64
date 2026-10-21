@@ -66,13 +66,14 @@
 //                                filename grows the day the scan does)
 //   /sys/bus/pci/00:1f.3         the function, one "key: value" fact per line
 //   /sys/cpu/                    the processors: "count", then one directory
-//                                per core, named by core number
-//   /sys/cpu/count               how many cores the scheduler runs, bare
-//   /sys/cpu/<n>/time            the core's CPU-time ledger (was /proc/cores
+//                                per CPU, named by CPU number
+//   /sys/cpu/count               how many CPUs the scheduler runs, bare
+//   /sys/cpu/<n>/time            the CPU's time ledger (was /proc/cores
 //                                until 2026-08-12 — a machine fact wearing a
 //                                process-tree address; top(1) followed it here)
-//   /sys/cpu/<n>/state           the roster bits that can strike a core off
-//                                the schedule — READ, side-effect free, no NMI
+//   /sys/cpu/<n>/state           its APIC ID, and the bits that can strike a
+//                                CPU off the schedule — READ, side-effect
+//                                free, no NMI
 //   /sys/cpu/<n>/probe           WRITE "probe": fire a diagnostic NMI at the
 //                                core.  READ: the last snapshot, rendered.
 //   /sys/net/                    the networking view: "ip", "dhcp", "tcp",
@@ -164,7 +165,7 @@
 #include "ata.h"      // eATADeviceType — /sys/block names devices by bus
 #include "memcmp.h"   // the /sys/block mounted-at GUID match
 #include "scheduler.h"              // mp_inScheduler, mp_lastIretqRIP
-#include "smp.h"                    // core_local_storage_t, kMPCoreCount
+#include "smp.h"                    // core_local_storage_t, kCPUCount
 #include "smp_core.h"               // get_core_local_storage_for_core, mpAcctSettleAll
 #include "nmi_probe.h"              // the probe trigger behind cpu/<n>/probe
 #include "driver/block/block_cache.h"   // /sys/cache — the block cache's own numbers
@@ -443,7 +444,7 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		// core that exists — "/cpu/9" on an 8-core machine is a name that
 		// does not exist, same as a task ID /proc never issued.
 		uint64_t n;
-		if (!synth_parse_u64(comp, &n) || n >= kMPCoreCount)
+		if (!synth_parse_u64(comp, &n) || n >= kCPUCount)
 			return;
 		out->cpu = (uint32_t)n;
 		if (!synth_next_component(path, &pos, comp, sizeof(comp)))
@@ -722,10 +723,9 @@ static void sys_gen_pci_device(synth_text_t *t, const sys_pci_view_t *v)
 }
 
 // ── The cpu generators ──────────────────────────────────────────────────────
-// Core numbers here are APIC IDs — the standing house convention
-// (kCoreLocalStorage, kIdleTasks and the mp_* arrays are all indexed by it,
-// and init_SMP brings cores up 0..kMPCoreCount-1 contiguous). If discontiguous
-// APIC IDs ever arrive, every one of those arrays learns together.
+// <n> is a CPU number (cpu_roster.h), dense 0..kCPUCount-1 — what every
+// per-CPU table in the kernel is indexed by. The APIC ID is a fact ABOUT a
+// CPU, and the state file says it.
 
 // TSC cycles → microseconds, at the read boundary. Raw cycles never leave
 // the kernel (the ABI speaks TIME — same doctrine as sleep's milliseconds):
@@ -741,7 +741,7 @@ static void sys_gen_cpu_count(synth_text_t *t)
 	// Bare number, newline — the filename already says what it counts, and
 	// a script wants the value, not a parse (Linux's cpu*/online files set
 	// the precedent).
-	synth_text_addf(t, "%u\n", (unsigned)kMPCoreCount);
+	synth_text_addf(t, "%u\n", (unsigned)kCPUCount);
 }
 
 // /sys/cache — the block cache confesses its size and its effectiveness
@@ -778,7 +778,7 @@ static void sys_gen_log(synth_text_t *t)
 	synth_text_addf(t, "ticks_per_second: %d\n", TICKS_PER_SECOND);
 
 	uint64_t used_total = 0, cap_total = 0, lost_total = 0;
-	for (int c = 0; c < kMPCoreCount; c++)
+	for (uint32_t c = 0; c < kCPUCount; c++)
 	{
 		log_buffer_t *b = &core_log_buffers[c];
 		if (b->capacity == 0)
@@ -2116,7 +2116,7 @@ static void sys_gen_cpu_time(synth_text_t *t, uint32_t core)
 	// mixture of raw counters here can create a plausible but false delta.
 }
 
-// cpu/<n>/state — the roster bits, raw. This file exists because of a core
+// cpu/<n>/state — its APIC ID and the scheduling bits, raw. This file exists because of a core
 // that spent thirteen hours struck off the P5's schedule while every
 // instrument we owned needed that core's cooperation to say so (2026-08-11).
 // These are plain globals in the shared upper half: reading them cross-core
@@ -2136,7 +2136,10 @@ static void sys_gen_cpu_state(synth_text_t *t, uint32_t core)
 {
 	core_local_storage_t *cls = get_core_local_storage_for_core(core);
 
-	synth_text_addf(t, "core: %u\n", core);
+	synth_text_addf(t, "cpu: %u\n", core);
+	// The hardware's name for this CPU: what CPUID reports to a program
+	// running on it, so ring 3 can turn that answer into a CPU number.
+	synth_text_addf(t, "apic: %u\n", kCPUs[core].apic.id);
 	// The three bits that can each strike a core off the roster alone
 	// (nmi_probe.h walks through the three disappearances in_scheduler
 	// causes). in_scheduler STUCK at 1 was the leading hypothesis for the
@@ -2171,7 +2174,7 @@ static void sys_gen_cpu_probe(synth_text_t *t, uint32_t core)
 	const nmi_probe_snapshot_t *s = nmi_probe_last(core);
 	if (s == NULL)
 	{
-		synth_text_addf(t, "no snapshot for core %u — write \"probe\" here to fire a diagnostic NMI\n", core);
+		synth_text_addf(t, "no snapshot for CPU %u — write \"probe\" here to fire a diagnostic NMI\n", core);
 		return;
 	}
 	nmi_probe_render(s, sys_cpu_probe_line, t);
@@ -2716,7 +2719,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 				return 1;
 			}
 			int core = h->index - 1;
-			if (core < (int)kMPCoreCount)
+			if (core < (int)kCPUCount)
 			{
 				h->index++;
 				entry->flags = OS64_DE_DIR;

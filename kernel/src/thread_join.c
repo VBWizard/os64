@@ -79,7 +79,7 @@ thread_join_t* thread_join_create(void* taskv, uint64_t entry, uint64_t arg,
 	// AFFINITY, and the trap in it: "run anywhere" is THREAD_NO_AFFINITY,
 	// which is 0xFFFFFFFFFFFFFFFF — NOT zero. createThread doesn't set the
 	// field and kmalloc zeroes every allocation, so a thread born here
-	// arrives claiming mp_apic == 0, and 0 is a perfectly valid APIC id:
+	// arrives claiming pinnedCPU == 0, and 0 is a perfectly valid CPU number:
 	// the BSP. Every thread a program created would then be PINNED to core
 	// 0 and they would timeshare one core while seven sat idle — the
 	// scheduler faithfully doing what it was told. (Found within an hour of
@@ -89,7 +89,7 @@ thread_join_t* thread_join_create(void* taskv, uint64_t entry, uint64_t arg,
 	// Inherit the creating task's main thread rather than hardcoding the
 	// sentinel: if that thread is pinned somewhere on purpose, its threads
 	// belong there too, and for every ordinary program it means "anywhere".
-	t->mp_apic = task->threads->mp_apic;
+	t->pinnedCPU = task->threads->pinnedCPU;
 
 	// Write the return address into the new thread's user stack. The stack
 	// lives at a task-local lower-half VA that the kernel's own page tables

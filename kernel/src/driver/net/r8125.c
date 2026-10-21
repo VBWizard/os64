@@ -52,7 +52,7 @@
 #include "memset.h"
 #include "strings/sprintf.h"   // snprintf — netdev.location, "02:00.0"
 #include "knet.h"                // kNetDoorbell — the interrupt handler rings it
-#include "smp.h"                 // kCPUInfo — the MSI is addressed at the BSP
+#include "smp_core.h"            // kCPUs, BSP_CPU — the MSI is addressed at the BSP
 #include "random.h"              // the interrupt's moment feeds the entropy pool
 
 // kPCIDeviceHeaders / kPCIDeviceFunctions and their counts come from pci.h —
@@ -1810,7 +1810,7 @@ void r8125_enable_msi(void)
 
 	uint32_t ctrl  = readPCIRegister(bus, slot, func, cap);
 	bool     is64  = (ctrl & MSI_CTRL_64BIT) != 0;
-	uint8_t  bsp   = kCPUInfo[0].apicID;
+	uint8_t  bsp   = (uint8_t)kCPUs[BSP_CPU].apic.id;   // an MSI address names an APIC ID
 	uint32_t addr  = MSI_ADDRESS_BASE | ((uint32_t)bsp << 12);
 
 	// Address, then data, then enable — the order the spec wants, so the

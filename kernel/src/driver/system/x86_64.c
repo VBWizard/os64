@@ -24,16 +24,16 @@ void write_apic_register(uintptr_t reg, uint32_t value) {
     *((volatile uint32_t*)reg) = value;
 }
 
-// Function to read the APIC ID of the current processor
-//NOTE: Returns 0 if SMP is not yet initialized
-uint32_t read_apic_id() {
+// The running CPU's local APIC ID. Answers 0 until init_SMP has mapped the
+// register, which is a guess and not a reading — nothing before that may ask.
+apic_id_t read_apic_id() {
     uint32_t id;
     
     if (kMPIdReg)
         id = read_apic_register(kMPIdReg);
     else
         id = 0;
-    return id >> 24;
+    return (apic_id_t){ id >> 24 };
 }
 
 __inline__ uint64_t rdtsc()

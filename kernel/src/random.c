@@ -31,7 +31,7 @@
 #define RANDOM_JITTER_SAMPLES   256     // samples past the stuck test the boot jitter loop wants
 #define RANDOM_JITTER_ROUNDS    (1u << 16)  // and the most walks it may spend collecting them
 #define RANDOM_JITTER_STEPS     256     // the one walk every round times
-#define RANDOM_FAST_POOLS       256     // indexed by APIC id, one cache line each
+#define RANDOM_FAST_POOLS       256     // indexed by CPU number, one cache line each
 
 // ── State ───────────────────────────────────────────────────────────────
 
@@ -110,7 +110,7 @@ static void hw_irq_restore(uint64_t flags)
 static uint32_t hw_core_index(void)
 {
 	core_local_storage_t* cls = try_get_core_local_storage();
-	return cls ? ((uint32_t)cls->apic_id & (RANDOM_FAST_POOLS - 1)) : 0u;
+	return cls ? ((uint32_t)cls->cpu & (RANDOM_FAST_POOLS - 1)) : 0u;
 }
 #endif
 

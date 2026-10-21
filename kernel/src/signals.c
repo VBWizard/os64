@@ -1037,9 +1037,9 @@ void processSignals()
 			if (mp_rflagsTripValue[core] != 0)
 			{
 				printd(DEBUG_EXCEPTIONS,
-					"RFLAGS TRIPWIRE: core %u had mp_isrSavedRFlags = 0x%016lx (sanitized to 0x202; see SCHEDULER_STRAY_WRITE.md)\n",
+					"RFLAGS TRIPWIRE: CPU %u had mp_isrSavedRFlags = 0x%016lx (sanitized to 0x202; see SCHEDULER_STRAY_WRITE.md)\n",
 					core, mp_rflagsTripValue[core]);
-				printf("RFLAGS TRIPWIRE: core %u caught the stray write! value 0x%016lx\n",
+				printf("RFLAGS TRIPWIRE: CPU %u caught the stray write! value 0x%016lx\n",
 					core, mp_rflagsTripValue[core]);
 				mp_rflagsTripValue[core] = 0;   // impound reported; re-arm the slot
 			}

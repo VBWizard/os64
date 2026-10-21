@@ -1,6 +1,7 @@
 // coreprobe — what one CPU says about itself, and how fast it runs, measured
-// from wherever the scheduler put this task; the `apic` lines say where that
-// was. It was born to find why the P5's odd APICs ran the compositor three
+// from wherever the scheduler put this task; the `cpu` lines say where that
+// was, as the CPU number and the APIC ID CPUID reports (the number comes from
+// /sys/cpu/<n>/state's `apic:` lines — CPUID knows only the APIC ID). It was born to find why the P5's odd APICs ran the compositor three
 // times slower (2026-10-18: SPEC_CTRL inherited with SSBD set on every
 // second thread — smp_core.c, spec_ctrl_init_this_cpu), and it stays as the
 // proof: after bring-up every thread of a core should post the same `imul`
@@ -18,15 +19,15 @@
 //             like the compositor's blit, both in MB/s.
 //   syscalls  micros() round trips per millisecond.
 //
-// To measure one core on purpose rather than wherever the scheduler put it:
-// `env PINCORE=<apic> coreprobe`.
+// To measure one CPU on purpose rather than wherever the scheduler put it:
+// `env PINCPU=<n> coreprobe`.
 //
 // coreprobe [ms]     — how long each measurement runs (default 500).
 // coreprobe -s [sec] — SAMPLE instead: for that many seconds, sleep a
 //                      little, then time the imul chain and the chain with
 //                      one extra branch of each kind (taken, never-taken,
 //                      indirect, call/ret), 50 ms each, and print one line —
-//                      `<ms since boot> apic <n> imul <rate> +taken <rate> ...`
+//                      `<ms since boot> cpu <n> apic <id> imul <rate> +taken <rate> ...`
 //                      — so a thread the scheduler moves about reports every
 //                      core it visits and what a branch costs there.
 #include "os64/os64.h"
@@ -34,6 +35,51 @@
 static void cpuid(uint32_t leaf, uint32_t sub, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
 {
     __asm__ volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(leaf), "c"(sub));
+}
+
+// APIC ID -> CPU number, -1 for none, from /sys/cpu (read once).
+static int32_t gCpuOfApic[256];
+
+static bool read_small(const char *path, char *buf, size_t cap)
+{
+    int64_t h = os64_open(path, NULL);
+    if (h < 0)
+        return false;
+    size_t used = 0;
+    int64_t n;
+    while (used + 1 < cap && (n = os64_read((int32_t)h, buf + used, cap - 1 - used)) > 0)
+        used += (size_t)n;
+    os64_close((int32_t)h);
+    buf[used] = '\0';
+    return used > 0;
+}
+
+static void load_cpu_numbers(void)
+{
+    for (int i = 0; i < 256; i++)
+        gCpuOfApic[i] = -1;
+    char text[1024];
+    if (!read_small("/sys/cpu/count", text, sizeof(text)))
+        return;
+    uint64_t count = (uint64_t)os64_atoi(text);
+    for (uint64_t cpu = 0; cpu < count; cpu++) {
+        char path[48];
+        os64_snprintf(path, sizeof(path), "/sys/cpu/%lu/state", cpu);
+        if (!read_small(path, text, sizeof(text)))
+            continue;
+        for (const char *p = text; *p; p++)
+            if ((p == text || p[-1] == '\n') && os64_memcmp(p, "apic: ", 6) == 0) {
+                int64_t id = os64_atoi(p + 6);
+                if (id >= 0 && id < 256)
+                    gCpuOfApic[id] = (int32_t)cpu;
+                break;
+            }
+    }
+}
+
+static int32_t cpu_of(uint32_t apic)
+{
+    return apic < 256 ? gCpuOfApic[apic] : -1;
 }
 
 static uint32_t apic_now(void)
@@ -89,6 +135,7 @@ static uint64_t imul_rate(int64_t ms)
 
 int main(int argc, char **argv)
 {
+    load_cpu_numbers();
     if (argc > 1 && argv[1][0] == '-' && argv[1][1] == 's') {
         int64_t sec = (argc > 2) ? os64_atoi(argv[2]) : 30;
         int64_t start = os64_micros();
@@ -106,8 +153,8 @@ int main(int argc, char **argv)
             uint64_t rind = indirect_rate(50);  moved |= apic_now() != apic;
             uint64_t rcr = callret_rate(50);    moved |= apic_now() != apic;
             // Time since BOOT, so two samplers started apart share one clock.
-            os64_printf("%ld apic %u%s imul %lu +taken %lu +nottaken %lu +indirect %lu +callret %lu\n",
-                        os64_micros() / 1000, apic, moved ? "(moved)" : "",
+            os64_printf("%ld cpu %d apic %u%s imul %lu +taken %lu +nottaken %lu +indirect %lu +callret %lu\n",
+                        os64_micros() / 1000, cpu_of(apic), apic, moved ? "(moved)" : "",
                         rate, rt, rnt, rind, rcr);
         }
         return 0;
@@ -135,7 +182,7 @@ int main(int argc, char **argv)
     // so if the scheduler moved the task during it, the sampler's rule: a
     // number from two cores is nobody's number.
     uint32_t apic0 = apic_now();
-    os64_printf("apic %u", apic0);
+    os64_printf("cpu %d apic %u", cpu_of(apic0), apic0);
     if (maxleaf >= 0xB) {
         cpuid(0xB, 0, &a, &b, &c, &d);
         os64_printf("  leaf0B: threads/core %u x2apic %u", b & 0xFFFF, d);
@@ -208,6 +255,7 @@ int main(int argc, char **argv)
         os64_printf("syscalls %lu per ms%s\n", calls * 1000 / (uint64_t)(t1 - t0),
                     apic_now() == apic0 ? "" : " (moved)");
     }
-    os64_printf("apic end %u\n", apic_now());
+    uint32_t apic_end = apic_now();
+    os64_printf("end cpu %d apic %u\n", cpu_of(apic_end), apic_end);
     return 0;
 }

@@ -65,7 +65,7 @@ typedef struct
 typedef struct s_thread
 {
 	uint64_t threadID;
-	uint64_t mp_apic;
+	uint64_t pinnedCPU;   // the CPU number it may run on, or THREAD_NO_AFFINITY
 	// THE TWO HALVES OF DYING (split 2026-08-09; they were one flag, and the
 	// seam cost a day). `exited` means RETIRED — nothing left to run, the
 	// scheduler may file this thread under ZOMBIE and never wake it again.
@@ -152,14 +152,14 @@ typedef struct s_thread
 	// The core this thread was most recently DISPATCHED on — stamped by
 	// scheduler_load_thread, one store, no locking (single writer: the
 	// dispatching core). This is "where did it last run", not affinity
-	// (mp_apic is the pin; this is the history). Surfaced in /proc so a
+	// (pinnedCPU is the pin; this is the history). Surfaced in /proc so a
 	// human summing per-core books can tell whose plate the time came off
 	// — the question that broke Chris's idle0 arithmetic the night the
 	// accounting converged (kworker's 0.5% was on core 1 all along).
 	// Since 2026-08-13 it is also load-bearing: the cache-home rule in
 	// scheduler_find_thread_to_run reads it as "where this thread's caches
 	// are warm" and keeps the thread there until waiting beats migrating.
-	uint32_t lastRunApicID;
+	uint32_t lastRunCPU;
 	// When this thread last ENTERED qRunnable (kTicksSinceStart units),
 	// stamped by scheduler_change_thread_queue_locked under the queue lock.
 	// The cache-home rule's other operand: a thread warm on another core is

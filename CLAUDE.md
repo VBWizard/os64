@@ -610,7 +610,25 @@ arrives is the same bytes either way.
   - Core-local storage (CLS) structure
   - Idle task
 - Inter-processor interrupts (IPIs) for scheduler coordination
-- Can be disabled via `nosmp` kernel cmdline
+- Can be disabled via `nosmp` kernel cmdline (but see DEBTS: a one-CPU boot
+  can hang on a plain spinlock waited on with interrupts off)
+- **A CPU NUMBER IS NOT AN APIC ID** (CPU_NUMBERS.md). The kernel names a
+  CPU by a dense number, 0..`kCPUCount`-1: every per-CPU array, the CLS slot
+  (`cls->cpu`), a thread's pin and history, the log's `AP%c`, `/proc`,
+  `/sys/cpu/<n>`, `PINCPU=`. The APIC ID is a hardware address, an
+  `apic_id_t` struct the compiler will not let you index with, and it
+  appears only where the hardware wants one: `send_ipi` (which takes a CPU
+  number and translates), the IOAPIC and MSI destinations, and an AP's first
+  "who am I". **`cpu_roster.c` decides the numbering, once, in
+  `kernel_main` before the log rings** (pure, `tools/test_cpu_roster_host.sh`):
+  CPU 0 is the BSP, the rest ascend by APIC ID, which puts SMT siblings side
+  by side and makes CPU n = APIC n on every dense machine (QEMU, the P5).
+  The 3900X is why: its APIC IDs are 0-5, 8-13, 16-21, 24-29, and using them
+  as indices overran every per-CPU table. `kCPUs[cpu]` holds each CPU's APIC
+  ID and Limine doorbell, `kApicToCPU[]` the reverse. **`make run-sparse`
+  boots that layout in QEMU**; anything touching bring-up, IPIs or per-CPU
+  state boots it too. `MAX_CPUS` is 64. Code that may run before this CPU's
+  CLS exists (printd, exception reports) asks `cpu_self()`.
 - **The speculation controls are written, never inherited.** `IA32_SPEC_CTRL`
   (IBRS/STIBP/SSBD/PSFD) is per hardware thread, and the P5's firmware hands
   the SECOND thread of every core SSBD set with the first thread clear — on
@@ -628,17 +646,19 @@ arrives is the same bytes either way.
   against thread 1 when one is inexplicably slow. **`/tests/coreprobe`** is
   the ring-3 proof: `coreprobe -s 20` wanders and prints each core's rate for
   a dependent multiply chain and for every branch kind; siblings must agree.
-- **`env PINCORE=<apic> program` pins a program, and every thread it makes,
-  to that core** (`task_env_pin`, task.c). The number is the APIC id that
-  /proc's `core`/`affinity` lines and coreprobe's `apic` lines print. It is
+- **`env PINCPU=<n> program` pins a program, and every thread it makes,
+  to CPU n** (`task_env_pin`, task.c). The number is the CPU number that
+  /proc's `cpu`/`affinity` lines and coreprobe's `cpu` column print. It is
   read once, at birth, from an unpinned USER program's environment, and it
   inherits like any variable, so a pinned shell pins everything it runs. A
-  value naming no running core leaves the program unpinned (DEBUG_TASK says
-  why). Fixture: `/tests/pincoretest`.
+  value naming no running CPU leaves the program unpinned (DEBUG_TASK says
+  why). `PINCORE=` is its old name, still read when `PINCPU` is absent, now
+  as a CPU number too. Fixture: `/tests/pincputest`.
 
 **Core-Local Storage:**
 - Accessed via `get_core_local_storage()`
-- Contains: APIC ID, current task/thread, CPU info, TSS, etc.
+- Contains: the CPU number (`cpu`) and its APIC ID (`apic`), current
+  task/thread, TSS, etc.
 
 ### ELF Loading
 
@@ -845,8 +865,9 @@ the library serves every process). How it fits together:
 - Common options:
   - `ROOTPARTUUID=<uuid>` / `ROOT=<uuid>`: Mount partition as root
   - `nosmp`: Disable multicore support (lowercase — legacy)
-  - `MAXCORES=<n>`: Cap how many cores init_SMP brings up (0/absent = all;
-    capped-off cores stay parked in Limine's AP loop)
+  - `MAXCPUS=<n>`: Bring up only the first n CPUs of the roster's order, BSP
+    first (0/absent = all; the rest stay parked in Limine's AP loop).
+    `MAXCORES=<n>` is its old name, still honoured, and says so at boot
   - `NOAHCI`: Disable AHCI driver
   - `NONVME`: Disable NVMe driver
   - `NONET`: Disable networking entirely (there is no per-NIC off switch)
@@ -939,7 +960,7 @@ the library serves every process). How it fits together:
 **Line format — ONE renderer, TWO configs.** `abi/include/os64/klog_format.h`
 holds the only copy of the layout logic (it used to be spelled in four places
 across the ring 0/3 boundary). Escapes: `%d` date, `%t` time, `%k` ticks, `%c`
-core, `%T` thread, `%g` category name, `%l` level, `%m` message, `%%`.
+CPU, `%T` thread, `%g` category name, `%l` level, `%m` message, `%%`.
 - SERIAL's format comes from `LOGFMT=<name>` on the cmdline — the only config
   channel that exists before a filesystem does.
 - The FILE's format comes from **`logd.conf`**, os64's first config file:
@@ -1184,7 +1205,8 @@ kernel/
 
 The default QEMU configuration (in root `GNUmakefile`):
 - 8GB RAM (`-m 8g`)
-- 2 CPU cores (`-smp 2`)
+- 8 CPUs (`-smp 8`; `QEMU_SMP=<spec>` on the make command line changes it,
+  and `make run-sparse` boots the 3900X's sparse APIC layout, 24 CPUs)
 - Serial output to `qemu_com1.log`
 - Telnet monitor on port 55555
 - NVMe disk image at `disk/os64.img` (64MB FAT partition)

@@ -11,10 +11,13 @@
 #include "strcmp.h"
 #include "panic.h"
 #include "smp_core.h"
+#include "sprintf.h"
 
-cpu_t *kCPUInfo;
+cpu_t kCPUs[MAX_CPUS];
+uint32_t kCPUCount;
+uint8_t kApicToCPU[CPU_ROSTER_APIC_IDS];
+cpu_roster_report_t kCPURosterReport;
 volatile uintptr_t kMPApicBase;
-volatile uint8_t kMPCoreCount;
 struct mpf_intel* kMPTable;
 mpConfig_t* kMPConfigTable;
 uint32_t kMPConfigTableCount = 0;
@@ -25,7 +28,7 @@ uintptr_t kMPICRLow=0;
 uintptr_t kMPICRHigh=0;
 uintptr_t kMPLVTTimer=0;
 extern struct limine_smp_response *kLimineSMPInfo;
-extern 	uint8_t apciGetAPICID(unsigned whichAPIC);
+extern bool kEnableSMP;
 extern void enable_fsgsbase();
 
 int kLocalAPICTimerSpeed[MAX_CPUS];
@@ -33,11 +36,88 @@ volatile core_local_storage_t* kDebugHoneypot = 0;
 
 volatile core_local_storage_t kCoreLocalStorage[MAX_CPUS] = {0};
 
-    // MAXCORES=N cmdline cap on how many cores init_SMP brings up; 0 = no cap.
-    // Cores beyond the cap are never woken — they stay parked in Limine's AP
-    // spin-loop. Useful on new hardware (e.g. the 12-core Bosgame P5) to keep
-    // the variable count down while bringing the machine up.
-    int kMaxActiveCores = 0;
+// MAXCPUS=N: how many CPUs this boot numbers and brings up; 0 = all of them.
+// The rest are never woken — they stay parked in Limine's AP spin-loop. It
+// takes the first N of the roster's order, so the BSP is always one of them.
+// -1 = not given, which is not the same as 0: MAXCPUS=0 must still win over a
+// stale MAXCORES=N.
+int kMaxCPUs = -1;
+// MAXCORES=N, the token's name before CPU was the word. Still honoured,
+// because boot tokens live in each machine's own limine.conf and do not
+// travel with a refresh; it says what it is called now, so it fades.
+int kMaxCPUsAlias = -1;
+
+// Number the CPUs (cpu_roster.h). Runs in kernel_main, on the BSP, before
+// the log rings — they are allocated one per numbered CPU — and before
+// anything else reads a CPU number. Limine's list and the cmdline are all it
+// needs, and both exist by then.
+void cpu_roster_init(void)
+{
+	if (kMaxCPUsAlias >= 0)
+	{
+		printf("MAXCORES=%d is now spelled MAXCPUS=%d%s\n", kMaxCPUsAlias, kMaxCPUsAlias,
+		       kMaxCPUs >= 0 ? " (MAXCPUS= given too, and it wins)" : "");
+		printd(DEBUG_BOOT, "MAXCORES=%d is now spelled MAXCPUS=%d%s\n", kMaxCPUsAlias, kMaxCPUsAlias,
+		       kMaxCPUs >= 0 ? " (MAXCPUS= given too, and it wins)" : "");
+		if (kMaxCPUs < 0)
+			kMaxCPUs = kMaxCPUsAlias;
+	}
+	uint32_t cap = kEnableSMP ? (kMaxCPUs > 0 ? (uint32_t)kMaxCPUs : 0) : 1;
+
+	// Limine's WHOLE list as plain IDs, however long: the roster decides
+	// which entries are usable, and an addressable ID can sit after any
+	// number of x2APIC-only or repeated ones.
+	uint32_t listed = (uint32_t)kLimineSMPInfo->cpu_count;
+	if (listed == 0)
+		panic("CPU roster: Limine listed no CPUs, not even the BSP");
+	uint32_t *ids = kmalloc(listed * sizeof(uint32_t));
+	if (ids == NULL)
+		panic("CPU roster: no room for Limine's list of %u CPUs", listed);
+	for (uint32_t i = 0; i < listed; i++)
+		ids[i] = kLimineSMPInfo->cpus[i]->lapic_id;
+
+	static uint32_t slot[MAX_CPUS];
+	if (!cpu_roster_build(ids, listed, kLimineSMPInfo->bsp_lapic_id, cap, MAX_CPUS,
+	                      slot, kApicToCPU, &kCPURosterReport))
+		panic("CPU roster: the BSP (APIC %u) is not among the %u CPUs Limine listed, or is not addressable",
+		      kLimineSMPInfo->bsp_lapic_id, listed);
+	kfree(ids);
+
+	kCPUCount = kCPURosterReport.count;
+	for (uint32_t cpu = 0; cpu < kCPUCount; cpu++)
+	{
+		struct limine_smp_info *info = kLimineSMPInfo->cpus[slot[cpu]];
+		kCPUs[cpu].apic = (apic_id_t){ info->lapic_id };
+		kCPUs[cpu].goto_address = (volatile uint64_t *)&info->goto_address;
+	}
+}
+
+void cpu_roster_print(void)
+{
+	const cpu_roster_report_t *r = &kCPURosterReport;
+	char line[192];
+	int n = snprintf(line, sizeof(line), "%u CPU%s", kCPUCount, kCPUCount == 1 ? "" : "s");
+	if (!r->dense)
+		n += snprintf(line + n, sizeof(line) - n, ", APIC IDs %u-%u, sparse", r->apic_lowest, r->apic_highest);
+	if (r->parked)
+		n += snprintf(line + n, sizeof(line) - n, ", %u parked by %s", r->parked,
+		              r->parked_by_max ? "MAX_CPUS" : (kEnableSMP ? "MAXCPUS=" : "nosmp"));
+	if (r->too_wide)
+		n += snprintf(line + n, sizeof(line) - n, ", %u left off (APIC ID above %u: x2APIC only)",
+		              r->too_wide, CPU_ROSTER_APIC_MAX);
+	if (r->duplicates)
+		n += snprintf(line + n, sizeof(line) - n, ", %u duplicate APIC ID%s ignored",
+		              r->duplicates, r->duplicates == 1 ? "" : "s");
+	printf("(%s)\n", line);
+	printd(DEBUG_BOOT, "SMP: %s\n", line);
+	// The numbering is topological only when the BSP has the lowest ID —
+	// true on every PC this project has met, so say so when it is not.
+	if (r->bsp_not_lowest)
+	{
+		printf("SMP: BSP is APIC %u; CPU numbering is not topological\n", kCPUs[0].apic.id);
+		printd(DEBUG_BOOT, "SMP: BSP is APIC %u; CPU numbering is not topological\n", kCPUs[0].apic.id);
+	}
+}
 
 bool mp_scan_for_config(uintptr_t start, uintptr_t length)
 {
@@ -115,6 +195,10 @@ unsigned int parse_mp_table()
 		printd(DEBUG_SMP,", product': %s\n", lTempString);
 		recPtr=(uint8_t*)(uintptr_t)kMPTable->physptr+sizeof(struct mpc_table);
 		printd(DEBUG_SMP,"Parsing MC %u table entries at 0x%08x\n", mc->count, recPtr);
+		// One row per record, and a record is a CPU, a bus, an IO APIC or an
+		// interrupt assignment — far more than there are CPUs on any real
+		// table, so the table is sized by the count it is about to hold.
+		kMPConfigTable = kmalloc(mc->count * sizeof(mpConfig_t));
 		for (int cnt=0;cnt< mc->count;cnt++)
 		{
 			switch((int)*(uint8_t*)recPtr)
@@ -243,29 +327,17 @@ unsigned int parse_mp_table()
 			}
 		}
 		kMPConfigTableCount = mc->count;
-		printd(DEBUG_SMP | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"rec5 pp=%08X(%08X),np=%08X(%08X)\n", kMPConfigTable[5].prevRecAddress, &kMPConfigTable[4], kMPConfigTable[5].nextRecAddress, &kMPConfigTable[6]);
 		return mc->count;
 	}
 	return 0;
 }
 
-//We will gather the details for each core, but only enable them if kEnableSMP = true
+// The platform half of SMP: the MP table, the IO APIC, and the BSP's local
+// APIC mapped where every CPU will reach its own. Which CPUs exist, and how
+// many this boot runs, the roster already decided (cpu_roster_init).
 int init_SMP(bool enableSMP)
 {
 	int mp_records;
-    kMPCoreCount = enableSMP?kLimineSMPInfo->cpu_count:1;
-
-    // Apply the MAXCORES=N cmdline cap. Everything downstream (kCPUInfo
-    // sizing, idle-task creation, AP wake-up, scheduler loops) iterates
-    // kMPCoreCount, so clamping here is the single point of truth; the
-    // capped-off cores are simply never started.
-    if (kMaxActiveCores > 0 && kMPCoreCount > kMaxActiveCores)
-    {
-        printf("SMP: MAXCORES=%u capping core count (%u available) ... ", kMaxActiveCores, kMPCoreCount);
-        kMPCoreCount = kMaxActiveCores;
-    }
-
-    kMPConfigTable = kmalloc(MAX_CPUS * sizeof(mpConfig_t));
     mp_records = parse_mp_table();
     if (!kIOAPICAddress)
     {
@@ -276,79 +348,37 @@ int init_SMP(bool enableSMP)
                     printd(DEBUG_SMP, "SMP: IO APIC address unavailable, continuing without SMP support.\n");
 #endif
     }
-    kCPUInfo = kmalloc((kMPCoreCount) * sizeof(cpu_t));
-    for (uint64_t core = 0; core < kMPCoreCount;core++)
+    // Every CPU's local APIC answers at the same physical address, each one
+    // seeing its own registers there, so one mapping serves them all.
+    uintptr_t lapicPhys = apicGetAPICBase();
+    printd(DEBUG_SMP, "BSP APIC register base found @ 0x%016lx, remapped to 0x%016lx\n", lapicPhys, lapicPhys + kHHDMOffset);
+    paging_map_page((pt_entry_t*)kKernelPML4v, lapicPhys + kHHDMOffset, lapicPhys, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
+    if (kIOAPICAddress)
     {
-            bool haveLimineCPUInfo = kLimineSMPInfo && (kLimineSMPInfo->cpu_count > core);
-            if (haveLimineCPUInfo)
-            {
-                    kCPUInfo[core].apicID =  kLimineSMPInfo->cpus[core]->lapic_id;
-                    kCPUInfo[core].goto_address = &kLimineSMPInfo->cpus[core]->goto_address;
-            }
-            else
-            {
-                    kCPUInfo[core].apicID = core;
-                    kCPUInfo[core].goto_address = NULL;
-            }
-            kCPUInfo[core].registerBase=apicGetAPICBase();
-            kCPUInfo[core].ioAPICAddress = kIOAPICAddress;
-            kCPUInfo[core].apic_lvt_timer  = kCPUInfo[core].registerBase + 0x320; // LVT Timer
-            kCPUInfo[core].apic_lvt_lint0  = kCPUInfo[core].registerBase + 0x350; // LVT LINT0 (External IRQ)
-            kCPUInfo[core].apic_lvt_lint1  = kCPUInfo[core].registerBase + 0x360; // LVT LINT1 (NMI)
-            kCPUInfo[core].apic_lvt_error  = kCPUInfo[core].registerBase + 0x370; // LVT Error Register
-            kCPUInfo[core].apic_tpr = kCPUInfo[core].registerBase + 0x80; // LVT Error Register
-            //Offset to virtual since this is a virtual address
-            kCPUInfo[core].apic_id_reg=kCPUInfo[core].registerBase+0x20;
-            kCPUInfo[core].apic_svr=kCPUInfo[core].registerBase+0xF0;
-            kCPUInfo[core].apic_eoi=kCPUInfo[core].registerBase+0xB0;
-            kCPUInfo[core].apic_icr_low=kCPUInfo[core].registerBase+0x300;
-            kCPUInfo[core].apic_icr_high=kCPUInfo[core].registerBase+0x310;
-            if (core == 0)
-            {
-                printd(DEBUG_SMP, "BSP APIC register base found @ 0x%016lx, remapped to 0x%016lx\n",kCPUInfo[0].registerBase, kCPUInfo[0].registerBase + kHHDMOffset);
-                paging_map_page((pt_entry_t*)kKernelPML4v, kCPUInfo[0].registerBase + kHHDMOffset, kCPUInfo[0].registerBase, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
-                if (kIOAPICAddress)
-                {
-                        paging_map_page((pt_entry_t*)kKernelPML4v, kIOAPICAddress + kHHDMOffset, kIOAPICAddress, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
-                        printd(DEBUG_SMP, "SMP: IO APIC found @ 0x%016lx, remapped to 0x%016lx\n", kIOAPICAddress, kIOAPICAddress + kHHDMOffset);
-                        kIOAPICAddress += kHHDMOffset;
-                }
-                else
-                {
+            paging_map_page((pt_entry_t*)kKernelPML4v, kIOAPICAddress + kHHDMOffset, kIOAPICAddress, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
+            printd(DEBUG_SMP, "SMP: IO APIC found @ 0x%016lx, remapped to 0x%016lx\n", kIOAPICAddress, kIOAPICAddress + kHHDMOffset);
+            kIOAPICAddress += kHHDMOffset;
+    }
+    else
+    {
 #ifndef DEBUG_NONE
-                    if ((kDebugLevel & DEBUG_SMP) == DEBUG_SMP)
-                            printd(DEBUG_SMP, "SMP: IO APIC not present, skipping remap.\n");
+        if ((kDebugLevel & DEBUG_SMP) == DEBUG_SMP)
+                printd(DEBUG_SMP, "SMP: IO APIC not present, skipping remap.\n");
 #endif
-                }
-                printd(DEBUG_SMP, "BSP apic timer HZ = %u\n",kCPUInfo[core].ticksPerSecond);
-        }
-        else
-            kCPUInfo[core].ticksPerSecond=kCPUInfo[0].ticksPerSecond;
-		//Now that we've logged all the register values and mapped them to the higher half, make them higher half
-		kCPUInfo[core].registerBase += kHHDMOffset;
-		kCPUInfo[core].apic_id_reg += kHHDMOffset;
-		kCPUInfo[core].apic_svr += kHHDMOffset;
-		kCPUInfo[core].apic_eoi += kHHDMOffset;
-		kCPUInfo[core].apic_icr_low += kHHDMOffset;
-		kCPUInfo[core].apic_icr_high += kHHDMOffset;
-		kCPUInfo[core].apic_lvt_timer += kHHDMOffset;
-		kCPUInfo[core].apic_lvt_lint0 += kHHDMOffset;
-		kCPUInfo[core].apic_lvt_lint1 += kHHDMOffset;
-		kCPUInfo[core].apic_lvt_error += kHHDMOffset;
-		kCPUInfo[core].apic_tpr += kHHDMOffset;
-		kCPUInfo[core].ticksPerSecond=apicGetHZ();
-	}
+    }
+    kMPApicBase = lapicPhys + kHHDMOffset;
+    kMPICRLow=kMPApicBase+0x300;
+    kMPICRHigh=kMPApicBase+0x310;
+    kMPLVTTimer=kMPApicBase+0x320;
+    kMPIdReg = kMPApicBase+0x20;
+    uint32_t lapicHz = apicGetHZ();
+    printd(DEBUG_SMP, "BSP apic timer HZ = %u\n", lapicHz);
 	if (check_for_apic())
 	{
-		kMPApicBase = kCPUInfo[0].registerBase;
-		kMPICRLow=kMPApicBase+0x300;
-		kMPICRHigh=kMPApicBase+0x310;
-		kMPLVTTimer=kMPApicBase+0x320;
-		kMPIdReg = kCPUInfo[0].apic_id_reg;
-        printd(DEBUG_SMP, "SMP: %s APIC %u Found, address 0x%016lx, initializing ... ", 
-			acpiGetAPICVersion()==0?"Discrete":"Integrated", 
-			kCPUInfo[0].apicID, 
-			kCPUInfo[0].registerBase);
+        printd(DEBUG_SMP, "SMP: %s APIC %u Found, address 0x%016lx, initializing ... ",
+			acpiGetAPICVersion()==0?"Discrete":"Integrated",
+			kCPUs[0].apic.id,
+			kMPApicBase);
         if (apicIsEnabled())
             printf("enabled ... ");
 		else

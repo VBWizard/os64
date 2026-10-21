@@ -2,6 +2,8 @@
 # vmboot — start a throwaway os64 VM, headless, and wait until its shell is up.
 #
 #   tools/vmboot [port]        (default 55556)
+#   QEMU_SMP=<spec> tools/vmboot [port]   another CPU topology — the root
+#                              GNUmakefile's QEMU_SPARSE_SMP is the 3900X's
 #
 # WHY THIS EXISTS: every agent that tests a change in QEMU was rebuilding the
 # same twenty-flag invocation by hand, and getting it subtly wrong — missing
@@ -19,6 +21,7 @@ set -u
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PORT=${1:-55556}
+SMP=${QEMU_SMP:-8}
 DIR=/tmp/os64-vm-$PORT
 
 if [ ! -f "$ROOT/os64_kernel.iso" ]; then
@@ -43,7 +46,7 @@ cp --sparse=always "$ROOT/disk/os64.img" "$DIR/os64.img"
 cp --sparse=always "$ROOT/disk/os64_data.img" "$DIR/os64_data.img"
 
 setsid timeout 3600 qemu-system-x86_64 \
-    -machine q35 -cpu qemu64,+rdrand,+rdseed -m 8g -smp 8 -no-reboot \
+    -machine q35 -cpu qemu64,+rdrand,+rdseed -m 8g -smp "$SMP" -no-reboot \
     -cdrom "$ROOT/os64_kernel.iso" -boot d \
     -display none \
     -serial "file:$DIR/serial.log" \

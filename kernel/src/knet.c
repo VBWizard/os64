@@ -64,8 +64,8 @@ void knet_thread(void)
 {
 	thread_t* self = get_core_local_storage()->currentThread;
 	doorbell_register(&kNetDoorbell, self, "knet");
-	printd(DEBUG_NET, "knet: running on APIC %u, %u device(s) to drain\n",
-	       get_core_local_storage()->apic_id, kNetDeviceCount);
+	printd(DEBUG_NET, "knet: running on CPU %u, %u device(s) to drain\n",
+	       get_core_local_storage()->cpu, kNetDeviceCount);
 
 	bool parked = false;   // did the park at the foot of the last turn actually sleep?
 	for (;;)
@@ -96,7 +96,7 @@ void knet_thread(void)
 		bool rung = doorbell_edge_rung(edge);
 		kKnetWakes++;
 		uint64_t started = rdtsc();
-		if (rung && doorbell_edge_apic(edge) == get_core_local_storage()->apic_id)
+		if (rung && doorbell_edge_cpu(edge) == get_core_local_storage()->cpu)
 		{
 			uint64_t waited = doorbell_edge_elapsed(edge, started);
 			if (parked)

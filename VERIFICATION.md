@@ -1281,7 +1281,7 @@ plausible reasoning had not.
 |---|---|---|
 | QEMU/TCG (WSL2) | Fast iteration; `-d int,cpu_reset,guest_errors` traces; deliberately hostile TSC desync between vCPUs | The TSC desync is a feature: it found the rdtsc-across-preemption bug |
 | VirtualBox | Real-ish I/O latency (found the NVMe locking race); stricter virtual-APIC (LVT arming order); firmware differences (virtual-wire mode NOT left on — found the dead-keyboard IMCR bug) | Boots the /mnt/c/temp ISO, put there by `make copy`; disk via `make vbox-sync`, VM OFF |
-| Bosgame P5 (bare metal) | Everything virtual APICs forgive; MADT interrupt-source overrides; real 12-core log volume (crashed default logging); USB stick module-load time (~20s for the 512MB ramdisk — it is NOT hung) | RAMDisk entries need zero disk prep; use `nolog` + MAXCORES during bring-up |
+| Bosgame P5 (bare metal) | Everything virtual APICs forgive; MADT interrupt-source overrides; real 12-core log volume (crashed default logging); USB stick module-load time (~20s for the 512MB ramdisk — it is NOT hung) | RAMDisk entries need zero disk prep; use `nolog` + MAXCPUS during bring-up |
 
 A change that touches interrupts, timers, storage, or SMP is not verified
 until it has seen at least QEMU + one of the other two.

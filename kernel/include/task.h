@@ -419,7 +419,7 @@
     void task_hold(task_t *task);
     void task_release(task_t *task);
 
-		task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID);
+		task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedCPU);
 	// Like task_create, with a failure verdict: -1 or OS64_SPAWN_TOO_LONG.
 	// The verdict covers interpreter-rewritten arguments before construction.
 	task_t *task_create_checked(char *path, int argc, char **argv, task_t *parent,

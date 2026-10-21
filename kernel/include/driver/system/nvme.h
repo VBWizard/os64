@@ -288,7 +288,7 @@ typedef struct {
 	// backed demand paging reads via vma.c) can interleave with another
 	// thread's read and both end up polling the same completion-queue slot —
 	// one wins, the other spins into the 5s timeout. ioLockOwner holds the
-	// APIC id of the holder (-1 = free) as a same-core re-entry tripwire.
+	// CPU number of the holder (-1 = free) as a same-CPU re-entry tripwire.
 	volatile uint32_t ioLock;
 	volatile int64_t ioLockOwner;
  } nvme_controller_t;

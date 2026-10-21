@@ -31,7 +31,7 @@ typedef struct {
     uint64_t major_faults;
     uint64_t switches;
     uint32_t tty;
-    uint32_t core;
+    uint32_t core;            // the CPU number it last ran on (/proc's "cpu" line)
     uint32_t threads;
     os64_proc_state_t state;
     uint64_t heap;
@@ -46,7 +46,7 @@ typedef struct {
     uint64_t tid;
     uint64_t pid;
     uint64_t runtime_us;
-    uint32_t core;
+    uint32_t core;            // the CPU number it last ran on (/proc's "cpu" line)
     os64_proc_state_t state;
     char affinity[24];
 } os64_thread_info_t;

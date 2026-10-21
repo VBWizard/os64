@@ -574,10 +574,10 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 	synth_text_addf(t, "faults\t%lu minor %lu major\n", minor_faults, major_faults);
 	synth_text_addf(t, "anon_zero_pages\t%lu\n", anon_zero_pages);
 	synth_text_addf(t, "switches\t%u\n", task->cSwitches);
-	// Where the task's thread last ran — the answer to "whose plate did
-	// this time come off", without which per-core arithmetic is guesswork.
+	// Which CPU the task's thread last ran on — the answer to "whose plate
+	// did this time come off", without which per-CPU arithmetic is guesswork.
 	if (th != NULL)
-		synth_text_addf(t, "core\t%u\n", th->lastRunApicID);
+		synth_text_addf(t, "cpu\t%u\n", th->lastRunCPU);
 	// CPU time committed at privilege and scheduler boundaries. `ticks`
 	// below is the old sampling counter, retained for the text ABI.
 	//
@@ -1167,19 +1167,19 @@ static void proc_gen_thread_status(synth_text_t *t, task_t *task, thread_t *th)
 	synth_text_addf(t, "thread\t%lu\n", th->threadID);
 	synth_text_addf(t, "task\t%lu\n", task->taskID);
 	synth_text_addf(t, "state\t%s\n", proc_state_name(th->threadState));
-	// mp_apic is the thread's PINNED AFFINITY, not the core it is running on —
+	// pinnedCPU is the thread's PINNED AFFINITY, not the CPU it is running on —
 	// a distinction worth the extra word, because labelling it "core" printed
 	// 18446744073709551615 for every ordinary thread during bring-up (that is
-	// THREAD_NO_AFFINITY, which means "any core", not core number 2^64-1).
-	// Which core a thread is on RIGHT NOW lives in each core's CLS and would
+	// THREAD_NO_AFFINITY, which means "any CPU", not CPU number 2^64-1).
+	// Which CPU a thread is on RIGHT NOW lives in each CPU's CLS and would
 	// have to be found by scanning them; it joins this file when something
 	// needs it.
-	if (th->mp_apic == THREAD_NO_AFFINITY)
+	if (th->pinnedCPU == THREAD_NO_AFFINITY)
 		synth_text_addf(t, "affinity\tany\n");
 	else
-		synth_text_addf(t, "affinity\t%lu\n", th->mp_apic);
+		synth_text_addf(t, "affinity\t%lu\n", th->pinnedCPU);
 	synth_text_addf(t, "idle\t%s\n", th->idleThread ? "yes" : "no");
-	synth_text_addf(t, "core\t%u\n", th->lastRunApicID);   // last dispatched here
+	synth_text_addf(t, "cpu\t%u\n", th->lastRunCPU);   // last dispatched here
 	synth_text_addf(t, "ring\t%u\n", (unsigned)(th->regs.CS & 3));
 	synth_text_addf(t, "rip\t%p\n", (void *)th->regs.RIP);
 	synth_text_addf(t, "rsp\t%p\n", (void *)th->regs.RSP);

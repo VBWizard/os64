@@ -168,7 +168,7 @@ bool task_signal_and_nudge(task_t* task, signals signal)
 		return false;
 
 	core_local_storage_t* cls = get_core_local_storage();
-	uint64_t own_apic = cls ? cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
+	uint64_t own_cpu = cls ? cls->cpu : BSP_CPU;
 
 	// UNDER signalLock, same reason as task_signal_all_threads above (Codex
 	// #29 rd4). Holding it across send_ipi is safe: the IPI is lock-free APIC
@@ -194,9 +194,9 @@ bool task_signal_and_nudge(task_t* task, signals signal)
 
 		// Same exemptions as the sibling sweep: this core is already inside
 		// the scheduler's reach, and the BSP's timer is never masked.
-		if (kSMPInitDone && th->lastRunApicID != own_apic &&
-		    th->lastRunApicID != BOOTSTRAP_PROCESSOR_ID)
-			send_ipi(th->lastRunApicID, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
+		if (kSMPInitDone && th->lastRunCPU != own_cpu &&
+		    th->lastRunCPU != BSP_CPU)
+			send_ipi(th->lastRunCPU, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 	}
 	spinlock_release_irqrestore(&task->signalLock, f);
 	return true;
@@ -237,7 +237,7 @@ void task_terminate_sibling_threads(task_t* task, thread_t* self)
 		return;
 
 	core_local_storage_t* cls = get_core_local_storage();
-	uint64_t own_apic = cls ? cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
+	uint64_t own_cpu = cls ? cls->cpu : BSP_CPU;
 	uint32_t marked = 0;
 
 	// UNDER signalLock, like the other broadcast producers (Codex #29 rd7):
@@ -261,18 +261,18 @@ void task_terminate_sibling_threads(task_t* task, thread_t* self)
 		printd(DEBUG_TASK | DEBUG_THREAD,
 		       "task_exit: marking sibling thread 0x%08lx of %s (state %u, last ran on AP %lu) for termination\n",
 		       th->threadID, task->exename, (uint32_t)th->threadState,
-		       th->lastRunApicID);
+		       th->lastRunCPU);
 
 		// Knock on the core it was last seen on, unless that is this core
 		// (we are already inside the scheduler's reach) or the BSP (whose
 		// timer is never masked, so it will notice on its own next tick).
-		if (kSMPInitDone && th->lastRunApicID != own_apic &&
-		    th->lastRunApicID != BOOTSTRAP_PROCESSOR_ID)
+		if (kSMPInitDone && th->lastRunCPU != own_cpu &&
+		    th->lastRunCPU != BSP_CPU)
 		{
 			printd(DEBUG_TASK | DEBUG_THREAD,
 			       "task_exit: nudging AP %lu so its scheduler can redirect thread 0x%08lx into the exit trampoline\n",
-			       th->lastRunApicID, th->threadID);
-			send_ipi(th->lastRunApicID, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
+			       th->lastRunCPU, th->threadID);
+			send_ipi(th->lastRunCPU, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 		}
 	}
 	spinlock_release_irqrestore(&task->signalLock, slf);
@@ -1943,7 +1943,7 @@ void task_init_page_tables(task_t *task)
     paging_init_null_guard(task->pml4v, task->tableArena);
 }
 
-task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint64_t pinnedAPICId)
+task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint64_t pinnedCPU)
 {
     printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
            "task_initialize: Initializing task\n");
@@ -2033,12 +2033,12 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 
 	newTask->threads = createThread((void*)newTask, kernelTask);
 	newTask->threads->idleThread = idleTask;
-	newTask->threads->mp_apic = pinnedAPICId;
+	newTask->threads->pinnedCPU = pinnedCPU;
 	printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
 		"task_initialize: thread 0x%08x affinity set to %s0x%08lx\n",
 		newTask->threads->threadID,
-		pinnedAPICId == THREAD_NO_AFFINITY ? "THREAD_NO_AFFINITY/" : "",
-		pinnedAPICId);
+		pinnedCPU == THREAD_NO_AFFINITY ? "THREAD_NO_AFFINITY/" : "",
+		pinnedCPU);
 	newTask->taskID = newTask->threads->threadID;
 	newTask->exited = false;
 	newTask->autoReap = false;
@@ -2414,54 +2414,68 @@ static bool task_measure_argv(const char *path, int argc, char **argv, size_t *b
 	return true;
 }
 
-// PINCORE=<apic id> in the environment a user program is born with pins it,
-// and every thread it makes, to that core: `env PINCORE=3 coreprobe`. The
-// number is the APIC id, the one /proc's `core` and `affinity` lines and
-// coreprobe's `apic` lines print, so what you read is what you type. It is
-// read at birth only, and a child inherits the variable with the rest of the
-// environment, so a pinned shell pins everything it runs. A value that is not
-// a running core's APIC id leaves the program unpinned, and a DEBUG_TASK line
-// says why; an empty one means unset.
+// PINCPU=<n> in the environment a user program is born with pins it, and
+// every thread it makes, to CPU n: `env PINCPU=3 coreprobe`. The number is a
+// CPU number, the one /proc's `cpu` and `affinity` lines and coreprobe's
+// `cpu` column print, so what you read is what you type. It is read at birth
+// only, and a child inherits the variable with the rest of the environment,
+// so a pinned shell pins everything it runs. A value that is not a running
+// CPU leaves the program unpinned, and a DEBUG_TASK line says why; an empty
+// one means unset.
+//
+// PINCORE=<n> is the name this had while it took an APIC ID. It is still
+// read when PINCPU is absent, and now means a CPU number too — the same
+// number on every machine whose APIC IDs are dense, a different CPU on one
+// whose are not (a 3900X). Its notice is a DEBUG_TASK line rather than the
+// glass because it would print at every spawn under a pinned shell.
 static uint64_t task_env_pin(const envpage_t *env, const char *path)
 {
-	const char *pin = env_get(env, "PINCORE");
+	const char *name = "PINCPU";
+	const char *pin = env_get(env, "PINCPU");
 	if (pin == NULL)
-		return THREAD_NO_AFFINITY;
+	{
+		name = "PINCORE";
+		pin = env_get(env, "PINCORE");
+		if (pin == NULL)
+			return THREAD_NO_AFFINITY;
+		printd(DEBUG_TASK, "PINCORE: %s - PINCORE= is now PINCPU=, and is read as a CPU number\n", path);
+	}
 
-	// Four digits is past any APIC id this kernel can bring up, and bounding
-	// the length is what keeps the accumulator from wrapping onto a real core.
-	uint64_t apic = 0;
+	// Four digits is past any CPU number this kernel can bring up, and
+	// bounding the length is what keeps the accumulator from wrapping onto a
+	// real CPU.
+	uint64_t cpu = 0;
 	int digits = 0;
 	for (const char *c = pin; *c != '\0'; c++, digits++)
 	{
 		if (*c < '0' || *c > '9' || digits == 4)
 		{
-			printd(DEBUG_TASK, "PINCORE: '%s' for %s is not an APIC id - not pinned\n", pin, path);
+			printd(DEBUG_TASK, "%s: '%s' for %s is not a CPU number - not pinned\n", name, pin, path);
 			return THREAD_NO_AFFINITY;
 		}
-		apic = apic * 10 + (uint64_t)(*c - '0');
+		cpu = cpu * 10 + (uint64_t)(*c - '0');
 	}
 	if (digits == 0)
-		return THREAD_NO_AFFINITY;   // `PINCORE=` with nothing after it: unpinned
+		return THREAD_NO_AFFINITY;   // `PINCPU=` with nothing after it: unpinned
 
-	for (uint64_t i = 0; i < kMPCoreCount; i++)
-		if ((uint64_t)kCPUInfo[i].apicID == apic)
-		{
-			printd(DEBUG_TASK, "PINCORE: %s pinned to APIC %lu\n", path, apic);
-			return apic;
-		}
-	printd(DEBUG_TASK, "PINCORE: APIC %lu for %s is not a running core - not pinned\n", apic, path);
+	if (cpu < kCPUCount)
+	{
+		printd(DEBUG_TASK, "%s: %s pinned to CPU %lu (APIC %u)\n", name, path, cpu, kCPUs[cpu].apic.id);
+		return cpu;
+	}
+	printd(DEBUG_TASK, "%s: CPU %lu for %s is not a running CPU (%u running) - not pinned\n",
+	       name, cpu, path, kCPUCount);
 	return THREAD_NO_AFFINITY;
 }
 
-task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID)
+task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedCPU)
 {
 	return task_create_checked(path, argc, argv, parentTaskPtr, isKernelTask,
-	                           pinnedAPICID, NULL);
+	                           pinnedCPU, NULL);
 }
 
 task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTaskPtr,
-                            bool isKernelTask, uint64_t pinnedAPICID, int64_t *error)
+                            bool isKernelTask, uint64_t pinnedCPU, int64_t *error)
 {
 	if (error) *error = -1;
 	size_t argvBlobBytes;
@@ -2601,7 +2615,7 @@ task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTas
 
 			printd(DEBUG_TASK, "task_create: '%s' is a #! script — running %s%s%s with it\n",
 			       path, interp, iarg[0] ? " " : "", iarg);
-			return task_create_checked(interp, nargc, nargv, parentTaskPtr, isKernelTask, pinnedAPICID, error);
+			return task_create_checked(interp, nargc, nargv, parentTaskPtr, isKernelTask, pinnedCPU, error);
 		}
 
 		if (!elf_can_load(path))
@@ -2636,10 +2650,10 @@ task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTas
 
 	// A pin the caller chose is part of that task's design, and a kernel task
 	// takes no orders from an environment; only an unpinned user program asks.
-	if (!isKernelTask && pinnedAPICID == THREAD_NO_AFFINITY)
-		pinnedAPICID = task_env_pin(inheritedEnv, path);
+	if (!isKernelTask && pinnedCPU == THREAD_NO_AFFINITY)
+		pinnedCPU = task_env_pin(inheritedEnv, path);
 
-	task_t* newTask = task_initialize(parentTaskPtr, isKernelTask, isIdleTask, pinnedAPICID);
+	task_t* newTask = task_initialize(parentTaskPtr, isKernelTask, isIdleTask, pinnedCPU);
 	newTask->env = inheritedEnv;
 
     //Copy the path (parameter) value from the parentTask's memory.
@@ -2649,10 +2663,10 @@ task_t *task_create_checked(char *path, int argc, char **argv, task_t *parentTas
 	    printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
 	           "task_create: Creating %s task for %s\n",isKernelTask?"kernel":"user",newTask->path);
 	printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
-		"task_create: path=%s pinnedAPICID=%s0x%08lx idle=%u logd=%u kworker=%u guicomp=%u\n",
+		"task_create: path=%s pinnedCPU=%s0x%08lx idle=%u logd=%u kworker=%u guicomp=%u\n",
 		newTask->path,
-		pinnedAPICID == THREAD_NO_AFFINITY ? "THREAD_NO_AFFINITY/" : "",
-		pinnedAPICID,
+		pinnedCPU == THREAD_NO_AFFINITY ? "THREAD_NO_AFFINITY/" : "",
+		pinnedCPU,
 		isIdleTask,
 		isLogdTask,
 		isKWorkerTask,

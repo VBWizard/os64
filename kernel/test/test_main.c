@@ -19,7 +19,7 @@
 #include "dlist.h"
 #include <stdint.h>
 #include "smp_core.h"
-#include "smp.h"       // kCPUInfo/kMPCoreCount — the backstop test picks its AP
+#include "smp.h"       // kCPUCount — the backstop test needs an AP
 #include "signals.h"   // SIGKILL — delivered to the hog by a backstop pass
 #include "CONFIG.h"    // the backstop test's windows are denominated in
                        // leases (kSchedBackstopMS), never in milliseconds
@@ -166,6 +166,41 @@ static bool test_page_zero_unmapped(void)
     kfree(task);
     if (!ok)
         TEST_FAIL("task page zero guard or neighbouring mapping is incorrect");
+    return true;
+}
+
+// The CPU roster round-trips (CPU_NUMBERS.md): every numbered CPU's APIC ID
+// maps back to that CPU, no two CPUs share an APIC ID, CPU 0 is the BSP, and
+// the CPU running this — the BSP, before the APs are woken — sits in the CLS
+// slot its own local APIC says it should. Each AP checks the same of itself
+// as it comes up (ap_wakeup_after_stack_switch).
+static bool test_cpu_roster_round_trip(void)
+{
+    for (uint32_t cpu = 0; cpu < kCPUCount; cpu++) {
+        uint32_t id = kCPUs[cpu].apic.id;
+        if (id > CPU_ROSTER_APIC_MAX || kApicToCPU[id] != cpu) {
+            printd(DEBUG_TESTS, "\tFAIL: test_cpu_roster_round_trip - CPU %u is APIC %u, which maps back to %u\n",
+                   cpu, id, id > CPU_ROSTER_APIC_MAX ? CPU_ROSTER_NO_CPU : kApicToCPU[id]);
+            return false;
+        }
+    }
+    uint32_t named = 0;
+    for (uint32_t id = 0; id < CPU_ROSTER_APIC_IDS; id++)
+        if (kApicToCPU[id] != CPU_ROSTER_NO_CPU)
+            named++;
+    if (named != kCPUCount) {
+        printd(DEBUG_TESTS, "\tFAIL: test_cpu_roster_round_trip - the inverse table names %u CPUs, the roster has %u\n",
+               named, kCPUCount);
+        return false;
+    }
+    core_local_storage_t *cls = get_core_local_storage();
+    apic_id_t mine = read_apic_id();
+    if (cls->cpu != BSP_CPU || cls->apic.id != mine.id || kCPUs[BSP_CPU].apic.id != mine.id) {
+        printd(DEBUG_TESTS, "\tFAIL: test_cpu_roster_round_trip - the BSP's slot says CPU %lu APIC %u, its LAPIC says APIC %u, the roster's CPU 0 is APIC %u\n",
+               cls->cpu, cls->apic.id, mine.id, kCPUs[BSP_CPU].apic.id);
+        return false;
+    }
+    printd(DEBUG_TESTS, "\tPASS: test_cpu_roster_round_trip (%u CPUs, BSP APIC %u)\n", kCPUCount, mine.id);
     return true;
 }
 
@@ -5238,8 +5273,8 @@ static bool test_net_icmp_conn(void)
     // own core is picked by the pass knet's park provokes, the same pass
     // that would have run the sweep.
     thread_t *self = get_core_local_storage()->currentThread;
-    uint64_t affinity_before = self->mp_apic;
-    self->mp_apic = BOOTSTRAP_PROCESSOR_ID;
+    uint64_t affinity_before = self->pinnedCPU;
+    self->pinnedCPU = BSP_CPU;
     __sync_synchronize();
     nap(10);
     uint64_t wake_min_us = ~0UL, wake_max_us = 0;
@@ -5260,13 +5295,13 @@ static bool test_net_icmp_conn(void)
         uint64_t per_us = kCPUCyclesPerSecond / 1000000;
         uint64_t stamp_tsc = c->last_arrival_tsc;
         uint64_t now_tsc = rdtsc();
-        measured_on = get_core_local_storage()->apic_id;   // printed, so the pin is checkable in every log
+        measured_on = get_core_local_storage()->cpu;   // printed, so the pin is checkable in every log
         uint64_t wake_us = (per_us && now_tsc > stamp_tsc) ? (now_tsc - stamp_tsc) / per_us : 0;
         if (wake_us < wake_min_us) wake_min_us = wake_us;
         if (wake_us > wake_max_us) wake_max_us = wake_us;
         samples++;
     }
-    self->mp_apic = affinity_before;   // the pin was the measurement's, not the test's
+    self->pinnedCPU = affinity_before;   // the pin was the measurement's, not the test's
     __sync_synchronize();
     if (measure_fail != NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - a %s in the wake measurement failed\n", measure_fail);
@@ -5309,7 +5344,7 @@ static bool test_net_icmp_conn(void)
     }
 
     printd(DEBUG_TESTS, "\tPASS: test_net_icmp_conn (%ld bytes echoed by %u.%u.%u.%u in %lu ticks; "
-           "arrival wake %lu-%lu us over %d echoes, %d lost, measured on APIC %u; cold-cache echo survived the ARP re-ask)\n",
+           "arrival wake %lu-%lu us over %d echoes, %d lost, measured on CPU %u; cold-cache echo survived the ARP re-ask)\n",
            got, NET_IPV4_OCTETS(kNetIPv4Gateway), rtt, wake_min_us, wake_max_us, samples, lost, measured_on);
     return true;
 }
@@ -5951,7 +5986,7 @@ static bool test_backstop_preemption(void)
         printd(DEBUG_TESTS, "\tSKIP: test_backstop_preemption (backstop not active this boot)\n");
         return true;
     }
-    if (kMPCoreCount < 2) {
+    if (kCPUCount < 2) {
         printd(DEBUG_TESTS, "\tSKIP: test_backstop_preemption (needs an AP)\n");
         return true;
     }
@@ -5960,7 +5995,7 @@ static bool test_backstop_preemption(void)
         return true;
     }
 
-    uint32_t ap = kCPUInfo[1].apicID;
+    uint32_t ap = 1;   // CPU 1: the first AP
     uint64_t fires_before = kSchedBackstopFires[ap];
 
     // Ring 3 and PINNED: the exact starvation shape. An unpinned spinner
@@ -6008,14 +6043,14 @@ static bool test_backstop_preemption(void)
     bool ok = false;
 
     if (expiries < 3) {
-        printd(DEBUG_TESTS, "\tFAIL: test_backstop_preemption - only %lu lease expiries on APIC %u in 500ms (wanted >=3)\n",
+        printd(DEBUG_TESTS, "\tFAIL: test_backstop_preemption - only %lu lease expiries on CPU %u in 500ms (wanted >=3)\n",
                expiries, ap);
     }
     else if (!hog->exited) {
         printd(DEBUG_TESTS, "\tFAIL: test_backstop_preemption - SIGKILL never reached the hog (no pass delivered it?)\n");
     }
     else {
-        printd(DEBUG_TESTS, "\tPASS: test_backstop_preemption (%lu lease expiries on APIC %u, SIGKILL landed)\n",
+        printd(DEBUG_TESTS, "\tPASS: test_backstop_preemption (%lu lease expiries on CPU %u, SIGKILL landed)\n",
                expiries, ap);
         ok = true;
     }
@@ -6030,6 +6065,7 @@ static void register_builtin_tests(void)
 {
     test_register("window_minimum_clamp", test_window_minimum_clamp, TEST_PHASE_PREBOOT);
     test_register("surface_blit", test_surface_blit, TEST_PHASE_PREBOOT);
+	test_register("cpu_roster_round_trip", test_cpu_roster_round_trip, TEST_PHASE_PREBOOT);
 	test_register("kmalloc_not_null", test_kmalloc_not_null, TEST_PHASE_PREBOOT);
 	test_register("frame_table_scale", test_frame_table_scale, TEST_PHASE_PREBOOT);
 	test_register("allocator_try_refuses", test_allocator_try_refuses, TEST_PHASE_PREBOOT);

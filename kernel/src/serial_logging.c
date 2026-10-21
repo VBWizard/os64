@@ -69,10 +69,11 @@ void printd(__uint128_t debug_level, const char *fmt, ...) {
 
     if ((kDebugLevel & debug_level) != debug_level) return;
     
-    uint16_t core = 0;  // Default core if SMP isn't initialized
 	uint64_t threadID = 0;
 
-    core = read_apic_id(); // Get actual core ID if SMP is initialized
+    // The CPU number, safely from anywhere — this runs before the BSP has a
+    // CLS and on APs before they publish theirs (cpu_self, smp_core.h).
+    uint16_t core = (uint16_t)cpu_self();
     if (kSMPInitDone && kCLSInitialized)
     {
         core_local_storage_t *cls = get_core_local_storage();

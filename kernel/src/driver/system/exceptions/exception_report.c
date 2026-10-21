@@ -69,15 +69,16 @@ static volatile uint32_t kWireDepth = 0;
 
 static uint32_t wire_self(void)
 {
-	// AP startup can fault before GS is installed. The LAPIC is available
-	// by then; read_apic_id returns the BSP identity before LAPIC setup.
-	return read_apic_id();
+	// An identity, not an index: the APIC ID is unique even for a CPU that
+	// faults before its CLS exists, or that the roster never numbered. The
+	// LAPIC is mapped by then; before init_SMP maps it only the BSP runs.
+	return read_apic_id().id;
 }
 
 static uint32_t exception_core_index(void)
 {
-	uint32_t core = read_apic_id();
-	return core < MAX_CPUS ? core : 0;
+	uint32_t cpu = cpu_self();
+	return cpu < MAX_CPUS ? cpu : 0;
 }
 
 void exception_wire_lock(void)
@@ -499,8 +500,10 @@ void exception_report(const exception_context_t *ctx, const char *why)
 		         exception_vector_name(ctx->vector));
 	}
 
-	EXC_EMIT(dying, ">>> AP %lu (Thread 0x%08x)  vector %lu  error 0x%lx <<<\n",
-	         (uint64_t)read_apic_id(), cls ? cls->threadID : 0,
+	// Both numbers: the CPU number is the log's, the APIC ID is what a
+	// person debugging the hardware will be holding.
+	EXC_EMIT(dying, ">>> AP %u (APIC %u) (Thread 0x%08x)  vector %lu  error 0x%lx <<<\n",
+	         cpu_self(), read_apic_id().id, cls ? cls->threadID : 0,
 	         ctx->vector, ctx->error_code);
 
 	// The #PF error code decoded, in the SAME words the ring-3 segfault report

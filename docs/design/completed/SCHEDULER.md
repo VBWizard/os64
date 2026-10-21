@@ -22,7 +22,7 @@ own threads (see task.h/thread.h).
 | Entry/exit asm | `scheduler.S` (`_schedule_ap`) | Interrupt entry, register capture to `mp_isrSaved*` arrays, CR3/stack switch, signal check (BSP), restore + `iretq`. Both scheduler vectors (timer 0x7E and manual 0x81) point here |
 | Policy | `scheduler.c` | Queues, thread selection, store/load thread state, `scheduler_trigger`, the donuts |
 | Per-core plumbing | `smp_core.c` | `send_ipi`, AP wake-up/init, LAPIC timer calibration + arming, TLB-shootdown ISR, per-core SYSCALL MSRs |
-| SMP bring-up | `smp.c` | `init_SMP`: MP/MADT parsing, `kCPUInfo`, MAXCORES clamp, CLS array allocation |
+| SMP bring-up | `smp.c` | `cpu_roster_init` (CPU numbers, `kCPUs`, the MAXCPUS cap) and `init_SMP` (MP table, LAPIC/IOAPIC mapping) |
 | Signals | `signals.c` | `sigaction` (SIGSLEEP/SIGLOGFLUSH), `processSignals` (ISLEEP wake scan) |
 | Core-local storage | `smp_core.h`, CLS struct in smp.h | `gs:0` self-pointer; per-core scratch that is valid under ANY CR3 |
 
@@ -38,7 +38,8 @@ LAPIC timer (vector 0x7E, periodic) or self-IPI (0x81, from scheduler_trigger)
       (invariants 1-3).
    3. (BSP only) _check_signals → processSignals: wake expired ISLEEPers,
       ring knet's doorbell once per tick, run the wake sweeps (DOORBELL.md).
-   4. Save GP registers into the per-core mp_isrSaved*[apic_id] arrays.
+   4. Save GP registers into the per-CPU mp_isrSaved*[cpu] arrays (the
+      CPU number from gs:CLS_CPU_OFFSET).
    5. mov cr3, kKernelPML4; switch RSP to this core's scheduler stack.
    6. call scheduler_do:
       - take kSchedulerSwitchTasksLock (test-and-set spinlock)
@@ -162,8 +163,8 @@ Idle threads never accumulate, so they win only when nothing else can run
 (and if truly nothing can, that's the "No runnable threads found" panic —
 idle threads must always be present and runnable).
 
-- **Affinity:** `thread->mp_apic` = `THREAD_NO_AFFINITY` (run anywhere) or
-  an APIC id (run only there). `scheduler_thread_can_run_on_core` is the
+- **Affinity:** `thread->pinnedCPU` = `THREAD_NO_AFFINITY` (run anywhere) or
+  a CPU number (run only there). `scheduler_thread_can_run_on_core` is the
   single gate.
 - **Wake boost:** `scheduler_wake_task_waiter(task, waiter)` adds
   `HIGH_PRIORITY_TICKS_BOOST` (10M) so a woken thread wins its next
@@ -238,22 +239,25 @@ whole design is "do a frame, halt." Until the damage-wake exists,
   bounded; a wedged target core produces a loud "stuck busy" panic naming
   sender, target, and vector instead of an invisible spin.
 
-## SMP bring-up (and MAXCORES)
+## SMP bring-up (and MAXCPUS)
 
-`init_SMP` parses MADT/MP tables into `kCPUInfo`, clamps `kMPCoreCount` to
-`MAXCORES=<n>` if given (the single point of truth — everything downstream
-just sees fewer cores; capped-off cores stay parked in Limine's AP loop,
-never woken). Then `ap_wake_up_aps`, per AP: write the AP's Limine
-`goto_address` → AP runs `ap_wakeup_entry` (own CR3/GDT/TSS/IDT, real stack,
+`cpu_roster_init` (kernel_main, before the log rings) numbers the CPUs from
+Limine's list: CPU 0 is the BSP, the rest ascend by APIC ID, and `nosmp` /
+`MAXCPUS=<n>` / `MAX_CPUS` take the first N of that order, so everything
+downstream just sees `kCPUCount` CPUs (capped-off ones stay parked in
+Limine's AP loop, never woken). CPU_NUMBERS.md is the design. Then
+`ap_wake_up_aps`, per AP in CPU order: write that CPU's own Limine
+`goto_address` (`kCPUs[cpu]`) → AP runs `ap_wakeup_entry` (own CR3/GDT/TSS/IDT, real stack,
 CLS) → handshake on `coreAwoken` → init IPI (0x7F: MSRs + timer calibration)
 → handshake on `coreInitialized` → enable-scheduling IPI (or a single manual
 kick under tickless). Finally `kSMPInitDone = true`, which un-gates
 TLB-shootdown broadcasts.
 
-**MAX_CPUS is 24.** The 3900X (24 threads) sits exactly at the boundary —
-index 24 would be one past the arrays. Anything bigger, or any APIC id ≥ 24,
-needs MAX_CPUS raised (it sizes every `mp_isrSaved*` array, kCPUInfo, CLS
-array, and friends) or MAXCORES used as the guard rail.
+**MAX_CPUS bounds CPU numbers, not APIC IDs.** It sizes every per-CPU table
+(the `mp_isrSaved*` arrays, CLS, the log rings) and, through
+`ASM_MAX_CPUS`, scheduler.S's own; a machine with more CPUs brings up the
+first MAX_CPUS and says how many it parked. APIC IDs can be sparse (the
+3900X's are 0-29 for 24 CPUs) and never index anything but `kApicToCPU`.
 
 ## The donuts (mandatory)
 
@@ -275,8 +279,8 @@ scheduler_wake_task_waiter(task, thread);  // early wake of THE WAITING THREAD (
 Wake granularity is the BSP pass cadence (~10-30ms); don't build anything
 that needs finer.
 
-**Pin a thread to a core:** set `thread->mp_apic = <apic_id>` before it
-becomes runnable. Remember: under tickless it will be nudge-only and
+**Pin a thread to a CPU:** set `thread->pinnedCPU = <cpu>` (a CPU number,
+not an APIC ID) before it becomes runnable. Remember: under tickless it will be nudge-only and
 unpreemptable there; any IRQ it depends on must ride a vector ≥ 0x40 if the
 core is an AP.
 
@@ -311,10 +315,11 @@ the never-drop rule means nothing is discarded); sustained oversubscription
 eventually reaches the forced-flush path, whose LOGFULL tripwire prints the
 moment a producer starts paying the drain cost itself. This family of
 overload is what crashed the 12-core Bosgame with default logging (fixed
-with `nolog` + `MAXCORES=4` on that entry). Rules of thumb: on more than ~2
-cores boot `nolog` and enable narrow subsystem bits (DEBUG_GUI) instead of
-DEBUG_SCHEDULER; if you truly need scheduler logs on wide hardware, cap
-cores with MAXCORES and accept the slowdown.
+with `nolog` + `MAXCORES=4` on that entry, the token now spelled MAXCPUS).
+Rules of thumb: on more than ~2 CPUs boot `nolog` and enable narrow
+subsystem bits (DEBUG_GUI) instead of DEBUG_SCHEDULER; if you truly need
+scheduler logs on wide hardware, cap CPUs with MAXCPUS and accept the
+slowdown.
 
 ### The magic number autopsy (2026-07-10/11) — read before "optimizing" cadence
 
@@ -386,7 +391,7 @@ priority class so the wall clock is unstealable no matter what a pass does.
   printds out of the pass/lock; don't touch the timer, it's innocent.
 - **Many-core boot dies early with verbose logging (bare metal) or crawls
   (QEMU):** serial oversubscription — see "do the math first" above.
-  `nolog` + MAXCORES, then re-enable narrow debug bits.
+  `nolog` + MAXCPUS, then re-enable narrow debug bits.
 
 ## Known limitations / future work
 

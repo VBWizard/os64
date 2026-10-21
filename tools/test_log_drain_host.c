@@ -21,7 +21,7 @@ static core_local_storage_t *forbidden_cls_read(void)
 #include "../kernel/src/logging/log.c"
 #undef get_core_local_storage
 
-volatile uint8_t kMPCoreCount = 1;
+uint32_t kCPUCount = 1;
 volatile uint64_t kTicksSinceStart = 1;
 volatile uint64_t kSystemCurrentTime = 0;
 char kLogdPath[128] = "";
@@ -37,7 +37,7 @@ void serial_print_string(const char *message)
     serial_calls++;
 }
 
-uint32_t read_apic_id(void) { return 0; }
+uint32_t cpu_self(void) { return 0; }
 
 void panic(const char *format, ...)
 {

@@ -1500,8 +1500,8 @@ bool guicomp_thread(bool daemon)
 	core_local_storage_t *cls = get_core_local_storage();
 	thread_t *self = cls->currentThread;
 
-	printd(DEBUG_GUI, "guicomp: compositor starting on APIC %u (thread=0x%08x, daemon=%u)\n",
-		cls->apic_id, self->threadID, daemon);
+	printd(DEBUG_GUI, "guicomp: compositor starting on CPU %u (thread=0x%08x, daemon=%u)\n",
+		cls->cpu, self->threadID, daemon);
 
 	if (surface_init(&kBackbuffer, kFrameBuffer.width, kFrameBuffer.height) != 0 ||
 	    surface_init(&kDesktop, kFrameBuffer.width, kFrameBuffer.height) != 0) {
@@ -1713,7 +1713,7 @@ bool guicomp_thread(bool daemon)
 	}
 }
 
-// Pin the compositor to core 1 when we have one (kworker precedent): keeps
+// Pin the compositor to CPU 1 when we have one (kworker precedent): keeps
 // steady frame work off the BSP, which handles IRQ0/signals. EXCEPT in
 // tickless mode (the default): there the AP scheduler timers stay masked
 // (smp_core.c enableAPScheduling_ISR) — a thread pinned to an AP runs
@@ -1723,8 +1723,8 @@ bool guicomp_thread(bool daemon)
 // (SCHEDULER.md) lets a pinned compositor and parked cores coexist.
 uint64_t gui_compositor_affinity(void)
 {
-	return (kMPCoreCount > 1 && !kTicklessScheduler)
-	           ? (uint64_t)kCPUInfo[1].apicID
+	return (kCPUCount > 1 && !kTicklessScheduler)
+	           ? (uint64_t)1
 	           : THREAD_NO_AFFINITY;
 }
 
