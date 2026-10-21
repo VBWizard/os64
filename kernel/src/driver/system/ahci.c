@@ -16,8 +16,8 @@
 #include "strings.h"
 
 pci_device_t kPCISATADevice;
-extern uint8_t kPCIDeviceCount;
-extern uint8_t kPCIFunctionCount;
+extern uint16_t kPCIDeviceCount;
+extern uint16_t kPCIFunctionCount;
 extern pci_device_t* kPCIDeviceHeaders;
 extern pci_device_t* kPCIDeviceFunctions;
 // kBlockDeviceInfo/kBlockDeviceInfoCount are defined in block_device.c now
