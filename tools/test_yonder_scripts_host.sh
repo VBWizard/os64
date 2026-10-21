@@ -33,7 +33,7 @@ host_flags=(-O1 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
 objects=()
 for source in tools/test_yonder_scripts_host.c tools/test_js_port_calendar.c tools/test_libflow_fonts.c \
     userland/libjs/runtime/runtime.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin}.c \
-    userland/apps/yonder/{scripts,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag}.c \
+    userland/apps/yonder/{scripts,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag,backdrop}.c \
     userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize}.c \
     userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \
     userland/libpage/upstream/ryu/ryu/d2s.c \

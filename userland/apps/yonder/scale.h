@@ -28,4 +28,11 @@ void yonder_tile_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os
                          os64_gui_rect_t tile, bool repeat_x, bool repeat_y, bool smooth,
                          const uint32_t *src, uint32_t sw, uint32_t sh);
 
+// ONE copy of the tile yonder_tile_picture lays, `tw` x `th`, into `dst`
+// (`tw` a row) as 0xAARRGGBB, NOT blended: each pixel is what the tiler
+// would lay over what is under it at that place of a copy, so laying `dst`
+// over a pixel is laying the picture there (backdrop.h).
+void yonder_tile_pixels(uint32_t *dst, int32_t tw, int32_t th, bool smooth, const uint32_t *src,
+                        uint32_t sw, uint32_t sh);
+
 #endif

@@ -43,6 +43,8 @@
 #include "sheet.h"
 #include "scale.h"
 #include "warp.h"
+#include "backdrop.h"
+#include "os64/damage.h"
 #include "settings.h"
 #include "scripts.h"
 #include "diag.h"
@@ -646,6 +648,74 @@ static void webfonts_families_shown(const Page *p);
 static void webfonts_layout_begins(const Page *p);
 static void pictures_schedule(void);
 static uint64_t frame_delay(const Picture *pic);
+// THE MOVING BACKGROUND'S LAYER (BACKDROP_LAYER.md, backdrop.h). One box at
+// a time whose moving background picture is drawn by its own pixels: the
+// view painted three times with that layer black, white and left out, and
+// each frame of it composed from those where it changed, instead of a
+// paint of everything in front of it. The box is HELD by its element,
+// layer and picture, since its box is remade by every layout; each frame's
+// mark says where its box is now.
+
+#define BACKDROP_INVALID 8      // the invalid list's rectangles (the dirty list's rule)
+#define BACKDROP_HOLES 16       // the widgets over the view a frame keeps clear of; more refuse
+
+typedef struct {
+    // The held background: its box's element (the canvas's owner when
+    // `canvas`), its layer of the box's sheets (-1: the `background`
+    // attribute's picture), and the picture. No element: none held.
+    const os64_html_node_t *node;
+    int32_t layer, pic;
+    bool canvas;
+    // The biggest background a frame offered while none is held, held at
+    // the next paint (backdrop_hold): by its element, since a layout
+    // between the frame and the paint remakes every box.
+    struct {
+        const os64_html_node_t *node;
+        int32_t layer, pic;
+        bool canvas;
+        int64_t area;
+    } offer;
+    // The held picture moved a frame, and its box's part of the view then
+    // (page coordinates). No box is kept: a layout remakes them.
+    bool due;
+    os64_gui_rect_t meet;
+    const char *refused;        // why the held background has no layer, or NULL
+    yonder_backdrop_policy_t policy;
+    // The three paintings, `vw` x `vh` (the view's size), and whether they
+    // hold the view outside the invalid list.
+    uint32_t *k, *w, *p;
+    int32_t vw, vh;
+    bool built;
+    os64_gui_rect_t invalid[BACKDROP_INVALID];
+    uint32_t ninvalid;
+    // The moving layer as the last painting that drew it laid it, page
+    // coordinates: a copy's place and size, its repeats, its smoothing.
+    // `laid` counts the paintings, so two places in one painting (an
+    // inline box's pieces) are seen; `through`, drawn through a sheet.
+    os64_gui_rect_t at;
+    bool repeat_x, repeat_y, smooth, placed, through, pieces;
+    uint32_t laid, placed_in;
+    // One copy as the view shows it, and the frame being taken (`tw` x `th`).
+    uint32_t *shown, *next;
+    int32_t tw, th;
+    // The pixels painted for something other than the held frames since
+    // the last frame (BACKDROP_QUIET_SHARE says how many still leave the
+    // view quiet); whether this paint is one the held frame marked (its
+    // ordinary paint, or its holes'), whose other rectangles were noted as
+    // it marked them (backdrop_others); and `measuring`, the ordinary
+    // paint's pixels, for the policy.
+    int64_t disturbed;
+    bool frame_painting;
+    int64_t measuring;
+    // What a frame composed, in window coordinates, for the paint to
+    // publish (glass_paint).
+    os64_gui_rect_t damage[OS64_UI_DAMAGE_MAX];
+    uint32_t ndamage;
+} BackdropLayer;
+static BackdropLayer s_layer;
+
+// Nothing held: the page left, or yonder is closing.
+static void backdrop_reset(void);
 
 // A shown picture's pixels: the still image, or the frame a moving one is on.
 static const uint32_t *picture_pixels(const Picture *pic, uint32_t *w, uint32_t *h)
@@ -1873,6 +1943,14 @@ static struct {
     // one arrive as one (the window's doorbell is a mask) — and the
     // deadlines handed the ticker already past.
     uint64_t bells, past[PAST_COUNT];
+    // The moving background's layer (BACKDROP_LAYER.md § What the record
+    // says): its box's frames, how each was drawn, the pixels composed and
+    // rebuilt, the builds and those lost before they paid, and the holes
+    // marked as parts.
+    struct {
+        uint64_t frames, composed, written, painted, painted_unbuilt, painted_dearer;
+        uint64_t rebuilt, built, lost, holes;
+    } bd;
     uint64_t from_cycles;
     int64_t from_us;
 } s_cost;
@@ -2536,6 +2614,7 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     // What the last page's paints kept is not this one's.
     yonder_paint_cache_empty(g.paint_cache);
     yonder_scratch_drop(g.paint_scratch);
+    backdrop_reset();
     // Its paints are counted from here (diag_paint), its readings anew.
     cost_reset();
     s_cost_readings = 0;
@@ -3527,15 +3606,21 @@ static int32_t css_picture(const Page *p, const flow_layer_t *l)
     return picture_find(p, url);
 }
 
-// Whether any of a style's layers shows picture `k`.
-static bool css_shows(const Page *p, const flow_style_t *s, int32_t k)
+// The first (topmost) of a style's layers that shows picture `k`, or -1.
+static int32_t css_layer_of(const Page *p, const flow_style_t *s, int32_t k)
 {
     for (int32_t i = 0; i < flow_background_layers(s); i++) {
         flow_layer_t l = flow_background_layer(s, i);
         if (l.image != NULL && css_picture(p, &l) == k)
-            return true;
+            return i;
     }
-    return false;
+    return -1;
+}
+
+// Whether any of a style's layers shows picture `k`.
+static bool css_shows(const Page *p, const flow_style_t *s, int32_t k)
+{
+    return css_layer_of(p, s, k) >= 0;
 }
 
 static bool picture_unasked(Page *p, const char *url, const char *written,
@@ -5043,9 +5128,32 @@ static bool whole_lines(DiagText *w)
     return true;
 }
 
+// The moving background's layer (BACKDROP_LAYER.md § What the record
+// says): which background it holds, its frames and how each was drawn, the
+// pixels composed and painted again for it, its builds and those lost
+// before they paid, the holes, and why it was refused if it was. False,
+// with nothing written, when no frame came.
+static bool backdrop_lines(DiagText *b)
+{
+    if (s_cost.bd.frames == 0)
+        return false;
+    dt_put(b, "%s, %lu frames: %lu composed (%lu.%lu Mpx), %lu painted (%lu before it was built, %lu dearer "
+              "so), %lu.%lu Mpx painted again for it, %lu built (%lu lost before they paid), %lu holes",
+           s_layer.node == NULL ? "none held" : s_layer.canvas ? "the canvas" : "a box",
+           (unsigned long)s_cost.bd.frames, (unsigned long)s_cost.bd.composed,
+           (unsigned long)(s_cost.bd.written / 1000000), (unsigned long)(s_cost.bd.written / 100000 % 10),
+           (unsigned long)s_cost.bd.painted, (unsigned long)s_cost.bd.painted_unbuilt,
+           (unsigned long)s_cost.bd.painted_dearer, (unsigned long)(s_cost.bd.rebuilt / 1000000),
+           (unsigned long)(s_cost.bd.rebuilt / 100000 % 10), (unsigned long)s_cost.bd.built,
+           (unsigned long)s_cost.bd.lost, (unsigned long)s_cost.bd.holes);
+    if (s_layer.refused != NULL)
+        dt_put(b, "; refused: %s", s_layer.refused);
+    return true;
+}
+
 static void diag_paint(Page *p)
 {
-    DiagText t = {0}, u = {0}, w = {0};
+    DiagText t = {0}, u = {0}, w = {0}, b = {0};
     bool timed = paint_lines(&t, &u);
     yonder_diag_fact(p->diag, "paint", dt_text(&t));
     if (timed)
@@ -5056,20 +5164,27 @@ static void diag_paint(Page *p)
         yonder_diag_fact(p->diag, "whole views", dt_text(&w));
     else
         yonder_diag_forget(p->diag, "whole views");
+    if (backdrop_lines(&b))
+        yonder_diag_fact(p->diag, "backdrop", dt_text(&b));
+    else
+        yonder_diag_forget(p->diag, "backdrop");
     os64_free(t.s);
     os64_free(u.s);
     os64_free(w.s);
+    os64_free(b.s);
 }
 
 // The counts kept as reading `n` of the page, with where the page was
 // scrolled, before they start again (diag_asked): each `d` adds one.
 static void diag_paint_reading(Page *p, uint32_t n)
 {
-    DiagText t = {0}, u = {0}, v = {0}, w = {0};
+    DiagText t = {0}, u = {0}, v = {0}, w = {0}, b = {0};
     bool timed = paint_lines(&t, &u);
     bool whole = whole_lines(&w);
-    dt_put(&v, "at y %ld: %s%s%s%s%s", (long)g.sy, dt_text(&t), timed ? " | " : "", timed ? dt_text(&u) : "",
-           whole ? " | whole views: " : "", whole ? dt_text(&w) : "");
+    bool backdrop = backdrop_lines(&b);
+    dt_put(&v, "at y %ld: %s%s%s%s%s%s%s", (long)g.sy, dt_text(&t), timed ? " | " : "",
+           timed ? dt_text(&u) : "", whole ? " | whole views: " : "", whole ? dt_text(&w) : "",
+           backdrop ? " | backdrop: " : "", backdrop ? dt_text(&b) : "");
     char key[32];
     os64_snprintf(key, sizeof(key), "paint reading %u", (unsigned)n);
     yonder_diag_fact(p->diag, key, dt_text(&v));
@@ -5077,6 +5192,7 @@ static void diag_paint_reading(Page *p, uint32_t n)
     os64_free(u.s);
     os64_free(v.s);
     os64_free(w.s);
+    os64_free(b.s);
 }
 
 // A page's fonts on its record, at each write: how many faces and files
@@ -5221,6 +5337,49 @@ static void mark_part(os64_gui_rect_t r)
     os64_ui_mark_dirty(&g.ui, &part);
 }
 
+// ── The moving background's layer ───────────────────────────────────────
+//
+// BackdropLayer holds it; its frames are made beside the view's painting
+// (backdrop_frame). A picture's frame behind a box is marked through here.
+
+// A box's background picture `k` (its sheets' layer `layer`, or -1 for the
+// `background` attribute; the canvas's owner's when `canvas`) moved a
+// frame, `meet` its part of the view in page coordinates. True when the
+// layer takes the frame — the caller marks nothing, and the next paint
+// composes it or marks it (backdrop_frame). Otherwise the biggest offered
+// while none is held is kept for backdrop_hold.
+static bool backdrop_moved(const flow_box_t *b, int32_t layer, int32_t k, os64_gui_rect_t meet,
+                           bool canvas)
+{
+    if (s_layer.node != NULL && s_layer.refused == NULL && b->node == s_layer.node &&
+        layer == s_layer.layer && k == s_layer.pic && canvas == s_layer.canvas) {
+        s_layer.due = true;
+        s_layer.meet = meet;
+        return true;
+    }
+    int64_t area = (int64_t)meet.w * meet.h;
+    if (s_layer.node == NULL && b->node != NULL && area > s_layer.offer.area) {
+        s_layer.offer.node = b->node;
+        s_layer.offer.layer = layer;
+        s_layer.offer.pic = k;
+        s_layer.offer.canvas = canvas;
+        s_layer.offer.area = area;
+    }
+    return false;
+}
+
+// A moved background marked for an ordinary paint, unless the layer took it.
+static void backdrop_mark(const flow_box_t *b, int32_t layer, int32_t k, os64_gui_rect_t meet,
+                          bool canvas)
+{
+    if (backdrop_moved(b, layer, k, meet, canvas))
+        return;
+    if (canvas)
+        mark_whole(WHOLE_BACKDROP, false);
+    else
+        mark_part(meet);
+}
+
 typedef struct {
     int32_t k;
     bool mark;
@@ -5229,18 +5388,29 @@ typedef struct {
     const flow_box_t *owner;    // the canvas's: asked apart from the walk
 } SheetPictureSeen;
 
+// Whether a box draws a background of its own: a text run, a line and a
+// marker carry their element's style, background and all, but the painter
+// draws none behind them (paint_box), so a picture moving there moves
+// nothing on them — and marking them would repaint text for nothing, and
+// keep the moving background's layer from ever seeing a quiet view.
+static bool box_draws_background(const flow_box_t *b)
+{
+    return b->kind != FLOW_BOX_TEXT && b->kind != FLOW_BOX_LINE && b->kind != FLOW_BOX_MARKER;
+}
+
 // One box of the view's walk: does a sheet put picture `k` behind it?
 static void sheet_picture_seen(void *ctx, const flow_box_t *b)
 {
     SheetPictureSeen *look = ctx;
-    if (b == look->owner || (look->seen && !look->mark) || !css_shows(&g.page, b->style, look->k))
+    if (b == look->owner || (look->seen && !look->mark) || !box_draws_background(b) ||
+        !css_shows(&g.page, b->style, look->k))
         return;
     os64_gui_rect_t meet;
     if (!os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), look->view, &meet))
         return;
     look->seen = true;
     if (look->mark)
-        mark_part(meet);
+        backdrop_mark(b, css_layer_of(&g.page, b->style, look->k), look->k, meet, false);
 }
 
 static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
@@ -5302,7 +5472,8 @@ static bool picture_on_screen(int32_t k, bool mark)
         seen = true;
         if (!mark)
             return true;
-        mark_whole(WHOLE_BACKDROP, false);
+        backdrop_mark(owner, attribute_shows(owner) ? -1 : css_layer_of(p, owner->style, k), k, view,
+                      true);
     }
     // Behind any other box: a `background` attribute's picture where it
     // shows (attribute_shows), and then a sheet's behind any box the view
@@ -5317,7 +5488,7 @@ static bool picture_on_screen(int32_t k, bool mark)
         seen = true;
         if (!mark)
             return true;
-        mark_part(meet);
+        backdrop_mark(b, -1, k, meet, false);
     }
     SheetPictureSeen look = {k, mark, view, false, owner};
     flow_visit(p->tree, view, scroll_now(), sheet_picture_seen, &look);
@@ -5337,7 +5508,8 @@ static void sheet_pictures_seen(void *ctx, const flow_box_t *b)
 {
     SheetPicturesSeen *look = ctx;
     os64_gui_rect_t meet;
-    if (b == look->owner || !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), look->view, &meet))
+    if (b == look->owner || !box_draws_background(b) ||
+        !os64_rect_intersect(flow_box_doc_rect(b, scroll_now()), look->view, &meet))
         return;
     for (int32_t i = 0; i < flow_background_layers(b->style); i++) {
         flow_layer_t l = flow_background_layer(b->style, i);
@@ -5346,7 +5518,7 @@ static void sheet_pictures_seen(void *ctx, const flow_box_t *b)
             continue;
         look->seen[k] = true;
         if (look->mark != NULL && look->mark[k])
-            mark_part(meet);
+            backdrop_mark(b, i, k, meet, false);
     }
 }
 
@@ -5385,7 +5557,7 @@ static void pictures_seen(bool *seen, const bool *mark)
                 continue;
             seen[k] = true;
             if (mark != NULL && mark[k])
-                mark_whole(WHOLE_BACKDROP, false);
+                backdrop_mark(owner, i, k, view, true);
         }
     } else if (owner != NULL) {
         // The attribute shows: the branch above takes a sheet's picture.
@@ -5393,7 +5565,7 @@ static void pictures_seen(bool *seen, const bool *mark)
         if (k >= 0 && k < p->npics) {
             seen[k] = true;
             if (mark != NULL && mark[k])
-                mark_whole(WHOLE_BACKDROP, false);
+                backdrop_mark(owner, -1, k, view, true);
         }
     }
     for (int32_t i = 0; p->bg_of != NULL && i < os64_page_nbackgrounds(model) && i < p->nbackground_map; i++) {
@@ -5406,7 +5578,7 @@ static void pictures_seen(bool *seen, const bool *mark)
             continue;
         seen[k] = true;
         if (mark != NULL && mark[k])
-            mark_part(meet);
+            backdrop_mark(b, -1, k, meet, false);
     }
     SheetPicturesSeen look = {seen, mark, p->npics, view, owner};
     flow_visit(p->tree, view, scroll_now(), sheet_pictures_seen, &look);
@@ -5868,8 +6040,14 @@ static void paint_counted(const os64_gui_rect_t *damage, uint32_t count, WholeBy
 // handed to the compositor, as os64_ui_paint does both, then counted
 // (paint_counted). What marked the view is this paint's, so it starts
 // again here.
+static void backdrop_frame(void);
+static void backdrop_paint_done(uint64_t spent);
+
 static void glass_paint(void)
 {
+    // A frame of the moving background's layer first: it composes what it
+    // can, published below with libui's, and marks what libui is to paint.
+    backdrop_frame();
     os64_gui_rect_t damage[OS64_UI_DAMAGE_MAX];
     WholeBy by = s_whole_by;
     os64_gui_rect_t reach = s_parts_reach;
@@ -5878,6 +6056,10 @@ static void glass_paint(void)
     cost_begin(PS_RENDER);
     uint32_t count = os64_ui_render_list(&g.ui, damage);
     cost_end(PS_RENDER);
+    backdrop_paint_done(count > 0 ? s_cost.now[PS_RENDER] : 0);
+    for (uint32_t i = 0; i < s_layer.ndamage; i++)
+        os64_draw_publish(g.ui.ctx, &s_layer.damage[i]);
+    s_layer.ndamage = 0;
     if (count == 0) {
         os64_memset(s_cost.now, 0, sizeof(s_cost.now));
         return;
@@ -8343,11 +8525,16 @@ typedef struct {
     int32_t depth;              // may pass GLASS_GROUPS; those are not kept
 } GlassGroups;
 
+// The moving background's three paintings (backdrop.h): its layer filled
+// black, filled white, or left out; GLASS_PAGE is the page as it is.
+typedef enum { GLASS_PAGE, GLASS_BLACK, GLASS_WHITE, GLASS_WITHOUT } GlassPass;
+
 typedef struct {
     os64_gui_surface_t *surf;
     int32_t dx, dy;             // page -> window
     os64_gui_rect_t clip;       // what is being painted, in window coordinates
     GlassGroups *groups;
+    GlassPass pass;             // a sheet's is always GLASS_PAGE: see glass_backdrop
 } Glass;
 
 static os64_gui_rect_t on_glass(const Glass *gl, os64_gui_rect_t r)
@@ -8468,6 +8655,30 @@ static void glass_text(void *ctx, const flow_box_t *b, int32_t x, int32_t baseli
                          0xff000000u | colour, flow_alpha(colour));
 }
 
+// The glass a painting of the page starts on (glass_page): a sheet made
+// during it is another.
+static const Glass *s_glass_root;
+
+// The held moving layer laid by a painting: its copy's place and size
+// (`tile`, page coordinates) and smoothing, kept for its frames. Two places
+// in one painting (an inline box's pieces) and a sheet's glass are refused.
+static void backdrop_laid(const Glass *gl, yonder_tile_t tile, bool smooth)
+{
+    if (gl != s_glass_root)
+        s_layer.through = true;
+    if (s_layer.placed && s_layer.placed_in == s_layer.laid &&
+        (s_layer.at.x != tile.at.x || s_layer.at.y != tile.at.y || s_layer.at.w != tile.at.w ||
+         s_layer.at.h != tile.at.h || s_layer.repeat_x != tile.repeat_x ||
+         s_layer.repeat_y != tile.repeat_y))
+        s_layer.pieces = true;
+    s_layer.at = tile.at;
+    s_layer.repeat_x = tile.repeat_x;
+    s_layer.repeat_y = tile.repeat_y;
+    s_layer.smooth = smooth;
+    s_layer.placed = true;
+    s_layer.placed_in = s_layer.laid;
+}
+
 // A picture behind a box: the box's sheets, or else libpage's list, say
 // whether there is one, and one that has arrived is tiled across `area`
 // over what is under it — sheet layer `layer`'s at the size, position and
@@ -8511,8 +8722,42 @@ static bool glass_backdrop(void *ctx, const flow_box_t *b, int32_t layer,
         return true;
     os64_gui_rect_t on = {area->x + gl->dx, area->y + gl->dy, area->w, area->h};
     os64_gui_rect_t cut = on_glass(gl, clip);
+    // The held moving layer (BACKDROP_LAYER.md): where it is laid is kept
+    // for its frames, and in its paintings it is a solid colour or nothing.
+    // A sheet's glass is always GLASS_PAGE, so a layer drawn through one is
+    // drawn as the picture there — and refused (backdrop_laid), since a
+    // sheet is laid through a matrix or a mask that moves its pixels.
+    bool held = s_layer.node != NULL && b->node == s_layer.node && layer == s_layer.layer &&
+                k == s_layer.pic;
+    if (held)
+        backdrop_laid(gl, tile, !b->style->pixelated);
     tile.at.x += gl->dx;
     tile.at.y += gl->dy;
+    if (held && gl->pass != GLASS_PAGE) {
+        if (gl->pass == GLASS_WITHOUT)
+            return true;
+        // What the tiler would cover: cut to the one copy on an axis that
+        // does not repeat.
+        os64_gui_rect_t r;
+        if (!os64_rect_intersect(on, cut, &r))
+            return true;
+        os64_gui_rect_t copy = tile.at;
+        if (!tile.repeat_x) {
+            copy.y = r.y;
+            copy.h = r.h;
+            if (!os64_rect_intersect(r, copy, &r))
+                return true;
+        }
+        copy = tile.at;
+        if (!tile.repeat_y) {
+            copy.x = r.x;
+            copy.w = r.w;
+            if (!os64_rect_intersect(r, copy, &r))
+                return true;
+        }
+        os64_draw_fill_rect(gl->surf, r, gl->pass == GLASS_BLACK ? 0xff000000u : 0xffffffffu);
+        return true;
+    }
     if (cut.w > 0 && cut.h > 0)
         yonder_tile_picture(gl->surf->pixels, gl->surf->pitch_px, cut, on, tile.at, tile.repeat_x,
                             tile.repeat_y, !b->style->pixelated, px, w, h);
@@ -8914,7 +9159,7 @@ static bool pane_through_open(void *ctx, os64_gui_rect_t bounds, const double m[
         for (size_t i = 0; i < n; i++)
             t->surf[k].pixels[i] = paper;
         t->sheet[k] = (Glass){&t->surf[k], -bounds.x, -bounds.y,
-                              (os64_gui_rect_t){0, 0, bounds.w, bounds.h}, &t->groups[k]};
+                              (os64_gui_rect_t){0, 0, bounds.w, bounds.h}, &t->groups[k], GLASS_PAGE};
     }
     os64_memcpy(t->m, m, sizeof(t->m));
     t->clip = clip;
@@ -8992,7 +9237,7 @@ static bool pane_clip_open(void *ctx, os64_gui_rect_t bounds)
         for (size_t i = 0; i < n; i++)
             c->surf[k].pixels[i] = paper;
         c->sheet[k] = (Glass){&c->surf[k], -bounds.x, -bounds.y,
-                              (os64_gui_rect_t){0, 0, bounds.w, bounds.h}, &c->groups[k]};
+                              (os64_gui_rect_t){0, 0, bounds.w, bounds.h}, &c->groups[k], GLASS_PAGE};
     }
     c->bounds = bounds;
     c->was_n = gp->n;
@@ -9110,25 +9355,40 @@ static void timed_pixels(void *ctx, os64_gui_rect_t rect, const uint32_t *argb)
     cost_end(PS_LAID);
 }
 
+// The page painted onto `gl` over `view` (page coordinates), as the view
+// shows it: the painter, then the boxes' scroll bars. The view's paints and
+// the moving background's three paintings (backdrop_paintings) are this.
+static void glass_page(Glass *gl, os64_gui_rect_t view);
+
+static void backdrop_painted(os64_gui_rect_t part);
+
 static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_theme_t *t)
 {
     (void)t;
     os64_gui_rect_t part;
     if (!os64_rect_intersect(w->bounds, g.ui.dirty, &part))
         return;
-    GlassGroups groups = {.depth = 0};
-    Glass gl = {&ctx->surf, w->bounds.x - g.sx, w->bounds.y - g.sy, part, &groups};
+    backdrop_painted(part);
     if (g.page.tree == NULL) {
         os64_draw_fill_rect(&ctx->surf, part, 0xff000000u | (s_dark ? kDark.paper : PAGE_PAPER));
         return;
     }
-    GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0, NULL};
+    GlassGroups groups = {.depth = 0};
+    Glass gl = {&ctx->surf, w->bounds.x - g.sx, w->bounds.y - g.sy, part, &groups, GLASS_PAGE};
+    cost_begin(PS_VIEW);
+    glass_page(&gl, (os64_gui_rect_t){part.x - gl.dx, part.y - gl.dy, part.w, part.h});
+    cost_end(PS_VIEW);
+}
+
+static void glass_page(Glass *gl, os64_gui_rect_t view)
+{
+    s_glass_root = gl;
+    s_layer.laid++;
+    GlassPane pane = {{gl, NULL}, 1, {NULL}, 0, NULL};
     yonder_verbs_t v = {&pane,        pane_fill,     timed_text,       timed_image,
                         pane_control, timed_backdrop, timed_group_open, timed_group_close,
                         timed_mask,   timed_pixels,  pane_frame,      timed_through_open,
                         timed_through_close, pane_clip_open, pane_clip_fill, pane_clip_close};
-    os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
-    cost_begin(PS_VIEW);
     yonder_paint_stage = cost_painter;
     if (g.paint_cache == NULL) {
         uint32_t sw = 0, sh = 0;
@@ -9144,9 +9404,524 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
     yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL, g.paint_cache,
                  g.paint_scratch, &v);
     yonder_paint_stage = NULL;
-    box_bars(&gl, view);
+    box_bars(gl, view);
     yonder_scratch_paint_end(g.paint_scratch);
-    cost_end(PS_VIEW);
+    s_glass_root = NULL;
+}
+
+// ── The moving background's frames ──────────────────────────────────────
+//
+// BACKDROP_LAYER.md § A frame. Everything here is in VIEW coordinates (the
+// view's own corner is 0, 0), the paintings' and the compose's, apart from
+// what is marked for libui (page coordinates, mark_part) and what is
+// published (the window's).
+
+// A background held only when its box covers at least 1/BACKDROP_SHARE of
+// the view: the paintings are the view's size whatever the box's, and a
+// small box's part is a small ordinary paint the dirty list keeps apart.
+#define BACKDROP_SHARE 16
+// The view stays quiet for the layer while what was painted between two
+// frames for anything else is at most 1/BACKDROP_QUIET_SHARE of the box's
+// part.
+#define BACKDROP_QUIET_SHARE 8
+// The most runs a frame's change is composed as; more compose the part
+// whole.
+#define BACKDROP_RUNS 8192
+// The biggest copy of a tile kept (pixels): a background sized past it is
+// refused, not copied every frame.
+#define BACKDROP_COPY_MOST (16u << 20)
+
+static os64_gui_rect_t view_rect(void)
+{
+    return (os64_gui_rect_t){0, 0, g.view.bounds.w, g.view.bounds.h};
+}
+
+static int64_t rect_area(os64_gui_rect_t r)
+{
+    return r.w > 0 && r.h > 0 ? (int64_t)r.w * r.h : 0;
+}
+
+static bool rect_holds(os64_gui_rect_t outer, os64_gui_rect_t r)
+{
+    return r.x >= outer.x && r.y >= outer.y && (int64_t)r.x + r.w <= (int64_t)outer.x + outer.w &&
+           (int64_t)r.y + r.h <= (int64_t)outer.y + outer.h;
+}
+
+// The held box's part of the view: the whole view for the canvas's.
+static os64_gui_rect_t backdrop_part(void)
+{
+    os64_gui_rect_t v = view_rect(), r;
+    if (s_layer.canvas)
+        return v;
+    os64_gui_rect_t m = {s_layer.meet.x - g.sx, s_layer.meet.y - g.sy, s_layer.meet.w, s_layer.meet.h};
+    return os64_rect_intersect(m, v, &r) ? r : (os64_gui_rect_t){0, 0, 0, 0};
+}
+
+// The paintings and copies given back; the layer is not built.
+static void backdrop_unbuild(void)
+{
+    os64_free(s_layer.k);
+    os64_free(s_layer.w);
+    os64_free(s_layer.p);
+    os64_free(s_layer.shown);
+    os64_free(s_layer.next);
+    s_layer.k = s_layer.w = s_layer.p = s_layer.shown = s_layer.next = NULL;
+    s_layer.vw = s_layer.vh = s_layer.tw = s_layer.th = 0;
+    s_layer.built = false;
+    s_layer.ninvalid = 0;
+}
+
+// Nothing held: the page left, or yonder is closing.
+static void backdrop_reset(void)
+{
+    backdrop_unbuild();
+    s_layer = (BackdropLayer){0};
+}
+
+// The held background has no layer from here, and why; the record says so.
+static void backdrop_refuse(const char *why)
+{
+    backdrop_unbuild();
+    s_layer.refused = why;
+}
+
+// Each showing widget of the subtree at `w` that meets `part`, cut to it,
+// into holes; false when they do not fit.
+static bool backdrop_holes_under(const os64_ui_widget_t *w, os64_gui_rect_t part,
+                                 os64_gui_rect_t *holes, uint32_t *n)
+{
+    for (; w != NULL; w = w->next_sibling) {
+        if (w->hidden)
+            continue;
+        os64_gui_rect_t r = {w->bounds.x - g.view.bounds.x, w->bounds.y - g.view.bounds.y, w->bounds.w,
+                             w->bounds.h}, m;
+        if (os64_rect_intersect(r, part, &m)) {
+            if (*n == BACKDROP_HOLES)
+                return false;
+            holes[(*n)++] = m;
+        }
+        if (!backdrop_holes_under(w->first_child, part, holes, n))
+            return false;
+    }
+    return true;
+}
+
+// Every widget libui paints after the view that meets `part`, cut to it:
+// the view's own children (the form controls), and what comes after the
+// view and after each widget holding it. No painting of the layer's sees
+// them, so a frame composes none of them and libui paints each as a part
+// (BACKDROP_LAYER.md § The moving box). False when there are more than
+// BACKDROP_HOLES.
+static bool backdrop_holes(os64_gui_rect_t part, os64_gui_rect_t *holes, uint32_t *n)
+{
+    *n = 0;
+    if (!backdrop_holes_under(g.view.first_child, part, holes, n))
+        return false;
+    for (const os64_ui_widget_t *w = &g.view; w != NULL; w = w->parent)
+        if (!backdrop_holes_under(w->next_sibling, part, holes, n))
+            return false;
+    return true;
+}
+
+// Whether `r` (view coordinates) lies inside a widget's hole: libui paints
+// the widget over it, and nothing in front of the background changed.
+static bool backdrop_in_hole(os64_gui_rect_t r)
+{
+    os64_gui_rect_t holes[BACKDROP_HOLES];
+    uint32_t n;
+    if (backdrop_holes(view_rect(), holes, &n))
+        for (uint32_t i = 0; i < n; i++)
+            if (rect_holds(holes[i], r))
+                return true;
+    return false;
+}
+
+// What changed in front of the held background at `r` (view coordinates):
+// its pixels count against the quiet (backdrop_frame), and on a built layer
+// the paintings there are stale. A layer wholly invalid before it paid for
+// itself was a waste (yonder_backdrop_lost).
+static void backdrop_changed(os64_gui_rect_t r)
+{
+    if (s_layer.disturbed < INT64_MAX / 4)
+        s_layer.disturbed += rect_area(r);
+    if (!s_layer.built)
+        return;
+    (void)os64_damage_add(s_layer.invalid, &s_layer.ninvalid, BACKDROP_INVALID, OS64_UI_DAMAGE_SLACK, r);
+    os64_gui_rect_t whole = backdrop_part();
+    for (uint32_t i = 0; i < s_layer.ninvalid; i++)
+        if (rect_holds(s_layer.invalid[i], whole)) {
+            s_cost.bd.lost += !s_layer.policy.paid;
+            yonder_backdrop_lost(&s_layer.policy);
+            s_layer.built = false;
+            s_layer.ninvalid = 0;
+            return;
+        }
+}
+
+// An ordinary paint of the view (view_paint, `part` in window coordinates):
+// what it painted may be what is in front of the held background
+// (backdrop_changed) — unless it lies inside a widget's hole, or it is a
+// paint the held frame marked (frame_painting), whose other rectangles were
+// noted as the frame marked it (backdrop_others).
+static void backdrop_painted(os64_gui_rect_t part)
+{
+    if (s_layer.node == NULL || s_layer.refused != NULL || s_layer.frame_painting)
+        return;
+    os64_gui_rect_t r = {part.x - g.view.bounds.x, part.y - g.view.bounds.y, part.w, part.h};
+    if (!backdrop_in_hole(r))
+        backdrop_changed(r);
+}
+
+// The held frame is about to mark a paint of its own (its part, or its
+// holes): what else is dirty now is what that paint changes in front, so it
+// is noted here, rectangle by rectangle, before libui's list merges it with
+// the frame's own — and the paint itself then notes nothing
+// (backdrop_painted).
+static void backdrop_others(void)
+{
+    if (s_layer.frame_painting)
+        return;
+    s_layer.frame_painting = true;
+    if (!g.ui.any_dirty)
+        return;
+    const os64_gui_rect_t *list = g.ui.damage_count > 0 ? g.ui.damage : &g.ui.dirty;
+    uint32_t n = g.ui.damage_count > 0 ? g.ui.damage_count : 1;
+    for (uint32_t i = 0; i < n; i++) {
+        os64_gui_rect_t r = {list[i].x - g.view.bounds.x, list[i].y - g.view.bounds.y, list[i].w,
+                             list[i].h}, m;
+        if (os64_rect_intersect(r, view_rect(), &m) && !backdrop_in_hole(m))
+            backdrop_changed(m);
+    }
+}
+
+// The biggest background a frame offered, held: refused at once when a
+// layer of its box is drawn above it (it is front painted as background).
+// Its box is found again from its element — the canvas's by the painter's
+// rule — since the frame's tree may have been laid out again since.
+static void backdrop_hold(void)
+{
+    os64_gui_rect_t v = view_rect();
+    if (s_layer.offer.area * BACKDROP_SHARE < rect_area(v) || g.page.tree == NULL)
+        return;
+    const yonder_verbs_t asking = {.backdrop = glass_backdrop};
+    const flow_box_t *b = s_layer.offer.canvas ? yonder_canvas_owner(g.page.tree, &asking)
+                                               : flow_box_for(g.page.tree, s_layer.offer.node);
+    if (b == NULL || b->node != s_layer.offer.node)
+        return;
+    backdrop_unbuild();
+    s_layer.node = b->node;
+    s_layer.layer = s_layer.offer.layer;
+    s_layer.pic = s_layer.offer.pic;
+    s_layer.canvas = s_layer.offer.canvas;
+    s_layer.refused = NULL;
+    s_layer.placed = s_layer.through = s_layer.pieces = false;
+    s_layer.disturbed = INT64_MAX / 4;     // its first frame is not quiet
+    yonder_backdrop_policy_init(&s_layer.policy);
+    for (int32_t i = 0; i < s_layer.layer; i++) {
+        flow_layer_t l = flow_background_layer(b->style, i);
+        if (l.image != NULL || l.gradient != NULL)
+            s_layer.refused = "a layer of its box drawn above it";
+    }
+}
+
+// The memory the three paintings take, the view's size; refused when it
+// does not fit beside the paint cache's own budget within its share of
+// installed memory (BACKDROP_LAYER.md § Memory), or the heap says no.
+static bool backdrop_memory(void)
+{
+    int32_t vw = g.view.bounds.w, vh = g.view.bounds.h;
+    if (s_layer.k != NULL && s_layer.vw == vw && s_layer.vh == vh)
+        return true;
+    backdrop_unbuild();
+    uint64_t bytes = (uint64_t)vw * (uint64_t)vh * 4u;
+    os64_memory_t mem = {0};
+    if (os64_memory(&mem) == 0 && mem.total != 0 &&
+        yonder_paint_cache_counts(g.paint_cache).budget + 3 * bytes > mem.total / YONDER_PAINT_CACHE_SHARE) {
+        backdrop_refuse("no room beside the paint cache");
+        return false;
+    }
+    s_layer.k = os64_malloc(bytes);
+    s_layer.w = os64_malloc(bytes);
+    s_layer.p = os64_malloc(bytes);
+    if (s_layer.k == NULL || s_layer.w == NULL || s_layer.p == NULL) {
+        backdrop_refuse("no memory");
+        return false;
+    }
+    s_layer.vw = vw;
+    s_layer.vh = vh;
+    return true;
+}
+
+// The held picture's frame on show as one copy at the size it is laid
+// (`next`), from the place the last painting kept. False with none, or a
+// copy too big, or no memory.
+static bool backdrop_copy(void)
+{
+    if (!s_layer.placed || s_layer.pic < 0 || s_layer.pic >= g.page.npics ||
+        g.page.pics[s_layer.pic].state != PIC_SHOWN)
+        return false;
+    int32_t tw = s_layer.at.w, th = s_layer.at.h;
+    if (tw <= 0 || th <= 0 || (uint64_t)tw * (uint64_t)th > BACKDROP_COPY_MOST) {
+        backdrop_refuse("a copy of its picture past what is kept");
+        return false;
+    }
+    if (tw != s_layer.tw || th != s_layer.th || s_layer.next == NULL) {
+        os64_free(s_layer.shown);
+        os64_free(s_layer.next);
+        s_layer.shown = os64_malloc((size_t)tw * (size_t)th * 4u);
+        s_layer.next = os64_malloc((size_t)tw * (size_t)th * 4u);
+        s_layer.tw = s_layer.shown != NULL && s_layer.next != NULL ? tw : 0;
+        s_layer.th = s_layer.tw != 0 ? th : 0;
+        if (s_layer.tw == 0) {
+            backdrop_refuse("no memory");
+            return false;
+        }
+    }
+    uint32_t w, h;
+    const uint32_t *px = picture_pixels(&g.page.pics[s_layer.pic], &w, &h);
+    yonder_tile_pixels(s_layer.next, tw, th, s_layer.smooth, px, w, h);
+    return true;
+}
+
+// The copy just taken is the one the view shows.
+static void backdrop_shown(void)
+{
+    uint32_t *was = s_layer.shown;
+    s_layer.shown = s_layer.next;
+    s_layer.next = was;
+}
+
+// The three paintings of `r`, into the layer.
+static void backdrop_paintings(os64_gui_rect_t r)
+{
+    uint32_t *into[3] = {s_layer.k, s_layer.w, s_layer.p};
+    const GlassPass pass[3] = {GLASS_BLACK, GLASS_WHITE, GLASS_WITHOUT};
+    for (int32_t i = 0; i < 3; i++) {
+        os64_gui_surface_t surf = {into[i], (uint32_t)s_layer.vw, (uint32_t)s_layer.vh, (uint32_t)s_layer.vw};
+        GlassGroups groups = {.depth = 0};
+        Glass gl = {&surf, -g.sx, -g.sy, r, &groups, pass[i]};
+        glass_page(&gl, (os64_gui_rect_t){r.x + g.sx, r.y + g.sy, r.w, r.h});
+    }
+}
+
+// The held frame marked for an ordinary paint, as it was before the layer:
+// the paint that follows is the frame's own (frame_painting), timed for
+// the policy (backdrop_paint_done).
+static void backdrop_ordinarily(os64_gui_rect_t part)
+{
+    s_cost.bd.painted++;
+    backdrop_others();
+    s_layer.measuring = rect_area(part);
+    if (s_layer.canvas)
+        mark_whole(WHOLE_BACKDROP, false);
+    else
+        mark_part(s_layer.meet);
+}
+
+// The composed rectangles kept for the paint to publish (glass_paint, with
+// libui's), and the holes marked for libui to paint as parts.
+static void backdrop_publish(const os64_gui_rect_t *damage, uint32_t n, const os64_gui_rect_t *holes,
+                             uint32_t nholes)
+{
+    for (uint32_t i = 0; i < n; i++) {
+        os64_gui_rect_t r = {damage[i].x + g.view.bounds.x, damage[i].y + g.view.bounds.y, damage[i].w,
+                             damage[i].h};
+        (void)os64_damage_add(s_layer.damage, &s_layer.ndamage, OS64_UI_DAMAGE_MAX, OS64_UI_DAMAGE_SLACK, r);
+    }
+    // The holes' paints are the frame's own: what else is dirty is noted
+    // before they are marked, however libui's list then merges them.
+    if (nholes > 0)
+        backdrop_others();
+    for (uint32_t i = 0; i < nholes; i++)
+        mark_part((os64_gui_rect_t){holes[i].x + g.sx, holes[i].y + g.sy, holes[i].w, holes[i].h});
+    s_cost.bd.holes += nholes;
+}
+
+// Painted from the paintings: `rebuilt` (the invalid rectangles just painted
+// again) whole, then the frame's change everywhere else, or `part` whole
+// when the change is not known as runs. The holes are left to libui.
+static int64_t backdrop_compose(os64_gui_rect_t part, const os64_gui_rect_t *rebuilt, uint32_t nrebuilt,
+                                const yonder_backdrop_run_t *runs, int32_t nruns,
+                                const os64_gui_rect_t *holes, uint32_t nholes)
+{
+    uint32_t *dst = g.ui.ctx->surf.pixels + (int64_t)g.view.bounds.y * g.ui.ctx->surf.pitch_px +
+                    g.view.bounds.x;
+    const yonder_backdrop_sheets_t sheets = {s_layer.k, s_layer.w, s_layer.p, (uint32_t)s_layer.vw,
+                                             s_layer.vw, s_layer.vh};
+    // The copy's place, in view coordinates.
+    const yonder_backdrop_tile_t tile = {s_layer.next, s_layer.tw, s_layer.th, s_layer.at.x - g.sx,
+                                         s_layer.at.y - g.sy, s_layer.repeat_x, s_layer.repeat_y};
+    os64_gui_rect_t skip[BACKDROP_HOLES + BACKDROP_INVALID], damage[OS64_UI_DAMAGE_MAX];
+    uint32_t nskip = 0;
+    for (uint32_t i = 0; i < nholes; i++)
+        skip[nskip++] = holes[i];
+    yonder_backdrop_out_t out = {skip, nskip, damage, 0, OS64_UI_DAMAGE_MAX, OS64_UI_DAMAGE_SLACK, 0};
+    uint32_t pitch = g.ui.ctx->surf.pitch_px;
+    for (uint32_t i = 0; i < nrebuilt; i++)
+        yonder_backdrop_compose_area(dst, pitch, &sheets, &tile, part, rebuilt[i], &out);
+    for (uint32_t i = 0; i < nrebuilt; i++)
+        skip[nskip++] = rebuilt[i];
+    out.nskip = nskip;
+    if (nruns >= 0)
+        yonder_backdrop_compose_runs(dst, pitch, &sheets, &tile, part, runs, nruns, &out);
+    else
+        yonder_backdrop_compose_area(dst, pitch, &sheets, &tile, part, part, &out);
+    backdrop_publish(damage, out.ndamage, holes, nholes);
+    return out.written;
+}
+
+// The held background's layer built for `part`: memory, the three
+// paintings, the frame on show taken, and the part composed whole. False,
+// with nothing composed, when it could not be.
+static bool backdrop_build(os64_gui_rect_t part)
+{
+    if (!backdrop_memory())
+        return false;
+    os64_gui_rect_t holes[BACKDROP_HOLES];
+    uint32_t nholes;
+    if (!backdrop_holes(part, holes, &nholes)) {
+        backdrop_refuse("more form controls over it than are kept clear");
+        return false;
+    }
+    uint64_t began = cycles();
+    backdrop_paintings(part);
+    uint64_t painted = cycles_since(began);
+    if (s_layer.through || s_layer.pieces) {
+        backdrop_refuse(s_layer.through ? "drawn through a transform or a clip" : "laid in pieces");
+        return false;
+    }
+    if (!backdrop_copy())
+        return false;
+    // Built from here: what the frame's own paint finds dirty as it marks
+    // the holes is noted against these paintings (backdrop_others).
+    s_layer.built = true;
+    s_layer.ninvalid = 0;
+    began = cycles();
+    int64_t written = backdrop_compose(part, NULL, 0, NULL, -1, holes, nholes);
+    uint64_t composed = cycles_since(began);
+    backdrop_shown();
+    yonder_backdrop_built(&s_layer.policy, (double)painted, rect_area(part));
+    yonder_backdrop_composed(&s_layer.policy, (double)composed, written, 0, 0, rect_area(part));
+    s_cost.bd.built++;
+    s_cost.bd.composed++;
+    s_cost.bd.written += (uint64_t)written;
+    return true;
+}
+
+// A frame of the held background (BACKDROP_LAYER.md § A frame), at the top
+// of the paint that follows it: built, composed from the layer where that
+// is measured cheaper, else marked for an ordinary paint as before. With
+// none held, the biggest a frame offered is held instead.
+static void backdrop_frame(void)
+{
+    if (!s_layer.due) {
+        if (s_layer.node == NULL && s_layer.offer.node != NULL)
+            backdrop_hold();
+        s_layer.offer.node = NULL;
+        s_layer.offer.area = 0;
+        // A picture that stopped (its loops done, or a frame failed) brings
+        // no more frames: what the layer holds goes back now, not when the
+        // page leaves.
+        if (s_layer.k != NULL && s_layer.pic >= 0 && s_layer.pic < g.page.npics &&
+            !g.page.pics[s_layer.pic].playing)
+            backdrop_unbuild();
+        return;
+    }
+    s_layer.due = false;
+    s_cost.bd.frames++;
+    os64_gui_rect_t part = backdrop_part();
+    // Quiet: what was painted since the last frame for anything else is a
+    // small part of the box's — a small animation in front costs its own
+    // part a frame, which the policy weighs; a scroll or a layout throws
+    // the paintings away.
+    if (s_layer.disturbed <= rect_area(part) / BACKDROP_QUIET_SHARE)
+        yonder_backdrop_quiet_frame(&s_layer.policy);
+    else
+        yonder_backdrop_ordinary(&s_layer.policy);
+    s_layer.disturbed = 0;
+    if (rect_area(part) == 0)
+        return;
+    if (s_layer.through || s_layer.pieces)
+        backdrop_refuse(s_layer.through ? "drawn through a transform or a clip" : "laid in pieces");
+    if (s_layer.built && (s_layer.vw != g.view.bounds.w || s_layer.vh != g.view.bounds.h))
+        s_layer.built = false;
+    if (s_layer.refused != NULL) {
+        backdrop_ordinarily(part);
+        return;
+    }
+    if (!s_layer.built) {
+        if (!yonder_backdrop_should_build(&s_layer.policy) || !backdrop_build(part)) {
+            s_cost.bd.painted_unbuilt++;
+            backdrop_ordinarily(part);
+        }
+        return;
+    }
+    if (!backdrop_copy()) {
+        backdrop_ordinarily(part);
+        return;
+    }
+    static yonder_backdrop_run_t runs[BACKDROP_RUNS];
+    int64_t changed = 0;
+    int32_t nruns = yonder_backdrop_changes(s_layer.shown, s_layer.next, s_layer.tw, s_layer.th, runs,
+                                            BACKDROP_RUNS, &changed);
+    // The changed pixels the part shows: each changed pixel of a copy at
+    // every copy that meets it, at most the part.
+    int64_t copies = ((int64_t)part.w / s_layer.tw + 2) * ((int64_t)part.h / s_layer.th + 2);
+    int64_t area = rect_area(part), invalid = 0;
+    int64_t estimate = nruns < 0 ? area : changed * copies < area ? changed * copies : area;
+    os64_gui_rect_t rebuilt[BACKDROP_INVALID];
+    uint32_t nrebuilt = 0;
+    for (uint32_t i = 0; i < s_layer.ninvalid; i++)
+        if (os64_rect_intersect(s_layer.invalid[i], part, &rebuilt[nrebuilt])) {
+            invalid += rect_area(rebuilt[nrebuilt]);
+            nrebuilt++;
+        }
+    if (!yonder_backdrop_should_compose(&s_layer.policy, estimate, invalid, area)) {
+        if (s_layer.policy.unprofitable)
+            backdrop_refuse("dearer than painting it");
+        else
+            backdrop_shown();
+        s_cost.bd.painted_dearer++;
+        backdrop_ordinarily(part);
+        return;
+    }
+    os64_gui_rect_t holes[BACKDROP_HOLES];
+    uint32_t nholes;
+    if (!backdrop_holes(part, holes, &nholes)) {
+        backdrop_refuse("more form controls over it than are kept clear");
+        backdrop_ordinarily(part);
+        return;
+    }
+    // The invalid list is taken: what the frame's own paint finds dirty as
+    // it marks the holes is noted for the next frame (backdrop_others).
+    s_layer.ninvalid = 0;
+    uint64_t began = cycles();
+    for (uint32_t i = 0; i < nrebuilt; i++)
+        backdrop_paintings(rebuilt[i]);
+    uint64_t repainted = cycles_since(began);
+    if (s_layer.through || s_layer.pieces) {
+        backdrop_refuse(s_layer.through ? "drawn through a transform or a clip" : "laid in pieces");
+        backdrop_ordinarily(part);
+        return;
+    }
+    began = cycles();
+    int64_t written = backdrop_compose(part, rebuilt, nrebuilt, runs, nruns, holes, nholes);
+    uint64_t composed = cycles_since(began);
+    backdrop_shown();
+    yonder_backdrop_composed(&s_layer.policy, (double)composed, written, (double)repainted, invalid, area);
+    s_cost.bd.composed++;
+    s_cost.bd.written += (uint64_t)written;
+    s_cost.bd.rebuilt += (uint64_t)invalid;
+}
+
+// The paint after a frame is done: an ordinary paint of the held frame is
+// what the policy measures (`spent` the paint's render).
+static void backdrop_paint_done(uint64_t spent)
+{
+    if (s_layer.measuring > 0 && spent > 0)
+        yonder_backdrop_painted(&s_layer.policy, (double)spent, s_layer.measuring);
+    s_layer.measuring = 0;
+    s_layer.frame_painting = false;
 }
 
 // The keyboard's arrows arrive as VT100 bursts (ESC [ A ...). libui's
@@ -10212,6 +10987,7 @@ int main(int argc, char **argv)
     g.paint_cache = NULL;
     yonder_scratch_free(g.paint_scratch);
     g.paint_scratch = NULL;
+    backdrop_reset();
     way_jar_free(g.way.jar);
     if (g.cache != NULL)
         way_cache_close(g.cache);

@@ -998,6 +998,42 @@ static void scale_cases(void)
     yonder_draw_picture(same, 2, (os64_gui_rect_t){0, 0, 2, 2}, (os64_gui_rect_t){0, 0, 2, 2}, true,
                         two, 2, 2);
     expect("smooth: unscaled is the picture itself", pixels_are(same, two, 4), NULL);
+    // One copy as pixels (yonder_tile_pixels), laid over a background by
+    // plain `over`, is what the tiler lays there: scaled up, down, at its
+    // own size, smoothed or not, transparent pixels and all.
+    {
+        uint32_t seed = 77;
+        bool all = true;
+        for (int trial = 0; trial < 200 && all; trial++) {
+            uint32_t src[7 * 6], copy[11 * 9], laid[11 * 9], under[11 * 9];
+            seed = seed * 1103515245u + 12345u;
+            uint32_t sw = 1 + (seed >> 8) % 7, sh = 1 + (seed >> 12) % 6;
+            seed = seed * 1103515245u + 12345u;
+            int32_t tw = 1 + (int32_t)((seed >> 8) % 11), th = 1 + (int32_t)((seed >> 12) % 9);
+            bool smooth = (seed >> 20) & 1;
+            for (uint32_t i = 0; i < sw * sh; i++) {
+                seed = seed * 1103515245u + 12345u;
+                uint32_t a = (seed >> 24) % 3 == 0 ? 0 : (seed >> 24) % 3 == 1 ? 255 : (seed >> 4) & 0xff;
+                src[i] = a << 24 | (seed & 0xffffff);
+            }
+            for (int32_t i = 0; i < tw * th; i++) {
+                seed = seed * 1103515245u + 12345u;
+                under[i] = laid[i] = 0xff000000u | (seed & 0xffffff);
+            }
+            os64_gui_rect_t whole = {0, 0, tw, th};
+            yonder_tile_picture(laid, (uint32_t)tw, whole, whole, whole, false, false, smooth, src, sw, sh);
+            yonder_tile_pixels(copy, tw, th, smooth, src, sw, sh);
+            for (int32_t i = 0; i < tw * th && all; i++) {
+                uint32_t a = copy[i] >> 24, d = under[i], want = 0xff000000u;
+                for (int s = 0; s <= 16; s += 8)
+                    want |= ((((copy[i] >> s) & 0xff) * a + ((d >> s) & 0xff) * (255 - a) + 127) / 255) << s;
+                if (a == 0)
+                    want = d;
+                all = laid[i] == want;
+            }
+        }
+        expect("tile pixels: one copy laid by `over` is what the tiler lays", all, NULL);
+    }
 
     // A sheet's picture, 20x10, behind a 100x50 box at (10, 20):
     // `right 10px center repeat-x` is calc(100% - 10px) and 50%, so x is

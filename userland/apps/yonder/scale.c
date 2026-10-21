@@ -135,6 +135,23 @@ void yonder_tile_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os
     }
 }
 
+void yonder_tile_pixels(uint32_t *dst, int32_t tw, int32_t th, bool smooth, const uint32_t *src,
+                        uint32_t sw, uint32_t sh)
+{
+    if (tw <= 0 || th <= 0 || sw == 0 || sh == 0)
+        return;
+    // yonder_tile_picture's choice of pixel, at (u, v) of a copy.
+    bool own = (uint32_t)tw == sw;
+    smooth = smooth && !(own && (uint32_t)th == sh);
+    for (int32_t v = 0; v < th; v++) {
+        const uint32_t *row = src + (uint64_t)source_at((uint32_t)v, sh, th) * sw;
+        uint32_t *out = dst + (int64_t)v * tw;
+        for (int32_t u = 0; u < tw; u++)
+            out[u] = smooth ? smooth_at(src, sw, sh, (uint32_t)u, tw, (uint32_t)v, th)
+                            : row[own ? (uint32_t)u : source_at((uint32_t)u, sw, tw)];
+    }
+}
+
 void yonder_draw_picture(uint32_t *dst, uint32_t pitch, os64_gui_rect_t clip, os64_gui_rect_t box,
                          bool smooth, const uint32_t *src, uint32_t sw, uint32_t sh)
 {

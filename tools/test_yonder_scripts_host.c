@@ -4357,6 +4357,302 @@ static void picture_tick_cases(void) {
     probe_drop();
 }
 
+/* The moving background's layer (BACKDROP_LAYER.md § Proof): a page whose
+ * body tiles a moving picture behind text, painted ordinarily, then played
+ * frame by frame through the real loop's order — the tick marks, the
+ * frame (backdrop_frame), libui's paint of what is dirty — and after every
+ * frame the view is held to a fresh ordinary paint of the same moment:
+ * within the rounding the design allows everywhere, outside the holes. The
+ * layer must hold the body, build once the view is quiet, and compose. */
+static uint32_t layer_frames[3][7 * 5];
+static os64_draw_ctx_t layer_screen, layer_ref;
+
+/* The view painted ordinarily into `c`, as glass_paint's render would. */
+static void layer_reference(os64_draw_ctx_t *c) {
+    GlassGroups groups={.depth=0};
+    os64_gui_rect_t v={0,0,g.view.bounds.w,g.view.bounds.h};
+    Glass gl={&c->surf,g.view.bounds.x-g.sx,g.view.bounds.y-g.sy,v,&groups,GLASS_PAGE};
+    glass_page(&gl,(os64_gui_rect_t){g.sx,g.sy,v.w,v.h});
+}
+/* glass_paint without its publish, which is a syscall here: the frame, then
+ * libui's render of what is dirty, timed for the policy as glass_paint
+ * times it. */
+static void layer_paint(void) {
+    backdrop_frame();
+    uint64_t began=cycles();
+    os64_gui_rect_t list[OS64_UI_DAMAGE_MAX];
+    uint32_t n=os64_ui_render_list(&g.ui,list);
+    backdrop_paint_done(n>0 ? cycles_since(began) : 0);
+    s_layer.ndamage=0;
+}
+/* The largest difference of a channel between the screen's view and the
+ * reference's, outside the holes. */
+static int layer_differs(void) {
+    os64_gui_rect_t holes[BACKDROP_HOLES]; uint32_t nholes=0;
+    (void)backdrop_holes((os64_gui_rect_t){0,0,g.view.bounds.w,g.view.bounds.h},holes,&nholes);
+    int most=0;
+    for(int32_t y=0;y<g.view.bounds.h;y++)
+        for(int32_t x=0;x<g.view.bounds.w;x++) {
+            bool hole=false;
+            for(uint32_t i=0;i<nholes;i++) hole=hole || (x>=holes[i].x && x<holes[i].x+holes[i].w &&
+                                                           y>=holes[i].y && y<holes[i].y+holes[i].h);
+            if(hole) continue;
+            size_t at=(size_t)(y+g.view.bounds.y)*layer_screen.surf.pitch_px+(size_t)(x+g.view.bounds.x);
+            uint32_t p=layer_screen.surf.pixels[at], q=layer_ref.surf.pixels[at];
+            for(int s=0;s<=16;s+=8) {
+                int d=abs((int)((p>>s)&0xff)-(int)((q>>s)&0xff));
+                if(d>most) most=d;
+            }
+        }
+    return most;
+}
+static void layer_new_screen(os64_draw_ctx_t *c) {
+    c->surf.width=800; c->surf.height=600; c->surf.pitch_px=800;
+    c->surf.pixels=os64_calloc(800u*600u,sizeof(uint32_t));
+}
+/* What one play saw: every frame what an ordinary paint shows (within the
+ * rounding, outside the holes); the body's picture offered at its first
+ * frame; and the layer's memory given back once the picture stopped. */
+typedef struct { bool close, offered, freed; } BackdropPlay;
+
+/* One play of a page whose body tiles a moving picture, s.gif, behind text
+ * and three form controls (two side by side, so libui's list merges their
+ * marks), `sheet` its own rules (where the html's colour and the moving
+ * background are said) and `extra` more of its content: a.gif is another
+ * moving picture, which stops at frame 10 on a frame never shown before,
+ * and t.gif a still one. Scrolled to `scroll`: set up, painted ordinarily,
+ * then 30 frames, with an ordinary change elsewhere at frames 12 and 20,
+ * then the pictures stopped. With `dense`, every third frame of the
+ * background changes a few pixels and the others change every one, so a
+ * policy that composes the few and paints the many takes both ways. The
+ * policy's measured costs (cycles a pixel) are pinned to `paint`, `compose`
+ * and `pass` before each frame once measured: the host's — sanitized,
+ * unoptimized — say nothing about the P5's, and each play asks one answer
+ * of the policy. */
+static BackdropPlay backdrop_play(const char *sheet, const char *extra, int32_t scroll, bool dense,
+                                  double paint, double compose, double pass) {
+    static struct os64_image_sequence stars, front;
+    static uint32_t front_frames[3][4*3];
+    static char html[1024];
+    BackdropPlay play={true,false,false};
+    /* As a page replacing the last one does (show_page): the cases before
+     * drop their pages without it. */
+    backdrop_reset();
+    os64_snprintf(html,sizeof(html),"<!doctype html><style>%s"
+               "p{color:#fff;margin:40px}div{background:rgba(255,0,0,0.5);width:200px;height:100px}</style>"
+               "<p>Text in front of the stars</p><div>half red</div><input id=f> <input id=g><input id=h>%s"
+               "<div style='height:3000px;background:none'></div>",sheet,extra);
+    probe_page(html,false);
+    g.sy=scroll;
+    pictures_start(&g.page);
+    css_pictures(&g.page);
+    int32_t star=-1, ahead=-1;
+    for(int32_t k=0;k<g.page.npics;k++) {
+        if(strstr(g.page.pics[k].url,"s.gif")!=NULL) { star=k; continue; }
+        if(strstr(g.page.pics[k].url,"a.gif")!=NULL) {
+            /* A picture in front, moving at every frame: two frames of 4x3. */
+            for(int32_t i=0;i<4*3;i++) {
+                front_frames[0][i]=0xff00c000u+(uint32_t)i; front_frames[1][i]=0xffc000c0u+(uint32_t)i;
+                front_frames[2][i]=0xff2020f0u+(uint32_t)i;
+            }
+            memset(&front,0,sizeof(front));
+            front.frame.delay_ms=100; front.frame.width=4; front.frame.height=3;
+            front.frame.pixels=front_frames[0];
+            g.page.pics[k].state=PIC_SHOWN; g.page.pics[k].moving=&front;
+            g.page.pics[k].playing=true; g.page.pics[k].due=now_ms; ahead=k;
+            continue;
+        }
+        /* A still picture: one opaque pixel. */
+        g.page.pics[k].image.pixels=os64_malloc(4);
+        g.page.pics[k].image.pixels[0]=0xff3060f0u;
+        g.page.pics[k].image.width=g.page.pics[k].image.height=1;
+        g.page.pics[k].state=PIC_SHOWN;
+    }
+    check(star>=0,"backdrop: the moving background's picture");
+    /* Three frames of a 7x5 tile: opaque and transparent pixels, each
+     * frame changing a few — or, `dense`, the first and third changing
+     * every one, the second a column. */
+    uint32_t seed=99;
+    for(int32_t i=0;i<7*5;i++) {
+        seed=seed*1103515245u+12345u;
+        layer_frames[0][i]=(i%6==0 ? 0u : 0xff000000u) | (seed>>8 & 0xffffff);
+    }
+    for(int32_t f=1;f<3;f++) {
+        memcpy(layer_frames[f],layer_frames[f-1],sizeof(layer_frames[f]));
+        for(int32_t i=f;i<7*5;i+=5) layer_frames[f][i]^=0x00a0a0a0u;
+    }
+    if(dense) {
+        for(int32_t i=0;i<7*5;i++) layer_frames[1][i]=layer_frames[0][i]^0x00a0a0a0u;
+        memcpy(layer_frames[2],layer_frames[1],sizeof(layer_frames[2]));
+        for(int32_t i=3;i<7*5;i+=7) layer_frames[2][i]^=0x00505050u;
+    }
+    memset(&stars,0,sizeof(stars));
+    stars.frame.delay_ms=100; stars.frame.width=7; stars.frame.height=5;
+    stars.frame.pixels=layer_frames[0];
+    g.page.pics[star].state=PIC_SHOWN; g.page.pics[star].moving=&stars;
+    g.page.pics[star].playing=true; g.page.pics[star].due=now_ms;
+    layer_new_screen(&layer_screen); layer_new_screen(&layer_ref);
+    g.ui.ctx=&layer_screen;
+    g.root.bounds=(os64_gui_rect_t){0,0,800,600};   /* the window, which the fixture leaves unsized */
+    const os64_ui_class_t *panel=g.view.cls;
+    g.view.cls=&kViewClass;                          /* the page's own painting, not the fixture's panel */
+    g.paint_cache=yonder_paint_cache_new(32u<<20);
+    g.paint_scratch=yonder_scratch_new();
+    cost_reset();
+    os64_ui_mark_dirty(&g.ui,&g.root);
+    layer_paint();
+    for(int32_t step=1;step<=30;step++) {
+        stars.frame.pixels=layer_frames[step%3];
+        /* It stops on a frame it never showed before, which no painting the
+         * layer kept can hold; a stopped picture's frame then stays. */
+        if(step<10) front.frame.pixels=front_frames[step%2];
+        else if(step==10) front.frame.pixels=front_frames[2];
+        /* A still picture is replaced at frame 10, as one arriving late is:
+         * its pixel changes and its box is marked, in a place nothing has
+         * made stale before. */
+        if(step==10)
+            for(int32_t k=0;k<g.page.npics;k++)
+                if(k!=star && k!=ahead && g.page.pics[k].image.pixels!=NULL) {
+                    g.page.pics[k].image.pixels[0]=0xfff0e010u;
+                    for(int32_t i=0;i<flow_nimages(g.page.tree);i++) {
+                        const flow_box_t *b=flow_image(g.page.tree,i);
+                        int32_t at=os64_page_image_for(page_model(&g.page),b->node);
+                        os64_gui_rect_t meet;
+                        if(at>=0 && at<g.page.nimage_map && g.page.pic_of[at]==k &&
+                           os64_rect_intersect(flow_box_doc_rect(b,scroll_now()),
+                                               (os64_gui_rect_t){g.sx,g.sy,800,600},&meet))
+                            mark_part(meet);
+                    }
+                }
+        now_ms=g.page.pics[star].due;
+        pictures_tick();
+        /* The picture in front stops on its frame 10 shows: every frame after
+         * composes over it, and shows its last frame only if what was in
+         * front of the stars there was painted again for the layer. */
+        if(step==10 && ahead>=0) g.page.pics[ahead].playing=false;
+        if(step==1) play.offered=s_layer.node==NULL && s_layer.offer.node!=NULL;
+        /* Something else on the page changes now and then: an ordinary paint
+         * the layer must not compose over stale paintings for. */
+        if(step==12 || step==20) mark_part((os64_gui_rect_t){g.sx+30,g.sy+30,120,60});
+        yonder_backdrop_policy_t *pol=&s_layer.policy;
+        if(pol->paint_cost>0) pol->paint_cost=paint;
+        if(pol->compose_cost>0) pol->compose_cost=compose;
+        if(pol->pass_cost>0) pol->pass_cost=pass;
+        layer_paint();
+        memset(layer_ref.surf.pixels,0,800u*600u*4u);
+        layer_reference(&layer_ref);
+        int d=layer_differs();
+        if(d>3) printf("backdrop: frame %d differs by %d from an ordinary paint\n",step,d);
+        play.close=play.close && d<=3;
+    }
+    /* The picture stops (its loops done): no frame comes, and the next
+     * paint gives back what the layer held. */
+    bool held=s_layer.k!=NULL;
+    g.page.pics[star].playing=false;
+    layer_paint();
+    play.freed=!held || s_layer.k==NULL;
+    for(int32_t k=0;k<g.page.npics;k++) { g.page.pics[k].moving=NULL; g.page.pics[k].playing=false; }
+    g.view.cls=panel;
+    g.ui.ctx=NULL;
+    yonder_paint_cache_free(g.paint_cache); g.paint_cache=NULL;
+    yonder_scratch_free(g.paint_scratch); g.paint_scratch=NULL;
+    os64_free(layer_screen.surf.pixels); os64_free(layer_ref.surf.pixels);
+    now_ms=100;
+    g.sy=0;
+    return play;
+}
+
+#define BACKDROP_BODY_BOX "html{background:#123}body{margin:0;background:#000 url(s.gif)}"
+
+static void backdrop_layer_cases(void) {
+    /* Painting dear, composing cheap: the P5's shape on a page full of text.
+     * The html has a colour, so the body is a box over the page. */
+    BackdropPlay play=backdrop_play(BACKDROP_BODY_BOX,"",0,false,100,5,100);
+    check(play.offered,"backdrop: the body's moving picture is offered at its first frame");
+    check(s_layer.node!=NULL && !s_layer.canvas && s_layer.refused==NULL,"backdrop: the body is held, not refused");
+    check(s_cost.bd.built==1 && s_cost.bd.composed>=20 && s_cost.bd.lost==0,
+          "backdrop: built once quiet, then composing, never lost");
+    check(s_cost.bd.rebuilt>0,"backdrop: an ordinary paint between frames is painted again for it");
+    /* Only those two changes: the holes' paints, merged by libui's list
+     * into rectangles no one hole holds, are the frame's own and change
+     * nothing in front. */
+    check(s_cost.bd.rebuilt<=2*120*60+2*OS64_UI_DAMAGE_SLACK,
+          "backdrop: the holes' own paints are not painted again for it");
+    check(s_cost.bd.holes>0,"backdrop: the form control is a hole");
+    check(play.close,"backdrop: every frame shows what an ordinary paint shows, within the rounding");
+    check(play.freed,"backdrop: a picture that stops gives back what the layer held");
+    backdrop_reset();
+    probe_drop();
+    /* The canvas: no html colour, so the body's background is the canvas's,
+     * behind the whole view; scrolled by a height no copy of the tile
+     * divides, so a copy laid from the view's corner instead of the page's
+     * shows. */
+    play=backdrop_play("body{margin:0;background:#000 url(s.gif)}","",37,false,100,5,100);
+    check(s_layer.node!=NULL && s_layer.canvas && s_layer.refused==NULL && s_cost.bd.composed>=20,
+          "backdrop: the canvas's moving picture is held and composed");
+    check(play.close,"backdrop: the canvas, scrolled, shows what an ordinary paint shows");
+    backdrop_reset();
+    probe_drop();
+    /* A body drawn through a matrix: its background is laid through a
+     * sheet, which moves its pixels, so the layer refuses it by name, and
+     * the page is painted as it always was. */
+    play=backdrop_play("html{background:#123}body{margin:0;background:#000 url(s.gif);transform:rotate(2deg)}",
+                       "",0,false,100,5,100);
+    check(s_layer.refused!=NULL && os64_streq(s_layer.refused,"drawn through a transform or a clip") &&
+          s_cost.bd.composed==0,"backdrop: a background drawn through a matrix is refused");
+    check(play.close,"backdrop: refused, every frame is still what an ordinary paint shows");
+    backdrop_reset();
+    probe_drop();
+    /* A picture moving in front of the stars at every frame: its part is
+     * painted ordinarily each frame, which leaves the view quiet enough to
+     * build, and is painted again for the layer before the next frame
+     * composes over it. */
+    play=backdrop_play(BACKDROP_BODY_BOX,"<img src=a.gif width=40 height=30>",0,false,100,5,100);
+    check(s_layer.refused==NULL && s_cost.bd.built==1 && s_cost.bd.composed>=20,
+          "backdrop: a small picture moving in front leaves the view quiet enough to build");
+    check(s_cost.bd.rebuilt>=4*40*30,"backdrop: the picture in front is painted again for it while it moves");
+    check(play.close,"backdrop: with a picture moving in front, every frame shows what an ordinary paint shows");
+    backdrop_reset();
+    probe_drop();
+    /* Frames that change every pixel are painted (composing them measures
+     * dearer) and frames that change a column are composed, in turn; the
+     * picture in front stops at frame 10, a painted frame, and frame 11 is
+     * composed over it: what changed in front while the frame painted must
+     * have been noted, or frame 11 composes it from stale paintings. */
+    play=backdrop_play(BACKDROP_BODY_BOX,"<img src=a.gif width=40 height=30><img src=t.gif width=60 height=40>",
+                       0,true,100,150,100);
+    check(s_layer.refused==NULL && s_cost.bd.composed>=5 && s_cost.bd.painted_dearer>=5,
+          "backdrop: dense frames painted and sparse ones composed, in turn");
+    check(play.close,"backdrop: painted and composed in turn, every frame shows what an ordinary paint shows");
+    backdrop_reset();
+    probe_drop();
+    /* A moving background on a small box is left to the dirty list. */
+    play=backdrop_play("html{background:#123}body{margin:0}#c{width:50px;height:30px;background:#000 url(s.gif)}",
+                       "<div id=c></div>",0,false,100,5,100);
+    check(s_layer.node==NULL && s_cost.bd.frames==0,"backdrop: a small box's moving background is not held");
+    check(play.close,"backdrop: a small box's frames are what an ordinary paint shows");
+    backdrop_reset();
+    probe_drop();
+    /* A still picture laid above the moving one is front painted as
+     * background: refused by name. */
+    play=backdrop_play("html{background:#123}body{margin:0;background:url(t.gif) no-repeat,#000 url(s.gif)}",
+                       "",0,false,100,5,100);
+    check(s_layer.refused!=NULL && os64_streq(s_layer.refused,"a layer of its box drawn above it") &&
+          s_cost.bd.composed==0,"backdrop: a layer drawn above the moving one is refused");
+    check(play.close,"backdrop: refused for a layer above, every frame is what an ordinary paint shows");
+    backdrop_reset();
+    probe_drop();
+    /* Painting cheap, composing dear: the layer gives itself up, and the
+     * page is still painted right. */
+    play=backdrop_play(BACKDROP_BODY_BOX,"",0,false,1,50,1);
+    check(s_layer.refused!=NULL && os64_streq(s_layer.refused,"dearer than painting it") &&
+          s_cost.bd.painted_dearer>=YONDER_BACKDROP_DEARER,
+          "backdrop: a layer dearer than painting is given up");
+    check(play.close,"backdrop: given up, every frame is still what an ordinary paint shows");
+    backdrop_reset();
+    probe_drop();
+}
+
 static void diag_picture_moves_case(void) {
     probe_page("<img src=file:///grows.png>",true);
     pictures_start(&g.page);
@@ -6270,6 +6566,7 @@ static void diag_cases(void) {
     diag_css_unasked_case();
     diag_lost_distinct_case();
     picture_tick_cases();
+    backdrop_layer_cases();
     diag_fact_short_case();
     diag_lost_overflow_case();
     diag_arriving_released_case();
