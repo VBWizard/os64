@@ -653,6 +653,10 @@ typedef struct {
     uint32_t b0, b1, s1;    // WORD: the word is [b0,b1), its spaces [b1,s1)
     int64_t w, sw;          // the word's (or box's) width, and its spaces'
     bool wrap_after;        // a soft wrap opportunity follows
+    // WORD: an opportunity follows that a line takes only when it holds no
+    // other before what does not fit (`overflow-wrap`, CSS Text 3 § 5.4):
+    // the end of a piece of a word cut at its characters.
+    bool emergency;
     bool collapsible;       // WORD: its spaces vanish at a line's end
     bool hang;              // WORD: its spaces stay but do not count (pre-wrap)
     bool keep_round;        // ATOM: a quirks-mode picture, no opportunity either side
@@ -734,8 +738,55 @@ static int64_t space_advance(L *l, const Fonts *f)
 // Spaces holding a tab are the exception to "once": a tab is as wide as
 // the way to the line's next stop, so the breaker walks them where the
 // line puts them (spaces_width).
+// Where a word may be cut between its characters (CSS Text 3 § 5.1, §
+// 5.4): every boundary is an opportunity under `word-break: break-all`;
+// under `overflow-wrap: anywhere` or `break-word` (and `word-break:
+// break-word`, which is `anywhere`) each is an EMERGENCY one, taken only
+// where the line holds no other — so only a word wider than the line `cw`
+// is cut, or, measuring min-content (`cw` 0), one whose breaks count there,
+// which `break-word`'s do not. Each piece but the last is a segment of its
+// own, cut at the boundaries the run's carets give, which are its
+// clusters; the start of the last piece is returned for the caller to make
+// it, with the spaces after it, as any word.
+static uint32_t word_pieces(L *l, Segs *s, const FItem *it, const char *text,
+                            const flow_style_t *style, const os64_text_run_t *run, uint32_t w0,
+                            uint32_t b0, uint32_t b1, int64_t cw)
+{
+    bool all = style->word_break == FLOW_WORD_BREAK_BREAK_ALL;
+    bool anywhere = style->overflow_wrap == FLOW_OVERFLOW_WRAP_ANYWHERE ||
+                    style->word_break == FLOW_WORD_BREAK_BREAK_WORD;
+    if (b1 - b0 < 2 || (!all && !anywhere && style->overflow_wrap == FLOW_OVERFLOW_WRAP_NORMAL))
+        return b0;
+    if (!all) {
+        int64_t w = caret_x(run, b1 - w0) - caret_x(run, b0 - w0);
+        if (cw > 0 ? w <= cw : !anywhere)
+            return b0;
+    }
+    os64_text_run_view_t v;
+    if (os64_text_run_view(run, &v) != OS64_FONT_OK)
+        return b0;
+    bool collapsible = f_ws_collapses(style->white_space);
+    for (size_t k = 0; k < v.caret_count && !l->failed; k++) {
+        uint32_t at = w0 + (uint32_t)v.carets[k].byte_offset;
+        if (at <= b0)
+            continue;
+        if (at >= b1)
+            break;
+        Seg *g = seg_add(l, s, SG_WORD);
+        if (g == NULL)
+            break;
+        *g = (Seg){.kind = SG_WORD, .item = it, .text = text, .style = style, .b0 = b0,
+                   .b1 = at, .s1 = at, .collapsible = collapsible,
+                   .hang = style->white_space == FLOW_WS_PRE_WRAP, .wrap_after = all,
+                   .emergency = !all};
+        g->w = caret_x(run, at - w0) - caret_x(run, b0 - w0);
+        b0 = at;
+    }
+    return b0;
+}
+
 static void text_segments(L *l, Segs *s, const FItem *it, const char *text, uint32_t n,
-                          const flow_style_t *style, int64_t tab_interval)
+                          const flow_style_t *style, int64_t tab_interval, int64_t cw)
 {
     Fonts f;
     if (n == 0 || !fonts_for(l, style, &f))
@@ -807,6 +858,9 @@ static void text_segments(L *l, Segs *s, const FItem *it, const char *text, uint
                 uint32_t b1 = at;
                 while (at < w1 && (text[at] == ' ' || text[at] == '\t'))
                     at++;
+                // A word cut at its characters (word_pieces) leaves its last
+                // piece, with the spaces after it, to be made here.
+                b0 = word_pieces(l, s, it, text, style, run, w0, b0, b1, cw);
                 Seg *g = seg_add(l, s, SG_WORD);
                 if (g == NULL)
                     break;
@@ -881,7 +935,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
         case FI_TEXT: {
             if (tabs == 0 && !f_ws_collapses(it->style->white_space))
                 tabs = tab_interval_for(l, ifc->style);
-            text_segments(l, s, it, it->text, it->len, it->style, tabs);
+            text_segments(l, s, it, it->text, it->len, it->style, tabs, cw);
             break;
         }
         case FI_ATOMIC: {
@@ -920,7 +974,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                     s->drop_space = ends_in_space(s);
                     break;
                 }
-                text_segments(l, s, it, alt, n, st, tabs);
+                text_segments(l, s, it, alt, n, st, tabs, cw);
                 break;
             }
             if (r.none) {
@@ -1101,10 +1155,10 @@ static int64_t spaces_width(const Seg *g, int64_t x)
 }
 
 // Greedy line breaking (CSS 2.1 §9.4.2): as much as fits, breaking at the
-// LAST soft wrap opportunity before what does not; a word wider than the
-// line goes on a line of its own and overflows it (`overflow-wrap:
-// normal`). Returns the segment after the line; `*forced` says a break
-// ended it.
+// LAST soft wrap opportunity before what does not, or, where the line
+// holds none, at the last emergency one (`overflow-wrap`, Seg); a word
+// wider than the line with neither goes on a line of its own and overflows
+// it. Returns the segment after the line; `*forced` says a break ended it.
 static size_t break_line(const Segs *s, size_t start, int64_t indent, int64_t avail,
                          bool *forced)
 {
@@ -1112,7 +1166,7 @@ static size_t break_line(const Segs *s, size_t start, int64_t indent, int64_t av
     // a tab reaches the same stop here as where the line is laid down.
     int64_t pen = indent;
     bool content = false;
-    size_t brk = SIZE_MAX;
+    size_t brk = SIZE_MAX, emergency = SIZE_MAX;
     *forced = false;
     for (size_t j = start; j < s->n; j++) {
         const Seg *g = &s->v[j];
@@ -1121,8 +1175,8 @@ static size_t break_line(const Segs *s, size_t start, int64_t indent, int64_t av
             return j + 1;
         }
         if (g->kind == SG_WORD || g->kind == SG_ATOM || g->kind == SG_MARKER) {
-            if (brk != SIZE_MAX && pen + g->w > avail)
-                return brk + 1;
+            if (pen + g->w > avail && (brk != SIZE_MAX || emergency != SIZE_MAX))
+                return (brk != SIZE_MAX ? brk : emergency) + 1;
             pen += g->w;
             if (g->kind != SG_WORD || g->b1 > g->b0)
                 content = true;
@@ -1131,6 +1185,8 @@ static size_t break_line(const Segs *s, size_t start, int64_t indent, int64_t av
         // it would end holds nothing.
         if (g->wrap_after && content)
             brk = j;
+        else if (g->emergency && content)
+            emergency = j;
         if (g->kind == SG_WORD)
             pen += spaces_width(g, pen);
     }
@@ -5550,7 +5606,9 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
         default:
             break;
         }
-        if (g->wrap_after || g->kind == SG_BREAK) {
+        // A word cut at its characters was cut here only where those
+        // breaks count toward min-content (word_pieces).
+        if (g->wrap_after || g->emergency || g->kind == SG_BREAK) {
             r.min = max64(r.min, word);
             word = 0;
         }

@@ -212,6 +212,15 @@ typedef enum {
     FLOW_TRANSFORM_CAPITALIZE,
 } flow_text_transform_t;
 
+// `word-break` (CSS Text 3 § 5.1) and `overflow-wrap` (§ 5.4).
+typedef enum {
+    FLOW_WORD_BREAK_NORMAL = 0, FLOW_WORD_BREAK_KEEP_ALL, FLOW_WORD_BREAK_BREAK_ALL,
+    FLOW_WORD_BREAK_BREAK_WORD,
+} flow_word_break_t;
+typedef enum {
+    FLOW_OVERFLOW_WRAP_NORMAL = 0, FLOW_OVERFLOW_WRAP_BREAK_WORD, FLOW_OVERFLOW_WRAP_ANYWHERE,
+} flow_overflow_wrap_t;
+
 typedef enum {
     FLOW_LIST_DISC = 0,
     FLOW_LIST_CIRCLE,
@@ -235,7 +244,7 @@ enum {
 
 typedef enum { FLOW_VISIBLE = 0, FLOW_HIDDEN, FLOW_COLLAPSE } flow_visibility_t;
 
-// `cursor`'s shapes (CSS UI 4 § 5.2), in its order.
+// `cursor`'s shapes (CSS UI 4 § 5.1.1), in its order.
 typedef enum {
     FLOW_CURSOR_AUTO = 0, FLOW_CURSOR_DEFAULT, FLOW_CURSOR_NONE, FLOW_CURSOR_CONTEXT_MENU,
     FLOW_CURSOR_HELP, FLOW_CURSOR_POINTER, FLOW_CURSOR_PROGRESS, FLOW_CURSOR_WAIT,
@@ -661,6 +670,14 @@ typedef struct {
     flow_line_height_t line_height;
     flow_length_t text_indent;      // PX or PERCENT: the first line's; AUTO reads as 0
     flow_text_transform_t text_transform;
+    // Where a line may break inside a word, both inherited (CSS Text 3 §
+    // 5.1, § 5.4): `break-all` between any two characters; `anywhere`, and
+    // `word-break: break-word`, only where the word would otherwise
+    // overflow its line, those breaks counting toward its min-content
+    // width; `overflow-wrap: break-word` the same, not counting them.
+    // `keep-all` is `normal`: libflow breaks a line only at white space.
+    flow_word_break_t word_break;
+    flow_overflow_wrap_t overflow_wrap;
     // This element's own decorations. CSS draws an ancestor's across its
     // descendants too, each in the colour of the element that drew it,
     // which is a fact libflow derives and not a property of the descendant.
@@ -723,7 +740,7 @@ typedef struct {
     // through the box to whatever is under it, though a descendant that
     // sets `auto` is still hit. Zero is `auto`, the initial value.
     bool pointer_events_none;
-    // `cursor` (CSS UI 4 § 5.2), inherited: the shape a pointer over the
+    // `cursor` (CSS UI 4 § 5.1.1), inherited: the shape a pointer over the
     // box takes, the keyword after whatever pictures the page named first.
     // Kept for the face; nothing draws a shape (YONDER_HONEY_DO.md § 7).
     flow_cursor_t cursor;

@@ -417,6 +417,12 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
     }
     if (s->text_transform != parent->text_transform)
         putf(b, " transform=%s", s_transform[s->text_transform]);
+    static const char *const kWordBreak[] = {"normal", "keep-all", "break-all", "break-word"};
+    static const char *const kOverflowWrap[] = {"normal", "break-word", "anywhere"};
+    if (s->word_break != parent->word_break)
+        putf(b, " word-break=%s", kWordBreak[s->word_break]);
+    if (s->overflow_wrap != parent->overflow_wrap)
+        putf(b, " overflow-wrap=%s", kOverflowWrap[s->overflow_wrap]);
     if (s->text_decoration & FLOW_DECORATION_UNDERLINE)
         puts_(b, " underline");
     if (s->text_decoration & FLOW_DECORATION_LINE_THROUGH)

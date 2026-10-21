@@ -385,6 +385,8 @@ static flow_style_t inherit(const Ctx *c, const flow_style_t *parent)
     s.line_height = parent->line_height;
     s.text_indent = parent->text_indent;
     s.text_transform = parent->text_transform;
+    s.word_break = parent->word_break;
+    s.overflow_wrap = parent->overflow_wrap;
     s.text_shadows = parent->text_shadows;
     s.ntext_shadows = parent->ntext_shadows;
     s.pixelated = parent->pixelated;
@@ -1879,6 +1881,8 @@ static void take(Spec *dst, const Spec *src, garb_prop_t prop)
         d->text_indent = s->text_indent;
         break;
     case GARB_TEXT_TRANSFORM: d->text_transform = s->text_transform; break;
+    case GARB_WORD_BREAK: d->word_break = s->word_break; break;
+    case GARB_OVERFLOW_WRAP: d->overflow_wrap = s->overflow_wrap; break;
     case GARB_TEXT_DECORATION_LINE: d->text_decoration = s->text_decoration; break;
     case GARB_VISIBILITY: d->visibility = s->visibility; break;
     case GARB_LIST_STYLE_TYPE: d->list_style_type = s->list_style_type; break;
@@ -3051,6 +3055,20 @@ static bool author_value(Author *a, Spec *sp, const garb_set_t *set)
         static const char *const words[] = {"none", "uppercase", "lowercase", "capitalize"};
         i = pick(v, words, F_ARRAY(words));
         s->text_transform = i >= 0 ? (flow_text_transform_t)i : FLOW_TRANSFORM_NONE;
+        break;
+    }
+    case GARB_WORD_BREAK: {
+        static const char *const words[] = {"normal", "keep-all", "break-all", "break-word"};
+        _Static_assert(F_ARRAY(words) == FLOW_WORD_BREAK_BREAK_WORD + 1, "flow_word_break_t");
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->word_break = (flow_word_break_t)i;
+        break;
+    }
+    case GARB_OVERFLOW_WRAP: {
+        static const char *const words[] = {"normal", "break-word", "anywhere"};
+        _Static_assert(F_ARRAY(words) == FLOW_OVERFLOW_WRAP_ANYWHERE + 1, "flow_overflow_wrap_t");
+        if ((i = pick(v, words, F_ARRAY(words))) >= 0)
+            s->overflow_wrap = (flow_overflow_wrap_t)i;
         break;
     }
     case GARB_OVERFLOW_X: case GARB_OVERFLOW_Y: {
