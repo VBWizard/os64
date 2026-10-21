@@ -33,7 +33,7 @@ yonder_host_build() {
         -isystem userland/obj/js/upstream -fsanitize=address,undefined -fno-sanitize-recover=all)
     local objects=() source object private
     for source in "$unit" tools/test_js_port_calendar.c tools/test_libflow_fonts.c \
-        userland/libjs/runtime/runtime.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin}.c \
+        userland/libjs/runtime/runtime.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin,modern}.c \
         userland/apps/yonder/{scripts,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag}.c \
         userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize}.c \
         userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \

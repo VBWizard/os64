@@ -215,6 +215,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_reclaim.inc"
 #include "test_dom_events.inc"
 #include "test_dom_classic.inc"
+#include "test_dom_modern.inc"
 #define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
     "function throws(n,f){let ok=false;try{f()}catch(e){ok=e.name===n}assert(ok,n)}"
 
@@ -263,7 +264,9 @@ static void dom_geometry_cases(void)
         "assert(node.offsetParent===document.body);"
         "Object.defineProperty(Object.prototype,'x',{set(){throw Error('setter ran')},configurable:true});"
         "assert(node.getBoundingClientRect().x===1.25);delete Object.prototype.x;"
-        "const getter=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node),'offsetWidth').get;"
+        "let owner=Object.getPrototypeOf(node);"
+        "while(!Object.prototype.hasOwnProperty.call(owner,'offsetWidth'))owner=Object.getPrototypeOf(owner);"
+        "const getter=Object.getOwnPropertyDescriptor(owner,'offsetWidth').get;"
         "throws('TypeError',()=>getter.call(document));throws('TypeError',()=>getter.call(node.firstChild));"
         "throws('TypeError',()=>node.getBoundingClientRect.call({}));", "geometry-values-and-receivers");
     os64_dom_geometry_stats_t stats=os64_dom_geometry_stats(f.binding,true);
@@ -379,6 +382,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--events")){dom_event_cases();printf("DOM events probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     bool mutation_mode=argc==2&&!strcmp(argv[1],"--mutants");
     dom_classic_cases();
+    dom_modern_cases();
     dom_geometry_cases();
     dom_global_miss_cases();
     dom_surface_cases();

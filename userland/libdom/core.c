@@ -285,6 +285,7 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
     if (installed >= 0) installed = d_event_install(dom, ctx, global);
     if (installed >= 0) installed = d_timer_install(dom, ctx, global);
     if (installed >= 0) installed = d_window_install(dom, ctx, global);
+    if (installed >= 0) installed = d_modern_install(dom, ctx, global);
     JS_FreeValue(ctx, global);
     if (installed < 0) goto fail;
     outcome->status = OS64_JS_OK;

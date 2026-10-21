@@ -287,29 +287,90 @@ static JSValue illegal_constructor(JSContext *ctx, JSValueConst self, int argc, 
     return JS_ThrowTypeError(ctx, "Illegal constructor");
 }
 
+/* `new DocumentFragment()` (DOM § 4.7): an empty fragment of the window's
+ * document. Called with `new`, the engine passes the constructor as `self`;
+ * called without it, there is no new object to make. */
+static JSValue fragment_constructor(JSContext *ctx, JSValueConst self, int argc,
+                                    JSValueConst *argv, int magic, JSValue *data)
+{
+    (void)argc; (void)argv; (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    if (!JS_IsConstructor(ctx, self))
+        return JS_ThrowTypeError(ctx, "Constructor DocumentFragment requires 'new'");
+    int64_t status;
+    os64_html_node_t *fragment = os64_html_create_fragment(dom->document, &status);
+    return fragment != NULL ? d_wrap(dom, ctx, fragment) : d_html_error(ctx, status);
+}
+
+/* Node's constants (DOM § 4.4), on the interface object and its prototype,
+ * as WebIDL puts every constant: what `n.nodeType === Node.ELEMENT_NODE`
+ * reads. */
+static int node_constants(JSContext *ctx, JSValueConst target)
+{
+    static const struct { const char *name; int value; } kConstants[] = {
+        {"ELEMENT_NODE", 1}, {"ATTRIBUTE_NODE", 2}, {"TEXT_NODE", 3}, {"CDATA_SECTION_NODE", 4},
+        {"ENTITY_REFERENCE_NODE", 5}, {"ENTITY_NODE", 6}, {"PROCESSING_INSTRUCTION_NODE", 7},
+        {"COMMENT_NODE", 8}, {"DOCUMENT_NODE", 9}, {"DOCUMENT_TYPE_NODE", 10},
+        {"DOCUMENT_FRAGMENT_NODE", 11}, {"NOTATION_NODE", 12},
+        {"DOCUMENT_POSITION_DISCONNECTED", 0x01}, {"DOCUMENT_POSITION_PRECEDING", 0x02},
+        {"DOCUMENT_POSITION_FOLLOWING", 0x04}, {"DOCUMENT_POSITION_CONTAINS", 0x08},
+        {"DOCUMENT_POSITION_CONTAINED_BY", 0x10}, {"DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC", 0x20},
+    };
+    for (unsigned i = 0; i < sizeof(kConstants) / sizeof(kConstants[0]); i++)
+        if (JS_DefinePropertyValueStr(ctx, target, kConstants[i].name, JS_NewInt32(ctx, kConstants[i].value),
+                                      JS_PROP_ENUMERABLE) < 0)
+            return -1;
+    return 0;
+}
+
 /* The interface objects for the prototypes the binding has (WebIDL § 3.7):
  * `Element.prototype` is what every element inherits, so `el instanceof
  * Element` holds and a page may patch the prototype, as the Wayback
- * Machine's player does. An interface with no prototype of its own here
- * (HTMLAnchorElement, Text) is not installed: aliasing it to a broader one
- * would make `instanceof` lie, and the census says what is missing. Each
- * prototype's `constructor` is its most specific interface, the last
- * named for it. */
-static int interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+ * Machine's player does. One interface per prototype: an interface with no
+ * prototype of its own here (Text and Comment share CharacterData's; most
+ * HTML elements have only HTMLElement's) is not installed, since aliasing
+ * it to a broader one would make `instanceof` lie, and the census says what
+ * is missing. Each prototype's `constructor` is its interface. An interface
+ * whose standard gives it a constructor the binding can honour constructs
+ * (DocumentFragment); the rest are Illegal constructors, as WebIDL makes
+ * an interface without one (`new Document()`, which makes an XML document,
+ * is one of these here). Node's constants come with Node. The Modern Web
+ * table's row (modern.c), so all of it exists only while options.modern is
+ * set. */
+int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     static const struct { const char *name; unsigned proto; } kInterfaces[] = {
         {"Node", D_PROTO_NODE}, {"CharacterData", D_PROTO_CHARACTER_DATA},
         {"DocumentFragment", D_PROTO_FRAGMENT}, {"Document", D_PROTO_DOCUMENT},
-        {"Element", D_PROTO_ELEMENT}, {"HTMLElement", D_PROTO_ELEMENT},
+        {"Element", D_PROTO_ELEMENT}, {"HTMLElement", D_PROTO_HTML_ELEMENT},
         {"HTMLFormElement", D_PROTO_FORM}, {"HTMLInputElement", D_PROTO_INPUT},
         {"HTMLTextAreaElement", D_PROTO_TEXTAREA}, {"HTMLSelectElement", D_PROTO_SELECT},
         {"HTMLButtonElement", D_PROTO_BUTTON}, {"HTMLImageElement", D_PROTO_IMAGE},
+        {"HTMLScriptElement", D_PROTO_SCRIPT}, {"HTMLAnchorElement", D_PROTO_ANCHOR},
+        {"HTMLLinkElement", D_PROTO_LINK},
     };
+    _Static_assert(sizeof(kInterfaces) / sizeof(kInterfaces[0]) == D_PROTO_COUNT,
+                   "an interface object for each of the binding's prototypes");
     for (unsigned i = 0; i < sizeof(kInterfaces) / sizeof(kInterfaces[0]); i++) {
-        JSValue f = JS_NewCFunction2(ctx, illegal_constructor, kInterfaces[i].name, 0,
-                                     JS_CFUNC_constructor_or_func, 0);
+        unsigned proto = kInterfaces[i].proto;
+        JSValue f;
+        if (proto == D_PROTO_FRAGMENT) {
+            f = JS_NewCFunctionData(ctx, fragment_constructor, 0, 0, 1, &dom->anchor->value);
+            if (!JS_IsException(f) && (!JS_SetConstructorBit(ctx, f, true) ||
+                JS_DefinePropertyValueStr(ctx, f, "name", JS_NewString(ctx, kInterfaces[i].name),
+                                          JS_PROP_CONFIGURABLE) < 0)) {
+                JS_FreeValue(ctx, f);
+                return -1;
+            }
+        } else {
+            f = JS_NewCFunction2(ctx, illegal_constructor, kInterfaces[i].name, 0,
+                                 JS_CFUNC_constructor_or_func, 0);
+        }
         if (JS_IsException(f)) return -1;
-        if (JS_SetConstructor(ctx, f, dom->prototypes[kInterfaces[i].proto]->value) < 0) {
+        if (JS_SetConstructor(ctx, f, dom->prototypes[proto]->value) < 0 ||
+            (proto == D_PROTO_NODE && (node_constants(ctx, f) < 0 ||
+                                       node_constants(ctx, dom->prototypes[proto]->value) < 0))) {
             JS_FreeValue(ctx, f);
             return -1;
         }
@@ -375,5 +436,5 @@ int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (JS_IsException(event)) return -1;
     int result = JS_DefinePropertyValueStr(ctx,event,"MOUSEMOVE",JS_NewInt32(ctx,16),JS_PROP_ENUMERABLE);
     JS_FreeValue(ctx,event);
-    return result < 0 ? -1 : interfaces_install(dom,ctx,global);
+    return result;
 }

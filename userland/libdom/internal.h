@@ -15,9 +15,13 @@ typedef struct DListener DListener;
 typedef struct DTimer DTimer;
 typedef struct DScript DScript;
 typedef struct DActiveEvent { struct DActiveEvent *previous; JSValue value; } DActiveEvent;
+/* The wrappers' prototypes, one per kind of node the binding tells apart
+ * (node.c's d_node_install builds the chain). An HTML element is an
+ * HTML_ELEMENT, or one of the kinds after it when it has one of its own;
+ * an element of another namespace is an ELEMENT. */
 enum {
     D_PROTO_NODE, D_PROTO_DOCUMENT, D_PROTO_ELEMENT, D_PROTO_CHARACTER_DATA,
-    D_PROTO_FRAGMENT, D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT,
+    D_PROTO_FRAGMENT, D_PROTO_HTML_ELEMENT, D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT,
     D_PROTO_BUTTON, D_PROTO_FORM, D_PROTO_IMAGE, D_PROTO_SCRIPT, D_PROTO_ANCHOR,
     D_PROTO_LINK, D_PROTO_COUNT
 };
@@ -260,6 +264,13 @@ bool d_classic_match(os64_dom_t *dom, const os64_html_node_t *root, const os64_h
 JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root, unsigned kind, const char *named);
 JSValue d_classic_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, unsigned kind);
 int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The Modern Web arc's surface (modern.c): the table's rows installed when
+ * options.modern is set, and each name a row declares, by index across the
+ * table, NULL past the last, for the harness that holds the rows to it. */
+int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+const char *d_modern_name(size_t index);
+/* The table's rows' installers, each in the file its slice owns. */
+int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 JSValue d_style(os64_dom_t *dom, JSContext *ctx, JSValueConst self);
 int d_style_install(os64_dom_t *dom, JSContext *ctx);
 extern JSClassExoticMethods d_node_exotic;

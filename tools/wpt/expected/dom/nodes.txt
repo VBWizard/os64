@@ -3,6 +3,22 @@
 # [excluded] are written by hand; tools/test_yonder_wpt_host.sh dom/nodes --update
 # rewrites [passing].
 [required]
+# Slice 0a: the interface objects (Node and its constants, DocumentFragment,
+# which constructs). Each fails with the switch off.
+Document-getElementsByTagName.html	getElementsByTagName('*')
+DocumentFragment-constructor.html	Create a valid document DocumentFragment
+DocumentFragment-constructor.html	Sets the owner document to the current global object associated document
+DocumentFragment-getElementById.html	The method must exist
+Element-getElementsByTagName.html	getElementsByTagName('*')
+Node-cloneNode.html	createDocumentFragment
+Node-constants.html	Constants for createDocumentPosition on Element object.
+Node-constants.html	Constants for createDocumentPosition on Node interface object.
+Node-constants.html	Constants for createDocumentPosition on Node prototype object.
+Node-constants.html	Constants for createDocumentPosition on Text object.
+Node-constants.html	Constants for nodeType on Element object.
+Node-constants.html	Constants for nodeType on Node interface object.
+Node-constants.html	Constants for nodeType on Node prototype object.
+Node-constants.html	Constants for nodeType on Text object.
 [excluded]
 [passing]
 CharacterData-appendData.html	Comment.appendData()
@@ -223,9 +239,13 @@ Document-getElementById.html	where insertion order and tree order don't match
 Document-getElementsByTagName.html	Caching is allowed
 Document-getElementsByTagName.html	Shouldn't be able to set unsigned properties on a HTMLCollection (non-strict mode)
 Document-getElementsByTagName.html	Shouldn't be able to set unsigned properties on a HTMLCollection (strict mode)
+Document-getElementsByTagName.html	getElementsByTagName('*')
+DocumentFragment-constructor.html	Create a valid document DocumentFragment
+DocumentFragment-constructor.html	Sets the owner document to the current global object associated document
 DocumentFragment-getElementById.html	Empty string ID values
 DocumentFragment-getElementById.html	It must return null when there are no matches
 DocumentFragment-getElementById.html	It must return the first element when there are matches
+DocumentFragment-getElementById.html	The method must exist
 DocumentFragment-querySelectorAll-after-modification.html	querySelectorAll should still work on DocumentFragments after they are modified
 Element-childElement-null.html	Null test
 Element-childElementCount-dynamic-add.html	Dynamic Adding of Elements
@@ -470,6 +490,7 @@ Element-getElementsByTagName.html	Caching is allowed
 Element-getElementsByTagName.html	Matching the context object
 Element-getElementsByTagName.html	Shouldn't be able to set unsigned properties on a HTMLCollection (non-strict mode)
 Element-getElementsByTagName.html	Shouldn't be able to set unsigned properties on a HTMLCollection (strict mode)
+Element-getElementsByTagName.html	getElementsByTagName('*')
 Element-hasAttribute.html	hasAttribute should work with all attribute casings
 Element-hasAttributes.html	element.hasAttributes() must return false when the element does not have attribute.
 Element-hasAttributes.html	element.hasAttributes() must return true when the element has attribute.
@@ -526,6 +547,15 @@ Node-childNodes.html	Node.childNodes on a DocumentFragment.
 Node-childNodes.html	Node.childNodes on an Element.
 Node-cloneNode-parser-created-names.html	cloneNode on elements with names containing angle brackets
 Node-cloneNode-parser-created-names.html	cloneNode on elements with names containing colons
+Node-cloneNode.html	createDocumentFragment
+Node-constants.html	Constants for createDocumentPosition on Element object.
+Node-constants.html	Constants for createDocumentPosition on Node interface object.
+Node-constants.html	Constants for createDocumentPosition on Node prototype object.
+Node-constants.html	Constants for createDocumentPosition on Text object.
+Node-constants.html	Constants for nodeType on Element object.
+Node-constants.html	Constants for nodeType on Node interface object.
+Node-constants.html	Constants for nodeType on Node prototype object.
+Node-constants.html	Constants for nodeType on Text object.
 Node-insertBefore.html	Calling insertBefore with a non-Node first argument must throw TypeError.
 Node-insertBefore.html	Calling insertBefore with a non-Node first argument on a leaf node Comment must throw TypeError.
 Node-insertBefore.html	Calling insertBefore with a non-Node first argument on a leaf node DocumentType must throw TypeError.
