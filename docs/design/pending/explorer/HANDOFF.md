@@ -112,3 +112,10 @@ so E1B must follow the post-destruction drain/tombstone protocol in the handoff.
 
 E7 still needs explicit FAT/ext2 publication, identity and source-change
 contracts before destructive transfers.
+
+## PR #322 second-review follow-up — 2026-10-21
+
+R2/R3 fixes and [evidence](evidence/e05a/review-r2/README.md) address unsafe early
+font adoption and lost manual resizes from maximized state. Host sanitizers,
+leak checks and cross-build passed. Independent re-review and P5 acceptance of
+these new fixes remain pending. Bring this parent forward into the E5C branch.

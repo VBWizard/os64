@@ -16,6 +16,7 @@ static char saved_size[64];
 static bool fail_size_write, fail_screen_info;
 static uint32_t native_flags, screen_width = 1600, screen_height = 1000;
 static const char *startup_fonts;
+static uint32_t startup_font_size=32;
 static void native_resize(uint32_t width, uint32_t height)
 {
     free(native_surface.pixels);
@@ -84,7 +85,7 @@ uint64_t file_test_syscall(uint64_t nr,uint64_t a,uint64_t b,uint64_t c,
 }
 
 int os64_ui_font_follow(os64_ui_t *ui)
-{ return startup_fonts ? ui_test_adopt(ui,startup_fonts,32) : OS64_FONT_OK; }
+{ return startup_fonts ? ui_test_adopt(ui,startup_fonts,startup_font_size) : OS64_FONT_OK; }
 
 void *os64_calloc(size_t n, size_t size)
 { void *p=os64_malloc(n*size); if(p)memset(p,0,n*size); return p; }
@@ -498,6 +499,44 @@ static void display_size_tests(void)
     fail_screen_info=false;screen_width=1600;screen_height=1000;saved_size[0]=0;
     free(d);
 }
+static void review_resize_tests(const char *font_dir)
+{
+    current="review: oversized startup font and manual resize from maximized";
+    os64_ui_file_dialog_t *d=calloc(1,sizeof(*d));CHECK(d!=NULL);
+    unsigned before=size_writes;
+    screen_width=640;screen_height=480;
+    strcpy(saved_size,"2500,1360");startup_fonts=font_dir;startup_font_size=96;
+    for(int mode=0;mode<2;++mode) {
+        os64_ui_file_options_t options={.mode=mode?OS64_UI_FILE_OPEN:OS64_UI_FILE_SAVE,.directory="/home"};
+        os64_ui_status_code_t rc=os64_ui_file_dialog_open(d,NULL,0,&options);
+        CHECK(rc==OS64_UI_OK);
+        if(rc==OS64_UI_OK) {
+            CHECK(!d->layout_pending && d->name.w.bounds.h<96);
+            CHECK(d->accept.bounds.y+d->accept.bounds.h<=(int32_t)d->draw.surf.height);
+            CHECK(d->min_width<=640 && d->min_height<=480);
+            key(d,27,0x01,0);CHECK(d->result==OS64_UI_FILE_CANCELLED);
+        }
+        CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK);
+        CHECK(size_writes==before && !strcmp(saved_size,"2500,1360"));
+    }
+    startup_fonts=NULL;startup_font_size=32;screen_width=1600;screen_height=1000;
+    strcpy(saved_size,"960,760");
+    os64_ui_file_options_t options={.mode=OS64_UI_FILE_OPEN,.directory="/home"};
+    CHECK(os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_OK);
+    resize_event(d,1600,1000,OS64_GUI_WINDOW_MAXIMIZED);
+    resize_event(d,1200,850,0); /* WM clears MAXIMIZED before the drag's event. */
+    CHECK(size_writes==before+1 && !strcmp(saved_size,"1200,850"));
+    key(d,27,0x01,0);
+    CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK);
+    options.mode=OS64_UI_FILE_SAVE;
+    CHECK(os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_OK);
+    CHECK(d->draw.surf.width==1200 && d->draw.surf.height==850);
+    resize_event(d,1600,1000,OS64_GUI_WINDOW_MAXIMIZED);
+    resize_event(d,1200,850,0); /* A true restore must not republish stale settings. */
+    CHECK(size_writes==before+1);
+    CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK);
+    saved_size[0]=0;free(d);
+}
 static void compact_tests(void)
 {
     current="compact and wrapped footer";
@@ -525,6 +564,7 @@ int main(int argc,char **argv)
     save_tests();open_tests();folder_tests();navigation_tests();lifecycle_tests();
     compact_tests();size_tests(argc>1?argv[1]:"userland/libfreetype/fixtures");
     display_size_tests();
+    review_resize_tests(argc>1?argv[1]:"userland/libfreetype/fixtures");
     layout_tests(argc>1?argv[1]:"userland/libfreetype/fixtures",argc>2?argv[2]:NULL);
     printf("file dialogs: %lu checks, %d failures\n",checks,failures);
     return failures?1:0;

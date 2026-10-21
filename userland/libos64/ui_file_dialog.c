@@ -320,15 +320,14 @@ static void file_size_remember(os64_ui_file_dialog_t *d)
 {
     bool changed = d->size_width != d->draw.surf.width ||
         d->size_height != d->draw.surf.height;
-    file_size_baseline(d);
     os64_gui_window_state_t state;
-    if (os64_gui_window_get_state(d->window, &state) != 0) {
-        d->size_suspended = true; return;
-    }
+    if (os64_gui_window_get_state(d->window, &state) != 0) return;
     bool suspended = (state.flags & (OS64_GUI_WINDOW_MAXIMIZED | OS64_GUI_WINDOW_MINIMIZED)) != 0;
-    bool restoring = d->size_suspended;
-    d->size_suspended = suspended;
-    if (!d->size_ready || !changed || suspended || restoring || d->layout_pending) return;
+    /* Keep the last normal dimensions through maximize/minimize. A restore
+     * matches them; a manual resize out of maximized state is a new choice. */
+    if (suspended) return;
+    file_size_baseline(d);
+    if (!d->size_ready || !changed || d->layout_pending) return;
     char value[32];
     os64_snprintf(value, sizeof(value), "%u,%u", d->size_width, d->size_height);
     os64_conf_pair_t pair = {"size", value};
@@ -453,8 +452,6 @@ static os64_ui_status_code_t file_compose(os64_ui_file_dialog_t *d,
     const os64_ui_file_options_t *options)
 {
     os64_ui_init(&d->ui, &d->draw);
-    /* Adopt the current font before measuring the restored window minimum. */
-    (void)os64_ui_font_follow(&d->ui);
     os64_ui_panel(&d->root);
     d->root.bounds = (os64_gui_rect_t){0,0,(int32_t)d->draw.surf.width,(int32_t)d->draw.surf.height};
     d->root.user = d;
@@ -494,6 +491,22 @@ static os64_ui_status_code_t file_compose(os64_ui_file_dialog_t *d,
         d->root.bounds.h = (int32_t)d->draw.surf.height;
         font_rc = file_layout(d, false);
     }
+    if (font_rc != OS64_FONT_OK)
+        return font_rc == OS64_FONT_NO_MEMORY ? OS64_UI_NO_MEMORY : OS64_UI_LIMIT;
+    /* Follow only after the tree and planner can reject an unfit font. A
+     * tiny saved window may grow for a valid candidate, but a refused native
+     * minimum leaves the fallback font usable on the smaller display. */
+    d->staged_min_width = d->staged_min_height = 0;
+    if (os64_ui_font_follow(&d->ui) != 0 &&
+        (d->staged_min_width > d->root.bounds.w || d->staged_min_height > d->root.bounds.h) &&
+        os64_gui_window_set_min_size(d->window, d->staged_min_width, d->staged_min_height) == 0) {
+        d->applied_min_width = d->staged_min_width; d->applied_min_height = d->staged_min_height;
+        if (os64_draw_ctx_refresh(&d->draw) != 0) return OS64_UI_ERROR;
+        d->root.bounds.w = (int32_t)d->draw.surf.width;
+        d->root.bounds.h = (int32_t)d->draw.surf.height;
+        (void)os64_ui_font_follow(&d->ui);
+    }
+    font_rc = file_layout(d, false);
     if (font_rc != OS64_FONT_OK)
         return font_rc == OS64_FONT_NO_MEMORY ? OS64_UI_NO_MEMORY : OS64_UI_LIMIT;
     os64_ui_status_code_t rc = os64_browser_create(&d->browser_ui.details,

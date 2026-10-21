@@ -1014,3 +1014,14 @@ measured idle one-worker pools closing in 1–11 ms, versus 206–980 ms for two
 workers. The jobs pipe tracks one waiting reader; the displaced reader waits
 for the one-second backstop. [E5B](E05B_CLOSE_LATENCY.md) records source, native
 timings and follow-up scope. No production fix was made during this diagnosis.
+
+## 2026-10-21 — PR #322 second-review fixes
+
+Chris assigned two additional findings. Both reproduced: the unplanned early
+font adoption could make dialogs fail on a smaller display; the first resize
+out of maximized state was incorrectly discarded even for a manual drag.
+The fixes retain transactional font fallback and preserve the last normal-size
+baseline through special window states. Five regression failures became 4,693
+passing ASan/UBSan/LSan checks, with cross-build and native QEMU validation in
+[the evidence packet](evidence/e05a/review-r2/README.md). P5 and independent
+re-review remain pending. The worker-lifetime fix remains deferred.

@@ -63,7 +63,7 @@ typedef struct os64_ui_file_dialog {
     int32_t min_width, min_height, staged_min_width, staged_min_height;
     int32_t applied_min_width, applied_min_height;
     uint32_t size_width, size_height;
-    bool size_ready, size_suspended, footer_dirty;
+    bool size_ready, footer_dirty;
     bool confirm, making_folder, layout_pending, registered;
 } os64_ui_file_dialog_t;
 
