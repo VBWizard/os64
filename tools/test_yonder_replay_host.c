@@ -36,16 +36,28 @@
  *     would on the glass. The microsecond clock also moves 1 ms each time
  *     it is read, so a script that never ends is stopped at the script
  *     time limit as it is on the P5;
+ *   - A NAVIGATION THE PAGE STARTS (a script setting `location`, a
+ *     refresh, a form it sends) ends the replay there: the next page is
+ *     not in this one's index, and a page left running would fire timers
+ *     that never fired where it was kept. The record gains `REPLAY
+ *     incomplete navigation <url>`;
+ *   - ONLY A PAGE REPLAYED TO A VERDICT IS JUDGED. A page that never
+ *     arrived (its parse unfinished, its sheets awaited, or nothing at all
+ *     when the budget was spent) or that asked for the next turn for ever
+ *     gains `REPLAY unfinished <why>`, and yonder_corpus_diff.py calls it
+ *     broken, never progress;
  *   - the page left as yonder leaves it when it closes, which is the
  *     departure write: that record, and its REPLAY lines after it, goes to
- *     OUT-DIR under the same name, and one line is printed, `incomplete`
- *     when it has REPLAY lines, else `clean` or the verdict's counts, with
- *     what went wrong in the replay itself beside it (the page never
- *     arrived, it asked for the next turn for ever, it did not let go of
- *     memory). A summary closes: `replayed P, clean C, incomplete I`, and
- *     how many records had no kept bytes. A record that says `kept: not
- *     whole`, or whose index names a format other than the one this runner
- *     reads, is counted and not replayed.
+ *     OUT-DIR under the same name, and one line is printed, `unfinished`
+ *     or `incomplete` (with the first REPLAY line) when it has those, else
+ *     `clean` or the verdict's counts, and anything that went wrong in the
+ *     harness itself (it did not let go of memory). A summary closes:
+ *     `replayed P, clean C, incomplete I, unfinished U`, and how many
+ *     records had no kept bytes. A record that says `kept: not whole` is
+ *     counted and not replayed. A `*.txt` that is not a record or cannot
+ *     be read, a record that lost lines (`facts not kept`, `some lines not
+ *     kept`, a fact with no memory to write it), and an index this runner
+ *     cannot read are UNJUDGED, and make the answer 2.
  *
  * --self-test is the proof (run by tools/test_yonder_replay_host.sh): the
  * fixture pages the scripted-page host's fixtures serve
@@ -54,9 +66,11 @@
  * their sub-resources served by the runner; what yonder kept is written out
  * to WORK-DIR/kept beside the records it wrote, replayed into WORK-DIR/out
  * by the path above, and each replayed record must be the page's own line
- * for line, its paint stages aside (rp_same). Then one of them is replayed
- * with a line taken out of its index, and must read as incomplete
- * (rp_incomplete_case).
+ * for line, its paint stages aside (rp_same). Then copies of one, and a
+ * page written here, are replayed as corpora that must not pass silently
+ * (rp_corpus_cases): a line taken out of the index, a damaged index, a
+ * record that lost lines, a `*.txt` that is not a record, no time to
+ * finish, and a page that navigates.
  */
 #define YONDER_HOST_FAKES_ONLY
 #pragma GCC diagnostic ignored "-Wunused-function"
@@ -184,15 +198,22 @@ typedef RpKnown (*rp_lookup_t)(void *ctx, uint32_t kind, const char *url, RpAnsw
  * kind it does not know is passed over: a later slice's lines answer that
  * slice's requests. */
 typedef struct { uint32_t kind; bool came; char *n, *url, *final, *label; char *bytes; size_t len; bool read; unsigned used; } RpEntry;
-typedef struct { char *folder; RpEntry *e; size_t n; bool versioned; } RpIndex;
+typedef struct { char *folder; RpEntry *e; size_t n; bool versioned, damaged; } RpIndex;
+/* An index line's number, which names its file: decimal digits and nothing
+ * else, so it can never name a path outside the folder. */
+static bool rp_number(const char *s) {
+    size_t n=strspn(s,"0123456789");
+    return n>0 && n<10 && s[n]=='\0';
+}
 
 static void rp_index_free(RpIndex *x) {
     for(size_t i=0;i<x->n;i++) { free(x->e[i].n); free(x->e[i].url); free(x->e[i].final); free(x->e[i].label); free(x->e[i].bytes); }
     free(x->e); free(x->folder); memset(x,0,sizeof(*x));
 }
 /* The folder's index; `versioned` false when there is one whose first line
- * names a format this runner does not read. A page with no folder fetched
- * nothing it kept, and its index is empty. */
+ * names a format this runner does not read, `damaged` when a line's number
+ * is not one (rp_number). A page with no folder fetched nothing it kept,
+ * and its index is empty. */
 static void rp_index_read(const char *folder, RpIndex *x) {
     memset(x,0,sizeof(*x));
     x->folder=strdup(folder);
@@ -207,7 +228,9 @@ static void rp_index_read(const char *folder, RpIndex *x) {
         char *end=strchr(line,'\n'); if(end) *end='\0';
         char *f[6]={0}; int nf=0;
         for(char *p=line; nf<6; ) { f[nf++]=p; char *t=strchr(p,'\t'); if(!t) break; *t='\0'; p=t+1; }
-        if(line[0]!='#' && nf==6 && (!strcmp(f[1],"script") || !strcmp(f[1],"sheet"))) {
+        if(line[0]!='#' && !rp_number(f[0]))
+            x->damaged=true;
+        else if(line[0]!='#' && nf==6 && (!strcmp(f[1],"script") || !strcmp(f[1],"sheet"))) {
             x->e=realloc(x->e,(x->n+1)*sizeof(*x->e));
             RpEntry *e=&x->e[x->n++]; memset(e,0,sizeof(*e));
             e->kind=!strcmp(f[1],"script") ? YONDER_JOB_SCRIPT : YONDER_JOB_SHEET;
@@ -253,25 +276,29 @@ typedef struct { os64_work_id_t id; os64_work_t work; uint32_t kind; bool unknow
 static RpJob *rp_jobs; static size_t rp_njobs, rp_capjobs;
 static os64_work_id_t rp_ids;
 static rp_lookup_t rp_lookup; static void *rp_lookup_ctx;
-/* What the page asked for that its source had nothing for, as the lines
- * `REPLAY incomplete <kind> <url>` the replayed record gains. */
-static char *rp_incomplete; static size_t rp_incomplete_len;
+/* THE REPLAY'S OWN LINES, which the replayed record gains after what the
+ * window wrote: `REPLAY incomplete <kind> <url>` for each thing the page
+ * asked for that its source had nothing for (`incomplete` counts them),
+ * and `REPLAY unfinished <why>` when the replay reached no verdict on the
+ * page (`unfinished`). Both are neither token, so a grep for MISSING or
+ * FAILED never meets them. */
+static char *rp_lines; static size_t rp_lines_len;
+static unsigned rp_incomplete;
+static bool rp_unfinished;
+/* A page from the network starts with a navigation job of the load's own;
+ * any other is a navigation the page started itself, and the replay stops
+ * there (`rp_navigated`). */
+static bool rp_trip_expected, rp_navigated;
 
-static os64_work_id_t rp_submit(const os64_work_t *work) {
-    if(rp_njobs==rp_capjobs) { rp_capjobs=rp_capjobs ? rp_capjobs*2 : 64; rp_jobs=realloc(rp_jobs,rp_capjobs*sizeof(*rp_jobs)); }
-    rp_jobs[rp_njobs]=(RpJob){++rp_ids,*work,*(const uint32_t *)work->job,false};
-    return rp_jobs[rp_njobs++].id;
-}
-/* A field of a REPLAY line, written as a page file writes data (diag.c):
- * a byte that would break the line, and a backslash, escaped, and a token
- * with its second letter percent-encoded, so the line answers no grep for
- * MISSING or FAILED. */
-static void rp_incomplete_add(const char *kind, const char *url) {
-    size_t n=strlen(kind)+strlen(url)*4+32;
-    rp_incomplete=realloc(rp_incomplete,rp_incomplete_len+n);
-    char *o=rp_incomplete+rp_incomplete_len;
-    o+=sprintf(o,"REPLAY incomplete %s ",kind);
-    for(const char *s=url; *s; s++) {
+/* One REPLAY line: `head`, then `data` written as a page file writes data
+ * (diag.c): a byte that would break the line, and a backslash, escaped,
+ * and a token with its second letter percent-encoded. */
+static void rp_line(const char *head, const char *data) {
+    size_t n=strlen(head)+strlen(data)*4+32;
+    rp_lines=realloc(rp_lines,rp_lines_len+n);
+    char *o=rp_lines+rp_lines_len;
+    o+=sprintf(o,"REPLAY %s",head);
+    for(const char *s=data; *s; s++) {
         unsigned char c=(unsigned char)*s;
         if(!strncmp(s,"MISSING",7) || !strncmp(s,"FAILED",6)) { o+=sprintf(o,"%c%%%02X",s[0],(unsigned char)s[1]); s++; }
         else if(c=='\\') o+=sprintf(o,"\\\\");
@@ -279,7 +306,32 @@ static void rp_incomplete_add(const char *kind, const char *url) {
         else *o++=(char)c;
     }
     *o++='\n';
-    rp_incomplete_len=(size_t)(o-rp_incomplete);
+    rp_lines_len=(size_t)(o-rp_lines);
+}
+static void rp_incomplete_add(const char *kind, const char *url) {
+    char head[64]; snprintf(head,sizeof(head),"incomplete %s ",kind);
+    rp_line(head,url);
+    rp_incomplete++;
+}
+static void rp_unfinished_add(const char *why) {
+    rp_line("unfinished ",why);
+    rp_unfinished=true;
+}
+
+static os64_work_id_t rp_submit(const os64_work_t *work) {
+    if(rp_njobs==rp_capjobs) { rp_capjobs=rp_capjobs ? rp_capjobs*2 : 64; rp_jobs=realloc(rp_jobs,rp_capjobs*sizeof(*rp_jobs)); }
+    RpJob *j=&rp_jobs[rp_njobs];
+    *j=(RpJob){++rp_ids,*work,*(const uint32_t *)work->job,false};
+    if(j->kind==YONDER_JOB_TRIP && rp_trip_expected) {
+        rp_trip_expected=false;
+    } else if(j->kind==YONDER_JOB_TRIP) {
+        /* The page went somewhere: the next page is not in this one's
+         * index (DEBTS.md § The replay corpus), so this one stops here. */
+        j->unknown=true;
+        rp_navigated=true;
+        rp_incomplete_add("navigation",((const yonder_trip_t *)work->job)->url);
+    }
+    return rp_jobs[rp_njobs++].id;
 }
 static void rp_take(size_t i) { memmove(rp_jobs+i,rp_jobs+i+1,(rp_njobs-i-1)*sizeof(*rp_jobs)); rp_njobs--; }
 /* A cancelled job is the pool's to release (work.h). */
@@ -384,7 +436,7 @@ typedef struct {
     bool keep;                      /* keep_pages, as a person browsing has it */
     uint64_t budget_ms;
 } RpLoad;
-typedef enum { RP_QUIET, RP_SPENT, RP_BUSY } RpEnd;
+typedef enum { RP_QUIET, RP_SPENT, RP_BUSY, RP_NAVIGATED } RpEnd;
 typedef struct { RpEnd end; bool arrived; unsigned harness_failures; size_t live_after; } RpRan;
 
 static bool rp_quiet(void) {
@@ -392,8 +444,12 @@ static bool rp_quiet(void) {
     return !yonder_scripts_alive(g.page.scripts) || yonder_scripts_timer_next(g.page.scripts)==UINT64_MAX;
 }
 /* The loop turned as main turns it, the clock moved a tick at a time when
- * a turn finds nothing to do. */
-static RpEnd rp_settle(uint64_t budget_ms) {
+ * a turn finds nothing to do, until the page is quiet, the budget is
+ * spent, it asks for the next turn for ever, or it starts a navigation of
+ * its own. A navigation to a file takes no job (open_local reads it at
+ * once), so it shows as a load the replay did not start: the record
+ * sequence (`next`, where it stood after the page's own load) moved. */
+static RpEnd rp_settle(uint64_t budget_ms, uint32_t next) {
     uint64_t waited=0; unsigned busy=0;
     for(;;) {
         rp_answer();
@@ -402,6 +458,12 @@ static RpEnd rp_settle(uint64_t budget_ms) {
         more=script_turn() || more;
         pictures_settle();
         if(g.coming.active && yonder_now_ms()>=g.coming.due) { coming_show(); more=true; }
+        if(!rp_navigated && s_diag.next!=next) {
+            rp_navigated=true;
+            rp_incomplete_add("navigation",g.stream.active ? g.stream.head.url : "file://");
+        }
+        if(rp_navigated)
+            return RP_NAVIGATED;
         if(more) {
             if(++busy>=RP_BUSY_MAX) return RP_BUSY;
             continue;
@@ -418,7 +480,8 @@ static RpRan rp_run(const RpLoad *load, rp_lookup_t lookup, void *ctx) {
     RpRan ran={0};
     unsigned failed=failures;
     rp_lookup=lookup; rp_lookup_ctx=ctx;
-    rp_incomplete_len=0;
+    rp_lines_len=0; rp_incomplete=0; rp_unfinished=false;
+    rp_trip_expected=!load->local; rp_navigated=false;
     /* A text context of the page's own: what one page's glyphs left in its
      * caches is neither a later page's to find nor held against it. */
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
@@ -453,8 +516,21 @@ static RpRan rp_run(const RpLoad *load, rp_lookup_t lookup, void *ctx) {
             yonder_mail_post_verdict(g.stream.mail,&v);
         }
     }
-    ran.end=rp_settle(load->budget_ms);
+    ran.end=rp_settle(load->budget_ms,s_diag.next);
     ran.arrived=page_doc(&g.page)!=NULL;
+    /* ONLY A PAGE REPLAYED TO A VERDICT IS JUDGED (yonder_corpus_diff.py):
+     * what stopped short says why, on the record itself, so its lines are
+     * never read as the page's. A page that went elsewhere has said so. */
+    if(ran.end==RP_BUSY)
+        rp_unfinished_add("it asked for the next turn for ever");
+    else if(ran.end!=RP_NAVIGATED && !ran.arrived) {
+        char why[96];
+        snprintf(why,sizeof(why),"%s when the replay's %lu s were spent",
+                 g.stream.active ? "its parse had not ended" : g.coming.active ? "it was still waiting for its sheets"
+                                                                             : "it had not arrived",
+                 (unsigned long)(load->budget_ms/1000));
+        rp_unfinished_add(why);
+    }
     /* Leaving, in yonder's own order as it closes: the pool first, which
      * lets go of what it still holds, then the pages, which write their
      * records. */
@@ -489,7 +565,12 @@ static const char *rp_written(const char *dir, const char *address, uint32_t seq
 
 /* ── Replaying a directory ──────────────────────────────────────────── */
 
-typedef struct { unsigned replayed, clean, incomplete, bare, not_whole, unarrived, busy, leaked, broken; } RpTally;
+/* What a directory's replay came to. `unjudged`: a `*.txt` that is not a
+ * record or cannot be read, a record that lost facts a replay rebuilds the
+ * page from, or an index this runner cannot read; each makes the run's
+ * answer 2, since a corpus with pages nobody judged reads as one that
+ * passed. */
+typedef struct { unsigned replayed, clean, incomplete, unfinished, bare, not_whole, unjudged, leaked, broken; } RpTally;
 
 /* The record's sequence, from its file name `<anything>-<digits>.txt`. */
 static uint32_t rp_seq(const char *name) {
@@ -509,15 +590,31 @@ static void rp_replay_one(const char *kept, const char *out, const char *name, u
     free(path);
     RpRecord r;
     if(text==NULL || !rp_record_read(text,&r)) {
+        printf("%s  unjudged: %s\n",name,text==NULL ? "it cannot be read" : "it is not a page file");
+        t->unjudged++;
         free(text); free(base);
-        return;                     /* not a page file */
+        return;
     }
+    /* A kept page whose record lost lines may have lost the facts the head
+     * is rebuilt from (yonder_diag_head_fact has room for them, but memory
+     * can still run out): a page read from defaults it did not know it took
+     * is not judged. */
+    const char *lost=strstr(text,"\nfacts not kept: ")!=NULL ? "it lost plain lines for want of room"
+                   : strstr(text,"\nsome lines not kept: ")!=NULL ? "it lost lines for want of memory"
+                   : NULL;
+    for(int i=0;lost==NULL && i<F_N;i++)
+        if(r.facts[i]!=NULL && !strcmp(r.facts[i],"no memory to write this line"))
+            lost="a fact a replay rebuilds the page from had no memory to be written";
     free(text);
     path=rp_cat(base,".html","");
     size_t len=0;
     char *bytes=rp_exists(path) ? rp_slurp(path,&len) : NULL;
     free(path);
     if(bytes==NULL) { t->bare++; rp_record_free(&r); free(base); return; }
+    if(lost!=NULL) {
+        printf("%s  unjudged: %s\n",name,lost);
+        t->unjudged++; free(bytes); rp_record_free(&r); free(base); return;
+    }
     if(r.facts[F_KEPT]!=NULL) {
         printf("%s  not replayed: %s\n",name,r.facts[F_KEPT]);
         t->not_whole++; free(bytes); rp_record_free(&r); free(base); return;
@@ -549,10 +646,13 @@ static void rp_replay_one(const char *kept, const char *out, const char *name, u
     RpIndex index;
     path=rp_cat(base,".d",""); rp_index_read(path,&index); free(path);
     free(base);
-    if(!index.versioned) {
-        printf("%s  not replayed: its index is not in the format this runner reads (# yonder kept index %d)\n",
-               name,YONDER_DIAG_INDEX_VERSION);
-        t->not_whole++; rp_index_free(&index); free(bytes); rp_record_free(&r); return;
+    if(!index.versioned || index.damaged) {
+        if(!index.versioned)
+            printf("%s  unjudged: its index is not in the format this runner reads (# yonder kept index %d)\n",
+                   name,YONDER_DIAG_INDEX_VERSION);
+        else
+            printf("%s  unjudged: its index is damaged: a line's number is not a decimal number\n",name);
+        t->unjudged++; rp_index_free(&index); free(bytes); rp_record_free(&r); return;
     }
     fake_reset(); snprintf(fake_dirs[nfake_dirs++],256,"/tmp/replay");
     size_t live_before=live;
@@ -560,30 +660,32 @@ static void rp_replay_one(const char *kept, const char *out, const char *name, u
     char written[256]; size_t wlen=0;
     const char *record=rp_written("/tmp/replay",r.address,load.seq,written,sizeof(written),&wlen);
     t->replayed++;
-    /* The record as the window wrote it, then what the replay could not
-     * answer. */
+    /* The record as the window wrote it, then the replay's own lines. */
     path=rp_cat(out,"/",name);
     char *whole=NULL;
     if(record!=NULL) {
-        whole=malloc(wlen+rp_incomplete_len+1);
+        whole=malloc(wlen+rp_lines_len+1);
         memcpy(whole,record,wlen);
-        if(rp_incomplete_len) memcpy(whole+wlen,rp_incomplete,rp_incomplete_len);
-        whole[wlen+rp_incomplete_len]='\0';
+        if(rp_lines_len) memcpy(whole+wlen,rp_lines,rp_lines_len);
+        whole[wlen+rp_lines_len]='\0';
     }
-    bool wrote=whole!=NULL && rp_write(path,whole,wlen+rp_incomplete_len);
+    bool wrote=whole!=NULL && rp_write(path,whole,wlen+rp_lines_len);
     free(path);
     if(!wrote) {
         printf("%s  no record was written\n",name); t->broken++;
     } else {
+        /* Only a page replayed to a verdict is clean, or its counts. */
         RpRecord again;
         bool read=rp_record_read(whole,&again);
-        bool incomplete=rp_incomplete_len!=0;
-        bool clean=read && !incomplete && !strcmp(again.verdict,"verdict: clean");
-        t->clean+=clean; t->incomplete+=incomplete;
-        printf("%s  %s",name,!read ? "unreadable" : incomplete ? "incomplete" : clean ? "clean" :
-               again.verdict+strlen("verdict: "));
-        if(!ran.arrived) { printf(" (it did not arrive)"); t->unarrived++; }
-        if(ran.end==RP_BUSY) { printf(" (it asked for the next turn for ever)"); t->busy++; }
+        bool clean=read && !rp_unfinished && !rp_incomplete && !strcmp(again.verdict,"verdict: clean");
+        t->clean+=clean; t->incomplete+=rp_incomplete!=0; t->unfinished+=rp_unfinished;
+        printf("%s  %s",name,!read ? "unreadable" : rp_unfinished ? "unfinished" : rp_incomplete ? "incomplete" :
+               clean ? "clean" : again.verdict+strlen("verdict: "));
+        if(rp_unfinished && rp_incomplete) printf(", incomplete");
+        if(rp_lines_len) {
+            const char *first=rp_lines+strlen("REPLAY ");
+            printf(" (%.*s)",(int)strcspn(first,"\n"),first);
+        }
         if(ran.live_after!=live_before) { printf(" (%ld blocks not let go)",(long)(ran.live_after-live_before)); t->leaked++; }
         if(ran.harness_failures!=0) { printf(" (%u harness checks failed)",ran.harness_failures); t->broken++; }
         printf("\n");
@@ -609,15 +711,15 @@ static int rp_replay_dir(const char *kept, const char *out, uint64_t budget_ms, 
     qsort(names,n,sizeof(*names),rp_strcmp);
     for(size_t i=0;i<n;i++) { rp_replay_one(kept,out,names[i],budget_ms,t); fflush(stdout); free(names[i]); }
     free(names);
-    printf("replayed %u, clean %u, incomplete %u",t->replayed,t->clean,t->incomplete);
+    printf("replayed %u, clean %u, incomplete %u, unfinished %u",t->replayed,t->clean,t->incomplete,
+           t->unfinished);
     if(t->bare) printf("; %u records carry no kept bytes",t->bare);
-    if(t->not_whole) printf("; %u not replayed, not whole or not readable",t->not_whole);
-    if(t->unarrived) printf("; %u did not arrive",t->unarrived);
-    if(t->busy) printf("; %u asked for the next turn for ever",t->busy);
+    if(t->not_whole) printf("; %u not replayed, kept not whole",t->not_whole);
+    if(t->unjudged) printf("; %u unjudged",t->unjudged);
     if(t->leaked) printf("; %u did not let go of what they held",t->leaked);
     if(t->broken) printf("; %u broke the harness",t->broken);
     printf("\n");
-    return t->leaked || t->broken ? 1 : 0;
+    return t->unjudged ? 2 : t->leaked || t->broken ? 1 : 0;
 }
 
 /* ── The self-test ──────────────────────────────────────────────────── */
@@ -715,48 +817,133 @@ static bool rp_same(const char *name, const char *a, const char *b) {
     return same;
 }
 
-/* A request the kept page's index has no line for: the first hand-made
- * page copied to WORK-DIR/partial with its script's line taken out of the
- * index, and replayed. The script is not made up, neither as content nor
- * as a failure: the record gains `REPLAY incomplete script <url>` and no
- * FAILED line for it, and the page is counted incomplete, not clean. The
- * problems found. */
-static unsigned rp_incomplete_case(const char *work, const char *kept, const char *name) {
+/* THE CASES A CORPUS MUST NOT PASS SILENTLY, each a copy of the first
+ * hand-made page (or a page written here) in a folder of its own under
+ * WORK-DIR, replayed as a corpus is. */
+typedef enum { RP_COPY, RP_DROP_SCRIPT_LINE, RP_BAD_NUMBER, RP_LOST_FACTS } RpEdit;
+
+/* The kept page `name` copied from `kept` into `dir`, with `edit` made to
+ * it. The problems found. */
+static unsigned rp_copy_page(const char *kept, const char *name, const char *dir, RpEdit edit) {
     unsigned bad=0;
-    char *partial=rp_cat(work,"/partial",""), *out=rp_cat(work,"/partial-out","");
     char *stem=strndup(name,strlen(name)-4);
-    char *from=rp_cat(kept,"/",stem), *to=rp_cat(partial,"/",stem);
+    char *from=rp_cat(kept,"/",stem), *to=rp_cat(dir,"/",stem);
     char *folder=rp_cat(to,".d","");
-    mkdir(partial,0777); mkdir(folder,0777);
+    mkdir(dir,0777); mkdir(folder,0777);
     static const char *const kFiles[]={".txt",".html",".d/1.js",".d/2.css",".d/3.css",".d/index"};
     for(size_t f=0;f<sizeof(kFiles)/sizeof(kFiles[0]);f++) {
         char *a=rp_cat(from,kFiles[f],""), *b=rp_cat(to,kFiles[f],"");
         size_t len=0; char *text=rp_slurp(a,&len);
-        if(text==NULL) { printf("  incomplete case: %s%s was not kept\n",stem,kFiles[f]); bad++; }
+        if(text==NULL) { printf("  %s: %s%s was not kept\n",dir,stem,kFiles[f]); bad++; }
         else {
-            if(!strcmp(kFiles[f],".d/index")) {
+            if(!strcmp(kFiles[f],".d/index") && edit==RP_DROP_SCRIPT_LINE) {
                 char *line=strstr(text,"\tscript\thttps://fixture.test/m.js\t");
                 char *start=line; while(start!=NULL && start>text && start[-1]!='\n') start--;
                 char *end=line!=NULL ? strchr(line,'\n') : NULL;
-                if(end==NULL) { printf("  incomplete case: the index has no line for m.js\n"); bad++; }
+                if(end==NULL) { printf("  %s: the index has no line for m.js\n",dir); bad++; }
                 else { memmove(start,end+1,strlen(end+1)+1); len=strlen(text); }
+            }
+            if(!strcmp(kFiles[f],".d/index") && edit==RP_BAD_NUMBER) {
+                char *line=strstr(text,"\n1\t");
+                if(line==NULL) { printf("  %s: the index has no line 1\n",dir); bad++; }
+                else {
+                    size_t at=(size_t)(line+1-text);
+                    text=realloc(text,len+4);
+                    memmove(text+at+3,text+at,len-at+1); memcpy(text+at,"../",3); len+=3;
+                }
+            }
+            if(!strcmp(kFiles[f],".txt") && edit==RP_LOST_FACTS) {
+                text=realloc(text,len+32); memcpy(text+len,"facts not kept: 3\n",19); len+=18;
             }
             if(!rp_write(b,text,len)) bad++;
         }
         free(text); free(a); free(b);
     }
-    RpTally t={0};
-    if(rp_replay_dir(partial,out,60000,NULL,&t)!=0) bad++;
+    free(folder); free(from); free(to); free(stem);
+    return bad;
+}
+
+/* `dir` replayed into `<dir>-out`: its answer, its tally, and the record
+ * written for `name` (malloc'd, NULL for none). */
+static int rp_replay_copy(const char *dir, const char *name, uint64_t budget_ms, RpTally *t, char **record) {
+    char *out=rp_cat(dir,"-out","");
+    memset(t,0,sizeof(*t));
+    int rc=rp_replay_dir(dir,out,budget_ms,NULL,t);
     char *got=rp_cat(out,"/",name);
-    char *record=rp_slurp(got,NULL);
-    if(t.replayed!=1 || t.incomplete!=1 || t.clean!=0 || record==NULL ||
+    *record=rp_slurp(got,NULL);
+    free(got); free(out);
+    return rc;
+}
+
+static unsigned rp_corpus_cases(const char *work, const char *kept, const char *name) {
+    unsigned bad=0;
+    RpTally t; char *record; int rc;
+    char *dir;
+
+    /* A request the index has no line for is not made up, neither as
+     * content nor as a failure: the record gains `REPLAY incomplete script
+     * <url>` and no FAILED line for it. The script blocked the parse, so
+     * the page did not arrive either, and says that too. */
+    dir=rp_cat(work,"/partial","");
+    bad+=rp_copy_page(kept,name,dir,RP_DROP_SCRIPT_LINE);
+    rc=rp_replay_copy(dir,name,60000,&t,&record);
+    if(rc!=0 || t.replayed!=1 || t.incomplete!=1 || t.clean!=0 || record==NULL ||
        strstr(record,"\nREPLAY incomplete script https://fixture.test/m.js\n")==NULL ||
+       strstr(record,"\nREPLAY unfinished its parse had not ended when the replay's 60 s were spent\n")==NULL ||
        strstr(record,"FAILED script https://fixture.test/m.js")!=NULL) {
-        printf("  incomplete case: a request the index lacks did not read as incomplete\n");
-        bad++;
+        printf("  a request the index lacks did not read as incomplete\n"); bad++;
     }
-    free(record); free(got);
-    free(folder); free(from); free(to); free(stem); free(partial); free(out);
+    free(record); free(dir);
+
+    /* An index line whose number is not one, a record that lost plain
+     * lines, and a `*.txt` that is not a record: none is judged, and each
+     * makes the answer 2. */
+    static const struct { const char *dir; RpEdit edit; } kRefused[]={
+        {"/badnumber",RP_BAD_NUMBER},{"/lostfacts",RP_LOST_FACTS},{"/notarecord",RP_COPY}};
+    for(size_t i=0;i<sizeof(kRefused)/sizeof(kRefused[0]);i++) {
+        dir=rp_cat(work,kRefused[i].dir,"");
+        bad+=rp_copy_page(kept,name,dir,kRefused[i].edit);
+        if(kRefused[i].edit==RP_COPY) {
+            char *notes=rp_cat(dir,"/notes.txt","");
+            if(!rp_write(notes,"not a page file\n",16)) bad++;
+            free(notes);
+        }
+        rc=rp_replay_copy(dir,name,60000,&t,&record);
+        unsigned judged=kRefused[i].edit==RP_COPY ? 1 : 0;
+        if(rc!=2 || t.unjudged!=1 || t.replayed!=judged) {
+            printf("  %s: a corpus with a page nobody can judge answered %d\n",kRefused[i].dir,rc); bad++;
+        }
+        free(record); free(dir);
+    }
+
+    /* No time to finish: every page that did not arrive says so on its
+     * record, and none is clean. */
+    dir=rp_cat(work,"/zero","");
+    bad+=rp_copy_page(kept,name,dir,RP_COPY);
+    rc=rp_replay_copy(dir,name,0,&t,&record);
+    if(rc!=0 || t.unfinished!=1 || t.clean!=0 || record==NULL || strstr(record,"\nREPLAY unfinished ")==NULL) {
+        printf("  a page given no time did not read as unfinished\n"); bad++;
+    }
+    free(record); free(dir);
+
+    /* A page that goes somewhere of its own: the replay stops there, says
+     * where it went, and the timer the page set for later never fires. */
+    dir=rp_cat(work,"/navigates","");
+    mkdir(dir,0777);
+    static const char kRecord[]="address: http://fixture.test/goes\nverdict: clean\nstatus: 200 OK\n"
+        "final address: http://fixture.test/goes\nbody: html\ncontent-type: text/html\nencrypted: no\n";
+    static const char kPage[]="<!doctype html><p>going</p><script>"
+        "setTimeout(function(){location.href='http://fixture.test/next'},100);"
+        "setTimeout(function(){tooLate()},5000)</script>";
+    char *txt=rp_cat(dir,"/fixture.test-0001.txt",""), *html=rp_cat(dir,"/fixture.test-0001.html","");
+    if(!rp_write(txt,kRecord,sizeof(kRecord)-1) || !rp_write(html,kPage,sizeof(kPage)-1)) bad++;
+    rc=rp_replay_copy(dir,"fixture.test-0001.txt",60000,&t,&record);
+    if(rc!=0 || t.incomplete!=1 || t.clean!=0 || record==NULL ||
+       strstr(record,"\nREPLAY incomplete navigation http://fixture.test/next\n")==NULL ||
+       strstr(record,"tooLate")!=NULL) {
+        printf("  a page that navigated was not stopped there\n"); bad++;
+    }
+    free(record); free(txt); free(html); free(dir);
     return bad;
 }
 
@@ -895,7 +1082,7 @@ static int rp_self_test(const char *work) {
     /* Every one replayed from what was written out, the way a corpus is. */
     RpTally t={0};
     int rc=rp_replay_dir(kept,out,60000,NULL,&t);
-    if(rc!=0 || t.replayed!=pages || t.incomplete!=0) bad++;
+    if(rc!=0 || t.replayed!=pages || t.incomplete!=0 || t.unfinished!=0) bad++;
     DIR *d=opendir(kept);
     for(struct dirent *e; d!=NULL && (e=readdir(d))!=NULL; ) {
         size_t len=strlen(e->d_name);
@@ -907,7 +1094,7 @@ static int rp_self_test(const char *work) {
         free(x); free(y); free(a); free(b);
     }
     if(d!=NULL) closedir(d);
-    bad+=rp_incomplete_case(work,kept,first_hand);
+    bad+=rp_corpus_cases(work,kept,first_hand);
     printf("replay self-test: %u pages kept and replayed, %u problems\n",pages,bad);
     return bad!=0;
 }

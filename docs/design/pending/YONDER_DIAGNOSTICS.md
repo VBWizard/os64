@@ -131,8 +131,9 @@ value it dropped or approximated. A tally that finds no room never marks
 the cascade incomplete. `MISSING font` is the font resolver's
 (PILE3.md § Web fonts), not this tally's.
 
-**A file, as the guest wrote it** (`/tests/pages/diag.html`, left by
-Reload, so this is the departure write):
+**A file, in the shape the build writes** (`/tests/pages/diag.html`, left
+by Reload, so this is the departure write; the times are an example, and
+a timer's task keeps the plain `failed`, since it evaluates no script):
 
     address: file:///tests/pages/diag.html
     verdict: 7 MISSING, 2 FAILED
@@ -145,9 +146,10 @@ Reload, so this is the departure write):
     MISSING css-at-rule keyframes (1)
     FAILED script file:///tests/pages/diag.html#inline-1: ReferenceError: 'nothere' is not defined (1)
     FAILED script file:///tests/pages/diag.html#timer-1: TypeError: cannot read property 'x' of null (1)
-    script file:///tests/pages/diag.html#inline-1: failed
+    script file:///tests/pages/diag.html#inline-1: failed in 1840 us
     bytes: 967
     final address: file:///tests/pages/diag.html
+    body: html
     arrived after: 271 ms
     laid out at: 828 px in 70 ms
     written: when the page was left
@@ -330,8 +332,10 @@ was shown, or since its record was last written on asking:
   0001, and the second run into `/home/yonder/pages` would write over the
   first run's census, host for host. The first write of a run starts one
   past the highest `-NNNN.txt` already in the directory, so `ls` still
-  lists in browse order across runs. Two yonders running at once share one
-  sequence and can collide on a name; that is left alone.
+  lists in browse order across runs. Each load then CLAIMS its name as it
+  begins (`yonder_diag_claim`, § The page kept, below): its file is made
+  only where nothing is, and a number another yonder took meanwhile is
+  passed over, so two yonders on one directory never write one name.
 - **A load that never became a page has a file too**: no such file, a 404
   that was not a page, out of memory starting it, too busy to start. Each
   is `FAILED page: <the status line's sentence>`. "One file per page load"
@@ -446,16 +450,33 @@ file `<name>.txt`:
   moves only when a shape that exists changes. Fonts and pictures are not
   kept, and the header says so.
 
-A step of keeping that fails ends the keeping of that page, is said once a
-run on the status line and in the log, and leaves the plain line `kept:
-not whole: a step of keeping the page failed` on the record.
+**Each name is claimed as the load begins** (`yonder_diag_claim`): the
+record's file is made where nothing is (os64_open's `x`), and with
+`keep_pages` the `<name>.d/` folder is made fresh and no `<name>.html` may
+be there already; a number that fails any of these is passed over for the
+next. So two yonders writing one directory, or a directory whose `.txt`
+was deleted and whose kept files were not, never pair a record with
+another's kept files, and the bytes are never renamed over a `.html`
+already there. A folder that kept nothing is removed when the record is
+let go.
+
+A step of keeping that fails, a claim that finds no fresh name in 64
+numbers among them, ends the keeping of that page, is said once a run on
+the status line and in the log, and leaves the plain line `kept: not
+whole: a step of keeping the page failed` on the record. The scripts and
+sheets kept before it stay, and so do the page's bytes if they were
+already whole.
 
 **The facts a replay rebuilds the head from**, on every page's record now:
 `final address` (written when the parse ends, so a page let go unshown
 has one too), `body` (`html`, `text` or `image`: what libway judged the
 body to be), and for a page from the network `content-type` and `charset`
 as the server named them (left out when it named none) and `encrypted`
-(`yes`/`no`). A page read with scripts off says `scripts: off`.
+(`yes`/`no`). A page read with scripts off says `scripts: off`. These,
+`status`, `TLS`, `laid out at` and `kept` have room of their own past the
+512 plain lines a record keeps (`yonder_diag_head_fact`), so a page with
+more plain lines than that never loses one; a replay refuses a record
+that says it lost any line all the same.
 
 **A script's line carries its evaluation time**: `script <address>: ran in
 1520 us`, or `failed in ...`, the time `os64_js_run` took, compiling

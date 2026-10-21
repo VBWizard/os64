@@ -24,7 +24,8 @@ after a `--`.)
 
 A directory is read for its `*.txt` files, not below it: a kept page's
 `.html` and `.d/` beside its record are not records. A file that does not
-begin `address: ` is passed over and counted on stderr. Run it with
+begin `address: ` is passed over and counted on stderr; a path that is not
+there, or a file that cannot be read, is an error (exit 2). Run it with
 `python3 -I`; it imports nothing but the standard library.
 """
 import argparse
@@ -67,8 +68,9 @@ def site_of(address):
 class Record:
     """One page file: its address, its MISSING lines as {(kind, name):
     count}, its FAILED lines as {(what, message): count}, and, for a record
-    a replay wrote, its `REPLAY incomplete <kind> <url>` lines: what the
-    replay had nothing kept for (tools/test_yonder_replay_host.c)."""
+    a replay wrote (tools/test_yonder_replay_host.c), its `REPLAY
+    incomplete <kind> <url>` lines, what the replay had nothing kept for,
+    and its other `REPLAY` lines, why the replay reached no verdict."""
 
     def __init__(self, path, address):
         self.path = path
@@ -77,6 +79,7 @@ class Record:
         self.missing = {}
         self.failed = {}
         self.incomplete = []
+        self.unfinished = []
 
 
 def read_record(path):
@@ -100,19 +103,33 @@ def read_record(path):
             rec.failed[key] = rec.failed.get(key, 0) + int(m.group(1))
         elif line.startswith(b'REPLAY incomplete '):
             rec.incomplete.append(unescape(line[len(b'REPLAY incomplete '):]))
+        elif line.startswith(b'REPLAY '):
+            rec.unfinished.append(unescape(line[len(b'REPLAY '):]))
     return rec
+
+
+class Unreadable(Exception):
+    """A path given that is not there, or a file that cannot be read: a
+    tally of what could be read would read as a census of everything."""
 
 
 def read_records(paths):
     """Every record under the paths given: a file is read as one, a
-    directory for its `*.txt` files, in name order."""
+    directory for its `*.txt` files, in name order (a directory that
+    happens to be named `*.txt` is not a record and is passed over).
+    Unreadable when a path is not there or a file cannot be read."""
     records, passed = [], 0
     for p in map(pathlib.Path, paths):
+        if not p.exists():
+            raise Unreadable(f'{p}: no such file or directory')
         files = sorted(p.glob('*.txt')) if p.is_dir() else [p]
         for f in files:
             if not f.is_file():
                 continue
-            rec = read_record(f)
+            try:
+                rec = read_record(f)
+            except OSError as e:
+                raise Unreadable(f'{f}: {e.strerror or e}') from e
             if rec is None:
                 passed += 1
             else:
@@ -247,7 +264,11 @@ def main(argv=None):
     # is printed escaped rather than ending the run.
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(errors='backslashreplace')
-    records = read_records(args.paths)
+    try:
+        records = read_records(args.paths)
+    except Unreadable as e:
+        print(f'yonder_tally: {e}', file=sys.stderr)
+        return 2
     if args.surface:
         print_surface(records, args.surface, set(args.kind))
     elif args.failed:

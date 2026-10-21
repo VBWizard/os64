@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """tools/yonder_corpus_diff.py on two hand-made replay directories: a page
 that gained a line, one that lost one, one whose counts alone moved, one
-the second replay did not write, and one only it wrote. Run with
-`python3 -I`; tools/test_yonder_replay_host.sh runs it."""
+the second replay did not write, and one only it wrote; then a page whose
+replay was incomplete, never reached a verdict, or recovered, in each
+direction; and a page file that cannot be read. Run with `python3 -I`;
+tools/test_yonder_replay_host.sh runs it."""
 import contextlib
 import importlib.util
 import io
@@ -72,7 +74,7 @@ class DiffCases(unittest.TestCase):
         self.assertNotIn('counts-0003', out)
         self.assertIn('pages\n  gone-0004.txt  https://gone.test/\n', out)
         self.assertIn('only in', out)
-        self.assertIn('before: 4 pages, 1 clean; after: 4 pages, 2 clean, 0 incomplete; '
+        self.assertIn('before: 4 pages, 1 clean; after: 4 pages, 2 clean, 0 incomplete, 0 broken; '
                       '1 lines gained, 2 lines lost', out)
 
     def test_progress_alone_passes(self):
@@ -88,11 +90,14 @@ class DiffCases(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn('gone-0004.txt', out)
 
-    def test_an_incomplete_replay_is_to_record_again(self):
-        # The replay met a script the corpus never kept: its record gained a
-        # FAILED line and lost one, and neither counts.
+    def settle_the_rest(self):
         (self.after / 'worse-0001.txt').write_text(BEFORE['worse-0001.txt'])
         (self.after / 'gone-0004.txt').write_text(BEFORE['gone-0004.txt'])
+
+    def test_newly_incomplete_is_neither(self):
+        # The replay met a script the corpus never kept: its record gained a
+        # FAILED line and lost others, and neither counts.
+        self.settle_the_rest()
         (self.after / 'better-0002.txt').write_text(
             'address: https://better.test/\nverdict: 1 FAILED\n'
             'FAILED script https://better.test/new.js: TypeError: no (1)\n'
@@ -100,10 +105,54 @@ class DiffCases(unittest.TestCase):
         rc, out = self.run_main(self.before, self.after)
         self.assertEqual(rc, 0)
         self.assertIn('regressions: 0 pages\nprogress: 0 pages\n', out)
-        self.assertIn('to record again: 1 pages asked for what the corpus never kept\n'
+        self.assertIn('newly incomplete: 1 pages\n'
                       '  better-0002.txt  https://better.test/\n'
                       '    ? script https://better.test/MISSING.js\n', out)
-        self.assertIn('after: 5 pages, 2 clean, 1 incomplete; 0 lines gained, 0 lines lost', out)
+        self.assertIn('after: 5 pages, 2 clean, 1 incomplete, 0 broken; 0 lines gained, 0 lines lost', out)
+
+    def test_still_incomplete_is_to_record_again(self):
+        self.settle_the_rest()
+        replay = 'address: https://better.test/\nverdict: clean\nREPLAY incomplete sheet https://better.test/s.css\n'
+        (self.before / 'better-0002.txt').write_text(replay)
+        (self.after / 'better-0002.txt').write_text(replay)
+        rc, out = self.run_main(self.before, self.after)
+        self.assertEqual(rc, 0)
+        self.assertIn('to record again: 1 pages\n  better-0002.txt', out)
+
+    def test_a_replay_with_no_verdict_is_broken_never_progress(self):
+        # The page never arrived: its record is short of every line the
+        # judged one had, which is not progress.
+        self.settle_the_rest()
+        (self.after / 'better-0002.txt').write_text(
+            'address: https://better.test/\nverdict: clean\nREPLAY unfinished it never arrived in 60 s\n')
+        rc, out = self.run_main(self.before, self.after)
+        self.assertEqual(rc, 1)
+        self.assertIn('progress: 0 pages\n', out)
+        self.assertIn('broken: 1 pages\n  better-0002.txt  https://better.test/\n'
+                      '    ! unfinished it never arrived in 60 s\n', out)
+        self.assertIn('after: 5 pages, 2 clean, 0 incomplete, 1 broken;', out)
+        # Broken before as well: still broken, and no regression of its own.
+        (self.before / 'better-0002.txt').write_text(
+            'address: https://better.test/\nverdict: clean\nREPLAY unfinished it never arrived in 60 s\n')
+        rc, out = self.run_main(self.before, self.after)
+        self.assertEqual(rc, 0)
+        self.assertIn('still broken: 1 pages\n', out)
+
+    def test_recovered_is_not_compared(self):
+        self.settle_the_rest()
+        (self.before / 'better-0002.txt').write_text(
+            'address: https://better.test/\nverdict: clean\nREPLAY incomplete script https://better.test/a.js\n')
+        (self.after / 'better-0002.txt').write_text(
+            'address: https://better.test/\nverdict: 1 MISSING\nMISSING global fetch (1)\n')
+        rc, out = self.run_main(self.before, self.after)
+        self.assertEqual(rc, 0)
+        self.assertIn('regressions: 0 pages\n', out)
+        self.assertIn('recovered: 1 pages\n  better-0002.txt', out)
+
+    def test_an_unreadable_page_file_is_an_error(self):
+        (self.after / 'odd.txt').mkdir()
+        rc, _ = self.run_main(self.before, self.after)
+        self.assertEqual(rc, 2)
 
     def test_not_a_directory(self):
         rc, _ = self.run_main(self.before, self.after / 'nothere')

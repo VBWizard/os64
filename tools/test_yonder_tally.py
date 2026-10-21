@@ -109,6 +109,13 @@ class TallyCases(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn('surface fetch, localStorage: 3 of 3 files, 2 of 2 sites, 17 asks', out)
 
+    def test_a_path_not_there_is_an_error(self):
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            rc = tally.main([str(self.root / 'nothere')])
+        self.assertEqual(rc, 2)
+        self.assertIn('no such file or directory', err.getvalue())
+
     def test_failed_ranked_with_pages(self):
         rc, out = self.run_main('--failed')
         self.assertEqual(rc, 0)
