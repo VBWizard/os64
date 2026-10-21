@@ -438,7 +438,7 @@ static const char *const kClear[] = {"none", "left", "right", "both", "inline-st
                                      "inline-end", NULL};
 static const char *const kOverflow[] = {"visible", "hidden", "clip", "scroll", "auto", NULL};
 static const char *const kPosition[] = {"static", "relative", "absolute", "fixed", "sticky", NULL};
-// CSS UI 4 § 5.1 for HTML, and SVG 2's values, which an HTML box treats as
+// CSS UI 4 § 6.2 for HTML, and SVG 2's values, which an HTML box treats as
 // auto: read so a sheet written for both keeps its declaration.
 static const char *const kPointerEvents[] = {"auto", "none", "visiblepainted", "visiblefill",
                                              "visiblestroke", "visible", "painted", "fill",

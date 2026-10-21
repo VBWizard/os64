@@ -770,7 +770,7 @@ typedef struct {
     // in effect animates (Web Animations 1 § 5.6) — which acts as if
     // `will-change` named it, and makes the box a group for as long.
     uint8_t animating;
-    // `pointer-events: none` (CSS UI 4 § 5.1), inherited: flow_hit passes
+    // `pointer-events: none` (CSS UI 4 § 6.2), inherited: flow_hit passes
     // through the box to whatever is under it, though a descendant that
     // sets `auto` is still hit. Zero is `auto`, the initial value.
     bool pointer_events_none;
