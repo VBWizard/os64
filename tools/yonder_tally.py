@@ -225,7 +225,7 @@ def print_failed(records, top, shown):
         print(f'{files:>7} {len(sites):>6} {count:>7}  {kind}: {message}')
         for address in where[:shown]:
             print(f'{"":>24}{address}')
-        if len(where) > shown:
+        if shown and len(where) > shown:
             print(f'{"":>24}and {len(where) - shown} more pages')
     if top and len(order) > top:
         print(f'and {len(order) - top} more failures')
@@ -241,7 +241,7 @@ def main(argv=None):
                     help='only this kind (global, css-property, ...); repeatable')
     ap.add_argument('--top', type=int, default=25, help='rows per table; 0 for all (default 25)')
     ap.add_argument('--pages', type=int, default=3,
-                    help='--failed: pages named under each failure (default 3)')
+                    help='--failed: pages named under each failure (default 3; 0 for none)')
     args = ap.parse_args(argv)
     # A name is whatever bytes a page wrote; one the terminal cannot show
     # is printed escaped rather than ending the run.

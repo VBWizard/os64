@@ -421,6 +421,48 @@ was shown, or since its record was last written on asking:
 | Mutants (`tools/test_yonder_diag_mutants.py`): the brief's three and fifteen more | 18 caught, none missed. The first run missed a token leaking into a fact's value; the address that spells both tokens was written for it. Round one added the token in record data, the verdict naming an empty token, and the two `css-value` shapes |
 | Guest (QEMU, ext2 root, desktop): `/tests/pages/diag.html`, Reload, files read host-side with `debugfs` | Badge `MISSING 7  FAILED 2`; the page reads `fetch: undefined, in window: false`; the arrival file has seven MISSING lines and one FAILED; the departure write adds the timer's FAILED; a second boot's first page is `-0002`, so the first run's `-0001` is kept. Not a P5 run |
 
+### The page kept, and what a replay needs (Modern Web slice 0b, 2026-10-21)
+
+MODERN_WEB.md § Slice 0b, as built, is the design record; this is what it
+added to the page file and beside it.
+
+**`keep_pages = on`** in yonder.conf, beside `diagnostics =` (it keeps
+nothing without it, and says so in the log), keeps each page next to its
+file `<name>.txt`:
+
+- `<name>.html`: the bytes as the parser was fed them, after the
+  transfer's decoding and before the characters'. They are appended to a
+  temporary file as the stream takes them and renamed into place when the
+  parse has had them all, so a page let go before then keeps nothing.
+- `<name>.d/`: each script and sheet the page fetched, as the window
+  received it, in the order each came back: `<n>.js` (a script's decoded
+  source), `<n>.css` (the bytes a sheet was parsed from). A fetch that
+  failed is a line with no file.
+- `<name>.d/index`, written whole again with each new line. Its first line
+  is `# yonder kept index 1`; more `#` lines say what the rest hold; every
+  other line is `<n> TAB <kind> TAB` what that kind carries, a script's
+  and a sheet's being `<url> TAB came|failed TAB <final> TAB <label>`. The
+  index grows by kind (a `fetch` line, a `storage` image), and the version
+  moves only when a shape that exists changes. Fonts and pictures are not
+  kept, and the header says so.
+
+A step of keeping that fails ends the keeping of that page, is said once a
+run on the status line and in the log, and leaves the plain line `kept:
+not whole: a step of keeping the page failed` on the record.
+
+**The facts a replay rebuilds the head from**, on every page's record now:
+`final address` (written when the parse ends, so a page let go unshown
+has one too), `body` (`html`, `text` or `image`: what libway judged the
+body to be), and for a page from the network `content-type` and `charset`
+as the server named them (left out when it named none) and `encrypted`
+(`yes`/`no`). A page read with scripts off says `scripts: off`.
+
+**A script's line carries its evaluation time**: `script <address>: ran in
+1520 us`, or `failed in ...`, the time `os64_js_run` took, compiling
+included. An event's or a timer's task, and a script that never reached
+the engine (its fetch failed), keep the plain `ran`/`failed`. QEMU's
+numbers are not a speed; the P5's are.
+
 ## Batch 1: what the first census taught the instrument
 
 Chris's first P5 census (google.com, danlegt.com, theoldnet.com and its

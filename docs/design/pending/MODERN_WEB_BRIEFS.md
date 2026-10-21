@@ -14,7 +14,7 @@ MODERN_WEB.md and its brief here is struck.
 | Slice | Builder | Reviewer | After |
 |---|---|---|---|
 | 0a the runner and the switch | Opus | Fable (the table), Chris | `userland` |
-| 0b the tally and the replay corpus | Opus | Chris | `userland`, beside 0a |
+| 0b the tally and the replay corpus | Opus, **Built** | Chris | `userland`, beside 0a |
 | 1a storage and the small globals | Opus | Chris | 0a's table |
 | 1b the window's view, scroll and history | Opus | Chris | 0a's table |
 | 2 fetch | Opus | Fable (origins and CORS), Chris | 0a's table |
@@ -106,9 +106,9 @@ own monitor port (0a 55570, 0b 55571, 1a 55572, 1b 55573, 2 55574,
 `make run-net` (BROWSER.md § Process). Never read a speed off QEMU.
 
 **What every PR states.** The WPT directory and its count before and
-after; how many of the P5's 401 page records name the slice's surface
-(0b's tally; before 0b lands, grep the records by hand, they are plain
-text); the corpus count before and after once kept pages exist; the P5
+after; how many of the P5's page records name the slice's surface
+(0b's tally, `tools/yonder_tally.py DIR --surface NAME...`; before 0b
+lands, grep the records by hand, they are plain text); the corpus count before and after once kept pages exist; the P5
 reading if the slice claims a speed (you cannot take it; say what Chris
 should run).
 
@@ -223,7 +223,11 @@ or applies to the next page (next page is enough; say which).
 `Element`, `HTMLElement`, `Node` (grep the P5 files; 0b's tool may not
 exist yet).
 
-## Slice 0b: the tally and the replay corpus
+## Slice 0b: the tally and the replay corpus — built
+
+**Built, 2026-10-21.** MODERN_WEB.md § Slice 0b, as built, is the record of
+what was built, the census, and where it departs from this brief. The brief
+below is struck: kept as it was handed out, and no longer the specification.
 
 **Build.** Four things, one PR, no libdom change.
 

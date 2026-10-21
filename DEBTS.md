@@ -415,6 +415,14 @@ how a worklist fills with things nobody intends to do.
 |---|---|---|---|---|
 | **Wikipedia's right-hand column folds into the middle one.** A Vector 2022 article (`https://en.wikipedia.org/wiki/C_(programming_language)`) is three columns in Chrome — contents, text, the tools/appearance column — and two in yonder, the right column's content laid out in the middle one. Not scripts (identical with scripts off) and not the window's width (identical maximized at 75% zoom, Chris, 2026-10-05). Cause not yet found: Vector builds the columns with grid, media queries and sticky positioning, so the first step is the page and its sheets as a fixture. Readable as it is | Fidelity | ? | the next layout slice, or a second site that folds the same way | yonder / libflow / libgarb, not yet narrowed |
 
+## The replay corpus (Modern Web slice 0b, 2026-10-21 — booked the day it was built)
+
+| Debt | Class | Size | Trigger | Where |
+|---|---|---|---|---|
+| **A replay reads the page in the harness's world, not the P5's.** The host binding lays text out in a bitmap face, runs on clocks a replay moves itself, and gets from the record only the view's width, scripts on or off, and the head. The view's height, the zoom, dark pages, reduced motion and the script time limit the page was read under are not on the record, so a replay takes the defaults. The corpus is judged replay against replay, so this costs fidelity to the P5, not the regression check | Fidelity | S | a kept page whose replay differs from its P5 record because of one of them (a media query on height, a script that measures text) | yonder.c `stream_finish` facts / `tools/test_yonder_replay_host.c` `rp_replay_one` |
+| **keep_pages writes on the window's thread.** Each kept script or sheet is written whole, and the index again whole, when its job is reaped, so a page of large bundles pauses the window for the writes. A diagnostics setting, off by default | Performance | S | browsing with `keep_pages = on` on the P5 visibly hitching while a page's scripts arrive | yonder.c `diag_keep` / diag.c `yonder_diag_keep_resource` |
+| **A form's reply replays as a GET.** The record keeps the page's head and bytes, not the request that fetched them, so a page that was the reply to a POST is fed back with nothing posted | Fidelity | S | a kept page from a form whose replay matters (its scripts read what was posted) | `tools/test_yonder_replay_host.c` `rp_run` |
+
 ## husk (the shell, ongoing)
 
 | Debt | Class | Size | Trigger | Where |
