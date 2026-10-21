@@ -10142,11 +10142,16 @@ int main(int argc, char **argv)
         (void)os64_gui_event_ring(g.win, BELL_STREAM);
     else
         status_rest("Type an address, or a path to an HTML file, and press Enter.");
-    // Said last, so it is still there to read when the window first shows.
-    if (diag_refused != NULL)
-        status_rest(diag_refused);
-    if (modern_refused != NULL)
-        status_rest(modern_refused);
+    // What yonder.conf asked for and could not have: said last, so it is
+    // still there to read when the window first shows, and in one line, so
+    // neither refusal hides the other.
+    if (diag_refused != NULL || modern_refused != NULL) {
+        char said[512];
+        os64_snprintf(said, sizeof(said), "%s%s%s", diag_refused != NULL ? diag_refused : "",
+                      diag_refused != NULL && modern_refused != NULL ? " " : "",
+                      modern_refused != NULL ? modern_refused : "");
+        status_rest(said);
+    }
     os64_ui_set_focus(&g.ui, first != NULL ? &g.view : &g.field.w);
     sync_bars();
 

@@ -288,19 +288,35 @@ static JSValue illegal_constructor(JSContext *ctx, JSValueConst self, int argc, 
 }
 
 /* `new DocumentFragment()` (DOM § 4.7): an empty fragment of the window's
- * document. Called with `new`, the engine passes the constructor as `self`;
- * called without it, there is no new object to make. */
-static JSValue fragment_constructor(JSContext *ctx, JSValueConst self, int argc,
-                                    JSValueConst *argv, int magic, JSValue *data)
+ * document. Made as a JS_CFUNC_constructor, so the engine refuses every
+ * call that is not a construct call before this runs (WebIDL: an
+ * interface's constructor is never just called), whatever `this` the
+ * caller chose; a function made that way carries no data, so it finds its
+ * binding through its context (d_binding). */
+static JSValue fragment_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
 {
-    (void)argc; (void)argv; (void)magic;
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    (void)new_target; (void)argc; (void)argv;
+    os64_dom_t *dom = d_binding(ctx);
     if (dom == NULL) return JS_EXCEPTION;
-    if (!JS_IsConstructor(ctx, self))
-        return JS_ThrowTypeError(ctx, "Constructor DocumentFragment requires 'new'");
     int64_t status;
     os64_html_node_t *fragment = os64_html_create_fragment(dom->document, &status);
     return fragment != NULL ? d_wrap(dom, ctx, fragment) : d_html_error(ctx, status);
+}
+
+/* An interface object's [[Prototype]] set to its parent interface's. The
+ * engine's JS_SetPrototype takes its reference to the new prototype before
+ * it copies a shape the object shares, and keeps it when that copy runs out
+ * of memory, which leaves the parent alive past the runtime. Giving the
+ * object a shape of its own first (`length`'s flags changed and changed
+ * back, either of which fails cleanly) leaves the set nothing to
+ * allocate. Every interface object's `length` is 0. */
+static int interface_parent(JSContext *ctx, JSValueConst f, JSValueConst parent)
+{
+    if (JS_DefinePropertyValueStr(ctx, f, "length", JS_NewInt32(ctx, 0),
+                                  JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE) < 0 ||
+        JS_DefinePropertyValueStr(ctx, f, "length", JS_NewInt32(ctx, 0), JS_PROP_CONFIGURABLE) < 0)
+        return -1;
+    return JS_SetPrototype(ctx, f, parent) < 0 ? -1 : 0;
 }
 
 /* Node's constants (DOM § 4.4), on the interface object and its prototype,
@@ -331,7 +347,10 @@ static int node_constants(JSContext *ctx, JSValueConst target)
  * prototype of its own here (Text and Comment share CharacterData's; most
  * HTML elements have only HTMLElement's) is not installed, since aliasing
  * it to a broader one would make `instanceof` lie, and the census says what
- * is missing. Each prototype's `constructor` is its interface. An interface
+ * is missing. Each prototype's `constructor` is its interface, and each
+ * interface object inherits its parent's (`Object.getPrototypeOf(
+ * HTMLElement) === Element`), as its prototype inherits its parent
+ * prototype (d_proto_parent); Node's is Function.prototype. An interface
  * whose standard gives it a constructor the binding can honour constructs
  * (DocumentFragment); the rest are Illegal constructors, as WebIDL makes
  * an interface without one (`new Document()`, which makes an XML document,
@@ -352,28 +371,27 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     };
     _Static_assert(sizeof(kInterfaces) / sizeof(kInterfaces[0]) == D_PROTO_COUNT,
                    "an interface object for each of the binding's prototypes");
+    /* Each interface object made so far, by prototype kind, borrowed from
+     * the global that holds it; the table names a parent before its
+     * children. */
+    JSValue made[D_PROTO_COUNT];
+    for (unsigned k = 0; k < D_PROTO_COUNT; k++) made[k] = JS_UNDEFINED;
     for (unsigned i = 0; i < sizeof(kInterfaces) / sizeof(kInterfaces[0]); i++) {
         unsigned proto = kInterfaces[i].proto;
-        JSValue f;
-        if (proto == D_PROTO_FRAGMENT) {
-            f = JS_NewCFunctionData(ctx, fragment_constructor, 0, 0, 1, &dom->anchor->value);
-            if (!JS_IsException(f) && (!JS_SetConstructorBit(ctx, f, true) ||
-                JS_DefinePropertyValueStr(ctx, f, "name", JS_NewString(ctx, kInterfaces[i].name),
-                                          JS_PROP_CONFIGURABLE) < 0)) {
-                JS_FreeValue(ctx, f);
-                return -1;
-            }
-        } else {
-            f = JS_NewCFunction2(ctx, illegal_constructor, kInterfaces[i].name, 0,
-                                 JS_CFUNC_constructor_or_func, 0);
-        }
+        int parent = d_proto_parent((int)proto);
+        if (parent >= 0 && JS_IsUndefined(made[parent])) return -1;
+        JSValue f = proto == D_PROTO_FRAGMENT
+            ? JS_NewCFunction2(ctx, fragment_constructor, kInterfaces[i].name, 0, JS_CFUNC_constructor, 0)
+            : JS_NewCFunction2(ctx, illegal_constructor, kInterfaces[i].name, 0, JS_CFUNC_constructor_or_func, 0);
         if (JS_IsException(f)) return -1;
         if (JS_SetConstructor(ctx, f, dom->prototypes[proto]->value) < 0 ||
+            (parent >= 0 && interface_parent(ctx, f, made[parent]) < 0) ||
             (proto == D_PROTO_NODE && (node_constants(ctx, f) < 0 ||
                                        node_constants(ctx, dom->prototypes[proto]->value) < 0))) {
             JS_FreeValue(ctx, f);
             return -1;
         }
+        made[proto] = f;
         if (JS_DefinePropertyValueStr(ctx, global, kInterfaces[i].name, f,
                                       JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
             return -1;

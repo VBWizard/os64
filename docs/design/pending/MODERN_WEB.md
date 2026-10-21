@@ -527,8 +527,15 @@ had shared Element's prototype, so an SVG element was an HTMLElement; HTML
 elements now have a prototype of their own (`D_PROTO_HTML_ELEMENT`). The
 anchor, script and link prototypes, which arrived after the parked commit,
 get their interfaces. `Node` carries the node-type and document-position
-constants on itself and its prototype. `new DocumentFragment()` constructs;
-`new Document()` is an Illegal constructor.
+constants on itself and its prototype. Each interface object inherits its
+parent interface's, as its prototype inherits the parent prototype.
+`new DocumentFragment()` constructs, and any call without `new` is refused
+by the engine (a constructor-only function); `new Document()` is an Illegal
+constructor. Setting an interface object's own [[Prototype]] met an engine
+leak: QuickJS's `JS_SetPrototype` keeps its reference to the new prototype
+when the shape copy it then needs runs out of memory, so the installer
+gives each interface object a shape of its own first (`interface_parent`,
+`classic.c`), which the full installer sweep proves.
 
 **The CSS side.** `Prop`, the shorthand table and the alias table carry
 `modern` (false everywhere today). `garb_read_declaration` takes a
@@ -552,7 +559,7 @@ its life, handed to the script host and to the page's cascade, and a
 | `dom/nodes` pass | 844 of 4397 | 858 of 4406 |
 | harness errors (failing whole) | 69 | 67 |
 | `[required]` | — | 14, all passing; all 14 fail with `--modern-off` |
-| DOM host | 3734 / 21296 checks | 3794 / 22148, 0 failed |
+| DOM host | 3734 / 21296 checks | 3794 / 22220, 0 failed |
 | scripted-page host | 5842 | 5888, 0 failed |
 
 The fourteen required tests are Node's eight constant tests, the two

@@ -483,16 +483,21 @@ static unsigned method_prototypes(int magic)
     }
 }
 
+int d_proto_parent(int kind)
+{
+    if (kind == D_PROTO_NODE) return -1;
+    if (kind == D_PROTO_HTML_ELEMENT) return D_PROTO_ELEMENT;
+    return kind > D_PROTO_HTML_ELEMENT ? D_PROTO_HTML_ELEMENT : D_PROTO_NODE;
+}
+
 int d_node_install(os64_dom_t *dom, JSContext *ctx)
 {
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return -1;
-    // Kind prototypes inherit Node; HTMLElement inherits Element, and the
-    // prototypes of particular HTML elements inherit HTMLElement, as their
-    // interfaces do. Each is made after the one it inherits. The registry
-    // retains these engine values through the same drain as wrappers.
+    // Each prototype is made after the one it inherits (d_proto_parent).
+    // The registry retains these engine values through the same drain as
+    // wrappers.
     for (int kind = 0; kind < D_PROTO_COUNT; kind++) {
-        int parent = kind > D_PROTO_HTML_ELEMENT ? D_PROTO_HTML_ELEMENT :
-            kind == D_PROTO_HTML_ELEMENT ? D_PROTO_ELEMENT : D_PROTO_NODE;
+        int parent = d_proto_parent(kind);
         JSValue value = kind == D_PROTO_NODE ? JS_NewObject(ctx) :
             JS_NewObjectProto(ctx, dom->prototypes[parent]->value);
         if (JS_IsException(value)) return -1;

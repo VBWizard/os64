@@ -25,6 +25,10 @@ enum {
     D_PROTO_BUTTON, D_PROTO_FORM, D_PROTO_IMAGE, D_PROTO_SCRIPT, D_PROTO_ANCHOR,
     D_PROTO_LINK, D_PROTO_COUNT
 };
+/* The kind a kind's prototype inherits, as its interface inherits: Node's
+ * for the node kinds, Element's for HTMLElement, HTMLElement's for the kinds
+ * after it; -1 for Node, which inherits Object's. */
+int d_proto_parent(int kind);
 /* The event types the host dispatches, which are the ones on<type> names
  * and os64_dom_listens count. A script may listen for any other type. */
 enum {
@@ -264,6 +268,10 @@ bool d_classic_match(os64_dom_t *dom, const os64_html_node_t *root, const os64_h
 JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root, unsigned kind, const char *named);
 JSValue d_classic_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, unsigned kind);
 int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The binding of the context a function made without data runs in (its
+ * anchor is the anchor class's prototype there); NULL, with the error
+ * d_context throws, when it is closed or unavailable. */
+os64_dom_t *d_binding(JSContext *ctx);
 /* The Modern Web arc's surface (modern.c): the table's rows installed when
  * options.modern is set, and each name a row declares, by index across the
  * table, NULL past the last, for the harness that holds the rows to it. */

@@ -623,8 +623,11 @@ static bool wpt_expect_read(const char *path, wpt_expect_t *e) {
     if(text==NULL) return true;
     enum { NONE, REQUIRED, PASSING, EXCLUDED } section=NONE;
     bool ok=true;
-    for(char *line=text,*next;ok && line!=NULL && *line;line=next) {
+    /* Every line, a blank one included: only what follows the last newline,
+     * when it is empty, is no line at all. */
+    for(char *line=text,*next;ok && line!=NULL;line=next) {
         next=strchr(line,'\n');
+        if(next==NULL && *line=='\0') break;
         if(next!=NULL) *next++='\0';
         if(!strcmp(line,"[required]")) { section=REQUIRED; continue; }
         if(!strcmp(line,"[passing]")) { section=PASSING; continue; }

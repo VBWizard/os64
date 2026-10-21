@@ -2,6 +2,8 @@
 [required]
 pass-fail.html	a test that passes
 [excluded]
-# A page excluded by name is not run, and says why.
+# A page excluded by name is not run, and says why; a blank line ends
+# nothing.
+
 excluded.html	the selftest proves an excluded page is not run
 [passing]

@@ -95,10 +95,10 @@ if [ "$1" = --selftest ]; then
         fail "a run against its own passes found a difference (exit $rc)"
 
     cp "$work/expect.txt" "$work/lost.txt"
-    printf 'pass-fail.html\ta pass that is gone\n' >> "$work/lost.txt"
+    printf '\npass-fail.html\ta pass that is gone\n' >> "$work/lost.txt"
     run --expect "$work/lost.txt"
     [ "$rc" -eq 1 ] && grep -qx 'LOST	pass-fail.html	a pass that is gone' "$work/out.txt" ||
-        fail "a pass the file has and the run lacks was not LOST, exit 1 (exit $rc)"
+        fail "a pass the file has after a blank line, and the run lacks, was not LOST, exit 1 (exit $rc)"
 
     sed 's/^\[required\]$/[required]\npass-fail.html\ta test that fails/' "$work/expect.txt" > "$work/required.txt"
     run --expect "$work/required.txt"

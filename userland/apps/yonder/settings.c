@@ -150,7 +150,7 @@ bool yonder_settings_saved_modern(const char **refused)
     if (rc == 0 && os64_streq_nocase(value, "off"))
         return false;
     if (rc != 0 || !os64_streq_nocase(value, "on")) {
-        static const char kRefused[] = "yonder.conf's modern is not on or off; the modern web surface is on";
+        static const char kRefused[] = "yonder.conf's modern is not on or off; the modern web surface is on.";
         os64_debug_log("yonder: yonder.conf's modern is not on or off; using on");
         if (refused != NULL)
             *refused = kRefused;

@@ -492,11 +492,17 @@ The first row is the interface objects (`classic.c`'s
 `Document`, `Element`, `HTMLElement` and the HTML element interfaces that
 have a prototype of their own, each named for exactly one of the binding's
 prototypes (WebIDL § 3.7), so `instanceof` answers truly and a page may
-patch `Element.prototype`. `Node` carries the node-type and
-document-position constants, on itself and its prototype, as WebIDL puts a
-constant. `new DocumentFragment()` makes an empty fragment of the window's
-document; every other interface is an "Illegal constructor", `Document`
-among them, since `new Document()` makes an XML document. An interface
+patch `Element.prototype`. Each interface object inherits its parent's
+(`Object.getPrototypeOf(HTMLElement) === Element`), as each prototype
+inherits its parent prototype; `Node`'s is `Function.prototype`. `Node`
+carries the node-type and document-position constants, on itself and its
+prototype, as WebIDL puts a constant. `new DocumentFragment()` makes an
+empty fragment of the window's document, and any call of it without `new`
+is refused by the engine itself, the function being made as a constructor
+only (it finds its binding through the anchor, which is its own class's
+prototype in the binding's context); every other interface is an "Illegal
+constructor", `Document` among them, since `new Document()` makes an XML
+document. An interface
 whose nodes share a broader prototype (Text, Comment, `HTMLDivElement`) is
 not installed: naming the broader prototype for it would make `instanceof`
 lie. Each prototype's `constructor` is its interface object; with the
