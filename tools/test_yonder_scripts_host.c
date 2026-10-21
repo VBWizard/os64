@@ -5070,6 +5070,41 @@ static void diag_keep_cases(void) {
     check(!fake_is_dir(path) && fake_text(html_path)!=NULL,"claim: its empty folder goes, its bytes stay");
     keep_end();
 
+    /* EVERY NAME TAKEN: with each of the claim's numbers holding another's
+     * record, the load has no claim, and nothing of it is written, neither
+     * over one of theirs nor beside it; when the record would have been
+     * written, the log and the status line say so. */
+    for(int keep=0;keep<2;keep++) {
+        keep_begin(keep==1);
+        next=s_diag.next;
+        for(unsigned i=0;i<YONDER_DIAG_CLAIM_TRIES;i++) {
+            snprintf(other,sizeof(other),"/tmp/kept/fixture.test-%04u.txt",(unsigned)next+i);
+            fh=os64_open(other,"w"); os64_write((int32_t)fh,"address: another's\n",19); os64_close((int32_t)fh);
+        }
+        audit_lines[0]='\0'; audit_keep=true;
+        loop_page("<p>taken</p>");
+        check(yonder_diag_claimed(g.stream.diag)==NULL && s_diag.next==next+1,
+              keep ? "claim, keeping: every name taken, the load has no claim"
+                   : "claim: every name taken, the load has no claim");
+        check(loop_settle() && g.page.tree!=NULL,keep ? "claim, keeping: the page arrives" : "claim: the page arrives");
+        audit_keep=false;
+        char said[128]; snprintf(said,sizeof(said),"No page file for this page: none of 64 names from %u on",(unsigned)next);
+        check(s_diag.claim_said && has(audit_lines,said) && has(g.status_text,said),
+              keep ? "claim, keeping: when the record would be written, the log and the status line say it is not"
+                   : "claim: when the record would be written, the log and the status line say it is not");
+        loop_drop();
+        unsigned untouched=0;
+        for(unsigned i=0;i<YONDER_DIAG_CLAIM_TRIES;i++) {
+            snprintf(other,sizeof(other),"/tmp/kept/fixture.test-%04u.txt",(unsigned)next+i);
+            untouched+=fake_text(other)!=NULL && !strcmp(fake_text(other),"address: another's\n");
+        }
+        check(untouched==YONDER_DIAG_CLAIM_TRIES && fake_count(".txt")==YONDER_DIAG_CLAIM_TRIES &&
+              fake_count(".html")==0 && fake_count("/index")==0 && !fake_temp_left(),
+              keep ? "claim, keeping: nothing of the page is written, and no record of theirs is touched"
+                   : "claim: nothing of the page is written, and no record of theirs is touched");
+        keep_end();
+    }
+
     /* The setting off: the page files are written and nothing is kept. */
     keep_begin(false);
     loop_page("<p>plain</p>");

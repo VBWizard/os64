@@ -2,9 +2,12 @@
 """tools/yonder_corpus_diff.py on two hand-made replay directories: a page
 that gained a line, one that lost one, one whose counts alone moved, one
 the second replay did not write, and one only it wrote; then a page whose
-replay was incomplete, never reached a verdict, or recovered, in each
-direction; a page file cut short or whose counts do not reconcile, which
-is unjudged; and a page file or directories that cannot be read. Run with
+replay was incomplete, never reached a verdict (with an incomplete line
+too, either order), or recovered, in each direction; a picture and a font
+the replay says it does not reproduce, compared on neither side; a page
+file cut short, whose counts do not reconcile, or a `*.txt` that is not a
+page file, each unjudged; and a page file or directories that cannot be
+read. Run with
 `python3 -I`;
 tools/test_yonder_replay_host.sh runs it."""
 import contextlib
@@ -140,6 +143,45 @@ class DiffCases(unittest.TestCase):
         rc, out = self.run_main(self.before, self.after)
         self.assertEqual(rc, 0)
         self.assertIn('still broken: 1 pages\n', out)
+
+    def test_unfinished_outranks_incomplete(self):
+        # A replay that met a script the corpus never kept AND reached no
+        # verdict is broken, whichever line comes first: the incomplete
+        # line is detail under it, never a way out of the broken heading.
+        self.settle_the_rest()
+        for lines in ('REPLAY incomplete script https://better.test/s.js\nREPLAY unfinished it never arrived\n',
+                      'REPLAY unfinished it never arrived\nREPLAY incomplete script https://better.test/s.js\n'):
+            with self.subTest(lines=lines):
+                (self.after / 'better-0002.txt').write_text('address: https://better.test/\nverdict: clean\n' + lines)
+                rc, out = self.run_main(self.before, self.after)
+                self.assertEqual(rc, 1)
+                self.assertIn('broken: 1 pages\n  better-0002.txt  https://better.test/\n'
+                              '    ! unfinished it never arrived\n'
+                              '    ! incomplete script https://better.test/s.js\n', out)
+                self.assertNotIn('incomplete: 1 pages', out)
+
+    def test_kinds_a_replay_does_not_reproduce_are_compared_on_neither_side(self):
+        # The kept page's picture failed; its replay never fetched it, and
+        # says so: neither progress nor a regression.
+        self.settle_the_rest()
+        (self.before / 'better-0002.txt').write_text(
+            'address: https://better.test/\nverdict: 1 MISSING, 1 FAILED\nMISSING font Arial (2)\n'
+            'FAILED picture: https://better.test/p.png: HTTP 404 (1)\n')
+        (self.after / 'better-0002.txt').write_text(
+            'address: https://better.test/\nverdict: clean\nREPLAY not reproduced: font image picture picture-scheme\n')
+        rc, out = self.run_main(self.before, self.after)
+        self.assertEqual(rc, 0)
+        self.assertIn('regressions: 0 pages\nprogress: 0 pages\n', out)
+        self.assertIn('; not compared, as the replay does not reproduce them: font image picture picture-scheme', out)
+
+    def test_a_txt_that_is_not_a_page_file_is_unjudged(self):
+        # Passed over, it would be a page left out of the comparison.
+        self.settle_the_rest()
+        (self.after / 'notes.txt').write_text('not a page file\n')
+        rc, out = self.run_main(self.before, self.after)
+        self.assertEqual(rc, 2)
+        self.assertIn('unjudged: 1 pages\n  notes.txt  ', out)
+        self.assertIn('not a page file', out)
 
     def test_recovered_is_not_compared(self):
         self.settle_the_rest()

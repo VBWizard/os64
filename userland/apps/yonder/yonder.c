@@ -1667,25 +1667,15 @@ static void diag_kept(int64_t answer);
 // A load's record, numbered in browse order, its name claimed in the
 // directory before anything is written under it (yonder_diag_claim): a
 // number another yonder took meanwhile is passed over. A record that can
-// claim no name is kept for the badge and never written: that is said once
-// a run, in the log and on the status line. NULL on no memory: the load
-// goes on unrecorded.
+// claim no name is kept for the badge and never written (diag_write).
+// NULL on no memory: the load goes on unrecorded.
 static yonder_diag_t *diag_begin(const char *url)
 {
     yonder_diag_t *d = yonder_diag_new(url, s_diag.next, os64_micros());
     if (d != NULL && s_diag.dir[0] != '\0') {
         int64_t claimed = yonder_diag_claim(d, s_diag.dir, s_diag.keep);
-        if (claimed != YONDER_DIAG_UNCLAIMED) {
+        if (claimed != YONDER_DIAG_UNCLAIMED)
             diag_kept(claimed);
-        } else if (!s_diag.claim_said) {
-            s_diag.claim_said = true;
-            char line[OS64_PATH_MAX + 128];
-            os64_snprintf(line, sizeof(line), "No page file for this page: none of %u names from %lu on could "
-                          "be made in %s; the rest are tried.", (unsigned)YONDER_DIAG_CLAIM_TRIES, (unsigned long)s_diag.next,
-                          s_diag.dir);
-            os64_debug_log(line);
-            status_rest(line);
-        }
     }
     s_diag.next = (d != NULL ? yonder_diag_seq(d) : s_diag.next) + 1;
     return d;
@@ -1693,13 +1683,26 @@ static yonder_diag_t *diag_begin(const char *url)
 
 // The record as it stands, written under the name its load claimed when
 // yonder.conf asks for files; true when the file was written. A record
-// with no claim is not written, and its load said so (diag_begin); a
-// failure is said once a run, in the log and on the status line.
+// that could claim no name is never written, and a failure is not either:
+// each is said once a run, in the log and on the status line, when the
+// record would have been written, after its load's own words.
 static bool diag_write(const yonder_diag_t *d)
 {
-    const yonder_diag_claim_t *c = yonder_diag_claimed(d);
-    if (c == NULL || s_diag.dir[0] == '\0')
+    if (d == NULL || s_diag.dir[0] == '\0')
         return false;
+    const yonder_diag_claim_t *c = yonder_diag_claimed(d);
+    if (c == NULL) {
+        if (!s_diag.claim_said) {
+            s_diag.claim_said = true;
+            char line[OS64_PATH_MAX + 128];
+            os64_snprintf(line, sizeof(line), "No page file for this page: none of %u names from %lu on could be "
+                          "made in %s; the rest are tried.", (unsigned)YONDER_DIAG_CLAIM_TRIES,
+                          (unsigned long)yonder_diag_seq(d), s_diag.dir);
+            os64_debug_log(line);
+            status_rest(line);
+        }
+        return false;
+    }
     if (yonder_diag_write(c) == 0)
         return true;
     if (s_diag.write_said)

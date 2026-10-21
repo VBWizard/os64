@@ -102,6 +102,10 @@ class ReaderCases(unittest.TestCase):
             self.assertEqual(rec.state, records.State.UNFINISHED)
             self.assertEqual(len(rec.incomplete), 1)
 
+    def test_kinds_not_reproduced_are_read_and_are_no_state(self):
+        rec = self.read(b'address: https://a.test/\nverdict: clean\nREPLAY not reproduced: font picture\n')
+        self.assertEqual((rec.state, rec.not_reproduced), (records.State.VERDICT, {'font', 'picture'}))
+
     def test_lines_lost_are_said(self):
         rec = self.read(b'address: https://a.test/\nverdict: clean\nsome lines not kept: no memory to name them\n')
         self.assertTrue(rec.lost)

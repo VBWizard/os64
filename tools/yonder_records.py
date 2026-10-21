@@ -73,7 +73,10 @@ class State(enum.IntEnum):
 class Record:
     """One page file read whole: its address, its MISSING lines as {(kind,
     name): count}, its FAILED lines as {(what, message): count}, its
-    `REPLAY` lines by state (`incomplete`, `unfinished`), and its `state`.
+    `REPLAY` lines by state (`incomplete`, `unfinished`), its `state`, and
+    the kinds its `REPLAY not reproduced:` line names (`not_reproduced`):
+    a replay's record says which kinds of line are not the page's, since
+    the replay never fetches what they are about.
     `lost`: the record says some lines had no memory to be named, which a
     count cannot show."""
 
@@ -87,6 +90,7 @@ class Record:
         self.unfinished = []
         self.lost = False
         self.state = State.VERDICT
+        self.not_reproduced = set()
 
 
 class Unjudged:
@@ -116,7 +120,8 @@ def read(path):
     naming why not. Its first line must be `address: `, its second
     `verdict: clean` or the counts of the tokens with records, its record
     lines exactly that many of each, each with its count, no other line a
-    verdict, and every `REPLAY` line one of the states this reader knows.
+    verdict, and every `REPLAY` line one of the states this reader knows or
+    the kinds a replay does not reproduce.
     A file that cannot be read, a byte order mark, and a line ending in a
     carriage return are each named."""
     path = pathlib.Path(path)
@@ -160,6 +165,8 @@ def read(path):
             return Unjudged(path, 'not a whole page file: a record line with no count')
         elif line.startswith(b'verdict: '):
             return Unjudged(path, 'not a whole page file: a second verdict line')
+        elif line.startswith(b'REPLAY not reproduced: '):
+            rec.not_reproduced |= set(unescape(line[len(b'REPLAY not reproduced: '):]).split())
         elif line.startswith(b'REPLAY '):
             for head, state in REPLAY_STATES:
                 if line.startswith(head):

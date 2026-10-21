@@ -46,7 +46,10 @@
  *     if still on the wire, and the record gains `REPLAY incomplete <kind>
  *     <url>` (rp_answer). Pictures
  *     and fonts are never answered: they are not kept, and a page shows
- *     without them, as it does while they come;
+ *     without them, as it does while they come. SO A REPLAY REPRODUCES THE
+ *     PAGE'S SCRIPT AND STYLE, NOT ITS PICTURES OR FONTS: its record names
+ *     their kinds on a `REPLAY not reproduced:` line, and what it came to
+ *     counts only the other kinds (RP_NOT_REPRODUCED);
  *   - THE CLOCK. A turn with nothing to do moves the window's milliseconds
  *     on by a tick (10 ms), until the page is quiet (nothing arriving,
  *     nothing out that will be answered, no timer set) or the virtual
@@ -67,9 +70,9 @@
  *     departure write: that record, and its REPLAY lines after it, goes to
  *     OUT-DIR under the same name, and one line is printed with what the
  *     page came to (rp_outcome): `unfinished` or `incomplete` with the
- *     first REPLAY line, `clean` or the verdict's counts, or `unjudged`
- *     and why, and anything that went wrong in the harness itself (it did
- *     not let go of memory). A summary closes: `replayed P, clean C,
+ *     first REPLAY line of that state, `clean` or the counts of the kinds
+ *     a replay reproduces, or `unjudged` and why, and anything that went
+ *     wrong in the harness itself (it did not let go of memory). A summary closes: `replayed P, clean C,
  *     incomplete I, unfinished U`, and how many records had no kept bytes
  *     (those are not kept pages, and are passed over).
  *
@@ -88,8 +91,9 @@
  * hand-made ones are loaded with keep_pages on, as a person browsing would,
  * their sub-resources served by the runner; what yonder kept is written out
  * to WORK-DIR/kept beside the records it wrote, replayed into WORK-DIR/out
- * by the path above, and each replayed record must be the page's own line
- * for line, its paint stages aside (rp_same). Then copies of one, and
+ * by the path above, and each replayed record must be the page's own
+ * (rp_same: both were read in this harness, which answers no picture or
+ * font either way). Then copies of one, and
  * pages written here, are replayed as corpora that must not pass silently
  * (rp_corpus_cases).
  */
@@ -98,6 +102,7 @@
 #include "test_yonder_scripts_host.c"
 
 #include <ctype.h>
+#include <unistd.h>
 #include "test_yonder_replay_fs.c"
 
 /* How far the clocks move: a tick when the loop has nothing to do, and the
@@ -143,6 +148,23 @@ static char *rp_unescape(const char *s, size_t n, bool tokens) {
  * the runner's own: no record of it is written. */
 typedef enum { RP_VERDICT, RP_INCOMPLETE, RP_UNFINISHED, RP_UNJUDGED, RP_STATES } RpState;
 
+/* WHAT A REPLAY DOES NOT REPRODUCE: a page's pictures and fonts are never
+ * answered (rp_answers), so a replay reproduces the page's script and
+ * style and not those, and the lines of their kinds on its record are not
+ * the page's. Every replayed record names these kinds on a `REPLAY not
+ * reproduced:` line, its outcome counts only the other kinds, and
+ * yonder_corpus_diff.py compares only the other kinds. Each is a MISSING
+ * line's kind or a FAILED line's what, as a record writes it. */
+#define RP_NOT_REPRODUCED "font image picture picture-scheme"
+static bool rp_reproduced(const char *kind, size_t len) {
+    for(const char *w=RP_NOT_REPRODUCED; *w; ) {
+        size_t n=strcspn(w," ");
+        if(n==len && !memcmp(w,kind,len)) return false;
+        w+=n+(w[n]==' ');
+    }
+    return true;
+}
+
 enum { F_STATUS, F_FINAL, F_BODY, F_TYPE, F_CHARSET, F_ENCRYPTED, F_TLS, F_SCRIPTS, F_LAID, F_KEPT, F_N };
 static const char *const kFacts[F_N]={"status","final address","body","content-type","charset","encrypted",
     "TLS","scripts","laid out at","kept"};
@@ -150,6 +172,7 @@ typedef struct {
     char *address;          /* line one, decoded */
     char *facts[F_N];       /* by kFacts, decoded; NULL when absent */
     unsigned missing, failed;   /* its record lines */
+    unsigned replayed_missing, replayed_failed; /* those of the kinds a replay reproduces */
     RpState state;          /* by its REPLAY lines: RP_VERDICT for none */
     char *said;             /* the first REPLAY line of that state, after `REPLAY <state> `; NULL for none */
     unsigned incomplete;    /* its `REPLAY incomplete` lines */
@@ -174,7 +197,7 @@ static bool rp_counted(const char *line, size_t len) {
  * first line `address: `, its second `verdict: clean` or the counts of the
  * tokens with records, its record lines exactly that many, each counted,
  * no other verdict line, no carriage return, and each `REPLAY` line one
- * of the states RpState names. */
+ * of the states RpState names or the kinds a replay does not reproduce. */
 static const char *rp_record_read(const char *text, RpRecord *r) {
     memset(r,0,sizeof(*r));
     if(strncmp(text,"address: ",9)!=0) return "it is not a page file: its first line is not `address: `";
@@ -194,10 +217,17 @@ static const char *rp_record_read(const char *text, RpRecord *r) {
             if(!ok) why="it is not a whole page file: its second line is not a verdict";
         } else if(!strncmp(line,"MISSING ",8) || !strncmp(line,"FAILED ",7)) {
             if(!rp_counted(line,len)) why="it is not a whole page file: a record line with no count";
-            else if(line[0]=='M') r->missing++;
-            else r->failed++;
+            else {
+                const char *kind=line+(line[0]=='M' ? 8 : 7);
+                const char *stop=line[0]=='M' ? memchr(kind,' ',(size_t)(line+len-kind)) : strstr(kind,": ");
+                bool counted=rp_reproduced(kind,stop!=NULL && stop<line+len ? (size_t)(stop-kind) : (size_t)(line+len-kind));
+                if(line[0]=='M') { r->missing++; r->replayed_missing+=counted; }
+                else { r->failed++; r->replayed_failed+=counted; }
+            }
         } else if(!strncmp(line,"verdict: ",9)) {
             why="it is not a whole page file: a second verdict line";
+        } else if(!strncmp(line,"REPLAY not reproduced: ",23)) {
+            /* What the record's lines are not: no state of the page's. */
         } else if(!strncmp(line,"REPLAY ",7)) {
             RpState s=!strncmp(line,"REPLAY incomplete ",18) ? RP_INCOMPLETE :
                       !strncmp(line,"REPLAY unfinished ",18) ? RP_UNFINISHED : RP_STATES;
@@ -684,7 +714,8 @@ static const char *rp_written(const char *dir, const char *address, uint32_t seq
 /* ── What a page came to ────────────────────────────────────────────── */
 
 /* A page's outcome: its state, why (UNJUDGED's reason, or what the first
- * REPLAY line of its state says), its record lines, and its `REPLAY incomplete` lines,
+ * REPLAY line of its state says), its record lines of the kinds a replay
+ * reproduces, and its `REPLAY incomplete` lines,
  * which an UNFINISHED page may have as well. */
 typedef struct {
     RpState state;
@@ -695,7 +726,8 @@ typedef struct {
 /* THE ONE PLACE A PAGE'S OUTCOME IS DECIDED: UNJUDGED when `unjudged`
  * names why, or when the record the replay wrote is not one rp_record_read
  * reads whole; otherwise the state its REPLAY lines say, with its record
- * lines counted. */
+ * lines of the kinds a replay reproduces counted: a VERDICT with none is
+ * clean. */
 static RpOutcome rp_outcome(const char *unjudged, const char *record) {
     RpOutcome o; memset(&o,0,sizeof(o));
     RpRecord r;
@@ -705,7 +737,7 @@ static RpOutcome rp_outcome(const char *unjudged, const char *record) {
         snprintf(o.why,sizeof(o.why),"%s%s",unjudged==NULL ? "the replay's own record: " : "",bad);
         return o;
     }
-    o.state=r.state; o.missing=r.missing; o.failed=r.failed; o.incomplete=r.incomplete;
+    o.state=r.state; o.missing=r.replayed_missing; o.failed=r.replayed_failed; o.incomplete=r.incomplete;
     snprintf(o.why,sizeof(o.why),"%s",r.said!=NULL ? r.said : "");
     rp_record_free(&r);
     return o;
@@ -826,12 +858,14 @@ static void rp_replay_one(const char *kept, const char *out, const char *name, u
     ran=rp_run(&load,rp_index_lookup,&index,&index);
     char written[256]; size_t wlen=0;
     const char *record=rp_written("/tmp/replay",r.address,load.seq,written,sizeof(written),&wlen);
-    /* The record as the window wrote it, then the replay's own lines. */
+    /* The record as the window wrote it, then the replay's own lines, and
+     * the kinds it does not reproduce. */
     if(record!=NULL) {
-        whole=malloc(wlen+rp_lines_len+1);
+        static const char kNot[]="REPLAY not reproduced: " RP_NOT_REPRODUCED "\n";
+        whole=malloc(wlen+rp_lines_len+sizeof(kNot));
         memcpy(whole,record,wlen);
         if(rp_lines_len) memcpy(whole+wlen,rp_lines,rp_lines_len);
-        whole[wlen+rp_lines_len]='\0';
+        memcpy(whole+wlen+rp_lines_len,kNot,sizeof(kNot));
     }
     fake_reset();
 judge:;
@@ -991,14 +1025,18 @@ static way_head_t rp_head(int status, const char *reason, const char *type, cons
     return h;
 }
 
-/* A kept page's record must be the replayed one, line for line, each
- * difference said. A `paint stages` line is the one exception, by its key:
- * its times are the processor's counter (YONDER_DIAGNOSTICS.md § What
- * paints cost), which no clock of the harness moves. */
+/* A page the self-test kept must replay to its own record, each difference
+ * said. Both were read in this harness, which answers no picture or font
+ * either way, so here the record matches in its picture and font lines
+ * too, which a corpus kept on the glass does not. Two lines are let be: a
+ * `paint stages` line, by its key, whose times are the processor's counter
+ * (YONDER_DIAGNOSTICS.md § What paints cost), which no clock of the harness
+ * moves; and the replay's own `REPLAY not reproduced:` line. */
 static bool rp_same(const char *name, const char *a, const char *b) {
     bool same=true;
     const char *x=a, *y=b;
     while(*x || *y) {
+        if(!strncmp(y,"REPLAY not reproduced: ",23)) { const char *ye=strchr(y,'\n'); y=ye ? ye+1 : y+strlen(y); continue; }
         const char *xe=strchr(x,'\n'), *ye=strchr(y,'\n');
         size_t xl=xe ? (size_t)(xe-x) : strlen(x), yl=ye ? (size_t)(ye-y) : strlen(y);
         bool stages=xl>14 && yl>14 && !strncmp(x,"paint stages: ",14) && !strncmp(y,"paint stages: ",14);
@@ -1015,7 +1053,7 @@ static bool rp_same(const char *name, const char *a, const char *b) {
 /* THE CASES A CORPUS MUST NOT PASS SILENTLY, each a copy of the first
  * hand-made page (or a page written here) in a folder of its own under
  * WORK-DIR, replayed as a corpus is. */
-typedef enum { RP_COPY, RP_DROP_SCRIPT_LINE, RP_BAD_NUMBER, RP_NO_MEMORY, RP_FULL_TABLE } RpEdit;
+typedef enum { RP_COPY, RP_DROP_SCRIPT_LINE, RP_BAD_NUMBER, RP_NO_MEMORY, RP_FULL_TABLE, RP_NO_INDEX } RpEdit;
 
 /* The kept page `name` copied from `kept` into `dir`, with `edit` made to
  * it. The problems found. */
@@ -1027,6 +1065,7 @@ static unsigned rp_copy_page(const char *kept, const char *name, const char *dir
     if(!rp_put_dir(dir) || !rp_put_dir(folder)) bad++;
     static const char *const kFiles[]={".txt",".html",".d/1.js",".d/2.css",".d/3.css",".d/index"};
     for(size_t f=0;f<sizeof(kFiles)/sizeof(kFiles[0]);f++) {
+        if(edit==RP_NO_INDEX && !strcmp(kFiles[f],".d/index")) continue;
         char *a=rp_cat(from,kFiles[f],""), *b=rp_cat(to,kFiles[f],"");
         size_t len=0; char *text=rp_file(a,&len);
         if(text==NULL) { printf("  %s: %s%s was not kept\n",dir,stem,kFiles[f]); bad++; }
@@ -1211,6 +1250,55 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
         printf("  a page that navigated was not stopped there\n"); bad++;
     }
     free(record); free(txt); free(html); free(dir);
+
+    /* A folder whose index is not there is a kept page with a piece
+     * missing, not a page that fetched nothing: unjudged. */
+    dir=rp_cat(work,"/noindex","");
+    bad+=rp_copy_page(kept,name,dir,RP_NO_INDEX);
+    rc=rp_replay_copy(dir,name,60000,&t,&record);
+    if(rc!=2 || t.states[RP_UNJUDGED]!=1 || rp_replayed(&t)!=0 || record!=NULL) {
+        printf("  a folder with no index was not unjudged (%d)\n",rc); bad++;
+    }
+    free(record);
+
+    /* An OUT-DIR that can be searched and not listed: whether it holds
+     * records cannot be told, so the whole replay is refused and nothing
+     * is written. Root lists any directory, and skips it. */
+    if(geteuid()!=0) {
+        char *locked=rp_cat(work,"/unlisted","");
+        RpFault fault;
+        if(!rp_put_dir(locked) || rp_fs_mode(locked,0333,&fault)!=RP_FS_OK) bad++;
+        RpTally t3={0};
+        rc=rp_replay_dir(dir,locked,60000,NULL,&t3);
+        if(rp_fs_mode(locked,0755,&fault)!=RP_FS_OK) bad++;
+        char **held=NULL; size_t nheld=0;
+        if(rc!=2 || rp_replayed(&t3)!=0 || rp_fs_list(locked,".txt",&held,&nheld,&fault)!=RP_FS_OK || nheld!=0) {
+            printf("  a whole replay into an OUT-DIR that cannot be listed was not refused (%d)\n",rc); bad++;
+        }
+        rp_fs_names_free(held,nheld);
+        free(locked);
+    }
+    free(dir);
+
+    /* A page kept with a picture that failed: the replay answers no
+     * picture, so the record it writes has no line for it, and says it
+     * does not reproduce pictures; the page reads clean, and the diff of
+     * the two (tools/test_yonder_replay_host.sh) compares neither side's
+     * picture lines, so it is not progress. */
+    dir=rp_cat(work,"/picture","");
+    if(!rp_put_dir(dir)) bad++;
+    static const char kPicRecord[]="address: http://fixture.test/pic\nverdict: 1 FAILED\n"
+        "FAILED picture: http://fixture.test/p.png: HTTP 404 (1)\nstatus: 200 OK\n"
+        "final address: http://fixture.test/pic\nbody: html\ncontent-type: text/html\nencrypted: no\n";
+    static const char kPicPage[]="<!doctype html><p>a picture</p><img src=p.png>";
+    char *pt=rp_cat(dir,"/fixture.test-0001.txt",""), *ph=rp_cat(dir,"/fixture.test-0001.html","");
+    if(!rp_put(pt,kPicRecord,sizeof(kPicRecord)-1) || !rp_put(ph,kPicPage,sizeof(kPicPage)-1)) bad++;
+    rc=rp_replay_copy(dir,"fixture.test-0001.txt",60000,&t,&record);
+    if(rc!=0 || t.clean!=1 || record==NULL || strstr(record,"FAILED")!=NULL ||
+       strstr(record,"\nREPLAY not reproduced: " RP_NOT_REPRODUCED "\n")==NULL) {
+        printf("  a page kept with a failed picture did not replay clean, saying pictures are not reproduced\n"); bad++;
+    }
+    free(record); free(pt); free(ph); free(dir);
     return bad;
 }
 

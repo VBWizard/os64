@@ -8,12 +8,18 @@ Each directory holds page files by the same names, as
 tools/test_yonder_replay_host.sh writes them, each read through
 tools/yonder_records.py, the one reader of page files, which says what
 state its page reached. ONLY A PAGE REPLAYED TO A VERDICT IS JUDGED: one
-whose record carries no `REPLAY` line. Such a page
-is the set of its record lines, `MISSING <kind> <name>` and `FAILED <what>:
-<message>`, with their counts left out: a count moves with timing, and a
-line appearing or going is what a slice changed. Judged on both sides, a
-page whose set GAINED a line is a regression, printed with the lines it
-gained, and one that lost lines is progress, printed with those.
+whose record carries no `REPLAY incomplete` or `REPLAY unfinished` line.
+Such a page is the set of its record lines, `MISSING <kind> <name>` and
+`FAILED <what>: <message>`, with their counts left out: a count moves with
+timing, and a line appearing or going is what a slice changed. A REPLAY
+REPRODUCES A PAGE'S SCRIPT AND STYLE, NOT ITS PICTURES OR FONTS, which it
+never fetches, and its record names the kinds it does not reproduce on a
+`REPLAY not reproduced:` line: the lines of every kind any record on
+either side names there are compared on neither side, and the summary
+says which, so a kept page's failed picture is not read as progress when
+its replay has none. Judged on both sides, a page whose set GAINED a line
+is a regression, printed with the lines it gained, and one that lost lines
+is progress, printed with those.
 
 The rest each have a heading of their own, by the after-record's state
 (the reader's State, whose order is the precedence: a record that says it
@@ -59,10 +65,11 @@ records = load_records()
 State = records.State
 
 
-def lines_of(rec):
-    """The page's record lines, counts left out."""
-    out = {f'MISSING {kind} {name}' for kind, name in rec.missing}
-    out |= {f'FAILED {what}: {message}' for what, message in rec.failed}
+def lines_of(rec, skip):
+    """The page's record lines, counts left out, but those of the kinds in
+    `skip`, a MISSING line's kind or a FAILED line's what."""
+    out = {f'MISSING {kind} {name}' for kind, name in rec.missing if kind not in skip}
+    out |= {f'FAILED {what}: {message}' for what, message in rec.failed if what not in skip}
     return out
 
 
@@ -85,9 +92,16 @@ def read_dir(path, unjudged):
     return pages
 
 
-def diff(before, after):
+def not_reproduced(*sides):
+    """The kinds any record on these sides says its replay does not
+    reproduce."""
+    return set().union(*(r.not_reproduced for pages in sides for r in pages.values()))
+
+
+def diff(before, after, skip):
     """{heading: {name: (address, lines)}} for the headings the module's
-    comment names, and the names only one side has (gone, new)."""
+    comment names, comparing no line of a kind in `skip`, and the names
+    only one side has (gone, new)."""
     out = {h: {} for h in ('regressions', 'progress', 'broken', 'still broken', 'newly incomplete',
                            'to record again', 'recovered')}
     for name in sorted(before.keys() & after.keys()):
@@ -103,7 +117,7 @@ def diff(before, after):
         elif b != State.VERDICT:
             out['recovered'][name] = (now.address, [])
         else:
-            gained, lost = lines_of(now) - lines_of(was), lines_of(was) - lines_of(now)
+            gained, lost = lines_of(now, skip) - lines_of(was, skip), lines_of(was, skip) - lines_of(now, skip)
             if gained:
                 out['regressions'][name] = (now.address, sorted(gained))
             if lost:
@@ -113,8 +127,8 @@ def diff(before, after):
     return out, gone, new
 
 
-def clean(pages):
-    return sum(1 for r in pages.values() if r.state == State.VERDICT and not r.missing and not r.failed)
+def clean(pages, skip):
+    return sum(1 for r in pages.values() if r.state == State.VERDICT and not lines_of(r, skip))
 
 
 def main(argv=None):
@@ -138,7 +152,8 @@ def main(argv=None):
     for name in unjudged:
         before.pop(name, None)
         after.pop(name, None)
-    table, gone, new = diff(before, after)
+    skip = not_reproduced(before, after)
+    table, gone, new = diff(before, after, skip)
     # Regressions and progress are always said, the rest when they have a
     # page; each line under a page says what it gained, lost, or why the
     # replay is not the page.
@@ -167,9 +182,10 @@ def main(argv=None):
     lost = sum(len(lines) for _, lines in table['progress'].values())
     incomplete = len(table['to record again']) + len(table['newly incomplete'])
     broken = len(table['broken']) + len(table['still broken'])
-    print(f'before: {len(before)} pages, {clean(before)} clean; after: {len(after)} pages, '
-          f'{clean(after)} clean, {incomplete} incomplete, {broken} broken; '
-          f'{gained} lines gained, {lost} lines lost')
+    print(f'before: {len(before)} pages, {clean(before, skip)} clean; after: {len(after)} pages, '
+          f'{clean(after, skip)} clean, {incomplete} incomplete, {broken} broken; '
+          f'{gained} lines gained, {lost} lines lost'
+          + (f'; not compared, as the replay does not reproduce them: {" ".join(sorted(skip))}' if skip else ''))
     if unjudged:
         return 2
     return 1 if table['regressions'] or table['broken'] or gone else 0

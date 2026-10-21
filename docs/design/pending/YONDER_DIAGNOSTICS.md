@@ -483,6 +483,12 @@ record. The scripts and
 sheets kept before it stay, and so do the page's bytes if they were
 already whole.
 
+**A replay reproduces a page's script and style, not its pictures or
+fonts**, which are not kept and which it never fetches: its record names
+their kinds on a `REPLAY not reproduced:` line, and the lines of those
+kinds are judged on neither side of a comparison
+(`tools/yonder_corpus_diff.py`).
+
 **The facts a replay rebuilds the head from**, on every page's record now:
 `final address` (written when the parse ends, so a page let go unshown
 has one too), `body` (`html`, `text` or `image`: what libway judged the

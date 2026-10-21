@@ -45,6 +45,15 @@ TMPDIR="$work" python3 -I tools/test_yonder_corpus_diff.py
 mkdir "$work/self"
 "$work/yonder-replay" --self-test "$work/self"
 python3 -I tools/yonder_corpus_diff.py "$work/self/kept" "$work/self/out" | tail -n 1
+# A page kept with a picture that failed, replayed without it: the diff
+# compares no picture line on either side, so it is neither progress nor a
+# regression.
+python3 -I tools/yonder_corpus_diff.py "$work/self/picture" "$work/self/picture-out" > "$work/picture.diff" &&
+    grep -q '^progress: 0 pages$' "$work/picture.diff" || {
+    echo "replay: the diff read a picture the replay does not reproduce" >&2
+    cat "$work/picture.diff" >&2
+    exit 1
+}
 # The same corpus given no time: the pages that cannot arrive in none say
 # so on their records, and the diff calls each broken (whatever else its
 # record says) and fails, never reading what they lack as progress. (A page that arrived without the time for its
