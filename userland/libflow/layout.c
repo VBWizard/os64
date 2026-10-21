@@ -1445,8 +1445,9 @@ typedef struct {
 
 // A context's ellipsis (flow_box_t.ellipsis): U+2026 in the block's fonts,
 // or three periods when the run of it is the engine's missing-glyph marker
-// (a placement of no font). Kept with the layout's runs; one that cannot be
-// made is no ellipsis, and the painter cuts the line instead.
+// (a placement of no font). Kept with the layout's runs; one the engine
+// refuses, or that cannot be kept, stops the layout as any run of its text
+// would (run_of, keep_run).
 static void ellipsis_of(L *l, FBox *ifc, const Fonts *bf)
 {
     const flow_style_t *s = ifc->style;
