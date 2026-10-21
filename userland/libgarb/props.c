@@ -3173,6 +3173,11 @@ typedef enum {
     SH_FLEX, SH_FLEX_FLOW, SH_GAP,
     SH_GRID_COLUMN, SH_GRID_ROW, SH_GRID_AREA, SH_PLACE_ITEMS, SH_PLACE_SELF, SH_PLACE_CONTENT,
     SH_BORDER_RADIUS, SH_ANIMATION, SH_OUTLINE,
+    // CSS Logical 1's flow-relative pairs, each a start and an end.
+    SH_MARGIN_INLINE, SH_MARGIN_BLOCK, SH_PADDING_INLINE, SH_PADDING_BLOCK, SH_INSET_INLINE,
+    SH_INSET_BLOCK, SH_BORDER_INLINE, SH_BORDER_BLOCK, SH_BORDER_INLINE_WIDTH,
+    SH_BORDER_BLOCK_WIDTH, SH_BORDER_INLINE_STYLE, SH_BORDER_BLOCK_STYLE,
+    SH_BORDER_INLINE_COLOR, SH_BORDER_BLOCK_COLOR,
 } Shorthand;
 
 // `modern` as Prop's.
@@ -3194,7 +3199,51 @@ static const struct { const char *name; Shorthand sh; bool modern; } kShorthands
     {"place-items", SH_PLACE_ITEMS, false}, {"place-self", SH_PLACE_SELF, false},
     {"place-content", SH_PLACE_CONTENT, false}, {"border-radius", SH_BORDER_RADIUS, false},
     {"animation", SH_ANIMATION, false}, {"outline", SH_OUTLINE, true},
+    {"margin-inline", SH_MARGIN_INLINE, true}, {"margin-block", SH_MARGIN_BLOCK, true},
+    {"padding-inline", SH_PADDING_INLINE, true}, {"padding-block", SH_PADDING_BLOCK, true},
+    {"inset-inline", SH_INSET_INLINE, true}, {"inset-block", SH_INSET_BLOCK, true},
+    {"border-inline", SH_BORDER_INLINE, true}, {"border-block", SH_BORDER_BLOCK, true},
+    {"border-inline-width", SH_BORDER_INLINE_WIDTH, true},
+    {"border-block-width", SH_BORDER_BLOCK_WIDTH, true},
+    {"border-inline-style", SH_BORDER_INLINE_STYLE, true},
+    {"border-block-style", SH_BORDER_BLOCK_STYLE, true},
+    {"border-inline-color", SH_BORDER_INLINE_COLOR, true},
+    {"border-block-color", SH_BORDER_BLOCK_COLOR, true},
 };
+
+// A flow-relative pair's physical sides (CSS Logical 1 § 4): the first
+// longhand of the four it is two of, top-right-bottom-left, and whether
+// it is the inline axis — start and end left and right in a horizontal,
+// left-to-right writing mode, which is the only one libflow lays out
+// (`direction` and `writing-mode` are not read: DEBTS.md) — or the block
+// axis, top and bottom.
+static const struct { Shorthand sh; garb_prop_t first; bool inline_axis; } kPairs[] = {
+    {SH_MARGIN_INLINE, GARB_MARGIN_TOP, true}, {SH_MARGIN_BLOCK, GARB_MARGIN_TOP, false},
+    {SH_PADDING_INLINE, GARB_PADDING_TOP, true}, {SH_PADDING_BLOCK, GARB_PADDING_TOP, false},
+    {SH_INSET_INLINE, GARB_TOP, true}, {SH_INSET_BLOCK, GARB_TOP, false},
+    {SH_BORDER_INLINE_WIDTH, GARB_BORDER_TOP_WIDTH, true},
+    {SH_BORDER_BLOCK_WIDTH, GARB_BORDER_TOP_WIDTH, false},
+    {SH_BORDER_INLINE_STYLE, GARB_BORDER_TOP_STYLE, true},
+    {SH_BORDER_BLOCK_STYLE, GARB_BORDER_TOP_STYLE, false},
+    {SH_BORDER_INLINE_COLOR, GARB_BORDER_TOP_COLOR, true},
+    {SH_BORDER_BLOCK_COLOR, GARB_BORDER_TOP_COLOR, false},
+};
+
+static int pair_of(Shorthand sh)
+{
+    for (int k = 0; k < (int)(sizeof(kPairs) / sizeof(kPairs[0])); k++)
+        if (kPairs[k].sh == sh)
+            return k;
+    return -1;
+}
+
+// A pair's start and end longhands.
+static void pair_sides(int k, garb_prop_t *start, garb_prop_t *end)
+{
+    // Top, right, bottom, left: the inline pair is left and right.
+    *start = (garb_prop_t)(kPairs[k].first + (kPairs[k].inline_axis ? 3 : 0));
+    *end = (garb_prop_t)(kPairs[k].first + (kPairs[k].inline_axis ? 1 : 2));
+}
 
 // What `animation` sets, in the order libgarb lists the longhands.
 static const garb_prop_t kAnimationProps[] = {
@@ -3256,6 +3305,23 @@ static int shorthand_longhands(Shorthand sh, garb_prop_t *out)
     case SH_OUTLINE:
         out[n++] = GARB_OUTLINE_WIDTH; out[n++] = GARB_OUTLINE_STYLE; out[n++] = GARB_OUTLINE_COLOR;
         break;
+    case SH_BORDER_INLINE: case SH_BORDER_BLOCK:
+        // The width, style and colour of the start side, then the end's.
+        for (int k = 0; k < 2; k++) {
+            garb_prop_t side = (garb_prop_t)(sh == SH_BORDER_INLINE ? (k == 0 ? 3 : 1) : 2 * k);
+            out[n++] = (garb_prop_t)(GARB_BORDER_TOP_WIDTH + side);
+            out[n++] = (garb_prop_t)(GARB_BORDER_TOP_STYLE + side);
+            out[n++] = (garb_prop_t)(GARB_BORDER_TOP_COLOR + side);
+        }
+        break;
+    default: {
+        int k = pair_of(sh);
+        if (k >= 0) {
+            pair_sides(k, &out[0], &out[1]);
+            n = 2;
+        }
+        break;
+    }
     }
     return n;
 }
@@ -3426,6 +3492,29 @@ static bool flex_shorthand(Sets *s, VCur *c)
     return true;
 }
 
+// A flow-relative pair (CSS Logical 1 § 4): the start's value and the
+// end's, the end the start's when it is left out.
+static bool logical_pair(Sets *s, VCur *c, int k, bool (*one)(Sets *, VCur *, garb_val_t *))
+{
+    garb_prop_t start, end;
+    pair_sides(k, &start, &end);
+    garb_val_t a, b;
+    if (!one(s, c, &a))
+        return false;
+    b = a;
+    int given = 1;
+    if (!vc_done(c)) {
+        if (!one(s, c, &b))
+            return false;
+        given = 2;
+    }
+    if (!vc_done(c) || !pair_known(s, start, end, given))
+        return false;
+    set(s, start, &a);
+    set(s, end, &b);
+    return true;
+}
+
 // `outline` (CSS UI 4 § 3.1): a width, a style and a colour, any order,
 // each at most once; each left out is its initial value (medium, none,
 // auto).
@@ -3477,6 +3566,21 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
     case SH_BACKGROUND: return background(s, c);
     case SH_ANIMATION: return animation(s, c);
     case SH_OUTLINE: return outline_shorthand(s, c);
+    case SH_BORDER_INLINE: case SH_BORDER_BLOCK: {
+        const garb_prop_t sides[2] = {sh == SH_BORDER_INLINE ? 3 : 0,
+                                      sh == SH_BORDER_INLINE ? 1 : 2};
+        return border_side(s, c, sides, 2);
+    }
+    case SH_MARGIN_INLINE: case SH_MARGIN_BLOCK: case SH_INSET_INLINE: case SH_INSET_BLOCK:
+        return logical_pair(s, c, pair_of(sh), margin_one);
+    case SH_PADDING_INLINE: case SH_PADDING_BLOCK:
+        return logical_pair(s, c, pair_of(sh), padding_one);
+    case SH_BORDER_INLINE_WIDTH: case SH_BORDER_BLOCK_WIDTH:
+        return logical_pair(s, c, pair_of(sh), bwidth_one);
+    case SH_BORDER_INLINE_STYLE: case SH_BORDER_BLOCK_STYLE:
+        return logical_pair(s, c, pair_of(sh), bstyle_one);
+    case SH_BORDER_INLINE_COLOR: case SH_BORDER_BLOCK_COLOR:
+        return logical_pair(s, c, pair_of(sh), bcolor_one);
     case SH_BACKGROUND_POSITION: {
         // A position per layer, each split into its two longhands' lists.
         Layers xs = {0}, ys = {0};
@@ -3635,9 +3739,60 @@ static const struct {
     {"-webkit-animation-fill-mode", "animation-fill-mode", false},
 };
 
+// CSS Logical 1's flow-relative longhands (§ 4, § 5) and the border sides'
+// shorthands, each the physical name it maps to in a horizontal,
+// left-to-right writing mode — the only one libflow lays out — so the
+// cascade orders a flow-relative declaration against its physical twin by
+// importance, specificity and order as one property, which is what the
+// standard's mapping comes to for one writing mode. All marked: the Modern
+// Web arc added them. `direction: rtl`, which flips inline start and end,
+// is not read (DEBTS.md).
+static const struct {
+    const char *name, *twin;
+} kLogical[] = {
+    {"inline-size", "width"}, {"block-size", "height"},
+    {"min-inline-size", "min-width"}, {"min-block-size", "min-height"},
+    {"max-inline-size", "max-width"}, {"max-block-size", "max-height"},
+    {"margin-inline-start", "margin-left"}, {"margin-inline-end", "margin-right"},
+    {"margin-block-start", "margin-top"}, {"margin-block-end", "margin-bottom"},
+    {"padding-inline-start", "padding-left"}, {"padding-inline-end", "padding-right"},
+    {"padding-block-start", "padding-top"}, {"padding-block-end", "padding-bottom"},
+    {"inset-inline-start", "left"}, {"inset-inline-end", "right"},
+    {"inset-block-start", "top"}, {"inset-block-end", "bottom"},
+    {"border-inline-start", "border-left"}, {"border-inline-end", "border-right"},
+    {"border-block-start", "border-top"}, {"border-block-end", "border-bottom"},
+    {"border-inline-start-width", "border-left-width"},
+    {"border-inline-end-width", "border-right-width"},
+    {"border-block-start-width", "border-top-width"},
+    {"border-block-end-width", "border-bottom-width"},
+    {"border-inline-start-style", "border-left-style"},
+    {"border-inline-end-style", "border-right-style"},
+    {"border-block-start-style", "border-top-style"},
+    {"border-block-end-style", "border-bottom-style"},
+    {"border-inline-start-color", "border-left-color"},
+    {"border-inline-end-color", "border-right-color"},
+    {"border-block-start-color", "border-top-color"},
+    {"border-block-end-color", "border-bottom-color"},
+};
+
+// Whether a name is a flow-relative one (kLogical's, or a pair's): the
+// Quirks standard's unitless lengths (§ 3.2) are the physical properties'
+// alone, so a declaration by one of these names is read without them.
+static bool logical_name(const char *name, size_t len)
+{
+    for (size_t k = 0; k < sizeof(kLogical) / sizeof(kLogical[0]); k++)
+        if (ieq(name, len, kLogical[k].name))
+            return true;
+    for (size_t k = 0; k < sizeof(kShorthands) / sizeof(kShorthands[0]); k++)
+        if (ieq(name, len, kShorthands[k].name))
+            return pair_of(kShorthands[k].sh) >= 0 || kShorthands[k].sh == SH_BORDER_INLINE ||
+                   kShorthands[k].sh == SH_BORDER_BLOCK;
+    return false;
+}
+
 // The name a declaration's name stands for: its twin's when it is an
-// alias, else itself. False for an alias marked modern when those are not
-// known, which names nothing.
+// alias or a flow-relative longhand, else itself. False for one marked
+// modern when those are not known, which names nothing.
 static bool unalias(const char **name, size_t *len, bool modern_off)
 {
     for (size_t k = 0; k < sizeof(kAliases) / sizeof(kAliases[0]); k++)
@@ -3645,6 +3800,12 @@ static bool unalias(const char **name, size_t *len, bool modern_off)
             *name = kAliases[k].twin;
             *len = os64_strlen(kAliases[k].twin);
             return !(modern_off && marked(kAliases[k].name, kAliases[k].modern));
+        }
+    for (size_t k = 0; k < sizeof(kLogical) / sizeof(kLogical[0]); k++)
+        if (ieq(*name, *len, kLogical[k].name)) {
+            *name = kLogical[k].twin;
+            *len = os64_strlen(kLogical[k].twin);
+            return !(modern_off && marked(kLogical[k].name, true));
         }
     return true;
 }
@@ -3692,6 +3853,7 @@ int32_t prop_longhands(const char *name, size_t len, bool modern_off, garb_prop_
 
 #define NSHORTHANDS ((int32_t)(sizeof(kShorthands) / sizeof(kShorthands[0])))
 #define NALIASES ((int32_t)(sizeof(kAliases) / sizeof(kAliases[0])))
+#define NLOGICAL ((int32_t)(sizeof(kLogical) / sizeof(kLogical[0])))
 
 const char *garb_prop_name_at(int32_t k)
 {
@@ -3703,7 +3865,10 @@ const char *garb_prop_name_at(int32_t k)
     if (k < NSHORTHANDS)
         return kShorthands[k].name;
     k -= NSHORTHANDS;
-    return k < NALIASES ? kAliases[k].name : NULL;
+    if (k < NALIASES)
+        return kAliases[k].name;
+    k -= NALIASES;
+    return k < NLOGICAL ? kLogical[k].name : NULL;
 }
 
 bool garb_prop_known(const char *name, size_t len, bool modern_off)
@@ -3742,7 +3907,8 @@ bool garb_decl_is_custom(const garb_decl_t *decl)
 int32_t garb_read_declaration(garb_parsed_t *owner, const garb_decl_t *decl, garb_reading_t how,
                               garb_set_t *out)
 {
-    Sets s = {out, 0, {owner->arena, false}, how.quirks, how.modern_off};
+    Sets s = {out, 0, {owner->arena, false}, how.quirks && !logical_name(decl->name, decl->len),
+              how.modern_off};
     VCur c = {decl->value, decl->nvalue, 0};
     const Longhand *l = longhand_named(decl->name, decl->len, how.modern_off);
     int sh = l == NULL ? shorthand_named(decl->name, decl->len, how.modern_off) : -1;

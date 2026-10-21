@@ -140,7 +140,8 @@ bool garb_prop_inherited(garb_prop_t prop);
 bool garb_prop_modern(garb_prop_t prop);
 // Every name a declaration may set a property by, each once, for whatever
 // lists them (an inline style object's members): the longhands' in
-// garb_prop_t's order, then the shorthands' and the aliases'. NULL past
+// garb_prop_t's order, then the shorthands', the aliases' and the
+// flow-relative names' (CSS Logical 1). NULL past
 // the last. garb_prop_known says whether a reading with `modern_off` reads
 // a name: a marked name, and a shorthand all of whose longhands are
 // marked, are not read with it.
