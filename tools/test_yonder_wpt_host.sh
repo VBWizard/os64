@@ -147,6 +147,21 @@ if [ "$1" = --selftest ]; then
     run --expect "$work/gated.txt" --modern-off --update
     [ "$rc" -eq 2 ] || fail "--update was taken with the switch off (exit $rc)"
 
+    # Only a page run to a verdict may change the expectations: a manifest
+    # naming a source that is not there, or one past the size a file may
+    # have, is a run that cannot be judged, and --update writes nothing.
+    truncate -s $((16 * 1024 * 1024 + 1)) "$work/wpt/selftest/huge.html"
+    for page in ghost.html huge.html; do
+        printf '{"items":{"testharness":{"selftest":{"%s":["%s",[null,{}]]}}},"url_base":"/","version":9}\n' \
+            "$page" "$(printf '0%.0s' {1..40})" > "$work/manifest.json"
+        python3 -I tools/wpt/pages.py "$work/manifest.json" selftest > "$work/one.txt"
+        cp "$work/lost.txt" "$work/unjudged.txt"
+        run --expect "$work/unjudged.txt" --pages "$work/one.txt" --update
+        [ "$rc" -eq 2 ] && cmp -s "$work/lost.txt" "$work/unjudged.txt" &&
+            grep -q "^UNJUDGED	$page	" "$work/out.txt" ||
+            fail "a listed page whose source is $page was not UNJUDGED, exit 2, the file untouched (exit $rc)"
+    done
+
     echo "wpt selftest: the runner's pages ran as tools/wpt/selftest.out says, found either way;" \
         "the expectations' three sections hold, unreadable ones and faulted runs are refused," \
         "and the switch's proof fails on a leak"

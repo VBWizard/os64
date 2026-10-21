@@ -50,7 +50,9 @@
  * is one TIMEOUT line naming why; a harness that ended in anything but OK
  * is a HARNESS line with its message, and that page FAILS WHOLE: none of
  * its tests is a pass, and one the harness said passed is a FAIL line that
- * says so. Then the summary.
+ * says so. A page never run to a verdict (its source missing, unreadable or
+ * past WPT_FILE_MAX; its navigation never started) is an UNJUDGED line, and
+ * the run cannot be judged (exit 2). Then the summary.
  *
  * THE EXPECTATIONS (--expect) are three sections of `page<tab>...` lines,
  * `#` lines being comments (MODERN_WEB.md § The oracle):
@@ -66,11 +68,13 @@
  * cannot be read makes the run one that cannot be judged (exit 2).
  * --update rewrites [passing] from this run and copies the other two as
  * they are, since they are written by hand; with --only it keeps the
- * [passing] lines of pages the substring does not select. It writes last,
- * beside the file and renamed over it, and only for a run with no fault: a
- * fault in the window's fakes (the host's check() failing, a page's or the
- * teardown's) fails the run (exit 2) whatever the results and leaves the
- * file as it was. --fault fakes one, for the selftest. */
+ * [passing] lines of pages the substring does not select. The only thing
+ * that may change the file is a page run to a verdict, so it writes last,
+ * beside the file and renamed over it, and only for a run every page of
+ * which was: an UNJUDGED page, or a fault in the window's fakes (the host's
+ * check() failing, a page's or the teardown's), fails the run (exit 2)
+ * whatever the results and leaves the file as it was. --fault fakes a
+ * fault, for the selftest. */
 #define YONDER_HOST_FAKES_ONLY
 #include "test_yonder_scripts_host.c"
 
@@ -537,7 +541,11 @@ static char *wpt_wrapper(const wpt_page_t *page, bool *long_timeout) {
 
 // ── Running one page ──────────────────────────────────────────────────────
 
-typedef struct { wpt_list_t lines; bool reported; const char *why; } wpt_outcome_t;
+/* A page's outcome: its result lines when it reported; why it did not when
+ * it ran and did not; and `unjudged` when it was never run to a verdict at
+ * all (its source could not be read, the window would not start it), which
+ * is the run's failure and not the page's. */
+typedef struct { wpt_list_t lines; bool reported, unjudged; const char *why; } wpt_outcome_t;
 
 /* The results element's text, if the page has one: its text children
  * joined, malloc'd. */
@@ -562,7 +570,11 @@ static void wpt_run(const wpt_page_t *page, wpt_outcome_t *out) {
     bool long_timeout=false;
     size_t len=0;
     char *html=page->kind==WPT_HTML ? wpt_slurp(page->source,&len) : wpt_wrapper(page,&long_timeout);
-    if(html==NULL) { out->why="its file could not be read"; return; }
+    if(html==NULL) {
+        out->unjudged=true;
+        out->why="its source is missing, unreadable, or past the size a file may have here";
+        return;
+    }
     len=strlen(html);
     if(page->kind==WPT_HTML) long_timeout=wpt_html_meta(html,"timeout","long",NULL);
     if(page->long_timeout>=0) long_timeout=page->long_timeout;
@@ -573,6 +585,7 @@ static void wpt_run(const wpt_page_t *page, wpt_outcome_t *out) {
     wpt_navigated=false;
     start_trip(url,NULL,NAV_GO,NULL);
     if(pool_work.job==NULL || !g.stream.active) {
+        out->unjudged=true;
         out->why="the window did not start the navigation";
         free(html); free(url); stream_window_drop(); clock_step=0;
         return;
@@ -794,7 +807,7 @@ int main(int argc, char **argv) {
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
     static const char *const kStatus[]={"PASS","FAIL","TIMEOUT","NOTRUN","PRECONDITION_FAILED"};
-    unsigned counts[5]={0}, silent=0, harness_bad=0, ran=0, excluded=0, discounted=0;
+    unsigned counts[5]={0}, silent=0, harness_bad=0, ran=0, excluded=0, discounted=0, unjudged=0;
     wpt_list_t passes={0};
     for(size_t i=0;i<wpt_npages;i++) {
         const wpt_page_t *page=&wpt_pages[i];
@@ -806,6 +819,11 @@ int main(int argc, char **argv) {
         wpt_outcome_t o;
         wpt_run(page,&o);
         if(failures!=faults) printf("FAULT\t%s\tthe window's fakes were asked for what they cannot do\n",page->name);
+        if(o.unjudged) {
+            unjudged++;
+            printf("UNJUDGED\t%s\t%s\n",page->name,o.why);
+            continue;
+        }
         if(!o.reported) {
             silent++; counts[2]++;
             printf("TIMEOUT\t%s\t(no results: %s)\n",page->name,o.why);
@@ -889,11 +907,18 @@ int main(int argc, char **argv) {
     os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"all layout text released");
     check(live==0,"native and engine heap is empty");
-    /* Written last, and only by a run that can be judged: a fault anywhere,
-     * a page's or the teardown's, leaves the expectations as they were. */
-    if(failures!=0) {
+    /* Written last, and only by a run that can be judged, since the only
+     * thing that may change the file is a page run to a verdict: a fault
+     * anywhere, a page's or the teardown's, or a page never run (its source
+     * unreadable, its navigation never started), leaves the expectations as
+     * they were, and the run cannot be judged (exit 2). */
+    if(unjudged!=0)
+        fprintf(stderr,"wpt: %u pages were never run to a verdict%s\n",unjudged,
+            update ? "; the expectations are not rewritten" : "");
+    if(failures!=0)
         fprintf(stderr,"wpt: %u faults in the window's fakes%s\n",failures,
             update ? "; the expectations are not rewritten" : "");
+    if(failures!=0 || unjudged!=0) {
         rc=2;
     } else if(update) {
         int written=wpt_update(expect,&e,&passes,only);

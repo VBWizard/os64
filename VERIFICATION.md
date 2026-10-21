@@ -1135,10 +1135,13 @@ fails the run and is named, and one that newly passes is listed to add.
 `[excluded]` names each page the slice knowingly does not run, with its
 reason after a tab (`needs iframe`), so what was never exercised is named,
 never counted. `--update` rewrites `[passing]` alone; the other two are
-written by hand, which is the point of them. It writes last, and not at
-all for a run with a fault in the window's fakes, which cannot be judged
-(exit 2); neither can a run whose expectation file exists and cannot be
-read (a file that does not exist is three empty sections). A slice commits its
+written by hand, which is the point of them. Only a page run to a verdict
+may change the file, so it writes last, and not at all for a run that
+cannot be judged (exit 2): one with a fault in the window's fakes, one with
+a page never run (an UNJUDGED line: its source missing, unreadable or too
+large, its navigation never started), and one whose expectation file
+exists and cannot be read (a file that does not exist is three empty
+sections). A slice commits its
 directory's file BEFORE its code, so the diff of that file is the proof.
 **A page whose harness did not end OK fails whole**: none of its tests is a
 pass, whatever the harness said of each, so a page that errored halfway
