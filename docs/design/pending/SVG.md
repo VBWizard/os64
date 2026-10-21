@@ -167,7 +167,14 @@ blending the alpha). The picture job, on bytes whose first bytes say SVG
 with libhtml into a private document owned by the picture (the product
 gains a `tree` beside `image` and `sequence`), and the oracle answers its
 size from `os64_svg_intrinsic`. The replaced-size oracle answers an
-inline `<svg>` from the node.
+inline `<svg>` from the node. **A standalone SVG has its own cascade**
+(Quinn's finding 10): the page's cascade knows nothing of the private
+document's nodes (`garb_style_for` answers an empty style for a node it
+never saw), so the picture owns a `garb_cascade_t` built on the window
+thread at first render over the private document's own `<style>`
+elements and presentation attributes, at the page's environment, freed
+with the picture; the host's `style` answers from whichever cascade the
+element's document owns. An inline `<svg>` uses the page's.
 
 **libgarb.** The paint properties, marked `modern`: `fill`, `fill-opacity`,
 `fill-rule`, `stroke`, `stroke-width`, `stroke-opacity`, `stroke-linecap`,

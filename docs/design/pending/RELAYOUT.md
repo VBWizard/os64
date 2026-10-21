@@ -31,8 +31,12 @@ the two that change what libflow's tree is. Chris rules and tests.*
    arenas, runs retained, never pointed at: no tree holds another tree's
    arena, so there is no chain of arenas to compact and the old tree is
    freed when the new one is shown, exactly as today.
-4. **The cascade is updated in place** for the restyle set, generation-
-   counted, so yonder's "same cascade?" checks keep their meaning.
+4. **The cascade is updated in place** for the restyle set, with TWO
+   counters: a SHEET generation that moves when the sheets or the
+   environment change (then every subtree is stale), and an UPDATE
+   counter that moves at every element update and invalidates nothing by
+   itself (the restyle set and style equality do that). yonder's "same
+   cascade?" checks read the first.
 5. **The public tree, the stacking order, the ink reach and libpage's model
    stay whole**, and the instrument that lands first decides, with numbers
    from the P5, whether any of them follows.
@@ -125,11 +129,39 @@ An entry lives until every reader has passed it; the document frees
 entries below the oldest reader's version. Each entry HOLDS (`os64_html_
 hold`) its target, its siblings and every added and removed node while it
 lives, so a removed subtree a reader has not seen yet is not reclaimed
-under it; a reader that reads promptly, as both of yonder's do (once per
-turn, once per microtask checkpoint), holds little. The log has a byte cap
-(`max_log_bytes`, an option; the default is a sixteenth of the arena
-budget): past it the oldest entries go and every reader behind them is
-told -1 at its next read. A -1 is never wrong, only slow.
+under it; a reader that reads promptly, as the layout's does (once per
+turn), holds little. The log has a byte cap (`max_log_bytes`, an option;
+the default is a sixteenth of the arena budget): past it the oldest
+entries go and every reader behind them is told -1 at its next read. A
+-1 is never wrong for a LAYOUT reader, only slow: it rebuilds whole.
+
+**The observer is not a reader of this log** (Quinn's finding 4: a lossy
+log cannot reconstruct records, their order or their old values, one
+script can outrun any cap before its checkpoint, and which observers a
+mutation reaches is decided by the tree AS IT WAS when the mutation
+happened, not at the checkpoint). So the document also offers one
+CALLBACK, the exception to "the library calls nobody", because it is
+exactly what the standard's "queue a mutation record" does at mutation
+time:
+
+```c
+/* Told, inside the verb and after the change is applied, of every change
+ * the standard's queue-a-mutation-record step sees: the same record as
+ * the entry above, for every verb call that step counts — an attribute
+ * set to the value it already has included, which moves no version and
+ * makes no log entry. The callback must not mutate the document. One per
+ * document; NULL removes it. */
+void os64_html_observe(os64_html_document_t *doc,
+                       void (*changed)(void *opaque, const os64_html_change_t *change),
+                       void *opaque);
+```
+
+libdom's callback walks the target's ancestors at that moment, as the
+standard does, and appends a record to each interested observer's own
+queue (holding the record's nodes), which is why nothing is lost and
+`takeRecords()` can answer inside the same task. The log and the callback
+are built from one record so they cannot disagree about what a change is;
+the log serves the layout, the callback serves the page.
 
 **Not logged:** form-owner changes and the control state (libpage's own
 version covers those; the observer does not see them either); a verb that
@@ -153,12 +185,20 @@ document. The cascade computes the two facts at build (`uses_has`,
 
 ```c
 /* Recompute the winners of the elements `changes` reach, by the restyle
- * rule above, drop the slots of removed nodes, and move the generation.
- * False when memory ran out or a change asks for everything: the caller
- * then cascades afresh, as today. Entries are the document's log's; the
- * cascade must have been built over `doc` at this env. */
+ * rule above, drop the slots of removed nodes, and move the UPDATE
+ * counter; the SHEET generation does not move (no sheet and no
+ * environment changed, or the caller would have cascaded afresh). False
+ * when memory ran out or a change asks for everything: the caller then
+ * cascades afresh, as today, and that moves the sheet generation.
+ * Entries are the document's log's; the cascade must have been built
+ * over `doc` at this env. */
 bool garb_cascade_update(garb_cascade_t *c, const os64_html_change_t *changes, size_t n);
+/* The sheet generation: what a layout's reuse compares (RELAYOUT.md's
+ * clause 7). Moves only when a cascade is built. */
 uint64_t garb_cascade_generation(const garb_cascade_t *c);
+/* The update counter: how many times the cascade was updated in place,
+ * for the instrument and the dumps. Never compared by the memo. */
+uint64_t garb_cascade_updates(const garb_cascade_t *c);
 ```
 
 In place, because the cascade is the window thread's alone and nothing
@@ -199,9 +239,17 @@ changes only paint will be steady and cost the parts path, not a layout.)
 
 **The rule.** A box B is REUSABLE for this layout when ALL of these hold:
 
-1. `subtree_steady(B)`: every element in B's subtree, B included, is
-   either outside the restyle set or came out style-equal, and none is
-   animated.
+1. B's subtree is UNTOUCHED and STEADY, two bits bubbled up separately
+   (Quinn's finding 7: style equality says nothing about text). Untouched:
+   no entry of the log names a node in B's subtree, B included, as a
+   target or an added or removed node — no child list, attribute or text
+   changed anywhere under B, so every run's text and every item sequence
+   is what it was. Steady: every element in the subtree is either outside
+   the restyle set or came out style-equal, and none is animated. A text
+   change under B with every style equal is untouched-false and B lays
+   out fresh; a class toggle no rule reads is untouched-false too (the
+   attribute changed) unless the log entry's target is OUTSIDE B and only
+   the restyle reached in, in which case equality decides.
 2. B had a placed, finished box in the previous tree (`placed`, not
    `unfinished`; a `display: none` element has none and nothing to reuse).
 3. B is a box pass 3 lays out as a unit from a given width: an in-flow
@@ -222,10 +270,12 @@ changes only paint will be steady and cost the parts path, not a layout.)
    percentage height, min/max-height, or vertical inset in the subtree)
    bubbled up like `holds_block`; when set, B is reusable only under a
    containing block whose height is definite and equal to the old.
-7. The environment is the old tree's: same width, zoom, cascade
-   generation, fonts (a web font that arrived or a face that moved is
-   "everything changed", as `s_web.moved` already says), same `medium`,
-   same `static_only` and `scripting`.
+7. The environment is the old tree's: same width, zoom, same cascade
+   SHEET generation (below: the one that moves when sheets or the
+   environment change, NOT the one that moves at every element update),
+   fonts (a web font that arrived or a face that moved is "everything
+   changed", as `s_web.moved` already says), same `medium`, same
+   `static_only` and `scripting`.
 
 When B is reusable, pass 2 builds B's own `FBox` and no children (it marks
 the box `reused`), and pass 3, on reaching it, GRAFTS: it deep-copies the
@@ -335,18 +385,25 @@ attributeOldValue, characterDataOldValue, attributeFilter})`,
 `disconnect()`, `takeRecords()`; `MutationRecord` with `type`, `target`,
 `addedNodes`, `removedNodes`, `previousSibling`, `nextSibling`,
 `attributeName`, `attributeNamespace` (null), `oldValue`. The binding
-registers a reader at runtime creation; at each microtask checkpoint it
-reads the entries since its last read, builds records for the observers
-whose options match (the standard's "queue a mutation record" filter:
-target or ancestor with `subtree`, the kind, the filter), and delivers to
-each observer with a non-empty queue, in registration order, as the
-standard's "notify mutation observers" microtask does. Old values: the
-first `observe` asking for either old-value option sets `keep_old` on the
-document, and it stays on (turning it off is not worth its edge cases).
-Removed nodes in a record are wrappers over held nodes, which the binding
-already does for detached nodes. The parser's insertions while a page
-streams are entries like any other, so an observer on `document` sees the
-page arrive, as it does in a browser.
+installs the document's `os64_html_observe` callback at runtime creation.
+AT MUTATION TIME, inside the verb, the callback runs the standard's
+"queue a mutation record": it walks the target's ancestors as the tree
+stands at that instant, finds every observer whose options match (the
+kind, `subtree`, the attribute filter), copies the record into that
+observer's own queue with its nodes held, and, if no "notify mutation
+observers" microtask is queued yet, queues one. At the microtask
+checkpoint that microtask delivers each observer's queue in registration
+order, as the standard says; `takeRecords()` hands an observer its queue
+at any moment, inside the same task included; `disconnect()` empties it.
+Nothing is reconstructed from the layout's log, which may have evicted or
+never logged what an observer must see (an attribute set to its own
+value). Old values: the first `observe` asking for either old-value option
+sets `keep_old` on the document, and it stays on (turning it off is not
+worth its edge cases). Removed nodes in a record are wrappers over held
+nodes, which the binding already does for detached nodes. The parser's
+insertions while a page streams reach the callback like any other verb,
+so an observer on `document` sees the page arrive, as it does in a
+browser.
 
 ## The cut, in order
 
