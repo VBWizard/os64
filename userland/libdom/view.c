@@ -255,7 +255,7 @@ static const char *snapshot_value(const os64_dom_t *dom, int32_t prop, size_t *l
 }
 
 /* A declaration getComputedStyle made: the element it reads (its wrapper,
- * which holds the node), or none for a pseudo-element, which answers
+ * which holds the node), and `empty` for a pseudo-element's, which answers
  * nothing until generated content is laid out. Engine memory, traced by
  * the collector, so a page that asks in a loop holds only what it keeps. */
 typedef struct {
@@ -319,9 +319,19 @@ enum {
 
 #define READ_ONLY "This declaration is a computed style, which a script cannot change"
 
+/* Whether a declaration answers nothing: a pseudo-element's, or an
+ * element's that is not in the document now (CSSOM: its declarations are
+ * then an empty list). */
+static bool computed_empty(os64_dom_t *dom, JSContext *ctx, const DComputed *c)
+{
+    if (c->empty) return true;
+    const os64_html_node_t *node = d_node(dom, ctx, c->element);
+    return node == NULL || !d_connected(dom, node);
+}
+
 static JSValue computed_value(os64_dom_t *dom, JSContext *ctx, const DComputed *c, int32_t prop)
 {
-    if (c->empty) return JS_NewString(ctx, "");
+    if (computed_empty(dom, ctx, c)) return JS_NewString(ctx, "");
     if (dom->computed == NULL)
         return d_error(ctx, "InvalidStateError", "No style provider is installed");
     const os64_html_node_t *node = d_node(dom, ctx, c->element);
@@ -348,14 +358,14 @@ static JSValue computed_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     if (magic < GARB_NPROPS) return computed_value(dom, ctx, c, magic);
     switch (magic) {
     case C_TEXT: return JS_NewString(ctx, "");
-    case C_LENGTH: return JS_NewInt32(ctx, c->empty ? 0 : GARB_NPROPS);
+    case C_LENGTH: return JS_NewInt32(ctx, computed_empty(dom, ctx, c) ? 0 : GARB_NPROPS);
     case C_PARENT_RULE: return JS_NULL;
     case C_PRIORITY: return JS_NewString(ctx, "");
     case C_ITEM: {
         uint32_t index = 0;
         if (argc < 1) return JS_ThrowTypeError(ctx, "item needs an index");
         if (JS_ToUint32(ctx, &index, argv[0]) < 0) return JS_EXCEPTION;
-        if (c->empty || index >= GARB_NPROPS) return JS_NewString(ctx, "");
+        if (index >= GARB_NPROPS || computed_empty(dom, ctx, c)) return JS_NewString(ctx, "");
         return JS_NewString(ctx, garb_prop_name((garb_prop_t)kOrder[index]));
     }
     case C_GET: {
@@ -422,6 +432,20 @@ static void camel(const char *name, char *out, size_t cap, bool webkit)
     out[at] = '\0';
 }
 
+// document.defaultView: the window, which is where a page that reaches
+// getComputedStyle through its document finds it.
+static JSValue default_view(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
+                            int magic, JSValue *data)
+{
+    (void)argc; (void)argv; (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    const os64_html_node_t *node = d_node(dom, ctx, self);
+    if (node == NULL) return JS_EXCEPTION;
+    if (node != dom->document->document) return JS_ThrowTypeError(ctx, "Expected the document");
+    return JS_DupValue(ctx, dom->window->value);
+}
+
 int d_computed_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     dom->computed_class = os64_js_class_id(&computed_slot);
@@ -463,7 +487,9 @@ int d_computed_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_method(dom, ctx, prototype, "removeProperty", computed_member, 1, C_REMOVE) < 0 ||
         d_iterable(ctx, prototype, false) < 0)
         return -1;
-    return d_method(dom, ctx, global, "getComputedStyle", get_computed_style, 1, 0);
+    if (d_accessor(dom, ctx, dom->prototypes[D_PROTO_DOCUMENT]->value, "defaultView", default_view, 0, false) < 0)
+        return -1;
+    return d_method_named(dom, ctx, global, "getComputedStyle", get_computed_style, 1, 0);
 }
 
 // ── scrollingElement ────────────────────────────────────────────────────
@@ -577,9 +603,9 @@ int d_view_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         if (d_accessor(dom, ctx, global, kViewNames[i], view_member, i, true) < 0) return -1;
     JSValueConst document = dom->prototypes[D_PROTO_DOCUMENT]->value;
     JSValueConst element = dom->prototypes[D_PROTO_ELEMENT]->value;
-    if (d_method(dom, ctx, global, "scroll", view_member, 0, V_SCROLL_TO) < 0 ||
-        d_method(dom, ctx, global, "scrollTo", view_member, 0, V_SCROLL_TO) < 0 ||
-        d_method(dom, ctx, global, "scrollBy", view_member, 0, V_SCROLL_BY) < 0 ||
+    if (d_method_named(dom, ctx, global, "scroll", view_member, 0, V_SCROLL_TO) < 0 ||
+        d_method_named(dom, ctx, global, "scrollTo", view_member, 0, V_SCROLL_TO) < 0 ||
+        d_method_named(dom, ctx, global, "scrollBy", view_member, 0, V_SCROLL_BY) < 0 ||
         d_accessor(dom, ctx, document, "scrollingElement", view_member, V_SCROLLING_ELEMENT, false) < 0)
         return -1;
     // onscroll and onresize are every element's, the document's and
@@ -769,8 +795,8 @@ int d_media_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     JS_SetClassProto(ctx, dom->media_class, JS_DupValue(ctx, prototype));
     if (d_accessor(dom, ctx, prototype, "media", media_member, M_MEDIA, false) < 0 ||
         d_accessor(dom, ctx, prototype, "matches", media_member, M_MATCHES, false) < 0 ||
-        d_method(dom, ctx, prototype, "addListener", media_member, 1, M_ADD_LISTENER) < 0 ||
-        d_method(dom, ctx, prototype, "removeListener", media_member, 1, M_REMOVE_LISTENER) < 0 ||
+        d_method_named(dom, ctx, prototype, "addListener", media_member, 1, M_ADD_LISTENER) < 0 ||
+        d_method_named(dom, ctx, prototype, "removeListener", media_member, 1, M_REMOVE_LISTENER) < 0 ||
         d_handler_install(dom, ctx, prototype, D_EVENT_CHANGE) < 0 ||
         d_target_install(dom, ctx, prototype) < 0 ||
         d_interface_install(ctx, global, "MediaQueryList", prototype, JS_UNDEFINED, NULL) < 0)
@@ -785,7 +811,7 @@ int d_media_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     int made = d_interface_install(ctx, global, "MediaQueryListEvent", own, event, media_event_construct);
     JS_FreeValue(ctx, event);
     if (made < 0) return -1;
-    return d_method(dom, ctx, global, "matchMedia", media_member, 1, M_MATCH_MEDIA);
+    return d_method_named(dom, ctx, global, "matchMedia", media_member, 1, M_MATCH_MEDIA);
 }
 
 // ── The view's events ───────────────────────────────────────────────────

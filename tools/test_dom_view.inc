@@ -170,7 +170,8 @@ static void dom_view_scroll_cases(void)
         "get behavior(){order.push('behavior');return 'auto'}});assert(order.join()==='behavior,left,top','WebIDL member order');"
         "var bad={valueOf(){throw Error('valueOf')}};var r;try{scrollTo(bad,1)}catch(e){r=e.message}assert(r==='valueOf');"
         "innerWidth=5;assert(innerWidth===5&&Object.getOwnPropertyDescriptor(window,'innerWidth').value===5,'[Replaceable]');"
-        "scrollY='mine';assert(scrollY==='mine');",
+        "scrollY='mine';assert(scrollY==='mine');"
+        "assert(scrollTo.name==='scrollTo'&&scroll.name==='scroll'&&scrollBy.name==='scrollBy','named as WebIDL names them');",
         "view: scroll and size");
     check(v.scrolls >= 10, "view: every scroll asks the host");
     os64_dom_geometry_stats_t before = os64_dom_geometry_stats(f.binding, true);
@@ -342,7 +343,8 @@ static void dom_view_computed_cases(void)
     ComputedFake c = {.document = f.document};
     os64_dom_set_computed(f.binding, fake_computed, &c);
     dom_script(&f, VIEW_ASSERT
-        "var b=document.body,cs=getComputedStyle(b);"
+        "var b=document.body,cs=getComputedStyle(b);assert(document.defaultView===window);"
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(Object.getPrototypeOf(document),'defaultView').get.call(b));"
         "assert(cs.color==='rgb(1, 2, 3)'&&cs.getPropertyValue('COLOR')==='rgb(1, 2, 3)','camel case, any case');"
         "assert(cs.backgroundColor===cs['background-color']&&cs.backgroundColor==='p2','dashed attributes');"
         "assert(cs.WebkitTextFillColor===cs.webkitTextFillColor&&cs['-webkit-text-fill-color']===cs.webkitTextFillColor,'webkit-cased');"
@@ -366,7 +368,10 @@ static void dom_view_computed_cases(void)
         "throws('TypeError',()=>getComputedStyle());throws('TypeError',()=>getComputedStyle(document));"
         "throws('TypeError',()=>getComputedStyle({}));throws('TypeError',()=>getComputedStyle(document.createTextNode('t')));"
         "throws('TypeError',()=>Object.getOwnPropertyDescriptor(Object.getPrototypeOf(cs),'color').get.call(b.style));"
-        "var loose=document.createElement('div');assert(getComputedStyle(loose).color==='','a detached element has no style');",
+        "var loose=document.createElement('div'),lcs=getComputedStyle(loose);"
+        "assert(lcs.color===''&&lcs.length===0&&lcs.item(0)===''&&[...lcs].length===0,'a detached element has no style');"
+        "document.body.appendChild(loose);assert(lcs.color==='rgb(1, 2, 3)'&&lcs.length>0,'connected, it has');"
+        "loose.remove();assert(lcs.length===0);",
         "computed: the declaration");
     check(c.last != NULL && c.last->kind == OS64_HTML_ELEMENT, "computed: the provider is asked for the element");
     os64_dom_geometry_stats(f.binding, true);
@@ -416,7 +421,8 @@ static void dom_view_history_cases(void)
         "history.pushState(2,'','?x=1');assert(location.search==='?x=1'&&location.pathname==='/dir/other.html'&&history.state===2);"
         "history.pushState(undefined,'');assert(history.state===null,'undefined is null');"
         "history.pushState([undefined],'');assert(history.state[0]===null,'in an array undefined is null');"
-        "assert(location.href==='http://view.test/dir/other.html?x=1','no address: unchanged');",
+        "assert(location.href==='http://view.test/dir/other.html?x=1','no address: unchanged');"
+        "history.pushState(3,'','#keep');history.pushState(4,'','');assert(location.hash==='#keep'&&history.state===4,'an empty address is none');",
         "history: state updates");
     dom_script(&f, VIEW_ASSERT
         "throws('SecurityError',()=>history.pushState(1,'','http://elsewhere.test/'));"
@@ -535,7 +541,7 @@ static void dom_view_off_cases(void)
         "'onscroll','onresize','matchMedia','MediaQueryList','MediaQueryListEvent','getComputedStyle',"
         "'onpopstate','onhashchange','PopStateEvent','HashChangeEvent'])assert(!(n in window),n);"
         "assert(!('pushState' in history)&&!('replaceState' in history)&&!('state' in history)&&!('scrollRestoration' in history));"
-        "assert(!('scrollingElement' in document)&&!('onscroll' in document.body)&&!('onscroll' in document));"
+        "assert(!('scrollingElement' in document)&&!('defaultView' in document)&&!('onscroll' in document.body)&&!('onscroll' in document));"
         "assert(history.length===1,'the classic length');"
         "var heard=0;addEventListener('scroll',()=>heard++);addEventListener('popstate',()=>heard++);"
         "location.hash='x';",

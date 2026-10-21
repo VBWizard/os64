@@ -14,7 +14,14 @@ static const char *page_url(const os64_dom_t *dom)
 void d_navigate(os64_dom_t *dom, os64_dom_navigation_kind_t kind, const os64_html_node_t *node,
                 const os64_html_node_t *submitter, const char *url, int32_t delta)
 {
-    /* The last ask of a task wins, as the last location= does in a browser. */
+    /* The last ask of a task wins, as the last location= does in a browser;
+     * but history.go()s add up, as HTML queues each traversal after the one
+     * before it: go(-2) then go(-1) is three back. */
+    if (kind == OS64_DOM_NAVIGATE_HISTORY && dom->navigation.kind == OS64_DOM_NAVIGATE_HISTORY) {
+        int64_t sum = (int64_t)dom->navigation.delta + delta;
+        dom->navigation.delta = sum > INT32_MAX ? INT32_MAX : sum < INT32_MIN ? INT32_MIN : (int32_t)sum;
+        return;
+    }
     if (node != NULL) os64_html_hold(dom->document, node);
     if (submitter != NULL) os64_html_hold(dom->document, submitter);
     if (dom->navigation.node != NULL) os64_html_release(dom->document, dom->navigation.node);
@@ -769,6 +776,12 @@ static JSValue update_state(os64_dom_t *dom, JSContext *ctx, int argc, JSValueCo
     d_string_free(dom, &unused);
     bool has_url = argc > 2 && !JS_IsUndefined(argv[2]) && !JS_IsNull(argv[2]);
     if (has_url && !d_string(dom, ctx, argv[2], &url)) return JS_EXCEPTION;
+    /* An empty address is none (HTML, after whatwg/html#9343): the entry
+     * keeps the document's, its fragment included. */
+    if (has_url && url.length == 0) {
+        d_string_free(dom, &url);
+        has_url = false;
+    }
     DJson json = {.dom = dom};
     int written = JS_IsUndefined(argv[0]) ? json_puts(&json, ctx, "null")
                                           : json_value(&json, ctx, argv[0], 0, false);
@@ -1002,8 +1015,8 @@ int d_history_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx, plain);
     JS_FreeValue(ctx, array);
     JSValueConst history = dom->history->value;
-    if (d_method(dom, ctx, history, "pushState", history_member, 2, HS_PUSH) < 0 ||
-        d_method(dom, ctx, history, "replaceState", history_member, 2, HS_REPLACE) < 0 ||
+    if (d_method_named(dom, ctx, history, "pushState", history_member, 2, HS_PUSH) < 0 ||
+        d_method_named(dom, ctx, history, "replaceState", history_member, 2, HS_REPLACE) < 0 ||
         d_accessor(dom, ctx, history, "state", history_member, HS_STATE, false) < 0 ||
         d_accessor(dom, ctx, history, "scrollRestoration", history_member, HS_RESTORATION, true) < 0 ||
         d_handler_install(dom, ctx, global, D_EVENT_POPSTATE) < 0 ||

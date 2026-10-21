@@ -115,6 +115,20 @@ int d_method(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
     return JS_DefinePropertyValueStr(ctx, target, name, function, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }
 
+int d_method_named(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
+                   const char *name, JSCFunctionData *fn, int argc, int magic)
+{
+    JSValue function = JS_NewCFunctionData(ctx, fn, argc, magic, 1, &dom->anchor->value);
+    if (JS_IsException(function)) return -1;
+    JSValue text = JS_NewString(ctx, name);
+    if (JS_IsException(text) ||
+        JS_DefinePropertyValueStr(ctx, function, "name", text, JS_PROP_CONFIGURABLE) < 0) {
+        JS_FreeValue(ctx, function);
+        return -1;
+    }
+    return JS_DefinePropertyValueStr(ctx, target, name, function, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+}
+
 int d_accessor(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
                const char *name, JSCFunctionData *fn, int magic, bool writable)
 {

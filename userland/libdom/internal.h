@@ -194,6 +194,10 @@ int d_method(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
              const char *name, JSCFunctionData *fn, int argc, int magic);
 int d_accessor(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
                const char *name, JSCFunctionData *fn, int magic, bool writable);
+/* d_method whose function's `name` is its own, as WebIDL names an
+ * operation; the Modern Web's rows make theirs so. */
+int d_method_named(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
+                   const char *name, JSCFunctionData *fn, int argc, int magic);
 JSValue d_wrap(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
 /* d_wrap for an interface's constructor: a node with no wrapper yet gets
  * one whose prototype is `prototype` when that is an object (new.target's,

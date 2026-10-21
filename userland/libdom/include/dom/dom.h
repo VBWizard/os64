@@ -273,13 +273,14 @@ bool os64_dom_view_step(os64_dom_t *dom, os64_js_outcome_t *outcome);
  * (garb_prop_t is `prop`; the table is the list, and a declaration's
  * length, order and names are the table's), each as CSSOM serialises it.
  * The binding asks for the whole element at every read, so a declaration a
- * script holds is live. */
+ * script holds is live; an element not in the document, and a
+ * pseudo-element, answer an empty declaration without asking. */
 typedef struct os64_dom_computed os64_dom_computed_t;
 /* The provider makes the element's style current (a layout, when it was
  * stale), puts every property it knows, and answers true; an element with
- * no style (not in the document's tree) puts nothing and answers true. False
- * when no current style could be made: the script sees InvalidStateError.
- * Must not enter JS or pump events. */
+ * no style puts nothing and answers true. False when no current style could
+ * be made: the script sees InvalidStateError. Must not enter JS or pump
+ * events. */
 typedef bool (*os64_dom_computed_provider_t)(void *opaque, const os64_html_node_t *element,
                                             os64_dom_computed_t *out);
 /* The provider's pen: property `prop` is `length` bytes of UTF-8 `value`,
@@ -395,7 +396,9 @@ uint64_t os64_dom_timer_next(const os64_dom_t *dom);
 bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
 
 /* The navigation a script asked for since the last take, if any: the last
- * ask wins. False when there is none. */
+ * ask wins, but history.go()s in a row add up to one delta (OS64_DOM_
+ * NAVIGATE_HISTORY), as HTML runs each after the one before it. False
+ * when there is none. */
 bool os64_dom_take_navigation(os64_dom_t *dom, os64_dom_navigation_t *ask);
 /* An error a nested dispatch or a handler compile reported inside a task the
  * host did not open through libdom (a script run with os64_js_run). The

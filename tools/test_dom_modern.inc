@@ -59,7 +59,8 @@ static void modern_names_free(char **names, size_t n)
  * the binding put there, leaving out what the table's rows add to them
  * (each prototype's `constructor` and Node's constants, the interface
  * row's; onscroll, onresize and the document's scrollingElement, the
- * view's; Symbol.toStringTag is a symbol, which no list of names holds).
+ * view's; its defaultView, getComputedStyle's; Symbol.toStringTag is a
+ * symbol, which no list of names holds).
  * malloc'd; NULL when the script did not run. */
 static char *modern_chain_shape(DomFixture *f)
 {
@@ -68,7 +69,7 @@ static char *modern_chain_shape(DomFixture *f)
         "var nodes=[document,document.body,document.createElement('div'),document.createElement('input'),"
         "document.createElement('a'),document.createElement('script'),holder.firstChild,"
         "document.createTextNode('t'),document.createComment('c'),document.createDocumentFragment()];"
-        "var row=/(^constructor$|_NODE$|^DOCUMENT_POSITION_|^onscroll$|^onresize$|^scrollingElement$)/;"
+        "var row=/(^constructor$|_NODE$|^DOCUMENT_POSITION_|^onscroll$|^onresize$|^scrollingElement$|^defaultView$)/;"
         "globalThis.chainShape=nodes.map(function(n){var levels=[];"
         "for(var p=Object.getPrototypeOf(n);p&&p!==Object.prototype;p=Object.getPrototypeOf(p))"
         "levels.push(Object.getOwnPropertyNames(p).filter(function(k){return !row.test(k)}).sort().join(','));"
