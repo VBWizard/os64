@@ -10,6 +10,9 @@ user-reported, without a captured installed-binary hash.
 
 ## Resume point
 
+Chris requested [E5D remembered window placement](E05D_WINDOW_PLACEMENT.md) as
+a separate future slice. Record only: implementation has not started.
+
 Active work is [E5C Roam file actions](E05C_ROAM_LAUNCH.md), owned by Quinn in
 `.worktrees/roam-file-actions`, branch `codex/roam-file-actions`, stacked on
 PR #322 at `328cba6d`. Chris approved resuming file launching and associations;

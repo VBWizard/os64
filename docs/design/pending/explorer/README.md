@@ -52,6 +52,9 @@ select the associations-file path. E5C implements that requirement.
 - D016 settles E2's visual family and installable sets. E6 still needs its
   standalone channel design and Fable review.
 
+Planned follow-up: [E5D remembered window position and size](E05D_WINDOW_PLACEMENT.md),
+requested by Chris for Roam with reusable support for other windows.
+
 ## Read in this order
 
 1. [Latest handoff](HANDOFF.md): where to resume, concrete next action, blockers.

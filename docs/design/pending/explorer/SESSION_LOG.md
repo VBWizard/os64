@@ -1039,3 +1039,12 @@ E5C publication: implementation `9f31fb0f` pushed to origin and opened as
 `codex/file-dialog-polish`. #322 remains open. Next: independent review and P5
 acceptance, then retarget #325 to userland after #322 merges. No review request
 comment or merge was sent. Worktree is clean after the handoff record commit.
+
+
+## 2026-10-21 — Window placement follow-up requested
+
+Chris requested saving Roam's position and size whenever they change and
+restoring them next launch, noting other windows would benefit. Recorded
+[E5D](E05D_WINDOW_PLACEMENT.md) as a separate planned slice with shared support
+and Roam first. No implementation started; PR #322's two new review findings
+are the immediate task. The missing move-notification contract needs design.
