@@ -305,3 +305,16 @@ requirements remain in force even where this log has no separate decision entry.
   Roam configuration must select the file path; no storage-format discussion
   is needed before proceeding. This resolves D018's requested conversation.
 - **Affected:** [Scribe integration](E05_SCRIBE.md), later Roam associations.
+
+
+## D020 — Resume Roam file actions
+
+- **Status:** Customer authorization and implementation choices, 2026-10-21.
+- **Source:** Chris approved resuming Roam launching/associations and deferred
+  the thread-lifetime fix. D019 governs configurable association storage.
+- **Engineering choices:** Extension-to-absolute-executable mapping; append
+  the document as one argv argument. Open With uses the shared picker for a
+  one-off executable choice. Gterm accepts a literal working-directory argv.
+  Poll for child collection only while launched applications remain alive,
+  because no SIGCHLD/timed GUI wait is available. No new worker is needed.
+- **Affected:** [E5C contract](E05C_ROAM_LAUNCH.md), Roam, libos64, gterm.

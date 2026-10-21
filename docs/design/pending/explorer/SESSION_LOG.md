@@ -1014,3 +1014,21 @@ measured idle one-worker pools closing in 1–11 ms, versus 206–980 ms for two
 workers. The jobs pipe tracks one waiting reader; the displaced reader waits
 for the one-second backstop. [E5B](E05B_CLOSE_LATENCY.md) records source, native
 timings and follow-up scope. No production fix was made during this diagnosis.
+
+
+## 2026-10-21 — E5C Roam file actions
+
+Chris approved resuming Roam while deferring the worker-lifetime fix. Quinn
+created `codex/roam-file-actions` from `328cba6d` (PR #322) and implemented
+shared extension associations with a configurable file location, literal argv
+launching, one-off Open With, Copy Full Path and Open Terminal Here. Gterm
+accepts --directory; Roam collects launched children on its UI thread.
+
+The [slice contract](E05C_ROAM_LAUNCH.md) and [evidence](evidence/e05c/README.md)
+record the interfaces, host failure injection, ASan/UBSan/LSan success outside
+the sandbox, cross-build and QEMU results. The initial QEMU setup selected the
+old FAT root; selecting the updated ext2 root corrected the test setup before
+acceptance. Real file launching, cancellation, explicit application selection,
+clipboard, directory-with-spaces terminal launch and live config override passed.
+No P5 or independent-review result is claimed. Publication is the next action;
+this branch stacks on #322. The existing dialog-worker issues remain deferred.

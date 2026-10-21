@@ -1,0 +1,58 @@
+stale_refs: working tree vs HEAD
+
+== Names this change RETIRED that survive only in prose (read every line):
+-- E05A_DIALOG_POLISH
+   docs/design/pending/explorer/E05_SCRIBE.md:84: Next: [compact footer and shared size memory](E05A_DIALOG_POLISH.md).
+   docs/design/pending/explorer/HANDOFF.md:27: Prerequisite follow-up: [E5A compact footer and shared size memory](E05A_DIALOG_POLISH.md),
+   docs/design/pending/explorer/HANDOFF.md:35: display change; [details and evidence](E05A_DIALOG_POLISH.md#review-r1--saved-size-after-a-display-change).
+   docs/design/pending/explorer/HANDOFF.md:87: | [E5 Scribe dialogs](E05_SCRIBE.md) | Accepted; PR #319 merged, P5 tested | [E5A layout and size follow-up](E05A_DIALOG_POLISH.md). |
+   docs/design/pending/explorer/README.md:80: | E5 | Open/Save picker and launch reuse | Scribe accepted, PR #319 merged; E5A under review; E5C validated, awaiting review | Quinn | [Scri
+   docs/design/pending/explorer/evidence/e05a/README.md:72: Independent review and merge remain pending. The [slice record](../../E05A_DIALOG_POLISH.md)
+   docs/design/pending/explorer/evidence/e05a/stale-refs.txt:10: docs/design/pending/explorer/HANDOFF.md:63: | [E5 Scribe dialogs](E05_SCRIBE.md) | Accepted; PR #319 merged, P5 tested | [E5A layout and siz
+   docs/design/pending/explorer/evidence/e05c/README.md:32: E05A_DIALOG_POLISH and E05_SCRIBE still exist; their surviving links are valid.
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:4: -- E05A_DIALOG_POLISH
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:5: docs/design/pending/explorer/E05_SCRIBE.md:84: Next: [compact footer and shared size memory](E05A_DIALOG_POLISH.md).
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:6: docs/design/pending/explorer/HANDOFF.md:23: Prerequisite follow-up: [E5A compact footer and shared size memory](E05A_DIALOG_POLISH.md),
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:7: docs/design/pending/explorer/HANDOFF.md:31: display change; [details and evidence](E05A_DIALOG_POLISH.md#review-r1--saved-size-after-a-displ
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:8: docs/design/pending/explorer/HANDOFF.md:83: | [E5 Scribe dialogs](E05_SCRIBE.md) | Accepted; PR #319 merged, P5 tested | [E5A layout and siz
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:10: docs/design/pending/explorer/evidence/e05a/README.md:72: Independent review and merge remain pending. The [slice record](../../E05A_DIALOG_P
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:16: docs/design/pending/explorer/HANDOFF.md:83: | [E5 Scribe dialogs](E05_SCRIBE.md) | Accepted; PR #319 merged, P5 tested | [E5A layout and siz
+-- E05_SCRIBE
+   docs/design/completed/SCRIBE.md:147: independent. [E5](../pending/explorer/E05_SCRIBE.md) records dialog integration
+   docs/design/pending/EXPLORER.md:452: records validation scope. E3 and E4 are merged. [E5's Scribe record](explorer/E05_SCRIBE.md)
+   docs/design/pending/explorer/DECISIONS.md:307: - **Affected:** [Scribe integration](E05_SCRIBE.md), later Roam associations.
+   docs/design/pending/explorer/HANDOFF.md:87: | [E5 Scribe dialogs](E05_SCRIBE.md) | Accepted; PR #319 merged, P5 tested | [E5A layout and size follow-up](E05A_DIALOG_POLISH.md). |
+   docs/design/pending/explorer/README.md:80: | E5 | Open/Save picker and launch reuse | Scribe accepted, PR #319 merged; E5A under review; E5C validated, awaiting review | Quinn | [Scri
+   docs/design/pending/explorer/evidence/e05/README.md:63: as `ddaad166`. The [slice record](../../E05_SCRIBE.md) contains the hardware
+   docs/design/pending/explorer/evidence/e05a/stale-refs.txt:4: -- ../../E05_SCRIBE.md
+   docs/design/pending/explorer/evidence/e05a/stale-refs.txt:5: docs/design/pending/explorer/evidence/e05/README.md:63: as `ddaad166`. The [slice record](../../E05_SCRIBE.md) contains the hardware
+   docs/design/pending/explorer/evidence/e05a/stale-refs.txt:6: -- E05_SCRIBE
+   docs/design/pending/explorer/evidence/e05a/stale-refs.txt:7: docs/design/completed/SCRIBE.md:147: independent. [E5](../pending/explorer/E05_SCRIBE.md) records dialog integration
+   docs/design/pending/explorer/evidence/e05a/stale-refs.txt:8: docs/design/pending/EXPLORER.md:452: records validation scope. E3 and E4 are merged. [E5's Scribe record](explorer/E05_SCRIBE.md)
+   docs/design/pending/explorer/evidence/e05a/stale-refs.txt:9: docs/design/pending/explorer/DECISIONS.md:307: - **Affected:** [Scribe integration](E05_SCRIBE.md), later Roam associations.
+   docs/design/pending/explorer/evidence/e05a/stale-refs.txt:10: docs/design/pending/explorer/HANDOFF.md:63: | [E5 Scribe dialogs](E05_SCRIBE.md) | Accepted; PR #319 merged, P5 tested | [E5A layout and siz
+   docs/design/pending/explorer/evidence/e05a/stale-refs.txt:12: docs/design/pending/explorer/evidence/e05/README.md:63: as `ddaad166`. The [slice record](../../E05_SCRIBE.md) contains the hardware
+   docs/design/pending/explorer/evidence/e05a/stale-refs.txt:16: Inspection: the E05_SCRIBE record remains at its existing path. All listed links still resolve; these are status updates, not retired files
+   docs/design/pending/explorer/evidence/e05c/README.md:32: E05A_DIALOG_POLISH and E05_SCRIBE still exist; their surviving links are valid.
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:5: docs/design/pending/explorer/E05_SCRIBE.md:84: Next: [compact footer and shared size memory](E05A_DIALOG_POLISH.md).
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:8: docs/design/pending/explorer/HANDOFF.md:83: | [E5 Scribe dialogs](E05_SCRIBE.md) | Accepted; PR #319 merged, P5 tested | [E5A layout and siz
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:11: docs/design/pending/explorer/evidence/e05a/stale-refs.txt:10: docs/design/pending/explorer/HANDOFF.md:63: | [E5 Scribe dialogs](E05_SCRIBE.m
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:12: -- E05_SCRIBE
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:13: docs/design/completed/SCRIBE.md:147: independent. [E5](../pending/explorer/E05_SCRIBE.md) records dialog integration
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:14: docs/design/pending/EXPLORER.md:452: records validation scope. E3 and E4 are merged. [E5's Scribe record](explorer/E05_SCRIBE.md)
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:15: docs/design/pending/explorer/DECISIONS.md:307: - **Affected:** [Scribe integration](E05_SCRIBE.md), later Roam associations.
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:16: docs/design/pending/explorer/HANDOFF.md:83: | [E5 Scribe dialogs](E05_SCRIBE.md) | Accepted; PR #319 merged, P5 tested | [E5A layout and siz
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:18: docs/design/pending/explorer/evidence/e05/README.md:63: as `ddaad166`. The [slice record](../../E05_SCRIBE.md) contains the hardware
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:19: docs/design/pending/explorer/evidence/e05a/stale-refs.txt:4: -- ../../E05_SCRIBE.md
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:20: docs/design/pending/explorer/evidence/e05a/stale-refs.txt:5: docs/design/pending/explorer/evidence/e05/README.md:63: as `ddaad166`. The [sli
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:21: docs/design/pending/explorer/evidence/e05a/stale-refs.txt:6: -- E05_SCRIBE
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:22: docs/design/pending/explorer/evidence/e05a/stale-refs.txt:7: docs/design/completed/SCRIBE.md:147: independent. [E5](../pending/explorer/E05_
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:23: docs/design/pending/explorer/evidence/e05a/stale-refs.txt:8: docs/design/pending/EXPLORER.md:452: records validation scope. E3 and E4 are me
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:24: docs/design/pending/explorer/evidence/e05a/stale-refs.txt:9: docs/design/pending/explorer/DECISIONS.md:307: - **Affected:** [Scribe integrat
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:25: docs/design/pending/explorer/evidence/e05a/stale-refs.txt:10: docs/design/pending/explorer/HANDOFF.md:63: | [E5 Scribe dialogs](E05_SCRIBE.m
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:26: docs/design/pending/explorer/evidence/e05a/stale-refs.txt:12: docs/design/pending/explorer/evidence/e05/README.md:63: as `ddaad166`. The [sl
+   docs/design/pending/explorer/evidence/e05c/stale-refs.txt:27: docs/design/pending/explorer/evidence/e05a/stale-refs.txt:16: Inspection: the E05_SCRIBE record remains at its existing path. All listed lin
+
+== No new superlative claims.
+
+Inspection: the two document names remain valid; no source symbol was retired.

@@ -1,0 +1,11 @@
+2026-10-21
+Build: python3 tools/test_roam_launch_host.py --build-only --output /tmp/roam-launch-host
+Run: ASAN_OPTIONS=detect_leaks=1 /tmp/roam-launch-host/test_roam_launch
+
+Roam lifecycle: 3 chooser opens, 5 close attempts; literal argv verified.
+PASS: launch configuration, failure paths, Roam activation and chooser lifecycle
+
+The sandbox run could not complete LeakSanitizer attachment:
+LSAN_OPTIONS=verbosity=1:log_threads=1 reported
+"Could not attach to thread 3 (errno 1)."
+The same binary passed outside the sandbox with ASan, UBSan and LSan enabled.

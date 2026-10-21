@@ -3,6 +3,10 @@
 #include "os64/ui_action.h"
 #include "os64/ui_dispatcher.h"
 #include "os64/proc.h"
+#include "os64/launch.h"
+#include "os64/conf.h"
+#include "os64/clip.h"
+#include "os64/ui_file_dialog.h"
 #include "os64/fmt.h"
 #include "os64/str.h"
 #include "image/icon_theme.h"
@@ -12,9 +16,12 @@ enum {
     A_REFRESH,A_ROOT,A_HOME,A_FOCUS_ADDRESS,A_FOCUS_FILTER,A_HIDDEN,A_HELP,
     A_COLUMNS,A_COLUMN_LEFT,A_COLUMN_RIGHT,A_SHOW_MENU,A_SHOW_TOOLBAR,
     A_SHOW_ADDRESS,A_SHOW_CRUMBS,A_SHOW_FILTER,A_SHOW_SIDEBAR,A_SHOW_STATUS,
+    A_OPEN_WITH,A_COPY_PATH,A_COPY_LOCATION,A_TERMINAL_FOLDER,A_TERMINAL_HERE,
     A_COLUMN_1=100
 };
 enum { M_FILE,M_EDIT,M_VIEW,M_GO,M_HELP,M_TOP,M_HEADER,M_ROW,M_BACKGROUND,M_COUNT };
+
+typedef enum { FILE_NONE,FILE_OPEN,FILE_CHOOSE,FILE_TERMINAL } file_operation_t;
 
 typedef struct {
     os64_ui_t ui;
@@ -34,6 +41,11 @@ typedef struct {
     uint64_t context_domain, context_id, pending_domain, pending_id;
     uint32_t context_column;
     bool initialized, menu_visible;
+    os64_ui_file_dialog_t chooser;
+    file_operation_t file_operation;
+    char file_path[OS64_DIRECTORY_PATH];
+    bool file_cleanup;
+    unsigned children;
 } roam_t;
 
 static roam_t app;
@@ -86,23 +98,113 @@ static void result_message(roam_t *a,os64_ui_status_code_t rc)
     if(rc!=OS64_UI_OK && rc!=OS64_UI_BUSY)
         os64_ui_browser_message(&a->browser_ui,"Could not open that location.");
 }
-static void activate(roam_t *a,uint64_t domain,os64_ui_data_id_t id)
+static void file_unlock(roam_t *a)
+{
+    a->file_operation=FILE_NONE; a->file_cleanup=false;
+    os64_ui_set_enabled(&a->ui,&a->root,true);
+    os64_ui_set_enabled(&a->ui,&a->bar.w,true);
+    os64_ui_set_focus(&a->ui,&a->browser_ui.details.w);
+    os64_ui_shortcut_reset(&a->shortcuts);
+}
+static void file_queue(roam_t *a,file_operation_t op,const char *path)
+{
+    if(a->file_operation!=FILE_NONE) return;
+    os64_strcopy(a->file_path,sizeof(a->file_path),path);
+    a->file_operation=op;
+    os64_ui_set_enabled(&a->ui,&a->root,false);
+    os64_ui_set_enabled(&a->ui,&a->bar.w,false);
+    os64_ui_shortcut_reset(&a->shortcuts);
+}
+static bool row_path(roam_t *a,uint64_t domain,uint64_t id,
+    char path[OS64_DIRECTORY_PATH],bool *folder)
 {
     const os64_directory_t *dir=os64_browser_directory(a->browser);
     const os64_directory_entry_t *entry=dir && domain==os64_directory_domain(dir)?
         os64_directory_entry(dir,id):NULL;
-    if(!entry) return;
-    if(!(entry->entry.flags&OS64_DE_DIR)) {
-        os64_ui_browser_message(&a->browser_ui,"Opening files is not configured.");
+    if(!entry) return false;
+    *folder=(entry->entry.flags&OS64_DE_DIR)!=0;
+    return os64_directory_join(os64_directory_location(dir),entry->entry.name,path)==OS64_UI_OK;
+}
+static void activate(roam_t *a,uint64_t domain,os64_ui_data_id_t id)
+{
+    char path[OS64_DIRECTORY_PATH]; bool folder;
+    if(!row_path(a,domain,id,path,&folder)) {
+        os64_ui_browser_message(&a->browser_ui,"That item is no longer available."); return;
+    }
+    if(folder) result_message(a,os64_browser_activate(a->browser,domain,id));
+    else file_queue(a,FILE_OPEN,path);
+}
+static void launched(roam_t *a,os64_launch_status_t rc)
+{
+    if(rc==OS64_LAUNCH_OK) ++a->children;
+    os64_ui_browser_message(&a->browser_ui,rc==OS64_LAUNCH_OK?
+        "Application started.":"Could not start the application. Try Open With.");
+}
+
+// Between dispatcher turns: retire menu windows before creating a chooser,
+// and release a completed chooser before launching its selected application.
+static void file_step(roam_t *a)
+{
+    if(a->file_operation==FILE_NONE || os64_ui_menu_active(a->menus)) return;
+    if(a->file_operation==FILE_TERMINAL) {
+        char *argv[]={"/bin/gterm","--directory",a->file_path,NULL};
+        int64_t pid=os64_spawn(argv[0],argv);
+        file_unlock(a);
+        launched(a,pid>0?OS64_LAUNCH_OK:OS64_LAUNCH_SPAWN_ERROR);
         return;
     }
-    result_message(a,os64_browser_activate(a->browser,domain,id));
+    if(a->file_operation==FILE_OPEN) {
+        char config[OS64_LAUNCH_PATH],application[OS64_LAUNCH_PATH];
+        int64_t got=os64_conf_get("roam.conf","associations",config,sizeof(config));
+        if(got==OS64_CONF_NO_FILE || got==OS64_CONF_NO_KEY)
+            os64_strcopy(config,sizeof(config),"file-associations.conf");
+        else if(got<0) {
+            file_unlock(a);
+            os64_ui_browser_message(&a->browser_ui,"Could not read roam.conf. Use Open With.");
+            return;
+        }
+        os64_launch_status_t rc=os64_launch_association(config,a->file_path,application);
+        if(rc==OS64_LAUNCH_OK) {
+            int64_t pid;
+            rc=os64_launch_file(application,a->file_path,&pid);
+            file_unlock(a); launched(a,rc); return;
+        }
+        if(rc!=OS64_LAUNCH_UNASSOCIATED) {
+            file_unlock(a);
+            os64_ui_browser_message(&a->browser_ui,"Could not read file associations. Use Open With.");
+            return;
+        }
+        a->file_operation=FILE_CHOOSE;
+    }
+    os64_ui_file_dialog_t *d=&a->chooser;
+    if(!d->window && !a->file_cleanup) {
+        if(!os64_ui_dispatcher_can_create(&a->dispatcher)) return;
+        os64_ui_file_options_t options={.mode=OS64_UI_FILE_OPEN,
+            .title="Open With - Choose Application",.directory="/bin",
+            .icons=a->icons?os64_icon_theme_provider(a->icons):NULL};
+        if(os64_ui_file_dialog_open(d,&a->dispatcher,a->window,&options)==OS64_UI_OK) return;
+        a->file_cleanup=true;
+        os64_ui_browser_message(&a->browser_ui,"Could not open the application chooser.");
+    }
+    if(!a->file_cleanup && d->result==OS64_UI_FILE_PENDING) return;
+    bool accepted=!a->file_cleanup && d->result==OS64_UI_FILE_ACCEPTED;
+    char application[OS64_DIRECTORY_PATH];
+    os64_strcopy(application,sizeof(application),d->path);
+    if(os64_ui_file_dialog_close(d)!=OS64_UI_OK) {
+        os64_ui_browser_message(&a->browser_ui,"Chooser cleanup refused; close it again to retry.");
+        return;
+    }
+    file_unlock(a);
+    if(accepted) {
+        int64_t pid;
+        launched(a,os64_launch_file(application,a->file_path,&pid));
+    }
 }
 static void changed(os64_ui_dataview_t *view,
     const os64_ui_dataview_change_t *change,void *user)
 {
     roam_t *a=user; (void)view;
-    if(change->activated) {
+    if(change->activated && a->file_operation==FILE_NONE) {
         a->pending_domain=change->domain;
         a->pending_id=change->activated;
     }
@@ -114,7 +216,7 @@ static void view_error(os64_ui_dataview_t *view,
 static bool context(os64_ui_widget_t *w,const os64_gui_event_t *event,void *user)
 {
     roam_t *a=user;
-    if(!a->menus) return false;
+    if(!a->menus || a->file_operation!=FILE_NONE) return false;
     bool keyboard=event->type==OS64_GUI_EVENT_KEY_DOWN;
     os64_gui_rect_t anchor=keyboard?w->bounds:
         (os64_gui_rect_t){event->mouse.x,event->mouse.y,0,0};
@@ -154,7 +256,14 @@ static void query(void *user,const os64_ui_action_context_t *ctx,uint32_t id,
 {
     roam_t *a=user; (void)ctx;
     state->enabled=true; state->checked=false;
-    if(id==A_OPEN) state->enabled=target_valid(a);
+    if(id==A_OPEN || id==A_COPY_PATH) state->enabled=target_valid(a);
+    if(id==A_OPEN_WITH || id==A_TERMINAL_FOLDER) {
+        char path[OS64_DIRECTORY_PATH]; bool folder=false;
+        state->enabled=row_path(a,a->context_domain,a->context_id,path,&folder) &&
+            (id==A_OPEN_WITH?!folder:folder);
+    }
+    if(id==A_TERMINAL_HERE || id==A_COPY_LOCATION)
+        state->enabled=os64_browser_directory(a->browser)!=NULL;
     if(id==A_BACK) state->enabled=os64_browser_can_back(a->browser);
     if(id==A_FORWARD) state->enabled=os64_browser_can_forward(a->browser);
     if(id==A_HIDDEN) state->checked=os64_browser_hidden(a->browser);
@@ -175,13 +284,40 @@ static void query(void *user,const os64_ui_action_context_t *ctx,uint32_t id,
         state->enabled=present && col.id!=1;
         state->checked=present && col.visible;
     }
+    if(a->file_operation!=FILE_NONE) state->enabled=false;
 }
 static os64_ui_action_result_t invoke(void *user,const os64_ui_action_context_t *ctx,uint32_t id)
 {
     roam_t *a=user; (void)ctx;
     os64_ui_status_code_t rc=OS64_UI_OK;
+    if(a->file_operation!=FILE_NONE)
+        return (os64_ui_action_result_t){OS64_UI_REFUSED,0};
     switch(id) {
     case A_OPEN: if(target_valid(a)) activate(a,a->context_domain,a->context_id); else rc=OS64_UI_STALE; break;
+    case A_OPEN_WITH: case A_COPY_PATH: case A_TERMINAL_FOLDER: {
+        char path[OS64_DIRECTORY_PATH]; bool folder;
+        if(!row_path(a,a->context_domain,a->context_id,path,&folder)) rc=OS64_UI_STALE;
+        else if(id==A_COPY_PATH) {
+            size_t n=os64_strlen(path);
+            os64_ui_browser_message(&a->browser_ui,
+                os64_clip_copy(path,n)==(int64_t)n?"Full path copied.":"Could not copy the path.");
+        } else if(id==A_OPEN_WITH && !folder) file_queue(a,FILE_CHOOSE,path);
+        else if(id==A_TERMINAL_FOLDER && folder) file_queue(a,FILE_TERMINAL,path);
+        else rc=OS64_UI_REFUSED;
+        break;
+    }
+    case A_COPY_LOCATION: case A_TERMINAL_HERE: {
+        const os64_directory_t *dir=os64_browser_directory(a->browser);
+        if(!dir) { rc=OS64_UI_STALE; break; }
+        const char *path=os64_directory_location(dir);
+        if(id==A_TERMINAL_HERE) file_queue(a,FILE_TERMINAL,path);
+        else {
+            size_t n=os64_strlen(path);
+            os64_ui_browser_message(&a->browser_ui,
+                os64_clip_copy(path,n)==(int64_t)n?"Full path copied.":"Could not copy the path.");
+        }
+        break;
+    }
     case A_QUIT: a->ui.quit=true; break;
     case A_SELECT_ALL: rc=os64_ui_dataview_command(&a->browser_ui.details,
         OS64_UI_SELECTION_ALL,0,false); break;
@@ -203,7 +339,7 @@ static os64_ui_action_result_t invoke(void *user,const os64_ui_action_context_t 
     case A_HIDDEN: rc=os64_browser_filter(a->browser,
         os64_browser_filter_text(a->browser),!os64_browser_hidden(a->browser)); break;
     case A_HELP: os64_ui_browser_message(&a->browser_ui,
-        "Enter opens folders. Use the address or filter to find a location."); break;
+        "Enter opens files and folders. Right-click for Open With and path actions."); break;
     case A_COLUMNS: rc=os64_ui_menu_open(a->menus,a->models[M_HEADER],a->action_view,
         a->bar.w.bounds,OS64_UI_MENU_CONTEXT); break;
     case A_COLUMN_LEFT: case A_COLUMN_RIGHT: {
@@ -243,7 +379,12 @@ static os64_ui_action_result_t invoke(void *user,const os64_ui_action_context_t 
 static bool create_actions(roam_t *a)
 {
     os64_ui_action_spec_t specs[]={
-        {A_OPEN,OS64_UI_ACTION_COMMAND,0,"Open","Open the selected folder",NULL,'o',{0,0}},
+        {A_OPEN,OS64_UI_ACTION_COMMAND,0,"Open","Open the selected file or folder",NULL,'o',{0,0}},
+        {A_OPEN_WITH,OS64_UI_ACTION_COMMAND,0,"Open With...","Choose an application for this file",NULL,'w',{0,0}},
+        {A_COPY_PATH,OS64_UI_ACTION_COMMAND,0,"Copy Full Path","Copy this item's absolute path",NULL,'c',{0,0}},
+        {A_COPY_LOCATION,OS64_UI_ACTION_COMMAND,0,"Copy Folder Path","Copy the current directory's absolute path",NULL,'p',{0,0}},
+        {A_TERMINAL_FOLDER,OS64_UI_ACTION_COMMAND,0,"Open Terminal Here","Open a terminal in this folder",NULL,'t',{0,0}},
+        {A_TERMINAL_HERE,OS64_UI_ACTION_COMMAND,0,"Open Terminal Here","Open a terminal in the current directory",NULL,'t',{0,0}},
         {A_QUIT,OS64_UI_ACTION_COMMAND,0,"Close Roam","Close this window",NULL,'q',{'q',OS64_GUI_MOD_CTRL}},
         {A_SELECT_ALL,OS64_UI_ACTION_COMMAND,0,"Select All","Select visible rows",NULL,'a',{'a',OS64_GUI_MOD_CTRL}},
         {A_CLEAR_SELECTION,OS64_UI_ACTION_COMMAND,0,"Clear Selection","Clear selection",NULL,'c',{0,0}},
@@ -284,26 +425,26 @@ static bool create_actions(roam_t *a)
 
 static bool create_menus(roam_t *a)
 {
-    os64_ui_menu_entry_t file[]={{.action=A_FOCUS_ADDRESS},{.action=A_REFRESH},
+    os64_ui_menu_entry_t file[]={{.action=A_FOCUS_ADDRESS},{.action=A_REFRESH},{.action=A_TERMINAL_HERE},
         {.kind=OS64_UI_MENU_SEPARATOR},{.action=A_QUIT}};
-    os64_ui_menu_entry_t edit[]={{.action=A_SELECT_ALL},{.action=A_CLEAR_SELECTION}};
+    os64_ui_menu_entry_t edit[]={{.action=A_SELECT_ALL},{.action=A_CLEAR_SELECTION},{.action=A_COPY_LOCATION}};
     os64_ui_menu_entry_t columns[]={{.action=A_COLUMN_1},{.action=A_COLUMN_1+1},
         {.action=A_COLUMN_1+2},{.action=A_COLUMN_1+3},
         {.kind=OS64_UI_MENU_SEPARATOR},{.action=A_COLUMN_LEFT},{.action=A_COLUMN_RIGHT}};
     os64_ui_menu_entry_t go[]={{.action=A_BACK},{.action=A_FORWARD},{.action=A_UP},
         {.action=A_ROOT},{.action=A_HOME},{.action=A_REFRESH}};
     os64_ui_menu_entry_t help[]={{.action=A_HELP}};
-    os64_ui_menu_entry_t row[]={{.action=A_OPEN},{.kind=OS64_UI_MENU_SEPARATOR},
+    os64_ui_menu_entry_t row[]={{.action=A_OPEN},{.action=A_OPEN_WITH},{.action=A_COPY_PATH},{.action=A_TERMINAL_FOLDER},{.kind=OS64_UI_MENU_SEPARATOR},
         {.action=A_FOCUS_ADDRESS},{.action=A_SHOW_MENU}};
-    os64_ui_menu_entry_t background[]={{.action=A_SHOW_MENU},{.action=A_REFRESH},
+    os64_ui_menu_entry_t background[]={{.action=A_SHOW_MENU},{.action=A_REFRESH},{.action=A_TERMINAL_HERE},{.action=A_COPY_LOCATION},
         {.action=A_FOCUS_ADDRESS},{.action=A_FOCUS_FILTER}};
-    if(os64_ui_menu_model_create(a->actions,file,4,&a->models[M_FILE]) ||
-       os64_ui_menu_model_create(a->actions,edit,2,&a->models[M_EDIT]) ||
+    if(os64_ui_menu_model_create(a->actions,file,5,&a->models[M_FILE]) ||
+       os64_ui_menu_model_create(a->actions,edit,3,&a->models[M_EDIT]) ||
        os64_ui_menu_model_create(a->actions,columns,7,&a->models[M_HEADER]) ||
        os64_ui_menu_model_create(a->actions,go,6,&a->models[M_GO]) ||
        os64_ui_menu_model_create(a->actions,help,1,&a->models[M_HELP]) ||
-       os64_ui_menu_model_create(a->actions,row,4,&a->models[M_ROW]) ||
-       os64_ui_menu_model_create(a->actions,background,4,&a->models[M_BACKGROUND])) {
+       os64_ui_menu_model_create(a->actions,row,7,&a->models[M_ROW]) ||
+       os64_ui_menu_model_create(a->actions,background,6,&a->models[M_BACKGROUND])) {
         os64_printf("roam: base menu creation refused\n"); return false;
     }
     os64_ui_menu_entry_t view[]={{.kind=OS64_UI_MENU_SUBMENU,.label="Columns",
@@ -328,6 +469,16 @@ static bool create_menus(roam_t *a)
 static void commands(void *user,const os64_gui_event_t *event)
 {
     roam_t *a=user;
+    if(a->file_operation!=FILE_NONE) {
+        if(event->type==OS64_GUI_EVENT_WINDOW_CLOSE && a->chooser.window>0)
+            (void)os64_gui_window_focus(a->chooser.window);
+        // Keep resize/font/lifecycle events flowing, but consume parent input.
+        if(event->type==OS64_GUI_EVENT_WINDOW_CLOSE ||
+           event->type==OS64_GUI_EVENT_KEY_DOWN || event->type==OS64_GUI_EVENT_KEY_UP ||
+           event->type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN || event->type==OS64_GUI_EVENT_MOUSE_BUTTON_UP ||
+           event->type==OS64_GUI_EVENT_MOUSE_WHEEL || event->type==OS64_GUI_EVENT_MOUSE_MOVE) return;
+        (void)os64_ui_dispatch(&a->ui,event); return;
+    }
     bool editing=a->ui.focus==&a->browser_ui.address.w ||
         a->ui.focus==&a->browser_ui.filter.w;
     if(!editing && a->ui.focus==&a->browser_ui.details.w &&
@@ -347,7 +498,7 @@ static void commands(void *user,const os64_gui_event_t *event)
 }
 static void prepare_turn(roam_t *a)
 {
-    if(a->ui.quit) return;
+    if(a->ui.quit || a->file_operation!=FILE_NONE) return;
     if(!os64_ui_menu_active(a->menus)) {
         if(a->pending_id) {
             uint64_t domain=a->pending_domain,id=a->pending_id;
@@ -433,6 +584,7 @@ static bool initialize(roam_t *a,const char *initial)
 }
 static bool cleanup(roam_t *a)
 {
+    if(os64_ui_file_dialog_close(&a->chooser)!=OS64_UI_OK) return false;
     if(a->menus && os64_ui_menu_session_dispose(a->menus)!=OS64_UI_OK)
         return false;
     a->menus=NULL;
@@ -470,8 +622,15 @@ int main(int argc,char **argv)
     }
     if(invalid_start)
         os64_ui_browser_message(&app.browser_ui,"Could not open that location.");
-    while(!app.ui.quit)
-        if(os64_ui_dispatcher_turn(&app.dispatcher,true)<0) break;
+    while(!app.ui.quit) {
+        // Without SIGCHLD or a timed GUI wait, poll while children are live so
+        // an idle Roam still collects them. Browsing alone keeps its event wait.
+        while(os64_reap(NULL)>0) if(app.children) --app.children;
+        int64_t events=os64_ui_dispatcher_turn(&app.dispatcher,app.children==0);
+        if(events<0) break;
+        file_step(&app);
+        if(app.children && events==0) (void)os64_sleep(16);
+    }
     while(!cleanup(&app)) {
         app.ui.quit=false;
         if(os64_ui_dispatcher_turn(&app.dispatcher,true)<0) return 1;
