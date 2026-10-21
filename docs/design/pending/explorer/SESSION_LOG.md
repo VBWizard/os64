@@ -962,3 +962,6 @@ two applications. The delivery bundle is `/tmp/file-dialog-polish-wire`.
 Review and P5 acceptance of E5A remain pending. Parent-owned stacking is the
 separate window-manager follow-up; Yonder and configurable associations-file
 storage remain separate work.
+
+Published E5A implementation `5efff386` as [draft PR #322](https://github.com/VBWizard/os64/pull/322)
+against `userland`; it has not been merged.

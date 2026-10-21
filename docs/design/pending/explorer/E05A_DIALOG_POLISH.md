@@ -1,6 +1,7 @@
 # E5A — Shared dialog layout and remembered size
 
 Implemented by Quinn on `codex/file-dialog-polish`, based on `5fb5f7a6`.
+Implementation `5efff386` is published as [draft PR #322](https://github.com/VBWizard/os64/pull/322).
 PR #319 merged as `ddaad166`; Chris reported a clean review and successful P5
 use, including resizing. No installed binary hash was captured.
 
