@@ -1,0 +1,7 @@
+# The runner's own expectations (tools/test_yonder_wpt_host.sh --selftest).
+[required]
+pass-fail.html	a test that passes
+[excluded]
+# A page excluded by name is not run, and says why.
+excluded.html	the selftest proves an excluded page is not run
+[passing]

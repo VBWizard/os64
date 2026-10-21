@@ -1092,6 +1092,87 @@ results page came back with its own title.
 written to the ext2 root only. Boot an ext2-root entry when TLS is what you
 are testing.
 
+## The web's own oracle — the WPT runner (2026-10-21)
+
+The Modern Web arc is judged by web-platform-tests, the suite the browsers
+run against themselves (MODERN_WEB.md § The oracle). A WPT page loads
+`/resources/testharness.js`, asserts one behaviour per test, and reports
+through `/resources/testharnessreport.js`, the file the suite leaves for the
+browser running it. Ours is `tools/wpt/testharnessreport.js`: it writes each
+test's verdict into an element of the page, and the runner reads that
+element out of the tree.
+
+```
+tools/wpt_fetch.sh                              # the suite at its pin, in .vendor/wpt
+tools/test_yonder_wpt_host.sh dom/nodes         # one directory against its expectations
+tools/test_yonder_wpt_host.sh dom/nodes --update   # rewrite [passing] from this run
+tools/test_yonder_wpt_host.sh dom/nodes --only Node-cloneNode
+tools/test_yonder_wpt_host.sh --selftest        # the runner held to its own pages
+```
+
+**The suite lives outside the tree.** `tools/wpt_fetch.sh` makes a shallow,
+partial, sparse checkout of one pinned commit, holding only the directories
+its list names; a slice adds its directories there, and moving the pin moves
+it for everyone, so a PR that moves it says so. The list includes the
+suite's own `tools`, from which the script builds WPT's `MANIFEST.json`
+over what is checked out: the suite's list of its tests, their types and
+the pages each script test makes, which is how its maintainers say tests
+are to be found. `tools/wpt/pages.py` turns it into the pages the runner
+loads; without Python there is no manifest, and the runner finds the same
+pages by file name (on `dom/nodes` the two agree page for page).
+
+**Two gates and a list** (MODERN_WEB.md § The oracle). What the tree keeps
+is `tools/wpt/expected/<dir>.txt`, headed by the WPT commit it was written
+at, in three sections. `[required]` names, one by one, the tests that
+exercise what the slice's interface is for: every one must pass or the run
+fails (exit 1) naming it, and that is what gates enabling the interface.
+`[passing]` is the baseline, every test that passes: one that goes missing
+fails the run and is named, and one that newly passes is listed to add.
+`[excluded]` names each page the slice knowingly does not run, with its
+reason after a tab (`needs iframe`), so what was never exercised is named,
+never counted. `--update` rewrites `[passing]` alone; the other two are
+written by hand, which is the point of them. A slice commits its
+directory's file BEFORE its code, so the diff of that file is the proof.
+**A page whose harness did not end OK fails whole**: none of its tests is a
+pass, whatever the harness said of each, so a page that errored halfway
+cannot count the tests it reached before it died.
+
+**The page runs in yonder's own window**, headless: the runner is
+`tools/test_yonder_wpt_host.c`, which includes the scripted-page host
+(`tools/test_yonder_scripts_host.c`) for its fakes and builds through the
+same `tools/yonder_host_build.sh`, so a WPT page takes the path a page from
+the network takes — navigation, head, streamed body, verdict, the loop. It
+is served at `http://wpt.test/<dir>/...`; scripts and sheets under that
+origin come from the checkout, anything else fails as an unreachable fetch,
+and pictures and fonts always fail. The window's clock moves a 10 ms tick
+at a time once the loop has nothing to do, up to 60 s (180 s for a page
+whose timeout is long), so the harness's own timeouts fire in the same order
+every run: two runs of a directory print the same lines.
+
+**What is run, and what is not.** The manifest's testharness pages that a
+window can load: `.html`/`.htm` pages, and `.any.js` and `.window.js`
+through the page WPT generates for their window variant (`// META:
+script=`, `title=`, `timeout=long` and `variant=` are honoured), each
+variant a page of its own. NOT run, and counted on the summary by reason:
+worker and shadow-realm variants (there are no workers) and XML documents
+(`.xhtml`, `.svg`: yonder parses HTML). Reftests are not testharness tests
+and are not in that list; comparing pictures is a later runner. A `.py`
+handler is never run; tests that need one fail. Each test's line carries
+the harness's message, which is the first thing to read when a count is
+lower than expected.
+
+**The runner tests itself.** `--selftest` runs `tools/wpt/selftest/`,
+pages whose every outcome is known — a pass and a failure, timers in clock
+order, a harness that times out and so fails whole, the long budget and the
+ordinary one, a script that never ends, variants, a `.any.js` with META
+lines, a `.window.js`, an excluded page, what is served and what is
+refused, and the files that must not be run at all — found by file name and
+again through a fixture manifest, and holds the output to
+`tools/wpt/selftest.out` line for line both ways; then holds the three
+sections, `--expect` and `--update` to what they promise. Run it after
+touching the runner, `pages.py`, the fakes it borrows, or the report
+script.
+
 ## Reading the serial log
 
 **WHERE these lines live depends on the boot entry.** Every one of them is a

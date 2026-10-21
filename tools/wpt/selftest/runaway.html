@@ -1,0 +1,8 @@
+<!doctype html>
+<title>The runner's own: a script that never ends</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>
+test(function() {}, "never reported: the script below is stopped, and the page with it");
+for (;;) {}
+</script>

@@ -6470,6 +6470,9 @@ static void covered_link_cases(void) {
     probe_drop();
 }
 
+/* A unit that includes this file for the window and its fakes alone (the
+ * WPT runner) defines YONDER_HOST_FAKES_ONLY and brings its own main. */
+#ifndef YONDER_HOST_FAKES_ONLY
 int main(void)
 {
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
@@ -6520,3 +6523,4 @@ int main(void)
     printf("Yonder scripted-page host: %u checks, %u failed\n",checks,failures);
     return failures?1:0;
 }
+#endif
