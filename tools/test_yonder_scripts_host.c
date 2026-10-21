@@ -604,6 +604,7 @@ static void probe_drop(void) {
     inputs_drop();
     yonder_scripts_free(g.page.scripts); g.page.scripts=NULL;
     forms_drop(); page_clear(&g.page); os64_ui_font_release(&g.ui);
+    way_history_clear(&g.way);
 }
 
 static os64_html_node_t *probe_id_in(const os64_html_document_t *doc, const char *id) {
@@ -2146,6 +2147,7 @@ static void stream_window_drop(void) {
     if(g.stream.active) stream_drop();
     if(pool_work.job!=NULL) { yonder_trip_release(pool_work.job,NULL); memset(&pool_work,0,sizeof(pool_work)); }
     inputs_drop(); forms_drop(); page_clear(&g.page); page_clear(&g.coming.page); os64_ui_font_release(&g.ui);
+    way_history_clear(&g.way);
     while(nsheet_jobs>0) os64_free(sheet_jobs[--nsheet_jobs].job);
 }
 /* The worker's part: a head for `url`, the body in `chunk`-sized posts, the verdict. */
@@ -2961,8 +2963,11 @@ static void loop_hash_unshown(void) {
     const char *pages[2]={at_dcl,mid_parse};
     for(int i=0;i<2;i++) {
         loop_page(pages[i]);
+        /* A fragment navigation: the page arrives at the address with its
+         * fragment, the entry it left behind it in the session. */
         check(loop_settle() && !g.stream.active && g.page.tree!=NULL &&
-              os64_streq(g.page.way.url,"http://fixture.test/final"),
+              os64_streq(g.page.way.url,"http://fixture.test/final#x") && g.way.depth>=1 &&
+              os64_streq(g.way.history[g.way.depth-1].url,"http://fixture.test/final"),
             i==0 ? "loop: location.hash at DOMContentLoaded arrives instead of fetching the page again"
                  : "loop: location.hash mid-parse arrives instead of fetching the page again");
         check(!status_says("fragment") && !status_says("anchor"),
@@ -3027,7 +3032,183 @@ static void loop_string_timer_throws(void) {
     loop_drop();
 }
 static void loop_modern(void);
+/* SLICE 1b IN THE WINDOW (MODERN_WEB.md § Slice 1b): the binding's view,
+ * computed-style and history providers are yonder's own, so what a page's
+ * script asks reaches the window's layout, scroll and session, and what
+ * the window does reaches the script as the events the brief rules. */
+
+/* The tasks a shown page is owed run, as the loop runs them: false when
+ * one never ends. */
+static bool view_turns(void) {
+    for(int i=0;i<64;i++) if(!script_turn()) return true;
+    return false;
+}
+/* getComputedStyle reads the page's laid-out boxes: on a page still
+ * arriving (its measured layout) and on the page shown. */
+static void loop_view_computed(void) {
+    loop_page("<style>body{margin:0}#b{width:200px;height:30px;color:rgb(10,20,30);padding:5%}"
+        "#h{display:none}</style><div id=b></div><div id=h><span id=s></span></div>"
+        "<p id=early>-</p><p id=late>-</p><script>"
+        "function read(){var cs=getComputedStyle(document.getElementById('b'));"
+        "return [cs.width,cs.color,cs.paddingLeft,getComputedStyle(document.getElementById('s')).display,"
+        "getComputedStyle(document.createElement('i')).color==='',cs.length>100].join('|')}"
+        "document.getElementById('early').textContent=read();"
+        "onload=function(){document.getElementById('b').style.width='321px';"
+        "document.getElementById('late').textContent=read()}</script>");
+    check(loop_settle() && g.page.tree!=NULL,"view: a page asking for computed styles arrives");
+    // 5% of the view's width: the body has no margin.
+    char padding[32], early[96], late[96];
+    garb_css_number(g.view.bounds.w*0.05,padding,sizeof(padding));
+    snprintf(early,sizeof(early),"200px|rgb(10, 20, 30)|%spx|inline|true|true",padding);
+    snprintf(late,sizeof(late),"321px|rgb(10, 20, 30)|%spx|inline|true|true",padding);
+    check(probe_text_is("early",early),
+        "view: getComputedStyle on a page still arriving reads its measured layout");
+    check(probe_text_is("late",late),
+        "view: on the page shown it reads the layout made current, a script's change included");
+    loop_drop();
+}
+/* A script's scroll moves g.view's, and any scroll of the view owes the
+ * page a scroll event, at the document and bubbling to window. */
+static void loop_view_scroll(void) {
+    loop_page("<style>body{margin:0;height:3000px}</style><p id=out>-</p><p id=size>-</p><script>"
+        "var n=0;addEventListener('scroll',function(e){n++;document.getElementById('out').textContent="
+        "'scrolled '+scrollY+' '+n+' '+(e.target===document)});"
+        "document.getElementById('size').textContent=[innerWidth,innerHeight,outerWidth>0].join(',');"
+        "onload=function(){scrollTo({top:300,behavior:'smooth'})}</script>");
+    check(loop_settle() && g.page.tree!=NULL && g.sy==300,"view: a script's scrollTo scrolls the page shown");
+    char size[48];
+    snprintf(size,sizeof(size),"%d,%d,true",(int)g.view.bounds.w,(int)g.view.bounds.h);
+    check(probe_text_is("size",size),"view: innerWidth and innerHeight are the view in CSS pixels");
+    check(view_turns() && probe_text_is("out","scrolled 300 1 true"),"view: the scroll is a task's event");
+    scroll_to(0,500);
+    check(view_turns() && probe_text_is("out","scrolled 500 2 true"),"view: a person's scroll is one too");
+    check(view_turns() && probe_text_is("out","scrolled 500 2 true"),"view: and only once");
+    loop_drop();
+    // A scroll asked for before the page is shown is made when it is.
+    loop_page("<style>body{margin:0;height:3000px}</style><script>scrollTo(0,400)</script><p>tail</p>");
+    check(loop_settle() && g.page.tree!=NULL && g.sy==400,"view: a scroll asked for while the page arrived is made");
+    loop_drop();
+}
+/* A resize owes resize, and a list whose answer moved its change. */
+static void loop_view_media(void) {
+    loop_page("<p id=out>-</p><script>var log=[];var m=matchMedia('(min-width: 700px)');"
+        "function o(){document.getElementById('out').textContent=log.join(',')}"
+        "m.onchange=function(e){log.push('change:'+e.matches+':'+e.media);o()};"
+        "addEventListener('resize',function(){log.push('resize:'+innerWidth+':'+m.matches);o()});"
+        "log.push('matches:'+m.matches);o()</script>");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","matches:true"),"media: judged at the view");
+    g.view.bounds.w=600;
+    check(view_turns() && probe_text_is("out","matches:true,resize:600:false,change:false:(min-width: 700px)"),
+        "media: a resize fires resize, then the list's change");
+    loop_drop();
+}
+/* The three routes and their events (MODERN_WEB_REVIEW.md, finding 11). */
+static void loop_view_history(void) {
+    loop_page("<p id=out>-</p><script>var log=[];"
+        "function o(){document.getElementById('out').textContent=log.join(',')}"
+        "addEventListener('popstate',function(e){log.push('pop:'+JSON.stringify(e.state)+':'+location.pathname+location.hash);o()});"
+        "addEventListener('hashchange',function(e){log.push('hash:'+e.oldURL.split('#')[1]+'>'+e.newURL.split('#')[1]);o()});"
+        "onload=function(){history.pushState({n:1},'','/one');history.pushState({n:2},'','#frag');"
+        "log.push('len:'+history.length);o()}</script>");
+    check(loop_settle() && g.page.tree!=NULL && os64_streq(g.page.way.url,"http://fixture.test/one#frag") &&
+          g.way.depth==2 && os64_streq(g.field_buf,"http://fixture.test/one#frag"),
+        "history: a state update moves the address, the field and the session");
+    check(view_turns() && probe_text_is("out","len:3"),
+        "history: pushState to another fragment fires neither popstate nor hashchange");
+    os64_work_id_t submitted=pool_ids;
+    click_back(NULL,NULL);
+    check(!g.stream.active && pool_ids==submitted && os64_streq(g.page.way.url,"http://fixture.test/one"),
+        "history: Back into a pushed entry fetches nothing");
+    check(view_turns() && probe_text_is("out","len:3,pop:{\"n\":1}:/one,hash:frag>undefined"),
+        "history: a traversal fires popstate with the entry's state, then hashchange");
+    click_forward(NULL,NULL);
+    check(view_turns() && probe_text_is("out","len:3,pop:{\"n\":1}:/one,hash:frag>undefined,"
+                                              "pop:{\"n\":2}:/one#frag,hash:undefined>frag"),
+        "history: Forward the same");
+    click_back(NULL,NULL); click_back(NULL,NULL);
+    check(!g.stream.active && pool_ids==submitted && os64_streq(g.page.way.url,"http://fixture.test/final") &&
+          g.way.ahead==2,
+        "history: back to the entry the page arrived at");
+    loop_drop();
+    // A person's fragment link: an entry, the scroll, then popstate and
+    // hashchange; a link to a name no element has changes the address
+    // and scrolls nowhere.
+    loop_page("<style>body{margin:0}</style><a id=l href=#target>go</a><a id=r href=#route>route</a>"
+        "<div style=height:2000px></div><h2 id=target>t</h2><p id=out>-</p><script>var log=[];"
+        "addEventListener('popstate',function(e){log.push('pop:'+e.state+':'+(scrollY>0))});"
+        "addEventListener('hashchange',function(e){log.push('hash:'+location.hash);"
+        "document.getElementById('out').textContent=log.join(',')})</script>");
+    check(loop_settle() && g.page.tree!=NULL,"history: a page of fragment links arrives");
+    input_click_at("l");
+    check(g.sy>0 && g.way.depth==1 && os64_streq(g.page.way.url,"http://fixture.test/final#target"),
+        "history: a fragment link scrolls and adds an entry");
+    check(view_turns() && probe_text_is("out","pop:null:true,hash:#target"),
+        "history: then popstate and hashchange, the scroll already made");
+    scroll_to(0,0);
+    input_click_at("r");
+    check(g.sy==0 && g.way.depth==2 && os64_streq(g.page.way.url,"http://fixture.test/final#route"),
+        "history: a name nothing claims is still a navigation, scrolling nowhere");
+    check(view_turns() && probe_text_is("out","pop:null:true,hash:#target,pop:null:false,hash:#route"),
+        "history: a router hears it");
+    scroll_to(0,300);
+    click_back(NULL,NULL);
+    check(!g.stream.active && g.sy==0 && os64_streq(g.page.way.url,"http://fixture.test/final#target"),
+        "history: Back puts the scroll back where it was when the entry was left");
+    click_forward(NULL,NULL);
+    check(!g.stream.active && g.sy==300 && os64_streq(g.page.way.url,"http://fixture.test/final#route"),
+        "history: and Forward to where it was on the entry Back left");
+    loop_drop();
+    // A page that keeps its own scroll is not scrolled by a traversal.
+    loop_page("<style>body{margin:0;height:3000px}</style><script>history.scrollRestoration='manual';"
+        "onload=function(){history.pushState(null,'','#a')}</script>");
+    check(loop_settle() && g.page.tree!=NULL && g.way.depth==1,"history: a manual page pushes an entry");
+    scroll_to(0,700);
+    click_back(NULL,NULL);
+    check(g.sy==700 && os64_streq(g.page.way.url,"http://fixture.test/final"),
+        "history: scrollRestoration manual leaves the scroll where it is");
+    loop_drop();
+    // Entries a page made before it was shown join the session when it is.
+    loop_page("<p id=out>-</p><script>history.pushState(1,'','?a');history.pushState(2,'','?b');history.back();"
+        "addEventListener('popstate',function(e){document.getElementById('out').textContent="
+        "e.state+':'+location.search+':'+history.length})</script><p>tail</p>");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","1:?a:3"),
+        "history: a page arriving traverses its own entries");
+    check(g.way.depth==1 && os64_streq(g.way.history[0].url,"http://fixture.test/final") && g.way.ahead==1 &&
+          os64_streq(g.page.way.url,"http://fixture.test/final?a") &&
+          os64_streq(g.way.forward[0].url,"http://fixture.test/final?b") &&
+          os64_streq(g.way.forward[0].state,"2"),
+        "history: and they join the session when it is shown, the one ahead with its state");
+    loop_drop();
+}
+/* With the switch off the names are absent, and the window's own history
+ * (a fragment link's entry) is the window's whatever the switch says. */
+static void loop_view_off(void) {
+    loop_modern_off=true;
+    loop_page("<a id=l href=#t>t</a><h2 id=t>t</h2><p id=out>-</p><script>var heard=0;"
+        "addEventListener('popstate',function(){heard++});addEventListener('scroll',function(){heard++});"
+        "document.getElementById('out').textContent=[typeof matchMedia,typeof getComputedStyle,"
+        "typeof history.pushState,typeof scrollTo,'scrollingElement' in document,typeof innerWidth].join()+':'+heard"
+        "</script>");
+    loop_modern_off=false;
+    check(loop_settle() && g.page.tree!=NULL &&
+          probe_text_is("out","undefined,undefined,undefined,undefined,false,undefined:0"),
+        "modern off: the view's, the computed style's and the history's names are absent");
+    input_click_at("l");
+    check(view_turns() && g.way.depth==1 && os64_streq(g.page.way.url,"http://fixture.test/final#t"),
+        "modern off: a fragment link is still an entry of the window's");
+    check(view_turns() && probe_text_is("out","undefined,undefined,undefined,undefined,false,undefined:0"),
+        "modern off: nothing is dispatched");
+    loop_drop();
+}
+static void loop_view_cases(void) {
+    loop_view_computed();
+    loop_view_scroll();
+    loop_view_media();
+    loop_view_history();
+    loop_view_off();
+}
 static void loop_cases(void) {
+    loop_view_cases();
     loop_throw_after_queue();
     loop_string_timer_throws();
     loop_parse_first();

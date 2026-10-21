@@ -227,6 +227,11 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     options.host_opaque = s;
     s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
     os64_dom_set_geometry(s->dom, s->options.geometry, s->options.opaque);
+    if (s->options.view.read != NULL)
+        os64_dom_set_view(s->dom, &s->options.view);
+    os64_dom_set_computed(s->dom, s->options.computed, s->options.opaque);
+    if (s->options.history.update != NULL)
+        os64_dom_set_history(s->dom, &s->options.history);
     os64_dom_set_user_agent(s->dom, s->user_agent, s->user_agent_opaque);
     os64_dom_set_cookies(s->dom, &s->cookies);
     if (s->options.diag != NULL)
@@ -766,6 +771,52 @@ const char *yonder_scripts_url(const yonder_scripts_t *s)
 bool yonder_scripts_encrypted(const yonder_scripts_t *s)
 {
     return s != NULL && s->options.encrypted;
+}
+
+void yonder_scripts_set_url(yonder_scripts_t *s, const char *url)
+{
+    if (s != NULL && url != NULL)
+        os64_strcopy(s->url, sizeof(s->url), url);
+}
+
+bool yonder_scripts_history_moved(yonder_scripts_t *s, const char *url, const char *state, size_t length)
+{
+    if (s == NULL || url == NULL)
+        return false;
+    os64_strcopy(s->url, sizeof(s->url), url);
+    return s->dom == NULL || s->dead || os64_dom_history_moved(s->dom, url, state, length);
+}
+
+bool yonder_scripts_history_event(yonder_scripts_t *s, bool hashchange, const char *old_url,
+                                  os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s == NULL || s->dead || s->dom == NULL ||
+        !os64_dom_listens(s->dom, hashchange ? "hashchange" : "popstate"))
+        return false;
+    s->written = 0;
+    s->task_address = NULL;
+    os64_dom_history_event(s->dom, hashchange, old_url, out);
+    judged(s, out);
+    return true;
+}
+
+bool yonder_scripts_view_step(yonder_scripts_t *s, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s == NULL || s->dead || s->dom == NULL)
+        return false;
+    s->written = 0;
+    s->task_address = NULL;
+    if (!os64_dom_view_step(s->dom, out))
+        return false;
+    judged(s, out);
+    return true;
+}
+
+bool yonder_scripts_scroll_manual(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead && os64_dom_history_manual(s->dom);
 }
 
 void yonder_scripts_set_user_agent(yonder_scripts_t *s, const char *(*provider)(void *), void *opaque)

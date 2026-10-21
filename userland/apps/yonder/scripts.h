@@ -40,6 +40,14 @@ typedef struct {
     // built, at the view's size. NULL: a script's measurement throws.
     os64_dom_geometry_provider_t geometry;
     void *opaque;
+    // The window's view, the computed style's provider (given `opaque`)
+    // and the session's history, for the Modern Web arc's surface
+    // (MODERN_WEB.md § Slice 1b; dom.h): installed in the binding when it
+    // is made. The view's and the history's carry their own opaque. Zeroed,
+    // a page's view reads as zeros and its history is its own.
+    os64_dom_view_provider_t view;
+    os64_dom_computed_provider_t computed;
+    os64_dom_history_t history;
     // The page's record (diag.h), borrowed for the host's life: a global
     // the page reached for and did not find, and a module script, are
     // written there as they happen. NULL keeps no record.
@@ -147,9 +155,32 @@ void yonder_scripts_set_user_agent(yonder_scripts_t *scripts, const char *(*prov
 // document.cookie's provider (os64_dom_set_cookies), copied, for the
 // binding made now or later. NULL: the document is cookie-averse.
 void yonder_scripts_set_cookies(yonder_scripts_t *scripts, const os64_dom_cookies_t *cookies);
-// The address the page's scripts run at (the options' url), and whether
-// the page arrived encrypted (the options' encrypted).
+// The address the page's scripts run at (the options' url, until the
+// session moves the document), and whether the page arrived encrypted (the
+// options' encrypted).
 const char *yonder_scripts_url(const yonder_scripts_t *scripts);
 bool yonder_scripts_encrypted(const yonder_scripts_t *scripts);
+
+// THE SESSION'S HALF (MODERN_WEB.md § Slice 1b). The document's address
+// moved (a state update, a fragment navigation, a traversal): what a
+// script's name and a `src` resolve against from now on. NULL is a no-op.
+void yonder_scripts_set_url(yonder_scripts_t *scripts, const char *url);
+// The session moved the document to another of its entries without a
+// fetch: its address and its state (JSON, NULL for none), told to the
+// binding (os64_dom_history_moved) when there is one, and taken as the
+// address either way. False when the binding could not keep them.
+bool yonder_scripts_history_moved(yonder_scripts_t *scripts, const char *url, const char *state,
+                                  size_t length);
+// popstate (`hashchange` false) or hashchange from `old_url`, as one task
+// (os64_dom_history_event). False when nothing ran: no binding, a dead one,
+// or nothing that could hear it; the outcome is judged as a task's.
+bool yonder_scripts_history_event(yonder_scripts_t *scripts, bool hashchange, const char *old_url,
+                                  os64_js_outcome_t *outcome);
+// The view's events, one task a call (os64_dom_view_step). False when
+// nothing ran.
+bool yonder_scripts_view_step(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
+// Whether the page asked to keep its own scroll across its entries
+// (history.scrollRestoration = "manual").
+bool yonder_scripts_scroll_manual(const yonder_scripts_t *scripts);
 
 #endif
