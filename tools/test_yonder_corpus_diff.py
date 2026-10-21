@@ -2,12 +2,13 @@
 """tools/yonder_corpus_diff.py on two hand-made replay directories: a page
 that gained a line, one that lost one, one whose counts alone moved, one
 the second replay did not write, and one only it wrote; then a page whose
-replay was incomplete, never reached a verdict (with an incomplete line
-too, either order), or recovered, in each direction; a picture and a font
-the replay says it does not reproduce, compared on neither side; a page
-file cut short, whose counts do not reconcile, or a `*.txt` that is not a
-page file, each unjudged; and a page file or directories that cannot be
-read. Run with
+replay was incomplete (newly, a gate), never reached a verdict (with an
+incomplete line too, either order), or recovered, in each direction; the
+outcomes of fetches the replay says it does not reproduce, compared on
+neither side, and pictures and fonts decided without a fetch, compared; a
+page file cut short (a replay's without its `end`), whose counts do not
+reconcile, that says it is unjudged, or a `*.txt` that is not a page file,
+each unjudged; and a page file or directories that cannot be read. Run with
 `python3 -I`;
 tools/test_yonder_replay_host.sh runs it."""
 import contextlib
@@ -44,6 +45,16 @@ AFTER = {
     'counts-0003.txt': 'address: https://counts.test/\nverdict: 1 MISSING\nMISSING global fetch (9)\nbytes: 2\n',
     'new-0005.txt': 'address: https://new.test/\nverdict: clean\n',
 }
+
+
+def replay(address, state, body='verdict: clean\n', detail='', why=''):
+    """A record as the replay runner writes it: the page's state second,
+    the window's record from its verdict on, the replay's own lines, and
+    `end`."""
+    head = f'address: {address}\nREPLAY state: {state}{" " + why if why else ""}\n'
+    if state == 'unjudged':
+        return head + 'end\n'
+    return head + body + detail + 'REPLAY not reproduced: font-fetch image picture-fetch\nend\n'
 
 
 def write(root, pages):
@@ -100,27 +111,29 @@ class DiffCases(unittest.TestCase):
         (self.after / 'worse-0001.txt').write_text(BEFORE['worse-0001.txt'])
         (self.after / 'gone-0004.txt').write_text(BEFORE['gone-0004.txt'])
 
-    def test_newly_incomplete_is_neither(self):
+    def test_newly_incomplete_is_a_gate(self):
         # The replay met a script the corpus never kept: its record gained a
         # FAILED line and lost others, and neither counts.
         self.settle_the_rest()
-        (self.after / 'better-0002.txt').write_text(
-            'address: https://better.test/\nverdict: 1 FAILED\n'
-            'FAILED script https://better.test/new.js: TypeError: no (1)\n'
-            'REPLAY incomplete script https://better.test/M%49SSING.js\n')
+        (self.after / 'better-0002.txt').write_text(replay(
+            'https://better.test/', 'incomplete', 'verdict: 1 FAILED\nFAILED script https://better.test/new.js: TypeError: no (1)\n',
+            'REPLAY incomplete script https://better.test/M%49SSING.js\n', 'script https://better.test/M%49SSING.js'))
         rc, out = self.run_main(self.before, self.after)
-        self.assertEqual(rc, 0)
+        # A gate: the corpus must be recorded again before this page can
+        # be judged, and the answer says so.
+        self.assertEqual(rc, 1)
         self.assertIn('regressions: 0 pages\nprogress: 0 pages\n', out)
-        self.assertIn('newly incomplete: 1 pages\n'
+        self.assertIn('newly incomplete: 1 pages (the corpus must be re-recorded before this change can be judged on them)\n'
                       '  better-0002.txt  https://better.test/\n'
                       '    ? script https://better.test/MISSING.js\n', out)
         self.assertIn('after: 5 pages, 2 clean, 1 incomplete, 0 broken; 0 lines gained, 0 lines lost', out)
 
     def test_still_incomplete_is_to_record_again(self):
         self.settle_the_rest()
-        replay = 'address: https://better.test/\nverdict: clean\nREPLAY incomplete sheet https://better.test/s.css\n'
-        (self.before / 'better-0002.txt').write_text(replay)
-        (self.after / 'better-0002.txt').write_text(replay)
+        again = replay('https://better.test/', 'incomplete', detail='REPLAY incomplete sheet https://better.test/s.css\n',
+                       why='sheet https://better.test/s.css')
+        (self.before / 'better-0002.txt').write_text(again)
+        (self.after / 'better-0002.txt').write_text(again)
         rc, out = self.run_main(self.before, self.after)
         self.assertEqual(rc, 0)
         self.assertIn('to record again: 1 pages\n  better-0002.txt', out)
@@ -129,8 +142,9 @@ class DiffCases(unittest.TestCase):
         # The page never arrived: its record is short of every line the
         # judged one had, which is not progress.
         self.settle_the_rest()
-        (self.after / 'better-0002.txt').write_text(
-            'address: https://better.test/\nverdict: clean\nREPLAY unfinished it never arrived in 60 s\n')
+        broken = replay('https://better.test/', 'unfinished', detail='REPLAY unfinished it never arrived in 60 s\n',
+                        why='it never arrived in 60 s')
+        (self.after / 'better-0002.txt').write_text(broken)
         rc, out = self.run_main(self.before, self.after)
         self.assertEqual(rc, 1)
         self.assertIn('progress: 0 pages\n', out)
@@ -138,8 +152,7 @@ class DiffCases(unittest.TestCase):
                       '    ! unfinished it never arrived in 60 s\n', out)
         self.assertIn('after: 5 pages, 2 clean, 0 incomplete, 1 broken;', out)
         # Broken before as well: still broken, and no regression of its own.
-        (self.before / 'better-0002.txt').write_text(
-            'address: https://better.test/\nverdict: clean\nREPLAY unfinished it never arrived in 60 s\n')
+        (self.before / 'better-0002.txt').write_text(broken)
         rc, out = self.run_main(self.before, self.after)
         self.assertEqual(rc, 0)
         self.assertIn('still broken: 1 pages\n', out)
@@ -152,7 +165,8 @@ class DiffCases(unittest.TestCase):
         for lines in ('REPLAY incomplete script https://better.test/s.js\nREPLAY unfinished it never arrived\n',
                       'REPLAY unfinished it never arrived\nREPLAY incomplete script https://better.test/s.js\n'):
             with self.subTest(lines=lines):
-                (self.after / 'better-0002.txt').write_text('address: https://better.test/\nverdict: clean\n' + lines)
+                (self.after / 'better-0002.txt').write_text(replay('https://better.test/', 'unfinished', detail=lines,
+                                                                   why='it never arrived'))
                 rc, out = self.run_main(self.before, self.after)
                 self.assertEqual(rc, 1)
                 self.assertIn('broken: 1 pages\n  better-0002.txt  https://better.test/\n'
@@ -161,18 +175,51 @@ class DiffCases(unittest.TestCase):
                 self.assertNotIn('incomplete: 1 pages', out)
 
     def test_kinds_a_replay_does_not_reproduce_are_compared_on_neither_side(self):
-        # The kept page's picture failed; its replay never fetched it, and
-        # says so: neither progress nor a regression.
+        # The kept page's picture failed to fetch and a picture's format was
+        # not one yonder decodes; its replay never fetched them, and says so:
+        # neither progress nor a regression.
         self.settle_the_rest()
         (self.before / 'better-0002.txt').write_text(
-            'address: https://better.test/\nverdict: 1 MISSING, 1 FAILED\nMISSING font Arial (2)\n'
-            'FAILED picture: https://better.test/p.png: HTTP 404 (1)\n')
-        (self.after / 'better-0002.txt').write_text(
-            'address: https://better.test/\nverdict: clean\nREPLAY not reproduced: font image picture picture-scheme\n')
+            'address: https://better.test/\nverdict: 1 MISSING, 1 FAILED\nMISSING image webp (2)\n'
+            'FAILED picture-fetch: https://better.test/p.png: HTTP 404 (1)\n')
+        (self.after / 'better-0002.txt').write_text(replay('https://better.test/', 'verdict'))
         rc, out = self.run_main(self.before, self.after)
         self.assertEqual(rc, 0)
         self.assertIn('regressions: 0 pages\nprogress: 0 pages\n', out)
-        self.assertIn('; not compared, as the replay does not reproduce them: font image picture picture-scheme', out)
+        self.assertIn('; not compared, as the replay does not reproduce them: font-fetch image picture-fetch', out)
+
+    def test_a_picture_decided_without_a_fetch_is_compared(self):
+        # A refused address and a font no face names are what the page did,
+        # fetch or no fetch: losing them is progress, and the diff says so.
+        self.settle_the_rest()
+        (self.before / 'better-0002.txt').write_text(
+            'address: https://better.test/\nverdict: 2 MISSING, 1 FAILED\nMISSING picture-scheme data (1)\n'
+            'MISSING font Arial (2)\nFAILED picture: x.png: the address was refused (1)\n')
+        (self.after / 'better-0002.txt').write_text(replay('https://better.test/', 'verdict'))
+        rc, out = self.run_main(self.before, self.after)
+        self.assertEqual(rc, 0)
+        self.assertIn('progress: 1 pages\n', out)
+        self.assertIn('    - MISSING picture-scheme data\n', out)
+        self.assertIn('    - MISSING font Arial\n', out)
+        self.assertIn('    - FAILED picture: x.png: the address was refused\n', out)
+
+    def test_a_replay_cut_short_is_unjudged_never_clean(self):
+        # A write cut by a quota: its address and its state survive, its
+        # `end` does not. Read as it is it would be a clean page.
+        self.settle_the_rest()
+        (self.after / 'better-0002.txt').write_text('address: https://better.test/\nREPLAY state: verdict\nverdict: clean\n')
+        rc, out = self.run_main(self.before, self.after)
+        self.assertEqual(rc, 2)
+        self.assertIn('progress: 0 pages\n', out)
+        self.assertIn("without its `end`", out)
+
+    def test_a_replay_that_says_it_is_unjudged_is_unjudged(self):
+        self.settle_the_rest()
+        (self.after / 'better-0002.txt').write_text(
+            replay('https://better.test/', 'unjudged', why='1 of the harness\'s own checks failed while it ran'))
+        rc, out = self.run_main(self.before, self.after)
+        self.assertEqual(rc, 2)
+        self.assertIn("unjudged: 1 of the harness's own checks failed while it ran", out)
 
     def test_a_txt_that_is_not_a_page_file_is_unjudged(self):
         # Passed over, it would be a page left out of the comparison.
@@ -185,10 +232,11 @@ class DiffCases(unittest.TestCase):
 
     def test_recovered_is_not_compared(self):
         self.settle_the_rest()
-        (self.before / 'better-0002.txt').write_text(
-            'address: https://better.test/\nverdict: clean\nREPLAY incomplete script https://better.test/a.js\n')
+        (self.before / 'better-0002.txt').write_text(replay(
+            'https://better.test/', 'incomplete', detail='REPLAY incomplete script https://better.test/a.js\n',
+            why='script https://better.test/a.js'))
         (self.after / 'better-0002.txt').write_text(
-            'address: https://better.test/\nverdict: 1 MISSING\nMISSING global fetch (1)\n')
+            replay('https://better.test/', 'verdict', 'verdict: 1 MISSING\nMISSING global fetch (1)\n'))
         rc, out = self.run_main(self.before, self.after)
         self.assertEqual(rc, 0)
         self.assertIn('regressions: 0 pages\n', out)

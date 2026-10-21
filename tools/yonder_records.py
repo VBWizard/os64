@@ -9,12 +9,13 @@ the verdict, then record lines
     MISSING <kind> <name> (<count>)
     FAILED <what>: <message> (<count>)
 
-plain `key: value` lines, and, in a record a replay wrote
-(tools/test_yonder_replay_host.c), `REPLAY` lines saying what the replay
-reached. read() answers a Record or an Unjudged naming why the file cannot
-be judged; it never answers a record of what it could read of a file that
-is not whole, since every line such a file lost would read as a page that
-stopped asking for it.
+and plain `key: value` lines. A record a replay wrote
+(tools/test_yonder_replay_host.c) puts its page's STATE second, `REPLAY
+state: <state> <why>`, carries REPLAY detail lines after the window's
+record, and ends with `end`. read() answers a Record, with its State, or
+an Unjudged naming why the file cannot be judged; it never answers a
+record of what it could read of a file that is not whole, since every
+line such a file lost would read as a page that stopped asking for it.
 
 Imported by path from beside the tool (`python3 -I` puts no directory on
 the path); it imports nothing but the standard library.
@@ -36,13 +37,14 @@ def unescape(raw):
     byte below 0x20 or 0x7F `\\xHH`, a token in data with its second
     letter percent-encoded, and a `%` of the data's own `%25`, which this
     reads back in one pass from the left, so the data's bytes come back
-    exactly."""
+    exactly. Bytes that are not UTF-8 raise UnicodeDecodeError, never a
+    guess."""
     def one(m):
         e = m.group(1)
         return b'\\' if e == b'\\' else bytes([int(e[1:], 16)])
     raw = ESCAPE.sub(one, raw)
     raw = PERCENT.sub(lambda m: PERCENT_BACK[m.group(0)], raw)
-    return raw.decode('utf-8', 'replace')
+    return raw.decode('utf-8')
 
 
 def site_of(address):
@@ -61,24 +63,34 @@ def site_of(address):
 
 
 class State(enum.IntEnum):
-    """What a record says its page reached, in order of precedence: a
-    record carrying the lines of two states is in the later one, so a
-    replay that reached no verdict is UNFINISHED whatever else it says.
-    A record yonder wrote, with no `REPLAY` line, reached its VERDICT."""
+    """What a page came to, in order of precedence (a page that is two is
+    the later). A replay's record SAYS it, on its second line, `REPLAY
+    state: <state> <why>`, decided by the runner from its own run; a
+    record yonder wrote is a VERDICT unless it says it cannot be judged."""
     VERDICT = 0
-    INCOMPLETE = 1      # `REPLAY incomplete <kind> <url>`: asked for what the corpus never kept
-    UNFINISHED = 2      # `REPLAY unfinished <why>`: the replay reached no verdict
+    INCOMPLETE = 1      # the page and its kept fetches did not meet one for one
+    UNFINISHED = 2      # the replay reached no verdict
+    UNJUDGED = 3        # the record says why it cannot be judged
+
+
+# The kinds of line a replay does not reproduce, being the outcome of a
+# fetch it never performs (tools/test_yonder_replay_host.c's
+# RP_NOT_REPRODUCED): a MISSING line's kind or a FAILED line's what. A
+# `REPLAY not reproduced:` line naming anything else is refused, since it
+# would keep lines of that kind out of every comparison.
+NOT_REPRODUCED = {'font-fetch', 'image', 'picture-fetch'}
+
+LINES_LOST = b'REPLAY unjudged: lines lost'
+UNWRITTEN = b'verdict: unwritten'
+STATE_LINE = re.compile(rb'REPLAY state: (verdict|incomplete|unfinished|unjudged)(?: (.*))?')
 
 
 class Record:
     """One page file read whole: its address, its MISSING lines as {(kind,
     name): count}, its FAILED lines as {(what, message): count}, its
-    `REPLAY` lines by state (`incomplete`, `unfinished`), its `state`, and
-    the kinds its `REPLAY not reproduced:` line names (`not_reproduced`):
-    a replay's record says which kinds of line are not the page's, since
-    the replay never fetches what they are about.
-    `lost`: the record says some lines had no memory to be named, which a
-    count cannot show."""
+    `state` and, for UNJUDGED, its `reason`; and on a replay's record its
+    REPLAY detail lines (`incomplete`, `unfinished`) and the kinds its
+    `REPLAY not reproduced:` line names (`not_reproduced`)."""
 
     def __init__(self, path, address):
         self.path = path
@@ -88,8 +100,8 @@ class Record:
         self.failed = {}
         self.incomplete = []
         self.unfinished = []
-        self.lost = False
         self.state = State.VERDICT
+        self.reason = ''
         self.not_reproduced = set()
 
 
@@ -111,19 +123,75 @@ class Unreadable(Exception):
     nothing."""
 
 
-# The `REPLAY` lines a record may carry, by the state each says.
-REPLAY_STATES = ((b'REPLAY incomplete ', State.INCOMPLETE), (b'REPLAY unfinished ', State.UNFINISHED))
+class Malformed(Exception):
+    """Why the lines being read are not a whole record."""
+
+
+def read_body(lines, rec, replay):
+    """The record lines from the verdict on into `rec`: the verdict, its
+    lines exactly that many of each, each counted, no other verdict, and,
+    on a replay's record (`replay`), its REPLAY detail lines; a REPLAY line
+    of no kind this reader knows is refused. A yonder record's
+    YONDER_DIAG_LINES_LOST, or its never-written placeholder, makes it
+    UNJUDGED."""
+    where = 'third' if replay else 'second'
+    if not lines:
+        raise Malformed(f'not a whole page file: its {where} line is not a verdict')
+    if lines[0] == UNWRITTEN and not replay:
+        rec.state, rec.reason = State.UNJUDGED, 'its name was claimed and its record never written'
+        return
+    verdict = VERDICT.fullmatch(lines[0])
+    if verdict is None:
+        raise Malformed(f'not a whole page file: its {where} line is not a verdict')
+    want_missing = int(verdict.group(1) or verdict.group(3) or 0)
+    want_failed = int(verdict.group(2) or verdict.group(4) or 0)
+    seen_missing = seen_failed = 0
+    for line in lines[1:]:
+        m = COUNT.search(line)
+        if line.startswith(b'MISSING ') and m:
+            seen_missing += 1
+            kind, _, name = line[len(b'MISSING '):m.start()].partition(b' ')
+            key = (unescape(kind), unescape(name))
+            rec.missing[key] = rec.missing.get(key, 0) + int(m.group(1))
+        elif line.startswith(b'FAILED ') and m:
+            seen_failed += 1
+            what, _, message = line[len(b'FAILED '):m.start()].partition(b': ')
+            key = (unescape(what), unescape(message))
+            rec.failed[key] = rec.failed.get(key, 0) + int(m.group(1))
+        elif line.startswith(b'MISSING ') or line.startswith(b'FAILED '):
+            raise Malformed('not a whole page file: a record line with no count')
+        elif line.startswith(b'verdict: '):
+            raise Malformed('not a whole page file: a second verdict line')
+        elif line == LINES_LOST and not replay:
+            rec.state, rec.reason = State.UNJUDGED, 'its record lost lines it could not keep'
+        elif replay and line.startswith(b'REPLAY incomplete '):
+            rec.incomplete.append(unescape(line[len(b'REPLAY incomplete '):]))
+        elif replay and line.startswith(b'REPLAY unfinished '):
+            rec.unfinished.append(unescape(line[len(b'REPLAY unfinished '):]))
+        elif replay and line.startswith(b'REPLAY not reproduced: '):
+            kinds = set(unescape(line[len(b'REPLAY not reproduced: '):]).split())
+            if not kinds <= NOT_REPRODUCED:
+                raise Malformed(f'a REPLAY not reproduced line naming what a replay does reproduce: '
+                                f'{" ".join(sorted(kinds - NOT_REPRODUCED))}')
+            rec.not_reproduced |= kinds
+        elif line.startswith(b'REPLAY '):
+            raise Malformed('a REPLAY line of no kind this reader knows')
+    if (seen_missing, seen_failed) != (want_missing, want_failed):
+        raise Malformed(f'not a whole page file: its verdict counts {want_missing} MISSING and '
+                        f'{want_failed} FAILED lines, and it holds {seen_missing} and {seen_failed}')
 
 
 def read(path):
     """The page file at `path`, judged whole: a Record, or an Unjudged
-    naming why not. Its first line must be `address: `, its second
-    `verdict: clean` or the counts of the tokens with records, its record
-    lines exactly that many of each, each with its count, no other line a
-    verdict, and every `REPLAY` line one of the states this reader knows or
-    the kinds a replay does not reproduce.
-    A file that cannot be read, a byte order mark, and a line ending in a
-    carriage return are each named."""
+    naming why not. Every file is UTF-8 with no NUL, no byte order mark and
+    no carriage return, and its first line is `address: `. A REPLAY'S
+    RECORD says its state on its second line (STATE_LINE) and ends with
+    `end`; an UNJUDGED one is its address, its state and `end`, and any
+    other carries the window's record from its verdict on, whose REPLAY
+    detail lines must agree with the state (a VERDICT has none, an
+    INCOMPLETE page an incomplete line and no unfinished one, an UNFINISHED
+    page an unfinished line). A RECORD YONDER WROTE has its verdict
+    second, and no REPLAY line but the one saying it lost lines."""
     path = pathlib.Path(path)
     try:
         if not path.is_file():
@@ -133,6 +201,12 @@ def read(path):
         return Unjudged(path, f'cannot be read: {e.strerror or e}')
     if data.startswith(b'\xef\xbb\xbf'):
         return Unjudged(path, 'not a page file: it begins with a byte order mark')
+    if b'\0' in data:
+        return Unjudged(path, 'not a whole page file: it holds a NUL')
+    try:
+        data.decode('utf-8')
+    except UnicodeDecodeError:
+        return Unjudged(path, 'not a page file: it is not UTF-8')
     lines = data.split(b'\n')
     if lines and lines[-1] == b'':
         lines.pop()
@@ -140,47 +214,30 @@ def read(path):
         return Unjudged(path, 'not a page file: its first line is not `address: `')
     if any(line.endswith(b'\r') for line in lines):
         return Unjudged(path, 'not a whole page file: a line ends in a carriage return')
-    verdict = VERDICT.fullmatch(lines[1]) if len(lines) > 1 else None
-    if verdict is None:
-        return Unjudged(path, 'not a whole page file: its second line is not a verdict')
-    want_missing = int(verdict.group(1) or verdict.group(3) or 0)
-    want_failed = int(verdict.group(2) or verdict.group(4) or 0)
-    rec = Record(path, unescape(lines[0][len(b'address: '):]))
-    seen_missing = seen_failed = 0
-    for line in lines[2:]:
-        m = COUNT.search(line)
-        if line.startswith(b'MISSING ') and m:
-            seen_missing += 1
-            body = line[len(b'MISSING '):m.start()]
-            kind, _, name = body.partition(b' ')
-            key = (unescape(kind), unescape(name))
-            rec.missing[key] = rec.missing.get(key, 0) + int(m.group(1))
-        elif line.startswith(b'FAILED ') and m:
-            seen_failed += 1
-            body = line[len(b'FAILED '):m.start()]
-            what, _, message = body.partition(b': ')
-            key = (unescape(what), unescape(message))
-            rec.failed[key] = rec.failed.get(key, 0) + int(m.group(1))
-        elif line.startswith(b'MISSING ') or line.startswith(b'FAILED '):
-            return Unjudged(path, 'not a whole page file: a record line with no count')
-        elif line.startswith(b'verdict: '):
-            return Unjudged(path, 'not a whole page file: a second verdict line')
-        elif line.startswith(b'REPLAY not reproduced: '):
-            rec.not_reproduced |= set(unescape(line[len(b'REPLAY not reproduced: '):]).split())
-        elif line.startswith(b'REPLAY '):
-            for head, state in REPLAY_STATES:
-                if line.startswith(head):
-                    said = unescape(line[len(head):])
-                    (rec.incomplete if state == State.INCOMPLETE else rec.unfinished).append(said)
-                    rec.state = max(rec.state, state)
-                    break
-            else:
-                return Unjudged(path, 'a REPLAY line of a state this reader does not know')
-        elif line.startswith(b'some lines not kept: '):
-            rec.lost = True
-    if (seen_missing, seen_failed) != (want_missing, want_failed):
-        return Unjudged(path, f'not a whole page file: its verdict counts {want_missing} MISSING and '
-                              f'{want_failed} FAILED lines, and it holds {seen_missing} and {seen_failed}')
+    try:
+        rec = Record(path, unescape(lines[0][len(b'address: '):]))
+        state = STATE_LINE.fullmatch(lines[1]) if len(lines) > 1 else None
+        if state is None:
+            read_body(lines[1:], rec, replay=False)
+            return rec
+        if lines[-1] != b'end' or len(lines) < 3:
+            raise Malformed("a replay's record without its `end`: it was cut short")
+        rec.state = State[state.group(1).decode().upper()]
+        rec.reason = unescape(state.group(2) or b'')
+        if b'end' in lines[2:-1]:
+            raise Malformed("a replay's record with lines past its `end`")
+        if rec.state == State.UNJUDGED:
+            return rec
+        read_body(lines[2:-1], rec, replay=True)
+        agrees = {State.VERDICT: not rec.incomplete and not rec.unfinished,
+                  State.INCOMPLETE: bool(rec.incomplete) and not rec.unfinished,
+                  State.UNFINISHED: bool(rec.unfinished)}[rec.state]
+        if not agrees:
+            raise Malformed("a replay's record whose REPLAY lines do not agree with its state")
+    except Malformed as e:
+        return Unjudged(path, str(e))
+    except UnicodeDecodeError:
+        return Unjudged(path, 'not a page file: a field escapes to bytes that are not UTF-8')
     return rec
 
 

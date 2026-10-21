@@ -25,11 +25,14 @@ after a `--`.)
 A directory is read for its `*.txt` files, not below it: a kept page's
 `.html` and `.d/` beside its record are not records. Every record is read
 through tools/yonder_records.py, the one reader of page files, which
-judges it whole; a path that is not there, a directory that cannot be
-listed, and any `*.txt` that reader cannot judge (one that cannot be read,
-is not a page file, or is not whole) are each named, and the answer is 2,
-since a census of the files that could be read would read as a census of
-all of them. Run it with `python3 -I`; it imports nothing but the standard
+judges it whole and says its State. THE TALLY COUNTS VERDICTS ONLY: a
+record whose page was incomplete, unfinished or unjudged (it lost lines,
+or was never written) is not counted, and stderr says how many of each
+and which. A path that is not there, a directory that cannot be listed,
+and any `*.txt` the reader cannot judge (one that cannot be read, is not
+a page file, or is not whole) are each named, and the answer is 2, since
+a census of the files that could be read would read as a census of all
+of them. Run it with `python3 -I`; it imports nothing but the standard
 library and that reader, loaded from beside this file.
 """
 import argparse
@@ -61,20 +64,32 @@ class NotJudged(Unreadable):
 
 
 def read_records(paths):
-    """Every record under the paths given: a file is read as one, a
-    directory for its `*.txt` files. Unreadable when a path is not there or
-    a directory cannot be listed; NotJudged, naming every one, when any
-    file could not be judged."""
-    records, unjudged = [], []
+    """Every record under the paths given whose page reached a VERDICT: a
+    file is read as one, a directory for its `*.txt` files, and every other
+    State is said on stderr, by state and by file, and not counted.
+    Unreadable when a path is not there or a directory cannot be listed;
+    NotJudged, naming every one, when any file could not be judged."""
+    records, unjudged, other = [], [], collections.defaultdict(list)
     for p in map(pathlib.Path, paths):
         if not p.exists():
             raise Unreadable(f'{p}: no such file or directory')
         files = records_module.page_files(p) if p.is_dir() else [p]
         for f in files:
             rec = records_module.read(f)
-            (unjudged if isinstance(rec, records_module.Unjudged) else records).append(rec)
+            if isinstance(rec, records_module.Unjudged):
+                unjudged.append(rec)
+            elif rec.state != records_module.State.VERDICT:
+                other[rec.state].append(rec)
+            else:
+                records.append(rec)
     if unjudged:
         raise NotJudged(unjudged)
+    if other:
+        print('yonder_tally: not counted: ' + ', '.join(f'{len(other[s])} {s.name.lower()}' for s in sorted(other)),
+              file=sys.stderr)
+        for state in sorted(other):
+            for rec in other[state]:
+                print(f'  {rec.path}  {state.name.lower()}{": " + rec.reason if rec.reason else ""}', file=sys.stderr)
     return records
 
 
@@ -152,9 +167,10 @@ def failure_key(what, message):
     """What a FAILED line is ranked by: its kind (the first word of what
     failed) and its message. A picture's and a font's message begins with
     the file's own address, which would make every one unique, so for
-    those the reason after the last `: ` is the message."""
+    those (and their fetches') the reason after the last `: ` is the
+    message."""
     kind = what.split(' ', 1)[0]
-    if kind in ('picture', 'font') and ': ' in message:
+    if kind in ('picture', 'font', 'picture-fetch', 'font-fetch') and ': ' in message:
         message = message.rsplit(': ', 1)[1]
     return kind, message
 

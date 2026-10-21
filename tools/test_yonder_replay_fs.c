@@ -1,22 +1,17 @@
-/* THE REPLAY RUNNER'S DOOR TO THE HOST'S FILES (tools/test_yonder_replay_host.c
- * includes this file): every file and directory the runner reads or writes
- * goes through these, and each answers one of three, which its caller must
- * meet: the thing was done; it is ABSENT, which is an answer only where the
- * caller says nothing there is legitimate; or a FAULT, with why, which the
- * caller makes an UNJUDGED page or a refused run, never an empty answer.
- * tools/test_yonder_replay_host.sh fails the self-test when the runner calls
- * the host's file functions anywhere but here. */
+/* tools/test_yonder_replay_fs.h says what this is: the replay runner's
+ * door to the host's files, in a translation unit of its own so the
+ * runner's can poison every call it makes. */
+#define _GNU_SOURCE
+#include "test_yonder_replay_fs.h"
+
 #include <dirent.h>
-#include <stdbool.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-
-typedef enum { RP_FS_OK, RP_FS_ABSENT, RP_FS_FAULT } RpFs;
-/* Why a call faulted: the path and what the host said. */
-typedef struct { char why[1024]; } RpFault;
+#include <unistd.h>
 
 static RpFs rp_fs_fault(RpFault *f, const char *path, const char *what, int err) {
     snprintf(f->why,sizeof(f->why),"%s %s: %s",path,what,strerror(err));
@@ -24,7 +19,7 @@ static RpFs rp_fs_fault(RpFault *f, const char *path, const char *what, int err)
 }
 
 /* A whole file into `*bytes` (malloc'd, NUL-terminated past `*len`). */
-static RpFs rp_fs_read(const char *path, char **bytes, size_t *len, RpFault *f) {
+RpFs rp_fs_read(const char *path, char **bytes, size_t *len, RpFault *f) {
     *bytes=NULL; if(len!=NULL) *len=0;
     FILE *file=fopen(path,"rb");
     if(file==NULL) return errno==ENOENT ? RP_FS_ABSENT : rp_fs_fault(f,path,"cannot be opened",errno);
@@ -48,18 +43,26 @@ static RpFs rp_fs_read(const char *path, char **bytes, size_t *len, RpFault *f) 
     return RP_FS_OK;
 }
 
-/* `len` bytes written as the whole of `path`. */
-static RpFs rp_fs_write(const char *path, const void *bytes, size_t len, RpFault *f) {
-    FILE *file=fopen(path,"wb");
-    if(file==NULL) return rp_fs_fault(f,path,"cannot be made",errno);
-    bool ok=fwrite(bytes,1,len,file)==len;
+RpFs rp_fs_write(const char *path, const void *bytes, size_t len, RpFault *f) {
+    char temp[PATH_MAX];
+    int t=snprintf(temp,sizeof(temp),"%s.%ld.new",path,(long)getpid());
+    if(t<0 || (size_t)t>=sizeof(temp)) return rp_fs_fault(f,path,"has no room for a temporary name",ENAMETOOLONG);
+    FILE *file=fopen(temp,"wb");
+    if(file==NULL) return rp_fs_fault(f,temp,"cannot be made",errno);
+    errno=0;
+    bool ok=fwrite(bytes,1,len,file)==len && fflush(file)==0;
     int err=errno;
     if(fclose(file)!=0 && ok) { ok=false; err=errno; }
-    return ok ? RP_FS_OK : rp_fs_fault(f,path,"cannot be written",err ? err : EIO);
+    if(ok && rename(temp,path)!=0) { ok=false; err=errno; }
+    if(!ok) {
+        remove(temp);
+        return rp_fs_fault(f,path,"cannot be written",err ? err : EIO);
+    }
+    return RP_FS_OK;
 }
 
 /* What is at `path`: a directory (`*dir` true) or anything else. */
-static RpFs rp_fs_kind(const char *path, bool *dir, RpFault *f) {
+RpFs rp_fs_kind(const char *path, bool *dir, RpFault *f) {
     struct stat st;
     if(stat(path,&st)!=0) return errno==ENOENT ? RP_FS_ABSENT : rp_fs_fault(f,path,"cannot be looked at",errno);
     *dir=S_ISDIR(st.st_mode);
@@ -67,7 +70,7 @@ static RpFs rp_fs_kind(const char *path, bool *dir, RpFault *f) {
 }
 
 /* A directory made, or one already there. */
-static RpFs rp_fs_mkdir(const char *path, RpFault *f) {
+RpFs rp_fs_mkdir(const char *path, RpFault *f) {
     if(mkdir(path,0777)==0) return RP_FS_OK;
     int err=errno;
     bool dir=false;
@@ -76,15 +79,23 @@ static RpFs rp_fs_mkdir(const char *path, RpFault *f) {
 }
 
 /* A file or an empty directory removed. */
-static RpFs rp_fs_remove(const char *path, RpFault *f) {
+RpFs rp_fs_remove(const char *path, RpFault *f) {
     if(remove(path)==0) return RP_FS_OK;
     return errno==ENOENT ? RP_FS_ABSENT : rp_fs_fault(f,path,"cannot be removed",errno);
 }
 
 /* A path's permission bits set: the self-test makes a directory that can
  * be searched and not listed. */
-static RpFs rp_fs_mode(const char *path, unsigned mode, RpFault *f) {
+RpFs rp_fs_mode(const char *path, unsigned mode, RpFault *f) {
     return chmod(path,(mode_t)mode)==0 ? RP_FS_OK : rp_fs_fault(f,path,"cannot have its mode set",errno);
+}
+
+RpFs rp_fs_same(const char *a, const char *b, bool *same, RpFault *f) {
+    char x[PATH_MAX], y[PATH_MAX];
+    if(realpath(a,x)==NULL) return errno==ENOENT ? RP_FS_ABSENT : rp_fs_fault(f,a,"cannot be resolved",errno);
+    if(realpath(b,y)==NULL) return errno==ENOENT ? RP_FS_ABSENT : rp_fs_fault(f,b,"cannot be resolved",errno);
+    *same=strcmp(x,y)==0;
+    return RP_FS_OK;
 }
 
 static int rp_fs_strcmp(const void *a, const void *b) { return strcmp(*(char *const *)a,*(char *const *)b); }
@@ -92,7 +103,7 @@ static int rp_fs_strcmp(const void *a, const void *b) { return strcmp(*(char *co
 /* The names in `dir` that end in `suffix`, sorted, into `*names` (each and
  * the array malloc'd; rp_fs_names_free lets them go). A directory that is
  * there and cannot be listed whole is a fault. */
-static RpFs rp_fs_list(const char *dir, const char *suffix, char ***names, size_t *n, RpFault *f) {
+RpFs rp_fs_list(const char *dir, const char *suffix, char ***names, size_t *n, RpFault *f) {
     *names=NULL; *n=0;
     DIR *d=opendir(dir);
     if(d==NULL) return errno==ENOENT ? RP_FS_ABSENT : rp_fs_fault(f,dir,"cannot be listed",errno);
@@ -119,7 +130,7 @@ static RpFs rp_fs_list(const char *dir, const char *suffix, char ***names, size_
     if(*n>0) qsort(*names,*n,sizeof(**names),rp_fs_strcmp);
     return RP_FS_OK;
 }
-static void rp_fs_names_free(char **names, size_t n) {
+void rp_fs_names_free(char **names, size_t n) {
     for(size_t i=0;i<n;i++) free(names[i]);
     free(names);
 }

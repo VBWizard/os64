@@ -43,6 +43,13 @@
 
 #define YONDER_DIAG_MISSING "MISSING"
 #define YONDER_DIAG_FAILED "FAILED"
+// The line a record carries when any of its lines was lost (no room, no
+// memory, a value with no memory to keep): every reader takes such a
+// record as one it cannot judge.
+#define YONDER_DIAG_LINES_LOST "REPLAY unjudged: lines lost"
+// A claimed name's file before its record is written: its second line,
+// which every reader takes as a record it cannot judge.
+#define YONDER_DIAG_UNWRITTEN "verdict: unwritten"
 
 // Distinct record lines kept, and plain lines: a page that asks for more
 // has the rest counted on a plain line, not kept.
@@ -125,14 +132,14 @@ typedef struct yonder_diag_claim yonder_diag_claim_t;
 // before a file went, never write over each other's records or pair one
 // record with another's kept files. The record's number moves up from
 // where it began until `<name>.txt` can be made where nothing is
-// (os64_open's "x"; the record as it stands goes in it), and, with `keep`,
-// until `<name>.d/` can be made fresh and no `<name>.html` is there; the
-// number it ends on is yonder_diag_seq's. A record that finds no such name
-// in YONDER_DIAG_CLAIM_TRIES tries takes the first number whose file it
-// can make, and nothing of its page is kept; one that can make none in as
-// many tries has NO CLAIM, keeps the number it began with, and nothing of
-// it is written. A record claims once: a second call answers 0 and changes
-// nothing.
+// (os64_open's "x", holding YONDER_DIAG_UNWRITTEN until the record is
+// written) and no `<name>.html` or `<name>.d` is there, kept or not; with
+// `keep`, `<name>.d/` is then made. The number it ends on is
+// yonder_diag_seq's. A fresh name whose folder cannot be made is claimed
+// and nothing of its page is kept. A record that finds no fresh name in
+// YONDER_DIAG_CLAIM_TRIES tries has NO CLAIM, keeps the number it began
+// with, and nothing of it is written. A record claims once: a second call
+// answers 0 and changes nothing.
 // Answers 0; -1 when `keep` asked for kept files and the name holds none
 // (the keepers answer as for a failed step); YONDER_DIAG_UNCLAIMED with
 // no claim.
@@ -145,7 +152,8 @@ const yonder_diag_claim_t *yonder_diag_claimed(const yonder_diag_t *d);
 
 // The claim's record written under its name whole: rendered, put in a
 // temporary file beside the real one and renamed over it, so a reader
-// never meets half a file. 0, or negative with no claim or when any step
+// never meets half a file. The claimed file must still be there. 0, or
+// negative with no claim, with the claimed file gone, or when any step
 // failed (the temporary is then removed).
 int64_t yonder_diag_write(const yonder_diag_claim_t *c);
 
@@ -163,7 +171,9 @@ int64_t yonder_diag_write(const yonder_diag_claim_t *c);
 int64_t yonder_diag_keep_bytes(const yonder_diag_claim_t *c, const void *bytes, size_t n);
 // The parser has had all the bytes it will be fed: the temporary file is
 // renamed to `<name>.html` (an empty one for a page of no bytes), never
-// over one there already, which is a failed step.
+// over one there already, which is a failed step, and the record gains
+// `kept: whole`, the fact a replay requires; a later step that fails
+// replaces it with `kept: not whole`.
 int64_t yonder_diag_keep_bytes_end(const yonder_diag_claim_t *c);
 
 // What a kept sub-resource is: its file's extension, and the word the

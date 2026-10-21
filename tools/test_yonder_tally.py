@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """tools/yonder_tally.py on three hand-made page files in a directory that
-also holds a kept page's bytes and folder, which are not read; then a
+also holds a kept page's bytes and folder, which are not read; records
+whose state is not a verdict, said and not counted; then a
 `*.txt` that is not a page file, page files that are not whole (cut short,
 or not matching their verdict), a path not there and a directory that
 cannot be listed, each an error. Run with `python3 -I tools/test_yonder_tally.py`; tools/test_yonder_replay_host.sh
@@ -127,6 +128,22 @@ class TallyCases(unittest.TestCase):
         rc, err = self.run_err(self.root)
         self.assertEqual(rc, 2)
         self.assertIn("notes.txt: not a page file: its first line is not `address: `", err)
+
+    def test_only_verdicts_are_counted(self):
+        # A page whose replay was incomplete, and one whose record lost
+        # lines, are said on stderr and left out of the census.
+        (self.root / 'r.test-0007.txt').write_bytes(
+            b'address: https://r.test/\nREPLAY state: incomplete script x\nverdict: 1 MISSING\n'
+            b'MISSING global fetch (1)\nREPLAY incomplete script x\nend\n')
+        (self.root / 'l.test-0008.txt').write_bytes(
+            b'address: https://l.test/\nverdict: 1 MISSING\nMISSING global fetch (1)\nREPLAY unjudged: lines lost\n')
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(err):
+            rc = tally.main([str(self.root)])
+        self.assertEqual(rc, 0)
+        self.assertIn('3 page files, 2 sites', out.getvalue())
+        self.assertIn('not counted: 1 incomplete, 1 unjudged', err.getvalue())
+        self.assertIn('l.test-0008.txt  unjudged: its record lost lines it could not keep', err.getvalue())
 
     def test_a_record_cut_short_is_an_error(self):
         (self.root / 'cut-0009.txt').write_bytes(b'address: https://cut.test/\n')

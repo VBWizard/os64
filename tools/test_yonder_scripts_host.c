@@ -3817,6 +3817,10 @@ static void classic_browser_cases(void)
     check(mark!=NULL && os64_streq(mark->value,"420:20:400"),"classic controls: page, client and body scroll coordinates agree");
     probe_drop();
 }
+/* What reads the host's own files directly is the suite's alone: a unit
+ * that includes this file for its fakes (YONDER_HOST_FAKES_ONLY) gets none
+ * of it, so the replay runner's every file goes through its own door. */
+#ifndef YONDER_HOST_FAKES_ONLY
 /* Optional consumer proof reads locally downloaded primary scripts. Site
  * sources stay outside the repository; regular regressions are original. */
 static char *classic_source(const char *directory, const char *name)
@@ -3907,6 +3911,7 @@ static void classic_downloaded_cases(void)
     check(script_rebuild(),"Million: original zoom edits render through the browser");
     probe_drop();
 }
+#endif
 
 typedef struct {
     const os64_gui_event_t *events;
@@ -3996,6 +4001,7 @@ static double hover_seconds(void)
     struct timespec ts;clock_gettime(CLOCK_MONOTONIC,&ts);
     return ts.tv_sec+ts.tv_nsec/1e9;
 }
+#ifndef YONDER_HOST_FAKES_ONLY
 static void classic_hover_profile(void)
 {
     const char *directory=getenv("D11_HOVER_PROFILE");if(directory==NULL) return;
@@ -4020,6 +4026,7 @@ static void classic_hover_profile(void)
     }
     probe_drop();
 }
+#endif
 
 /* ── THE PAGE FILES (YONDER_DIAGNOSTICS.md) ───────────────────────────── */
 /* The text of the file `name` in `dir`, or NULL. YONDER_DIAG_DUMP=1 prints
@@ -4949,7 +4956,7 @@ static void diag_keep_cases(void) {
     const char *text=diag_file("/tmp/kept",name);
     check(has(text,"\nstatus: 200 OK\nfinal address: https://fixture.test/final\nbody: html\n"
         "content-type: text/html\ncharset: windows-1252\nencrypted: yes\n") && !has(text,"\nscripts: off\n") &&
-        !has(text,"\nkept: "),
+        has(text,"\nkept: whole\n"),
         "keep: the page file carries the facts a replay rebuilds the head from");
     check(!fake_temp_left(),"keep: no temporary file is left");
     loop_drop();
@@ -5031,8 +5038,10 @@ static void diag_keep_cases(void) {
         yonder_diag_head_fact(d,"body","html");
         yonder_diag_fact(d,"one more","lost");
         char *big=malloc(1<<16); yonder_diag_render(d,big,1<<16);
-        check(has(big,"\nbody: html\n") && !has(big,"one more") && has(big,"\nfacts not kept: 6\n"),
-            "keep: a head fact is kept on a page whose plain lines fill the table, which still counts the rest");
+        check(has(big,"\nbody: html\n") && !has(big,"one more") && has(big,"\nfacts not kept: 6\n") &&
+              has(big,"\n" YONDER_DIAG_LINES_LOST "\n"),
+            "keep: a head fact is kept on a page whose plain lines fill the table, which still counts the rest, "
+            "and says it lost lines");
         free(big); yonder_diag_free(d);
     }
 
@@ -5068,6 +5077,28 @@ static void diag_keep_cases(void) {
     snprintf(path,sizeof(path),"/tmp/kept/fixture.test-%04u.d",(unsigned)seq);
     snprintf(html_path,sizeof(html_path),"/tmp/kept/fixture.test-%04u.html",(unsigned)seq);
     check(!fake_is_dir(path) && fake_text(html_path)!=NULL,"claim: its empty folder goes, its bytes stay");
+    keep_end();
+
+    /* A NAME BESIDE ANOTHER'S KEPT FILES IS NOT FRESH, kept or not: with
+     * keep_pages off, a number whose page bytes or folder are there is
+     * passed over too, so a record is never paired with another load's kept
+     * page. The claimed file holds only `verdict: unwritten` until the
+     * record is written. */
+    keep_begin(false);
+    next=s_diag.next;
+    snprintf(left,sizeof(left),"/tmp/kept/fixture.test-%04u.html",(unsigned)next);
+    snprintf(folder,sizeof(folder),"/tmp/kept/fixture.test-%04u.d",(unsigned)next+1);
+    fh=os64_open(left,"w"); os64_write((int32_t)fh,"<p>another's",12); os64_close((int32_t)fh);
+    os64_mkdir(folder);
+    loop_page("<p>revisit</p>");
+    snprintf(path,sizeof(path),"/tmp/kept/fixture.test-%04u.txt",(unsigned)next+2);
+    check(yonder_diag_seq(g.stream.diag)==next+2 && fake_text(path)!=NULL &&
+          has(fake_text(path),"\n" YONDER_DIAG_UNWRITTEN "\n") && !has(fake_text(path),"verdict: clean"),
+          "claim, keep off: a number beside another's kept bytes or folder is passed over, and the claim reads unwritten");
+    check(loop_settle() && g.page.tree!=NULL,"claim, keep off: the page arrives");
+    loop_drop();
+    check(has(fake_text(path),"\nverdict: clean\n") && !strcmp(fake_text(left),"<p>another's") &&
+          fake_is_dir(folder),"claim, keep off: the record replaces its placeholder, and touches nothing of theirs");
     keep_end();
 
     /* EVERY NAME TAKEN: with each of the claim's numbers holding another's

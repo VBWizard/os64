@@ -450,6 +450,17 @@ size_t yonder_diag_render(const yonder_diag_t *d, char *out, size_t cap)
     put_lost(&o, "facts", &d->facts);
     if (d->short_of_memory)
         puts_(&o, "some lines not kept: no memory to name them\n");
+    // ONE MARKER for every way a line was lost, which the readers key on:
+    // a record missing a line, whatever the cause, cannot be judged, since
+    // the line it lost may be the one a change made or mended.
+    bool lost = d->short_of_memory;
+    const Table *tables[3] = {&d->missing, &d->failed, &d->facts};
+    for (int i = 0; i < 3; i++)
+        lost |= tables[i]->ngone != 0 || tables[i]->more;
+    for (uint32_t i = 0; i < d->facts.n; i++)
+        lost |= d->facts.lines[i].count != 0;
+    if (lost)
+        puts_(&o, YONDER_DIAG_LINES_LOST "\n");
     if (cap != 0)
         out[o.at < cap ? o.at : cap - 1] = '\0';
     return o.at;
@@ -557,7 +568,11 @@ static bool kept_path(const yonder_diag_t *d, const char *dir, const char *suffi
 int64_t yonder_diag_write(const yonder_diag_claim_t *c)
 {
     char path[OS64_PATH_MAX];
-    if (c == NULL || !kept_path(c->record, c->dir, ".txt", path, sizeof(path)))
+    os64_dirent_t e;
+    // The name is proved again before it is written over: a claimed file
+    // that is gone means the name may be anyone's now. (A file put back
+    // between this look and the rename is not caught.)
+    if (c == NULL || !kept_path(c->record, c->dir, ".txt", path, sizeof(path)) || os64_stat(path, &e) != 0)
         return -1;
     const yonder_diag_t *d = c->record;
     size_t need = yonder_diag_render(d, NULL, 0);
@@ -596,20 +611,28 @@ static bool kept_path(const yonder_diag_t *d, const char *dir, const char *suffi
 
 static int64_t keep_failed(yonder_diag_t *d);
 
-// The record's file made at `path` only if nothing is there, with the
-// record as it stands in it, so the name is claimed by a file that reads as
-// a record from the start. False when something is there, or it could not
-// be made.
+// The record's file made at `path` only if nothing is there, holding its
+// address and `verdict: unwritten`, which every reader takes as a record it
+// cannot judge, so a name claimed and never written (a yonder that died, a
+// write that failed) is never read as a page that met nothing. The real
+// record replaces it. False when something is there, or it could not be
+// made.
 static bool claim_file(const yonder_diag_t *d, const char *path)
 {
     int64_t h = os64_open(path, "x");
     if (h < 0)
         return false;
-    size_t need = yonder_diag_render(d, NULL, 0);
-    char *text = os64_malloc(need + 1);
+    Out m = {NULL, 0, 0};
+    puts_(&m, "address: ");
+    put_text(&m, d->url);
+    puts_(&m, "\n" YONDER_DIAG_UNWRITTEN "\n");
+    char *text = os64_malloc(m.at + 1);
     if (text != NULL) {
-        yonder_diag_render(d, text, need + 1);
-        (void)write_all((int32_t)h, text, need);
+        Out o = {text, m.at + 1, 0};
+        puts_(&o, "address: ");
+        put_text(&o, d->url);
+        puts_(&o, "\n" YONDER_DIAG_UNWRITTEN "\n");
+        (void)write_all((int32_t)h, text, m.at);
         os64_free(text);
     }
     (void)os64_close((int32_t)h);
@@ -642,12 +665,15 @@ int64_t yonder_diag_claim(yonder_diag_t *d, const char *dir, bool keep)
     for (uint32_t tries = 0; tries < YONDER_DIAG_CLAIM_TRIES; tries++, d->seq++) {
         if (!kept_path(d, dir, ".txt", path, sizeof(path)) || !claim_file(d, path))
             continue;
-        if (!keep)
+        // Its kept files' names must be fresh too, whether or not this
+        // record keeps its page: no page's bytes and no folder by that
+        // name left from before, which a reader would pair with this
+        // record. With `keep`, the folder is made here.
+        bool fresh = kept_path(d, dir, ".html", html, sizeof(html)) && os64_stat(html, &e) != 0 &&
+                     kept_path(d, dir, ".d", folder, sizeof(folder)) && os64_stat(folder, &e) != 0;
+        if (fresh && !keep)
             return claim_take(d, dir, path) ? 0 : YONDER_DIAG_UNCLAIMED;
-        // Its kept files' names must be fresh too: the folder made here,
-        // and no page's bytes by that name left from before.
-        if (kept_path(d, dir, ".html", html, sizeof(html)) && os64_stat(html, &e) != 0 &&
-            kept_path(d, dir, ".d", folder, sizeof(folder)) && os64_mkdir(folder) == 0) {
+        if (fresh && os64_mkdir(folder) == 0) {
             if (!claim_take(d, dir, path)) {
                 (void)os64_unlink(folder);
                 break;
@@ -658,15 +684,15 @@ int64_t yonder_diag_claim(yonder_diag_t *d, const char *dir, bool keep)
             (void)os64_unlink(folder);
             return keep_failed(d);
         }
+        // A fresh name whose folder cannot be made is the record's, and
+        // nothing of its page is kept: its record says `kept: not whole`,
+        // which no replay judges.
+        if (fresh)
+            return !claim_take(d, dir, path) ? YONDER_DIAG_UNCLAIMED : keep_failed(d);
         (void)os64_unlink(path);
     }
-    // No name with fresh kept files: the record takes the first name it
-    // can make, and nothing of the page is kept. With none, it has no
-    // claim, and nothing of it is written.
-    d->seq = first;
-    for (uint32_t tries = 0; tries < YONDER_DIAG_CLAIM_TRIES; tries++, d->seq++)
-        if (kept_path(d, dir, ".txt", path, sizeof(path)) && claim_file(d, path))
-            return !claim_take(d, dir, path) ? YONDER_DIAG_UNCLAIMED : keep ? keep_failed(d) : 0;
+    // No fresh name has a claim, and nothing of the record is written:
+    // a record beside another's kept files would be paired with them.
     d->seq = first;
     return YONDER_DIAG_UNCLAIMED;
 }
@@ -751,6 +777,9 @@ int64_t yonder_diag_keep_bytes_end(const yonder_diag_claim_t *c)
     os64_free(d->keep.temp);
     d->keep.temp = NULL;
     d->keep.ended = true;
+    // Said positively, so a replay replays only a page whose record says
+    // it was kept whole; a later step that fails says otherwise.
+    yonder_diag_head_fact(d, "kept", "whole");
     return 0;
 }
 

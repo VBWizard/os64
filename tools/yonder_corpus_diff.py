@@ -7,19 +7,21 @@
 Each directory holds page files by the same names, as
 tools/test_yonder_replay_host.sh writes them, each read through
 tools/yonder_records.py, the one reader of page files, which says what
-state its page reached. ONLY A PAGE REPLAYED TO A VERDICT IS JUDGED: one
-whose record carries no `REPLAY incomplete` or `REPLAY unfinished` line.
-Such a page is the set of its record lines, `MISSING <kind> <name>` and
-`FAILED <what>: <message>`, with their counts left out: a count moves with
-timing, and a line appearing or going is what a slice changed. A REPLAY
-REPRODUCES A PAGE'S SCRIPT AND STYLE, NOT ITS PICTURES OR FONTS, which it
-never fetches, and its record names the kinds it does not reproduce on a
-`REPLAY not reproduced:` line: the lines of every kind any record on
-either side names there are compared on neither side, and the summary
-says which, so a kept page's failed picture is not read as progress when
-its replay has none. Judged on both sides, a page whose set GAINED a line
-is a regression, printed with the lines it gained, and one that lost lines
-is progress, printed with those.
+state its page came to: a replay's record says it on its second line. ONLY
+A PAGE REPLAYED TO A VERDICT IS JUDGED. Such a page is the set of its
+record lines, `MISSING <kind> <name>` and `FAILED <what>: <message>`, with
+their counts left out: a count moves with timing, and a line appearing or
+going is what a slice changed. A REPLAY DOES NOT REPRODUCE WHAT A FETCH IT
+NEVER PERFORMS DECIDED (a picture's or a web font's fetch, and what its
+bytes came to), and its record names those kinds on a `REPLAY not
+reproduced:` line: the lines of every kind any record on either side names
+there are compared on neither side, and the summary says which, so a kept
+page's picture that failed to fetch is not read as progress when its
+replay has none. A picture or a font decided without a fetch (a scheme
+nothing fetches, an address refused, a family no face names) is compared.
+Judged on both sides, a page whose set GAINED a line is a regression,
+printed with the lines it gained, and one that lost lines is progress,
+printed with those.
 
 The rest each have a heading of their own, by the after-record's state
 (the reader's State, whose order is the precedence: a record that says it
@@ -29,22 +31,26 @@ is both is the later), and none is progress:
   verdict (the page never arrived, or asked for the next turn for ever),
   so what it shows is not the page. A regression when the before-record
   reached one; still broken otherwise.
-- TO RECORD AGAIN: the after-record says `REPLAY incomplete`, the page
-  asked for something the corpus never kept. Listed with what it asked
-  for, as newly incomplete when the before-record was not; neither a
-  regression nor progress, and never silent.
+- NEWLY INCOMPLETE: the after-record is incomplete (the page asked for
+  something the corpus never kept, or never asked for something it kept)
+  and the before-record was not. It is A GATE: the corpus must be
+  recorded again before the change can be judged on that page, so the
+  answer is 1, and the heading says so.
+- TO RECORD AGAIN: incomplete on both sides. Listed with what it met,
+  neither a regression nor progress, and never silent.
 - RECOVERED: the after-record reached a verdict where the before-record
   did not; its lines are not compared with a record that was not the page.
 - UNJUDGED: a `*.txt` on either side the reader cannot judge (one that
   cannot be read, is not a page file, or is not whole: a file cut short
   reads as a page that stopped asking for everything it lost), or whose
-  record says some lines had no memory to be named. Listed with why, and
-  judged on neither side.
+  record says its page is unjudged (it lost lines, it was never written,
+  or its replay said so). Listed with why, and judged on neither side.
 - A page the after directory does not have is a regression, since whatever
   it gained cannot be seen.
 
 Exit 2 when a directory cannot be listed or any page is unjudged; else 1
-when there is any regression; else 0. Run it with `python3 -I`; the
+when there is any regression, broken page, missing page or newly
+incomplete page; else 0. Run it with `python3 -I`; the
 records are data, and the reader is loaded from beside this file.
 """
 import argparse
@@ -75,18 +81,17 @@ def lines_of(rec, skip):
 
 def read_dir(path, unjudged):
     """{file name: record} for the page files in a directory: each read
-    whole by the reader, and one it cannot judge, or whose record says it
-    lost lines it could not name, put in `unjudged` as {name: reason}
-    instead. Unreadable (the reader's) when the directory cannot be
-    listed: read as empty, it would read as a corpus that did not
-    change."""
+    whole by the reader, and one it cannot judge, or whose record says its
+    page is UNJUDGED, put in `unjudged` as {name: reason} instead.
+    Unreadable (the reader's) when the directory cannot be listed: read as
+    empty, it would read as a corpus that did not change."""
     pages = {}
     for f in records.page_files(path):
         rec = records.read(f)
         if isinstance(rec, records.Unjudged):
             unjudged[f.name] = str(rec)
-        elif rec.lost:
-            unjudged[f.name] = f'{f}: its record says some lines had no memory to be named'
+        elif rec.state == State.UNJUDGED:
+            unjudged[f.name] = f'{f}: unjudged: {rec.reason}'
         else:
             pages[f.name] = rec
     return pages
@@ -163,7 +168,9 @@ def main(argv=None):
         rows = table[title]
         if not rows and title not in ('regressions', 'progress'):
             continue
-        print(f'{title}: {len(rows)} pages')
+        gate = (' (the corpus must be re-recorded before this change can be judged on them)'
+                if title == 'newly incomplete' else '')
+        print(f'{title}: {len(rows)} pages{gate}')
         for name, (address, lines) in rows.items():
             print(f'  {name}  {address}')
             for line in lines:
@@ -188,7 +195,7 @@ def main(argv=None):
           + (f'; not compared, as the replay does not reproduce them: {" ".join(sorted(skip))}' if skip else ''))
     if unjudged:
         return 2
-    return 1 if table['regressions'] or table['broken'] or gone else 0
+    return 1 if table['regressions'] or table['broken'] or table['newly incomplete'] or gone else 0
 
 
 if __name__ == '__main__':

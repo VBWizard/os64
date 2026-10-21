@@ -7,12 +7,13 @@
 #       writes its record again into OUT-DIR; compare two such directories
 #       with tools/yonder_corpus_diff.py
 #   tools/test_yonder_replay_host.sh
-#       the proof: the runner's door to the host's files held to (no file
-#       call anywhere in the runner but tools/test_yonder_replay_fs.c), the
-#       census tools' tests, then the runner's self-test,
+#       the proof: the census tools' tests, then the runner's self-test,
 #       which keeps the fixture pages as yonder would, replays them, and
 #       requires every replayed record to be the page's own, and the corpus
-#       diff to find nothing between them; then the same corpus given no
+#       diff to find nothing between them; then a page kept with a picture
+#       whose fetch failed, which the diff must not read as progress; the
+#       same corpus written under a file-size limit, whose records must each
+#       be whole or say they could not be written; and the corpus given no
 #       time, whose unfinished pages the diff must call broken
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
@@ -27,17 +28,11 @@ cleanup() {
 }
 trap cleanup EXIT
 . tools/yonder_host_build.sh
-yonder_host_build "$work" tools/test_yonder_replay_host.c "$work/yonder-replay"
+YONDER_HOST_UNITS=tools/test_yonder_replay_fs.c \
+    yonder_host_build "$work" tools/test_yonder_replay_host.c "$work/yonder-replay"
 if [ "$#" -gt 0 ]; then
     "$work/yonder-replay" "$@"
     exit
-fi
-# A file call made around the door would answer a fault as an empty answer
-# again: the runner may call the host's file functions nowhere else.
-if grep -nE '\b(fopen|freopen|fread|fwrite|fclose|fdopen|opendir|fdopendir|readdir|closedir|scandir|mkdir|rmdir|stat|lstat|fstat|access|chmod|unlink|remove|rename|open|creat|truncate)[[:space:]]*\(' \
-        tools/test_yonder_replay_host.c; then
-    echo "replay: the runner calls the host's files around tools/test_yonder_replay_fs.c" >&2
-    exit 1
 fi
 TMPDIR="$work" python3 -I tools/test_yonder_records.py
 TMPDIR="$work" python3 -I tools/test_yonder_tally.py
@@ -54,6 +49,32 @@ python3 -I tools/yonder_corpus_diff.py "$work/self/picture" "$work/self/picture-
     cat "$work/picture.diff" >&2
     exit 1
 }
+# The same corpus written under a file-size limit, as a quota or a full
+# disk would cut it (the signal ignored, so a write past it fails rather
+# than ending the run): every record that could not be written whole is
+# not there at all, or says it is unjudged, so no page reads as a record
+# cut short; the run answers 2; and no temporary file is left.
+if ( trap '' XFSZ; exec prlimit --fsize=2048 "$work/yonder-replay" "$work/self/kept" "$work/capped" ) \
+        > "$work/capped.log" 2>&1; then
+    echo "replay: a corpus written under a size limit passed" >&2
+    exit 1
+fi
+python3 -I - "$work/capped" <<'PY' || { cat "$work/capped.log" >&2; exit 1; }
+import importlib.util, pathlib, sys
+spec = importlib.util.spec_from_file_location('yonder_records', 'tools/yonder_records.py')
+records = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(records)
+out = pathlib.Path(sys.argv[1])
+files = sorted(out.iterdir())
+broken = [str(records.read(f)) for f in files if f.suffix == '.txt' and isinstance(records.read(f), records.Unjudged)]
+temps = [f.name for f in files if f.suffix != '.txt']
+unjudged = sum(1 for f in files if f.suffix == '.txt' and not isinstance(records.read(f), records.Unjudged)
+               and records.read(f).state == records.State.UNJUDGED)
+if broken or temps or unjudged == 0:
+    print(f'replay: under a size limit: {broken} not whole, {temps} left over, {unjudged} said unjudged', file=sys.stderr)
+    sys.exit(1)
+print(f'size limit: {len(files)} records, every one whole, {unjudged} saying they could not be written')
+PY
 # The same corpus given no time: the pages that cannot arrive in none say
 # so on their records, and the diff calls each broken (whatever else its
 # record says) and fails, never reading what they lack as progress. (A page that arrived without the time for its
