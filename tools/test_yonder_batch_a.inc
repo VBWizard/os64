@@ -46,6 +46,12 @@ static void object_rect_cases(void)
     // 60 left across, less 10: 10 + 50; 20 down: 20 + 20.
     expect("object-position: an edge and an offset",
            object_rect_is(FLOW_OBJECT_NONE, right10, bottom, 40, 30, 60, 40, 40, 30), NULL);
+    // A 1 x 10000000 picture covers the box 100 wide and a billion tall,
+    // held to a quarter of an int32_t (536870911); at 100% down its top is
+    // 20 + 50 - that, inside the hold.
+    expect("object-fit: cover of an extreme picture is held",
+           object_rect_is(FLOW_OBJECT_COVER, zero, bottom, 1, 10000000, 10, 70 - 536870911, 100,
+                          536870911), NULL);
     expect("object-fit: a picture with no size fills",
            object_rect_is(FLOW_OBJECT_CONTAIN, half, half, 0, 30, 10, 20, 100, 50), NULL);
 }

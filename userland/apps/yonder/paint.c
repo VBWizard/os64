@@ -297,11 +297,16 @@ os64_gui_rect_t yonder_object_rect(const flow_style_t *s, os64_gui_rect_t box, u
         else
             w = nearest((int64_t)box.h * iw, ih);
     }
-    w = min64(w, INT32_MAX);
-    h = min64(h, INT32_MAX);
-    int32_t x = place_axis(s->object_position[0], box.x, (int32_t)max64(INT32_MIN, box.w - w));
-    int32_t y = place_axis(s->object_position[1], box.y, (int32_t)max64(INT32_MIN, box.h - h));
-    return (os64_gui_rect_t){x, y, (int32_t)w, (int32_t)h};
+    // Held to a quarter of what an int32_t says, size and place alike, so
+    // that a picture's edge less any point of a surface still fits one: a
+    // 1 x 16384 picture covering a wide box is billions of pixels tall.
+    const int64_t most = INT32_MAX / 4;
+    w = min64(w, most);
+    h = min64(h, most);
+    int64_t x = place_axis(s->object_position[0], box.x, (int32_t)(box.w - w));
+    int64_t y = place_axis(s->object_position[1], box.y, (int32_t)(box.h - h));
+    return (os64_gui_rect_t){(int32_t)max64(-most, min64(most, x)),
+                             (int32_t)max64(-most, min64(most, y)), (int32_t)w, (int32_t)h};
 }
 
 // A size written for one axis of a `room`-px origin box, in px up to what

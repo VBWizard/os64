@@ -86,8 +86,41 @@ static void ellipsis_door_cases(void)
     sheeted_close(&p);
 }
 
+// What a hostile sheet can ask of slice 4's properties lays out whole:
+// a tracking of a hundred thousand pixels either way across a long word
+// (each run still fits the engine's coordinates: none trails a run, and a
+// window too wide is halved), a ratio of a millionth and of a million,
+// an outline a million pixels wide and as far off, every character an
+// opportunity in a long text, an ellipsis on a line it cannot fit.
+static void hostile_batch_a_cases(void)
+{
+    static const char *const kPages[] = {
+        "<p style='letter-spacing: 100000px'>abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz",
+        "<p style='letter-spacing: -100000px'>abcdefghijklmnopqrstuvwxyz abc",
+        "<div style='width: 1000000px; aspect-ratio: 1 / 1000000'></div>"
+        "<div style='height: 1000000px; aspect-ratio: 1000000'></div>",
+        "<div style='outline: 1000000px solid; outline-offset: -1000000px'>a</div>"
+        "<div style='outline: 1000000px solid; outline-offset: 1000000px'>a</div>",
+        "<p style='word-break: break-all; width: 1px'>abcdefghijklmnopqrstuvwxyz0123456789",
+        "<p style='overflow-wrap: anywhere; width: 0'>abcdefghij klmnop",
+        "<p style='width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis'>abc",
+    };
+    for (size_t k = 0; k < sizeof(kPages) / sizeof(kPages[0]); k++) {
+        char html[512];
+        snprintf(html, sizeof(html), "<!doctype html>%s", kPages[k]);
+        Sheeted p;
+        sheeted_open(&p, html, 300, 600);
+        flow_tree_t *tree = flow_layout(p.doc, p.page, 300, &p.env);
+        expect("batch A: a hostile page lays out whole", tree != NULL && !flow_incomplete(tree),
+               kPages[k]);
+        flow_free(tree);
+        sheeted_close(&p);
+    }
+}
+
 static void batch_a_cases(void)
 {
+    hostile_batch_a_cases();
     // cursor is inherited, the keyword after the pictures kept; user-select
     // is not: the p inside the div is auto again, and prints nothing.
     cascade_case("cursor and user-select", 800,
