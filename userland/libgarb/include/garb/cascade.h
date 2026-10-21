@@ -217,6 +217,19 @@ int32_t garb_cascade_skips(const garb_cascade_t *c, garb_skip_t *out, int32_t ca
 // parse is false (`not all`).
 bool garb_media_matches(const garb_value_t *v, int32_t n, garb_env_t env);
 bool garb_media_text_matches(const char *text, garb_env_t env);
+// The same list as CSSOM serialises it, which is what a MediaQueryList's
+// `media` reads (CSSOM § Serializing media queries): the queries joined by
+// `, `; each one that is not a query's shape, an empty one included, as
+// `not all`; `not` or `only`, the type and a known feature's name and
+// keywords in lower case; `all and` left out of a query nothing negates; a
+// number to six significant digits (garb_css_number), a ratio as `a / b`;
+// anything else in brackets kept as written, its white space made single
+// spaces. A list with no content is "". A query's shape is the grammar's:
+// a feature this machine does not know changes what the query evaluates
+// to, not how it is written. Like snprintf; the text form answers
+// (size_t)-1, with "" written, when there was no memory to read it.
+size_t garb_media_serialize(const garb_value_t *v, int32_t n, char *out, size_t cap);
+size_t garb_media_text_serialize(const char *text, char *out, size_t cap);
 
 // Every element's winners as text, in document order: `tag#id.class:
 // prop: value; ...`, for the harness and a probe. Like snprintf.

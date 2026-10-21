@@ -334,6 +334,31 @@ static void media(const char *text)
     puts(garb_media_text_matches(text + used, env) ? "true" : "false");
 }
 
+// A media query list as CSSOM serialises it (garb_media_text_serialize),
+// whole, and again into each smaller buffer: what fits is the whole text's
+// prefix, and the length answered is the whole text's every time.
+static void media_text(const char *text)
+{
+    char whole[512];
+    size_t n = garb_media_text_serialize(text, whole, sizeof(whole));
+    if (n >= sizeof(whole)) {
+        puts("too long for the case");
+        return;
+    }
+    for (size_t cap = 0; cap <= n; cap++) {
+        char cut[512];
+        memset(cut, 'x', sizeof(cut));
+        size_t again = garb_media_text_serialize(text, cut, cap);
+        bool fits = cap == 0 ? cut[0] == 'x'
+                             : strlen(cut) == (cap - 1 < n ? cap - 1 : n) && memcmp(cut, whole, strlen(cut)) == 0;
+        if (again != n || !fits) {
+            printf("cut at %zu: %zu, %s\n", cap, again, fits ? "fits" : "spills");
+            return;
+        }
+    }
+    printf("[%s]\n", whole);
+}
+
 // The faces mode: each face garb_cascade_font_faces answers, in order —
 // `"FAMILY" WEIGHTS STYLE [RANGES] sheet N` and then its sources, each
 // `url(TEXT) [format(F)]` or `local(NAME)` — and how many were lost.
@@ -842,7 +867,30 @@ static int sweep_lists(void)
     }
     printf("libgarb sweep, every list parse: every allocation failed in turn, %s\n",
            failures == 0 ? "each ended with a prefix, nothing leaked" : "FAILED");
-    return failures;
+    // A media query list's serialization is the whole list's or none: a
+    // parse that ran short would serialize another list.
+    const char *media_list = "screen and (min-width: 600px), (color) or (hover), print";
+    char whole[256], part[256];
+    allocations = 0;
+    fail_at = 0;
+    size_t wanted = garb_media_text_serialize(media_list, whole, sizeof(whole));
+    size_t worst = allocations;
+    int media_failures = 0;
+    for (size_t at = 1; at <= worst; at++) {
+        allocations = 0;
+        fail_at = at;
+        size_t got = garb_media_text_serialize(media_list, part, sizeof(part));
+        fail_at = 0;
+        if (!(got == wanted && strcmp(part, whole) == 0) && !(got == (size_t)-1 && part[0] == '\0'))
+            media_failures++;
+        if (live != s_live_base) {
+            media_failures++;
+            live = s_live_base;
+        }
+    }
+    printf("libgarb sweep, media text: each of %zu allocations failed in turn, %s\n", worst,
+           media_failures == 0 ? "each answer the whole list or none, nothing leaked" : "FAILED");
+    return failures + media_failures;
 }
 
 // A selector list with every allocation failing in turn: an answer that
@@ -1135,7 +1183,37 @@ static int numbers(void)
     int ok = st == GARB_OK && n > 0 && inf != NULL && strstr(inf + 1, "Infinity") == NULL;
     printf("libgarb numbers: past int64_t and past a double: %s\n", ok ? "dumped" : "FAILED");
     garb_free(&r);
-    return ok ? 0 : 1;
+    // A number as a script reads it (garb_css_number): six significant
+    // digits, no trailing zeros, no exponent, no negative zero; every
+    // double, the largest included, fits its own length.
+    static const struct { double v; const char *want; } css[] = {
+        {0, "0"}, {-0.0, "0"}, {1, "1"}, {-1, "-1"}, {0.5, "0.5"}, {33.333333333, "33.3333"},
+        {1234.5678, "1234.57"}, {123456.7, "123457"}, {1e15, "1000000000000000"},
+        {0.000001234, "0.000001234"}, {-0.0000001, "-0.0000001"}, {-0.00000000000000000001, "-0.00000000000000000001"}, {-1e-25, "0"},
+        {1e-30, "0"}, {0.1, "0.1"}, {2.675, "2.675"}, {100, "100"}, {99.9999999, "100"},
+        {1.5e20, "150000000000000000000"}, {-2.5e19, "-25000000000000000000"},
+        {1.0 / 0.0, "0"}, {0.0 / 0.0, "0"}, {9007199254740993.0, "9007199254740992"},
+    };
+    int css_failed = 0;
+    for (size_t i = 0; i < sizeof(css) / sizeof(css[0]); i++) {
+        char b[8];
+        size_t n = garb_css_number(css[i].v, b, sizeof(b));
+        char whole[400];
+        size_t again = garb_css_number(css[i].v, whole, sizeof(whole));
+        bool cut = strlen(b) == (n < sizeof(b) ? n : sizeof(b) - 1) && strncmp(b, whole, strlen(b)) == 0;
+        if (strcmp(whole, css[i].want) != 0 || again != n || n != strlen(whole) || !cut) {
+            printf("FAIL css number %.17g: got %s (%zu), want %s\n", css[i].v, whole, n, css[i].want);
+            css_failed++;
+        }
+    }
+    char largest[400];
+    size_t n_largest = garb_css_number(1.7976931348623157e308, largest, sizeof(largest));
+    if (n_largest != strlen(largest) || n_largest != 309 || strncmp(largest, "179769", 6) != 0) {
+        printf("FAIL css number: the largest double came out %zu long\n", n_largest);
+        css_failed++;
+    }
+    printf("libgarb css numbers: %s\n", css_failed ? "FAILED" : "as a script reads them");
+    return ok && css_failed == 0 ? 0 : 1;
 }
 
 // What a parse COSTS, GARB.md § The cost: a sheet shaped like the web's
@@ -1622,6 +1700,8 @@ int main(int argc, char **argv)
             declaration(text, len);
         else if (strcmp(argv[1], "media") == 0)
             media(text);
+        else if (strcmp(argv[1], "media-text") == 0)
+            media_text(text);
         else if (strcmp(argv[1], "cascade") == 0)
             cascade(text, len, pabsent ? NULL : protocol, CASCADE_WINNERS);
         else if (strcmp(argv[1], "skips") == 0)

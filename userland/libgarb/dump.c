@@ -98,6 +98,79 @@ void garb_format_double(char *b, size_t cap, double v)
     os64_snprintf(b, cap, "%se%d", m, (int)e);
 }
 
+size_t garb_css_number(double v, char *out, size_t cap)
+{
+    char b[DBL_MAX_10_EXP + 24];         // the largest finite double, every digit
+    size_t k = 0;
+    if (v != v || v > DBL_MAX || v < -DBL_MAX)
+        v = 0;
+    bool negative = v < 0;
+    double a = negative ? -v : v;
+    // The decimal exponent, by division: no libm in a freestanding build.
+    int32_t e = 0;
+    double t = a;
+    while (t >= 10.0) {
+        t /= 10.0;
+        e++;
+    }
+    while (t > 0 && t < 1.0) {
+        t *= 10.0;
+        e--;
+    }
+    if (a > 0 && e >= 18) {
+        // Past what a 64-bit integer holds: six digits, then zeros.
+        uint64_t digits = (uint64_t)(t * 100000.0 + 0.5);
+        if (digits >= 1000000) {
+            digits /= 10;
+            e++;
+        }
+        if (negative)
+            b[k++] = '-';
+        char head[8];
+        os64_snprintf(head, sizeof(head), "%lu", (unsigned long)digits);
+        for (size_t i = 0; head[i] != '\0'; i++)
+            b[k++] = head[i];
+        for (int32_t z = e - 5; z > 0; z--)
+            b[k++] = '0';
+        b[k] = '\0';
+    } else {
+        int32_t places = a > 0 ? 5 - e : 0;
+        if (places < 0)
+            places = 0;
+        if (places > 20)
+            places = 20;
+        double scale = 1;
+        for (int32_t i = 0; i < places; i++)
+            scale *= 10.0;
+        uint64_t scaled = (uint64_t)(a * scale + 0.5);
+        uint64_t unit = 1;
+        for (int32_t i = 0; i < places && unit <= UINT64_MAX / 10; i++)
+            unit *= 10;
+        uint64_t whole = scaled / unit, part = scaled % unit;
+        if (negative && scaled != 0)
+            b[k++] = '-';
+        os64_snprintf(b + k, sizeof(b) - k, "%lu", (unsigned long)whole);
+        k += os64_strlen(b + k);
+        if (part != 0) {
+            char frac[24];
+            int32_t n = places;
+            for (int32_t i = n - 1; i >= 0; i--) {
+                frac[i] = (char)('0' + part % 10);
+                part /= 10;
+            }
+            while (n > 0 && frac[n - 1] == '0')
+                n--;
+            b[k++] = '.';
+            for (int32_t i = 0; i < n; i++)
+                b[k++] = frac[i];
+        }
+        b[k] = '\0';
+    }
+    if (cap > 0)
+        os64_strcopy(out, cap, b);
+    return k;
+}
+
 static void num(Out *o, double v)
 {
     char b[48];

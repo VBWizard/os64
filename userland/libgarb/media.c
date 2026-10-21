@@ -11,6 +11,8 @@
 // asked for — a light or dark scheme, and full or reduced motion — from the
 // env (garb_env_t), each the first unless they asked otherwise.
 
+#include <float.h>
+
 #include "values_internal.h"
 #include "garb/cascade.h"
 #include "os64/str.h"
@@ -464,6 +466,417 @@ bool garb_media_matches(const garb_value_t *v, int32_t n, garb_env_t env)
         start = k + 1;
     }
     return false;
+}
+
+// ── Serialization (CSSOM § Serializing media queries) ───────────────────
+//
+// A query is read for its SHAPE alone (Media Queries 4 § 3's grammar):
+// whether a feature is one this machine knows changes what it evaluates to,
+// not whether it is a query. Each function reads at `c` and, when `o` is
+// not NULL, writes what it read; the list's serializer reads each query
+// once to judge it and again to write it, so a query that turns out not to
+// be one has written nothing and is written `not all`.
+
+typedef struct {
+    char *out;
+    size_t cap, len;
+} SOut;
+
+static void s_put(SOut *o, const char *s, size_t n)
+{
+    if (o == NULL)
+        return;
+    for (size_t i = 0; i < n; i++, o->len++)
+        if (o->len + 1 < o->cap)
+            o->out[o->len] = s[i];
+    if (o->cap > 0)
+        o->out[o->len < o->cap ? o->len : o->cap - 1] = '\0';
+}
+
+static void s_puts(SOut *o, const char *s)
+{
+    s_put(o, s, os64_strlen(s));
+}
+
+static void s_lower(SOut *o, const char *s, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        char ch = s[i] >= 'A' && s[i] <= 'Z' ? (char)(s[i] - 'A' + 'a') : s[i];
+        s_put(o, &ch, 1);
+    }
+}
+
+static void s_number(SOut *o, double v)
+{
+    char b[DBL_MAX_10_EXP + 24];
+    garb_css_number(v, b, sizeof(b));
+    s_puts(o, b);
+}
+
+static void s_values(SOut *o, const garb_value_t *v, int32_t n);
+
+// One component value written back as CSS: what a <general-enclosed> is
+// kept as. A number and a unit are spelled canonically; the rest as the
+// tokenizer read them.
+static void s_value(SOut *o, const garb_value_t *v)
+{
+    switch (v->kind) {
+    case GARB_IDENT: s_put(o, v->text, v->len); break;
+    case GARB_FUNCTION:
+        s_put(o, v->text, v->len);
+        s_put(o, "(", 1);
+        s_values(o, v->children, v->nchildren);
+        s_put(o, ")", 1);
+        break;
+    case GARB_AT_KEYWORD: s_put(o, "@", 1); s_put(o, v->text, v->len); break;
+    case GARB_HASH: s_put(o, "#", 1); s_put(o, v->text, v->len); break;
+    case GARB_STRING:
+        s_put(o, "\"", 1);
+        for (uint32_t i = 0; i < v->len; i++) {
+            if (v->text[i] == '"' || v->text[i] == '\\')
+                s_put(o, "\\", 1);
+            s_put(o, &v->text[i], 1);
+        }
+        s_put(o, "\"", 1);
+        break;
+    case GARB_URL: s_put(o, "url(", 4); s_put(o, v->text, v->len); s_put(o, ")", 1); break;
+    case GARB_DELIM: s_put(o, v->text, v->len); break;
+    case GARB_NUMBER: s_number(o, v->number); break;
+    case GARB_PERCENTAGE: s_number(o, v->number); s_put(o, "%", 1); break;
+    case GARB_DIMENSION: s_number(o, v->number); s_lower(o, v->unit, v->unit_len); break;
+    case GARB_WHITESPACE: s_put(o, " ", 1); break;
+    case GARB_COLON: s_put(o, ":", 1); break;
+    case GARB_SEMICOLON: s_put(o, ";", 1); break;
+    case GARB_COMMA: s_put(o, ",", 1); break;
+    case GARB_BLOCK: {
+        char open = v->open, close = open == '{' ? '}' : open == '[' ? ']' : ')';
+        s_put(o, &open, 1);
+        s_values(o, v->children, v->nchildren);
+        s_put(o, &close, 1);
+        break;
+    }
+    default: break;     // CDO, CDC and the bad tokens: none is <any-value>
+    }
+}
+
+// A run of component values, the white space at its ends dropped and each
+// run of it inside written as one space.
+static void s_values(SOut *o, const garb_value_t *v, int32_t n)
+{
+    int32_t first = 0, last = n;
+    while (first < last && v[first].kind == GARB_WHITESPACE)
+        first++;
+    while (last > first && v[last - 1].kind == GARB_WHITESPACE)
+        last--;
+    for (int32_t i = first; i < last; i++)
+        if (v[i].kind != GARB_WHITESPACE || v[i - 1].kind != GARB_WHITESPACE)
+            s_value(o, &v[i]);
+}
+
+// Whether a run is <any-value>: no bad string, bad url or unmatched
+// closing bracket at any depth.
+static bool any_value(const garb_value_t *v, int32_t n)
+{
+    for (int32_t i = 0; i < n; i++) {
+        if (v[i].kind == GARB_BAD_STRING || v[i].kind == GARB_BAD_URL || v[i].kind == GARB_UNMATCHED)
+            return false;
+        if ((v[i].kind == GARB_BLOCK || v[i].kind == GARB_FUNCTION) &&
+            !any_value(v[i].children, v[i].nchildren))
+            return false;
+    }
+    return true;
+}
+
+// <mf-value>: a number, a dimension, an identifier, a ratio (`a / b`, both
+// numbers), or a function such as calc(). An identifier is ASCII
+// case-insensitive in a feature this machine knows, so it is written in
+// lower case.
+static bool s_mf_value(MCur *c, SOut *o)
+{
+    const garb_value_t *t = peek(c);
+    if (t == NULL)
+        return false;
+    switch (t->kind) {
+    case GARB_NUMBER: {
+        c->i++;
+        MCur look = *c;
+        if (is_delim_v(peek(&look), '/')) {
+            look.i++;
+            const garb_value_t *d = peek(&look);
+            if (d == NULL || d->kind != GARB_NUMBER)
+                return false;
+            look.i++;
+            *c = look;
+            s_number(o, t->number);
+            s_puts(o, " / ");
+            s_number(o, d->number);
+            return true;
+        }
+        s_number(o, t->number);
+        return true;
+    }
+    case GARB_DIMENSION:
+    case GARB_PERCENTAGE:
+    case GARB_FUNCTION:
+        if (t->kind == GARB_FUNCTION && !any_value(t->children, t->nchildren))
+            return false;
+        c->i++;
+        s_value(o, t);
+        return true;
+    case GARB_IDENT:
+        c->i++;
+        s_lower(o, t->text, t->len);
+        return true;
+    default:
+        return false;
+    }
+}
+
+// A comparison written back: `<`, `<=`, `>`, `>=` or `=`, a space each side.
+static const char *op_text(Op op)
+{
+    switch (op) {
+    case OP_LT: return " < ";
+    case OP_LE: return " <= ";
+    case OP_GT: return " > ";
+    case OP_GE: return " >= ";
+    default: return " = ";
+    }
+}
+
+// Whether an identifier names a feature this machine knows, `min-` and
+// `max-` forms of a ranged one included.
+static bool known_name(const garb_value_t *t)
+{
+    if (t == NULL || t->kind != GARB_IDENT)
+        return false;
+    const char *s = t->text;
+    size_t n = t->len;
+    bool bounded = n > 4 && (ieq(s, 4, "min-") || ieq(s, 4, "max-"));
+    const Feature *f = feature_named(bounded ? s + 4 : s, bounded ? n - 4 : n);
+    return f != NULL && (!bounded || f->ranged);
+}
+
+// <media-feature>, in a block's contents: `name`, `name: value`, or a range
+// — `name < value`, `value < name`, `value < name < value`. Only a name this
+// machine knows is read as one; any other is <general-enclosed>, kept as
+// written.
+static bool s_feature(const garb_value_t *block, SOut *o)
+{
+    MCur c = {.v = block->children, .n = block->nchildren};
+    const garb_value_t *t = peek(&c);
+    if (known_name(t)) {
+        c.i++;
+        Op op;
+        MCur look = c;
+        if (peek(&look) == NULL) {
+            s_lower(o, t->text, t->len);
+            return true;
+        }
+        if (peek(&look)->kind == GARB_COLON) {
+            look.i++;
+            if (!s_mf_value(&look, NULL) || peek(&look) != NULL)
+                return false;
+            s_lower(o, t->text, t->len);
+            s_puts(o, ": ");
+            look = c;
+            peek(&look);
+            look.i++;
+            s_mf_value(&look, o);
+            return true;
+        }
+        if (!comparison(&look, &op) || !s_mf_value(&look, NULL) || peek(&look) != NULL)
+            return false;
+        s_lower(o, t->text, t->len);
+        look = c;
+        comparison(&look, &op);
+        s_puts(o, op_text(op));
+        s_mf_value(&look, o);
+        return true;
+    }
+    // A value first: the name after it, then perhaps another value.
+    MCur look = c;
+    Op op1, op2;
+    if (!s_mf_value(&look, NULL) || !comparison(&look, &op1) || !known_name(peek(&look)))
+        return false;
+    const garb_value_t *name = peek(&look);
+    look.i++;
+    bool two = peek(&look) != NULL;
+    if (two && (!comparison(&look, &op2) || !s_mf_value(&look, NULL) || peek(&look) != NULL))
+        return false;
+    // Both comparisons point the same way, and neither is `=`.
+    if (two && (op1 == OP_EQ || op2 == OP_EQ ||
+                (op1 == OP_LT || op1 == OP_LE) != (op2 == OP_LT || op2 == OP_LE)))
+        return false;
+    look = c;
+    s_mf_value(&look, o);
+    comparison(&look, &op1);
+    s_puts(o, op_text(op1));
+    s_lower(o, name->text, name->len);
+    peek(&look);
+    look.i++;
+    if (two) {
+        comparison(&look, &op2);
+        s_puts(o, op_text(op2));
+        s_mf_value(&look, o);
+    }
+    return true;
+}
+
+static bool s_condition(MCur *c, bool allow_or, SOut *o);
+
+// <media-in-parens>: a condition in brackets, a feature, or
+// <general-enclosed> — a function, or brackets holding <any-value> — which
+// is a query's shape whatever it holds.
+static bool s_in_parens(MCur *c, SOut *o)
+{
+    const garb_value_t *t = peek(c);
+    if (t == NULL)
+        return false;
+    if (t->kind == GARB_FUNCTION) {
+        if (!any_value(t->children, t->nchildren))
+            return false;
+        c->i++;
+        s_value(o, t);
+        return true;
+    }
+    if (t->kind != GARB_BLOCK || t->open != '(' || !any_value(t->children, t->nchildren))
+        return false;
+    c->i++;
+    s_put(o, "(", 1);
+    if (!s_feature(t, NULL)) {
+        MCur inner = {.v = t->children, .n = t->nchildren};
+        MCur probe = inner;
+        if (s_condition(&probe, true, NULL) && peek(&probe) == NULL)
+            s_condition(&inner, true, o);
+        else
+            s_values(o, t->children, t->nchildren);
+    } else {
+        s_feature(t, o);
+    }
+    s_put(o, ")", 1);
+    return true;
+}
+
+// <media-condition>, or <media-condition-without-or>: `not` and one, or a
+// run joined all by `and` or all by `or`.
+static bool s_condition(MCur *c, bool allow_or, SOut *o)
+{
+    if (is_word(peek(c), "not")) {
+        c->i++;
+        s_puts(o, "not ");
+        return s_in_parens(c, o);
+    }
+    if (!s_in_parens(c, o))
+        return false;
+    const garb_value_t *t = peek(c);
+    bool ands = is_word(t, "and"), ors = allow_or && is_word(t, "or");
+    while ((ands && is_word(peek(c), "and")) || (ors && is_word(peek(c), "or"))) {
+        c->i++;
+        s_puts(o, ands ? " and " : " or ");
+        if (!s_in_parens(c, o))
+            return false;
+    }
+    return true;
+}
+
+// Whether an identifier may be a media type: not one of the words the
+// grammar keeps for itself.
+static bool media_type(const garb_value_t *t)
+{
+    return t != NULL && t->kind == GARB_IDENT && !is_word(t, "not") && !is_word(t, "only") &&
+           !is_word(t, "and") && !is_word(t, "or") && !is_word(t, "layer");
+}
+
+// One <media-query>, CSSOM's way: `not` or `only` as written, the type in
+// lower case, and `all and` left out when nothing negates it.
+static bool s_query(MCur *c, SOut *o)
+{
+    const garb_value_t *t = peek(c);
+    if (t == NULL)
+        return false;
+    const garb_value_t *modifier = NULL, *type = NULL;
+    if (is_word(t, "not") || is_word(t, "only")) {
+        MCur look = *c;
+        look.i++;
+        if (media_type(peek(&look))) {
+            modifier = t;
+            c->i = look.i;
+            t = peek(c);
+        } else if (is_word(t, "only")) {
+            return false;
+        }
+    }
+    if (modifier != NULL || media_type(t)) {
+        type = t;
+        c->i++;
+        bool all = is_word(type, "all") && modifier == NULL;
+        if (modifier != NULL) {
+            s_lower(o, modifier->text, modifier->len);
+            s_put(o, " ", 1);
+        }
+        if (is_word(peek(c), "and")) {
+            c->i++;
+            if (!all) {
+                s_lower(o, type->text, type->len);
+                s_puts(o, " and ");
+            }
+            if (!s_condition(c, false, o))
+                return false;
+        } else {
+            s_lower(o, type->text, type->len);
+        }
+    } else if (!s_condition(c, true, o)) {
+        return false;
+    }
+    return peek(c) == NULL;
+}
+
+size_t garb_media_serialize(const garb_value_t *v, int32_t n, char *out, size_t cap)
+{
+    SOut o = {out, cap, 0};
+    if (cap > 0)
+        out[0] = '\0';
+    bool any_content = false;
+    for (int32_t k = 0; k < n; k++)
+        if (v[k].kind != GARB_WHITESPACE)
+            any_content = true;
+    if (!any_content)
+        return 0;
+    int32_t start = 0;
+    for (int32_t k = 0; k <= n; k++) {
+        if (k < n && v[k].kind != GARB_COMMA)
+            continue;
+        if (start > 0)
+            s_puts(&o, ", ");
+        MCur judge = {.v = v + start, .n = k - start};
+        if (s_query(&judge, NULL)) {
+            MCur write = {.v = v + start, .n = k - start};
+            s_query(&write, &o);
+        } else {
+            s_puts(&o, "not all");
+        }
+        start = k + 1;
+    }
+    return o.len;
+}
+
+size_t garb_media_text_serialize(const char *text, char *out, size_t cap)
+{
+    if (cap > 0)
+        out[0] = '\0';
+    if (text == NULL)
+        return 0;
+    // A list that ran short of memory partway is a prefix of the text, and
+    // its serialization would be a different list's.
+    garb_parsed_t r;
+    if (garb_parse_values(text, os64_strlen(text), &r) != GARB_OK || r.incomplete) {
+        garb_free(&r);
+        return (size_t)-1;
+    }
+    size_t length = garb_media_serialize(r.values, r.nvalues, out, cap);
+    garb_free(&r);
+    return length;
 }
 
 bool garb_media_text_matches(const char *text, garb_env_t env)
