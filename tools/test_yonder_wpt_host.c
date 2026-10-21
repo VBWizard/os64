@@ -4,6 +4,7 @@
  *   test_yonder_wpt_host --wpt <checkout> --dir <dir> --expect <file>
  *                        [--pages <file>] [--update] [--only <substring>]
  *                        [--report <file>] [--modern-off] [--fault]
+ *                        [--short-read <path>]
  *
  * The window is the scripted-page host's (that file is included whole,
  * without its main, for its fakes of the OS: the pool, the mailbox, the
@@ -27,7 +28,10 @@
  * META global= names no window is not run either. Each variant (a META
  * variant= line, a <meta name=variant>) is a page of its own. A page is
  * named as WPT names it, relative to <dir>: `a.html`, `b.any.html?1-10`.
- * A page the expectation file excludes is not run.
+ * A test file that cannot be read whole is listed all the same, as the page
+ * it would most simply make, so its run is UNJUDGED below, as a
+ * manifest-listed page's is. A page the expectation file excludes is not
+ * run.
  *
  * WHAT IS SERVED: the page is http://wpt.test/<dir>/<name>; every script and
  * sheet the page asks for whose address is under http://wpt.test/ is
@@ -50,9 +54,9 @@
  * is one TIMEOUT line naming why; a harness that ended in anything but OK
  * is a HARNESS line with its message, and that page FAILS WHOLE: none of
  * its tests is a pass, and one the harness said passed is a FAIL line that
- * says so. A page never run to a verdict (its source missing, unreadable or
- * past WPT_FILE_MAX; its navigation never started) is an UNJUDGED line, and
- * the run cannot be judged (exit 2). Then the summary.
+ * says so. A page never run to a verdict (its source missing, past
+ * WPT_FILE_MAX, or not read whole; its navigation never started) is an
+ * UNJUDGED line, and the run cannot be judged (exit 2). Then the summary.
  *
  * THE EXPECTATIONS (--expect) are three sections of `page<tab>...` lines,
  * `#` lines being comments (MODERN_WEB.md § The oracle):
@@ -115,6 +119,10 @@ static bool wpt_modern_off;
 /* --fault: a fault in the fakes after the last page, as if one had been
  * met, for the selftest to prove a faulted run rewrites nothing. */
 static bool wpt_fault;
+/* --short-read <path>: every read of exactly that path stops a byte short,
+ * as a file changing under the reader would, for the selftest to prove a
+ * short read is a failed one. */
+static const char *wpt_short_read;
 
 static void *wpt_must(void *p) {
     if(p==NULL) { fprintf(stderr,"wpt: out of memory\n"); exit(2); }
@@ -156,16 +164,23 @@ static void wpt_list_free(wpt_list_t *l) {
     free(l->v); memset(l,0,sizeof(*l));
 }
 
-/* A whole file, NUL-terminated; NULL when it is not a regular file or is
- * past WPT_FILE_MAX. */
+/* A whole file, NUL-terminated; NULL when it is not a regular file, is
+ * past WPT_FILE_MAX, cannot be opened, or does not read whole (fewer bytes
+ * than its size, or a read error). */
 static char *wpt_slurp(const char *path, size_t *len) {
     struct stat st;
     if(stat(path,&st)!=0 || !S_ISREG(st.st_mode) || (uint64_t)st.st_size>WPT_FILE_MAX) return NULL;
     FILE *f=fopen(path,"rb");
     if(f==NULL) return NULL;
-    char *bytes=wpt_must(malloc((size_t)st.st_size+1));
-    size_t got=fread(bytes,1,(size_t)st.st_size,f);
+    size_t want=(size_t)st.st_size;
+    char *bytes=wpt_must(malloc(want+1));
+    size_t asked=want>0 && wpt_short_read!=NULL && !strcmp(path,wpt_short_read) ? want-1 : want;
+    size_t got=fread(bytes,1,asked,f);
+    bool whole=got==want && !ferror(f);
     fclose(f);
+    /* A read that stopped short is no file at all: what it lost may be the
+     * part that mattered. */
+    if(!whole) { free(bytes); return NULL; }
     bytes[got]='\0';
     *len=got;
     return bytes;
@@ -334,9 +349,17 @@ static void wpt_consider(const char *source, const char *rel) {
     if(!any && !window && !html) return;
     size_t len=0;
     char *bytes=wpt_slurp(source,&len);
-    if(bytes==NULL) return;
     char *checkout_rel=wpt_join(wpt_dir,rel);
-    if(any || window) {
+    if(bytes==NULL) {
+        /* A test file that cannot be read is listed all the same, under the
+         * page it would most simply make, and its run says UNJUDGED, as a
+         * manifest-listed page's does: left out, it would read as a page
+         * gone and --update would drop its passes. */
+        int stem=(int)(strlen(rel)-strlen(any ? ".any.js" : ".window.js"));
+        wpt_page_add(any || window ? wpt_fmt("%.*s%s",stem,rel,any ? ".any.html" : ".window.html")
+                                   : wpt_strdup(rel),
+                     source,checkout_rel,any ? WPT_ANY : window ? WPT_WINDOW : WPT_HTML,-1);
+    } else if(any || window) {
         wpt_meta_t m;
         wpt_script_meta(bytes,&m);
         if(!any || !m.any_global || m.window) {
@@ -572,7 +595,7 @@ static void wpt_run(const wpt_page_t *page, wpt_outcome_t *out) {
     char *html=page->kind==WPT_HTML ? wpt_slurp(page->source,&len) : wpt_wrapper(page,&long_timeout);
     if(html==NULL) {
         out->unjudged=true;
-        out->why="its source is missing, unreadable, or past the size a file may have here";
+        out->why="its source is missing, past the size a file may have here, or did not read whole";
         return;
     }
     len=strlen(html);
@@ -639,9 +662,10 @@ typedef struct {
 
 /* The file at `path` into `e`; a file that does not exist is three empty
  * sections. False, having said why, for one that exists and cannot be read
- * (a directory, past WPT_FILE_MAX, refused), a line outside any section, or
- * an exclusion that gives no reason: a run against expectations it could
- * not read would judge nothing, and --update would replace them. */
+ * whole (a directory, past WPT_FILE_MAX, refused, read short), a line
+ * outside any section, or an exclusion that gives no reason: a run against
+ * expectations it could not read would judge nothing, and --update would
+ * replace them. */
 static bool wpt_expect_read(const char *path, wpt_expect_t *e) {
     memset(e,0,sizeof(*e));
     struct stat st;
@@ -657,7 +681,7 @@ static bool wpt_expect_read(const char *path, wpt_expect_t *e) {
     }
     size_t len=0;
     char *text=wpt_slurp(path,&len);
-    if(text==NULL) { fprintf(stderr,"wpt: %s could not be read\n",path); return false; }
+    if(text==NULL) { fprintf(stderr,"wpt: %s could not be read whole\n",path); return false; }
     enum { NONE, REQUIRED, PASSING, EXCLUDED } section=NONE;
     bool ok=true;
     /* Every line, a blank one included: only what follows the last newline,
@@ -752,7 +776,8 @@ static int wpt_update(const char *expect, const wpt_expect_t *e, const wpt_list_
 
 static int wpt_usage(void) {
     fprintf(stderr,"usage: test_yonder_wpt_host --wpt <checkout> --dir <dir> --expect <file>"
-        " [--pages <file>] [--update] [--only <substring>] [--report <file>] [--modern-off] [--fault]\n");
+        " [--pages <file>] [--update] [--only <substring>] [--report <file>] [--modern-off] [--fault]"
+        " [--short-read <path>]\n");
     return 2;
 }
 
@@ -769,6 +794,7 @@ int main(int argc, char **argv) {
         else if(i+1<argc && !strcmp(argv[i],"--report")) wpt_report=argv[++i];
         else if(!strcmp(argv[i],"--modern-off")) wpt_modern_off=true;
         else if(!strcmp(argv[i],"--fault")) wpt_fault=true;
+        else if(i+1<argc && !strcmp(argv[i],"--short-read")) wpt_short_read=argv[++i];
         else return wpt_usage();
     }
     if(wpt_root==NULL || wpt_dir==NULL || expect==NULL) return wpt_usage();

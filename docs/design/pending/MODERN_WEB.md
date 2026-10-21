@@ -495,9 +495,10 @@ is listed) and `[excluded]` (a page not run, with its reason). `--update`
 rewrites `[passing]` alone. A page whose harness did not end OK fails
 whole: a pass it reported prints as a FAIL that says so. Only a page run
 to a verdict may change the expectations, so `--update` writes last, and
-only for a run with no fault and no page left unrun (a source missing,
-unreadable or too large is an UNJUDGED page); an expectation file that
-exists and cannot be read makes the run unjudgeable too. `--modern-off` runs the
+only for a run with no fault and no page left unrun (a source missing, too
+large or not read whole is an UNJUDGED page, whichever discovery found it);
+an expectation file that exists and cannot be read whole makes the run
+unjudgeable too. `--modern-off` runs the
 window with the switch off, to show the required tests are the slice's
 own: green only when none of them passes, a LEAKED one failing the run.
 `--selftest` holds the runner to `tools/wpt/selftest/` both

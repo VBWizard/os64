@@ -161,6 +161,33 @@ if [ "$1" = --selftest ]; then
             grep -q "^UNJUDGED	$page	" "$work/out.txt" ||
             fail "a listed page whose source is $page was not UNJUDGED, exit 2, the file untouched (exit $rc)"
     done
+    # Found by file name, a test file too large to read is listed all the
+    # same, and is UNJUDGED.
+    cp "$work/lost.txt" "$work/unjudged.txt"
+    run --expect "$work/unjudged.txt" --only huge --update
+    [ "$rc" -eq 2 ] && cmp -s "$work/lost.txt" "$work/unjudged.txt" &&
+        grep -q "^UNJUDGED	huge.html	" "$work/out.txt" ||
+        fail "found by file name, a source past the cap was not UNJUDGED, exit 2, the file untouched (exit $rc)"
+    # A read that stops short is no read: a test source read short is
+    # UNJUDGED, listed by the manifest or found by file name, and an
+    # expectation file read short cannot be judged; --update writes nothing.
+    src="$work/wpt/selftest/pass-fail.html"
+    printf '{"items":{"testharness":{"selftest":{"pass-fail.html":["%s",[null,{}]]}}},"url_base":"/","version":9}\n' \
+        "$(printf '0%.0s' {1..40})" > "$work/manifest.json"
+    python3 -I tools/wpt/pages.py "$work/manifest.json" selftest > "$work/one.txt"
+    for how in --pages --only; do
+        what="$work/one.txt"
+        [ "$how" = --only ] && what=pass-fail
+        cp "$work/lost.txt" "$work/short.txt"
+        run --expect "$work/short.txt" "$how" "$what" --short-read "$src" --update
+        [ "$rc" -eq 2 ] && cmp -s "$work/lost.txt" "$work/short.txt" &&
+            grep -q "^UNJUDGED	pass-fail.html	" "$work/out.txt" ||
+            fail "a source read short ($how) was not UNJUDGED, exit 2, the file untouched (exit $rc)"
+    done
+    cp "$work/lost.txt" "$work/short.txt"
+    run --expect "$work/short.txt" --short-read "$work/short.txt" --update
+    [ "$rc" -eq 2 ] && cmp -s "$work/lost.txt" "$work/short.txt" ||
+        fail "an expectation file read short was taken, or rewritten (exit $rc)"
 
     echo "wpt selftest: the runner's pages ran as tools/wpt/selftest.out says, found either way;" \
         "the expectations' three sections hold, unreadable ones and faulted runs are refused," \

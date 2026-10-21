@@ -1138,9 +1138,10 @@ never counted. `--update` rewrites `[passing]` alone; the other two are
 written by hand, which is the point of them. Only a page run to a verdict
 may change the file, so it writes last, and not at all for a run that
 cannot be judged (exit 2): one with a fault in the window's fakes, one with
-a page never run (an UNJUDGED line: its source missing, unreadable or too
-large, its navigation never started), and one whose expectation file
-exists and cannot be read (a file that does not exist is three empty
+a page never run (an UNJUDGED line: its source missing, too large or not
+read whole, its navigation never started; listed so whether the manifest
+or the file names found it), and one whose expectation file exists and
+cannot be read whole (a file that does not exist is three empty
 sections). A slice commits its
 directory's file BEFORE its code, so the diff of that file is the proof.
 **A page whose harness did not end OK fails whole**: none of its tests is a
