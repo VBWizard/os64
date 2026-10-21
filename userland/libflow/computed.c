@@ -304,9 +304,64 @@ static int64_t cb_height(const flow_computed_t *c)
     return cb != NULL ? cb->content.h : -1;
 }
 
+static bool leaves_flow(const flow_style_t *s)
+{
+    return s->position == FLOW_POSITION_ABSOLUTE || s->position == FLOW_POSITION_FIXED;
+}
+
+// An absolute or fixed box's containing block, in device pixels: its
+// nearest positioned ancestor's padding box, or the initial containing
+// block (the page's origin, the root's width, the viewport's height) —
+// which a fixed box is always in, the viewport's own coordinates being a
+// fixed box's (flow_box_t.fixed).
+static os64_gui_rect_t positioned_block(const flow_computed_t *c)
+{
+    const flow_box_t *root = flow_root(c->tree);
+    double height = (double)c->env.viewport_height * c->zoom;
+    os64_gui_rect_t initial = {0, 0, root != NULL ? 2 * root->rect.x + root->rect.w : 0,
+                               (int32_t)(height + 0.5)};
+    if (c->style->position == FLOW_POSITION_FIXED)
+        return initial;
+    for (const flow_box_t *b = c->box->parent; b != NULL; b = b->parent) {
+        if (!b->positioned || b->style == NULL)
+            continue;
+        const flow_unit_t *bw = b->style->border_width;
+        int32_t l = (bw[FLOW_LEFT] + 32) / 64, t = (bw[FLOW_TOP] + 32) / 64;
+        return (os64_gui_rect_t){b->rect.x + l, b->rect.y + t,
+                                 b->rect.w - l - (bw[FLOW_RIGHT] + 32) / 64,
+                                 b->rect.h - t - (bw[FLOW_BOTTOM] + 32) / 64};
+    }
+    return initial;
+}
+
+// A length in device pixels, resolved against `base` (a percentage's), or
+// `fallback` for one that is `auto`.
+static double used_px(flow_length_t l, int64_t base, double fallback)
+{
+    if (l.kind == FLOW_LENGTH_PX) return (double)l.value / FLOW_UNITS_PER_PX;
+    if (l.kind == FLOW_LENGTH_PERCENT && base >= 0) return (double)f_len(l, base * FLOW_UNITS_PER_PX) / FLOW_UNITS_PER_PX;
+    return fallback;
+}
+
+// A relative or sticky box's offset on an axis, in device pixels, as CSS
+// 2.1 § 9.4.3 uses it: an auto inset is the other's negation, both auto
+// are 0, and over-constrained the left (top) wins. `first` asks for the
+// left or top one.
+static double relative_offset(const flow_computed_t *c, bool across, bool first)
+{
+    const flow_length_t *in = c->style->inset;
+    flow_length_t near = in[across ? FLOW_LEFT : FLOW_TOP], far = in[across ? FLOW_RIGHT : FLOW_BOTTOM];
+    int64_t base = across ? cb_width(c) : cb_height(c);
+    double offset = near.kind != FLOW_LENGTH_AUTO ? used_px(near, base, 0)
+                  : far.kind != FLOW_LENGTH_AUTO ? -used_px(far, base, 0) : 0;
+    return first ? offset : -offset;
+}
+
 // A margin's used value (CSSOM § Resolved values): a percentage of the
-// containing block's width, and an `auto` margin across a block in the
-// flow what the block left over on that side; `auto` anywhere else is 0.
+// containing block's width, and an `auto` margin across what the box left
+// over on that side of where it was placed — in the flow, of its
+// containing block's content box, its relative offset taken back; out of
+// it, of the containing block past the inset — `auto` anywhere else 0.
 static void margin(const flow_computed_t *c, Out *o, int side)
 {
     flow_length_t m = c->style->margin[side];
@@ -314,22 +369,30 @@ static void margin(const flow_computed_t *c, Out *o, int side)
         length(c, o, m, "auto");
         return;
     }
-    if (m.kind == FLOW_LENGTH_AUTO) {
-        const flow_box_t *cb = containing(c);
-        bool across = side == FLOW_LEFT || side == FLOW_RIGHT;
-        bool in_flow = !c->box->positioned && c->box->floated == FLOW_FLOAT_NONE &&
-                       !c->box->fixed && c->box->kind != FLOW_BOX_ATOMIC;
-        if (across && in_flow && cb != NULL) {
-            int64_t gap = side == FLOW_LEFT
-                ? (int64_t)c->box->rect.x - cb->content.x
-                : (int64_t)cb->content.x + cb->content.w - ((int64_t)c->box->rect.x + c->box->rect.w);
-            px(c, o, (double)(gap > 0 ? gap : 0));
-        } else {
-            px(c, o, 0);
-        }
+    if (m.kind != FLOW_LENGTH_AUTO) {
+        used_length(c, o, m, leaves_flow(c->style) ? positioned_block(c).w : cb_width(c), "auto");
         return;
     }
-    used_length(c, o, m, cb_width(c), "auto");
+    bool across = side == FLOW_LEFT || side == FLOW_RIGHT;
+    const flow_box_t *b = c->box;
+    double gap = 0;
+    if (across && leaves_flow(c->style)) {
+        os64_gui_rect_t cb = positioned_block(c);
+        flow_length_t at = c->style->inset[side];
+        if (at.kind != FLOW_LENGTH_AUTO) {
+            double inset_px = used_px(at, cb.w, 0);
+            gap = side == FLOW_LEFT ? b->rect.x - cb.x - inset_px
+                                    : (double)cb.x + cb.w - ((double)b->rect.x + b->rect.w) - inset_px;
+        }
+    } else if (across && b->floated == FLOW_FLOAT_NONE && b->kind != FLOW_BOX_ATOMIC) {
+        const flow_box_t *cb = containing(c);
+        double shift = c->style->position == FLOW_POSITION_RELATIVE || c->style->position == FLOW_POSITION_STICKY
+            ? relative_offset(c, true, true) : 0;
+        if (cb != NULL)
+            gap = side == FLOW_LEFT ? b->rect.x - shift - cb->content.x
+                                    : (double)cb->content.x + cb->content.w - (b->rect.x - shift + b->rect.w);
+    }
+    px(c, o, gap > 0 ? gap : 0);
 }
 
 // The used width or height: the content box's, or the border box's when
@@ -347,18 +410,44 @@ static void size(const flow_computed_t *c, Out *o, bool across)
     px(c, o, (double)(v > 0 ? v : 0));
 }
 
-// An inset (CSSOM § Resolved values): a positioned box's percentage
-// worked out against its containing block; `auto` and a static box's as
-// computed.
+// An inset (CSSOM § Resolved values): a positioned box's used value. A
+// relative one's offsets by CSS 2.1 § 9.4.3 (relative_offset); an absolute
+// or fixed one's percentage of its containing block, and its `auto` where
+// the box was placed in that block, its margin taken off; a sticky one's
+// percentage worked out and its `auto` left; a static box's, and one with
+// no box, as computed.
 static void inset(const flow_computed_t *c, Out *o, int side)
 {
-    flow_length_t l = c->style->inset[side];
-    if (c->style->position == FLOW_POSITION_STATIC || !rendered(c)) {
+    const flow_style_t *s = c->style;
+    flow_length_t l = s->inset[side];
+    bool across = side == FLOW_LEFT || side == FLOW_RIGHT;
+    if (s->position == FLOW_POSITION_STATIC || !rendered(c)) {
         length(c, o, l, "auto");
         return;
     }
-    bool across = side == FLOW_LEFT || side == FLOW_RIGHT;
-    used_length(c, o, l, across ? cb_width(c) : cb_height(c), "auto");
+    if (s->position == FLOW_POSITION_RELATIVE) {
+        px(c, o, relative_offset(c, across, side == FLOW_LEFT || side == FLOW_TOP));
+        return;
+    }
+    if (!leaves_flow(s)) {
+        used_length(c, o, l, across ? cb_width(c) : cb_height(c), "auto");
+        return;
+    }
+    os64_gui_rect_t cb = positioned_block(c);
+    if (l.kind != FLOW_LENGTH_AUTO) {
+        used_length(c, o, l, across ? cb.w : cb.h, "auto");
+        return;
+    }
+    const flow_box_t *b = c->box;
+    double m = used_px(s->margin[side], cb.w, 0);
+    double v;
+    switch (side) {
+    case FLOW_LEFT: v = b->rect.x - cb.x - m; break;
+    case FLOW_RIGHT: v = (double)cb.x + cb.w - ((double)b->rect.x + b->rect.w) - m; break;
+    case FLOW_TOP: v = b->rect.y - cb.y - m; break;
+    default: v = (double)cb.y + cb.h - ((double)b->rect.y + b->rect.h) - m; break;
+    }
+    px(c, o, v);
 }
 
 // ── The lists ───────────────────────────────────────────────────────────

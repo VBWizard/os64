@@ -129,7 +129,8 @@ static void computed_cases(void)
     c = flow_computed_new(tree, &p.env, computed_find(root, "pos"), NULL);
     computed_is(c, "computed: a relative box's inset", GARB_TOP, "10px");
     computed_is(c, "computed: left", GARB_LEFT, "5px");
-    computed_is(c, "computed: an unset inset", GARB_RIGHT, "auto");
+    computed_is(c, "computed: a relative box's unset inset is the other's negation", GARB_RIGHT, "-5px");
+    computed_is(c, "computed: and both unset are 0", GARB_BOTTOM, "-10px");
     computed_is(c, "computed: z-index", GARB_Z_INDEX, "3");
     computed_is(c, "computed: opacity", GARB_OPACITY, "0.25");
     computed_is(c, "computed: transform is its matrix", GARB_TRANSFORM, "matrix(2, 0, 0, 2, 10, 20)");
@@ -218,6 +219,34 @@ static void computed_cases(void)
     expect("computed: each allocation failed answers NULL or the whole style", whole && count > 0, NULL);
     expect("computed: and keeps nothing", !kept, NULL);
     printf("libflow computed sweep: each of %zu allocations failed in turn\n", count);
+    flow_free(tree);
+    sheeted_close(&p);
+
+    // Positioned boxes with auto margins and insets (WPT's computed-style-005
+    // and the insets' tests): what the layout placed.
+    sheeted_open(&p, "<!doctype html><style>body{margin:0}x{display:block;position:relative;width:60px;"
+                     "height:10px}y{display:block;width:40px;height:10px;margin:auto}"
+                     "#a{position:absolute;left:0;right:0}#r{position:relative}"
+                     "#t{position:absolute;top:7px;width:5px;height:5px;margin:0}</style>"
+                     "<x><y id=a></y></x><x><y id=r></y></x><x><y id=t></y></x>", 800, 600);
+    tree = flow_layout(p.doc, p.page, 800, &p.env);
+    root = p.doc->document;
+    c = tree != NULL ? flow_computed_new(tree, &p.env, computed_find(root, "a"), NULL) : NULL;
+    computed_is(c, "computed: an absolute box's auto margin is what it left", GARB_MARGIN_LEFT, "10px");
+    computed_is(c, "computed: and on the other side", GARB_MARGIN_RIGHT, "10px");
+    computed_is(c, "computed: an absolute box's inset as written", GARB_LEFT, "0px");
+    computed_is(c, "computed: an absolute box's auto inset is where it was placed", GARB_TOP, "0px");
+    flow_computed_free(c);
+    c = tree != NULL ? flow_computed_new(tree, &p.env, computed_find(root, "r"), NULL) : NULL;
+    computed_is(c, "computed: a relative box's auto margin", GARB_MARGIN_LEFT, "10px");
+    computed_is(c, "computed: a relative box with no insets is at 0", GARB_LEFT, "0px");
+    computed_is(c, "computed: on every side", GARB_RIGHT, "0px");
+    flow_computed_free(c);
+    c = tree != NULL ? flow_computed_new(tree, &p.env, computed_find(root, "t"), NULL) : NULL;
+    computed_is(c, "computed: an absolute box's top", GARB_TOP, "7px");
+    computed_is(c, "computed: its bottom, from its containing block", GARB_BOTTOM, "-2px");
+    computed_is(c, "computed: its auto left, its static place", GARB_LEFT, "0px");
+    flow_computed_free(c);
     flow_free(tree);
     sheeted_close(&p);
 
