@@ -468,7 +468,7 @@ mutants = [
      '            at[j + 1] = x;\n'
      '        }', GARB),
     ('the-shorthand-auto-is-a-name', PROPS,
-     '        } else if (!have[A_DURATION] && vc_keyword(c, kAuto) != NULL) {',
+     '        } else if (open[A_DURATION] && vc_keyword(c, kAuto) != NULL) {',
      '        } else if (false && vc_keyword(c, kAuto) != NULL) {', GARB),
     # libflow: a failed layout's timeline, an inline element's pieces, and
     # what float, position, overflow and currentColor make of each other

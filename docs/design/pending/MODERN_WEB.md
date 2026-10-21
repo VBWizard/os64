@@ -529,8 +529,9 @@ row needs no case of its own to prove its switch. A row that leaves an
 engine exception pending fails the creation (QuickJS's function
 constructors swallow an out-of-memory in `length` and `name`; the full
 installer sweep found one). The switch takes away the table's names and
-what its rows put on them, nothing else: the binding's own prototype chain,
-which this slice corrected (below), is the same with it on or off (Fable's
+what its rows put on them (each prototype's `constructor` and
+Symbol.toStringTag, Node's constants), nothing else: the prototype chain's
+levels, which this slice corrected (below), are the same with it on or off (Fable's
 ruling on Codex's fourth round: the separate HTMLElement prototype fixes
 the binding's structure and is not surface the arc adds, and no page
 detects a feature by comparing prototypes). The DOM host holds that too.
@@ -542,7 +543,9 @@ had shared Element's prototype, so an SVG element was an HTMLElement; HTML
 elements now have a prototype of their own (`D_PROTO_HTML_ELEMENT`). The
 anchor, script and link prototypes, which arrived after the parked commit,
 get their interfaces. `Node` carries the node-type and document-position
-constants on itself and its prototype. Each interface object inherits its
+constants on itself and its prototype, and each prototype's
+`Symbol.toStringTag` is its interface's name, which is what
+`Object.prototype.toString` reports. Each interface object inherits its
 parent interface's, as its prototype inherits the parent prototype.
 `new DocumentFragment()` constructs, and any call without `new` is refused
 by the engine (a constructor-only function); `new Document()` is an Illegal
@@ -557,7 +560,10 @@ gives each interface object a shape of its own first (`interface_parent`,
 `garb_reading_t {quirks, modern_off}`; `garb_env_t.modern_off` carries the
 answer through a cascade (declarations, `@supports`, `var()`-held
 properties, the skip tally); a marked longhand leaves an unmarked
-shorthand's answer; libdom's style object has no member for a marked
+shorthand's answer, and the shorthand reads no part of its value that only
+the marked longhand takes, so `animation: spin` is invalid while
+`animation-name` is marked and the switch is off, as it would be in an
+engine without that longhand; libdom's style object has no member for a marked
 property while the switch is off. `GARB_MODERN_PROBE` lets the host suites
 prove the mark before anything is marked.
 
@@ -574,7 +580,7 @@ its life, handed to the script host and to the page's cascade, and a
 | `dom/nodes` pass | 844 of 4397 | 858 of 4406 |
 | harness errors (failing whole) | 69 | 67 |
 | `[required]` | — | 14, all passing; none passes with `--modern-off` (a green run) |
-| DOM host | 3734 / 21296 checks | 3794 / 22220, 0 failed |
+| DOM host | 3734 / 21296 checks | 3810 / 22416, 0 failed |
 | scripted-page host | 5842 | 5888, 0 failed |
 
 The fourteen required tests are Node's eight constant tests, the two

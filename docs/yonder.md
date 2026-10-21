@@ -119,9 +119,11 @@ Click the Settings icon in the title bar.
   turn their animations off when told.
 - **Modern web surface**: everything the Modern Web work has added to what
   a page's scripts and style sheets can use. On unless `yonder.conf` says
-  `modern = off`. If a site that used to work stops working, turn it off
-  and the site gets the yonder it had before; the next page you open takes
-  the change, and that page's diagnostics file says `modern: off`.
+  `modern = off`. If a site that used to work stops working, turn it off:
+  the names that work added are absent from the page's scripts and the
+  CSS it added is not read, while the page's objects keep the same levels
+  of prototypes either way. The next page you open takes the change, and
+  that page's diagnostics file says `modern: off`.
 - **Apply** changes this window from the next page on. **Save as default**
   also writes the settings to `yonder.conf`, where every new yonder reads
   them.

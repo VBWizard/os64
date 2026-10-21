@@ -1419,12 +1419,14 @@ static int keyframes_scale(void)
 
 // THE MODERN MARK (values.h's garb_prop_modern and garb_reading_t): with
 // `modern_off`, a marked name reads as one libgarb does not read, a marked
-// longhand leaves no shorthand's answer, and a cascade built with it in its
-// environment neither applies nor supports what is marked, and tallies it
-// as passed over. tools/test_garb_host.sh builds this driver with
+// longhand leaves no shorthand's answer, a shorthand reads no part of its
+// value that only a marked longhand takes, and a cascade built with it in
+// its environment neither applies nor supports what is marked, and tallies
+// it as passed over. tools/test_garb_host.sh builds this driver with
 // GARB_MODERN_PROBE marking a longhand (animation-name), a shorthand
 // (grid-gap) and an alias (-webkit-transform), since the arc may not have
-// marked one of each.
+// marked one of each, and a longhand of every other shorthand, so each
+// shorthand's reader is held to the rule.
 static int modern_reads(const char *decl, garb_reading_t how, garb_prop_t *props, int32_t cap)
 {
     garb_parsed_t r;
@@ -1456,7 +1458,9 @@ static void modern_cascade(bool off, garb_prop_t *props, int32_t *n, bool *skipp
     static const char kSheet[] =
         "#x{animation-name:spin;grid-gap:4px;margin:1px}"
         "@supports (animation-name: spin){#x{display:flex}}"
-        "@supports (animation-name: var(--a)){#x{float:left}}";
+        "@supports (animation-name: var(--a)){#x{float:left}}"
+        "@supports (animation: spin){#x{visibility:hidden}}"
+        "@supports not (animation-name: spin){#x{z-index:1}}";
     os64_html_options_t opt = os64_html_options_default();
     os64_html_parser_t *hp = os64_html_parser_new(&opt);
     os64_html_parser_feed(hp, kPage, sizeof(kPage) - 1);
@@ -1500,9 +1504,46 @@ static int modern_marks(void)
                  "an alias of a marked longhand goes with it");
     MODERN_CHECK(modern_reads("animation: spin 1s", on, p, GARB_SETS_MAX) == 8 &&
                  modern_has(p, 8, GARB_ANIMATION_NAME), "a shorthand sets all of its longhands");
-    int32_t n = modern_reads("animation: spin 1s", off, p, GARB_SETS_MAX);
+    int32_t n = modern_reads("animation: 1s", off, p, GARB_SETS_MAX);
     MODERN_CHECK(n == 7 && !modern_has(p, n, GARB_ANIMATION_NAME),
                  "an unmarked shorthand sets every longhand but the marked one with modern_off");
+    // Each shorthand, with modern_off, as an engine that never had its
+    // marked longhand reads it: a part only that longhand takes is invalid,
+    // and the rest reads without it.
+    static const struct { const char *decl; int32_t off; } kParts[] = {
+        {"animation: spin", GARB_DECL_INVALID}, {"animation: spin 1s", GARB_DECL_INVALID},
+        {"animation: ease ease", GARB_DECL_INVALID}, {"animation: ease", 7},
+        {"font: bold 12px serif", GARB_DECL_INVALID}, {"font: italic 12px serif", 5},
+        {"text-decoration: underline", GARB_DECL_INVALID}, {"text-decoration: dotted", 0},
+        {"list-style: url(a.png)", GARB_DECL_INVALID}, {"list-style: none none", GARB_DECL_INVALID},
+        {"list-style: none", 2}, {"list-style: square inside", 2},
+        {"flex: 1 2", GARB_DECL_INVALID}, {"flex: 1 10px", 2},
+        {"flex-flow: wrap", GARB_DECL_INVALID}, {"flex-flow: column", 1},
+        {"place-items: center start", GARB_DECL_INVALID}, {"place-items: center", 1},
+        {"overflow: hidden auto", GARB_DECL_INVALID}, {"overflow: hidden", 1},
+        {"grid-row: 1 / 3", GARB_DECL_INVALID}, {"grid-row: 1", 1},
+        {"grid-area: 1 / 2 / 3", GARB_DECL_INVALID}, {"grid-area: 1 / 2", 3},
+        {"margin: 1px 2px 3px 4px", GARB_DECL_INVALID}, {"margin: 1px 2px 3px", 3},
+        {"border-radius: 1px 2px 3px 4px", GARB_DECL_INVALID}, {"border-radius: 1px / 2px", 3},
+        {"border-radius: 1px / 1px 2px 3px 4px", GARB_DECL_INVALID},
+        {"border-top: red", GARB_DECL_INVALID}, {"border-top: 1px solid", 2}, {"border: red", 11},
+        {"background: url(a.png) content-box padding-box", GARB_DECL_INVALID},
+        {"background: content-box", 6}, {"background: 0 0 / 10px", GARB_DECL_INVALID},
+        {"background: 0 0 red", 6},
+    };
+    for (size_t k = 0; k < sizeof(kParts) / sizeof(kParts[0]); k++) {
+        int32_t got = modern_reads(kParts[k].decl, off, p, GARB_SETS_MAX);
+        if (got != kParts[k].off) {
+            printf("libgarb modern: %s read %d with modern_off, not %d - FAILED\n", kParts[k].decl,
+                   (int)got, (int)kParts[k].off);
+            failed++;
+        }
+        if (modern_reads(kParts[k].decl, on, p, GARB_SETS_MAX) <= 0) {
+            printf("libgarb modern: %s is not read with the marked names known - FAILED\n",
+                   kParts[k].decl);
+            failed++;
+        }
+    }
     n = modern_reads("animation: inherit", off, p, GARB_SETS_MAX);
     MODERN_CHECK(n == 7 && !modern_has(p, n, GARB_ANIMATION_NAME),
                  "a CSS-wide keyword reaches every longhand but the marked one with modern_off");
@@ -1524,7 +1565,8 @@ static int modern_marks(void)
     modern_cascade(false, w, &n, &name, &gap);
     MODERN_CHECK(modern_has(w, n, GARB_ANIMATION_NAME) && modern_has(w, n, GARB_ROW_GAP) &&
                  modern_has(w, n, GARB_DISPLAY) && modern_has(w, n, GARB_FLOAT) &&
-                 modern_has(w, n, GARB_TRANSFORM) && !name && !gap,
+                 modern_has(w, n, GARB_TRANSFORM) && modern_has(w, n, GARB_VISIBILITY) &&
+                 !modern_has(w, n, GARB_Z_INDEX) && !name && !gap,
                  "a cascade that knows the marked names applies and supports them");
     modern_cascade(true, w, &n, &name, &gap);
     MODERN_CHECK(!modern_has(w, n, GARB_ANIMATION_NAME) && !modern_has(w, n, GARB_ROW_GAP) &&
@@ -1534,6 +1576,9 @@ static int modern_marks(void)
                  "a cascade with modern_off applies no marked name, in a sheet or a style attribute, "
                  "and supports none");
     MODERN_CHECK(name && gap, "a cascade with modern_off tallies the marked names it passed over");
+    MODERN_CHECK(!modern_has(w, n, GARB_VISIBILITY) && modern_has(w, n, GARB_Z_INDEX),
+                 "with modern_off, @supports finds a shorthand whose value only a marked longhand "
+                 "takes unsupported, and the marked longhand itself unsupported, in one reading");
 #undef MODERN_CHECK
     printf("libgarb modern: %s\n", failed ? "FAILED" : "the mark holds for longhands, shorthands, aliases and the cascade");
     return failed ? 1 : 0;

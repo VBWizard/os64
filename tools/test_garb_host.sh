@@ -27,7 +27,7 @@ host_flags=(-std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined,f
    -fno-sanitize-recover=all -fno-builtin -fno-tree-loop-distribute-patterns
    -I userland/libgarb/include -I userland/libgarb -I userland/libhtml/include
    -I userland/libos64/include -I userland -I abi/include
-   '-DGARB_MODERN_PROBE="animation-name","grid-gap","-webkit-transform"')
+   '-DGARB_MODERN_PROBE="animation-name","grid-gap","-webkit-transform","font-weight","text-decoration-line","list-style-image","flex-shrink","flex-wrap","justify-items","overflow-y","grid-row-end","margin-left","border-bottom-left-radius","border-top-color","background-clip","background-size"')
 host_sources=(tools/test_garb_host.c
    userland/libgarb/tokenize.c userland/libgarb/parse.c userland/libgarb/decode.c
    userland/libgarb/dump.c userland/libgarb/select.c

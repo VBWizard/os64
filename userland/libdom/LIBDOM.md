@@ -70,9 +70,10 @@ Node supplies tree navigation, ownerDocument, childNodes, nodeType/nodeName,
 nodeValue/textContent and tree methods. A property absent from a node's chain
 reads undefined and is absent from `in`; assignment may create an ordinary
 expando. Borrowed methods and accessors still validate native receivers.
-The prototypes are named on window by interface objects that construct
-nothing (§ The Modern Web's surface); the surface is the one this file
-lists.
+With the Modern Web switch on, the prototypes are named on window by
+interface objects (§ The Modern Web's surface): DocumentFragment's
+constructs an empty fragment, and the rest are Illegal constructors. The
+surface is the one this file lists.
 
 Child collections and tag queries are native live objects with `length`,
 `item(index)` and indexed access. A query refreshes against the HTML version;
@@ -467,8 +468,10 @@ interfaces. Host acceptance and remaining J5/P5 work are in the design record.
 arc adds to window is installed by one table, `modern.c`'s, walked once at
 creation after the classic window is whole: with the option clear the walk
 does not run and none of those names exists, which is what a page's feature
-detection needs to see. The binding's own prototype chain is the same
-either way. A row is the names it puts on window and the
+detection needs to see. What goes is the table's names and what its rows
+put on them (each prototype's `constructor` and Symbol.toStringTag, Node's
+constants); the prototype chain's levels are the same either way. A row is
+the names it puts on window and the
 installer that puts them there; a slice adds its file and its row and
 installs no global anywhere else.
 
@@ -497,7 +500,11 @@ patch `Element.prototype`. Each interface object inherits its parent's
 (`Object.getPrototypeOf(HTMLElement) === Element`), as each prototype
 inherits its parent prototype; `Node`'s is `Function.prototype`. `Node`
 carries the node-type and document-position constants, on itself and its
-prototype, as WebIDL puts a constant. `new DocumentFragment()` makes an
+prototype, as WebIDL puts a constant. Each prototype's own
+`Symbol.toStringTag` is its interface's name, so
+`Object.prototype.toString.call(document.body)` is `[object HTMLElement]`
+(WebIDL § 3.7.3; a Text says `CharacterData`, whose prototype it shares).
+`new DocumentFragment()` makes an
 empty fragment of the window's document, whose prototype is new.target's
 `prototype` (so a subclass makes its own kind; DocumentFragment's when that
 is not an object), and any call of it without `new`

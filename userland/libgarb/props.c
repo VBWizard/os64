@@ -500,9 +500,20 @@ typedef struct {
     bool modern_off;
 } Sets;
 
-// A longhand into the answer; one marked modern is left out when those are
-// not known, which is what keeps it out of a shorthand that sets it beside
-// longhands that are.
+// Whether the reading knows longhand `p`: one marked modern is unknown to a
+// reading with `modern_off`, which is an engine that never had it. A
+// shorthand reads a part of its value only when a longhand that part sets
+// is known, so a value only a marked longhand's grammar takes makes the
+// shorthand invalid, as it would be in that engine; set() then leaves the
+// marked longhand's reset out of the answer.
+static bool knows(const Sets *s, garb_prop_t p)
+{
+    return !(s->modern_off && garb_prop_modern(p));
+}
+
+// A longhand into the answer; one the reading does not know is left out,
+// which is what keeps it out of a shorthand that resets it beside
+// longhands that are known.
 static void set(Sets *s, garb_prop_t p, const garb_val_t *v)
 {
     if (s->modern_off && garb_prop_modern(p))
@@ -573,6 +584,29 @@ static bool kw_or_dim(Sets *s, VCur *c, const char *const *allowed, int accept, 
 }
 
 // One to four values for top, right, bottom, left (CSS 2.1 § 8.3's box).
+// Whether each of `n` values of a one-to-four list (top right bottom left,
+// or a corner's four) sets a side the reading knows: the sides each value
+// fills, by how many were given.
+static bool four_known(const Sets *s, garb_prop_t first, int n)
+{
+    static const uint8_t kFills[4][4] = {{0xF}, {0x5, 0xA}, {0x1, 0xA, 0x4}, {0x1, 0x2, 0x4, 0x8}};
+    for (int i = 0; i < n; i++) {
+        bool any = false;
+        for (int side = 0; side < 4; side++)
+            any |= (kFills[n - 1][i] >> side & 1) && knows(s, (garb_prop_t)(first + side));
+        if (!any)
+            return false;
+    }
+    return true;
+}
+
+// Whether a pair's `n` values (one, or two) set a longhand the reading
+// knows: one value sets both, two set one each.
+static bool pair_known(const Sets *s, garb_prop_t a, garb_prop_t b, int n)
+{
+    return n == 1 ? knows(s, a) || knows(s, b) : knows(s, a) && knows(s, b);
+}
+
 static bool box4(Sets *s, VCur *c, garb_prop_t first,
                  bool (*one)(Sets *, VCur *, garb_val_t *))
 {
@@ -580,7 +614,7 @@ static bool box4(Sets *s, VCur *c, garb_prop_t first,
     int n = 0;
     while (n < 4 && !vc_done(c) && one(s, c, &v[n]))
         n++;
-    if (n == 0 || !vc_done(c))
+    if (n == 0 || !vc_done(c) || !four_known(s, first, n))
         return false;
     garb_val_t top = v[0], right = n > 1 ? v[1] : top, bottom = n > 2 ? v[2] : top,
                left = n > 3 ? v[3] : right;
@@ -623,7 +657,8 @@ static bool radius_shorthand(Sets *s, VCur *c)
         if (nv == 0)
             return false;
     }
-    if (!vc_done(c))
+    if (!vc_done(c) || !four_known(s, GARB_BORDER_TOP_LEFT_RADIUS, nh) ||
+        (nv > 0 && !four_known(s, GARB_BORDER_TOP_LEFT_RADIUS, nv)))
         return false;
     if (nv == 0) {
         os64_memcpy(v, h, sizeof(h));
@@ -788,15 +823,21 @@ static bool border_side(Sets *s, VCur *c, const garb_prop_t *sides, int nsides)
 {
     garb_val_t width = kw("medium"), style = kw("none"), color = initial_color();
     bool have_w = false, have_s = false, have_c = false;
+    bool know_w = false, know_s = false, know_c = false;
+    for (int k = 0; k < nsides; k++) {
+        know_w |= knows(s, (garb_prop_t)(GARB_BORDER_TOP_WIDTH + sides[k]));
+        know_s |= knows(s, (garb_prop_t)(GARB_BORDER_TOP_STYLE + sides[k]));
+        know_c |= knows(s, (garb_prop_t)(GARB_BORDER_TOP_COLOR + sides[k]));
+    }
     while (!vc_done(c)) {
         garb_val_t v;
-        if (!have_w && bwidth_one(s, c, &v)) {
+        if (!have_w && know_w && bwidth_one(s, c, &v)) {
             width = v;
             have_w = true;
-        } else if (!have_s && bstyle_one(s, c, &v)) {
+        } else if (!have_s && know_s && bstyle_one(s, c, &v)) {
             style = v;
             have_s = true;
-        } else if (!have_c && vc_color(c, &v)) {
+        } else if (!have_c && know_c && vc_color(c, &v)) {
             color = v;
             have_c = true;
         } else {
@@ -973,14 +1014,15 @@ static bool font_shorthand(Sets *s, VCur *c)
             normals++;
             continue;
         }
-        if (!have_style && font_style(s, c, &v)) {
+        if (!have_style && knows(s, GARB_FONT_STYLE) && font_style(s, c, &v)) {
             style = v;
             have_style = true;
-        } else if (!have_variant && vc_keyword(&look, kFontVariant) != NULL) {
+        } else if (!have_variant && knows(s, GARB_FONT_VARIANT) &&
+                   vc_keyword(&look, kFontVariant) != NULL) {
             *c = look;
             variant = kw("small-caps");
             have_variant = true;
-        } else if (!have_weight && font_weight(s, c, &v)) {
+        } else if (!have_weight && knows(s, GARB_FONT_WEIGHT) && font_weight(s, c, &v)) {
             weight = v;
             have_weight = true;
         } else if (!have_stretch && vc_keyword(c, kFontStretch) != NULL) {
@@ -992,14 +1034,14 @@ static bool font_shorthand(Sets *s, VCur *c)
     if (normals + have_style + have_variant + have_weight + have_stretch > 4)
         return false;
     garb_val_t size, lh = kw("normal"), fam;
-    if (!font_size(s, c, &size))
+    if (!knows(s, GARB_FONT_SIZE) || !font_size(s, c, &size))
         return false;
     if (is_delim_v(vc_peek(c), '/')) {
         c->i++;
-        if (!line_height(s, c, &lh))
+        if (!knows(s, GARB_LINE_HEIGHT) || !line_height(s, c, &lh))
             return false;
     }
-    if (!families(s, c, &fam) || !vc_done(c))
+    if (!knows(s, GARB_FONT_FAMILY) || !families(s, c, &fam) || !vc_done(c))
         return false;
     set(s, GARB_FONT_STYLE, &style);
     set(s, GARB_FONT_VARIANT, &variant);
@@ -1652,28 +1694,31 @@ static bool background_layers(Sets *s, VCur *c, Layers lists[L_N], garb_val_t *c
             if (t == NULL || t->kind == GARB_COMMA)
                 break;
             garb_val_t v, x, y;
-            if (!have_img && vc_keyword(c, kNone) != NULL) {
+            bool know_img = knows(s, GARB_BACKGROUND_IMAGE);
+            if (!have_img && know_img && vc_keyword(c, kNone) != NULL) {
                 have_img = true;
-            } else if (!have_img && bg_image(s, c, &v)) {
+            } else if (!have_img && know_img && bg_image(s, c, &v)) {
                 l[L_IMAGE] = v;
                 have_img = true;
-            } else if (!have_pos && position(s, c, &x, &y)) {
+            } else if (!have_pos &&
+                       (knows(s, GARB_BACKGROUND_POSITION_X) || knows(s, GARB_BACKGROUND_POSITION_Y)) &&
+                       position(s, c, &x, &y)) {
                 l[L_X] = x;
                 l[L_Y] = y;
                 have_pos = true;
                 if (is_delim_v(vc_peek(c), '/')) {
                     c->i++;
-                    if (!bg_size(s, c, &l[L_SIZE]))
+                    if (!knows(s, GARB_BACKGROUND_SIZE) || !bg_size(s, c, &l[L_SIZE]))
                         return false;
                 }
-            } else if (!have_rep && repeat(c, &v)) {
+            } else if (!have_rep && knows(s, GARB_BACKGROUND_REPEAT) && repeat(c, &v)) {
                 l[L_REPEAT] = v;
                 have_rep = true;
             } else if (!have_att && vc_keyword(c, kAttachment) != NULL) {
                 have_att = true;
             } else if (boxes < 2 && (box[boxes] = vc_keyword(c, kClipBox)) != NULL) {
                 boxes++;
-            } else if (!have_color && vc_color(c, &v)) {
+            } else if (!have_color && knows(s, GARB_BACKGROUND_COLOR) && vc_color(c, &v)) {
                 *color = v;
                 have_color = true;
             } else {
@@ -1688,6 +1733,9 @@ static bool background_layers(Sets *s, VCur *c, Layers lists[L_N], garb_val_t *c
         // `text` clips and never places: the origin is the other box, or
         // stays as it was when there is none.
         if (boxes == 2 && os64_streq(box[0], "text"))
+            return false;
+        // One box sets the origin and the clip, two set one each.
+        if (boxes > 0 && !pair_known(s, GARB_BACKGROUND_ORIGIN, GARB_BACKGROUND_CLIP, boxes))
             return false;
         if (boxes > 0) {
             l[L_CLIP] = kw(box[boxes - 1]);
@@ -1756,7 +1804,7 @@ static bool text_decoration(Sets *s, VCur *c)
     garb_val_t line = kw("none"), v;
     bool have_line = false, have_style = false, have_color = false, have_thick = false;
     while (!vc_done(c)) {
-        if (!have_line && decoration_line(s, c, &v)) {
+        if (!have_line && knows(s, GARB_TEXT_DECORATION_LINE) && decoration_line(s, c, &v)) {
             line = v;
             have_line = true;
         } else if (!have_style && vc_keyword(c, kDecorationStyle) != NULL) {
@@ -1822,13 +1870,14 @@ static bool list_style(Sets *s, VCur *c)
             continue;
         }
         const char *k;
-        if (!have_pos && (k = vc_keyword(c, kListPosition)) != NULL) {
+        if (!have_pos && knows(s, GARB_LIST_STYLE_POSITION) &&
+            (k = vc_keyword(c, kListPosition)) != NULL) {
             pos = kw(k);
             have_pos = true;
-        } else if (!have_image && vc_url(c, &v)) {
+        } else if (!have_image && knows(s, GARB_LIST_STYLE_IMAGE) && vc_url(c, &v)) {
             image = v;
             have_image = true;
-        } else if (!have_type && list_type(s, c, &v)) {
+        } else if (!have_type && knows(s, GARB_LIST_STYLE_TYPE) && list_type(s, c, &v)) {
             type = v;
             have_type = true;
         } else {
@@ -1837,6 +1886,12 @@ static bool list_style(Sets *s, VCur *c)
     }
     if (nones > 2 || (nones == 2 && (have_type || have_image)) ||
         (nones == 1 && have_type && have_image))
+        return false;
+    // A `none` is the type's or the image's, whichever is not named: two
+    // are one each, and one is whichever of those the reading knows.
+    bool none_type = !have_type && knows(s, GARB_LIST_STYLE_TYPE),
+         none_image = !have_image && knows(s, GARB_LIST_STYLE_IMAGE);
+    if ((nones == 2 && !(none_type && none_image)) || (nones == 1 && !none_type && !none_image))
         return false;
     if (nones >= 1 && !have_type)
         type = kw("none");
@@ -3029,7 +3084,8 @@ static int shorthand_longhands(Shorthand sh, garb_prop_t *out)
 }
 
 // One animation of `animation` (Animations 1 § 4.9), its parts in any
-// order: the first time is the duration and the second the delay, and a
+// order: the first time is the duration and the second the delay (the
+// first is the delay when the reading does not know the duration), and a
 // keyword some other longhand takes is that longhand's until it has one —
 // so `ease ease` is eased `ease` and named `ease`, and the name is what no
 // other longhand would take. What it leaves out is the longhand's initial
@@ -3052,27 +3108,32 @@ static bool animation_one(Sets *s, VCur *c, garb_val_t v[A_N])
         garb_val_t one;
         const char *k;
         int got = -1;
-        if (vc_time(c, true, &one)) {
-            got = !have[A_DURATION] ? A_DURATION : !have[A_DELAY] ? A_DELAY : -1;
+        // Each part is read only when the reading knows its longhand
+        // (knows), and a part already given is no candidate.
+        bool open[A_N];
+        for (int a = 0; a < A_N; a++)
+            open[a] = !have[a] && knows(s, kAnimationProps[a]);
+        if ((open[A_DURATION] || open[A_DELAY]) && vc_time(c, true, &one)) {
+            got = open[A_DURATION] ? A_DURATION : A_DELAY;
             if (got == A_DURATION && one.number < 0)
                 return false;
-        } else if (!have[A_DURATION] && vc_keyword(c, kAuto) != NULL) {
+        } else if (open[A_DURATION] && vc_keyword(c, kAuto) != NULL) {
             got = A_DURATION;           // Animations 2's duration keyword
             one = kw("auto");
-        } else if (!have[A_EASING] && easing(s, c, &one)) {
+        } else if (open[A_EASING] && easing(s, c, &one)) {
             got = A_EASING;
-        } else if (!have[A_COUNT] && iterations(s, c, &one)) {
+        } else if (open[A_COUNT] && iterations(s, c, &one)) {
             got = A_COUNT;
-        } else if (!have[A_DIRECTION] && (k = vc_keyword(c, kDirection)) != NULL) {
+        } else if (open[A_DIRECTION] && (k = vc_keyword(c, kDirection)) != NULL) {
             got = A_DIRECTION;
             one = kw(k);
-        } else if (!have[A_FILL] && (k = vc_keyword(c, kFillMode)) != NULL) {
+        } else if (open[A_FILL] && (k = vc_keyword(c, kFillMode)) != NULL) {
             got = A_FILL;
             one = kw(k);
-        } else if (!have[A_PLAY] && (k = vc_keyword(c, kPlayState)) != NULL) {
+        } else if (open[A_PLAY] && (k = vc_keyword(c, kPlayState)) != NULL) {
             got = A_PLAY;
             one = kw(k);
-        } else if (!have[A_NAME] && anim_name(c, &one)) {
+        } else if (open[A_NAME] && anim_name(c, &one)) {
             got = A_NAME;
         }
         if (got < 0 || have[got])
@@ -3114,13 +3175,14 @@ static bool animation(Sets *s, VCur *c)
     return ok;
 }
 
-// Up to `max` grid lines split by slashes (Grid 2 § 8.4): what each one
-// left out is its partner's name where that one is a name, else auto.
-static bool grid_lines(Sets *s, VCur *c, garb_val_t *lines, int32_t max)
+// Up to `max` grid lines split by slashes (Grid 2 § 8.4), the n-th for the
+// longhand `props[n]`, which the reading must know: what each one left out
+// is its partner's name where that one is a name, else auto.
+static bool grid_lines(Sets *s, VCur *c, const garb_prop_t *props, garb_val_t *lines, int32_t max)
 {
     int32_t n = 0;
     for (;;) {
-        if (n == max || !grid_line(s, c, &lines[n]))
+        if (n == max || !knows(s, props[n]) || !grid_line(s, c, &lines[n]))
             return false;
         n++;
         const garb_value_t *t = vc_peek(c);
@@ -3159,14 +3221,15 @@ static bool flex_shorthand(Sets *s, VCur *c)
         while (!vc_done(c)) {
             const garb_value_t *t = vc_peek(c);
             if (!factors && t != NULL && t->kind == GARB_NUMBER) {
-                if (!vc_dim(c, ACCEPT_NUMBER, false, false, &s->a, &grow))
+                if (!knows(s, GARB_FLEX_GROW) || !vc_dim(c, ACCEPT_NUMBER, false, false, &s->a, &grow))
                     return false;
                 const garb_value_t *u = vc_peek(c);
                 if (u != NULL && u->kind == GARB_NUMBER &&
-                    !vc_dim(c, ACCEPT_NUMBER, false, false, &s->a, &shrink))
+                    (!knows(s, GARB_FLEX_SHRINK) ||
+                     !vc_dim(c, ACCEPT_NUMBER, false, false, &s->a, &shrink)))
                     return false;
                 factors = true;
-            } else if (!have_basis) {
+            } else if (!have_basis && knows(s, GARB_FLEX_BASIS)) {
                 const char *k = vc_keyword(c, kBasisWords);
                 if (k != NULL)
                     basis = kw(k);
@@ -3209,8 +3272,8 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
     case SH_BACKGROUND_POSITION: {
         // A position per layer, each split into its two longhands' lists.
         Layers xs = {0}, ys = {0};
-        bool ok = true;
-        for (;;) {
+        bool ok = knows(s, GARB_BACKGROUND_POSITION_X) || knows(s, GARB_BACKGROUND_POSITION_Y);
+        while (ok) {
             if (!position(s, c, &x, &y) || !layers_add(s, &xs, &x) || !layers_add(s, &ys, &y)) {
                 ok = false;
                 break;
@@ -3239,10 +3302,12 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
         garb_val_t dir = kw("row"), wrap = kw("nowrap");
         bool have_dir = false, have_wrap = false;
         while (!vc_done(c)) {
-            if (!have_dir && (k = vc_keyword(c, kFlexDirection)) != NULL) {
+            if (!have_dir && knows(s, GARB_FLEX_DIRECTION) &&
+                (k = vc_keyword(c, kFlexDirection)) != NULL) {
                 dir = kw(k);
                 have_dir = true;
-            } else if (!have_wrap && (k = vc_keyword(c, kFlexWrap)) != NULL) {
+            } else if (!have_wrap && knows(s, GARB_FLEX_WRAP) &&
+                       (k = vc_keyword(c, kFlexWrap)) != NULL) {
                 wrap = kw(k);
                 have_wrap = true;
             } else {
@@ -3262,9 +3327,13 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
         if (!longhand_one(s, c, &gap, &x))
             return false;
         y = x;
-        if (!vc_done(c) && !longhand_one(s, c, &gap, &y))
-            return false;
-        if (!vc_done(c))
+        int given = 1;
+        if (!vc_done(c)) {
+            if (!longhand_one(s, c, &gap, &y))
+                return false;
+            given = 2;
+        }
+        if (!vc_done(c) || !pair_known(s, GARB_ROW_GAP, GARB_COLUMN_GAP, given))
             return false;
         set(s, GARB_ROW_GAP, &x);
         set(s, GARB_COLUMN_GAP, &y);
@@ -3272,16 +3341,19 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
     }
     case SH_GRID_COLUMN: case SH_GRID_ROW: {
         garb_val_t two[2];
-        if (!grid_lines(s, c, two, 2))
-            return false;
         garb_prop_t start = sh == SH_GRID_COLUMN ? GARB_GRID_COLUMN_START : GARB_GRID_ROW_START;
+        const garb_prop_t ends[2] = {start, (garb_prop_t)(start + 1)};
+        if (!grid_lines(s, c, ends, two, 2))
+            return false;
         set(s, start, &two[0]);
         set(s, (garb_prop_t)(start + 1), &two[1]);
         return true;
     }
     case SH_GRID_AREA: {
         garb_val_t four[4];
-        if (!grid_lines(s, c, four, 4))
+        static const garb_prop_t kArea[4] = {GARB_GRID_ROW_START, GARB_GRID_COLUMN_START,
+                                             GARB_GRID_ROW_END, GARB_GRID_COLUMN_END};
+        if (!grid_lines(s, c, kArea, four, 4))
             return false;
         set(s, GARB_GRID_ROW_START, &four[0]);
         set(s, GARB_GRID_COLUMN_START, &four[1]);
@@ -3300,6 +3372,8 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
         };
         const Longhand *pair = kPlace[sh - SH_PLACE_ITEMS];
         if (!longhand_one(s, c, &pair[0], &x))
+            return false;
+        if (!pair_known(s, pair[0].prop, pair[1].prop, vc_done(c) ? 1 : 2))
             return false;
         if (vc_done(c)) {
             VCur again = {&(garb_value_t){.kind = GARB_IDENT, .text = x.keyword,
@@ -3320,7 +3394,7 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
         y = x;
         if ((k = vc_keyword(c, kOverflow)) != NULL)
             y = kw(k);
-        if (!vc_done(c))
+        if (!vc_done(c) || !pair_known(s, GARB_OVERFLOW_X, GARB_OVERFLOW_Y, k != NULL ? 2 : 1))
             return false;
         set(s, GARB_OVERFLOW_X, &x);
         set(s, GARB_OVERFLOW_Y, &y);

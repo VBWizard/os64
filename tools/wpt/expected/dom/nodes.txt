@@ -860,10 +860,10 @@ getElementsByClassName-whitespace-class-names.html	Passing a ZERO WIDTH JOINER t
 getElementsByClassName-whitespace-class-names.html	Passing a ZERO WIDTH NON-BREAKING SPACE to getElementsByClassName still finds the span
 getElementsByClassName-whitespace-class-names.html	Passing a ZERO WIDTH NON-JOINER to getElementsByClassName still finds the span
 getElementsByClassName-whitespace-class-names.html	Passing a ZERO WIDTH SPACE to getElementsByClassName still finds the span
-insert-adjacent.html	insertAdjacentElement(afterbegin, [object Object] )
-insert-adjacent.html	insertAdjacentElement(afterend, [object Object] )
-insert-adjacent.html	insertAdjacentElement(beforebegin, [object Object] )
-insert-adjacent.html	insertAdjacentElement(beforeend, [object Object] )
+insert-adjacent.html	insertAdjacentElement(afterbegin, [object HTMLElement] )
+insert-adjacent.html	insertAdjacentElement(afterend, [object HTMLElement] )
+insert-adjacent.html	insertAdjacentElement(beforebegin, [object HTMLElement] )
+insert-adjacent.html	insertAdjacentElement(beforeend, [object HTMLElement] )
 insert-adjacent.html	insertAdjacentText should return null
 insert-adjacent.html	insertAdjacentText(afterbegin, tartiflette )
 insert-adjacent.html	insertAdjacentText(afterend, gateau aux pommes )

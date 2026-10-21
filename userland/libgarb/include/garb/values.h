@@ -280,7 +280,9 @@ static inline double garb_hold(double v, double limit)
 // allows take a length without a unit. `modern_off` makes every name the
 // Modern Web arc added (garb_prop_modern, and the shorthands and aliases
 // marked beside them) one libgarb does not read, answered 0 as any such
-// name is. Zero for each is a standards-mode reading that knows them all.
+// name is, and reads a shorthand as an engine without its marked longhands
+// would: a part of its value only one of them takes makes it invalid.
+// Zero for each is a standards-mode reading that knows them all.
 typedef struct {
     bool quirks;
     bool modern_off;

@@ -57,7 +57,8 @@ static void modern_names_free(char **names, size_t n)
 /* The shape of the binding's prototype chains, for nodes of every kind it
  * tells apart: for each, each level down to Object.prototype, as the names
  * the binding put there, leaving out what the interface row adds (each
- * prototype's `constructor`, Node's constants). malloc'd; NULL when the
+ * prototype's `constructor`, Node's constants; its Symbol.toStringTag is
+ * a symbol, which no list of names holds). malloc'd; NULL when the
  * script did not run. */
 static char *modern_chain_shape(DomFixture *f)
 {
@@ -100,6 +101,16 @@ static void dom_modern_cases(void)
         "var s=document.body.style;assert('animationName' in s);"
         "s.setProperty('animation-name','spin');assert(s.getPropertyValue('animation-name')==='spin');",
         "modern-on-style-member");
+    dom_script(&f, MODERN_ASSERT
+        "function tag(o){return Object.prototype.toString.call(o)}"
+        "assert(tag(document.body)==='[object HTMLElement]'&&tag(document)==='[object Document]');"
+        "assert(tag(document.createElement('input'))==='[object HTMLInputElement]');"
+        "assert(tag(document.createTextNode('t'))==='[object CharacterData]');"
+        "assert(tag(new DocumentFragment())==='[object DocumentFragment]');"
+        "var d=Object.getOwnPropertyDescriptor(HTMLElement.prototype,Symbol.toStringTag);"
+        "assert(d.value==='HTMLElement'&&d.configurable&&!d.writable&&!d.enumerable);"
+        "assert(!Object.prototype.hasOwnProperty.call(HTMLElement,Symbol.toStringTag));",
+        "modern-on-string-tag");
     check(on != NULL, "modern: window's names with the switch on");
     char *chain_on = modern_chain_shape(&f);
     fixture_free(&f);
@@ -117,6 +128,8 @@ static void dom_modern_cases(void)
         "var b=document.body;assert(b.tagName==='BODY'&&b.constructor===Object);"
         "assert(Object.getPrototypeOf(b)!==Object.prototype&&typeof b.getAttribute==='function');"
         "assert(b.ELEMENT_NODE===undefined&&!('ELEMENT_NODE' in b));"
+        "assert(Object.prototype.toString.call(b)==='[object Object]'&&"
+        "Object.getOwnPropertySymbols(Object.getPrototypeOf(b)).indexOf(Symbol.toStringTag)<0);"
         /* tools/test_dom_host.sh marks animation-name as the arc's */
         "assert(!('animationName' in b.style)&&'color' in b.style);"
         "b.style.setProperty('animation-name','spin');b.style.color='red';"

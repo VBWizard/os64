@@ -349,6 +349,31 @@ static int node_constants(JSContext *ctx, JSValueConst target)
     return 0;
 }
 
+/* Symbol.toStringTag as a key, read off the global's Symbol before any page
+ * has run; JS_ATOM_NULL when it cannot be read. */
+static JSAtom string_tag_key(JSContext *ctx)
+{
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue symbol = JS_GetPropertyStr(ctx, global, "Symbol");
+    JSValue tag = JS_GetPropertyStr(ctx, symbol, "toStringTag");
+    JS_FreeValue(ctx, global);
+    JS_FreeValue(ctx, symbol);
+    JSAtom key = JS_IsSymbol(tag) ? JS_ValueToAtom(ctx, tag) : JS_ATOM_NULL;
+    JS_FreeValue(ctx, tag);
+    return key;
+}
+
+/* An interface prototype object's own `[Symbol.toStringTag]`: its
+ * interface's name, configurable and neither writable nor enumerable, as
+ * WebIDL § 3.7.3 has it. Object.prototype.toString reads it, so
+ * `String(document.body)` is "[object HTMLElement]". */
+static int string_tag(JSContext *ctx, JSValueConst prototype, JSAtom key, const char *name)
+{
+    JSValue text = JS_NewString(ctx, name);
+    if (JS_IsException(text)) return -1;
+    return JS_DefinePropertyValue(ctx, prototype, key, text, JS_PROP_CONFIGURABLE) < 0 ? -1 : 0;
+}
+
 /* The interface objects for the prototypes the binding has (WebIDL § 3.7):
  * `Element.prototype` is what every element inherits, so `el instanceof
  * Element` holds and a page may patch the prototype, as the Wayback
@@ -363,7 +388,8 @@ static int node_constants(JSContext *ctx, JSValueConst target)
  * whose standard gives it a constructor the binding can honour constructs
  * (DocumentFragment); the rest are Illegal constructors, as WebIDL makes
  * an interface without one (`new Document()`, which makes an XML document,
- * is one of these here). Node's constants come with Node. The Modern Web
+ * is one of these here). Node's constants come with Node, and each
+ * prototype's Symbol.toStringTag with its interface. The Modern Web
  * table's row (modern.c), so all of it exists only while options.modern is
  * set. */
 int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
@@ -385,27 +411,34 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
      * children. */
     JSValue made[D_PROTO_COUNT];
     for (unsigned k = 0; k < D_PROTO_COUNT; k++) made[k] = JS_UNDEFINED;
-    for (unsigned i = 0; i < sizeof(kInterfaces) / sizeof(kInterfaces[0]); i++) {
+    JSAtom tag = string_tag_key(ctx);
+    if (tag == JS_ATOM_NULL) return -1;
+    int result = 0;
+    for (unsigned i = 0; result == 0 && i < sizeof(kInterfaces) / sizeof(kInterfaces[0]); i++) {
         unsigned proto = kInterfaces[i].proto;
+        JSValueConst prototype = dom->prototypes[proto]->value;
         int parent = d_proto_parent((int)proto);
-        if (parent >= 0 && JS_IsUndefined(made[parent])) return -1;
+        result = -1;
+        if (parent >= 0 && JS_IsUndefined(made[parent])) break;
         JSValue f = proto == D_PROTO_FRAGMENT
             ? JS_NewCFunction2(ctx, fragment_constructor, kInterfaces[i].name, 0, JS_CFUNC_constructor, 0)
             : JS_NewCFunction2(ctx, illegal_constructor, kInterfaces[i].name, 0, JS_CFUNC_constructor_or_func, 0);
-        if (JS_IsException(f)) return -1;
-        if (JS_SetConstructor(ctx, f, dom->prototypes[proto]->value) < 0 ||
+        if (JS_IsException(f)) break;
+        if (JS_SetConstructor(ctx, f, prototype) < 0 ||
+            string_tag(ctx, prototype, tag, kInterfaces[i].name) < 0 ||
             (parent >= 0 && interface_parent(ctx, f, made[parent]) < 0) ||
-            (proto == D_PROTO_NODE && (node_constants(ctx, f) < 0 ||
-                                       node_constants(ctx, dom->prototypes[proto]->value) < 0))) {
+            (proto == D_PROTO_NODE && (node_constants(ctx, f) < 0 || node_constants(ctx, prototype) < 0))) {
             JS_FreeValue(ctx, f);
-            return -1;
+            break;
         }
         made[proto] = f;
         if (JS_DefinePropertyValueStr(ctx, global, kInterfaces[i].name, f,
                                       JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
-            return -1;
+            break;
+        result = 0;
     }
-    return 0;
+    JS_FreeAtom(ctx, tag);
+    return result;
 }
 
 int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)

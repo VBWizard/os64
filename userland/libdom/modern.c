@@ -7,7 +7,7 @@
  * is a name a page's feature detection finds missing, which is the point
  * (rule 1: a surface either exists whole or does not exist). What the
  * switch takes away is the table's names and what its rows put on them;
- * the binding's own prototype chain is the same with it on or off.
+ * the prototype chain's levels are the same with it on or off.
  *
  * A row is the names it puts on window and the installer that puts them
  * there; a slice adds its file and its row. The names are the row's whole
