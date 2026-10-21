@@ -1048,3 +1048,21 @@ restoring them next launch, noting other windows would benefit. Recorded
 [E5D](E05D_WINDOW_PLACEMENT.md) as a separate planned slice with shared support
 and Roam first. No implementation started; PR #322's two new review findings
 are the immediate task. The missing move-notification contract needs design.
+
+## 2026-10-21 — PR #322 second-review fixes
+
+Chris assigned two additional findings. Both reproduced: the unplanned early
+font adoption could make dialogs fail on a smaller display; the first resize
+out of maximized state was incorrectly discarded even for a manual drag.
+The fixes retain transactional font fallback and preserve the last normal-size
+baseline through special window states. Five regression failures became 4,693
+passing ASan/UBSan/LSan checks, with cross-build and native QEMU validation in
+[the evidence packet](evidence/e05a/review-r2/README.md). P5 and independent
+re-review remain pending. The worker-lifetime fix remains deferred.
+
+Integration: parent fix `eeee450d` from PR #322 brought into E5C. The session-log
+merge retained both histories. Roam/Scribe/gterm cross-build and the Roam launch
+suite passed with ASan/UBSan/LSan enabled. Native dialog evidence is the parent's
+640×480 run; the earlier E5C native screenshots remain evidence for `9f31fb0f`,
+not a new full native run of this merge. The window-placement request is recorded
+in `334dcb0c` as a planned slice, without implementation.

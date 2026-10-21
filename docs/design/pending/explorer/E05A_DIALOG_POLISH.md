@@ -61,8 +61,9 @@ moves the preference destination without a source change. Invalid sizes fall
 back to the default; dimensions are decimal integers from 1 through 32767,
 separated by a comma. The caller clamps to the current display before native
 creation, which then fits the frame decorations; composition
-raises the minimum for the current font. A screen too small for those controls
-can refuse creation. The stored preference is unchanged by these adjustments.
+raises the minimum for a configured font when it fits; otherwise the
+transactional planner retains the fallback font. A screen too small even for
+the fallback controls can refuse creation. The stored preference is unchanged by these adjustments.
 
 
 ## Review R1 — saved size after a display change
@@ -92,3 +93,23 @@ rebooting back to 2560×1440, it restored the original large size. Chris approve
 the fix. No installed binary hash was captured; independent review and merge
 remain separate. His later close-delay report is tracked in
 [E5B](E05B_CLOSE_LATENCY.md).
+
+## Review R2/R3 — startup font fallback and resize from maximized
+
+The October 21 review found two real failures at `328cba6d`:
+
+- R2/P1: font adoption ran before the widget tree and layout planner existed.
+  The startup comment was wrong: adopting early did not establish a safe
+  measured minimum, because the empty planner could accept an unfit font.
+  Compose the fallback layout and register its planner first. A valid candidate
+  may grow a tiny restored window; a refused native minimum retains the usable
+  fallback font. Configured fonts and saved dialog dimensions are not rewritten.
+- R3/P2: treating the first normal resize after maximization as a restore also
+  discarded a completed Ctrl+Alt+right-drag. Keep the normal-size baseline
+  through maximized/minimized events. Returning to that size is unchanged;
+  resizing to a different normal size publishes the new preference.
+
+The added regression cases produced five failures before the fixes. Afterward,
+4,693 checks passed with ASan/UBSan/LSan outside the sandbox; cross-build passed.
+[Round-two evidence](evidence/e05a/review-r2/README.md) records native checks.
+Independent re-review and P5 acceptance of these fixes remain pending.

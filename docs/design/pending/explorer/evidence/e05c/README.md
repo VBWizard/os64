@@ -78,3 +78,12 @@ paths, not commands. Open With is a one-off choice and does not edit mappings.
 
 Appearance Workshop/Frame Studio rendering remains a P5 check. Parent-owned
 stacking and the known dialog worker close/lifetime issues remain separate.
+
+## Parent review-fix integration
+
+PR #322 fix `eeee450d` was merged forward on October 21. Roam, Scribe and gterm
+were rebuilt against its updated shared dialog header/library, and the Roam
+host launch/lifecycle suite passed with ASan/UBSan/LSan. The screenshots and
+binary hashes above identify the earlier E5C native run; the parent has separate
+[640×480 dialog regression evidence](../e05a/review-r2/README.md). A complete
+native rerun of the combined branch is not claimed.
