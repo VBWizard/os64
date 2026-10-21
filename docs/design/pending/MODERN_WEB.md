@@ -585,11 +585,13 @@ one), `body` (libway's judgement, rather than the replay judging the
 content type again), `content-type`, `charset` and `encrypted` for a page
 from the network, and `scripts: off` when the page was read without them.
 They, `status`, `TLS`, `laid out at` and `kept` have room past the 512
-plain lines a record keeps (`yonder_diag_head_fact`), and a replay
-refuses, unjudged, any kept page whose record says it lost a line. That
-is strict on purpose and has a cost worth knowing: 9 of the P5's 1,601
-records say `facts not kept` (acid3, Yahoo, jwz.org), so pages like those
-would be kept and never judged.
+plain lines a record keeps (`yonder_diag_head_fact`). So a record that
+ran out of ROOM for its other plain lines (9 of the P5's 1,601 say `facts
+not kept`: acid3, Yahoo, jwz.org) still carries everything a replay needs,
+and a replay is compared with another made under the same caps, which
+drop the same lines: it is judged (ruled 2026-10-21). Only a record with a
+line that had no MEMORY to be written (`no memory to write this line`),
+which may be missing anything, is refused as unjudged.
 
 **The instrument** (slice 7's before-and-after): a script's line is
 `script <address>: ran in <n> us`, the time `os64_js_run` took, compiling
@@ -623,7 +625,8 @@ not in the index, and a page left running would fire timers that never
 fired where it was kept. **Only a page replayed to a verdict is judged**:
 one that never arrived, or asked for the next turn for ever, gains `REPLAY
 unfinished <why>` and reads `unfinished`. A `*.txt` that is not a record, a
-record that lost lines and an index the runner cannot read (its format, or
+record with a line that had no memory to be written, and an index the
+runner cannot read (its format, or
 a line number that is not a decimal number, which would otherwise become
 a path) are unjudged and make the answer 2. The page is left as yonder
 leaves it when it closes, which is the departure write.
@@ -644,7 +647,7 @@ answers 2.
 | Check | Result |
 |---|---|
 | Scripted-page host (`tools/test_yonder_scripts_host.sh`): the keep cases (a windows-1252 page posted in 97-byte chunks with a NUL inside kept byte for byte; the index, its version, each file, a failed script's line and no file; the facts; a page let go unshown; a stream stopped before its verdict leaving nothing; a folder that cannot be made; a name another yonder took, bytes and a folder left from before, each passed over; an empty folder removed; a head fact kept past a full table; the setting off keeping nothing) and the script time (a forced layout's 2,500 µs on the line) | 5,902 checks, zero failures (5,842 before the slice) |
-| The replay's self-test (`tools/test_yonder_replay_host.sh`): the 29 fixture pages of `tools/yonder_loop_fixture`, `yonder_script_fixture` and `pages`, and nine hand-made (a sheet that imports another from its redirected address and is read under its label, a page in windows-1252 from an encrypted fetch, a text body, a file's page and its script and timer, an error page, a failed script with a module and a global, a page too deep to read to its end, a picture by itself, a 1,400-pixel window, scripts off), kept with keep_pages on, written to real files, replayed | 38 pages; every replayed record is the kept one line for line (the paint stages aside: the processor's counter times them); the corpus diff between the two finds nothing. Then, each as a corpus of its own: a script's index line taken out reads `incomplete` with no FAILED line for it; a damaged index, a record that lost lines and a `*.txt` that is not a record are unjudged (answer 2); no time reads `unfinished`; a page that navigates stops there. The whole corpus given no time: its 5 unfinished pages are the diff's 5 broken, and it fails |
+| The replay's self-test (`tools/test_yonder_replay_host.sh`): the 29 fixture pages of `tools/yonder_loop_fixture`, `yonder_script_fixture` and `pages`, and nine hand-made (a sheet that imports another from its redirected address and is read under its label, a page in windows-1252 from an encrypted fetch, a text body, a file's page and its script and timer, an error page, a failed script with a module and a global, a page too deep to read to its end, a picture by itself, a 1,400-pixel window, scripts off), kept with keep_pages on, written to real files, replayed | 38 pages; every replayed record is the kept one line for line (the paint stages aside: the processor's counter times them); the corpus diff between the two finds nothing. Then, each as a corpus of its own: a script's index line taken out reads `incomplete` with no FAILED line for it; a damaged index, a record with a line that had no memory, and a `*.txt` that is not a record are unjudged (answer 2), while one whose table was full is judged; no time reads `unfinished`; a page that navigates stops there. The whole corpus given no time: its 5 unfinished pages are the diff's 5 broken, and it fails |
 | Hand mutants of the runner and the keepers (not the mutant harnesses) | caught: a sheet read without its label, the head's `encrypted`, `body` and status ignored, sheets left unanswered, the clock not moved, a file page's script refused, the view's width ignored and scripts-off ignored (both missed first, and the two hand-made pages that catch them were written for them), the bytes not kept, the rename skipped, a script not kept, the time not measured, the temporary not removed, the not-whole line not written |
 | `tools/test_yonder_tally.py`, `tools/test_yonder_corpus_diff.py` | 7 and 9 tests pass |
 | Guest (QEMU, GUI entry, headless): `yonder` started from `/home/gui.conf`, `/home/kp/kp.html` (a script, a sheet that imports another, a script that 404s) typed into it, `/home` read back with `debugfs` | `kept/file-0001.html` byte-identical to the page, `.d/` with `1.js`, `2.css`, `3.css` and the index's four lines, the failed one included; `e2fsck -fn` clean on `/home`. Replayed on the host: the same MISSING and FAILED lines, plus the timer's death at 300 ms, which the guest's arrival write predates. Not a P5 run |
@@ -669,6 +672,6 @@ let it run on (stopped, incomplete); the diff's two incomplete directions
 (exit 2); the diff crashed on an unreadable page file (exit 2); a sequence
 counted once could pair records with another's kept files (the claim); the
 facts a replay needs could be lost past 512 plain lines (their own room,
-and refusal); an index number used as a path unchecked, and a non-record
+and refusal only of a record that ran out of memory); an index number used as a path unchecked, and a non-record
 `*.txt` skipped silently (unjudged); and two texts that were not the whole
 truth (`diag_kept`'s comment, YONDER_DIAGNOSTICS.md's sample).

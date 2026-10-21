@@ -55,9 +55,10 @@
  *     `replayed P, clean C, incomplete I, unfinished U`, and how many
  *     records had no kept bytes. A record that says `kept: not whole` is
  *     counted and not replayed. A `*.txt` that is not a record or cannot
- *     be read, a record that lost lines (`facts not kept`, `some lines not
- *     kept`, a fact with no memory to write it), and an index this runner
- *     cannot read are UNJUDGED, and make the answer 2.
+ *     be read, a record with a line that had no memory to be written (it
+ *     may be missing anything), and an index this runner cannot read are
+ *     UNJUDGED, and make the answer 2. A record that ran out of room for
+ *     plain lines is judged: its head facts have room of their own.
  *
  * --self-test is the proof (run by tools/test_yonder_replay_host.sh): the
  * fixture pages the scripted-page host's fixtures serve
@@ -69,8 +70,9 @@
  * for line, its paint stages aside (rp_same). Then copies of one, and a
  * page written here, are replayed as corpora that must not pass silently
  * (rp_corpus_cases): a line taken out of the index, a damaged index, a
- * record that lost lines, a `*.txt` that is not a record, no time to
- * finish, and a page that navigates.
+ * record with a line that had no memory, one whose table was full (which
+ * IS judged), a `*.txt` that is not a record, no time to finish, and a
+ * page that navigates.
  */
 #define YONDER_HOST_FAKES_ONLY
 #pragma GCC diagnostic ignored "-Wunused-function"
@@ -566,8 +568,8 @@ static const char *rp_written(const char *dir, const char *address, uint32_t seq
 /* ── Replaying a directory ──────────────────────────────────────────── */
 
 /* What a directory's replay came to. `unjudged`: a `*.txt` that is not a
- * record or cannot be read, a record that lost facts a replay rebuilds the
- * page from, or an index this runner cannot read; each makes the run's
+ * record or cannot be read, a record with a line that had no memory to be
+ * written, or an index this runner cannot read; each makes the run's
  * answer 2, since a corpus with pages nobody judged reads as one that
  * passed. */
 typedef struct { unsigned replayed, clean, incomplete, unfinished, bare, not_whole, unjudged, leaked, broken; } RpTally;
@@ -595,16 +597,14 @@ static void rp_replay_one(const char *kept, const char *out, const char *name, u
         free(text); free(base);
         return;
     }
-    /* A kept page whose record lost lines may have lost the facts the head
-     * is rebuilt from (yonder_diag_head_fact has room for them, but memory
-     * can still run out): a page read from defaults it did not know it took
-     * is not judged. */
-    const char *lost=strstr(text,"\nfacts not kept: ")!=NULL ? "it lost plain lines for want of room"
-                   : strstr(text,"\nsome lines not kept: ")!=NULL ? "it lost lines for want of memory"
-                   : NULL;
-    for(int i=0;lost==NULL && i<F_N;i++)
-        if(r.facts[i]!=NULL && !strcmp(r.facts[i],"no memory to write this line"))
-            lost="a fact a replay rebuilds the page from had no memory to be written";
+    /* A kept page whose record says a line had no memory to be written may
+     * be missing anything, the facts its head is rebuilt from included: it
+     * is not judged. One that ran out of ROOM for plain lines is: the head
+     * facts have room of their own (yonder_diag_head_fact), and a replay is
+     * compared with another made under the same caps, which drop the same
+     * lines. */
+    const char *lost=strstr(text,": no memory to write this line\n")!=NULL
+                   ? "a line of its record had no memory to be written" : NULL;
     free(text);
     path=rp_cat(base,".html","");
     size_t len=0;
@@ -820,7 +820,7 @@ static bool rp_same(const char *name, const char *a, const char *b) {
 /* THE CASES A CORPUS MUST NOT PASS SILENTLY, each a copy of the first
  * hand-made page (or a page written here) in a folder of its own under
  * WORK-DIR, replayed as a corpus is. */
-typedef enum { RP_COPY, RP_DROP_SCRIPT_LINE, RP_BAD_NUMBER, RP_LOST_FACTS } RpEdit;
+typedef enum { RP_COPY, RP_DROP_SCRIPT_LINE, RP_BAD_NUMBER, RP_NO_MEMORY, RP_FULL_TABLE } RpEdit;
 
 /* The kept page `name` copied from `kept` into `dir`, with `edit` made to
  * it. The problems found. */
@@ -852,8 +852,9 @@ static unsigned rp_copy_page(const char *kept, const char *name, const char *dir
                     memmove(text+at+3,text+at,len-at+1); memcpy(text+at,"../",3); len+=3;
                 }
             }
-            if(!strcmp(kFiles[f],".txt") && edit==RP_LOST_FACTS) {
-                text=realloc(text,len+32); memcpy(text+len,"facts not kept: 3\n",19); len+=18;
+            if(!strcmp(kFiles[f],".txt") && (edit==RP_NO_MEMORY || edit==RP_FULL_TABLE)) {
+                const char *add=edit==RP_NO_MEMORY ? "written: no memory to write this line\n" : "facts not kept: 3\n";
+                text=realloc(text,len+strlen(add)+1); memcpy(text+len,add,strlen(add)+1); len+=strlen(add);
             }
             if(!rp_write(b,text,len)) bad++;
         }
@@ -895,11 +896,11 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
     }
     free(record); free(dir);
 
-    /* An index line whose number is not one, a record that lost plain
-     * lines, and a `*.txt` that is not a record: none is judged, and each
-     * makes the answer 2. */
+    /* An index line whose number is not one, a record with a line that had
+     * no memory to be written, and a `*.txt` that is not a record: none is
+     * judged, and each makes the answer 2. */
     static const struct { const char *dir; RpEdit edit; } kRefused[]={
-        {"/badnumber",RP_BAD_NUMBER},{"/lostfacts",RP_LOST_FACTS},{"/notarecord",RP_COPY}};
+        {"/badnumber",RP_BAD_NUMBER},{"/nomemory",RP_NO_MEMORY},{"/notarecord",RP_COPY}};
     for(size_t i=0;i<sizeof(kRefused)/sizeof(kRefused[0]);i++) {
         dir=rp_cat(work,kRefused[i].dir,"");
         bad+=rp_copy_page(kept,name,dir,kRefused[i].edit);
@@ -915,6 +916,16 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
         }
         free(record); free(dir);
     }
+
+    /* A record that ran out of room for plain lines is judged: its head
+     * facts had room of their own. */
+    dir=rp_cat(work,"/fulltable","");
+    bad+=rp_copy_page(kept,name,dir,RP_FULL_TABLE);
+    rc=rp_replay_copy(dir,name,60000,&t,&record);
+    if(rc!=0 || t.unjudged!=0 || t.replayed!=1) {
+        printf("  a record whose table was full was not judged (%d)\n",rc); bad++;
+    }
+    free(record); free(dir);
 
     /* No time to finish: every page that did not arrive says so on its
      * record, and none is clean. */

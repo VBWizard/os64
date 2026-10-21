@@ -475,8 +475,9 @@ as the server named them (left out when it named none) and `encrypted`
 (`yes`/`no`). A page read with scripts off says `scripts: off`. These,
 `status`, `TLS`, `laid out at` and `kept` have room of their own past the
 512 plain lines a record keeps (`yonder_diag_head_fact`), so a page with
-more plain lines than that never loses one; a replay refuses a record
-that says it lost any line all the same.
+more plain lines than that never loses one, and a replay judges it; a
+replay refuses only a record with a line that had no memory to be
+written.
 
 **A script's line carries its evaluation time**: `script <address>: ran in
 1520 us`, or `failed in ...`, the time `os64_js_run` took, compiling
