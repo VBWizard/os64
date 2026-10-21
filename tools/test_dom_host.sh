@@ -16,7 +16,11 @@ flags=(-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
     -Iuserland/libmath/include -Iuserland/libjs/port -Iuserland/libjs/include
     -Iuserland/libdom/include -Iuserland/libhtml/include -Iuserland/libpage/include
     -Iuserland/libgarb/include -Iuserland/libpage/upstream/ryu -Iuserland/libos64/include -Iabi/include
-    -isystem userland/obj/js/upstream -fsanitize=address,undefined -fno-sanitize-recover=all)
+    -isystem userland/obj/js/upstream -fsanitize=address,undefined -fno-sanitize-recover=all
+    '-DGARB_MODERN_PROBE="animation-name"')
+# The probe marks a property the Modern Web arc did not add, so the binding's
+# side of the mark (a style member that goes with the switch) has one to
+# hold to (tools/test_dom_modern.inc); libgarb's own suite proves the rest.
 objects=()
 for source in userland/libjs/runtime/runtime.c userland/libos64/str.c userland/libos64/fmt.c \
     userland/libos64/bidi.c userland/libos64/url.c userland/libos64/arena.c tools/test_js_port_calendar.c tools/test_dom_host.c \

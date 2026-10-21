@@ -10,127 +10,131 @@
 
 // ── The table ───────────────────────────────────────────────────────────
 
+// `modern`: the Modern Web arc added it, so a reading with `modern_off`
+// does not know it (garb_prop_modern). Every property the arc adds is
+// marked, and the shorthands and aliases it adds below are too.
 typedef struct {
     const char *name;
     bool inherited;
+    bool modern;
 } Prop;
 
 static const Prop kProps[GARB_NPROPS] = {
-    [GARB_DISPLAY] = {"display", false},
-    [GARB_COLOR] = {"color", true},
-    [GARB_BACKGROUND_COLOR] = {"background-color", false},
-    [GARB_BACKGROUND_IMAGE] = {"background-image", false},
-    [GARB_BACKGROUND_REPEAT] = {"background-repeat", false},
-    [GARB_BACKGROUND_POSITION_X] = {"background-position-x", false},
-    [GARB_BACKGROUND_POSITION_Y] = {"background-position-y", false},
-    [GARB_BACKGROUND_SIZE] = {"background-size", false},
-    [GARB_BACKGROUND_ORIGIN] = {"background-origin", false},
-    [GARB_BACKGROUND_CLIP] = {"background-clip", false},
-    [GARB_MARGIN_TOP] = {"margin-top", false},
-    [GARB_MARGIN_RIGHT] = {"margin-right", false},
-    [GARB_MARGIN_BOTTOM] = {"margin-bottom", false},
-    [GARB_MARGIN_LEFT] = {"margin-left", false},
-    [GARB_PADDING_TOP] = {"padding-top", false},
-    [GARB_PADDING_RIGHT] = {"padding-right", false},
-    [GARB_PADDING_BOTTOM] = {"padding-bottom", false},
-    [GARB_PADDING_LEFT] = {"padding-left", false},
-    [GARB_BORDER_TOP_WIDTH] = {"border-top-width", false},
-    [GARB_BORDER_RIGHT_WIDTH] = {"border-right-width", false},
-    [GARB_BORDER_BOTTOM_WIDTH] = {"border-bottom-width", false},
-    [GARB_BORDER_LEFT_WIDTH] = {"border-left-width", false},
-    [GARB_BORDER_TOP_STYLE] = {"border-top-style", false},
-    [GARB_BORDER_RIGHT_STYLE] = {"border-right-style", false},
-    [GARB_BORDER_BOTTOM_STYLE] = {"border-bottom-style", false},
-    [GARB_BORDER_LEFT_STYLE] = {"border-left-style", false},
-    [GARB_BORDER_TOP_COLOR] = {"border-top-color", false},
-    [GARB_BORDER_RIGHT_COLOR] = {"border-right-color", false},
-    [GARB_BORDER_BOTTOM_COLOR] = {"border-bottom-color", false},
-    [GARB_BORDER_LEFT_COLOR] = {"border-left-color", false},
-    [GARB_WIDTH] = {"width", false},
-    [GARB_HEIGHT] = {"height", false},
-    [GARB_MIN_WIDTH] = {"min-width", false},
-    [GARB_MAX_WIDTH] = {"max-width", false},
-    [GARB_MIN_HEIGHT] = {"min-height", false},
-    [GARB_MAX_HEIGHT] = {"max-height", false},
-    [GARB_BOX_SIZING] = {"box-sizing", false},
-    [GARB_FONT_FAMILY] = {"font-family", true},
-    [GARB_FONT_SIZE] = {"font-size", true},
-    [GARB_FONT_WEIGHT] = {"font-weight", true},
-    [GARB_FONT_STYLE] = {"font-style", true},
-    [GARB_FONT_VARIANT] = {"font-variant", true},
-    [GARB_LINE_HEIGHT] = {"line-height", true},
-    [GARB_TEXT_ALIGN] = {"text-align", true},
-    [GARB_VERTICAL_ALIGN] = {"vertical-align", false},
-    [GARB_WHITE_SPACE] = {"white-space", true},
-    [GARB_TEXT_DECORATION_LINE] = {"text-decoration-line", false},
-    [GARB_TEXT_INDENT] = {"text-indent", true},
-    [GARB_TEXT_TRANSFORM] = {"text-transform", true},
-    [GARB_VISIBILITY] = {"visibility", true},
-    [GARB_LIST_STYLE_TYPE] = {"list-style-type", true},
-    [GARB_LIST_STYLE_POSITION] = {"list-style-position", true},
-    [GARB_LIST_STYLE_IMAGE] = {"list-style-image", true},
-    [GARB_BORDER_SPACING] = {"border-spacing", true},
-    [GARB_BORDER_COLLAPSE] = {"border-collapse", true},
-    [GARB_CAPTION_SIDE] = {"caption-side", true},
-    [GARB_FLOAT] = {"float", false},
-    [GARB_CLEAR] = {"clear", false},
-    [GARB_OVERFLOW_X] = {"overflow-x", false},
-    [GARB_OVERFLOW_Y] = {"overflow-y", false},
-    [GARB_POSITION] = {"position", false},
-    [GARB_TOP] = {"top", false},
-    [GARB_RIGHT] = {"right", false},
-    [GARB_BOTTOM] = {"bottom", false},
-    [GARB_LEFT] = {"left", false},
-    [GARB_Z_INDEX] = {"z-index", false},
-    [GARB_OPACITY] = {"opacity", false},
-    [GARB_POINTER_EVENTS] = {"pointer-events", true},
-    [GARB_FLEX_DIRECTION] = {"flex-direction", false},
-    [GARB_FLEX_WRAP] = {"flex-wrap", false},
-    [GARB_JUSTIFY_CONTENT] = {"justify-content", false},
-    [GARB_ALIGN_ITEMS] = {"align-items", false},
-    [GARB_ALIGN_SELF] = {"align-self", false},
-    [GARB_ALIGN_CONTENT] = {"align-content", false},
-    [GARB_FLEX_GROW] = {"flex-grow", false},
-    [GARB_FLEX_SHRINK] = {"flex-shrink", false},
-    [GARB_FLEX_BASIS] = {"flex-basis", false},
-    [GARB_ORDER] = {"order", false},
-    [GARB_ROW_GAP] = {"row-gap", false},
-    [GARB_COLUMN_GAP] = {"column-gap", false},
-    [GARB_GRID_TEMPLATE_COLUMNS] = {"grid-template-columns", false},
-    [GARB_GRID_TEMPLATE_ROWS] = {"grid-template-rows", false},
-    [GARB_GRID_TEMPLATE_AREAS] = {"grid-template-areas", false},
-    [GARB_GRID_AUTO_COLUMNS] = {"grid-auto-columns", false},
-    [GARB_GRID_AUTO_ROWS] = {"grid-auto-rows", false},
-    [GARB_GRID_AUTO_FLOW] = {"grid-auto-flow", false},
-    [GARB_GRID_COLUMN_START] = {"grid-column-start", false},
-    [GARB_GRID_COLUMN_END] = {"grid-column-end", false},
-    [GARB_GRID_ROW_START] = {"grid-row-start", false},
-    [GARB_GRID_ROW_END] = {"grid-row-end", false},
-    [GARB_JUSTIFY_ITEMS] = {"justify-items", false},
-    [GARB_JUSTIFY_SELF] = {"justify-self", false},
-    [GARB_BORDER_TOP_LEFT_RADIUS] = {"border-top-left-radius", false},
-    [GARB_BORDER_TOP_RIGHT_RADIUS] = {"border-top-right-radius", false},
-    [GARB_BORDER_BOTTOM_RIGHT_RADIUS] = {"border-bottom-right-radius", false},
-    [GARB_BORDER_BOTTOM_LEFT_RADIUS] = {"border-bottom-left-radius", false},
-    [GARB_BOX_SHADOW] = {"box-shadow", false},
-    [GARB_TEXT_SHADOW] = {"text-shadow", true},
-    [GARB_IMAGE_RENDERING] = {"image-rendering", true},
-    [GARB_CLIP] = {"clip", false},
-    [GARB_TRANSFORM] = {"transform", false},
-    [GARB_TRANSFORM_ORIGIN] = {"transform-origin", false},
-    [GARB_TRANSLATE] = {"translate", false},
-    [GARB_ROTATE] = {"rotate", false},
-    [GARB_SCALE] = {"scale", false},
-    [GARB_TEXT_FILL_COLOR] = {"-webkit-text-fill-color", true},
-    [GARB_ANIMATION_NAME] = {"animation-name", false},
-    [GARB_ANIMATION_DURATION] = {"animation-duration", false},
-    [GARB_ANIMATION_TIMING_FUNCTION] = {"animation-timing-function", false},
-    [GARB_ANIMATION_ITERATION_COUNT] = {"animation-iteration-count", false},
-    [GARB_ANIMATION_DIRECTION] = {"animation-direction", false},
-    [GARB_ANIMATION_PLAY_STATE] = {"animation-play-state", false},
-    [GARB_ANIMATION_DELAY] = {"animation-delay", false},
-    [GARB_ANIMATION_FILL_MODE] = {"animation-fill-mode", false},
-    [GARB_WILL_CHANGE] = {"will-change", false},
+    [GARB_DISPLAY] = {"display", false, false},
+    [GARB_COLOR] = {"color", true, false},
+    [GARB_BACKGROUND_COLOR] = {"background-color", false, false},
+    [GARB_BACKGROUND_IMAGE] = {"background-image", false, false},
+    [GARB_BACKGROUND_REPEAT] = {"background-repeat", false, false},
+    [GARB_BACKGROUND_POSITION_X] = {"background-position-x", false, false},
+    [GARB_BACKGROUND_POSITION_Y] = {"background-position-y", false, false},
+    [GARB_BACKGROUND_SIZE] = {"background-size", false, false},
+    [GARB_BACKGROUND_ORIGIN] = {"background-origin", false, false},
+    [GARB_BACKGROUND_CLIP] = {"background-clip", false, false},
+    [GARB_MARGIN_TOP] = {"margin-top", false, false},
+    [GARB_MARGIN_RIGHT] = {"margin-right", false, false},
+    [GARB_MARGIN_BOTTOM] = {"margin-bottom", false, false},
+    [GARB_MARGIN_LEFT] = {"margin-left", false, false},
+    [GARB_PADDING_TOP] = {"padding-top", false, false},
+    [GARB_PADDING_RIGHT] = {"padding-right", false, false},
+    [GARB_PADDING_BOTTOM] = {"padding-bottom", false, false},
+    [GARB_PADDING_LEFT] = {"padding-left", false, false},
+    [GARB_BORDER_TOP_WIDTH] = {"border-top-width", false, false},
+    [GARB_BORDER_RIGHT_WIDTH] = {"border-right-width", false, false},
+    [GARB_BORDER_BOTTOM_WIDTH] = {"border-bottom-width", false, false},
+    [GARB_BORDER_LEFT_WIDTH] = {"border-left-width", false, false},
+    [GARB_BORDER_TOP_STYLE] = {"border-top-style", false, false},
+    [GARB_BORDER_RIGHT_STYLE] = {"border-right-style", false, false},
+    [GARB_BORDER_BOTTOM_STYLE] = {"border-bottom-style", false, false},
+    [GARB_BORDER_LEFT_STYLE] = {"border-left-style", false, false},
+    [GARB_BORDER_TOP_COLOR] = {"border-top-color", false, false},
+    [GARB_BORDER_RIGHT_COLOR] = {"border-right-color", false, false},
+    [GARB_BORDER_BOTTOM_COLOR] = {"border-bottom-color", false, false},
+    [GARB_BORDER_LEFT_COLOR] = {"border-left-color", false, false},
+    [GARB_WIDTH] = {"width", false, false},
+    [GARB_HEIGHT] = {"height", false, false},
+    [GARB_MIN_WIDTH] = {"min-width", false, false},
+    [GARB_MAX_WIDTH] = {"max-width", false, false},
+    [GARB_MIN_HEIGHT] = {"min-height", false, false},
+    [GARB_MAX_HEIGHT] = {"max-height", false, false},
+    [GARB_BOX_SIZING] = {"box-sizing", false, false},
+    [GARB_FONT_FAMILY] = {"font-family", true, false},
+    [GARB_FONT_SIZE] = {"font-size", true, false},
+    [GARB_FONT_WEIGHT] = {"font-weight", true, false},
+    [GARB_FONT_STYLE] = {"font-style", true, false},
+    [GARB_FONT_VARIANT] = {"font-variant", true, false},
+    [GARB_LINE_HEIGHT] = {"line-height", true, false},
+    [GARB_TEXT_ALIGN] = {"text-align", true, false},
+    [GARB_VERTICAL_ALIGN] = {"vertical-align", false, false},
+    [GARB_WHITE_SPACE] = {"white-space", true, false},
+    [GARB_TEXT_DECORATION_LINE] = {"text-decoration-line", false, false},
+    [GARB_TEXT_INDENT] = {"text-indent", true, false},
+    [GARB_TEXT_TRANSFORM] = {"text-transform", true, false},
+    [GARB_VISIBILITY] = {"visibility", true, false},
+    [GARB_LIST_STYLE_TYPE] = {"list-style-type", true, false},
+    [GARB_LIST_STYLE_POSITION] = {"list-style-position", true, false},
+    [GARB_LIST_STYLE_IMAGE] = {"list-style-image", true, false},
+    [GARB_BORDER_SPACING] = {"border-spacing", true, false},
+    [GARB_BORDER_COLLAPSE] = {"border-collapse", true, false},
+    [GARB_CAPTION_SIDE] = {"caption-side", true, false},
+    [GARB_FLOAT] = {"float", false, false},
+    [GARB_CLEAR] = {"clear", false, false},
+    [GARB_OVERFLOW_X] = {"overflow-x", false, false},
+    [GARB_OVERFLOW_Y] = {"overflow-y", false, false},
+    [GARB_POSITION] = {"position", false, false},
+    [GARB_TOP] = {"top", false, false},
+    [GARB_RIGHT] = {"right", false, false},
+    [GARB_BOTTOM] = {"bottom", false, false},
+    [GARB_LEFT] = {"left", false, false},
+    [GARB_Z_INDEX] = {"z-index", false, false},
+    [GARB_OPACITY] = {"opacity", false, false},
+    [GARB_POINTER_EVENTS] = {"pointer-events", true, false},
+    [GARB_FLEX_DIRECTION] = {"flex-direction", false, false},
+    [GARB_FLEX_WRAP] = {"flex-wrap", false, false},
+    [GARB_JUSTIFY_CONTENT] = {"justify-content", false, false},
+    [GARB_ALIGN_ITEMS] = {"align-items", false, false},
+    [GARB_ALIGN_SELF] = {"align-self", false, false},
+    [GARB_ALIGN_CONTENT] = {"align-content", false, false},
+    [GARB_FLEX_GROW] = {"flex-grow", false, false},
+    [GARB_FLEX_SHRINK] = {"flex-shrink", false, false},
+    [GARB_FLEX_BASIS] = {"flex-basis", false, false},
+    [GARB_ORDER] = {"order", false, false},
+    [GARB_ROW_GAP] = {"row-gap", false, false},
+    [GARB_COLUMN_GAP] = {"column-gap", false, false},
+    [GARB_GRID_TEMPLATE_COLUMNS] = {"grid-template-columns", false, false},
+    [GARB_GRID_TEMPLATE_ROWS] = {"grid-template-rows", false, false},
+    [GARB_GRID_TEMPLATE_AREAS] = {"grid-template-areas", false, false},
+    [GARB_GRID_AUTO_COLUMNS] = {"grid-auto-columns", false, false},
+    [GARB_GRID_AUTO_ROWS] = {"grid-auto-rows", false, false},
+    [GARB_GRID_AUTO_FLOW] = {"grid-auto-flow", false, false},
+    [GARB_GRID_COLUMN_START] = {"grid-column-start", false, false},
+    [GARB_GRID_COLUMN_END] = {"grid-column-end", false, false},
+    [GARB_GRID_ROW_START] = {"grid-row-start", false, false},
+    [GARB_GRID_ROW_END] = {"grid-row-end", false, false},
+    [GARB_JUSTIFY_ITEMS] = {"justify-items", false, false},
+    [GARB_JUSTIFY_SELF] = {"justify-self", false, false},
+    [GARB_BORDER_TOP_LEFT_RADIUS] = {"border-top-left-radius", false, false},
+    [GARB_BORDER_TOP_RIGHT_RADIUS] = {"border-top-right-radius", false, false},
+    [GARB_BORDER_BOTTOM_RIGHT_RADIUS] = {"border-bottom-right-radius", false, false},
+    [GARB_BORDER_BOTTOM_LEFT_RADIUS] = {"border-bottom-left-radius", false, false},
+    [GARB_BOX_SHADOW] = {"box-shadow", false, false},
+    [GARB_TEXT_SHADOW] = {"text-shadow", true, false},
+    [GARB_IMAGE_RENDERING] = {"image-rendering", true, false},
+    [GARB_CLIP] = {"clip", false, false},
+    [GARB_TRANSFORM] = {"transform", false, false},
+    [GARB_TRANSFORM_ORIGIN] = {"transform-origin", false, false},
+    [GARB_TRANSLATE] = {"translate", false, false},
+    [GARB_ROTATE] = {"rotate", false, false},
+    [GARB_SCALE] = {"scale", false, false},
+    [GARB_TEXT_FILL_COLOR] = {"-webkit-text-fill-color", true, false},
+    [GARB_ANIMATION_NAME] = {"animation-name", false, false},
+    [GARB_ANIMATION_DURATION] = {"animation-duration", false, false},
+    [GARB_ANIMATION_TIMING_FUNCTION] = {"animation-timing-function", false, false},
+    [GARB_ANIMATION_ITERATION_COUNT] = {"animation-iteration-count", false, false},
+    [GARB_ANIMATION_DIRECTION] = {"animation-direction", false, false},
+    [GARB_ANIMATION_PLAY_STATE] = {"animation-play-state", false, false},
+    [GARB_ANIMATION_DELAY] = {"animation-delay", false, false},
+    [GARB_ANIMATION_FILL_MODE] = {"animation-fill-mode", false, false},
+    [GARB_WILL_CHANGE] = {"will-change", false, false},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -141,6 +145,28 @@ const char *garb_prop_name(garb_prop_t prop)
 bool garb_prop_inherited(garb_prop_t prop)
 {
     return prop < GARB_NPROPS && kProps[prop].inherited;
+}
+
+// Whether a name of the tables is marked modern: the table's mark. The
+// harnesses prove the mark on names of every kind (a longhand, a
+// shorthand, an alias) before the arc has marked one of each, by compiling
+// with GARB_MODERN_PROBE, a list of names marked as if the tables said so.
+static bool marked(const char *name, bool modern)
+{
+#ifdef GARB_MODERN_PROBE
+    static const char *const kProbe[] = {GARB_MODERN_PROBE};
+    for (size_t k = 0; k < sizeof(kProbe) / sizeof(kProbe[0]); k++)
+        if (os64_streq(name, kProbe[k]))
+            return true;
+#else
+    (void)name;
+#endif
+    return modern;
+}
+
+bool garb_prop_modern(garb_prop_t prop)
+{
+    return prop < GARB_NPROPS && marked(kProps[prop].name, kProps[prop].modern);
 }
 
 // ── Keywords ────────────────────────────────────────────────────────────
@@ -471,10 +497,16 @@ typedef struct {
     int32_t n;
     Arena a;
     bool quirks;
+    bool modern_off;
 } Sets;
 
+// A longhand into the answer; one marked modern is left out when those are
+// not known, which is what keeps it out of a shorthand that sets it beside
+// longhands that are.
 static void set(Sets *s, garb_prop_t p, const garb_val_t *v)
 {
+    if (s->modern_off && garb_prop_modern(p))
+        return;
     if (s->n < GARB_SETS_MAX) {
         s->out[s->n].prop = p;
         s->out[s->n].value = *v;
@@ -2914,23 +2946,25 @@ typedef enum {
     SH_BORDER_RADIUS, SH_ANIMATION,
 } Shorthand;
 
-static const struct { const char *name; Shorthand sh; } kShorthands[] = {
-    {"margin", SH_MARGIN}, {"padding", SH_PADDING}, {"border", SH_BORDER},
-    {"border-top", SH_BORDER_TOP}, {"border-right", SH_BORDER_RIGHT},
-    {"border-bottom", SH_BORDER_BOTTOM}, {"border-left", SH_BORDER_LEFT},
-    {"border-width", SH_BORDER_WIDTH}, {"border-style", SH_BORDER_STYLE},
-    {"border-color", SH_BORDER_COLOR}, {"background", SH_BACKGROUND},
-    {"background-position", SH_BACKGROUND_POSITION}, {"font", SH_FONT},
-    {"list-style", SH_LIST_STYLE}, {"text-decoration", SH_TEXT_DECORATION},
-    {"overflow", SH_OVERFLOW}, {"inset", SH_INSET},
-    {"flex", SH_FLEX}, {"flex-flow", SH_FLEX_FLOW}, {"gap", SH_GAP},
+// `modern` as Prop's.
+static const struct { const char *name; Shorthand sh; bool modern; } kShorthands[] = {
+    {"margin", SH_MARGIN, false}, {"padding", SH_PADDING, false}, {"border", SH_BORDER, false},
+    {"border-top", SH_BORDER_TOP, false}, {"border-right", SH_BORDER_RIGHT, false},
+    {"border-bottom", SH_BORDER_BOTTOM, false}, {"border-left", SH_BORDER_LEFT, false},
+    {"border-width", SH_BORDER_WIDTH, false}, {"border-style", SH_BORDER_STYLE, false},
+    {"border-color", SH_BORDER_COLOR, false}, {"background", SH_BACKGROUND, false},
+    {"background-position", SH_BACKGROUND_POSITION, false}, {"font", SH_FONT, false},
+    {"list-style", SH_LIST_STYLE, false}, {"text-decoration", SH_TEXT_DECORATION, false},
+    {"overflow", SH_OVERFLOW, false}, {"inset", SH_INSET, false},
+    {"flex", SH_FLEX, false}, {"flex-flow", SH_FLEX_FLOW, false}, {"gap", SH_GAP, false},
     // Grid 1's first spelling of `gap`, still written by nearly every sheet
     // that wants the gap in the browsers of 2018 (Box Alignment 3 § 8.4).
-    {"grid-gap", SH_GAP},
-    {"grid-column", SH_GRID_COLUMN}, {"grid-row", SH_GRID_ROW}, {"grid-area", SH_GRID_AREA},
-    {"place-items", SH_PLACE_ITEMS}, {"place-self", SH_PLACE_SELF},
-    {"place-content", SH_PLACE_CONTENT}, {"border-radius", SH_BORDER_RADIUS},
-    {"animation", SH_ANIMATION},
+    {"grid-gap", SH_GAP, false},
+    {"grid-column", SH_GRID_COLUMN, false}, {"grid-row", SH_GRID_ROW, false},
+    {"grid-area", SH_GRID_AREA, false},
+    {"place-items", SH_PLACE_ITEMS, false}, {"place-self", SH_PLACE_SELF, false},
+    {"place-content", SH_PLACE_CONTENT, false}, {"border-radius", SH_BORDER_RADIUS, false},
+    {"animation", SH_ANIMATION, false},
 };
 
 // What `animation` sets, in the order libgarb lists the longhands.
@@ -3298,66 +3332,78 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
 // The Compatibility Standard's legacy name aliases (§ 3.4.1) that are read:
 // a prefixed name every engine reads as its standard twin is no one
 // engine's dialect, so it is the twin — a longhand's or a shorthand's.
+// `modern` as Prop's; an alias of a marked twin is unknown with it anyway.
 static const struct {
     const char *name, *twin;
+    bool modern;
 } kAliases[] = {
-    {"-webkit-background-clip", "background-clip"},
-    {"-webkit-transform", "transform"},
-    {"-webkit-transform-origin", "transform-origin"},
-    {"-webkit-animation", "animation"},
-    {"-webkit-animation-name", "animation-name"},
-    {"-webkit-animation-duration", "animation-duration"},
-    {"-webkit-animation-timing-function", "animation-timing-function"},
-    {"-webkit-animation-iteration-count", "animation-iteration-count"},
-    {"-webkit-animation-direction", "animation-direction"},
-    {"-webkit-animation-play-state", "animation-play-state"},
-    {"-webkit-animation-delay", "animation-delay"},
-    {"-webkit-animation-fill-mode", "animation-fill-mode"},
+    {"-webkit-background-clip", "background-clip", false},
+    {"-webkit-transform", "transform", false},
+    {"-webkit-transform-origin", "transform-origin", false},
+    {"-webkit-animation", "animation", false},
+    {"-webkit-animation-name", "animation-name", false},
+    {"-webkit-animation-duration", "animation-duration", false},
+    {"-webkit-animation-timing-function", "animation-timing-function", false},
+    {"-webkit-animation-iteration-count", "animation-iteration-count", false},
+    {"-webkit-animation-direction", "animation-direction", false},
+    {"-webkit-animation-play-state", "animation-play-state", false},
+    {"-webkit-animation-delay", "animation-delay", false},
+    {"-webkit-animation-fill-mode", "animation-fill-mode", false},
 };
 
 // The name a declaration's name stands for: its twin's when it is an
-// alias, else itself.
-static void unalias(const char **name, size_t *len)
+// alias, else itself. False for an alias marked modern when those are not
+// known, which names nothing.
+static bool unalias(const char **name, size_t *len, bool modern_off)
 {
     for (size_t k = 0; k < sizeof(kAliases) / sizeof(kAliases[0]); k++)
         if (ieq(*name, *len, kAliases[k].name)) {
             *name = kAliases[k].twin;
             *len = os64_strlen(kAliases[k].twin);
-            return;
+            return !(modern_off && marked(kAliases[k].name, kAliases[k].modern));
         }
+    return true;
 }
 
 // The longhand a declaration's name names, by its own name or an alias;
-// NULL for none.
-static const Longhand *longhand_named(const char *name, size_t len)
+// NULL for none. These two are where a name is known or not, so they are
+// where `modern_off` takes the marked names away.
+static const Longhand *longhand_named(const char *name, size_t len, bool modern_off)
 {
-    unalias(&name, &len);
+    if (!unalias(&name, &len, modern_off))
+        return NULL;
     for (size_t k = 0; k < sizeof(kLonghands) / sizeof(kLonghands[0]); k++)
         if (ieq(name, len, kProps[kLonghands[k].prop].name))
-            return &kLonghands[k];
+            return modern_off && garb_prop_modern(kLonghands[k].prop) ? NULL : &kLonghands[k];
     return NULL;
 }
 
 // The shorthand a declaration's name names, by its own name or an alias;
 // -1 for none.
-static int shorthand_named(const char *name, size_t len)
+static int shorthand_named(const char *name, size_t len, bool modern_off)
 {
-    unalias(&name, &len);
+    if (!unalias(&name, &len, modern_off))
+        return -1;
     for (size_t k = 0; k < sizeof(kShorthands) / sizeof(kShorthands[0]); k++)
         if (ieq(name, len, kShorthands[k].name))
-            return (int)kShorthands[k].sh;
+            return modern_off && marked(kShorthands[k].name, kShorthands[k].modern)
+                       ? -1 : (int)kShorthands[k].sh;
     return -1;
 }
 
-int32_t prop_longhands(const char *name, size_t len, garb_prop_t *out)
+int32_t prop_longhands(const char *name, size_t len, bool modern_off, garb_prop_t *out)
 {
-    const Longhand *l = longhand_named(name, len);
+    const Longhand *l = longhand_named(name, len, modern_off);
     if (l != NULL) {
         out[0] = l->prop;
         return 1;
     }
-    int sh = shorthand_named(name, len);
-    return sh >= 0 ? shorthand_longhands((Shorthand)sh, out) : 0;
+    int sh = shorthand_named(name, len, modern_off);
+    int32_t n = sh >= 0 ? shorthand_longhands((Shorthand)sh, out) : 0, kept = 0;
+    for (int32_t k = 0; k < n; k++)
+        if (!(modern_off && garb_prop_modern(out[k])))
+            out[kept++] = out[k];
+    return kept;
 }
 
 // ── Declarations ────────────────────────────────────────────────────────
@@ -3387,13 +3433,13 @@ bool garb_decl_is_custom(const garb_decl_t *decl)
     return decl->len >= 2 && decl->name[0] == '-' && decl->name[1] == '-';
 }
 
-int32_t garb_read_declaration(garb_parsed_t *owner, const garb_decl_t *decl, bool quirks,
+int32_t garb_read_declaration(garb_parsed_t *owner, const garb_decl_t *decl, garb_reading_t how,
                               garb_set_t *out)
 {
-    Sets s = {out, 0, {owner->arena, false}, quirks};
+    Sets s = {out, 0, {owner->arena, false}, how.quirks, how.modern_off};
     VCur c = {decl->value, decl->nvalue, 0};
-    const Longhand *l = longhand_named(decl->name, decl->len);
-    int sh = l == NULL ? shorthand_named(decl->name, decl->len) : -1;
+    const Longhand *l = longhand_named(decl->name, decl->len, how.modern_off);
+    int sh = l == NULL ? shorthand_named(decl->name, decl->len, how.modern_off) : -1;
     if (l == NULL && sh < 0)
         return 0;
     if (garb_decl_has_var(decl))

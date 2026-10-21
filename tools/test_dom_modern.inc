@@ -65,6 +65,10 @@ static void dom_modern_cases(void)
     if (!fixture_ready(&f)) return;
     size_t non = 0;
     char **on = modern_global_names(&f, &non);
+    dom_script(&f, MODERN_ASSERT
+        "var s=document.body.style;assert('animationName' in s);"
+        "s.setProperty('animation-name','spin');assert(s.getPropertyValue('animation-name')==='spin');",
+        "modern-on-style-member");
     check(on != NULL, "modern: window's names with the switch on");
     fixture_free(&f);
 
@@ -81,6 +85,10 @@ static void dom_modern_cases(void)
         "var b=document.body;assert(b.tagName==='BODY'&&b.constructor===Object);"
         "assert(Object.getPrototypeOf(b)!==Object.prototype&&typeof b.getAttribute==='function');"
         "assert(b.ELEMENT_NODE===undefined&&!('ELEMENT_NODE' in b));"
+        /* tools/test_dom_host.sh marks animation-name as the arc's */
+        "assert(!('animationName' in b.style)&&'color' in b.style);"
+        "b.style.setProperty('animation-name','spin');b.style.color='red';"
+        "assert(b.style.getPropertyValue('animation-name')===''&&b.style.color==='red');"
         "assert(typeof Image==='function'&&new Image().tagName==='IMG');",
         "modern-off-absent");
 

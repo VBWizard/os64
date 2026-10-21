@@ -234,7 +234,7 @@ static void declaration(const char *text, size_t len)
         return;
     }
     garb_set_t sets[GARB_SETS_MAX];
-    int32_t n = garb_read_declaration(&r, &r.decl, quirks, sets);
+    int32_t n = garb_read_declaration(&r, &r.decl, (garb_reading_t){.quirks = quirks}, sets);
     if (n == GARB_DECL_HELD) {
         puts("held");
     } else if (n < 0) {
@@ -600,7 +600,7 @@ static void parse_all(const char *text, size_t len)
         garb_set_t sets[GARB_SETS_MAX];
         for (int32_t k = 0; k < n; k++)
             if (items[k].kind == GARB_ITEM_DECL)
-                (void)garb_read_declaration(&r, &items[k].decl, false, sets);
+                (void)garb_read_declaration(&r, &items[k].decl, (garb_reading_t){0}, sets);
     }
     garb_free(&r);
 }
@@ -1019,7 +1019,7 @@ static int sweep_grown_lists(void)
             continue;
         }
         size_t before = allocations;
-        int32_t whole = garb_read_declaration(&r, &r.decl, false, sets);
+        int32_t whole = garb_read_declaration(&r, &r.decl, (garb_reading_t){0}, sets);
         size_t worst = allocations - before;
         garb_free(&r);
         for (size_t at = 1; at <= worst; at++) {
@@ -1031,7 +1031,7 @@ static int sweep_grown_lists(void)
             }
             fail_single = true;
             fail_at = allocations + at;
-            int32_t n = garb_read_declaration(&r, &r.decl, false, sets);
+            int32_t n = garb_read_declaration(&r, &r.decl, (garb_reading_t){0}, sets);
             fail_at = 0;
             fail_single = false;
             if (n != whole && !r.incomplete) {
@@ -1417,8 +1417,132 @@ static int keyframes_scale(void)
     return ok ? 0 : 1;
 }
 
+// THE MODERN MARK (values.h's garb_prop_modern and garb_reading_t): with
+// `modern_off`, a marked name reads as one libgarb does not read, a marked
+// longhand leaves no shorthand's answer, and a cascade built with it in its
+// environment neither applies nor supports what is marked, and tallies it
+// as passed over. tools/test_garb_host.sh builds this driver with
+// GARB_MODERN_PROBE marking a longhand (animation-name), a shorthand
+// (grid-gap) and an alias (-webkit-transform), since the arc may not have
+// marked one of each.
+static int modern_reads(const char *decl, garb_reading_t how, garb_prop_t *props, int32_t cap)
+{
+    garb_parsed_t r;
+    if (garb_parse_one_declaration(decl, strlen(decl), &r) != GARB_OK) {
+        garb_free(&r);
+        return -100;
+    }
+    garb_set_t sets[GARB_SETS_MAX];
+    int32_t n = garb_read_declaration(&r, &r.decl, how, sets);
+    for (int32_t k = 0; k < n && k < cap; k++)
+        props[k] = sets[k].prop;
+    garb_free(&r);
+    return n;
+}
+
+static bool modern_has(const garb_prop_t *props, int32_t n, garb_prop_t p)
+{
+    for (int32_t k = 0; k < n; k++)
+        if (props[k] == p)
+            return true;
+    return false;
+}
+
+// `#x`'s winners and what the cascade passed over, with the environment
+// knowing the marked names or not.
+static void modern_cascade(bool off, garb_prop_t *props, int32_t *n, bool *skipped_name, bool *skipped_gap)
+{
+    static const char kPage[] = "<!doctype html><div id=x style='color:blue;-webkit-transform:none'></div>";
+    static const char kSheet[] =
+        "#x{animation-name:spin;grid-gap:4px;margin:1px}"
+        "@supports (animation-name: spin){#x{display:flex}}"
+        "@supports (animation-name: var(--a)){#x{float:left}}";
+    os64_html_options_t opt = os64_html_options_default();
+    os64_html_parser_t *hp = os64_html_parser_new(&opt);
+    os64_html_parser_feed(hp, kPage, sizeof(kPage) - 1);
+    os64_html_document_t *doc = os64_html_parser_finish(hp);
+    garb_parsed_t r;
+    (void)garb_parse_sheet_text(kSheet, sizeof(kSheet) - 1, &r);
+    garb_sheet_in_t in = {.sheet = &r};
+    garb_cascade_t *c = garb_cascade(&in, 1, doc, (garb_env_t){.width = 800, .height = 600, .modern_off = off});
+    garb_style_t st = c != NULL ? garb_style_for(c, by_id(doc->document, "x")) : (garb_style_t){0};
+    *n = st.n;
+    for (int32_t k = 0; k < st.n && k < 64; k++)
+        props[k] = st.sets[k].prop;
+    garb_skip_t skips[GARB_SKIPS_MAX];
+    int32_t ns = c != NULL ? garb_cascade_skips(c, skips, GARB_SKIPS_MAX, NULL) : 0;
+    *skipped_name = *skipped_gap = false;
+    for (int32_t k = 0; k < ns && k < GARB_SKIPS_MAX; k++) {
+        if (skips[k].kind != GARB_SKIP_PROPERTY)
+            continue;
+        *skipped_name |= skips[k].len == 14 && memcmp(skips[k].name, "animation-name", 14) == 0;
+        *skipped_gap |= skips[k].len == 8 && memcmp(skips[k].name, "grid-gap", 8) == 0;
+    }
+    garb_cascade_free(c);
+    garb_free(&r);
+    os64_html_document_free(doc);
+}
+
+static int modern_marks(void)
+{
+    int failed = 0;
+#define MODERN_CHECK(cond, what) \
+    do { if (!(cond)) { printf("libgarb modern: %s - FAILED\n", what); failed++; } } while (0)
+    garb_reading_t on = {0}, off = {.modern_off = true};
+    garb_prop_t p[GARB_SETS_MAX];
+    MODERN_CHECK(garb_prop_modern(GARB_ANIMATION_NAME) && !garb_prop_modern(GARB_DISPLAY) &&
+                 !garb_prop_modern(GARB_NPROPS), "the mark is read off the table, the probe's included");
+    MODERN_CHECK(modern_reads("animation-name: spin", on, p, GARB_SETS_MAX) == 1 &&
+                 p[0] == GARB_ANIMATION_NAME, "a marked longhand is read when marked names are known");
+    MODERN_CHECK(modern_reads("animation-name: spin", off, p, GARB_SETS_MAX) == 0,
+                 "a marked longhand is a name libgarb does not read with modern_off");
+    MODERN_CHECK(modern_reads("-webkit-animation-name: spin", off, p, GARB_SETS_MAX) == 0,
+                 "an alias of a marked longhand goes with it");
+    MODERN_CHECK(modern_reads("animation: spin 1s", on, p, GARB_SETS_MAX) == 8 &&
+                 modern_has(p, 8, GARB_ANIMATION_NAME), "a shorthand sets all of its longhands");
+    int32_t n = modern_reads("animation: spin 1s", off, p, GARB_SETS_MAX);
+    MODERN_CHECK(n == 7 && !modern_has(p, n, GARB_ANIMATION_NAME),
+                 "an unmarked shorthand sets every longhand but the marked one with modern_off");
+    n = modern_reads("animation: inherit", off, p, GARB_SETS_MAX);
+    MODERN_CHECK(n == 7 && !modern_has(p, n, GARB_ANIMATION_NAME),
+                 "a CSS-wide keyword reaches every longhand but the marked one with modern_off");
+    MODERN_CHECK(modern_reads("grid-gap: 4px", off, p, GARB_SETS_MAX) == 0 &&
+                 modern_reads("gap: 4px", off, p, GARB_SETS_MAX) == 2 &&
+                 modern_reads("grid-gap: 4px", on, p, GARB_SETS_MAX) == 2,
+                 "a marked shorthand is unknown with modern_off, its unmarked twin is not");
+    MODERN_CHECK(modern_reads("-webkit-transform: none", off, p, GARB_SETS_MAX) == 0 &&
+                 modern_reads("transform: none", off, p, GARB_SETS_MAX) == 1 &&
+                 modern_reads("-webkit-transform: none", on, p, GARB_SETS_MAX) == 1,
+                 "a marked alias is unknown with modern_off, the name it stands for is not");
+    MODERN_CHECK(modern_reads("width: 10", (garb_reading_t){.quirks = true, .modern_off = true}, p,
+                              GARB_SETS_MAX) == 1, "quirks still reads beside modern_off");
+    MODERN_CHECK(modern_reads("animation-name: var(--a)", off, p, GARB_SETS_MAX) == 0,
+                 "a marked name holding var() is unknown, not held, with modern_off");
+
+    garb_prop_t w[64];
+    bool name, gap;
+    modern_cascade(false, w, &n, &name, &gap);
+    MODERN_CHECK(modern_has(w, n, GARB_ANIMATION_NAME) && modern_has(w, n, GARB_ROW_GAP) &&
+                 modern_has(w, n, GARB_DISPLAY) && modern_has(w, n, GARB_FLOAT) &&
+                 modern_has(w, n, GARB_TRANSFORM) && !name && !gap,
+                 "a cascade that knows the marked names applies and supports them");
+    modern_cascade(true, w, &n, &name, &gap);
+    MODERN_CHECK(!modern_has(w, n, GARB_ANIMATION_NAME) && !modern_has(w, n, GARB_ROW_GAP) &&
+                 !modern_has(w, n, GARB_DISPLAY) && !modern_has(w, n, GARB_FLOAT) &&
+                 !modern_has(w, n, GARB_TRANSFORM) && modern_has(w, n, GARB_COLOR) &&
+                 modern_has(w, n, GARB_MARGIN_TOP),
+                 "a cascade with modern_off applies no marked name, in a sheet or a style attribute, "
+                 "and supports none");
+    MODERN_CHECK(name && gap, "a cascade with modern_off tallies the marked names it passed over");
+#undef MODERN_CHECK
+    printf("libgarb modern: %s\n", failed ? "FAILED" : "the mark holds for longhands, shorthands, aliases and the cascade");
+    return failed ? 1 : 0;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "--modern") == 0)
+        return modern_marks();
     if (argc == 2 && strcmp(argv[1], "--keyframes-scale") == 0)
         return keyframes_scale();
     if (argc == 2 && strcmp(argv[1], "--faces-cap") == 0)

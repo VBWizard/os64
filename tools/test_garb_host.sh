@@ -4,7 +4,8 @@
 # over a real 2026 sheet and through every entry point, then a million
 # nested ( on a small stack, numbers past int64_t's reach, and what a parse
 # costs (GARB.md § The cost): a 4 MiB sheet whole, one at the cap kept, and
-# @keyframes at scale held to a sort's cost.
+# @keyframes at scale held to a sort's cost; then the Modern Web arc's mark,
+# on the names GARB_MODERN_PROBE marks for the purpose.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 
@@ -25,7 +26,8 @@ trap cleanup EXIT
 host_flags=(-std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined,float-cast-overflow
    -fno-sanitize-recover=all -fno-builtin -fno-tree-loop-distribute-patterns
    -I userland/libgarb/include -I userland/libgarb -I userland/libhtml/include
-   -I userland/libos64/include -I userland -I abi/include)
+   -I userland/libos64/include -I userland -I abi/include
+   '-DGARB_MODERN_PROBE="animation-name","grid-gap","-webkit-transform"')
 host_sources=(tools/test_garb_host.c
    userland/libgarb/tokenize.c userland/libgarb/parse.c userland/libgarb/decode.c
    userland/libgarb/dump.c userland/libgarb/select.c
@@ -46,3 +48,4 @@ python3 tools/test_garb_suite.py "$work/garb_driver"
 "$work/garb_driver" --full
 "$work/garb_driver" --keyframes-scale
 "$work/garb_driver" --faces-cap
+"$work/garb_driver" --modern

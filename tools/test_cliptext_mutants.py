@@ -43,14 +43,14 @@ CASES = ('bash tools/test_yonder_warp_host.sh && bash tools/test_libflow_host.sh
 mutants = [
     # libgarb: the Compatibility Standard's names, and what @supports says.
     ('the-prefixed-clip-is-not-read', PROPS,
-     '    {"-webkit-background-clip", "background-clip"},',
-     '    {"-webkit-background-clipx", "background-clip"},'),
+     '    {"-webkit-background-clip", "background-clip", false},',
+     '    {"-webkit-background-clipx", "background-clip", false},'),
     ('a-clip-to-the-text-is-approximated', PROPS,
      '    {GARB_NPROPS, NULL},\n};',
      '    {GARB_BACKGROUND_CLIP, "text"},\n    {GARB_NPROPS, NULL},\n};'),
     ('the-fill-is-not-inherited', PROPS,
-     '    [GARB_TEXT_FILL_COLOR] = {"-webkit-text-fill-color", true},',
-     '    [GARB_TEXT_FILL_COLOR] = {"-webkit-text-fill-color", false},'),
+     '    [GARB_TEXT_FILL_COLOR] = {"-webkit-text-fill-color", true, false},',
+     '    [GARB_TEXT_FILL_COLOR] = {"-webkit-text-fill-color", false, false},'),
     # libflow: the fill colour.
     ('the-fill-is-never-resolved', STYLE,
      '    if (s->current_colours & FLOW_CURRENT_FILL)\n        s->fill = s->color;',

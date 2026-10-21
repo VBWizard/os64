@@ -82,8 +82,8 @@ UI_TEXT = 'python3 tools/test_ui_text_host.py --real'
 mutants = [
     # libgarb: the grammars and the Compatibility Standard's names.
     ('the-prefixed-shorthand-is-not-read', PROPS,
-     '    {"-webkit-animation", "animation"},',
-     '    {"-webkit-animationx", "animation"},', GARB),
+     '    {"-webkit-animation", "animation", false},',
+     '    {"-webkit-animationx", "animation", false},', GARB),
     ('a-time-takes-any-unit', VALUES,
      '    else if (ieq(t->unit, t->unit_len, "ms"))\n        out->unit = GARB_U_MS;\n    else\n        return false;',
      '    else\n        out->unit = GARB_U_MS;', GARB),
