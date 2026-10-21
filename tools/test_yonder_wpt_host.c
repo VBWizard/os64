@@ -3,13 +3,15 @@
  *
  *   test_yonder_wpt_host --wpt <checkout> --dir <dir> --expect <file>
  *                        [--pages <file>] [--update] [--only <substring>]
- *                        [--report <file>]
+ *                        [--report <file>] [--modern-off]
  *
  * The window is the scripted-page host's (that file is included whole,
  * without its main, for its fakes of the OS: the pool, the mailbox, the
  * clocks, the disk), so a page here takes the path a page from the network
  * takes in yonder: a navigation, a head, the body in the stream's chunks,
- * the verdict, then turns of the loop.
+ * the verdict, then turns of the loop. Its modern switch is on, as yonder's
+ * is unless yonder.conf says otherwise; --modern-off turns it off, which is
+ * how a slice shows its required tests are its own surface's (they fail).
  *
  * WHAT IS RUN: with --pages, the pages that file lists, which
  * tools/wpt/pages.py makes from WPT's own MANIFEST.json (the suite's list of
@@ -96,6 +98,8 @@ static wpt_page_t *wpt_pages;
 static size_t wpt_npages, wpt_pages_cap;
 /* The page under way asked to navigate, which ends its turns. */
 static bool wpt_navigated;
+/* The window's modern switch is off (--modern-off). */
+static bool wpt_modern_off;
 
 static void *wpt_must(void *p) {
     if(p==NULL) { fprintf(stderr,"wpt: out of memory\n"); exit(2); }
@@ -554,6 +558,7 @@ static void wpt_run(const wpt_page_t *page, wpt_outcome_t *out) {
     char *url=wpt_fmt("%s%s/%s",WPT_ORIGIN,wpt_dir,page->name);
     stream_window();
     g.scripts_on=true; g.script_ms=5000; now_ms=100; clock_step=1000;
+    g.modern=!wpt_modern_off;
     wpt_navigated=false;
     start_trip(url,NULL,NAV_GO,NULL);
     if(pool_work.job==NULL || !g.stream.active) {
@@ -707,7 +712,7 @@ static int wpt_update(const char *expect, const wpt_expect_t *e, const wpt_list_
 
 static int wpt_usage(void) {
     fprintf(stderr,"usage: test_yonder_wpt_host --wpt <checkout> --dir <dir> --expect <file>"
-        " [--pages <file>] [--update] [--only <substring>] [--report <file>]\n");
+        " [--pages <file>] [--update] [--only <substring>] [--report <file>] [--modern-off]\n");
     return 2;
 }
 
@@ -722,6 +727,7 @@ int main(int argc, char **argv) {
         else if(i+1<argc && !strcmp(argv[i],"--pages")) pages=argv[++i];
         else if(i+1<argc && !strcmp(argv[i],"--only")) only=argv[++i];
         else if(i+1<argc && !strcmp(argv[i],"--report")) wpt_report=argv[++i];
+        else if(!strcmp(argv[i],"--modern-off")) wpt_modern_off=true;
         else return wpt_usage();
     }
     if(wpt_root==NULL || wpt_dir==NULL || expect==NULL) return wpt_usage();

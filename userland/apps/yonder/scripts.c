@@ -216,6 +216,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
                                      &s->runtime, out) != OS64_JS_OK)
         return false;
     os64_dom_options_t options = os64_dom_default_options();
+    options.modern = s->options.modern;
     options.alert = s->options.alert;
     options.alert_opaque = s->options.opaque;
     options.url = s->url;

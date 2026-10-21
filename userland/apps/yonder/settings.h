@@ -7,7 +7,8 @@
 // whether pictures and sheets stay on disk (CACHE.md), with usage and an
 // Empty button; the default zoom; dark pages (`appearance = dark`); and
 // whether animations run (`animations = off`) and whether pages are told
-// to reduce motion (`motion = reduce`). Apply changes this window; Save as
+// to reduce motion (`motion = reduce`); and whether pages get the Modern
+// Web arc's surface (`modern = off`). Apply changes this window; Save as
 // default writes to yonder.conf.
 //
 // The dialog is a window of its own, and yonder's loop waits on its own
@@ -30,13 +31,15 @@
 // Opens with the current choices, or focuses the existing dialog.
 // Callbacks receive a validated agent/script policy (the switch and the
 // time limit in seconds), zoom (thousandths, whole percentages from 25
-// to 500), dark pages and the animations' switches on the window thread.
+// to 500), dark pages, the animations' switches and the modern switch on
+// the window thread.
 void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
                           void (*use)(const char *agent, bool scripts, uint32_t script_seconds),
                           way_cache_t *cache, bool scripts, uint32_t script_seconds, uint32_t zoom,
                           void (*zoom_use)(uint32_t thousandths), bool dark,
                           void (*dark_use)(bool dark), bool run, bool reduce,
-                          void (*motion_use)(bool run, bool reduce));
+                          void (*motion_use)(bool run, bool reduce), bool modern,
+                          void (*modern_use)(bool modern));
 // The bell rang: what arrived at the dialog is handled and painted.
 void yonder_settings_rung(void);
 // Closes the dialog if it is open.
@@ -55,6 +58,11 @@ bool yonder_settings_saved_animations(void);
 bool yonder_settings_saved_reduce_motion(void);
 // Scripts default off; only the saved literal on enables them.
 bool yonder_settings_saved_scripts(void);
+// THE MODERN WEB'S SWITCH (MODERN_WEB.md, rule 4): `modern = on | off`.
+// Absent it is on; present, it is obeyed. A value that is neither is read
+// as on, and `*refused` (may be NULL) says so for the status line;
+// otherwise it is NULL.
+bool yonder_settings_saved_modern(const char **refused);
 // The saved script time limit (`script_seconds = 10`), whole seconds from
 // YONDER_SCRIPT_SECONDS_MIN to _MAX; the default when absent or not one.
 uint32_t yonder_settings_saved_script_seconds(void);

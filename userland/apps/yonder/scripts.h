@@ -47,6 +47,9 @@ typedef struct {
     // The page arrived encrypted (way_head_t.encrypted): what its scripts
     // may do with Secure cookies.
     bool encrypted;
+    // The Modern Web arc's surface (os64_dom_options_t.modern), as the
+    // page's navigation found the switch.
+    bool modern;
 } yonder_scripts_options_t;
 
 // A host for `doc`, whose control state is `state` (which must outlive it).

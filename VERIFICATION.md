@@ -1126,6 +1126,8 @@ is `tools/wpt/expected/<dir>.txt`, headed by the WPT commit it was written
 at, in three sections. `[required]` names, one by one, the tests that
 exercise what the slice's interface is for: every one must pass or the run
 fails (exit 1) naming it, and that is what gates enabling the interface.
+`--modern-off` runs the window with the arc's switch off, which is how a
+slice shows its required tests are its own surface's: each one fails.
 `[passing]` is the baseline, every test that passes: one that goes missing
 fails the run and is named, and one that newly passes is listed to add.
 `[excluded]` names each page the slice knowingly does not run, with its

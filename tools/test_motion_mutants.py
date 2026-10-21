@@ -447,8 +447,8 @@ mutants = [
      '                        .dark = s_dark};', WINDOW),
     ('the-cascade-is-kept-across-reduce', YONDER,
      '                                                  garb_cascade_env(cascade).reduced_motion !=\n'
-     '                                                      view.reduced_motion))) {',
-     '                                                  false))) {', WINDOW),
+     '                                                      view.reduced_motion ||\n',
+     '                                                  false ||\n', WINDOW),
     # libgarb: @keyframes at any scale, and Animations 2's duration keyword.
     ('keyframes-group-across-easings', CASCADE,
      '            while (j < n && at[j].offset == at[i].offset && easing_cmp(at[j].easing, at[i].easing) == 0)',
