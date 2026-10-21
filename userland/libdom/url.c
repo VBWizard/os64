@@ -588,7 +588,7 @@ static bool escape_delimiters(const DString *value, size_t from, bool path, char
         if (used + (escape ? 3 : 1) >= cap) return false;
         if (escape) {
             out[used++] = '%';
-            out[used++] = '2';
+            out[used++] = c == '#' ? '2' : '3';
             out[used++] = c == '#' ? '3' : 'F';
         } else out[used++] = c;
     }
@@ -926,7 +926,29 @@ static int params_from_record(os64_dom_t *dom, JSContext *ctx, DParams *params, 
                   d_string_text(dom, ctx, value, &text[1], true);
         JS_FreeValue(ctx, key);
         JS_FreeValue(ctx, value);
-        if (ok && pair_add(ctx, params, text[0].data, text[0].length, text[1].data, text[1].length, false) < 0)
+        /* Two keys may be one string once each lone surrogate is U+FFFD:
+         * a record keeps the first key's place and the last value. Only a
+         * key with U+FFFD in it can meet another so. */
+        bool replaced = false;
+        for (size_t at = 0; ok && at + 2 < text[0].length && !replaced; at++)
+            replaced = (unsigned char)text[0].data[at] == 0xef && (unsigned char)text[0].data[at + 1] == 0xbf &&
+                       (unsigned char)text[0].data[at + 2] == 0xbd;
+        DPair *same_key = NULL;
+        for (size_t at = 0; ok && replaced && at < params->count && same_key == NULL; at++)
+            if (params->pairs[at].name_length == text[0].length &&
+                os64_memcmp(params->pairs[at].name, text[0].data, text[0].length) == 0)
+                same_key = &params->pairs[at];
+        if (ok && same_key != NULL) {
+            char *copy = js_malloc(ctx, text[1].length + 1);
+            if (copy == NULL) ok = false;
+            else {
+                os64_memcpy(copy, text[1].data, text[1].length);
+                copy[text[1].length] = '\0';
+                js_free(ctx, same_key->value);
+                same_key->value = copy;
+                same_key->value_length = text[1].length;
+            }
+        } else if (ok && pair_add(ctx, params, text[0].data, text[0].length, text[1].data, text[1].length, false) < 0)
             ok = false;
         d_string_free(dom, &text[0]);
         d_string_free(dom, &text[1]);

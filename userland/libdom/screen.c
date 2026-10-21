@@ -31,14 +31,23 @@ enum {
     O_TYPE, O_ANGLE, O_LOCK, O_UNLOCK
 };
 
-/* A promise rejected with a NotSupportedError: lock()'s answer. */
+/* lock(orientation)'s answer, a promise rejected with the exception
+ * pending (WebIDL: a promise-returning operation rejects where another
+ * would throw) or, when none is, with a NotSupportedError. */
 static JSValue refused(JSContext *ctx)
 {
+    JSValue error = JS_GetException(ctx);
+    bool thrown = !JS_IsNull(error) && !JS_IsUninitialized(error);
+    if (!thrown) {
+        (void)d_error(ctx, "NotSupportedError", "screen.orientation.lock() is not available on this device");
+        error = JS_GetException(ctx);
+    }
     JSValue resolving[2];
     JSValue promise = JS_NewPromiseCapability(ctx, resolving);
-    if (JS_IsException(promise)) return promise;
-    (void)d_error(ctx, "NotSupportedError", "screen.orientation.lock() is not available on this device");
-    JSValue error = JS_GetException(ctx);
+    if (JS_IsException(promise)) {
+        JS_FreeValue(ctx, error);
+        return promise;
+    }
     JSValue done = JS_Call(ctx, resolving[1], JS_UNDEFINED, 1, (JSValueConst *)&error);
     JS_FreeValue(ctx, error);
     JS_FreeValue(ctx, resolving[0]);
@@ -89,9 +98,22 @@ static JSValue screen_member(JSContext *ctx, JSValueConst self, int argc, JSValu
     switch (magic) {
     case O_TYPE: return JS_NewString(ctx, s->width >= s->height ? "landscape-primary" : "portrait-primary");
     case O_ANGLE: return JS_NewInt32(ctx, 0);
-    case O_LOCK:
-        if (argc < 1) return JS_ThrowTypeError(ctx, "lock needs an orientation");
+    case O_LOCK: {
+        /* The argument is an OrientationLockType; a lock of any is refused. */
+        static const char *const kLocks[] = {"any", "natural", "landscape", "portrait", "portrait-primary",
+                                             "portrait-secondary", "landscape-primary", "landscape-secondary"};
+        if (argc < 1) {
+            JS_ThrowTypeError(ctx, "lock needs an orientation");
+            return refused(ctx);
+        }
+        const char *text = JS_ToCString(ctx, argv[0]);
+        if (text == NULL) return refused(ctx);
+        bool known = false;
+        for (size_t i = 0; i < sizeof(kLocks) / sizeof(kLocks[0]); i++) known = known || os64_streq(text, kLocks[i]);
+        JS_FreeCString(ctx, text);
+        if (!known) JS_ThrowTypeError(ctx, "That is not an orientation lock type");
         return refused(ctx);
+    }
     default: return JS_UNDEFINED;
     }
 }
