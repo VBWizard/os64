@@ -1,0 +1,80 @@
+<!doctype html>
+<!-- A picture behind a rounded box follows its curve. Each picture sits
+     beside the same box in a flat colour: the two must have the same
+     corners, smoothed the same, and no picture may show past its curve
+     onto the grey. Compare with Chrome. banner.png is 40x20, red | blue
+     with a yellow diagonal; twinkle.gif is 32x32 and moves.
+
+     Below them, a moving picture behind a short box whose text runs far
+     past it: scrolled until the box itself has gone, only its text left
+     in view, the picture is not on screen, and yonder stops playing it -
+     the CPU falls to idle. -->
+<html><head><title>rounded pictures</title>
+<style>
+body { margin: 16px; font-family: sans-serif; font-size: 13px; background: #888 }
+h2 { font-size: 15px; margin: 18px 0 8px }
+.row { display: flex; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; align-items: flex-start }
+.pair { display: flex; gap: 6px }
+.b { width: 150px; height: 90px }
+.pic { background: url(banner.png) 0 0 / 60px 30px }
+.flat { background: #36c }
+.r1 { border-radius: 24px }
+.r2 { border-radius: 40px 8px 60px 0 / 30px 40px 20px 0 }
+.r3 { width: 110px; height: 110px; border-radius: 50% }
+.r4 { border: 10px solid #222; border-radius: 34px; background-clip: padding-box }
+.r5 { border-radius: 80px 10px }
+.r6 { border-radius: 24px; background: url(twinkle.gif) 0 0 / 32px }
+.r6.flat { background: #36c }
+.clip { font: bold 52px sans-serif; color: transparent; border-radius: 30px;
+        -webkit-background-clip: text; background-clip: text;
+        background-image: url(banner.png); background-size: 60px 30px }
+table.t { border-spacing: 0; border-radius: 26px }
+table.t td { width: 150px; height: 90px; padding: 0 }
+.tall { height: 40px; width: 300px; background: url(twinkle.gif); color: #fff }
+.note { color: #fff; max-width: 640px }
+</style></head>
+<body>
+<h2>A picture follows its box's curve</h2>
+<div class=row>
+  <div class=pair><div class="b pic r1"></div><div class="b flat r1"></div></div>
+  <div class=pair><div class="b pic r2"></div><div class="b flat r2"></div></div>
+  <div class=pair><div class="b pic r3"></div><div class="b flat r3"></div></div>
+</div>
+<div class=row>
+  <div class=pair><div class="b pic r4"></div><div class="b flat r4"></div></div>
+  <div class=pair><div class="b pic r5"></div><div class="b flat r5"></div></div>
+  <div class=pair><div class="b r6"></div><div class="b flat r6"></div></div>
+</div>
+<div class=row>
+  <div class=pair>
+    <table class=t background=banner.png><tr><td></td></tr></table>
+    <table class=t style="background: #36c"><tr><td></td></tr></table>
+  </div>
+  <div class="b clip">Text</div>
+</div>
+<p class=note>Top row: 24px all round; a different ellipse at each corner;
+a circle. Middle: cut to the padding box inside a dark border; radii
+past the middle (80px, 10px); a moving picture. Bottom: a table's
+<code>background</code> attribute; a picture clipped to the text of a
+rounded box.</p>
+
+<h2>A moving picture behind text that overflows its box</h2>
+<p class=note>The starry strip below is 40px tall; its lines run far past
+it. Scroll until the strip has left the top of the window and only its
+lines show: the stars are not on screen, and yonder stops playing them.</p>
+<div class=tall>
+line 1<br>line 2<br>line 3<br>line 4<br>line 5<br>line 6<br>line 7<br>line 8<br>
+line 9<br>line 10<br>line 11<br>line 12<br>line 13<br>line 14<br>line 15<br>
+line 16<br>line 17<br>line 18<br>line 19<br>line 20<br>line 21<br>line 22<br>
+line 23<br>line 24<br>line 25<br>line 26<br>line 27<br>line 28<br>line 29<br>
+line 30<br>line 31<br>line 32<br>line 33<br>line 34<br>line 35<br>line 36<br>
+line 37<br>line 38<br>line 39<br>line 40<br>line 41<br>line 42<br>line 43<br>
+line 44<br>line 45<br>line 46<br>line 47<br>line 48<br>line 49<br>line 50<br>
+line 51<br>line 52<br>line 53<br>line 54<br>line 55<br>line 56<br>line 57<br>
+line 58<br>line 59<br>line 60<br>line 61<br>line 62<br>line 63<br>line 64<br>
+line 65<br>line 66<br>line 67<br>line 68<br>line 69<br>line 70<br>line 71<br>
+line 72<br>line 73<br>line 74<br>line 75<br>line 76<br>line 77<br>line 78<br>
+line 79<br>line 80
+</div>
+<div style="height: 1200px"></div>
+</body></html>

@@ -4272,6 +4272,128 @@ static void diag_css_unasked_case(void) {
     probe_drop();
 }
 
+/* Text, a line and a marker carry their element's style, background and
+ * all, but nothing is drawn behind them: a moving picture behind a box is
+ * not on screen when only the text overflowing the box is, and marks only
+ * the box's part, not a marker hung outside it. */
+static void picture_text_cases(void) {
+    static struct os64_image_sequence fake;
+    static char html[2048];
+    int32_t n=os64_snprintf(html,sizeof(html),"<!doctype html><style>body{margin:0}"
+        "#c{height:20px;width:100px;background:url(c.gif)}"
+        "ul{margin:0 0 0 60px;padding:0}li{background:url(m.gif);list-style-position:outside}"
+        "</style><div id=c>");
+    for(int i=0;i<60;i++) n+=os64_snprintf(html+n,sizeof(html)-(size_t)n,"line %d<br>",i);
+    os64_snprintf(html+n,sizeof(html)-(size_t)n,"</div><div style='height:3000px'></div>"
+        "<ul><li>x</li></ul>");
+    probe_page(html,false);
+    pictures_start(&g.page);
+    css_pictures(&g.page);
+    int32_t c=-1, m=-1;
+    for(int32_t k=0;k<g.page.npics;k++) {
+        memset(&fake,0,sizeof(fake));
+        fake.frame.delay_ms=100; fake.frame.width=fake.frame.height=1;
+        g.page.pics[k].state=PIC_SHOWN; g.page.pics[k].moving=&fake;
+        g.page.pics[k].playing=true; g.page.pics[k].due=1000;
+        if(strstr(g.page.pics[k].url,"c.gif")) c=k;
+        if(strstr(g.page.pics[k].url,"m.gif")) m=k;
+    }
+    check(c>=0 && m>=0 && g.page.npics<=8,"picture text: two moving pictures");
+    bool seen[8], mark[8]={false};
+    /* Scrolled past the box, into the lines that overflow it. */
+    g.sy=200;
+    pictures_seen(seen,NULL);
+    check(!seen[c] && !picture_on_screen(c,false),
+          "picture text: a box scrolled away is not on screen for its overflowing text");
+    g.ui.any_dirty=false; g.ui.dirty=(os64_gui_rect_t){0,0,0,0};
+    mark[c]=true;
+    pictures_seen(seen,mark);
+    (void)picture_on_screen(c,true);
+    check(!g.ui.any_dirty,"picture text: nor is its overflowing text marked");
+    /* The list item's marker hangs left of it, at 60px: its part only. */
+    const flow_box_t *li=NULL;
+    for(os64_html_node_t *e=g.page.way.doc->document;e!=NULL;e=(os64_html_node_t *)next_within(e,g.page.way.doc->document))
+        if(e->tag==OS64_HTML_TAG_LI) li=flow_box_for(g.page.tree,e);
+    check(li!=NULL,"picture text: the list item's box");
+    if(li!=NULL) {
+        os64_gui_rect_t r=flow_box_doc_rect(li,scroll_now());
+        g.sy=r.y-100;
+        os64_gui_rect_t at=flow_box_doc_rect(li,scroll_now());
+        memset(mark,0,sizeof(mark)); mark[m]=true;
+        g.ui.any_dirty=false; g.ui.dirty=(os64_gui_rect_t){0,0,0,0};
+        pictures_seen(seen,mark);
+        bool one=g.ui.any_dirty && g.ui.dirty.x>=g.view.bounds.x+at.x;
+        g.ui.any_dirty=false; g.ui.dirty=(os64_gui_rect_t){0,0,0,0};
+        (void)picture_on_screen(m,true);
+        bool apart=g.ui.any_dirty && g.ui.dirty.x>=g.view.bounds.x+at.x;
+        check(at.x==60 && seen[m] && one && apart,
+              "picture text: a marker hung outside its box is not marked for the box's picture");
+    }
+    g.sy=0;
+    for(int32_t k=0;k<g.page.npics;k++) g.page.pics[k].moving=NULL;
+    probe_drop();
+}
+
+/* A picture behind a rounded box follows its curve, through yonder's own
+ * face: a picture of one opaque blue pixel paints every pixel as the same
+ * box's blue colour does — the edge's shares as well — and a patterned
+ * picture paints, outside the corners' squares, every pixel as the same
+ * box square does. */
+static void round_picture_glass_cases(void) {
+    static uint32_t blue=0xff0000ffu, pattern[4]={0xffff0000u,0xff00ff00u,0xff0000ffu,0xffffff00u};
+    static const char *const kPages[4]={
+        "#c{border-radius:30px 12px 40px 0/20px 30px 25px 0;background:url(p.gif)}",
+        "#c{border-radius:30px 12px 40px 0/20px 30px 25px 0;background:#0000ff}",
+        "#c{border-radius:30px 12px 40px 0/20px 30px 25px 0;background:url(q.gif)}",
+        "#c{background:url(q.gif)}"};
+    uint32_t *shot[4]={NULL};
+    for(int i=0;i<4;i++) {
+        static char html[512];
+        os64_snprintf(html,sizeof(html),"<!doctype html><style>html{background:#fff}body{margin:0}"
+            "#c{margin:10px 20px;width:160px;height:80px}%s</style><div id=c></div>",kPages[i]);
+        probe_page(html,false);
+        pictures_start(&g.page); css_pictures(&g.page);
+        for(int32_t k=0;k<g.page.npics;k++) {
+            bool q=strstr(g.page.pics[k].url,"q.gif")!=NULL;
+            g.page.pics[k].image.pixels=os64_malloc(q ? sizeof(pattern) : sizeof(blue));
+            os64_memcpy(g.page.pics[k].image.pixels,q ? pattern : &blue,q ? sizeof(pattern) : sizeof(blue));
+            g.page.pics[k].image.width=g.page.pics[k].image.height=q ? 2 : 1;
+            g.page.pics[k].state=PIC_SHOWN;
+        }
+        os64_draw_ctx_t screen={0};
+        screen.surf.width=screen.surf.pitch_px=800; screen.surf.height=600;
+        screen.surf.pixels=os64_calloc(800u*600u,sizeof(uint32_t));
+        g.paint_cache=yonder_paint_cache_new(32u<<20); g.paint_scratch=yonder_scratch_new();
+        g.ui.dirty=g.view.bounds;
+        view_paint(&g.view,&screen,NULL);
+        yonder_paint_cache_free(g.paint_cache); g.paint_cache=NULL;
+        yonder_scratch_free(g.paint_scratch); g.paint_scratch=NULL;
+        shot[i]=screen.surf.pixels;
+        probe_drop();
+    }
+    /* The corners' squares, from the radii above, in the page. */
+    const os64_gui_rect_t sq[3]={{20,10,30,20},{168,10,12,30},{140,65,40,25}};
+    int most=0, differ=0;
+    for(int32_t y=0;y<120;y++)
+        for(int32_t x=0;x<220;x++) {
+            size_t at=(size_t)y*800+(size_t)x;
+            for(int s=0;s<=16;s+=8) {
+                int d=abs((int)((shot[0][at]>>s)&0xff)-(int)((shot[1][at]>>s)&0xff));
+                most=d>most ? d : most;
+            }
+            bool corner=false;
+            for(int k=0;k<3;k++)
+                corner=corner || (x>=sq[k].x && x<sq[k].x+sq[k].w && y>=sq[k].y && y<sq[k].y+sq[k].h);
+            if(!corner && shot[2][at]!=shot[3][at]) differ++;
+        }
+    check(most<=1,"round picture: a blue picture's corners are the blue colour's, share for share");
+    check(differ==0,"round picture: outside its corners a rounded picture is the square one's");
+    check(shot[0][(size_t)10*800+20]==shot[1][(size_t)10*800+20] &&
+          (shot[0][(size_t)10*800+20]&0xffffffu)==0xffffffu,
+          "round picture: the corner's own pixel is the page's, not the picture's");
+    for(int i=0;i<4;i++) os64_free(shot[i]);
+}
+
 /* A last picture that moves the page is written for after the page is laid
  * out again, so the record says what that layout came to. */
 /* The ticks of moving pictures (YONDER_PERF.md): one pass over the page
@@ -6270,6 +6392,8 @@ static void diag_cases(void) {
     diag_css_unasked_case();
     diag_lost_distinct_case();
     picture_tick_cases();
+    picture_text_cases();
+    round_picture_glass_cases();
     diag_fact_short_case();
     diag_lost_overflow_case();
     diag_arriving_released_case();

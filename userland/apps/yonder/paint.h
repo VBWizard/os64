@@ -31,8 +31,9 @@ typedef struct {
     // A picture BEHIND a box (YONDER.md § Y5b). With `area` NULL, only
     // asks: true when a sheet or an attribute puts one there. Otherwise
     // sheet layer `layer`'s picture — or, at -1, the `background`
-    // attribute's — is tiled across `area` (the layer's clip box, or the
-    // view for the canvas's): a layer's as its size and position place it
+    // attribute's — is tiled across `area` (the layer's clip box or a part
+    // of it, as a rounded box's is drawn, or the view for the canvas's): a
+    // layer's as its size and position place it
     // in `origin` (yonder_background_tile), an attribute's from (ox, oy);
     // drawn if it has arrived, nothing yet if not. `origin` is the
     // painter's answer to which box: the layer's origin box of the box, or
