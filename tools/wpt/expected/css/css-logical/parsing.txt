@@ -1,0 +1,175 @@
+# WPT's css/css-logical/parsing in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh css/css-logical/parsing --update
+# rewrites [passing].
+[required]
+[excluded]
+# Pages whose tests read getComputedStyle, which slice 1b brings; each runs
+# again once it lands.
+block-size-computed.html	needs getComputedStyle (slice 1b)
+border-block-color-computed.html	needs getComputedStyle (slice 1b)
+border-block-style-computed.html	needs getComputedStyle (slice 1b)
+border-block-width-computed.html	needs getComputedStyle (slice 1b)
+border-inline-color-computed.html	needs getComputedStyle (slice 1b)
+border-inline-style-computed.html	needs getComputedStyle (slice 1b)
+border-inline-width-computed.html	needs getComputedStyle (slice 1b)
+inline-size-computed.html	needs getComputedStyle (slice 1b)
+inset-block-inline-computed.html	needs getComputedStyle (slice 1b)
+inset-computed.html	needs getComputedStyle (slice 1b)
+margin-block-inline-computed.html	needs getComputedStyle (slice 1b)
+max-block-size-computed.html	needs getComputedStyle (slice 1b)
+max-inline-size-computed.html	needs getComputedStyle (slice 1b)
+min-block-size-computed.html	needs getComputedStyle (slice 1b)
+min-inline-size-computed.html	needs getComputedStyle (slice 1b)
+padding-block-inline-computed.html	needs getComputedStyle (slice 1b)
+[passing]
+block-size-invalid.html	e.style['block-size'] = "-10px" should not set the property value
+block-size-invalid.html	e.style['block-size'] = "-20%" should not set the property value
+block-size-invalid.html	e.style['block-size'] = "10px 20%" should not set the property value
+block-size-invalid.html	e.style['block-size'] = "10px border-box" should not set the property value
+block-size-invalid.html	e.style['block-size'] = "20% available" should not set the property value
+block-size-invalid.html	e.style['block-size'] = "60" should not set the property value
+block-size-invalid.html	e.style['block-size'] = "content-box 20%" should not set the property value
+block-size-invalid.html	e.style['block-size'] = "max-content 10px" should not set the property value
+block-size-invalid.html	e.style['block-size'] = "min-content available" should not set the property value
+block-size-invalid.html	e.style['block-size'] = "none" should not set the property value
+border-block-color-invalid.html	e.style['border-block-color'] = "auto" should not set the property value
+border-block-color-invalid.html	e.style['border-block-color'] = "lime, transparent" should not set the property value
+border-block-color-invalid.html	e.style['border-block-color'] = "red green blue" should not set the property value
+border-block-color-invalid.html	e.style['border-block-end-color'] = "#123456789" should not set the property value
+border-block-color-invalid.html	e.style['border-block-end-color'] = "123" should not set the property value
+border-block-color-invalid.html	e.style['border-block-end-color'] = "hsla(1,2,3,4,5)" should not set the property value
+border-block-color-invalid.html	e.style['border-block-end-color'] = "red, green" should not set the property value
+border-block-color-invalid.html	e.style['border-block-end-color'] = "rgb(1)" should not set the property value
+border-block-color-invalid.html	e.style['border-block-end-color'] = "rgba(-2, 300, 400%, -0.5)" should not set the property value
+border-block-color-invalid.html	e.style['border-block-start-color'] = "#12" should not set the property value
+border-block-color-invalid.html	e.style['border-block-start-color'] = "auto" should not set the property value
+border-block-color-invalid.html	e.style['border-block-start-color'] = "red green" should not set the property value
+border-block-color-invalid.html	e.style['border-block-start-color'] = "rgb" should not set the property value
+border-block-color-invalid.html	e.style['border-block-start-color'] = "rgb(1,2,3,4,5)" should not set the property value
+border-block-color-invalid.html	e.style['border-block-start-color'] = "rgb(10%, 20, 30%)" should not set the property value
+border-block-style-invalid.html	e.style['border-block-end-style'] = "solid double" should not set the property value
+border-block-style-invalid.html	e.style['border-block-start-style'] = "auto" should not set the property value
+border-block-style-invalid.html	e.style['border-block-start-style'] = "hidden, outset" should not set the property value
+border-block-style-invalid.html	e.style['border-block-style'] = "auto" should not set the property value
+border-block-style-invalid.html	e.style['border-block-style'] = "groove, ridge" should not set the property value
+border-block-style-invalid.html	e.style['border-block-style'] = "hidden inset dashed" should not set the property value
+border-block-width-invalid.html	e.style['border-block-end-width'] = "10" should not set the property value
+border-block-width-invalid.html	e.style['border-block-end-width'] = "30%" should not set the property value
+border-block-width-invalid.html	e.style['border-block-start-width'] = "-20px" should not set the property value
+border-block-width-invalid.html	e.style['border-block-start-width'] = "auto" should not set the property value
+border-block-width-invalid.html	e.style['border-block-start-width'] = "medium 40px" should not set the property value
+border-block-width-invalid.html	e.style['border-block-width'] = "10px 20px 30px" should not set the property value
+border-block-width-invalid.html	e.style['border-block-width'] = "thick, thin" should not set the property value
+border-inline-color-invalid.html	e.style['border-inline-color'] = "auto" should not set the property value
+border-inline-color-invalid.html	e.style['border-inline-color'] = "lime, transparent" should not set the property value
+border-inline-color-invalid.html	e.style['border-inline-color'] = "red green blue" should not set the property value
+border-inline-color-invalid.html	e.style['border-inline-end-color'] = "#123456789" should not set the property value
+border-inline-color-invalid.html	e.style['border-inline-end-color'] = "123" should not set the property value
+border-inline-color-invalid.html	e.style['border-inline-end-color'] = "hsla(1,2,3,4,5)" should not set the property value
+border-inline-color-invalid.html	e.style['border-inline-end-color'] = "red, green" should not set the property value
+border-inline-color-invalid.html	e.style['border-inline-end-color'] = "rgb(1)" should not set the property value
+border-inline-color-invalid.html	e.style['border-inline-end-color'] = "rgba(-2, 300, 400%, -0.5)" should not set the property value
+border-inline-color-invalid.html	e.style['border-inline-start-color'] = "#12" should not set the property value
+border-inline-color-invalid.html	e.style['border-inline-start-color'] = "auto" should not set the property value
+border-inline-color-invalid.html	e.style['border-inline-start-color'] = "red green" should not set the property value
+border-inline-color-invalid.html	e.style['border-inline-start-color'] = "rgb" should not set the property value
+border-inline-color-invalid.html	e.style['border-inline-start-color'] = "rgb(1,2,3,4,5)" should not set the property value
+border-inline-color-invalid.html	e.style['border-inline-start-color'] = "rgb(10%, 20, 30%)" should not set the property value
+border-inline-style-invalid.html	e.style['border-inline-end-style'] = "solid double" should not set the property value
+border-inline-style-invalid.html	e.style['border-inline-start-style'] = "auto" should not set the property value
+border-inline-style-invalid.html	e.style['border-inline-start-style'] = "hidden, outset" should not set the property value
+border-inline-style-invalid.html	e.style['border-inline-style'] = "auto" should not set the property value
+border-inline-style-invalid.html	e.style['border-inline-style'] = "groove, ridge" should not set the property value
+border-inline-style-invalid.html	e.style['border-inline-style'] = "hidden inset dashed" should not set the property value
+border-inline-width-invalid.html	e.style['border-inline-end-width'] = "10" should not set the property value
+border-inline-width-invalid.html	e.style['border-inline-end-width'] = "30%" should not set the property value
+border-inline-width-invalid.html	e.style['border-inline-start-width'] = "-20px" should not set the property value
+border-inline-width-invalid.html	e.style['border-inline-start-width'] = "auto" should not set the property value
+border-inline-width-invalid.html	e.style['border-inline-start-width'] = "medium 40px" should not set the property value
+border-inline-width-invalid.html	e.style['border-inline-width'] = "10px 20px 30px" should not set the property value
+border-inline-width-invalid.html	e.style['border-inline-width'] = "thick, thin" should not set the property value
+inline-size-invalid.html	e.style['inline-size'] = "-10px" should not set the property value
+inline-size-invalid.html	e.style['inline-size'] = "-20%" should not set the property value
+inline-size-invalid.html	e.style['inline-size'] = "10px 20%" should not set the property value
+inline-size-invalid.html	e.style['inline-size'] = "10px border-box" should not set the property value
+inline-size-invalid.html	e.style['inline-size'] = "20% available" should not set the property value
+inline-size-invalid.html	e.style['inline-size'] = "60" should not set the property value
+inline-size-invalid.html	e.style['inline-size'] = "content-box 20%" should not set the property value
+inline-size-invalid.html	e.style['inline-size'] = "max-content 10px" should not set the property value
+inline-size-invalid.html	e.style['inline-size'] = "min-content available" should not set the property value
+inline-size-invalid.html	e.style['inline-size'] = "none" should not set the property value
+inset-block-inline-invalid.html	e.style['inset-block'] = "20%, calc(10px - 0.5em)" should not set the property value
+inset-block-inline-invalid.html	e.style['inset-block'] = "none" should not set the property value
+inset-block-inline-invalid.html	e.style['inset-block-end'] = "10" should not set the property value
+inset-block-inline-invalid.html	e.style['inset-block-start'] = "none" should not set the property value
+inset-block-inline-invalid.html	e.style['inset-inline'] = "10px auto 20px" should not set the property value
+inset-block-inline-invalid.html	e.style['inset-inline-end'] = "10px, auto" should not set the property value
+inset-block-inline-invalid.html	e.style['inset-inline-start'] = "20% calc(10px - 0.5em)" should not set the property value
+inset-invalid.html	e.style['inset'] = "10px auto 20px auto 30px" should not set the property value
+inset-invalid.html	e.style['inset'] = "20%, calc(10px - 0.5em)" should not set the property value
+inset-invalid.html	e.style['inset'] = "none" should not set the property value
+margin-block-inline-invalid.html	e.style['margin-block'] = "20%, calc(10px - 0.5em)" should not set the property value
+margin-block-inline-invalid.html	e.style['margin-block'] = "none" should not set the property value
+margin-block-inline-invalid.html	e.style['margin-block-end'] = "10" should not set the property value
+margin-block-inline-invalid.html	e.style['margin-block-start'] = "none" should not set the property value
+margin-block-inline-invalid.html	e.style['margin-inline'] = "10px auto 20px" should not set the property value
+margin-block-inline-invalid.html	e.style['margin-inline-end'] = "10px, auto" should not set the property value
+margin-block-inline-invalid.html	e.style['margin-inline-start'] = "20% calc(10px - 0.5em)" should not set the property value
+max-block-size-invalid.html	e.style['max-block-size'] = "-10px" should not set the property value
+max-block-size-invalid.html	e.style['max-block-size'] = "-20%" should not set the property value
+max-block-size-invalid.html	e.style['max-block-size'] = "10px 20%" should not set the property value
+max-block-size-invalid.html	e.style['max-block-size'] = "10px border-box" should not set the property value
+max-block-size-invalid.html	e.style['max-block-size'] = "20% available" should not set the property value
+max-block-size-invalid.html	e.style['max-block-size'] = "60" should not set the property value
+max-block-size-invalid.html	e.style['max-block-size'] = "auto" should not set the property value
+max-block-size-invalid.html	e.style['max-block-size'] = "content-box 20%" should not set the property value
+max-block-size-invalid.html	e.style['max-block-size'] = "max-content 10px" should not set the property value
+max-block-size-invalid.html	e.style['max-block-size'] = "min-content available" should not set the property value
+max-inline-size-invalid.html	e.style['max-inline-size'] = "-10px" should not set the property value
+max-inline-size-invalid.html	e.style['max-inline-size'] = "-20%" should not set the property value
+max-inline-size-invalid.html	e.style['max-inline-size'] = "10px 20%" should not set the property value
+max-inline-size-invalid.html	e.style['max-inline-size'] = "10px border-box" should not set the property value
+max-inline-size-invalid.html	e.style['max-inline-size'] = "20% available" should not set the property value
+max-inline-size-invalid.html	e.style['max-inline-size'] = "60" should not set the property value
+max-inline-size-invalid.html	e.style['max-inline-size'] = "auto" should not set the property value
+max-inline-size-invalid.html	e.style['max-inline-size'] = "content-box 20%" should not set the property value
+max-inline-size-invalid.html	e.style['max-inline-size'] = "max-content 10px" should not set the property value
+max-inline-size-invalid.html	e.style['max-inline-size'] = "min-content available" should not set the property value
+min-block-size-invalid.html	e.style['min-block-size'] = "-10px" should not set the property value
+min-block-size-invalid.html	e.style['min-block-size'] = "-20%" should not set the property value
+min-block-size-invalid.html	e.style['min-block-size'] = "10px 20%" should not set the property value
+min-block-size-invalid.html	e.style['min-block-size'] = "10px border-box" should not set the property value
+min-block-size-invalid.html	e.style['min-block-size'] = "20% available" should not set the property value
+min-block-size-invalid.html	e.style['min-block-size'] = "60" should not set the property value
+min-block-size-invalid.html	e.style['min-block-size'] = "content-box 20%" should not set the property value
+min-block-size-invalid.html	e.style['min-block-size'] = "max-content 10px" should not set the property value
+min-block-size-invalid.html	e.style['min-block-size'] = "min-content available" should not set the property value
+min-block-size-invalid.html	e.style['min-block-size'] = "none" should not set the property value
+min-inline-size-invalid.html	e.style['min-inline-size'] = "-10px" should not set the property value
+min-inline-size-invalid.html	e.style['min-inline-size'] = "-20%" should not set the property value
+min-inline-size-invalid.html	e.style['min-inline-size'] = "10px 20%" should not set the property value
+min-inline-size-invalid.html	e.style['min-inline-size'] = "10px border-box" should not set the property value
+min-inline-size-invalid.html	e.style['min-inline-size'] = "20% available" should not set the property value
+min-inline-size-invalid.html	e.style['min-inline-size'] = "60" should not set the property value
+min-inline-size-invalid.html	e.style['min-inline-size'] = "content-box 20%" should not set the property value
+min-inline-size-invalid.html	e.style['min-inline-size'] = "max-content 10px" should not set the property value
+min-inline-size-invalid.html	e.style['min-inline-size'] = "min-content available" should not set the property value
+min-inline-size-invalid.html	e.style['min-inline-size'] = "none" should not set the property value
+padding-block-inline-invalid.html	e.style['padding-block'] = "20% -10px" should not set the property value
+padding-block-inline-invalid.html	e.style['padding-block'] = "20%, calc(10px - 0.5em)" should not set the property value
+padding-block-inline-invalid.html	e.style['padding-block'] = "auto, -10px" should not set the property value
+padding-block-inline-invalid.html	e.style['padding-block'] = "none" should not set the property value
+padding-block-inline-invalid.html	e.style['padding-block-end'] = "10" should not set the property value
+padding-block-inline-invalid.html	e.style['padding-block-end'] = "1px 2px" should not set the property value
+padding-block-inline-invalid.html	e.style['padding-block-end'] = "1px, 2px" should not set the property value
+padding-block-inline-invalid.html	e.style['padding-block-end'] = "auto" should not set the property value
+padding-block-inline-invalid.html	e.style['padding-block-start'] = "-10px" should not set the property value
+padding-block-inline-invalid.html	e.style['padding-block-start'] = "none" should not set the property value
+padding-block-inline-invalid.html	e.style['padding-inline'] = "-20% calc(20% + 10px)" should not set the property value
+padding-block-inline-invalid.html	e.style['padding-inline'] = "10px auto 20px" should not set the property value
+padding-block-inline-invalid.html	e.style['padding-inline'] = "1px 2px 3px" should not set the property value
+padding-block-inline-invalid.html	e.style['padding-inline-end'] = "-20%" should not set the property value
+padding-block-inline-invalid.html	e.style['padding-inline-end'] = "10px, auto" should not set the property value
+padding-block-inline-invalid.html	e.style['padding-inline-start'] = "20% calc(10px - 0.5em)" should not set the property value
+padding-block-inline-invalid.html	e.style['padding-inline-start'] = "2px auto" should not set the property value

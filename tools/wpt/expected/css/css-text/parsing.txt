@@ -1,0 +1,263 @@
+# WPT's css/css-text/parsing in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh css/css-text/parsing --update
+# rewrites [passing].
+[required]
+[excluded]
+# Pages whose tests read getComputedStyle, which slice 1b brings; each runs
+# again once it lands.
+hyphenate-character-computed.html	needs getComputedStyle (slice 1b)
+hyphenate-limit-chars-computed.html	needs getComputedStyle (slice 1b)
+hyphenate-limit-lines-computed.html	needs getComputedStyle (slice 1b)
+hyphens-computed.html	needs getComputedStyle (slice 1b)
+letter-spacing-computed.html	needs getComputedStyle (slice 1b)
+letter-spacing-inherited-computed.html	needs getComputedStyle (slice 1b)
+line-break-computed.html	needs getComputedStyle (slice 1b)
+overflow-wrap-computed.html	needs getComputedStyle (slice 1b)
+tab-size-computed.html	needs getComputedStyle (slice 1b)
+text-align-computed.html	needs getComputedStyle (slice 1b)
+text-align-last-computed.html	needs getComputedStyle (slice 1b)
+text-autospace-computed.html	needs getComputedStyle (slice 1b)
+text-fit-computed.html	needs getComputedStyle (slice 1b)
+text-indent-computed.html	needs getComputedStyle (slice 1b)
+text-justify-computed-legacy.html	needs getComputedStyle (slice 1b)
+text-justify-computed.html	needs getComputedStyle (slice 1b)
+text-spacing-computed.html	needs getComputedStyle (slice 1b)
+text-spacing-trim-computed.html	needs getComputedStyle (slice 1b)
+text-transform-computed.html	needs getComputedStyle (slice 1b)
+text-wrap-computed.html	needs getComputedStyle (slice 1b)
+text-wrap-mode-computed.html	needs getComputedStyle (slice 1b)
+text-wrap-pretty.html	needs getComputedStyle (slice 1b)
+text-wrap-style-computed.html	needs getComputedStyle (slice 1b)
+white-space-collapse-computed.html	needs getComputedStyle (slice 1b)
+white-space-computed.html	needs getComputedStyle (slice 1b)
+white-space-shorthand-text-wrap.html	needs getComputedStyle (slice 1b)
+word-break-computed.html	needs getComputedStyle (slice 1b)
+word-space-transform-computed.html	needs getComputedStyle (slice 1b)
+word-spacing-computed.html	needs getComputedStyle (slice 1b)
+word-wrap-computed.html	needs getComputedStyle (slice 1b)
+[passing]
+hanging-punctuation-invalid.html	e.style['hanging-punctuation'] = "20px" should not set the property value
+hanging-punctuation-invalid.html	e.style['hanging-punctuation'] = "allow-end last force-end" should not set the property value
+hanging-punctuation-invalid.html	e.style['hanging-punctuation'] = "first allow-end force-end last" should not set the property value
+hanging-punctuation-invalid.html	e.style['hanging-punctuation'] = "first allow-end last allow-end" should not set the property value
+hanging-punctuation-invalid.html	e.style['hanging-punctuation'] = "first first" should not set the property value
+hanging-punctuation-invalid.html	e.style['hanging-punctuation'] = "force-end allow-end" should not set the property value
+hanging-punctuation-invalid.html	e.style['hanging-punctuation'] = "last force-end last" should not set the property value
+hanging-punctuation-invalid.html	e.style['hanging-punctuation'] = "last last" should not set the property value
+hanging-punctuation-invalid.html	e.style['hanging-punctuation'] = "last none" should not set the property value
+hanging-punctuation-invalid.html	e.style['hanging-punctuation'] = "none first" should not set the property value
+hanging-punctuation-invalid.html	e.style['hanging-punctuation'] = "nonsense" should not set the property value
+hyphenate-character-invalid.html	e.style['hyphenate-character'] = "1400" should not set the property value
+hyphenate-character-invalid.html	e.style['hyphenate-character'] = "U+1400" should not set the property value
+hyphenate-character-invalid.html	e.style['hyphenate-character'] = "\\"-\\" \\"=\\"" should not set the property value
+hyphenate-character-invalid.html	e.style['hyphenate-character'] = "auto auto" should not set the property value
+hyphenate-character-invalid.html	e.style['hyphenate-character'] = "manual" should not set the property value
+hyphenate-character-invalid.html	e.style['hyphenate-character'] = "none" should not set the property value
+hyphenate-character-invalid.html	e.style['hyphenate-character'] = "normal" should not set the property value
+hyphenate-limit-chars-invalid.html	e.style['hyphenate-limit-chars'] = "1 1.2" should not set the property value
+hyphenate-limit-chars-invalid.html	e.style['hyphenate-limit-chars'] = "1 2 1.2" should not set the property value
+hyphenate-limit-chars-invalid.html	e.style['hyphenate-limit-chars'] = "1 2 3 4" should not set the property value
+hyphenate-limit-chars-invalid.html	e.style['hyphenate-limit-chars'] = "1 none" should not set the property value
+hyphenate-limit-chars-invalid.html	e.style['hyphenate-limit-chars'] = "1 normal" should not set the property value
+hyphenate-limit-chars-invalid.html	e.style['hyphenate-limit-chars'] = "1.2" should not set the property value
+hyphenate-limit-chars-invalid.html	e.style['hyphenate-limit-chars'] = "none" should not set the property value
+hyphenate-limit-chars-invalid.html	e.style['hyphenate-limit-chars'] = "normal" should not set the property value
+hyphenate-limit-lines-invalid.html	e.style['hyphenate-limit-lines'] = "-1" should not set the property value
+hyphenate-limit-lines-invalid.html	e.style['hyphenate-limit-lines'] = "1 2" should not set the property value
+hyphenate-limit-lines-invalid.html	e.style['hyphenate-limit-lines'] = "1.2" should not set the property value
+hyphenate-limit-lines-invalid.html	e.style['hyphenate-limit-lines'] = "1px" should not set the property value
+hyphenate-limit-lines-invalid.html	e.style['hyphenate-limit-lines'] = "\\"1\\"" should not set the property value
+hyphenate-limit-lines-invalid.html	e.style['hyphenate-limit-lines'] = "auto" should not set the property value
+hyphenate-limit-lines-invalid.html	e.style['hyphenate-limit-lines'] = "no-limit 2" should not set the property value
+hyphenate-limit-lines-invalid.html	e.style['hyphenate-limit-lines'] = "none" should not set the property value
+hyphens-invalid.html	e.style['hyphens'] = "auto auto" should not set the property value
+hyphens-invalid.html	e.style['hyphens'] = "none manual" should not set the property value
+hyphens-invalid.html	e.style['hyphens'] = "normal" should not set the property value
+letter-spacing-invalid.html	e.style['letter-spacing'] = "10% 10px" should not set the property value
+letter-spacing-invalid.html	e.style['letter-spacing'] = "20" should not set the property value
+letter-spacing-invalid.html	e.style['letter-spacing'] = "auto" should not set the property value
+letter-spacing-invalid.html	e.style['letter-spacing'] = "normal 10px" should not set the property value
+line-break-invalid.html	e.style['line-break'] = "after-white-space" should not set the property value
+line-break-invalid.html	e.style['line-break'] = "anywhere anywhere" should not set the property value
+line-break-invalid.html	e.style['line-break'] = "auto loose" should not set the property value
+line-break-invalid.html	e.style['line-break'] = "none" should not set the property value
+line-break-invalid.html	e.style['line-break'] = "strict normal" should not set the property value
+overflow-wrap-invalid.html	e.style['overflow-wrap'] = "anywhere anywhere" should not set the property value
+overflow-wrap-invalid.html	e.style['overflow-wrap'] = "auto" should not set the property value
+overflow-wrap-invalid.html	e.style['overflow-wrap'] = "normal break-word" should not set the property value
+tab-size-invalid.html	e.style['tab-size'] = "-10px" should not set the property value
+tab-size-invalid.html	e.style['tab-size'] = "-20" should not set the property value
+tab-size-invalid.html	e.style['tab-size'] = "30%" should not set the property value
+tab-size-invalid.html	e.style['tab-size'] = "calc(40% + 50px)" should not set the property value
+text-align-all-invalid.html	e.style['text-align-all'] = "auto" should not set the property value
+text-align-all-invalid.html	e.style['text-align-all'] = "center justify" should not set the property value
+text-align-all-invalid.html	e.style['text-align-all'] = "left right" should not set the property value
+text-align-all-invalid.html	e.style['text-align-all'] = "match-parent match-parent" should not set the property value
+text-align-all-invalid.html	e.style['text-align-all'] = "start end" should not set the property value
+text-align-invalid.html	e.style['text-align'] = "auto" should not set the property value
+text-align-invalid.html	e.style['text-align'] = "center justify" should not set the property value
+text-align-invalid.html	e.style['text-align'] = "justify-all match-parent" should not set the property value
+text-align-invalid.html	e.style['text-align'] = "left right" should not set the property value
+text-align-invalid.html	e.style['text-align'] = "start end" should not set the property value
+text-align-last-invalid.html	e.style['text-align-last'] = "auto start" should not set the property value
+text-align-last-invalid.html	e.style['text-align-last'] = "end left" should not set the property value
+text-align-last-invalid.html	e.style['text-align-last'] = "justify match-parent" should not set the property value
+text-align-last-invalid.html	e.style['text-align-last'] = "none" should not set the property value
+text-align-last-invalid.html	e.style['text-align-last'] = "right center" should not set the property value
+text-autospace-invalid.html	e.style['text-autospace'] = "auto ideograph-alpha ideograph-numeric" should not set the property value
+text-autospace-invalid.html	e.style['text-autospace'] = "auto ideograph-alpha" should not set the property value
+text-autospace-invalid.html	e.style['text-autospace'] = "auto insert" should not set the property value
+text-autospace-invalid.html	e.style['text-autospace'] = "auto punctuation" should not set the property value
+text-autospace-invalid.html	e.style['text-autospace'] = "auto replace" should not set the property value
+text-autospace-invalid.html	e.style['text-autospace'] = "insert punctuation normal" should not set the property value
+text-autospace-invalid.html	e.style['text-autospace'] = "normal ideograph-alpha ideograph-numeric" should not set the property value
+text-autospace-invalid.html	e.style['text-autospace'] = "normal ideograph-alpha" should not set the property value
+text-autospace-invalid.html	e.style['text-autospace'] = "normal insert" should not set the property value
+text-autospace-invalid.html	e.style['text-autospace'] = "normal punctuation" should not set the property value
+text-autospace-invalid.html	e.style['text-autospace'] = "normal replace" should not set the property value
+text-autospace-invalid.html	e.style['text-autospace'] = "punctuation normal insert" should not set the property value
+text-autospace-invalid.html	e.style['text-autospace'] = "punctuation normal replace" should not set the property value
+text-autospace-invalid.html	e.style['text-autospace'] = "punctuation normal" should not set the property value
+text-autospace-invalid.html	e.style['text-autospace'] = "replace punctuation normal" should not set the property value
+text-fit-invalid.html	e.style['text-fit'] = "consistent 100%" should not set the property value
+text-fit-invalid.html	e.style['text-fit'] = "grow 150% consistent" should not set the property value
+text-fit-invalid.html	e.style['text-fit'] = "grow consistent 1.0" should not set the property value
+text-fit-invalid.html	e.style['text-fit'] = "larger" should not set the property value
+text-fit-invalid.html	e.style['text-fit'] = "smaller" should not set the property value
+text-fit-invalid.html	e.style['text-fit'] = "stretch per-line" should not set the property value
+text-group-align-invalid.html	e.style['text-group-align'] = "5px" should not set the property value
+text-group-align-invalid.html	e.style['text-group-align'] = "auto" should not set the property value
+text-group-align-invalid.html	e.style['text-group-align'] = "center start" should not set the property value
+text-group-align-invalid.html	e.style['text-group-align'] = "end start" should not set the property value
+text-group-align-invalid.html	e.style['text-group-align'] = "justify" should not set the property value
+text-group-align-invalid.html	e.style['text-group-align'] = "left right" should not set the property value
+text-group-align-invalid.html	e.style['text-group-align'] = "match-parent" should not set the property value
+text-group-align-invalid.html	e.style['text-group-align'] = "none center" should not set the property value
+text-group-align-invalid.html	e.style['text-group-align'] = "right center" should not set the property value
+text-group-align-invalid.html	e.style['text-group-align'] = "start center" should not set the property value
+text-group-align-invalid.html	e.style['text-group-align'] = "wrap" should not set the property value
+text-indent-invalid.html	e.style['text-indent'] = "10" should not set the property value
+text-indent-invalid.html	e.style['text-indent'] = "10px hanging 20px" should not set the property value
+text-indent-invalid.html	e.style['text-indent'] = "auto" should not set the property value
+text-indent-invalid.html	e.style['text-indent'] = "each-line each-line" should not set the property value
+text-indent-invalid.html	e.style['text-indent'] = "each-line" should not set the property value
+text-indent-invalid.html	e.style['text-indent'] = "hanging 20% hanging" should not set the property value
+text-indent-invalid.html	e.style['text-indent'] = "hanging" should not set the property value
+text-justify-invalid.html	e.style['text-justify'] = "auto none" should not set the property value
+text-justify-invalid.html	e.style['text-justify'] = "inter-character inter-word" should not set the property value
+text-justify-invalid.html	e.style['text-justify'] = "normal" should not set the property value
+text-spacing-invalid.html	e.style['text-spacing'] = "auto auto" should not set the property value
+text-spacing-invalid.html	e.style['text-spacing'] = "auto no-autospace" should not set the property value
+text-spacing-invalid.html	e.style['text-spacing'] = "auto space-first" should not set the property value
+text-spacing-invalid.html	e.style['text-spacing'] = "no-autospace auto" should not set the property value
+text-spacing-invalid.html	e.style['text-spacing'] = "no-autospace none" should not set the property value
+text-spacing-invalid.html	e.style['text-spacing'] = "none no-autospace" should not set the property value
+text-spacing-invalid.html	e.style['text-spacing'] = "none none" should not set the property value
+text-spacing-invalid.html	e.style['text-spacing'] = "none space-first" should not set the property value
+text-spacing-invalid.html	e.style['text-spacing'] = "normal normal no-autospace" should not set the property value
+text-spacing-invalid.html	e.style['text-spacing'] = "space-first auto" should not set the property value
+text-spacing-invalid.html	e.style['text-spacing'] = "space-first none" should not set the property value
+text-spacing-trim-invalid.html	e.style['text-spacing-trim'] = "allow-end space-first" should not set the property value
+text-spacing-trim-invalid.html	e.style['text-spacing-trim'] = "allow-end" should not set the property value
+text-spacing-trim-invalid.html	e.style['text-spacing-trim'] = "auto space-all" should not set the property value
+text-spacing-trim-invalid.html	e.style['text-spacing-trim'] = "auto space-first" should not set the property value
+text-spacing-trim-invalid.html	e.style['text-spacing-trim'] = "none" should not set the property value
+text-spacing-trim-invalid.html	e.style['text-spacing-trim'] = "normal space-all" should not set the property value
+text-spacing-trim-invalid.html	e.style['text-spacing-trim'] = "normal space-first" should not set the property value
+text-spacing-trim-invalid.html	e.style['text-spacing-trim'] = "space-first allow-end" should not set the property value
+text-spacing-trim-invalid.html	e.style['text-spacing-trim'] = "trim-auto" should not set the property value
+text-transform-invalid.html	e.style['text-transform'] = "capitalize full-width lowercase" should not set the property value
+text-transform-invalid.html	e.style['text-transform'] = "capitalize math-auto" should not set the property value
+text-transform-invalid.html	e.style['text-transform'] = "capitalize none" should not set the property value
+text-transform-invalid.html	e.style['text-transform'] = "full-size-kana capitalize full-size-kana" should not set the property value
+text-transform-invalid.html	e.style['text-transform'] = "full-size-kana math-auto" should not set the property value
+text-transform-invalid.html	e.style['text-transform'] = "full-width full-size-kana full-width" should not set the property value
+text-transform-invalid.html	e.style['text-transform'] = "full-width math-auto" should not set the property value
+text-transform-invalid.html	e.style['text-transform'] = "lowercase math-auto" should not set the property value
+text-transform-invalid.html	e.style['text-transform'] = "math-auto capitalize" should not set the property value
+text-transform-invalid.html	e.style['text-transform'] = "math-auto full-size-kana" should not set the property value
+text-transform-invalid.html	e.style['text-transform'] = "math-auto full-width" should not set the property value
+text-transform-invalid.html	e.style['text-transform'] = "math-auto lowercase" should not set the property value
+text-transform-invalid.html	e.style['text-transform'] = "math-auto math-auto" should not set the property value
+text-transform-invalid.html	e.style['text-transform'] = "math-auto none" should not set the property value
+text-transform-invalid.html	e.style['text-transform'] = "math-auto uppercase" should not set the property value
+text-transform-invalid.html	e.style['text-transform'] = "none full-width" should not set the property value
+text-transform-invalid.html	e.style['text-transform'] = "none math-auto" should not set the property value
+text-transform-invalid.html	e.style['text-transform'] = "uppercase full-size-kana uppercase" should not set the property value
+text-transform-invalid.html	e.style['text-transform'] = "uppercase math-auto" should not set the property value
+text-wrap-invalid.html	e.style['text-wrap'] = "5px" should not set the property value
+text-wrap-invalid.html	e.style['text-wrap'] = "balance stable" should not set the property value
+text-wrap-invalid.html	e.style['text-wrap'] = "delicious wrap" should not set the property value
+text-wrap-invalid.html	e.style['text-wrap'] = "none" should not set the property value
+text-wrap-invalid.html	e.style['text-wrap'] = "normal" should not set the property value
+text-wrap-invalid.html	e.style['text-wrap'] = "pretty balance" should not set the property value
+text-wrap-invalid.html	e.style['text-wrap'] = "stable pretty" should not set the property value
+text-wrap-invalid.html	e.style['text-wrap'] = "wrap nowrap" should not set the property value
+text-wrap-mode-invalid.html	e.style['text-wrap-mode'] = "5px" should not set the property value
+text-wrap-mode-invalid.html	e.style['text-wrap-mode'] = "auto" should not set the property value
+text-wrap-mode-invalid.html	e.style['text-wrap-mode'] = "balance balance" should not set the property value
+text-wrap-mode-invalid.html	e.style['text-wrap-mode'] = "balance stable" should not set the property value
+text-wrap-mode-invalid.html	e.style['text-wrap-mode'] = "balance" should not set the property value
+text-wrap-mode-invalid.html	e.style['text-wrap-mode'] = "delicious wrap" should not set the property value
+text-wrap-mode-invalid.html	e.style['text-wrap-mode'] = "none" should not set the property value
+text-wrap-mode-invalid.html	e.style['text-wrap-mode'] = "normal" should not set the property value
+text-wrap-mode-invalid.html	e.style['text-wrap-mode'] = "nowrap stable" should not set the property value
+text-wrap-mode-invalid.html	e.style['text-wrap-mode'] = "pretty balance" should not set the property value
+text-wrap-mode-invalid.html	e.style['text-wrap-mode'] = "pretty pretty" should not set the property value
+text-wrap-mode-invalid.html	e.style['text-wrap-mode'] = "pretty" should not set the property value
+text-wrap-mode-invalid.html	e.style['text-wrap-mode'] = "stable pretty" should not set the property value
+text-wrap-mode-invalid.html	e.style['text-wrap-mode'] = "stable stable" should not set the property value
+text-wrap-mode-invalid.html	e.style['text-wrap-mode'] = "stable" should not set the property value
+text-wrap-mode-invalid.html	e.style['text-wrap-mode'] = "wrap auto" should not set the property value
+text-wrap-mode-invalid.html	e.style['text-wrap-mode'] = "wrap nowrap" should not set the property value
+text-wrap-mode-invalid.html	e.style['text-wrap-mode'] = "wrap stable" should not set the property value
+text-wrap-style-invalid.html	e.style['text-wrap-style'] = "5px" should not set the property value
+text-wrap-style-invalid.html	e.style['text-wrap-style'] = "balance stable" should not set the property value
+text-wrap-style-invalid.html	e.style['text-wrap-style'] = "delicious wrap" should not set the property value
+text-wrap-style-invalid.html	e.style['text-wrap-style'] = "none" should not set the property value
+text-wrap-style-invalid.html	e.style['text-wrap-style'] = "normal" should not set the property value
+text-wrap-style-invalid.html	e.style['text-wrap-style'] = "nowrap nowrap" should not set the property value
+text-wrap-style-invalid.html	e.style['text-wrap-style'] = "nowrap" should not set the property value
+text-wrap-style-invalid.html	e.style['text-wrap-style'] = "pretty balance" should not set the property value
+text-wrap-style-invalid.html	e.style['text-wrap-style'] = "stable pretty" should not set the property value
+text-wrap-style-invalid.html	e.style['text-wrap-style'] = "wrap nowrap" should not set the property value
+text-wrap-style-invalid.html	e.style['text-wrap-style'] = "wrap wrap" should not set the property value
+text-wrap-style-invalid.html	e.style['text-wrap-style'] = "wrap" should not set the property value
+white-space-collapse-invalid.html	e.style['white-space-collapse'] = "5px" should not set the property value
+white-space-collapse-invalid.html	e.style['white-space-collapse'] = "auto" should not set the property value
+white-space-collapse-invalid.html	e.style['white-space-collapse'] = "collapse preserve" should not set the property value
+white-space-collapse-invalid.html	e.style['white-space-collapse'] = "delicious collapse" should not set the property value
+white-space-collapse-invalid.html	e.style['white-space-collapse'] = "none" should not set the property value
+white-space-collapse-invalid.html	e.style['white-space-collapse'] = "preserve preserve-breaks" should not set the property value
+white-space-invalid.html	e.style['white-space'] = "auto" should not set the property value
+white-space-invalid.html	e.style['white-space'] = "balance" should not set the property value
+white-space-invalid.html	e.style['white-space'] = "normal pre" should not set the property value
+white-space-invalid.html	e.style['white-space'] = "nowrap pre-wrap" should not set the property value
+white-space-invalid.html	e.style['white-space'] = "pre-line break-spaces" should not set the property value
+white-space-invalid.html	e.style['white-space'] = "pretty" should not set the property value
+white-space-shorthand.html	e.style['white-space'] = "balance collapse" should not set the property value
+white-space-shorthand.html	e.style['white-space'] = "balance preserve" should not set the property value
+white-space-shorthand.html	e.style['white-space'] = "balance" should not set the property value
+white-space-shorthand.html	e.style['white-space'] = "collapse balance" should not set the property value
+white-space-shorthand.html	e.style['white-space'] = "preserve balance" should not set the property value
+word-break-invalid.html	e.style['word-break'] = "auto" should not set the property value
+word-break-invalid.html	e.style['word-break'] = "break-all break-all" should not set the property value
+word-break-invalid.html	e.style['word-break'] = "break-all break-word" should not set the property value
+word-break-invalid.html	e.style['word-break'] = "break-word normal" should not set the property value
+word-break-invalid.html	e.style['word-break'] = "keep-all break-word" should not set the property value
+word-break-invalid.html	e.style['word-break'] = "normal break-word" should not set the property value
+word-break-invalid.html	e.style['word-break'] = "normal keep-all" should not set the property value
+word-break-invalid.html	e.style['word-break'] = "word-break" should not set the property value
+word-space-transform-invalid.html	e.style['word-space-transform'] = "auto" should not set the property value
+word-space-transform-invalid.html	e.style['word-space-transform'] = "auto-phrase" should not set the property value
+word-space-transform-invalid.html	e.style['word-space-transform'] = "none auto-phrase" should not set the property value
+word-space-transform-invalid.html	e.style['word-space-transform'] = "normal" should not set the property value
+word-space-transform-invalid.html	e.style['word-space-transform'] = "space ideographic-space" should not set the property value
+word-space-transform-invalid.html	e.style['word-space-transform'] = "spaces" should not set the property value
+word-spacing-invalid.html	e.style['word-spacing'] = "10% 10px" should not set the property value
+word-spacing-invalid.html	e.style['word-spacing'] = "auto" should not set the property value
+word-spacing-invalid.html	e.style['word-spacing'] = "normal 10px" should not set the property value
+word-wrap-invalid.html	e.style['word-wrap'] = "anywhere anywhere" should not set the property value
+word-wrap-invalid.html	e.style['word-wrap'] = "auto" should not set the property value
+word-wrap-invalid.html	e.style['word-wrap'] = "normal break-word" should not set the property value

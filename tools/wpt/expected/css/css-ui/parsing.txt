@@ -1,0 +1,89 @@
+# WPT's css/css-ui/parsing in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh css/css-ui/parsing --update
+# rewrites [passing].
+[required]
+[excluded]
+# Pages whose tests read getComputedStyle, which slice 1b brings; each runs
+# again once it lands.
+box-sizing-computed.html	needs getComputedStyle (slice 1b)
+canonical-order-outline-sub-properties-001.html	needs getComputedStyle (slice 1b)
+caret-color-computed.html	needs getComputedStyle (slice 1b)
+cursor-computed.html	needs getComputedStyle (slice 1b)
+field-sizing-computed.html	needs getComputedStyle (slice 1b)
+interactivity-computed.html	needs getComputedStyle (slice 1b)
+outline-color-computed.html	needs getComputedStyle (slice 1b)
+outline-offset-computed.html	needs getComputedStyle (slice 1b)
+outline-style-computed.html	needs getComputedStyle (slice 1b)
+outline-width-computed.html	needs getComputedStyle (slice 1b)
+resize-computed.html	needs getComputedStyle (slice 1b)
+user-select-computed-contain.html	needs getComputedStyle (slice 1b)
+user-select-computed.html	needs getComputedStyle (slice 1b)
+[passing]
+box-sizing-invalid.html	e.style['box-sizing'] = "auto" should not set the property value
+box-sizing-invalid.html	e.style['box-sizing'] = "content-box border-box" should not set the property value
+box-sizing-invalid.html	e.style['box-sizing'] = "fill-box" should not set the property value
+box-sizing-invalid.html	e.style['box-sizing'] = "margin-box" should not set the property value
+box-sizing-invalid.html	e.style['box-sizing'] = "padding-box" should not set the property value
+box-sizing-invalid.html	e.style['box-sizing'] = "view-box" should not set the property value
+caret-color-invalid.html	e.style['caret-color'] = "50%" should not set the property value
+caret-color-invalid.html	e.style['caret-color'] = "auto !" should not set the property value
+caret-color-invalid.html	e.style['caret-color'] = "auto auto auto" should not set the property value
+caret-color-invalid.html	e.style['caret-color'] = "auto auto" should not set the property value
+caret-color-invalid.html	e.style['caret-color'] = "auto currentcolor" should not set the property value
+caret-color-invalid.html	e.style['caret-color'] = "auto rgb(0, 255, 0)" should not set the property value
+caret-color-invalid.html	e.style['caret-color'] = "auto rgba(10, 20, 30, 0.4)" should not set the property value
+caret-color-invalid.html	e.style['caret-color'] = "auto transparent" should not set the property value
+caret-color-invalid.html	e.style['caret-color'] = "invert" should not set the property value
+caret-color-invalid.html	e.style['caret-color'] = "none" should not set the property value
+caret-color-invalid.html	e.style['caret-color'] = "red  50%" should not set the property value
+caret-color-invalid.html	e.style['caret-color'] = "red  invert" should not set the property value
+caret-color-invalid.html	e.style['caret-color'] = "red  none" should not set the property value
+caret-color-invalid.html	e.style['caret-color'] = "red /" should not set the property value
+caret-color-invalid.html	e.style['caret-color'] = "red green blue yellow" should not set the property value
+caret-color-invalid.html	e.style['caret-color'] = "red green blue" should not set the property value
+caret-color-invalid.html	e.style['caret-color'] = "red, green" should not set the property value
+cursor-invalid.html	e.style['cursor'] = "1 2 url(\\"https://example.com/\\"), copy" should not set the property value
+cursor-invalid.html	e.style['cursor'] = "en-resize" should not set the property value
+cursor-invalid.html	e.style['cursor'] = "light-dark(linear-gradient(red), none), pointer" should not set the property value
+cursor-invalid.html	e.style['cursor'] = "light-dark(radial-gradient(red), url(\\"https://example.com/\\")), pointer" should not set the property value
+cursor-invalid.html	e.style['cursor'] = "light-dark(url(\\"https://example.com/\\"), linear-gradient(red)), pointer" should not set the property value
+cursor-invalid.html	e.style['cursor'] = "linear-gradient(red), pointer" should not set the property value
+cursor-invalid.html	e.style['cursor'] = "url(\\"https://example.com/\\") 1px 2px, copy" should not set the property value
+cursor-invalid.html	e.style['cursor'] = "url(\\"https://example.com/\\") alias" should not set the property value
+cursor-invalid.html	e.style['cursor'] = "url(\\"https://example.com/\\"), url(\\"https://example.com/\\") 3% 4%, move" should not set the property value
+cursor-invalid.html	e.style['cursor'] = "url(\\"https://example.com/\\"), url(\\"https://example.com/\\") 3, move" should not set the property value
+field-sizing-invalid.html	e.style['field-sizing'] = "100%" should not set the property value
+field-sizing-invalid.html	e.style['field-sizing'] = "10px" should not set the property value
+field-sizing-invalid.html	e.style['field-sizing'] = "auto" should not set the property value
+field-sizing-invalid.html	e.style['field-sizing'] = "legacy" should not set the property value
+field-sizing-invalid.html	e.style['field-sizing'] = "none" should not set the property value
+field-sizing-invalid.html	e.style['field-sizing'] = "normal auto" should not set the property value
+field-sizing-invalid.html	e.style['field-sizing'] = "normal" should not set the property value
+interactivity.html	e.style['interactivity'] = "auto inert" should not set the property value
+interactivity.html	e.style['interactivity'] = "none" should not set the property value
+interactivity.html	e.style['interactivity'] = "normal" should not set the property value
+outline-color-invalid.html	e.style['outline-color'] = "50%" should not set the property value
+outline-color-invalid.html	e.style['outline-color'] = "invert" should not set the property value
+outline-color-invalid.html	e.style['outline-color'] = "none" should not set the property value
+outline-invalid.html	e.style['outline'] = "double invert groove" should not set the property value
+outline-invalid.html	e.style['outline'] = "invert solid rgba(10, 20, 30, 0.4)" should not set the property value
+outline-invalid.html	e.style['outline'] = "invert solid" should not set the property value
+outline-invalid.html	e.style['outline'] = "thin outset thick" should not set the property value
+outline-offset-invalid.html	e.style['outline-offset'] = "1%" should not set the property value
+outline-offset-invalid.html	e.style['outline-offset'] = "2px 3px" should not set the property value
+outline-offset-invalid.html	e.style['outline-offset'] = "3px inset" should not set the property value
+outline-offset-invalid.html	e.style['outline-offset'] = "auto" should not set the property value
+outline-offset-invalid.html	e.style['outline-offset'] = "inset 3px" should not set the property value
+outline-style-invalid.html	e.style['outline-style'] = "dotted dashed" should not set the property value
+outline-style-invalid.html	e.style['outline-style'] = "hidden" should not set the property value
+outline-style-invalid.html	e.style['outline-style'] = "solid double groove ridge" should not set the property value
+outline-width-invalid.html	e.style['outline-width'] = "1%" should not set the property value
+outline-width-invalid.html	e.style['outline-width'] = "auto" should not set the property value
+outline-width-invalid.html	e.style['outline-width'] = "thin medium thick medium thin" should not set the property value
+resize-invalid.html	e.style['resize'] = "-internal-textarea-auto" should not set the property value
+resize-invalid.html	e.style['resize'] = "auto" should not set the property value
+resize-invalid.html	e.style['resize'] = "both 0" should not set the property value
+resize-invalid.html	e.style['resize'] = "horizontal vertical" should not set the property value
+user-select-invalid.html	e.style['user-select'] = "text contain" should not set the property value
+user-select-invalid.html	e.style['user-select'] = "visible" should not set the property value
