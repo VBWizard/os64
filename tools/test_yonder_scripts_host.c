@@ -218,8 +218,15 @@ os64_font_status_t __wrap_os64_text_font_open(os64_text_context_t *c, const uint
     if(font_open_refusals>0) { font_open_refusals--; *out=NULL; return OS64_FONT_LIMIT; }
     return __real_os64_text_font_open(c,bytes,len,o,out);
 }
+/* A program that includes this file to drive pages of its own (the replay
+ * runner, tools/test_yonder_replay_host.c) may run the pool itself: when
+ * set, the first takes every submission, and the second every cancellation
+ * of a job it holds, answering whether it did. */
+static os64_work_id_t (*pool_submit_hook)(const os64_work_t *work);
+static bool (*pool_cancel_hook)(os64_work_id_t id);
 void os64_work_cancel(os64_work_pool_t *pool, os64_work_id_t id) {
     (void)pool;
+    if(pool_cancel_hook!=NULL && pool_cancel_hook(id)) return;
     for(int i=0;i<nscript_jobs;i++) if(script_jobs[i].id==id) {
         os64_free(script_jobs[i].job); script_jobs[i]=script_jobs[--nscript_jobs]; script_cancels++; return;
     }
@@ -237,6 +244,7 @@ void os64_work_cancel(os64_work_pool_t *pool, os64_work_id_t id) {
 os64_work_id_t os64_work_submit(os64_work_pool_t *pool, const os64_work_t *work) {
     (void)pool;
     if(!pool_open) { check(false,"unexpected background submission"); return 0; }
+    if(pool_submit_hook!=NULL) return pool_submit_hook(work);
     if(*(const uint32_t *)work->job==YONDER_JOB_SCRIPT) {
         if(nscript_jobs==32) return 0;
         script_jobs[nscript_jobs].id=++pool_ids; script_jobs[nscript_jobs].job=work->job;
@@ -432,12 +440,15 @@ const os64_image_frame_t *os64_image_sequence_frame(const os64_image_sequence_t 
     if(sequence==NULL) { check(false,"unexpected animation read"); return NULL; }
     return &sequence->frame;
 }
-/* A file a case serves (open_local), or none. */
+/* A file a case serves (open_local), or none: `slurp_length` bytes, or a
+ * string's when that is zero. */
 static const char *slurp_path, *slurp_bytes;
+static size_t slurp_length;
 os64_slurp_status_t os64_slurp(const char *path, size_t cap, uint8_t **bytes, size_t *length) {
     (void)cap; *bytes=NULL; *length=0;
     if(slurp_path==NULL || !os64_streq(path,slurp_path)) return OS64_SLURP_NO_FILE;
-    *length=strlen(slurp_bytes); *bytes=os64_malloc(*length+1); memcpy(*bytes,slurp_bytes,*length+1);
+    *length=slurp_length!=0 ? slurp_length : strlen(slurp_bytes);
+    *bytes=os64_malloc(*length+1); memcpy(*bytes,slurp_bytes,*length); (*bytes)[*length]=0;
     return OS64_SLURP_OK;
 }
 
@@ -6675,6 +6686,10 @@ static void covered_link_cases(void) {
     probe_drop();
 }
 
+/* A program that includes this file for the window and its fakes, and
+ * brings its own cases, defines YONDER_HOST_FAKES_ONLY first (the replay
+ * runner, tools/test_yonder_replay_host.c). */
+#ifndef YONDER_HOST_FAKES_ONLY
 int main(void)
 {
     os64_text_options_t options={.memory={.alloc=probe_alloc,.free=probe_free},
@@ -6725,3 +6740,4 @@ int main(void)
     printf("Yonder scripted-page host: %u checks, %u failed\n",checks,failures);
     return failures?1:0;
 }
+#endif
