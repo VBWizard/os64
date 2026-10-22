@@ -7,6 +7,18 @@
 
 #define SHEET_ACCEPT "text/css,*/*;q=0.1"
 
+// The bytes a sheet was parsed from go with the product when the window
+// keeps the page and the parse made a sheet of them; otherwise they go.
+static void keep_or_free(const yonder_sheet_job_t *j, yonder_sheet_t *s, uint8_t *bytes, size_t len)
+{
+    if (j->keep && s->ok) {
+        s->kept = bytes;
+        s->kept_len = len;
+    } else {
+        os64_free(bytes);
+    }
+}
+
 int64_t yonder_sheet_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out)
 {
     yonder_sheet_job_t *j = job;
@@ -24,7 +36,7 @@ int64_t yonder_sheet_run(void *job, bool (*cancelled)(void *ctx), void *ctx, voi
         if (os64_slurp(j->url + 7, GARB_SHEET_MAX, &bytes, &len) != OS64_SLURP_OK)
             return 0;
         s->ok = garb_parse_sheet(bytes, len, NULL, environment, &s->parsed) == GARB_OK;
-        os64_free(bytes);
+        keep_or_free(j, s, bytes, len);
         return s->ok ? 1 : 0;
     }
     os64_fetch_options_t opt = {0};
@@ -46,7 +58,8 @@ int64_t yonder_sheet_run(void *job, bool (*cancelled)(void *ctx), void *ctx, voi
     os64_strcopy(s->url, sizeof(s->url), body.url);
     s->ok = garb_parse_sheet(body.bytes, body.len, body.charset[0] != '\0' ? body.charset : NULL,
                              environment, &s->parsed) == GARB_OK;
-    os64_free(body.bytes);
+    os64_strcopy(s->label, sizeof(s->label), body.charset);
+    keep_or_free(j, s, body.bytes, body.len);
     return s->ok ? 1 : 0;
 }
 
@@ -55,6 +68,7 @@ void yonder_sheet_release(void *job, void *product)
     yonder_sheet_t *s = product;
     if (s != NULL) {
         garb_free(&s->parsed);
+        os64_free(s->kept);
         os64_free(s);
     }
     os64_free(job);

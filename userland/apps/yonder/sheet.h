@@ -35,6 +35,9 @@ typedef struct {
     // was given (HTML's `link` fetch).
     bool any_type;
     way_hooks_t hooks;              // the page's cookies, its Referer, the cache
+    // The window keeps the page (keep_pages, diag.h): the product carries
+    // what the sheet was parsed from.
+    bool keep;
 } yonder_sheet_job_t;
 
 typedef struct {
@@ -43,6 +46,12 @@ typedef struct {
     // Where the sheet came from after its redirects: its @imports are
     // resolved against it.
     char url[OS64_FETCH_URL_MAX];
+    // With the job's `keep`, a parsed sheet's bytes as they arrived and the
+    // charset its response labelled them with ("" for none), so a replay
+    // parses them again as this job did. os64_malloc'd; NULL otherwise.
+    uint8_t *kept;
+    size_t kept_len;
+    char label[HTTP_CHARSET_MAX];
 } yonder_sheet_t;
 
 int64_t yonder_sheet_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out);

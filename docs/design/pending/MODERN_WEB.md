@@ -96,10 +96,15 @@ slice is made, not where it lands. Four rules.
    object never lands behind the kill switch either; the switch is for
    finished surface that turns out to hurt, not for drafts.
 2. **The oracle, before the sites.** Every slice names its web-platform-tests
-   directory and its pass rate is the acceptance. A slice cannot regress a
-   directory that passed. § The oracle, below.
+   directory, and TWO gates read it (Quinn, 2026-10-21: a regression
+   baseline alone lets an interface ship passing a tenth of its tests): a
+   REQUIRED set, the tests named one by one as the interface's essential
+   behaviour, every one of which passes before the interface's row joins
+   the table enabled; and the baseline, every test that passes, which a
+   slice cannot shrink. What a slice knowingly does not run is excluded
+   BY NAME with its reason, never as a count. § The oracle, below.
 3. **The corpus, before every merge.** Two instruments, because the
-   P5's page files are RECORDS and not pages: each of the 401 under
+   P5's page files are RECORDS and not pages: each of the 1,601 under
    `/home/tmp/yonder/backup` names what a real page asked for and what
    failed (YONDER_DIAGNOSTICS.md), and nothing on the P5 keeps a page's
    bytes (the cache keeps sheets and pictures, never pages; CACHE.md § 2).
@@ -318,7 +323,10 @@ A layout that reuses the boxes a change did not touch; then
 `html/webappapis/animation-frames/`, `dom/nodes/MutationObserver-*`.
 Acceptance: the perf record's layouts-per-second on danlegt, unchanged
 with rAF on. **Fable design**, because it changes what libflow's tree IS
-between layouts.
+between layouts: [RELAYOUT.md](RELAYOUT.md) (2026-10-21), which cuts it
+into 5a (the change log in libhtml, `MutationObserver`, the instrument),
+5b (the cascade updated in place, pass 1 reused), 5c (the layout memo)
+and 5d (`requestAnimationFrame`).
 
 **Slice 6: SVG.** Inline `<svg>` in the tree, and SVG as a picture
 (`<img src="x.svg">`, the census's `MISSING image svg`): a renderer for
@@ -327,7 +335,13 @@ paths, the basic shapes, fills and strokes, transforms, `use`/`symbol`,
 libgarb already parses. Oracle: WPT `svg/` (structure and painting; the
 reftests when the runner can compare pictures). Acceptance: Google's and
 GitHub's icons, suckless's logo. **Fable design** for the renderer's seam
-(what libflow hands it, what it hands back, and where it runs), Opus builds.
+(what libflow hands it, what it hands back, and where it runs), Opus
+builds: [SVG.md](SVG.md) (2026-10-21), which makes an `<svg>` a replaced
+box to the layout, puts the renderer in a library of its own that fills
+and strokes through FreeType's rasterizer and stroker behind one new verb
+on the font backend table, and cuts it into 6a (the reftest runner, which
+slices 4 and 8 need too), 6b (the renderer's core) and 6c (gradients, text,
+the picture path).
 
 **Slice 7: the bytecode cache.** Per bundle, keyed by the cache's own entry
 identity (the response's validators), capped in bytes, compressed with
@@ -360,12 +374,22 @@ what keeps eight builders from colliding in one tree, and it is as much
 design as the slices themselves.
 
 **The order.** Slices 0a and 0b first, side by side: they touch different
-files. The fan-out (1a, 1b, 2, 3, 4, 7) starts once 0a's table exists,
-because every one of them registers in it; a fan-out slice that opens
-before 0a has merged branches from 0a's branch and says so in its PR
-(DOM_BRIEFS.md's stacking rule). Slices 5, 6 and 8 wait: 5 and 6 are
-Fable designs written while the fan-out builds, and 8 shares libgarb with
-4.
+files (both built 2026-10-21, PRs #327 and #326). The fan-out starts once
+0a's table exists, because every one of them registers in it; a fan-out
+slice that opens before 0a has merged branches from `opus/tmw-0a-runner`
+and says so in its PR (DOM_BRIEFS.md's stacking rule). **Three builders at
+a time, not six** (ruled 2026-10-21 after two builders spent a percent of
+the five-hour usage window a minute: the weekly budget was the plan's
+premise, the five-hour window is the real pacing limit, and a builder
+paused by a wall mid-edit is worse than one that never started). The
+first three: **1a, 1b and 4**, none of which needs fetch, each in its own
+worktree off 0a's branch. The second three, when the first three's PRs
+are open: **2, 3 and 7**; 3 after 2 if the window is tight, because its
+inline import rides 2's transport. Then 5a and 6a, which 0a alone
+unblocks, and 5b, 5c, 6b, 6c in their documents' order. Slice 8 follows 4.
+Every builder reads MODERN_WEB_BRIEFS.md as it stands on
+`fable/modern-web` AFTER Quinn's review (2512ba11 and later), not the
+copy a 0a or 0b branch carries, which predates it.
 
 **The table, which is the switch.** libdom gains `modern.c`: one static
 table of rows, each a name and an installer, walked once at runtime
@@ -403,7 +427,7 @@ adds rather than edits.
 
 **What every PR states**, so Chris can judge it without re-deriving: its
 WPT directory and its count before and after (the expectation file's
-diff is the proof); how many of the 401 records named its surface (the
+diff is the proof); how many of the P5's records named its surface (the
 tally); the corpus count before and after once kept pages exist; and the
 P5 reading if it claims a speed. A builder commits on its own branch and
 opens the PR; Chris tests before anything merges; Fable reads 0a's table
@@ -456,6 +480,33 @@ From 2026-10-07, so they are not re-argued from scratch:
 - Every PR states: the WPT directory and its count before and after, the
   corpus count before and after, and the P5 reading if the slice claims a
   speed.
+
+## Review record
+
+**Quinn, 2026-10-21, at `30833121`** ([MODERN_WEB_REVIEW.md](MODERN_WEB_REVIEW.md)):
+eleven findings, all taken, the direction kept. Five P1: the pinned
+QuickJS resolves imports even under compile-only, so modules need a
+no-resolve flag and an explicit link step (slice 3, verified against
+`quickjs.c`); a synchronous request through `way_fetch_whole` would be a
+second, less protected transport, so sync XHR and dynamic `import()` run
+the one fetch job inline (slices 2 and 3, verified against `load.c`);
+per-window `localStorage` snapshots lose each other's writes, so the file
+is the shared state and a window commits its own changes by read, merge,
+write (slice 1a); `MutationObserver` cannot be rebuilt from a lossy
+layout log, so the document gains one mutation-time callback and the
+binding queues records as the standard does (RELAYOUT.md); a source
+digest does not validate bytecode, so the blob carries a payload digest
+and framing and a mismatch is a miss (slice 7). Six P2: a module's
+top-level await outlives the drain, so evaluation has a state asked after
+every turn (slice 3); the memo compared a counter every update moved, so
+the cascade has a sheet generation and an update counter, and untouched
+is a bit of its own beside steady (RELAYOUT.md); the replay index grows
+with the features that fetch, and an unrecorded request is "incomplete",
+not a failure (slice 0b); the WPT gate gains the required set and named
+exclusions (rule 2, slice 0a); a standalone SVG picture owns its own
+cascade (SVG.md); `pushState` fires nothing, fragment navigation and
+traversal each their own events (slice 1b). The two builders already
+running (0a, 0b) were told their changes the same afternoon.
 
 ## As built
 
@@ -615,6 +666,296 @@ DEBTS.md § Classic browser scripting; the classic installers' trust in the
 engine's function constructors, there too. The mutant harnesses were not
 run (the briefs' rule); their anchors were checked against the changed
 files.
+
+### Slice 0b, as built
+
+Built by Opus on `opus/tmw-0b-corpus`, from `fable/modern-web` at
+`a5152d17` (`userland` 44768c2f and the arc's two docs commits), on
+2026-10-21, with Quinn's finding 8 (MODERN_WEB_REVIEW.md) taken the same
+afternoon. The brief is MODERN_WEB_BRIEFS.md § Slice 0b. **The contract
+it is held to is REPLAY.md** (Fable, 2026-10-22, after five Codex rounds
+and five cold reads found the same kinds of hole again): the grammar of a
+record and an index, a replay's inputs and the versions of a kept page,
+the index, what a replay reproduces and judges, one process per page, and
+the proof. What follows is what was built against it.
+
+**The census, as it stood on 2026-10-21.** The P5's records under
+`/home/tmp/yonder/backup` are 1,601 page files from 268 sites, not 401
+(401 is the number of lines os64's `ls` prints there, four names a line).
+They were fetched one `cat` a file and tallied with
+`python3 -I tools/yonder_tally.py DIR`. Read it with three things in mind:
+FILES weight what was loaded often (www.bing.com is 174 of them,
+danlegt.com 145), so the sites column is the fairer rank for a platform
+name; a page's own globals rank high by files on one site (danlegt's
+`HomeChat`, `Scratch2000` and `umami`, 142 files each); and the records span
+several builds of yonder, so a name since built (`float` as a `css-value`,
+before floats were laid out) still counts.
+
+| files | sites | asks | MISSING global |
+|---:|---:|---:|---|
+| 466 | 37 | 46,635 | localStorage |
+| 289 | 48 | 9,264 | XMLHttpRequest |
+| 275 | 35 | 315 | module |
+| 253 | 47 | 1,059 | performance |
+| 252 | 34 | 324 | URL |
+| 247 | 23 | 274 | screen |
+| 246 | 29 | 479 | matchMedia |
+| 232 | 43 | 546 | MutationObserver |
+| 215 | 35 | 508 | fetch |
+| 195 | 23 | 9,312 | ActiveXObject |
+| 187 | 14 | 192 | getComputedStyle |
+| 169 | 33 | 206 | requestAnimationFrame |
+| 168 | 23 | 239 | setImmediate |
+| 162 | 30 | 169 | Element |
+| 161 | 11 | 208 | btoa |
+| 146 | 39 | 229 | global |
+| 144 | 23 | 241 | WebKitMutationObserver |
+| 144 | 11 | 147 | TextEncoder |
+
+(891 global names in all; the next rows are danlegt's own names.)
+
+| files | sites | asks | MISSING css-property |
+|---:|---:|---:|---|
+| 919 | 129 | 49,437 | cursor |
+| 865 | 110 | 27,133 | outline |
+| 776 | 113 | 89,647 | content |
+| 726 | 95 | 18,240 | letter-spacing |
+| 717 | 86 | 13,699 | filter |
+| 699 | 103 | 34,099 | transition |
+| 650 | 78 | 7,857 | text-overflow |
+| 627 | 78 | 8,753 | user-select |
+| 585 | 72 | 22,465 | fill |
+| 556 | 66 | 3,720 | overflow-wrap |
+| 553 | 74 | 13,070 | outline-offset |
+| 520 | 78 | 4,297 | word-break |
+| 428 | 68 | 9,864 | object-fit |
+| 425 | 50 | 5,915 | clip-path |
+| 389 | 33 | 4,157 | stroke |
+| 387 | 66 | 2,292 | word-wrap |
+| 377 | 44 | 1,488 | backdrop-filter |
+| 373 | 60 | 4,559 | appearance |
+| 364 | 39 | 794 | scroll-behavior |
+| 357 | 25 | 3,459 | margin-inline |
+| 356 | 43 | 3,884 | aspect-ratio |
+
+(377 property names in all.) The other kinds, by files: elements `svg`
+496 (65 sites), `canvas` 162 (8), `iframe` 146 (41), then one site's custom
+elements (GitHub's `react-partial` 53); at-rules `keyframes` 228 (48),
+`property` 125 (13), `container` 116 (18); `MISSING script module` 259
+(62); pictures `image svg` 198 (44), `picture-scheme data` 308 (20);
+values `background-image: conic-gradient` 168 (6), `float: left` 107
+(35), `clear: both` 100 (29); fonts `Arial` 209 (19), `Helvetica` 165
+(10). The FAILED lines, ranked by `--failed`: a picture that would not
+decode 269 files (19 sites), then the script deaths the globals above
+explain: `'URL' is not defined` 155 (13), `'matchMedia' is not a function`
+148 (7), `cannot convert to object` 144 (3), `'getComputedStyle' is not
+defined` 143 (2), `'performance' is not defined` 133 (12), `cannot read
+property of undefined` 130 (19), `'btoa' is not defined` 109 (2).
+
+**The number a fan-out PR states** is `python3 -I tools/yonder_tally.py
+DIR --surface NAME...`: how many files, and sites, name ANY of the
+slice's names (on 2026-10-21, `localStorage sessionStorage` is 480 of
+1,601 files, 42 of 268 sites). `--kind` narrows it to one kind; a name is
+matched exactly. `--failed` ranks the FAILED lines with the pages they
+were on, a picture's or a font's by its reason rather than its address.
+The tool reads `*.txt` in the directories it is given through the one
+reader (below). A census is not a diff: it COUNTS a record that lost
+lines (what it kept is what the page asked for; partial is still asked)
+and says on stderr how many records lost lines; it counts a replay's
+record only when its page reached a verdict, and lists the others by
+state on stderr; and a claimed name's placeholder that was never written
+(`verdict: unwritten`) is damage, named, and the answer is 2, as it is for
+any `*.txt` the reader cannot judge. It imports nothing outside the
+standard library.
+
+**keep_pages** (`keep_pages = on` beside `diagnostics =` in yonder.conf;
+YONDER_DIAGNOSTICS.md § The page kept has the file shapes). The page's
+bytes are kept in `stream_take`, the one place every byte the parser is
+fed passes, so a body of any chunking and any encoding is kept exactly;
+they go to a temporary file renamed into place at `stream_finish`, cut
+short or not. The builder's call the brief left open: a page let go before
+then keeps NOTHING and its temporary is removed with its record, rather
+than left for a later write to replace, since a page without all its bytes
+cannot be fed again as it was. Scripts are kept in `script_arrived` as the
+decoded source the host is handed. A sheet's product is a parse, which
+cannot be written, so `sheet.c` hands back, when the job says the window
+keeps pages, the bytes it parsed and the charset its response named, and a
+replay parses them again with the same call; the bytes are held only until
+the window writes them. A fetch that failed is kept as a line saying so:
+without it a replay could not tell a page's real 404 from a request the
+corpus never saw. The keepers are diag.c's, beside the record they belong
+to; a step that fails ends that page's keeping, is said once a run, and
+leaves `kept: not whole` on the record; a page whose bytes were kept whole
+says `kept: whole`, and a replay replays only such a record (or, of a
+page kept before that fact existed, one whose bytes are beside it:
+REPLAY.md § 3). **Each record
+CLAIMS its name as the load begins** (`yonder_diag_claim`): its file is
+made only where nothing is, holding `verdict: unwritten` (which every
+reader takes as unjudged) until the record replaces it, and no `.html` or
+`.d` may be there whether or not this record keeps its page, so two
+yonders on one directory, a `.txt` deleted from beside its kept files, or
+a keep-off load landing on a kept page's number, never pair a record with
+another's pages, and the bytes are never renamed over a `.html` already
+there. A record that can claim no name has no claim, and nothing of it is
+written; the record's write proves its claimed file is still its own
+first, by the nonce its claim wrote in the placeholder (`verdict:
+unwritten <nonce>`) and in every record after (`claim: <nonce>`), so a
+placeholder not known to be whole on disk (no memory for it, a write or
+close that failed) is no claim, its name not known to be this claim's:
+it is removed, or left as a file no reader takes for a page when the
+unlink cannot remove it, and its number passed over.
+No Settings line: there is none for `diagnostics` either.
+
+
+**The record's inputs** (REPLAY.md § 3 is the table). `diag_begin`
+writes them as head facts at the claim, as in force for the load: `agent`
+first (`g.way.agent`), `clock` (`os64_time` in epoch milliseconds) and
+`tz` (the `TZ` in force, or `<n>m`, the configured minutes east, when
+there is none), then `laid out at` (the view's `<width>x<height> px`,
+written again at arrival with the layout's time), and the rest of the
+settings `kDiagSettings` names: `scripts`, `modern`, `zoom`,
+`appearance`, `motion`, `animate` (not `animations`, which the census
+already uses for how a page's animations fare) and `script seconds`.
+`diag_cookies` writes `cookies` at the head, when the stream takes it
+(or `open_local` makes a file's) and before the parser is fed a byte:
+the string libway's script door, `way_script_cookies`, answers at that
+moment for the FINAL address and the transport the page arrived over,
+as the page's script host asks it, with every Set-Cookie of the head's
+own hops already heard, so never an HttpOnly cookie (what the jar gains
+after the head reaches no script in a replay: REPLAY.md § 3's jar row);
+asked again with twice the room up
+to 1 MiB, and a string that does not fit, or no memory for one, leaves
+the record saying it lost lines.
+`diag_write` compares each of `kDiagSettings`, the agent among them,
+with what the claim wrote, and `diag_arrived` the layout's view with the
+claim's (a view that moves after the arrival is not compared: yonder's
+own bars move it, and a replay reproduces them); one that differs marks
+the record `REPLAY unjudged: settings changed
+during the load` (`yonder_diag_unjudged`; the first reason stands). The
+head facts, `TLS` and `kept` have a room of their own, 24 lines counted
+apart from the 512 the other plain lines may take
+(`yonder_diag_head_fact`); `bytes` is a plain line. Every record ends
+with `end` (`YONDER_DIAG_END`). The index is version 2: each script's
+and sheet's line ends with the job's own identity (a script's token, a
+sheet's place in its page's table).
+
+**The readers.** `tools/yonder_records.py` is the one Python reader, which
+the tally and the diff read records through; `rp_record_read` and
+`rp_index_read` are the runner's. Each classifies every line by REPLAY.md
+§ 2 (`classify()`, `rp_classify`), so a control byte anywhere, or a field
+that decodes to a NUL, refuses a record or an index; both run every
+vector in
+`tools/yonder_record_grammar.txt` (the `escape:` vectors hold their two
+unescapes equal, one pass from the left), and every number goes through
+one parser each (`decimal()`, `rp_decimal`). A record is of version 2 when
+it says any of `agent`, `cookies`, `clock` or `tz`; `end` is required of
+one that is a kept page's, and of every replay's. Every page-written string either tool prints
+goes through `display()`, and every one the runner prints through
+`rp_display`, the same rule.
+
+**The replay runner** (`tools/test_yonder_replay_host.{c,sh} KEPT-DIR
+OUT-DIR`; its header says how it meets REPLAY.md). It includes
+`tools/test_yonder_scripts_host.c` with `YONDER_HOST_FAKES_ONLY`, which
+leaves that file's `main` out; two hooks there let it run the pool itself
+(the scripted host's fake keeps 32 jobs of each kind and parks pictures
+in the navigation's slot, which a real page overruns), and the file fake
+serves a length. The build list is `tools/yonder_host_build.sh`, which
+both suites source, so they link the same thing. Every file it touches
+goes through `tools/test_yonder_replay_fs.{h,c}`, its own translation
+unit, whose writes go to a temporary file made new (`O_EXCL|O_NOFOLLOW`),
+flushed and renamed into place, whose reads refuse a symbolic link, and
+whose every call answers done, absent or a fault; the runner poisons,
+after including its header, the host's file functions that unit could
+reach. **One process per page**: the parent reads each kept record to
+decide whether it is a page to replay (`rp_is_kept`: one that says
+`kept:`, or of version 1 one whose `.html` is beside it), forks a child for it, and waits for it ten
+minutes at most (`rp_wait`): blocked in `waitpid`, which a 100 ms timer
+interrupts so the clock can be read, retried on `EINTR` alone, the child
+killed at its limit (SIGCHLD is reset to its default at start). It
+removes the temporary a child killed inside its write leaves, and trusts
+the child only when its exit status (`RP_CHILD_*`, 64 to 95) and its
+record agree: the state, the defaulted line, and the clean flag against
+the record's own lines of the kinds a replay reproduces; whether a page
+let go of what it held the record does not say, and that flag can only
+make the answer worse. Otherwise it writes the page unjudged itself,
+saying why. The child (`rp_replay_page`) reads the page's inputs from
+its record (`rp_window_of`): each is required (`kNeeded`) of a version
+2 record. A version 1 record takes nothing silently: its window, agent
+and zone, where it does not say them, are what the person states with
+`--window KEY=VALUE,...` (`rp_window_state`; an item ends at a comma a
+known key follows, so an agent string may hold commas), each named with
+its value on `REPLAY inputs stated:`, and one neither said nor stated
+leaves the page unjudged; its cookies and clock are the harness's, named
+on `REPLAY inputs defaulted: cookies clock`; its absent `content-type`
+or `charset` reads as empty, which is how its builds spelled empty; its
+`kept lines` binds the index when it says one; and its jobs are matched
+by kind and address in the kept order. A version 1 record that says no
+`kept:` is a kept page when its `.html` is beside it, assumed whole, its
+`bytes:` matching, and its replay record says `REPLAY kept: assumed
+whole (version 1)`. A record and its index of different versions are
+unjudged. It sets them where the window
+reads them (`rp_apply_inputs`): the agent on the session, the cookie
+string in the fake jar's script door, the clock the JS `Date` reads (to
+the millisecond, and still), and the zone (a `TZ` into the environment,
+or the configured offset with `TZ` unset). The page is fed, its jobs
+answered from the index in the kept order, the clock moved a tick an idle
+turn up to 60 virtual seconds, a navigation it starts ending the replay
+there, and it is left as yonder leaves it when it closes (the header says
+each step); `rp_decide` gives its state and `rp_compose` its record.
+
+**The diff** (`tools/yonder_corpus_diff.py BEFORE AFTER`) judges only
+pages replayed to a verdict on both sides, comparing their record lines
+of the kinds a replay reproduces, with counts left out: a gained line is a
+regression (exit 1), a lost one progress. A page whose after-record is
+unfinished is BROKEN, a regression when the before-record reached a
+verdict, never progress; one NEWLY INCOMPLETE exits 1 under its own
+heading (the corpus must be recorded again before the change can be
+judged on it); one incomplete on both sides is listed to be recorded
+again; one that reached a verdict where it had not is recovered, and not
+compared. A page the after directory lacks is a regression, one only the
+after directory has is unjudged, and so is a pair of records of one name
+and two addresses, or that took different inputs from the harness; a
+directory it cannot list answers 2, and so does any `*.txt` the reader
+cannot judge, each listed with why.
+
+**The instrument** (slice 7's before-and-after): a script's line is
+`script <address>: ran in <n> us`, the time `os64_js_run` took, compiling
+included (`yonder_scripts_task_us`). On the host the clock moves only when
+a case moves it, so the line is exact in the cases; in QEMU it is a number
+and not a speed.
+
+**Proof.**
+
+| Check | Result |
+|---|---|
+| Scripted-page host (`tools/test_yonder_scripts_host.sh`): the keep cases (a windows-1252 page posted in 97-byte chunks with a NUL inside kept byte for byte; the index, its version, each file, a failed script's line and no file; the facts; a page let go unshown; a stream stopped before its verdict leaving nothing; a folder that cannot be made; a name another yonder took, bytes and a folder left from before, each passed over; an empty folder removed; a head fact kept past a full table; an address's own `%` written apart from the token spelling; every one of the claim's 64 names taken, with keep_pages and without, writing nothing of the page and saying so; with keep_pages off, a number beside another's kept bytes or folder passed over, the claimed file reading `verdict: unwritten` until the record replaces it; a record that lost a line saying so; `kept: whole` on a page kept whole; picture and font failures a fetch decided written as `picture-fetch` and `font-fetch`; the setting off keeping nothing; 512 ordinary facts and the head's together losing nothing, the record ending with `end`; the agent, the cookies a script could read, the clock and the zone on the record; a zoom, the scripts switch, the agent or the view changed before the page was left, and a page laid out in another view than its claim's, each marking it unjudged, and an unchanged window not; cookies the jar cannot hand over whole not written and the record saying it lost lines; the cookies taken at the head for the final address, so an http load redirected to https records its Secure cookie, a response's own Set-Cookie is on the record, and a cookie the page's first script sets is not; a claimed record removed from under its page not written again, nor one another yonder claimed after it went, by its nonce; a placeholder with no memory for its text, or whose write or close fails, removed and its number passed over) and the script time | 6,062 checks, zero failures |
+| The replay's self-test (`tools/test_yonder_replay_host.sh`): the 29 fixture pages of `tools/yonder_loop_fixture`, `yonder_script_fixture` and `pages`, and twelve hand-made (a sheet that imports another from its redirected address and is read under its label, a page in windows-1252 from an encrypted fetch, a text body, a file's page and its script and timer, an error page, a failed script with a module and a global, a page too deep to read to its end, a picture by itself, a 1,400-pixel window, scripts off, an address holding `M%49SSING` of its own beside MISSING, the modern switch off, and a page read with every other input unlike the harness's, its agent, cookie string, clock, zone, view, zoom, dark pages, reduced motion and animations off, whose script writes each into its record), kept with keep_pages on in a child of their own, written to real files, replayed | 41 pages; every replayed record is the kept one (the paint stages aside, which the processor's counter times), the fixture pages having been kept with no input, as a replay reads them (REPLAY.md § 5); the corpus replayed again diffs clean, and replays the same from a runner started with SIGCHLD ignored. Then, each a corpus of its own: twenty-nine refusals, each checked by the reason its one rule gives (a damaged index line's number, a record that lost a line with no memory or past a full table, a `*.txt` that is not a record, a record cut before its `end` and one cut between its `kept lines:` and its `kept:`, a count of twenty digits, a quoted terminal sequence, index lines short of their fields or of a kind cut short, two sheets' lines numbered each as the other, a `kept lines` past UINT32_MAX and one short of its index, a `bytes` with something after its digits or a zero before them, an index of version 1 beside a record of version 2, an index of version 3, an empty index, an index with no version line, a carriage return in a fact, a control byte in an index field, a second `address:`, a second `kept:` after `kept: whole`, an index's version line again after its lines, a plain fact that is not UTF-8, a line past `end`, a second verdict, the claim's placeholder never replaced, an agent escaped to a byte that is no part of UTF-8); each of the nineteen inputs a record must say, taken out in turn; a child whose status names a state its record does not say, one that calls clean a page its record does not, one killed inside its write (its temporary removed), one that never ends (killed at its time), and two that exit outside the table (1, as a sanitizer does, and 97), each unjudged by the parent; two sheets of one address kept in the reverse order, each taking its own line; a kept page of version 1 judged with what was stated and defaulted named, one with no `kept:` judged as assumed kept whole and saying so, and one without a `zoom` nobody stated, unjudged; the page read with other inputs made version 1 and replayed in the window `--window` states, its script writing each stated input; `--window` taking an agent holding commas and refusing a key nobody states, a key twice, a view without its height and values no record says; a script asked for twice beside a version 1 index that kept it once, answered once; and the cases of the rounds before (a request the index lacks, no time (a corpus the diff compares with none given 60 s, by their budgets), two async scripts in their kept order, a navigation, a picture's failed fetch, a harness check failing, a partial run's rules, kept bytes of the wrong length, a record not UTF-8, a link planted at a temporary's name, a page whose replay dies or dirties the fakes); the whole-record vectors (a line a reader parses one value from, twice); and the child's elapsed wall-clock time with and without a borrow across a second, equal, backwards and past 2^32 ms |
+| `tools/test_yonder_replay_mutants.py`, run by `tools/test_yonder_replay_host.sh --mutants` through `tools/mutants_parallel.py` | 108 mutants, 108 caught, each by its own case (its log names the case that failed): with `tools/test_yonder_diag_mutants.py`'s (56 caught of 56, which hold yonder's own page-file rules, § 1's placeholder that is not whole among them), one for every rule of REPLAY.md § 1-7. Each of the 19 inputs taken out of `kNeeded`; the record's inputs not read; each input not applied (all of them, and the agent, cookies, clock, zone, zoom, appearance, motion, animations and height alone); the defaulted line not written; an unknown index version read; two versions let be; the identity compare, the numbering check, the index's version line standing once and one-line-one-job dropped; `kept lines` not bound to the index; the leading-zero refusal, the UINT32_MAX bound, the control-byte refusal, the NUL-field refusal and the end rule each dropped in both readers; the C reader's whole-record UTF-8 check, lines past `end`, a second verdict and the placeholder each read; a second head fact and a second address read in the C reader, and in the Python reader a second head fact, a second state, and a second of each of the five `REPLAY` lines that stand once, each alone; a not-reproduced kind named twice read, in both readers; a field escaped to bytes that are not UTF-8 read, in both readers; the budget line unwritten, and not required by the Python reader; the parent's agreement check, clean-flag check, exit-table bound, `EINTR` retry, time limit, temp removal and SIGCHLD reset each dropped, and the time limit's elapsed milliseconds taken without the nanoseconds' borrow, or a backwards span read as a forward one; version 1's stated inputs taken from the harness (the zoom, the agent), an unstated input not refused, the stated and assumed lines unwritten, a page with no `kept:` not kept, its absent `charset` not read as empty, and `--window` splitting at every comma or taking a view without its height; yonder's claim proof and its nonce comparison, whole-cookies check, setting-change mark, scripts setting and arrival view check each dropped; the cookies not taken at the head, taken for the clear, taken again after the scripts at arrival, and not taken for a file's page; and the diff's defaulted-set and address pairing, the `--window` statements' pairing, the budgets' pairing, unfinished-is-broken, regression, broken, newly-incomplete, missing-from-after, only-after, not-reproduced and unjudged rules each dropped |
+| `tools/test_yonder_records.py`, `tools/test_yonder_tally.py`, `tools/test_yonder_corpus_diff.py` | 13, 14 and 25 tests pass, every grammar vector among them |
+| The P5's 1,601 census records | all read as verdicts by the new grammar; none is a kept page |
+| Chris's kept pages of 2026-10-21 and 2026-10-22 (601 records), with the `--window` below | 2026-10-21: `replayed 341, clean 4, incomplete 107, unfinished 11; 341 of version 1, their inputs defaulted; 16 records are not kept pages; 10 unjudged; 2 did not let go of what they held` (every one assumed kept whole: none says `kept:`). 2026-10-22: `replayed 224, clean 15, incomplete 7, unfinished 4; 224 of version 1, their inputs defaulted; 4 records are not kept pages; 6 unjudged`. Every replayed record names what was stated and defaulted; the 16 unjudged lost lines (3 kept records, 13 the replay window's own); the 20 not kept pages have no bytes beside them; the two that did not let go are www.bing.com pages, a window leak on a real page the fixtures do not have |
+| Anchors of every mutant harness that names a file this slice touched | 1,079 anchors, each found once |
+
+**The corpus count**: 565 of the 601 records kept on 2026-10-21 and
+2026-10-22 replay (436 to a verdict, 19 of them clean; 114 incomplete;
+15 unfinished), 16 are unjudged and 20 are not kept pages, run with
+
+    --window zoom=1000,appearance=dark,motion=full,animate=on,modern=on,scripts=on,script-seconds=5,laid-out-at=2526x1282,agent=<the Chrome on Windows preset>,tz=EST5EDT
+
+The settings are the P5's yonder.conf as Fable stated them; the width is
+what 536 of the records' `laid out at` lines say; the height (1282) was
+inferred from the records' whole-view paint areas, and `tz` and the
+agent were read from notes and yonder's own Chrome preset, because the
+P5 did not answer that day. Chris confirms or corrects those three, and
+both sides of any measurement are run with the same statement. A page
+recorded from now on is version 2 and says them all.
+
+**Deferred**, each a DEBTS.md row (§ The replay corpus): a replay lays
+text out in the harness's bitmap face; `screen`, once built, will answer
+the harness's size; a kept corpus holds the cookies a page's scripts
+could read; keep_pages writes on the window's thread; a page that
+navigates replays only as far as going; a replay does not reproduce what
+a picture's or a font's fetch decides; a form's reply replays as a GET.
 
 ### Slice 1b, as built
 

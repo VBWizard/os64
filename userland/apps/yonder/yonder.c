@@ -20,6 +20,7 @@
 #include "way/way.h"
 #include "image/image.h"
 #include "os64/os64.h"
+#include "os64/date.h"
 #include "os64/draw.h"
 #include "os64/fmt.h"
 #include "os64/font_backend.h"
@@ -496,12 +497,17 @@ static bool s_script_audit;
 
 // THE PAGE FILES (YONDER_DIAGNOSTICS.md): the directory yonder.conf's
 // `diagnostics` names, empty when it names none or the directory could not
-// be made (said once, at the start); the sequence the next load is given;
-// and whether a failed write has been said, which is said once a run.
+// be made (said once, at the start); the sequence the next load's claim
+// begins at (diag_begin); and whether a failed write, and a load whose
+// record could claim no name, have been said, each said once a run.
+// `keep`: yonder.conf's `keep_pages`, which keeps each page beside its file
+// (diag.h), read with the directory; a page that could not be kept is said
+// once a run too.
 static struct {
     char dir[OS64_PATH_MAX];
     uint32_t next;
-    bool write_said;
+    bool write_said, claim_said;
+    bool keep, keep_said;
 } s_diag = {.next = 1};
 
 // ── Pages ───────────────────────────────────────────────────────────────
@@ -1711,16 +1717,22 @@ static void say_way(void)
 static void layout(void);
 
 // yonder.conf's `diagnostics` directory, made if it is missing and its
-// parent is not. The sentence to say once when it names one that cannot be
-// used (it is also logged), NULL otherwise. A run's sequence continues from
-// the highest the directory already holds, so a kept census is never
-// written over by the next run's first page.
+// parent is not, and whether pages are kept in it (`keep_pages`). The
+// sentence to say once when it names one that cannot be used (it is also
+// logged), NULL otherwise. A run's sequence continues from the highest the
+// directory already holds, so a kept census is never written over by the
+// next run's first page.
 static const char *diag_dir_open(void)
 {
     static char said[OS64_PATH_MAX + 96];
     char dir[OS64_PATH_MAX];
-    if (!yonder_settings_saved_diagnostics(dir, sizeof(dir)))
+    bool keep = yonder_settings_saved_keep_pages();
+    if (!yonder_settings_saved_diagnostics(dir, sizeof(dir))) {
+        if (keep)
+            os64_debug_log("yonder: yonder.conf's keep_pages keeps pages beside their page files, "
+                           "and there is no diagnostics directory; nothing is kept");
         return NULL;
+    }
     os64_dirent_t e;
     const char *why = NULL;
     if (os64_stat(dir, &e) != 0)
@@ -1734,24 +1746,163 @@ static const char *diag_dir_open(void)
     }
     os64_strcopy(s_diag.dir, sizeof(s_diag.dir), dir);
     s_diag.next = yonder_diag_next_seq(dir);
+    s_diag.keep = keep;
     return NULL;
 }
 
-// A load's record, numbered in browse order. NULL on no memory: the load
-// goes on unrecorded.
-static yonder_diag_t *diag_begin(const char *url)
+static void diag_kept(int64_t answer);
+
+// A load's record, numbered in browse order, its name claimed in the
+// directory before anything is written under it (yonder_diag_claim): a
+// number another yonder took meanwhile is passed over. A record that can
+// claim no name is kept for the badge and never written (diag_write).
+// NULL on no memory: the load goes on unrecorded.
+// THE SETTINGS A RECORD SAYS ITS PAGE WAS READ UNDER, by key, as in force
+// now: what the claim writes, and what a write compares the record with.
+// The value, which a number is written into `out` (`cap` bytes) for.
+static const char *const kDiagSettings[] = {"agent", "scripts", "modern", "zoom", "appearance", "motion", "animate",
+                                            "script seconds"};
+static const char *diag_setting(const char *key, char *out, size_t cap)
 {
-    return yonder_diag_new(url, s_diag.next++, os64_micros());
+    if (os64_streq(key, "agent"))
+        return g.way.agent != NULL ? g.way.agent : YONDER_AGENT;
+    if (os64_streq(key, "scripts"))
+        return g.scripts_on ? "on" : "off";
+    if (os64_streq(key, "modern"))
+        return g.modern ? "on" : "off";
+    if (os64_streq(key, "appearance"))
+        return s_dark ? "dark" : "light";
+    if (os64_streq(key, "motion"))
+        return s_reduce_motion ? "reduce" : "full";
+    // `animate`, not `animations`: that key says how the page's own
+    // animations are faring.
+    if (os64_streq(key, "animate"))
+        return s_animations ? "on" : "off";
+    os64_snprintf(out, cap, "%lu", (unsigned long)(os64_streq(key, "zoom") ? g.zoom : g.script_ms / 1000));
+    return out;
+}
+// The view a record says its page was laid out in, `<width>x<height>`, and
+// whether it is the view `w` by `h`.
+static bool diag_same_view(const char *laid, int32_t w, int32_t h)
+{
+    char now[48];
+    int n = os64_snprintf(now, sizeof(now), "%dx%d px", (int)w, (int)h);
+    return laid == NULL || (n > 0 && os64_strlen(laid) >= (size_t)n && os64_memcmp(laid, now, (size_t)n) == 0);
 }
 
-// The record as it stands, written when yonder.conf asks for files; true
-// when the file was written. A failure is said once a run, in the log and
-// on the status line.
-static bool diag_write(const yonder_diag_t *d)
+// THE JAR'S `document.cookie` STRING AT THE HEAD (REPLAY.md § 3), on the
+// record: libway's script door for the page's FINAL address and the
+// transport it arrived over, as the page's script host asks it
+// (scripts_host takes the same two), so HttpOnly cookies stay out. Taken
+// once the head is in hand and before the parser is fed a byte
+// (stream_turn, open_local), because that is the last moment the jar's
+// state is the page's own and no other fetch's: every hop's Set-Cookie
+// is heard as the fetch reads the head, before the head is posted (a
+// trailer's is dropped), and after it the jar moves with whatever else is
+// fetched or runs (a script's own `src`, a sheet a script waits for, the
+// page still on screen, an expiry judged at each read), and a replay
+// reproduces none of those changes. Asked again with twice the room, up to 1 MiB;
+// cookies that do not fit even then are not written cut short, and the
+// record says it lost a line.
+static void diag_cookies(yonder_diag_t *d, const char *url, bool encrypted)
+{
+    if (d == NULL)
+        return;
+    bool whole = false;
+    size_t cap = 512;
+    char *cookies = NULL;
+    while (!whole && cap <= ((size_t)1 << 20)) {
+        os64_free(cookies);
+        cookies = os64_malloc(cap);
+        if (cookies == NULL)
+            break;
+        (void)way_script_cookies(g.way.jar, url, encrypted, cookies, cap, &whole);
+        cap *= 2;
+    }
+    if (cookies != NULL && whole)
+        yonder_diag_head_fact(d, "cookies", cookies);
+    else
+        yonder_diag_short(d);
+    os64_free(cookies);
+}
+
+static yonder_diag_t *diag_begin(const char *url)
+{
+    yonder_diag_t *d = yonder_diag_new(url, s_diag.next, os64_micros());
+    // THE INPUTS A REPLAY READS THE PAGE WITH, as in force for this load
+    // (REPLAY.md § 3): the agent first; the clock and its zone (the agent,
+    // the cookies, the clock and the zone are what make a record version
+    // 2); the view's size; and the rest of kDiagSettings. The cookies are
+    // not the claim's: they are the final address's, taken at the head
+    // (diag_cookies). A replay sets each from the record and assumes none.
+    // The arrival writes the laid-out size again; a record whose page was
+    // laid out in another view than the claim's (diag_arrived), or whose
+    // settings are not the ones the claim wrote when it is written
+    // (diag_write), is marked unjudged.
+    if (d != NULL) {
+        char v[48];
+        yonder_diag_head_fact(d, kDiagSettings[0], diag_setting(kDiagSettings[0], v, sizeof(v)));
+        os64_time_t t;
+        if (os64_time(&t) == 0 && t.ticks_per_second != 0) {
+            os64_snprintf(v, sizeof(v), "%lld", (long long)t.epoch * 1000 +
+                          (long long)((uint64_t)t.ticks_into_second * 1000 / t.ticks_per_second));
+            yonder_diag_head_fact(d, "clock", v);
+            const char *zone = os64_getenv("TZ");
+            if (zone != NULL && zone[0] != '\0')
+                yonder_diag_head_fact(d, "tz", zone);
+            else {
+                os64_snprintf(v, sizeof(v), "%dm", (int)t.tz_offset_minutes);
+                yonder_diag_head_fact(d, "tz", v);
+            }
+        }
+        os64_snprintf(v, sizeof(v), "%dx%d px", (int)g.view.bounds.w, (int)g.view.bounds.h);
+        yonder_diag_head_fact(d, "laid out at", v);
+        for (size_t i = 1; i < sizeof(kDiagSettings) / sizeof(kDiagSettings[0]); i++)
+            yonder_diag_head_fact(d, kDiagSettings[i], diag_setting(kDiagSettings[i], v, sizeof(v)));
+    }
+    if (d != NULL && s_diag.dir[0] != '\0') {
+        int64_t claimed = yonder_diag_claim(d, s_diag.dir, s_diag.keep);
+        if (claimed != YONDER_DIAG_UNCLAIMED)
+            diag_kept(claimed);
+    }
+    s_diag.next = (d != NULL ? yonder_diag_seq(d) : s_diag.next) + 1;
+    return d;
+}
+
+// The record as it stands, written under the name its load claimed when
+// yonder.conf asks for files; true when the file was written. A record
+// that could claim no name is never written, and a failure is not either:
+// each is said once a run, in the log and on the status line, when the
+// record would have been written, after its load's own words.
+static bool diag_write(yonder_diag_t *d)
 {
     if (d == NULL || s_diag.dir[0] == '\0')
         return false;
-    if (yonder_diag_write(d, s_diag.dir) == 0)
+    // A record is of one window: a setting that is not what the claim
+    // wrote makes it a record no replay can read the page again by. (The
+    // view is compared once, at arrival, against the claim's: after it,
+    // the view also moves when yonder's own bars come and go, which a
+    // replay of the page reproduces.)
+    char now[48];
+    for (size_t i = 0; i < sizeof(kDiagSettings) / sizeof(kDiagSettings[0]); i++) {
+        const char *then = yonder_diag_fact_value(d, kDiagSettings[i]);
+        if (then != NULL && !os64_streq(then, diag_setting(kDiagSettings[i], now, sizeof(now))))
+            yonder_diag_unjudged(d, "settings changed during the load");
+    }
+    const yonder_diag_claim_t *c = yonder_diag_claimed(d);
+    if (c == NULL) {
+        if (!s_diag.claim_said) {
+            s_diag.claim_said = true;
+            char line[OS64_PATH_MAX + 128];
+            os64_snprintf(line, sizeof(line), "No page file for this page: none of %u names from %lu on could be "
+                          "made in %s; the rest are tried.", (unsigned)YONDER_DIAG_CLAIM_TRIES,
+                          (unsigned long)yonder_diag_seq(d), s_diag.dir);
+            os64_debug_log(line);
+            status_rest(line);
+        }
+        return false;
+    }
+    if (yonder_diag_write(c) == 0)
         return true;
     if (s_diag.write_said)
         return false;
@@ -1762,6 +1913,31 @@ static bool diag_write(const yonder_diag_t *d)
     os64_debug_log(line);
     status_rest(line);
     return false;
+}
+
+// What a keeper answered (diag.h): a page that could not be kept is said
+// once a run, in the log and on the status line, and the next page is
+// tried. The scripts and sheets kept of it before the failure stay, and so
+// do its bytes if they were already whole; bytes still in their temporary
+// file go with it. Its record says it is not whole.
+static void diag_kept(int64_t answer)
+{
+    if (answer == 0 || s_diag.keep_said)
+        return;
+    s_diag.keep_said = true;
+    char line[OS64_PATH_MAX + 96];
+    os64_snprintf(line, sizeof(line), "A page could not be kept in %s; the rest are tried.", s_diag.dir);
+    os64_debug_log(line);
+    status_rest(line);
+}
+
+// A script or sheet as the window received it, or that it did not come
+// (`bytes` NULL), kept beside the record of the page that asked for it.
+static void diag_keep(yonder_diag_t *d, yonder_diag_kept_t kind, uint32_t job, const char *url, const char *final,
+                      const char *label, const void *bytes, size_t n)
+{
+    if (s_diag.keep)
+        diag_kept(yonder_diag_keep_resource(yonder_diag_claimed(d), kind, job, url, final, label, bytes, n));
 }
 
 // The badge follows the shown page's counts; its width moves the status
@@ -2098,11 +2274,16 @@ static void diag_arrived(Page *p, uint64_t laid_ms)
     if (p->diag == NULL)
         return;
     char v[96];
-    yonder_diag_fact(p->diag, "final address", p->way.url);
+    // Laid out in another view than the one the claim wrote: the window
+    // was resized under the load.
+    if (!diag_same_view(yonder_diag_fact_value(p->diag, "laid out at"), p->laid_width, p->laid_height))
+        yonder_diag_unjudged(p->diag, "settings changed during the load");
+    yonder_diag_head_fact(p->diag, "final address", p->way.url);
     os64_snprintf(v, sizeof(v), "%ld ms", (long)((os64_micros() - yonder_diag_began(p->diag)) / 1000));
     yonder_diag_fact(p->diag, "arrived after", v);
-    os64_snprintf(v, sizeof(v), "%d px in %lu ms", (int)p->laid_width, (unsigned long)laid_ms);
-    yonder_diag_fact(p->diag, "laid out at", v);
+    os64_snprintf(v, sizeof(v), "%dx%d px in %lu ms", (int)p->laid_width, (int)p->laid_height,
+                  (unsigned long)laid_ms);
+    yonder_diag_head_fact(p->diag, "laid out at", v);
     diag_observe(p, "when the page arrived");
     diag_write(p->diag);
 }
@@ -2890,6 +3071,8 @@ static void open_local(const char *path, NavKind kind, const way_position_t *cru
     g.stream.has_head = true;
     g.stream.head.body = WAY_BODY_HTML;
     os64_snprintf(g.stream.head.url, sizeof(g.stream.head.url), "file://%s", path);
+    // A file's head is whole here, and nothing is parsed yet.
+    diag_cookies(g.stream.diag, g.stream.head.url, g.stream.head.encrypted);
     g.stream.has_verdict = true;
     g.stream.verdict.page = true;
     g.stream.verdict.fetch = OS64_FETCH_OK;
@@ -3519,6 +3702,7 @@ static void sheet_fetch(Page *p, Sheet *sh, const char *url)
     job->hooks.jar = g.way.jar;
     job->hooks.cache = g.cache;
     os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), p->way.url);
+    job->keep = s_diag.keep;
     os64_work_t work = {yonder_sheet_run, yonder_sheet_release, job, SHEET_RESERVE};
     sh->id = os64_work_submit(g.pool, &work);
     if (sh->id == 0) {
@@ -3663,6 +3847,13 @@ static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
     Sheet *sh = &p->sheets[job->index];
     if (!sh->waiting)
         return;
+    // Kept as the page received it, a sheet that failed as a failure,
+    // beside the record of the page it is for: the stream's page has none
+    // of its own, its record is the stream's.
+    bool came = got != NULL && got->ok;
+    diag_keep(p == &g.stream.page ? g.stream.diag : p->diag, YONDER_DIAG_KEPT_SHEET, (uint32_t)job->index, job->url,
+              came ? got->url : job->url, came ? got->label : "",
+              came ? (got->kept != NULL ? (const void *)got->kept : "") : NULL, came ? got->kept_len : 0);
     sh->waiting = false;
     sh->id = 0;
     if (sh->holds)
@@ -3950,8 +4141,10 @@ static bool picture_moves_page(const Page *p, int32_t pic)
 // A picture that will not be shown, on the page's record by its address:
 // an unsupported format or variant is asked for and not had, MISSING image
 // <format>, with the address on a plain line; one that could not be asked
-// for (`asked`, the reason), would not fetch, came with an error the
-// server answered, or would not decode is FAILED picture.
+// for (`asked`, the reason) is FAILED picture; one whose fetch decided it
+// (it would not fetch, came with an error the server answered, or would
+// not decode) is FAILED picture-fetch, a kind of its own because a replay,
+// which fetches no picture, cannot reproduce it (MISSING image is one too).
 static void picture_failed(Page *p, const char *url, const yonder_picture_t *product,
                            const char *asked)
 {
@@ -3970,7 +4163,7 @@ static void picture_failed(Page *p, const char *url, const yonder_picture_t *pro
                                        product->why[0] != '\0' ? product->why : "no picture came");
         char line[OS64_FETCH_URL_MAX + 80];
         os64_snprintf(line, sizeof(line), "%s: %s", url, why);
-        yonder_diag_failed(p->diag, "picture", line);
+        yonder_diag_failed(p->diag, asked != NULL ? "picture" : "picture-fetch", line);
     }
     badge_follow();
 }
@@ -4692,14 +4885,18 @@ static const char *webfonts_refusal(os64_font_status_t st)
                                        : "would not open";
 }
 
-// A file is failed: named in the page's record, and the badge told.
-static void webfonts_fail(WebFontFile *w, const char *why)
+// A file is failed: named in the page's record, and the badge told. One
+// whose fetch decided it (`fetched`: the job came back, or its bytes would
+// not open) is FAILED font-fetch, a kind of its own because a replay,
+// which fetches no font, cannot reproduce it; one never fetched is FAILED
+// font.
+static void webfonts_fail(WebFontFile *w, const char *why, bool fetched)
 {
     w->state = WF_FAILED;
     w->failed_layout = geometry_layout_total;
     char line[OS64_FETCH_URL_MAX + 80];
     os64_snprintf(line, sizeof(line), "%s: %s", w->url, why);
-    yonder_diag_failed(g.page.diag, "font", line);
+    yonder_diag_failed(g.page.diag, fetched ? "font-fetch" : "font", line);
     badge_follow();
     // The record is written again once nothing is out and the page is laid
     // out (diag_pictures_in), whichever way the failure came.
@@ -4734,9 +4931,9 @@ static void webfonts_feed(bool laid)
             w->state = WF_READY;
             w->ready_layout = geometry_layout_total;
         } else if (st == OS64_FONT_LIMIT || st == OS64_FONT_NO_MEMORY)
-            webfonts_fail(w, "no room to open it");
+            webfonts_fail(w, "no room to open it", true);
         else
-            webfonts_fail(w, webfonts_refusal(st));
+            webfonts_fail(w, webfonts_refusal(st), true);
         webfonts_move();
     }
     // A size refused for room gets one more layout: the tree that held the
@@ -4795,7 +4992,7 @@ static void webfonts_feed(bool laid)
         }
         if (why != NULL) {
             s_web.waiting--;
-            webfonts_fail(w, why);
+            webfonts_fail(w, why, false);
             webfonts_move();
         } else {
             w->state = WF_WAITING;
@@ -4820,7 +5017,7 @@ static void webfonts_unhold(void)
         os64_free(w->sfnt);
         w->sfnt = NULL;
         s_web.held_bytes -= w->sfnt_len;
-        webfonts_fail(w, "no room to open it");
+        webfonts_fail(w, "no room to open it", true);
     }
 }
 
@@ -4861,7 +5058,7 @@ static void webfont_arrived(const yonder_webfont_job_t *job, yonder_webfont_t *p
             why = webfonts_refusal(st);
     }
     if (why != NULL) {
-        webfonts_fail(w, why);
+        webfonts_fail(w, why, true);
     } else {
         w->state = WF_READY;
         w->ready_layout = geometry_layout_total;
@@ -4884,7 +5081,7 @@ static void webfonts_orphaned(void)
         if (w->state != WF_WAITING)
             continue;
         s_web.waiting--;
-        webfonts_fail(w, "the workers stopped");
+        webfonts_fail(w, "the workers stopped", false);
         webfonts_move();
         any = true;
     }
@@ -7018,6 +7215,12 @@ static yonder_scripts_t *scripts_for(uint64_t serial)
 static void script_arrived(const yonder_script_job_t *job, const yonder_script_t *got)
 {
     yonder_scripts_t *host = scripts_for(job->page);
+    // Kept as the host is handed it, decoded, a fetch that failed as a
+    // failure: a replay hands it over the same.
+    bool came = got != NULL && got->ok;
+    if (host != NULL)
+        diag_keep(yonder_scripts_diag(host), YONDER_DIAG_KEPT_SCRIPT, job->token, job->url,
+                  came ? got->url : job->url, "", came ? got->source : NULL, came ? got->length : 0);
     if (host != NULL)
         yonder_scripts_fetched(host, job->token, got != NULL && got->ok ? got->source : NULL,
                                got != NULL ? got->length : 0);
@@ -7086,11 +7289,19 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
     const char *address = yonder_scripts_task_address(host);
     char key[OS64_DOM_URL_MAX + 16];
     os64_snprintf(key, sizeof(key), "script %s", address != NULL ? address : name);
+    // How long the engine took over it, compiling included, when the task
+    // evaluated a script: `ran in 1520 us`.
+    int64_t us = yonder_scripts_task_us(host);
+    char ran[48] = "ran", died[48] = "failed";
+    if (us >= 0) {
+        os64_snprintf(ran, sizeof(ran), "ran in %ld us", (long)us);
+        os64_snprintf(died, sizeof(died), "failed in %ld us", (long)us);
+    }
     // A task with a script's name is a script's, and the record lists it;
     // an event or a timer with none is listed only by a failure.
     if (out->status == OS64_JS_OK) {
         if (out->source_name[0] != '\0')
-            yonder_diag_fact(diag, key, "ran");
+            yonder_diag_fact(diag, key, ran);
         badge_follow();     // a global it missed is recorded as it runs
         if (at != 0)
             status_rest(line);
@@ -7118,7 +7329,7 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
     os64_snprintf(line + at, sizeof(line) - at, "Script %s: %s", name, failure);
     yonder_diag_failed(diag, key, failure);
     if (out->source_name[0] != '\0')
-        yonder_diag_fact(diag, key, "failed");
+        yonder_diag_fact(diag, key, died);
     badge_follow();
     status_rest(line);
     yonder_scripts_set_note(host, line);
@@ -8820,6 +9031,10 @@ static bool stream_open(void);
 // wire's verdict, or OK and NULL when the window cut the fetch short itself.
 static void stream_finish(os64_fetch_status_t fetch, const char *reason)
 {
+    // The parser has been handed every byte it will have: a kept page's
+    // bytes are whole.
+    if (s_diag.keep)
+        diag_kept(yonder_diag_keep_bytes_end(yonder_diag_claimed(g.stream.diag)));
     NavKind kind = g.stream.kind;
     way_position_t crumb = g.stream.crumb;
     char fragment[sizeof(g.stream.fragment)];
@@ -8872,23 +9087,45 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         os64_snprintf(bytes, sizeof(bytes), "%lu", (unsigned long)g.stream.bytes);
         yonder_diag_fact(fresh.diag, "bytes", bytes);
         if (g.stream.head.tls_version) {
-            yonder_diag_fact(fresh.diag, "TLS", g.stream.head.tls_version == 0x0304 ? "1.3" :
+            yonder_diag_head_fact(fresh.diag, "TLS", g.stream.head.tls_version == 0x0304 ? "1.3" :
                 g.stream.head.tls_fallback ? "1.2 (fallback)" : "1.2");
         }
-        // The server's answer, for every page from the network. One that is
-        // an error is shown, as a browser shows it, and is a failed load
-        // from the person's chair: a 429's page is not a clean page.
-        if (g.stream.local == NULL && g.stream.head.status != 0) {
+        // The server's answer, for every page from the network (0 when its
+        // protocol has none), which a replay requires rather than assumes.
+        // One that is an error is shown, as a browser shows it, and is a
+        // failed load from the person's chair: a 429's page is not a clean
+        // page.
+        if (g.stream.local == NULL) {
             char status[16 + HTTP_REASON_MAX];
-            os64_snprintf(status, sizeof(status), "%d %s", (int)g.stream.head.status,
-                          g.stream.head.reason);
-            yonder_diag_fact(fresh.diag, "status", status);
+            os64_snprintf(status, sizeof(status), g.stream.head.reason[0] ? "%d %s" : "%d",
+                          (int)g.stream.head.status, g.stream.head.reason);
+            yonder_diag_head_fact(fresh.diag, "status", status);
             if (g.stream.head.status >= 400) {
                 os64_snprintf(status, sizeof(status), "HTTP %d %s", (int)g.stream.head.status,
                               g.stream.head.reason);
                 yonder_diag_failed(fresh.diag, "page", status);
             }
         }
+        // What a replay of a kept page needs to rebuild the head it came
+        // with (tools/test_yonder_replay_host.c): where it came from after
+        // its redirects and what libway judged its body to be; for a page
+        // from the network, its type and charset as the server named them
+        // (empty when it named none: a replay requires every line, and
+        // assumes none) and whether it arrived encrypted; and a page read with scripts
+        // off says so. They, the status and TLS above, and the width it is
+        // laid out at have room a page's other plain lines cannot take
+        // (yonder_diag_head_fact).
+        static const char *const kBodies[] = {[WAY_BODY_HTML] = "html", [WAY_BODY_TEXT] = "text",
+                                              [WAY_BODY_IMAGE] = "image"};
+        yonder_diag_head_fact(fresh.diag, "final address", g.stream.head.url);
+        yonder_diag_head_fact(fresh.diag, "body", kBodies[g.stream.head.body]);
+        if (g.stream.local == NULL) {
+            yonder_diag_head_fact(fresh.diag, "content-type", g.stream.head.content_type);
+            yonder_diag_head_fact(fresh.diag, "charset", g.stream.head.charset);
+            yonder_diag_head_fact(fresh.diag, "encrypted", g.stream.head.encrypted ? "yes" : "no");
+        }
+        if (!fresh.scripting)
+            yonder_diag_head_fact(fresh.diag, "scripts", "off");
     }
     // The sheets the stream sent for move with it, still out or landed,
     // and keep their jobs, which name this serial: no sheet is fetched
@@ -9013,7 +9250,9 @@ static bool stream_open(void)
 }
 
 // The bytes the arriving page has to give: the mailbox's chunks, or the
-// file's, one chunk at a time.
+// file's, one chunk at a time. Every byte taken goes to the parser, so this
+// is where a kept page's bytes are kept (keep_pages, diag.h): as the parser
+// is fed them, after the transfer's decoding and before the characters'.
 static size_t stream_take(uint8_t *chunk, size_t cap)
 {
     size_t n;
@@ -9027,6 +9266,8 @@ static size_t stream_take(uint8_t *chunk, size_t cap)
         g.stream.local_at += n;
     }
     g.stream.bytes += n;
+    if (s_diag.keep && n != 0)
+        diag_kept(yonder_diag_keep_bytes(yonder_diag_claimed(g.stream.diag), chunk, n));
     return n;
 }
 
@@ -9226,6 +9467,9 @@ static bool stream_turn(void)
     yonder_mail_t *mail = g.stream.mail;
     if (mail != NULL && !g.stream.has_head && yonder_mail_take_head(mail, &g.stream.head)) {
         g.stream.has_head = true;
+        // The head is final and nothing is parsed yet: the jar's cookies
+        // for the page, as they stand at its head (diag_cookies).
+        diag_cookies(g.stream.diag, g.stream.head.url, g.stream.head.encrypted);
         if (g.stream.head.body != WAY_BODY_TEXT && !stream_parser(NULL, 0)) {
             stream_failed("Out of memory reading that page.");
             stop_trip();
