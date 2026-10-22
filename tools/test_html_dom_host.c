@@ -1019,6 +1019,90 @@ static void t_documents(void)
     check(live == 0, "two-document cases freed");
 }
 
+// A second document in the page's arena (html.h § create_document): the
+// DOM Standard's rules for a document's children, none of the page's own,
+// and nodes that cross between the two trees by moving.
+static void t_second_documents(void)
+{
+    os64_html_document_t *doc = parse(PAGE);
+    HDoc *d = (HDoc *)doc;
+    HNode *html = doc->html, *head = doc->head, *body = doc->body;
+    uint64_t version = os64_html_version(doc);
+    int64_t st = 99;
+    HNode *second = os64_html_create_document(doc, &st);
+    check(second && st == OS64_HTML_OK && second->kind == OS64_HTML_DOCUMENT && !second->parent &&
+              !second->first_child && second != doc->document && os64_html_owns_node(doc, second) &&
+              os64_html_version(doc) == version,
+          "a second document: empty, detached, this document's, and the version stays");
+    st = 99;
+    HNode *doctype = os64_html_create_doctype(doc, "html", "", "", &st);
+    HNode *named = os64_html_create_doctype(doc, "x y", "-//p", "s.dtd", NULL);
+    char name[] = "html";
+    HNode *copied = os64_html_create_doctype(doc, name, "", "", NULL);
+    name[0] = 'X';
+    check(doctype && st == OS64_HTML_OK && doctype->kind == OS64_HTML_DOCTYPE && strcmp(doctype->name, "html") == 0 &&
+              strcmp(doctype->public_id, "") == 0 && strcmp(doctype->system_id, "") == 0 && named &&
+              strcmp(named->name, "x y") == 0 && strcmp(named->public_id, "-//p") == 0 &&
+              strcmp(named->system_id, "s.dtd") == 0 && copied && strcmp(copied->name, "html") == 0,
+          "a doctype: its name and identifiers, each the doctype's own copy");
+    st = 0;
+    check(!os64_html_create_doctype(doc, NULL, "", "", &st) && st == OS64_HTML_BAD_ARGUMENT &&
+              !os64_html_create_doctype(doc, "html", NULL, "", NULL) &&
+              !os64_html_create_doctype(doc, "html", "", NULL, NULL) &&
+              !os64_html_create_doctype(doc, "\xff", "", "", &st) && st == OS64_HTML_BAD_TEXT &&
+              !os64_html_create_doctype(doc, "h", "\xc3", "", NULL) &&
+              !os64_html_create_doctype(doc, "h", "", "\xe2\x82", NULL),
+          "a doctype refuses an absent string and one that is not UTF-8");
+    check(!os64_html_create_document(NULL, &st) && st == OS64_HTML_BAD_ARGUMENT &&
+              !os64_html_create_doctype(NULL, "html", "", "", NULL),
+          "no document, no node");
+
+    HNode *root = os64_html_create_element(doc, OS64_HTML_NS_HTML, "html", NULL);
+    HNode *inner_head = os64_html_create_element(doc, OS64_HTML_NS_HTML, "head", NULL);
+    HNode *inner_body = os64_html_create_element(doc, OS64_HTML_NS_HTML, "body", NULL);
+    HNode *text = os64_html_create_text(doc, "t", 1, NULL);
+    HNode *other = os64_html_create_element(doc, OS64_HTML_NS_HTML, "div", NULL);
+    check(os64_html_insert(doc, second, root, NULL) == OS64_HTML_OK &&
+              os64_html_insert(doc, root, inner_head, NULL) == OS64_HTML_OK &&
+              os64_html_insert(doc, root, inner_body, NULL) == OS64_HTML_OK &&
+              os64_html_insert(doc, second, doctype, root) == OS64_HTML_OK,
+          "a doctype and an element under the second document, the doctype first");
+    expect_tree(second, "#document[<!html><html>[<head><body>]]", "the second document's tree");
+    check(os64_html_insert(doc, second, text, NULL) == OS64_HTML_HIERARCHY &&
+              os64_html_insert(doc, second, other, NULL) == OS64_HTML_HIERARCHY &&
+              os64_html_insert(doc, second, named, NULL) == OS64_HTML_HIERARCHY &&
+              os64_html_insert(doc, inner_body, second, NULL) == OS64_HTML_HIERARCHY &&
+              os64_html_insert(doc, body, second, NULL) == OS64_HTML_HIERARCHY,
+          "no text, a second element or a second doctype under it, and it under nothing");
+    check(doc->html == html && doc->head == head && doc->body == body,
+          "the page's landmarks are not the second document's");
+    // Its element is the DOM Standard's: any element, which may go. Held,
+    // so that taking it out does not reclaim it.
+    os64_html_hold(doc, root);
+    check(os64_html_replace(doc, second, other, root) == OS64_HTML_OK &&
+              os64_html_remove(doc, other) == OS64_HTML_OK && os64_html_insert(doc, second, root, NULL) == OS64_HTML_OK,
+          "its element is replaced by a div, which is removed, and the html element put back");
+    os64_html_release(doc, root);
+    // A node moves between the two trees as any of the document's nodes do.
+    HNode *b = id_in(doc, "b");
+    check(os64_html_insert(doc, inner_body, b, NULL) == OS64_HTML_OK && b->parent == inner_body,
+          "the page's node moves into the second document");
+    expect_tree(id_in(doc, "a"), "<div id='a'>", "and is gone from the page");
+    check(os64_html_insert(doc, id_in(doc, "a"), b, NULL) == OS64_HTML_OK && b->parent == id_in(doc, "a"),
+          "and back");
+    check(doc->html == html && doc->head == head && doc->body == body, "the landmarks stay through the moves");
+    st = 0;
+    check(!os64_html_clone(doc, second, true, &st) && st == OS64_HTML_BAD_ARGUMENT,
+          "a document is not cloned");
+    HNode *doctype_copy = os64_html_clone(doc, doctype, false, NULL);
+    check(doctype_copy && strcmp(doctype_copy->name, "html") == 0 && strcmp(doctype_copy->public_id, "") == 0,
+          "a doctype it made is cloned with its strings");
+    check(links_ok(d, second, 0) == 0 && links_ok(d, doc->document, 0) == d->records, "links in both trees");
+    // A document freed with a second document's tree in it frees all of it.
+    os64_html_document_free(doc);
+    check(live == 0, "second-document cases freed");
+}
+
 // ── When memory runs out ────────────────────────────────────────────────
 
 typedef int64_t (*Verb)(os64_html_document_t *doc);
@@ -1053,6 +1137,18 @@ static int64_t v_create_element(os64_html_document_t *doc)
 {
     int64_t st = 0;
     made = os64_html_create_element(doc, OS64_HTML_NS_HTML, "template", &st);
+    return st;
+}
+static int64_t v_create_document(os64_html_document_t *doc)
+{
+    int64_t st = 0;
+    made = os64_html_create_document(doc, &st);
+    return st;
+}
+static int64_t v_create_doctype(os64_html_document_t *doc)
+{
+    int64_t st = 0;
+    made = os64_html_create_doctype(doc, "html", "-//public", "system", &st);
     return st;
 }
 static int64_t v_create_text(os64_html_document_t *doc)
@@ -1104,6 +1200,8 @@ static void t_out_of_memory(void)
                  {"remove_attr", no_prepare, v_remove_attr},
                  {"create_element", no_prepare, v_create_element},
                  {"create_text", no_prepare, v_create_text},
+                 {"create_document", no_prepare, v_create_document},
+                 {"create_doctype", no_prepare, v_create_doctype},
                  {"clone", own_attrs, v_clone},
                  {"clone from another document", open_elsewhere, v_clone_across},
                  {"clone of another document's doctype", open_elsewhere, v_clone_doctype_across}};
@@ -1141,6 +1239,7 @@ static void t_out_of_memory(void)
             // failed. One that makes nodes may have made some: those stay
             // charged, as any detached node does.
             bool makes_nodes = verbs[v].verb == v_create_element || verbs[v].verb == v_create_text ||
+                               verbs[v].verb == v_create_document || verbs[v].verb == v_create_doctype ||
                                verbs[v].verb == v_clone || verbs[v].verb == v_clone_across ||
                                verbs[v].verb == v_clone_doctype_across;
             if (!makes_nodes)
@@ -2548,6 +2647,7 @@ int main(int argc, char **argv)
         t_deep();
         t_pins();
         t_documents();
+        t_second_documents();
         t_out_of_memory();
     }
     static const char *const pages[] = {
