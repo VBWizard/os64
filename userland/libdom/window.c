@@ -15,9 +15,11 @@ void d_navigate(os64_dom_t *dom, os64_dom_navigation_kind_t kind, const os64_htm
                 const os64_html_node_t *submitter, const char *url, int32_t delta)
 {
     /* The last ask of a task wins, as the last location= does in a browser;
-     * but history.go()s add up, as HTML queues each traversal after the one
-     * before it: go(-2) then go(-1) is three back. */
-    if (kind == OS64_DOM_NAVIGATE_HISTORY && dom->navigation.kind == OS64_DOM_NAVIGATE_HISTORY) {
+     * but with the Modern Web switch on, history.go()s add up, as HTML
+     * queues each traversal after the one before it: go(-2) then go(-1) is
+     * three back. */
+    if (kind == OS64_DOM_NAVIGATE_HISTORY && dom->navigation.kind == OS64_DOM_NAVIGATE_HISTORY &&
+        dom->options.modern) {
         int64_t sum = (int64_t)dom->navigation.delta + delta;
         dom->navigation.delta = sum > INT32_MAX ? INT32_MAX : sum < INT32_MIN ? INT32_MIN : (int32_t)sum;
         return;
@@ -182,7 +184,26 @@ static size_t before_fragment(const char *url)
     return n;
 }
 
-static bool fragment_navigation(os64_dom_t *dom, const char *url, bool replace);
+static int fragment_navigation(os64_dom_t *dom, JSContext *ctx, const char *url, bool replace);
+
+/* `name` as the URL parser's fragment state writes it: the fragment
+ * percent-encode set (C0 controls, space, `"`, `<`, `>`, backtick, and
+ * every byte past ASCII) as %XX. False when it does not fit `cap`. */
+static bool fragment_encoded(const char *name, char *out, size_t cap)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    size_t n = 0;
+    for (const unsigned char *s = (const unsigned char *)name; *s != '\0'; s++) {
+        bool encode = *s <= 0x20 || *s >= 0x7F || *s == '"' || *s == '<' || *s == '>' || *s == '`';
+        if (n + (encode ? 3 : 1) >= cap) return false;
+        if (!encode) { out[n++] = (char)*s; continue; }
+        out[n++] = '%';
+        out[n++] = hex[*s >> 4];
+        out[n++] = hex[*s & 15];
+    }
+    out[n] = '\0';
+    return true;
+}
 
 static JSValue ask_url(os64_dom_t *dom, JSContext *ctx, os64_dom_navigation_kind_t kind, JSValueConst value,
                        bool fragment)
@@ -193,24 +214,42 @@ static JSValue ask_url(os64_dom_t *dom, JSContext *ctx, os64_dom_navigation_kind
     bool resolved;
     if (fragment) {
         /* hash = names a place in this page: the address with its fragment
-         * replaced, which the host reaches without a request. */
+         * replaced, which the host reaches without a request (HTML § The
+         * Location interface, the hash setter): one leading `#` taken off,
+         * the rest parsed in the fragment state, and nothing at all when
+         * that is the fragment the address already has (none counting as
+         * the empty one). With the Modern Web switch off the name is
+         * written as given and always asked for, as before the arc. */
         const char *base = page_url(dom);
         size_t keep = before_fragment(base);
         const char *name = text.data[0] == '#' ? text.data + 1 : text.data;
-        resolved = keep + 1 + os64_strlen(name) < sizeof(url);
-        if (resolved) os64_snprintf(url, sizeof(url), "%.*s#%s", (int)keep, base, name);
+        char encoded[OS64_DOM_URL_MAX];
+        if (dom->options.modern) {
+            resolved = fragment_encoded(name, encoded, sizeof(encoded));
+            const char *has = base[keep] == '#' ? base + keep + 1 : "";
+            if (resolved && os64_strcmp(encoded, has) == 0) {
+                d_string_free(dom, &text);
+                return JS_UNDEFINED;
+            }
+        } else {
+            resolved = os64_strlen(name) < sizeof(encoded);
+            if (resolved) os64_strcopy(encoded, sizeof(encoded), name);
+        }
+        resolved = resolved && keep + 1 + os64_strlen(encoded) < sizeof(url);
+        if (resolved) os64_snprintf(url, sizeof(url), "%.*s#%s", (int)keep, base, encoded);
     } else resolved = resolve(dom, text.data, url, sizeof(url));
     d_string_free(dom, &text);
     if (!resolved) return d_error(ctx, "SyntaxError", "The address cannot be resolved against this page");
     /* An address that differs from the document's only in a fragment it has
      * is HTML's navigation to a fragment, which happens now, inside the
-     * script, when the host takes it (os64_dom_history_t.fragment): the
-     * same address again replaces the entry rather than adding one. */
+     * script, when the host takes it (fragment_navigation): the same
+     * address again replaces the entry rather than adding one. */
     const char *here = page_url(dom);
     size_t keep = before_fragment(url);
     if (url[keep] == '#' && keep == before_fragment(here) && os64_memcmp(url, here, keep) == 0) {
         bool same = os64_strcmp(url, here) == 0;
-        if (fragment_navigation(dom, url, kind == OS64_DOM_NAVIGATE_REPLACE || same)) return JS_UNDEFINED;
+        int made = fragment_navigation(dom, ctx, url, kind == OS64_DOM_NAVIGATE_REPLACE || same);
+        if (made != 0) return made < 0 ? JS_EXCEPTION : JS_UNDEFINED;
     }
     d_navigate(dom, kind, NULL, NULL, url, 0);
     return JS_UNDEFINED;
@@ -827,6 +866,7 @@ static JSValue update_state(os64_dom_t *dom, JSContext *ctx, int argc, JSValueCo
             JS_FreeValue(ctx, dom->entry_state_value->value);
             dom->entry_state_value->value = value;
             dom->entry_state_read = true;
+            dom->entry_name++;
         }
     }
     d_free(dom, json.text);
@@ -834,14 +874,26 @@ static JSValue update_state(os64_dom_t *dom, JSContext *ctx, int argc, JSValueCo
     return result;
 }
 
-static bool fragment_navigation(os64_dom_t *dom, const char *url, bool replace)
+static JSValue history_event(os64_dom_t *dom, JSContext *ctx, void *arg);
+
+/* A fragment navigation a script made (HTML § Navigate to a fragment): the
+ * host takes the entry, the document's address and its null state follow,
+ * and then — inside the script that asked, before it goes on — `popstate`,
+ * because the navigation's "update document for history step application"
+ * fires it there and then. The hashchange it owes is the host's to queue
+ * (os64_dom_history_t.fragment). 1 when it was made; 0, with nothing
+ * changed and nothing fired, when the host could not take it; -1 when it
+ * was made and the popstate could not be dispatched (no room for it, or
+ * the runtime failed under a listener), with the exception pending, as
+ * dispatchEvent answers. */
+static int fragment_navigation(os64_dom_t *dom, JSContext *ctx, const char *url, bool replace)
 {
-    if (!dom->options.modern || dom->history_host.fragment == NULL) return false;
+    if (!dom->options.modern || dom->history_host.fragment == NULL) return 0;
     char *address = copy_text(dom, url, os64_strlen(url));
-    if (address == NULL) return false;
+    if (address == NULL) return 0;
     if (!dom->history_host.fragment(dom->history_host.opaque, url, replace)) {
         d_free(dom, address);
-        return false;
+        return 0;
     }
     d_free(dom, dom->url);
     dom->url = address;
@@ -849,7 +901,14 @@ static bool fragment_navigation(os64_dom_t *dom, const char *url, bool replace)
     dom->entry_state = NULL;
     dom->entry_state_length = 0;
     dom->entry_state_read = false;
-    return true;
+    dom->entry_name++;
+    if (dom->popstate_prototype == NULL || !os64_dom_listens(dom, "popstate")) return 1;
+    os64_dom_history_event_t popstate = {.entry = dom->entry_name};
+    JSValue event = history_event(dom, ctx, &popstate);
+    if (JS_IsException(event)) return -1;
+    int dispatched = d_dispatch(dom, ctx, event, NULL);
+    JS_FreeValue(ctx, event);
+    return dispatched < 0 ? -1 : 1;
 }
 
 bool os64_dom_history_moved(os64_dom_t *dom, const char *url, const char *state, size_t length)
@@ -868,17 +927,29 @@ bool os64_dom_history_moved(os64_dom_t *dom, const char *url, const char *state,
     dom->entry_state = kept;
     dom->entry_state_length = kept != NULL ? length : 0;
     dom->entry_state_read = false;
+    dom->entry_name++;
     return true;
 }
 
-typedef struct {
-    bool hashchange;
-    const char *old_url;
-} HistoryEvent;
+uint64_t os64_dom_history_entry(const os64_dom_t *dom)
+{
+    return dom != NULL ? dom->entry_name : 0;
+}
+
+/* A popstate's state: history.state itself while the entry it was owed
+ * for is still the current one (the same object, as HTML's event and
+ * history.state share one deserialization), else that entry's state read
+ * from the JSON it carried. */
+static JSValue owed_state(os64_dom_t *dom, JSContext *ctx, const os64_dom_history_event_t *what)
+{
+    if (what->entry == dom->entry_name) return state_value(dom, ctx);
+    if (what->state == NULL) return JS_NULL;
+    return JS_ParseJSON(ctx, what->state, what->length, "<history state>");
+}
 
 static JSValue history_event(os64_dom_t *dom, JSContext *ctx, void *arg)
 {
-    const HistoryEvent *what = arg;
+    const os64_dom_history_event_t *what = arg;
     JSValueConst prototype = what->hashchange ? dom->hashchange_prototype->value : dom->popstate_prototype->value;
     JSValue event = d_event_new_proto(dom, ctx, prototype, what->hashchange ? "hashchange" : "popstate",
                                       false, false, true);
@@ -888,12 +959,12 @@ static JSValue history_event(os64_dom_t *dom, JSContext *ctx, void *arg)
         JSValue old_url = JS_NewString(ctx, what->old_url);
         defined = JS_IsException(old_url) ? -1
             : JS_DefinePropertyValueStr(ctx, event, "oldURL", old_url, JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE);
-        JSValue new_url = defined < 0 ? JS_EXCEPTION : JS_NewString(ctx, page_url(dom));
+        JSValue new_url = defined < 0 ? JS_EXCEPTION : JS_NewString(ctx, what->new_url);
         if (defined >= 0)
             defined = JS_IsException(new_url) ? -1
                 : JS_DefinePropertyValueStr(ctx, event, "newURL", new_url, JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE);
     } else {
-        JSValue state = state_value(dom, ctx);
+        JSValue state = owed_state(dom, ctx, what);
         defined = JS_IsException(state) ? -1
             : JS_DefinePropertyValueStr(ctx, event, "state", state, JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE);
         if (defined >= 0)
@@ -907,12 +978,14 @@ static JSValue history_event(os64_dom_t *dom, JSContext *ctx, void *arg)
     return event;
 }
 
-os64_js_status_t os64_dom_history_event(os64_dom_t *dom, bool hashchange, const char *old_url,
+os64_js_status_t os64_dom_history_event(os64_dom_t *dom, const os64_dom_history_event_t *event,
                                         os64_js_outcome_t *outcome)
 {
     if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
     os64_memset(outcome, 0, sizeof(*outcome));
-    if (dom == NULL || (hashchange && old_url == NULL)) {
+    if (dom == NULL || event == NULL ||
+        (event->hashchange ? event->old_url == NULL || event->new_url == NULL
+                           : event->state == NULL && event->length != 0)) {
         outcome->status = OS64_JS_BAD_ARGUMENT;
         return outcome->status;
     }
@@ -920,11 +993,10 @@ os64_js_status_t os64_dom_history_event(os64_dom_t *dom, bool hashchange, const 
         outcome->status = OS64_JS_FAILED_RUNTIME;
         return outcome->status;
     }
-    const char *type = hashchange ? "hashchange" : "popstate";
+    const char *type = event->hashchange ? "hashchange" : "popstate";
     if (!dom->options.modern || dom->popstate_prototype == NULL || !os64_dom_listens(dom, type))
         return OS64_JS_OK;
-    HistoryEvent what = {hashchange, old_url};
-    return d_host_dispatch(dom, NULL, NULL, type, history_event, &what, NULL, outcome);
+    return d_host_dispatch(dom, NULL, NULL, type, history_event, (void *)event, NULL, outcome);
 }
 
 enum { HS_PUSH, HS_REPLACE, HS_STATE, HS_RESTORATION };

@@ -166,17 +166,21 @@ bool yonder_scripts_encrypted(const yonder_scripts_t *scripts);
 // script's name and a `src` resolve against from now on. NULL is a no-op.
 void yonder_scripts_set_url(yonder_scripts_t *scripts, const char *url);
 // The session is moving the document to another of its entries without a
-// fetch: its address and its state (JSON, NULL for none), told to the
-// binding (os64_dom_history_moved) when there is one, and taken as the
-// address. False, with nothing taken, when the binding could not keep
-// them; the caller moves the window only on true. True for NULL scripts,
-// which have nothing to tell.
+// fetch, or a page arriving is given its entry's state: its address and
+// its state (JSON, NULL for none), told to the binding
+// (os64_dom_history_moved), or kept for it until the first task makes it,
+// and taken as the address. False, with nothing taken, when there was no
+// room to keep them; the caller moves the window only on true. True for
+// NULL scripts, which have nothing to tell.
 bool yonder_scripts_history_moved(yonder_scripts_t *scripts, const char *url, const char *state,
                                   size_t length);
-// popstate (`hashchange` false) or hashchange from `old_url`, as one task
-// (os64_dom_history_event). False when nothing ran: no binding, a dead one,
-// or nothing that could hear it; the outcome is judged as a task's.
-bool yonder_scripts_history_event(yonder_scripts_t *scripts, bool hashchange, const char *old_url,
+// The binding's name for the document's current entry (os64_dom_history_
+// entry), which an owed popstate carries; 0 with no binding.
+uint64_t yonder_scripts_history_entry(const yonder_scripts_t *scripts);
+// popstate or hashchange as it was owed, as one task (os64_dom_history_
+// event). False when nothing ran: no binding, a dead one, or nothing that
+// could hear it; the outcome is judged as a task's.
+bool yonder_scripts_history_event(yonder_scripts_t *scripts, const os64_dom_history_event_t *event,
                                   os64_js_outcome_t *outcome);
 // The view's events, one task a call (os64_dom_view_step). False when
 // nothing ran.

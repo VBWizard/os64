@@ -167,11 +167,14 @@ struct os64_dom {
     /* HISTORY (window.c): the host's provider; the current entry's state as
      * JSON, NULL for null; its value, parsed at the first read of
      * history.state and the same object every read after (`entry_state_read`);
-     * and whether the page asked to keep its own scroll. */
+     * the entry's name (os64_dom_history_entry), a new one at every change
+     * of the entry or its state; and whether the page asked to keep its own
+     * scroll. */
     os64_dom_history_t history_host;
     char *entry_state;
     size_t entry_state_length;
     DValue *entry_state_value;
+    uint64_t entry_name;
     bool entry_state_read, scroll_manual;
     DValue *popstate_prototype, *hashchange_prototype;
     /* JS_GetClassID of a plain object and of an array: the only objects

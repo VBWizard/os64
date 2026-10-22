@@ -477,10 +477,10 @@ static void dom_view_history_cases(void)
     unsigned fragments = h.fragments;
     dom_script(&f, VIEW_ASSERT
         "location.hash='part';assert(location.hash==='#part'&&location.href==='http://view.test/next#part','at once');"
-        "assert(history.state===null);location.hash='#part';",
+        "assert(history.state===null);location.hash='#part';location.hash='part';location.href=location.href;",
         "history: location.hash");
     check(h.fragments == fragments + 2 && h.replace && strcmp(h.fragment, "http://view.test/next#part") == 0,
-          "history: the host takes each, the same address again replacing");
+          "history: the host takes each, the hash it has already no navigation, the same address replacing");
     os64_dom_navigation_t ask;
     check(!os64_dom_take_navigation(f.binding, &ask), "history: a fragment the host took is no ask");
     dom_script(&f, "location.href='#two';location.replace('#three');", "history: href and replace");
@@ -504,9 +504,10 @@ static void dom_view_history_cases(void)
     check(os64_dom_history_moved(f.binding, "http://view.test/next#back", "{\"n\":7}", 7),
           "history: the host moves the document");
     os64_js_outcome_t outcome;
-    check(os64_dom_history_event(f.binding, false, NULL, &outcome) == OS64_JS_OK, "history: popstate");
-    check(os64_dom_history_event(f.binding, true, "http://view.test/next#three", &outcome) == OS64_JS_OK,
-          "history: hashchange");
+    os64_dom_history_event_t pop = {.state = "{\"n\":7}", .length = 7, .entry = os64_dom_history_entry(f.binding)};
+    check(os64_dom_history_event(f.binding, &pop, &outcome) == OS64_JS_OK, "history: popstate");
+    os64_dom_history_event_t hash = {true, "http://view.test/next#three", "http://view.test/next#back", NULL, 0, 0};
+    check(os64_dom_history_event(f.binding, &hash, &outcome) == OS64_JS_OK, "history: hashchange");
     dom_script(&f, VIEW_ASSERT
         "assert(events.join()==='pop:{\"n\":7}:true:true:falsefalsefalse,hash:http://view.test/next#three>http://view.test/next#back:true',events.join());"
         "assert(location.href==='http://view.test/next#back'&&history.state.n===7);"
@@ -518,9 +519,17 @@ static void dom_view_history_cases(void)
         "history: what was heard");
     check(!os64_dom_history_moved(f.binding, NULL, NULL, 0) && !os64_dom_history_moved(f.binding, "x", NULL, 3),
           "history: a move with no address, or a length with no state, is refused");
-    check(os64_dom_history_event(f.binding, true, NULL, &outcome) == OS64_JS_BAD_ARGUMENT,
-          "history: a hashchange needs the old address");
-    check(os64_dom_history_event(NULL, false, NULL, &outcome) == OS64_JS_BAD_ARGUMENT, "history: NULL binding");
+    os64_dom_history_event_t no_old = {true, NULL, "http://view.test/x", NULL, 0, 0};
+    os64_dom_history_event_t no_new = {true, "http://view.test/x", NULL, NULL, 0, 0};
+    os64_dom_history_event_t no_state = {false, NULL, NULL, NULL, 3, 0};
+    check(os64_dom_history_event(f.binding, &no_old, &outcome) == OS64_JS_BAD_ARGUMENT &&
+              os64_dom_history_event(f.binding, &no_new, &outcome) == OS64_JS_BAD_ARGUMENT,
+          "history: a hashchange needs both addresses");
+    check(os64_dom_history_event(f.binding, &no_state, &outcome) == OS64_JS_BAD_ARGUMENT &&
+              os64_dom_history_event(f.binding, NULL, &outcome) == OS64_JS_BAD_ARGUMENT,
+          "history: a popstate's length needs its state, and an event is needed");
+    check(os64_dom_history_event(NULL, &pop, &outcome) == OS64_JS_BAD_ARGUMENT, "history: NULL binding");
+    check(os64_dom_history_entry(NULL) == 0, "history: a NULL binding names no entry");
     os64_dom_set_history(f.binding, NULL);
     dom_script(&f, VIEW_ASSERT "assert(history.length===1,'no host: one entry');", "history: no host");
     fixture_free(&f);
@@ -550,12 +559,95 @@ static void dom_view_off_cases(void)
     check(os64_dom_take_navigation(f.binding, &ask) && strcmp(ask.url, "http://view.test/page.html#x") == 0 &&
               h.fragments == 0,
           "modern off: a fragment is the ask it always was");
+    dom_script(&f, "history.back();history.go(-2);", "modern off: two traversals");
+    check(os64_dom_take_navigation(f.binding, &ask) && ask.kind == OS64_DOM_NAVIGATE_HISTORY && ask.delta == -2,
+          "modern off: the last traversal asked wins, as before the arc");
     v.view.scroll_y = 50;
     os64_js_outcome_t outcome;
     check(!os64_dom_view_step(f.binding, &outcome), "modern off: the view owes no event");
-    check(os64_dom_history_event(f.binding, false, NULL, &outcome) == OS64_JS_OK, "modern off: popstate is OK");
+    os64_dom_history_event_t pop = {.entry = os64_dom_history_entry(f.binding)};
+    check(os64_dom_history_event(f.binding, &pop, &outcome) == OS64_JS_OK, "modern off: popstate is OK");
     dom_script(&f, VIEW_ASSERT "assert(heard===0,'nothing dispatched');", "modern off: nothing heard");
     fixture_free(&f);
+}
+
+/* What a history event carries is what it was owed with, and a script's
+ * fragment navigation fires its popstate inside the script: the hash
+ * setter's own rule, the synchronous popstate, and an owed event read
+ * after other moves came between. */
+static void dom_view_owed_cases(void)
+{
+    DomFixture f = view_fixture(true, "http://view.test/p#a%20b");
+    if (!fixture_ready(&f)) return;
+    HistoryFake h = {.length = 1};
+    os64_dom_history_t host = {fake_history_update, fake_history_fragment, fake_history_length, &h};
+    os64_dom_set_history(f.binding, &host);
+    dom_script(&f, VIEW_ASSERT
+        "location.hash='a b';location.hash='#a b';location.hash='a%20b';"
+        "assert(location.href==='http://view.test/p#a%20b','the fragment it has: nothing');",
+        "owed: the hash setter's own rule");
+    check(h.fragments == 0, "owed: a hash the address already has is no navigation (HTML's hash setter)");
+    dom_script(&f, VIEW_ASSERT
+        "location.hash='q\"<>`';assert(location.hash==='#q%22%3C%3E%60','the fragment percent-encode set');"
+        "var log=[];addEventListener('popstate',e=>log.push('pop:'+JSON.stringify(e.state)+location.hash+':'+(e.state===history.state)));"
+        "location.hash='x';log.push('after');history.pushState({n:1},'');"
+        "assert(log.join()==='pop:null#x:true,after',log.join());"
+        "var thrower=()=>{throw Error('a listener that throws')};addEventListener('popstate',thrower);"
+        "location.hash='y';log.push('went on');removeEventListener('popstate',thrower);"
+        "assert(log.join()==='pop:null#x:true,after,pop:null#y:true,went on',log.join());",
+        "owed: a script's fragment navigation fires popstate inside it");
+    check(h.fragments == 3, "owed: each fragment navigation reached the host");
+    os64_js_outcome_t outcome;
+    check(os64_dom_take_report(f.binding, &outcome) && strstr(outcome.message, "a listener that throws") != NULL,
+          "owed: the throwing listener is reported, as a nested dispatch's is");
+    dom_script(&f, "var heard=[];onhashchange=e=>heard.push(e.oldURL.split('#')[1]+'>'+e.newURL.split('#')[1]);"
+        "addEventListener('popstate',e=>heard.push('pop:'+JSON.stringify(e.state)+':'+(e.state===history.state)));",
+        "owed: listeners");
+    uint64_t owed_for = os64_dom_history_entry(f.binding);
+    check(os64_dom_history_moved(f.binding, "http://view.test/p#c", "{\"now\":3}", 9),
+          "owed: another move comes before the owed events run");
+    os64_dom_history_event_t hash = {true, "http://view.test/p#a", "http://view.test/p#b", NULL, 0, 0};
+    os64_dom_history_event_t stale = {false, NULL, NULL, "{\"then\":1}", 10, owed_for};
+    os64_dom_history_event_t current = {.state = "{\"now\":3}", .length = 9,
+                                        .entry = os64_dom_history_entry(f.binding)};
+    check(os64_dom_history_event(f.binding, &hash, &outcome) == OS64_JS_OK &&
+              os64_dom_history_event(f.binding, &stale, &outcome) == OS64_JS_OK &&
+              os64_dom_history_event(f.binding, &current, &outcome) == OS64_JS_OK,
+          "owed: the events run");
+    dom_script(&f, VIEW_ASSERT
+        "assert(heard.join()==='a>b,pop:{\"then\":1}:false,pop:{\"now\":3}:true',heard.join());",
+        "owed: each carries what it was owed with; only the current entry's is history.state");
+    fixture_free(&f);
+}
+
+/* The arc's handler types are handlers only with the switch on, as
+ * properties and as content attributes alike: with it off a
+ * `<body onhashchange>` or a `<div onscroll>` is an ordinary attribute,
+ * which an event the page dispatches itself does not run. */
+static void dom_view_attribute_cases(void)
+{
+    for (int modern = 0; modern < 2; modern++) {
+        DomFixture f = view_fixture(modern != 0, "http://view.test/page.html");
+        if (!fixture_ready(&f)) continue;
+        char source[1024];
+        snprintf(source, sizeof(source), VIEW_ASSERT
+            "var ran=[];document.body.setAttribute('onhashchange','ran.push(\"hash\")');"
+            "document.body.setAttribute('onpopstate','ran.push(\"pop\")');"
+            "var d=document.createElement('div');d.setAttribute('onscroll','ran.push(\"scroll\")');"
+            "d.setAttribute('onresize','ran.push(\"resize\")');document.body.appendChild(d);"
+            "dispatchEvent(new Event('hashchange'));dispatchEvent(new Event('popstate'));"
+            "d.dispatchEvent(new Event('scroll'));d.dispatchEvent(new Event('resize'));"
+            "assert(ran.join()===%s,ran.join());"
+            "assert(typeof onhashchange===%s&&typeof d.onscroll===%s);",
+            modern ? "'hash,pop,scroll,resize'" : "''", modern ? "'function'" : "'undefined'",
+            modern ? "'function'" : "'undefined'");
+        dom_script(&f, source, modern ? "attributes: the arc's handlers with the switch on"
+                                      : "attributes: no arc handler with the switch off");
+        check(os64_dom_listens(f.binding, "hashchange") == (modern != 0) &&
+                  os64_dom_listens(f.binding, "scroll") == (modern != 0),
+              "attributes: listens counts the arc's attributes only with the switch on");
+        fixture_free(&f);
+    }
 }
 
 /* Every binding allocation the slice's operations make, failed in turn:
@@ -613,7 +705,7 @@ static void dom_view_allocation_cases(void)
  * turn. A refused move answers false and leaves the address and the state
  * as they were; an event that could not be built or delivered reports
  * through its outcome; neither leaks (fixture_free counts). */
-enum { HOST_MOVE, HOST_POP, HOST_HASH, HOST_RESIZE, HOST_SCROLL, HOST_CHANGE, HOST_OPS };
+enum { HOST_MOVE, HOST_POP, HOST_POP_STALE, HOST_HASH, HOST_RESIZE, HOST_SCROLL, HOST_CHANGE, HOST_OPS };
 
 static DomFixture host_op_fixture(int op, ViewFake *v, os64_dom_view_provider_t *provider)
 {
@@ -641,12 +733,25 @@ static bool host_op(DomFixture *f, ViewFake *v, int op, os64_js_status_t *status
     switch (op) {
     case HOST_MOVE:
         return os64_dom_history_moved(f->binding, "http://view.test/page.html#moved", "{\"n\":1}", 7);
-    case HOST_POP:
-        *status = os64_dom_history_event(f->binding, false, NULL, &outcome);
+    case HOST_POP: {
+        os64_dom_history_event_t pop = {.entry = os64_dom_history_entry(f->binding)};
+        *status = os64_dom_history_event(f->binding, &pop, &outcome);
         return true;
-    case HOST_HASH:
-        *status = os64_dom_history_event(f->binding, true, "http://view.test/page.html#old", &outcome);
+    }
+    case HOST_POP_STALE: {
+        // Owed for an entry that is no longer the current one: its state
+        // is read from the JSON it carried.
+        os64_dom_history_event_t pop = {.state = "{\"old\":2}", .length = 9,
+                                        .entry = os64_dom_history_entry(f->binding) + 1};
+        *status = os64_dom_history_event(f->binding, &pop, &outcome);
         return true;
+    }
+    case HOST_HASH: {
+        os64_dom_history_event_t hash = {true, "http://view.test/page.html#old", "http://view.test/page.html",
+                                         NULL, 0, 0};
+        *status = os64_dom_history_event(f->binding, &hash, &outcome);
+        return true;
+    }
     case HOST_RESIZE:
         v->view.height = 320;            // the list reads only the width
         break;
@@ -666,7 +771,7 @@ static void dom_view_host_allocation_cases(void)
 {
     // What the page heard, as JS string literals.
     static const char *const heard[HOST_OPS] = {
-        "''", "'pop:{\"was\":1}'", "'hash:http://view.test/page.html'", "'resize'", "'scroll'",
+        "''", "'pop:{\"was\":1}'", "'pop:{\"old\":2}'", "'hash:http://view.test/page.html'", "'resize'", "'scroll'",
         "'change:true:(min-width: 500px)'",
     };
     for (int op = 0; op < HOST_OPS; op++) {
@@ -721,6 +826,8 @@ static void dom_view_edge_cases(void)
     os64_dom_set_computed(f.binding, fake_computed, &c);
     dom_script(&f, VIEW_ASSERT
         "var deep=matchMedia('('.repeat(100000)+')'.repeat(100000));assert(!deep.matches&&deep.media==='not all');"
+        "var q='(width)';for(var i=0;i<60;i++)q='('+q+')';var nested=matchMedia(q);"
+        "assert(nested.matches&&nested.media===q,'nested within the bound: read once a level');"
         "var long=matchMedia('(min-width: 1px) and '.repeat(50000)+'(color)');assert(long.matches,'a long list');"
         "var big=matchMedia('x'.repeat(1<<20));assert(!big.matches&&big.media.length===1<<20,'a long unknown type');"
         "assert(!matchMedia('screen\\0, print').matches,'a NUL is part of the type, not its end');"
@@ -743,5 +850,7 @@ static void dom_view_cases(void)
     dom_view_history_cases();
     dom_view_off_cases();
     dom_view_edge_cases();
+    dom_view_owed_cases();
+    dom_view_attribute_cases();
 }
 #undef VIEW_ASSERT

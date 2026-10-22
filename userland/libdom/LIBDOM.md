@@ -292,7 +292,9 @@ the first click.
 window have an on<type> property, and an on<type> content attribute is a
 handler. With the Modern Web switch on, so do `scroll` and `resize`; window
 alone has `onpopstate` and `onhashchange`, and a MediaQueryList `onchange`
-(§ The view, computed style and the session's history). A target's handler is one slot in its listener list, in the place
+(§ The view, computed style and the session's history). With it off none
+of the four is a property, and their content attributes are ordinary
+attributes that no event runs. A target's handler is one slot in its listener list, in the place
 it was first set; a slot for an attribute the parser or innerHTML wrote goes
 first (an element has its attributes before any script can reach it), and a
 script's `setAttribute` makes its slot then. Window's slots come from the
@@ -345,8 +347,9 @@ of the page is recorded and performed by the host after the task.
 (`os64_dom_take_navigation`): `location.href =`, `location = `,
 `location.assign`, `replace`, `reload`, `hash =` (the address with its
 fragment replaced), `history.back/forward/go` (`go(0)` reloads), a link's
-`click()`, and a form's submission. Consecutive `back/forward/go` in one
-task add up to one traversal of their sum. Addresses are resolved exactly as
+`click()`, and a form's submission. With the Modern Web switch on,
+consecutive `back/forward/go` in one task add up to one traversal of their
+sum. Addresses are resolved exactly as
 a link's are, by libpage's own steps with the base as the tree stands
 (`os64_dom_resolve`, which a host uses for a script's `src` too); `hash =`
 stays in the page. With the Modern Web switch on and a history host

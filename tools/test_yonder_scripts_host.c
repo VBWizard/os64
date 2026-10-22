@@ -3229,6 +3229,162 @@ static void loop_view_history_short(void) {
     }
     check(count>0 && moved>0 && asked>retired,"history short: the sweep reaches the session's allocations");
 }
+/* The body of the page the trip in flight fetched (loop_page's, without
+ * starting a trip). */
+static void post_arriving(const char *rest) {
+    char *html=pad_page(rest);
+    way_head_t h=stream_head("text/html","",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body((const uint8_t *)html,strlen(html),YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    free(html);
+}
+/* Whether the session is `back` behind the page on screen (oldest first,
+ * by address), the page at `here`, and `ahead` before it (nearest first);
+ * each list is addresses joined by `,` after http://fixture.test. */
+static bool session_is(const char *back, const char *here, const char *ahead) {
+    char got_back[512]="", got_ahead[512]="";
+    for(int32_t i=0;i<g.way.depth;i++)
+        os64_snprintf(got_back+strlen(got_back),sizeof(got_back)-strlen(got_back),"%s%s",i?",":"",
+                      g.way.history[i].url+strlen("http://fixture.test"));
+    for(int32_t i=g.way.ahead-1;i>=0;i--)
+        os64_snprintf(got_ahead+strlen(got_ahead),sizeof(got_ahead)-strlen(got_ahead),"%s%s",
+                      i<g.way.ahead-1?",":"",g.way.forward[i].url+strlen("http://fixture.test"));
+    bool same=os64_streq(got_back,back) && os64_streq(g.page.way.url+strlen("http://fixture.test"),here) &&
+              os64_streq(got_ahead,ahead);
+    if(!same)
+        fprintf(stderr,"session: [%s] %s [%s], wanted [%s] %s [%s]\n",got_back,
+                g.page.way.url+strlen("http://fixture.test"),got_ahead,back,here,ahead);
+    return same;
+}
+/* The cold reader's findings on slice 1b, each a case (the orchestrator's
+ * rulings, MODERN_WEB_BRIEFS.md § Slice 1b). */
+static void loop_view_owed(void) {
+    // A hashchange carries the addresses it was owed with, and a script's
+    // fragment navigation fires its popstate there and then, with the
+    // fragment entry's state.
+    loop_page("<p id=out>-</p><script>var log=[];function o(){document.getElementById('out').textContent=log.join(',')}"
+        "addEventListener('hashchange',function(e){log.push(e.oldURL.split('#')[1]+'>'+e.newURL.split('#')[1]);o()});"
+        "addEventListener('popstate',function(e){log.push('pop:'+JSON.stringify(e.state)+location.hash);o()});"
+        "onload=function(){location.hash='a';location.hash='b';history.pushState({n:1},'');log.push('then');o()}</script>");
+    check(loop_settle() && view_turns() && probe_text_is("out","pop:null#a,pop:null#b,then,undefined>a,a>b"),
+        "owed: each hashchange carries its own addresses, each popstate its entry's state, at once");
+    loop_drop();
+    // The hash a page already has is no navigation: no entry, no event.
+    loop_page("<p id=out>-</p><script>var log=[];function o(){document.getElementById('out').textContent=log.join(',')}"
+        "addEventListener('popstate',function(){log.push('pop');o()});"
+        "addEventListener('hashchange',function(){log.push('hash');o()});"
+        "onload=function(){location.hash='a';setTimeout(function(){log.push('then');location.hash='a';o()},10)}</script>");
+    check(loop_settle() && view_turns(),"owed: the hash page arrives");
+    now_ms+=100;
+    check(loop_settle() && view_turns() && probe_text_is("out","pop,hash,then") && g.way.depth==1,
+        "owed: setting the hash it has changes nothing (HTML's hash setter)");
+    loop_drop();
+}
+static void loop_view_refetched(void) {
+    // A fetched Back gives the document its entry's state; so does a
+    // reload, which is the same entry again.
+    loop_page("<p id=out>-</p><script>onload=function(){history.pushState({k:1},'','/kept')}</script>");
+    check(loop_settle() && view_turns() && os64_streq(g.page.way.url,"http://fixture.test/kept"),
+        "refetched: the page pushes its state");
+    start_trip("http://fixture.test/other",NULL,NAV_GO,NULL);
+    post_arriving("<p>other</p>");
+    check(loop_settle() && view_turns() && g.way.depth==2,"refetched: another page");
+    click_back(NULL,NULL);
+    check(g.stream.active,"refetched: Back to the pushed entry fetches it");
+    post_arriving("<p id=out>-</p><script>document.getElementById('out').textContent="
+        "JSON.stringify(history.state)+':'+history.length</script>");
+    check(loop_settle() && view_turns() && probe_text_is("out","{\"k\":1}:3") &&
+          g.page.entry_state!=NULL && os64_streq(g.page.entry_state,"{\"k\":1}"),
+        "refetched: the document that comes back reads the entry's state (HTML's restore)");
+    click_reload(NULL,NULL);
+    post_arriving("<p id=out>-</p><script>document.getElementById('out').textContent=JSON.stringify(history.state)</script>");
+    check(loop_settle() && view_turns() && probe_text_is("out","{\"k\":1}"),
+        "refetched: a reload is the same entry, its state with it");
+    loop_drop();
+}
+static void loop_view_identity(void) {
+    // A fragment link on the page on screen while Back fetches another
+    // entry: the traversal lands on the entry it named, and the change the
+    // page made meanwhile never joins the session (HTML's traversal queue
+    // finalizes it only while its document is still the active one).
+    loop_page("<p>P</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns(),"identity: P");
+    start_trip("http://fixture.test/A",NULL,NAV_GO,NULL);
+    post_arriving("<style>body{margin:0}</style><a id=l href=#sec>go</a><div style=height:2000px></div>"
+        "<h2 id=sec>s</h2><script>history.replaceState(null,'','/A')</script>");
+    check(loop_settle() && view_turns() && session_is("/P","/A",""),"identity: on A, P behind");
+    click_back(NULL,NULL);
+    input_click_at("l");
+    check(g.stream.active && session_is("/P","/A#sec",""),
+        "identity: the link moves A's address, and not the session, while P is fetched");
+    post_arriving("<p>P again</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns() && session_is("","/P","/A"),
+        "identity: Back lands on the entry it named, A ahead as it was");
+    // The same change with the traversal stopped instead joins the session.
+    click_forward(NULL,NULL);
+    post_arriving("<a id=l href=#sec>go</a><script>history.replaceState(null,'','/A')</script>");
+    check(loop_settle() && view_turns() && session_is("/P","/A",""),"identity: Forward to A");
+    click_back(NULL,NULL);
+    input_click_at("l");
+    stop_trip();
+    check(!g.stream.active && session_is("/P,/A","/A#sec",""),
+        "identity: a stopped traversal leaves the change the page made, as its entry");
+    loop_drop();
+}
+static void unshown_back_case(const char *when, const char *script) {
+    char body[512];
+    loop_page("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns(),"unshown back: P");
+    start_trip("http://fixture.test/A",NULL,NAV_GO,NULL);
+    os64_snprintf(body,sizeof(body),"<p id=out>A</p><script>history.replaceState(null,'','/A');%s</script><p>tail</p>",
+                  script);
+    post_arriving(body);
+    loop_settle();
+    view_turns();
+    if(g.stream.active) {                   // `load`'s Back fetches P
+        post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
+        loop_settle();
+        view_turns();
+    }
+    char what[160];
+    os64_snprintf(what,sizeof(what),"unshown back: history.back() %s lands on P, A ahead",when);
+    check(probe_text_is("out","P") && session_is("","/P","/A"),what);
+    loop_drop();
+}
+static void loop_view_unshown_back(void) {
+    // One rule wherever the page is in its arrival: its navigation
+    // committed when its response came, so Back from it is P.
+    unshown_back_case("during the parse","history.back()");
+    unshown_back_case("at DOMContentLoaded","document.addEventListener('DOMContentLoaded',function(){history.back()})");
+    unshown_back_case("at load","onload=function(){history.back()}");
+    unshown_back_case("in a later task","onload=function(){setTimeout(function(){history.back()},0)}");
+}
+static void loop_view_passed_over(void) {
+    // A traversal over more than one entry: only the entry left takes the
+    // scroll the person is at; the ones passed over keep their own.
+    loop_page("<style>body{margin:0;height:5000px}</style><p id=x>x</p>");
+    check(loop_settle() && view_turns(),"passed over: a tall page");
+    scroll_to(0,100); page_update(&g.page,"http://fixture.test/final#a",NULL,0,true,true);
+    scroll_to(0,200); page_update(&g.page,"http://fixture.test/final#b",NULL,0,true,true);
+    scroll_to(0,300);
+    session_go(-2);
+    check(os64_streq(g.page.way.url,"http://fixture.test/final") && g.sy==100,"passed over: go(-2) lands at 100");
+    session_go(1);
+    check(os64_streq(g.page.way.url,"http://fixture.test/final#a") && g.sy==200,
+        "passed over: Forward to the entry passed over is at its own 200");
+    session_go(1);
+    check(os64_streq(g.page.way.url,"http://fixture.test/final#b") && g.sy==300,
+        "passed over: and the one left is at 300");
+    loop_drop();
+}
+static void loop_view_cold_cases(void) {
+    loop_view_owed();
+    loop_view_refetched();
+    loop_view_identity();
+    loop_view_unshown_back();
+    loop_view_passed_over();
+}
 /* With the switch off the names are absent, and the window's own history
  * (a fragment link's entry) is the window's whatever the switch says. */
 static void loop_view_off(void) {
@@ -3255,6 +3411,7 @@ static void loop_view_cases(void) {
     loop_view_media();
     loop_view_history();
     loop_view_history_short();
+    loop_view_cold_cases();
     loop_view_off();
 }
 static void loop_cases(void) {

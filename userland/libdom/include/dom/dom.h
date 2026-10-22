@@ -315,11 +315,14 @@ typedef struct {
     /* A fragment navigation the document's script asked for (location.hash
      * =, or an address that differs from the document's only in its
      * fragment): the host adds the entry `url` (replaces the current one
-     * when `replace`), scrolls to its fragment, and owes popstate and
-     * hashchange (os64_dom_history_event). On true the binding makes `url`
-     * the document's address and null its state. False when the host
-     * could not: nothing changed, and the binding asks for the address as
-     * a navigation instead (os64_dom_take_navigation). */
+     * when `replace`), scrolls to its fragment, and owes hashchange when
+     * the fragment moved (os64_dom_history_event). On true the binding
+     * makes `url` the document's address and null its state, and fires
+     * popstate itself, inside the script that asked (HTML § Navigate to a
+     * fragment, whose "update document for history step application"
+     * fires it then and there). False when the host could not: nothing
+     * changed, and the binding asks for the address as a navigation
+     * instead (os64_dom_take_navigation). */
     bool (*fragment)(void *opaque, const char *url, bool replace);
     /* history.length: the entries in the session. */
     uint32_t (*length)(void *opaque);
@@ -341,10 +344,32 @@ void os64_dom_set_history(os64_dom_t *dom, const os64_dom_history_t *history);
  * move and moves them only on true, or the window would show one address
  * while the page's scripts read another. Owner thread, outside JS. */
 bool os64_dom_history_moved(os64_dom_t *dom, const char *url, const char *state, size_t length);
-/* `popstate` at window, its state history.state's (`hashchange` false), or
- * `hashchange` from `old_url` to the document's address now, each as one
- * task. OK with nothing run when modern is off or nothing could hear it. */
-os64_js_status_t os64_dom_history_event(os64_dom_t *dom, bool hashchange, const char *old_url,
+/* The document's current entry and its state, named: a new name at every
+ * state update, fragment navigation and move. A host takes it when it owes
+ * a popstate, so the event knows whether its entry is still the current
+ * one. 0 for a NULL binding. */
+uint64_t os64_dom_history_entry(const os64_dom_t *dom);
+/* One of the history's events as the host OWED it: what it carries is
+ * captured then, not read when it runs, since other moves may come
+ * between. */
+typedef struct {
+    bool hashchange;
+    /* hashchange: the document's address before and after the move it was
+     * owed for. */
+    const char *old_url, *new_url;
+    /* popstate: the state of the entry it was owed for, `length` bytes of
+     * NUL-terminated JSON (NULL for null), and that entry's name
+     * (os64_dom_history_entry) when it was owed. While that entry is still
+     * the current one the event's state is history.state itself; after,
+     * it is read from this JSON. */
+    const char *state;
+    size_t length;
+    uint64_t entry;
+} os64_dom_history_event_t;
+/* `popstate` or `hashchange` at window, as one task. OK with nothing run
+ * when modern is off or nothing could hear it; BAD_ARGUMENT for a
+ * hashchange without both addresses, or a length with no state. */
+os64_js_status_t os64_dom_history_event(os64_dom_t *dom, const os64_dom_history_event_t *event,
                                         os64_js_outcome_t *outcome);
 /* Whether the page set history.scrollRestoration to "manual": the host
  * then leaves the scroll where it is when it traverses to another entry
@@ -384,7 +409,9 @@ os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node
 bool os64_dom_listens(os64_dom_t *dom, const char *type);
 /* Which event types the document's on<type> content attributes name, as a
  * mask os64_dom_handler_bit reads: the walk os64_dom_listens counts with.
- * It needs no runtime, so a host can ask before making one. */
+ * It needs no runtime, so a host can ask before making one. It knows no
+ * binding, so it names the Modern Web arc's types whatever the switch
+ * says; os64_dom_listens counts them only with the switch on. */
 uint32_t os64_dom_handler_attributes(const os64_html_document_t *doc);
 /* The bit for `type` in that mask; 0 for a type no attribute can name
  * (DOMContentLoaded, or one outside the types the host dispatches). */
@@ -399,9 +426,9 @@ uint64_t os64_dom_timer_next(const os64_dom_t *dom);
 bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
 
 /* The navigation a script asked for since the last take, if any: the last
- * ask wins, but history.go()s in a row add up to one delta (OS64_DOM_
- * NAVIGATE_HISTORY), as HTML runs each after the one before it. False
- * when there is none. */
+ * ask wins, but with the Modern Web switch on history.go()s in a row add
+ * up to one delta (OS64_DOM_NAVIGATE_HISTORY), as HTML runs each after the
+ * one before it. False when there is none. */
 bool os64_dom_take_navigation(os64_dom_t *dom, os64_dom_navigation_t *ask);
 /* An error a nested dispatch or a handler compile reported inside a task the
  * host did not open through libdom (a script run with os64_js_run). The

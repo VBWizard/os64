@@ -38,10 +38,19 @@ static bool has_handler_name(int kind)
     return kind >= 0 && kind != D_EVENT_DOM_CONTENT_LOADED;
 }
 
+/* Whether on<type> is a handler on this page: the arc's types (SCROLL on)
+ * only with the Modern Web switch on, so a content attribute for one is
+ * an ordinary attribute with it off, as it was before the arc. */
+static bool handler_on(const os64_dom_t *dom, int kind)
+{
+    return has_handler_name(kind) && (kind < D_EVENT_SCROLL || dom->options.modern);
+}
+
 /* HTML's "window-reflecting body element event handler set" and the body's
  * WindowEventHandlers, as far as the types dispatched here reach: the body's
- * onload is window's, and so are its onscroll, onresize, onpopstate and
- * onhashchange. */
+ * onload, onfocus and onblur are window's, and so are its onscroll,
+ * onresize, onpopstate and onhashchange (handlers only with the switch on,
+ * handler_on). */
 static bool window_reflecting(int kind)
 {
     return kind == D_EVENT_LOAD || kind == D_EVENT_FOCUS || kind == D_EVENT_BLUR ||
@@ -252,7 +261,7 @@ static bool body_like(const os64_html_node_t *node)
 /* The element whose content attribute feeds this target's slot. */
 static const os64_html_node_t *attribute_source(os64_dom_t *dom, DValue *entry, int kind)
 {
-    if (!has_handler_name(kind)) return NULL;
+    if (!handler_on(dom, kind)) return NULL;
     if (entry == dom->window) return window_reflecting(kind) ? body_element(dom) : NULL;
     const os64_html_node_t *node = entry->node;
     if (node == NULL || node->kind != OS64_HTML_ELEMENT) return NULL;
@@ -336,7 +345,7 @@ int d_handler_attribute_set(os64_dom_t *dom, JSContext *ctx, const os64_html_nod
                             const char *name)
 {
     int kind = handler_kind(name);
-    if (kind < 0 || node->kind != OS64_HTML_ELEMENT) return 0;
+    if (kind < 0 || !handler_on(dom, kind) || node->kind != OS64_HTML_ELEMENT) return 0;
     DValue *entry = body_like(node) && window_reflecting(kind) ? dom->window : d_find(dom, node);
     if (entry == NULL) return 0;
     return slot_for(dom, ctx, entry, kind, false) != NULL ? 0 : -1;
@@ -597,9 +606,9 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
     return result;
 }
 
-static bool element_has_handler(const os64_html_node_t *node, int kind)
+static bool element_has_handler(const os64_dom_t *dom, const os64_html_node_t *node, int kind)
 {
-    return has_handler_name(kind) && node->kind == OS64_HTML_ELEMENT &&
+    return handler_on(dom, kind) && node->kind == OS64_HTML_ELEMENT &&
         !(body_like(node) && window_reflecting(kind)) && handler_attribute(node, kind) != NULL;
 }
 
@@ -634,7 +643,7 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     size_t count = 0;
     for (const os64_html_node_t *at = node; at != NULL; at = at->parent) {
         DValue *entry = d_find(dom, at);
-        if (entry == NULL && element_has_handler(at, kind)) {
+        if (entry == NULL && element_has_handler(dom, at, kind)) {
             JSValue wrapper = d_wrap(dom, ctx, at);
             if (JS_IsException(wrapper)) { JS_FreeValue(ctx, target); d_free(dom, path); return -1; }
             JS_FreeValue(ctx, wrapper);
@@ -836,6 +845,9 @@ static uint32_t attribute_mask(os64_dom_t *dom)
     uint64_t version = os64_html_version(dom->document);
     if (dom->attribute_scanned && dom->attribute_version == version) return dom->attribute_mask;
     uint32_t mask = os64_dom_handler_attributes(dom->document);
+    // With the switch off the arc's types' attributes are no handlers.
+    if (!dom->options.modern)
+        for (int kind = D_EVENT_SCROLL; kind < D_EVENT_COUNT; kind++) mask &= ~(1u << kind);
     dom->attribute_mask = mask;
     dom->attribute_version = version;
     dom->attribute_scanned = true;
