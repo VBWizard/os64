@@ -1053,13 +1053,23 @@ bool flow_outline_rect(const flow_box_t *box, os64_gui_rect_t *out)
     int64_t w = size_px(s->outline_width);
     if (w <= 0 || s->outline_style == FLOW_BORDER_NONE || !paints_frame(box))
         return false;
-    // The offset may be negative: it may take the ring inside the border
-    // box, and past its middle, where the ring's inner edge is gone.
+    // The offset may be negative and take the ring inside the border box;
+    // its outside is then held to twice its width at least, each way on
+    // its own, about the box's middle (CSS UI 4 § 3.5), so a ring is
+    // always drawn.
     int64_t off = s->outline_offset;
     int64_t grow = (off >= 0 ? (off + 32) / 64 : -((32 - off) / 64)) + w;
-    *out = held_rect((int64_t)box->rect.x - grow, (int64_t)box->rect.y - grow,
-                     (int64_t)box->rect.x + box->rect.w + grow,
-                     (int64_t)box->rect.y + box->rect.h + grow);
+    int64_t x0 = (int64_t)box->rect.x - grow, x1 = (int64_t)box->rect.x + box->rect.w + grow;
+    int64_t y0 = (int64_t)box->rect.y - grow, y1 = (int64_t)box->rect.y + box->rect.h + grow;
+    if (x1 - x0 < 2 * w) {
+        x0 = (int64_t)box->rect.x + ((int64_t)box->rect.w - 2 * w) / 2;
+        x1 = x0 + 2 * w;
+    }
+    if (y1 - y0 < 2 * w) {
+        y0 = (int64_t)box->rect.y + ((int64_t)box->rect.h - 2 * w) / 2;
+        y1 = y0 + 2 * w;
+    }
+    *out = held_rect(x0, y0, x1, y1);
     return out->w > 0 && out->h > 0;
 }
 

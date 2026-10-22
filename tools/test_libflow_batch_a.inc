@@ -24,8 +24,9 @@ static const flow_box_t *batch_a_box(const flow_box_t *b, os64_html_tag_t tag, f
 // width, 1 + 2, on every side: -3 -3 26 16, reaching 3 past the box on
 // every side. Its ink is measured past its overflow, which its span's 20
 // tall line takes 10 below it: 3 above, right and left, none below. The
-// span is an inline box's piece, which draws none; a negative offset past
-// the box's middle draws none either (an empty rect).
+// span is an inline box's piece, which draws none. A negative offset
+// that would turn the ring inside out is held: the ring's outside is
+// never under twice its width each way (CSS UI 4 § 3.5).
 static void outline_door_cases(void)
 {
     Sheeted p;
@@ -49,10 +50,14 @@ static void outline_door_cases(void)
     expect("outline: in the box's ink, past its overflow", strcmp(ink, "3 3 0 3") == 0, ink);
     expect("outline: an inline box's piece draws none (booked)",
            span != NULL && !flow_outline_rect(span, &r), NULL);
-    // p: 10 x 4 at y 30 (after the div's 10 and its 20 tall line), less 4
-    // a side and plus 1: -3 across a 4px height is no rect.
-    expect("outline: an offset that turns the ring inside out draws none",
-           para != NULL && !flow_outline_rect(para, &r), NULL);
+    // p: 10 x 4 at y 10, right after the div's 10 (its 20 tall line
+    // overflows it), less 4 a side and plus 1: across, 10 - 6 = 4, which is
+    // at least twice the width, 2, so 3..7; down, 4 - 6 = -2 is held to 2,
+    // about the p's middle: 11..13.
+    bool held = para != NULL && flow_outline_rect(para, &r);
+    snprintf(ink, sizeof(ink), "%d %d %d %d", r.x, r.y, r.w, r.h);
+    expect("outline: an offset that would turn the ring inside out is held to twice its width",
+           held && strcmp(ink, "3 11 4 2") == 0, ink);
     flow_free(tree);
     sheeted_close(&p);
 }

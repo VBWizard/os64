@@ -1269,7 +1269,8 @@ os64_gui_rect_t flow_decoration_rect(const flow_box_t *box, uint32_t line);
 // Where the painter draws a box's outline (CSS UI 4 § 3): its border box
 // grown on every side by the outline's offset and then its width, the
 // outline the ring between that and the border box grown by the offset
-// alone. False for a box that draws none: no width, a style of none, or a
+// alone — or, where a negative offset would make it smaller, twice the
+// width each way, about the box's middle (§ 3.5). False for a box that draws none: no width, a style of none, or a
 // box that paints no frame of its own (a text, a line, an inline box's
 // piece — whose outline is booked).
 bool flow_outline_rect(const flow_box_t *box, os64_gui_rect_t *out);
