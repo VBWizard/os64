@@ -516,3 +516,12 @@ int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     JS_FreeValue(ctx,event);
     return result;
 }
+
+int d_string_tag(JSContext *ctx, JSValueConst object, const char *name)
+{
+    JSAtom key = string_tag_key(ctx);
+    if (key == JS_ATOM_NULL) return -1;
+    int result = string_tag(ctx, object, key, name);
+    JS_FreeAtom(ctx, key);
+    return result;
+}

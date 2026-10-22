@@ -329,6 +329,8 @@ void os64_dom_drain(os64_dom_t *dom)
     d_storage_drain(dom);
     d_event_drain(dom);
     d_timer_drain(dom);
+    /* The requests out are cancelled with the host and forgotten. */
+    d_fetch_drain(dom);
     for (DValue *entry = dom->values; entry != NULL; entry = entry->next) {
         JS_FreeValueRT(dom->engine, entry->value);
         entry->value = JS_UNDEFINED;
@@ -347,6 +349,7 @@ void os64_dom_free(os64_dom_t *dom)
         query = next;
     }
     d_timer_free(dom);
+    d_fetch_free(dom);
     d_window_free(dom);
     d_storage_free(dom);
     for (DValue *entry = dom->values; entry != NULL;) {
@@ -363,9 +366,9 @@ void os64_dom_free(os64_dom_t *dom)
 }
 
 size_t os64_dom_bytes(const os64_dom_t *dom) { return dom != NULL ? dom->bytes : 0; }
-/* The three registries: wrappers and other held values, listener callbacks,
- * and timer callbacks with their arguments. */
+/* The four registries: wrappers and other held values, listener callbacks,
+ * timer callbacks with their arguments, and what the requests out hold. */
 size_t os64_dom_registry_count(const os64_dom_t *dom)
 {
-    return dom != NULL ? dom->retained + dom->listeners_held + dom->timers_held : 0;
+    return dom != NULL ? dom->retained + dom->listeners_held + dom->timers_held + dom->requests_held : 0;
 }

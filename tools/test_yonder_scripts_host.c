@@ -209,6 +209,9 @@ void *os64_calloc(size_t n, size_t z) {
  * which runs here for real: the cases and the WPT runner say what each
  * address answers, and read back which requests a page made. */
 #include "test_fetch_fake.inc"
+/* The jar's and the preflight cache's locks yield under contention; this
+ * host's one thread never contends. */
+void os64_yield(void) {}
 const os64_font_backend_t *os64_freetype_backend_v1(void) { return flow_test_backend(); }
 void os64_ui_theme_current(os64_ui_theme_t *theme, uint64_t *installed) {
     os64_ui_theme_defaults(theme); *installed=0;
@@ -4754,14 +4757,14 @@ static void diag_page_cases(void) {
     loop_drop();
     check(has(diag_file("/tmp/diag",name),"\nwritten: when the page was left\n"),"diag: leaving rewrites the file");
 
-    /* typeof fetch: recorded, and the page's path unchanged. */
+    /* typeof noSuchGlobal: recorded, and the page's path unchanged. */
     loop_page("<p id=out>x</p><script>document.getElementById('out').textContent="
-        "String('fetch' in window)+' '+typeof fetch+' '+(window.fetch===undefined)+' '+(self.fetch===undefined)</script>");
+        "String('noSuchGlobal' in window)+' '+typeof noSuchGlobal+' '+(window.noSuchGlobal===undefined)+' '+(self.noSuchGlobal===undefined)</script>");
     check(loop_settle() && probe_text_is("out","false undefined true true"),
-        "diag: the page that asks for fetch sees what it always saw");
+        "diag: the page that asks for noSuchGlobal sees what it always saw");
     yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
-    check(has(text,"\nverdict: 1 MISSING\nMISSING global fetch (3)\n") && !has(text,"global self"),
-        "diag: `typeof fetch`, `window.fetch` and `self.fetch` are one MISSING line counting all three asks");
+    check(has(text,"\nverdict: 1 MISSING\nMISSING global noSuchGlobal (3)\n") && !has(text,"global self"),
+        "diag: `typeof noSuchGlobal`, `window.noSuchGlobal` and `self.noSuchGlobal` are one MISSING line counting all three asks");
     check(!strcmp(g.badge_text,"MISSING 1") && !g.badge.hidden,"diag: the badge shows the file's own token and count");
     loop_drop();
 

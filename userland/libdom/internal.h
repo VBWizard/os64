@@ -3,6 +3,7 @@
 
 #include "dom/dom.h"
 #include "os64/js_engine.h"
+#include "way/origin.h"
 #include "os64/mem.h"
 #include "os64/str.h"
 #include "quickjs.h"
@@ -14,6 +15,7 @@ typedef struct DQuery DQuery;
 typedef struct DListener DListener;
 typedef struct DTimer DTimer;
 typedef struct DScript DScript;
+typedef struct DRequest DRequest;
 typedef struct DActiveEvent { struct DActiveEvent *previous; JSValue value; } DActiveEvent;
 /* The wrappers' prototypes, one per kind of node the binding tells apart
  * (node.c's d_node_install builds the chain). An HTML element is an
@@ -51,6 +53,11 @@ struct DValue {
     DValue *style, *class_list, *dataset;
     DQuery *child_nodes, *children, *images, *forms, *elements;
     DListener *listeners, *last_listener;
+    /* A COLLECTABLE plain target's (d_event_target_init): this record is
+     * the first member of the object's own state, outside the registry;
+     * `value` is the object itself, not a reference; its listeners'
+     * callbacks are traced by the object's gc_mark and freed with it. */
+    bool engine_held;
 };
 struct DQuery {
     os64_dom_t *dom;
@@ -77,6 +84,9 @@ struct DListener {
     int kind;
     uint8_t handler;
     bool capture, once, removed;
+    /* On a collectable plain target: its callback is the target's to trace
+     * and free, not one of the registry's values. */
+    bool engine;
 };
 /* DListener.handler: zero for a listener, else the state of a handler slot.
  * An ERROR slot failed to compile its attribute and stays absent until the
@@ -172,6 +182,14 @@ struct os64_dom {
     /* Symbol.iterator as the engine made it, for reading an iterable a
      * page hands over (url.c). */
     DValue *iterator_symbol;
+    /* A script's requests (slice 2): DOMException's prototype, the host's
+     * network, the requests out with the next token, and how many engine
+     * values they hold (the registry's fourth list). */
+    DValue *exception_prototype, *file_prototype, *form_prototype, *progress_prototype;
+    os64_dom_network_t network;
+    DRequest *requests;
+    uint32_t request_token;
+    size_t requests_held;
 };
 typedef struct { char *data; size_t length; } DString;
 
@@ -207,6 +225,13 @@ void d_event_drain(os64_dom_t *dom);
 void d_event_free(os64_dom_t *dom, DValue *entry);
 void d_timer_drain(os64_dom_t *dom);
 void d_timer_free(os64_dom_t *dom);
+/* A timer the binding sets for itself (AbortSignal.timeout, an
+ * XMLHttpRequest's timeout): `callback` (taken) is called with no
+ * arguments once, `delay` ms from now on the host's clock, as one of the
+ * page's timers. Its id, or 0 with an exception pending. Cancelling an id
+ * that has fired, or 0, does nothing. */
+uint32_t d_timer_add(os64_dom_t *dom, JSContext *ctx, JSValue callback, uint64_t delay);
+void d_timer_cancel(os64_dom_t *dom, uint32_t id);
 void d_window_free(os64_dom_t *dom);
 int d_event_kind(const char *type);
 /* A handler slot noticed in a content attribute must keep its place among
@@ -230,6 +255,30 @@ int d_event_handler(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, int
 int d_dispatch_plain(os64_dom_t *dom, JSContext *ctx, JSValueConst event, DValue *target);
 JSValue d_event_new(os64_dom_t *dom, JSContext *ctx, const char *type, bool bubbles,
                     bool cancelable, bool trusted);
+/* d_event_new with a prototype of the caller's (a ProgressEvent's), or the
+ * Event prototype when `prototype` is not an object. */
+JSValue d_event_new_proto(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, const char *type, bool bubbles,
+                          bool cancelable, bool trusted);
+/* A COLLECTABLE plain target (event.c): an object a page may make as often
+ * as it likes, whose state begins with a DValue that is NOT on the
+ * registry. Its class is registered with d_event_target as any plain
+ * target's; d_event_target_init fills the record for `object`, the class's
+ * gc_mark calls d_event_target_mark and its finalizer
+ * d_event_target_finalize, which frees the listeners. on<type> for any type
+ * is d_event_handler_named. d_dispatch_plain_task is d_dispatch_plain from
+ * a host task: each listener a call and a checkpoint, as the host's own
+ * dispatch runs them, the outcome folded into `outcome`. */
+void d_event_target_init(os64_dom_t *dom, DValue *entry, JSValueConst object);
+void d_event_target_mark(JSRuntime *rt, const DValue *entry, JS_MarkFunc *mark);
+void d_event_target_finalize(JSRuntime *rt, DValue *entry);
+int d_event_handler_named(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, const char *type);
+int d_dispatch_plain_task(os64_dom_t *dom, JSContext *ctx, JSValueConst event, DValue *target,
+                          os64_js_outcome_t *outcome);
+/* A host task's bookkeeping (event.c): an entry's outcome folded into the
+ * task's (the first failure kept, a sticky one over one that is not), and
+ * the task ended with the binding's own report folded in. */
+void d_outcome_fold(os64_js_outcome_t *into, const os64_js_outcome_t *from);
+os64_js_status_t d_task_finish(os64_dom_t *dom, os64_js_outcome_t *outcome);
 void d_report(os64_dom_t *dom, JSContext *ctx, JSValueConst error);
 int d_script_mark(os64_dom_t *dom, const os64_html_node_t *node);
 int d_script_mark_tree(os64_dom_t *dom, const os64_html_node_t *root);
@@ -344,10 +393,11 @@ JSValue d_interface_new(JSContext *ctx, const char *name, int length, JSCFunctio
  * U+FFFD, WebIDL's USVString. Charged to the binding's budget like
  * d_string; false with an exception pending. */
 bool d_string_text(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DString *out, bool scalar);
-/* The origin an address has (HTML § Origins), serialized: `scheme://host`
- * and `:port` when it is not the scheme's default, for an address whose
- * scheme gives it a tuple origin (http, https, ws, wss, ftp), else "null",
- * an opaque origin. False when it does not fit in cap. */
+/* The origin an address has (HTML § Origins), serialized by libway
+ * (way_origin_serialize): `scheme://host` and `:port` when it is not the
+ * scheme's default, for an address whose scheme gives it a tuple origin
+ * (http, https, ws, wss, ftp; a blob: address its inner http(s) address's),
+ * else "null", an opaque origin. False when it does not fit in cap. */
 bool d_origin(const char *url, char *out, size_t cap);
 /* The binding's storage (storage.c): what os64_dom_drain commits, and what
  * os64_dom_free frees. */
@@ -355,6 +405,127 @@ void d_storage_drain(os64_dom_t *dom);
 void d_storage_free(os64_dom_t *dom);
 /* The storage maps' steps so far (storage.c's s_steps), for the DOM host. */
 uint64_t d_storage_steps(void);
+/* ── Slice 2: a script's requests (fetch.c, xhr.c, blob.c, abort.c,
+ * exception.c). LIBDOM.md § Requests is the record. ── */
+int d_exception_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_abort_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_blob_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_fetch_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_xhr_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* ProgressEvent (event.c): the interface, and one made for a dispatch. */
+int d_progress_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+JSValue d_progress_event_new(os64_dom_t *dom, JSContext *ctx, const char *type, bool computable, double loaded,
+                             double total, bool trusted);
+/* A DOMException named `name`: made (d_dom_exception_new) or thrown
+ * (d_dom_exception, which answers JS_EXCEPTION). */
+JSValue d_dom_exception_new(os64_dom_t *dom, JSContext *ctx, const char *name, const char *message);
+JSValue d_dom_exception(os64_dom_t *dom, JSContext *ctx, const char *name, const char *message);
+/* WebIDL's sequence<any>: `value`'s iterator walked to its end, at most
+ * `max` elements (one more is a TypeError, and the iterator is closed),
+ * each kept in a js_malloc'd array the caller frees with d_sequence_free.
+ * The page's iterator runs here; the array is C's and no page sees it.
+ * -1 with an exception pending. */
+#define D_SEQUENCE_MAX 65536
+int d_sequence(os64_dom_t *dom, JSContext *ctx, JSValueConst value, size_t max, JSValue **out, size_t *count);
+void d_sequence_free(JSContext *ctx, JSValue *items, size_t count);
+/* encoding.c's buffer sources for the other rows: 1 with the bytes a
+ * BufferSource holds now (borrowed), 0 for a value that is not one, -1
+ * with an exception pending; and a new Uint8Array holding a copy. */
+int d_buffer_source(os64_dom_t *dom, JSContext *ctx, JSValueConst value, const uint8_t **bytes, size_t *length);
+JSValue d_uint8_array(JSContext *ctx, const uint8_t *bytes, size_t length);
+/* url.c's URLSearchParams, for a request body: its
+ * application/x-www-form-urlencoded serialization (js_malloc'd) when
+ * `value` is one; NULL and no exception when it is not one; NULL with an
+ * exception pending when there was no memory. */
+char *d_params_text(JSContext *ctx, JSValueConst value, size_t *length);
+/* AbortSignal (abort.c). A signal's algorithms are C's: a fetch's abort,
+ * by its request's token, and a dependent signal's. */
+JSValue d_signal_new(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype);
+bool d_signal_is(JSValueConst value);
+bool d_signal_aborted(JSValueConst signal, JSValue *reason, JSContext *ctx);
+int d_signal_abort(os64_dom_t *dom, JSContext *ctx, JSValueConst signal, JSValueConst reason);
+int d_signal_follow(os64_dom_t *dom, JSContext *ctx, JSValueConst dependent, JSValueConst source);
+int d_signal_add_fetch(JSContext *ctx, JSValueConst signal, uint32_t token);
+void d_signal_fetch_answered(JSContext *ctx, JSValueConst signal, uint32_t token, JSValueConst response);
+void d_signal_remove_fetch(JSContext *ctx, JSValueConst signal, uint32_t token);
+/* fetch.c: a fetch's abort, the algorithm its signal runs. `response` is
+ * the Response once the fetch answered, else undefined. */
+void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, JSValueConst response, JSValueConst reason);
+/* True when an abort could no longer reach `response`'s body: it has none,
+ * it has been read, or an abort already reached it. */
+bool d_response_body_settled(JSValueConst response);
+/* Bytes and their type (blob.c, fetch.c): js_malloc'd, `type` "" for none. */
+typedef struct {
+    uint8_t *bytes;
+    size_t length;
+    char *type;
+} DBytes;
+void d_bytes_free(JSContext *ctx, DBytes *b);
+/* A Blob's (or File's) bytes and type, borrowed; false for anything else. */
+bool d_blob_get(JSValueConst value, const uint8_t **bytes, size_t *length, const char **type);
+/* A new Blob of `bytes` (taken) and `type` (copied). */
+JSValue d_blob_new(os64_dom_t *dom, JSContext *ctx, DBytes *bytes);
+bool d_form_data_is(JSValueConst value);
+/* A FormData as multipart/form-data (HTML § 4.10.21.8), its type naming
+ * the boundary. -1 with an exception pending. */
+int d_form_data_encode(os64_dom_t *dom, JSContext *ctx, JSValueConst form, DBytes *out);
+/* A body read back as FormData (Fetch § 5.3 "formData"): multipart or
+ * urlencoded by `type`; a TypeError for anything else. */
+JSValue d_form_data_parse(os64_dom_t *dom, JSContext *ctx, const uint8_t *bytes, size_t length, const char *type);
+/* Fetch § 5.2 "extract a body": a string, a BufferSource, a Blob, a
+ * FormData or a URLSearchParams, as bytes and a type (NULL for a
+ * BufferSource's none). 1 extracted, 0 not one of those, -1 with an
+ * exception pending. */
+int d_body_extract(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DBytes *out, bool *has_type);
+/* The requests out (fetch.c, xhr.c): each a token the host's answer names,
+ * the host's id for cancel, and what waits on it. */
+typedef void (*DAnswer)(os64_dom_t *dom, JSContext *ctx, DRequest *request, const os64_dom_response_t *response,
+                        os64_js_outcome_t *outcome);
+struct DRequest {
+    DRequest *next;
+    uint32_t token;
+    uint64_t id;
+    DAnswer answer;
+    JSValue held[3];            /* C-held: the registry's fourth list, drain releases them */
+};
+DRequest *d_request_start(os64_dom_t *dom, JSContext *ctx, const os64_dom_request_t *request, DAnswer answer);
+DRequest *d_request_find(os64_dom_t *dom, uint32_t token);
+/* Forgets a request: cancels it with the host when it is still out
+ * (`cancel`), releases what it held and frees it. */
+void d_request_end(os64_dom_t *dom, DRequest *request, bool cancel);
+void d_fetch_drain(os64_dom_t *dom);
+void d_fetch_free(os64_dom_t *dom);
+/* WebIDL's ByteString (fetch.c): a string whose every code unit is a byte,
+ * as those bytes (js_malloc'd, NUL-terminated); false with a TypeError for
+ * any other. d_byte_text is the way back (isomorphic decode). */
+bool d_byte_string(JSContext *ctx, JSValueConst value, char **out, size_t *length);
+JSValue d_byte_text(JSContext *ctx, const char *bytes, size_t length);
+bool d_same_nocase(const char *a, size_t alen, const char *b, size_t blen);
+/* The steps a header list's work took (fetch.c, xhr.c): each line read
+ * from a server's block, each entry placed by a sort's pass, each value
+ * joined. Not synchronized: a count for the DOM host to hold the work a
+ * page or a server can size to its bound, as d_storage_steps is. */
+extern uint64_t d_request_steps;
+/* A header block (way/origin.h's shape) as a Headers object with `guard`. */
+JSValue d_headers_from_block(os64_dom_t *dom, JSContext *ctx, const char *block, size_t length, int guard);
+/* A minimal ReadableStream over a copy of `bytes` (fetch.c): its reader
+ * hands over the whole as one Uint8Array, then done. */
+JSValue d_stream_new(os64_dom_t *dom, JSContext *ctx, const uint8_t *bytes, size_t length);
+/* A promise settled with `value` (taken), or rejected with the pending
+ * exception when `value` is JS_EXCEPTION (blob.c). */
+JSValue d_promise_settled(JSContext *ctx, JSValue value);
+/* The Encoding Standard's decode of a whole body (encoding.c, TextDecoder's
+ * decoders): `label` as TextDecoder reads one, UTF-8 when it is NULL or
+ * names nothing this browser decodes; a BOM of the encoding taken off, an
+ * invalid sequence U+FFFD. Engine memory. d_utf8_decode is UTF-8 decode. */
+JSValue d_text_decode(JSContext *ctx, const char *label, const uint8_t *bytes, size_t length);
+JSValue d_utf8_decode(JSContext *ctx, const uint8_t *bytes, size_t length);
+/* url.c: `input` parsed as a URL against the document's base URL, as a
+ * link's href is resolved: 1 with the address (d_alloc'd, the caller frees
+ * it), 0 for one that does not parse, -1 with an exception pending. */
+int d_url_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst input, char **out);
+/* An object's own [Symbol.toStringTag] (classic.c), as an interface's. */
+int d_string_tag(JSContext *ctx, JSValueConst object, const char *name);
 JSValue d_style(os64_dom_t *dom, JSContext *ctx, JSValueConst self);
 int d_style_install(os64_dom_t *dom, JSContext *ctx);
 extern JSClassExoticMethods d_node_exotic;

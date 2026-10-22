@@ -134,6 +134,36 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
     return JS_NewUint32(ctx, timer->id);
 }
 
+uint32_t d_timer_add(os64_dom_t *dom, JSContext *ctx, JSValue callback, uint64_t delay)
+{
+    if (dom->timer_count >= OS64_DOM_TIMERS_MAX || dom->timer_id == INT32_MAX) {
+        JS_FreeValue(ctx, callback);
+        d_error(ctx, "QuotaExceededError", "Too many timers");
+        return 0;
+    }
+    DTimer *timer = d_alloc(dom, sizeof(*timer));
+    if (timer == NULL) {
+        JS_FreeValue(ctx, callback);
+        d_error(ctx, "QuotaExceededError", "DOM timer quota exceeded");
+        return 0;
+    }
+    timer->callback = callback;
+    dom->timers_held += held_values(timer);
+    timer->id = ++dom->timer_id;
+    timer->nesting = dom->timer_nesting + 1;
+    timer->delay = delay;
+    timer->due = now_ms(dom) + delay;
+    insert(dom, timer);
+    dom->timer_count++;
+    return timer->id;
+}
+
+void d_timer_cancel(os64_dom_t *dom, uint32_t id)
+{
+    DTimer *timer = id != 0 ? unlink_id(dom, id) : NULL;
+    if (timer != NULL) timer_free(dom, timer);
+}
+
 int d_timer_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     if (d_method(dom, ctx, global, "setTimeout", timer_method, 2, T_TIMEOUT) < 0 ||

@@ -1,0 +1,765 @@
+/* A SCRIPT'S REQUESTS (libdom/fetch.c, xhr.c, abort.c, blob.c, exception.c;
+ * dom.h § A SCRIPT'S REQUESTS): the origin the binding names is libway's,
+ * byte for byte; Headers, Request and Response as a page makes them; fetch()
+ * and XMLHttpRequest against a fake host network that records each request
+ * and answers when a case says; aborting at each point a request can be;
+ * the work a page or a server can size, held to its bound by count; a body
+ * the runtime has no room for; every allocation failed in turn; and every
+ * name gone with the modern switch off. */
+
+#include <way/origin.h>
+
+/* fetch.c's count of a header list's steps (libdom/internal.h). */
+extern uint64_t d_request_steps;
+
+#define FETCH_ASSERT STORAGE_ASSERT
+
+/* What the fake network saw of one request. */
+typedef struct {
+    uint32_t token;
+    uint64_t id;
+    bool cancelled, preflight, has_body;
+    char url[512], method[32], referrer[512];
+    char headers[4096];
+    size_t headers_length;
+    char body[4096];
+    size_t body_length;
+    way_mode_t mode;
+    way_credentials_t credentials;
+    way_redirect_t redirect;
+} NetSeen;
+
+typedef struct {
+    NetSeen seen[64];
+    size_t count;
+    unsigned cancels, runs, releases;
+    bool refuse;
+    /* What run answers: false is "could not be run". */
+    bool run_ok;
+    os64_dom_response_t run_answer;
+} FakeNet;
+
+static void net_record(NetSeen *s, const os64_dom_request_t *q)
+{
+    memset(s, 0, sizeof(*s));
+    snprintf(s->url, sizeof(s->url), "%s", q->url != NULL ? q->url : "");
+    snprintf(s->method, sizeof(s->method), "%s", q->method != NULL ? q->method : "");
+    snprintf(s->referrer, sizeof(s->referrer), "%s", q->referrer != NULL ? q->referrer : "");
+    s->headers_length = q->headers_length < sizeof(s->headers) - 1 ? q->headers_length : sizeof(s->headers) - 1;
+    if (s->headers_length != 0) memcpy(s->headers, q->headers, s->headers_length);
+    s->has_body = q->body != NULL;
+    s->body_length = q->body_length < sizeof(s->body) - 1 ? q->body_length : sizeof(s->body) - 1;
+    if (s->body_length != 0) memcpy(s->body, q->body, s->body_length);
+    s->mode = q->mode;
+    s->credentials = q->credentials;
+    s->redirect = q->redirect;
+    s->preflight = q->preflight;
+}
+
+static uint64_t net_start(void *opaque, const os64_dom_request_t *q, uint32_t token)
+{
+    FakeNet *n = opaque;
+    if (n->refuse || n->count == sizeof(n->seen) / sizeof(n->seen[0])) return 0;
+    NetSeen *s = &n->seen[n->count++];
+    net_record(s, q);
+    s->token = token;
+    s->id = 1000 + n->count;
+    return s->id;
+}
+
+static void net_cancel(void *opaque, uint64_t id)
+{
+    FakeNet *n = opaque;
+    n->cancels++;
+    for (size_t i = 0; i < n->count; i++)
+        if (n->seen[i].id == id) n->seen[i].cancelled = true;
+}
+
+static bool net_run(void *opaque, const os64_dom_request_t *q, os64_dom_response_t *out)
+{
+    FakeNet *n = opaque;
+    n->runs++;
+    if (n->count < sizeof(n->seen) / sizeof(n->seen[0])) net_record(&n->seen[n->count++], q);
+    if (!n->run_ok) return false;
+    *out = n->run_answer;
+    return true;
+}
+
+static void net_release(void *opaque, os64_dom_response_t *r)
+{
+    FakeNet *n = opaque;
+    (void)r;
+    n->releases++;
+}
+
+static DomFixture net_fixture_engine(const char *url, FakeNet *net, size_t engine_cap)
+{
+    os64_dom_options_t options = os64_dom_default_options();
+    options.url = url;
+    options.now_ms = storage_now;
+    DomFixture f = fixture_base(0, 0, engine_cap);
+    if (f.runtime != NULL && f.state != NULL) {
+        os64_js_outcome_t outcome;
+        f.binding = os64_dom_create(f.runtime, f.document, f.state, &options, &outcome);
+    }
+    if (f.binding != NULL && net != NULL) {
+        const os64_dom_network_t network = {net_start, net_cancel, net_run, net_release, net};
+        os64_dom_set_network(f.binding, &network);
+    }
+    return f;
+}
+
+static DomFixture net_fixture(const char *url, FakeNet *net)
+{
+    return net_fixture_engine(url, net, 0);
+}
+
+static os64_dom_response_t net_answer_of(int32_t status, const char *url, const char *headers, const char *body)
+{
+    return (os64_dom_response_t){
+        .ok = true, .type = WAY_TYPE_BASIC, .status = status, .status_text = "OK", .url = url,
+        .headers = headers, .headers_length = headers != NULL ? strlen(headers) : 0,
+        .has_body = body != NULL, .body = body, .body_length = body != NULL ? strlen(body) : 0,
+    };
+}
+
+/* The host's answer to the request the net saw `which`th, as its task. */
+static os64_js_status_t net_answer(DomFixture *f, FakeNet *n, size_t which, const os64_dom_response_t *r)
+{
+    os64_js_outcome_t outcome;
+    os64_js_status_t status = os64_dom_fetched(f->binding, n->seen[which].token, r, &outcome);
+    if (status != OS64_JS_OK)
+        fprintf(stderr, "fetched: status=%d message=%s\n%s\n", status, outcome.message, outcome.stack_trace);
+    return status;
+}
+
+/* A global's value as text (empty when it has none). */
+static void global_text(DomFixture *f, const char *name, char *out, size_t cap)
+{
+    os64_js_outcome_t outcome;
+    JSContext *ctx = os64_js_context(f->runtime, OS64_JS_ABI_ID, &outcome);
+    out[0] = '\0';
+    if (ctx == NULL) return;
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue value = JS_GetPropertyStr(ctx, global, name);
+    JS_FreeValue(ctx, global);
+    const char *text = JS_ToCString(ctx, value);
+    JS_FreeValue(ctx, value);
+    if (text == NULL) {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        return;
+    }
+    snprintf(out, cap, "%s", text);
+    JS_FreeCString(ctx, text);
+}
+
+/* ── One origin, three spellings ─────────────────────────────────────── */
+
+/* d_origin is libway's way_origin_serialize: what location.origin reads,
+ * what the storage provider is told (and so what names a store's file),
+ * and what the fetch job judges are one string for every kind of address:
+ * default and explicit ports, upper case, IP literals, opaque origins. */
+static void dom_fetch_origin_cases(void)
+{
+    static const char *const kUrls[] = {
+        "http://example.test/", "http://example.test:80/a", "http://example.test:8080/p?q#f",
+        "HTTP://EXAMPLE.TEST/", "https://example.test:443/", "https://example.test:444/",
+        "http://127.0.0.1:8000/", "http://[::1]/", "http://[2001:db8::1]:81/x", "https://user:pw@example.test/",
+        "ws://example.test/", "ftp://example.test:21/", "file:///home/page.html", "about:blank",
+        "data:text/html,hi", "blob:http://example.test/uuid",
+    };
+    for (size_t i = 0; i < sizeof(kUrls) / sizeof(kUrls[0]); i++) {
+        FakeStore store = {0};
+        DomFixture f = storage_fixture(kUrls[i], &store);
+        if (!fixture_ready(&f)) { fake_store_free(&store); return; }
+        dom_script(&f, "globalThis.o=location.origin;try{localStorage.getItem('k')}catch(e){}", "origin: read");
+        char page[256];
+        global_text(&f, "o", page, sizeof(page));
+        way_origin_t origin;
+        way_origin_of(kUrls[i], 0, &origin);
+        char way[WAY_ORIGIN_TEXT_MAX];
+        check(way_origin_serialize(&origin, way, sizeof(way)), "origin: libway serializes it");
+        if (strcmp(page, way) != 0) fprintf(stderr, "origin %s: location %s, libway %s\n", kUrls[i], page, way);
+        check(strcmp(page, way) == 0, "origin: location.origin is libway's");
+        /* An opaque origin has no storage; a tuple's is told the same. */
+        if (store.identities != 0) {
+            if (strcmp(store.origin, way) != 0) fprintf(stderr, "origin %s: store %s\n", kUrls[i], store.origin);
+            check(strcmp(store.origin, way) == 0, "origin: the store is named by libway's origin");
+        } else check(strcmp(way, "null") == 0, "origin: only an opaque origin has no store");
+        fixture_free(&f);
+        fake_store_free(&store);
+    }
+}
+
+/* ── Headers ─────────────────────────────────────────────────────────── */
+
+static void dom_fetch_headers_cases(void)
+{
+    DomFixture f = net_fixture("http://example.test/page", NULL);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, FETCH_ASSERT
+        "var h=new Headers();assert(h instanceof Headers&&Object.prototype.toString.call(h)==='[object Headers]');"
+        "h.append('B','2');h.append('a','1');h.append('b',' 3\\t');"
+        "assert(h.get('b')==='2, 3'&&h.get('A')==='1'&&h.get('c')===null&&h.has('B')&&!h.has('c'));"
+        "assert([...h].join('|')==='a,1|b,2, 3');"
+        "assert([...h.keys()].join()==='a,b'&&[...h.values()].join('|')==='1|2, 3');"
+        "h.set('B','x');assert(h.get('b')==='x');h.delete('A');assert(!h.has('a')&&[...h].length===1);"
+        "throws('TypeError',()=>h.append('bad name','v'));throws('TypeError',()=>h.append('n','a\\nb'));"
+        "throws('TypeError',()=>h.append('n','\\u0100'));throws('TypeError',()=>h.get('a b'));",
+        "headers: append, get, set, delete, iteration sorted and combined");
+    dom_script(&f, FETCH_ASSERT
+        "var h=new Headers([['Set-Cookie','a=1'],['set-cookie','b=2'],['x','1']]);"
+        "assert([...h].join('|')==='set-cookie,a=1|set-cookie,b=2|x,1');"
+        "assert(h.getSetCookie().join()==='a=1,b=2'&&h.get('set-cookie')==='a=1, b=2');"
+        "var r=new Headers({z:'1',y:'2'});assert([...r.keys()].join()==='y,z');"
+        "throws('TypeError',()=>new Headers([['a']]));throws('TypeError',()=>new Headers([['a','b','c']]));"
+        "throws('TypeError',()=>new Headers(1));"
+        "var c=new Headers(r);assert(c.get('z')==='1'&&c!==r);"
+        "var seen=[];new Headers({x:'1'}).forEach(function(v,k,o){seen.push(k+'='+v,o instanceof Headers)});"
+        "assert(seen.join()==='x=1,true');",
+        "headers: set-cookie apart, records, sequences, another Headers, forEach");
+    /* A walk reads the sorted list as it stands at each step. */
+    dom_script(&f, FETCH_ASSERT
+        "var h=new Headers({b:'2',d:'4'});var out=[];"
+        "for(const [k] of h){out.push(k);if(k==='b')h.append('c','3');}"
+        "assert(out.join()==='b,c,d','a name added behind the walk is reached');"
+        "var g=new Headers({a:'1',b:'2',c:'3'});out=[];for(const [k] of g){out.push(k);if(k==='a')g.delete('a');}"
+        "assert(out.join()==='a,c','a name deleted under the walk moves it on');",
+        "headers: iteration under change");
+    /* Guards: what a Request's and a Response's headers refuse. */
+    dom_script(&f, FETCH_ASSERT
+        "var q=new Request('/x',{headers:{'Accept-Charset':'x','Cookie':'c','X-Fine':'1','Proxy-A':'p','Sec-B':'s'}});"
+        "assert([...q.headers.keys()].join()==='x-fine','forbidden request headers go silently');"
+        "q.headers.set('Host','h');assert(!q.headers.has('host'));"
+        "q.headers.set('X-HTTP-Method-Override','CONNECT');assert(!q.headers.has('x-http-method-override'));"
+        "var p=new Response('',{headers:{'Set-Cookie':'a','X':'1'}});assert(!p.headers.has('set-cookie')&&p.headers.has('x'));"
+        "var e=Response.error();throws('TypeError',()=>e.headers.append('a','b'));"
+        "var n=new Request('/x',{mode:'no-cors',headers:{'Accept':'text/html','X-Not':'1','Content-Type':'text/plain'}});"
+        "assert([...n.headers.keys()].join()==='accept,content-type','no-cors keeps the safelisted');"
+        "n.headers.append('Content-Type','application/json');assert(n.headers.get('content-type')==='text/plain');"
+        "n.headers.append('Range','bytes=0-1');assert(!n.headers.has('range'));",
+        "headers: request, response, immutable and no-cors guards");
+    fixture_free(&f);
+}
+
+/* ── Request and Response, as a page makes them ──────────────────────── */
+
+static void dom_fetch_object_cases(void)
+{
+    DomFixture f = net_fixture("http://example.test/dir/page", NULL);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, FETCH_ASSERT
+        "var q=new Request('a?b#c');assert(q.url==='http://example.test/dir/a?b#c'&&q.method==='GET');"
+        "assert(q.mode==='cors'&&q.credentials==='same-origin'&&q.redirect==='follow'&&q.cache==='default');"
+        "assert(q.referrer==='about:client'&&q.referrerPolicy===''&&q.integrity===''&&!q.keepalive&&q.destination==='');"
+        "assert(q.signal instanceof AbortSignal&&!q.signal.aborted&&q.body===null&&!q.bodyUsed&&q.duplex==='half');"
+        "assert(new Request('/x',{method:'post'}).method==='POST'&&new Request('/x',{method:'Patch'}).method==='Patch');"
+        "throws('TypeError',()=>new Request('/x',{method:'CONNECT'}));throws('TypeError',()=>new Request('/x',{method:'a b'}));"
+        "throws('TypeError',()=>new Request('/x',{mode:'navigate'}));"
+        "throws('TypeError',()=>new Request('/x',{mode:'no-cors',method:'PUT'}));"
+        "throws('TypeError',()=>new Request('/x',{body:'b'}));throws('TypeError',()=>new Request('/x',{method:'HEAD',body:'b'}));"
+        "throws('TypeError',()=>new Request('http://a b/'));throws('TypeError',()=>new Request('/x',{window:{}}));"
+        "throws('TypeError',()=>new Request('/x',{cache:'only-if-cached'}));"
+        "throws('TypeError',()=>new Request('/x',{credentials:'bogus'}));"
+        "var r=new Request('/x',{referrer:''});assert(r.referrer==='');"
+        "r=new Request('/x',{referrer:'/elsewhere'});assert(r.referrer==='http://example.test/elsewhere');"
+        "r=new Request('/x',{referrer:'http://other.test/'});assert(r.referrer==='about:client');"
+        "r=new Request('/x',{referrerPolicy:'origin'});assert(r.referrerPolicy==='origin');",
+        "request: the constructor's defaults and refusals");
+    /* WebIDL reads a dictionary's members in name order, each once. */
+    dom_script(&f, FETCH_ASSERT
+        "var order=[];var init={};"
+        "for(const k of ['window','signal','referrerPolicy','referrer','redirect','priority','mode','method',"
+        "'keepalive','integrity','headers','duplex','credentials','cache','body'])"
+        "Object.defineProperty(init,k,{get(){order.push(k);return undefined}});"
+        "new Request('/x',init);"
+        "assert(order.join()==='body,cache,credentials,duplex,headers,integrity,keepalive,method,mode,priority,"
+        "redirect,referrer,referrerPolicy,signal,window',order.join());",
+        "request: RequestInit read in name order");
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.log=[];"
+        "var q=new Request('/x',{method:'POST',body:'hi \\u00e9'});"
+        "assert(q.headers.get('content-type')==='text/plain;charset=UTF-8'&&Object.prototype.toString.call(q.body)==='[object ReadableStream]');"
+        "var c=q.clone();assert(c.url===q.url&&c.headers.get('content-type')===q.headers.get('content-type'));"
+        "q.text().then(t=>log.push('q:'+t));c.arrayBuffer().then(b=>log.push('c:'+b.byteLength));"
+        "assert(q.bodyUsed);throws('TypeError',()=>q.clone());"
+        "new Request('/x',{method:'POST',body:new URLSearchParams('a=1&b=2')}).headers.get('content-type')==="
+        "'application/x-www-form-urlencoded;charset=UTF-8'||log.push('bad params type');"
+        "var b=new Request('/x',{method:'POST',body:new Blob(['x'],{type:'Text/Plain'})});"
+        "assert(b.headers.get('content-type')==='text/plain');"
+        "assert(!new Request('/x',{method:'POST',body:new Uint8Array([1,2])}).headers.has('content-type'));"
+        "var fd=new FormData();fd.append('k','v');"
+        "assert(/^multipart\\/form-data; boundary=/.test(new Request('/x',{method:'POST',body:fd}).headers.get('content-type')));"
+        "var from=new Request('/x',{method:'POST',body:'once'});var to=new Request(from);"
+        "assert(from.bodyUsed&&!to.bodyUsed);throws('TypeError',()=>new Request(from));",
+        "request: bodies, their types, clone and taking an input's body");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='q:hi \\u00e9,c:5',log.join());", "request: bodies read");
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.log=[];"
+        "var r=new Response('{\"a\":1}',{status:201,statusText:'Made',headers:{'X':'1'}});"
+        "assert(r.status===201&&r.ok&&r.statusText==='Made'&&r.type==='default'&&r.url===''&&!r.redirected);"
+        "assert(r.headers.get('content-type')==='text/plain;charset=UTF-8');"
+        "r.json().then(j=>log.push('json:'+j.a));"
+        "throws('RangeError',()=>new Response('',{status:199}));throws('RangeError',()=>new Response('',{status:600}));"
+        "throws('TypeError',()=>new Response('x',{status:204}));throws('TypeError',()=>new Response('',{statusText:'a\\nb'}));"
+        "assert(new Response(null,{status:204}).body===null);"
+        "var e=Response.error();assert(e.type==='error'&&e.status===0&&e.statusText===''&&e.body===null);"
+        "var d=Response.redirect('/to',301);assert(d.status===301&&d.headers.get('location')==='http://example.test/to');"
+        "throws('RangeError',()=>Response.redirect('/to',200));throws('TypeError',()=>Response.redirect('http://a b/'));"
+        "var j=Response.json({b:[1]},{status:202});assert(j.status===202&&j.headers.get('content-type')==='application/json');"
+        "j.text().then(t=>log.push('text:'+t));"
+        "throws('TypeError',()=>Response.json(undefined));"
+        "new Response(new Uint8Array([104,105])).text().then(t=>log.push('bytes:'+t));"
+        "new Response('abc').bytes().then(b=>log.push('u8:'+(b instanceof Uint8Array)+b.length));"
+        "new Response('abc',{headers:{'content-type':'Text/Weird; charset=x'}}).blob().then(b=>log.push('blob:'+b.type+b.size));"
+        "new Response('a=1&b=2',{headers:{'content-type':'application/x-www-form-urlencoded'}}).formData()"
+        ".then(f=>log.push('form:'+f.get('b')));"
+        "new Response('x').formData().catch(e=>log.push('form-refused:'+e.name));"
+        "new Response('{').json().catch(e=>log.push('json-bad:'+e.name));",
+        "response: the constructor, error, redirect, json and every body reader");
+    dom_script(&f, FETCH_ASSERT
+        "var want='json:1,text:{\"b\":[1]},bytes:hi,u8:true3,blob:text/weird;charset=x3,form:2,"
+        "form-refused:TypeError,json-bad:SyntaxError';assert(log.join()===want,log.join());",
+        "response: bodies read");
+    /* The stream a body is: one chunk, then done; a reader locks it. */
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.log=[];var r=new Response('chunk');var s=r.body;assert(s===r.body&&!s.locked);"
+        "var rd=s.getReader();assert(s.locked&&!r.bodyUsed);throws('TypeError',()=>s.getReader());"
+        "r.text().catch(e=>log.push('locked:'+e.name));throws('TypeError',()=>r.clone());"
+        "rd.read().then(a=>{log.push(a.done+':'+new TextDecoder().decode(a.value));return rd.read()})"
+        ".then(a=>{log.push(a.done+':'+a.value);rd.releaseLock();log.push(s.locked)});"
+        "assert(typeof ReadableStream==='undefined'||true);"
+        "throws('RangeError',()=>new Response('x').body.getReader({mode:'byob'}));",
+        "stream: one chunk, then done");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='locked:TypeError,false:chunk,true:undefined,false',log.join());",
+               "stream: read");
+    fixture_free(&f);
+}
+
+/* ── fetch() through the host ────────────────────────────────────────── */
+
+static void dom_fetch_network_cases(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/dir/page", &net);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.log=[];"
+        "fetch('data.json?x',{method:'POST',body:'abc',headers:{'X-One':'1','x-one':'2'},credentials:'include'})"
+        ".then(r=>{log.push(r.status,r.type,r.url,r.redirected,r.headers.get('content-type'));"
+        "throws('TypeError',()=>r.headers.set('a','b'));return r.json()}).then(j=>log.push(j.v));",
+        "fetch: a request goes to the host");
+    check(net.count == 1, "fetch: the host starts one request");
+    NetSeen *s = &net.seen[0];
+    check(!strcmp(s->url, "http://example.test/dir/data.json?x") && !strcmp(s->method, "POST"),
+          "fetch: the host gets the parsed URL and the method");
+    check(s->has_body && s->body_length == 3 && !memcmp(s->body, "abc", 3), "fetch: the host gets the body");
+    check(strstr(s->headers, "X-One: 1\r\n") != NULL && strstr(s->headers, "x-one: 2\r\n") != NULL &&
+          strstr(s->headers, "Content-Type: text/plain;charset=UTF-8\r\n") != NULL,
+          "fetch: the host gets the author headers as a block, the body's type among them");
+    check(s->mode == WAY_MODE_CORS && s->credentials == WAY_CREDENTIALS_INCLUDE && s->redirect == WAY_REDIRECT_FOLLOW &&
+          !s->preflight, "fetch: the modes reach the host");
+    check(!strcmp(s->referrer, "http://example.test/dir/page"), "fetch: about:client is the page's address");
+    check(os64_dom_fetches_pending(f.binding) == 1, "fetch: one request out");
+    os64_dom_response_t answer = net_answer_of(200, "http://example.test/dir/data.json?x",
+                                               "Content-Type: application/json\r\n", "{\"v\":42}");
+    answer.type = WAY_TYPE_CORS;
+    answer.redirected = true;
+    check(net_answer(&f, &net, 0, &answer) == OS64_JS_OK, "fetch: the answer is a task");
+    check(os64_dom_fetches_pending(f.binding) == 0, "fetch: an answered request is not out");
+    dom_script(&f, FETCH_ASSERT
+        "assert(log.join()==='200,cors,http://example.test/dir/data.json?x,true,application/json,42',log.join());",
+        "fetch: the promise resolves with the host's response");
+    check(net_answer(&f, &net, 0, &answer) == OS64_JS_OK, "fetch: a second answer for the token does nothing");
+
+    /* A network error rejects with a TypeError; so does a host that would
+     * not start the request, and a request this browser will not make. */
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.log=[];fetch('/fail').catch(e=>log.push('net:'+e.name));"
+        "fetch('/x',{integrity:'sha256-abc'}).catch(e=>log.push('sri:'+e.name));"
+        "fetch('/x',{method:'POST',keepalive:true,body:'x'.repeat(65537)}).catch(e=>log.push('keep:'+e.name));"
+        "fetch('http://a b/').catch(e=>log.push('url:'+e.name));fetch().catch(e=>log.push('none:'+e.name));",
+        "fetch: refusals");
+    check(net.count == 2, "fetch: only the network error's request reached the host");
+    os64_dom_response_t error = {.ok = false, .why = "CORS"};
+    net_answer(&f, &net, 1, &error);
+    net.refuse = true;
+    dom_script(&f, "fetch('/r').catch(e=>log.push('refused:'+e.name));", "fetch: a host that will not start it");
+    net.refuse = false;
+    dom_script(&f, FETCH_ASSERT
+        "assert(log.join()==='sri:TypeError,keep:TypeError,url:TypeError,none:TypeError,net:TypeError,refused:TypeError',"
+        "log.join());", "fetch: each refusal rejects");
+
+    /* data: goes to the host as written; the page's base resolves the
+     * rest. A no-cors request carries its mode. */
+    dom_script(&f, "fetch(' data:,hello ');fetch('/n',{mode:'no-cors',redirect:'manual'});", "fetch: data and no-cors");
+    check(!strcmp(net.seen[2].url, "data:,hello"), "fetch: a data: address goes to the host trimmed and unparsed");
+    check(net.seen[3].mode == WAY_MODE_NO_CORS && net.seen[3].redirect == WAY_REDIRECT_MANUAL,
+          "fetch: no-cors and manual reach the host");
+    /* Drain cancels what is out. */
+    unsigned cancels = net.cancels;
+    fixture_free(&f);
+    check(net.cancels == cancels + 2, "fetch: drain cancels each request out");
+
+    /* No network at all: a TypeError. */
+    f = net_fixture("http://example.test/", NULL);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, "globalThis.log=[];fetch('/x').catch(e=>log.push(e.name));", "fetch: no network");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='TypeError');", "fetch: no network rejects");
+    fixture_free(&f);
+}
+
+/* ── Aborting ────────────────────────────────────────────────────────── */
+
+static void dom_fetch_abort_cases(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/", &net);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.log=[];var c=new AbortController();var s=c.signal;"
+        "assert(s instanceof AbortSignal&&s instanceof Object&&!s.aborted&&s.reason===undefined);"
+        "s.onabort=e=>log.push('onabort:'+e.type+e.isTrusted);s.addEventListener('abort',()=>log.push('listener'));"
+        "c.abort();c.abort('again');assert(s.aborted&&s.reason.name==='AbortError'&&s.reason instanceof DOMException);"
+        "throws('AbortError',()=>s.throwIfAborted());"
+        "assert(AbortSignal.abort('why').reason==='why');"
+        "var any=AbortSignal.any([new AbortController().signal,AbortSignal.abort(7)]);assert(any.aborted&&any.reason===7);"
+        "var t=AbortSignal.timeout(5);assert(!t.aborted);"
+        "throws('TypeError',()=>AbortSignal.any([1]));throws('TypeError',()=>new AbortSignal());",
+        "abort: a controller, its signal, abort, any and timeout");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='onabort:aborttrue,listener',log.join());", "abort: events");
+    storage_clock += 10;
+    os64_js_outcome_t outcome;
+    check(os64_dom_timer_fire(f.binding, storage_clock, &outcome), "abort: the timeout's timer fires");
+    dom_script(&f, FETCH_ASSERT "assert(t.aborted&&t.reason.name==='TimeoutError');", "abort: timeout aborts");
+
+    /* Before: the fetch never starts. While out: the promise rejects and
+     * the host cancels. After: the body's read rejects. */
+    dom_script(&f, FETCH_ASSERT
+        "globalThis.log=[];fetch('/x',{signal:AbortSignal.abort()}).catch(e=>log.push('before:'+e.name));"
+        "globalThis.c2=new AbortController();fetch('/y',{signal:c2.signal}).catch(e=>log.push('during:'+e.name));"
+        "globalThis.c3=new AbortController();fetch('/z',{signal:c3.signal}).then(r=>{globalThis.r3=r});"
+        "c2.abort();",
+        "abort: before and during");
+    check(net.count == 2 && net.seen[0].cancelled && !net.seen[1].cancelled, "abort: during cancels with the host");
+    os64_dom_response_t answer = net_answer_of(200, "http://example.test/z", "", "body");
+    net_answer(&f, &net, 1, &answer);
+    dom_script(&f, "c3.abort(new Error('late'));r3.text().catch(e=>log.push('after:'+e.message));", "abort: after");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='before:AbortError,during:AbortError,after:late',log.join());",
+               "abort: each point");
+    net_answer(&f, &net, 0, &answer);
+    dom_script(&f, FETCH_ASSERT "assert(log.length===3,'an aborted request answers nothing');", "abort: late answer");
+
+    /* A Request's signal follows its input's. */
+    dom_script(&f, FETCH_ASSERT
+        "var c=new AbortController();var q=new Request('/x',{signal:c.signal});var q2=new Request(q);"
+        "assert(q.signal!==c.signal&&q2.signal!==q.signal);c.abort('r');"
+        "assert(q.signal.aborted&&q.signal.reason==='r'&&q2.signal.aborted);",
+        "abort: a request's signal follows");
+    /* One controller over many requests keeps none of them past use. */
+    dom_script(&f, FETCH_ASSERT
+        "var c=new AbortController();for(let i=0;i<2000;i++)new Request('/x',{signal:c.signal});c.abort();",
+        "abort: one controller, many requests");
+    fixture_free(&f);
+}
+
+/* ── XMLHttpRequest ──────────────────────────────────────────────────── */
+
+/* The event order WPT's xhr/resources/xmlhttprequest-event-order.js
+ * records, which the xhr event-order tests hold a browser to. */
+#define XHR_RECORDER "function rec(x){globalThis.ev=[];x.addEventListener('readystatechange',()=>ev.push(x.readyState));" \
+    "for(const t of ['loadstart','progress','abort','timeout','error','load','loadend']){" \
+    "x.addEventListener(t,e=>ev.push(e.type+'('+e.loaded+','+e.total+','+e.lengthComputable+')'));" \
+    "x.upload.addEventListener(t,e=>ev.push('upload.'+e.type+'('+e.loaded+','+e.total+','+e.lengthComputable+')'));}}"
+
+static void dom_xhr_cases(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/dir/page", &net);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, FETCH_ASSERT
+        "var x=new XMLHttpRequest();assert(x instanceof XMLHttpRequestEventTarget&&x.upload instanceof XMLHttpRequestUpload);"
+        "assert(x.readyState===0&&XMLHttpRequest.DONE===4&&x.OPENED===1&&x.status===0&&x.statusText===''&&x.response==='');"
+        "assert(x.responseType===''&&x.timeout===0&&!x.withCredentials&&x.responseURL===''&&x.getAllResponseHeaders()==='');"
+        "throws('InvalidStateError',()=>x.send());throws('InvalidStateError',()=>x.setRequestHeader('a','b'));"
+        "throws('SyntaxError',()=>x.open('a b','/x'));throws('SecurityError',()=>x.open('TRACE','/x'));"
+        "throws('SyntaxError',()=>x.open('GET','http://a b/'));"
+        "x.responseType='bogus';assert(x.responseType==='');x.responseType='json';"
+        "throws('InvalidAccessError',()=>x.open('GET','/x',false));x.responseType='';"
+        "x.open('get','/x');assert(x.readyState===1);"
+        "x.setRequestHeader('X-A','1');x.setRequestHeader('x-a',' 2 ');x.setRequestHeader('Cookie','c');"
+        "throws('SyntaxError',()=>x.setRequestHeader('a b','1'));throws('SyntaxError',()=>x.setRequestHeader('a','a\\nb'));"
+        "throws('TypeError',()=>x.setRequestHeader('a','\\u0100'));"
+        "var p=new ProgressEvent('p',{loaded:-1,total:3,lengthComputable:true,bubbles:true});"
+        "assert(p instanceof Event&&p.loaded===18446744073709552000&&p.total===3&&p.lengthComputable&&p.bubbles);"
+        "throws('TypeError',()=>ProgressEvent.prototype.loaded);",
+        "xhr: the surface and its refusals");
+
+    /* Async, with an upload: WPT's send-response-event-order. */
+    dom_script(&f, XHR_RECORDER
+        "var x=new XMLHttpRequest();rec(x);x.open('POST','content.py');globalThis.xr=x;"
+        "x.withCredentials=true;x.send('Test Message');",
+        "xhr: an asynchronous POST");
+    size_t last = net.count - 1;
+    NetSeen *s = &net.seen[last];
+    check(!strcmp(s->url, "http://example.test/dir/content.py") && !strcmp(s->method, "POST") && s->preflight &&
+          s->credentials == WAY_CREDENTIALS_INCLUDE && strstr(s->headers, "Content-Type: text/plain;charset=UTF-8") != NULL,
+          "xhr: the request reaches the host, an upload listener asking for a preflight");
+    os64_dom_response_t answer = net_answer_of(200, "http://example.test/dir/content.py#frag",
+                                               "Content-Length: 12\r\nX-B: 2\r\nx-a: 1\r\nX-A: 3\r\n", "Test Message");
+    net_answer(&f, &net, last, &answer);
+    dom_script(&f, FETCH_ASSERT
+        "var want=[1,'loadstart(0,0,false)','upload.loadstart(0,12,true)','upload.progress(12,12,true)',"
+        "'upload.load(12,12,true)','upload.loadend(12,12,true)',2,3,'progress(12,12,true)',4,'load(12,12,true)',"
+        "'loadend(12,12,true)'].join();assert(ev.join()===want,ev.join());"
+        "assert(xr.status===200&&xr.statusText==='OK'&&xr.responseText==='Test Message'&&xr.response==='Test Message');"
+        "assert(xr.responseURL==='http://example.test/dir/content.py');"
+        "assert(xr.getResponseHeader('x-a')==='1, 3'&&xr.getResponseHeader('nope')===null);"
+        "assert(xr.getAllResponseHeaders()==='content-length: 12\\r\\nx-a: 1, 3\\r\\nx-b: 2\\r\\n',xr.getAllResponseHeaders());"
+        "throws('InvalidStateError',()=>xr.responseType='text');throws('InvalidStateError',()=>xr.overrideMimeType('a/b'));",
+        "xhr: the events in order, and the response");
+
+    /* A network error: send-no-response's CORS failure. */
+    dom_script(&f, XHR_RECORDER "var x=new XMLHttpRequest();rec(x);x.open('POST','/c');x.send('Test Message');",
+               "xhr: a request that fails");
+    os64_dom_response_t failure = {.ok = false, .why = "CORS"};
+    net_answer(&f, &net, net.count - 1, &failure);
+    dom_script(&f, FETCH_ASSERT
+        "var want=[1,'loadstart(0,0,false)','upload.loadstart(0,12,true)',4,'upload.error(0,0,false)',"
+        "'upload.loadend(0,0,false)','error(0,0,false)','loadend(0,0,false)'].join();assert(ev.join()===want,ev.join());",
+        "xhr: a network error's events");
+
+    /* abort() inside loadstart: abort-event-order. */
+    dom_script(&f, XHR_RECORDER
+        "var x=new XMLHttpRequest();rec(x);x.open('POST','/a');"
+        "x.addEventListener('loadstart',()=>x.abort());x.send('Test Message');"
+        "var want=[1,'loadstart(0,0,false)',4,'upload.abort(0,0,false)','upload.loadend(0,0,false)',"
+        "'abort(0,0,false)','loadend(0,0,false)'];assert(ev.join()===want.join(),ev.join());assert(x.readyState===0);",
+        "xhr: abort inside loadstart");
+
+    /* An empty answer: no LOADING. */
+    dom_script(&f, XHR_RECORDER "var x=new XMLHttpRequest();rec(x);x.open('GET','/e');x.send();globalThis.xe=x;",
+               "xhr: an empty answer");
+    os64_dom_response_t empty = net_answer_of(204, "http://example.test/e", "", NULL);
+    net_answer(&f, &net, net.count - 1, &empty);
+    dom_script(&f, FETCH_ASSERT
+        "assert(ev.join()===[1,'loadstart(0,0,false)',2,'progress(0,0,false)',4,'load(0,0,false)','loadend(0,0,false)'].join(),"
+        "ev.join());assert(xe.status===204&&xe.response==='');",
+        "xhr: an empty answer's events");
+
+    /* Response types. */
+    static const struct { const char *type, *holds; } kTypes[] = {
+        {"arraybuffer", "xt.response instanceof ArrayBuffer&&xt.response.byteLength===9&&xt.response===xt.response"},
+        {"blob", "xt.response instanceof Blob&&xt.response.size===9&&xt.response.type==='application/json;charset=utf-8'"},
+        {"json", "xt.response.k[0]===1&&xt.response===xt.response"},
+        {"text", "xt.response==='{\"k\":[1]}'&&xt.responseText===xt.response"},
+        {"document", "xt.response===null&&xt.responseXML===null"},
+    };
+    for (size_t i = 0; i < sizeof(kTypes) / sizeof(kTypes[0]); i++) {
+        char script[512];
+        snprintf(script, sizeof(script),
+                 "var x=new XMLHttpRequest();x.open('GET','/t');x.responseType='%s';x.send();globalThis.xt=x;"
+                 "assert(x.response===(x.responseType==='text'?'':null));", kTypes[i].type);
+        dom_script(&f, script, "xhr: a response type");
+        os64_dom_response_t typed = net_answer_of(200, "http://example.test/t",
+                                                  "Content-Type: application/json; charset=utf-8\r\n", "{\"k\":[1]}");
+        net_answer(&f, &net, net.count - 1, &typed);
+        snprintf(script, sizeof(script), FETCH_ASSERT "assert(%s,'%s');", kTypes[i].holds, kTypes[i].type);
+        dom_script(&f, script, "xhr: a response type's response");
+    }
+    dom_script(&f, FETCH_ASSERT
+        "assert(xt.responseXML===null);throws('InvalidStateError',()=>xt.responseText);"
+        "var x=new XMLHttpRequest();x.open('GET','/j');x.responseType='json';x.send();globalThis.xj=x;",
+        "xhr: document is null");
+    os64_dom_response_t bad_json = net_answer_of(200, "http://example.test/j", "", "{");
+    net_answer(&f, &net, net.count - 1, &bad_json);
+    dom_script(&f, FETCH_ASSERT "assert(xj.response===null&&xj.response===null);", "xhr: JSON that does not parse is null");
+
+    /* overrideMimeType decides the charset text is read in. */
+    dom_script(&f, "var x=new XMLHttpRequest();x.open('GET','/l');x.overrideMimeType('text/plain;charset=windows-1252');"
+               "x.send();globalThis.xl=x;", "xhr: an override");
+    os64_dom_response_t latin = net_answer_of(200, "http://example.test/l", "Content-Type: text/plain;charset=utf-8\r\n",
+                                              "caf\xe9");
+    net_answer(&f, &net, net.count - 1, &latin);
+    dom_script(&f, FETCH_ASSERT "assert(xl.responseText==='caf\\u00e9',escape(xl.responseText));", "xhr: the override's charset");
+
+    /* Synchronous: run by the host, no events before, a NetworkError on
+     * failure. */
+    net.run_ok = true;
+    net.run_answer = net_answer_of(200, "http://example.test/s", "Content-Length: 12\r\n", "Test Message");
+    dom_script(&f, FETCH_ASSERT XHR_RECORDER
+        "var x=new XMLHttpRequest();rec(x);x.open('POST','/s',false);"
+        "throws('InvalidAccessError',()=>{x.timeout=5});throws('InvalidAccessError',()=>{x.responseType='text'});"
+        "x.send('Test Message');assert(x.response==='Test Message');"
+        "assert(ev.join()===[1,4,'load(12,12,true)','loadend(12,12,true)'].join(),ev.join());",
+        "xhr: synchronous");
+    check(net.runs == 1 && net.releases == 1, "xhr: a synchronous request is run and released");
+    net.run_ok = false;
+    dom_script(&f, FETCH_ASSERT
+        "var x=new XMLHttpRequest();x.open('GET','/s',false);throws('NetworkError',()=>x.send());assert(x.readyState===4);",
+        "xhr: a synchronous failure throws");
+
+    /* A timeout, on the page's own timers. */
+    dom_script(&f, XHR_RECORDER "var x=new XMLHttpRequest();rec(x);x.open('GET','/slow');x.timeout=50;x.send();",
+               "xhr: a timeout");
+    size_t slow = net.count - 1;
+    storage_clock += 60;
+    os64_js_outcome_t outcome;
+    check(os64_dom_timer_fire(f.binding, storage_clock, &outcome), "xhr: the timeout's timer fires");
+    check(net.seen[slow].cancelled, "xhr: a timeout cancels with the host");
+    dom_script(&f, FETCH_ASSERT
+        "assert(ev.join()===[1,'loadstart(0,0,false)',4,'timeout(0,0,false)','loadend(0,0,false)'].join(),ev.join());",
+        "xhr: a timeout's events");
+    /* open() again stops what was under way, with no events. */
+    dom_script(&f, XHR_RECORDER "var x=new XMLHttpRequest();rec(x);x.open('GET','/one');x.send();x.open('GET','/two');"
+               "assert(ev.join()===[1,'loadstart(0,0,false)'].join(),ev.join());", "xhr: open again");
+    check(net.seen[net.count - 1].cancelled, "xhr: open again cancels the request out");
+    /* A request out keeps its object alive with nothing else holding it. */
+    dom_script(&f, "globalThis.done=0;(function(){var x=new XMLHttpRequest();x.onload=()=>done++;x.open('GET','/gc');x.send();})();",
+               "xhr: unreferenced while out");
+    size_t gc = net.count - 1;
+    JSContext *ctx = os64_js_context(f.runtime, OS64_JS_ABI_ID, &outcome);
+    JS_RunGC(JS_GetRuntime(ctx));
+    os64_dom_response_t ok = net_answer_of(200, "http://example.test/gc", "", "x");
+    net_answer(&f, &net, gc, &ok);
+    dom_script(&f, FETCH_ASSERT "assert(done===1);", "xhr: an object with a request out outlives its references");
+    fixture_free(&f);
+}
+
+/* ── What a page or a server can size, held to its bound by count ───── */
+
+/* The steps a header list's work takes (fetch.c's d_request_steps): a
+ * Headers walked whole, a server's header block read into a Response, and
+ * an XMLHttpRequest's getAllResponseHeaders. Each doubles a size eight
+ * times over and holds the work to n log n, so a quadratic step fails by
+ * count, not by a clock. */
+static uint64_t fetch_steps_for(DomFixture *f, FakeNet *net, int kind, size_t n)
+{
+    char script[512];
+    if (kind == 0) {
+        snprintf(script, sizeof(script),
+                 "var a=[];for(let i=0;i<%zu;i++)a.push(['h'+((i*7919)%%%zu),'v']);globalThis.hh=new Headers(a);", n, n);
+        dom_script(f, script, "bound: a Headers made");
+        uint64_t before = d_request_steps;
+        dom_script(f, "var k=0;for(const e of hh)k++;", "bound: a Headers walked");
+        return d_request_steps - before;
+    }
+    /* A block of n lines, in reverse order. */
+    size_t cap = n * 24 + 1;
+    char *block = malloc(cap);
+    if (block == NULL) abort();
+    size_t at = 0;
+    for (size_t i = n; i > 0; i--) at += (size_t)snprintf(block + at, cap - at, "H%zu: v\r\n", i);
+    dom_script(f, kind == 1 ? "fetch('/b').then(r=>{globalThis.rb=r})"
+                            : "var x=new XMLHttpRequest();x.open('GET','/b');x.send();globalThis.xb=x;",
+               "bound: a request for a big block");
+    os64_dom_response_t answer = net_answer_of(200, "http://example.test/b", block, "");
+    uint64_t before = d_request_steps;
+    net_answer(f, net, net->count - 1, &answer);
+    if (kind == 2) dom_script(f, "xb.getAllResponseHeaders();", "bound: every header of a big block");
+    uint64_t steps = d_request_steps - before;
+    free(block);
+    return steps;
+}
+
+static void dom_fetch_bound_cases(void)
+{
+    static const char *const kWhat[] = {"a Headers walked", "a server's block read", "getAllResponseHeaders"};
+    for (int kind = 0; kind < 3; kind++) {
+        FakeNet net = {0};
+        DomFixture f = net_fixture("http://example.test/", &net);
+        if (!fixture_ready(&f)) return;
+        uint64_t small = fetch_steps_for(&f, &net, kind, 64);
+        uint64_t large = fetch_steps_for(&f, &net, kind, 64 * 256);
+        /* n log n from 64 to 16384: 256 times the entries, 256 * 14/6
+         * the steps; a quadratic walk is 65536 times. */
+        bool bounded = small > 0 && large <= small * 256 * 3;
+        if (!bounded) fprintf(stderr, "bound %s: %llu steps at 64, %llu at 16384\n", kWhat[kind],
+                              (unsigned long long)small, (unsigned long long)large);
+        check(bounded, "bound: a header list's work is n log n in its length");
+        fixture_free(&f);
+    }
+}
+
+/* ── A body the runtime has no room for (requirement B) ──────────────── */
+
+/* The answer's bytes are copied into the runtime's memory, so a body
+ * larger than the runtime's limit is that limit, met as any allocation a
+ * script makes meets it: libjs's sticky LIMIT, which ends the page's
+ * runtime (its host retires it, as for a script that allocated too much).
+ * Nothing the page sees half-made, and the teardown accounts for every
+ * byte. The same body inside the limit resolves. */
+static void dom_fetch_memory_cases(void)
+{
+    for (int fits = 0; fits < 2; fits++) {
+        FakeNet net = {0};
+        DomFixture f = net_fixture_engine("http://example.test/", &net, 4 * 1024 * 1024);
+        if (!fixture_ready(&f)) return;
+        size_t size = fits ? 512 * 1024 : 6 * 1024 * 1024;
+        char *big = malloc(size + 1);
+        if (big == NULL) abort();
+        memset(big, 'x', size);
+        big[size] = '\0';
+        dom_script(&f, "globalThis.log=[];fetch('/big').then(r=>r.arrayBuffer()).then(b=>log.push(b.byteLength));",
+                   "memory: a request for a big body");
+        os64_dom_response_t answer = net_answer_of(200, "http://example.test/big", "", big);
+        os64_js_status_t status = net_answer(&f, &net, 0, &answer);
+        if (fits) {
+            check(status == OS64_JS_OK, "memory: a body inside the limit is answered");
+            dom_script(&f, FETCH_ASSERT "assert(log.join()==='524288',log.join());", "memory: and read");
+        } else
+            check(status == OS64_JS_LIMIT, "memory: a body past the limit is the runtime's limit");
+        free(big);
+        fixture_free(&f);
+    }
+}
+
+/* ── Every allocation failed in turn ─────────────────────────────────── */
+
+static void dom_fetch_sweep_cases(void)
+{
+    static const char *const kOperations[] = {
+        "new Headers([['a','1'],['b','2']]).forEach(()=>{})",
+        "new Request('/x',{method:'POST',body:'b',headers:{x:'1'}}).clone()",
+        "new Response('a=1',{headers:{'content-type':'application/x-www-form-urlencoded'}}).formData()",
+        "fetch('/x').catch(()=>{})",
+        "var x=new XMLHttpRequest();x.open('GET','/x');x.setRequestHeader('a','b');x.send()",
+        "AbortSignal.any([new AbortController().signal]);new AbortController().abort()",
+        "var f=new FormData();f.append('a',new Blob(['x']),'n');new Response(f).text()",
+    };
+    size_t n = sizeof(kOperations) / sizeof(kOperations[0]);
+    os64_dom_options_t options = os64_dom_default_options();
+    options.url = "http://example.test/";
+    binding_sweep("fetch", kOperations, n, &options);
+    engine_sweep("fetch", kOperations, n, &options);
+}
+
+/* ── With the switch off, none of it ─────────────────────────────────── */
+
+static void dom_fetch_modern_off_cases(void)
+{
+    os64_dom_options_t options = os64_dom_default_options();
+    options.modern = false;
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, FETCH_ASSERT
+        "for(const n of ['fetch','Headers','Request','Response','AbortController','AbortSignal','FormData','Blob',"
+        "'File','XMLHttpRequest','XMLHttpRequestEventTarget','XMLHttpRequestUpload','ProgressEvent','DOMException',"
+        "'ReadableStream'])assert(typeof window[n]==='undefined'&&!(n in window),n);",
+        "modern off: no request surface");
+    fixture_free(&f);
+}
+
+static void dom_fetch_cases(void)
+{
+    dom_fetch_origin_cases();
+    dom_fetch_headers_cases();
+    dom_fetch_object_cases();
+    dom_fetch_network_cases();
+    dom_fetch_abort_cases();
+    dom_xhr_cases();
+    dom_fetch_bound_cases();
+    dom_fetch_memory_cases();
+    dom_fetch_modern_off_cases();
+    dom_fetch_sweep_cases();
+}

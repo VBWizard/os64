@@ -268,6 +268,34 @@ static os64_dom_storage_status_t session_commit(void *opaque, const char *origin
                                  s->options.diag);
 }
 
+// A script's requests (dom.h § A SCRIPT'S REQUESTS): the window's, for
+// this page by its serial.
+static uint64_t net_start(void *opaque, const os64_dom_request_t *request, uint32_t token)
+{
+    yonder_scripts_t *s = opaque;
+    return s->options.request != NULL ? s->options.request(s->options.opaque, s->options.serial, token, request) : 0;
+}
+
+static void net_cancel(void *opaque, uint64_t id)
+{
+    yonder_scripts_t *s = opaque;
+    if (s->options.cancel != NULL)
+        s->options.cancel(s->options.opaque, id);
+}
+
+static bool net_run(void *opaque, const os64_dom_request_t *request, os64_dom_response_t *response)
+{
+    yonder_scripts_t *s = opaque;
+    return s->options.run != NULL && s->options.run(s->options.opaque, s->options.serial, request, response);
+}
+
+static void net_release(void *opaque, os64_dom_response_t *response)
+{
+    yonder_scripts_t *s = opaque;
+    if (s->options.release != NULL)
+        s->options.release(s->options.opaque, response);
+}
+
 // The runtime and its binding, made at the first script that runs. Heap
 // and source keep the profile measured for libdom (DOM.md § D5b); the stack
 // is the 128 KiB DOM_D10.md measured, because geometry shares it with native
@@ -312,6 +340,10 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     }
     if (s->options.diag != NULL)
         os64_dom_set_global_miss(s->dom, global_missed, s);
+    if (s->options.request != NULL) {
+        const os64_dom_network_t network = {net_start, net_cancel, net_run, net_release, s};
+        os64_dom_set_network(s->dom, &network);
+    }
     if (s->dom == NULL || os64_js_install_output(s->runtime, 1, OS64_JS_OUTPUT_CONSOLE, out) != OS64_JS_OK) {
         // A runtime a binding could not be built in is not evaluated again.
         out->status = OS64_JS_HOST_FAILURE;
@@ -791,6 +823,25 @@ bool yonder_scripts_timer_fire(yonder_scripts_t *s, uint64_t now, os64_js_outcom
         return false;
     judged(s, out);
     return true;
+}
+
+bool yonder_scripts_answered(yonder_scripts_t *s, uint32_t token, const os64_dom_response_t *response,
+                             os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s == NULL || s->dead || !os64_dom_fetch_waiting(s->dom, token))
+        return false;
+    s->written = 0;
+    s->task_address = NULL;
+    os64_dom_fetched(s->dom, token, response, out);
+    judged(s, out);
+    return true;
+}
+
+void yonder_scripts_requests_cancel(yonder_scripts_t *s)
+{
+    if (s != NULL && !s->dead)
+        os64_dom_fetches_cancel(s->dom);
 }
 
 bool yonder_scripts_take_navigation(yonder_scripts_t *s, os64_dom_navigation_t *ask)

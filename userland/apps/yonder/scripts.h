@@ -63,6 +63,16 @@ typedef struct {
     // (devicePixelRatio), given `opaque`; NULL is 1000.
     os64_dom_screen_t screen;
     uint32_t (*zoom)(void *opaque);
+    // A script's requests, fetch() and XMLHttpRequest's (dom.h § A
+    // SCRIPT'S REQUESTS), given `opaque`. `request` submits the page
+    // `serial`'s request `token` and answers its job id (cancelled through
+    // `cancel`), 0 when it could not be begun; its answer comes back through
+    // yonder_scripts_answered. `run` runs a synchronous XMLHttpRequest's to
+    // its end on this thread, filling `*response`, which `release` frees.
+    // A NULL `request`: every request is a network error.
+    uint64_t (*request)(void *opaque, uint64_t serial, uint32_t token, const os64_dom_request_t *request);
+    bool (*run)(void *opaque, uint64_t serial, const os64_dom_request_t *request, os64_dom_response_t *response);
+    void (*release)(void *opaque, os64_dom_response_t *response);
 } yonder_scripts_options_t;
 
 // A host for `doc`, whose control state is `state` (which must outlive it).
@@ -136,6 +146,13 @@ void yonder_scripts_set_note(yonder_scripts_t *scripts, const char *line);
 const char *yonder_scripts_note(const yonder_scripts_t *scripts);
 uint64_t yonder_scripts_timer_next(const yonder_scripts_t *scripts);
 bool yonder_scripts_timer_fire(yonder_scripts_t *scripts, uint64_t now, os64_js_outcome_t *outcome);
+// The answer to the page's request `token` (os64_dom_fetched), as one
+// task. False when nothing ran: the runtime is gone, or never was.
+bool yonder_scripts_answered(yonder_scripts_t *scripts, uint32_t token, const os64_dom_response_t *response,
+                             os64_js_outcome_t *outcome);
+// The page departs: every request its scripts have out is cancelled and
+// forgotten, and nothing of the page hears it (os64_dom_fetches_cancel).
+void yonder_scripts_requests_cancel(yonder_scripts_t *scripts);
 // The navigation the last task asked for; nodes arrive held.
 bool yonder_scripts_take_navigation(yonder_scripts_t *scripts, os64_dom_navigation_t *ask);
 // A new task budget, from the next task on, and the budget tasks have.
