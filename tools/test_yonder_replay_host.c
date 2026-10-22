@@ -33,10 +33,11 @@
  * record whether a page is one to replay, forks a child for it, and
  * trusts what the child says only when its exit status and its record
  * agree; the child (rp_replay_page) reads the page's inputs from its record
- * (rp_window_of: every one required of a version 2 page, each a version 1
- * page lacks taken from the harness and named on its record), feeds the
- * page to the window, writes its record with the state rp_decide gave it,
- * and exits.
+ * (rp_window_of: every one required, of either version, but the agent,
+ * the cookies, the clock and the zone, which a version 1 page takes from
+ * the harness and names on its record), sets them where the window reads
+ * them (rp_run, rp_apply_inputs), feeds the page to the window, writes its
+ * record with the state rp_decide gave it, and exits.
  *
  * THE REPLAY ITSELF (rp_run). The window and every fake are
  * tools/test_yonder_scripts_host.c's, the headless binding: this file
@@ -117,6 +118,7 @@
 #include <signal.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <errno.h>
 #include <time.h>
@@ -308,13 +310,14 @@ typedef struct {
     const char *f[7]; size_t fl[7]; int nf;
 } RpLine;
 
-/* THE INPUTS A REPLAY MAY TAKE FROM THE HARNESS for a kept page of version
- * 1, which does not record them (REPLAY.md § 3), each named on the
- * replay's `REPLAY inputs defaulted:` line in this order;
- * tools/yonder_records.py's DEFAULTABLE is the same set. */
-static const char *const kDefaultable[]={"agent","cookies","clock","tz","modern","zoom","appearance","motion",
-    "animate","scripts","script-seconds","view-width","view-height","status","content-type","charset",
-    "encrypted","body","final-address","kept-lines","job-identity"};
+/* WHAT A REPLAY OF A VERSION 1 PAGE NAMES on its `REPLAY inputs defaulted:`
+ * line, in this order (REPLAY.md § 3): the four inputs version 2 added,
+ * which a version 1 record does not say and the replay takes from the
+ * harness, and `job-identity`, which its index does not record, so its
+ * jobs are matched by kind and address in the kept order. Nothing else is
+ * ever taken from the harness. tools/yonder_records.py's DEFAULTABLE is
+ * the same set. */
+static const char *const kDefaultable[]={"agent","cookies","clock","tz","job-identity"};
 #define RP_DEFAULTABLE (sizeof(kDefaultable)/sizeof(kDefaultable[0]))
 
 /* A fact value a reader parses, matched whole: NULL, or why it is not. */
@@ -377,6 +380,13 @@ static RpLine rp_classify(const char *line, size_t len, bool index) {
      * holding one is refused whole, since its readers classify every line. */
     for(size_t i=0;i<len;i++)
         if((unsigned char)line[i]<0x20 && line[i]!='\t') { l.why="a control byte"; return l; }
+    /* Nor one spelled `\x00`: a field that decodes to a NUL would read as
+     * shorter than it is wherever a string ends at one. */
+    size_t dlen=0;
+    char *decoded=rp_unescape_n(line,len,!index,&dlen);
+    bool nul=memchr(decoded,'\0',dlen)!=NULL;
+    free(decoded);
+    if(nul) { l.why="a NUL in a field"; return l; }
     if(index) {
         if(rp_starts(line,len,"# yonder kept index ")) {
             if(rp_decimal(line+20,len-20,&l.n[0])) l.kind="index:version";
@@ -1322,67 +1332,47 @@ static void rp_report(const char *name, const RpOutcome *o, bool leaked, RpTally
     printf("\n");
 }
 
-/* What a version 1 page takes from the harness for an input its record
- * does not say (REPLAY.md § 3): the fact, its name on the replay's
- * `REPLAY inputs defaulted:` line, and the value the harness gives
- * (NULL: computed by rp_window_of). */
-static const struct { int fact; const char *name, *value; } kDefaults[]={
-    {F_AGENT,"agent",YONDER_AGENT},{F_COOKIES,"cookies",NULL},{F_CLOCK,"clock",NULL},{F_TZ,"tz",NULL},
-    {F_MODERN,"modern","on"},{F_ZOOM,"zoom","1000"},{F_APPEARANCE,"appearance","light"},{F_MOTION,"motion","full"},
-    {F_ANIMATIONS,"animate","on"},{F_SCRIPTS,"scripts","on"},{F_SCRIPT_SECONDS,"script-seconds",NULL},
-    {F_STATUS,"status","200 OK"},{F_TYPE,"content-type","text/html"},{F_CHARSET,"charset",""},
-    {F_ENCRYPTED,"encrypted","no"},{F_BODY,"body","html"},{F_FINAL,"final-address",NULL}};
-/* `name` marked taken from the harness, in kDefaultable's order. */
+/* `name` marked in `taken`, in kDefaultable's order. */
 static void rp_defaulted(bool *taken, const char *name) {
     for(size_t k=0;k<RP_DEFAULTABLE;k++) if(!strcmp(kDefaultable[k],name)) taken[k]=true;
 }
 
 /* THE PAGE'S INPUTS (REPLAY.md § 3), the window it was read in and its
  * network head, rebuilt from its record's facts: NULL, or why the page
- * cannot be judged. A record of VERSION 2 says every one, each REQUIRED
+ * cannot be judged. Every record says each one it needs, REQUIRED
  * (kNeeded), never assumed: its final address, body, kept lines, the view
  * it was laid out in (width and height), its zoom, appearance, motion,
  * whether animations run, the modern switch, scripts and their time
  * limit, its agent, the cookies a script could read, its clock and zone;
  * a page from the network its status, content-type, charset and
  * encryption too (a fact may be empty: the server named none). A record
- * of VERSION 1 predates the inputs it does not say, and the replay takes
- * each from the harness (kDefaults), marking it in `taken`; so does a
- * version 1 index's missing job identity. Each value has passed the
+ * of VERSION 1 predates four of them, the agent, the cookies, the clock
+ * and the zone, and the replay takes those four, and only those, from the
+ * harness (rp_harness_inputs), marking each in `taken`; a version 1
+ * index's missing job identity is marked too. Each value has passed the
  * grammar (rp_classify). `index` is the page's kept index, whose line
  * count the record's `kept lines` must be. */
 static const char *rp_window_of(const RpRecord *r, bool local, const RpIndex *index, RpLoad *load, bool *taken) {
     static const int kNeeded[]={F_FINAL,F_BODY,F_KEPT_LINES,F_LAID,F_ZOOM,F_APPEARANCE,F_MOTION,F_ANIMATIONS,F_MODERN,
         F_SCRIPTS,F_SCRIPT_SECONDS,F_AGENT,F_COOKIES,F_CLOCK,F_TZ,F_STATUS,F_TYPE,F_CHARSET,F_ENCRYPTED};
-    static char why[160], clock[32], seconds[16];
+    static char why[160], clock[32], zone[64];
     const char *f[F_N];
     memcpy(f,r->facts,sizeof(f));
-    if(rp_version(r)>=2) {
-        for(size_t i=0;i<sizeof(kNeeded)/sizeof(kNeeded[0]);i++)
-            if(f[kNeeded[i]]==NULL && !(local && (kNeeded[i]==F_STATUS || kNeeded[i]==F_TYPE ||
-                                                  kNeeded[i]==F_CHARSET || kNeeded[i]==F_ENCRYPTED))) {
-                snprintf(why,sizeof(why),"its record does not say its `%s`",kFacts[kNeeded[i]]);
-                return why;
-            }
-    } else {
+    if(rp_version(r)<2) {
         RpLoad harness; rp_harness_inputs(&harness);
         snprintf(clock,sizeof(clock),"%llu",(unsigned long long)harness.clock_ms);
-        snprintf(seconds,sizeof(seconds),"%d",YONDER_SCRIPT_SECONDS_DEFAULT);
-        for(size_t i=0;i<sizeof(kDefaults)/sizeof(kDefaults[0]);i++) {
-            int k=kDefaults[i].fact;
-            if(f[k]!=NULL || (local && (k==F_STATUS || k==F_TYPE || k==F_CHARSET || k==F_ENCRYPTED))) continue;
-            f[k]=k==F_COOKIES ? harness.cookies : k==F_CLOCK ? clock : k==F_SCRIPT_SECONDS ? seconds :
-                 k==F_FINAL ? r->address : kDefaults[i].value;
-            rp_defaulted(taken,kDefaults[i].name);
-        }
-        /* A census-era `laid out at` says the page's height, not the
-         * view's size: the harness's view stands for it. */
-        if(f[F_LAID]==NULL || f[F_LAID][rp_digit_run(f[F_LAID],f[F_LAID]+strlen(f[F_LAID]))]!='x') {
-            f[F_LAID]="800x600 px";
-            rp_defaulted(taken,"view-width"); rp_defaulted(taken,"view-height");
-        }
-        if(f[F_KEPT_LINES]==NULL) rp_defaulted(taken,"kept-lines");
+        const char *tz=getenv("TZ");
+        if(tz!=NULL && tz[0]!='\0') snprintf(zone,sizeof(zone),"%s",tz);
+        else snprintf(zone,sizeof(zone),"%dm",(int)js_test_clock.tz_offset_minutes);
+        f[F_AGENT]=harness.agent; f[F_COOKIES]=harness.cookies; f[F_CLOCK]=clock; f[F_TZ]=zone;
+        rp_defaulted(taken,"agent"); rp_defaulted(taken,"cookies"); rp_defaulted(taken,"clock"); rp_defaulted(taken,"tz");
     }
+    for(size_t i=0;i<sizeof(kNeeded)/sizeof(kNeeded[0]);i++)
+        if(f[kNeeded[i]]==NULL && !(local && (kNeeded[i]==F_STATUS || kNeeded[i]==F_TYPE ||
+                                              kNeeded[i]==F_CHARSET || kNeeded[i]==F_ENCRYPTED))) {
+            snprintf(why,sizeof(why),"its record does not say its `%s`",kFacts[kNeeded[i]]);
+            return why;
+        }
     if(index->version==1) rp_defaulted(taken,"job-identity");
     /* `<width>x<height> px`, perhaps ` in <n> ms`. */
     const char *laid=f[F_LAID], *x=laid+rp_digit_run(laid,laid+strlen(laid)), *px=strstr(laid," px");
@@ -1397,8 +1387,7 @@ static const char *rp_window_of(const RpRecord *r, bool local, const RpIndex *in
     if(!rp_decimal(f[F_SCRIPT_SECONDS],strlen(f[F_SCRIPT_SECONDS]),&load->script_seconds))
         return "its record's `script seconds` is none yonder writes";
     uint32_t want_lines=0;
-    if(f[F_KEPT_LINES]!=NULL && (!rp_decimal(f[F_KEPT_LINES],strlen(f[F_KEPT_LINES]),&want_lines) ||
-                                 want_lines!=index->lines)) {
+    if(!rp_decimal(f[F_KEPT_LINES],strlen(f[F_KEPT_LINES]),&want_lines) || want_lines!=index->lines) {
         snprintf(why,sizeof(why),"its record says its index holds %u lines, and it holds %u",want_lines,index->lines);
         return why;
     }
@@ -1431,19 +1420,10 @@ static const char *rp_window_of(const RpRecord *r, bool local, const RpIndex *in
 }
 
 /* Whether a whole record is a KEPT PAGE's (REPLAY.md § 3): one that says
- * `kept:` (whole or not); or, of version 1, which predates that fact, one
- * whose page bytes (`<base>.html`) are beside it. */
-static RpFs rp_is_kept(const char *base, const RpRecord *r, bool *kept, RpFault *fault) {
-    *kept=r->facts[F_KEPT]!=NULL;
-    if(*kept || rp_version(r)>=2) return RP_FS_OK;
-    char *html=rp_cat(base,".html","");
-    bool dir=false;
-    RpFs got=rp_fs_kind(html,&dir,fault);
-    free(html);
-    if(got==RP_FS_FAULT) return got;
-    *kept=got==RP_FS_OK;
-    return RP_FS_OK;
-}
+ * `kept:` (whole or not), of either version. yonder writes it when the
+ * page's bytes are done, last, so for a version 1 record, which may lack
+ * `end`, it is the line that says the record reached its end. */
+static bool rp_is_kept(const RpRecord *r) { return r->facts[F_KEPT]!=NULL; }
 /* THE END RULE (REPLAY.md § 2): a kept page's record of version 2 (one
  * that says `kept lines:`, written at its claim, or `kept:`) ends with
  * `end`, so one cut short anywhere after its claim is never replayed. */
@@ -1487,7 +1467,7 @@ static int rp_replay_page(const char *kept, const char *out, const char *name, u
     if((unjudged=rp_record_read(text,size,&r))!=NULL) goto judge;
     if((unjudged=r.unjudged)!=NULL) goto judge;
     if(rp_cut_short(&r)) { unjudged="its record has no `end`: it was cut short"; goto judge; }
-    if(rp_is_kept(base,&r,&is_kept,&fault)==RP_FS_FAULT) { unjudged=fault.why; goto judge; }
+    is_kept=rp_is_kept(&r);
     if(!is_kept) { unjudged="it is not a kept page (its record does not say `kept:`)"; goto judge; }
     if(r.facts[F_KEPT]!=NULL && strcmp(r.facts[F_KEPT],"whole")) {
         snprintf(why,sizeof(why),"it was kept %s",r.facts[F_KEPT]);
@@ -1570,34 +1550,43 @@ judge:;
 
 /* A child's end awaited, for at most rp_child_limit_ms of the wall clock
  * (REPLAY.md § 6: ten minutes; past it the child is killed): its status,
- * and whether it was killed for its time. `waitpid` is retried when a
- * signal interrupted it, and on nothing else: false when the child cannot
+ * and whether it was killed for its time. The parent blocks in `waitpid`,
+ * and a timer interrupts it every RP_WAIT_TICK_MS to look at the clock, so
+ * an interrupted wait is the ordinary case: `waitpid` is retried when a
+ * signal interrupted it, and on nothing else. False when the child cannot
  * be waited for. */
-static uint64_t rp_child_limit_ms=10*60*1000;
+#define RP_CHILD_LIMIT_MS (10*60*1000)
+#define RP_WAIT_TICK_MS 100
+static uint64_t rp_child_limit_ms=RP_CHILD_LIMIT_MS;
+static void rp_wait_tick(int sig) { (void)sig; }
 static bool rp_wait(pid_t pid, int *status, bool *timed_out) {
+    struct sigaction tick, was;
+    memset(&tick,0,sizeof(tick));
+    tick.sa_handler=rp_wait_tick;      /* no SA_RESTART: the tick must interrupt the wait */
+    sigemptyset(&tick.sa_mask);
+    sigaction(SIGALRM,&tick,&was);
+    struct itimerval every={{0,RP_WAIT_TICK_MS*1000},{0,RP_WAIT_TICK_MS*1000}}, off={{0,0},{0,0}};
+    setitimer(ITIMER_REAL,&every,NULL);
     struct timespec start, now;
     clock_gettime(CLOCK_MONOTONIC,&start);
-    long nap_us=1000;
     *timed_out=false;
+    bool waited=false;
     for(;;) {
-        pid_t w=waitpid(pid,status,WNOHANG);
-        if(w==pid) return true;
-        if(w<0 && errno!=EINTR) return false;
-        if(w<0) continue;
+        pid_t w=waitpid(pid,status,0);
+        if(w==pid) { waited=true; break; }
+        if(w>=0 || errno!=EINTR) break;
         clock_gettime(CLOCK_MONOTONIC,&now);
         uint64_t ms=(uint64_t)(now.tv_sec-start.tv_sec)*1000+(uint64_t)((now.tv_nsec-start.tv_nsec)/1000000);
-        if(ms>=rp_child_limit_ms) {
+        if(!*timed_out && ms>=rp_child_limit_ms) {
             kill(pid,SIGKILL);
             *timed_out=true;
-            for(;;) {
-                if(waitpid(pid,status,0)==pid) return true;
-                if(errno!=EINTR) return false;
-            }
         }
-        struct timespec nap={0,nap_us*1000};
-        nanosleep(&nap,NULL);
-        if(nap_us<20000) nap_us*=2;
     }
+    int saved=errno;
+    setitimer(ITIMER_REAL,&off,NULL);
+    sigaction(SIGALRM,&was,NULL);
+    errno=saved;
+    return waited;
 }
 
 /* ONE PROCESS PER PAGE (REPLAY.md § 6). The fakes the window runs on were
@@ -1621,16 +1610,20 @@ static bool rp_wait(pid_t pid, int *status, bool *timed_out) {
  * (`<out>/<name>.<pid>.new`), and TRUSTS the child's record only when its
  * status is in the table and the record agrees with it: its second line
  * the state the status names, its `REPLAY inputs defaulted:` line there
- * when the status says so, and its `end`. A child that died, ran past its
+ * when the status says so, a verdict with no line of a kind a replay
+ * reproduces exactly when the status says clean, and its `end`. A child that died, ran past its
  * time, exited outside the table, or whose record disagrees leaves its
  * page UNJUDGED, in a record the parent writes. */
 /* The self-test's: a page whose child dies (`rp_crash_page`), never ends
  * (`rp_hang_page`), dies leaving its write's temporary (`rp_orphan_page`),
- * exits with a state its record does not say (`rp_lie_page`) or with a
- * status outside the table, as a sanitizer's death does
- * (`rp_odd_exit_page`), or dirties the fakes' statics after its record is
+ * exits with a state its record does not say (`rp_lie_page`), with its
+ * clean flag turned over (`rp_lie_clean_page`) or with a status outside
+ * the table, as a sanitizer's death does (`rp_odd_exit_page`, exiting
+ * `rp_odd_exit_code`), or dirties the fakes' statics after its record is
  * written (`rp_dirty_page`). */
-static const char *rp_crash_page, *rp_hang_page, *rp_orphan_page, *rp_lie_page, *rp_odd_exit_page, *rp_dirty_page;
+static const char *rp_crash_page, *rp_hang_page, *rp_orphan_page, *rp_lie_page, *rp_lie_clean_page,
+                  *rp_odd_exit_page, *rp_dirty_page;
+static int rp_odd_exit_code=1;
 static bool rp_one_process(const char *kept, const char *out, const char *name, uint64_t budget_ms, bool replace,
                            RpTally *t) {
     RpFault fault;
@@ -1641,8 +1634,7 @@ static bool rp_one_process(const char *kept, const char *out, const char *name, 
         char *stem=strndup(name,strlen(name)-4), *base=rp_cat(kept,"/",stem), *path=rp_cat(base,".txt","");
         char *text=NULL; size_t size=0; RpRecord r; bool is_kept=true;
         if(rp_fs_read(path,&text,&size,&fault)==RP_FS_OK && rp_record_read(text,size,&r)==NULL) {
-            bool k=false;
-            if(r.unjudged==NULL && !rp_cut_short(&r) && rp_is_kept(base,&r,&k,&fault)==RP_FS_OK) is_kept=k;
+            if(r.unjudged==NULL && !rp_cut_short(&r)) is_kept=rp_is_kept(&r);
             rp_record_free(&r);
         }
         free(text); free(path); free(base); free(stem);
@@ -1660,8 +1652,13 @@ static bool rp_one_process(const char *kept, const char *out, const char *name, 
     if(pid<0) { fprintf(stderr,"replay: no process for %s; the run stops here\n",rp_display(name)); free(at_out); return false; }
     if(pid==0) {
         if(rp_crash_page!=NULL && !strcmp(name,rp_crash_page)) abort();
-        if(rp_hang_page!=NULL && !strcmp(name,rp_hang_page)) for(;;) pause();
-        if(rp_odd_exit_page!=NULL && !strcmp(name,rp_odd_exit_page)) _exit(1);
+        if(rp_hang_page!=NULL && !strcmp(name,rp_hang_page)) {
+            /* Never ending, but not for ever: a parent that does not kill
+             * it sees it die of the alarm instead. */
+            alarm(20);
+            for(;;) pause();
+        }
+        if(rp_odd_exit_page!=NULL && !strcmp(name,rp_odd_exit_page)) _exit(rp_odd_exit_code);
         if(rp_orphan_page!=NULL && !strcmp(name,rp_orphan_page)) {
             /* What a child killed inside its write leaves: the temporary
              * the door was writing, by its own name. */
@@ -1677,6 +1674,7 @@ static bool rp_one_process(const char *kept, const char *out, const char *name, 
         }
         /* A status naming a state the record does not say. */
         if(rp_lie_page!=NULL && !strcmp(name,rp_lie_page)) code=RP_CHILD_BASE+RP_UNFINISHED;
+        if(rp_lie_clean_page!=NULL && !strcmp(name,rp_lie_clean_page)) code^=RP_CHILD_CLEAN;
         fflush(stdout); fflush(stderr);
         _exit(code);
     }
@@ -1702,28 +1700,44 @@ static bool rp_one_process(const char *kept, const char *out, const char *name, 
     } else if(code>=RP_CHILD_BASE && code<=RP_CHILD_TOP) {
         RpState st=(RpState)((code-RP_CHILD_BASE)&3);
         bool defaulted=((code-RP_CHILD_BASE)&RP_CHILD_DEFAULTED)!=0;
-        /* The page's state is read from its record: the status says which. */
+        bool clean=((code-RP_CHILD_BASE)&RP_CHILD_CLEAN)!=0;
+        /* The page's state is read from its record, which must say what
+         * the status says: its second line the state, its `REPLAY inputs
+         * defaulted:` line there when the status says so, a clean page's
+         * record no MISSING or FAILED line of a kind a replay reproduces
+         * and anyone else's at least one, and its `end`. Whether it let go
+         * of what it held, the record does not say: that flag can only
+         * make the run's answer worse. */
         char *text=NULL; size_t size=0;
         bool says=false;
         if(rp_fs_read(at_out,&text,&size,&fault)==RP_FS_OK) {
             char head[64]; snprintf(head,sizeof(head),"\nREPLAY state: %s",kStates[st]);
             const char *line=strstr(text,head);
+            unsigned reproduced=0;
+            for(size_t at=0; at<size; ) {
+                const char *l=text+at, *e=memchr(l,'\n',size-at);
+                size_t n=e!=NULL ? (size_t)(e-l) : size-at;
+                RpLine k=rp_classify(l,n,false);
+                if((!strcmp(k.kind,"missing") || !strcmp(k.kind,"failed")) && rp_reproduced(k.a,k.alen)) reproduced++;
+                at+=n+1;
+            }
             says=line!=NULL && memchr(text,'\n',(size_t)(line-text))==NULL &&
                  (line[strlen(head)]=='\n' || line[strlen(head)]==' ') &&
                  (strstr(text,"\nREPLAY inputs defaulted: ")!=NULL)==defaulted &&
+                 clean==(st==RP_VERDICT && reproduced==0) &&
                  size>=4 && !strcmp(text+size-4,YONDER_DIAG_END "\n");
         }
         free(text);
         if(says) {
             t->states[st]++;
-            t->clean+=((code-RP_CHILD_BASE)&RP_CHILD_CLEAN)!=0;
+            t->clean+=clean;
             t->leaked+=((code-RP_CHILD_BASE)&RP_CHILD_LEAKED)!=0;
             t->defaulted+=defaulted;
             free(at_out);
             return true;
         }
-        snprintf(why,sizeof(why),"the replay died: its record does not say what its process ended with (%s%s)",kStates[st],
-                 defaulted ? ", its inputs defaulted" : "");
+        snprintf(why,sizeof(why),"the replay died: its record does not say what its process ended with (%s%s%s)",
+                 kStates[st],clean ? ", clean" : "",defaulted ? ", its inputs defaulted" : "");
     } else if(WIFSIGNALED(status)) {
         snprintf(why,sizeof(why),"the replay died: signal %d (%s)",WTERMSIG(status),strsignal(WTERMSIG(status)));
     } else {
@@ -1826,23 +1840,28 @@ static bool rp_put_dir(const char *path) {
     printf("  %s\n",fault.why); rp_faults++;
     return false;
 }
-/* A kept page's record written here, of version 2, saying what yonder's
- * says of its kept files (as many bytes as `page` and `lines` index lines)
- * and of the inputs it was read with (the harness's: rp_harness_inputs,
- * the window's settings at their defaults, its zone `330m`), and ending
- * as yonder's does. */
-static bool rp_put_record(const char *path, const char *record, const char *page, unsigned lines) {
+/* A kept page's record written here, of `version` 2 or 1, saying what
+ * yonder's says of its kept files (as many bytes as `page` and `lines`
+ * index lines) and of the inputs it was read with (the harness's:
+ * rp_harness_inputs, the window's settings at their defaults, its zone
+ * `330m`), and ending as yonder's does. Version 1 says neither the four
+ * inputs version 2 added nor `end`. */
+static bool rp_put_record_of(const char *path, const char *record, const char *page, unsigned lines, int version) {
     size_t n=strlen(record)+512;
-    char *text=malloc(n);
+    char *text=malloc(n), inputs[256]="";
     RpLoad harness; rp_harness_inputs(&harness);
-    snprintf(text,n,"%sagent: %s\ncookies: %s\nclock: %llu\ntz: 330m\n"
-             "bytes: %zu\nkept lines: %u\nmodern: on\nlaid out at: 800x600 px\nzoom: 1000\n"
-             "appearance: light\nmotion: full\nanimate: on\nscripts: on\nscript seconds: %d\n" YONDER_DIAG_END "\n",
-             record,harness.agent,harness.cookies,(unsigned long long)harness.clock_ms,
-             strlen(page),lines,YONDER_SCRIPT_SECONDS_DEFAULT);
+    if(version>=2)
+        snprintf(inputs,sizeof(inputs),"agent: %s\ncookies: %s\nclock: %llu\ntz: 330m\n",
+                 harness.agent,harness.cookies,(unsigned long long)harness.clock_ms);
+    snprintf(text,n,"%s%sbytes: %zu\nkept lines: %u\nmodern: on\nlaid out at: 800x600 px\nzoom: 1000\n"
+             "appearance: light\nmotion: full\nanimate: on\nscripts: on\nscript seconds: %d\n%s",
+             record,inputs,strlen(page),lines,YONDER_SCRIPT_SECONDS_DEFAULT,version>=2 ? YONDER_DIAG_END "\n" : "");
     bool ok=rp_put(path,text,strlen(text));
     free(text);
     return ok;
+}
+static bool rp_put_record(const char *path, const char *record, const char *page, unsigned lines) {
+    return rp_put_record_of(path,record,page,lines,2);
 }
 static unsigned rp_replayed(const RpTally *t) {
     return t->states[RP_VERDICT]+t->states[RP_INCOMPLETE]+t->states[RP_UNFINISHED];
@@ -1896,8 +1915,9 @@ static bool rp_copy_kept(const char *host) {
 /* A hand-made page: what it proves, where it is from, its bytes and head,
  * the words of its own checks, which its record must not hold, words its
  * record must hold, which say it was read as it is meant to be, the width
- * of the view it is read in (0 for the harness's own), and whether it is
- * read with scripts off. */
+ * of the view it is read in (0 for the harness's own), whether it is read
+ * with scripts off or the modern switch off, and whether it is read with
+ * every other input unlike the harness's (rp_other_inputs). */
 typedef struct {
     const char *what;
     const char *address;
@@ -1907,7 +1927,17 @@ typedef struct {
     int32_t width;
     bool scripts_off;
     bool modern_off;                /* read with the modern switch off */
+    bool other;                     /* read with rp_other_inputs */
 } RpCase;
+/* INPUTS UNLIKE THE HARNESS'S, every one a replay takes from the record
+ * (REPLAY.md § 3), so a replay that took the harness's value for any of
+ * them instead of the record's reads another page: the agent, the cookie
+ * string, the clock and the zone, the view's width and height, the zoom,
+ * dark pages, reduced motion and animations off. */
+static void rp_other_inputs(RpLoad *load) {
+    load->agent="other-agent/2"; load->cookies="kept=yes"; load->clock_ms=UINT64_C(1600000000123); load->tz="-120m";
+    load->width=900; load->height=700; load->zoom=1250; load->dark=true; load->reduce=true; load->still=true;
+}
 
 static way_head_t rp_head(int status, const char *reason, const char *type, const char *charset,
                           const char *final, bool encrypted, way_body_t body) {
@@ -1961,7 +1991,8 @@ static bool rp_same(const char *name, const char *a, const char *b) {
 typedef enum { RP_COPY, RP_DROP_SCRIPT_LINE, RP_BAD_NUMBER, RP_NO_MEMORY, RP_FULL_TABLE, RP_NO_INDEX, RP_CUT,
                RP_DROP_FACT, RP_SHORT_LINE, RP_CUT_BEFORE_KEPT, RP_BIG_COUNT, RP_ODD_LINE, RP_ESCAPES,
                RP_SWAP_NUMBERS, RP_BIG_LINES, RP_JUNK_BYTES, RP_V1, RP_V3, RP_EMPTY_INDEX, RP_NO_VERSION,
-               RP_CR, RP_INDEX_CONTROL, RP_SECOND_ADDRESS, RP_LEADING_ZERO } RpEdit;
+               RP_CR, RP_INDEX_CONTROL, RP_SECOND_ADDRESS, RP_LEADING_ZERO, RP_NOT_UTF8, RP_PAST_END,
+               RP_SECOND_VERDICT, RP_PLACEHOLDER, RP_FEWER_LINES } RpEdit;
 /* The fact RP_DROP_FACT takes out of the record. */
 static const char *rp_drop_fact;
 
@@ -2078,7 +2109,7 @@ static unsigned rp_copy_page(const char *kept, const char *name, const char *dir
             }
             /* A fact taken out, or its value spoiled: the line `key: ...`
              * whose key is `drop`, removed, or given `value`. */
-            const char *drop=edit==RP_DROP_FACT ? rp_drop_fact : edit==RP_BIG_LINES ? "kept lines" :
+            const char *drop=edit==RP_DROP_FACT ? rp_drop_fact : edit==RP_BIG_LINES || edit==RP_FEWER_LINES ? "kept lines" :
                              edit==RP_JUNK_BYTES || edit==RP_LEADING_ZERO ? "bytes" : NULL;
             if(!strcmp(kFiles[f],".txt") && drop!=NULL) {
                 char key[32]; snprintf(key,sizeof(key),"\n%s: ",drop);
@@ -2087,6 +2118,7 @@ static unsigned rp_copy_page(const char *kept, const char *name, const char *dir
                 else {
                     char value[64]="";
                     if(edit==RP_BIG_LINES) snprintf(value,sizeof(value),"\nkept lines: 4294967296");
+                    if(edit==RP_FEWER_LINES) snprintf(value,sizeof(value),"\nkept lines: %lu",strtoul(at+13,NULL,10)-1);
                     if(edit==RP_JUNK_BYTES) snprintf(value,sizeof(value),"%.*sx",(int)(eol-at),at);
                     if(edit==RP_LEADING_ZERO) snprintf(value,sizeof(value),"\nbytes: 0%.*s",(int)(eol-at-8),at+8);
                     size_t head=(size_t)(at-text), tail=strlen(eol);
@@ -2094,6 +2126,26 @@ static unsigned rp_copy_page(const char *kept, const char *name, const char *dir
                     memcpy(again,text,head); strcpy(again+head,value); strcat(again,eol);
                     free(text); text=again; len=strlen(text);
                 }
+            }
+            if(!strcmp(kFiles[f],".txt") && (edit==RP_NOT_UTF8 || edit==RP_PAST_END || edit==RP_SECOND_VERDICT)) {
+                /* A plain fact whose bytes are not UTF-8, or a second
+                 * verdict, before the record's `end`; or a line after it. */
+                const char *add=edit==RP_NOT_UTF8 ? "note: caf\xE9\n" : edit==RP_SECOND_VERDICT ? "verdict: clean\n"
+                                                                                       : "note: after\n";
+                if(len<4 || strcmp(text+len-4,YONDER_DIAG_END "\n")) { printf("  %s: the record has no end\n",dir); bad++; }
+                else {
+                    text=realloc(text,len+strlen(add)+1);
+                    size_t at=edit==RP_PAST_END ? len : len-4;
+                    memmove(text+at+strlen(add),text+at,len-at+1);
+                    memcpy(text+at,add,strlen(add)); len+=strlen(add);
+                }
+            }
+            if(!strcmp(kFiles[f],".txt") && edit==RP_PLACEHOLDER) {
+                /* The claim's placeholder, never replaced, beside the kept
+                 * files: a name claimed and a record never written. */
+                char *nl=strchr(text,'\n');
+                if(nl==NULL) { printf("  %s: the record has no address\n",dir); bad++; }
+                else { nl[1]='\0'; text=realloc(text,strlen(text)+32); strcat(text,"verdict: unwritten\n"); len=strlen(text); }
             }
             if(!strcmp(kFiles[f],".d/index") && edit==RP_SWAP_NUMBERS) {
                 /* The two sheets' lines numbered each as the other: each
@@ -2208,9 +2260,11 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
      * zero before them, an index of version 1 beside a record of version 2
      * and one of a version no runner reads, an index that is empty or
      * whose first line is not its version, a carriage return in a fact, a
-     * control byte in an index field, and a second `address:`: none is
-     * judged, each says why on a record of its own, and each makes the
-     * answer 2. */
+     * control byte in an index field, a second `address:`, a plain fact
+     * whose bytes are not UTF-8, a line past `end`, a second verdict, the
+     * claim's placeholder never replaced, and a `kept lines` one short of
+     * its index: none is judged, each says why on a record of its own, and
+     * each makes the answer 2. */
     static const struct { const char *dir; RpEdit edit; const char *why; } kRefused[]={
         {"/badnumber",RP_BAD_NUMBER,"its index is damaged: a count no record holds"},
         {"/nomemory",RP_NO_MEMORY,"its record lost lines it could not keep"},
@@ -2232,7 +2286,12 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
         {"/noversion",RP_NO_VERSION,"its index is damaged: its first line is not its version"},
         {"/carriagereturn",RP_CR,"it is not a whole page file: a control byte"},
         {"/indexcontrol",RP_INDEX_CONTROL,"its index is damaged: a control byte"},
-        {"/secondaddress",RP_SECOND_ADDRESS,"it is not a whole page file: an `address:` out of its place"}};
+        {"/secondaddress",RP_SECOND_ADDRESS,"it is not a whole page file: an `address:` out of its place"},
+        {"/notutf8",RP_NOT_UTF8,"it is not a page file: it is not UTF-8"},
+        {"/pastend",RP_PAST_END,"it is not a whole page file: lines past its `end`"},
+        {"/secondverdict",RP_SECOND_VERDICT,"it is not a whole page file: a second verdict line"},
+        {"/placeholder",RP_PLACEHOLDER,"its name was claimed and its record never written"},
+        {"/fewerlines",RP_FEWER_LINES,"its record says its index holds 2 lines, and it holds 3"}};
     for(size_t i=0;i<sizeof(kRefused)/sizeof(kRefused[0]);i++) {
         dir=rp_cat(work,kRefused[i].dir,"");
         bad+=rp_copy_page(kept,name,dir,kRefused[i].edit);
@@ -2289,9 +2348,10 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
     }
     free(record); free(dir);
 
-    /* A page that asks for one address more often than where it was kept:
-     * the extra job has no line of its own, so it is not answered from the
-     * first one again (which would run the script twice); it is
+    /* A page that asks for one address more often than where it was kept,
+     * of version 1 so its index records no identity to tell the two jobs
+     * apart: each line answers one job, so the extra job is not answered
+     * from the first line again (which would run the script twice); it is
      * incomplete, and, since it blocks the parse, the page is unfinished.
      * Then a whole replay into an OUT-DIR that already holds records is
      * refused, and a partial one adds to it. */
@@ -2301,10 +2361,10 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
     static const char kTwiceRecord[]="address: http://fixture.test/twice\nverdict: clean\nstatus: 200 OK\n"
         "final address: http://fixture.test/twice\nbody: html\ncontent-type: text/html\ncharset: \nencrypted: no\nkept: whole\n";
     static const char kTwicePage[]="<!doctype html><p>twice</p><script src=t.js></script><script src=t.js></script>";
-    static const char kTwiceIndex[]="# yonder kept index 2\n1\tscript\thttp://fixture.test/t.js\tcame\thttp://fixture.test/t.js\t\t1\n";
+    static const char kTwiceIndex[]="# yonder kept index 1\n1\tscript\thttp://fixture.test/t.js\tcame\thttp://fixture.test/t.js\t\n";
     char *f1=rp_cat(dir,"/fixture.test-0001.txt",""), *f2=rp_cat(dir,"/fixture.test-0001.html","");
     char *f3=rp_cat(dfolder,"/index",""), *f4=rp_cat(dfolder,"/1.js","");
-    if(!rp_put_record(f1,kTwiceRecord,kTwicePage,1) || !rp_put(f2,kTwicePage,sizeof(kTwicePage)-1) ||
+    if(!rp_put_record_of(f1,kTwiceRecord,kTwicePage,1,1) || !rp_put(f2,kTwicePage,sizeof(kTwicePage)-1) ||
        !rp_put(f3,kTwiceIndex,sizeof(kTwiceIndex)-1) || !rp_put(f4,"1",1)) bad++;
     rc=rp_replay_copy(dir,"fixture.test-0001.txt",60000,&t,&record);
     if(rc!=0 || t.states[RP_UNFINISHED]!=1 || t.clean!=0 || record==NULL ||
@@ -2621,25 +2681,30 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
 
     /* WHAT THE PARENT DOES NOT TRUST (REPLAY.md § 6), a copy of the first
      * hand-made page each: a child whose status names a state its record
-     * does not say; one killed inside its record's write, whose temporary
-     * the parent removes; one that never ends, killed at its time; and one
-     * that exits with a status outside the table, as a sanitizer's death
-     * does. Each page is unjudged on a record the parent writes, saying
-     * why, and no temporary is left in OUT-DIR. */
-    static const struct { const char *dir; const char **hook; const char *why; } kDistrust[]={
-        {"/lies",&rp_lie_page,"the replay died: its record does not say what its process ended with (unfinished)"},
-        {"/orphan",&rp_orphan_page,"the replay died: signal 6 (Aborted)"},
-        {"/hangs",&rp_hang_page,"the replay died: it timed out after 2 s, and was killed"},
-        {"/oddexit",&rp_odd_exit_page,"the replay died: exit status 1"}};
+     * does not say, and one whose status calls a page clean that its
+     * record does not; one killed inside its record's write, whose
+     * temporary the parent removes; one that never ends, killed at its
+     * time; and two that exit with a status outside the table, 1 as a
+     * sanitizer's death does and 97 just past the table's top. Each page
+     * is unjudged on a record the parent writes, saying why, and no
+     * temporary is left in OUT-DIR. */
+    static const struct { const char *dir; const char **hook; int code; const char *why; } kDistrust[]={
+        {"/lies",&rp_lie_page,0,"the replay died: its record does not say what its process ended with (unfinished)"},
+        {"/liesclean",&rp_lie_clean_page,0,
+         "the replay died: its record does not say what its process ended with (verdict, clean)"},
+        {"/orphan",&rp_orphan_page,0,"the replay died: signal 6 (Aborted)"},
+        {"/hangs",&rp_hang_page,0,"the replay died: it timed out after 2 s, and was killed"},
+        {"/oddexit",&rp_odd_exit_page,1,"the replay died: exit status 1"},
+        {"/oddexit97",&rp_odd_exit_page,97,"the replay died: exit status 97"}};
     for(size_t i=0;i<sizeof(kDistrust)/sizeof(kDistrust[0]);i++) {
         dir=rp_cat(work,kDistrust[i].dir,"");
         bad+=rp_copy_page(kept,name,dir,RP_COPY);
         /* Two seconds for the one that never ends: the others are let
          * run to their end, however slowly a loaded machine runs them. */
-        *kDistrust[i].hook=name;
+        *kDistrust[i].hook=name; rp_odd_exit_code=kDistrust[i].code;
         if(kDistrust[i].hook==&rp_hang_page) rp_child_limit_ms=2000;
         rc=rp_replay_copy(dir,name,60000,&t,&record);
-        *kDistrust[i].hook=NULL; rp_child_limit_ms=10*60*1000;
+        *kDistrust[i].hook=NULL; rp_child_limit_ms=RP_CHILD_LIMIT_MS;
         char state[256]; snprintf(state,sizeof(state),"\nREPLAY state: unjudged %s\nend\n",kDistrust[i].why);
         char *outdir=rp_cat(dir,"-out",""), **left=NULL; size_t nleft=0;
         RpFault fault;
@@ -2679,29 +2744,26 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
     }
     free(record); free(f1); free(f2); free(f3); free(f4); free(f5); free(dfolder); free(dir);
 
-    /* A KEPT PAGE OF VERSION 1 (REPLAY.md § 3): a record without the
-     * inputs version 2 added, without its window, its `kept:` or its
-     * `end`, beside its bytes, and an index of six fields. It is judged:
-     * its job matched by kind and address in the kept order, each input
-     * it lacks taken from the harness and named on its record. */
+    /* A KEPT PAGE OF VERSION 1 (REPLAY.md § 3): a record whole but for the
+     * four inputs version 2 added and its `end`, and an index of six
+     * fields. It is judged, its job matched by kind and address in the
+     * kept order, those four taken from the harness and named on its
+     * record with the identity its index lacks. */
     dir=rp_cat(work,"/version1page","");
     dfolder=rp_cat(dir,"/fixture.test-0001.d","");
     if(!rp_put_dir(dir) || !rp_put_dir(dfolder)) bad++;
     static const char kOldPage[]="<!doctype html><p>old</p><script src=a.js></script>";
-    char kOldRecord[512];
-    snprintf(kOldRecord,sizeof(kOldRecord),"address: http://fixture.test/old\nverdict: clean\nbytes: %zu\n"
-             "status: 200 OK\nfinal address: http://fixture.test/old\nbody: html\ncontent-type: text/html\ncharset: \n"
-             "encrypted: no\nlaid out at: 2526 px in 20 ms\n",sizeof(kOldPage)-1);
+    static const char kOldRecord[]="address: http://fixture.test/old\nverdict: clean\nstatus: 200 OK\n"
+        "final address: http://fixture.test/old\nbody: html\ncontent-type: text/html\ncharset: \nencrypted: no\nkept: whole\n";
     static const char kOldIndex[]="# yonder kept index 1\n"
         "1\tscript\thttp://fixture.test/a.js\tcame\thttp://fixture.test/a.js\t\n";
     f1=rp_cat(dir,"/fixture.test-0001.txt",""); f2=rp_cat(dir,"/fixture.test-0001.html","");
     f3=rp_cat(dfolder,"/index",""); f4=rp_cat(dfolder,"/1.js","");
-    if(!rp_put(f1,kOldRecord,strlen(kOldRecord)) || !rp_put(f2,kOldPage,sizeof(kOldPage)-1) ||
+    if(!rp_put_record_of(f1,kOldRecord,kOldPage,1,1) || !rp_put(f2,kOldPage,sizeof(kOldPage)-1) ||
        !rp_put(f3,kOldIndex,sizeof(kOldIndex)-1) || !rp_put(f4,"document.title='old'",20)) bad++;
     rc=rp_replay_copy(dir,"fixture.test-0001.txt",60000,&t,&record);
     if(rc!=0 || t.clean!=1 || t.defaulted!=1 || record==NULL ||
-       strstr(record,"\nREPLAY inputs defaulted: agent cookies clock tz modern zoom appearance motion animate scripts "
-                     "script-seconds view-width view-height kept-lines job-identity\n")==NULL) {
+       strstr(record,"\nREPLAY inputs defaulted: agent cookies clock tz job-identity\n")==NULL) {
         printf("  a kept page of version 1 was not judged with its inputs defaulted and named (%d)\n",rc); bad++;
     }
     free(record); free(f1); free(f2); free(f3); free(f4); free(dfolder); free(dir);
@@ -2796,46 +2858,66 @@ static int rp_self_test(const char *work) {
          "<!doctype html><title>caf\xE9</title><link rel=stylesheet href=k.css>"
          "<p id=out class=caf\xE9>caf\xE9</p><script src=m.js></script><canvas></canvas>",
          rp_head(200,"OK","text/html","windows-1252","https://fixture.test/final",true,WAY_BODY_HTML),
-         "sheetUnread charsetLost","aspect-ratio m.js:",0,false,false},
+         "sheetUnread charsetLost","aspect-ratio m.js:",0,false,false,false},
         {"a text body","http://fixture.test/notes.txt","\xEF\xBB\xBFplain <b>text</b> caf\xC3\xA9\n",
-         rp_head(200,"OK","text/plain","","http://fixture.test/notes.txt",false,WAY_BODY_TEXT),NULL,"body:",0,false,false},
+         rp_head(200,"OK","text/plain","","http://fixture.test/notes.txt",false,WAY_BODY_TEXT),NULL,"body:",0,false,false,false},
         {"a file's page, its script, and a timer that fires after it is shown","file:///pages/f.html",
          "<!doctype html><p>a file</p><script src=f.js></script><script>fetch</script>",
-         rp_head(0,"","","","",false,WAY_BODY_HTML),NULL,"f.js: #timer-1:",0,false,false},
+         rp_head(0,"","","","",false,WAY_BODY_HTML),NULL,"f.js: #timer-1:",0,false,false,false},
         {"an error page","http://fixture.test/busy","<!doctype html><p>slow down</p>",
          rp_head(429,"Too Many Requests","text/html","","http://fixture.test/busy",false,WAY_BODY_HTML),
-         NULL,"429",0,false,false},
+         NULL,"429",0,false,false,false},
         {"a script that did not come, a module, a global","http://fixture.test/gone",
          "<!doctype html><script src=gone.js></script><script type=module>1</script>"
          "<script>if(window.localStorage)x()</script><svg></svg>",
-         rp_head(200,"OK","text/html","","http://fixture.test/gone",false,WAY_BODY_HTML),NULL,"gone.js",0,false,false},
+         rp_head(200,"OK","text/html","","http://fixture.test/gone",false,WAY_BODY_HTML),NULL,"gone.js",0,false,false,false},
         {"a page too deep to read to its end","http://fixture.test/deep",deep,
-         rp_head(200,"OK","text/html","","http://fixture.test/deep",false,WAY_BODY_HTML),NULL,"to its end",0,false,false},
+         rp_head(200,"OK","text/html","","http://fixture.test/deep",false,WAY_BODY_HTML),NULL,"to its end",0,false,false,false},
         {"a picture asked for by itself","http://fixture.test/shot.png","",
-         rp_head(200,"OK","image/png","","http://fixture.test/shot.png",false,WAY_BODY_IMAGE),NULL,"still coming",0,false,false},
+         rp_head(200,"OK","image/png","","http://fixture.test/shot.png",false,WAY_BODY_IMAGE),NULL,"still coming",0,false,false,false},
         {"a wide window, which a media query and a script both see","http://fixture.test/wide",
          "<!doctype html><style>@media (max-width:1000px){p{aspect-ratio:2}}</style><p id=p>wide</p>"
          "<script>if(document.getElementById('p').offsetWidth<1000)narrow()</script>",
          rp_head(200,"OK","text/html","","http://fixture.test/wide",false,WAY_BODY_HTML),
-         "narrow aspect-ratio","1400 px",1400,false,false},
+         "narrow aspect-ratio","1400 px",1400,false,false,false},
         {"a page read with scripts off","http://fixture.test/quiet",
          "<!doctype html><p>no script runs</p><script>nothere()</script>",
          rp_head(200,"OK","text/html","","http://fixture.test/quiet",false,WAY_BODY_HTML),
-         "nothere","scripts:",0,true,false},
+         "nothere","scripts:",0,true,false,false},
         /* Read with the modern switch off: the interfaces the arc adds are
          * not there, and a replay that read it with the switch on would
          * record another page. */
         {"a page read with modern off","http://fixture.test/plain-dom",
          "<!doctype html><p>no modern surface</p><script>Node</script>",
          rp_head(200,"OK","text/html","","http://fixture.test/plain-dom",false,WAY_BODY_HTML),
-         NULL,"modern: off Node",0,false,true},
+         NULL,"modern: off Node",0,false,true,false},
         /* An address holding `M%49SSING` of its own beside MISSING: the
          * record writes them apart, and the replay must ask for the script
          * by the same address the page did. */
         {"an address that spells a token both ways","http://fixture.test/M%49SSING/MISSING/p.html",
          "<!doctype html><p>percent</p><script src=s.js></script>",
          rp_head(200,"OK","text/html","","http://fixture.test/M%49SSING/MISSING/p.html",false,WAY_BODY_HTML),
-         NULL,"M%2549SSING/M%49SSING/s.js: ran",0,false,false},
+         NULL,"M%2549SSING/M%49SSING/s.js: ran",0,false,false,false},
+        /* Read with every input unlike the harness's, its script writing
+         * each into its record as the name of a global it looks for, so a
+         * replay that takes the harness's value for any of them writes
+         * another record. */
+        {"inputs unlike the harness's","http://fixture.test/other",
+         "<!doctype html><style>#dk,#mo{width:10px}"
+         "@media (prefers-color-scheme: dark){#dk{width:111px}}"
+         "@media (prefers-reduced-motion: reduce){#mo{width:122px}}"
+         "#vw{width:100vw;height:1px}#vh{height:50vh}"
+         "@keyframes grow{from{width:10px}to{width:200px}}#an{animation:grow 1s forwards;height:1px}</style>"
+         "<div id=dk></div><div id=mo></div><div id=vw></div><div id=vh></div><div id=an></div><script>"
+         "function say(k,v){try{eval(k+'_'+String(v).replace(/\\W/g,'_'))}catch(e){}}"
+         "function w(id){return document.getElementById(id).offsetWidth}"
+         "say('agent',navigator.userAgent);say('cookie',document.cookie);say('clock',Date.now());"
+         "say('zone',new Date(0).getTimezoneOffset());say('dark',w('dk'));say('motion',w('mo'));"
+         "say('wide',w('vw'));say('high',document.getElementById('vh').offsetHeight);"
+         "setTimeout(function(){say('animate',w('an'))},2000)</script>",
+         rp_head(200,"OK","text/html","","http://fixture.test/other",false,WAY_BODY_HTML),
+         NULL,"agent_other_agent_2 cookie_kept_yes clock_1600000000123 zone_120 dark_111 motion_122 wide_720 high_280 "
+         "animate_704",0,false,false,true},
     };
     const char *dirs[]={"tools/yonder_loop_fixture","tools/yonder_script_fixture","tools/pages"};
     unsigned pages=0, bad=0;
@@ -2886,6 +2968,7 @@ static int rp_self_test(const char *work) {
                 load.zoom=1000; load.modern=set<3 || !hand[i].modern_off; load.script_seconds=YONDER_SCRIPT_SECONDS_DEFAULT;
                 load.dir="/tmp/kept"; load.keep=true; load.budget_ms=60000;
                 rp_harness_inputs(&load);
+                if(set==3 && hand[i].other) rp_other_inputs(&load);
                 fake_reset(); snprintf(fake_dirs[nfake_dirs++],256,"/tmp/kept");
                 size_t live_before=live;
                 RpRan ran=rp_run(&load,rp_site_lookup,&site,NULL);

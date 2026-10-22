@@ -499,8 +499,9 @@ void os64_ui_settings_report(os64_ui_settings_t *dialog, const char *text) {
 static char fake_cookie_url[256], fake_cookie_set[256];
 static int fake_cookie_encrypted=-1;    /* what the window said of the page's transport */
 static const char *fake_cookie_read="session=abc; theme=dark";
+static bool fake_cookie_short;          /* the jar says the string did not fit, whatever the room */
 size_t way_script_cookies(way_jar_t *jar, const char *page_url, bool encrypted, char *out, size_t cap, bool *whole) {
-    (void)jar; *whole=true; snprintf(fake_cookie_url,sizeof(fake_cookie_url),"%s",page_url?page_url:"");
+    (void)jar; *whole=!fake_cookie_short; snprintf(fake_cookie_url,sizeof(fake_cookie_url),"%s",page_url?page_url:"");
     fake_cookie_encrypted=encrypted;
     return (size_t)snprintf(out,cap,"%s",fake_cookie_read);
 }
@@ -5169,6 +5170,66 @@ static void diag_keep_cases(void) {
               "inputs: the agent, the script-visible cookies, the clock and its zone are on the record");
         check(has(text,"\n" YONDER_DIAG_UNJUDGED "settings changed during the load\n"),
               "inputs: a setting changed during the load marks the record unjudged");
+    }
+    keep_end();
+    /* Each other change to the window during the load marks it too (the
+     * scripts switch, the agent, the view resized after the page arrived,
+     * and a page laid out in another view than its claim's), and a load
+     * in an unchanged window is not marked. */
+    for(int change=0;change<5;change++) {
+        keep_begin(true);
+        int32_t width=g.view.bounds.w;
+        loop_page("<p>window</p>");
+        /* A claim made in another view than the one the page is then laid
+         * out in: only the arrival can see it, since the departure finds
+         * the window as the page was laid out. */
+        if(change==4) {
+            check(g.stream.diag!=NULL,"inputs: the page has not arrived when its claim's view is set");
+            yonder_diag_head_fact(g.stream.diag,"laid out at","1x1 px");
+        }
+        check(loop_settle() && g.page.tree!=NULL,"inputs: the page arrives in its window");
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        bool scripts=g.scripts_on; const char *agent=g.way.agent;
+        if(change==1) g.scripts_on=!scripts;
+        if(change==2) g.way.agent="another/1";
+        if(change==3) g.view.bounds.w+=40;
+        loop_drop();
+        g.scripts_on=scripts; g.way.agent=agent; g.view.bounds.w=width;
+        const char *text=diag_file("/tmp/kept",name);
+        static const char *const kChange[]={"nothing changed","the scripts switch","the agent","the view resized",
+                                            "a claim in another view"};
+        char what[96]; snprintf(what,sizeof(what),"inputs: %s %s the record unjudged",kChange[change],
+                                change==0 ? "leaves" : "marks");
+        check(text!=NULL && has(text,"\n" YONDER_DIAG_UNJUDGED "settings changed during the load\n")==(change!=0),what);
+        keep_end();
+    }
+    /* Cookies the jar cannot hand over whole are not written cut short:
+     * the record says it lost lines. */
+    keep_begin(true);
+    fake_cookie_short=true;
+    loop_page("<p>cookies</p>");
+    check(loop_settle() && g.page.tree!=NULL,"inputs: a page whose cookies do not fit arrives");
+    {
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        loop_drop();
+        fake_cookie_short=false;
+        const char *text=diag_file("/tmp/kept",name);
+        check(text!=NULL && !has(text,"\ncookies: ") && has(text,"\n" YONDER_DIAG_LINES_LOST "\n"),
+              "inputs: cookies that do not fit are not written, and the record says it lost lines");
+    }
+    keep_end();
+    /* THE CLAIM IS PROVED AGAIN BEFORE A WRITE: a claimed record removed
+     * while its page is up is not written again under a name that may be
+     * anyone's now. */
+    keep_begin(false);
+    loop_page("<p>gone</p>");
+    check(loop_settle() && g.page.tree!=NULL,"claim: the page arrives");
+    {
+        char name[64], path[128]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        snprintf(path,sizeof(path),"/tmp/kept/%s",name);
+        check(os64_unlink(path)==0,"claim: its record is removed from under it");
+        loop_drop();
+        check(fake_text(path)==NULL,"claim: a record whose file is gone is not written again");
     }
     keep_end();
 

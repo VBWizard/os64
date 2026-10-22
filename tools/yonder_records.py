@@ -206,25 +206,29 @@ HEAD = {k: re.compile(v) for k, v in HEAD.items()}
 # says any of them is of version 2, and one that says none of version 1.
 V2_FACTS = (b'agent: ', b'cookies: ', b'clock: ', b'tz: ')
 
-# The inputs a replay may name as taken from the harness, for a kept page
-# of a version that does not record them (REPLAY.md § 3).
-DEFAULTABLE = {'agent', 'cookies', 'clock', 'tz', 'modern', 'zoom', 'appearance', 'motion', 'animate', 'scripts',
-               'script-seconds', 'view-width', 'view-height', 'status', 'content-type', 'charset', 'encrypted',
-               'body', 'final-address', 'kept-lines', 'job-identity'}
+# What a replay of a version 1 page names on its `REPLAY inputs defaulted:`
+# line (REPLAY.md § 3): the four inputs version 2 added, which it takes
+# from the harness, and `job-identity`, which a version 1 index does not
+# record. Nothing else is ever taken from the harness.
+DEFAULTABLE = {'agent', 'cookies', 'clock', 'tz', 'job-identity'}
 
 
 def classify(line, index=False):
     """(kind, fields) for one line of a record, or of an index (`index`):
     the kind's name as tools/yonder_record_grammar.txt spells it, or
     ('REFUSED', why) / ('index:REFUSED', why). A line holding a control
-    byte (a carriage return, a NUL, any byte below 0x20 but the tab) is no
-    line of either, and read() classifies every line of a record, so one
-    anywhere refuses it whole."""
+    byte (a carriage return, a NUL, any byte below 0x20 but the tab), or a
+    field that decodes to a NUL, is no line of either, and read()
+    classifies every line of a record, so one anywhere refuses it whole."""
     def numbers(m, limit=UINT32_MAX):
         return [decimal(g, limit) if g is not None and g[:1].isdigit() else g for g in m.groups()]
     try:
         if any(c < 0x20 for c in line if c != 0x09):
             return ('index:REFUSED' if index else 'REFUSED'), 'a control byte'
+        # Nor one spelled `\x00`: a field that decodes to a NUL would read
+        # as shorter than it is wherever a string ends at one.
+        if b'\0' in unescape_bytes(line, tokens=not index):
+            return ('index:REFUSED' if index else 'REFUSED'), 'a NUL in a field'
         if index:
             if line.startswith(b'# yonder kept index '):
                 return 'index:version', decimal(line[len(b'# yonder kept index '):])

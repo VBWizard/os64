@@ -200,7 +200,9 @@ REFUSED	FAILED page: no  (1)
 fact	note: a	b
 # what a replay says it took from the harness, for a kept page of version 1
 defaulted	REPLAY inputs defaulted: agent cookies clock tz
-defaulted	REPLAY inputs defaulted: view-height
+defaulted	REPLAY inputs defaulted: agent cookies clock tz job-identity
+REFUSED	REPLAY inputs defaulted: view-height
+REFUSED	REPLAY inputs defaulted: agent zoom
 REFUSED	REPLAY inputs defaulted: agent global
 REFUSED	REPLAY inputs defaulted: agent agent
 REFUSED	REPLAY inputs defaulted: 
@@ -240,3 +242,10 @@ escape:5c78475a	\xGZ
 escape:4d25343953	M%49S
 escape:61254d495353494e4762	a%M%49SSINGb
 escape:255c	%25\\
+# A field that decodes to a NUL (`\x00`) is no field; an escaped backslash
+# before `x00` decodes to text.
+REFUSED	address: https://a.test/\x00
+REFUSED	note: a\x00b
+REFUSED	MISSING global a\x00 (1)
+fact	note: a\\x00b
+index:REFUSED	1	script	https://a.test/x\x00.js	came	https://a.test/x.js		1

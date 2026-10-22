@@ -1672,39 +1672,53 @@ static void diag_kept(int64_t answer);
 // NULL on no memory: the load goes on unrecorded.
 // THE SETTINGS A RECORD SAYS ITS PAGE WAS READ UNDER, by key, as in force
 // now: what the claim writes, and what a write compares the record with.
-static const char *const kDiagSettings[] = {"modern", "zoom", "appearance", "motion", "animate", "script seconds"};
-static void diag_setting(const char *key, char *out, size_t cap)
+// The value, which a number is written into `out` (`cap` bytes) for.
+static const char *const kDiagSettings[] = {"agent", "scripts", "modern", "zoom", "appearance", "motion", "animate",
+                                            "script seconds"};
+static const char *diag_setting(const char *key, char *out, size_t cap)
 {
+    if (os64_streq(key, "agent"))
+        return g.way.agent != NULL ? g.way.agent : YONDER_AGENT;
+    if (os64_streq(key, "scripts"))
+        return g.scripts_on ? "on" : "off";
     if (os64_streq(key, "modern"))
-        os64_strcopy(out, cap, g.modern ? "on" : "off");
-    else if (os64_streq(key, "zoom"))
-        os64_snprintf(out, cap, "%lu", (unsigned long)g.zoom);
-    else if (os64_streq(key, "appearance"))
-        os64_strcopy(out, cap, s_dark ? "dark" : "light");
-    else if (os64_streq(key, "motion"))
-        os64_strcopy(out, cap, s_reduce_motion ? "reduce" : "full");
-    else if (os64_streq(key, "animate"))
-        // `animate`, not `animations`: that key says how the page's own
-        // animations are faring.
-        os64_strcopy(out, cap, s_animations ? "on" : "off");
-    else
-        os64_snprintf(out, cap, "%lu", (unsigned long)(g.script_ms / 1000));
+        return g.modern ? "on" : "off";
+    if (os64_streq(key, "appearance"))
+        return s_dark ? "dark" : "light";
+    if (os64_streq(key, "motion"))
+        return s_reduce_motion ? "reduce" : "full";
+    // `animate`, not `animations`: that key says how the page's own
+    // animations are faring.
+    if (os64_streq(key, "animate"))
+        return s_animations ? "on" : "off";
+    os64_snprintf(out, cap, "%lu", (unsigned long)(os64_streq(key, "zoom") ? g.zoom : g.script_ms / 1000));
+    return out;
+}
+// The view a record says its page was laid out in, `<width>x<height>`, and
+// whether it is the view `w` by `h`.
+static bool diag_same_view(const char *laid, int32_t w, int32_t h)
+{
+    char now[48];
+    int n = os64_snprintf(now, sizeof(now), "%dx%d px", (int)w, (int)h);
+    return laid == NULL || (n > 0 && os64_strlen(laid) >= (size_t)n && os64_memcmp(laid, now, (size_t)n) == 0);
 }
 
 static yonder_diag_t *diag_begin(const char *url)
 {
     yonder_diag_t *d = yonder_diag_new(url, s_diag.next, os64_micros());
     // THE INPUTS A REPLAY READS THE PAGE WITH, as in force for this load
-    // (REPLAY.md § 3): the agent first, which marks a record of this form;
-    // the cookies a script on the page could read (libway's script door,
-    // which keeps HttpOnly cookies from scripts); the clock and its zone;
-    // the view's size, scripts, and the settings (kDiagSettings). A replay
-    // sets each from the record and assumes none; the arrival writes the
-    // laid-out size again, and a write that finds a setting changed marks
-    // the record unjudged (diag_write).
+    // (REPLAY.md § 3): the agent first; the cookies a script on the page
+    // could read (libway's script door, which keeps HttpOnly cookies from
+    // scripts); the clock and its zone (the agent, the cookies, the clock
+    // and the zone are what make a record version 2); the view's size; and
+    // the rest of kDiagSettings. A replay sets each from the record and
+    // assumes none. The arrival writes the laid-out size again, and a
+    // record whose page was laid out in another view, or whose window is
+    // not the one the claim wrote when it is written, is marked unjudged
+    // (diag_arrived, diag_write).
     if (d != NULL) {
         char v[48];
-        yonder_diag_head_fact(d, "agent", g.way.agent != NULL ? g.way.agent : YONDER_AGENT);
+        yonder_diag_head_fact(d, kDiagSettings[0], diag_setting(kDiagSettings[0], v, sizeof(v)));
         bool encrypted = os64_strlen(url) >= 6 && os64_memcmp(url, "https:", 6) == 0;
         bool whole = false;
         size_t cap = 512;
@@ -1737,11 +1751,8 @@ static yonder_diag_t *diag_begin(const char *url)
         }
         os64_snprintf(v, sizeof(v), "%dx%d px", (int)g.view.bounds.w, (int)g.view.bounds.h);
         yonder_diag_head_fact(d, "laid out at", v);
-        yonder_diag_head_fact(d, "scripts", g.scripts_on ? "on" : "off");
-        for (size_t i = 0; i < sizeof(kDiagSettings) / sizeof(kDiagSettings[0]); i++) {
-            diag_setting(kDiagSettings[i], v, sizeof(v));
-            yonder_diag_head_fact(d, kDiagSettings[i], v);
-        }
+        for (size_t i = 1; i < sizeof(kDiagSettings) / sizeof(kDiagSettings[0]); i++)
+            yonder_diag_head_fact(d, kDiagSettings[i], diag_setting(kDiagSettings[i], v, sizeof(v)));
     }
     if (d != NULL && s_diag.dir[0] != '\0') {
         int64_t claimed = yonder_diag_claim(d, s_diag.dir, s_diag.keep);
@@ -1762,14 +1773,16 @@ static bool diag_write(yonder_diag_t *d)
     if (d == NULL || s_diag.dir[0] == '\0')
         return false;
     // A record is of one window: a setting that is not what the claim
-    // wrote makes it a record no replay can read the page again by.
+    // wrote, or a view that is not the one the page was laid out in, makes
+    // it a record no replay can read the page again by.
     char now[48];
     for (size_t i = 0; i < sizeof(kDiagSettings) / sizeof(kDiagSettings[0]); i++) {
         const char *then = yonder_diag_fact_value(d, kDiagSettings[i]);
-        diag_setting(kDiagSettings[i], now, sizeof(now));
-        if (then != NULL && !os64_streq(then, now))
+        if (then != NULL && !os64_streq(then, diag_setting(kDiagSettings[i], now, sizeof(now))))
             yonder_diag_unjudged(d, "settings changed during the load");
     }
+    if (!diag_same_view(yonder_diag_fact_value(d, "laid out at"), g.view.bounds.w, g.view.bounds.h))
+        yonder_diag_unjudged(d, "settings changed during the load");
     const yonder_diag_claim_t *c = yonder_diag_claimed(d);
     if (c == NULL) {
         if (!s_diag.claim_said) {
@@ -2155,6 +2168,10 @@ static void diag_arrived(Page *p, uint64_t laid_ms)
     if (p->diag == NULL)
         return;
     char v[96];
+    // Laid out in another view than the one the claim wrote: the window
+    // was resized under the load.
+    if (!diag_same_view(yonder_diag_fact_value(p->diag, "laid out at"), p->laid_width, p->laid_height))
+        yonder_diag_unjudged(p->diag, "settings changed during the load");
     yonder_diag_head_fact(p->diag, "final address", p->way.url);
     os64_snprintf(v, sizeof(v), "%ld ms", (long)((os64_micros() - yonder_diag_began(p->diag)) / 1000));
     yonder_diag_fact(p->diag, "arrived after", v);

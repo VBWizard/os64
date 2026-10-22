@@ -47,8 +47,9 @@ is both is the later), and none is progress:
   reads as a page that stopped asking for everything it lost), a record
   no replay wrote, or one whose replay says its page is unjudged (its kept
   record lost lines or was never written, a harness check failed, its
-  record could not be written). Listed with why, and judged on neither
-  side.
+  record could not be written), and a pair whose records name two
+  addresses or took different inputs from the harness. Listed with why,
+  and judged on neither side.
 - A page the after directory does not have is a regression, since whatever
   it gained cannot be seen; a page only the after directory has is
   unjudged, since the before replay did not replay it (it stopped, or was
@@ -166,10 +167,17 @@ def main(argv=None):
         return 2
     # Paired by name, a page must be one page: records whose addresses
     # differ are two pages, and comparing them would be no comparison.
+    # And a page is compared only with itself read the same way: records
+    # that took different inputs from the harness (`REPLAY inputs
+    # defaulted:`) were read in two different windows.
     for name in sorted(before.keys() & after.keys()):
         if before[name].address != after[name].address:
             unjudged[name] = (f'{name}: its records name two addresses, {before[name].address} and '
                               f'{after[name].address}')
+        elif before[name].defaulted != after[name].defaulted:
+            unjudged[name] = (f'{name}: its replays took different inputs from the harness, '
+                              f'{" ".join(sorted(before[name].defaulted)) or "none"} and '
+                              f'{" ".join(sorted(after[name].defaulted)) or "none"}')
     # A page not judged on one side is judged on neither.
     for name in unjudged:
         before.pop(name, None)
