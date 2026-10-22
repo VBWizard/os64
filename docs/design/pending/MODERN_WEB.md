@@ -1007,11 +1007,11 @@ rows in `modern.c`, a file each in libdom, and yonder's store.
 
 | Seam | What it is now |
 |---|---|
-| `os64_dom_storage_t` | a provider per area: `identity` (asked at a task's first touch; a value other than the last loaded means the store moved), `load` (the image, asked again with room, a few times, when it outgrew the room), `commit(changes, last)` (this page's change list only, merged by the host onto the store as it stands; `last` is drain's) |
-| the statuses | OK; FULL (past the quota: nothing kept, the page reads the store back); FAILED (the area keeps its map in memory for the page's life); BUSY (another window has the store: the changes are handed over again a second later, or at drain; at drain itself they are lost and the provider says so) |
-| commits | coalesced to one a second (`os64_dom_storage_settle`, `_due`, `OS64_DOM_STORAGE_COMMIT_MS`); sooner when the change list would pass the quota or the keys' cap, and a change it could not make room for (a busy store) is refused as a full store's is, so the list never passes its bound; once more at drain, the last |
+| `os64_dom_storage_t` | a provider per area: `identity` (asked at a task's first touch; a value other than the last loaded means the store moved), `load` (the image, asked again with room, a few times, when it outgrew the room), `commit(changes)` (this page's change list only, merged by the host onto the store as it stands) |
+| the statuses | OK; FULL (past the quota: nothing kept, the page reads the store back); FAILED (the area keeps its map in memory for the page's life) |
+| commits | coalesced to one a second (`os64_dom_storage_settle`, `_due`, `OS64_DOM_STORAGE_COMMIT_MS`); sooner when the change list would pass the quota or the keys' cap, and a change it could not make room for (no memory to write the list) is refused as a full store's is, so the list never passes its bound; once more at drain, the last |
 | `page_departs()` (yonder.c) | the one place the page on screen departs: where every navigation's page is first parsed (`stream_parser`) and as the window closes. It unloads the page, as HTML does: `yonder_scripts_depart` retires its runtime, so none of its queued scripts, timers or handlers runs again, and drain makes its storage's last commit then, so the next page's scripts read what it wrote. The page stays on screen, scriptless, until the new one is laid out; a navigation that never becomes a page is not a departure |
-| the store | `<profile>/storage/<origin>`, the origin with every byte outside `[A-Za-z0-9.-]` as `%XX`; read, merged and published by temp and rename under `<store>+lock` (an exclusive create holding `<task> <second>`), broken when its task is gone, a zombie, this window's own, or ten seconds old; a live one waited for 200 ms (2 s at the last commit, which nothing on screen waits for); the store's identity read again before the rename, and a moved store merged onto again. Clear page storage takes each store's lock the same way, and every lock with no store yet (a window making an origin's first store), so a window mid-commit finishes first, and a store held past the wait is reported, not cleared. What the second look cannot see is an unlocked writer's same-size image in the same second, or one landing between the look and the rename (DEBTS) |
+| the store | `<profile>/storage/<origin>`, the origin with every byte outside `[A-Za-z0-9.-]` as `%XX`; read, merged and published by temp and rename, which is atomic (a reader meets the old image or the new one); the store's identity read again just before the rename, and a store another window published since merged onto again. There is no lock between windows (Chris's ruling: one person on one machine), so two committing one origin in the same instant can lose one window's changes (DEBTS). Clear page storage removes each store with one unlink; a window mid-commit may then publish its own changes. The first touch of the profile removes the temps a crash left |
 | the image format | `os64 storage 1\n`, then `+<key bytes> <value bytes>\n` key value `\n` for a set, `-<key bytes>\n` key `\n` for a removal (an image holds sets only; no store is no image, and a file without the magic line, an empty one included, is not one); `os64_dom_storage_merge` and `os64_dom_storage_walk` are libdom's, and yonder only moves bytes |
 | `options.now_us`, `options.timing` | the host's microsecond clock, and the navigation's origin and milestones (`os64_dom_timing_t`), read as the binding is made and whenever a script asks |
 | `options.screen`, `options.zoom` | the display in device pixels, and the zoom in thousandths when asked |
@@ -1063,7 +1063,7 @@ too late for the next page (P1), quadratic removals (P2), two yonders
 merging onto one image (P2), a lookup stale after a Proxy trap, answered
 arrays filled through setters, orphaned temps, and a comment (P3s). **The
 design read** passed it with the WTF-8 ruling and the last commit's longer
-wait. **Codex's first round** found eight: six fixed (the change list's
+wait (since retired with the lock, below). **Codex's first round** found eight: six fixed (the change list's
 bound under a busy store, the departed page's tasks, an empty file taken
 for an image, Clear against a live commit, measure's negative duration,
 `navigationStart` without a wall clock), and two declined on WebIDL's
@@ -1072,7 +1072,13 @@ no IteratorClose), the second with a conversion-order bug found beside it
 and fixed. **A second cold read** found five, all fixed: a quadratic
 record conversion behind keys holding U+FFFD, Clear missing a window
 making an origin's first store, a commit out of memory retried every
-turn, and two comments.
+turn, and two comments. **Codex's second round** found three: the orphan
+sweep's grammar and redirectCount fixed, an empty measure dictionary
+declined on User Timing's step 1. **Its third round** found a race
+between two windows breaking one crashed lock; Chris ruled the
+cross-window lock out (one person on one machine), so a commit is read,
+merge, second look, rename, with BUSY and the last commit's wait retired
+and the same-instant loss booked.
 
 **Stacked on this branch**, slice 2 (fetch) moves `d_origin` onto libway's
 `way_origin_*` (Fable's ruling 8: the slice that lands second does it).
@@ -1083,4 +1089,5 @@ entries; `DOMException` with `code` and `structuredClone` (raised with
 Chris as a small libdom slice); libos64's URL grammar gaps (userinfo, IPv6,
 IDNA, `aaa:/b`, an opaque path's trailing space); the legacy multi-byte
 decoders; a store's identity at whole-second resolution; sessionStorage's
-memory per window; and what the store lock's second look cannot see.
+memory per window; and two windows committing one origin's store in the
+same instant.

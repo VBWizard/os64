@@ -23,9 +23,10 @@
  * keys, and freed with the binding. A setItem past either throws; a change
  * list that would pass either is committed early instead, since what it
  * holds is the page's own writes and removals, and a change it still has
- * no room for (the store busy) is refused as a full store's is. The keys' cap bounds what
- * the quota cannot: a key of one character costs the quota two bytes and
- * the heap a record, and a page could otherwise make millions of them. */
+ * no room for (no memory to write the list) is refused as a full store's
+ * is. The keys' cap bounds what the quota cannot: a key of one character
+ * costs the quota two bytes and the heap a record, and a page could
+ * otherwise make millions of them. */
 
 #define MAGIC "os64 storage 1\n"
 #define MAGIC_LENGTH (sizeof(MAGIC) - 1)
@@ -533,25 +534,23 @@ static DStorageArea *area_touch(os64_dom_t *dom, JSContext *ctx, os64_dom_storag
  * window's changes merged in. A store that could not be written leaves the
  * area to memory; one that was full drops the changes, so the page reads
  * back what the store kept. Changes that could not be written down for
- * want of memory, or that a busy store could not take, wait for the next
- * commit, COMMIT_MS on. */
-static void area_commit(DStorageArea *area, bool last)
+ * want of memory wait for the next commit, COMMIT_MS on. */
+static void area_commit(DStorageArea *area)
 {
     os64_dom_t *dom = area->dom;
     if (!kept(dom, area) || area->changes.count == 0) return;
     size_t length;
     char *changes = map_write(&area->changes, &length);
-    /* A commit that could not be made, for want of memory or a busy store,
-     * counts as one for the schedule: the next is COMMIT_MS on, and the
-     * host's loop waits for it rather than asking again every turn. */
+    /* A commit that could not be made for want of memory counts as one
+     * for the schedule: the next is COMMIT_MS on, and the host's loop waits
+     * for it rather than asking again every turn. */
     area->committed = true;
     area->committed_at = now_ms(dom);
     if (changes == NULL) return;
     const os64_dom_storage_t *provider = &dom->storage_providers[area->which];
     os64_dom_storage_status_t status = provider->commit != NULL
-        ? provider->commit(provider->opaque, area->origin, changes, length, last) : OS64_DOM_STORAGE_FAILED;
+        ? provider->commit(provider->opaque, area->origin, changes, length) : OS64_DOM_STORAGE_FAILED;
     os64_free(changes);
-    if (status == OS64_DOM_STORAGE_BUSY) return;
     map_free(&area->changes);
     if (status == OS64_DOM_STORAGE_FAILED) area->memory = true;
     else area->loaded = false;
@@ -584,7 +583,7 @@ void os64_dom_storage_settle(os64_dom_t *dom)
         DStorageArea *area = dom->storage[i];
         if (area == NULL) continue;
         area->asked = false;
-        if (area_due(area) <= now) area_commit(area, false);
+        if (area_due(area) <= now) area_commit(area);
     }
 }
 
@@ -614,7 +613,7 @@ void os64_dom_storage_forget(os64_dom_t *dom)
 void d_storage_drain(os64_dom_t *dom)
 {
     for (int i = 0; i < OS64_DOM_STORAGE_AREAS; i++)
-        if (dom->storage[i] != NULL) area_commit(dom->storage[i], true);
+        if (dom->storage[i] != NULL) area_commit(dom->storage[i]);
 }
 
 void d_storage_free(os64_dom_t *dom)
@@ -645,13 +644,12 @@ static bool changes_fit(const DMap *changes, size_t count, size_t cost)
  * that would pass the quota or the keys' cap is committed now rather than
  * when it is due: a page that sets and removes key after key in one task
  * would otherwise hold every key it removed until its next commit. False
- * when the commit did not make the room (a busy store, or no memory to
- * write the list): the change is refused, and the list never passes its
- * bound whatever the store answers. */
+ * when the commit did not make the room (no memory to write the list): the
+ * change is refused, and the list never passes its bound. */
 static bool changes_room(DStorageArea *area, size_t count, size_t cost)
 {
     if (!kept(area->dom, area) || changes_fit(&area->changes, count, cost)) return true;
-    area_commit(area, false);
+    area_commit(area);
     return !kept(area->dom, area) || changes_fit(&area->changes, count, cost);
 }
 

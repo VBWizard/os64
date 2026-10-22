@@ -109,7 +109,7 @@ typedef struct {
     char *image;                        /* the harness's malloc */
     size_t length;
     uint64_t identity;
-    unsigned identities, loads, commits, lasts;      /* lasts: commits made as the last */
+    unsigned identities, loads, commits;
     bool fail_load, fail_commit;
     /* load answers this length and writes nothing when it is not 0; with
      * outgrow, one byte more than the room it is given. */
@@ -170,10 +170,9 @@ static void fake_store_take(FakeStore *s, void *merged, size_t length)
 }
 
 static os64_dom_storage_status_t fake_commit(void *opaque, const char *origin, const void *changes,
-                                             size_t length, bool last)
+                                             size_t length)
 {
     FakeStore *s = opaque;
-    s->lasts += last ? 1 : 0;
     snprintf(s->origin, sizeof(s->origin), "%s", origin);
     s->commits++;
     s->last_changes_length = length < sizeof(s->last_changes) ? length : sizeof(s->last_changes);
@@ -393,28 +392,16 @@ static void dom_storage_provider_cases(void)
     os64_dom_storage_settle(f.binding);
     dom_script(&f, STORAGE_ASSERT "assert(localStorage.length===1&&localStorage.getItem('later')==='new');",
                "storage: a clear does not take a key another window added after it");
-    /* A commit a busy store refuses: the changes wait, for drain at the
-     * latest, and no commit before drain's is the last. */
-    dom_script(&f, "localStorage.setItem('x','kept')", "storage: a change a busy store will not take");
-    unsigned refused = store.commits;
-    storage_clock += OS64_DOM_STORAGE_COMMIT_MS;
-    store.forced = OS64_DOM_STORAGE_BUSY;
-    os64_dom_storage_settle(f.binding);
-    store.forced = OS64_DOM_STORAGE_OK;
-    check(store.commits == refused + 1 && os64_dom_storage_due(f.binding) != UINT64_MAX && store.lasts == 0,
-          "storage: a busy store's refusal keeps the changes");
     /* Drain commits what is left, due or not. */
     os64_dom_storage_settle(f.binding);
     dom_script(&f, "sessionStorage.setItem('s','v');localStorage.setItem('z','last')",
                "storage: changes left at departure");
     unsigned before = store.commits;
     os64_dom_drain(f.binding);
-    check(store.commits == before + 2 && store.lasts == 2, "storage: drain makes the last commit, both areas");
+    check(store.commits == before + 2, "storage: drain makes the last commit, both areas");
     fixture_free(&f);
     check(store.length != 0 && bytes_find(store.image, store.length, "+1 4\nzlast\n", 11) != NULL,
           "storage: the last commit reached the store");
-    check(bytes_find(store.image, store.length, "+1 4\nxkept\n", 11) != NULL,
-          "storage: with what a busy store refused before");
     fake_store_free(&store);
 
     /* A full store: nothing kept, and the page reads the store back. */
@@ -428,24 +415,6 @@ static void dom_storage_provider_cases(void)
     dom_script(&f, STORAGE_ASSERT "assert(localStorage.getItem('a')===null&&localStorage.length===0);",
                "storage: after a full store refused a commit, the page sees the store");
     check(os64_dom_storage_due(f.binding) == UINT64_MAX, "storage: a refused commit's changes are gone");
-    /* A busy store: nothing kept, the changes handed over again at the next
-     * commit, and the page's own map as it was. */
-    dom_script(&f, "localStorage.setItem('busy','1')", "storage: a write a busy store cannot take now");
-    store.forced = OS64_DOM_STORAGE_BUSY;
-    storage_clock = 3000;
-    unsigned tries = store.commits;
-    os64_dom_storage_settle(f.binding);
-    store.forced = OS64_DOM_STORAGE_OK;
-    check(store.commits == tries + 1 && os64_dom_storage_due(f.binding) == 3000 + OS64_DOM_STORAGE_COMMIT_MS,
-          "storage: a busy store's changes are kept, due again a second on");
-    dom_script(&f, STORAGE_ASSERT "assert(localStorage.getItem('busy')==='1');", "storage: the page still sees its write");
-    storage_clock = 3000 + OS64_DOM_STORAGE_COMMIT_MS;
-    os64_dom_storage_settle(f.binding);
-    check(store.commits == tries + 2 && bytes_find(store.image, store.length, "+4 1\nbusy1\n", 11) != NULL,
-          "storage: and reach the store when it is free");
-    dom_script(&f, "localStorage.removeItem('busy')", "storage: tidy");
-    storage_clock = 9000;
-    os64_dom_storage_settle(f.binding);
     /* A store that cannot be written: the area keeps to memory from here. */
     dom_script(&f, "localStorage.setItem('b','2')", "storage: a write the store cannot keep");
     store.fail_commit = true;
@@ -886,12 +855,9 @@ static void dom_storage_page_code_cases(void)
     fixture_free(&f);
 }
 
-/* The change list's bound holds whatever the store answers: under a busy
- * store a change that would pass it cannot be made room for, and is
- * refused as a full store's would be. */
 /* A commit that could not even write its change list down (no memory)
- * waits COMMIT_MS for the next, as a busy store's does: the host's loop is
- * told a time to wait for, not "now" turn after turn. */
+ * waits COMMIT_MS for the next: the host's loop is told a time to wait
+ * for, not "now" turn after turn. */
 static void dom_storage_commit_memory_cases(void)
 {
     FakeStore store = {0};
@@ -904,7 +870,7 @@ static void dom_storage_commit_memory_cases(void)
     os64_dom_storage_settle(f.binding);
     fail_size = 0;
     check(store.commits == 0 && os64_dom_storage_due(f.binding) == storage_clock + OS64_DOM_STORAGE_COMMIT_MS,
-          "storage: a commit with no memory to write its list waits a second, as a busy one does");
+          "storage: a commit with no memory to write its list waits a second");
     storage_clock += OS64_DOM_STORAGE_COMMIT_MS;
     os64_dom_storage_settle(f.binding);
     check(store.commits == 1 && store.length != 0, "storage: and is made then");
@@ -913,22 +879,27 @@ static void dom_storage_commit_memory_cases(void)
     storage_clock = 0;
 }
 
-static void dom_storage_busy_bound_cases(void)
+/* The change list's bound holds whatever the commit manages: a change
+ * that would pass it, when the early commit cannot make room, is refused
+ * as a full store's would be. */
+static void dom_storage_bound_cases(void)
 {
     FakeStore store = {0};
     DomFixture f = storage_fixture("http://example.test/", &store);
     if (!fixture_ready(&f)) return;
-    store.forced = OS64_DOM_STORAGE_BUSY;
+    /* The early commit at the third key cannot write its list down (two
+     * removals of 1,000,001-byte keys): no room is made. */
+    fail_size = strlen("os64 storage 1\n") + 2 * (strlen("-1000001\n") + 1000001 + 1);
     dom_script(&f, STORAGE_ASSERT "var big='x'.repeat(1000000),stopped=-1;"
                "for(var i=0;i<6&&stopped<0;i++){try{localStorage.setItem(i+big,'');localStorage.removeItem(i+big)}"
                "catch(e){assert(e.name==='QuotaExceededError',e.name);stopped=i}}"
                "assert(stopped===2,'refused at the change that would pass the bound: '+stopped);"
                "assert(localStorage.length===0);",
-               "storage: a busy store, and set and remove of key after big key");
-    check(store.commits >= 1 && store.length == 0, "storage: the busy store was asked, and kept nothing");
-    store.forced = OS64_DOM_STORAGE_OK;
+               "storage: no memory for the early commit, and set and remove of key after big key");
+    fail_size = 0;
+    check(store.commits == 0, "storage: the early commit could not be made");
     os64_dom_drain(f.binding);
-    check(store.length == 0, "storage: what the page could change reached the store once it was free");
+    check(store.commits == 1 && store.length == 0, "storage: what the page could change reached the store at drain");
     fixture_free(&f);
     fake_store_free(&store);
 }
@@ -937,7 +908,7 @@ static void dom_storage_cases(void)
 {
     dom_storage_shape_cases();
     dom_storage_page_code_cases();
-    dom_storage_busy_bound_cases();
+    dom_storage_bound_cases();
     dom_storage_commit_memory_cases();
     dom_storage_quota_cases();
     dom_storage_provider_cases();

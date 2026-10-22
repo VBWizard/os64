@@ -42,16 +42,11 @@ static bool fake_short_write, fake_fail_write, fake_fail_sync, fake_fail_rename;
 /* A disk error on the file at this path (NULL for none): its writes, or
  * its close, fail. */
 static const char *fake_fail_write_at, *fake_fail_close_at;
-/* The task this window is, and the tasks that are running (a store lock's
- * holder is asked after through os64_proc_read); fake_live_zombie makes
- * the first of them a zombie. os64_sleep runs fake_sleep_hook once, at the
- * sleep fake_sleep_hook_at names (the next, when it is 0): another
- * window's commit, landing while this one waits for the lock. */
+/* The task this window is, and the tasks that are running (a temp's
+ * owner is asked after through os64_proc_read); fake_live_zombie makes the
+ * first of them a zombie. */
 static uint64_t fake_task = 7, fake_live[4];
 static bool fake_live_zombie;
-static unsigned fake_sleeps;
-static void (*fake_sleep_hook)(void);
-static unsigned fake_sleep_hook_at;     /* the sleep it runs at, counted in fake_sleeps; 0 the next */
 /* fake_sync_hook runs once, at the next sync: another window's write
  * landing between this one's read and its rename. */
 static void (*fake_sync_hook)(void);
@@ -74,7 +69,7 @@ static void fake_reset(void) {
     for(int i=0;i<FAKE_FILES;i++) free(fake_files[i].data);
     memset(fake_files,0,sizeof(fake_files)); nfake_dirs=0; fake_writes=0; fake_fail_open=false;
     fake_short_write=fake_fail_write=fake_fail_sync=fake_fail_rename=false;
-    fake_task=7; memset(fake_live,0,sizeof(fake_live)); fake_live_zombie=false; fake_sleeps=0; fake_sleep_hook=NULL; fake_sleep_hook_at=0; fake_sync_hook=NULL;
+    fake_task=7; memset(fake_live,0,sizeof(fake_live)); fake_live_zombie=false; fake_sync_hook=NULL;
     fake_second=1;
     fake_fail_write_at=fake_fail_close_at=NULL;
     snprintf(fake_dirs[nfake_dirs++],256,"/tmp");
@@ -201,14 +196,6 @@ int32_t os64_proc_read(uint64_t pid, os64_proc_info_t *out) {
         return 0;
     }
     return pid==fake_task ? (out->pid=pid, out->state=OS64_PROC_RUNNING, 0) : -1;
-}
-int64_t os64_sleep(uint64_t ms) {
-    (void)ms; fake_sleeps++;
-    if(fake_sleeps<fake_sleep_hook_at) return 0;
-    void (*hook)(void)=fake_sleep_hook;
-    fake_sleep_hook=NULL;
-    if(hook!=NULL) hook();
-    return 0;
 }
 /* The clocks stand still unless a case moves them: micros steps by
  * clock_step at every read (an overrun is a loop that reads it) and by
@@ -7360,12 +7347,12 @@ static void storage_disk_cases(void) {
     yonder_storage_t *st=yonder_storage_new("/tmp/profile");
     check(yonder_storage_identity(st,L,origin)==0 && yonder_storage_load(st,L,origin,out,sizeof(out))==0 &&
           yonder_storage_problem(st)==NULL,"storage disk: no file is an empty store, and no problem");
-    check(yonder_storage_commit(st,L,origin,kGone,strlen(kGone),false,NULL)==OS64_DOM_STORAGE_OK &&
+    check(yonder_storage_commit(st,L,origin,kGone,strlen(kGone),NULL)==OS64_DOM_STORAGE_OK &&
           fake_file(STORE_FILE)<0,"storage disk: removing from no store leaves no file");
-    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_OK && store_holds("k","1") &&
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK && store_holds("k","1") &&
           yonder_storage_identity(st,L,origin)!=0,"storage disk: a commit makes the file");
     int writes=fake_writes;
-    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_OK && store_holds("k","1") &&
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK && store_holds("k","1") &&
           fake_writes==writes+1 && fake_file(STORE_FILE)>=0 && fake_files[fake_file(STORE_FILE)].len==strlen(kOne),
           "storage disk: the same commit twice writes the same image");
     int64_t length=yonder_storage_load(st,L,origin,out,sizeof(out));
@@ -7374,7 +7361,7 @@ static void storage_disk_cases(void) {
     check(yonder_storage_load(st,L,origin,out,4)==(int64_t)strlen(kOne) && out[0]=='z',
           "storage disk: a store bigger than the room answers its length and writes nothing");
     fake_short_write=true;
-    check(yonder_storage_commit(st,L,origin,kTwo,strlen(kTwo),false,NULL)==OS64_DOM_STORAGE_OK && store_holds("k","2"),
+    check(yonder_storage_commit(st,L,origin,kTwo,strlen(kTwo),NULL)==OS64_DOM_STORAGE_OK && store_holds("k","2"),
           "storage disk: a disk that writes a byte at a time is written whole");
     fake_short_write=false;
     /* A write, a sync, a rename refused: the old image stays, whole, and
@@ -7384,7 +7371,7 @@ static void storage_disk_cases(void) {
     for(size_t i=0;i<3;i++) {
         char name[96];
         *refusals[i]=true;
-        os64_dom_storage_status_t status=yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL);
+        os64_dom_storage_status_t status=yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL);
         *refusals[i]=false;
         snprintf(name,sizeof(name),"storage disk: a refused %s keeps the old image, leaves no temp, and says so",names[i]);
         check(status==OS64_DOM_STORAGE_FAILED && store_holds("k","2") && fake_temps()==0 &&
@@ -7394,7 +7381,7 @@ static void storage_disk_cases(void) {
     fake_slurp_fail=true;
     check(yonder_storage_load(st,L,origin,out,sizeof(out))<0 && problem_has(st,"cannot be read."),
           "storage disk: an unreadable store loads as broken and says so");
-    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_FAILED,
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED,
           "storage disk: and refuses a commit");
     fake_slurp_fail=false;
     check(store_holds("k","2"),"storage disk: the unreadable store is as it was");
@@ -7407,14 +7394,14 @@ static void storage_disk_cases(void) {
     fake_files[f].len=real;
     /* Not libdom's format. */
     fake_put(STORE_FILE,"hello\n",6);
-    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_FAILED &&
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
           problem_has(st,"its file is not one yonder wrote") && !strcmp(fake_text(STORE_FILE),"hello\n"),
           "storage disk: a file not in the format is never written over");
     /* An empty file where the store should be: there, and no image. */
     fake_put(STORE_FILE,"",0);
     check(yonder_storage_load(st,L,origin,out,sizeof(out))<0 && problem_has(st,"its file is not one yonder wrote"),
           "storage disk: an empty file at the store's name loads as broken");
-    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_FAILED &&
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
           fake_file(STORE_FILE)>=0 && fake_files[fake_file(STORE_FILE)].len==0 && fake_temps()==0,
           "storage disk: and is never written over");
     /* A folder where the file should be. */
@@ -7422,52 +7409,51 @@ static void storage_disk_cases(void) {
     snprintf(fake_dirs[nfake_dirs++],256,"%s",STORE_FILE);
     check(yonder_storage_load(st,L,origin,out,sizeof(out))<0 && problem_has(st,"cannot be read."),
           "storage disk: a folder at the store's name loads as broken");
-    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_FAILED && fake_temps()==0 &&
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED && fake_temps()==0 &&
           fake_file(STORE_FILE)<0,"storage disk: and is never written over");
     nfake_dirs--;
     /* An origin whose store name is another's temp name as spelled before
      * the '+': the other's store is untouched. */
     static const char kOther[]="/tmp/profile/storage/http%3A%2F%2Ffixture.test.7.7.new";
     fake_put(kOther,kTwo,strlen(kTwo));
-    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_OK && store_holds("k","1") &&
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK && store_holds("k","1") &&
           fake_text(kOther)!=NULL && !strcmp(fake_text(kOther),kTwo),
           "storage disk: no origin's store is another's temp");
     (void)os64_unlink(kOther);
     /* An origin too long to name a file, with its temp, in a path. */
     char longest[300]="http://";
     memset(longest+7,'a',240); longest[247]='\0';
-    check(yonder_storage_commit(st,L,longest,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_FAILED &&
+    check(yonder_storage_commit(st,L,longest,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
           problem_has(st,"its address is too long to name a file") &&
           yonder_storage_load(st,L,longest,out,sizeof(out))<0 && yonder_storage_identity(st,L,longest)==0,
           "storage disk: an origin too long to name a file is kept in no file, and the problem names it");
     yonder_storage_t *relative=yonder_storage_new("profile");
-    check(yonder_storage_commit(relative,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_FAILED &&
+    check(yonder_storage_commit(relative,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
           problem_has(relative,"the profile folder is not a full path (profile)"),
           "storage disk: a profile that is not a full path is said to be so");
     yonder_storage_free(relative);
     char deep[256]="/";
     memset(deep+1,'d',250); deep[251]='\0';
     yonder_storage_t *tall=yonder_storage_new(deep);
-    check(yonder_storage_commit(tall,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_FAILED &&
+    check(yonder_storage_commit(tall,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
           problem_has(tall,"the profile folder's path is too long"),
           "storage disk: a profile with no room for its storage folder is said to be too long");
     yonder_storage_free(tall);
     /* A file in the way of the profile folder. */
     yonder_storage_t *blocked=yonder_storage_new("/tmp/blocked/profile");
     fake_put("/tmp/blocked","x",1);
-    check(yonder_storage_commit(blocked,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_FAILED &&
+    check(yonder_storage_commit(blocked,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
           problem_has(blocked,"/tmp/blocked/profile/storage cannot be made."),
           "storage disk: a file where a folder must be refuses the commit");
     yonder_storage_free(blocked);
     /* The last key removed: the file goes; a file another window removed
      * first is gone as asked. */
-    check(yonder_storage_commit(st,L,origin,kGone,strlen(kGone),false,NULL)==OS64_DOM_STORAGE_OK && fake_file(STORE_FILE)<0,
+    check(yonder_storage_commit(st,L,origin,kGone,strlen(kGone),NULL)==OS64_DOM_STORAGE_OK && fake_file(STORE_FILE)<0,
           "storage disk: a store left empty is removed");
     /* Clear twice, and the sessions with it. */
-    check(yonder_storage_commit(st,S,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_OK &&
-          yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_OK,"storage disk: both areas kept");
-    uint32_t busy=1;
-    check(yonder_storage_clear(st,&busy)==1 && busy==0 && yonder_storage_clear(st,&busy)==0 &&
+    check(yonder_storage_commit(st,S,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK &&
+          yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK,"storage disk: both areas kept");
+    check(yonder_storage_clear(st)==1 && yonder_storage_clear(st)==0 &&
           yonder_storage_identity(st,S,origin)==0 &&
           yonder_storage_load(st,S,origin,out,sizeof(out))==0 && yonder_storage_problem(st)==NULL,
           "storage disk: Clear page storage twice: the files and the sessions go once, and the problem with them");
@@ -7478,10 +7464,10 @@ static void storage_disk_cases(void) {
         for(size_t cut=1;cut<200 && !swept;cut++) {
             fake_reset();
             yonder_storage_t *sw=yonder_storage_new("/tmp/profile");
-            if(yonder_storage_commit(sw,area?S:L,origin,kOne,strlen(kOne),false,NULL)!=OS64_DOM_STORAGE_OK) { whole=false; break; }
+            if(yonder_storage_commit(sw,area?S:L,origin,kOne,strlen(kOne),NULL)!=OS64_DOM_STORAGE_OK) { whole=false; break; }
             size_t before=live;
             attempts=0; fail_at=cut;
-            os64_dom_storage_status_t status=yonder_storage_commit(sw,area?S:L,origin,kTwo,strlen(kTwo),false,NULL);
+            os64_dom_storage_status_t status=yonder_storage_commit(sw,area?S:L,origin,kTwo,strlen(kTwo),NULL);
             int64_t loaded=yonder_storage_load(sw,area?S:L,origin,out,sizeof(out));
             swept=attempts<cut;
             fail_at=0;
@@ -7498,55 +7484,6 @@ static void storage_disk_cases(void) {
     yonder_storage_free(st);
     yonder_storage_free(NULL);
     fake_reset();
-}
-/* TWO YONDERS, ONE STORE (storage.c § Two yonders): two windows' commits
- * interleaved on the fake disk, each a separate task. Neither's changes
- * are lost: the store's lock is waited for, a crash's lock is broken, a
- * live holder past the wait makes the commit BUSY, and a store another
- * writer moved between the read and the rename is merged onto again. */
-#define STORE_LOCK STORE_FILE "+lock"
-static yonder_storage_t *other_window;
-static const char kOtherChange[]="os64 storage 1\n+5 1\nother1\n";
-/* The other window, task 8, holding the lock: it commits and lets go. */
-static void other_commits_and_lets_go(void) {
-    uint64_t me=fake_task;
-    fake_task=8;
-    (void)os64_unlink(STORE_LOCK);
-    check(yonder_storage_commit(other_window,OS64_DOM_STORAGE_LOCAL,"http://fixture.test",kOtherChange,
-                                sizeof(kOtherChange)-1,false,NULL)==OS64_DOM_STORAGE_OK,"two yonders: the other window commits");
-    fake_task=me;
-}
-/* Another writer that took no lock, between this one's read and rename. */
-static void other_writes_unlocked(void) {
-    static const char kImage[]="os64 storage 1\n+1 1\nw1\n";
-    fake_put(STORE_FILE,kImage,sizeof(kImage)-1);
-}
-/* The lock's holder lets go. */
-static void let_go(void) {
-    (void)os64_unlink(STORE_LOCK);
-}
-static void plant_lock(uint64_t task, uint64_t taken) {
-    char text[48];
-    int n=snprintf(text,sizeof(text),"%lu %lu\n",(unsigned long)task,(unsigned long)taken);
-    fake_put(STORE_LOCK,text,(size_t)n);
-}
-static void storage_departure_busy_case(void) {
-    /* A store another window holds as the page departs: the departure's
-     * commit is the page's last, which waits past a live commit's wait for
-     * the lock, so the next page reads the write. */
-    storage_departure_page();
-    fake_live[0]=8;
-    plant_lock(8,(uint64_t)js_test_clock.epoch);
-    fake_sleep_hook=let_go;
-    fake_sleep_hook_at=fake_sleeps+100;     /* past a live commit's wait, inside the last's */
-    storage_page_as("http://fixture.test/two","<p id=out>start</p><script>"
-        "document.getElementById('out').textContent=localStorage.getItem('tok')+' '+sessionStorage.getItem('tok');"
-        "</script>",NAV_GO);
-    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","x y") && fake_file(STORE_LOCK)<0,
-        "departure: the departure's last commit waits for a busy store, and the next page reads the write");
-    loop_drop();
-    yonder_storage_free(s_storage);
-    s_storage=NULL;
 }
 /* A DEPARTED PAGE RUNS NOTHING MORE (HTML unloads its document): its queued
  * timer, due while the next page streams in, neither runs nor writes, now
@@ -7573,177 +7510,107 @@ static void storage_departed_tasks_case(void) {
     yonder_storage_free(s_storage);
     s_storage=NULL;
 }
+/* TWO YONDERS, ONE STORE (storage.c § Two yonders): another window's
+ * commit lands between this one's read and its rename; the store's
+ * identity, read again before the rename, sees it, and the merge is made
+ * again onto what that window wrote, so neither's changes are lost. */
+static yonder_storage_t *other_window;
+static const char kOtherChange[]="os64 storage 1\n+5 1\nother1\n";
+/* The other window, task 8, commits. */
+static void other_commits(void) {
+    uint64_t me=fake_task;
+    fake_task=8;
+    fake_second++;          /* a later second: its store's identity moves */
+    check(yonder_storage_commit(other_window,OS64_DOM_STORAGE_LOCAL,"http://fixture.test",kOtherChange,
+                                sizeof(kOtherChange)-1,NULL)==OS64_DOM_STORAGE_OK,"two yonders: the other window commits");
+    fake_task=me;
+}
 static void storage_two_yonder_cases(void) {
     static const char kMine[]="os64 storage 1\n+4 1\nmine1\n";
     const os64_dom_storage_area_t L=OS64_DOM_STORAGE_LOCAL;
     const char *origin="http://fixture.test";
-    uint64_t now=(uint64_t)js_test_clock.epoch;
-    /* A live holder lets go during the wait: this commit lands after its. */
     fake_reset();
     yonder_storage_t *st=yonder_storage_new("/tmp/profile");
     other_window=yonder_storage_new("/tmp/profile");
-    check(yonder_storage_commit(st,L,origin,"os64 storage 1\n+4 1\nseed1\n",26,false,NULL)==OS64_DOM_STORAGE_OK,
+    check(yonder_storage_commit(st,L,origin,"os64 storage 1\n+4 1\nseed1\n",26,NULL)==OS64_DOM_STORAGE_OK,
           "two yonders: a store to start from");
-    fake_live[0]=8;
-    plant_lock(8,now);
-    fake_sleep_hook=other_commits_and_lets_go;
-    check(yonder_storage_commit(st,L,origin,kMine,sizeof(kMine)-1,false,NULL)==OS64_DOM_STORAGE_OK && fake_sleeps>=1,
-          "two yonders: a commit waits for a live holder's lock");
-    check(store_holds("seed","1") && store_holds("other","1") && store_holds("mine","1") &&
-          fake_file(STORE_LOCK)<0 && fake_temps()==0,
-          "two yonders: neither window's changes are lost, and the lock is let go");
-    /* Another writer moves the store between the read and the rename: the
-     * merge is made again onto what it wrote. */
-    fake_sync_hook=other_writes_unlocked;
-    check(yonder_storage_commit(st,L,origin,kMine,sizeof(kMine)-1,false,NULL)==OS64_DOM_STORAGE_OK &&
-          store_holds("w","1") && store_holds("mine","1") && fake_temps()==0,
-          "two yonders: a store moved before the rename is merged onto again");
-    /* A crash's lock: its task gone, a zombie, or too old. Broken at once. */
-    static const struct { uint64_t task, taken; bool zombie; const char *name; } kStale[]={
-        {9,0,false,"two yonders: a lock whose task is gone is broken"},
-        {8,0,true,"two yonders: a lock whose task is a zombie is broken"},
-        {8,60,false,"two yonders: a lock older than a commit could be is broken"},
-        {7,0,false,"two yonders: a lock naming this window, which holds none between commits, is broken"},
-    };
-    for(size_t i=0;i<sizeof(kStale)/sizeof(kStale[0]);i++) {
-        fake_live_zombie=kStale[i].zombie;
-        plant_lock(kStale[i].task,now-kStale[i].taken);
-        fake_sleeps=0;
-        check(yonder_storage_commit(st,L,origin,kMine,sizeof(kMine)-1,false,NULL)==OS64_DOM_STORAGE_OK && fake_sleeps==0 &&
-              fake_file(STORE_LOCK)<0,kStale[i].name);
-        fake_live_zombie=false;
-    }
-    /* A lock that names nothing: waited for, then broken. */
-    fake_put(STORE_LOCK,"",0);
-    fake_sleeps=0;
-    check(yonder_storage_commit(st,L,origin,kMine,sizeof(kMine)-1,false,NULL)==OS64_DOM_STORAGE_OK && fake_sleeps==40 &&
-          fake_file(STORE_LOCK)<0,"two yonders: a half-made lock is broken at the end of the wait");
-    /* A live holder that keeps it: BUSY, nothing written, the lock its. */
-    plant_lock(8,now);
-    static const char kLater[]="os64 storage 1\n+5 1\nlater1\n";
-    yonder_diag_t *diag=yonder_diag_new("http://fixture.test/",1,0);
-    check(yonder_storage_commit(st,L,origin,kLater,sizeof(kLater)-1,false,diag)==OS64_DOM_STORAGE_BUSY &&
-          store_holds("later",NULL) && fake_file(STORE_LOCK)>=0 && fake_temps()==0,
-          "two yonders: a lock held past the wait makes the commit BUSY, and nothing is written");
-    char record[2048];
-    yonder_diag_render(diag,record,sizeof(record));
-    check(strstr(record,"FAILED storage: localStorage of http://fixture.test is busy")!=NULL,
-          "two yonders: and the page's record says its changes wait");
-    /* The last commit waits longer: a lock let go past a live commit's
-     * wait but inside the last's is waited out, and the changes kept. */
-    fake_sleep_hook=let_go;
-    fake_sleep_hook_at=fake_sleeps+100;
-    unsigned slept=fake_sleeps;
-    check(yonder_storage_commit(st,L,origin,kLater,sizeof(kLater)-1,false,NULL)==OS64_DOM_STORAGE_BUSY &&
-          fake_sleeps-slept==40,"two yonders: a live commit gives up at its wait");
-    check(yonder_storage_commit(st,L,origin,kLater,sizeof(kLater)-1,true,NULL)==OS64_DOM_STORAGE_OK &&
-          store_holds("later","1") && fake_file(STORE_LOCK)<0,
-          "two yonders: the last commit waits past it for a lock let go in time, and keeps the changes");
-    /* One still held at the end of the last's wait: lost, and said. */
-    plant_lock(8,now);
-    static const char kTwoKeys[]="os64 storage 1\n+4 1\nlost1\n-5\nlater\n";
-    slept=fake_sleeps;
-    check(yonder_storage_commit(st,L,origin,kTwoKeys,sizeof(kTwoKeys)-1,true,diag)==OS64_DOM_STORAGE_BUSY &&
-          fake_sleeps-slept==400 && store_holds("later","1") && store_holds("lost",NULL),
-          "two yonders: a lock held past the last commit's wait refuses it");
-    yonder_diag_render(diag,record,sizeof(record));
-    check(strstr(record,"localStorage of http://fixture.test was busy (another window was writing it) as the page "
-                        "left; 2 keys not kept")!=NULL,
-          "two yonders: and the page's record names the origin and how many keys were not kept");
-    (void)os64_unlink(STORE_LOCK);
-    yonder_diag_free(diag);
+    fake_sync_hook=other_commits;
+    check(yonder_storage_commit(st,L,origin,kMine,sizeof(kMine)-1,NULL)==OS64_DOM_STORAGE_OK &&
+          store_holds("seed","1") && store_holds("other","1") && store_holds("mine","1") && fake_temps()==0,
+          "two yonders: a store another window moved before the rename is merged onto again, and neither loses");
     yonder_storage_free(st);
     yonder_storage_free(other_window);
     other_window=NULL;
     fake_reset();
 }
-/* CLEAR AGAINST A WINDOW MID-COMMIT: Clear takes each store's lock as a
- * commit does, so a window holding it finishes first and nothing it
- * publishes outlives the clear; one held past the wait is not cleared,
- * and the Settings line says so. */
-static void storage_clear_lock_cases(void) {
+/* Clear page storage removes every store, one unlink each; a window that
+ * commits after it publishes only its own changes. */
+static void storage_clear_cases(void) {
     const os64_dom_storage_area_t L=OS64_DOM_STORAGE_LOCAL;
-    const char *origin="http://fixture.test";
-    uint64_t now=(uint64_t)js_test_clock.epoch;
     fake_reset();
     yonder_storage_t *st=yonder_storage_new("/tmp/profile");
     other_window=yonder_storage_new("/tmp/profile");
-    check(yonder_storage_commit(st,L,origin,"os64 storage 1\n+4 1\nseed1\n",26,false,NULL)==OS64_DOM_STORAGE_OK,
-          "clear: a store to clear");
-    fake_live[0]=8;
-    plant_lock(8,now);
-    fake_sleep_hook=other_commits_and_lets_go;
-    uint32_t busy=9;
-    int64_t removed=yonder_storage_clear(st,&busy);
-    /* A clear that did not wait lets the writer publish after it. */
-    if(fake_sleep_hook!=NULL) { void (*finish)(void)=fake_sleep_hook; fake_sleep_hook=NULL; finish(); }
-    check(removed==1 && busy==0 && fake_file(STORE_FILE)<0 && fake_file(STORE_LOCK)<0,
-          "clear: a window mid-commit finishes first, and nothing it published outlives the clear");
-    /* A window making the origin's FIRST store: its lock, no store yet.
-     * Clear waits for it too, and the store it publishes goes. */
-    plant_lock(8,now);
-    fake_sleep_hook=other_commits_and_lets_go;
-    removed=yonder_storage_clear(st,&busy);
-    if(fake_sleep_hook!=NULL) { void (*finish)(void)=fake_sleep_hook; fake_sleep_hook=NULL; finish(); }
-    check(removed==1 && busy==0 && fake_file(STORE_FILE)<0 && fake_file(STORE_LOCK)<0,
-          "clear: a window making an origin's first store finishes first, and its store goes");
-    /* Held past the wait: left, counted, and said. */
-    check(yonder_storage_commit(st,L,origin,"os64 storage 1\n+4 1\nseed1\n",26,false,NULL)==OS64_DOM_STORAGE_OK,
-          "clear: a store again");
-    plant_lock(8,now);
-    removed=yonder_storage_clear(st,&busy);
-    check(removed<0 && busy==1 && fake_file(STORE_FILE)>=0 && store_holds("seed","1") && fake_file(STORE_LOCK)>=0,
-          "clear: a store whose lock is held past the wait is not cleared, and is counted");
+    check(yonder_storage_commit(st,L,"http://fixture.test","os64 storage 1\n+4 1\nseed1\n",26,NULL)==
+          OS64_DOM_STORAGE_OK &&
+          yonder_storage_commit(st,L,"http://two.test","os64 storage 1\n+4 1\nseed1\n",26,NULL)==OS64_DOM_STORAGE_OK,
+          "clear: two stores");
+    check(yonder_storage_clear(st)==2 && fake_file(STORE_FILE)<0 &&
+          fake_file("/tmp/profile/storage/http%3A%2F%2Ftwo.test")<0,"clear: every store goes");
+    other_commits();
+    check(store_holds("other","1") && store_holds("seed",NULL),
+          "clear: a window committing after it publishes its own changes, and nothing that was cleared");
+    check(yonder_storage_commit(st,L,"http://two.test","os64 storage 1\n+4 1\nseed1\n",26,NULL)==OS64_DOM_STORAGE_OK,
+          "clear: a store to clear from Settings");
     yonder_storage_t *window_store=s_storage;
     s_storage=st;
     char line[200];
     storage_clear(line,sizeof(line));
     s_storage=window_store;
-    check(strstr(line,"Not cleared: 1 site another window was writing")!=NULL,"clear: and Settings says so");
-    (void)os64_unlink(STORE_LOCK);
+    check(strstr(line,"Cleared page storage: 2 stored sites gone.")!=NULL,line);
     yonder_storage_free(st);
     yonder_storage_free(other_window);
     other_window=NULL;
     fake_reset();
 }
-/* What a crash leaves (finding 7): temps and locks whose task is gone. The
- * first touch of the profile's stores removes them, and Clear page storage
- * does, counting only stores; a live window's temp and lock stay. */
+/* What a crash leaves: temps whose task is gone (or is this one, or a
+ * zombie). The first touch of the profile's stores removes them, and Clear
+ * page storage does, counting only stores; a live window's temp stays. */
 static void storage_orphan_cases(void) {
     fake_reset();
     snprintf(fake_dirs[nfake_dirs++],256,"/tmp/profile");
     snprintf(fake_dirs[nfake_dirs++],256,"/tmp/profile/storage");
     static const char kImage[]="os64 storage 1\n+1 1\nk1\n";
-    char lock[64];
-    uint64_t now=(uint64_t)js_test_clock.epoch;
     fake_live[0]=8;
     fake_put(STORE_FILE,kImage,sizeof(kImage)-1);
     fake_put(STORE_FILE "+9.3.new",kImage,sizeof(kImage)-1);       /* task 9: gone */
     fake_put(STORE_FILE "+7.1.new",kImage,sizeof(kImage)-1);       /* this task's, from before it was */
     fake_put(STORE_FILE "+8.2.new",kImage,sizeof(kImage)-1);       /* task 8: live, mid-commit */
-    int n=snprintf(lock,sizeof(lock),"9 %lu\n",(unsigned long)now);
-    fake_put("/tmp/profile/storage/http%3A%2F%2Fother.test+lock",lock,(size_t)n);
-    n=snprintf(lock,sizeof(lock),"8 %lu\n",(unsigned long)now);
-    fake_put("/tmp/profile/storage/http%3A%2F%2Flive.test+lock",lock,(size_t)n);
     /* Names a dead or this task's number follows a '+' in, that are not a
-     * temp by its whole spelling: never ours to remove. */
+     * temp by its whole spelling (a lock an older yonder left among them):
+     * never ours to remove. */
     static const char *const kNotTemps[]={
         "/tmp/profile/storage/notes+9", "/tmp/profile/storage/x+9.1.new.bak", "/tmp/profile/storage/x+9.new",
         "/tmp/profile/storage/x+.1.new", "/tmp/profile/storage/x+09.1.new", "/tmp/profile/storage/x+7.01.new",
         "/tmp/profile/storage/+9.1.new", "/tmp/profile/storage/x+9.1.newer",
+        "/tmp/profile/storage/http%3A%2F%2Fother.test+lock",
     };
     for(size_t i=0;i<sizeof(kNotTemps)/sizeof(kNotTemps[0]);i++) fake_put(kNotTemps[i],"mine",4);
     yonder_storage_t *st=yonder_storage_new("/tmp/profile");
     (void)yonder_storage_identity(st,OS64_DOM_STORAGE_LOCAL,"http://fixture.test");
-    check(fake_file(STORE_FILE "+9.3.new")<0 && fake_file(STORE_FILE "+7.1.new")<0 &&
-          fake_file("/tmp/profile/storage/http%3A%2F%2Fother.test+lock")<0,
-          "orphans: the first touch removes what a crash left");
-    check(fake_file(STORE_FILE "+8.2.new")>=0 && fake_file("/tmp/profile/storage/http%3A%2F%2Flive.test+lock")>=0 &&
-          fake_file(STORE_FILE)>=0,"orphans: a live window's temp and lock, and the store, stay");
+    check(fake_file(STORE_FILE "+9.3.new")<0 && fake_file(STORE_FILE "+7.1.new")<0,
+          "orphans: the first touch removes the temps a crash left");
+    check(fake_file(STORE_FILE "+8.2.new")>=0 && fake_file(STORE_FILE)>=0,
+          "orphans: a live window's temp, and the store, stay");
     fake_put(STORE_FILE "+9.4.new",kImage,sizeof(kImage)-1);
-    (void)os64_unlink("/tmp/profile/storage/http%3A%2F%2Flive.test+lock");   /* that window finished */
-    uint32_t busy;
-    check(yonder_storage_clear(st,&busy)==1 && busy==0 && fake_file(STORE_FILE)<0 && fake_file(STORE_FILE "+9.4.new")<0 &&
+    fake_put(STORE_FILE "+8.5.new",kImage,sizeof(kImage)-1);
+    fake_live_zombie=true;      /* task 8 died, its parent not yet told: its temps are a crash's */
+    fake_put(STORE_FILE "+8.2.new",kImage,sizeof(kImage)-1);
+    check(yonder_storage_clear(st)==1 && fake_file(STORE_FILE "+8.5.new")<0 && fake_file(STORE_FILE "+8.2.new")<0,
+          "orphans: a zombie's temps are a crash's");
+    fake_live_zombie=false;
+    fake_put(STORE_FILE,kImage,sizeof(kImage)-1);
+    fake_put(STORE_FILE "+8.2.new",kImage,sizeof(kImage)-1);
+    check(yonder_storage_clear(st)==1 && fake_file(STORE_FILE)<0 && fake_file(STORE_FILE "+9.4.new")<0 &&
           fake_file(STORE_FILE "+8.2.new")>=0,
           "orphans: Clear removes the stores and a crash's temps, and counts only stores");
     bool kept=true;
@@ -7810,9 +7677,8 @@ static void storage_cases(void) {
     storage_departure_cases();
     storage_disk_cases();
     storage_two_yonder_cases();
-    storage_departure_busy_case();
     storage_departed_tasks_case();
-    storage_clear_lock_cases();
+    storage_clear_cases();
     storage_orphan_cases();
     timing_window_cases();
     timing_redirect_case();

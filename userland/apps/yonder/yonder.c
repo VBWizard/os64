@@ -7543,24 +7543,19 @@ static void storage_turn(void)
 }
 
 // Settings' "Clear page storage": the store emptied, and every page open
-// now forgets what it had, so its next touch reads the empty store. A site
-// another window held past the wait is not cleared, and the line says so.
+// now forgets what it had, so its next touch reads the empty store.
 static void storage_clear(char *line, size_t cap)
 {
     if (s_storage == NULL) {
         os64_strcopy(line, cap, "Page storage is not kept in this window; there is nothing to clear.");
         return;
     }
-    uint32_t busy;
-    int64_t removed = yonder_storage_clear(s_storage, &busy);
+    int64_t removed = yonder_storage_clear(s_storage);
     yonder_scripts_t *hosts[] = {g.page.scripts, g.stream.scripts, g.coming.active ? g.coming.page.scripts : NULL};
     for (size_t i = 0; i < sizeof(hosts) / sizeof(hosts[0]); i++)
         yonder_scripts_storage_forget(hosts[i]);
     s_storage_said[0] = '\0';
-    if (busy != 0)
-        os64_snprintf(line, cap, "Not cleared: %lu site%s another window was writing; the rest is cleared. "
-                      "Try again in a moment.", (unsigned long)busy, busy == 1 ? "" : "s");
-    else if (removed < 0)
+    if (removed < 0)
         os64_strcopy(line, cap, "Cleared this window's page storage; some stored files could not be removed.");
     else
         os64_snprintf(line, cap, "Cleared page storage: %ld stored site%s gone.", (long)removed,

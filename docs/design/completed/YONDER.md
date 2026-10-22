@@ -136,9 +136,8 @@ remaining gates before recommending scripts for ordinary browsing.
   says `modern: off`. **Clear page storage** sits at that row's right and
   acts at once, as Empty the cache does (`yonder_settings_on_clear_storage`
   hands it to `storage_clear`, which removes every site's store from the
-  profile's `storage/` folder, each under its store lock, and has every page
-  open forget its maps; a store another window holds past the wait is left
-  and the line counts it).
+  profile's `storage/` folder, one unlink each, and has every page open
+  forget its maps; a window mid-commit may then publish its own changes).
 - **yonder's loop waits on its own window**, so a thread waits on the
   dialog's (without taking its events) and rings a doorbell on yonder's;
   the loop pumps the dialog and tells the thread it has. One ring is out

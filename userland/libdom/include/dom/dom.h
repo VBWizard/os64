@@ -302,14 +302,7 @@ typedef enum {
     /* The store could not be read or written: the page's area keeps its
      * map for the page's life from here, and asks the provider nothing
      * more. */
-    OS64_DOM_STORAGE_FAILED = -2,
-    /* The store is another's for now (another window is committing to
-     * it): nothing was kept, and the changes are handed over again at the
-     * next commit, COMMIT_MS from now, or at drain's, whichever is first.
-     * Drain's commit is the last: there it is the provider's to wait
-     * longer (nothing on screen waits for it), and a BUSY it answers loses
-     * the changes, which the provider reports. */
-    OS64_DOM_STORAGE_BUSY = -3
+    OS64_DOM_STORAGE_FAILED = -2
 } os64_dom_storage_status_t;
 /* A provider, all on the owner thread, none entering JS; `origin` is the
  * serialized origin ("https://example.com"), borrowed for the call.
@@ -319,16 +312,16 @@ typedef enum {
  * loaded means the store moved and is loaded again.
  * load: the store's image, written into `out` when it fits in `cap`;
  * answers its length either way (0 for none), negative when it cannot be
- * read or is not an image (an empty file is not one). The binding asks again with room when it did not fit, a few
- * times; a store still outgrowing its room is read at the next task.
+ * read or is not an image (an empty file is not one). The binding asks
+ * again with room when it did not fit, a few times; a store still
+ * outgrowing its room is read at the next task.
  * commit: this page's changes since its last commit (a change list in
- * os64_dom_storage_merge's format), merged onto the store as it stands.
- * `last` is drain's commit, after which there is none. */
+ * os64_dom_storage_merge's format), merged onto the store as it stands. */
 typedef struct {
     uint64_t (*identity)(void *opaque, const char *origin);
     int64_t (*load)(void *opaque, const char *origin, void *out, size_t cap);
     os64_dom_storage_status_t (*commit)(void *opaque, const char *origin, const void *changes,
-                                        size_t length, bool last);
+                                        size_t length);
     void *opaque;
 } os64_dom_storage_t;
 /* Copied; NULL removes the area's provider. Install before the first
@@ -397,7 +390,7 @@ os64_dom_geometry_stats_t os64_dom_geometry_stats(os64_dom_t *dom, bool reset);
 /* Owner-thread only, outside JS callbacks. Idempotent; NULL is a no-op.
  * Drain closes bindings and releases C-retained JS values even when libjs
  * has entered a sticky failed state. It first commits each storage area's
- * changes to its provider, the last of a page's commits (`last`). Native
+ * changes to its provider, the last of a page's commits. Native
  * records remain alive through engine finalizers; os64_dom_free releases
  * their native node holds.
  * The required order is drain, os64_js_destroy (or destroy_report), then
