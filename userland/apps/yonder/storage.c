@@ -482,8 +482,9 @@ static lock_t lock_take(const char *lock, uint32_t wait_ms)
     return LOCK_REFUSED;
 }
 
-// A decimal number at `*at`, as %lu or %u spells it, no larger than `max`:
-// digits, none of them a leading zero. False for anything else.
+// A decimal number at `*at`, no larger than `max`: a run of digits, read
+// whole. False for anything else. A leading zero is read here; what refuses
+// it is temp_task spelling the name again, as %lu or %u never writes one.
 static bool spelled_number(const char **at, uint64_t max, uint64_t *out)
 {
     uint64_t value = 0;

@@ -389,7 +389,7 @@ static int mark_time(os64_dom_t *dom, JSContext *ctx, JSValueConst mark, double 
     return -1;
 }
 
-/* The PerformanceMark constructor's steps (User Timing § 3.1.1), which
+/* The PerformanceMark constructor's steps (User Timing § 2.2.1), which
  * mark() runs too: a new mark, not yet in the buffer. */
 static JSValue mark_make(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, int argc, JSValueConst *argv)
 {
@@ -441,7 +441,7 @@ static int duration_time(JSContext *ctx, double duration)
     return -1;
 }
 
-/* measure(name, startOrMeasureOptions, endMark) (User Timing § 3.1.3). */
+/* measure(name, startOrMeasureOptions, endMark) (User Timing § 2.1.3). */
 static JSValue measure(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv)
 {
     if (argc < 1) return JS_ThrowTypeError(ctx, "A measure needs a name");

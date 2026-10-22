@@ -6,7 +6,6 @@
 #include "os64/proc.h"
 #include "os64/str.h"
 #include "os64/io.h"
-#include "os64/proc.h"
 
 /* Read on the window owner thread, including after a page owner is freed. */
 static size_t teardown_leaks;
