@@ -617,6 +617,7 @@ static const char *rp_index_read(const char *folder, RpIndex *x, RpFault *fault)
             }
         } else if(!strcmp(l.kind,"index:entry")) {
             x->lines++;
+            if(l.n[0]!=x->n+1) { bad="its index is damaged: its lines are not numbered 1 to N in order, each once"; break; }
             char *f[7]; char *copy=strndup(line,len), *p=copy;
             for(int k=0;k<7;k++) { f[k]=p; char *t=strchr(p,'\t'); if(t!=NULL) { *t='\0'; p=t+1; } }
             x->e=realloc(x->e,(x->n+1)*sizeof(*x->e));
@@ -653,7 +654,7 @@ static const char *rp_index_read(const char *folder, RpIndex *x, RpFault *fault)
 static RpKnown rp_index_lookup(void *ctx, uint32_t kind, const char *url, uint32_t id, RpAnswer *out) {
     RpIndex *x=ctx; RpEntry *pick=NULL;
     for(size_t i=0;i<x->n && pick==NULL;i++)
-        if(x->e[i].kind==kind && !strcmp(x->e[i].url,url) && x->e[i].used==0)
+        if(x->e[i].kind==kind && x->e[i].id==id && !strcmp(x->e[i].url,url) && x->e[i].used==0)
             pick=&x->e[i];
     if(pick==NULL) return RP_UNKNOWN;
     pick->used++;
@@ -802,7 +803,7 @@ static uint32_t rp_job_id(const RpJob *j) {
                                       : (uint32_t)((const yonder_sheet_job_t *)j->work.job)->index;
 }
 static bool rp_names(const RpEntry *e, const RpJob *j) {
-    return e->kind==j->kind && !strcmp(e->url,rp_job_url(j));
+    return e->kind==j->kind && e->id==rp_job_id(j) && !strcmp(e->url,rp_job_url(j));
 }
 /* THE KEPT ORDER, when the answers come from a kept index (NULL when they
  * come from a self-test's own site, which has none): its lines are in the
@@ -1893,7 +1894,7 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
         {"/badnumber",RP_BAD_NUMBER},{"/nomemory",RP_NO_MEMORY},{"/fulltable",RP_FULL_TABLE},{"/notarecord",RP_COPY},
         {"/cut",RP_CUT},{"/nostatus",RP_NO_STATUS},{"/shortline",RP_SHORT_LINE},{"/cutbeforekept",RP_CUT_BEFORE_KEPT},
         {"/bigcount",RP_BIG_COUNT},{"/oddline",RP_ODD_LINE},{"/escapes",RP_ESCAPES},
-        {"/nomodern",RP_NO_MODERN},{"/nolaid",RP_NO_LAID},{"/biglines",RP_BIG_LINES},
+        {"/dupnumber",RP_DUP_NUMBER},{"/nomodern",RP_NO_MODERN},{"/nolaid",RP_NO_LAID},{"/biglines",RP_BIG_LINES},
         {"/junkbytes",RP_JUNK_BYTES},{"/version1",RP_V1}};
     for(size_t i=0;i<sizeof(kRefused)/sizeof(kRefused[0]);i++) {
         dir=rp_cat(work,kRefused[i].dir,"");

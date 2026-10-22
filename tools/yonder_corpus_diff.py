@@ -164,6 +164,12 @@ def main(argv=None):
     except records.Unreadable as e:
         print(f'yonder_corpus_diff: {display(e)}', file=sys.stderr)
         return 2
+    # Paired by name, a page must be one page: records whose addresses
+    # differ are two pages, and comparing them would be no comparison.
+    for name in sorted(before.keys() & after.keys()):
+        if before[name].address != after[name].address:
+            unjudged[name] = (f'{name}: its records name two addresses, {before[name].address} and '
+                              f'{after[name].address}')
     # A page not judged on one side is judged on neither.
     for name in unjudged:
         before.pop(name, None)

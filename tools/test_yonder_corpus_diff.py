@@ -124,6 +124,15 @@ class DiffCases(unittest.TestCase):
         self.assertIn('https://worse.test/\\x1B[2J', out)
         self.assertIn('FAILED script x.js: \\x1B]0;owned\\x07', out)
 
+    def test_records_of_two_addresses_are_unjudged(self):
+        # One name, two pages: no comparison, and never silent.
+        self.settle_the_rest()
+        (self.after / 'better-0002.txt').write_text(as_replay('address: https://other.test/\nverdict: clean\n'))
+        rc, out = self.run_main(self.before, self.after)
+        self.assertEqual(rc, 2)
+        self.assertIn('progress: 0 pages\n', out)
+        self.assertIn('its records name two addresses, https://better.test/ and https://other.test/', out)
+
     def test_a_record_no_replay_wrote_is_unjudged(self):
         # A kept record has no state line: the diff compares replays only.
         self.settle_the_rest()
