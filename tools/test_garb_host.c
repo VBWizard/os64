@@ -336,6 +336,10 @@ static void media(const char *text)
         env.scripting = true;
         used += 10;
     }
+    // `device WxH ...`: the screen, which the device-* features answer.
+    int more = 0;
+    if (sscanf(text + used, "device %lfx%lf %n", &env.device_width, &env.device_height, &more) == 2)
+        used += more;
     puts(garb_media_text_matches(text + used, env) ? "true" : "false");
 }
 

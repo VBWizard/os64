@@ -872,13 +872,19 @@ static int32_t sheet_emit(Page *p, int32_t e, garb_sheet_in_t *in, int32_t *entr
 }
 
 // A view `w` x `h` device pixels as the page's sheets see it: in CSS
-// pixels at `zoom` (thousandths), never less than one.
+// pixels at `zoom` (thousandths), never less than one; and the screen the
+// window is on (s_screen, or libdom's default when none was read, as
+// `screen` reports it), in CSS pixels at `zoom` as `screen.width` is, for
+// the device-* media features, which a window's size does not move.
 static garb_env_t css_view(int32_t w, int32_t h, uint32_t zoom)
 {
     int64_t cw = ((int64_t)w * 1000 + zoom / 2) / zoom;
     int64_t ch = ((int64_t)h * 1000 + zoom / 2) / zoom;
+    os64_dom_screen_t screen = s_screen.width > 0 && s_screen.height > 0 ? s_screen : os64_dom_default_options().screen;
     return (garb_env_t){.width = cw > 0 ? (int32_t)cw : 1, .height = ch > 0 ? (int32_t)ch : 1,
-                        .dark = s_dark, .reduced_motion = s_reduce_motion};
+                        .dark = s_dark, .reduced_motion = s_reduce_motion,
+                        .device_width = (double)((int64_t)screen.width * 1000 / zoom),
+                        .device_height = (double)((int64_t)screen.height * 1000 / zoom)};
 }
 
 // `n` CSS pixels as device pixels at `zoom` (thousandths; 0 is 1000),
@@ -1028,7 +1034,9 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
                                                   garb_cascade_env(cascade).reduced_motion !=
                                                       view.reduced_motion ||
                                                   garb_cascade_env(cascade).modern_off != view.modern_off ||
-                                                  garb_cascade_env(cascade).scripting != view.scripting))) {
+                                                  garb_cascade_env(cascade).scripting != view.scripting ||
+                                                  garb_cascade_env(cascade).device_width != view.device_width ||
+                                                  garb_cascade_env(cascade).device_height != view.device_height))) {
         garb_sheet_in_t in[SHEETS_MAX];
         int32_t n = 0;
         const os64_page_t *model = page_model(p);

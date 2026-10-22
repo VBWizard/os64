@@ -2,7 +2,8 @@
 # query list, OUT whether it holds. The machine is a screen with a mouse, 8
 # bits a channel and 1 dppx; the document runs no scripts and the person's
 # choices are a light scheme and full motion, unless a case says `dark`,
-# `reduce` or `scripting` (in that order) after its viewport.
+# `reduce` or `scripting` (in that order) after its viewport; the screen is
+# the viewport unless `device WxH` follows them.
 IN: 800x600
 OUT: true
 IN: 800x600 all
@@ -102,6 +103,20 @@ OUT: false
 IN: 800x600 scripting (scripting)
 OUT: true
 IN: 800x600 scripting not (scripting: initial-only)
+OUT: true
+IN: 800x600 (device-width: 800px)
+OUT: true
+IN: 800x600 device 1920x1080 (device-width: 1920px)
+OUT: true
+IN: 800x600 device 1920x1080 (device-width: 800px)
+OUT: false
+IN: 800x600 device 1920x1080 (min-device-width: 1000px) and (max-width: 900px)
+OUT: true
+IN: 800x600 device 1920x1080 (device-height: 1080px)
+OUT: true
+IN: 800x600 device 1920x1080 (device-aspect-ratio: 16/9)
+OUT: true
+IN: 800x600 device 1920x1080 (aspect-ratio: 4/3)
 OUT: true
 IN: 800x600 (color)
 OUT: true

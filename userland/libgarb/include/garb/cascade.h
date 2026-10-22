@@ -32,6 +32,10 @@ typedef struct {
     // Whether the document's scripts run: what `scripting` answers,
     // `enabled` when true and `none` when false.
     bool scripting;
+    // The output device, the screen, in CSS pixels: what device-width,
+    // device-height and device-aspect-ratio answer. Either 0 answers them
+    // from the viewport, for a host that knows no screen.
+    double device_width, device_height;
     // Whether the Modern Web arc's properties are taken away
     // (garb_reading_t): the cascade reads every declaration, and every
     // `@supports` condition, with this answer, and records a marked

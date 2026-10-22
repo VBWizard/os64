@@ -1,5 +1,5 @@
-// media.c — Media Queries Level 4: a query list against the viewport
-// (garb/cascade.h).
+// media.c — Media Queries Level 4: a query list against the viewport and
+// the screen (garb/cascade.h).
 //
 // Level 4's logic has three values: a feature this engine does not know,
 // or text it cannot read, is UNKNOWN rather than false, so `not (hover:
@@ -7,10 +7,10 @@
 // false.
 //
 // What the machine answers: a screen, a mouse (fine pointer, can hover), 8
-// bits a colour channel and 1 dppx; whether the document's scripts run;
-// and what the person asked for — a light or dark scheme, and full or
-// reduced motion — each from the env (garb_env_t), the first unless it
-// says otherwise.
+// bits a colour channel and 1 dppx; and from the env (garb_env_t) the
+// screen's size, whether the document's scripts run, and what the person
+// asked for, a light or dark scheme and full or reduced motion, each the
+// first unless the env says otherwise.
 
 #include <float.h>
 
@@ -146,8 +146,14 @@ static const Feature kFeatures[] = {
 };
 
 // This machine's value of a ranged feature, and a value written for it.
+// The device-* features are the output device's (the screen's,
+// garb_env_t.device_width), the rest the viewport's.
 static bool actual(const Feature *f, garb_env_t env, double *out)
 {
+    if (os64_memcmp(f->name, "device-", 7) == 0 && env.device_width > 0 && env.device_height > 0) {
+        env.width = env.device_width;
+        env.height = env.device_height;
+    }
     switch (f->kind) {
     case F_WIDTH: *out = env.width; return true;
     case F_HEIGHT: *out = env.height; return true;

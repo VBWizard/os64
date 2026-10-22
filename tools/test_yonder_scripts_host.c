@@ -3941,7 +3941,36 @@ static void loop_view_media_scripting(void) {
         "media scripting: matchMedia answers enabled for a page whose scripts run");
     loop_drop();
 }
+/* Codex round 2: device-width, device-height and device-aspect-ratio are
+ * the screen's (what `screen` reports), not the viewport's, in a sheet and
+ * in matchMedia, and a window's size does not move them. A window that
+ * read no screen answers libdom's default, as `screen` does, which is
+ * what a replay answers. */
+static void loop_view_media_device(void) {
+    static const char page[]="<style>#d{display:none}@media (min-device-width: 1900px){#d{display:block}}</style>"
+        "<p id=d>d</p><p id=out>-</p><script>var log=[];function o(){log.push([screen.width,"
+        "matchMedia('(device-width: '+screen.width+'px)').matches,matchMedia('(device-height: '+screen.height+'px)').matches,"
+        "matchMedia('(width: '+screen.width+'px)').matches].join(':'));document.getElementById('out').textContent=log.join()}"
+        "o();setTimeout(o,100)</script>";
+    loop_page(page);
+    check(loop_settle() && view_turns() && probe_text_is("out","1024:true:true:false") &&
+          flow_box_for(g.page.tree,probe_id("d"))==NULL,
+        "media device: with no screen read, the default's, as screen reports it");
+    loop_drop();
+    s_screen=(os64_dom_screen_t){1920,1080,1920,1040,24};
+    loop_page(page);
+    bool shown=loop_settle() && view_turns() && probe_text_is("out","1920:true:true:false") &&
+               flow_box_for(g.page.tree,probe_id("d"))!=NULL;
+    check(shown,"media device: the screen's size, in a sheet and in matchMedia, not the viewport's");
+    g.view.bounds.w=640;
+    now_ms+=200; loop_settle(); view_turns();
+    check(probe_text_is("out","1920:true:true:false,1920:true:true:false"),
+        "media device: and a narrower window does not move it");
+    loop_drop();
+    s_screen=(os64_dom_screen_t){0};
+}
 static void loop_view_cold2_cases(void) {
+    loop_view_media_device();
     loop_view_media_scripting();
     loop_view_replacing_refused();
     loop_view_loading_redirect();
