@@ -476,7 +476,10 @@ is never broken between them; `wend`'s renderer holds a word across
 elements for exactly this reason and yonder must not wrap worse than
 `wend`. The element boundary is not a break opportunity; a space is, and
 so is `wbr`, whose whole meaning is one (the Western profile's rule; soft
-hyphens and CJK are booked). Measurement
+hyphens and CJK are booked). `word-break: break-all` makes one between
+every two clusters, and `overflow-wrap: anywhere` or `break-word` EMERGENCY
+ones, taken only where a line holds no other (Modern Web slice 4,
+MODERN_WEB.md § Slice 4, as built). Measurement
 uses the text engine and never a width table: each text piece is laid
 out ONCE as a measuring run with its resolved fonts — a piece longer
 than the engine's run cap, 1 MiB, is measured in windows cut at spaces —
@@ -484,8 +487,8 @@ and the run's carets give the pen position at every byte, so a word that
 spans pieces is the sum of its parts' caret distances (kerning across
 the boundary is not attempted, and neither is it by the engines that
 matter). A word wider than the line goes on a line of its own and
-OVERFLOWS it, CSS's `overflow-wrap: normal` — the page grows wider and
-`flow_width` says so; `wend` cuts such a word at the margin because a
+OVERFLOWS it, CSS's `overflow-wrap: normal`, the initial value — the page
+grows wider and `flow_width` says so; `wend` cuts such a word at the margin because a
 terminal cannot scroll sideways, and a browser window can. A fragment is
 one run, so the words of a line are grouped into fragments that stop
 short of the run cap. Each line's fragment of each piece is then laid out
@@ -495,7 +498,11 @@ the memory of one run per line-fragment; it works with the engine as it
 stands, and a range-draw on the measuring run (one run per piece,
 painted by byte range) is the F2 ask that halves both, booked with its
 trigger below. Min-content width (tables, below) is the widest WORD of
-the sequence under the same definition — across nodes.
+the sequence under the same definition — across nodes, and cut where
+`break-all` and `anywhere` cut it (`break-word`'s cuts do not count, Text
+3 § 5.4). The tracking `letter-spacing` puts after a line's last
+character is left out of the line: its fit, its fragment's width and both
+intrinsic widths (Text 3 § 7.2).
 
 **`pre` and `pre-wrap` are measured PER LINE, because the engine refuses
 a literal LF** (`os64_text_layout` answers BAD_ARGUMENT; one run is one
