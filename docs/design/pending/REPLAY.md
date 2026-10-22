@@ -229,6 +229,9 @@ the rows that say so are the whole of what a replay fakes.
 | the text face | the harness | — | stated: bitmap face, so measurements differ from the P5's |
 | pictures and fonts | not fetched | — | stated: their fetch-decided outcomes are not reproduced (§ 5) |
 | the screen | the harness | — | stated: `screen` answers libdom's default, 1024 × 768, not the display the page was kept on |
+| page storage | the harness | — | stated: `localStorage` and `sessionStorage` start empty and live in memory for the replay alone; no profile folder is read or written |
+| how the page was reached | the harness | — | stated: by its address, always (`performance.navigation.type` 0, the navigation entry's `navigate`), whether it was kept on a reload, Back or a link |
+| the redirects followed | the harness | — | stated: `redirectCount` is 0; the record keeps no count |
 
 **A kept file is bound to its record by what the record says of it, and
 nothing else** (version 2; version 1 by what it says, § 3's versions
@@ -324,8 +327,8 @@ fields   := (script | sheet)   -- v2: address TAB came|failed TAB final TAB labe
 
 Lines are numbered 1..N in order, each once; a number repeated, skipped
 or out of order is damage. A line of a kind the reader does not know is
-damage, so the slice that keeps a new kind (slice 2's `fetch`, slice 1a's
-`storage`) teaches both readers that kind in the same change. Fields hold
+damage, so the slice that keeps a new kind (slice 2's `fetch`, for one)
+teaches both readers that kind in the same change. Fields hold
 no raw control byte and decode to no NUL; the C reader never re-splits a field with a
 NUL-terminated routine. A job is matched to a line by kind, address and
 identity (v1: kind and address, in kept order); each line answers one
@@ -427,6 +430,9 @@ Each is a row in DEBTS.md § The replay corpus.
 |---|---|
 | the text face is the harness's bitmap face, so measured layout differs from the P5's | a replay regression that is a measurement |
 | `screen` answers libdom's default, not the display the page was kept on | a page whose MISSING lines, or whose layout, depend on it |
+| page storage starts empty on a replay | a kept page whose record differs from its replay's by what it had stored (a consent banner shown or not) |
+| a replay is always reached by address | a kept page reached by a reload or Back whose scripts read how it was reached |
+| `redirectCount` is 0 on a replay | a census page that reads `redirectCount` |
 | a kept corpus holds script-visible cookies | the day the filesystem has modes, the record is written closed |
 | keep_pages writes on the window's thread | browsing with it on visibly hitching while a page's scripts arrive |
 | a page that navigates replays only as far as going | pages that redirect by script often enough that their incomplete records hide what slices change |
