@@ -1530,14 +1530,17 @@ const flow_box_t *flow_box_for(const flow_tree_t *tree, const os64_html_node_t *
 int32_t flow_nimages(const flow_tree_t *tree);
 const flow_box_t *flow_image(const flow_tree_t *tree, int32_t i);
 
-// Whether a replaced element drawn in `style` is sized by the page alone —
-// a width and a height in pixels, or one of them and an aspect-ratio of
-// its own (not `auto <ratio>`, which a picture's ratio replaces) — so that
-// what the oracle answers (flow_env_t.replaced_size) cannot change its box. The rule the layout
-// sizes by, for a face deciding whether an arrival needs a new layout:
-// ask it of the element's box (flow_box_for), not of its attributes, which
-// say what the page wrote and not what parsed. False for NULL.
-bool flow_replaced_fixed(const flow_style_t *style);
+// Whether a replaced box is sized by the page alone, so that what the
+// oracle answers (flow_env_t.replaced_size) cannot change it: its style
+// gives a width and a height in pixels, or one of them and an
+// aspect-ratio of its own (not `auto <ratio>`, which a picture's ratio
+// replaces); and, a flex item, its main size is given, its basis is not
+// `content` and its main minimum is a length — else the flex algorithm
+// reads the picture's own size. The rule the layout sizes by, for a face
+// deciding whether an arrival needs a new layout: ask it of the element's
+// box (flow_box_for), not of its attributes, which say what the page
+// wrote and not what parsed. False for NULL.
+bool flow_replaced_fixed(const flow_box_t *box);
 int32_t flow_ncontrols(const flow_tree_t *tree);
 const flow_box_t *flow_control(const flow_tree_t *tree, int32_t i);
 

@@ -3267,7 +3267,7 @@ static char *copy_text(const char *text)
 static bool picture_sized(const Page *p, const os64_html_node_t *node)
 {
     const flow_box_t *b = flow_box_for(p->tree, node);
-    return b != NULL && flow_replaced_fixed(b->style);
+    return b != NULL && flow_replaced_fixed(b);
 }
 
 // Hands the pool the page's next pictures, in table order, while fewer than

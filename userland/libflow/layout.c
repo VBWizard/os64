@@ -518,18 +518,32 @@ static bool height_given(const flow_style_t *s)
     return s->height.kind == FLOW_LENGTH_PX;
 }
 
-// Fixed: both sides given, or one side and a ratio of the page's own that
-// no picture's can replace (not `auto <ratio>`), which replaced_size uses
-// whether or not the picture has arrived, held by the same limits
-// (replaced_hold).
-bool flow_replaced_fixed(const flow_style_t *style)
+// Fixed by its style: both sides given, or one side and a ratio of the
+// page's own that no picture's can replace (not `auto <ratio>`), which
+// replaced_size uses whether or not the picture has arrived, held by the
+// same limits (replaced_hold). And by its place: a flex item's size is the
+// flex algorithm's, which reads the picture's own size (replaced_own) for
+// a base of `content` and for an automatic minimum on the main axis, so a
+// flex item is fixed only where its main size is given, its basis is not
+// `content`, and its main minimum is a length. A grid item's automatic
+// minimum is its contribution, the size replaced_size gives, so its place
+// changes nothing.
+bool flow_replaced_fixed(const flow_box_t *box)
 {
-    if (style == NULL)
+    const flow_style_t *s = box != NULL ? box->style : NULL;
+    if (s == NULL)
         return false;
-    if (width_given(style) && height_given(style))
-        return true;
-    return style->aspect_ratio > 0 && !style->aspect_natural &&
-           (width_given(style) || height_given(style));
+    bool sized = (width_given(s) && height_given(s)) ||
+                 (s->aspect_ratio > 0 && !s->aspect_natural && (width_given(s) || height_given(s)));
+    const flow_style_t *in = box->parent != NULL ? box->parent->style : NULL;
+    if (!sized || in == NULL ||
+        (in->display != FLOW_DISPLAY_FLEX && in->display != FLOW_DISPLAY_INLINE_FLEX))
+        return sized;
+    bool column = in->flex_direction == FLOW_FLEX_COLUMN ||
+                  in->flex_direction == FLOW_FLEX_COLUMN_REVERSE;
+    flow_length_t least = column ? s->min_height : s->min_width;
+    bool given = column ? height_given(s) : width_given(s);
+    return given && s->flex_basis.kind != FLOW_LENGTH_CONTENT && least.kind == FLOW_LENGTH_PX;
 }
 
 // §10.4's limits on a replaced box's size `r`, its ratio kept in whichever
