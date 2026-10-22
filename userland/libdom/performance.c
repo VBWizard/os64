@@ -263,20 +263,22 @@ static int buffer_clear(os64_dom_t *dom, JSContext *ctx, int kind, JSValueConst 
     return 0;
 }
 
-typedef struct { JSValue value; double start; uint32_t order; } Found;
+typedef struct { JSValue value; double start; } Found;
 
 /* The entries of `kind` (-1: every kind) named `name` (undefined: any),
  * the navigation entry among them, as a new Array in startTime order. */
 static JSValue buffer_query(os64_dom_t *dom, JSContext *ctx, int kind, JSValueConst name)
 {
     uint32_t count = buffer_length(dom, ctx);
-    Found *found = d_alloc(dom, sizeof(*found) * ((size_t)count + 1));
+    /* The entries found, and as many again for the sort's scratch. */
+    Found *found = d_alloc(dom, sizeof(*found) * ((size_t)count + 1) * 2);
     if (found == NULL) return d_error(ctx, "QuotaExceededError", "Performance entry quota exceeded");
+    Found *scratch = found + count + 1;
     uint32_t used = 0;
     JSValue result = JS_EXCEPTION;
     const DEntry *navigation = JS_GetOpaque(dom->navigation_entry->value, os64_js_class_id(&entry_slot));
     if ((kind < 0 || kind == K_NAVIGATION) && navigation != NULL && named(ctx, navigation, name))
-        found[used++] = (Found){JS_DupValue(ctx, dom->navigation_entry->value), 0, 0};
+        found[used++] = (Found){JS_DupValue(ctx, dom->navigation_entry->value), 0};
     for (uint32_t i = 0; i < count; i++) {
         JSValue item = JS_GetPropertyUint32(ctx, dom->performance_entries->value, i);
         if (JS_IsException(item)) goto done;
@@ -285,25 +287,34 @@ static JSValue buffer_query(os64_dom_t *dom, JSContext *ctx, int kind, JSValueCo
             JS_FreeValue(ctx, item);
             continue;
         }
-        found[used] = (Found){item, entry->start, used};
+        found[used] = (Found){item, entry->start};
         used++;
     }
-    /* A stable insertion sort: the buffer is nearly in order already, since
-     * most entries are made at now(). */
-    for (uint32_t i = 1; i < used; i++) {
-        Found one = found[i];
-        uint32_t at = i;
-        while (at > 0 && found[at - 1].start > one.start) { found[at] = found[at - 1]; at--; }
-        found[at] = one;
+    /* A stable merge sort: a page may make marks at any startTime it
+     * likes, in any order, as many as its budget holds. */
+    Found *from = found, *to = scratch;
+    for (uint32_t width = 1; width < used; width *= 2) {
+        for (uint32_t lo = 0; lo < used; lo += 2 * width) {
+            uint32_t mid = used - lo > width ? lo + width : used;
+            uint32_t hi = used - mid > width ? mid + width : used;
+            uint32_t a = lo, b = mid, at = lo;
+            while (a < mid && b < hi) to[at++] = from[b].start < from[a].start ? from[b++] : from[a++];
+            while (a < mid) to[at++] = from[a++];
+            while (b < hi) to[at++] = from[b++];
+        }
+        Found *swap = from;
+        from = to;
+        to = swap;
     }
     result = JS_NewArray(ctx);
     for (uint32_t i = 0; !JS_IsException(result) && i < used; i++) {
-        if (JS_SetPropertyUint32(ctx, result, i, found[i].value) < 0) {
+        if (JS_SetPropertyUint32(ctx, result, i, from[i].value) < 0) {
             JS_FreeValue(ctx, result);
             result = JS_EXCEPTION;
         }
-        found[i].value = JS_UNDEFINED;
+        from[i].value = JS_UNDEFINED;
     }
+    for (uint32_t i = 0; i < used; i++) found[i].value = from[i].value;
 done:
     for (uint32_t i = 0; i < used; i++) JS_FreeValue(ctx, found[i].value);
     d_free(dom, found);
