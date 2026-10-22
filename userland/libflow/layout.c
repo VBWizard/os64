@@ -204,6 +204,28 @@ static int64_t ratio_width(const flow_style_t *s, int64_t h, int64_t hf, int64_t
     return ratio_size(s, h, vf, hf, false);
 }
 
+// Whether a non-replaced box keeps a ratio: a block container of an
+// element's own — a flex, grid or flow root among them — with one. A
+// replaced box keeps its own through replaced_size; aspect-ratio does not
+// apply to a table's inner boxes (Sizing 4 § 4.1), and a table's own is
+// booked (DEBTS.md).
+static bool ratio_box(const FBox *b)
+{
+    return b->kind == FB_BLOCK && b->node != NULL && b->style->aspect_ratio > 0;
+}
+
+// The content height a ratio box takes from its content width `w`, its
+// content `content` tall: its ratio's, and at least its content's where
+// min-height is auto and it does not scroll (§ 4.3's automatic minimum;
+// its limits are the caller's to apply).
+static int64_t ratio_content_h(const flow_style_t *s, int64_t w, int64_t hf, int64_t vf,
+                               int64_t content)
+{
+    int64_t want = ratio_height(s, w, hf, vf);
+    bool scrolls = s->overflow_y != FLOW_OVERFLOW_VISIBLE && s->overflow_y != FLOW_OVERFLOW_CLIP;
+    return s->min_height.kind == FLOW_LENGTH_AUTO && !scrolls ? max64(want, content) : want;
+}
+
 static void fail(L *l)
 {
     l->failed = true;
@@ -3331,9 +3353,11 @@ static void laid_offset(const FBox *c, int64_t cbw, int64_t *dx, int64_t *dy)
         rel_offset(c->style, cbw, definite_height(c->parent), dx, dy);
 }
 
+static int64_t natural_w(const FBox *c);
+
 // An item's height before its container stretched or flexed it: a height
-// the page gave, or its content's, held to its limits; border box. What a
-// container sizes it from, however often it places it.
+// the page gave, its ratio's, or its content's, held to its limits; border
+// box. What a container sizes it from, however often it places it.
 static int64_t natural_h(const FBox *c)
 {
     const flow_style_t *cs = c->style;
@@ -3343,6 +3367,12 @@ static int64_t natural_h(const FBox *c)
         return c->h;                // a table's height is its rows'
     int64_t h = cs->height.kind == FLOW_LENGTH_PX ? content_of(cs, cs->height, 0, vf)
                                                   : c->content_h - vf;
+    // A box with a ratio is its ratio's height from the width it was laid
+    // out at, as block_at made it.
+    if (ratio_box(c) && cs->height.kind != FLOW_LENGTH_PX) {
+        int64_t w = natural_w(c), hf = hframe(c, 0);
+        h = ratio_content_h(cs, max64(0, w - hf), hf, vf, max64(0, h));
+    }
     return clamp_height(cs, max64(0, h), vf) + vf;
 }
 
@@ -3598,13 +3628,25 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
         if (c->kind == FB_REPLACED)
             content = replaced_own(l, c, 1, cw, !wraps && stretches_across(s, c) ? c->flex_w : -1) +
                       it->frame;
+        // A box with a ratio and a definite cross size — a width given, or
+        // the one line's that stretches it (§ 9.8) — has its height through
+        // its ratio (§ 9.2.3 B), and an automatic minimum no more than it
+        // (§ 4.5); the content it was laid out with is the rest.
+        int64_t moved = -1;
+        if (ratio_box(c) && cs->height.kind != FLOW_LENGTH_PX &&
+            (cs->width.kind == FLOW_LENGTH_PX || cs->width.kind == FLOW_LENGTH_PERCENT ||
+             (!wraps && stretches_across(s, c)))) {
+            int64_t hf = hframe(c, cw);
+            moved = clamp_height(cs, ratio_height(cs, max64(0, c->w - hf), hf, it->frame),
+                                 it->frame) + it->frame;
+        }
         flow_length_t fb = cs->flex_basis;
         if (fb.kind == FLOW_LENGTH_PX || (fb.kind == FLOW_LENGTH_PERCENT && given >= 0))
             it->base = content_of(cs, fb, max64(0, given), it->frame) + it->frame;
         else if (fb.kind == FLOW_LENGTH_AUTO && cs->height.kind == FLOW_LENGTH_PX)
             it->base = content_of(cs, cs->height, 0, it->frame) + it->frame;
         else
-            it->base = content;
+            it->base = moved >= 0 ? moved : content;
         it->max = cs->max_height.kind == FLOW_LENGTH_PX
                       ? content_of(cs, cs->max_height, 0, it->frame) + it->frame : kNoLimit;
         if (cs->min_height.kind == FLOW_LENGTH_PX)
@@ -3615,7 +3657,8 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
             // The automatic minimum (§ 4.5): its content's height, no more
             // than a height the page gave (natural_h is that, when it gave
             // one), or its limit.
-            it->min = min64(min64(content, natural_h(c)), it->max);
+            it->min = min64(min64(min64(content, natural_h(c)), moved >= 0 ? moved : kNoLimit),
+                            it->max);
         it->min = max64(it->min, it->frame);
         it->max = max64(it->max, it->min);
         it->hyp = it->base < it->min ? it->min : it->base > it->max ? it->max : it->base;
@@ -3864,6 +3907,24 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
                 own_min = own_max = replaced_own(l, c, 0, cw, ch) + it->frame;
             }
             bool width_given = cs->width.kind == FLOW_LENGTH_PX || cs->width.kind == FLOW_LENGTH_PERCENT;
+            // A box with a ratio and a definite cross size — a height given,
+            // or the one line's that stretches it (§ 9.8) — has a content
+            // width through its ratio (§ 9.2.3 B), and an automatic minimum
+            // no more than it (§ 4.5's transferred size suggestion).
+            if (ratio_box(c) && !width_given) {
+                int64_t vf = vframe(c, cw), ch = -1;
+                if (height_given(cs))
+                    ch = clamp_height(cs, content_of(cs, cs->height, 0, vf), vf);
+                else if (h_def && !r.wraps && stretches_across(s, c))
+                    ch = clamp_height(cs, max64(0, h_given - len(cs->margin[FLOW_TOP], cw) -
+                                                       len(cs->margin[FLOW_BOTTOM], cw) - vf), vf);
+                if (ch >= 0) {
+                    int64_t moved = clamp_width(cs, ratio_width(cs, ch, it->frame, vf), cw,
+                                                it->frame) + it->frame;
+                    own_max = moved;
+                    own_min = min64(own_min, moved);
+                }
+            }
             flow_length_t fb = cs->flex_basis;
             if (fb.kind == FLOW_LENGTH_PX || fb.kind == FLOW_LENGTH_PERCENT)
                 it->base = content_of(cs, fb, cw, it->frame) + it->frame;
@@ -4921,6 +4982,12 @@ static bool grid_place(L *l, const FStyles *styles, FBox *b, GPlan *p, int64_t c
                      c->border[FLOW_BOTTOM];
         int64_t h = natural_h(c), room = ah - (mt + h + mb), dy = 0;
         flow_place_t a = self_align(cs->align_self, s->align_items, c);
+        // `normal` is `start` down a box with a ratio, whose height is
+        // its ratio's (Box Alignment 3 § 6.2, Grid 2 § 6.2); a stretch the
+        // page wrote still stretches it.
+        flow_place_t written = cs->align_self != FLOW_PLACE_AUTO ? cs->align_self : s->align_items;
+        if (ratio_box(c) && (written == FLOW_PLACE_NORMAL || written == FLOW_PLACE_AUTO))
+            a = FLOW_PLACE_START;
         if (at_auto || ab_auto) {
             if (room > 0)
                 dy = at_auto && ab_auto ? room / 2 : at_auto ? room : 0;
@@ -5135,6 +5202,13 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
         forced_w = b->atom_w;
     } else if (b->abs_sized) {
         forced_w = b->abs_w;
+    } else if (ratio_box(b) && s->width.kind == FLOW_LENGTH_AUTO && height_given(s) &&
+               !b->flex_sized) {
+        // A width left to it and a height given: the ratio gives the
+        // width (Sizing 4 § 4.1), held to its limits — a float's too, which
+        // would otherwise shrink to fit.
+        int64_t hf = hframe(b, cbw), vf = vframe(b, cbw);
+        forced_w = clamp_width(s, ratio_width(s, content_of(s, s->height, 0, vf), hf, vf), cbw, hf);
     } else if (s->width.kind == FLOW_LENGTH_FIT_CONTENT ||
                ((b->floated != FLOW_FLOAT_NONE ||
                  (b->parent == NULL && s->float_side != FLOW_FLOAT_NONE)) &&
@@ -5152,13 +5226,6 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
         forced_w = b->flex_w;
         if (b->kind == FB_REPLACED && !height_given(s))
             rep.h = replaced_for(l, b, 0, b->flex_w, cbw);
-    }
-    // A width left to it and a height given: the ratio gives the width
-    // (Sizing 4 § 4.1), held to its limits.
-    if (forced_w < 0 && b->kind != FB_REPLACED && s->aspect_ratio > 0 &&
-        s->width.kind == FLOW_LENGTH_AUTO && height_given(s) && !b->abs_h_set) {
-        int64_t hf = hframe(b, cbw), vf = vframe(b, cbw);
-        forced_w = clamp_width(s, ratio_width(s, content_of(s, s->height, 0, vf), hf, vf), cbw, hf);
     }
     int64_t mt = len(s->margin[FLOW_TOP], cbw), mb = len(s->margin[FLOW_BOTTOM], cbw);
     clearance(l, b, cur, mt);
@@ -5193,8 +5260,10 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
     // 4.1): not auto for a margin to collapse through, and at least its
     // content's where min-height is auto and the box does not scroll — the
     // automatic minimum of § 4.3, its min-content height held by its
-    // maximum, which clamp_height applies after.
-    bool by_ratio = height_auto && s->aspect_ratio > 0 && b->kind != FB_REPLACED && !b->flex_sized;
+    // maximum, which clamp_height applies after. A flex or grid item's
+    // too, from the width its container gave it; a container that
+    // stretches it across sets its height after (flex_place, grid_place).
+    bool by_ratio = height_auto && ratio_box(b);
     bool bottom_open = !root && height_auto && !by_ratio && !min_height &&
                        b->border[FLOW_BOTTOM] == 0 && b->padding[FLOW_BOTTOM] == 0;
     int64_t vframe_px = b->border[FLOW_TOP] + b->padding[FLOW_TOP] + b->padding[FLOW_BOTTOM] +
@@ -5345,12 +5414,8 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
             content_h = max64(content_h, floats_end - content_top);
         pm_out = margin_of(mb);
     }
-    if (by_ratio) {
-        int64_t want = ratio_height(s, cw, b->w - cw, vframe_px);
-        bool scrolls = s->overflow_y != FLOW_OVERFLOW_VISIBLE && s->overflow_y != FLOW_OVERFLOW_CLIP;
-        content_h = s->min_height.kind == FLOW_LENGTH_AUTO && !scrolls ? max64(want, content_h)
-                                                                       : want;
-    }
+    if (by_ratio)
+        content_h = ratio_content_h(s, cw, b->w - cw, vframe_px, content_h);
     // Content taller than a max-height is drawn past it.
     content_h = clamp_height(s, max64(0, content_h), vframe_px);
     b->placed = true;
@@ -5569,6 +5634,16 @@ static void absolute(L *l, const FStyles *styles, FBox *a, Rect cb)
         hgt = rep.h;
     } else if (width_given(s)) {
         w = content_of(s, s->width, cb.w, hf);
+    } else if (ratio_box(a) && s->width.kind == FLOW_LENGTH_AUTO && (h.auto0 || h.auto1) &&
+               (s->height.kind == FLOW_LENGTH_PX || s->height.kind == FLOW_LENGTH_PERCENT ||
+                (!v.auto0 && !v.auto1))) {
+        // A height it is given, by its own or by both insets, and a width
+        // left to shrink: the ratio gives the width (Sizing 4 § 4.1). A
+        // height left to it is its ratio's when the box is laid out.
+        int64_t given = s->height.kind != FLOW_LENGTH_AUTO
+                            ? content_of(s, s->height, cb.h, vf)
+                            : max64(0, cb.h - v.in0 - v.in1 - v.m0 - v.m1 - vf);
+        w = ratio_width(s, clamp_height(s, given, vf), hf, vf);
     } else if (s->width.kind == FLOW_LENGTH_FIT_CONTENT) {
         w = shrink_to_fit(l, a, cb.w - (h.auto0 ? 0 : h.in0) - (h.auto1 ? 0 : h.in1) - h.m0 -
                                     h.m1 - hf);
@@ -5859,6 +5934,11 @@ static Intr intrinsic(L *l, FBox *b)
         if (b->kind != FB_CELL) {
             if (s->width.kind == FLOW_LENGTH_PX)
                 r.min = r.max = content_of(s, s->width, 0, frame);
+            // A height given and a ratio: both widths are its ratio's
+            // (Sizing 4 § 4.1).
+            else if (ratio_box(b) && s->width.kind == FLOW_LENGTH_AUTO && height_given(s))
+                r.min = r.max = ratio_width(s, content_of(s, s->height, 0, vframe(b, 0)), frame,
+                                            vframe(b, 0));
             if (s->max_width.kind == FLOW_LENGTH_PX) {
                 r.min = min64(r.min, content_of(s, s->max_width, 0, frame));
                 r.max = min64(r.max, content_of(s, s->max_width, 0, frame));

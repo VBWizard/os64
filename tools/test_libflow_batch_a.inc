@@ -485,6 +485,80 @@ static void batch_a_cases(void)
         "    block div 0 238 200 20\n"
         "    block div 0 268 200 20\n");
 
+    // The cold reader's cases (Sizing 4 § 4.1, Flexbox 1 § 9.2.3 B and §
+    // 9.8, Box Alignment 3 § 6.2): a flex item 20 high at 1 is 20 wide; a
+    // float 20 high at 2 is 40 wide, not shrunk to its nothing; an absolute
+    // box 20 high at 3 is 60 wide.
+    cascade_layout_case("aspect-ratio: a flex item, a float and an absolute box take their widths",
+        "<!doctype html><style>body { margin: 0 } .f { display: flex } .a { height: 20px;"
+        " aspect-ratio: 1 } .fl { float: left; height: 20px; aspect-ratio: 2 } .ab { position:"
+        " absolute; top: 60px; left: 0; height: 20px; aspect-ratio: 3 } .blk { height: 20px;"
+        " aspect-ratio: 1 }</style><div class=f><div class=a></div></div><div class=blk></div>"
+        "<div class=fl></div><div class=ab></div>", 200,
+        "page 200 80\n"
+        "block html 0 0 200 60\n"
+        "  block body 0 0 200 40\n"
+        "    block div 0 0 200 20\n"
+        "      block div 0 0 20 20\n"
+        "    block div 0 20 20 20\n"
+        "    block div 0 40 40 20 float-left\n"
+        "    block div 0 60 60 20 positioned\n");
+    // A column 100 wide stretches its item across, which its ratio of 2
+    // makes 50 high; a row item 40 wide at 1, not stretched, is 40 high; a
+    // grid item stretched across its 60 column is placed down at the start
+    // (`normal` is `start` for a box with a ratio), 20 high at 3.
+    cascade_layout_case("aspect-ratio: a column item, a row item and a grid item take their heights",
+        "<!doctype html><style>body { margin: 0 } .col { display: flex; flex-direction: column;"
+        " width: 100px } .c { aspect-ratio: 2 } .row { display: flex; align-items: flex-start }"
+        " .r { width: 40px; aspect-ratio: 1 } .g { display: grid; width: 60px } .gi {"
+        " aspect-ratio: 3 }</style><div class=col><div class=c></div></div><div class=row><div"
+        " class=r></div></div><div class=g><div class=gi></div></div>", 200,
+        "page 200 110\n"
+        "block html 0 0 200 110\n"
+        "  block body 0 0 200 110\n"
+        "    block div 0 0 100 50\n"
+        "      block div 0 0 100 50\n"
+        "    block div 0 50 200 40\n"
+        "      block div 0 50 40 40\n"
+        "    block div 0 90 60 20\n"
+        "      block div 0 90 60 20\n");
+    // A row 30 high stretches its item down, which is then 60 wide at 2
+    // (its stretched height is definite, § 9.8); a column item given 80 at
+    // 4 is 20 high; `align-self: stretch` the page wrote stretches a grid
+    // item with a ratio down its 50; a float shrinks to its child's
+    // width, the 10 high child's ratio of 5 making its min- and
+    // max-content 50; a grid row is as tall as a ratio item 30 wide at 1,
+    // and its neighbour stretched to it.
+    cascade_layout_case("aspect-ratio: stretched sizes, a written stretch, intrinsic widths",
+        "<!doctype html><style>body { margin: 0 } div { margin: 0 } .f { display: flex;"
+        " height: 30px } .i { aspect-ratio: 2 } .c { display: flex; flex-direction: column;"
+        " width: 200px; align-items: flex-start } .w { width: 80px; aspect-ratio: 4 } .g {"
+        " display: grid; width: 60px } .s { aspect-ratio: 3; align-self: stretch } .fl {"
+        " float: left } .k { height: 10px; aspect-ratio: 5 } .gr { display: grid;"
+        " grid-template-columns: 30px 30px } .tall { aspect-ratio: 1 }</style>"
+        "<div class=f><div class=i></div></div><div class=c><div class=w></div></div>"
+        "<div class=g style='height: 50px'><div class=s></div></div><div class=fl><div class=k>"
+        "</div></div><div style='clear: both' class=gr><div class=tall>x</div><div>y</div></div>",
+        200,
+        "page 200 140\n"
+        "block html 0 0 200 140\n"
+        "  block body 0 0 200 140\n"
+        "    block div 0 0 200 30\n"
+        "      block div 0 0 60 30\n"
+        "    block div 0 30 200 20\n"
+        "      block div 0 30 80 20\n"
+        "    block div 0 50 60 50\n"
+        "      block div 0 50 60 50\n"
+        "    block div 0 100 50 10 float-left\n"
+        "      block div 0 100 50 10\n"
+        "    block div 0 110 200 30 clearance=10\n"
+        "      block div 0 110 30 30\n"
+        "        line 0 110 30 20 base 14\n"
+        "          text \"x\" 0 112 8 16 serif 16\n"
+        "      block div 30 110 30 30\n"
+        "        line 30 110 30 20 base 14\n"
+        "          text \"y\" 30 112 8 16 serif 16\n");
+
     // ── text-overflow (CSS Overflow 4 § 4.1) ──
 
     // Not inherited; the line is laid out as it would be, past its block:
