@@ -276,7 +276,9 @@ void os64_dom_set_cookies(os64_dom_t *dom, const os64_dom_cookies_t *cookies);
  *
  * Strings keep every code unit a script gave them, a lone surrogate and
  * U+0000 included, as WTF-8; the store is bytes the host moves and does
- * not read. An area holds at most OS64_DOM_STORAGE_QUOTA bytes, counted as
+ * not read. Browsers keep them so, WPT's webstorage holds a binding to it,
+ * and pages that pack binary into UTF-16 strings (LZ-string's compressors)
+ * read back garbage from a store that replaced them. An area holds at most OS64_DOM_STORAGE_QUOTA bytes, counted as
  * the standard's quota counts them: the UTF-16 code units of every key and
  * value, two bytes each, and at most 65536 keys. A setItem that would pass
  * either throws QuotaExceededError and changes nothing. */
