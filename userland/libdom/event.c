@@ -514,6 +514,8 @@ typedef struct {
     os64_js_outcome_t *host;
     /* HTML's load at window reads the document as its target. */
     bool document_target;
+    /* A plain target (d_event_target): the path is the target alone. */
+    DValue *plain;
 } Dispatch;
 
 /* One step of the path: the target's records whose capture flag fits the
@@ -591,17 +593,18 @@ static bool element_has_handler(const os64_html_node_t *node, int kind)
 
 /* The DOM Standard's dispatch, for one event at one target: the path is the
  * target's ancestors and, past the document, window (except for load);
- * capture down, the target, then bubble up when the event bubbles. */
+ * capture down, the target, then bubble up when the event bubbles. A plain
+ * target is a path of one. */
 static int dispatch(Dispatch *d, const os64_html_node_t *node)
 {
     os64_dom_t *dom = d->dom;
     JSContext *ctx = d->ctx;
     DEvent *event = d->event;
     int kind = d_event_kind(event->type);
-    size_t length = 0;
+    size_t length = d->plain != NULL ? 1 : 0;
     const os64_html_node_t *top = node;
     for (const os64_html_node_t *at = node; at != NULL; at = at->parent) { length++; top = at; }
-    bool to_window = node == NULL || (top == document_node(dom) && kind != D_EVENT_LOAD);
+    bool to_window = d->plain == NULL && (node == NULL || (top == document_node(dom) && kind != D_EVENT_LOAD));
     if (to_window) length++;
     DValue **path = d_alloc(dom, length * sizeof(*path));
     if (path == NULL) {
@@ -609,11 +612,13 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
         return -1;
     }
     JSValue target;
-    if (node == NULL)
+    if (d->plain != NULL) target = JS_DupValue(ctx, d->plain->value);
+    else if (node == NULL)
         target = d->document_target ? d_wrap(dom, ctx, document_node(dom)) : JS_DupValue(ctx, dom->window->value);
     else target = d_wrap(dom, ctx, node);
     if (JS_IsException(target)) { d_free(dom, path); return -1; }
     size_t count = 0;
+    if (d->plain != NULL) path[count++] = d->plain;
     for (const os64_html_node_t *at = node; at != NULL; at = at->parent) {
         DValue *entry = d_find(dom, at);
         if (entry == NULL && element_has_handler(at, kind)) {
@@ -653,9 +658,16 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
 
 int d_dispatch(os64_dom_t *dom, JSContext *ctx, JSValueConst object, const os64_html_node_t *node)
 {
-    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), NULL, false};
+    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), NULL, false, NULL};
     if (d.event == NULL) { JS_ThrowTypeError(ctx, "Expected an Event"); return -1; }
     return dispatch(&d, node);
+}
+
+int d_dispatch_plain(os64_dom_t *dom, JSContext *ctx, JSValueConst object, DValue *target)
+{
+    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), NULL, false, target};
+    if (d.event == NULL) { JS_ThrowTypeError(ctx, "Expected an Event"); return -1; }
+    return dispatch(&d, NULL);
 }
 
 static bool define_number(JSContext *ctx, JSValueConst object, const char *name, double value)
@@ -755,7 +767,7 @@ os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node
         return finish_task(dom, outcome);
     }
     Dispatch d = {dom, ctx, object, JS_GetOpaque(object, dom->event_class), outcome,
-                  node == NULL && d_event_kind(ev->type) == D_EVENT_LOAD};
+                  node == NULL && d_event_kind(ev->type) == D_EVENT_LOAD, NULL};
     /* Engine refusals between the wrapper's calls are latched by libjs and
      * reported by task_end; the binding's own refusal is reported here. */
     if (dispatch(&d, node) < 0 && JS_HasException(ctx)) {
@@ -814,11 +826,24 @@ bool os64_dom_listens(os64_dom_t *dom, const char *type)
 
 /* SCRIPT SURFACE. */
 
+/* A plain target's entry: its opaque, for an object of a class
+ * d_event_target registered. NULL for any other value. */
+static DValue *plain_entry(const os64_dom_t *dom, JSValueConst self)
+{
+    if (!JS_IsObject(self)) return NULL;
+    JSClassID id = JS_GetClassID(self);
+    for (unsigned i = 0; i < dom->target_class_count; i++)
+        if (dom->target_classes[i] == id) return JS_GetOpaque(self, id);
+    return NULL;
+}
+
 static DValue *target_entry(os64_dom_t *dom, JSContext *ctx, JSValueConst self)
 {
     if (JS_IsUndefined(self) || JS_IsNull(self) ||
         (JS_IsObject(self) && JS_VALUE_GET_PTR(self) == JS_VALUE_GET_PTR(dom->window->value)))
         return dom->window;
+    DValue *plain = plain_entry(dom, self);
+    if (plain != NULL) return plain;
     const os64_html_node_t *node = d_node(dom, ctx, self);
     if (node == NULL) return NULL;
     DValue *entry = d_find(dom, node);
@@ -867,7 +892,9 @@ static JSValue target_method(JSContext *ctx, JSValueConst self, int argc, JSValu
         // A redispatched event stays cancelled: initEvent is the reset, and
         // a vetoed default action must not come back on the second try.
         event->trusted = false;
-        int result = d_dispatch(dom, ctx, argv[0], entry == dom->window ? NULL : entry->node);
+        int result = entry != dom->window && entry->node == NULL
+            ? d_dispatch_plain(dom, ctx, argv[0], entry)
+            : d_dispatch(dom, ctx, argv[0], entry == dom->window ? NULL : entry->node);
         return result < 0 ? JS_EXCEPTION : JS_NewBool(ctx, result != 0);
     }
     if (argc < 2) return JS_ThrowTypeError(ctx, "Listener methods need a type and a callback");
@@ -1116,6 +1143,33 @@ int d_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
             if (d_accessor(dom, ctx, holders[i], name, handler_property, kind, true) < 0) return -1;
     }
     return d_method(dom, ctx, dom->prototypes[D_PROTO_DOCUMENT]->value, "createEvent", event_construct, 1, 1);
+}
+
+int d_event_target(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, JSClassID class_id)
+{
+    bool known = false;
+    for (unsigned i = 0; i < dom->target_class_count; i++) known = known || dom->target_classes[i] == class_id;
+    if (!known) {
+        if (dom->target_class_count == sizeof(dom->target_classes) / sizeof(dom->target_classes[0])) {
+            JS_ThrowInternalError(ctx, "Too many kinds of plain event target");
+            return -1;
+        }
+        dom->target_classes[dom->target_class_count++] = class_id;
+    }
+    static const struct { const char *name; int magic, argc; } targets[] = {
+        {"addEventListener", M_ADD, 2}, {"removeEventListener", M_REMOVE, 2}, {"dispatchEvent", M_DISPATCH, 1}
+    };
+    for (size_t i = 0; i < sizeof(targets) / sizeof(targets[0]); i++)
+        if (d_method(dom, ctx, prototype, targets[i].name, target_method, targets[i].argc, targets[i].magic) < 0)
+            return -1;
+    return 0;
+}
+
+int d_event_handler(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, int kind)
+{
+    char name[32] = "on";
+    os64_strcopy(name + 2, sizeof(name) - 2, kinds[kind]);
+    return d_accessor(dom, ctx, prototype, name, handler_property, kind, true);
 }
 
 /* Drain: every listener's callback goes with the registry. Records stay, as

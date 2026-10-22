@@ -377,7 +377,9 @@ bool os64_page_url_absolute(const char *base, const char *reference, char *out, 
 // building a model: the same input cleaning, the first `<base href>` as the
 // tree stands now, the same fallbacks, the same canonical spelling. A
 // fragment is kept as written. False when the reference will not resolve
-// or the answer will not fit in `cap`. For an address a script names.
+// or the answer will not fit in `cap`. For an address a script names. A
+// NULL `doc` is an address with no document around it (a script's `new
+// URL`): no `<base href>`, and a query in UTF-8.
 bool os64_page_resolve_in(const os64_html_document_t *doc, const char *document_url,
                           const char *reference, char *out, size_t cap);
 // Where the page came from, canonical. Never NULL.

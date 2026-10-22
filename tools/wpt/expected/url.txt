@@ -1,0 +1,299 @@
+# WPT's url in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh url --update
+# rewrites [passing].
+[required]
+# Slice 1a: URL's statics and toJSON, URLSearchParams whole, and the
+# application/x-www-form-urlencoded parser. Each fails with the switch off.
+url-searchparams.any.html	URL.searchParams and URL.search setters, update propagation
+url-searchparams.any.html	URL.searchParams getter
+url-searchparams.any.html	URL.searchParams setter, invalid values
+url-searchparams.any.html	URL.searchParams updating, clearing
+url-statics-canparse.any.html	URL.canParse(a, https://b/)
+url-statics-canparse.any.html	URL.canParse(aaa:/b, undefined)
+url-statics-canparse.any.html	URL.canParse(aaa:b, undefined)
+url-statics-canparse.any.html	URL.canParse(https://test:test, undefined)
+url-statics-canparse.any.html	URL.canParse(undefined, aaa:b)
+url-statics-canparse.any.html	URL.canParse(undefined, https://test:test/)
+url-statics-canparse.any.html	URL.canParse(undefined, undefined)
+url-statics-parse.any.html	URL.parse() should return a unique object
+url-statics-parse.any.html	URL.parse(a, https://b/)
+url-statics-parse.any.html	URL.parse(aaa:/b, undefined)
+url-statics-parse.any.html	URL.parse(aaa:b, undefined)
+url-statics-parse.any.html	URL.parse(https://test:test, undefined)
+url-statics-parse.any.html	URL.parse(undefined, aaa:b)
+url-statics-parse.any.html	URL.parse(undefined, undefined)
+url-tojson.any.html	url-tojson
+urlencoded-parser.any.html	URLSearchParams constructed with: 
+urlencoded-parser.any.html	URLSearchParams constructed with: %61+%4d%4D=
+urlencoded-parser.any.html	URLSearchParams constructed with: %61=a
+urlencoded-parser.any.html	URLSearchParams constructed with: %=a
+urlencoded-parser.any.html	URLSearchParams constructed with: %C2
+urlencoded-parser.any.html	URLSearchParams constructed with: %C2x
+urlencoded-parser.any.html	URLSearchParams constructed with: %EF%BB%BFtest=%EF%BB%BF
+urlencoded-parser.any.html	URLSearchParams constructed with: %EF%BF%BF=%EF%BF%BF
+urlencoded-parser.any.html	URLSearchParams constructed with: %FE%FF
+urlencoded-parser.any.html	URLSearchParams constructed with: %FF%FE
+urlencoded-parser.any.html	URLSearchParams constructed with: %a=a
+urlencoded-parser.any.html	URLSearchParams constructed with: %a_=a
+urlencoded-parser.any.html	URLSearchParams constructed with: &
+urlencoded-parser.any.html	URLSearchParams constructed with: &&&a=b&&&&c=d&
+urlencoded-parser.any.html	URLSearchParams constructed with: &a
+urlencoded-parser.any.html	URLSearchParams constructed with: =b
+urlencoded-parser.any.html	URLSearchParams constructed with: _charset_=windows-1252&test=%C2x
+urlencoded-parser.any.html	URLSearchParams constructed with: a
+urlencoded-parser.any.html	URLSearchParams constructed with: a&
+urlencoded-parser.any.html	URLSearchParams constructed with: a&a
+urlencoded-parser.any.html	URLSearchParams constructed with: a&b&c
+urlencoded-parser.any.html	URLSearchParams constructed with: a=
+urlencoded-parser.any.html	URLSearchParams constructed with: a==a
+urlencoded-parser.any.html	URLSearchParams constructed with: a=a&a=b&a=c
+urlencoded-parser.any.html	URLSearchParams constructed with: a=a+b+c+d
+urlencoded-parser.any.html	URLSearchParams constructed with: a=b
+urlencoded-parser.any.html	URLSearchParams constructed with: a=b&c=d
+urlencoded-parser.any.html	URLSearchParams constructed with: a=b&c=d&
+urlencoded-parser.any.html	URLSearchParams constructed with: b=%%2a
+urlencoded-parser.any.html	URLSearchParams constructed with: b=%2%2af%2a
+urlencoded-parser.any.html	URLSearchParams constructed with: b=%2sf%2a
+urlencoded-parser.any.html	URLSearchParams constructed with: id=0&value=%
+urlencoded-parser.any.html	URLSearchParams constructed with: test
+urlencoded-parser.any.html	URLSearchParams constructed with: †&†=x
+urlencoded-parser.any.html	URLSearchParams constructed with: ﻿test=﻿
+urlsearchparams-append.any.html	Append empty strings
+urlsearchparams-append.any.html	Append multiple
+urlsearchparams-append.any.html	Append null
+urlsearchparams-append.any.html	Append same name
+urlsearchparams-constructor.any.html	Basic URLSearchParams construction
+urlsearchparams-constructor.any.html	Construct with 2 unpaired surrogates (no trailing)
+urlsearchparams-constructor.any.html	Construct with 3 unpaired surrogates (no leading)
+urlsearchparams-constructor.any.html	Construct with array with two keys
+urlsearchparams-constructor.any.html	Construct with object with +
+urlsearchparams-constructor.any.html	Construct with object with NULL, non-ASCII, and surrogate keys
+urlsearchparams-constructor.any.html	Construct with object with two keys
+urlsearchparams-constructor.any.html	Constructor with sequence of sequences of strings
+urlsearchparams-constructor.any.html	Custom [Symbol.iterator]
+urlsearchparams-constructor.any.html	Parse %00
+urlsearchparams-constructor.any.html	Parse %20
+urlsearchparams-constructor.any.html	Parse %e2%8e%84
+urlsearchparams-constructor.any.html	Parse %f0%9f%92%a9
+urlsearchparams-constructor.any.html	Parse +
+urlsearchparams-constructor.any.html	Parse \\0
+urlsearchparams-constructor.any.html	Parse encoded +
+urlsearchparams-constructor.any.html	Parse space
+urlsearchparams-constructor.any.html	Parse ⎄
+urlsearchparams-constructor.any.html	Parse 💩
+urlsearchparams-constructor.any.html	URLSearchParams constructor, empty string as argument
+urlsearchparams-constructor.any.html	URLSearchParams constructor, no arguments
+urlsearchparams-constructor.any.html	URLSearchParams constructor, object.
+urlsearchparams-constructor.any.html	URLSearchParams constructor, remove leading "?"
+urlsearchparams-constructor.any.html	URLSearchParams constructor, string.
+urlsearchparams-constructor.any.html	URLSearchParams constructor, {} as argument
+urlsearchparams-delete.any.html	Delete basics
+urlsearchparams-delete.any.html	Deleting all params removes ? from URL
+urlsearchparams-delete.any.html	Deleting appended multiple
+urlsearchparams-delete.any.html	Removing non-existent param removes ? from URL
+urlsearchparams-delete.any.html	Two-argument delete()
+urlsearchparams-delete.any.html	Two-argument delete() respects undefined as second arg
+urlsearchparams-foreach.any.html	For-of Check
+urlsearchparams-foreach.any.html	ForEach Check
+urlsearchparams-foreach.any.html	delete current param during iteration
+urlsearchparams-foreach.any.html	delete every param seen during iteration
+urlsearchparams-foreach.any.html	delete next param during iteration
+urlsearchparams-foreach.any.html	empty
+urlsearchparams-get.any.html	Get basics
+urlsearchparams-get.any.html	More get() basics
+urlsearchparams-getall.any.html	getAll() basics
+urlsearchparams-getall.any.html	getAll() multiples
+urlsearchparams-has.any.html	Has basics
+urlsearchparams-has.any.html	Two-argument has()
+urlsearchparams-has.any.html	Two-argument has() respects undefined as second arg
+urlsearchparams-has.any.html	has() following delete()
+urlsearchparams-set.any.html	Set basics
+urlsearchparams-set.any.html	URLSearchParams.set
+urlsearchparams-size.any.html	URLSearchParams's size and addition
+urlsearchparams-size.any.html	URLSearchParams's size and deletion
+urlsearchparams-size.any.html	URLSearchParams's size when obtained from a URL
+urlsearchparams-size.any.html	URLSearchParams's size when obtained from a URL and using .search
+urlsearchparams-sort.any.html	Parse and sort: a🌈&a💩
+urlsearchparams-sort.any.html	Parse and sort: bbb&bb&aaa&aa=x&aa=y
+urlsearchparams-sort.any.html	Parse and sort: z=b&a=b&z=a&a=a
+urlsearchparams-sort.any.html	Parse and sort: z=z&=f&=t&=x
+urlsearchparams-sort.any.html	Parse and sort: z=z&a=a&z=y&a=b&z=x&a=c&z=w&a=d&z=v&a=e&z=u&a=f&z=t&a=g
+urlsearchparams-sort.any.html	Parse and sort: é&e�&é
+urlsearchparams-sort.any.html	Parse and sort: ﬃ&🌈
+urlsearchparams-sort.any.html	Parse and sort: �=x&￼&�=a
+urlsearchparams-sort.any.html	Sorting non-existent params removes ? from URL
+urlsearchparams-sort.any.html	URL parse and sort: a🌈&a💩
+urlsearchparams-sort.any.html	URL parse and sort: bbb&bb&aaa&aa=x&aa=y
+urlsearchparams-sort.any.html	URL parse and sort: z=b&a=b&z=a&a=a
+urlsearchparams-sort.any.html	URL parse and sort: z=z&=f&=t&=x
+urlsearchparams-sort.any.html	URL parse and sort: z=z&a=a&z=y&a=b&z=x&a=c&z=w&a=d&z=v&a=e&z=u&a=f&z=t&a=g
+urlsearchparams-sort.any.html	URL parse and sort: é&e�&é
+urlsearchparams-sort.any.html	URL parse and sort: ﬃ&🌈
+urlsearchparams-sort.any.html	URL parse and sort: �=x&￼&�=a
+urlsearchparams-stringifier.any.html	Serialize %
+urlsearchparams-stringifier.any.html	Serialize &
+urlsearchparams-stringifier.any.html	Serialize *-._
+urlsearchparams-stringifier.any.html	Serialize +
+urlsearchparams-stringifier.any.html	Serialize =
+urlsearchparams-stringifier.any.html	Serialize \\0
+urlsearchparams-stringifier.any.html	Serialize empty name
+urlsearchparams-stringifier.any.html	Serialize empty name and value
+urlsearchparams-stringifier.any.html	Serialize empty value
+urlsearchparams-stringifier.any.html	Serialize space
+urlsearchparams-stringifier.any.html	Serialize 💩
+urlsearchparams-stringifier.any.html	URLSearchParams connected to URL
+urlsearchparams-stringifier.any.html	URLSearchParams must not do newline normalization
+urlsearchparams-stringifier.any.html	URLSearchParams.toString
+[excluded]
+[passing]
+a-element.html?exclude=(file|javascript|mailto)	Test that embedded 0x0A is stripped
+a-element.html?include=file	Test that embedded 0x0A is stripped
+a-element.html?include=javascript	Test that embedded 0x0A is stripped
+a-element.html?include=mailto	Test that embedded 0x0A is stripped
+historical.any.html	<a> and <area>.searchParams should be undefined
+historical.any.html	Constructor only takes strings
+historical.any.html	Setting URL's href attribute and base URLs
+historical.any.html	URL.domainToASCII should be undefined
+historical.any.html	URL.domainToUnicode should be undefined
+historical.any.html	searchParams on location object
+url-searchparams.any.html	URL.searchParams and URL.search setters, update propagation
+url-searchparams.any.html	URL.searchParams getter
+url-searchparams.any.html	URL.searchParams setter, invalid values
+url-searchparams.any.html	URL.searchParams updating, clearing
+url-statics-canparse.any.html	URL.canParse(a, https://b/)
+url-statics-canparse.any.html	URL.canParse(aaa:/b, undefined)
+url-statics-canparse.any.html	URL.canParse(aaa:b, undefined)
+url-statics-canparse.any.html	URL.canParse(https://test:test, undefined)
+url-statics-canparse.any.html	URL.canParse(undefined, aaa:b)
+url-statics-canparse.any.html	URL.canParse(undefined, https://test:test/)
+url-statics-canparse.any.html	URL.canParse(undefined, undefined)
+url-statics-parse.any.html	URL.parse() should return a unique object
+url-statics-parse.any.html	URL.parse(a, https://b/)
+url-statics-parse.any.html	URL.parse(aaa:/b, undefined)
+url-statics-parse.any.html	URL.parse(aaa:b, undefined)
+url-statics-parse.any.html	URL.parse(https://test:test, undefined)
+url-statics-parse.any.html	URL.parse(undefined, aaa:b)
+url-statics-parse.any.html	URL.parse(undefined, undefined)
+url-tojson.any.html	url-tojson
+urlencoded-parser.any.html	URLSearchParams constructed with: 
+urlencoded-parser.any.html	URLSearchParams constructed with: %61+%4d%4D=
+urlencoded-parser.any.html	URLSearchParams constructed with: %61=a
+urlencoded-parser.any.html	URLSearchParams constructed with: %=a
+urlencoded-parser.any.html	URLSearchParams constructed with: %C2
+urlencoded-parser.any.html	URLSearchParams constructed with: %C2x
+urlencoded-parser.any.html	URLSearchParams constructed with: %EF%BB%BFtest=%EF%BB%BF
+urlencoded-parser.any.html	URLSearchParams constructed with: %EF%BF%BF=%EF%BF%BF
+urlencoded-parser.any.html	URLSearchParams constructed with: %FE%FF
+urlencoded-parser.any.html	URLSearchParams constructed with: %FF%FE
+urlencoded-parser.any.html	URLSearchParams constructed with: %a=a
+urlencoded-parser.any.html	URLSearchParams constructed with: %a_=a
+urlencoded-parser.any.html	URLSearchParams constructed with: &
+urlencoded-parser.any.html	URLSearchParams constructed with: &&&a=b&&&&c=d&
+urlencoded-parser.any.html	URLSearchParams constructed with: &a
+urlencoded-parser.any.html	URLSearchParams constructed with: =b
+urlencoded-parser.any.html	URLSearchParams constructed with: _charset_=windows-1252&test=%C2x
+urlencoded-parser.any.html	URLSearchParams constructed with: a
+urlencoded-parser.any.html	URLSearchParams constructed with: a&
+urlencoded-parser.any.html	URLSearchParams constructed with: a&a
+urlencoded-parser.any.html	URLSearchParams constructed with: a&b&c
+urlencoded-parser.any.html	URLSearchParams constructed with: a=
+urlencoded-parser.any.html	URLSearchParams constructed with: a==a
+urlencoded-parser.any.html	URLSearchParams constructed with: a=a&a=b&a=c
+urlencoded-parser.any.html	URLSearchParams constructed with: a=a+b+c+d
+urlencoded-parser.any.html	URLSearchParams constructed with: a=b
+urlencoded-parser.any.html	URLSearchParams constructed with: a=b&c=d
+urlencoded-parser.any.html	URLSearchParams constructed with: a=b&c=d&
+urlencoded-parser.any.html	URLSearchParams constructed with: b=%%2a
+urlencoded-parser.any.html	URLSearchParams constructed with: b=%2%2af%2a
+urlencoded-parser.any.html	URLSearchParams constructed with: b=%2sf%2a
+urlencoded-parser.any.html	URLSearchParams constructed with: id=0&value=%
+urlencoded-parser.any.html	URLSearchParams constructed with: test
+urlencoded-parser.any.html	URLSearchParams constructed with: †&†=x
+urlencoded-parser.any.html	URLSearchParams constructed with: ﻿test=﻿
+urlsearchparams-append.any.html	Append empty strings
+urlsearchparams-append.any.html	Append multiple
+urlsearchparams-append.any.html	Append null
+urlsearchparams-append.any.html	Append same name
+urlsearchparams-constructor.any.html	Basic URLSearchParams construction
+urlsearchparams-constructor.any.html	Construct with 2 unpaired surrogates (no trailing)
+urlsearchparams-constructor.any.html	Construct with 3 unpaired surrogates (no leading)
+urlsearchparams-constructor.any.html	Construct with array with two keys
+urlsearchparams-constructor.any.html	Construct with object with +
+urlsearchparams-constructor.any.html	Construct with object with NULL, non-ASCII, and surrogate keys
+urlsearchparams-constructor.any.html	Construct with object with two keys
+urlsearchparams-constructor.any.html	Constructor with sequence of sequences of strings
+urlsearchparams-constructor.any.html	Custom [Symbol.iterator]
+urlsearchparams-constructor.any.html	Parse %00
+urlsearchparams-constructor.any.html	Parse %20
+urlsearchparams-constructor.any.html	Parse %e2%8e%84
+urlsearchparams-constructor.any.html	Parse %f0%9f%92%a9
+urlsearchparams-constructor.any.html	Parse +
+urlsearchparams-constructor.any.html	Parse \\0
+urlsearchparams-constructor.any.html	Parse encoded +
+urlsearchparams-constructor.any.html	Parse space
+urlsearchparams-constructor.any.html	Parse ⎄
+urlsearchparams-constructor.any.html	Parse 💩
+urlsearchparams-constructor.any.html	URLSearchParams constructor, empty string as argument
+urlsearchparams-constructor.any.html	URLSearchParams constructor, no arguments
+urlsearchparams-constructor.any.html	URLSearchParams constructor, object.
+urlsearchparams-constructor.any.html	URLSearchParams constructor, remove leading "?"
+urlsearchparams-constructor.any.html	URLSearchParams constructor, string.
+urlsearchparams-constructor.any.html	URLSearchParams constructor, {} as argument
+urlsearchparams-delete.any.html	Delete basics
+urlsearchparams-delete.any.html	Deleting all params removes ? from URL
+urlsearchparams-delete.any.html	Deleting appended multiple
+urlsearchparams-delete.any.html	Removing non-existent param removes ? from URL
+urlsearchparams-delete.any.html	Two-argument delete()
+urlsearchparams-delete.any.html	Two-argument delete() respects undefined as second arg
+urlsearchparams-foreach.any.html	For-of Check
+urlsearchparams-foreach.any.html	ForEach Check
+urlsearchparams-foreach.any.html	delete current param during iteration
+urlsearchparams-foreach.any.html	delete every param seen during iteration
+urlsearchparams-foreach.any.html	delete next param during iteration
+urlsearchparams-foreach.any.html	empty
+urlsearchparams-get.any.html	Get basics
+urlsearchparams-get.any.html	More get() basics
+urlsearchparams-getall.any.html	getAll() basics
+urlsearchparams-getall.any.html	getAll() multiples
+urlsearchparams-has.any.html	Has basics
+urlsearchparams-has.any.html	Two-argument has()
+urlsearchparams-has.any.html	Two-argument has() respects undefined as second arg
+urlsearchparams-has.any.html	has() following delete()
+urlsearchparams-set.any.html	Set basics
+urlsearchparams-set.any.html	URLSearchParams.set
+urlsearchparams-size.any.html	URLSearchParams's size and addition
+urlsearchparams-size.any.html	URLSearchParams's size and deletion
+urlsearchparams-size.any.html	URLSearchParams's size when obtained from a URL
+urlsearchparams-size.any.html	URLSearchParams's size when obtained from a URL and using .search
+urlsearchparams-sort.any.html	Parse and sort: a🌈&a💩
+urlsearchparams-sort.any.html	Parse and sort: bbb&bb&aaa&aa=x&aa=y
+urlsearchparams-sort.any.html	Parse and sort: z=b&a=b&z=a&a=a
+urlsearchparams-sort.any.html	Parse and sort: z=z&=f&=t&=x
+urlsearchparams-sort.any.html	Parse and sort: z=z&a=a&z=y&a=b&z=x&a=c&z=w&a=d&z=v&a=e&z=u&a=f&z=t&a=g
+urlsearchparams-sort.any.html	Parse and sort: é&e�&é
+urlsearchparams-sort.any.html	Parse and sort: ﬃ&🌈
+urlsearchparams-sort.any.html	Parse and sort: �=x&￼&�=a
+urlsearchparams-sort.any.html	Sorting non-existent params removes ? from URL
+urlsearchparams-sort.any.html	URL parse and sort: a🌈&a💩
+urlsearchparams-sort.any.html	URL parse and sort: bbb&bb&aaa&aa=x&aa=y
+urlsearchparams-sort.any.html	URL parse and sort: z=b&a=b&z=a&a=a
+urlsearchparams-sort.any.html	URL parse and sort: z=z&=f&=t&=x
+urlsearchparams-sort.any.html	URL parse and sort: z=z&a=a&z=y&a=b&z=x&a=c&z=w&a=d&z=v&a=e&z=u&a=f&z=t&a=g
+urlsearchparams-sort.any.html	URL parse and sort: é&e�&é
+urlsearchparams-sort.any.html	URL parse and sort: ﬃ&🌈
+urlsearchparams-sort.any.html	URL parse and sort: �=x&￼&�=a
+urlsearchparams-stringifier.any.html	Serialize %
+urlsearchparams-stringifier.any.html	Serialize &
+urlsearchparams-stringifier.any.html	Serialize *-._
+urlsearchparams-stringifier.any.html	Serialize +
+urlsearchparams-stringifier.any.html	Serialize =
+urlsearchparams-stringifier.any.html	Serialize \\0
+urlsearchparams-stringifier.any.html	Serialize empty name
+urlsearchparams-stringifier.any.html	Serialize empty name and value
+urlsearchparams-stringifier.any.html	Serialize empty value
+urlsearchparams-stringifier.any.html	Serialize space
+urlsearchparams-stringifier.any.html	Serialize 💩
+urlsearchparams-stringifier.any.html	URLSearchParams connected to URL
+urlsearchparams-stringifier.any.html	URLSearchParams must not do newline normalization
+urlsearchparams-stringifier.any.html	URLSearchParams.toString

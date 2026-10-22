@@ -15,6 +15,7 @@
 #include <dom/dom.h>
 
 #include "diag.h"
+#include "storage.h"
 
 typedef struct yonder_scripts yonder_scripts_t;
 
@@ -50,6 +51,18 @@ typedef struct {
     // The Modern Web arc's surface (os64_dom_options_t.modern), as the
     // page's navigation found the switch.
     bool modern;
+    // Where the page's localStorage and sessionStorage are kept (storage.h),
+    // borrowed for the host's life; NULL keeps them for the page's life.
+    yonder_storage_t *storage;
+    // The page's navigation timing as far as it has gone, copied; later
+    // milestones arrive by yonder_scripts_mark. NULL: its origin is the
+    // host's creation.
+    const os64_dom_timing_t *timing;
+    // The display the page is told it is on (`screen`), in device pixels,
+    // and the window's zoom in thousandths as it stands when asked
+    // (devicePixelRatio), given `opaque`; NULL is 1000.
+    os64_dom_screen_t screen;
+    uint32_t (*zoom)(void *opaque);
 } yonder_scripts_options_t;
 
 // A host for `doc`, whose control state is `state` (which must outlive it).
@@ -155,5 +168,25 @@ void yonder_scripts_set_cookies(yonder_scripts_t *scripts, const os64_dom_cookie
 // the page arrived encrypted (the options' encrypted).
 const char *yonder_scripts_url(const yonder_scripts_t *scripts);
 bool yonder_scripts_encrypted(const yonder_scripts_t *scripts);
+
+// A milestone of the page's navigation timing reached at `now_us`
+// (os64_micros' clock), for performance.timing and the navigation entry.
+void yonder_scripts_mark(yonder_scripts_t *scripts, os64_dom_milestone_t which, uint64_t now_us);
+// The page's storage (dom.h § Web storage): every task the host runs ends
+// with os64_dom_storage_settle, which commits what is due; `due` is when
+// the next commit is (UINT64_MAX for none, yonder_now_ms' clock), and
+// `settle` commits it when no task has. `forget` drops the page's maps and
+// the changes it has not committed: "Clear page storage". What is left is
+// committed as the runtime is retired (yonder_scripts_depart, or the
+// host's teardown), the last of the page's commits.
+uint64_t yonder_scripts_storage_due(const yonder_scripts_t *scripts);
+void yonder_scripts_storage_settle(yonder_scripts_t *scripts);
+// THE PAGE DEPARTS (HTML's unload, yonder.c's page_departs): its runtime
+// is retired at once, as a runtime that failed is. Its queued scripts,
+// timers and handlers never run, the fetches for its scripts are let go,
+// it asks the window nothing more, and its storage makes its last commit
+// now. The host stays, dead, until the page is freed. Idempotent.
+void yonder_scripts_depart(yonder_scripts_t *scripts);
+void yonder_scripts_storage_forget(yonder_scripts_t *scripts);
 
 #endif

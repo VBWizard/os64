@@ -951,11 +951,146 @@ both sides of any measurement are run with the same statement. A page
 recorded from now on is version 2 and says them all.
 
 **Deferred**, each a DEBTS.md row (§ The replay corpus): a replay lays
-text out in the harness's bitmap face; `screen`, once built, will answer
-the harness's size; a kept corpus holds the cookies a page's scripts
+text out in the harness's bitmap face; `screen` answers libdom's
+default, not the display the page was kept on; a kept corpus holds the cookies a page's scripts
 could read; keep_pages writes on the window's thread; a page that
 navigates replays only as far as going; a replay does not reproduce what
 a picture's or a font's fetch decides; a form's reply replays as a GET.
+
+### Slice 1a, as built
+
+Built by Opus on `opus/tmw-1a-storage`, from MODERN_WEB_BRIEFS.md § Slice
+1a (the reviewed copy on `fable/modern-web`), then read cold by a fresh
+Opus (eight findings, all fixed on the branch) and read for design. Six
+rows in `modern.c`, a file each in libdom, and yonder's store.
+
+**What was built.**
+
+- **`localStorage`, `sessionStorage`, `Storage`** (`storage.c`): the whole
+  interface, and named properties as WebIDL's legacy platform object (a key
+  is an own property unless the prototype chain has one by that name;
+  `[[Set]]` and a data `[[DefineOwnProperty]]` are `setItem`, `delete` is
+  `removeItem`, a Symbol is ordinary). The quota is 5 MiB counted as the
+  standard counts (two bytes a UTF-16 code unit of every key and value),
+  plus a cap of 65,536 keys, which bounds what the quota cannot (a
+  one-character key costs the quota two bytes and the heap a record). An
+  opaque origin (a file, `about:blank`) gets areas that work and are kept
+  nowhere. `key(n)`'s order is the map's: a removal moves the last key into
+  its place, so a change list of n removals (what `clear()` makes) is
+  linear work.
+- **`performance`** (`performance.c`): `now()` and `timeOrigin` coarsened
+  to 100 µs; User Timing's `mark` and `measure` (the L3 dictionary too),
+  `getEntries`/`ByType`/`ByName`, `clearMarks`/`clearMeasures`, `toJSON`,
+  `detail` a structured clone of plain data through the engine's own
+  writer; the legacy `timing` and `navigation` objects and the `navigation`
+  entry. The connection phases yonder does not measure read as
+  `fetchStart`, `secureConnectionStart` too for an https page.
+- **`URL`, `URLSearchParams`** (`url.c`), over `os64_page_resolve_in` with
+  no document, so a script's address and a link's agree: every component
+  and setter, `canParse`, `parse`, `toJSON`, and URLSearchParams whole,
+  live both ways with its URL and sorted stably in UTF-16 code units.
+- **`TextEncoder`, `TextDecoder`** (`encoding.c`): UTF-8 out; in, UTF-8,
+  windows-1252 and its aliases, and UTF-16 of either order (beyond the
+  brief: WPT's `textdecoder-*` pages need it, and libhtml's label table
+  gained the Encoding Standard's UTF-16 labels for it), with `fatal`,
+  `ignoreBOM` and streaming.
+- **`screen`, `devicePixelRatio`** (`screen.c`): the display in CSS pixels
+  at the page's zoom; the zoom as the ratio, as Chrome reports it.
+- **`btoa`, `atob`** (`base64.c`).
+- **yonder**: `profile =` in `yonder.conf` (`yonder_settings_saved_profile`,
+  default `/home/yogi/.yonder`, made with its parents when first needed, a
+  refusal said on the status line), the store (`apps/yonder/storage.c`),
+  Settings' "Clear page storage", the navigation's milestones marked as the
+  stream reaches them, and the screen read from the desktop at start.
+
+**The seams, as they ended.**
+
+| Seam | What it is now |
+|---|---|
+| `os64_dom_storage_t` | a provider per area: `identity` (asked at a task's first touch; a value other than the last loaded means the store moved), `load` (the image, asked again with room, a few times, when it outgrew the room), `commit(changes)` (this page's change list only, merged by the host onto the store as it stands) |
+| the statuses | OK; FULL (past the quota: nothing kept, the page reads the store back); FAILED (the area keeps its map in memory for the page's life) |
+| commits | coalesced to one a second (`os64_dom_storage_settle`, `_due`, `OS64_DOM_STORAGE_COMMIT_MS`); sooner when the change list would pass the quota or the keys' cap, and a change it could not make room for (no memory to write the list) is refused as a full store's is, so what a page writes never takes the list past its bound (a `clear()` of a map another window grew past the keys' cap can, until the next commit); once more at drain, the last |
+| `page_departs()` (yonder.c) | the one place the page on screen departs: where every navigation's page is first parsed (`stream_parser`) and as the window closes. It unloads the page, as HTML does: `yonder_scripts_depart` retires its runtime, so none of its queued scripts, timers or handlers runs again, and drain makes its storage's last commit then, so the next page's scripts read what it wrote. The page stays on screen, scriptless, until the new one is laid out; a navigation that never becomes a page is not a departure |
+| the store | `<profile>/storage/<origin>`, the origin with every byte outside `[A-Za-z0-9.-]` as `%XX`; read, merged and published by temp and rename, which is atomic (a reader meets the old image or the new one); the store's identity read again just before the rename, and a store another window published since merged onto again. There is no lock between windows (Chris's ruling: one person on one machine), so two committing one origin in the same instant can lose one window's changes (DEBTS). Clear page storage removes each store with one unlink; a window mid-commit may then publish the store as it read it before the clear, with its own changes. The first touch of the profile removes the temps a crash left |
+| the image format | `os64 storage 1\n`, then `+<key bytes> <value bytes>\n` key value `\n` for a set, `-<key bytes>\n` key `\n` for a removal (an image holds sets only; no store is no image, and a file without the magic line, an empty one included, is not one); `os64_dom_storage_merge` and `os64_dom_storage_walk` are libdom's, and yonder only moves bytes |
+| `options.now_us`, `options.timing` | the host's microsecond clock, and the navigation's origin and milestones (`os64_dom_timing_t`), read as the binding is made and whenever a script asks |
+| `options.screen`, `options.zoom` | the display in device pixels, and the zoom in thousandths when asked |
+| the plain EventTarget | `d_event_target(prototype, class)` gives a class's objects the three EventTarget methods, `d_event_handler` an `on<type>`, `d_dispatch_plain` a dispatch whose path is the target alone; performance and `screen.orientation` use it |
+
+**The WTF-8 ruling.** The brief said to replace NUL and lone surrogates
+with U+FFFD at storage's boundary, as the binding does elsewhere. Storage
+keeps them exactly, as WTF-8, and the design read ruled that correct:
+browsers keep them, WPT's webstorage holds a binding to it, and pages that
+pack binary into UTF-16 strings (LZ-string's compressors) read back
+garbage from a store that replaced them. The reason is written at the
+contract in `dom.h`.
+
+**Numbers.** WPT, before (the baseline commit) → after:
+
+| directory | before | after | `[required]` | excluded pages |
+|---|---|---|---|---|
+| `webstorage` | 0 | 1,236 | 142 | 0 |
+| `url` | 6 | 150 | 140 | 0 |
+| `hr-time` | 0 | 8 | 8 | 0 |
+| `user-timing` | 3 | 466 | 463 | 0 |
+| `encoding` | 0 | 3,955 | 183 | 1,207 |
+
+Every required test passes with the switch on and fails with it off. The
+excluded pages are the legacy multi-byte encodings' (`legacy-mb-*`, the
+ISO-2022-JP and Big5 encoders), out of scope as the brief says. What still
+fails, by cause: `url`'s pages that load `urltestdata.json` with `fetch`
+(slice 2), userinfo in `url-setters-stripping` (320, the grammar's), the
+`storage` event and iframes in `webstorage`, `DOMException`'s `code` and
+`structuredClone` throughout, PerformanceObserver, SharedArrayBuffer and the
+streams. `dom/nodes` is unchanged (858).
+
+**The census** (the P5's 1,601 page records, counted with slice 0b's
+`yonder_tally.py`): 678 records, 92 of 268 sites and 62,138 asks name at
+least one of `localStorage` (466 records, 46,635 asks), `sessionStorage`
+(37, 13,366), `performance` (253, 1,059), `URL` (252, 324),
+`URLSearchParams` (83, 131), `TextEncoder` (144, 147), `TextDecoder` (140,
+141), `screen` (247, 274) or `devicePixelRatio` (54, 61); `btoa` 161
+records and `atob` 53 besides.
+
+Host: the DOM host from 3,810 / 22,416 checks to about 6,600 / 35,000,
+with about 5,200 allocation sweeps; the scripted-page host from 5,888 to
+about 6,000; all 0 failed (the PR states the counts at its head). The
+mutant harnesses were not run (the briefs' rule).
+
+**The cold read** found eight, all fixed: performance's private buffer
+reachable through an `Array.prototype` setter (P1), the departure commit
+too late for the next page (P1), quadratic removals (P2), two yonders
+merging onto one image (P2), a lookup stale after a Proxy trap, answered
+arrays filled through setters, orphaned temps, and a comment (P3s). **The
+design read** passed it with the WTF-8 ruling and the last commit's longer
+wait (since retired with the lock, below). **Codex's first round** found eight: six fixed (the change list's
+bound under a busy store, the departed page's tasks, an empty file taken
+for an image, Clear against a live commit, measure's negative duration,
+`navigationStart` without a wall clock), and two declined on WebIDL's
+text (`new URLSearchParams(null)` is `null=`; a sequence's conversion has
+no IteratorClose), the second with a conversion-order bug found beside it
+and fixed. **A second cold read** found five, all fixed: a quadratic
+record conversion behind keys holding U+FFFD, Clear missing a window
+making an origin's first store, a commit out of memory retried every
+turn, and two comments. **Codex's second round** found three: the orphan
+sweep's grammar and redirectCount fixed, an empty measure dictionary
+declined on User Timing's step 1. **Its third round** found a race
+between two windows breaking one crashed lock; Chris ruled the
+cross-window lock out (one person on one machine), so a commit is read,
+merge, second look, rename, with BUSY and the last commit's wait retired
+and the same-instant loss booked.
+
+**Stacked on this branch**, slice 2 (fetch) moves `d_origin` onto libway's
+`way_origin_*` (Fable's ruling 8: the slice that lands second does it).
+
+**Booked** (DEBTS.md § Classic browser scripting): the `storage` event
+between windows; PerformanceObserver and the `resource` and `paint`
+entries; `DOMException` with `code` and `structuredClone` (raised with
+Chris as a small libdom slice); libos64's URL grammar gaps (userinfo, IPv6,
+IDNA, `aaa:/b`, an opaque path's trailing space); the legacy multi-byte
+decoders; a store's identity at whole-second resolution; sessionStorage's
+memory per window; and two windows committing one origin's store in the
+same instant.
 
 ### Slice 4, as built
 

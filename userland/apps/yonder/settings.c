@@ -29,11 +29,13 @@
 #define CONF_ANIMATIONS "animations"
 #define CONF_MOTION "motion"
 #define CONF_MODERN "modern"
+#define CONF_PROFILE "profile"
 
 // The list's height, in rows; the dialog's rows are a line of words, the
 // list, field, cache row, zoom row, the page-script switch with the
 // script time limit beside it, the animations' two switches, and the
-// modern switch. Cache usage appears on the dialog's status line; a body
+// modern switch with Clear page storage beside it. Cache usage appears on
+// the dialog's status line; a body
 // must fit the helper's window, which is sized for this many rows and no
 // more.
 #define LIST_ROWS 6
@@ -75,6 +77,10 @@ static struct {
     // The Modern Web arc's surface, on a row of its own.
     os64_ui_checkbox_t modern;
     void (*modern_use)(bool modern);
+    // "Clear page storage", at the modern row's right end: it acts at once
+    // (yonder_settings_on_clear_storage), as Empty the cache does.
+    os64_ui_widget_t clear;
+    void (*clear_storage)(char *line, size_t cap);
     // The relay: `thread` waits for events at the dialog's window and
     // rings `bell` on `window`, then waits on `pumped` until the loop has
     // handled them — one ring outstanding at a time, so it never spins on
@@ -226,6 +232,34 @@ bool yonder_settings_saved_diagnostics(char *out, size_t cap)
         return false;
     }
     return true;
+}
+
+const char *yonder_settings_saved_profile(char *out, size_t cap)
+{
+    int64_t rc = os64_conf_get(CONF_NAME, CONF_PROFILE, out, cap);
+    if (rc == OS64_CONF_NO_FILE || rc == OS64_CONF_NO_KEY) {
+        os64_strcopy(out, cap, YONDER_PROFILE_DEFAULT);
+        return NULL;
+    }
+    if (rc != 0) {
+        static const char kLong[] = "yonder.conf's profile is too long for a path; using " YONDER_PROFILE_DEFAULT ".";
+        static const char kUnread[] = "yonder.conf could not be read for its profile; using " YONDER_PROFILE_DEFAULT
+                                      ".";
+        os64_debug_log(rc == OS64_CONF_TRUNCATED ? kLong : kUnread);
+        os64_strcopy(out, cap, YONDER_PROFILE_DEFAULT);
+        return rc == OS64_CONF_TRUNCATED ? kLong : kUnread;
+    }
+    size_t n = os64_strlen(out);
+    while (n > 1 && out[n - 1] == '/')
+        out[--n] = '\0';
+    if (n == 0 || out[0] != '/') {
+        static const char kRefused[] = "yonder.conf's profile is not a folder's full path; using "
+                                       YONDER_PROFILE_DEFAULT ".";
+        os64_debug_log("yonder: yonder.conf's profile is not a folder's full path; using " YONDER_PROFILE_DEFAULT);
+        os64_strcopy(out, cap, YONDER_PROFILE_DEFAULT);
+        return kRefused;
+    }
+    return NULL;
 }
 
 bool yonder_settings_saved_keep_pages(void)
@@ -442,13 +476,31 @@ static bool arrange(os64_ui_settings_t *d, os64_gui_rect_t b, int32_t row, bool 
     int32_t motion_y = last + 3 * row;
     place(&s.run.w, (os64_gui_rect_t){b.x, motion_y, run_w, row}, staged);
     place(&s.reduce.w, (os64_gui_rect_t){b.x + run_w + row, motion_y, reduce_w, row}, staged);
-    int32_t modern_w = 0;
+    int32_t modern_w = 0, clear_w = 0;
     if (os64_ui_text_measure(&d->ui, OS64_FONT_ROLE_UI, s.modern.w.text, os64_strlen(s.modern.w.text),
                              &modern_w) ||
-        modern_w + 2 * row > b.w)
+        os64_ui_text_measure(&d->ui, OS64_FONT_ROLE_UI, s.clear.text, os64_strlen(s.clear.text), &clear_w) ||
+        modern_w + 2 * row + row + clear_w + 2 * row > b.w)
         return false;
+    clear_w += 2 * row;
     place(&s.modern.w, (os64_gui_rect_t){b.x, last + 4 * row, modern_w + 2 * row, row}, staged);
+    place(&s.clear, (os64_gui_rect_t){b.x + b.w - clear_w, last + 4 * row, clear_w, row}, staged);
     return true;
+}
+
+void yonder_settings_on_clear_storage(void (*clear)(char *line, size_t cap))
+{
+    s.clear_storage = clear;
+}
+
+static void cleared(os64_ui_widget_t *w, void *user)
+{
+    (void)w;
+    (void)user;
+    char line[160] = "There is no page storage to clear.";
+    if (s.clear_storage != NULL)
+        s.clear_storage(line, sizeof(line));
+    os64_ui_settings_report(&s.d, line);
 }
 
 static void limit_say(void)
@@ -581,10 +633,11 @@ void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
     // It takes effect from the next page: a page's script surface is made
     // with its runtime, and its sheets are read with the same answer.
     os64_ui_checkbox(&s.modern, "Modern web surface (from the next page)", modern, NULL, NULL);
+    os64_ui_button(&s.clear, "Clear page storage", cleared, NULL);
     os64_ui_widget_t *kids[] = {&s.heading, &s.list.w,     &s.field.w, &s.keep.w,  &s.size.w,
                                 &s.mb,      &s.empty,      &s.zoom_words, &s.zoom.w, &s.percent,
                                 &s.scripts.w, &s.limit_words, &s.limit.w, &s.limit_value,
-                                &s.dark.w, &s.run.w, &s.reduce.w, &s.modern.w};
+                                &s.dark.w, &s.run.w, &s.reduce.w, &s.modern.w, &s.clear};
     for (size_t i = 0; i < sizeof(kids) / sizeof(kids[0]); i++)
         os64_ui_add_child(&s.d.body, kids[i]);
     os64_ui_listbox_set(&s.d.ui, &s.list, yonder_agent_npresets(), selected);
