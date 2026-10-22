@@ -548,12 +548,15 @@ first: `agent` (the User-Agent the window's requests carry), `clock` (the wall c
 in epoch milliseconds, which a script's `Date` starts from) and `tz` (the
 zone it reads local time in: the `TZ` in force, or `<n>m`, the machine's
 configured minutes east, when there is none); and, at the head, before
-the parser is fed a byte, `cookies` (the `document.cookie` string the
-page's first script could read, for the final address and the transport
-it arrived over, with the response's own Set-Cookie heard: libway's
-script door, so never an HttpOnly cookie; one past 1 MiB, or with no
-memory to hold it, is not written, and the record says it lost lines; a
-load that never had a head has none). A record that says any of
+the parser is fed a byte, `cookies` (the jar's `document.cookie` string
+then, for the final address and the transport it arrived over, with
+every Set-Cookie of the head's own hops heard: libway's script door, so
+never an HttpOnly cookie; one past 1 MiB, or with no memory to hold it,
+is not written, and the record says it lost lines; a load that never had
+a head has none). The jar can move after the head and before a script
+reads it (a script's own `src` response, a sheet a script waits for, the
+page still on screen, an expiry), and a replay sees none of that
+(REPLAY.md § 3's jar row). A record that says any of
 those four is of VERSION 2 (REPLAY.md § 3), and a replay requires all of
 them; a kept page recorded before them is of version 1, and a replay of
 it takes its cookies and clock from its harness, and its agent, zone and

@@ -1703,17 +1703,20 @@ static bool diag_same_view(const char *laid, int32_t w, int32_t h)
     return laid == NULL || (n > 0 && os64_strlen(laid) >= (size_t)n && os64_memcmp(laid, now, (size_t)n) == 0);
 }
 
-// THE COOKIES A SCRIPT ON THE PAGE COULD READ (REPLAY.md § 3), on its
+// THE JAR'S `document.cookie` STRING AT THE HEAD (REPLAY.md § 3), on the
 // record: libway's script door for the page's FINAL address and the
 // transport it arrived over, as the page's script host asks it
 // (scripts_host takes the same two), so HttpOnly cookies stay out. Taken
 // once the head is in hand and before the parser is fed a byte
-// (stream_turn, open_local): the head is the redirects' end and the
-// response's own Set-Cookie is in the jar by then (libway hears it as the
-// fetch reads the head), and nothing on the page has run yet to change
-// them. Asked again with twice the room, up to 1 MiB; cookies that do not
-// fit even then are not written cut short, and the record says it lost a
-// line.
+// (stream_turn, open_local), because that is the last moment the jar's
+// state is the page's own and no other fetch's: every hop's Set-Cookie
+// is heard as the fetch reads the head, before the head is posted (a
+// trailer's is dropped), and after it the jar moves with whatever else is
+// fetched or runs (a script's own `src`, a sheet a script waits for, the
+// page still on screen, an expiry judged at each read), and a replay
+// reproduces none of those changes. Asked again with twice the room, up to 1 MiB;
+// cookies that do not fit even then are not written cut short, and the
+// record says it lost a line.
 static void diag_cookies(yonder_diag_t *d, const char *url, bool encrypted)
 {
     if (d == NULL)
@@ -8376,8 +8379,8 @@ static bool stream_turn(void)
     yonder_mail_t *mail = g.stream.mail;
     if (mail != NULL && !g.stream.has_head && yonder_mail_take_head(mail, &g.stream.head)) {
         g.stream.has_head = true;
-        // The head is final and nothing is parsed yet: the cookies the
-        // page's first script will read.
+        // The head is final and nothing is parsed yet: the jar's cookies
+        // for the page, as they stand at its head (diag_cookies).
         diag_cookies(g.stream.diag, g.stream.head.url, g.stream.head.encrypted);
         if (g.stream.head.body != WAY_BODY_TEXT && !stream_parser(NULL, 0)) {
             stream_failed("Out of memory reading that page.");

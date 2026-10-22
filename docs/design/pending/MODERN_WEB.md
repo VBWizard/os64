@@ -818,10 +818,12 @@ settings `kDiagSettings` names: `scripts`, `modern`, `zoom`,
 already uses for how a page's animations fare) and `script seconds`.
 `diag_cookies` writes `cookies` at the head, when the stream takes it
 (or `open_local` makes a file's) and before the parser is fed a byte:
-the string libway's script door, `way_script_cookies`, hands a script
-for the FINAL address and the transport the page arrived over, as the
-page's script host asks it, with the response's own Set-Cookie already
-heard, so never an HttpOnly cookie; asked again with twice the room up
+the string libway's script door, `way_script_cookies`, answers at that
+moment for the FINAL address and the transport the page arrived over,
+as the page's script host asks it, with every Set-Cookie of the head's
+own hops already heard, so never an HttpOnly cookie (what the jar gains
+after the head reaches no script in a replay: REPLAY.md § 3's jar row);
+asked again with twice the room up
 to 1 MiB, and a string that does not fit, or no memory for one, leaves
 the record saying it lost lines.
 `diag_write` compares each of `kDiagSettings`, the agent among them,

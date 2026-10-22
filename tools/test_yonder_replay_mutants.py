@@ -322,7 +322,8 @@ mutants = [
      '', PROOF),
     ('cookies-taken-after-scripts', YONDER,
      '    yonder_diag_head_fact(p->diag, "final address", p->way.url);',
-     '    yonder_diag_head_fact(p->diag, "final address", p->way.url);\n    diag_cookies(p->diag, p->way.url, false);',
+     '    yonder_diag_head_fact(p->diag, "final address", p->way.url);\n'
+     '    diag_cookies(p->diag, p->way.url, yonder_scripts_encrypted(p->scripts));',
      WINDOW),
     ('setting-change-unmarked', YONDER,
      '        if (then != NULL && !os64_streq(then, diag_setting(kDiagSettings[i], now, sizeof(now))))',

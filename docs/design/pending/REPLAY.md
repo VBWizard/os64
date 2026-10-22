@@ -217,7 +217,7 @@ the rows that say so are the whole of what a replay fakes.
 | scripts, their budget | record | `scripts:`, `script seconds:` | yes (v1: stated when unsaid, named) |
 | zoom, appearance, motion, animations | record | `zoom:`, `appearance:`, `motion:`, `animate:` | yes (v1: stated when unsaid, named) |
 | the user agent | record | `agent:` | yes (v2; v1: stated, named) |
-| the script-visible cookies | record | `cookies:` the `document.cookie` string the page's first script could read: taken at the head, for the final address and its transport, after the response's Set-Cookie and before the parser's first byte, HttpOnly excluded; the replay's jar hands it back unchanged | yes (v2; v1: the harness's, named) |
+| the script-visible cookies | record | `cookies:` the jar's `document.cookie` string at the head: for the final address and its transport, after the head's own redirects and Set-Cookie (every hop's is heard before the head is posted; trailers are dropped), before the page is fed a byte, HttpOnly excluded; the replay's jar hands it back unchanged | yes (v2; v1: the harness's, named) |
 | the clock | record | `clock:` epoch milliseconds at claim | yes (v2; v1: the harness's, named) |
 | the zone | record | `tz:` the zone in force at claim | yes (v2; v1: stated, named) |
 | the clock while the page runs | the harness | — | stated: `Date` reads the record's clock, frozen; it does not move while the page runs |
@@ -225,7 +225,7 @@ the rows that say so are the whole of what a replay fakes.
 | the fetch's end | the harness | — | stated: a page from the network is posted whole before the first turn, with a verdict of OK always; the record keeps what the parser was fed, not how the fetch ended |
 | when products arrive | the harness | — | stated: each script or sheet job is answered at the top of the next turn, in the kept order, never between the chunks of the page's own parse |
 | the request | the harness | — | stated: a page that was the reply to a POST is fed back as a GET's |
-| the cookie jar | the harness | — | stated: read-only; what the page sets with `document.cookie=`, and a `Set-Cookie` of its own, is not seen again |
+| the cookie jar | the harness | — | stated: read-only, and it holds the record's string and nothing more; what the page sets with `document.cookie=`, a `Set-Cookie` from any fetch the page makes after the head (one its first script waits for included), a cookie the page still on screen set, and an expiry are not seen in a replay, so a script that read the jar after any of those where the page was kept reads the head's string here |
 | the text face | the harness | — | stated: bitmap face, so measurements differ from the P5's |
 | pictures and fonts | not fetched | — | stated: their fetch-decided outcomes are not reproduced (§ 5) |
 | the screen | the harness | — | stated: `screen`, once built, answers the harness's size |
@@ -262,8 +262,9 @@ be two windows. A view that moves AFTER the page arrived is not compared:
 it also moves when yonder's own bars come and go (a replay of a bing.com
 page shrank its view 40 px that way), which a replay of the page
 reproduces, and the record cannot tell that from a person resizing the
-window. The clock is what it was at the claim and the cookies what they
-were at the head, by definition, and neither is compared.
+window. The clock is what it was at the claim and the cookies what the
+jar held at the head, by definition, and neither is compared; what the
+jar held after the head is no input at all (the jar's row above).
 
 **Versions.** The index's first line carries its format, `# yonder kept
 index <v>`; a record is of version 2 when it says any input version 2

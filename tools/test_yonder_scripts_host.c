@@ -5313,7 +5313,7 @@ static void diag_keep_cases(void) {
      * the Secure cookie its page's script reads there; a response's own
      * Set-Cookie, heard after the claim and before the head, is on it; and
      * a cookie the page's first script sets is not, since the record says
-     * what that script read. */
+     * what the jar held at the head. */
     for(int how=0;how<3;how++) {
         static const char *const kWant[]={"\ncookies: secure=1; plain=1\n","\ncookies: heard=1\n","\ncookies: first=1\n"};
         static const char *const kWhat[]={
