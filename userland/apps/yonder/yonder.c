@@ -7189,8 +7189,9 @@ static NavKind unshown_kind(const Page *p)
 // `further` more entries back than the one before that first entry (0 for
 // that one). ONE RULE WHEREVER THE PAGE IS in its arrival — parsing, at its
 // DOMContentLoaded, waiting for its sheets — because by HTML its navigation
-// committed when its response came (§ Populating a session history entry):
-// it is an entry of the session already, and going back from it lands
+// committed when its response came and its document was made (§ Finalize a
+// cross-document navigation, which puts its entry in the session before
+// any of its scripts run): it is an entry already, and going back from it lands
 // where going back from the shown page would. So the page is never shown,
 // the session is moved as its own entries would have moved it, and the
 // window goes to the entry asked for from the page on screen: no fetch
@@ -7465,10 +7466,12 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
 // three event rules (MODERN_WEB_BRIEFS.md § Slice 1b): a STATE UPDATE
 // (pushState, replaceState) moves the address and fires nothing; a
 // FRAGMENT NAVIGATION adds an entry (replaces the current one when the
-// address is the same), scrolls, and owes popstate, then hashchange when
+// address is the same), scrolls, and fires popstate — inside the script
+// when the page's binding made it, else owed — then owes hashchange when
 // the fragment moved; a TRAVERSAL to an entry of this document fetches
 // nothing, owes the same two, and puts the scroll back where it was unless
-// the page keeps its own.
+// the page keeps its own. One to an entry of another document fetches it
+// and moves the session when it arrives (session_go, g.traversing).
 
 // The page whose document `doc` is: on screen, held by stream_finish,
 // waiting for its sheets, or arriving. NULL for none.

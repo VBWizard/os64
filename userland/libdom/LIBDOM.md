@@ -490,10 +490,11 @@ and move nothing. `os64_dom_view_step` is the host's rendering step: one
 event a call, `resize`, else `scroll`, else the first MediaQueryList whose
 answer moved, until it answers false.
 
-**matchMedia** keeps the query as written and serialises it once, by
-libgarb (`garb_media_text_serialize`), for `media`; `matches` is judged at
-every read, against the view. A list libgarb could not read whole is `not
-all`. A list nothing holds is freed by the next matchMedia; one listened
+**matchMedia** keeps the query as written and serialises it once, in one
+pass by libgarb (`garb_media_text_serialized`, into the binding's own
+storage), for `media`; `matches` is judged at every read, against the
+view. A list libgarb could not read whole (nested past its depth, or no
+memory) is `not all`. A list nothing holds is freed by the next matchMedia; one listened
 to (`addEventListener`, `addListener`, `onchange`) is held from then until
 the page goes.
 
