@@ -159,9 +159,10 @@ typedef struct {
     // address typed, Back, Forward and Reload.
     char referrer[OS64_FETCH_URL_MAX];
     // way_open's own, for way_head_t.redirects: the origin of the address
-    // asked for, and whether a redirect has left it.
+    // asked for, and the number of the first hop that left it (0 for none).
     os64_url_t asked_origin;
-    bool asked_parsed, left_origin;
+    bool asked_parsed;
+    uint32_t left_at;
 } way_leg_t;
 
 // A leg for `session`, with the session's own face and agent and an empty

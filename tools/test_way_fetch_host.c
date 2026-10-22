@@ -784,8 +784,8 @@ static void pictures_are_pages_for_a_face_that_shows_them(void)
         // every one stayed on the asked origin; 0 when none, or one left it.
         static way_session_t r_session = {.name="fixture", .agent="fixture", .accept="text/html"};
         static const char kOk[] = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nok";
-        uint32_t counts[3];
-        for (int c = 0; c < 3; c++) {
+        uint32_t counts[4];
+        for (int c = 0; c < 4; c++) {
             fresh();
             if (c == 0) {
                 script("r.test", "HTTP/1.1 302 Found\r\nLocation: /two\r\nContent-Length: 0\r\n\r\n");
@@ -795,8 +795,13 @@ static void pictures_are_pages_for_a_face_that_shows_them(void)
                 script("r.test", "HTTP/1.1 302 Found\r\nLocation: http://other.test/x\r\nContent-Length: 0\r\n\r\n");
                 script("other.test", "HTTP/1.1 302 Found\r\nLocation: http://r.test/back\r\nContent-Length: 0\r\n\r\n");
                 script("r.test", kOk);
-            } else {
+            } else if (c == 2) {
                 script("r.test", kOk);
+            } else {
+                // The last 302 names nowhere, so it is not followed: it is
+                // the page, and the one redirect before it still counts.
+                script("r.test", "HTTP/1.1 302 Found\r\nLocation: /two\r\nContent-Length: 0\r\n\r\n");
+                script("r.test", "HTTP/1.1 302 Found\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nno");
             }
             way_leg_t r_leg = way_leg(&r_session);
             way_opening_t ro;
@@ -810,6 +815,8 @@ static void pictures_are_pages_for_a_face_that_shows_them(void)
                counts[0] == 2, NULL);
         expect("redirectCount: a chain that left the origin, even to come back, counts 0", counts[1] == 0, NULL);
         expect("redirectCount: no redirect counts 0", counts[2] == 0, NULL);
+        expect("redirectCount: a last redirect that was not followed leaves the count of those that were",
+               counts[3] == 1, NULL);
     }
     {
         char out[40];
