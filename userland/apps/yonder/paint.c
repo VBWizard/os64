@@ -1985,7 +1985,8 @@ static bool is_frame(const flow_box_t *b)
 // flow_hit. The painter draws a piece as far as it is kept, leaves out a
 // box cut away (flow_box_cut_away: an atom past the limit with everything
 // in it, a box stacked out of one), and draws the ellipsis after what is
-// kept, on the line's baseline, when the walk hands it the line after the
+// kept, on the line's baseline, as the block's text is drawn (text_run:
+// its shadows, then its fill), when the walk hands it the line after the
 // line's pieces — and in a text clip's pen pass too, where the walk of
 // the clip hands it the line (flow_visit_text_clip). Its cuts are kept in
 // the paint's memo (Painter.cuts), each line worked once a paint.
@@ -2010,8 +2011,28 @@ static uint32_t text_fill(const Painter *p, const flow_style_t *s)
     return p->penned ? p->pen : ink_of(p, s->fill);
 }
 
-// A line's ellipsis, where its cut puts it, filled as the block's text is
-// (text_fill): in the pen when a text clip's pass draws it.
+// A text box's run with its pen at (`x`, `y`), the baseline's start in the
+// coordinates being painted: its shadows under it, the last first — the
+// run again in each shadow's colour at its offset, sharp whatever its blur
+// (PILE3.md § Booked) — and then the run in its fill (text_fill). A text
+// clip's pen draws the run alone. The page's text and a line's ellipsis
+// both go through it.
+static void text_run(const Painter *p, const flow_box_t *b, int64_t x, int64_t y)
+{
+    os64_gui_rect_t view = on_page(p, p->view);
+    for (int32_t i = b->style->ntext_shadows - 1; !p->penned && i >= 0; i--) {
+        const flow_shadow_t *sh = &b->style->text_shadows[i];
+        p->v->text(p->v->ctx, b, (int32_t)max64(INT32_MIN, min64(INT32_MAX, x + sh->x)),
+                   (int32_t)max64(INT32_MIN, min64(INT32_MAX, y + sh->y)), view,
+                   sh->current ? ink_of(p, b->style->color) : sh->colour);
+    }
+    p->v->text(p->v->ctx, b, (int32_t)max64(INT32_MIN, min64(INT32_MAX, x)),
+               (int32_t)max64(INT32_MIN, min64(INT32_MAX, y)), view, text_fill(p, b->style));
+}
+
+// A line's ellipsis, where its cut puts it, drawn as the block's text is
+// (text_run): its shadows, and its fill — in the pen alone when a text
+// clip's pass draws it.
 static void ellipsis(const Painter *p, const flow_box_t *line)
 {
     flow_line_cut_t c = line_cut(p, line);
@@ -2024,9 +2045,7 @@ static void ellipsis(const Painter *p, const flow_box_t *line)
     e.run = block->ellipsis;
     e.text = NULL;
     e.length = 0;
-    p->v->text(p->v->ctx, &e, (int32_t)max64(INT32_MIN, min64(INT32_MAX, c.at + p->off.x)),
-               (int32_t)((int64_t)line->baseline + p->off.y), on_page(p, p->view),
-               text_fill(p, block->style));
+    text_run(p, &e, c.at + p->off.x, (int64_t)line->baseline + p->off.y);
 }
 
 // A frame's stand-in reads as a link on a pale panel, the default link
@@ -2115,20 +2134,8 @@ static void paint_box(void *ctx, const flow_box_t *b)
         // A numbered marker is its text.
         __attribute__((fallthrough));
     case FLOW_BOX_TEXT:
-        // Its shadows under it, the last first: the run again in each
-        // shadow's colour at its offset — sharp, whatever its blur
-        // (PILE3.md § Booked) — and then the run in its FILL colour. A text
-        // clip's pen draws the run alone.
-        for (int32_t i = b->style->ntext_shadows - 1; b->run != NULL && !p->penned && i >= 0; i--) {
-            const flow_shadow_t *sh = &b->style->text_shadows[i];
-            p->v->text(p->v->ctx, b, (int32_t)((int64_t)b->rect.x + p->off.x + sh->x),
-                       (int32_t)((int64_t)b->baseline + p->off.y + sh->y), on_page(p, p->view),
-                       sh->current ? ink_of(p, b->style->color) : sh->colour);
-        }
         if (b->run != NULL)
-            p->v->text(p->v->ctx, b, (int32_t)((int64_t)b->rect.x + p->off.x),
-                       (int32_t)((int64_t)b->baseline + p->off.y), on_page(p, p->view),
-                       text_fill(p, b->style));
+            text_run(p, b, (int64_t)b->rect.x + p->off.x, (int64_t)b->baseline + p->off.y);
         decorations(p, b);
         return;
     case FLOW_BOX_ATOMIC:

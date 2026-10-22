@@ -219,6 +219,19 @@ static void ellipsis_review_cases(void)
         "text \"abcdefghij\" 0 14 #000000/0 clip 0 0 32 20\n"
         "text \"\" 32 14 #000000/0 clip 0 0 40 20\n");
     s_clip_refused = false;
+    // The ellipsis is drawn as the block's text is, its shadows under it:
+    // a red shadow 2 across and 1 down under the kept text and under the
+    // ellipsis, each then in its green fill.
+    paint_page_case("text-overflow: the ellipsis takes the text's shadows",
+                    "<!doctype html><style>body { margin: 0 } div { width: 40px; overflow: hidden;"
+                    " white-space: nowrap; text-overflow: ellipsis; color: #00ff00;"
+                    " text-shadow: 2px 1px #ff0000 }</style><div>abcdefghij</div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "text \"abcdefghij\" 2 15 #ff0000 clip 0 0 32 20\n"
+                    "text \"abcdefghij\" 0 14 #00ff00 clip 0 0 32 20\n"
+                    "text \"\" 34 15 #ff0000 clip 0 0 40 20\n"
+                    "text \"\" 32 14 #00ff00 clip 0 0 40 20\n");
     // pre-wrap: abc and six spaces end the first line, 48 wide, but the
     // spaces hang (Text 3 § 4.1.3): abc is 24 and fits, so no ellipsis.
     paint_page_case("text-overflow: spaces that hang do not overflow a line",
