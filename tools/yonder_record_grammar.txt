@@ -7,6 +7,14 @@
 # must answer its kind. A line that begins like a kind and does not match
 # its grammar exactly is REFUSED, never read as another kind.
 #
+# A WHOLE RECORD is a vector too, for the rules no single line can break
+# (a line a reader parses one value from stands at most once):
+# `record:read` or `record:REFUSED <words>`, a tab, and the record's lines
+# joined by `¶`, which no vector's record holds otherwise. A `record:` is
+# one yonder wrote, which both readers read whole, or refuse with a reason
+# holding <words>; a `replay:` is a replay's record, which only
+# tools/yonder_records.py reads.
+#
 # address
 address	address: https://a.test/
 address	address: 
@@ -135,6 +143,7 @@ not-reproduced	REPLAY not reproduced: image
 REFUSED	REPLAY not reproduced: image global
 REFUSED	REPLAY not reproduced: 
 REFUSED	REPLAY not reproduced: image  picture-fetch
+REFUSED	REPLAY not reproduced: image font-fetch image
 marked	REPLAY unjudged: lines lost
 marked	REPLAY unjudged: settings changed during the load
 REFUSED	REPLAY unjudged: 
@@ -286,3 +295,47 @@ REFUSED	REPLAY budget: 60
 REFUSED	REPLAY budget: 60s
 REFUSED	REPLAY budget:  s
 REFUSED	REPLAY budget: 4294967296 s
+# A LINE A READER PARSES ONE VALUE FROM STANDS AT MOST ONCE, in a whole record:
+# the address, the verdict or the state, `end`, each head fact, and each
+# REPLAY line but incomplete, unfinished and unjudged. Tokens and plain facts
+# may repeat, and so may `REPLAY unjudged:`, which yonder writes for lost
+# lines and for a setting changed, both on one record.
+record:read	address: https://a.test/¶verdict: clean¶kept: whole¶bytes: 3¶end
+record:read	address: https://a.test/¶verdict: 2 MISSING¶MISSING global x (1)¶MISSING global x (1)¶note: a¶note: b¶REPLAY unjudged: lines lost¶REPLAY unjudged: settings changed during the load¶end
+record:REFUSED a second `address:`	address: https://a.test/¶verdict: clean¶address: https://a.test/¶end
+record:REFUSED a second verdict line	address: https://a.test/¶verdict: clean¶verdict: clean¶end
+record:REFUSED lines past its `end`	address: https://a.test/¶verdict: clean¶end¶end
+record:REFUSED a second `status:`	address: https://a.test/¶verdict: clean¶status: 200 OK¶status: 404¶end
+record:REFUSED a second `final address:`	address: https://a.test/¶verdict: clean¶final address: https://a.test/¶final address: https://b.test/¶end
+record:REFUSED a second `body:`	address: https://a.test/¶verdict: clean¶body: html¶body: text¶end
+record:REFUSED a second `content-type:`	address: https://a.test/¶verdict: clean¶content-type: text/html¶content-type: text/plain¶end
+record:REFUSED a second `charset:`	address: https://a.test/¶verdict: clean¶charset: utf-8¶charset: ¶end
+record:REFUSED a second `encrypted:`	address: https://a.test/¶verdict: clean¶encrypted: no¶encrypted: yes¶end
+record:REFUSED a second `TLS:`	address: https://a.test/¶verdict: clean¶TLS: 1.3¶TLS: 1.2¶end
+record:REFUSED a second `scripts:`	address: https://a.test/¶verdict: clean¶scripts: on¶scripts: off¶end
+record:REFUSED a second `laid out at:`	address: https://a.test/¶verdict: clean¶laid out at: 800x600 px¶laid out at: 830x600 px¶end
+record:REFUSED a second `kept:`	address: https://a.test/¶verdict: clean¶kept: whole¶kept: not whole: a step of keeping the page failed¶end
+record:REFUSED a second `bytes:`	address: https://a.test/¶verdict: clean¶bytes: 3¶bytes: 4¶end
+record:REFUSED a second `kept lines:`	address: https://a.test/¶verdict: clean¶kept lines: 0¶kept lines: 1¶end
+record:REFUSED a second `modern:`	address: https://a.test/¶verdict: clean¶modern: on¶modern: off¶end
+record:REFUSED a second `zoom:`	address: https://a.test/¶verdict: clean¶zoom: 1000¶zoom: 1250¶end
+record:REFUSED a second `appearance:`	address: https://a.test/¶verdict: clean¶appearance: light¶appearance: dark¶end
+record:REFUSED a second `motion:`	address: https://a.test/¶verdict: clean¶motion: full¶motion: reduce¶end
+record:REFUSED a second `script seconds:`	address: https://a.test/¶verdict: clean¶script seconds: 5¶script seconds: 6¶end
+record:REFUSED a second `animate:`	address: https://a.test/¶verdict: clean¶animate: on¶animate: off¶end
+record:REFUSED a second `agent:`	address: https://a.test/¶verdict: clean¶agent: a¶agent: b¶end
+record:REFUSED a second `cookies:`	address: https://a.test/¶verdict: clean¶cookies: ¶cookies: k=v¶end
+record:REFUSED a second `clock:`	address: https://a.test/¶verdict: clean¶clock: 1¶clock: 2¶end
+record:REFUSED a second `tz:`	address: https://a.test/¶verdict: clean¶tz: 330m¶tz: EST5EDT¶end
+record:REFUSED a second `bytes:`	address: https://a.test/¶verdict: clean¶bytes: 3¶note: between¶bytes: 3¶end
+replay:read	address: https://a.test/¶REPLAY state: verdict¶verdict: clean¶REPLAY inputs stated: zoom=1000¶REPLAY inputs defaulted: cookies clock¶REPLAY kept: assumed whole (version 1)¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:read	address: https://a.test/¶REPLAY state: incomplete script x¶verdict: clean¶REPLAY incomplete script x¶REPLAY incomplete sheet y¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:read	address: https://a.test/¶REPLAY state: unfinished it never arrived¶verdict: clean¶REPLAY unfinished it never arrived¶REPLAY unfinished its parse had not ended¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:REFUSED a second `REPLAY state:`	address: https://a.test/¶REPLAY state: verdict¶verdict: clean¶REPLAY state: verdict¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:REFUSED a second `REPLAY budget:`	address: https://a.test/¶REPLAY state: verdict¶verdict: clean¶REPLAY budget: 30 s¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:REFUSED a second `REPLAY not reproduced:`	address: https://a.test/¶REPLAY state: verdict¶verdict: clean¶REPLAY not reproduced: font-fetch¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:REFUSED a second `REPLAY inputs stated:`	address: https://a.test/¶REPLAY state: verdict¶verdict: clean¶REPLAY inputs stated: zoom=1000¶REPLAY inputs stated: tz=0m¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:REFUSED a second `REPLAY inputs defaulted:`	address: https://a.test/¶REPLAY state: verdict¶verdict: clean¶REPLAY inputs defaulted: cookies¶REPLAY inputs defaulted: clock¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:REFUSED a second `REPLAY kept:`	address: https://a.test/¶REPLAY state: verdict¶verdict: clean¶REPLAY kept: assumed whole (version 1)¶REPLAY kept: assumed whole (version 1)¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:REFUSED a second `kept:`	address: https://a.test/¶REPLAY state: verdict¶verdict: clean¶kept: whole¶kept: not whole: a step of keeping the page failed¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:REFUSED a second `address:`	address: https://a.test/¶REPLAY state: verdict¶verdict: clean¶address: https://a.test/¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end

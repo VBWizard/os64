@@ -155,7 +155,9 @@ typedef struct yonder_diag_claim yonder_diag_claim_t;
 // record with another's kept files. The record's number moves up from
 // where it began until `<name>.txt` can be made where nothing is
 // (os64_open's "x", holding YONDER_DIAG_UNWRITTEN and the claim's nonce
-// until the record is written) and no `<name>.html` or `<name>.d` is there, kept or not; with
+// until the record is written; one that cannot be written and closed
+// whole is removed, and its number passed over, since no later write
+// could prove it this claim's) and no `<name>.html` or `<name>.d` is there, kept or not; with
 // `keep`, `<name>.d/` is then made. The number it ends on is
 // yonder_diag_seq's. A fresh name whose folder cannot be made is claimed
 // and nothing of its page is kept. A record that finds no fresh name in

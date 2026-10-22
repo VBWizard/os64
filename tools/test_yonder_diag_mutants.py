@@ -194,6 +194,19 @@ mutants = [
     ('a-short-value-is-unsaid', DIAG,
      '        if (d->facts.lines[i].count != 0)',
      '        if (false)', WINDOW),
+    # #326 round 7: a placeholder that is not whole is no claim.
+    ('claim-placeholder-without-memory-taken', DIAG,
+     '    bool whole = text != NULL;\n    if (whole) {',
+     '    bool whole = true;\n    if (text != NULL) {', WINDOW),
+    ('claim-placeholder-write-failure-taken', DIAG,
+     '        whole = write_all((int32_t)h, text, m.at);',
+     '        (void)write_all((int32_t)h, text, m.at);', WINDOW),
+    ('claim-placeholder-close-failure-taken', DIAG,
+     '    whole = os64_close((int32_t)h) == 0 && whole;',
+     '    (void)os64_close((int32_t)h);', WINDOW),
+    ('claim-placeholder-left-behind', DIAG,
+     '    if (!whole)\n        (void)os64_unlink(path);',
+     '', WINDOW),
 ]
 
 caught, missed, unbuilt = [], [], []

@@ -16,8 +16,11 @@ document's lesson, written into MODERN_WEB_BRIEFS.md.*
    line of a page record, a replay record and a kept index matches exactly
    one production below or the file is not a record. The grammar lives in
    `tools/yonder_record_grammar.txt` as vectors (`<kind or REFUSED> TAB
-   <line>`), and the Python reader and the C reader each run every vector
-   and must agree; a reader that classifies a line the vectors do not
+   <line>`, and for the rules no single line can break, a whole record:
+   `record:read` or `record:REFUSED <why>` TAB its lines joined by `¶`),
+   and the Python reader and the C reader each run every vector and must
+   agree (a `replay:` record vector is the Python reader's alone, the one
+   reader of a replay's record); a reader that classifies a line the vectors do not
    cover is extended by adding the vector first. Reconciliation (counts
    adding up) never rescues a line the grammar refuses.
 2. **A replay has a stated input list, and takes every input from the
@@ -56,7 +59,10 @@ The claim (`yonder_diag_claim`) is the only way any of these names is
 written: `<name>.txt` is created exclusively (os64's `"x"` open) holding
 `verdict: unwritten <nonce>`, and `.html` and `.d` must not exist by that
 name, with `keep_pages` on or off; a name that cannot be claimed is
-passed over, and after 64 names nothing is written. The nonce is a random
+passed over, and a placeholder that could not be written whole (no
+memory for it, a write or close that failed) is no claim: the file is
+removed and the name passed over. After 64 names nothing is written.
+The nonce is a random
 64-bit value of the claim's (`/dev/random`; where that cannot be read,
 the clock, the sequence and the record's address mixed), in sixteen hex
 digits, and every record the claim writes carries it too, as the plain
@@ -97,7 +103,7 @@ replay      := "REPLAY incomplete " text | "REPLAY unfinished " text
              | "REPLAY inputs defaulted:" (" " defaulted)+     (each name once)
              | "REPLAY kept: assumed whole (version 1)"
              | "REPLAY budget: " count " s"
-             | "REPLAY not reproduced:" (" " known-kind)+
+             | "REPLAY not reproduced:" (" " known-kind)+       (each kind once)
 end         := "end"
 count       := "0" | [1-9][0-9]{0,9}      (no leading zero, at most UINT32_MAX)
 count1      := [1-9][0-9]{0,9}            (a verdict names no token it has no line of)
@@ -158,8 +164,18 @@ it lost lines.
   the index's numbers and version, the runner's own `--seconds`, and the
   sequence in a record's name once its zero padding is passed over) goes
   through it.
-- **A second `address:`, a second verdict, a second `end`, a line past
-  `end`, a line the grammar does not know**: not a record.
+- **A line a reader parses one value from stands at most once.** The
+  address, the verdict or state, `end`, each key of the head set, and
+  each `REPLAY` line other than `incomplete`/`unfinished`/`unjudged`
+  (`inputs stated`, `inputs defaulted`, `kept: assumed whole`, `budget`,
+  `not reproduced`) appears once or not at all; a second occurrence is
+  not a record, and the reader names it (``a second `kept:` ``). Tokens
+  (`MISSING`/`FAILED`) and plain facts may repeat, and so may `REPLAY
+  unjudged:`, which yonder writes once for lost lines and once for a
+  setting changed during the load, both on one record. A second
+  `address:`, a second verdict, a second `kept:` after `kept: whole`, a
+  line past `end`, a line the grammar does not know: not a record. Whole
+  records are vectors too (`record:` and `replay:` in the vector file).
 
 ## 3. The replay's inputs
 
@@ -169,12 +185,12 @@ the rows that say so are the whole of what a replay fakes.
 
 | input | source | head fact | required |
 |---|---|---|---|
-| the page's bytes | `<name>.html` | `bytes: N` must equal the file's length | yes |
+| the page's bytes | `<name>.html` | `bytes: N` must equal the file's length, which is all that binds them to the record (below) | yes |
 | that the page was kept whole | record | `kept: whole` (a record without `kept:` is not a kept page) | yes (v1: assumed when unsaid, named) |
 | the address, final address | record | `address:`, `final address:` | yes |
 | the head: status, content type, charset, encrypted, body kind | record | `status:`, `content-type:`, `charset:`, `encrypted:`, `body:` (local pages: `body:` only) | yes |
 | TLS | record | `TLS:` read into the head and written back on the replay's record; nothing else on the page reads it | when said |
-| the sub-resources | `.d/index` and files | `kept lines: N` must equal the index's lines | yes (v1: when said) |
+| the sub-resources | `.d/index` and files | `kept lines: N` must equal the index's lines, and each line names its job (§ 4), which is all that binds them to the record (below) | yes (v1: when said) |
 | the window's size | record | `laid out at: WxH px` (claim; rewritten at arrival with the layout time) | yes (v1: stated when unsaid, named) |
 | the modern switch | record | `modern:` | yes (v1: stated when unsaid, named) |
 | scripts, their budget | record | `scripts:`, `script seconds:` | yes (v1: stated when unsaid, named) |
@@ -192,6 +208,17 @@ the rows that say so are the whole of what a replay fakes.
 | the text face | the harness | — | stated: bitmap face, so measurements differ from the P5's |
 | pictures and fonts | not fetched | — | stated: their fetch-decided outcomes are not reproduced (§ 5) |
 | the screen | the harness | — | stated: `screen`, once built, answers the harness's size |
+
+**A kept file is bound to its record by what the record says of it, and
+nothing else**: the page's bytes by their length, the index by its line
+count, and each product by its index line's number, kind, address and
+job identity. The corpus is the person's own, written by one yonder
+under the claim's exclusive open and copied whole, so a file of the
+right length under the right name is that page's bytes. Bytes of the
+same length swapped under a record would replay as the page; binding
+them by content (a digest in both readers) is declined, and the row
+"Kept bytes bound to their record by length" in the tree's DECLINED.md
+says why and what would reopen it.
 
 **Privacy, said plainly:** a kept page already holds the bytes of a
 logged-in page; with `cookies:` it also holds the tokens the page could

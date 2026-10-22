@@ -73,7 +73,7 @@ MALFORMED = {
                                    'lines past its `end`'),
     'a control byte': (WHOLE + b'note: a\x01b\n', 'control byte'),
     'a carriage return mid-line': (WHOLE + b'note: a\rb\n', 'control byte'),
-    'a second address': (b'address: https://a.test/\nverdict: clean\naddress: https://b.test/\n', 'out of its place'),
+    'a second address': (b'address: https://a.test/\nverdict: clean\naddress: https://b.test/\n', 'a second `address:`'),
     "a version 2 record cut before its end": (b'address: https://a.test/\nverdict: clean\nagent: a\nkept: whole\n',
                                               "without its `end`"),
     # Any input version 2 added marks it, so one that lost its agent is
@@ -202,6 +202,18 @@ class ReaderCases(unittest.TestCase):
             with self.subTest(line=line[:60]):
                 if kind.startswith('escape:'):
                     self.assertEqual(records.unescape_bytes(line), bytes.fromhex(kind[len('escape:'):]))
+                elif kind.startswith(('record:', 'replay:')):
+                    # A whole record, its lines joined by `¶`: read, or
+                    # refused with a reason holding the vector's words.
+                    rec = self.read(line.replace('¶'.encode(), b'\n') + b'\n')
+                    expect = kind.split(':', 1)[1]
+                    if expect == 'read':
+                        self.assertIsInstance(rec, records.Record, str(rec))
+                        self.assertEqual(rec.replay, kind.startswith('replay:'))
+                    else:
+                        self.assertTrue(expect.startswith('REFUSED '), kind)
+                        self.assertIsInstance(rec, records.Unjudged)
+                        self.assertIn(expect[len('REFUSED '):], str(rec))
                 else:
                     self.assertEqual(records.classify(line, index=kind.startswith('index:'))[0], kind)
             seen += 1

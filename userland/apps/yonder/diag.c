@@ -743,9 +743,11 @@ static bool diag_contains(const char *text, const char *needle)
 // address and `verdict: unwritten <nonce>`, which no reader judges or counts (the
 // tally names it as damage), so a name claimed and never written (a yonder
 // that died, a write that failed) is never read as a page that met
-// nothing. The real
-// record replaces it. False when something is there, or it could not be
-// made.
+// nothing. The real record replaces it, and proves the name its own by
+// the nonce (claim_ours), so A PLACEHOLDER THAT IS NOT WHOLE IS NO CLAIM:
+// with no memory for its text, or a write or a close that failed, the
+// file is removed and the name passed over. False when something is
+// there, or it could not be made whole.
 static bool claim_file(const yonder_diag_t *d, const char *path)
 {
     int64_t h = os64_open(path, "x");
@@ -758,16 +760,19 @@ static bool claim_file(const yonder_diag_t *d, const char *path)
     put_text(&m, d->url);
     puts_(&m, mark);
     char *text = os64_malloc(m.at + 1);
-    if (text != NULL) {
+    bool whole = text != NULL;
+    if (whole) {
         Out o = {text, m.at + 1, 0};
         puts_(&o, "address: ");
         put_text(&o, d->url);
         puts_(&o, mark);
-        (void)write_all((int32_t)h, text, m.at);
+        whole = write_all((int32_t)h, text, m.at);
         os64_free(text);
     }
-    (void)os64_close((int32_t)h);
-    return true;
+    whole = os64_close((int32_t)h) == 0 && whole;
+    if (!whole)
+        (void)os64_unlink(path);
+    return whole;
 }
 
 // The name at `path` taken as this record's: the proof made, which holds

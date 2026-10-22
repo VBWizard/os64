@@ -487,7 +487,9 @@ over. The claim writes a random nonce into its placeholder (`verdict:
 unwritten <nonce>`) and every record it writes after (`claim: <nonce>`),
 and the record's write proves the claimed file is still its own, by that
 nonce, before replacing it: one gone, or claimed by another yonder after
-it went, is not written over.
+it went, is not written over. So a placeholder that could not be written
+whole (no memory for it, a write or a close that failed) is no claim:
+its file is removed and its number passed over.
 
 A step of keeping that fails, or a fresh name whose folder cannot be
 made, ends the keeping of that page,
@@ -529,7 +531,9 @@ of version 1, recorded before that fact, it assumes kept whole when its
 bytes are beside it, and says so), and every record says `bytes: N`, what
 the parser was fed, and every kept page's says `kept lines: N`, from 0
 at its claim, how many lines its index holds: on the host nothing else
-binds a record to its kept files.
+binds a record to its kept files (REPLAY.md § 3 states that as the rule,
+and DECLINED.md's row "Kept bytes bound to their record by length" why
+no digest binds them by content).
 
 **The facts a replay rebuilds the head from**, on every page's record now:
 `final address` (written when the parse ends, so a page let go unshown

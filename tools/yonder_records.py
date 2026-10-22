@@ -318,10 +318,14 @@ def classify(line, index=False):
                     return kind, line[len(head):]
             m = RE_NOT_REPRODUCED.fullmatch(line)
             if m is not None:
-                words = set(m.group(1).decode('utf-8').split(' '))
+                listed = m.group(1).decode('utf-8').split(' ')
+                words = set(listed)
                 if not words <= NOT_REPRODUCED:
                     return 'REFUSED', ('a REPLAY not reproduced line naming what a replay does reproduce: '
                                        + ' '.join(sorted(words - NOT_REPRODUCED)))
+                # Each kind once, as each name on the inputs lines.
+                if len(words) != len(listed):
+                    return 'REFUSED', 'a REPLAY not reproduced line naming a kind twice'
                 return 'not-reproduced', words
             return 'REFUSED', 'a REPLAY line of no kind this reader knows'
         key, sep, value = line.partition(b': ')
@@ -343,9 +347,20 @@ def read_body(lines, rec, replay):
     the grammar (classify): the verdict, its record lines exactly that many
     of each, no other verdict, and, on a replay's record (`replay`), its
     REPLAY detail lines; any line the grammar refuses, or a kind out of its
-    place, is Malformed. A yonder record's lines-lost marker, or its
+    place, is Malformed. A LINE A READER PARSES ONE VALUE FROM STANDS AT
+    MOST ONCE (REPLAY.md § 2): a second of a head fact, of the address, of
+    the verdict or the state, or of a REPLAY line other than incomplete,
+    unfinished and unjudged is Malformed, named, since a reader that kept
+    the first would judge the page by whichever came first; tokens and
+    plain facts may repeat. A yonder record's lines-lost marker, or its
     never-written placeholder, makes it UNJUDGED."""
     where = 'third' if replay else 'second'
+    seen = set()
+
+    def once(spelling):
+        if spelling in seen:
+            raise Malformed(f'not a whole page file: a second `{spelling}`')
+        seen.add(spelling)
     kind, f = classify(lines[0]) if lines else ('REFUSED', None)
     if kind != 'verdict':
         raise Malformed(f'not a whole page file: its {where} line is not a verdict'
@@ -368,10 +383,16 @@ def read_body(lines, rec, replay):
             seen_failed += 1
             key = (unescape(f[0]), unescape(f[1]))
             rec.failed[key] = rec.failed.get(key, 0) + f[2]
-        elif kind in ('fact', 'head'):
+        elif kind == 'head':
+            once(f[0].decode('utf-8') + ':')
+        elif kind == 'fact':
             pass
         elif kind == 'verdict':
             raise Malformed('not a whole page file: a second verdict line')
+        elif kind == 'address':
+            raise Malformed('not a whole page file: a second `address:`')
+        elif kind == 'state' and replay:
+            raise Malformed('not a whole page file: a second `REPLAY state:`')
         elif kind == 'marked' and not replay:
             # One line for every reason a record yonder wrote says it cannot
             # be judged: its lines lost, a setting changed during the load.
@@ -383,19 +404,24 @@ def read_body(lines, rec, replay):
                 rec.reason = ('its record lost lines it could not keep' if f == b'lines lost'
                               else 'its record says: ' + unescape(f))
         elif kind == 'defaulted' and replay:
-            rec.defaulted |= f
+            once('REPLAY inputs defaulted:')
+            rec.defaulted = f
         elif kind == 'stated' and replay:
-            rec.stated.update({k: unescape(v) for k, v in f.items()})
+            once('REPLAY inputs stated:')
+            rec.stated = {k: unescape(v) for k, v in f.items()}
         elif kind == 'assumed' and replay:
+            once('REPLAY kept:')
             rec.assumed = True
-        elif kind == 'budget' and replay and rec.budget is None:
+        elif kind == 'budget' and replay:
+            once('REPLAY budget:')
             rec.budget = f
         elif kind == 'incomplete' and replay:
             rec.incomplete.append(unescape(f))
         elif kind == 'unfinished' and replay:
             rec.unfinished.append(unescape(f))
         elif kind == 'not-reproduced' and replay:
-            rec.not_reproduced |= f
+            once('REPLAY not reproduced:')
+            rec.not_reproduced = f
         elif kind == 'REFUSED':
             raise Malformed(f'not a whole page file: {f}')
         elif kind in ('incomplete', 'unfinished', 'not-reproduced', 'marked', 'defaulted', 'stated', 'assumed', 'budget',

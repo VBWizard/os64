@@ -28,10 +28,11 @@
  * poisoned below it.
  *
  * THE READERS: rp_classify is § 2's grammar, line by line, and runs every
- * vector in tools/yonder_record_grammar.txt (rp_grammar_vectors), as
+ * line's vector in tools/yonder_record_grammar.txt (rp_grammar_vectors), as
  * tools/yonder_records.py's classify() does; rp_record_read reads a kept
- * record whole by it, rp_index_read a kept index, and every number goes
- * through rp_decimal.
+ * record whole by it, and the vectors of a whole record yonder wrote are
+ * read through it, as through tools/yonder_records.py's read(); rp_index_read reads a kept
+ * index, and every number goes through rp_decimal.
  *
  * ONE PROCESS PER PAGE (rp_one_process): the parent decides from the kept
  * record whether a page is one to replay, forks a child for it, and
@@ -297,6 +298,12 @@ static size_t rp_digit_run(const char *s, const char *end) {
 }
 static bool rp_is(const char *s, size_t n, const char *word) { return strlen(word)==n && !memcmp(s,word,n); }
 static bool rp_starts(const char *s, size_t n, const char *head) { return n>=strlen(head) && !memcmp(s,head,strlen(head)); }
+/* Where the `m` bytes at `needle` first stand in the `n` at `s`; NULL for
+ * nowhere. */
+static const char *rp_find(const char *s, size_t n, const char *needle, size_t m) {
+    for(size_t i=0;m<=n && i<=n-m;i++) if(!memcmp(s+i,needle,m)) return s+i;
+    return NULL;
+}
 
 /* ONE LINE CLASSIFIED BY THE GRAMMAR (tools/yonder_record_grammar.txt holds
  * its vectors, which this reader and tools/yonder_records.py's classify()
@@ -572,6 +579,12 @@ static RpLine rp_classify(const char *line, size_t len, bool index) {
                 size_t n=sp!=NULL ? (size_t)(sp-w) : (size_t)(end-w);
                 if(n==0 || (sp!=NULL && sp+1==end)) return l;
                 if(rp_reproduced(w,n)) { l.why="a REPLAY not reproduced line naming what a replay does reproduce"; return l; }
+                /* Each kind once, as each name on the inputs lines. */
+                for(const char *v=p; v<w; ) {
+                    size_t m=strcspn(v," ");
+                    if(m==n && !memcmp(v,w,n)) { l.why="a REPLAY not reproduced line naming a kind twice"; return l; }
+                    v+=m+1;
+                }
                 w+=n+(sp!=NULL);
             }
             l.kind="not-reproduced"; return l;
@@ -595,8 +608,11 @@ static RpLine rp_classify(const char *line, size_t len, bool index) {
  * (rp_classify), by the rules tools/yonder_records.py reads a record yonder
  * wrote by: NULL with `r` filled, or why it is not a whole record (`r`
  * empty). UTF-8; its first line `address: `, its second a verdict, its
- * record lines exactly the verdict's count, no other verdict line and no
- * other address, no control byte in any line (rp_classify refuses one, so
+ * record lines exactly the verdict's count, no other verdict line, no
+ * other address and no head fact twice (a line a reader parses one value
+ * from stands at most once: read first-wins, a `kept: whole` above a
+ * `kept: not whole` would replay a page its own record refuses), no control
+ * byte in any line (rp_classify refuses one, so
  * a carriage return or a NUL anywhere refuses the record), no `REPLAY`
  * line but a `REPLAY unjudged:` mark, and nothing past an `end` (`ended`):
  * a record that says its name was never written, or that it cannot be
@@ -647,14 +663,21 @@ static const char *rp_record_read(const char *text, size_t size, RpRecord *r) {
                     r->unjudged=r->said;
                 }
             }
-        } else if(!strcmp(l.kind,"head") || !strcmp(l.kind,"fact")) {
-            for(int i=0;i<F_N;i++)
-                if(r->facts[i]==NULL && rp_is(l.a,l.alen,kFacts[i])) r->facts[i]=rp_unescape(l.b,l.blen,true);
+        } else if(!strcmp(l.kind,"head")) {
+            for(int i=0;i<F_N && why==NULL;i++) {
+                if(!rp_is(l.a,l.alen,kFacts[i])) continue;
+                if(r->facts[i]!=NULL) {
+                    snprintf(said,sizeof(said),"it is not a whole page file: a second `%s:`",kFacts[i]);
+                    why=said;
+                } else r->facts[i]=rp_unescape(l.b,l.blen,true);
+            }
+        } else if(!strcmp(l.kind,"fact")) {
+            /* A plain fact may repeat: no reader parses one. */
         } else if(!strcmp(l.kind,"REFUSED")) {
             snprintf(said,sizeof(said),"it is not a whole page file: %s",l.why);
             why=said;
         } else if(!strcmp(l.kind,"address")) {
-            why="it is not a whole page file: an `address:` out of its place";
+            why="it is not a whole page file: a second `address:`";
         } else {
             why="it is not a kept page's record: it carries a REPLAY line";
         }
@@ -1634,7 +1657,9 @@ static int rp_replay_page(const char *kept, const char *out, const char *name, u
     /* NOTHING ON THE HOST BINDS A RECORD TO ITS KEPT FILES but what the
      * record says of them: the bytes the parser was fed, and the lines its
      * index holds (rp_window_of). Kept files that are not those are
-     * another page's. */
+     * another page's. Bytes of the same length swapped in under a record
+     * pass; why that is not bound by content is the row "Kept bytes bound
+     * to their record by length" in DECLINED.md. */
     uint32_t said_bytes=0;
     if(r.facts[F_BYTES]==NULL || !rp_decimal(r.facts[F_BYTES],strlen(r.facts[F_BYTES]),&said_bytes) || said_bytes!=len) {
         snprintf(why,sizeof(why),"its record says the page had %s bytes, and its kept bytes are %zu",
@@ -1714,6 +1739,14 @@ judge:;
 #define RP_WAIT_TICK_MS 100
 static uint64_t rp_child_limit_ms=RP_CHILD_LIMIT_MS;
 static void rp_wait_tick(int sig) { (void)sig; }
+/* The whole milliseconds from `from` to `to`, two readings of one clock:
+ * the difference taken in signed nanoseconds, so a `to` whose nanoseconds
+ * are below `from`'s borrows from the seconds instead of wrapping, and
+ * 0 for a `to` before `from`. */
+static uint64_t rp_elapsed_ms(const struct timespec *from, const struct timespec *to) {
+    int64_t ns=((int64_t)to->tv_sec-(int64_t)from->tv_sec)*INT64_C(1000000000)+((int64_t)to->tv_nsec-(int64_t)from->tv_nsec);
+    return ns>0 ? (uint64_t)ns/UINT64_C(1000000) : 0;
+}
 static bool rp_wait(pid_t pid, int *status, bool *timed_out) {
     struct sigaction tick, was;
     memset(&tick,0,sizeof(tick));
@@ -1731,8 +1764,7 @@ static bool rp_wait(pid_t pid, int *status, bool *timed_out) {
         if(w==pid) { waited=true; break; }
         if(w>=0 || errno!=EINTR) break;
         clock_gettime(CLOCK_MONOTONIC,&now);
-        uint64_t ms=(uint64_t)(now.tv_sec-start.tv_sec)*1000+(uint64_t)((now.tv_nsec-start.tv_nsec)/1000000);
-        if(!*timed_out && ms>=rp_child_limit_ms) {
+        if(!*timed_out && rp_elapsed_ms(&start,&now)>=rp_child_limit_ms) {
             kill(pid,SIGKILL);
             *timed_out=true;
         }
@@ -2151,7 +2183,7 @@ typedef enum { RP_COPY, RP_DROP_SCRIPT_LINE, RP_BAD_NUMBER, RP_NO_MEMORY, RP_FUL
                RP_DROP_FACT, RP_SHORT_LINE, RP_CUT_BEFORE_KEPT, RP_BIG_COUNT, RP_ODD_LINE, RP_ESCAPES,
                RP_SWAP_NUMBERS, RP_BIG_LINES, RP_JUNK_BYTES, RP_V1, RP_V3, RP_EMPTY_INDEX, RP_NO_VERSION,
                RP_CR, RP_INDEX_CONTROL, RP_SECOND_ADDRESS, RP_LEADING_ZERO, RP_NOT_UTF8, RP_PAST_END,
-               RP_SECOND_VERDICT, RP_PLACEHOLDER, RP_FEWER_LINES, RP_ESCAPED_NOT_UTF8 } RpEdit;
+               RP_SECOND_VERDICT, RP_PLACEHOLDER, RP_FEWER_LINES, RP_ESCAPED_NOT_UTF8, RP_SECOND_KEPT } RpEdit;
 /* The fact RP_DROP_FACT takes out of the record. */
 static const char *rp_drop_fact;
 
@@ -2288,11 +2320,14 @@ static unsigned rp_copy_page(const char *kept, const char *name, const char *dir
                     free(text); text=again; len=strlen(text);
                 }
             }
-            if(!strcmp(kFiles[f],".txt") && (edit==RP_NOT_UTF8 || edit==RP_PAST_END || edit==RP_SECOND_VERDICT)) {
-                /* A plain fact whose bytes are not UTF-8, or a second
-                 * verdict, before the record's `end`; or a line after it. */
-                const char *add=edit==RP_NOT_UTF8 ? "note: caf\xE9\n" : edit==RP_SECOND_VERDICT ? "verdict: clean\n"
-                                                                                       : "note: after\n";
+            if(!strcmp(kFiles[f],".txt") && (edit==RP_NOT_UTF8 || edit==RP_PAST_END || edit==RP_SECOND_VERDICT ||
+                                              edit==RP_SECOND_KEPT)) {
+                /* A plain fact whose bytes are not UTF-8, a second
+                 * verdict, or a second `kept:` after the record's `kept:
+                 * whole`, before its `end`; or a line after it. */
+                const char *add=edit==RP_NOT_UTF8 ? "note: caf\xE9\n" : edit==RP_SECOND_VERDICT ? "verdict: clean\n" :
+                                edit==RP_SECOND_KEPT ? "kept: not whole: a step of keeping the page failed\n"
+                                                     : "note: after\n";
                 if(len<4 || strcmp(text+len-4,YONDER_DIAG_END "\n")) { printf("  %s: the record has no end\n",dir); bad++; }
                 else {
                     text=realloc(text,len+strlen(add)+1);
@@ -2421,7 +2456,8 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
      * zero before them, an index of version 1 beside a record of version 2
      * and one of a version no runner reads, an index that is empty or
      * whose first line is not its version, a carriage return in a fact, a
-     * control byte in an index field, a second `address:`, a plain fact
+     * control byte in an index field, a second `address:`, a `kept: not
+     * whole` after the record's `kept: whole` (a second head fact), a plain fact
      * whose bytes are not UTF-8, a line past `end`, a second verdict, the
      * claim's placeholder never replaced, a `kept lines` one short of its
      * index, and an agent escaped to a byte that is no part of UTF-8: none
@@ -2448,7 +2484,8 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
         {"/noversion",RP_NO_VERSION,"its index is damaged: its first line is not its version"},
         {"/carriagereturn",RP_CR,"it is not a whole page file: a control byte"},
         {"/indexcontrol",RP_INDEX_CONTROL,"its index is damaged: a control byte"},
-        {"/secondaddress",RP_SECOND_ADDRESS,"it is not a whole page file: an `address:` out of its place"},
+        {"/secondaddress",RP_SECOND_ADDRESS,"it is not a whole page file: a second `address:`"},
+        {"/secondkept",RP_SECOND_KEPT,"it is not a whole page file: a second `kept:`"},
         {"/notutf8",RP_NOT_UTF8,"it is not a page file: it is not UTF-8"},
         {"/pastend",RP_PAST_END,"it is not a whole page file: lines past its `end`"},
         {"/secondverdict",RP_SECOND_VERDICT,"it is not a whole page file: a second verdict line"},
@@ -3065,6 +3102,33 @@ static unsigned rp_grammar_vectors(void) {
             free(bytes); free(want);
             continue;
         }
+        /* `record:read` or `record:REFUSED <words>`: the field, its lines
+         * joined by `¶`, is a record yonder wrote, which rp_record_read
+         * reads whole, or refuses with a reason holding <words>. A
+         * `replay:` vector is a replay's record, which only
+         * tools/yonder_records.py reads. */
+        if(klen>=7 && !memcmp(line,"replay:",7)) continue;
+        if(klen>=7 && !memcmp(line,"record:",7)) {
+            RpText whole={0};
+            for(const char *p=tab+1, *e=line+len; p<e; ) {
+                const char *mark=rp_find(p,(size_t)(e-p),"\xC2\xB6",2);
+                const char *stop=mark!=NULL ? mark : e;
+                rp_add(&whole,p,(size_t)(stop-p)); rp_add(&whole,"\n",1);
+                p=mark!=NULL ? mark+2 : e;
+            }
+            RpRecord r;
+            const char *why=rp_record_read(whole.p,whole.n,&r);
+            bool want_read=klen==11 && !memcmp(line+7,"read",4);
+            bool refused=klen>15 && !memcmp(line+7,"REFUSED ",8);
+            n++;
+            if(want_read ? why!=NULL : !refused || why==NULL || rp_find(why,strlen(why),line+15,klen-15)==NULL) {
+                printf("  grammar: a record vector `%.*s` read as %s\n",(int)klen,line,why!=NULL ? why : "whole");
+                bad++;
+            }
+            if(why==NULL) rp_record_free(&r);
+            free(whole.p);
+            continue;
+        }
         bool index=klen>6 && !memcmp(line,"index:",6);
         RpLine l=rp_classify(tab+1,len-klen-1,index);
         n++;
@@ -3104,6 +3168,34 @@ static unsigned rp_window_cases(void) {
     for(size_t i=0;i<sizeof(kRefused)/sizeof(kRefused[0]);i++) {
         if(rp_window_state(kRefused[i])==NULL) { printf("  --window took `%s`\n",kRefused[i]); bad++; }
         rp_window_clear();
+    }
+    return bad;
+}
+
+/* THE CHILD'S WALL CLOCK (rp_wait reads its limit through rp_elapsed_ms):
+ * a span with no borrow, two whose nanoseconds borrow across a second (a
+ * page started late in one second and looked at early in the next; the
+ * second, 49.5 ms, is one that a negative nanosecond quotient truncated
+ * toward zero and wrapped back would read as 50), two equal readings, a
+ * `to` before `from`, and a span past 2^32 ms. The problems found. */
+static unsigned rp_elapsed_cases(void) {
+    static const struct { struct timespec from, to; uint64_t ms; } kSpans[]={
+        {{10,100000000},{12,600000000},2500},
+        {{10,950000000},{11,50000000},100},
+        {{10,950500000},{11,0},49},
+        {{10,950000000},{10,950000000},0},
+        {{11,50000000},{10,950000000},0},
+        {{1,900000000},{4294969,196000000},UINT64_C(4294967296)},
+    };
+    unsigned bad=0;
+    for(size_t i=0;i<sizeof(kSpans)/sizeof(kSpans[0]);i++) {
+        uint64_t got=rp_elapsed_ms(&kSpans[i].from,&kSpans[i].to);
+        if(got!=kSpans[i].ms) {
+            printf("  elapsed: %lld.%09ld to %lld.%09ld read as %llu ms, not %llu\n",(long long)kSpans[i].from.tv_sec,
+                   kSpans[i].from.tv_nsec,(long long)kSpans[i].to.tv_sec,kSpans[i].to.tv_nsec,
+                   (unsigned long long)got,(unsigned long long)kSpans[i].ms);
+            bad++;
+        }
     }
     return bad;
 }
@@ -3333,6 +3425,7 @@ static int rp_self_test(const char *work) {
     bad+=rp_corpus_cases(work,kept,first_hand,other_hand);
     bad+=rp_grammar_vectors();
     bad+=rp_window_cases();
+    bad+=rp_elapsed_cases();
     bad+=rp_faults;
     printf("replay self-test: %u pages kept and replayed, %u problems\n",pages,bad);
     return bad!=0;

@@ -32,6 +32,9 @@ static struct { char path[256]; char *data; size_t len, read_at; bool used; } fa
 static char fake_dirs[16][256];
 static int nfake_dirs, fake_writes, fake_dir_at;
 static bool fake_fail_open;
+/* A disk error on the file at this path (NULL for none): its writes, or
+ * its close, fail. */
+static const char *fake_fail_write_at, *fake_fail_close_at;
 static const char *fake_parent(const char *path, char *out, size_t cap) {
     snprintf(out,cap,"%s",path); char *slash=strrchr(out,'/');
     if(slash==NULL) return NULL;
@@ -49,6 +52,7 @@ static int fake_file(const char *path) {
 static void fake_reset(void) {
     for(int i=0;i<FAKE_FILES;i++) free(fake_files[i].data);
     memset(fake_files,0,sizeof(fake_files)); nfake_dirs=0; fake_writes=0; fake_fail_open=false;
+    fake_fail_write_at=fake_fail_close_at=NULL;
     snprintf(fake_dirs[nfake_dirs++],256,"/tmp");
 }
 static const char *fake_text(const char *path) {
@@ -75,6 +79,7 @@ int64_t os64_open(const char *p, const char *m) {
 int64_t os64_write(int32_t h, const void *b, size_t n) {
     if(h<FAKE_HANDLE) return port_os64_write(h,b,n);
     int f=h-FAKE_HANDLE;
+    if(fake_fail_write_at!=NULL && !strcmp(fake_files[f].path,fake_fail_write_at)) return -1;
     fake_files[f].data=realloc(fake_files[f].data,fake_files[f].len+n+1);
     memcpy(fake_files[f].data+fake_files[f].len,b,n); fake_files[f].len+=n;
     fake_files[f].data[fake_files[f].len]='\0';
@@ -88,7 +93,11 @@ int64_t os64_read(int32_t h, void *b, size_t n) {
     fake_files[f].read_at+=take;
     return (int64_t)take;
 }
-int64_t os64_close(int32_t h) { (void)h; return 0; }
+int64_t os64_close(int32_t h) {
+    int f=h-FAKE_HANDLE;
+    return f>=0 && f<FAKE_FILES && fake_files[f].used && fake_fail_close_at!=NULL &&
+           !strcmp(fake_files[f].path,fake_fail_close_at) ? -1 : 0;
+}
 int64_t os64_rename(const char *from, const char *to) {
     int f=fake_file(from);
     if(f<0) return -1;
@@ -5180,6 +5189,33 @@ static void diag_keep_cases(void) {
               keep ? "claim, keeping: nothing of the page is written, and no record of theirs is touched"
                    : "claim: nothing of the page is written, and no record of theirs is touched");
         keep_end();
+    }
+
+    /* A PLACEHOLDER THAT IS NOT WHOLE IS NO CLAIM: with no memory for its
+     * text, or a write or a close of it that fails, its file is removed
+     * and its number passed over, and the claim is made on the next. */
+    {
+        static const char *const kHow[]={"no memory for the placeholder","a write of the placeholder that fails",
+                                         "a close of the placeholder that fails"};
+        for(int how=0;how<3;how++) {
+            keep_begin(false);
+            char passed[64], taken[64];
+            snprintf(passed,sizeof(passed),"/tmp/kept/p.test-%04u.txt",1u);
+            snprintf(taken,sizeof(taken),"/tmp/kept/p.test-%04u.txt",2u);
+            yonder_diag_t *d=yonder_diag_new("http://p.test/",1,0);
+            if(how==0) fail_at=attempts+1;
+            if(how==1) fake_fail_write_at=passed;
+            if(how==2) fake_fail_close_at=passed;
+            int64_t got=d!=NULL ? yonder_diag_claim(d,"/tmp/kept",false) : -9;
+            fail_at=0; fake_fail_write_at=fake_fail_close_at=NULL;
+            char what[160]; snprintf(what,sizeof(what),"claim: %s is no claim; its file goes and the next number is claimed",
+                                     kHow[how]);
+            check(got==0 && yonder_diag_seq(d)==2 && fake_text(passed)==NULL &&
+                  has(fake_text(taken),"\n" YONDER_DIAG_UNWRITTEN " ") && yonder_diag_write(yonder_diag_claimed(d))==0 &&
+                  has(fake_text(taken),"\nverdict: clean\n"),what);
+            yonder_diag_free(d);
+            keep_end();
+        }
     }
 
     /* THE INPUTS A REPLAY READS THE PAGE WITH (REPLAY.md § 3), written at
