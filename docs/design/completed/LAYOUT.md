@@ -476,7 +476,10 @@ is never broken between them; `wend`'s renderer holds a word across
 elements for exactly this reason and yonder must not wrap worse than
 `wend`. The element boundary is not a break opportunity; a space is, and
 so is `wbr`, whose whole meaning is one (the Western profile's rule; soft
-hyphens and CJK are booked). Measurement
+hyphens and CJK are booked). `word-break: break-all` makes one between
+every two clusters, and `overflow-wrap: anywhere` or `break-word` EMERGENCY
+ones, taken only where a line holds no other (Modern Web slice 4,
+MODERN_WEB.md § Slice 4, as built). Measurement
 uses the text engine and never a width table: each text piece is laid
 out ONCE as a measuring run with its resolved fonts — a piece longer
 than the engine's run cap, 1 MiB, is measured in windows cut at spaces —
@@ -484,8 +487,8 @@ and the run's carets give the pen position at every byte, so a word that
 spans pieces is the sum of its parts' caret distances (kerning across
 the boundary is not attempted, and neither is it by the engines that
 matter). A word wider than the line goes on a line of its own and
-OVERFLOWS it, CSS's `overflow-wrap: normal` — the page grows wider and
-`flow_width` says so; `wend` cuts such a word at the margin because a
+OVERFLOWS it, CSS's `overflow-wrap: normal`, the initial value — the page
+grows wider and `flow_width` says so; `wend` cuts such a word at the margin because a
 terminal cannot scroll sideways, and a browser window can. A fragment is
 one run, so the words of a line are grouped into fragments that stop
 short of the run cap. Each line's fragment of each piece is then laid out
@@ -495,7 +498,11 @@ the memory of one run per line-fragment; it works with the engine as it
 stands, and a range-draw on the measuring run (one run per piece,
 painted by byte range) is the F2 ask that halves both, booked with its
 trigger below. Min-content width (tables, below) is the widest WORD of
-the sequence under the same definition — across nodes.
+the sequence under the same definition — across nodes, and cut where
+`break-all` and `anywhere` cut it (`break-word`'s cuts do not count, Text
+3 § 5.4). The tracking `letter-spacing` puts after a line's last
+character is left out of the line: its fit, its fragment's width and both
+intrinsic widths (Text 3 § 7.2).
 
 **`pre` and `pre-wrap` are measured PER LINE, because the engine refuses
 a literal LF** (`os64_text_layout` answers BAD_ARGUMENT; one run is one
@@ -729,13 +736,28 @@ its contract; this is what it offers and why.
   space (missing, `alt=""`) has no box and is not listed, so the face
   FETCHES from libpage's images list, which names every picture the page
   does whether it has a box yet or not.
-- **`flow_replaced_fixed(style)`** — whether a replaced box in that style
-  is sized by the page alone (a width, and a height in pixels), so an
-  arrival cannot move it: the rule `replaced_size` sizes by, written once,
-  for a face deciding whether a picture's arrival needs a new layout. Asked
-  of the element's box, never of its attributes: `width="auto"` is written
-  and fixes nothing. The host suite holds it to the layout for 42
-  spellings of the two sides (`fixed_cases`).
+- **`flow_replaced_fixed(box)`** — whether a replaced box is sized by the
+  page alone, so an arrival cannot move it. By its style: a width and a
+  height in pixels, or one of them and an `aspect-ratio` of the page's own
+  (not `auto <ratio>`, which the picture's ratio replaces); every path of
+  `replaced_size` with a side given ends in the same limits
+  (`replaced_hold`) — an `<input type=image>`'s default path before its
+  picture comes too — so such a box sizes the same before and after. And by its place: the flex
+  algorithm reads the picture's own size (`replaced_own`) for a basis of
+  `content` and for an automatic main minimum, so a flex item is fixed
+  only where its main size is given, its basis is not `content` and its
+  main minimum is a length; a grid item's automatic minimum is the size
+  `replaced_size` gives, so a grid changes nothing. The rule the layout
+  sizes by, written once, for a face deciding whether a picture's arrival
+  needs a new layout. Asked of the element's box, never of its attributes:
+  `width="auto"` is written and fixes nothing. The host suite holds it to
+  the layout (`fixed_cases`) for the 42 spellings of the two sides, each
+  with no ratio, a ratio of its own, `auto 2`, a ratio held by a limit,
+  and minimums of 0 with and without a ratio, as an `<img>` and an
+  `<input type=image>`, in a paragraph, a grid, a
+  flex row and a flex column: exactly in a paragraph and a grid (fixed
+  exactly when arrival moves nothing), and in a flex line in the
+  direction that matters (fixed only when it moves nothing).
 - **`flow_height`, `flow_width`** — the width is the root's overflow
   width: at least the width laid out at, more where something would not
   fit. **`flow_dump`** is the dump above, snprintf-shaped.
@@ -784,7 +806,12 @@ LIBPAGE.md's rule restated for geometry:
   suite lays out a table nested forty deep AND a table whose cells all
   span, and asserts the layout count against the linear bound in both.
   The measuring run per text piece is laid out once per layout;
-  fragments once per line. **A question about an element's ancestors or
+  fragments once per line. A word cut at its characters (`word-break:
+  break-all`, `overflow-wrap: anywhere`) finds its first caret in the
+  piece's run by halving and steps only through its own, never from the
+  run's start, which made a long text of short words quadratic
+  (`FLayout.piece_carets`, held to two a word per measure by the host
+  suite). **A question about an element's ancestors or
   siblings is answered from its parent's record, never by a walk**: pass
   1 keeps what the chapter's descendant selectors ask (lists, list items,
   `nobr`, `q` depth, a link, decorations) on each element as it styles

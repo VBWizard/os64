@@ -578,6 +578,11 @@ static void paint_oracle(flow_tree_t *t, os64_page_t *page, os64_gui_rect_t view
     free(plain);
 }
 
+// A scroll the page's first scroll container is put at before a paint_of
+// paints it, when `s_paint_scrolls` says so.
+static bool s_paint_scrolls;
+static flow_point_t s_paint_scroll;
+
 static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect_t view,
                       bool *escaped, bool css)
 {
@@ -601,6 +606,8 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     env.cascade = c;
     env.viewport_height = view.h;
     flow_tree_t *t = flow_layout(doc, page, width, &env);
+    if (t != NULL && s_paint_scrolls)
+        (void)flow_scroll_set(t, 0, s_paint_scroll);
     Rec rec = {{0}, view, false, page};
     out(&rec.out, "%s", "");
     yonder_verbs_t v = verbs_of(&rec);
@@ -651,6 +658,7 @@ static void paint_case(const char *name, const char *html, int32_t width, os64_g
 }
 
 #include "test_yonder_cases.inc"
+#include "test_yonder_batch_a.inc"
 
 // A blurred shadow cannot be worked pixel by pixel by hand, so what a blur
 // must do is checked: the mask reaches three box blurs past the shape on
@@ -2127,6 +2135,7 @@ int main(int argc, char **argv)
         scratch_cases();
         scratch_paint_cases();
         paint_cases();
+        batch_a_paint_cases();
         shadow_blur_cases();
         huge_corner_case();
         round_picture_cases();

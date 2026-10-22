@@ -488,11 +488,20 @@ whatever it answered, and so does the creation: QuickJS's function
 constructors define `length` and `name` without saying when that ran out
 of memory.
 
-The style object follows the same switch for the CSS the arc adds: a
-property libgarb marks (`garb_prop_modern`) has no camel-case member while
-the option is clear, and a declaration of it is read as one libgarb does
-not know (`garb_reading_t.modern_off`), so `'aspectRatio' in el.style` and
-`setProperty` answer as they did before the arc.
+Every property name libgarb reads is a member of the style object three
+ways (CSSOM § 6.6.1): camel-cased (`marginInlineStart`, `WebkitTransform`),
+webkit-cased for a `-webkit-` name (`webkitTransform`), and dashed as
+written (`margin-inline-start`), for shorthands and aliases as well as
+longhands and the flow-relative names (`garb_prop_name_at` lists them
+all). The style object follows the same switch for the CSS the arc adds: a
+name libgarb does not read with the switch off (`garb_prop_known`: a
+marked property, or a shorthand whose longhands are all marked) has none
+of those members while the option is clear,
+and a declaration of it is read as one libgarb does not know
+(`garb_reading_t.modern_off`), so `'aspectRatio' in el.style` and
+`setProperty` answer as they did before the arc. A value reads back as it
+was written, not in CSSOM's canonical form, and a shorthand's longhands do
+not read back (DEBTS.md § Classic browser scripting).
 
 The first row is the interface objects (`classic.c`'s
 `d_interfaces_install`): `Node`, `CharacterData`, `DocumentFragment`,

@@ -16,7 +16,8 @@
 # THE PIN is for everyone: a slice that needs a newer directory moves it
 # and says so in its PR, since every expectation file was written against
 # the commit named here. A slice adds the directories its brief names to
-# the list; `resources` (testharness.js) and `common` are what the tests
+# the list; `resources` (testharness.js), `common` and `css/support` (the
+# CSS tests' parsing and computed-value helpers) are what the tests
 # themselves load, and `tools` is the suite's own, which makes
 # MANIFEST.json: the list of every test, its type and the pages a script
 # test makes, which the runner reads (tools/wpt/pages.py). It is built over
@@ -50,6 +51,7 @@ WPT_DIRS=(
     css/css-text
     css/css-ui
     css/css-overflow
+    css/support
 )
 
 top=$(git rev-parse --show-toplevel)

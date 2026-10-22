@@ -1,0 +1,37 @@
+# WPT's css/css-sizing/aspect-ratio/parsing in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh css/css-sizing/aspect-ratio/parsing --update
+# rewrites [passing].
+[required]
+# Slice 4: aspect-ratio read (auto, a ratio, both). Each fails with the
+# switch off.
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "0 / 0" should set the property value
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "0 / 9" should set the property value
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "16 / 0" should set the property value
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "16 / 9" should set the property value
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "16.3 / 1" should set the property value
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "16.3 / 9.4" should set the property value
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "auto" should set the property value
+[excluded]
+# Pages whose tests read getComputedStyle, which slice 1b brings; each runs
+# again once it lands.
+aspect-ratio-computed.html	needs getComputedStyle (slice 1b)
+[passing]
+aspect-ratio-invalid.html	e.style['aspect-ratio'] = "1 invalid" should not set the property value
+aspect-ratio-invalid.html	e.style['aspect-ratio'] = "16 / -9" should not set the property value
+aspect-ratio-invalid.html	e.style['aspect-ratio'] = "16 / auto" should not set the property value
+aspect-ratio-invalid.html	e.style['aspect-ratio'] = "16 /" should not set the property value
+aspect-ratio-invalid.html	e.style['aspect-ratio'] = "16 9" should not set the property value
+aspect-ratio-invalid.html	e.style['aspect-ratio'] = "16px / 9px" should not set the property value
+aspect-ratio-invalid.html	e.style['aspect-ratio'] = "auto / 16" should not set the property value
+aspect-ratio-invalid.html	e.style['aspect-ratio'] = "auto / 5" should not set the property value
+aspect-ratio-invalid.html	e.style['aspect-ratio'] = "auto 1 / 1 auto" should not set the property value
+aspect-ratio-invalid.html	e.style['aspect-ratio'] = "auto 16 /" should not set the property value
+aspect-ratio-invalid.html	e.style['aspect-ratio'] = "invalid 1.5" should not set the property value
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "0 / 0" should set the property value
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "0 / 9" should set the property value
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "16 / 0" should set the property value
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "16 / 9" should set the property value
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "16.3 / 1" should set the property value
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "16.3 / 9.4" should set the property value
+aspect-ratio-valid.html	e.style['aspect-ratio'] = "auto" should set the property value

@@ -4839,13 +4839,13 @@ static void diag_page_cases(void) {
         "diag: the timer's death is in the departure write");
 
     /* A module script and a canvas, each by its kind; a skipped property. */
-    loop_page("<style>p{aspect-ratio:1;background-image:conic-gradient(red,blue);background-clip:text}"
+    loop_page("<style>p{contain:paint;background-image:conic-gradient(red,blue);background-clip:text}"
         "h1{display:inline frob}</style><p id=out>x</p><canvas></canvas><canvas></canvas>"
         "<my-widget></my-widget><script type=module>1</script>");
     check(loop_settle() && g.page.tree!=NULL,"diag: a page with a module, canvases and a custom element arrives");
     yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
     check(has(text,"MISSING script module (1)\n") && has(text,"MISSING element canvas (2)\n") &&
-        has(text,"MISSING element my-widget (1)\n") && has(text,"MISSING css-property aspect-ratio (1)\n") &&
+        has(text,"MISSING element my-widget (1)\n") && has(text,"MISSING css-property contain (1)\n") &&
         has(text,"MISSING css-value background-image: conic-gradient (1)\n") &&
         has(text,"MISSING css-value display: inline frob (1)\n") && !has(text,"background-clip"),
         "diag: a module script, an element drawn as nothing, a property the cascade skipped and a value it "
@@ -7794,6 +7794,22 @@ static void covered_link_cases(void) {
         "navigation accept: pages first, then every picture type libimage decodes at half the weight");
     check(probe_field("blank")!=NULL && probe_field("blank")->w->cls->paint==NULL,
         "invisible gadget: an empty name submits nothing, so it names nothing");
+    probe_drop();
+    /* A control the ellipsis cuts away is not there to be pointed at
+     * (flow_box_cut_away), so its widget is not drawn over the ellipsis:
+     * after abcd, 32 of a 40-wide line, a checkbox in an inline-block with
+     * a transform — stacked, a layer of its own — is past the limit; one
+     * kept as the line's first atom is drawn. */
+    probe_page("<!doctype html><style>body{margin:0} div{width:40px;overflow:hidden;"
+        "white-space:nowrap;text-overflow:ellipsis} input{margin:0;width:12px;height:6px}"
+        " span{display:inline-block;transform:translate(1px,0)}</style>"
+        "<div>abcd<span><input type=checkbox name=past id=past></span></div>"
+        "<div><span><input type=checkbox name=kept id=kept></span>abcdefghij</div>",false);
+    forms_place();
+    check(probe_field("past")!=NULL && probe_field("past")->w->hidden,
+        "ellipsis: a control past the cut has no widget over the ellipsis");
+    check(probe_field("kept")!=NULL && !probe_field("kept")->w->hidden,
+        "ellipsis: a control the cut keeps has its widget");
     probe_drop();
 }
 

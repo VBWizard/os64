@@ -99,6 +99,10 @@ static void dom_modern_cases(void)
     char **on = modern_global_names(&f, &non);
     dom_script(&f, MODERN_ASSERT
         "var s=document.body.style;assert('animationName' in s);"
+        /* slice 4's names: longhands, shorthands, aliases, flow-relative names */
+        "assert('aspectRatio' in s&&'outline' in s&&'outline-offset' in s&&'wordWrap' in s);"
+        "assert('marginInlineStart' in s&&'margin-inline' in s&&'borderBlockEnd' in s);"
+        "s.marginInlineStart='3px';assert(s.getPropertyValue('margin-inline-start')==='3px'&&s.marginLeft==='');"
         "s.setProperty('animation-name','spin');assert(s.getPropertyValue('animation-name')==='spin');",
         "modern-on-style-member");
     dom_script(&f, MODERN_ASSERT
@@ -131,7 +135,12 @@ static void dom_modern_cases(void)
         "assert(Object.prototype.toString.call(b)==='[object Object]'&&"
         "Object.getOwnPropertySymbols(Object.getPrototypeOf(b)).indexOf(Symbol.toStringTag)<0);"
         /* tools/test_dom_host.sh marks animation-name as the arc's */
-        "assert(!('animationName' in b.style)&&'color' in b.style);"
+        "assert(!('animationName' in b.style)&&!('animation-name' in b.style)&&'color' in b.style);"
+        /* the shorthand is still read, for the longhands that are not marked */
+        "assert('animation' in b.style);"
+        "assert(!('aspectRatio' in b.style)&&!('outline' in b.style)&&!('wordWrap' in b.style)&&"
+        "!('marginInlineStart' in b.style)&&!('margin-inline' in b.style)&&!('cursor' in b.style));"
+        "b.style.setProperty('margin-inline-start','3px');assert(b.style.getPropertyValue('margin-inline-start')==='');"
         "b.style.setProperty('animation-name','spin');b.style.color='red';"
         "assert(b.style.getPropertyValue('animation-name')===''&&b.style.color==='red');"
         "assert(typeof Image==='function'&&new Image().tagName==='IMG');",

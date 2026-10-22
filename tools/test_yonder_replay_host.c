@@ -3240,7 +3240,9 @@ static int rp_self_test(const char *work) {
          * as the UTF-8 its response says it is. */
         {"https://fixture.test/k.css","@import 'i.css'; p.caf\xC3\xA9{width:300px;color:red}",
          "https://cdn.fixture.test/k.css","utf-8"},
-        {"https://cdn.fixture.test/i.css","p{margin:0;aspect-ratio:1}",NULL,""},
+        /* field-sizing is a property yonder does not know, so its MISSING
+         * line is the proof this imported sheet was read. */
+        {"https://cdn.fixture.test/i.css","p{margin:0;field-sizing:content}",NULL,""},
         /* A check that fails names a global the page does not have, so a
          * replay that reads the page or its sheet otherwise is a record
          * with another MISSING line. */
@@ -3259,7 +3261,7 @@ static int rp_self_test(const char *work) {
          "<!doctype html><title>caf\xE9</title><link rel=stylesheet href=k.css>"
          "<p id=out class=caf\xE9>caf\xE9</p><script src=m.js></script><canvas></canvas>",
          rp_head(200,"OK","text/html","windows-1252","https://fixture.test/final",true,WAY_BODY_HTML),
-         "sheetUnread charsetLost","aspect-ratio m.js:",0,false,false,false},
+         "sheetUnread charsetLost","field-sizing m.js:",0,false,false,false},
         {"a text body","http://fixture.test/notes.txt","\xEF\xBB\xBFplain <b>text</b> caf\xC3\xA9\n",
          rp_head(200,"OK","text/plain","","http://fixture.test/notes.txt",false,WAY_BODY_TEXT),NULL,"body:",0,false,false,false},
         {"a file's page, its script, and a timer that fires after it is shown","file:///pages/f.html",
@@ -3277,10 +3279,10 @@ static int rp_self_test(const char *work) {
         {"a picture asked for by itself","http://fixture.test/shot.png","",
          rp_head(200,"OK","image/png","","http://fixture.test/shot.png",false,WAY_BODY_IMAGE),NULL,"still coming",0,false,false,false},
         {"a wide window, which a media query and a script both see","http://fixture.test/wide",
-         "<!doctype html><style>@media (max-width:1000px){p{aspect-ratio:2}}</style><p id=p>wide</p>"
+         "<!doctype html><style>@media (max-width:1000px){p{field-sizing:fixed}}</style><p id=p>wide</p>"
          "<script>if(document.getElementById('p').offsetWidth<1000)narrow()</script>",
          rp_head(200,"OK","text/html","","http://fixture.test/wide",false,WAY_BODY_HTML),
-         "narrow aspect-ratio","1400 px",1400,false,false,false},
+         "narrow field-sizing","1400 px",1400,false,false,false},
         {"a page read with scripts off","http://fixture.test/quiet",
          "<!doctype html><p>no script runs</p><script>nothere()</script>",
          rp_head(200,"OK","text/html","","http://fixture.test/quiet",false,WAY_BODY_HTML),

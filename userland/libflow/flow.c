@@ -42,8 +42,11 @@ _Static_assert(FLOW_BOX_BLOCK == (int)FB_BLOCK && FLOW_BOX_REPLACED == (int)FB_R
 // background and borders — and its BODY — everything else of its own —
 // with the members of negative z-index between the two. A GROUP — a
 // stacking context below full opacity — is bracketed by an OPEN and a
-// CLOSE around everything it paints, which a face composites whole.
-typedef enum { PART_WHOLE = 0, PART_SELF, PART_BODY, PART_OPEN, PART_CLOSE } LayerPart;
+// CLOSE around everything it paints, which a face composites whole. Last
+// in each context its OUTLINES: those of every box painted in it
+// (Appendix E, step 10).
+typedef enum { PART_WHOLE = 0, PART_SELF, PART_BODY, PART_OPEN, PART_CLOSE,
+               PART_OUTLINES } LayerPart;
 
 typedef struct {
     const flow_box_t *box;
@@ -960,15 +963,17 @@ static bool leaves_text_clip(const flow_box_t *d)
     return d->frame != NULL && d->frame->kind == F_FRAME_TRANSFORM && d->frame->box == d;
 }
 
-// Each TEXT box under `top` that a text clip holds, in tree order, without
-// recursion — the tree is as deep as the page.
+// Each TEXT box under `top` that a text clip holds, and each LINE of a
+// block with an ellipsis, whose ellipsis is text the clip holds too, in
+// tree order, without recursion — the tree is as deep as the page.
 static void visit_clip_subtree(const flow_box_t *top, void (*visit)(void *, const flow_box_t *),
                                void *ctx)
 {
     const flow_box_t *b = top->first;
     while (b != NULL) {
         bool enter = !leaves_text_clip(b);
-        if (enter && b->kind == FLOW_BOX_TEXT)
+        if (enter && (b->kind == FLOW_BOX_TEXT ||
+                      (b->kind == FLOW_BOX_LINE && b->parent != NULL && b->parent->ellipsis != NULL)))
             visit(ctx, b);
         if (enter && b->first != NULL) {
             b = b->first;
@@ -1044,6 +1049,242 @@ os64_gui_rect_t flow_decoration_rect(const flow_box_t *box, uint32_t line)
     return held_rect(box->rect.x, y, (int64_t)box->rect.x + box->rect.w, y + thick);
 }
 
+bool flow_outline_rect(const flow_box_t *box, os64_gui_rect_t *out)
+{
+    const flow_style_t *s = box->style;
+    int64_t w = size_px(s->outline_width);
+    if (w <= 0 || s->outline_style == FLOW_BORDER_NONE || !paints_frame(box))
+        return false;
+    // The offset may be negative and take the ring inside the border box;
+    // its outside is then held to twice its width at least, each way on
+    // its own, about the box's middle (CSS UI 4 § 3.5), so a ring is
+    // always drawn.
+    int64_t off = s->outline_offset;
+    int64_t grow = (off >= 0 ? (off + 32) / 64 : -((32 - off) / 64)) + w;
+    int64_t x0 = (int64_t)box->rect.x - grow, x1 = (int64_t)box->rect.x + box->rect.w + grow;
+    int64_t y0 = (int64_t)box->rect.y - grow, y1 = (int64_t)box->rect.y + box->rect.h + grow;
+    if (x1 - x0 < 2 * w) {
+        x0 = (int64_t)box->rect.x + ((int64_t)box->rect.w - 2 * w) / 2;
+        x1 = x0 + 2 * w;
+    }
+    if (y1 - y0 < 2 * w) {
+        y0 = (int64_t)box->rect.y + ((int64_t)box->rect.h - 2 * w) / 2;
+        y1 = y0 + 2 * w;
+    }
+    *out = held_rect(x0, y0, x1, y1);
+    return out->w > 0 && out->h > 0;
+}
+
+// ── Where a line ends in its ellipsis (CSS Overflow 4 § 4.1) ────────────
+//
+// One rule, read by the painter and by flow_hit alike: on a cut line, what
+// flow_line_cut_keeps does not keep is not there — not drawn and not hit —
+// and the ellipsis drawn after what is kept is its block's.
+
+static int64_t cut_max(int64_t a, int64_t b)
+{
+    return a > b ? a : b;
+}
+
+// How much of a text box is kept before `limit`, in whole pixels from its
+// left: up to the last character boundary that does not pass it; 0 for a
+// box that is no text.
+static int64_t text_kept(const flow_box_t *text, int64_t limit)
+{
+    size_t byte;
+    os64_text_caret_t c;
+    int64_t room = limit - text->rect.x;
+    if (text->kind != FLOW_BOX_TEXT || text->run == NULL || room <= 0 ||
+        os64_text_fit(text->run, (os64_font_pos_t)(room * 64 < INT32_MAX ? room * 64 : INT32_MAX),
+                      &byte) != OS64_FONT_OK ||
+        os64_text_caret(text->run, byte, OS64_TEXT_BEFORE, &c) != OS64_FONT_OK)
+        return 0;
+    return c.x / 64;
+}
+
+static bool line_content(const flow_box_t *k)
+{
+    return k->kind == FLOW_BOX_TEXT || k->kind == FLOW_BOX_ATOMIC || k->kind == FLOW_BOX_MARKER;
+}
+
+// Where a box's content on its line ends: its right edge, but for a text
+// whose white space is preserved and wraps, whose spaces at its end hang
+// (CSS Text 3 § 4.1.3) and take no room on the line.
+static int64_t content_end(const flow_box_t *k)
+{
+    int64_t right = (int64_t)k->rect.x + k->rect.w;
+    if (k->kind != FLOW_BOX_TEXT || k->style->white_space != FLOW_WS_PRE_WRAP || k->run == NULL)
+        return right;
+    uint32_t n = k->length;
+    while (n > 0 && k->text[n - 1] == ' ')
+        n--;
+    os64_text_caret_t c;
+    if (n == k->length || os64_text_caret(k->run, n, OS64_TEXT_BEFORE, &c) != OS64_FONT_OK)
+        return right;
+    return (int64_t)k->rect.x + (c.x + 63) / 64;
+}
+
+flow_line_cut_t flow_line_cut(const flow_tree_t *tree, const flow_box_t *line)
+{
+    flow_line_cut_t c = {false, 0, 0};
+    const flow_box_t *block = line != NULL ? line->parent : NULL;
+    if (line == NULL || line->kind != FLOW_BOX_LINE || block == NULL || block->ellipsis == NULL)
+        return c;
+    // The block clips, so where it scrolls its end edge is where the scroll
+    // shows it: content scrolled into view is drawn and not ellipsed, and a
+    // line scrolled to its end has no ellipsis.
+    int64_t sx = block->scroller >= 0 ? flow_scroll_at(tree, block->scroller).x : 0;
+    int64_t edge = (int64_t)line->rect.x + line->rect.w + sx, reach = INT64_MIN;
+    for (const flow_box_t *k = line->first; k != NULL; k = k->next)
+        if (line_content(k))
+            reach = cut_max(reach, content_end(k));
+    os64_text_run_view_t v;
+    if (reach <= edge || os64_text_run_view(block->ellipsis, &v) != OS64_FONT_OK)
+        return c;
+    c.limit = edge - ((int64_t)v.advance_x + 63) / 64;
+    int64_t at = INT64_MIN;
+    for (const flow_box_t *k = line->first; k != NULL; k = k->next) {
+        if (!line_content(k))
+            continue;
+        int64_t right = (int64_t)k->rect.x + k->rect.w;
+        if (right <= c.limit)
+            at = cut_max(at, right);
+        else if (k->kind == FLOW_BOX_TEXT && k->rect.x < c.limit && text_kept(k, c.limit) > 0)
+            at = cut_max(at, (int64_t)k->rect.x + text_kept(k, c.limit));
+    }
+    // Nothing fits before the limit: the line's first character or atom
+    // is kept and clipped rather than ellipsed, and the ellipsis follows
+    // it, clipped by the box with it.
+    if (at == INT64_MIN) {
+        const flow_box_t *first = NULL;
+        for (const flow_box_t *k = line->first; k != NULL; k = k->next)
+            if (line_content(k) && (first == NULL || k->rect.x < first->rect.x))
+                first = k;
+        os64_text_caret_t one;
+        if (first == NULL)
+            return c;
+        if (first->kind == FLOW_BOX_TEXT && first->run != NULL &&
+            os64_text_run_view(first->run, &v) == OS64_FONT_OK && v.glyph_count > 0 &&
+            os64_text_caret(first->run, v.glyphs[0].byte_end, OS64_TEXT_BEFORE, &one) ==
+                OS64_FONT_OK) {
+            c.limit = (int64_t)first->rect.x + ((int64_t)one.x + 63) / 64;
+            at = (int64_t)first->rect.x + text_kept(first, c.limit);
+        } else {
+            c.limit = at = (int64_t)first->rect.x + first->rect.w;
+        }
+    }
+    c.on = true;
+    c.at = at;
+    return c;
+}
+
+bool flow_line_cut_keeps(const flow_line_cut_t *cut, const flow_box_t *piece, int64_t *to)
+{
+    int64_t x = piece->rect.x, right = x + piece->rect.w;
+    *to = right;
+    if (cut == NULL || !cut->on || right <= cut->limit)
+        return true;
+    switch (piece->kind) {
+    case FLOW_BOX_TEXT:
+        *to = x + text_kept(piece, cut->limit);
+        break;
+    case FLOW_BOX_SPAN:
+        *to = cut->at < right ? cut->at : right;
+        break;
+    default:
+        // An atom, a marker or anything else on the line: whole or not at
+        // all.
+        *to = x;
+        break;
+    }
+    return *to > x;
+}
+
+void flow_cut_memo_open(flow_cut_memo_t *memo, const flow_tree_t *tree)
+{
+    os64_memset(memo, 0, sizeof(*memo));
+    memo->tree = tree;
+    memo->slot = memo->own;
+    memo->cap = sizeof(memo->own) / sizeof(memo->own[0]);
+}
+
+void flow_cut_memo_close(flow_cut_memo_t *memo)
+{
+    if (memo->slot != memo->own)
+        os64_free(memo->slot);
+    memo->slot = memo->own;
+    memo->cap = memo->n = 0;
+}
+
+static uint32_t cut_slot_of(const flow_box_t *line, uint32_t cap)
+{
+    uint64_t h = ((uint64_t)(uintptr_t)line >> 4) * 0x9e3779b97f4a7c15ull;
+    return (uint32_t)(h >> 32) & (cap - 1);
+}
+
+// Twice the room, every kept cut moved across; false, and the table as it
+// was, without the memory.
+static bool cut_memo_grow(flow_cut_memo_t *memo)
+{
+    uint32_t cap = memo->cap * 2;
+    flow_cut_slot_t *slot = cap > memo->cap ? os64_calloc(cap, sizeof(*slot)) : NULL;
+    if (slot == NULL)
+        return false;
+    for (uint32_t i = 0; i < memo->cap; i++) {
+        if (memo->slot[i].line == NULL)
+            continue;
+        uint32_t k = cut_slot_of(memo->slot[i].line, cap);
+        while (slot[k].line != NULL)
+            k = (k + 1) & (cap - 1);
+        slot[k] = memo->slot[i];
+    }
+    if (memo->slot != memo->own)
+        os64_free(memo->slot);
+    memo->slot = slot;
+    memo->cap = cap;
+    return true;
+}
+
+flow_line_cut_t flow_cut_memo_get(flow_cut_memo_t *memo, const flow_box_t *line)
+{
+    const flow_box_t *block = line != NULL ? line->parent : NULL;
+    if (line == NULL || line->kind != FLOW_BOX_LINE || block == NULL || block->ellipsis == NULL)
+        return (flow_line_cut_t){false, 0, 0};
+    uint32_t k = cut_slot_of(line, memo->cap);
+    while (memo->slot[k].line != NULL) {
+        if (memo->slot[k].line == line)
+            return memo->slot[k].cut;
+        k = (k + 1) & (memo->cap - 1);
+    }
+    flow_line_cut_t c = flow_line_cut(memo->tree, line);
+    memo->worked++;
+    // Kept while the table stays at most half full.
+    if (2 * (memo->n + 1) > memo->cap) {
+        if (!cut_memo_grow(memo))
+            return c;
+        k = cut_slot_of(line, memo->cap);
+        while (memo->slot[k].line != NULL)
+            k = (k + 1) & (memo->cap - 1);
+    }
+    memo->slot[k] = (flow_cut_slot_t){line, c};
+    memo->n++;
+    return c;
+}
+
+bool flow_box_cut_away(flow_cut_memo_t *memo, const flow_box_t *box)
+{
+    for (const flow_box_t *a = box; a != NULL && a->parent != NULL; a = a->parent) {
+        const flow_box_t *line = a->parent;
+        if (line->kind != FLOW_BOX_LINE || line->parent == NULL || line->parent->ellipsis == NULL)
+            continue;
+        flow_line_cut_t cut = flow_cut_memo_get(memo, line);
+        int64_t to;
+        if (cut.on && !flow_line_cut_keeps(&cut, a, &to))
+            return true;
+    }
+    return false;
+}
+
 os64_gui_rect_t flow_marker_shape_rect(const flow_box_t *box)
 {
     int64_t size = size_px(box->style->font_size);
@@ -1107,6 +1348,14 @@ static void own_ink(flow_box_t *b)
         os64_gui_rect_t r = flow_marker_shape_rect(b);
         past_box(b, r.x, r.y, (int64_t)r.x + r.w, (int64_t)r.y + r.h, most, NULL);
     }
+    // An outline is drawn past the border box and in no box's overflow.
+    // Whether one is held only grows, as the ink does: a tick that measures
+    // a box again (ink_grown) keeps what its descendants handed up.
+    os64_gui_rect_t ring;
+    bool ringed = flow_outline_rect(b, &ring);
+    b->holds_outline |= ringed;
+    if (ringed)
+        past_box(b, ring.x, ring.y, (int64_t)ring.x + ring.w, (int64_t)ring.y + ring.h, most, NULL);
     for (int32_t i = 0; i < nbox + ntext; i++) {
         bool text = i >= nbox;
         const flow_shadow_t *sh = text ? &s->text_shadows[i - nbox] : &s->box_shadows[i];
@@ -1139,6 +1388,9 @@ static void own_ink(flow_box_t *b)
 static void ink_up(const flow_box_t *b)
 {
     flow_box_t *up = (flow_box_t *)b->parent;
+    // An outline below is its context's to paint, whichever layer it is in
+    // (visit_outlines walks into stacked boxes that are not contexts).
+    up->holds_outline |= b->holds_outline;
     if (b->stacked)
         return;
     os64_gui_rect_t c = b->overflow, p = up->overflow;
@@ -1275,6 +1527,7 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
     // In the list at its place in the pre-order, which is tree order: the
     // paint order until z-index sorts it.
     b->control = src->control;
+    b->ellipsis = src->ellipsis;
     if (b->control >= 0 &&
         !push_list(bd, &bd->t->controls, &bd->t->ncontrols, &bd->t->cap_controls, b))
         return b;
@@ -1538,6 +1791,7 @@ static void emit_context(Stack *st, int32_t c)
         else
             layer(st, st->entry[m[k]], PART_WHOLE);
     }
+    layer(st, box, PART_OUTLINES);
     if (is_group(box))
         layer(st, box, PART_CLOSE);
 }
@@ -1554,8 +1808,8 @@ static bool stack_build(flow_tree_t *t)
     st.order = os64_calloc((size_t)n + 1, sizeof(int32_t));
     st.first = os64_calloc((size_t)n + 2, sizeof(int32_t));
     st.count = os64_calloc((size_t)n + 2, sizeof(int32_t));
-    // Each context two layers at most, and an open and a close.
-    st.layers = os64_calloc((size_t)n * 4 + 4, sizeof(Layer));
+    // Each context two layers at most, its outlines, and an open and a close.
+    st.layers = os64_calloc((size_t)n * 5 + 5, sizeof(Layer));
     st.painted = os64_calloc((size_t)n + 1, sizeof(*st.painted));
     bool ok = ctx != NULL && tmp != NULL && st.context != NULL && st.order != NULL &&
               st.first != NULL && st.count != NULL && st.layers != NULL && st.painted != NULL;
@@ -2614,6 +2868,10 @@ static void visit_inline(const Visit *outer, const flow_box_t *b)
             for (const flow_box_t *f = c->first; f != NULL; f = f->next)
                 if (!f->stacked && !f->unpainted && meets(f->overflow, v->view))
                     visit_piece(v, f);
+            // A line that may end in its block's ellipsis, after its
+            // pieces, for the painter to draw the ellipsis over them.
+            if (b->ellipsis != NULL)
+                v->visit(v->ctx, c);
         } else if (c->kind == FLOW_BOX_MARKER) {
             if (!c->unpainted && meets(c->overflow, v->view))
                 v->visit(v->ctx, c);
@@ -2793,6 +3051,26 @@ static os64_gui_rect_t *all_group_bounds(const flow_tree_t *tree, flow_point_t s
     return out;
 }
 
+// Step 10 of a context `b`: the outlines of every box painted in it — its
+// own and its descendants', a positioned one's that is no context of its
+// own too, but none of a context inside it, which paints its own — each
+// that meets `view`, a rect in document coordinates, by its overflow
+// grown by its ink. Only the subtrees that hold an outline are walked.
+static void visit_outlines(const flow_box_t *b, bool top, os64_gui_rect_t view,
+                           flow_point_t scroll, const flow_visitor_t *visitor)
+{
+    if (!b->holds_outline || b->unpainted || (!top && b->stacked && makes_context(b)))
+        return;
+    os64_gui_rect_t ring;
+    if (flow_outline_rect(b, &ring)) {
+        flow_point_t o = flow_box_doc_offset(b, scroll);
+        if (meets(moved(ring, o.x, o.y), view))
+            visitor->outline(visitor->ctx, b);
+    }
+    for (const flow_box_t *c = b->first; c != NULL; c = c->next)
+        visit_outlines(c, false, view, scroll, visitor);
+}
+
 // The layers in paint order (stack_build), each against the viewport in
 // its box's own coordinates: a fixed box's are the viewport's. A WHOLE box
 // is its two-phase walk; a SELF, the box alone; a BODY, the rest of that
@@ -2801,7 +3079,7 @@ static os64_gui_rect_t *all_group_bounds(const flow_tree_t *tree, flow_point_t s
 void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                 void (*visit)(void *ctx, const flow_box_t *box), void *ctx)
 {
-    flow_visitor_t v = {visit, NULL, NULL, ctx};
+    flow_visitor_t v = {visit, NULL, NULL, ctx, NULL};
     flow_visit_groups(tree, viewport, scroll, &v);
 }
 
@@ -2887,6 +3165,10 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
             visit_inline(&v, b);
             break;
         }
+        case PART_OUTLINES:
+            if (visitor->outline != NULL)
+                visit_outlines(b, true, view, scroll, visitor);
+            break;
         case PART_OPEN: case PART_CLOSE: break;     // heard above
         }
     }
@@ -2903,7 +3185,14 @@ static const flow_box_t *hit_self(const flow_box_t *b, int32_t x, int32_t y)
                ? b : NULL;
 }
 
-static const flow_box_t *hit(const flow_tree_t *t, const flow_box_t *b, int32_t x, int32_t y);
+// One hit's walk: the tree, and the cuts of its lines that end in an
+// ellipsis, each worked once a hit (flow_cut_memo_t).
+typedef struct {
+    const flow_tree_t *tree;
+    flow_cut_memo_t *cuts;
+} HitWalk;
+
+static const flow_box_t *hit(HitWalk *t, const flow_box_t *b, int32_t x, int32_t y);
 
 // What a hit is painted with (Appendix E): a block's background (step 4),
 // under a float (step 5), under inline content (step 7). A higher rank is
@@ -2911,13 +3200,13 @@ static const flow_box_t *hit(const flow_tree_t *t, const flow_box_t *b, int32_t 
 // whose border box runs under it, does not take a click on the float.
 enum { RANK_BLOCK = 1, RANK_FLOAT, RANK_INLINE };
 
-static const flow_box_t *hit_kids_ranked(const flow_tree_t *t, const flow_box_t *b, int32_t x,
+static const flow_box_t *hit_kids_ranked(HitWalk *t, const flow_box_t *b, int32_t x,
                                          int32_t y, int *rank);
 
 // A child's hit, and its rank: anything on a line is inline content; a
 // float, and whatever in it is hit, is the float's; a block is whatever
 // was hit inside it, or its own background.
-static const flow_box_t *hit_ranked(const flow_tree_t *t, const flow_box_t *c, int32_t x,
+static const flow_box_t *hit_ranked(HitWalk *t, const flow_box_t *c, int32_t x,
                                     int32_t y, int *rank)
 {
     if (!block_level(c->kind)) {
@@ -2944,23 +3233,32 @@ static const flow_box_t *hit_ranked(const flow_tree_t *t, const flow_box_t *c, i
 // container's content is a frame inside the one being walked: what clips
 // it from outside is asked here, where the container stands, and the point
 // is then taken to where the content stands.
-static const flow_box_t *hit_kids_ranked(const flow_tree_t *t, const flow_box_t *b, int32_t x,
+static const flow_box_t *hit_kids_ranked(HitWalk *t, const flow_box_t *b, int32_t x,
                                          int32_t y, int *rank)
 {
     *rank = 0;
     if (!holds(b->overflow, x, y))
         return NULL;
     if (b->scroller >= 0) {
-        const flow_frame_t *f = t->scrollers[b->scroller];
+        const flow_frame_t *f = t->tree->scrollers[b->scroller];
         int64_t cx = (int64_t)x + f->at.x, cy = (int64_t)y + f->at.y;
         if ((f->clips && !holds(f->clip, x, y)) || cx > INT32_MAX || cy > INT32_MAX)
             return NULL;
         x = (int32_t)cx;
         y = (int32_t)cy;
     }
+    // A line cut by its block's ellipsis: a piece is there only as far as
+    // it is kept (flow_line_cut_keeps), so the hidden tail of a kept text
+    // or inline box's piece is no more hit than an atom left out.
+    flow_line_cut_t cut = {false, 0, 0};
+    if (b->kind == FLOW_BOX_LINE && b->parent != NULL && b->parent->ellipsis != NULL)
+        cut = flow_cut_memo_get(t->cuts, b);
     const flow_box_t *found = NULL;
     for (const flow_box_t *c = b->first; c != NULL; c = c->next) {
         if (c->stacked)
+            continue;
+        int64_t to;
+        if (cut.on && (!flow_line_cut_keeps(&cut, c, &to) || x >= to))
             continue;
         int r = 0;
         const flow_box_t *h = hit_ranked(t, c, x, y, &r);
@@ -2972,14 +3270,25 @@ static const flow_box_t *hit_kids_ranked(const flow_tree_t *t, const flow_box_t 
     return found;
 }
 
-static const flow_box_t *hit_kids(const flow_tree_t *t, const flow_box_t *b, int32_t x, int32_t y)
+static const flow_box_t *hit_kids(HitWalk *t, const flow_box_t *b, int32_t x, int32_t y)
 {
     int rank;
     return hit_kids_ranked(t, b, x, y, &rank);
 }
 
-static const flow_box_t *hit(const flow_tree_t *t, const flow_box_t *b, int32_t x, int32_t y)
+static const flow_box_t *hit(HitWalk *t, const flow_box_t *b, int32_t x, int32_t y)
 {
+    // On a line cut by its block's ellipsis, nothing past what is kept is
+    // there to be pointed at — the line included past the ellipsis's start,
+    // so the point is its block's, the ellipsis standing in no inline box
+    // (hit_kids_ranked asks each piece). Worked only for a line that holds
+    // the point, once a hit (the walk's memo).
+    if (b->kind == FLOW_BOX_LINE && b->parent != NULL && b->parent->ellipsis != NULL &&
+        holds(b->overflow, x, y)) {
+        flow_line_cut_t cut = flow_cut_memo_get(t->cuts, b);
+        if (cut.on && x >= cut.at)
+            return NULL;
+    }
     const flow_box_t *h = hit_kids(t, b, x, y);
     return h != NULL ? h : hit_self(b, x, y);
 }
@@ -2988,11 +3297,18 @@ static const flow_box_t *hit(const flow_tree_t *t, const flow_box_t *b, int32_t 
 // own coordinates. What clips the frames a layer's box is in from outside
 // is asked once, of the layer; the scroll containers inside it, as the
 // walk enters each (hit_kids).
-const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll)
+const flow_box_t *flow_hit_counted(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll,
+                                   uint64_t *cuts)
 {
+    if (cuts != NULL)
+        *cuts = 0;
     if (tree == NULL || tree->root == NULL)
         return NULL;
-    for (int32_t i = tree->nlayers; i > 0; i--) {
+    flow_cut_memo_t memo;
+    flow_cut_memo_open(&memo, tree);
+    HitWalk walk = {tree, &memo};
+    const flow_box_t *found = NULL;
+    for (int32_t i = tree->nlayers; i > 0 && found == NULL; i--) {
         const flow_box_t *b = tree->layers[i - 1].box;
         if (!outside_clips_hold(b, x, y, scroll))
             continue;
@@ -3000,17 +3316,29 @@ const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_p
         if (!flow_box_point(b, scroll, x, y, &at))
             continue;
         int64_t px = at.x, py = at.y;
-        const flow_box_t *h = NULL;
+        // A layer whose box is cut away by an ellipsis on a line it is
+        // inside is not there (flow_box_cut_away): asked only of a box that
+        // holds the point, so a hit works the cuts of the lines under it.
+        if (!holds(b->overflow, (int32_t)px, (int32_t)py) && !holds(b->rect, (int32_t)px, (int32_t)py))
+            continue;
+        if (flow_box_cut_away(&memo, b))
+            continue;
         switch (tree->layers[i - 1].part) {
-        case PART_WHOLE: h = hit(tree, b, (int32_t)px, (int32_t)py); break;
-        case PART_SELF: h = hit_self(b, (int32_t)px, (int32_t)py); break;
-        case PART_BODY: h = hit_kids(tree, b, (int32_t)px, (int32_t)py); break;
-        case PART_OPEN: case PART_CLOSE: break;     // a group is no box of its own
+        case PART_WHOLE: found = hit(&walk, b, (int32_t)px, (int32_t)py); break;
+        case PART_SELF: found = hit_self(b, (int32_t)px, (int32_t)py); break;
+        case PART_BODY: found = hit_kids(&walk, b, (int32_t)px, (int32_t)py); break;
+        case PART_OPEN: case PART_CLOSE: case PART_OUTLINES: break;     // no box's own
         }
-        if (h != NULL)
-            return h;
     }
-    return NULL;
+    if (cuts != NULL)
+        *cuts = memo.worked;
+    flow_cut_memo_close(&memo);
+    return found;
+}
+
+const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll)
+{
+    return flow_hit_counted(tree, x, y, scroll, NULL);
 }
 
 bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point_t scroll)
