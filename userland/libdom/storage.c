@@ -15,7 +15,9 @@
  * of its own writes, and a commit hands over the change list alone, which
  * the host merges onto the store as the store then stands: two windows on
  * one origin lose nothing of each other's but the same key written by
- * both, where the later commit wins. clear() is a removal of every key the
+ * both, where the later commit wins, as far as the host's merge sees each
+ * commit (two in the same instant are the host's to settle). clear() is a
+ * removal of every key the
  * page could see, so it cannot take away a key another window added after.
  *
  * An area's map and change list are not the binding's budget's: each is
@@ -645,7 +647,9 @@ static bool changes_fit(const DMap *changes, size_t count, size_t cost)
  * when it is due: a page that sets and removes key after key in one task
  * would otherwise hold every key it removed until its next commit. False
  * when the commit did not make the room (no memory to write the list): the
- * change is refused, and the list never passes its bound. */
+ * change is refused, so what this page writes never takes the list past
+ * its bound. A clear() of a map another window grew past the keys' cap
+ * can, until the next commit. */
 static bool changes_room(DStorageArea *area, size_t count, size_t cost)
 {
     if (!kept(area->dom, area) || changes_fit(&area->changes, count, cost)) return true;

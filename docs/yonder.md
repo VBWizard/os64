@@ -127,7 +127,8 @@ Click the Settings icon in the title bar.
 - **Clear page storage**, at that row's right: removes what every site
   has kept in its page storage (below), at once, and the pages open now
   forget theirs. A page in another yonder window that writes at that
-  moment keeps what it writes then.
+  moment keeps what it writes then, and may bring back what its site had
+  kept.
 - **Apply** changes this window from the next page on. **Save as default**
   also writes the settings to `yonder.conf`, where every new yonder reads
   them.

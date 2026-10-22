@@ -47,8 +47,9 @@ os64_dom_storage_status_t yonder_storage_commit(yonder_storage_t *storage, os64_
 
 // Settings' "Clear page storage": every store under <profile>/storage/ is
 // removed, one unlink each, with every temp a crash left (a live window's,
-// mid-commit, stays, and what that window then publishes is its own
-// changes), and this window's sessionStorage forgotten. The pages open now
+// mid-commit, stays, and that window may then publish the store as it read
+// it before the clear, with its changes), and this window's sessionStorage
+// forgotten. The pages open now
 // forget their own maps with os64_dom_storage_forget. Answers how many
 // stores went, negative when the folder could not be listed or a file
 // could not be removed (what could be, was).

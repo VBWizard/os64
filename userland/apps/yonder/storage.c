@@ -601,9 +601,9 @@ int64_t yonder_storage_clear(yonder_storage_t *st)
     if (!whole && count == 0)
         return -1;
     // Every store goes, one unlink each, and every temp a crash left; a
-    // live yonder's temp is that window's, mid-commit, and stays (and what
-    // it publishes is its own changes, after the clear). Only a store is a
-    // site.
+    // live yonder's temp is that window's, mid-commit, and stays (and it
+    // may publish the store as it read it before the clear, with its
+    // changes). Only a store is a site.
     int64_t removed = 0;
     bool all = whole;
     for (size_t i = 0; i < count; i++) {

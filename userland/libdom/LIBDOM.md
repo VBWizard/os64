@@ -558,9 +558,11 @@ the store again); or FAILED (the area keeps its map in memory from then
 on). Commits are coalesced (`os64_dom_storage_settle` between tasks,
 `os64_dom_storage_due` for the host's clock, `OS64_DOM_STORAGE_COMMIT_MS`),
 sooner when the change list would pass the quota or the keys' cap, and once
-more at drain, the last. The change list never passes its bound: a change
-it cannot make room for, because the store would not take the early commit,
-is refused with `QuotaExceededError` as a full store's is. A host that unloads a page
+more at drain, the last. What a page writes never takes the change list
+past its bound: a change it cannot make room for (no memory to write the
+list down for the early commit) is refused with `QuotaExceededError` as a
+full store's is. A `clear()` of a map another window grew past the keys'
+cap can pass it, until the next commit. A host that unloads a page
 (yonder's departure) drains it, which is that page's last commit.
 `os64_dom_storage_forget` drops both maps for "Clear page storage". The
 image format is `os64 storage 1\n`, then `+<key bytes> <value bytes>\n` and

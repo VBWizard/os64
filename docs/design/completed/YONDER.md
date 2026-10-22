@@ -137,7 +137,8 @@ remaining gates before recommending scripts for ordinary browsing.
   acts at once, as Empty the cache does (`yonder_settings_on_clear_storage`
   hands it to `storage_clear`, which removes every site's store from the
   profile's `storage/` folder, one unlink each, and has every page open
-  forget its maps; a window mid-commit may then publish its own changes).
+  forget its maps; a window mid-commit may then publish the store as it read
+  it before the clear, with its own changes).
 - **yonder's loop waits on its own window**, so a thread waits on the
   dialog's (without taking its events) and rings a doorbell on yonder's;
   the loop pumps the dialog and tells the thread it has. One ring is out
