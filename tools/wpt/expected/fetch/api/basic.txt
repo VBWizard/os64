@@ -3,5 +3,262 @@
 # [excluded] are written by hand; tools/test_yonder_wpt_host.sh fetch/api/basic --update
 # rewrites [passing].
 [required]
+mode-same-origin.any.html	Fetch ../resources/top.txt with same-origin mode
+mode-same-origin.any.html	Fetch /fetch/api/basic/../resources/redirect.py?location=http://www1.wpt.test/fetch/api/resources/top.txt with same-origin mode
+mode-same-origin.any.html	Fetch /fetch/api/basic/../resources/redirect.py?location=https://wpt.test/fetch/api/resources/top.txt with same-origin mode
+mode-same-origin.any.html	Fetch http://wpt.test/fetch/api/resources/top.txt with same-origin mode
+mode-same-origin.any.html	Fetch http://www1.wpt.test/fetch/api/resources/top.txt with same-origin mode
+mode-same-origin.any.html	Fetch https://wpt.test/fetch/api/resources/top.txt with same-origin mode
+request-head.any.html	Fetch with HEAD with body
+response-null-body.any.html	Null body status with subresource integrity should abort
+scheme-about.any.html	Fetching about:blank with method GET is KO
+scheme-about.any.html	Fetching about:blank with method POST is KO
+scheme-about.any.html	Fetching about:blank with method PUT is KO
+scheme-about.any.html	Fetching about:blank with range header does not affect behavior
+scheme-about.any.html	Fetching about:config with method GET is KO
+scheme-about.any.html	Fetching about:invalid.com with method GET is KO
+scheme-about.any.html	Fetching about:unicorn with method GET is KO
+scheme-data.any.html	Fetching [GET] data:notAdataUrl.com is KO
+scheme-data.any.html	Fetching [HEAD] data:,response%27s%20body is OK
+scheme-data.any.html	Fetching [POST] data:,response%27s%20body is OK
+scheme-data.any.html	Fetching data:,response%27s%20body is OK
+scheme-data.any.html	Fetching data:,response%27s%20body is OK (cors)
+scheme-data.any.html	Fetching data:,response%27s%20body is OK (same-origin)
+scheme-data.any.html	Fetching data:image/png;base64,cmVzcG9uc2UncyBib2[...] is OK
+scheme-data.any.html	Fetching data:text/plain;base64,cmVzcG9uc2UncyBib[...] is OK
+stream-safe-creation.any.html	Object.prototype.highWaterMark accessor returning invalid value should not affect stream creation by 'consumeEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.highWaterMark accessor returning invalid value should not affect stream creation by 'consumeEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.highWaterMark accessor returning invalid value should not affect stream creation by 'consumeNonEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.highWaterMark accessor returning invalid value should not affect stream creation by 'consumeNonEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.highWaterMark accessor returning invalid value should not affect stream creation by 'fetch'
+stream-safe-creation.any.html	Object.prototype.highWaterMark accessor returning invalid value should not affect stream creation by 'request'
+stream-safe-creation.any.html	Object.prototype.highWaterMark accessor returning invalid value should not affect stream creation by 'response'
+stream-safe-creation.any.html	Object.prototype.size accessor returning invalid value should not affect stream creation by 'consumeEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.size accessor returning invalid value should not affect stream creation by 'consumeEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.size accessor returning invalid value should not affect stream creation by 'consumeNonEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.size accessor returning invalid value should not affect stream creation by 'consumeNonEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.size accessor returning invalid value should not affect stream creation by 'fetch'
+stream-safe-creation.any.html	Object.prototype.size accessor returning invalid value should not affect stream creation by 'request'
+stream-safe-creation.any.html	Object.prototype.size accessor returning invalid value should not affect stream creation by 'response'
+stream-safe-creation.any.html	Object.prototype.start accessor returning invalid value should not affect stream creation by 'consumeEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.start accessor returning invalid value should not affect stream creation by 'consumeEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.start accessor returning invalid value should not affect stream creation by 'consumeNonEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.start accessor returning invalid value should not affect stream creation by 'consumeNonEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.start accessor returning invalid value should not affect stream creation by 'fetch'
+stream-safe-creation.any.html	Object.prototype.start accessor returning invalid value should not affect stream creation by 'request'
+stream-safe-creation.any.html	Object.prototype.start accessor returning invalid value should not affect stream creation by 'response'
+stream-safe-creation.any.html	Object.prototype.start function which errors the stream should not affect stream creation by 'consumeEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.start function which errors the stream should not affect stream creation by 'consumeEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.start function which errors the stream should not affect stream creation by 'consumeNonEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.start function which errors the stream should not affect stream creation by 'consumeNonEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.start function which errors the stream should not affect stream creation by 'fetch'
+stream-safe-creation.any.html	Object.prototype.start function which errors the stream should not affect stream creation by 'request'
+stream-safe-creation.any.html	Object.prototype.start function which errors the stream should not affect stream creation by 'response'
+stream-safe-creation.any.html	Object.prototype.type accessor returning invalid value should not affect stream creation by 'consumeEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.type accessor returning invalid value should not affect stream creation by 'consumeEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.type accessor returning invalid value should not affect stream creation by 'consumeNonEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.type accessor returning invalid value should not affect stream creation by 'consumeNonEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.type accessor returning invalid value should not affect stream creation by 'fetch'
+stream-safe-creation.any.html	Object.prototype.type accessor returning invalid value should not affect stream creation by 'request'
+stream-safe-creation.any.html	Object.prototype.type accessor returning invalid value should not affect stream creation by 'response'
+stream-safe-creation.any.html	throwing Object.prototype.highWaterMark accessor should not affect stream creation by 'consumeEmptyRequest'
+stream-safe-creation.any.html	throwing Object.prototype.highWaterMark accessor should not affect stream creation by 'consumeEmptyResponse'
+stream-safe-creation.any.html	throwing Object.prototype.highWaterMark accessor should not affect stream creation by 'consumeNonEmptyRequest'
+stream-safe-creation.any.html	throwing Object.prototype.highWaterMark accessor should not affect stream creation by 'consumeNonEmptyResponse'
+stream-safe-creation.any.html	throwing Object.prototype.highWaterMark accessor should not affect stream creation by 'fetch'
+stream-safe-creation.any.html	throwing Object.prototype.highWaterMark accessor should not affect stream creation by 'request'
+stream-safe-creation.any.html	throwing Object.prototype.highWaterMark accessor should not affect stream creation by 'response'
+stream-safe-creation.any.html	throwing Object.prototype.size accessor should not affect stream creation by 'consumeEmptyRequest'
+stream-safe-creation.any.html	throwing Object.prototype.size accessor should not affect stream creation by 'consumeEmptyResponse'
+stream-safe-creation.any.html	throwing Object.prototype.size accessor should not affect stream creation by 'consumeNonEmptyRequest'
+stream-safe-creation.any.html	throwing Object.prototype.size accessor should not affect stream creation by 'consumeNonEmptyResponse'
+stream-safe-creation.any.html	throwing Object.prototype.size accessor should not affect stream creation by 'fetch'
+stream-safe-creation.any.html	throwing Object.prototype.size accessor should not affect stream creation by 'request'
+stream-safe-creation.any.html	throwing Object.prototype.size accessor should not affect stream creation by 'response'
+stream-safe-creation.any.html	throwing Object.prototype.start accessor should not affect stream creation by 'consumeEmptyRequest'
+stream-safe-creation.any.html	throwing Object.prototype.start accessor should not affect stream creation by 'consumeEmptyResponse'
+stream-safe-creation.any.html	throwing Object.prototype.start accessor should not affect stream creation by 'consumeNonEmptyRequest'
+stream-safe-creation.any.html	throwing Object.prototype.start accessor should not affect stream creation by 'consumeNonEmptyResponse'
+stream-safe-creation.any.html	throwing Object.prototype.start accessor should not affect stream creation by 'fetch'
+stream-safe-creation.any.html	throwing Object.prototype.start accessor should not affect stream creation by 'request'
+stream-safe-creation.any.html	throwing Object.prototype.start accessor should not affect stream creation by 'response'
+stream-safe-creation.any.html	throwing Object.prototype.type accessor should not affect stream creation by 'consumeEmptyRequest'
+stream-safe-creation.any.html	throwing Object.prototype.type accessor should not affect stream creation by 'consumeEmptyResponse'
+stream-safe-creation.any.html	throwing Object.prototype.type accessor should not affect stream creation by 'consumeNonEmptyRequest'
+stream-safe-creation.any.html	throwing Object.prototype.type accessor should not affect stream creation by 'consumeNonEmptyResponse'
+stream-safe-creation.any.html	throwing Object.prototype.type accessor should not affect stream creation by 'fetch'
+stream-safe-creation.any.html	throwing Object.prototype.type accessor should not affect stream creation by 'request'
+stream-safe-creation.any.html	throwing Object.prototype.type accessor should not affect stream creation by 'response'
+text-utf8.any.html	UTF-16 without BOM decoded as UTF-8 (Request object)
+text-utf8.any.html	UTF-16 without BOM decoded as UTF-8 (Response object)
+text-utf8.any.html	UTF-16 without BOM decoded as UTF-8 with Request.text()
+text-utf8.any.html	UTF-16 without BOM decoded as UTF-8 with Response.text()
+text-utf8.any.html	UTF-16BE with BOM decoded as UTF-8 (Request object)
+text-utf8.any.html	UTF-16BE with BOM decoded as UTF-8 (Response object)
+text-utf8.any.html	UTF-16BE with BOM decoded as UTF-8 with Request.text()
+text-utf8.any.html	UTF-16BE with BOM decoded as UTF-8 with Response.text()
+text-utf8.any.html	UTF-16LE with BOM decoded as UTF-8 (Request object)
+text-utf8.any.html	UTF-16LE with BOM decoded as UTF-8 (Response object)
+text-utf8.any.html	UTF-16LE with BOM decoded as UTF-8 with Request.text()
+text-utf8.any.html	UTF-16LE with BOM decoded as UTF-8 with Response.text()
+text-utf8.any.html	UTF-8 with BOM (Request object)
+text-utf8.any.html	UTF-8 with BOM (Response object)
+text-utf8.any.html	UTF-8 with BOM with Request.text()
+text-utf8.any.html	UTF-8 with BOM with Response.text()
+text-utf8.any.html	UTF-8 without BOM (Request object)
+text-utf8.any.html	UTF-8 without BOM (Response object)
+text-utf8.any.html	UTF-8 without BOM with Request.text()
+text-utf8.any.html	UTF-8 without BOM with Response.text()
 [excluded]
+fetch-in-popup-from-iframe.html	popups and frames, which this browser does not have
+mediasource.window.html	MediaSource, which this browser does not have
+request-upload.h2.any.html	a streaming request body over HTTP/2: no ReadableStream global, no HTTP/2
 [passing]
+gc.any.html	GC/CC should not discard a Request's FormData body Blob before it is read
+gc.any.html	GC/CC should not discard a Response's FormData body Blob before it is read
+gc.any.html	GC/CC should not discard a cloned FormData body's Blob before it is read
+gc.any.html	GC/CC should not discard a moved FormData body's Blob before it is read
+header-value-null-byte.any.html	Ensure fetch() rejects null bytes in headers
+historical.any.html	'type' getter should not exist on Request objects
+historical.any.html	Headers object no longer has a getAll() method
+historical.any.html	Response object no longer has a trailer getter
+integrity.sub.any.html	CORS invalid integrity
+integrity.sub.any.html	Empty string integrity
+integrity.sub.any.html	Empty string integrity for opaque response
+integrity.sub.any.html	Invalid integrity
+integrity.sub.any.html	Multiple integrities: both are invalid
+integrity.sub.any.html	Multiple integrities: invalid stronger than valid
+integrity.sub.any.html	SHA-* integrity for opaque response
+mode-no-cors.sub.any.html	Fetch http://wpt.test:8001/fetch/api/resources/top.txt with no-cors mode
+mode-no-cors.sub.any.html	Fetch https://wpt.test:443/fetch/api/resources/top.txt with no-cors mode
+mode-same-origin.any.html	Fetch ../resources/top.txt with same-origin mode
+mode-same-origin.any.html	Fetch /fetch/api/basic/../resources/redirect.py?location=http://www1.wpt.test/fetch/api/resources/top.txt with same-origin mode
+mode-same-origin.any.html	Fetch /fetch/api/basic/../resources/redirect.py?location=https://wpt.test/fetch/api/resources/top.txt with same-origin mode
+mode-same-origin.any.html	Fetch http://wpt.test/fetch/api/resources/top.txt with same-origin mode
+mode-same-origin.any.html	Fetch http://www1.wpt.test/fetch/api/resources/top.txt with same-origin mode
+mode-same-origin.any.html	Fetch https://wpt.test/fetch/api/resources/top.txt with same-origin mode
+request-head.any.html	Fetch with HEAD with body
+response-null-body.any.html	Null body status with subresource integrity should abort
+scheme-about.any.html	Fetching about:blank with method GET is KO
+scheme-about.any.html	Fetching about:blank with method POST is KO
+scheme-about.any.html	Fetching about:blank with method PUT is KO
+scheme-about.any.html	Fetching about:blank with range header does not affect behavior
+scheme-about.any.html	Fetching about:config with method GET is KO
+scheme-about.any.html	Fetching about:invalid.com with method GET is KO
+scheme-about.any.html	Fetching about:unicorn with method GET is KO
+scheme-data.any.html	Fetching [GET] data:notAdataUrl.com is KO
+scheme-data.any.html	Fetching [HEAD] data:,response%27s%20body is OK
+scheme-data.any.html	Fetching [POST] data:,response%27s%20body is OK
+scheme-data.any.html	Fetching data:,response%27s%20body is OK
+scheme-data.any.html	Fetching data:,response%27s%20body is OK (cors)
+scheme-data.any.html	Fetching data:,response%27s%20body is OK (same-origin)
+scheme-data.any.html	Fetching data:image/png;base64,cmVzcG9uc2UncyBib2[...] is OK
+scheme-data.any.html	Fetching data:text/plain;base64,cmVzcG9uc2UncyBib[...] is OK
+scheme-others.sub.any.html	Fetching aaa://wpt.test:80/ is KO
+scheme-others.sub.any.html	Fetching cap://wpt.test:80/ is KO
+scheme-others.sub.any.html	Fetching cid://wpt.test:80/ is KO
+scheme-others.sub.any.html	Fetching dav://wpt.test:80/ is KO
+scheme-others.sub.any.html	Fetching dict://wpt.test:80/ is KO
+scheme-others.sub.any.html	Fetching dns://wpt.test:80/ is KO
+scheme-others.sub.any.html	Fetching geo://wpt.test:80/ is KO
+scheme-others.sub.any.html	Fetching im://wpt.test:80/ is KO
+scheme-others.sub.any.html	Fetching imap://wpt.test:80/ is KO
+scheme-others.sub.any.html	Fetching ipp://wpt.test:80/ is KO
+scheme-others.sub.any.html	Fetching ldap://wpt.test:80/ is KO
+scheme-others.sub.any.html	Fetching mailto://wpt.test:80/ is KO
+scheme-others.sub.any.html	Fetching nfs://wpt.test:80/ is KO
+scheme-others.sub.any.html	Fetching pop://wpt.test:80/ is KO
+scheme-others.sub.any.html	Fetching rtsp://wpt.test:80/ is KO
+scheme-others.sub.any.html	Fetching snmp://wpt.test:80/ is KO
+stream-safe-creation.any.html	Object.prototype.highWaterMark accessor returning invalid value should not affect stream creation by 'consumeEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.highWaterMark accessor returning invalid value should not affect stream creation by 'consumeEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.highWaterMark accessor returning invalid value should not affect stream creation by 'consumeNonEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.highWaterMark accessor returning invalid value should not affect stream creation by 'consumeNonEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.highWaterMark accessor returning invalid value should not affect stream creation by 'fetch'
+stream-safe-creation.any.html	Object.prototype.highWaterMark accessor returning invalid value should not affect stream creation by 'request'
+stream-safe-creation.any.html	Object.prototype.highWaterMark accessor returning invalid value should not affect stream creation by 'response'
+stream-safe-creation.any.html	Object.prototype.size accessor returning invalid value should not affect stream creation by 'consumeEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.size accessor returning invalid value should not affect stream creation by 'consumeEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.size accessor returning invalid value should not affect stream creation by 'consumeNonEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.size accessor returning invalid value should not affect stream creation by 'consumeNonEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.size accessor returning invalid value should not affect stream creation by 'fetch'
+stream-safe-creation.any.html	Object.prototype.size accessor returning invalid value should not affect stream creation by 'request'
+stream-safe-creation.any.html	Object.prototype.size accessor returning invalid value should not affect stream creation by 'response'
+stream-safe-creation.any.html	Object.prototype.start accessor returning invalid value should not affect stream creation by 'consumeEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.start accessor returning invalid value should not affect stream creation by 'consumeEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.start accessor returning invalid value should not affect stream creation by 'consumeNonEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.start accessor returning invalid value should not affect stream creation by 'consumeNonEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.start accessor returning invalid value should not affect stream creation by 'fetch'
+stream-safe-creation.any.html	Object.prototype.start accessor returning invalid value should not affect stream creation by 'request'
+stream-safe-creation.any.html	Object.prototype.start accessor returning invalid value should not affect stream creation by 'response'
+stream-safe-creation.any.html	Object.prototype.start function which errors the stream should not affect stream creation by 'consumeEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.start function which errors the stream should not affect stream creation by 'consumeEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.start function which errors the stream should not affect stream creation by 'consumeNonEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.start function which errors the stream should not affect stream creation by 'consumeNonEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.start function which errors the stream should not affect stream creation by 'fetch'
+stream-safe-creation.any.html	Object.prototype.start function which errors the stream should not affect stream creation by 'request'
+stream-safe-creation.any.html	Object.prototype.start function which errors the stream should not affect stream creation by 'response'
+stream-safe-creation.any.html	Object.prototype.type accessor returning invalid value should not affect stream creation by 'consumeEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.type accessor returning invalid value should not affect stream creation by 'consumeEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.type accessor returning invalid value should not affect stream creation by 'consumeNonEmptyRequest'
+stream-safe-creation.any.html	Object.prototype.type accessor returning invalid value should not affect stream creation by 'consumeNonEmptyResponse'
+stream-safe-creation.any.html	Object.prototype.type accessor returning invalid value should not affect stream creation by 'fetch'
+stream-safe-creation.any.html	Object.prototype.type accessor returning invalid value should not affect stream creation by 'request'
+stream-safe-creation.any.html	Object.prototype.type accessor returning invalid value should not affect stream creation by 'response'
+stream-safe-creation.any.html	throwing Object.prototype.highWaterMark accessor should not affect stream creation by 'consumeEmptyRequest'
+stream-safe-creation.any.html	throwing Object.prototype.highWaterMark accessor should not affect stream creation by 'consumeEmptyResponse'
+stream-safe-creation.any.html	throwing Object.prototype.highWaterMark accessor should not affect stream creation by 'consumeNonEmptyRequest'
+stream-safe-creation.any.html	throwing Object.prototype.highWaterMark accessor should not affect stream creation by 'consumeNonEmptyResponse'
+stream-safe-creation.any.html	throwing Object.prototype.highWaterMark accessor should not affect stream creation by 'fetch'
+stream-safe-creation.any.html	throwing Object.prototype.highWaterMark accessor should not affect stream creation by 'request'
+stream-safe-creation.any.html	throwing Object.prototype.highWaterMark accessor should not affect stream creation by 'response'
+stream-safe-creation.any.html	throwing Object.prototype.size accessor should not affect stream creation by 'consumeEmptyRequest'
+stream-safe-creation.any.html	throwing Object.prototype.size accessor should not affect stream creation by 'consumeEmptyResponse'
+stream-safe-creation.any.html	throwing Object.prototype.size accessor should not affect stream creation by 'consumeNonEmptyRequest'
+stream-safe-creation.any.html	throwing Object.prototype.size accessor should not affect stream creation by 'consumeNonEmptyResponse'
+stream-safe-creation.any.html	throwing Object.prototype.size accessor should not affect stream creation by 'fetch'
+stream-safe-creation.any.html	throwing Object.prototype.size accessor should not affect stream creation by 'request'
+stream-safe-creation.any.html	throwing Object.prototype.size accessor should not affect stream creation by 'response'
+stream-safe-creation.any.html	throwing Object.prototype.start accessor should not affect stream creation by 'consumeEmptyRequest'
+stream-safe-creation.any.html	throwing Object.prototype.start accessor should not affect stream creation by 'consumeEmptyResponse'
+stream-safe-creation.any.html	throwing Object.prototype.start accessor should not affect stream creation by 'consumeNonEmptyRequest'
+stream-safe-creation.any.html	throwing Object.prototype.start accessor should not affect stream creation by 'consumeNonEmptyResponse'
+stream-safe-creation.any.html	throwing Object.prototype.start accessor should not affect stream creation by 'fetch'
+stream-safe-creation.any.html	throwing Object.prototype.start accessor should not affect stream creation by 'request'
+stream-safe-creation.any.html	throwing Object.prototype.start accessor should not affect stream creation by 'response'
+stream-safe-creation.any.html	throwing Object.prototype.type accessor should not affect stream creation by 'consumeEmptyRequest'
+stream-safe-creation.any.html	throwing Object.prototype.type accessor should not affect stream creation by 'consumeEmptyResponse'
+stream-safe-creation.any.html	throwing Object.prototype.type accessor should not affect stream creation by 'consumeNonEmptyRequest'
+stream-safe-creation.any.html	throwing Object.prototype.type accessor should not affect stream creation by 'consumeNonEmptyResponse'
+stream-safe-creation.any.html	throwing Object.prototype.type accessor should not affect stream creation by 'fetch'
+stream-safe-creation.any.html	throwing Object.prototype.type accessor should not affect stream creation by 'request'
+stream-safe-creation.any.html	throwing Object.prototype.type accessor should not affect stream creation by 'response'
+text-utf8.any.html	UTF-16 without BOM decoded as UTF-8 (Request object)
+text-utf8.any.html	UTF-16 without BOM decoded as UTF-8 (Response object)
+text-utf8.any.html	UTF-16 without BOM decoded as UTF-8 with Request.text()
+text-utf8.any.html	UTF-16 without BOM decoded as UTF-8 with Response.text()
+text-utf8.any.html	UTF-16BE with BOM decoded as UTF-8 (Request object)
+text-utf8.any.html	UTF-16BE with BOM decoded as UTF-8 (Response object)
+text-utf8.any.html	UTF-16BE with BOM decoded as UTF-8 with Request.text()
+text-utf8.any.html	UTF-16BE with BOM decoded as UTF-8 with Response.text()
+text-utf8.any.html	UTF-16LE with BOM decoded as UTF-8 (Request object)
+text-utf8.any.html	UTF-16LE with BOM decoded as UTF-8 (Response object)
+text-utf8.any.html	UTF-16LE with BOM decoded as UTF-8 with Request.text()
+text-utf8.any.html	UTF-16LE with BOM decoded as UTF-8 with Response.text()
+text-utf8.any.html	UTF-8 with BOM (Request object)
+text-utf8.any.html	UTF-8 with BOM (Response object)
+text-utf8.any.html	UTF-8 with BOM with Request.text()
+text-utf8.any.html	UTF-8 with BOM with Response.text()
+text-utf8.any.html	UTF-8 without BOM (Request object)
+text-utf8.any.html	UTF-8 without BOM (Response object)
+text-utf8.any.html	UTF-8 without BOM with Request.text()
+text-utf8.any.html	UTF-8 without BOM with Response.text()
+url-parsing.sub.html?encoding=utf8	Request uses the UTF-8 URL parser
+url-parsing.sub.html?encoding=utf8	Request's referrer uses the UTF-8 URL parser
+url-parsing.sub.html?encoding=utf8	Response.redirect() uses the UTF-8 URL parser
+url-parsing.sub.html?encoding=windows-1252	Request uses the UTF-8 URL parser
+url-parsing.sub.html?encoding=windows-1252	Request's referrer uses the UTF-8 URL parser
+url-parsing.sub.html?encoding=windows-1252	Response.redirect() uses the UTF-8 URL parser
+url-parsing.sub.html?encoding=x-cp1251	Request uses the UTF-8 URL parser
+url-parsing.sub.html?encoding=x-cp1251	Request's referrer uses the UTF-8 URL parser
+url-parsing.sub.html?encoding=x-cp1251	Response.redirect() uses the UTF-8 URL parser
