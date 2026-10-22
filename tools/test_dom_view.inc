@@ -608,6 +608,132 @@ static void dom_view_allocation_cases(void)
     }
 }
 
+/* The host's half under the same sweep: a move, the two history events and
+ * each kind of view step, every binding allocation each makes failed in
+ * turn. A refused move answers false and leaves the address and the state
+ * as they were; an event that could not be built or delivered reports
+ * through its outcome; neither leaks (fixture_free counts). */
+enum { HOST_MOVE, HOST_POP, HOST_HASH, HOST_RESIZE, HOST_SCROLL, HOST_CHANGE, HOST_OPS };
+
+static DomFixture host_op_fixture(int op, ViewFake *v, os64_dom_view_provider_t *provider)
+{
+    DomFixture f = view_fixture(true, "http://view.test/page.html");
+    if (!fixture_ready(&f)) return f;
+    *v = (ViewFake){.view = {.width = 400, .height = 300}};
+    *provider = (os64_dom_view_provider_t){fake_view_read, fake_view_scroll, v};
+    os64_dom_set_view(f.binding, provider);
+    dom_script(&f, "globalThis.heard=[];"
+        "addEventListener('popstate',e=>heard.push('pop:'+JSON.stringify(e.state)));"
+        "onhashchange=e=>heard.push('hash:'+e.newURL);"
+        "addEventListener('scroll',()=>heard.push('scroll'));"
+        "var mq=matchMedia('(min-width: 500px)');mq.onchange=e=>heard.push('change:'+e.matches+':'+e.media);"
+        "history.replaceState({was:1},'');",
+        "host op: listeners");
+    if (op == HOST_RESIZE)
+        dom_script(&f, "addEventListener('resize',()=>heard.push('resize'));", "host op: resize listener");
+    return f;
+}
+
+static bool host_op(DomFixture *f, ViewFake *v, int op, os64_js_status_t *status)
+{
+    os64_js_outcome_t outcome = {0};
+    *status = OS64_JS_OK;
+    switch (op) {
+    case HOST_MOVE:
+        return os64_dom_history_moved(f->binding, "http://view.test/page.html#moved", "{\"n\":1}", 7);
+    case HOST_POP:
+        *status = os64_dom_history_event(f->binding, false, NULL, &outcome);
+        return true;
+    case HOST_HASH:
+        *status = os64_dom_history_event(f->binding, true, "http://view.test/page.html#old", &outcome);
+        return true;
+    case HOST_RESIZE:
+        v->view.height = 320;            // the list reads only the width
+        break;
+    case HOST_SCROLL:
+        v->view.scroll_y = 25;
+        break;
+    case HOST_CHANGE:
+        v->view.width = 800;
+        break;
+    }
+    bool ran = os64_dom_view_step(f->binding, &outcome);
+    *status = outcome.status;
+    return ran;
+}
+
+static void dom_view_host_allocation_cases(void)
+{
+    // What the page heard, as JS string literals.
+    static const char *const heard[HOST_OPS] = {
+        "''", "'pop:{\"was\":1}'", "'hash:http://view.test/page.html'", "'resize'", "'scroll'",
+        "'change:true:(min-width: 500px)'",
+    };
+    for (int op = 0; op < HOST_OPS; op++) {
+        ViewFake v;
+        os64_dom_view_provider_t provider;
+        DomFixture f = host_op_fixture(op, &v, &provider);
+        if (!fixture_ready(&f)) continue;
+        os64_js_status_t status;
+        size_t start = dom_attempts;
+        bool done = host_op(&f, &v, op, &status);
+        size_t count = dom_attempts - start;
+        check(done && status == OS64_JS_OK, "host op: the baseline runs");
+        char source[1024];
+        snprintf(source, sizeof(source), VIEW_ASSERT "assert(heard.join()===%s,heard.join());", heard[op]);
+        dom_script(&f, source, "host op: the baseline is heard");
+        fixture_free(&f);
+        for (size_t cut = 1; cut <= count; cut++) {
+            f = host_op_fixture(op, &v, &provider);
+            if (!fixture_ready(&f)) break;
+            size_t target = dom_attempts + cut;
+            dom_fail_at = target;
+            done = host_op(&f, &v, op, &status);
+            dom_fail_at = 0;
+            dom_sweeps++;
+            check(dom_attempts >= target, "host op: injection point reached");
+            if (op == HOST_MOVE && !done)
+                dom_script(&f, VIEW_ASSERT "assert(location.href==='http://view.test/page.html'&&history.state.was===1,"
+                               "'a refused move changed the document');",
+                           "host op: a refused move");
+            else if (op == HOST_MOVE)
+                dom_script(&f, VIEW_ASSERT "assert(location.hash==='#moved'&&history.state.n===1);", "host op: moved");
+            // Whatever the cut cost, the binding is whole: a page task runs.
+            dom_script(&f, VIEW_ASSERT "assert(Array.isArray(heard)&&mq.media==='(min-width: 500px)');",
+                       "host op: the binding after a cut");
+            fixture_free(&f);
+        }
+    }
+}
+
+/* Edges a hostile page reaches for: a query nested past libgarb's depth or
+ * a megabyte long, a NUL inside a name or a query (a script string's NUL
+ * is U+FFFD by the time a C string sees it, so it ends nothing), and a
+ * state exactly at its cap and one byte past it. */
+static void dom_view_edge_cases(void)
+{
+    DomFixture f = view_fixture(true, "http://view.test/page.html");
+    if (!fixture_ready(&f)) return;
+    ViewFake v = {.view = {.width = 800, .height = 600}};
+    os64_dom_view_provider_t provider = {fake_view_read, fake_view_scroll, &v};
+    os64_dom_set_view(f.binding, &provider);
+    ComputedFake c = {.document = f.document};
+    os64_dom_set_computed(f.binding, fake_computed, &c);
+    dom_script(&f, VIEW_ASSERT
+        "var deep=matchMedia('('.repeat(100000)+')'.repeat(100000));assert(!deep.matches&&deep.media==='not all');"
+        "var long=matchMedia('(min-width: 1px) and '.repeat(50000)+'(color)');assert(long.matches,'a long list');"
+        "var big=matchMedia('x'.repeat(1<<20));assert(!big.matches&&big.media.length===1<<20,'a long unknown type');"
+        "assert(!matchMedia('screen\\0, print').matches,'a NUL is part of the type, not its end');"
+        "assert(matchMedia('screen\\0, print').media==='screen\\ufffd, print');"
+        "assert(getComputedStyle(document.body).getPropertyValue('color\\0')==='','a NUL is part of the name');"
+        "history.pushState('x'.repeat(65534),'');assert(history.state.length===65534,'JSON exactly at the cap');"
+        "throws('QuotaExceededError',()=>history.pushState('x'.repeat(65535),''));"
+        "assert(history.state.length===65534,'a refusal keeps the state');"
+        "throws('QuotaExceededError',()=>history.pushState({k:'x'.repeat(65530)},''));",
+        "edges: queries, names and the state's cap");
+    fixture_free(&f);
+}
+
 static void dom_view_cases(void)
 {
     dom_view_scroll_cases();
@@ -616,5 +742,6 @@ static void dom_view_cases(void)
     dom_view_computed_cases();
     dom_view_history_cases();
     dom_view_off_cases();
+    dom_view_edge_cases();
 }
 #undef VIEW_ASSERT

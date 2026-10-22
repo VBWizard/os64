@@ -407,7 +407,7 @@ int main(int argc, char **argv)
     dom_fragment_mode_cases();
     dom_budget_cases();
     dom_event_cases();
-    if(!mutation_mode){dom_allocation_cases();dom_clone_allocation_cases();dom_view_allocation_cases();}
+    if(!mutation_mode){dom_allocation_cases();dom_clone_allocation_cases();dom_view_allocation_cases();dom_view_host_allocation_cases();}
     printf("DOM host: %u checks, %u failed; binding allocation sweeps=%zu\n", checks, failures, dom_sweeps);
     return failures ? 1 : 0;
 }

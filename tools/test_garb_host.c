@@ -890,7 +890,22 @@ static int sweep_lists(void)
     }
     printf("libgarb sweep, media text: each of %zu allocations failed in turn, %s\n", worst,
            media_failures == 0 ? "each answer the whole list or none, nothing leaked" : "FAILED");
-    return failures + media_failures;
+    // Brackets nested past GARB_DEPTH_MAX lose their contents: none either;
+    // nested within it, the list is read.
+    static char deep[4 * GARB_DEPTH_MAX + 1], shallow_text[GARB_DEPTH_MAX + 1];
+    for (int i = 0; i < 2 * GARB_DEPTH_MAX; i++) {
+        deep[i] = '(';
+        deep[4 * GARB_DEPTH_MAX - 1 - i] = ')';
+    }
+    for (int i = 0; i < GARB_DEPTH_MAX / 2; i++) {
+        shallow_text[i] = '(';
+        shallow_text[GARB_DEPTH_MAX - 1 - i] = ')';
+    }
+    size_t nested = garb_media_text_serialize(deep, part, sizeof(part));
+    size_t shallow = garb_media_text_serialize(shallow_text, part, sizeof(part));
+    bool depth_ok = nested == (size_t)-1 && shallow != (size_t)-1;
+    printf("libgarb media text nested past GARB_DEPTH_MAX: %s\n", depth_ok ? "none" : "FAILED");
+    return failures + media_failures + !depth_ok;
 }
 
 // A selector list with every allocation failing in turn: an answer that

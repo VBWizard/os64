@@ -227,7 +227,8 @@ bool garb_media_text_matches(const char *text, garb_env_t env);
 // spaces. A list with no content is "". A query's shape is the grammar's:
 // a feature this machine does not know changes what the query evaluates
 // to, not how it is written. Like snprintf; the text form answers
-// (size_t)-1, with "" written, when there was no memory to read it.
+// (size_t)-1, with "" written, when it could not read the text whole: no
+// memory, or brackets nested past GARB_DEPTH_MAX.
 size_t garb_media_serialize(const garb_value_t *v, int32_t n, char *out, size_t cap);
 size_t garb_media_text_serialize(const char *text, char *out, size_t cap);
 

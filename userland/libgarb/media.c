@@ -867,8 +867,9 @@ size_t garb_media_text_serialize(const char *text, char *out, size_t cap)
         out[0] = '\0';
     if (text == NULL)
         return 0;
-    // A list that ran short of memory partway is a prefix of the text, and
-    // its serialization would be a different list's.
+    // A list read short (memory ran out partway, or brackets nested past
+    // GARB_DEPTH_MAX lost their contents) is not the text's, and its
+    // serialization would be a different list's.
     garb_parsed_t r;
     if (garb_parse_values(text, os64_strlen(text), &r) != GARB_OK || r.incomplete) {
         garb_free(&r);
