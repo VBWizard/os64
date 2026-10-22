@@ -299,7 +299,11 @@ typedef enum {
     /* The store could not be read or written: the page's area keeps its
      * map for the page's life from here, and asks the provider nothing
      * more. */
-    OS64_DOM_STORAGE_FAILED = -2
+    OS64_DOM_STORAGE_FAILED = -2,
+    /* The store is another's for now (another window is committing to
+     * it): nothing was kept, and the changes are handed over again at the
+     * next commit, COMMIT_MS from now. At drain there is no next commit. */
+    OS64_DOM_STORAGE_BUSY = -3
 } os64_dom_storage_status_t;
 /* A provider, all on the owner thread, none entering JS; `origin` is the
  * serialized origin ("https://example.com"), borrowed for the call.

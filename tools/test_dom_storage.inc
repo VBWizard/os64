@@ -426,6 +426,24 @@ static void dom_storage_provider_cases(void)
     dom_script(&f, STORAGE_ASSERT "assert(localStorage.getItem('a')===null&&localStorage.length===0);",
                "storage: after a full store refused a commit, the page sees the store");
     check(os64_dom_storage_due(f.binding) == UINT64_MAX, "storage: a refused commit's changes are gone");
+    /* A busy store: nothing kept, the changes handed over again at the next
+     * commit, and the page's own map as it was. */
+    dom_script(&f, "localStorage.setItem('busy','1')", "storage: a write a busy store cannot take now");
+    store.forced = OS64_DOM_STORAGE_BUSY;
+    storage_clock = 3000;
+    unsigned tries = store.commits;
+    os64_dom_storage_settle(f.binding);
+    store.forced = OS64_DOM_STORAGE_OK;
+    check(store.commits == tries + 1 && os64_dom_storage_due(f.binding) == 3000 + OS64_DOM_STORAGE_COMMIT_MS,
+          "storage: a busy store's changes are kept, due again a second on");
+    dom_script(&f, STORAGE_ASSERT "assert(localStorage.getItem('busy')==='1');", "storage: the page still sees its write");
+    storage_clock = 3000 + OS64_DOM_STORAGE_COMMIT_MS;
+    os64_dom_storage_settle(f.binding);
+    check(store.commits == tries + 2 && bytes_find(store.image, store.length, "+4 1\nbusy1\n", 11) != NULL,
+          "storage: and reach the store when it is free");
+    dom_script(&f, "localStorage.removeItem('busy')", "storage: tidy");
+    storage_clock = 9000;
+    os64_dom_storage_settle(f.binding);
     /* A store that cannot be written: the area keeps to memory from here. */
     dom_script(&f, "localStorage.setItem('b','2')", "storage: a write the store cannot keep");
     store.fail_commit = true;

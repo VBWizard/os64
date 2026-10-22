@@ -529,7 +529,8 @@ static DStorageArea *area_touch(os64_dom_t *dom, JSContext *ctx, os64_dom_storag
  * window's changes merged in. A store that could not be written leaves the
  * area to memory; one that was full drops the changes, so the page reads
  * back what the store kept. Changes that could not be written down for
- * want of memory wait for the next commit. */
+ * want of memory, or that a busy store could not take, wait for the next
+ * commit. */
 static void area_commit(DStorageArea *area)
 {
     os64_dom_t *dom = area->dom;
@@ -543,6 +544,7 @@ static void area_commit(DStorageArea *area)
     os64_free(changes);
     area->committed = true;
     area->committed_at = now_ms(dom);
+    if (status == OS64_DOM_STORAGE_BUSY) return;
     map_free(&area->changes);
     if (status == OS64_DOM_STORAGE_FAILED) area->memory = true;
     else area->loaded = false;
