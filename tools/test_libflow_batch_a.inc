@@ -573,6 +573,88 @@ static void batch_a_cases(void)
         "        line 30 110 30 20 base 14\n"
         "          text \"y\" 30 112 8 16 serif 16\n");
 
+    // Codex round 1: a ratio narrows no box below its automatic minimum,
+    // its min-content width, capped by its maximum (Sizing 4 § 4.3).
+    // abcdefghijkl is 80 wide in the test faces, with no break in it; each
+    // box is 10 high at 1, so its ratio alone would make it 10 wide.
+    cascade_layout_case("aspect-ratio: the automatic minimum widens a block, a float, an absolute box",
+        "<!doctype html><style>body { margin: 0 } .r { height: 10px; aspect-ratio: 1 }"
+        " .fl { float: left } .ab { position: absolute; top: 40px; left: 0 }</style>"
+        "<div class=r>abcdefghijkl</div><div class='r fl'>abcdefghijkl</div>"
+        "<div class='r ab'>abcdefghijkl</div>", 200,
+        "page 200 58\n"
+        "block html 0 0 200 20\n"
+        "  block body 0 0 200 10\n"
+        "    block div 0 0 80 10\n"
+        "      line 0 0 80 20 base 14\n"
+        "        text \"abcdefghijkl\" 0 2 80 16 serif 16\n"
+        "    block div 0 10 80 10 float-left\n"
+        "      line 0 10 80 20 base 14\n"
+        "        text \"abcdefghijkl\" 0 12 80 16 serif 16\n"
+        "    block div 0 40 80 10 positioned\n"
+        "      line 0 40 80 20 base 14\n"
+        "        text \"abcdefghijkl\" 0 42 80 16 serif 16\n");
+    // An inline-block, a flex item and a float sized by a child with a
+    // ratio, each the same; a `min-width: 0`, a box that scrolls across,
+    // and a max-width of 50 leave the ratio's 10, 10 and 50.
+    cascade_layout_case("aspect-ratio: the automatic minimum in an atom, a flex item, an intrinsic width",
+        "<!doctype html><style>body { margin: 0 } .r { height: 10px; aspect-ratio: 1 }"
+        " .ib { display: inline-block } .f { display: flex } .fl { float: left }"
+        " .z { min-width: 0 } .h { overflow: hidden } .m { max-width: 50px }</style>"
+        "<div><span class='r ib'>abcdefghijkl</span></div><div class=f><div class=r>abcdefghijkl"
+        "</div></div><div class=fl><div class=r>abcdefghijkl</div></div><div class='r z'"
+        " style='clear: both'>abcdefghijkl</div><div class='r h'>abcdefghijkl</div><div class='r m'>"
+        "abcdefghijkl</div>", 200,
+        "page 200 78\n"
+        "block html 0 0 200 70\n"
+        "  block body 0 0 200 70\n"
+        "    block div 0 0 200 20\n"
+        "      line 0 0 200 20 base 14\n"
+        "        atomic span 0 0 80 10\n"
+        "          block span 0 0 80 10\n"
+        "            line 0 0 80 20 base 14\n"
+        "              text \"abcdefghijkl\" 0 2 80 16 serif 16\n"
+        "    block div 0 20 200 10\n"
+        "      block div 0 20 80 10\n"
+        "        line 0 20 80 20 base 14\n"
+        "          text \"abcdefghijkl\" 0 22 80 16 serif 16\n"
+        "    block div 0 30 80 10 float-left\n"
+        "      block div 0 30 80 10\n"
+        "        line 0 30 80 20 base 14\n"
+        "          text \"abcdefghijkl\" 0 32 80 16 serif 16\n"
+        "    block div 0 40 10 10 clearance=10\n"
+        "      line 0 40 10 20 base 14\n"
+        "        text \"abcdefghijkl\" 0 42 80 16 serif 16\n"
+        "    block div 0 50 10 10 scroller 0 range 70 10\n"
+        "      line 0 50 10 20 base 14 clip 0 50 10 10\n"
+        "        text \"abcdefghijkl\" 0 52 80 16 serif 16 clip 0 50 10 10\n"
+        "    block div 0 60 50 10\n"
+        "      line 0 60 50 20 base 14\n"
+        "        text \"abcdefghijkl\" 0 62 80 16 serif 16\n");
+    // A column item 100 wide at 2 holding five lines, 100 high, in a column
+    // 60 high: its automatic minimum is its content's height, so it does
+    // not shrink to fit (Flexbox 1 § 4.5; the transferred size suggestion
+    // is a replaced box's).
+    cascade_layout_case("aspect-ratio: a column item does not shrink below its content",
+        "<!doctype html><style>body { margin: 0 } .c { display: flex; flex-direction: column;"
+        " height: 60px; width: 100px } .i { aspect-ratio: 2 }</style><div class=c><div class=i>"
+        "a<br>b<br>c<br>d<br>e</div></div>", 200,
+        "page 200 100\n"
+        "block html 0 0 200 60\n"
+        "  block body 0 0 200 60\n"
+        "    block div 0 0 100 60\n"
+        "      block div 0 0 100 100\n"
+        "        line 0 0 100 20 base 14\n"
+        "          text \"a\" 0 2 8 16 serif 16\n"
+        "        line 0 20 100 20 base 14\n"
+        "          text \"b\" 0 22 8 16 serif 16\n"
+        "        line 0 40 100 20 base 14\n"
+        "          text \"c\" 0 42 8 16 serif 16\n"
+        "        line 0 60 100 20 base 14\n"
+        "          text \"d\" 0 62 8 16 serif 16\n"
+        "        line 0 80 100 20 base 14\n"
+        "          text \"e\" 0 82 8 16 serif 16\n");
+
     // ── text-overflow (CSS Overflow 4 § 4.1) ──
 
     // Not inherited; the line is laid out as it would be, past its block:
