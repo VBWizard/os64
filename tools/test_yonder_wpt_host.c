@@ -34,13 +34,21 @@
  * run.
  *
  * WHAT IS SERVED: the page is http://wpt.test/<dir>/<name>; every script and
- * sheet the page asks for whose address is under http://wpt.test/ is
- * answered from the checkout (a .py handler is not: nothing here runs
- * one), /resources/testharnessreport.js from --report (tools/wpt/'s, which
- * leaves the results in the tree; read once, before any page, and a run
- * without it cannot be judged), and everything else fails as a fetch that
- * did not arrive does. Pictures and fonts always fail. The bytes are served
- * as they are on disk, which WPT writes in UTF-8.
+ * sheet the page asks for, and every request a script makes (fetch,
+ * XMLHttpRequest: the real fetch job, against libfetch faked by
+ * test_fetch_fake.inc), whose address names one of the hosts of
+ * kWptHosts (the page's own, its www subdomains, and a second site,
+ * wpt-alt.test, for the cross-origin cases) is answered from the checkout
+ * (a .py handler is not: nothing here runs one, and a request for one is a
+ * network error), /resources/testharnessreport.js from --report
+ * (tools/wpt/'s, which leaves the results in the tree; read once, before
+ * any page, and a run without it cannot be judged), and everything else
+ * fails as a fetch that did not arrive does. A script's request is
+ * answered as WPT's server answers a static file, with the headers of its
+ * `.headers` sidecar; one for a file that is not there is a 404. Pictures
+ * and fonts always fail. The bytes are served as they are on disk, which
+ * WPT writes in UTF-8, but for a `.sub.` file, whose host and port
+ * templates are filled in (wpt_substitute).
  *
  * THE CLOCK: the loop is turned until nothing is owed, then the window's
  * clock moves one 10 ms tick and it is turned again, up to a budget of 60 s
@@ -500,16 +508,80 @@ static size_t wpt_report_len;
  * what it reported is not its verdict, and its run is UNJUDGED. */
 static bool wpt_serve_broken;
 
+/* THE HOSTS SERVED, all from the one checkout: the page's own (wpt.test),
+ * its www subdomains, and a second site (wpt-alt.test) with its own, so a
+ * cross-origin test has an origin that is not the page's without a second
+ * server. These are the names WPT's templates make of {{host}},
+ * {{domains[www1]}} and {{hosts[alt][]}} (wpt_substitute), and any of
+ * them answers on the ports the templates name: 80 and 8001 for http, 443
+ * and 8443 for https. */
+static const char *const kWptHosts[]={
+    "wpt.test","www.wpt.test","www1.wpt.test","www2.wpt.test",
+    "wpt-alt.test","www.wpt-alt.test","www1.wpt-alt.test","www2.wpt-alt.test",
+};
+/* Where the path of an address the runner serves begins, or NULL. */
+static const char *wpt_path_of(const char *url) {
+    const char *p;
+    bool https=false;
+    if(!strncmp(url,"http://",7)) p=url+7;
+    else if(!strncmp(url,"https://",8)) { p=url+8; https=true; }
+    else return NULL;
+    size_t host=strcspn(p,":/?#");
+    bool known=false;
+    for(size_t i=0;i<sizeof(kWptHosts)/sizeof(kWptHosts[0]) && !known;i++)
+        known=strlen(kWptHosts[i])==host && !strncmp(p,kWptHosts[i],host);
+    if(!known) return NULL;
+    p+=host;
+    if(*p==':') {
+        unsigned port=(unsigned)strtoul(p+1,NULL,10);
+        if(https ? port!=443 && port!=8443 : port!=80 && port!=8001) return NULL;
+        p+=1+strspn(p+1,"0123456789");
+    }
+    return *p=='/' ? p+1 : NULL;
+}
+
+/* wptserve's templates, in a file named `.sub.`: the host and port
+ * substitutions get-host-info.sub.js and its kind are written in, made to
+ * name the hosts above. Anything else between {{ and }} is left as it is,
+ * which a test reads as the template it is. malloc'd, with its length. */
+static char *wpt_substitute(const char *bytes, size_t len, size_t *out_len) {
+    static const struct { const char *from, *to; } kSubs[]={
+        {"{{host}}","wpt.test"},{"{{domains[]}}","wpt.test"},
+        {"{{domains[www]}}","www.wpt.test"},{"{{domains[www1]}}","www1.wpt.test"},
+        {"{{domains[www2]}}","www2.wpt.test"},
+        {"{{hosts[alt][]}}","wpt-alt.test"},{"{{hosts[alt][www]}}","www.wpt-alt.test"},
+        {"{{hosts[alt][www1]}}","www1.wpt-alt.test"},{"{{hosts[alt][www2]}}","www2.wpt-alt.test"},
+        {"{{ports[http][0]}}","80"},{"{{ports[http][1]}}","8001"},
+        {"{{ports[https][0]}}","443"},{"{{ports[https][1]}}","8443"},
+    };
+    char *out=wpt_must(malloc(len*2+1));    /* no substitution doubles a name */
+    size_t n=0;
+    for(size_t i=0;i<len;) {
+        bool done=false;
+        for(size_t k=0;k<sizeof(kSubs)/sizeof(kSubs[0]) && !done && bytes[i]=='{';k++) {
+            size_t f=strlen(kSubs[k].from);
+            if(i+f<=len && !memcmp(bytes+i,kSubs[k].from,f)) {
+                size_t t=strlen(kSubs[k].to);
+                memcpy(out+n,kSubs[k].to,t); n+=t; i+=f; done=true;
+            }
+        }
+        if(!done) out[n++]=bytes[i++];
+    }
+    out[n]='\0';
+    *out_len=n;
+    return out;
+}
+
 /* What an address serves, malloc'd with its length: a file of the
  * checkout, or the report script this runner serves in place of the
  * suite's; NULL for anything this runner does not serve, and for a file
  * that is there and does not read whole, which sets wpt_serve_broken. */
 static char *wpt_serve(const char *url, size_t *len) {
-    size_t o=strlen(WPT_ORIGIN);
-    if(strncmp(url,WPT_ORIGIN,o)!=0) return NULL;
+    const char *from=wpt_path_of(url);
+    if(from==NULL) return NULL;
     size_t cap=strlen(url)+1, n=0;
     char *path=wpt_must(malloc(cap));
-    for(const char *p=url+o;*p!='\0' && *p!='?' && *p!='#';p++) {
+    for(const char *p=from;*p!='\0' && *p!='?' && *p!='#';p++) {
         int c=(unsigned char)*p;
         if(c=='%' && isxdigit((unsigned char)p[1]) && isxdigit((unsigned char)p[2])) {
             char hex[3]={p[1],p[2],0};
@@ -536,11 +608,86 @@ static char *wpt_serve(const char *url, size_t *len) {
                              : !(errno==ENOENT || errno==ENOTDIR || errno==ENAMETOOLONG)) {
             bytes=wpt_slurp(file,len);
             if(bytes==NULL) wpt_serve_broken=true;
+            else if(strstr(path,".sub.")!=NULL) {
+                char *made=wpt_substitute(bytes,*len,len);
+                free(bytes);
+                bytes=made;
+            }
         }
         free(file);
     }
     free(path);
     return bytes;
+}
+
+/* A fetch job's answer (test_fetch_fake.inc's resolver), as WPT's own
+ * server answers a static file: its bytes with a type by its extension,
+ * and the headers its `.headers` sidecar and its directory's
+ * `__dir__.headers` name (how WPT gives a static file CORS headers), on
+ * every host and port above. A file that is not there is a 404 a server
+ * would send. A .py handler cannot run here, and an address the runner
+ * does not serve reaches no server: both are network errors. */
+static const char *wpt_type_of(const char *path) {
+    static const struct { const char *ext, *type; } kTypes[]={
+        {".html","text/html"},{".htm","text/html"},{".js","text/javascript"},{".json","application/json"},
+        {".css","text/css"},{".txt","text/plain"},{".xml","application/xml"},{".svg","image/svg+xml"},
+        {".png","image/png"},{".gif","image/gif"},{".jpg","image/jpeg"},{".wav","audio/wav"},
+    };
+    for(size_t i=0;i<sizeof(kTypes)/sizeof(kTypes[0]);i++) if(wpt_ends(path,kTypes[i].ext)) return kTypes[i].type;
+    return "application/octet-stream";
+}
+static void wpt_sidecar(const char *file, char **head, size_t *n, size_t *cap) {
+    size_t len;
+    char *text=wpt_slurp(file,&len);
+    if(text==NULL) return;
+    for(char *line=text;*line;) {
+        size_t l=strcspn(line,"\r\n");
+        if(l>0) {
+            if(*n+l+3>*cap) { *cap=(*n+l+3)*2; *head=wpt_must(realloc(*head,*cap)); }
+            memcpy(*head+*n,line,l); *n+=l;
+            memcpy(*head+*n,"\r\n",3); *n+=2;
+        }
+        line+=l; line+=strspn(line,"\r\n");
+    }
+    free(text);
+}
+static bool wpt_fetch_resolve(const char *method, const char *url, fake_answer_t *out, char **scratch) {
+    (void)method;
+    const char *from=wpt_path_of(url);
+    if(from==NULL) return false;
+    size_t plen=strcspn(from,"?#");
+    char *path=wpt_must(malloc(plen+1));
+    memcpy(path,from,plen); path[plen]='\0';
+    if(wpt_ends(path,".py") || wpt_bad_name(path)!=NULL) { free(path); return false; }
+    size_t len=0;
+    char *bytes=wpt_serve(url,&len);
+    size_t cap=256, n=0;
+    char *head=wpt_must(malloc(cap));
+    head[0]='\0';
+    if(bytes!=NULL) {
+        n=(size_t)snprintf(head,cap,"Content-Type: %s\r\n",wpt_type_of(path));
+        char *file=wpt_join(wpt_root,path), *slash=strrchr(path,'/');
+        char *dirfile=slash!=NULL ? wpt_fmt("%s/%.*s/__dir__.headers",wpt_root,(int)(slash-path),path)
+                                  : wpt_fmt("%s/__dir__.headers",wpt_root);
+        char *side=wpt_fmt("%s.headers",file);
+        wpt_sidecar(dirfile,&head,&n,&cap);
+        wpt_sidecar(side,&head,&n,&cap);
+        free(file); free(dirfile); free(side);
+    }
+    /* One block the fake frees after the fetch: the head, then the body. */
+    char *block=wpt_must(malloc(n+1+len+1));
+    memcpy(block,head,n+1);
+    if(bytes!=NULL) memcpy(block+n+1,bytes,len+1);
+    free(head); free(bytes); free(path);
+    memset(out,0,sizeof(*out));
+    out->url=url;
+    out->status=bytes!=NULL ? 200 : 404;
+    out->reason=bytes!=NULL ? "OK" : "Not Found";
+    out->headers=block;
+    out->body=bytes!=NULL ? block+n+1 : "";
+    out->body_len=bytes!=NULL ? len : 0;
+    *scratch=block;
+    return true;
 }
 
 static void *wpt_product(size_t size) {
@@ -710,6 +857,8 @@ static void wpt_run(const wpt_page_t *page, wpt_outcome_t *out) {
     if(page->long_timeout>=0) long_timeout=page->long_timeout;
     char *url=wpt_fmt("%s%s/%s",WPT_ORIGIN,wpt_dir,page->name);
     wpt_serve_broken=false;
+    fake_fetch_reset();
+    fake_resolve=wpt_fetch_resolve;
     stream_window();
     g.scripts_on=true; g.script_ms=5000; now_ms=100; clock_step=1000;
     g.modern=!wpt_modern_off;

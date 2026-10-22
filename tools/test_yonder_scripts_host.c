@@ -170,6 +170,10 @@ void *os64_calloc(size_t n, size_t z) {
     if (p) memset(p,0,n*z);
     return p;
 }
+/* libfetch, faked by its contract for the fetch job (yonder/fetch_job.c),
+ * which runs here for real: the cases and the WPT runner say what each
+ * address answers, and read back which requests a page made. */
+#include "test_fetch_fake.inc"
 const os64_font_backend_t *os64_freetype_backend_v1(void) { return flow_test_backend(); }
 void os64_ui_theme_current(os64_ui_theme_t *theme, uint64_t *installed) {
     os64_ui_theme_defaults(theme); *installed=0;

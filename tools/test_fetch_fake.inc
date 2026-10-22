@@ -18,7 +18,10 @@
  *
  * An answer comes from fake_answers (the first whose method, when it names
  * one, and address match), else from fake_resolve when a host set one; an
- * address with neither is a DIAL_FAILED fetch. */
+ * address with neither is a DIAL_FAILED fetch. Each host uses the helpers it
+ * needs, so they are marked unused. */
+
+#include <strings.h>
 
 #include "fetch/fetch.h"
 
@@ -57,14 +60,14 @@ static fake_request_t fake_requests[FAKE_REQUESTS];
 static int nfake_requests;
 static int fake_reads, fake_closes, fake_opens;
 
-static void fake_fetch_reset(void) {
+__attribute__((unused)) static void fake_fetch_reset(void) {
     memset(fake_answers,0,sizeof(fake_answers)); nfake_answers=0;
     memset(fake_requests,0,sizeof(fake_requests)); nfake_requests=0;
     fake_reads=fake_closes=fake_opens=0;
     fake_resolve=NULL;
 }
 
-static fake_answer_t *fake_answer(const char *method, const char *url, int32_t status, const char *headers,
+__attribute__((unused)) static fake_answer_t *fake_answer(const char *method, const char *url, int32_t status, const char *headers,
                                   const char *body) {
     fake_answer_t *a=&fake_answers[nfake_answers++];
     memset(a,0,sizeof(*a));
@@ -74,7 +77,7 @@ static fake_answer_t *fake_answer(const char *method, const char *url, int32_t s
 }
 
 /* The fields of request `i` that a case asks about, "" when it has none. */
-static const char *fake_field(int i, const char *name, char *out, size_t cap) {
+__attribute__((unused)) static const char *fake_field(int i, const char *name, char *out, size_t cap) {
     out[0]='\0';
     if(i<0 || i>=nfake_requests) return out;
     const char *blocks[3]={fake_requests[i].fields,fake_requests[i].extra,fake_requests[i].body_headers};
