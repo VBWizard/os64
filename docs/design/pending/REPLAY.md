@@ -340,7 +340,11 @@ picture's format), `picture-fetch`, `font-fetch`. A replay record names
 them on `REPLAY not reproduced:` and a reader refuses any other word
 there. `MISSING picture-scheme`, `FAILED picture` for a refused or
 never-asked address, and `MISSING font` are decided without a fetch and
-are compared.
+are compared. A line the page's input produced on the machine that kept
+it (a click handler's `FAILED`, an event's `MISSING`) is not reproduced,
+since a replay dispatches no input; the diff compares two replays of one
+corpus with each other and never a kept record with its replay, so both
+sides lack those lines alike.
 
 The page's state, decided in ONE function from the run itself (never by
 reading the record back): UNJUDGED (anything in § 2-4 refused; the kept

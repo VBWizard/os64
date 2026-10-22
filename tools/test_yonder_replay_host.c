@@ -56,9 +56,11 @@
  *     always: the record does not say how the fetch ended, only what the
  *     parser was fed; a file's page is read from the kept bytes by the
  *     window's own open_local;
- *   - the loop turned as yonder's main loop turns it (the stream's turn,
- *     the waiting page's, the shown page's, the pictures' settle, the tick
- *     that shows a page whose sheets are late), with the jobs the window
+ *   - the loop turned as yonder's main loop turns it when nobody touches
+ *     the page (the stream's turn, the waiting page's, the shown page's,
+ *     the pictures' settle, the tick that shows a page whose sheets are
+ *     late; no input is dispatched, so what a click or a key did where the
+ *     page was kept is not reproduced, REPLAY.md § 5), with the jobs the window
  *     submitted answered at the top of each turn: a script or a sheet from
  *     the kept index's line for it (rp_entry_is), each line answering one
  *     job, and IN THE INDEX'S ORDER, which is the order the products
@@ -90,7 +92,8 @@
  *     or nothing at all when the budget was spent), that asked for the
  *     next turn for ever, or that had a job out when the budget ended
  *     gains `REPLAY unfinished <why>`;
- *   - the page left as yonder leaves it when it closes, which is the
+ *   - the page left as yonder leaves it when it closes and nobody touched
+ *     it, which is the
  *     departure write: that record, its state second and its REPLAY lines
  *     after it, goes to OUT-DIR under the same name (rp_compose), and one
  *     line is printed with what the page came to: `unfinished` or
@@ -1131,7 +1134,8 @@ static bool rp_quiet(void) {
     if(g.stream.active || g.coming.active || rp_answerable()) return false;
     return !yonder_scripts_alive(g.page.scripts) || yonder_scripts_timer_next(g.page.scripts)==UINT64_MAX;
 }
-/* The loop turned as main turns it, the clock moved a tick at a time when
+/* The loop turned as main turns it when nobody touches the page (no input
+ * is dispatched: REPLAY.md § 5), the clock moved a tick at a time when
  * a turn finds nothing to do, until the page is quiet, the budget is
  * spent, it asks for the next turn for ever, or it starts a navigation of
  * its own. A navigation to a file takes no job (open_local reads it at
@@ -2148,8 +2152,9 @@ static way_head_t rp_head(int status, const char *reason, const char *type, cons
 
 /* A page the self-test kept must replay to its own record, each difference
  * said. Both were read in this harness, which answers no picture or font
- * either way, so here the record matches in its picture and font lines
- * too, which a corpus kept on the glass does not. Let be: a `paint stages`
+ * and dispatches no input either way, so here the record matches in its
+ * picture and font lines too, which a corpus kept on the glass need not,
+ * and neither side holds a line an input made. Let be: a `paint stages`
  * line, by its key, whose times are the processor's counter
  * (YONDER_DIAGNOSTICS.md § What paints cost), which no clock of the
  * harness moves; the `kept:`, `kept lines:` and `claim:` facts, which say
