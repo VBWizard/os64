@@ -518,9 +518,18 @@ static bool height_given(const flow_style_t *s)
     return s->height.kind == FLOW_LENGTH_PX;
 }
 
+// Fixed: both sides given, or one side and a ratio of the page's own that
+// no picture's can replace (not `auto <ratio>`), which replaced_size uses
+// whether or not the picture has arrived, held by the same limits
+// (replaced_hold).
 bool flow_replaced_fixed(const flow_style_t *style)
 {
-    return style != NULL && width_given(style) && height_given(style);
+    if (style == NULL)
+        return false;
+    if (width_given(style) && height_given(style))
+        return true;
+    return style->aspect_ratio > 0 && !style->aspect_natural &&
+           (width_given(style) || height_given(style));
 }
 
 // §10.4's limits on a replaced box's size `r`, its ratio kept in whichever
@@ -528,7 +537,8 @@ bool flow_replaced_fixed(const flow_style_t *style)
 // carries the height with it where the height was not given, and a
 // height held the width where it was not. The rest of §10.4's table —
 // both limits binding at once against the ratio — is booked (GARB.md §
-// Booked). One door for a picture whether or not it has arrived.
+// Booked). One door for a picture whether or not it has arrived, so a
+// box flow_replaced_fixed calls fixed sizes the same either way.
 static void replaced_hold(const flow_style_t *s, Replaced *r, bool w_set, bool h_set, int64_t cbw,
                           int64_t fw, int64_t fh)
 {

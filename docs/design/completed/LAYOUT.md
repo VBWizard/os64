@@ -737,12 +737,17 @@ its contract; this is what it offers and why.
   FETCHES from libpage's images list, which names every picture the page
   does whether it has a box yet or not.
 - **`flow_replaced_fixed(style)`** — whether a replaced box in that style
-  is sized by the page alone (a width, and a height in pixels), so an
-  arrival cannot move it: the rule `replaced_size` sizes by, written once,
-  for a face deciding whether a picture's arrival needs a new layout. Asked
-  of the element's box, never of its attributes: `width="auto"` is written
-  and fixes nothing. The host suite holds it to the layout for 42
-  spellings of the two sides (`fixed_cases`).
+  is sized by the page alone (a width and a height in pixels, or one of
+  them and an `aspect-ratio` of the page's own — not `auto <ratio>`, which
+  the picture's ratio replaces), so an arrival cannot move it: the rule
+  `replaced_size` sizes by, written once, for a face deciding whether a
+  picture's arrival needs a new layout; both of `replaced_size`'s paths
+  end in the same limits (`replaced_hold`), so a fixed box sizes the same
+  before and after. Asked of the element's box, never of its attributes:
+  `width="auto"` is written and fixes nothing. The host suite holds it to
+  the layout for 168 spellings: the 42 of the two sides, each with no
+  ratio, a ratio of its own, `auto 2`, and a ratio held by a limit
+  (`fixed_cases`).
 - **`flow_height`, `flow_width`** — the width is the root's overflow
   width: at least the width laid out at, more where something would not
   fit. **`flow_dump`** is the dump above, snprintf-shaped.
