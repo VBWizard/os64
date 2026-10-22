@@ -205,10 +205,10 @@ static int64_t ratio_width(const flow_style_t *s, int64_t h, int64_t hf, int64_t
 }
 
 // Whether a non-replaced box keeps a ratio: a block container of an
-// element's own — a flex, grid or flow root among them — with one. A
-// replaced box keeps its own through replaced_size; aspect-ratio does not
-// apply to a table's inner boxes (Sizing 4 § 4.1), and a table's own is
-// booked (DEBTS.md).
+// element's own — a flex, grid or flow root among them, an inline-block's
+// too — with one. A replaced box keeps its own through replaced_size;
+// aspect-ratio applies to no inline box and no table's inner box (Sizing
+// 4 § 4.1), and a table's own is booked (DEBTS.md).
 static bool ratio_box(const FBox *b)
 {
     return b->kind == FB_BLOCK && b->node != NULL && b->style->aspect_ratio > 0;
