@@ -283,7 +283,7 @@ static void border_color(Spec *sp, uint32_t rgb)
 
 static void monospace(Spec *sp)
 {
-    sp->s.family = (flow_family_list_t){NULL, 0, FLOW_GENERIC_MONO};
+    sp->s.family = (flow_family_list_t){.generic = FLOW_GENERIC_MONO};
 }
 
 // "Maps to the dimension property": the attribute, read as a dimension,
@@ -342,7 +342,7 @@ static flow_style_t initial(const Ctx *c)
     flow_style_t s;
     os64_memset(&s, 0, sizeof(s));
     s.display = FLOW_DISPLAY_INLINE;
-    s.family = (flow_family_list_t){NULL, 0, c->env->default_generic};
+    s.family = (flow_family_list_t){.generic = c->env->default_generic};
     s.font_weight = 400;
     s.font_style = FLOW_FONT_NORMAL;
     s.font_size = css(c, c->env->viewport_font_px);
@@ -505,7 +505,8 @@ static flow_generic_t guess_generic(const char *s, uint32_t len)
 // `<font face="Verdana, Arial, sans-serif">`: the names as written, each a
 // slice of the attribute, and the generic the list ends in — the first
 // generic keyword the page wrote, else a guess from the first name. A
-// generic keyword is a family, not a name, so it is not passed as one.
+// generic keyword is a family, not a name, so it is not passed as one;
+// the list as written keeps it where it stood.
 static bool font_face(Ctx *c, const char *v, flow_family_list_t *out)
 {
     uint32_t count = 0;
@@ -514,9 +515,10 @@ static bool font_face(Ctx *c, const char *v, flow_family_list_t *out)
             count++;
     count++;
     flow_family_name_t *names = f_arena_alloc(&c->out->arena, count * sizeof(*names));
-    if (names == NULL)
+    flow_family_written_t *written = names != NULL ? f_arena_alloc(&c->out->arena, count * sizeof(*written)) : NULL;
+    if (written == NULL)
         return false;
-    uint32_t n = 0;
+    uint32_t n = 0, nwritten = 0;
     bool have_generic = false;
     flow_generic_t generic = FLOW_GENERIC_SANS;
     const char *p = v;
@@ -538,8 +540,10 @@ static bool font_face(Ctx *c, const char *v, flow_family_list_t *out)
                 generic = g;
                 have_generic = true;
             }
+            written[nwritten++] = (flow_family_written_t){start, len, true};
         } else if (len > 0) {
             names[n++] = (flow_family_name_t){start, len};
+            written[nwritten++] = (flow_family_written_t){start, len, false};
         }
         if (*p == '\0')
             break;
@@ -550,7 +554,7 @@ static bool font_face(Ctx *c, const char *v, flow_family_list_t *out)
         return true;
     if (!have_generic)
         generic = guess_generic(names[0].name, names[0].len);
-    *out = (flow_family_list_t){n > 0 ? names : NULL, n, generic};
+    *out = (flow_family_list_t){n > 0 ? names : NULL, n, generic, written, nwritten};
     return true;
 }
 
@@ -1668,10 +1672,11 @@ static bool author_generic(const char *k, flow_generic_t *out)
 }
 
 // `font-family`: the names in order and the first generic, as `<font
-// face>` builds them. The names point into the sheet.
-// The names are copied for every element the declaration reaches: a
-// `* { font-family: … }` reset costs one list an element (48 bytes for
-// three names), out of the lists' budget (list_alloc), past which the
+// face>` builds them, and the list as written. The names point into the
+// sheet.
+// The lists are copied for every element the declaration reaches: a
+// `* { font-family: … }` reset costs one pair an element (96 bytes for
+// three families), out of the lists' budget (list_alloc), past which the
 // element keeps the family it inherited; one list per winning set would
 // cost it once.
 static bool author_family(Author *a, const garb_val_t *v, flow_family_list_t *out)
@@ -1679,10 +1684,13 @@ static bool author_family(Author *a, const garb_val_t *v, flow_family_list_t *ou
     if (v->items == NULL || v->nitems <= 0)
         return true;
     bool spent;
-    flow_family_name_t *names = list_alloc(a->c, (size_t)v->nitems * sizeof(*names), &spent);
+    // One allocation: the names, then the list as written.
+    flow_family_name_t *names =
+        list_alloc(a->c, (size_t)v->nitems * (sizeof(*names) + sizeof(flow_family_written_t)), &spent);
     if (names == NULL)
         return spent;
-    uint32_t n = 0;
+    flow_family_written_t *written = (flow_family_written_t *)(names + v->nitems);
+    uint32_t n = 0, nwritten = 0;
     bool have_generic = false;
     flow_generic_t generic = FLOW_GENERIC_SANS;
     for (int32_t i = 0; i < v->nitems; i++) {
@@ -1693,13 +1701,15 @@ static bool author_family(Author *a, const garb_val_t *v, flow_family_list_t *ou
                 generic = g;
                 have_generic = true;
             }
+            written[nwritten++] = (flow_family_written_t){it->keyword, (uint32_t)os64_strlen(it->keyword), true};
         } else if (it->kind == GARB_V_STRING && it->len > 0) {
             names[n++] = (flow_family_name_t){it->text, (uint32_t)it->len};
+            written[nwritten++] = (flow_family_written_t){it->text, (uint32_t)it->len, false};
         }
     }
     if (!have_generic && n > 0)
         generic = guess_generic(names[0].name, names[0].len);
-    *out = (flow_family_list_t){n > 0 ? names : NULL, n, generic};
+    *out = (flow_family_list_t){n > 0 ? names : NULL, n, generic, nwritten > 0 ? written : NULL, nwritten};
     return true;
 }
 

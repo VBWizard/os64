@@ -469,31 +469,36 @@ static void inset(const flow_computed_t *c, Out *o, int side)
 
 // ── The lists ───────────────────────────────────────────────────────────
 
-// The names as the page wrote them, then the generic family libflow falls
-// back to: the one the page wrote, or, when it wrote none, the one the
-// first name guessed (which a browser would not write).
+// The list as the page declared it (CSS Fonts 4 § 2.1: the computed value
+// is "list, as specified"), in its order, a generic keyword where it was
+// written and nothing added; a name that is not one identifier is quoted,
+// as Chrome does. A family nothing declared is libflow's own generic.
 static void families(Out *o, const flow_family_list_t *f)
 {
-    for (uint32_t i = 0; i < f->count; i++) {
-        // A name that is not one identifier is quoted, as Chrome does.
-        bool plain = f->names[i].len > 0;
-        for (uint32_t k = 0; plain && k < f->names[i].len; k++) {
-            char ch = f->names[i].name[k];
+    if (f->nwritten == 0) {
+        WORD(o, kGeneric, f->generic);
+        return;
+    }
+    for (uint32_t i = 0; i < f->nwritten; i++) {
+        const flow_family_written_t *w = &f->written[i];
+        if (i > 0)
+            puts_(o, ", ");
+        bool plain = w->keyword || w->len > 0;
+        for (uint32_t k = 0; !w->keyword && plain && k < w->len; k++) {
+            char ch = w->name[k];
             plain = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '-' || ch == '_' ||
                     (k > 0 && ch >= '0' && ch <= '9') || (unsigned char)ch >= 0x80;
         }
         if (!plain)
             puts_(o, "\"");
-        for (uint32_t k = 0; k < f->names[i].len; k++) {
-            if (!plain && (f->names[i].name[k] == '"' || f->names[i].name[k] == '\\'))
+        for (uint32_t k = 0; k < w->len; k++) {
+            if (!plain && (w->name[k] == '"' || w->name[k] == '\\'))
                 puts_(o, "\\");
-            put(o, &f->names[i].name[k], 1);
+            put(o, &w->name[k], 1);
         }
         if (!plain)
             puts_(o, "\"");
-        puts_(o, ", ");
     }
-    WORD(o, kGeneric, f->generic);
 }
 
 static void breadth(const flow_computed_t *c, Out *o, const flow_breadth_t *b)

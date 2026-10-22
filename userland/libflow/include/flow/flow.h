@@ -133,12 +133,25 @@ typedef struct {
     uint32_t len;
 } flow_family_name_t;
 
+// A family as the page wrote it in its list: a name, or a generic keyword
+// (`keyword`), a slice of the sheet or the attribute as the names are.
+typedef struct {
+    const char *name;
+    uint32_t len;
+    bool keyword;
+} flow_family_written_t;
+
 // The names in order, then the generic a resolver falls back to. A
-// resolver that matches no name takes the generic.
+// resolver that matches no name takes the generic. `written` is the list
+// as the page declared it, in its order, generic keywords where they were
+// written: what the property computes to (computed.c), which the
+// resolver's two halves cannot say. NULL and 0 when nothing declared it.
 typedef struct {
     const flow_family_name_t *names;
     uint32_t count;
     flow_generic_t generic;
+    const flow_family_written_t *written;
+    uint32_t nwritten;
 } flow_family_list_t;
 
 typedef enum { FLOW_FONT_NORMAL = 0, FLOW_FONT_ITALIC } flow_font_style_t;

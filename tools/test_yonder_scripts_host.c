@@ -7677,7 +7677,7 @@ static void webfont_cases(void) {
         Page other=g.page;
         other.way.doc=parse_file((const uint8_t *)"<p>other",8,false);
         flow_family_name_t web={"Web",3};
-        flow_family_list_t ask={&web,1,FLOW_GENERIC_SERIF};
+        flow_family_list_t ask={.names=&web,.count=1,.generic=FLOW_GENERIC_SERIF};
         os64_text_font_t *const *list; size_t n; os64_font_face_info_t info;
         s_laying.cascade=g.page.cascade; s_laying.entry=g.page.cascade_entry;
         int32_t files=s_web.nfiles; uint32_t handles=(uint32_t)s_web.nhandles;
@@ -7868,7 +7868,7 @@ static void webfont_cases(void) {
     pictures_settle();
     {
         flow_family_name_t names[]={{"test serif",10},{"Web",3}};
-        flow_family_list_t ask={names,2,FLOW_GENERIC_SERIF};
+        flow_family_list_t ask={.names=names,.count=2,.generic=FLOW_GENERIC_SERIF};
         os64_text_font_t *const *list; size_t n; os64_font_face_info_t info, second;
         s_laying.cascade=g.page.cascade; s_laying.entry=g.page.cascade_entry;
         check(page_fonts(&g.page,&ask,false,false,16,&list,&n,&info)==OS64_FONT_OK && n>=3 &&
@@ -7889,7 +7889,7 @@ static void webfont_cases(void) {
         flow_family_name_t names[36]; char text[36][16];
         for(int i=0;i<34;i++) { snprintf(text[i],16,"n%d",i); names[i]=(flow_family_name_t){text[i],(uint32_t)strlen(text[i])}; }
         names[34]=(flow_family_name_t){"test sans",9};
-        flow_family_list_t ask={names,35,FLOW_GENERIC_SERIF};
+        flow_family_list_t ask={.names=names,.count=35,.generic=FLOW_GENERIC_SERIF};
         os64_text_font_t *const *list; size_t n; os64_font_face_info_t info;
         s_laying.cascade=g.page.cascade; s_laying.entry=g.page.cascade_entry;
         check(page_fonts(&g.page,&ask,false,false,16,&list,&n,&info)==OS64_FONT_OK && strcmp(info.family,"Test Sans")==0,

@@ -1521,6 +1521,7 @@ int main(int argc, char **argv)
     motion_cases();
     computed_cases();
     computed_round1_cases();
+    computed_round2_cases();
     fixed_cases();
     paint_cases();
     decoration_colour_cases();

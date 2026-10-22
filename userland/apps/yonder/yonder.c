@@ -10277,7 +10277,7 @@ static FrameLabel frame_label(const flow_box_t *b)
         os64_snprintf(text, sizeof(text), "Frame: %s", l->href.url);
     else
         os64_strcopy(text, sizeof(text), "Frame (it names no document)");
-    const flow_family_list_t sans = {NULL, 0, FLOW_GENERIC_SANS};
+    const flow_family_list_t sans = {.generic = FLOW_GENERIC_SANS};
     os64_text_font_t *const *fonts;
     size_t nfonts;
     os64_font_face_info_t face;

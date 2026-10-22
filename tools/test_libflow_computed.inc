@@ -339,3 +339,41 @@ static void computed_round1_cases(void)
     flow_free(tree);
     sheeted_close(&p);
 }
+
+// Codex round 2 on slice 1b: font-family computes to the list as the page
+// declared it (CSS Fonts 4 § 2.1, "list, as specified"): nothing added
+// after a named family, a generic kept where it was written, a generic
+// keyword as itself, from a sheet and from <font face> alike.
+static void computed_round2_cases(void)
+{
+    static const char page[] =
+        "<!doctype html><style>body{margin:0}#a{font-family:Arial}#g{font-family:serif,Arial}"
+        "#k{font-family:cursive}#q{font-family:\"My Face\",monospace,Arial}</style>"
+        "<span id=a>a<b id=ai>i</b></span><span id=g>g</span><span id=k>k</span><span id=q>q</span>"
+        "<font id=f face=\"Verdana, sans-serif\">f</font><font id=fv face=Verdana>v</font><span id=none>n</span>";
+    Sheeted p;
+    sheeted_open(&p, page, 800, 600);
+    flow_tree_t *tree = flow_layout(p.doc, p.page, 800, &p.env);
+    expect("computed round 2: the page lays out", tree != NULL, NULL);
+    if (tree == NULL) {
+        sheeted_close(&p);
+        return;
+    }
+    static const struct { const char *id, *want, *what; } kFamily[] = {
+        {"a", "Arial", "computed: a named family alone gets no fallback appended"},
+        {"ai", "Arial", "computed: and inherits as written"},
+        {"g", "serif, Arial", "computed: a generic written first stays first"},
+        {"k", "cursive", "computed: a generic keyword is itself, not the face it falls to"},
+        {"q", "\"My Face\", monospace, Arial", "computed: names and generics in the order written"},
+        {"f", "Verdana, sans-serif", "computed: <font face>'s list as written"},
+        {"fv", "Verdana", "computed: and with no generic, none added"},
+    };
+    const os64_html_node_t *root = p.doc->document;
+    for (size_t i = 0; i < sizeof(kFamily) / sizeof(kFamily[0]); i++) {
+        flow_computed_t *c = flow_computed_new(tree, &p.env, computed_find(root, kFamily[i].id), NULL);
+        computed_is(c, kFamily[i].what, GARB_FONT_FAMILY, kFamily[i].want);
+        flow_computed_free(c);
+    }
+    flow_free(tree);
+    sheeted_close(&p);
+}
