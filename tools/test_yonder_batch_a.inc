@@ -108,6 +108,34 @@ static void ellipsis_review_cases(void)
                     "text \"\" 8 14 #00ff00 clip 0 0 12 20\n"
                     "text \"abc\" 0 34 #00ff00 clip 0 20 4 20\n"
                     "text \"\" 8 34 #00ff00 clip 0 20 4 20\n");
+    // A box that scrolls across: the ellipsis sits at its visible end, and
+    // what scrolls into view is drawn, not ellipsed (Overflow 4 § 4.1).
+    // abcdefghij is 68 wide in a box of 40, so it scrolls 28. At 0 the
+    // limit is 32; scrolled 20 the visible end is 60 in the content, the
+    // limit 52, drawn at 32 on the glass; scrolled to its end (40 asks
+    // for 28) the text ends at the visible end and there is no ellipsis.
+    static const char *const kScrolled[] = {
+        "fill 0 0 200 100 #fefefe\n"
+        "text \"abcdefghij\" 0 14 #00ff00 clip 0 0 32 20\n"
+        "text \"\" 32 14 #00ff00 clip 0 0 40 20\n",
+        "fill 0 0 200 100 #fefefe\n"
+        "text \"abcdefghij\" -20 14 #00ff00 clip 0 0 32 20\n"
+        "text \"\" 32 14 #00ff00 clip 0 0 40 20\n",
+        "fill 0 0 200 100 #fefefe\n"
+        "text \"abcdefghij\" -28 14 #00ff00 clip 0 0 40 20\n",
+    };
+    for (int32_t k = 0; k < 3; k++) {
+        s_paint_scrolls = true;
+        s_paint_scroll = (flow_point_t){20 * k, 0};
+        paint_page_case(k == 0 ? "text-overflow: a box that scrolls, at its start"
+                        : k == 1 ? "text-overflow: a box scrolled part way"
+                                 : "text-overflow: a box scrolled to its end shows its end",
+                        "<!doctype html><style>body { margin: 0 } div { width: 40px;"
+                        " overflow-x: auto; overflow-y: hidden; white-space: nowrap;"
+                        " text-overflow: ellipsis; color: #00ff00 }</style><div>abcdefghij</div>",
+                        200, (os64_gui_rect_t){0, 0, 200, 100}, true, kScrolled[k]);
+        s_paint_scrolls = false;
+    }
     // pre-wrap: abc and six spaces end the first line, 48 wide, but the
     // spaces hang (Text 3 § 4.1.3): abc is 24 and fits, so no ellipsis.
     paint_page_case("text-overflow: spaces that hang do not overflow a line",
@@ -118,6 +146,33 @@ static void ellipsis_review_cases(void)
                     "fill 0 0 200 100 #fefefe\n"
                     "text \"abc      \" 0 14 #101010 clip 0 0 40 40\n"
                     "text \"de\" 0 34 #101010 clip 0 0 40 40\n");
+}
+
+// A line of 2,000 bold x's, 4,000 boxes (each b's piece and its text),
+// that ends in an ellipsis: each box asks where the line is cut, and the
+// painter works that out once a paint, walking the line three times at
+// most. paint_of paints a page eight times at most (the paint and its
+// oracle's), so 3 x 4,000 x 8 bounds it; a walk for each box was 4,000
+// walks of 4,000 a paint.
+static void ellipsis_bound_case(void)
+{
+    size_t pieces = 2000;
+    char *html = malloc(pieces * 8 + 256);
+    strcpy(html, "<!doctype html><style>body { margin: 0 } div { width: 40px; overflow: hidden;"
+                 " white-space: nowrap; text-overflow: ellipsis } b { font-weight: normal }"
+                 "</style><div>");
+    for (size_t i = 0; i < pieces; i++)
+        strcat(html, "<b>x</b>");
+    uint64_t was = yonder_paint_cut_walks;
+    bool escaped = false;
+    char *got = paint_of(html, strlen(html), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
+    uint64_t walks = yonder_paint_cut_walks - was;
+    expect("text-overflow: a line's cut is worked once a paint, not once a piece",
+           got != NULL && walks <= 3 * 2 * pieces * 8, NULL);
+    if (walks > 3 * 2 * pieces * 8)
+        fprintf(stderr, "    walks %llu for %zu pieces\n", (unsigned long long)walks, pieces);
+    free(got);
+    free(html);
 }
 
 // An outline is painted last in its stacking context (CSS 2.1 Appendix E,
@@ -158,6 +213,7 @@ static void batch_a_paint_cases(void)
 {
     object_rect_cases();
     ellipsis_review_cases();
+    ellipsis_bound_case();
     outline_order_cases();
     // text-overflow: the div is 40 wide, its line abcdefghij 68. The
     // ellipsis is 8 (16px serif), so what is kept ends by 32: abcd, a-d

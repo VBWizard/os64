@@ -167,6 +167,10 @@ void yonder_paint_cache_counts_restart(yonder_paint_cache_t *c);
 // (`begin`) and end; NULL, nothing is told.
 typedef enum { YONDER_PAINT_SHADOW, YONDER_PAINT_GRADIENT } yonder_paint_stage_t;
 extern void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
+// How many pieces of lines the painter has walked working where lines end
+// in their ellipsis (paint.c line_cut), since the program started: a
+// count the harness holds linear in the pieces painted.
+extern uint64_t yonder_paint_cut_walks;
 
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                   uint32_t paper, const yonder_dark_t *dark, yonder_paint_cache_t *cache,
