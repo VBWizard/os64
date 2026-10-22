@@ -7098,6 +7098,14 @@ static void storage_clear_lock_cases(void) {
     if(fake_sleep_hook!=NULL) { void (*finish)(void)=fake_sleep_hook; fake_sleep_hook=NULL; finish(); }
     check(removed==1 && busy==0 && fake_file(STORE_FILE)<0 && fake_file(STORE_LOCK)<0,
           "clear: a window mid-commit finishes first, and nothing it published outlives the clear");
+    /* A window making the origin's FIRST store: its lock, no store yet.
+     * Clear waits for it too, and the store it publishes goes. */
+    plant_lock(8,now);
+    fake_sleep_hook=other_commits_and_lets_go;
+    removed=yonder_storage_clear(st,&busy);
+    if(fake_sleep_hook!=NULL) { void (*finish)(void)=fake_sleep_hook; fake_sleep_hook=NULL; finish(); }
+    check(removed==1 && busy==0 && fake_file(STORE_FILE)<0 && fake_file(STORE_LOCK)<0,
+          "clear: a window making an origin's first store finishes first, and its store goes");
     /* Held past the wait: left, counted, and said. */
     check(yonder_storage_commit(st,L,origin,"os64 storage 1\n+4 1\nseed1\n",26,false,NULL)==OS64_DOM_STORAGE_OK,
           "clear: a store again");
@@ -7144,6 +7152,7 @@ static void storage_orphan_cases(void) {
     check(fake_file(STORE_FILE "+8.2.new")>=0 && fake_file("/tmp/profile/storage/http%3A%2F%2Flive.test+lock")>=0 &&
           fake_file(STORE_FILE)>=0,"orphans: a live window's temp and lock, and the store, stay");
     fake_put(STORE_FILE "+9.4.new",kImage,sizeof(kImage)-1);
+    (void)os64_unlink("/tmp/profile/storage/http%3A%2F%2Flive.test+lock");   /* that window finished */
     uint32_t busy;
     check(yonder_storage_clear(st,&busy)==1 && busy==0 && fake_file(STORE_FILE)<0 && fake_file(STORE_FILE "+9.4.new")<0 &&
           fake_file(STORE_FILE "+8.2.new")>=0,

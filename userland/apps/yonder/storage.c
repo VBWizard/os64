@@ -725,6 +725,53 @@ os64_dom_storage_status_t yonder_storage_commit(yonder_storage_t *st, os64_dom_s
     return status;
 }
 
+// The listing's store names (those with no '+'), an open-addressed index
+// of their positions plus one: whether a lock's store was listed is a few
+// probes whatever the folder holds.
+typedef struct {
+    uint32_t *slots;
+    size_t nslots;
+} Listed;
+
+static uint32_t name_hash(const char *name, size_t length)
+{
+    uint32_t hash = 2166136261u;
+    for (size_t i = 0; i < length; i++) hash = (hash ^ (unsigned char)name[i]) * 16777619u;
+    return hash;
+}
+
+static bool listed_has(const Listed *l, char (*names)[OS64_DIRENT_NAME_MAX + 1], const char *name, size_t length)
+{
+    size_t mask = l->nslots - 1;
+    for (size_t at = name_hash(name, length) & mask; l->slots[at] != 0; at = (at + 1) & mask) {
+        const char *held = names[l->slots[at] - 1];
+        if (os64_strlen(held) == length && os64_memcmp(held, name, length) == 0)
+            return true;
+    }
+    return false;
+}
+
+// False on no memory.
+static bool listed_index(Listed *l, char (*names)[OS64_DIRENT_NAME_MAX + 1], size_t count)
+{
+    size_t nslots = 16;
+    while (nslots < count * 2)
+        nslots *= 2;
+    l->slots = os64_calloc(nslots, sizeof(*l->slots));
+    l->nslots = nslots;
+    if (l->slots == NULL)
+        return false;
+    for (size_t i = 0; i < count; i++) {
+        if (os64_strchr(names[i], '+') != NULL)
+            continue;
+        size_t at = name_hash(names[i], os64_strlen(names[i])) & (nslots - 1);
+        while (l->slots[at] != 0)
+            at = (at + 1) & (nslots - 1);
+        l->slots[at] = (uint32_t)i + 1;
+    }
+    return true;
+}
+
 int64_t yonder_storage_clear(yonder_storage_t *st, uint32_t *busy)
 {
     *busy = 0;
@@ -742,36 +789,54 @@ int64_t yonder_storage_clear(yonder_storage_t *st, uint32_t *busy)
         return -1;
     // Each store goes under its own lock, as a commit takes it, so a window
     // mid-commit finishes first and nothing it publishes outlives the
-    // clear; one whose lock a live window holds past the wait is left, and
-    // counted. Then every temp and lock a crash left; a live yonder's is
-    // that window's, mid-commit, and stays. Only a store is a site.
+    // clear; and so does each lock whose store was not listed, a window
+    // making an origin's first store: its lock is taken (made, if that
+    // window has let it go since the listing) and the store it published
+    // goes. One whose lock a live window holds past the wait is left, and
+    // counted. Then every temp a crash left; a live yonder's is that
+    // window's, mid-commit, and stays. Only a store is a site.
+    Listed stores = {NULL, 0};
+    if (!listed_index(&stores, names, count)) {
+        os64_free(names);
+        return -1;
+    }
     int64_t removed = 0;
     bool all = whole;
-    for (size_t i = 0; i < count; i++) {
-        if (os64_strchr(names[i], '+') != NULL)
-            continue;
-        char path[OS64_PATH_MAX], lock[OS64_PATH_MAX];
-        int n = os64_snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
-        int m = os64_snprintf(lock, sizeof(lock), "%s/%s" LOCK_SUFFIX, dir, names[i]);
-        if (n <= 0 || (size_t)n >= sizeof(path) || m <= 0 || (size_t)m >= sizeof(lock)) {
-            all = false;
-            continue;
+    for (int pass = 0; pass < 2; pass++) {
+        for (size_t i = 0; i < count; i++) {
+            const char *plus = os64_strchr(names[i], '+');
+            size_t base = plus != NULL ? (size_t)(plus - names[i]) : os64_strlen(names[i]);
+            // The first pass takes the stores, the second the locks whose
+            // store was not listed.
+            if (pass == 0 ? plus != NULL
+                          : plus == NULL || !os64_streq(plus, LOCK_SUFFIX) || base == 0 ||
+                            listed_has(&stores, names, names[i], base))
+                continue;
+            char path[OS64_PATH_MAX], lock[OS64_PATH_MAX];
+            int n = os64_snprintf(path, sizeof(path), "%s/%.*s", dir, (int)base, names[i]);
+            int m = os64_snprintf(lock, sizeof(lock), "%s" LOCK_SUFFIX, path);
+            if (n <= 0 || (size_t)n >= sizeof(path) || m <= 0 || (size_t)m >= sizeof(lock)) {
+                all = false;
+                continue;
+            }
+            lock_t taken = lock_take(lock, LOCK_WAIT_MS);
+            if (taken != LOCK_TAKEN) {
+                if (taken == LOCK_HELD && *busy < UINT32_MAX)
+                    (*busy)++;
+                all = false;
+                continue;
+            }
+            if (os64_unlink(path) == 0)
+                removed++;
+            else if (os64_stat(path, &entry) == 0)
+                all = false;
+            (void)os64_unlink(lock);
         }
-        lock_t taken = lock_take(lock, LOCK_WAIT_MS);
-        if (taken != LOCK_TAKEN) {
-            if (taken == LOCK_HELD && *busy < UINT32_MAX)
-                (*busy)++;
-            all = false;
-            continue;
-        }
-        if (os64_unlink(path) == 0 || os64_stat(path, &entry) < 0)
-            removed++;
-        else
-            all = false;
-        (void)os64_unlink(lock);
     }
+    os64_free(stores.slots);
     for (size_t i = 0; i < count; i++) {
-        if (os64_strchr(names[i], '+') == NULL || !orphan(dir, names[i]))
+        const char *plus = os64_strchr(names[i], '+');
+        if (plus == NULL || os64_streq(plus, LOCK_SUFFIX) || !orphan(dir, names[i]))
             continue;
         char path[OS64_PATH_MAX];
         int n = os64_snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
