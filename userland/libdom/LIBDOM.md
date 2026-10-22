@@ -374,8 +374,9 @@ a script the host runs, a script innerHTML parses is born started, and a
 clone of a started script is started. When a verb connects a classic script
 that has not started (an `appendChild` of a `createElement('script')`), the
 binding marks it and tells the host through `options.script_connected`;
-moving a started script tells nobody. A host that sets no callback gets no
-notices and no marks.
+moving a started script tells nobody, and one connected to a document of
+its own (§ Documents of their own) is marked and tells nobody. A host that
+sets no callback gets no notices and no marks.
 
 ## `document.write`
 
@@ -450,7 +451,9 @@ makes HTML elements when it was made for the HTML namespace and refuses
 otherwise. libhtml's tree holds elements of the HTML, SVG and MathML
 namespaces only, so an element in no namespace, or another, is a
 NotSupportedError, from `createDocument` and from such a document's
-`createElement`; `createElementNS` is not built.
+`createElement`; `createElementNS` is not built. A new document is in
+no-quirks mode in a browser; here a query or a style attribute in it reads
+with the window's mode, which a quirks page's class selectors show.
 
 ## Proof boundary
 

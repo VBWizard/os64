@@ -51,10 +51,10 @@ struct DValue {
     DValue *style, *class_list, *dataset;
     DQuery *child_nodes, *children, *images, *forms, *elements;
     DListener *listeners, *last_listener;
-    /* A document DOMImplementation made (implementation.c): its document
-     * once the node is the root of a tree no document holds, when that is
-     * not the window's; NULL is the window's. Read only while the node is
-     * such a root (d_node_document), and written as it becomes one. */
+    /* The document the node was made in, copied from or last taken out of,
+     * when that is not the window's (implementation.c); NULL is the
+     * window's. Read only while the node is the root of a tree no document
+     * holds (d_node_document). */
     const os64_html_node_t *document;
     /* A document's DOMImplementation, made when first asked for, and what
      * kind of document it is. */
@@ -356,9 +356,9 @@ int d_implementation_classic(os64_dom_t *dom, JSContext *ctx);
  * hangs from; else, for a tree no document holds, the one it was made in
  * or last left (its root's record), the window's when there is none. */
 const os64_html_node_t *d_node_document(os64_dom_t *dom, const os64_html_node_t *node);
-/* Whether a node's node document is the window's: only such a node may
- * navigate, submit, take focus, run a script, compile a handler or read
- * the page's cookies. */
+/* Whether a node's node document is the window's: a node of a document
+ * with no window navigates, submits and takes focus nowhere, compiles no
+ * handler, and as a document reads no cookies. */
 bool d_window_document(os64_dom_t *dom, const os64_html_node_t *node);
 /* A verb is about to take `node` out of its tree: its record says which
  * document it leaves, for when it is a root. */

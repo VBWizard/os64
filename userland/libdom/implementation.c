@@ -15,16 +15,16 @@
  *
  * IT HAS NO WINDOW. Its location is null, it is cookie-averse, it cannot be
  * written to, a script connected to it is marked started and never runs, a
- * handler attribute in it is not compiled, and a link, a form, a focus or a
- * blur in it asks nothing of the host (d_window_document is the one test).
+ * handler attribute in it is not compiled, and a link, a form, a focus, a
+ * blur or a reset in it asks nothing of the host.
  *
  * WHICH DOCUMENT A NODE BELONGS TO is the document its tree hangs from, and
  * a tree that hangs from none (a node made and not yet inserted, or one
  * taken out) remembers the document it was made in or last left on its
  * root's wrapper (DValue.document). Every verb that takes a node out of a
- * tree passes through d_leaving first, and every node a document of its
- * own makes or a clone copies passes through d_made_in, so a root that has
- * a wrapper always says. One that has none (a child innerHTML replaced,
+ * tree records first the document it leaves (d_leaving), and every node a
+ * document of its own makes or a clone copies is recorded as it is made
+ * (d_made_in), so a root that has a wrapper always says. One that has none (a child innerHTML replaced,
  * never handed to a script) says nothing, and reads as the window's: a
  * script reaches it only through a descendant it held before. While no
  * document of its own exists every node is the window's, and none of this
@@ -59,9 +59,15 @@ void d_made_in(os64_dom_t *dom, const os64_html_node_t *node, const os64_html_no
     if (entry != NULL) entry->document = document != window_document(dom) ? document : NULL;
 }
 
+/* Only a node with a wrapper keeps a record, so one without costs a lookup
+ * and no walk to its root. */
 void d_leaving(os64_dom_t *dom, const os64_html_node_t *node)
 {
-    if (dom->documents != 0 && node->parent != NULL) d_made_in(dom, node, d_node_document(dom, node));
+    if (dom->documents == 0 || node->parent == NULL) return;
+    DValue *entry = d_find(dom, node);
+    if (entry == NULL) return;
+    const os64_html_node_t *document = d_node_document(dom, node);
+    entry->document = document != window_document(dom) ? document : NULL;
 }
 
 int d_document_type(os64_dom_t *dom, const os64_html_node_t *node)
@@ -72,26 +78,37 @@ int d_document_type(os64_dom_t *dom, const os64_html_node_t *node)
 
 /* The DOMImplementation whose `this` this is: the registry entry of its
  * document's wrapper. NULL with a TypeError thrown. */
-static DValue *implementation_of(os64_dom_t *dom, JSContext *ctx, JSValueConst self)
+static DValue *implementation_of(JSContext *ctx, JSValueConst self)
 {
     DValue *owner = JS_GetOpaque(self, os64_js_class_id(&implementation_slot));
     if (owner == NULL || owner->node == NULL) {
         JS_ThrowTypeError(ctx, "Expected a DOMImplementation");
         return NULL;
     }
-    (void)dom;
     return owner;
 }
 
-/* A new document's wrapper, its kind recorded and counted, so that from now
- * on nodes are asked which document they are in. */
+/* A new DOCUMENT node, counted from the moment it exists, so that from then
+ * on nodes are asked which document they are in: one may be moved into it
+ * before it has a wrapper. NULL with the refusal thrown. */
+static os64_html_node_t *document_made(os64_dom_t *dom, JSContext *ctx)
+{
+    int64_t status;
+    os64_html_node_t *document = os64_html_create_document(dom->document, &status);
+    if (document == NULL) {
+        d_html_error(ctx, status);
+        return NULL;
+    }
+    dom->documents++;
+    return document;
+}
+
+/* The new document's wrapper, which records what kind of document it is. */
 static JSValue document_new(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *document, int type)
 {
     JSValue value = d_wrap(dom, ctx, document);
     if (JS_IsException(value)) return value;
-    DValue *entry = d_find(dom, document);
-    entry->document_type = (uint8_t)type;
-    dom->documents++;
+    d_find(dom, document)->document_type = (uint8_t)type;
     return value;
 }
 
@@ -117,7 +134,7 @@ static JSValue create_html_document(os64_dom_t *dom, JSContext *ctx, int argc, J
     os64_html_document_t *doc = dom->document;
     os64_html_node_t *document = NULL, *doctype = NULL, *html = NULL, *head = NULL, *body = NULL,
                      *title_element = NULL, *text = NULL;
-    bool built = (document = made(ctx, os64_html_create_document(doc, &status), status)) != NULL &&
+    bool built = (document = document_made(dom, ctx)) != NULL &&
         (doctype = made(ctx, os64_html_create_doctype(doc, "html", "", "", &status), status)) != NULL &&
         (html = made(ctx, os64_html_create_element(doc, OS64_HTML_NS_HTML, "html", &status), status)) != NULL &&
         (head = made(ctx, os64_html_create_element(doc, OS64_HTML_NS_HTML, "head", &status), status)) != NULL &&
@@ -253,7 +270,7 @@ static JSValue create_document(os64_dom_t *dom, JSContext *ctx, int argc, JSValu
     if (JS_IsUndefined(result) && name.length != 0)
         element = made(ctx, os64_html_create_element(dom->document, space, name.data, &status), status);
     if (JS_IsUndefined(result) && (name.length == 0 || element != NULL))
-        document = made(ctx, os64_html_create_document(dom->document, &status), status);
+        document = document_made(dom, ctx);
     d_string_free(dom, &name);
     d_string_free(dom, &ns);
     if (document == NULL) return JS_IsUndefined(result) ? JS_EXCEPTION : result;
@@ -272,7 +289,7 @@ static JSValue implementation_method(JSContext *ctx, JSValueConst self, int argc
 {
     os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
-    DValue *owner = implementation_of(dom, ctx, self);
+    DValue *owner = implementation_of(ctx, self);
     if (owner == NULL) return JS_EXCEPTION;
     switch (magic) {
     case I_HTML_DOCUMENT: return create_html_document(dom, ctx, argc, argv);

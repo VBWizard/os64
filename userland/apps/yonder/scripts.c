@@ -383,9 +383,6 @@ void yonder_scripts_free(yonder_scripts_t *s)
     os64_free(s);
 }
 
-// A new item for `script`, holding it. NULL past the page's cap or out of
-// memory: that script does not run, as a script past a browser's limit does
-// not.
 // A copy of `text`, NULL for none or no memory: the address is for the
 // page's record, and a script runs the same without it.
 static char *keep(const char *text)
@@ -399,6 +396,9 @@ static char *keep(const char *text)
     return c;
 }
 
+// A new item for `script`, holding it (a link's script has no element, and
+// holds nothing). NULL past the page's cap or out of memory: that script
+// does not run, as a script past a browser's limit does not.
 static Item *item_new(yonder_scripts_t *s, const os64_html_node_t *script, Mode mode)
 {
     if (s->count == SCRIPT_COUNT_MAX)
@@ -717,8 +717,8 @@ static int hex_value(char c)
 }
 
 // HTML's "navigate to a javascript: URL": the address after its scheme,
-// percent-decoded, then read as UTF-8, a byte that is not UTF-8 becoming
-// U+FFFD as the decode the standard names makes it.
+// percent-decoded, then read as UTF-8, each byte that is not UTF-8 becoming
+// U+FFFD.
 bool yonder_scripts_address(yonder_scripts_t *s, const char *url, const char *fragment)
 {
     if (s == NULL || s->dead || url == NULL)

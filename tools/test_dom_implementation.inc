@@ -245,7 +245,12 @@ static void implementation_owner_cases(void)
         "kids.textContent='';assert(kid.ownerDocument===d,'taken out by textContent');"
         "var f2=d.createDocumentFragment();var g=d.createElement('g');f2.appendChild(g);document.body.appendChild(f2);"
         "assert(g.ownerDocument===document&&f2.ownerDocument===d,'a fragment\\'s children are adopted, not the fragment');"
-        "assert(document.ownerDocument===null&&d.ownerDocument===null);",
+        "assert(document.ownerDocument===null&&d.ownerDocument===null);"
+        /* a root that never had a wrapper keeps no record, and reads as the
+         * window's (LIBDOM.md § Documents of their own says so) */
+        "d.body.innerHTML='<div><b id=deep>x</b></div>';var deep=d.getElementById('deep');"
+        "assert(deep.ownerDocument===d);d.body.innerHTML='';"
+        "assert(deep.parentNode.parentNode===null&&deep.ownerDocument===document,'an unwrapped root says nothing');",
         "ownerDocument through creation, moves, removals, replacements and copies");
     fixture_free(&f);
 }
