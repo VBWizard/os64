@@ -615,3 +615,166 @@ DEBTS.md § Classic browser scripting; the classic installers' trust in the
 engine's function constructors, there too. The mutant harnesses were not
 run (the briefs' rule); their anchors were checked against the changed
 files.
+
+### Slice 4, as built
+
+Built by Opus on `opus/tmw-4-css`, from MODERN_WEB_BRIEFS.md § Slice 4,
+then read cold by a fresh Opus (eleven findings, all fixed on the branch)
+and read for design. Every property is a libgarb row marked `modern`, with
+its grammar, and a consumer in libflow or yonder's painter; the cascade,
+the style object and WPT all see it go with the switch.
+
+**What was built.**
+
+- **The flow-relative properties** (CSS Logical 1 § 4). Each
+  flow-relative longhand, and each border side's flow-relative shorthand,
+  is a NAME for its physical twin in a horizontal, left-to-right writing
+  mode (`kLogical` in `libgarb/props.c`), so the cascade orders
+  `margin-inline-start` against `margin-left` by importance, specificity
+  and order as one property, which is what the standard's mapping comes to
+  for the one writing mode libflow lays out. The fourteen two-sided ones
+  (`margin-inline`, `padding-block`, `inset-inline`, `border-inline-width`
+  and the rest) are new shorthands, each a pair of physical sides
+  (`kPairs`). Quirks mode's unitless lengths are the physical names' alone.
+  `direction` and `writing-mode` are not read (DEBTS.md § Browser layout).
+- **`cursor`** (UI 4 § 5.1.1): every keyword, inherited, kept on
+  `flow_style_t`. Pictures (`url()`, and `image-set()` read against its
+  grammar) with their hotspots are read and dropped, so the fallback
+  keyword is what is kept. Nothing draws a pointer shape yet (the
+  honey-do's work).
+- **`user-select`** (UI 4 § 6.1): read and kept; nothing selects
+  differently.
+- **`word-break` and `overflow-wrap`**, with `word-wrap` as its alias (Text
+  3 § 5.1, § 5.4). `break-all` makes a break between every two clusters;
+  `anywhere` and `break-word` make EMERGENCY ones, taken only where a line
+  holds no other, cut at the clusters the run's carets give
+  (`word_pieces`). Min-content counts `break-all`'s and `anywhere`'s and
+  not `break-word`'s, as § 5.4 says; `Segs.measuring` says which is being
+  worked. `keep-all` is `normal`, since libflow breaks only at spaces.
+- **`letter-spacing`** (Text 3 § 7.2): a `<length>`; Text 4's percentages
+  are refused. The text engine adds it (`os64_text_layout_t.letter_spacing`)
+  after every cluster but a tab, the run's last included, so characters on
+  either side of an element's edge are spaced as any two are. libflow
+  leaves the spacing after a line's last character out of the line — in
+  the fit, the fragment's width and min- and max-content
+  (`trailing_spacing`). **That is a deliberate divergence from Chrome and
+  Firefox**, which keep the trailing gap: § 7.2 says a UA must not append
+  letter spacing at the end of a line. On the P5 it shows as a centred,
+  letter-spaced heading sitting half a gap off where Chrome puts it;
+  matching Chrome is a one-line flip, `trailing_spacing` answering 0.
+- **`text-overflow`** (Overflow 4 § 4.1): `clip | ellipsis`. A block that
+  clips (`overflow` not `visible`) and asks for an ellipsis has one laid out
+  once in its own fonts (`flow_box_t.ellipsis`: U+2026, or three periods
+  where the fonts have no glyph for it). libflow's walk hands the painter
+  that block's LINE boxes after each line's pieces, and the painter draws
+  the ellipsis then: text past the limit is cut at the last character that
+  fits, an inline box's piece where the kept content ends, and an atom
+  past the limit is left out whole with everything in it
+  (`past_ellipsis`). Spaces that hang at a pre-wrap line's end do not count
+  as content passing the end (`content_end`). A line that would keep
+  nothing is cut, not ellipsed.
+- **`outline`** and its four longhands (UI 4 § 3): a square ring of a
+  border's styles round the border box, `outline-offset` past it, taking no
+  room and counted in the box's ink (`flow_outline_rect`). `auto` is drawn
+  solid. It is painted LAST in its stacking context (CSS 2.1 Appendix E,
+  step 10): `flow_visit_groups` hands each ring that meets the view to
+  `flow_visitor_t.outline` in a layer of its own, after the context's
+  members and before its group closes. The ring, not the box's overflow,
+  is what is asked to meet the view. There was no default focus ring to
+  move: `:focus` never matches, and yonder's widgets draw their own.
+- **`object-fit` and `object-position`** (Images 3 § 4.5, § 4.6): a
+  picture is placed by `yonder_object_rect` and cut to its content box.
+  Images 4's pairs (`cover scale-down`) are not read.
+- **`aspect-ratio`** (Sizing 4 § 4.1; a new value kind, `GARB_V_RATIO`). A
+  block's height follows its width and its width a given height. With
+  `min-height: auto` and no scrolling it is at least as tall as its content
+  (§ 4.3). A picture's own ratio loses to the page's unless `auto` is
+  written beside it, and a picture not yet measured takes its other side
+  from the page's ratio. A float or an absolute box with a height and no
+  width takes the ratio's width rather than shrinking to fit. A flex item
+  with a definite cross size (given, or its single line's that stretches
+  it, Flexbox 1 § 9.8) has its flex base size through the ratio (§ 9.2.3
+  B), and an automatic minimum no larger than that transferred size
+  (§ 4.5). A grid item under `normal` starts down its area and stretches
+  across it: the inline axis keeps `stretch`, as Chrome and Firefox do for
+  the `aspect-ratio` tile pattern (a grid of `aspect-ratio: 1` cards fills
+  each column and is as tall as it is wide). A written `stretch` still
+  stretches it down. Intrinsic widths follow a given height through the
+  ratio. A table's inner boxes take none, as § 4.1 says, and a table's own
+  box is booked.
+
+The two grammar laxities WPT exposed in passing are fixed too: a radial
+gradient's `at` is a full `<position>`, and each of `text-indent`'s
+keywords may appear once.
+
+**The seams, as they ended.**
+
+| Seam | What it is now |
+|---|---|
+| `kLogical`, `kPairs` (libgarb) | a flow-relative longhand is its physical twin's name; a two-sided one is a shorthand of a physical pair |
+| libdom's style object | every property name libgarb reads is a member three ways (CSSOM § 6.6.1): camel-cased, webkit-cased for a `-webkit-` name, and dashed as written, for shorthands and aliases too (`garb_prop_name_at`, `garb_prop_known`); a marked one goes with the switch |
+| `flow_visitor_t.outline` | its last member: handed each ring last in its stacking context; NULL (as `flow_visit` passes it) means no outline step |
+| the LINE visit | the walk (`flow_visit`, `flow_visit_groups`) hands a LINE box over only for a block with an ellipsis, after the line's pieces |
+| `os64_text_layout_t.letter_spacing` | tracking after every cluster but a tab, the last too; trimming it at a line's end is the caller's |
+| motion | `copy_prop` covers all thirteen longhands, so `same_value` does too; `letter-spacing`, `outline-width`, `-offset`, `-color`, `object-position` and `aspect-ratio` (by its logarithm, Values 4 § 5.7.1) interpolate, and the keywords are discrete at half way |
+
+**Numbers.** WPT, before (the baseline commit, nothing built) → after:
+
+| directory | before | after | `--modern-off` | `[required]` | excluded pages |
+|---|---|---|---|---|---|
+| `css/css-logical/parsing` | 150 | 269 | 155 | 114 | 16 |
+| `css/css-sizing/aspect-ratio/parsing` | 11 | 18 | 11 | 7 | 1 |
+| `css/css-images/parsing` | 348 | 287 | 271 | 16 | 7 |
+| `css/css-text/parsing` | 224 | 268 | 254 | 14 | 30 |
+| `css/css-ui/parsing` | 67 | 151 | 69 | 82 | 13 |
+| `css/css-overflow/parsing` | 109 | 122 | 120 | 2 | 10 |
+
+The 235 required tests pass with the switch on and all fail with it off;
+none leaks. The `--modern-off` column is above "before" because the style
+object's dashed and webkit-cased members and the two grammar fixes are not
+the arc's surface and stay with the switch off. The excluded pages are
+every page whose tests read `getComputedStyle`, which waits on slice 1b.
+
+**css-images went DOWN, 348 → 287.** All 97 lost tests are
+`conic-gradient` values in `-invalid` pages (95 in
+`gradient-interpolation-method-invalid.html`, 2 in
+`conic-gradient-calc-angle-percentage-invalid.html`). They passed only
+because `background-image` was unreachable by its dashed name; once the
+style object answered it, libgarb's ruling that a conic gradient is taken
+by name (GARB.md's module table) makes every one of those values valid.
+The 36 gained are the slice's 16 (`object-fit`, `object-position`) and 20
+that are not the slice's surface and pass with the switch off too:
+gradient positions (the dashed names reach them, and the radial `at` fix
+holds them), `image-rendering`, and one conic case. One page,
+`gradient-interpolation-method-valid.html`, times out: its thousands of
+style writes run the runner's script clock out. It passed nothing before.
+
+Most `-valid` tests that still fail fail on serialization. The style
+object returns a value as it was written, not CSSOM's canonical form (`0`
+for `0px`, `16/9` for `16 / 9`). It also cannot read back a shorthand's
+longhands, and there is no `CSS.supports`. That is a libdom slice of its
+own (DEBTS.md § Classic browser scripting).
+
+**The census** (the P5's 1,601 page records): 985 name at least one of the
+slice's properties as missing. By records: `cursor` 919, `outline` 865,
+`letter-spacing` 726, `text-overflow` 650, `user-select` 627,
+`overflow-wrap` 556, `outline-offset` 553, `word-break` 520, `object-fit`
+428, `word-wrap` 387, `aspect-ratio` 356, `object-position` 296; some
+flow-relative property in 512 records and 127,354 asks. danlegt's asks:
+`object-fit` 7,537, `letter-spacing` 6,297, `cursor` 4,865, `outline`
+2,438, `word-break` 572, `overflow-wrap` 286. Not in the brief and still
+missing: the flow-relative radii (84 to 92 records each),
+`scroll-padding-block` (51), `contain-intrinsic-block-size` (36).
+
+Host: libflow 21,382 → 21,667 checks, yonder 1,716 → 1,816, the DOM host
+22,416 → 38,935, garb declarations 626, text 7,369, the scripted-page host
+5,888; all 0 failed. The mutant harnesses were not run (the briefs' rule).
+
+**Booked** (DEBTS.md § Browser layout, unless named): `direction` and
+`writing-mode`; `aspect-ratio` on a table's own box; the flow-relative
+radii; an outline on an inline box, and one that follows `border-radius`;
+`text-overflow` on an anonymous block's lines; `overflow-wrap` beside a
+float; the `-computed` WPT pages once slice 1b lands; and the style
+object's serialization (§ Classic browser scripting). Noted and not booked:
+`word-break: break-all` over a megabyte of text makes a segment per
+character, the same class of cost libflow already pays per word.
