@@ -252,6 +252,11 @@ static unsigned script_cancels;
 static struct { os64_work_id_t id; void *job; } sheet_jobs[32];
 static int nsheet_jobs;
 static unsigned sheet_submits;      /* every sheet job the window ever sent */
+/* A script's request (fetch, XMLHttpRequest) too: held until a case runs
+ * it, the real fetch job against the fake libfetch (request_land). */
+static struct { os64_work_id_t id; yonder_fetch_job_t *job; } request_jobs[64];
+static int nrequest_jobs;
+static unsigned request_cancels;
 /* A font file's job too: held until a case answers it (font_land). */
 static struct { os64_work_id_t id; yonder_webfont_job_t *job; } font_jobs[32];
 static int nfont_jobs;
@@ -289,6 +294,10 @@ void os64_work_cancel(os64_work_pool_t *pool, os64_work_id_t id) {
     for(int i=0;i<nfont_jobs;i++) if(font_jobs[i].id==id) {
         os64_free(font_jobs[i].job); font_jobs[i]=font_jobs[--nfont_jobs]; font_cancels++; return;
     }
+    for(int i=0;i<nrequest_jobs;i++) if(request_jobs[i].id==id) {
+        yonder_fetch_release(request_jobs[i].job,NULL); request_jobs[i]=request_jobs[--nrequest_jobs];
+        request_cancels++; return;
+    }
     pool_cancelled=id;
     if(id==pool_work_id && pool_work.job!=NULL) {
         pool_work.release(pool_work.job,NULL); memset(&pool_work,0,sizeof(pool_work));
@@ -307,6 +316,11 @@ os64_work_id_t os64_work_submit(os64_work_pool_t *pool, const os64_work_t *work)
         sheet_submits++;
         sheet_jobs[nsheet_jobs].id=++pool_ids; sheet_jobs[nsheet_jobs].job=work->job;
         return sheet_jobs[nsheet_jobs++].id;
+    }
+    if(*(const uint32_t *)work->job==YONDER_JOB_FETCH) {
+        if(nrequest_jobs==64) return 0;
+        request_jobs[nrequest_jobs].id=++pool_ids; request_jobs[nrequest_jobs].job=work->job;
+        return request_jobs[nrequest_jobs++].id;
     }
     if(*(const uint32_t *)work->job==YONDER_JOB_FONT) {
         if(nfont_jobs==32 || font_refuse) return 0;
@@ -7220,6 +7234,8 @@ static void covered_link_cases(void) {
     probe_drop();
 }
 
+#include "test_yonder_requests.inc"
+
 /* A unit that includes this file for the window and its fakes alone (the
  * WPT runner) defines YONDER_HOST_FAKES_ONLY and brings its own main. */
 #ifndef YONDER_HOST_FAKES_ONLY
@@ -7265,6 +7281,7 @@ int main(void)
     if(getenv("YONDER_NO_STREAM")==NULL) join_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) diag_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) storage_cases();
+    if(getenv("YONDER_NO_STREAM")==NULL) request_cases();
     webfont_cases();
     paint_cost_cases();
     whole_view_cases();

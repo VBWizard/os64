@@ -728,6 +728,16 @@ static bool wpt_answer(void) {
         reaped(id,job,got);
         any=true;
     }
+    /* A script's request: the real fetch job, whose libfetch (faked) the
+     * checkout answers through wpt_fetch_resolve. */
+    while(nrequest_jobs>0) {
+        os64_work_id_t id=request_jobs[0].id; yonder_fetch_job_t *job=request_jobs[0].job;
+        request_jobs[0]=request_jobs[--nrequest_jobs];
+        void *got=NULL;
+        (void)yonder_fetch_run(job,NULL,NULL,&got);
+        reaped(id,job,got);
+        any=true;
+    }
     while(nfont_jobs>0) {
         os64_work_id_t id=font_jobs[0].id; yonder_webfont_job_t *job=font_jobs[0].job;
         font_jobs[0]=font_jobs[--nfont_jobs];
@@ -853,6 +863,12 @@ static void wpt_run(const wpt_page_t *page, wpt_outcome_t *out) {
     /* A test's own bytes go to the parser as many as they are, a NUL among
      * them included; the page made for a script test is a C string. */
     if(page->kind!=WPT_HTML) len=strlen(html);
+    /* A `.sub.` page is filled in as wptserve fills one it serves. */
+    if(page->kind==WPT_HTML && strstr(page->source,".sub.")!=NULL) {
+        char *made=wpt_substitute(html,len,&len);
+        free(html);
+        html=made;
+    }
     if(page->kind==WPT_HTML) long_timeout=wpt_html_meta(html,len,"timeout","long",NULL);
     if(page->long_timeout>=0) long_timeout=page->long_timeout;
     char *url=wpt_fmt("%s%s/%s",WPT_ORIGIN,wpt_dir,page->name);
