@@ -701,6 +701,127 @@ static void batch_a_cases(void)
         "        line 0 80 100 20 base 14\n"
         "          text \"e\" 0 82 8 16 serif 16\n");
 
+    // Second cold read. An absolute box with a ratio whose two sizes are
+    // left to it and all four insets set has its BLOCK axis as the
+    // ratio-dependent one (Position 3 § 4.1): WPT abspos-003, 100 wide in
+    // a 100 x 500 block, is 100 high and not stretched to 500; abspos-005,
+    // given 100 wide among the same insets, the same; abspos-006, given 100
+    // high in a 500 x 100 block, is 100 wide.
+    cascade_layout_case("aspect-ratio: an absolute box with every inset set (WPT abspos-003, -005, -006)",
+        "<!doctype html><style>body { margin: 0 } .c { position: relative } .r {"
+        " position: absolute; left: 0; right: 0; top: 0; bottom: 0; aspect-ratio: 1 }</style>"
+        "<div class=c style='width: 100px; height: 500px'><div class=r></div></div>"
+        "<div class=c style='width: 100px; height: 500px'><div class=r style='width: 100px'></div></div>"
+        "<div class=c style='width: 500px; height: 100px'><div class=r style='height: 100px'></div></div>",
+        800,
+        "page 800 1100\n"
+        "block html 0 0 800 1100\n"
+        "  block body 0 0 800 1100\n"
+        "    block div 0 0 100 500 positioned\n"
+        "      line 0 0 100 0 base 14\n"
+        "      block div 0 0 100 100 positioned\n"
+        "    block div 0 500 100 500 positioned\n"
+        "      line 0 500 100 0 base 14\n"
+        "      block div 0 500 100 100 positioned\n"
+        "    block div 0 1000 500 100 positioned\n"
+        "      line 0 1000 500 0 base 14\n"
+        "      block div 0 1000 100 100 positioned\n");
+    // WPT abspos-021: inset 0 in a block 200 wide and 0 high, max-height
+    // 100 at 1. The width stretches to 200, but the max-height carried
+    // across the ratio (Sizing 4 § 4.4) holds it to 100, and the height
+    // its ratio gives is 100.
+    cascade_layout_case("aspect-ratio: a max-height held across the ratio (WPT abspos-021)",
+        "<!doctype html><style>body { margin: 0 }</style><div style='position: relative;"
+        " width: 200px'><div style='position: absolute; inset: 0; max-height: 100px;"
+        " aspect-ratio: 1 / 1'></div></div>", 800,
+        "page 800 100\n"
+        "block html 0 0 800 0\n"
+        "  block body 0 0 800 0\n"
+        "    block div 0 0 200 0 positioned\n"
+        "      line 0 0 200 0 base 14\n"
+        "      block div 0 0 100 100 positioned\n");
+    // Height 100, max-height 50, at 2: the height is held first, so the
+    // width is 100, in every formatting context — a block, a float, an
+    // inline-block, an absolute box, a flex item, an item stretched across
+    // a column and a grid item (whose widths are carried the max-height's
+    // 50 across, Sizing 4 § 4.4), and a float sized by such a child.
+    cascade_layout_case("aspect-ratio: the height held first, in every context",
+        "<!doctype html><style>body { margin: 0 } .r { height: 100px; max-height: 50px;"
+        " aspect-ratio: 2 / 1 } .f { float: left } .ib { display: inline-block } .a {"
+        " position: absolute; top: 300px; left: 0 } .x { display: flex } .col { display: flex;"
+        " flex-direction: column; width: 300px } .g { display: grid; width: 300px } .m {"
+        " max-height: 50px; aspect-ratio: 2 / 1 }</style>"
+        "<div class=r></div><div class='r f'></div><p style='clear: both; margin: 0'>"
+        "<span class='r ib'></span></p><div class='r a'></div><div class=x><div class=r></div>"
+        "</div><div class=col><div class=m></div></div><div class=g><div class=m></div></div>"
+        "<div class=f><div class=r></div></div>",
+        800,
+        "page 800 356\n"
+        "block html 0 0 800 356\n"
+        "  block body 0 0 800 306\n"
+        "    block div 0 0 100 50\n"
+        "    block div 0 50 100 50 float-left\n"
+        "    block p 0 100 800 56 clearance=50\n"
+        "      line 0 100 800 56 base 50\n"
+        "        atomic span 0 100 100 50\n"
+        "          block span 0 100 100 50\n"
+        "    block div 0 300 100 50 positioned\n"
+        "    block div 0 156 800 50\n"
+        "      block div 0 156 100 50\n"
+        "    block div 0 206 300 50\n"
+        "      block div 0 206 100 50\n"
+        "    block div 0 256 300 50\n"
+        "      block div 0 256 100 50\n"
+        "    block div 0 306 100 50 float-left\n"
+        "      block div 0 306 100 50\n");
+    // WPT block-aspect-ratio-025: a float of height 100%, which is auto
+    // here, with min-height 100 at 1 — the min-height carried across makes
+    // it 100 wide; -027: a block 100/80 with max-height 80, stretched
+    // across the page, is held to the 100 its max-height gives (and 20 of
+    // padding below makes it square); -043: height 200 at 1/2 with
+    // max-height 100 holding a 100-wide child is 100 square, its automatic
+    // minimum flooring the width the max-height would carry across.
+    cascade_layout_case("aspect-ratio: limits carried across (WPT block-aspect-ratio-025, -027, -043)",
+        "<!doctype html><style>body { margin: 0 } p { margin: 0 } i { display: inline-block;"
+        " width: 20px; height: 10px; vertical-align: bottom }</style>"
+        "<div style='aspect-ratio: 1/1; height: 100%; min-height: 100px; float: left'></div>"
+        "<div style='clear: both; height: 100px'><div style='aspect-ratio: 100/80;"
+        " max-height: 80px; padding-bottom: 20px'><i></i><i></i><i></i><i></i><i></i><i></i>"
+        "<i></i><i></i><i></i><i></i></div></div>"
+        "<div style='height: 200px; aspect-ratio: 1 / 2; max-height: 100px'><div"
+        " style='width: 100px'></div></div>",
+        800,
+        "page 800 300\n"
+        "block html 0 0 800 300\n"
+        "  block body 0 0 800 300\n"
+        "    block div 0 0 100 100 float-left\n"
+        "    block div 0 100 800 100 clearance=100\n"
+        "      block div 0 100 100 100\n"
+        "        line 0 100 100 20 base 14\n"
+        "          atomic i 0 110 20 10\n"
+        "            block i 0 110 20 10\n"
+        "          atomic i 20 110 20 10\n"
+        "            block i 20 110 20 10\n"
+        "          atomic i 40 110 20 10\n"
+        "            block i 40 110 20 10\n"
+        "          atomic i 60 110 20 10\n"
+        "            block i 60 110 20 10\n"
+        "          atomic i 80 110 20 10\n"
+        "            block i 80 110 20 10\n"
+        "        line 0 120 100 20 base 14\n"
+        "          atomic i 0 130 20 10\n"
+        "            block i 0 130 20 10\n"
+        "          atomic i 20 130 20 10\n"
+        "            block i 20 130 20 10\n"
+        "          atomic i 40 130 20 10\n"
+        "            block i 40 130 20 10\n"
+        "          atomic i 60 130 20 10\n"
+        "            block i 60 130 20 10\n"
+        "          atomic i 80 130 20 10\n"
+        "            block i 80 130 20 10\n"
+        "    block div 0 200 100 100\n"
+        "      block div 0 200 100 0\n");
+
     // ── text-overflow (CSS Overflow 4 § 4.1) ──
 
     // Not inherited; the line is laid out as it would be, past its block:
