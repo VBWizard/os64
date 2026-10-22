@@ -272,9 +272,6 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
     return served;
 }
 
-// A DOWNGRADE IS A PERSON'S DECISION, which is the whole reason libfetch
-// takes a callback: a script may not follow https into http, and somebody at
-// a keyboard may. Every other hop takes the library's own verdict.
 // Whether a hop's target is on the origin of the address asked for: the
 // same scheme, host and port, a port the URL did not name being its
 // scheme's own (http 80, https 443).
@@ -290,6 +287,10 @@ static bool same_origin(const os64_url_t *a, const os64_url_t *b)
     return os64_streq(a->scheme, b->scheme) && os64_streq(a->host, b->host) && origin_port(a) == origin_port(b);
 }
 
+// A DOWNGRADE IS A PERSON'S DECISION, which is the whole reason libfetch
+// takes a callback: a script may not follow https into http, and somebody at
+// a keyboard may. Every other hop takes the library's own verdict. Every
+// hop is also where the load learns whether it left the asked origin.
 static os64_fetch_verdict_t hop_ask(void *ctx, const os64_fetch_hop_t *hop)
 {
     way_leg_t *s = ctx;
