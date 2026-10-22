@@ -7433,8 +7433,10 @@ static NavKind unshown_kind(const Page *p)
 // entry already, and going back or forward from it lands where doing so
 // from that entry would (§ Traverse the history by a delta: the step that
 // many entries away, and nothing when there is none). So, when there is
-// such an entry, the page is never shown, the session is moved as its own
-// entries would have moved it, and the window goes to the entry asked for
+// such an entry, the page is never shown, a new way's own entries join the
+// session as its commit would have put them (a traversal's or a reload's go
+// with the page: DEBTS.md § Classic browser scripting), and the window goes
+// to the entry asked for
 // from the page on screen: no fetch when that is the page on screen. Once
 // it is shown (its `load` and every later task) the page on screen IS it,
 // and session_go answers.
@@ -7444,6 +7446,11 @@ static void unshown_go(Page *p, int32_t delta)
         return;                     // no session around it to go into
     NavKind kind = unshown_kind(p);
     bool back = delta < 0;
+    // A page with entries of its own pushed at least once, which let go of
+    // what was ahead of its entry (arrive_now): forward past its own is
+    // nothing, however it came.
+    if (!back && (p->nback > 0 || p->nahead > 0))
+        return;
     // How far past the entry next to its own the delta reaches: 0 is that
     // entry.
     int64_t past = back ? (int64_t)delta + 1 + p->nback : (int64_t)delta - 1 - p->nahead;

@@ -1018,7 +1018,7 @@ and a tenth the new cases found) and read for design. Four rows in
 | entries (`way_crumb_t.document`, `.entry`, `.state`) | a crumb names its document (moving between two of one document's is no fetch), the entry itself (a fetched traversal finds its target by name wherever the list has moved it, the entries between keeping their own scroll and state) and its state, owned by the session |
 | `stream_entry` | a Back, Forward or Reload that fetches gives the arriving document the entry's state before its first script (HTML § Restore the history object state); a host whose binding is not made yet keeps it for the binding |
 | `g.traversing` | while a traversal is fetched, the page on screen's state updates and fragment navigations change the page and not the session (HTML § Finalize a same-document navigation drops a change whose document is no longer active) |
-| `unshown_go` | `history.back()` or `forward()` past a page not yet shown is ONE rule wherever its arrival is (parse, DOMContentLoaded, waiting for sheets): its navigation committed when its response came (HTML § Finalize a cross-document navigation), so when there is an entry that far (§ Traverse the history by a delta) the page is never shown, its entries go ahead, and the window goes there from the page on screen, with no fetch when that is the page on screen; when there is none, nothing happens and the page arrives. A new way's page has nothing ahead; a reload is the entry on screen again; a traversal's page is the entry it was fetched for (`Page.arrives_at`), which its arrival lands on whatever it pushed before it was shown. From `load` on, the page is the one on screen |
+| `unshown_go` | `history.back()` or `forward()` past a page not yet shown is ONE rule wherever its arrival is (parse, DOMContentLoaded, waiting for sheets): its navigation committed when its response came (HTML § Finalize a cross-document navigation), so when there is an entry that far (§ Traverse the history by a delta) the page is never shown, a new way's entries go ahead (a traversal's are let go with it: DEBTS.md), and the window goes there from the page on screen, with no fetch when that is the page on screen; when there is none, nothing happens and the page arrives. A new way's page has nothing ahead, and neither has a page that pushed before it was shown, however it came: the push let go of what was ahead of its entry; a reload is the entry on screen again; a traversal's page is the entry it was fetched for (`Page.arrives_at`), which its arrival lands on whatever it pushed before it was shown. From `load` on, the page is the one on screen |
 | the switch | with it off: none of the four rows' names, nor `scrollingElement`, `defaultView` or an element's `onscroll`; the arc's handler types are not handlers as content attributes either; `history.length` is 1, a fragment navigation is an ask, the hash setter asks whatever it is given, and history deltas do not add up. What it does not reach: the window's own session (a fragment link's entry, Back within a document, the entries named by crumbs), which is yonder's own history, not web surface (the design read's ruling) |
 
 **The scroll-restoration ruling.** The brief said a traversal within a
@@ -1092,7 +1092,7 @@ live scroll on every entry (P3s). The new cases found a tenth:
 a delta of INT32_MIN negated past int32_t into an out-of-bounds index
 (P1; every delta's magnitude is now int64_t, and the class audit found a
 scroll rounded after its clamp); `history.forward()` from an arriving
-page dropped (now `unshown_go`'s rule both ways); a refetched page that
+page dropped (`unshown_go` now answers both ways); a refetched page that
 pushed before it was shown losing its target (`Page.arrives_at`); the
 computed fallback's CSS-wide keywords, and its 511-byte cut; and a quirks
 body under a boxless root. The hidden descendant's `rem` already read the
@@ -1100,6 +1100,9 @@ root's font; a case pins it. Its adversarial pass found a page that
 pushed and went back among its own entries keeping P ahead
 (`way_forget_ahead`), and a QuickJS crash compiling under a failed
 allocation (booked).
+**The second cold read**, of round 1's fixes, found: `history.forward()`
+from an arriving page that had pushed abandoning it, where the push had let
+go of what was ahead and forward is nothing.
 **The design read** passed it with the scroll-restoration ruling, the two
 accepted departures from HTML's traversal queue below, and the session's
 being outside the switch.

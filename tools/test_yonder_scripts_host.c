@@ -3612,7 +3612,45 @@ static void loop_view_pushed_while_arriving(void) {
         "pushed and back: the push's entry ahead, and P let go as the push let it go");
     loop_drop();
 }
+/* The second cold read of Codex round 1's fixes. A page that pushed before
+ * it was shown let go of what was ahead of its entry: forward() past its
+ * own entries is nothing, and it arrives, whether it came by Back or by a
+ * reload. */
+static void loop_view_pushed_then_forward(void) {
+    loop_page("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
+    check(loop_settle() && view_turns(),"pushed then forward: T");
+    start_trip("http://fixture.test/P",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns() && session_is("/T","/P",""),"pushed then forward: on P, T behind");
+    click_back(NULL,NULL);
+    post_arriving("<p id=out>T</p><script>history.replaceState(null,'','/T');history.pushState(null,'','/T2');"
+        "history.forward()</script><p>tail</p>");
+    check(loop_settle() && view_turns() && !g.stream.active && probe_text_is("out","T") &&
+          session_is("/T","/T2",""),
+        "pushed then forward: by Back, the push let P go, and T arrives at its push");
+    loop_drop();
+    // The same from a reload of T with P ahead.
+    loop_page("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
+    check(loop_settle() && view_turns(),"pushed then forward: T again");
+    start_trip("http://fixture.test/P",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns() && session_is("/T","/P",""),"pushed then forward: on P again");
+    click_back(NULL,NULL);
+    post_arriving("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
+    check(loop_settle() && view_turns() && session_is("","/T","/P"),"pushed then forward: on T, P ahead");
+    click_reload(NULL,NULL);
+    post_arriving("<p id=out>R</p><script>history.replaceState(null,'','/T');history.pushState(null,'','/T2');"
+        "history.forward()</script><p>tail</p>");
+    check(loop_settle() && view_turns() && !g.stream.active && probe_text_is("out","R") &&
+          session_is("/T","/T2",""),
+        "pushed then forward: by a reload, the same");
+    loop_drop();
+}
+static void loop_view_cold2_cases(void) {
+    loop_view_pushed_then_forward();
+}
 static void loop_view_cold_cases(void) {
+    loop_view_cold2_cases();
     loop_view_extremes();
     loop_view_unshown_forward();
     loop_view_pushed_while_arriving();
