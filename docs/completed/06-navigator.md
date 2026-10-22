@@ -45,6 +45,16 @@ links libway and `yonder` links libway, so the family reads as a sentence.
   POST's reply cannot be saved by fetching its address). The walk's POST
   step now reaches the server, and Back to it later fetches its address
   by GET, as the help says; the other 23 screens are unchanged.
+- **A crumb is a session history entry** since the Modern Web arc's slice
+  1b (MODERN_WEB.md § Slice 1b, as built): beside its address and the
+  face's position it carries `document` (the face's name for the document
+  it was shown in, so two crumbs naming one document are entries of it and
+  moving between them is no fetch), `entry` (the face's name for the entry
+  itself, so a traversal that fetches finds its target wherever the list
+  has moved it) and `state` (what the document's script left with it,
+  owned by the session while the crumb is in it). The `_entry` calls hand
+  a whole crumb in and out with its state, and `way_history_clear` frees
+  them; wend calls none of them and fills none of the fields.
 
 The original planning handout follows as history.
 
