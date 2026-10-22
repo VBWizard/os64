@@ -976,8 +976,8 @@ struct flow_box {
     // three periods where those fonts have no glyph for it — and owned by
     // the tree. Where it goes, and what of each line it hides, is
     // flow_line_cut's and flow_line_cut_keeps', which the painter reads
-    // when flow_visit hands it each of the box's lines, and flow_hit too.
-    // NULL otherwise.
+    // when flow_visit (or flow_visit_text_clip) hands it each of the box's
+    // lines, and flow_hit too. NULL otherwise.
     const os64_text_run_t *ellipsis;
     // TEXT: where those bytes are in the node's processed text — what a
     // selection maps a pixel back through — when the node is a TEXT node.
@@ -1333,7 +1333,8 @@ bool flow_box_cut_away(flow_cut_memo_t *memo, const flow_box_t *box);
 os64_gui_rect_t flow_marker_shape_rect(const flow_box_t *box);
 // The text a background of `box` clipped to its text (`background-clip:
 // text`, Backgrounds 4 § 2.8) is cut to: hands `visit` each TEXT box it
-// holds, in tree order. A box's own text and its in-flow and floated
+// holds, and each LINE of a block with an ellipsis (flow_box_t.ellipsis),
+// whose ellipsis is text it holds too, in tree order. A box's own text and its in-flow and floated
 // descendants' — a relatively positioned one's too — but not a marker's,
 // nor an absolutely positioned or fixed descendant's, nor a transformed
 // one's, nor anything in those (Chrome's answers, PILE3.md § The text

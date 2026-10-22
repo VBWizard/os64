@@ -963,15 +963,17 @@ static bool leaves_text_clip(const flow_box_t *d)
     return d->frame != NULL && d->frame->kind == F_FRAME_TRANSFORM && d->frame->box == d;
 }
 
-// Each TEXT box under `top` that a text clip holds, in tree order, without
-// recursion — the tree is as deep as the page.
+// Each TEXT box under `top` that a text clip holds, and each LINE of a
+// block with an ellipsis, whose ellipsis is text the clip holds too, in
+// tree order, without recursion — the tree is as deep as the page.
 static void visit_clip_subtree(const flow_box_t *top, void (*visit)(void *, const flow_box_t *),
                                void *ctx)
 {
     const flow_box_t *b = top->first;
     while (b != NULL) {
         bool enter = !leaves_text_clip(b);
-        if (enter && b->kind == FLOW_BOX_TEXT)
+        if (enter && (b->kind == FLOW_BOX_TEXT ||
+                      (b->kind == FLOW_BOX_LINE && b->parent != NULL && b->parent->ellipsis != NULL)))
             visit(ctx, b);
         if (enter && b->first != NULL) {
             b = b->first;

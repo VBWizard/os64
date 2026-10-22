@@ -16,6 +16,8 @@ typedef struct {
 static void clip_text_visit(void *ctx, const flow_box_t *b)
 {
     ClipTexts *t = ctx;
+    if (b->kind != FLOW_BOX_TEXT)
+        return;     // a line whose ellipsis the clip holds
     size_t n = b->length;
     if (t->len == 0 && t->len + 1 < sizeof(t->text))
         t->text[t->len++] = '|';

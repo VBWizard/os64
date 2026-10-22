@@ -1986,8 +1986,9 @@ static bool is_frame(const flow_box_t *b)
 // box cut away (flow_box_cut_away: an atom past the limit with everything
 // in it, a box stacked out of one), and draws the ellipsis after what is
 // kept, on the line's baseline, when the walk hands it the line after the
-// line's pieces. Its cuts are kept in the paint's memo (Painter.cuts),
-// each line worked once a paint.
+// line's pieces — and in a text clip's pen pass too, where the walk of
+// the clip hands it the line (flow_visit_text_clip). Its cuts are kept in
+// the paint's memo (Painter.cuts), each line worked once a paint.
 
 static flow_line_cut_t line_cut(const Painter *p, const flow_box_t *line)
 {
@@ -2010,11 +2011,11 @@ static uint32_t text_fill(const Painter *p, const flow_style_t *s)
 }
 
 // A line's ellipsis, where its cut puts it, filled as the block's text is
-// (text_fill).
+// (text_fill): in the pen when a text clip's pass draws it.
 static void ellipsis(const Painter *p, const flow_box_t *line)
 {
     flow_line_cut_t c = line_cut(p, line);
-    if (!c.on || p->penned)
+    if (!c.on)
         return;
     const flow_box_t *block = line->parent;
     flow_box_t e = *line;
@@ -2096,12 +2097,14 @@ static void paint_box(void *ctx, const flow_box_t *b)
         }
     }
     const Painter *p = &clipped;
-    if (p->penned && b->kind != FLOW_BOX_TEXT)
+    // A text clip's pen draws text alone: the texts, and the ellipsis a
+    // line ends in.
+    if (p->penned && b->kind != FLOW_BOX_TEXT && b->kind != FLOW_BOX_LINE)
         return;
     switch (b->kind) {
     case FLOW_BOX_LINE:
         // The walk hands a line over only after its pieces, and only when
-        // its block has an ellipsis.
+        // its block has an ellipsis; so does a text clip's.
         ellipsis(p, b);
         return;
     case FLOW_BOX_MARKER:

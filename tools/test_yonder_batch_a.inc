@@ -185,6 +185,40 @@ static void ellipsis_review_cases(void)
         "fill 0 0 200 100 #fefefe\n"
         "fill 0 4 30 10 #0000ff\n"
         "text \"\" 30 14 #00ff00 clip 0 0 40 20\n");
+    // A gradient heading (background-clip: text, a transparent fill): the
+    // ellipsis is text the clip holds, drawn in its pen into the mask with
+    // the kept text, so it takes the gradient; and drawn transparent in
+    // the ordinary pass, as the text is.
+    paint_page_case("text-overflow: a text clip holds the ellipsis",
+        "<!doctype html><style>body { margin: 0 } div { width: 40px;"
+        " overflow: hidden; white-space: nowrap; text-overflow: ellipsis;"
+        " background: linear-gradient(#ff0000, #0000ff); background-clip: text;"
+        " -webkit-text-fill-color: transparent }</style><div>abcdefghij</div>",
+        200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+        "fill 0 0 200 100 #fefefe\n"
+        "clip 0 0 40 20\n"
+        "text \"\" 32 14 #ffffff clip 0 0 40 20\n"
+        "text \"abcdefghij\" 0 14 #ffffff clip 0 0 32 20\n"
+        "fill clip\n"
+        "pixels 0 0 40 20 fff90006 ff0600f9\n"
+        "end clip\n"
+        "text \"abcdefghij\" 0 14 #000000/0 clip 0 0 32 20\n"
+        "text \"\" 32 14 #000000/0 clip 0 0 40 20\n");
+    // The same, the face refusing the clip: the text and the ellipsis in
+    // the gradient's middle, opaque (clip_solid).
+    s_clip_refused = true;
+    paint_page_case("text-overflow: a refused text clip draws the ellipsis in its solid pen",
+        "<!doctype html><style>body { margin: 0 } div { width: 40px;"
+        " overflow: hidden; white-space: nowrap; text-overflow: ellipsis;"
+        " background: linear-gradient(#ff0000, #0000ff); background-clip: text;"
+        " -webkit-text-fill-color: transparent }</style><div>abcdefghij</div>",
+        200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+        "fill 0 0 200 100 #fefefe\n"
+        "text \"\" 32 14 #800080 clip 0 0 40 20\n"
+        "text \"abcdefghij\" 0 14 #800080 clip 0 0 32 20\n"
+        "text \"abcdefghij\" 0 14 #000000/0 clip 0 0 32 20\n"
+        "text \"\" 32 14 #000000/0 clip 0 0 40 20\n");
+    s_clip_refused = false;
     // pre-wrap: abc and six spaces end the first line, 48 wide, but the
     // spaces hang (Text 3 § 4.1.3): abc is 24 and fits, so no ellipsis.
     paint_page_case("text-overflow: spaces that hang do not overflow a line",
