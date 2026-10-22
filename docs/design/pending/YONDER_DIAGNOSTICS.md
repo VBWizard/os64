@@ -443,8 +443,9 @@ was shown, or since its record was last written on asking:
 
 ### The page kept, and what a replay needs (Modern Web slice 0b, 2026-10-21)
 
-MODERN_WEB.md § Slice 0b, as built, is the design record; this is what it
-added to the page file and beside it.
+REPLAY.md is the contract a kept page and a replay are held to, and
+MODERN_WEB.md § Slice 0b, as built, says what was built against it; this
+is what it added to the page file and beside it.
 
 **`keep_pages = on`** in yonder.conf, beside `diagnostics =` (it keeps
 nothing without it, and says so in the log), keeps each page next to its
@@ -511,7 +512,11 @@ a record that lost ANY line (no room in its tables, no memory to keep a
 line or a value) says so with one marker, `REPLAY unjudged: lines lost`,
 beside the counts of what went; a replay and the corpus diff take it as
 unjudged, since the line it lost may be the one a change made, while the
-tally counts the lines it kept. A page kept whole says `kept: whole`, the
+tally counts the lines it kept. A record whose load saw a setting it
+records change before the record was written (the modern switch, zoom,
+appearance, motion, animations, the script time limit) says so the same
+way, `REPLAY unjudged: settings changed during the load`: a replay
+cannot read one page in two windows. A page kept whole says `kept: whole`, the
 only kept page a replay replays, and every record says `bytes: N`, what
 the parser was fed, and, when its page kept scripts or sheets, `kept
 lines: N`, how many lines its index holds: on the host nothing else binds
@@ -523,8 +528,19 @@ has one too), `body` (`html`, `text` or `image`: what libway judged the
 body to be), and for a page from the network `content-type` and `charset`
 as the server named them (empty when it named none) and `encrypted`
 (`yes`/`no`), and its `status` (`0` when its protocol has none). And the
-window it was read in, written at the claim as in force for the load:
-`modern` (`on`/`off`), `laid out at` (the view's `<width>x<height> px`,
+page's other inputs, written at the claim as in force for the load,
+first: `agent` (the User-Agent the window's requests carry), `cookies`
+(the `document.cookie` string a script on the page could read then,
+libway's script door, so never an HttpOnly cookie; one past 1 MiB, or
+with no memory to hold it, is not written, and the record says it lost
+lines), `clock` (the wall clock
+in epoch milliseconds, which a script's `Date` starts from) and `tz` (the
+zone it reads local time in: the `TZ` in force, or `<n>m`, the machine's
+configured minutes east, when there is none). A record that says any of
+those four is of VERSION 2 (REPLAY.md § 3), and a replay requires all of
+them; a kept page recorded before them is of version 1, and a replay
+takes them from its harness and says so on its record. Then the window
+it was read in: `modern` (`on`/`off`), `laid out at` (the view's `<width>x<height> px`,
 again at arrival with ` in <n> ms`), `zoom` (per mille), `appearance`
 (`light`/`dark`), `motion` (`full`/`reduce`), `animate` (`on`/`off`: whether
 animations run),

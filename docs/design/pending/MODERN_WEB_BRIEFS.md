@@ -112,6 +112,16 @@ host first; a QEMU boot is for what needs the wire or the disk. The
 mutant harnesses are NOT part of this run unless Chris asks (they take an
 hour each and the box is shared); say in the PR that they were not run.
 
+**A tool that is a gate gets its format designed before it is built**
+(ruled 2026-10-22, after five Codex rounds and five cold reads of #326
+each found the replay corpus saying "clean" about something it had not
+seen, the same kind each time). A file another tool judges a change by (a
+record, an index, a corpus) has its grammar, its inputs and its versions
+written down first, as REPLAY.md is for the replay: one vector file every
+reader runs, every input named with its one source, and a hand mutant
+per rule that the suite must fail. The same kind of finding twice means
+stop and design.
+
 **Three passes before Codex sees it** (ruled 2026-10-21 after #327's
 first five Codex rounds found eleven legitimate things, nearly all of them
 I/O and error-path edge cases a cold reader asks about and an author does
@@ -162,10 +172,11 @@ writes it; `--modern-off` shows the required tests are the slice's own).
 
 ## Slice 0b — built
 
-The brief is retired in favour of [MODERN_WEB.md § Slice 0b, as built](MODERN_WEB.md#slice-0b-as-built),
-which records the census, keep_pages and its index, the facts a replay
-rebuilds a head from, the replay runner and the diff as they ended up,
-with the numbers. What the fan-out needs from it: a PR's census number is
+The brief is retired in favour of REPLAY.md, the contract a kept page
+and a replay are held to, and [MODERN_WEB.md § Slice 0b, as built](MODERN_WEB.md#slice-0b-as-built),
+which records the census, keep_pages and its index, the inputs a record
+carries, the replay runner and the diff as they ended up, with the
+numbers. What the fan-out needs from it: a PR's census number is
 `python3 -I tools/yonder_tally.py DIR --surface NAME...` over the P5's
 records (how many files and sites name any of the slice's names); once
 kept pages exist, `tools/test_yonder_replay_host.sh KEPT OUT` replays them

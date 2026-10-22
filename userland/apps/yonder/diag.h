@@ -212,7 +212,7 @@ typedef enum { YONDER_DIAG_KEPT_SCRIPT, YONDER_DIAG_KEPT_SHEET } yonder_diag_kep
 // parses the bytes again under it; "" for none). Lines are numbered from 1
 // in the order they are kept, each once.
 //
-// THE INDEX GROWS with what pages fetch (MODERN_WEB_BRIEFS.md § Slice 0b):
+// THE INDEX GROWS with what pages fetch (REPLAY.md § 4):
 // its first line is `# yonder kept index <version>`, more lines beginning
 // `#` say what the rest hold, and every other line is
 //     <n> TAB <kind> TAB what that kind carries
@@ -225,7 +225,8 @@ typedef enum { YONDER_DIAG_KEPT_SCRIPT, YONDER_DIAG_KEPT_SHEET } yonder_diag_kep
 //     <url> TAB came|failed TAB <final> TAB <label> TAB <job>
 // with a byte below 0x20, 0x7F and a backslash in a field written `\xHH`
 // and `\\`, as a page file writes them. Version 2 added `<job>`; a replay
-// refuses a kept page of version 1.
+// reads a kept page of version 1 by REPLAY.md § 3, matching its jobs by
+// kind and address in the order kept.
 #define YONDER_DIAG_INDEX_VERSION 2
 int64_t yonder_diag_keep_resource(const yonder_diag_claim_t *c, yonder_diag_kept_t kind, uint32_t job,
                                   const char *url, const char *final, const char *label,

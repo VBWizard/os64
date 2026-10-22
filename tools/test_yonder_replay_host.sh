@@ -6,6 +6,11 @@
 #       replays every page kept in KEPT-DIR (yonder.conf's keep_pages) and
 #       writes its record again into OUT-DIR; compare two such directories
 #       with tools/yonder_corpus_diff.py
+#   tools/test_yonder_replay_host.sh --mutants [WORKERS]
+#       the proof's own proof (REPLAY.md § 7): every mutant in
+#       tools/test_yonder_replay_mutants.py, each breaking one rule, run
+#       through tools/mutants_parallel.py in WORKERS copies of the tree (12
+#       unless said); each must make the proof below fail
 #   tools/test_yonder_replay_host.sh
 #       the proof: the census tools' tests, then the runner's self-test,
 #       which keeps the fixture pages as yonder would, replays them, and
@@ -17,6 +22,9 @@
 #       time, whose unfinished pages the diff must call broken
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+if [ "${1:-}" = --mutants ]; then
+    exec python3 -I tools/mutants_parallel.py "test_yonder_replay_mutants.py:${2:-12}"
+fi
 work=$(mktemp -d -t os64-yonder-replay.XXXXXX)
 cleanup() {
     result=$?
