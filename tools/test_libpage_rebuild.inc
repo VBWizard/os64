@@ -278,6 +278,16 @@ static void rebuild_value_modes(void)
     rebuild_expect("rebuild: disabled script checkbox",os64_page_node_set_checked(f.state,c,true)==0);
     bool on=false;
     rebuild_expect("rebuild: checked getter",os64_page_node_checked(f.state,c,&on)==0 && on);
+    /* Checkedness is every input's: a text input keeps what a script set,
+     * and it is the checkbox's once its type says checkbox. */
+    os64_html_node_t *t=rebuild_id(f.doc,"t");
+    on=true;
+    rebuild_expect("rebuild: a text input's checkedness starts false",os64_page_node_checked(f.state,t,&on)==0 && !on);
+    rebuild_expect("rebuild: a text input's checkedness is set",
+        os64_page_node_set_checked(f.state,t,true)==0 && os64_page_node_checked(f.state,t,&on)==0 && on);
+    rebuild_expect("rebuild: and is the checkbox's when its type changes",
+        os64_page_node_set_attr(f.state,t,"type","checkbox",8,false)==0 &&
+        os64_page_node_checked(f.state,t,&on)==0 && on);
     rebuild_expect("rebuild: disabled script option",os64_page_node_set_selected_index(f.state,s,0)==0);
     int32_t index=-2;
     rebuild_expect("rebuild: selectedIndex getter",os64_page_node_selected_index(f.state,s,&index)==0 && index==0);
