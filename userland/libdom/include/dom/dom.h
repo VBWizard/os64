@@ -28,7 +28,9 @@ typedef struct {
  * `origin_epoch_us` on the wall clock, microseconds since the Unix epoch.
  * Each milestone is microseconds after the origin, OS64_DOM_TIMING_NOT_YET
  * until it has happened; `type` is how the navigation came about and
- * `redirects` how many redirects it followed. */
+ * `redirects` Navigation Timing's redirectCount: the redirects it followed
+ * when every one stayed on the origin, 0 when there were none or one did
+ * not. */
 #define OS64_DOM_TIMING_NOT_YET UINT64_MAX
 typedef enum {
     OS64_DOM_TIMING_FETCH_START = 0,

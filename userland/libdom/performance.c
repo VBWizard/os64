@@ -27,7 +27,8 @@
  * did not wait for them: the domain lookup, the connection and the request
  * read as fetchStart (a connection already open), the secure connection as
  * fetchStart for an https page and 0 for any other, and the unload and
- * redirect pairs 0. */
+ * redirect pairs 0 (a redirect's times are not measured, though their
+ * count, redirectCount, is the host's: os64_dom_timing_t.redirects). */
 
 static JSClassID performance_slot, entry_slot, timing_slot, navigation_slot;
 

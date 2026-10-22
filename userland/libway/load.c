@@ -275,9 +275,30 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
 // A DOWNGRADE IS A PERSON'S DECISION, which is the whole reason libfetch
 // takes a callback: a script may not follow https into http, and somebody at
 // a keyboard may. Every other hop takes the library's own verdict.
+// Whether a hop's target is on the origin of the address asked for: the
+// same scheme, host and port, a port the URL did not name being its
+// scheme's own (http 80, https 443).
+static uint16_t origin_port(const os64_url_t *u)
+{
+    if (u->port != 0)
+        return u->port;
+    return os64_streq(u->scheme, "https") ? 443 : os64_streq(u->scheme, "http") ? 80 : 0;
+}
+
+static bool same_origin(const os64_url_t *a, const os64_url_t *b)
+{
+    return os64_streq(a->scheme, b->scheme) && os64_streq(a->host, b->host) && origin_port(a) == origin_port(b);
+}
+
 static os64_fetch_verdict_t hop_ask(void *ctx, const os64_fetch_hop_t *hop)
 {
     way_leg_t *s = ctx;
+    // A redirect that leaves the asked origin, or one whose target is not
+    // spelled out, makes the load's redirectCount 0 (way_head_t.redirects).
+    bool spelled = hop->kind == OS64_FETCH_HOP_WHOLE || hop->kind == OS64_FETCH_HOP_DOWNGRADE ||
+                   hop->kind == OS64_FETCH_HOP_SELF;
+    if (!s->asked_parsed || !spelled || !same_origin(&s->asked_origin, &hop->target))
+        s->left_origin = true;
     if (hop->kind != OS64_FETCH_HOP_DOWNGRADE)
         return OS64_FETCH_HOP_DEFAULT;
     char question[WAY_SENTENCE_MAX];
@@ -347,6 +368,8 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
         *why = OS64_FETCH_OK;
     leg_say(s, " fetching %s", url);
     show(s);
+    s->asked_parsed = os64_url_parse(url, &s->asked_origin) == OS64_URL_OK;
+    s->left_origin = false;
 
     os64_html_options_t limits = os64_html_options_default();
     os64_fetch_options_t opt = {0};
@@ -424,6 +447,7 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
     }
     out->fetch = f;
     head_copy(&out->head, head, html ? WAY_BODY_HTML : image ? WAY_BODY_IMAGE : WAY_BODY_TEXT);
+    out->head.redirects = s->left_origin ? 0 : head->hops;
     const os64_fetch_detail_t *detail = os64_fetch_detail(f);
     out->head.tls_version = detail->tls_version;
     out->head.tls_fallback = detail->tls_fallback;

@@ -7752,6 +7752,25 @@ static void storage_orphan_cases(void) {
     yonder_storage_free(st);
     fake_reset();
 }
+/* The redirects the head says libway followed on the asked origin are the
+ * page's redirectCount, both spellings. */
+static void timing_redirect_case(void) {
+    fake_reset();
+    stream_window();
+    g.scripts_on=true; g.script_ms=5000; now_ms=100;
+    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    char *html=pad_page("<p id=out>start</p><script>document.getElementById('out').textContent="
+        "performance.navigation.redirectCount+' '+performance.getEntriesByType('navigation')[0].redirectCount;</script>");
+    way_head_t h=stream_head("text/html","",false);
+    h.redirects=2;
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body((const uint8_t *)html,strlen(html),YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    free(html);
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","2 2"),
+          "timing: the head's same-origin redirects are the page's redirectCount");
+    loop_drop();
+}
 /* The page reads its navigation's timing and the screen it is on. */
 static void timing_window_cases(void) {
     fake_reset();
@@ -7796,6 +7815,7 @@ static void storage_cases(void) {
     storage_clear_lock_cases();
     storage_orphan_cases();
     timing_window_cases();
+    timing_redirect_case();
     storage_modern_off_cases();
 }
 

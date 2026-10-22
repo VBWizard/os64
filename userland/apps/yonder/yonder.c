@@ -8517,6 +8517,9 @@ static bool stream_turn(void)
     yonder_mail_t *mail = g.stream.mail;
     if (mail != NULL && !g.stream.has_head && yonder_mail_take_head(mail, &g.stream.head)) {
         g.stream.has_head = true;
+        // Before any of the page's scripts can ask: their host takes the
+        // timing when it is made, at the parse.
+        g.stream.timing.redirects = g.stream.head.redirects;
         stream_mark(OS64_DOM_TIMING_RESPONSE_START);
         // The head is final and nothing is parsed yet: the jar's cookies
         // for the page, as they stand at its head (diag_cookies).
