@@ -516,11 +516,13 @@ tally counts the lines it kept. A record whose window changed under its
 load says so the same way, `REPLAY unjudged: settings changed during the
 load`: a setting it records that is not what the claim wrote when the
 record is written (the agent, scripts on or off, the modern switch, zoom,
-appearance, motion, animations, the script time limit), or a view that
-is not the one the page was laid out in (at arrival, against the claim's;
-after it, against the layout's). A replay cannot read one page in two
-windows. A page kept whole says `kept: whole`, the
-only kept page a replay replays, and every record says `bytes: N`, what
+appearance, motion, animations, the script time limit), or a page laid
+out in another view than the claim's. A replay cannot read one page in
+two windows. A view that moves after the page arrived is not marked: it
+also moves when yonder's own bars come and go, which a replay reproduces.
+A page kept whole says `kept: whole`, the kept page a replay replays (one
+of version 1, recorded before that fact, it assumes kept whole when its
+bytes are beside it, and says so), and every record says `bytes: N`, what
 the parser was fed, and every kept page's says `kept lines: N`, from 0
 at its claim, how many lines its index holds: on the host nothing else
 binds a record to its kept files.
@@ -541,8 +543,11 @@ in epoch milliseconds, which a script's `Date` starts from) and `tz` (the
 zone it reads local time in: the `TZ` in force, or `<n>m`, the machine's
 configured minutes east, when there is none). A record that says any of
 those four is of VERSION 2 (REPLAY.md § 3), and a replay requires all of
-them; a kept page recorded before them is of version 1, and a replay
-takes them from its harness and says so on its record. Then the window
+them; a kept page recorded before them is of version 1, and a replay of
+it takes its cookies and clock from its harness, and its agent, zone and
+any window input its record does not say from what the person running
+it states (`--window`), saying which on its record (REPLAY.md § 3). Then
+the window
 it was read in: `modern` (`on`/`off`), `laid out at` (the view's `<width>x<height> px`,
 again at arrival with ` in <n> ms`), `zoom` (per mille), `appearance`
 (`light`/`dark`), `motion` (`full`/`reduce`), `animate` (`on`/`off`: whether
