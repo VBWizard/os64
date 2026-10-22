@@ -303,6 +303,27 @@ static void implementation_windowless_cases(void)
     fixture_free(&f);
 }
 
+/* A body's window-reflecting handlers (onload, onfocus, onblur) are
+ * window's only for the window's body (HTML § 8.1.8.1, "determining the
+ * target of an event handler"); a new document's body has none. */
+static void implementation_reflection_cases(void)
+{
+    DomFixture f = fixture_new(NULL);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, IMPL_ASSERT
+        "var mine=function(){};window.onload=mine;assert(document.body.onload===mine,'the window\\'s body reflects');"
+        "var z=document.implementation.createHTMLDocument('');"
+        "assert(z.body.onload===null,'a new document\\'s body reads null');"
+        "z.body.onload=function(){};assert(window.onload===mine&&z.body.onload===null,'and an assignment changes nothing');"
+        "z.body.setAttribute('onload','window.hijacked=1');z.body.setAttribute('onfocus','window.hijacked=1');"
+        "assert(window.onload===mine&&window.onfocus===null,'nor does its attribute');"
+        "var r=document.implementation.createHTMLDocument('').createElement('frameset');r.onblur=function(){};"
+        "assert(r.onblur===null&&window.onblur===null,'a frameset of its own neither');"
+        "z.body.onclick=function(){};assert(typeof z.body.onclick==='function','a handler that does not reflect is its own');",
+        "reflected handlers: only the window's body reaches window");
+    fixture_free(&f);
+}
+
 static void implementation_document_cases(void)
 {
     DomFixture f = fixture_new(NULL);
@@ -403,6 +424,7 @@ static void dom_implementation_cases(void)
     implementation_html_document_cases();
     implementation_owner_cases();
     implementation_windowless_cases();
+    implementation_reflection_cases();
     implementation_document_cases();
     implementation_control_type_cases();
     implementation_jquery_cases();

@@ -321,12 +321,25 @@ static int handler_kind(const char *name)
     return -1;
 }
 
+/* HTML's "determining the target of an event handler": a body's (or a
+ * frameset's) window-reflecting handler is window's when the body is the
+ * window's document's, and nobody's when its document has no window
+ * (implementation.c). 1 for window's, 0 for the element's own, -1 for
+ * nobody's. */
+static int reflected(os64_dom_t *dom, const os64_html_node_t *node, int kind)
+{
+    if (!body_like(node) || !window_reflecting(kind)) return 0;
+    return d_window_document(dom, node) ? 1 : -1;
+}
+
 int d_handler_attribute_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
                             const char *name)
 {
     int kind = handler_kind(name);
     if (kind < 0 || node->kind != OS64_HTML_ELEMENT) return 0;
-    DValue *entry = body_like(node) && window_reflecting(kind) ? dom->window : d_find(dom, node);
+    int target = reflected(dom, node, kind);
+    if (target < 0) return 0;
+    DValue *entry = target > 0 ? dom->window : d_find(dom, node);
     if (entry == NULL) return 0;
     return slot_for(dom, ctx, entry, kind, false) != NULL ? 0 : -1;
 }
@@ -938,7 +951,9 @@ static JSValue target_method(JSContext *ctx, JSValueConst self, int argc, JSValu
 }
 
 /* on<type> for an element, the document or window. The body's
- * window-reflecting handlers are window's, whichever object is asked. */
+ * window-reflecting handlers are window's, whichever object is asked; a
+ * body of a document with no window has none, reads null and ignores an
+ * assignment. */
 static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                                 int magic, JSValue *data)
 {
@@ -948,7 +963,9 @@ static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSV
     int kind = magic & ~D_SET;
     DValue *entry = target_entry(dom, ctx, self);
     if (entry == NULL) return JS_EXCEPTION;
-    if (entry != dom->window && body_like(entry->node) && window_reflecting(kind)) entry = dom->window;
+    int target = entry != dom->window ? reflected(dom, entry->node, kind) : 0;
+    if (target < 0) return set ? JS_UNDEFINED : JS_NULL;
+    if (target > 0) entry = dom->window;
     if (!set) {
         DListener *slot = slot_find(entry, kinds[kind]);
         if (slot == NULL) {
