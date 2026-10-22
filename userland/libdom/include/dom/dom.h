@@ -289,9 +289,9 @@ typedef bool (*os64_dom_computed_provider_t)(void *opaque, const os64_html_node_
 bool os64_dom_computed_put(os64_dom_computed_t *out, int32_t prop, const char *value, size_t length);
 /* What making the style current cost, added to os64_dom_geometry_stats. */
 void os64_dom_computed_cost(os64_dom_computed_t *out, uint64_t layouts, uint64_t elapsed_us);
-/* NULL removes it; a script's getComputedStyle then throws
- * InvalidStateError for an element and reads "" for a pseudo-element.
- * Install outside callbacks. */
+/* NULL removes it; a declaration's read then throws InvalidStateError for
+ * an element in the document, and reads "" for a pseudo-element or an
+ * element outside it. Install outside callbacks. */
 void os64_dom_set_computed(os64_dom_t *dom, os64_dom_computed_provider_t provider, void *opaque);
 
 /* HISTORY (HTML § The History interface; MODERN_WEB.md § Slice 1b): the
@@ -316,9 +316,10 @@ typedef struct {
      * =, or an address that differs from the document's only in its
      * fragment): the host adds the entry `url` (replaces the current one
      * when `replace`), scrolls to its fragment, and owes popstate and
-     * hashchange (os64_dom_history_event). The binding has already made
-     * `url` the document's address and null its state. False when the host
-     * could not: the address is put back. */
+     * hashchange (os64_dom_history_event). On true the binding makes `url`
+     * the document's address and null its state. False when the host
+     * could not: nothing changed, and the binding asks for the address as
+     * a navigation instead (os64_dom_take_navigation). */
     bool (*fragment)(void *opaque, const char *url, bool replace);
     /* history.length: the entries in the session. */
     uint32_t (*length)(void *opaque);
@@ -335,8 +336,10 @@ void os64_dom_set_history(os64_dom_t *dom, const os64_dom_history_t *history);
  * began (a link to `#x`). The document's address becomes `url`, its state
  * `length` bytes of the JSON the host kept (NULL for null), read the next
  * time history.state is. Nothing is dispatched: the host follows with
- * os64_dom_history_event. False on no memory, nothing changed. Owner
- * thread, outside JS. */
+ * os64_dom_history_event. False on no memory, nothing changed; it is the
+ * step of a move that can fail, so a host calls it before its own entries
+ * move and moves them only on true, or the window would show one address
+ * while the page's scripts read another. Owner thread, outside JS. */
 bool os64_dom_history_moved(os64_dom_t *dom, const char *url, const char *state, size_t length);
 /* `popstate` at window, its state history.state's (`hashchange` false), or
  * `hashchange` from `old_url` to the document's address now, each as one

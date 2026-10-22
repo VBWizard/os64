@@ -379,7 +379,8 @@ void way_went_back_entry(way_session_t *session, way_crumb_t *left, way_crumb_t 
 bool way_next(way_session_t *session, way_crumb_t *out);
 void way_went_forward(way_session_t *session, const char *url, const way_position_t *where);
 void way_went_forward_entry(way_session_t *session, way_crumb_t *left, way_crumb_t *arrived);
-// An entry put where Forward goes, nearest last, its state taken: what a
+// An entry put where Forward goes next, its state taken, so a face pushes
+// the furthest first; past WAY_HISTORY_MAX the furthest is let go. What a
 // face does with entries a page made ahead of itself before it was shown.
 void way_forward_entry(way_session_t *session, way_crumb_t *ahead);
 

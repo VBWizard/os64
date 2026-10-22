@@ -166,7 +166,7 @@ struct os64_dom {
     struct DMedia *media, *media_last;
     /* HISTORY (window.c): the host's provider; the current entry's state as
      * JSON, NULL for null; its value, parsed at the first read of
-     * history.state and the same object every read after (`state_read`);
+     * history.state and the same object every read after (`entry_state_read`);
      * and whether the page asked to keep its own scroll. */
     os64_dom_history_t history_host;
     char *entry_state;

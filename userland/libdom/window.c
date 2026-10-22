@@ -541,7 +541,8 @@ int d_window_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
  * Modern Web table's row. A state update (pushState, replaceState) changes
  * the address and the state and fires nothing; a fragment navigation and
  * a traversal to an entry of this document are the host's, which fires
- * popstate and then hashchange through os64_dom_history_event. */
+ * popstate, then hashchange when the fragment moved, through
+ * os64_dom_history_event. */
 
 void os64_dom_set_history(os64_dom_t *dom, const os64_dom_history_t *history)
 {
@@ -654,8 +655,10 @@ static int json_value(DJson *j, JSContext *ctx, JSValueConst v, int depth, bool 
     if (JS_GetOwnPropertyNames(ctx, &props, &count, v, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) < 0) return -1;
     int result = json_puts(j, ctx, array ? "[" : "{");
     if (array && result == 0) {
-        /* An array is its own properties 0 to length - 1 and nothing else:
-         * JSON writes a hole as null and leaves a name out. */
+        /* A clone of an array keeps its holes and its named properties,
+         * which JSON cannot carry (it writes a hole as null and leaves a
+         * name out): only an array that is its own properties 0 to
+         * length - 1 and nothing else is kept. */
         uint32_t length = 0;
         JSValue n = JS_GetPropertyStr(ctx, v, "length");
         result = JS_IsException(n) || JS_ToUint32(ctx, &length, n) < 0 ? -1 : 0;
