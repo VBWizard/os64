@@ -63,25 +63,57 @@ claimed file is still there before renaming over it.
 
 A record is lines separated by `\n`, bytes are UTF-8, and NO line
 contains a `\r`, a NUL, or any byte below 0x20 other than the `\t` the
-escape never leaves (a control byte in a value is spelled `\xHH`). A
-record that breaks that anywhere is not a record. The lines, in order:
+escape never leaves (a control byte in a value is spelled `\xHH`), and
+no field decodes to a NUL (`\x00`: a string would end at it). A record
+that breaks that anywhere is not a record. The lines:
 
 ```
 record      := address (verdict | state verdict?) (head | plain | token | replay)* end?
-                                       (in any order: yonder writes its tokens first)
+                                       (in any order after the second line: yonder writes its tokens first)
 address     := "address: " text
-verdict     := "verdict: clean" | "verdict: " count " MISSING" | "verdict: " count " FAILED"
-             | "verdict: " count " MISSING, " count " FAILED" | "verdict: unwritten"
-state       := "REPLAY state: " ("verdict" | "incomplete" | "unfinished" | "unjudged") (" " text)?
-head        := key ": " value          (a key from the head set, § 3; room 24, counted apart)
-plain       := key ": " value          (any other key; room 512)
+verdict     := "verdict: clean" | "verdict: unwritten"
+             | "verdict: " count1 " MISSING" | "verdict: " count1 " FAILED"
+             | "verdict: " count1 " MISSING, " count1 " FAILED"
+state       := "REPLAY state: verdict"
+             | "REPLAY state: " ("incomplete" | "unfinished" | "unjudged") " " text
+head        := head-key ": " head-value     (the head set below)
+plain       := key ": " value               (any other key)
 token       := "MISSING " kind " " name " (" count ")"
              | "FAILED " what ": " message " (" count ")"
 replay      := "REPLAY incomplete " text | "REPLAY unfinished " text
-             | "REPLAY unjudged: " text | "REPLAY not reproduced:" (" " known-kind)+
+             | "REPLAY unjudged: " text
+             | "REPLAY inputs defaulted:" (" " defaulted)+     (each name once)
+             | "REPLAY not reproduced:" (" " known-kind)+
 end         := "end"
 count       := "0" | [1-9][0-9]{0,9}      (no leading zero, at most UINT32_MAX)
+count1      := [1-9][0-9]{0,9}            (a verdict names no token it has no line of)
+clock       := "0" | [1-9][0-9]{0,15}     (epoch milliseconds, at most 2^53-1)
+defaulted   := "agent" | "cookies" | "clock" | "tz" | "job-identity"
+known-kind  := "font-fetch" | "image" | "picture-fetch"
 ```
+
+THE HEAD SET is what both readers parse a value of; any other key is a
+plain fact, its value any text:
+
+| key | value |
+|---|---|
+| `status` | count, then optionally ` ` and the reason |
+| `body` | `html` \| `text` \| `image` |
+| `encrypted` | `yes` \| `no` |
+| `scripts`, `modern`, `animate` | `on` \| `off` |
+| `appearance` | `light` \| `dark` |
+| `motion` | `full` \| `reduce` |
+| `kept` | `whole` \| `not whole: ` text |
+| `bytes`, `kept lines`, `zoom`, `script seconds` | count |
+| `laid out at` | count [`x` count] ` px` [` in ` count ` ms`] |
+| `clock` | clock |
+| `agent`, `tz` | text, not empty |
+| `final address`, `content-type`, `charset`, `TLS`, `cookies` | text, maybe empty |
+
+yonder writes them in a room of their own (24 lines, counted apart from
+the 512 the plain lines may take), except `bytes`, which it writes in
+the plain room: a record that ran out of plain room may lose it, and says
+it lost lines.
 
 - The SECOND line is the verdict for a page record and the state for a
   replay record; nothing else may stand there.
@@ -101,8 +133,11 @@ count       := "0" | [1-9][0-9]{0,9}      (no leading zero, at most UINT32_MAX)
   with every escape in every position.
 - **Numbers.** One bounded-decimal parser per reader: ASCII digits only,
   no sign, no leading zero past a lone `0`, at most ten digits, at most
-  UINT32_MAX, nothing trailing. Everything numeric (counts, `bytes`,
-  `kept lines`, `zoom`, the index's numbers and version) goes through it.
+  UINT32_MAX (a clock: sixteen digits, at most 2^53-1), nothing trailing.
+  Everything numeric (counts, `bytes`, `kept lines`, `zoom`, the clock,
+  the index's numbers and version, the runner's own `--seconds`, and the
+  sequence in a record's name once its zero padding is passed over) goes
+  through it.
 - **A second `address:`, a second verdict, a second `end`, a line past
   `end`, a line the grammar does not know**: not a record.
 
@@ -110,24 +145,32 @@ count       := "0" | [1-9][0-9]{0,9}      (no leading zero, at most UINT32_MAX)
 
 A replay reads a page in the window it was read in. Every input has one
 source; "the harness" is a source only where this table says so, and
-those three are the whole of what a replay fakes.
+the rows that say so are the whole of what a replay fakes.
 
 | input | source | head fact | required |
 |---|---|---|---|
 | the page's bytes | `<name>.html` | `bytes: N` must equal the file's length | yes |
+| that the page was kept whole | record | `kept: whole` (a record without `kept:` is not a kept page) | yes |
 | the address, final address | record | `address:`, `final address:` | yes |
 | the head: status, content type, charset, encrypted, body kind | record | `status:`, `content-type:`, `charset:`, `encrypted:`, `body:` (local pages: `body:` only) | yes |
+| TLS | record | `TLS:` read into the head and written back on the replay's record; nothing else on the page reads it | when said |
 | the sub-resources | `.d/index` and files | `kept lines: N` must equal the index's lines | yes |
 | the window's size | record | `laid out at: WxH px` (claim; rewritten at arrival with the layout time) | yes |
 | the modern switch | record | `modern:` | yes |
 | scripts, their budget | record | `scripts:`, `script seconds:` | yes |
 | zoom, appearance, motion, animations | record | `zoom:`, `appearance:`, `motion:`, `animate:` | yes |
-| the user agent | record | `agent:` | yes (v2+) |
-| the script-visible cookies | record | `cookies:` the `document.cookie` string the page could read at claim, HttpOnly excluded | yes (v2+) |
-| the clock | record | `clock:` epoch milliseconds at claim; `tz:` the zone in force | yes (v2+) |
+| the user agent | record | `agent:` | yes (v2; v1: the harness's, named) |
+| the script-visible cookies | record | `cookies:` the `document.cookie` string the page could read at claim, HttpOnly excluded | yes (v2; v1: the harness's, named) |
+| the clock | record | `clock:` epoch milliseconds at claim; `tz:` the zone in force | yes (v2; v1: the harness's, named) |
+| the clock while the page runs | the harness | — | stated: `Date` reads the record's clock, frozen; it does not move while the page runs |
+| the window's time | the harness | — | stated: an idle turn moves the window's milliseconds a 10 ms tick, the microsecond clock moves 1 ms each time it is read, and the replay ends at a 60 s virtual budget (`--seconds`) |
+| the fetch's end | the harness | — | stated: a page from the network is posted whole before the first turn, with a verdict of OK always; the record keeps what the parser was fed, not how the fetch ended |
+| when products arrive | the harness | — | stated: each script or sheet job is answered at the top of the next turn, in the kept order, never between the chunks of the page's own parse |
+| the request | the harness | — | stated: a page that was the reply to a POST is fed back as a GET's |
+| the cookie jar | the harness | — | stated: read-only; what the page sets with `document.cookie=`, and a `Set-Cookie` of its own, is not seen again |
 | the text face | the harness | — | stated: bitmap face, so measurements differ from the P5's |
 | pictures and fonts | not fetched | — | stated: their fetch-decided outcomes are not reproduced (§ 5) |
-| the screen | the harness | — | stated: `screen` answers the harness's size |
+| the screen | the harness | — | stated: `screen`, once built, answers the harness's size |
 
 **Privacy, said plainly:** a kept page already holds the bytes of a
 logged-in page; with `cookies:` it also holds the tokens the page could
@@ -135,31 +178,40 @@ read. A kept corpus is exactly as private as the browsing was, and
 `keep_pages` is a setting the person turns on knowing that. The record
 never holds an HttpOnly cookie, which no script could read either.
 
-**Settings changed during a load** (zoom, appearance, motion, the
-script budget, the switch): the record gains `REPLAY unjudged: settings
+**The window changed during a load**: yonder compares, at every write of
+the record, the agent, scripts on or off, the modern switch, the zoom,
+appearance, motion, animations and the script budget with what the claim
+wrote, and the view with the one the page was laid out in (at arrival,
+the layout's against the claim's; after it, the window's against the
+layout's). One that differs gives the record `REPLAY unjudged: settings
 changed during the load` and the page is not replayable; a replay cannot
-be two windows.
+be two windows. The cookies and the clock are what they were at the
+claim, by definition, and are not compared.
 
 **Versions.** The index's first line carries its format, `# yonder kept
 index <v>`; a record is of version 2 when it says any input version 2
 added (`agent:`, `cookies:`, `clock:`, `tz:`), and of version 1 when it
 says none, and a record and its index of different versions are damage. A reader accepts every
-version it knows. **Version 1** (the index with six fields, no job
-identity; records without `agent`, `cookies`, `clock`, `tz`, and some
-without `end`) is read with its jobs matched in kept order and the
-missing inputs taken from the harness, and the replay record says so:
-`REPLAY inputs defaulted: agent cookies clock tz` — a page so marked is
-judged (both sides of a diff default the same way for the same kept
-files) but its defaulted inputs are visible to the person reading it.
-**Version 2** is strict. A version the reader does not know is damage.
-An index with no first line, or a first line that is not the version
-line, is damage.
+version it knows. **Version 1** is a record without `agent`, `cookies`,
+`clock` and `tz`, with or without `end`, and an index of six fields, no
+job identity. ONLY THOSE FOUR INPUTS ARE EVER TAKEN FROM THE HARNESS: every
+other row above marked "yes" is required of version 1 as of version 2,
+`kept lines` is bound to the index for it too, and its `kept: whole` must
+be there, since yonder writes it last and it stands for the `end` such a
+record may lack. Its jobs are matched by kind and address in kept order,
+and the replay record says what it took: `REPLAY inputs defaulted: agent
+cookies clock tz job-identity`. A page so marked is judged; the diff
+compares two records of it only when both took the same inputs from the
+harness. **Version 2** is strict. A version the reader does not know is
+damage. An index with no first line, or a first line that is not the
+version line, is damage.
 
 ## 4. The index
 
 ```
-index    := version line*
+index    := version (comment | line)*
 version  := "# yonder kept index " count
+comment  := "#" text
 line     := count TAB kind TAB fields
 fields   := (script | sheet)   -- v2: address TAB came|failed TAB final TAB label TAB identity
                                -- v1: the same without identity
@@ -169,7 +221,7 @@ Lines are numbered 1..N in order, each once; a number repeated, skipped
 or out of order is damage. A line of a kind the reader does not know is
 damage, so the slice that keeps a new kind (slice 2's `fetch`, slice 1a's
 `storage`) teaches both readers that kind in the same change. Fields hold
-no raw control byte; the C reader never re-splits a field with a
+no raw control byte and decode to no NUL; the C reader never re-splits a field with a
 NUL-terminated routine. A job is matched to a line by kind, address and
 identity (v1: kind and address, in kept order); each line answers one
 job; a job with no line left is `REPLAY incomplete`; a line no job took
@@ -186,8 +238,10 @@ never-asked address, and `MISSING font` are decided without a fetch and
 are compared.
 
 The page's state, decided in ONE function from the run itself (never by
-reading the record back): UNJUDGED (anything in § 2-4 refused; a harness
-check failed; the write faulted; the child died) outranks UNFINISHED (no
+reading the record back): UNJUDGED (anything in § 2-4 refused; the kept
+record lost lines, or says settings changed during the load; a harness
+check failed; the window's own record lost lines; the write faulted; the
+child died) outranks UNFINISHED (no
 verdict reached: never arrived, busy for ever, a job out at the budget)
 outranks INCOMPLETE (an index line unmatched either way, a navigation the
 page started) outranks VERDICT. Only VERDICT pages are judged clean or
@@ -212,6 +266,13 @@ gets a record the parent writes: `REPLAY state: unjudged the replay died:
 <signal or status>`. A production run replays nothing in the parent; the
 self-test keeps its fixtures in a child too, so children start clean.
 
+The OUT-DIR: a whole run writes into one that holds no records, and is
+refused otherwise; OUT-DIR must not be KEPT-DIR, compared by device and
+inode so a bind mount is the same directory; one that cannot be listed
+refuses the run; and `--only` (a partial run) removes a page's old record
+before its child starts, so a record that cannot be written now leaves
+none rather than the old one, and one it cannot remove refuses the run.
+
 ## 7. The proof
 
 - The grammar vectors, run by both readers, including every refusal in
@@ -226,20 +287,34 @@ self-test keeps its fixtures in a child too, so children start clean.
   the damage that ONLY that rule can catch (a case that another rule
   catches first proves nothing).
 - **The mutants**: `tools/test_yonder_replay_mutants.py` applies one hand
-  mutant per rule (the required-fact table minus one entry; the identity
-  compare dropped; the numbering check dropped; the agreement check
-  forced true; the version check dropped; the parent's temp removal
-  dropped) and requires the suite to FAIL on each. It is run by the PR
-  before Codex and listed in the PR body with its count.
-- The diff: pairs by name AND address, judges VERDICT pages only, exits 1
-  on a regression or a `newly incomplete`, 2 on anything unjudged on
-  either side, and compares only the reproduced kinds.
+  mutant per rule in § 1-7, every rule, not a sample (rule 4: the
+  required-fact table minus each entry; each input not applied; the
+  identity compare, the numbering check, each-line-one-job, each refusal
+  of the readers, the version checks, the end rule, the claim's proof,
+  the window-change marks, the parent's wait, limit, exit table,
+  agreement and temp removal, and the diff's rules) and requires its
+  suite to FAIL on each. It is run by the PR before Codex
+  (`tools/test_yonder_replay_host.sh --mutants`) and listed in the PR body
+  with its count.
+- The diff: pairs by name AND address, and only records that took the
+  same inputs from the harness; judges VERDICT pages only; exits 2 on
+  anything unjudged on either side and on a page only AFTER has (BEFORE
+  did not replay it); else 1 on a regression, a broken page (UNFINISHED
+  after), a `newly incomplete` page, or one missing from AFTER; and
+  compares only the reproduced kinds.
 
 ## 8. Booked, with triggers
 
 | debt | trigger |
 |---|---|
+Each is a row in DEBTS.md § The replay corpus.
+
+| debt | trigger |
+|---|---|
 | the text face is the harness's bitmap face, so measured layout differs from the P5's | a replay regression that is a measurement |
-| pictures and fonts are not fetched on replay | a page whose script branches on a picture's size |
-| `screen` answers the harness's size | a page whose MISSING lines depend on it |
+| `screen`, once built, answers the harness's size | the slice that builds it, or a page whose MISSING lines depend on it |
 | a kept corpus holds script-visible cookies | the day the filesystem has modes, the record is written closed |
+| keep_pages writes on the window's thread | browsing with it on visibly hitching while a page's scripts arrive |
+| a page that navigates replays only as far as going | pages that redirect by script often enough that their incomplete records hide what slices change |
+| pictures and fonts are not fetched on replay | a slice whose work is pictures or fonts wanting the corpus to judge it |
+| a form's reply replays as a GET | a kept page from a form whose scripts read what was posted |

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """One deliberate break at a time to the replay's rules
-(docs/design/pending/REPLAY.md § 2-6), against the replay's whole proof,
-tools/test_yonder_replay_host.sh: a mutant is CAUGHT when the proof fails,
+(docs/design/pending/REPLAY.md § 1-7, every rule a mutant), against the
+replay's whole proof, tools/test_yonder_replay_host.sh, or, for a rule
+yonder keeps when it writes a record, the scripted-page host,
+tools/test_yonder_scripts_host.sh: a mutant is CAUGHT when its proof fails,
 MISSED when it passes, which means a case is missing and gets written. A
-build failure is neither. REPLAY.md § 7: a check without a mutant is not a
-check.
+build failure is neither. REPLAY.md's rule 4: a check without a mutant is
+not a check.
 
 The shape is test_yonder_diag_mutants.py's: each mutant is applied to the
 worktree's copy of its file, the proof is run, and the file is put back
@@ -31,6 +33,10 @@ RUNNER = 'tools/test_yonder_replay_host.c'
 # path for a suite to run unmutated first, and this one is a module.
 RECORDS = str(pathlib.PurePath('tools', 'yonder_records.py'))
 PROOF = 'tools/test_yonder_replay_host.sh'
+WINDOW = 'tools/test_yonder_scripts_host.sh'
+DIAG = 'userland/apps/yonder/diag.c'
+YONDER = 'userland/apps/yonder/yonder.c'
+DIFF = str(pathlib.PurePath('tools', 'yonder_corpus_diff.py'))
 
 # THE INPUTS A VERSION 2 RECORD MUST SAY (REPLAY.md § 3), the runner's
 # kNeeded, each taken out of it in turn: the proof's case for that input
@@ -118,6 +124,136 @@ mutants = [
     ('temporary-left', RUNNER,
      '        if(rp_fs_remove(temp,&fault)==RP_FS_FAULT) {',
      '        if(false && rp_fs_remove(temp,&fault)==RP_FS_FAULT) {', PROOF),
+    ('clean-flag-trusted', RUNNER,
+     'clean==(st==RP_VERDICT && reproduced==0) &&',
+     '(clean==(st==RP_VERDICT && reproduced==0) || true) &&', PROOF),
+    ('exit-table-unbounded', RUNNER,
+     '} else if(code>=RP_CHILD_BASE && code<=RP_CHILD_TOP) {',
+     '} else if(code>=RP_CHILD_BASE) {', PROOF),
+    ('sigchld-not-reset', RUNNER,
+     '    signal(SIGCHLD,SIG_DFL);',
+     '    (void)0;', PROOF),
+    ('wait-not-retried', RUNNER,
+     'if(w>=0 || errno!=EINTR) break;',
+     'if(w>=0 || true) break;', PROOF),
+    ('time-limit-not-kept', RUNNER,
+     'if(!*timed_out && ms>=rp_child_limit_ms) {',
+     'if(false && ms>=rp_child_limit_ms) {', PROOF),
+    # § 2 and § 3: what the reader of a kept record refuses.
+    ('c-whole-record-utf8-unchecked', RUNNER,
+     'if(!rp_utf8((const unsigned char *)text,size)) return "it is not a page file: it is not UTF-8";',
+     'if(false) return "it is not a page file: it is not UTF-8";', PROOF),
+    ('c-lines-past-end-read', RUNNER,
+     'if(at<size) why="it is not a whole page file: lines past its `end`";',
+     'if(false) why="it is not a whole page file: lines past its `end`";', PROOF),
+    ('c-second-verdict-read', RUNNER,
+     '} else if(!strcmp(l.kind,"verdict")) {',
+     '} else if(false && !strcmp(l.kind,"verdict")) {', PROOF),
+    ('placeholder-read', RUNNER,
+     '} else if(l.unwritten) r->unjudged=',
+     '} else if(false) r->unjudged=', PROOF),
+    ('c-nul-field-read', RUNNER,
+     '    if(nul) { l.why="a NUL in a field"; return l; }',
+     '    if(nul && false) { l.why="a NUL in a field"; return l; }', PROOF),
+    ('py-nul-field-read', RECORDS,
+     "        if b'\\0' in unescape_bytes(line, tokens=not index):",
+     '        if False:', PROOF),
+    ('kept-lines-not-bound', RUNNER,
+     '|| want_lines!=index->lines) {',
+     '|| (want_lines!=index->lines && false)) {', PROOF),
+    # § 4: each line answers one job.
+    ('a-line-answers-twice', RUNNER,
+     'if(x->e[i].used==0 && rp_entry_is(',
+     'if(rp_entry_is(', PROOF),
+    # § 3: every input set where the window reads it.
+    ('record-inputs-not-read', RUNNER,
+     '    load->agent=f[F_AGENT]; load->cookies=f[F_COOKIES]; load->tz=f[F_TZ];',
+     '    rp_harness_inputs(load);', PROOF),
+    ('inputs-not-applied', RUNNER,
+     '    rp_apply_inputs(load);',
+     '    (void)rp_apply_inputs;', PROOF),
+    ('agent-not-applied', RUNNER,
+     '    g.way.agent=load->agent;',
+     '    (void)load->agent;', PROOF),
+    ('cookies-not-applied', RUNNER,
+     '    fake_cookie_read=load->cookies;',
+     '    (void)load->cookies;', PROOF),
+    ('clock-not-applied', RUNNER,
+     '    js_test_clock.epoch=(int64_t)(load->clock_ms/1000);\n    js_test_clock.ticks_per_second=1000;\n'
+     '    js_test_clock.ticks_into_second=(uint32_t)(load->clock_ms%1000);',
+     '    (void)load->clock_ms;', PROOF),
+    ('zone-not-applied', RUNNER,
+     '    if(load->tz==NULL) return;',
+     '    if(true) return;', PROOF),
+    ('zoom-not-applied', RUNNER,
+     'g.zoom=load->zoom;',
+     '(void)load->zoom;', PROOF),
+    ('appearance-not-applied', RUNNER,
+     's_dark=load->dark;',
+     '(void)load->dark;', PROOF),
+    ('motion-not-applied', RUNNER,
+     's_reduce_motion=load->reduce;',
+     '(void)load->reduce;', PROOF),
+    ('animate-not-applied', RUNNER,
+     '    s_animations=!load->still;',
+     '    (void)load->still;', PROOF),
+    ('height-not-applied', RUNNER,
+     '    g.root.bounds.h+=load->height-g.view.bounds.h;',
+     '    (void)load->height;', PROOF),
+    # § 1 and § 3, yonder's side: the claim proved, the inputs whole, a
+    # window that changed marked.
+    ('claim-not-proved', DIAG,
+     '|| os64_stat(path, &e) != 0)',
+     '|| (os64_stat(path, &e) != 0 && false))', WINDOW),
+    ('cookies-written-cut', YONDER,
+     '        if (cookies != NULL && whole)',
+     '        if (cookies != NULL)', WINDOW),
+    ('setting-change-unmarked', YONDER,
+     '        if (then != NULL && !os64_streq(then, diag_setting(kDiagSettings[i], now, sizeof(now))))',
+     '        if (false && then != NULL && !os64_streq(then, diag_setting(kDiagSettings[i], now, sizeof(now))))',
+     WINDOW),
+    ('scripts-switch-unrecorded', YONDER,
+     '{"agent", "scripts", "modern",',
+     '{"agent", "modern",', WINDOW),
+    ('resize-unmarked', YONDER,
+     '    if (!diag_same_view(yonder_diag_fact_value(d, "laid out at"), g.view.bounds.w, g.view.bounds.h))',
+     '    if (false && !diag_same_view(yonder_diag_fact_value(d, "laid out at"), g.view.bounds.w, g.view.bounds.h))',
+     WINDOW),
+    ('resize-before-arrival-unmarked', YONDER,
+     '    if (!diag_same_view(yonder_diag_fact_value(p->diag, "laid out at"), p->laid_width, p->laid_height))',
+     '    if (false && !diag_same_view(yonder_diag_fact_value(p->diag, "laid out at"), p->laid_width, p->laid_height))',
+     WINDOW),
+    # § 7: the diff's rules.
+    ('diff-defaults-not-compared', DIFF,
+     '        elif before[name].defaulted != after[name].defaulted:',
+     '        elif False:', PROOF),
+    ('diff-addresses-not-compared', DIFF,
+     '        if before[name].address != after[name].address:',
+     '        if False:', PROOF),
+    ('diff-unfinished-not-broken', DIFF,
+     '        if a == State.UNFINISHED:',
+     '        if False:', PROOF),
+    ('diff-regressions-pass', DIFF,
+     "    return 1 if table['regressions'] or table['broken']",
+     "    return 1 if table['broken']", PROOF),
+    ('diff-broken-passes', DIFF,
+     "table['regressions'] or table['broken'] or table['newly incomplete']",
+     "table['regressions'] or table['newly incomplete']", PROOF),
+    ('diff-newly-incomplete-passes', DIFF,
+     "or table['newly incomplete'] or gone else 0",
+     'or gone else 0', PROOF),
+    ('diff-missing-from-after-passes', DIFF,
+     "or table['newly incomplete'] or gone else 0",
+     "or table['newly incomplete'] else 0", PROOF),
+    ('diff-only-after-judged', DIFF,
+     "        unjudged[name] = f'{name}: {args.before} did not replay this page'",
+     '        continue', PROOF),
+    ('diff-not-reproduced-compared', DIFF,
+     '    skip = not_reproduced(before, after)',
+     '    skip = set()', PROOF),
+    ('diff-unjudged-passes', DIFF,
+     '    if unjudged:\n        return 2\n',
+     '    if False:\n        return 2\n', PROOF),
 ]
 
 caught, missed, unbuilt = [], [], []

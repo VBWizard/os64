@@ -15,8 +15,10 @@
 #       the proof: the census tools' tests, then the runner's self-test,
 #       which keeps the fixture pages as yonder would, replays them, and
 #       requires every replayed record to be the page's own; then the same
-#       corpus replayed again, which the corpus diff must find no different;
-#       an OUT-DIR that is the kept directory by a bind mount, refused; the
+#       corpus replayed again, which the corpus diff must find no different,
+#       and again by a runner started with SIGCHLD ignored, which must
+#       replay it the same; an OUT-DIR that is the kept directory by a bind
+#       mount, refused; the
 #       corpus written under a file-size limit, whose records must each be
 #       whole or say they could not be written; and the corpus given no
 #       time, whose unfinished pages the diff must call broken
@@ -46,7 +48,9 @@ TMPDIR="$work" python3 -I tools/test_yonder_records.py
 TMPDIR="$work" python3 -I tools/test_yonder_tally.py
 TMPDIR="$work" python3 -I tools/test_yonder_corpus_diff.py
 mkdir "$work/self"
-"$work/yonder-replay" --self-test "$work/self"
+# Under a limit of its own, as a whole process group, so a page whose child
+# is never killed fails the proof rather than holding it for ever.
+timeout 600 "$work/yonder-replay" --self-test "$work/self"
 # The runner prints what a page wrote re-spelled: a record whose quoted fact
 # holds a terminal's title sequence reaches the screen as \xHH, never raw.
 "$work/yonder-replay" "$work/self/escapes" "$work/escapes-shown" > "$work/escapes.log" 2>&1 || true
@@ -65,6 +69,17 @@ python3 -I tools/yonder_corpus_diff.py "$work/self/out" "$work/again" > "$work/a
     exit 1
 }
 tail -n 1 "$work/again.diff"
+# A runner started with SIGCHLD ignored, as a careless parent may start it,
+# resets it: otherwise the kernel reaps each page's child itself and the
+# status that says what the page came to is lost. The same corpus replays
+# to the same summary.
+python3 -I -c 'import os, signal, sys; signal.signal(signal.SIGCHLD, signal.SIG_IGN); os.execv(sys.argv[1], sys.argv[1:])' \
+    "$work/yonder-replay" "$work/self/kept" "$work/ignored" > "$work/ignored.log" 2>&1 || true
+if [ "$(tail -n 1 "$work/again.log")" != "$(tail -n 1 "$work/ignored.log")" ]; then
+    echo "replay: a runner started with SIGCHLD ignored replayed the corpus otherwise" >&2
+    tail -n 3 "$work/ignored.log" >&2
+    exit 1
+fi
 # An OUT-DIR that is the kept directory by another path (a bind mount) is
 # the kept directory: refused before anything is written.
 mkdir "$work/bound"

@@ -512,15 +512,18 @@ a record that lost ANY line (no room in its tables, no memory to keep a
 line or a value) says so with one marker, `REPLAY unjudged: lines lost`,
 beside the counts of what went; a replay and the corpus diff take it as
 unjudged, since the line it lost may be the one a change made, while the
-tally counts the lines it kept. A record whose load saw a setting it
-records change before the record was written (the modern switch, zoom,
-appearance, motion, animations, the script time limit) says so the same
-way, `REPLAY unjudged: settings changed during the load`: a replay
-cannot read one page in two windows. A page kept whole says `kept: whole`, the
+tally counts the lines it kept. A record whose window changed under its
+load says so the same way, `REPLAY unjudged: settings changed during the
+load`: a setting it records that is not what the claim wrote when the
+record is written (the agent, scripts on or off, the modern switch, zoom,
+appearance, motion, animations, the script time limit), or a view that
+is not the one the page was laid out in (at arrival, against the claim's;
+after it, against the layout's). A replay cannot read one page in two
+windows. A page kept whole says `kept: whole`, the
 only kept page a replay replays, and every record says `bytes: N`, what
-the parser was fed, and, when its page kept scripts or sheets, `kept
-lines: N`, how many lines its index holds: on the host nothing else binds
-a record to its kept files.
+the parser was fed, and every kept page's says `kept lines: N`, from 0
+at its claim, how many lines its index holds: on the host nothing else
+binds a record to its kept files.
 
 **The facts a replay rebuilds the head from**, on every page's record now:
 `final address` (written when the parse ends, so a page let go unshown
@@ -553,9 +556,11 @@ lose the others, and is unjudged. A replay requires every one of them its
 page needs (a file's page has no status, type, charset or encryption)
 rather than assume any, reads the page in the window they say, and reads
 every line of the record by one grammar
-(`tools/yonder_record_grammar.txt` holds its vectors), and every record ends with the line `end`, which
-a replay requires of a kept page's record and the readers of any record
-that says `kept:`, `kept lines:` or `REPLAY state:`.
+(`tools/yonder_record_grammar.txt` holds its vectors). Every record
+yonder writes ends with the line `end`, which both readers require of a
+replay's record and of a kept page's record of version 2 (one that says
+`kept:` or `kept lines:`); a kept page of version 1 may lack it, and its
+`kept: whole`, written last, stands for it.
 
 **A script's line carries its evaluation time**: `script <address>: ran in
 1520 us`, or `failed in ...`, the time `os64_js_run` took, compiling
