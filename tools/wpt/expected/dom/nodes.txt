@@ -19,6 +19,249 @@ Node-constants.html	Constants for nodeType on Element object.
 Node-constants.html	Constants for nodeType on Node interface object.
 Node-constants.html	Constants for nodeType on Node prototype object.
 Node-constants.html	Constants for nodeType on Text object.
+# Slice 0c: document.implementation and the documents it makes, Document.doctype
+# and DocumentType. These need the interface objects (DOMImplementation,
+# DocumentType), and fail with the switch off.
+DOMImplementation-createDocument-no-browsing-context.html	new DOMImplementation() throws
+DOMImplementation-createDocument.html	DOMImplementation.createDocument(namespace, qualifiedName, doctype)
+DOMImplementation-createDocument.html	createDocument test: null,null,false,function "function TypeError() {\n    [native code]\n}"
+Document-doctype.html	Window document with doctype
+Document-implementation.html	Getting implementation off the same document
+DocumentType-literal.html	DocumentType literals
+Node-cloneNode.html	implementation.createDocumentType
+# Slice 0c: the same surface's classic half. document.implementation is on
+# every page, the switch off included (it is in every browser that ever ran
+# jQuery), so these pass with --modern-off too, which lists them LEAKED.
+DOMImplementation-createDocumentType.html	DOMImplementation.createDocumentType(qualifiedName, publicId, systemId)
+DOMImplementation-createDocumentType.html	createDocumentType("", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("#", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("$", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("%", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("&", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("'", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("(", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType(")", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("*", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("1foo", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType(":foo", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("@", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("@foo", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("^", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("_:_", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("_:_.", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("_:a-", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("_:h0", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("_:test", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("`", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("a-b:c", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("a-b:c.j", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("a.b:c", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:!", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:#", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:$", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:%", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:&", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:'", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:(", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:)", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:*", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:+", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:,", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:/", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:;", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:<", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:=", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:@", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:[", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:\\"", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:\\\\", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:]", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:^", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:`", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:{", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:}", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:~", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("f1oo", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("f:oo", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("f@oo", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "", "f'o\\"o") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "", "f'oo") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "", "f\\"oo") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "", "foo") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "", "foo>") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "f'o\\"o", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "f'oo", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "f\\"oo", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "foo", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "foo>", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo1", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo:", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo@", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("l_:_", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("ns0:test", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("ns:EEE.", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("ns:_-", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("ns:_0", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("ns:a0", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("prefix::local", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("test:root", "1234", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("test:root", "1234", "test") should work
+DOMImplementation-createDocumentType.html	createDocumentType("test:root", "test", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("test:root", "test", "test") should work
+DOMImplementation-createDocumentType.html	createDocumentType("{", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("}", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("~", "", "") should work
+DOMImplementation-createHTMLDocument.html	createHTMLDocument(): document location getter is null
+DOMImplementation-hasFeature.html	hasFeature(" Core", "")
+DOMImplementation-hasFeature.html	hasFeature(" Core", null)
+DOMImplementation-hasFeature.html	hasFeature(" XML", "")
+DOMImplementation-hasFeature.html	hasFeature(" XML", null)
+DOMImplementation-hasFeature.html	hasFeature("Co re", "")
+DOMImplementation-hasFeature.html	hasFeature("Co re", null)
+DOMImplementation-hasFeature.html	hasFeature("CoRe", "")
+DOMImplementation-hasFeature.html	hasFeature("CoRe", null)
+DOMImplementation-hasFeature.html	hasFeature("Coare", "")
+DOMImplementation-hasFeature.html	hasFeature("Coare", null)
+DOMImplementation-hasFeature.html	hasFeature("Core ", "")
+DOMImplementation-hasFeature.html	hasFeature("Core ", null)
+DOMImplementation-hasFeature.html	hasFeature("Core")
+DOMImplementation-hasFeature.html	hasFeature("Core", " ")
+DOMImplementation-hasFeature.html	hasFeature("Core", " 1.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", " 100.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", " 2.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", " 3.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "")
+DOMImplementation-hasFeature.html	hasFeature("Core", "1")
+DOMImplementation-hasFeature.html	hasFeature("Core", "1. 0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "1.0 ")
+DOMImplementation-hasFeature.html	hasFeature("Core", "1.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "1.0a")
+DOMImplementation-hasFeature.html	hasFeature("Core", "1.1")
+DOMImplementation-hasFeature.html	hasFeature("Core", "1.a0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "100")
+DOMImplementation-hasFeature.html	hasFeature("Core", "100. 0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "100.0 ")
+DOMImplementation-hasFeature.html	hasFeature("Core", "100.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "100.0a")
+DOMImplementation-hasFeature.html	hasFeature("Core", "100.1")
+DOMImplementation-hasFeature.html	hasFeature("Core", "100.a0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "2")
+DOMImplementation-hasFeature.html	hasFeature("Core", "2. 0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "2.0 ")
+DOMImplementation-hasFeature.html	hasFeature("Core", "2.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "2.0a")
+DOMImplementation-hasFeature.html	hasFeature("Core", "2.1")
+DOMImplementation-hasFeature.html	hasFeature("Core", "2.a0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "3")
+DOMImplementation-hasFeature.html	hasFeature("Core", "3. 0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "3.0 ")
+DOMImplementation-hasFeature.html	hasFeature("Core", "3.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "3.0a")
+DOMImplementation-hasFeature.html	hasFeature("Core", "3.1")
+DOMImplementation-hasFeature.html	hasFeature("Core", "3.a0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "a1.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "a100.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "a2.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "a3.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", 1)
+DOMImplementation-hasFeature.html	hasFeature("Core", 100)
+DOMImplementation-hasFeature.html	hasFeature("Core", 2)
+DOMImplementation-hasFeature.html	hasFeature("Core", 3)
+DOMImplementation-hasFeature.html	hasFeature("Core", null)
+DOMImplementation-hasFeature.html	hasFeature("Core", undefined)
+DOMImplementation-hasFeature.html	hasFeature("Corea", "")
+DOMImplementation-hasFeature.html	hasFeature("Corea", null)
+DOMImplementation-hasFeature.html	hasFeature("This is filler text.", "")
+DOMImplementation-hasFeature.html	hasFeature("XM L", "")
+DOMImplementation-hasFeature.html	hasFeature("XM L", null)
+DOMImplementation-hasFeature.html	hasFeature("XML ", "")
+DOMImplementation-hasFeature.html	hasFeature("XML ", null)
+DOMImplementation-hasFeature.html	hasFeature("XML")
+DOMImplementation-hasFeature.html	hasFeature("XML", " ")
+DOMImplementation-hasFeature.html	hasFeature("XML", " 1.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", " 100.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", " 2.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", " 3.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "")
+DOMImplementation-hasFeature.html	hasFeature("XML", "1")
+DOMImplementation-hasFeature.html	hasFeature("XML", "1. 0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "1.0 ")
+DOMImplementation-hasFeature.html	hasFeature("XML", "1.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "1.0a")
+DOMImplementation-hasFeature.html	hasFeature("XML", "1.1")
+DOMImplementation-hasFeature.html	hasFeature("XML", "1.a0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "100")
+DOMImplementation-hasFeature.html	hasFeature("XML", "100. 0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "100.0 ")
+DOMImplementation-hasFeature.html	hasFeature("XML", "100.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "100.0a")
+DOMImplementation-hasFeature.html	hasFeature("XML", "100.1")
+DOMImplementation-hasFeature.html	hasFeature("XML", "100.a0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "2")
+DOMImplementation-hasFeature.html	hasFeature("XML", "2. 0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "2.0 ")
+DOMImplementation-hasFeature.html	hasFeature("XML", "2.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "2.0a")
+DOMImplementation-hasFeature.html	hasFeature("XML", "2.1")
+DOMImplementation-hasFeature.html	hasFeature("XML", "2.a0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "3")
+DOMImplementation-hasFeature.html	hasFeature("XML", "3. 0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "3.0 ")
+DOMImplementation-hasFeature.html	hasFeature("XML", "3.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "3.0a")
+DOMImplementation-hasFeature.html	hasFeature("XML", "3.1")
+DOMImplementation-hasFeature.html	hasFeature("XML", "3.a0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "a1.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "a100.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "a2.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "a3.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", 1)
+DOMImplementation-hasFeature.html	hasFeature("XML", 100)
+DOMImplementation-hasFeature.html	hasFeature("XML", 2)
+DOMImplementation-hasFeature.html	hasFeature("XML", 3)
+DOMImplementation-hasFeature.html	hasFeature("XML", null)
+DOMImplementation-hasFeature.html	hasFeature("XML", undefined)
+DOMImplementation-hasFeature.html	hasFeature("XMLa", "")
+DOMImplementation-hasFeature.html	hasFeature("XMLa", null)
+DOMImplementation-hasFeature.html	hasFeature("XMaL", "")
+DOMImplementation-hasFeature.html	hasFeature("XMaL", null)
+DOMImplementation-hasFeature.html	hasFeature("XmL", "")
+DOMImplementation-hasFeature.html	hasFeature("XmL", null)
+DOMImplementation-hasFeature.html	hasFeature("aCore", "")
+DOMImplementation-hasFeature.html	hasFeature("aCore", null)
+DOMImplementation-hasFeature.html	hasFeature("aXML", "")
+DOMImplementation-hasFeature.html	hasFeature("aXML", null)
+DOMImplementation-hasFeature.html	hasFeature("core", "")
+DOMImplementation-hasFeature.html	hasFeature("core", null)
+DOMImplementation-hasFeature.html	hasFeature("http://www.w3.org/TR/SVG11/feature#Script")
+DOMImplementation-hasFeature.html	hasFeature("http://www.w3.org/TR/SVG11/feature#Script", "7.5")
+DOMImplementation-hasFeature.html	hasFeature("org.w3c.dom.svg")
+DOMImplementation-hasFeature.html	hasFeature("org.w3c.dom.svg", "")
+DOMImplementation-hasFeature.html	hasFeature("org.w3c.dom.svg", "1.0")
+DOMImplementation-hasFeature.html	hasFeature("org.w3c.dom.svg", "1.1")
+DOMImplementation-hasFeature.html	hasFeature("org.w3c.svg")
+DOMImplementation-hasFeature.html	hasFeature("org.w3c.svg", "")
+DOMImplementation-hasFeature.html	hasFeature("org.w3c.svg", "1.0")
+DOMImplementation-hasFeature.html	hasFeature("org.w3c.svg", "1.1")
+DOMImplementation-hasFeature.html	hasFeature("xml", "")
+DOMImplementation-hasFeature.html	hasFeature("xml", null)
+DOMImplementation-hasFeature.html	hasFeature()
+DOMImplementation-hasFeature.html	hasFeature(null, "")
+DOMImplementation-hasFeature.html	hasFeature(undefined, "")
+Document-implementation.html	Getting implementation off different documents
+DocumentType-remove.html	doctype should support remove()
+DocumentType-remove.html	remove() should work if doctype does have a parent
+DocumentType-remove.html	remove() should work if doctype does have a parent and siblings
+DocumentType-remove.html	remove() should work if doctype doesn't have a parent
+Node-mutation-adoptNode.html	simple append of foreign div with text
+Node-nodeName.html	For DocumentType nodes, nodeName should return the name.
+Node-nodeValue.html	DocumentType.nodeValue
+Node-parentElement.html	When the parent is a document, parentElement should be null (doctype)
+Node-replaceChild.html	If the context node is a document, inserting a new doctype should work.
+Node-replaceChild.html	Replacing the document element with a DocumentFragment containing a single element and comments should work.
+Node-replaceChild.html	Replacing the document element with a DocumentFragment containing a single element should work.
+Node-replaceChild.html	Replacing the document element with a single element should work.
 [excluded]
 [passing]
 CharacterData-appendData.html	Comment.appendData()
@@ -148,8 +391,228 @@ ChildNode-replaceWith.html	Text.replaceWith() with only text as an argument.
 ChildNode-replaceWith.html	Text.replaceWith() with sibling of child as arguments.
 ChildNode-replaceWith.html	Text.replaceWith() with undefined as an argument.
 ChildNode-replaceWith.html	Text.replaceWith() without any argument.
+DOMImplementation-createDocument-no-browsing-context.html	new DOMImplementation() throws
+DOMImplementation-createDocument.html	DOMImplementation.createDocument(namespace, qualifiedName, doctype)
+DOMImplementation-createDocument.html	createDocument test: null,null,false,function "function TypeError() {\n    [native code]\n}"
 DOMImplementation-createDocument.html	createDocument with missing arguments
+DOMImplementation-createDocumentType.html	DOMImplementation.createDocumentType(qualifiedName, publicId, systemId)
+DOMImplementation-createDocumentType.html	createDocumentType("", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("#", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("$", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("%", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("&", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("'", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("(", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType(")", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("*", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("1foo", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType(":foo", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("@", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("@foo", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("^", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("_:_", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("_:_.", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("_:a-", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("_:h0", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("_:test", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("`", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("a-b:c", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("a-b:c.j", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("a.b:c", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:!", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:#", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:$", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:%", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:&", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:'", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:(", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:)", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:*", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:+", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:,", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:/", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:;", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:<", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:=", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:@", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:[", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:\\"", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:\\\\", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:]", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:^", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:`", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:{", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:}", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:~", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("f1oo", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("f:oo", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("f@oo", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "", "f'o\\"o") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "", "f'oo") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "", "f\\"oo") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "", "foo") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "", "foo>") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "f'o\\"o", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "f'oo", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "f\\"oo", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "foo", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo", "foo>", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo1", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo:", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("foo@", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("l_:_", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("ns0:test", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("ns:EEE.", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("ns:_-", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("ns:_0", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("ns:a0", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("prefix::local", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("test:root", "1234", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("test:root", "1234", "test") should work
+DOMImplementation-createDocumentType.html	createDocumentType("test:root", "test", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("test:root", "test", "test") should work
+DOMImplementation-createDocumentType.html	createDocumentType("{", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("}", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("~", "", "") should work
+DOMImplementation-createHTMLDocument.html	createHTMLDocument(): document location getter is null
 DOMImplementation-hasFeature.html	DOMImplementation.hasFeature(feature, version)
+DOMImplementation-hasFeature.html	hasFeature(" Core", "")
+DOMImplementation-hasFeature.html	hasFeature(" Core", null)
+DOMImplementation-hasFeature.html	hasFeature(" XML", "")
+DOMImplementation-hasFeature.html	hasFeature(" XML", null)
+DOMImplementation-hasFeature.html	hasFeature("Co re", "")
+DOMImplementation-hasFeature.html	hasFeature("Co re", null)
+DOMImplementation-hasFeature.html	hasFeature("CoRe", "")
+DOMImplementation-hasFeature.html	hasFeature("CoRe", null)
+DOMImplementation-hasFeature.html	hasFeature("Coare", "")
+DOMImplementation-hasFeature.html	hasFeature("Coare", null)
+DOMImplementation-hasFeature.html	hasFeature("Core ", "")
+DOMImplementation-hasFeature.html	hasFeature("Core ", null)
+DOMImplementation-hasFeature.html	hasFeature("Core")
+DOMImplementation-hasFeature.html	hasFeature("Core", " ")
+DOMImplementation-hasFeature.html	hasFeature("Core", " 1.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", " 100.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", " 2.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", " 3.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "")
+DOMImplementation-hasFeature.html	hasFeature("Core", "1")
+DOMImplementation-hasFeature.html	hasFeature("Core", "1. 0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "1.0 ")
+DOMImplementation-hasFeature.html	hasFeature("Core", "1.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "1.0a")
+DOMImplementation-hasFeature.html	hasFeature("Core", "1.1")
+DOMImplementation-hasFeature.html	hasFeature("Core", "1.a0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "100")
+DOMImplementation-hasFeature.html	hasFeature("Core", "100. 0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "100.0 ")
+DOMImplementation-hasFeature.html	hasFeature("Core", "100.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "100.0a")
+DOMImplementation-hasFeature.html	hasFeature("Core", "100.1")
+DOMImplementation-hasFeature.html	hasFeature("Core", "100.a0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "2")
+DOMImplementation-hasFeature.html	hasFeature("Core", "2. 0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "2.0 ")
+DOMImplementation-hasFeature.html	hasFeature("Core", "2.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "2.0a")
+DOMImplementation-hasFeature.html	hasFeature("Core", "2.1")
+DOMImplementation-hasFeature.html	hasFeature("Core", "2.a0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "3")
+DOMImplementation-hasFeature.html	hasFeature("Core", "3. 0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "3.0 ")
+DOMImplementation-hasFeature.html	hasFeature("Core", "3.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "3.0a")
+DOMImplementation-hasFeature.html	hasFeature("Core", "3.1")
+DOMImplementation-hasFeature.html	hasFeature("Core", "3.a0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "a1.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "a100.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "a2.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", "a3.0")
+DOMImplementation-hasFeature.html	hasFeature("Core", 1)
+DOMImplementation-hasFeature.html	hasFeature("Core", 100)
+DOMImplementation-hasFeature.html	hasFeature("Core", 2)
+DOMImplementation-hasFeature.html	hasFeature("Core", 3)
+DOMImplementation-hasFeature.html	hasFeature("Core", null)
+DOMImplementation-hasFeature.html	hasFeature("Core", undefined)
+DOMImplementation-hasFeature.html	hasFeature("Corea", "")
+DOMImplementation-hasFeature.html	hasFeature("Corea", null)
+DOMImplementation-hasFeature.html	hasFeature("This is filler text.", "")
+DOMImplementation-hasFeature.html	hasFeature("XM L", "")
+DOMImplementation-hasFeature.html	hasFeature("XM L", null)
+DOMImplementation-hasFeature.html	hasFeature("XML ", "")
+DOMImplementation-hasFeature.html	hasFeature("XML ", null)
+DOMImplementation-hasFeature.html	hasFeature("XML")
+DOMImplementation-hasFeature.html	hasFeature("XML", " ")
+DOMImplementation-hasFeature.html	hasFeature("XML", " 1.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", " 100.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", " 2.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", " 3.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "")
+DOMImplementation-hasFeature.html	hasFeature("XML", "1")
+DOMImplementation-hasFeature.html	hasFeature("XML", "1. 0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "1.0 ")
+DOMImplementation-hasFeature.html	hasFeature("XML", "1.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "1.0a")
+DOMImplementation-hasFeature.html	hasFeature("XML", "1.1")
+DOMImplementation-hasFeature.html	hasFeature("XML", "1.a0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "100")
+DOMImplementation-hasFeature.html	hasFeature("XML", "100. 0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "100.0 ")
+DOMImplementation-hasFeature.html	hasFeature("XML", "100.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "100.0a")
+DOMImplementation-hasFeature.html	hasFeature("XML", "100.1")
+DOMImplementation-hasFeature.html	hasFeature("XML", "100.a0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "2")
+DOMImplementation-hasFeature.html	hasFeature("XML", "2. 0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "2.0 ")
+DOMImplementation-hasFeature.html	hasFeature("XML", "2.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "2.0a")
+DOMImplementation-hasFeature.html	hasFeature("XML", "2.1")
+DOMImplementation-hasFeature.html	hasFeature("XML", "2.a0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "3")
+DOMImplementation-hasFeature.html	hasFeature("XML", "3. 0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "3.0 ")
+DOMImplementation-hasFeature.html	hasFeature("XML", "3.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "3.0a")
+DOMImplementation-hasFeature.html	hasFeature("XML", "3.1")
+DOMImplementation-hasFeature.html	hasFeature("XML", "3.a0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "a1.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "a100.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "a2.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", "a3.0")
+DOMImplementation-hasFeature.html	hasFeature("XML", 1)
+DOMImplementation-hasFeature.html	hasFeature("XML", 100)
+DOMImplementation-hasFeature.html	hasFeature("XML", 2)
+DOMImplementation-hasFeature.html	hasFeature("XML", 3)
+DOMImplementation-hasFeature.html	hasFeature("XML", null)
+DOMImplementation-hasFeature.html	hasFeature("XML", undefined)
+DOMImplementation-hasFeature.html	hasFeature("XMLa", "")
+DOMImplementation-hasFeature.html	hasFeature("XMLa", null)
+DOMImplementation-hasFeature.html	hasFeature("XMaL", "")
+DOMImplementation-hasFeature.html	hasFeature("XMaL", null)
+DOMImplementation-hasFeature.html	hasFeature("XmL", "")
+DOMImplementation-hasFeature.html	hasFeature("XmL", null)
+DOMImplementation-hasFeature.html	hasFeature("aCore", "")
+DOMImplementation-hasFeature.html	hasFeature("aCore", null)
+DOMImplementation-hasFeature.html	hasFeature("aXML", "")
+DOMImplementation-hasFeature.html	hasFeature("aXML", null)
+DOMImplementation-hasFeature.html	hasFeature("core", "")
+DOMImplementation-hasFeature.html	hasFeature("core", null)
+DOMImplementation-hasFeature.html	hasFeature("http://www.w3.org/TR/SVG11/feature#Script")
+DOMImplementation-hasFeature.html	hasFeature("http://www.w3.org/TR/SVG11/feature#Script", "7.5")
+DOMImplementation-hasFeature.html	hasFeature("org.w3c.dom.svg")
+DOMImplementation-hasFeature.html	hasFeature("org.w3c.dom.svg", "")
+DOMImplementation-hasFeature.html	hasFeature("org.w3c.dom.svg", "1.0")
+DOMImplementation-hasFeature.html	hasFeature("org.w3c.dom.svg", "1.1")
+DOMImplementation-hasFeature.html	hasFeature("org.w3c.svg")
+DOMImplementation-hasFeature.html	hasFeature("org.w3c.svg", "")
+DOMImplementation-hasFeature.html	hasFeature("org.w3c.svg", "1.0")
+DOMImplementation-hasFeature.html	hasFeature("org.w3c.svg", "1.1")
+DOMImplementation-hasFeature.html	hasFeature("xml", "")
+DOMImplementation-hasFeature.html	hasFeature("xml", null)
+DOMImplementation-hasFeature.html	hasFeature()
+DOMImplementation-hasFeature.html	hasFeature(null, "")
+DOMImplementation-hasFeature.html	hasFeature(undefined, "")
 Document-createEvent.https.html	EVENT should be an alias for Event.
 Document-createEvent.https.html	EVENTS should be an alias for Event.
 Document-createEvent.https.html	Event should be an alias for Event.
@@ -224,6 +687,7 @@ Document-createEvent.https.html	htmlevents should be an alias for Event.
 Document-createEvent.https.html	svgevents should be an alias for Event.
 Document-createProcessingInstruction.html	Document.createProcessingInstruction in HTML documents
 Document-createTreeWalker.html	Required arguments to createTreeWalker should be required.
+Document-doctype.html	Window document with doctype
 Document-getElementById.html	Calling document.getElementById with a null argument.
 Document-getElementById.html	Calling document.getElementById with an empty string argument.
 Document-getElementById.html	Calling document.getElementById with an undefined argument.
@@ -240,6 +704,8 @@ Document-getElementsByTagName.html	Caching is allowed
 Document-getElementsByTagName.html	Shouldn't be able to set unsigned properties on a HTMLCollection (non-strict mode)
 Document-getElementsByTagName.html	Shouldn't be able to set unsigned properties on a HTMLCollection (strict mode)
 Document-getElementsByTagName.html	getElementsByTagName('*')
+Document-implementation.html	Getting implementation off different documents
+Document-implementation.html	Getting implementation off the same document
 DocumentFragment-constructor.html	Create a valid document DocumentFragment
 DocumentFragment-constructor.html	Sets the owner document to the current global object associated document
 DocumentFragment-getElementById.html	Empty string ID values
@@ -247,6 +713,11 @@ DocumentFragment-getElementById.html	It must return null when there are no match
 DocumentFragment-getElementById.html	It must return the first element when there are matches
 DocumentFragment-getElementById.html	The method must exist
 DocumentFragment-querySelectorAll-after-modification.html	querySelectorAll should still work on DocumentFragments after they are modified
+DocumentType-literal.html	DocumentType literals
+DocumentType-remove.html	doctype should support remove()
+DocumentType-remove.html	remove() should work if doctype does have a parent
+DocumentType-remove.html	remove() should work if doctype does have a parent and siblings
+DocumentType-remove.html	remove() should work if doctype doesn't have a parent
 Element-childElement-null.html	Null test
 Element-childElementCount-dynamic-add.html	Dynamic Adding of Elements
 Element-childElementCount-dynamic-remove.html	Dynamic Removal of Elements
@@ -548,6 +1019,7 @@ Node-childNodes.html	Node.childNodes on an Element.
 Node-cloneNode-parser-created-names.html	cloneNode on elements with names containing angle brackets
 Node-cloneNode-parser-created-names.html	cloneNode on elements with names containing colons
 Node-cloneNode.html	createDocumentFragment
+Node-cloneNode.html	implementation.createDocumentType
 Node-constants.html	Constants for createDocumentPosition on Element object.
 Node-constants.html	Constants for createDocumentPosition on Node interface object.
 Node-constants.html	Constants for createDocumentPosition on Node prototype object.
@@ -563,16 +1035,20 @@ Node-insertBefore.html	Calling insertBefore with a non-Node first argument on a 
 Node-insertBefore.html	Calling insertBefore with second argument missing, or other than Node, null, or undefined, must throw TypeError.
 Node-insertBefore.html	Inserting a node before itself should not move the node
 Node-isConnected.html	Test with ordinary child nodes
+Node-mutation-adoptNode.html	simple append of foreign div with text
 Node-nodeName.html	For Comment nodes, nodeName should return "#comment".
 Node-nodeName.html	For Document nodes, nodeName should return "#document".
 Node-nodeName.html	For DocumentFragment nodes, nodeName should return "#document-fragment".
+Node-nodeName.html	For DocumentType nodes, nodeName should return the name.
 Node-nodeName.html	For Text nodes, nodeName should return "#text".
 Node-nodeValue.html	Comment.nodeValue
 Node-nodeValue.html	Document.nodeValue
 Node-nodeValue.html	DocumentFragment.nodeValue
+Node-nodeValue.html	DocumentType.nodeValue
 Node-nodeValue.html	Element.nodeValue
 Node-nodeValue.html	Text.nodeValue
 Node-parentElement.html	When the parent is a document, parentElement should be null (comment)
+Node-parentElement.html	When the parent is a document, parentElement should be null (doctype)
 Node-parentElement.html	When the parent is a document, parentElement should be null (element)
 Node-parentElement.html	When the parent is null, parentElement should be null
 Node-parentElement.html	parentElement should return null for children of DocumentFragments (element)
@@ -584,11 +1060,15 @@ Node-parentElement.html	parentElement should work correctly in disconnected subt
 Node-parentElement.html	parentElement should work correctly with DocumentFragments (element)
 Node-parentElement.html	parentElement should work correctly with DocumentFragments (text)
 Node-removeChild.html	Passing a value that is not a Node reference to removeChild should throw TypeError.
+Node-replaceChild.html	If the context node is a document, inserting a new doctype should work.
 Node-replaceChild.html	Passing null to replaceChild should throw a TypeError.
 Node-replaceChild.html	Replacing a node with its next sibling should work (2 children)
 Node-replaceChild.html	Replacing a node with its next sibling should work (4 children)
 Node-replaceChild.html	Replacing a node with itself should not move the node
 Node-replaceChild.html	Replacing an element with a DocumentFragment should allow a child of the DocumentFragment to be found by Id.
+Node-replaceChild.html	Replacing the document element with a DocumentFragment containing a single element and comments should work.
+Node-replaceChild.html	Replacing the document element with a DocumentFragment containing a single element should work.
+Node-replaceChild.html	Replacing the document element with a single element should work.
 Node-replaceChild.html	replaceChild should work in the presence of mutation events.
 NodeList-Iterable.html	NodeList has Symbol.iterator.
 NodeList-Iterable.html	NodeList has entries method.
