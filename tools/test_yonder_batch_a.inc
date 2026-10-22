@@ -136,6 +136,17 @@ static void ellipsis_review_cases(void)
                         200, (os64_gui_rect_t){0, 0, 200, 100}, true, kScrolled[k]);
         s_paint_scrolls = false;
     }
+    // The ellipsis is filled as the block's text is: with
+    // -webkit-text-fill-color red over a green colour, both the kept text
+    // and the ellipsis are red.
+    paint_page_case("text-overflow: the ellipsis takes the text's fill",
+                    "<!doctype html><style>body { margin: 0 } div { width: 40px; overflow: hidden;"
+                    " white-space: nowrap; text-overflow: ellipsis; color: #00ff00;"
+                    " -webkit-text-fill-color: #ff0000 }</style><div>abcdefghij</div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "text \"abcdefghij\" 0 14 #ff0000 clip 0 0 32 20\n"
+                    "text \"\" 32 14 #ff0000 clip 0 0 40 20\n");
     // pre-wrap: abc and six spaces end the first line, 48 wide, but the
     // spaces hang (Text 3 § 4.1.3): abc is 24 and fits, so no ellipsis.
     paint_page_case("text-overflow: spaces that hang do not overflow a line",

@@ -1988,7 +1988,7 @@ static bool is_frame(const flow_box_t *b)
 // text up to its last character that ends by the limit, an inline box's
 // piece up to where what is kept ends, an atom before the cut whole, one at
 // or past it not at all, its content included — and the ellipsis at the
-// cut, in the block's colour, on the line's baseline, when the walk
+// cut, filled as the block's text is, on the line's baseline, when the walk
 // hands it the line after the line's pieces.
 
 // The last LINE_CUTS lines' cuts (flow_line_cut), the oldest replaced
@@ -2039,7 +2039,16 @@ static bool past_ellipsis(const Painter *p, const flow_box_t *b)
     return false;
 }
 
-// A line's ellipsis, where line_cut puts it.
+// What a text's glyphs are filled with: the clip's pen inside a text clip,
+// else the style's fill (-webkit-text-fill-color, or the colour), as the
+// page's ink.
+static uint32_t text_fill(const Painter *p, const flow_style_t *s)
+{
+    return p->penned ? p->pen : ink_of(p, s->fill);
+}
+
+// A line's ellipsis, where line_cut puts it, filled as the block's text is
+// (text_fill).
 static void ellipsis(const Painter *p, const flow_box_t *line)
 {
     flow_line_cut_t c = line_cut(p, line);
@@ -2054,7 +2063,7 @@ static void ellipsis(const Painter *p, const flow_box_t *line)
     e.length = 0;
     p->v->text(p->v->ctx, &e, (int32_t)max64(INT32_MIN, min64(INT32_MAX, c.at + p->off.x)),
                (int32_t)((int64_t)line->baseline + p->off.y), on_page(p, p->view),
-               ink_of(p, block->style->color));
+               text_fill(p, block->style));
 }
 
 // A frame's stand-in reads as a link on a pale panel, the default link
@@ -2156,7 +2165,7 @@ static void paint_box(void *ctx, const flow_box_t *b)
         if (b->run != NULL)
             p->v->text(p->v->ctx, b, (int32_t)((int64_t)b->rect.x + p->off.x),
                        (int32_t)((int64_t)b->baseline + p->off.y), on_page(p, p->view),
-                       p->penned ? p->pen : ink_of(p, b->style->fill));
+                       text_fill(p, b->style));
         decorations(p, b);
         return;
     case FLOW_BOX_ATOMIC:
