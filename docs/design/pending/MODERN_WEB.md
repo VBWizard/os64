@@ -1102,7 +1102,8 @@ pushed and went back among its own entries keeping P ahead
 allocation (booked).
 **The second cold read**, of round 1's fixes, found: `history.forward()`
 from an arriving page that had pushed abandoning it, where the push had let
-go of what was ahead and forward is nothing.
+go of what was ahead and forward is nothing; and `history.length`, read
+by such a page, still counting what its push let go of.
 **The design read** passed it with the scroll-restoration ruling, the two
 accepted departures from HTML's traversal queue below, and the session's
 being outside the switch.

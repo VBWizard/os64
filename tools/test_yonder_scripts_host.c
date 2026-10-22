@@ -3592,7 +3592,7 @@ static void loop_view_pushed_while_arriving(void) {
     click_back(NULL,NULL);
     post_arriving("<p id=out>-</p><script>var was=JSON.stringify(history.state);"
         "history.replaceState(history.state,'','/T');history.pushState({n:2},'','/T2');document.getElementById('out').textContent=was+':'+history.length</script>");
-    check(loop_settle() && view_turns() && session_is("/T","/T2","") && probe_text_is("out","{\"t\":1}:3") &&
+    check(loop_settle() && view_turns() && session_is("/T","/T2","") && probe_text_is("out","{\"t\":1}:2") &&
           g.way.depth==1 && g.way.history[0].state!=NULL && os64_streq(g.way.history[0].state,"{\"t\":1}"),
         "pushed while arriving: the target entry once, the push after it, nothing ahead");
     click_back(NULL,NULL);
@@ -3646,8 +3646,41 @@ static void loop_view_pushed_then_forward(void) {
         "pushed then forward: by a reload, the same");
     loop_drop();
 }
+/* history.length read by an arriving page after it pushed counts only up
+ * to its own entry, and its own: the push let go of what was ahead. It
+ * reads the same while it arrives and once it is shown. */
+static void loop_view_pushed_length(void) {
+    static const char page[]="<p id=out>-</p><script>var log=[];history.replaceState(null,'','/T');"
+        "history.pushState(null,'','/T2');log.push(history.length);"
+        "onload=function(){log.push(history.length);document.getElementById('out').textContent=log.join()}</script>";
+    loop_page("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
+    check(loop_settle() && view_turns(),"pushed length: T");
+    start_trip("http://fixture.test/P",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns() && session_is("/T","/P",""),"pushed length: on P, T behind");
+    click_back(NULL,NULL);
+    post_arriving(page);
+    check(loop_settle() && view_turns() && session_is("/T","/T2","") && probe_text_is("out","2,2"),
+        "pushed length: by Back, 2 while arriving and 2 once shown");
+    loop_drop();
+    // A reload of T with P ahead: the entry on screen again, then its push.
+    loop_page("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
+    check(loop_settle() && view_turns(),"pushed length: T again");
+    start_trip("http://fixture.test/P",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns(),"pushed length: on P again");
+    click_back(NULL,NULL);
+    post_arriving("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
+    check(loop_settle() && view_turns() && session_is("","/T","/P"),"pushed length: on T, P ahead");
+    click_reload(NULL,NULL);
+    post_arriving(page);
+    check(loop_settle() && view_turns() && session_is("/T","/T2","") && probe_text_is("out","2,2"),
+        "pushed length: by a reload, the same");
+    loop_drop();
+}
 static void loop_view_cold2_cases(void) {
     loop_view_pushed_then_forward();
+    loop_view_pushed_length();
 }
 static void loop_view_cold_cases(void) {
     loop_view_cold2_cases();

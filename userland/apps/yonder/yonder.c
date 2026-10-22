@@ -7424,6 +7424,35 @@ static NavKind unshown_kind(const Page *p)
     return p == &g.stream.page ? g.stream.kind : p == g.finishing.page ? g.finishing.kind : g.coming.kind;
 }
 
+// Where the entry a page not yet shown arrives at stands, counted from the
+// page on screen (0). A new way's page is the entry after the one on screen
+// and the newest, its commit having let go of what was ahead (1). A reload
+// or a refresh is the entry on screen again (0). A traversal's page is the
+// session's entry it named (Page.arrives_at), which stays where it is; one
+// the session let go past its cap arrives as a new way's (arrive_now).
+// True when it arrives as a new way's: nothing is ahead of it.
+static bool unshown_at(const Page *p, int64_t *at)
+{
+    NavKind kind = unshown_kind(p);
+    if (kind == NAV_BACK || kind == NAV_FORWARD) {
+        for (int32_t i = 0; i < g.way.depth; i++)
+            if (g.way.history[i].entry == p->arrives_at) {
+                *at = (int64_t)i - g.way.depth;
+                return false;
+            }
+        for (int32_t j = 0; j < g.way.ahead; j++)
+            if (g.way.forward[j].entry == p->arrives_at) {
+                *at = (int64_t)g.way.ahead - j;
+                return false;
+            }
+    } else if (kind != NAV_GO) {
+        *at = 0;
+        return false;
+    }
+    *at = 1;
+    return true;
+}
+
 // Back or Forward from a page not yet shown, past its own entries (`delta`
 // as asked; page_traverse has answered within them). ONE RULE WHEREVER THE
 // PAGE IS in its arrival — parsing, at its DOMContentLoaded, waiting for its
@@ -7436,10 +7465,9 @@ static NavKind unshown_kind(const Page *p)
 // such an entry, the page is never shown, a new way's own entries join the
 // session as its commit would have put them (a traversal's or a reload's go
 // with the page: DEBTS.md § Classic browser scripting), and the window goes
-// to the entry asked for
-// from the page on screen: no fetch when that is the page on screen. Once
-// it is shown (its `load` and every later task) the page on screen IS it,
-// and session_go answers.
+// to the entry asked for from the page on screen: no fetch when that is the
+// page on screen. Once it is shown (its `load` and every later task) the
+// page on screen IS it, and session_go answers.
 static void unshown_go(Page *p, int32_t delta)
 {
     if (g.page.tree == NULL || delta == 0)
@@ -7452,39 +7480,12 @@ static void unshown_go(Page *p, int32_t delta)
     if (!back && (p->nback > 0 || p->nahead > 0))
         return;
     // How far past the entry next to its own the delta reaches: 0 is that
-    // entry.
+    // entry; and where that entry is, counted from the page on screen.
     int64_t past = back ? (int64_t)delta + 1 + p->nback : (int64_t)delta - 1 - p->nahead;
-    // Where that entry is, counted from the page on screen (0). A new way's
-    // page is the entry after the one on screen and the newest, its
-    // commit having let go of what was ahead: nothing is ahead of it. A
-    // reload or a refresh is the entry on screen again. A traversal's page
-    // is the session's entry it named (Page.arrives_at), which stays where
-    // it is.
-    int64_t next;
-    if (kind == NAV_BACK || kind == NAV_FORWARD) {
-        int64_t at = 0;
-        bool found = false;
-        for (int32_t i = 0; i < g.way.depth && !found; i++)
-            if (g.way.history[i].entry == p->arrives_at) {
-                at = (int64_t)i - g.way.depth;
-                found = true;
-            }
-        for (int32_t j = 0; j < g.way.ahead && !found; j++)
-            if (g.way.forward[j].entry == p->arrives_at) {
-                at = (int64_t)g.way.ahead - j;
-                found = true;
-            }
-        // An entry let go past the cap: its page is placed as a new way's.
-        if (!found && !back)
-            return;
-        next = found ? at + (back ? -1 : 1) : 0;
-    } else if (kind == NAV_GO) {
-        if (!back)
-            return;
-        next = 0;
-    } else {
-        next = back ? -1 : 1;
-    }
+    int64_t at;
+    if (unshown_at(p, &at) && !back)
+        return;
+    int64_t next = at + (back ? -1 : 1);
     int64_t target = next + past;
     if (target < -(int64_t)g.way.depth || target > (int64_t)g.way.ahead)
         return;                     // no entry there: nothing happens, and the page arrives
@@ -8242,9 +8243,10 @@ static void session_go(int32_t delta)
 
 // How many entries a page's session holds, for history.length: the
 // session's and the page on screen's; for a page not yet shown, its own
-// and, when a page is shown, the session as its coming leaves it — a new
-// way after the page on screen, a reload or a refresh in its place, a
-// traversal to an entry the session already holds.
+// and, when a page is shown, the session as its arrival leaves it
+// (arrive_now): the entries before the one it arrives at (unshown_at), its
+// own, and those after that entry, of which there are none for a new way's
+// page or for a page that pushed, its push having let go of them.
 static uint32_t page_entries(const Page *p)
 {
     uint32_t session = (uint32_t)g.way.depth + 1 + (uint32_t)g.way.ahead;
@@ -8253,7 +8255,10 @@ static uint32_t page_entries(const Page *p)
     uint32_t own = (uint32_t)p->nback + 1 + (uint32_t)p->nahead;
     if (g.page.tree == NULL)
         return own;
-    return unshown_kind(p) == NAV_GO ? (uint32_t)g.way.depth + 1 + own : session - 1 + own;
+    int64_t at;
+    bool fresh = unshown_at(p, &at);
+    int64_t after = fresh || p->nback > 0 || p->nahead > 0 ? 0 : (int64_t)g.way.ahead - at;
+    return (uint32_t)((int64_t)g.way.depth + at + own + after);
 }
 
 // The first event a page owes, as one task: true when one ran.
