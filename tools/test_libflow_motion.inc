@@ -4349,8 +4349,59 @@ static void motion_sweep(void)
     motion_incomplete_cases();
 }
 
+// Slice 4's longhands under @keyframes (MODERN_WEB_BRIEFS.md § Slice 4):
+// each animatable by its computed value mixes halfway as its type does —
+// a length, a colour, a position, a <ratio> by its logarithm (Values 4 §
+// 5.7.1) — and a keyword is discrete, the first value until halfway.
+// Paused at half of a linear second.
+static void motion_batch_a_cases(void)
+{
+    static const char kPage[] =
+        "<!doctype html><style>div { animation: m 1s linear -500ms paused }"
+        " #k { animation-delay: -250ms }"
+        " @keyframes m { from { letter-spacing: 0; outline: 2px solid #ff0000;"
+        " outline-offset: 0; object-position: 0% 0%; aspect-ratio: 1; cursor: pointer;"
+        " word-break: normal }"
+        " to { letter-spacing: 10px; outline: 6px solid #0000ff; outline-offset: 4px;"
+        " object-position: 100% 100%; aspect-ratio: 4; cursor: wait; word-break: break-all } }"
+        "</style><div id=h>a</div><div id=k>b</div>";
+    Moving m;
+    moving_open(&m, kPage, 0);
+    const flow_style_t *h = moving_style(&m, "h"), *k = moving_style(&m, "k");
+    expect("animation: letter-spacing halfway, 5px", h != NULL && h->letter_spacing == 5 * 64, NULL);
+    expect("animation: outline-width and -offset halfway",
+           h != NULL && h->outline_width == 4 * 64 && h->outline_offset == 2 * 64 &&
+               h->outline_style == FLOW_BORDER_SOLID, NULL);
+    expect("animation: outline-color halfway",
+           h != NULL && h->outline_color == 0x800080u, NULL);
+    expect("animation: object-position halfway, 50% 50%",
+           h != NULL && h->object_position[0].kind == FLOW_LENGTH_PERCENT &&
+               h->object_position[0].value == 50 * 64 && h->object_position[1].value == 50 * 64,
+           NULL);
+    expect("animation: aspect-ratio halfway by its logarithm, 2",
+           h != NULL && fabs(h->aspect_ratio - 2) < 1e-9, NULL);
+    expect("animation: a keyword is the second value from halfway",
+           h != NULL && h->cursor == FLOW_CURSOR_WAIT && h->word_break == FLOW_WORD_BREAK_BREAK_ALL,
+           NULL);
+    expect("animation: and the first before it",
+           k != NULL && k->cursor == FLOW_CURSOR_POINTER && k->word_break == FLOW_WORD_BREAK_NORMAL &&
+               k->letter_spacing == 160, NULL);
+    moving_close(&m);
+    // An outline whose style is none has no width, whatever is animating
+    // the width; a style animated to solid brings the width's own, medium
+    // when nothing declares one.
+    moving_open(&m, "<!doctype html><style>div { animation: n 1s linear -750ms paused }"
+                    " @keyframes n { from { outline-style: none } to { outline-style: solid } }"
+                    "</style><div id=s>a</div>", 0);
+    const flow_style_t *s = moving_style(&m, "s");
+    expect("animation: an outline style animated to solid draws medium",
+           s != NULL && s->outline_style == FLOW_BORDER_SOLID && s->outline_width == 3 * 64, NULL);
+    moving_close(&m);
+}
+
 static void motion_cases(void)
 {
+    motion_batch_a_cases();
     motion_easing_cases();
     motion_chrome_cases();
     motion_sparse_cases();

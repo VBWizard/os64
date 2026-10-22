@@ -3804,6 +3804,17 @@ static flow_unit_t own_width(const Ctx *c, const Spec *sp, garb_style_t st, garb
     return css(c, 3);
 }
 
+// An outline's own width, the same way: finish makes it 0 for a style of
+// none, which an animation may be moving.
+static flow_unit_t own_outline_width(const Ctx *c, const Spec *sp, garb_style_t st,
+                                     garb_style_t sets)
+{
+    if (sp->outline_px != 0 || author_declares(st, GARB_OUTLINE_WIDTH) ||
+        author_declares(sets, GARB_OUTLINE_WIDTH))
+        return sp->outline_px;
+    return css(c, 3);
+}
+
 // Whether two easings are one where keyframes are grouped: a keyword curve
 // is itself and not the same curve written as cubic-bezier(), and steps
 // are their count and where they jump however written (Chrome's answer,
@@ -3973,6 +3984,8 @@ static const FResolved *keyframe_resolved(void *ctx, int32_t a, int32_t j, const
     finish(x->c, &k, x->parent, x->item, x->root);
     for (int side = 0; side < 4; side++)
         k.s.border_width[side] = own_width(x->c, &k, x->st, (garb_style_t){f->decls, NULL, NULL, f->ndecls}, side);
+    k.s.outline_width = own_outline_width(x->c, &k, x->st,
+                                          (garb_style_t){f->decls, NULL, NULL, f->ndecls});
     unsettled(&k.s, &specified);
     r->style = k.s;
     *slot = r;
@@ -4113,14 +4126,15 @@ static bool animate(Ctx *c, const os64_html_node_t *n, Spec *sp, const Spec *ua,
         return false;
     m->anims = anims;
     // The animations' inputs keep each side's own width (own_width), and
-    // its width is settled once every animation is laid over
-    // (f_motion_style).
+    // the outline its own (own_outline_width), each settled once every
+    // animation is laid over (f_motion_style).
     const garb_style_t none = {NULL, NULL, NULL, 0};
     Spec base = *sp;
     finish(c, &base, parent, item, root);
     m->base = base.s;
     for (int side = 0; side < 4; side++)
         m->base.border_width[side] = own_width(c, &base, st, none, side);
+    m->base.outline_width = own_outline_width(c, &base, st, none);
     int32_t *first = f_arena_alloc(&c->out->arena, (size_t)count * sizeof(*first));
     if (first == NULL)
         return false;
