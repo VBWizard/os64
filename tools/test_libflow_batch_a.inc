@@ -1051,6 +1051,36 @@ static void batch_a_cases(void)
         "    block div 0 100 800 100\n"
         "      block div 0 100 100 100\n");
 
+    // A picture with one side given and a ratio of the page's own is held
+    // by its limits whether or not it has arrived (replaced_hold, one door
+    // for both): height 100 at 2 with max-width 50 is 50 x 100; width 100
+    // at 2 with max-height 20 is 100 x 20; height 10 at 2 with min-width
+    // 50 is 50 x 10; width 10 at 2 with min-height 20 is 10 x 20 — the
+    // side the page gave keeps its own size. Each missing, then arrived
+    // (known.png, 40 x 30), the same.
+    cascade_layout_case("aspect-ratio: a picture's limits hold it before and after it arrives",
+        "<!doctype html><style>body { margin: 0 } img { display: block }</style>"
+        "<img src=missing.png alt=a style='height: 100px; aspect-ratio: 2; max-width: 50px'>"
+        "<img src=known.png alt=a style='height: 100px; aspect-ratio: 2; max-width: 50px'>"
+        "<img src=missing.png alt=a style='width: 100px; aspect-ratio: 2; max-height: 20px'>"
+        "<img src=known.png alt=a style='width: 100px; aspect-ratio: 2; max-height: 20px'>"
+        "<img src=missing.png alt=a style='height: 10px; aspect-ratio: 2; min-width: 50px'>"
+        "<img src=known.png alt=a style='height: 10px; aspect-ratio: 2; min-width: 50px'>"
+        "<img src=missing.png alt=a style='width: 10px; aspect-ratio: 2; min-height: 20px'>"
+        "<img src=known.png alt=a style='width: 10px; aspect-ratio: 2; min-height: 20px'>",
+        400,
+        "page 400 300\n"
+        "block html 0 0 400 300\n"
+        "  block body 0 0 400 300\n"
+        "    replaced img 0 0 50 100\n"
+        "    replaced img 0 100 50 100\n"
+        "    replaced img 0 200 100 20\n"
+        "    replaced img 0 220 100 20\n"
+        "    replaced img 0 240 50 10\n"
+        "    replaced img 0 250 50 10\n"
+        "    replaced img 0 260 10 20\n"
+        "    replaced img 0 280 10 20\n");
+
     // ── text-overflow (CSS Overflow 4 § 4.1) ──
 
     // Not inherited; the line is laid out as it would be, past its block:

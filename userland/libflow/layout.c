@@ -523,6 +523,29 @@ bool flow_replaced_fixed(const flow_style_t *style)
     return style != NULL && width_given(style) && height_given(style);
 }
 
+// §10.4's limits on a replaced box's size `r`, its ratio kept in whichever
+// dimension the page left to it (`img { max-width: 100% }`): a width held
+// carries the height with it where the height was not given, and a
+// height held the width where it was not. The rest of §10.4's table —
+// both limits binding at once against the ratio — is booked (GARB.md §
+// Booked). One door for a picture whether or not it has arrived.
+static void replaced_hold(const flow_style_t *s, Replaced *r, bool w_set, bool h_set, int64_t cbw,
+                          int64_t fw, int64_t fh)
+{
+    int64_t held = clamp_width(s, r->w, cbw, fw);
+    if (held != r->w) {
+        if (!h_set && r->w > 0)
+            r->h = r->h * held / r->w;
+        r->w = held;
+    }
+    held = clamp_height(s, r->h, fh);
+    if (held != r->h) {
+        if (!w_set && r->h > 0)
+            r->w = r->w * held / r->h;
+        r->h = held;
+    }
+}
+
 // A replaced box's size, against a containing block `cbw` wide and `cbh`
 // tall. Its ratio is the page's aspect-ratio where it gave one (Sizing 4 §
 // 4.1), else the picture's own. `cbh` is negative where that height is not definite, and then a
@@ -562,32 +585,19 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
             r.w = kw;
             r.h = ratio ? ratio_height(s, kw, fw, fh) : kh;
         }
-        // §10.4's limits, the picture's own ratio kept in whichever
-        // dimension the page left to it (`img { max-width: 100% }`). The
-        // rest of §10.4's table — both limits binding at once against the
-        // ratio — is booked (GARB.md § Booked).
-        int64_t held = clamp_width(s, r.w, cbw, fw);
-        if (held != r.w) {
-            if (!h_set && r.w > 0)
-                r.h = r.h * held / r.w;
-            r.w = held;
-        }
-        held = clamp_height(s, r.h, fh);
-        if (held != r.h) {
-            if (!w_set && r.h > 0)
-                r.w = r.w * held / r.h;
-            r.h = held;
-        }
+        replaced_hold(s, &r, w_set, h_set, cbw, fw, fh);
         return r;
     }
     // A picture whose size is not known yet takes its other side from the
     // page's ratio, or is guessed square from the side the page gave,
-    // until it arrives; anything else keeps its own default on the side
-    // the page left unset (a frame's 300 by 150), or the ratio's.
+    // until it arrives, held by the limits an arrived one is
+    // (replaced_hold); anything else keeps its own default on the side the
+    // page left unset (a frame's 300 by 150), or the ratio's.
     bool img = node->ns == OS64_HTML_NS_HTML && node->tag == OS64_HTML_TAG_IMG;
     if (img && (w_set || h_set)) {
         r.w = w_set ? w : ratio ? ratio_width(s, h, fw, fh) : h;
         r.h = h_set ? h : ratio ? ratio_height(s, w, fw, fh) : w;
+        replaced_hold(s, &r, w_set, h_set, cbw, fw, fh);
         return r;
     }
     if (img) {
