@@ -341,8 +341,9 @@ static bool temp_write(yonder_storage_t *st, const char *path, const void *image
 // it was taken). It is held across the read, the merge and the rename, so
 // two yonders (two processes) never merge onto one image and lose each
 // other's changes. A lock whose task is not running (gone, or a zombie),
-// or that is older than LOCK_STALE_S (a commit takes milliseconds; a task
-// number is reused at the next boot), was left by a crash and is broken. A
+// or is this window's own (lock_dead), or that is older than LOCK_STALE_S
+// (a commit takes milliseconds; a task number is reused at the next boot),
+// was left by a crash and is broken. A
 // live one is waited for, LOCK_STEP_MS at a time, up to LOCK_WAIT_MS; then
 // the commit is BUSY and libdom keeps the changes for the next. One that
 // names nothing is being written, or was left half made: it is waited for
@@ -400,11 +401,14 @@ static bool lock_read(const char *lock, uint64_t *task, uint64_t *taken)
     return true;
 }
 
-// Whether a lock that names its holder was left by a crash (above).
+// Whether a lock that names its holder was left by a crash (above). One
+// that names this task is a lock this window failed to let go, or an
+// earlier boot's task of the same number: this window holds none across a
+// commit, so it is never one in use.
 static bool lock_dead(uint64_t task, uint64_t taken)
 {
     uint64_t now = wall_seconds();
-    return !task_alive(task) || (now > taken && now - taken > LOCK_STALE_S);
+    return task == os64_taskid() || !task_alive(task) || (now > taken && now - taken > LOCK_STALE_S);
 }
 
 static bool lock_stale(const char *lock)

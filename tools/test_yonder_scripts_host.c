@@ -6964,6 +6964,7 @@ static void storage_two_yonder_cases(void) {
         {9,0,false,"two yonders: a lock whose task is gone is broken"},
         {8,0,true,"two yonders: a lock whose task is a zombie is broken"},
         {8,60,false,"two yonders: a lock older than a commit could be is broken"},
+        {7,0,false,"two yonders: a lock naming this window, which holds none between commits, is broken"},
     };
     for(size_t i=0;i<sizeof(kStale)/sizeof(kStale[0]);i++) {
         fake_live_zombie=kStale[i].zombie;
