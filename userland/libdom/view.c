@@ -60,7 +60,7 @@ void os64_dom_set_view(os64_dom_t *dom, const os64_dom_view_provider_t *view)
 enum {
     V_SCROLL_X, V_PAGE_X_OFFSET, V_SCROLL_Y, V_PAGE_Y_OFFSET, V_INNER_WIDTH, V_INNER_HEIGHT,
     V_OUTER_WIDTH, V_OUTER_HEIGHT, V_ACCESSORS,
-    V_SCROLL_TO = V_ACCESSORS, V_SCROLL_BY, V_SCROLLING_ELEMENT
+    V_SCROLL_TO = V_ACCESSORS, V_SCROLL_BY, V_SCROLLING_ELEMENT, V_FOCUS
 };
 static const char *const kViewNames[V_ACCESSORS] = {
     "scrollX", "pageXOffset", "scrollY", "pageYOffset", "innerWidth", "innerHeight",
@@ -452,7 +452,12 @@ int d_computed_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     const JSClassDef definition = {.class_name = "CSSStyleDeclaration", .finalizer = computed_finalizer,
                                    .gc_mark = computed_mark};
     if (JS_NewClass(dom->engine, dom->computed_class, &definition) < 0) return -1;
-    JSValue prototype = JS_NewObject(ctx);
+    /* A computed declaration and an element's style are one interface,
+     * CSSStyleDeclaration (CSSOM), whose interface object names the style
+     * object's prototype: the computed one inherits it, shadowing every
+     * member with its read-only own, so `instanceof` answers truly for
+     * both. */
+    JSValue prototype = JS_NewObjectProto(ctx, dom->style_prototype->value);
     dom->computed_prototype = d_retain(dom, ctx, prototype);
     if (dom->computed_prototype == NULL) return -1;
     JS_SetClassProto(ctx, dom->computed_class, JS_DupValue(ctx, prototype));
@@ -487,7 +492,8 @@ int d_computed_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_method(dom, ctx, prototype, "removeProperty", computed_member, 1, C_REMOVE) < 0 ||
         d_iterable(ctx, prototype, false) < 0)
         return -1;
-    if (d_accessor(dom, ctx, dom->prototypes[D_PROTO_DOCUMENT]->value, "defaultView", default_view, 0, false) < 0)
+    if (d_accessor(dom, ctx, dom->prototypes[D_PROTO_DOCUMENT]->value, "defaultView", default_view, 0, false) < 0 ||
+        d_interface_install(ctx, global, "CSSStyleDeclaration", dom->style_prototype->value, JS_UNDEFINED, NULL) < 0)
         return -1;
     return d_method_named(dom, ctx, global, "getComputedStyle", get_computed_style, 1, 0);
 }
@@ -579,6 +585,11 @@ static JSValue view_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
     }
     if (magic == V_SCROLL_TO || magic == V_SCROLL_BY)
         return scroll_method(dom, ctx, argc, argv, magic == V_SCROLL_BY);
+    /* window.focus() and blur(): the window a page is shown in is the
+     * person's to raise or leave, so both do nothing here (HTML: blur()'s
+     * steps are to do nothing; focus() on a top-level window only
+     * encourages the browser to bring it forward). */
+    if (magic == V_FOCUS) return JS_UNDEFINED;
     if (magic == V_SCROLLING_ELEMENT) {
         const os64_html_node_t *node = d_node(dom, ctx, self);
         if (node == NULL) return JS_EXCEPTION;
@@ -606,6 +617,8 @@ int d_view_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (d_method_named(dom, ctx, global, "scroll", view_member, 0, V_SCROLL_TO) < 0 ||
         d_method_named(dom, ctx, global, "scrollTo", view_member, 0, V_SCROLL_TO) < 0 ||
         d_method_named(dom, ctx, global, "scrollBy", view_member, 0, V_SCROLL_BY) < 0 ||
+        d_method_named(dom, ctx, global, "focus", view_member, 0, V_FOCUS) < 0 ||
+        d_method_named(dom, ctx, global, "blur", view_member, 0, V_FOCUS) < 0 ||
         d_accessor(dom, ctx, document, "scrollingElement", view_member, V_SCROLLING_ELEMENT, false) < 0)
         return -1;
     // onscroll and onresize are every element's, the document's and

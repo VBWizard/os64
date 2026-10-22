@@ -162,6 +162,7 @@ static void dom_view_scroll_cases(void)
         "scrollBy(1,3);assert(scrollX===6&&scrollY===5,'scrollBy adds');"
         "scrollBy({top:10});assert(scrollX===6&&scrollY===15,'scrollBy one axis');"
         "scrollTo(NaN,Infinity);assert(scrollX===0&&scrollY===0,'non-finite is 0');"
+        "assert(focus()===undefined&&blur()===undefined&&document.defaultView.focus===focus&&focus.name==='focus','window focus and blur do nothing');"
         "scrollTo(5000,-9);assert(scrollX===1000&&scrollY===0,'the host clamps');"
         "throws('TypeError',()=>scrollTo(5));throws('TypeError',()=>scrollBy(5));throws('TypeError',()=>scroll('x'));"
         "throws('TypeError',()=>scrollTo({behavior:''}));throws('TypeError',()=>scrollTo({left:1,behavior:'abcd'}));"
@@ -344,6 +345,10 @@ static void dom_view_computed_cases(void)
     os64_dom_set_computed(f.binding, fake_computed, &c);
     dom_script(&f, VIEW_ASSERT
         "var b=document.body,cs=getComputedStyle(b);assert(document.defaultView===window);"
+        "assert(typeof CSSStyleDeclaration==='function'&&cs instanceof CSSStyleDeclaration&&b.style instanceof CSSStyleDeclaration,"
+        "'one interface, both declarations');throws('TypeError',()=>new CSSStyleDeclaration());"
+        "assert(Object.prototype.toString.call(cs)==='[object CSSStyleDeclaration]'&&CSSStyleDeclaration.prototype.constructor===CSSStyleDeclaration);"
+        "assert(cs.setProperty!==b.style.setProperty&&cs.color!==undefined,'the computed members shadow the style object\\'s');"
         "throws('TypeError',()=>Object.getOwnPropertyDescriptor(Object.getPrototypeOf(document),'defaultView').get.call(b));"
         "assert(cs.color==='rgb(1, 2, 3)'&&cs.getPropertyValue('COLOR')==='rgb(1, 2, 3)','camel case, any case');"
         "assert(cs.backgroundColor===cs['background-color']&&cs.backgroundColor==='p2','dashed attributes');"
@@ -546,9 +551,9 @@ static void dom_view_off_cases(void)
     os64_dom_history_t host = {fake_history_update, fake_history_fragment, fake_history_length, &h};
     os64_dom_set_history(f.binding, &host);
     dom_script(&f, VIEW_ASSERT
-        "for(const n of ['scrollX','pageYOffset','innerWidth','outerHeight','scroll','scrollTo','scrollBy',"
+        "for(const n of ['scrollX','pageYOffset','innerWidth','outerHeight','scroll','scrollTo','scrollBy','focus','blur',"
         "'onscroll','onresize','matchMedia','MediaQueryList','MediaQueryListEvent','getComputedStyle',"
-        "'onpopstate','onhashchange','PopStateEvent','HashChangeEvent'])assert(!(n in window),n);"
+        "'onpopstate','onhashchange','PopStateEvent','HashChangeEvent','CSSStyleDeclaration'])assert(!(n in window),n);"
         "assert(!('pushState' in history)&&!('replaceState' in history)&&!('state' in history)&&!('scrollRestoration' in history));"
         "assert(!('scrollingElement' in document)&&!('defaultView' in document)&&!('onscroll' in document.body)&&!('onscroll' in document));"
         "assert(history.length===1,'the classic length');"

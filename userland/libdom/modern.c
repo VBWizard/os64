@@ -32,10 +32,10 @@ static const DModernRow kModern[] = {
      d_interfaces_install},
     {(const char *const[]){"scrollX", "pageXOffset", "scrollY", "pageYOffset", "innerWidth",
                            "innerHeight", "outerWidth", "outerHeight", "scroll", "scrollTo",
-                           "scrollBy", "onscroll", "onresize", NULL},
+                           "scrollBy", "onscroll", "onresize", "focus", "blur", NULL},
      d_view_install},
     {(const char *const[]){"matchMedia", "MediaQueryList", "MediaQueryListEvent", NULL}, d_media_install},
-    {(const char *const[]){"getComputedStyle", NULL}, d_computed_install},
+    {(const char *const[]){"getComputedStyle", "CSSStyleDeclaration", NULL}, d_computed_install},
     {(const char *const[]){"onpopstate", "onhashchange", "PopStateEvent", "HashChangeEvent", NULL},
      d_history_install},
 };

@@ -3429,7 +3429,23 @@ static void loop_view_refetch_short(void) {
     }
     check(clicked>0 && asked>0 && kept>0,"refetch short: the sweep reaches the arrivals that keep a state");
 }
+/* The corpus replay's suspects: what a page reaches through what this
+ * slice hands it must be there. statcounter's load listener focuses
+ * `document.defaultView`; a page asks `instanceof CSSStyleDeclaration` of a
+ * computed style. */
+static void loop_view_reached(void) {
+    loop_page("<p id=out>-</p><script>addEventListener('load',function(){var t=document.defaultView;"
+        "t&&t.focus();document.getElementById('out').textContent=(getComputedStyle(document.body) instanceof "
+        "CSSStyleDeclaration)+':'+(document.body.style instanceof CSSStyleDeclaration)})</script>");
+    char record[8192];
+    check(loop_settle() && view_turns() && probe_text_is("out","true:true"),
+        "reached: window.focus() from defaultView, and CSSStyleDeclaration for both declarations");
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"FAILED")==NULL,"reached: the load listener does not fail");
+    loop_drop();
+}
 static void loop_view_cold_cases(void) {
+    loop_view_reached();
     loop_view_refetch_short();
     loop_view_owed();
     loop_view_refetched();

@@ -6,6 +6,7 @@
 # Slice 1b: getComputedStyle's declaration: live, read-only, empty for a
 # detached element, in CSSOM's order, resolved values. Each fails with the
 # switch off.
+cssstyledeclaration-properties.html	CSS Test: CSSStyleDeclaration properties are defined as WebIDL attributes, not using getOwnPropertyNames()
 computed-style-001.html	inherited_property_values
 computed-style-001.html	property_values
 computed-style-001.html	relative_property_values
@@ -128,6 +129,7 @@ cssstyledeclaration-csstext-final-delimiter.html	inline style - text - delimiter
 cssstyledeclaration-csstext.html	cssText on computed style declaration returns the empty string
 cssstyledeclaration-csstext.html	uppercase property
 cssstyledeclaration-mutability.html	HTMLElement's CSSStyleDeclaration is mutable
+cssstyledeclaration-properties.html	CSS Test: CSSStyleDeclaration properties are defined as WebIDL attributes, not using getOwnPropertyNames()
 cssstyledeclaration-removeProperty-all.html	CSSStyleDeclaration.removeProperty("all") 1
 cssstyledeclaration-setter-attr.html	Setting an invalid property via the declaration setter doesn't create a declaration
 cssstyledeclaration-setter-attr.html	Setting an invalid value via the declaration setter doesn't create a declaration
