@@ -283,10 +283,20 @@ static bool type_is(const os64_html_node_t *node, const char *wanted, bool missi
     return *a == '\0' && *b == '\0';
 }
 
-bool d_connected(const os64_dom_t *dom, const os64_html_node_t *node)
+static const os64_html_node_t *tree_root(const os64_html_node_t *node)
 {
     while (node->parent != NULL) node = node->parent;
-    return node == dom->document->document;
+    return node;
+}
+
+bool d_connected(const os64_html_node_t *node)
+{
+    return tree_root(node)->kind == OS64_HTML_DOCUMENT;
+}
+
+bool d_in_window_tree(const os64_dom_t *dom, const os64_html_node_t *node)
+{
+    return tree_root(node) == dom->document->document;
 }
 
 static bool form_associated(const os64_html_node_t *node)
@@ -303,16 +313,17 @@ static bool form_associated(const os64_html_node_t *node)
 }
 
 /* HTML's form owner: the parser's record, else the form a `form` attribute
- * names, else the nearest form ancestor. libhtml clears a record the moment
- * it stops being true, so a record found is believed. */
-const os64_html_node_t *d_form_owner(const os64_dom_t *dom, const os64_html_node_t *node)
+ * names in the control's own document's tree (any document's, as libpage's
+ * node_owner reads it), else the nearest form ancestor. libhtml clears a
+ * record the moment it stops being true, so a record found is believed. */
+const os64_html_node_t *d_form_owner(const os64_html_node_t *node)
 {
     if (!form_associated(node)) return NULL;
     if (node->form_owner != NULL) return node->form_owner;
     const os64_html_attr_t *named = os64_html_attr(node, "form");
     if (named != NULL) {
-        if (!d_connected(dom, node)) return NULL;
-        const os64_html_node_t *root = dom->document->document;
+        if (!d_connected(node)) return NULL;
+        const os64_html_node_t *root = tree_root(node);
         for (const os64_html_node_t *at = root; at != NULL;) {
             const os64_html_attr_t *id = at->kind == OS64_HTML_ELEMENT ? os64_html_attr(at, "id") : NULL;
             if (id != NULL && os64_strcmp(id->value, named->value) == 0)
@@ -412,7 +423,7 @@ static int click_activate(os64_dom_t *dom, JSContext *ctx, const os64_html_node_
     }
     bool button = html_element(node, OS64_HTML_TAG_BUTTON);
     bool input = html_element(node, OS64_HTML_TAG_INPUT);
-    const os64_html_node_t *form = d_form_owner(dom, node);
+    const os64_html_node_t *form = d_form_owner(node);
     if (form == NULL) return 1;
     if ((button && (type_is(node, "submit", true) || !(type_is(node, "reset", false) || type_is(node, "button", false)))) ||
         (input && (type_is(node, "submit", false) || type_is(node, "image", false))))
@@ -681,11 +692,9 @@ void d_script_connected(os64_dom_t *dom, const os64_html_node_t *const *scripts,
     for (size_t i = 0; i < count; i++) {
         const os64_html_node_t *script = scripts[i];
         if (os64_dom_script_kind(script) != OS64_DOM_SCRIPT_CLASSIC) continue;
-        const os64_html_node_t *root = script;
-        while (root->parent != NULL) root = root->parent;
-        if (root == dom->document->document) {
+        if (d_in_window_tree(dom, script)) {
             if (d_script_mark(dom, script) == 1) dom->options.script_connected(dom->options.host_opaque, script);
-        } else if (root->kind == OS64_HTML_DOCUMENT) {
+        } else if (d_connected(script)) {
             (void)d_script_mark(dom, script);
         }
     }

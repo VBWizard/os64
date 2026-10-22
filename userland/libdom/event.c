@@ -400,7 +400,7 @@ static int slot_compile(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListene
         slot_state(dom, slot, D_SLOT_ERROR);
         return -1;
     }
-    const os64_html_node_t *form = element != NULL ? d_form_owner(dom, element) : NULL;
+    const os64_html_node_t *form = element != NULL ? d_form_owner(element) : NULL;
     JSValue scopes[3] = {
         d_wrap(dom, ctx, document_node(dom)),
         form != NULL ? d_wrap(dom, ctx, form) : JS_NewObject(ctx),

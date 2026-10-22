@@ -255,8 +255,14 @@ int d_script_copy_marks(os64_dom_t *dom, const os64_html_node_t *from, const os6
 void d_script_connected(os64_dom_t *dom, const os64_html_node_t *const *scripts, size_t count);
 size_t d_script_collect(const os64_html_node_t *node,
                         const os64_html_node_t **out, size_t cap);
-bool d_connected(const os64_dom_t *dom, const os64_html_node_t *node);
-const os64_html_node_t *d_form_owner(const os64_dom_t *dom, const os64_html_node_t *node);
+/* TWO KINDS OF CONNECTED. d_connected is DOM's: the node's tree hangs from
+ * a document, any document, a document of its own (implementation.c)
+ * included; isConnected and a `form` attribute's lookup ask it.
+ * d_in_window_tree is narrower: the tree hangs from the window's document,
+ * which is what a script must be in to run. */
+bool d_connected(const os64_html_node_t *node);
+bool d_in_window_tree(const os64_dom_t *dom, const os64_html_node_t *node);
+const os64_html_node_t *d_form_owner(const os64_html_node_t *node);
 JSValue d_element_action(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, int action);
 void d_navigate(os64_dom_t *dom, os64_dom_navigation_kind_t kind, const os64_html_node_t *node,
                 const os64_html_node_t *submitter, const char *url, int32_t delta);
@@ -326,7 +332,7 @@ enum {
 enum { D_QUERY_GENERIC, D_QUERY_IMAGES, D_QUERY_FORMS, D_QUERY_CONTROLS, D_QUERY_DOCUMENT_NAMES,
        D_QUERY_CLASSES, D_QUERY_NAME };
 bool d_named_match(const os64_html_node_t *node, const char *name);
-bool d_classic_match(os64_dom_t *dom, const os64_html_node_t *root, const os64_html_node_t *node, unsigned kind);
+bool d_classic_match(const os64_html_node_t *root, const os64_html_node_t *node, unsigned kind);
 JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root, unsigned kind, const char *named);
 JSValue d_classic_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, unsigned kind);
 int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);

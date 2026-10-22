@@ -324,6 +324,25 @@ static void implementation_reflection_cases(void)
     fixture_free(&f);
 }
 
+/* DOM's connected is any document's tree; running a script asks for the
+ * window's (internal.h's two kinds of connected). */
+static void implementation_connected_cases(void)
+{
+    DomFixture f = fixture_new(NULL);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, IMPL_ASSERT
+        "var d=document.implementation.createHTMLDocument('');"
+        "assert(d.body.isConnected===true&&document.body.isConnected===true,'in a document, any document');"
+        "assert(d.createElement('p').isConnected===false&&document.createElement('p').isConnected===false);"
+        "d.body.innerHTML='<form id=f></form><input id=i form=f><input id=j form=nothing>';"
+        "var form=d.getElementById('f');"
+        "assert(form.elements.length===1&&form.elements[0]===d.getElementById('i'),"
+        "'a form attribute names a form in its own document\\'s tree');"
+        "document.body.appendChild(d.getElementById('i'));assert(form.elements.length===0,'and only there');",
+        "connected: isConnected and a form attribute in a document of its own");
+    fixture_free(&f);
+}
+
 static void implementation_document_cases(void)
 {
     DomFixture f = fixture_new(NULL);
@@ -425,6 +444,7 @@ static void dom_implementation_cases(void)
     implementation_owner_cases();
     implementation_windowless_cases();
     implementation_reflection_cases();
+    implementation_connected_cases();
     implementation_document_cases();
     implementation_control_type_cases();
     implementation_jquery_cases();

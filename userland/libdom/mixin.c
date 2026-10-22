@@ -397,7 +397,7 @@ static JSValue reflect(JSContext *ctx, JSValueConst this_value, int argc,
     if (self == NULL) return JS_EXCEPTION;
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
-    if (magic == R_CONNECTED) return JS_NewBool(ctx, d_connected(dom, self));
+    if (magic == R_CONNECTED) return JS_NewBool(ctx, d_connected(self));
     if (!is_element(self)) return JS_ThrowTypeError(ctx, "Reflected attribute requires an element");
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
     const char *name = magic == R_HIDDEN ? "hidden" : magic == R_LANG ? "lang" : magic == R_DIR ? "dir" :

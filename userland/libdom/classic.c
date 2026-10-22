@@ -22,11 +22,14 @@ static bool contains(const char *text, const char *word)
     return false;
 }
 
-static const os64_html_node_t *dom_root(os64_dom_t *dom, const os64_html_node_t *node)
+/* The tree a form's controls and a document's names are looked for in:
+ * the document the node is connected to (any document, d_connected), else
+ * the node's own subtree. */
+static const os64_html_node_t *dom_root(const os64_html_node_t *node)
 {
     const os64_html_node_t *root = node;
     while (root->parent != NULL) root = root->parent;
-    return root == dom->document->document ? root : node;
+    return root->kind == OS64_HTML_DOCUMENT ? root : node;
 }
 
 bool d_named_match(const os64_html_node_t *node, const char *name)
@@ -36,7 +39,7 @@ bool d_named_match(const os64_html_node_t *node, const char *name)
     return (id != NULL && os64_streq(id->value, name)) || (named != NULL && os64_streq(named->value, name));
 }
 
-bool d_classic_match(os64_dom_t *dom, const os64_html_node_t *root,
+bool d_classic_match(const os64_html_node_t *root,
                       const os64_html_node_t *node, unsigned kind)
 {
     if (node->kind != OS64_HTML_ELEMENT || node->ns != OS64_HTML_NS_HTML) return false;
@@ -48,7 +51,7 @@ bool d_classic_match(os64_dom_t *dom, const os64_html_node_t *root,
     case D_QUERY_CONTROLS:
         return (node->tag == OS64_HTML_TAG_INPUT || node->tag == OS64_HTML_TAG_SELECT ||
                 node->tag == OS64_HTML_TAG_TEXTAREA || node->tag == OS64_HTML_TAG_BUTTON) &&
-               d_form_owner(dom, node) == root;
+               d_form_owner(node) == root;
     default: return true;
     }
 }
@@ -59,7 +62,7 @@ JSValue d_classic_collection(os64_dom_t *dom, JSContext *ctx,
     DValue *entry = d_find(dom, node);
     DQuery **slot = kind == D_QUERY_IMAGES ? &entry->images : kind == D_QUERY_FORMS ? &entry->forms : &entry->elements;
     if (*slot != NULL) return JS_DupValue(ctx, (*slot)->entry->value);
-    const os64_html_node_t *root = kind == D_QUERY_CONTROLS ? dom_root(dom, node) : node;
+    const os64_html_node_t *root = kind == D_QUERY_CONTROLS ? dom_root(node) : node;
     JSValue value = d_special_collection(dom, ctx, root, kind, NULL);
     if (!JS_IsException(value)) {
         *slot = JS_GetOpaque(value, dom->collection_class);
@@ -91,11 +94,11 @@ static int named_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueCon
     const char *name = JS_ToCString(ctx, key);
     JS_FreeValue(ctx, key);
     if (name == NULL) return -1;
-    const os64_html_node_t *search = dom_root(entry->dom, root);
+    const os64_html_node_t *search = dom_root(root);
     const os64_html_node_t *first = NULL;
     size_t count = 0;
     for (const os64_html_node_t *at = search->first_child; at != NULL; at = next_node(at, search))
-        if (d_classic_match(entry->dom, root, at, kind) && d_named_match(at, name)) {
+        if (d_classic_match(root, at, kind) && d_named_match(at, name)) {
             if (first == NULL) first = at;
             count++;
         }
