@@ -517,9 +517,11 @@ const os64_image_frame_t *os64_image_sequence_frame(const os64_image_sequence_t 
 /* A file a case serves (open_local), or none: `slurp_length` bytes, or a
  * string's when that is zero; and the fake disk's files (page storage
  * reads its stores this way), whole. fake_slurp_fail makes every read of
- * a fake file fail, as a disk that cannot be read does. */
+ * a fake file fail, as a disk that cannot be read does; reading the case's
+ * file takes slurp_us on the clock. */
 static const char *slurp_path, *slurp_bytes;
 static size_t slurp_length;
+static int64_t slurp_us;
 static bool fake_slurp_fail;
 os64_slurp_status_t os64_slurp(const char *path, size_t cap, uint8_t **bytes, size_t *length) {
     *bytes=NULL; *length=0;
@@ -534,6 +536,7 @@ os64_slurp_status_t os64_slurp(const char *path, size_t cap, uint8_t **bytes, si
         return OS64_SLURP_OK;
     }
     if(slurp_path==NULL || !os64_streq(path,slurp_path)) return OS64_SLURP_NO_FILE;
+    clock_us+=slurp_us;
     *length=slurp_length!=0 ? slurp_length : strlen(slurp_bytes);
     *bytes=os64_malloc(*length+1); memcpy(*bytes,slurp_bytes,*length); (*bytes)[*length]=0;
     return OS64_SLURP_OK;
@@ -7658,6 +7661,22 @@ static void timing_window_cases(void) {
         "timing: after its load, the page reads every milestone");
     loop_drop();
 }
+/* A page from disk: its navigation begins before the read, and its
+ * response is the read. */
+static void timing_file_case(void) {
+    stream_window();
+    g.scripts_on=true; g.script_ms=5000;
+    slurp_path="/pages/local.html";
+    slurp_bytes="<p id=out>start</p><script>var t=performance.timing;document.getElementById('out').textContent="
+        "[t.fetchStart===t.navigationStart,t.responseStart-t.fetchStart<10,t.responseEnd-t.responseStart>=50].join();</script>";
+    slurp_us=50000;
+    open_address("/pages/local.html",NAV_GO,NULL,NULL);
+    slurp_us=0;
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","true,true,true"),
+        "timing: a file's response starts as its read does and ends when the read has");
+    slurp_path=NULL;
+    loop_drop();
+}
 /* With the switch off, none of slice 1a's names exists. */
 static void storage_modern_off_cases(void) {
     loop_modern_off=true;
@@ -7682,6 +7701,7 @@ static void storage_cases(void) {
     storage_orphan_cases();
     timing_window_cases();
     timing_redirect_case();
+    timing_file_case();
     storage_modern_off_cases();
 }
 

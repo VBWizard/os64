@@ -2910,9 +2910,8 @@ static void stream_modern_capture(void)
 // THE PAGE'S NAVIGATION TIMING (performance.timing, the navigation entry):
 // its origin is the moment the navigation began, on os64_micros' clock and
 // the wall clock's, and the fetch starts then.
-static void stream_timing_start(NavKind kind)
+static void timing_start(os64_dom_timing_t *t, NavKind kind)
 {
-    os64_dom_timing_t *t = &g.stream.timing;
     int64_t now = os64_micros();
     t->origin_us = now > 0 ? (uint64_t)now : 0;
     os64_time_t wall;
@@ -2927,14 +2926,21 @@ static void stream_timing_start(NavKind kind)
             : OS64_DOM_NAVIGATE;
 }
 
+// A milestone of the navigation `t` times, now: kept, and answered on
+// os64_micros' clock.
+static uint64_t timing_mark(os64_dom_timing_t *t, os64_dom_milestone_t which)
+{
+    int64_t now = os64_micros();
+    uint64_t at = now > 0 ? (uint64_t)now : 0;
+    t->at[which] = at > t->origin_us ? at - t->origin_us : 0;
+    return at;
+}
+
 // A milestone of the page arriving, now: kept, and told to its scripts'
 // host when it has one.
 static void stream_mark(os64_dom_milestone_t which)
 {
-    int64_t now = os64_micros();
-    uint64_t at = now > 0 ? (uint64_t)now : 0;
-    g.stream.timing.at[which] = at > g.stream.timing.origin_us ? at - g.stream.timing.origin_us : 0;
-    yonder_scripts_mark(g.stream.scripts, which, at);
+    yonder_scripts_mark(g.stream.scripts, which, timing_mark(&g.stream.timing, which));
 }
 
 static void open_local(const char *path, NavKind kind, const way_position_t *crumb)
@@ -2944,6 +2950,12 @@ static void open_local(const char *path, NavKind kind, const way_position_t *cru
     char line[512];
     os64_snprintf(line, sizeof(line), "file://%s", path);
     yonder_diag_t *diag = diag_begin(line);
+    // A file's response is its read: the navigation begins before it, the
+    // response starts as the read does and ends when it has. The stream is
+    // not this page's until the read has worked, so the times wait here.
+    os64_dom_timing_t timing;
+    timing_start(&timing, kind);
+    timing_mark(&timing, OS64_DOM_TIMING_RESPONSE_START);
     switch (os64_slurp(path, YONDER_FILE_MAX, &bytes, &len)) {
     case OS64_SLURP_OK:
         break;
@@ -2960,11 +2972,9 @@ static void open_local(const char *path, NavKind kind, const way_position_t *cru
         diag_abandon(diag, line);
         return;
     }
+    timing_mark(&timing, OS64_DOM_TIMING_RESPONSE_END);
     os64_memset(&g.stream, 0, sizeof(g.stream));
-    // A file's response is its read, done before the stream begins.
-    stream_timing_start(kind);
-    stream_mark(OS64_DOM_TIMING_RESPONSE_START);
-    stream_mark(OS64_DOM_TIMING_RESPONSE_END);
+    g.stream.timing = timing;
     g.stream.diag = diag;
     g.stream.local = bytes;
     g.stream.local_len = len;
@@ -3184,7 +3194,7 @@ static void start_trip(const char *url, os64_page_request_t *request, NavKind ki
     if (request != NULL && kind != NAV_RELOAD && g.page.tree != NULL)
         os64_strcopy(trip->referrer, sizeof(trip->referrer), g.page.way.url);
     os64_memset(&g.stream, 0, sizeof(g.stream));
-    stream_timing_start(kind);
+    timing_start(&g.stream.timing, kind);
     if (request != NULL) {
         g.stream.has_fragment = request->has_fragment;
         if (request->has_fragment)
