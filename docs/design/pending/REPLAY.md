@@ -229,6 +229,8 @@ the rows that say so are the whole of what a replay fakes.
 | the text face | the harness | — | stated: bitmap face, so measurements differ from the P5's |
 | pictures and fonts | not fetched | — | stated: their fetch-decided outcomes are not reproduced (§ 5) |
 | the screen | the harness | — | stated: `screen`, once built, answers the harness's size |
+| the session history | the harness | — | stated: every page arrives as a new way in a window with no history: `history.length` 1, `history.state` null, no scroll restored, whether it was kept on a reload, Back, Forward or a link, and whatever entries were around it |
+| the window's frame | the harness | — | stated: `outerWidth` and `outerHeight` answer the root's bounds as the harness lays them out around the record's view, not the frame the page was kept in; the replay never sets yonder's frame size (`g.frame_w`, `g.frame_h`), and the record does not keep it |
 
 **A kept file is bound to its record by what the record says of it, and
 nothing else** (version 2; version 1 by what it says, § 3's versions
@@ -427,6 +429,8 @@ Each is a row in DEBTS.md § The replay corpus.
 |---|---|
 | the text face is the harness's bitmap face, so measured layout differs from the P5's | a replay regression that is a measurement |
 | `screen`, once built, answers the harness's size | the slice that builds it, or a page whose MISSING lines depend on it |
+| a replay's session history is a new window's | a kept page reached by a reload, Back or Forward, or with entries around it, whose scripts read `history.length` or `history.state`, or whose replay differs by where it is scrolled |
+| `outerWidth` and `outerHeight` answer the harness's root | a kept page whose MISSING lines, or whose layout, depend on the window's outer size |
 | a kept corpus holds script-visible cookies | the day the filesystem has modes, the record is written closed |
 | keep_pages writes on the window's thread | browsing with it on visibly hitching while a page's scripts arrive |
 | a page that navigates replays only as far as going | pages that redirect by script often enough that their incomplete records hide what slices change |
