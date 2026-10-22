@@ -10401,7 +10401,8 @@ int main(int argc, char **argv)
     way_jar_free(g.way.jar);
     if (g.cache != NULL)
         way_cache_close(g.cache);
-    // The pages made their departure commits as they went (page_clear).
+    // Every page's scripts' host is gone by here, and each made its
+    // departure commit as it went.
     yonder_storage_free(s_storage);
     s_storage = NULL;
     // Nothing is left to read an agent: the workers are gone, and the pages.

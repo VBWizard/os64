@@ -12,7 +12,8 @@
 // an image per origin in memory, kept across the window's navigations and
 // gone with the window, never a file.
 //
-// Images are libdom's format; this file never reads one, it moves them.
+// Images are libdom's format; this file moves them, and takes one apart
+// only through libdom's merge and walk.
 
 #include <dom/dom.h>
 
