@@ -511,12 +511,19 @@ and `replaceState` give it the entry's address (one the document may
 rewrite its own to, or SecurityError) and its state as JSON (dom.h § HISTORY says what JSON may
 carry; DataCloneError otherwise, QuotaExceededError past 64 KiB or when the
 host refuses), and fire nothing. `history.state` is that JSON read once,
-the same object until the entry changes. A fragment navigation goes to the
-host at once. A traversal is the host's: it tells the binding
-(`os64_dom_history_moved`) before it moves its own entries, then dispatches
-`popstate` and, when the fragment changed, `hashchange`
-(`os64_dom_history_event`); `history.scrollRestoration` is the host's to
-read (`os64_dom_history_manual`).
+the same object until the entry changes. A fragment navigation a script
+makes goes to the host at once, and its `popstate` fires inside that
+script, with the new entry's null state; the host queues the `hashchange`.
+`location.hash` set to the fragment the address already has (as the URL
+parser's fragment state writes it) navigates nowhere. A traversal is the
+host's: it tells the binding (`os64_dom_history_moved`) before it moves its
+own entries, then owes `popstate` and, when the fragment changed,
+`hashchange`. An owed event carries what it was owed with
+(`os64_dom_history_event_t`): a hashchange its two addresses, a popstate
+the entry's state and name (`os64_dom_history_entry`), its state being
+history.state itself only while that entry is still the current one.
+`history.scrollRestoration` is the host's to read
+(`os64_dom_history_manual`).
 
 ## The Modern Web's surface
 

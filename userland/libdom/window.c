@@ -881,11 +881,12 @@ static JSValue history_event(os64_dom_t *dom, JSContext *ctx, void *arg);
  * and then — inside the script that asked, before it goes on — `popstate`,
  * because the navigation's "update document for history step application"
  * fires it there and then. The hashchange it owes is the host's to queue
- * (os64_dom_history_t.fragment). 1 when it was made; 0, with nothing
- * changed and nothing fired, when the host could not take it; -1 when it
- * was made and the popstate could not be dispatched (no room for it, or
- * the runtime failed under a listener), with the exception pending, as
- * dispatchEvent answers. */
+ * (os64_dom_history_t.fragment). 1 when it was made, its popstate
+ * dispatched or, when the binding had no room for it, reported, since the
+ * navigation the script asked for stands; 0, with nothing changed and
+ * nothing fired, when the host could not take it; -1 when it was made and
+ * the runtime failed under a listener, with the exception pending, so the
+ * script ends as it would have in dispatchEvent. */
 static int fragment_navigation(os64_dom_t *dom, JSContext *ctx, const char *url, bool replace)
 {
     if (!dom->options.modern || dom->history_host.fragment == NULL) return 0;
@@ -905,10 +906,15 @@ static int fragment_navigation(os64_dom_t *dom, JSContext *ctx, const char *url,
     if (dom->popstate_prototype == NULL || !os64_dom_listens(dom, "popstate")) return 1;
     os64_dom_history_event_t popstate = {.entry = dom->entry_name};
     JSValue event = history_event(dom, ctx, &popstate);
-    if (JS_IsException(event)) return -1;
-    int dispatched = d_dispatch(dom, ctx, event, NULL);
+    int dispatched = JS_IsException(event) ? -1 : d_dispatch(dom, ctx, event, NULL);
     JS_FreeValue(ctx, event);
-    return dispatched < 0 ? -1 : 1;
+    if (dispatched >= 0) return 1;
+    os64_js_outcome_t probe;
+    if (os64_js_context(dom->runtime, OS64_JS_ABI_ID, &probe) == NULL) return -1;
+    JSValue error = JS_GetException(ctx);
+    d_report(dom, ctx, error);
+    JS_FreeValue(ctx, error);
+    return 1;
 }
 
 bool os64_dom_history_moved(os64_dom_t *dom, const char *url, const char *state, size_t length)

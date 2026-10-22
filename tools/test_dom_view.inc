@@ -661,6 +661,7 @@ static void dom_view_allocation_cases(void)
         "matchMedia('(min-width: 1px)').addEventListener('change',()=>{})",
         "getComputedStyle(document.body).color",
         "location.hash='frag'",
+        "addEventListener('popstate',e=>{globalThis.heard=e.state});location.hash='frag'",
         "history.state",
     };
     for (size_t op = 0; op < sizeof(operations) / sizeof(operations[0]); op++) {

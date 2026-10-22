@@ -3378,7 +3378,59 @@ static void loop_view_passed_over(void) {
         "passed over: and the one left is at 300");
     loop_drop();
 }
+/* Short of memory at any allocation of a fetched Back that brings a state
+ * back (the copy session_go takes, the arriving page's, the host's keep
+ * and the binding's), the arrived page and the window agree on its state:
+ * what history.state reads is the window's Page.entry_state. */
+static void loop_view_refetch_short(void) {
+    size_t clicked=0, arrived=0;
+    unsigned asked=0, kept=0;
+    // The cuts fall in the click (1 to `clicked`) or the arrival after it
+    // (the rest); posting the page is the fake mailbox's and is not cut.
+    for(size_t cut=0;cut==0 || cut<=clicked+arrived;cut++) {
+        loop_page("<script>onload=function(){history.pushState({k:1},'','/kept')}</script>");
+        if(!loop_settle() || !view_turns()) { check(false,"refetch short: the page arrives"); loop_drop(); return; }
+        start_trip("http://fixture.test/other",NULL,NAV_GO,NULL);
+        post_arriving("<p>other</p>");
+        loop_settle();
+        view_turns();
+        size_t start=attempts;
+        if(cut && cut<=clicked) fail_at=attempts+cut;
+        click_back(NULL,NULL);
+        fail_at=0;
+        if(!cut) clicked=attempts-start;
+        if(g.stream.active)
+            post_arriving("<p id=out>-</p><script>document.getElementById('out').textContent="
+                          "JSON.stringify(history.state)</script>");
+        start=attempts;
+        if(cut>clicked) fail_at=attempts+(cut-clicked);
+        loop_settle();
+        view_turns();
+        fail_at=0;
+        if(!cut) arrived=attempts-start;
+        // A page whose own script could not write its answer under the
+        // cut (no text, or the parse's `-`) is not asked.
+        os64_html_node_t *out=probe_id("out");
+        const char *said=out && out->first_child && out->first_child->kind==OS64_HTML_TEXT ? out->first_child->text : "";
+        if(g.page.tree!=NULL && os64_streq(g.page.way.url,"http://fixture.test/final") &&
+           yonder_scripts_alive(g.page.scripts) && (os64_streq(said,"null") || said[0]=='{')) {
+            asked++;
+            const char *state=g.page.entry_state;
+            bool agree=state==NULL ? probe_text_is("out","null") : probe_text_is("out",state);
+            kept+=state!=NULL;
+            if(!agree) {
+                os64_html_node_t *o=probe_id("out");
+                fprintf(stderr,"refetch short: cut %zu (%zu in the click): page says %s, window %s\n",cut,clicked,
+                        o && o->first_child ? o->first_child->text : "?",state ? state : "NULL");
+            }
+            check(agree,"refetch short: the page reads the state the window keeps");
+        }
+        loop_drop();
+    }
+    check(clicked>0 && asked>0 && kept>0,"refetch short: the sweep reaches the arrivals that keep a state");
+}
 static void loop_view_cold_cases(void) {
+    loop_view_refetch_short();
     loop_view_owed();
     loop_view_refetched();
     loop_view_identity();
