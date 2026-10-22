@@ -729,8 +729,10 @@ added window's `focus`/`blur`; checking every interface the slice hands
 out added `CSSStyleDeclaration`. amazon's and ms.now's unjudged records
 are the record's own capacity (its facts past `YONDER_DIAG_FACTS_MAX`).
 
-Host: the DOM host 3,810 / 22,416 → 4,706 / 36,992 checks, with 5,715
-allocation sweeps; the scripted-page host 5,888 → 6,793; all 0 failed.
+Host: the DOM host 3,810 / 22,416 → 4,709 / 36,995 checks, with 5,715
+allocation sweeps; the scripted-page host 5,888 → 6,361 (its refetch
+sweep cuts an arrival only up to the page's first script, below); all 0
+failed.
 libgarb's harness took 27 minutes with the media serializer as first
 built, its allocation sweep paying the cost that doubled at every bracket
 level (the cold read's P1); in one pass it takes 10 seconds. The mutant harnesses were not
