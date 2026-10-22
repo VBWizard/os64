@@ -459,11 +459,14 @@ file `<name>.txt`:
   source), `<n>.css` (the bytes a sheet was parsed from). A fetch that
   failed is a line with no file.
 - `<name>.d/index`, written whole again with each new line. Its first line
-  is `# yonder kept index 1`; more `#` lines say what the rest hold; every
-  other line is `<n> TAB <kind> TAB` what that kind carries, a script's
-  and a sheet's being `<url> TAB came|failed TAB <final> TAB <label>`. The
-  index grows by kind (a `fetch` line, a `storage` image), and the version
-  moves only when a shape that exists changes. Fonts and pictures are not
+  is `# yonder kept index 2`; more `#` lines say what the rest hold; every
+  other line is `<n> TAB <kind> TAB` what that kind carries, numbered 1 to
+  N in the order kept, a script's and a sheet's being `<url> TAB
+  came|failed TAB <final> TAB <label> TAB <job>`, `<job>` the job's own
+  identity (a script's token, a sheet's place in its page's table), so a
+  replay gives two jobs of one address each its own outcome. The index
+  grows by kind (a `fetch` line, a `storage` image), and the version moves
+  when a shape that exists changes (2 added `<job>`). Fonts and pictures are not
   kept, and the header says so.
 
 **Each name is claimed as the load begins** (`yonder_diag_claim`): the
@@ -519,14 +522,22 @@ a record to its kept files.
 has one too), `body` (`html`, `text` or `image`: what libway judged the
 body to be), and for a page from the network `content-type` and `charset`
 as the server named them (empty when it named none) and `encrypted`
-(`yes`/`no`), and its `status` (`0` when its protocol has none). A page
-read with scripts off says `scripts: off`. These, `TLS`, `laid out at`,
-`kept` and `kept lines` have room of their own (16 lines, counted apart
-from the 512 the other plain lines may take: `yonder_diag_head_fact`), so
+(`yes`/`no`), and its `status` (`0` when its protocol has none). And the
+window it was read in, written at the claim as in force for the load:
+`modern` (`on`/`off`), `laid out at` (the view's `<width>x<height> px`,
+again at arrival with ` in <n> ms`), `zoom` (per mille), `appearance`
+(`light`/`dark`), `motion` (`full`/`reduce`), `animate` (`on`/`off`: whether
+animations run),
+`scripts` (`on`/`off`) and
+`script seconds`. These, `TLS`, `kept` and `kept lines` have room of their
+own (24 lines, counted apart from the 512 the other plain lines may take:
+`yonder_diag_head_fact`), so
 a page with more plain lines than that never loses one of these; it does
 lose the others, and is unjudged. A replay requires every one of them its
 page needs (a file's page has no status, type, charset or encryption)
-rather than assume any, and every record ends with the line `end`, which
+rather than assume any, reads the page in the window they say, and reads
+every line of the record by one grammar
+(`tools/yonder_record_grammar.txt` holds its vectors), and every record ends with the line `end`, which
 a replay requires of a kept page's record and the readers of any record
 that says `kept:`, `kept lines:` or `REPLAY state:`.
 

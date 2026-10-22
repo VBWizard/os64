@@ -1672,6 +1672,26 @@ static void diag_kept(int64_t answer);
 static yonder_diag_t *diag_begin(const char *url)
 {
     yonder_diag_t *d = yonder_diag_new(url, s_diag.next, os64_micros());
+    // THE WINDOW A REPLAY READS THE PAGE IN, as in force for this load (the
+    // view's size, the zoom, dark pages, reduced motion, whether animations
+    // run, the modern switch, scripts and their time limit), so a replay
+    // sets each from the record and assumes none. The arrival writes the laid-out size again.
+    if (d != NULL) {
+        char v[48];
+        yonder_diag_head_fact(d, "modern", g.modern ? "on" : "off");
+        os64_snprintf(v, sizeof(v), "%dx%d px", (int)g.view.bounds.w, (int)g.view.bounds.h);
+        yonder_diag_head_fact(d, "laid out at", v);
+        os64_snprintf(v, sizeof(v), "%lu", (unsigned long)g.zoom);
+        yonder_diag_head_fact(d, "zoom", v);
+        yonder_diag_head_fact(d, "appearance", s_dark ? "dark" : "light");
+        yonder_diag_head_fact(d, "motion", s_reduce_motion ? "reduce" : "full");
+        // `animate`, not `animations`: that key says how the page's own
+        // animations are faring.
+        yonder_diag_head_fact(d, "animate", s_animations ? "on" : "off");
+        yonder_diag_head_fact(d, "scripts", g.scripts_on ? "on" : "off");
+        os64_snprintf(v, sizeof(v), "%lu", (unsigned long)(g.script_ms / 1000));
+        yonder_diag_head_fact(d, "script seconds", v);
+    }
     if (d != NULL && s_diag.dir[0] != '\0') {
         int64_t claimed = yonder_diag_claim(d, s_diag.dir, s_diag.keep);
         if (claimed != YONDER_DIAG_UNCLAIMED)
@@ -1734,11 +1754,11 @@ static void diag_kept(int64_t answer)
 
 // A script or sheet as the window received it, or that it did not come
 // (`bytes` NULL), kept beside the record of the page that asked for it.
-static void diag_keep(yonder_diag_t *d, yonder_diag_kept_t kind, const char *url, const char *final,
+static void diag_keep(yonder_diag_t *d, yonder_diag_kept_t kind, uint32_t job, const char *url, const char *final,
                       const char *label, const void *bytes, size_t n)
 {
     if (s_diag.keep)
-        diag_kept(yonder_diag_keep_resource(yonder_diag_claimed(d), kind, url, final, label, bytes, n));
+        diag_kept(yonder_diag_keep_resource(yonder_diag_claimed(d), kind, job, url, final, label, bytes, n));
 }
 
 // The badge follows the shown page's counts; its width moves the status
@@ -2078,7 +2098,8 @@ static void diag_arrived(Page *p, uint64_t laid_ms)
     yonder_diag_head_fact(p->diag, "final address", p->way.url);
     os64_snprintf(v, sizeof(v), "%ld ms", (long)((os64_micros() - yonder_diag_began(p->diag)) / 1000));
     yonder_diag_fact(p->diag, "arrived after", v);
-    os64_snprintf(v, sizeof(v), "%d px in %lu ms", (int)p->laid_width, (unsigned long)laid_ms);
+    os64_snprintf(v, sizeof(v), "%dx%d px in %lu ms", (int)p->laid_width, (int)p->laid_height,
+                  (unsigned long)laid_ms);
     yonder_diag_head_fact(p->diag, "laid out at", v);
     diag_observe(p, "when the page arrived");
     diag_write(p->diag);
@@ -3559,7 +3580,7 @@ static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
     // beside the record of the page it is for: the stream's page has none
     // of its own, its record is the stream's.
     bool came = got != NULL && got->ok;
-    diag_keep(p == &g.stream.page ? g.stream.diag : p->diag, YONDER_DIAG_KEPT_SHEET, job->url,
+    diag_keep(p == &g.stream.page ? g.stream.diag : p->diag, YONDER_DIAG_KEPT_SHEET, (uint32_t)job->index, job->url,
               came ? got->url : job->url, came ? got->label : "",
               came ? (got->kept != NULL ? (const void *)got->kept : "") : NULL, came ? got->kept_len : 0);
     sh->waiting = false;
@@ -6905,7 +6926,7 @@ static void script_arrived(const yonder_script_job_t *job, const yonder_script_t
     // failure: a replay hands it over the same.
     bool came = got != NULL && got->ok;
     if (host != NULL)
-        diag_keep(yonder_scripts_diag(host), YONDER_DIAG_KEPT_SCRIPT, job->url,
+        diag_keep(yonder_scripts_diag(host), YONDER_DIAG_KEPT_SCRIPT, job->token, job->url,
                   came ? got->url : job->url, "", came ? got->source : NULL, came ? got->length : 0);
     if (host != NULL)
         yonder_scripts_fetched(host, job->token, got != NULL && got->ok ? got->source : NULL,

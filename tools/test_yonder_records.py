@@ -51,7 +51,7 @@ MALFORMED = {
     "a replay's record with lines past its end": (b'address: https://a.test/\nREPLAY state: verdict\nverdict: clean\n'
                                                   b'end\nFAILED page: no (1)\nend\n', 'past its `end`'),
     'a state of nothing it knows': (b'address: https://a.test/\nREPLAY state: fine\nverdict: clean\nend\n',
-                                    'second line is not a verdict'),
+                                    'a REPLAY line of no kind this reader knows'),
     'a verdict state with an incomplete line': (b'address: https://a.test/\nREPLAY state: verdict\nverdict: clean\n'
                                                 b'REPLAY incomplete script x\nend\n', 'do not agree with its state'),
     'an incomplete state with nothing incomplete': (b'address: https://a.test/\nREPLAY state: incomplete x\n'
@@ -135,7 +135,7 @@ class ReaderCases(unittest.TestCase):
                          (records.State.UNFINISHED, ['it never arrived'], 'it never arrived'))
         # Both: unfinished, the incomplete line kept as detail.
         for lines in (incomplete + unfinished, unfinished + incomplete):
-            rec = self.read(replayed(b'unfinished', detail=lines))
+            rec = self.read(replayed(b'unfinished', detail=lines, why=b'it never arrived'))
             self.assertEqual(rec.state, records.State.UNFINISHED)
             self.assertEqual(len(rec.incomplete), 1)
         rec = self.read(replayed(b'unjudged', why=b'its record could not be written'))
@@ -168,6 +168,21 @@ class ReaderCases(unittest.TestCase):
 
     def test_display_spells_control_bytes(self):
         self.assertEqual(records.display('a\x1b[2J\\b\nc\x85\u00e9'), 'a\\x1B[2J\\\\b\\x0Ac\\x85\u00e9')
+
+    def test_the_grammar_vectors(self):
+        # tools/yonder_record_grammar.txt: every vector's line is its kind,
+        # as the replay runner's C reader must also find.
+        path = pathlib.Path(__file__).resolve().parent / 'yonder_record_grammar.txt'
+        seen = 0
+        for raw in path.read_bytes().split(b'\n'):
+            if not raw or raw.startswith(b'#'):
+                continue
+            kind, _, line = raw.partition(b'\t')
+            kind = kind.decode()
+            with self.subTest(line=line[:60]):
+                self.assertEqual(records.classify(line, index=kind.startswith('index:'))[0], kind)
+            seen += 1
+        self.assertGreater(seen, 100)
 
     def test_every_txt_is_listed(self):
         (self.root / 'b.txt').write_bytes(b'')

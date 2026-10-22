@@ -25,8 +25,6 @@ import os
 import pathlib
 import re
 
-COUNT = re.compile(rb' \((\d+)\)$')
-VERDICT = re.compile(rb'verdict: (?:clean|(\d+) MISSING, (\d+) FAILED|(\d+) MISSING|(\d+) FAILED)')
 ESCAPE = re.compile(rb'\\(\\|x[0-9A-Fa-f]{2})')
 PERCENT = re.compile(rb'M%49SSING|F%41ILED|%25')
 PERCENT_BACK = {b'M%49SSING': b'MISSING', b'F%41ILED': b'FAILED', b'%25': b'%'}
@@ -93,7 +91,6 @@ NOT_REPRODUCED = {'font-fetch', 'image', 'picture-fetch'}
 LINES_LOST = b'REPLAY unjudged: lines lost'
 END = b'end'
 UNWRITTEN = b'verdict: unwritten'
-STATE_LINE = re.compile(rb'REPLAY state: (verdict|incomplete|unfinished|unjudged)(?: (.*))?')
 
 
 class Record:
@@ -148,70 +145,170 @@ class Malformed(Exception):
 UINT32_MAX = 0xFFFFFFFF
 
 
-def count_of(digits):
-    """A count as diag.c writes one: decimal, and no more than UINT32_MAX,
-    which no count it keeps passes. Malformed otherwise, however long."""
-    if len(digits) > 10:
+def decimal(digits):
+    """THE ONE NUMBER PARSER: a whole decimal, digits and nothing else, at
+    most UINT32_MAX, which no number diag.c writes passes (a count, a byte
+    count, an index line's number, a zoom). Malformed otherwise, however
+    long."""
+    if not digits or len(digits) > 10 or not digits.isdigit():
         raise Malformed('not a whole page file: a count no record holds')
-    try:
-        n = int(digits)
-    except ValueError:
-        raise Malformed('not a whole page file: a count no record holds') from None
+    n = int(digits)
     if n > UINT32_MAX:
         raise Malformed('not a whole page file: a count no record holds')
     return n
 
 
+count_of = decimal
+
+
+# THE GRAMMAR of a record's lines and an index's (tools/yonder_record_grammar.txt
+# holds its vectors, which this reader and the replay runner's C reader both
+# run and must agree on). A line is exactly one kind or REFUSED; a line that
+# begins like a kind and does not match its grammar exactly is REFUSED, never
+# read as some other kind, and never accepted because the record's counts
+# happen to reconcile.
+RE_VERDICT = re.compile(rb'verdict: (?:(clean)|(unwritten)|([0-9]+) MISSING, ([0-9]+) FAILED|'
+                        rb'([0-9]+) MISSING|([0-9]+) FAILED)')
+RE_MISSING = re.compile(rb'MISSING ([^ ]+) (.+) \(([0-9]+)\)')
+RE_FAILED = re.compile(rb'FAILED (.+?): (.+) \(([0-9]+)\)')
+RE_STATE = re.compile(rb'REPLAY state: (verdict|incomplete|unfinished|unjudged)(?: (.+))?')
+RE_NOT_REPRODUCED = re.compile(rb'REPLAY not reproduced: ([^ ]+(?: [^ ]+)*)')
+# The facts whose values a reader parses: each value matched whole, every
+# number in it through decimal().
+HEAD = {
+    b'bytes': rb'([0-9]+)', b'kept lines': rb'([0-9]+)', b'zoom': rb'([0-9]+)', b'script seconds': rb'([0-9]+)',
+    b'status': rb'([0-9]+)(?: .*)?',
+    b'laid out at': rb'([0-9]+)(?:x([0-9]+))? px(?: in ([0-9]+) ms)?',
+    b'body': rb'html|text|image', b'encrypted': rb'yes|no', b'scripts': rb'on|off', b'modern': rb'on|off',
+    b'appearance': rb'light|dark', b'motion': rb'full|reduce', b'animate': rb'on|off', b'kept': rb'whole|not whole: .+',
+    b'final address': rb'.*', b'content-type': rb'.*', b'charset': rb'.*', b'TLS': rb'.*',
+}
+HEAD = {k: re.compile(v) for k, v in HEAD.items()}
+
+
+def classify(line, index=False):
+    """(kind, fields) for one line of a record, or of an index (`index`):
+    the kind's name as tools/yonder_record_grammar.txt spells it, or
+    ('REFUSED', why) / ('index:REFUSED', why)."""
+    def numbers(m):
+        return [decimal(g) if g is not None and g.isdigit() else g for g in m.groups()]
+    try:
+        if index:
+            if line.startswith(b'# yonder kept index '):
+                return 'index:version', decimal(line[len(b'# yonder kept index '):])
+            if line.startswith(b'#'):
+                return 'index:comment', None
+            f = line.split(b'\t')
+            if (len(f) != 7 or f[1] not in (b'script', b'sheet') or not f[2] or f[3] not in (b'came', b'failed')
+                    or decimal(f[0]) < 1):
+                return 'index:REFUSED', 'a line that is not a script\'s or a sheet\'s whole'
+            return 'index:entry', (decimal(f[0]), f[1], f[2], f[3] == b'came', f[4], f[5], decimal(f[6]))
+        if line == END:
+            return 'end', None
+        if line == LINES_LOST:
+            return 'lines-lost', None
+        if line.startswith(b'address: '):
+            return 'address', line[len(b'address: '):]
+        if line.startswith(b'verdict: '):
+            m = RE_VERDICT.fullmatch(line)
+            if m is None:
+                return 'REFUSED', 'a verdict of no spelling yonder writes'
+            g = numbers(m)
+            if g[1] is not None:
+                return 'verdict', 'unwritten'
+            counts = (g[2] or g[4] or 0, g[3] or g[5] or 0)
+            if any(n == 0 for n in g[2:] if n is not None):
+                return 'REFUSED', 'a verdict that names a token with no records'
+            return 'verdict', counts
+        if line.startswith(b'MISSING '):
+            m = RE_MISSING.fullmatch(line)
+            if m is None:
+                return 'REFUSED', 'a record line with no count, or no kind and name'
+            return 'missing', (m.group(1), m.group(2), decimal(m.group(3)))
+        if line.startswith(b'FAILED '):
+            m = RE_FAILED.fullmatch(line)
+            if m is None:
+                return 'REFUSED', 'a record line with no count, or no what and message'
+            return 'failed', (m.group(1), m.group(2), decimal(m.group(3)))
+        if line.startswith(b'REPLAY '):
+            m = RE_STATE.fullmatch(line)
+            if m is not None:
+                if (m.group(1) == b'verdict') != (m.group(2) is None):
+                    return 'REFUSED', 'a REPLAY state with no why, or a verdict with one'
+                return 'state', (m.group(1), m.group(2) or b'')
+            for head, kind in ((b'REPLAY incomplete ', 'incomplete'), (b'REPLAY unfinished ', 'unfinished')):
+                if line.startswith(head) and len(line) > len(head):
+                    return kind, line[len(head):]
+            m = RE_NOT_REPRODUCED.fullmatch(line)
+            if m is not None:
+                words = set(m.group(1).decode('utf-8').split(' '))
+                if not words <= NOT_REPRODUCED:
+                    return 'REFUSED', ('a REPLAY not reproduced line naming what a replay does reproduce: '
+                                       + ' '.join(sorted(words - NOT_REPRODUCED)))
+                return 'not-reproduced', words
+            return 'REFUSED', 'a REPLAY line of no kind this reader knows'
+        key, sep, value = line.partition(b': ')
+        if not sep or not key:
+            return 'REFUSED', 'a line of no kind a record holds'
+        if key in HEAD:
+            m = HEAD[key].fullmatch(value)
+            if m is None:
+                return 'REFUSED', f'a `{key.decode("utf-8", "replace")}` of no value yonder writes'
+            numbers(m)
+            return 'head', (key, value)
+        return 'fact', (key, value)
+    except Malformed as e:
+        return ('index:REFUSED' if index else 'REFUSED'), str(e).replace('not a whole page file: ', '')
+
+
 def read_body(lines, rec, replay):
-    """The record lines from the verdict on into `rec`: the verdict, its
-    lines exactly that many of each, each counted, no other verdict, and,
-    on a replay's record (`replay`), its REPLAY detail lines; a REPLAY line
-    of no kind this reader knows is refused. A yonder record's
-    YONDER_DIAG_LINES_LOST, or its never-written placeholder, makes it
-    UNJUDGED."""
+    """The record lines from the verdict on into `rec`, every one a kind of
+    the grammar (classify): the verdict, its record lines exactly that many
+    of each, no other verdict, and, on a replay's record (`replay`), its
+    REPLAY detail lines; any line the grammar refuses, or a kind out of its
+    place, is Malformed. A yonder record's lines-lost marker, or its
+    never-written placeholder, makes it UNJUDGED."""
     where = 'third' if replay else 'second'
-    if not lines:
-        raise Malformed(f'not a whole page file: its {where} line is not a verdict')
-    if lines[0] == UNWRITTEN and not replay:
+    kind, f = classify(lines[0]) if lines else ('REFUSED', None)
+    if kind != 'verdict':
+        raise Malformed(f'not a whole page file: its {where} line is not a verdict'
+                        + (f' ({f})' if kind == 'REFUSED' and f else ''))
+    if f == 'unwritten':
+        if replay or len(lines) > 1:
+            raise Malformed('not a whole page file: a placeholder with lines')
         rec.state, rec.reason = State.UNJUDGED, 'its name was claimed and its record never written'
         rec.unwritten = True
         return
-    verdict = VERDICT.fullmatch(lines[0])
-    if verdict is None:
-        raise Malformed(f'not a whole page file: its {where} line is not a verdict')
-    want_missing = count_of(verdict.group(1) or verdict.group(3) or b'0')
-    want_failed = count_of(verdict.group(2) or verdict.group(4) or b'0')
+    want_missing, want_failed = f
     seen_missing = seen_failed = 0
     for line in lines[1:]:
-        m = COUNT.search(line)
-        if line.startswith(b'MISSING ') and m:
+        kind, f = classify(line)
+        if kind == 'missing':
             seen_missing += 1
-            kind, _, name = line[len(b'MISSING '):m.start()].partition(b' ')
-            key = (unescape(kind), unescape(name))
-            rec.missing[key] = rec.missing.get(key, 0) + count_of(m.group(1))
-        elif line.startswith(b'FAILED ') and m:
+            key = (unescape(f[0]), unescape(f[1]))
+            rec.missing[key] = rec.missing.get(key, 0) + f[2]
+        elif kind == 'failed':
             seen_failed += 1
-            what, _, message = line[len(b'FAILED '):m.start()].partition(b': ')
-            key = (unescape(what), unescape(message))
-            rec.failed[key] = rec.failed.get(key, 0) + count_of(m.group(1))
-        elif line.startswith(b'MISSING ') or line.startswith(b'FAILED '):
-            raise Malformed('not a whole page file: a record line with no count')
-        elif line.startswith(b'verdict: '):
+            key = (unescape(f[0]), unescape(f[1]))
+            rec.failed[key] = rec.failed.get(key, 0) + f[2]
+        elif kind in ('fact', 'head'):
+            pass
+        elif kind == 'verdict':
             raise Malformed('not a whole page file: a second verdict line')
-        elif line == LINES_LOST and not replay:
+        elif kind == 'lines-lost' and not replay:
             rec.state, rec.reason, rec.lost = State.UNJUDGED, 'its record lost lines it could not keep', True
-        elif replay and line.startswith(b'REPLAY incomplete '):
-            rec.incomplete.append(unescape(line[len(b'REPLAY incomplete '):]))
-        elif replay and line.startswith(b'REPLAY unfinished '):
-            rec.unfinished.append(unescape(line[len(b'REPLAY unfinished '):]))
-        elif replay and line.startswith(b'REPLAY not reproduced: '):
-            kinds = set(unescape(line[len(b'REPLAY not reproduced: '):]).split())
-            if not kinds <= NOT_REPRODUCED:
-                raise Malformed(f'a REPLAY not reproduced line naming what a replay does reproduce: '
-                                f'{" ".join(sorted(kinds - NOT_REPRODUCED))}')
-            rec.not_reproduced |= kinds
-        elif line.startswith(b'REPLAY '):
+        elif kind == 'incomplete' and replay:
+            rec.incomplete.append(unescape(f))
+        elif kind == 'unfinished' and replay:
+            rec.unfinished.append(unescape(f))
+        elif kind == 'not-reproduced' and replay:
+            rec.not_reproduced |= f
+        elif kind == 'REFUSED':
+            raise Malformed(f'not a whole page file: {f}')
+        elif kind in ('incomplete', 'unfinished', 'not-reproduced', 'lines-lost', 'state'):
             raise Malformed('a REPLAY line of no kind this reader knows')
+        else:
+            raise Malformed(f'not a whole page file: {kind} out of its place')
     if (seen_missing, seen_failed) != (want_missing, want_failed):
         raise Malformed(f'not a whole page file: its verdict counts {want_missing} MISSING and '
                         f'{want_failed} FAILED lines, and it holds {seen_missing} and {seen_failed}')
@@ -256,8 +353,10 @@ def read(path):
         return Unjudged(path, 'not a whole page file: a line ends in a carriage return')
     try:
         rec = Record(path, unescape(lines[0][len(b'address: '):]))
-        state = STATE_LINE.fullmatch(lines[1]) if len(lines) > 1 else None
-        if state is None:
+        kind, state = classify(lines[1]) if len(lines) > 1 else ('REFUSED', None)
+        if kind != 'state' and lines[1:2] and lines[1].startswith(b'REPLAY state: '):
+            raise Malformed(f'not a whole page file: {state}')
+        if kind != 'state':
             # Yonder ends every record with `end` now; a kept page's must
             # have it, and only a census record written before it (one
             # that says nothing of being kept) may lack it.
@@ -275,8 +374,8 @@ def read(path):
         if lines[-1] != END or len(lines) < 3:
             raise Malformed("a replay's record without its `end`: it was cut short")
         rec.replay = True
-        rec.state = State[state.group(1).decode().upper()]
-        rec.reason = unescape(state.group(2) or b'')
+        rec.state = State[state[0].decode().upper()]
+        rec.reason = unescape(state[1])
         if END in lines[2:-1]:
             raise Malformed("a replay's record with lines past its `end`")
         if rec.state == State.UNJUDGED:

@@ -794,8 +794,14 @@ written; the record's write proves its claimed file is still there first.
 No Settings line: there is none for `diagnostics` either.
 
 **The index grows** (Quinn's finding 8): its first line names the format,
-`# yonder kept index 1`, and every line is `<n>`, `<kind>`, then what that
-kind carries, so slice 2's `fetch` lines and slice 1a's `storage` image
+`# yonder kept index 2`, and every line is `<n>`, `<kind>`, then what that
+kind carries (a script's and a sheet's: the address asked for, `came` or
+`failed`, the address after redirects, the label, and the JOB'S OWN
+IDENTITY, a script's token or a sheet's place in its page's table, which
+version 2 added: Codex #326 round 5 found two `<link>`s to one sheet with
+different media taking each other's outcomes; the replay matches a job on
+its address and identity), its lines numbered 1 to N in the order kept,
+each once (a number repeated or skipped is damage), so slice 2's `fetch` lines and slice 1a's `storage` image
 are new shapes beside the script and sheet ones, and the version moves
 only when an existing shape changes. The runner takes any line that is
 not a shape it knows as damage (the page is unjudged), so the slice that
@@ -809,10 +815,17 @@ one), `body` (libway's judgement, rather than the replay judging the
 content type again), `status` (`0` when the protocol has none),
 `content-type` and `charset` (empty when the server named none) and
 `encrypted` for a page from the network, `kept lines` for a kept page
-(from `0`), and `scripts: off` when the page was read without them. They,
-`TLS`, `laid out at` and `kept` have a room of their own, 16 lines counted
-apart from the 512 the other plain lines may take (`yonder_diag_head_fact`;
-Codex #326 round 4: one count had let the head eat the others' quota). A
+(from `0`), and **THE WINDOW THE PAGE WAS READ IN, written at the claim as
+in force for the load** (Codex #326 round 5: a replay had read a page
+taken with the modern switch off with it on): `modern` (on/off), `laid
+out at` (the view's `<width>x<height> px`, written again at arrival with
+the time the layout took), `zoom` (per mille), `appearance` (light/dark),
+`motion` (full/reduce), `animate` (on/off: whether animations run), `scripts` (on/off) and `script seconds`. The
+replay sets each on its window, so a page is read again in the window it
+was read in, not the harness's. They, `TLS` and `kept` have a room of
+their own, 24 lines counted apart from the 512 the other plain lines may
+take (`yonder_diag_head_fact`; Codex #326 round 4: one count had let the
+head eat the others' quota). A
 replay REQUIRES every one of them its page needs, never a default: a
 record cut short after its `bytes:` line had replayed an HTTP error page
 as a 200. **Every record ends with the line `end`** (`YONDER_DIAG_END`),
@@ -954,7 +967,18 @@ second form below is the answer).
   fenced out of the fakes-only build the runner includes). Nothing else on
   the host binds a record to its kept files, so the runner checks the
   record's `bytes:` against the kept bytes and its `kept lines:` against
-  the index. `tools/yonder_records.py` is the one Python
+  the index. **ONE GRAMMAR, TWO READERS, ONE FILE OF VECTORS** (Codex
+  #326 round 5: both readers had parsed by partition and strtoul, and so
+  accepted a line with its separator gone, or a count that wrapped, while
+  the record's counts reconciled): every line of a record or an index is
+  exactly one kind or refused, by `classify()` in
+  `tools/yonder_records.py` and `rp_classify` in the runner, and both run
+  every vector in `tools/yonder_record_grammar.txt` (`<kind or
+  REFUSED>\t<line>`, every refusal the review rounds and cold reads named
+  among them) in their own tests and must answer it. Every number in a
+  record or an index goes through one bounded-decimal parser per reader
+  (`decimal()`, `rp_decimal`): digits and nothing else, at most
+  UINT32_MAX. `tools/yonder_records.py` is the one Python
   reader: `read()` answers a `Record` with the `State` its record says, or
   an `Unjudged` naming why (not UTF-8, a NUL, a byte order mark, a
   carriage return, no address, a verdict or state of no known spelling, a
@@ -968,7 +992,8 @@ second form below is the answer).
   bytes `\xHH`, so a page cannot drive the terminal it is read on. The
   runner's own reader
   of kept records uses the same grammar. The diff compares replays' records
-  only (a state line and a not-reproduced line required), of one kept
+  only (a state line and a not-reproduced line required), paired by name
+  and by address (records of one name and two addresses are unjudged), of one kept
   corpus: a page only the after replay has is unjudged, since the before
   replay did not replay it. Its headings follow `State`'s order.
 - *Nothing is written under a name the record did not claim, and no
@@ -979,6 +1004,17 @@ second form below is the answer).
   reads `verdict: unwritten` until the record replaces it, and the write
   proves the claimed file is still there; the runner replays only a record
   that says `kept: whole`.
+
+- *One process per page* (class C, Fable's ruling on Opus's read: the
+  fakes the window runs on were written for one-shot cases, and their
+  statics, the console's buffer, the fake disk, the allocator's failure
+  point, the pool fake's tables, could carry one page's replay into the
+  next). The runner forks a child for each kept page; the child replays
+  it, writes its record through the door and exits with what the page
+  came to; the parent, which replays nothing and holds no fake state,
+  reads the page's state from the record and the exit status, and a child
+  that dies, or whose record does not say what it exited saying, leaves
+  its page unjudged in a record the parent writes, and the run goes on.
 
 The sites they govern: the runner's reads of KEPT-DIR, each record, its
 `.html`, its folder, its index and each kept file, its listing and making
@@ -993,9 +1029,9 @@ list.
 | Check | Result |
 |---|---|
 | Scripted-page host (`tools/test_yonder_scripts_host.sh`): the keep cases (a windows-1252 page posted in 97-byte chunks with a NUL inside kept byte for byte; the index, its version, each file, a failed script's line and no file; the facts; a page let go unshown; a stream stopped before its verdict leaving nothing; a folder that cannot be made; a name another yonder took, bytes and a folder left from before, each passed over; an empty folder removed; a head fact kept past a full table; an address's own `%` written apart from the token spelling; every one of the claim's 64 names taken, with keep_pages and without, writing nothing of the page and saying so; with keep_pages off, a number beside another's kept bytes or folder passed over, the claimed file reading `verdict: unwritten` until the record replaces it; a record that lost a line saying so; `kept: whole` on a page kept whole; picture and font failures a fetch decided written as `picture-fetch` and `font-fetch`; the setting off keeping nothing; 512 ordinary facts and the head's together losing nothing, the record ending with `end`) and the script time (a forced layout's 2,500 µs on the line) | 5,974 checks, zero failures |
-| The replay's self-test (`tools/test_yonder_replay_host.sh`): the 29 fixture pages of `tools/yonder_loop_fixture`, `yonder_script_fixture` and `pages`, and ten hand-made (a sheet that imports another from its redirected address and is read under its label, a page in windows-1252 from an encrypted fetch, a text body, a file's page and its script and timer, an error page, a failed script with a module and a global, a page too deep to read to its end, a picture by itself, a 1,400-pixel window, scripts off, an address holding `M%49SSING` of its own beside MISSING), kept with keep_pages on, written to real files, replayed | 39 pages; every replayed record is the kept one (the paint stages aside: the processor's counter times them; both were read in the harness, which answers no picture or font either way); the corpus replayed again, and the corpus diff of the two replays finds nothing. Then, each as a corpus of its own: a script's index line taken out reads `unfinished` (the script blocked the parse) with its `incomplete` line and no FAILED line for it; a damaged index, a folder with no index, a record that lost a line (with no memory, or past a full table), and a `*.txt` that is not a record are unjudged (answer 2), each on a record saying so; no time reads `unfinished`; a script asked for twice and kept once is `incomplete` and the page `unfinished`; two async scripts kept in the reverse of the order they were asked for run in the kept order; a whole replay into a directory holding records is refused, and so is one into a directory that can be searched and not listed (mode 0333), writing nothing; a page that navigates stops there; a page kept with a picture whose fetch failed replays clean, its record saying what it does not reproduce. THE COLD READ'S ATTACKS, each a case: a harness check made to fail while a page replays leaves it unjudged on its record; a partial replay into the kept directory is refused; a kept script the page no longer asks for reads `incomplete`; a keep-off record beside another load's page bytes is passed over, and under `--only` an earlier record of it is replaced by an unjudged one; and the whole corpus written under `prlimit --fsize=2048` (SIGXFSZ ignored) answers 2 with every record whole, the one too big for the limit saying it could not be written, and no temporary left. THE THIRD COLD READ'S, each a case: kept bytes of the wrong length are unjudged; a partial run whose new record cannot be written leaves no record, never the old one, and one whose old record cannot be removed stops; a `*.txt` named only `.txt` and a record that is not UTF-8 are unjudged; a URL holding `%25` and a backslash is escaped once on the state line, as on its detail line; and an OUT-DIR that is the kept directory by a bind mount (under `unshare`, skipped where there is no user namespace) is refused. CODEX ROUND 4'S AND THE FOURTH COLD READ'S, each a case: a kept record cut just before its `end`, one cut after its claim's `kept lines:` and before its `kept:`, and one with no `status:`, are unjudged; a record line's count of twenty digits is refused; an index line short of its fields, or of a kind cut short, is a damaged index; a link planted at a record's temporary name is never written through (its target untouched, the page unjudged); and a fact holding a terminal's title sequence reaches the runner's output re-spelled, never raw. The whole corpus given no time: its 6 unfinished pages are the diff's 6 broken, and it fails |
+| The replay's self-test (`tools/test_yonder_replay_host.sh`): the 29 fixture pages of `tools/yonder_loop_fixture`, `yonder_script_fixture` and `pages`, and eleven hand-made (a sheet that imports another from its redirected address and is read under its label, a page in windows-1252 from an encrypted fetch, a text body, a file's page and its script and timer, an error page, a failed script with a module and a global, a page too deep to read to its end, a picture by itself, a 1,400-pixel window, scripts off, an address holding `M%49SSING` of its own beside MISSING, the modern switch off), kept with keep_pages on, written to real files, replayed | 40 pages; every replayed record is the kept one (the paint stages aside: the processor's counter times them; both were read in the harness, which answers no picture or font either way); the corpus replayed again, and the corpus diff of the two replays finds nothing. Then, each as a corpus of its own: a script's index line taken out reads `unfinished` (the script blocked the parse) with its `incomplete` line and no FAILED line for it; a damaged index, a folder with no index, a record that lost a line (with no memory, or past a full table), and a `*.txt` that is not a record are unjudged (answer 2), each on a record saying so; no time reads `unfinished`; a script asked for twice and kept once is `incomplete` and the page `unfinished`; two async scripts kept in the reverse of the order they were asked for run in the kept order; a whole replay into a directory holding records is refused, and so is one into a directory that can be searched and not listed (mode 0333), writing nothing; a page that navigates stops there; a page kept with a picture whose fetch failed replays clean, its record saying what it does not reproduce. THE COLD READ'S ATTACKS, each a case: a harness check made to fail while a page replays leaves it unjudged on its record; a partial replay into the kept directory is refused; a kept script the page no longer asks for reads `incomplete`; a keep-off record beside another load's page bytes is passed over, and under `--only` an earlier record of it is replaced by an unjudged one; and the whole corpus written under `prlimit --fsize=2048` (SIGXFSZ ignored) answers 2 with every record whole, the one too big for the limit saying it could not be written, and no temporary left. THE THIRD COLD READ'S, each a case: kept bytes of the wrong length are unjudged; a partial run whose new record cannot be written leaves no record, never the old one, and one whose old record cannot be removed stops; a `*.txt` named only `.txt` and a record that is not UTF-8 are unjudged; a URL holding `%25` and a backslash is escaped once on the state line, as on its detail line; and an OUT-DIR that is the kept directory by a bind mount (under `unshare`, skipped where there is no user namespace) is refused. CODEX ROUND 4'S AND THE FOURTH COLD READ'S, each a case: a kept record cut just before its `end`, one cut after its claim's `kept lines:` and before its `kept:`, and one with no `status:`, are unjudged; a record line's count of twenty digits is refused; an index line short of its fields, or of a kind cut short, is a damaged index; a link planted at a record's temporary name is never written through (its target untouched, the page unjudged); and a fact holding a terminal's title sequence reaches the runner's output re-spelled, never raw. CLASS C'S: a page whose replay is made to die (`--crash-page`) leaves a record, written by the parent, saying it died, and the next page replays as it would alone; a page whose replay leaves the fakes dirty (the console's buffer full, the allocator set to fail) does not reach the next page (a hand mutant that dirties the parent instead is caught). CODEX ROUND 5'S, each a case: two index lines of one number, an index of version 1, a record without its `modern` or its `laid out at`, a `kept lines` past UINT32_MAX and a `bytes` with something after its digits are unjudged; a page read with the modern switch off replays to its own record (the replay reads it with the switch off); and both readers answer every vector in `tools/yonder_record_grammar.txt`. The whole corpus given no time: its 6 unfinished pages are the diff's 6 broken, and it fails |
 | Hand mutants of the runner and the keepers (not the mutant harnesses) | caught: a sheet read without its label, the head's `encrypted`, `body` and status ignored, sheets left unanswered, the clock not moved, a file page's script refused, the view's width ignored and scripts-off ignored (both missed first, and the two hand-made pages that catch them were written for them), the bytes not kept, the rename skipped, a script not kept, the time not measured, the temporary not removed, the not-whole line not written |
-| `tools/test_yonder_records.py`, `tools/test_yonder_tally.py`, `tools/test_yonder_corpus_diff.py` | 11, 14 and 21 tests pass (a kept record cut between its claim's `kept lines:` and its `kept:` refused, one let go mid-stream with `end` read; a count of 5,000 digits and one past UINT32_MAX refused, UINT32_MAX read; a kept record cut before its `end` refused, a census one without it read; a page's `\x1b[2J` printed re-spelled by both tools): the reader names every malformation (empty, a byte order mark, carriage returns, a NUL, bytes or escapes that are not UTF-8, no address, cut after it, a verdict of nothing it knows or with a sign, two verdict lines, a line short of or past its verdict, a record line with no count, a REPLAY line on a record yonder wrote, a replay's record cut before its `end` or with lines past it, a state of nothing it knows, REPLAY lines that disagree with the state, a stray word on the not-reproduced line, a directory, a file it cannot read) and reads lost lines and a never-written record as unjudged; the tally, on a mixed directory, counts a record that lost lines and says so, leaves out an incomplete replay and says so, and names a placeholder as damage (answer 2); the diff gates newly incomplete pages, unjudges a page only the after replay has and a record no replay wrote, and compares pictures and fonts decided without a fetch |
+| `tools/test_yonder_records.py`, `tools/test_yonder_tally.py`, `tools/test_yonder_corpus_diff.py` | 12, 14 and 22 tests pass (every vector in `tools/yonder_record_grammar.txt` its kind; records of one name and two addresses unjudged; a kept record cut between its claim's `kept lines:` and its `kept:` refused, one let go mid-stream with `end` read; a count of 5,000 digits and one past UINT32_MAX refused, UINT32_MAX read; a kept record cut before its `end` refused, a census one without it read; a page's `\x1b[2J` printed re-spelled by both tools): the reader names every malformation (empty, a byte order mark, carriage returns, a NUL, bytes or escapes that are not UTF-8, no address, cut after it, a verdict of nothing it knows or with a sign, two verdict lines, a line short of or past its verdict, a record line with no count, a REPLAY line on a record yonder wrote, a replay's record cut before its `end` or with lines past it, a state of nothing it knows, REPLAY lines that disagree with the state, a stray word on the not-reproduced line, a directory, a file it cannot read) and reads lost lines and a never-written record as unjudged; the tally, on a mixed directory, counts a record that lost lines and says so, leaves out an incomplete replay and says so, and names a placeholder as damage (answer 2); the diff gates newly incomplete pages, unjudges a page only the after replay has and a record no replay wrote, and compares pictures and fonts decided without a fetch |
 | Guest (QEMU, GUI entry, headless): `yonder` started from `/home/gui.conf`, `/home/kp/kp.html` (a script, a sheet that imports another, a script that 404s) typed into it, `/home` read back with `debugfs` | `kept/file-0001.html` byte-identical to the page, `.d/` with `1.js`, `2.css`, `3.css` and the index's four lines, the failed one included; `e2fsck -fn` clean on `/home`. Replayed on the host: the same MISSING and FAILED lines, plus the timer's death at 300 ms, which the guest's arrival write predates. Not a P5 run |
 | The P5's existing records | `replayed 0, clean 0, incomplete 0, unfinished 0; 1601 records are not kept pages`: the replay of those records is impossible, as the brief said; the tally reads all 1,601 as verdicts |
 | Anchors of every mutant harness that names a file this slice touched | 1,009 anchors, all found once (one, `sheets-failure-holds-nothing`, kept by writing the sheet's line before its wait is counted down; five moved with the picture-fetch and font-fetch spellings, the same mutations at the new text). The mutant harnesses were not run |
@@ -1003,9 +1039,10 @@ list.
 **The corpus count** is zero pages until the P5 browses with
 `keep_pages = on`; until then the tally is the number every PR states.
 
-**Deferred**, each a DEBTS.md row (§ The replay corpus): a replay reads
-the page in the harness's world (a bitmap face, the default zoom, height
-and script time limit); keep_pages writes on the window's thread; a page
+**Deferred**, each a DEBTS.md row (§ The replay corpus): a replay lays
+text out in the harness's bitmap face (the window it reads the page in is
+the page's own, from its record); keep_pages writes on the window's
+thread; a page
 that navigates replays only as far as going; a replay does not reproduce
 what a picture's or a font's fetch decides; a form's reply replays as a
 GET.

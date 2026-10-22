@@ -3071,7 +3071,7 @@ static void loop_cases(void) {
 }
 /* THE MODERN SWITCH, in the window: a page takes the switch its navigation
  * found, so its script surface has the arc's names or not, its record says
- * `modern: off` when it was off, and flipping the switch reaches the next
+ * which (`modern: on` or `off`), and flipping the switch reaches the next
  * page and not the one on screen. */
 static void loop_modern(void) {
     static const char page[]="<p id=out>start</p><script>document.getElementById('out').textContent="
@@ -3081,7 +3081,7 @@ static void loop_modern(void) {
     check(loop_settle() && g.page.tree!=NULL && g.page.modern && probe_text_is("out","function function true"),
         "modern on: a page's scripts see the arc's names");
     yonder_diag_render(g.page.diag,record,sizeof(record));
-    check(strstr(record,"modern:")==NULL,"modern on: the record says nothing of it");
+    check(strstr(record,"\nmodern: on\n")!=NULL,"modern on: the record says so, as a replay reads it");
     check(!garb_cascade_env(g.page.cascade).modern_off,"modern on: the page's cascade knows the arc's properties");
     modern_use(false);
     check(g.page.modern && !g.modern,"modern: Settings' switch leaves the page on screen as it was made");
@@ -4936,14 +4936,14 @@ static void diag_keep_cases(void) {
         "keep: the page's bytes are kept as the parser was fed them, undecoded, in however many chunks");
     snprintf(path,sizeof(path),"%s.d/index",base);
     const char *index=fake_text(path);
-    check(index!=NULL && !strncmp(index,"# yonder kept index 1\n",22) &&
-        has(index,"\n1\tsheet\thttps://fixture.test/k.css\tcame\thttps://fixture.test/k.css\tutf-8\n"
-        "2\tsheet\thttps://fixture.test/i.css\tcame\thttps://fixture.test/i.css\t\n"
-        "3\tscript\thttps://fixture.test/k.js\tcame\thttps://fixture.test/k.js\t\n"
-        "4\tscript\thttps://fixture.test/gone.js\tfailed\thttps://fixture.test/gone.js\t\n") &&
+    check(index!=NULL && !strncmp(index,"# yonder kept index 2\n",22) &&
+        has(index,"\n1\tsheet\thttps://fixture.test/k.css\tcame\thttps://fixture.test/k.css\tutf-8\t0\n"
+        "2\tsheet\thttps://fixture.test/i.css\tcame\thttps://fixture.test/i.css\t\t1\n"
+        "3\tscript\thttps://fixture.test/k.js\tcame\thttps://fixture.test/k.js\t\t1\n"
+        "4\tscript\thttps://fixture.test/gone.js\tfailed\thttps://fixture.test/gone.js\t\t2\n") &&
         has(index,"fonts and pictures are not kept"),
         "keep: the index names its version, then each sheet and script in the order it came back, whether "
-        "it came, its addresses and label, under a header saying what is not kept");
+        "it came, its addresses, label and job, under a header saying what is not kept");
     snprintf(path,sizeof(path),"%s.d/4.js",base);
     check(fake_text(path)==NULL,"keep: a script that did not come has a line and no file");
     snprintf(path,sizeof(path),"%s.d/1.css",base);

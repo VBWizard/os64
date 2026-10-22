@@ -95,12 +95,12 @@ void yonder_diag_failed_seen(yonder_diag_t *d, const char *what, const char *mes
 // replaced by a later setting of the same key.
 void yonder_diag_fact(yonder_diag_t *d, const char *key, const char *value);
 // The same line, for a fact a replay rebuilds the page from (the head, the
-// width it was laid out at, whether it was kept whole, how many lines its
+// window it was read in, whether it was kept whole, how many lines its
 // index holds): it has room of its own, YONDER_DIAG_HEAD_FACTS, counted
 // apart from the ordinary facts' YONDER_DIAG_FACTS_MAX, so a page with
 // more plain lines than that never loses one of these, and neither room
 // takes a place in the other.
-#define YONDER_DIAG_HEAD_FACTS 16
+#define YONDER_DIAG_HEAD_FACTS 24
 void yonder_diag_head_fact(yonder_diag_t *d, const char *key, const char *value);
 // The plain lines whose keys begin `prefix` let go, the rest kept in
 // order — and so are those of them that met no room, so a set of lines
@@ -196,10 +196,13 @@ typedef enum { YONDER_DIAG_KEPT_SCRIPT, YONDER_DIAG_KEPT_SHEET } yonder_diag_kep
 // as the next `<name>.d/<n>.js` or `.css`; when its fetch failed (`bytes`
 // NULL), no file, since a replay must fail it as the page saw it fail. The
 // index is written again whole with its line, and the record's `kept lines`
-// fact says how many it holds. `url` is the address its job
-// carried, `final` the one it came from after redirects, `label` the
-// charset its response named (a sheet's: a replay parses the bytes again
-// under it; "" for none).
+// fact says how many it holds. `job` is the job's own identity (a
+// script's token, a sheet's place in its page's table), so a replay gives
+// two jobs of one kind and address each the outcome its own fetch had;
+// `url` is the address its job carried, `final` the one it came from after
+// redirects, `label` the charset its response named (a sheet's: a replay
+// parses the bytes again under it; "" for none). Lines are numbered from 1
+// in the order they are kept, each once.
 //
 // THE INDEX GROWS with what pages fetch (MODERN_WEB_BRIEFS.md § Slice 0b):
 // its first line is `# yonder kept index <version>`, more lines beginning
@@ -211,11 +214,12 @@ typedef enum { YONDER_DIAG_KEPT_SCRIPT, YONDER_DIAG_KEPT_SHEET } yonder_diag_kep
 // knows, and takes a line it does not as damage, so the slice that keeps
 // a new kind teaches the replay it in the same change. A script's and a
 // sheet's line carries
-//     <url> TAB came|failed TAB <final> TAB <label>
+//     <url> TAB came|failed TAB <final> TAB <label> TAB <job>
 // with a byte below 0x20, 0x7F and a backslash in a field written `\xHH`
-// and `\\`, as a page file writes them.
-#define YONDER_DIAG_INDEX_VERSION 1
-int64_t yonder_diag_keep_resource(const yonder_diag_claim_t *c, yonder_diag_kept_t kind,
+// and `\\`, as a page file writes them. Version 2 added `<job>`; a replay
+// refuses a kept page of version 1.
+#define YONDER_DIAG_INDEX_VERSION 2
+int64_t yonder_diag_keep_resource(const yonder_diag_claim_t *c, yonder_diag_kept_t kind, uint32_t job,
                                   const char *url, const char *final, const char *label,
                                   const void *bytes, size_t n);
 

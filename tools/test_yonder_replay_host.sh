@@ -42,7 +42,7 @@ mkdir "$work/self"
 # The runner prints what a page wrote re-spelled: a record whose quoted fact
 # holds a terminal's title sequence reaches the screen as \xHH, never raw.
 "$work/yonder-replay" "$work/self/escapes" "$work/escapes-shown" > "$work/escapes.log" 2>&1 || true
-if LC_ALL=C grep -q $'\x1b\|\x07' "$work/escapes.log" || ! grep -q 'no\\x1B\]0;owned\\x07' "$work/escapes.log"; then
+if LC_ALL=C grep -q $'\x1b\|\x07' "$work/escapes.log" || ! grep -q 'not whole: \\x1B\]0;owned\\x07' "$work/escapes.log"; then
     echo "replay: the runner printed a page's terminal sequence raw" >&2
     cat -v "$work/escapes.log" >&2
     exit 1

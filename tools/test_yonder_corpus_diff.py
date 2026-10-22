@@ -113,6 +113,8 @@ class DiffCases(unittest.TestCase):
 
     def test_page_text_cannot_drive_the_terminal(self):
         self.settle_the_rest()
+        (self.before / 'worse-0001.txt').write_text(as_replay(
+            'address: https://worse.test/\\x1B[2J\nverdict: 1 MISSING\nMISSING global fetch (1)\n'))
         (self.after / 'worse-0001.txt').write_text(as_replay(
             'address: https://worse.test/\\x1B[2J\nverdict: 1 MISSING, 1 FAILED\nMISSING global fetch (1)\n'
             'FAILED script x.js: \\x1B]0;owned\\x07 (1)\n'))

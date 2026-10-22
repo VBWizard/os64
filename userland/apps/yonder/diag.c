@@ -812,7 +812,7 @@ int64_t yonder_diag_keep_bytes_end(const yonder_diag_claim_t *c)
     return 0;
 }
 
-int64_t yonder_diag_keep_resource(const yonder_diag_claim_t *c, yonder_diag_kept_t kind,
+int64_t yonder_diag_keep_resource(const yonder_diag_claim_t *c, yonder_diag_kept_t kind, uint32_t job,
                                   const char *url, const char *final, const char *label,
                                   const void *bytes, size_t n)
 {
@@ -842,20 +842,21 @@ int64_t yonder_diag_keep_resource(const yonder_diag_claim_t *c, yonder_diag_kept
     static const char kHeader[] =
         "# yonder kept index " DIAG_VERSION(YONDER_DIAG_INDEX_VERSION) "\n"
         "# what this page fetched, as yonder received it: <n>\t<kind>\tthen what the kind carries\n"
-        "# script, sheet: <address asked for>\tcame|failed\t<address after redirects>\t<charset label>;"
-        " the file <n>.js or <n>.css when it came\n"
+        "# script, sheet: <address asked for>\tcame|failed\t<address after redirects>\t<charset label>\t"
+        "<the job's own identity>; the file <n>.js or <n>.css when it came\n"
         "# fonts and pictures are not kept\n";
 #undef DIAG_VERSION
 #undef DIAG_STRING
-    char lead[32];
+    char lead[32], tail[16];
     os64_snprintf(lead, sizeof(lead), "%lu\t%s\t", (unsigned long)number, word);
+    os64_snprintf(tail, sizeof(tail), "%lu\n", (unsigned long)job);
     const char *fields[4] = {url, bytes != NULL ? "came" : "failed", final, label};
     Out m = {NULL, 0, 0};
     for (int f = 0; f < 4; f++) {
         put_field(&m, fields[f] != NULL ? fields[f] : "", false);
         put(&m, "\t", 1);
     }
-    size_t line = os64_strlen(lead) + m.at;
+    size_t line = os64_strlen(lead) + m.at + os64_strlen(tail);
     size_t total = sizeof(kHeader) - 1 + d->keep.index_len + line;
     char *text = os64_malloc(total + 1);
     if (text == NULL)
@@ -867,8 +868,9 @@ int64_t yonder_diag_keep_resource(const yonder_diag_claim_t *c, yonder_diag_kept
     puts_(&o, lead);
     for (int f = 0; f < 4; f++) {
         put_field(&o, fields[f] != NULL ? fields[f] : "", false);
-        put(&o, f < 3 ? "\t" : "\n", 1);
+        put(&o, "\t", 1);
     }
+    puts_(&o, tail);
     bool ok = write_whole(index, text, total);
     if (ok) {
         // The lines without the header: the next index begins from them.
