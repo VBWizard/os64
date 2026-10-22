@@ -531,7 +531,7 @@ static DStorageArea *area_touch(os64_dom_t *dom, JSContext *ctx, os64_dom_storag
  * back what the store kept. Changes that could not be written down for
  * want of memory, or that a busy store could not take, wait for the next
  * commit. */
-static void area_commit(DStorageArea *area)
+static void area_commit(DStorageArea *area, bool last)
 {
     os64_dom_t *dom = area->dom;
     if (!kept(dom, area) || area->changes.count == 0) return;
@@ -540,7 +540,7 @@ static void area_commit(DStorageArea *area)
     if (changes == NULL) return;
     const os64_dom_storage_t *provider = &dom->storage_providers[area->which];
     os64_dom_storage_status_t status = provider->commit != NULL
-        ? provider->commit(provider->opaque, area->origin, changes, length) : OS64_DOM_STORAGE_FAILED;
+        ? provider->commit(provider->opaque, area->origin, changes, length, last) : OS64_DOM_STORAGE_FAILED;
     os64_free(changes);
     area->committed = true;
     area->committed_at = now_ms(dom);
@@ -577,7 +577,7 @@ void os64_dom_storage_settle(os64_dom_t *dom)
         DStorageArea *area = dom->storage[i];
         if (area == NULL) continue;
         area->asked = false;
-        if (area_due(area) <= now) area_commit(area);
+        if (area_due(area) <= now) area_commit(area, false);
     }
 }
 
@@ -604,16 +604,20 @@ void os64_dom_storage_forget(os64_dom_t *dom)
     }
 }
 
+static void commit_all(os64_dom_t *dom, bool last)
+{
+    for (int i = 0; i < OS64_DOM_STORAGE_AREAS; i++)
+        if (dom->storage[i] != NULL) area_commit(dom->storage[i], last);
+}
+
 void os64_dom_storage_flush(os64_dom_t *dom)
 {
-    if (dom == NULL) return;
-    for (int i = 0; i < OS64_DOM_STORAGE_AREAS; i++)
-        if (dom->storage[i] != NULL) area_commit(dom->storage[i]);
+    if (dom != NULL) commit_all(dom, false);
 }
 
 void d_storage_drain(os64_dom_t *dom)
 {
-    os64_dom_storage_flush(dom);
+    commit_all(dom, true);
 }
 
 void d_storage_free(os64_dom_t *dom)
@@ -642,7 +646,7 @@ static void changes_room(DStorageArea *area, size_t count, size_t cost)
                                                                                   : OS64_DOM_STORAGE_KEYS) ||
          cost > OS64_DOM_STORAGE_QUOTA - (changes->used < OS64_DOM_STORAGE_QUOTA ? changes->used
                                                                                  : OS64_DOM_STORAGE_QUOTA)))
-        area_commit(area);
+        area_commit(area, false);
 }
 
 /* A change, made to the map and remembered for the commit together, or
