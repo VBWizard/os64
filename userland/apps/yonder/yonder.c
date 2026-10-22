@@ -680,15 +680,19 @@ typedef struct Page {
     // which arriving moves in.
     // `events` are the history's events the page owes its scripts, in
     // order (page_event_run). A scroll its script asked for before it was
-    // shown is made when it is (`scroll_asked`, in CSS pixels). A struct
-    // copy of a Page borrows what these point at; page_clear frees it.
+    // shown is made when it is (`scroll_asked`, in CSS pixels). `loaded`
+    // is HTML's "completely loaded": false until the page is shown and its
+    // `load` task, the navigation that task asked for included, is over
+    // (arrive_now), and a navigation its script asks for before then
+    // replaces its entry (page_navigation_replaces). A struct copy of a
+    // Page borrows what these point at; page_clear frees it.
     uint64_t document, entry, arrives_at;
     char *entry_state;
     way_crumb_t *back, *ahead;
     int32_t nback, nahead;
     PageEvent events[PAGE_EVENTS_MAX];
     int32_t nevents;
-    bool scroll_asked;
+    bool scroll_asked, loaded;
     double ask_x, ask_y;
 } Page;
 
@@ -2966,6 +2970,7 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
         if (note != NULL && page_doc(&g.page) == doc)
             status_rest(note);
     }
+    g.page.loaded = true;
     // The arrival write: what the page was once it was shown and its `load`
     // had run. Its departure writes the file again, complete.
     diag_arrived(&g.page, g.laid_ms);
@@ -6685,8 +6690,10 @@ static void forms_flush(void)
 
 // Sends a form: the button pressed (CONTROL) or Enter in a field (IMPLICIT).
 // libpage decides what goes and where; libway judges it; an INVALID
-// refusal puts the focus on the control that failed.
-static void form_send(int32_t control, os64_page_activation_t how)
+// refusal puts the focus on the control that failed. `kind` is how the
+// reply comes: a new way, or a refresh when a script sends the form before
+// its page has completely loaded (navigation_perform).
+static void form_send_as(int32_t control, os64_page_activation_t how, NavKind kind)
 {
     forms_flush();
     os64_page_what_t what = {how, control, 0, 0};
@@ -6694,7 +6701,7 @@ static void form_send(int32_t control, os64_page_activation_t how)
     os64_page_verdict_t verdict = os64_page_activate(page_model(&g.page), what, &request);
     if (verdict == OS64_PAGE_NAVIGATE) {
         g.chain = 0;
-        request_navigate(&request, NAV_GO, WAY_ASK_SEND);
+        request_navigate(&request, kind, WAY_ASK_SEND);
         return;
     }
     if (verdict == OS64_PAGE_FRAGMENT) {
@@ -6710,6 +6717,11 @@ static void form_send(int32_t control, os64_page_activation_t how)
             os64_ui_set_focus(&g.ui, failed->w);
     }
     os64_page_request_free(&request);
+}
+
+static void form_send(int32_t control, os64_page_activation_t how)
+{
+    form_send_as(control, how, NAV_GO);
 }
 
 // The keys of a focused password field, taken before libui sees them: its
@@ -7533,6 +7545,18 @@ static bool unshown_at(const Page *p, int64_t *at)
     return true;
 }
 
+// Whether a navigation a page's script asks for replaces the page's own
+// entry: until the page has completely loaded (Page.loaded), HTML navigates
+// with historyHandling "replace", by address (§ 7.2.4 The Location
+// interface, "Location-object navigate", step 3, short of transient
+// activation) and by a form (§ 4.10.22.3 Form submission algorithm, step
+// 25). No activation is weighed: a page is shown and its `load` runs in one
+// turn (arrive_now), so a person's input has no task in that window.
+static bool page_navigation_replaces(const Page *p)
+{
+    return p != NULL && !p->loaded;
+}
+
 // Back or Forward from a page not yet shown, past its own entries (`delta`
 // as asked; page_traverse has answered within them). ONE RULE WHEREVER THE
 // PAGE IS in its arrival — parsing, at its DOMContentLoaded, waiting for its
@@ -7636,17 +7660,20 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
             say_failed(g.page.diag, "navigation", "A script asked for an address this browser cannot go to.");
             return;
         }
+        // A page's navigation is from its own entry, which replace()
+        // replaces, and so does an ordinary navigation until the page has
+        // completely loaded (page_navigation_replaces). For the page on
+        // screen, whose `load` is running, that entry is the one on screen.
         // A page not yet shown is the session's entry already (unshown_go
-        // says why), and its navigation is from that entry, not from the
-        // page on screen: replace() replaces it, and so does an ordinary
-        // navigation, since the page has not completely loaded (HTML
-        // § 7.2.4 The Location interface, "Location-object navigate", step
-        // 3: a document not yet completely loaded navigates with
-        // historyHandling "replace"). The new page takes its place
+        // says why), not the page on screen's: the new page takes its place
         // (start_trip). One that waits on the question bar is asked as the
-        // page on screen's, and its place is not taken.
-        g.replacing = shown ? NULL : page_of_host(host);
-        request_navigate(&request, ask->kind == OS64_DOM_NAVIGATE_REPLACE ? NAV_REFRESH : NAV_GO,
+        // page on screen's, and a page not yet shown's place is not taken.
+        Page *p = shown ? &g.page : page_of_host(host);
+        bool replaces = page_navigation_replaces(p);
+        g.replacing = replaces && p != &g.page ? p : NULL;
+        request_navigate(&request,
+                         ask->kind == OS64_DOM_NAVIGATE_REPLACE || (replaces && p == &g.page) ? NAV_REFRESH
+                                                                                                : NAV_GO,
                          WAY_ASK_GO);
         g.replacing = NULL;
         return;
@@ -7674,12 +7701,15 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
         return;
     case OS64_DOM_NAVIGATE_SUBMIT:
         if (shown) {
+            // A form sent before its page has completely loaded replaces
+            // the page's entry, as an address does.
+            NavKind kind = page_navigation_replaces(&g.page) ? NAV_REFRESH : NAV_GO;
             int32_t control = ask->submitter != NULL
                 ? os64_page_control_for(page_model(&g.page), ask->submitter) : -1;
             if (control >= 0)
-                form_send(control, OS64_PAGE_ACTIVATE_CONTROL);
+                form_send_as(control, OS64_PAGE_ACTIVATE_CONTROL, kind);
             else
-                form_send(os64_page_form_for(page_model(&g.page), ask->node), OS64_PAGE_ACTIVATE_FORM);
+                form_send_as(os64_page_form_for(page_model(&g.page), ask->node), OS64_PAGE_ACTIVATE_FORM, kind);
         }
         return;
     case OS64_DOM_NAVIGATE_NONE:

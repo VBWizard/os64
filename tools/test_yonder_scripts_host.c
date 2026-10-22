@@ -3764,7 +3764,48 @@ static void loop_view_unshown_redirect(void) {
         "unshown redirect pushed: X replaces R2, R and S behind");
     loop_drop();
 }
+/* The third cold read: a page shown has not completely loaded until its
+ * `load` task is over, so a redirect from onload, <body onload> or a form
+ * a script sends there replaces the page's entry, as HTML's
+ * Location-object navigate and form submission do. A timer after load and
+ * a person's click push. `how` is R's markup after its own name. */
+static void loading_redirect_case(const char *how, const char *what, bool replaces) {
+    char body[512], line[200];
+    loop_page("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns(),"loading redirect: S");
+    start_trip("http://fixture.test/R",NULL,NAV_GO,NULL);
+    os64_snprintf(body,sizeof(body),"<p id=out>R</p><script>history.replaceState(null,'','/R')</script>%s",how);
+    post_arriving(body);
+    loop_settle();
+    view_turns();
+    if(!g.stream.active && probe_id("l")!=NULL)
+        input_click_at("l");
+    for(int i=0;i<4 && !g.stream.active;i++) { now_ms+=20; loop_settle(); view_turns(); }
+    os64_snprintf(line,sizeof(line),"loading redirect: %s fetches X",what);
+    check(g.stream.active,line);
+    post_arriving("<p id=out>X</p><script>history.replaceState(null,'','/X')</script>");
+    os64_snprintf(line,sizeof(line),"loading redirect: %s %s",what,replaces ? "replaces R, S behind" : "pushes, R behind");
+    check(loop_settle() && view_turns() && probe_text_is("out","X") &&
+          (replaces ? session_is("/S","/X","") : session_is("/S,/R","/X","")),line);
+    if(replaces) {
+        click_back(NULL,NULL);
+        post_arriving("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+        os64_snprintf(line,sizeof(line),"loading redirect: %s, and Back from X is S",what);
+        check(loop_settle() && view_turns() && probe_text_is("out","S") && session_is("","/S","/X"),line);
+    }
+    loop_drop();
+}
+static void loop_view_loading_redirect(void) {
+    loading_redirect_case("<script>onload=function(){location.href='/X'}</script>","onload's href",true);
+    loading_redirect_case("<body onload=\"location.replace('/X')\">","<body onload>'s replace",true);
+    loading_redirect_case("<form method=post action=/X><input name=a value=1></form>"
+        "<script>onload=function(){document.forms[0].submit()}</script>","a form sent in onload",true);
+    loading_redirect_case("<script>onload=function(){setTimeout(function(){location.href='/X'},0)}</script>",
+        "a timer after load",false);
+    loading_redirect_case("<a id=l href=/X>x</a>","a person's click once it is shown",false);
+}
 static void loop_view_cold2_cases(void) {
+    loop_view_loading_redirect();
     loop_view_pushed_then_forward();
     loop_view_pushed_length();
     loop_view_new_way_back();
