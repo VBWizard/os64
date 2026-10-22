@@ -156,6 +156,13 @@ static void dom_performance_cases(void)
         "throws('TypeError',()=>performance.measure('x',{duration:1}));"
         "throws('TypeError',()=>performance.measure('x',{start:1,end:2,duration:1}));"
         "throws('TypeError',()=>performance.measure('x',{start:-1}));"
+        /* A negative duration is refused where measure() converts it (User
+         * Timing § 3.1.3 runs it through "convert a mark to a timestamp"),
+         * after the start; a numeric string is a number first. */
+        "throws('TypeError',()=>performance.measure('x',{start:10,duration:-5}));"
+        "throws('TypeError',()=>performance.measure('x',{duration:-5,end:20}));"
+        "throws('SyntaxError',()=>performance.measure('x',{start:'no such mark',duration:-5}));"
+        "assert(performance.measure('s',{start:1,duration:'2'}).duration===2);performance.clearMeasures('s');"
         "throws('SyntaxError',()=>performance.measure('x','no such mark'));"
         "throws('InvalidAccessError',()=>performance.measure('x','loadEventStart'));"
         "throws('DataCloneError',()=>performance.measure('x',{start:0,detail:Symbol()}));"
@@ -185,6 +192,18 @@ static void dom_performance_cases(void)
         "assert(performance.navigation.type===0&&performance.getEntriesByType('navigation')[0].type==='navigate');",
         "performance: a host with no timing");
     fixture_free(&f);
+    /* A host whose wall clock gave nothing (origin_epoch_us 0, as yonder
+     * hands over then): navigationStart is still 0 (User Timing § 3.2). */
+    view_timing.origin_epoch_us = 0;
+    options.timing = view_timing_of;
+    f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, STORAGE_ASSERT
+        "var n=performance.measure('n','navigationStart');assert(n.startTime===0,String(n.startTime));"
+        "assert(performance.measure('m',{start:'navigationStart',end:5}).duration===5);",
+        "performance: navigationStart is 0 whatever the wall clock");
+    fixture_free(&f);
+    options.timing = NULL;
     static const char *const kOperations[] = {
         "performance.mark('m')", "performance.mark('m',{detail:{a:1}})", "performance.measure('x')",
         "performance.mark('a');performance.getEntries()", "performance.getEntriesByName('x','mark')",
@@ -300,6 +319,19 @@ static void dom_url_cases(void)
         "assert([...t.values()].length===t.size);"
         "throws('TypeError',()=>t.append('a'));throws('TypeError',()=>t.get());throws('TypeError',()=>t.forEach());"
         "throws('TypeError',()=>URLSearchParams.prototype.get.call({},'a'));"
+        /* WebIDL's union conversion: null is no dictionary and no object,
+         * so it is the USVString "null" (the union's string step). */
+        "assert(new URLSearchParams(null).toString()==='null=');"
+        /* The sequence is converted whole, every inner item to a string as
+         * it comes, before any pair's size is judged (the URL Standard's
+         * constructor steps); a failure stops the conversion with no
+         * IteratorClose (WebIDL's "create a sequence from an iterable"). */
+        "var seen=[];var item=function(n){return{toString:function(){seen.push(n);return n}}};"
+        "throws('TypeError',()=>new URLSearchParams([[item('a')],[item('b'),item('c')]]));"
+        "assert(seen.join()==='a,b,c','every item converted before the size is judged: '+seen.join());"
+        "seen=[];throws('RangeError',()=>new URLSearchParams([[item('a'),item('b'),{toString:function(){throw new RangeError('x')}}]]));"
+        "var closed=false;function* gen(){try{yield ['k','v'];yield [{toString:function(){throw new RangeError('y')}},'v'];}finally{closed=true}}"
+        "throws('RangeError',()=>new URLSearchParams(gen()));assert(closed===false,'no IteratorClose');"
         "assert(new URLSearchParams().toString()===''&&new URLSearchParams(undefined).size===0);",
         "url: URLSearchParams, and a URL's query live both ways");
     fixture_free(&f);

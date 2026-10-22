@@ -336,8 +336,8 @@ done:
 /* ── User Timing ─────────────────────────────────────────────────────── */
 
 /* "Convert a mark to a timestamp": a name of PerformanceTiming's is that
- * attribute after navigationStart (InvalidAccessError when it has not
- * happened); another name is the latest mark by that name (SyntaxError when
+ * attribute after navigationStart (navigationStart itself 0;
+ * InvalidAccessError for one that has not happened); another name is the latest mark by that name (SyntaxError when
  * there is none); a number is itself, and may not be negative. -1 thrown. */
 static int mark_time(os64_dom_t *dom, JSContext *ctx, JSValueConst mark, double *out)
 {
@@ -358,6 +358,12 @@ static int mark_time(os64_dom_t *dom, JSContext *ctx, JSValueConst mark, double 
     JS_FreeCString(ctx, text);
     if (timing >= 0) {
         JS_FreeValue(ctx, name);
+        /* "If name is navigationStart, return 0" (User Timing § 3.2),
+         * whatever the wall clock the host could or could not read. */
+        if (timing == 0) {
+            *out = 0;
+            return 0;
+        }
         os64_dom_timing_t t;
         timing_read(dom, &t);
         uint64_t at = timing_epoch(dom, &t, (size_t)timing);
@@ -424,6 +430,16 @@ done:
     return result;
 }
 
+/* `duration`, already a DOMHighResTimeStamp, run through "convert a mark
+ * to a timestamp" where measure() uses it: a negative one is a TypeError.
+ * -1 thrown. */
+static int duration_time(JSContext *ctx, double duration)
+{
+    if (duration >= 0) return 0;
+    JS_ThrowTypeError(ctx, "A measure's duration may not be negative");
+    return -1;
+}
+
 /* measure(name, startOrMeasureOptions, endMark) (User Timing § 3.1.3). */
 static JSValue measure(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv)
 {
@@ -479,12 +495,16 @@ static JSValue measure(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *
     else if (has_end) ok = mark_time(dom, ctx, member[2], &end);
     else if (has_start && has_duration) {
         ok = mark_time(dom, ctx, member[3], &begin);
+        if (ok == 0) ok = duration_time(ctx, duration);
         end = begin + duration;
     } else end = coarse((int64_t)(now_us(dom) - dom->time_origin_us));
     JS_FreeValue(ctx, end_mark);
     if (ok == 0) {
         if (has_start) ok = mark_time(dom, ctx, member[3], &begin);
-        else if (has_duration && has_end) begin = end - duration;
+        else if (has_duration && has_end) {
+            ok = duration_time(ctx, duration);
+            begin = end - duration;
+        }
         else if (!options) ok = mark_time(dom, ctx, start_text, &begin);
         else begin = 0;
     }

@@ -808,7 +808,9 @@ static JSValue url_member(JSContext *ctx, JSValueConst self, int argc, JSValueCo
 /* Each value an iterable yields, by ECMAScript's iteration (what WebIDL's
  * sequence conversion runs) through `method`, its @@iterator, handed to
  * `each`, which owns it and answers -1 to stop with an exception pending.
- * -1 thrown. */
+ * -1 thrown. A stop does not call the iterator's `return`: WebIDL's
+ * "create a sequence from an iterable" converts each item as it comes and
+ * lets a failure propagate with no IteratorClose. */
 static int each_value(JSContext *ctx, JSValueConst iterable, JSValueConst method,
                       int (*each)(void *opaque, JSValue value), void *opaque)
 {
@@ -853,18 +855,25 @@ static JSValue iterator_method(os64_dom_t *dom, JSContext *ctx, JSValueConst obj
     return method;
 }
 
-/* One inner sequence: its first two items, and how many it had. */
+/* One inner sequence, sequence<USVString>: each item converted as it
+ * arrives, as WebIDL converts a sequence's items, its first two kept, and
+ * how many it had. */
 typedef struct {
+    os64_dom_t *dom;
     JSContext *ctx;
-    JSValue items[2];
+    DString items[2];
     uint32_t count;
 } Pair;
 
 static int pair_item(void *opaque, JSValue value)
 {
     Pair *pair = opaque;
-    if (pair->count < 2) pair->items[pair->count] = value;
-    else JS_FreeValue(pair->ctx, value);
+    DString text = {0};
+    bool ok = d_string_text(pair->dom, pair->ctx, value, &text, true);
+    JS_FreeValue(pair->ctx, value);
+    if (!ok) return -1;
+    if (pair->count < 2) pair->items[pair->count] = text;
+    else d_string_free(pair->dom, &text);
     if (pair->count < UINT32_MAX) pair->count++;
     return 0;
 }
@@ -873,34 +882,35 @@ typedef struct {
     os64_dom_t *dom;
     JSContext *ctx;
     DParams *params;
+    bool odd;                   /* an inner sequence's size was not 2 */
 } Pairs;
 
-/* sequence<sequence<USVString>>'s outer item: an inner sequence of exactly
- * two strings, which becomes a pair. */
+/* sequence<sequence<USVString>>'s outer item, an inner sequence, which
+ * becomes a pair. Its size is judged by the constructor once the whole
+ * sequence is converted, as the URL Standard's steps judge it. */
 static int pairs_item(void *opaque, JSValue value)
 {
     Pairs *pairs = opaque;
     JSContext *ctx = pairs->ctx;
     os64_dom_t *dom = pairs->dom;
-    Pair pair = {ctx, {JS_UNDEFINED, JS_UNDEFINED}, 0};
+    Pair pair = {dom, ctx, {{0}, {0}}, 0};
     JSValue method = JS_IsObject(value) ? iterator_method(dom, ctx, value) : JS_UNDEFINED;
     int result = -1;
     if (!JS_IsException(method) && (JS_IsUndefined(method) || JS_IsNull(method)))
         JS_ThrowTypeError(ctx, "Each pair must be a sequence");
     else if (!JS_IsException(method) && each_value(ctx, value, method, pair_item, &pair) == 0) {
-        if (pair.count != 2) JS_ThrowTypeError(ctx, "Each pair must have exactly two items");
-        else {
-            DString text[2] = {{0}, {0}};
-            if (d_string_text(dom, ctx, pair.items[0], &text[0], true) &&
-                d_string_text(dom, ctx, pair.items[1], &text[1], true))
-                result = pair_add(ctx, pairs->params, text[0].data, text[0].length, text[1].data, text[1].length,
-                                  false);
-            d_string_free(dom, &text[0]);
-            d_string_free(dom, &text[1]);
+        if (pair.count != 2) {
+            pairs->odd = true;
+            result = 0;
+        } else if (!pairs->odd) {
+            result = pair_add(ctx, pairs->params, pair.items[0].data, pair.items[0].length, pair.items[1].data,
+                              pair.items[1].length, false);
+        } else {
+            result = 0;
         }
     }
-    JS_FreeValue(ctx, pair.items[0]);
-    JS_FreeValue(ctx, pair.items[1]);
+    d_string_free(dom, &pair.items[0]);
+    d_string_free(dom, &pair.items[1]);
     JS_FreeValue(ctx, method);
     JS_FreeValue(ctx, value);
     return result;
@@ -979,10 +989,14 @@ static JSValue params_constructor(JSContext *ctx, JSValueConst new_target, int a
         /* (sequence<sequence<USVString>> or record<USVString, USVString>):
          * an object with an iterator is the sequence. */
         JSValue method = iterator_method(dom, ctx, init);
-        Pairs pairs = {dom, ctx, params};
+        Pairs pairs = {dom, ctx, params, false};
         if (JS_IsException(method)) result = -1;
         else if (JS_IsUndefined(method) || JS_IsNull(method)) result = params_from_record(dom, ctx, params, init);
         else result = each_value(ctx, init, method, pairs_item, &pairs);
+        if (result == 0 && pairs.odd) {
+            JS_ThrowTypeError(ctx, "Each pair must have exactly two items");
+            result = -1;
+        }
         JS_FreeValue(ctx, method);
     } else if (!JS_IsUndefined(init)) {
         DString text = {0};
