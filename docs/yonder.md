@@ -126,7 +126,9 @@ Click the Settings icon in the title bar.
   that page's diagnostics file says `modern: off`.
 - **Clear page storage**, at that row's right: removes what every site
   has kept in its page storage (below), at once, and the pages open now
-  forget theirs.
+  forget theirs. A site another yonder window is writing at that moment is
+  waited for briefly; if it is still busy, the line says it was not
+  cleared, and Clear can be pressed again.
 - **Apply** changes this window from the next page on. **Save as default**
   also writes the settings to `yonder.conf`, where every new yonder reads
   them.

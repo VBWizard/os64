@@ -284,9 +284,8 @@ void os64_dom_set_cookies(os64_dom_t *dom, const os64_dom_cookies_t *cookies);
  * either throws QuotaExceededError and changes nothing. */
 #define OS64_DOM_STORAGE_QUOTA ((size_t)5 * 1024 * 1024)
 /* Changes are handed over at most this often, and once more as the
- * binding is drained; sooner when the host flushes them (the page is
- * departing) or when the changes not yet handed over would pass the quota
- * or the keys' cap. */
+ * binding is drained (the page departing: os64_dom_drain); sooner when the
+ * changes not yet handed over would pass the quota or the keys' cap. */
 #define OS64_DOM_STORAGE_COMMIT_MS 1000
 typedef enum {
     OS64_DOM_STORAGE_LOCAL = 0,
@@ -318,7 +317,7 @@ typedef enum {
  * loaded means the store moved and is loaded again.
  * load: the store's image, written into `out` when it fits in `cap`;
  * answers its length either way (0 for none), negative when it cannot be
- * read. The binding asks again with room when it did not fit, a few
+ * read or is not an image (an empty file is not one). The binding asks again with room when it did not fit, a few
  * times; a store still outgrowing its room is read at the next task.
  * commit: this page's changes since its last commit (a change list in
  * os64_dom_storage_merge's format), merged onto the store as it stands.
@@ -345,12 +344,6 @@ void os64_dom_storage_settle(os64_dom_t *dom);
 /* When the next commit is due on the now_ms clock: UINT64_MAX with nothing
  * to commit. */
 uint64_t os64_dom_storage_due(const os64_dom_t *dom);
-/* Commits what both areas have not, due or not: the page is departing (a
- * navigation away from it has become a page), and the next page's scripts
- * must read what it wrote. The binding works on; what it changes after
- * commits as it falls due, and changes a busy store did not take here
- * wait for the next commit, drain's at the latest. */
-void os64_dom_storage_flush(os64_dom_t *dom);
 /* Forgets both areas' maps and their changes not yet committed, so their
  * next touch reads the store as it is: "Clear page storage" while a page
  * is open. Owner thread, outside callbacks. */
@@ -361,7 +354,8 @@ void os64_dom_storage_forget(os64_dom_t *dom);
  * "os64 storage 1\n" and then records, `+<key bytes> <value bytes>\n`
  * followed by the key, the value and "\n" for a set, `-<key bytes>\n`, the
  * key and "\n" for a removal (an image holds only sets). The merge applies
- * a change list to an image (NULL with length 0 for no store) as it stands
+ * a change list to an image (NULL with length 0 for no store; anything
+ * else, an empty file's bytes included, must be in the format) as it stands
  * and answers the new image in `*out` (os64_malloc'd; the caller frees it
  * with os64_free; NULL, length 0, for an image with nothing in it):
  * OS64_DOM_STORAGE_FULL when the result would hold more than the quota and

@@ -244,6 +244,14 @@ int64_t yonder_storage_load(yonder_storage_t *st, os64_dom_storage_area_t area, 
     size_t length;
     if (!read_store(st, path, &bytes, &length))
         return -1;
+    // An empty file is there and is no image (every image begins with
+    // libdom's magic line): another's, never yonder's own "none".
+    if (bytes != NULL && length == 0) {
+        os64_free(bytes);
+        os64_snprintf(st->problem, sizeof(st->problem),
+                      "Page storage is not kept for %s: its file is not one yonder wrote.", origin);
+        return -1;
+    }
     if (length <= cap)
         os64_memcpy(out, bytes, length);
     os64_free(bytes);
@@ -717,8 +725,9 @@ os64_dom_storage_status_t yonder_storage_commit(yonder_storage_t *st, os64_dom_s
     return status;
 }
 
-int64_t yonder_storage_clear(yonder_storage_t *st)
+int64_t yonder_storage_clear(yonder_storage_t *st, uint32_t *busy)
 {
+    *busy = 0;
     if (st == NULL)
         return -1;
     sessions_free(st);
@@ -731,20 +740,42 @@ int64_t yonder_storage_clear(yonder_storage_t *st)
     char (*names)[OS64_DIRENT_NAME_MAX + 1] = listing(dir, &count, &whole);
     if (!whole && count == 0)
         return -1;
-    // Every store goes, and every temp and lock a crash left; a live
-    // yonder's temp or lock is that window's, mid-commit, and stays. Only
-    // a store is a site.
+    // Each store goes under its own lock, as a commit takes it, so a window
+    // mid-commit finishes first and nothing it publishes outlives the
+    // clear; one whose lock a live window holds past the wait is left, and
+    // counted. Then every temp and lock a crash left; a live yonder's is
+    // that window's, mid-commit, and stays. Only a store is a site.
     int64_t removed = 0;
     bool all = whole;
     for (size_t i = 0; i < count; i++) {
-        bool store = os64_strchr(names[i], '+') == NULL;
-        if (!store && !orphan(dir, names[i]))
+        if (os64_strchr(names[i], '+') != NULL)
+            continue;
+        char path[OS64_PATH_MAX], lock[OS64_PATH_MAX];
+        int n = os64_snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
+        int m = os64_snprintf(lock, sizeof(lock), "%s/%s" LOCK_SUFFIX, dir, names[i]);
+        if (n <= 0 || (size_t)n >= sizeof(path) || m <= 0 || (size_t)m >= sizeof(lock)) {
+            all = false;
+            continue;
+        }
+        lock_t taken = lock_take(lock, LOCK_WAIT_MS);
+        if (taken != LOCK_TAKEN) {
+            if (taken == LOCK_HELD && *busy < UINT32_MAX)
+                (*busy)++;
+            all = false;
+            continue;
+        }
+        if (os64_unlink(path) == 0 || os64_stat(path, &entry) < 0)
+            removed++;
+        else
+            all = false;
+        (void)os64_unlink(lock);
+    }
+    for (size_t i = 0; i < count; i++) {
+        if (os64_strchr(names[i], '+') == NULL || !orphan(dir, names[i]))
             continue;
         char path[OS64_PATH_MAX];
         int n = os64_snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
-        if (n > 0 && (size_t)n < sizeof(path) && os64_unlink(path) == 0)
-            removed += store ? 1 : 0;
-        else
+        if (n <= 0 || (size_t)n >= sizeof(path) || (os64_unlink(path) != 0 && os64_stat(path, &entry) == 0))
             all = false;
     }
     os64_free(names);

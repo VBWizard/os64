@@ -6829,6 +6829,13 @@ static void storage_disk_cases(void) {
     check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_FAILED &&
           problem_has(st,"its file is not one yonder wrote") && !strcmp(fake_text(STORE_FILE),"hello\n"),
           "storage disk: a file not in the format is never written over");
+    /* An empty file where the store should be: there, and no image. */
+    fake_put(STORE_FILE,"",0);
+    check(yonder_storage_load(st,L,origin,out,sizeof(out))<0 && problem_has(st,"its file is not one yonder wrote"),
+          "storage disk: an empty file at the store's name loads as broken");
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_FAILED &&
+          fake_file(STORE_FILE)>=0 && fake_files[fake_file(STORE_FILE)].len==0 && fake_temps()==0,
+          "storage disk: and is never written over");
     /* A folder where the file should be. */
     (void)os64_unlink(STORE_FILE);
     snprintf(fake_dirs[nfake_dirs++],256,"%s",STORE_FILE);
@@ -6878,7 +6885,9 @@ static void storage_disk_cases(void) {
     /* Clear twice, and the sessions with it. */
     check(yonder_storage_commit(st,S,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_OK &&
           yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_OK,"storage disk: both areas kept");
-    check(yonder_storage_clear(st)==1 && yonder_storage_clear(st)==0 && yonder_storage_identity(st,S,origin)==0 &&
+    uint32_t busy=1;
+    check(yonder_storage_clear(st,&busy)==1 && busy==0 && yonder_storage_clear(st,&busy)==0 &&
+          yonder_storage_identity(st,S,origin)==0 &&
           yonder_storage_load(st,S,origin,out,sizeof(out))==0 && yonder_storage_problem(st)==NULL,
           "storage disk: Clear page storage twice: the files and the sessions go once, and the problem with them");
     /* Every allocation failed in turn, each area: an answer of OK or
@@ -6941,22 +6950,44 @@ static void plant_lock(uint64_t task, uint64_t taken) {
     fake_put(STORE_LOCK,text,(size_t)n);
 }
 static void storage_departure_busy_case(void) {
-    /* A store another window holds as the page departs: the flush is
-     * refused and the changes wait (the next page reads the store without
-     * them); the departed page's last commit, as its host goes at the next
-     * page's arrival, waits longer and lands them. */
+    /* A store another window holds as the page departs: the departure's
+     * commit is the page's last, which waits past a live commit's wait for
+     * the lock, so the next page reads the write. */
     storage_departure_page();
     fake_live[0]=8;
     plant_lock(8,(uint64_t)js_test_clock.epoch);
     fake_sleep_hook=let_go;
-    fake_sleep_hook_at=fake_sleeps+140;     /* past the flush's wait and a live commit's after it */
+    fake_sleep_hook_at=fake_sleeps+100;     /* past a live commit's wait, inside the last's */
     storage_page_as("http://fixture.test/two","<p id=out>start</p><script>"
         "document.getElementById('out').textContent=localStorage.getItem('tok')+' '+sessionStorage.getItem('tok');"
         "</script>",NAV_GO);
-    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","null y"),
-        "departure: a busy store's refusal at the flush leaves the next page without the write");
-    check(store_holds("tok","x") && fake_file(STORE_LOCK)<0,
-        "departure: and the departed page's last commit lands it");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","x y") && fake_file(STORE_LOCK)<0,
+        "departure: the departure's last commit waits for a busy store, and the next page reads the write");
+    loop_drop();
+    yonder_storage_free(s_storage);
+    s_storage=NULL;
+}
+/* A DEPARTED PAGE RUNS NOTHING MORE (HTML unloads its document): its queued
+ * timer, due while the next page streams in, neither runs nor writes, now
+ * or at the departed page's teardown. */
+static void storage_departed_tasks_case(void) {
+    fake_reset();
+    s_storage=yonder_storage_new("/tmp/profile");
+    loop_page("<p id=out>start</p><script>localStorage.setItem('a','1');"
+        "setTimeout(function(){localStorage.setItem('late','1');document.title='ran'},500);</script>");
+    check(loop_settle() && g.page.tree!=NULL,"departed: the first page arrives");
+    yonder_scripts_t *departing=g.page.scripts;
+    storage_page_as("http://fixture.test/two","<p id=out>start</p><script>"
+        "document.getElementById('out').textContent=String(localStorage.getItem('late'));</script>",NAV_GO);
+    /* The next page's parse begins: the page on screen departs. */
+    for(int i=0;i<5 && g.stream.parser==NULL && g.stream.active;i++) stream_turn();
+    check(g.page.scripts==departing && !yonder_scripts_alive(departing),
+          "departed: the page on screen is unloaded as the next one's parse begins");
+    now_ms+=1000;
+    (void)script_turn();
+    check(store_holds("late",NULL),"departed: and wrote nothing");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","null") && store_holds("late",NULL) &&
+          store_holds("a","1"),"departed: nor at its teardown, and the next page reads the store without it");
     loop_drop();
     yonder_storage_free(s_storage);
     s_storage=NULL;
@@ -7045,6 +7076,47 @@ static void storage_two_yonder_cases(void) {
     other_window=NULL;
     fake_reset();
 }
+/* CLEAR AGAINST A WINDOW MID-COMMIT: Clear takes each store's lock as a
+ * commit does, so a window holding it finishes first and nothing it
+ * publishes outlives the clear; one held past the wait is not cleared,
+ * and the Settings line says so. */
+static void storage_clear_lock_cases(void) {
+    const os64_dom_storage_area_t L=OS64_DOM_STORAGE_LOCAL;
+    const char *origin="http://fixture.test";
+    uint64_t now=(uint64_t)js_test_clock.epoch;
+    fake_reset();
+    yonder_storage_t *st=yonder_storage_new("/tmp/profile");
+    other_window=yonder_storage_new("/tmp/profile");
+    check(yonder_storage_commit(st,L,origin,"os64 storage 1\n+4 1\nseed1\n",26,false,NULL)==OS64_DOM_STORAGE_OK,
+          "clear: a store to clear");
+    fake_live[0]=8;
+    plant_lock(8,now);
+    fake_sleep_hook=other_commits_and_lets_go;
+    uint32_t busy=9;
+    int64_t removed=yonder_storage_clear(st,&busy);
+    /* A clear that did not wait lets the writer publish after it. */
+    if(fake_sleep_hook!=NULL) { void (*finish)(void)=fake_sleep_hook; fake_sleep_hook=NULL; finish(); }
+    check(removed==1 && busy==0 && fake_file(STORE_FILE)<0 && fake_file(STORE_LOCK)<0,
+          "clear: a window mid-commit finishes first, and nothing it published outlives the clear");
+    /* Held past the wait: left, counted, and said. */
+    check(yonder_storage_commit(st,L,origin,"os64 storage 1\n+4 1\nseed1\n",26,false,NULL)==OS64_DOM_STORAGE_OK,
+          "clear: a store again");
+    plant_lock(8,now);
+    removed=yonder_storage_clear(st,&busy);
+    check(removed<0 && busy==1 && fake_file(STORE_FILE)>=0 && store_holds("seed","1") && fake_file(STORE_LOCK)>=0,
+          "clear: a store whose lock is held past the wait is not cleared, and is counted");
+    yonder_storage_t *window_store=s_storage;
+    s_storage=st;
+    char line[200];
+    storage_clear(line,sizeof(line));
+    s_storage=window_store;
+    check(strstr(line,"Not cleared: 1 site another window was writing")!=NULL,"clear: and Settings says so");
+    (void)os64_unlink(STORE_LOCK);
+    yonder_storage_free(st);
+    yonder_storage_free(other_window);
+    other_window=NULL;
+    fake_reset();
+}
 /* What a crash leaves (finding 7): temps and locks whose task is gone. The
  * first touch of the profile's stores removes them, and Clear page storage
  * does, counting only stores; a live window's temp and lock stay. */
@@ -7072,7 +7144,8 @@ static void storage_orphan_cases(void) {
     check(fake_file(STORE_FILE "+8.2.new")>=0 && fake_file("/tmp/profile/storage/http%3A%2F%2Flive.test+lock")>=0 &&
           fake_file(STORE_FILE)>=0,"orphans: a live window's temp and lock, and the store, stay");
     fake_put(STORE_FILE "+9.4.new",kImage,sizeof(kImage)-1);
-    check(yonder_storage_clear(st)==1 && fake_file(STORE_FILE)<0 && fake_file(STORE_FILE "+9.4.new")<0 &&
+    uint32_t busy;
+    check(yonder_storage_clear(st,&busy)==1 && busy==0 && fake_file(STORE_FILE)<0 && fake_file(STORE_FILE "+9.4.new")<0 &&
           fake_file(STORE_FILE "+8.2.new")>=0,
           "orphans: Clear removes the stores and a crash's temps, and counts only stores");
     yonder_storage_free(st);
@@ -7118,6 +7191,8 @@ static void storage_cases(void) {
     storage_disk_cases();
     storage_two_yonder_cases();
     storage_departure_busy_case();
+    storage_departed_tasks_case();
+    storage_clear_lock_cases();
     storage_orphan_cases();
     timing_window_cases();
     storage_modern_off_cases();

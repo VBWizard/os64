@@ -559,9 +559,12 @@ or BUSY (another window has the store: the changes are handed over again a
 second later, or at drain, whichever is first). Commits are coalesced
 (`os64_dom_storage_settle` between tasks, `os64_dom_storage_due` for the
 host's clock, `OS64_DOM_STORAGE_COMMIT_MS`), sooner when the change list
-would pass the quota or the keys' cap, at `os64_dom_storage_flush` (the page
-departing), and once more at drain, the last (`last` set: the provider may
-wait longer there, and a BUSY loses the changes).
+would pass the quota or the keys' cap, and once more at drain, the last
+(`last` set: the provider may wait longer there, and a BUSY loses the
+changes). The change list never passes its bound: a change it cannot make
+room for, because the store would not take the early commit, is refused
+with `QuotaExceededError` as a full store's is. A host that unloads a page
+(yonder's departure) drains it, which is that page's last commit.
 `os64_dom_storage_forget` drops both maps for "Clear page storage". The
 image format is `os64 storage 1\n`, then `+<key bytes> <value bytes>\n` and
 the key, the value and `\n` for a set, `-<key bytes>\n`, the key and `\n`

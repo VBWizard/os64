@@ -2505,14 +2505,16 @@ static void refresh_if_declared(void)
 
 // THE PAGE ON SCREEN DEPARTS: a navigation away from it has become a page,
 // whose parse begins now (stream_parser), or the window is closing. This is
-// where a browser fires pagehide and unload, and what it changed in its
-// storage is committed now, due or not, so the next page's scripts read
-// it: localStorage in the file, sessionStorage in the window's image. The
-// page stays on screen until the new one is laid out, and anything its
-// scripts change after this commits as it falls due.
+// where a browser unloads the document, and so does yonder: its scripts'
+// runtime is retired (yonder_scripts_depart), so no task of its runs again,
+// and what it changed in its storage is committed now, so the next page's
+// scripts read it: localStorage in the file, sessionStorage in the
+// window's image. The page stays on screen, scriptless, until the new one
+// is laid out, and stays so if that one never is (Stop, or a layout out of
+// memory).
 static void page_departs(void)
 {
-    yonder_scripts_storage_flush(g.page.scripts);
+    yonder_scripts_depart(g.page.scripts);
 }
 
 // A milestone of a page's navigation timing (stream_mark's, for a page
@@ -7328,19 +7330,24 @@ static void storage_turn(void)
 }
 
 // Settings' "Clear page storage": the store emptied, and every page open
-// now forgets what it had, so its next touch reads the empty store.
+// now forgets what it had, so its next touch reads the empty store. A site
+// another window held past the wait is not cleared, and the line says so.
 static void storage_clear(char *line, size_t cap)
 {
     if (s_storage == NULL) {
         os64_strcopy(line, cap, "Page storage is not kept in this window; there is nothing to clear.");
         return;
     }
-    int64_t removed = yonder_storage_clear(s_storage);
+    uint32_t busy;
+    int64_t removed = yonder_storage_clear(s_storage, &busy);
     yonder_scripts_t *hosts[] = {g.page.scripts, g.stream.scripts, g.coming.active ? g.coming.page.scripts : NULL};
     for (size_t i = 0; i < sizeof(hosts) / sizeof(hosts[0]); i++)
         yonder_scripts_storage_forget(hosts[i]);
     s_storage_said[0] = '\0';
-    if (removed < 0)
+    if (busy != 0)
+        os64_snprintf(line, cap, "Not cleared: %lu site%s another window was writing; the rest is cleared. "
+                      "Try again in a moment.", (unsigned long)busy, busy == 1 ? "" : "s");
+    else if (removed < 0)
         os64_strcopy(line, cap, "Cleared this window's page storage; some stored files could not be removed.");
     else
         os64_snprintf(line, cap, "Cleared page storage: %ld stored site%s gone.", (long)removed,

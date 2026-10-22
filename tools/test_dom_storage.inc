@@ -393,26 +393,16 @@ static void dom_storage_provider_cases(void)
     os64_dom_storage_settle(f.binding);
     dom_script(&f, STORAGE_ASSERT "assert(localStorage.length===1&&localStorage.getItem('later')==='new');",
                "storage: a clear does not take a key another window added after it");
-    /* The page departs: a flush commits what is left, due or not, and the
-     * binding works on. */
-    dom_script(&f, "localStorage.setItem('y','flushed')", "storage: a change not yet due");
-    unsigned flushed = store.commits;
-    check(os64_dom_storage_due(f.binding) > storage_clock, "storage: not yet due");
-    os64_dom_storage_flush(f.binding);
-    check(store.commits == flushed + 1 && os64_dom_storage_due(f.binding) == UINT64_MAX &&
-          bytes_find(store.image, store.length, "+1 7\nyflushed\n", 14) != NULL,
-          "storage: a flush commits it at once");
-    os64_dom_storage_flush(f.binding);
-    check(store.commits == flushed + 1 && store.lasts == 0,
-          "storage: a flush with nothing left commits nothing, and none of its commits is the last");
-    /* A flush a busy store refuses: the changes wait, for drain at the
-     * latest. */
+    /* A commit a busy store refuses: the changes wait, for drain at the
+     * latest, and no commit before drain's is the last. */
     dom_script(&f, "localStorage.setItem('x','kept')", "storage: a change a busy store will not take");
+    unsigned refused = store.commits;
+    storage_clock += OS64_DOM_STORAGE_COMMIT_MS;
     store.forced = OS64_DOM_STORAGE_BUSY;
-    os64_dom_storage_flush(f.binding);
+    os64_dom_storage_settle(f.binding);
     store.forced = OS64_DOM_STORAGE_OK;
-    check(store.commits == flushed + 2 && os64_dom_storage_due(f.binding) != UINT64_MAX,
-          "storage: a busy store's refusal at a flush keeps the changes");
+    check(store.commits == refused + 1 && os64_dom_storage_due(f.binding) != UINT64_MAX && store.lasts == 0,
+          "storage: a busy store's refusal keeps the changes");
     /* Drain commits what is left, due or not. */
     os64_dom_storage_settle(f.binding);
     dom_script(&f, "sessionStorage.setItem('s','v');localStorage.setItem('z','last')",
@@ -424,7 +414,7 @@ static void dom_storage_provider_cases(void)
     check(store.length != 0 && bytes_find(store.image, store.length, "+1 4\nzlast\n", 11) != NULL,
           "storage: the last commit reached the store");
     check(bytes_find(store.image, store.length, "+1 4\nxkept\n", 11) != NULL,
-          "storage: with what a busy store refused at the flush");
+          "storage: with what a busy store refused before");
     fake_store_free(&store);
 
     /* A full store: nothing kept, and the page reads the store back. */
@@ -665,6 +655,8 @@ static void dom_storage_bytes_cases(void)
           os64_dom_storage_merge(NULL, 0, NULL, 0, &out, &length) == OS64_DOM_STORAGE_FAILED &&
           os64_dom_storage_merge(NULL, 0, kMore, sizeof(kMore) - 1, NULL, &length) == OS64_DOM_STORAGE_FAILED,
           "storage: a merge without its arguments is refused");
+    check(os64_dom_storage_merge("", 0, kMore, sizeof(kMore) - 1, &out, &length) == OS64_DOM_STORAGE_FAILED &&
+          out == NULL, "storage: an empty file's bytes are no image (no store is NULL)");
     dom_host_free(again);
     /* Past the quota: refused when the merge would hold more than the
      * quota and more than the store did; a store already past it may
@@ -894,10 +886,34 @@ static void dom_storage_page_code_cases(void)
     fixture_free(&f);
 }
 
+/* The change list's bound holds whatever the store answers: under a busy
+ * store a change that would pass it cannot be made room for, and is
+ * refused as a full store's would be. */
+static void dom_storage_busy_bound_cases(void)
+{
+    FakeStore store = {0};
+    DomFixture f = storage_fixture("http://example.test/", &store);
+    if (!fixture_ready(&f)) return;
+    store.forced = OS64_DOM_STORAGE_BUSY;
+    dom_script(&f, STORAGE_ASSERT "var big='x'.repeat(1000000),stopped=-1;"
+               "for(var i=0;i<6&&stopped<0;i++){try{localStorage.setItem(i+big,'');localStorage.removeItem(i+big)}"
+               "catch(e){assert(e.name==='QuotaExceededError',e.name);stopped=i}}"
+               "assert(stopped===2,'refused at the change that would pass the bound: '+stopped);"
+               "assert(localStorage.length===0);",
+               "storage: a busy store, and set and remove of key after big key");
+    check(store.commits >= 1 && store.length == 0, "storage: the busy store was asked, and kept nothing");
+    store.forced = OS64_DOM_STORAGE_OK;
+    os64_dom_drain(f.binding);
+    check(store.length == 0, "storage: what the page could change reached the store once it was free");
+    fixture_free(&f);
+    fake_store_free(&store);
+}
+
 static void dom_storage_cases(void)
 {
     dom_storage_shape_cases();
     dom_storage_page_code_cases();
+    dom_storage_busy_bound_cases();
     dom_storage_quota_cases();
     dom_storage_provider_cases();
     dom_storage_two_windows_cases();

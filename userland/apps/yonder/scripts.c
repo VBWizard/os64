@@ -888,10 +888,10 @@ void yonder_scripts_storage_settle(yonder_scripts_t *s)
         os64_dom_storage_settle(s->dom);
 }
 
-void yonder_scripts_storage_flush(yonder_scripts_t *s)
+void yonder_scripts_depart(yonder_scripts_t *s)
 {
-    if (s != NULL && s->dom != NULL)
-        os64_dom_storage_flush(s->dom);
+    if (s != NULL && !s->dead)
+        retire(s);
 }
 
 void yonder_scripts_storage_forget(yonder_scripts_t *s)

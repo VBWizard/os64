@@ -49,12 +49,15 @@ os64_dom_storage_status_t yonder_storage_commit(yonder_storage_t *storage, os64_
                                                 bool last, yonder_diag_t *diag);
 
 // Settings' "Clear page storage": every store under <profile>/storage/ is
-// removed, with every temp and lock a crash left (a live window's, mid-
-// commit, stay), and this window's sessionStorage forgotten. The pages
-// open now forget their own maps with os64_dom_storage_forget. Answers how
-// many stores went, negative when the folder could not be listed or a file
-// could not be removed (what could be removed was).
-int64_t yonder_storage_clear(yonder_storage_t *storage);
+// removed, each under its own lock (a window mid-commit finishes first, so
+// nothing it publishes outlives the clear), with every temp and lock a
+// crash left (a live window's, mid-commit, stay), and this window's
+// sessionStorage forgotten. The pages open now forget their own maps with
+// os64_dom_storage_forget. Answers how many stores went, negative when the
+// folder could not be listed or a store could not be cleared (what could
+// be, was); `*busy` is how many were not because a live window held their
+// lock past the wait.
+int64_t yonder_storage_clear(yonder_storage_t *storage, uint32_t *busy);
 
 // Why localStorage is kept in no file, when it is not: the profile folder
 // could not be made, a store could not be read or written or is not
