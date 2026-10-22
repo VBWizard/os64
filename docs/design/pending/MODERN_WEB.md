@@ -1110,6 +1110,9 @@ had let go of; and a page not yet shown that navigated by address doing so
 from the page on screen (`g.replacing`), so a JavaScript redirector's
 `location.replace` erased the page its link was on, and a redirector
 reached by Back left its entry behind, where Back reached it again.
+It also found that a replay's session history and window frame are the
+harness's, which REPLAY.md § 3 now states, and Back from an arriving page
+measuring its target before a held push joins the session (booked).
 **The design read** passed it with the scroll-restoration ruling, the two
 accepted departures from HTML's traversal queue below, and the session's
 being outside the switch.
@@ -1128,5 +1131,7 @@ per document; `matchMedia` writing `calc()` as given; the out-of-memory
 `not all`; a second traversal stopping the first; a stopped traversal
 collapsing held changes; Back from an arriving page with nothing on
 screen; from the corpus replay, `crypto.getRandomValues` and a script
-element's `load` and `error`; and from Codex's round, QuickJS compiling a
-parse that ran out of memory.
+element's `load` and `error`; from Codex's round, QuickJS compiling a
+parse that ran out of memory; and from the second cold read, Back from an
+arriving page measured before a held push joins. In § The replay corpus:
+a replay's session history and window frame.

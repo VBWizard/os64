@@ -7585,6 +7585,9 @@ static void unshown_go(Page *p, int32_t delta)
     }
     if (p == g.finishing.page)
         g.finishing.abandoned = true;
+    // Stopping a traversal can add the page on screen's held change to the
+    // session (traverse_end) after `target` was measured (DEBTS.md § Classic
+    // browser scripting).
     stop_trip();
     if (target != 0)
         session_go((int32_t)target);
