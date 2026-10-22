@@ -1497,6 +1497,20 @@ each must serialise (WPT's `serialize-all-longhands`). At the merge, with
 4's properties parsed: `css/cssom` 722, `css/cssom-view` 248,
 `css/mediaqueries` 118.
 
+**Codex round 2**, after the merge, found seven. Fixed: `font-family`
+computing to libflow's names and its fallback, where the computed value is
+the declared list as written (`flow_family_list_t.written`); an event's
+init dictionary that is a primitive accepted, now a TypeError for every
+Event interface through libdom's one gate (`d_dictionary`); the
+`scripting` media feature fixed at `none`, now the document's
+(`garb_env_t.scripting`); and the device-* features answering the
+viewport, now the screen's (`garb_env_t.device_width`, from `s_screen` and
+the binding's `options.screen`), which put `css/mediaqueries` at 120.
+Booked: a grid template's resolved value as the used track sizes. Declined
+as what-ifs or as WebIDL's own rule: an options getter that scrolls the
+window, and `scrollRestoration` refusing an unknown word (WebIDL ignores
+it).
+
 **Booked** (DEBTS.md § Classic browser scripting): computed custom
 properties and shorthands; `DOMException` (raised with Chris as a small
 libdom slice); frames and `window.open`; an entry's state living only as
@@ -1509,5 +1523,6 @@ element's `load` and `error`; from Codex's round, QuickJS compiling a
 parse that ran out of memory; and from the second cold read, Back from an
 arriving page measured before a held push joins; and from the third, the
 question bar answered for a page not yet shown, a page not yet shown's
-Referer, and a fragment navigation before load. In § The replay corpus:
+Referer, and a fragment navigation before load; and from Codex's second
+round, a grid template's used track sizes. In § The replay corpus:
 a replay's session history and window frame.
