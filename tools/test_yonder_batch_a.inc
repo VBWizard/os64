@@ -93,6 +93,21 @@ static void ellipsis_review_cases(void)
                     "fill 0 2 32 16 #0000ff\n"
                     "text \"abcdefghij\" 0 14 #00ff00 clip 0 0 32 20\n"
                     "text \"\" 32 14 #00ff00 clip 0 0 40 20\n");
+    // Codex round 1: a box with no room before the ellipsis keeps its first
+    // character, clipped rather than ellipsed, and the ellipsis follows it
+    // (Overflow 4 § 4.1). 12 wide: the limit is 4, which a, 8 wide, passes;
+    // a is kept, 0..8, and the ellipsis drawn at 8, both clipped at 12.
+    // 4 wide, the same, the box's clip cutting both at 4.
+    paint_page_case("text-overflow: no room before the ellipsis keeps the first character",
+                    "<!doctype html><style>body { margin: 0 } div { overflow: hidden;"
+                    " white-space: nowrap; text-overflow: ellipsis; color: #00ff00 }</style>"
+                    "<div style='width: 12px'>abc</div><div style='width: 4px'>abc</div>",
+                    200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+                    "fill 0 0 200 100 #fefefe\n"
+                    "text \"abc\" 0 14 #00ff00 clip 0 0 8 20\n"
+                    "text \"\" 8 14 #00ff00 clip 0 0 12 20\n"
+                    "text \"abc\" 0 34 #00ff00 clip 0 20 4 20\n"
+                    "text \"\" 8 34 #00ff00 clip 0 20 4 20\n");
     // pre-wrap: abc and six spaces end the first line, 48 wide, but the
     // spaces hang (Text 3 § 4.1.3): abc is 24 and fits, so no ellipsis.
     paint_page_case("text-overflow: spaces that hang do not overflow a line",

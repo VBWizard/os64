@@ -671,8 +671,9 @@ the style object and WPT all see it go with the switch.
   fits, an inline box's piece where the kept content ends, and an atom
   past the limit is left out whole with everything in it
   (`past_ellipsis`). Spaces that hang at a pre-wrap line's end do not count
-  as content passing the end (`content_end`). A line that would keep
-  nothing is cut, not ellipsed.
+  as content passing the end (`content_end`). A line with no room before
+  the ellipsis keeps its first character or atom, clipped rather than
+  ellipsed, and the ellipsis follows it, clipped by the box with it.
 - **`outline`** and its four longhands (UI 4 § 3): a square ring of a
   border's styles round the border box, `outline-offset` past it, taking no
   room and counted in the box's ink (`flow_outline_rect`). `auto` is drawn

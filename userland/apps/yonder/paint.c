@@ -1982,8 +1982,9 @@ static bool is_frame(const flow_box_t *b)
 // an inline box's piece is cut where what is kept ends — and the ellipsis
 // is drawn right after what is kept, in the block's colour on the line's
 // baseline, when the walk hands the painter the line, after the line's
-// pieces. A line that would keep nothing is cut and not ellipsed: its
-// first character or atom is clipped rather than ellipsed.
+// pieces. A line that would keep nothing before the limit keeps its first
+// character or atom, clipped rather than ellipsed, and the ellipsis
+// follows it, clipped by the box where there is no room for it.
 typedef struct {
     bool on;
     int64_t limit, at;      // where what is kept must end; where the ellipsis starts
@@ -2049,7 +2050,28 @@ static LineCut line_cut(const flow_box_t *line)
         else if (k->kind == FLOW_BOX_TEXT && k->rect.x < c.limit && text_kept(k, c.limit) > 0)
             at = max64(at, (int64_t)k->rect.x + text_kept(k, c.limit));
     }
-    c.on = at != INT64_MIN;
+    // Nothing fits before the limit: the line's first character or atom
+    // is kept and clipped rather than ellipsed, and the ellipsis follows
+    // it, clipped by the box with it (Overflow 4 § 4.1).
+    if (at == INT64_MIN) {
+        const flow_box_t *first = NULL;
+        for (const flow_box_t *k = line->first; k != NULL; k = k->next)
+            if (line_content(k) && (first == NULL || k->rect.x < first->rect.x))
+                first = k;
+        os64_text_caret_t one;
+        if (first == NULL)
+            return c;
+        if (first->kind == FLOW_BOX_TEXT && first->run != NULL &&
+            os64_text_run_view(first->run, &v) == OS64_FONT_OK && v.glyph_count > 0 &&
+            os64_text_caret(first->run, v.glyphs[0].byte_end, OS64_TEXT_BEFORE, &one) ==
+                OS64_FONT_OK) {
+            c.limit = (int64_t)first->rect.x + ((int64_t)one.x + 63) / 64;
+            at = (int64_t)first->rect.x + text_kept(first, c.limit);
+        } else {
+            c.limit = at = (int64_t)first->rect.x + first->rect.w;
+        }
+    }
+    c.on = true;
     c.at = at;
     return c;
 }
