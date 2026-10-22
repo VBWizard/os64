@@ -864,26 +864,54 @@ static void transform(const flow_computed_t *c, Out *o)
 
 // ── A property ──────────────────────────────────────────────────────────
 
-// The winner the page's own sheets gave the property on the element or,
-// for an inherited property, on its nearest ancestor that has one: what a
-// property libflow does not model computes to, written as libgarb writes a
-// value. False for none.
+// A value as libgarb writes it, whole: written in place at the length
+// libgarb reports, so a value of any length reads complete, or reports the
+// length a caller needs to read it again with room (flow_computed_text's
+// snprintf contract).
+static void put_value(Out *o, const garb_val_t *v)
+{
+    size_t need = garb_val_dump(v, NULL, 0);
+    if (o->len < o->cap)
+        garb_val_dump(v, o->out + o->len, o->cap - o->len);
+    o->len += need;
+    if (o->cap > 0)
+        o->out[o->len < o->cap ? o->len : o->cap - 1] = '\0';
+}
+
+// The winner the page's own sheets gave the property on the element, or
+// on the ancestors its value comes from: what a property libflow does not
+// model computes to, written as libgarb writes a value. The CSS-wide
+// keywords mean what the cascade gives them (style.c's lay_sets):
+// `inherit`, and `unset` on an inherited property, take the parent's; no
+// winner on an inherited property does too; `initial`, `unset` on a
+// property that is not inherited, and no winner on one, are the initial
+// value. `revert` and `revert-layer` go back to the user-agent origin,
+// which declares none of these properties, so they are `unset`. False for
+// the initial value, which the caller writes (its own word, or nothing).
 static bool declared(const flow_computed_t *c, int32_t prop, Out *o)
 {
     const garb_cascade_t *cascade = c->env.cascade;
     if (cascade == NULL)
         return false;
+    bool inherited = garb_prop_inherited((garb_prop_t)prop);
     for (const os64_html_node_t *n = c->element; n != NULL && n->kind == OS64_HTML_ELEMENT; n = n->parent) {
         garb_style_t st = garb_style_for(cascade, n);
-        for (int32_t i = 0; i < st.n; i++) {
-            if ((int32_t)st.sets[i].prop != prop || st.sets[i].value.kind == GARB_V_WIDE)
-                continue;
-            char b[512];
-            size_t len = garb_val_dump(&st.sets[i].value, b, sizeof(b));
-            put(o, b, len < sizeof(b) ? len : sizeof(b) - 1);
+        const garb_val_t *won = NULL;
+        for (int32_t i = 0; i < st.n && won == NULL; i++)
+            if ((int32_t)st.sets[i].prop == prop)
+                won = &st.sets[i].value;
+        if (won == NULL) {
+            if (!inherited)
+                return false;
+            continue;
+        }
+        if (won->kind != GARB_V_WIDE) {
+            put_value(o, won);
             return true;
         }
-        if (!garb_prop_inherited((garb_prop_t)prop))
+        bool from_parent = os64_streq(won->keyword, "inherit") ||
+                           (!os64_streq(won->keyword, "initial") && inherited);
+        if (!from_parent)
             return false;
     }
     return false;

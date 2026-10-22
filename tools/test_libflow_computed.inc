@@ -267,3 +267,75 @@ static void computed_cases(void)
     flow_free(tree);
     sheeted_close(&p);
 }
+
+// Codex's round on slice 1b: a hidden descendant's rem reads the root's
+// font size; the CSS-wide keywords on a property libflow does not model
+// mean what the cascade gives them; and a declared value of any length is
+// written whole.
+static void computed_round1_cases(void)
+{
+    static char page[2048];
+    char longname[701];
+    memset(longname, 'a', 700);
+    longname[700] = '\0';
+    snprintf(page, sizeof(page),
+             "<!doctype html><style>html{font-size:20px}body{margin:0}#h{display:none}"
+             "#r{margin-left:1rem;text-indent:2rem}#p{font-variant:small-caps}#ci{font-variant:initial}"
+             "#cu{font-variant:unset}#cn{font-variant:inherit}#cr{font-variant:revert}"
+             "#ul{list-style-image:url(b.png)}#ii{list-style-image:initial}#long{list-style-image:url(%s.png)}"
+             "</style><div id=h><p id=r>x</p></div><div id=p><span id=ci>a</span><span id=cu>b</span>"
+             "<span id=cn>c</span><span id=cr>d</span><span id=plain>e</span></div>"
+             "<ul id=ul><li id=ii>a</li><li id=il>b</li></ul><ul id=long><li>c</li></ul>",
+             longname);
+    Sheeted p;
+    sheeted_open(&p, page, 800, 600);
+    flow_tree_t *tree = flow_layout(p.doc, p.page, 800, &p.env);
+    expect("computed round 1: the page lays out", tree != NULL, NULL);
+    if (tree == NULL) {
+        sheeted_close(&p);
+        return;
+    }
+    const os64_html_node_t *root = p.doc->document;
+    flow_computed_t *c = flow_computed_new(tree, &p.env, computed_find(root, "r"), NULL);
+    computed_is(c, "computed: a hidden descendant's rem is the root's font size", GARB_MARGIN_LEFT, "20px");
+    computed_is(c, "computed: and so is every rem it has", GARB_TEXT_INDENT, "40px");
+    flow_computed_free(c);
+    static const struct { const char *id, *want, *what; } kVariant[] = {
+        {"ci", "normal", "computed: `initial` is the initial value, not an ancestor's"},
+        {"cu", "small-caps", "computed: `unset` on an inherited property inherits"},
+        {"cn", "small-caps", "computed: `inherit` inherits"},
+        {"cr", "small-caps", "computed: `revert` goes back to the user agent's, which is `unset`"},
+        {"plain", "small-caps", "computed: no winner on an inherited property inherits"},
+    };
+    for (size_t i = 0; i < sizeof(kVariant) / sizeof(kVariant[0]); i++) {
+        c = flow_computed_new(tree, &p.env, computed_find(root, kVariant[i].id), NULL);
+        computed_is(c, kVariant[i].what, GARB_FONT_VARIANT, kVariant[i].want);
+        flow_computed_free(c);
+    }
+    c = flow_computed_new(tree, &p.env, computed_find(root, "ii"), NULL);
+    computed_is(c, "computed: `initial` list-style-image is none", GARB_LIST_STYLE_IMAGE, "none");
+    flow_computed_free(c);
+    // A declared value past any fixed buffer: whole, at the length it
+    // needs, and the same text read again with room.
+    const os64_html_node_t *ul = computed_find(root, "long");
+    c = ul != NULL ? flow_computed_new(tree, &p.env, ul->first_child, NULL) : NULL;
+    size_t need = c != NULL ? flow_computed_text(c, GARB_LIST_STYLE_IMAGE, NULL, 0) : 0;
+    char *whole = malloc(need + 1);
+    size_t again = whole != NULL ? flow_computed_text(c, GARB_LIST_STYLE_IMAGE, whole, need + 1) : 0;
+    char want_tail[16];
+    snprintf(want_tail, sizeof(want_tail), "a.png)");
+    expect("computed: a long declared value is written whole",
+           whole != NULL && need > 700 && again == need && strlen(whole) == need &&
+               strstr(whole, longname) != NULL && strcmp(whole + need - strlen(want_tail), want_tail) == 0,
+           whole);
+    if (c != NULL && need > 0) {
+        char cut[64];
+        size_t short_read = flow_computed_text(c, GARB_LIST_STYLE_IMAGE, cut, sizeof(cut));
+        expect("computed: and a short buffer is told the whole length", short_read == need &&
+               strlen(cut) == sizeof(cut) - 1 && strncmp(cut, whole, sizeof(cut) - 1) == 0, cut);
+    }
+    free(whole);
+    flow_computed_free(c);
+    flow_free(tree);
+    sheeted_close(&p);
+}

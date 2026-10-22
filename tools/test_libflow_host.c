@@ -1503,6 +1503,7 @@ int main(int argc, char **argv)
     cliptext_cases();
     motion_cases();
     computed_cases();
+    computed_round1_cases();
     fixed_cases();
     paint_cases();
     decoration_colour_cases();

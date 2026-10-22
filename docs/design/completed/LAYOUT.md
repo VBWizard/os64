@@ -183,7 +183,8 @@ an absolute one's against its containing block), a line height that is
 not `normal`, a transform and its origin. An element pass 1 did not reach
 (inside a `display: none`) is styled for the asking against the same
 environment; a property libflow does not model reads what the page's
-sheets declared for it, or nothing. `flow.h` holds the contract.
+sheets declared for it, the CSS-wide keywords meaning what the cascade
+gives them, or its initial value. `flow.h` holds the contract.
 
 ## The three passes
 

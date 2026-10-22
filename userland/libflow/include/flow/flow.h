@@ -1371,8 +1371,11 @@ int64_t flow_dump(const flow_tree_t *tree, char *out, size_t cap);
 // not reach, one inside a `display: none` element, is styled for the
 // asking with `env`, which must be the environment `tree` was laid out
 // with, its cascade alive. A property libflow does not model is what the
-// page's sheets declared for it (on the element, or for an inherited one
-// on its nearest ancestor that declares it), as libgarb writes a value, or
+// page's sheets declared for it, as libgarb writes a value, whole at any
+// length: on the element, or on the ancestors its value comes from — an
+// inherited property's nearest declaring one, and any property's parent
+// through `inherit`, or `unset` (`revert`, `revert-layer`) on an inherited
+// property — or its initial value, which is the property's own word or
 // nothing. `url` resolves a url() a sheet wrote as the face fetches it; a
 // url it leaves (NULL, or false) is written as the sheet wrote it.
 typedef struct flow_computed flow_computed_t;
