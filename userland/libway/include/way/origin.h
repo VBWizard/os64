@@ -110,8 +110,14 @@ bool way_header_next(const char *block, size_t len, size_t *at, way_header_t *h)
 
 // The CORS-unsafe request-header names of an author header block, lowercased,
 // deduplicated, sorted bytewise and joined by "," (§ 4.8's spelling), into
-// `out`. The count of names; -1 when they do not fit in `cap`.
+// `out` (NULL counts them). The count of names; -1 when they do not fit in
+// `cap`, or memory ran out, which a caller reads as "there are some".
 int32_t way_cors_unsafe_names(const char *block, size_t len, char *out, size_t cap);
+
+// The most elements a response's Access-Control-Allow-Methods, -Allow-
+// Headers or -Expose-Headers is read for; a longer list is judged as one
+// that does not parse (no grant, nothing exposed).
+#define WAY_CORS_LIST_MAX 1024
 
 // ── MIME types (MIME Sniffing § 4.4, the strict parser) ────────────────
 

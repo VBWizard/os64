@@ -14,7 +14,7 @@ cleanup() {
 trap cleanup EXIT
 
 . tools/host_build.sh
-host_flags=(-std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all
+host_flags=(-std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all -DWAY_ORIGIN_STEPS
             -I userland/libway/include -I userland/libos64/include -I abi/include)
 host_sources=(tools/test_way_origin_host.c userland/libway/origin.c
               userland/libos64/url.c userland/libos64/str.c userland/libos64/fmt.c)

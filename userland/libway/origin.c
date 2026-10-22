@@ -11,6 +11,20 @@
 
 // ── Text ────────────────────────────────────────────────────────────────
 
+// A page sizes a request's headers and a server a response's, and no script
+// budget can interrupt C, so the work over either is counted where it is
+// done: tools/test_way_origin_host.c defines WAY_ORIGIN_STEPS and holds the
+// count to n log n at sizes past every cap. Nothing else counts.
+#ifdef WAY_ORIGIN_STEPS
+extern uint64_t way_origin_steps;
+#endif
+static inline void step(void)
+{
+#ifdef WAY_ORIGIN_STEPS
+    way_origin_steps++;
+#endif
+}
+
 static char lower(char c)
 {
     return c >= 'A' && c <= 'Z' ? (char)(c - 'A' + 'a') : c;
@@ -23,6 +37,7 @@ static char upper(char c)
 
 static bool same_nocase(const char *a, size_t alen, const char *b, size_t blen)
 {
+    step();
     if (alen != blen)
         return false;
     for (size_t i = 0; i < alen; i++)
@@ -38,12 +53,14 @@ static bool is_nocase(const char *a, size_t alen, const char *word)
 
 static bool same_bytes(const char *a, size_t alen, const char *b, size_t blen)
 {
+    step();
     return alen == blen && os64_memcmp(a, b, alen) == 0;
 }
 
 // Bytewise order of two names, case folded: <0, 0, >0.
 static int32_t order_nocase(const char *a, size_t alen, const char *b, size_t blen)
 {
+    step();
     for (size_t i = 0; i < alen && i < blen; i++) {
         unsigned char x = (unsigned char)lower(a[i]), y = (unsigned char)lower(b[i]);
         if (x != y)
@@ -487,6 +504,7 @@ bool way_header_non_wildcard(const char *name, size_t nlen)
 
 bool way_header_next(const char *block, size_t len, size_t *at, way_header_t *h)
 {
+    step();
     if (block == NULL || *at >= len)
         return false;
     const char *p = block + *at, *end = block + len;
@@ -527,46 +545,93 @@ static bool safelist_overflows(const char *block, size_t len)
     return total > 1024;
 }
 
+// ── Names, sorted ───────────────────────────────────────────────────────
+//
+// A page sizes a request's header list and a server a response's, and no
+// script budget can interrupt C, so every walk over either is n log n at
+// worst: names are gathered once, sorted once, and searched.
+
+typedef struct {
+    const char *p;
+    size_t n;
+} Span;
+
+// Bottom-up merge sort of `n` spans by case-folded bytes, through `scratch`
+// (room for `n`): n log n whatever order they arrive in.
+static void spans_sort(Span *s, Span *scratch, size_t n)
+{
+    for (size_t width = 1; width < n; width *= 2) {
+        for (size_t lo = 0; lo < n; lo += 2 * width) {
+            size_t mid = lo + width < n ? lo + width : n;
+            size_t hi = lo + 2 * width < n ? lo + 2 * width : n;
+            size_t i = lo, j = mid, k = lo;
+            while (i < mid && j < hi)
+                scratch[k++] = order_nocase(s[j].p, s[j].n, s[i].p, s[i].n) < 0 ? s[j++] : s[i++];
+            while (i < mid)
+                scratch[k++] = s[i++];
+            while (j < hi)
+                scratch[k++] = s[j++];
+        }
+        os64_memcpy(s, scratch, n * sizeof(*s));
+    }
+}
+
+// The first of the sorted `s` not ordered before `want`, case folded.
+static size_t spans_lower_bound(const Span *s, size_t n, const char *want, size_t len)
+{
+    size_t lo = 0, hi = n;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (order_nocase(s[mid].p, s[mid].n, want, len) < 0)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return lo;
+}
+
 int32_t way_cors_unsafe_names(const char *block, size_t len, char *out, size_t cap)
 {
-    bool overflow = safelist_overflows(block, len);
-    // The sorted-lowercase set, emitted smallest first: each round takes the
-    // least name greater than the last one written. A block is bounded by
-    // its caller, so the rounds are too, and nothing is allocated.
-    const char *last = NULL;
-    size_t last_len = 0, used = 0;
-    int32_t count = 0;
     if (out != NULL && cap > 0)
         out[0] = '\0';
-    for (;;) {
-        const char *best = NULL;
-        size_t best_len = 0, at = 0;
-        way_header_t h;
-        while (way_header_next(block, len, &at, &h)) {
-            if (!unsafe_name(&h, overflow))
-                continue;
-            if (last != NULL && order_nocase(h.name, h.name_len, last, last_len) <= 0)
-                continue;
-            if (best == NULL || order_nocase(h.name, h.name_len, best, best_len) < 0) {
-                best = h.name;
-                best_len = h.name_len;
-            }
-        }
-        if (best == NULL)
-            return count;
+    bool overflow = safelist_overflows(block, len);
+    size_t n = 0, at = 0;
+    way_header_t h;
+    while (way_header_next(block, len, &at, &h))
+        if (unsafe_name(&h, overflow))
+            n++;
+    if (n == 0)
+        return 0;
+    Span *s = os64_malloc(2 * n * sizeof(Span));
+    if (s == NULL)
+        return -1;
+    size_t k = 0;
+    at = 0;
+    while (way_header_next(block, len, &at, &h))
+        if (unsafe_name(&h, overflow))
+            s[k++] = (Span){h.name, h.name_len};
+    spans_sort(s, s + n, n);
+    // The sorted-lowercase set: each name once, smallest first.
+    int32_t count = 0;
+    size_t used = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (i > 0 && order_nocase(s[i].p, s[i].n, s[i - 1].p, s[i - 1].n) == 0)
+            continue;
         if (out != NULL) {
-            if (used + (count > 0) + best_len + 1 > cap)
+            if (used + (count > 0) + s[i].n + 1 > cap) {
+                os64_free(s);
                 return -1;
+            }
             if (count > 0)
                 out[used++] = ',';
-            for (size_t i = 0; i < best_len; i++)
-                out[used++] = lower(best[i]);
+            for (size_t j = 0; j < s[i].n; j++)
+                out[used++] = lower(s[i].p[j]);
             out[used] = '\0';
         }
         count++;
-        last = best;
-        last_len = best_len;
     }
+    os64_free(s);
+    return count;
 }
 
 // ── MIME types ──────────────────────────────────────────────────────────
@@ -770,7 +835,7 @@ bool way_preflight_capable(const way_request_t *r)
 {
     return r->tainting == WAY_TAINT_CORS &&
            (r->preflight_flag || !way_method_safelisted(r->method) ||
-            way_cors_unsafe_names(r->headers, r->headers_len, NULL, 0) > 0);
+            way_cors_unsafe_names(r->headers, r->headers_len, NULL, 0) != 0);
 }
 
 bool way_credentials_included(const way_request_t *r)
@@ -961,6 +1026,7 @@ static void list_start(ListWalk *w, const way_response_t *resp, const char *name
 static bool list_next(ListWalk *w, const char **item, size_t *len, bool *bad)
 {
     for (;;) {
+        step();
         if (!w->in_line) {
             way_header_t h;
             bool found = false;
@@ -1000,37 +1066,72 @@ static bool list_next(ListWalk *w, const char **item, size_t *len, bool *bad)
     }
 }
 
-static ListResult list_check(const way_response_t *resp, const char *name)
+// A response's list, read once: its verdict, and its elements sorted (case
+// folded) for searching. ABSENT, OK, or FAILURE: an element that is not a
+// token, a line that could not be read, more than WAY_CORS_LIST_MAX
+// elements, or no memory to hold them, each read the restrictive way.
+typedef struct {
+    ListResult result;
+    Span *items;
+    size_t n;
+} Names;
+
+static void names_free(Names *l)
 {
+    os64_free(l->items);
+    l->items = NULL;
+    l->n = 0;
+}
+
+static void names_read(const way_response_t *resp, const char *name, Names *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    out->result = LIST_FAILURE;
     if (omitted(resp, name))
-        return LIST_FAILURE;
-    ListWalk w;
-    list_start(&w, resp, name);
-    const char *item;
-    size_t len;
-    bool bad = false, any_line = false;
-    size_t at = 0;
+        return;
+    size_t lines = 0, at = 0;
     way_header_t h;
     while (way_header_next(resp->headers, resp->headers_len, &at, &h))
         if (is_nocase(h.name, h.name_len, name))
-            any_line = true;
-    if (!any_line)
-        return LIST_ABSENT;
-    while (list_next(&w, &item, &len, &bad))
-        ;
-    return bad ? LIST_FAILURE : LIST_OK;
-}
-
-static bool list_has(const way_response_t *resp, const char *name, const char *want, size_t want_len,
-                     bool nocase)
-{
+            lines++;
+    if (lines == 0) {
+        out->result = LIST_ABSENT;
+        return;
+    }
     ListWalk w;
     list_start(&w, resp, name);
     const char *item;
-    size_t len;
+    size_t len, n = 0;
     bool bad = false;
-    while (list_next(&w, &item, &len, &bad))
-        if (nocase ? same_nocase(item, len, want, want_len) : same_bytes(item, len, want, want_len))
+    while (list_next(&w, &item, &len, &bad) && !bad && n <= WAY_CORS_LIST_MAX)
+        n++;
+    if (bad || n > WAY_CORS_LIST_MAX)
+        return;
+    out->result = LIST_OK;
+    if (n == 0)
+        return;
+    Span *s = os64_malloc(2 * n * sizeof(Span));
+    if (s == NULL) {
+        out->result = LIST_FAILURE;
+        return;
+    }
+    list_start(&w, resp, name);
+    for (size_t k = 0; k < n && list_next(&w, &item, &len, &bad); k++)
+        s[k] = (Span){item, len};
+    spans_sort(s, s + n, n);
+    out->items = s;
+    out->n = n;
+}
+
+// Whether the list names `want`: case folded, or (for methods, which are
+// case-sensitive) byte for byte.
+static bool names_has(const Names *l, const char *want, size_t len, bool nocase)
+{
+    if (l->result != LIST_OK)
+        return false;
+    for (size_t i = spans_lower_bound(l->items, l->n, want, len);
+         i < l->n && same_nocase(l->items[i].p, l->items[i].n, want, len); i++)
+        if (nocase || same_bytes(l->items[i].p, l->items[i].n, want, len))
             return true;
     return false;
 }
@@ -1062,16 +1163,21 @@ bool way_preflight_lines(const way_request_t *r, char *out, size_t cap)
     if (n <= 0 || (size_t)n >= cap)
         return false;
     size_t used = (size_t)n;
+    // The names go straight after their header's name; with none, the
+    // header is taken back off.
     static const char kHeaders[] = "Access-Control-Request-Headers: ";
-    int32_t names = way_cors_unsafe_names(r->headers, r->headers_len, NULL, 0);
-    if (names <= 0)
-        return true;
     if (used + sizeof(kHeaders) - 1 >= cap)
         return false;
     os64_memcpy(out + used, kHeaders, sizeof(kHeaders) - 1);
-    used += sizeof(kHeaders) - 1;
-    if (way_cors_unsafe_names(r->headers, r->headers_len, out + used, cap - used) < 0)
+    int32_t names = way_cors_unsafe_names(r->headers, r->headers_len, out + used + sizeof(kHeaders) - 1,
+                                          cap - used - (sizeof(kHeaders) - 1));
+    if (names < 0)
         return false;
+    if (names == 0) {
+        out[used] = '\0';
+        return true;
+    }
+    used += sizeof(kHeaders) - 1;
     used += os64_strlen(out + used);
     if (used + 3 > cap)
         return false;
@@ -1107,45 +1213,62 @@ static uint32_t max_age_of(const way_response_t *resp)
     return v > WAY_PREFLIGHT_AGE_MAX ? WAY_PREFLIGHT_AGE_MAX : (uint32_t)v;
 }
 
-bool way_preflight_judge(const way_request_t *r, const way_response_t *resp, uint32_t *max_age)
+// § 4.8's judgement over lists already read.
+static bool preflight_allows(const way_request_t *r, const Names *methods, const Names *names)
 {
-    *max_age = 0;
-    if (!way_cors_check(r, resp) || resp->status < 200 || resp->status > 299)
-        return false;
-    ListResult methods = list_check(resp, "access-control-allow-methods");
-    ListResult names = list_check(resp, "access-control-allow-headers");
-    if (methods == LIST_FAILURE || names == LIST_FAILURE)
+    if (methods->result == LIST_FAILURE || names->result == LIST_FAILURE)
         return false;
     bool include = r->credentials == WAY_CREDENTIALS_INCLUDE;
-    size_t mlen = os64_strlen(r->method);
     // A null method list with the use-CORS-preflight flag is « method ».
-    bool in_methods = methods == LIST_OK ? list_has(resp, "access-control-allow-methods", r->method, mlen, false)
-                                         : r->preflight_flag;
-    bool method_star = methods == LIST_OK && list_has(resp, "access-control-allow-methods", "*", 1, false);
+    bool in_methods = methods->result == LIST_OK ? names_has(methods, r->method, os64_strlen(r->method), false)
+                                                 : r->preflight_flag;
+    bool method_star = names_has(methods, "*", 1, false);
     if (!in_methods && !way_method_safelisted(r->method) && (include || !method_star))
         return false;
-    bool name_star = names == LIST_OK && list_has(resp, "access-control-allow-headers", "*", 1, false);
+    bool name_star = names_has(names, "*", 1, false);
     size_t at = 0;
     way_header_t h;
     bool overflow = safelist_overflows(r->headers, r->headers_len);
     while (way_header_next(r->headers, r->headers_len, &at, &h)) {
-        bool named = names == LIST_OK &&
-                     list_has(resp, "access-control-allow-headers", h.name, h.name_len, true);
+        bool named = names_has(names, h.name, h.name_len, true);
         if (way_header_non_wildcard(h.name, h.name_len) && !named)
             return false;
         if (unsafe_name(&h, overflow) && !named && (include || !name_star))
             return false;
     }
-    *max_age = max_age_of(resp);
     return true;
 }
 
+bool way_preflight_judge(const way_request_t *r, const way_response_t *resp, uint32_t *max_age)
+{
+    *max_age = 0;
+    if (!way_cors_check(r, resp) || resp->status < 200 || resp->status > 299)
+        return false;
+    Names methods, names;
+    names_read(resp, "access-control-allow-methods", &methods);
+    names_read(resp, "access-control-allow-headers", &names);
+    bool allowed = preflight_allows(r, &methods, &names);
+    names_free(&methods);
+    names_free(&names);
+    if (allowed)
+        *max_age = max_age_of(resp);
+    return allowed;
+}
+
 // ── The preflight cache ─────────────────────────────────────────────────
+//
+// A grant is one method or header name for one key. Grants of one key share
+// a number, found once per call by comparing whole keys, so a call compares
+// at most the cap's worth of keys, and then only numbers and short names,
+// however many names an answer lists (WAY_CORS_LIST_MAX bounds those).
 
 typedef struct {
     char *key;                  // partition, '\n', request origin, '\n', URL; one allocation with `item`
     size_t key_len;
+    uint64_t key_hash;
+    uint32_t key_id;            // the same for every grant of one key
     char *item;                 // the method, or the header name
+    size_t item_len;
     bool method;
     bool credentials;
     uint64_t expires_ms;
@@ -1155,6 +1278,7 @@ struct way_preflight {
     os64_lock_t lock;
     Grant grants[WAY_PREFLIGHT_ENTRIES_MAX];
     int32_t n;
+    uint32_t next_id;
 };
 
 // An entry's key, in three pieces, so that looking one up allocates nothing:
@@ -1164,8 +1288,19 @@ typedef struct {
     char partition[WAY_ORIGIN_TEXT_MAX + 24];
     char origin[WAY_ORIGIN_TEXT_MAX];
     const char *url;
-    size_t partition_len, origin_len, url_len;
+    size_t partition_len, origin_len, url_len, len;
+    uint64_t hash;
 } Key;
+
+// FNV-1a, over the key's bytes as one string.
+static uint64_t hash_bytes(uint64_t h, const char *p, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        h ^= (unsigned char)p[i];
+        h *= 1099511628211ull;
+    }
+    return h;
+}
 
 static bool key_of(const way_request_t *r, const char *url, Key *k)
 {
@@ -1179,18 +1314,34 @@ static bool key_of(const way_request_t *r, const char *url, Key *k)
     k->partition_len = os64_strlen(k->partition);
     k->origin_len = os64_strlen(k->origin);
     k->url_len = os64_strlen(url);
+    k->len = k->partition_len + 1 + k->origin_len + 1 + k->url_len;
+    uint64_t h = hash_bytes(14695981039346656037ull, k->partition, k->partition_len);
+    h = hash_bytes(h, "\n", 1);
+    h = hash_bytes(h, k->origin, k->origin_len);
+    h = hash_bytes(h, "\n", 1);
+    k->hash = hash_bytes(h, url, k->url_len);
     return true;
 }
 
 static bool key_is(const Grant *g, const Key *k)
 {
-    if (g->key_len != k->partition_len + 1 + k->origin_len + 1 + k->url_len)
+    step();
+    if (g->key_hash != k->hash || g->key_len != k->len)
         return false;
     const char *p = g->key;
     return os64_memcmp(p, k->partition, k->partition_len) == 0 && p[k->partition_len] == '\n' &&
            os64_memcmp(p + k->partition_len + 1, k->origin, k->origin_len) == 0 &&
            p[k->partition_len + 1 + k->origin_len] == '\n' &&
            os64_memcmp(p + k->partition_len + 1 + k->origin_len + 1, k->url, k->url_len) == 0;
+}
+
+// The number the key's grants share, 0 when it has none.
+static uint32_t key_find(const way_preflight_t *c, const Key *k)
+{
+    for (int32_t i = 0; i < c->n; i++)
+        if (key_is(&c->grants[i], k))
+            return c->grants[i].key_id;
+    return 0;
 }
 
 way_preflight_t *way_preflight_new(void)
@@ -1222,31 +1373,33 @@ static void expire(way_preflight_t *c, uint64_t now_ms)
             i++;
 }
 
-// § 4.9 "cache entry match".
-static bool grant_matches(const Grant *g, const Key *k, bool include)
+// § 4.9 "cache entry match", for grants of the key numbered `id`.
+static bool grant_matches(const Grant *g, uint32_t id, bool include)
 {
-    return key_is(g, k) && (g->credentials || !include);
+    step();
+    return id != 0 && g->key_id == id && (g->credentials || !include);
 }
 
-static bool method_cached(const way_preflight_t *c, const Key *k, bool include, const char *method)
+static bool method_cached(const way_preflight_t *c, uint32_t id, bool include, const char *method)
 {
+    size_t len = os64_strlen(method);
     for (int32_t i = 0; i < c->n; i++) {
         const Grant *g = &c->grants[i];
-        if (g->method && grant_matches(g, k, include) &&
-            (os64_streq(g->item, method) || os64_streq(g->item, "*")))
+        if (g->method && grant_matches(g, id, include) &&
+            (same_bytes(g->item, g->item_len, method, len) || same_bytes(g->item, g->item_len, "*", 1)))
             return true;
     }
     return false;
 }
 
-static bool name_cached(const way_preflight_t *c, const Key *k, bool include, const char *name, size_t len)
+static bool name_cached(const way_preflight_t *c, uint32_t id, bool include, const char *name, size_t len)
 {
     for (int32_t i = 0; i < c->n; i++) {
         const Grant *g = &c->grants[i];
-        if (g->method || !grant_matches(g, k, include))
+        if (g->method || !grant_matches(g, id, include))
             continue;
-        if (same_nocase(g->item, os64_strlen(g->item), name, len) ||
-            (os64_streq(g->item, "*") && !way_header_non_wildcard(name, len)))
+        if (same_nocase(g->item, g->item_len, name, len) ||
+            (same_bytes(g->item, g->item_len, "*", 1) && !way_header_non_wildcard(name, len)))
             return true;
     }
     return false;
@@ -1261,35 +1414,53 @@ bool way_preflight_needed(way_preflight_t *cache, const way_request_t *r, const 
     bool include = r->credentials == WAY_CREDENTIALS_INCLUDE;
     os64_lock_acquire(&cache->lock);
     expire(cache, now_ms);
-    bool needed = !method_cached(cache, &k, include, r->method) &&
+    uint32_t id = key_find(cache, &k);
+    bool needed = !method_cached(cache, id, include, r->method) &&
                   (!way_method_safelisted(r->method) || r->preflight_flag);
     bool overflow = safelist_overflows(r->headers, r->headers_len);
     size_t at = 0;
     way_header_t h;
     while (!needed && way_header_next(r->headers, r->headers_len, &at, &h))
-        if (unsafe_name(&h, overflow) && !name_cached(cache, &k, include, h.name, h.name_len))
+        if (unsafe_name(&h, overflow) && !name_cached(cache, id, include, h.name, h.name_len))
             needed = true;
     os64_lock_release(&cache->lock);
     return needed;
 }
 
-// One grant kept: an existing one for the same key, kind and item has its
-// lifetime set; else a new one, past the cap evicting the soonest to expire.
-// A grant there is no memory for is not kept, and is asked for again.
-static void grant_put(way_preflight_t *c, const Key *k, bool method, bool credentials, const char *item,
-                      size_t item_len, uint64_t expires_ms)
+// A number no live grant has: 0 means "none", and after the counter wraps a
+// number still in use would make two keys one. At most the cap's worth of
+// numbers are in use, so the search ends within that many steps.
+static uint32_t id_new(way_preflight_t *c)
 {
-    for (int32_t i = 0; i < c->n; i++) {
+    for (;;) {
+        if (++c->next_id == 0)
+            c->next_id = 1;
+        bool used = false;
+        for (int32_t i = 0; i < c->n && !used; i++)
+            used = c->grants[i].key_id == c->next_id;
+        if (!used)
+            return c->next_id;
+    }
+}
+
+// One grant kept for the key numbered `*id` (0: the key has none yet, and
+// gets its number here): an existing one of the same kind and item has its
+// lifetime set; else a new one, past the cap evicting the soonest to
+// expire. A grant there is no memory for is not kept, and is asked for again.
+static void grant_put(way_preflight_t *c, const Key *k, uint32_t *id, bool method, bool credentials,
+                      const char *item, size_t item_len, uint64_t expires_ms)
+{
+    for (int32_t i = 0; *id != 0 && i < c->n; i++) {
         Grant *g = &c->grants[i];
-        if (g->method == method && g->credentials == credentials && key_is(g, k) &&
-            (method ? same_bytes(g->item, os64_strlen(g->item), item, item_len)
-                    : same_nocase(g->item, os64_strlen(g->item), item, item_len))) {
+        step();
+        if (g->key_id == *id && g->method == method && g->credentials == credentials &&
+            (method ? same_bytes(g->item, g->item_len, item, item_len)
+                    : same_nocase(g->item, g->item_len, item, item_len))) {
             g->expires_ms = expires_ms;
             return;
         }
     }
-    size_t key_len = k->partition_len + 1 + k->origin_len + 1 + k->url_len;
-    char *block = os64_malloc(key_len + 1 + item_len + 1);
+    char *block = os64_malloc(k->len + 1 + item_len + 1);
     if (block == NULL)
         return;
     if (c->n == WAY_PREFLIGHT_ENTRIES_MAX) {
@@ -1299,6 +1470,8 @@ static void grant_put(way_preflight_t *c, const Key *k, bool method, bool creden
                 soonest = i;
         grant_drop(c, soonest);
     }
+    if (*id == 0)
+        *id = id_new(c);
     char *p = block;
     os64_memcpy(p, k->partition, k->partition_len);
     p += k->partition_len;
@@ -1313,8 +1486,11 @@ static void grant_put(way_preflight_t *c, const Key *k, bool method, bool creden
     p[item_len] = '\0';
     Grant *g = &c->grants[c->n++];
     g->key = block;
-    g->key_len = key_len;
+    g->key_len = k->len;
+    g->key_hash = k->hash;
+    g->key_id = *id;
     g->item = p;
+    g->item_len = item_len;
     g->method = method;
     g->credentials = credentials;
     g->expires_ms = expires_ms;
@@ -1328,30 +1504,30 @@ void way_preflight_store(way_preflight_t *cache, const way_request_t *r, const c
         return;
     bool include = r->credentials == WAY_CREDENTIALS_INCLUDE;
     uint64_t expires = now_ms + (uint64_t)max_age * 1000u;
+    // Read outside the lock: it allocates, and the lock is held only to
+    // touch the grants.
+    Names lists[2];
+    names_read(resp, "access-control-allow-methods", &lists[0]);
+    names_read(resp, "access-control-allow-headers", &lists[1]);
     os64_lock_acquire(&cache->lock);
     expire(cache, now_ms);
+    uint32_t id = key_find(cache, &k);
     // A `*` is kept as an uncredentialed grant whatever this request was: the
     // standard's match would otherwise let a `*` from a credentialed answer
     // that also named one method stand in for a method it never named.
-    static const char *const kLists[2] = {"access-control-allow-methods", "access-control-allow-headers"};
     for (int32_t which = 0; which < 2; which++) {
         bool method = which == 0;
-        if (method && list_check(resp, kLists[0]) == LIST_ABSENT) {
-            if (r->preflight_flag)
-                grant_put(cache, &k, true, include, r->method, os64_strlen(r->method), expires);
-            continue;
-        }
-        ListWalk w;
-        list_start(&w, resp, kLists[which]);
-        const char *item;
-        size_t len;
-        bool bad = false;
-        while (list_next(&w, &item, &len, &bad)) {
-            bool star = len == 1 && item[0] == '*';
-            grant_put(cache, &k, method, include && !star, item, len, expires);
+        if (method && lists[0].result == LIST_ABSENT && r->preflight_flag)
+            grant_put(cache, &k, &id, true, include, r->method, os64_strlen(r->method), expires);
+        for (size_t i = 0; lists[which].result == LIST_OK && i < lists[which].n; i++) {
+            const Span *item = &lists[which].items[i];
+            bool star = item->n == 1 && item->p[0] == '*';
+            grant_put(cache, &k, &id, method, include && !star, item->p, item->n, expires);
         }
     }
     os64_lock_release(&cache->lock);
+    names_free(&lists[0]);
+    names_free(&lists[1]);
 }
 
 void way_preflight_clear(way_preflight_t *cache, const way_request_t *r, const char *url)
@@ -1360,8 +1536,9 @@ void way_preflight_clear(way_preflight_t *cache, const way_request_t *r, const c
     if (cache == NULL || !key_of(r, url, &k))
         return;
     os64_lock_acquire(&cache->lock);
-    for (int32_t i = 0; i < cache->n;)
-        if (key_is(&cache->grants[i], &k))
+    uint32_t id = key_find(cache, &k);
+    for (int32_t i = 0; id != 0 && i < cache->n;)
+        if (cache->grants[i].key_id == id)
             grant_drop(cache, i);
         else
             i++;
@@ -1491,15 +1668,13 @@ size_t way_response_headers(const way_request_t *r, way_type_t type, const way_r
     if (type != WAY_TYPE_BASIC && type != WAY_TYPE_CORS)
         return 0;
     // § 4.1: the CORS-exposed header-name list. A list that cannot be read
-    // or does not parse exposes nothing beyond the safelisted names.
-    bool expose_all = false, use_list = false;
+    // or does not parse (Names' FAILURE) exposes nothing beyond the
+    // safelisted names.
+    Names exposed = {.result = LIST_ABSENT};
+    bool expose_all = false;
     if (type == WAY_TYPE_CORS) {
-        ListResult names = list_check(resp, "access-control-expose-headers");
-        if (names == LIST_OK) {
-            use_list = true;
-            expose_all = r->credentials != WAY_CREDENTIALS_INCLUDE &&
-                         list_has(resp, "access-control-expose-headers", "*", 1, false);
-        }
+        names_read(resp, "access-control-expose-headers", &exposed);
+        expose_all = r->credentials != WAY_CREDENTIALS_INCLUDE && names_has(&exposed, "*", 1, false);
     }
     size_t at = 0, used = 0;
     way_header_t h;
@@ -1510,12 +1685,14 @@ size_t way_response_headers(const way_request_t *r, way_type_t type, const way_r
         else if (type == WAY_TYPE_BASIC || always_safelisted_response(h.name, h.name_len) || expose_all)
             keep = true;
         else
-            keep = use_list && list_has(resp, "access-control-expose-headers", h.name, h.name_len, true);
+            keep = names_has(&exposed, h.name, h.name_len, true);
         if (!keep)
             continue;
         size_t line = h.name_len + 2 + h.value_len + 2;
-        if (used + line + 1 > cap)
+        if (used + line + 1 > cap) {
+            names_free(&exposed);
             return SIZE_MAX;
+        }
         os64_memcpy(out + used, h.name, h.name_len);
         used += h.name_len;
         out[used++] = ':';
@@ -1526,6 +1703,7 @@ size_t way_response_headers(const way_request_t *r, way_type_t type, const way_r
         out[used++] = '\n';
         out[used] = '\0';
     }
+    names_free(&exposed);
     return used;
 }
 

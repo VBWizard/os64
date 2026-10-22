@@ -1080,6 +1080,144 @@ static void mixed_content(void)
     expect("151 and blocked at the hop", hop(&q, "http://b.test/", &why) == WAY_HOP_REFUSED && why == WAY_REFUSE_MIXED, NULL);
 }
 
+// ── The work a page or a server sizes ───────────────────────────────────
+
+// origin.c counts its comparisons and line reads here (its step()). Each
+// case below builds the largest input the callers allow, or past it, and
+// holds the count to a multiple of n log n: a walk that went quadratic
+// would pass the bound by an order of magnitude, and no clock is read.
+uint64_t way_origin_steps;
+
+static uint64_t log2_of(uint64_t n)
+{
+    uint64_t l = 1;
+    while (n >>= 1)
+        l++;
+    return l;
+}
+
+static void bound(const char *name, uint64_t steps, uint64_t n, uint64_t per)
+{
+    char detail[96];
+    snprintf(detail, sizeof(detail), "%llu steps for n = %llu", (unsigned long long)steps, (unsigned long long)n);
+    expect(name, steps <= per * n * log2_of(n), detail);
+}
+
+static void bounds(void)
+{
+    // A request of distinct unsafe names filling an 8 KiB block (the job's
+    // cap, about 740 of them): sorted once, not once per name.
+    static char block[16384];
+    size_t used = 0;
+    int n = 0;
+    while (used + 16 < 8192) {
+        used += (size_t)snprintf(block + used, sizeof(block) - used, "X-%04d: 1\r\n", 9999 - n);
+        n++;
+    }
+    static char names[16384];
+    way_origin_steps = 0;
+    int32_t got = way_cors_unsafe_names(block, used, names, sizeof(names));
+    expect("bounds: every name", got == n, NULL);
+    bound("bounds: unsafe names are n log n", way_origin_steps, (uint64_t)n, 8);
+
+    // The preflight judged with every one of those names against an answer
+    // listing WAY_CORS_LIST_MAX names.
+    static char answer[65536];
+    size_t a = (size_t)snprintf(answer, sizeof(answer),
+                                "Access-Control-Allow-Origin: https://a.test\r\nAccess-Control-Allow-Methods: PUT\r\n"
+                                "Access-Control-Allow-Headers: ");
+    for (int i = 0; i < WAY_CORS_LIST_MAX; i++)
+        a += (size_t)snprintf(answer + a, sizeof(answer) - a, "%sx-%04d", i ? "," : "", 9999 - i);
+    a += (size_t)snprintf(answer + a, sizeof(answer) - a, "\r\n");
+    Req *q = calloc(1, sizeof(Req) + sizeof(block));
+    way_refusal_t why;
+    req(q, "https://a.test/", WAY_MODE_CORS, WAY_CREDENTIALS_SAME_ORIGIN, "PUT", "", "https://b.test/r");
+    q->r.headers = block;
+    q->r.headers_len = used;
+    hop(q, "https://b.test/r", &why);
+    way_response_t r = resp(200, answer);
+    uint32_t age;
+    way_origin_steps = 0;
+    bool judged = way_preflight_judge(&q->r, &r, &age);
+    expect("bounds: every name is in the answer", judged, NULL);
+    bound("bounds: a preflight judgement is n log n", way_origin_steps, (uint64_t)(n + WAY_CORS_LIST_MAX), 16);
+
+    // A list past the cap is a list that does not parse.
+    char *longer = malloc(sizeof(answer));
+    size_t l = (size_t)snprintf(longer, sizeof(answer), "Access-Control-Allow-Origin: https://a.test\r\n"
+                                                        "Access-Control-Allow-Methods: PUT, ");
+    for (int i = 0; i <= WAY_CORS_LIST_MAX; i++)
+        l += (size_t)snprintf(longer + l, sizeof(answer) - l, "M%d,", i);
+    snprintf(longer + l, sizeof(answer) - l, "\r\n");
+    Req small;
+    req(&small, "https://a.test/", WAY_MODE_CORS, WAY_CREDENTIALS_SAME_ORIGIN, "PUT", "", "https://b.test/r");
+    hop(&small, "https://b.test/r", &why);
+    small.r.headers = small.headers;
+    r = resp(200, longer);
+    expect("bounds: a list past WAY_CORS_LIST_MAX grants nothing", !way_preflight_judge(&small.r, &r, &age), NULL);
+    free(longer);
+
+    // The filter: the most lines a head has (HTTP_HEADERS_MAX, 128) against
+    // an exposed list at the cap.
+    static char head[65536];
+    size_t h = (size_t)snprintf(head, sizeof(head), "Access-Control-Expose-Headers: ");
+    for (int i = 0; i < WAY_CORS_LIST_MAX; i++)
+        h += (size_t)snprintf(head + h, sizeof(head) - h, "%sx-%04d", i ? "," : "", i);
+    h += (size_t)snprintf(head + h, sizeof(head) - h, "\r\n");
+    for (int i = 0; i < 127; i++)
+        h += (size_t)snprintf(head + h, sizeof(head) - h, "X-%04d: v\r\n", i * 7);
+    r = resp(200, head);
+    static char out[65536];
+    way_origin_steps = 0;
+    size_t kept = way_response_headers(&small.r, WAY_TYPE_CORS, &r, out, sizeof(out));
+    expect("bounds: exposed lines kept", kept != SIZE_MAX && strstr(out, "X-0007: v\r\n") != NULL, NULL);
+    bound("bounds: the filter is n log n", way_origin_steps, 128 + WAY_CORS_LIST_MAX, 16);
+
+    // The cache full, then an answer at both lists' caps stored into it.
+    way_preflight_t *c = way_preflight_new();
+    for (int i = 0; i < WAY_PREFLIGHT_ENTRIES_MAX; i++) {
+        char u[64];
+        snprintf(u, sizeof(u), "https://b.test/%d", i);
+        way_response_t one = resp(200, "Access-Control-Allow-Origin: https://a.test\r\nAccess-Control-Allow-Methods: PUT\r\n");
+        way_preflight_store(c, &small.r, u, &one, 600, 0);
+    }
+    size_t m = (size_t)snprintf(answer, sizeof(answer), "Access-Control-Allow-Origin: https://a.test\r\n"
+                                                        "Access-Control-Allow-Methods: ");
+    for (int i = 0; i < WAY_CORS_LIST_MAX; i++)
+        m += (size_t)snprintf(answer + m, sizeof(answer) - m, "%sM%d", i ? "," : "", i);
+    m += (size_t)snprintf(answer + m, sizeof(answer) - m, "\r\nAccess-Control-Allow-Headers: ");
+    for (int i = 0; i < WAY_CORS_LIST_MAX; i++)
+        m += (size_t)snprintf(answer + m, sizeof(answer) - m, "%sx-%d", i ? "," : "", i);
+    snprintf(answer + m, sizeof(answer) - m, "\r\n");
+    r = resp(200, answer);
+    way_origin_steps = 0;
+    way_preflight_store(c, &small.r, "https://b.test/big", &r, 600, 1);
+    expect("bounds: the cache stays at its cap", way_preflight_count(c) == WAY_PREFLIGHT_ENTRIES_MAX, NULL);
+    // Each of the 2,048 grants scans the cap's worth of grants once: linear
+    // in the answer, with the cap as its constant.
+    uint64_t grants = 2 * WAY_CORS_LIST_MAX;
+    char detail[96];
+    snprintf(detail, sizeof(detail), "%llu steps", (unsigned long long)way_origin_steps);
+    expect("bounds: storing is linear in the answer", way_origin_steps <= grants * (WAY_PREFLIGHT_ENTRIES_MAX * 3 + 64), detail);
+    way_origin_steps = 0;
+    q->r.headers = block;
+    way_preflight_needed(c, &q->r, "https://b.test/big", 2);
+    snprintf(detail, sizeof(detail), "%llu steps", (unsigned long long)way_origin_steps);
+    expect("bounds: asking is linear in the request", way_origin_steps <= (uint64_t)n * (WAY_PREFLIGHT_ENTRIES_MAX * 3 + 64), detail);
+    way_preflight_free(c);
+    free(q);
+
+    // MIME and the forbidden-header split are single passes over their text.
+    static char mime_text[70000];
+    size_t t = (size_t)snprintf(mime_text, sizeof(mime_text), "text/plain");
+    while (t + 16 < sizeof(mime_text))
+        t += (size_t)snprintf(mime_text + t, sizeof(mime_text) - t, ";a=\"b;c\"");
+    char e[WAY_MIME_ESSENCE_MAX], cs[WAY_MIME_CHARSET_MAX];
+    way_origin_steps = 0;
+    expect("bounds: a long MIME type parses", way_mime_parse(mime_text, t, e, sizeof(e), cs, sizeof(cs)), NULL);
+    bound("bounds: MIME parsing is linear", way_origin_steps, t, 2);
+}
+
 // ── Every allocation failed in turn ─────────────────────────────────────
 
 // What allocates: an origin (the parsed URL), a referrer, the cache's keys
@@ -1145,6 +1283,7 @@ int main(void)
     origin_headers();
     referrers();
     mixed_content();
+    bounds();
     sweep();
     expect("nothing leaked", live == 0, NULL);
     printf("way origin: %d checks, %d failed\n", checks, failures);
