@@ -856,10 +856,20 @@ static uint32_t word_pieces(L *l, Segs *s, const FItem *it, const char *text,
     if (os64_text_run_view(run, &v) != OS64_FONT_OK)
         return b0;
     bool collapsible = f_ws_collapses(style->white_space);
-    for (size_t k = 0; k < v.caret_count && !l->failed; k++) {
+    // The first caret past b0, found by halving: the carets are in byte
+    // order, and a run holds every word of its text, so a walk from the
+    // first caret for each word would be quadratic in the text.
+    size_t lo = 0, hi = v.caret_count;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (w0 + (uint32_t)v.carets[mid].byte_offset <= b0)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    for (size_t k = lo; k < v.caret_count && !l->failed; k++) {
         uint32_t at = w0 + (uint32_t)v.carets[k].byte_offset;
-        if (at <= b0)
-            continue;
+        l->out->piece_carets++;
         if (at >= b1)
             break;
         Seg *g = seg_add(l, s, SG_WORD);

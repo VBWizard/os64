@@ -914,6 +914,9 @@ typedef struct {
     // How many steps the exclusion spaces walked, read and moved (FLOATS.md
     // § Bounds): what the harness holds linear in the floats and lines.
     uint64_t float_walk;
+    // How many carets word_pieces stepped through cutting words at their
+    // characters: what the harness holds linear in the text.
+    uint64_t piece_carets;
     // The most table working memory held at once, which shares the arena's
     // budget: what the harness holds to it.
     size_t scratch_peak;

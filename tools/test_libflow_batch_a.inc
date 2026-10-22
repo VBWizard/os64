@@ -198,9 +198,53 @@ static void hostile_batch_a_cases(void)
     }
 }
 
+// Cutting words at their characters costs the text, not its square: a run
+// holds every word of its text, and word_pieces finds each word's first
+// caret by halving rather than walking from the run's start. 4,000 words
+// of `ab ` under break-all (laid out) and under anywhere in a float
+// (measured for min-content, then laid out): each word steps through its
+// cut and the caret that ends it, two a word each time the context is
+// measured. Walked from the start, it was about 8,000 for each word.
+static void piece_bounds(void)
+{
+    static const char *const kStyles[] = {
+        "<p style='word-break: break-all'>",
+        "<div style='float: left; overflow-wrap: anywhere'>",
+    };
+    size_t words = 4000;
+    for (size_t k = 0; k < 2; k++) {
+        char *html = malloc(words * 3 + 128);
+        strcpy(html, "<!doctype html>");
+        strcat(html, kStyles[k]);
+        size_t n = strlen(html);
+        for (size_t i = 0; i < words; i++, n += 3)
+            memcpy(html + n, "ab ", 3);
+        html[n] = '\0';
+        Sheeted p;
+        sheeted_open(&p, html, 800, 600);
+        FStyles *st = f_style_build(p.doc, p.page, &p.env);
+        FBoxes *bx = st != NULL ? f_boxes_build(p.doc, p.page, st, &p.env) : NULL;
+        FLayout *lay = bx != NULL ? f_layout(bx, p.doc, p.page, &p.env, 800) : NULL;
+        bool ok = lay != NULL && !lay->incomplete && lay->measures > 0 &&
+                  lay->piece_carets <= 2 * words * lay->measures;
+        expect(k == 0 ? "word-break: break-all cuts words in time linear in the text"
+                      : "overflow-wrap: anywhere measures min-content in time linear in the text",
+               ok, NULL);
+        if (!ok && lay != NULL)
+            fprintf(stderr, "    carets %llu, measures %llu\n",
+                    (unsigned long long)lay->piece_carets, (unsigned long long)lay->measures);
+        f_layout_free(lay);
+        f_boxes_free(bx);
+        f_style_free(st);
+        sheeted_close(&p);
+        free(html);
+    }
+}
+
 static void batch_a_cases(void)
 {
     hostile_batch_a_cases();
+    piece_bounds();
     // cursor is inherited, the keyword after the pictures kept; user-select
     // is not: the p inside the div is auto again, and prints nothing.
     cascade_case("cursor and user-select", 800,
