@@ -687,16 +687,20 @@ the style object and WPT all see it go with the switch.
   picture is placed by `yonder_object_rect` and cut to its content box.
   Images 4's pairs (`cover scale-down`) are not read.
 - **`aspect-ratio`** (Sizing 4 § 4.1; a new value kind, `GARB_V_RATIO`). A
-  block's height follows its width and its width a given height. With
-  `min-height: auto` and no scrolling it is at least as tall as its content
-  (§ 4.3). A picture's own ratio loses to the page's unless `auto` is
+  block's height follows its width and its width a given height, measured
+  on the content box under `auto && <ratio>` whatever box-sizing says (§
+  4.1: "in all cases"). Whichever size the ratio gives, the box is held to
+  its automatic minimum there where that minimum is auto and it does not
+  scroll: at least its content's height, at least its min-content width,
+  capped by its maximum (§ 4.3; `ratio_content_h`, `ratio_floor_w`). A
+  picture's own ratio loses to the page's unless `auto` is
   written beside it, and a picture not yet measured takes its other side
   from the page's ratio. A float or an absolute box with a height and no
   width takes the ratio's width rather than shrinking to fit. A flex item
   with a definite cross size (given, or its single line's that stretches
   it, Flexbox 1 § 9.8) has its flex base size through the ratio (§ 9.2.3
-  B), and an automatic minimum no larger than that transferred size
-  (§ 4.5). A grid item under `normal` starts down its area and stretches
+  B); its automatic minimum stays its content's, since § 4.5's transferred
+  size suggestion is a replaced item's. A grid item under `normal` starts down its area and stretches
   across it: the inline axis keeps `stretch`, as Chrome and Firefox do for
   the `aspect-ratio` tile pattern (a grid of `aspect-ratio: 1` cards fills
   each column and is as tall as it is wide). A written `stretch` still
@@ -767,7 +771,7 @@ flow-relative property in 512 records and 127,354 asks. danlegt's asks:
 missing: the flow-relative radii (84 to 92 records each),
 `scroll-padding-block` (51), `contain-intrinsic-block-size` (36).
 
-Host: libflow 21,382 → 21,667 checks, yonder 1,716 → 1,816, the DOM host
+Host: libflow 21,382 → 21,670 checks, yonder 1,716 → 1,825, the DOM host
 22,416 → 38,935, garb declarations 626, text 7,369, the scripted-page host
 5,888; all 0 failed. The mutant harnesses were not run (the briefs' rule).
 
