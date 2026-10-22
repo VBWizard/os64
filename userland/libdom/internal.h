@@ -355,6 +355,9 @@ void d_storage_drain(os64_dom_t *dom);
 void d_storage_free(os64_dom_t *dom);
 /* The storage maps' steps so far (storage.c's s_steps), for the DOM host. */
 uint64_t d_storage_steps(void);
+/* URLSearchParams' record conversion's probes so far (url.c), for the DOM
+ * host. */
+uint64_t d_url_record_probes(void);
 JSValue d_style(os64_dom_t *dom, JSContext *ctx, JSValueConst self);
 int d_style_install(os64_dom_t *dom, JSContext *ctx);
 extern JSClassExoticMethods d_node_exotic;

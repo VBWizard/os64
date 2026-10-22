@@ -7,6 +7,9 @@ static uint32_t view_zoom = 1000;
 static uint32_t view_zoom_of(void *opaque) { (void)opaque; return view_zoom; }
 
 static void dom_private_container_cases(void);
+/* url.c's count of record-key probes (libdom/internal.h). */
+uint64_t d_url_record_probes(void);
+static void dom_url_record_work_cases(void);
 static void dom_screen_cases(void)
 {
     DomFixture f = fixture_new(NULL);
@@ -349,6 +352,7 @@ static void dom_url_cases(void)
     };
     engine_sweep("URL", kEngine, sizeof(kEngine) / sizeof(kEngine[0]), NULL);
     dom_private_container_cases();
+    dom_url_record_work_cases();
 }
 
 /* WHAT THE PAGE CAN REACH THROUGH THE PROTOTYPES (Array.prototype and
@@ -377,5 +381,27 @@ static void dom_private_container_cases(void)
         "assert(got.length===2&&got[0]==='1'&&got[1]==='2','getAll defines its elements');"
         "assert(pairs[0][0]==='a'&&pairs[0][1]==='1'&&pairs[2][0]==='b','an entry pair defines its elements');",
         "prototypes: no private container leaks, no answered element is swallowed");
+    fixture_free(&f);
+}
+
+/* A record whose keys all hold U+FFFD (each a lone surrogate) is converted
+ * with a lookup per key, counted in probes and held to a bound, never
+ * timed; and keys that become one USVString are one pair, in the first
+ * one's place, with the last one's value. */
+static void dom_url_record_work_cases(void)
+{
+    DomFixture f = fixture_new(NULL);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, STORAGE_ASSERT
+        "var r=new URLSearchParams({'a\\ud800':'1','b':'2','a\\udc00':'3'});"
+        "assert(r.toString()==='a%EF%BF%BD=3&b=2',r.toString());",
+        "url: record keys that become one string are one pair");
+    uint64_t before = d_url_record_probes();
+    dom_script(&f, STORAGE_ASSERT
+        "var o={};for(var i=0;i<20000;i++)o['\\ud800'+i]=i;"
+        "assert(new URLSearchParams(o).size===20000);",
+        "url: a record of 20,000 keys holding U+FFFD");
+    uint64_t probes = d_url_record_probes() - before;
+    check(probes > 0 && probes < 16 * (uint64_t)20000, "url: and its keys' lookups are linear in the record");
     fixture_free(&f);
 }

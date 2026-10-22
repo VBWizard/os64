@@ -916,6 +916,64 @@ static int pairs_item(void *opaque, JSValue value)
     return result;
 }
 
+/* The record's keys that hold U+FFFD once converted, an open-addressed
+ * index of pair positions (plus one) over them: only such keys can meet
+ * one another, two different JavaScript strings becoming one USVString, so
+ * only they are looked up, and each lookup is a few probes whatever the
+ * record's size. */
+typedef struct {
+    uint32_t *slots;
+    size_t nslots, used;
+} Replaced;
+
+/* The probes made, for the DOM host to hold record conversion to a bound;
+ * a count to read, not synchronized. */
+static uint64_t s_record_probes;
+
+uint64_t d_url_record_probes(void)
+{
+    return s_record_probes;
+}
+
+static uint32_t key_hash(const char *key, size_t length)
+{
+    uint32_t hash = 2166136261u;
+    for (size_t i = 0; i < length; i++) hash = (hash ^ (unsigned char)key[i]) * 16777619u;
+    return hash;
+}
+
+/* The slot holding the pair named `key`, or the empty slot where it goes. */
+static size_t replaced_slot(const Replaced *r, const DParams *params, const char *key, size_t length)
+{
+    size_t mask = r->nslots - 1;
+    for (size_t at = key_hash(key, length) & mask;; at = (at + 1) & mask) {
+        s_record_probes++;
+        uint32_t held = r->slots[at];
+        if (held == 0) return at;
+        const DPair *pair = &params->pairs[held - 1];
+        if (pair->name_length == length && os64_memcmp(pair->name, key, length) == 0) return at;
+    }
+}
+
+/* Room for one more key, at most half the slots in use. False on no
+ * memory. */
+static bool replaced_reserve(JSContext *ctx, Replaced *r, const DParams *params)
+{
+    if (r->nslots != 0 && (r->used + 1) * 2 <= r->nslots) return true;
+    size_t nslots = r->nslots != 0 ? r->nslots * 2 : 64;
+    uint32_t *slots = js_mallocz(ctx, nslots * sizeof(*slots));
+    if (slots == NULL) return false;
+    Replaced grown = {slots, nslots, r->used};
+    for (size_t i = 0; i < r->nslots; i++)
+        if (r->slots[i] != 0) {
+            const DPair *pair = &params->pairs[r->slots[i] - 1];
+            slots[replaced_slot(&grown, params, pair->name, pair->name_length)] = r->slots[i];
+        }
+    js_free(ctx, r->slots);
+    *r = grown;
+    return true;
+}
+
 /* WebIDL's record<USVString, USVString>: the object's own enumerable
  * string keys, in its own order, each with its value. -1 thrown. */
 static int params_from_record(os64_dom_t *dom, JSContext *ctx, DParams *params, JSValueConst record)
@@ -923,6 +981,7 @@ static int params_from_record(os64_dom_t *dom, JSContext *ctx, DParams *params, 
     JSPropertyEnum *keys;
     uint32_t count;
     if (JS_GetOwnPropertyNames(ctx, &keys, &count, record, JS_GPN_STRING_MASK) < 0) return -1;
+    Replaced index = {NULL, 0, 0};
     int result = 0;
     for (uint32_t i = 0; result == 0 && i < count; i++) {
         JSPropertyDescriptor desc;
@@ -948,11 +1007,15 @@ static int params_from_record(os64_dom_t *dom, JSContext *ctx, DParams *params, 
         for (size_t at = 0; ok && at + 2 < text[0].length && !replaced; at++)
             replaced = (unsigned char)text[0].data[at] == 0xef && (unsigned char)text[0].data[at + 1] == 0xbf &&
                        (unsigned char)text[0].data[at + 2] == 0xbd;
+        size_t slot = 0;
         DPair *same_key = NULL;
-        for (size_t at = 0; ok && replaced && at < params->count && same_key == NULL; at++)
-            if (params->pairs[at].name_length == text[0].length &&
-                os64_memcmp(params->pairs[at].name, text[0].data, text[0].length) == 0)
-                same_key = &params->pairs[at];
+        if (ok && replaced) {
+            ok = replaced_reserve(ctx, &index, params);
+            if (ok) {
+                slot = replaced_slot(&index, params, text[0].data, text[0].length);
+                if (index.slots[slot] != 0) same_key = &params->pairs[index.slots[slot] - 1];
+            }
+        }
         if (ok && same_key != NULL) {
             char *copy = js_malloc(ctx, text[1].length + 1);
             if (copy == NULL) ok = false;
@@ -963,12 +1026,17 @@ static int params_from_record(os64_dom_t *dom, JSContext *ctx, DParams *params, 
                 same_key->value = copy;
                 same_key->value_length = text[1].length;
             }
-        } else if (ok && pair_add(ctx, params, text[0].data, text[0].length, text[1].data, text[1].length, false) < 0)
+        } else if (ok && pair_add(ctx, params, text[0].data, text[0].length, text[1].data, text[1].length, false) < 0) {
             ok = false;
+        } else if (ok && replaced) {
+            index.slots[slot] = (uint32_t)params->count;
+            index.used++;
+        }
         d_string_free(dom, &text[0]);
         d_string_free(dom, &text[1]);
         if (!ok) result = -1;
     }
+    js_free(ctx, index.slots);
     JS_FreePropertyEnum(ctx, keys, count);
     return result;
 }
