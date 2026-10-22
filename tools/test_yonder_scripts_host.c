@@ -2189,6 +2189,7 @@ static void input_javascript_links(void) {
     static const char page[]=
         "<p><a id=login href=\"javascript:toggle('open');\">log in</a></p>"
         "<p><a id=coded href=\"javascript:note(%27a%20b#c%27)\">coded</a></p>"
+        "<p><a id=twice href=\"javascript:note('%2541#%2541')\">twice</a></p>"
         "<p><a id=broken href=\"javascript:nothere()\">broken</a></p>"
         "<p><a id=nothing href=\"javascript:void(0)\">nothing</a></p><p id=log>-</p>"
         "<script>function toggle(how){document.getElementById('log').textContent=how}"
@@ -2205,17 +2206,22 @@ static void input_javascript_links(void) {
     input_click_at("coded");
     check(script_turn() && probe_text_is("log","a b#c"),
         "javascript link: the address is percent-decoded, its fragment included");
+    /* The fragment arrives decoded (libpage's request): it is not decoded
+     * a second time, so an escaped percent sign stays one. */
+    input_click_at("twice");
+    check(script_turn() && probe_text_is("log","%41#%41"),
+        "javascript link: the fragment is decoded once, as the address is");
     input_click_at("broken");
     script_turn();
-    check(javascript_record_has("FAILED script javascript:#inline-3: ReferenceError"),
+    check(javascript_record_has("FAILED script javascript:#inline-4: ReferenceError"),
         "javascript link: a script that throws is a FAILED script line");
-    check(javascript_record_has("script javascript:#inline-3: failed in"),
+    check(javascript_record_has("script javascript:#inline-4: failed in"),
         "javascript link: and its task is listed as failed");
     /* The failure's badge lays the window out again, and the fixture's
      * root has no size of its own: the view is put back where it was. */
     g.view.bounds=(os64_gui_rect_t){0,0,800,600};
     input_click_at("nothing");
-    check(script_turn() && javascript_record_has("script javascript:#inline-4: ran in"),
+    check(script_turn() && javascript_record_has("script javascript:#inline-5: ran in"),
         "javascript link: void(0) runs, and does nothing");
     /* The page's own click() follows the link by the same door. */
     yonder_scripts_t *host=g.page.scripts;

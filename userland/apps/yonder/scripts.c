@@ -717,8 +717,8 @@ static int hex_value(char c)
 }
 
 // HTML's "navigate to a javascript: URL": the address after its scheme,
-// percent-decoded, then read as UTF-8, each byte that is not UTF-8 becoming
-// U+FFFD.
+// percent-decoded, its fragment joined as given, then read as UTF-8, each
+// byte that is not UTF-8 becoming U+FFFD.
 bool yonder_scripts_address(yonder_scripts_t *s, const char *url, const char *fragment)
 {
     if (s == NULL || s->dead || url == NULL)
@@ -738,22 +738,21 @@ bool yonder_scripts_address(yonder_scripts_t *s, const char *url, const char *fr
         return false;
     }
     size_t n = 0;
-    for (size_t pass = 0; pass < 2; pass++) {
-        const char *from = pass == 0 ? rest : fragment;
-        if (from == NULL)
-            continue;
-        if (pass == 1)
-            bytes[n++] = '#';
-        for (size_t i = 0; from[i] != '\0'; i++) {
-            int high = from[i] == '%' ? hex_value(from[i + 1]) : -1;
-            int low = high >= 0 ? hex_value(from[i + 2]) : -1;
-            if (low >= 0) {
-                bytes[n++] = (char)(high * 16 + low);
-                i += 2;
-            } else {
-                bytes[n++] = from[i];
-            }
+    for (size_t i = 0; rest[i] != '\0'; i++) {
+        int high = rest[i] == '%' ? hex_value(rest[i + 1]) : -1;
+        int low = high >= 0 ? hex_value(rest[i + 2]) : -1;
+        if (low >= 0) {
+            bytes[n++] = (char)(high * 16 + low);
+            i += 2;
+        } else {
+            bytes[n++] = rest[i];
         }
+    }
+    // libpage hands a fragment over decoded already: it is joined as it is.
+    if (fragment != NULL) {
+        bytes[n++] = '#';
+        for (size_t i = 0; fragment[i] != '\0'; i++)
+            bytes[n++] = fragment[i];
     }
     size_t at = 0;
     for (size_t i = 0; i < n;) {
