@@ -7,9 +7,10 @@
 // false.
 //
 // What the machine answers: a screen, a mouse (fine pointer, can hover), 8
-// bits a colour channel, 1 dppx, and no scripting; and what the person
-// asked for — a light or dark scheme, and full or reduced motion — from the
-// env (garb_env_t), each the first unless they asked otherwise.
+// bits a colour channel and 1 dppx; whether the document's scripts run;
+// and what the person asked for — a light or dark scheme, and full or
+// reduced motion — each from the env (garb_env_t), the first unless it
+// says otherwise.
 
 #include <float.h>
 
@@ -137,7 +138,8 @@ static const Feature kFeatures[] = {
     {"prefers-reduced-transparency", F_WORDS, "no-preference", false},
     {"prefers-contrast", F_WORDS, "no-preference", false},
     {"forced-colors", F_WORDS, "none", false}, {"inverted-colors", F_WORDS, "none", false},
-    {"scripting", F_WORDS, "none", false}, {"update", F_WORDS, "fast", false},
+    {"scripting", F_WORDS, "none", false},          // or `enabled`: the env's
+    {"update", F_WORDS, "fast", false},
     {"display-mode", F_WORDS, "browser", false}, {"dynamic-range", F_WORDS, "standard", false},
     {"color-gamut", F_WORDS, "srgb", false}, {"overflow-block", F_WORDS, "scroll", false},
     {"overflow-inline", F_WORDS, "scroll", false}, {"scan", F_WORDS, "progressive", false},
@@ -246,10 +248,12 @@ static const Feature *feature_named(const char *s, size_t n)
     return NULL;
 }
 
-// What a word feature answers here: the machine's, or for the two the
-// person chooses, what they chose.
+// What a word feature answers here: the machine's, for the two the person
+// chooses what they chose, and for `scripting` the document's.
 static const char *answer_of(const Feature *f, garb_env_t env)
 {
+    if (os64_streq(f->name, "scripting") && env.scripting)
+        return "enabled";
     if (os64_streq(f->name, "prefers-color-scheme") && env.dark)
         return "dark";
     if (os64_streq(f->name, "prefers-reduced-motion") && env.reduced_motion)

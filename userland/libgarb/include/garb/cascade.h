@@ -29,6 +29,9 @@ typedef struct {
     // `prefers-reduced-motion` answers, `reduce` when true and
     // `no-preference` when false.
     bool reduced_motion;
+    // Whether the document's scripts run: what `scripting` answers,
+    // `enabled` when true and `none` when false.
+    bool scripting;
     // Whether the Modern Web arc's properties are taken away
     // (garb_reading_t): the cascade reads every declaration, and every
     // `@supports` condition, with this answer, and records a marked

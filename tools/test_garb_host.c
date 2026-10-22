@@ -322,7 +322,8 @@ static void media(const char *text)
         return;
     }
     // `WIDTHxHEIGHT dark ...`: the person's scheme is dark; `reduce ...`:
-    // they asked for less motion.
+    // they asked for less motion; `scripting ...`: the document runs
+    // scripts.
     if (strncmp(text + used, "dark ", 5) == 0) {
         env.dark = true;
         used += 5;
@@ -330,6 +331,10 @@ static void media(const char *text)
     if (strncmp(text + used, "reduce ", 7) == 0) {
         env.reduced_motion = true;
         used += 7;
+    }
+    if (strncmp(text + used, "scripting ", 10) == 0) {
+        env.scripting = true;
+        used += 10;
     }
     puts(garb_media_text_matches(text + used, env) ? "true" : "false");
 }

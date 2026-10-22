@@ -1021,12 +1021,14 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     int32_t entry[SHEETS_MAX] = {0};
     garb_env_t view = css_view(width, height, zoom);
     view.modern_off = !p->modern;
+    view.scripting = p->scripting;
     if (cascade == NULL || p->sheets_changed || (cascade != NULL && (garb_cascade_env(cascade).width != view.width ||
                                                   garb_cascade_env(cascade).height != view.height ||
                                                   garb_cascade_env(cascade).dark != view.dark ||
                                                   garb_cascade_env(cascade).reduced_motion !=
                                                       view.reduced_motion ||
-                                                  garb_cascade_env(cascade).modern_off != view.modern_off))) {
+                                                  garb_cascade_env(cascade).modern_off != view.modern_off ||
+                                                  garb_cascade_env(cascade).scripting != view.scripting))) {
         garb_sheet_in_t in[SHEETS_MAX];
         int32_t n = 0;
         const os64_page_t *model = page_model(p);
@@ -3786,6 +3788,7 @@ static bool sheet_holds(const Page *p, const Sheet *sh)
     if (sh->lapsed)
         return false;
     garb_env_t view = css_view(g.view.bounds.w, g.view.bounds.h, g.zoom);
+    view.scripting = p->scripting;
     if (sh->importer >= 0) {
         const garb_import_t *im = &p->sheets[sh->importer].imports[sh->import_index];
         return p->sheets[sh->importer].holds && garb_media_matches(im->media, im->nmedia, view);

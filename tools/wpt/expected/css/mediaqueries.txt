@@ -129,6 +129,8 @@ resizable.tentative.html	Should be unknown: '(resizable: 1)'
 resizable.tentative.html	Should be unknown: '(resizable: 10px)'
 resizable.tentative.html	Should be unknown: '(resizable: none)'
 resizable.tentative.html	Should be unknown: '(resizable: random)'
+scripting.html	Check that scripting currently evaluates to true in the boolean context
+scripting.html	Check that scripting currently matches 'enabled'
 scripting.html	Should be unknown: '(scripting: 0)'
 scripting.html	Should be unknown: '(scripting: 10px)'
 update-media-feature.html	Check that update always matches non printing documents

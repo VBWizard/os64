@@ -693,10 +693,10 @@ static void *media_grow(void *ctx, void *old, size_t old_size, size_t new_size)
     return grown;
 }
 
-static bool media_matches(const DMedia *m, const os64_dom_view_t *v)
+static bool media_matches(const os64_dom_t *dom, const DMedia *m, const os64_dom_view_t *v)
 {
     garb_env_t env = {.width = v->width, .height = v->height, .dark = v->dark,
-                      .reduced_motion = v->reduced_motion};
+                      .reduced_motion = v->reduced_motion, .scripting = dom->options.scripting};
     return !m->unread && garb_media_text_matches(m->query, env);
 }
 
@@ -781,7 +781,7 @@ static JSValue media_member(JSContext *ctx, JSValueConst self, int argc, JSValue
         m->query = query.data;         // the DString's storage is the binding's, and moves here
         m->media = media;
         os64_dom_view_t v = view_now(dom);
-        m->matches = media_matches(m, &v);
+        m->matches = media_matches(dom, m, &v);
         if (dom->media_last != NULL) dom->media_last->next = m;
         else dom->media = m;
         dom->media_last = m;
@@ -794,7 +794,7 @@ static JSValue media_member(JSContext *ctx, JSValueConst self, int argc, JSValue
     case M_MEDIA: return JS_NewString(ctx, m->media);
     case M_MATCHES: {
         os64_dom_view_t v = view_now(dom);
-        return JS_NewBool(ctx, media_matches(m, &v));
+        return JS_NewBool(ctx, media_matches(dom, m, &v));
     }
     case M_ADD_LISTENER: case M_REMOVE_LISTENER:
         return d_listener_change(dom, ctx, self, argc > 0 ? argv[0] : JS_UNDEFINED, magic == M_ADD_LISTENER);
@@ -941,7 +941,7 @@ bool os64_dom_view_step(os64_dom_t *dom, os64_js_outcome_t *outcome)
         *judged = now;
         for (DMedia *m = dom->media; m != NULL; m = m->next) {
             if (m->collected && m->entry == NULL) continue;
-            bool matches = media_matches(m, &now);
+            bool matches = media_matches(dom, m, &now);
             if (matches != m->matches) {
                 m->matches = matches;
                 m->owed = !m->owed;     // a change and its undoing owe nothing

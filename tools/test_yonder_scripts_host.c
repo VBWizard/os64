@@ -3921,7 +3921,28 @@ static void loop_view_replacing_refused(void) {
         "replacing refused: the page still arrives, with the entry it pushed from");
     loop_drop();
 }
+/* Codex round 2 on slice 1b. `scripting` answers the document's own state,
+ * in a sheet and in matchMedia: enabled when the page's scripts are on,
+ * none when they are off. */
+static void loop_view_media_scripting(void) {
+    static const char sheet[]="<style>#on,#off{display:none}@media (scripting){#on{display:block}}"
+        "@media (scripting: none){#off{display:block}}</style><p id=on>on</p><p id=off>off</p>";
+    for(int scripts=0;scripts<2;scripts++) {
+        probe_page(sheet,scripts!=0);
+        bool on=flow_box_for(g.page.tree,probe_id("on"))!=NULL, off=flow_box_for(g.page.tree,probe_id("off"))!=NULL;
+        check(scripts ? on && !off : off && !on,
+            scripts ? "media scripting: a sheet's (scripting) holds with scripts on"
+                    : "media scripting: and (scripting: none) with them off");
+        probe_drop();
+    }
+    loop_page("<p id=out>-</p><script>document.getElementById('out').textContent=[matchMedia('(scripting)').matches,"
+        "matchMedia('(scripting: enabled)').matches,matchMedia('(scripting: none)').matches].join()</script>");
+    check(loop_settle() && view_turns() && probe_text_is("out","true,true,false"),
+        "media scripting: matchMedia answers enabled for a page whose scripts run");
+    loop_drop();
+}
 static void loop_view_cold2_cases(void) {
+    loop_view_media_scripting();
     loop_view_replacing_refused();
     loop_view_loading_redirect();
     loop_view_pushed_then_forward();

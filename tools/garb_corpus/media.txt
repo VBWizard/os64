@@ -1,8 +1,8 @@
 # Media Queries 4 (GARB.md, G2c), worked by hand: IN is a viewport and a
 # query list, OUT whether it holds. The machine is a screen with a mouse, 8
-# bits a channel, 1 dppx and no scripting; the person's choices are a light
-# scheme and full motion, unless a case says `dark` or `reduce` (in that
-# order) after its viewport.
+# bits a channel and 1 dppx; the document runs no scripts and the person's
+# choices are a light scheme and full motion, unless a case says `dark`,
+# `reduce` or `scripting` (in that order) after its viewport.
 IN: 800x600
 OUT: true
 IN: 800x600 all
@@ -92,6 +92,16 @@ OUT: true
 IN: 800x600 (scripting: enabled)
 OUT: false
 IN: 800x600 (scripting: none)
+OUT: true
+IN: 800x600 (scripting)
+OUT: false
+IN: 800x600 scripting (scripting: enabled)
+OUT: true
+IN: 800x600 scripting (scripting: none)
+OUT: false
+IN: 800x600 scripting (scripting)
+OUT: true
+IN: 800x600 scripting not (scripting: initial-only)
 OUT: true
 IN: 800x600 (color)
 OUT: true
