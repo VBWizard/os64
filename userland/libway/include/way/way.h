@@ -100,9 +100,11 @@ typedef struct {
 // where on it the person was. `document` is the face's own name for the
 // document the entry was shown in, 0 for none: two crumbs naming one
 // nonzero document are entries of that one document, and moving between
-// them is no fetch. `state` is what the document's script left with the
-// entry (history.pushState's, serialised as the face's binding chose),
-// NUL-terminated, NULL for none. The library stores both and reads neither.
+// them is no fetch. `entry` is the face's own name for the entry itself, 0
+// for none, so a face can find one again wherever the list has moved it.
+// `state` is what the document's script left with the entry
+// (history.pushState's, serialised as the face's binding chose),
+// NUL-terminated, NULL for none. The library stores them and reads none.
 // A crumb IN THE SESSION OWNS its state: way_last and way_next copy one out
 // with its state BORROWED, good until the session next changes, and only
 // the _entry calls below hand a state in or out.
@@ -110,6 +112,7 @@ typedef struct {
     char url[OS64_FETCH_URL_MAX];
     way_position_t position;
     uint64_t document;
+    uint64_t entry;
     char *state;
 } way_crumb_t;
 

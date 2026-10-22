@@ -400,16 +400,20 @@ static void entries(void)
     expect("entries: remembering takes the state", left.state == NULL && s.depth == 1 &&
            s.history[0].document == 7 && strcmp(s.history[0].state, "{\"n\":1}") == 0, NULL);
     left = crumb_of("http://h/a#two", 7, "2");
+    left.entry = 41;
     way_remember_entry(&s, &left);
     expect("entries: Back's crumb is copied out with its state borrowed",
            way_last(&s, &crumb) && crumb.document == 7 && crumb.state == s.history[1].state &&
-               s.depth == 2, NULL);
+               crumb.entry == 41 && s.depth == 2, NULL);
     left = crumb_of("http://h/a#three", 7, NULL);
+    left.entry = 42;
     way_went_back_entry(&s, &left, &arrived);
     expect("entries: Back hands the crumb's state to the face and keeps the left one for Forward",
            s.depth == 1 && s.ahead == 1 && strcmp(arrived.state, "2") == 0 &&
                strcmp(arrived.url, "http://h/a#two") == 0 && s.forward[0].state == NULL &&
                s.forward[0].document == 7 && strcmp(s.forward[0].url, "http://h/a#three") == 0, NULL);
+    expect("entries: an entry keeps its name wherever it moves", arrived.entry == 41 && s.forward[0].entry == 42,
+           NULL);
     left = arrived;                         // the state goes back in with the entry it came with
     way_went_forward_entry(&s, &left, &arrived);
     expect("entries: Forward is the mirror, the state taken back in",
