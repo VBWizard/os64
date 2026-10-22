@@ -506,6 +506,10 @@ bool d_same_nocase(const char *a, size_t alen, const char *b, size_t blen);
  * joined. Not synchronized: a count for the DOM host to hold the work a
  * page or a server can size to its bound, as d_storage_steps is. */
 extern uint64_t d_request_steps;
+/* An iterator prototype's `next` (fetch.c): WebIDL's iterator prototype
+ * object defines it writable, ENUMERABLE and configurable, which
+ * d_method's operations are not. */
+int d_iterator_next(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, JSCFunctionData *fn, int magic);
 /* A header block (way/origin.h's shape) as a Headers object with `guard`. */
 JSValue d_headers_from_block(os64_dom_t *dom, JSContext *ctx, const char *block, size_t length, int guard);
 /* A minimal ReadableStream over a copy of `bytes` (fetch.c): its reader
@@ -520,9 +524,11 @@ JSValue d_promise_settled(JSContext *ctx, JSValue value);
  * invalid sequence U+FFFD. Engine memory. d_utf8_decode is UTF-8 decode. */
 JSValue d_text_decode(JSContext *ctx, const char *label, const uint8_t *bytes, size_t length);
 JSValue d_utf8_decode(JSContext *ctx, const uint8_t *bytes, size_t length);
-/* url.c: `input` parsed as a URL against the document's base URL, as a
- * link's href is resolved: 1 with the address (d_alloc'd, the caller frees
- * it), 0 for one that does not parse, -1 with an exception pending. */
+/* url.c: `input` parsed as a URL against the document's base URL (its
+ * <base href> as the tree stands), by the API's parser: a query is UTF-8
+ * whatever the document's encoding. 1 with the address (d_alloc'd, the
+ * caller frees it), 0 for one that does not parse, -1 with an exception
+ * pending. */
 int d_url_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst input, char **out);
 /* An object's own [Symbol.toStringTag] (classic.c), as an interface's. */
 int d_string_tag(JSContext *ctx, JSValueConst object, const char *name);

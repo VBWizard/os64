@@ -318,7 +318,7 @@ static void dom_fetch_object_cases(void)
         "new Response('{').json().catch(e=>log.push('json-bad:'+e.name));",
         "response: the constructor, error, redirect, json and every body reader");
     dom_script(&f, FETCH_ASSERT
-        "var want='json:1,text:{\"b\":[1]},bytes:hi,u8:true3,blob:text/weird;charset=x3,form:2,"
+        "var want='json:1,text:{\"b\":[1]},bytes:hi,u8:true3,blob:text/weird; charset=x3,form:2,"
         "form-refused:TypeError,json-bad:SyntaxError';assert(log.join()===want,log.join());",
         "response: bodies read");
     /* The stream a body is: one chunk, then done; a reader locks it. */
@@ -331,7 +331,16 @@ static void dom_fetch_object_cases(void)
         "assert(typeof ReadableStream==='undefined'||true);"
         "throws('RangeError',()=>new Response('x').body.getReader({mode:'byob'}));",
         "stream: one chunk, then done");
-    dom_script(&f, FETCH_ASSERT "assert(log.join()==='locked:TypeError,false:chunk,true:undefined,false',log.join());",
+    /* A body method read it whole with a reader it keeps; a FormData body
+     * reads back as one, and an empty one is no bytes. */
+    dom_script(&f, FETCH_ASSERT
+        "var r=new Response('x');r.text();assert(r.body.locked);throws('TypeError',()=>r.body.getReader());"
+        "var fd=new FormData();fd.append('k','v, w');fd.append('f',new File(['bytes'],'n.txt',{type:'text/plain'}));"
+        "new Request('/x',{method:'POST',body:fd}).formData().then(g=>{log.push('form:'+g.get('k')+'/'+g.get('f').name)});"
+        "new Request('/x',{method:'POST',body:new FormData()}).text().then(t=>log.push('empty:'+t.length));",
+        "stream: a body method locks it; FormData both ways");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='locked:TypeError,false:chunk,true:undefined,false,form:v, w/n.txt,empty:0',"
+               "log.join());",
                "stream: read");
     fixture_free(&f);
 }
@@ -456,6 +465,30 @@ static void dom_fetch_abort_cases(void)
         "assert(q.signal!==c.signal&&q2.signal!==q.signal);c.abort('r');"
         "assert(q.signal.aborted&&q.signal.reason==='r'&&q2.signal.aborted);",
         "abort: a request's signal follows");
+    /* The source's event fires before its dependents', and each dependent
+     * is already aborted when it does; a chain as deep as a page likes is
+     * walked, not recursed. */
+    dom_script(&f, FETCH_ASSERT
+        "var order=[];var c=new AbortController();var q=new Request('/x',{signal:c.signal});"
+        "c.signal.onabort=()=>order.push('source:'+q.signal.aborted);q.signal.onabort=()=>order.push('dependent');"
+        "c.abort();assert(order.join()==='source:true,dependent',order.join());"
+        "var root=new AbortController();var s=root.signal;for(let i=0;i<20000;i++)s=AbortSignal.any([s]);"
+        "root.abort('deep');assert(s.aborted&&s.reason==='deep');",
+        "abort: source first, then dependents, however deep");
+    /* After an answer: the reason, every time; an empty body is closed
+     * before an abort can error it. */
+    dom_script(&f, "globalThis.c4=new AbortController();fetch('/w',{signal:c4.signal}).then(r=>{globalThis.r4=r});"
+               "globalThis.c5=new AbortController();fetch('/v',{signal:c5.signal}).then(r=>{globalThis.r5=r});",
+               "abort: two more requests");
+    os64_dom_response_t full = net_answer_of(200, "http://example.test/w", "", "full");
+    os64_dom_response_t none = net_answer_of(200, "http://example.test/v", "", "");
+    net_answer(&f, &net, net.count - 2, &full);
+    net_answer(&f, &net, net.count - 1, &none);
+    dom_script(&f, "globalThis.log=[];c4.abort();c5.abort();"
+               "r4.text().catch(e=>log.push('1:'+e.name));r4.text().catch(e=>log.push('2:'+e.name));"
+               "r5.text().then(t=>log.push('empty:'+t.length));", "abort: after the answer");
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='1:AbortError,2:AbortError,empty:0',log.join());",
+               "abort: the reason twice, and an empty body read");
     /* One controller over many requests keeps none of them past use. */
     dom_script(&f, FETCH_ASSERT
         "var c=new AbortController();for(let i=0;i<2000;i++)new Request('/x',{signal:c.signal});c.abort();",
@@ -491,7 +524,7 @@ static void dom_xhr_cases(void)
         "throws('SyntaxError',()=>x.setRequestHeader('a b','1'));throws('SyntaxError',()=>x.setRequestHeader('a','a\\nb'));"
         "throws('TypeError',()=>x.setRequestHeader('a','\\u0100'));"
         "var p=new ProgressEvent('p',{loaded:-1,total:3,lengthComputable:true,bubbles:true});"
-        "assert(p instanceof Event&&p.loaded===18446744073709552000&&p.total===3&&p.lengthComputable&&p.bubbles);"
+        "assert(p instanceof Event&&p.loaded===-1&&p.total===3&&p.lengthComputable&&p.bubbles);assert(new ProgressEvent('p',{loaded:1.5}).loaded===1.5);throws('TypeError',()=>new ProgressEvent('p',{total:NaN}));"
         "throws('TypeError',()=>ProgressEvent.prototype.loaded);",
         "xhr: the surface and its refusals");
 

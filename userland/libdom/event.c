@@ -1337,7 +1337,7 @@ JSValue d_progress_event_new(os64_dom_t *dom, JSContext *ctx, const char *type, 
 
 /* new ProgressEvent(type, init): the dictionary read as WebIDL reads an
  * inherited one, EventInit's members first, then its own in name order;
- * loaded and total are unsigned long long, so a negative wraps. */
+ * loaded and total are WebIDL doubles: finite, or a TypeError. */
 static JSValue progress_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
 {
     os64_dom_t *dom = d_binding(ctx);
@@ -1356,17 +1356,20 @@ static JSValue progress_constructor(JSContext *ctx, JSValueConst new_target, int
         static const char *const names[] = {"bubbles", "cancelable", "composed", "lengthComputable", "loaded", "total"};
         for (int i = 0; i < 6; i++) {
             JSValue value = JS_GetPropertyStr(ctx, init, names[i]);
-            int64_t n = 0;
+            double n = 0;
             int got = JS_IsException(value) ? -1
                     : i < 4 ? JS_ToBool(ctx, value)
-                    : JS_IsUndefined(value) ? 0 : JS_ToInt64(ctx, &n, value);
+                    : JS_IsUndefined(value) ? 0 : JS_ToFloat64(ctx, &n, value);
             JS_FreeValue(ctx, value);
             if (got < 0) {
                 JS_FreeCString(ctx, type);
                 return JS_EXCEPTION;
             }
             if (i < 4) flags[i] = got != 0;
-            else numbers[i - 4] = (double)(uint64_t)n;
+            else if (n != n || n - n != 0) {
+                JS_FreeCString(ctx, type);
+                return JS_ThrowTypeError(ctx, "loaded and total are finite numbers");
+            } else numbers[i - 4] = n;
         }
     }
     JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");

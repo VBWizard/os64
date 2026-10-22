@@ -1059,7 +1059,9 @@ int d_form_data_encode(os64_dom_t *dom, JSContext *ctx, JSValueConst form, DByte
                  newlines_normalized(ctx, &b, e->value, e->value_length, put_raw) && buf_text(ctx, &b, "\r\n");
         }
     }
-    ok = ok && buf_text(ctx, &b, "--") && buf_put(ctx, &b, boundary, blen) && buf_text(ctx, &b, "--\r\n");
+    /* No entries is no body at all, as a browser sends one. */
+    if (f->count != 0)
+        ok = ok && buf_text(ctx, &b, "--") && buf_put(ctx, &b, boundary, blen) && buf_text(ctx, &b, "--\r\n");
     char type[128];
     os64_snprintf(type, sizeof(type), "multipart/form-data; boundary=%s", boundary);
     out->type = ok ? engine_copy(ctx, type, os64_strlen(type)) : NULL;
@@ -1336,7 +1338,7 @@ int d_blob_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     };
     for (size_t i = 0; i < sizeof(kForm) / sizeof(kForm[0]); i++)
         if (d_method(dom, ctx, dp, kForm[i].name, form_member, kForm[i].argc, kForm[i].magic) < 0) return -1;
-    if (d_method(dom, ctx, iterator->value, "next", form_member, 0, M_NEXT) < 0) return -1;
+    if (d_iterator_next(dom, ctx, iterator->value, form_member, M_NEXT) < 0) return -1;
     /* [Symbol.iterator] is entries (WebIDL § 3.7.9.1), and the iterator says
      * what it is. */
     JSAtom iterator_atom = JS_ValueToAtom(ctx, dom->iterator_symbol->value);

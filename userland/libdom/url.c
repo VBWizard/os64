@@ -1356,8 +1356,24 @@ int d_url_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst input, char **out)
         d_error(ctx, "QuotaExceededError", "URL quota exceeded");
         return -1;
     }
-    bool parsed = os64_dom_resolve(dom->document, dom->url != NULL ? dom->url : "about:blank", text.data, *out,
+    /* The document's base URL (its <base href> as the tree stands), then
+     * the API's parse against it: UTF-8, whatever the document's own
+     * encoding, which only its links' queries are written in. */
+    bool parsed = os64_dom_resolve(dom->document, dom->url != NULL ? dom->url : "about:blank", "", *out,
                                    OS64_DOM_URL_MAX);
+    char *base = parsed ? d_alloc(dom, OS64_DOM_URL_MAX) : NULL;
+    if (parsed && base == NULL) {
+        d_free(dom, *out);
+        *out = NULL;
+        d_string_free(dom, &text);
+        d_error(ctx, "QuotaExceededError", "URL quota exceeded");
+        return -1;
+    }
+    if (parsed) {
+        os64_memcpy(base, *out, OS64_DOM_URL_MAX);
+        parsed = resolve(text.data, base, *out, OS64_DOM_URL_MAX);
+        d_free(dom, base);
+    }
     d_string_free(dom, &text);
     if (!parsed) {
         d_free(dom, *out);

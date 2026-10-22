@@ -47,6 +47,7 @@ typedef struct {
     size_t length;
     bool has;                   /* a body, not null */
     bool used;                  /* disturbed: read, or read from */
+    bool consumed;              /* read whole by a body method, whose reader keeps the stream locked */
     JSValue stream;             /* made at the first ask, [SameObject] */
     JSValue aborted;            /* the abort reason a fetch's signal gave it, or undefined */
 } DBody;
@@ -673,12 +674,16 @@ static int headers_fill(os64_dom_t *dom, JSContext *ctx, JSValueConst self, JSVa
         d_sequence_free(ctx, pairs, count);
         return result;
     }
-    /* record<ByteString, ByteString>: own enumerable string keys, in order,
-     * each value read as its key is reached (WebIDL § 3.2.18). */
+    /* record<ByteString, ByteString> (WebIDL § 3.2.18): each own string key
+     * in order, its descriptor asked, and an enumerable one's key made a
+     * ByteString BEFORE its value is read; the record is whole before fill
+     * appends any of it. */
     JSPropertyEnum *props;
     uint32_t count;
     if (JS_GetOwnPropertyNames(ctx, &props, &count, init, JS_GPN_STRING_MASK) < 0) return -1;
-    int result = 0;
+    JSValue *pairs = count ? js_mallocz(ctx, 2 * (size_t)count * sizeof(*pairs)) : NULL;
+    int result = count && pairs == NULL ? -1 : 0;
+    size_t taken = 0;
     for (uint32_t i = 0; result == 0 && i < count; i++) {
         JSPropertyDescriptor desc;
         int has = JS_GetOwnProperty(ctx, &desc, init, props[i].atom);
@@ -689,16 +694,40 @@ static int headers_fill(os64_dom_t *dom, JSContext *ctx, JSValueConst self, JSVa
         JS_FreeValue(ctx, desc.getter);
         JS_FreeValue(ctx, desc.setter);
         if (!enumerable) continue;
-        JSValue name_value = JS_AtomToString(ctx, props[i].atom);
-        JSValue value = JS_IsException(name_value) ? JS_EXCEPTION : JS_GetProperty(ctx, init, props[i].atom);
-        char *name = NULL, *text = NULL;
-        size_t nlen, vlen;
-        if (JS_IsException(value) || !header_arguments(ctx, name_value, value, true, &name, &nlen, &text, &vlen) ||
-            headers_append(ctx, headers_state(self), name, nlen, text, vlen) < 0)
+        JSValue key = JS_AtomToString(ctx, props[i].atom);
+        char *bytes;
+        size_t length;
+        if (JS_IsException(key) || !d_byte_string(ctx, key, &bytes, &length)) {
+            JS_FreeValue(ctx, key);
             result = -1;
-        JS_FreeValue(ctx, name_value);
+            break;
+        }
+        js_free(ctx, bytes);
+        JSValue value = JS_GetProperty(ctx, init, props[i].atom);
+        JSValue text = JS_IsException(value) ? JS_EXCEPTION : JS_ToString(ctx, value);
         JS_FreeValue(ctx, value);
+        if (!JS_IsException(text) && !d_byte_string(ctx, text, &bytes, &length)) {
+            JS_FreeValue(ctx, text);
+            text = JS_EXCEPTION;
+        } else if (!JS_IsException(text)) js_free(ctx, bytes);
+        if (JS_IsException(text)) {
+            JS_FreeValue(ctx, key);
+            result = -1;
+            break;
+        }
+        pairs[2 * taken] = key;
+        pairs[2 * taken + 1] = text;
+        taken++;
     }
+    for (size_t i = 0; result == 0 && i < taken; i++) {
+        char *name, *value;
+        size_t nlen, vlen;
+        if (!header_arguments(ctx, pairs[2 * i], pairs[2 * i + 1], true, &name, &nlen, &value, &vlen) ||
+            headers_append(ctx, headers_state(self), name, nlen, value, vlen) < 0)
+            result = -1;
+    }
+    for (size_t i = 0; i < 2 * taken; i++) JS_FreeValue(ctx, pairs[i]);
+    js_free(ctx, pairs);
     for (uint32_t i = 0; i < count; i++) JS_FreeAtom(ctx, props[i].atom);
     js_free(ctx, props);
     return result;
@@ -1085,26 +1114,20 @@ int d_body_extract(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DBytes *
     return 1;
 }
 
-/* The MIME type a body's headers give it, for blob() and formData(): the
- * Content-Type, essence and charset (engine memory, "" for none). */
+/* The MIME type a body's headers give it, for blob() and formData()
+ * (engine memory, "" for none): the last Content-Type line as written,
+ * when it is a MIME type at all. A multipart body's boundary is one of its
+ * parameters, and may hold a comma, so the line is not taken from the
+ * combined value; blob() lowercases it, as a Blob's type is. */
 static char *body_type(JSContext *ctx, JSValueConst headers)
 {
-    DHeaders *h = headers_state(headers);
-    bool no_memory = false;
-    size_t length = 0;
-    char *joined = h != NULL ? list_get(ctx, h, "content-type", 12, &length, &no_memory) : NULL;
-    if (no_memory) return NULL;
-    char essence[WAY_MIME_ESSENCE_MAX], charset[WAY_MIME_CHARSET_MAX], out[WAY_MIME_ESSENCE_MAX + WAY_MIME_CHARSET_MAX + 16];
-    out[0] = '\0';
-    /* The last type of a combined value is the one "extract a MIME type"
-     * keeps. */
-    const char *last = joined;
-    for (size_t i = 0; joined != NULL && i < length; i++)
-        if (joined[i] == ',') last = joined + i + 1;
-    if (last != NULL && way_mime_parse(last, length - (size_t)(last - joined), essence, sizeof(essence), charset, sizeof(charset)))
-        os64_snprintf(out, sizeof(out), charset[0] ? "%s;charset=%s" : "%s", essence, charset);
-    js_free(ctx, joined);
-    return engine_dup(ctx, out, os64_strlen(out));
+    const DHeaders *h = headers_state(headers);
+    const DHeader *line = NULL;
+    for (size_t i = 0; h != NULL && i < h->count; i++)
+        if (d_same_nocase(h->list[i].name, h->list[i].name_length, "content-type", 12)) line = &h->list[i];
+    char essence[WAY_MIME_ESSENCE_MAX];
+    bool type = line != NULL && way_mime_parse(line->value, line->value_length, essence, sizeof(essence), NULL, 0);
+    return engine_dup(ctx, type ? line->value : "", type ? line->value_length : 0);
 }
 
 /* WebIDL's JSON.parse, as the engine's own. */
@@ -1127,9 +1150,22 @@ enum { BODY_TEXT, BODY_JSON, BODY_ARRAY_BUFFER, BODY_BLOB, BODY_FORM_DATA, BODY_
  * a promise. */
 static JSValue body_consume(os64_dom_t *dom, JSContext *ctx, JSValueConst self, DBody *b, JSValueConst headers, int kind)
 {
+    /* A body an abort errored answers its reason however often it is
+     * asked. */
+    if (!JS_IsUndefined(b->aborted)) {
+        b->used = true;
+        return d_promise_settled(ctx, JS_Throw(ctx, JS_DupValue(ctx, b->aborted)));
+    }
     if (body_unusable(b)) return d_promise_settled(ctx, JS_ThrowTypeError(ctx, "The body has already been read"));
     b->used = b->has;
-    if (!JS_IsUndefined(b->aborted)) return d_promise_settled(ctx, JS_Throw(ctx, JS_DupValue(ctx, b->aborted)));
+    /* "Fully read" takes a reader it never releases: the stream, made now
+     * or later, is closed and locked. */
+    b->consumed = b->has;
+    DStream *s = JS_IsUndefined(b->stream) ? NULL : stream_state(b->stream);
+    if (s != NULL) {
+        s->locked = true;
+        s->state = ST_CLOSED;
+    }
     const uint8_t *bytes = b->bytes != NULL ? b->bytes : (const uint8_t *)"";
     size_t length = b->has ? b->length : 0;
     (void)self;
@@ -1170,8 +1206,10 @@ static JSValue body_stream(os64_dom_t *dom, JSContext *ctx, JSValueConst self, D
         if (JS_IsException(stream)) return stream;
         b = body_of(self);
         b->stream = stream;
-        /* A body already read is a stream already closed. */
+        /* A body already read is a stream already closed, and one a body
+         * method read is locked by the reader it took. */
         if (b->used) stream_state(stream)->state = ST_CLOSED;
+        if (b->consumed) stream_state(stream)->locked = true;
     }
     return JS_DupValue(ctx, b->stream);
 }
@@ -2315,9 +2353,10 @@ void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, JSValueConst
         d_request_end(dom, request, true);
         return;
     }
-    /* Answered: a body not yet read is read as the reason. */
+    /* Answered: a body not yet read is read as the reason; an empty one
+     * closed before it could error, and reads as empty. */
     DResp *r = response_state(response);
-    if (r != NULL && JS_IsUndefined(r->body.aborted) && r->body.has && !r->body.used) {
+    if (r != NULL && JS_IsUndefined(r->body.aborted) && r->body.has && r->body.length != 0 && !r->body.used) {
         r->body.aborted = JS_DupValue(ctx, reason);
         DStream *s = JS_IsUndefined(r->body.stream) ? NULL : stream_state(r->body.stream);
         if (s != NULL && s->state == ST_READABLE && !s->delivered) {
@@ -2469,6 +2508,13 @@ os64_js_status_t os64_dom_fetched(os64_dom_t *dom, uint32_t token, const os64_do
 
 typedef struct { const char *name; int magic, argc; bool accessor; } Member;
 
+int d_iterator_next(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, JSCFunctionData *fn, int magic)
+{
+    JSValue function = JS_NewCFunctionData(ctx, fn, 0, magic, 1, &dom->anchor->value);
+    if (JS_IsException(function)) return -1;
+    return JS_DefinePropertyValueStr(ctx, prototype, "next", function, JS_PROP_C_W_E);
+}
+
 static int methods(os64_dom_t *dom, JSContext *ctx, JSValueConst target, JSCFunctionData *fn, const Member *list,
                    size_t count)
 {
@@ -2560,7 +2606,7 @@ int d_fetch_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         body_for_response[i].magic += R_BODY_BASE;
     }
     if (methods(dom, ctx, protos[0]->value, headers_member, kHeaders, 10) < 0 ||
-        d_method(dom, ctx, protos[1]->value, "next", headers_member, 0, H_NEXT) < 0 ||
+        d_iterator_next(dom, ctx, protos[1]->value, headers_member, H_NEXT) < 0 ||
         methods(dom, ctx, protos[2]->value, request_member, kRequest, 17) < 0 ||
         methods(dom, ctx, protos[2]->value, request_member, body_for_request, 8) < 0 ||
         methods(dom, ctx, protos[3]->value, response_member, kResponse, 8) < 0 ||

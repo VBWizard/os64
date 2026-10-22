@@ -203,33 +203,42 @@ static JSValue default_reason(os64_dom_t *dom, JSContext *ctx, const char *name,
     return d_dom_exception_new(dom, ctx, name, message);
 }
 
-/* The reason set and the dependents gathered; then each's steps: its
- * algorithms, then its `abort` event. -1 with an exception pending only
- * when the runtime failed under it. */
-static int signal_abort(os64_dom_t *dom, JSContext *ctx, JSValueConst signal, JSValueConst reason);
+/* Marks `signal` aborted with `reason` (taken); false when it already was. */
+static bool mark_aborted(os64_dom_t *dom, JSContext *ctx, DSignal *s, JSValue reason)
+{
+    if (s->aborted) {
+        JS_FreeValue(ctx, reason);
+        return false;
+    }
+    s->aborted = true;
+    JS_FreeValue(ctx, s->reason);
+    s->reason = reason;
+    if (s->timer != 0) {
+        d_timer_cancel(dom, s->timer);
+        s->timer = 0;
+    }
+    return true;
+}
 
+/* A signal's abort steps: its fetches aborted, then its `abort` event. The
+ * list is taken whole: what a run adds goes nowhere, since an aborted
+ * signal never runs again; its dependents were gathered before (below).
+ * -1 when the runtime is finished with. */
 static int abort_steps(os64_dom_t *dom, JSContext *ctx, JSValueConst signal)
 {
     DSignal *s = signal_state(signal);
     if (s == NULL) return 0;
-    /* The list is taken whole: what a run adds goes nowhere, since an
-     * aborted signal never runs again. */
     DAlgorithm *list = s->algorithms;
     size_t count = s->count;
     s->algorithms = NULL;
     s->count = s->cap = 0;
     JSValue reason = JS_DupValue(ctx, s->reason);
-    int result = 0;
     for (size_t i = 0; i < count; i++) {
-        if (result == 0) {
-            if (list[i].kind == A_FETCH) d_fetch_abort(dom, ctx, list[i].token, list[i].target, reason);
-            else if (list[i].kind == A_FOLLOW) result = signal_abort(dom, ctx, list[i].target, reason);
-        }
+        if (list[i].kind == A_FETCH) d_fetch_abort(dom, ctx, list[i].token, list[i].target, reason);
         JS_FreeValue(ctx, list[i].target);
     }
     js_free(ctx, list);
     JS_FreeValue(ctx, reason);
-    if (result < 0) return result;
     JSValue event = d_event_new(dom, ctx, "abort", false, false, true);
     if (JS_IsException(event)) return -1;
     int dispatched = d_dispatch_plain(dom, ctx, event, &signal_state(signal)->target);
@@ -237,6 +246,12 @@ static int abort_steps(os64_dom_t *dom, JSContext *ctx, JSValueConst signal)
     return dispatched < 0 ? -1 : 0;
 }
 
+/* DOM § 3.2 "signal abort": the reason set; every dependent not yet
+ * aborted marked with it, and theirs in turn (a Request's signal follows
+ * its input's, so a page can chain them as deep as it likes: the walk is a
+ * worklist, never recursion); then the signal's own steps, its event
+ * first, then each dependent's in the order gathered. -1 with an exception
+ * pending only when the runtime failed under it. */
 static int signal_abort(os64_dom_t *dom, JSContext *ctx, JSValueConst signal, JSValueConst reason)
 {
     DSignal *s = signal_state(signal);
@@ -244,14 +259,38 @@ static int signal_abort(os64_dom_t *dom, JSContext *ctx, JSValueConst signal, JS
     JSValue value = JS_IsUndefined(reason) ? default_reason(dom, ctx, "AbortError", "The operation was aborted.")
                                            : JS_DupValue(ctx, reason);
     if (JS_IsException(value)) return -1;
-    s->aborted = true;
-    JS_FreeValue(ctx, s->reason);
-    s->reason = value;
-    if (s->timer != 0) {
-        d_timer_cancel(dom, s->timer);
-        s->timer = 0;
+    mark_aborted(dom, ctx, s, value);
+    JSValue *gathered = NULL;
+    size_t count = 0, cap = 0;
+    int result = 0;
+    /* signal first, then each gathered dependent, scanned in turn. */
+    for (size_t at = 0; result == 0; at++) {
+        JSValueConst from = at == 0 ? signal : gathered[at - 1];
+        DSignal *f = signal_state(from);
+        for (size_t i = 0; f != NULL && i < f->count && result == 0; i++) {
+            DSignal *d = f->algorithms[i].kind == A_FOLLOW ? signal_state(f->algorithms[i].target) : NULL;
+            if (d == NULL || !mark_aborted(dom, ctx, d, JS_DupValue(ctx, s->reason))) continue;
+            if (count == cap) {
+                size_t grown_cap = cap ? cap * 2 : 8;
+                JSValue *grown = js_realloc(ctx, gathered, grown_cap * sizeof(*grown));
+                if (grown == NULL) {
+                    result = -1;
+                    break;
+                }
+                gathered = grown;
+                cap = grown_cap;
+            }
+            gathered[count++] = JS_DupValue(ctx, f->algorithms[i].target);
+        }
+        if (at == count) break;
     }
-    return abort_steps(dom, ctx, signal);
+    if (result == 0) result = abort_steps(dom, ctx, signal);
+    for (size_t i = 0; i < count; i++) {
+        if (result == 0) result = abort_steps(dom, ctx, gathered[i]);
+        JS_FreeValue(ctx, gathered[i]);
+    }
+    js_free(ctx, gathered);
+    return result;
 }
 
 int d_signal_abort(os64_dom_t *dom, JSContext *ctx, JSValueConst signal, JSValueConst reason)
