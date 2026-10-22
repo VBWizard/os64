@@ -1008,27 +1008,37 @@ the style object and WPT all see it go with the switch.
 - **`text-overflow`** (Overflow 4 § 4.1): `clip | ellipsis`. A block that
   clips (`overflow` not `visible`) and asks for an ellipsis has one laid out
   once in its own fonts (`flow_box_t.ellipsis`: U+2026, or three periods
-  where the fonts have no glyph for it). Where a line ends in it is ONE
-  rule in libflow with two doors (`flow_line_cut`, beside the box tree it
-  reads): what must end by the limit — the end edge less the ellipsis — is
-  kept, the ellipsis starts where that ends, and nothing at or past it is
-  drawn by the painter or hit by `flow_hit`, which answers the block there
-  (the ellipsis stands in no inline box, as in Chrome). It lives in
-  libflow and not the painter because hit testing is libflow's and the
-  painter can call it unchanged; a rule written twice is two rules. A text
-  across the limit keeps the characters that end by it
-  (`flow_text_kept`), an inline box's piece ends where the kept content
-  does, an atom at or past the cut is left out whole with everything in
-  it. Spaces that hang at a pre-wrap line's end do not count as content
-  passing the end. A line with no room before the ellipsis keeps its first
-  character or atom, clipped rather than ellipsed, and the ellipsis
-  follows it, clipped by the box with it. The end is where the block's
-  scroll shows it, so content scrolled into view is drawn and a line
-  scrolled to its end has no ellipsis. libflow's walk hands the painter
-  the block's LINE boxes after each line's pieces, and the painter draws
-  the ellipsis then, filled as the block's text is (`text_fill`); it works
-  a line's cut once a paint (`LineCuts`), and `flow_hit` once a hit, never
-  once a piece.
+  where the fonts have no glyph for it). Where a line ends in it, and what
+  of each box on it is kept, is ONE predicate in libflow with two doors,
+  beside the box tree it reads: `flow_line_cut` gives the limit (the end
+  edge less the ellipsis) and where the ellipsis starts, and
+  `flow_line_cut_keeps` is the one place the keep rule is written — an
+  atom or a marker kept whole only when it ends by the limit, a text kept
+  to its last character that does, an inline box's piece kept up to where
+  the ellipsis starts. `flow_box_cut_away` asks it of a box and every box
+  it is inside, so a box stacked out of a piece left out is left out too.
+  The painter draws only what is kept, and `flow_hit` hits only that: it
+  asks the predicate of each piece on a cut line and `flow_box_cut_away`
+  of each layer, and past the ellipsis's start answers the block (the
+  ellipsis stands in no inline box, as in Chrome). It lives in libflow and
+  not the painter because hit testing is libflow's and the painter can
+  call it unchanged; a rule written twice is two rules. An absolute box in
+  an inline is out of flow, not on the line, and is not hidden: § 4.1
+  hides a line's characters and atomic inline-level elements. Spaces that
+  hang at a pre-wrap line's end do not count as content passing the end.
+  A line with no room before the ellipsis keeps its first character or
+  atom, clipped rather than ellipsed, and the ellipsis follows it, clipped
+  by the box with it. The end is where the block's scroll shows it, so
+  content scrolled into view is drawn and a line scrolled to its end has no
+  ellipsis. libflow's walk hands the painter the block's LINE boxes after
+  each line's pieces, and the painter draws the ellipsis then, in the
+  fill its text takes (`text_fill`); a text clip's walk hands it the line
+  too, so a `background-clip: text` heading's ellipsis takes the gradient,
+  or the clip's solid pen where the face refuses the clip. Cuts are kept
+  in a memo keyed by the line that grows (`flow_cut_memo_t`), one for a
+  paint and one for a hit, so each line is worked once whatever order its
+  boxes and layers are asked in; a hit works only the lines under the
+  point or that a layer holding the point is inside.
 - **`outline`** and its four longhands (UI 4 § 3), the shorthand's parts
   read in any order (`auto` is a style and a colour both, so `outline:
   auto solid` is read by backing up, `outline_rest`): a square ring of a
@@ -1091,7 +1101,7 @@ keywords may appear once.
 | libdom's style object | every property name libgarb reads is a member three ways (CSSOM § 6.6.1): camel-cased, webkit-cased for a `-webkit-` name, and dashed as written, for shorthands and aliases too (`garb_prop_name_at`, `garb_prop_known`); a marked one goes with the switch |
 | `flow_visitor_t.outline` | its last member: handed each ring last in its stacking context; NULL (as `flow_visit` passes it) means no outline step |
 | the LINE visit | the walk (`flow_visit`, `flow_visit_groups`) hands a LINE box over only for a block with an ellipsis, after the line's pieces |
-| `flow_line_cut`, `flow_text_kept` (libflow) | where a line ends in its ellipsis: the one rule the painter and `flow_hit` both read |
+| `flow_line_cut`, `flow_line_cut_keeps`, `flow_box_cut_away`, `flow_cut_memo_t` (libflow) | where a line ends in its ellipsis and what of each box on it is kept: the one predicate the painter and `flow_hit` both read, and the memo each keeps its cuts in |
 | `os64_text_layout_t.letter_spacing` | tracking after every cluster but a tab, the last too; trimming it at a line's end is the caller's |
 | `width_limits`, `hold_width`, `ratio_width_held` (libflow) | the one door every width a ratio makes or holds passes through, in every formatting context |
 | motion | `copy_prop` covers all thirteen longhands, so `same_value` does too; `letter-spacing`, `outline-width`, `-offset`, `-color`, `object-position` and `aspect-ratio` (by its logarithm, Values 4 § 5.7.1) interpolate, and the keywords are discrete at half way |
