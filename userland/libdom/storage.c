@@ -394,10 +394,6 @@ static DStorageArea *area_of(os64_dom_t *dom, os64_dom_storage_area_t which)
     return area;
 }
 
-/* The store read into a fresh map, this page's changes replayed over it,
- * and the map replaced. False with the map as it was: on no memory (tried
- * again at the next task), or when the store could not be read or was not
- * in the format (`*broken`, and the area keeps to memory). */
 static bool only_sets(void *opaque, const char *key, size_t key_length, const char *value, size_t value_length)
 {
     (void)key; (void)key_length; (void)value_length;
@@ -412,33 +408,34 @@ static bool image_valid(const void *image, size_t length)
     return length == 0 || (os64_dom_storage_walk(image, length, only_sets, &sets) && sets);
 }
 
+/* The store read into a fresh map, this page's changes replayed over it,
+ * and the map replaced. False with the map as it was: on no memory, or a
+ * store still growing past its room at the last asking (both tried again
+ * at the next task), or when the store could not be read or was not in
+ * the format (`*broken`, and the area keeps to memory). */
 static bool area_load(DStorageArea *area, bool *broken)
 {
     os64_dom_t *dom = area->dom;
     const os64_dom_storage_t *provider = &dom->storage_providers[area->which];
     *broken = false;
-    size_t cap = LOAD_FIRST;
-    char *image = NULL;
-    int64_t length = -1;
+    size_t room = LOAD_FIRST;
+    char *image;
+    int64_t length;
     /* A store that grows between the asking and the reading is asked
-     * again, a few times; one that keeps growing is tried at the next
-     * task. */
-    for (int tries = 0; tries < LOAD_TRIES; tries++) {
-        os64_free(image);
-        image = os64_malloc(cap);
+     * again with the room it answered, a few times. */
+    for (int tries = 1;; tries++) {
+        image = os64_malloc(room);
         if (image == NULL) return false;
-        length = provider->load(provider->opaque, area->origin, image, cap);
+        length = provider->load(provider->opaque, area->origin, image, room);
         if (length < 0 || (uint64_t)length > IMAGE_MAX) {
             os64_free(image);
             *broken = true;
             return false;
         }
-        if ((uint64_t)length <= cap) break;
-        cap = (size_t)length;
-    }
-    if ((uint64_t)length > cap) {
+        if ((uint64_t)length <= room) break;
         os64_free(image);
-        return false;
+        if (tries == LOAD_TRIES) return false;
+        room = (size_t)length;
     }
     if (!image_valid(image, (size_t)length)) {
         os64_free(image);

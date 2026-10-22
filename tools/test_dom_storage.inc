@@ -107,6 +107,10 @@ typedef struct {
     uint64_t identity;
     unsigned identities, loads, commits;
     bool fail_load, fail_commit;
+    /* load answers this length and writes nothing when it is not 0; with
+     * outgrow, one byte more than the room it is given. */
+    int64_t claimed;
+    bool outgrow;
     os64_dom_storage_status_t forced;   /* answered by commit when not OK */
     char origin[128];
     char last_changes[4096];
@@ -139,6 +143,8 @@ static int64_t fake_load(void *opaque, const char *origin, void *out, size_t cap
     snprintf(s->origin, sizeof(s->origin), "%s", origin);
     s->loads++;
     if (s->fail_load) return -1;
+    if (s->claimed != 0) return s->claimed;
+    if (s->outgrow) return (int64_t)cap + 1;
     if (s->length <= cap && s->length != 0) memcpy(out, s->image, s->length);
     return (int64_t)s->length;
 }
@@ -434,6 +440,51 @@ static void dom_storage_provider_cases(void)
         fixture_free(&f);
         fake_store_free(&store);
     }
+
+    /* A store bigger than any image libdom writes is one it did not write:
+     * never read, never written over. */
+    store.claimed = (int64_t)64 * 1024 * 1024;
+    f = storage_fixture("http://example.test/", &store);
+    if (!fixture_ready(&f)) { fake_store_free(&store); return; }
+    dom_script(&f, STORAGE_ASSERT "assert(localStorage.length===0);localStorage.setItem('a','1');"
+               "assert(localStorage.getItem('a')==='1');", "storage: a store past any image");
+    os64_dom_drain(f.binding);
+    check(store.loads == 1 && store.commits == 0, "storage: a store past any image is never read or written over");
+    fixture_free(&f);
+    fake_store_free(&store);
+
+    /* A store that grows every time it is asked: tried a few times, then
+     * at the next task; the page's changes still reach it. */
+    fake_store_set(&store, "os64 storage 1\n+5 6\nthereyonder\n");
+    store.outgrow = true;
+    f = storage_fixture("http://example.test/", &store);
+    if (!fixture_ready(&f)) { fake_store_free(&store); return; }
+    dom_script(&f, STORAGE_ASSERT "localStorage.setItem('mine','1');", "storage: a store that keeps growing");
+    check(store.loads > 1 && store.loads <= 8, "storage: a growing store is asked again, a few times");
+    unsigned growing = store.loads;
+    os64_dom_storage_settle(f.binding);
+    store.outgrow = false;
+    dom_script(&f, STORAGE_ASSERT "assert(localStorage.getItem('there')==='yonder',String(localStorage.getItem('there')));"
+               "assert(localStorage.getItem('mine')==='1',String(localStorage.getItem('mine')));",
+               "storage: a store that stopped growing");
+    check(store.loads == growing + 1, "storage: the next task reads the store once it holds still");
+    fixture_free(&f);
+    fake_store_free(&store);
+
+    /* A key and a value holding the format's own bytes round-trip through
+     * the store: the records are counted, never split on a byte. */
+    f = storage_fixture("http://example.test/", &store);
+    if (!fixture_ready(&f)) { fake_store_free(&store); return; }
+    dom_script(&f, "localStorage.setItem('k\\n+1 1\\nx\\t','v\\n-1\\nk\\n');", "storage: the format's bytes in a key");
+    os64_dom_drain(f.binding);
+    fixture_free(&f);
+    f = storage_fixture("http://example.test/", &store);
+    if (!fixture_ready(&f)) { fake_store_free(&store); return; }
+    dom_script(&f, STORAGE_ASSERT "assert(localStorage.length===1);"
+               "assert(localStorage.getItem('k\\n+1 1\\nx\\t')==='v\\n-1\\nk\\n');",
+               "storage: a key holding newlines, tabs and record heads round-trips");
+    fixture_free(&f);
+    fake_store_free(&store);
 
     /* Forgetting: the maps and their uncommitted changes go, and the next
      * touch reads the store. */
