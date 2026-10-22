@@ -6,6 +6,7 @@
 #include "os64/proc.h"
 #include "os64/str.h"
 #include "os64/io.h"
+#include "os64/proc.h"
 
 /* Read on the window owner thread, including after a page owner is freed. */
 static size_t teardown_leaks;
@@ -81,6 +82,10 @@ struct yonder_scripts {
     const char *task_address;
     // The page's navigation timing, which its binding reads when asked.
     os64_dom_timing_t timing;
+    // How long the last task's script took the engine to evaluate, in
+    // microseconds; -1 when the last task evaluated none
+    // (yonder_scripts_task_us).
+    int64_t task_us;
 };
 
 static void release_item(yonder_scripts_t *s, Item *it)
@@ -335,6 +340,7 @@ yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc, os64_page_state_
     s->options.timing = NULL;
     os64_strcopy(s->url, sizeof(s->url), options->url != NULL ? options->url : "about:blank");
     s->blocking = -1;
+    s->task_us = -1;
     if (options->timing != NULL) {
         s->timing = *options->timing;
     } else {
@@ -554,6 +560,7 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
     char name[OS64_JS_SOURCE_NAME_CAP];
     os64_strcopy(name, sizeof(name), it->name);
     s->task_address = it->address;
+    s->task_us = -1;
     if (it->state == STATE_FAILED) {
         out->status = OS64_JS_EXCEPTION;
         os64_strcopy(out->message, sizeof(out->message), it->why);
@@ -566,7 +573,12 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
         char *source = it->source;
         size_t length = it->length;
         it->source = NULL;
+        // The engine's whole evaluation, compiling the source included: the
+        // number a bytecode cache would make smaller (MODERN_WEB.md slice 7).
+        int64_t began = os64_micros();
         os64_js_run(s->runtime, source, length, name, out);
+        int64_t ended = os64_micros();
+        s->task_us = began >= 0 && ended >= began ? ended - began : -1;
         os64_free(source);
         if (out->status == OS64_JS_EXCEPTION && out->jobs_pending)
             drain_after_exception(s, out);
@@ -732,8 +744,10 @@ os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *s, const os64_html_no
                                          os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
-    if (s != NULL)
+    if (s != NULL) {
         s->task_address = NULL;
+        s->task_us = -1;
+    }
     if (prevented != NULL)
         *prevented = false;
     if (s == NULL || s->dead)
@@ -786,6 +800,7 @@ bool yonder_scripts_timer_fire(yonder_scripts_t *s, uint64_t now, os64_js_outcom
     if (s != NULL) {
         s->written = 0;
         s->task_address = NULL;
+        s->task_us = -1;
     }
     if (s == NULL || s->dead || !os64_dom_timer_fire(s->dom, now, out))
         return false;
@@ -832,6 +847,11 @@ uint64_t yonder_scripts_written(const yonder_scripts_t *s)
 const char *yonder_scripts_task_address(const yonder_scripts_t *s)
 {
     return s != NULL ? s->task_address : NULL;
+}
+
+int64_t yonder_scripts_task_us(const yonder_scripts_t *s)
+{
+    return s != NULL ? s->task_us : -1;
 }
 
 yonder_diag_t *yonder_scripts_diag(const yonder_scripts_t *s)

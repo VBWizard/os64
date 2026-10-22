@@ -147,6 +147,10 @@ bool yonder_scripts_alive(const yonder_scripts_t *scripts);
 // source name (OS64_JS_SOURCE_NAME_CAP) may cut short; NULL when the task
 // was an inline script, an event or a timer. Good until the host is freed.
 const char *yonder_scripts_task_address(const yonder_scripts_t *scripts);
+// How long the engine took to evaluate the script the last task ran
+// (os64_js_run, compiling it included), in microseconds; -1 when the last
+// task was an event or a timer, or ran no script.
+int64_t yonder_scripts_task_us(const yonder_scripts_t *scripts);
 // The record the host was given (options.diag).
 yonder_diag_t *yonder_scripts_diag(const yonder_scripts_t *scripts);
 // The serial a script's fetch job carries back.
