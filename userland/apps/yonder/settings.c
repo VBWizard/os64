@@ -240,7 +240,15 @@ const char *yonder_settings_saved_profile(char *out, size_t cap)
         os64_strcopy(out, cap, YONDER_PROFILE_DEFAULT);
         return NULL;
     }
-    size_t n = rc == 0 ? os64_strlen(out) : 0;
+    if (rc != 0) {
+        static const char kLong[] = "yonder.conf's profile is too long for a path; using " YONDER_PROFILE_DEFAULT ".";
+        static const char kUnread[] = "yonder.conf could not be read for its profile; using " YONDER_PROFILE_DEFAULT
+                                      ".";
+        os64_debug_log(rc == OS64_CONF_TRUNCATED ? kLong : kUnread);
+        os64_strcopy(out, cap, YONDER_PROFILE_DEFAULT);
+        return rc == OS64_CONF_TRUNCATED ? kLong : kUnread;
+    }
+    size_t n = os64_strlen(out);
     while (n > 1 && out[n - 1] == '/')
         out[--n] = '\0';
     if (n == 0 || out[0] != '/') {

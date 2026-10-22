@@ -88,6 +88,11 @@ bool yonder_storage_file_name(const char *origin, char *out, size_t cap)
     return used != 0 && !os64_streq(out, ".") && !os64_streq(out, "..");
 }
 
+// A temp file is its store's path and "+<task>.<count>.new". The '+' is a
+// byte a store's name never holds (it is %2B there), so no origin's store
+// is another's temp. The room it needs is kept free in every store path.
+#define TEMP_SUFFIX_MAX (1 + 20 + 1 + 10 + 4)
+
 // <profile>/storage, and the store file for `origin` in it.
 static bool store_dir(const yonder_storage_t *st, char *out, size_t cap)
 {
@@ -95,6 +100,8 @@ static bool store_dir(const yonder_storage_t *st, char *out, size_t cap)
     return st->profile[0] == '/' && n > 0 && (size_t)n < cap;
 }
 
+// False when the profile is not a full path, or the origin's file name
+// and its temp's would not fit a path.
 static bool store_path(const yonder_storage_t *st, const char *origin, char *out, size_t cap)
 {
     char name[OS64_PATH_MAX];
@@ -102,7 +109,22 @@ static bool store_path(const yonder_storage_t *st, const char *origin, char *out
         return false;
     size_t used = os64_strlen(out);
     int n = os64_snprintf(out + used, cap - used, "/%s", name);
-    return n > 0 && (size_t)n < cap - used;
+    return n > 0 && (size_t)n + TEMP_SUFFIX_MAX < cap - used;
+}
+
+// Why the store for `origin` has no path, for the status line.
+static void say_no_path(yonder_storage_t *st, const char *origin)
+{
+    char dir[OS64_PATH_MAX];
+    if (st->profile[0] != '/')
+        os64_snprintf(st->problem, sizeof(st->problem),
+                      "Page storage is not kept: the profile folder is not a full path (%s).", st->profile);
+    else if (!store_dir(st, dir, sizeof(dir)))
+        os64_snprintf(st->problem, sizeof(st->problem),
+                      "Page storage is not kept: the profile folder's path is too long (%s).", st->profile);
+    else
+        os64_snprintf(st->problem, sizeof(st->problem),
+                      "Page storage is not kept for %s: its address is too long to name a file.", origin);
 }
 
 // Every folder of `path` that is missing, made, parents first. False when
@@ -163,18 +185,27 @@ uint64_t yonder_storage_identity(yonder_storage_t *st, os64_dom_storage_area_t a
 }
 
 // The store file's bytes as they stand: true with *bytes NULL and *length
-// 0 when there is none; false when it is there and cannot be read whole,
-// or is a folder.
-static bool read_store(const char *path, uint8_t **bytes, size_t *length)
+// 0 when there is none (or it went between the asking and the reading);
+// false, with the problem said, when it is there and cannot be read whole,
+// is a folder, or there is no memory to read it into.
+static bool read_store(yonder_storage_t *st, const char *path, uint8_t **bytes, size_t *length)
 {
     *bytes = NULL;
     *length = 0;
     os64_dirent_t entry;
     if (os64_stat(path, &entry) < 0)
         return true;
-    if (entry.flags & OS64_DE_DIR)
-        return false;
-    return os64_slurp(path, STORE_MAX, bytes, length) == OS64_SLURP_OK;
+    os64_slurp_status_t status = entry.flags & OS64_DE_DIR ? OS64_SLURP_IO_ERROR
+                                                           : os64_slurp(path, STORE_MAX, bytes, length);
+    if (status == OS64_SLURP_OK)
+        return true;
+    if (status == OS64_SLURP_NO_FILE && os64_stat(path, &entry) < 0)
+        return true;
+    os64_snprintf(st->problem, sizeof(st->problem),
+                  status == OS64_SLURP_NO_MEMORY ? "Page storage is not kept: no memory to read %s."
+                                                 : "Page storage is not kept: %s cannot be read.",
+                  path);
+    return false;
 }
 
 int64_t yonder_storage_load(yonder_storage_t *st, os64_dom_storage_area_t area, const char *origin, void *out,
@@ -191,8 +222,10 @@ int64_t yonder_storage_load(yonder_storage_t *st, os64_dom_storage_area_t area, 
         return (int64_t)s->length;
     }
     char path[OS64_PATH_MAX];
-    if (!store_path(st, origin, path, sizeof(path)))
+    if (!store_path(st, origin, path, sizeof(path))) {
+        say_no_path(st, origin);
         return -1;
+    }
     os64_dirent_t entry;
     if (os64_stat(path, &entry) < 0)
         return 0;
@@ -201,7 +234,7 @@ int64_t yonder_storage_load(yonder_storage_t *st, os64_dom_storage_area_t area, 
         return entry.size > STORE_MAX ? (int64_t)STORE_MAX + 1 : (int64_t)entry.size;
     uint8_t *bytes;
     size_t length;
-    if (!read_store(path, &bytes, &length))
+    if (!read_store(st, path, &bytes, &length))
         return -1;
     if (length <= cap)
         os64_memcpy(out, bytes, length);
@@ -234,6 +267,13 @@ static bool refused_key(void *opaque, const char *key, size_t key_length, const 
     for (size_t i = 0; i < key_length; i++)
         r->text[r->used++] = key[i] != '\0' ? key[i] : '?';
     r->text[r->used] = '\0';
+    return true;
+}
+
+static bool every_record(void *opaque, const char *key, size_t key_length, const char *value,
+                         size_t value_length)
+{
+    (void)opaque, (void)key, (void)key_length, (void)value, (void)value_length;
     return true;
 }
 
@@ -271,7 +311,7 @@ static bool write_all(int32_t h, const uint8_t *p, size_t n)
 static bool publish(yonder_storage_t *st, const char *path, const void *image, size_t length)
 {
     char temp[OS64_PATH_MAX];
-    int n = os64_snprintf(temp, sizeof(temp), "%s.%lu.%u.new", path, (unsigned long)os64_taskid(),
+    int n = os64_snprintf(temp, sizeof(temp), "%s+%lu.%u.new", path, (unsigned long)os64_taskid(),
                           (unsigned)++st->temps);
     if (n <= 0 || (size_t)n >= sizeof(temp))
         return false;
@@ -331,8 +371,7 @@ os64_dom_storage_status_t yonder_storage_commit(yonder_storage_t *st, os64_dom_s
         return commit_session(st, origin, changes, length, diag);
     char dir[OS64_PATH_MAX], path[OS64_PATH_MAX];
     if (!store_dir(st, dir, sizeof(dir)) || !store_path(st, origin, path, sizeof(path))) {
-        os64_snprintf(st->problem, sizeof(st->problem),
-                      "Page storage is not kept: the profile folder is not a full path (%s).", st->profile);
+        say_no_path(st, origin);
         return OS64_DOM_STORAGE_FAILED;
     }
     if (!make_dirs(dir)) {
@@ -343,25 +382,30 @@ os64_dom_storage_status_t yonder_storage_commit(yonder_storage_t *st, os64_dom_s
     // top. A store that is there and cannot be read is never written over.
     uint8_t *image;
     size_t image_length;
-    if (!read_store(path, &image, &image_length)) {
-        os64_snprintf(st->problem, sizeof(st->problem), "Page storage is not kept: %s cannot be read.", path);
+    if (!read_store(st, path, &image, &image_length))
         return OS64_DOM_STORAGE_FAILED;
-    }
     void *merged;
     size_t merged_length;
     os64_dom_storage_status_t status = os64_dom_storage_merge(image, image_length, changes, length, &merged,
                                                               &merged_length);
     bool had = image != NULL;
+    // A refused merge is a file in no format of libdom's, or no memory.
+    if (status == OS64_DOM_STORAGE_FAILED)
+        os64_snprintf(st->problem, sizeof(st->problem),
+                      os64_dom_storage_walk(image, image_length, every_record, NULL)
+                          ? "Page storage is not kept for %s: no memory to merge its changes."
+                          : "Page storage is not kept for %s: its file is not one yonder wrote.",
+                      origin);
     os64_free(image);
     if (status == OS64_DOM_STORAGE_FULL)
         say_full(diag, "localStorage", origin, changes, length);
-    if (status == OS64_DOM_STORAGE_FAILED)
-        os64_snprintf(st->problem, sizeof(st->problem),
-                      "Page storage is not kept for %s: its file is not one yonder wrote.", origin);
     if (status != OS64_DOM_STORAGE_OK)
         return status;
-    // A store left empty is no store.
-    bool ok = merged != NULL ? publish(st, path, merged, merged_length) : !had || os64_unlink(path) == 0;
+    // A store left empty is no store, and one another window removed
+    // first is gone as asked.
+    os64_dirent_t entry;
+    bool ok = merged != NULL ? publish(st, path, merged, merged_length)
+                             : !had || os64_unlink(path) == 0 || os64_stat(path, &entry) < 0;
     os64_free(merged);
     if (!ok) {
         os64_snprintf(st->problem, sizeof(st->problem), "Page storage is not kept: %s cannot be written.", path);

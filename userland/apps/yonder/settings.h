@@ -79,9 +79,10 @@ bool yonder_settings_saved_diagnostics(char *out, size_t cap);
 // THE PROFILE FOLDER (YONDER_HONEY_DO.md § Where yonder's files live):
 // `profile = <dir>`, where the person's own files are kept, page storage
 // first among them. Into `out` without a trailing slash; absent, it is
-// YONDER_PROFILE_DEFAULT. A value that is not a full path is refused for
-// the default, and the answer is then the sentence for the status line
-// (NULL otherwise). The folder is made when something is first kept in it.
+// YONDER_PROFILE_DEFAULT. A value that is not a full path, or too long for
+// `out`, or a yonder.conf that cannot be read, is refused for the default,
+// and the answer is then the sentence for the status line (NULL
+// otherwise). The folder is made when something is first kept in it.
 #define YONDER_PROFILE_DEFAULT "/home/yogi/.yonder"
 const char *yonder_settings_saved_profile(char *out, size_t cap);
 

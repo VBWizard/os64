@@ -32,6 +32,9 @@ static struct { char path[256]; char *data; size_t len; bool used; uint64_t mtim
 static char fake_dirs[16][256];
 static int nfake_dirs, fake_writes, fake_dir_at;
 static bool fake_fail_open;
+/* A disk that writes a byte a call, or refuses a write, a sync or a
+ * rename. */
+static bool fake_short_write, fake_fail_write, fake_fail_sync, fake_fail_rename;
 static uint64_t fake_second = 1;
 static const char *fake_parent(const char *path, char *out, size_t cap) {
     snprintf(out,cap,"%s",path); char *slash=strrchr(out,'/');
@@ -50,6 +53,7 @@ static int fake_file(const char *path) {
 static void fake_reset(void) {
     for(int i=0;i<FAKE_FILES;i++) free(fake_files[i].data);
     memset(fake_files,0,sizeof(fake_files)); nfake_dirs=0; fake_writes=0; fake_fail_open=false;
+    fake_short_write=fake_fail_write=fake_fail_sync=fake_fail_rename=false;
     fake_second=1;
     snprintf(fake_dirs[nfake_dirs++],256,"/tmp");
 }
@@ -72,6 +76,8 @@ int64_t os64_open(const char *p, const char *m) {
 int64_t os64_write(int32_t h, const void *b, size_t n) {
     if(h<FAKE_HANDLE) return port_os64_write(h,b,n);
     int f=h-FAKE_HANDLE;
+    if(fake_fail_write) return -1;
+    if(fake_short_write && n>1) n=1;
     fake_files[f].data=realloc(fake_files[f].data,fake_files[f].len+n+1);
     memcpy(fake_files[f].data+fake_files[f].len,b,n); fake_files[f].len+=n;
     fake_files[f].data[fake_files[f].len]='\0';
@@ -81,7 +87,7 @@ int64_t os64_read(int32_t h, void *b, size_t n) { (void)h; (void)b; (void)n; ret
 int64_t os64_close(int32_t h) { (void)h; return 0; }
 int64_t os64_rename(const char *from, const char *to) {
     int f=fake_file(from);
-    if(f<0) return -1;
+    if(f<0 || fake_fail_rename) return -1;
     int old=fake_file(to);
     if(old>=0) { free(fake_files[old].data); memset(&fake_files[old],0,sizeof(fake_files[old])); }
     snprintf(fake_files[f].path,256,"%s",to);
@@ -89,7 +95,7 @@ int64_t os64_rename(const char *from, const char *to) {
     fake_writes++;
     return 0;
 }
-int64_t os64_sync(int32_t h) { (void)h; return 0; }
+int64_t os64_sync(int32_t h) { (void)h; return fake_fail_sync ? -1 : 0; }
 int64_t os64_unlink(const char *p) {
     int f=fake_file(p);
     if(f<0) return -1;
@@ -453,7 +459,9 @@ os64_slurp_status_t os64_slurp(const char *path, size_t cap, uint8_t **bytes, si
     if(f>=0) {
         if(fake_slurp_fail) return OS64_SLURP_IO_ERROR;
         if(fake_files[f].len>cap) return OS64_SLURP_TOO_BIG;
-        *length=fake_files[f].len; *bytes=os64_malloc(*length+1);
+        *bytes=os64_malloc(fake_files[f].len+1);
+        if(*bytes==NULL) return OS64_SLURP_NO_MEMORY;
+        *length=fake_files[f].len;
         memcpy(*bytes,fake_files[f].data,*length); (*bytes)[*length]=0;
         return OS64_SLURP_OK;
     }
@@ -466,7 +474,9 @@ bool os64_ui_theme_session(os64_ui_theme_t *theme, uint64_t *installed, uint64_t
     (void)theme; (void)installed; (void)hint; return false;
 }
 static char saved_scripts[8], saved_zoom[8], saved_seconds[8], saved_diagnostics[256], saved_appearance[8],
-    saved_animations[8], saved_motion[16], saved_modern[16], saved_profile[256], settings_report[256];
+    saved_animations[8], saved_motion[16], saved_modern[16], saved_profile[300], settings_report[256];
+/* What reading yonder.conf's profile answers instead, when not 0. */
+static int64_t profile_conf_failure;
 int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) {
     check(os64_streq(file,"yonder.conf"),"settings read Yonder configuration");
     const char *value=os64_streq(key,"scripts") ? saved_scripts :
@@ -474,8 +484,10 @@ int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) 
         os64_streq(key,"diagnostics") ? saved_diagnostics : os64_streq(key,"appearance") ? saved_appearance :
         os64_streq(key,"animations") ? saved_animations : os64_streq(key,"motion") ? saved_motion :
         os64_streq(key,"modern") ? saved_modern : os64_streq(key,"profile") ? saved_profile : "";
+    if(os64_streq(key,"profile") && profile_conf_failure!=0) return profile_conf_failure;
     if(!value[0]) return OS64_CONF_NO_KEY;
-    os64_strcopy(out,cap,value); return 0;
+    /* A value too long for `out` is TRUNCATED, as the real reader says. */
+    return os64_strcopy(out,cap,value)<cap ? 0 : OS64_CONF_TRUNCATED;
 }
 int64_t os64_conf_set(const char *file, const char *key, const char *value) {
     check(os64_streq(file,"yonder.conf"),"settings save Yonder configuration");
@@ -1050,6 +1062,15 @@ static void switch_cases(void) {
     const char *profile_refused=yonder_settings_saved_profile(profile,sizeof(profile));
     check(profile_refused!=NULL && strstr(profile_refused,"not a folder's full path")!=NULL &&
           os64_streq(profile,"/home/yogi/.yonder"), "profile: anything else is the default, refused loudly");
+    saved_profile[0]='/'; memset(saved_profile+1,'p',280); saved_profile[281]=0;
+    profile_refused=yonder_settings_saved_profile(profile,sizeof(profile));
+    check(profile_refused!=NULL && strstr(profile_refused,"too long for a path")!=NULL &&
+          os64_streq(profile,"/home/yogi/.yonder"), "profile: one too long for a path is the default, said so");
+    profile_conf_failure=OS64_CONF_NO_MEMORY;
+    profile_refused=yonder_settings_saved_profile(profile,sizeof(profile));
+    profile_conf_failure=0;
+    check(profile_refused!=NULL && strstr(profile_refused,"could not be read")!=NULL &&
+          os64_streq(profile,"/home/yogi/.yonder"), "profile: a yonder.conf that cannot be read is the default, said so");
     saved_profile[0]=0;
     /* Clear page storage acts at once and says what it did. */
     yonder_settings_on_clear_storage(NULL);
@@ -6628,6 +6649,170 @@ static void storage_full_cases(void) {
     yonder_storage_free(s_storage);
     s_storage=NULL;
 }
+/* THE STORE'S DISK, BADLY BEHAVED: yonder's provider verbs called as
+ * libdom calls them, against a file that is missing, a folder, unreadable,
+ * not libdom's, too big for the room or for any image; a disk that writes a
+ * byte at a time or refuses a write, a sync or a rename; an origin too long
+ * to name a file, one whose store is spelled like another's temp; the same
+ * call twice; and every allocation failed in turn. What is on the disk is
+ * always a whole image, the old or the new, and no temp is left behind. */
+static void fake_put(const char *path, const char *bytes, size_t length) {
+    int f=fake_file(path);
+    if(f<0) for(f=0;f<FAKE_FILES && fake_files[f].used;f++) {}
+    free(fake_files[f].data);
+    fake_files[f].used=true; snprintf(fake_files[f].path,256,"%s",path);
+    fake_files[f].data=malloc(length+1); memcpy(fake_files[f].data,bytes,length); fake_files[f].data[length]='\0';
+    fake_files[f].len=length; fake_files[f].mtime=++fake_second;
+}
+static int fake_temps(void) {
+    int n=0;
+    for(int i=0;i<FAKE_FILES;i++) if(fake_files[i].used && strstr(fake_files[i].path,".new")!=NULL) n++;
+    return n;
+}
+static bool problem_has(const yonder_storage_t *st, const char *text) {
+    const char *p=yonder_storage_problem(st);
+    return p!=NULL && strstr(p,text)!=NULL;
+}
+static void storage_disk_cases(void) {
+    static const char kOne[]="os64 storage 1\n+1 1\nk1\n", kTwo[]="os64 storage 1\n+1 1\nk2\n";
+    static const char kGone[]="os64 storage 1\n-1\nk\n";
+    const os64_dom_storage_area_t L=OS64_DOM_STORAGE_LOCAL, S=OS64_DOM_STORAGE_SESSION;
+    const char *origin="http://fixture.test";
+    char out[64];
+    fake_reset();
+    yonder_storage_t *st=yonder_storage_new("/tmp/profile");
+    check(yonder_storage_identity(st,L,origin)==0 && yonder_storage_load(st,L,origin,out,sizeof(out))==0 &&
+          yonder_storage_problem(st)==NULL,"storage disk: no file is an empty store, and no problem");
+    check(yonder_storage_commit(st,L,origin,kGone,strlen(kGone),NULL)==OS64_DOM_STORAGE_OK &&
+          fake_file(STORE_FILE)<0,"storage disk: removing from no store leaves no file");
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK && store_holds("k","1") &&
+          yonder_storage_identity(st,L,origin)!=0,"storage disk: a commit makes the file");
+    int writes=fake_writes;
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK && store_holds("k","1") &&
+          fake_writes==writes+1 && fake_file(STORE_FILE)>=0 && fake_files[fake_file(STORE_FILE)].len==strlen(kOne),
+          "storage disk: the same commit twice writes the same image");
+    int64_t length=yonder_storage_load(st,L,origin,out,sizeof(out));
+    check(length==(int64_t)strlen(kOne) && !memcmp(out,kOne,strlen(kOne)),"storage disk: a load reads the image");
+    memset(out,'z',sizeof(out));
+    check(yonder_storage_load(st,L,origin,out,4)==(int64_t)strlen(kOne) && out[0]=='z',
+          "storage disk: a store bigger than the room answers its length and writes nothing");
+    fake_short_write=true;
+    check(yonder_storage_commit(st,L,origin,kTwo,strlen(kTwo),NULL)==OS64_DOM_STORAGE_OK && store_holds("k","2"),
+          "storage disk: a disk that writes a byte at a time is written whole");
+    fake_short_write=false;
+    /* A write, a sync, a rename refused: the old image stays, whole, and
+     * the temp goes. */
+    bool *refusals[]={&fake_fail_write,&fake_fail_sync,&fake_fail_rename};
+    const char *names[]={"write","sync","rename"};
+    for(size_t i=0;i<3;i++) {
+        char name[96];
+        *refusals[i]=true;
+        os64_dom_storage_status_t status=yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL);
+        *refusals[i]=false;
+        snprintf(name,sizeof(name),"storage disk: a refused %s keeps the old image, leaves no temp, and says so",names[i]);
+        check(status==OS64_DOM_STORAGE_FAILED && store_holds("k","2") && fake_temps()==0 &&
+              problem_has(st,"storage/http%3A%2F%2Ffixture.test cannot be written."),name);
+    }
+    /* A file that cannot be read: never written over. */
+    fake_slurp_fail=true;
+    check(yonder_storage_load(st,L,origin,out,sizeof(out))<0 && problem_has(st,"cannot be read."),
+          "storage disk: an unreadable store loads as broken and says so");
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED,
+          "storage disk: and refuses a commit");
+    fake_slurp_fail=false;
+    check(store_holds("k","2"),"storage disk: the unreadable store is as it was");
+    /* Bigger than any image libdom writes: answered by its size alone. */
+    int f=fake_file(STORE_FILE);
+    size_t real=fake_files[f].len;
+    fake_files[f].len=(size_t)64*1024*1024;
+    check(yonder_storage_load(st,L,origin,out,sizeof(out))>(int64_t)(32*1024*1024),
+          "storage disk: a store past the cap answers a length libdom refuses, unread");
+    fake_files[f].len=real;
+    /* Not libdom's format. */
+    fake_put(STORE_FILE,"hello\n",6);
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
+          problem_has(st,"its file is not one yonder wrote") && !strcmp(fake_text(STORE_FILE),"hello\n"),
+          "storage disk: a file not in the format is never written over");
+    /* A folder where the file should be. */
+    (void)os64_unlink(STORE_FILE);
+    snprintf(fake_dirs[nfake_dirs++],256,"%s",STORE_FILE);
+    check(yonder_storage_load(st,L,origin,out,sizeof(out))<0 && problem_has(st,"cannot be read."),
+          "storage disk: a folder at the store's name loads as broken");
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED && fake_temps()==0 &&
+          fake_file(STORE_FILE)<0,"storage disk: and is never written over");
+    nfake_dirs--;
+    /* An origin whose store name is another's temp name as spelled before
+     * the '+': the other's store is untouched. */
+    static const char kOther[]="/tmp/profile/storage/http%3A%2F%2Ffixture.test.7.7.new";
+    fake_put(kOther,kTwo,strlen(kTwo));
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK && store_holds("k","1") &&
+          fake_text(kOther)!=NULL && !strcmp(fake_text(kOther),kTwo),
+          "storage disk: no origin's store is another's temp");
+    (void)os64_unlink(kOther);
+    /* An origin too long to name a file, with its temp, in a path. */
+    char longest[300]="http://";
+    memset(longest+7,'a',240); longest[247]='\0';
+    check(yonder_storage_commit(st,L,longest,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
+          problem_has(st,"its address is too long to name a file") &&
+          yonder_storage_load(st,L,longest,out,sizeof(out))<0 && yonder_storage_identity(st,L,longest)==0,
+          "storage disk: an origin too long to name a file is kept in no file, and the problem names it");
+    yonder_storage_t *relative=yonder_storage_new("profile");
+    check(yonder_storage_commit(relative,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
+          problem_has(relative,"the profile folder is not a full path (profile)"),
+          "storage disk: a profile that is not a full path is said to be so");
+    yonder_storage_free(relative);
+    char deep[256]="/";
+    memset(deep+1,'d',250); deep[251]='\0';
+    yonder_storage_t *tall=yonder_storage_new(deep);
+    check(yonder_storage_commit(tall,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
+          problem_has(tall,"the profile folder's path is too long"),
+          "storage disk: a profile with no room for its storage folder is said to be too long");
+    yonder_storage_free(tall);
+    /* A file in the way of the profile folder. */
+    yonder_storage_t *blocked=yonder_storage_new("/tmp/blocked/profile");
+    fake_put("/tmp/blocked","x",1);
+    check(yonder_storage_commit(blocked,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
+          problem_has(blocked,"/tmp/blocked/profile/storage cannot be made."),
+          "storage disk: a file where a folder must be refuses the commit");
+    yonder_storage_free(blocked);
+    /* The last key removed: the file goes; a file another window removed
+     * first is gone as asked. */
+    check(yonder_storage_commit(st,L,origin,kGone,strlen(kGone),NULL)==OS64_DOM_STORAGE_OK && fake_file(STORE_FILE)<0,
+          "storage disk: a store left empty is removed");
+    /* Clear twice, and the sessions with it. */
+    check(yonder_storage_commit(st,S,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK &&
+          yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK,"storage disk: both areas kept");
+    check(yonder_storage_clear(st)==1 && yonder_storage_clear(st)==0 && yonder_storage_identity(st,S,origin)==0 &&
+          yonder_storage_load(st,S,origin,out,sizeof(out))==0 && yonder_storage_problem(st)==NULL,
+          "storage disk: Clear page storage twice: the files and the sessions go once, and the problem with them");
+    /* Every allocation failed in turn, each area: an answer of OK or
+     * FAILED, the store whole before or after, no temp, nothing leaked. */
+    for(int area=0;area<2;area++) {
+        bool swept=false, whole=true, leaked=false;
+        for(size_t cut=1;cut<200 && !swept;cut++) {
+            fake_reset();
+            yonder_storage_t *sw=yonder_storage_new("/tmp/profile");
+            if(yonder_storage_commit(sw,area?S:L,origin,kOne,strlen(kOne),NULL)!=OS64_DOM_STORAGE_OK) { whole=false; break; }
+            size_t before=live;
+            attempts=0; fail_at=cut;
+            os64_dom_storage_status_t status=yonder_storage_commit(sw,area?S:L,origin,kTwo,strlen(kTwo),NULL);
+            int64_t loaded=yonder_storage_load(sw,area?S:L,origin,out,sizeof(out));
+            swept=attempts<cut;
+            fail_at=0;
+            const char *want=status==OS64_DOM_STORAGE_OK ? kTwo : kOne;
+            if(status!=OS64_DOM_STORAGE_OK && status!=OS64_DOM_STORAGE_FAILED) whole=false;
+            if(area==0 && (!store_holds("k",status==OS64_DOM_STORAGE_OK ? "2" : "1") || fake_temps()!=0)) whole=false;
+            if(loaded>=0 && (loaded!=(int64_t)strlen(want) || memcmp(out,want,strlen(want)))) whole=false;
+            if(live!=before) leaked=true;
+            yonder_storage_free(sw);
+        }
+        check(swept && whole && !leaked,area ? "storage disk: sessionStorage's commit and load with every allocation failed in turn"
+                                             : "storage disk: localStorage's commit and load with every allocation failed in turn");
+    }
+    yonder_storage_free(st);
+    yonder_storage_free(NULL);
+    fake_reset();
+}
 /* The page reads its navigation's timing and the screen it is on. */
 static void timing_window_cases(void) {
     fake_reset();
@@ -6664,6 +6849,7 @@ static void storage_modern_off_cases(void) {
 static void storage_cases(void) {
     storage_window_cases();
     storage_full_cases();
+    storage_disk_cases();
     timing_window_cases();
     storage_modern_off_cases();
 }

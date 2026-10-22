@@ -30,7 +30,8 @@ void yonder_storage_free(yonder_storage_t *storage);
 // when there is no file; sessionStorage's counts the window's commits to
 // that origin. load: the image into `out` when it fits in `cap`; its length
 // either way, 0 for none, negative when the file is there and cannot be
-// read. commit: the change list merged onto the store as it stands. A merge
+// read or the origin names no file. commit: the change list merged onto
+// the store as it stands, published by temp and rename. A merge
 // past the quota keeps nothing and names, in `diag` (may be NULL), the
 // keys the commit could not keep.
 uint64_t yonder_storage_identity(yonder_storage_t *storage, os64_dom_storage_area_t area, const char *origin);
@@ -48,8 +49,10 @@ os64_dom_storage_status_t yonder_storage_commit(yonder_storage_t *storage, os64_
 int64_t yonder_storage_clear(yonder_storage_t *storage);
 
 // Why localStorage is kept in no file, when it is not: the profile folder
-// could not be made, or a store could not be written. NULL while nothing
-// has gone wrong. For the status line.
+// could not be made, a store could not be read or written or is not
+// libdom's, or an origin's address is too long to name a file. The latest
+// such answer, until Clear page storage; NULL while nothing has gone
+// wrong. For the status line.
 const char *yonder_storage_problem(const yonder_storage_t *storage);
 
 // An origin as a file name: every byte outside [A-Za-z0-9.-] as %XX, so
