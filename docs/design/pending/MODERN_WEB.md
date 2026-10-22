@@ -1162,7 +1162,7 @@ flow-relative property in 512 records and 127,354 asks. danlegt's asks:
 missing: the flow-relative radii (84 to 92 records each),
 `scroll-padding-block` (51), `contain-intrinsic-block-size` (36).
 
-Host: libflow 21,382 → 21,817 checks, yonder 1,716 → 1,914, the DOM host
+Host: libflow 21,382 → 23,667 checks, yonder 1,716 → 1,914, the DOM host
 22,416 → 38,935, garb declarations 632, text 7,369, the scripted-page host
 5,888; all 0 failed. The mutant harnesses were not run (the briefs' rule).
 
