@@ -190,13 +190,12 @@ index has no line for reads `REPLAY incomplete`, a corpus to record again.
 ## Slice 0c: what the corpus said first (document.implementation, javascript: links)
 
 The first census-driven slice: not planned, found. On 2026-10-22, with
-the two kept corpora replaying, apgfcu.com's LOGIN did nothing in yonder,
+the two kept corpora replaying, a bank's LOGIN did nothing in yonder,
 and its record said why: jQuery 3.5.1 dies at load with `TypeError:
 cannot read property 'createHTMLDocument' of undefined`, and every script
 after it with `jQuery is not defined`. **141 of the ~600 kept pages carry
-that exact line**: apgfcu, synchrony, roundpoint, billerpayments and bing
-among them, most of Tier 1's banking list, plus kernel.org, php.net and
-the itch.io game sites. One missing object keeps every jQuery 3 site's
+that exact line**: most of Tier 1's banking list among them, a search
+engine, two documentation sites and the browser-game sites. One missing object keeps every jQuery 3 site's
 script world shut, and until it opens the census cannot see what those
 pages want NEXT. Build this before any slice whose census number is
 smaller, and after whatever is already open.
@@ -228,7 +227,7 @@ change:
 2. **`javascript:` link addresses** (HTML § 7.4.2, "navigate to a
    javascript: URL"): a click on a link whose address's scheme is
    `javascript:` runs the rest of the address, percent-decoded, as a
-   classic script in the page, and does not navigate. apgfcu's LOGIN is
+   classic script in the page, and does not navigate. The bank's LOGIN is
    `href="javascript:toggleLogin();"`, the code IN the address. The
    standard's second half (a string result replaces the document) is
    DECLINED for the arc (DECLINED.md row, this slice): no page in the
@@ -245,9 +244,9 @@ change:
    status line says the scripts are off.
 
 **The acceptance is that jQuery BOOTS, both of them.** The corpus keeps
-two: jQuery 3.5.1 (apgfcu.com's record, the `createHTMLDocument` death,
-141 pages) and jQuery 1.12.4-aem (pnc.com's record, 2026-10-22: `TypeError:
-Control property refused`, 17 pages, pnc's whole script world dead after
+two: jQuery 3.5.1 (the first bank's record, the `createHTMLDocument` death,
+141 pages) and jQuery 1.12.4-aem (a second bank's record, 2026-10-22: `TypeError:
+Control property refused`, 17 pages, its whole script world dead after
 it). The 1.12.4 death is a different wall: its `support` probes set
 properties on form controls it makes (`input.setAttribute("type",
 "checkbox")`, `checked`, `value`, a `<select>`'s `<option>`), and libpage
@@ -286,8 +285,147 @@ rides along (271 WPT tests want it; a separate slice unless it is a
 one-line delegation, and say so).
 
 **PR states.** The `[required]` tests gained; the tally line before and
-after; apgfcu.com's LOGIN opening its dropdown on the P5, by hand, in the
-PR body with what the record says after.
+after; the first bank's LOGIN opening its dropdown on the P5, by hand, in
+the PR body with what the record says after (no host names in the PR:
+counts and failing expressions only, Chris's rule of 2026-10-22).
+
+## Slice 0d: `Element.attributes` (NamedNodeMap and Attr), the wall behind jQuery 1.12.4
+
+Designed by Fable, 2026-10-22, on Chris's ruling that it is built properly
+and on Opus's finding (0c's builder) of why it is not a patch. 0c's
+acceptance for jQuery 1.12.4 moves here: 1.12.4's focusin probe reads
+`e.attributes[c].expando`, libdom has no `attributes`, the read throws,
+and the library dies at load on 17 kept pages. **Its own PR, from
+`userland`, after 0c merges**, with the three passes and a Codex round:
+every line of it is reachable from a page's script.
+
+**What is built.** `Element.attributes` is a `NamedNodeMap` (DOM § 4.9.1)
+and each item is an `Attr` that IS a `Node` (DOM § 4.9.2): `nodeType` 2,
+`instanceof Node` true and never a lie. A `classic` row, not `modern`:
+this is DOM Level 1 surface and jQuery 1.x's floor. Also
+`document.createAttribute(name)` / `createAttributeNS`, `getAttributeNode`
+/ `NS`, `setAttributeNode` / `NS`, `removeAttributeNode`, since the map's
+verbs are theirs.
+
+**The one design decision: an Attr is a VIEW of an element, not a tree
+node.** libdom already has non-tree objects that stand for an element:
+`style`, `classList` and `dataset` are `DValue` entries made once per
+element with `node` NULL and `target` the element (style.c:220,
+mixin.c:736). An Attr is that shape with a NAME: a `DValue` whose
+`target` is its owner element, carrying the qualified name and namespace
+it stands for, kept on the element's entry in a list (one per name, made
+on first touch), so the same object comes back for as long as the
+attribute exists (`attributes[0] === attributes[0]`,
+`getAttributeNode('id') === attributes.getNamedItem('id')`). Its VALUE is
+never cached while it is attached: every read asks libhtml by name
+(`os64_html_attr(target, name)`), so no pointer into the arena is held
+across page code (libhtml retires an attribute's bytes on change; the
+class 1a's cold read named). The `NamedNodeMap` is one more view per
+element (`attributes`), made once, whose `length` and `item(i)` walk the
+element's attribute list AT THE CALL, never from a snapshot: an index
+held across page code was the bug class of #326 and 1a, and the map
+holds none. Its indexed and named properties go through the exotic
+`get_own_property` the binding already uses (`d_node_exotic`, classic.c;
+storage.c's `storage_exotic` is the fuller example): `attributes[0]`,
+`attributes['id']`, `attributes.length`, `for..in`, and
+`getNamedItem` is the named property's function. Named lookup is by
+qualified name, first match; the NS forms by namespace and local name.
+
+**Detached Attrs, and moving one.** An attribute leaves its element by
+`removeAttribute`, `removeAttributeNode`, `removeNamedItem`,
+`setAttributeNode` replacing it, `classList`/`dataset`/handler-slot
+verbs that remove, or `createAttribute` (born detached). ALL of those are
+libdom's own verbs (the parser sets attributes only at a node's
+creation; libpage keeps control state outside the attribute list), which
+is the invariant that makes detachment complete: at each removal verb,
+libdom finds the element's Attr entry of that name, if any, copies the
+last value into the entry (binding-allocated, charged), and clears
+`target`. A detached Attr answers `ownerElement` null, keeps and takes a
+`value`, and lives on a dom-wide list until the document ends (charged
+to the dom's quota like every entry; a page that detaches ten thousand
+attributes meets `QuotaExceededError`, not a leak). The lazy backstop:
+an attached Attr whose name libhtml no longer finds reads as detached
+with an empty value and a `FAILED page` line naming the invariant broken
+("an attribute left its element outside libdom"), so a future verb
+outside libdom is visible, not silent. `setAttributeNode(attr)`: an Attr
+owned by ANOTHER element throws `InUseAttributeError`; one owned by this
+element is a no-op returning itself; a detached one sets the attribute
+from the entry's stored value (through `os64_html_set_attr`), moves the
+entry onto this element's list and sets `target`, and returns the Attr
+that was there before, now detached (or null). `getAttributeNode` of an
+absent name is null, never a fresh detached Attr.
+
+**An Attr as a Node receiver.** The Node members take a tree node through
+`d_node` (node.c:88), which refuses an entry with no `node`, and an Attr
+has none. The rule: **`Attr.prototype` (D_PROTO_ATTR, parent
+D_PROTO_NODE) shadows every Node member with its own answer**, so that
+through an Attr every Node member answers as the standard says:
+`nodeType` 2, `nodeName` the qualified name, `nodeValue` and
+`textContent` the value (settable; setting an attached one is
+`setAttribute`), `parentNode`, `parentElement`, `firstChild`,
+`lastChild`, `previousSibling`, `nextSibling` null, `childNodes` an empty
+list, `hasChildNodes` false, `isConnected` false, `ownerDocument` the
+document, `getRootNode` itself, `contains(x)` x === itself,
+`appendChild`/`insertBefore`/`replaceChild`/`removeChild` a
+`HierarchyRequestError` (removeChild a `NotFoundError`), `cloneNode` a
+detached copy with the value, `isEqualNode` by name, namespace and
+value, `isSameNode` identity, `compareDocumentPosition` DOM § 4.4's
+answer for a node with no parent, `normalize` nothing. A Node member
+invoked on an Attr by reaching for `Node.prototype`'s function itself
+(`Node.prototype.appendChild.call(attr, x)`) meets `d_node`'s TypeError
+rather than the member's own error: say so in DIVERGENCES.md (no page
+does it; the shadow table is the whole truth for every `attr.x`). What
+`d_node` says for an Attr receiver is a sentence that names it ("an
+Attr is a Node with no place in the tree"), not "Expected a node from
+this document".
+
+**Attr's own members.** `name`, `localName`, `prefix`, `namespaceURI`
+(from the qualified name and libhtml's `ns`), `value` (read live,
+written through `os64_html_set_attr` when attached), `ownerElement`,
+`specified` always true. `Attr` and `NamedNodeMap` are constructors on
+`window` with the right `prototype` chains and `Symbol.toStringTag`
+(0a's cold read: a shorthand `knows` rule and the tag, both apply).
+
+**Reach, and the bug class that goes with it.** Everything here is
+reachable from a page's script, so the class to design against is the
+one every libdom round has found: private state reachable from a page
+(an Attr's stored value is the binding's, never the page's object), and
+page code running in the middle of a walk (a `NamedNodeMap` iteration
+that runs a getter which removes an attribute: the walk is by position
+at each call, so it reads what is there now, and a removed item is the
+spec's answer too). State both in the as-built with the case that pins
+each.
+
+**Proof.** The libdom host suite: the two kept jQuerys' `support` probes
+(0c's fixtures, `tools/test_dom_implementation.inc`'s `JQUERY_1_NEXT`)
+reading nothing, which is 0c's acceptance met; identity (same object
+twice, across `getAttributeNode` and the map); liveness (set, read
+through the Attr; remove, the Attr detached with its last value; set
+again, a NEW Attr, the old still detached); `setAttributeNode` moving an
+Attr between two elements and refusing one in use; `createAttribute`
+born detached; every Node member through an Attr, each one; the
+`for..in` and `length` of the map after an attribute is added and
+removed mid-walk; namespace forms on an SVG element's `xlink:href`;
+quota met by detaching attributes in a loop (the entry count bounded by
+the dom's quota); and the lazy backstop's FAILED line, reached by a
+host-only verb that removes an attribute beneath the binding. A mutant
+per rule, the mutants' list in the libdom harness. WPT: `dom/nodes`'s
+`attributes.html` and `Element-setAttributeNode*`, `Node-properties`
+for Attr: the required set grows by what passes, stated. Then the corpus:
+`tools/yonder_tally.py --failed` before and after on the 17 pages
+(`Control property refused` and `expando` gone), their records saying
+what the library wants next, and the replay diff against the baseline
+clean of regressions.
+
+**Left to the builder.** Whether the per-element Attr list is a small
+array or a chain; the exact `compareDocumentPosition` bits for two
+Attrs of one element (the standard's "implementation-specific" case:
+pick, state, pin); whether `dataset` and `classList` detach Attrs
+through a shared door or each verb calls it (one door is the lean).
+
+**PR states.** The two jQuerys booting; the WPT tests gained; the 17
+pages' before and after lines; no host names (counts and failing
+expressions only).
 
 ## Slice 1a: storage and the small globals
 
