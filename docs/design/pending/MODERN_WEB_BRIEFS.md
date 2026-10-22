@@ -244,8 +244,21 @@ change:
    are NOT this slice. With `scripts = off`, the link does nothing and the
    status line says the scripts are off.
 
-**Proof.** The libdom host suite: the jQuery feature test above, verbatim,
-passing; a node made in the new document inserted into the page and
+**The acceptance is that jQuery BOOTS, both of them.** The corpus keeps
+two: jQuery 3.5.1 (apgfcu.com's record, the `createHTMLDocument` death,
+141 pages) and jQuery 1.12.4-aem (pnc.com's record, 2026-10-22: `TypeError:
+Control property refused`, 17 pages, pnc's whole script world dead after
+it). The 1.12.4 death is a different wall: its `support` probes set
+properties on form controls it makes (`input.setAttribute("type",
+"checkbox")`, `checked`, `value`, a `<select>`'s `<option>`), and libpage
+refuses one of them through `d_page_error` (classic.c, node.c, style.c
+throw it). Run the kept copies of BOTH files in the libdom host suite as
+fixtures, find the probe that trips, make it pass, and state which it was
+in the PR; a probe that cannot pass for a design reason is a DECLINED row
+with the page count. Neither copy may be edited: they are the oracle.
+
+**Proof.** The libdom host suite: both jQuerys booting (above); the jQuery
+feature test, verbatim, passing; a node made in the new document inserted into the page and
 read back by the page's `querySelector`; a `<script>` set into the new
 document's `innerHTML` never running; `createHTMLDocument()` with no
 title (title element present and empty) and with one; `createDocument`
