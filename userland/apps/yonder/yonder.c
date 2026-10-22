@@ -1703,39 +1703,55 @@ static bool diag_same_view(const char *laid, int32_t w, int32_t h)
     return laid == NULL || (n > 0 && os64_strlen(laid) >= (size_t)n && os64_memcmp(laid, now, (size_t)n) == 0);
 }
 
+// THE COOKIES A SCRIPT ON THE PAGE COULD READ (REPLAY.md § 3), on its
+// record: libway's script door for the page's FINAL address and the
+// transport it arrived over, as the page's script host asks it
+// (scripts_host takes the same two), so HttpOnly cookies stay out. Taken
+// once the head is in hand and before the parser is fed a byte
+// (stream_turn, open_local): the head is the redirects' end and the
+// response's own Set-Cookie is in the jar by then (libway hears it as the
+// fetch reads the head), and nothing on the page has run yet to change
+// them. Asked again with twice the room, up to 1 MiB; cookies that do not
+// fit even then are not written cut short, and the record says it lost a
+// line.
+static void diag_cookies(yonder_diag_t *d, const char *url, bool encrypted)
+{
+    if (d == NULL)
+        return;
+    bool whole = false;
+    size_t cap = 512;
+    char *cookies = NULL;
+    while (!whole && cap <= ((size_t)1 << 20)) {
+        os64_free(cookies);
+        cookies = os64_malloc(cap);
+        if (cookies == NULL)
+            break;
+        (void)way_script_cookies(g.way.jar, url, encrypted, cookies, cap, &whole);
+        cap *= 2;
+    }
+    if (cookies != NULL && whole)
+        yonder_diag_head_fact(d, "cookies", cookies);
+    else
+        yonder_diag_short(d);
+    os64_free(cookies);
+}
+
 static yonder_diag_t *diag_begin(const char *url)
 {
     yonder_diag_t *d = yonder_diag_new(url, s_diag.next, os64_micros());
     // THE INPUTS A REPLAY READS THE PAGE WITH, as in force for this load
-    // (REPLAY.md § 3): the agent first; the cookies a script on the page
-    // could read (libway's script door, which keeps HttpOnly cookies from
-    // scripts); the clock and its zone (the agent, the cookies, the clock
-    // and the zone are what make a record version 2); the view's size; and
-    // the rest of kDiagSettings. A replay sets each from the record and
-    // assumes none. The arrival writes the laid-out size again; a record
-    // whose page was laid out in another view than the claim's
-    // (diag_arrived), or whose settings are not the ones the claim wrote
-    // when it is written (diag_write), is marked unjudged.
+    // (REPLAY.md § 3): the agent first; the clock and its zone (the agent,
+    // the cookies, the clock and the zone are what make a record version
+    // 2); the view's size; and the rest of kDiagSettings. The cookies are
+    // not the claim's: they are the final address's, taken at the head
+    // (diag_cookies). A replay sets each from the record and assumes none.
+    // The arrival writes the laid-out size again; a record whose page was
+    // laid out in another view than the claim's (diag_arrived), or whose
+    // settings are not the ones the claim wrote when it is written
+    // (diag_write), is marked unjudged.
     if (d != NULL) {
         char v[48];
         yonder_diag_head_fact(d, kDiagSettings[0], diag_setting(kDiagSettings[0], v, sizeof(v)));
-        bool encrypted = os64_strlen(url) >= 6 && os64_memcmp(url, "https:", 6) == 0;
-        bool whole = false;
-        size_t cap = 512;
-        char *cookies = NULL;
-        while (!whole && cap <= ((size_t)1 << 20)) {
-            os64_free(cookies);
-            cookies = os64_malloc(cap);
-            if (cookies == NULL)
-                break;
-            (void)way_script_cookies(g.way.jar, url, encrypted, cookies, cap, &whole);
-            cap *= 2;
-        }
-        if (cookies != NULL && whole)
-            yonder_diag_head_fact(d, "cookies", cookies);
-        else
-            yonder_diag_short(d);
-        os64_free(cookies);
         os64_time_t t;
         if (os64_time(&t) == 0 && t.ticks_per_second != 0) {
             os64_snprintf(v, sizeof(v), "%lld", (long long)t.epoch * 1000 +
@@ -2885,6 +2901,8 @@ static void open_local(const char *path, NavKind kind, const way_position_t *cru
     g.stream.has_head = true;
     g.stream.head.body = WAY_BODY_HTML;
     os64_snprintf(g.stream.head.url, sizeof(g.stream.head.url), "file://%s", path);
+    // A file's head is whole here, and nothing is parsed yet.
+    diag_cookies(g.stream.diag, g.stream.head.url, g.stream.head.encrypted);
     g.stream.has_verdict = true;
     g.stream.verdict.page = true;
     g.stream.verdict.fetch = OS64_FETCH_OK;
@@ -8358,6 +8376,9 @@ static bool stream_turn(void)
     yonder_mail_t *mail = g.stream.mail;
     if (mail != NULL && !g.stream.has_head && yonder_mail_take_head(mail, &g.stream.head)) {
         g.stream.has_head = true;
+        // The head is final and nothing is parsed yet: the cookies the
+        // page's first script will read.
+        diag_cookies(g.stream.diag, g.stream.head.url, g.stream.head.encrypted);
         if (g.stream.head.body != WAY_BODY_TEXT && !stream_parser(NULL, 0)) {
             stream_failed("Out of memory reading that page.");
             stop_trip();

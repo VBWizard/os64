@@ -28,7 +28,12 @@ document's lesson, written into MODERN_WEB_BRIEFS.md.*
    holds a record to its `end` before reading its lines, the C reader
    stops at its first bad line), so a vector states a reason only where
    every reader that runs it gives that reason, and a vector that states
-   one breaks that rule alone.
+   one breaks that rule alone. The reader bounds a record by its grammar
+   and takes the rest as yonder's (a value within a production that
+   yonder never writes, such as a script time past its setting's range,
+   a head string past the buffer it was written from, or a `.txt` under
+   a name no claim makes): the row "The reader bounds a record by its
+   grammar and nothing else" in the tree's DECLINED.md says why.
 2. **A replay has a stated input list, and takes every input from the
    record or the kept files, never from the harness, except the three
    it says it fakes.** The list is § 3. A kept record missing a required
@@ -212,7 +217,7 @@ the rows that say so are the whole of what a replay fakes.
 | scripts, their budget | record | `scripts:`, `script seconds:` | yes (v1: stated when unsaid, named) |
 | zoom, appearance, motion, animations | record | `zoom:`, `appearance:`, `motion:`, `animate:` | yes (v1: stated when unsaid, named) |
 | the user agent | record | `agent:` | yes (v2; v1: stated, named) |
-| the script-visible cookies | record | `cookies:` the `document.cookie` string the page could read at claim, HttpOnly excluded | yes (v2; v1: the harness's, named) |
+| the script-visible cookies | record | `cookies:` the `document.cookie` string the page's first script could read: taken at the head, for the final address and its transport, after the response's Set-Cookie and before the parser's first byte, HttpOnly excluded; the replay's jar hands it back unchanged | yes (v2; v1: the harness's, named) |
 | the clock | record | `clock:` epoch milliseconds at claim | yes (v2; v1: the harness's, named) |
 | the zone | record | `tz:` the zone in force at claim | yes (v2; v1: stated, named) |
 | the clock while the page runs | the harness | — | stated: `Date` reads the record's clock, frozen; it does not move while the page runs |
@@ -257,8 +262,8 @@ be two windows. A view that moves AFTER the page arrived is not compared:
 it also moves when yonder's own bars come and go (a replay of a bing.com
 page shrank its view 40 px that way), which a replay of the page
 reproduces, and the record cannot tell that from a person resizing the
-window. The cookies and the clock are what they were at the claim, by
-definition, and are not compared.
+window. The clock is what it was at the claim and the cookies what they
+were at the head, by definition, and neither is compared.
 
 **Versions.** The index's first line carries its format, `# yonder kept
 index <v>`; a record is of version 2 when it says any input version 2

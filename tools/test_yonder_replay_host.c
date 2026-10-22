@@ -1569,6 +1569,11 @@ static const char *rp_window_of(const RpRecord *r, bool local, const RpIndex *in
     if(!rp_decimal(f[F_STATUS],sp!=NULL ? (size_t)(sp-f[F_STATUS]) : strlen(f[F_STATUS]),&status))
         return "its record's `status` is none yonder writes";
     hd->status=(int)status;
+    /* Copied into the buffers yonder wrote them from, so a value yonder
+     * wrote fits whole. One longer was not written by yonder: the reader
+     * bounds a record by its grammar and takes the rest as yonder's, which
+     * is the row "The reader bounds a record by its grammar and nothing
+     * else" in DECLINED.md. */
     os64_strcopy(hd->reason,sizeof(hd->reason),sp!=NULL ? sp+1 : "");
     os64_strcopy(hd->url,sizeof(hd->url),f[F_FINAL]);
     os64_strcopy(hd->content_type,sizeof(hd->content_type),f[F_TYPE]);

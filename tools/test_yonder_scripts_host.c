@@ -522,10 +522,13 @@ static char fake_cookie_url[256], fake_cookie_set[256];
 static int fake_cookie_encrypted=-1;    /* what the window said of the page's transport */
 static const char *fake_cookie_read="session=abc; theme=dark";
 static bool fake_cookie_short;          /* the jar says the string did not fit, whatever the room */
+/* A jar that answers by the page's address and transport, as libway's
+ * does (NULL: every page reads fake_cookie_read). */
+static const char *(*fake_cookie_answer)(const char *page_url, bool encrypted);
 size_t way_script_cookies(way_jar_t *jar, const char *page_url, bool encrypted, char *out, size_t cap, bool *whole) {
     (void)jar; *whole=!fake_cookie_short; snprintf(fake_cookie_url,sizeof(fake_cookie_url),"%s",page_url?page_url:"");
     fake_cookie_encrypted=encrypted;
-    return (size_t)snprintf(out,cap,"%s",fake_cookie_read);
+    return (size_t)snprintf(out,cap,"%s",fake_cookie_answer!=NULL ? fake_cookie_answer(page_url,encrypted) : fake_cookie_read);
 }
 void way_script_cookie(way_jar_t *jar, const char *page_url, bool encrypted, const char *text, size_t len) {
     (void)jar; snprintf(fake_cookie_url,sizeof(fake_cookie_url),"%s",page_url?page_url:"");
@@ -4919,6 +4922,24 @@ static void keep_begin(bool on) {
     snprintf(saved_keep_pages,sizeof(saved_keep_pages),"%s",on ? "on" : "off");
     check(diag_dir_open()==NULL && s_diag.keep==on,"keep: keep_pages is read with the diagnostics directory");
 }
+/* Jars for the cookie cases (diag_keep_cases): one holding a Secure cookie
+ * it hands only to an https page, one that has heard the response's own
+ * Set-Cookie (`fake_cookie_heard`), and one that hands back what the page's
+ * script set beside what it held. */
+static bool fake_cookie_heard;
+static const char *cookie_jar_secure(const char *url, bool encrypted) {
+    return encrypted && !strncmp(url,"https://fixture.test/",21) ? "secure=1; plain=1" : "plain=1";
+}
+static const char *cookie_jar_heard(const char *url, bool encrypted) {
+    (void)url; (void)encrypted;
+    return fake_cookie_heard ? "heard=1" : "";
+}
+static const char *cookie_jar_scripted(const char *url, bool encrypted) {
+    static char text[300];
+    (void)url; (void)encrypted;
+    snprintf(text,sizeof(text),"first=1%s%s",fake_cookie_set[0] ? "; " : "",fake_cookie_set);
+    return text;
+}
 static void keep_end(void) {
     saved_diagnostics[0]=saved_keep_pages[0]='\0';
     memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
@@ -5219,8 +5240,8 @@ static void diag_keep_cases(void) {
     }
 
     /* THE INPUTS A REPLAY READS THE PAGE WITH (REPLAY.md § 3), written at
-     * the claim: the agent, the cookies a script could read, the clock and
-     * its zone, the window. A setting changed before the record is written
+     * the claim: the agent, the clock and its zone, the window; and the
+     * cookies a script could read, at the head. A setting changed before the record is written
      * makes the record one no replay can read the page again by. */
     keep_begin(true);
     loop_page("<p>inputs</p>");
@@ -5287,6 +5308,38 @@ static void diag_keep_cases(void) {
               "inputs: cookies that do not fit are not written, and the record says it lost lines");
     }
     keep_end();
+    /* THE COOKIES ARE THE FINAL ADDRESS'S, TAKEN AT THE HEAD (REPLAY.md
+     * § 3): a load asked for in the clear and redirected to https carries
+     * the Secure cookie its page's script reads there; a response's own
+     * Set-Cookie, heard after the claim and before the head, is on it; and
+     * a cookie the page's first script sets is not, since the record says
+     * what that script read. */
+    for(int how=0;how<3;how++) {
+        static const char *const kWant[]={"\ncookies: secure=1; plain=1\n","\ncookies: heard=1\n","\ncookies: first=1\n"};
+        static const char *const kWhat[]={
+            "inputs: a load redirected from http to https records the cookies its page reads there, Secure ones too",
+            "inputs: a cookie the response itself sets is on the record",
+            "inputs: a cookie the page's first script sets is not on the record"};
+        keep_begin(false);
+        fake_cookie_heard=false; fake_cookie_set[0]='\0';
+        fake_cookie_answer=how==0 ? cookie_jar_secure : how==1 ? cookie_jar_heard : cookie_jar_scripted;
+        stream_window(); g.scripts_on=true; g.script_ms=5000; now_ms=100;
+        start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+        if(how==1) fake_cookie_heard=true;
+        way_head_t h=stream_head("text/html","",false);
+        if(how==0) { os64_strcopy(h.url,sizeof(h.url),"https://fixture.test/final"); h.encrypted=true; }
+        yonder_mail_post_head(g.stream.mail,&h);
+        char *html=pad_page(how==2 ? "<p>c</p><script>document.cookie='late=1'</script>" : "<p>c</p>");
+        stream_post_body((const uint8_t *)html,strlen(html),YONDER_STREAM_CHUNK);
+        stream_post_verdict(true,OS64_FETCH_OK,"");
+        free(html);
+        check(loop_settle() && g.page.tree!=NULL,"inputs: a page whose cookies the jar answers by address arrives");
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        loop_drop();
+        fake_cookie_answer=NULL;
+        check(has(diag_file("/tmp/kept",name),kWant[how]) && (how!=2 || has(fake_cookie_set,"late=1")),kWhat[how]);
+        keep_end();
+    }
     /* THE CLAIM IS PROVED AGAIN BEFORE A WRITE: a claimed record removed
      * while its page is up is not written again under a name that may be
      * anyone's now. */

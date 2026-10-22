@@ -809,17 +809,21 @@ No Settings line: there is none for `diagnostics` either.
 
 **The record's inputs** (REPLAY.md § 3 is the table). `diag_begin`
 writes them as head facts at the claim, as in force for the load: `agent`
-first (`g.way.agent`), `cookies` (the string libway's script door,
-`way_script_cookies`, would hand a script on the page, so never an
-HttpOnly cookie; asked again with twice the room up to 1 MiB, and a
-string that does not fit, or no memory for one, leaves the record
-saying it lost lines), `clock` (`os64_time` in epoch milliseconds) and
+first (`g.way.agent`), `clock` (`os64_time` in epoch milliseconds) and
 `tz` (the `TZ` in force, or `<n>m`, the configured minutes east, when
 there is none), then `laid out at` (the view's `<width>x<height> px`,
 written again at arrival with the layout's time), and the rest of the
 settings `kDiagSettings` names: `scripts`, `modern`, `zoom`,
 `appearance`, `motion`, `animate` (not `animations`, which the census
 already uses for how a page's animations fare) and `script seconds`.
+`diag_cookies` writes `cookies` at the head, when the stream takes it
+(or `open_local` makes a file's) and before the parser is fed a byte:
+the string libway's script door, `way_script_cookies`, hands a script
+for the FINAL address and the transport the page arrived over, as the
+page's script host asks it, with the response's own Set-Cookie already
+heard, so never an HttpOnly cookie; asked again with twice the room up
+to 1 MiB, and a string that does not fit, or no memory for one, leaves
+the record saying it lost lines.
 `diag_write` compares each of `kDiagSettings`, the agent among them,
 with what the claim wrote, and `diag_arrived` the layout's view with the
 claim's (a view that moves after the arrival is not compared: yonder's

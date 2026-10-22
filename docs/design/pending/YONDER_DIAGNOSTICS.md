@@ -544,14 +544,16 @@ body to be), and for a page from the network `content-type` and `charset`
 as the server named them (empty when it named none) and `encrypted`
 (`yes`/`no`), and its `status` (`0` when its protocol has none). And the
 page's other inputs, written at the claim as in force for the load,
-first: `agent` (the User-Agent the window's requests carry), `cookies`
-(the `document.cookie` string a script on the page could read then,
-libway's script door, so never an HttpOnly cookie; one past 1 MiB, or
-with no memory to hold it, is not written, and the record says it lost
-lines), `clock` (the wall clock
+first: `agent` (the User-Agent the window's requests carry), `clock` (the wall clock
 in epoch milliseconds, which a script's `Date` starts from) and `tz` (the
 zone it reads local time in: the `TZ` in force, or `<n>m`, the machine's
-configured minutes east, when there is none). A record that says any of
+configured minutes east, when there is none); and, at the head, before
+the parser is fed a byte, `cookies` (the `document.cookie` string the
+page's first script could read, for the final address and the transport
+it arrived over, with the response's own Set-Cookie heard: libway's
+script door, so never an HttpOnly cookie; one past 1 MiB, or with no
+memory to hold it, is not written, and the record says it lost lines; a
+load that never had a head has none). A record that says any of
 those four is of VERSION 2 (REPLAY.md § 3), and a replay requires all of
 them; a kept page recorded before them is of version 1, and a replay of
 it takes its cookies and clock from its harness, and its agent, zone and
