@@ -576,6 +576,26 @@ static JSValue navigation_json(os64_dom_t *dom, JSContext *ctx)
  * PerformanceEntry's four alone, and for the navigation entry all of them. */
 static JSValue entry_json(JSContext *ctx, JSValueConst self, const DEntry *entry);
 
+/* serverTiming: a FrozenArray, a new one at each read, and os64 reads no
+ * Server-Timing header, so it is empty. Frozen by definition (its length
+ * made unwritable, the array closed), never by calling Object.freeze or
+ * setting anything, which a page's script could have replaced. */
+static JSValue frozen_empty_array(JSContext *ctx)
+{
+    JSValue array = JS_NewArray(ctx);
+    if (JS_IsException(array)) return array;
+    JSAtom length = JS_NewAtom(ctx, "length");
+    int done = length == JS_ATOM_NULL ? -1
+             : JS_DefineProperty(ctx, array, length, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED,
+                                 JS_PROP_HAS_WRITABLE | JS_PROP_THROW);
+    if (length != JS_ATOM_NULL) JS_FreeAtom(ctx, length);
+    if (done < 0 || JS_PreventExtensions(ctx, array) < 0) {
+        JS_FreeValue(ctx, array);
+        return JS_EXCEPTION;
+    }
+    return array;
+}
+
 static JSValue performance_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
                                   JSValue *data)
 {
@@ -630,7 +650,7 @@ static JSValue performance_member(JSContext *ctx, JSValueConst self, int argc, J
         case R_INITIATOR: return JS_NewString(ctx, "navigation");
         case R_PROTOCOL:
             return JS_NewString(ctx, page_is(dom, "http:") || page_is(dom, "https:") ? "http/1.1" : "");
-        case R_SERVER_TIMING: return JS_NewArray(ctx);
+        case R_SERVER_TIMING: return frozen_empty_array(ctx);
         case R_NAV_TYPE: return JS_NewString(ctx, kTypeNames[t.type <= 2 ? t.type : 0]);
         case R_NAV_REDIRECTS: return JS_NewUint32(ctx, t.redirects);
         case R_ZERO: return JS_NewInt32(ctx, 0);

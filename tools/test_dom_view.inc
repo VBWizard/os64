@@ -104,7 +104,7 @@ static void dom_performance_cases(void)
         "var nav=performance.getEntriesByType('navigation');assert(nav.length===1);nav=nav[0];"
         "assert(nav.name==='https://example.test/page?q'&&nav.entryType==='navigation'&&nav.startTime===0);"
         "assert(nav.duration===0&&nav.responseStart===2&&nav.domInteractive===0&&nav.type==='reload'&&nav.redirectCount===2);"
-        "assert(nav.initiatorType==='navigation'&&nav.nextHopProtocol==='http/1.1'&&Array.isArray(nav.serverTiming));"
+        "assert(nav.initiatorType==='navigation'&&nav.nextHopProtocol==='http/1.1'&&Array.isArray(nav.serverTiming)&&Object.isFrozen(nav.serverTiming)&&nav.serverTiming.length===0);"
         "assert(nav instanceof PerformanceEntry&&!('PerformanceNavigationTiming' in window)&&!('PerformanceResourceTiming' in window));"
         "assert(Object.prototype.toString.call(nav)==='[object PerformanceNavigationTiming]');"
         "var j=nav.toJSON();assert(j.name===nav.name&&j.domLoading===undefined&&j.type==='reload'&&j.responseStart===2);"
