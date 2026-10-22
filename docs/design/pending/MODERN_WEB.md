@@ -1073,9 +1073,13 @@ the style object and WPT all see it go with the switch.
   `max-height: 80px` is as wide as that height makes it. A picture's own
   ratio loses to the page's unless `auto` is written beside it, and a
   picture not yet measured takes its other side from the page's ratio,
-  held by the limits an arrived one is (`replaced_hold`); with one side
-  given and a ratio of its own (not `auto <ratio>`) it is fixed, so its
-  arrival lays nothing out again (`flow_replaced_fixed`). A
+  held by the limits an arrived one is (`replaced_hold`, which every
+  replaced box with a side given ends in, an `<input type=image>` before
+  its picture comes too); with one side given and a ratio of its own (not
+  `auto <ratio>`) it is fixed, so its arrival lays nothing out again —
+  unless it is a flex item whose main size, basis or main minimum leaves
+  the flex algorithm reading the picture's own size
+  (`flow_replaced_fixed`, asked of the box). A
   float or an absolute box with a height and no width takes the ratio's
   width rather than shrinking to fit. An absolute box whose two sizes are
   left to it takes its BLOCK axis as the ratio-dependent one unless only
