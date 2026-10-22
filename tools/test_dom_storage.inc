@@ -7,6 +7,10 @@
  * pages on one store; and every allocation the binding makes failed in
  * turn. */
 
+/* storage.c's count of the maps' steps (libdom/internal.h). */
+uint64_t d_storage_steps(void);
+static void dom_storage_merge_work_cases(void);
+
 /* assert(x, why), and throws(name, f): f throws an error named `name`.
  * The slice's other case files use it too. */
 #define STORAGE_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
@@ -603,10 +607,10 @@ static void dom_storage_bytes_cases(void)
     void *again;
     size_t again_length;
     static const char kMore[] = "os64 storage 1\n+1 2\nzWW\n-1\nx\n+1 0\nn\n";
-    static const char kMerged[] = "os64 storage 1\n+1 2\nzWW\n+1 1\nqr\n+1 0\nn\n";
+    static const char kMerged[] = "os64 storage 1\n+1 1\nqr\n+1 2\nzWW\n+1 0\nn\n";
     check(os64_dom_storage_merge(out, length, kMore, sizeof(kMore) - 1, &again, &again_length) == OS64_DOM_STORAGE_OK &&
           again_length == sizeof(kMerged) - 1 && !memcmp(again, kMerged, again_length),
-          "storage: a set keeps its key's place, a removal takes it out, a new key goes last");
+          "storage: a set keeps its key's place, a removal's place takes the last key, a new key goes last");
     dom_host_free(out);
     static const char kAllGone[] = "os64 storage 1\n-1\nz\n-1\nq\n-1\nn\n-5\nnever\n";
     check(os64_dom_storage_merge(again, again_length, kAllGone, sizeof(kAllGone) - 1, &out, &length) ==
@@ -640,6 +644,71 @@ static void dom_storage_bytes_cases(void)
           OS64_DOM_STORAGE_OK && out == NULL, "storage: a full store may always shrink");
     dom_host_free(full);
     free(records);
+    dom_storage_merge_work_cases();
+}
+
+/* Which of the keys k0..k(n-1) a walk meets, and how often. */
+typedef struct { unsigned char *seen; size_t n; bool stray; } KeysSeen;
+static bool keys_seen(void *opaque, const char *key, size_t key_length, const char *value, size_t value_length)
+{
+    (void)value; (void)value_length;
+    KeysSeen *s = opaque;
+    size_t index = 0;
+    if (key_length < 2 || key[0] != 'k') { s->stray = true; return true; }
+    for (size_t i = 1; i < key_length; i++) index = index * 10 + (size_t)(key[i] - '0');
+    if (index >= s->n || s->seen[index]++ != 0) s->stray = true;
+    return true;
+}
+
+/* A change list's work is linear in its length: clear() over the most keys
+ * an area may hold, and a scattered half removed, each counted in the
+ * maps' steps (d_storage_steps), never timed. And what is left is exactly
+ * the keys not removed, whatever order the removals came in. */
+static void dom_storage_merge_work_cases(void)
+{
+    size_t n = 65536;
+    char *image = malloc(32 + n * 24), *changes = malloc(32 + n * 24);
+    if (image == NULL || changes == NULL) abort();
+    size_t il = (size_t)sprintf(image, "os64 storage 1\n"), cl = (size_t)sprintf(changes, "os64 storage 1\n");
+    for (size_t i = 0; i < n; i++) {
+        char key[16];
+        int kl = snprintf(key, sizeof(key), "k%zu", i);
+        il += (size_t)sprintf(image + il, "+%d 0\n%s\n", kl, key);
+    }
+    for (size_t i = 0; i < n; i++) {
+        char key[16];
+        int kl = snprintf(key, sizeof(key), "k%zu", (i * 40503u) % n);
+        cl += (size_t)sprintf(changes + cl, "-%d\n%s\n", kl, key);
+    }
+    void *out;
+    size_t length;
+    uint64_t before = d_storage_steps();
+    check(os64_dom_storage_merge(image, il, changes, cl, &out, &length) == OS64_DOM_STORAGE_OK && out == NULL,
+          "storage: a clear of the most keys an area holds empties the store");
+    uint64_t steps = d_storage_steps() - before;
+    check(steps < 64 * (uint64_t)n, "storage: and its work is linear in the keys");
+    /* Every other key, in a scattered order: the rest are kept, once each. */
+    cl = (size_t)sprintf(changes, "os64 storage 1\n");
+    for (size_t i = 0; i < n; i++) {
+        size_t k = (i * 40503u) % n;
+        if (k % 2 != 0) continue;
+        char key[16];
+        int kl = snprintf(key, sizeof(key), "k%zu", k);
+        cl += (size_t)sprintf(changes + cl, "-%d\n%s\n", kl, key);
+    }
+    check(os64_dom_storage_merge(image, il, changes, cl, &out, &length) == OS64_DOM_STORAGE_OK && out != NULL,
+          "storage: half the keys removed");
+    unsigned char *seen = calloc(n, 1);
+    if (seen == NULL) abort();
+    KeysSeen s = {seen, n, false};
+    check(os64_dom_storage_walk(out, length, keys_seen, &s) && !s.stray, "storage: the walk meets each key once");
+    bool exact = true;
+    for (size_t i = 0; i < n; i++) exact = exact && seen[i] == (i % 2 != 0 ? 1 : 0);
+    check(exact, "storage: and exactly the keys not removed are kept");
+    dom_host_free(out);
+    free(seen);
+    free(image);
+    free(changes);
 }
 
 /* Every allocation the binding makes for storage, failed in turn: the
@@ -756,9 +825,37 @@ static void dom_storage_engine_cases(void)
     engine_sweep("storage", kEngine, sizeof(kEngine) / sizeof(kEngine[0]), NULL);
 }
 
+/* Page code that runs inside a property lookup (a Proxy prototype's `has`
+ * trap, which the named-property visibility check consults) and changes
+ * the map: the answer is the key's own, looked up after the trap. */
+static void dom_storage_page_code_cases(void)
+{
+    DomFixture f = storage_fixture("http://example.test/", NULL);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, STORAGE_ASSERT
+        "localStorage.setItem('a','1');localStorage.setItem('b','2');localStorage.setItem('c','3');"
+        "var done=false;"
+        "Object.setPrototypeOf(Storage.prototype,new Proxy({},{has:function(t,k){"
+        "if(k==='b'&&!done){done=true;localStorage.removeItem('a');}return false;}}));"
+        "assert(localStorage.b==='2',String(localStorage.b));"
+        "done=false;localStorage.setItem('a','1');"
+        "Object.setPrototypeOf(Storage.prototype,new Proxy({},{has:function(t,k){"
+        "if(k==='c'&&!done){done=true;localStorage.removeItem('c');}return false;}}));"
+        "assert(Object.getOwnPropertyDescriptor(localStorage,'c')===undefined,'a key the trap removed is gone');"
+        "done=false;localStorage.setItem('c','3');"
+        "Object.setPrototypeOf(Storage.prototype,new Proxy({},{has:function(t,k){"
+        "if(!done){done=true;localStorage.clear();localStorage.setItem('z','9');}return false;}}));"
+        "var names=Object.keys(localStorage);assert(names.length===names.filter(function(n,i){return names.indexOf(n)===i}).length,"
+        "'no name twice');"
+        "Object.setPrototypeOf(Storage.prototype,Object.prototype);",
+        "storage: page code inside a lookup changes the map");
+    fixture_free(&f);
+}
+
 static void dom_storage_cases(void)
 {
     dom_storage_shape_cases();
+    dom_storage_page_code_cases();
     dom_storage_quota_cases();
     dom_storage_provider_cases();
     dom_storage_two_windows_cases();
