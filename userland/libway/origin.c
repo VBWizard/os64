@@ -1,0 +1,1539 @@
+// origin.c — origins and the CORS protocol (way/origin.h).
+//
+// The Fetch Standard's sections are cited where their rule is applied. Each
+// rule is one function; the job and libdom only ever ask these.
+
+#include "way/origin.h"
+#include "os64/fmt.h"
+#include "os64/lock.h"
+#include "os64/mem.h"
+#include "os64/str.h"
+
+// ── Text ────────────────────────────────────────────────────────────────
+
+static char lower(char c)
+{
+    return c >= 'A' && c <= 'Z' ? (char)(c - 'A' + 'a') : c;
+}
+
+static char upper(char c)
+{
+    return c >= 'a' && c <= 'z' ? (char)(c - 'a' + 'A') : c;
+}
+
+static bool same_nocase(const char *a, size_t alen, const char *b, size_t blen)
+{
+    if (alen != blen)
+        return false;
+    for (size_t i = 0; i < alen; i++)
+        if (lower(a[i]) != lower(b[i]))
+            return false;
+    return true;
+}
+
+static bool is_nocase(const char *a, size_t alen, const char *word)
+{
+    return same_nocase(a, alen, word, os64_strlen(word));
+}
+
+static bool same_bytes(const char *a, size_t alen, const char *b, size_t blen)
+{
+    return alen == blen && os64_memcmp(a, b, alen) == 0;
+}
+
+// Bytewise order of two names, case folded: <0, 0, >0.
+static int32_t order_nocase(const char *a, size_t alen, const char *b, size_t blen)
+{
+    for (size_t i = 0; i < alen && i < blen; i++) {
+        unsigned char x = (unsigned char)lower(a[i]), y = (unsigned char)lower(b[i]);
+        if (x != y)
+            return x < y ? -1 : 1;
+    }
+    return alen == blen ? 0 : alen < blen ? -1 : 1;
+}
+
+static bool http_tab_or_space(char c)
+{
+    return c == ' ' || c == '\t';
+}
+
+static bool http_whitespace(char c)
+{
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+static bool is_digit(char c)
+{
+    return c >= '0' && c <= '9';
+}
+
+// RFC 9110 § 5.6.2's tchar.
+static bool is_token_byte(char c)
+{
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || is_digit(c))
+        return true;
+    return c != '\0' && os64_strchr("!#$%&'*+-.^_`|~", c) != NULL;
+}
+
+static bool is_token(const char *s, size_t len)
+{
+    if (len == 0)
+        return false;
+    for (size_t i = 0; i < len; i++)
+        if (!is_token_byte(s[i]))
+            return false;
+    return true;
+}
+
+// ── Origins ─────────────────────────────────────────────────────────────
+
+// The URL Standard's special schemes with a host, and their ports. file is
+// special too, and its origin is opaque: os64 treats every file as its own.
+static uint16_t special_port(const char *scheme)
+{
+    static const struct { const char *scheme; uint16_t port; } kSpecial[] = {
+        {"http", 80}, {"https", 443}, {"ws", 80}, {"wss", 443}, {"ftp", 21},
+    };
+    for (size_t i = 0; i < sizeof(kSpecial) / sizeof(kSpecial[0]); i++)
+        if (os64_streq(kSpecial[i].scheme, scheme))
+            return kSpecial[i].port;
+    return 0;
+}
+
+static void opaque(way_origin_t *out, uint64_t id)
+{
+    os64_memset(out, 0, sizeof(*out));
+    out->opaque = true;
+    out->id = id;
+}
+
+void way_origin_of(const char *url, uint64_t opaque_id, way_origin_t *out)
+{
+    if (url == NULL) {
+        opaque(out, opaque_id);
+        return;
+    }
+    // URL § origin: a blob: URL has its inner URL's origin when that is
+    // http or https, and an opaque one otherwise.
+    char scheme[OS64_URL_SCHEME_MAX];
+    if (os64_url_scheme_of(url, scheme, sizeof(scheme)) && os64_streq(scheme, "blob")) {
+        const char *inner = url + 5;
+        char inner_scheme[OS64_URL_SCHEME_MAX];
+        if (os64_url_scheme_of(inner, inner_scheme, sizeof(inner_scheme)) &&
+            (os64_streq(inner_scheme, "http") || os64_streq(inner_scheme, "https"))) {
+            way_origin_of(inner, opaque_id, out);
+            return;
+        }
+        opaque(out, opaque_id);
+        return;
+    }
+    os64_url_t *parsed = os64_malloc(sizeof(*parsed));
+    if (parsed == NULL || os64_url_parse(url, parsed) != OS64_URL_OK || special_port(parsed->scheme) == 0) {
+        os64_free(parsed);
+        opaque(out, opaque_id);
+        return;
+    }
+    os64_memset(out, 0, sizeof(*out));
+    os64_strcopy(out->scheme, sizeof(out->scheme), parsed->scheme);
+    os64_strcopy(out->host, sizeof(out->host), parsed->host);
+    out->port = parsed->port != 0 ? parsed->port : special_port(parsed->scheme);
+    os64_free(parsed);
+}
+
+bool way_origin_same(const way_origin_t *a, const way_origin_t *b)
+{
+    if (a->opaque || b->opaque)
+        return a->opaque && b->opaque && a->id != 0 && a->id == b->id;
+    return a->port == b->port && os64_streq(a->scheme, b->scheme) && os64_streq(a->host, b->host);
+}
+
+bool way_origin_same_site(const way_origin_t *a, const way_origin_t *b)
+{
+    // HTML § same site: two opaque origins are same site when they are the
+    // same origin. A tuple's site is its scheme and its host's registrable
+    // domain; without the public-suffix list (DEBTS) the host itself stands
+    // in for that, which only ever splits one site into several.
+    if (a->opaque || b->opaque)
+        return way_origin_same(a, b);
+    return os64_streq(a->scheme, b->scheme) && os64_streq(a->host, b->host);
+}
+
+bool way_origin_serialize(const way_origin_t *o, char *out, size_t cap)
+{
+    if (o->opaque)
+        return os64_strcopy(out, cap, "null") < cap;
+    int32_t n = o->port != special_port(o->scheme)
+        ? os64_snprintf(out, cap, "%s://%s:%u", o->scheme, o->host, (unsigned)o->port)
+        : os64_snprintf(out, cap, "%s://%s", o->scheme, o->host);
+    return n > 0 && (size_t)n < cap;
+}
+
+bool way_origin_prohibits_mixed(const way_origin_t *page)
+{
+    return !page->opaque && os64_streq(page->scheme, "https");
+}
+
+// Four decimal parts, each 0..255 written without a leading zero, the first
+// 127. Any other spelling of a loopback address (127.1, 0177.0.0.1) is not
+// trusted: what it means depends on whose parser reads it.
+static bool loopback_literal(const char *host)
+{
+    const char *p = host;
+    for (int32_t part = 0; part < 4; part++) {
+        if (!is_digit(*p))
+            return false;
+        uint32_t v = 0;
+        const char *start = p;
+        while (is_digit(*p) && p - start < 4)
+            v = v * 10 + (uint32_t)(*p++ - '0');
+        if (v > 255 || (p - start > 1 && *start == '0') || is_digit(*p))
+            return false;
+        if (part == 0 && v != 127)
+            return false;
+        if (part < 3 && *p++ != '.')
+            return false;
+    }
+    return *p == '\0';
+}
+
+// Secure Contexts § 3.1, for a URL: https, wss and data: are; an http URL
+// is when its host is loopback.
+static bool trustworthy(const char *url)
+{
+    char scheme[OS64_URL_SCHEME_MAX];
+    if (url == NULL || !os64_url_scheme_of(url, scheme, sizeof(scheme)))
+        return false;
+    if (os64_streq(scheme, "https") || os64_streq(scheme, "wss") || os64_streq(scheme, "data"))
+        return true;
+    way_origin_t o;
+    way_origin_of(url, 0, &o);
+    return !o.opaque && loopback_literal(o.host);
+}
+
+bool way_mixed_blocked(const way_origin_t *page, const char *url)
+{
+    return way_origin_prohibits_mixed(page) && !trustworthy(url);
+}
+
+bool way_port_bad(const char *url)
+{
+    static const uint16_t kBad[] = {
+        0, 1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95,
+        101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161,
+        179, 389, 427, 465, 512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563,
+        587, 601, 636, 989, 990, 993, 995, 1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061,
+        6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080,
+    };
+    char scheme[OS64_URL_SCHEME_MAX];
+    if (url == NULL || !os64_url_scheme_of(url, scheme, sizeof(scheme)) ||
+        (!os64_streq(scheme, "http") && !os64_streq(scheme, "https")))
+        return false;
+    way_origin_t o;
+    way_origin_of(url, 0, &o);
+    if (o.opaque)
+        return true;                            // a port nobody could read is not one to allow
+    for (size_t i = 0; i < sizeof(kBad) / sizeof(kBad[0]); i++)
+        if (o.port == kBad[i])
+            return true;
+    return false;
+}
+
+// ── Methods (§ 2.2.1) ───────────────────────────────────────────────────
+
+bool way_method_ok(const char *method, size_t len)
+{
+    return len < WAY_METHOD_MAX && is_token(method, len);
+}
+
+bool way_method_forbidden(const char *method, size_t len)
+{
+    return is_nocase(method, len, "CONNECT") || is_nocase(method, len, "TRACE") ||
+           is_nocase(method, len, "TRACK");
+}
+
+bool way_method_safelisted(const char *method)
+{
+    return os64_streq(method, "GET") || os64_streq(method, "HEAD") || os64_streq(method, "POST");
+}
+
+void way_method_normalize(char *method)
+{
+    static const char *const kNormal[] = {"DELETE", "GET", "HEAD", "OPTIONS", "POST", "PUT"};
+    size_t len = os64_strlen(method);
+    for (size_t i = 0; i < sizeof(kNormal) / sizeof(kNormal[0]); i++)
+        if (is_nocase(method, len, kNormal[i])) {
+            for (size_t j = 0; j < len; j++)
+                method[j] = upper(method[j]);
+            return;
+        }
+}
+
+// ── Headers (§ 2.2.2) ───────────────────────────────────────────────────
+
+bool way_header_name_ok(const char *name, size_t len)
+{
+    return is_token(name, len);
+}
+
+bool way_header_value_ok(const char *value, size_t len)
+{
+    if (len > 0 && (http_tab_or_space(value[0]) || http_tab_or_space(value[len - 1])))
+        return false;
+    for (size_t i = 0; i < len; i++)
+        if (value[i] == '\0' || value[i] == '\r' || value[i] == '\n')
+            return false;
+    return true;
+}
+
+void way_header_value_normalize(const char **value, size_t *len)
+{
+    while (*len > 0 && http_whitespace((*value)[0])) {
+        (*value)++;
+        (*len)--;
+    }
+    while (*len > 0 && http_whitespace((*value)[*len - 1]))
+        (*len)--;
+}
+
+// § 2.2 "collect an HTTP quoted string" from `s` at `*at` (a '"'), without
+// extracting: the span it covers, quotes included, and `*at` moved past it.
+static void quoted_string(const char *s, size_t len, size_t *at)
+{
+    (*at)++;
+    while (*at < len) {
+        char c = s[(*at)++];
+        if (c == '"')
+            return;
+        if (c == '\\' && *at < len)
+            (*at)++;
+    }
+}
+
+// § 2.2.2 "get, decode, and split", one value at a time: the next value at
+// `*at` (white space taken off its ends), and `*at` moved past its comma.
+// False when there is none left.
+static bool split_next(const char *s, size_t len, size_t *at, bool *started, const char **v, size_t *vlen)
+{
+    if (*at > len || (*at == len && *started))
+        return false;
+    *started = true;
+    size_t from = *at;
+    while (*at < len && s[*at] != ',') {
+        if (s[*at] == '"')
+            quoted_string(s, len, at);
+        else
+            (*at)++;
+    }
+    size_t to = *at;
+    while (from < to && http_tab_or_space(s[from]))
+        from++;
+    while (to > from && http_tab_or_space(s[to - 1]))
+        to--;
+    *v = s + from;
+    *vlen = to - from;
+    if (*at < len)
+        (*at)++;            // the comma
+    else
+        *at = len + 1;      // that was the last value
+    return true;
+}
+
+bool way_header_forbidden_request(const char *name, size_t nlen, const char *value, size_t vlen)
+{
+    static const char *const kForbidden[] = {
+        "accept-charset", "accept-encoding", "access-control-request-headers",
+        "access-control-request-method", "connection", "content-length", "cookie", "cookie2",
+        "date", "dnt", "expect", "host", "keep-alive", "origin", "referer", "set-cookie", "te",
+        "trailer", "transfer-encoding", "upgrade", "via",
+        // Not on the standard's list since it was removed from it; Chrome
+        // still drops it, and a page's User-Agent on the wire would be a
+        // CORS-unsafe header forcing a preflight nobody expected.
+        "user-agent",
+    };
+    for (size_t i = 0; i < sizeof(kForbidden) / sizeof(kForbidden[0]); i++)
+        if (is_nocase(name, nlen, kForbidden[i]))
+            return true;
+    if ((nlen >= 6 && is_nocase(name, 6, "proxy-")) || (nlen >= 4 && is_nocase(name, 4, "sec-")))
+        return true;
+    if (is_nocase(name, nlen, "x-http-method") || is_nocase(name, nlen, "x-http-method-override") ||
+        is_nocase(name, nlen, "x-method-override")) {
+        size_t at = 0;
+        bool started = false;
+        const char *v;
+        size_t len;
+        while (split_next(value, vlen, &at, &started, &v, &len))
+            if (way_method_forbidden(v, len))
+                return true;
+    }
+    return false;
+}
+
+bool way_header_forbidden_response(const char *name, size_t nlen)
+{
+    return is_nocase(name, nlen, "set-cookie") || is_nocase(name, nlen, "set-cookie2");
+}
+
+static bool cors_unsafe_byte(unsigned char c)
+{
+    return (c < 0x20 && c != 0x09) || c == 0x7F || (c != '\0' && os64_strchr("\"():<>?@[\\]{}", (char)c) != NULL);
+}
+
+static bool any_cors_unsafe_byte(const char *v, size_t len)
+{
+    for (size_t i = 0; i < len; i++)
+        if (cors_unsafe_byte((unsigned char)v[i]))
+            return true;
+    return false;
+}
+
+// § 2.2.2 "parse a single range header value", allowWhitespace false: the
+// form `bytes=N-`, `bytes=N-M` or `bytes=-M`. `*has_start` says N was there.
+static bool single_range(const char *v, size_t len, bool *has_start)
+{
+    if (len < 5 || os64_memcmp(v, "bytes", 5) != 0)
+        return false;
+    size_t at = 5;
+    if (at >= len || v[at] != '=')
+        return false;
+    at++;
+    size_t start = at;
+    while (at < len && is_digit(v[at]))
+        at++;
+    size_t start_end = at;
+    if (at >= len || v[at] != '-')
+        return false;
+    at++;
+    size_t end = at;
+    while (at < len && is_digit(v[at]))
+        at++;
+    size_t end_end = at;
+    if (at != len || (start == start_end && end == end_end))
+        return false;
+    *has_start = start != start_end;
+    if (start != start_end && end != end_end) {
+        // Compare as numbers of any length: leading zeros off, then the
+        // longer is larger, then the bytes decide.
+        while (start + 1 < start_end && v[start] == '0')
+            start++;
+        while (end + 1 < end_end && v[end] == '0')
+            end++;
+        size_t a = start_end - start, b = end_end - end;
+        if (a > b || (a == b && os64_memcmp(v + start, v + end, a) > 0))
+            return false;
+    }
+    return true;
+}
+
+bool way_header_cors_safelisted(const char *name, size_t nlen, const char *value, size_t vlen)
+{
+    if (vlen > 128)
+        return false;
+    if (is_nocase(name, nlen, "accept"))
+        return !any_cors_unsafe_byte(value, vlen);
+    if (is_nocase(name, nlen, "accept-language") || is_nocase(name, nlen, "content-language")) {
+        for (size_t i = 0; i < vlen; i++) {
+            char c = value[i];
+            if (!is_digit(c) && !(c >= 'A' && c <= 'Z') && !(c >= 'a' && c <= 'z') &&
+                os64_strchr(" *,-.;=", c) == NULL)
+                return false;
+            if (c == '\0')
+                return false;
+        }
+        return true;
+    }
+    if (is_nocase(name, nlen, "content-type")) {
+        if (any_cors_unsafe_byte(value, vlen))
+            return false;
+        char essence[WAY_MIME_ESSENCE_MAX];
+        if (!way_mime_parse(value, vlen, essence, sizeof(essence), NULL, 0))
+            return false;
+        return os64_streq(essence, "application/x-www-form-urlencoded") ||
+               os64_streq(essence, "multipart/form-data") || os64_streq(essence, "text/plain");
+    }
+    if (is_nocase(name, nlen, "range")) {
+        bool has_start;
+        return single_range(value, vlen, &has_start) && has_start;
+    }
+    return false;
+}
+
+bool way_header_no_cors_safelisted_name(const char *name, size_t nlen)
+{
+    return is_nocase(name, nlen, "accept") || is_nocase(name, nlen, "accept-language") ||
+           is_nocase(name, nlen, "content-language") || is_nocase(name, nlen, "content-type");
+}
+
+bool way_header_no_cors_safelisted(const char *name, size_t nlen, const char *value, size_t vlen)
+{
+    return way_header_no_cors_safelisted_name(name, nlen) &&
+           way_header_cors_safelisted(name, nlen, value, vlen);
+}
+
+bool way_header_privileged_no_cors(const char *name, size_t nlen)
+{
+    return is_nocase(name, nlen, "range");
+}
+
+bool way_header_request_body(const char *name, size_t nlen)
+{
+    return is_nocase(name, nlen, "content-encoding") || is_nocase(name, nlen, "content-language") ||
+           is_nocase(name, nlen, "content-location") || is_nocase(name, nlen, "content-type");
+}
+
+bool way_header_non_wildcard(const char *name, size_t nlen)
+{
+    return is_nocase(name, nlen, "authorization");
+}
+
+bool way_header_next(const char *block, size_t len, size_t *at, way_header_t *h)
+{
+    if (block == NULL || *at >= len)
+        return false;
+    const char *p = block + *at, *end = block + len;
+    const char *name = p;
+    while (p < end && *p != ':' && *p != '\r' && *p != '\n')
+        p++;
+    if (p + 1 >= end || p == name || p[0] != ':' || p[1] != ' ')
+        return false;
+    size_t name_len = (size_t)(p - name);
+    p += 2;
+    const char *value = p;
+    while (p < end && *p != '\r' && *p != '\n')
+        p++;
+    if (p + 1 >= end || p[0] != '\r' || p[1] != '\n')
+        return false;
+    h->name = name;
+    h->name_len = name_len;
+    h->value = value;
+    h->value_len = (size_t)(p - value);
+    *at = (size_t)(p + 2 - block);
+    return true;
+}
+
+// § 2.2.2 "CORS-unsafe request-header names": whether the header at `h` is
+// one, given whether the safelisted values together pass 1024 bytes.
+static bool unsafe_name(const way_header_t *h, bool overflow)
+{
+    return overflow || !way_header_cors_safelisted(h->name, h->name_len, h->value, h->value_len);
+}
+
+static bool safelist_overflows(const char *block, size_t len)
+{
+    size_t total = 0, at = 0;
+    way_header_t h;
+    while (way_header_next(block, len, &at, &h))
+        if (way_header_cors_safelisted(h.name, h.name_len, h.value, h.value_len))
+            total += h.value_len;
+    return total > 1024;
+}
+
+int32_t way_cors_unsafe_names(const char *block, size_t len, char *out, size_t cap)
+{
+    bool overflow = safelist_overflows(block, len);
+    // The sorted-lowercase set, emitted smallest first: each round takes the
+    // least name greater than the last one written. A block is bounded by
+    // its caller, so the rounds are too, and nothing is allocated.
+    const char *last = NULL;
+    size_t last_len = 0, used = 0;
+    int32_t count = 0;
+    if (out != NULL && cap > 0)
+        out[0] = '\0';
+    for (;;) {
+        const char *best = NULL;
+        size_t best_len = 0, at = 0;
+        way_header_t h;
+        while (way_header_next(block, len, &at, &h)) {
+            if (!unsafe_name(&h, overflow))
+                continue;
+            if (last != NULL && order_nocase(h.name, h.name_len, last, last_len) <= 0)
+                continue;
+            if (best == NULL || order_nocase(h.name, h.name_len, best, best_len) < 0) {
+                best = h.name;
+                best_len = h.name_len;
+            }
+        }
+        if (best == NULL)
+            return count;
+        if (out != NULL) {
+            if (used + (count > 0) + best_len + 1 > cap)
+                return -1;
+            if (count > 0)
+                out[used++] = ',';
+            for (size_t i = 0; i < best_len; i++)
+                out[used++] = lower(best[i]);
+            out[used] = '\0';
+        }
+        count++;
+        last = best;
+        last_len = best_len;
+    }
+}
+
+// ── MIME types ──────────────────────────────────────────────────────────
+
+// MIME Sniffing's "HTTP quoted-string token code point": tab, the printable
+// ASCII range and the bytes a header's isomorphic decoding makes U+0080..FF.
+static bool quoted_token_byte(unsigned char c)
+{
+    return c == 0x09 || (c >= 0x20 && c <= 0x7E) || c >= 0x80;
+}
+
+bool way_mime_parse(const char *value, size_t len, char *essence, size_t ecap, char *charset,
+                    size_t ccap)
+{
+    if (charset != NULL && ccap > 0)
+        charset[0] = '\0';
+    way_header_value_normalize(&value, &len);
+    size_t at = 0;
+    while (at < len && value[at] != '/')
+        at++;
+    if (at == 0 || at >= len || !is_token(value, at))
+        return false;
+    size_t type_len = at++;
+    size_t sub = at;
+    while (at < len && value[at] != ';')
+        at++;
+    size_t sub_end = at;
+    while (sub_end > sub && http_whitespace(value[sub_end - 1]))
+        sub_end--;
+    if (!is_token(value + sub, sub_end - sub))
+        return false;
+    if (type_len + 1 + (sub_end - sub) + 1 > ecap)
+        return false;
+    size_t e = 0;
+    for (size_t i = 0; i < type_len; i++)
+        essence[e++] = lower(value[i]);
+    essence[e++] = '/';
+    for (size_t i = sub; i < sub_end; i++)
+        essence[e++] = lower(value[i]);
+    essence[e] = '\0';
+    // The parameters, of which only the first valid charset is kept.
+    bool have_charset = false;
+    while (at < len) {
+        at++;                                   // the ';'
+        while (at < len && http_whitespace(value[at]))
+            at++;
+        size_t name = at;
+        while (at < len && value[at] != ';' && value[at] != '=')
+            at++;
+        size_t name_len = at - name;
+        if (at < len && value[at] == ';')
+            continue;
+        if (at >= len)
+            break;
+        at++;                                   // the '='
+        if (at >= len)
+            break;
+        char got[WAY_MIME_CHARSET_MAX];
+        size_t got_len = 0;
+        bool fits = true, valid = true;
+        if (value[at] == '"') {
+            // Collected with its value extracted: the quotes and escapes off.
+            at++;
+            while (at < len) {
+                char c = value[at++];
+                if (c == '"')
+                    break;
+                if (c == '\\') {
+                    if (at >= len) {
+                        c = '\\';
+                    } else {
+                        c = value[at++];
+                    }
+                }
+                if (!quoted_token_byte((unsigned char)c))
+                    valid = false;
+                if (got_len + 1 < sizeof(got))
+                    got[got_len++] = c;
+                else
+                    fits = false;
+            }
+            while (at < len && value[at] != ';')
+                at++;
+        } else {
+            size_t from = at;
+            while (at < len && value[at] != ';')
+                at++;
+            size_t to = at;
+            while (to > from && http_whitespace(value[to - 1]))
+                to--;
+            if (to == from)
+                continue;
+            for (size_t i = from; i < to; i++) {
+                if (!quoted_token_byte((unsigned char)value[i]))
+                    valid = false;
+                if (got_len + 1 < sizeof(got))
+                    got[got_len++] = value[i];
+                else
+                    fits = false;
+            }
+        }
+        got[got_len] = '\0';
+        if (name_len > 0 && is_token(value + name, name_len) && valid && !have_charset &&
+            is_nocase(value + name, name_len, "charset")) {
+            have_charset = true;
+            if (fits && charset != NULL)
+                os64_strcopy(charset, ccap, got);
+        }
+    }
+    return true;
+}
+
+// ── A request, hop by hop ───────────────────────────────────────────────
+
+static bool scheme_is(const char *url, const char *want)
+{
+    char scheme[OS64_URL_SCHEME_MAX];
+    return url != NULL && os64_url_scheme_of(url, scheme, sizeof(scheme)) && os64_streq(scheme, want);
+}
+
+static bool http_scheme(const char *url)
+{
+    return scheme_is(url, "http") || scheme_is(url, "https");
+}
+
+void way_request_start(way_request_t *r, const char *url)
+{
+    r->tainting = WAY_TAINT_BASIC;
+    r->rtaint = WAY_RTAINT_SAME_ORIGIN;
+    way_origin_of(url, 0, &r->current);
+    r->urls = 1;
+}
+
+const char *way_refusal_name(way_refusal_t why)
+{
+    switch (why) {
+    case WAY_REFUSE_NONE: return "none";
+    case WAY_REFUSE_PORT: return "a blocked port";
+    case WAY_REFUSE_MIXED: return "mixed content";
+    case WAY_REFUSE_SAME_ORIGIN: return "mode same-origin met another origin";
+    case WAY_REFUSE_NO_CORS: return "mode no-cors cannot stop at a redirect";
+    case WAY_REFUSE_SCHEME: return "not an http, https or data address";
+    case WAY_REFUSE_URL: return "an address this browser cannot fetch";
+    }
+    return "?";
+}
+
+way_hop_t way_main_fetch(way_request_t *r, const char *url, way_refusal_t *why)
+{
+    *why = WAY_REFUSE_NONE;
+    if (http_scheme(url) && r->current.opaque) {
+        *why = WAY_REFUSE_URL;
+        return WAY_HOP_REFUSED;
+    }
+    if (way_port_bad(url)) {
+        *why = WAY_REFUSE_PORT;
+        return WAY_HOP_REFUSED;
+    }
+    if (way_mixed_blocked(&r->origin, url)) {
+        *why = WAY_REFUSE_MIXED;
+        return WAY_HOP_REFUSED;
+    }
+    // § 4.1's first matching statement. Same origin keeps a request basic
+    // only while it IS basic: a chain that left the origin never returns.
+    // Its scheme fetch serves http(s) alone: a same-origin blob: URL has no
+    // Blob URL store to come from.
+    if (way_origin_same(&r->current, &r->origin) && r->tainting == WAY_TAINT_BASIC) {
+        if (!http_scheme(url)) {
+            *why = WAY_REFUSE_SCHEME;
+            return WAY_HOP_REFUSED;
+        }
+        return WAY_HOP_BASIC;
+    }
+    if (scheme_is(url, "data")) {
+        r->tainting = WAY_TAINT_BASIC;
+        return WAY_HOP_DATA;
+    }
+    if (r->mode == WAY_MODE_SAME_ORIGIN) {
+        *why = WAY_REFUSE_SAME_ORIGIN;
+        return WAY_HOP_REFUSED;
+    }
+    if (!http_scheme(url)) {
+        // no-cors goes to scheme fetch, which fetches nothing but http(s)
+        // and data: here: the same refusal either way.
+        *why = WAY_REFUSE_SCHEME;
+        return WAY_HOP_REFUSED;
+    }
+    if (r->mode == WAY_MODE_NO_CORS) {
+        if (r->redirect != WAY_REDIRECT_FOLLOW) {
+            *why = WAY_REFUSE_NO_CORS;
+            return WAY_HOP_REFUSED;
+        }
+        r->tainting = WAY_TAINT_OPAQUE;
+        return WAY_HOP_OPAQUE;
+    }
+    r->tainting = WAY_TAINT_CORS;
+    return WAY_HOP_CORS;
+}
+
+bool way_preflight_capable(const way_request_t *r)
+{
+    return r->tainting == WAY_TAINT_CORS &&
+           (r->preflight_flag || !way_method_safelisted(r->method) ||
+            way_cors_unsafe_names(r->headers, r->headers_len, NULL, 0) > 0);
+}
+
+bool way_credentials_included(const way_request_t *r)
+{
+    return r->credentials == WAY_CREDENTIALS_INCLUDE ||
+           (r->credentials == WAY_CREDENTIALS_SAME_ORIGIN && r->tainting == WAY_TAINT_BASIC);
+}
+
+bool way_request_origin(const way_request_t *r, char *out, size_t cap)
+{
+    if (r->rtaint != WAY_RTAINT_SAME_ORIGIN)
+        return os64_strcopy(out, cap, "null") < cap;
+    return way_origin_serialize(&r->origin, out, cap);
+}
+
+bool way_origin_header(const way_request_t *r, const char *url, char *out, size_t cap)
+{
+    if (r->tainting == WAY_TAINT_CORS)
+        return way_request_origin(r, out, cap);
+    if (os64_streq(r->method, "GET") || os64_streq(r->method, "HEAD"))
+        return false;
+    if (!way_request_origin(r, out, cap))
+        return false;
+    if (r->mode == WAY_MODE_CORS)
+        return true;
+    way_origin_t to;
+    way_origin_of(url, 0, &to);
+    bool null = false;
+    switch (r->policy) {
+    case WAY_POLICY_NO_REFERRER:
+        null = true;
+        break;
+    case WAY_POLICY_NO_REFERRER_WHEN_DOWNGRADE:
+    case WAY_POLICY_STRICT_ORIGIN:
+    case WAY_POLICY_STRICT_ORIGIN_WHEN_CROSS_ORIGIN:
+        null = !r->origin.opaque && os64_streq(r->origin.scheme, "https") && !scheme_is(url, "https");
+        break;
+    case WAY_POLICY_SAME_ORIGIN:
+        null = !way_origin_same(&r->origin, &to);
+        break;
+    default:
+        break;
+    }
+    if (null)
+        return os64_strcopy(out, cap, "null") < cap;
+    return true;
+}
+
+// Referrer Policy § 8.4 "strip url for use as a referrer": the address
+// without its fragment (os64's URL never holds userinfo), or its origin
+// alone as a URL ("https://a.test/"). Only http(s) pages are referrers
+// here; the standard lets file: be one, Chrome does not, and neither does
+// way_referrer.
+static bool strip_referrer(const char *referrer, bool origin_only, char *out, size_t cap)
+{
+    if (!http_scheme(referrer))
+        return false;
+    os64_url_t *u = os64_malloc(sizeof(*u));
+    if (u == NULL)
+        return false;
+    bool ok = os64_url_parse(referrer, u) == OS64_URL_OK;
+    if (ok && origin_only)
+        os64_strcopy(u->path, sizeof(u->path), "/");
+    ok = ok && os64_url_spell(u, out, cap);
+    os64_free(u);
+    return ok;
+}
+
+bool way_referrer_for(const way_request_t *r, const char *referrer, const char *url, char *out,
+                      size_t cap)
+{
+    if (referrer == NULL || referrer[0] == '\0' || r->policy == WAY_POLICY_NO_REFERRER)
+        return false;
+    way_origin_t from, to;
+    way_origin_of(referrer, 0, &from);
+    way_origin_of(url, 0, &to);
+    bool same = way_origin_same(&from, &to);
+    bool downgrade = trustworthy(referrer) && !trustworthy(url);
+    bool whole;
+    switch (r->policy) {
+    case WAY_POLICY_ORIGIN: whole = false; break;
+    case WAY_POLICY_UNSAFE_URL: whole = true; break;
+    case WAY_POLICY_STRICT_ORIGIN:
+        if (downgrade)
+            return false;
+        whole = false;
+        break;
+    case WAY_POLICY_SAME_ORIGIN:
+        if (!same)
+            return false;
+        whole = true;
+        break;
+    case WAY_POLICY_ORIGIN_WHEN_CROSS_ORIGIN: whole = same; break;
+    case WAY_POLICY_NO_REFERRER_WHEN_DOWNGRADE:
+        if (downgrade)
+            return false;
+        whole = true;
+        break;
+    default:                                    // strict-origin-when-cross-origin
+        if (same) {
+            whole = true;
+            break;
+        }
+        if (downgrade)
+            return false;
+        whole = false;
+        break;
+    }
+    if (!strip_referrer(referrer, !whole, out, cap))
+        return false;
+    // § 8.3 step 7: an address longer than 4096 bytes goes as its origin.
+    if (whole && os64_strlen(out) > 4096)
+        return strip_referrer(referrer, true, out, cap);
+    return true;
+}
+
+// ── A response's headers ────────────────────────────────────────────────
+
+typedef enum { GET_ABSENT, GET_OK, GET_UNREADABLE, GET_LONG } GetResult;
+
+static bool omitted(const way_response_t *resp, const char *name)
+{
+    size_t at = 0, nlen = os64_strlen(name);
+    const char *o = resp->omitted;
+    while (o != NULL && at < resp->omitted_len) {
+        size_t from = at;
+        while (at < resp->omitted_len && o[at] != '\r' && o[at] != '\n')
+            at++;
+        if (same_nocase(o + from, at - from, name, nlen))
+            return true;
+        while (at < resp->omitted_len && (o[at] == '\r' || o[at] == '\n'))
+            at++;
+    }
+    return false;
+}
+
+// § 2.2.2 "get": every line named `name`, values joined by ", ", into `out`.
+static GetResult header_get(const way_response_t *resp, const char *name, char *out, size_t cap)
+{
+    if (omitted(resp, name))
+        return GET_UNREADABLE;
+    size_t at = 0, used = 0, nlen = os64_strlen(name);
+    bool found = false;
+    way_header_t h;
+    out[0] = '\0';
+    while (way_header_next(resp->headers, resp->headers_len, &at, &h)) {
+        if (!same_nocase(h.name, h.name_len, name, nlen))
+            continue;
+        size_t need = (found ? 2 : 0) + h.value_len;
+        if (used + need + 1 > cap)
+            return GET_LONG;
+        if (found) {
+            out[used++] = ',';
+            out[used++] = ' ';
+        }
+        os64_memcpy(out + used, h.value, h.value_len);
+        used += h.value_len;
+        out[used] = '\0';
+        found = true;
+    }
+    return found ? GET_OK : GET_ABSENT;
+}
+
+// § 2.2.2 "extract header list values" for a `#token` header (#method,
+// #field-name), one element at a time across every line of that name.
+typedef struct {
+    const way_response_t *resp;
+    const char *name;
+    size_t name_len;
+    size_t line_at;             // where the next line is read from
+    const char *value;          // the line being split
+    size_t value_len, at;
+    bool in_line;
+} ListWalk;
+
+typedef enum { LIST_ABSENT, LIST_OK, LIST_FAILURE } ListResult;
+
+static void list_start(ListWalk *w, const way_response_t *resp, const char *name)
+{
+    os64_memset(w, 0, sizeof(*w));
+    w->resp = resp;
+    w->name = name;
+    w->name_len = os64_strlen(name);
+}
+
+// The next non-empty element, or false at the end. `*bad` says one was not
+// a token.
+static bool list_next(ListWalk *w, const char **item, size_t *len, bool *bad)
+{
+    for (;;) {
+        if (!w->in_line) {
+            way_header_t h;
+            bool found = false;
+            while (way_header_next(w->resp->headers, w->resp->headers_len, &w->line_at, &h))
+                if (same_nocase(h.name, h.name_len, w->name, w->name_len)) {
+                    found = true;
+                    break;
+                }
+            if (!found)
+                return false;
+            w->value = h.value;
+            w->value_len = h.value_len;
+            w->at = 0;
+            w->in_line = true;
+        }
+        if (w->at >= w->value_len) {
+            w->in_line = false;
+            continue;
+        }
+        size_t from = w->at;
+        while (w->at < w->value_len && w->value[w->at] != ',')
+            w->at++;
+        size_t to = w->at;
+        if (w->at < w->value_len)
+            w->at++;
+        while (from < to && http_tab_or_space(w->value[from]))
+            from++;
+        while (to > from && http_tab_or_space(w->value[to - 1]))
+            to--;
+        if (to == from)
+            continue;                           // an empty element is ignored
+        *item = w->value + from;
+        *len = to - from;
+        if (!is_token(*item, *len))
+            *bad = true;
+        return true;
+    }
+}
+
+static ListResult list_check(const way_response_t *resp, const char *name)
+{
+    if (omitted(resp, name))
+        return LIST_FAILURE;
+    ListWalk w;
+    list_start(&w, resp, name);
+    const char *item;
+    size_t len;
+    bool bad = false, any_line = false;
+    size_t at = 0;
+    way_header_t h;
+    while (way_header_next(resp->headers, resp->headers_len, &at, &h))
+        if (is_nocase(h.name, h.name_len, name))
+            any_line = true;
+    if (!any_line)
+        return LIST_ABSENT;
+    while (list_next(&w, &item, &len, &bad))
+        ;
+    return bad ? LIST_FAILURE : LIST_OK;
+}
+
+static bool list_has(const way_response_t *resp, const char *name, const char *want, size_t want_len,
+                     bool nocase)
+{
+    ListWalk w;
+    list_start(&w, resp, name);
+    const char *item;
+    size_t len;
+    bool bad = false;
+    while (list_next(&w, &item, &len, &bad))
+        if (nocase ? same_nocase(item, len, want, want_len) : same_bytes(item, len, want, want_len))
+            return true;
+    return false;
+}
+
+bool way_cors_check(const way_request_t *r, const way_response_t *resp)
+{
+    char origin[WAY_ORIGIN_TEXT_MAX + 8];
+    // Longer than any serialized origin is a mismatch, so GET_LONG fails too.
+    if (header_get(resp, "access-control-allow-origin", origin, sizeof(origin)) != GET_OK)
+        return false;
+    bool include = r->credentials == WAY_CREDENTIALS_INCLUDE;
+    if (!include && os64_streq(origin, "*"))
+        return true;
+    char mine[WAY_ORIGIN_TEXT_MAX];
+    if (!way_request_origin(r, mine, sizeof(mine)) || !os64_streq(origin, mine))
+        return false;
+    if (!include)
+        return true;
+    char credentials[8];
+    return header_get(resp, "access-control-allow-credentials", credentials, sizeof(credentials)) == GET_OK &&
+           os64_streq(credentials, "true");
+}
+
+// ── The preflight ───────────────────────────────────────────────────────
+
+bool way_preflight_lines(const way_request_t *r, char *out, size_t cap)
+{
+    int32_t n = os64_snprintf(out, cap, "Access-Control-Request-Method: %s\r\n", r->method);
+    if (n <= 0 || (size_t)n >= cap)
+        return false;
+    size_t used = (size_t)n;
+    static const char kHeaders[] = "Access-Control-Request-Headers: ";
+    int32_t names = way_cors_unsafe_names(r->headers, r->headers_len, NULL, 0);
+    if (names <= 0)
+        return true;
+    if (used + sizeof(kHeaders) - 1 >= cap)
+        return false;
+    os64_memcpy(out + used, kHeaders, sizeof(kHeaders) - 1);
+    used += sizeof(kHeaders) - 1;
+    if (way_cors_unsafe_names(r->headers, r->headers_len, out + used, cap - used) < 0)
+        return false;
+    used += os64_strlen(out + used);
+    if (used + 3 > cap)
+        return false;
+    out[used++] = '\r';
+    out[used++] = '\n';
+    out[used] = '\0';
+    return true;
+}
+
+// Access-Control-Max-Age (§ 3.3.4, delta-seconds, a single header) as the
+// seconds to keep the grants: 5 when absent or not a number, capped, and 0
+// when a line of it could not be read (nothing kept on a guess).
+static uint32_t max_age_of(const way_response_t *resp)
+{
+    if (omitted(resp, "access-control-max-age"))
+        return 0;
+    size_t at = 0, lines = 0;
+    way_header_t h, one = {0};
+    while (way_header_next(resp->headers, resp->headers_len, &at, &h))
+        if (is_nocase(h.name, h.name_len, "access-control-max-age")) {
+            one = h;
+            lines++;
+        }
+    if (lines != 1 || one.value_len == 0)
+        return 5;
+    uint64_t v = 0;
+    for (size_t i = 0; i < one.value_len; i++) {
+        if (!is_digit(one.value[i]))
+            return 5;
+        if (v < WAY_PREFLIGHT_AGE_MAX)
+            v = v * 10 + (uint64_t)(one.value[i] - '0');
+    }
+    return v > WAY_PREFLIGHT_AGE_MAX ? WAY_PREFLIGHT_AGE_MAX : (uint32_t)v;
+}
+
+bool way_preflight_judge(const way_request_t *r, const way_response_t *resp, uint32_t *max_age)
+{
+    *max_age = 0;
+    if (!way_cors_check(r, resp) || resp->status < 200 || resp->status > 299)
+        return false;
+    ListResult methods = list_check(resp, "access-control-allow-methods");
+    ListResult names = list_check(resp, "access-control-allow-headers");
+    if (methods == LIST_FAILURE || names == LIST_FAILURE)
+        return false;
+    bool include = r->credentials == WAY_CREDENTIALS_INCLUDE;
+    size_t mlen = os64_strlen(r->method);
+    // A null method list with the use-CORS-preflight flag is « method ».
+    bool in_methods = methods == LIST_OK ? list_has(resp, "access-control-allow-methods", r->method, mlen, false)
+                                         : r->preflight_flag;
+    bool method_star = methods == LIST_OK && list_has(resp, "access-control-allow-methods", "*", 1, false);
+    if (!in_methods && !way_method_safelisted(r->method) && (include || !method_star))
+        return false;
+    bool name_star = names == LIST_OK && list_has(resp, "access-control-allow-headers", "*", 1, false);
+    size_t at = 0;
+    way_header_t h;
+    bool overflow = safelist_overflows(r->headers, r->headers_len);
+    while (way_header_next(r->headers, r->headers_len, &at, &h)) {
+        bool named = names == LIST_OK &&
+                     list_has(resp, "access-control-allow-headers", h.name, h.name_len, true);
+        if (way_header_non_wildcard(h.name, h.name_len) && !named)
+            return false;
+        if (unsafe_name(&h, overflow) && !named && (include || !name_star))
+            return false;
+    }
+    *max_age = max_age_of(resp);
+    return true;
+}
+
+// ── The preflight cache ─────────────────────────────────────────────────
+
+typedef struct {
+    char *key;                  // partition, '\n', request origin, '\n', URL; one allocation with `item`
+    size_t key_len;
+    char *item;                 // the method, or the header name
+    bool method;
+    bool credentials;
+    uint64_t expires_ms;
+} Grant;
+
+struct way_preflight {
+    os64_lock_t lock;
+    Grant grants[WAY_PREFLIGHT_ENTRIES_MAX];
+    int32_t n;
+};
+
+// An entry's key, in three pieces, so that looking one up allocates nothing:
+// § 4.9's network partition key (the page's site, by the same-host stand-in),
+// the serialized request origin, and the URL.
+typedef struct {
+    char partition[WAY_ORIGIN_TEXT_MAX + 24];
+    char origin[WAY_ORIGIN_TEXT_MAX];
+    const char *url;
+    size_t partition_len, origin_len, url_len;
+} Key;
+
+static bool key_of(const way_request_t *r, const char *url, Key *k)
+{
+    if (r->origin.opaque)
+        os64_snprintf(k->partition, sizeof(k->partition), "opaque %lu", (unsigned long)r->origin.id);
+    else
+        os64_snprintf(k->partition, sizeof(k->partition), "%s %s", r->origin.scheme, r->origin.host);
+    if (!way_request_origin(r, k->origin, sizeof(k->origin)))
+        return false;
+    k->url = url;
+    k->partition_len = os64_strlen(k->partition);
+    k->origin_len = os64_strlen(k->origin);
+    k->url_len = os64_strlen(url);
+    return true;
+}
+
+static bool key_is(const Grant *g, const Key *k)
+{
+    if (g->key_len != k->partition_len + 1 + k->origin_len + 1 + k->url_len)
+        return false;
+    const char *p = g->key;
+    return os64_memcmp(p, k->partition, k->partition_len) == 0 && p[k->partition_len] == '\n' &&
+           os64_memcmp(p + k->partition_len + 1, k->origin, k->origin_len) == 0 &&
+           p[k->partition_len + 1 + k->origin_len] == '\n' &&
+           os64_memcmp(p + k->partition_len + 1 + k->origin_len + 1, k->url, k->url_len) == 0;
+}
+
+way_preflight_t *way_preflight_new(void)
+{
+    return os64_calloc(1, sizeof(way_preflight_t));
+}
+
+static void grant_drop(way_preflight_t *c, int32_t i)
+{
+    os64_free(c->grants[i].key);
+    c->grants[i] = c->grants[--c->n];
+}
+
+void way_preflight_free(way_preflight_t *cache)
+{
+    if (cache == NULL)
+        return;
+    while (cache->n > 0)
+        grant_drop(cache, 0);
+    os64_free(cache);
+}
+
+static void expire(way_preflight_t *c, uint64_t now_ms)
+{
+    for (int32_t i = 0; i < c->n;)
+        if (c->grants[i].expires_ms <= now_ms)
+            grant_drop(c, i);
+        else
+            i++;
+}
+
+// § 4.9 "cache entry match".
+static bool grant_matches(const Grant *g, const Key *k, bool include)
+{
+    return key_is(g, k) && (g->credentials || !include);
+}
+
+static bool method_cached(const way_preflight_t *c, const Key *k, bool include, const char *method)
+{
+    for (int32_t i = 0; i < c->n; i++) {
+        const Grant *g = &c->grants[i];
+        if (g->method && grant_matches(g, k, include) &&
+            (os64_streq(g->item, method) || os64_streq(g->item, "*")))
+            return true;
+    }
+    return false;
+}
+
+static bool name_cached(const way_preflight_t *c, const Key *k, bool include, const char *name, size_t len)
+{
+    for (int32_t i = 0; i < c->n; i++) {
+        const Grant *g = &c->grants[i];
+        if (g->method || !grant_matches(g, k, include))
+            continue;
+        if (same_nocase(g->item, os64_strlen(g->item), name, len) ||
+            (os64_streq(g->item, "*") && !way_header_non_wildcard(name, len)))
+            return true;
+    }
+    return false;
+}
+
+bool way_preflight_needed(way_preflight_t *cache, const way_request_t *r, const char *url,
+                          uint64_t now_ms)
+{
+    Key k;
+    if (cache == NULL || !key_of(r, url, &k))
+        return true;
+    bool include = r->credentials == WAY_CREDENTIALS_INCLUDE;
+    os64_lock_acquire(&cache->lock);
+    expire(cache, now_ms);
+    bool needed = !method_cached(cache, &k, include, r->method) &&
+                  (!way_method_safelisted(r->method) || r->preflight_flag);
+    bool overflow = safelist_overflows(r->headers, r->headers_len);
+    size_t at = 0;
+    way_header_t h;
+    while (!needed && way_header_next(r->headers, r->headers_len, &at, &h))
+        if (unsafe_name(&h, overflow) && !name_cached(cache, &k, include, h.name, h.name_len))
+            needed = true;
+    os64_lock_release(&cache->lock);
+    return needed;
+}
+
+// One grant kept: an existing one for the same key, kind and item has its
+// lifetime set; else a new one, past the cap evicting the soonest to expire.
+// A grant there is no memory for is not kept, and is asked for again.
+static void grant_put(way_preflight_t *c, const Key *k, bool method, bool credentials, const char *item,
+                      size_t item_len, uint64_t expires_ms)
+{
+    for (int32_t i = 0; i < c->n; i++) {
+        Grant *g = &c->grants[i];
+        if (g->method == method && g->credentials == credentials && key_is(g, k) &&
+            (method ? same_bytes(g->item, os64_strlen(g->item), item, item_len)
+                    : same_nocase(g->item, os64_strlen(g->item), item, item_len))) {
+            g->expires_ms = expires_ms;
+            return;
+        }
+    }
+    size_t key_len = k->partition_len + 1 + k->origin_len + 1 + k->url_len;
+    char *block = os64_malloc(key_len + 1 + item_len + 1);
+    if (block == NULL)
+        return;
+    if (c->n == WAY_PREFLIGHT_ENTRIES_MAX) {
+        int32_t soonest = 0;
+        for (int32_t i = 1; i < c->n; i++)
+            if (c->grants[i].expires_ms < c->grants[soonest].expires_ms)
+                soonest = i;
+        grant_drop(c, soonest);
+    }
+    char *p = block;
+    os64_memcpy(p, k->partition, k->partition_len);
+    p += k->partition_len;
+    *p++ = '\n';
+    os64_memcpy(p, k->origin, k->origin_len);
+    p += k->origin_len;
+    *p++ = '\n';
+    os64_memcpy(p, k->url, k->url_len);
+    p += k->url_len;
+    *p++ = '\0';
+    os64_memcpy(p, item, item_len);
+    p[item_len] = '\0';
+    Grant *g = &c->grants[c->n++];
+    g->key = block;
+    g->key_len = key_len;
+    g->item = p;
+    g->method = method;
+    g->credentials = credentials;
+    g->expires_ms = expires_ms;
+}
+
+void way_preflight_store(way_preflight_t *cache, const way_request_t *r, const char *url,
+                         const way_response_t *resp, uint32_t max_age, uint64_t now_ms)
+{
+    Key k;
+    if (cache == NULL || max_age == 0 || !key_of(r, url, &k))
+        return;
+    bool include = r->credentials == WAY_CREDENTIALS_INCLUDE;
+    uint64_t expires = now_ms + (uint64_t)max_age * 1000u;
+    os64_lock_acquire(&cache->lock);
+    expire(cache, now_ms);
+    // A `*` is kept as an uncredentialed grant whatever this request was: the
+    // standard's match would otherwise let a `*` from a credentialed answer
+    // that also named one method stand in for a method it never named.
+    static const char *const kLists[2] = {"access-control-allow-methods", "access-control-allow-headers"};
+    for (int32_t which = 0; which < 2; which++) {
+        bool method = which == 0;
+        if (method && list_check(resp, kLists[0]) == LIST_ABSENT) {
+            if (r->preflight_flag)
+                grant_put(cache, &k, true, include, r->method, os64_strlen(r->method), expires);
+            continue;
+        }
+        ListWalk w;
+        list_start(&w, resp, kLists[which]);
+        const char *item;
+        size_t len;
+        bool bad = false;
+        while (list_next(&w, &item, &len, &bad)) {
+            bool star = len == 1 && item[0] == '*';
+            grant_put(cache, &k, method, include && !star, item, len, expires);
+        }
+    }
+    os64_lock_release(&cache->lock);
+}
+
+void way_preflight_clear(way_preflight_t *cache, const way_request_t *r, const char *url)
+{
+    Key k;
+    if (cache == NULL || !key_of(r, url, &k))
+        return;
+    os64_lock_acquire(&cache->lock);
+    for (int32_t i = 0; i < cache->n;)
+        if (key_is(&cache->grants[i], &k))
+            grant_drop(cache, i);
+        else
+            i++;
+    os64_lock_release(&cache->lock);
+}
+
+int32_t way_preflight_count(way_preflight_t *cache)
+{
+    if (cache == NULL)
+        return 0;
+    os64_lock_acquire(&cache->lock);
+    int32_t n = cache->n;
+    os64_lock_release(&cache->lock);
+    return n;
+}
+
+// ── Redirects ───────────────────────────────────────────────────────────
+
+bool way_redirect_status(int32_t status)
+{
+    return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+}
+
+// Deletes every author header the predicate names, in place.
+static void delete_headers(way_request_t *r, bool (*doomed)(const char *name, size_t len))
+{
+    size_t at = 0, keep = 0;
+    way_header_t h;
+    while (r->headers != NULL && at < r->headers_len) {
+        size_t from = at;
+        if (!way_header_next(r->headers, r->headers_len, &at, &h))
+            break;
+        if (doomed(h.name, h.name_len))
+            continue;
+        if (keep != from)
+            os64_memmove(r->headers + keep, r->headers + from, at - from);
+        keep += at - from;
+    }
+    if (r->headers != NULL) {
+        r->headers_len = keep;
+        r->headers[keep] = '\0';
+    }
+}
+
+// § 2.2.5 "compute the redirect-taint", one URL at a time: what appending
+// `next` after `last` does to it. It only ever rises.
+static void taint_step(way_request_t *r, const way_origin_t *last, const way_origin_t *next)
+{
+    if (r->rtaint == WAY_RTAINT_CROSS_SITE)
+        return;
+    if (!way_origin_same_site(next, last) && !way_origin_same_site(&r->origin, last))
+        r->rtaint = WAY_RTAINT_CROSS_SITE;
+    else if (!way_origin_same(next, last) && !way_origin_same(&r->origin, last))
+        r->rtaint = WAY_RTAINT_SAME_SITE;
+}
+
+way_follow_t way_redirect_follow(way_request_t *r, int32_t status, const char *from, const char *to,
+                                 bool *drop_body)
+{
+    *drop_body = false;
+    if (r->urls > WAY_REDIRECTS_MAX || !http_scheme(to))
+        return WAY_FOLLOW_REFUSED;
+    way_origin_t next;
+    way_origin_of(to, 0, &next);
+    if (next.opaque)
+        return WAY_FOLLOW_REFUSED;              // a URL os64's grammar refuses (userinfo among them)
+    // House policy (fetch.h): what a script asks for never steps down from
+    // https to plain http on a server's say-so, whatever the page's scheme.
+    if (scheme_is(from, "https") && scheme_is(to, "http"))
+        return WAY_FOLLOW_REFUSED;
+    if (((status == 301 || status == 302) && os64_streq(r->method, "POST")) ||
+        (status == 303 && !os64_streq(r->method, "GET") && !os64_streq(r->method, "HEAD"))) {
+        os64_strcopy(r->method, sizeof(r->method), "GET");
+        *drop_body = r->body;
+        r->body = false;
+        delete_headers(r, way_header_request_body);
+    }
+    way_origin_t was;
+    way_origin_of(from, 0, &was);
+    if (!way_origin_same(&was, &next))
+        delete_headers(r, way_header_non_wildcard);
+    taint_step(r, &r->current, &next);
+    r->current = next;
+    r->urls++;
+    return WAY_FOLLOW_GO;
+}
+
+// ── The response a page sees ────────────────────────────────────────────
+
+const char *way_type_name(way_type_t type)
+{
+    switch (type) {
+    case WAY_TYPE_BASIC: return "basic";
+    case WAY_TYPE_CORS: return "cors";
+    case WAY_TYPE_OPAQUE: return "opaque";
+    case WAY_TYPE_OPAQUEREDIRECT: return "opaqueredirect";
+    case WAY_TYPE_ERROR: return "error";
+    case WAY_TYPE_DEFAULT: return "default";
+    }
+    return "error";
+}
+
+way_type_t way_response_type(const way_request_t *r)
+{
+    return r->tainting == WAY_TAINT_CORS ? WAY_TYPE_CORS
+         : r->tainting == WAY_TAINT_OPAQUE ? WAY_TYPE_OPAQUE : WAY_TYPE_BASIC;
+}
+
+static bool always_safelisted_response(const char *name, size_t len)
+{
+    static const char *const kSafe[] = {
+        "cache-control", "content-language", "content-length", "content-type", "expires",
+        "last-modified", "pragma",
+    };
+    for (size_t i = 0; i < sizeof(kSafe) / sizeof(kSafe[0]); i++)
+        if (is_nocase(name, len, kSafe[i]))
+            return true;
+    return false;
+}
+
+size_t way_response_headers(const way_request_t *r, way_type_t type, const way_response_t *resp,
+                            char *out, size_t cap)
+{
+    if (cap == 0)
+        return SIZE_MAX;
+    out[0] = '\0';
+    if (type != WAY_TYPE_BASIC && type != WAY_TYPE_CORS)
+        return 0;
+    // § 4.1: the CORS-exposed header-name list. A list that cannot be read
+    // or does not parse exposes nothing beyond the safelisted names.
+    bool expose_all = false, use_list = false;
+    if (type == WAY_TYPE_CORS) {
+        ListResult names = list_check(resp, "access-control-expose-headers");
+        if (names == LIST_OK) {
+            use_list = true;
+            expose_all = r->credentials != WAY_CREDENTIALS_INCLUDE &&
+                         list_has(resp, "access-control-expose-headers", "*", 1, false);
+        }
+    }
+    size_t at = 0, used = 0;
+    way_header_t h;
+    while (way_header_next(resp->headers, resp->headers_len, &at, &h)) {
+        bool keep;
+        if (way_header_forbidden_response(h.name, h.name_len))
+            keep = false;
+        else if (type == WAY_TYPE_BASIC || always_safelisted_response(h.name, h.name_len) || expose_all)
+            keep = true;
+        else
+            keep = use_list && list_has(resp, "access-control-expose-headers", h.name, h.name_len, true);
+        if (!keep)
+            continue;
+        size_t line = h.name_len + 2 + h.value_len + 2;
+        if (used + line + 1 > cap)
+            return SIZE_MAX;
+        os64_memcpy(out + used, h.name, h.name_len);
+        used += h.name_len;
+        out[used++] = ':';
+        out[used++] = ' ';
+        os64_memcpy(out + used, h.value, h.value_len);
+        used += h.value_len;
+        out[used++] = '\r';
+        out[used++] = '\n';
+        out[used] = '\0';
+    }
+    return used;
+}
+
+bool way_response_has_body(const way_request_t *r, way_type_t type, int32_t status)
+{
+    if (type != WAY_TYPE_BASIC && type != WAY_TYPE_CORS && type != WAY_TYPE_DEFAULT)
+        return false;
+    if (r != NULL && (os64_streq(r->method, "HEAD") || os64_streq(r->method, "CONNECT")))
+        return false;
+    return status != 101 && status != 103 && status != 204 && status != 205 && status != 304;
+}
