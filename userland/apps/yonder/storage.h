@@ -37,6 +37,8 @@ void yonder_storage_free(yonder_storage_t *storage);
 // merge past the quota keeps nothing and names, in `diag` (may be NULL),
 // the keys the commit could not keep; a store another window held past the
 // wait is BUSY, also named there, and libdom hands the changes over again.
+// `last` is drain's commit, which waits longer for the lock and, refused
+// even so, says there how many keys were not kept.
 // The first touch of the profile's stores removes the temps and locks a
 // crash left.
 uint64_t yonder_storage_identity(yonder_storage_t *storage, os64_dom_storage_area_t area, const char *origin);
@@ -44,7 +46,7 @@ int64_t yonder_storage_load(yonder_storage_t *storage, os64_dom_storage_area_t a
                             void *out, size_t cap);
 os64_dom_storage_status_t yonder_storage_commit(yonder_storage_t *storage, os64_dom_storage_area_t area,
                                                 const char *origin, const void *changes, size_t length,
-                                                yonder_diag_t *diag);
+                                                bool last, yonder_diag_t *diag);
 
 // Settings' "Clear page storage": every store under <profile>/storage/ is
 // removed, with every temp and lock a crash left (a live window's, mid-

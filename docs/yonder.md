@@ -124,6 +124,9 @@ Click the Settings icon in the title bar.
   CSS it added is not read, while the page's objects keep the same levels
   of prototypes either way. The next page you open takes the change, and
   that page's diagnostics file says `modern: off`.
+- **Clear page storage**, at that row's right: removes what every site
+  has kept in its page storage (below), at once, and the pages open now
+  forget theirs.
 - **Apply** changes this window from the next page on. **Save as default**
   also writes the settings to `yonder.conf`, where every new yonder reads
   them.
@@ -148,6 +151,21 @@ after its first visit. The page itself is fetched every time.
 
 The P5's refresh script leaves `/var/cache/` alone, so the cache survives
 a system refresh.
+
+## Page storage
+
+A site's scripts can keep things on this machine between visits
+(`localStorage`: a login token, a setting, what you last read). yonder
+keeps each site's in a file of its own under your **profile folder**,
+`/home/yogi/.yonder/storage/`, named for the site (`https://example.com`
+is `https%3A%2F%2Fexample.com`); a page from a file or `about:blank`
+keeps its storage only while it is open. Every yonder window shares the files: what one site's page
+writes in one window, its pages in another read. What a page keeps for
+one window only (`sessionStorage`) lives as long as the window and is
+never written down. A site may keep up to 5 MB. If the profile folder
+cannot be made or a file cannot be written, the status line says so and
+the page's storage lasts as long as the page. Clear page storage in
+Settings removes it all.
 
 ## yonder.conf
 
@@ -175,10 +193,12 @@ cache_dir = /var/cache/yonder
 | `animations` | `on` or `off`: whether a page's CSS animations move | `on` |
 | `motion` | `reduce` or `no-preference`: what pages are told about movement | `no-preference` |
 | `diagnostics` | a directory to write a file about each page into, an absolute path | none |
+| `modern` | `on` or `off`: the Modern Web surface | `on` |
+| `profile` | the folder for your own files, page storage first among them, an absolute path; made when first needed | `/home/yogi/.yonder` |
 
 A value yonder cannot use is ignored and the default used; a bad `agent`,
 `cache_mb`, `zoom`, `script_seconds` or `diagnostics` also says so in the
-log.
+log, and a bad `modern` or `profile` on the status line.
 
 ## Fonts
 

@@ -345,7 +345,11 @@ static bool temp_write(yonder_storage_t *st, const char *path, const void *image
 // (a commit takes milliseconds; a task number is reused at the next boot),
 // was left by a crash and is broken. A live one is waited for,
 // LOCK_STEP_MS at a time, up to LOCK_WAIT_MS; then the commit is BUSY and
-// libdom keeps the changes for the next. One that names nothing is being
+// libdom keeps the changes for the next. The last commit (libdom's drain:
+// the page's window is closing or its next page has arrived) waits up to
+// LOCK_FINAL_WAIT_MS, since nothing on screen waits for it and there is no
+// commit after it; one still refused then loses its changes, and the page's
+// record says how many. One that names nothing is being
 // written, or was left half made: it is waited for the same way and broken
 // at the end of the wait. Under the lock, the store's identity is read
 // again before the rename: a writer that ignored the lock (a crash's lock
@@ -354,6 +358,10 @@ static bool temp_write(yonder_storage_t *st, const char *path, const void *image
 // image of the same size in the same second (file_identity), or one that
 // lands between the look and the rename.
 #define LOCK_WAIT_MS 200
+// Ten times a live commit's: past it, a holder has stalled for longer than
+// a closing window should hang, and still well short of LOCK_STALE_S, the
+// age at which its lock is a crash's.
+#define LOCK_FINAL_WAIT_MS 2000
 #define LOCK_STEP_MS 5
 #define LOCK_STALE_S 10
 #define MERGE_TRIES 3
@@ -423,7 +431,7 @@ static bool lock_stale(const char *lock)
 // to be made (a folder that cannot be written).
 typedef enum { LOCK_TAKEN, LOCK_HELD, LOCK_REFUSED } lock_t;
 
-static lock_t lock_take(const char *lock)
+static lock_t lock_take(const char *lock, uint32_t wait_ms)
 {
     char text[48];
     int n = os64_snprintf(text, sizeof(text), "%lu %lu\n", (unsigned long)os64_taskid(),
@@ -432,7 +440,7 @@ static lock_t lock_take(const char *lock)
         return LOCK_REFUSED;
     // Every turn waits a step or breaks a lock; a lock that will not go is
     // a folder that will not let it, and the turns end.
-    for (uint32_t turn = 0, waited = 0; turn < 2 * (LOCK_WAIT_MS / LOCK_STEP_MS) + 4; turn++) {
+    for (uint32_t turn = 0, waited = 0; turn < 2 * (wait_ms / LOCK_STEP_MS) + 4; turn++) {
         int64_t h = os64_open(lock, "x");
         if (h >= 0) {
             bool ok = write_all((int32_t)h, (const uint8_t *)text, (size_t)n);
@@ -451,7 +459,7 @@ static lock_t lock_take(const char *lock)
             (void)os64_unlink(lock);
             continue;
         }
-        if (waited >= LOCK_WAIT_MS) {
+        if (waited >= wait_ms) {
             if (named)
                 return LOCK_HELD;   // a live holder: the changes wait for the next commit
             (void)os64_unlink(lock);    // half made, and still so at the wait's end
@@ -575,14 +583,33 @@ static os64_dom_storage_status_t commit_session(yonder_storage_t *st, const char
     return OS64_DOM_STORAGE_OK;
 }
 
-static void say_busy(yonder_diag_t *diag, const char *origin)
+static bool count_record(void *opaque, const char *key, size_t key_length, const char *value, size_t value_length)
+{
+    (void)key, (void)key_length, (void)value, (void)value_length;
+    (*(uint32_t *)opaque)++;
+    return true;
+}
+
+// A store another window kept past the wait, in the page's record: the
+// changes wait for the next commit, or, at the last, how many keys were
+// not kept.
+static void say_busy(yonder_diag_t *diag, const char *origin, const void *changes, size_t length, bool last)
 {
     if (diag == NULL)
         return;
-    char message[OS64_PATH_MAX + 96];
-    os64_snprintf(message, sizeof(message),
-                  "localStorage of %s is busy (another window is writing it); its changes wait for the next commit",
-                  origin);
+    char message[OS64_PATH_MAX + 128];
+    if (last) {
+        uint32_t keys = 0;
+        (void)os64_dom_storage_walk(changes, length, count_record, &keys);
+        os64_snprintf(message, sizeof(message),
+                      "localStorage of %s was busy (another window was writing it) as the page left; "
+                      "%u key%s not kept",
+                      origin, (unsigned)keys, keys == 1 ? "" : "s");
+    } else {
+        os64_snprintf(message, sizeof(message),
+                      "localStorage of %s is busy (another window is writing it); its changes wait for the next commit",
+                      origin);
+    }
     yonder_diag_failed(diag, "storage", message);
 }
 
@@ -599,7 +626,8 @@ static uint64_t path_identity(const char *path)
 // is merged onto again, up to MERGE_TRIES merges in all, and then the
 // commit is BUSY.
 static os64_dom_storage_status_t commit_locked(yonder_storage_t *st, const char *origin, const char *path,
-                                               const void *changes, size_t length, yonder_diag_t *diag)
+                                               const void *changes, size_t length, bool last,
+                                               yonder_diag_t *diag)
 {
     for (int tries = 1;; tries++) {
         uint64_t before = path_identity(path);
@@ -633,7 +661,7 @@ static os64_dom_storage_status_t commit_locked(yonder_storage_t *st, const char 
                 (void)os64_unlink(temp);
             if (tries < MERGE_TRIES)
                 continue;
-            say_busy(diag, origin);
+            say_busy(diag, origin, changes, length, last);
             return OS64_DOM_STORAGE_BUSY;
         }
         // A store left empty is no store, and one another window removed
@@ -657,7 +685,7 @@ static os64_dom_storage_status_t commit_locked(yonder_storage_t *st, const char 
 
 os64_dom_storage_status_t yonder_storage_commit(yonder_storage_t *st, os64_dom_storage_area_t area,
                                                 const char *origin, const void *changes, size_t length,
-                                                yonder_diag_t *diag)
+                                                bool last, yonder_diag_t *diag)
 {
     if (st == NULL || origin == NULL || changes == NULL)
         return OS64_DOM_STORAGE_FAILED;
@@ -675,16 +703,16 @@ os64_dom_storage_status_t yonder_storage_commit(yonder_storage_t *st, os64_dom_s
     char lock[OS64_PATH_MAX];
     os64_snprintf(lock, sizeof(lock), "%s" LOCK_SUFFIX, path);   // store_path kept the room
     sweep(st);
-    lock_t taken = lock_take(lock);
+    lock_t taken = lock_take(lock, last ? LOCK_FINAL_WAIT_MS : LOCK_WAIT_MS);
     if (taken == LOCK_HELD) {
-        say_busy(diag, origin);
+        say_busy(diag, origin, changes, length, last);
         return OS64_DOM_STORAGE_BUSY;
     }
     if (taken == LOCK_REFUSED) {
         os64_snprintf(st->problem, sizeof(st->problem), "Page storage is not kept: %s cannot be written.", path);
         return OS64_DOM_STORAGE_FAILED;
     }
-    os64_dom_storage_status_t status = commit_locked(st, origin, path, changes, length, diag);
+    os64_dom_storage_status_t status = commit_locked(st, origin, path, changes, length, last, diag);
     (void)os64_unlink(lock);
     return status;
 }

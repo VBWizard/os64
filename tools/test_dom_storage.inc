@@ -109,7 +109,7 @@ typedef struct {
     char *image;                        /* the harness's malloc */
     size_t length;
     uint64_t identity;
-    unsigned identities, loads, commits;
+    unsigned identities, loads, commits, lasts;      /* lasts: commits made as the last */
     bool fail_load, fail_commit;
     /* load answers this length and writes nothing when it is not 0; with
      * outgrow, one byte more than the room it is given. */
@@ -170,9 +170,10 @@ static void fake_store_take(FakeStore *s, void *merged, size_t length)
 }
 
 static os64_dom_storage_status_t fake_commit(void *opaque, const char *origin, const void *changes,
-                                             size_t length)
+                                             size_t length, bool last)
 {
     FakeStore *s = opaque;
+    s->lasts += last ? 1 : 0;
     snprintf(s->origin, sizeof(s->origin), "%s", origin);
     s->commits++;
     s->last_changes_length = length < sizeof(s->last_changes) ? length : sizeof(s->last_changes);
@@ -402,17 +403,28 @@ static void dom_storage_provider_cases(void)
           bytes_find(store.image, store.length, "+1 7\nyflushed\n", 14) != NULL,
           "storage: a flush commits it at once");
     os64_dom_storage_flush(f.binding);
-    check(store.commits == flushed + 1, "storage: a flush with nothing left commits nothing");
+    check(store.commits == flushed + 1 && store.lasts == 0,
+          "storage: a flush with nothing left commits nothing, and none of its commits is the last");
+    /* A flush a busy store refuses: the changes wait, for drain at the
+     * latest. */
+    dom_script(&f, "localStorage.setItem('x','kept')", "storage: a change a busy store will not take");
+    store.forced = OS64_DOM_STORAGE_BUSY;
+    os64_dom_storage_flush(f.binding);
+    store.forced = OS64_DOM_STORAGE_OK;
+    check(store.commits == flushed + 2 && os64_dom_storage_due(f.binding) != UINT64_MAX,
+          "storage: a busy store's refusal at a flush keeps the changes");
     /* Drain commits what is left, due or not. */
     os64_dom_storage_settle(f.binding);
     dom_script(&f, "sessionStorage.setItem('s','v');localStorage.setItem('z','last')",
                "storage: changes left at departure");
     unsigned before = store.commits;
     os64_dom_drain(f.binding);
-    check(store.commits == before + 2, "storage: drain makes the departure commit, both areas");
+    check(store.commits == before + 2 && store.lasts == 2, "storage: drain makes the last commit, both areas");
     fixture_free(&f);
     check(store.length != 0 && bytes_find(store.image, store.length, "+1 4\nzlast\n", 11) != NULL,
-          "storage: the departure commit reached the store");
+          "storage: the last commit reached the store");
+    check(bytes_find(store.image, store.length, "+1 4\nxkept\n", 11) != NULL,
+          "storage: with what a busy store refused at the flush");
     fake_store_free(&store);
 
     /* A full store: nothing kept, and the page reads the store back. */

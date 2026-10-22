@@ -163,7 +163,14 @@ UTF-16 under a BOM. **Any other label is refused by name into the
 document** — `doc->charset_unsupported` carries the label, the bytes are
 decoded as Windows-1252 so the ASCII half of the page still reads, and the
 face can tell the user what happened. Shift_JIS, GBK, KOI8-R and the rest
-arrive when a page demands one (consumer-driven, the roadmap rule).
+arrive when a page demands one (consumer-driven, the roadmap rule). The
+label table knows the Encoding Standard's UTF-16 labels (`utf-16`,
+`utf-16le`, `utf-16be`, `unicode`, `ucs-2`, `csunicode`,
+`iso-10646-ucs-2`, `unicodefeff`, `unicodefffe`): one in a `<meta>` means
+UTF-8, as the prescan's rule says, and one from the transport is refused as
+above, since only a BOM decodes UTF-16 here. `os64_html_encoding_for_label`
+and `os64_html_decode_windows_1252` export the table and the 1252 decoder,
+which libdom's `TextDecoder` reads too.
 
 After decoding, the standard's **input stream preprocessing** runs: CRLF
 and lone CR become LF, and the tokenizer's rules turn NUL into U+FFFD

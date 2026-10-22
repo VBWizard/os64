@@ -241,10 +241,10 @@ static int64_t local_load(void *opaque, const char *origin, void *out, size_t ca
 }
 
 static os64_dom_storage_status_t local_commit(void *opaque, const char *origin, const void *changes,
-                                              size_t length)
+                                              size_t length, bool last)
 {
     yonder_scripts_t *s = opaque;
-    return yonder_storage_commit(s->options.storage, OS64_DOM_STORAGE_LOCAL, origin, changes, length,
+    return yonder_storage_commit(s->options.storage, OS64_DOM_STORAGE_LOCAL, origin, changes, length, last,
                                  s->options.diag);
 }
 
@@ -261,10 +261,10 @@ static int64_t session_load(void *opaque, const char *origin, void *out, size_t 
 }
 
 static os64_dom_storage_status_t session_commit(void *opaque, const char *origin, const void *changes,
-                                                size_t length)
+                                                size_t length, bool last)
 {
     yonder_scripts_t *s = opaque;
-    return yonder_storage_commit(s->options.storage, OS64_DOM_STORAGE_SESSION, origin, changes, length,
+    return yonder_storage_commit(s->options.storage, OS64_DOM_STORAGE_SESSION, origin, changes, length, last,
                                  s->options.diag);
 }
 

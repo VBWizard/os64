@@ -133,7 +133,10 @@ remaining gates before recommending scripts for ordinary browsing.
   navigation captures it beside the parser mode and the page keeps it, so
   Apply reaches the next page and not the one on screen; a page made with
   it off has none of the arc's globals or CSS properties, and its record
-  says `modern: off`.
+  says `modern: off`. **Clear page storage** sits at that row's right and
+  acts at once, as Empty the cache does (`yonder_settings_on_clear_storage`
+  hands it to `storage_clear`, which removes every site's store from the
+  profile's `storage/` folder and has every page open forget its maps).
 - **yonder's loop waits on its own window**, so a thread waits on the
   dialog's (without taking its events) and rings a doorbell on yonder's;
   the loop pumps the dialog and tells the thread it has. One ring is out

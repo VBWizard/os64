@@ -37,8 +37,9 @@ can find, and the path is configurable. So:
   (1997, Communicator 4, when one machine began to hold more than one
   person's bookmarks), and it is what every browser since has called this
   folder.
-- Inside it: `favorites`, `history`, `cookies`, and from the arc's slice 1,
-  `storage/<origin>/` for the page storage APIs. Each is named by its
+- Inside it: `favorites`, `history`, `cookies`, and from the arc's slice 1a,
+  `storage/<origin>` for the page storage APIs (a file per origin, built:
+  MODERN_WEB.md § Slice 1a, as built). Each is named by its
   purpose, with no extension, as `/home/husk.rc` and the conf files are.
 - **`downloads = <dir>`** is a second setting, default **`/home/yogi/downloads`**
   (the profile's sibling, not its child): a download is something the person
