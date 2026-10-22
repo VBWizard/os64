@@ -1081,6 +1081,27 @@ static void batch_a_cases(void)
         "    replaced img 0 260 10 20\n"
         "    replaced img 0 280 10 20\n");
 
+    // An <input type=image> takes replaced_size's default path until its
+    // picture comes, and §10.4 holds it there too (replaced_hold): width
+    // 100 at 2 with max-height 20 is 100 x 20, and a float of height 100 at
+    // 2 with max-width 50 is 50 x 100, missing and arrived alike.
+    cascade_layout_case("aspect-ratio: an image input's limits hold it before its picture comes",
+        "<!doctype html><style>body { margin: 0 } input { display: block; margin: 0;"
+        " padding: 0; border: 0 } .f { float: left; clear: both }</style>"
+        "<input type=image src=missing.png alt=a style='width: 100px; aspect-ratio: 2;"
+        " max-height: 20px'><input type=image src=known.png alt=a style='width: 100px;"
+        " aspect-ratio: 2; max-height: 20px'><input type=image class=f src=missing.png alt=a"
+        " style='height: 100px; aspect-ratio: 2; max-width: 50px'><input type=image class=f"
+        " src=known.png alt=a style='height: 100px; aspect-ratio: 2; max-width: 50px'>",
+        400,
+        "page 400 240\n"
+        "block html 0 0 400 240\n"
+        "  block body 0 0 400 40\n"
+        "    replaced input 0 0 100 20 control 0\n"
+        "    replaced input 0 20 100 20 control 1\n"
+        "    replaced input 0 40 50 100 control 2 float-left\n"
+        "    replaced input 0 140 50 100 control 3 float-left\n");
+
     // ── text-overflow (CSS Overflow 4 § 4.1) ──
 
     // Not inherited; the line is laid out as it would be, past its block:

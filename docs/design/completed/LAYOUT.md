@@ -739,9 +739,10 @@ its contract; this is what it offers and why.
 - **`flow_replaced_fixed(box)`** — whether a replaced box is sized by the
   page alone, so an arrival cannot move it. By its style: a width and a
   height in pixels, or one of them and an `aspect-ratio` of the page's own
-  (not `auto <ratio>`, which the picture's ratio replaces); the picture
-  paths of `replaced_size` end in the same limits (`replaced_hold`), so
-  such a box sizes the same before and after. And by its place: the flex
+  (not `auto <ratio>`, which the picture's ratio replaces); every path of
+  `replaced_size` with a side given ends in the same limits
+  (`replaced_hold`) — an `<input type=image>`'s default path before its
+  picture comes too — so such a box sizes the same before and after. And by its place: the flex
   algorithm reads the picture's own size (`replaced_own`) for a basis of
   `content` and for an automatic main minimum, so a flex item is fixed
   only where its main size is given, its basis is not `content` and its
@@ -752,7 +753,8 @@ its contract; this is what it offers and why.
   `width="auto"` is written and fixes nothing. The host suite holds it to
   the layout (`fixed_cases`) for the 42 spellings of the two sides, each
   with no ratio, a ratio of its own, `auto 2`, a ratio held by a limit,
-  and minimums of 0 with and without a ratio, in a paragraph, a grid, a
+  and minimums of 0 with and without a ratio, as an `<img>` and an
+  `<input type=image>`, in a paragraph, a grid, a
   flex row and a flex column: exactly in a paragraph and a grid (fixed
   exactly when arrival moves nothing), and in a flex line in the
   direction that matters (fixed only when it moves nothing).

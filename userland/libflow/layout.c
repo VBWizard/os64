@@ -551,8 +551,9 @@ bool flow_replaced_fixed(const flow_box_t *box)
 // carries the height with it where the height was not given, and a
 // height held the width where it was not. The rest of §10.4's table —
 // both limits binding at once against the ratio — is booked (GARB.md §
-// Booked). One door for a picture whether or not it has arrived, so a
-// box flow_replaced_fixed calls fixed sizes the same either way.
+// Booked). One door for every replaced box with a side given, whether or
+// not its picture has arrived, so a box flow_replaced_fixed calls fixed
+// sizes the same either way.
 static void replaced_hold(const flow_style_t *s, Replaced *r, bool w_set, bool h_set, int64_t cbw,
                           int64_t fw, int64_t fh)
 {
@@ -616,7 +617,8 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     // page's ratio, or is guessed square from the side the page gave,
     // until it arrives, held by the limits an arrived one is
     // (replaced_hold); anything else keeps its own default on the side the
-    // page left unset (a frame's 300 by 150), or the ratio's.
+    // page left unset (a frame's 300 by 150), or the ratio's, and is held
+    // the same way where the page gave a side.
     bool img = node->ns == OS64_HTML_NS_HTML && node->tag == OS64_HTML_TAG_IMG;
     if (img && (w_set || h_set)) {
         r.w = w_set ? w : ratio ? ratio_width(s, h, fw, fh) : h;
@@ -654,6 +656,11 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
         r.w = ratio_width(s, h, fw, fh);
     else if (ratio && !h_set)
         r.h = ratio_height(s, r.w, fw, fh);
+    // §10.4 holds every replaced element: a side the page gave is held as
+    // an arrived picture's is (an <input type=image> takes this path until
+    // its picture comes); the defaults alone are left as they are.
+    if (w_set || h_set)
+        replaced_hold(s, &r, w_set, h_set, cbw, fw, fh);
     return r;
 }
 

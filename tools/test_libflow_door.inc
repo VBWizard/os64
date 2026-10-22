@@ -133,7 +133,9 @@ static void door_cases(void)
 // spell a picture's width and height, with no ratio, a ratio of its own,
 // one the picture's replaces (`auto 2`), a ratio held by a limit, and
 // minimums of 0 with and without a ratio (what makes a flex item's main
-// minimum a length); in a paragraph, a grid, a flex row and a flex
+// minimum a length); as
+// an <img> and as an <input type=image>, which takes the default path
+// until its picture comes; in a paragraph, a grid, a flex row and a flex
 // column. A face that trusts it to skip a layout on arrival must never be
 // wrong in the direction that leaves a picture squashed: fixed means the
 // box comes out the same whether the picture has arrived (known.png,
@@ -154,7 +156,7 @@ static void fixed_cases(void)
                                          "style='aspect-ratio: 2; max-width: 30px; min-height: 20px'",
                                          "style='min-width: 0; min-height: 0'",
                                          "style='aspect-ratio: 2; min-width: 0; min-height: 0'"};
-    static const char *const tags[] = {"img"};
+    static const char *const tags[] = {"img", "input type=image"};
     static const char *const places[][2] = {
         {"<p>", "p"},
         {"<div style='display: grid; width: 20px'>", "grid"},
