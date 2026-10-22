@@ -1,0 +1,25 @@
+# WPT's hr-time in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh hr-time --update
+# rewrites [passing].
+[required]
+# Slice 1a: performance.now(), timeOrigin and toJSON. Each fails with the
+# switch off.
+basic.any.html	Performance interface extends EventTarget.
+basic.any.html	self.performance.now() difference is not negative
+basic.any.html	self.performance.now() is a function that returns a number
+basic.any.html	self.performance.now() returns a positive number
+monotonic-clock.any.html	self.performance.now() difference is not negative
+monotonic-clock.any.html	self.performance.now() returns a positive number
+performance-tojson.html	Test performance.toJSON()
+timeOrigin.html	Window timeOrigin is close to Date.now() when there is no system clock adjustment.
+[excluded]
+[passing]
+basic.any.html	Performance interface extends EventTarget.
+basic.any.html	self.performance.now() difference is not negative
+basic.any.html	self.performance.now() is a function that returns a number
+basic.any.html	self.performance.now() returns a positive number
+monotonic-clock.any.html	self.performance.now() difference is not negative
+monotonic-clock.any.html	self.performance.now() returns a positive number
+performance-tojson.html	Test performance.toJSON()
+timeOrigin.html	Window timeOrigin is close to Date.now() when there is no system clock adjustment.

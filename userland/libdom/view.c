@@ -35,6 +35,15 @@ static void charge(os64_dom_t *dom, uint64_t layouts, uint64_t elapsed_us)
     dom->geometry_stats.elapsed_us = add_count(dom->geometry_stats.elapsed_us, elapsed_us);
 }
 
+// An interface object (d_interface_new) named on window.
+static int expose(JSContext *ctx, JSValueConst global, const char *name, int length, JSCFunction *constructor,
+                  JSValueConst prototype, JSValueConst parent)
+{
+    JSValue f = d_interface_new(ctx, name, length, constructor, prototype, parent);
+    if (JS_IsException(f)) return -1;
+    return JS_DefinePropertyValueStr(ctx, global, name, f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0 ? -1 : 0;
+}
+
 // ── The view ────────────────────────────────────────────────────────────
 
 static os64_dom_view_t view_now(const os64_dom_t *dom)
@@ -493,7 +502,7 @@ int d_computed_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_iterable(ctx, prototype, false) < 0)
         return -1;
     if (d_accessor(dom, ctx, dom->prototypes[D_PROTO_DOCUMENT]->value, "defaultView", default_view, 0, false) < 0 ||
-        d_interface_install(ctx, global, "CSSStyleDeclaration", dom->style_prototype->value, JS_UNDEFINED, NULL) < 0)
+        expose(ctx, global, "CSSStyleDeclaration", 0, NULL, dom->style_prototype->value, JS_UNDEFINED) < 0)
         return -1;
     return d_method_named(dom, ctx, global, "getComputedStyle", get_computed_style, 1, 0);
 }
@@ -639,8 +648,8 @@ int d_view_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     // window's (HTML's GlobalEventHandlers); the body's are window's.
     JSValueConst holders[] = {element, document, global};
     for (size_t i = 0; i < sizeof(holders) / sizeof(holders[0]); i++)
-        if (d_handler_install(dom, ctx, holders[i], D_EVENT_SCROLL) < 0 ||
-            d_handler_install(dom, ctx, holders[i], D_EVENT_RESIZE) < 0)
+        if (d_event_handler(dom, ctx, holders[i], D_EVENT_SCROLL) < 0 ||
+            d_event_handler(dom, ctx, holders[i], D_EVENT_RESIZE) < 0)
             return -1;
     return 0;
 }
@@ -715,7 +724,9 @@ static void media_sweep(os64_dom_t *dom)
     }
 }
 
-int d_media_target(os64_dom_t *dom, JSContext *ctx, JSValueConst self, DValue **entry)
+// A MediaQueryList's event target entry (d_event_target's resolver), made
+// the first time it is asked for, so a list nothing listens to is not held.
+static int media_entry(os64_dom_t *dom, JSContext *ctx, JSValueConst self, DValue **entry)
 {
     if (dom->media_class == 0 || !JS_IsObject(self) || JS_GetClassID(self) != dom->media_class) return 0;
     DMedia *m = JS_GetOpaque(self, dom->media_class);
@@ -849,9 +860,9 @@ int d_media_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_accessor(dom, ctx, prototype, "matches", media_member, M_MATCHES, false) < 0 ||
         d_method_named(dom, ctx, prototype, "addListener", media_member, 1, M_ADD_LISTENER) < 0 ||
         d_method_named(dom, ctx, prototype, "removeListener", media_member, 1, M_REMOVE_LISTENER) < 0 ||
-        d_handler_install(dom, ctx, prototype, D_EVENT_CHANGE) < 0 ||
-        d_target_install(dom, ctx, prototype) < 0 ||
-        d_interface_install(ctx, global, "MediaQueryList", prototype, JS_UNDEFINED, NULL) < 0)
+        d_event_handler(dom, ctx, prototype, D_EVENT_CHANGE) < 0 ||
+        d_event_target(dom, ctx, prototype, dom->media_class, media_entry) < 0 ||
+        expose(ctx, global, "MediaQueryList", 0, NULL, prototype, JS_UNDEFINED) < 0)
         return -1;
     JSValue event_prototype = JS_GetClassProto(ctx, dom->event_class);
     JSValue own = JS_NewObjectProto(ctx, event_prototype);
@@ -860,7 +871,7 @@ int d_media_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (dom->media_event_prototype == NULL) return -1;
     JSValue event = JS_GetPropertyStr(ctx, global, "Event");
     if (JS_IsException(event)) return -1;
-    int made = d_interface_install(ctx, global, "MediaQueryListEvent", own, event, media_event_construct);
+    int made = expose(ctx, global, "MediaQueryListEvent", 1, media_event_construct, own, event);
     JS_FreeValue(ctx, event);
     if (made < 0) return -1;
     return d_method_named(dom, ctx, global, "matchMedia", media_member, 1, M_MATCH_MEDIA);

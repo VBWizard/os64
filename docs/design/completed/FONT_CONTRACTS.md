@@ -198,6 +198,11 @@ row pitch and baseline from the role's primary face at its selected size (an
 empty primary-only run supplies those metrics). Taller fallback/marker ink is
 clipped to the row, without changing pitch. F4 takes selection X from the run
 and Y from the consumer's row. Ink union excludes empty masks. Logical width includes trailing spaces and tabs.
+`letter_spacing` (CSS Text 3 § 7.2 tracking) is added after every cluster but a
+tab, the run's last too, so runs laid side by side are spaced across their join;
+trimming it where a line ends is the consumer's. A negative one narrows a cluster
+to no less than nothing, so carets never go back. Grid mode refuses one
+(BAD_ARGUMENT).
 Glyph placement keeps source cluster spans and separate ink bounds. A run can
 represent multiple glyphs for one cluster even though the initial Western accent
 strategy below often selects one composed glyph.

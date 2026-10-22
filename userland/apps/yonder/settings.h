@@ -8,8 +8,8 @@
 // Empty button; the default zoom; dark pages (`appearance = dark`); and
 // whether animations run (`animations = off`) and whether pages are told
 // to reduce motion (`motion = reduce`); and whether pages get the Modern
-// Web arc's surface (`modern = off`). Apply changes this window; Save as
-// default writes to yonder.conf.
+// Web arc's surface (`modern = off`), with Clear page storage beside it.
+// Apply changes this window; Save as default writes to yonder.conf.
 //
 // The dialog is a window of its own, and yonder's loop waits on its own
 // window alone, so a thread waits on the dialog's and rings `bell` on
@@ -42,6 +42,10 @@ void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
                           void (*modern_use)(bool modern));
 // The bell rang: what arrived at the dialog is handled and painted.
 void yonder_settings_rung(void);
+// What the dialog's "Clear page storage" does, on the window thread: it
+// writes the sentence the dialog's status line then says. Set once, before
+// the dialog opens; with none, the button says there is nothing to clear.
+void yonder_settings_on_clear_storage(void (*clear)(char *line, size_t cap));
 // Closes the dialog if it is open.
 void yonder_settings_close(void);
 
@@ -76,6 +80,16 @@ bool yonder_settings_saved_diagnostics(char *out, size_t cap);
 // for the replay corpus). Off when absent; a value that is neither `on` nor
 // `off` is logged and read as off. It keeps nothing without `diagnostics`.
 bool yonder_settings_saved_keep_pages(void);
+
+// THE PROFILE FOLDER (YONDER_HONEY_DO.md § Where yonder's files live):
+// `profile = <dir>`, where the person's own files are kept, page storage
+// first among them. Into `out` without a trailing slash; absent, it is
+// YONDER_PROFILE_DEFAULT. A value that is not a full path, or too long for
+// `out`, or a yonder.conf that cannot be read, is refused for the default,
+// and the answer is then the sentence for the status line (NULL
+// otherwise). The folder is made when something is first kept in it.
+#define YONDER_PROFILE_DEFAULT "/home/yogi/.yonder"
+const char *yonder_settings_saved_profile(char *out, size_t cap);
 
 // The agent yonder.conf saves, into `out` (YONDER_AGENT_MAX bytes): true
 // when there is one and it is valid.

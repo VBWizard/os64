@@ -174,6 +174,11 @@ typedef struct {
     // a refresh — which its Referer names (way_referrer). Empty for an
     // address typed, Back, Forward and Reload.
     char referrer[OS64_FETCH_URL_MAX];
+    // way_open's own, for way_head_t.redirects: the origin of the address
+    // asked for, and the number of the first hop that left it (0 for none).
+    os64_url_t asked_origin;
+    bool asked_parsed;
+    uint32_t left_at;
 } way_leg_t;
 
 // A leg for `session`, with the session's own face and agent and an empty
@@ -240,6 +245,10 @@ typedef struct {
     uint16_t tls_version;
     bool tls_fallback;
     way_body_t body;
+    // Navigation Timing's redirectCount: the redirects followed to get here
+    // when every one stayed on the origin of the address asked for, and 0
+    // when there were none or any left it. way_open's alone.
+    uint32_t redirects;
 } way_head_t;
 
 // A fetch open with its head read and judged a page. The fetch is the

@@ -167,6 +167,10 @@ void yonder_paint_cache_counts_restart(yonder_paint_cache_t *c);
 // (`begin`) and end; NULL, nothing is told.
 typedef enum { YONDER_PAINT_SHADOW, YONDER_PAINT_GRADIENT } yonder_paint_stage_t;
 extern void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
+// How many line cuts (flow_line_cut) the painter has worked, since the
+// program started: a count the harness holds to the lines painted, not the
+// pieces on them.
+extern uint64_t yonder_paint_cuts;
 
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
                   uint32_t paper, const yonder_dark_t *dark, yonder_paint_cache_t *cache,
@@ -190,6 +194,17 @@ typedef struct {
 } yonder_tile_t;
 bool yonder_background_tile(const flow_layer_t *l, os64_gui_rect_t area, uint32_t iw, uint32_t ih,
                             yonder_tile_t *out);
+
+// Where a picture `iw` x `ih` is drawn in its CONTENT box `box`, as its
+// style's object-fit and object-position say (CSS Images 3 § 4.5, § 4.6):
+// the box itself for fill, or a picture without a size on both axes; its
+// own ratio scaled to fit inside the box (contain) or to cover it (cover);
+// its own size (none); none if that fits inside the box, else contain
+// (scale-down) — placed by the position, a percentage of the room it
+// leaves, which is negative where it is bigger than the box. What is
+// drawn of it is cut to the box: that is the caller's.
+os64_gui_rect_t yonder_object_rect(const flow_style_t *s, os64_gui_rect_t box, uint32_t iw,
+                                   uint32_t ih);
 
 // The two tones a bevelled border is drawn in, from its colour.
 uint32_t yonder_lighter(uint32_t colour);

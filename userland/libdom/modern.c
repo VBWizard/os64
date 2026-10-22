@@ -38,6 +38,14 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"getComputedStyle", "CSSStyleDeclaration", NULL}, d_computed_install},
     {(const char *const[]){"onpopstate", "onhashchange", "PopStateEvent", "HashChangeEvent", NULL},
      d_history_install},
+    {(const char *const[]){"localStorage", "sessionStorage", "Storage", NULL}, d_storage_install},
+    {(const char *const[]){"performance", "Performance", "PerformanceEntry", "PerformanceMark",
+                           "PerformanceMeasure", "PerformanceTiming", "PerformanceNavigation", NULL},
+     d_performance_install},
+    {(const char *const[]){"URL", "URLSearchParams", NULL}, d_url_install},
+    {(const char *const[]){"TextEncoder", "TextDecoder", NULL}, d_encoding_install},
+    {(const char *const[]){"screen", "devicePixelRatio", "Screen", "ScreenOrientation", NULL}, d_screen_install},
+    {(const char *const[]){"btoa", "atob", NULL}, d_base64_install},
 };
 
 int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)

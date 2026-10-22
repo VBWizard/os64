@@ -218,6 +218,17 @@ static const char *const kGeneric[] = {"serif", "sans-serif", "monospace"};
 static const char *const kAnimDirection[] = {"normal", "reverse", "alternate", "alternate-reverse"};
 static const char *const kFill[] = {"none", "forwards", "backwards", "both"};
 static const char *const kJump[] = {"jump-end", "jump-start", "jump-none", "jump-both"};
+static const char *const kCursor[] = {
+    "auto", "default", "none", "context-menu", "help", "pointer", "progress", "wait", "cell",
+    "crosshair", "text", "vertical-text", "alias", "copy", "move", "no-drop", "not-allowed", "grab",
+    "grabbing", "e-resize", "n-resize", "ne-resize", "nw-resize", "s-resize", "se-resize", "sw-resize",
+    "w-resize", "ew-resize", "ns-resize", "nesw-resize", "nwse-resize", "col-resize", "row-resize",
+    "all-scroll", "zoom-in", "zoom-out"};
+static const char *const kUserSelect[] = {"auto", "text", "none", "contain", "all"};
+static const char *const kWordBreak[] = {"normal", "keep-all", "break-all", "break-word"};
+static const char *const kOverflowWrap[] = {"normal", "break-word", "anywhere"};
+static const char *const kTextOverflow[] = {"clip", "ellipsis"};
+static const char *const kObjectFit[] = {"fill", "contain", "cover", "none", "scale-down"};
 
 // One name per value: an enum that grows without its table stops the build.
 _Static_assert(F_ARRAY(kDisplay) == FLOW_DISPLAY_NONE + 1, "kDisplay");
@@ -241,14 +252,20 @@ _Static_assert(F_ARRAY(kGeneric) == FLOW_GENERIC_MONO + 1, "kGeneric");
 _Static_assert(F_ARRAY(kAnimDirection) == FLOW_DIRECTION_ALTERNATE_REVERSE + 1, "kAnimDirection");
 _Static_assert(F_ARRAY(kFill) == FLOW_FILL_BOTH + 1, "kFill");
 _Static_assert(F_ARRAY(kJump) == FLOW_JUMP_BOTH + 1, "kJump");
+_Static_assert(F_ARRAY(kCursor) == FLOW_CURSOR_ZOOM_OUT + 1, "kCursor");
+_Static_assert(F_ARRAY(kUserSelect) == FLOW_USER_SELECT_ALL + 1, "kUserSelect");
+_Static_assert(F_ARRAY(kWordBreak) == FLOW_WORD_BREAK_BREAK_WORD + 1, "kWordBreak");
+_Static_assert(F_ARRAY(kOverflowWrap) == FLOW_OVERFLOW_WRAP_ANYWHERE + 1, "kOverflowWrap");
+_Static_assert(F_ARRAY(kTextOverflow) == FLOW_TEXT_OVERFLOW_ELLIPSIS + 1, "kTextOverflow");
+_Static_assert(F_ARRAY(kObjectFit) == FLOW_OBJECT_SCALE_DOWN + 1, "kObjectFit");
 
 // `table[v]`, or "" for a value past the table (a style is only ever
 // written by libflow, so that is a broken invariant, not a page's doing).
-static void word(Out *o, const char *const *table, int32_t n, int32_t v)
+static void table_word(Out *o, const char *const *table, int32_t n, int32_t v)
 {
     puts_(o, v >= 0 && v < n ? table[v] : "");
 }
-#define WORD(o, table, v) word((o), (table), F_ARRAY(table), (int32_t)(v))
+#define WORD(o, table, v) table_word((o), (table), F_ARRAY(table), (int32_t)(v))
 
 // ── The box, for the resolved values ────────────────────────────────────
 
@@ -1173,6 +1190,38 @@ size_t flow_computed_text(const flow_computed_t *c, int32_t prop, char *out, siz
             puts_(&o, "transform");
         if (s->will_change & FLOW_WILL_OPACITY)
             puts_(&o, s->will_change & FLOW_WILL_TRANSFORM ? ", opacity" : "opacity");
+        break;
+    case GARB_CURSOR: WORD(&o, kCursor, s->cursor); break;
+    case GARB_USER_SELECT: WORD(&o, kUserSelect, s->user_select); break;
+    case GARB_WORD_BREAK: WORD(&o, kWordBreak, s->word_break); break;
+    case GARB_OVERFLOW_WRAP: WORD(&o, kOverflowWrap, s->overflow_wrap); break;
+    case GARB_LETTER_SPACING:
+        if (s->letter_spacing == 0)
+            puts_(&o, "normal");
+        else
+            units(c, &o, s->letter_spacing);
+        break;
+    case GARB_TEXT_OVERFLOW: WORD(&o, kTextOverflow, s->text_overflow); break;
+    case GARB_OUTLINE_WIDTH: units(c, &o, s->outline_width); break;
+    case GARB_OUTLINE_STYLE:
+        if (s->outline_auto)
+            puts_(&o, "auto");
+        else
+            WORD(&o, kBorder, s->outline_style);
+        break;
+    case GARB_OUTLINE_COLOR: colour(&o, s->outline_color); break;
+    case GARB_OUTLINE_OFFSET: units(c, &o, s->outline_offset); break;
+    case GARB_OBJECT_FIT: WORD(&o, kObjectFit, s->object_fit); break;
+    case GARB_OBJECT_POSITION:
+        length(c, &o, s->object_position[0], "50%");
+        puts_(&o, " ");
+        length(c, &o, s->object_position[1], "50%");
+        break;
+    case GARB_ASPECT_RATIO:
+        // The style keeps the ratio as one number; the pair the page wrote
+        // is its declaration's.
+        if (!declared(c, prop, &o))
+            puts_(&o, "auto");
         break;
     case GARB_FONT_VARIANT:
         if (!declared(c, prop, &o))

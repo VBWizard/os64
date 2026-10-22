@@ -1,10 +1,11 @@
 #include "scripts.h"
 #include "os64/js_engine.h"
+#include "os64/date.h"
 #include "os64/fmt.h"
 #include "os64/mem.h"
+#include "os64/proc.h"
 #include "os64/str.h"
 #include "os64/io.h"
-#include "os64/proc.h"
 
 /* Read on the window owner thread, including after a page owner is freed. */
 static size_t teardown_leaks;
@@ -82,6 +83,8 @@ struct yonder_scripts {
     // The whole address of the script the last task ran, NULL when it was
     // an inline script, an event or a timer (yonder_scripts_task_address).
     const char *task_address;
+    // The page's navigation timing, which its binding reads when asked.
+    os64_dom_timing_t timing;
     // How long the last task's script took the engine to evaluate, in
     // microseconds; -1 when the last task evaluated none
     // (yonder_scripts_task_us).
@@ -161,10 +164,13 @@ static void drain_after_exception(yonder_scripts_t *s, os64_js_outcome_t *out)
     }
 }
 
-// A task's outcome, judged: a sticky one retires the runtime.
+// A task's outcome, judged: the task is over for the page's storage (its
+// next touch asks the store again, and what is due commits), and a sticky
+// outcome retires the runtime.
 static void judged(yonder_scripts_t *s, const os64_js_outcome_t *out)
 {
     s->tasks++;
+    os64_dom_storage_settle(s->dom);
     if (sticky(out->status))
         retire(s);
 }
@@ -207,6 +213,69 @@ static uint64_t now_ms(void *opaque)
     return s->options.now_ms != NULL ? s->options.now_ms(s->options.opaque) : 0;
 }
 
+// performance.now()'s clock: os64_micros, the clock the timing's
+// milestones are marked on.
+static uint64_t now_us(void *opaque)
+{
+    (void)opaque;
+    int64_t now = os64_micros();
+    return now > 0 ? (uint64_t)now : 0;
+}
+
+static void timing(void *opaque, os64_dom_timing_t *out)
+{
+    yonder_scripts_t *s = opaque;
+    *out = s->timing;
+}
+
+static uint32_t zoom(void *opaque)
+{
+    yonder_scripts_t *s = opaque;
+    return s->options.zoom != NULL ? s->options.zoom(s->options.opaque) : 1000;
+}
+
+// The page's storage providers: the window's store (storage.h), with the
+// page's record for a commit the store was too full to keep.
+static uint64_t local_identity(void *opaque, const char *origin)
+{
+    yonder_scripts_t *s = opaque;
+    return yonder_storage_identity(s->options.storage, OS64_DOM_STORAGE_LOCAL, origin);
+}
+
+static int64_t local_load(void *opaque, const char *origin, void *out, size_t cap)
+{
+    yonder_scripts_t *s = opaque;
+    return yonder_storage_load(s->options.storage, OS64_DOM_STORAGE_LOCAL, origin, out, cap);
+}
+
+static os64_dom_storage_status_t local_commit(void *opaque, const char *origin, const void *changes,
+                                              size_t length)
+{
+    yonder_scripts_t *s = opaque;
+    return yonder_storage_commit(s->options.storage, OS64_DOM_STORAGE_LOCAL, origin, changes, length,
+                                 s->options.diag);
+}
+
+static uint64_t session_identity(void *opaque, const char *origin)
+{
+    yonder_scripts_t *s = opaque;
+    return yonder_storage_identity(s->options.storage, OS64_DOM_STORAGE_SESSION, origin);
+}
+
+static int64_t session_load(void *opaque, const char *origin, void *out, size_t cap)
+{
+    yonder_scripts_t *s = opaque;
+    return yonder_storage_load(s->options.storage, OS64_DOM_STORAGE_SESSION, origin, out, cap);
+}
+
+static os64_dom_storage_status_t session_commit(void *opaque, const char *origin, const void *changes,
+                                                size_t length)
+{
+    yonder_scripts_t *s = opaque;
+    return yonder_storage_commit(s->options.storage, OS64_DOM_STORAGE_SESSION, origin, changes, length,
+                                 s->options.diag);
+}
+
 // The runtime and its binding, made at the first script that runs. Heap
 // and source keep the profile measured for libdom (DOM.md § D5b); the stack
 // is the 128 KiB DOM_D10.md measured, because geometry shares it with native
@@ -233,6 +302,11 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     options.script_connected = connected;
     options.activate = activate;
     options.write = write;
+    options.now_us = now_us;
+    options.timing = timing;
+    if (s->options.screen.width > 0 && s->options.screen.height > 0)
+        options.screen = s->options.screen;
+    options.zoom = zoom;
     options.host_opaque = s;
     s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
     os64_dom_set_geometry(s->dom, s->options.geometry, s->options.opaque);
@@ -254,6 +328,12 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     s->entry_state = NULL;
     os64_dom_set_user_agent(s->dom, s->user_agent, s->user_agent_opaque);
     os64_dom_set_cookies(s->dom, &s->cookies);
+    if (s->options.storage != NULL) {
+        const os64_dom_storage_t local = {local_identity, local_load, local_commit, s};
+        const os64_dom_storage_t session = {session_identity, session_load, session_commit, s};
+        os64_dom_set_storage(s->dom, OS64_DOM_STORAGE_LOCAL, &local);
+        os64_dom_set_storage(s->dom, OS64_DOM_STORAGE_SESSION, &session);
+    }
     if (s->options.diag != NULL)
         os64_dom_set_global_miss(s->dom, global_missed, s);
     if (s->dom == NULL || os64_js_install_output(s->runtime, 1, OS64_JS_OUTPUT_CONSOLE, out) != OS64_JS_OK) {
@@ -276,9 +356,22 @@ yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc, os64_page_state_
     s->state = state;
     s->options = *options;
     s->options.url = NULL;
+    s->options.timing = NULL;
     os64_strcopy(s->url, sizeof(s->url), options->url != NULL ? options->url : "about:blank");
     s->blocking = -1;
     s->task_us = -1;
+    if (options->timing != NULL) {
+        s->timing = *options->timing;
+    } else {
+        // No navigation said when it began: the host's making is the origin.
+        s->timing.origin_us = now_us(NULL);
+        os64_time_t wall;
+        if (os64_time(&wall) == 0 && wall.ticks_per_second != 0)
+            s->timing.origin_epoch_us = wall.epoch * 1000000 +
+                (int64_t)((uint64_t)wall.ticks_into_second * 1000000 / wall.ticks_per_second);
+        for (int i = 0; i < OS64_DOM_TIMING_COUNT; i++)
+            s->timing.at[i] = OS64_DOM_TIMING_NOT_YET;
+    }
     return s;
 }
 
@@ -883,4 +976,34 @@ void yonder_scripts_set_user_agent(yonder_scripts_t *s, const char *(*provider)(
     s->user_agent = provider;
     s->user_agent_opaque = opaque;
     os64_dom_set_user_agent(s->dom, provider, opaque);
+}
+
+void yonder_scripts_mark(yonder_scripts_t *s, os64_dom_milestone_t which, uint64_t now_us)
+{
+    if (s == NULL || (unsigned)which >= OS64_DOM_TIMING_COUNT)
+        return;
+    s->timing.at[which] = now_us > s->timing.origin_us ? now_us - s->timing.origin_us : 0;
+}
+
+uint64_t yonder_scripts_storage_due(const yonder_scripts_t *s)
+{
+    return s != NULL && s->dom != NULL ? os64_dom_storage_due(s->dom) : UINT64_MAX;
+}
+
+void yonder_scripts_storage_settle(yonder_scripts_t *s)
+{
+    if (s != NULL && s->dom != NULL)
+        os64_dom_storage_settle(s->dom);
+}
+
+void yonder_scripts_depart(yonder_scripts_t *s)
+{
+    if (s != NULL && !s->dead)
+        retire(s);
+}
+
+void yonder_scripts_storage_forget(yonder_scripts_t *s)
+{
+    if (s != NULL && s->dom != NULL)
+        os64_dom_storage_forget(s->dom);
 }

@@ -951,11 +951,366 @@ both sides of any measurement are run with the same statement. A page
 recorded from now on is version 2 and says them all.
 
 **Deferred**, each a DEBTS.md row (§ The replay corpus): a replay lays
-text out in the harness's bitmap face; `screen`, once built, will answer
-the harness's size; a kept corpus holds the cookies a page's scripts
+text out in the harness's bitmap face; `screen` answers libdom's
+default, not the display the page was kept on; a kept corpus holds the cookies a page's scripts
 could read; keep_pages writes on the window's thread; a page that
 navigates replays only as far as going; a replay does not reproduce what
 a picture's or a font's fetch decides; a form's reply replays as a GET.
+
+### Slice 1a, as built
+
+Built by Opus on `opus/tmw-1a-storage`, from MODERN_WEB_BRIEFS.md § Slice
+1a (the reviewed copy on `fable/modern-web`), then read cold by a fresh
+Opus (eight findings, all fixed on the branch) and read for design. Six
+rows in `modern.c`, a file each in libdom, and yonder's store.
+
+**What was built.**
+
+- **`localStorage`, `sessionStorage`, `Storage`** (`storage.c`): the whole
+  interface, and named properties as WebIDL's legacy platform object (a key
+  is an own property unless the prototype chain has one by that name;
+  `[[Set]]` and a data `[[DefineOwnProperty]]` are `setItem`, `delete` is
+  `removeItem`, a Symbol is ordinary). The quota is 5 MiB counted as the
+  standard counts (two bytes a UTF-16 code unit of every key and value),
+  plus a cap of 65,536 keys, which bounds what the quota cannot (a
+  one-character key costs the quota two bytes and the heap a record). An
+  opaque origin (a file, `about:blank`) gets areas that work and are kept
+  nowhere. `key(n)`'s order is the map's: a removal moves the last key into
+  its place, so a change list of n removals (what `clear()` makes) is
+  linear work.
+- **`performance`** (`performance.c`): `now()` and `timeOrigin` coarsened
+  to 100 µs; User Timing's `mark` and `measure` (the L3 dictionary too),
+  `getEntries`/`ByType`/`ByName`, `clearMarks`/`clearMeasures`, `toJSON`,
+  `detail` a structured clone of plain data through the engine's own
+  writer; the legacy `timing` and `navigation` objects and the `navigation`
+  entry. The connection phases yonder does not measure read as
+  `fetchStart`, `secureConnectionStart` too for an https page.
+- **`URL`, `URLSearchParams`** (`url.c`), over `os64_page_resolve_in` with
+  no document, so a script's address and a link's agree: every component
+  and setter, `canParse`, `parse`, `toJSON`, and URLSearchParams whole,
+  live both ways with its URL and sorted stably in UTF-16 code units.
+- **`TextEncoder`, `TextDecoder`** (`encoding.c`): UTF-8 out; in, UTF-8,
+  windows-1252 and its aliases, and UTF-16 of either order (beyond the
+  brief: WPT's `textdecoder-*` pages need it, and libhtml's label table
+  gained the Encoding Standard's UTF-16 labels for it), with `fatal`,
+  `ignoreBOM` and streaming.
+- **`screen`, `devicePixelRatio`** (`screen.c`): the display in CSS pixels
+  at the page's zoom; the zoom as the ratio, as Chrome reports it.
+- **`btoa`, `atob`** (`base64.c`).
+- **yonder**: `profile =` in `yonder.conf` (`yonder_settings_saved_profile`,
+  default `/home/yogi/.yonder`, made with its parents when first needed, a
+  refusal said on the status line), the store (`apps/yonder/storage.c`),
+  Settings' "Clear page storage", the navigation's milestones marked as the
+  stream reaches them, and the screen read from the desktop at start.
+
+**The seams, as they ended.**
+
+| Seam | What it is now |
+|---|---|
+| `os64_dom_storage_t` | a provider per area: `identity` (asked at a task's first touch; a value other than the last loaded means the store moved), `load` (the image, asked again with room, a few times, when it outgrew the room), `commit(changes)` (this page's change list only, merged by the host onto the store as it stands) |
+| the statuses | OK; FULL (past the quota: nothing kept, the page reads the store back); FAILED (the area keeps its map in memory for the page's life) |
+| commits | coalesced to one a second (`os64_dom_storage_settle`, `_due`, `OS64_DOM_STORAGE_COMMIT_MS`); sooner when the change list would pass the quota or the keys' cap, and a change it could not make room for (no memory to write the list) is refused as a full store's is, so what a page writes never takes the list past its bound (a `clear()` of a map another window grew past the keys' cap can, until the next commit); once more at drain, the last |
+| `page_departs()` (yonder.c) | the one place the page on screen departs: where every navigation's page is first parsed (`stream_parser`) and as the window closes. It unloads the page, as HTML does: `yonder_scripts_depart` retires its runtime, so none of its queued scripts, timers or handlers runs again, and drain makes its storage's last commit then, so the next page's scripts read what it wrote. The page stays on screen, scriptless, until the new one is laid out; a navigation that never becomes a page is not a departure |
+| the store | `<profile>/storage/<origin>`, the origin with every byte outside `[A-Za-z0-9.-]` as `%XX`; read, merged and published by temp and rename, which is atomic (a reader meets the old image or the new one); the store's identity read again just before the rename, and a store another window published since merged onto again. There is no lock between windows (Chris's ruling: one person on one machine), so two committing one origin in the same instant can lose one window's changes (DEBTS). Clear page storage removes each store with one unlink; a window mid-commit may then publish the store as it read it before the clear, with its own changes. The first touch of the profile removes the temps a crash left |
+| the image format | `os64 storage 1\n`, then `+<key bytes> <value bytes>\n` key value `\n` for a set, `-<key bytes>\n` key `\n` for a removal (an image holds sets only; no store is no image, and a file without the magic line, an empty one included, is not one); `os64_dom_storage_merge` and `os64_dom_storage_walk` are libdom's, and yonder only moves bytes |
+| `options.now_us`, `options.timing` | the host's microsecond clock, and the navigation's origin and milestones (`os64_dom_timing_t`), read as the binding is made and whenever a script asks |
+| `options.screen`, `options.zoom` | the display in device pixels, and the zoom in thousandths when asked |
+| the plain EventTarget | `d_event_target(prototype, class)` gives a class's objects the three EventTarget methods, `d_event_handler` an `on<type>`, `d_dispatch_plain` a dispatch whose path is the target alone; performance and `screen.orientation` use it |
+
+**The WTF-8 ruling.** The brief said to replace NUL and lone surrogates
+with U+FFFD at storage's boundary, as the binding does elsewhere. Storage
+keeps them exactly, as WTF-8, and the design read ruled that correct:
+browsers keep them, WPT's webstorage holds a binding to it, and pages that
+pack binary into UTF-16 strings (LZ-string's compressors) read back
+garbage from a store that replaced them. The reason is written at the
+contract in `dom.h`.
+
+**Numbers.** WPT, before (the baseline commit) → after:
+
+| directory | before | after | `[required]` | excluded pages |
+|---|---|---|---|---|
+| `webstorage` | 0 | 1,236 | 142 | 0 |
+| `url` | 6 | 150 | 140 | 0 |
+| `hr-time` | 0 | 8 | 8 | 0 |
+| `user-timing` | 3 | 466 | 463 | 0 |
+| `encoding` | 0 | 3,955 | 183 | 1,207 |
+
+Every required test passes with the switch on and fails with it off. The
+excluded pages are the legacy multi-byte encodings' (`legacy-mb-*`, the
+ISO-2022-JP and Big5 encoders), out of scope as the brief says. What still
+fails, by cause: `url`'s pages that load `urltestdata.json` with `fetch`
+(slice 2), userinfo in `url-setters-stripping` (320, the grammar's), the
+`storage` event and iframes in `webstorage`, `DOMException`'s `code` and
+`structuredClone` throughout, PerformanceObserver, SharedArrayBuffer and the
+streams. `dom/nodes` is unchanged (858).
+
+**The census** (the P5's 1,601 page records, counted with slice 0b's
+`yonder_tally.py`): 678 records, 92 of 268 sites and 62,138 asks name at
+least one of `localStorage` (466 records, 46,635 asks), `sessionStorage`
+(37, 13,366), `performance` (253, 1,059), `URL` (252, 324),
+`URLSearchParams` (83, 131), `TextEncoder` (144, 147), `TextDecoder` (140,
+141), `screen` (247, 274) or `devicePixelRatio` (54, 61); `btoa` 161
+records and `atob` 53 besides.
+
+Host: the DOM host from 3,810 / 22,416 checks to about 6,600 / 35,000,
+with about 5,200 allocation sweeps; the scripted-page host from 5,888 to
+about 6,000; all 0 failed (the PR states the counts at its head). The
+mutant harnesses were not run (the briefs' rule).
+
+**The cold read** found eight, all fixed: performance's private buffer
+reachable through an `Array.prototype` setter (P1), the departure commit
+too late for the next page (P1), quadratic removals (P2), two yonders
+merging onto one image (P2), a lookup stale after a Proxy trap, answered
+arrays filled through setters, orphaned temps, and a comment (P3s). **The
+design read** passed it with the WTF-8 ruling and the last commit's longer
+wait (since retired with the lock, below). **Codex's first round** found eight: six fixed (the change list's
+bound under a busy store, the departed page's tasks, an empty file taken
+for an image, Clear against a live commit, measure's negative duration,
+`navigationStart` without a wall clock), and two declined on WebIDL's
+text (`new URLSearchParams(null)` is `null=`; a sequence's conversion has
+no IteratorClose), the second with a conversion-order bug found beside it
+and fixed. **A second cold read** found five, all fixed: a quadratic
+record conversion behind keys holding U+FFFD, Clear missing a window
+making an origin's first store, a commit out of memory retried every
+turn, and two comments. **Codex's second round** found three: the orphan
+sweep's grammar and redirectCount fixed, an empty measure dictionary
+declined on User Timing's step 1. **Its third round** found a race
+between two windows breaking one crashed lock; Chris ruled the
+cross-window lock out (one person on one machine), so a commit is read,
+merge, second look, rename, with BUSY and the last commit's wait retired
+and the same-instant loss booked.
+
+**Stacked on this branch**, slice 2 (fetch) moves `d_origin` onto libway's
+`way_origin_*` (Fable's ruling 8: the slice that lands second does it).
+
+**Booked** (DEBTS.md § Classic browser scripting): the `storage` event
+between windows; PerformanceObserver and the `resource` and `paint`
+entries; `DOMException` with `code` and `structuredClone` (raised with
+Chris as a small libdom slice); libos64's URL grammar gaps (userinfo, IPv6,
+IDNA, `aaa:/b`, an opaque path's trailing space); the legacy multi-byte
+decoders; a store's identity at whole-second resolution; sessionStorage's
+memory per window; and two windows committing one origin's store in the
+same instant.
+
+### Slice 4, as built
+
+Built by Opus on `opus/tmw-4-css`, from MODERN_WEB_BRIEFS.md § Slice 4,
+then read cold by a fresh Opus (eleven findings, all fixed on the branch)
+and read for design. Every property is a libgarb row marked `modern`, with
+its grammar, and a consumer in libflow or yonder's painter; the cascade,
+the style object and WPT all see it go with the switch.
+
+**What was built.**
+
+- **The flow-relative properties** (CSS Logical 1 § 4). Each
+  flow-relative longhand, and each border side's flow-relative shorthand,
+  is a NAME for its physical twin in a horizontal, left-to-right writing
+  mode (`kLogical` in `libgarb/props.c`), so the cascade orders
+  `margin-inline-start` against `margin-left` by importance, specificity
+  and order as one property, which is what the standard's mapping comes to
+  for the one writing mode libflow lays out. The fourteen two-sided ones
+  (`margin-inline`, `padding-block`, `inset-inline`, `border-inline-width`
+  and the rest) are new shorthands, each a pair of physical sides
+  (`kPairs`). Quirks mode's unitless lengths are the physical names' alone.
+  `direction` and `writing-mode` are not read (DEBTS.md § Browser layout).
+- **`cursor`** (UI 4 § 5.1.1): every keyword, inherited, kept on
+  `flow_style_t`. Pictures (`url()`, and `image-set()` read against its
+  grammar) with their hotspots are read and dropped, so the fallback
+  keyword is what is kept. Nothing draws a pointer shape yet (the
+  honey-do's work).
+- **`user-select`** (UI 4 § 6.1): read and kept; nothing selects
+  differently.
+- **`word-break` and `overflow-wrap`**, with `word-wrap` as its alias (Text
+  3 § 5.1, § 5.4). `break-all` makes a break between every two clusters;
+  `anywhere` and `break-word` make EMERGENCY ones, taken only where a line
+  holds no other, cut at the clusters the run's carets give
+  (`word_pieces`). Min-content counts `break-all`'s and `anywhere`'s and
+  not `break-word`'s, as § 5.4 says; `Segs.measuring` says which is being
+  worked. Each word's first caret is found by halving, so cutting is
+  linear in the text (LAYOUT.md § Bounds). `keep-all` is `normal`, since
+  libflow breaks only at spaces.
+- **`letter-spacing`** (Text 3 § 7.2): a `<length>`; Text 4's percentages
+  are refused. The text engine adds it (`os64_text_layout_t.letter_spacing`)
+  after every cluster but a tab, the run's last included, so characters on
+  either side of an element's edge are spaced as any two are. libflow
+  leaves the spacing after a line's last character out of the line — in
+  the fit, the fragment's width and min- and max-content
+  (`trailing_spacing`). **That is a deliberate divergence from Chrome and
+  Firefox**, which keep the trailing gap: § 7.2 says a UA must not append
+  letter spacing at the end of a line. On the P5 it shows as a centred,
+  letter-spaced heading sitting half a gap off where Chrome puts it;
+  matching Chrome is a one-line flip, `trailing_spacing` answering 0.
+- **`text-overflow`** (Overflow 4 § 4.1): `clip | ellipsis`. A block that
+  clips (`overflow` not `visible`) and asks for an ellipsis has one laid out
+  once in its own fonts (`flow_box_t.ellipsis`: U+2026, or three periods
+  where the fonts have no glyph for it). Where a line ends in it, and what
+  of each box on it is kept, is ONE predicate in libflow with two doors,
+  beside the box tree it reads: `flow_line_cut` gives the limit (the end
+  edge less the ellipsis) and where the ellipsis starts, and
+  `flow_line_cut_keeps` is the one place the keep rule is written — an
+  atom or a marker kept whole only when it ends by the limit, a text kept
+  to its last character that does, an inline box's piece kept up to where
+  the ellipsis starts. `flow_box_cut_away` asks it of a box and every box
+  it is inside, so a box stacked out of a piece left out is left out too.
+  The painter draws only what is kept, and `flow_hit` hits only that: it
+  asks the predicate of each piece on a cut line and `flow_box_cut_away`
+  of each layer, and past the ellipsis's start answers the block (the
+  ellipsis stands in no inline box, as in Chrome). It lives in libflow and
+  not the painter because hit testing is libflow's and the painter can
+  call it unchanged; a rule written twice is two rules. An absolute box in
+  an inline is out of flow, not on the line, and is not hidden: § 4.1
+  hides a line's characters and atomic inline-level elements. Spaces that
+  hang at a pre-wrap line's end do not count as content passing the end.
+  A line with no room before the ellipsis keeps its first character or
+  atom, clipped rather than ellipsed, and the ellipsis follows it, clipped
+  by the box with it. The end is where the block's scroll shows it, so
+  content scrolled into view is drawn and a line scrolled to its end has no
+  ellipsis. libflow's walk hands the painter the block's LINE boxes after
+  each line's pieces, and the painter draws the ellipsis then as it draws
+  the block's text, its shadows and then its fill (`text_run`); a text
+  clip's walk hands it the line
+  too, so a `background-clip: text` heading's ellipsis takes the gradient,
+  or the clip's solid pen where the face refuses the clip. Cuts are kept
+  in a memo keyed by the line that grows (`flow_cut_memo_t`), one for a
+  paint and one for a hit, so each line is worked once whatever order its
+  boxes and layers are asked in; a hit works only the lines under the
+  point or that a layer holding the point is inside.
+- **`outline`** and its four longhands (UI 4 § 3), the shorthand's parts
+  read in any order (`auto` is a style and a colour both, so `outline:
+  auto solid` is read by backing up, `outline_rest`): a square ring of a
+  border's styles round the border box, `outline-offset` past it, taking no
+  room and counted in the box's ink (`flow_outline_rect`). `auto` is drawn
+  solid. The width kept is the computed one whatever the style, so
+  `inherit` passes it on; a style of none draws nothing. A negative offset
+  is held so the ring's outside is never under twice its width each way
+  (§ 3.5). It is painted LAST in its stacking context (CSS 2.1 Appendix E,
+  step 10): `flow_visit_groups` hands each ring that meets the view to
+  `flow_visitor_t.outline` in a layer of its own, after the context's
+  members and before its group closes. The ring, not the box's overflow,
+  is what is asked to meet the view. There was no default focus ring to
+  move: `:focus` never matches, and yonder's widgets draw their own.
+- **`object-fit` and `object-position`** (Images 3 § 4.5, § 4.6): a
+  picture is placed by `yonder_object_rect` and cut to its content box.
+  Images 4's pairs (`cover scale-down`) are not read.
+- **`aspect-ratio`** (Sizing 4 § 4.1; a new value kind, `GARB_V_RATIO`). A
+  block's height follows its width and its width a given height, measured
+  on the content box under `auto && <ratio>` whatever box-sizing says (§
+  4.1: "in all cases"). Whichever size the ratio gives, the box is held to
+  its automatic minimum there where that minimum is auto and it does not
+  scroll: at least its content's height, at least its min-content width,
+  capped by its maximum (§ 4.3; `ratio_content_h`, `ratio_floor_w`). The
+  limits travel across the ratio by one door, so every formatting context
+  answers alike: a width made from a height takes the height held to its
+  own limits first (`ratio_width_held`, CSS 2 § 10.3.2's order), and a
+  width the ratio box leaves to itself is held to its own limits and to
+  its definite min- and max-height carried across onto a min- or max-width
+  the page left unset (§ 4.4, `width_limits`) — so a stretched block with
+  `max-height: 80px` is as wide as that height makes it. A picture's own
+  ratio loses to the page's unless `auto` is written beside it, and a
+  picture not yet measured takes its other side from the page's ratio,
+  held by the limits an arrived one is (`replaced_hold`, which every
+  replaced box with a side given ends in, an `<input type=image>` before
+  its picture comes too); with one side given and a ratio of its own (not
+  `auto <ratio>`) it is fixed, so its arrival lays nothing out again —
+  unless it is a flex item whose main size, basis or main minimum leaves
+  the flex algorithm reading the picture's own size
+  (`flow_replaced_fixed`, asked of the box). A
+  float or an absolute box with a height and no width takes the ratio's
+  width rather than shrinking to fit. An absolute box whose two sizes are
+  left to it takes its BLOCK axis as the ratio-dependent one unless only
+  its inline axis has an auto inset (Position 3 § 4.1), so four insets
+  set do not stretch its height. A flex item with a definite cross size
+  (given, or its single line's that stretches it, Flexbox 1 § 9.8) has its
+  flex base size through the ratio (§ 9.2.3 B), under `flex-basis:
+  content` even where its main size is given; its automatic minimum stays
+  its content's, since § 4.5's transferred size suggestion is a replaced
+  item's. A grid item under `normal` starts down its area and stretches
+  across it: the inline axis keeps `stretch`, as Chrome and Firefox do for
+  the `aspect-ratio` tile pattern (a grid of `aspect-ratio: 1` cards fills
+  each column and is as tall as it is wide). A written `stretch` still
+  stretches it down. Intrinsic widths follow a given height through the
+  ratio. A table's inner boxes take none, as § 4.1 says, and a table's own
+  box is booked.
+
+The two grammar laxities WPT exposed in passing are fixed too: a radial
+gradient's `at` is a full `<position>`, and each of `text-indent`'s
+keywords may appear once.
+
+**The seams, as they ended.**
+
+| Seam | What it is now |
+|---|---|
+| `kLogical`, `kPairs` (libgarb) | a flow-relative longhand is its physical twin's name; a two-sided one is a shorthand of a physical pair |
+| libdom's style object | every property name libgarb reads is a member three ways (CSSOM § 6.6.1): camel-cased, webkit-cased for a `-webkit-` name, and dashed as written, for shorthands and aliases too (`garb_prop_name_at`, `garb_prop_known`); a marked one goes with the switch |
+| `flow_visitor_t.outline` | its last member: handed each ring last in its stacking context; NULL (as `flow_visit` passes it) means no outline step |
+| the LINE visit | the walk (`flow_visit`, `flow_visit_groups`) hands a LINE box over only for a block with an ellipsis, after the line's pieces |
+| `flow_line_cut`, `flow_line_cut_keeps`, `flow_box_cut_away`, `flow_cut_memo_t` (libflow) | where a line ends in its ellipsis and what of each box on it is kept: the one predicate the painter and `flow_hit` both read, and the memo each keeps its cuts in |
+| `os64_text_layout_t.letter_spacing` | tracking after every cluster but a tab, the last too; trimming it at a line's end is the caller's |
+| `width_limits`, `hold_width`, `ratio_width_held` (libflow) | the one door every width a ratio makes or holds passes through, in every formatting context |
+| motion | `copy_prop` covers all thirteen longhands, so `same_value` does too; `letter-spacing`, `outline-width`, `-offset`, `-color`, `object-position` and `aspect-ratio` (by its logarithm, Values 4 § 5.7.1) interpolate, and the keywords are discrete at half way |
+
+**Numbers.** WPT, before (the baseline commit, nothing built) → after:
+
+| directory | before | after | `--modern-off` | `[required]` | excluded pages |
+|---|---|---|---|---|---|
+| `css/css-logical/parsing` | 150 | 269 | 155 | 114 | 16 |
+| `css/css-sizing/aspect-ratio/parsing` | 11 | 18 | 11 | 7 | 1 |
+| `css/css-images/parsing` | 348 | 287 | 271 | 16 | 7 |
+| `css/css-text/parsing` | 224 | 268 | 254 | 14 | 30 |
+| `css/css-ui/parsing` | 67 | 151 | 69 | 82 | 13 |
+| `css/css-overflow/parsing` | 109 | 122 | 120 | 2 | 10 |
+
+The 235 required tests pass with the switch on and all fail with it off;
+none leaks. The `--modern-off` column is above "before" because the style
+object's dashed and webkit-cased members and the two grammar fixes are not
+the arc's surface and stay with the switch off. The excluded pages are
+every page whose tests read `getComputedStyle`, which waits on slice 1b.
+
+**css-images went DOWN, 348 → 287.** All 97 lost tests are
+`conic-gradient` values in `-invalid` pages (95 in
+`gradient-interpolation-method-invalid.html`, 2 in
+`conic-gradient-calc-angle-percentage-invalid.html`). They passed only
+because `background-image` was unreachable by its dashed name; once the
+style object answered it, libgarb's ruling that a conic gradient is taken
+by name (GARB.md's module table) makes every one of those values valid.
+The 36 gained are the slice's 16 (`object-fit`, `object-position`) and 20
+that are not the slice's surface and pass with the switch off too:
+gradient positions (the dashed names reach them, and the radial `at` fix
+holds them), `image-rendering`, and one conic case. One page,
+`gradient-interpolation-method-valid.html`, times out: its thousands of
+style writes run the runner's script clock out. It passed nothing before.
+
+Most `-valid` tests that still fail fail on serialization. The style
+object returns a value as it was written, not CSSOM's canonical form (`0`
+for `0px`, `16/9` for `16 / 9`). It also cannot read back a shorthand's
+longhands, and there is no `CSS.supports`. That is a libdom slice of its
+own (DEBTS.md § Classic browser scripting).
+
+**The census** (the P5's 1,601 page records): 985 name at least one of the
+slice's properties as missing. By records: `cursor` 919, `outline` 865,
+`letter-spacing` 726, `text-overflow` 650, `user-select` 627,
+`overflow-wrap` 556, `outline-offset` 553, `word-break` 520, `object-fit`
+428, `word-wrap` 387, `aspect-ratio` 356, `object-position` 296; some
+flow-relative property in 512 records and 127,354 asks. danlegt's asks:
+`object-fit` 7,537, `letter-spacing` 6,297, `cursor` 4,865, `outline`
+2,438, `word-break` 572, `overflow-wrap` 286. Not in the brief and still
+missing: the flow-relative radii (84 to 92 records each),
+`scroll-padding-block` (51), `contain-intrinsic-block-size` (36).
+
+Host: libflow 21,382 → 23,667 checks, yonder 1,716 → 1,914, the DOM host
+22,416 → 38,935, garb declarations 632, text 7,369, the scripted-page host
+5,888; all 0 failed. The mutant harnesses were not run (the briefs' rule).
+
+**Booked** (DEBTS.md § Browser layout, unless named): `direction` and
+`writing-mode`; `aspect-ratio` on a table's own box; the flow-relative
+radii; an outline on an inline box, and one that follows `border-radius`;
+`text-overflow` on an anonymous block's lines; `overflow-wrap` beside a
+float; the `-computed` WPT pages once slice 1b lands; and the style
+object's serialization (§ Classic browser scripting). CSS system colours
+(`highlight` and the rest) are booked beside them, though older than the
+slice: libgarb never read them. Noted and not booked:
+`word-break: break-all` over a megabyte of text makes a segment per
+character, the same class of cost libflow already pays per word.
 
 ### Slice 1b, as built
 
@@ -1126,11 +1481,21 @@ a fragment navigation before load pushing.
 accepted departures from HTML's traversal queue below, and the session's
 being outside the switch.
 
-**Stacked on 1a**: when slice 1a lands, the MediaQueryList's lone event
-target becomes 1a's plain one (`lone` → `plain`, `d_target_install` →
-`d_event_target`, `d_handler_install` → `d_event_handler`, with a
-per-class resolver for the list's lazily made record), as a follow-up
-commit.
+**Merged with 1a and 4**: a MediaQueryList is one of 1a's plain event
+targets (`d_event_target`, `d_event_handler`, `d_dispatch_plain`, the
+host's `d_host_dispatch` at a plain target's entry). 1a's helper gained a
+per-class resolver for it: a list's entry is made the first time the list
+is listened to (`media_entry`), so a list nothing listens to is not held,
+where performance and screen.orientation keep theirs as their opaque. The
+interface objects are 1a's `d_interface_new`; 1b's own installer is gone.
+The two `DOMException` rows are one. Slice 4's thirteen longhands
+(`cursor`, `user-select`, `word-break`, `overflow-wrap`, `letter-spacing`,
+`text-overflow`, the four `outline-*`, `object-fit`, `object-position`,
+`aspect-ratio`) are computed from libflow's style (`aspect-ratio` as the
+page declared its pair), since libgarb's table is the property list and
+each must serialise (WPT's `serialize-all-longhands`). At the merge, with
+4's properties parsed: `css/cssom` 722, `css/cssom-view` 248,
+`css/mediaqueries` 118.
 
 **Booked** (DEBTS.md § Classic browser scripting): computed custom
 properties and shorthands; `DOMException` (raised with Chris as a small

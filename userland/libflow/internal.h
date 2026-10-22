@@ -543,6 +543,9 @@ void f_style_anonymous(const FStyles *styles, const flow_style_t *parent,
 // reads as the rules that fired. Like snprintf, it answers the length the
 // whole dump needs and writes what fits.
 int64_t f_style_dump(const FStyles *styles, char *out, size_t cap);
+// `cursor`'s keywords in flow_cursor_t's order (CSS UI 4 § 5.1.1): what
+// pass 1 reads a keyword as, and what a dump writes back.
+extern const char *const f_cursor_words[FLOW_CURSOR_ZOOM_OUT + 1];
 
 // ── Pass 2: the box tree (boxes.c) ──────────────────────────────────────
 //
@@ -663,6 +666,9 @@ struct FBox {
     // formatting context with items — never both. Out-of-flow children may
     // hang under either kind.
     bool ifc;
+    // An inline formatting context's ellipsis (flow_box_t.ellipsis), made
+    // once, the first time its lines are laid out; NULL for none.
+    os64_text_run_t *ellipsis;
     // POSITION.md. `positioned`: a block-level box whose position is not
     // static — but a table's row, group or column, laid out static (booked)
     // — whose public box is stacked (flow_box_t.stacked): reached from the
@@ -921,6 +927,9 @@ typedef struct {
     // How many steps the exclusion spaces walked, read and moved (FLOATS.md
     // § Bounds): what the harness holds linear in the floats and lines.
     uint64_t float_walk;
+    // How many carets word_pieces stepped through cutting words at their
+    // characters: what the harness holds linear in the text.
+    uint64_t piece_carets;
     // The most table working memory held at once, which shares the arena's
     // budget: what the harness holds to it.
     size_t scratch_peak;

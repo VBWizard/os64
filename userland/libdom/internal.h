@@ -32,7 +32,7 @@ int d_proto_parent(int kind);
 /* The event types the host dispatches, which are the ones on<type> names
  * and os64_dom_listens count. A script may listen for any other type. The
  * handler properties of the ones from SCROLL on are the Modern Web arc's,
- * installed by its table's rows (d_handler_install), not with the rest. */
+ * installed by its table's rows (d_event_handler), not with the rest. */
 enum {
     D_EVENT_CLICK, D_EVENT_MOUSEDOWN, D_EVENT_MOUSEUP, D_EVENT_MOUSEOVER,
     D_EVENT_MOUSEOUT, D_EVENT_MOUSEMOVE, D_EVENT_KEYDOWN, D_EVENT_KEYPRESS,
@@ -134,6 +134,11 @@ struct os64_dom {
     bool attribute_scanned;
     unsigned dispatching;
     DActiveEvent *current_event;
+    /* The classes of plain event targets (d_event_target), and each one's
+     * resolver, NULL for a class whose opaque is its entry. */
+    JSClassID target_classes[8];
+    int (*target_resolvers[8])(os64_dom_t *, JSContext *, JSValueConst, DValue **);
+    unsigned target_class_count;
     bool sweep_pending;
     DListener *invoking;
     DValue *invoking_entry;
@@ -180,6 +185,31 @@ struct os64_dom {
     /* JS_GetClassID of a plain object and of an array: the only objects
      * a state's JSON carries. */
     JSClassID plain_class, array_class;
+    /* DataView's constructor and its buffer, byteOffset and byteLength
+     * getters as the engine made them, for reading a buffer source
+     * (encoding.c). */
+    DValue *data_view[4];
+    /* Web storage (storage.c): an area per os64_dom_storage_area_t, made
+     * at its first touch, and the provider each is kept by. */
+    struct DStorageArea *storage[OS64_DOM_STORAGE_AREAS];
+    os64_dom_storage_t storage_providers[OS64_DOM_STORAGE_AREAS];
+    /* performance (performance.c): its object (a plain event target), the
+     * marks and measures it buffers (an engine object with no prototype,
+     * never handed to a page, in the order made, and how many it holds),
+     * its timing and navigation objects, the navigation entry, and the
+     * entries' prototypes. The time origin is read once, as the binding is
+     * made. */
+    DValue *performance, *performance_entries, *performance_timing, *performance_navigation,
+        *navigation_entry;
+    uint32_t performance_count;
+    DValue *entry_prototypes[5];
+    uint64_t time_origin_us;
+    int64_t time_origin_epoch_us;
+    /* screen and screen.orientation (screen.c), each made once. */
+    DValue *screen, *orientation;
+    /* Symbol.iterator as the engine made it, for reading an iterable a
+     * page hands over (url.c). */
+    DValue *iterator_symbol;
 };
 typedef struct { char *data; size_t length; } DString;
 
@@ -230,6 +260,22 @@ int d_handler_attribute_set(os64_dom_t *dom, JSContext *ctx, const os64_html_nod
  * default was not prevented, 0 when it was, -1 with an exception pending
  * when the binding refused its own storage or the runtime failed under it. */
 int d_dispatch(os64_dom_t *dom, JSContext *ctx, JSValueConst event, const os64_html_node_t *node);
+/* A PLAIN EVENT TARGET: an object that is neither a node nor window and
+ * is an EventTarget all the same (performance, screen.orientation, a
+ * MediaQueryList), whose registry entry holds its listeners. A row
+ * registers the object's class and gives its prototype the three
+ * EventTarget methods with d_event_target, and an on<type> property for one
+ * of the binding's event types with d_event_handler. The entry is the
+ * object's opaque when `resolve` is NULL; a class whose objects come and go
+ * (a MediaQueryList) gives a resolver instead, which makes the entry the
+ * first time it is asked for, so an object nothing listens to is not held:
+ * 1 with the entry, 0 when `self` is not its kind, -1 with an exception
+ * pending. d_dispatch_plain is d_dispatch at one: the path is the target
+ * alone. */
+int d_event_target(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, JSClassID class_id,
+                   int (*resolve)(os64_dom_t *dom, JSContext *ctx, JSValueConst self, DValue **entry));
+int d_event_handler(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, int kind);
+int d_dispatch_plain(os64_dom_t *dom, JSContext *ctx, JSValueConst event, DValue *target);
 JSValue d_event_new(os64_dom_t *dom, JSContext *ctx, const char *type, bool bubbles,
                     bool cancelable, bool trusted);
 /* d_event_new with the event's prototype `prototype` when it is an object
@@ -242,25 +288,16 @@ JSValue d_event_new_proto(os64_dom_t *dom, JSContext *ctx, JSValueConst prototyp
 JSValue d_event_construct(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv,
                           JSValueConst prototype);
 /* One event the host dispatches as one task, as os64_dom_dispatch does: at
- * `node`, at window (both NULL), or at `lone`, a target that is no node.
- * `make` builds the Event inside the task (its own prototype and fields);
- * the caller has already asked whether anything listens. */
-os64_js_status_t d_host_dispatch(os64_dom_t *dom, const os64_html_node_t *node, DValue *lone,
+ * `node`, at window (both NULL), or at `plain`, a plain event target's
+ * entry. `make` builds the Event inside the task (its own prototype and
+ * fields); the caller has already asked whether anything listens. */
+os64_js_status_t d_host_dispatch(os64_dom_t *dom, const os64_html_node_t *node, DValue *plain,
                                  const char *type, JSValue (*make)(os64_dom_t *, JSContext *, void *),
                                  void *arg, bool *prevented, os64_js_outcome_t *outcome);
-/* The on<type> property of a handler type (D_EVENT_*) on `target`. */
-int d_handler_install(os64_dom_t *dom, JSContext *ctx, JSValueConst target, int kind);
-/* EventTarget's three methods on `target`, a prototype whose objects
- * target_entry resolves. */
-int d_target_install(os64_dom_t *dom, JSContext *ctx, JSValueConst target);
 /* MediaQueryList's legacy addListener and removeListener: the `change`
  * listener `callback` added to or removed from `self`. */
 JSValue d_listener_change(os64_dom_t *dom, JSContext *ctx, JSValueConst self, JSValueConst callback,
                           bool add);
-/* Whether `self` is a MediaQueryList (view.c): 1 with its target record in
- * *entry, made the first time it is asked for, 0 when it is something
- * else, -1 with an exception pending when the record could not be made. */
-int d_media_target(os64_dom_t *dom, JSContext *ctx, JSValueConst self, DValue **entry);
 void d_report(os64_dom_t *dom, JSContext *ctx, JSValueConst error);
 int d_script_mark(os64_dom_t *dom, const os64_html_node_t *node);
 int d_script_mark_tree(os64_dom_t *dom, const os64_html_node_t *root);
@@ -358,16 +395,43 @@ int d_view_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_media_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_computed_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_history_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
-/* An interface object `name` on `global` for `prototype`, made as the
- * interface objects row makes its own (WebIDL § 3.7): the prototype's
- * `constructor` and Symbol.toStringTag, the object's [[Prototype]]
- * `parent` when that is an object, and `construct` its constructor, made
- * constructor-only so it is never just called (it finds its binding with
- * d_binding), or an Illegal constructor when NULL. */
-int d_interface_install(JSContext *ctx, JSValueConst global, const char *name, JSValueConst prototype,
-                        JSValueConst parent, JSCFunction *construct);
 /* The view's records freed, after the engine (os64_dom_free). */
 void d_view_free(os64_dom_t *dom);
+int d_storage_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_performance_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_url_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_encoding_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_screen_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_base64_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* An interface object for a prototype a row made (WebIDL § 3.7): its
+ * `prototype` and the prototype's `constructor` and Symbol.toStringTag
+ * (`name`). `constructor` makes an instance, given new.target, and refuses
+ * a call without `new` (JS_CFUNC_constructor); NULL makes an Illegal
+ * constructor. `parent`, when an object, is the parent interface's object,
+ * which this one inherits. JS_EXCEPTION when it could not be made. */
+JSValue d_interface_new(JSContext *ctx, const char *name, int length, JSCFunction *constructor,
+                        JSValueConst prototype, JSValueConst parent);
+/* A string's text exactly as the engine holds it, as UTF-8 with a NUL a
+ * byte like any other and, unless `scalar`, a lone surrogate as the
+ * three bytes the engine writes for it (WTF-8): what JS_NewStringLen
+ * reads back as the same string. `scalar` makes each lone surrogate
+ * U+FFFD, WebIDL's USVString. Charged to the binding's budget like
+ * d_string; false with an exception pending. */
+bool d_string_text(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DString *out, bool scalar);
+/* The origin an address has (HTML § Origins), serialized: `scheme://host`
+ * and `:port` when it is not the scheme's default, for an address whose
+ * scheme gives it a tuple origin (http, https, ws, wss, ftp), else "null",
+ * an opaque origin. False when it does not fit in cap. */
+bool d_origin(const char *url, char *out, size_t cap);
+/* The binding's storage (storage.c): what os64_dom_drain commits, and what
+ * os64_dom_free frees. */
+void d_storage_drain(os64_dom_t *dom);
+void d_storage_free(os64_dom_t *dom);
+/* The storage maps' steps so far (storage.c's s_steps), for the DOM host. */
+uint64_t d_storage_steps(void);
+/* URLSearchParams' record conversion's probes so far (url.c), for the DOM
+ * host. */
+uint64_t d_url_record_probes(void);
 JSValue d_style(os64_dom_t *dom, JSContext *ctx, JSValueConst self);
 int d_style_install(os64_dom_t *dom, JSContext *ctx);
 extern JSClassExoticMethods d_node_exotic;

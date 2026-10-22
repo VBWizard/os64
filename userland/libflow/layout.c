@@ -175,6 +175,103 @@ static int64_t clamp_height(const flow_style_t *s, int64_t h, int64_t frame)
     return h;
 }
 
+// ── Preferred aspect ratios (CSS Sizing 4 § 4) ──────────────────────────
+//
+// A box with a ratio (flow_style_t.aspect_ratio) and one of its width and
+// height left to it takes that one from the other, measured on its content
+// box, or on its border box where box-sizing says so and `auto` was not
+// written beside the ratio: § 4.1 says of `auto && <ratio>` that "in all
+// cases, size calculations involving the aspect ratio work with the
+// content box dimensions always", a box with no natural ratio of its own
+// included (WPT's block-aspect-ratio-050). The two below answer CONTENT
+// sizes from a content size, `hf` and `vf` being the box's frames across
+// and down, held where a length is.
+static int64_t ratio_size(const flow_style_t *s, int64_t from, int64_t from_frame,
+                          int64_t to_frame, bool down)
+{
+    bool border = s->box_sizing == FLOW_BORDER_BOX && !s->aspect_natural;
+    double given = (double)(border ? from + from_frame : from);
+    double size = down ? given / s->aspect_ratio : given * s->aspect_ratio;
+    double most = (double)F_INT_MAX * FLOW_UNITS_PER_PX;
+    int64_t n = size >= most ? (int64_t)most : (int64_t)(size + 0.5);
+    return max64(0, border ? n - to_frame : n);
+}
+
+static int64_t ratio_height(const flow_style_t *s, int64_t w, int64_t hf, int64_t vf)
+{
+    return ratio_size(s, w, hf, vf, true);
+}
+
+static int64_t ratio_width(const flow_style_t *s, int64_t h, int64_t hf, int64_t vf)
+{
+    return ratio_size(s, h, vf, hf, false);
+}
+
+// Whether a non-replaced box keeps a ratio: a block container of an
+// element's own — a flex, grid or flow root among them, an inline-block's
+// too — with one. A replaced box keeps its own through replaced_size;
+// aspect-ratio applies to no inline box and no table's inner box (Sizing
+// 4 § 4.1), and a table's own is booked (DEBTS.md).
+static bool ratio_box(const FBox *b)
+{
+    return b->kind == FB_BLOCK && b->node != NULL && b->style->aspect_ratio > 0;
+}
+
+// The content height a ratio box takes from its content width `w`, its
+// content `content` tall: its ratio's, and at least its content's where
+// min-height is auto and it does not scroll (§ 4.3's automatic minimum;
+// its limits are the caller's to apply).
+static int64_t ratio_content_h(const flow_style_t *s, int64_t w, int64_t hf, int64_t vf,
+                               int64_t content)
+{
+    int64_t want = ratio_height(s, w, hf, vf);
+    bool scrolls = s->overflow_y != FLOW_OVERFLOW_VISIBLE && s->overflow_y != FLOW_OVERFLOW_CLIP;
+    return s->min_height.kind == FLOW_LENGTH_AUTO && !scrolls ? max64(want, content) : want;
+}
+
+// The limits a box's content width is held to (CSS 2 § 10.4): its own
+// min- and max-width; and for a box with a ratio whose width is left to it,
+// Sizing 4 § 4.4's transfers — a definite min- or max-height carried
+// across the ratio onto a min- or max-width the page left unset, the
+// carried minimum capped by the box's own maximum width, the carried
+// maximum floored by its own minimum and by the carried minimum. So a
+// stretched block with a ratio and `max-height: 80px` is as wide as that
+// height makes it, whichever of its sizes the ratio gives.
+static void width_limits(const FBox *b, int64_t base, int64_t hf, int64_t vf, int64_t *lo,
+                         int64_t *hi)
+{
+    const flow_style_t *s = b->style;
+    *lo = binds(s->min_width, base) ? content_of(s, s->min_width, base, hf) : 0;
+    *hi = binds(s->max_width, base) ? content_of(s, s->max_width, base, hf) : INT64_MAX / 4;
+    if (!ratio_box(b) || s->width.kind != FLOW_LENGTH_AUTO)
+        return;
+    if (!binds(s->min_width, base) && s->min_height.kind == FLOW_LENGTH_PX)
+        *lo = min64(ratio_width(s, content_of(s, s->min_height, 0, vf), hf, vf), *hi);
+    if (!binds(s->max_width, base) && s->max_height.kind == FLOW_LENGTH_PX)
+        *hi = max64(ratio_width(s, content_of(s, s->max_height, 0, vf), hf, vf), *lo);
+}
+
+// A content width `w` held to width_limits: the minimum wins.
+static int64_t hold_width(const FBox *b, int64_t w, int64_t base, int64_t hf, int64_t vf)
+{
+    int64_t lo, hi;
+    width_limits(b, base, hf, vf, &lo, &hi);
+    return max64(min64(w, hi), lo);
+}
+
+// The content width a ratio box takes from its content height `h`, the
+// width being the ratio-dependent axis (Sizing 4 § 4.2): the height held to
+// its own limits first, then carried across the ratio, then held to the
+// width's (hold_width) — one door, so that every formatting context
+// answers alike (CSS 2 § 10.3.2's order for a replaced element, which §
+// 4.2 sends a box with a ratio through). The automatic minimum is the
+// caller's (ratio_floor_w).
+static int64_t ratio_width_held(const FBox *b, int64_t h, int64_t base, int64_t hf, int64_t vf)
+{
+    const flow_style_t *s = b->style;
+    return hold_width(b, ratio_width(s, clamp_height(s, h, vf), hf, vf), base, hf, vf);
+}
+
 static void fail(L *l)
 {
     l->failed = true;
@@ -315,9 +412,10 @@ static bool keep_run(L *l, os64_text_run_t *run)
 // start, relative to the run's own origin. The stops repeat every
 // interval, so the origin is handed over reduced modulo it: the same stops,
 // in the engine's 32-bit coordinates however far along the line the run
-// starts.
+// starts. `spacing` is the text's letter-spacing, 0 for a run that is not
+// the page's text (a space measured, a marker).
 static os64_text_run_t *run_of(L *l, const Fonts *f, const char *text, uint32_t n,
-                               int64_t tab_origin, int64_t tab_interval)
+                               int64_t tab_origin, int64_t tab_interval, flow_unit_t spacing)
 {
     if (l->failed)
         return NULL;
@@ -328,6 +426,7 @@ static os64_text_run_t *run_of(L *l, const Fonts *f, const char *text, uint32_t 
         .font_count = f->count,
         .tab_origin = (os64_font_pos_t)(tab_origin % interval),
         .tab_interval = (os64_font_pos_t)interval,
+        .letter_spacing = spacing,
     };
     os64_text_run_t *run = NULL;
     if (os64_text_layout(l->env->text, (const uint8_t *)text, n, &opt, &run) != OS64_FONT_OK) {
@@ -345,7 +444,7 @@ static os64_text_run_t *run_of(L *l, const Fonts *f, const char *text, uint32_t 
 // A measuring run, or NULL with the engine's reason, failing nothing: the
 // caller decides whether LIMIT means "try less".
 static os64_text_run_t *run_try(L *l, const Fonts *f, const char *text, uint32_t n,
-                                int64_t tab_interval, os64_font_status_t *why)
+                                int64_t tab_interval, flow_unit_t spacing, os64_font_status_t *why)
 {
     os64_text_layout_t opt = {
         .encoding = OS64_TEXT_UTF8_WESTERN_V1,
@@ -353,10 +452,37 @@ static os64_text_run_t *run_try(L *l, const Fonts *f, const char *text, uint32_t
         .font_count = f->count,
         .tab_origin = 0,
         .tab_interval = (os64_font_pos_t)(tab_interval > 0 ? tab_interval : 64 * 8),
+        .letter_spacing = spacing,
     };
     os64_text_run_t *run = NULL;
     *why = os64_text_layout(l->env->text, (const uint8_t *)text, n, &opt, &run);
     return *why == OS64_FONT_OK ? run : NULL;
+}
+
+static int64_t caret_x(const os64_text_run_t *run, uint32_t byte);
+
+// The tracking after the cluster of `run` that ends at byte `end`: how far
+// the caret there is past the end of the cluster's last glyph — what
+// letter-spacing added, which CSS Text 3 § 7.2 does not apply at the end
+// of a line. 0 for a run with none, and after a tab, which takes none.
+static int64_t trailing_spacing(const os64_text_run_t *run, uint32_t end)
+{
+    os64_text_run_view_t v;
+    if (end == 0 || os64_text_run_view(run, &v) != OS64_FONT_OK || v.glyph_count == 0)
+        return 0;
+    // The last glyph that begins before `end`: glyphs are in byte order.
+    size_t lo = 0, hi = v.glyph_count;
+    while (hi - lo > 1) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (v.glyphs[mid].byte_begin < end)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    const os64_text_placement_t *g = &v.glyphs[lo];
+    if (g->byte_end != end)
+        return 0;
+    return caret_x(run, end) - ((int64_t)g->x + g->advance_x);
 }
 
 static int64_t caret_x(const os64_text_run_t *run, uint32_t byte)
@@ -392,13 +518,62 @@ static bool height_given(const flow_style_t *s)
     return s->height.kind == FLOW_LENGTH_PX;
 }
 
-bool flow_replaced_fixed(const flow_style_t *style)
+// Fixed by its style: both sides given, or one side and a ratio of the
+// page's own that no picture's can replace (not `auto <ratio>`), which
+// replaced_size uses whether or not the picture has arrived, held by the
+// same limits (replaced_hold). And by its place: a flex item's size is the
+// flex algorithm's, which reads the picture's own size (replaced_own) for
+// a base of `content` and for an automatic minimum on the main axis, so a
+// flex item is fixed only where its main size is given, its basis is not
+// `content`, and its main minimum is a length. A grid item's automatic
+// minimum is its contribution, the size replaced_size gives, so its place
+// changes nothing.
+bool flow_replaced_fixed(const flow_box_t *box)
 {
-    return style != NULL && width_given(style) && height_given(style);
+    const flow_style_t *s = box != NULL ? box->style : NULL;
+    if (s == NULL)
+        return false;
+    bool sized = (width_given(s) && height_given(s)) ||
+                 (s->aspect_ratio > 0 && !s->aspect_natural && (width_given(s) || height_given(s)));
+    const flow_style_t *in = box->parent != NULL ? box->parent->style : NULL;
+    if (!sized || in == NULL ||
+        (in->display != FLOW_DISPLAY_FLEX && in->display != FLOW_DISPLAY_INLINE_FLEX))
+        return sized;
+    bool column = in->flex_direction == FLOW_FLEX_COLUMN ||
+                  in->flex_direction == FLOW_FLEX_COLUMN_REVERSE;
+    flow_length_t least = column ? s->min_height : s->min_width;
+    bool given = column ? height_given(s) : width_given(s);
+    return given && s->flex_basis.kind != FLOW_LENGTH_CONTENT && least.kind == FLOW_LENGTH_PX;
+}
+
+// §10.4's limits on a replaced box's size `r`, its ratio kept in whichever
+// dimension the page left to it (`img { max-width: 100% }`): a width held
+// carries the height with it where the height was not given, and a
+// height held the width where it was not. The rest of §10.4's table —
+// both limits binding at once against the ratio — is booked (GARB.md §
+// Booked). One door for every replaced box with a side given, whether or
+// not its picture has arrived, so a box flow_replaced_fixed calls fixed
+// sizes the same either way.
+static void replaced_hold(const flow_style_t *s, Replaced *r, bool w_set, bool h_set, int64_t cbw,
+                          int64_t fw, int64_t fh)
+{
+    int64_t held = clamp_width(s, r->w, cbw, fw);
+    if (held != r->w) {
+        if (!h_set && r->w > 0)
+            r->h = r->h * held / r->w;
+        r->w = held;
+    }
+    held = clamp_height(s, r->h, fh);
+    if (held != r->h) {
+        if (!w_set && r->h > 0)
+            r->w = r->w * held / r->h;
+        r->h = held;
+    }
 }
 
 // A replaced box's size, against a containing block `cbw` wide and `cbh`
-// tall. `cbh` is negative where that height is not definite, and then a
+// tall. Its ratio is the page's aspect-ratio where it gave one (Sizing 4 §
+// 4.1), else the picture's own. `cbh` is negative where that height is not definite, and then a
 // percentage height is as if unset (§ 10.5) and the box's own ratio decides
 // it; an absolute box's containing block always has one (§ 10.6.5), so its
 // `height: 100%` is that block's height, not its width times the ratio.
@@ -418,45 +593,37 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     bool known = l->env->replaced_size != NULL &&
                  l->env->replaced_size(l->env->ctx, node, &iw, &ih) && iw >= 0 && ih >= 0;
     int64_t kw = f_css_units(l->env, iw), kh = f_css_units(l->env, ih);
+    // The page's ratio (Sizing 4 § 4.1) stands in for the picture's own,
+    // unless it said `auto` beside it and the picture has one.
+    bool ratio = s->aspect_ratio > 0 && !(s->aspect_natural && known && kw > 0 && kh > 0);
     if (known) {
         if (w_set && h_set) {
             r.w = w;
             r.h = h;
         } else if (w_set) {
             r.w = w;
-            r.h = kw > 0 ? mul_div(w, kh, kw) : kh;
+            r.h = ratio ? ratio_height(s, w, fw, fh) : kw > 0 ? mul_div(w, kh, kw) : kh;
         } else if (h_set) {
             r.h = h;
-            r.w = kh > 0 ? mul_div(h, kw, kh) : kw;
+            r.w = ratio ? ratio_width(s, h, fw, fh) : kh > 0 ? mul_div(h, kw, kh) : kw;
         } else {
             r.w = kw;
-            r.h = kh;
+            r.h = ratio ? ratio_height(s, kw, fw, fh) : kh;
         }
-        // §10.4's limits, the picture's own ratio kept in whichever
-        // dimension the page left to it (`img { max-width: 100% }`). The
-        // rest of §10.4's table — both limits binding at once against the
-        // ratio — is booked (GARB.md § Booked).
-        int64_t held = clamp_width(s, r.w, cbw, fw);
-        if (held != r.w) {
-            if (!h_set && r.w > 0)
-                r.h = r.h * held / r.w;
-            r.w = held;
-        }
-        held = clamp_height(s, r.h, fh);
-        if (held != r.h) {
-            if (!w_set && r.h > 0)
-                r.w = r.w * held / r.h;
-            r.h = held;
-        }
+        replaced_hold(s, &r, w_set, h_set, cbw, fw, fh);
         return r;
     }
-    // A picture whose size is not known yet is guessed square from the
-    // side the page gave, until it arrives; anything else keeps its own
-    // default on the side the page left unset (a frame's 300 by 150).
+    // A picture whose size is not known yet takes its other side from the
+    // page's ratio, or is guessed square from the side the page gave,
+    // until it arrives, held by the limits an arrived one is
+    // (replaced_hold); anything else keeps its own default on the side the
+    // page left unset (a frame's 300 by 150), or the ratio's, and is held
+    // the same way where the page gave a side.
     bool img = node->ns == OS64_HTML_NS_HTML && node->tag == OS64_HTML_TAG_IMG;
     if (img && (w_set || h_set)) {
-        r.w = w_set ? w : h;
-        r.h = h_set ? h : w;
+        r.w = w_set ? w : ratio ? ratio_width(s, h, fw, fh) : h;
+        r.h = h_set ? h : ratio ? ratio_height(s, w, fw, fh) : w;
+        replaced_hold(s, &r, w_set, h_set, cbw, fw, fh);
         return r;
     }
     if (img) {
@@ -485,6 +652,15 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
         r.w = w;
     if (h_set)
         r.h = h;
+    if (ratio && h_set && !w_set)
+        r.w = ratio_width(s, h, fw, fh);
+    else if (ratio && !h_set)
+        r.h = ratio_height(s, r.w, fw, fh);
+    // §10.4 holds every replaced element: a side the page gave is held as
+    // an arrived picture's is (an <input type=image> takes this path until
+    // its picture comes); the defaults alone are left as they are.
+    if (w_set || h_set)
+        replaced_hold(s, &r, w_set, h_set, cbw, fw, fh);
     return r;
 }
 
@@ -652,7 +828,14 @@ typedef struct {
     const flow_style_t *style;
     uint32_t b0, b1, s1;    // WORD: the word is [b0,b1), its spaces [b1,s1)
     int64_t w, sw;          // the word's (or box's) width, and its spaces'
+    // WORD: the tracking after its last letter (letter-spacing), counted in
+    // `w`, which a line that ends there leaves out (trailing_spacing).
+    int64_t trail;
     bool wrap_after;        // a soft wrap opportunity follows
+    // WORD: an opportunity follows that a line takes only when it holds no
+    // other before what does not fit (`overflow-wrap`, CSS Text 3 § 5.4):
+    // the end of a piece of a word cut at its characters.
+    bool emergency;
     bool collapsible;       // WORD: its spaces vanish at a line's end
     bool hang;              // WORD: its spaces stay but do not count (pre-wrap)
     bool keep_round;        // ATOM: a quirks-mode picture, no opportunity either side
@@ -677,6 +860,9 @@ typedef struct {
     // text's leading space is the same space and collapses into it. Pass 2
     // could not know — the picture's absence is the face's, at layout.
     bool drop_space;
+    // The segments measure min-content and max-content (ifc_intrinsic),
+    // not a line of a width: what word_pieces cuts differs.
+    bool measuring;
 } Segs;
 
 static Seg *seg_add(L *l, Segs *s, SegKind kind)
@@ -718,7 +904,7 @@ static bool ends_in_space(const Segs *s)
 static int64_t space_advance(L *l, const Fonts *f)
 {
     os64_font_status_t why;
-    os64_text_run_t *run = run_try(l, f, " ", 1, 0, &why);
+    os64_text_run_t *run = run_try(l, f, " ", 1, 0, 0, &why);
     if (run == NULL)
         return 0;
     int64_t w = caret_x(run, 1);
@@ -726,7 +912,68 @@ static int64_t space_advance(L *l, const Fonts *f)
     return w;
 }
 
-// A text's words: measured ONCE, then cut at its spaces. A text longer than
+// Where a word may be cut between its characters (CSS Text 3 § 5.1, §
+// 5.4): every boundary is an opportunity under `word-break: break-all`;
+// under `overflow-wrap: anywhere` or `break-word` (and `word-break:
+// break-word`, which is `anywhere`) each is an EMERGENCY one, taken only
+// where the line holds no other — so only a word wider than the line `cw`
+// is cut, or, measuring (Segs.measuring), one whose breaks count toward
+// min-content, which `break-word`'s do not. Each piece but the last is a segment of its
+// own, cut at the boundaries the run's carets give, which are its
+// clusters; the start of the last piece is returned for the caller to make
+// it, with the spaces after it, as any word.
+static uint32_t word_pieces(L *l, Segs *s, const FItem *it, const char *text,
+                            const flow_style_t *style, const os64_text_run_t *run, uint32_t w0,
+                            uint32_t b0, uint32_t b1, int64_t cw)
+{
+    bool all = style->word_break == FLOW_WORD_BREAK_BREAK_ALL;
+    bool anywhere = style->overflow_wrap == FLOW_OVERFLOW_WRAP_ANYWHERE ||
+                    style->word_break == FLOW_WORD_BREAK_BREAK_WORD;
+    if (b1 - b0 < 2 || (!all && !anywhere && style->overflow_wrap == FLOW_OVERFLOW_WRAP_NORMAL))
+        return b0;
+    if (!all) {
+        int64_t w = caret_x(run, b1 - w0) - caret_x(run, b0 - w0);
+        if (s->measuring ? !anywhere : w <= cw)
+            return b0;
+    }
+    os64_text_run_view_t v;
+    if (os64_text_run_view(run, &v) != OS64_FONT_OK)
+        return b0;
+    bool collapsible = f_ws_collapses(style->white_space);
+    // The first caret past b0, found by halving: the carets are in byte
+    // order, and a run holds every word of its text, so a walk from the
+    // first caret for each word would be quadratic in the text.
+    size_t lo = 0, hi = v.caret_count;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (w0 + (uint32_t)v.carets[mid].byte_offset <= b0)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    for (size_t k = lo; k < v.caret_count && !l->failed; k++) {
+        uint32_t at = w0 + (uint32_t)v.carets[k].byte_offset;
+        l->out->piece_carets++;
+        if (at >= b1)
+            break;
+        Seg *g = seg_add(l, s, SG_WORD);
+        if (g == NULL)
+            break;
+        *g = (Seg){.kind = SG_WORD, .item = it, .text = text, .style = style, .b0 = b0,
+                   .b1 = at, .s1 = at, .collapsible = collapsible,
+                   .hang = style->white_space == FLOW_WS_PRE_WRAP, .wrap_after = all,
+                   .emergency = !all};
+        g->w = caret_x(run, at - w0) - caret_x(run, b0 - w0);
+        if (style->letter_spacing != 0)
+            g->trail = trailing_spacing(run, at - w0);
+        b0 = at;
+    }
+    return b0;
+}
+
+// A text's words: measured ONCE, then cut at its spaces, and at its
+// characters where word-break or overflow-wrap say (word_pieces). A text
+// longer than
 // the engine takes in one run (OS64_TEXT_BYTES_MAX) is measured in WINDOWS
 // cut after a space, so a word never straddles two; a window with no space
 // in it is cut at a character boundary, and the word it splits stays one
@@ -735,7 +982,7 @@ static int64_t space_advance(L *l, const Fonts *f)
 // the way to the line's next stop, so the breaker walks them where the
 // line puts them (spaces_width).
 static void text_segments(L *l, Segs *s, const FItem *it, const char *text, uint32_t n,
-                          const flow_style_t *style, int64_t tab_interval)
+                          const flow_style_t *style, int64_t tab_interval, int64_t cw)
 {
     Fonts f;
     if (n == 0 || !fonts_for(l, style, &f))
@@ -769,7 +1016,8 @@ static void text_segments(L *l, Segs *s, const FItem *it, const char *text, uint
         os64_text_run_t *run = NULL;
         for (;;) {
             os64_font_status_t why;
-            run = l->failed ? NULL : run_try(l, &f, text + w0, w1 - w0, tab_interval, &why);
+            run = l->failed ? NULL : run_try(l, &f, text + w0, w1 - w0, tab_interval,
+                                                        style->letter_spacing, &why);
             if (run != NULL || l->failed || why != OS64_FONT_LIMIT)
                 break;
             uint32_t half = w0 + (w1 - w0) / 2;
@@ -797,6 +1045,8 @@ static void text_segments(L *l, Segs *s, const FItem *it, const char *text, uint
                            .b0 = b0, .b1 = end, .s1 = w1, .collapsible = collapsible};
                 int64_t x0 = caret_x(run, b0 - w0);
                 g->w = caret_x(run, end - w0) - x0;
+                if (style->letter_spacing != 0 && end > b0)
+                    g->trail = trailing_spacing(run, end - w0);
                 g->sw = caret_x(run, w1 - w0) - x0 - g->w;
             }
         } else {
@@ -807,6 +1057,9 @@ static void text_segments(L *l, Segs *s, const FItem *it, const char *text, uint
                 uint32_t b1 = at;
                 while (at < w1 && (text[at] == ' ' || text[at] == '\t'))
                     at++;
+                // A word cut at its characters (word_pieces) leaves its last
+                // piece, with the spaces after it, to be made here.
+                b0 = word_pieces(l, s, it, text, style, run, w0, b0, b1, cw);
                 Seg *g = seg_add(l, s, SG_WORD);
                 if (g == NULL)
                     break;
@@ -815,6 +1068,8 @@ static void text_segments(L *l, Segs *s, const FItem *it, const char *text, uint
                            .hang = ws == FLOW_WS_PRE_WRAP, .wrap_after = at > b1};
                 int64_t x0 = caret_x(run, b0 - w0), x1 = caret_x(run, b1 - w0);
                 g->w = x1 - x0;
+                if (style->letter_spacing != 0 && b1 > b0)
+                    g->trail = trailing_spacing(run, b1 - w0);
                 g->sw = caret_x(run, at - w0) - x1;
                 for (uint32_t t = b1; t < at; t++)
                     if (text[t] == '\t')
@@ -840,7 +1095,7 @@ static int64_t tab_interval_for(L *l, const flow_style_t *block)
     Fonts f;
     if (!fonts_for(l, block, &f))
         return 0;
-    os64_text_run_t *run = run_of(l, &f, " ", 1, 0, 64);
+    os64_text_run_t *run = run_of(l, &f, " ", 1, 0, 64, 0);
     if (run == NULL)
         return 0;
     int64_t w;
@@ -872,6 +1127,24 @@ static int64_t hframe(const FBox *b, int64_t base);
 static int64_t float_margin(const FBox *f, int side, int64_t cw);
 static int64_t vframe(const FBox *b, int64_t base);
 
+// A content width `w` its ratio gave box `b` (one that is not replaced:
+// ratio_box), held to its automatic minimum: where `min-width` is auto
+// and the box does not scroll across, its min-content width, capped by its
+// maximum (Sizing 4 § 4.3), so a ratio never narrows a box below a word it
+// holds. `base` and `frame` are what the box's limits are measured
+// against.
+static int64_t ratio_floor_w(L *l, FBox *b, int64_t w, int64_t base, int64_t frame)
+{
+    const flow_style_t *s = b->style;
+    if (s->min_width.kind != FLOW_LENGTH_AUTO || f_overflow_scrolls(s->overflow_x))
+        return w;
+    (void)intrinsic(l, b);      // measures content_min
+    int64_t least = max64(0, b->content_min - hframe(b, 0));
+    if (binds(s->max_width, base))
+        least = min64(least, content_of(s, s->max_width, base, frame));
+    return max64(w, least);
+}
+
 static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
 {
     l->out->measures++;
@@ -881,7 +1154,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
         case FI_TEXT: {
             if (tabs == 0 && !f_ws_collapses(it->style->white_space))
                 tabs = tab_interval_for(l, ifc->style);
-            text_segments(l, s, it, it->text, it->len, it->style, tabs);
+            text_segments(l, s, it, it->text, it->len, it->style, tabs, cw);
             break;
         }
         case FI_ATOMIC: {
@@ -920,7 +1193,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                     s->drop_space = ends_in_space(s);
                     break;
                 }
-                text_segments(l, s, it, alt, n, st, tabs);
+                text_segments(l, s, it, alt, n, st, tabs, cw);
                 break;
             }
             if (r.none) {
@@ -955,6 +1228,14 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                     r.w = room;
                 } else if (width_given(st)) {
                     r.w = content_of(st, st->width, cw, fw);
+                } else if (st->aspect_ratio > 0 && height_given(st)) {
+                    // Its height and its ratio give its width (Sizing 4 §
+                    // 4.1), no narrower than its automatic minimum.
+                    r.w = ratio_floor_w(l, it->content,
+                                        ratio_width_held(it->content,
+                                                         content_of(st, st->height, 0, fh), cw,
+                                                         fw, fh),
+                                        cw, fw);
                 } else {
                     // intrinsic() answers border-box widths with the frame's
                     // percentages at 0 (the containing block is not known
@@ -965,7 +1246,8 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                     r.w = min64(max64(in.min - f0, room), in.max - f0);
                     r.w = max64(0, r.w);
                 }
-                r.w = clamp_width(st, r.w, cw, fw);
+                if (width_given(st) || !(st->aspect_ratio > 0 && height_given(st)))
+                    r.w = hold_width(it->content, r.w, cw, fw, fh);
             }
             g->atom = r;
             g->w = g->ml + fw + r.w + g->mr;
@@ -1028,7 +1310,7 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
             Fonts f;
             if (!fonts_for(l, it->style, &f))
                 return;
-            os64_text_run_t *run = run_of(l, &f, it->text, it->len, 0, 0);
+            os64_text_run_t *run = run_of(l, &f, it->text, it->len, 0, 0, 0);
             if (run == NULL)
                 return;
             os64_text_run_view_t v;
@@ -1101,10 +1383,10 @@ static int64_t spaces_width(const Seg *g, int64_t x)
 }
 
 // Greedy line breaking (CSS 2.1 §9.4.2): as much as fits, breaking at the
-// LAST soft wrap opportunity before what does not; a word wider than the
-// line goes on a line of its own and overflows it (`overflow-wrap:
-// normal`). Returns the segment after the line; `*forced` says a break
-// ended it.
+// LAST soft wrap opportunity before what does not, or, where the line
+// holds none, at the last emergency one (`overflow-wrap`, Seg); a word
+// wider than the line with neither goes on a line of its own and overflows
+// it. Returns the segment after the line; `*forced` says a break ended it.
 static size_t break_line(const Segs *s, size_t start, int64_t indent, int64_t avail,
                          bool *forced)
 {
@@ -1112,7 +1394,7 @@ static size_t break_line(const Segs *s, size_t start, int64_t indent, int64_t av
     // a tab reaches the same stop here as where the line is laid down.
     int64_t pen = indent;
     bool content = false;
-    size_t brk = SIZE_MAX;
+    size_t brk = SIZE_MAX, emergency = SIZE_MAX;
     *forced = false;
     for (size_t j = start; j < s->n; j++) {
         const Seg *g = &s->v[j];
@@ -1121,8 +1403,11 @@ static size_t break_line(const Segs *s, size_t start, int64_t indent, int64_t av
             return j + 1;
         }
         if (g->kind == SG_WORD || g->kind == SG_ATOM || g->kind == SG_MARKER) {
-            if (brk != SIZE_MAX && pen + g->w > avail)
-                return brk + 1;
+            // A word fits if it fits without its trailing tracking, which
+            // the line leaves out should it end there.
+            int64_t w = g->kind == SG_WORD ? g->w - g->trail : g->w;
+            if (pen + w > avail && (brk != SIZE_MAX || emergency != SIZE_MAX))
+                return (brk != SIZE_MAX ? brk : emergency) + 1;
             pen += g->w;
             if (g->kind != SG_WORD || g->b1 > g->b0)
                 content = true;
@@ -1131,6 +1416,8 @@ static size_t break_line(const Segs *s, size_t start, int64_t indent, int64_t av
         // it would end holds nothing.
         if (g->wrap_after && content)
             brk = j;
+        else if (g->emergency && content)
+            emergency = j;
         if (g->kind == SG_WORD)
             pen += spaces_width(g, pen);
     }
@@ -1337,6 +1624,27 @@ typedef struct {
     int64_t rel_x, rel_y;
 } Later;
 
+// A context's ellipsis (flow_box_t.ellipsis): U+2026 in the block's fonts,
+// or three periods when the run of it is the engine's missing-glyph marker
+// (a placement of no font). Kept with the layout's runs; one the engine
+// refuses, or that cannot be kept, stops the layout as any run of its text
+// would (run_of, keep_run).
+static void ellipsis_of(L *l, FBox *ifc, const Fonts *bf)
+{
+    const flow_style_t *s = ifc->style;
+    if (s->text_overflow != FLOW_TEXT_OVERFLOW_ELLIPSIS || s->overflow_x == FLOW_OVERFLOW_VISIBLE)
+        return;
+    os64_text_run_t *run = run_of(l, bf, "\xe2\x80\xa6", 3, 0, 0, 0);
+    os64_text_run_view_t v;
+    if (run != NULL && os64_text_run_view(run, &v) == OS64_FONT_OK &&
+        (v.glyph_count == 0 || v.glyphs[0].font_identity == 0)) {
+        os64_text_run_release(run);
+        run = run_of(l, bf, "...", 3, 0, 0, 0);
+    }
+    if (run != NULL && keep_run(l, run))
+        ifc->ellipsis = run;
+}
+
 static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw, Cursor *cur)
 {
     // Pass 2 stopped inside this context: its last line was broken without
@@ -1346,6 +1654,8 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
     segments(l, ifc, cw, &s);
     Fonts bf;
     bool have_block_font = fonts_for(l, ifc->style, &bf);
+    if (have_block_font && ifc->ellipsis == NULL)
+        ellipsis_of(l, ifc, &bf);
     Open open = {0};
     // The x each open inline's piece on the current line starts at.
     int64_t *open_x = NULL;
@@ -1531,7 +1841,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                     // Tabs stop where the LINE's stops are, whatever this
                     // fragment starts after.
                     os64_text_run_t *run = run_of(l, &f, g->text + b0, b1 - b0,
-                                                  pre ? -pen : 0, tabs);
+                                                  pre ? -pen : 0, tabs, g->style->letter_spacing);
                     if (run == NULL || !keep_run(l, run))
                         break;
                     FFrag *fr = frag_add(l, line, FF_TEXT, rel_x, rel_y);
@@ -1546,8 +1856,13 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                     fr->text = g->text;
                     fr->begin = b0;
                     fr->end = b1;
+                    // The line's last fragment leaves out the tracking
+                    // after its last character (CSS Text 3 § 7.2).
+                    int64_t width = v.advance_x;
+                    if (at_tail && g->style->letter_spacing != 0)
+                        width -= trailing_spacing(run, b1 - b0);
                     fr->x = pen;
-                    fr->w = v.advance_x;
+                    fr->w = width;
                     fr->h = v.ascent + v.descent;
                     fr->y = -v.ascent;
                     Paint p = paint_for(l, styles, g->item->node,
@@ -1560,10 +1875,10 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                     // Pre-wrap spaces ending a line hang: they are drawn, and
                     // count for nothing — not the line's width, not the page's.
                     if (at_tail && e->hang && !spread && e->b1 > b0)
-                        fr->hang = v.advance_x - caret_x(run, e->b1 - b0);
+                        fr->hang = max64(0, width - caret_x(run, e->b1 - b0));
                     else if (at_tail && e->hang && !spread)
-                        fr->hang = v.advance_x;
-                    pen += v.advance_x;
+                        fr->hang = width;
+                    pen += width;
                     used = pen - fr->hang;
                     has_text = true;
                     content = true;
@@ -1661,7 +1976,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 Fonts f;
                 if (!fonts_for(l, g->style, &f))
                     break;
-                os64_text_run_t *run = run_of(l, &f, g->text, g->b1, 0, 0);
+                os64_text_run_t *run = run_of(l, &f, g->text, g->b1, 0, 0, 0);
                 if (run == NULL || !keep_run(l, run))
                     break;
                 FFrag *fr = frag_add(l, line, FF_MARKER, rel_x, rel_y);
@@ -2144,7 +2459,7 @@ static int64_t widths(FBox *b, int64_t cbw, int64_t forced_w, int64_t *ml_out)
     else
         w = forced_w >= 0 ? forced_w : content_of(s, s->width, cbw, frame);
     if (forced_w < 0) {
-        int64_t held = clamp_width(s, w, cbw, frame);
+        int64_t held = hold_width(b, w, cbw, frame, vframe(b, cbw));
         if (held != w) {
             w = held;
             w_auto = false;
@@ -2287,7 +2602,7 @@ static void place_marker(L *l, const FStyles *styles, FBox *b, int64_t content_x
     Fonts f;
     if (!fonts_for(l, b->style, &f))
         return;
-    os64_text_run_t *run = run_of(l, &f, b->marker, b->marker_len, 0, 0);
+    os64_text_run_t *run = run_of(l, &f, b->marker, b->marker_len, 0, 0, 0);
     if (run == NULL || !keep_run(l, run))
         return;
     FFrag *fr = alloc(l, sizeof(*fr));
@@ -3159,9 +3474,11 @@ static void laid_offset(const FBox *c, int64_t cbw, int64_t *dx, int64_t *dy)
         rel_offset(c->style, cbw, definite_height(c->parent), dx, dy);
 }
 
+static int64_t natural_w(const FBox *c);
+
 // An item's height before its container stretched or flexed it: a height
-// the page gave, or its content's, held to its limits; border box. What a
-// container sizes it from, however often it places it.
+// the page gave, its ratio's, or its content's, held to its limits; border
+// box. What a container sizes it from, however often it places it.
 static int64_t natural_h(const FBox *c)
 {
     const flow_style_t *cs = c->style;
@@ -3171,6 +3488,12 @@ static int64_t natural_h(const FBox *c)
         return c->h;                // a table's height is its rows'
     int64_t h = cs->height.kind == FLOW_LENGTH_PX ? content_of(cs, cs->height, 0, vf)
                                                   : c->content_h - vf;
+    // A box with a ratio is its ratio's height from the width it was laid
+    // out at, as block_at made it.
+    if (ratio_box(c) && cs->height.kind != FLOW_LENGTH_PX) {
+        int64_t w = natural_w(c), hf = hframe(c, 0);
+        h = ratio_content_h(cs, max64(0, w - hf), hf, vf, max64(0, h));
+    }
     return clamp_height(cs, max64(0, h), vf) + vf;
 }
 
@@ -3426,13 +3749,30 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
         if (c->kind == FB_REPLACED)
             content = replaced_own(l, c, 1, cw, !wraps && stretches_across(s, c) ? c->flex_w : -1) +
                       it->frame;
+        // A box with a ratio and a definite cross size — a width given, or
+        // the one line's that stretches it (§ 9.8) — has its height through
+        // its ratio (§ 9.2.3 B). Its automatic minimum stays its content's
+        // (§ 4.5: the transferred size suggestion is a replaced box's), and
+        // that content was laid out at its ratio's height or more (§ 4.3 of
+        // Sizing 4, block_at).
+        // A height given makes no difference under `flex-basis: content`,
+        // whose base is the ratio's all the same (§ 9.2.3 B).
+        int64_t moved = -1;
+        if (ratio_box(c) &&
+            (cs->height.kind != FLOW_LENGTH_PX || cs->flex_basis.kind == FLOW_LENGTH_CONTENT) &&
+            (cs->width.kind == FLOW_LENGTH_PX || cs->width.kind == FLOW_LENGTH_PERCENT ||
+             (!wraps && stretches_across(s, c)))) {
+            int64_t hf = hframe(c, cw);
+            moved = clamp_height(cs, ratio_height(cs, max64(0, c->w - hf), hf, it->frame),
+                                 it->frame) + it->frame;
+        }
         flow_length_t fb = cs->flex_basis;
         if (fb.kind == FLOW_LENGTH_PX || (fb.kind == FLOW_LENGTH_PERCENT && given >= 0))
             it->base = content_of(cs, fb, max64(0, given), it->frame) + it->frame;
         else if (fb.kind == FLOW_LENGTH_AUTO && cs->height.kind == FLOW_LENGTH_PX)
             it->base = content_of(cs, cs->height, 0, it->frame) + it->frame;
         else
-            it->base = content;
+            it->base = moved >= 0 ? moved : content;
         it->max = cs->max_height.kind == FLOW_LENGTH_PX
                       ? content_of(cs, cs->max_height, 0, it->frame) + it->frame : kNoLimit;
         if (cs->min_height.kind == FLOW_LENGTH_PX)
@@ -3692,6 +4032,25 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
                 own_min = own_max = replaced_own(l, c, 0, cw, ch) + it->frame;
             }
             bool width_given = cs->width.kind == FLOW_LENGTH_PX || cs->width.kind == FLOW_LENGTH_PERCENT;
+            // A box with a ratio and a definite cross size — a height given,
+            // or the one line's that stretches it (§ 9.8) — has a content
+            // width through its ratio (§ 9.2.3 B). Its automatic minimum
+            // stays its content's (§ 4.5: the transferred size suggestion
+            // is a replaced box's).
+            // Under `flex-basis: content` a width given makes no difference
+            // to the base, which is the ratio's all the same (§ 9.2.3 B).
+            if (ratio_box(c) && (!width_given || cs->flex_basis.kind == FLOW_LENGTH_CONTENT)) {
+                int64_t vf = vframe(c, cw), ch = -1;
+                if (height_given(cs))
+                    ch = clamp_height(cs, content_of(cs, cs->height, 0, vf), vf);
+                else if (h_def && !r.wraps && stretches_across(s, c))
+                    ch = clamp_height(cs, max64(0, h_given - len(cs->margin[FLOW_TOP], cw) -
+                                                       len(cs->margin[FLOW_BOTTOM], cw) - vf), vf);
+                if (ch >= 0) {
+                    int64_t moved = ratio_width_held(c, ch, cw, it->frame, vf) + it->frame;
+                    own_max = moved;
+                }
+            }
             flow_length_t fb = cs->flex_basis;
             if (fb.kind == FLOW_LENGTH_PX || fb.kind == FLOW_LENGTH_PERCENT)
                 it->base = content_of(cs, fb, cw, it->frame) + it->frame;
@@ -3702,19 +4061,23 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
                 // max-content width, before a limit the page gave, which
                 // holds the hypothetical size and not the base (§ 9.2.3).
                 it->base = own_max;
-            it->max = binds(cs->max_width, cw) ? content_of(cs, cs->max_width, cw, it->frame) + it->frame
-                                                : kNoLimit;
+            // Its limits, a ratio box's carried across from its height's
+            // where its own are unset (width_limits, Sizing 4 § 4.4).
+            int64_t lo, hi;
+            width_limits(c, cw, it->frame, vframe(c, cw), &lo, &hi);
+            it->max = hi < INT64_MAX / 4 ? hi + it->frame : kNoLimit;
             if (binds(cs->min_width, cw)) {
-                it->min = content_of(cs, cs->min_width, cw, it->frame) + it->frame;
+                it->min = lo + it->frame;
             } else if (f_overflow_scrolls(cs->overflow_x) || f_overflow_scrolls(cs->overflow_y)) {
-                it->min = it->frame;
+                it->min = max64(it->frame, lo + it->frame);
             } else {
                 // The automatic minimum (§ 4.5): the content's min-content
-                // width, no more than a width the page gave, or its limit.
+                // width, no more than a width the page gave, or its limit;
+                // and a minimum carried across from the height.
                 it->min = own_min;
                 if (width_given)
                     it->min = min64(it->min, content_of(cs, cs->width, cw, it->frame) + it->frame);
-                it->min = min64(it->min, it->max);
+                it->min = max64(min64(it->min, it->max), lo + it->frame);
             }
             it->min = max64(it->min, it->frame);
             it->max = max64(it->max, it->min);
@@ -3779,7 +4142,7 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
                 int64_t frame = hframe(c, cw);
                 int64_t across = cw - len(cs->margin[FLOW_LEFT], cw) - len(cs->margin[FLOW_RIGHT], cw);
                 int64_t cwid = width_given ? clamp_width(cs, content_of(cs, cs->width, cw, frame), cw, frame)
-                             : stretched ? clamp_width(cs, max64(0, across - frame), cw, frame)
+                             : stretched ? hold_width(c, max64(0, across - frame), cw, frame, vframe(c, cw))
                              : fit_content(l, c, cw);
                 c->flex_sized = true;
                 c->flex_w = cwid;
@@ -4749,6 +5112,14 @@ static bool grid_place(L *l, const FStyles *styles, FBox *b, GPlan *p, int64_t c
                      c->border[FLOW_BOTTOM];
         int64_t h = natural_h(c), room = ah - (mt + h + mb), dy = 0;
         flow_place_t a = self_align(cs->align_self, s->align_items, c);
+        // `normal` is `start` down a box with a ratio, whose height is
+        // its ratio's (Box Alignment 3 § 6.2, Grid 2 § 6.2); a stretch the
+        // page wrote still stretches it. Across, `normal` still stretches
+        // it, as Chrome and Firefox do: a column of `aspect-ratio: 1`
+        // cards is as wide as its track and as tall as it is wide.
+        flow_place_t written = cs->align_self != FLOW_PLACE_AUTO ? cs->align_self : s->align_items;
+        if (ratio_box(c) && (written == FLOW_PLACE_NORMAL || written == FLOW_PLACE_AUTO))
+            a = FLOW_PLACE_START;
         if (at_auto || ab_auto) {
             if (room > 0)
                 dy = at_auto && ab_auto ? room / 2 : at_auto ? room : 0;
@@ -4832,7 +5203,7 @@ static void grid_layout(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_
             else if (c->kind == FB_REPLACED && a != FLOW_PLACE_STRETCH)
                 cwid = replaced_size(l, c->node, cs, aw, -1).w;
             else if (a == FLOW_PLACE_STRETCH && !ml_auto && !mr_auto)
-                cwid = clamp_width(cs, max64(0, aw - ml - mr - frame), aw, frame);
+                cwid = hold_width(c, max64(0, aw - ml - mr - frame), aw, frame, vframe(c, aw));
             else
                 cwid = fit_content(l, c, aw);
             c->flex_sized = true;
@@ -4963,6 +5334,15 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
         forced_w = b->atom_w;
     } else if (b->abs_sized) {
         forced_w = b->abs_w;
+    } else if (ratio_box(b) && s->width.kind == FLOW_LENGTH_AUTO && height_given(s) &&
+               !b->flex_sized) {
+        // A width left to it and a height given: the ratio gives the
+        // width (Sizing 4 § 4.1), held to its limits and its automatic
+        // minimum (§ 4.3) — a float's too, which would otherwise shrink to
+        // fit.
+        int64_t hf = hframe(b, cbw), vf = vframe(b, cbw);
+        forced_w = ratio_floor_w(l, b, ratio_width_held(b, content_of(s, s->height, 0, vf), cbw, hf, vf),
+                                 cbw, hf);
     } else if (s->width.kind == FLOW_LENGTH_FIT_CONTENT ||
                ((b->floated != FLOW_FLOAT_NONE ||
                  (b->parent == NULL && s->float_side != FLOW_FLOAT_NONE)) &&
@@ -5010,8 +5390,16 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
     // margins meet each other, only across a height of auto and a
     // min-height of zero.
     bool min_height = s->min_height.kind == FLOW_LENGTH_PX && s->min_height.value > 0;
-    bool bottom_open = !root && height_auto && !min_height && b->border[FLOW_BOTTOM] == 0 &&
-                       b->padding[FLOW_BOTTOM] == 0;
+    // A height left to it that its ratio gives from its width (Sizing 4 §
+    // 4.1): not auto for a margin to collapse through, and at least its
+    // content's where min-height is auto and the box does not scroll — the
+    // automatic minimum of § 4.3, its min-content height held by its
+    // maximum, which clamp_height applies after. A flex or grid item's
+    // too, from the width its container gave it; a container that
+    // stretches it across sets its height after (flex_place, grid_place).
+    bool by_ratio = height_auto && ratio_box(b);
+    bool bottom_open = !root && height_auto && !by_ratio && !min_height &&
+                       b->border[FLOW_BOTTOM] == 0 && b->padding[FLOW_BOTTOM] == 0;
     int64_t vframe_px = b->border[FLOW_TOP] + b->padding[FLOW_TOP] + b->padding[FLOW_BOTTOM] +
                         b->border[FLOW_BOTTOM];
 
@@ -5160,6 +5548,8 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
             content_h = max64(content_h, floats_end - content_top);
         pm_out = margin_of(mb);
     }
+    if (by_ratio)
+        content_h = ratio_content_h(s, cw, b->w - cw, vframe_px, content_h);
     // Content taller than a max-height is drawn past it.
     content_h = clamp_height(s, max64(0, content_h), vframe_px);
     b->placed = true;
@@ -5237,7 +5627,7 @@ static int64_t fit_content(L *l, FBox *b, int64_t cbw)
     const flow_style_t *s = b->style;
     int64_t frame = hframe(b, cbw);
     int64_t margins = len(s->margin[FLOW_LEFT], cbw) + len(s->margin[FLOW_RIGHT], cbw);
-    return clamp_width(s, shrink_to_fit(l, b, cbw - margins - frame), cbw, frame);
+    return hold_width(b, shrink_to_fit(l, b, cbw - margins - frame), cbw, frame, vframe(b, cbw));
 }
 
 // One axis of an absolute box's equations: the two insets and the two
@@ -5372,12 +5762,27 @@ static void absolute(L *l, const FStyles *styles, FBox *a, Rect cb)
     bool replaced = a->kind == FB_REPLACED;
     Replaced rep = {0, 0, false, false};
     int64_t w = -1, hgt = -1;
+    bool from_ratio = false;
     if (replaced) {
         rep = replaced_size(l, a->node, s, cb.w, cb.h);
         w = rep.w;
         hgt = rep.h;
     } else if (width_given(s)) {
         w = content_of(s, s->width, cb.w, hf);
+    } else if (ratio_box(a) && s->width.kind == FLOW_LENGTH_AUTO &&
+               (s->height.kind == FLOW_LENGTH_PX || s->height.kind == FLOW_LENGTH_PERCENT ||
+                (!v.auto0 && !v.auto1 && (h.auto0 || h.auto1)))) {
+        // The width is the ratio-dependent axis (Position 3 § 4.1): the
+        // height is given, or both sizes are automatic and only the
+        // width's axis has an auto inset, so the insets stretch the
+        // height. The ratio gives the width (Sizing 4 § 4.1). Any other
+        // height left to it is the ratio-dependent one, its ratio's when
+        // the box is laid out.
+        int64_t given = s->height.kind != FLOW_LENGTH_AUTO
+                            ? content_of(s, s->height, cb.h, vf)
+                            : max64(0, cb.h - v.in0 - v.in1 - v.m0 - v.m1 - vf);
+        w = ratio_floor_w(l, a, ratio_width_held(a, given, cb.w, hf, vf), cb.w, hf);
+        from_ratio = true;
     } else if (s->width.kind == FLOW_LENGTH_FIT_CONTENT) {
         w = shrink_to_fit(l, a, cb.w - (h.auto0 ? 0 : h.in0) - (h.auto1 ? 0 : h.in1) - h.m0 -
                                     h.m1 - hf);
@@ -5385,13 +5790,18 @@ static void absolute(L *l, const FStyles *styles, FBox *a, Rect cb)
     int64_t used_w, ml;
     int64_t x = solve_axis(h, sx - cb.x, hf, w, &fit, true, &used_w, &ml);
     if (!replaced) {
-        int64_t held = clamp_width(s, used_w, cb.w, hf);
+        // A width its ratio gave is held already, and its automatic
+        // minimum floors what holds it.
+        int64_t held = from_ratio ? used_w : hold_width(a, used_w, cb.w, hf, vf);
         if (held != used_w)
             x = solve_axis(h, sx - cb.x, hf, held, &fit, true, &used_w, &ml);
         // A percentage height resolves here: the containing block's is known.
+        // Both insets stretch a height left to it, but for a box with a
+        // ratio whose block axis is the ratio-dependent one: there the
+        // ratio sizes it and the end inset gives (Position 3 § 4.1).
         if (s->height.kind == FLOW_LENGTH_PX || s->height.kind == FLOW_LENGTH_PERCENT)
             hgt = content_of(s, s->height, cb.h, vf);
-        else if (!v.auto0 && !v.auto1)
+        else if (!v.auto0 && !v.auto1 && (!ratio_box(a) || from_ratio))
             hgt = max64(0, cb.h - v.in0 - v.in1 - v.m0 - v.m1 - vf);
         if (hgt >= 0) {
             hgt = clamp_height(s, hgt, vf);
@@ -5489,12 +5899,15 @@ static int64_t vframe(const FBox *b, int64_t base)
 // or on a line of its own when it clears (FLOATS.md, Decision 5).
 static Intr ifc_intrinsic(L *l, FBox *ifc)
 {
-    Segs s = {0};
+    Segs s = {.measuring = true};
     segments(l, ifc, 0, &s);
     Intr r = {0, 0};
     // The first line's indent is part of its first word and of the line,
     // a percentage of a width not known yet counting as nothing.
     int64_t word = max64(0, first_line_indent(ifc, 0)), line = word, space = 0;
+    // The tracking after the last letter on the line so far, which a line
+    // ending there leaves out (trailing_spacing); 0 once anything follows.
+    int64_t tail = 0;
     for (size_t i = 0; i < s.n; i++) {
         const Seg *g = &s.v[i];
         switch (g->kind) {
@@ -5515,6 +5928,7 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
             if (wmax > 0 || g->kind != SG_WORD) {
                 line += space + wmax;
                 space = 0;
+                tail = g->kind == SG_WORD ? g->trail : 0;
             }
             if (g->kind == SG_WORD && g->s1 > g->b1) {
                 int64_t sw = spaces_width(g, line + space);
@@ -5522,16 +5936,18 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
                 // quirks-mode row of slices and the whitespace between).
                 if (!g->wrap_after)
                     word += sw;
-                if (g->collapsible || g->hang)
+                if (g->collapsible || g->hang) {
                     space += sw;
-                else
+                } else {
                     line += sw;
+                    tail = 0;
+                }
             }
             break;
         }
         case SG_BREAK:
-            r.max = max64(r.max, line);
-            line = space = 0;
+            r.max = max64(r.max, line - tail);
+            line = space = tail = 0;
             break;
         case SG_FLOAT: {
             const FBox *f = g->item->floated;
@@ -5545,18 +5961,22 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
                 line = space = 0;
             }
             line += fi.max + m;
+            tail = 0;
             break;
         }
         default:
             break;
         }
-        if (g->wrap_after || g->kind == SG_BREAK) {
-            r.min = max64(r.min, word);
+        // A word cut at its characters was cut here only where those
+        // breaks count toward min-content (word_pieces).
+        if (g->wrap_after || g->emergency || g->kind == SG_BREAK) {
+            r.min = max64(r.min, word - (g->kind == SG_WORD ? g->trail : 0));
             word = 0;
         }
     }
-    r.min = max64(r.min, word);
-    r.max = max64(r.max, max64(line, r.min));
+    const Seg *last = s.n > 0 ? &s.v[s.n - 1] : NULL;
+    r.min = max64(r.min, word - (last != NULL && last->kind == SG_WORD ? last->trail : 0));
+    r.max = max64(r.max, max64(line - tail, r.min));
     os64_free(s.v);
     return r;
 }
@@ -5656,16 +6076,29 @@ static Intr intrinsic(L *l, FBox *b)
         b->content_min = r.min + frame;
         b->content_max = r.max + frame;
         if (b->kind != FB_CELL) {
-            if (s->width.kind == FLOW_LENGTH_PX)
+            int64_t vf = vframe(b, 0), lo, hi;
+            // Its limits (width_limits: a ratio box's carried across from
+            // its height's where its own are unset).
+            width_limits(b, 0, frame, vf, &lo, &hi);
+            bool from_ratio = ratio_box(b) && s->width.kind == FLOW_LENGTH_AUTO && height_given(s);
+            if (s->width.kind == FLOW_LENGTH_PX) {
                 r.min = r.max = content_of(s, s->width, 0, frame);
-            if (s->max_width.kind == FLOW_LENGTH_PX) {
-                r.min = min64(r.min, content_of(s, s->max_width, 0, frame));
-                r.max = min64(r.max, content_of(s, s->max_width, 0, frame));
+            } else if (from_ratio) {
+                // A height given and a ratio: both widths are its ratio's,
+                // held as every ratio-made width is (ratio_width_held), and
+                // no less than its automatic minimum, its content's
+                // min-content width (Sizing 4 § 4.3), which only its own
+                // limits hold.
+                int64_t w = ratio_width_held(b, content_of(s, s->height, 0, vf), 0, frame, vf);
+                if (s->min_width.kind == FLOW_LENGTH_AUTO && !f_overflow_scrolls(s->overflow_x))
+                    w = max64(w, r.min);
+                r.min = r.max = w;
+                lo = s->min_width.kind == FLOW_LENGTH_PX ? content_of(s, s->min_width, 0, frame) : 0;
+                hi = s->max_width.kind == FLOW_LENGTH_PX ? content_of(s, s->max_width, 0, frame)
+                                                         : INT64_MAX / 4;
             }
-            if (s->min_width.kind == FLOW_LENGTH_PX) {
-                r.min = max64(r.min, content_of(s, s->min_width, 0, frame));
-                r.max = max64(r.max, content_of(s, s->min_width, 0, frame));
-            }
+            r.min = max64(min64(r.min, hi), lo);
+            r.max = max64(min64(r.max, hi), lo);
         }
         r.min += frame;
         r.max += frame;

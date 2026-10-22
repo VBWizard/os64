@@ -12,6 +12,7 @@
 #include "test_libflow_fonts.h"
 #include "../userland/libhtml/internal.h"
 #include "os64/conf.h"
+#include "os64/procfs.h"
 #include "os64/js_engine.h"
 os64_js_status_t __real_os64_js_create_with_teardown(const os64_js_config_t *,
     os64_js_teardown_policy_t, const char *, os64_js_runtime_t **, os64_js_outcome_t *);
@@ -28,13 +29,28 @@ static yonder_diag_t *diag_new_claimed(const char *url, uint32_t seq);
  * `w` and `x`, read from the start by `r`. */
 #define FAKE_HANDLE 1000
 #define FAKE_FILES 128
-static struct { char path[256]; char *data; size_t len, read_at; bool used; } fake_files[FAKE_FILES];
+/* A file's modification time is the fake second it was last published in
+ * (fake_second, which a case moves), as a real disk's is in whole
+ * seconds. */
+static struct { char path[256]; char *data; size_t len, read_at; bool used; uint64_t mtime; } fake_files[FAKE_FILES];
 static char fake_dirs[16][256];
 static int nfake_dirs, fake_writes, fake_dir_at;
 static bool fake_fail_open;
+/* A disk that writes a byte a call, or refuses a write, a sync or a
+ * rename. */
+static bool fake_short_write, fake_fail_write, fake_fail_sync, fake_fail_rename;
 /* A disk error on the file at this path (NULL for none): its writes, or
  * its close, fail. */
 static const char *fake_fail_write_at, *fake_fail_close_at;
+/* The task this window is, and the tasks that are running (a temp's
+ * owner is asked after through os64_proc_read); fake_live_zombie makes the
+ * first of them a zombie. */
+static uint64_t fake_task = 7, fake_live[4];
+static bool fake_live_zombie;
+/* fake_sync_hook runs once, at the next sync: another window's write
+ * landing between this one's read and its rename. */
+static void (*fake_sync_hook)(void);
+static uint64_t fake_second = 1;
 static const char *fake_parent(const char *path, char *out, size_t cap) {
     snprintf(out,cap,"%s",path); char *slash=strrchr(out,'/');
     if(slash==NULL) return NULL;
@@ -52,6 +68,9 @@ static int fake_file(const char *path) {
 static void fake_reset(void) {
     for(int i=0;i<FAKE_FILES;i++) free(fake_files[i].data);
     memset(fake_files,0,sizeof(fake_files)); nfake_dirs=0; fake_writes=0; fake_fail_open=false;
+    fake_short_write=fake_fail_write=fake_fail_sync=fake_fail_rename=false;
+    fake_task=7; memset(fake_live,0,sizeof(fake_live)); fake_live_zombie=false; fake_sync_hook=NULL;
+    fake_second=1;
     fake_fail_write_at=fake_fail_close_at=NULL;
     snprintf(fake_dirs[nfake_dirs++],256,"/tmp");
 }
@@ -79,7 +98,9 @@ int64_t os64_open(const char *p, const char *m) {
 int64_t os64_write(int32_t h, const void *b, size_t n) {
     if(h<FAKE_HANDLE) return port_os64_write(h,b,n);
     int f=h-FAKE_HANDLE;
+    if(fake_fail_write) return -1;
     if(fake_fail_write_at!=NULL && !strcmp(fake_files[f].path,fake_fail_write_at)) return -1;
+    if(fake_short_write && n>1) n=1;
     fake_files[f].data=realloc(fake_files[f].data,fake_files[f].len+n+1);
     memcpy(fake_files[f].data+fake_files[f].len,b,n); fake_files[f].len+=n;
     fake_files[f].data[fake_files[f].len]='\0';
@@ -100,12 +121,20 @@ int64_t os64_close(int32_t h) {
 }
 int64_t os64_rename(const char *from, const char *to) {
     int f=fake_file(from);
-    if(f<0) return -1;
+    if(f<0 || fake_fail_rename) return -1;
     int old=fake_file(to);
     if(old>=0) { free(fake_files[old].data); memset(&fake_files[old],0,sizeof(fake_files[old])); }
     snprintf(fake_files[f].path,256,"%s",to);
+    fake_files[f].mtime=fake_second;
     fake_writes++;
     return 0;
+}
+int64_t os64_sync(int32_t h) {
+    (void)h;
+    void (*hook)(void)=fake_sync_hook;
+    fake_sync_hook=NULL;
+    if(hook!=NULL) hook();
+    return fake_fail_sync ? -1 : 0;
 }
 /* A file, or a directory with nothing in it, as os64_unlink removes either. */
 int64_t os64_unlink(const char *p) {
@@ -131,7 +160,10 @@ int64_t os64_mkdir(const char *p) {
 int64_t os64_stat(const char *p, os64_dirent_t *entry) {
     memset(entry,0,sizeof(*entry));
     if(fake_is_dir(p)) { entry->flags=OS64_DE_DIR; return 0; }
-    return fake_file(p)>=0 ? 0 : -1;
+    int f=fake_file(p);
+    if(f<0) return -1;
+    entry->size=fake_files[f].len; entry->mtime=fake_files[f].mtime;
+    return 0;
 }
 /* The window's paint asks the machine's memory when it makes its cache;
  * no case here paints the window's view, so the answer is never used. */
@@ -156,7 +188,15 @@ int64_t os64_readdir(int32_t h, os64_dirent_t *entry) {
     }
     return 0;
 }
-uint64_t os64_taskid(void) { return 7; }
+uint64_t os64_taskid(void) { return fake_task; }
+int32_t os64_proc_read(uint64_t pid, os64_proc_info_t *out) {
+    memset(out,0,sizeof(*out));
+    for(int i=0;i<4;i++) if(fake_live[i]!=0 && fake_live[i]==pid) {
+        out->pid=pid; out->state=i==0 && fake_live_zombie ? OS64_PROC_ZOMBIE : OS64_PROC_ISLEEP;
+        return 0;
+    }
+    return pid==fake_task ? (out->pid=pid, out->state=OS64_PROC_RUNNING, 0) : -1;
+}
 /* The clocks stand still unless a case moves them: micros steps by
  * clock_step at every read (an overrun is a loop that reads it) and by
  * geometry_layout_delay at every forced layout (a slow native layout), and
@@ -480,12 +520,28 @@ const os64_image_frame_t *os64_image_sequence_frame(const os64_image_sequence_t 
     return &sequence->frame;
 }
 /* A file a case serves (open_local), or none: `slurp_length` bytes, or a
- * string's when that is zero. */
+ * string's when that is zero; and the fake disk's files (page storage
+ * reads its stores this way), whole. fake_slurp_fail makes every read of
+ * a fake file fail, as a disk that cannot be read does; reading the case's
+ * file takes slurp_us on the clock. */
 static const char *slurp_path, *slurp_bytes;
 static size_t slurp_length;
+static int64_t slurp_us;
+static bool fake_slurp_fail;
 os64_slurp_status_t os64_slurp(const char *path, size_t cap, uint8_t **bytes, size_t *length) {
-    (void)cap; *bytes=NULL; *length=0;
+    *bytes=NULL; *length=0;
+    int f=fake_file(path);
+    if(f>=0) {
+        if(fake_slurp_fail) return OS64_SLURP_IO_ERROR;
+        if(fake_files[f].len>cap) return OS64_SLURP_TOO_BIG;
+        *bytes=os64_malloc(fake_files[f].len+1);
+        if(*bytes==NULL) return OS64_SLURP_NO_MEMORY;
+        *length=fake_files[f].len;
+        memcpy(*bytes,fake_files[f].data,*length); (*bytes)[*length]=0;
+        return OS64_SLURP_OK;
+    }
     if(slurp_path==NULL || !os64_streq(path,slurp_path)) return OS64_SLURP_NO_FILE;
+    clock_us+=slurp_us;
     *length=slurp_length!=0 ? slurp_length : strlen(slurp_bytes);
     *bytes=os64_malloc(*length+1); memcpy(*bytes,slurp_bytes,*length); (*bytes)[*length]=0;
     return OS64_SLURP_OK;
@@ -495,16 +551,22 @@ bool os64_ui_theme_session(os64_ui_theme_t *theme, uint64_t *installed, uint64_t
     (void)theme; (void)installed; (void)hint; return false;
 }
 static char saved_scripts[8], saved_zoom[8], saved_seconds[8], saved_diagnostics[256], saved_appearance[8],
-    saved_animations[8], saved_motion[16], saved_keep_pages[16], saved_modern[16], settings_report[256];
+    saved_animations[8], saved_motion[16], saved_keep_pages[16], saved_modern[16], saved_profile[300],
+    settings_report[256];
+/* What reading yonder.conf's profile answers instead, when not 0. */
+static int64_t profile_conf_failure;
 int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) {
     check(os64_streq(file,"yonder.conf"),"settings read Yonder configuration");
     const char *value=os64_streq(key,"scripts") ? saved_scripts :
         os64_streq(key,"zoom") ? saved_zoom : os64_streq(key,"script_seconds") ? saved_seconds :
         os64_streq(key,"diagnostics") ? saved_diagnostics : os64_streq(key,"appearance") ? saved_appearance :
         os64_streq(key,"animations") ? saved_animations : os64_streq(key,"motion") ? saved_motion :
-        os64_streq(key,"keep_pages") ? saved_keep_pages : os64_streq(key,"modern") ? saved_modern : "";
+        os64_streq(key,"keep_pages") ? saved_keep_pages : os64_streq(key,"modern") ? saved_modern :
+        os64_streq(key,"profile") ? saved_profile : "";
+    if(os64_streq(key,"profile") && profile_conf_failure!=0) return profile_conf_failure;
     if(!value[0]) return OS64_CONF_NO_KEY;
-    os64_strcopy(out,cap,value); return 0;
+    /* A value too long for `out` is TRUNCATED, as the real reader says. */
+    return os64_strcopy(out,cap,value)<cap ? 0 : OS64_CONF_TRUNCATED;
 }
 int64_t os64_conf_set(const char *file, const char *key, const char *value) {
     check(os64_streq(file,"yonder.conf"),"settings save Yonder configuration");
@@ -1070,6 +1132,38 @@ static void switch_cases(void) {
     apply(&settings_fixture.d,true);
     check(settings_modern==1 && os64_streq(saved_modern,"on") && strstr(settings_report,"modern")==NULL,
         "modern: and on");
+    /* THE PROFILE FOLDER: absent is /home/yogi/.yonder; a full path is
+     * obeyed without its trailing slashes; anything else is the default,
+     * said. */
+    char profile[256];
+    saved_profile[0]=0;
+    check(yonder_settings_saved_profile(profile,sizeof(profile))==NULL && os64_streq(profile,"/home/yogi/.yonder"),
+        "profile: absent is the default, and nothing is said");
+    strcpy(saved_profile,"/home/me/browser//");
+    check(yonder_settings_saved_profile(profile,sizeof(profile))==NULL && os64_streq(profile,"/home/me/browser"),
+        "profile: a full path, without its trailing slashes");
+    strcpy(saved_profile,"relative/place");
+    const char *profile_refused=yonder_settings_saved_profile(profile,sizeof(profile));
+    check(profile_refused!=NULL && strstr(profile_refused,"not a folder's full path")!=NULL &&
+          os64_streq(profile,"/home/yogi/.yonder"), "profile: anything else is the default, refused loudly");
+    saved_profile[0]='/'; memset(saved_profile+1,'p',280); saved_profile[281]=0;
+    profile_refused=yonder_settings_saved_profile(profile,sizeof(profile));
+    check(profile_refused!=NULL && strstr(profile_refused,"too long for a path")!=NULL &&
+          os64_streq(profile,"/home/yogi/.yonder"), "profile: one too long for a path is the default, said so");
+    profile_conf_failure=OS64_CONF_NO_MEMORY;
+    profile_refused=yonder_settings_saved_profile(profile,sizeof(profile));
+    profile_conf_failure=0;
+    check(profile_refused!=NULL && strstr(profile_refused,"could not be read")!=NULL &&
+          os64_streq(profile,"/home/yogi/.yonder"), "profile: a yonder.conf that cannot be read is the default, said so");
+    saved_profile[0]=0;
+    /* Clear page storage acts at once and says what it did. */
+    yonder_settings_on_clear_storage(NULL);
+    cleared(NULL,NULL);
+    check(strstr(settings_report,"no page storage to clear")!=NULL,"Clear page storage with nothing to clear says so");
+    yonder_settings_on_clear_storage(storage_clear);
+    cleared(NULL,NULL);
+    check(strstr(settings_report,"Page storage is not kept in this window")!=NULL,
+        "Clear page storage in a window that keeps none says so");
     settings_fixture.dark.checked=false;
     settings_fixture.scripts.checked=false;
     apply(&settings_fixture.d,true);
@@ -5552,13 +5646,13 @@ static void diag_page_cases(void) {
         "diag: the timer's death is in the departure write");
 
     /* A module script and a canvas, each by its kind; a skipped property. */
-    loop_page("<style>p{aspect-ratio:1;background-image:conic-gradient(red,blue);background-clip:text}"
+    loop_page("<style>p{contain:paint;background-image:conic-gradient(red,blue);background-clip:text}"
         "h1{display:inline frob}</style><p id=out>x</p><canvas></canvas><canvas></canvas>"
         "<my-widget></my-widget><script type=module>1</script>");
     check(loop_settle() && g.page.tree!=NULL,"diag: a page with a module, canvases and a custom element arrives");
     yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
     check(has(text,"MISSING script module (1)\n") && has(text,"MISSING element canvas (2)\n") &&
-        has(text,"MISSING element my-widget (1)\n") && has(text,"MISSING css-property aspect-ratio (1)\n") &&
+        has(text,"MISSING element my-widget (1)\n") && has(text,"MISSING css-property contain (1)\n") &&
         has(text,"MISSING css-value background-image: conic-gradient (1)\n") &&
         has(text,"MISSING css-value display: inline frob (1)\n") && !has(text,"background-clip"),
         "diag: a module script, an element drawn as nothing, a property the cascade skipped and a value it "
@@ -7831,6 +7925,593 @@ static void webfont_cases(void) {
     s_faces.families=NULL; s_faces.text=NULL;
 }
 
+/* ── PAGE STORAGE IN THE WINDOW (storage.h, MODERN_WEB.md § Slice 1a) ──
+ * localStorage in its file under the profile folder: made, written at a
+ * task's end, coalesced, written at departure, full; sessionStorage across
+ * a navigation in the window; a profile that cannot be made; Clear page
+ * storage; and the timing and the screen a page reads. */
+#define STORE_FILE "/tmp/profile/storage/http%3A%2F%2Ffixture.test"
+/* The page's next navigation in this window, as loop_page's but keeping
+ * the window, to `address`, which the head says the page came from. */
+static void storage_page_as(const char *address, const char *rest, NavKind kind) {
+    start_trip(address,NULL,kind,NULL);
+    char *html=pad_page(rest);
+    way_head_t h=stream_head("text/html","",false);
+    os64_strcopy(h.url,sizeof(h.url),address);
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body((const uint8_t *)html,strlen(html),YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    free(html);
+}
+static void storage_page(const char *address, const char *rest) {
+    storage_page_as(address,rest,NAV_GO);
+}
+/* Whether the store file holds `key` as `value` (NULL: holds no `key`). */
+typedef struct { const char *key, *value; bool found, right; } StoreLook;
+static bool store_look(void *opaque, const char *key, size_t key_length, const char *value, size_t value_length) {
+    StoreLook *l=opaque;
+    if(strlen(l->key)!=key_length || memcmp(l->key,key,key_length)) return true;
+    l->found=true;
+    l->right=l->value!=NULL && value!=NULL && strlen(l->value)==value_length && !memcmp(l->value,value,value_length);
+    return false;
+}
+static bool store_holds(const char *key, const char *value) {
+    int f=fake_file(STORE_FILE);
+    if(f<0) return false;
+    StoreLook l={key,value,false,false};
+    if(!os64_dom_storage_walk(fake_files[f].data,fake_files[f].len,store_look,&l)) return false;
+    return value==NULL ? !l.found : l.found && l.right;
+}
+static void storage_window_cases(void) {
+    fake_reset();
+    s_storage=yonder_storage_new("/tmp/profile");
+    s_storage_said[0]='\0';
+    loop_page("<p id=out>start</p><script>localStorage.setItem('a','1');"
+        "setTimeout(function(){localStorage.setItem('b','2')},50);"
+        "setTimeout(function(){localStorage.setItem('c','3')},5000);</script>");
+    check(loop_settle() && g.page.tree!=NULL,"storage: the page arrives");
+    check(fake_is_dir("/tmp/profile") && fake_is_dir("/tmp/profile/storage") && store_holds("a","1"),
+        "storage: the profile folder is made, and a task's write is in the origin's file at its end");
+    int writes=fake_writes;
+    now_ms=150;
+    check(script_turn() && fake_writes==writes && store_holds("b",NULL),
+        "storage: a write within a second of the last commit waits");
+    check(yonder_scripts_storage_due(g.page.scripts)==1100,"storage: and is due a second after it");
+    now_ms=1100;
+    storage_turn();
+    check(fake_writes==writes+1 && store_holds("b","2") && store_holds("a","1"),
+        "storage: the loop commits it when it is due, merged onto the file");
+    /* Another window writes the file: this page reads it at its next task. */
+    fake_second++;
+    {
+        static const char kOther[]="os64 storage 1\n+1 1\nab\n+1 1\nb2\n+5 1\nother1\n";
+        int f=fake_file(STORE_FILE);
+        free(fake_files[f].data);
+        fake_files[f].data=malloc(sizeof(kOther)); memcpy(fake_files[f].data,kOther,sizeof(kOther));
+        fake_files[f].len=sizeof(kOther)-1; fake_files[f].mtime=fake_second;
+    }
+    now_ms=5100;
+    check(script_turn() && store_holds("other","1") && store_holds("c","3"),
+        "storage: a commit merges onto what another window wrote");
+    storage_page("http://fixture.test/two","<p id=out>start</p><script>"
+        "sessionStorage.setItem('s','kept');localStorage.setItem('d','4');</script>");
+    check(loop_settle() && g.page.tree!=NULL,"storage: the second page arrives");
+    /* A second write, in a task within a second of the first commit, is
+     * left for the departure commit. */
+    storage_page("http://fixture.test/three","<p id=out>start</p><script>"
+        "document.getElementById('out').textContent=sessionStorage.getItem('s')+' '+localStorage.getItem('d');"
+        "localStorage.setItem('first','1');"
+        "document.addEventListener('DOMContentLoaded',function(){localStorage.setItem('e','5')});</script>");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","kept 4"),
+        "storage: sessionStorage survives a navigation in the window, and localStorage is the file's");
+    check(store_holds("first","1") && store_holds("e",NULL),"storage: the second write waits for its second");
+    storage_page("http://elsewhere.test/","<p id=out>start</p><script>"
+        "document.getElementById('out').textContent=String(sessionStorage.getItem('s'))+' '+localStorage.length;</script>");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","null 0"),
+        "storage: another origin has its own areas");
+    check(store_holds("e","5"),"storage: the page that left made its departure commit");
+    check(fake_file("/tmp/profile/storage/http%3A%2F%2Felsewhere.test")<0,
+        "storage: an origin that stored nothing has no file");
+    /* Clear page storage: the files go, and so do the pages' maps. */
+    char line[160];
+    storage_clear(line,sizeof(line));
+    check(fake_file(STORE_FILE)<0 && strstr(line,"1 stored site gone")!=NULL,
+        "storage: Clear page storage removes the origins' files and says how many");
+    storage_page("http://fixture.test/four","<p id=out>start</p><script>"
+        "document.getElementById('out').textContent=String(sessionStorage.getItem('s'))+' '+localStorage.length;</script>");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","null 0"),
+        "storage: after a clear a page finds nothing, either area");
+    loop_drop();
+    yonder_storage_free(s_storage);
+    s_storage=NULL;
+}
+static void storage_full_cases(void) {
+    fake_reset();
+    s_storage=yonder_storage_new("/tmp/profile");
+    loop_page("<p id=out>start</p><script>localStorage.setItem('mine','x');"
+        "setTimeout(function(){localStorage.setItem('later','y')},400);</script>");
+    check(loop_settle() && g.page.tree!=NULL && store_holds("mine","x"),"storage full: the page's first write");
+    now_ms=500;
+    check(script_turn() && store_holds("later",NULL),"storage full: a second write, not yet due");
+    /* Another window fills the store to its quota before it is. */
+    size_t units=OS64_DOM_STORAGE_QUOTA/2-6;            /* 'k' and 'mine'='x' with it: the whole quota */
+    char *records=malloc(units+128);
+    int head=snprintf(records,128,"os64 storage 1\n+4 1\nminex\n+1 %zu\nk",units);
+    memset(records+head,'v',units); records[head+units]='\n';
+    int f=fake_file(STORE_FILE);
+    free(fake_files[f].data);
+    fake_files[f].data=records; fake_files[f].len=(size_t)head+units+1; fake_files[f].mtime=++fake_second;
+    now_ms=1100;
+    storage_turn();
+    char record[8192];
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"FAILED storage: localStorage of http://fixture.test is full; not kept: later")!=NULL,
+        "storage full: the commit keeps nothing and the record names the key it could not keep");
+    check(store_holds("later",NULL) && store_holds("mine","x"),"storage full: the store is as the other window left it");
+    loop_drop();
+    yonder_storage_free(s_storage);
+    s_storage=NULL;
+    /* A profile whose folder cannot be made: the page's storage works for
+     * its life, and the status line says why it is not kept. */
+    fake_reset();
+    s_storage=yonder_storage_new("/nowhere/profile");
+    s_storage_said[0]='\0';
+    loop_page("<p id=out>start</p><script>localStorage.setItem('a','1');"
+        "document.getElementById('out').textContent=localStorage.getItem('a');</script>");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","1"),"storage: a page whose store cannot be kept still works");
+    storage_turn();
+    check(strstr(g.status_text,"Page storage is not kept: /nowhere/profile/storage cannot be made.")!=NULL,
+        "storage: the status line says the profile folder cannot be made");
+    check(!fake_is_dir("/nowhere"),"storage: nothing is made outside a parent that exists");
+    loop_drop();
+    yonder_storage_free(s_storage);
+    s_storage=NULL;
+}
+/* THE PAGE DEPARTS (yonder.c's page_departs): a write its page made within
+ * the coalescing second is in the store before the next page's scripts run,
+ * whatever took the window away: a link, Reload, Back, Forward, a file.
+ * sessionStorage's with it. */
+static void storage_departure_page(void) {
+    fake_reset();
+    s_storage=yonder_storage_new("/tmp/profile");
+    loop_page("<p id=out>start</p><script>localStorage.setItem('a','1');sessionStorage.setItem('a','1');"
+        "setTimeout(function(){localStorage.setItem('tok','x');sessionStorage.setItem('tok','y')},50);</script>");
+    check(loop_settle() && g.page.tree!=NULL,"departure: the first page arrives");
+    now_ms=150;
+    check(script_turn() && store_holds("a","1") && store_holds("tok",NULL),
+        "departure: the timer's write waits for its second");
+}
+static void storage_departure_cases(void) {
+    static const struct { NavKind kind; const char *name; } kPaths[]={
+        {NAV_GO,"departure: a link's next page reads what the last page wrote"},
+        {NAV_RELOAD,"departure: Reload's page reads what the last page wrote"},
+        {NAV_BACK,"departure: Back's page reads what the last page wrote"},
+        {NAV_FORWARD,"departure: Forward's page reads what the last page wrote"},
+    };
+    for(size_t i=0;i<sizeof(kPaths)/sizeof(kPaths[0]);i++) {
+        storage_departure_page();
+        storage_page_as("http://fixture.test/two","<p id=out>start</p><script>"
+            "document.getElementById('out').textContent=localStorage.getItem('tok')+' '+sessionStorage.getItem('tok');"
+            "</script>",kPaths[i].kind);
+        check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","x y"),kPaths[i].name);
+        loop_drop();
+        yonder_storage_free(s_storage);
+        s_storage=NULL;
+    }
+    /* A file: the write is in the store as the file's parse begins. */
+    storage_departure_page();
+    slurp_path="/pages/local.html";
+    slurp_bytes="<p id=out>disk</p>";
+    open_address("/pages/local.html",NAV_GO,NULL,NULL);
+    check(store_holds("tok","x"),"departure: a file's page begins after the last page's write is kept");
+    check(loop_settle(),"departure: the file arrives");
+    slurp_path=NULL;
+    loop_drop();
+    yonder_storage_free(s_storage);
+    s_storage=NULL;
+    /* A navigation that never becomes a page leaves the page where it is:
+     * nothing departs, and the write commits when it falls due. */
+    storage_departure_page();
+    start_trip("http://fixture.test/gone",NULL,NAV_GO,NULL);
+    stream_post_verdict(false,OS64_FETCH_DIAL_FAILED,"No road to fixture.test");
+    loop_settle();
+    check(store_holds("tok",NULL),"departure: a failed navigation is no departure");
+    now_ms=1200;
+    storage_turn();
+    check(store_holds("tok","x"),"departure: and the write commits when due");
+    loop_drop();
+    yonder_storage_free(s_storage);
+    s_storage=NULL;
+}
+/* THE STORE'S DISK, BADLY BEHAVED: yonder's provider verbs called as
+ * libdom calls them, against a file that is missing, a folder, unreadable,
+ * not libdom's, too big for the room or for any image; a disk that writes a
+ * byte at a time or refuses a write, a sync or a rename; an origin too long
+ * to name a file, one whose store is spelled like another's temp; the same
+ * call twice; and every allocation failed in turn. What is on the disk is
+ * always a whole image, the old or the new, and no temp is left behind. */
+static void fake_put(const char *path, const char *bytes, size_t length) {
+    int f=fake_file(path);
+    if(f<0) for(f=0;f<FAKE_FILES && fake_files[f].used;f++) {}
+    free(fake_files[f].data);
+    fake_files[f].used=true; snprintf(fake_files[f].path,256,"%s",path);
+    fake_files[f].data=malloc(length+1); memcpy(fake_files[f].data,bytes,length); fake_files[f].data[length]='\0';
+    fake_files[f].len=length; fake_files[f].mtime=++fake_second;
+}
+static int fake_temps(void) {
+    int n=0;
+    for(int i=0;i<FAKE_FILES;i++) if(fake_files[i].used && strstr(fake_files[i].path,".new")!=NULL) n++;
+    return n;
+}
+static bool problem_has(const yonder_storage_t *st, const char *text) {
+    const char *p=yonder_storage_problem(st);
+    return p!=NULL && strstr(p,text)!=NULL;
+}
+static void storage_disk_cases(void) {
+    static const char kOne[]="os64 storage 1\n+1 1\nk1\n", kTwo[]="os64 storage 1\n+1 1\nk2\n";
+    static const char kGone[]="os64 storage 1\n-1\nk\n";
+    const os64_dom_storage_area_t L=OS64_DOM_STORAGE_LOCAL, S=OS64_DOM_STORAGE_SESSION;
+    const char *origin="http://fixture.test";
+    char out[64];
+    fake_reset();
+    yonder_storage_t *st=yonder_storage_new("/tmp/profile");
+    check(yonder_storage_identity(st,L,origin)==0 && yonder_storage_load(st,L,origin,out,sizeof(out))==0 &&
+          yonder_storage_problem(st)==NULL,"storage disk: no file is an empty store, and no problem");
+    check(yonder_storage_commit(st,L,origin,kGone,strlen(kGone),NULL)==OS64_DOM_STORAGE_OK &&
+          fake_file(STORE_FILE)<0,"storage disk: removing from no store leaves no file");
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK && store_holds("k","1") &&
+          yonder_storage_identity(st,L,origin)!=0,"storage disk: a commit makes the file");
+    int writes=fake_writes;
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK && store_holds("k","1") &&
+          fake_writes==writes+1 && fake_file(STORE_FILE)>=0 && fake_files[fake_file(STORE_FILE)].len==strlen(kOne),
+          "storage disk: the same commit twice writes the same image");
+    int64_t length=yonder_storage_load(st,L,origin,out,sizeof(out));
+    check(length==(int64_t)strlen(kOne) && !memcmp(out,kOne,strlen(kOne)),"storage disk: a load reads the image");
+    memset(out,'z',sizeof(out));
+    check(yonder_storage_load(st,L,origin,out,4)==(int64_t)strlen(kOne) && out[0]=='z',
+          "storage disk: a store bigger than the room answers its length and writes nothing");
+    fake_short_write=true;
+    check(yonder_storage_commit(st,L,origin,kTwo,strlen(kTwo),NULL)==OS64_DOM_STORAGE_OK && store_holds("k","2"),
+          "storage disk: a disk that writes a byte at a time is written whole");
+    fake_short_write=false;
+    /* A write, a sync, a rename refused: the old image stays, whole, and
+     * the temp goes. */
+    bool *refusals[]={&fake_fail_write,&fake_fail_sync,&fake_fail_rename};
+    const char *names[]={"write","sync","rename"};
+    for(size_t i=0;i<3;i++) {
+        char name[96];
+        *refusals[i]=true;
+        os64_dom_storage_status_t status=yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL);
+        *refusals[i]=false;
+        snprintf(name,sizeof(name),"storage disk: a refused %s keeps the old image, leaves no temp, and says so",names[i]);
+        check(status==OS64_DOM_STORAGE_FAILED && store_holds("k","2") && fake_temps()==0 &&
+              problem_has(st,"storage/http%3A%2F%2Ffixture.test cannot be written."),name);
+    }
+    /* A file that cannot be read: never written over. */
+    fake_slurp_fail=true;
+    check(yonder_storage_load(st,L,origin,out,sizeof(out))<0 && problem_has(st,"cannot be read."),
+          "storage disk: an unreadable store loads as broken and says so");
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED,
+          "storage disk: and refuses a commit");
+    fake_slurp_fail=false;
+    check(store_holds("k","2"),"storage disk: the unreadable store is as it was");
+    /* Bigger than any image libdom writes: answered by its size alone. */
+    int f=fake_file(STORE_FILE);
+    size_t real=fake_files[f].len;
+    fake_files[f].len=(size_t)64*1024*1024;
+    check(yonder_storage_load(st,L,origin,out,sizeof(out))>(int64_t)(32*1024*1024),
+          "storage disk: a store past the cap answers a length libdom refuses, unread");
+    fake_files[f].len=real;
+    /* Not libdom's format. */
+    fake_put(STORE_FILE,"hello\n",6);
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
+          problem_has(st,"its file is not one yonder wrote") && !strcmp(fake_text(STORE_FILE),"hello\n"),
+          "storage disk: a file not in the format is never written over");
+    /* An empty file where the store should be: there, and no image. */
+    fake_put(STORE_FILE,"",0);
+    check(yonder_storage_load(st,L,origin,out,sizeof(out))<0 && problem_has(st,"its file is not one yonder wrote"),
+          "storage disk: an empty file at the store's name loads as broken");
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
+          fake_file(STORE_FILE)>=0 && fake_files[fake_file(STORE_FILE)].len==0 && fake_temps()==0,
+          "storage disk: and is never written over");
+    /* A folder where the file should be. */
+    (void)os64_unlink(STORE_FILE);
+    snprintf(fake_dirs[nfake_dirs++],256,"%s",STORE_FILE);
+    check(yonder_storage_load(st,L,origin,out,sizeof(out))<0 && problem_has(st,"cannot be read."),
+          "storage disk: a folder at the store's name loads as broken");
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED && fake_temps()==0 &&
+          fake_file(STORE_FILE)<0,"storage disk: and is never written over");
+    nfake_dirs--;
+    /* An origin whose store name is another's temp name as spelled before
+     * the '+': the other's store is untouched. */
+    static const char kOther[]="/tmp/profile/storage/http%3A%2F%2Ffixture.test.7.7.new";
+    fake_put(kOther,kTwo,strlen(kTwo));
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK && store_holds("k","1") &&
+          fake_text(kOther)!=NULL && !strcmp(fake_text(kOther),kTwo),
+          "storage disk: no origin's store is another's temp");
+    (void)os64_unlink(kOther);
+    /* An origin too long to name a file, with its temp, in a path. */
+    char longest[300]="http://";
+    memset(longest+7,'a',240); longest[247]='\0';
+    check(yonder_storage_commit(st,L,longest,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
+          problem_has(st,"its address is too long to name a file") &&
+          yonder_storage_load(st,L,longest,out,sizeof(out))<0 && yonder_storage_identity(st,L,longest)==0,
+          "storage disk: an origin too long to name a file is kept in no file, and the problem names it");
+    yonder_storage_t *relative=yonder_storage_new("profile");
+    check(yonder_storage_commit(relative,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
+          problem_has(relative,"the profile folder is not a full path (profile)"),
+          "storage disk: a profile that is not a full path is said to be so");
+    yonder_storage_free(relative);
+    char deep[256]="/";
+    memset(deep+1,'d',250); deep[251]='\0';
+    yonder_storage_t *tall=yonder_storage_new(deep);
+    check(yonder_storage_commit(tall,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
+          problem_has(tall,"the profile folder's path is too long"),
+          "storage disk: a profile with no room for its storage folder is said to be too long");
+    yonder_storage_free(tall);
+    /* A file in the way of the profile folder. */
+    yonder_storage_t *blocked=yonder_storage_new("/tmp/blocked/profile");
+    fake_put("/tmp/blocked","x",1);
+    check(yonder_storage_commit(blocked,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
+          problem_has(blocked,"/tmp/blocked/profile/storage cannot be made."),
+          "storage disk: a file where a folder must be refuses the commit");
+    yonder_storage_free(blocked);
+    /* The last key removed: the file goes; a file another window removed
+     * first is gone as asked. */
+    check(yonder_storage_commit(st,L,origin,kGone,strlen(kGone),NULL)==OS64_DOM_STORAGE_OK && fake_file(STORE_FILE)<0,
+          "storage disk: a store left empty is removed");
+    /* Clear twice, and the sessions with it. */
+    check(yonder_storage_commit(st,S,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK &&
+          yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK,"storage disk: both areas kept");
+    check(yonder_storage_clear(st)==1 && yonder_storage_clear(st)==0 &&
+          yonder_storage_identity(st,S,origin)==0 &&
+          yonder_storage_load(st,S,origin,out,sizeof(out))==0 && yonder_storage_problem(st)==NULL,
+          "storage disk: Clear page storage twice: the files and the sessions go once, and the problem with them");
+    /* Every allocation failed in turn, each area: an answer of OK or
+     * FAILED, the store whole before or after, no temp, nothing leaked. */
+    for(int area=0;area<2;area++) {
+        bool swept=false, whole=true, leaked=false;
+        for(size_t cut=1;cut<200 && !swept;cut++) {
+            fake_reset();
+            yonder_storage_t *sw=yonder_storage_new("/tmp/profile");
+            if(yonder_storage_commit(sw,area?S:L,origin,kOne,strlen(kOne),NULL)!=OS64_DOM_STORAGE_OK) { whole=false; break; }
+            size_t before=live;
+            attempts=0; fail_at=cut;
+            os64_dom_storage_status_t status=yonder_storage_commit(sw,area?S:L,origin,kTwo,strlen(kTwo),NULL);
+            int64_t loaded=yonder_storage_load(sw,area?S:L,origin,out,sizeof(out));
+            swept=attempts<cut;
+            fail_at=0;
+            const char *want=status==OS64_DOM_STORAGE_OK ? kTwo : kOne;
+            if(status!=OS64_DOM_STORAGE_OK && status!=OS64_DOM_STORAGE_FAILED) whole=false;
+            if(area==0 && (!store_holds("k",status==OS64_DOM_STORAGE_OK ? "2" : "1") || fake_temps()!=0)) whole=false;
+            if(loaded>=0 && (loaded!=(int64_t)strlen(want) || memcmp(out,want,strlen(want)))) whole=false;
+            if(live!=before) leaked=true;
+            yonder_storage_free(sw);
+        }
+        check(swept && whole && !leaked,area ? "storage disk: sessionStorage's commit and load with every allocation failed in turn"
+                                             : "storage disk: localStorage's commit and load with every allocation failed in turn");
+    }
+    yonder_storage_free(st);
+    yonder_storage_free(NULL);
+    fake_reset();
+}
+/* A DEPARTED PAGE RUNS NOTHING MORE (HTML unloads its document): its queued
+ * timer, due while the next page streams in, neither runs nor writes, now
+ * or at the departed page's teardown. */
+static void storage_departed_tasks_case(void) {
+    fake_reset();
+    s_storage=yonder_storage_new("/tmp/profile");
+    loop_page("<p id=out>start</p><script>localStorage.setItem('a','1');"
+        "setTimeout(function(){localStorage.setItem('late','1');document.title='ran'},500);</script>");
+    check(loop_settle() && g.page.tree!=NULL,"departed: the first page arrives");
+    yonder_scripts_t *departing=g.page.scripts;
+    storage_page_as("http://fixture.test/two","<p id=out>start</p><script>"
+        "document.getElementById('out').textContent=String(localStorage.getItem('late'));</script>",NAV_GO);
+    /* The next page's parse begins: the page on screen departs. */
+    for(int i=0;i<5 && g.stream.parser==NULL && g.stream.active;i++) stream_turn();
+    check(g.page.scripts==departing && !yonder_scripts_alive(departing),
+          "departed: the page on screen is unloaded as the next one's parse begins");
+    now_ms+=1000;
+    (void)script_turn();
+    check(store_holds("late",NULL),"departed: and wrote nothing");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","null") && store_holds("late",NULL) &&
+          store_holds("a","1"),"departed: nor at its teardown, and the next page reads the store without it");
+    loop_drop();
+    yonder_storage_free(s_storage);
+    s_storage=NULL;
+}
+/* TWO YONDERS, ONE STORE (storage.c § Two yonders): another window's
+ * commit lands between this one's read and its rename; the store's
+ * identity, read again before the rename, sees it, and the merge is made
+ * again onto what that window wrote, so neither's changes are lost. */
+static yonder_storage_t *other_window;
+static const char kOtherChange[]="os64 storage 1\n+5 1\nother1\n";
+/* The other window, task 8, commits. */
+static void other_commits(void) {
+    uint64_t me=fake_task;
+    fake_task=8;
+    fake_second++;          /* a later second: its store's identity moves */
+    check(yonder_storage_commit(other_window,OS64_DOM_STORAGE_LOCAL,"http://fixture.test",kOtherChange,
+                                sizeof(kOtherChange)-1,NULL)==OS64_DOM_STORAGE_OK,"two yonders: the other window commits");
+    fake_task=me;
+}
+static void storage_two_yonder_cases(void) {
+    static const char kMine[]="os64 storage 1\n+4 1\nmine1\n";
+    const os64_dom_storage_area_t L=OS64_DOM_STORAGE_LOCAL;
+    const char *origin="http://fixture.test";
+    fake_reset();
+    yonder_storage_t *st=yonder_storage_new("/tmp/profile");
+    other_window=yonder_storage_new("/tmp/profile");
+    check(yonder_storage_commit(st,L,origin,"os64 storage 1\n+4 1\nseed1\n",26,NULL)==OS64_DOM_STORAGE_OK,
+          "two yonders: a store to start from");
+    fake_sync_hook=other_commits;
+    check(yonder_storage_commit(st,L,origin,kMine,sizeof(kMine)-1,NULL)==OS64_DOM_STORAGE_OK &&
+          store_holds("seed","1") && store_holds("other","1") && store_holds("mine","1") && fake_temps()==0,
+          "two yonders: a store another window moved before the rename is merged onto again, and neither loses");
+    yonder_storage_free(st);
+    yonder_storage_free(other_window);
+    other_window=NULL;
+    fake_reset();
+}
+/* Clear page storage removes every store, one unlink each; a window that
+ * commits after it publishes only its own changes. */
+static void storage_clear_cases(void) {
+    const os64_dom_storage_area_t L=OS64_DOM_STORAGE_LOCAL;
+    fake_reset();
+    yonder_storage_t *st=yonder_storage_new("/tmp/profile");
+    other_window=yonder_storage_new("/tmp/profile");
+    check(yonder_storage_commit(st,L,"http://fixture.test","os64 storage 1\n+4 1\nseed1\n",26,NULL)==
+          OS64_DOM_STORAGE_OK &&
+          yonder_storage_commit(st,L,"http://two.test","os64 storage 1\n+4 1\nseed1\n",26,NULL)==OS64_DOM_STORAGE_OK,
+          "clear: two stores");
+    check(yonder_storage_clear(st)==2 && fake_file(STORE_FILE)<0 &&
+          fake_file("/tmp/profile/storage/http%3A%2F%2Ftwo.test")<0,"clear: every store goes");
+    other_commits();
+    check(store_holds("other","1") && store_holds("seed",NULL),
+          "clear: a window committing after it publishes its own changes, and nothing that was cleared");
+    check(yonder_storage_commit(st,L,"http://two.test","os64 storage 1\n+4 1\nseed1\n",26,NULL)==OS64_DOM_STORAGE_OK,
+          "clear: a store to clear from Settings");
+    yonder_storage_t *window_store=s_storage;
+    s_storage=st;
+    char line[200];
+    storage_clear(line,sizeof(line));
+    s_storage=window_store;
+    check(strstr(line,"Cleared page storage: 2 stored sites gone.")!=NULL,line);
+    yonder_storage_free(st);
+    yonder_storage_free(other_window);
+    other_window=NULL;
+    fake_reset();
+}
+/* What a crash leaves: temps whose task is gone (or is this one, or a
+ * zombie). The first touch of the profile's stores removes them, and Clear
+ * page storage does, counting only stores; a live window's temp stays. */
+static void storage_orphan_cases(void) {
+    fake_reset();
+    snprintf(fake_dirs[nfake_dirs++],256,"/tmp/profile");
+    snprintf(fake_dirs[nfake_dirs++],256,"/tmp/profile/storage");
+    static const char kImage[]="os64 storage 1\n+1 1\nk1\n";
+    fake_live[0]=8;
+    fake_put(STORE_FILE,kImage,sizeof(kImage)-1);
+    fake_put(STORE_FILE "+9.3.new",kImage,sizeof(kImage)-1);       /* task 9: gone */
+    fake_put(STORE_FILE "+7.1.new",kImage,sizeof(kImage)-1);       /* this task's, from before it was */
+    fake_put(STORE_FILE "+8.2.new",kImage,sizeof(kImage)-1);       /* task 8: live, mid-commit */
+    /* Names a dead or this task's number follows a '+' in, that are not a
+     * temp by its whole spelling (a lock an older yonder left among them):
+     * never ours to remove. */
+    static const char *const kNotTemps[]={
+        "/tmp/profile/storage/notes+9", "/tmp/profile/storage/x+9.1.new.bak", "/tmp/profile/storage/x+9.new",
+        "/tmp/profile/storage/x+.1.new", "/tmp/profile/storage/x+09.1.new", "/tmp/profile/storage/x+7.01.new",
+        "/tmp/profile/storage/+9.1.new", "/tmp/profile/storage/x+9.1.newer",
+        "/tmp/profile/storage/http%3A%2F%2Fother.test+lock",
+    };
+    for(size_t i=0;i<sizeof(kNotTemps)/sizeof(kNotTemps[0]);i++) fake_put(kNotTemps[i],"mine",4);
+    yonder_storage_t *st=yonder_storage_new("/tmp/profile");
+    (void)yonder_storage_identity(st,OS64_DOM_STORAGE_LOCAL,"http://fixture.test");
+    check(fake_file(STORE_FILE "+9.3.new")<0 && fake_file(STORE_FILE "+7.1.new")<0,
+          "orphans: the first touch removes the temps a crash left");
+    check(fake_file(STORE_FILE "+8.2.new")>=0 && fake_file(STORE_FILE)>=0,
+          "orphans: a live window's temp, and the store, stay");
+    fake_put(STORE_FILE "+9.4.new",kImage,sizeof(kImage)-1);
+    fake_put(STORE_FILE "+8.5.new",kImage,sizeof(kImage)-1);
+    fake_live_zombie=true;      /* task 8 died, its parent not yet told: its temps are a crash's */
+    fake_put(STORE_FILE "+8.2.new",kImage,sizeof(kImage)-1);
+    check(yonder_storage_clear(st)==1 && fake_file(STORE_FILE "+8.5.new")<0 && fake_file(STORE_FILE "+8.2.new")<0,
+          "orphans: a zombie's temps are a crash's");
+    fake_live_zombie=false;
+    fake_put(STORE_FILE,kImage,sizeof(kImage)-1);
+    fake_put(STORE_FILE "+8.2.new",kImage,sizeof(kImage)-1);
+    check(yonder_storage_clear(st)==1 && fake_file(STORE_FILE)<0 && fake_file(STORE_FILE "+9.4.new")<0 &&
+          fake_file(STORE_FILE "+8.2.new")>=0,
+          "orphans: Clear removes the stores and a crash's temps, and counts only stores");
+    bool kept=true;
+    for(size_t i=0;i<sizeof(kNotTemps)/sizeof(kNotTemps[0]);i++) kept=kept && fake_file(kNotTemps[i])>=0;
+    check(kept,"orphans: a name that only looks like a temp outlives the sweep and Clear");
+    yonder_storage_free(st);
+    fake_reset();
+}
+/* The redirects the head says libway followed on the asked origin are the
+ * page's redirectCount, both spellings. */
+static void timing_redirect_case(void) {
+    fake_reset();
+    stream_window();
+    g.scripts_on=true; g.script_ms=5000; now_ms=100;
+    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    char *html=pad_page("<p id=out>start</p><script>document.getElementById('out').textContent="
+        "performance.navigation.redirectCount+' '+performance.getEntriesByType('navigation')[0].redirectCount;</script>");
+    way_head_t h=stream_head("text/html","",false);
+    h.redirects=2;
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body((const uint8_t *)html,strlen(html),YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    free(html);
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","2 2"),
+          "timing: the head's same-origin redirects are the page's redirectCount");
+    loop_drop();
+}
+/* The page reads its navigation's timing and the screen it is on. */
+static void timing_window_cases(void) {
+    fake_reset();
+    clock_us=10000000;
+    loop_page("<p id=out>start</p><script>var t=performance.timing;"
+        "document.getElementById('out').textContent=[t.navigationStart>0,t.fetchStart===t.navigationStart,"
+        "t.responseStart>=t.fetchStart,t.domLoading>=t.responseStart,t.domInteractive,t.loadEventEnd,"
+        "performance.now()>=0,screen.width,devicePixelRatio,performance.navigation.type].join();"
+        "window.addEventListener('load',function(){setTimeout(function(){var t=performance.timing;"
+        "document.getElementById('out').textContent=[t.domInteractive>=t.domLoading,"
+        "t.domContentLoadedEventEnd>=t.domContentLoadedEventStart,t.domComplete>=t.domInteractive,"
+        "t.loadEventEnd>=t.loadEventStart,t.loadEventStart>0].join()},10)});</script>");
+    check(loop_settle() && g.page.tree!=NULL,"timing: the page arrives");
+    check(probe_text_is("out","true,true,true,true,0,0,true,1024,1,0"),
+        "timing: a page's script reads its navigation's milestones so far, the screen and the zoom");
+    now_ms+=20;
+    check(script_turn() && probe_text_is("out","true,true,true,true,true"),
+        "timing: after its load, the page reads every milestone");
+    loop_drop();
+}
+/* A page from disk: its navigation begins before the read, and its
+ * response is the read. */
+static void timing_file_case(void) {
+    stream_window();
+    g.scripts_on=true; g.script_ms=5000;
+    slurp_path="/pages/local.html";
+    slurp_bytes="<p id=out>start</p><script>var t=performance.timing;document.getElementById('out').textContent="
+        "[t.fetchStart===t.navigationStart,t.responseStart-t.fetchStart<10,t.responseEnd-t.responseStart>=50].join();</script>";
+    slurp_us=50000;
+    open_address("/pages/local.html",NAV_GO,NULL,NULL);
+    slurp_us=0;
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","true,true,true"),
+        "timing: a file's response starts as its read does and ends when the read has");
+    slurp_path=NULL;
+    loop_drop();
+}
+/* With the switch off, none of slice 1a's names exists. */
+static void storage_modern_off_cases(void) {
+    loop_modern_off=true;
+    loop_page("<p id=out>start</p><script>document.getElementById('out').textContent="
+        "[typeof localStorage,typeof sessionStorage,typeof Storage,typeof performance,typeof URL,"
+        "typeof URLSearchParams,typeof TextEncoder,typeof TextDecoder,typeof screen,typeof devicePixelRatio,"
+        "typeof btoa,typeof atob].join();</script>");
+    loop_modern_off=false;
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out",
+        "undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined"),
+        "modern off: storage, performance, URL, the encoders, screen and base64 do not exist");
+    loop_drop();
+}
+static void storage_cases(void) {
+    storage_window_cases();
+    storage_full_cases();
+    storage_departure_cases();
+    storage_disk_cases();
+    storage_two_yonder_cases();
+    storage_departed_tasks_case();
+    storage_clear_cases();
+    storage_orphan_cases();
+    timing_window_cases();
+    timing_redirect_case();
+    timing_file_case();
+    storage_modern_off_cases();
+}
+
 static void diag_cases(void) {
     diag_unit_cases();
     diag_setting_cases();
@@ -7921,6 +8602,22 @@ static void covered_link_cases(void) {
     check(probe_field("blank")!=NULL && probe_field("blank")->w->cls->paint==NULL,
         "invisible gadget: an empty name submits nothing, so it names nothing");
     probe_drop();
+    /* A control the ellipsis cuts away is not there to be pointed at
+     * (flow_box_cut_away), so its widget is not drawn over the ellipsis:
+     * after abcd, 32 of a 40-wide line, a checkbox in an inline-block with
+     * a transform — stacked, a layer of its own — is past the limit; one
+     * kept as the line's first atom is drawn. */
+    probe_page("<!doctype html><style>body{margin:0} div{width:40px;overflow:hidden;"
+        "white-space:nowrap;text-overflow:ellipsis} input{margin:0;width:12px;height:6px}"
+        " span{display:inline-block;transform:translate(1px,0)}</style>"
+        "<div>abcd<span><input type=checkbox name=past id=past></span></div>"
+        "<div><span><input type=checkbox name=kept id=kept></span>abcdefghij</div>",false);
+    forms_place();
+    check(probe_field("past")!=NULL && probe_field("past")->w->hidden,
+        "ellipsis: a control past the cut has no widget over the ellipsis");
+    check(probe_field("kept")!=NULL && !probe_field("kept")->w->hidden,
+        "ellipsis: a control the cut keeps has its widget");
+    probe_drop();
 }
 
 /* A unit that includes this file for the window and its fakes alone (the
@@ -7968,6 +8665,7 @@ int main(void)
     reporting_teardown();
     if(getenv("YONDER_NO_STREAM")==NULL) join_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) diag_cases();
+    if(getenv("YONDER_NO_STREAM")==NULL) storage_cases();
     webfont_cases();
     paint_cost_cases();
     whole_view_cases();

@@ -98,7 +98,8 @@ ordinary children/textContent follow actual children, while innerHTML uses
 that contents fragment. outerHTML is read-only in this slice.
 
 Strings cross the native boundary as UTF-8. NUL and lone UTF-16 surrogates
-become U+FFFD, while valid surrogate pairs retain their character. HTML names
+become U+FFFD, while valid surrogate pairs retain their character; web
+storage is the exception, keeping both exactly (WTF-8, § Slice 1a's rows). HTML names
 are ASCII-folded where the operation requires it. Native placement validity
 belongs to libhtml; bindings turn its status into an exception.
 Element and attribute names use the DOM Standard's separate name-validation
@@ -232,7 +233,9 @@ memory (§ Events).
 ## Events
 
 `addEventListener`, `removeEventListener` and `dispatchEvent` are on every
-node and on window. A listener is a function or an object with `handleEvent`;
+node, on window, and on each plain event target a Modern Web row makes
+(`d_event_target`: an object that is neither, whose dispatch path is itself
+alone). A listener is a function or an object with `handleEvent`;
 the third argument is the old boolean `useCapture` or `{capture, once}`
 (`passive` is accepted and changes nothing). `new Event(type, {bubbles,
 cancelable})` and the old `document.createEvent(...)` with `initEvent` make
@@ -244,8 +247,9 @@ host's clock), `isTrusted`, and the writable old spellings `returnValue` and
 (`key`, `keyCode`, `charCode`, `which`) and the modifier flags, as data.
 
 **Where the values live.** A target's listener list hangs off its wrapper
-record, in the order listeners were added; window's off a record of its own,
-and a MediaQueryList's off one made when it is first listened to, which
+record, in the order listeners were added; window's off a record of its own;
+a plain target's off its entry, which is its object's opaque, or for a
+MediaQueryList one its resolver makes when it is first listened to, which
 holds the list from then on.
 Each listener's callback is a C-held engine value, the registry's second
 list, released by drain. An Event's own state is engine memory traced by the
@@ -253,7 +257,7 @@ collector (`gc_mark`), because a script may keep an event long after its
 dispatch: its finalizer frees engine storage and nothing native.
 
 **Dispatch** is the DOM Standard's: the path is the target and its ancestors,
-then window past the document (except for `load`), and a MediaQueryList,
+then window past the document (except for `load`), and a plain target,
 which is in no tree, alone; capture listeners top
 down, then the target's capture listeners and its others, then bubbling up
 when the event bubbles. A list is cut where it ended when its target was
@@ -566,11 +570,20 @@ whatever it answered, and so does the creation: QuickJS's function
 constructors define `length` and `name` without saying when that ran out
 of memory.
 
-The style object follows the same switch for the CSS the arc adds: a
-property libgarb marks (`garb_prop_modern`) has no camel-case member while
-the option is clear, and a declaration of it is read as one libgarb does
-not know (`garb_reading_t.modern_off`), so `'aspectRatio' in el.style` and
-`setProperty` answer as they did before the arc.
+Every property name libgarb reads is a member of the style object three
+ways (CSSOM § 6.6.1): camel-cased (`marginInlineStart`, `WebkitTransform`),
+webkit-cased for a `-webkit-` name (`webkitTransform`), and dashed as
+written (`margin-inline-start`), for shorthands and aliases as well as
+longhands and the flow-relative names (`garb_prop_name_at` lists them
+all). The style object follows the same switch for the CSS the arc adds: a
+name libgarb does not read with the switch off (`garb_prop_known`: a
+marked property, or a shorthand whose longhands are all marked) has none
+of those members while the option is clear,
+and a declaration of it is read as one libgarb does not know
+(`garb_reading_t.modern_off`), so `'aspectRatio' in el.style` and
+`setProperty` answer as they did before the arc. A value reads back as it
+was written, not in CSSOM's canonical form, and a shorthand's longhands do
+not read back (DEBTS.md § Classic browser scripting).
 
 The first row is the interface objects (`classic.c`'s
 `d_interfaces_install`): `Node`, `CharacterData`, `DocumentFragment`,
@@ -599,3 +612,85 @@ not installed: naming the broader prototype for it would make `instanceof`
 lie. Each prototype's `constructor` is its interface object; with the
 switch off it is what it was before the arc (`Image` for the image
 prototype, inherited from `Object.prototype` for the rest).
+
+### Slice 1a's rows: storage and the small globals
+
+Six rows, a file each (MODERN_WEB.md § Slice 1a, as built).
+
+**`localStorage`, `sessionStorage`, `Storage`** (`storage.c`; HTML §
+12.2). Each area is a map of strings for the page's origin (`d_origin`:
+scheme, host and a port that is not the scheme's own; anything else is an
+opaque origin, `null`, whose areas work and are kept nowhere). Strings keep
+every code unit, a lone surrogate and U+0000 included, as WTF-8: browsers
+keep them, WPT's webstorage holds a binding to it, and pages that pack
+binary into UTF-16 strings break otherwise. An area holds at most 5 MiB,
+counted as the standard counts (two bytes a UTF-16 code unit of every key
+and value), and 65,536 keys; a `setItem` past either throws
+`QuotaExceededError` and changes nothing. Its memory is not the binding's
+budget's. The object is WebIDL's legacy platform object with named
+properties: a key is an own property unless the prototype chain has one by
+that name, `[[Set]]` and a data `[[DefineOwnProperty]]` are `setItem`,
+`delete` is `removeItem`, a Symbol is an ordinary property, and a lookup
+that runs page code (a Proxy prototype's `has`) looks the key up again
+after it. `key(n)`'s order is the map's: a new key goes last, and a removal
+moves the last key into its place (the standard asks only that the order
+hold while the keys do), so every change is a few steps.
+
+**Where an area is kept is the host's** (`dom.h` § Web storage): a provider
+per area (`os64_dom_set_storage`) answers `identity` (a value that moves
+with the store), `load` (the store's image) and `commit` (this page's
+change list, merged by the host onto the store as it stands;
+`os64_dom_storage_merge` does the merge and `os64_dom_storage_walk` reads
+the records). An area reads the store at the first touch in a task when
+its identity moved, replays its own change list over it, and hands only
+the change list back: a `clear()` is a removal of each key the page could
+see. A commit answers OK; FULL (past the quota: nothing kept, the page sees
+the store again); or FAILED (the area keeps its map in memory from then
+on). Commits are coalesced (`os64_dom_storage_settle` between tasks,
+`os64_dom_storage_due` for the host's clock, `OS64_DOM_STORAGE_COMMIT_MS`),
+sooner when the change list would pass the quota or the keys' cap, and once
+more at drain, the last. What a page writes never takes the change list
+past its bound: a change it cannot make room for (no memory to write the
+list down for the early commit) is refused with `QuotaExceededError` as a
+full store's is. A `clear()` of a map another window grew past the keys'
+cap can pass it, until the next commit. A host that unloads a page
+(yonder's departure) drains it, which is that page's last commit.
+`os64_dom_storage_forget` drops both maps for "Clear page storage". The
+image format is `os64 storage 1\n`, then `+<key bytes> <value bytes>\n` and
+the key, the value and `\n` for a set, `-<key bytes>\n`, the key and `\n`
+for a removal.
+
+**`performance`** (`performance.c`): `now()` and `timeOrigin`, coarsened to
+100 µs, on the host's microsecond clock (`options.now_us`) against the
+navigation's origin (`options.timing`, read as the binding is made); User
+Timing's `mark`, `measure` (the L3 dictionary too), the entry lists and
+`clearMarks`/`clearMeasures`, `detail` a structured clone of plain data
+(DataCloneError otherwise); the legacy `timing` and `navigation` objects
+and a `navigation` entry, which read the host's milestones whenever asked.
+The entry buffer is an engine object with no prototype that no page is
+handed, counted in C. Nothing else is recorded; there is no
+PerformanceObserver. `performance` and `screen.orientation` are plain event
+targets (§ Events).
+
+**`URL`, `URLSearchParams`** (`url.c`): parsed by the page's own link rule
+(`os64_page_resolve_in` with no document), so a script and a link agree on
+an address; every component and setter, `canParse`, `parse`, `toJSON`;
+URLSearchParams whole, live both ways with its URL, sorted (stably, by
+merge) in UTF-16 code units. Where libos64's grammar is not the URL
+Standard's parser, the gap is the grammar's (url.c's header names them).
+
+**`TextEncoder`, `TextDecoder`** (`encoding.c`): UTF-8 out (`encode`,
+`encodeInto`); in, the encodings libhtml's label table names (UTF-8,
+windows-1252 and its aliases, UTF-16 of either order), with `fatal`,
+`ignoreBOM` and streaming. Another label is a RangeError.
+
+**`screen`, `devicePixelRatio`** (`screen.c`): the display the host gives
+(`options.screen`, device pixels) in CSS pixels at the page's zoom
+(`options.zoom`), which is also `devicePixelRatio`; `screen.orientation`
+never changes, and its `lock()` rejects.
+
+**`btoa`, `atob`** (`base64.c`): HTML § 8.3, forgiving-base64, a string of
+bytes either way, `InvalidCharacterError` before any work.
+
+Every Array these rows answer DEFINES its elements, so a setter a page put
+on `Array.prototype` neither runs nor swallows one.

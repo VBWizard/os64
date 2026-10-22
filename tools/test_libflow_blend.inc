@@ -58,7 +58,7 @@ static void blend_cases(void)
     flow_tree_t *t = flow_layout(q.doc, q.page, 400, &q.env);
     const flow_box_t *h = box_with_id(t, q.doc->document, "h");
     GroupLog g = {{0}, 0, {{0}}, 0};
-    flow_visitor_t v = {glog_visit, glog_open, glog_close, &g};
+    flow_visitor_t v = {glog_visit, glog_open, glog_close, &g, NULL};
     flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &v);
     expect("blend: a block below full opacity is stacked, not positioned, and one group",
            h != NULL && h->stacked && !h->positioned && flow_npositioned(t) == 0 &&
@@ -83,7 +83,7 @@ static void blend_cases(void)
     t = flow_layout(q.doc, q.page, 400, &q.env);
     const flow_box_t *ib = box_with_id(t, q.doc->document, "ib");
     GroupLog n = {{0}, 0, {{0}}, 0};
-    flow_visitor_t nv = {glog_visit, glog_open, glog_close, &n};
+    flow_visitor_t nv = {glog_visit, glog_open, glog_close, &n, NULL};
     flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &nv);
     expect("blend: a group holds its positioned members, and groups nest",
            n.opens == 2 && strncmp(n.log, "t ( ( ) ) ", 10) == 0 && n.bounds[0].y == 0 &&
@@ -100,7 +100,7 @@ static void blend_cases(void)
                  400, 600);
     t = flow_layout(q.doc, q.page, 400, &q.env);
     GroupLog z = {{0}, 0, {{0}}, 0};
-    flow_visitor_t zv = {glog_visit, glog_open, glog_close, &z};
+    flow_visitor_t zv = {glog_visit, glog_open, glog_close, &z, NULL};
     flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &zv);
     expect("blend: opacity 0 opens no group and paints nothing",
            strcmp(z.log, "( b ) ") == 0, z.log);

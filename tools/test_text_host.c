@@ -192,6 +192,29 @@ static void geometry(void)
     CHECK(os64_text_layout(c,(uint8_t *)"\n",1,&o,&r)==OS64_FONT_BAD_ARGUMENT && !r);
     CHECK(os64_text_layout(c,NULL,1,&o,&r)==OS64_FONT_BAD_ARGUMENT && !r);
     CHECK(os64_text_layout(c,(uint8_t *)"x",OS64_TEXT_BYTES_MAX+1u,&o,&r)==OS64_FONT_LIMIT && !r);
+    /* Tracking: after every cluster but a tab, the run's last too; a negative
+     * one holds a cluster at no width, never back past its start. */
+    current="letter spacing";
+    o=(os64_text_layout_t){.fonts=&f,.font_count=1,.tab_interval=512,.letter_spacing=64};
+    CHECK(os64_text_layout(c,(uint8_t *)"iWi",3,&o,&r)==OS64_FONT_OK && r->view.advance_x==1152);
+    CHECK(r->view.carets[1].x==256 && r->view.carets[2].x==896 && r->view.carets[3].x==1152);
+    CHECK(r->view.glyphs[1].x==256 && r->view.glyphs[2].x==896);
+    os64_text_run_release(r);
+    CHECK(os64_text_layout(c,(uint8_t *)"i\ti",3,&o,&r)==OS64_FONT_OK && r->view.advance_x==768);
+    CHECK(r->view.carets[1].x==256 && r->view.carets[2].x==512);
+    os64_text_run_release(r);
+    o.letter_spacing=-1000;
+    CHECK(os64_text_layout(c,(uint8_t *)"iWi",3,&o,&r)==OS64_FONT_OK && r->view.advance_x==0);
+    CHECK(r->view.carets[1].x==0 && r->view.carets[2].x==0 && r->view.carets[3].x==0);
+    os64_text_run_release(r);
+    o.letter_spacing=INT32_MAX;
+    CHECK(os64_text_layout(c,(uint8_t *)"iWi",3,&o,&r)==OS64_FONT_LIMIT && !r);
+    CHECK(os64_text_layout(c,(uint8_t *)"i",1,&o,&r)==OS64_FONT_LIMIT && !r);
+    o=(os64_text_layout_t){.fonts=&f,.font_count=1,.tab_interval=512,.encoding=OS64_TEXT_LATIN1,
+                           .cell_advance=256,.letter_spacing=64};
+    CHECK(os64_text_layout(c,(uint8_t *)"WW",2,&o,&r)==OS64_FONT_BAD_ARGUMENT && !r);
+    current="clips, blending and atomic paint failure";
+    o=(os64_text_layout_t){.fonts=&f,.font_count=1,.tab_origin=INT32_MAX,.tab_interval=INT32_MAX};
     os64_text_font_t *dups[]={f,f};o.fonts=dups;o.font_count=2;
     CHECK(os64_text_layout(c,NULL,0,&o,&r)==OS64_FONT_BAD_ARGUMENT && !r);
     os64_text_font_release(f);CHECK(os64_text_destroy(c)==OS64_FONT_OK && live==0);

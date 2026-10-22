@@ -16,6 +16,7 @@ a:link, a:visited { color: #00e !important; text-decoration: underline }
 @keyframes blink { 0% { opacity: 1 } 50% { opacity: 0 } }
 @keyframes slide { from { margin-left: var(--pad, 2px) } 50%, 75% { opacity: .5; animation-timing-function: steps(2) } }
 .title { animation: blink 1s, slide 2s steps(3, end) infinite; will-change: transform, opacity }
+.card { aspect-ratio: auto 16 / calc(9 + 0); object-position: right 10px top 5%; object-fit: cover; cursor: url(a.cur) 1 calc(2 + 0), image-set("b.png" 1x), pointer; outline: 2px dashed red; margin-inline: 1px calc(2px + 1em); letter-spacing: 1px; word-wrap: break-word; text-overflow: ellipsis; user-select: none; border-block: thin solid blue }
 .bad { color: red; width: 10px 20px {oops}; } } .after { color: \62 lue }
 <!-- .cdo { x: y } -->
 .unterminated { content: "abc

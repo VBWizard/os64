@@ -452,8 +452,15 @@ void p_resolve(os64_page_t *page, const char *ref, os64_page_ref_t *out)
     }
     if (os64_url_scheme_of(bare, scheme, sizeof(scheme))) {
         // No base worth resolving against, but an absolute reference needs
-        // none, so a `mailto:` on an opaque page still works.
-        p_canonical(page, bare, &out->url, &out->refused);
+        // none, so a `mailto:` on an opaque page still works. Its path is
+        // still squashed (`http://h/a/../b` is `http://h/b`): resolving a
+        // reference that names its own scheme reads nothing of the base.
+        static const os64_url_t kNoBase;
+        if (!os64_url_absolute(&kNoBase, bare, absolute, sizeof(absolute))) {
+            out->refused = OS64_PAGE_REASON_TOO_LONG;
+            return;
+        }
+        p_canonical(page, absolute, &out->url, &out->refused);
         return;
     }
     out->refused = OS64_PAGE_REASON_BAD_ACTION;

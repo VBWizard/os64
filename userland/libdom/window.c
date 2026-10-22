@@ -1100,8 +1100,8 @@ int d_history_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_method_named(dom, ctx, history, "replaceState", history_member, 2, HS_REPLACE) < 0 ||
         d_accessor(dom, ctx, history, "state", history_member, HS_STATE, false) < 0 ||
         d_accessor(dom, ctx, history, "scrollRestoration", history_member, HS_RESTORATION, true) < 0 ||
-        d_handler_install(dom, ctx, global, D_EVENT_POPSTATE) < 0 ||
-        d_handler_install(dom, ctx, global, D_EVENT_HASHCHANGE) < 0)
+        d_event_handler(dom, ctx, global, D_EVENT_POPSTATE) < 0 ||
+        d_event_handler(dom, ctx, global, D_EVENT_HASHCHANGE) < 0)
         return -1;
     JSValue event_prototype = JS_GetClassProto(ctx, dom->event_class);
     JSValue event = JS_GetPropertyStr(ctx, global, "Event");
@@ -1110,12 +1110,15 @@ int d_history_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     JSValue hashchange = dom->popstate_prototype != NULL ? JS_NewObjectProto(ctx, event_prototype) : JS_EXCEPTION;
     dom->hashchange_prototype = dom->popstate_prototype != NULL ? d_retain(dom, ctx, hashchange) : NULL;
     int result = dom->hashchange_prototype == NULL || JS_IsException(event) ? -1 : 0;
-    if (result == 0)
-        result = d_interface_install(ctx, global, "PopStateEvent", dom->popstate_prototype->value, event,
-                                     popstate_construct);
-    if (result == 0)
-        result = d_interface_install(ctx, global, "HashChangeEvent", dom->hashchange_prototype->value, event,
-                                     hashchange_construct);
+    static const char *const names[] = {"PopStateEvent", "HashChangeEvent"};
+    JSCFunction *const constructs[] = {popstate_construct, hashchange_construct};
+    for (int i = 0; result == 0 && i < 2; i++) {
+        JSValueConst own = i == 0 ? dom->popstate_prototype->value : dom->hashchange_prototype->value;
+        JSValue f = d_interface_new(ctx, names[i], 1, constructs[i], own, event);
+        if (JS_IsException(f) ||
+            JS_DefinePropertyValueStr(ctx, global, names[i], f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+            result = -1;
+    }
     JS_FreeValue(ctx, event_prototype);
     JS_FreeValue(ctx, event);
     return result;

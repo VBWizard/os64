@@ -77,6 +77,7 @@ match-media-parsing.html	Test parsing ',,' with matchMedia
 match-media-parsing.html	Test parsing 'all' with matchMedia
 match-media-parsing.html	Test parsing 'all,all' with matchMedia
 match-media-parsing.html	Test parsing 'color)' with matchMedia
+mq-non-matching-lazy-load.tentative.html	Ensure browser renders the page without waiting for non matching @import style
 navigation-controls.tentative.html	Should be unknown: '(navigation-controls: back-button/none)'
 navigation-controls.tentative.html	Should be unknown: '(navigation-controls: none back-button)'
 overflow-media-features.html	Check that overflow-block: none doesn't match non printing documents

@@ -34,7 +34,8 @@ parse, builds the model and arrives exactly as a page arrives today.
   drawn from a half-parsed tree. Progressive display is a different slice
   with a different proof (what a reader sees while a page arrives), and
   DOM.md § What the old page does meanwhile already says the old page
-  stays live.
+  stays live (until the new page's parse begins, since Modern Web slice
+  1a, when it is unloaded and its scripts stop).
 - **Linked sheets are still discovered when the parse ends.** Starting
   them during the parse is a real saving on every page with a `<link
   rel=stylesheet>`, and D7 needs it ("a script waits for the sheets named

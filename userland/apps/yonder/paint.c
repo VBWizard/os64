@@ -54,6 +54,10 @@ typedef struct {
     // relighting — and every other box draws nothing.
     bool penned;
     uint32_t pen;
+    // The paint's cuts of the lines that end in an ellipsis
+    // (flow_cut_memo_t), each line worked once a paint; NULL draws no
+    // line as cut.
+    flow_cut_memo_t *cuts;
 } Painter;
 
 // A coordinate and a move added, held to what a 32-bit coordinate can say,
@@ -273,6 +277,40 @@ os64_gui_rect_t yonder_box_edge(const flow_box_t *box, os64_gui_rect_t rect, flo
     int64_t y = min64((int64_t)rect.y + e[FLOW_TOP], INT32_MAX);
     return (os64_gui_rect_t){(int32_t)x, (int32_t)y, (int32_t)min64(w, INT32_MAX - x),
                              (int32_t)min64(h, INT32_MAX - y)};
+}
+
+os64_gui_rect_t yonder_object_rect(const flow_style_t *s, os64_gui_rect_t box, uint32_t iw,
+                                   uint32_t ih)
+{
+    flow_object_fit_t fit = s->object_fit;
+    if (iw == 0 || ih == 0)
+        return box;
+    if (fit == FLOW_OBJECT_SCALE_DOWN)
+        fit = iw <= (uint32_t)max64(0, box.w) && ih <= (uint32_t)max64(0, box.h)
+                  ? FLOW_OBJECT_NONE : FLOW_OBJECT_CONTAIN;
+    int64_t w = box.w, h = box.h;
+    if (fit == FLOW_OBJECT_NONE) {
+        w = iw;
+        h = ih;
+    } else if (fit == FLOW_OBJECT_CONTAIN || fit == FLOW_OBJECT_COVER) {
+        // The picture wider in shape than the box fits by its width, and
+        // covers by its height.
+        bool wider = (int64_t)iw * box.h > (int64_t)ih * box.w;
+        if (wider == (fit == FLOW_OBJECT_CONTAIN))
+            h = nearest((int64_t)box.w * ih, iw);
+        else
+            w = nearest((int64_t)box.h * iw, ih);
+    }
+    // Held to a quarter of what an int32_t says, size and place alike, so
+    // that a picture's edge less any point of a surface still fits one: a
+    // 1 x 16384 picture covering a wide box is billions of pixels tall.
+    const int64_t most = INT32_MAX / 4;
+    w = min64(w, most);
+    h = min64(h, most);
+    int64_t x = place_axis(s->object_position[0], box.x, (int32_t)(box.w - w));
+    int64_t y = place_axis(s->object_position[1], box.y, (int32_t)(box.h - h));
+    return (os64_gui_rect_t){(int32_t)max64(-most, min64(most, x)),
+                             (int32_t)max64(-most, min64(most, y)), (int32_t)w, (int32_t)h};
 }
 
 // A size written for one axis of a `room`-px origin box, in px up to what
@@ -1126,6 +1164,7 @@ static bool shadow_kept(const Painter *p, const Round *shape, const Round *times
 }
 
 void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
+uint64_t yonder_paint_cuts;
 
 static void shadow_cast(const Painter *p, const flow_box_t *b, const Round *outer, const Round *inner,
                         const flow_shadow_t *sh, bool square);
@@ -1797,6 +1836,29 @@ static void frame(const Painter *p, const flow_box_t *b)
         borders(p, b);
 }
 
+// A box's outline (CSS UI 4 § 3): a ring of the outline's width, style and
+// colour round where libflow says it is (flow_outline_rect), drawn as a
+// square border is — so its styles are a border's, dotted to outset — when
+// the walk hands it over, last in its stacking context, over everything
+// painted in it (paint_outline). Square whatever the box's radius:
+// following the corners is booked.
+static void outline(const Painter *p, const flow_box_t *b)
+{
+    os64_gui_rect_t ring;
+    if (p->penned || !flow_outline_rect(b, &ring))
+        return;
+    flow_style_t s = *b->style;
+    for (int k = 0; k < 4; k++) {
+        s.border_width[k] = b->style->outline_width;
+        s.border_style[k] = b->style->outline_style;
+        s.border_color[k] = b->style->outline_color;
+    }
+    flow_box_t drawn = *b;
+    drawn.style = &s;
+    drawn.rect = ring;
+    borders(p, &drawn);
+}
+
 // The picture or control inside an atom's borders and padding. A percentage
 // padding resolved against a width the public tree does not carry, so it
 // counts as none here; pictures and controls rarely have one.
@@ -1915,22 +1977,93 @@ static bool is_frame(const flow_box_t *b)
            (b->node->tag == OS64_HTML_TAG_IFRAME || b->node->tag == OS64_HTML_TAG_FRAME);
 }
 
+// ── The ellipsis (CSS Overflow 4 § 4.1) ─────────────────────────────────
+//
+// Where a line ends in its block's ellipsis, and what of each box on it is
+// kept, is libflow's (flow_line_cut, flow_line_cut_keeps), because the
+// rule has two doors: what is not kept is neither drawn here nor hit by
+// flow_hit. The painter draws a piece as far as it is kept, leaves out a
+// box cut away (flow_box_cut_away: an atom past the limit with everything
+// in it, a box stacked out of one), and draws the ellipsis after what is
+// kept, on the line's baseline, as the block's text is drawn (text_run:
+// its shadows, then its fill), when the walk hands it the line after the
+// line's pieces — and in a text clip's pen pass too, where the walk of
+// the clip hands it the line (flow_visit_text_clip). Its cuts are kept in
+// the paint's memo (Painter.cuts), each line worked once a paint.
+
+static flow_line_cut_t line_cut(const Painter *p, const flow_box_t *line)
+{
+    return p->cuts != NULL ? flow_cut_memo_get(p->cuts, line) : (flow_line_cut_t){false, 0, 0};
+}
+
+// Whether nothing of a box is drawn for a line's ellipsis: the rule
+// flow_hit reads too (flow_box_cut_away).
+static bool past_ellipsis(const Painter *p, const flow_box_t *b)
+{
+    return p->cuts != NULL && flow_box_cut_away(p->cuts, b);
+}
+
+// What a text's glyphs are filled with: the clip's pen inside a text clip,
+// else the style's fill (-webkit-text-fill-color, or the colour), as the
+// page's ink.
+static uint32_t text_fill(const Painter *p, const flow_style_t *s)
+{
+    return p->penned ? p->pen : ink_of(p, s->fill);
+}
+
+// A text box's run with its pen at (`x`, `y`), the baseline's start in the
+// coordinates being painted: its shadows under it, the last first — the
+// run again in each shadow's colour at its offset, sharp whatever its blur
+// (PILE3.md § Booked) — and then the run in its fill (text_fill). A text
+// clip's pen draws the run alone. The page's text and a line's ellipsis
+// both go through it.
+static void text_run(const Painter *p, const flow_box_t *b, int64_t x, int64_t y)
+{
+    os64_gui_rect_t view = on_page(p, p->view);
+    for (int32_t i = b->style->ntext_shadows - 1; !p->penned && i >= 0; i--) {
+        const flow_shadow_t *sh = &b->style->text_shadows[i];
+        p->v->text(p->v->ctx, b, (int32_t)max64(INT32_MIN, min64(INT32_MAX, x + sh->x)),
+                   (int32_t)max64(INT32_MIN, min64(INT32_MAX, y + sh->y)), view,
+                   sh->current ? ink_of(p, b->style->color) : sh->colour);
+    }
+    p->v->text(p->v->ctx, b, (int32_t)max64(INT32_MIN, min64(INT32_MAX, x)),
+               (int32_t)max64(INT32_MIN, min64(INT32_MAX, y)), view, text_fill(p, b->style));
+}
+
+// A line's ellipsis, where its cut puts it, drawn as the block's text is
+// (text_run): its shadows, and its fill — in the pen alone when a text
+// clip's pass draws it.
+static void ellipsis(const Painter *p, const flow_box_t *line)
+{
+    flow_line_cut_t c = line_cut(p, line);
+    if (!c.on)
+        return;
+    const flow_box_t *block = line->parent;
+    flow_box_t e = *line;
+    e.kind = FLOW_BOX_TEXT;
+    e.style = block->style;
+    e.run = block->ellipsis;
+    e.text = NULL;
+    e.length = 0;
+    text_run(p, &e, c.at + p->off.x, (int64_t)line->baseline + p->off.y);
+}
+
 // A frame's stand-in reads as a link on a pale panel, the default link
 // colour on light grey, both moved for dark pages like the page's own.
 #define FRAME_INK 0x0000eeu
 #define FRAME_PAPER 0xf0f0f0u
 
-static void paint_box(void *ctx, const flow_box_t *b)
+// The painter for one box, in its own coordinates; false when nothing of
+// it is to be drawn. The box's own coordinates: a fixed one's view is the
+// page's less the scroll, a sticky one's less its push, and the painter's
+// shift (a group drawn upright) applied. A box an ancestor's `overflow`
+// clips is drawn only inside the clip, asked in the coordinates being
+// painted — what clips a sticky box from outside stays put as the box
+// moves — and every verb is handed the view, so the view is narrowed.
+static bool box_painter(const Painter *outer, const flow_box_t *b, Painter *out)
 {
-    const Painter *outer = ctx;
     if (b->style->visibility != FLOW_VISIBLE || outer->groups->hidden != 0)
-        return;
-    // The box's own coordinates: a fixed one's view is the page's less the
-    // scroll, a sticky one's less its push, and the painter's shift (a
-    // group drawn upright) applied. A box an ancestor's `overflow` clips is
-    // drawn only inside the clip, asked in the coordinates being painted —
-    // what clips a sticky box from outside stays put as the box moves — and
-    // every verb is handed the view, so the view is narrowed.
+        return false;
     Painter clipped = *outer;
     clipped.off = flow_box_doc_offset(b, outer->scroll);
     clipped.off.x = sum32(clipped.off.x, outer->shift.x);
@@ -1944,16 +2077,54 @@ static void paint_box(void *ctx, const flow_box_t *b)
         int64_t x1 = min64((int64_t)v.x + v.w, (int64_t)c.x + c.w);
         int64_t y1 = min64((int64_t)v.y + v.h, (int64_t)c.y + c.h);
         if (x1 <= x0 || y1 <= y0)
-            return;
+            return false;
         v = (os64_gui_rect_t){(int32_t)x0, (int32_t)y0, (int32_t)(x1 - x0), (int32_t)(y1 - y0)};
     }
     clipped.view = (os64_gui_rect_t){(int32_t)((int64_t)v.x - clipped.off.x),
                                      (int32_t)((int64_t)v.y - clipped.off.y), v.w, v.h};
+    *out = clipped;
+    return true;
+}
+
+// A box's outline, handed over last in its stacking context
+// (flow_visitor_t.outline); none for a box left out of a line's ellipsis.
+static void paint_outline(void *ctx, const flow_box_t *b)
+{
+    Painter p;
+    if (box_painter(ctx, b, &p) && !past_ellipsis(&p, b))
+        outline(&p, b);
+}
+
+static void paint_box(void *ctx, const flow_box_t *b)
+{
+    Painter clipped;
+    if (!box_painter(ctx, b, &clipped))
+        return;
+    // On a line that ends in an ellipsis, a box is drawn as far as it is
+    // kept (flow_line_cut_keeps), and not at all when it is cut away.
+    if (past_ellipsis(&clipped, b))
+        return;
+    if (b->parent != NULL && b->parent->kind == FLOW_BOX_LINE) {
+        flow_line_cut_t lc = line_cut(&clipped, b->parent);
+        int64_t keep;
+        if (lc.on && flow_line_cut_keeps(&lc, b, &keep) &&
+            keep < (int64_t)b->rect.x + b->rect.w) {
+            int64_t room = keep - clipped.view.x;
+            if (room <= 0)
+                return;
+            clipped.view.w = (int32_t)min64(clipped.view.w, room);
+        }
+    }
     const Painter *p = &clipped;
-    if (p->penned && b->kind != FLOW_BOX_TEXT)
+    // A text clip's pen draws text alone: the texts, and the ellipsis a
+    // line ends in.
+    if (p->penned && b->kind != FLOW_BOX_TEXT && b->kind != FLOW_BOX_LINE)
         return;
     switch (b->kind) {
     case FLOW_BOX_LINE:
+        // The walk hands a line over only after its pieces, and only when
+        // its block has an ellipsis; so does a text clip's.
+        ellipsis(p, b);
         return;
     case FLOW_BOX_MARKER:
         if (flow_marker_is_shape(b->style)) {
@@ -1963,20 +2134,8 @@ static void paint_box(void *ctx, const flow_box_t *b)
         // A numbered marker is its text.
         __attribute__((fallthrough));
     case FLOW_BOX_TEXT:
-        // Its shadows under it, the last first: the run again in each
-        // shadow's colour at its offset — sharp, whatever its blur
-        // (PILE3.md § Booked) — and then the run in its FILL colour. A text
-        // clip's pen draws the run alone.
-        for (int32_t i = b->style->ntext_shadows - 1; b->run != NULL && !p->penned && i >= 0; i--) {
-            const flow_shadow_t *sh = &b->style->text_shadows[i];
-            p->v->text(p->v->ctx, b, (int32_t)((int64_t)b->rect.x + p->off.x + sh->x),
-                       (int32_t)((int64_t)b->baseline + p->off.y + sh->y), on_page(p, p->view),
-                       sh->current ? ink_of(p, b->style->color) : sh->colour);
-        }
         if (b->run != NULL)
-            p->v->text(p->v->ctx, b, (int32_t)((int64_t)b->rect.x + p->off.x),
-                       (int32_t)((int64_t)b->baseline + p->off.y), on_page(p, p->view),
-                       p->penned ? p->pen : ink_of(p, b->style->fill));
+            text_run(p, b, (int64_t)b->rect.x + p->off.x, (int64_t)b->baseline + p->off.y);
         decorations(p, b);
         return;
     case FLOW_BOX_ATOMIC:
@@ -2443,8 +2602,10 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_
                   yonder_scratch_t *scratch, const yonder_verbs_t *verbs)
 {
     PaintGroups groups = {.depth = 0};
+    flow_cut_memo_t cuts;
+    flow_cut_memo_open(&cuts, tree);
     Painter p = {.v = verbs, .view = viewport, .scroll = scroll, .groups = &groups, .dark = dark,
-                 .cache = cache, .scratch = scratch};
+                 .cache = cache, .scratch = scratch, .cuts = &cuts};
     if (cache != NULL)
         paint_cache_begin(cache);
     if (dark != NULL)
@@ -2482,7 +2643,9 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_
         }
     }
     if (root != NULL) {
-        flow_visitor_t v = {paint_box, group_open, group_close, &p};
+        flow_visitor_t v = {paint_box, group_open, group_close, &p, paint_outline};
         flow_visit_groups(tree, viewport, scroll, &v);
     }
+    yonder_paint_cuts += cuts.worked;
+    flow_cut_memo_close(&cuts);
 }

@@ -70,10 +70,11 @@ typedef struct {
 enum { FLOW_TOP = 0, FLOW_RIGHT = 1, FLOW_BOTTOM = 2, FLOW_LEFT = 3 };
 
 // flow_style_t.current_colours: a side's border colour (1 << side), the
-// background colour, and the text's fill colour.
+// background colour, the text's fill colour, and the outline's.
 #define FLOW_CURRENT_BORDER(side) ((uint8_t)(1u << (side)))
 #define FLOW_CURRENT_BACKGROUND ((uint8_t)0x10)
 #define FLOW_CURRENT_FILL ((uint8_t)0x20)
+#define FLOW_CURRENT_OUTLINE ((uint8_t)0x40)
 
 // ── Colours ─────────────────────────────────────────────────────────────
 //
@@ -212,6 +213,15 @@ typedef enum {
     FLOW_TRANSFORM_CAPITALIZE,
 } flow_text_transform_t;
 
+// `word-break` (CSS Text 3 § 5.1) and `overflow-wrap` (§ 5.4).
+typedef enum {
+    FLOW_WORD_BREAK_NORMAL = 0, FLOW_WORD_BREAK_KEEP_ALL, FLOW_WORD_BREAK_BREAK_ALL,
+    FLOW_WORD_BREAK_BREAK_WORD,
+} flow_word_break_t;
+typedef enum {
+    FLOW_OVERFLOW_WRAP_NORMAL = 0, FLOW_OVERFLOW_WRAP_BREAK_WORD, FLOW_OVERFLOW_WRAP_ANYWHERE,
+} flow_overflow_wrap_t;
+
 typedef enum {
     FLOW_LIST_DISC = 0,
     FLOW_LIST_CIRCLE,
@@ -234,6 +244,36 @@ enum {
 };
 
 typedef enum { FLOW_VISIBLE = 0, FLOW_HIDDEN, FLOW_COLLAPSE } flow_visibility_t;
+
+// `cursor`'s shapes (CSS UI 4 § 5.1.1), in its order.
+typedef enum {
+    FLOW_CURSOR_AUTO = 0, FLOW_CURSOR_DEFAULT, FLOW_CURSOR_NONE, FLOW_CURSOR_CONTEXT_MENU,
+    FLOW_CURSOR_HELP, FLOW_CURSOR_POINTER, FLOW_CURSOR_PROGRESS, FLOW_CURSOR_WAIT,
+    FLOW_CURSOR_CELL, FLOW_CURSOR_CROSSHAIR, FLOW_CURSOR_TEXT, FLOW_CURSOR_VERTICAL_TEXT,
+    FLOW_CURSOR_ALIAS, FLOW_CURSOR_COPY, FLOW_CURSOR_MOVE, FLOW_CURSOR_NO_DROP,
+    FLOW_CURSOR_NOT_ALLOWED, FLOW_CURSOR_GRAB, FLOW_CURSOR_GRABBING, FLOW_CURSOR_E_RESIZE,
+    FLOW_CURSOR_N_RESIZE, FLOW_CURSOR_NE_RESIZE, FLOW_CURSOR_NW_RESIZE, FLOW_CURSOR_S_RESIZE,
+    FLOW_CURSOR_SE_RESIZE, FLOW_CURSOR_SW_RESIZE, FLOW_CURSOR_W_RESIZE, FLOW_CURSOR_EW_RESIZE,
+    FLOW_CURSOR_NS_RESIZE, FLOW_CURSOR_NESW_RESIZE, FLOW_CURSOR_NWSE_RESIZE,
+    FLOW_CURSOR_COL_RESIZE, FLOW_CURSOR_ROW_RESIZE, FLOW_CURSOR_ALL_SCROLL, FLOW_CURSOR_ZOOM_IN,
+    FLOW_CURSOR_ZOOM_OUT,
+} flow_cursor_t;
+
+// `text-overflow`, its one-value form (CSS Overflow 4 § 4.1).
+typedef enum { FLOW_TEXT_OVERFLOW_CLIP = 0, FLOW_TEXT_OVERFLOW_ELLIPSIS } flow_text_overflow_t;
+
+// `object-fit` (CSS Images 3 § 4.5).
+typedef enum {
+    FLOW_OBJECT_FILL = 0, FLOW_OBJECT_CONTAIN, FLOW_OBJECT_COVER, FLOW_OBJECT_NONE,
+    FLOW_OBJECT_SCALE_DOWN,
+} flow_object_fit_t;
+
+// `user-select` (CSS UI 4 § 6.1).
+typedef enum {
+    FLOW_USER_SELECT_AUTO = 0, FLOW_USER_SELECT_TEXT, FLOW_USER_SELECT_NONE,
+    FLOW_USER_SELECT_CONTAIN, FLOW_USER_SELECT_ALL,
+} flow_user_select_t;
+
 typedef enum { FLOW_SEPARATE = 0, FLOW_COLLAPSE_BORDERS } flow_border_collapse_t;
 typedef enum { FLOW_CAPTION_TOP = 0, FLOW_CAPTION_BOTTOM } flow_caption_side_t;
 typedef enum { FLOW_FLOAT_NONE = 0, FLOW_FLOAT_LEFT, FLOW_FLOAT_RIGHT } flow_float_t;
@@ -618,6 +658,13 @@ typedef struct {
     // styles', and live as long as they do.
     const flow_shadow_t *box_shadows, *text_shadows;
     int32_t nbox_shadows, ntext_shadows;
+    // How a picture fills its content box (CSS Images 3 § 4.5, § 4.6):
+    // stretched to it, scaled to fit inside or to cover it, at its own
+    // size, or the smaller of those two, placed by `object_position` — x
+    // then y, PX or PERCENT of the room the picture leaves — and cut to
+    // the box. Neither inherited.
+    flow_object_fit_t object_fit;
+    flow_length_t object_position[2];
     // A picture scaled is drawn with its pixels kept square and hard
     // (`image-rendering: pixelated`, `crisp-edges` and their older
     // spellings), not smoothed. Inherited.
@@ -630,9 +677,22 @@ typedef struct {
     // Whether width, height and their limits measure the content box or
     // the border box (CSS Sizing 3 § 4.1).
     flow_box_sizing_t box_sizing;
+    // `aspect-ratio` (CSS Sizing 4 § 4.1), not inherited: the ratio a box
+    // keeps between its width and its height when one of them is left to
+    // it, width over height, or 0 for none (`auto`, or a ratio of 0 or of
+    // nothing). `aspect_natural` says `auto` was written beside it: a
+    // replaced box with a ratio of its own keeps that instead, and the
+    // ratio is the content box's; without it the ratio is the box
+    // box-sizing names.
+    double aspect_ratio;
+    bool aspect_natural;
     // Computed as CSS Overflow 3 § 3 says: a visible or clip axis beside
     // one that scrolls or hides becomes auto or hidden.
     flow_overflow_t overflow_x, overflow_y;
+    // What a line its content overflows ends in (CSS Overflow 4 § 4.1),
+    // on a block whose overflow is not visible: cut (clip), or an
+    // ellipsis (flow_box_t.ellipsis). Not inherited.
+    flow_text_overflow_t text_overflow;
 
     flow_text_align_t text_align;
     flow_vertical_align_t vertical_align;
@@ -640,6 +700,18 @@ typedef struct {
     flow_line_height_t line_height;
     flow_length_t text_indent;      // PX or PERCENT: the first line's; AUTO reads as 0
     flow_text_transform_t text_transform;
+    // Where a line may break inside a word, both inherited (CSS Text 3 §
+    // 5.1, § 5.4): `break-all` between any two characters; `anywhere`, and
+    // `word-break: break-word`, only where the word would otherwise
+    // overflow its line, those breaks counting toward its min-content
+    // width; `overflow-wrap: break-word` the same, not counting them.
+    // `keep-all` is `normal`: libflow breaks a line only at white space.
+    flow_word_break_t word_break;
+    flow_overflow_wrap_t overflow_wrap;
+    // `letter-spacing` (CSS Text 3 § 7.2), inherited: added after every
+    // character of a run of text but its last, so none trails a line; 0
+    // is `normal`. Negative narrows, never past a character's own start.
+    flow_unit_t letter_spacing;
     // This element's own decorations. CSS draws an ancestor's across its
     // descendants too, each in the colour of the element that drew it,
     // which is a fact libflow derives and not a property of the descendant.
@@ -698,10 +770,29 @@ typedef struct {
     // in effect animates (Web Animations 1 § 5.6) — which acts as if
     // `will-change` named it, and makes the box a group for as long.
     uint8_t animating;
-    // `pointer-events: none` (CSS UI 4 § 5.1), inherited: flow_hit passes
+    // `pointer-events: none` (CSS UI 4 § 6.2), inherited: flow_hit passes
     // through the box to whatever is under it, though a descendant that
     // sets `auto` is still hit. Zero is `auto`, the initial value.
     bool pointer_events_none;
+    // `cursor` (CSS UI 4 § 5.1.1), inherited: the shape a pointer over the
+    // box takes, the keyword after whatever pictures the page named first.
+    // Kept for the face; nothing draws a shape (YONDER_HONEY_DO.md § 7).
+    flow_cursor_t cursor;
+    // `outline` (CSS UI 4 § 3): drawn outside the border edge, past it by
+    // `outline_offset`, `outline_width` wide, last in its stacking context,
+    // over everything painted in it (flow_visitor_t.outline), and taking no
+    // room (flow_outline_rect). The width is the computed one (CSS UI 4 §
+    // 3.2), kept whatever the style, so `inherit` passes it on; a style of
+    // none draws nothing, the width ignored (§ 3.3). `auto` is drawn solid,
+    // and `outline_auto` says it was asked for. The colour's currentColor, and its `auto`,
+    // are the element's colour (current_colours). Not inherited.
+    flow_unit_t outline_width, outline_offset;
+    flow_border_style_t outline_style;
+    bool outline_auto;
+    uint32_t outline_color;
+    // `user-select` (CSS UI 4 § 6.1), not inherited: kept for the day text
+    // selection reads it; nothing selects differently by it.
+    flow_user_select_t user_select;
     // A box that leaves the flow — absolute or fixed — has its `display`
     // BLOCKIFIED (CSS 2.1 § 9.7), and this says the display the page gave
     // was inline-level: its static position is where it would have stood
@@ -865,9 +956,9 @@ struct flow_box {
     // miss what is drawn.
     os64_gui_rect_t overflow;
     // How far past `overflow` what it or anything in it paints may reach,
-    // in pixels, on each side in CSS's side order: its shadows, which are
-    // in no box's overflow, and the glyph ink, decorations and marker
-    // shapes the painter draws past it. A group that composites the box
+    // in pixels, on each side in CSS's side order: its shadows and its
+    // outline, which are in no box's overflow, and the glyph ink,
+    // decorations and marker shapes the painter draws past it. A group that composites the box
     // must hold it, so this is AT LEAST that far: never less, and more
     // where a shadow paints nothing it is counted for (the bounds
     // contract, PILE3.md § Transforms, the painter, Booked).
@@ -879,6 +970,15 @@ struct flow_box {
     const os64_text_run_t *run;
     const char *text;
     uint32_t length;
+    // A box holding lines whose `text-overflow` is ellipsis and whose
+    // `overflow` is not visible: the ellipsis its lines end in where their
+    // content passes their end, laid out in its own fonts — U+2026, or
+    // three periods where those fonts have no glyph for it — and owned by
+    // the tree. Where it goes, and what of each line it hides, is
+    // flow_line_cut's and flow_line_cut_keeps', which the painter reads
+    // when flow_visit (or flow_visit_text_clip) hands it each of the box's
+    // lines, and flow_hit too. NULL otherwise.
+    const os64_text_run_t *ellipsis;
     // TEXT: where those bytes are in the node's processed text — what a
     // selection maps a pixel back through — when the node is a TEXT node.
     // Under an ELEMENT they are text the page never wrote there (a `q`'s
@@ -921,6 +1021,11 @@ struct flow_box {
     // subtrees that hold none, so a page without floats pays nothing for
     // them.
     bool holds_float;
+    // It, or a box below it, draws an outline (flow_outline_rect), or did
+    // at a tick of the tree's animations — it only grows, as `ink` does:
+    // the outline step of flow_visit_groups walks only the subtrees that
+    // hold one, and asks each box there whether it draws one now.
+    bool holds_outline;
     // Painted as a layer of its own, in paint order, and never through its
     // tree ancestors: their walks skip it. A positioned box is; so is a
     // block-level box in the flow below full opacity, a stacking context
@@ -1163,13 +1268,73 @@ bool flow_marker_is_shape(const flow_style_t *s);
 // above it. A small font puts it past the line box, which is why a group's
 // bounds ask too.
 os64_gui_rect_t flow_decoration_rect(const flow_box_t *box, uint32_t line);
+// Where the painter draws a box's outline (CSS UI 4 § 3): its border box
+// grown on every side by the outline's offset and then its width, the
+// outline the ring between that and the border box grown by the offset
+// alone — or, where a negative offset would make it smaller, twice the
+// width each way, about the box's middle (§ 3.5). False for a box that draws none: no width, a style of none, or a
+// box that paints no frame of its own (a text, a line, an inline box's
+// piece — whose outline is booked).
+bool flow_outline_rect(const flow_box_t *box, os64_gui_rect_t *out);
+
+// Where a LINE of a block with an ellipsis (flow_box_t.ellipsis) ends in
+// it (CSS Overflow 4 § 4.1), in the line's coordinates: off when the
+// line's content does not pass the block's end edge — where the block's
+// scroll shows it, so content scrolled into view is not ellipsed —
+// pre-wrap spaces that hang there not counting. On, `limit` is the end
+// edge less the ellipsis, and the ellipsis starts at `at`, where what is
+// kept ends (flow_line_cut_keeps says what is). A line that would keep
+// nothing keeps its first character or atom, clipped rather than
+// ellipsed: `limit` is then where that ends, and `at` follows it. Linear
+// in the line's boxes, so a caller asking for many boxes keeps the answer
+// (flow_cut_memo_t).
+typedef struct {
+    bool on;
+    int64_t limit, at;
+} flow_line_cut_t;
+flow_line_cut_t flow_line_cut(const flow_tree_t *tree, const flow_box_t *line);
+// THE ONE PLACE THE KEEP RULE IS WRITTEN, read by both doors — yonder's
+// painter draws only what is kept, and flow_hit hits only that: whether
+// any of `piece`, a box on a line cut as `cut` says, is kept, and up to
+// where (`*to`, in the line's coordinates). An atom or a marker is kept
+// whole when it ends by `limit` and not at all otherwise; a text keeps its
+// characters that end by `limit`; an inline box's piece is kept up to
+// `at`; anything ending by `limit` is kept whole. Nothing of a piece is
+// kept when `*to` is not past its left edge.
+bool flow_line_cut_keeps(const flow_line_cut_t *cut, const flow_box_t *piece, int64_t *to);
+// The cuts of lines asked for in one paint or one hit, keyed by the line:
+// a table that grows, so each line's cut is worked once however its boxes
+// are asked — in tree order or in any order of layers. `worked` counts the
+// cuts worked. Out of memory to grow, a cut not kept is worked each time it
+// is asked. One for each caller and each paint or hit; opened over the
+// tree whose scroll positions the cuts read, and closed after.
+typedef struct {
+    const flow_box_t *line;
+    flow_line_cut_t cut;
+} flow_cut_slot_t;
+typedef struct {
+    const flow_tree_t *tree;
+    flow_cut_slot_t *slot, own[16];
+    uint32_t cap, n;
+    uint64_t worked;
+} flow_cut_memo_t;
+void flow_cut_memo_open(flow_cut_memo_t *memo, const flow_tree_t *tree);
+void flow_cut_memo_close(flow_cut_memo_t *memo);
+flow_line_cut_t flow_cut_memo_get(flow_cut_memo_t *memo, const flow_box_t *line);
+// Whether `box`, or a box it is inside, is a piece of a cut line of which
+// nothing is kept (flow_line_cut_keeps): then nothing of `box` is drawn or
+// hit — an atom past the limit with everything in it, and a box positioned
+// or stacked out of such a piece. Its depth in lines, each cut once per
+// memo.
+bool flow_box_cut_away(flow_cut_memo_t *memo, const flow_box_t *box);
 // The square a shape marker (flow_marker_is_shape) is drawn in: a third of
 // its font size across and at least 3 pixels, centred in the box less a
 // quarter of the size at its end, on the height a line-through takes.
 os64_gui_rect_t flow_marker_shape_rect(const flow_box_t *box);
 // The text a background of `box` clipped to its text (`background-clip:
 // text`, Backgrounds 4 § 2.8) is cut to: hands `visit` each TEXT box it
-// holds, in tree order. A box's own text and its in-flow and floated
+// holds, and each LINE of a block with an ellipsis (flow_box_t.ellipsis),
+// whose ellipsis is text it holds too, in tree order. A box's own text and its in-flow and floated
 // descendants' — a relatively positioned one's too — but not a marker's,
 // nor an absolutely positioned or fixed descendant's, nor a transformed
 // one's, nor anything in those (Chrome's answers, PILE3.md § The text
@@ -1261,7 +1426,9 @@ int32_t flow_box_scroller(const flow_box_t *box);
 bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point_t scroll);
 
 // Every box that meets `viewport` but the LINE boxes, which paint nothing of
-// their own (flow_hit can still answer one), and the unpainted ones, in
+// their own (flow_hit can still answer one) — except a line of a box with
+// an ellipsis (flow_box_t.ellipsis), handed over after its pieces, which
+// may end in it — and the unpainted ones, in
 // painting order (CSS 2.1 Appendix E): each stacking context's own
 // background, then its members of negative z-index, then its own content —
 // the block-level boxes, their backgrounds and borders, then the inline
@@ -1297,11 +1464,18 @@ void flow_visit(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t 
 // draw it upright instead, so a face that refuses to lay it loses nothing.
 // A face that blends nothing
 // may leave `open` and `close` NULL, which is flow_visit.
+// `outline`, when not NULL, is handed each box that draws an outline
+// (flow_outline_rect) and meets the viewport, LAST in its stacking context
+// — after every box painted in it, before the context's group closes
+// (CSS 2.1 Appendix E, step 10) — once there and never through `visit`:
+// an outline is painted over everything of its context, its own content
+// included.
 typedef struct {
     void (*visit)(void *ctx, const flow_box_t *box);
     void (*open)(void *ctx, const flow_box_t *box, os64_gui_rect_t bounds);
     void (*close)(void *ctx, const flow_box_t *box);
     void *ctx;
+    void (*outline)(void *ctx, const flow_box_t *box);
 } flow_visitor_t;
 
 void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,
@@ -1312,10 +1486,21 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
 // the point, and that is drawn (`visibility: visible`) and not
 // `pointer-events: none`; NULL for none. A scroll container's content is
 // where its scroll moves it, and is not there outside its padding box.
-// (x, y) is in document coordinates, the page scrolled to `scroll`. The face
-// asks libpage what its node means, and a TEXT's run where in the text the
-// pointer is (os64_text_hit).
+// On a line cut by its block's ellipsis, what flow_line_cut_keeps does not
+// keep is not there — the hidden tail of a kept piece either, and no box
+// stacked out of a piece cut away (flow_box_cut_away); past the
+// ellipsis's start the point is the block's, the ellipsis standing in no
+// inline box. (x, y) is in document coordinates, the page scrolled to
+// `scroll`. The face asks libpage what its node means, and a TEXT's run
+// where in the text the pointer is (os64_text_hit).
+// THE BOUND: a hit works the cut of a line at most once (a memo keyed by
+// the line), and only of a line that holds the point or that a layer box
+// holding the point is inside; each cut is linear in its line's boxes.
+// flow_hit_counted answers the same and says, in `*cuts`, how many cuts
+// it worked.
 const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll);
+const flow_box_t *flow_hit_counted(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll,
+                                   uint64_t *cuts);
 
 // The box under (x, y), in document coordinates, among everything in the
 // flow — relative boxes included, out-of-flow ones not — whatever is drawn
@@ -1345,13 +1530,17 @@ const flow_box_t *flow_box_for(const flow_tree_t *tree, const os64_html_node_t *
 int32_t flow_nimages(const flow_tree_t *tree);
 const flow_box_t *flow_image(const flow_tree_t *tree, int32_t i);
 
-// Whether a replaced element drawn in `style` is sized by the page alone —
-// a width, and a height in pixels — so that what the oracle answers
-// (flow_env_t.replaced_size) cannot change its box. The rule the layout
-// sizes by, for a face deciding whether an arrival needs a new layout:
-// ask it of the element's box (flow_box_for), not of its attributes, which
-// say what the page wrote and not what parsed. False for NULL.
-bool flow_replaced_fixed(const flow_style_t *style);
+// Whether a replaced box is sized by the page alone, so that what the
+// oracle answers (flow_env_t.replaced_size) cannot change it: its style
+// gives a width and a height in pixels, or one of them and an
+// aspect-ratio of its own (not `auto <ratio>`, which a picture's ratio
+// replaces); and, a flex item, its main size is given, its basis is not
+// `content` and its main minimum is a length — else the flex algorithm
+// reads the picture's own size. The rule the layout sizes by, for a face
+// deciding whether an arrival needs a new layout: ask it of the element's
+// box (flow_box_for), not of its attributes, which say what the page
+// wrote and not what parsed. False for NULL.
+bool flow_replaced_fixed(const flow_box_t *box);
 int32_t flow_ncontrols(const flow_tree_t *tree);
 const flow_box_t *flow_control(const flow_tree_t *tree, int32_t i);
 

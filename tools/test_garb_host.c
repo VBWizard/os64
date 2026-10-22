@@ -1676,6 +1676,42 @@ static int modern_marks(void)
                               GARB_SETS_MAX) == 1, "quirks still reads beside modern_off");
     MODERN_CHECK(modern_reads("animation-name: var(--a)", off, p, GARB_SETS_MAX) == 0,
                  "a marked name holding var() is unknown, not held, with modern_off");
+    // The list of names a style object makes members of: each once, every
+    // one read with the marked names known, the marked ones unknown without.
+    int32_t names = 0;
+    bool once = true, all_known = true;
+    for (const char *nm; (nm = garb_prop_name_at(names)) != NULL; names++) {
+        for (int32_t j = 0; j < names; j++)
+            once &= strcmp(garb_prop_name_at(j), nm) != 0;
+        all_known &= garb_prop_known(nm, strlen(nm), false);
+    }
+    MODERN_CHECK(names > GARB_NPROPS && once && all_known && garb_prop_name_at(-1) == NULL &&
+                 strcmp(garb_prop_name_at(0), garb_prop_name(0)) == 0,
+                 "the names are the longhands' and the rest, each once, each read");
+    // Every name the switch takes away, read by name with it off and on: a
+    // CSS-wide keyword, which every property takes, is no declaration at
+    // all with it off and sets at least one longhand with it on.
+    int32_t marked = 0;
+    for (int32_t k = 0; garb_prop_name_at(k) != NULL; k++) {
+        const char *nm = garb_prop_name_at(k);
+        if (garb_prop_known(nm, strlen(nm), true))
+            continue;
+        char decl[96];
+        snprintf(decl, sizeof(decl), "%s: inherit", nm);
+        marked++;
+        if (modern_reads(decl, off, p, GARB_SETS_MAX) != 0 ||
+            modern_reads(decl, on, p, GARB_SETS_MAX) <= 0) {
+            printf("libgarb modern: %s is read with modern_off, or not without it - FAILED\n", nm);
+            failed++;
+        }
+    }
+    MODERN_CHECK(marked >= 3, "the names the switch takes away are read by name");
+    MODERN_CHECK(!garb_prop_known("animation-name", 14, true) &&
+                 !garb_prop_known("grid-gap", 8, true) &&
+                 !garb_prop_known("-webkit-transform", 17, true) &&
+                 garb_prop_known("Animation", 9, true) && garb_prop_known("margin", 6, true) &&
+                 !garb_prop_known("marginx", 7, false),
+                 "a marked name is not known with modern_off, a shorthand with a longhand left is");
 
     garb_prop_t w[64];
     bool name, gap;

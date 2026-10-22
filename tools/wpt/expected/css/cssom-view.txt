@@ -30,6 +30,8 @@ HTMLBody-ScrollArea_quirksmode.html	Ensure that style.overflowY can be set prope
 HTMLBody-ScrollArea_quirksmode.html	document.scrollingElement should be body element in quirks.
 HTMLBody-ScrollArea_quirksmode.html	scrollingElement in quirks should be body if any of document and body has a visible overflow.
 HTMLBody-ScrollArea_quirksmode.html	scrollingElement in quirks should be null when body is potentially scrollable.
+Screen-pixelDepth-Screen-colorDepth001.html	testColorDepth
+Screen-pixelDepth-Screen-colorDepth001.html	testPixelDepth
 client-props-inline-list-item.html	client* returns the same for non-replaced inlines regardless of list-item-ness
 client-props-root.html	client* properties on the root element
 client-props-zoom.html	Client properties for elements with css zoom
@@ -38,6 +40,12 @@ cssom-geometryutils-element-types.html	getBoxQuads() returns quads for exposed C
 cssom-getBoundingClientRect-001.html	getBoundingClientRect() should return a DOMRect where height=bottom-top
 cssom-getBoundingClientRect-001.html	getBoundingClientRect() should return a DOMRect where width=right-left
 cssom-getBoundingClientRect-002.html	getBoundingClientRect on a newly-created Element not yet inserted into the DOM should return an all-zeroes DOMRect
+cssom-view-window-screen-interface.html	window.screen.availHeight >= 0 && window.screen.availHeight <= window.screen.height
+cssom-view-window-screen-interface.html	window.screen.availWidth >= 0 && window.screen.availWidth <= window.screen.width
+cssom-view-window-screen-interface.html	window.screen.colorDepth == 0 || window.screen.colorDepth == 16 || window.screen.colorDepth == 24 || window.screen.colorDepth == 30 || window.screen.colorDepth == 32
+cssom-view-window-screen-interface.html	window.screen.height >= 0 && window.screen.height < 6000000
+cssom-view-window-screen-interface.html	window.screen.pixelDepth must return the value returned by window.screen.colorDepth
+cssom-view-window-screen-interface.html	window.screen.width >= 0 && window.screen.width < 6000000
 detached-element-geometry.window.html	clientHeight should return 0 for an element with no associated CSS layout box
 detached-element-geometry.window.html	clientLeft should return 0 for an element with no associated CSS layout box
 detached-element-geometry.window.html	clientTop should return 0 for an element with no associated CSS layout box
@@ -106,6 +114,9 @@ offsetTopLeftInScrollableParent.html	Margins on child and parent, border on chil
 offsetTopLeftInScrollableParent.html	Margins on child and parent, border on child and parent
 offsetTopLeftInScrollableParent.html	Margins on child and parent, border on child and parent, padding on child
 offsetTopLeftInScrollableParent.html	Margins on child and parent, border on child and parent, padding on child and parent
+parsing/scroll-behavior-invalid.html	e.style['scroll-behavior'] = "auto smooth" should not set the property value
+parsing/scroll-behavior-invalid.html	e.style['scroll-behavior'] = "auto, smooth" should not set the property value
+parsing/scroll-behavior-invalid.html	e.style['scroll-behavior'] = "normal" should not set the property value
 scroll-overflow-clip-quirks-001.html	CSSOM scrollingElement reflects the propagated scroll to viewport correctly
 scroll-overflow-clip-quirks-002.html	CSSOM scrollingElement reflects the propagated scroll to viewport correctly
 scroll-zoom.html	scroll properties for elements with css zoom
@@ -247,6 +258,14 @@ table-offset-props.html	Bottom caption
 table-offset-props.html	Overall test to make sure there are no exceptions
 table-offset-props.html	Table with padding
 table-scroll-props.html	Overall test to make sure there are no exceptions
+window-screen-height-immutable.html	immutability test
+window-screen-height.html	positive check
+window-screen-height.html	upper bound check
+window-screen-height.html	zero check
+window-screen-width-immutable.html	immutability test
+window-screen-width.html	positive check
+window-screen-width.html	upper bound check
+window-screen-width.html	zero check
 window-scroll-arguments.html	scroll with 0 arguments
 window-scroll-arguments.html	scroll with a valid ScrollToOptions argument
 window-scroll-arguments.html	scrollBy with 0 arguments

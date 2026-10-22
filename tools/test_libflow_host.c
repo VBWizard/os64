@@ -218,6 +218,10 @@ static void text_teardown(void)
 
 static const char *kPage = "http://host/dir/page.html";
 
+// The cascade a case builds knows none of the Modern Web arc's names, as
+// yonder's does with `modern = off` (MODERN_WEB.md, rule 4).
+static bool s_modern_off;
+
 // A page not scrolled: every box's coordinates are the document's then.
 static const flow_point_t kNoScroll = {0, 0};
 
@@ -275,7 +279,9 @@ static void sheeted_open(Sheeted *p, const char *html, double width, double heig
         in[p->n] = (garb_sheet_in_t){.sheet = &p->sheets[p->n], .media = sh->media};
         p->n++;
     }
-    p->cascade = garb_cascade(in, p->n, p->doc, (garb_env_t){.width = width, .height = height});
+    p->cascade = garb_cascade(in, p->n, p->doc,
+                              (garb_env_t){.width = width, .height = height,
+                                           .modern_off = s_modern_off});
     p->env = kEnv;
     p->env.cascade = p->cascade;
     p->env.viewport_height = (int32_t)height;
@@ -360,6 +366,7 @@ static void style_case(const char *name, const char *html, const char *expected)
 #include "test_libflow_layout.inc"
 #include "test_libflow_tables.inc"
 #include "test_libflow_cascade.inc"
+#include "test_libflow_batch_a.inc"
 
 // ── The corpus, and the allocation sweep ────────────────────────────────
 
@@ -1455,6 +1462,15 @@ int main(int argc, char **argv)
     bool floats = argc == 2 && strcmp(argv[1], "--floats") == 0;
     bool cliptext = argc == 2 && strcmp(argv[1], "--cliptext") == 0;
     bool motion = argc == 2 && strcmp(argv[1], "--motion") == 0;
+    // `--batch-a`: the Modern Web arc's slice 4 alone, in seconds.
+    if (argc == 2 && strcmp(argv[1], "--batch-a") == 0) {
+        text_setup();
+        batch_a_cases();
+        text_teardown();
+        printf("libflow: %d checks, %d failed%s\n", checks, failures,
+               live != 0 ? " (AND LEAKED)" : "");
+        return failures != 0 || live != 0 ? 1 : 0;
+    }
     if (floats || cliptext || motion || (argc == 2 && strcmp(argv[1], "--transforms") == 0)) {
         text_setup();
         style_cases();
@@ -1475,6 +1491,7 @@ int main(int argc, char **argv)
     attrs_cases();
     style_cases();
     cascade_cases();
+    batch_a_cases();
     boxes_cases();
     layout_cases();
     table_cases();
@@ -1525,6 +1542,14 @@ int main(int argc, char **argv)
         ".i{position:relative;top:4px} .a{position:absolute;bottom:0;right:0}"
         ".s{grid-column:span 2}</style><div class=g><p>one<p class=i>two<span class=a>x</span>"
         "<p class=s>three<p>four</div>", 300);
+    // Slice 4's properties: cut words, spacing, ratios, an ellipsis made.
+    layout_relation_sweep("a page of CSS batch A",
+        "<!doctype html><style>.w{width:40px;word-break:break-all;letter-spacing:1px}"
+        ".o{width:40px;overflow-wrap:anywhere;outline:1px solid;outline-offset:2px}"
+        ".r{width:80px;aspect-ratio:2} .t{width:40px;overflow:hidden;white-space:nowrap;"
+        "text-overflow:ellipsis} img{width:30px;aspect-ratio:1;object-fit:cover}</style>"
+        "<div class=w>abcdefghij klmnop</div><div class=o>ab abcdefghijkl</div>"
+        "<div class=r>x</div><div class=t>abcdefghij</div><img src=known.png>", 300);
     // A tall first cell in a table the failure stops: its lines, not
     // placed, must not reach the page's edges.
     layout_relation_sweep("a tall cell in a table that stops",

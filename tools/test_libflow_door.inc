@@ -130,49 +130,85 @@ static void door_cases(void)
 }
 
 // flow_replaced_fixed is the layout's own rule: for every way a page can
-// spell a picture's width and height, it answers yes exactly when the box
-// comes out the same whether the picture has arrived (known.png, 40x30) or
-// not (missing.png). A face that trusts it to skip a layout on arrival is
-// then never wrong in the direction that leaves a picture squashed.
+// spell a picture's width and height, with no ratio, a ratio of its own,
+// one the picture's replaces (`auto 2`), a ratio held by a limit, and
+// minimums of 0 with and without a ratio (what makes a flex item's main
+// minimum a length); as
+// an <img> and as an <input type=image>, which takes the default path
+// until its picture comes; in a paragraph, a grid, a flex row and a flex
+// column. A face that trusts it to skip a layout on arrival must never be
+// wrong in the direction that leaves a picture squashed: fixed means the
+// box comes out the same whether the picture has arrived (known.png,
+// 40x30) or not (missing.png). In a paragraph and a grid it is exact —
+// fixed exactly when arrival moves nothing; in a flex line, where the
+// rule asks a flex item for more than its own sizes (a main minimum given
+// as a length), only that direction is held.
+static int32_t s_fixed_seen[4];
+
 static void fixed_cases(void)
 {
     static const char *const sides[] = {"", "width=50", "width=auto", "width=abc", "width=\"\"",
                                         "width=50%", "width=\"50 %\""};
     static const char *const heights[] = {"", "height=60", "height=auto", "height=\"\"",
                                           "height=60%", "height=\" 60\""};
+    static const char *const ratios[] = {"", "style='aspect-ratio: 2'",
+                                         "style='aspect-ratio: auto 2'",
+                                         "style='aspect-ratio: 2; max-width: 30px; min-height: 20px'",
+                                         "style='min-width: 0; min-height: 0'",
+                                         "style='aspect-ratio: 2; min-width: 0; min-height: 0'"};
+    static const char *const tags[] = {"img", "input type=image"};
+    static const char *const places[][2] = {
+        {"<p>", "p"},
+        {"<div style='display: grid; width: 20px'>", "grid"},
+        {"<div style='display: flex; width: 20px'>", "flex row"},
+        {"<div style='display: flex; flex-direction: column; align-items: start; height: 10px'>",
+         "flex column"},
+    };
+    for (size_t w = 0; w < sizeof(places) / sizeof(places[0]); w++)
+    for (size_t g = 0; g < sizeof(tags) / sizeof(tags[0]); g++)
+    for (size_t q = 0; q < sizeof(ratios) / sizeof(ratios[0]); q++)
     for (size_t i = 0; i < sizeof(sides) / sizeof(sides[0]); i++)
         for (size_t k = 0; k < sizeof(heights) / sizeof(heights[0]); k++) {
             os64_gui_rect_t rect[2];
             bool fixed = false, laid = true;
             for (int arrived = 0; arrived < 2; arrived++) {
-                char html[256];
-                snprintf(html, sizeof(html), "<!doctype html><p><img src=%s %s %s alt=pic>",
-                         arrived ? "known.png" : "missing.png", sides[i], heights[k]);
-                os64_html_document_t *doc = parse(html);
-                os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
-                flow_tree_t *t = flow_layout(doc, page, 400, &kEnv);
-                const os64_html_node_t *img = doc->body->first_child->first_child;
+                char html[384];
+                snprintf(html, sizeof(html), "<!doctype html>%s<%s src=%s %s %s %s alt=pic>",
+                         places[w][0], tags[g], arrived ? "known.png" : "missing.png", sides[i],
+                         heights[k], ratios[q]);
+                // Through the cascade, so the style attribute is read.
+                Sheeted p;
+                sheeted_open(&p, html, 400, 600);
+                flow_tree_t *t = flow_layout(p.doc, p.page, 400, &p.env);
+                const os64_html_node_t *img = p.doc->body->first_child->first_child;
                 const flow_box_t *b = t != NULL ? flow_box_for(t, img) : NULL;
                 laid &= b != NULL;
                 if (b != NULL) {
                     rect[arrived] = b->rect;
-                    // The style is the element's either way: the two answers agree.
+                    // The style and the place are the element's either way:
+                    // the two answers agree.
                     if (arrived)
-                        laid &= fixed == flow_replaced_fixed(b->style);
-                    fixed = flow_replaced_fixed(b->style);
+                        laid &= fixed == flow_replaced_fixed(b);
+                    fixed = flow_replaced_fixed(b);
                 }
                 flow_free(t);
-                os64_page_free(page);
-                os64_html_document_free(doc);
+                sheeted_close(&p);
             }
             bool same = laid && rect[0].x == rect[1].x && rect[0].y == rect[1].y &&
                         rect[0].w == rect[1].w && rect[0].h == rect[1].h;
-            char what[160];
-            snprintf(what, sizeof(what), "fixed: <img %s %s> is fixed exactly when arrival moves nothing",
-                     sides[i], heights[k]);
-            expect(what, laid && fixed == same, NULL);
+            bool exact = w < 2;
+            char what[384];
+            snprintf(what, sizeof(what), "fixed: <%s %s %s %s> in a %s is fixed %s arrival moves nothing",
+                     tags[g], sides[i], heights[k], ratios[q], places[w][1],
+                     exact ? "exactly when" : "only when");
+            expect(what, laid && (exact ? fixed == same : !fixed || same), NULL);
+            s_fixed_seen[w] += fixed;
         }
-    expect("fixed: no style is not fixed", !flow_replaced_fixed(NULL), NULL);
+    // Each place has spellings it calls fixed, so each is held to the rule.
+    expect("fixed: every place has fixed spellings",
+           s_fixed_seen[0] > 0 && s_fixed_seen[1] > 0 && s_fixed_seen[2] > 0 && s_fixed_seen[3] > 0,
+           NULL);
+    expect("fixed: no box is not fixed", !flow_replaced_fixed(NULL), NULL);
 }
 
 // ── The allocation sweep: rules (a) to (d) of LAYOUT.md § Proof ─────────
