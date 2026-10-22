@@ -127,11 +127,16 @@ static way_crumb_t plain(const char *url, const way_position_t *where)
     return crumb;
 }
 
+void way_forget_ahead(way_session_t *s)
+{
+    while (s->ahead > 0)
+        drop(s->forward, &s->ahead);
+}
+
 void way_remember_entry(way_session_t *s, way_crumb_t *left)
 {
     push(s->history, &s->depth, left);
-    while (s->ahead > 0)
-        drop(s->forward, &s->ahead);
+    way_forget_ahead(s);
 }
 
 void way_remember(way_session_t *s, const char *url, const way_position_t *where)

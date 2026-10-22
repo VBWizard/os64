@@ -361,6 +361,10 @@ void way_remember(way_session_t *session, const char *url, const way_position_t 
 // The same, for an entry the face describes whole: the crumb is copied in
 // and its state TAKEN (`left->state` is NULL after).
 void way_remember_entry(way_session_t *session, way_crumb_t *left);
+// The entries ahead let go, their states freed, as a new way lets them go:
+// what a face does when a page that arrived had pushed from its entry and
+// then gone back among its own.
+void way_forget_ahead(way_session_t *session);
 
 // The crumb Back would return to, its state borrowed. False, with the
 // sentence, when there is none. The crumb stays until the face says it

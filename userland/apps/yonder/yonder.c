@@ -2686,7 +2686,11 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     os64_memset(fresh, 0, sizeof(*fresh));
     // The entries its scripts made before it was shown join the session:
     // those behind it each a new way, as a pushState is, and those ahead
-    // of it (a Back before it was shown made them) where Forward goes.
+    // of it (a Back before it was shown made them) where Forward goes. A
+    // page with entries of its own pushed at least once, which let go of
+    // what was ahead of its entry, whether or not it went back after.
+    if (g.page.nback > 0 || g.page.nahead > 0)
+        way_forget_ahead(&g.way);
     for (int32_t i = 0; i < g.page.nback; i++)
         way_remember_entry(&g.way, &g.page.back[i]);
     for (int32_t i = 0; i < g.page.nahead; i++)

@@ -414,6 +414,16 @@ static void entries(void)
                s.forward[0].document == 7 && strcmp(s.forward[0].url, "http://h/a#three") == 0, NULL);
     expect("entries: an entry keeps its name wherever it moves", arrived.entry == 41 && s.forward[0].entry == 42,
            NULL);
+    {
+        way_session_t f = session();
+        way_crumb_t a = crumb_of("http://h/x", 1, "{}"), b = crumb_of("http://h/y", 1, "1");
+        way_forward_entry(&f, &a);
+        way_forward_entry(&f, &b);
+        way_forget_ahead(&f);
+        expect("entries: forgetting what is ahead empties Forward and frees the states", f.ahead == 0 && f.depth == 0,
+               NULL);
+        way_history_clear(&f);
+    }
     left = arrived;                         // the state goes back in with the entry it came with
     way_went_forward_entry(&s, &left, &arrived);
     expect("entries: Forward is the mirror, the state taken back in",

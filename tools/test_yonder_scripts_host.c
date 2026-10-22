@@ -3400,14 +3400,20 @@ static void loop_view_refetch_short(void) {
         fail_at=0;
         if(!cut) clicked=attempts-start;
         if(g.stream.active)
-            post_arriving("<p id=out>-</p><script>document.getElementById('out').textContent="
-                          "JSON.stringify(history.state)</script>");
+            post_arriving("<p id=out>-</p><script src=wait.js></script><script>document.getElementById('out')"
+                          ".textContent=JSON.stringify(history.state)</script>");
+        // The arrival is cut up to its first script, held by `wait.js`:
+        // the stream's host made and the state kept for its binding. What
+        // runs after is the engine's, whose compile under a failed
+        // allocation is booked in DEBTS.md (libjs), and not this sweep's.
         start=attempts;
         if(cut>clicked) fail_at=attempts+(cut-clicked);
         loop_settle();
-        view_turns();
         fail_at=0;
         if(!cut) arrived=attempts-start;
+        script_land("wait.js","0");
+        loop_settle();
+        view_turns();
         // A page whose own script could not write its answer under the
         // cut (no text, or the parse's `-`) is not asked.
         os64_html_node_t *out=probe_id("out");
@@ -3542,6 +3548,19 @@ static void loop_view_pushed_while_arriving(void) {
         "pushed while arriving: the target entry once, the push after it, nothing ahead");
     click_back(NULL,NULL);
     check(!g.stream.active && session_is("","/T","/T2"),"pushed while arriving: and Back to T is in the document");
+    loop_drop();
+    // Pushed and then back among its own: it arrives at the target with its
+    // push ahead, and P, which the push let go of, is not.
+    loop_page("<p id=out>T</p><script>history.replaceState({t:1},'','/T')</script>");
+    check(loop_settle() && view_turns(),"pushed and back: T");
+    start_trip("http://fixture.test/P",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns() && session_is("/T","/P",""),"pushed and back: on P");
+    click_back(NULL,NULL);
+    post_arriving("<p id=out>T</p><script>history.replaceState(history.state,'','/T');"
+        "history.pushState({n:2},'','/T2')</script><script>history.back()</script><p>tail</p>");
+    check(loop_settle() && view_turns() && session_is("","/T","/T2"),
+        "pushed and back: the push's entry ahead, and P let go as the push let it go");
     loop_drop();
 }
 static void loop_view_cold_cases(void) {
