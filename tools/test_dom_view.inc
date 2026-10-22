@@ -229,7 +229,15 @@ static void dom_url_cases(void)
         "assert(URL.parse('nope')===null&&URL.parse('x','http://h.test/a').href==='http://h.test/x');"
         "assert(URL.parse.call(null,'http://h.test/') instanceof URL);"
         "class U2 extends URL{};assert(new U2('http://h.test/') instanceof U2);"
-        "assert('a'.repeat(9000).length&&URL.canParse('http://h.test/'+'a'.repeat(9000))===false,'past OS64_URL_REF_MAX');",
+        "assert('a'.repeat(9000).length&&URL.canParse('http://h.test/'+'a'.repeat(9000))===false,'past OS64_URL_REF_MAX');"
+        /* A query its URLSearchParams grew past what a parse takes is
+         * held; a setter that would need the parse leaves it as it is. */
+        "var big=new URL('http://h.test/a?x=1#f');big.searchParams.append('k','a'.repeat(9000));"
+        "assert(big.href.length>9000&&big.hash==='#f'&&big.search.length>9000&&big.searchParams.get('x')==='1');"
+        "var held=big.href;big.pathname='/p';big.hash='g';big.host='other.test';assert(big.href===held,'unchanged');"
+        "big.searchParams.delete('k');assert(big.href==='http://h.test/a?x=1#f');"
+        "var small=new URL('http://h.test/a');small.pathname='a'.repeat(9000);small.hash='b'.repeat(9000);"
+        "small.search='c'.repeat(9000);assert(small.href==='http://h.test/a','a setter past the limit changes nothing');",
         "url: parsing, resolving and the components");
     dom_script(&f, STORAGE_ASSERT
         "var u=new URL('http://h.test:8080/p/q?a=1#f');"
