@@ -146,6 +146,9 @@ const char *http_url_reason(http_url_result_t rc);
 // apart and does not need to, since neither is the server's doing.
 typedef enum { HTTP_METHOD_GET = 0, HTTP_METHOD_POST } http_method_t;
 
+// The longest method a caller may name, with its NUL.
+#define HTTP_METHOD_NAME_MAX 64
+
 typedef struct {
     const char *user_agent;
     const char *accept;
@@ -153,6 +156,19 @@ typedef struct {
     http_method_t method;       // zero-initialized options send GET
     size_t body_len;            // POST: sent as Content-Length, including zero
     const char *content_type;   // POST: optional, boundary preserved verbatim
+    // A method by name, any token, in place of `method` (which then stays
+    // GET, with no content_type): its body, when there is one, goes with a
+    // Content-Length, and so does an empty POST or PUT (Fetch § 4.6). GET
+    // and HEAD carry no body.
+    const char *method_name;
+    // The representation headers a caller's page chose, as whole lines:
+    // Content-Type, Content-Encoding, Content-Language and Content-Location
+    // only, and only beside a method_name, whose redirects the caller
+    // rewrites itself.
+    const char *body_headers;
+    // Accept-Encoding: identity, for a request that asks for a byte Range
+    // of the representation (Fetch § 4.6: a coding would number other bytes).
+    bool identity;
 } http_request_extras_t;
 
 bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteForm,
@@ -162,7 +178,10 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
 // cannot supply Host, Content-Length, Content-Type, Content-Encoding,
 // Content-Language, Content-Location, Transfer-Encoding, Connection, Expect,
 // Trailer, TE, Upgrade, Accept-Encoding, User-Agent or Accept.
-// GET rejects body_len/content_type; POST permits an empty body.
+// GET rejects body_len/content_type; POST permits an empty body. A
+// method_name that is not a token, a body with GET or HEAD, body_headers
+// without a method_name or naming anything else, and content_type beside a
+// method_name are refused.
 // The field-byte judgement on its own, so a caller can refuse a bad header
 // BEFORE dialling anybody about it. http_request applies it again.
 bool http_request_extras_ok(const http_request_extras_t *extras);

@@ -212,8 +212,13 @@ typedef struct {
 // Chrome's navigation one is about 135 bytes, and yonder's names every
 // picture type libimage decodes besides its page types.
 #define OS64_FETCH_ACCEPT_MAX   512
-#define OS64_FETCH_EXTRA_MAX    1024
+// A script's request carries its page's own headers, and one bearer token
+// alone is often past a kilobyte.
+#define OS64_FETCH_EXTRA_MAX    8192
+// What headers_for may write: a hop's Cookie and Referer.
+#define OS64_FETCH_HOP_FIELDS_MAX 1024
 #define OS64_FETCH_CONTENT_TYPE_MAX 256
+#define OS64_FETCH_METHOD_MAX   HTTP_METHOD_NAME_MAX
 
 typedef struct {
     // Request headers, each optional (NULL = not sent). They are COPIED at
@@ -251,9 +256,10 @@ typedef struct {
     // the fetch as INTERRUPTED. NULL = never (interrupted waits are retried).
     bool (*cancelled)(void *ctx);
     void *ctx;
-    // POST bytes are borrowed, immutable and needed through open, including
-    // 307/308 replay. NULL body is legal only when body_len is zero. GET
-    // requires NULL body/content_type and zero body_len. A failed upload is
+    // POST bytes (or a method_name's) are borrowed, immutable and needed
+    // through open, including 307/308 replay. NULL body is legal only when
+    // body_len is zero. GET requires NULL body/content_type and zero
+    // body_len. A failed upload is
     // not retried: the server may already have acted. 301/302/303 turn POST
     // into GET without body metadata; 307/308 preserve it. on_hop can refuse.
     os64_fetch_method_t method;
@@ -276,6 +282,29 @@ typedef struct {
     // policy using this fact; no cookie parsing/storage is done here.
     void (*on_set_cookie)(void *ctx, const os64_url_t *from_url, bool encrypted,
                           const char *value, size_t len);
+    // A METHOD BY NAME, for a caller that owns its redirects (the Fetch
+    // standard's job, yonder/fetch_job.c): any token below
+    // OS64_FETCH_METHOD_MAX, sent as spelled, with `method` left GET and no
+    // content_type. Its body goes with any method but GET and HEAD, a HEAD's
+    // reply is read as bodiless whatever it says, and the library follows
+    // NO redirect: on_hop still hears each one, and every redirect ends the
+    // fetch as REDIRECT_STOPPED with its head readable, for the caller to
+    // rewrite and ask again by its own rule. NULL: `method`, and the hops
+    // above.
+    const char *method_name;
+    // Beside a method_name only: the body's representation headers as
+    // "Name: value\r\n" lines (Content-Type, Content-Encoding,
+    // Content-Language, Content-Location, nothing else), copied at open.
+    const char *body_headers;
+    // Accept-Encoding: identity instead of "gzip, identity", for a request
+    // asking for a byte Range (whose numbers are the representation's).
+    bool identity;
+    // Every field of each final head, in wire order, as read: the name and
+    // the OWS-trimmed value, borrowed for the call; a line too long to read
+    // comes by name with a NULL value, so absence and omission differ. A
+    // followed redirect's head is offered too, before on_hop hears it.
+    void (*on_header)(void *ctx, const char *name, size_t name_len, const char *value,
+                      size_t value_len);
     // These callbacks run inside open on its thread, using ctx. Copy anything
     // needed afterward; do not re-enter this fetch. cancellation uses ctx
     // during reads/close as well, so that context must live through close.
