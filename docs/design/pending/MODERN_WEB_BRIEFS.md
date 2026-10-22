@@ -187,6 +187,95 @@ pages fetch adds a `<kind>` line shape to the kept index
 (`userland/apps/yonder/diag.h`) and its answer to the runner; a request the
 index has no line for reads `REPLAY incomplete`, a corpus to record again.
 
+## Slice 0c: what the corpus said first (document.implementation, javascript: links)
+
+The first census-driven slice: not planned, found. On 2026-10-22, with
+the two kept corpora replaying, apgfcu.com's LOGIN did nothing in yonder,
+and its record said why: jQuery 3.5.1 dies at load with `TypeError:
+cannot read property 'createHTMLDocument' of undefined`, and every script
+after it with `jQuery is not defined`. **141 of the ~600 kept pages carry
+that exact line**: apgfcu, synchrony, roundpoint, billerpayments and bing
+among them, most of Tier 1's banking list, plus kernel.org, php.net and
+the itch.io game sites. One missing object keeps every jQuery 3 site's
+script world shut, and until it opens the census cannot see what those
+pages want NEXT. Build this before any slice whose census number is
+smaller, and after whatever is already open.
+
+**Build**, a file in libdom and a row in `modern.c`, plus one yonder
+change:
+
+1. **`document.implementation`** (DOM § 4.5.1, the `DOMImplementation`
+   interface), a `classic`-table object (it is in every browser that ever
+   ran jQuery; nothing about it is modern): `createHTMLDocument(title)`
+   returns a NEW document, not a fragment: `<!DOCTYPE html><html><head>
+   <title>title</title></head><body></body></html>`, with `head`, `body`,
+   `documentElement`, `createElement`, `createTextNode`, `querySelector`
+   and `innerHTML` working on it, because jQuery's feature test is
+   `createHTMLDocument("").body.innerHTML = "<form></form><form></form>"`
+   and then `body.childNodes.length === 2`, and `jQuery.parseHTML` builds
+   its nodes in such a document and ADOPTS them into the page (a node
+   made in one document inserted into another must work: check `node.c`'s
+   owner-document rule and say in the PR what adoption does). The new
+   document has NO browsing context: no window, no scripts run in it, no
+   fetches from it, `location` absent, and a `<script>` inserted there is
+   born started (content.c's rule for innerHTML already). It is the
+   page's memory: the same `garb_env_t`/arena rules as a fragment, freed
+   with the page. `createDocument(ns, name, doctype)` returns an XML
+   document of one root element or none; `createDocumentType` returns a
+   doctype node; `hasFeature()` returns true (it is specified to). How
+   libdom allocates a document today and whether a second one can share
+   the page's arena is the builder's first read (`core.c`, `internal.h`).
+2. **`javascript:` link addresses** (HTML § 7.4.2, "navigate to a
+   javascript: URL"): a click on a link whose address's scheme is
+   `javascript:` runs the rest of the address, percent-decoded, as a
+   classic script in the page, and does not navigate. apgfcu's LOGIN is
+   `href="javascript:toggleLogin();"`, the code IN the address. The
+   standard's second half (a string result replaces the document) is
+   DECLINED for the arc (DECLINED.md row, this slice): no page in the
+   corpus wants it, and it would need a document replaced from a string.
+   Where: yonder's `request_navigate` judges the request through libway,
+   which refuses the scheme with "that is a javascript: address, which
+   yonder does not fetch"; the click path runs the script BEFORE asking
+   libway, through the same door an inline `<script>` runs through
+   (`scripts.c`), so it counts on the record as a script (`script
+   javascript:#inline-<n>`, or a spelling the builder chooses and states
+   in YONDER_DIAGNOSTICS.md), its failure a `FAILED script` line, and the
+   refusal line goes away. Form actions and `<iframe src>` with the scheme
+   are NOT this slice. With `scripts = off`, the link does nothing and the
+   status line says the scripts are off.
+
+**Proof.** The libdom host suite: the jQuery feature test above, verbatim,
+passing; a node made in the new document inserted into the page and
+read back by the page's `querySelector`; a `<script>` set into the new
+document's `innerHTML` never running; `createHTMLDocument()` with no
+title (title element present and empty) and with one; `createDocument`
+with and without a root; `hasFeature` true. A mutant per rule. The WPT
+directory `dom/nodes` has the 282 tests that read `document.implementation`
+(MODERN_WEB.md § Slice 0a, as built): the expectation file's `[required]`
+grows by the ones this slice makes pass, stated in the PR. The scripted-page
+host: a page whose link is `javascript:...`, clicked by the harness's
+click, running the script (its side effect read back); one whose script
+throws, the FAILED line on the record; one with scripts off, nothing. A
+mutant for each.
+
+**Census and corpus.** The PR states `tools/yonder_tally.py --failed`'s
+count of `createHTMLDocument' of undefined` before (141 over the two
+pulls) and after a replay of the kept corpora: the line must be gone and
+the pages' records must say what they want NEXT, which is the slice's
+real deliverable. The replay diff against the baseline (REPLAY.md § 7)
+must show no regression; lines LOST on those 141 pages are expected and
+are the point.
+
+**Left to the builder.** Whether the new document shares the page's arena
+or has its own (say which and why; freed with the page either way); the
+record's spelling for a `javascript:` script; whether `createElementNS`
+rides along (271 WPT tests want it; a separate slice unless it is a
+one-line delegation, and say so).
+
+**PR states.** The `[required]` tests gained; the tally line before and
+after; apgfcu.com's LOGIN opening its dropdown on the P5, by hand, in the
+PR body with what the record says after.
+
 ## Slice 1a: storage and the small globals
 
 **Build**, each a file in libdom and a row in `modern.c`:

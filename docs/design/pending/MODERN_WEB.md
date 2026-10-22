@@ -385,8 +385,16 @@ paused by a wall mid-edit is worse than one that never started). The
 first three: **1a, 1b and 4**, none of which needs fetch, each in its own
 worktree off 0a's branch. The second three, when the first three's PRs
 are open: **2, 3 and 7**; 3 after 2 if the window is tight, because its
-inline import rides 2's transport. Then 5a and 6a, which 0a alone
+inline import rides 2's transport. **Slice 0c goes next after whatever is
+open when it is read** (2026-10-22, the first slice the corpus itself
+named: `document.implementation` keeps every jQuery 3 site's scripts shut,
+141 of the ~600 kept pages, most of Tier 1's banks among them, and until
+it opens the census cannot see what those pages want next; the brief says
+the rest). Then 5a and 6a, which 0a alone
 unblocks, and 5b, 5c, 6b, 6c in their documents' order. Slice 8 follows 4.
+**Since 2026-10-22 one slice at a time** (Chris: every usage point counts),
+in this order, the three-at-a-time above being the budget's ceiling and
+not its pace.
 Every builder reads MODERN_WEB_BRIEFS.md as it stands on
 `fable/modern-web` AFTER Quinn's review (2512ba11 and later), not the
 copy a 0a or 0b branch carries, which predates it.
