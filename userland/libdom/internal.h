@@ -158,11 +158,11 @@ struct os64_dom {
     /* performance (performance.c): its object (a plain event target), the
      * marks and measures it buffers (an engine Array, in the order made),
      * its timing and navigation objects, the navigation entry, and the
-     * entries' prototypes. The time origin is read once, at the first ask. */
+     * entries' prototypes. The time origin is read once, as the binding is
+     * made. */
     DValue *performance, *performance_entries, *performance_timing, *performance_navigation,
         *navigation_entry;
     DValue *entry_prototypes[5];
-    bool time_origin_known;
     uint64_t time_origin_us;
     int64_t time_origin_epoch_us;
     /* screen and screen.orientation (screen.c), each made once. */

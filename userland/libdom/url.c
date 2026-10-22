@@ -8,15 +8,20 @@
  * percent-encoding and the special schemes' default ports), so a script's
  * `new URL(href, base)` and an `<a href>` agree on what an address is.
  * Where that grammar is not yet the URL Standard's parser (no userinfo, no
- * IPv6 host, no IDNA, an address past OS64_URL_REF_MAX, a fragment left
- * as written), the difference is the grammar's to close, not this file's:
- * an address it refuses is a TypeError here, as an invalid URL is.
+ * IPv6 host, no IDNA, no path that begins with a slash after a scheme the
+ * standard does not know (`aaa:/b`), an opaque path's trailing spaces kept
+ * as written, an address past OS64_URL_REF_MAX, a fragment left as
+ * written), the difference is the grammar's to close, not this file's: an
+ * address it refuses is a TypeError here, as an invalid URL is.
  *
  * A URL object holds its address serialized (href); every component is
  * read from that string, and every setter builds the address it describes
  * and parses it whole, keeping the old one when the new one does not
  * parse, as the standard's setters keep it. Its searchParams is made with
- * it and the two stay one: a change to either is the other's at once. */
+ * it and the two stay one: a change to either is the other's at once. A
+ * query its searchParams grows is not parsed, so it may pass what a parse
+ * takes; such an address is held and read back, and a setter, which would
+ * parse it, keeps it as it is. */
 
 static JSClassID url_slot, params_slot, iterator_slot;
 
@@ -1094,16 +1099,27 @@ static JSValue params_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         return result;
     }
     case Q_SORT: {
-        /* A stable sort by name, in UTF-16 code units (an insertion sort:
-         * a query's pairs are few). */
-        for (size_t i = 1; i < params->count; i++) {
-            DPair one = params->pairs[i];
-            size_t at = i;
-            while (at > 0 && name_order(&params->pairs[at - 1], &one) > 0) {
-                params->pairs[at] = params->pairs[at - 1];
-                at--;
+        /* A stable sort by name, in UTF-16 code units: a merge sort, since
+         * a page may append as many pairs as it likes. */
+        if (params->count > 1) {
+            DPair *scratch = js_malloc(ctx, params->count * sizeof(*scratch));
+            if (scratch == NULL) return JS_EXCEPTION;
+            DPair *from = params->pairs, *to = scratch;
+            for (size_t width = 1; width < params->count; width *= 2) {
+                for (size_t lo = 0; lo < params->count; lo += 2 * width) {
+                    size_t mid = lo + width < params->count ? lo + width : params->count;
+                    size_t hi = mid + width < params->count ? mid + width : params->count;
+                    size_t a = lo, b = mid, at = lo;
+                    while (a < mid && b < hi) to[at++] = name_order(&from[b], &from[a]) < 0 ? from[b++] : from[a++];
+                    while (a < mid) to[at++] = from[a++];
+                    while (b < hi) to[at++] = from[b++];
+                }
+                DPair *swap = from;
+                from = to;
+                to = swap;
             }
-            params->pairs[at] = one;
+            if (from != params->pairs) os64_memcpy(params->pairs, from, params->count * sizeof(*from));
+            js_free(ctx, scratch);
         }
         return params_update(ctx, params) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
     }

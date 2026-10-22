@@ -109,9 +109,9 @@ typedef struct {
      * against the timing's origin. NULL reads now_ms's milliseconds. */
     uint64_t (*now_us)(void *opaque);
     /* The page's navigation timing as it stands, written into `out`, asked
-     * whenever a script reads it (the clock's origin when performance is
-     * first touched). It must not enter JS. NULL: the origin is the
-     * binding's creation and no milestone has happened. */
+     * as the binding is made (for the clock's origin) and whenever a script
+     * reads it. It must not enter JS. NULL: the origin is the binding's
+     * creation and no milestone has happened. */
     void (*timing)(void *opaque, os64_dom_timing_t *out);
     /* What `screen` reports, copied at creation. */
     os64_dom_screen_t screen;

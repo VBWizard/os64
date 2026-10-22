@@ -760,7 +760,6 @@ int d_performance_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
             ? wall.epoch * 1000000 + (int64_t)((uint64_t)wall.ticks_into_second * 1000000 / wall.ticks_per_second)
             : 0;
     }
-    dom->time_origin_known = true;
 
     /* The prototypes: Performance's, the entries', timing's, navigation's. */
     DValue *performance = prototype_new(dom, ctx, JS_UNDEFINED);

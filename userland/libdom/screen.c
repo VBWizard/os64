@@ -8,8 +8,8 @@
  * 1920-pixel display is 1536 wide and devicePixelRatio is 1.25. The
  * orientation is the display's shape; it never changes here, so its
  * `change` event never fires, and lock() is refused, as a desktop browser
- * refuses it. screen, screen.orientation and devicePixelRatio are
- * [Replaceable]: a page may assign over them. */
+ * refuses it. window's screen and devicePixelRatio are [Replaceable]: a
+ * page may assign over them. */
 
 static JSClassID screen_slot, orientation_slot;
 static int screen_mark;
