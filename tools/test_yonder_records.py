@@ -58,6 +58,14 @@ MALFORMED = {
                                                     b'verdict: clean\nend\n', 'do not agree with its state'),
     "a judged replay's record that does not say what it does not reproduce": (
         b'address: https://a.test/\nREPLAY state: verdict\nverdict: clean\nend\n', 'does not say what it does not reproduce'),
+    'a count of 5000 digits': (b'address: https://a.test/\nverdict: ' + b'9' * 5000 + b' MISSING\n',
+                               'a count no record holds'),
+    'a count past UINT32_MAX': (b'address: https://a.test/\nverdict: 1 MISSING\nMISSING global x (4294967296)\n',
+                                'a count no record holds'),
+    "a kept page's record cut before its end": (b'address: https://a.test/\nverdict: clean\nbytes: 3\nkept: whole\n',
+                                                "a kept page's record without its `end`"),
+    'lines past a record\'s end': (b'address: https://a.test/\nverdict: clean\nend\nkept: whole\nend\n',
+                                   'lines past its `end`'),
     'a stray kind on the not-reproduced line': (b'address: https://a.test/\nREPLAY state: verdict\nverdict: clean\n'
                                                 b'REPLAY not reproduced: image global\nend\n',
                                                 'naming what a replay does reproduce: global'),
@@ -145,6 +153,16 @@ class ReaderCases(unittest.TestCase):
         self.assertEqual(rec.missing, {})
         rec = self.read(b'address: https://a.test/\nverdict: unwritten\n')
         self.assertEqual((rec.state, rec.unwritten, rec.replay), (records.State.UNJUDGED, True, False))
+
+    def test_counts_up_to_uint32_max_and_end(self):
+        rec = self.read(b'address: https://a.test/\nverdict: 1 MISSING\nMISSING global x (4294967295)\nkept: whole\nend\n')
+        self.assertEqual(rec.missing, {('global', 'x'): 4294967295})
+        # A census record written before yonder wrote `end` may lack it.
+        rec = self.read(b'address: https://a.test/\nverdict: clean\nbytes: 3\n')
+        self.assertEqual(rec.state, records.State.VERDICT)
+
+    def test_display_spells_control_bytes(self):
+        self.assertEqual(records.display('a\x1b[2J\\b\nc\x85\u00e9'), 'a\\x1B[2J\\\\b\\x0Ac\\x85\u00e9')
 
     def test_every_txt_is_listed(self):
         (self.root / 'b.txt').write_bytes(b'')

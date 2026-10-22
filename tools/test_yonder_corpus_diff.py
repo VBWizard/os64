@@ -111,6 +111,17 @@ class DiffCases(unittest.TestCase):
         self.assertIn('unjudged: 1 pages\n  new-0005.txt  new-0005.txt: ', out)
         self.assertIn('did not replay this page', out)
 
+    def test_page_text_cannot_drive_the_terminal(self):
+        self.settle_the_rest()
+        (self.after / 'worse-0001.txt').write_text(as_replay(
+            'address: https://worse.test/\\x1B[2J\nverdict: 1 MISSING, 1 FAILED\nMISSING global fetch (1)\n'
+            'FAILED script x.js: \\x1B]0;owned\\x07 (1)\n'))
+        rc, out = self.run_main(self.before, self.after)
+        self.assertEqual(rc, 1)
+        self.assertNotIn('\x1b', out)
+        self.assertIn('https://worse.test/\\x1B[2J', out)
+        self.assertIn('FAILED script x.js: \\x1B]0;owned\\x07', out)
+
     def test_a_record_no_replay_wrote_is_unjudged(self):
         # A kept record has no state line: the diff compares replays only.
         self.settle_the_rest()

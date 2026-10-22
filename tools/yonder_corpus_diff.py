@@ -75,6 +75,7 @@ def load_records():
 
 records = load_records()
 State = records.State
+display = records.display
 
 
 def lines_of(rec, skip):
@@ -155,13 +156,13 @@ def main(argv=None):
         sys.stdout.reconfigure(errors='backslashreplace')
     for d in (args.before, args.after):
         if not pathlib.Path(d).is_dir():
-            print(f'yonder_corpus_diff: {d} is not a directory', file=sys.stderr)
+            print(f'yonder_corpus_diff: {display(d)} is not a directory', file=sys.stderr)
             return 2
     unjudged = {}
     try:
         before, after = read_dir(args.before, unjudged), read_dir(args.after, unjudged)
     except records.Unreadable as e:
-        print(f'yonder_corpus_diff: {e}', file=sys.stderr)
+        print(f'yonder_corpus_diff: {display(e)}', file=sys.stderr)
         return 2
     # A page not judged on one side is judged on neither.
     for name in unjudged:
@@ -182,13 +183,13 @@ def main(argv=None):
                 if title == 'newly incomplete' else '')
         print(f'{title}: {len(rows)} pages{gate}')
         for name, (address, lines) in rows.items():
-            print(f'  {name}  {address}')
+            print(f'  {display(name)}  {display(address)}')
             for line in lines:
-                print(f'    {sign} {line}')
+                print(f'    {sign} {display(line)}')
     if gone:
-        print(f'missing from {args.after}: {len(gone)} pages')
+        print(f'missing from {display(args.after)}: {len(gone)} pages')
         for name in gone:
-            print(f'  {name}  {before[name].address}')
+            print(f'  {display(name)}  {display(before[name].address)}')
     # Both replays read one kept corpus, so a page only the after one has
     # is a page the before one never replayed (it stopped, or was
     # partial): nothing to compare it with, and never silent.
@@ -198,7 +199,7 @@ def main(argv=None):
     if unjudged:
         print(f'unjudged: {len(unjudged)} pages')
         for name, why in sorted(unjudged.items()):
-            print(f'  {name}  {why}')
+            print(f'  {display(name)}  {display(why)}')
     gained = sum(len(lines) for _, lines in table['regressions'].values())
     lost = sum(len(lines) for _, lines in table['progress'].values())
     incomplete = len(table['to record again']) + len(table['newly incomplete'])

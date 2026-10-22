@@ -10,6 +10,7 @@
 typedef struct {
     char *a, *b;            // MISSING: kind, name; FAILED: what, message; fact: key, value
     uint32_t count;         // a fact's: 1 when its latest value had no memory to keep
+    bool head;              // a fact's: set by yonder_diag_head_fact, in the head's own room
 } Line;
 
 // The lines that met no room are counted as distinct lines, as the file
@@ -40,6 +41,9 @@ struct yonder_diag {
     struct yonder_diag_claim claim;
     int64_t began_us;
     Table missing, failed, facts;
+    // The facts that are the head's (Line.head): they have room of their
+    // own, so they are counted apart from the ordinary facts' quota.
+    uint32_t head_facts;
     // A line went with no memory even to name it (yonder_diag_short).
     bool short_of_memory;
     // THE PAGE KEPT (diag.h): the folder its name claimed (yonder_diag_
@@ -105,7 +109,7 @@ static void table_lose(Table *t, const char *a, const char *b, bool both)
             t->cap_gone = bigger;
         }
     }
-    Line one = {t->ngone < t->cap_gone ? copy(a) : NULL, t->ngone < t->cap_gone ? copy(b) : NULL, 0};
+    Line one = {t->ngone < t->cap_gone ? copy(a) : NULL, t->ngone < t->cap_gone ? copy(b) : NULL, 0, false};
     if (one.a == NULL || one.b == NULL) {
         os64_free(one.a);
         os64_free(one.b);
@@ -153,7 +157,7 @@ static Line *table_line(Table *t, const char *a, const char *b, bool both, uint3
         t->lines = next;
         t->cap = bigger;
     }
-    Line one = {copy(a), copy(b), 0};
+    Line one = {copy(a), copy(b), 0, false};
     if (one.a == NULL || one.b == NULL) {
         os64_free(one.a);
         os64_free(one.b);
@@ -237,12 +241,26 @@ void yonder_diag_failed(yonder_diag_t *d, const char *what, const char *message)
         l->count = saturating(l->count, 1);
 }
 
-// A plain line set, in a table of `max` lines.
-static void fact_set(yonder_diag_t *d, const char *key, const char *value, uint32_t max)
+// A plain line set. A new one takes a place in its own room: the head's
+// YONDER_DIAG_HEAD_FACTS (`head`), or the ordinary facts'
+// YONDER_DIAG_FACTS_MAX, counted apart so neither eats the other's.
+static void fact_set(yonder_diag_t *d, const char *key, const char *value, bool head)
 {
     if (d == NULL)
         return;
-    Line *l = table_line(&d->facts, key, "", false, max);
+    Table *t = &d->facts;
+    Line *l = NULL;
+    for (uint32_t i = 0; i < t->n && l == NULL; i++)
+        if (os64_streq(t->lines[i].a, key))
+            l = &t->lines[i];
+    if (l == NULL) {
+        bool room = head ? d->head_facts < YONDER_DIAG_HEAD_FACTS : t->n - d->head_facts < YONDER_DIAG_FACTS_MAX;
+        l = table_line(t, key, "", false, room ? UINT32_MAX : 0);
+        if (l != NULL && head) {
+            l->head = true;
+            d->head_facts++;
+        }
+    }
     if (l == NULL)
         return;
     // A value with no memory to keep is not left empty, nor the one before
@@ -257,12 +275,12 @@ static void fact_set(yonder_diag_t *d, const char *key, const char *value, uint3
 
 void yonder_diag_fact(yonder_diag_t *d, const char *key, const char *value)
 {
-    fact_set(d, key, value, YONDER_DIAG_FACTS_MAX);
+    fact_set(d, key, value, false);
 }
 
 void yonder_diag_head_fact(yonder_diag_t *d, const char *key, const char *value)
 {
-    fact_set(d, key, value, YONDER_DIAG_FACTS_MAX + YONDER_DIAG_HEAD_FACTS);
+    fact_set(d, key, value, true);
 }
 
 void yonder_diag_forget(yonder_diag_t *d, const char *prefix)
@@ -279,6 +297,8 @@ void yonder_diag_forget(yonder_diag_t *d, const char *prefix)
         for (uint32_t i = 0; i < *counts[k]; i++) {
             Line *l = &lists[k][i];
             if (os64_strlen(l->a) >= len && os64_memcmp(l->a, prefix, len) == 0) {
+                if (k == 0 && l->head)
+                    d->head_facts--;
                 os64_free(l->a);
                 os64_free(l->b);
             } else {
@@ -462,6 +482,9 @@ size_t yonder_diag_render(const yonder_diag_t *d, char *out, size_t cap)
         lost |= d->facts.lines[i].count != 0;
     if (lost)
         puts_(&o, YONDER_DIAG_LINES_LOST "\n");
+    // The last line, which a reader of a kept page's record requires, so a
+    // record cut short anywhere is never read as a page.
+    puts_(&o, YONDER_DIAG_END "\n");
     if (cap != 0)
         out[o.at < cap ? o.at : cap - 1] = '\0';
     return o.at;
@@ -681,8 +704,12 @@ int64_t yonder_diag_claim(yonder_diag_t *d, const char *dir, bool keep)
                 break;
             }
             d->keep.folder = copy(folder);
-            if (d->keep.folder != NULL)
+            if (d->keep.folder != NULL) {
+                // Its index holds no line yet, said so a replay need not
+                // assume it.
+                yonder_diag_head_fact(d, "kept lines", "0");
                 return 0;
+            }
             (void)os64_unlink(folder);
             return keep_failed(d);
         }

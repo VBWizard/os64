@@ -55,6 +55,7 @@ def load_records():
 
 records_module = load_records()
 unescape = records_module.unescape
+display = records_module.display
 Unreadable = records_module.Unreadable
 
 
@@ -62,7 +63,7 @@ class NotJudged(Unreadable):
     """Files the reader could not judge, each named with why."""
 
     def __init__(self, unjudged):
-        super().__init__('\n'.join(f'yonder_tally: {u}' for u in unjudged))
+        super().__init__('\n'.join(f'yonder_tally: {display(u)}' for u in unjudged))
         self.unjudged = unjudged
 
 
@@ -101,7 +102,8 @@ def read_records(paths):
               file=sys.stderr)
         for state in sorted(other):
             for rec in other[state]:
-                print(f'  {rec.path}  {state.name.lower()}{": " + rec.reason if rec.reason else ""}', file=sys.stderr)
+                print(f'  {display(rec.path)}  {state.name.lower()}{": " + display(rec.reason) if rec.reason else ""}',
+                      file=sys.stderr)
     return records
 
 
@@ -132,10 +134,10 @@ def print_missing(records, kinds, top):
             continue
         rows = ranked(table[kind])
         print()
-        print(f'MISSING {kind}: {len(rows)} names')
+        print(f'MISSING {display(kind)}: {len(rows)} names')
         print(f'{"files":>7} {"sites":>6} {"asks":>8}  name')
         for name, (files, asks, where) in rows[:top or None]:
-            print(f'{files:>7} {len(where):>6} {asks:>8}  {name}')
+            print(f'{files:>7} {len(where):>6} {asks:>8}  {display(name)}')
         if top and len(rows) > top:
             print(f'{"":>7} {"":>6} {"":>8}  and {len(rows) - top} more')
 
@@ -168,11 +170,11 @@ def surface(records, names, kinds):
 def print_surface(records, names, kinds):
     files, sites, asks, each = surface(records, names, kinds)
     total_sites = len({r.site for r in records})
-    print(f'surface {", ".join(names)}: {files} of {len(records)} files, '
+    print(f'surface {display(", ".join(names))}: {files} of {len(records)} files, '
           f'{len(sites)} of {total_sites} sites, {asks} asks')
     for name in names:
         f, s, a = each[name]
-        print(f'  {name}: {f} files, {len(s)} sites, {a} asks')
+        print(f'  {display(name)}: {f} files, {len(s)} sites, {a} asks')
 
 
 def failure_key(what, message):
@@ -206,9 +208,9 @@ def print_failed(records, top, shown):
     print(f'{len(records)} page files, {len(rows)} distinct failures')
     print(f'{"files":>7} {"sites":>6} {"count":>7}  kind: message')
     for (kind, message), (files, count, sites, where) in order[:top or None]:
-        print(f'{files:>7} {len(sites):>6} {count:>7}  {kind}: {message}')
+        print(f'{files:>7} {len(sites):>6} {count:>7}  {display(kind)}: {display(message)}')
         for address in where[:shown]:
-            print(f'{"":>24}{address}')
+            print(f'{"":>24}{display(address)}')
         if shown and len(where) > shown:
             print(f'{"":>24}and {len(where) - shown} more pages')
     if top and len(order) > top:
@@ -237,7 +239,7 @@ def main(argv=None):
         print(e, file=sys.stderr)
         return 2
     except Unreadable as e:
-        print(f'yonder_tally: {e}', file=sys.stderr)
+        print(f'yonder_tally: {display(e)}', file=sys.stderr)
         return 2
     if args.surface:
         print_surface(records, args.surface, set(args.kind))

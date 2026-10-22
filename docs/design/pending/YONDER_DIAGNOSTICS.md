@@ -518,12 +518,17 @@ a record to its kept files.
 `final address` (written when the parse ends, so a page let go unshown
 has one too), `body` (`html`, `text` or `image`: what libway judged the
 body to be), and for a page from the network `content-type` and `charset`
-as the server named them (left out when it named none) and `encrypted`
-(`yes`/`no`). A page read with scripts off says `scripts: off`. These,
-`status`, `TLS`, `laid out at` and `kept` have room of their own past the
-512 plain lines a record keeps (`yonder_diag_head_fact`), so a page with
-more plain lines than that never loses one of these; it does lose the
-others, and is unjudged.
+as the server named them (empty when it named none) and `encrypted`
+(`yes`/`no`), and its `status` (`0` when its protocol has none). A page
+read with scripts off says `scripts: off`. These, `TLS`, `laid out at`,
+`kept` and `kept lines` have room of their own (16 lines, counted apart
+from the 512 the other plain lines may take: `yonder_diag_head_fact`), so
+a page with more plain lines than that never loses one of these; it does
+lose the others, and is unjudged. A replay requires every one of them its
+page needs (a file's page has no status, type, charset or encryption)
+rather than assume any, and every record now ends with the line `end`,
+which a replay requires of a kept page's record and the readers of any
+record that says `kept:` or `REPLAY state:`.
 
 **A script's line carries its evaluation time**: `script <address>: ran in
 1520 us`, or `failed in ...`, the time `os64_js_run` took, compiling

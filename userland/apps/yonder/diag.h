@@ -12,7 +12,8 @@
 // Then the RECORD LINES, each beginning with its token:
 //     MISSING <kind> <name> (<count>)
 //     FAILED <what>: <message> (<count>)
-// and the plain lines, `key: value`. A token appears on the verdict line
+// and the plain lines, `key: value`, and last the line `end`
+// (YONDER_DIAG_END). A token appears on the verdict line
 // only when it has records, and otherwise only at the start of its own
 // record lines: DATA that spells one, in any line, has its second letter
 // percent-encoded (`M%49SSING`, `F%41ILED`), which an address reads as the
@@ -54,6 +55,11 @@
 // takes it as damage (a yonder that stopped between claim and write) and
 // names it.
 #define YONDER_DIAG_UNWRITTEN "verdict: unwritten"
+// The last line of every record yonder_diag_render writes. A reader
+// requires it on any record that says `kept:` (a kept page) or `REPLAY
+// state:` (a replay's), so a record cut short is never read as a page;
+// records written before it (the first census) have neither, and none.
+#define YONDER_DIAG_END "end"
 
 // Distinct record lines kept, and plain lines: a page that asks for more
 // has the rest counted on a plain line, not kept.
@@ -88,10 +94,11 @@ void yonder_diag_failed_seen(yonder_diag_t *d, const char *what, const char *mes
 // replaced by a later setting of the same key.
 void yonder_diag_fact(yonder_diag_t *d, const char *key, const char *value);
 // The same line, for a fact a replay rebuilds the page from (the head, the
-// width it was laid out at, whether it was kept whole): it has room of its
-// own past YONDER_DIAG_FACTS_MAX, so a page with more plain lines than that
-// never loses one of these, and a replay never rebuilds a head from
-// defaults it did not know it was taking.
+// width it was laid out at, whether it was kept whole, how many lines its
+// index holds): it has room of its own, YONDER_DIAG_HEAD_FACTS, counted
+// apart from the ordinary facts' YONDER_DIAG_FACTS_MAX, so a page with
+// more plain lines than that never loses one of these, and neither room
+// takes a place in the other.
 #define YONDER_DIAG_HEAD_FACTS 16
 void yonder_diag_head_fact(yonder_diag_t *d, const char *key, const char *value);
 // The plain lines whose keys begin `prefix` let go, the rest kept in

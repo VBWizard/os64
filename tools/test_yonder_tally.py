@@ -153,6 +153,16 @@ class TallyCases(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn('u.test-0009.txt: damage: its name was claimed and its record never written', err)
 
+    def test_page_text_cannot_drive_the_terminal(self):
+        # A name a page wrote, escaped in the record, reaches the screen
+        # re-spelled, never as the escape it is.
+        (self.root / 'e.test-0010.txt').write_bytes(
+            b'address: https://e.test/\nverdict: 1 MISSING\nMISSING global x\\x1B[2Jy (1)\nend\n')
+        rc, out = self.run_main('--top', '0')
+        self.assertEqual(rc, 0)
+        self.assertNotIn('\x1b', out)
+        self.assertIn('x\\x1B[2Jy', out)
+
     def test_a_record_cut_short_is_an_error(self):
         (self.root / 'cut-0009.txt').write_bytes(b'address: https://cut.test/\n')
         rc, err = self.run_err(self.root)

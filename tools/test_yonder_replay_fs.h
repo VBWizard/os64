@@ -22,7 +22,8 @@ typedef struct { char why[1024]; } RpFault;
  * symbolic link is not followed, and is a fault. */
 RpFs rp_fs_read(const char *path, char **bytes, size_t *len, RpFault *f);
 /* `len` bytes made the whole of `path`, WHOLE OR NOT AT ALL: written to a
- * temporary file beside it, flushed to the disk, and renamed over it, the
+ * temporary file beside it, made new (a name already there, a link planted
+ * at it included, is a fault), flushed to the disk, and renamed over it, the
  * temporary removed when any step faults, so a write cut short (a full
  * disk, a size limit) leaves whatever was there before, never part of a
  * file. The directory is not flushed after the rename, so a power lost
@@ -36,6 +37,9 @@ RpFs rp_fs_kind(const char *path, bool *dir, RpFault *f);
 RpFs rp_fs_mkdir(const char *path, RpFault *f);
 /* A file or an empty directory removed. */
 RpFs rp_fs_remove(const char *path, RpFault *f);
+/* A symbolic link to `target` made at `path`: the self-test plants one
+ * where the runner must not follow it. */
+RpFs rp_fs_symlink(const char *target, const char *path, RpFault *f);
 /* A path's permission bits set: the self-test makes a directory that can
  * be searched and not listed. */
 RpFs rp_fs_mode(const char *path, unsigned mode, RpFault *f);

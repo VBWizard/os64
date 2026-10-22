@@ -47,6 +47,16 @@ def unescape(raw):
     return raw.decode('utf-8')
 
 
+def display(text):
+    """`text` as it may reach a terminal: a control character (C0, DEL and
+    C1) re-spelled `\\xHH` and a backslash `\\\\`, so text a page wrote can
+    neither drive the terminal (`\\x1b[2J`) nor pass for a line of this
+    tool's own. Every page-controlled string a tool prints goes through
+    it."""
+    return ''.join(f'\\x{ord(c):02X}' if ord(c) < 0x20 or 0x7F <= ord(c) < 0xA0
+                   else '\\\\' if c == '\\' else c for c in str(text))
+
+
 def site_of(address):
     """The host an address names, lower case, without userinfo or port;
     the scheme for an address with none (`file`, `about`)."""
@@ -81,6 +91,7 @@ class State(enum.IntEnum):
 NOT_REPRODUCED = {'font-fetch', 'image', 'picture-fetch'}
 
 LINES_LOST = b'REPLAY unjudged: lines lost'
+END = b'end'
 UNWRITTEN = b'verdict: unwritten'
 STATE_LINE = re.compile(rb'REPLAY state: (verdict|incomplete|unfinished|unjudged)(?: (.*))?')
 
@@ -134,6 +145,23 @@ class Malformed(Exception):
     """Why the lines being read are not a whole record."""
 
 
+UINT32_MAX = 0xFFFFFFFF
+
+
+def count_of(digits):
+    """A count as diag.c writes one: decimal, and no more than UINT32_MAX,
+    which no count it keeps passes. Malformed otherwise, however long."""
+    if len(digits) > 10:
+        raise Malformed('not a whole page file: a count no record holds')
+    try:
+        n = int(digits)
+    except ValueError:
+        raise Malformed('not a whole page file: a count no record holds') from None
+    if n > UINT32_MAX:
+        raise Malformed('not a whole page file: a count no record holds')
+    return n
+
+
 def read_body(lines, rec, replay):
     """The record lines from the verdict on into `rec`: the verdict, its
     lines exactly that many of each, each counted, no other verdict, and,
@@ -151,8 +179,8 @@ def read_body(lines, rec, replay):
     verdict = VERDICT.fullmatch(lines[0])
     if verdict is None:
         raise Malformed(f'not a whole page file: its {where} line is not a verdict')
-    want_missing = int(verdict.group(1) or verdict.group(3) or 0)
-    want_failed = int(verdict.group(2) or verdict.group(4) or 0)
+    want_missing = count_of(verdict.group(1) or verdict.group(3) or b'0')
+    want_failed = count_of(verdict.group(2) or verdict.group(4) or b'0')
     seen_missing = seen_failed = 0
     for line in lines[1:]:
         m = COUNT.search(line)
@@ -160,12 +188,12 @@ def read_body(lines, rec, replay):
             seen_missing += 1
             kind, _, name = line[len(b'MISSING '):m.start()].partition(b' ')
             key = (unescape(kind), unescape(name))
-            rec.missing[key] = rec.missing.get(key, 0) + int(m.group(1))
+            rec.missing[key] = rec.missing.get(key, 0) + count_of(m.group(1))
         elif line.startswith(b'FAILED ') and m:
             seen_failed += 1
             what, _, message = line[len(b'FAILED '):m.start()].partition(b': ')
             key = (unescape(what), unescape(message))
-            rec.failed[key] = rec.failed.get(key, 0) + int(m.group(1))
+            rec.failed[key] = rec.failed.get(key, 0) + count_of(m.group(1))
         elif line.startswith(b'MISSING ') or line.startswith(b'FAILED '):
             raise Malformed('not a whole page file: a record line with no count')
         elif line.startswith(b'verdict: '):
@@ -200,8 +228,10 @@ def read(path):
     INCOMPLETE page an incomplete line and no unfinished one, an UNFINISHED
     page an unfinished line) and which says what it does not reproduce. A
     RECORD YONDER WROTE has its verdict second (or the placeholder's
-    `verdict: unwritten`), and no REPLAY line but the one saying it lost
-    lines."""
+    `verdict: unwritten`), no REPLAY line but the one saying it lost
+    lines, and ends with `end`, which a kept page's (one that says `kept:`)
+    must; a census record written before yonder wrote it may lack it.
+    Every count is at most UINT32_MAX."""
     path = pathlib.Path(path)
     try:
         if not path.is_file():
@@ -228,14 +258,23 @@ def read(path):
         rec = Record(path, unescape(lines[0][len(b'address: '):]))
         state = STATE_LINE.fullmatch(lines[1]) if len(lines) > 1 else None
         if state is None:
-            read_body(lines[1:], rec, replay=False)
+            # Yonder ends every record with `end` now; a kept page's must
+            # have it, and only a census record written before it (one
+            # that says nothing of being kept) may lack it.
+            ended = lines[-1] == END
+            body = lines[1:-1] if ended else lines[1:]
+            if END in body:
+                raise Malformed('not a whole page file: lines past its `end`')
+            if not ended and any(line.startswith(b'kept: ') for line in body):
+                raise Malformed("a kept page's record without its `end`: it was cut short")
+            read_body(body, rec, replay=False)
             return rec
-        if lines[-1] != b'end' or len(lines) < 3:
+        if lines[-1] != END or len(lines) < 3:
             raise Malformed("a replay's record without its `end`: it was cut short")
         rec.replay = True
         rec.state = State[state.group(1).decode().upper()]
         rec.reason = unescape(state.group(2) or b'')
-        if b'end' in lines[2:-1]:
+        if END in lines[2:-1]:
             raise Malformed("a replay's record with lines past its `end`")
         if rec.state == State.UNJUDGED:
             return rec

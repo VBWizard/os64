@@ -7905,13 +7905,15 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
             yonder_diag_head_fact(fresh.diag, "TLS", g.stream.head.tls_version == 0x0304 ? "1.3" :
                 g.stream.head.tls_fallback ? "1.2 (fallback)" : "1.2");
         }
-        // The server's answer, for every page from the network. One that is
-        // an error is shown, as a browser shows it, and is a failed load
-        // from the person's chair: a 429's page is not a clean page.
-        if (g.stream.local == NULL && g.stream.head.status != 0) {
+        // The server's answer, for every page from the network (0 when its
+        // protocol has none), which a replay requires rather than assumes.
+        // One that is an error is shown, as a browser shows it, and is a
+        // failed load from the person's chair: a 429's page is not a clean
+        // page.
+        if (g.stream.local == NULL) {
             char status[16 + HTTP_REASON_MAX];
-            os64_snprintf(status, sizeof(status), "%d %s", (int)g.stream.head.status,
-                          g.stream.head.reason);
+            os64_snprintf(status, sizeof(status), g.stream.head.reason[0] ? "%d %s" : "%d",
+                          (int)g.stream.head.status, g.stream.head.reason);
             yonder_diag_head_fact(fresh.diag, "status", status);
             if (g.stream.head.status >= 400) {
                 os64_snprintf(status, sizeof(status), "HTTP %d %s", (int)g.stream.head.status,
@@ -7923,7 +7925,8 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         // with (tools/test_yonder_replay_host.c): where it came from after
         // its redirects and what libway judged its body to be; for a page
         // from the network, its type and charset as the server named them
-        // and whether it arrived encrypted; and a page read with scripts
+        // (empty when it named none: a replay requires every line, and
+        // assumes none) and whether it arrived encrypted; and a page read with scripts
         // off says so. They, the status and TLS above, and the width it is
         // laid out at have room a page's other plain lines cannot take
         // (yonder_diag_head_fact).
@@ -7932,10 +7935,8 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         yonder_diag_head_fact(fresh.diag, "final address", g.stream.head.url);
         yonder_diag_head_fact(fresh.diag, "body", kBodies[g.stream.head.body]);
         if (g.stream.local == NULL) {
-            if (g.stream.head.content_type[0] != '\0')
-                yonder_diag_head_fact(fresh.diag, "content-type", g.stream.head.content_type);
-            if (g.stream.head.charset[0] != '\0')
-                yonder_diag_head_fact(fresh.diag, "charset", g.stream.head.charset);
+            yonder_diag_head_fact(fresh.diag, "content-type", g.stream.head.content_type);
+            yonder_diag_head_fact(fresh.diag, "charset", g.stream.head.charset);
             yonder_diag_head_fact(fresh.diag, "encrypted", g.stream.head.encrypted ? "yes" : "no");
         }
         if (!fresh.scripting)

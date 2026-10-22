@@ -4618,7 +4618,7 @@ static void diag_unit_cases(void) {
     yonder_diag_t *d=yonder_diag_new("http://Example.COM:8080/FAILED?x=MISSING",3,0);
     char text[4096];
     yonder_diag_render(d,text,sizeof(text));
-    check(!strncmp(text,"address: http://Example.COM:8080/F%41ILED?x=M%49SSING\nverdict: clean\n",70),
+    check(!strcmp(text,"address: http://Example.COM:8080/F%41ILED?x=M%49SSING\nverdict: clean\n" YONDER_DIAG_END "\n"),
         "diag: a clean record's verdict, and a token in a plain line spelled with its second letter encoded");
     yonder_diag_missing(d,"global","fetch",1); yonder_diag_missing(d,"global","fetch",2);
     yonder_diag_missing_seen(d,"element","canvas",3); yonder_diag_missing_seen(d,"element","canvas",2);
@@ -5042,6 +5042,18 @@ static void diag_keep_cases(void) {
               has(big,"\n" YONDER_DIAG_LINES_LOST "\n"),
             "keep: a head fact is kept on a page whose plain lines fill the table, which still counts the rest, "
             "and says it lost lines");
+        free(big); yonder_diag_free(d);
+        /* Exactly the ordinary quota, and the head besides: the head's room
+         * is its own, so nothing is lost and the record ends whole. */
+        d=yonder_diag_new("http://fixture.test/full",1,0);
+        for(unsigned i=0;i<YONDER_DIAG_FACTS_MAX;i++) { char k[16]; snprintf(k,sizeof(k),"script %u",i); yonder_diag_fact(d,k,"ran"); }
+        static const char *const kHead[]={"status","final address","body","content-type","charset","encrypted",
+            "TLS","scripts","laid out at","kept","kept lines"};
+        for(size_t i=0;i<sizeof(kHead)/sizeof(kHead[0]);i++) yonder_diag_head_fact(d,kHead[i],"x");
+        big=malloc(1<<16); yonder_diag_render(d,big,1<<16);
+        check(has(big,"\nscript 511: ran\n") && has(big,"\nkept lines: x\n") && !has(big,"not kept") &&
+              !has(big,YONDER_DIAG_LINES_LOST) && strlen(big)>4 && !strcmp(big+strlen(big)-4,YONDER_DIAG_END "\n"),
+              "keep: 512 ordinary facts and the head's together lose nothing, and the record ends with `end`");
         free(big); yonder_diag_free(d);
     }
 

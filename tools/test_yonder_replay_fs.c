@@ -50,8 +50,12 @@ RpFs rp_fs_write(const char *path, const void *bytes, size_t len, RpFault *f) {
     char temp[PATH_MAX];
     int t=snprintf(temp,sizeof(temp),"%s.%ld.new",path,(long)getpid());
     if(t<0 || (size_t)t>=sizeof(temp)) return rp_fs_fault(f,path,"has no room for a temporary name",ENAMETOOLONG);
-    FILE *file=fopen(temp,"wb");
-    if(file==NULL) return rp_fs_fault(f,temp,"cannot be made",errno);
+    /* Made new or not at all: a name already there, a link planted at it
+     * included, is a fault, never a file to write through. */
+    int fd=open(temp,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0666);
+    if(fd<0) return rp_fs_fault(f,temp,errno==EEXIST ? "is there already" : "cannot be made",errno);
+    FILE *file=fdopen(fd,"wb");
+    if(file==NULL) { int err=errno; close(fd); remove(temp); return rp_fs_fault(f,temp,"cannot be made",err); }
     errno=0;
     bool ok=fwrite(bytes,1,len,file)==len && fflush(file)==0 && fsync(fileno(file))==0;
     int err=errno;
@@ -86,6 +90,10 @@ RpFs rp_fs_mkdir(const char *path, RpFault *f) {
 RpFs rp_fs_remove(const char *path, RpFault *f) {
     if(remove(path)==0) return RP_FS_OK;
     return errno==ENOENT ? RP_FS_ABSENT : rp_fs_fault(f,path,"cannot be removed",errno);
+}
+
+RpFs rp_fs_symlink(const char *target, const char *path, RpFault *f) {
+    return symlink(target,path)==0 ? RP_FS_OK : rp_fs_fault(f,path,"cannot be made a link",errno);
 }
 
 /* A path's permission bits set: the self-test makes a directory that can
