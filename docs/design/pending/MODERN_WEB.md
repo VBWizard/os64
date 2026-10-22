@@ -1019,6 +1019,7 @@ and a tenth the new cases found) and read for design. Four rows in
 | `stream_entry` | a Back, Forward or Reload that fetches gives the arriving document the entry's state before its first script (HTML § Restore the history object state); a host whose binding is not made yet keeps it for the binding |
 | `g.traversing` | while a traversal is fetched, the page on screen's state updates and fragment navigations change the page and not the session (HTML § Finalize a same-document navigation drops a change whose document is no longer active) |
 | `unshown_go` | `history.back()` or `forward()` past a page not yet shown is ONE rule wherever its arrival is (parse, DOMContentLoaded, waiting for sheets): its navigation committed when its response came (HTML § Finalize a cross-document navigation), so when there is an entry that far (§ Traverse the history by a delta) the page is never shown, a new way's entries go ahead (a traversal's are let go with it: DEBTS.md), and the window goes there from the page on screen, with no fetch when that is the page on screen; when there is none, nothing happens and the page arrives. A new way's page has nothing ahead, and neither has a page that pushed before it was shown, however it came: the push let go of what was ahead of its entry; a reload is the entry on screen again; a traversal's page is the entry it was fetched for (`Page.arrives_at`), which its arrival lands on whatever it pushed before it was shown. From `load` on, the page is the one on screen |
+| `g.replacing` | a page not yet shown that navigates by address (`location.replace`, `location.href`, during its parse, its DOMContentLoaded or its wait for sheets) navigates from its own entry, which the new page replaces: an ordinary navigation too, since the page has not completely loaded (HTML § 7.2.4, Location-object navigate, step 3). The new page takes its place (`start_trip`): it comes as the replaced page came (a reload's as a refresh), at the entry a traversal was fetched for, with the entries its scripts made around it, and a traversal goes on as its own. A redirector reached by a link leaves the page before it behind; one reached by Back is replaced, so Back past it is the entry before it. One that waits on the question bar is asked as the page on screen's |
 | the switch | with it off: none of the four rows' names, nor `scrollingElement`, `defaultView` or an element's `onscroll`; the arc's handler types are not handlers as content attributes either; `history.length` is 1, a fragment navigation is an ask, the hash setter asks whatever it is given, and history deltas do not add up. What it does not reach: the window's own session (a fragment link's entry, Back within a document, the entries named by crumbs), which is yonder's own history, not web surface (the design read's ruling) |
 
 **The scroll-restoration ruling.** The brief said a traversal within a
@@ -1105,7 +1106,10 @@ from an arriving page that had pushed abandoning it, where the push had let
 go of what was ahead and forward is nothing; and `history.length`, read
 by such a page, still counting what its push let go of; and a new way's
 page going back past its own entries putting them ahead of what its commit
-had let go of.
+had let go of; and a page not yet shown that navigated by address doing so
+from the page on screen (`g.replacing`), so a JavaScript redirector's
+`location.replace` erased the page its link was on, and a redirector
+reached by Back left its entry behind, where Back reached it again.
 **The design read** passed it with the scroll-restoration ruling, the two
 accepted departures from HTML's traversal queue below, and the session's
 being outside the switch.

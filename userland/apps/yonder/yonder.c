@@ -670,12 +670,14 @@ typedef struct Page {
     // (way_crumb_t.entry): a traversal's target keeps its name, a reload is
     // the same entry, a push makes a new one. `arrives_at` is the session
     // entry a fetched traversal is bringing back, by its name, whatever the
-    // page's scripts push before it is shown (0 for any other arrival).
-    // `entry_state` is the current
-    // entry's state as its script left it (JSON, NULL for none). The
-    // session (g.way) holds the entries of the page on screen; a page not
-    // yet shown keeps the ones its scripts make in two stacks of its own,
-    // `back` and `ahead`, each nearest last, which arriving moves in.
+    // page's scripts push before it is shown, and still is for a page that
+    // replaces such a page before it was shown (start_trip); 0 for any
+    // other arrival. `entry_state` is the current entry's state as its
+    // script left it (JSON, NULL for none). The session (g.way) holds the
+    // entries of the page on screen; a page not yet shown keeps the ones
+    // its scripts make, and those of a page not yet shown that it replaced,
+    // in two stacks of its own, `back` and `ahead`, each nearest last,
+    // which arriving moves in.
     // `events` are the history's events the page owes its scripts, in
     // order (page_event_run). A scroll its script asked for before it was
     // shown is made when it is (`scroll_asked`, in CSS pixels). A struct
@@ -1367,6 +1369,10 @@ static struct {
     // (stop_trip), where the change does join, as one entry.
     bool traversing, has_held, held_push;
     way_crumb_t held;
+    // The page not yet shown whose navigation by address is being started
+    // (navigation_perform), which takes its place in the session
+    // (start_trip); NULL otherwise.
+    Page *replacing;
     // A page that arrived and is waiting for its linked sheets, with what
     // arriving needs; the page on screen stays until it is shown (GARB.md,
     // G4). `due` is when it is shown whatever is still coming.
@@ -3231,10 +3237,85 @@ static const char *file_path(const char *after)
     return path;
 }
 
+// A page not yet shown's place in the session, which the navigation that
+// replaces its entry takes (g.replacing): how it is coming, the entry a
+// traversal arrives at, and the entries its scripts made, which stay where
+// they are around the entry. `kind` is how the new page comes: as the
+// replaced page did, but a reload's successor comes as a refresh, a new
+// document in the entry on screen.
+typedef struct {
+    bool taken;
+    NavKind kind;
+    uint64_t arrives_at;
+    way_crumb_t *back, *ahead;
+    int32_t nback, nahead;
+} Place;
+
+static NavKind unshown_kind(const Page *p);
+static void page_stack_clear(way_crumb_t *stack, int32_t *n);
+
+static void place_take(Place *place)
+{
+    os64_memset(place, 0, sizeof(*place));
+    Page *p = g.replacing;
+    g.replacing = NULL;
+    if (p == NULL)
+        return;
+    NavKind kind = unshown_kind(p);
+    place->taken = true;
+    place->kind = kind == NAV_RELOAD ? NAV_REFRESH : kind;
+    place->arrives_at = p->arrives_at;
+    place->back = p->back;
+    place->ahead = p->ahead;
+    place->nback = p->nback;
+    place->nahead = p->nahead;
+    p->back = p->ahead = NULL;
+    p->nback = p->nahead = 0;
+}
+
+static void trip_send(const char *url, os64_page_request_t *request, NavKind kind,
+                      const way_position_t *crumb);
+
 // Sends `url` (with `request`'s body, if it is a form: MOVED into the job)
 // to a worker. The navigation it replaces is stopped first: one at a time.
+// One started by a page not yet shown (g.replacing) takes that page's place
+// (Place) instead of coming from the page on screen, and a traversal the
+// page was coming by goes on as the new page's: the session moves to that
+// entry when the new page arrives (arrive_now), and the page on screen's
+// changes meanwhile stay held (g.held). Its scroll is the top, as a new
+// document's.
 static void start_trip(const char *url, os64_page_request_t *request, NavKind kind,
                        const way_position_t *crumb)
+{
+    Place place;
+    place_take(&place);
+    bool traversal = place.taken && g.traversing && (place.kind == NAV_BACK || place.kind == NAV_FORWARD);
+    if (traversal)
+        g.traversing = false;           // stop_trip must not end it
+    trip_send(url, request, place.taken ? place.kind : kind, crumb);
+    if (!place.taken)
+        return;
+    if (!g.stream.active) {
+        // Nothing was started: the place goes, and a traversal with it, as
+        // one stopped.
+        page_stack_clear(place.back, &place.nback);
+        page_stack_clear(place.ahead, &place.nahead);
+        os64_free(place.back);
+        os64_free(place.ahead);
+        if (traversal)
+            traverse_end(true);
+        return;
+    }
+    g.stream.page.arrives_at = place.arrives_at;
+    g.stream.page.back = place.back;
+    g.stream.page.ahead = place.ahead;
+    g.stream.page.nback = place.nback;
+    g.stream.page.nahead = place.nahead;
+    g.traversing = traversal;
+}
+
+static void trip_send(const char *url, os64_page_request_t *request, NavKind kind,
+                      const way_position_t *crumb)
 {
     // A QUESTION IS ABOUT THE PAGE ON SCREEN, and going anywhere leaves it:
     // whoever asked, it goes (a form's request with it) before this goes.
@@ -7407,7 +7488,6 @@ static bool page_fragment(Page *p, const char *url, bool replace, bool tell);
 static void fragment_scroll(const os64_html_node_t *target, const char *name);
 static bool page_traverse(Page *p, int32_t delta);
 static void session_go(int32_t delta);
-static void page_stack_clear(way_crumb_t *stack, int32_t *n);
 
 // How many entries a history delta moves, in a type that holds every one:
 // a page's history.go() takes any WebIDL `long`, and INT32_MIN has no
@@ -7553,8 +7633,19 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
             say_failed(g.page.diag, "navigation", "A script asked for an address this browser cannot go to.");
             return;
         }
+        // A page not yet shown is the session's entry already (unshown_go
+        // says why), and its navigation is from that entry, not from the
+        // page on screen: replace() replaces it, and so does an ordinary
+        // navigation, since the page has not completely loaded (HTML
+        // § 7.2.4 The Location interface, "Location-object navigate", step
+        // 3: a document not yet completely loaded navigates with
+        // historyHandling "replace"). The new page takes its place
+        // (start_trip). One that waits on the question bar is asked as the
+        // page on screen's, and its place is not taken.
+        g.replacing = shown ? NULL : page_of_host(host);
         request_navigate(&request, ask->kind == OS64_DOM_NAVIGATE_REPLACE ? NAV_REFRESH : NAV_GO,
                          WAY_ASK_GO);
+        g.replacing = NULL;
         return;
     }
     case OS64_DOM_NAVIGATE_RELOAD:

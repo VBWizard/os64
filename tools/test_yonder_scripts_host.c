@@ -3698,10 +3698,77 @@ static void loop_view_new_way_back(void) {
         "new way back: go(-2) from A2 is S, A and A2 ahead, F let go");
     loop_drop();
 }
+/* A page not yet shown that navigates by address does so from its own
+ * entry, which the navigation replaces: replace() does, and so does an
+ * ordinary navigation before the page has completely loaded (HTML's
+ * Location-object navigate). A redirector reached by a link leaves the
+ * page it was reached from behind; one reached by Back is replaced, so
+ * Back past it is the entry before it. */
+static void unshown_redirect_case(const char *how) {
+    char body[256], what[160];
+    loop_page("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns(),"unshown redirect: S");
+    start_trip("http://fixture.test/R",NULL,NAV_GO,NULL);
+    os64_snprintf(body,sizeof(body),"<p id=out>R</p><script>history.replaceState(null,'','/R');%s</script><p>tail</p>",how);
+    post_arriving(body);
+    loop_settle();
+    view_turns();
+    os64_snprintf(what,sizeof(what),"unshown redirect: %s from a new way's page fetches X",how);
+    check(g.stream.active && !probe_text_is("out","R"),what);
+    post_arriving("<p id=out>X</p><script>history.replaceState(null,'','/X')</script>");
+    os64_snprintf(what,sizeof(what),"unshown redirect: %s from a new way's page replaces it, S behind",how);
+    check(loop_settle() && view_turns() && probe_text_is("out","X") && session_is("/S","/X",""),what);
+    loop_drop();
+}
+static void unshown_redirect_back_case(const char *how) {
+    char body[256], what[160];
+    loop_page("<p id=out>U</p><script>history.replaceState(null,'','/U')</script>");
+    check(loop_settle() && view_turns(),"unshown redirect back: U");
+    start_trip("http://fixture.test/T",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
+    check(loop_settle() && view_turns(),"unshown redirect back: T");
+    start_trip("http://fixture.test/S",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns() && session_is("/U,/T","/S",""),"unshown redirect back: on S");
+    click_back(NULL,NULL);
+    os64_snprintf(body,sizeof(body),"<p id=out>T</p><script>history.replaceState(null,'','/T');%s</script><p>tail</p>",how);
+    post_arriving(body);
+    loop_settle();
+    view_turns();
+    post_arriving("<p id=out>X</p><script>history.replaceState(null,'','/X')</script>");
+    os64_snprintf(what,sizeof(what),"unshown redirect back: %s from T reached by Back replaces T, S ahead",how);
+    check(loop_settle() && view_turns() && probe_text_is("out","X") && session_is("/U","/X","/S"),what);
+    click_back(NULL,NULL);
+    post_arriving("<p id=out>U</p><script>history.replaceState(null,'','/U')</script>");
+    os64_snprintf(what,sizeof(what),"unshown redirect back: %s, and Back from X is U",how);
+    check(loop_settle() && view_turns() && probe_text_is("out","U") && session_is("","/U","/X,/S"),what);
+    loop_drop();
+}
+static void loop_view_unshown_redirect(void) {
+    unshown_redirect_case("location.replace('/X')");
+    unshown_redirect_case("location.href='/X'");
+    unshown_redirect_back_case("location.href='/X'");
+    unshown_redirect_back_case("location.replace('/X')");
+    unshown_redirect_back_case("document.addEventListener('DOMContentLoaded',function(){location.href='/X'})");
+    // A redirector that pushed first: the push's entry is the one replaced,
+    // and the entry it pushed from stays behind it.
+    loop_page("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns(),"unshown redirect pushed: S");
+    start_trip("http://fixture.test/R",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>R</p><script>history.replaceState(null,'','/R');history.pushState(null,'','/R2');"
+        "location.replace('/X')</script><p>tail</p>");
+    loop_settle();
+    view_turns();
+    post_arriving("<p id=out>X</p><script>history.replaceState(null,'','/X')</script>");
+    check(loop_settle() && view_turns() && probe_text_is("out","X") && session_is("/S,/R","/X",""),
+        "unshown redirect pushed: X replaces R2, R and S behind");
+    loop_drop();
+}
 static void loop_view_cold2_cases(void) {
     loop_view_pushed_then_forward();
     loop_view_pushed_length();
     loop_view_new_way_back();
+    loop_view_unshown_redirect();
 }
 static void loop_view_cold_cases(void) {
     loop_view_cold2_cases();
