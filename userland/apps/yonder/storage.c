@@ -343,14 +343,16 @@ static bool temp_write(yonder_storage_t *st, const char *path, const void *image
 // other's changes. A lock whose task is not running (gone, or a zombie),
 // or is this window's own (lock_dead), or that is older than LOCK_STALE_S
 // (a commit takes milliseconds; a task number is reused at the next boot),
-// was left by a crash and is broken. A
-// live one is waited for, LOCK_STEP_MS at a time, up to LOCK_WAIT_MS; then
-// the commit is BUSY and libdom keeps the changes for the next. One that
-// names nothing is being written, or was left half made: it is waited for
-// the same way and broken at the end of the wait. Under the lock, the
-// store's identity is read again before the rename: a writer that ignored
-// the lock (a crash's lock broken by two waiters at once) moved it, and the
-// merge is made again onto what it wrote.
+// was left by a crash and is broken. A live one is waited for,
+// LOCK_STEP_MS at a time, up to LOCK_WAIT_MS; then the commit is BUSY and
+// libdom keeps the changes for the next. One that names nothing is being
+// written, or was left half made: it is waited for the same way and broken
+// at the end of the wait. Under the lock, the store's identity is read
+// again before the rename: a writer that ignored the lock (a crash's lock
+// broken by two waiters at once) moved it, and the merge is made again
+// onto what it wrote. What the second look cannot see is such a writer's
+// image of the same size in the same second (file_identity), or one that
+// lands between the look and the rename.
 #define LOCK_WAIT_MS 200
 #define LOCK_STEP_MS 5
 #define LOCK_STALE_S 10
@@ -594,7 +596,8 @@ static uint64_t path_identity(const char *path)
 // Read, merge, write, under the store's lock: the store as it stands, this
 // page's changes on top. A store that is there and cannot be read is never
 // written over. A store that moved between the read and the rename (above)
-// is merged onto again, MERGE_TRIES times, and then the commit is BUSY.
+// is merged onto again, up to MERGE_TRIES merges in all, and then the
+// commit is BUSY.
 static os64_dom_storage_status_t commit_locked(yonder_storage_t *st, const char *origin, const char *path,
                                                const void *changes, size_t length, yonder_diag_t *diag)
 {
