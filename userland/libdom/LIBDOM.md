@@ -232,7 +232,9 @@ memory (§ Events).
 ## Events
 
 `addEventListener`, `removeEventListener` and `dispatchEvent` are on every
-node and on window. A listener is a function or an object with `handleEvent`;
+node, on window, and on each plain event target a Modern Web row makes
+(`d_event_target`: an object that is neither, whose dispatch path is itself
+alone). A listener is a function or an object with `handleEvent`;
 the third argument is the old boolean `useCapture` or `{capture, once}`
 (`passive` is accepted and changes nothing). `new Event(type, {bubbles,
 cancelable})` and the old `document.createEvent(...)` with `initEvent` make
