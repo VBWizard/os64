@@ -2188,16 +2188,15 @@ static bool motion_walk(const FMotion *m, Look *look, bool record)
 
 // What every animation leaves together, worked once from the style they
 // leave: what is in currentColor follows the colour as it moves; a side
-// drawn as none or hidden has no width (Backgrounds 3 § 4.3), nor has an
-// outline whose style is none (CSS UI 4 § 3.2).
+// drawn as none or hidden has no width (Backgrounds 3 § 4.3). An outline
+// keeps its width whatever its style, as its computed value does (CSS UI
+// 4 § 3.2); a style of none draws nothing (flow_outline_rect).
 static void motion_settle(flow_style_t *out)
 {
     follow_colour(out);
     for (int i = 0; i < 4; i++)
         if (out->border_style[i] == FLOW_BORDER_NONE || out->border_style[i] == FLOW_BORDER_HIDDEN)
             out->border_width[i] = 0;
-    if (out->outline_style == FLOW_BORDER_NONE)
-        out->outline_width = 0;
 }
 
 bool f_motion_style(const FMotion *m, double now, flow_style_t *out, FAlloc alloc, FResolve resolve,

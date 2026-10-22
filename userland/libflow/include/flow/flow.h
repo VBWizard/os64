@@ -781,9 +781,10 @@ typedef struct {
     // `outline` (CSS UI 4 § 3): drawn outside the border edge, past it by
     // `outline_offset`, `outline_width` wide, last in its stacking context,
     // over everything painted in it (flow_visitor_t.outline), and taking no
-    // room (flow_outline_rect). The width is 0 when the style is
-    // none, as a border's is; `auto` is drawn solid, and `outline_auto`
-    // says it was asked for. The colour's currentColor, and its `auto`,
+    // room (flow_outline_rect). The width is the computed one (CSS UI 4 §
+    // 3.2), kept whatever the style, so `inherit` passes it on; a style of
+    // none draws nothing, the width ignored (§ 3.3). `auto` is drawn solid,
+    // and `outline_auto` says it was asked for. The colour's currentColor, and its `auto`,
     // are the element's colour (current_colours). Not inherited.
     flow_unit_t outline_width, outline_offset;
     flow_border_style_t outline_style;
@@ -1268,9 +1269,9 @@ os64_gui_rect_t flow_decoration_rect(const flow_box_t *box, uint32_t line);
 // Where the painter draws a box's outline (CSS UI 4 § 3): its border box
 // grown on every side by the outline's offset and then its width, the
 // outline the ring between that and the border box grown by the offset
-// alone. False for a box that draws none: no width, or a box that paints
-// no frame of its own (a text, a line, an inline box's piece — whose
-// outline is booked).
+// alone. False for a box that draws none: no width, a style of none, or a
+// box that paints no frame of its own (a text, a line, an inline box's
+// piece — whose outline is booked).
 bool flow_outline_rect(const flow_box_t *box, os64_gui_rect_t *out);
 // The square a shape marker (flow_marker_is_shape) is drawn in: a third of
 // its font size across and at least 3 pixels, centred in the box less a

@@ -4399,8 +4399,7 @@ static void motion_batch_a_cases(void)
            k != NULL && k->cursor == FLOW_CURSOR_POINTER && k->word_break == FLOW_WORD_BREAK_NORMAL &&
                k->letter_spacing == 160, NULL);
     moving_close(&m);
-    // An outline whose style is none has no width, whatever is animating
-    // the width; a style animated to solid brings the width's own, medium
+    // A style animated to solid brings the outline's own width, medium
     // when nothing declares one.
     moving_open(&m, "<!doctype html><style>div { animation: n 1s linear -750ms paused }"
                     " @keyframes n { from { outline-style: none } to { outline-style: solid } }"

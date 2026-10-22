@@ -449,6 +449,24 @@ static void batch_a_cases(void)
         "        b inline weight=700\n"
         "        i inline italic outline=16:solid:#0000ff outline-offset=-8\n"
         "      em inline italic outline=3:dotted:#ff0000\n");
+    // outline-width's computed value is its length whatever the style (CSS
+    // UI 4 § 3.2), so `inherit` passes on 4 from a solid outline and 7 from
+    // one whose style is none; `initial` and `revert` are medium, 3. A
+    // style of none draws nothing and prints nothing.
+    cascade_case("outline: the width is computed whatever the style", 800,
+        "<!doctype html><style>.p { outline: 4px solid } .p i { outline-width: inherit;"
+        " outline-style: solid } .q { outline: 7px none } .q i { outline-width: inherit;"
+        " outline-style: solid } .e { outline-style: solid; outline-width: initial } .r {"
+        " outline-style: solid; outline-width: revert }</style><div class=p><i>a</i></div>"
+        "<div class=q><i>b</i></div><div class=e></div><div class=r></div>",
+        PAGE_OPEN
+        "  body block margin=8/8/8/8 holds-block\n"
+        "    div block outline=4:solid:ink\n"
+        "      i inline italic outline=4:solid:ink\n"
+        "    div block\n"
+        "      i inline italic outline=7:solid:ink\n"
+        "    div block outline=3:solid:ink\n"
+        "    div block outline=3:solid:ink\n");
     // It takes no room: the div is where it would be without one.
     cascade_layout_case("outline: takes no room",
         "<!doctype html><style>body { margin: 0 } div { width: 20px; height: 10px;"

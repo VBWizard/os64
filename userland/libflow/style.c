@@ -3722,7 +3722,9 @@ static void finish(const Ctx *c, Spec *sp, const flow_style_t *parent, bool item
     s->current_colours = (uint8_t)(sp->outline_color_set
                                        ? s->current_colours & ~FLOW_CURRENT_OUTLINE
                                        : s->current_colours | FLOW_CURRENT_OUTLINE);
-    s->outline_width = s->outline_style != FLOW_BORDER_NONE ? sp->outline_px : 0;
+    // The computed width, whatever the style: a style of none draws
+    // nothing (flow_outline_rect), and `inherit` passes on the width.
+    s->outline_width = sp->outline_px;
     const flow_length_t half = {FLOW_LENGTH_PERCENT, 50 * 64, 0};
     for (int k = 0; k < 2; k++)
         s->object_position[k] = resolve(sp->object_position[k], s->font_size, half);
@@ -3804,8 +3806,8 @@ static flow_unit_t own_width(const Ctx *c, const Spec *sp, garb_style_t st, garb
     return css(c, 3);
 }
 
-// An outline's own width, the same way: finish makes it 0 for a style of
-// none, which an animation may be moving.
+// An outline's own width, the same way: the width an origin declared, or,
+// declared by none, the initial `medium`.
 static flow_unit_t own_outline_width(const Ctx *c, const Spec *sp, garb_style_t st,
                                      garb_style_t sets)
 {

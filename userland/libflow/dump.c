@@ -485,7 +485,7 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         putf(b, " opacity=%d.%03d", s->opacity / 1000, s->opacity % 1000);
     if (s->pointer_events_none != parent->pointer_events_none)
         puts_(b, s->pointer_events_none ? " pointer-events=none" : " pointer-events=auto");
-    if (s->outline_width > 0) {
+    if (s->outline_width > 0 && s->outline_style != FLOW_BORDER_NONE) {
         puts_(b, " outline=");
         unit(b, s->outline_width);
         putf(b, ":%s:", s->outline_auto ? "auto" : s_border[s->outline_style]);

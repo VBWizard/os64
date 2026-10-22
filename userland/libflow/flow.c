@@ -1051,7 +1051,7 @@ bool flow_outline_rect(const flow_box_t *box, os64_gui_rect_t *out)
 {
     const flow_style_t *s = box->style;
     int64_t w = size_px(s->outline_width);
-    if (w <= 0 || !paints_frame(box))
+    if (w <= 0 || s->outline_style == FLOW_BORDER_NONE || !paints_frame(box))
         return false;
     // The offset may be negative: it may take the ring inside the border
     // box, and past its middle, where the ring's inner edge is gone.
