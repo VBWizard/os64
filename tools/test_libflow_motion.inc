@@ -4349,6 +4349,18 @@ static void motion_sweep(void)
     motion_incomplete_cases();
 }
 
+static void motion_no_visit(void *ctx, const flow_box_t *b)
+{
+    (void)ctx;
+    (void)b;
+}
+
+static void motion_count_ring(void *ctx, const flow_box_t *b)
+{
+    (void)b;
+    (*(int32_t *)ctx)++;
+}
+
 // Slice 4's longhands under @keyframes (MODERN_WEB_BRIEFS.md § Slice 4):
 // each animatable by its computed value mixes halfway as its type does —
 // a length, a colour, a position, a <ratio> by its logarithm (Values 4 §
@@ -4396,6 +4408,19 @@ static void motion_batch_a_cases(void)
     const flow_style_t *s = moving_style(&m, "s");
     expect("animation: an outline style animated to solid draws medium",
            s != NULL && s->outline_style == FLOW_BORDER_SOLID && s->outline_width == 3 * 64, NULL);
+    moving_close(&m);
+    // A tick grows the ink of what it changed and leaves standing what the
+    // layout found below it: an outline under an element whose shadow
+    // ticks is still handed to the outline step after the tick.
+    moving_open_for(&m, MOTION_STYLE "@keyframes s{from{box-shadow:0 0 0 red}"
+                        "to{box-shadow:0 0 10px red}}#p{animation:s 1s linear}"
+                        "#c{outline:1px solid;height:10px}</style><div id=p><div id=c></div></div>",
+                    0, true);
+    bool ticked = flow_motion_tick(m.tree, 500, (flow_point_t){0, 0}, NULL, NULL, NULL);
+    int32_t rings = 0;
+    flow_visitor_t vis = {motion_no_visit, NULL, NULL, &rings, motion_count_ring};
+    flow_visit_groups(m.tree, (os64_gui_rect_t){0, 0, 800, 600}, (flow_point_t){0, 0}, &vis);
+    expect("tick: an outline below a ticked shadow is still painted", ticked && rings == 1, NULL);
     moving_close(&m);
 }
 

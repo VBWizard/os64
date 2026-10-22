@@ -1018,8 +1018,10 @@ struct flow_box {
     // subtrees that hold none, so a page without floats pays nothing for
     // them.
     bool holds_float;
-    // It, or a box below it, draws an outline (flow_outline_rect): the
-    // outline step of flow_visit_groups walks only the subtrees that do.
+    // It, or a box below it, draws an outline (flow_outline_rect), or did
+    // at a tick of the tree's animations — it only grows, as `ink` does:
+    // the outline step of flow_visit_groups walks only the subtrees that
+    // hold one, and asks each box there whether it draws one now.
     bool holds_outline;
     // Painted as a layer of its own, in paint order, and never through its
     // tree ancestors: their walks skip it. A positioned box is; so is a

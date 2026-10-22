@@ -1127,9 +1127,12 @@ static void own_ink(flow_box_t *b)
         past_box(b, r.x, r.y, (int64_t)r.x + r.w, (int64_t)r.y + r.h, most, NULL);
     }
     // An outline is drawn past the border box and in no box's overflow.
+    // Whether one is held only grows, as the ink does: a tick that measures
+    // a box again (ink_grown) keeps what its descendants handed up.
     os64_gui_rect_t ring;
-    b->holds_outline = flow_outline_rect(b, &ring);
-    if (b->holds_outline)
+    bool ringed = flow_outline_rect(b, &ring);
+    b->holds_outline |= ringed;
+    if (ringed)
         past_box(b, ring.x, ring.y, (int64_t)ring.x + ring.w, (int64_t)ring.y + ring.h, most, NULL);
     for (int32_t i = 0; i < nbox + ntext; i++) {
         bool text = i >= nbox;
