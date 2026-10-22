@@ -683,9 +683,10 @@ typedef struct Page {
     // shown is made when it is (`scroll_asked`, in CSS pixels). `loaded`
     // is HTML's "completely loaded": false until the page is shown and its
     // `load` task, the navigation that task asked for included, is over
-    // (arrive_now), and a navigation its script asks for before then
-    // replaces its entry (page_navigation_replaces). A struct copy of a
-    // Page borrows what these point at; page_clear frees it.
+    // (arrive_now), and a navigation by address or a form its script asks
+    // for before then replaces its entry (page_navigation_replaces). A
+    // struct copy of a Page borrows what these point at; page_clear frees
+    // it.
     uint64_t document, entry, arrives_at;
     char *entry_state;
     way_crumb_t *back, *ahead;
@@ -7563,7 +7564,9 @@ static bool unshown_at(const Page *p, int64_t *at)
 // interface, "Location-object navigate", step 3, short of transient
 // activation) and by a form (§ 4.10.22.3 Form submission algorithm, step
 // 25). No activation is weighed: a page is shown and its `load` runs in one
-// turn (arrive_now), so a person's input has no task in that window.
+// turn (arrive_now), so a person's input has no task in that window. A
+// fragment navigation is not held to it (DEBTS.md § Classic browser
+// scripting).
 static bool page_navigation_replaces(const Page *p)
 {
     return p != NULL && !p->loaded;
