@@ -439,7 +439,9 @@ static void batch_a_cases(void)
     // scrolls and e has a min-height of its own, so neither grows: 10. f:
     // border-box, the ratio its border box's, 100 by 50 with 10 of padding
     // round a 30 content. g: `auto 2` is the content box's, 80 by 40, 60
-    // with its padding.
+    // with its padding: under `auto && <ratio>` the ratio works on the
+    // content box "in all cases" (§ 4.1), a box with no natural ratio
+    // included.
     cascade_layout_case("aspect-ratio: a block's height from its width, or its width from its height",
         "<!doctype html><style>body { margin: 0 } p { margin: 0 }"
         " .a { width: 100px; aspect-ratio: 2 } .b { height: 50px; aspect-ratio: 16 / 9 }"

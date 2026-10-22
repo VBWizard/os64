@@ -180,9 +180,12 @@ static int64_t clamp_height(const flow_style_t *s, int64_t h, int64_t frame)
 // A box with a ratio (flow_style_t.aspect_ratio) and one of its width and
 // height left to it takes that one from the other, measured on its content
 // box, or on its border box where box-sizing says so and `auto` was not
-// written beside the ratio (§ 4.1). The two below answer CONTENT sizes
-// from a content size, `hf` and `vf` being the box's frames across and
-// down, held where a length is.
+// written beside the ratio: § 4.1 says of `auto && <ratio>` that "in all
+// cases, size calculations involving the aspect ratio work with the
+// content box dimensions always", a box with no natural ratio of its own
+// included (WPT's block-aspect-ratio-050). The two below answer CONTENT
+// sizes from a content size, `hf` and `vf` being the box's frames across
+// and down, held where a length is.
 static int64_t ratio_size(const flow_style_t *s, int64_t from, int64_t from_frame,
                           int64_t to_frame, bool down)
 {
