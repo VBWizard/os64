@@ -57,8 +57,10 @@ typedef struct {
     bool penned;
     uint32_t pen;
     // The cuts of the lines that end in an ellipsis, worked once a paint
-    // (line_cut); NULL to work each when asked.
+    // (line_cut); NULL to work each when asked. `tree` is what they are
+    // worked in (flow_line_cut reads its scroll positions).
     LineCuts *cuts;
+    const flow_tree_t *tree;
 } Painter;
 
 // A coordinate and a move added, held to what a 32-bit coordinate can say,
@@ -1165,7 +1167,7 @@ static bool shadow_kept(const Painter *p, const Round *shape, const Round *times
 }
 
 void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
-uint64_t yonder_paint_cut_walks;
+uint64_t yonder_paint_cuts;
 
 static void shadow_cast(const Painter *p, const flow_box_t *b, const Round *outer, const Round *inner,
                         const flow_shadow_t *sh, bool square);
@@ -1980,140 +1982,40 @@ static bool is_frame(const flow_box_t *b)
 
 // ── The ellipsis (CSS Overflow 4 § 4.1) ─────────────────────────────────
 //
-// A line whose block has an ellipsis (flow_box_t.ellipsis) and whose
-// content passes the line's end where the block's scroll shows it —
-// pre-wrap spaces that hang there do not count — ends in it: what does not
-// fit before that end less the ellipsis is not drawn — a text across that
-// limit keeps the characters that end before it, an atom past it nothing,
-// its content included, and an inline box's piece is cut where what is
-// kept ends — and the ellipsis
-// is drawn right after what is kept, in the block's colour on the line's
-// baseline, when the walk hands the painter the line, after the line's
-// pieces. A line that would keep nothing before the limit keeps its first
-// character or atom, clipped rather than ellipsed, and the ellipsis
-// follows it, clipped by the box where there is no room for it.
-typedef struct {
-    bool on;
-    int64_t limit, at;      // where what is kept must end; where the ellipsis starts
-} LineCut;
+// Where a line ends in its block's ellipsis is libflow's (flow_line_cut),
+// because the rule has two doors: what lies at or past the cut is neither
+// drawn here nor hit by flow_hit. The painter draws what the cut keeps — a
+// text up to its last character that ends by the limit, an inline box's
+// piece up to where what is kept ends, an atom before the cut whole, one at
+// or past it not at all, its content included — and the ellipsis at the
+// cut, in the block's colour, on the line's baseline, when the walk
+// hands it the line after the line's pieces.
 
-// The last LINE_CUTS lines' cuts, the oldest replaced first: enough for a
-// box inside atoms nested on that many ellipsed lines to find each.
+// The last LINE_CUTS lines' cuts (flow_line_cut), the oldest replaced
+// first: enough for a box inside atoms nested on that many ellipsed lines
+// to find each.
 #define LINE_CUTS 8
 struct LineCuts {
     const flow_box_t *line[LINE_CUTS];
-    LineCut cut[LINE_CUTS];
+    flow_line_cut_t cut[LINE_CUTS];
     int32_t next;
 };
 
-// How much of a text box is kept before `limit`, in whole pixels from its
-// left: up to the last character boundary that does not pass it.
-static int64_t text_kept(const flow_box_t *t, int64_t limit)
-{
-    size_t byte;
-    os64_text_caret_t c;
-    int64_t room = limit - t->rect.x;
-    if (t->run == NULL || room <= 0 ||
-        os64_text_fit(t->run, (os64_font_pos_t)min64(room * 64, INT32_MAX), &byte) != OS64_FONT_OK ||
-        os64_text_caret(t->run, byte, OS64_TEXT_BEFORE, &c) != OS64_FONT_OK)
-        return 0;
-    return c.x / 64;
-}
-
-static bool line_content(const flow_box_t *k)
-{
-    return k->kind == FLOW_BOX_TEXT || k->kind == FLOW_BOX_ATOMIC || k->kind == FLOW_BOX_MARKER;
-}
-
-// Where a box's content on its line ends: its right edge, but for a text
-// whose white space is preserved and wraps, whose spaces at its end hang
-// (CSS Text 3 § 4.1.3) and take no room on the line.
-static int64_t content_end(const flow_box_t *k)
-{
-    int64_t right = (int64_t)k->rect.x + k->rect.w;
-    if (k->kind != FLOW_BOX_TEXT || k->style->white_space != FLOW_WS_PRE_WRAP || k->run == NULL)
-        return right;
-    uint32_t n = k->length;
-    while (n > 0 && k->text[n - 1] == ' ')
-        n--;
-    os64_text_caret_t c;
-    if (n == k->length || os64_text_caret(k->run, n, OS64_TEXT_BEFORE, &c) != OS64_FONT_OK)
-        return right;
-    return (int64_t)k->rect.x + (c.x + 63) / 64;
-}
-
-// The cut of a line of a block with an ellipsis whose content is
-// scrolled `sx` across: the block's end edge is where the scroll shows it,
-// so content scrolled into view is drawn and not ellipsed (Overflow 4 §
-// 4.1), and a line scrolled to its end has no ellipsis at all.
-static LineCut cut_of(const flow_box_t *line, int64_t sx)
-{
-    LineCut c = {false, 0, 0};
-    const flow_box_t *block = line->parent;
-    int64_t edge = (int64_t)line->rect.x + line->rect.w + sx, reach = INT64_MIN;
-    for (const flow_box_t *k = line->first; k != NULL; k = k->next, yonder_paint_cut_walks++)
-        if (line_content(k))
-            reach = max64(reach, content_end(k));
-    os64_text_run_view_t v;
-    if (reach <= edge || os64_text_run_view(block->ellipsis, &v) != OS64_FONT_OK)
-        return c;
-    c.limit = edge - ((int64_t)v.advance_x + 63) / 64;
-    int64_t at = INT64_MIN;
-    for (const flow_box_t *k = line->first; k != NULL; k = k->next, yonder_paint_cut_walks++) {
-        if (!line_content(k))
-            continue;
-        int64_t right = (int64_t)k->rect.x + k->rect.w;
-        if (right <= c.limit)
-            at = max64(at, right);
-        else if (k->kind == FLOW_BOX_TEXT && k->rect.x < c.limit && text_kept(k, c.limit) > 0)
-            at = max64(at, (int64_t)k->rect.x + text_kept(k, c.limit));
-    }
-    // Nothing fits before the limit: the line's first character or atom
-    // is kept and clipped rather than ellipsed, and the ellipsis follows
-    // it, clipped by the box with it (Overflow 4 § 4.1).
-    if (at == INT64_MIN) {
-        const flow_box_t *first = NULL;
-        for (const flow_box_t *k = line->first; k != NULL; k = k->next, yonder_paint_cut_walks++)
-            if (line_content(k) && (first == NULL || k->rect.x < first->rect.x))
-                first = k;
-        os64_text_caret_t one;
-        if (first == NULL)
-            return c;
-        if (first->kind == FLOW_BOX_TEXT && first->run != NULL &&
-            os64_text_run_view(first->run, &v) == OS64_FONT_OK && v.glyph_count > 0 &&
-            os64_text_caret(first->run, v.glyphs[0].byte_end, OS64_TEXT_BEFORE, &one) ==
-                OS64_FONT_OK) {
-            c.limit = (int64_t)first->rect.x + ((int64_t)one.x + 63) / 64;
-            at = (int64_t)first->rect.x + text_kept(first, c.limit);
-        } else {
-            c.limit = at = (int64_t)first->rect.x + first->rect.w;
-        }
-    }
-    c.on = true;
-    c.at = at;
-    return c;
-}
-
-// A line's cut (cut_of), at the scroll its block is painted at. Working one
-// walks the line, and each of its pieces asks for it, so the painter keeps
-// the last few it worked (LineCuts): a line is walked once a paint, not
-// once a piece.
-static LineCut line_cut(const Painter *p, const flow_box_t *line)
+// A line's cut (flow_line_cut). Working one walks the line, and each of
+// its pieces asks for it, so the painter keeps the last few it worked
+// (LineCuts): a line is worked once a paint, not once a piece.
+static flow_line_cut_t line_cut(const Painter *p, const flow_box_t *line)
 {
     const flow_box_t *block = line != NULL ? line->parent : NULL;
     if (line == NULL || line->kind != FLOW_BOX_LINE || block == NULL || block->ellipsis == NULL)
-        return (LineCut){false, 0, 0};
+        return (flow_line_cut_t){false, 0, 0};
     LineCuts *memo = p->cuts;
     if (memo != NULL)
         for (int32_t i = 0; i < LINE_CUTS; i++)
             if (memo->line[i] == line)
                 return memo->cut[i];
-    // The block clips, so it is a scroll container whose content its
-    // lines are: the scroll is how far the block's offset and its line's
-    // differ.
-    int64_t sx = (int64_t)flow_box_doc_offset(block, p->scroll).x -
-                 flow_box_doc_offset(line, p->scroll).x;
-    LineCut c = cut_of(line, sx);
+    yonder_paint_cuts++;
+    flow_line_cut_t c = flow_line_cut(p->tree, line);
     if (memo != NULL) {
         memo->line[memo->next] = line;
         memo->cut[memo->next] = c;
@@ -2123,14 +2025,15 @@ static LineCut line_cut(const Painter *p, const flow_box_t *line)
 }
 
 // Whether a box is an atom left out of a cut line, or inside one: an atom
-// there is drawn whole or not at all.
+// at or past the cut is not there (flow_line_cut's rule, which flow_hit
+// reads too), drawn whole or not at all.
 static bool past_ellipsis(const Painter *p, const flow_box_t *b)
 {
     for (const flow_box_t *a = b; a != NULL; a = a->parent) {
         if (a->kind != FLOW_BOX_ATOMIC || a->parent == NULL || a->parent->kind != FLOW_BOX_LINE)
             continue;
-        LineCut c = line_cut(p, a->parent);
-        if (c.on && (int64_t)a->rect.x + a->rect.w > c.limit)
+        flow_line_cut_t c = line_cut(p, a->parent);
+        if (c.on && (int64_t)a->rect.x >= c.at)
             return true;
     }
     return false;
@@ -2139,7 +2042,7 @@ static bool past_ellipsis(const Painter *p, const flow_box_t *b)
 // A line's ellipsis, where line_cut puts it.
 static void ellipsis(const Painter *p, const flow_box_t *line)
 {
-    LineCut c = line_cut(p, line);
+    flow_line_cut_t c = line_cut(p, line);
     if (!c.on || p->penned)
         return;
     const flow_box_t *block = line->parent;
@@ -2212,10 +2115,11 @@ static void paint_box(void *ctx, const flow_box_t *b)
     // with everything in it.
     if (past_ellipsis(&clipped, b))
         return;
-    LineCut lc = b->kind == FLOW_BOX_TEXT || b->kind == FLOW_BOX_SPAN || b->kind == FLOW_BOX_MARKER
-                     ? line_cut(&clipped, b->parent) : (LineCut){false, 0, 0};
+    flow_line_cut_t lc = b->kind == FLOW_BOX_TEXT || b->kind == FLOW_BOX_SPAN ||
+                                 b->kind == FLOW_BOX_MARKER
+                             ? line_cut(&clipped, b->parent) : (flow_line_cut_t){false, 0, 0};
     if (lc.on && (int64_t)b->rect.x + b->rect.w > lc.limit) {
-        int64_t keep = b->kind == FLOW_BOX_TEXT ? (int64_t)b->rect.x + text_kept(b, lc.limit)
+        int64_t keep = b->kind == FLOW_BOX_TEXT ? (int64_t)b->rect.x + flow_text_kept(b, lc.limit)
                      : b->kind == FLOW_BOX_SPAN ? lc.at : b->rect.x;
         int64_t room = keep - clipped.view.x;
         if (keep <= b->rect.x || room <= 0)
@@ -2721,7 +2625,7 @@ void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_
     PaintGroups groups = {.depth = 0};
     LineCuts cuts = {.next = 0};
     Painter p = {.v = verbs, .view = viewport, .scroll = scroll, .groups = &groups, .dark = dark,
-                 .cache = cache, .scratch = scratch, .cuts = &cuts};
+                 .cache = cache, .scratch = scratch, .cuts = &cuts, .tree = tree};
     if (cache != NULL)
         paint_cache_begin(cache);
     if (dark != NULL)

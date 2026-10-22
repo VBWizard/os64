@@ -1073,6 +1073,106 @@ bool flow_outline_rect(const flow_box_t *box, os64_gui_rect_t *out)
     return out->w > 0 && out->h > 0;
 }
 
+// ── Where a line ends in its ellipsis (CSS Overflow 4 § 4.1) ────────────
+//
+// One rule, read by the painter and by flow_hit alike: on a cut line,
+// what lies at or past `at` is not there — not drawn and not hit — and
+// the ellipsis drawn there is its block's.
+
+static int64_t cut_max(int64_t a, int64_t b)
+{
+    return a > b ? a : b;
+}
+
+int64_t flow_text_kept(const flow_box_t *text, int64_t limit)
+{
+    size_t byte;
+    os64_text_caret_t c;
+    int64_t room = limit - text->rect.x;
+    if (text->kind != FLOW_BOX_TEXT || text->run == NULL || room <= 0 ||
+        os64_text_fit(text->run, (os64_font_pos_t)(room * 64 < INT32_MAX ? room * 64 : INT32_MAX),
+                      &byte) != OS64_FONT_OK ||
+        os64_text_caret(text->run, byte, OS64_TEXT_BEFORE, &c) != OS64_FONT_OK)
+        return 0;
+    return c.x / 64;
+}
+
+static bool line_content(const flow_box_t *k)
+{
+    return k->kind == FLOW_BOX_TEXT || k->kind == FLOW_BOX_ATOMIC || k->kind == FLOW_BOX_MARKER;
+}
+
+// Where a box's content on its line ends: its right edge, but for a text
+// whose white space is preserved and wraps, whose spaces at its end hang
+// (CSS Text 3 § 4.1.3) and take no room on the line.
+static int64_t content_end(const flow_box_t *k)
+{
+    int64_t right = (int64_t)k->rect.x + k->rect.w;
+    if (k->kind != FLOW_BOX_TEXT || k->style->white_space != FLOW_WS_PRE_WRAP || k->run == NULL)
+        return right;
+    uint32_t n = k->length;
+    while (n > 0 && k->text[n - 1] == ' ')
+        n--;
+    os64_text_caret_t c;
+    if (n == k->length || os64_text_caret(k->run, n, OS64_TEXT_BEFORE, &c) != OS64_FONT_OK)
+        return right;
+    return (int64_t)k->rect.x + (c.x + 63) / 64;
+}
+
+flow_line_cut_t flow_line_cut(const flow_tree_t *tree, const flow_box_t *line)
+{
+    flow_line_cut_t c = {false, 0, 0};
+    const flow_box_t *block = line != NULL ? line->parent : NULL;
+    if (line == NULL || line->kind != FLOW_BOX_LINE || block == NULL || block->ellipsis == NULL)
+        return c;
+    // The block clips, so where it scrolls its end edge is where the scroll
+    // shows it: content scrolled into view is drawn and not ellipsed, and a
+    // line scrolled to its end has no ellipsis.
+    int64_t sx = block->scroller >= 0 ? flow_scroll_at(tree, block->scroller).x : 0;
+    int64_t edge = (int64_t)line->rect.x + line->rect.w + sx, reach = INT64_MIN;
+    for (const flow_box_t *k = line->first; k != NULL; k = k->next)
+        if (line_content(k))
+            reach = cut_max(reach, content_end(k));
+    os64_text_run_view_t v;
+    if (reach <= edge || os64_text_run_view(block->ellipsis, &v) != OS64_FONT_OK)
+        return c;
+    c.limit = edge - ((int64_t)v.advance_x + 63) / 64;
+    int64_t at = INT64_MIN;
+    for (const flow_box_t *k = line->first; k != NULL; k = k->next) {
+        if (!line_content(k))
+            continue;
+        int64_t right = (int64_t)k->rect.x + k->rect.w;
+        if (right <= c.limit)
+            at = cut_max(at, right);
+        else if (k->kind == FLOW_BOX_TEXT && k->rect.x < c.limit && flow_text_kept(k, c.limit) > 0)
+            at = cut_max(at, (int64_t)k->rect.x + flow_text_kept(k, c.limit));
+    }
+    // Nothing fits before the limit: the line's first character or atom
+    // is kept and clipped rather than ellipsed, and the ellipsis follows
+    // it, clipped by the box with it.
+    if (at == INT64_MIN) {
+        const flow_box_t *first = NULL;
+        for (const flow_box_t *k = line->first; k != NULL; k = k->next)
+            if (line_content(k) && (first == NULL || k->rect.x < first->rect.x))
+                first = k;
+        os64_text_caret_t one;
+        if (first == NULL)
+            return c;
+        if (first->kind == FLOW_BOX_TEXT && first->run != NULL &&
+            os64_text_run_view(first->run, &v) == OS64_FONT_OK && v.glyph_count > 0 &&
+            os64_text_caret(first->run, v.glyphs[0].byte_end, OS64_TEXT_BEFORE, &one) ==
+                OS64_FONT_OK) {
+            c.limit = (int64_t)first->rect.x + ((int64_t)one.x + 63) / 64;
+            at = (int64_t)first->rect.x + flow_text_kept(first, c.limit);
+        } else {
+            c.limit = at = (int64_t)first->rect.x + first->rect.w;
+        }
+    }
+    c.on = true;
+    c.at = at;
+    return c;
+}
+
 os64_gui_rect_t flow_marker_shape_rect(const flow_box_t *box)
 {
     int64_t size = size_px(box->style->font_size);
@@ -3050,6 +3150,15 @@ static const flow_box_t *hit_kids(const flow_tree_t *t, const flow_box_t *b, int
 
 static const flow_box_t *hit(const flow_tree_t *t, const flow_box_t *b, int32_t x, int32_t y)
 {
+    // On a line cut by its block's ellipsis, nothing at or past the cut is
+    // there to be pointed at (flow_line_cut), the line included: the point
+    // is its block's, the ellipsis standing in no inline box. Worked for
+    // the lines the point is on, once a hit.
+    if (b->kind == FLOW_BOX_LINE && b->parent != NULL && b->parent->ellipsis != NULL) {
+        flow_line_cut_t cut = flow_line_cut(t, b);
+        if (cut.on && x >= cut.at)
+            return NULL;
+    }
     const flow_box_t *h = hit_kids(t, b, x, y);
     return h != NULL ? h : hit_self(b, x, y);
 }

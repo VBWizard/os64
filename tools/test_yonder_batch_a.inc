@@ -149,11 +149,10 @@ static void ellipsis_review_cases(void)
 }
 
 // A line of 2,000 bold x's, 4,000 boxes (each b's piece and its text),
-// that ends in an ellipsis: each box asks where the line is cut, and the
-// painter works that out once a paint, walking the line three times at
-// most. paint_of paints a page eight times at most (the paint and its
-// oracle's), so 3 x 4,000 x 8 bounds it; a walk for each box was 4,000
-// walks of 4,000 a paint.
+// that ends in an ellipsis: each box the view shows asks where the line is
+// cut, and the painter asks libflow once a paint (yonder_paint_cuts).
+// paint_of paints a page eight times at most (the paint and its oracle's),
+// so 8 bounds it; asking for each box was one a box a paint.
 static void ellipsis_bound_case(void)
 {
     size_t pieces = 2000;
@@ -163,14 +162,14 @@ static void ellipsis_bound_case(void)
                  "</style><div>");
     for (size_t i = 0; i < pieces; i++)
         strcat(html, "<b>x</b>");
-    uint64_t was = yonder_paint_cut_walks;
+    uint64_t was = yonder_paint_cuts;
     bool escaped = false;
     char *got = paint_of(html, strlen(html), 200, (os64_gui_rect_t){0, 0, 200, 100}, &escaped, true);
-    uint64_t walks = yonder_paint_cut_walks - was;
+    uint64_t cuts = yonder_paint_cuts - was;
     expect("text-overflow: a line's cut is worked once a paint, not once a piece",
-           got != NULL && walks <= 3 * 2 * pieces * 8, NULL);
-    if (walks > 3 * 2 * pieces * 8)
-        fprintf(stderr, "    walks %llu for %zu pieces\n", (unsigned long long)walks, pieces);
+           got != NULL && cuts <= 8, NULL);
+    if (cuts > 8)
+        fprintf(stderr, "    %llu cuts for one line\n", (unsigned long long)cuts);
     free(got);
     free(html);
 }

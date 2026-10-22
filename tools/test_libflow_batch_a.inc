@@ -171,6 +171,42 @@ static void ellipsis_door_cases(void)
     sheeted_close(&p);
 }
 
+// The cut has two doors (flow_line_cut): what is not drawn is not hit.
+// Each div is 40 wide, its ellipsis 8, its limit 32. In the first, abcd
+// ends at 32 and an inline-block 30 wide follows it, left out; in the
+// second a link's text is kept to abcd, 0..32. A point on the kept text
+// hits it; a point on the hidden atom (35), on the link's hidden tail
+// (36) or on the ellipsis (33) hits the block: the ellipsis stands in no
+// inline box.
+static void ellipsis_hit_cases(void)
+{
+    Sheeted p;
+    sheeted_open(&p, "<!doctype html><style>body { margin: 0 } div { width: 40px;"
+                     " overflow: hidden; white-space: nowrap; text-overflow: ellipsis }"
+                     " i { display: inline-block; width: 30px; height: 10px }</style>"
+                     "<div>abcd<i></i></div><div><a href=x>abcdefghij</a></div>",
+                 100, 600);
+    flow_tree_t *tree = flow_layout(p.doc, p.page, 100, &p.env);
+    const flow_point_t o = {0, 0};
+    const flow_box_t *atom = tree != NULL ? flow_hit(tree, 35, 5, o) : NULL;
+    const flow_box_t *kept = tree != NULL ? flow_hit(tree, 10, 25, o) : NULL;
+    const flow_box_t *tail = tree != NULL ? flow_hit(tree, 36, 25, o) : NULL;
+    const flow_box_t *dots = tree != NULL ? flow_hit(tree, 33, 25, o) : NULL;
+    expect("text-overflow: an atom past the cut is not hit; its block is",
+           atom != NULL && atom->kind == FLOW_BOX_BLOCK && atom->node != NULL &&
+               atom->node->tag == OS64_HTML_TAG_DIV, NULL);
+    expect("text-overflow: a link's kept text is hit",
+           kept != NULL && kept->kind == FLOW_BOX_TEXT, NULL);
+    expect("text-overflow: a link's hidden tail is not hit; its block is",
+           tail != NULL && tail->kind == FLOW_BOX_BLOCK && tail->node->tag == OS64_HTML_TAG_DIV,
+           NULL);
+    expect("text-overflow: the ellipsis is its block's, not the link's",
+           dots != NULL && dots->kind == FLOW_BOX_BLOCK && dots->node->tag == OS64_HTML_TAG_DIV,
+           NULL);
+    flow_free(tree);
+    sheeted_close(&p);
+}
+
 // What a hostile sheet can ask of slice 4's properties lays out whole:
 // a tracking of a hundred thousand pixels either way across a long word
 // (each run still fits the engine's coordinates: none trails a run, and a
@@ -250,6 +286,7 @@ static void batch_a_cases(void)
 {
     hostile_batch_a_cases();
     piece_bounds();
+    ellipsis_hit_cases();
     // cursor is inherited, the keyword after the pictures kept; user-select
     // is not: the p inside the div is auto again, and prints nothing.
     cascade_case("cursor and user-select", 800,

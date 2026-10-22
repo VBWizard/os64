@@ -1274,6 +1274,30 @@ os64_gui_rect_t flow_decoration_rect(const flow_box_t *box, uint32_t line);
 // box that paints no frame of its own (a text, a line, an inline box's
 // piece — whose outline is booked).
 bool flow_outline_rect(const flow_box_t *box, os64_gui_rect_t *out);
+
+// Where a LINE of a block with an ellipsis (flow_box_t.ellipsis) ends in
+// it (CSS Overflow 4 § 4.1), in the line's coordinates: off when the
+// line's content does not pass the block's end edge — where the block's
+// scroll shows it, so content scrolled into view is not ellipsed —
+// pre-wrap spaces that hang there not counting. On, what must end by
+// `limit` (the end edge less the ellipsis) is kept: a whole box that ends
+// by it, and the characters of a text across it that do (flow_text_kept);
+// the ellipsis starts at `at`, where what is kept ends. A line that would
+// keep nothing keeps its first character or atom, clipped rather than
+// ellipsed, and `at` follows it. ONE RULE, two doors: what lies at or past
+// `at` is not drawn (yonder's painter) and not hit (flow_hit, which
+// answers the block there, the ellipsis standing in no inline box).
+// Linear in the line's boxes: a caller asking for every box on a line
+// keeps the answer.
+typedef struct {
+    bool on;
+    int64_t limit, at;
+} flow_line_cut_t;
+flow_line_cut_t flow_line_cut(const flow_tree_t *tree, const flow_box_t *line);
+// How much of a text box is kept before `limit`, in whole pixels from its
+// left: up to the last character boundary that does not pass it; 0 for a
+// box that is no text.
+int64_t flow_text_kept(const flow_box_t *text, int64_t limit);
 // The square a shape marker (flow_marker_is_shape) is drawn in: a third of
 // its font size across and at least 3 pixels, centred in the box less a
 // quarter of the size at its end, on the height a line-through takes.
@@ -1432,7 +1456,9 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
 // the point, and that is drawn (`visibility: visible`) and not
 // `pointer-events: none`; NULL for none. A scroll container's content is
 // where its scroll moves it, and is not there outside its padding box.
-// (x, y) is in document coordinates, the page scrolled to `scroll`. The face
+// On a line cut by its block's ellipsis nothing at or past the cut is there
+// (flow_line_cut). (x, y) is in document coordinates, the page scrolled to
+// `scroll`. The face
 // asks libpage what its node means, and a TEXT's run where in the text the
 // pointer is (os64_text_hit).
 const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll);
