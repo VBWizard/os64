@@ -47,7 +47,7 @@ mutants=[
  ('attribute-state-routing','node','os64_page_node_set_attr(dom->state, node, name.data, value.data,\n                                                value.length, magic == D_REMOVE_ATTR)','(magic == D_REMOVE_ATTR ? os64_html_remove_attr(dom->document, (os64_html_node_t *)node, name.data) : os64_html_set_attr(dom->document, (os64_html_node_t *)node, name.data, value.data, value.length))'),
  ('structural-state-routing','node','return os64_page_node_insert(dom->state, parent, node, before);','return os64_html_insert(dom->document, parent, node, before);'),
  ('registry-drain','core','dom->retained = 0;','dom->retained += 0;'),
- ('fragment-scripting-mode','content','string.length, dom->options.scripting, &status);','string.length, true, &status);'),
+ ('fragment-scripting-mode','content','string.length, d_scripting(dom, node), &status);','string.length, true, &status);'),
  ('numeric-readonly-hook','collection','return JS_DefineProperty(ctx, query->dom->index_guard->value, atom,','return JS_DefineProperty(ctx, object, atom,'),
  ('undefined-nullable-content','content','(JS_IsUndefined(value) && (property == D_NODE_VALUE || property == D_TEXT_CONTENT))','(false && JS_IsUndefined(value) && (property == D_NODE_VALUE || property == D_TEXT_CONTENT))'),
  ('attribute-name-equals','content'," || *at == '='",''),

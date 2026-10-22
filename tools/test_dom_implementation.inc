@@ -340,6 +340,19 @@ static void implementation_connected_cases(void)
         "'a form attribute names a form in its own document\\'s tree');"
         "document.body.appendChild(d.getElementById('i'));assert(form.elements.length===0,'and only there');",
         "connected: isConnected and a form attribute in a document of its own");
+    /* Scripting is the page's (the fixture's options have it on), and off
+     * for a node of a document with no window: noscript's contents are
+     * markup there, and text in the page. */
+    dom_script(&f, IMPL_ASSERT
+        "var z=document.implementation.createHTMLDocument('');"
+        "z.body.innerHTML='<noscript><b>x</b></noscript>';"
+        "assert(z.body.firstChild.firstChild.nodeType===1,'innerHTML in a document of its own: markup');"
+        "assert(z.body.innerHTML==='<noscript><b>x</b></noscript>','and serialized as markup');"
+        "z.body.firstChild.insertAdjacentHTML('afterend','<noscript><i>y</i></noscript>');"
+        "assert(z.body.lastChild.firstChild.nodeType===1,'insertAdjacentHTML there: markup');"
+        "var e=document.getElementById('box');e.innerHTML='<noscript><b>x</b></noscript>';"
+        "assert(e.firstChild.firstChild.nodeType===3,'in the page: text');",
+        "scripting: a document with no window parses noscript as markup");
     fixture_free(&f);
 }
 

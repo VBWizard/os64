@@ -366,6 +366,10 @@ const os64_html_node_t *d_node_document(os64_dom_t *dom, const os64_html_node_t 
  * with no window navigates, submits and takes focus nowhere, compiles no
  * handler, and as a document reads no cookies. */
 bool d_window_document(os64_dom_t *dom, const os64_html_node_t *node);
+/* Whether scripting is enabled for a node (HTML § 8.1.3.2): the page's
+ * scripting, for a node of the window's document. What a fragment parse and
+ * a serialization read `noscript` by. */
+bool d_scripting(os64_dom_t *dom, const os64_html_node_t *node);
 /* A verb is about to take `node` out of its tree: its record says which
  * document it leaves, for when it is a root. */
 void d_leaving(os64_dom_t *dom, const os64_html_node_t *node);

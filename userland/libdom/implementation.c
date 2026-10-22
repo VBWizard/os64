@@ -53,6 +53,11 @@ bool d_window_document(os64_dom_t *dom, const os64_html_node_t *node)
     return dom->documents == 0 || d_node_document(dom, node) == window_document(dom);
 }
 
+bool d_scripting(os64_dom_t *dom, const os64_html_node_t *node)
+{
+    return dom->options.scripting && d_window_document(dom, node);
+}
+
 void d_made_in(os64_dom_t *dom, const os64_html_node_t *node, const os64_html_node_t *document)
 {
     DValue *entry = d_find(dom, node);

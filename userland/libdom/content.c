@@ -107,11 +107,11 @@ JSValue d_content_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
     if (property == D_INNER_HTML || property == D_OUTER_HTML) {
         if (node->kind != OS64_HTML_ELEMENT) return JS_ThrowTypeError(ctx, "HTML requires an element");
-        size_t length = os64_html_serialize(node, property == D_INNER_HTML,
-                                            dom->options.scripting, NULL, 0);
+        bool scripting = d_scripting(dom, node);
+        size_t length = os64_html_serialize(node, property == D_INNER_HTML, scripting, NULL, 0);
         char *buffer = length == SIZE_MAX ? NULL : d_alloc(dom, length + 1);
         if (buffer == NULL) return d_error(ctx, "QuotaExceededError", "DOM serialization quota exceeded");
-        os64_html_serialize(node, property == D_INNER_HTML, dom->options.scripting, buffer, length + 1);
+        os64_html_serialize(node, property == D_INNER_HTML, scripting, buffer, length + 1);
         JSValue result = JS_NewStringLen(ctx, buffer, length);
         d_free(dom, buffer);
         return result;
@@ -180,7 +180,7 @@ JSValue d_content_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
     }
     if (property == D_INNER_HTML) {
         os64_html_node_t *fragment = os64_html_parse_fragment(dom->document, node, string.data,
-                                               string.length, dom->options.scripting, &status);
+                                               string.length, d_scripting(dom, node), &status);
         /* A script innerHTML inserts never runs: it is born started. */
         if (fragment != NULL && d_script_mark_tree(dom, fragment) < 0) status = OS64_HTML_NO_MEMORY;
         else if (fragment != NULL) status = d_replace_content(dom, node->template_contents != NULL ?

@@ -211,7 +211,7 @@ static JSValue adjacent_steps(os64_dom_t *dom, JSContext *ctx, const os64_html_n
         if (!is_element(context) || is_html(context, OS64_HTML_TAG_HTML))
             context = os64_html_create_element(dom->document, OS64_HTML_NS_HTML, "body", &status);
         os64_html_node_t *fragment = context == NULL ? NULL :
-            os64_html_parse_fragment(dom->document, context, text->data, text->length, dom->options.scripting, &status);
+            os64_html_parse_fragment(dom->document, context, text->data, text->length, d_scripting(dom, parent), &status);
         if (fragment == NULL) return d_html_error(ctx, status);
         os64_html_hold(dom->document, fragment);
         /* A script insertAdjacentHTML inserts never runs: it is born started. */
