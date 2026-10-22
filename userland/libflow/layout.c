@@ -4984,7 +4984,9 @@ static bool grid_place(L *l, const FStyles *styles, FBox *b, GPlan *p, int64_t c
         flow_place_t a = self_align(cs->align_self, s->align_items, c);
         // `normal` is `start` down a box with a ratio, whose height is
         // its ratio's (Box Alignment 3 § 6.2, Grid 2 § 6.2); a stretch the
-        // page wrote still stretches it.
+        // page wrote still stretches it. Across, `normal` still stretches
+        // it, as Chrome and Firefox do: a column of `aspect-ratio: 1`
+        // cards is as wide as its track and as tall as it is wide.
         flow_place_t written = cs->align_self != FLOW_PLACE_AUTO ? cs->align_self : s->align_items;
         if (ratio_box(c) && (written == FLOW_PLACE_NORMAL || written == FLOW_PLACE_AUTO))
             a = FLOW_PLACE_START;
