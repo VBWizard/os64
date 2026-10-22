@@ -71,6 +71,11 @@ uint32_t yonder_settings_saved_script_seconds(void);
 // /home/yonder/pages`, YONDER_DIAGNOSTICS.md), into `out`, without a
 // trailing slash: true when there is one and it is a full path.
 bool yonder_settings_saved_diagnostics(char *out, size_t cap);
+// Whether yonder.conf asks for each page to be kept beside its page file
+// (`keep_pages = on`, MODERN_WEB.md rule 3: its bytes, scripts and sheets,
+// for the replay corpus). Off when absent; a value that is neither `on` nor
+// `off` is logged and read as off. It keeps nothing without `diagnostics`.
+bool yonder_settings_saved_keep_pages(void);
 
 // The agent yonder.conf saves, into `out` (YONDER_AGENT_MAX bytes): true
 // when there is one and it is valid.

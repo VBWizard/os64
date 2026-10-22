@@ -1,0 +1,341 @@
+# THE GRAMMAR OF A PAGE FILE'S LINES, AND OF A KEPT INDEX'S, AS TEST VECTORS.
+# One vector a line: the kind the line is, or REFUSED, a tab, and the line
+# itself, to the end. A kind beginning `index:` is a line of a kept page's
+# index; every other is a line of a record. tools/yonder_records.py
+# (tools/test_yonder_records.py) and the replay runner's C reader
+# (tools/test_yonder_replay_host.c --self-test) each run every vector and
+# must answer its kind. A line that begins like a kind and does not match
+# its grammar exactly is REFUSED, never read as another kind.
+#
+# A WHOLE RECORD is a vector too, for the rules no single line can break
+# (a line a reader parses one value from stands at most once):
+# `record:read` or `record:REFUSED <words>`, a tab, and the record's lines
+# joined by `¶`, which no vector's record holds otherwise. A `record:` is
+# one yonder wrote, which both readers read whole, or refuse with a reason
+# holding <words>; a `replay:` is a replay's record, which only
+# tools/yonder_records.py reads.
+#
+# address
+address	address: https://a.test/
+address	address: 
+address	address: http://Example.COM:8080/F%41ILED?x=M%49SSING
+REFUSED	address:https://a.test/
+# verdict: `clean`, `unwritten` (a claimed name's placeholder), or the tokens with records, each counted
+verdict	verdict: clean
+verdict	verdict: unwritten
+verdict	verdict: 1 MISSING
+verdict	verdict: 2 FAILED
+verdict	verdict: 7 MISSING, 2 FAILED
+verdict	verdict: 4294967295 MISSING
+REFUSED	verdict: fine
+REFUSED	verdict: +1 MISSING
+REFUSED	verdict:  1 MISSING
+REFUSED	verdict: 1 MISSING 
+REFUSED	verdict: 0 MISSING
+REFUSED	verdict: 1 MISSING, 0 FAILED
+REFUSED	verdict: 2 FAILED, 1 MISSING
+REFUSED	verdict: 4294967296 MISSING
+REFUSED	verdict: 99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999 MISSING
+REFUSED	verdict: 99999999999999999999 FAILED
+REFUSED	verdict: clean 
+REFUSED	verdict:
+# MISSING <kind> <name> (<count>): a kind with no space, a name, a whole bounded count
+missing	MISSING global fetch (3)
+missing	MISSING css-value float: left (12)
+missing	MISSING global M%49SSINGno\x09tab (4)
+missing	MISSING font Times New Roman (0)
+missing	MISSING element x (4294967295)
+REFUSED	MISSING kind (1)
+REFUSED	MISSING global fetch
+REFUSED	MISSING global fetch ()
+REFUSED	MISSING global fetch (1) 
+REFUSED	MISSING global fetch (1x)
+REFUSED	MISSING global fetch (-1)
+REFUSED	MISSING global fetch (4294967296)
+REFUSED	MISSING global fetch (99999999999999999999)
+REFUSED	MISSING  fetch (1)
+REFUSED	MISSING global  (1)
+REFUSED	MISSING
+# FAILED <what>: <message> (<count>): a what, the `: `, a message, a whole bounded count
+failed	FAILED page: HTTP 429 Too Many Requests (1)
+failed	FAILED script https://a.test/x.js: TypeError: x is not a function (2)
+failed	FAILED picture-fetch: https://a.test/p.png: HTTP 404 (1)
+failed	FAILED link refused: the address was refused (1)
+REFUSED	FAILED script message (1)
+REFUSED	FAILED page: (1)
+REFUSED	FAILED : message (1)
+REFUSED	FAILED page: no
+REFUSED	FAILED page: no (4294967296)
+REFUSED	FAILED page: no (1) trailing
+# a fact whose value a reader parses, matched whole
+head	bytes: 1263
+head	kept lines: 0
+head	kept: whole
+head	kept: not whole: a step of keeping the page failed
+head	status: 200 OK
+head	status: 0
+head	status: 429 Too Many Requests
+head	laid out at: 830 px in 12 ms
+head	laid out at: 830x600 px
+head	laid out at: 1400x900 px in 0 ms
+head	body: html
+head	encrypted: no
+head	scripts: off
+head	scripts: on
+head	modern: on
+head	zoom: 1000
+head	appearance: dark
+head	motion: reduce
+head	animate: off
+fact	animations: some paused: a tick's frame took 273 ms, over 200
+head	script seconds: 5
+head	content-type: 
+head	charset: windows-1252
+head	final address: https://a.test/final
+head	TLS: 1.2 (fallback)
+REFUSED	bytes: 12x
+REFUSED	bytes: 
+REFUSED	bytes: -1
+REFUSED	bytes: 4294967296
+REFUSED	kept lines: 4294967296
+REFUSED	kept lines: 1 
+REFUSED	kept: maybe
+REFUSED	kept: not whole: 
+REFUSED	status: OK
+REFUSED	laid out at: 830
+REFUSED	laid out at: 830x px
+REFUSED	laid out at: 4294967296x600 px
+REFUSED	body: pdf
+REFUSED	encrypted: maybe
+REFUSED	modern: yes
+REFUSED	zoom: 100%
+REFUSED	appearance: auto
+REFUSED	motion: none
+REFUSED	animate: paused
+REFUSED	script seconds: 5.5
+# a plain fact: a key, the `: `, a value (which may be empty)
+fact	arrived after: 51 ms
+fact	script https://a.test/x.js: ran in 1520 us
+fact	facts not kept: 3, and more not counted
+fact	some lines not kept: no memory to name them
+fact	written: no memory to write this line
+fact	note: 
+REFUSED	no colon here
+REFUSED	: no key
+REFUSED	
+REFUSED	MISSING
+# a replay's own lines
+state	REPLAY state: verdict
+state	REPLAY state: incomplete never asked for script https://a.test/x.js
+state	REPLAY state: unfinished its parse had not ended when the replay's 60 s were spent
+state	REPLAY state: unjudged its record could not be written
+REFUSED	REPLAY state: verdict but why
+REFUSED	REPLAY state: unjudged
+REFUSED	REPLAY state: fine
+REFUSED	REPLAY state:
+incomplete	REPLAY incomplete script https://a.test/M%49SSING.js
+incomplete	REPLAY incomplete navigation http://a.test/next
+unfinished	REPLAY unfinished it asked for the next turn for ever
+REFUSED	REPLAY incomplete 
+REFUSED	REPLAY unfinished 
+not-reproduced	REPLAY not reproduced: font-fetch image picture-fetch
+not-reproduced	REPLAY not reproduced: image
+REFUSED	REPLAY not reproduced: image global
+REFUSED	REPLAY not reproduced: 
+REFUSED	REPLAY not reproduced: image  picture-fetch
+REFUSED	REPLAY not reproduced: image font-fetch image
+marked	REPLAY unjudged: lines lost
+marked	REPLAY unjudged: settings changed during the load
+REFUSED	REPLAY unjudged: 
+REFUSED	REPLAY lost its way
+end	end
+REFUSED	end 
+fact	end: of a key
+# an index's lines: its version, a comment, and a script's or a sheet's seven fields
+index:version	# yonder kept index 2
+index:REFUSED	# yonder kept index two
+index:REFUSED	# yonder kept index 4294967296
+index:comment	# what this page fetched, as yonder received it
+index:entry	1	script	https://a.test/x.js	came	https://a.test/x.js		3
+index:entry	2	sheet	https://a.test/k.css	failed	https://a.test/k.css	utf-8	0
+index:entry	3	sheet	https://a.test/a%25b\\c.css	came	https://cdn.a.test/a.css		1
+index:entry-v1	1	script	https://a.test/x.js	came	https://a.test/x.js	
+index:REFUSED	1	script	https://a.test/x.js	came
+index:REFUSED	1	scr
+index:REFUSED	1
+index:REFUSED	
+index:REFUSED	0	script	https://a.test/x.js	came	https://a.test/x.js		1
+index:REFUSED	../1	script	https://a.test/x.js	came	https://a.test/x.js		1
+index:REFUSED	4294967296	script	https://a.test/x.js	came	https://a.test/x.js		1
+index:REFUSED	1	fetch	https://a.test/x.js	came	https://a.test/x.js		1
+index:REFUSED	1	script		came	https://a.test/x.js		1
+index:REFUSED	1	script	https://a.test/x.js	kept	https://a.test/x.js		1
+index:REFUSED	1	script	https://a.test/x.js	came	https://a.test/x.js		one
+index:REFUSED	1	script	https://a.test/x.js	came	https://a.test/x.js		1	extra
+# numbers: `0`, or a first digit 1-9; no sign; ASCII digits only; at most UINT32_MAX (a clock: 2^53-1)
+verdict	verdict: 10 MISSING
+REFUSED	verdict: 01 MISSING
+REFUSED	verdict: 00 FAILED
+missing	MISSING global x (0)
+REFUSED	MISSING global x (00)
+REFUSED	MISSING global x (007)
+REFUSED	MISSING global x (٣)
+REFUSED	bytes: 0123
+head	bytes: 0
+REFUSED	kept lines: 01
+REFUSED	zoom: １000
+REFUSED	status: 0200 OK
+REFUSED	laid out at: 0800x600 px
+REFUSED	laid out at: 800x0600 px
+REFUSED	laid out at: 800x600 px in 01 ms
+head	clock: 1700000000370
+head	clock: 0
+head	clock: 9007199254740991
+REFUSED	clock: 9007199254740992
+REFUSED	clock: 01700000000370
+REFUSED	clock: 1.7e12
+head	agent: Mozilla/5.0 (os64) yonder
+REFUSED	agent: 
+head	cookies: session=abc; theme=dark
+head	cookies: 
+head	tz: EST5EDT,M3.2.0,M11.1.0
+head	tz: 330m
+REFUSED	tz: 
+# a control byte anywhere in a line, raw: no line (a tab is the escape's to leave)
+REFUSED	MISSING global xy (1)
+REFUSED	note: ab
+REFUSED	address: https://a.test/[2J
+REFUSED	FAILED page: no  (1)
+fact	note: a	b
+# what a replay of a kept page of version 1 took from the harness (the
+# cookies and the clock, never anything else), what the person stated
+# (`--window`), and that it assumed a page with no `kept:` kept whole
+defaulted	REPLAY inputs defaulted: cookies clock
+defaulted	REPLAY inputs defaulted: clock
+REFUSED	REPLAY inputs defaulted: agent cookies clock tz
+REFUSED	REPLAY inputs defaulted: cookies clock job-identity
+REFUSED	REPLAY inputs defaulted: view-height
+REFUSED	REPLAY inputs defaulted: cookies global
+REFUSED	REPLAY inputs defaulted: clock clock
+REFUSED	REPLAY inputs defaulted: 
+REFUSED	REPLAY inputs defaulted: cookies  clock
+stated	REPLAY inputs stated: zoom=1000 appearance=dark motion=full animate=on modern=on scripts=on script-seconds=5 laid-out-at=2526x1282\x20px agent=Mozilla/5.0\x20(X11) tz=EST5EDT
+stated	REPLAY inputs stated: tz=-120m
+REFUSED	REPLAY inputs stated: 
+REFUSED	REPLAY inputs stated: zoom
+REFUSED	REPLAY inputs stated: zoom=
+REFUSED	REPLAY inputs stated: cookies=a
+REFUSED	REPLAY inputs stated: zoom=1 zoom=2
+REFUSED	REPLAY inputs stated: agent=a b
+REFUSED	REPLAY inputs stated: zoom=1  tz=0m
+assumed	REPLAY kept: assumed whole (version 1)
+REFUSED	REPLAY kept: assumed whole
+REFUSED	REPLAY kept: assumed whole (version 2)
+# an index of version 1: six fields, no job identity
+index:entry-v1	1	script	https://a.test/x.js	came	https://a.test/x.js	
+index:REFUSED	01	script	https://a.test/x.js	came	https://a.test/x.js		1
+index:REFUSED	1	script	https://a.test/x.js	came	https://a.test/x.js		01
+index:REFUSED	1	script	https://a.test/x.js	came	https://a.test/x.js		1
+index:REFUSED	# yonder kept index 02
+# ESCAPES, read back in ONE pass from the left, in every position: `escape:<the bytes, hex>`, a tab, a field
+escape:	
+escape:5c	\\
+escape:615c62	a\\b
+escape:5c	\x5C
+escape:09	\x09
+escape:4d495353494e47	M%49SSING
+escape:4641494c4544	F%41ILED
+escape:25	%25
+escape:2532	%2
+escape:3735	75
+escape:3735	75
+escape:373525	75%
+escape:2525	%25%
+escape:253332	%32
+escape:253235	%2525
+escape:253235	\x2525
+escape:5c783235	\\x25
+escape:4d2534395353494e47	M%2549SSING
+escape:4d495353494e474d495353494e47	M%49SSINGM%49SSING
+escape:5c4d495353494e47	\\M%49SSING
+escape:5c783431	\\x41
+escape:41	\x41
+escape:5c78	\x
+escape:5c7834	\x4
+escape:5c78475a	\xGZ
+escape:4d25343953	M%49S
+escape:61254d495353494e4762	a%M%49SSINGb
+escape:255c	%25\\
+# A field that decodes to a NUL (`\x00`) is no field; an escaped backslash
+# before `x00` decodes to text.
+REFUSED	address: https://a.test/\x00
+REFUSED	note: a\x00b
+REFUSED	MISSING global a\x00 (1)
+fact	note: a\\x00b
+index:REFUSED	1	script	https://a.test/x\x00.js	came	https://a.test/x.js		1
+# A field must decode to UTF-8 as well as be written in it: an escape
+# spells a byte that may not stand raw, never one that is no part of a
+# character.
+REFUSED	agent: \xFF
+REFUSED	note: caf\xC3
+REFUSED	address: https://a.test/\xE9
+fact	note: caf\xC3\xA9
+index:REFUSED	1	script	https://a.test/\xFF.js	came	https://a.test/x.js		1
+# The claim's placeholder, with its nonce
+verdict	verdict: unwritten 0123456789abcdef
+REFUSED	verdict: unwritten 0123
+REFUSED	verdict: unwritten 0123456789ABCDEF
+REFUSED	verdict: unwritten 0123456789abcdef0
+REFUSED	verdict: unwritten  0123456789abcdef
+# The budget a replay was given
+budget	REPLAY budget: 60 s
+budget	REPLAY budget: 0 s
+REFUSED	REPLAY budget: 060 s
+REFUSED	REPLAY budget: 60
+REFUSED	REPLAY budget: 60s
+REFUSED	REPLAY budget:  s
+REFUSED	REPLAY budget: 4294967296 s
+# A LINE A READER PARSES ONE VALUE FROM STANDS AT MOST ONCE, in a whole record:
+# the address, the verdict or the state, `end`, each head fact, and each
+# REPLAY line but incomplete, unfinished and unjudged. Tokens and plain facts
+# may repeat, and so may `REPLAY unjudged:`, which yonder writes for lost
+# lines and for a setting changed, both on one record.
+record:read	address: https://a.test/¶verdict: clean¶kept: whole¶bytes: 3¶end
+record:read	address: https://a.test/¶verdict: 2 MISSING¶MISSING global x (1)¶MISSING global x (1)¶note: a¶note: b¶REPLAY unjudged: lines lost¶REPLAY unjudged: settings changed during the load¶end
+record:REFUSED a second `address:`	address: https://a.test/¶verdict: clean¶address: https://a.test/¶end
+record:REFUSED a second verdict line	address: https://a.test/¶verdict: clean¶verdict: clean¶end
+record:REFUSED lines past its `end`	address: https://a.test/¶verdict: clean¶end¶end
+record:REFUSED a second `status:`	address: https://a.test/¶verdict: clean¶status: 200 OK¶status: 404¶end
+record:REFUSED a second `final address:`	address: https://a.test/¶verdict: clean¶final address: https://a.test/¶final address: https://b.test/¶end
+record:REFUSED a second `body:`	address: https://a.test/¶verdict: clean¶body: html¶body: text¶end
+record:REFUSED a second `content-type:`	address: https://a.test/¶verdict: clean¶content-type: text/html¶content-type: text/plain¶end
+record:REFUSED a second `charset:`	address: https://a.test/¶verdict: clean¶charset: utf-8¶charset: ¶end
+record:REFUSED a second `encrypted:`	address: https://a.test/¶verdict: clean¶encrypted: no¶encrypted: yes¶end
+record:REFUSED a second `TLS:`	address: https://a.test/¶verdict: clean¶TLS: 1.3¶TLS: 1.2¶end
+record:REFUSED a second `scripts:`	address: https://a.test/¶verdict: clean¶scripts: on¶scripts: off¶end
+record:REFUSED a second `laid out at:`	address: https://a.test/¶verdict: clean¶laid out at: 800x600 px¶laid out at: 830x600 px¶end
+record:REFUSED a second `kept:`	address: https://a.test/¶verdict: clean¶kept: whole¶kept: not whole: a step of keeping the page failed¶end
+record:REFUSED a second `bytes:`	address: https://a.test/¶verdict: clean¶bytes: 3¶bytes: 4¶end
+record:REFUSED a second `kept lines:`	address: https://a.test/¶verdict: clean¶kept lines: 0¶kept lines: 1¶end
+record:REFUSED a second `modern:`	address: https://a.test/¶verdict: clean¶modern: on¶modern: off¶end
+record:REFUSED a second `zoom:`	address: https://a.test/¶verdict: clean¶zoom: 1000¶zoom: 1250¶end
+record:REFUSED a second `appearance:`	address: https://a.test/¶verdict: clean¶appearance: light¶appearance: dark¶end
+record:REFUSED a second `motion:`	address: https://a.test/¶verdict: clean¶motion: full¶motion: reduce¶end
+record:REFUSED a second `script seconds:`	address: https://a.test/¶verdict: clean¶script seconds: 5¶script seconds: 6¶end
+record:REFUSED a second `animate:`	address: https://a.test/¶verdict: clean¶animate: on¶animate: off¶end
+record:REFUSED a second `agent:`	address: https://a.test/¶verdict: clean¶agent: a¶agent: b¶end
+record:REFUSED a second `cookies:`	address: https://a.test/¶verdict: clean¶cookies: ¶cookies: k=v¶end
+record:REFUSED a second `clock:`	address: https://a.test/¶verdict: clean¶clock: 1¶clock: 2¶end
+record:REFUSED a second `tz:`	address: https://a.test/¶verdict: clean¶tz: 330m¶tz: EST5EDT¶end
+record:REFUSED a second `bytes:`	address: https://a.test/¶verdict: clean¶bytes: 3¶note: between¶bytes: 3¶end
+replay:read	address: https://a.test/¶REPLAY state: verdict¶verdict: clean¶REPLAY inputs stated: zoom=1000¶REPLAY inputs defaulted: cookies clock¶REPLAY kept: assumed whole (version 1)¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:read	address: https://a.test/¶REPLAY state: incomplete script x¶verdict: clean¶REPLAY incomplete script x¶REPLAY incomplete sheet y¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:read	address: https://a.test/¶REPLAY state: unfinished it never arrived¶verdict: clean¶REPLAY unfinished it never arrived¶REPLAY unfinished its parse had not ended¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:REFUSED a second `REPLAY state:`	address: https://a.test/¶REPLAY state: verdict¶verdict: clean¶REPLAY state: verdict¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:REFUSED a second `REPLAY budget:`	address: https://a.test/¶REPLAY state: verdict¶verdict: clean¶REPLAY budget: 30 s¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:REFUSED a second `REPLAY not reproduced:`	address: https://a.test/¶REPLAY state: verdict¶verdict: clean¶REPLAY not reproduced: font-fetch¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:REFUSED a second `REPLAY inputs stated:`	address: https://a.test/¶REPLAY state: verdict¶verdict: clean¶REPLAY inputs stated: zoom=1000¶REPLAY inputs stated: tz=0m¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:REFUSED a second `REPLAY inputs defaulted:`	address: https://a.test/¶REPLAY state: verdict¶verdict: clean¶REPLAY inputs defaulted: cookies¶REPLAY inputs defaulted: clock¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:REFUSED a second `REPLAY kept:`	address: https://a.test/¶REPLAY state: verdict¶verdict: clean¶REPLAY kept: assumed whole (version 1)¶REPLAY kept: assumed whole (version 1)¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:REFUSED a second `kept:`	address: https://a.test/¶REPLAY state: verdict¶verdict: clean¶kept: whole¶kept: not whole: a step of keeping the page failed¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
+replay:REFUSED a second `address:`	address: https://a.test/¶REPLAY state: verdict¶verdict: clean¶address: https://a.test/¶REPLAY not reproduced: image¶REPLAY budget: 60 s¶end
