@@ -44,7 +44,7 @@ static bool fake_view_scroll(void *opaque, double x, double y, os64_dom_geometry
 typedef struct {
     unsigned calls;
     bool refuse, spill;
-    const char *root_overflow, *body_overflow, *body_display;
+    const char *root_overflow, *body_overflow, *body_display, *root_display;
     const os64_html_node_t *last;
     const os64_html_document_t *document;
 } ComputedFake;
@@ -64,7 +64,9 @@ static bool fake_computed(void *opaque, const os64_html_node_t *element, os64_do
         char text[64];
         if (i == GARB_WIDTH) snprintf(text, sizeof(text), "%upx", f->calls);
         else if (i == GARB_COLOR) snprintf(text, sizeof(text), "rgb(1, 2, 3)");
-        else if (i == GARB_DISPLAY) snprintf(text, sizeof(text), "%s", body && f->body_display ? f->body_display : "block");
+        else if (i == GARB_DISPLAY)
+            snprintf(text, sizeof(text), "%s", body && f->body_display ? f->body_display
+                                                : root && f->root_display ? f->root_display : "block");
         else if (i == GARB_OVERFLOW_X || i == GARB_OVERFLOW_Y)
             snprintf(text, sizeof(text), "%s", body && f->body_overflow ? f->body_overflow
                                                 : root && f->root_overflow ? f->root_overflow : "visible");
@@ -240,7 +242,18 @@ static void dom_view_scrolling_element_cases(void)
     c.body_display = "none";
     dom_script(&q, VIEW_ASSERT "assert(document.scrollingElement===document.body,'a body with no box');",
                "scrollingElement: an undisplayed body");
+    c.body_display = "contents";
+    dom_script(&q, VIEW_ASSERT "assert(document.scrollingElement===document.body,'a contents body has no box');",
+               "scrollingElement: a contents body");
     c.body_display = NULL;
+    c.body_overflow = "auto";
+    c.root_display = "none";
+    dom_script(&q, VIEW_ASSERT "assert(document.scrollingElement===document.body,'a root with no box: nor has the body');",
+               "scrollingElement: an undisplayed root");
+    c.root_display = "contents";
+    dom_script(&q, VIEW_ASSERT "assert(document.scrollingElement===null,'a contents root leaves the body its box');",
+               "scrollingElement: a contents root");
+    c.root_display = NULL;
     dom_script(&q, VIEW_ASSERT "document.documentElement.removeChild(document.body);"
                "assert(document.scrollingElement===null,'no body');", "scrollingElement: no body");
     fixture_free(&q);

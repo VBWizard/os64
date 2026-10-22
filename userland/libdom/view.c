@@ -537,20 +537,34 @@ static bool overflows(const os64_dom_t *dom, bool clip_scrolls)
     return false;
 }
 
-// CSSOM View's "potentially scrollable" for the body: it has a box, and it
-// and its parent both have an overflow that scrolls — the parent's `clip`
-// counting as `hidden`. 1, 0, or -1 with an exception pending. With no
-// style provider nothing is known to scroll.
+// Whether the snapshot's element generates no box of its own: `display`
+// none or contents (or no style at all).
+static bool boxless(const os64_dom_t *dom)
+{
+    size_t length;
+    const char *display = snapshot_value(dom, GARB_DISPLAY, &length);
+    return length == 0 || os64_strcmp(display, "none") == 0 || os64_strcmp(display, "contents") == 0;
+}
+
+// CSSOM View's "potentially scrollable" for the body (as its
+// scrollingElement steps): the body has an associated box, and its parent's
+// and its own overflow-x or overflow-y are each neither visible nor clip —
+// the parent's `clip` counting as `hidden`, as the WPT holds it. The body
+// has no box when it is display none or contents, or when its parent (the
+// root, whose own computed display is not the body's) generates none, as
+// `html { display: none }` does. 1, 0, or -1 with an exception pending.
+// With no style provider nothing is known to scroll.
 static int body_scrolls(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *body)
 {
     if (dom->computed == NULL || body->parent == NULL) return 0;
     int made = snapshot_of(dom, ctx, body);
     if (made <= 0) return made;
-    size_t length;
-    const char *display = snapshot_value(dom, GARB_DISPLAY, &length);
-    if (length == 0 || os64_strcmp(display, "none") == 0 || !overflows(dom, false)) return 0;
+    if (boxless(dom) || !overflows(dom, false)) return 0;
     made = snapshot_of(dom, ctx, body->parent);
     if (made <= 0) return made;
+    size_t length;
+    const char *display = snapshot_value(dom, GARB_DISPLAY, &length);
+    if (length == 0 || os64_strcmp(display, "none") == 0) return 0;
     return overflows(dom, true) ? 1 : 0;
 }
 
