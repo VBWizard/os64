@@ -890,6 +890,30 @@ static int sweep_lists(void)
     }
     printf("libgarb sweep, media text: each of %zu allocations failed in turn, %s\n", worst,
            media_failures == 0 ? "each answer the whole list or none, nothing leaked" : "FAILED");
+    // The same of the grown form, whose buffer is one allocation more.
+    allocations = 0;
+    size_t grown_length = 0;
+    char *grown = garb_media_text_serialized(media_list, &grown_length, NULL, NULL);
+    size_t grown_worst = allocations;
+    int grown_failures = grown == NULL || strcmp(grown, whole) != 0 || grown_length != wanted;
+    os64_free(grown);
+    live = s_live_base;
+    for (size_t at = 1; at <= grown_worst; at++) {
+        allocations = 0;
+        fail_at = at;
+        grown = garb_media_text_serialized(media_list, &grown_length, NULL, NULL);
+        fail_at = 0;
+        if (grown != NULL ? strcmp(grown, whole) != 0 || grown_length != wanted : grown_length != 0)
+            grown_failures++;
+        os64_free(grown);
+        if (live != s_live_base) {
+            grown_failures++;
+            live = s_live_base;
+        }
+    }
+    printf("libgarb sweep, grown media text: each of %zu allocations failed in turn, %s\n", grown_worst,
+           grown_failures == 0 ? "each answer the whole list or none, nothing leaked" : "FAILED");
+    media_failures += grown_failures;
     // Brackets nested past GARB_DEPTH_MAX lose their contents: none either;
     // nested within it, the list is read.
     static char deep[4 * GARB_DEPTH_MAX + 1], shallow_text[GARB_DEPTH_MAX + 1];
@@ -1677,8 +1701,68 @@ static int modern_marks(void)
     return failed ? 1 : 0;
 }
 
+// A media query's cost against its depth, by the steps media.c counts
+// (GARB_MEDIA_COUNT, which the build defines): `(width)` in d brackets,
+// matched, serialised and serialised into a grown buffer. Each bracket
+// level must add the same steps as the one before; a reading that judged
+// a level and then wrote it doubled them at every level.
+extern size_t garb_media_visits;
+static int media_depth(void)
+{
+    int failed = 0;
+    size_t last[3] = {0, 0, 0}, step[3] = {0, 0, 0};
+    garb_env_t env = {.width = 800, .height = 600};
+    // It stops at the first level that costs more than the one before: a
+    // cost that doubles would otherwise take days to reach the bound.
+    for (int d = 0; d < GARB_DEPTH_MAX - 2 && !failed; d++) {
+        char q[2 * GARB_DEPTH_MAX + 16];
+        int k = 0;
+        for (int i = 0; i < d; i++) q[k++] = '(';
+        k += snprintf(q + k, sizeof(q) - (size_t)k, "(width)");
+        for (int i = 0; i < d; i++) q[k++] = ')';
+        q[k] = '\0';
+        size_t visits[3];
+        garb_media_visits = 0;
+        bool matched = garb_media_text_matches(q, env);
+        visits[0] = garb_media_visits;
+        char out[256];
+        garb_media_visits = 0;
+        size_t n = garb_media_text_serialize(q, out, sizeof(out));
+        visits[1] = garb_media_visits;
+        size_t grown_length = 0;
+        garb_media_visits = 0;
+        char *grown = garb_media_text_serialized(q, &grown_length, NULL, NULL);
+        visits[2] = garb_media_visits;
+        if (!matched || n != (size_t)k || strcmp(out, q) != 0 || grown == NULL ||
+            grown_length != n || strcmp(grown, out) != 0) {
+            printf("media depth %d: matched %d, [%s] %zu, grown [%s]\n", d, matched, out, n, grown ? grown : "NULL");
+            failed = 1;
+        }
+        os64_free(grown);
+        for (int f = 0; f < 3; f++) {
+            if (d >= 2 && visits[f] - last[f] != step[f]) {
+                printf("media depth %d: %s took %zu steps, %zu more than at %d (the level before added %zu)\n", d,
+                       f == 0 ? "a match" : f == 1 ? "a serialization" : "a grown serialization", visits[f],
+                       visits[f] - last[f], d - 1, step[f]);
+                failed = 1;
+            }
+            step[f] = visits[f] - last[f];
+            last[f] = visits[f];
+        }
+    }
+    if (step[0] == 0 || step[1] == 0 || step[2] == 0) {
+        printf("media depth: a level cost no steps: the count is not counting\n");
+        failed = 1;
+    }
+    printf("libgarb media depth: %s (a level costs %zu, %zu and %zu steps)\n",
+           failed ? "FAILED" : "each bracket level adds the same steps", step[0], step[1], step[2]);
+    return failed;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "--media-depth") == 0)
+        return media_depth();
     if (argc == 2 && strcmp(argv[1], "--modern") == 0)
         return modern_marks();
     if (argc == 2 && strcmp(argv[1], "--keyframes-scale") == 0)

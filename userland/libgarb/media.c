@@ -15,7 +15,18 @@
 
 #include "values_internal.h"
 #include "garb/cascade.h"
+#include "os64/mem.h"
 #include "os64/str.h"
+
+#ifdef GARB_MEDIA_COUNT
+// What a match or a serialization visited, a step per reading function
+// entered: the cost test's measure (test_garb_host.c, which defines
+// GARB_MEDIA_COUNT), compiled in for it alone.
+size_t garb_media_visits;
+static void visit(void) { garb_media_visits++; }
+#else
+static void visit(void) {}
+#endif
 
 typedef enum { M_FALSE, M_TRUE, M_UNKNOWN } Tri;
 
@@ -358,6 +369,7 @@ static Tri condition(MCur *c, bool allow_or);
 // else in brackets or a function, which is UNKNOWN.
 static Tri in_parens(MCur *c)
 {
+    visit();
     const garb_value_t *t = peek(c);
     if (t == NULL)
         return M_UNKNOWN;
@@ -379,6 +391,7 @@ static Tri in_parens(MCur *c)
 // <media-condition>: `not` one, or a run joined all by `and` or all by `or`.
 static Tri condition(MCur *c, bool allow_or)
 {
+    visit();
     if (is_word(peek(c), "not")) {
         c->i++;
         return tri_not(in_parens(c));
@@ -473,24 +486,80 @@ bool garb_media_matches(const garb_value_t *v, int32_t n, garb_env_t env)
 // A query is read for its SHAPE alone (Media Queries 4 § 3's grammar):
 // whether a feature is one this machine knows changes what it evaluates to,
 // not whether it is a query. Each function reads at `c` and, when `o` is
-// not NULL, writes what it read; the list's serializer reads each query
-// once to judge it and again to write it, so a query that turns out not to
-// be one has written nothing and is written `not all`.
+// not NULL, writes what it read as it reads it. ONE PASS: a reading that
+// turns out not to be the shape tried is taken back (s_back) and the next
+// shape tried from the same place, so each bracket level is read once and
+// the cost is linear in the query, never doubling at each level. A query
+// that is no query is taken back whole and written `not all`. Whether a
+// query holds a bad token anywhere is asked once, of the whole query
+// (any_value), since one anywhere in it makes it no query.
 
 typedef struct {
     char *out;
     size_t cap, len;
+    // Grown as it is written, by `grow` (garb_media_text_serialized's
+    // buffer), and `failed` once it could not grow.
+    garb_grow_t grow;
+    void *grow_ctx;
+    bool failed;
 } SOut;
+
+// The default memory for a grown buffer: libos64's.
+static void *os64_grow(void *ctx, void *old, size_t old_size, size_t new_size)
+{
+    (void)ctx;
+    (void)old_size;
+    if (new_size == 0) {
+        os64_free(old);
+        return NULL;
+    }
+    return os64_realloc(old, new_size);
+}
+
+static bool s_room(SOut *o, size_t n)
+{
+    if (o->grow == NULL || o->failed)
+        return !o->failed;
+    if (o->len + n + 1 <= o->cap)
+        return true;
+    size_t cap = o->cap > 0 ? o->cap : 64;
+    while (cap < o->len + n + 1)
+        cap = cap <= SIZE_MAX / 2 ? cap * 2 : o->len + n + 1;
+    char *grown = o->grow(o->grow_ctx, o->out, o->cap, cap);
+    if (grown == NULL) {
+        o->failed = true;
+        return false;
+    }
+    o->out = grown;
+    o->cap = cap;
+    return true;
+}
 
 static void s_put(SOut *o, const char *s, size_t n)
 {
     if (o == NULL)
         return;
+    s_room(o, n);
     for (size_t i = 0; i < n; i++, o->len++)
         if (o->len + 1 < o->cap)
             o->out[o->len] = s[i];
     if (o->cap > 0)
         o->out[o->len < o->cap ? o->len : o->cap - 1] = '\0';
+}
+
+// Takes back what was written past `len`.
+static void s_back(SOut *o, size_t len)
+{
+    if (o == NULL)
+        return;
+    o->len = len;
+    if (o->cap > 0)
+        o->out[len < o->cap ? len : o->cap - 1] = '\0';
+}
+
+static size_t s_mark(const SOut *o)
+{
+    return o != NULL ? o->len : 0;
 }
 
 static void s_puts(SOut *o, const char *s)
@@ -520,6 +589,7 @@ static void s_values(SOut *o, const garb_value_t *v, int32_t n);
 // tokenizer read them.
 static void s_value(SOut *o, const garb_value_t *v)
 {
+    visit();
     switch (v->kind) {
     case GARB_IDENT: s_put(o, v->text, v->len); break;
     case GARB_FUNCTION:
@@ -578,6 +648,7 @@ static void s_values(SOut *o, const garb_value_t *v, int32_t n)
 static bool any_value(const garb_value_t *v, int32_t n)
 {
     for (int32_t i = 0; i < n; i++) {
+        visit();
         if (v[i].kind == GARB_BAD_STRING || v[i].kind == GARB_BAD_URL || v[i].kind == GARB_UNMATCHED)
             return false;
         if ((v[i].kind == GARB_BLOCK || v[i].kind == GARB_FUNCTION) &&
@@ -618,8 +689,6 @@ static bool s_mf_value(MCur *c, SOut *o)
     case GARB_DIMENSION:
     case GARB_PERCENTAGE:
     case GARB_FUNCTION:
-        if (t->kind == GARB_FUNCTION && !any_value(t->children, t->nchildren))
-            return false;
         c->i++;
         s_value(o, t);
         return true;
@@ -663,6 +732,7 @@ static bool known_name(const garb_value_t *t)
 // written.
 static bool s_feature(const garb_value_t *block, SOut *o)
 {
+    visit();
     MCur c = {.v = block->children, .n = block->nchildren};
     const garb_value_t *t = peek(&c);
     if (known_name(t)) {
@@ -730,38 +800,40 @@ static bool s_condition(MCur *c, bool allow_or, SOut *o);
 // is a query's shape whatever it holds.
 static bool s_in_parens(MCur *c, SOut *o)
 {
+    visit();
     const garb_value_t *t = peek(c);
     if (t == NULL)
         return false;
     if (t->kind == GARB_FUNCTION) {
-        if (!any_value(t->children, t->nchildren))
-            return false;
         c->i++;
         s_value(o, t);
         return true;
     }
-    if (t->kind != GARB_BLOCK || t->open != '(' || !any_value(t->children, t->nchildren))
+    if (t->kind != GARB_BLOCK || t->open != '(')
         return false;
     c->i++;
     s_put(o, "(", 1);
-    if (!s_feature(t, NULL)) {
+    // A feature, else a condition, else <general-enclosed>: each tried
+    // from the same place, what a failed one wrote taken back.
+    size_t open = s_mark(o);
+    if (!s_feature(t, o)) {
+        s_back(o, open);
         MCur inner = {.v = t->children, .n = t->nchildren};
-        MCur probe = inner;
-        if (s_condition(&probe, true, NULL) && peek(&probe) == NULL)
-            s_condition(&inner, true, o);
-        else
+        if (!s_condition(&inner, true, o) || peek(&inner) != NULL) {
+            s_back(o, open);
             s_values(o, t->children, t->nchildren);
-    } else {
-        s_feature(t, o);
+        }
     }
     s_put(o, ")", 1);
     return true;
 }
 
 // <media-condition>, or <media-condition-without-or>: `not` and one, or a
-// run joined all by `and` or all by `or`.
+// run joined all by `and` or all by `or`. What it wrote before it failed
+// is the caller's to take back.
 static bool s_condition(MCur *c, bool allow_or, SOut *o)
 {
+    visit();
     if (is_word(peek(c), "not")) {
         c->i++;
         s_puts(o, "not ");
@@ -832,11 +904,11 @@ static bool s_query(MCur *c, SOut *o)
     return peek(c) == NULL;
 }
 
-size_t garb_media_serialize(const garb_value_t *v, int32_t n, char *out, size_t cap)
+// The list into `o`, each query read once: one that is no query (a bad
+// token anywhere in it, or not the grammar's shape) taken back and written
+// `not all`.
+static size_t serialize_into(const garb_value_t *v, int32_t n, SOut *o)
 {
-    SOut o = {out, cap, 0};
-    if (cap > 0)
-        out[0] = '\0';
     bool any_content = false;
     for (int32_t k = 0; k < n; k++)
         if (v[k].kind != GARB_WHITESPACE)
@@ -848,17 +920,24 @@ size_t garb_media_serialize(const garb_value_t *v, int32_t n, char *out, size_t 
         if (k < n && v[k].kind != GARB_COMMA)
             continue;
         if (start > 0)
-            s_puts(&o, ", ");
-        MCur judge = {.v = v + start, .n = k - start};
-        if (s_query(&judge, NULL)) {
-            MCur write = {.v = v + start, .n = k - start};
-            s_query(&write, &o);
-        } else {
-            s_puts(&o, "not all");
+            s_puts(o, ", ");
+        size_t at = s_mark(o);
+        MCur query = {.v = v + start, .n = k - start};
+        if (!any_value(v + start, k - start) || !s_query(&query, o)) {
+            s_back(o, at);
+            s_puts(o, "not all");
         }
         start = k + 1;
     }
-    return o.len;
+    return o->len;
+}
+
+size_t garb_media_serialize(const garb_value_t *v, int32_t n, char *out, size_t cap)
+{
+    SOut o = {.out = out, .cap = cap};
+    if (cap > 0)
+        out[0] = '\0';
+    return serialize_into(v, n, &o);
 }
 
 size_t garb_media_text_serialize(const char *text, char *out, size_t cap)
@@ -878,6 +957,29 @@ size_t garb_media_text_serialize(const char *text, char *out, size_t cap)
     size_t length = garb_media_serialize(r.values, r.nvalues, out, cap);
     garb_free(&r);
     return length;
+}
+
+char *garb_media_text_serialized(const char *text, size_t *length, garb_grow_t grow, void *ctx)
+{
+    *length = 0;
+    if (text == NULL)
+        return NULL;
+    garb_parsed_t r;
+    if (garb_parse_values(text, os64_strlen(text), &r) != GARB_OK || r.incomplete) {
+        garb_free(&r);
+        return NULL;
+    }
+    SOut o = {.grow = grow != NULL ? grow : os64_grow, .grow_ctx = ctx};
+    s_room(&o, 0);
+    serialize_into(r.values, r.nvalues, &o);
+    garb_free(&r);
+    if (o.failed) {
+        if (o.out != NULL)
+            o.grow(o.grow_ctx, o.out, o.cap, 0);
+        return NULL;
+    }
+    *length = o.len;
+    return o.out;
 }
 
 bool garb_media_text_matches(const char *text, garb_env_t env)

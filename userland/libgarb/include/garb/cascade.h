@@ -226,11 +226,22 @@ bool garb_media_text_matches(const char *text, garb_env_t env);
 // anything else in brackets kept as written, its white space made single
 // spaces. A list with no content is "". A query's shape is the grammar's:
 // a feature this machine does not know changes what the query evaluates
-// to, not how it is written. Like snprintf; the text form answers
-// (size_t)-1, with "" written, when it could not read the text whole: no
-// memory, or brackets nested past GARB_DEPTH_MAX.
+// to, not how it is written. Each query is read once, so the cost is
+// linear in the list however deep its brackets nest. Like snprintf; the
+// text form answers (size_t)-1, with "" written, when it could not read the
+// text whole: no memory, or brackets nested past GARB_DEPTH_MAX.
 size_t garb_media_serialize(const garb_value_t *v, int32_t n, char *out, size_t cap);
 size_t garb_media_text_serialize(const char *text, char *out, size_t cap);
+// Memory for a buffer libgarb grows for its caller: a block of `new_size`
+// bytes holding the first `old_size` of `old` (which it lets go), or NULL
+// with `old` untouched; `new_size` 0 lets `old` go and answers NULL.
+typedef void *(*garb_grow_t)(void *ctx, void *old, size_t old_size, size_t new_size);
+// The text form in one pass into a buffer it grows with `grow` (NULL:
+// libos64's os64_realloc and os64_free): NUL-terminated, its length in
+// *length, the caller's to let go the way `grow` would. NULL where the
+// text form answers (size_t)-1, and when there was no memory for the
+// buffer, with nothing left held.
+char *garb_media_text_serialized(const char *text, size_t *length, garb_grow_t grow, void *ctx);
 
 // Every element's winners as text, in document order: `tag#id.class:
 // prop: value; ...`, for the harness and a probe. Like snprintf.

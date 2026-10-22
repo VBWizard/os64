@@ -632,7 +632,8 @@ typedef struct DMedia {
     DValue *entry;
     bool matches, owed, collected;
     /* libgarb could not read the list whole (it nests past GARB_DEPTH_MAX,
-     * or memory ran short partway): what was read is a different list, so
+     * or memory ran short reading or writing it): what was read is a
+     * different list, so
      * it is `not all`, which never matches, rather than a refusal, since
      * matchMedia answers every string with a list. */
     bool unread;
@@ -643,6 +644,17 @@ static void media_finalizer(JSRuntime *rt, JSValue value)
     (void)rt;
     DMedia *m = JS_GetOpaque(value, JS_GetClassID(value));
     if (m != NULL) m->collected = true;
+}
+
+// libgarb's grown buffer in the binding's ledger (garb_grow_t).
+static void *media_grow(void *ctx, void *old, size_t old_size, size_t new_size)
+{
+    os64_dom_t *dom = ctx;
+    char *grown = new_size > 0 ? d_alloc(dom, new_size) : NULL;
+    if (new_size > 0 && grown == NULL) return NULL;
+    if (grown != NULL && old != NULL) os64_memcpy(grown, old, old_size < new_size ? old_size : new_size);
+    d_free(dom, old);
+    return grown;
 }
 
 static bool media_matches(const DMedia *m, const os64_dom_view_t *v)
@@ -708,24 +720,26 @@ static JSValue media_member(JSContext *ctx, JSValueConst self, int argc, JSValue
         DString query = {0};
         if (!d_string(dom, ctx, argv[0], &query)) return JS_EXCEPTION;
         media_sweep(dom);
-        static const char kUnread[] = "not all";
-        size_t length = garb_media_text_serialize(query.data, NULL, 0);
-        if (length == (size_t)-1) length = 0;
-        size_t room = length < sizeof(kUnread) - 1 ? sizeof(kUnread) - 1 : length;
-        DMedia *m = room < SIZE_MAX ? d_alloc(dom, sizeof(*m)) : NULL;
-        char *media = m != NULL ? d_alloc(dom, room + 1) : NULL;
-        JSValue object = media != NULL ? JS_NewObjectClass(ctx, dom->media_class) : JS_UNDEFINED;
-        if (media == NULL || JS_IsException(object)) {
+        // Serialised once, into the binding's own storage (media_grow);
+        // NULL is a list libgarb could not read whole.
+        size_t length = 0;
+        char *media = garb_media_text_serialized(query.data, &length, media_grow, dom);
+        bool unread = media == NULL;
+        if (unread) {
+            length = os64_strlen("not all");
+            media = d_alloc(dom, length + 1);
+            if (media != NULL) os64_strcopy(media, length + 1, "not all");
+        }
+        DMedia *m = media != NULL ? d_alloc(dom, sizeof(*m)) : NULL;
+        JSValue object = m != NULL ? JS_NewObjectClass(ctx, dom->media_class) : JS_UNDEFINED;
+        if (m == NULL || JS_IsException(object)) {
             d_free(dom, media);
             d_free(dom, m);
             d_string_free(dom, &query);
             return JS_IsException(object) ? object
                                           : d_error(ctx, "QuotaExceededError", "No room for a MediaQueryList");
         }
-        // Read again into the room made: an answer that is not the length
-        // the first read gave is one libgarb could not read whole.
-        m->unread = garb_media_text_serialize(query.data, media, length + 1) != length;
-        if (m->unread) os64_strcopy(media, room + 1, kUnread);
+        m->unread = unread;
         m->query = query.data;         // the DString's storage is the binding's, and moves here
         m->media = media;
         os64_dom_view_t v = view_now(dom);
