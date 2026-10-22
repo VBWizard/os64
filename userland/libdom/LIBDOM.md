@@ -480,8 +480,11 @@ interfaces. Host acceptance and remaining J5/P5 work are in the design record.
 Three owner-thread providers, each installed outside callbacks; dom.h
 holds their contracts, `view.c` and `window.c` the binding's half. All of
 it is the Modern Web arc's surface, in four rows of `modern.c`'s table (the
-view's members with `onscroll` and `onresize`; `matchMedia`,
-`MediaQueryList` and `MediaQueryListEvent`; `getComputedStyle`; and
+view's members with `onscroll`, `onresize` and window's `focus` and `blur`,
+which do nothing, the window being the person's to raise; `matchMedia`,
+`MediaQueryList` and `MediaQueryListEvent`; `getComputedStyle` and the
+`CSSStyleDeclaration` interface, which names the style object's prototype
+and which the computed declaration's inherits; and
 `onpopstate`, `onhashchange`, `PopStateEvent` and `HashChangeEvent`, with
 `pushState`, `replaceState`, `state` and `scrollRestoration` on history).
 With the switch off none of those names exists, nor

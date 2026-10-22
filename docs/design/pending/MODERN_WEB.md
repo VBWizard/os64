@@ -632,8 +632,11 @@ and a tenth the new cases found) and read for design. Four rows in
   window's frame, unzoomed), `scroll`/`scrollTo`/`scrollBy` (two numbers
   or a ScrollToOptions; `smooth` done at once; non-finite is 0; the
   host clamps), `document.scrollingElement` (CSSOM View's, quirks
-  included), and `onscroll`/`onresize`. `resize` at window and `scroll` at
-  the document, bubbling, are fired by the host's rendering step.
+  included), `onscroll`/`onresize`, and window's `focus()` and `blur()`,
+  which do nothing (the window is the person's to raise; added when the
+  corpus replay showed statcounter reaching `defaultView.focus()`).
+  `resize` at window and `scroll` at the document, bubbling, are fired by
+  the host's rendering step.
 - **`matchMedia`, `MediaQueryList`, `MediaQueryListEvent`**: `media` is
   CSSOM's serialisation of the list (libgarb's new
   `garb_media_serialize`/`_text_serialize`/`_text_serialized`), `matches`
@@ -646,8 +649,12 @@ and a tenth the new cases found) and read for design. Four rows in
   the sizes, margins, padding, a positioned box's insets, line height and
   transform), camel, dashed and webkit spellings, `cssFloat`, indices and
   iteration in CSSOM's order; a pseudo-element and a detached element read
-  an empty declaration. `document.defaultView` is window (beyond the
-  brief: it is how pages reach `getComputedStyle`).
+  an empty declaration. `CSSStyleDeclaration` is an interface on window,
+  naming the style object's prototype, which the computed one inherits
+  and shadows, so `instanceof` answers truly for both (added for the
+  corpus replay's check that every interface the slice hands out is on
+  window). `document.defaultView` is window (beyond the brief: it is how
+  pages reach `getComputedStyle`).
 - **History**: `pushState`, `replaceState` (an empty URL is none, whatwg/
   html#9343), `state` (JSON: plain data, finite numbers but -0, no holes;
   DataCloneError otherwise, QuotaExceededError past 64 KiB),
@@ -689,7 +696,7 @@ the switch on and off:
 |---|---|---|---|---|---|
 | `css/cssom-view` | 217 | 229 | 217 | 8 | 9 (frames) |
 | `html/browsers/history/the-history-interface` | 4 | 50 | 4 | 19 | 0 |
-| `css/cssom` | 459 | 588 | 459 | 19 | 0 |
+| `css/cssom` | 459 | 589 | 459 | 20 | 0 |
 | `css/mediaqueries` | 0 | 117 | 0 | 13 | 0 |
 
 Every required test passes with the switch on and fails with it off.
@@ -699,16 +706,31 @@ excluded pages, and history's pages that open one), `DOMException`'s
 cssom-view's element geometry outside this slice.
 
 **The census** (the P5's 1,601 page records, slice 0b's
-`yonder_tally.py`): 289 records, 49 of 268 sites and 9,620 asks name at
+`yonder_tally.py`): 316 records, 57 of 268 sites and 9,668 asks name at
 least one of the slice's names: `getComputedStyle` (187 records, 192
 asks), `matchMedia` (246, 479), `innerWidth` (62, 2,552), `innerHeight`
 (68, 2,385), `outerWidth` (14, 15), `outerHeight` (9, 10), `scrollY` (13,
 15), `pageXOffset` (12, 1,984), `pageYOffset` (12, 1,986), `scrollTo` (1,
-2). The history members are not window misses, so the census cannot count
-them.
+2), `CSSStyleDeclaration` (37, 42), `focus` (1, 6). The history members
+are not window misses, so the census cannot count them.
 
-Host: the DOM host 3,810 / 22,416 → 4,712 / 36,884 checks, with 5,697
-allocation sweeps; the scripted-page host 5,888 → 6,791; all 0 failed.
+**The corpus replay** (230 pages Chris kept on the P5, 222 judged, run by
+the orchestrator) found four failure groups that could have been this
+slice's, each traced to its cause: Cloudflare's challenge (five sites)
+dies at `crypto.getRandomValues`, before and after, its timer then
+calling a callback (`window.qpPe1`) that the dead script would have made;
+the only change is the address, which now carries the challenge's token
+because `replaceState` runs and no script `load` event puts it back (both
+booked). React's `getActiveElementDeep` (att.com, javascriptminigames)
+now reaches `instanceof window.HTMLIFrameElement`, slice 0a's booked
+interface. statcounter now reaches `""+document.referrer` (slice 1a's
+booked row) and `document.defaultView.focus()`, for which this slice
+added window's `focus`/`blur`; checking every interface the slice hands
+out added `CSSStyleDeclaration`. amazon's and ms.now's unjudged records
+are the record's own capacity (its facts past `YONDER_DIAG_FACTS_MAX`).
+
+Host: the DOM host 3,810 / 22,416 → 4,706 / 36,992 checks, with 5,715
+allocation sweeps; the scripted-page host 5,888 → 6,793; all 0 failed.
 libgarb's harness took 27 minutes with the media serializer as first
 built, its allocation sweep paying the cost that doubled at every bracket
 level (the cold read's P1); in one pass it takes 10 seconds. The mutant harnesses were not
@@ -739,5 +761,6 @@ libdom slice); frames and `window.open`; an entry's state living only as
 long as its crumb; history deltas adding up to nothing; `scrollRestoration`
 per document; `matchMedia` writing `calc()` as given; the out-of-memory
 `not all`; a second traversal stopping the first; a stopped traversal
-collapsing held changes; and Back from an arriving page with nothing on
-screen.
+collapsing held changes; Back from an arriving page with nothing on
+screen; and, from the corpus replay, `crypto.getRandomValues` and a script
+element's `load` and `error`.
