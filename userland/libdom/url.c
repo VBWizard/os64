@@ -668,11 +668,18 @@ static int url_assign(os64_dom_t *dom, JSContext *ctx, DUrl *url, int which, JSV
     case U_HOST: case U_HOSTNAME: {
         /* The host state's override: up to the path, the query or the
          * fragment. host takes a port with it, and keeps the address's
-         * when it names none; hostname is refused one. */
+         * when it names none; hostname is refused one. A file address
+         * has no port, and an empty value takes its host away
+         * (file://server/share becomes file:///share, the file host
+         * state's empty host); no other special scheme's host is empty. */
         if (!p.authority) break;
         size_t end = span_until(&text, 0, scheme_special ? "/?#\\" : "/?#");
         size_t colon = span_until(&text, 0, ":");
-        if (which == U_HOSTNAME && colon < end) break;
+        if (file && end == 0) {
+            built = splice(href, length, p.host, p.host_end, "", 0, candidate, OS64_DOM_URL_MAX);
+            break;
+        }
+        if ((which == U_HOSTNAME || file) && colon < end) break;
         if (colon == 0 || (end == 0 && scheme_special)) break;
         size_t to = which == U_HOST && colon < end ? p.port_end : p.host_end;
         built = splice(href, length, p.host, to, text.data, end, candidate, OS64_DOM_URL_MAX);

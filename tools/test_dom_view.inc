@@ -292,7 +292,12 @@ static void dom_url_cases(void)
         "u.username='me';u.password='pw';assert(u.username===''&&u.password===''&&u.href.indexOf('@')<0);"
         "u.href='http://new.test/n';assert(u.href==='http://new.test/n');"
         "throws('TypeError',()=>{u.href='not an address'});assert(u.href==='http://new.test/n');"
-        "var o=new URL('mailto:a');o.pathname='b';assert(o.href==='mailto:a','an opaque path is not set');",
+        "var o=new URL('mailto:a');o.pathname='b';assert(o.href==='mailto:a','an opaque path is not set');"
+        "var fh=new URL('file://server/share');fh.host='';assert(fh.href==='file:///share'&&fh.host==='',fh.href);"
+        "var fn=new URL('file://hi/x');fn.hostname='';assert(fn.href==='file:///x'&&fn.hostname==='',fn.href);"
+        "fn.hostname='there';assert(fn.href==='file://there/x');fn.host='y:123';fn.hostname='y:123';"
+        "assert(fn.href==='file://there/x','a file address has no port');"
+        "var sh=new URL('https://h.test/p');sh.host='';sh.hostname='';assert(sh.href==='https://h.test/p');",
         "url: the setters");
     dom_script(&f, STORAGE_ASSERT
         "var u=new URL('http://h.test/?a=1&b=2&a=3');var p=u.searchParams;"
