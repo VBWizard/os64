@@ -39,6 +39,11 @@ struct yonder_diag {
     char *url;
     uint32_t seq;
     struct yonder_diag_claim claim;
+    // The claim's own mark, written in its placeholder and in every record
+    // it writes after (`claim: <nonce>`), so a write proves the file at its
+    // name is still this record's and not one another yonder claimed after
+    // it went (claim_ours). 0 before the claim.
+    uint64_t nonce;
     int64_t began_us;
     Table missing, failed, facts;
     // The facts that are the head's (Line.head): they have room of their
@@ -480,6 +485,11 @@ size_t yonder_diag_render(const yonder_diag_t *d, char *out, size_t cap)
             put_text(&o, d->facts.lines[i].b);
         puts_(&o, "\n");
     }
+    if (d->nonce != 0) {
+        char mark[48];
+        os64_snprintf(mark, sizeof(mark), "claim: %016llx\n", (unsigned long long)d->nonce);
+        puts_(&o, mark);
+    }
     // What met no room is said, in words that are neither token: the
     // verdict already counts every line that was kept.
     put_lost(&o, "missing names", &d->missing);
@@ -611,14 +621,58 @@ static bool write_whole(const char *path, const void *bytes, size_t n)
 
 static bool kept_path(const yonder_diag_t *d, const char *dir, const char *suffix, char *out, size_t cap);
 
+static bool diag_contains(const char *text, const char *needle);
+
+// Whether the file at `path` is still this record's: its placeholder, or a
+// record it wrote, carrying its nonce. A file that is gone, or one that
+// carries another nonce or none, means the name is someone else's now.
+static bool claim_ours(const yonder_diag_t *d, const char *path)
+{
+    int64_t h = os64_open(path, "r");
+    if (h < 0)
+        return false;
+    size_t cap = 4096, n = 0;
+    char *text = os64_malloc(cap);
+    bool ok = text != NULL;
+    while (ok) {
+        if (n + 1 == cap) {
+            char *more = cap < ((size_t)16 << 20) ? os64_realloc(text, cap * 2) : NULL;
+            if (more == NULL) {
+                ok = false;
+                break;
+            }
+            text = more;
+            cap *= 2;
+        }
+        int64_t got = os64_read((int32_t)h, text + n, cap - 1 - n);
+        if (got < 0)
+            ok = false;
+        if (got <= 0)
+            break;
+        n += (size_t)got;
+    }
+    (void)os64_close((int32_t)h);
+    bool ours = false;
+    if (ok) {
+        text[n] = '\0';
+        char mark[64];
+        os64_snprintf(mark, sizeof(mark), "\n" YONDER_DIAG_UNWRITTEN " %016llx\n", (unsigned long long)d->nonce);
+        ours = diag_contains(text, mark);
+        os64_snprintf(mark, sizeof(mark), "\nclaim: %016llx\n", (unsigned long long)d->nonce);
+        ours = ours || diag_contains(text, mark);
+    }
+    os64_free(text);
+    return ours;
+}
+
 int64_t yonder_diag_write(const yonder_diag_claim_t *c)
 {
     char path[OS64_PATH_MAX];
-    os64_dirent_t e;
-    // The name is proved again before it is written over: a claimed file
-    // that is gone means the name may be anyone's now. (A file put back
-    // between this look and the rename is not caught.)
-    if (c == NULL || !kept_path(c->record, c->dir, ".txt", path, sizeof(path)) || os64_stat(path, &e) != 0)
+    // The name is proved again before it is written over: the file there
+    // must still be this record's own, by its nonce. One that is gone, or
+    // that another yonder claimed after it went, is not written over.
+    // (A file changed between this look and the rename is not caught.)
+    if (c == NULL || !kept_path(c->record, c->dir, ".txt", path, sizeof(path)) || !claim_ours(c->record, path))
         return -1;
     const yonder_diag_t *d = c->record;
     size_t need = yonder_diag_render(d, NULL, 0);
@@ -657,8 +711,36 @@ static bool kept_path(const yonder_diag_t *d, const char *dir, const char *suffi
 
 static int64_t keep_failed(yonder_diag_t *d);
 
+// A claim's nonce: eight bytes of /dev/random, or, where it cannot be
+// read, the microsecond clock, the sequence and the record's own address
+// mixed, which no two claims share in practice. Never 0, which is "no
+// claim".
+static uint64_t claim_nonce(const yonder_diag_t *d)
+{
+    uint64_t n = 0;
+    int64_t h = os64_open("/dev/random", "r");
+    if (h >= 0) {
+        if (os64_read((int32_t)h, &n, sizeof(n)) != (int64_t)sizeof(n))
+            n = 0;
+        (void)os64_close((int32_t)h);
+    }
+    if (n == 0)
+        n = ((uint64_t)os64_micros() * 0x9E3779B97F4A7C15ULL) ^ ((uint64_t)d->seq << 32) ^ (uint64_t)(uintptr_t)d;
+    return n != 0 ? n : 1;
+}
+
+// Whether `text` holds `needle`.
+static bool diag_contains(const char *text, const char *needle)
+{
+    size_t n = os64_strlen(needle), t = os64_strlen(text);
+    for (size_t i = 0; i + n <= t; i++)
+        if (os64_memcmp(text + i, needle, n) == 0)
+            return true;
+    return false;
+}
+
 // The record's file made at `path` only if nothing is there, holding its
-// address and `verdict: unwritten`, which no reader judges or counts (the
+// address and `verdict: unwritten <nonce>`, which no reader judges or counts (the
 // tally names it as damage), so a name claimed and never written (a yonder
 // that died, a write that failed) is never read as a page that met
 // nothing. The real
@@ -670,15 +752,17 @@ static bool claim_file(const yonder_diag_t *d, const char *path)
     if (h < 0)
         return false;
     Out m = {NULL, 0, 0};
+    char mark[48];
+    os64_snprintf(mark, sizeof(mark), "\n" YONDER_DIAG_UNWRITTEN " %016llx\n", (unsigned long long)d->nonce);
     puts_(&m, "address: ");
     put_text(&m, d->url);
-    puts_(&m, "\n" YONDER_DIAG_UNWRITTEN "\n");
+    puts_(&m, mark);
     char *text = os64_malloc(m.at + 1);
     if (text != NULL) {
         Out o = {text, m.at + 1, 0};
         puts_(&o, "address: ");
         put_text(&o, d->url);
-        puts_(&o, "\n" YONDER_DIAG_UNWRITTEN "\n");
+        puts_(&o, mark);
         (void)write_all((int32_t)h, text, m.at);
         os64_free(text);
     }
@@ -709,6 +793,7 @@ int64_t yonder_diag_claim(yonder_diag_t *d, const char *dir, bool keep)
     char path[OS64_PATH_MAX], html[OS64_PATH_MAX], folder[OS64_PATH_MAX];
     os64_dirent_t e;
     uint32_t first = d->seq;
+    d->nonce = claim_nonce(d);
     for (uint32_t tries = 0; tries < YONDER_DIAG_CLAIM_TRIES; tries++, d->seq++) {
         if (!kept_path(d, dir, ".txt", path, sizeof(path)) || !claim_file(d, path))
             continue;

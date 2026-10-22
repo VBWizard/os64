@@ -74,11 +74,12 @@
  *   - THE CLOCK. A turn with nothing to do moves the window's milliseconds
  *     on by a tick (10 ms), until the page is quiet (nothing arriving,
  *     nothing out that will be answered, no timer set) or the virtual
- *     budget is spent (60 s, --seconds), so a page's timers fire as they
- *     would on the glass. The microsecond clock also moves 1 ms each time
+ *     budget is spent (60 s, --seconds; the record says it, and the diff
+ *     compares no two replays given different budgets), so a page's timers
+ *     fire as they would on the glass. The microsecond clock also moves 1 ms each time
  *     it is read, so a script that never ends is stopped at the script
  *     time limit as it is on the P5. The JS Date clock is the record's
- *     `clock:` and does not move;
+ *     `clock:` (a version 1 page's the harness's) and does not move;
  *   - A NAVIGATION THE PAGE STARTS (a script setting `location`, a
  *     refresh, a form it sends) ends the replay there: the next page is
  *     not in this one's index, and a page left running would fire timers
@@ -401,12 +402,16 @@ static RpLine rp_classify(const char *line, size_t len, bool index) {
     for(size_t i=0;i<len;i++)
         if((unsigned char)line[i]<0x20 && line[i]!='\t') { l.why="a control byte"; return l; }
     /* Nor one spelled `\x00`: a field that decodes to a NUL would read as
-     * shorter than it is wherever a string ends at one. */
+     * shorter than it is wherever a string ends at one. And every field
+     * must decode to UTF-8, as the file must be written in it: an escape
+     * may spell a byte that may not stand raw, never one that is no part
+     * of a character (`agent: \xFF` would be an input no record holds). */
     size_t dlen=0;
     char *decoded=rp_unescape_n(line,len,!index,&dlen);
-    bool nul=memchr(decoded,'\0',dlen)!=NULL;
+    bool nul=memchr(decoded,'\0',dlen)!=NULL, utf8=rp_utf8((const unsigned char *)decoded,dlen);
     free(decoded);
     if(nul) { l.why="a NUL in a field"; return l; }
+    if(!utf8) { l.why="a field that escapes to bytes that are not UTF-8"; return l; }
     if(index) {
         if(rp_starts(line,len,"# yonder kept index ")) {
             if(rp_decimal(line+20,len-20,&l.n[0])) l.kind="index:version";
@@ -484,12 +489,24 @@ static RpLine rp_classify(const char *line, size_t len, bool index) {
         return l;
     }
     if(rp_is(line,len,RP_KEPT_ASSUMED)) { l.kind="assumed"; return l; }
+    /* `REPLAY budget: <seconds> s`: the virtual time the replay had. */
+    if(rp_starts(line,len,"REPLAY budget: ")) {
+        l.why="a REPLAY budget of no spelling a replay writes";
+        if(len<17 || !rp_is(end-2,2," s") || !rp_decimal(line+15,len-17,&l.n[0])) return l;
+        l.kind="budget"; l.why=NULL;
+        return l;
+    }
     if(rp_starts(line,len,"address: ")) { l.kind="address"; l.a=line+9; l.alen=len-9; return l; }
     if(rp_starts(line,len,"verdict: ")) {
         const char *p=line+9; size_t rest=len-9, d;
         l.why="a verdict of no spelling yonder writes";
         if(rp_is(p,rest,"clean")) { l.kind="verdict"; return l; }
-        if(rp_is(p,rest,"unwritten")) { l.kind="verdict"; l.unwritten=true; return l; }
+        /* The claim's placeholder: `unwritten`, then its nonce (sixteen
+         * lowercase hex digits) when the claim wrote one. */
+        if(rp_is(p,rest,"unwritten") || (rest==26 && rp_starts(p,rest,"unwritten ") &&
+                                         strspn(p+10,"0123456789abcdef")>=16)) {
+            l.kind="verdict"; l.unwritten=true; return l;
+        }
         d=rp_digit_run(p,end);
         if(d==0) return l;
         uint32_t a=0, b=0;
@@ -597,15 +614,6 @@ static const char *rp_record_read(const char *text, size_t size, RpRecord *r) {
         size_t len=end!=NULL ? (size_t)(end-line) : size-at;
         at+=len+1;
         RpLine l=rp_classify(line,len,false);
-        /* The fields tools/yonder_records.py decodes, the address and the
-         * record lines', must escape to UTF-8 as they must there. */
-        if(!strcmp(l.kind,"address") || !strcmp(l.kind,"missing") || !strcmp(l.kind,"failed")) {
-            size_t flen=0;
-            char *field=rp_unescape_n(line,len,true,&flen);
-            if(!rp_utf8((const unsigned char *)field,flen)) why="it is not a page file: a field escapes to bytes that are not UTF-8";
-            free(field);
-            if(why!=NULL) break;
-        }
         if(line_no==0) {
             if(strcmp(l.kind,"address")) {
                 snprintf(said,sizeof(said),"it is not a whole page file: %s",l.why);
@@ -1238,6 +1246,7 @@ typedef struct {
     char why[1100];
     unsigned missing, failed;
     RpFrom from;
+    uint32_t budget_s;          /* the virtual seconds the replay was given */
 } RpOutcome;
 
 /* THE ONE PLACE A PAGE'S STATE IS DECIDED, from the page's own run, never
@@ -1270,9 +1279,11 @@ static bool rp_any_taken(const RpOutcome *o) {
 /* THE RECORD A REPLAY WRITES, the page's state IN IT: its address; `REPLAY
  * state: <state> <why>` as its second line, before any token line; for a
  * judged state the window's record from its verdict on, the replay's own
- * REPLAY lines, the inputs it took from the harness (`REPLAY inputs
- * defaulted:`, a version 1 page's), and the kinds it does not reproduce;
- * and `end`, which both
+ * REPLAY lines, for a version 1 page what it took from outside its record
+ * (`REPLAY inputs stated:`, `REPLAY inputs defaulted:`, `REPLAY kept:
+ * assumed whole (version 1)`), the virtual seconds it was given (`REPLAY
+ * budget:`, which the diff compares), and the kinds it does not
+ * reproduce; and `end`, which both
  * readers require, so a record cut short is never read. An UNJUDGED page's
  * record is its address, its state and `end`. `address` is the decoded
  * address, used when the window wrote no record. */
@@ -1313,6 +1324,10 @@ static RpText rp_compose(const RpOutcome *o, const char *address, const char *wi
             rp_add(&t,"\n",1);
         }
         if(o->from.assumed) rp_add(&t,RP_KEPT_ASSUMED "\n",strlen(RP_KEPT_ASSUMED)+1);
+        /* The budget the page was given, which the diff compares: two
+         * replays given different time are two different readings. */
+        char budget[48]; snprintf(budget,sizeof(budget),"REPLAY budget: %u s\n",o->budget_s);
+        rp_add(&t,budget,strlen(budget));
         rp_add(&t,kNot,sizeof(kNot)-1);
     }
     rp_add(&t,"end\n",4);
@@ -1667,6 +1682,7 @@ static int rp_replay_page(const char *kept, const char *out, const char *name, u
     }
 judge:;
     RpOutcome o=rp_decide(unjudged,&window,&from);
+    o.budget_s=(uint32_t)(budget_ms/1000);
     RpText whole=rp_compose(&o,r.address,o.state==RP_UNJUDGED ? NULL : record,wlen);
     path=rp_cat(out,"/",name);
     if(rp_fs_write(path,whole.p,whole.n,&fault)!=RP_FS_OK && o.state!=RP_UNJUDGED) {
@@ -2097,13 +2113,16 @@ static way_head_t rp_head(int status, const char *reason, const char *type, cons
  * too, which a corpus kept on the glass does not. Let be: a `paint stages`
  * line, by its key, whose times are the processor's counter
  * (YONDER_DIAGNOSTICS.md § What paints cost), which no clock of the
- * harness moves; the `kept:` and `kept lines:` facts, which say how the
- * record was made and not what the page did; each record's `end`; and the
- * replay's own lines, its state and what it does not reproduce. */
+ * harness moves; the `kept:`, `kept lines:` and `claim:` facts, which say
+ * how the record was made and not what the page did; each record's `end`;
+ * and the replay's own lines, its state, its budget and what it does not
+ * reproduce. */
 static bool rp_let_be(const char *line, size_t len, bool replay) {
     return (len>=6 && !strncmp(line,"kept: ",6)) || (len>=12 && !strncmp(line,"kept lines: ",12)) ||
+           (len>=7 && !strncmp(line,"claim: ",7)) ||
            (len==3 && !strncmp(line,"end",3)) ||
            (replay && ((len>=14 && !strncmp(line,"REPLAY state: ",14)) ||
+                       (len>=15 && !strncmp(line,"REPLAY budget: ",15)) ||
                        (len>=23 && !strncmp(line,"REPLAY not reproduced: ",23))));
 }
 static bool rp_same(const char *name, const char *a, const char *b) {
@@ -2132,7 +2151,7 @@ typedef enum { RP_COPY, RP_DROP_SCRIPT_LINE, RP_BAD_NUMBER, RP_NO_MEMORY, RP_FUL
                RP_DROP_FACT, RP_SHORT_LINE, RP_CUT_BEFORE_KEPT, RP_BIG_COUNT, RP_ODD_LINE, RP_ESCAPES,
                RP_SWAP_NUMBERS, RP_BIG_LINES, RP_JUNK_BYTES, RP_V1, RP_V3, RP_EMPTY_INDEX, RP_NO_VERSION,
                RP_CR, RP_INDEX_CONTROL, RP_SECOND_ADDRESS, RP_LEADING_ZERO, RP_NOT_UTF8, RP_PAST_END,
-               RP_SECOND_VERDICT, RP_PLACEHOLDER, RP_FEWER_LINES } RpEdit;
+               RP_SECOND_VERDICT, RP_PLACEHOLDER, RP_FEWER_LINES, RP_ESCAPED_NOT_UTF8 } RpEdit;
 /* The fact RP_DROP_FACT takes out of the record. */
 static const char *rp_drop_fact;
 
@@ -2250,6 +2269,7 @@ static unsigned rp_copy_page(const char *kept, const char *name, const char *dir
             /* A fact taken out, or its value spoiled: the line `key: ...`
              * whose key is `drop`, removed, or given `value`. */
             const char *drop=edit==RP_DROP_FACT ? rp_drop_fact : edit==RP_BIG_LINES || edit==RP_FEWER_LINES ? "kept lines" :
+                             edit==RP_ESCAPED_NOT_UTF8 ? "agent" :
                              edit==RP_JUNK_BYTES || edit==RP_LEADING_ZERO ? "bytes" : NULL;
             if(!strcmp(kFiles[f],".txt") && drop!=NULL) {
                 char key[32]; snprintf(key,sizeof(key),"\n%s: ",drop);
@@ -2258,6 +2278,7 @@ static unsigned rp_copy_page(const char *kept, const char *name, const char *dir
                 else {
                     char value[64]="";
                     if(edit==RP_BIG_LINES) snprintf(value,sizeof(value),"\nkept lines: 4294967296");
+                    if(edit==RP_ESCAPED_NOT_UTF8) snprintf(value,sizeof(value),"\nagent: \\xFF");
                     if(edit==RP_FEWER_LINES) snprintf(value,sizeof(value),"\nkept lines: %lu",strtoul(at+13,NULL,10)-1);
                     if(edit==RP_JUNK_BYTES) snprintf(value,sizeof(value),"%.*sx",(int)(eol-at),at);
                     if(edit==RP_LEADING_ZERO) snprintf(value,sizeof(value),"\nbytes: 0%.*s",(int)(eol-at-8),at+8);
@@ -2402,8 +2423,9 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
      * whose first line is not its version, a carriage return in a fact, a
      * control byte in an index field, a second `address:`, a plain fact
      * whose bytes are not UTF-8, a line past `end`, a second verdict, the
-     * claim's placeholder never replaced, and a `kept lines` one short of
-     * its index: none is judged, each says why on a record of its own, and
+     * claim's placeholder never replaced, a `kept lines` one short of its
+     * index, and an agent escaped to a byte that is no part of UTF-8: none
+     * is judged, each says why on a record of its own, and
      * each makes the answer 2. */
     static const struct { const char *dir; RpEdit edit; const char *why; } kRefused[]={
         {"/badnumber",RP_BAD_NUMBER,"its index is damaged: a count no record holds"},
@@ -2431,7 +2453,8 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
         {"/pastend",RP_PAST_END,"it is not a whole page file: lines past its `end`"},
         {"/secondverdict",RP_SECOND_VERDICT,"it is not a whole page file: a second verdict line"},
         {"/placeholder",RP_PLACEHOLDER,"its name was claimed and its record never written"},
-        {"/fewerlines",RP_FEWER_LINES,"its record says its index holds 2 lines, and it holds 3"}};
+        {"/fewerlines",RP_FEWER_LINES,"its record says its index holds 2 lines, and it holds 3"},
+        {"/escapednotutf8",RP_ESCAPED_NOT_UTF8,"it is not a whole page file: a field that escapes to bytes that are not UTF-8"}};
     for(size_t i=0;i<sizeof(kRefused)/sizeof(kRefused[0]);i++) {
         dir=rp_cat(work,kRefused[i].dir,"");
         bad+=rp_copy_page(kept,name,dir,kRefused[i].edit);

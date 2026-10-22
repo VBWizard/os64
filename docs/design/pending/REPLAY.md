@@ -54,24 +54,34 @@ Under the diagnostics directory, for a page claimed as `<host>-<nnnn>`:
 
 The claim (`yonder_diag_claim`) is the only way any of these names is
 written: `<name>.txt` is created exclusively (os64's `"x"` open) holding
-`verdict: unwritten`, and `.html` and `.d` must not exist by that name,
-with `keep_pages` on or off; a name that cannot be claimed is passed over,
-and after 64 names nothing is written. The write of the record proves the
-claimed file is still there before renaming over it.
+`verdict: unwritten <nonce>`, and `.html` and `.d` must not exist by that
+name, with `keep_pages` on or off; a name that cannot be claimed is
+passed over, and after 64 names nothing is written. The nonce is a random
+64-bit value of the claim's (`/dev/random`; where that cannot be read,
+the clock, the sequence and the record's address mixed), in sixteen hex
+digits, and every record the claim writes carries it too, as the plain
+fact `claim: <nonce>`. The write of the record proves the claimed file is
+still ITS OWN before renaming over it: it re-reads the file and replaces
+it only when the nonce there is its own. A file gone, or one another
+yonder claimed after it went (another nonce), means the name is someone
+else's now: nothing is written, and that is said once, as a failed write
+is.
 
 ## 2. The record
 
 A record is lines separated by `\n`, bytes are UTF-8, and NO line
 contains a `\r`, a NUL, or any byte below 0x20 other than the `\t` the
 escape never leaves (a control byte in a value is spelled `\xHH`), and
-no field decodes to a NUL (`\x00`: a string would end at it). A record
-that breaks that anywhere is not a record. The lines:
+no field decodes to a NUL (`\x00`: a string would end at it) or to bytes
+that are not UTF-8 (`\xFF`: a value must decode to UTF-8 as well as be
+written in it). A record that breaks that anywhere is not a record. The
+lines:
 
 ```
 record      := address (verdict | state verdict?) (head | plain | token | replay)* end?
                                        (in any order after the second line: yonder writes its tokens first)
 address     := "address: " text
-verdict     := "verdict: clean" | "verdict: unwritten"
+verdict     := "verdict: clean" | "verdict: unwritten" (" " nonce)?
              | "verdict: " count1 " MISSING" | "verdict: " count1 " FAILED"
              | "verdict: " count1 " MISSING, " count1 " FAILED"
 state       := "REPLAY state: verdict"
@@ -86,6 +96,7 @@ replay      := "REPLAY incomplete " text | "REPLAY unfinished " text
                                                                      a value spelled \x20)
              | "REPLAY inputs defaulted:" (" " defaulted)+     (each name once)
              | "REPLAY kept: assumed whole (version 1)"
+             | "REPLAY budget: " count " s"
              | "REPLAY not reproduced:" (" " known-kind)+
 end         := "end"
 count       := "0" | [1-9][0-9]{0,9}      (no leading zero, at most UINT32_MAX)
@@ -94,6 +105,7 @@ clock       := "0" | [1-9][0-9]{0,15}     (epoch milliseconds, at most 2^53-1)
 statable    := "zoom" | "appearance" | "motion" | "animate" | "modern" | "scripts"
              | "script-seconds" | "laid-out-at" | "agent" | "tz"
 defaulted   := "cookies" | "clock"
+nonce       := [0-9a-f]{16}
 known-kind  := "font-fetch" | "image" | "picture-fetch"
 ```
 
@@ -135,7 +147,10 @@ it lost lines.
   that a reader would otherwise take for part of a token's spelling
   (`M%49SSING`, `F%41ILED`), and the two token spellings decoded as the
   words they stand for. The readers' decoders are held equal by vectors
-  with every escape in every position.
+  with every escape in every position. What a field decodes to must be
+  UTF-8 with no NUL, as the file itself must be: every decoded value is
+  an input to some reader, and an escape spells a byte that may not stand
+  raw, never one that is no part of a character.
 - **Numbers.** One bounded-decimal parser per reader: ASCII digits only,
   no sign, no leading zero past a lone `0`, at most ten digits, at most
   UINT32_MAX (a clock: sixteen digits, at most 2^53-1), nothing trailing.
@@ -169,7 +184,7 @@ the rows that say so are the whole of what a replay fakes.
 | the clock | record | `clock:` epoch milliseconds at claim | yes (v2; v1: the harness's, named) |
 | the zone | record | `tz:` the zone in force at claim | yes (v2; v1: stated, named) |
 | the clock while the page runs | the harness | — | stated: `Date` reads the record's clock, frozen; it does not move while the page runs |
-| the window's time | the harness | — | stated: an idle turn moves the window's milliseconds a 10 ms tick, the microsecond clock moves 1 ms each time it is read, and the replay ends at a 60 s virtual budget (`--seconds`) |
+| the window's time | the harness | — | stated: an idle turn moves the window's milliseconds a 10 ms tick, the microsecond clock moves 1 ms each time it is read, and the replay ends at a 60 s virtual budget (`--seconds`), which every judged replay record states (`REPLAY budget: <seconds> s`) and the diff compares |
 | the fetch's end | the harness | — | stated: a page from the network is posted whole before the first turn, with a verdict of OK always; the record keeps what the parser was fed, not how the fetch ended |
 | when products arrive | the harness | — | stated: each script or sheet job is answered at the top of the next turn, in the kept order, never between the chunks of the page's own parse |
 | the request | the harness | — | stated: a page that was the reply to a POST is fed back as a GET's |
@@ -332,8 +347,8 @@ none rather than the old one, and one it cannot remove refuses the run.
   (`tools/test_yonder_replay_host.sh --mutants`) and listed in the PR body
   with its count.
 - The diff: pairs by name AND address, and only records that took the
-  same inputs from the harness and were run with the same `--window`
-  statement; judges VERDICT pages only; exits 2 on
+  same inputs from the harness, were run with the same `--window`
+  statement and were given the same budget; judges VERDICT pages only; exits 2 on
   anything unjudged on either side and on a page only AFTER has (BEFORE
   did not replay it); else 1 on a regression, a broken page (UNFINISHED
   after), a `newly incomplete` page, or one missing from AFTER; and

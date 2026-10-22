@@ -24,10 +24,11 @@ static yonder_diag_t *diag_new_claimed(const char *url, uint32_t seq);
 /* THE DISK, FAKED, for the page files (YONDER_DIAGNOSTICS.md): directories
  * and files in memory, reached only under a directory a case made or
  * seeded. Every other path opens nothing, as the window's fixtures always
- * had it. Handles from FAKE_HANDLE up are the fake's. */
+ * had it. Handles from FAKE_HANDLE up are the fake's: written whole by
+ * `w` and `x`, read from the start by `r`. */
 #define FAKE_HANDLE 1000
 #define FAKE_FILES 128
-static struct { char path[256]; char *data; size_t len; bool used; } fake_files[FAKE_FILES];
+static struct { char path[256]; char *data; size_t len, read_at; bool used; } fake_files[FAKE_FILES];
 static char fake_dirs[16][256];
 static int nfake_dirs, fake_writes, fake_dir_at;
 static bool fake_fail_open;
@@ -56,8 +57,13 @@ static const char *fake_text(const char *path) {
 int64_t os64_open(const char *p, const char *m) {
     char parent[256];
     if(fake_fail_open || fake_parent(p,parent,sizeof(parent))==NULL || !fake_is_dir(parent) ||
-       (strcmp(m,"w") && strcmp(m,"x"))) return -1;
+       (strcmp(m,"w") && strcmp(m,"x") && strcmp(m,"r"))) return -1;
     int f=fake_file(p);
+    if(!strcmp(m,"r")) {
+        if(f<0) return -1;
+        fake_files[f].read_at=0;
+        return FAKE_HANDLE+f;
+    }
     if(f>=0 && !strcmp(m,"x")) return -1;
     if(f<0) for(f=0;f<FAKE_FILES && fake_files[f].used;f++) {}
     if(f==FAKE_FILES) return -1;
@@ -74,7 +80,14 @@ int64_t os64_write(int32_t h, const void *b, size_t n) {
     fake_files[f].data[fake_files[f].len]='\0';
     return (int64_t)n;
 }
-int64_t os64_read(int32_t h, void *b, size_t n) { (void)h; (void)b; (void)n; return -1; }
+int64_t os64_read(int32_t h, void *b, size_t n) {
+    if(h<FAKE_HANDLE || h>=FAKE_HANDLE+FAKE_FILES || !fake_files[h-FAKE_HANDLE].used) return -1;
+    int f=h-FAKE_HANDLE;
+    size_t left=fake_files[f].len-fake_files[f].read_at, take=n<left ? n : left;
+    memcpy(b,fake_files[f].data+fake_files[f].read_at,take);
+    fake_files[f].read_at+=take;
+    return (int64_t)take;
+}
 int64_t os64_close(int32_t h) { (void)h; return 0; }
 int64_t os64_rename(const char *from, const char *to) {
     int f=fake_file(from);
@@ -5097,8 +5110,8 @@ static void diag_keep_cases(void) {
     /* A NAME BESIDE ANOTHER'S KEPT FILES IS NOT FRESH, kept or not: with
      * keep_pages off, a number whose page bytes or folder are there is
      * passed over too, so a record is never paired with another load's kept
-     * page. The claimed file holds only `verdict: unwritten` until the
-     * record is written. */
+     * page. The claimed file holds only `verdict: unwritten` and the
+     * claim's nonce until the record is written. */
     keep_begin(false);
     next=s_diag.next;
     snprintf(left,sizeof(left),"/tmp/kept/fixture.test-%04u.html",(unsigned)next);
@@ -5108,12 +5121,30 @@ static void diag_keep_cases(void) {
     loop_page("<p>revisit</p>");
     snprintf(path,sizeof(path),"/tmp/kept/fixture.test-%04u.txt",(unsigned)next+2);
     check(yonder_diag_seq(g.stream.diag)==next+2 && fake_text(path)!=NULL &&
-          has(fake_text(path),"\n" YONDER_DIAG_UNWRITTEN "\n") && !has(fake_text(path),"verdict: clean"),
+          has(fake_text(path),"\n" YONDER_DIAG_UNWRITTEN " ") && !has(fake_text(path),"verdict: clean"),
           "claim, keep off: a number beside another's kept bytes or folder is passed over, and the claim reads unwritten");
     check(loop_settle() && g.page.tree!=NULL,"claim, keep off: the page arrives");
     loop_drop();
     check(has(fake_text(path),"\nverdict: clean\n") && !strcmp(fake_text(left),"<p>another's") &&
           fake_is_dir(folder),"claim, keep off: the record replaces its placeholder, and touches nothing of theirs");
+    keep_end();
+
+    /* THE NAME IS PROVED OURS BY THE CLAIM'S NONCE: a claimed file removed
+     * and claimed again by another yonder (its placeholder, its nonce) is
+     * not written over, at arrival or at departure. */
+    keep_begin(false);
+    loop_page("<p>reclaimed</p>");
+    {
+        char name[64], theirs[160]; yonder_diag_file_name(g.stream.diag,name,sizeof(name));
+        snprintf(path,sizeof(path),"/tmp/kept/%s",name);
+        snprintf(theirs,sizeof(theirs),"address: http://other.test/\n" YONDER_DIAG_UNWRITTEN " 0123456789abcdef\n");
+        check(os64_unlink(path)==0,"claim: its placeholder is removed from under it");
+        fh=os64_open(path,"x"); os64_write((int32_t)fh,theirs,strlen(theirs)); os64_close((int32_t)fh);
+        check(loop_settle() && g.page.tree!=NULL,"claim: the page arrives under a name another claimed");
+        loop_drop();
+        check(fake_text(path)!=NULL && !strcmp(fake_text(path),theirs),
+              "claim: a name another yonder claimed after ours went is not written over");
+    }
     keep_end();
 
     /* EVERY NAME TAKEN: with each of the claim's numbers holding another's

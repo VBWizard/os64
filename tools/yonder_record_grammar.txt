@@ -264,3 +264,25 @@ REFUSED	note: a\x00b
 REFUSED	MISSING global a\x00 (1)
 fact	note: a\\x00b
 index:REFUSED	1	script	https://a.test/x\x00.js	came	https://a.test/x.js		1
+# A field must decode to UTF-8 as well as be written in it: an escape
+# spells a byte that may not stand raw, never one that is no part of a
+# character.
+REFUSED	agent: \xFF
+REFUSED	note: caf\xC3
+REFUSED	address: https://a.test/\xE9
+fact	note: caf\xC3\xA9
+index:REFUSED	1	script	https://a.test/\xFF.js	came	https://a.test/x.js		1
+# The claim's placeholder, with its nonce
+verdict	verdict: unwritten 0123456789abcdef
+REFUSED	verdict: unwritten 0123
+REFUSED	verdict: unwritten 0123456789ABCDEF
+REFUSED	verdict: unwritten 0123456789abcdef0
+REFUSED	verdict: unwritten  0123456789abcdef
+# The budget a replay was given
+budget	REPLAY budget: 60 s
+budget	REPLAY budget: 0 s
+REFUSED	REPLAY budget: 060 s
+REFUSED	REPLAY budget: 60
+REFUSED	REPLAY budget: 60s
+REFUSED	REPLAY budget:  s
+REFUSED	REPLAY budget: 4294967296 s

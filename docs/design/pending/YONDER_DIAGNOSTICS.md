@@ -483,7 +483,11 @@ let go. The claim is what every write under the name takes
 (`yonder_diag_claim_t`), so a record that could make none of 64 fresh
 names has no claim: nothing of it is written, it is said once a run on
 the status line and in the log, and no file of anyone else's is written
-over. The record's write proves its claimed file is still there first.
+over. The claim writes a random nonce into its placeholder (`verdict:
+unwritten <nonce>`) and every record it writes after (`claim: <nonce>`),
+and the record's write proves the claimed file is still its own, by that
+nonce, before replacing it: one gone, or claimed by another yonder after
+it went, is not written over.
 
 A step of keeping that fails, or a fresh name whose folder cannot be
 made, ends the keeping of that page,

@@ -110,7 +110,8 @@ class Record:
     line names (`not_reproduced`), and, for a page of version 1, what it
     took from outside its record: the inputs the harness gave
     (`defaulted`), those `--window` stated, {key: value} (`stated`), and
-    whether it was assumed kept whole (`assumed`). A record yonder wrote
+    whether it was assumed kept whole (`assumed`), and the virtual seconds
+    a replay was given (`budget`). A record yonder wrote
     that is UNJUDGED says why in a flag too: `marked`, it says so itself,
     and `lost`, it lost lines (the lines it kept are read, and a census
     counts them), or `unwritten`, it is a claimed name's placeholder."""
@@ -132,6 +133,7 @@ class Record:
         self.defaulted = set()
         self.stated = {}
         self.assumed = False
+        self.budget = None
         self.not_reproduced = set()
 
 
@@ -187,7 +189,7 @@ count_of = decimal
 # begins like a kind and does not match its grammar exactly is REFUSED, never
 # read as some other kind, and never accepted because the record's counts
 # happen to reconcile.
-RE_VERDICT = re.compile(rb'verdict: (?:(clean)|(unwritten)|([0-9]+) MISSING, ([0-9]+) FAILED|'
+RE_VERDICT = re.compile(rb'verdict: (?:(clean)|(unwritten)(?: [0-9a-f]{16})?|([0-9]+) MISSING, ([0-9]+) FAILED|'
                         rb'([0-9]+) MISSING|([0-9]+) FAILED)')
 RE_MISSING = re.compile(rb'MISSING ([^ ]+) (.+) \(([0-9]+)\)')
 RE_FAILED = re.compile(rb'FAILED (.+?): (.+) \(([0-9]+)\)')
@@ -227,7 +229,8 @@ def classify(line, index=False):
     the kind's name as tools/yonder_record_grammar.txt spells it, or
     ('REFUSED', why) / ('index:REFUSED', why). A line holding a control
     byte (a carriage return, a NUL, any byte below 0x20 but the tab), or a
-    field that decodes to a NUL, is no line of either, and read()
+    field that decodes to a NUL or to bytes that are not UTF-8, is no line
+    of either, and read()
     classifies every line of a record, so one anywhere refuses it whole."""
     def numbers(m, limit=UINT32_MAX):
         return [decimal(g, limit) if g is not None and g[:1].isdigit() else g for g in m.groups()]
@@ -236,8 +239,14 @@ def classify(line, index=False):
             return ('index:REFUSED' if index else 'REFUSED'), 'a control byte'
         # Nor one spelled `\x00`: a field that decodes to a NUL would read
         # as shorter than it is wherever a string ends at one.
-        if b'\0' in unescape_bytes(line, tokens=not index):
+        decoded = unescape_bytes(line, tokens=not index)
+        if b'\0' in decoded:
             return ('index:REFUSED' if index else 'REFUSED'), 'a NUL in a field'
+        # And every field decodes to UTF-8, as the file is written in it.
+        try:
+            decoded.decode('utf-8')
+        except UnicodeDecodeError:
+            return ('index:REFUSED' if index else 'REFUSED'), 'a field that escapes to bytes that are not UTF-8'
         if index:
             if line.startswith(b'# yonder kept index '):
                 return 'index:version', decimal(line[len(b'# yonder kept index '):])
@@ -270,6 +279,11 @@ def classify(line, index=False):
             return 'stated', stated
         if line == KEPT_ASSUMED:
             return 'assumed', None
+        if line.startswith(b'REPLAY budget: '):
+            m = re.fullmatch(rb'REPLAY budget: ([0-9]+) s', line)
+            if m is None:
+                return 'REFUSED', 'a REPLAY budget of no spelling a replay writes'
+            return 'budget', decimal(m.group(1))
         if line.startswith(b'address: '):
             return 'address', line[len(b'address: '):]
         if line.startswith(b'verdict: '):
@@ -374,6 +388,8 @@ def read_body(lines, rec, replay):
             rec.stated.update({k: unescape(v) for k, v in f.items()})
         elif kind == 'assumed' and replay:
             rec.assumed = True
+        elif kind == 'budget' and replay and rec.budget is None:
+            rec.budget = f
         elif kind == 'incomplete' and replay:
             rec.incomplete.append(unescape(f))
         elif kind == 'unfinished' and replay:
@@ -382,7 +398,8 @@ def read_body(lines, rec, replay):
             rec.not_reproduced |= f
         elif kind == 'REFUSED':
             raise Malformed(f'not a whole page file: {f}')
-        elif kind in ('incomplete', 'unfinished', 'not-reproduced', 'marked', 'defaulted', 'stated', 'assumed', 'state'):
+        elif kind in ('incomplete', 'unfinished', 'not-reproduced', 'marked', 'defaulted', 'stated', 'assumed', 'budget',
+                      'state'):
             raise Malformed('a REPLAY line of no kind this reader knows')
         else:
             raise Malformed(f'not a whole page file: {kind} out of its place')
@@ -401,8 +418,9 @@ def read(path):
     and nothing else, and any other carries the window's record from its
     verdict on, whose REPLAY detail lines must agree with the state (a
     VERDICT has none, an INCOMPLETE page an incomplete line and no
-    unfinished one, an UNFINISHED page an unfinished line), may say the
-    inputs it took from the harness, and says what it does not reproduce.
+    unfinished one, an UNFINISHED page an unfinished line), may say what a
+    version 1 page took from outside its record, and says what it does not
+    reproduce and the budget it was given.
     A RECORD YONDER WROTE has its verdict second (or the placeholder's
     `verdict: unwritten`), no REPLAY line but a `REPLAY unjudged:` mark,
     and ends with `end`, which a kept page's of version 2 (one that says
@@ -472,6 +490,8 @@ def read(path):
             raise Malformed("a replay's record whose REPLAY lines do not agree with its state")
         if not rec.not_reproduced:
             raise Malformed("a replay's record that does not say what it does not reproduce")
+        if rec.budget is None:
+            raise Malformed("a replay's record that does not say its budget")
     except Malformed as e:
         return Unjudged(path, str(e))
     except UnicodeDecodeError:

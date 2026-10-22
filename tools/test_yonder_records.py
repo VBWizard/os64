@@ -56,6 +56,9 @@ MALFORMED = {
                                                 b'REPLAY incomplete script x\nend\n', 'do not agree with its state'),
     'an incomplete state with nothing incomplete': (b'address: https://a.test/\nREPLAY state: incomplete x\n'
                                                     b'verdict: clean\nend\n', 'do not agree with its state'),
+    "a judged replay's record that does not say its budget": (
+        b'address: https://a.test/\nREPLAY state: verdict\nverdict: clean\n'
+        b'REPLAY not reproduced: image\nend\n', 'does not say its budget'),
     "a judged replay's record that does not say what it does not reproduce": (
         b'address: https://a.test/\nREPLAY state: verdict\nverdict: clean\nend\n', 'does not say what it does not reproduce'),
     'a count of 5000 digits': (b'address: https://a.test/\nverdict: ' + b'9' * 5000 + b' MISSING\n',
@@ -89,7 +92,7 @@ MALFORMED = {
 def replayed(state, body=b'verdict: clean\n', detail=b'', why=b''):
     """A record as the replay runner writes it."""
     head = b'address: https://a.test/\nREPLAY state: ' + state + (b' ' + why if why else b'') + b'\n'
-    return head + (b'end\n' if state == b'unjudged' else body + detail + b'REPLAY not reproduced: image\nend\n')
+    return head + (b'end\n' if state == b'unjudged' else body + detail + b'REPLAY not reproduced: image\nREPLAY budget: 60 s\nend\n')
 
 
 class ReaderCases(unittest.TestCase):

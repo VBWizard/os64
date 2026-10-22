@@ -9,8 +9,8 @@ outcomes of fetches the replay says it does not reproduce, compared on
 neither side, and pictures and fonts decided without a fetch, compared; a
 page file cut short (a replay's without its `end`), whose counts do not
 reconcile, that says it is unjudged, or a `*.txt` that is not a page file,
-each unjudged; a pair read with different inputs from the harness, or
-different --window statements, unjudged; and a page file or directories that cannot be read. Run with
+each unjudged; a pair read with different inputs from the harness,
+different --window statements or different budgets, unjudged; and a page file or directories that cannot be read. Run with
 `python3 -I`;
 tools/test_yonder_replay_host.sh runs it."""
 import contextlib
@@ -39,7 +39,7 @@ def replay(address, state, body='verdict: clean\n', detail='', why=''):
     head = f'address: {address}\nREPLAY state: {state}{" " + why if why else ""}\n'
     if state == 'unjudged':
         return head + 'end\n'
-    return head + body + detail + 'REPLAY not reproduced: font-fetch image picture-fetch\nend\n'
+    return head + body + detail + 'REPLAY not reproduced: font-fetch image picture-fetch\nREPLAY budget: 60 s\nend\n'
 
 
 def as_replay(text):
@@ -47,7 +47,7 @@ def as_replay(text):
     writes it."""
     first, _, rest = text.partition('\n')
     return (f'{first}\nREPLAY state: verdict\n{rest}'
-            'REPLAY not reproduced: font-fetch image picture-fetch\nend\n')
+            'REPLAY not reproduced: font-fetch image picture-fetch\nREPLAY budget: 60 s\nend\n')
 
 
 BEFORE = {
@@ -141,7 +141,7 @@ class DiffCases(unittest.TestCase):
         (self.after / 'better-0002.txt').write_text(
             'address: https://better.test/\nREPLAY state: verdict\nverdict: clean\n'
             'REPLAY inputs defaulted: cookies clock\n'
-            'REPLAY not reproduced: font-fetch image picture-fetch\nend\n')
+            'REPLAY not reproduced: font-fetch image picture-fetch\nREPLAY budget: 60 s\nend\n')
         rc, out = self.run_main(self.before, self.after)
         self.assertEqual(rc, 2)
         self.assertIn('progress: 0 pages\n', out)
@@ -153,10 +153,20 @@ class DiffCases(unittest.TestCase):
         (self.after / 'better-0002.txt').write_text(
             'address: https://better.test/\nREPLAY state: verdict\nverdict: clean\n'
             'REPLAY inputs stated: zoom=1500\n'
-            'REPLAY not reproduced: font-fetch image picture-fetch\nend\n')
+            'REPLAY not reproduced: font-fetch image picture-fetch\nREPLAY budget: 60 s\nend\n')
         rc, out = self.run_main(self.before, self.after)
         self.assertEqual(rc, 2)
         self.assertIn('its replays were run with different --window statements, none and zoom=1500', out)
+
+    def test_records_given_different_budgets_are_unjudged(self):
+        # One page given 60 s and 0 s: two readings, no comparison.
+        self.settle_the_rest()
+        (self.after / 'better-0002.txt').write_text(
+            'address: https://better.test/\nREPLAY state: verdict\nverdict: clean\n'
+            'REPLAY not reproduced: font-fetch image picture-fetch\nREPLAY budget: 0 s\nend\n')
+        rc, out = self.run_main(self.before, self.after)
+        self.assertEqual(rc, 2)
+        self.assertIn('its replays were given different budgets, 60 s and 0 s', out)
 
     def test_a_record_no_replay_wrote_is_unjudged(self):
         # A kept record has no state line: the diff compares replays only.

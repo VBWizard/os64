@@ -51,10 +51,12 @@
 // it was written down, and says how many records lost lines.
 #define YONDER_DIAG_UNJUDGED "REPLAY unjudged: "
 #define YONDER_DIAG_LINES_LOST YONDER_DIAG_UNJUDGED "lines lost"
-// A claimed name's file before its record is written: its second line.
-// A replay and the diff take it as a record they cannot judge; the tally
-// takes it as damage (a yonder that stopped between claim and write) and
-// names it.
+// A claimed name's file before its record is written: its second line,
+// followed by ` ` and the claim's nonce in sixteen hex digits, which every
+// record the claim writes after carries too (`claim: <nonce>`), so a write
+// replaces only a file that is still its own. A replay and the diff take
+// it as a record they cannot judge; the tally takes it as damage (a yonder
+// that stopped between claim and write) and names it.
 #define YONDER_DIAG_UNWRITTEN "verdict: unwritten"
 // The last line of every record yonder_diag_render writes. A reader
 // requires it on any record that says `kept:` or `kept lines:` (a kept
@@ -152,8 +154,8 @@ typedef struct yonder_diag_claim yonder_diag_claim_t;
 // before a file went, never write over each other's records or pair one
 // record with another's kept files. The record's number moves up from
 // where it began until `<name>.txt` can be made where nothing is
-// (os64_open's "x", holding YONDER_DIAG_UNWRITTEN until the record is
-// written) and no `<name>.html` or `<name>.d` is there, kept or not; with
+// (os64_open's "x", holding YONDER_DIAG_UNWRITTEN and the claim's nonce
+// until the record is written) and no `<name>.html` or `<name>.d` is there, kept or not; with
 // `keep`, `<name>.d/` is then made. The number it ends on is
 // yonder_diag_seq's. A fresh name whose folder cannot be made is claimed
 // and nothing of its page is kept. A record that finds no fresh name in
@@ -172,9 +174,10 @@ const yonder_diag_claim_t *yonder_diag_claimed(const yonder_diag_t *d);
 
 // The claim's record written under its name whole: rendered, put in a
 // temporary file beside the real one and renamed over it, so a reader
-// never meets half a file. The claimed file must still be there. 0, or
-// negative with no claim, with the claimed file gone, or when any step
-// failed (the temporary is then removed).
+// never meets half a file. The claimed file must still be this claim's
+// own, carrying its nonce. 0, or negative with no claim, with the claimed
+// file gone or another's, or when any step failed (the temporary is then
+// removed).
 int64_t yonder_diag_write(const yonder_diag_claim_t *c);
 
 // ── Keeping the page (keep_pages) ──

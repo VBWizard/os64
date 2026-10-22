@@ -136,7 +136,7 @@ class TallyCases(unittest.TestCase):
         # incomplete is said and left out.
         (self.root / 'r.test-0007.txt').write_bytes(
             b'address: https://r.test/\nREPLAY state: incomplete script x\nverdict: 1 MISSING\n'
-            b'MISSING global fetch (1)\nREPLAY incomplete script x\nREPLAY not reproduced: image\nend\n')
+            b'MISSING global fetch (1)\nREPLAY incomplete script x\nREPLAY not reproduced: image\nREPLAY budget: 60 s\nend\n')
         (self.root / 'l.test-0008.txt').write_bytes(
             b'address: https://l.test/\nverdict: 1 MISSING\nMISSING global fetch (1)\nREPLAY unjudged: lines lost\n')
         err = io.StringIO()

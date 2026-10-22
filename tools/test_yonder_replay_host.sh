@@ -24,7 +24,8 @@
 #       mount, refused; the
 #       corpus written under a file-size limit, whose records must each be
 #       whole or say they could not be written; and the corpus given no
-#       time, whose unfinished pages the diff must call broken
+#       time, which the diff must compare with none of the corpus given
+#       60 s, each page unjudged by its budget
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 if [ "${1:-}" = --mutants ]; then
@@ -124,22 +125,20 @@ if broken or temps or unjudged == 0:
 print(f'size limit: {len(files)} records, every one whole, {unjudged} saying they could not be written')
 PY
 # The same corpus given no time: the pages that cannot arrive in none say
-# so on their records, and the diff calls each broken (whatever else its
-# record says) and fails, never reading what they lack as progress. (A
-# page that arrived without the time for its later timers is judged, and
-# may read as progress: the two replays were not given the same budget.)
+# so on their records, and every record says the budget it was given. The
+# diff compares no page whose replays were given different budgets (a page
+# with time for none of its timers is another reading of it, never
+# progress): each is unjudged, by its budget, and the answer is 2.
 "$work/yonder-replay" "$work/self/kept" "$work/no-time" --seconds 0 > "$work/zero.log"
-if python3 -I tools/yonder_corpus_diff.py "$work/self/out" "$work/no-time" > "$work/zero.diff"; then
-    echo "replay: a corpus given no time passed the diff" >&2
-    cat "$work/zero.diff" >&2
-    exit 1
-fi
-broken=$(sed -n 's/^broken: \([0-9]*\) pages$/\1/p' "$work/zero.diff")
+rc=0
+python3 -I tools/yonder_corpus_diff.py "$work/self/out" "$work/no-time" > "$work/zero.diff" || rc=$?
+pages=$(ls "$work/no-time" | grep -c '\.txt$')
+budgets=$(grep -c 'were given different budgets, 60 s and 0 s' "$work/zero.diff" || true)
 unfinished=$(sed -n 's/.*, unfinished \([0-9]*\).*/\1/p' "$work/zero.log" | tail -n 1)
-[ -n "$broken" ] && [ "$broken" = "$unfinished" ] || {
-    echo "replay: the pages given no time were not each called broken" >&2
+[ "$rc" = 2 ] && [ "$budgets" = "$pages" ] && [ "${unfinished:-0}" -gt 0 ] || {
+    echo "replay: a corpus given no time was compared with one given 60 s (answer $rc, $budgets of $pages unjudged by budget)" >&2
     cat "$work/zero.diff" >&2
     exit 1
 }
 tail -n 1 "$work/zero.log"
-tail -n 1 "$work/zero.diff"
+echo "no time: $budgets of $pages pages unjudged against the 60 s replay, by their budgets"
