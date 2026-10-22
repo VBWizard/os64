@@ -889,6 +889,30 @@ static void dom_storage_page_code_cases(void)
 /* The change list's bound holds whatever the store answers: under a busy
  * store a change that would pass it cannot be made room for, and is
  * refused as a full store's would be. */
+/* A commit that could not even write its change list down (no memory)
+ * waits COMMIT_MS for the next, as a busy store's does: the host's loop is
+ * told a time to wait for, not "now" turn after turn. */
+static void dom_storage_commit_memory_cases(void)
+{
+    FakeStore store = {0};
+    storage_clock = 500;
+    DomFixture f = storage_fixture("http://example.test/", &store);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, "localStorage.setItem('k',new Array(100001).join('v'))", "storage: a change too big to write down now");
+    check(os64_dom_storage_due(f.binding) <= storage_clock, "storage: due at once");
+    fail_size = strlen("os64 storage 1\n") + strlen("+1 100000\n") + 1 + 100000 + 1;
+    os64_dom_storage_settle(f.binding);
+    fail_size = 0;
+    check(store.commits == 0 && os64_dom_storage_due(f.binding) == storage_clock + OS64_DOM_STORAGE_COMMIT_MS,
+          "storage: a commit with no memory to write its list waits a second, as a busy one does");
+    storage_clock += OS64_DOM_STORAGE_COMMIT_MS;
+    os64_dom_storage_settle(f.binding);
+    check(store.commits == 1 && store.length != 0, "storage: and is made then");
+    fixture_free(&f);
+    fake_store_free(&store);
+    storage_clock = 0;
+}
+
 static void dom_storage_busy_bound_cases(void)
 {
     FakeStore store = {0};
@@ -914,6 +938,7 @@ static void dom_storage_cases(void)
     dom_storage_shape_cases();
     dom_storage_page_code_cases();
     dom_storage_busy_bound_cases();
+    dom_storage_commit_memory_cases();
     dom_storage_quota_cases();
     dom_storage_provider_cases();
     dom_storage_two_windows_cases();

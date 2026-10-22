@@ -534,20 +534,23 @@ static DStorageArea *area_touch(os64_dom_t *dom, JSContext *ctx, os64_dom_storag
  * area to memory; one that was full drops the changes, so the page reads
  * back what the store kept. Changes that could not be written down for
  * want of memory, or that a busy store could not take, wait for the next
- * commit. */
+ * commit, COMMIT_MS on. */
 static void area_commit(DStorageArea *area, bool last)
 {
     os64_dom_t *dom = area->dom;
     if (!kept(dom, area) || area->changes.count == 0) return;
     size_t length;
     char *changes = map_write(&area->changes, &length);
+    /* A commit that could not be made, for want of memory or a busy store,
+     * counts as one for the schedule: the next is COMMIT_MS on, and the
+     * host's loop waits for it rather than asking again every turn. */
+    area->committed = true;
+    area->committed_at = now_ms(dom);
     if (changes == NULL) return;
     const os64_dom_storage_t *provider = &dom->storage_providers[area->which];
     os64_dom_storage_status_t status = provider->commit != NULL
         ? provider->commit(provider->opaque, area->origin, changes, length, last) : OS64_DOM_STORAGE_FAILED;
     os64_free(changes);
-    area->committed = true;
-    area->committed_at = now_ms(dom);
     if (status == OS64_DOM_STORAGE_BUSY) return;
     map_free(&area->changes);
     if (status == OS64_DOM_STORAGE_FAILED) area->memory = true;
