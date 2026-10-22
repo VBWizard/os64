@@ -391,6 +391,32 @@ static os64_text_run_t *run_try(L *l, const Fonts *f, const char *text, uint32_t
     return *why == OS64_FONT_OK ? run : NULL;
 }
 
+static int64_t caret_x(const os64_text_run_t *run, uint32_t byte);
+
+// The tracking after the cluster of `run` that ends at byte `end`: how far
+// the caret there is past the end of the cluster's last glyph — what
+// letter-spacing added, which CSS Text 3 § 7.2 does not apply at the end
+// of a line. 0 for a run with none, and after a tab, which takes none.
+static int64_t trailing_spacing(const os64_text_run_t *run, uint32_t end)
+{
+    os64_text_run_view_t v;
+    if (end == 0 || os64_text_run_view(run, &v) != OS64_FONT_OK || v.glyph_count == 0)
+        return 0;
+    // The last glyph that begins before `end`: glyphs are in byte order.
+    size_t lo = 0, hi = v.glyph_count;
+    while (hi - lo > 1) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (v.glyphs[mid].byte_begin < end)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    const os64_text_placement_t *g = &v.glyphs[lo];
+    if (g->byte_end != end)
+        return 0;
+    return caret_x(run, end) - ((int64_t)g->x + g->advance_x);
+}
+
 static int64_t caret_x(const os64_text_run_t *run, uint32_t byte)
 {
     os64_text_caret_t c;
@@ -693,6 +719,9 @@ typedef struct {
     const flow_style_t *style;
     uint32_t b0, b1, s1;    // WORD: the word is [b0,b1), its spaces [b1,s1)
     int64_t w, sw;          // the word's (or box's) width, and its spaces'
+    // WORD: the tracking after its last letter (letter-spacing), counted in
+    // `w`, which a line that ends there leaves out (trailing_spacing).
+    int64_t trail;
     bool wrap_after;        // a soft wrap opportunity follows
     // WORD: an opportunity follows that a line takes only when it holds no
     // other before what does not fit (`overflow-wrap`, CSS Text 3 § 5.4):
@@ -816,6 +845,8 @@ static uint32_t word_pieces(L *l, Segs *s, const FItem *it, const char *text,
                    .hang = style->white_space == FLOW_WS_PRE_WRAP, .wrap_after = all,
                    .emergency = !all};
         g->w = caret_x(run, at - w0) - caret_x(run, b0 - w0);
+        if (style->letter_spacing != 0)
+            g->trail = trailing_spacing(run, at - w0);
         b0 = at;
     }
     return b0;
@@ -895,6 +926,8 @@ static void text_segments(L *l, Segs *s, const FItem *it, const char *text, uint
                            .b0 = b0, .b1 = end, .s1 = w1, .collapsible = collapsible};
                 int64_t x0 = caret_x(run, b0 - w0);
                 g->w = caret_x(run, end - w0) - x0;
+                if (style->letter_spacing != 0 && end > b0)
+                    g->trail = trailing_spacing(run, end - w0);
                 g->sw = caret_x(run, w1 - w0) - x0 - g->w;
             }
         } else {
@@ -916,6 +949,8 @@ static void text_segments(L *l, Segs *s, const FItem *it, const char *text, uint
                            .hang = ws == FLOW_WS_PRE_WRAP, .wrap_after = at > b1};
                 int64_t x0 = caret_x(run, b0 - w0), x1 = caret_x(run, b1 - w0);
                 g->w = x1 - x0;
+                if (style->letter_spacing != 0 && b1 > b0)
+                    g->trail = trailing_spacing(run, b1 - w0);
                 g->sw = caret_x(run, at - w0) - x1;
                 for (uint32_t t = b1; t < at; t++)
                     if (text[t] == '\t')
@@ -1225,7 +1260,10 @@ static size_t break_line(const Segs *s, size_t start, int64_t indent, int64_t av
             return j + 1;
         }
         if (g->kind == SG_WORD || g->kind == SG_ATOM || g->kind == SG_MARKER) {
-            if (pen + g->w > avail && (brk != SIZE_MAX || emergency != SIZE_MAX))
+            // A word fits if it fits without its trailing tracking, which
+            // the line leaves out should it end there.
+            int64_t w = g->kind == SG_WORD ? g->w - g->trail : g->w;
+            if (pen + w > avail && (brk != SIZE_MAX || emergency != SIZE_MAX))
                 return (brk != SIZE_MAX ? brk : emergency) + 1;
             pen += g->w;
             if (g->kind != SG_WORD || g->b1 > g->b0)
@@ -1675,8 +1713,13 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                     fr->text = g->text;
                     fr->begin = b0;
                     fr->end = b1;
+                    // The line's last fragment leaves out the tracking
+                    // after its last character (CSS Text 3 § 7.2).
+                    int64_t width = v.advance_x;
+                    if (at_tail && g->style->letter_spacing != 0)
+                        width -= trailing_spacing(run, b1 - b0);
                     fr->x = pen;
-                    fr->w = v.advance_x;
+                    fr->w = width;
                     fr->h = v.ascent + v.descent;
                     fr->y = -v.ascent;
                     Paint p = paint_for(l, styles, g->item->node,
@@ -1689,10 +1732,10 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                     // Pre-wrap spaces ending a line hang: they are drawn, and
                     // count for nothing — not the line's width, not the page's.
                     if (at_tail && e->hang && !spread && e->b1 > b0)
-                        fr->hang = v.advance_x - caret_x(run, e->b1 - b0);
+                        fr->hang = max64(0, width - caret_x(run, e->b1 - b0));
                     else if (at_tail && e->hang && !spread)
-                        fr->hang = v.advance_x;
-                    pen += v.advance_x;
+                        fr->hang = width;
+                    pen += width;
                     used = pen - fr->hang;
                     has_text = true;
                     content = true;
@@ -5643,6 +5686,9 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
     // The first line's indent is part of its first word and of the line,
     // a percentage of a width not known yet counting as nothing.
     int64_t word = max64(0, first_line_indent(ifc, 0)), line = word, space = 0;
+    // The tracking after the last letter on the line so far, which a line
+    // ending there leaves out (trailing_spacing); 0 once anything follows.
+    int64_t tail = 0;
     for (size_t i = 0; i < s.n; i++) {
         const Seg *g = &s.v[i];
         switch (g->kind) {
@@ -5663,6 +5709,7 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
             if (wmax > 0 || g->kind != SG_WORD) {
                 line += space + wmax;
                 space = 0;
+                tail = g->kind == SG_WORD ? g->trail : 0;
             }
             if (g->kind == SG_WORD && g->s1 > g->b1) {
                 int64_t sw = spaces_width(g, line + space);
@@ -5670,16 +5717,18 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
                 // quirks-mode row of slices and the whitespace between).
                 if (!g->wrap_after)
                     word += sw;
-                if (g->collapsible || g->hang)
+                if (g->collapsible || g->hang) {
                     space += sw;
-                else
+                } else {
                     line += sw;
+                    tail = 0;
+                }
             }
             break;
         }
         case SG_BREAK:
-            r.max = max64(r.max, line);
-            line = space = 0;
+            r.max = max64(r.max, line - tail);
+            line = space = tail = 0;
             break;
         case SG_FLOAT: {
             const FBox *f = g->item->floated;
@@ -5693,6 +5742,7 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
                 line = space = 0;
             }
             line += fi.max + m;
+            tail = 0;
             break;
         }
         default:
@@ -5701,12 +5751,13 @@ static Intr ifc_intrinsic(L *l, FBox *ifc)
         // A word cut at its characters was cut here only where those
         // breaks count toward min-content (word_pieces).
         if (g->wrap_after || g->emergency || g->kind == SG_BREAK) {
-            r.min = max64(r.min, word);
+            r.min = max64(r.min, word - (g->kind == SG_WORD ? g->trail : 0));
             word = 0;
         }
     }
-    r.min = max64(r.min, word);
-    r.max = max64(r.max, max64(line, r.min));
+    const Seg *last = s.n > 0 ? &s.v[s.n - 1] : NULL;
+    r.min = max64(r.min, word - (last != NULL && last->kind == SG_WORD ? last->trail : 0));
+    r.max = max64(r.max, max64(line - tail, r.min));
     os64_free(s.v);
     return r;
 }

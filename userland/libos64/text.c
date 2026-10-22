@@ -192,7 +192,7 @@ os64_font_status_t os64_text_layout(os64_text_context_t *c, const uint8_t *bytes
                 status=add_glyph(r,TEXT_MARKER,at,d.end,&pen,r->view.caret_count-1,&previous,&previous_index);
                 if (status!=OS64_FONT_OK) goto fail;
             }
-            if (o->letter_spacing && d.end<length) {
+            if (o->letter_spacing) {
                 int64_t from=carets[r->view.caret_count-1].x;
                 pen+=o->letter_spacing;
                 if (pen<from) pen=from;

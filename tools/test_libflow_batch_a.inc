@@ -339,13 +339,15 @@ static void batch_a_cases(void)
         "    div block letter-spacing=4 holds-block\n"
         "      p block size=32 margin=32/0/32/0\n"
         "        span inline letter-spacing=0\n");
-    // 2px after every character of a run but its last: "ab cd" is a 8, b
-    // 8, the space 4, c 8, d 8 and four spacings, 44. Two runs, ab and the
-    // b element's cd, each lose their last: 18 and 18. Measured for
-    // breaking, ab and its space are 20 + 6 and cd 18 more, past 40: ab
-    // ends its line, drawn 18 wide without its space. 0.25em of 8px is 2,
-    // after a's 4: ab is 10.
-    cascade_layout_case("letter-spacing: after every character of a run but the last",
+    // 2px after every character but the line's last (CSS Text 3 § 7.2: none
+    // at the end of a line): "ab cd" is a 8, b 8, the space 4, c 8, d 8 and
+    // four spacings, 44. Across an element's edge the characters are
+    // spaced as any two are: ab is 20 with b's spacing, and the b
+    // element's cd, ending the line, 18. Measured for breaking, ab and its
+    // space are 20 + 6, and cd fits if 18 does: 44 does not fit in 40, so
+    // ab ends its line, drawn 18 wide without its space or its last
+    // spacing. 0.25em of 8px is 2, after a's 4: ab is 10.
+    cascade_layout_case("letter-spacing: after every character but the line's last",
         "<!doctype html><style>body { margin: 0 } p { margin: 0; letter-spacing: 2px }</style>"
         "<p>ab cd</p><p>ab<b>cd</b></p><p style='width: 40px'>ab cd</p>"
         "<p style='letter-spacing: 0.25em; font-size: 8px'>ab</p>", 200,
@@ -357,9 +359,9 @@ static void batch_a_cases(void)
         "        text \"ab cd\" 0 2 44 16 serif 16\n"
         "    block p 0 20 200 20\n"
         "      line 0 20 200 20 base 14\n"
-        "        span b 18 22 18 16\n"
-        "        text \"ab\" 0 22 18 16 serif 16\n"
-        "        text \"cd\" 18 22 18 16 serif 16 bold\n"
+        "        span b 20 22 18 16\n"
+        "        text \"ab\" 0 22 20 16 serif 16\n"
+        "        text \"cd\" 20 22 18 16 serif 16 bold\n"
         "    block p 0 40 40 40\n"
         "      line 0 40 40 20 base 14\n"
         "        text \"ab\" 0 42 18 16 serif 16\n"
@@ -538,6 +540,36 @@ static void batch_a_cases(void)
         "    p block margin=16/4/16/2 padding=16/0/16/7\n"
         "    div block border=2:solid:#ff0000/0:none:ink/0:none:ink/0:none:ink width=50%"
         " max-height=10 position=relative inset=auto/auto/auto/3\n");
+
+    // The cold reader's case: 10px across two element edges. ab is 8 + 10
+    // + 8 + 10 = 36, cd from 36 the same, ef from 72 ends the line, 8 + 10
+    // + 4, 22. A line ending at a break leaves out its last spacing too:
+    // abc 44, def 40. Its max-content width leaves out the same: an
+    // inline-block of abc shrinks to 44.
+    cascade_layout_case("letter-spacing: spaced across an element's edge, not at a line's end",
+        "<!doctype html><style>body { margin: 0 } p { margin: 0; letter-spacing: 10px }"
+        " b { font-weight: normal } i { display: inline-block; font-style: normal }</style>"
+        "<p>ab<b>cd</b>ef</p><p>abc<br>def</p><p><i>abc</i></p>", 300,
+        "page 300 80\n"
+        "block html 0 0 300 80\n"
+        "  block body 0 0 300 80\n"
+        "    block p 0 0 300 20\n"
+        "      line 0 0 300 20 base 14\n"
+        "        span b 36 2 36 16\n"
+        "        text \"ab\" 0 2 36 16 serif 16\n"
+        "        text \"cd\" 36 2 36 16 serif 16\n"
+        "        text \"ef\" 72 2 22 16 serif 16\n"
+        "    block p 0 20 300 40\n"
+        "      line 0 20 300 20 base 14\n"
+        "        text \"abc\" 0 22 44 16 serif 16\n"
+        "      line 0 40 300 20 base 14\n"
+        "        text \"def\" 0 42 40 16 serif 16\n"
+        "    block p 0 60 300 20\n"
+        "      line 0 60 300 20 base 14\n"
+        "        atomic i 0 60 44 20\n"
+        "          block i 0 60 44 20\n"
+        "            line 0 60 44 20 base 14\n"
+        "              text \"abc\" 0 62 44 16 serif 16\n");
 
     s_modern_off = true;
     cascade_case("flow-relative properties: unknown with the Modern Web switch off", 800,
