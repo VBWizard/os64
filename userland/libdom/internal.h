@@ -156,12 +156,14 @@ struct os64_dom {
     struct DStorageArea *storage[OS64_DOM_STORAGE_AREAS];
     os64_dom_storage_t storage_providers[OS64_DOM_STORAGE_AREAS];
     /* performance (performance.c): its object (a plain event target), the
-     * marks and measures it buffers (an engine Array, in the order made),
+     * marks and measures it buffers (an engine object with no prototype,
+     * never handed to a page, in the order made, and how many it holds),
      * its timing and navigation objects, the navigation entry, and the
      * entries' prototypes. The time origin is read once, as the binding is
      * made. */
     DValue *performance, *performance_entries, *performance_timing, *performance_navigation,
         *navigation_entry;
+    uint32_t performance_count;
     DValue *entry_prototypes[5];
     uint64_t time_origin_us;
     int64_t time_origin_epoch_us;
@@ -351,6 +353,8 @@ bool d_origin(const char *url, char *out, size_t cap);
  * os64_dom_free frees. */
 void d_storage_drain(os64_dom_t *dom);
 void d_storage_free(os64_dom_t *dom);
+/* The storage maps' steps so far (storage.c's s_steps), for the DOM host. */
+uint64_t d_storage_steps(void);
 JSValue d_style(os64_dom_t *dom, JSContext *ctx, JSValueConst self);
 int d_style_install(os64_dom_t *dom, JSContext *ctx);
 extern JSClassExoticMethods d_node_exotic;

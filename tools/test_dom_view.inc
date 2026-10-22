@@ -6,6 +6,7 @@
 static uint32_t view_zoom = 1000;
 static uint32_t view_zoom_of(void *opaque) { (void)opaque; return view_zoom; }
 
+static void dom_private_container_cases(void);
 static void dom_screen_cases(void)
 {
     DomFixture f = fixture_new(NULL);
@@ -315,4 +316,34 @@ static void dom_url_cases(void)
         "URL.parse('x','http://h.test/').origin",
     };
     engine_sweep("URL", kEngine, sizeof(kEngine) / sizeof(kEngine[0]), NULL);
+    dom_private_container_cases();
+}
+
+/* WHAT THE PAGE CAN REACH THROUGH THE PROTOTYPES (Array.prototype and
+ * Object.prototype with an index's setter on them): no private container
+ * of the binding's is ever handed to page code, so a setter that keeps its
+ * `this` keeps nothing of the binding's; and every Array the slice answers
+ * DEFINES its elements (WebIDL's CreateArrayFromList), so a setter there
+ * swallows none of them. */
+static void dom_private_container_cases(void)
+{
+    DomFixture f = fixture_new(NULL);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, STORAGE_ASSERT
+        "var caught=0,leaked=null;"
+        "for(const index of ['0','1','2']){"
+        "Object.defineProperty(Array.prototype,index,{set:function(v){caught++;leaked=this},configurable:true});"
+        "Object.defineProperty(Object.prototype,index,{set:function(v){caught++;leaked=this},configurable:true});}"
+        "performance.mark('m');performance.mark('n');performance.measure('x','m','n');"
+        "performance.clearMarks('n');performance.mark('o');"
+        "var all=performance.getEntries(),marks=performance.getEntriesByType('mark'),named=performance.getEntriesByName('m');"
+        "var p=new URLSearchParams('a=1&a=2&b=3');var got=p.getAll('a'),pairs=[...p],keys=[...p.keys()];"
+        "for(const index of ['0','1','2']){delete Array.prototype[index];delete Object.prototype[index];}"
+        "assert(caught===0&&leaked===null,'no setter ran: '+caught);"
+        "assert(all.length===4&&all[0].entryType==='navigation'&&all[1].name==='m','getEntries defines its elements');"
+        "assert(marks.length===2&&marks[0].name==='m'&&marks[1].name==='o'&&named[0].name==='m');"
+        "assert(got.length===2&&got[0]==='1'&&got[1]==='2','getAll defines its elements');"
+        "assert(pairs[0][0]==='a'&&pairs[0][1]==='1'&&pairs[2][0]==='b','an entry pair defines its elements');",
+        "prototypes: no private container leaks, no answered element is swallowed");
+    fixture_free(&f);
 }
