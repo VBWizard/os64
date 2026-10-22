@@ -118,6 +118,20 @@ static void outline_step_cases(void)
            plain.seq);
     flow_free(tree);
     sheeted_close(&p);
+    // A ring reaches past its box's overflow: the box 0, 0, 20 x 10 is out
+    // of a view 30 to 40 down that its ring, offset 20 and 5 wide (to 35),
+    // meets. The outline step asks the ring, not the box.
+    sheeted_open(&p, "<!doctype html><style>body { margin: 0 } div { width: 20px; height: 10px;"
+                     " outline: 5px solid; outline-offset: 20px }</style><div id=a></div>",
+                 200, 600);
+    tree = flow_layout(p.doc, p.page, 200, &p.env);
+    OutlineLog far = {{0}, 0};
+    flow_visitor_t fv = {outline_visit, NULL, NULL, &far, outline_ring};
+    flow_visit_groups(tree, (os64_gui_rect_t){0, 30, 200, 10}, (flow_point_t){0, 0}, &fv);
+    expect("outline: a ring in view is handed over though its box is not",
+           strcmp(far.seq, "oa") == 0, far.seq);
+    flow_free(tree);
+    sheeted_close(&p);
 }
 
 static void ellipsis_door_cases(void)
