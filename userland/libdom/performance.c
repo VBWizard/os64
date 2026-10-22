@@ -479,6 +479,10 @@ static JSValue measure(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *
     if (JS_IsException(end_mark)) goto done;
     bool has_start = !JS_IsUndefined(member[3]), has_end = !JS_IsUndefined(member[2]);
     bool has_duration = !JS_IsUndefined(member[1]);
+    /* User Timing § 2.1.3 step 1 checks the options only when "at least one
+     * of start, end, duration, and detail exist": an empty dictionary, or
+     * one of undefineds, skips them, and an endMark beside it is used
+     * (WPT measure-with-dict's measure8 and measure20). */
     if (options && any) {
         const char *why = !JS_IsUndefined(end_mark) ? "An end mark may not be given beside measure options"
                         : !has_start && !has_end ? "Measure options need a start or an end"

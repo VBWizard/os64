@@ -166,6 +166,12 @@ static void dom_performance_cases(void)
         "throws('TypeError',()=>performance.measure('x',{duration:-5,end:20}));"
         "throws('SyntaxError',()=>performance.measure('x',{start:'no such mark',duration:-5}));"
         "assert(performance.measure('s',{start:1,duration:'2'}).duration===2);performance.clearMeasures('s');"
+        /* An empty dictionary, or one of undefineds, is no options (User
+         * Timing § 2.1.3 step 1): start 0, and an endMark beside it used. */
+        "var e8=performance.measure('e8',{});assert(e8.startTime===0);"
+        "var e20=performance.measure('e20',{},'m2');assert(e20.startTime===0&&e20.duration===5,'endMark used');"
+        "var e23=performance.measure('e23',{invalidDict:1,start:undefined},'m2');assert(e23.duration===5);"
+        "performance.clearMeasures('e8');performance.clearMeasures('e20');performance.clearMeasures('e23');"
         "throws('SyntaxError',()=>performance.measure('x','no such mark'));"
         "throws('InvalidAccessError',()=>performance.measure('x','loadEventStart'));"
         "throws('DataCloneError',()=>performance.measure('x',{start:0,detail:Symbol()}));"
