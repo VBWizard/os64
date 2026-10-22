@@ -535,6 +535,17 @@ static void dom_view_history_cases(void)
         "assert(new HashChangeEvent('x').oldURL==='');throws('TypeError',()=>PopStateEvent('x'));"
         "assert(Object.getPrototypeOf(PopStateEvent.prototype)===Event.prototype);",
         "history: what was heard");
+    // An init dictionary that is a primitive other than undefined or null
+    // is a TypeError (WebIDL § 3.2.17), for every Event interface alike;
+    // undefined and null are an empty one. Codex round 2.
+    dom_script(&f, VIEW_ASSERT
+        "throws('TypeError',()=>new PopStateEvent('x',1));throws('TypeError',()=>new HashChangeEvent('x','bad'));"
+        "throws('TypeError',()=>new MediaQueryListEvent('x',true));throws('TypeError',()=>new Event('x',0));"
+        "assert(new PopStateEvent('x',null).state===null&&new HashChangeEvent('x',undefined).newURL===''&&"
+        "new MediaQueryListEvent('x',null).media===''&&new Event('x',null).type==='x');"
+        "var order=[];new Event({toString(){order.push('type');return 'x'}},{get bubbles(){order.push('init');return 1}});"
+        "assert(order.join()==='type,init',order.join());",
+        "event constructors: a primitive init is a TypeError, undefined and null are empty, the type converts first");
     check(!os64_dom_history_moved(f.binding, NULL, NULL, 0) && !os64_dom_history_moved(f.binding, "x", NULL, 3),
           "history: a move with no address, or a length with no state, is refused");
     os64_dom_history_event_t no_old = {true, NULL, "http://view.test/x", NULL, 0, 0};

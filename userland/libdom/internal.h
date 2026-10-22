@@ -220,6 +220,10 @@ bool d_context(os64_dom_t *dom, JSContext *ctx, const char *abi);
 void *d_alloc(os64_dom_t *dom, size_t size);
 void d_free(os64_dom_t *dom, void *ptr);
 JSValue d_error(JSContext *ctx, const char *name, const char *message);
+/* A dictionary argument (WebIDL § 3.2.17): argv[at] undefined, null or
+ * missing is an empty one, any other value that is not an object a
+ * TypeError. 1 an object, 0 empty, -1 with the exception pending. */
+int d_dictionary(JSContext *ctx, int argc, JSValueConst *argv, int at);
 JSValue d_html_error(JSContext *ctx, int64_t status);
 JSValue d_page_error(JSContext *ctx, int64_t status);
 DValue *d_retain(os64_dom_t *dom, JSContext *ctx, JSValue value);

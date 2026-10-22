@@ -1089,20 +1089,26 @@ JSValue d_event_construct(os64_dom_t *dom, JSContext *ctx, int argc, JSValueCons
                           JSValueConst prototype)
 {
     if (argc < 1) return JS_ThrowTypeError(ctx, "Event needs a type");
-    bool flags[2] = {false, false};
-    if (argc > 1 && JS_IsObject(argv[1])) {
-        const char *names[] = {"bubbles", "cancelable"};
-        for (int i = 0; i < 2; i++) {
-            JSValue value = JS_GetPropertyStr(ctx, argv[1], names[i]);
-            if (JS_IsException(value)) return value;
-            int flag = JS_ToBool(ctx, value);
-            JS_FreeValue(ctx, value);
-            if (flag < 0) return JS_EXCEPTION;
-            flags[i] = flag != 0;
-        }
-    }
+    /* The arguments convert in order: the type, then the init dictionary
+     * (WebIDL § 3.2.17), whose primitive other than undefined and null is
+     * a TypeError here for every Event interface; one with members of its
+     * own reads them after. */
     const char *type = JS_ToCString(ctx, argv[0]);
     if (type == NULL) return JS_EXCEPTION;
+    bool flags[2] = {false, false};
+    int init = d_dictionary(ctx, argc, argv, 1);
+    for (int i = 0; init > 0 && i < 2; i++) {
+        static const char *const names[] = {"bubbles", "cancelable"};
+        JSValue value = JS_GetPropertyStr(ctx, argv[1], names[i]);
+        int flag = JS_IsException(value) ? -1 : JS_ToBool(ctx, value);
+        JS_FreeValue(ctx, value);
+        if (flag < 0) init = -1;
+        else flags[i] = flag != 0;
+    }
+    if (init < 0) {
+        JS_FreeCString(ctx, type);
+        return JS_EXCEPTION;
+    }
     JSValue object = d_event_new_proto(dom, ctx, prototype, type, flags[0], flags[1], false);
     JS_FreeCString(ctx, type);
     return object;

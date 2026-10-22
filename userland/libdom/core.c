@@ -24,6 +24,16 @@ void d_free(os64_dom_t *dom, void *ptr)
     os64_free(block);
 }
 
+int d_dictionary(JSContext *ctx, int argc, JSValueConst *argv, int at)
+{
+    if (argc <= at || JS_IsUndefined(argv[at]) || JS_IsNull(argv[at])) return 0;
+    if (!JS_IsObject(argv[at])) {
+        JS_ThrowTypeError(ctx, "A dictionary argument must be an object");
+        return -1;
+    }
+    return 1;
+}
+
 JSValue d_error(JSContext *ctx, const char *name, const char *message)
 {
     JSValue error = JS_NewError(ctx);
