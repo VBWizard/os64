@@ -324,6 +324,9 @@ void os64_dom_drain(os64_dom_t *dom)
 {
     if (dom == NULL || dom->closed) return;
     dom->closed = true;
+    /* What the page changed in its storage and has not committed goes to
+     * the store before the binding is gone: the last of its commits. */
+    d_storage_drain(dom);
     d_event_drain(dom);
     d_timer_drain(dom);
     for (DValue *entry = dom->values; entry != NULL; entry = entry->next) {
@@ -345,6 +348,7 @@ void os64_dom_free(os64_dom_t *dom)
     }
     d_timer_free(dom);
     d_window_free(dom);
+    d_storage_free(dom);
     for (DValue *entry = dom->values; entry != NULL;) {
         DValue *next = entry->next;
         d_event_free(dom, entry);

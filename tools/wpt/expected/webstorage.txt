@@ -1,0 +1,1389 @@
+# WPT's webstorage in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh webstorage --update
+# rewrites [passing].
+[required]
+# Slice 1a: localStorage and sessionStorage as Storage objects: the
+# methods, the named properties (get, set, define, delete, enumerate,
+# `in`, symbols left to the prototype), the string conversions, and a
+# sample of setItem's round trips. Each fails with the switch off.
+defineProperty.window.html	Defining data property for key 9 on localStorage
+defineProperty.window.html	Defining data property for key 9 on localStorage twice
+defineProperty.window.html	Defining data property for key 9 on sessionStorage
+defineProperty.window.html	Defining data property for key 9 on sessionStorage twice
+defineProperty.window.html	Defining data property for key x on localStorage
+defineProperty.window.html	Defining data property for key x on localStorage twice
+defineProperty.window.html	Defining data property for key x on sessionStorage
+defineProperty.window.html	Defining data property for key x on sessionStorage twice
+defineProperty.window.html	Defining data property with toString for key 9 on localStorage
+defineProperty.window.html	Defining data property with toString for key 9 on sessionStorage
+defineProperty.window.html	Defining data property with toString for key x on localStorage
+defineProperty.window.html	Defining data property with toString for key x on sessionStorage
+missing_arguments.window.html	Should throw TypeError for function "function() { localStorage.getItem(); }".
+missing_arguments.window.html	Should throw TypeError for function "function() { localStorage.key(); }".
+missing_arguments.window.html	Should throw TypeError for function "function() { localStorage.removeItem(); }".
+missing_arguments.window.html	Should throw TypeError for function "function() { localStorage.setItem("a"); }".
+missing_arguments.window.html	Should throw TypeError for function "function() { localStorage.setItem(); }".
+missing_arguments.window.html	Should throw TypeError for function "function() { sessionStorage.getItem(); }".
+missing_arguments.window.html	Should throw TypeError for function "function() { sessionStorage.key(); }".
+missing_arguments.window.html	Should throw TypeError for function "function() { sessionStorage.removeItem(); }".
+missing_arguments.window.html	Should throw TypeError for function "function() { sessionStorage.setItem("a"); }".
+missing_arguments.window.html	Should throw TypeError for function "function() { sessionStorage.setItem(); }".
+set.window.html	Setting property for key 9 on localStorage
+set.window.html	Setting property for key 9 on localStorage with accessor property on prototype
+set.window.html	Setting property for key 9 on localStorage with data property on prototype
+set.window.html	Setting property for key 9 on localStorage with data property on prototype and existing item
+set.window.html	Setting property for key 9 on sessionStorage
+set.window.html	Setting property for key 9 on sessionStorage with accessor property on prototype
+set.window.html	Setting property for key 9 on sessionStorage with data property on prototype
+set.window.html	Setting property for key 9 on sessionStorage with data property on prototype and existing item
+set.window.html	Setting property for key x on localStorage
+set.window.html	Setting property for key x on localStorage with accessor property on prototype
+set.window.html	Setting property for key x on localStorage with data property on prototype
+set.window.html	Setting property for key x on localStorage with data property on prototype and existing item
+set.window.html	Setting property for key x on sessionStorage
+set.window.html	Setting property for key x on sessionStorage with accessor property on prototype
+set.window.html	Setting property for key x on sessionStorage with data property on prototype
+set.window.html	Setting property for key x on sessionStorage with data property on prototype and existing item
+set.window.html	Setting property with toString for key 9 on localStorage
+set.window.html	Setting property with toString for key 9 on sessionStorage
+set.window.html	Setting property with toString for key x on localStorage
+set.window.html	Setting property with toString for key x on sessionStorage
+storage_builtins.window.html	Builtins in localStorage
+storage_builtins.window.html	Builtins in sessionStorage
+storage_clear.window.html	Clear in localStorage
+storage_clear.window.html	Clear in sessionStorage
+storage_enumerate.window.html	localStorage: enumerate a Storage object and get only the keys as a result and the built-in properties of the Storage object should be ignored
+storage_enumerate.window.html	localStorage: test enumeration of numeric and non-numeric keys
+storage_enumerate.window.html	sessionStorage: enumerate a Storage object and get only the keys as a result and the built-in properties of the Storage object should be ignored
+storage_enumerate.window.html	sessionStorage: test enumeration of numeric and non-numeric keys
+storage_functions_not_overwritten.window.html	localStorage should be not rendered unusable by setting a key with the same name as a storage function such that the function is hidden
+storage_functions_not_overwritten.window.html	sessionStorage should be not rendered unusable by setting a key with the same name as a storage function such that the function is hidden
+storage_getitem.window.html	All items should be added to localStorage.
+storage_getitem.window.html	All items should be added to sessionStorage.
+storage_getitem.window.html	Get value by getIten(key) and named access in localStorage.
+storage_getitem.window.html	Get value by getIten(key) and named access in sessionStorage.
+storage_getitem.window.html	Named access to localStorage should be correct
+storage_getitem.window.html	Named access to sessionStorage should be correct
+storage_getitem.window.html	localStorage.getItem should be correct
+storage_getitem.window.html	sessionStorage.getItem should be correct
+storage_in.window.html	The in operator in localStorage: method access
+storage_in.window.html	The in operator in localStorage: property access
+storage_in.window.html	The in operator in sessionStorage: method access
+storage_in.window.html	The in operator in sessionStorage: property access
+storage_indexing.window.html	Getting existing number-valued properties on localStorage
+storage_indexing.window.html	Getting existing number-valued properties on sessionStorage
+storage_indexing.window.html	Getting number properties on localStorage
+storage_indexing.window.html	Getting number properties on sessionStorage
+storage_indexing.window.html	Getting number-valued string properties on localStorage
+storage_indexing.window.html	Getting number-valued string properties on sessionStorage
+storage_indexing.window.html	Indexed getter on localStorage
+storage_indexing.window.html	Indexed getter on sessionStorage
+storage_key.window.html	localStorage.key
+storage_key.window.html	localStorage.key with value changes
+storage_key.window.html	localStorage.key() should return null for out-of-range arguments.
+storage_key.window.html	localStorage.key(0) should return the right thing.
+storage_key.window.html	localStorage.key(1) should return the right thing.
+storage_key.window.html	localStorage.key(2) should return the right thing.
+storage_key.window.html	localStorage.key(3) should return the right thing.
+storage_key.window.html	localStorage.key(4294967296) should return the right thing.
+storage_key.window.html	localStorage.key(4294967297) should return the right thing.
+storage_key.window.html	localStorage.key(4294967298) should return the right thing.
+storage_key.window.html	localStorage.key(4294967299) should return the right thing.
+storage_key.window.html	sessionStorage.key
+storage_key.window.html	sessionStorage.key with value changes
+storage_key.window.html	sessionStorage.key() should return null for out-of-range arguments.
+storage_key.window.html	sessionStorage.key(0) should return the right thing.
+storage_key.window.html	sessionStorage.key(1) should return the right thing.
+storage_key.window.html	sessionStorage.key(2) should return the right thing.
+storage_key.window.html	sessionStorage.key(3) should return the right thing.
+storage_key.window.html	sessionStorage.key(4294967296) should return the right thing.
+storage_key.window.html	sessionStorage.key(4294967297) should return the right thing.
+storage_key.window.html	sessionStorage.key(4294967298) should return the right thing.
+storage_key.window.html	sessionStorage.key(4294967299) should return the right thing.
+storage_key_empty_string.window.html	localStorage.key with empty string
+storage_key_empty_string.window.html	sessionStorage.key with empty string
+storage_length.window.html	localStorage.length (method access)
+storage_length.window.html	localStorage.length (proprty access)
+storage_length.window.html	sessionStorage.length (method access)
+storage_length.window.html	sessionStorage.length (proprty access)
+storage_removeitem.window.html	delete localStorage[]
+storage_removeitem.window.html	delete sessionStorage[]
+storage_removeitem.window.html	localStorage.removeItem()
+storage_removeitem.window.html	localStorage.removeItem(null)
+storage_removeitem.window.html	localStorage.removeItem(undefined)
+storage_removeitem.window.html	sessionStorage.removeItem()
+storage_removeitem.window.html	sessionStorage.removeItem(null)
+storage_removeitem.window.html	sessionStorage.removeItem(undefined)
+storage_set_value_enumerate.window.html	enumerate a localStorage object with the key and get the values
+storage_set_value_enumerate.window.html	enumerate a sessionStorage object with the key and get the values
+storage_string_conversion.window.html	localStorage only stores strings
+storage_string_conversion.window.html	sessionStorage only stores strings
+storage_supported_property_names.window.html	Object.getOwnPropertyNames on localStorage Storage
+storage_supported_property_names.window.html	Object.getOwnPropertyNames on localStorage storage with empty collection
+storage_supported_property_names.window.html	Object.getOwnPropertyNames on sessionStorage Storage
+storage_supported_property_names.window.html	Object.getOwnPropertyNames on sessionStorage storage with empty collection
+symbol-props.window.html	localStorage: defineProperty + get
+symbol-props.window.html	localStorage: defineProperty not configurable
+symbol-props.window.html	localStorage: delete existing property
+symbol-props.window.html	localStorage: delete non-existent property
+symbol-props.window.html	localStorage: get with symbol on prototype
+symbol-props.window.html	localStorage: plain set + get (loose)
+symbol-props.window.html	localStorage: plain set + get (strict)
+symbol-props.window.html	sessionStorage: defineProperty + get
+symbol-props.window.html	sessionStorage: defineProperty not configurable
+symbol-props.window.html	sessionStorage: delete existing property
+symbol-props.window.html	sessionStorage: delete non-existent property
+symbol-props.window.html	sessionStorage: get with symbol on prototype
+symbol-props.window.html	sessionStorage: plain set + get (loose)
+symbol-props.window.html	sessionStorage: plain set + get (strict)
+storage_setitem.window.html	localStorage.setItem()
+storage_setitem.window.html	localStorage.setItem(_, null)
+storage_setitem.window.html	localStorage.setItem(_, undefined)
+storage_setitem.window.html	localStorage.setItem(null, _)
+storage_setitem.window.html	localStorage.setItem(undefined, _)
+storage_setitem.window.html	localStorage.setItem({ throws })
+storage_setitem.window.html	sessionStorage.setItem()
+storage_setitem.window.html	sessionStorage.setItem(_, null)
+storage_setitem.window.html	sessionStorage.setItem(_, undefined)
+storage_setitem.window.html	sessionStorage.setItem(null, _)
+storage_setitem.window.html	sessionStorage.setItem(undefined, _)
+storage_setitem.window.html	sessionStorage.setItem({ throws })
+[excluded]
+[passing]
+defineProperty.window.html	Defining data property for key 9 on localStorage
+defineProperty.window.html	Defining data property for key 9 on localStorage twice
+defineProperty.window.html	Defining data property for key 9 on sessionStorage
+defineProperty.window.html	Defining data property for key 9 on sessionStorage twice
+defineProperty.window.html	Defining data property for key x on localStorage
+defineProperty.window.html	Defining data property for key x on localStorage twice
+defineProperty.window.html	Defining data property for key x on sessionStorage
+defineProperty.window.html	Defining data property for key x on sessionStorage twice
+defineProperty.window.html	Defining data property with toString for key 9 on localStorage
+defineProperty.window.html	Defining data property with toString for key 9 on sessionStorage
+defineProperty.window.html	Defining data property with toString for key x on localStorage
+defineProperty.window.html	Defining data property with toString for key x on sessionStorage
+missing_arguments.window.html	Should throw TypeError for function "function() { localStorage.getItem(); }".
+missing_arguments.window.html	Should throw TypeError for function "function() { localStorage.key(); }".
+missing_arguments.window.html	Should throw TypeError for function "function() { localStorage.removeItem(); }".
+missing_arguments.window.html	Should throw TypeError for function "function() { localStorage.setItem("a"); }".
+missing_arguments.window.html	Should throw TypeError for function "function() { localStorage.setItem(); }".
+missing_arguments.window.html	Should throw TypeError for function "function() { sessionStorage.getItem(); }".
+missing_arguments.window.html	Should throw TypeError for function "function() { sessionStorage.key(); }".
+missing_arguments.window.html	Should throw TypeError for function "function() { sessionStorage.removeItem(); }".
+missing_arguments.window.html	Should throw TypeError for function "function() { sessionStorage.setItem("a"); }".
+missing_arguments.window.html	Should throw TypeError for function "function() { sessionStorage.setItem(); }".
+set.window.html	Setting property for key 9 on localStorage
+set.window.html	Setting property for key 9 on localStorage with accessor property on prototype
+set.window.html	Setting property for key 9 on localStorage with data property on prototype
+set.window.html	Setting property for key 9 on localStorage with data property on prototype and existing item
+set.window.html	Setting property for key 9 on sessionStorage
+set.window.html	Setting property for key 9 on sessionStorage with accessor property on prototype
+set.window.html	Setting property for key 9 on sessionStorage with data property on prototype
+set.window.html	Setting property for key 9 on sessionStorage with data property on prototype and existing item
+set.window.html	Setting property for key x on localStorage
+set.window.html	Setting property for key x on localStorage with accessor property on prototype
+set.window.html	Setting property for key x on localStorage with data property on prototype
+set.window.html	Setting property for key x on localStorage with data property on prototype and existing item
+set.window.html	Setting property for key x on sessionStorage
+set.window.html	Setting property for key x on sessionStorage with accessor property on prototype
+set.window.html	Setting property for key x on sessionStorage with data property on prototype
+set.window.html	Setting property for key x on sessionStorage with data property on prototype and existing item
+set.window.html	Setting property with toString for key 9 on localStorage
+set.window.html	Setting property with toString for key 9 on sessionStorage
+set.window.html	Setting property with toString for key x on localStorage
+set.window.html	Setting property with toString for key x on sessionStorage
+storage_builtins.window.html	Builtins in localStorage
+storage_builtins.window.html	Builtins in sessionStorage
+storage_clear.window.html	Clear in localStorage
+storage_clear.window.html	Clear in sessionStorage
+storage_enumerate.window.html	localStorage: enumerate a Storage object and get only the keys as a result and the built-in properties of the Storage object should be ignored
+storage_enumerate.window.html	localStorage: test enumeration of numeric and non-numeric keys
+storage_enumerate.window.html	sessionStorage: enumerate a Storage object and get only the keys as a result and the built-in properties of the Storage object should be ignored
+storage_enumerate.window.html	sessionStorage: test enumeration of numeric and non-numeric keys
+storage_functions_not_overwritten.window.html	localStorage should be not rendered unusable by setting a key with the same name as a storage function such that the function is hidden
+storage_functions_not_overwritten.window.html	sessionStorage should be not rendered unusable by setting a key with the same name as a storage function such that the function is hidden
+storage_getitem.window.html	All items should be added to localStorage.
+storage_getitem.window.html	All items should be added to sessionStorage.
+storage_getitem.window.html	Get value by getIten(key) and named access in localStorage.
+storage_getitem.window.html	Get value by getIten(key) and named access in sessionStorage.
+storage_getitem.window.html	Named access to localStorage should be correct
+storage_getitem.window.html	Named access to sessionStorage should be correct
+storage_getitem.window.html	localStorage.getItem should be correct
+storage_getitem.window.html	sessionStorage.getItem should be correct
+storage_in.window.html	The in operator in localStorage: method access
+storage_in.window.html	The in operator in localStorage: property access
+storage_in.window.html	The in operator in sessionStorage: method access
+storage_in.window.html	The in operator in sessionStorage: property access
+storage_indexing.window.html	Getting existing number-valued properties on localStorage
+storage_indexing.window.html	Getting existing number-valued properties on sessionStorage
+storage_indexing.window.html	Getting number properties on localStorage
+storage_indexing.window.html	Getting number properties on sessionStorage
+storage_indexing.window.html	Getting number-valued string properties on localStorage
+storage_indexing.window.html	Getting number-valued string properties on sessionStorage
+storage_indexing.window.html	Indexed getter on localStorage
+storage_indexing.window.html	Indexed getter on sessionStorage
+storage_key.window.html	localStorage.key
+storage_key.window.html	localStorage.key with value changes
+storage_key.window.html	localStorage.key() should return null for out-of-range arguments.
+storage_key.window.html	localStorage.key(0) should return the right thing.
+storage_key.window.html	localStorage.key(1) should return the right thing.
+storage_key.window.html	localStorage.key(2) should return the right thing.
+storage_key.window.html	localStorage.key(3) should return the right thing.
+storage_key.window.html	localStorage.key(4294967296) should return the right thing.
+storage_key.window.html	localStorage.key(4294967297) should return the right thing.
+storage_key.window.html	localStorage.key(4294967298) should return the right thing.
+storage_key.window.html	localStorage.key(4294967299) should return the right thing.
+storage_key.window.html	sessionStorage.key
+storage_key.window.html	sessionStorage.key with value changes
+storage_key.window.html	sessionStorage.key() should return null for out-of-range arguments.
+storage_key.window.html	sessionStorage.key(0) should return the right thing.
+storage_key.window.html	sessionStorage.key(1) should return the right thing.
+storage_key.window.html	sessionStorage.key(2) should return the right thing.
+storage_key.window.html	sessionStorage.key(3) should return the right thing.
+storage_key.window.html	sessionStorage.key(4294967296) should return the right thing.
+storage_key.window.html	sessionStorage.key(4294967297) should return the right thing.
+storage_key.window.html	sessionStorage.key(4294967298) should return the right thing.
+storage_key.window.html	sessionStorage.key(4294967299) should return the right thing.
+storage_key_empty_string.window.html	localStorage.key with empty string
+storage_key_empty_string.window.html	sessionStorage.key with empty string
+storage_length.window.html	localStorage.length (method access)
+storage_length.window.html	localStorage.length (proprty access)
+storage_length.window.html	sessionStorage.length (method access)
+storage_length.window.html	sessionStorage.length (proprty access)
+storage_removeitem.window.html	delete localStorage[]
+storage_removeitem.window.html	delete sessionStorage[]
+storage_removeitem.window.html	localStorage.removeItem()
+storage_removeitem.window.html	localStorage.removeItem(null)
+storage_removeitem.window.html	localStorage.removeItem(undefined)
+storage_removeitem.window.html	sessionStorage.removeItem()
+storage_removeitem.window.html	sessionStorage.removeItem(null)
+storage_removeitem.window.html	sessionStorage.removeItem(undefined)
+storage_set_value_enumerate.window.html	enumerate a localStorage object with the key and get the values
+storage_set_value_enumerate.window.html	enumerate a sessionStorage object with the key and get the values
+storage_setitem.window.html	localStorage key containing null
+storage_setitem.window.html	localStorage value containing null
+storage_setitem.window.html	localStorage.setItem()
+storage_setitem.window.html	localStorage.setItem(_, null)
+storage_setitem.window.html	localStorage.setItem(_, undefined)
+storage_setitem.window.html	localStorage.setItem(null, _)
+storage_setitem.window.html	localStorage.setItem(undefined, _)
+storage_setitem.window.html	localStorage.setItem({ throws })
+storage_setitem.window.html	localStorage[" "]
+storage_setitem.window.html	localStorage["!"]
+storage_setitem.window.html	localStorage["#"]
+storage_setitem.window.html	localStorage["$"]
+storage_setitem.window.html	localStorage["%"]
+storage_setitem.window.html	localStorage["&"]
+storage_setitem.window.html	localStorage["'"]
+storage_setitem.window.html	localStorage["("]
+storage_setitem.window.html	localStorage[")"]
+storage_setitem.window.html	localStorage["*"]
+storage_setitem.window.html	localStorage["+"]
+storage_setitem.window.html	localStorage[","]
+storage_setitem.window.html	localStorage["-"]
+storage_setitem.window.html	localStorage["."]
+storage_setitem.window.html	localStorage["/"]
+storage_setitem.window.html	localStorage["0"]
+storage_setitem.window.html	localStorage["1"]
+storage_setitem.window.html	localStorage["2"]
+storage_setitem.window.html	localStorage["3"]
+storage_setitem.window.html	localStorage["4"]
+storage_setitem.window.html	localStorage["5"]
+storage_setitem.window.html	localStorage["6"]
+storage_setitem.window.html	localStorage["7"]
+storage_setitem.window.html	localStorage["8"]
+storage_setitem.window.html	localStorage["9"]
+storage_setitem.window.html	localStorage[":"]
+storage_setitem.window.html	localStorage[";"]
+storage_setitem.window.html	localStorage["<"]
+storage_setitem.window.html	localStorage["="]
+storage_setitem.window.html	localStorage[">"]
+storage_setitem.window.html	localStorage["?"]
+storage_setitem.window.html	localStorage["@"]
+storage_setitem.window.html	localStorage["A"]
+storage_setitem.window.html	localStorage["B"]
+storage_setitem.window.html	localStorage["C"]
+storage_setitem.window.html	localStorage["D"]
+storage_setitem.window.html	localStorage["E"]
+storage_setitem.window.html	localStorage["F"]
+storage_setitem.window.html	localStorage["G"]
+storage_setitem.window.html	localStorage["H"]
+storage_setitem.window.html	localStorage["I"]
+storage_setitem.window.html	localStorage["J"]
+storage_setitem.window.html	localStorage["K"]
+storage_setitem.window.html	localStorage["L"]
+storage_setitem.window.html	localStorage["M"]
+storage_setitem.window.html	localStorage["N"]
+storage_setitem.window.html	localStorage["O"]
+storage_setitem.window.html	localStorage["P"]
+storage_setitem.window.html	localStorage["Q"]
+storage_setitem.window.html	localStorage["R"]
+storage_setitem.window.html	localStorage["S"]
+storage_setitem.window.html	localStorage["T"]
+storage_setitem.window.html	localStorage["U"]
+storage_setitem.window.html	localStorage["U+d800"]
+storage_setitem.window.html	localStorage["U+d83ca"]
+storage_setitem.window.html	localStorage["U+dbff"]
+storage_setitem.window.html	localStorage["U+dc00"]
+storage_setitem.window.html	localStorage["U+dfff"]
+storage_setitem.window.html	localStorage["V"]
+storage_setitem.window.html	localStorage["W"]
+storage_setitem.window.html	localStorage["X"]
+storage_setitem.window.html	localStorage["Y"]
+storage_setitem.window.html	localStorage["Z"]
+storage_setitem.window.html	localStorage["["]
+storage_setitem.window.html	localStorage["\\""]
+storage_setitem.window.html	localStorage["\\0"]
+storage_setitem.window.html	localStorage["\\\\"]
+storage_setitem.window.html	localStorage["\\b"]
+storage_setitem.window.html	localStorage["\\f"]
+storage_setitem.window.html	localStorage["\\n"]
+storage_setitem.window.html	localStorage["\\r"]
+storage_setitem.window.html	localStorage["\\t"]
+storage_setitem.window.html	localStorage["\\ufffd"]
+storage_setitem.window.html	localStorage["\\ufffe"]
+storage_setitem.window.html	localStorage["\\uffff"]
+storage_setitem.window.html	localStorage["\\v"]
+storage_setitem.window.html	localStorage["\\x01"]
+storage_setitem.window.html	localStorage["\\x02"]
+storage_setitem.window.html	localStorage["\\x03"]
+storage_setitem.window.html	localStorage["\\x04"]
+storage_setitem.window.html	localStorage["\\x05"]
+storage_setitem.window.html	localStorage["\\x06"]
+storage_setitem.window.html	localStorage["\\x07"]
+storage_setitem.window.html	localStorage["\\x0e"]
+storage_setitem.window.html	localStorage["\\x0f"]
+storage_setitem.window.html	localStorage["\\x10"]
+storage_setitem.window.html	localStorage["\\x11"]
+storage_setitem.window.html	localStorage["\\x12"]
+storage_setitem.window.html	localStorage["\\x13"]
+storage_setitem.window.html	localStorage["\\x14"]
+storage_setitem.window.html	localStorage["\\x15"]
+storage_setitem.window.html	localStorage["\\x16"]
+storage_setitem.window.html	localStorage["\\x17"]
+storage_setitem.window.html	localStorage["\\x18"]
+storage_setitem.window.html	localStorage["\\x19"]
+storage_setitem.window.html	localStorage["\\x1a"]
+storage_setitem.window.html	localStorage["\\x1b"]
+storage_setitem.window.html	localStorage["\\x1c"]
+storage_setitem.window.html	localStorage["\\x1d"]
+storage_setitem.window.html	localStorage["\\x1e"]
+storage_setitem.window.html	localStorage["\\x1f"]
+storage_setitem.window.html	localStorage["]"]
+storage_setitem.window.html	localStorage["^"]
+storage_setitem.window.html	localStorage["_"]
+storage_setitem.window.html	localStorage["`"]
+storage_setitem.window.html	localStorage["a"]
+storage_setitem.window.html	localStorage["aU+df4d"]
+storage_setitem.window.html	localStorage["b"]
+storage_setitem.window.html	localStorage["c"]
+storage_setitem.window.html	localStorage["d"]
+storage_setitem.window.html	localStorage["e"]
+storage_setitem.window.html	localStorage["f"]
+storage_setitem.window.html	localStorage["g"]
+storage_setitem.window.html	localStorage["h"]
+storage_setitem.window.html	localStorage["i"]
+storage_setitem.window.html	localStorage["j"]
+storage_setitem.window.html	localStorage["k"]
+storage_setitem.window.html	localStorage["l"]
+storage_setitem.window.html	localStorage["m"]
+storage_setitem.window.html	localStorage["n"]
+storage_setitem.window.html	localStorage["o"]
+storage_setitem.window.html	localStorage["p"]
+storage_setitem.window.html	localStorage["q"]
+storage_setitem.window.html	localStorage["r"]
+storage_setitem.window.html	localStorage["s"]
+storage_setitem.window.html	localStorage["t"]
+storage_setitem.window.html	localStorage["u"]
+storage_setitem.window.html	localStorage["v"]
+storage_setitem.window.html	localStorage["w"]
+storage_setitem.window.html	localStorage["x"]
+storage_setitem.window.html	localStorage["y"]
+storage_setitem.window.html	localStorage["z"]
+storage_setitem.window.html	localStorage["{"]
+storage_setitem.window.html	localStorage["|"]
+storage_setitem.window.html	localStorage["}"]
+storage_setitem.window.html	localStorage["~"]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage[" "]
+storage_setitem.window.html	localStorage["¡"]
+storage_setitem.window.html	localStorage["¢"]
+storage_setitem.window.html	localStorage["£"]
+storage_setitem.window.html	localStorage["¤"]
+storage_setitem.window.html	localStorage["¥"]
+storage_setitem.window.html	localStorage["¦"]
+storage_setitem.window.html	localStorage["§"]
+storage_setitem.window.html	localStorage["¨"]
+storage_setitem.window.html	localStorage["©"]
+storage_setitem.window.html	localStorage["ª"]
+storage_setitem.window.html	localStorage["«"]
+storage_setitem.window.html	localStorage["¬"]
+storage_setitem.window.html	localStorage["­"]
+storage_setitem.window.html	localStorage["®"]
+storage_setitem.window.html	localStorage["¯"]
+storage_setitem.window.html	localStorage["°"]
+storage_setitem.window.html	localStorage["±"]
+storage_setitem.window.html	localStorage["²"]
+storage_setitem.window.html	localStorage["³"]
+storage_setitem.window.html	localStorage["´"]
+storage_setitem.window.html	localStorage["µ"]
+storage_setitem.window.html	localStorage["¶"]
+storage_setitem.window.html	localStorage["·"]
+storage_setitem.window.html	localStorage["¸"]
+storage_setitem.window.html	localStorage["¹"]
+storage_setitem.window.html	localStorage["º"]
+storage_setitem.window.html	localStorage["»"]
+storage_setitem.window.html	localStorage["¼"]
+storage_setitem.window.html	localStorage["½"]
+storage_setitem.window.html	localStorage["¾"]
+storage_setitem.window.html	localStorage["¿"]
+storage_setitem.window.html	localStorage["À"]
+storage_setitem.window.html	localStorage["Á"]
+storage_setitem.window.html	localStorage["Â"]
+storage_setitem.window.html	localStorage["Ã"]
+storage_setitem.window.html	localStorage["Ä"]
+storage_setitem.window.html	localStorage["Å"]
+storage_setitem.window.html	localStorage["Æ"]
+storage_setitem.window.html	localStorage["Ç"]
+storage_setitem.window.html	localStorage["È"]
+storage_setitem.window.html	localStorage["É"]
+storage_setitem.window.html	localStorage["Ê"]
+storage_setitem.window.html	localStorage["Ë"]
+storage_setitem.window.html	localStorage["Ì"]
+storage_setitem.window.html	localStorage["Í"]
+storage_setitem.window.html	localStorage["Î"]
+storage_setitem.window.html	localStorage["Ï"]
+storage_setitem.window.html	localStorage["Ð"]
+storage_setitem.window.html	localStorage["Ñ"]
+storage_setitem.window.html	localStorage["Ò"]
+storage_setitem.window.html	localStorage["Ó"]
+storage_setitem.window.html	localStorage["Ô"]
+storage_setitem.window.html	localStorage["Õ"]
+storage_setitem.window.html	localStorage["Ö"]
+storage_setitem.window.html	localStorage["×"]
+storage_setitem.window.html	localStorage["Ø"]
+storage_setitem.window.html	localStorage["Ù"]
+storage_setitem.window.html	localStorage["Ú"]
+storage_setitem.window.html	localStorage["Û"]
+storage_setitem.window.html	localStorage["Ü"]
+storage_setitem.window.html	localStorage["Ý"]
+storage_setitem.window.html	localStorage["Þ"]
+storage_setitem.window.html	localStorage["ß"]
+storage_setitem.window.html	localStorage["à"]
+storage_setitem.window.html	localStorage["á"]
+storage_setitem.window.html	localStorage["â"]
+storage_setitem.window.html	localStorage["ã"]
+storage_setitem.window.html	localStorage["ä"]
+storage_setitem.window.html	localStorage["å"]
+storage_setitem.window.html	localStorage["æ"]
+storage_setitem.window.html	localStorage["ç"]
+storage_setitem.window.html	localStorage["è"]
+storage_setitem.window.html	localStorage["é"]
+storage_setitem.window.html	localStorage["ê"]
+storage_setitem.window.html	localStorage["ë"]
+storage_setitem.window.html	localStorage["ì"]
+storage_setitem.window.html	localStorage["í"]
+storage_setitem.window.html	localStorage["î"]
+storage_setitem.window.html	localStorage["ï"]
+storage_setitem.window.html	localStorage["ð"]
+storage_setitem.window.html	localStorage["ñ"]
+storage_setitem.window.html	localStorage["ò"]
+storage_setitem.window.html	localStorage["ó"]
+storage_setitem.window.html	localStorage["ô"]
+storage_setitem.window.html	localStorage["õ"]
+storage_setitem.window.html	localStorage["ö"]
+storage_setitem.window.html	localStorage["÷"]
+storage_setitem.window.html	localStorage["ø"]
+storage_setitem.window.html	localStorage["ù"]
+storage_setitem.window.html	localStorage["ú"]
+storage_setitem.window.html	localStorage["û"]
+storage_setitem.window.html	localStorage["ü"]
+storage_setitem.window.html	localStorage["ý"]
+storage_setitem.window.html	localStorage["þ"]
+storage_setitem.window.html	localStorage["ÿ"]
+storage_setitem.window.html	localStorage["퟿"]
+storage_setitem.window.html	localStorage[""]
+storage_setitem.window.html	localStorage["🍍"]
+storage_setitem.window.html	localStorage["􏿿"]
+storage_setitem.window.html	localStorage[]
+storage_setitem.window.html	localStorage[] = " "
+storage_setitem.window.html	localStorage[] = "!"
+storage_setitem.window.html	localStorage[] = "#"
+storage_setitem.window.html	localStorage[] = "$"
+storage_setitem.window.html	localStorage[] = "%"
+storage_setitem.window.html	localStorage[] = "&"
+storage_setitem.window.html	localStorage[] = "'"
+storage_setitem.window.html	localStorage[] = "("
+storage_setitem.window.html	localStorage[] = ")"
+storage_setitem.window.html	localStorage[] = "*"
+storage_setitem.window.html	localStorage[] = "+"
+storage_setitem.window.html	localStorage[] = ","
+storage_setitem.window.html	localStorage[] = "-"
+storage_setitem.window.html	localStorage[] = "."
+storage_setitem.window.html	localStorage[] = "/"
+storage_setitem.window.html	localStorage[] = "0"
+storage_setitem.window.html	localStorage[] = "1"
+storage_setitem.window.html	localStorage[] = "2"
+storage_setitem.window.html	localStorage[] = "3"
+storage_setitem.window.html	localStorage[] = "4"
+storage_setitem.window.html	localStorage[] = "5"
+storage_setitem.window.html	localStorage[] = "6"
+storage_setitem.window.html	localStorage[] = "7"
+storage_setitem.window.html	localStorage[] = "8"
+storage_setitem.window.html	localStorage[] = "9"
+storage_setitem.window.html	localStorage[] = ":"
+storage_setitem.window.html	localStorage[] = ";"
+storage_setitem.window.html	localStorage[] = "<"
+storage_setitem.window.html	localStorage[] = "="
+storage_setitem.window.html	localStorage[] = ">"
+storage_setitem.window.html	localStorage[] = "?"
+storage_setitem.window.html	localStorage[] = "@"
+storage_setitem.window.html	localStorage[] = "A"
+storage_setitem.window.html	localStorage[] = "B"
+storage_setitem.window.html	localStorage[] = "C"
+storage_setitem.window.html	localStorage[] = "D"
+storage_setitem.window.html	localStorage[] = "E"
+storage_setitem.window.html	localStorage[] = "F"
+storage_setitem.window.html	localStorage[] = "G"
+storage_setitem.window.html	localStorage[] = "H"
+storage_setitem.window.html	localStorage[] = "I"
+storage_setitem.window.html	localStorage[] = "J"
+storage_setitem.window.html	localStorage[] = "K"
+storage_setitem.window.html	localStorage[] = "L"
+storage_setitem.window.html	localStorage[] = "M"
+storage_setitem.window.html	localStorage[] = "N"
+storage_setitem.window.html	localStorage[] = "O"
+storage_setitem.window.html	localStorage[] = "P"
+storage_setitem.window.html	localStorage[] = "Q"
+storage_setitem.window.html	localStorage[] = "R"
+storage_setitem.window.html	localStorage[] = "S"
+storage_setitem.window.html	localStorage[] = "T"
+storage_setitem.window.html	localStorage[] = "U"
+storage_setitem.window.html	localStorage[] = "U+d800"
+storage_setitem.window.html	localStorage[] = "U+d83ca"
+storage_setitem.window.html	localStorage[] = "U+dbff"
+storage_setitem.window.html	localStorage[] = "U+dc00"
+storage_setitem.window.html	localStorage[] = "U+dfff"
+storage_setitem.window.html	localStorage[] = "V"
+storage_setitem.window.html	localStorage[] = "W"
+storage_setitem.window.html	localStorage[] = "X"
+storage_setitem.window.html	localStorage[] = "Y"
+storage_setitem.window.html	localStorage[] = "Z"
+storage_setitem.window.html	localStorage[] = "["
+storage_setitem.window.html	localStorage[] = "\\""
+storage_setitem.window.html	localStorage[] = "\\0"
+storage_setitem.window.html	localStorage[] = "\\\\"
+storage_setitem.window.html	localStorage[] = "\\b"
+storage_setitem.window.html	localStorage[] = "\\f"
+storage_setitem.window.html	localStorage[] = "\\n"
+storage_setitem.window.html	localStorage[] = "\\r"
+storage_setitem.window.html	localStorage[] = "\\t"
+storage_setitem.window.html	localStorage[] = "\\ufffd"
+storage_setitem.window.html	localStorage[] = "\\ufffe"
+storage_setitem.window.html	localStorage[] = "\\uffff"
+storage_setitem.window.html	localStorage[] = "\\v"
+storage_setitem.window.html	localStorage[] = "\\x01"
+storage_setitem.window.html	localStorage[] = "\\x02"
+storage_setitem.window.html	localStorage[] = "\\x03"
+storage_setitem.window.html	localStorage[] = "\\x04"
+storage_setitem.window.html	localStorage[] = "\\x05"
+storage_setitem.window.html	localStorage[] = "\\x06"
+storage_setitem.window.html	localStorage[] = "\\x07"
+storage_setitem.window.html	localStorage[] = "\\x0e"
+storage_setitem.window.html	localStorage[] = "\\x0f"
+storage_setitem.window.html	localStorage[] = "\\x10"
+storage_setitem.window.html	localStorage[] = "\\x11"
+storage_setitem.window.html	localStorage[] = "\\x12"
+storage_setitem.window.html	localStorage[] = "\\x13"
+storage_setitem.window.html	localStorage[] = "\\x14"
+storage_setitem.window.html	localStorage[] = "\\x15"
+storage_setitem.window.html	localStorage[] = "\\x16"
+storage_setitem.window.html	localStorage[] = "\\x17"
+storage_setitem.window.html	localStorage[] = "\\x18"
+storage_setitem.window.html	localStorage[] = "\\x19"
+storage_setitem.window.html	localStorage[] = "\\x1a"
+storage_setitem.window.html	localStorage[] = "\\x1b"
+storage_setitem.window.html	localStorage[] = "\\x1c"
+storage_setitem.window.html	localStorage[] = "\\x1d"
+storage_setitem.window.html	localStorage[] = "\\x1e"
+storage_setitem.window.html	localStorage[] = "\\x1f"
+storage_setitem.window.html	localStorage[] = "]"
+storage_setitem.window.html	localStorage[] = "^"
+storage_setitem.window.html	localStorage[] = "_"
+storage_setitem.window.html	localStorage[] = "`"
+storage_setitem.window.html	localStorage[] = "a"
+storage_setitem.window.html	localStorage[] = "aU+df4d"
+storage_setitem.window.html	localStorage[] = "b"
+storage_setitem.window.html	localStorage[] = "c"
+storage_setitem.window.html	localStorage[] = "d"
+storage_setitem.window.html	localStorage[] = "e"
+storage_setitem.window.html	localStorage[] = "f"
+storage_setitem.window.html	localStorage[] = "g"
+storage_setitem.window.html	localStorage[] = "h"
+storage_setitem.window.html	localStorage[] = "i"
+storage_setitem.window.html	localStorage[] = "j"
+storage_setitem.window.html	localStorage[] = "k"
+storage_setitem.window.html	localStorage[] = "l"
+storage_setitem.window.html	localStorage[] = "m"
+storage_setitem.window.html	localStorage[] = "n"
+storage_setitem.window.html	localStorage[] = "o"
+storage_setitem.window.html	localStorage[] = "p"
+storage_setitem.window.html	localStorage[] = "q"
+storage_setitem.window.html	localStorage[] = "r"
+storage_setitem.window.html	localStorage[] = "s"
+storage_setitem.window.html	localStorage[] = "t"
+storage_setitem.window.html	localStorage[] = "u"
+storage_setitem.window.html	localStorage[] = "v"
+storage_setitem.window.html	localStorage[] = "w"
+storage_setitem.window.html	localStorage[] = "x"
+storage_setitem.window.html	localStorage[] = "y"
+storage_setitem.window.html	localStorage[] = "z"
+storage_setitem.window.html	localStorage[] = "{"
+storage_setitem.window.html	localStorage[] = "|"
+storage_setitem.window.html	localStorage[] = "}"
+storage_setitem.window.html	localStorage[] = "~"
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = " "
+storage_setitem.window.html	localStorage[] = "¡"
+storage_setitem.window.html	localStorage[] = "¢"
+storage_setitem.window.html	localStorage[] = "£"
+storage_setitem.window.html	localStorage[] = "¤"
+storage_setitem.window.html	localStorage[] = "¥"
+storage_setitem.window.html	localStorage[] = "¦"
+storage_setitem.window.html	localStorage[] = "§"
+storage_setitem.window.html	localStorage[] = "¨"
+storage_setitem.window.html	localStorage[] = "©"
+storage_setitem.window.html	localStorage[] = "ª"
+storage_setitem.window.html	localStorage[] = "«"
+storage_setitem.window.html	localStorage[] = "¬"
+storage_setitem.window.html	localStorage[] = "­"
+storage_setitem.window.html	localStorage[] = "®"
+storage_setitem.window.html	localStorage[] = "¯"
+storage_setitem.window.html	localStorage[] = "°"
+storage_setitem.window.html	localStorage[] = "±"
+storage_setitem.window.html	localStorage[] = "²"
+storage_setitem.window.html	localStorage[] = "³"
+storage_setitem.window.html	localStorage[] = "´"
+storage_setitem.window.html	localStorage[] = "µ"
+storage_setitem.window.html	localStorage[] = "¶"
+storage_setitem.window.html	localStorage[] = "·"
+storage_setitem.window.html	localStorage[] = "¸"
+storage_setitem.window.html	localStorage[] = "¹"
+storage_setitem.window.html	localStorage[] = "º"
+storage_setitem.window.html	localStorage[] = "»"
+storage_setitem.window.html	localStorage[] = "¼"
+storage_setitem.window.html	localStorage[] = "½"
+storage_setitem.window.html	localStorage[] = "¾"
+storage_setitem.window.html	localStorage[] = "¿"
+storage_setitem.window.html	localStorage[] = "À"
+storage_setitem.window.html	localStorage[] = "Á"
+storage_setitem.window.html	localStorage[] = "Â"
+storage_setitem.window.html	localStorage[] = "Ã"
+storage_setitem.window.html	localStorage[] = "Ä"
+storage_setitem.window.html	localStorage[] = "Å"
+storage_setitem.window.html	localStorage[] = "Æ"
+storage_setitem.window.html	localStorage[] = "Ç"
+storage_setitem.window.html	localStorage[] = "È"
+storage_setitem.window.html	localStorage[] = "É"
+storage_setitem.window.html	localStorage[] = "Ê"
+storage_setitem.window.html	localStorage[] = "Ë"
+storage_setitem.window.html	localStorage[] = "Ì"
+storage_setitem.window.html	localStorage[] = "Í"
+storage_setitem.window.html	localStorage[] = "Î"
+storage_setitem.window.html	localStorage[] = "Ï"
+storage_setitem.window.html	localStorage[] = "Ð"
+storage_setitem.window.html	localStorage[] = "Ñ"
+storage_setitem.window.html	localStorage[] = "Ò"
+storage_setitem.window.html	localStorage[] = "Ó"
+storage_setitem.window.html	localStorage[] = "Ô"
+storage_setitem.window.html	localStorage[] = "Õ"
+storage_setitem.window.html	localStorage[] = "Ö"
+storage_setitem.window.html	localStorage[] = "×"
+storage_setitem.window.html	localStorage[] = "Ø"
+storage_setitem.window.html	localStorage[] = "Ù"
+storage_setitem.window.html	localStorage[] = "Ú"
+storage_setitem.window.html	localStorage[] = "Û"
+storage_setitem.window.html	localStorage[] = "Ü"
+storage_setitem.window.html	localStorage[] = "Ý"
+storage_setitem.window.html	localStorage[] = "Þ"
+storage_setitem.window.html	localStorage[] = "ß"
+storage_setitem.window.html	localStorage[] = "à"
+storage_setitem.window.html	localStorage[] = "á"
+storage_setitem.window.html	localStorage[] = "â"
+storage_setitem.window.html	localStorage[] = "ã"
+storage_setitem.window.html	localStorage[] = "ä"
+storage_setitem.window.html	localStorage[] = "å"
+storage_setitem.window.html	localStorage[] = "æ"
+storage_setitem.window.html	localStorage[] = "ç"
+storage_setitem.window.html	localStorage[] = "è"
+storage_setitem.window.html	localStorage[] = "é"
+storage_setitem.window.html	localStorage[] = "ê"
+storage_setitem.window.html	localStorage[] = "ë"
+storage_setitem.window.html	localStorage[] = "ì"
+storage_setitem.window.html	localStorage[] = "í"
+storage_setitem.window.html	localStorage[] = "î"
+storage_setitem.window.html	localStorage[] = "ï"
+storage_setitem.window.html	localStorage[] = "ð"
+storage_setitem.window.html	localStorage[] = "ñ"
+storage_setitem.window.html	localStorage[] = "ò"
+storage_setitem.window.html	localStorage[] = "ó"
+storage_setitem.window.html	localStorage[] = "ô"
+storage_setitem.window.html	localStorage[] = "õ"
+storage_setitem.window.html	localStorage[] = "ö"
+storage_setitem.window.html	localStorage[] = "÷"
+storage_setitem.window.html	localStorage[] = "ø"
+storage_setitem.window.html	localStorage[] = "ù"
+storage_setitem.window.html	localStorage[] = "ú"
+storage_setitem.window.html	localStorage[] = "û"
+storage_setitem.window.html	localStorage[] = "ü"
+storage_setitem.window.html	localStorage[] = "ý"
+storage_setitem.window.html	localStorage[] = "þ"
+storage_setitem.window.html	localStorage[] = "ÿ"
+storage_setitem.window.html	localStorage[] = "퟿"
+storage_setitem.window.html	localStorage[] = ""
+storage_setitem.window.html	localStorage[] = "🍍"
+storage_setitem.window.html	localStorage[] = "􏿿"
+storage_setitem.window.html	localStorage[] = null
+storage_setitem.window.html	localStorage[] = undefined
+storage_setitem.window.html	localStorage[] = { throws }
+storage_setitem.window.html	localStorage[] update
+storage_setitem.window.html	localStorage[null]
+storage_setitem.window.html	localStorage[undefined]
+storage_setitem.window.html	sessionStorage key containing null
+storage_setitem.window.html	sessionStorage value containing null
+storage_setitem.window.html	sessionStorage.setItem()
+storage_setitem.window.html	sessionStorage.setItem(_, null)
+storage_setitem.window.html	sessionStorage.setItem(_, undefined)
+storage_setitem.window.html	sessionStorage.setItem(null, _)
+storage_setitem.window.html	sessionStorage.setItem(undefined, _)
+storage_setitem.window.html	sessionStorage.setItem({ throws })
+storage_setitem.window.html	sessionStorage[" "]
+storage_setitem.window.html	sessionStorage["!"]
+storage_setitem.window.html	sessionStorage["#"]
+storage_setitem.window.html	sessionStorage["$"]
+storage_setitem.window.html	sessionStorage["%"]
+storage_setitem.window.html	sessionStorage["&"]
+storage_setitem.window.html	sessionStorage["'"]
+storage_setitem.window.html	sessionStorage["("]
+storage_setitem.window.html	sessionStorage[")"]
+storage_setitem.window.html	sessionStorage["*"]
+storage_setitem.window.html	sessionStorage["+"]
+storage_setitem.window.html	sessionStorage[","]
+storage_setitem.window.html	sessionStorage["-"]
+storage_setitem.window.html	sessionStorage["."]
+storage_setitem.window.html	sessionStorage["/"]
+storage_setitem.window.html	sessionStorage["0"]
+storage_setitem.window.html	sessionStorage["1"]
+storage_setitem.window.html	sessionStorage["2"]
+storage_setitem.window.html	sessionStorage["3"]
+storage_setitem.window.html	sessionStorage["4"]
+storage_setitem.window.html	sessionStorage["5"]
+storage_setitem.window.html	sessionStorage["6"]
+storage_setitem.window.html	sessionStorage["7"]
+storage_setitem.window.html	sessionStorage["8"]
+storage_setitem.window.html	sessionStorage["9"]
+storage_setitem.window.html	sessionStorage[":"]
+storage_setitem.window.html	sessionStorage[";"]
+storage_setitem.window.html	sessionStorage["<"]
+storage_setitem.window.html	sessionStorage["="]
+storage_setitem.window.html	sessionStorage[">"]
+storage_setitem.window.html	sessionStorage["?"]
+storage_setitem.window.html	sessionStorage["@"]
+storage_setitem.window.html	sessionStorage["A"]
+storage_setitem.window.html	sessionStorage["B"]
+storage_setitem.window.html	sessionStorage["C"]
+storage_setitem.window.html	sessionStorage["D"]
+storage_setitem.window.html	sessionStorage["E"]
+storage_setitem.window.html	sessionStorage["F"]
+storage_setitem.window.html	sessionStorage["G"]
+storage_setitem.window.html	sessionStorage["H"]
+storage_setitem.window.html	sessionStorage["I"]
+storage_setitem.window.html	sessionStorage["J"]
+storage_setitem.window.html	sessionStorage["K"]
+storage_setitem.window.html	sessionStorage["L"]
+storage_setitem.window.html	sessionStorage["M"]
+storage_setitem.window.html	sessionStorage["N"]
+storage_setitem.window.html	sessionStorage["O"]
+storage_setitem.window.html	sessionStorage["P"]
+storage_setitem.window.html	sessionStorage["Q"]
+storage_setitem.window.html	sessionStorage["R"]
+storage_setitem.window.html	sessionStorage["S"]
+storage_setitem.window.html	sessionStorage["T"]
+storage_setitem.window.html	sessionStorage["U"]
+storage_setitem.window.html	sessionStorage["U+d800"]
+storage_setitem.window.html	sessionStorage["U+d83ca"]
+storage_setitem.window.html	sessionStorage["U+dbff"]
+storage_setitem.window.html	sessionStorage["U+dc00"]
+storage_setitem.window.html	sessionStorage["U+dfff"]
+storage_setitem.window.html	sessionStorage["V"]
+storage_setitem.window.html	sessionStorage["W"]
+storage_setitem.window.html	sessionStorage["X"]
+storage_setitem.window.html	sessionStorage["Y"]
+storage_setitem.window.html	sessionStorage["Z"]
+storage_setitem.window.html	sessionStorage["["]
+storage_setitem.window.html	sessionStorage["\\""]
+storage_setitem.window.html	sessionStorage["\\0"]
+storage_setitem.window.html	sessionStorage["\\\\"]
+storage_setitem.window.html	sessionStorage["\\b"]
+storage_setitem.window.html	sessionStorage["\\f"]
+storage_setitem.window.html	sessionStorage["\\n"]
+storage_setitem.window.html	sessionStorage["\\r"]
+storage_setitem.window.html	sessionStorage["\\t"]
+storage_setitem.window.html	sessionStorage["\\ufffd"]
+storage_setitem.window.html	sessionStorage["\\ufffe"]
+storage_setitem.window.html	sessionStorage["\\uffff"]
+storage_setitem.window.html	sessionStorage["\\v"]
+storage_setitem.window.html	sessionStorage["\\x01"]
+storage_setitem.window.html	sessionStorage["\\x02"]
+storage_setitem.window.html	sessionStorage["\\x03"]
+storage_setitem.window.html	sessionStorage["\\x04"]
+storage_setitem.window.html	sessionStorage["\\x05"]
+storage_setitem.window.html	sessionStorage["\\x06"]
+storage_setitem.window.html	sessionStorage["\\x07"]
+storage_setitem.window.html	sessionStorage["\\x0e"]
+storage_setitem.window.html	sessionStorage["\\x0f"]
+storage_setitem.window.html	sessionStorage["\\x10"]
+storage_setitem.window.html	sessionStorage["\\x11"]
+storage_setitem.window.html	sessionStorage["\\x12"]
+storage_setitem.window.html	sessionStorage["\\x13"]
+storage_setitem.window.html	sessionStorage["\\x14"]
+storage_setitem.window.html	sessionStorage["\\x15"]
+storage_setitem.window.html	sessionStorage["\\x16"]
+storage_setitem.window.html	sessionStorage["\\x17"]
+storage_setitem.window.html	sessionStorage["\\x18"]
+storage_setitem.window.html	sessionStorage["\\x19"]
+storage_setitem.window.html	sessionStorage["\\x1a"]
+storage_setitem.window.html	sessionStorage["\\x1b"]
+storage_setitem.window.html	sessionStorage["\\x1c"]
+storage_setitem.window.html	sessionStorage["\\x1d"]
+storage_setitem.window.html	sessionStorage["\\x1e"]
+storage_setitem.window.html	sessionStorage["\\x1f"]
+storage_setitem.window.html	sessionStorage["]"]
+storage_setitem.window.html	sessionStorage["^"]
+storage_setitem.window.html	sessionStorage["_"]
+storage_setitem.window.html	sessionStorage["`"]
+storage_setitem.window.html	sessionStorage["a"]
+storage_setitem.window.html	sessionStorage["aU+df4d"]
+storage_setitem.window.html	sessionStorage["b"]
+storage_setitem.window.html	sessionStorage["c"]
+storage_setitem.window.html	sessionStorage["d"]
+storage_setitem.window.html	sessionStorage["e"]
+storage_setitem.window.html	sessionStorage["f"]
+storage_setitem.window.html	sessionStorage["g"]
+storage_setitem.window.html	sessionStorage["h"]
+storage_setitem.window.html	sessionStorage["i"]
+storage_setitem.window.html	sessionStorage["j"]
+storage_setitem.window.html	sessionStorage["k"]
+storage_setitem.window.html	sessionStorage["l"]
+storage_setitem.window.html	sessionStorage["m"]
+storage_setitem.window.html	sessionStorage["n"]
+storage_setitem.window.html	sessionStorage["o"]
+storage_setitem.window.html	sessionStorage["p"]
+storage_setitem.window.html	sessionStorage["q"]
+storage_setitem.window.html	sessionStorage["r"]
+storage_setitem.window.html	sessionStorage["s"]
+storage_setitem.window.html	sessionStorage["t"]
+storage_setitem.window.html	sessionStorage["u"]
+storage_setitem.window.html	sessionStorage["v"]
+storage_setitem.window.html	sessionStorage["w"]
+storage_setitem.window.html	sessionStorage["x"]
+storage_setitem.window.html	sessionStorage["y"]
+storage_setitem.window.html	sessionStorage["z"]
+storage_setitem.window.html	sessionStorage["{"]
+storage_setitem.window.html	sessionStorage["|"]
+storage_setitem.window.html	sessionStorage["}"]
+storage_setitem.window.html	sessionStorage["~"]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage[" "]
+storage_setitem.window.html	sessionStorage["¡"]
+storage_setitem.window.html	sessionStorage["¢"]
+storage_setitem.window.html	sessionStorage["£"]
+storage_setitem.window.html	sessionStorage["¤"]
+storage_setitem.window.html	sessionStorage["¥"]
+storage_setitem.window.html	sessionStorage["¦"]
+storage_setitem.window.html	sessionStorage["§"]
+storage_setitem.window.html	sessionStorage["¨"]
+storage_setitem.window.html	sessionStorage["©"]
+storage_setitem.window.html	sessionStorage["ª"]
+storage_setitem.window.html	sessionStorage["«"]
+storage_setitem.window.html	sessionStorage["¬"]
+storage_setitem.window.html	sessionStorage["­"]
+storage_setitem.window.html	sessionStorage["®"]
+storage_setitem.window.html	sessionStorage["¯"]
+storage_setitem.window.html	sessionStorage["°"]
+storage_setitem.window.html	sessionStorage["±"]
+storage_setitem.window.html	sessionStorage["²"]
+storage_setitem.window.html	sessionStorage["³"]
+storage_setitem.window.html	sessionStorage["´"]
+storage_setitem.window.html	sessionStorage["µ"]
+storage_setitem.window.html	sessionStorage["¶"]
+storage_setitem.window.html	sessionStorage["·"]
+storage_setitem.window.html	sessionStorage["¸"]
+storage_setitem.window.html	sessionStorage["¹"]
+storage_setitem.window.html	sessionStorage["º"]
+storage_setitem.window.html	sessionStorage["»"]
+storage_setitem.window.html	sessionStorage["¼"]
+storage_setitem.window.html	sessionStorage["½"]
+storage_setitem.window.html	sessionStorage["¾"]
+storage_setitem.window.html	sessionStorage["¿"]
+storage_setitem.window.html	sessionStorage["À"]
+storage_setitem.window.html	sessionStorage["Á"]
+storage_setitem.window.html	sessionStorage["Â"]
+storage_setitem.window.html	sessionStorage["Ã"]
+storage_setitem.window.html	sessionStorage["Ä"]
+storage_setitem.window.html	sessionStorage["Å"]
+storage_setitem.window.html	sessionStorage["Æ"]
+storage_setitem.window.html	sessionStorage["Ç"]
+storage_setitem.window.html	sessionStorage["È"]
+storage_setitem.window.html	sessionStorage["É"]
+storage_setitem.window.html	sessionStorage["Ê"]
+storage_setitem.window.html	sessionStorage["Ë"]
+storage_setitem.window.html	sessionStorage["Ì"]
+storage_setitem.window.html	sessionStorage["Í"]
+storage_setitem.window.html	sessionStorage["Î"]
+storage_setitem.window.html	sessionStorage["Ï"]
+storage_setitem.window.html	sessionStorage["Ð"]
+storage_setitem.window.html	sessionStorage["Ñ"]
+storage_setitem.window.html	sessionStorage["Ò"]
+storage_setitem.window.html	sessionStorage["Ó"]
+storage_setitem.window.html	sessionStorage["Ô"]
+storage_setitem.window.html	sessionStorage["Õ"]
+storage_setitem.window.html	sessionStorage["Ö"]
+storage_setitem.window.html	sessionStorage["×"]
+storage_setitem.window.html	sessionStorage["Ø"]
+storage_setitem.window.html	sessionStorage["Ù"]
+storage_setitem.window.html	sessionStorage["Ú"]
+storage_setitem.window.html	sessionStorage["Û"]
+storage_setitem.window.html	sessionStorage["Ü"]
+storage_setitem.window.html	sessionStorage["Ý"]
+storage_setitem.window.html	sessionStorage["Þ"]
+storage_setitem.window.html	sessionStorage["ß"]
+storage_setitem.window.html	sessionStorage["à"]
+storage_setitem.window.html	sessionStorage["á"]
+storage_setitem.window.html	sessionStorage["â"]
+storage_setitem.window.html	sessionStorage["ã"]
+storage_setitem.window.html	sessionStorage["ä"]
+storage_setitem.window.html	sessionStorage["å"]
+storage_setitem.window.html	sessionStorage["æ"]
+storage_setitem.window.html	sessionStorage["ç"]
+storage_setitem.window.html	sessionStorage["è"]
+storage_setitem.window.html	sessionStorage["é"]
+storage_setitem.window.html	sessionStorage["ê"]
+storage_setitem.window.html	sessionStorage["ë"]
+storage_setitem.window.html	sessionStorage["ì"]
+storage_setitem.window.html	sessionStorage["í"]
+storage_setitem.window.html	sessionStorage["î"]
+storage_setitem.window.html	sessionStorage["ï"]
+storage_setitem.window.html	sessionStorage["ð"]
+storage_setitem.window.html	sessionStorage["ñ"]
+storage_setitem.window.html	sessionStorage["ò"]
+storage_setitem.window.html	sessionStorage["ó"]
+storage_setitem.window.html	sessionStorage["ô"]
+storage_setitem.window.html	sessionStorage["õ"]
+storage_setitem.window.html	sessionStorage["ö"]
+storage_setitem.window.html	sessionStorage["÷"]
+storage_setitem.window.html	sessionStorage["ø"]
+storage_setitem.window.html	sessionStorage["ù"]
+storage_setitem.window.html	sessionStorage["ú"]
+storage_setitem.window.html	sessionStorage["û"]
+storage_setitem.window.html	sessionStorage["ü"]
+storage_setitem.window.html	sessionStorage["ý"]
+storage_setitem.window.html	sessionStorage["þ"]
+storage_setitem.window.html	sessionStorage["ÿ"]
+storage_setitem.window.html	sessionStorage["퟿"]
+storage_setitem.window.html	sessionStorage[""]
+storage_setitem.window.html	sessionStorage["🍍"]
+storage_setitem.window.html	sessionStorage["􏿿"]
+storage_setitem.window.html	sessionStorage[]
+storage_setitem.window.html	sessionStorage[] = " "
+storage_setitem.window.html	sessionStorage[] = "!"
+storage_setitem.window.html	sessionStorage[] = "#"
+storage_setitem.window.html	sessionStorage[] = "$"
+storage_setitem.window.html	sessionStorage[] = "%"
+storage_setitem.window.html	sessionStorage[] = "&"
+storage_setitem.window.html	sessionStorage[] = "'"
+storage_setitem.window.html	sessionStorage[] = "("
+storage_setitem.window.html	sessionStorage[] = ")"
+storage_setitem.window.html	sessionStorage[] = "*"
+storage_setitem.window.html	sessionStorage[] = "+"
+storage_setitem.window.html	sessionStorage[] = ","
+storage_setitem.window.html	sessionStorage[] = "-"
+storage_setitem.window.html	sessionStorage[] = "."
+storage_setitem.window.html	sessionStorage[] = "/"
+storage_setitem.window.html	sessionStorage[] = "0"
+storage_setitem.window.html	sessionStorage[] = "1"
+storage_setitem.window.html	sessionStorage[] = "2"
+storage_setitem.window.html	sessionStorage[] = "3"
+storage_setitem.window.html	sessionStorage[] = "4"
+storage_setitem.window.html	sessionStorage[] = "5"
+storage_setitem.window.html	sessionStorage[] = "6"
+storage_setitem.window.html	sessionStorage[] = "7"
+storage_setitem.window.html	sessionStorage[] = "8"
+storage_setitem.window.html	sessionStorage[] = "9"
+storage_setitem.window.html	sessionStorage[] = ":"
+storage_setitem.window.html	sessionStorage[] = ";"
+storage_setitem.window.html	sessionStorage[] = "<"
+storage_setitem.window.html	sessionStorage[] = "="
+storage_setitem.window.html	sessionStorage[] = ">"
+storage_setitem.window.html	sessionStorage[] = "?"
+storage_setitem.window.html	sessionStorage[] = "@"
+storage_setitem.window.html	sessionStorage[] = "A"
+storage_setitem.window.html	sessionStorage[] = "B"
+storage_setitem.window.html	sessionStorage[] = "C"
+storage_setitem.window.html	sessionStorage[] = "D"
+storage_setitem.window.html	sessionStorage[] = "E"
+storage_setitem.window.html	sessionStorage[] = "F"
+storage_setitem.window.html	sessionStorage[] = "G"
+storage_setitem.window.html	sessionStorage[] = "H"
+storage_setitem.window.html	sessionStorage[] = "I"
+storage_setitem.window.html	sessionStorage[] = "J"
+storage_setitem.window.html	sessionStorage[] = "K"
+storage_setitem.window.html	sessionStorage[] = "L"
+storage_setitem.window.html	sessionStorage[] = "M"
+storage_setitem.window.html	sessionStorage[] = "N"
+storage_setitem.window.html	sessionStorage[] = "O"
+storage_setitem.window.html	sessionStorage[] = "P"
+storage_setitem.window.html	sessionStorage[] = "Q"
+storage_setitem.window.html	sessionStorage[] = "R"
+storage_setitem.window.html	sessionStorage[] = "S"
+storage_setitem.window.html	sessionStorage[] = "T"
+storage_setitem.window.html	sessionStorage[] = "U"
+storage_setitem.window.html	sessionStorage[] = "U+d800"
+storage_setitem.window.html	sessionStorage[] = "U+d83ca"
+storage_setitem.window.html	sessionStorage[] = "U+dbff"
+storage_setitem.window.html	sessionStorage[] = "U+dc00"
+storage_setitem.window.html	sessionStorage[] = "U+dfff"
+storage_setitem.window.html	sessionStorage[] = "V"
+storage_setitem.window.html	sessionStorage[] = "W"
+storage_setitem.window.html	sessionStorage[] = "X"
+storage_setitem.window.html	sessionStorage[] = "Y"
+storage_setitem.window.html	sessionStorage[] = "Z"
+storage_setitem.window.html	sessionStorage[] = "["
+storage_setitem.window.html	sessionStorage[] = "\\""
+storage_setitem.window.html	sessionStorage[] = "\\0"
+storage_setitem.window.html	sessionStorage[] = "\\\\"
+storage_setitem.window.html	sessionStorage[] = "\\b"
+storage_setitem.window.html	sessionStorage[] = "\\f"
+storage_setitem.window.html	sessionStorage[] = "\\n"
+storage_setitem.window.html	sessionStorage[] = "\\r"
+storage_setitem.window.html	sessionStorage[] = "\\t"
+storage_setitem.window.html	sessionStorage[] = "\\ufffd"
+storage_setitem.window.html	sessionStorage[] = "\\ufffe"
+storage_setitem.window.html	sessionStorage[] = "\\uffff"
+storage_setitem.window.html	sessionStorage[] = "\\v"
+storage_setitem.window.html	sessionStorage[] = "\\x01"
+storage_setitem.window.html	sessionStorage[] = "\\x02"
+storage_setitem.window.html	sessionStorage[] = "\\x03"
+storage_setitem.window.html	sessionStorage[] = "\\x04"
+storage_setitem.window.html	sessionStorage[] = "\\x05"
+storage_setitem.window.html	sessionStorage[] = "\\x06"
+storage_setitem.window.html	sessionStorage[] = "\\x07"
+storage_setitem.window.html	sessionStorage[] = "\\x0e"
+storage_setitem.window.html	sessionStorage[] = "\\x0f"
+storage_setitem.window.html	sessionStorage[] = "\\x10"
+storage_setitem.window.html	sessionStorage[] = "\\x11"
+storage_setitem.window.html	sessionStorage[] = "\\x12"
+storage_setitem.window.html	sessionStorage[] = "\\x13"
+storage_setitem.window.html	sessionStorage[] = "\\x14"
+storage_setitem.window.html	sessionStorage[] = "\\x15"
+storage_setitem.window.html	sessionStorage[] = "\\x16"
+storage_setitem.window.html	sessionStorage[] = "\\x17"
+storage_setitem.window.html	sessionStorage[] = "\\x18"
+storage_setitem.window.html	sessionStorage[] = "\\x19"
+storage_setitem.window.html	sessionStorage[] = "\\x1a"
+storage_setitem.window.html	sessionStorage[] = "\\x1b"
+storage_setitem.window.html	sessionStorage[] = "\\x1c"
+storage_setitem.window.html	sessionStorage[] = "\\x1d"
+storage_setitem.window.html	sessionStorage[] = "\\x1e"
+storage_setitem.window.html	sessionStorage[] = "\\x1f"
+storage_setitem.window.html	sessionStorage[] = "]"
+storage_setitem.window.html	sessionStorage[] = "^"
+storage_setitem.window.html	sessionStorage[] = "_"
+storage_setitem.window.html	sessionStorage[] = "`"
+storage_setitem.window.html	sessionStorage[] = "a"
+storage_setitem.window.html	sessionStorage[] = "aU+df4d"
+storage_setitem.window.html	sessionStorage[] = "b"
+storage_setitem.window.html	sessionStorage[] = "c"
+storage_setitem.window.html	sessionStorage[] = "d"
+storage_setitem.window.html	sessionStorage[] = "e"
+storage_setitem.window.html	sessionStorage[] = "f"
+storage_setitem.window.html	sessionStorage[] = "g"
+storage_setitem.window.html	sessionStorage[] = "h"
+storage_setitem.window.html	sessionStorage[] = "i"
+storage_setitem.window.html	sessionStorage[] = "j"
+storage_setitem.window.html	sessionStorage[] = "k"
+storage_setitem.window.html	sessionStorage[] = "l"
+storage_setitem.window.html	sessionStorage[] = "m"
+storage_setitem.window.html	sessionStorage[] = "n"
+storage_setitem.window.html	sessionStorage[] = "o"
+storage_setitem.window.html	sessionStorage[] = "p"
+storage_setitem.window.html	sessionStorage[] = "q"
+storage_setitem.window.html	sessionStorage[] = "r"
+storage_setitem.window.html	sessionStorage[] = "s"
+storage_setitem.window.html	sessionStorage[] = "t"
+storage_setitem.window.html	sessionStorage[] = "u"
+storage_setitem.window.html	sessionStorage[] = "v"
+storage_setitem.window.html	sessionStorage[] = "w"
+storage_setitem.window.html	sessionStorage[] = "x"
+storage_setitem.window.html	sessionStorage[] = "y"
+storage_setitem.window.html	sessionStorage[] = "z"
+storage_setitem.window.html	sessionStorage[] = "{"
+storage_setitem.window.html	sessionStorage[] = "|"
+storage_setitem.window.html	sessionStorage[] = "}"
+storage_setitem.window.html	sessionStorage[] = "~"
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = " "
+storage_setitem.window.html	sessionStorage[] = "¡"
+storage_setitem.window.html	sessionStorage[] = "¢"
+storage_setitem.window.html	sessionStorage[] = "£"
+storage_setitem.window.html	sessionStorage[] = "¤"
+storage_setitem.window.html	sessionStorage[] = "¥"
+storage_setitem.window.html	sessionStorage[] = "¦"
+storage_setitem.window.html	sessionStorage[] = "§"
+storage_setitem.window.html	sessionStorage[] = "¨"
+storage_setitem.window.html	sessionStorage[] = "©"
+storage_setitem.window.html	sessionStorage[] = "ª"
+storage_setitem.window.html	sessionStorage[] = "«"
+storage_setitem.window.html	sessionStorage[] = "¬"
+storage_setitem.window.html	sessionStorage[] = "­"
+storage_setitem.window.html	sessionStorage[] = "®"
+storage_setitem.window.html	sessionStorage[] = "¯"
+storage_setitem.window.html	sessionStorage[] = "°"
+storage_setitem.window.html	sessionStorage[] = "±"
+storage_setitem.window.html	sessionStorage[] = "²"
+storage_setitem.window.html	sessionStorage[] = "³"
+storage_setitem.window.html	sessionStorage[] = "´"
+storage_setitem.window.html	sessionStorage[] = "µ"
+storage_setitem.window.html	sessionStorage[] = "¶"
+storage_setitem.window.html	sessionStorage[] = "·"
+storage_setitem.window.html	sessionStorage[] = "¸"
+storage_setitem.window.html	sessionStorage[] = "¹"
+storage_setitem.window.html	sessionStorage[] = "º"
+storage_setitem.window.html	sessionStorage[] = "»"
+storage_setitem.window.html	sessionStorage[] = "¼"
+storage_setitem.window.html	sessionStorage[] = "½"
+storage_setitem.window.html	sessionStorage[] = "¾"
+storage_setitem.window.html	sessionStorage[] = "¿"
+storage_setitem.window.html	sessionStorage[] = "À"
+storage_setitem.window.html	sessionStorage[] = "Á"
+storage_setitem.window.html	sessionStorage[] = "Â"
+storage_setitem.window.html	sessionStorage[] = "Ã"
+storage_setitem.window.html	sessionStorage[] = "Ä"
+storage_setitem.window.html	sessionStorage[] = "Å"
+storage_setitem.window.html	sessionStorage[] = "Æ"
+storage_setitem.window.html	sessionStorage[] = "Ç"
+storage_setitem.window.html	sessionStorage[] = "È"
+storage_setitem.window.html	sessionStorage[] = "É"
+storage_setitem.window.html	sessionStorage[] = "Ê"
+storage_setitem.window.html	sessionStorage[] = "Ë"
+storage_setitem.window.html	sessionStorage[] = "Ì"
+storage_setitem.window.html	sessionStorage[] = "Í"
+storage_setitem.window.html	sessionStorage[] = "Î"
+storage_setitem.window.html	sessionStorage[] = "Ï"
+storage_setitem.window.html	sessionStorage[] = "Ð"
+storage_setitem.window.html	sessionStorage[] = "Ñ"
+storage_setitem.window.html	sessionStorage[] = "Ò"
+storage_setitem.window.html	sessionStorage[] = "Ó"
+storage_setitem.window.html	sessionStorage[] = "Ô"
+storage_setitem.window.html	sessionStorage[] = "Õ"
+storage_setitem.window.html	sessionStorage[] = "Ö"
+storage_setitem.window.html	sessionStorage[] = "×"
+storage_setitem.window.html	sessionStorage[] = "Ø"
+storage_setitem.window.html	sessionStorage[] = "Ù"
+storage_setitem.window.html	sessionStorage[] = "Ú"
+storage_setitem.window.html	sessionStorage[] = "Û"
+storage_setitem.window.html	sessionStorage[] = "Ü"
+storage_setitem.window.html	sessionStorage[] = "Ý"
+storage_setitem.window.html	sessionStorage[] = "Þ"
+storage_setitem.window.html	sessionStorage[] = "ß"
+storage_setitem.window.html	sessionStorage[] = "à"
+storage_setitem.window.html	sessionStorage[] = "á"
+storage_setitem.window.html	sessionStorage[] = "â"
+storage_setitem.window.html	sessionStorage[] = "ã"
+storage_setitem.window.html	sessionStorage[] = "ä"
+storage_setitem.window.html	sessionStorage[] = "å"
+storage_setitem.window.html	sessionStorage[] = "æ"
+storage_setitem.window.html	sessionStorage[] = "ç"
+storage_setitem.window.html	sessionStorage[] = "è"
+storage_setitem.window.html	sessionStorage[] = "é"
+storage_setitem.window.html	sessionStorage[] = "ê"
+storage_setitem.window.html	sessionStorage[] = "ë"
+storage_setitem.window.html	sessionStorage[] = "ì"
+storage_setitem.window.html	sessionStorage[] = "í"
+storage_setitem.window.html	sessionStorage[] = "î"
+storage_setitem.window.html	sessionStorage[] = "ï"
+storage_setitem.window.html	sessionStorage[] = "ð"
+storage_setitem.window.html	sessionStorage[] = "ñ"
+storage_setitem.window.html	sessionStorage[] = "ò"
+storage_setitem.window.html	sessionStorage[] = "ó"
+storage_setitem.window.html	sessionStorage[] = "ô"
+storage_setitem.window.html	sessionStorage[] = "õ"
+storage_setitem.window.html	sessionStorage[] = "ö"
+storage_setitem.window.html	sessionStorage[] = "÷"
+storage_setitem.window.html	sessionStorage[] = "ø"
+storage_setitem.window.html	sessionStorage[] = "ù"
+storage_setitem.window.html	sessionStorage[] = "ú"
+storage_setitem.window.html	sessionStorage[] = "û"
+storage_setitem.window.html	sessionStorage[] = "ü"
+storage_setitem.window.html	sessionStorage[] = "ý"
+storage_setitem.window.html	sessionStorage[] = "þ"
+storage_setitem.window.html	sessionStorage[] = "ÿ"
+storage_setitem.window.html	sessionStorage[] = "퟿"
+storage_setitem.window.html	sessionStorage[] = ""
+storage_setitem.window.html	sessionStorage[] = "🍍"
+storage_setitem.window.html	sessionStorage[] = "􏿿"
+storage_setitem.window.html	sessionStorage[] = null
+storage_setitem.window.html	sessionStorage[] = undefined
+storage_setitem.window.html	sessionStorage[] = { throws }
+storage_setitem.window.html	sessionStorage[] update
+storage_setitem.window.html	sessionStorage[null]
+storage_setitem.window.html	sessionStorage[undefined]
+storage_string_conversion.window.html	localStorage only stores strings
+storage_string_conversion.window.html	sessionStorage only stores strings
+storage_supported_property_names.window.html	Object.getOwnPropertyNames on localStorage Storage
+storage_supported_property_names.window.html	Object.getOwnPropertyNames on localStorage storage with empty collection
+storage_supported_property_names.window.html	Object.getOwnPropertyNames on sessionStorage Storage
+storage_supported_property_names.window.html	Object.getOwnPropertyNames on sessionStorage storage with empty collection
+symbol-props.window.html	localStorage: defineProperty + get
+symbol-props.window.html	localStorage: defineProperty not configurable
+symbol-props.window.html	localStorage: delete existing property
+symbol-props.window.html	localStorage: delete non-existent property
+symbol-props.window.html	localStorage: get with symbol on prototype
+symbol-props.window.html	localStorage: plain set + get (loose)
+symbol-props.window.html	localStorage: plain set + get (strict)
+symbol-props.window.html	sessionStorage: defineProperty + get
+symbol-props.window.html	sessionStorage: defineProperty not configurable
+symbol-props.window.html	sessionStorage: delete existing property
+symbol-props.window.html	sessionStorage: delete non-existent property
+symbol-props.window.html	sessionStorage: get with symbol on prototype
+symbol-props.window.html	sessionStorage: plain set + get (loose)
+symbol-props.window.html	sessionStorage: plain set + get (strict)

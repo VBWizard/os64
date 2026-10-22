@@ -318,12 +318,13 @@ static JSValue fragment_constructor(JSContext *ctx, JSValueConst new_target, int
  * of memory, which leaves the parent alive past the runtime. Giving the
  * object a shape of its own first (`length`'s flags changed and changed
  * back, either of which fails cleanly) leaves the set nothing to
- * allocate. Every interface object's `length` is 0. */
-static int interface_parent(JSContext *ctx, JSValueConst f, JSValueConst parent)
+ * allocate. `length` is the interface's: its constructor's required
+ * arguments, 0 for one that constructs nothing. */
+static int interface_parent(JSContext *ctx, JSValueConst f, JSValueConst parent, int length)
 {
-    if (JS_DefinePropertyValueStr(ctx, f, "length", JS_NewInt32(ctx, 0),
+    if (JS_DefinePropertyValueStr(ctx, f, "length", JS_NewInt32(ctx, length),
                                   JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE) < 0 ||
-        JS_DefinePropertyValueStr(ctx, f, "length", JS_NewInt32(ctx, 0), JS_PROP_CONFIGURABLE) < 0)
+        JS_DefinePropertyValueStr(ctx, f, "length", JS_NewInt32(ctx, length), JS_PROP_CONFIGURABLE) < 0)
         return -1;
     return JS_SetPrototype(ctx, f, parent) < 0 ? -1 : 0;
 }
@@ -426,7 +427,7 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         if (JS_IsException(f)) break;
         if (JS_SetConstructor(ctx, f, prototype) < 0 ||
             string_tag(ctx, prototype, tag, kInterfaces[i].name) < 0 ||
-            (parent >= 0 && interface_parent(ctx, f, made[parent]) < 0) ||
+            (parent >= 0 && interface_parent(ctx, f, made[parent], 0) < 0) ||
             (proto == D_PROTO_NODE && (node_constants(ctx, f) < 0 || node_constants(ctx, prototype) < 0))) {
             JS_FreeValue(ctx, f);
             break;
@@ -439,6 +440,23 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     }
     JS_FreeAtom(ctx, tag);
     return result;
+}
+
+JSValue d_interface_new(JSContext *ctx, const char *name, int length, JSCFunction *constructor,
+                        JSValueConst prototype, JSValueConst parent)
+{
+    JSValue f = constructor != NULL
+        ? JS_NewCFunction2(ctx, constructor, name, length, JS_CFUNC_constructor, 0)
+        : JS_NewCFunction2(ctx, illegal_constructor, name, 0, JS_CFUNC_constructor_or_func, 0);
+    if (JS_IsException(f)) return f;
+    JSAtom tag = string_tag_key(ctx);
+    bool made = tag != JS_ATOM_NULL && JS_SetConstructor(ctx, f, prototype) >= 0 &&
+                string_tag(ctx, prototype, tag, name) >= 0 &&
+                (!JS_IsObject(parent) || interface_parent(ctx, f, parent, constructor != NULL ? length : 0) >= 0);
+    if (tag != JS_ATOM_NULL) JS_FreeAtom(ctx, tag);
+    if (made) return f;
+    JS_FreeValue(ctx, f);
+    return JS_EXCEPTION;
 }
 
 int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)

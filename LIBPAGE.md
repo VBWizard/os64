@@ -201,7 +201,10 @@ refused where a link to it is encoded and followed. `os64_page_resolve_in`
 applies ALL of it, for an address a script names (a `src`, a `location`
 ask): the document's own steps, its base as the tree stands now, on a
 scratch page with no model, so a script and a link in one document can
-never disagree about where an address goes. Two more answers come off the
+never disagree about where an address goes. With no document (a script's
+`new URL`), it takes no `<base href>`, and a query is UTF-8. An absolute
+reference resolved with nothing to resolve against still has its dot
+segments removed. Two more answers come off the
 same kind of scratch page, for a document still being parsed, so they
 cannot disagree with the model that will be built when it ends:
 `os64_page_sheets_in` lists the sheets the tree names by the model's own

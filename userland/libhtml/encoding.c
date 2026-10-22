@@ -34,9 +34,12 @@ static int label_encoding(const unsigned char *s, size_t n)
     for (size_t i = 0; i < H_ARRAY(aliases); i++)
         if (ascii_equal(s, n, aliases[i]))
             return E_1252;
-    if (ascii_equal(s, n, "utf-16") || ascii_equal(s, n, "utf-16le"))
-        return E_UTF16LE;
-    if (ascii_equal(s, n, "utf-16be"))
+    static const char *const utf16le[] = {"csunicode", "iso-10646-ucs-2", "ucs-2",   "unicode",
+                                          "unicodefeff", "utf-16",         "utf-16le"};
+    for (size_t i = 0; i < H_ARRAY(utf16le); i++)
+        if (ascii_equal(s, n, utf16le[i]))
+            return E_UTF16LE;
+    if (ascii_equal(s, n, "unicodefffe") || ascii_equal(s, n, "utf-16be"))
         return E_UTF16BE;
     return -1;
 }
@@ -79,6 +82,10 @@ bool os64_html_encode_windows_1252(uint32_t cp, uint8_t *out)
         return true;
     }
     return false;
+}
+uint32_t os64_html_decode_windows_1252(uint8_t byte)
+{
+    return byte >= 0x80 && byte <= 0x9f ? windows_high[byte - 0x80] : byte;
 }
 static const unsigned char *content_charset(const unsigned char *s, size_t n, size_t *out_n)
 {
@@ -221,7 +228,7 @@ void h_decode(os64_html_parser_t *p, unsigned char b, size_t offset)
 {
     p->offset = offset;
     if (p->encoding == E_1252) {
-        h_codepoint(p, b >= 0x80 && b <= 0x9f ? windows_high[b - 0x80] : b);
+        h_codepoint(p, os64_html_decode_windows_1252(b));
         return;
     }
     if (p->encoding == E_UTF16LE || p->encoding == E_UTF16BE) {
