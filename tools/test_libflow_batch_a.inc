@@ -822,6 +822,25 @@ static void batch_a_cases(void)
         "    block div 0 200 100 100\n"
         "      block div 0 200 100 0\n");
 
+    // WPT flex-aspect-ratio-021 and -022: under `flex-basis: content`
+    // the base is the ratio's from the definite cross size (Flexbox 1 §
+    // 9.2.3 B) though a main size is given — a row item 100 high at 1 and
+    // given 20 wide is 100 wide; a column item 100 wide given 20 high is
+    // 100 high.
+    cascade_layout_case("aspect-ratio: flex-basis content takes the ratio (WPT flex-aspect-ratio-021, -022)",
+        "<!doctype html><style>body { margin: 0 }</style><div style='display: flex'><div"
+        " style='flex-basis: content; height: 100px; aspect-ratio: 1/1; width: 20px;"
+        " min-width: 0'></div></div><div style='display: flex; flex-direction: column'><div"
+        " style='flex-basis: content; width: 100px; aspect-ratio: 1/1; height: 20px;"
+        " min-height: 0'></div></div>", 800,
+        "page 800 200\n"
+        "block html 0 0 800 200\n"
+        "  block body 0 0 800 200\n"
+        "    block div 0 0 800 100\n"
+        "      block div 0 0 100 100\n"
+        "    block div 0 100 800 100\n"
+        "      block div 0 100 100 100\n");
+
     // ── text-overflow (CSS Overflow 4 § 4.1) ──
 
     // Not inherited; the line is laid out as it would be, past its block:

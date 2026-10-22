@@ -3714,8 +3714,11 @@ static bool flex_place(L *l, const FStyles *styles, FlexRun *r, int64_t given, i
         // (§ 4.5: the transferred size suggestion is a replaced box's), and
         // that content was laid out at its ratio's height or more (§ 4.3 of
         // Sizing 4, block_at).
+        // A height given makes no difference under `flex-basis: content`,
+        // whose base is the ratio's all the same (§ 9.2.3 B).
         int64_t moved = -1;
-        if (ratio_box(c) && cs->height.kind != FLOW_LENGTH_PX &&
+        if (ratio_box(c) &&
+            (cs->height.kind != FLOW_LENGTH_PX || cs->flex_basis.kind == FLOW_LENGTH_CONTENT) &&
             (cs->width.kind == FLOW_LENGTH_PX || cs->width.kind == FLOW_LENGTH_PERCENT ||
              (!wraps && stretches_across(s, c)))) {
             int64_t hf = hframe(c, cw);
@@ -3993,7 +3996,9 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
             // width through its ratio (§ 9.2.3 B). Its automatic minimum
             // stays its content's (§ 4.5: the transferred size suggestion
             // is a replaced box's).
-            if (ratio_box(c) && !width_given) {
+            // Under `flex-basis: content` a width given makes no difference
+            // to the base, which is the ratio's all the same (§ 9.2.3 B).
+            if (ratio_box(c) && (!width_given || cs->flex_basis.kind == FLOW_LENGTH_CONTENT)) {
                 int64_t vf = vframe(c, cw), ch = -1;
                 if (height_given(cs))
                     ch = clamp_height(cs, content_of(cs, cs->height, 0, vf), vf);
