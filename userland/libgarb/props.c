@@ -3559,9 +3559,41 @@ static bool logical_pair(Sets *s, VCur *c, int k, bool (*one)(Sets *, VCur *, ga
     return true;
 }
 
+// The rest of an outline from the cursor on: each part not yet had tried
+// in turn, and the next tried after it, back to the next part where the
+// rest cannot be read. `||` takes the parts in any order (Values 4 §
+// 2.2), and `auto` is both a style and a colour, so the first part that
+// reads a component is not always the one it is: `outline: auto solid` is
+// the colour auto and the style solid. Three parts, so six orders at
+// most.
+static bool outline_rest(Sets *s, VCur *c, const Longhand *parts, garb_val_t *v, bool *have)
+{
+    if (vc_done(c))
+        return true;
+    int32_t at = c->i;
+    for (int k = 0; k < 3; k++) {
+        // A reader that refuses may have written its answer: each tries
+        // into its own.
+        garb_val_t one;
+        if (have[k] || !knows(s, parts[k].prop) || !longhand_one(s, c, &parts[k], &one)) {
+            c->i = at;
+            continue;
+        }
+        garb_val_t was = v[k];
+        v[k] = one;
+        have[k] = true;
+        if (outline_rest(s, c, parts, v, have))
+            return true;
+        v[k] = was;
+        have[k] = false;
+        c->i = at;
+    }
+    return false;
+}
+
 // `outline` (CSS UI 4 § 3.1): a width, a style and a colour, any order,
-// each at most once; each left out is its initial value (medium, none,
-// auto).
+// each at most once (outline_rest); each left out is its initial value
+// (medium, none, auto).
 static bool outline_shorthand(Sets *s, VCur *c)
 {
     static const Longhand kParts[3] = {
@@ -3569,20 +3601,7 @@ static bool outline_shorthand(Sets *s, VCur *c)
         {GARB_OUTLINE_COLOR, G_OUTLINE_COLOR, NULL}};
     garb_val_t v[3] = {kw("medium"), kw("none"), kw("auto")};
     bool have[3] = {false, false, false};
-    while (!vc_done(c)) {
-        // A reader that refuses may have written its answer: each tries
-        // into its own.
-        garb_val_t one;
-        int k = 0;
-        for (; k < 3; k++)
-            if (!have[k] && knows(s, kParts[k].prop) && longhand_one(s, c, &kParts[k], &one))
-                break;
-        if (k == 3)
-            return false;
-        v[k] = one;
-        have[k] = true;
-    }
-    if (!have[0] && !have[1] && !have[2])
+    if (vc_done(c) || !outline_rest(s, c, kParts, v, have))
         return false;
     for (int k = 0; k < 3; k++)
         set(s, kParts[k].prop, &v[k]);

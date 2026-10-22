@@ -1197,6 +1197,18 @@ IN: outline: red solid
 OUT: outline-width: medium; outline-style: solid; outline-color: rgb(255, 0, 0)
 IN: outline: auto
 OUT: outline-width: medium; outline-style: auto; outline-color: auto
+IN: outline: auto solid
+OUT: outline-width: medium; outline-style: solid; outline-color: auto
+IN: outline: solid auto
+OUT: outline-width: medium; outline-style: solid; outline-color: auto
+IN: outline: auto 2px solid
+OUT: outline-width: 2px; outline-style: solid; outline-color: auto
+IN: outline: auto auto
+OUT: outline-width: medium; outline-style: auto; outline-color: auto
+IN: outline: auto red
+OUT: outline-width: medium; outline-style: auto; outline-color: rgb(255, 0, 0)
+IN: outline: auto auto auto
+OUT: invalid
 IN: outline: none
 OUT: outline-width: medium; outline-style: none; outline-color: auto
 IN: outline: thick
