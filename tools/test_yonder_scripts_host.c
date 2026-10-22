@@ -3678,9 +3678,30 @@ static void loop_view_pushed_length(void) {
         "pushed length: by a reload, the same");
     loop_drop();
 }
+/* A new way's page that pushed and goes back past its own entries before
+ * it is shown: its commit let go of what was ahead of the page on screen,
+ * so the session keeps its entries ahead and not F. */
+static void loop_view_new_way_back(void) {
+    loop_page("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns(),"new way back: S");
+    start_trip("http://fixture.test/F",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>F</p><script>history.replaceState(null,'','/F')</script>");
+    check(loop_settle() && view_turns(),"new way back: F");
+    click_back(NULL,NULL);
+    post_arriving("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns() && session_is("","/S","/F"),"new way back: on S, F ahead");
+    start_trip("http://fixture.test/A",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>A</p><script>history.replaceState(null,'','/A');history.pushState(null,'','/A2');"
+        "history.go(-2)</script><p>tail</p>");
+    check(loop_settle() && view_turns() && !g.stream.active && probe_text_is("out","S") &&
+          session_is("","/S","/A,/A2"),
+        "new way back: go(-2) from A2 is S, A and A2 ahead, F let go");
+    loop_drop();
+}
 static void loop_view_cold2_cases(void) {
     loop_view_pushed_then_forward();
     loop_view_pushed_length();
+    loop_view_new_way_back();
 }
 static void loop_view_cold_cases(void) {
     loop_view_cold2_cases();

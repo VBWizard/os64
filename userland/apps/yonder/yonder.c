@@ -7490,8 +7490,10 @@ static void unshown_go(Page *p, int32_t delta)
     if (target < -(int64_t)g.way.depth || target > (int64_t)g.way.ahead)
         return;                     // no entry there: nothing happens, and the page arrives
     // A new way's entries go ahead of the page on screen, nearest last
-    // (way_forward_entry), as its own commit would have put them.
+    // (way_forward_entry), as its own commit would have put them, and that
+    // commit let go of what was ahead first.
     if (kind == NAV_GO) {
+        way_forget_ahead(&g.way);
         for (int32_t i = 0; i < p->nahead; i++)
             way_forward_entry(&g.way, &p->ahead[i]);
         way_crumb_t current = page_entry_left(p);
