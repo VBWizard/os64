@@ -1,7 +1,7 @@
 #ifndef YONDER_FETCH_JOB_H
 #define YONDER_FETCH_JOB_H
 
-// A script's request (fetch, XMLHttpRequest, and slice 3's module scripts),
+// A script's request (fetch() and XMLHttpRequest's),
 // run by the Fetch standard's rules: ONE path, whether it runs on a pool
 // worker or, for a synchronous XHR, inline on the window thread. The job
 // drives the redirect loop itself, one libfetch fetch per hop, and asks

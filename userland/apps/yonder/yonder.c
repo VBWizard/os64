@@ -7079,7 +7079,11 @@ static yonder_fetch_job_t *request_job(uint64_t serial, uint32_t token, const os
     job->request.policy = q->policy;
     job->request.preflight_flag = q->preflight;
     os64_strcopy(job->request.method, sizeof(job->request.method), q->method);
-    os64_strcopy(job->referrer, sizeof(job->referrer), q->referrer != NULL ? q->referrer : "");
+    // A referrer too long to keep whole goes as none: a cut address would
+    // name a page that is not this one.
+    const char *referrer = q->referrer != NULL ? q->referrer : "";
+    os64_strcopy(job->referrer, sizeof(job->referrer),
+                 os64_strlen(referrer) < sizeof(job->referrer) ? referrer : "");
     job->jar = g.way.jar;
     job->preflight = s_preflight;
     return job;
@@ -7939,10 +7943,10 @@ static bool coming_turn(void)
 
 // ── The doorbell ────────────────────────────────────────────────────────
 
-// A job the pool finished. A picture's or a sheet's is read here; a
-// navigation's fetch said everything it had to say down the mailbox before
-// it returned, so its job is only let go, and one finished before its
-// cancel was noticed is let go the same way.
+// A job the pool finished, read here by its kind and handed to what asked
+// for it. A navigation's fetch said everything it had to say down
+// the mailbox before it returned, so its job is only let go, and one
+// finished before its cancel was noticed is let go the same way.
 static void reaped(os64_work_id_t id, void *job, void *product)
 {
     if (*(const uint32_t *)job == YONDER_JOB_PICTURE) {

@@ -264,7 +264,8 @@ static void dom_fetch_object_cases(void)
         "var r=new Request('/x',{referrer:''});assert(r.referrer==='');"
         "r=new Request('/x',{referrer:'/elsewhere'});assert(r.referrer==='http://example.test/elsewhere');"
         "r=new Request('/x',{referrer:'http://other.test/'});assert(r.referrer==='about:client');"
-        "r=new Request('/x',{referrerPolicy:'origin'});assert(r.referrerPolicy==='origin');",
+        "r=new Request('/x',{referrerPolicy:'origin'});assert(r.referrerPolicy==='origin');"
+        "r=new Request('/x',{referrer:'about:client'});assert(r.referrer==='about:client');",
         "request: the constructor's defaults and refusals");
     /* WebIDL reads a dictionary's members in name order, each once. */
     dom_script(&f, FETCH_ASSERT

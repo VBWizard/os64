@@ -454,7 +454,7 @@ void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, JSValueConst
 /* True when an abort could no longer reach `response`'s body: it has none,
  * it has been read, or an abort already reached it. */
 bool d_response_body_settled(JSValueConst response);
-/* Bytes and their type (blob.c, fetch.c): js_malloc'd, `type` "" for none. */
+/* Bytes and their type (blob.c, fetch.c): js_malloc'd; `type` NULL or "" for none. */
 typedef struct {
     uint8_t *bytes;
     size_t length;
