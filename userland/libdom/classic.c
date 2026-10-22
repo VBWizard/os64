@@ -139,6 +139,9 @@ static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
         const os64_html_node_t *node = d_node(dom, ctx, self);
         if (node == NULL) return JS_EXCEPTION;
         if (node->kind != OS64_HTML_DOCUMENT) return JS_ThrowTypeError(ctx, "cookie requires a document");
+        /* A document with no window is cookie-averse (HTML § 3.1.3), as
+         * every document is when the host gives no provider. */
+        if (!d_window_document(dom, node)) return set ? JS_UNDEFINED : JS_NewString(ctx, "");
         if (set) {
             DString text = {0};
             if (!d_string(dom, ctx, argc > 0 ? argv[0] : JS_UNDEFINED, &text)) return JS_EXCEPTION;
@@ -398,6 +401,7 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     static const struct { const char *name; unsigned proto; } kInterfaces[] = {
         {"Node", D_PROTO_NODE}, {"CharacterData", D_PROTO_CHARACTER_DATA},
         {"DocumentFragment", D_PROTO_FRAGMENT}, {"Document", D_PROTO_DOCUMENT},
+        {"DocumentType", D_PROTO_DOCTYPE},
         {"Element", D_PROTO_ELEMENT}, {"HTMLElement", D_PROTO_HTML_ELEMENT},
         {"HTMLFormElement", D_PROTO_FORM}, {"HTMLInputElement", D_PROTO_INPUT},
         {"HTMLTextAreaElement", D_PROTO_TEXTAREA}, {"HTMLSelectElement", D_PROTO_SELECT},
@@ -484,7 +488,8 @@ int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_accessor(dom,ctx,image,"width",classic,C_WIDTH,true) < 0 ||
         d_accessor(dom,ctx,image,"height",classic,C_HEIGHT,true) < 0 ||
         d_method(dom,ctx,doc,"captureEvents",classic,1,C_CAPTURE) < 0 ||
-        d_method(dom,ctx,doc,"releaseEvents",classic,1,C_CAPTURE) < 0) return -1;
+        d_method(dom,ctx,doc,"releaseEvents",classic,1,C_CAPTURE) < 0 ||
+        d_implementation_classic(dom,ctx) < 0) return -1;
     const unsigned named_kinds[] = {D_PROTO_IMAGE,D_PROTO_FORM,D_PROTO_INPUT,
         D_PROTO_TEXTAREA,D_PROTO_SELECT,D_PROTO_BUTTON};
     for (unsigned i = 0; i < sizeof(named_kinds)/sizeof(named_kinds[0]); i++)

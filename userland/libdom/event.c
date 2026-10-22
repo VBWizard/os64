@@ -412,10 +412,16 @@ static int slot_compile(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListene
 }
 
 /* The slot's function, compiling it if its attribute has not been: a new
- * reference, JS_NULL when there is none, JS_EXCEPTION when compiling threw. */
+ * reference, JS_NULL when there is none, JS_EXCEPTION when compiling threw.
+ * An attribute on an element of a document with no window is not compiled
+ * (scripting is disabled for it) and reads as none, until the element is
+ * the window's. */
 static JSValue slot_value(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListener *slot)
 {
     if (slot_refresh(dom, ctx, entry, slot) < 0) return JS_EXCEPTION;
+    if (slot->handler == D_SLOT_UNCOMPILED && entry != dom->window && entry->node != NULL &&
+        !d_window_document(dom, entry->node))
+        return JS_NULL;
     if (slot->handler == D_SLOT_UNCOMPILED && slot_compile(dom, ctx, entry, slot) < 0)
         return JS_EXCEPTION;
     return slot->handler == D_SLOT_FUNCTION ? JS_DupValue(ctx, slot->callback) : JS_NULL;

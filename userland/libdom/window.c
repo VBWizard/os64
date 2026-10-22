@@ -75,6 +75,16 @@ enum {
  * parsing. A refusal of the parse is the page's and not the script's; only
  * "there is no insertion point" throws. */
 #define WRITE_ENDED "document.write after the parse has ended would replace the document, which this browser does not do"
+#define WRITE_UNOPENED "document.write into a document with no window would open it, which this browser does not do"
+
+/* A document of its own (implementation.c) as `this`: it has no window,
+ * so no parser of the page's and no location. */
+static bool windowless(os64_dom_t *dom, JSValueConst self)
+{
+    DValue *entry = JS_GetOpaque(self, dom->node_class);
+    return entry != NULL && entry->node != NULL && entry->node->kind == OS64_HTML_DOCUMENT &&
+           !d_window_document(dom, entry->node);
+}
 
 static int64_t host_write(os64_dom_t *dom, const char *utf8, size_t length)
 {
@@ -228,11 +238,13 @@ static JSValue window_member(JSContext *ctx, JSValueConst self, int argc, JSValu
          * on every mouseover and expects no complaint. */
         return set ? JS_UNDEFINED : JS_NewString(ctx, "");
     case W_WRITE: case W_WRITELN:
+        if (windowless(dom, self)) return d_error(ctx, "InvalidStateError", WRITE_UNOPENED);
         return document_write(dom, ctx, argc, argv, magic == W_WRITELN);
     case W_OPEN:
         /* open() over the parser that is running answers the document and
          * changes nothing; any other open() would make a new document. An
          * empty write asks the host whether there is an insertion point. */
+        if (windowless(dom, self)) return d_error(ctx, "InvalidStateError", WRITE_UNOPENED);
         if (host_write(dom, "", 0) == OS64_HTML_BAD_ARGUMENT)
             return d_error(ctx, "InvalidStateError", WRITE_ENDED);
         return JS_DupValue(ctx, self);
@@ -244,13 +256,15 @@ static JSValue window_member(JSContext *ctx, JSValueConst self, int argc, JSValu
 }
 
 /* location itself: reading answers the object, assigning navigates, on
- * window and on document alike. */
+ * window and on document alike. A document with no window has none: it
+ * reads null, and assigning to it is assigning to null's href. */
 static JSValue location_property(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                                  int magic, JSValue *data)
 {
-    (void)self;
     os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
+    if (windowless(dom, self))
+        return magic & D_SET ? JS_ThrowTypeError(ctx, "This document has no location") : JS_NULL;
     if (magic & D_SET) return ask_url(dom, ctx, OS64_DOM_NAVIGATE_URL, argc > 0 ? argv[0] : JS_UNDEFINED, false);
     return JS_DupValue(ctx, dom->location->value);
 }
@@ -331,18 +345,24 @@ static int fire(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, c
     return result;
 }
 
+/* What the host performs for an element: only for one of the window's,
+ * since a document with no window has nothing on screen. */
 static void notify(os64_dom_t *dom, const os64_html_node_t *node, os64_dom_activation_t what)
 {
-    if (dom->options.activate != NULL) dom->options.activate(dom->options.host_opaque, node, what);
+    if (dom->options.activate != NULL && d_window_document(dom, node))
+        dom->options.activate(dom->options.host_opaque, node, what);
 }
 
 enum { A_CLICK, A_FOCUS, A_BLUR, A_SUBMIT, A_REQUEST_SUBMIT, A_RESET };
 
 /* A form's submission: HTML fires submit at the form unless the script
- * called submit() itself, and a submit nobody cancelled becomes the ask. */
+ * called submit() itself, and a submit nobody cancelled becomes the ask. A
+ * form in a document with no window cannot navigate, and HTML submits
+ * nothing from it, not even the event. */
 static int submit(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form,
                   const os64_html_node_t *submitter, bool event)
 {
+    if (!d_window_document(dom, form)) return 1;
     int result = event ? fire(dom, ctx, form, "submit", true, true) : 1;
     if (result > 0) d_navigate(dom, OS64_DOM_NAVIGATE_SUBMIT, form, submitter, NULL, 0);
     return result;
@@ -386,7 +406,8 @@ static int click_activate(os64_dom_t *dom, JSContext *ctx, const os64_html_node_
     if (result == 0) return 0;
     if ((html_element(node, OS64_HTML_TAG_A) || html_element(node, OS64_HTML_TAG_AREA)) &&
         os64_html_attr(node, "href") != NULL) {
-        d_navigate(dom, OS64_DOM_NAVIGATE_FOLLOW, node, NULL, NULL, 0);
+        /* A link in a document with no window cannot navigate. */
+        if (d_window_document(dom, node)) d_navigate(dom, OS64_DOM_NAVIGATE_FOLLOW, node, NULL, NULL, 0);
         return 1;
     }
     bool button = html_element(node, OS64_HTML_TAG_BUTTON);
@@ -650,13 +671,23 @@ size_t d_script_collect(const os64_html_node_t *node,
 }
 
 /* HTML prepares a script element when it becomes connected: one that has
- * not started is marked started and handed to the host, which runs it. */
+ * not started is marked started and handed to the host, which runs it.
+ * Connected to a document with no window, it is marked started all the
+ * same and runs nowhere, then or after it is moved into the page (HTML's
+ * "prepare the script element": scripting is disabled for it), unless the
+ * binding has no memory left to mark it with. */
 void d_script_connected(os64_dom_t *dom, const os64_html_node_t *const *scripts, size_t count)
 {
     for (size_t i = 0; i < count; i++) {
         const os64_html_node_t *script = scripts[i];
-        if (!d_connected(dom, script) || os64_dom_script_kind(script) != OS64_DOM_SCRIPT_CLASSIC) continue;
-        if (d_script_mark(dom, script) == 1) dom->options.script_connected(dom->options.host_opaque, script);
+        if (os64_dom_script_kind(script) != OS64_DOM_SCRIPT_CLASSIC) continue;
+        const os64_html_node_t *root = script;
+        while (root->parent != NULL) root = root->parent;
+        if (root == dom->document->document) {
+            if (d_script_mark(dom, script) == 1) dom->options.script_connected(dom->options.host_opaque, script);
+        } else if (root->kind == OS64_HTML_DOCUMENT) {
+            (void)d_script_mark(dom, script);
+        }
     }
 }
 

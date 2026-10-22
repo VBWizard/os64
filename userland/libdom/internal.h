@@ -21,7 +21,7 @@ typedef struct DActiveEvent { struct DActiveEvent *previous; JSValue value; } DA
  * an element of another namespace is an ELEMENT. */
 enum {
     D_PROTO_NODE, D_PROTO_DOCUMENT, D_PROTO_ELEMENT, D_PROTO_CHARACTER_DATA,
-    D_PROTO_FRAGMENT, D_PROTO_HTML_ELEMENT, D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT,
+    D_PROTO_FRAGMENT, D_PROTO_DOCTYPE, D_PROTO_HTML_ELEMENT, D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT,
     D_PROTO_BUTTON, D_PROTO_FORM, D_PROTO_IMAGE, D_PROTO_SCRIPT, D_PROTO_ANCHOR,
     D_PROTO_LINK, D_PROTO_COUNT
 };
@@ -51,7 +51,21 @@ struct DValue {
     DValue *style, *class_list, *dataset;
     DQuery *child_nodes, *children, *images, *forms, *elements;
     DListener *listeners, *last_listener;
+    /* A document DOMImplementation made (implementation.c): its document
+     * once the node is the root of a tree no document holds, when that is
+     * not the window's; NULL is the window's. Read only while the node is
+     * such a root (d_node_document), and written as it becomes one. */
+    const os64_html_node_t *document;
+    /* A document's DOMImplementation, made when first asked for, and what
+     * kind of document it is. */
+    DValue *implementation;
+    uint8_t document_type;
 };
+/* DValue.document_type: the window's document and createHTMLDocument's are
+ * HTML documents; createDocument makes an XML document, whose createElement
+ * makes HTML elements when it was made for the HTML namespace
+ * (application/xhtml+xml) and elements in no namespace otherwise. */
+enum { D_DOCUMENT_HTML = 0, D_DOCUMENT_XHTML, D_DOCUMENT_XML };
 struct DQuery {
     os64_dom_t *dom;
     const os64_html_node_t *root, *owner;
@@ -172,6 +186,10 @@ struct os64_dom {
     /* Symbol.iterator as the engine made it, for reading an iterable a
      * page hands over (url.c). */
     DValue *iterator_symbol;
+    /* DOMImplementation (implementation.c): its prototype, and how many
+     * documents of their own it has made, none of which has a window. */
+    DValue *implementation_prototype;
+    size_t documents;
 };
 typedef struct { char *data; size_t length; } DString;
 
@@ -292,7 +310,7 @@ enum {
     D_FIRST_ELEMENT, D_LAST_ELEMENT, D_PREV_ELEMENT, D_NEXT_ELEMENT,
     D_CHILD_ELEMENT_COUNT, D_PARENT_ELEMENT, D_TYPE, D_NAME, D_TAG, D_DOCUMENT_ELEMENT, D_HEAD, D_BODY,
     D_TEXT_CONTENT, D_NODE_VALUE, D_DATA, D_INNER_HTML, D_OUTER_HTML,
-    D_ID, D_CLASS, D_VALUE, D_CHECKED, D_SELECTED_INDEX
+    D_ID, D_CLASS, D_VALUE, D_CHECKED, D_SELECTED_INDEX, D_CONTROL_TYPE
 };
 enum {
     D_APPEND, D_INSERT, D_REMOVE, D_REPLACE, D_CLONE, D_GET_ID, D_GET_TAG,
@@ -329,6 +347,28 @@ int d_url_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_encoding_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_screen_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_base64_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_implementation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* DOCUMENTS OF THEIR OWN (implementation.c). document.implementation and
+ * DOMImplementation's prototype, which every page has (classic), and the
+ * DocumentType members. */
+int d_implementation_classic(os64_dom_t *dom, JSContext *ctx);
+/* A node's node document: a document itself; else the document its tree
+ * hangs from; else, for a tree no document holds, the one it was made in
+ * or last left (its root's record), the window's when there is none. */
+const os64_html_node_t *d_node_document(os64_dom_t *dom, const os64_html_node_t *node);
+/* Whether a node's node document is the window's: only such a node may
+ * navigate, submit, take focus, run a script, compile a handler or read
+ * the page's cookies. */
+bool d_window_document(os64_dom_t *dom, const os64_html_node_t *node);
+/* A verb is about to take `node` out of its tree: its record says which
+ * document it leaves, for when it is a root. */
+void d_leaving(os64_dom_t *dom, const os64_html_node_t *node);
+/* A node made for, or copied from a node of, `document`: its record says
+ * so, the window's leaving none. */
+void d_made_in(os64_dom_t *dom, const os64_html_node_t *node, const os64_html_node_t *document);
+/* The kind of document `node` is (D_DOCUMENT_*); a node that is no
+ * document is the window's kind. */
+int d_document_type(os64_dom_t *dom, const os64_html_node_t *node);
 /* An interface object for a prototype a row made (WebIDL § 3.7): its
  * `prototype` and the prototype's `constructor` and Symbol.toStringTag
  * (`name`). `constructor` makes an instance, given new.target, and refuses

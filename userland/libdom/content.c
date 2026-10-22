@@ -141,9 +141,16 @@ JSValue d_content_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *n
     return result;
 }
 
+/* Every child is taken out, so each records first the document it leaves,
+ * the parent's, as d_remove's node does. */
 int64_t d_replace_content(os64_dom_t *dom, os64_html_node_t *parent,
                            os64_html_node_t *replacement)
 {
+    if (dom->documents != 0) {
+        const os64_html_node_t *document = d_node_document(dom, parent);
+        for (const os64_html_node_t *child = parent->first_child; child != NULL; child = child->next)
+            d_made_in(dom, child, document);
+    }
     return os64_page_node_replace_children(dom->state, parent, replacement);
 }
 

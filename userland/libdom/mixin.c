@@ -104,8 +104,10 @@ static int change(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self,
         magic == D_REPLACE_CHILDREN ? self : self->parent;
     if (parent == NULL) return 0;
     if (magic == D_REPLACE_CHILDREN) {
-        /* A document keeps its <html> element (libhtml's rule; LIBDOM.md
-         * § The classic methods), so replacing its children is refused
+        /* A document's children are not replaced: the window's keeps its
+         * <html> element (libhtml's rule; LIBDOM.md § The classic methods),
+         * and libpage's children verb takes an element or a fragment, so a
+         * document of its own (implementation.c) is refused the same way,
          * before anything moves. */
         if (parent->kind == OS64_HTML_DOCUMENT) { d_html_error(ctx, OS64_HTML_ROOT_REQUIRED); return -1; }
         /* The replacement must be nowhere yet, so a lone node still in a
@@ -929,7 +931,7 @@ JSValue d_dataset(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 /* ── Installation ─────────────────────────────────────────────────────── */
 
 #define PARENTS ((1u << D_PROTO_DOCUMENT) | (1u << D_PROTO_ELEMENT) | (1u << D_PROTO_FRAGMENT))
-#define CHILDREN ((1u << D_PROTO_ELEMENT) | (1u << D_PROTO_CHARACTER_DATA))
+#define CHILDREN ((1u << D_PROTO_ELEMENT) | (1u << D_PROTO_CHARACTER_DATA) | (1u << D_PROTO_DOCTYPE))
 #define ELEMENTS (1u << D_PROTO_ELEMENT)
 
 int d_mixin_install(os64_dom_t *dom, JSContext *ctx)

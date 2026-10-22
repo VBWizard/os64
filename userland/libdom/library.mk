@@ -6,6 +6,8 @@ LIBDOM_SRCS := libdom/core.c libdom/node.c libdom/collection.c libdom/content.c 
 # The Modern Web's slice 1a: storage, performance, URL, encoding, screen, base64.
 LIBDOM_SRCS += libdom/storage.c libdom/performance.c libdom/url.c libdom/encoding.c libdom/screen.c \
     libdom/base64.c
+# Slice 0c: DOMImplementation and the documents it makes.
+LIBDOM_SRCS += libdom/implementation.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))
 LIBDOM_SO := $(BIN)/libdom.so
 LIBDOM_BASE = $(patsubst libdom.so=%,%,$(filter libdom.so=%,$(LIB_BASE_PAIRS)))

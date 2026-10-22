@@ -58,12 +58,13 @@ Element's. The supported properties and methods are placed on those chains:
 
 | Kind | Surface beyond Node |
 | --- | --- |
-| Document | documentElement/head/body, child-element access, ID/tag/class/name/selector queries, creation |
+| Document | documentElement/head/body, doctype, implementation, child-element access, ID/tag/class/name/selector queries, creation |
 | Element | tagName, id/className, innerHTML/outerHTML, attributes, tag/class/selector queries, child-element access and element siblings, § The classic methods |
 | Text and Comment (CharacterData) | data and element siblings |
+| DocumentType | name, publicId, systemId |
 | DocumentFragment | child-element access, ID and selector queries |
-| HTML input/textarea/select/button | value |
-| HTML input | checked (native control-state operations support checkbox/radio) |
+| HTML input/textarea/select/button | value, type (an input's state keyword, else "text"; a button's "submit", "reset" or "button"; "select-one" or "select-multiple"; "textarea") |
+| HTML input | checked (every input's checkedness, which only a checkbox and a radio show and send) |
 | HTML select | selectedIndex |
 
 Node supplies tree navigation, ownerDocument, childNodes, nodeType/nodeName,
@@ -114,7 +115,7 @@ standard's steps over the verbs appendChild already uses, so a script these
 connect runs and a moved control keeps its form:
 
 - **ParentNode** (document, element, fragment): `append`, `prepend`,
-  `replaceChildren`. **ChildNode** (element, text, comment): `before`,
+  `replaceChildren`. **ChildNode** (element, text, comment, doctype): `before`,
   `after`, `replaceWith`, `remove`. Arguments are nodes or strings (a string
   is a Text node), and several are gathered into a fragment first, as the
   standard does, so a refused insertion leaves them in that fragment. Every
@@ -123,8 +124,10 @@ connect runs and a moved control keeps its form:
   (`os64_html_may_insert`) before it is moved anywhere.
   A document keeps its `<html>` element (libhtml's rule, which every reader
   of the tree relies on), so `document.replaceChildren(...)` is refused as
-  `document.removeChild(document.documentElement)` always was; on an
-  element or a fragment, where pages call it, it is the standard's.
+  `document.removeChild(document.documentElement)` always was, and a
+  document of its own's is refused the same way (libpage's children verb
+  takes an element or a fragment); on an element or a fragment, where pages
+  call it, it is the standard's.
 - `contains`, `isConnected`; `matches` and `closest` (the selectors
   `querySelector` uses); `getElementsByClassName` (live; a quirks document
   compares classes without regard to ASCII case) and `getElementsByName`.
@@ -399,13 +402,65 @@ it acts only on a parser `open()` made, and none is ever made. Which writes
 have an insertion point is the host's rule, not this library's (yonder's is
 DOM_D9.md's: only the script the parse is stopped at, while it runs).
 
+## Documents of their own
+
+`document.implementation` (`implementation.c`; DOM § 4.5.1) is on every
+page, the switch off included: it is in every browser that ever ran
+jQuery, whose `parseHTML` builds its nodes in a document of its own so
+that the markup runs nothing and fetches nothing until it is put in the
+page. One DOMImplementation per document, made when first asked for.
+`createHTMLDocument(title)` makes `<!DOCTYPE html><html><head><title>
+title</title></head><body></body></html>`, the title element and its text
+only when a title is given; `createDocument(namespace, qualifiedName,
+doctype)` an XML document holding the doctype and then the element
+createElementNS would make, either absent when not asked for;
+`createDocumentType` a doctype; `hasFeature()` answers true, as it is
+specified to. The `DOMImplementation` interface object is a Modern Web
+row.
+
+**A new document lives in the page's arena** (libhtml's
+`os64_html_create_document`): a second DOCUMENT node there, under the DOM
+Standard's rules for a document's children and none of the window's own
+(its element may be anything and may go). Its nodes are the page's nodes
+to every verb, hold and wrapper, so one appended to the page is MOVED and
+keeps its identity, wrapper, expandos and listeners: that is what
+adoption does here. It is freed with the page and charged to its caps, as
+a fragment is.
+
+**Which document a node belongs to** is the document its tree hangs from;
+a tree that hangs from none remembers the document it was made in, copied
+from, or last taken out of, on its root's wrapper (`DValue.document`,
+written by `d_made_in` and `d_leaving`). A root with no wrapper (a child
+innerHTML replaced, never handed to a script) says nothing and reads as
+the window's: a script reaches it only through a descendant it held
+before. While no document of its own exists, every node is the window's
+and none of this runs.
+
+**It has no window.** Its `location` is null and assigning to it throws;
+it is cookie-averse; `write`, `writeln` and `open` throw
+InvalidStateError, since writing would open it; a link in it navigates
+nowhere, a form in it submits nothing (not even the event), and focus,
+blur and reset there reach no host. A script connected to it is marked
+started and runs nowhere, then or after it moves into the page, as a
+script innerHTML parses is; a handler attribute in it is not compiled and
+reads null until its element is the window's.
+
+**An XML document** keeps an element name's case, and its createElement
+makes HTML elements when it was made for the HTML namespace and refuses
+otherwise. libhtml's tree holds elements of the HTML, SVG and MathML
+namespaces only, so an element in no namespace, or another, is a
+NotSupportedError, from `createDocument` and from such a document's
+`createElement`; `createElementNS` is not built.
+
 ## Proof boundary
 
 `tools/test_dom_host.sh` tests the actual target engine core and a separately
 ASan-instrumented target-profile engine, with sanitized bindings/tree/state.
 `tools/test_dom_events.inc` holds a case per rule of § Events, § Timers,
 § Asks, § Script elements and § `document.write`, and
-`tools/test_dom_mutants.py --events` a mutant per rule. `domtest` exercises
+`tools/test_dom_mutants.py --events` a mutant per rule;
+`tools/test_dom_implementation.inc` holds a case per rule of § Documents of
+their own, and runs jQuery 3.5.1 and 1.12.4 whole. `domtest` exercises
 the shared-library boundary and heap in ring 3. These are library proofs; yonder's loop is proven with its own
 harness. Result counts are recorded in DOM.md after the final source freeze.
 
@@ -505,7 +560,7 @@ not read back (DEBTS.md § Classic browser scripting).
 
 The first row is the interface objects (`classic.c`'s
 `d_interfaces_install`): `Node`, `CharacterData`, `DocumentFragment`,
-`Document`, `Element`, `HTMLElement` and the HTML element interfaces that
+`Document`, `DocumentType`, `Element`, `HTMLElement` and the HTML element interfaces that
 have a prototype of their own, each named for exactly one of the binding's
 prototypes (WebIDL § 3.7), so `instanceof` answers truly and a page may
 patch `Element.prototype`. Each interface object inherits its parent's
