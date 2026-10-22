@@ -3102,7 +3102,7 @@ static void loop_view_media(void) {
         "media: a resize fires resize, then the list's change");
     loop_drop();
 }
-/* The three routes and their events (MODERN_WEB_REVIEW.md, finding 11). */
+/* The three routes and their events (MODERN_WEB_BRIEFS.md § Slice 1b). */
 static void loop_view_history(void) {
     loop_page("<p id=out>-</p><script>var log=[];"
         "function o(){document.getElementById('out').textContent=log.join(',')}"
@@ -3180,6 +3180,55 @@ static void loop_view_history(void) {
         "history: and they join the session when it is shown, the one ahead with its state");
     loop_drop();
 }
+/* Short of memory at any allocation of a state update, a replacement, a
+ * fragment navigation and a traversal, the session and the page still
+ * agree: history.length counts the entries the window keeps and
+ * location.href is the address the window shows. (The harness's last
+ * check counts what a cut leaked.) */
+static void loop_view_history_short(void) {
+    static const char page[]="<style>body{margin:0}p{height:20px;margin:0}</style>"
+        "<p id=a onclick=\"history.pushState({n:1},'','/one');history.replaceState({n:2},'','#r');"
+        "location.hash='h';history.back()\">a</p>"
+        "<p id=c onclick=\"document.getElementById('out').textContent=history.length+'|'+location.href\">c</p>"
+        "<p id=out>-</p><script>var ready=1</script>";
+    size_t count=0;
+    unsigned asked=0, retired=0, moved=0;
+    for(size_t cut=0;cut==0 || cut<=count;cut++) {
+        loop_page(page);
+        if(!loop_settle() || g.page.tree==NULL) { check(false,"history short: the page arrives"); loop_drop(); return; }
+        size_t start=attempts;
+        if(cut) fail_at=attempts+cut;
+        input_click_at("a");
+        view_turns();
+        if(!cut) check(g.way.depth==1 && g.way.ahead==1 && os64_streq(g.page.way.url,"http://fixture.test/one#r"),
+                       "history short: the baseline lands one back from the fragment");
+        moved+=g.way.depth>0;
+        click_back(NULL,NULL);            // a person's traversal, under the same cut
+        view_turns();
+        fail_at=0;
+        if(!cut) count=attempts-start;
+        if(!cut) check(g.way.depth==0 && os64_streq(g.page.way.url,"http://fixture.test/final"),
+                       "history short: and Back to where the page arrived");
+        view_turns();
+        // A cut the engine took retires the page's scripts (scripts.h):
+        // there is no page left to ask.
+        if(!yonder_scripts_alive(g.page.scripts)) { retired++; loop_drop(); continue; }
+        input_click_at("c");
+        view_turns();
+        char want[OS64_FETCH_URL_MAX+32];
+        os64_snprintf(want,sizeof(want),"%d|%s",(int)(g.way.depth+1+g.way.ahead),g.page.way.url);
+        bool agree=probe_text_is("out",want);
+        asked++;
+        if(!agree) {
+            os64_html_node_t *o=probe_id("out");
+            fprintf(stderr,"history short: cut %zu: page says %s, window %s\n",cut,
+                    o && o->first_child ? o->first_child->text : "?",want);
+        }
+        check(agree,"history short: the page and the window agree on the entries and the address");
+        loop_drop();
+    }
+    check(count>0 && moved>0 && asked>retired,"history short: the sweep reaches the session's allocations");
+}
 /* With the switch off the names are absent, and the window's own history
  * (a fragment link's entry) is the window's whatever the switch says. */
 static void loop_view_off(void) {
@@ -3205,6 +3254,7 @@ static void loop_view_cases(void) {
     loop_view_scroll();
     loop_view_media();
     loop_view_history();
+    loop_view_history_short();
     loop_view_off();
 }
 static void loop_cases(void) {

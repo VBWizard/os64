@@ -781,10 +781,14 @@ void yonder_scripts_set_url(yonder_scripts_t *s, const char *url)
 
 bool yonder_scripts_history_moved(yonder_scripts_t *s, const char *url, const char *state, size_t length)
 {
-    if (s == NULL || url == NULL)
+    if (url == NULL)
+        return false;
+    if (s == NULL)
+        return true;
+    if (s->dom != NULL && !s->dead && !os64_dom_history_moved(s->dom, url, state, length))
         return false;
     os64_strcopy(s->url, sizeof(s->url), url);
-    return s->dom == NULL || s->dead || os64_dom_history_moved(s->dom, url, state, length);
+    return true;
 }
 
 bool yonder_scripts_history_event(yonder_scripts_t *s, bool hashchange, const char *old_url,

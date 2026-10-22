@@ -7137,7 +7137,8 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
         // for the page on screen the scroll; one not yet shown scrolls when
         // it arrives. The binding asked for it here only when it did not
         // make it itself (dom.h § HISTORY): its page's events are owed all
-        // the same, and are heard when the arc's surface is on.
+        // the same, and are heard when the arc's surface is on. With no
+        // memory for the entry it is the scroll alone.
         if (here != NULL && ask->url[n] == '#' && n == before_fragment(here) &&
             os64_memcmp(ask->url, here, n) == 0) {
             bool replace = ask->kind == OS64_DOM_NAVIGATE_REPLACE || os64_strcmp(ask->url, here) == 0;
@@ -7345,12 +7346,13 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
 // carrying its state, and moving between two of one document's is no
 // fetch. A page not yet shown keeps the entries its scripts make itself,
 // and arriving moves them in (arrive_now). Three ways an entry changes,
-// three event rules (Quinn's finding 11, MODERN_WEB_REVIEW.md): a STATE
-// UPDATE (pushState, replaceState) moves the address and fires nothing; a
-// FRAGMENT NAVIGATION adds an entry, scrolls, and owes popstate then
-// hashchange; a TRAVERSAL to an entry of this document fetches nothing,
-// owes popstate and then hashchange when the fragment moved, and puts the
-// scroll back where it was unless the page keeps its own.
+// three event rules (MODERN_WEB_BRIEFS.md § Slice 1b): a STATE UPDATE
+// (pushState, replaceState) moves the address and fires nothing; a
+// FRAGMENT NAVIGATION adds an entry (replaces the current one when the
+// address is the same), scrolls, and owes popstate, then hashchange when
+// the fragment moved; a TRAVERSAL to an entry of this document fetches
+// nothing, owes the same two, and puts the scroll back where it was unless
+// the page keeps its own.
 
 // The page whose document `doc` is: on screen, held by stream_finish,
 // waiting for its sheets, or arriving. NULL for none.
@@ -7435,7 +7437,8 @@ static void page_event_owe(Page *p, bool hashchange, const char *old_url)
 {
     // A page with no scripts has nothing that could hear it, and one owed
     // more than it can hold has its newest let go: a script that traverses
-    // in a loop is owed its events in order, not all of them.
+    // in a loop is owed its events in order, not all of them. A hashchange
+    // with no memory for its old address is let go the same way.
     if (page_scripts(p) == NULL || p->nevents == PAGE_EVENTS_MAX)
         return;
     char *old = hashchange ? copy_text(old_url) : NULL;
@@ -7477,24 +7480,33 @@ static void page_address_moved(Page *p)
         page_rebase(p);
 }
 
-// `crumb` (its state taken) onto a page's own stack, the oldest let go
-// past the session's cap, as the session lets it go. False on no memory,
-// with nothing taken.
-static bool page_stack_push(way_crumb_t **stack, int32_t *n, way_crumb_t *crumb)
+// Room on a page's own stack of `n` crumbs for `more` pushes (the session's
+// cap counted: a push there lets the oldest go), so the pushes cannot
+// fail. False on no memory, with the stack as it was.
+static bool page_stack_room(way_crumb_t **stack, int32_t n, int32_t more)
+{
+    int32_t want = n + more < WAY_HISTORY_MAX ? n + more : WAY_HISTORY_MAX;
+    if (want <= n)
+        return true;
+    way_crumb_t *grown = os64_realloc(*stack, (size_t)want * sizeof(**stack));
+    if (grown == NULL)
+        return false;
+    *stack = grown;
+    return true;
+}
+
+// `crumb` (its state taken) onto a page's own stack that page_stack_room
+// made room on, the oldest let go past the session's cap, as the session
+// lets it go.
+static void page_stack_push(way_crumb_t *stack, int32_t *n, way_crumb_t *crumb)
 {
     if (*n == WAY_HISTORY_MAX) {
-        os64_free((*stack)[0].state);
-        os64_memmove(*stack, *stack + 1, (size_t)(*n - 1) * sizeof(**stack));
+        os64_free(stack[0].state);
+        os64_memmove(stack, stack + 1, (size_t)(*n - 1) * sizeof(*stack));
         (*n)--;
-    } else {
-        way_crumb_t *grown = os64_realloc(*stack, (size_t)(*n + 1) * sizeof(**stack));
-        if (grown == NULL)
-            return false;
-        *stack = grown;
     }
-    (*stack)[(*n)++] = *crumb;
+    stack[(*n)++] = *crumb;
     crumb->state = NULL;
-    return true;
 }
 
 static void page_stack_clear(way_crumb_t *stack, int32_t *n)
@@ -7523,8 +7535,11 @@ static way_crumb_t page_entry_left(Page *p)
 
 // A STATE UPDATE: the page's address `url` and its state a copy of
 // `state` (NULL for none), the entry that was current kept behind it when
-// `push`. Nothing is owed. False on no memory, with nothing changed.
-static bool page_update(Page *p, const char *url, const char *state, size_t length, bool push)
+// `push`; told to the page's binding when `tell` (the binding did not make
+// the move itself), after everything that could fail on the window's side
+// and before any of it changes, so the two agree. Nothing is owed. False
+// on no memory, with nothing changed on either side.
+static bool page_update(Page *p, const char *url, const char *state, size_t length, bool push, bool tell)
 {
     size_t cap;
     char *address = page_address(p, &cap);
@@ -7538,16 +7553,18 @@ static bool page_update(Page *p, const char *url, const char *state, size_t leng
         os64_memcpy(kept, state, length);
         kept[length] = '\0';
     }
+    if ((push && p != &g.page && !page_stack_room(&p->back, p->nback, 1)) ||
+        (tell && !yonder_scripts_history_moved(page_scripts(p), url, state, length))) {
+        os64_free(kept);
+        return false;
+    }
     if (push) {
         way_crumb_t left = page_entry_left(p);
         if (p == &g.page) {
             way_remember_entry(&g.way, &left);
-        } else if (page_stack_push(&p->back, &p->nback, &left)) {
-            page_stack_clear(p->ahead, &p->nahead);
         } else {
-            p->entry_state = left.state;
-            os64_free(kept);
-            return false;
+            page_stack_push(p->back, &p->nback, &left);
+            page_stack_clear(p->ahead, &p->nahead);
         }
     }
     os64_free(p->entry_state);
@@ -7561,15 +7578,14 @@ static bool page_update(Page *p, const char *url, const char *state, size_t leng
 // one replaced when `replace`) with no state, popstate owed, and
 // hashchange from where it was when the fragment moved; `tell` when the
 // page's binding has not made the move itself. The scroll is the caller's.
+// False on no memory, with nothing changed (page_update).
 static bool page_fragment(Page *p, const char *url, bool replace, bool tell)
 {
     size_t cap;
     char old[OS64_FETCH_URL_MAX];
     os64_strcopy(old, sizeof(old), page_address(p, &cap));
-    if (!page_update(p, url, NULL, 0, !replace))
+    if (!page_update(p, url, NULL, 0, !replace, tell))
         return false;
-    if (tell)
-        (void)yonder_scripts_history_moved(page_scripts(p), url, NULL, 0);
     page_event_owe(p, false, NULL);
     if (fragments_differ(old, url))
         page_event_owe(p, true, old);
@@ -7597,7 +7613,9 @@ static void fragment_scroll(const os64_html_node_t *target, const char *name)
 // forward, when every entry it crosses is this document's: no fetch; the
 // address and the state the entry's; popstate owed, and hashchange when
 // the fragment moved; the scroll put back where it was unless the page
-// keeps its own. False, with nothing changed, when they are not all its.
+// keeps its own. False, with nothing changed, when they are not all its;
+// true, with nothing changed but the status line, when the page's binding
+// had no memory to move.
 static bool session_traverse(int32_t delta)
 {
     bool back = delta < 0;
@@ -7609,6 +7627,15 @@ static bool session_traverse(int32_t delta)
     for (int32_t k = 1; k <= n; k++)
         if (stack[count - k].document != g.page.document)
             return false;
+    // The binding hears the entry first, as the one step that can fail:
+    // a window that moved without it would show one address while the
+    // page's scripts read another.
+    const way_crumb_t *target = &stack[count - n];
+    if (!yonder_scripts_history_moved(g.page.scripts, target->url, target->state,
+                                      target->state != NULL ? os64_strlen(target->state) : 0)) {
+        status_rest("Out of memory moving this page to that entry; it is where it was.");
+        return true;
+    }
     char old[OS64_FETCH_URL_MAX];
     os64_strcopy(old, sizeof(old), g.page.way.url);
     way_position_t at;
@@ -7623,9 +7650,6 @@ static bool session_traverse(int32_t delta)
         at = arrived.position;
     }
     page_address_moved(&g.page);
-    const char *state = g.page.entry_state;
-    (void)yonder_scripts_history_moved(g.page.scripts, g.page.way.url, state,
-                                       state != NULL ? os64_strlen(state) : 0);
     page_event_owe(&g.page, false, NULL);
     if (fragments_differ(old, g.page.way.url))
         page_event_owe(&g.page, true, old);
@@ -7638,7 +7662,9 @@ static bool session_traverse(int32_t delta)
     return true;
 }
 
-// The same for a page not yet shown, within the entries its scripts made.
+// The same for a page not yet shown, within the entries its scripts made:
+// false when they do not reach `delta` away, and true, with nothing
+// changed, when there was no memory to move.
 static bool page_traverse(Page *p, int32_t delta)
 {
     bool back = delta < 0;
@@ -7647,23 +7673,25 @@ static bool page_traverse(Page *p, int32_t delta)
     int32_t *nfrom = back ? &p->nback : &p->nahead, *nto = back ? &p->nahead : &p->nback;
     if (n == 0 || n > *nfrom)
         return false;
+    // Everything that can fail before anything moves, the binding last
+    // (session_traverse says why).
+    const way_crumb_t *target = &(*from)[*nfrom - n];
+    if (!page_stack_room(to, *nto, n) ||
+        !yonder_scripts_history_moved(page_scripts(p), target->url, target->state,
+                                      target->state != NULL ? os64_strlen(target->state) : 0))
+        return true;
     size_t cap;
     char *address = page_address(p, &cap);
     char old[OS64_FETCH_URL_MAX];
     os64_strcopy(old, sizeof(old), address);
     for (int32_t k = 0; k < n; k++) {
         way_crumb_t left = page_entry_left(p);
-        if (!page_stack_push(to, nto, &left)) {
-            p->entry_state = left.state;        // no memory: it stops where it got to
-            break;
-        }
+        page_stack_push(*to, nto, &left);
         way_crumb_t arrived = (*from)[--*nfrom];
         os64_strcopy(address, cap, arrived.url);
         p->entry_state = arrived.state;
     }
     page_address_moved(p);
-    const char *state = p->entry_state;
-    (void)yonder_scripts_history_moved(page_scripts(p), address, state, state != NULL ? os64_strlen(state) : 0);
     page_event_owe(p, false, NULL);
     if (fragments_differ(old, address))
         page_event_owe(p, true, old);
@@ -7746,7 +7774,7 @@ static bool page_event_run(Page *p, bool shown)
 static bool history_update(void *opaque, const char *url, const char *state, size_t length, bool push)
 {
     Page *p = page_of_doc(opaque);
-    return p != NULL && page_update(p, url, state, length, push);
+    return p != NULL && page_update(p, url, state, length, push, false);
 }
 
 static bool history_fragment(void *opaque, const char *url, bool replace)
@@ -10268,9 +10296,11 @@ static void follow_link_asked(int32_t link, way_ask_t ask)
     os64_page_request_t request;
     os64_page_verdict_t verdict = os64_page_activate(page_model(&g.page), what, &request);
     // A place in this page is a fragment navigation (MODERN_WEB.md § Slice
-    // 1b): an entry, the scroll, and the page's popstate and hashchange. A
+    // 1b): an entry, the scroll, and the page's popstate, then hashchange
+    // when the fragment moved. A
     // name nothing in the page claims is one too, scrolling nowhere: a
-    // router that hears hashchange is what such a link is for.
+    // router that hears hashchange is what such a link is for. With no
+    // memory for the entry it is the scroll alone, the address unmoved.
     bool unclaimed = verdict == OS64_PAGE_NOTHING && request.reason == OS64_PAGE_REASON_NO_ANCHOR &&
                      request.has_fragment && request.fragment != NULL;
     if (verdict == OS64_PAGE_FRAGMENT || unclaimed) {
