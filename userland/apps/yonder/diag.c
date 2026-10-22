@@ -744,10 +744,13 @@ static bool diag_contains(const char *text, const char *needle)
 // tally names it as damage), so a name claimed and never written (a yonder
 // that died, a write that failed) is never read as a page that met
 // nothing. The real record replaces it, and proves the name its own by
-// the nonce (claim_ours), so A PLACEHOLDER THAT IS NOT WHOLE IS NO CLAIM:
-// with no memory for its text, or a write or a close that failed, the
-// file is removed and the name passed over. False when something is
-// there, or it could not be made whole.
+// the nonce (claim_ours), so A PLACEHOLDER NOT KNOWN TO BE WHOLE IS NO
+// CLAIM: with no memory for its text, or a write or a close that failed,
+// it is not known to be whole on disk, so the name is not known to be
+// this claim's. The file is removed and the name passed over; one the
+// unlink cannot remove is left as a file no reader takes for a page (a
+// placeholder, or less than one). False when something is there, or it
+// could not be made whole.
 static bool claim_file(const yonder_diag_t *d, const char *path)
 {
     int64_t h = os64_open(path, "x");

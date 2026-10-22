@@ -22,7 +22,13 @@ document's lesson, written into MODERN_WEB_BRIEFS.md.*
    agree (a `replay:` record vector is the Python reader's alone, the one
    reader of a replay's record); a reader that classifies a line the vectors do not
    cover is extended by adding the vector first. Reconciliation (counts
-   adding up) never rescues a line the grammar refuses.
+   adding up) never rescues a line the grammar refuses. Both readers
+   refuse the same records and lines; which rule a reader NAMES for one
+   that breaks more than one is that reader's order (the Python reader
+   holds a record to its `end` before reading its lines, the C reader
+   stops at its first bad line), so a vector states a reason only where
+   every reader that runs it gives that reason, and a vector that states
+   one breaks that rule alone.
 2. **A replay has a stated input list, and takes every input from the
    record or the kept files, never from the harness, except the three
    it says it fakes.** The list is § 3. A kept record missing a required
@@ -36,10 +42,16 @@ document's lesson, written into MODERN_WEB_BRIEFS.md.*
    process.
 4. **A check without a mutant is not a check.** Every refusal and every
    requirement in this document has a case in the suite AND a hand mutant
-   that removes the check and must fail that case; the mutant list is
-   part of the suite (`tools/test_yonder_replay_mutants.py`), not a
-   reviewer's afterthought. Five cold reads found cases that passed with
-   their fix deleted; this is why.
+   that removes the check and must fail that case; the mutant lists are
+   part of the suite, not a reviewer's afterthought, and there are two:
+   `tools/test_yonder_replay_mutants.py` holds the readers', the
+   runner's and the diff's, and those of yonder's writing rules that
+   reach the replay (the claim's proof by its nonce, the inputs on the
+   record, the window-change marks), and
+   `tools/test_yonder_diag_mutants.py` holds the rest of yonder's own
+   (the page file, the badge, a placeholder that is not whole). Five
+   cold reads found cases that passed with their fix deleted; this is
+   why.
 5. **Older kept pages stay readable.** A format moves only by adding; a
    reader names the version it read and the defaults it took for what
    that version lacks, in the replay record, so a diff never compares a
@@ -59,9 +71,12 @@ The claim (`yonder_diag_claim`) is the only way any of these names is
 written: `<name>.txt` is created exclusively (os64's `"x"` open) holding
 `verdict: unwritten <nonce>`, and `.html` and `.d` must not exist by that
 name, with `keep_pages` on or off; a name that cannot be claimed is
-passed over, and a placeholder that could not be written whole (no
-memory for it, a write or close that failed) is no claim: the file is
-removed and the name passed over. After 64 names nothing is written.
+passed over, and a placeholder not known to be whole on disk (no
+memory for it, a write or close that failed) is no claim, since its
+name is not known to be this claim's: the file is removed, or, when the
+unlink cannot remove it, left as a file no reader takes for a page (a
+placeholder, or less than one), and the name is passed over. After 64
+names nothing is written.
 The nonce is a random
 64-bit value of the claim's (`/dev/random`; where that cannot be read,
 the clock, the sequence and the record's address mixed), in sixteen hex
@@ -168,8 +183,9 @@ it lost lines.
   address, the verdict or state, `end`, each key of the head set, and
   each `REPLAY` line other than `incomplete`/`unfinished`/`unjudged`
   (`inputs stated`, `inputs defaulted`, `kept: assumed whole`, `budget`,
-  `not reproduced`) appears once or not at all; a second occurrence is
-  not a record, and the reader names it (``a second `kept:` ``). Tokens
+  `not reproduced`) appears once or not at all, and so does an index's
+  version line (§ 4); a second occurrence is not a record, or not an
+  index, and the reader names it (``a second `kept:` ``). Tokens
   (`MISSING`/`FAILED`) and plain facts may repeat, and so may `REPLAY
   unjudged:`, which yonder writes once for lost lines and once for a
   setting changed during the load, both on one record. A second
@@ -210,15 +226,20 @@ the rows that say so are the whole of what a replay fakes.
 | the screen | the harness | — | stated: `screen`, once built, answers the harness's size |
 
 **A kept file is bound to its record by what the record says of it, and
-nothing else**: the page's bytes by their length, the index by its line
-count, and each product by its index line's number, kind, address and
-job identity. The corpus is the person's own, written by one yonder
-under the claim's exclusive open and copied whole, so a file of the
-right length under the right name is that page's bytes. Bytes of the
-same length swapped under a record would replay as the page; binding
-them by content (a digest in both readers) is declined, and the row
-"Kept bytes bound to their record by length" in the tree's DECLINED.md
-says why and what would reopen it.
+nothing else** (version 2; version 1 by what it says, § 3's versions
+and § 4): the page's bytes by their length, the index by its line
+count, and each product by its index line alone (number, kind, address,
+job identity), with no size at all. The corpus is the person's own,
+written by one yonder under the claim's exclusive open and copied whole,
+so a file under the right name, of the right length where a length is
+said, is that page's. Bytes of the same length swapped under a record
+would replay as the page, and a stale product of ANY length under a
+number this page's index uses would replay as the page's (a copy
+interrupted inside `.d/`; on the machine that kept it, the claim's rule
+that `.d` must not exist yet is what rules that out). Binding them by
+content (a digest in both readers) is declined, and the row "Kept bytes
+bound to their record by length" in the tree's DECLINED.md says why and
+what would reopen it.
 
 **Privacy, said plainly:** a kept page already holds the bytes of a
 logged-in page; with `cookies:` it also holds the tokens the page could
@@ -287,7 +308,9 @@ damage.
 ```
 index    := version (comment | line)*
 version  := "# yonder kept index " count
-comment  := "#" text
+comment  := "#" text      -- never beginning "# yonder kept index ": a line
+                           -- spelled so is the version line or damage, so a
+                           -- second version line is never read as a comment
 line     := count TAB kind TAB fields
 fields   := (script | sheet)   -- v2: address TAB came|failed TAB final TAB label TAB identity
                                -- v1: the same without identity
@@ -363,16 +386,19 @@ none rather than the old one, and one it cannot remove refuses the run.
 - The runner self-test: one page per rule in § 2-6, each with the cut or
   the damage that ONLY that rule can catch (a case that another rule
   catches first proves nothing).
-- **The mutants**: `tools/test_yonder_replay_mutants.py` applies one hand
-  mutant per rule in § 1-7, every rule, not a sample (rule 4: the
+- **The mutants**: the two harnesses rule 4 names apply one hand mutant
+  per rule in § 1-7 between them (`tools/test_yonder_diag_mutants.py`
+  yonder's own, among them § 1's placeholder that is not whole;
+  `tools/test_yonder_replay_mutants.py` the rest), every rule, not a sample (rule 4: the
   required-fact table minus each entry; each input not applied; the
   identity compare, the numbering check, each-line-one-job, each refusal
   of the readers, the version checks, the end rule, the claim's proof,
   the window-change marks, the parent's wait, limit, exit table,
   agreement and temp removal, and the diff's rules) and requires its
-  suite to FAIL on each. It is run by the PR before Codex
-  (`tools/test_yonder_replay_host.sh --mutants`) and listed in the PR body
-  with its count.
+  suite to FAIL on each. Both are run by the PR before Codex (the
+  replay's by `tools/test_yonder_replay_host.sh --mutants`, the
+  diagnostics' through `tools/mutants_parallel.py`) and listed in the PR
+  body with their counts.
 - The diff: pairs by name AND address, and only records that took the
   same inputs from the harness, were run with the same `--window`
   statement and were given the same budget; judges VERDICT pages only; exits 2 on

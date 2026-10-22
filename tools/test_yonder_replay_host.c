@@ -1658,8 +1658,10 @@ static int rp_replay_page(const char *kept, const char *out, const char *name, u
      * record says of them: the bytes the parser was fed, and the lines its
      * index holds (rp_window_of). Kept files that are not those are
      * another page's. Bytes of the same length swapped in under a record
-     * pass; why that is not bound by content is the row "Kept bytes bound
-     * to their record by length" in DECLINED.md. */
+     * pass, and so does a product of any length under a number its index
+     * uses (an index line says no size); why neither is bound by content
+     * is the row "Kept bytes bound to their record by length" in
+     * DECLINED.md. */
     uint32_t said_bytes=0;
     if(r.facts[F_BYTES]==NULL || !rp_decimal(r.facts[F_BYTES],strlen(r.facts[F_BYTES]),&said_bytes) || said_bytes!=len) {
         snprintf(why,sizeof(why),"its record says the page had %s bytes, and its kept bytes are %zu",
@@ -2183,7 +2185,8 @@ typedef enum { RP_COPY, RP_DROP_SCRIPT_LINE, RP_BAD_NUMBER, RP_NO_MEMORY, RP_FUL
                RP_DROP_FACT, RP_SHORT_LINE, RP_CUT_BEFORE_KEPT, RP_BIG_COUNT, RP_ODD_LINE, RP_ESCAPES,
                RP_SWAP_NUMBERS, RP_BIG_LINES, RP_JUNK_BYTES, RP_V1, RP_V3, RP_EMPTY_INDEX, RP_NO_VERSION,
                RP_CR, RP_INDEX_CONTROL, RP_SECOND_ADDRESS, RP_LEADING_ZERO, RP_NOT_UTF8, RP_PAST_END,
-               RP_SECOND_VERDICT, RP_PLACEHOLDER, RP_FEWER_LINES, RP_ESCAPED_NOT_UTF8, RP_SECOND_KEPT } RpEdit;
+               RP_SECOND_VERDICT, RP_PLACEHOLDER, RP_FEWER_LINES, RP_ESCAPED_NOT_UTF8, RP_SECOND_KEPT,
+               RP_SECOND_VERSION } RpEdit;
 /* The fact RP_DROP_FACT takes out of the record. */
 static const char *rp_drop_fact;
 
@@ -2395,6 +2398,14 @@ static unsigned rp_copy_page(const char *kept, const char *name, const char *dir
                 static const char kOdd[]="9\tscr\n";
                 text=realloc(text,len+sizeof(kOdd)); memcpy(text+len,kOdd,sizeof(kOdd)); len+=sizeof(kOdd)-1;
             }
+            if(!strcmp(kFiles[f],".d/index") && edit==RP_SECOND_VERSION) {
+                /* The version line again, after the lines: whole, and of
+                 * the index's own version, so only its standing once can
+                 * tell. */
+                char again[48];
+                int n=snprintf(again,sizeof(again),"# yonder kept index %d\n",YONDER_DIAG_INDEX_VERSION);
+                text=realloc(text,len+(size_t)n+1); memcpy(text+len,again,(size_t)n+1); len+=(size_t)n;
+            }
             if(!strcmp(kFiles[f],".d/index") && edit==RP_SHORT_LINE) {
                 static const char kShort[]="9\tscript\thttps://fixture.test/x.js\tcame\n";
                 text=realloc(text,len+sizeof(kShort)); memcpy(text+len,kShort,sizeof(kShort)); len+=sizeof(kShort)-1;
@@ -2457,7 +2468,8 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
      * and one of a version no runner reads, an index that is empty or
      * whose first line is not its version, a carriage return in a fact, a
      * control byte in an index field, a second `address:`, a `kept: not
-     * whole` after the record's `kept: whole` (a second head fact), a plain fact
+     * whole` after the record's `kept: whole` (a second head fact), the
+     * index's version line again after its lines, a plain fact
      * whose bytes are not UTF-8, a line past `end`, a second verdict, the
      * claim's placeholder never replaced, a `kept lines` one short of its
      * index, and an agent escaped to a byte that is no part of UTF-8: none
@@ -2486,6 +2498,7 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
         {"/indexcontrol",RP_INDEX_CONTROL,"its index is damaged: a control byte"},
         {"/secondaddress",RP_SECOND_ADDRESS,"it is not a whole page file: a second `address:`"},
         {"/secondkept",RP_SECOND_KEPT,"it is not a whole page file: a second `kept:`"},
+        {"/secondversion",RP_SECOND_VERSION,"its index is damaged: a second version line"},
         {"/notutf8",RP_NOT_UTF8,"it is not a page file: it is not UTF-8"},
         {"/pastend",RP_PAST_END,"it is not a whole page file: lines past its `end`"},
         {"/secondverdict",RP_SECOND_VERDICT,"it is not a whole page file: a second verdict line"},

@@ -487,9 +487,11 @@ over. The claim writes a random nonce into its placeholder (`verdict:
 unwritten <nonce>`) and every record it writes after (`claim: <nonce>`),
 and the record's write proves the claimed file is still its own, by that
 nonce, before replacing it: one gone, or claimed by another yonder after
-it went, is not written over. So a placeholder that could not be written
-whole (no memory for it, a write or a close that failed) is no claim:
-its file is removed and its number passed over.
+it went, is not written over. A placeholder not known to be whole on
+disk (no memory for it, a write or a close that failed) is therefore no
+claim, since its name is not known to be this claim's: its file is
+removed, or left as a file no reader takes for a page when the unlink
+cannot remove it, and its number passed over.
 
 A step of keeping that fails, or a fresh name whose folder cannot be
 made, ends the keeping of that page,
