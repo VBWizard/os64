@@ -526,9 +526,9 @@ from the 512 the other plain lines may take: `yonder_diag_head_fact`), so
 a page with more plain lines than that never loses one of these; it does
 lose the others, and is unjudged. A replay requires every one of them its
 page needs (a file's page has no status, type, charset or encryption)
-rather than assume any, and every record now ends with the line `end`,
-which a replay requires of a kept page's record and the readers of any
-record that says `kept:` or `REPLAY state:`.
+rather than assume any, and every record ends with the line `end`, which
+a replay requires of a kept page's record and the readers of any record
+that says `kept:`, `kept lines:` or `REPLAY state:`.
 
 **A script's line carries its evaluation time**: `script <address>: ran in
 1520 us`, or `failed in ...`, the time `os64_js_run` took, compiling

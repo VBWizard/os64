@@ -231,12 +231,16 @@ static void rp_record_free(RpRecord *r) {
     memset(r,0,sizeof(*r));
 }
 /* A record's line `MISSING ... (<n>)` or `FAILED ... (<n>)`: it ends in a
- * count. */
+ * count, which is at most UINT32_MAX. */
+static bool rp_digits(const char **s, unsigned *v);
 static bool rp_counted(const char *line, size_t len) {
     if(len<4 || line[len-1]!=')') return false;
     size_t at=len-1;
     while(at>0 && isdigit((unsigned char)line[at-1])) at--;
-    return at<len-1 && at>=2 && line[at-1]=='(' && line[at-2]==' ';
+    if(at>=len-1 || at<2 || line[at-1]!='(' || line[at-2]!=' ') return false;
+    /* The same bound as a verdict's counts: no count past UINT32_MAX. */
+    const char *p=line+at; unsigned v;
+    return rp_digits(&p,&v) && p==line+len-1;
 }
 /* Whether `n` bytes are UTF-8: what tools/yonder_records.py decodes them
  * as, and refuses when they are not. */
@@ -322,7 +326,7 @@ static const char *rp_record_read(const char *text, size_t size, RpRecord *r) {
         else if(line_no==1) {
             if(!rp_verdict(v,&want_missing,&want_failed)) why="it is not a whole page file: its second line is not a verdict";
         } else if(!strncmp(line,"MISSING ",8) || !strncmp(line,"FAILED ",7)) {
-            if(!rp_counted(line,len)) why="it is not a whole page file: a record line with no count";
+            if(!rp_counted(line,len)) why="it is not a whole page file: a record line with no count, or one no record holds";
             else {
                 const char *kind=line+(line[0]=='M' ? 8 : 7);
                 const char *stop=line[0]=='M' ? memchr(kind,' ',(size_t)(line+len-kind)) : strstr(kind,": ");
@@ -379,8 +383,8 @@ typedef RpKnown (*rp_lookup_t)(void *ctx, uint32_t kind, const char *url, RpAnsw
  * second line kept for it. A job past the last has no line of its own: the
  * page asked more often than where it was kept, and an answer made up from
  * an earlier line would run a script or apply a sheet once more than the
- * page did, so it is unknown (incomplete). A kind it does not know is
- * passed over: a later slice's lines answer that slice's requests. */
+ * page did, so it is unknown (incomplete). A line of any other shape is
+ * damage (rp_index_read). */
 typedef struct { uint32_t kind; bool came; char *n, *url, *final, *label; char *bytes; size_t len; unsigned used; } RpEntry;
 typedef struct { char *folder; RpEntry *e; size_t n; unsigned lines; } RpIndex;
 /* An index line's number, which names its file: decimal digits and nothing
@@ -399,10 +403,11 @@ static void rp_index_free(RpIndex *x) {
  * reason in `fault` when the host said it). A page with NO FOLDER fetched
  * nothing it kept, and its index is empty; a folder whose index is not
  * there, cannot be read, names a format this runner does not read, has a
- * line whose number is not one (rp_number), a script's or a sheet's line
- * with fewer than its six fields or that says neither `came` nor `failed`,
- * or names a file that is not there or cannot be read, is a kept page with
- * a piece missing. */
+ * line whose number is not one (rp_number), a line that is not a script's
+ * or a sheet's six fields (the only lines yonder writes: a slice that
+ * keeps another kind teaches this runner it in the same change) or that
+ * says neither `came` nor `failed`, or names a file that is not there or
+ * cannot be read, is a kept page with a piece missing. */
 static const char *rp_index_read(const char *folder, RpIndex *x, RpFault *fault) {
     memset(x,0,sizeof(*x));
     x->folder=strdup(folder);
@@ -430,11 +435,11 @@ static const char *rp_index_read(const char *folder, RpIndex *x, RpFault *fault)
         char *end=strchr(line,'\n'); if(end) *end='\0';
         char *f[6]={0}; int nf=0;
         for(char *p=line; nf<6; ) { f[nf++]=p; char *t=strchr(p,'\t'); if(!t) break; *t='\0'; p=t+1; }
-        x->lines+=line[0]!='#' && line[0]!='\0';
+        x->lines+=line[0]!='#';
         if(line[0]!='#' && !rp_number(f[0]))
             bad="its index is damaged: a line's number is not a decimal number";
-        else if(line[0]!='#' && nf>=2 && nf<6 && (!strcmp(f[1],"script") || !strcmp(f[1],"sheet")))
-            bad="its index is damaged: a script's or a sheet's line is not whole";
+        else if(line[0]!='#' && (nf!=6 || (strcmp(f[1],"script") && strcmp(f[1],"sheet"))))
+            bad="its index is damaged: a line is not a script's or a sheet's whole";
         else if(line[0]!='#' && nf==6 && (!strcmp(f[1],"script") || !strcmp(f[1],"sheet")) &&
                 strcmp(f[3],"came") && strcmp(f[3],"failed"))
             bad="its index is damaged: a line says neither `came` nor `failed`";
@@ -939,18 +944,45 @@ static uint32_t rp_seq(const char *name) {
     return at<n-4 && at>0 && name[at-1]=='-' ? (uint32_t)strtoul(name+at,NULL,10) : 0;
 }
 
+/* `s` as it may reach a terminal, by tools/yonder_records.py's display()
+ * rule: a control character (C0, DEL and C1) re-spelled `\xHH`, a
+ * backslash `\\`, and a byte that is no part of UTF-8 `\xHH` too, so text
+ * a page wrote (an address, a fact the runner quotes, a file's name) can
+ * neither drive the terminal nor pass for the runner's own words. Every
+ * such string the runner prints goes through it. The answer lives until
+ * the eighth call after. */
+static const char *rp_display(const char *s) {
+    static char ring[8][4096]; static unsigned turn;
+    char *out=ring[turn++%8]; size_t o=0;
+    const unsigned char *u=(const unsigned char *)s;
+    for(size_t i=0; u[i] && o+9<sizeof(ring[0]); ) {
+        unsigned c=u[i]; size_t n=c<0x80 ? 1 : c>=0xC2 && c<=0xDF ? 2 : c>=0xE0 && c<=0xEF ? 3 : c>=0xF0 && c<=0xF4 ? 4 : 0;
+        if(n>1 && !rp_utf8(u+i,strnlen((const char *)u+i,n))) n=0;
+        if(n==0) { o+=(size_t)snprintf(out+o,sizeof(ring[0])-o,"\\x%02X",c); i++; continue; }
+        unsigned cp=n==1 ? c : n==2 ? ((c&0x1F)<<6)|(u[i+1]&0x3F) : 0x100;
+        if(cp<0x20 || (cp>=0x7F && cp<0xA0)) o+=(size_t)snprintf(out+o,sizeof(ring[0])-o,"\\x%02X",cp);
+        else if(c=='\\') { out[o++]='\\'; out[o++]='\\'; }
+        else { memcpy(out+o,u+i,n); o+=n; }
+        i+=n;
+    }
+    out[o]='\0';
+    return out;
+}
+
 /* What the page came to, counted and printed on its line: the state, and
  * why or its counts. */
 static void rp_report(const char *name, const RpOutcome *o, bool leaked, RpTally *t) {
     t->states[o->state]++;
     switch(o->state) {
-    case RP_UNJUDGED: printf("%s  unjudged: %s",name,o->why); break;
-    case RP_UNFINISHED: printf("%s  unfinished (%s)%s",name,o->why,rp_incomplete ? ", incomplete" : ""); break;
-    case RP_INCOMPLETE: printf("%s  incomplete (%s)",name,o->why); break;
+    case RP_UNJUDGED: printf("%s  unjudged: %s",rp_display(name),rp_display(o->why)); break;
+    case RP_UNFINISHED:
+        printf("%s  unfinished (%s)%s",rp_display(name),rp_display(o->why),rp_incomplete ? ", incomplete" : "");
+        break;
+    case RP_INCOMPLETE: printf("%s  incomplete (%s)",rp_display(name),rp_display(o->why)); break;
     case RP_VERDICT:
-        if(o->missing==0 && o->failed==0) { t->clean++; printf("%s  clean",name); }
-        else if(o->missing!=0 && o->failed!=0) printf("%s  %u MISSING, %u FAILED",name,o->missing,o->failed);
-        else printf("%s  %u %s",name,o->missing ? o->missing : o->failed,o->missing ? "MISSING" : "FAILED");
+        if(o->missing==0 && o->failed==0) { t->clean++; printf("%s  clean",rp_display(name)); }
+        else if(o->missing!=0 && o->failed!=0) printf("%s  %u MISSING, %u FAILED",rp_display(name),o->missing,o->failed);
+        else printf("%s  %u %s",rp_display(name),o->missing ? o->missing : o->failed,o->missing ? "MISSING" : "FAILED");
         break;
     case RP_STATES: break;
     }
@@ -1018,8 +1050,16 @@ static bool rp_replay_one(const char *kept, const char *out, const char *name, u
     if(got!=RP_FS_OK) { unjudged=got==RP_FS_FAULT ? fault.why : "it is gone"; goto judge; }
     if((unjudged=rp_record_read(text,size,&r))!=NULL) goto judge;
     if((unjudged=r.unjudged)!=NULL) goto judge;
+    /* A kept page's record says so from its claim on (`kept lines:`), and
+     * one cut short after it, before its `kept:`, is not a page that was
+     * never kept. */
+    if((r.facts[F_KEPT]!=NULL || r.facts[F_KEPT_LINES]!=NULL) && !r.ended) {
+        unjudged="its record has no `end`: it was cut short"; goto judge;
+    }
     if(r.facts[F_KEPT]==NULL) {
-        /* Not a kept page: keep_pages was off when it was written. */
+        /* Not a kept page: keep_pages was off when it was written, or its
+         * load was let go before its bytes were whole (`kept lines:` and
+         * `end`, and no `kept:`). */
         bool there=false;
         if(replace) {
             char *was=rp_cat(out,"/",name);
@@ -1035,7 +1075,6 @@ static bool rp_replay_one(const char *kept, const char *out, const char *name, u
         snprintf(why,sizeof(why),"it was kept %s",r.facts[F_KEPT]);
         unjudged=why; goto judge;
     }
-    if(!r.ended) { unjudged="its record has no `end`: it was cut short"; goto judge; }
     path=rp_cat(base,".html","");
     got=rp_fs_read(path,&bytes,&len,&fault);
     free(path);
@@ -1095,7 +1134,7 @@ judge:;
      * that cannot be written now leaves none rather than the old one; one
      * that cannot be removed refuses the run. */
     if(replace && rp_fs_remove(path,&fault)==RP_FS_FAULT) {
-        fprintf(stderr,"replay: %s; the run stops here\n",fault.why);
+        fprintf(stderr,"replay: %s; the run stops here\n",rp_display(fault.why));
         free(path); free(whole.p);
         refused=true;
         if(ran) fake_reset();
@@ -1131,28 +1170,28 @@ static int rp_replay_dir(const char *kept, const char *out, uint64_t budget_ms, 
     char **held=NULL, **names=NULL; size_t before=0, n=0;
     RpFs got=rp_fs_list(out,".txt",&held,&before,&fault);
     rp_fs_names_free(held,before);
-    if(got==RP_FS_FAULT) { fprintf(stderr,"replay: %s; nothing was replayed\n",fault.why); return 2; }
+    if(got==RP_FS_FAULT) { fprintf(stderr,"replay: %s; nothing was replayed\n",rp_display(fault.why)); return 2; }
     bool same=false;
     if(got==RP_FS_OK && (got=rp_fs_same(kept,out,&same,&fault))==RP_FS_FAULT) {
-        fprintf(stderr,"replay: %s; nothing was replayed\n",fault.why); return 2;
+        fprintf(stderr,"replay: %s; nothing was replayed\n",rp_display(fault.why)); return 2;
     }
     if(same) {
-        fprintf(stderr,"replay: %s is the kept directory itself; a replay is written somewhere else\n",out);
+        fprintf(stderr,"replay: %s is the kept directory itself; a replay is written somewhere else\n",rp_display(out));
         return 2;
     }
     if(only==NULL && before!=0) {
         fprintf(stderr,"replay: %s already holds %zu records; a whole replay is written into an empty "
-                       "or new directory\n",out,before);
+                       "or new directory\n",rp_display(out),before);
         return 2;
     }
     got=rp_fs_list(kept,".txt",&names,&n,&fault);
     if(got!=RP_FS_OK) {
-        fprintf(stderr,"replay: %s\n",got==RP_FS_FAULT ? fault.why : "the kept directory is not there");
+        fprintf(stderr,"replay: %s\n",got==RP_FS_FAULT ? rp_display(fault.why) : "the kept directory is not there");
         return 2;
     }
     if(rp_fs_mkdir(out,&fault)!=RP_FS_OK) {
         rp_fs_names_free(names,n);
-        fprintf(stderr,"replay: %s; nothing was replayed\n",fault.why);
+        fprintf(stderr,"replay: %s; nothing was replayed\n",rp_display(fault.why));
         return 2;
     }
     for(size_t i=0;i<n;i++)
@@ -1170,7 +1209,7 @@ static int rp_replay_dir(const char *kept, const char *out, uint64_t budget_ms, 
     if(t->leaked) printf("; %u did not let go of what they held",t->leaked);
     if(only!=NULL)
         printf("; a partial run (--only %s): %s held %zu records before it, which stand except those it "
-               "wrote again",only,out,before);
+               "wrote again",rp_display(only),rp_display(out),before);
     printf("\n");
     return t->states[RP_UNJUDGED] ? 2 : t->leaked ? 1 : 0;
 }
@@ -1325,7 +1364,7 @@ static bool rp_same(const char *name, const char *a, const char *b) {
  * hand-made page (or a page written here) in a folder of its own under
  * WORK-DIR, replayed as a corpus is. */
 typedef enum { RP_COPY, RP_DROP_SCRIPT_LINE, RP_BAD_NUMBER, RP_NO_MEMORY, RP_FULL_TABLE, RP_NO_INDEX, RP_CUT,
-               RP_NO_STATUS, RP_SHORT_LINE } RpEdit;
+               RP_NO_STATUS, RP_SHORT_LINE, RP_CUT_BEFORE_KEPT, RP_BIG_COUNT, RP_ODD_LINE, RP_ESCAPES } RpEdit;
 
 /* The kept page `name` copied from `kept` into `dir`, with `edit` made to
  * it. The problems found. */
@@ -1380,12 +1419,52 @@ static unsigned rp_copy_page(const char *kept, const char *name, const char *dir
                 memcpy(text+len,YONDER_DIAG_END "\n",5); len+=4;
             }
             if(!strcmp(kFiles[f],".txt") && edit==RP_CUT) {
-                /* Cut short just after its `bytes:` line, as a quota would
-                 * cut it. */
-                char *at=strstr(text,"\nbytes: ");
+                /* Cut short just before its `end`, as a quota would cut it,
+                 * so only the `end` rule can catch it. */
+                if(len<4 || strcmp(text+len-4,YONDER_DIAG_END "\n")) { printf("  %s: the record has no end\n",dir); bad++; }
+                else { len-=4; text[len]='\0'; }
+            }
+            if(!strcmp(kFiles[f],".txt") && edit==RP_CUT_BEFORE_KEPT) {
+                /* Cut after its claim's `kept lines:` and before its bytes'
+                 * `kept:`, so it says neither `kept:` nor `end`. */
+                char *at=strstr(text,"\nkept: whole\n");
+                if(at==NULL || strstr(text,"\nkept lines: ")==NULL || strstr(text,"\nkept lines: ")>at) {
+                    printf("  %s: the record does not say `kept lines:` before `kept:`\n",dir); bad++;
+                } else { len=(size_t)(at+1-text); text[len]='\0'; }
+            }
+            if(!strcmp(kFiles[f],".txt") && edit==RP_BIG_COUNT) {
+                /* A record line's count of twenty digits. */
+                char *at=strstr(text,"\nMISSING ");
                 char *eol=at!=NULL ? strchr(at+1,'\n') : NULL;
-                if(eol==NULL) { printf("  %s: the record has no bytes line\n",dir); bad++; }
-                else { len=(size_t)(eol+1-text); text[len]='\0'; }
+                char *paren=NULL;
+                for(char *c=at; eol!=NULL && c<eol; c++) if(*c=='(') paren=c;
+                if(paren==NULL) { printf("  %s: the record has no MISSING line\n",dir); bad++; }
+                else {
+                    static const char kBig[]="(99999999999999999999)";
+                    size_t head=(size_t)(paren-text), tail=strlen(eol);
+                    char *again=malloc(head+sizeof(kBig)+tail);
+                    memcpy(again,text,head); memcpy(again+head,kBig,sizeof(kBig)-1); memcpy(again+head+sizeof(kBig)-1,eol,tail+1);
+                    free(text); text=again; len=strlen(text);
+                }
+            }
+            if(!strcmp(kFiles[f],".txt") && edit==RP_ESCAPES) {
+                /* A fact the runner quotes, holding a terminal's title
+                 * sequence. */
+                char *at=strstr(text,"\nkept: whole\n");
+                if(at==NULL) { printf("  %s: the record has no kept line\n",dir); bad++; }
+                else {
+                    static const char kOwned[]="\nkept: no\\x1B]0;owned\\x07\n";
+                    size_t head=(size_t)(at-text); const char *rest=at+strlen("\nkept: whole\n");
+                    char *again=malloc(head+sizeof(kOwned)+strlen(rest));
+                    memcpy(again,text,head); strcpy(again+head,kOwned); strcat(again,rest);
+                    free(text); text=again; len=strlen(text);
+                }
+            }
+            if(!strcmp(kFiles[f],".d/index") && edit==RP_ODD_LINE) {
+                /* A line whose kind is cut short: damage, not a kind
+                 * unknown. */
+                static const char kOdd[]="9\tscr\n";
+                text=realloc(text,len+sizeof(kOdd)); memcpy(text+len,kOdd,sizeof(kOdd)); len+=sizeof(kOdd)-1;
             }
             if(!strcmp(kFiles[f],".txt") && edit==RP_NO_STATUS) {
                 char *at=strstr(text,"\nstatus: ");
@@ -1441,13 +1520,17 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
     /* An index line whose number is not one, a record that lost a line
      * (with no memory to write it, or no room: the line past the cap may be
      * the one a change made), a `*.txt` that is not a record, a record cut
-     * short after its `bytes:` (no `end`, its head unsaid: a 429 would
-     * replay as a 200), one with no `status:`, and a script's index line
-     * short of its fields: none is judged, each says so on a record of its
-     * own, and each makes the answer 2. */
+     * just before its `end`, one cut after its claim's `kept lines:` and
+     * before its `kept:` (it is a kept page's, not a page never kept), one
+     * with no `status:` (a 429 would replay as a 200), one with a count of
+     * twenty digits, one whose quoted fact holds a terminal sequence (the
+     * .sh checks the runner prints it re-spelled), and index lines short of
+     * their fields or of a kind cut short: none is judged, each says so on
+     * a record of its own, and each makes the answer 2. */
     static const struct { const char *dir; RpEdit edit; } kRefused[]={
         {"/badnumber",RP_BAD_NUMBER},{"/nomemory",RP_NO_MEMORY},{"/fulltable",RP_FULL_TABLE},{"/notarecord",RP_COPY},
-        {"/cut",RP_CUT},{"/nostatus",RP_NO_STATUS},{"/shortline",RP_SHORT_LINE}};
+        {"/cut",RP_CUT},{"/nostatus",RP_NO_STATUS},{"/shortline",RP_SHORT_LINE},{"/cutbeforekept",RP_CUT_BEFORE_KEPT},
+        {"/bigcount",RP_BIG_COUNT},{"/oddline",RP_ODD_LINE},{"/escapes",RP_ESCAPES}};
     for(size_t i=0;i<sizeof(kRefused)/sizeof(kRefused[0]);i++) {
         dir=rp_cat(work,kRefused[i].dir,"");
         bad+=rp_copy_page(kept,name,dir,kRefused[i].edit);

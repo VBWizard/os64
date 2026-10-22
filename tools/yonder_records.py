@@ -229,8 +229,8 @@ def read(path):
     page an unfinished line) and which says what it does not reproduce. A
     RECORD YONDER WROTE has its verdict second (or the placeholder's
     `verdict: unwritten`), no REPLAY line but the one saying it lost
-    lines, and ends with `end`, which a kept page's (one that says `kept:`)
-    must; a census record written before yonder wrote it may lack it.
+    lines, and ends with `end`, which a kept page's (one that says `kept:`
+    or `kept lines:`) must; a census record written before yonder wrote it may lack it.
     Every count is at most UINT32_MAX."""
     path = pathlib.Path(path)
     try:
@@ -265,7 +265,10 @@ def read(path):
             body = lines[1:-1] if ended else lines[1:]
             if END in body:
                 raise Malformed('not a whole page file: lines past its `end`')
-            if not ended and any(line.startswith(b'kept: ') for line in body):
+            # A kept page's record says so from its claim on (`kept lines:`,
+            # written then; `kept:` comes when its bytes are whole), so one
+            # cut short anywhere after its claim is caught.
+            if not ended and any(line.startswith((b'kept: ', b'kept lines: ')) for line in body):
                 raise Malformed("a kept page's record without its `end`: it was cut short")
             read_body(body, rec, replay=False)
             return rec

@@ -56,9 +56,10 @@
 // names it.
 #define YONDER_DIAG_UNWRITTEN "verdict: unwritten"
 // The last line of every record yonder_diag_render writes. A reader
-// requires it on any record that says `kept:` (a kept page) or `REPLAY
-// state:` (a replay's), so a record cut short is never read as a page;
-// records written before it (the first census) have neither, and none.
+// requires it on any record that says `kept:` or `kept lines:` (a kept
+// page's, from its claim on) or `REPLAY state:` (a replay's), so a record
+// cut short is never read as a page; records written before it (the first
+// census) have none of those, and no `end`.
 #define YONDER_DIAG_END "end"
 
 // Distinct record lines kept, and plain lines: a page that asks for more
@@ -206,8 +207,10 @@ typedef enum { YONDER_DIAG_KEPT_SCRIPT, YONDER_DIAG_KEPT_SHEET } yonder_diag_kep
 //     <n> TAB <kind> TAB what that kind carries
 // so a kind a later slice keeps (a `fetch`, a `storage` image) is one more
 // line shape and leaves these as they are; the version moves only when a
-// shape that exists changes, and a reader passes over a kind it does not
-// know. A script's and a sheet's line carries
+// shape that exists changes. A replay reads every line as a kind it
+// knows, and takes a line it does not as damage, so the slice that keeps
+// a new kind teaches the replay it in the same change. A script's and a
+// sheet's line carries
 //     <url> TAB came|failed TAB <final> TAB <label>
 // with a byte below 0x20, 0x7F and a backslash in a field written `\xHH`
 // and `\\`, as a page file writes them.

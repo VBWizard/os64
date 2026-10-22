@@ -132,9 +132,9 @@ static void table_found(Table *t, const char *a, const char *b, bool both)
 }
 
 // The line keyed `a` (and `b`, when `both`), found or added. NULL when the
-// table holds `max` lines already (more, when lines kept past the others'
-// room were added: yonder_diag_head_fact) or memory ran out: the line is
-// then counted as lost, once.
+// table holds `max` lines already (the facts' rooms are decided by
+// fact_set, which passes no room as 0) or memory ran out: the line is then
+// counted as lost, once.
 static Line *table_line(Table *t, const char *a, const char *b, bool both, uint32_t max)
 {
     for (uint32_t i = 0; i < t->n; i++)

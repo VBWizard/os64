@@ -64,6 +64,8 @@ MALFORMED = {
                                 'a count no record holds'),
     "a kept page's record cut before its end": (b'address: https://a.test/\nverdict: clean\nbytes: 3\nkept: whole\n',
                                                 "a kept page's record without its `end`"),
+    "a kept page's record cut after its claim, before its kept": (
+        b'address: https://a.test/\nverdict: clean\nkept lines: 0\nbytes: 3\n', "a kept page's record without its `end`"),
     'lines past a record\'s end': (b'address: https://a.test/\nverdict: clean\nend\nkept: whole\nend\n',
                                    'lines past its `end`'),
     'a stray kind on the not-reproduced line': (b'address: https://a.test/\nREPLAY state: verdict\nverdict: clean\n'
@@ -159,6 +161,9 @@ class ReaderCases(unittest.TestCase):
         self.assertEqual(rec.missing, {('global', 'x'): 4294967295})
         # A census record written before yonder wrote `end` may lack it.
         rec = self.read(b'address: https://a.test/\nverdict: clean\nbytes: 3\n')
+        self.assertEqual(rec.state, records.State.VERDICT)
+        # A load let go mid-stream: claimed for keeping, never kept, whole.
+        rec = self.read(b'address: https://a.test/\nverdict: clean\nkept lines: 0\nend\n')
         self.assertEqual(rec.state, records.State.VERDICT)
 
     def test_display_spells_control_bytes(self):

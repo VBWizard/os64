@@ -5043,9 +5043,11 @@ static void diag_keep_cases(void) {
             "keep: a head fact is kept on a page whose plain lines fill the table, which still counts the rest, "
             "and says it lost lines");
         free(big); yonder_diag_free(d);
-        /* Exactly the ordinary quota, and the head besides: the head's room
-         * is its own, so nothing is lost and the record ends whole. */
+        /* Exactly the ordinary quota, and the head besides, one head fact
+         * set before them all (as a claim sets `kept lines:`): the head's
+         * room is its own, so nothing is lost and the record ends whole. */
         d=yonder_diag_new("http://fixture.test/full",1,0);
+        yonder_diag_head_fact(d,"kept lines","0");
         for(unsigned i=0;i<YONDER_DIAG_FACTS_MAX;i++) { char k[16]; snprintf(k,sizeof(k),"script %u",i); yonder_diag_fact(d,k,"ran"); }
         static const char *const kHead[]={"status","final address","body","content-type","charset","encrypted",
             "TLS","scripts","laid out at","kept","kept lines"};
