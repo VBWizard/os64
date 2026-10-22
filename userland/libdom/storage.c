@@ -685,17 +685,23 @@ static bool area_change(DStorageArea *area, const char *key, size_t key_length, 
 /* clear(): a removal of each key the page can see, remembered for the
  * commit, so a key another window adds before it is not taken with them.
  * Every removal is made before any is kept: false on no memory, or with
- * no room in the change list, with nothing changed. */
+ * no room in the change list, with nothing changed. A key already in the
+ * list has its record there replaced, so the room asked for is the keys
+ * not yet listed and what the removals cost past the records they
+ * replace, as area_change asks for one. */
 static bool area_clear(DStorageArea *area)
 {
     size_t count = area->map.count;
     if (count == 0) return true;
-    size_t cost = 0;
+    size_t fresh = 0, cost = 0, replaced = 0;
     for (size_t i = 0; i < count; i++) {
         const DItem *item = &area->map.items[i];
         cost += item_cost(item->key_length, item->bytes, 0, NULL);
+        ptrdiff_t listed = map_find(&area->changes, item->bytes, item->key_length, item->hash);
+        if (listed >= 0) replaced += cost_of(&area->changes.items[listed]);
+        else fresh++;
     }
-    if (!changes_room(area, count, cost)) return false;
+    if (!changes_room(area, fresh, cost > replaced ? cost - replaced : 0)) return false;
     if (kept(area->dom, area)) {
         DItem *made = os64_malloc(count * sizeof(*made));
         if (made == NULL || !map_reserve_n(&area->changes, count)) {

@@ -902,6 +902,27 @@ static void dom_storage_bound_cases(void)
     check(store.commits == 1 && store.length == 0, "storage: what the page could change reached the store at drain");
     fixture_free(&f);
     fake_store_free(&store);
+
+    /* clear() over sets not yet committed replaces their records, so it
+     * asks for no more room than it takes: four sets fill the quota, the
+     * list could not be written down for an early commit, and clear()
+     * still fits. */
+    FakeStore filled = {0};
+    f = storage_fixture("http://example.test/", &filled);
+    if (!fixture_ready(&f)) return;
+    size_t value = OS64_DOM_STORAGE_QUOTA / 8 - 1;
+    char script[512];
+    snprintf(script, sizeof(script),
+             STORAGE_ASSERT "var v='v'.repeat(%zu);for(var i=0;i<4;i++)localStorage.setItem(String(i),v);"
+             "localStorage.clear();assert(localStorage.length===0);", value);
+    fail_size = strlen("os64 storage 1\n") + 4 * (strlen("+1 \n") + strlen("655359") + 1 + value + 1);
+    dom_script(&f, script, "storage: clear() over a full list of sets the commit could not write down");
+    fail_size = 0;
+    check(filled.commits == 0, "storage: clear() needed no early commit");
+    os64_dom_drain(f.binding);
+    check(filled.commits == 1 && filled.length == 0, "storage: and its removals reached the store at drain");
+    fixture_free(&f);
+    fake_store_free(&filled);
 }
 
 static void dom_storage_cases(void)
