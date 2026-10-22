@@ -7114,6 +7114,22 @@ static void covered_link_cases(void) {
     check(probe_field("blank")!=NULL && probe_field("blank")->w->cls->paint==NULL,
         "invisible gadget: an empty name submits nothing, so it names nothing");
     probe_drop();
+    /* A control the ellipsis cuts away is not there to be pointed at
+     * (flow_box_cut_away), so its widget is not drawn over the ellipsis:
+     * after abcd, 32 of a 40-wide line, a checkbox in an inline-block with
+     * a transform — stacked, a layer of its own — is past the limit; one
+     * kept as the line's first atom is drawn. */
+    probe_page("<!doctype html><style>body{margin:0} div{width:40px;overflow:hidden;"
+        "white-space:nowrap;text-overflow:ellipsis} input{margin:0;width:12px;height:6px}"
+        " span{display:inline-block;transform:translate(1px,0)}</style>"
+        "<div>abcd<span><input type=checkbox name=past id=past></span></div>"
+        "<div><span><input type=checkbox name=kept id=kept></span>abcdefghij</div>",false);
+    forms_place();
+    check(probe_field("past")!=NULL && probe_field("past")->w->hidden,
+        "ellipsis: a control past the cut has no widget over the ellipsis");
+    check(probe_field("kept")!=NULL && !probe_field("kept")->w->hidden,
+        "ellipsis: a control the cut keeps has its widget");
+    probe_drop();
 }
 
 /* A unit that includes this file for the window and its fakes alone (the
