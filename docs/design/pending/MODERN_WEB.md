@@ -1116,7 +1116,9 @@ measuring its target before a held push joins the session (booked).
 **The third cold read** found that "not yet shown" is not "not yet
 completely loaded": yonder shows a page before its `load`, so a redirect
 or a script's form in `onload` still pushed, and Back from where it went
-reached the redirector again (`Page.loaded`).
+reached the redirector again (`Page.loaded`); and a page at its
+DOMContentLoaded whose replacing navigation could not start arriving
+without the entries its scripts made, which it now takes back.
 **The design read** passed it with the scroll-restoration ruling, the two
 accepted departures from HTML's traversal queue below, and the session's
 being outside the switch.

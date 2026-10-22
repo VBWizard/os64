@@ -3804,7 +3804,31 @@ static void loop_view_loading_redirect(void) {
         "a timer after load",false);
     loading_redirect_case("<a id=l href=/X>x</a>","a person's click once it is shown",false);
 }
+/* A page at its DOMContentLoaded whose replacing navigation cannot start
+ * (the pool refuses the trip) still arrives, and with the entries its
+ * scripts made. */
+static os64_work_id_t refuse_trips(const os64_work_t *work) {
+    if(*(const uint32_t *)work->job==YONDER_JOB_TRIP) return 0;
+    pool_submit_hook=NULL;
+    os64_work_id_t id=os64_work_submit(NULL,work);
+    pool_submit_hook=refuse_trips;
+    return id;
+}
+static void loop_view_replacing_refused(void) {
+    loop_page("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns(),"replacing refused: S");
+    start_trip("http://fixture.test/R",NULL,NAV_GO,NULL);
+    pool_submit_hook=refuse_trips;
+    post_arriving("<p id=out>R</p><script>history.replaceState(null,'','/R');history.pushState(null,'','/R2');"
+        "document.addEventListener('DOMContentLoaded',function(){location.href='/X'})</script>");
+    bool settled=loop_settle();
+    pool_submit_hook=NULL;
+    check(settled && view_turns() && !g.stream.active && probe_text_is("out","R") && session_is("/S,/R","/R2",""),
+        "replacing refused: the page still arrives, with the entry it pushed from");
+    loop_drop();
+}
 static void loop_view_cold2_cases(void) {
+    loop_view_replacing_refused();
     loop_view_loading_redirect();
     loop_view_pushed_then_forward();
     loop_view_pushed_length();

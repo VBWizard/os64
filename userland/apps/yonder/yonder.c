@@ -3247,9 +3247,10 @@ static const char *file_path(const char *after)
 // traversal arrives at, and the entries its scripts made, which stay where
 // they are around the entry. `kind` is how the new page comes: as the
 // replaced page did, but a reload's successor comes as a refresh, a new
-// document in the entry on screen.
+// document in the entry on screen. `from` is the page it was taken from.
 typedef struct {
     bool taken;
+    Page *from;
     NavKind kind;
     uint64_t arrives_at;
     way_crumb_t *back, *ahead;
@@ -3268,6 +3269,7 @@ static void place_take(Place *place)
         return;
     NavKind kind = unshown_kind(p);
     place->taken = true;
+    place->from = p;
     place->kind = kind == NAV_RELOAD ? NAV_REFRESH : kind;
     place->arrives_at = p->arrives_at;
     place->back = p->back;
@@ -3301,8 +3303,18 @@ static void start_trip(const char *url, os64_page_request_t *request, NavKind ki
     if (!place.taken)
         return;
     if (!g.stream.active) {
-        // Nothing was started: the place goes, and a traversal with it, as
-        // one stopped.
+        // Nothing was started. A page held at its DOMContentLoaded
+        // (g.finishing) outlives the stop and still arrives: its place, and
+        // the traversal it was coming by, are its own again. Any other went
+        // with the stop, and its place goes too, a traversal as one stopped.
+        if (place.from == g.finishing.page) {
+            place.from->back = place.back;
+            place.from->ahead = place.ahead;
+            place.from->nback = place.nback;
+            place.from->nahead = place.nahead;
+            g.traversing = traversal;
+            return;
+        }
         page_stack_clear(place.back, &place.nback);
         page_stack_clear(place.ahead, &place.nahead);
         os64_free(place.back);
