@@ -25,24 +25,33 @@ import os
 import pathlib
 import re
 
-ESCAPE = re.compile(rb'\\(\\|x[0-9A-Fa-f]{2})')
-PERCENT = re.compile(rb'M%49SSING|F%41ILED|%25')
-PERCENT_BACK = {b'M%49SSING': b'MISSING', b'F%41ILED': b'FAILED', b'%25': b'%'}
+# Every escape, tried at each place in ONE pass from the left (REPLAY.md
+# § 2): what one decodes is never read again, so `\\x25` and `25` side by
+# side are `%25`, never `%`. The runner's rp_unescape_n is the same pass.
+ESCAPE = re.compile(rb'\\\\|\\x[0-9A-Fa-f]{2}|M%49SSING|F%41ILED|%25')
+ESCAPE_BACK = {b'\\\\': b'\\', b'M%49SSING': b'MISSING', b'F%41ILED': b'FAILED', b'%25': b'%'}
+
+
+def unescape_bytes(raw, tokens=True):
+    """A field's bytes as the page wrote them: diag.c spells a backslash
+    `\\\\`, a byte below 0x20 or 0x7F `\\xHH`, and, with `tokens` (a record's
+    fields; an index's have no tokens), a token in data with its second
+    letter percent-encoded and a `%` of the data's own `%25`. One pass from
+    the left gives back the data's bytes exactly."""
+    def one(m):
+        e = m.group(0)
+        if e.startswith(b'\\x'):
+            return bytes([int(e[2:], 16)])
+        if not tokens and e not in (b'\\\\',):
+            return e
+        return ESCAPE_BACK[e]
+    return ESCAPE.sub(one, raw)
 
 
 def unescape(raw):
-    """A field as the page wrote it: diag.c spells a backslash `\\\\`, a
-    byte below 0x20 or 0x7F `\\xHH`, a token in data with its second
-    letter percent-encoded, and a `%` of the data's own `%25`, which this
-    reads back in one pass from the left, so the data's bytes come back
-    exactly. Bytes that are not UTF-8 raise UnicodeDecodeError, never a
-    guess."""
-    def one(m):
-        e = m.group(1)
-        return b'\\' if e == b'\\' else bytes([int(e[1:], 16)])
-    raw = ESCAPE.sub(one, raw)
-    raw = PERCENT.sub(lambda m: PERCENT_BACK[m.group(0)], raw)
-    return raw.decode('utf-8')
+    """unescape_bytes() decoded: bytes that are not UTF-8 raise
+    UnicodeDecodeError, never a guess."""
+    return unescape_bytes(raw).decode('utf-8')
 
 
 def display(text):
@@ -88,7 +97,6 @@ class State(enum.IntEnum):
 # would keep lines of that kind out of every comparison.
 NOT_REPRODUCED = {'font-fetch', 'image', 'picture-fetch'}
 
-LINES_LOST = b'REPLAY unjudged: lines lost'
 END = b'end'
 UNWRITTEN = b'verdict: unwritten'
 
@@ -116,7 +124,9 @@ class Record:
         self.reason = ''
         self.replay = False
         self.lost = False
+        self.marked = False
         self.unwritten = False
+        self.defaulted = set()
         self.not_reproduced = set()
 
 
@@ -145,15 +155,20 @@ class Malformed(Exception):
 UINT32_MAX = 0xFFFFFFFF
 
 
-def decimal(digits):
-    """THE ONE NUMBER PARSER: a whole decimal, digits and nothing else, at
-    most UINT32_MAX, which no number diag.c writes passes (a count, a byte
-    count, an index line's number, a zoom). Malformed otherwise, however
-    long."""
-    if not digits or len(digits) > 10 or not digits.isdigit():
+CLOCK_MAX = (1 << 53) - 1
+
+
+def decimal(digits, limit=UINT32_MAX):
+    """THE ONE NUMBER PARSER (REPLAY.md § 2): a whole decimal, ASCII digits
+    and nothing else, no sign, no leading zero past a lone `0`, at most
+    `limit`: UINT32_MAX, which no number diag.c writes passes (a count, a
+    byte count, an index line's number, a zoom), or CLOCK_MAX for a clock's
+    milliseconds. Malformed otherwise, however long."""
+    if (not digits or len(digits) > len(str(limit)) or not all(0x30 <= c <= 0x39 for c in digits)
+            or (len(digits) > 1 and digits[0] == 0x30)):
         raise Malformed('not a whole page file: a count no record holds')
     n = int(digits)
-    if n > UINT32_MAX:
+    if n > limit:
         raise Malformed('not a whole page file: a count no record holds')
     return n
 
@@ -182,31 +197,55 @@ HEAD = {
     b'body': rb'html|text|image', b'encrypted': rb'yes|no', b'scripts': rb'on|off', b'modern': rb'on|off',
     b'appearance': rb'light|dark', b'motion': rb'full|reduce', b'animate': rb'on|off', b'kept': rb'whole|not whole: .+',
     b'final address': rb'.*', b'content-type': rb'.*', b'charset': rb'.*', b'TLS': rb'.*',
+    b'agent': rb'.+', b'cookies': rb'.*', b'clock': rb'([0-9]+)', b'tz': rb'.+',
 }
 HEAD = {k: re.compile(v) for k, v in HEAD.items()}
+
+
+# The inputs version 2 of a record added (REPLAY.md § 3): a record that
+# says any of them is of version 2, and one that says none of version 1.
+V2_FACTS = (b'agent: ', b'cookies: ', b'clock: ', b'tz: ')
+
+# The inputs a replay may name as taken from the harness, for a kept page
+# of a version that does not record them (REPLAY.md § 3).
+DEFAULTABLE = {'agent', 'cookies', 'clock', 'tz', 'modern', 'zoom', 'appearance', 'motion', 'animate', 'scripts',
+               'script-seconds', 'view-width', 'view-height', 'status', 'content-type', 'charset', 'encrypted',
+               'body', 'final-address', 'kept-lines', 'job-identity'}
 
 
 def classify(line, index=False):
     """(kind, fields) for one line of a record, or of an index (`index`):
     the kind's name as tools/yonder_record_grammar.txt spells it, or
-    ('REFUSED', why) / ('index:REFUSED', why)."""
-    def numbers(m):
-        return [decimal(g) if g is not None and g.isdigit() else g for g in m.groups()]
+    ('REFUSED', why) / ('index:REFUSED', why). A line holding a control
+    byte (a carriage return, a NUL, any byte below 0x20 but the tab) is no
+    line of either, and read() classifies every line of a record, so one
+    anywhere refuses it whole."""
+    def numbers(m, limit=UINT32_MAX):
+        return [decimal(g, limit) if g is not None and g[:1].isdigit() else g for g in m.groups()]
     try:
+        if any(c < 0x20 for c in line if c != 0x09):
+            return ('index:REFUSED' if index else 'REFUSED'), 'a control byte'
         if index:
             if line.startswith(b'# yonder kept index '):
                 return 'index:version', decimal(line[len(b'# yonder kept index '):])
             if line.startswith(b'#'):
                 return 'index:comment', None
             f = line.split(b'\t')
-            if (len(f) != 7 or f[1] not in (b'script', b'sheet') or not f[2] or f[3] not in (b'came', b'failed')
-                    or decimal(f[0]) < 1):
+            if (len(f) not in (6, 7) or f[1] not in (b'script', b'sheet') or not f[2]
+                    or f[3] not in (b'came', b'failed') or decimal(f[0]) < 1):
                 return 'index:REFUSED', 'a line that is not a script\'s or a sheet\'s whole'
+            if len(f) == 6:
+                return 'index:entry-v1', (decimal(f[0]), f[1], f[2], f[3] == b'came', f[4], f[5], None)
             return 'index:entry', (decimal(f[0]), f[1], f[2], f[3] == b'came', f[4], f[5], decimal(f[6]))
         if line == END:
             return 'end', None
-        if line == LINES_LOST:
-            return 'lines-lost', None
+        if line.startswith(b'REPLAY unjudged: ') and len(line) > len(b'REPLAY unjudged: '):
+            return 'marked', line[len(b'REPLAY unjudged: '):]
+        if line.startswith(b'REPLAY inputs defaulted: '):
+            words = line[len(b'REPLAY inputs defaulted: '):].split(b' ')
+            if not all(w.decode('ascii', 'replace') in DEFAULTABLE for w in words) or len(set(words)) != len(words):
+                return 'REFUSED', 'a REPLAY inputs defaulted line naming no input a replay defaults'
+            return 'defaulted', {w.decode('ascii') for w in words}
         if line.startswith(b'address: '):
             return 'address', line[len(b'address: '):]
         if line.startswith(b'verdict: '):
@@ -254,7 +293,7 @@ def classify(line, index=False):
             m = HEAD[key].fullmatch(value)
             if m is None:
                 return 'REFUSED', f'a `{key.decode("utf-8", "replace")}` of no value yonder writes'
-            numbers(m)
+            numbers(m, CLOCK_MAX if key == b'clock' else UINT32_MAX)
             return 'head', (key, value)
         return 'fact', (key, value)
     except Malformed as e:
@@ -295,8 +334,18 @@ def read_body(lines, rec, replay):
             pass
         elif kind == 'verdict':
             raise Malformed('not a whole page file: a second verdict line')
-        elif kind == 'lines-lost' and not replay:
-            rec.state, rec.reason, rec.lost = State.UNJUDGED, 'its record lost lines it could not keep', True
+        elif kind == 'marked' and not replay:
+            # One line for every reason a record yonder wrote says it cannot
+            # be judged: its lines lost, a setting changed during the load.
+            rec.marked = True
+            if f == b'lines lost':
+                rec.lost = True
+            if rec.state != State.UNJUDGED:
+                rec.state = State.UNJUDGED
+                rec.reason = ('its record lost lines it could not keep' if f == b'lines lost'
+                              else 'its record says: ' + unescape(f))
+        elif kind == 'defaulted' and replay:
+            rec.defaulted |= f
         elif kind == 'incomplete' and replay:
             rec.incomplete.append(unescape(f))
         elif kind == 'unfinished' and replay:
@@ -305,7 +354,7 @@ def read_body(lines, rec, replay):
             rec.not_reproduced |= f
         elif kind == 'REFUSED':
             raise Malformed(f'not a whole page file: {f}')
-        elif kind in ('incomplete', 'unfinished', 'not-reproduced', 'lines-lost', 'state'):
+        elif kind in ('incomplete', 'unfinished', 'not-reproduced', 'marked', 'defaulted', 'state'):
             raise Malformed('a REPLAY line of no kind this reader knows')
         else:
             raise Malformed(f'not a whole page file: {kind} out of its place')
@@ -316,19 +365,23 @@ def read_body(lines, rec, replay):
 
 def read(path):
     """The page file at `path`, judged whole: a Record, or an Unjudged
-    naming why not. Every file is UTF-8 with no NUL, no byte order mark and
-    no carriage return, and its first line is `address: `. A REPLAY'S
-    RECORD says its state on its second line (STATE_LINE) and ends with
-    `end`; an UNJUDGED one is its address, its state and `end`, and any
-    other carries the window's record from its verdict on, whose REPLAY
-    detail lines must agree with the state (a VERDICT has none, an
-    INCOMPLETE page an incomplete line and no unfinished one, an UNFINISHED
-    page an unfinished line) and which says what it does not reproduce. A
-    RECORD YONDER WROTE has its verdict second (or the placeholder's
-    `verdict: unwritten`), no REPLAY line but the one saying it lost
-    lines, and ends with `end`, which a kept page's (one that says `kept:`
-    or `kept lines:`) must; a census record written before yonder wrote it may lack it.
-    Every count is at most UINT32_MAX."""
+    naming why not. Every file is UTF-8 with no byte order mark, its first
+    line is `address: `, and every line of it is a kind of the grammar
+    (classify), so a control byte anywhere (a carriage return, a NUL)
+    refuses it. A REPLAY'S RECORD says its state on its second line and
+    ends with `end`; an UNJUDGED one is its address, its state and `end`
+    and nothing else, and any other carries the window's record from its
+    verdict on, whose REPLAY detail lines must agree with the state (a
+    VERDICT has none, an INCOMPLETE page an incomplete line and no
+    unfinished one, an UNFINISHED page an unfinished line), may say the
+    inputs it took from the harness, and says what it does not reproduce.
+    A RECORD YONDER WROTE has its verdict second (or the placeholder's
+    `verdict: unwritten`), no REPLAY line but a `REPLAY unjudged:` mark,
+    and ends with `end`, which a kept page's of version 2 (one that says
+    `kept:` or `kept lines:`, and an input of V2_FACTS) must; a census
+    record, or a kept page of version 1, written before yonder wrote it
+    may lack it. Every count is at most UINT32_MAX, and a clock at most
+    CLOCK_MAX."""
     path = pathlib.Path(path)
     try:
         if not path.is_file():
@@ -338,8 +391,6 @@ def read(path):
         return Unjudged(path, f'cannot be read: {e.strerror or e}')
     if data.startswith(b'\xef\xbb\xbf'):
         return Unjudged(path, 'not a page file: it begins with a byte order mark')
-    if b'\0' in data:
-        return Unjudged(path, 'not a whole page file: it holds a NUL')
     try:
         data.decode('utf-8')
     except UnicodeDecodeError:
@@ -349,25 +400,28 @@ def read(path):
         lines.pop()
     if not lines or not lines[0].startswith(b'address: '):
         return Unjudged(path, 'not a page file: its first line is not `address: `')
-    if any(line.endswith(b'\r') for line in lines):
-        return Unjudged(path, 'not a whole page file: a line ends in a carriage return')
     try:
+        kind, why = classify(lines[0])
+        if kind != 'address':
+            raise Malformed(f'not a whole page file: {why}')
         rec = Record(path, unescape(lines[0][len(b'address: '):]))
         kind, state = classify(lines[1]) if len(lines) > 1 else ('REFUSED', None)
         if kind != 'state' and lines[1:2] and lines[1].startswith(b'REPLAY state: '):
             raise Malformed(f'not a whole page file: {state}')
         if kind != 'state':
-            # Yonder ends every record with `end` now; a kept page's must
-            # have it, and only a census record written before it (one
-            # that says nothing of being kept) may lack it.
+            # Yonder ends every record with `end`; a kept page's record of
+            # version 2 (it says an input version 2 added, V2_FACTS, which
+            # the claim writes first) must have it, from its claim on (`kept lines:`, written then;
+            # `kept:` when its bytes are whole), so one cut short anywhere
+            # after its claim is caught. A census record written before
+            # `end` existed, and a kept page of version 1, may lack it
+            # (REPLAY.md § 3).
             ended = lines[-1] == END
             body = lines[1:-1] if ended else lines[1:]
             if END in body:
                 raise Malformed('not a whole page file: lines past its `end`')
-            # A kept page's record says so from its claim on (`kept lines:`,
-            # written then; `kept:` comes when its bytes are whole), so one
-            # cut short anywhere after its claim is caught.
-            if not ended and any(line.startswith((b'kept: ', b'kept lines: ')) for line in body):
+            kept = any(line.startswith((b'kept: ', b'kept lines: ')) for line in body)
+            if not ended and kept and any(line.startswith(V2_FACTS) for line in body):
                 raise Malformed("a kept page's record without its `end`: it was cut short")
             read_body(body, rec, replay=False)
             return rec
@@ -379,6 +433,8 @@ def read(path):
         if END in lines[2:-1]:
             raise Malformed("a replay's record with lines past its `end`")
         if rec.state == State.UNJUDGED:
+            if len(lines) != 3:
+                raise Malformed("an unjudged replay's record with lines beside its state")
             return rec
         read_body(lines[2:-1], rec, replay=True)
         agrees = {State.VERDICT: not rec.incomplete and not rec.unfinished,

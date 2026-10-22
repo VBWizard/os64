@@ -145,7 +145,7 @@ class TallyCases(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn('4 page files, 3 sites', out.getvalue())
         self.assertRegex(out.getvalue(), r'\n +4 +3 +7  fetch\n')
-        self.assertIn('1 record(s) lost lines; the lines they kept are counted', err.getvalue())
+        self.assertIn('1 record(s) say they cannot be judged', err.getvalue())
         self.assertIn('not counted: 1 incomplete', err.getvalue())
         # A claimed name never written is damage: named, and the answer 2.
         (self.root / 'u.test-0009.txt').write_bytes(b'address: https://u.test/\nverdict: unwritten\n')

@@ -26,9 +26,9 @@ A directory is read for its `*.txt` files, not below it: a kept page's
 `.html` and `.d/` beside its record are not records. Every record is read
 through tools/yonder_records.py, the one reader of page files, which
 judges it whole and says its State. A CENSUS IS NOT A DIFF: it counts
-every page yonder recorded, a record that lost lines included (what it
-kept is what the page asked for, and partial is still asked; stderr says
-how many records lost lines), and a replay's record only when its page
+every page yonder recorded, a record marked unjudged included (lines
+lost, or settings changed during its load: what it kept is what the page
+asked for, and partial is still asked; stderr says how many), and a replay's record only when its page
 reached a verdict (stderr says how many of each other state, and which).
 A path that is not there, a directory that cannot be listed, a claimed
 name's placeholder that was never written (damage: a yonder stopped
@@ -69,8 +69,9 @@ class NotJudged(Unreadable):
 
 def read_records(paths):
     """Every record under the paths given that the census counts: a file is
-    read as one, a directory for its `*.txt` files. A record that lost
-    lines is counted, and their number said on stderr; a replay's record
+    read as one, a directory for its `*.txt` files. A record marked
+    unjudged (lines lost, settings changed) is counted, and their number
+    said on stderr; a replay's record
     whose page did not reach a verdict is said on stderr, by state and by
     file, and not counted. Unreadable when a path is not there or a
     directory cannot be listed; NotJudged, naming every one, when any file
@@ -86,7 +87,7 @@ def read_records(paths):
                 unjudged.append(rec)
             elif rec.unwritten:
                 unjudged.append(records_module.Unjudged(f, f'damage: {rec.reason}'))
-            elif rec.lost:
+            elif rec.marked:
                 lost += 1
                 records.append(rec)
             elif rec.state != records_module.State.VERDICT:
@@ -96,7 +97,8 @@ def read_records(paths):
     if unjudged:
         raise NotJudged(unjudged)
     if lost:
-        print(f'yonder_tally: {lost} record(s) lost lines; the lines they kept are counted', file=sys.stderr)
+        print(f'yonder_tally: {lost} record(s) say they cannot be judged (lines lost, or settings changed during '
+              f'the load); the lines they kept are counted', file=sys.stderr)
     if other:
         print('yonder_tally: not counted: ' + ', '.join(f'{len(other[s])} {s.name.lower()}' for s in sorted(other)),
               file=sys.stderr)

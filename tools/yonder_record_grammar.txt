@@ -135,8 +135,9 @@ not-reproduced	REPLAY not reproduced: image
 REFUSED	REPLAY not reproduced: image global
 REFUSED	REPLAY not reproduced: 
 REFUSED	REPLAY not reproduced: image  picture-fetch
-lines-lost	REPLAY unjudged: lines lost
-REFUSED	REPLAY unjudged: something else
+marked	REPLAY unjudged: lines lost
+marked	REPLAY unjudged: settings changed during the load
+REFUSED	REPLAY unjudged: 
 REFUSED	REPLAY lost its way
 end	end
 REFUSED	end 
@@ -149,7 +150,7 @@ index:comment	# what this page fetched, as yonder received it
 index:entry	1	script	https://a.test/x.js	came	https://a.test/x.js		3
 index:entry	2	sheet	https://a.test/k.css	failed	https://a.test/k.css	utf-8	0
 index:entry	3	sheet	https://a.test/a%25b\\c.css	came	https://cdn.a.test/a.css		1
-index:REFUSED	1	script	https://a.test/x.js	came	https://a.test/x.js	
+index:entry-v1	1	script	https://a.test/x.js	came	https://a.test/x.js	
 index:REFUSED	1	script	https://a.test/x.js	came
 index:REFUSED	1	scr
 index:REFUSED	1
@@ -162,3 +163,80 @@ index:REFUSED	1	script		came	https://a.test/x.js		1
 index:REFUSED	1	script	https://a.test/x.js	kept	https://a.test/x.js		1
 index:REFUSED	1	script	https://a.test/x.js	came	https://a.test/x.js		one
 index:REFUSED	1	script	https://a.test/x.js	came	https://a.test/x.js		1	extra
+# numbers: `0`, or a first digit 1-9; no sign; ASCII digits only; at most UINT32_MAX (a clock: 2^53-1)
+verdict	verdict: 10 MISSING
+REFUSED	verdict: 01 MISSING
+REFUSED	verdict: 00 FAILED
+missing	MISSING global x (0)
+REFUSED	MISSING global x (00)
+REFUSED	MISSING global x (007)
+REFUSED	MISSING global x (٣)
+REFUSED	bytes: 0123
+head	bytes: 0
+REFUSED	kept lines: 01
+REFUSED	zoom: １000
+REFUSED	status: 0200 OK
+REFUSED	laid out at: 0800x600 px
+REFUSED	laid out at: 800x0600 px
+REFUSED	laid out at: 800x600 px in 01 ms
+head	clock: 1700000000370
+head	clock: 0
+head	clock: 9007199254740991
+REFUSED	clock: 9007199254740992
+REFUSED	clock: 01700000000370
+REFUSED	clock: 1.7e12
+head	agent: Mozilla/5.0 (os64) yonder
+REFUSED	agent: 
+head	cookies: session=abc; theme=dark
+head	cookies: 
+head	tz: EST5EDT,M3.2.0,M11.1.0
+head	tz: 330m
+REFUSED	tz: 
+# a control byte anywhere in a line, raw: no line (a tab is the escape's to leave)
+REFUSED	MISSING global xy (1)
+REFUSED	note: ab
+REFUSED	address: https://a.test/[2J
+REFUSED	FAILED page: no  (1)
+fact	note: a	b
+# what a replay says it took from the harness, for a kept page of version 1
+defaulted	REPLAY inputs defaulted: agent cookies clock tz
+defaulted	REPLAY inputs defaulted: view-height
+REFUSED	REPLAY inputs defaulted: agent global
+REFUSED	REPLAY inputs defaulted: agent agent
+REFUSED	REPLAY inputs defaulted: 
+REFUSED	REPLAY inputs defaulted: agent  tz
+# an index of version 1: six fields, no job identity
+index:entry-v1	1	script	https://a.test/x.js	came	https://a.test/x.js	
+index:REFUSED	01	script	https://a.test/x.js	came	https://a.test/x.js		1
+index:REFUSED	1	script	https://a.test/x.js	came	https://a.test/x.js		01
+index:REFUSED	1	script	https://a.test/x.js	came	https://a.test/x.js		1
+index:REFUSED	# yonder kept index 02
+# ESCAPES, read back in ONE pass from the left, in every position: `escape:<the bytes, hex>`, a tab, a field
+escape:	
+escape:5c	\\
+escape:615c62	a\\b
+escape:5c	\x5C
+escape:09	\x09
+escape:4d495353494e47	M%49SSING
+escape:4641494c4544	F%41ILED
+escape:25	%25
+escape:2532	%2
+escape:3735	75
+escape:3735	75
+escape:373525	75%
+escape:2525	%25%
+escape:253332	%32
+escape:253235	%2525
+escape:253235	\x2525
+escape:5c783235	\\x25
+escape:4d2534395353494e47	M%2549SSING
+escape:4d495353494e474d495353494e47	M%49SSINGM%49SSING
+escape:5c4d495353494e47	\\M%49SSING
+escape:5c783431	\\x41
+escape:41	\x41
+escape:5c78	\x
+escape:5c7834	\x4
+escape:5c78475a	\xGZ
+escape:4d25343953	M%49S
+escape:61254d495353494e4762	a%M%49SSINGb
+escape:255c	%25\\

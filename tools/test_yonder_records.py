@@ -27,7 +27,7 @@ WHOLE = b'address: https://a.test/\nverdict: 1 MISSING, 1 FAILED\nMISSING global
 MALFORMED = {
     'empty': (b'', 'not a page file'),
     'byte order mark': (b'\xef\xbb\xbf' + WHOLE, 'byte order mark'),
-    'carriage returns': (WHOLE.replace(b'\n', b'\r\n'), 'carriage return'),
+    'carriage returns': (WHOLE.replace(b'\n', b'\r\n'), 'control byte'),
     'no address': (b'verdict: clean\n', 'not a page file'),
     'cut after the address': (b'address: https://a.test/\n', 'second line is not a verdict'),
     'a verdict of nothing it knows': (b'address: https://a.test/\nverdict: fine\n', 'second line is not a verdict'),
@@ -40,7 +40,7 @@ MALFORMED = {
                                     'a record line with no count'),
     'a REPLAY line on a record yonder wrote': (b'address: https://a.test/\nverdict: clean\nREPLAY lost its way\n',
                                                'a REPLAY line of no kind this reader knows'),
-    'a NUL': (WHOLE + b'bytes: 1\x002\n', 'NUL'),
+    'a NUL': (WHOLE + b'bytes: 1\x002\n', 'control byte'),
     'bytes that are not UTF-8': (WHOLE + b'title: caf\xe9\n', 'not UTF-8'),
     'an escape to bytes that are not UTF-8': (b'address: https://a.test/\\xff\nverdict: clean\n',
                                               'escapes to bytes that are not UTF-8'),
@@ -62,12 +62,24 @@ MALFORMED = {
                                'a count no record holds'),
     'a count past UINT32_MAX': (b'address: https://a.test/\nverdict: 1 MISSING\nMISSING global x (4294967296)\n',
                                 'a count no record holds'),
-    "a kept page's record cut before its end": (b'address: https://a.test/\nverdict: clean\nbytes: 3\nkept: whole\n',
+    "a kept page's record cut before its end": (b'address: https://a.test/\nverdict: clean\nagent: a\nbytes: 3\nkept: whole\n',
                                                 "a kept page's record without its `end`"),
     "a kept page's record cut after its claim, before its kept": (
-        b'address: https://a.test/\nverdict: clean\nkept lines: 0\nbytes: 3\n', "a kept page's record without its `end`"),
+        b'address: https://a.test/\nverdict: clean\nagent: a\nkept lines: 0\nbytes: 3\n', "a kept page's record without its `end`"),
     'lines past a record\'s end': (b'address: https://a.test/\nverdict: clean\nend\nkept: whole\nend\n',
                                    'lines past its `end`'),
+    'a control byte': (WHOLE + b'note: a\x01b\n', 'control byte'),
+    'a carriage return mid-line': (WHOLE + b'note: a\rb\n', 'control byte'),
+    'a second address': (b'address: https://a.test/\nverdict: clean\naddress: https://b.test/\n', 'out of its place'),
+    "a version 2 record cut before its end": (b'address: https://a.test/\nverdict: clean\nagent: a\nkept: whole\n',
+                                              "without its `end`"),
+    # Any input version 2 added marks it, so one that lost its agent is
+    # still held to the end rule.
+    "a version 2 record without its agent, cut before its end": (
+        b'address: https://a.test/\nverdict: clean\nclock: 1\nkept: whole\n', "without its `end`"),
+    'a control byte in the address': (b'address: https://a.test/\x01\nverdict: clean\n', 'control byte'),
+    "an unjudged replay's record with lines beside its state": (
+        b'address: https://a.test/\nREPLAY state: unjudged gone\nverdict: clean\nend\n', 'lines beside its state'),
     'a stray kind on the not-reproduced line': (b'address: https://a.test/\nREPLAY state: verdict\nverdict: clean\n'
                                                 b'REPLAY not reproduced: image global\nend\n',
                                                 'naming what a replay does reproduce: global'),
@@ -166,6 +178,11 @@ class ReaderCases(unittest.TestCase):
         rec = self.read(b'address: https://a.test/\nverdict: clean\nkept lines: 0\nend\n')
         self.assertEqual(rec.state, records.State.VERDICT)
 
+    def test_a_version_1_kept_record_reads_without_end(self):
+        # Kept before `agent:` and `end` were written (REPLAY.md § 3).
+        rec = self.read(b'address: https://a.test/\nverdict: clean\nkept lines: 0\nkept: whole\nbytes: 3\n')
+        self.assertEqual(rec.state, records.State.VERDICT)
+
     def test_display_spells_control_bytes(self):
         self.assertEqual(records.display('a\x1b[2J\\b\nc\x85\u00e9'), 'a\\x1B[2J\\\\b\\x0Ac\\x85\u00e9')
 
@@ -180,7 +197,10 @@ class ReaderCases(unittest.TestCase):
             kind, _, line = raw.partition(b'\t')
             kind = kind.decode()
             with self.subTest(line=line[:60]):
-                self.assertEqual(records.classify(line, index=kind.startswith('index:'))[0], kind)
+                if kind.startswith('escape:'):
+                    self.assertEqual(records.unescape_bytes(line), bytes.fromhex(kind[len('escape:'):]))
+                else:
+                    self.assertEqual(records.classify(line, index=kind.startswith('index:'))[0], kind)
             seen += 1
         self.assertGreater(seen, 100)
 
