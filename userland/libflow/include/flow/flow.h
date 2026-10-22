@@ -974,9 +974,10 @@ struct flow_box {
     // `overflow` is not visible: the ellipsis its lines end in where their
     // content passes their end, laid out in its own fonts — U+2026, or
     // three periods where those fonts have no glyph for it — and owned by
-    // the tree. Where it goes is flow_line_cut's, which the painter reads
-    // when flow_visit hands it each of the box's lines, and flow_hit
-    // too. NULL otherwise.
+    // the tree. Where it goes, and what of each line it hides, is
+    // flow_line_cut's and flow_line_cut_keeps', which the painter reads
+    // when flow_visit hands it each of the box's lines, and flow_hit too.
+    // NULL otherwise.
     const os64_text_run_t *ellipsis;
     // TEXT: where those bytes are in the node's processed text — what a
     // selection maps a pixel back through — when the node is a TEXT node.
@@ -1280,25 +1281,52 @@ bool flow_outline_rect(const flow_box_t *box, os64_gui_rect_t *out);
 // it (CSS Overflow 4 § 4.1), in the line's coordinates: off when the
 // line's content does not pass the block's end edge — where the block's
 // scroll shows it, so content scrolled into view is not ellipsed —
-// pre-wrap spaces that hang there not counting. On, what must end by
-// `limit` (the end edge less the ellipsis) is kept: a whole box that ends
-// by it, and the characters of a text across it that do (flow_text_kept);
-// the ellipsis starts at `at`, where what is kept ends. A line that would
-// keep nothing keeps its first character or atom, clipped rather than
-// ellipsed, and `at` follows it. ONE RULE, two doors: what lies at or past
-// `at` is not drawn (yonder's painter) and not hit (flow_hit, which
-// answers the block there, the ellipsis standing in no inline box).
-// Linear in the line's boxes: a caller asking for every box on a line
-// keeps the answer.
+// pre-wrap spaces that hang there not counting. On, `limit` is the end
+// edge less the ellipsis, and the ellipsis starts at `at`, where what is
+// kept ends (flow_line_cut_keeps says what is). A line that would keep
+// nothing keeps its first character or atom, clipped rather than
+// ellipsed: `limit` is then where that ends, and `at` follows it. Linear
+// in the line's boxes, so a caller asking for many boxes keeps the answer
+// (flow_cut_memo_t).
 typedef struct {
     bool on;
     int64_t limit, at;
 } flow_line_cut_t;
 flow_line_cut_t flow_line_cut(const flow_tree_t *tree, const flow_box_t *line);
-// How much of a text box is kept before `limit`, in whole pixels from its
-// left: up to the last character boundary that does not pass it; 0 for a
-// box that is no text.
-int64_t flow_text_kept(const flow_box_t *text, int64_t limit);
+// THE ONE PLACE THE KEEP RULE IS WRITTEN, read by both doors — yonder's
+// painter draws only what is kept, and flow_hit hits only that: whether
+// any of `piece`, a box on a line cut as `cut` says, is kept, and up to
+// where (`*to`, in the line's coordinates). An atom or a marker is kept
+// whole when it ends by `limit` and not at all otherwise; a text keeps its
+// characters that end by `limit`; an inline box's piece is kept up to
+// `at`; anything ending by `limit` is kept whole. Nothing of a piece is
+// kept when `*to` is not past its left edge.
+bool flow_line_cut_keeps(const flow_line_cut_t *cut, const flow_box_t *piece, int64_t *to);
+// The cuts of lines asked for in one paint or one hit, keyed by the line:
+// a table that grows, so each line's cut is worked once however its boxes
+// are asked — in tree order or in any order of layers. `worked` counts the
+// cuts worked. Out of memory to grow, a cut not kept is worked each time it
+// is asked. One for each caller and each paint or hit; opened over the
+// tree whose scroll positions the cuts read, and closed after.
+typedef struct {
+    const flow_box_t *line;
+    flow_line_cut_t cut;
+} flow_cut_slot_t;
+typedef struct {
+    const flow_tree_t *tree;
+    flow_cut_slot_t *slot, own[16];
+    uint32_t cap, n;
+    uint64_t worked;
+} flow_cut_memo_t;
+void flow_cut_memo_open(flow_cut_memo_t *memo, const flow_tree_t *tree);
+void flow_cut_memo_close(flow_cut_memo_t *memo);
+flow_line_cut_t flow_cut_memo_get(flow_cut_memo_t *memo, const flow_box_t *line);
+// Whether `box`, or a box it is inside, is a piece of a cut line of which
+// nothing is kept (flow_line_cut_keeps): then nothing of `box` is drawn or
+// hit — an atom past the limit with everything in it, and a box positioned
+// or stacked out of such a piece. Its depth in lines, each cut once per
+// memo.
+bool flow_box_cut_away(flow_cut_memo_t *memo, const flow_box_t *box);
 // The square a shape marker (flow_marker_is_shape) is drawn in: a third of
 // its font size across and at least 3 pixels, centred in the box less a
 // quarter of the size at its end, on the height a line-through takes.
@@ -1457,12 +1485,21 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
 // the point, and that is drawn (`visibility: visible`) and not
 // `pointer-events: none`; NULL for none. A scroll container's content is
 // where its scroll moves it, and is not there outside its padding box.
-// On a line cut by its block's ellipsis nothing at or past the cut is there
-// (flow_line_cut). (x, y) is in document coordinates, the page scrolled to
-// `scroll`. The face
-// asks libpage what its node means, and a TEXT's run where in the text the
-// pointer is (os64_text_hit).
+// On a line cut by its block's ellipsis, what flow_line_cut_keeps does not
+// keep is not there — the hidden tail of a kept piece either, and no box
+// stacked out of a piece cut away (flow_box_cut_away); past the
+// ellipsis's start the point is the block's, the ellipsis standing in no
+// inline box. (x, y) is in document coordinates, the page scrolled to
+// `scroll`. The face asks libpage what its node means, and a TEXT's run
+// where in the text the pointer is (os64_text_hit).
+// THE BOUND: a hit works the cut of a line at most once (a memo keyed by
+// the line), and only of a line that holds the point or that a layer box
+// holding the point is inside; each cut is linear in its line's boxes.
+// flow_hit_counted answers the same and says, in `*cuts`, how many cuts
+// it worked.
 const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll);
+const flow_box_t *flow_hit_counted(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll,
+                                   uint64_t *cuts);
 
 // The box under (x, y), in document coordinates, among everything in the
 // flow — relative boxes included, out-of-flow ones not — whatever is drawn

@@ -167,9 +167,9 @@ void yonder_paint_cache_counts_restart(yonder_paint_cache_t *c);
 // (`begin`) and end; NULL, nothing is told.
 typedef enum { YONDER_PAINT_SHADOW, YONDER_PAINT_GRADIENT } yonder_paint_stage_t;
 extern void (*yonder_paint_stage)(yonder_paint_stage_t stage, bool begin);
-// How many line cuts (flow_line_cut) the painter has asked libflow for,
-// since the program started: a count the harness holds to the lines
-// painted, not the pieces on them.
+// How many line cuts (flow_line_cut) the painter has worked, since the
+// program started: a count the harness holds to the lines painted, not the
+// pieces on them.
 extern uint64_t yonder_paint_cuts;
 
 void yonder_paint(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_point_t scroll,

@@ -147,6 +147,44 @@ static void ellipsis_review_cases(void)
                     "fill 0 0 200 100 #fefefe\n"
                     "text \"abcdefghij\" 0 14 #ff0000 clip 0 0 32 20\n"
                     "text \"\" 32 14 #ff0000 clip 0 0 40 20\n");
+    // What the cut keeps is what is drawn, by the rule flow_hit reads
+    // (flow_line_cut_keeps, flow_box_cut_away). Three links blue after
+    // abcd in divs 40 wide: an inline-block with a transform, a stacked
+    // atom on the line, is left out; an absolute box in a relative inline
+    // is out of flow and not on the line, which does not overflow — no
+    // ellipsis — so it is drawn (32, 22, cut to the div at 8 x 8); a
+    // transformed inline-block inside an inline is left out.
+    paint_page_case("text-overflow: a stacked atom past the cut is not drawn",
+        "<!doctype html><style>body { margin: 0 } div { width: 40px;"
+        " overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #00ff00 }"
+        " a { background: #0000ff }</style>"
+        "<div>abcd<a href=x style='display: inline-block; width: 30px; height: 10px;"
+        " transform: translate(1px, 0)'></a></div>"
+        "<div>abcd<i style='position: relative'><a href=x style='position: absolute; left: 0;"
+        " top: 0; width: 20px; height: 8px'></a></i></div>"
+        "<div>abcd<i><a href=x style='transform: translate(1px, 0); display: inline-block;"
+        " width: 20px; height: 8px'></a></i></div>",
+        200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+        "fill 0 0 200 100 #fefefe\n"
+        "text \"abcd\" 0 14 #00ff00 clip 0 0 40 20\n"
+        "text \"\" 32 14 #00ff00 clip 0 0 40 20\n"
+        "text \"abcd\" 0 34 #00ff00 clip 0 20 40 20\n"
+        "text \"abcd\" 0 54 #00ff00 clip 0 40 40 20\n"
+        "text \"\" 32 54 #00ff00 clip 0 40 40 20\n"
+        "fill 32 22 8 8 #0000ff\n");
+    // An atom is kept whole only when it ends by the limit (32): of two
+    // inline-blocks 30 wide, the second pulled back 4 (26..56) is left
+    // out though it starts before the ellipsis, which follows the first at
+    // 30.
+    paint_page_case("text-overflow: an atom that does not end by the limit is not drawn",
+        "<!doctype html><style>body { margin: 0 } div { width: 40px;"
+        " overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #00ff00 }"
+        " i { display: inline-block; width: 30px; height: 10px; background: #0000ff }</style>"
+        "<div><i></i><i style='margin-left: -4px; background: #00ff00'></i></div>",
+        200, (os64_gui_rect_t){0, 0, 200, 100}, true,
+        "fill 0 0 200 100 #fefefe\n"
+        "fill 0 4 30 10 #0000ff\n"
+        "text \"\" 30 14 #00ff00 clip 0 0 40 20\n");
     // pre-wrap: abc and six spaces end the first line, 48 wide, but the
     // spaces hang (Text 3 § 4.1.3): abc is 24 and fits, so no ellipsis.
     paint_page_case("text-overflow: spaces that hang do not overflow a line",

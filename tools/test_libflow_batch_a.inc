@@ -207,6 +207,153 @@ static void ellipsis_hit_cases(void)
     sheeted_close(&p);
 }
 
+// The kind and tag of a hit, as "kind:tag" ("block:div", "atomic:a").
+static void hit_name(const flow_box_t *h, char *out, size_t n)
+{
+    const char *kind = h == NULL ? "none" : h->kind == FLOW_BOX_BLOCK ? "block"
+                     : h->kind == FLOW_BOX_LINE ? "line" : h->kind == FLOW_BOX_TEXT ? "text"
+                     : h->kind == FLOW_BOX_ATOMIC ? "atomic" : h->kind == FLOW_BOX_SPAN ? "span"
+                     : "other";
+    const char *tag = "-";
+    if (h != NULL && h->node != NULL && h->node->kind == OS64_HTML_ELEMENT)
+        tag = h->node->tag == OS64_HTML_TAG_DIV ? "div" : h->node->tag == OS64_HTML_TAG_A ? "a"
+            : h->node->tag == OS64_HTML_TAG_I ? "i" : "?";
+    snprintf(out, n, "%s:%s", kind, tag);
+}
+
+// A box stacked out of a piece the cut leaves out is not hit either
+// (flow_box_cut_away, asked of every layer): each div is 40 wide, its
+// limit 32, abcd 0..32, and a link past it. An inline-block with a
+// transform, and a transformed inline-block inside an inline, are atoms on
+// the line, stacked and left out: a point at 36 on each is the div's. An absolute box in a
+// relative inline is NOT on the line — it is out of flow, its tree parent
+// the div, and Overflow 4 § 4.1 hides only "characters and atomic
+// inline-level elements" of a line — and the line, abcd and an empty
+// inline, does not even overflow: there is no ellipsis, and the box is
+// drawn and hit where it is, at 32..52, by both doors alike.
+static void ellipsis_stacked_hit_cases(void)
+{
+    static const char *const kLinks[] = {
+        "abcd<a href=x style='display: inline-block; width: 30px; height: 10px;"
+        " transform: translate(1px, 0)'></a>",
+        "abcd<i style='position: relative'><a href=x style='position: absolute; left: 0; top: 0;"
+        " width: 20px; height: 8px'></a></i>",
+        "abcd<i><a href=x style='transform: translate(1px, 0); display: inline-block; width: 20px;"
+        " height: 8px'></a></i>",
+    };
+    static const char *const kHits[] = {"block:div", "block:a", "block:div"};
+    static const int32_t kY[] = {5, 5, 10};      // inside each link
+    for (size_t k = 0; k < 3; k++) {
+        char html[640];
+        snprintf(html, sizeof(html), "<!doctype html><style>body { margin: 0 } div { width: 40px;"
+                 " overflow: hidden; white-space: nowrap; text-overflow: ellipsis }</style>"
+                 "<div>%s</div>", kLinks[k]);
+        Sheeted p;
+        sheeted_open(&p, html, 100, 600);
+        flow_tree_t *tree = flow_layout(p.doc, p.page, 100, &p.env);
+        char got[32];
+        hit_name(tree != NULL ? flow_hit(tree, 36, kY[k], (flow_point_t){0, 0}) : NULL, got, sizeof(got));
+        expect(k == 1 ? "text-overflow: an absolute box out of a cut inline is out of the line, and hit"
+                      : "text-overflow: an atom stacked past the cut is not hit",
+               strcmp(got, kHits[k]) == 0, got);
+        flow_free(tree);
+        sheeted_close(&p);
+    }
+}
+
+// The keep rule is written once (flow_line_cut_keeps): an atom is kept
+// whole only when it ends by the limit. Two inline-blocks 30 wide, the
+// second pulled back 4 (the negative-margin gap idiom): 0..30 ends by the
+// limit, 32, and is kept; 26..56 does not, and is not, though it starts
+// before the ellipsis (at 30). A point at 28 hits the first; at 35, the
+// div.
+static void ellipsis_keep_cases(void)
+{
+    Sheeted p;
+    sheeted_open(&p, "<!doctype html><style>body { margin: 0 } div { width: 40px;"
+                     " overflow: hidden; white-space: nowrap; text-overflow: ellipsis }"
+                     " i { display: inline-block; width: 30px; height: 10px }</style>"
+                     "<div><i></i><i style='margin-left: -4px'></i></div>", 100, 600);
+    flow_tree_t *tree = flow_layout(p.doc, p.page, 100, &p.env);
+    const flow_box_t *div = tree != NULL ? batch_a_box(flow_root(tree), OS64_HTML_TAG_DIV,
+                                                       FLOW_BOX_BLOCK) : NULL;
+    const flow_box_t *line = div != NULL ? div->first : NULL;
+    const flow_box_t *one = line != NULL ? line->first : NULL;
+    const flow_box_t *two = one != NULL ? one->next : NULL;
+    flow_line_cut_t cut = line != NULL ? flow_line_cut(tree, line) : (flow_line_cut_t){false, 0, 0};
+    int64_t to1 = 0, to2 = 0;
+    bool keeps1 = one != NULL && flow_line_cut_keeps(&cut, one, &to1);
+    bool keeps2 = two != NULL && flow_line_cut_keeps(&cut, two, &to2);
+    char why[96];
+    snprintf(why, sizeof(why), "cut %d %lld %lld; %d %lld; %d %lld", cut.on, (long long)cut.limit,
+             (long long)cut.at, keeps1, (long long)to1, keeps2, (long long)to2);
+    expect("text-overflow: an atom is kept whole only when it ends by the limit",
+           cut.on && cut.limit == 32 && cut.at == 30 && keeps1 && to1 == 30 && !keeps2 &&
+               two != NULL && two->rect.x == 26,
+           why);
+    char at35[32];
+    const flow_box_t *h28 = tree != NULL ? flow_hit(tree, 28, 5, (flow_point_t){0, 0}) : NULL;
+    while (h28 != NULL && h28 != one && h28 != two)
+        h28 = h28->parent;
+    hit_name(tree != NULL ? flow_hit(tree, 35, 5, (flow_point_t){0, 0}) : NULL, at35, sizeof(at35));
+    expect("text-overflow: an atom left out is not hit where it is not drawn: the first is",
+           h28 != NULL && h28 == one, NULL);
+    expect("text-overflow: past what is kept, the div", strcmp(at35, "block:div") == 0, at35);
+    flow_free(tree);
+    sheeted_close(&p);
+}
+
+// A hit works the cut of a line at most once, and only of a line under the
+// point or one a layer box holding the point is inside (flow_hit's bound).
+// A block of 3,000 bold x's wrapping onto a thousand-odd lines, a relative
+// inline-block every 30: one hit works one cut. Then 100 lines each with a
+// relative inline-block moved up onto the same point, their z-indexes
+// alternating so the layers come in no line's order: each line's cut is
+// worked once — the memo is keyed by the line and grows, so no order of
+// layers makes it work one again.
+static void ellipsis_hit_bound_cases(void)
+{
+    size_t pieces = 3000;
+    char *html = malloc(pieces * 120 + 512);
+    strcpy(html, "<!doctype html><style>body { margin: 0 } div { width: 40px; overflow: hidden;"
+                 " text-overflow: ellipsis } b { font-weight: normal } i { position: relative;"
+                 " display: inline-block; width: 5px; height: 5px }</style><div>");
+    size_t n = strlen(html);
+    for (size_t k = 0; k < pieces; k++)
+        n += (size_t)sprintf(html + n, k % 30 == 29 ? "<b>x</b> <i></i> " : "<b>x</b> ");
+    strcpy(html + n, "</div>");
+    Sheeted p;
+    sheeted_open(&p, html, 100, 100000);
+    flow_tree_t *tree = flow_layout(p.doc, p.page, 100, &p.env);
+    uint64_t cuts = 0;
+    const flow_box_t *h = tree != NULL ? flow_hit_counted(tree, 2, 10005, (flow_point_t){0, 0}, &cuts)
+                                       : NULL;
+    char why[64];
+    snprintf(why, sizeof(why), "%llu cuts", (unsigned long long)cuts);
+    expect("text-overflow: a hit in a block of a thousand lines works the cut under the point",
+           h != NULL && cuts == 1, why);
+    flow_free(tree);
+    sheeted_close(&p);
+    // 100 lines, the k-th's atom moved up k lines onto the first line's.
+    n = (size_t)sprintf(html, "<!doctype html><style>body { margin: 0 } div { width: 40px;"
+                        " overflow: hidden; text-overflow: ellipsis; line-height: 20px }"
+                        " i { position: relative; display: inline-block; width: 30px;"
+                        " height: 10px }</style><div>");
+    for (int k = 0; k < 100; k++)
+        n += (size_t)sprintf(html + n, "<i style='top: %dpx; z-index: %d'></i><br>", -20 * k,
+                             k % 2 == 0 ? k : 1000 - k);
+    strcpy(html + n, "</div>");
+    sheeted_open(&p, html, 100, 100000);
+    tree = flow_layout(p.doc, p.page, 100, &p.env);
+    h = tree != NULL ? flow_hit_counted(tree, 5, 5, (flow_point_t){0, 0}, &cuts) : NULL;
+    snprintf(why, sizeof(why), "%llu cuts", (unsigned long long)cuts);
+    expect("text-overflow: a hit through a hundred lines' layers works each line once",
+           h != NULL && cuts == 100, why);
+    flow_free(tree);
+    sheeted_close(&p);
+    free(html);
+}
+
 // What a hostile sheet can ask of slice 4's properties lays out whole:
 // a tracking of a hundred thousand pixels either way across a long word
 // (each run still fits the engine's coordinates: none trails a run, and a
@@ -287,6 +434,9 @@ static void batch_a_cases(void)
     hostile_batch_a_cases();
     piece_bounds();
     ellipsis_hit_cases();
+    ellipsis_stacked_hit_cases();
+    ellipsis_keep_cases();
+    ellipsis_hit_bound_cases();
     // cursor is inherited, the keyword after the pictures kept; user-select
     // is not: the p inside the div is auto again, and prints nothing.
     cascade_case("cursor and user-select", 800,
