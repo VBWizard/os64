@@ -1031,8 +1031,9 @@ the style object and WPT all see it go with the switch.
   by the box with it. The end is where the block's scroll shows it, so
   content scrolled into view is drawn and a line scrolled to its end has no
   ellipsis. libflow's walk hands the painter the block's LINE boxes after
-  each line's pieces, and the painter draws the ellipsis then, in the
-  fill its text takes (`text_fill`); a text clip's walk hands it the line
+  each line's pieces, and the painter draws the ellipsis then as it draws
+  the block's text, its shadows and then its fill (`text_run`); a text
+  clip's walk hands it the line
   too, so a `background-clip: text` heading's ellipsis takes the gradient,
   or the clip's solid pen where the face refuses the clip. Cuts are kept
   in a memo keyed by the line that grows (`flow_cut_memo_t`), one for a
@@ -1071,7 +1072,10 @@ the style object and WPT all see it go with the switch.
   the page left unset (§ 4.4, `width_limits`) — so a stretched block with
   `max-height: 80px` is as wide as that height makes it. A picture's own
   ratio loses to the page's unless `auto` is written beside it, and a
-  picture not yet measured takes its other side from the page's ratio. A
+  picture not yet measured takes its other side from the page's ratio,
+  held by the limits an arrived one is (`replaced_hold`); with one side
+  given and a ratio of its own (not `auto <ratio>`) it is fixed, so its
+  arrival lays nothing out again (`flow_replaced_fixed`). A
   float or an absolute box with a height and no width takes the ratio's
   width rather than shrinking to fit. An absolute box whose two sizes are
   left to it takes its BLOCK axis as the ratio-dependent one unless only
@@ -1154,7 +1158,7 @@ flow-relative property in 512 records and 127,354 asks. danlegt's asks:
 missing: the flow-relative radii (84 to 92 records each),
 `scroll-padding-block` (51), `contain-intrinsic-block-size` (36).
 
-Host: libflow 21,382 → 21,682 checks, yonder 1,716 → 1,869, the DOM host
+Host: libflow 21,382 → 21,817 checks, yonder 1,716 → 1,914, the DOM host
 22,416 → 38,935, garb declarations 632, text 7,369, the scripted-page host
 5,888; all 0 failed. The mutant harnesses were not run (the briefs' rule).
 
