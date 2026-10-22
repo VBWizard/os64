@@ -282,8 +282,9 @@ void os64_dom_set_cookies(os64_dom_t *dom, const os64_dom_cookies_t *cookies);
  * either throws QuotaExceededError and changes nothing. */
 #define OS64_DOM_STORAGE_QUOTA ((size_t)5 * 1024 * 1024)
 /* Changes are handed over at most this often, and once more as the
- * binding is drained; sooner only when the changes not yet handed over
- * would pass the quota or the keys' cap. */
+ * binding is drained; sooner when the host flushes them (the page is
+ * departing) or when the changes not yet handed over would pass the quota
+ * or the keys' cap. */
 #define OS64_DOM_STORAGE_COMMIT_MS 1000
 typedef enum {
     OS64_DOM_STORAGE_LOCAL = 0,
@@ -334,6 +335,11 @@ void os64_dom_storage_settle(os64_dom_t *dom);
 /* When the next commit is due on the now_ms clock: UINT64_MAX with nothing
  * to commit. */
 uint64_t os64_dom_storage_due(const os64_dom_t *dom);
+/* Commits what both areas have not, due or not: the page is departing (a
+ * navigation away from it has become a page), and the next page's scripts
+ * must read what it wrote. The binding works on; what it changes after
+ * commits as it falls due. */
+void os64_dom_storage_flush(os64_dom_t *dom);
 /* Forgets both areas' maps and their changes not yet committed, so their
  * next touch reads the store as it is: "Clear page storage" while a page
  * is open. Owner thread, outside callbacks. */
@@ -384,7 +390,7 @@ os64_dom_geometry_stats_t os64_dom_geometry_stats(os64_dom_t *dom, bool reset);
 /* Owner-thread only, outside JS callbacks. Idempotent; NULL is a no-op.
  * Drain closes bindings and releases C-retained JS values even when libjs
  * has entered a sticky failed state. It first commits each storage area's
- * changes to its provider, which is a page's departure commit. Native
+ * changes to its provider, the last of a page's commits. Native
  * records remain alive through engine finalizers; os64_dom_free releases
  * their native node holds.
  * The required order is drain, os64_js_destroy (or destroy_report), then

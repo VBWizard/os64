@@ -392,7 +392,19 @@ static void dom_storage_provider_cases(void)
     os64_dom_storage_settle(f.binding);
     dom_script(&f, STORAGE_ASSERT "assert(localStorage.length===1&&localStorage.getItem('later')==='new');",
                "storage: a clear does not take a key another window added after it");
-    /* The departure commit: drain commits what is left, due or not. */
+    /* The page departs: a flush commits what is left, due or not, and the
+     * binding works on. */
+    dom_script(&f, "localStorage.setItem('y','flushed')", "storage: a change not yet due");
+    unsigned flushed = store.commits;
+    check(os64_dom_storage_due(f.binding) > storage_clock, "storage: not yet due");
+    os64_dom_storage_flush(f.binding);
+    check(store.commits == flushed + 1 && os64_dom_storage_due(f.binding) == UINT64_MAX &&
+          bytes_find(store.image, store.length, "+1 7\nyflushed\n", 14) != NULL,
+          "storage: a flush commits it at once");
+    os64_dom_storage_flush(f.binding);
+    check(store.commits == flushed + 1, "storage: a flush with nothing left commits nothing");
+    /* Drain commits what is left, due or not. */
+    os64_dom_storage_settle(f.binding);
     dom_script(&f, "sessionStorage.setItem('s','v');localStorage.setItem('z','last')",
                "storage: changes left at departure");
     unsigned before = store.commits;

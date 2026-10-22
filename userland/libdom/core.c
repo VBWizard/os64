@@ -324,8 +324,8 @@ void os64_dom_drain(os64_dom_t *dom)
 {
     if (dom == NULL || dom->closed) return;
     dom->closed = true;
-    /* What the page changed in its storage goes to the store before the
-     * binding is gone: the departure commit. */
+    /* What the page changed in its storage and has not committed goes to
+     * the store before the binding is gone: the last of its commits. */
     d_storage_drain(dom);
     d_event_drain(dom);
     d_timer_drain(dom);

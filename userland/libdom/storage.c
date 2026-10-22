@@ -602,10 +602,16 @@ void os64_dom_storage_forget(os64_dom_t *dom)
     }
 }
 
-void d_storage_drain(os64_dom_t *dom)
+void os64_dom_storage_flush(os64_dom_t *dom)
 {
+    if (dom == NULL) return;
     for (int i = 0; i < OS64_DOM_STORAGE_AREAS; i++)
         if (dom->storage[i] != NULL) area_commit(dom->storage[i]);
+}
+
+void d_storage_drain(os64_dom_t *dom)
+{
+    os64_dom_storage_flush(dom);
 }
 
 void d_storage_free(os64_dom_t *dom)

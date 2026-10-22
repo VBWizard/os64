@@ -6518,8 +6518,8 @@ static void webfont_cases(void) {
 #define STORE_FILE "/tmp/profile/storage/http%3A%2F%2Ffixture.test"
 /* The page's next navigation in this window, as loop_page's but keeping
  * the window, to `address`, which the head says the page came from. */
-static void storage_page(const char *address, const char *rest) {
-    start_trip(address,NULL,NAV_GO,NULL);
+static void storage_page_as(const char *address, const char *rest, NavKind kind) {
+    start_trip(address,NULL,kind,NULL);
     char *html=pad_page(rest);
     way_head_t h=stream_head("text/html","",false);
     os64_strcopy(h.url,sizeof(h.url),address);
@@ -6527,6 +6527,9 @@ static void storage_page(const char *address, const char *rest) {
     stream_post_body((const uint8_t *)html,strlen(html),YONDER_STREAM_CHUNK);
     stream_post_verdict(true,OS64_FETCH_OK,"");
     free(html);
+}
+static void storage_page(const char *address, const char *rest) {
+    storage_page_as(address,rest,NAV_GO);
 }
 /* Whether the store file holds `key` as `value` (NULL: holds no `key`). */
 typedef struct { const char *key, *value; bool found, right; } StoreLook;
@@ -6645,6 +6648,62 @@ static void storage_full_cases(void) {
     check(strstr(g.status_text,"Page storage is not kept: /nowhere/profile/storage cannot be made.")!=NULL,
         "storage: the status line says the profile folder cannot be made");
     check(!fake_is_dir("/nowhere"),"storage: nothing is made outside a parent that exists");
+    loop_drop();
+    yonder_storage_free(s_storage);
+    s_storage=NULL;
+}
+/* THE PAGE DEPARTS (yonder.c's page_departs): a write its page made within
+ * the coalescing second is in the store before the next page's scripts run,
+ * whatever took the window away: a link, Reload, Back, Forward, a file.
+ * sessionStorage's with it. */
+static void storage_departure_page(void) {
+    fake_reset();
+    s_storage=yonder_storage_new("/tmp/profile");
+    loop_page("<p id=out>start</p><script>localStorage.setItem('a','1');sessionStorage.setItem('a','1');"
+        "setTimeout(function(){localStorage.setItem('tok','x');sessionStorage.setItem('tok','y')},50);</script>");
+    check(loop_settle() && g.page.tree!=NULL,"departure: the first page arrives");
+    now_ms=150;
+    check(script_turn() && store_holds("a","1") && store_holds("tok",NULL),
+        "departure: the timer's write waits for its second");
+}
+static void storage_departure_cases(void) {
+    static const struct { NavKind kind; const char *name; } kPaths[]={
+        {NAV_GO,"departure: a link's next page reads what the last page wrote"},
+        {NAV_RELOAD,"departure: Reload's page reads what the last page wrote"},
+        {NAV_BACK,"departure: Back's page reads what the last page wrote"},
+        {NAV_FORWARD,"departure: Forward's page reads what the last page wrote"},
+    };
+    for(size_t i=0;i<sizeof(kPaths)/sizeof(kPaths[0]);i++) {
+        storage_departure_page();
+        storage_page_as("http://fixture.test/two","<p id=out>start</p><script>"
+            "document.getElementById('out').textContent=localStorage.getItem('tok')+' '+sessionStorage.getItem('tok');"
+            "</script>",kPaths[i].kind);
+        check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","x y"),kPaths[i].name);
+        loop_drop();
+        yonder_storage_free(s_storage);
+        s_storage=NULL;
+    }
+    /* A file: the write is in the store as the file's parse begins. */
+    storage_departure_page();
+    slurp_path="/pages/local.html";
+    slurp_bytes="<p id=out>disk</p>";
+    open_address("/pages/local.html",NAV_GO,NULL,NULL);
+    check(store_holds("tok","x"),"departure: a file's page begins after the last page's write is kept");
+    check(loop_settle(),"departure: the file arrives");
+    slurp_path=NULL;
+    loop_drop();
+    yonder_storage_free(s_storage);
+    s_storage=NULL;
+    /* A navigation that never becomes a page leaves the page where it is:
+     * nothing departs, and the write commits when it falls due. */
+    storage_departure_page();
+    start_trip("http://fixture.test/gone",NULL,NAV_GO,NULL);
+    stream_post_verdict(false,OS64_FETCH_DIAL_FAILED,"No road to fixture.test");
+    loop_settle();
+    check(store_holds("tok",NULL),"departure: a failed navigation is no departure");
+    now_ms=1200;
+    storage_turn();
+    check(store_holds("tok","x"),"departure: and the write commits when due");
     loop_drop();
     yonder_storage_free(s_storage);
     s_storage=NULL;
@@ -6849,6 +6908,7 @@ static void storage_modern_off_cases(void) {
 static void storage_cases(void) {
     storage_window_cases();
     storage_full_cases();
+    storage_departure_cases();
     storage_disk_cases();
     timing_window_cases();
     storage_modern_off_cases();
