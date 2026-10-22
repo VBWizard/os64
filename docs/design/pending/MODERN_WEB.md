@@ -650,7 +650,9 @@ the style object and WPT all see it go with the switch.
   holds no other, cut at the clusters the run's carets give
   (`word_pieces`). Min-content counts `break-all`'s and `anywhere`'s and
   not `break-word`'s, as § 5.4 says; `Segs.measuring` says which is being
-  worked. `keep-all` is `normal`, since libflow breaks only at spaces.
+  worked. Each word's first caret is found by halving, so cutting is
+  linear in the text (LAYOUT.md § Bounds). `keep-all` is `normal`, since
+  libflow breaks only at spaces.
 - **`letter-spacing`** (Text 3 § 7.2): a `<length>`; Text 4's percentages
   are refused. The text engine adds it (`os64_text_layout_t.letter_spacing`)
   after every cluster but a tab, the run's last included, so characters on
@@ -673,11 +675,17 @@ the style object and WPT all see it go with the switch.
   (`past_ellipsis`). Spaces that hang at a pre-wrap line's end do not count
   as content passing the end (`content_end`). A line with no room before
   the ellipsis keeps its first character or atom, clipped rather than
-  ellipsed, and the ellipsis follows it, clipped by the box with it.
+  ellipsed, and the ellipsis follows it, clipped by the box with it. The
+  end is where the block's scroll shows it, so content scrolled into view
+  is drawn and a line scrolled to its end has no ellipsis. The painter
+  works a line's cut once a paint (`LineCuts`), not once a piece.
 - **`outline`** and its four longhands (UI 4 § 3): a square ring of a
   border's styles round the border box, `outline-offset` past it, taking no
   room and counted in the box's ink (`flow_outline_rect`). `auto` is drawn
-  solid. It is painted LAST in its stacking context (CSS 2.1 Appendix E,
+  solid. The width kept is the computed one whatever the style, so
+  `inherit` passes it on; a style of none draws nothing. A negative offset
+  is held so the ring's outside is never under twice its width each way
+  (§ 3.5). It is painted LAST in its stacking context (CSS 2.1 Appendix E,
   step 10): `flow_visit_groups` hands each ring that meets the view to
   `flow_visitor_t.outline` in a layer of its own, after the context's
   members and before its group closes. The ring, not the box's overflow,
@@ -692,15 +700,26 @@ the style object and WPT all see it go with the switch.
   4.1: "in all cases"). Whichever size the ratio gives, the box is held to
   its automatic minimum there where that minimum is auto and it does not
   scroll: at least its content's height, at least its min-content width,
-  capped by its maximum (§ 4.3; `ratio_content_h`, `ratio_floor_w`). A
-  picture's own ratio loses to the page's unless `auto` is
-  written beside it, and a picture not yet measured takes its other side
-  from the page's ratio. A float or an absolute box with a height and no
-  width takes the ratio's width rather than shrinking to fit. A flex item
-  with a definite cross size (given, or its single line's that stretches
-  it, Flexbox 1 § 9.8) has its flex base size through the ratio (§ 9.2.3
-  B); its automatic minimum stays its content's, since § 4.5's transferred
-  size suggestion is a replaced item's. A grid item under `normal` starts down its area and stretches
+  capped by its maximum (§ 4.3; `ratio_content_h`, `ratio_floor_w`). The
+  limits travel across the ratio by one door, so every formatting context
+  answers alike: a width made from a height takes the height held to its
+  own limits first (`ratio_width_held`, CSS 2 § 10.3.2's order), and a
+  width the ratio box leaves to itself is held to its own limits and to
+  its definite min- and max-height carried across onto a min- or max-width
+  the page left unset (§ 4.4, `width_limits`) — so a stretched block with
+  `max-height: 80px` is as wide as that height makes it. A picture's own
+  ratio loses to the page's unless `auto` is written beside it, and a
+  picture not yet measured takes its other side from the page's ratio. A
+  float or an absolute box with a height and no width takes the ratio's
+  width rather than shrinking to fit. An absolute box whose two sizes are
+  left to it takes its BLOCK axis as the ratio-dependent one unless only
+  its inline axis has an auto inset (Position 3 § 4.1), so four insets
+  set do not stretch its height. A flex item with a definite cross size
+  (given, or its single line's that stretches it, Flexbox 1 § 9.8) has its
+  flex base size through the ratio (§ 9.2.3 B), under `flex-basis:
+  content` even where its main size is given; its automatic minimum stays
+  its content's, since § 4.5's transferred size suggestion is a replaced
+  item's. A grid item under `normal` starts down its area and stretches
   across it: the inline axis keeps `stretch`, as Chrome and Firefox do for
   the `aspect-ratio` tile pattern (a grid of `aspect-ratio: 1` cards fills
   each column and is as tall as it is wide). A written `stretch` still
@@ -721,6 +740,7 @@ keywords may appear once.
 | `flow_visitor_t.outline` | its last member: handed each ring last in its stacking context; NULL (as `flow_visit` passes it) means no outline step |
 | the LINE visit | the walk (`flow_visit`, `flow_visit_groups`) hands a LINE box over only for a block with an ellipsis, after the line's pieces |
 | `os64_text_layout_t.letter_spacing` | tracking after every cluster but a tab, the last too; trimming it at a line's end is the caller's |
+| `width_limits`, `hold_width`, `ratio_width_held` (libflow) | the one door every width a ratio makes or holds passes through, in every formatting context |
 | motion | `copy_prop` covers all thirteen longhands, so `same_value` does too; `letter-spacing`, `outline-width`, `-offset`, `-color`, `object-position` and `aspect-ratio` (by its logarithm, Values 4 § 5.7.1) interpolate, and the keywords are discrete at half way |
 
 **Numbers.** WPT, before (the baseline commit, nothing built) → after:
@@ -771,7 +791,7 @@ flow-relative property in 512 records and 127,354 asks. danlegt's asks:
 missing: the flow-relative radii (84 to 92 records each),
 `scroll-padding-block` (51), `contain-intrinsic-block-size` (36).
 
-Host: libflow 21,382 → 21,670 checks, yonder 1,716 → 1,825, the DOM host
+Host: libflow 21,382 → 21,678 checks, yonder 1,716 → 1,860, the DOM host
 22,416 → 38,935, garb declarations 626, text 7,369, the scripted-page host
 5,888; all 0 failed. The mutant harnesses were not run (the briefs' rule).
 
@@ -780,6 +800,8 @@ Host: libflow 21,382 → 21,670 checks, yonder 1,716 → 1,825, the DOM host
 radii; an outline on an inline box, and one that follows `border-radius`;
 `text-overflow` on an anonymous block's lines; `overflow-wrap` beside a
 float; the `-computed` WPT pages once slice 1b lands; and the style
-object's serialization (§ Classic browser scripting). Noted and not booked:
+object's serialization (§ Classic browser scripting). CSS system colours
+(`highlight` and the rest) are booked beside them, though older than the
+slice: libgarb never read them. Noted and not booked:
 `word-break: break-all` over a megabyte of text makes a segment per
 character, the same class of cost libflow already pays per word.

@@ -791,7 +791,12 @@ LIBPAGE.md's rule restated for geometry:
   suite lays out a table nested forty deep AND a table whose cells all
   span, and asserts the layout count against the linear bound in both.
   The measuring run per text piece is laid out once per layout;
-  fragments once per line. **A question about an element's ancestors or
+  fragments once per line. A word cut at its characters (`word-break:
+  break-all`, `overflow-wrap: anywhere`) finds its first caret in the
+  piece's run by halving and steps only through its own, never from the
+  run's start, which made a long text of short words quadratic
+  (`FLayout.piece_carets`, held to two a word per measure by the host
+  suite). **A question about an element's ancestors or
   siblings is answered from its parent's record, never by a walk**: pass
   1 keeps what the chapter's descendant selectors ask (lists, list items,
   `nobr`, `q` depth, a link, decorations) on each element as it styles
