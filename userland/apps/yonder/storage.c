@@ -1,10 +1,12 @@
 // storage.c — where a page's storage is kept (storage.h).
 
 #include "storage.h"
+#include "os64/date.h"
 #include "os64/fmt.h"
 #include "os64/io.h"
 #include "os64/mem.h"
 #include "os64/proc.h"
+#include "os64/procfs.h"
 #include "os64/slurp.h"
 #include "os64/str.h"
 
@@ -27,8 +29,11 @@ struct yonder_storage {
     Session *sessions;
     uint64_t generations;           // the last generation handed out
     uint32_t temps;                 // names the next temp file
+    bool swept;                     // the dead's temps and locks are gone (sweep)
     char problem[OS64_PATH_MAX + 96];
 };
+
+static void sweep(yonder_storage_t *st);
 
 yonder_storage_t *yonder_storage_new(const char *profile)
 {
@@ -88,10 +93,12 @@ bool yonder_storage_file_name(const char *origin, char *out, size_t cap)
     return used != 0 && !os64_streq(out, ".") && !os64_streq(out, "..");
 }
 
-// A temp file is its store's path and "+<task>.<count>.new". The '+' is a
-// byte a store's name never holds (it is %2B there), so no origin's store
-// is another's temp. The room it needs is kept free in every store path.
+// A temp file is its store's path and "+<task>.<count>.new", and a store's
+// lock its path and "+lock". The '+' is a byte a store's name never holds
+// (it is %2B there), so no origin's store is another's temp or lock. The
+// room they need is kept free in every store path.
 #define TEMP_SUFFIX_MAX (1 + 20 + 1 + 10 + 4)
+#define LOCK_SUFFIX "+lock"
 
 // <profile>/storage, and the store file for `origin` in it.
 static bool store_dir(const yonder_storage_t *st, char *out, size_t cap)
@@ -177,6 +184,7 @@ uint64_t yonder_storage_identity(yonder_storage_t *st, os64_dom_storage_area_t a
         Session *s = session_of(st, origin);
         return s != NULL ? s->generation : 0;
     }
+    sweep(st);
     char path[OS64_PATH_MAX];
     os64_dirent_t entry;
     if (!store_path(st, origin, path, sizeof(path)) || os64_stat(path, &entry) < 0)
@@ -306,14 +314,14 @@ static bool write_all(int32_t h, const uint8_t *p, size_t n)
     return true;
 }
 
-// The image published at `path` by temp and rename, so a reader never
-// meets half of one. False with nothing left behind but what was there.
-static bool publish(yonder_storage_t *st, const char *path, const void *image, size_t length)
+// The image written whole to a temp beside `path` (named into `temp`), for
+// a rename to publish, so a reader never meets half of one. False with no
+// temp left behind.
+static bool temp_write(yonder_storage_t *st, const char *path, const void *image, size_t length, char *temp,
+                       size_t cap)
 {
-    char temp[OS64_PATH_MAX];
-    int n = os64_snprintf(temp, sizeof(temp), "%s+%lu.%u.new", path, (unsigned long)os64_taskid(),
-                          (unsigned)++st->temps);
-    if (n <= 0 || (size_t)n >= sizeof(temp))
+    int n = os64_snprintf(temp, cap, "%s+%lu.%u.new", path, (unsigned long)os64_taskid(), (unsigned)++st->temps);
+    if (n <= 0 || (size_t)n >= cap)
         return false;
     int64_t h = os64_open(temp, "w");
     if (h < 0)
@@ -321,10 +329,216 @@ static bool publish(yonder_storage_t *st, const char *path, const void *image, s
     bool ok = write_all((int32_t)h, image, length);
     ok = ok && os64_sync((int32_t)h) == 0;
     ok = os64_close((int32_t)h) == 0 && ok;
-    ok = ok && os64_rename(temp, path) == 0;
     if (!ok)
         (void)os64_unlink(temp);
     return ok;
+}
+
+// ── Two yonders, one store ──────────────────────────────────────────────
+//
+// THE STORE'S LOCK is `<store>+lock`, made with an exclusive create and
+// holding "<task> <seconds>\n" (its taker and the wall clock's second when
+// it was taken). It is held across the read, the merge and the rename, so
+// two yonders (two processes) never merge onto one image and lose each
+// other's changes. A lock whose task is not running (gone, or a zombie),
+// or is this window's own (lock_dead), or that is older than LOCK_STALE_S
+// (a commit takes milliseconds; a task number is reused at the next boot),
+// was left by a crash and is broken. A live one is waited for,
+// LOCK_STEP_MS at a time, up to LOCK_WAIT_MS; then the commit is BUSY and
+// libdom keeps the changes for the next. One that names nothing is being
+// written, or was left half made: it is waited for the same way and broken
+// at the end of the wait. Under the lock, the store's identity is read
+// again before the rename: a writer that ignored the lock (a crash's lock
+// broken by two waiters at once) moved it, and the merge is made again
+// onto what it wrote. What the second look cannot see is such a writer's
+// image of the same size in the same second (file_identity), or one that
+// lands between the look and the rename.
+#define LOCK_WAIT_MS 200
+#define LOCK_STEP_MS 5
+#define LOCK_STALE_S 10
+#define MERGE_TRIES 3
+
+static uint64_t wall_seconds(void)
+{
+    os64_time_t wall;
+    return os64_time(&wall) == 0 && wall.epoch > 0 ? (uint64_t)wall.epoch : 0;
+}
+
+// Whether task `id` is running: there, and not a zombie.
+static bool task_alive(uint64_t id)
+{
+    os64_proc_info_t info;
+    return id != 0 && os64_proc_read(id, &info) == 0 && info.state != OS64_PROC_ZOMBIE;
+}
+
+// A lock's holder and when it was taken; false for a lock that names none
+// (empty, half written, or not one of these).
+static bool lock_read(const char *lock, uint64_t *task, uint64_t *taken)
+{
+    uint8_t *bytes;
+    size_t length;
+    if (os64_slurp(lock, 64, &bytes, &length) != OS64_SLURP_OK)
+        return false;
+    uint64_t number[2] = {0, 0};
+    size_t which = 0, digits = 0;
+    bool ok = false;
+    for (size_t i = 0; i < length; i++) {
+        uint8_t c = bytes[i];
+        if (c >= '0' && c <= '9' && digits < 19) {
+            number[which] = number[which] * 10 + (uint64_t)(c - '0');
+            digits++;
+        } else if (c == ' ' && which == 0 && digits != 0) {
+            which = 1;
+            digits = 0;
+        } else {
+            ok = c == '\n' && which == 1 && digits != 0 && i + 1 == length;
+            break;
+        }
+    }
+    os64_free(bytes);
+    if (!ok)
+        return false;
+    *task = number[0];
+    *taken = number[1];
+    return true;
+}
+
+// Whether a lock that names its holder was left by a crash (above). One
+// that names this task is a lock this window failed to let go, or an
+// earlier boot's task of the same number: this window holds none across a
+// commit, so it is never one in use.
+static bool lock_dead(uint64_t task, uint64_t taken)
+{
+    uint64_t now = wall_seconds();
+    return task == os64_taskid() || !task_alive(task) || (now > taken && now - taken > LOCK_STALE_S);
+}
+
+static bool lock_stale(const char *lock)
+{
+    uint64_t task, taken;
+    return lock_read(lock, &task, &taken) && lock_dead(task, taken);
+}
+
+// The lock at `lock`: taken, held by a live window past the wait, or not
+// to be made (a folder that cannot be written).
+typedef enum { LOCK_TAKEN, LOCK_HELD, LOCK_REFUSED } lock_t;
+
+static lock_t lock_take(const char *lock)
+{
+    char text[48];
+    int n = os64_snprintf(text, sizeof(text), "%lu %lu\n", (unsigned long)os64_taskid(),
+                          (unsigned long)wall_seconds());
+    if (n <= 0 || (size_t)n >= sizeof(text))
+        return LOCK_REFUSED;
+    // Every turn waits a step or breaks a lock; a lock that will not go is
+    // a folder that will not let it, and the turns end.
+    for (uint32_t turn = 0, waited = 0; turn < 2 * (LOCK_WAIT_MS / LOCK_STEP_MS) + 4; turn++) {
+        int64_t h = os64_open(lock, "x");
+        if (h >= 0) {
+            bool ok = write_all((int32_t)h, (const uint8_t *)text, (size_t)n);
+            ok = os64_close((int32_t)h) == 0 && ok;
+            if (ok)
+                return LOCK_TAKEN;
+            (void)os64_unlink(lock);
+            return LOCK_REFUSED;
+        }
+        os64_dirent_t entry;
+        if (os64_stat(lock, &entry) < 0)
+            continue;               // let go between the create and the look, or not to be made
+        uint64_t task, taken;
+        bool named = lock_read(lock, &task, &taken);
+        if (named && lock_dead(task, taken)) {
+            (void)os64_unlink(lock);
+            continue;
+        }
+        if (waited >= LOCK_WAIT_MS) {
+            if (named)
+                return LOCK_HELD;   // a live holder: the changes wait for the next commit
+            (void)os64_unlink(lock);    // half made, and still so at the wait's end
+            continue;
+        }
+        (void)os64_sleep(LOCK_STEP_MS);
+        waited += LOCK_STEP_MS;
+    }
+    return LOCK_REFUSED;
+}
+
+// A temp's or a lock's owner is gone: its task is not running, or it is
+// this one, whose own are never in the middle of anything when this is
+// asked. A lock is gone by lock_stale's rule. Store names hold no '+'.
+static bool orphan(const char *dir, const char *name)
+{
+    const char *plus = os64_strchr(name, '+');
+    if (plus == NULL)
+        return false;
+    char path[OS64_PATH_MAX];
+    int n = os64_snprintf(path, sizeof(path), "%s/%s", dir, name);
+    if (n <= 0 || (size_t)n >= sizeof(path))
+        return false;
+    if (os64_streq(plus, LOCK_SUFFIX))
+        return lock_stale(path);
+    uint64_t task = 0;
+    size_t digits = 0;
+    for (const char *at = plus + 1; *at >= '0' && *at <= '9' && digits < 19; at++, digits++)
+        task = task * 10 + (uint64_t)(*at - '0');
+    return digits != 0 && (task == os64_taskid() || !task_alive(task));
+}
+
+// The names in `dir` that are files, os64_malloc'd: the listing first and
+// the removals after, since a folder is not changed under a listing of it.
+// NULL with *count 0 for none; *whole false when the listing stopped short.
+static char (*listing(const char *dir, size_t *count, bool *whole))[OS64_DIRENT_NAME_MAX + 1]
+{
+    *count = 0;
+    *whole = false;
+    int64_t h = os64_opendir(dir);
+    if (h < 0)
+        return NULL;
+    char (*names)[OS64_DIRENT_NAME_MAX + 1] = NULL;
+    size_t cap = 0;
+    os64_dirent_t entry;
+    *whole = true;
+    while (os64_readdir((int32_t)h, &entry) == 1) {
+        if (entry.flags & OS64_DE_DIR)
+            continue;
+        if (*count == cap) {
+            size_t more = cap != 0 ? cap * 2 : 16;
+            void *grown = os64_realloc(names, more * sizeof(*names));
+            if (grown == NULL) {
+                *whole = false;
+                break;
+            }
+            names = grown;
+            cap = more;
+        }
+        os64_strcopy(names[(*count)++], sizeof(names[0]), entry.name);
+    }
+    os64_close((int32_t)h);
+    return names;
+}
+
+// At the first touch of a profile's stores: the temps and locks a crash
+// left (orphan) are removed, so they neither grow without end nor stand
+// for a site.
+static void sweep(yonder_storage_t *st)
+{
+    if (st->swept)
+        return;
+    st->swept = true;
+    char dir[OS64_PATH_MAX];
+    os64_dirent_t entry;
+    if (!store_dir(st, dir, sizeof(dir)) || os64_stat(dir, &entry) < 0)
+        return;
+    size_t count;
+    bool whole;
+    char (*names)[OS64_DIRENT_NAME_MAX + 1] = listing(dir, &count, &whole);
+    for (size_t i = 0; i < count; i++) {
+        char path[OS64_PATH_MAX];
+        int n = os64_snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
+        if (n > 0 && (size_t)n < sizeof(path) && orphan(dir, names[i]))
+            (void)os64_unlink(path);
+    }
+    os64_free(names);
 }
 
 static os64_dom_storage_status_t commit_session(yonder_storage_t *st, const char *origin, const void *changes,
@@ -361,6 +575,86 @@ static os64_dom_storage_status_t commit_session(yonder_storage_t *st, const char
     return OS64_DOM_STORAGE_OK;
 }
 
+static void say_busy(yonder_diag_t *diag, const char *origin)
+{
+    if (diag == NULL)
+        return;
+    char message[OS64_PATH_MAX + 96];
+    os64_snprintf(message, sizeof(message),
+                  "localStorage of %s is busy (another window is writing it); its changes wait for the next commit",
+                  origin);
+    yonder_diag_failed(diag, "storage", message);
+}
+
+// The store's identity now, 0 for none (as yonder_storage_identity's).
+static uint64_t path_identity(const char *path)
+{
+    os64_dirent_t entry;
+    return os64_stat(path, &entry) < 0 ? 0 : file_identity(&entry);
+}
+
+// Read, merge, write, under the store's lock: the store as it stands, this
+// page's changes on top. A store that is there and cannot be read is never
+// written over. A store that moved between the read and the rename (above)
+// is merged onto again, up to MERGE_TRIES merges in all, and then the
+// commit is BUSY.
+static os64_dom_storage_status_t commit_locked(yonder_storage_t *st, const char *origin, const char *path,
+                                               const void *changes, size_t length, yonder_diag_t *diag)
+{
+    for (int tries = 1;; tries++) {
+        uint64_t before = path_identity(path);
+        uint8_t *image;
+        size_t image_length;
+        if (!read_store(st, path, &image, &image_length))
+            return OS64_DOM_STORAGE_FAILED;
+        void *merged;
+        size_t merged_length;
+        os64_dom_storage_status_t status = os64_dom_storage_merge(image, image_length, changes, length, &merged,
+                                                                  &merged_length);
+        bool had = image != NULL;
+        // A refused merge is a file in no format of libdom's, or no memory.
+        if (status == OS64_DOM_STORAGE_FAILED)
+            os64_snprintf(st->problem, sizeof(st->problem),
+                          os64_dom_storage_walk(image, image_length, every_record, NULL)
+                              ? "Page storage is not kept for %s: no memory to merge its changes."
+                              : "Page storage is not kept for %s: its file is not one yonder wrote.",
+                          origin);
+        os64_free(image);
+        if (status == OS64_DOM_STORAGE_FULL)
+            say_full(diag, "localStorage", origin, changes, length);
+        if (status != OS64_DOM_STORAGE_OK)
+            return status;
+        char temp[OS64_PATH_MAX];
+        bool publishing = merged != NULL;
+        bool ok = !publishing || temp_write(st, path, merged, merged_length, temp, sizeof(temp));
+        os64_free(merged);
+        if (ok && path_identity(path) != before) {
+            if (publishing)
+                (void)os64_unlink(temp);
+            if (tries < MERGE_TRIES)
+                continue;
+            say_busy(diag, origin);
+            return OS64_DOM_STORAGE_BUSY;
+        }
+        // A store left empty is no store, and one another window removed
+        // first is gone as asked.
+        os64_dirent_t entry;
+        if (ok && publishing) {
+            ok = os64_rename(temp, path) == 0;
+            if (!ok)
+                (void)os64_unlink(temp);
+        } else if (ok) {
+            ok = !had || os64_unlink(path) == 0 || os64_stat(path, &entry) < 0;
+        }
+        if (!ok) {
+            os64_snprintf(st->problem, sizeof(st->problem), "Page storage is not kept: %s cannot be written.",
+                          path);
+            return OS64_DOM_STORAGE_FAILED;
+        }
+        return OS64_DOM_STORAGE_OK;
+    }
+}
+
 os64_dom_storage_status_t yonder_storage_commit(yonder_storage_t *st, os64_dom_storage_area_t area,
                                                 const char *origin, const void *changes, size_t length,
                                                 yonder_diag_t *diag)
@@ -378,40 +672,21 @@ os64_dom_storage_status_t yonder_storage_commit(yonder_storage_t *st, os64_dom_s
         os64_snprintf(st->problem, sizeof(st->problem), "Page storage is not kept: %s cannot be made.", dir);
         return OS64_DOM_STORAGE_FAILED;
     }
-    // Read, merge, write: the store as it stands, this page's changes on
-    // top. A store that is there and cannot be read is never written over.
-    uint8_t *image;
-    size_t image_length;
-    if (!read_store(st, path, &image, &image_length))
-        return OS64_DOM_STORAGE_FAILED;
-    void *merged;
-    size_t merged_length;
-    os64_dom_storage_status_t status = os64_dom_storage_merge(image, image_length, changes, length, &merged,
-                                                              &merged_length);
-    bool had = image != NULL;
-    // A refused merge is a file in no format of libdom's, or no memory.
-    if (status == OS64_DOM_STORAGE_FAILED)
-        os64_snprintf(st->problem, sizeof(st->problem),
-                      os64_dom_storage_walk(image, image_length, every_record, NULL)
-                          ? "Page storage is not kept for %s: no memory to merge its changes."
-                          : "Page storage is not kept for %s: its file is not one yonder wrote.",
-                      origin);
-    os64_free(image);
-    if (status == OS64_DOM_STORAGE_FULL)
-        say_full(diag, "localStorage", origin, changes, length);
-    if (status != OS64_DOM_STORAGE_OK)
-        return status;
-    // A store left empty is no store, and one another window removed
-    // first is gone as asked.
-    os64_dirent_t entry;
-    bool ok = merged != NULL ? publish(st, path, merged, merged_length)
-                             : !had || os64_unlink(path) == 0 || os64_stat(path, &entry) < 0;
-    os64_free(merged);
-    if (!ok) {
+    char lock[OS64_PATH_MAX];
+    os64_snprintf(lock, sizeof(lock), "%s" LOCK_SUFFIX, path);   // store_path kept the room
+    sweep(st);
+    lock_t taken = lock_take(lock);
+    if (taken == LOCK_HELD) {
+        say_busy(diag, origin);
+        return OS64_DOM_STORAGE_BUSY;
+    }
+    if (taken == LOCK_REFUSED) {
         os64_snprintf(st->problem, sizeof(st->problem), "Page storage is not kept: %s cannot be written.", path);
         return OS64_DOM_STORAGE_FAILED;
     }
-    return OS64_DOM_STORAGE_OK;
+    os64_dom_storage_status_t status = commit_locked(st, origin, path, changes, length, diag);
+    (void)os64_unlink(lock);
+    return status;
 }
 
 int64_t yonder_storage_clear(yonder_storage_t *st)
@@ -423,37 +698,24 @@ int64_t yonder_storage_clear(yonder_storage_t *st)
     os64_dirent_t entry;
     if (!store_dir(st, dir, sizeof(dir)) || os64_stat(dir, &entry) < 0)
         return 0;
-    int64_t h = os64_opendir(dir);
-    if (h < 0)
+    size_t count;
+    bool whole;
+    char (*names)[OS64_DIRENT_NAME_MAX + 1] = listing(dir, &count, &whole);
+    if (!whole && count == 0)
         return -1;
-    // The names first, then the removals: a folder is not changed under a
-    // listing of it.
-    char (*names)[OS64_DIRENT_NAME_MAX + 1] = NULL;
-    size_t count = 0, cap = 0;
-    bool listed = true;
-    while (os64_readdir((int32_t)h, &entry) == 1) {
-        if (entry.flags & OS64_DE_DIR)
-            continue;
-        if (count == cap) {
-            size_t more = cap != 0 ? cap * 2 : 16;
-            void *grown = os64_realloc(names, more * sizeof(*names));
-            if (grown == NULL) {
-                listed = false;
-                break;
-            }
-            names = grown;
-            cap = more;
-        }
-        os64_strcopy(names[count++], sizeof(names[0]), entry.name);
-    }
-    os64_close((int32_t)h);
+    // Every store goes, and every temp and lock a crash left; a live
+    // yonder's temp or lock is that window's, mid-commit, and stays. Only
+    // a store is a site.
     int64_t removed = 0;
-    bool all = listed;
+    bool all = whole;
     for (size_t i = 0; i < count; i++) {
+        bool store = os64_strchr(names[i], '+') == NULL;
+        if (!store && !orphan(dir, names[i]))
+            continue;
         char path[OS64_PATH_MAX];
         int n = os64_snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
         if (n > 0 && (size_t)n < sizeof(path) && os64_unlink(path) == 0)
-            removed++;
+            removed += store ? 1 : 0;
         else
             all = false;
     }

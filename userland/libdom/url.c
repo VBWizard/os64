@@ -1048,8 +1048,10 @@ static JSValue pair_value(JSContext *ctx, const DPair *pair, int kind)
     if (kind == I_VALUES) return JS_NewStringLen(ctx, pair->value, pair->value_length);
     JSValue array = JS_NewArray(ctx);
     if (JS_IsException(array)) return array;
-    if (JS_SetPropertyUint32(ctx, array, 0, JS_NewStringLen(ctx, pair->name, pair->name_length)) < 0 ||
-        JS_SetPropertyUint32(ctx, array, 1, JS_NewStringLen(ctx, pair->value, pair->value_length)) < 0) {
+    if (JS_DefinePropertyValueUint32(ctx, array, 0, JS_NewStringLen(ctx, pair->name, pair->name_length),
+                                     JS_PROP_C_W_E) < 0 ||
+        JS_DefinePropertyValueUint32(ctx, array, 1, JS_NewStringLen(ctx, pair->value, pair->value_length),
+                                     JS_PROP_C_W_E) < 0) {
         JS_FreeValue(ctx, array);
         return JS_EXCEPTION;
     }
@@ -1196,8 +1198,9 @@ static JSValue params_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         uint32_t used = 0;
         for (size_t i = 0; !JS_IsException(result) && i < params->count; i++)
             if (same(&params->pairs[i], false, &name) &&
-                JS_SetPropertyUint32(ctx, result, used++,
-                                     JS_NewStringLen(ctx, params->pairs[i].value, params->pairs[i].value_length)) < 0) {
+                JS_DefinePropertyValueUint32(ctx, result, used++,
+                                             JS_NewStringLen(ctx, params->pairs[i].value, params->pairs[i].value_length),
+                                             JS_PROP_C_W_E) < 0) {
                 JS_FreeValue(ctx, result);
                 result = JS_EXCEPTION;
             }

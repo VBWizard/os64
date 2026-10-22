@@ -171,11 +171,13 @@ void yonder_scripts_mark(yonder_scripts_t *scripts, os64_dom_milestone_t which, 
 // The page's storage (dom.h § Web storage): every task the host runs ends
 // with os64_dom_storage_settle, which commits what is due; `due` is when
 // the next commit is (UINT64_MAX for none, yonder_now_ms' clock), and
-// `settle` commits it when no task has. `forget` drops the page's maps and
-// the changes it has not committed: "Clear page storage". The departure
-// commit is the host's teardown's.
+// `settle` commits it when no task has. `flush` commits whatever is left,
+// due or not, as the page departs (yonder.c's page_departs). `forget` drops
+// the page's maps and the changes it has not committed: "Clear page
+// storage". The host's teardown commits what is left once more.
 uint64_t yonder_scripts_storage_due(const yonder_scripts_t *scripts);
 void yonder_scripts_storage_settle(yonder_scripts_t *scripts);
+void yonder_scripts_storage_flush(yonder_scripts_t *scripts);
 void yonder_scripts_storage_forget(yonder_scripts_t *scripts);
 
 #endif

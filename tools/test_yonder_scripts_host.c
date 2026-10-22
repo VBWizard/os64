@@ -12,6 +12,7 @@
 #include "test_libflow_fonts.h"
 #include "../userland/libhtml/internal.h"
 #include "os64/conf.h"
+#include "os64/procfs.h"
 #include "os64/js_engine.h"
 os64_js_status_t __real_os64_js_create_with_teardown(const os64_js_config_t *,
     os64_js_teardown_policy_t, const char *, os64_js_runtime_t **, os64_js_outcome_t *);
@@ -35,6 +36,18 @@ static bool fake_fail_open;
 /* A disk that writes a byte a call, or refuses a write, a sync or a
  * rename. */
 static bool fake_short_write, fake_fail_write, fake_fail_sync, fake_fail_rename;
+/* The task this window is, and the tasks that are running (a store lock's
+ * holder is asked after through os64_proc_read); fake_live_zombie makes
+ * the first of them a zombie. os64_sleep runs fake_sleep_hook once, at its
+ * first call after a case sets it: another window's commit, landing while
+ * this one waits for the lock. */
+static uint64_t fake_task = 7, fake_live[4];
+static bool fake_live_zombie;
+static unsigned fake_sleeps;
+static void (*fake_sleep_hook)(void);
+/* fake_sync_hook runs once, at the next sync: another window's write
+ * landing between this one's read and its rename. */
+static void (*fake_sync_hook)(void);
 static uint64_t fake_second = 1;
 static const char *fake_parent(const char *path, char *out, size_t cap) {
     snprintf(out,cap,"%s",path); char *slash=strrchr(out,'/');
@@ -54,6 +67,7 @@ static void fake_reset(void) {
     for(int i=0;i<FAKE_FILES;i++) free(fake_files[i].data);
     memset(fake_files,0,sizeof(fake_files)); nfake_dirs=0; fake_writes=0; fake_fail_open=false;
     fake_short_write=fake_fail_write=fake_fail_sync=fake_fail_rename=false;
+    fake_task=7; memset(fake_live,0,sizeof(fake_live)); fake_live_zombie=false; fake_sleeps=0; fake_sleep_hook=NULL; fake_sync_hook=NULL;
     fake_second=1;
     snprintf(fake_dirs[nfake_dirs++],256,"/tmp");
 }
@@ -95,7 +109,13 @@ int64_t os64_rename(const char *from, const char *to) {
     fake_writes++;
     return 0;
 }
-int64_t os64_sync(int32_t h) { (void)h; return fake_fail_sync ? -1 : 0; }
+int64_t os64_sync(int32_t h) {
+    (void)h;
+    void (*hook)(void)=fake_sync_hook;
+    fake_sync_hook=NULL;
+    if(hook!=NULL) hook();
+    return fake_fail_sync ? -1 : 0;
+}
 int64_t os64_unlink(const char *p) {
     int f=fake_file(p);
     if(f<0) return -1;
@@ -138,7 +158,22 @@ int64_t os64_readdir(int32_t h, os64_dirent_t *entry) {
     }
     return 0;
 }
-uint64_t os64_taskid(void) { return 7; }
+uint64_t os64_taskid(void) { return fake_task; }
+int32_t os64_proc_read(uint64_t pid, os64_proc_info_t *out) {
+    memset(out,0,sizeof(*out));
+    for(int i=0;i<4;i++) if(fake_live[i]!=0 && fake_live[i]==pid) {
+        out->pid=pid; out->state=i==0 && fake_live_zombie ? OS64_PROC_ZOMBIE : OS64_PROC_ISLEEP;
+        return 0;
+    }
+    return pid==fake_task ? (out->pid=pid, out->state=OS64_PROC_RUNNING, 0) : -1;
+}
+int64_t os64_sleep(uint64_t ms) {
+    (void)ms; fake_sleeps++;
+    void (*hook)(void)=fake_sleep_hook;
+    fake_sleep_hook=NULL;
+    if(hook!=NULL) hook();
+    return 0;
+}
 /* The clocks stand still unless a case moves them: micros steps by
  * clock_step at every read (an overrun is a loop that reads it) and by
  * geometry_layout_delay at every forced layout (a slow native layout), and
@@ -6522,8 +6557,8 @@ static void webfont_cases(void) {
 #define STORE_FILE "/tmp/profile/storage/http%3A%2F%2Ffixture.test"
 /* The page's next navigation in this window, as loop_page's but keeping
  * the window, to `address`, which the head says the page came from. */
-static void storage_page(const char *address, const char *rest) {
-    start_trip(address,NULL,NAV_GO,NULL);
+static void storage_page_as(const char *address, const char *rest, NavKind kind) {
+    start_trip(address,NULL,kind,NULL);
     char *html=pad_page(rest);
     way_head_t h=stream_head("text/html","",false);
     os64_strcopy(h.url,sizeof(h.url),address);
@@ -6531,6 +6566,9 @@ static void storage_page(const char *address, const char *rest) {
     stream_post_body((const uint8_t *)html,strlen(html),YONDER_STREAM_CHUNK);
     stream_post_verdict(true,OS64_FETCH_OK,"");
     free(html);
+}
+static void storage_page(const char *address, const char *rest) {
+    storage_page_as(address,rest,NAV_GO);
 }
 /* Whether the store file holds `key` as `value` (NULL: holds no `key`). */
 typedef struct { const char *key, *value; bool found, right; } StoreLook;
@@ -6649,6 +6687,62 @@ static void storage_full_cases(void) {
     check(strstr(g.status_text,"Page storage is not kept: /nowhere/profile/storage cannot be made.")!=NULL,
         "storage: the status line says the profile folder cannot be made");
     check(!fake_is_dir("/nowhere"),"storage: nothing is made outside a parent that exists");
+    loop_drop();
+    yonder_storage_free(s_storage);
+    s_storage=NULL;
+}
+/* THE PAGE DEPARTS (yonder.c's page_departs): a write its page made within
+ * the coalescing second is in the store before the next page's scripts run,
+ * whatever took the window away: a link, Reload, Back, Forward, a file.
+ * sessionStorage's with it. */
+static void storage_departure_page(void) {
+    fake_reset();
+    s_storage=yonder_storage_new("/tmp/profile");
+    loop_page("<p id=out>start</p><script>localStorage.setItem('a','1');sessionStorage.setItem('a','1');"
+        "setTimeout(function(){localStorage.setItem('tok','x');sessionStorage.setItem('tok','y')},50);</script>");
+    check(loop_settle() && g.page.tree!=NULL,"departure: the first page arrives");
+    now_ms=150;
+    check(script_turn() && store_holds("a","1") && store_holds("tok",NULL),
+        "departure: the timer's write waits for its second");
+}
+static void storage_departure_cases(void) {
+    static const struct { NavKind kind; const char *name; } kPaths[]={
+        {NAV_GO,"departure: a link's next page reads what the last page wrote"},
+        {NAV_RELOAD,"departure: Reload's page reads what the last page wrote"},
+        {NAV_BACK,"departure: Back's page reads what the last page wrote"},
+        {NAV_FORWARD,"departure: Forward's page reads what the last page wrote"},
+    };
+    for(size_t i=0;i<sizeof(kPaths)/sizeof(kPaths[0]);i++) {
+        storage_departure_page();
+        storage_page_as("http://fixture.test/two","<p id=out>start</p><script>"
+            "document.getElementById('out').textContent=localStorage.getItem('tok')+' '+sessionStorage.getItem('tok');"
+            "</script>",kPaths[i].kind);
+        check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","x y"),kPaths[i].name);
+        loop_drop();
+        yonder_storage_free(s_storage);
+        s_storage=NULL;
+    }
+    /* A file: the write is in the store as the file's parse begins. */
+    storage_departure_page();
+    slurp_path="/pages/local.html";
+    slurp_bytes="<p id=out>disk</p>";
+    open_address("/pages/local.html",NAV_GO,NULL,NULL);
+    check(store_holds("tok","x"),"departure: a file's page begins after the last page's write is kept");
+    check(loop_settle(),"departure: the file arrives");
+    slurp_path=NULL;
+    loop_drop();
+    yonder_storage_free(s_storage);
+    s_storage=NULL;
+    /* A navigation that never becomes a page leaves the page where it is:
+     * nothing departs, and the write commits when it falls due. */
+    storage_departure_page();
+    start_trip("http://fixture.test/gone",NULL,NAV_GO,NULL);
+    stream_post_verdict(false,OS64_FETCH_DIAL_FAILED,"No road to fixture.test");
+    loop_settle();
+    check(store_holds("tok",NULL),"departure: a failed navigation is no departure");
+    now_ms=1200;
+    storage_turn();
+    check(store_holds("tok","x"),"departure: and the write commits when due");
     loop_drop();
     yonder_storage_free(s_storage);
     s_storage=NULL;
@@ -6817,6 +6911,128 @@ static void storage_disk_cases(void) {
     yonder_storage_free(NULL);
     fake_reset();
 }
+/* TWO YONDERS, ONE STORE (storage.c § Two yonders): two windows' commits
+ * interleaved on the fake disk, each a separate task. Neither's changes
+ * are lost: the store's lock is waited for, a crash's lock is broken, a
+ * live holder past the wait makes the commit BUSY, and a store another
+ * writer moved between the read and the rename is merged onto again. */
+#define STORE_LOCK STORE_FILE "+lock"
+static yonder_storage_t *other_window;
+static const char kOtherChange[]="os64 storage 1\n+5 1\nother1\n";
+/* The other window, task 8, holding the lock: it commits and lets go. */
+static void other_commits_and_lets_go(void) {
+    uint64_t me=fake_task;
+    fake_task=8;
+    (void)os64_unlink(STORE_LOCK);
+    check(yonder_storage_commit(other_window,OS64_DOM_STORAGE_LOCAL,"http://fixture.test",kOtherChange,
+                                sizeof(kOtherChange)-1,NULL)==OS64_DOM_STORAGE_OK,"two yonders: the other window commits");
+    fake_task=me;
+}
+/* Another writer that took no lock, between this one's read and rename. */
+static void other_writes_unlocked(void) {
+    static const char kImage[]="os64 storage 1\n+1 1\nw1\n";
+    fake_put(STORE_FILE,kImage,sizeof(kImage)-1);
+}
+static void plant_lock(uint64_t task, uint64_t taken) {
+    char text[48];
+    int n=snprintf(text,sizeof(text),"%lu %lu\n",(unsigned long)task,(unsigned long)taken);
+    fake_put(STORE_LOCK,text,(size_t)n);
+}
+static void storage_two_yonder_cases(void) {
+    static const char kMine[]="os64 storage 1\n+4 1\nmine1\n";
+    const os64_dom_storage_area_t L=OS64_DOM_STORAGE_LOCAL;
+    const char *origin="http://fixture.test";
+    uint64_t now=(uint64_t)js_test_clock.epoch;
+    /* A live holder lets go during the wait: this commit lands after its. */
+    fake_reset();
+    yonder_storage_t *st=yonder_storage_new("/tmp/profile");
+    other_window=yonder_storage_new("/tmp/profile");
+    check(yonder_storage_commit(st,L,origin,"os64 storage 1\n+4 1\nseed1\n",26,NULL)==OS64_DOM_STORAGE_OK,
+          "two yonders: a store to start from");
+    fake_live[0]=8;
+    plant_lock(8,now);
+    fake_sleep_hook=other_commits_and_lets_go;
+    check(yonder_storage_commit(st,L,origin,kMine,sizeof(kMine)-1,NULL)==OS64_DOM_STORAGE_OK && fake_sleeps>=1,
+          "two yonders: a commit waits for a live holder's lock");
+    check(store_holds("seed","1") && store_holds("other","1") && store_holds("mine","1") &&
+          fake_file(STORE_LOCK)<0 && fake_temps()==0,
+          "two yonders: neither window's changes are lost, and the lock is let go");
+    /* Another writer moves the store between the read and the rename: the
+     * merge is made again onto what it wrote. */
+    fake_sync_hook=other_writes_unlocked;
+    check(yonder_storage_commit(st,L,origin,kMine,sizeof(kMine)-1,NULL)==OS64_DOM_STORAGE_OK &&
+          store_holds("w","1") && store_holds("mine","1") && fake_temps()==0,
+          "two yonders: a store moved before the rename is merged onto again");
+    /* A crash's lock: its task gone, a zombie, or too old. Broken at once. */
+    static const struct { uint64_t task, taken; bool zombie; const char *name; } kStale[]={
+        {9,0,false,"two yonders: a lock whose task is gone is broken"},
+        {8,0,true,"two yonders: a lock whose task is a zombie is broken"},
+        {8,60,false,"two yonders: a lock older than a commit could be is broken"},
+        {7,0,false,"two yonders: a lock naming this window, which holds none between commits, is broken"},
+    };
+    for(size_t i=0;i<sizeof(kStale)/sizeof(kStale[0]);i++) {
+        fake_live_zombie=kStale[i].zombie;
+        plant_lock(kStale[i].task,now-kStale[i].taken);
+        fake_sleeps=0;
+        check(yonder_storage_commit(st,L,origin,kMine,sizeof(kMine)-1,NULL)==OS64_DOM_STORAGE_OK && fake_sleeps==0 &&
+              fake_file(STORE_LOCK)<0,kStale[i].name);
+        fake_live_zombie=false;
+    }
+    /* A lock that names nothing: waited for, then broken. */
+    fake_put(STORE_LOCK,"",0);
+    fake_sleeps=0;
+    check(yonder_storage_commit(st,L,origin,kMine,sizeof(kMine)-1,NULL)==OS64_DOM_STORAGE_OK && fake_sleeps==40 &&
+          fake_file(STORE_LOCK)<0,"two yonders: a half-made lock is broken at the end of the wait");
+    /* A live holder that keeps it: BUSY, nothing written, the lock its. */
+    plant_lock(8,now);
+    static const char kLater[]="os64 storage 1\n+5 1\nlater1\n";
+    yonder_diag_t *diag=yonder_diag_new("http://fixture.test/",1,0);
+    check(yonder_storage_commit(st,L,origin,kLater,sizeof(kLater)-1,diag)==OS64_DOM_STORAGE_BUSY &&
+          store_holds("later",NULL) && fake_file(STORE_LOCK)>=0 && fake_temps()==0,
+          "two yonders: a lock held past the wait makes the commit BUSY, and nothing is written");
+    char record[2048];
+    yonder_diag_render(diag,record,sizeof(record));
+    check(strstr(record,"FAILED storage: localStorage of http://fixture.test is busy")!=NULL,
+          "two yonders: and the page's record says its changes wait");
+    yonder_diag_free(diag);
+    yonder_storage_free(st);
+    yonder_storage_free(other_window);
+    other_window=NULL;
+    fake_reset();
+}
+/* What a crash leaves (finding 7): temps and locks whose task is gone. The
+ * first touch of the profile's stores removes them, and Clear page storage
+ * does, counting only stores; a live window's temp and lock stay. */
+static void storage_orphan_cases(void) {
+    fake_reset();
+    snprintf(fake_dirs[nfake_dirs++],256,"/tmp/profile");
+    snprintf(fake_dirs[nfake_dirs++],256,"/tmp/profile/storage");
+    static const char kImage[]="os64 storage 1\n+1 1\nk1\n";
+    char lock[64];
+    uint64_t now=(uint64_t)js_test_clock.epoch;
+    fake_live[0]=8;
+    fake_put(STORE_FILE,kImage,sizeof(kImage)-1);
+    fake_put(STORE_FILE "+9.3.new",kImage,sizeof(kImage)-1);       /* task 9: gone */
+    fake_put(STORE_FILE "+7.1.new",kImage,sizeof(kImage)-1);       /* this task's, from before it was */
+    fake_put(STORE_FILE "+8.2.new",kImage,sizeof(kImage)-1);       /* task 8: live, mid-commit */
+    int n=snprintf(lock,sizeof(lock),"9 %lu\n",(unsigned long)now);
+    fake_put("/tmp/profile/storage/http%3A%2F%2Fother.test+lock",lock,(size_t)n);
+    n=snprintf(lock,sizeof(lock),"8 %lu\n",(unsigned long)now);
+    fake_put("/tmp/profile/storage/http%3A%2F%2Flive.test+lock",lock,(size_t)n);
+    yonder_storage_t *st=yonder_storage_new("/tmp/profile");
+    (void)yonder_storage_identity(st,OS64_DOM_STORAGE_LOCAL,"http://fixture.test");
+    check(fake_file(STORE_FILE "+9.3.new")<0 && fake_file(STORE_FILE "+7.1.new")<0 &&
+          fake_file("/tmp/profile/storage/http%3A%2F%2Fother.test+lock")<0,
+          "orphans: the first touch removes what a crash left");
+    check(fake_file(STORE_FILE "+8.2.new")>=0 && fake_file("/tmp/profile/storage/http%3A%2F%2Flive.test+lock")>=0 &&
+          fake_file(STORE_FILE)>=0,"orphans: a live window's temp and lock, and the store, stay");
+    fake_put(STORE_FILE "+9.4.new",kImage,sizeof(kImage)-1);
+    check(yonder_storage_clear(st)==1 && fake_file(STORE_FILE)<0 && fake_file(STORE_FILE "+9.4.new")<0 &&
+          fake_file(STORE_FILE "+8.2.new")>=0,
+          "orphans: Clear removes the stores and a crash's temps, and counts only stores");
+    yonder_storage_free(st);
+    fake_reset();
+}
 /* The page reads its navigation's timing and the screen it is on. */
 static void timing_window_cases(void) {
     fake_reset();
@@ -6853,7 +7069,10 @@ static void storage_modern_off_cases(void) {
 static void storage_cases(void) {
     storage_window_cases();
     storage_full_cases();
+    storage_departure_cases();
     storage_disk_cases();
+    storage_two_yonder_cases();
+    storage_orphan_cases();
     timing_window_cases();
     storage_modern_off_cases();
 }

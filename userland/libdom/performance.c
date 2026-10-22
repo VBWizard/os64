@@ -12,7 +12,8 @@
  * a context that is not cross-origin isolated, which none here is.
  *
  * THE ENTRIES. Marks and measures are kept in the order made, in an engine
- * Array the registry holds, so the collector sees what they hold; an
+ * object the registry holds, so the collector sees what they hold: one
+ * with no prototype, which no page is ever handed, counted in C; an
  * entry's own state (its name, times and detail) is engine memory traced
  * by the collector, as an Event's is. The navigation entry is made once and
  * reads the host's timing as it stands whenever asked. A query answers the
@@ -220,22 +221,29 @@ static int timestamp(JSContext *ctx, JSValueConst value, double *out)
 
 /* ── The buffer ──────────────────────────────────────────────────────── */
 
-static uint32_t buffer_length(os64_dom_t *dom, JSContext *ctx)
+/* The buffer is an object with no prototype that no page is ever handed,
+ * its entries defined at 0..performance_count-1: nothing a page does to
+ * Array.prototype or Object.prototype runs when it is written or read, and
+ * every walk of it is bounded by the count this file keeps. */
+static JSValue buffer_new(JSContext *ctx)
 {
-    JSValue length = JS_GetPropertyStr(ctx, dom->performance_entries->value, "length");
-    uint32_t count = 0;
-    if (!JS_IsException(length)) JS_ToUint32(ctx, &count, length);
-    JS_FreeValue(ctx, length);
-    return count;
+    return JS_NewObjectProto(ctx, JS_NULL);
 }
 
 static int buffer_add(os64_dom_t *dom, JSContext *ctx, JSValueConst entry)
 {
-    return JS_SetPropertyUint32(ctx, dom->performance_entries->value, buffer_length(dom, ctx),
-                                JS_DupValue(ctx, entry)) < 0 ? -1 : 0;
+    if (dom->performance_count == UINT32_MAX - 1) {
+        d_error(ctx, "QuotaExceededError", "Performance entry quota exceeded");
+        return -1;
+    }
+    if (JS_DefinePropertyValueUint32(ctx, dom->performance_entries->value, dom->performance_count,
+                                     JS_DupValue(ctx, entry), JS_PROP_C_W_E) < 0)
+        return -1;
+    dom->performance_count++;
+    return 0;
 }
 
-/* Whether an entry's name is `name` (NULL matches every name). */
+/* Whether an entry's name is `name` (undefined matches every name). */
 static bool named(JSContext *ctx, const DEntry *entry, JSValueConst name)
 {
     return JS_IsUndefined(name) || JS_StrictEq(ctx, entry->name, name);
@@ -245,9 +253,9 @@ static bool named(JSContext *ctx, const DEntry *entry, JSValueConst name)
  * out of the buffer. */
 static int buffer_clear(os64_dom_t *dom, JSContext *ctx, int kind, JSValueConst name)
 {
-    JSValue kept = JS_NewArray(ctx);
+    JSValue kept = buffer_new(ctx);
     if (JS_IsException(kept)) return -1;
-    uint32_t count = buffer_length(dom, ctx), used = 0;
+    uint32_t count = dom->performance_count, used = 0;
     for (uint32_t i = 0; i < count; i++) {
         JSValue item = JS_GetPropertyUint32(ctx, dom->performance_entries->value, i);
         if (JS_IsException(item)) { JS_FreeValue(ctx, kept); return -1; }
@@ -256,10 +264,14 @@ static int buffer_clear(os64_dom_t *dom, JSContext *ctx, int kind, JSValueConst 
             JS_FreeValue(ctx, item);
             continue;
         }
-        if (JS_SetPropertyUint32(ctx, kept, used++, item) < 0) { JS_FreeValue(ctx, kept); return -1; }
+        if (JS_DefinePropertyValueUint32(ctx, kept, used++, item, JS_PROP_C_W_E) < 0) {
+            JS_FreeValue(ctx, kept);
+            return -1;
+        }
     }
     JS_FreeValue(ctx, dom->performance_entries->value);
     dom->performance_entries->value = kept;
+    dom->performance_count = used;
     return 0;
 }
 
@@ -269,7 +281,7 @@ typedef struct { JSValue value; double start; } Found;
  * the navigation entry among them, as a new Array in startTime order. */
 static JSValue buffer_query(os64_dom_t *dom, JSContext *ctx, int kind, JSValueConst name)
 {
-    uint32_t count = buffer_length(dom, ctx);
+    uint32_t count = dom->performance_count;
     /* The entries found, and as many again for the sort's scratch. */
     Found *found = d_alloc(dom, sizeof(*found) * ((size_t)count + 1) * 2);
     if (found == NULL) return d_error(ctx, "QuotaExceededError", "Performance entry quota exceeded");
@@ -308,7 +320,7 @@ static JSValue buffer_query(os64_dom_t *dom, JSContext *ctx, int kind, JSValueCo
     }
     result = JS_NewArray(ctx);
     for (uint32_t i = 0; !JS_IsException(result) && i < used; i++) {
-        if (JS_SetPropertyUint32(ctx, result, i, from[i].value) < 0) {
+        if (JS_DefinePropertyValueUint32(ctx, result, i, from[i].value, JS_PROP_C_W_E) < 0) {
             JS_FreeValue(ctx, result);
             result = JS_EXCEPTION;
         }
@@ -356,8 +368,7 @@ static int mark_time(os64_dom_t *dom, JSContext *ctx, JSValueConst mark, double 
         *out = (double)at - (double)timing_epoch(dom, &t, 0);
         return 0;
     }
-    uint32_t count = buffer_length(dom, ctx);
-    for (uint32_t i = count; i > 0; i--) {
+    for (uint32_t i = dom->performance_count; i > 0; i--) {
         JSValue item = JS_GetPropertyUint32(ctx, dom->performance_entries->value, i - 1);
         if (JS_IsException(item)) { JS_FreeValue(ctx, name); return -1; }
         DEntry *entry = JS_GetOpaque(item, os64_js_class_id(&entry_slot));
@@ -886,7 +897,7 @@ int d_performance_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     dom->performance = d_retain(dom, ctx, object);
     if (dom->performance == NULL) return -1;
     JS_SetOpaque(object, dom->performance);
-    dom->performance_entries = d_retain(dom, ctx, JS_NewArray(ctx));
+    dom->performance_entries = d_retain(dom, ctx, buffer_new(ctx));
     if (dom->performance_entries == NULL) return -1;
     JSValue timing_object = JS_NewObjectClass(ctx, (int)timing_id);
     dom->performance_timing = d_retain(dom, ctx, timing_object);

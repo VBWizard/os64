@@ -47,11 +47,13 @@ typedef struct {
     bool removed;           /* a change list's: the key was removed */
 } DItem;
 
-/* The items in the order their keys were first set, which is key(n)'s
- * order, and an open-addressed index over them: a slot holds an item's
- * position plus one, 0 when empty, and there are at least twice as many
- * slots as items can be. A removal shifts the items after it, so the index
- * is rebuilt then; nothing else moves an item. */
+/* The items, which are key(n)'s order, and an open-addressed index over
+ * them (linear probing): a slot holds an item's position plus one, 0 when
+ * empty, and there are at least twice as many slots as items can be. A new
+ * key goes last. A removal takes its key out of the index and moves the
+ * last item into its place, so every change is a few steps whatever the
+ * map holds: the standard leaves key(n)'s order to the browser, asking
+ * only that it hold while the keys do. Nothing else moves an item. */
 typedef struct {
     DItem *items;
     size_t count, cap;
@@ -101,11 +103,22 @@ static size_t item_cost(size_t key_length, const char *key, size_t value_length,
     return 2 * (units(key, key_length) + (value != NULL ? units(value, value_length) : 0));
 }
 
+/* The maps' steps (slots probed, items moved) since the process began, for
+ * the DOM host to hold the work of a change to a bound. Not synchronized:
+ * a count to read, not to rely on across threads. */
+static uint64_t s_steps;
+
+uint64_t d_storage_steps(void)
+{
+    return s_steps;
+}
+
 /* The slot that holds `key`, or the empty slot where it would go. */
 static size_t map_slot(const DMap *map, const char *key, size_t length, uint32_t hash)
 {
     size_t mask = map->nslots - 1, at = hash & mask;
     for (;; at = (at + 1) & mask) {
+        s_steps++;
         uint32_t held = map->slots[at];
         if (held == 0) return at;
         const DItem *item = &map->items[held - 1];
@@ -199,13 +212,34 @@ static void map_put(DMap *map, DItem item)
     *old = item;
 }
 
+/* The item at `at` out: its slot emptied by backward shift (each later
+ * slot of its run whose home is not between the hole and itself moves
+ * into the hole), then the last item moved into its place. */
 static void map_remove(DMap *map, size_t at)
 {
-    map->used -= cost_of(&map->items[at]);
-    os64_free(map->items[at].bytes);
-    os64_memmove(map->items + at, map->items + at + 1, (map->count - at - 1) * sizeof(*map->items));
+    DItem *item = &map->items[at];
+    size_t mask = map->nslots - 1;
+    size_t hole = map_slot(map, item->bytes, item->key_length, item->hash);
+    map->used -= cost_of(item);
+    os64_free(item->bytes);
+    for (size_t next = (hole + 1) & mask; map->slots[next] != 0; next = (next + 1) & mask) {
+        s_steps++;
+        size_t home = map->items[map->slots[next] - 1].hash & mask;
+        bool stays = hole <= next ? home > hole && home <= next : home > hole || home <= next;
+        if (stays) continue;
+        map->slots[hole] = map->slots[next];
+        hole = next;
+    }
+    map->slots[hole] = 0;
+    size_t last = map->count - 1;
+    if (at != last) {
+        /* The last item's slot is found by its key, which it still holds. */
+        size_t slot = map_slot(map, map->items[last].bytes, map->items[last].key_length, map->items[last].hash);
+        map->items[at] = map->items[last];
+        map->slots[slot] = (uint32_t)at + 1;
+        s_steps++;
+    }
     map->count--;
-    map_index(map);
 }
 
 static void map_free(DMap *map)
@@ -495,7 +529,8 @@ static DStorageArea *area_touch(os64_dom_t *dom, JSContext *ctx, os64_dom_storag
  * window's changes merged in. A store that could not be written leaves the
  * area to memory; one that was full drops the changes, so the page reads
  * back what the store kept. Changes that could not be written down for
- * want of memory wait for the next commit. */
+ * want of memory, or that a busy store could not take, wait for the next
+ * commit. */
 static void area_commit(DStorageArea *area)
 {
     os64_dom_t *dom = area->dom;
@@ -509,6 +544,7 @@ static void area_commit(DStorageArea *area)
     os64_free(changes);
     area->committed = true;
     area->committed_at = now_ms(dom);
+    if (status == OS64_DOM_STORAGE_BUSY) return;
     map_free(&area->changes);
     if (status == OS64_DOM_STORAGE_FAILED) area->memory = true;
     else area->loaded = false;
@@ -568,10 +604,16 @@ void os64_dom_storage_forget(os64_dom_t *dom)
     }
 }
 
-void d_storage_drain(os64_dom_t *dom)
+void os64_dom_storage_flush(os64_dom_t *dom)
 {
+    if (dom == NULL) return;
     for (int i = 0; i < OS64_DOM_STORAGE_AREAS; i++)
         if (dom->storage[i] != NULL) area_commit(dom->storage[i]);
+}
+
+void d_storage_drain(os64_dom_t *dom)
+{
+    os64_dom_storage_flush(dom);
 }
 
 void d_storage_free(os64_dom_t *dom)
@@ -726,9 +768,11 @@ static int storage_own_property(JSContext *ctx, JSPropertyDescriptor *desc, JSVa
     if (at < 0) return at == -1 ? 0 : -1;
     int shown = visible(ctx, object, atom);
     if (shown <= 0) return shown;
+    /* `visible` may have run page code (a Proxy's has trap) that changed
+     * the map, so the key is looked up again. */
+    at = named(area, ctx, atom, &symbol);
+    if (at < 0) return at == -1 ? 0 : -1;
     if (desc != NULL) {
-        /* The map may have moved under a getter run by `visible`. */
-        if ((size_t)at >= area->map.count) return 0;
         JSValue value = item_value(ctx, &area->map.items[at]);
         if (JS_IsException(value)) return -1;
         *desc = (JSPropertyDescriptor){.flags = JS_PROP_C_W_E, .value = value,
@@ -744,20 +788,30 @@ static int storage_own_names(JSContext *ctx, JSPropertyEnum **table, uint32_t *l
     size_t count = area->map.count;
     JSPropertyEnum *names = count != 0 ? js_malloc(ctx, count * sizeof(*names)) : NULL;
     if (count != 0 && names == NULL) return -1;
-    uint32_t used = 0;
-    for (size_t i = 0; i < count && i < area->map.count; i++) {
+    /* Every key's atom first, then each one's visibility: `visible` may run
+     * page code that changes the map, and the names are the map as it was
+     * asked for. */
+    for (size_t i = 0; i < count; i++) {
         const DItem *item = &area->map.items[i];
-        JSAtom atom = JS_NewAtomLen(ctx, item->bytes, item->key_length);
-        int shown = atom == JS_ATOM_NULL ? -1 : visible(ctx, object, atom);
+        names[i].is_enumerable = true;
+        names[i].atom = JS_NewAtomLen(ctx, item->bytes, item->key_length);
+        if (names[i].atom == JS_ATOM_NULL) {
+            while (i != 0) JS_FreeAtom(ctx, names[--i].atom);
+            js_free(ctx, names);
+            return -1;
+        }
+    }
+    uint32_t used = 0;
+    for (size_t i = 0; i < count; i++) {
+        int shown = visible(ctx, object, names[i].atom);
         if (shown < 0) {
-            if (atom != JS_ATOM_NULL) JS_FreeAtom(ctx, atom);
+            for (size_t k = i; k < count; k++) JS_FreeAtom(ctx, names[k].atom);
             while (used != 0) JS_FreeAtom(ctx, names[--used].atom);
             js_free(ctx, names);
             return -1;
         }
-        if (!shown) { JS_FreeAtom(ctx, atom); continue; }
-        names[used].is_enumerable = true;
-        names[used++].atom = atom;
+        if (!shown) JS_FreeAtom(ctx, names[i].atom);
+        else names[used++] = names[i];
     }
     *table = names;
     *length = used;

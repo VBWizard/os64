@@ -2503,6 +2503,18 @@ static void refresh_if_declared(void)
         os64_ui_textfield_set(&g.ui, &g.field, later);
 }
 
+// THE PAGE ON SCREEN DEPARTS: a navigation away from it has become a page,
+// whose parse begins now (stream_parser), or the window is closing. This is
+// where a browser fires pagehide and unload, and what it changed in its
+// storage is committed now, due or not, so the next page's scripts read
+// it: localStorage in the file, sessionStorage in the window's image. The
+// page stays on screen until the new one is laid out, and anything its
+// scripts change after this commits as it falls due.
+static void page_departs(void)
+{
+    yonder_scripts_storage_flush(g.page.scripts);
+}
+
 // A milestone of a page's navigation timing (stream_mark's, for a page
 // past its stream, whose host is its own now), reached now.
 static void page_mark(yonder_scripts_t *host, os64_dom_milestone_t which)
@@ -2892,7 +2904,7 @@ static void stream_drop(void)
     yonder_scripts_free(g.stream.scripts);
     // A load that never became a page writes its record here, with what it
     // got as far as; one that did took its record with it (stream_finish).
-    // The host borrows the record (its storage's departure commit writes
+    // The host borrows the record (its storage's last commit writes
     // there), so the record goes after it.
     diag_write(g.stream.diag);
     yonder_diag_free(g.stream.diag);
@@ -7832,9 +7844,12 @@ static void image_page(os64_html_parser_t *parser, const char *url)
 // bytes — the standard's own element for "everything after this is text",
 // so libflow sees preformatted text and needs nothing new — in the
 // encoding libway's rule chooses from the head and the body's first bytes.
-// A picture's page is yonder's own (image_page), in UTF-8.
+// A picture's page is yonder's own (image_page), in UTF-8. Every
+// navigation's page is first parsed here, so this is where the page on
+// screen departs (page_departs).
 static bool stream_parser(const void *first, size_t n)
 {
+    page_departs();
     os64_html_options_t opt = os64_html_options_default();
     opt.scripting = g.stream.scripting;
     if (g.stream.head.body == WAY_BODY_HTML) {
@@ -10385,6 +10400,7 @@ int main(int argc, char **argv)
     g.pool = NULL;                      // and no teardown below cancels through it
     if (g.asker == ASK_REQUEST)
         os64_page_request_free(&g.pending);
+    page_departs();
     if (g.stream.active)
         stream_drop();
     inputs_drop();
