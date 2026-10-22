@@ -96,7 +96,10 @@ bool yonder_storage_file_name(const char *origin, char *out, size_t cap)
 // A temp file is its store's path and "+<task>.<count>.new", and a store's
 // lock its path and "+lock". The '+' is a byte a store's name never holds
 // (it is %2B there), so no origin's store is another's temp or lock. The
-// room they need is kept free in every store path.
+// room they need is kept free in every store path. TEMP_FORMAT is the one
+// spelling of a temp's name: temp_write makes names with it, and temp_task
+// knows one only by making it again.
+#define TEMP_FORMAT "%s+%lu.%u.new"
 #define TEMP_SUFFIX_MAX (1 + 20 + 1 + 10 + 4)
 #define LOCK_SUFFIX "+lock"
 
@@ -328,7 +331,7 @@ static bool write_all(int32_t h, const uint8_t *p, size_t n)
 static bool temp_write(yonder_storage_t *st, const char *path, const void *image, size_t length, char *temp,
                        size_t cap)
 {
-    int n = os64_snprintf(temp, cap, "%s+%lu.%u.new", path, (unsigned long)os64_taskid(), (unsigned)++st->temps);
+    int n = os64_snprintf(temp, cap, TEMP_FORMAT, path, (unsigned long)os64_taskid(), (unsigned)++st->temps);
     if (n <= 0 || (size_t)n >= cap)
         return false;
     int64_t h = os64_open(temp, "w");
@@ -479,13 +482,52 @@ static lock_t lock_take(const char *lock, uint32_t wait_ms)
     return LOCK_REFUSED;
 }
 
+// A decimal number at `*at`, as %lu or %u spells it, no larger than `max`:
+// digits, none of them a leading zero. False for anything else.
+static bool spelled_number(const char **at, uint64_t max, uint64_t *out)
+{
+    uint64_t value = 0;
+    const char *p = *at;
+    if (*p < '0' || *p > '9')
+        return false;
+    for (; *p >= '0' && *p <= '9'; p++) {
+        if (value > (max - (uint64_t)(*p - '0')) / 10)
+            return false;
+        value = value * 10 + (uint64_t)(*p - '0');
+    }
+    *at = p;
+    *out = value;
+    return true;
+}
+
+// The task in a temp's name, when `name` is one temp_write could have
+// made: a store's name, then TEMP_FORMAT's own spelling, checked by
+// spelling it again. False for any other name, which is never ours to
+// remove.
+static bool temp_task(const char *name, uint64_t *task)
+{
+    const char *plus = os64_strchr(name, '+');
+    if (plus == NULL || plus == name || (size_t)(plus - name) > OS64_DIRENT_NAME_MAX)
+        return false;
+    const char *at = plus + 1;
+    uint64_t count;
+    if (!spelled_number(&at, UINT64_MAX, task) || *at++ != '.' || !spelled_number(&at, UINT32_MAX, &count))
+        return false;
+    char base[OS64_DIRENT_NAME_MAX + 1], spelled[OS64_PATH_MAX];
+    os64_memcpy(base, name, (size_t)(plus - name));
+    base[plus - name] = '\0';
+    int n = os64_snprintf(spelled, sizeof(spelled), TEMP_FORMAT, base, (unsigned long)*task, (unsigned)count);
+    return n > 0 && (size_t)n < sizeof(spelled) && os64_streq(spelled, name);
+}
+
 // A temp's or a lock's owner is gone: its task is not running, or it is
 // this one, whose own are never in the middle of anything when this is
-// asked. A lock is gone by lock_stale's rule. Store names hold no '+'.
+// asked. A lock is gone by lock_stale's rule. A name that is neither a
+// temp nor a lock by its whole spelling is not ours, and is left alone.
 static bool orphan(const char *dir, const char *name)
 {
     const char *plus = os64_strchr(name, '+');
-    if (plus == NULL)
+    if (plus == NULL || plus == name)
         return false;
     char path[OS64_PATH_MAX];
     int n = os64_snprintf(path, sizeof(path), "%s/%s", dir, name);
@@ -493,11 +535,8 @@ static bool orphan(const char *dir, const char *name)
         return false;
     if (os64_streq(plus, LOCK_SUFFIX))
         return lock_stale(path);
-    uint64_t task = 0;
-    size_t digits = 0;
-    for (const char *at = plus + 1; *at >= '0' && *at <= '9' && digits < 19; at++, digits++)
-        task = task * 10 + (uint64_t)(*at - '0');
-    return digits != 0 && (task == os64_taskid() || !task_alive(task));
+    uint64_t task;
+    return temp_task(name, &task) && (task == os64_taskid() || !task_alive(task));
 }
 
 // The names in `dir` that are files, os64_malloc'd: the listing first and

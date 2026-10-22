@@ -7725,6 +7725,14 @@ static void storage_orphan_cases(void) {
     fake_put("/tmp/profile/storage/http%3A%2F%2Fother.test+lock",lock,(size_t)n);
     n=snprintf(lock,sizeof(lock),"8 %lu\n",(unsigned long)now);
     fake_put("/tmp/profile/storage/http%3A%2F%2Flive.test+lock",lock,(size_t)n);
+    /* Names a dead or this task's number follows a '+' in, that are not a
+     * temp by its whole spelling: never ours to remove. */
+    static const char *const kNotTemps[]={
+        "/tmp/profile/storage/notes+9", "/tmp/profile/storage/x+9.1.new.bak", "/tmp/profile/storage/x+9.new",
+        "/tmp/profile/storage/x+.1.new", "/tmp/profile/storage/x+09.1.new", "/tmp/profile/storage/x+7.01.new",
+        "/tmp/profile/storage/+9.1.new", "/tmp/profile/storage/x+9.1.newer",
+    };
+    for(size_t i=0;i<sizeof(kNotTemps)/sizeof(kNotTemps[0]);i++) fake_put(kNotTemps[i],"mine",4);
     yonder_storage_t *st=yonder_storage_new("/tmp/profile");
     (void)yonder_storage_identity(st,OS64_DOM_STORAGE_LOCAL,"http://fixture.test");
     check(fake_file(STORE_FILE "+9.3.new")<0 && fake_file(STORE_FILE "+7.1.new")<0 &&
@@ -7738,6 +7746,9 @@ static void storage_orphan_cases(void) {
     check(yonder_storage_clear(st,&busy)==1 && busy==0 && fake_file(STORE_FILE)<0 && fake_file(STORE_FILE "+9.4.new")<0 &&
           fake_file(STORE_FILE "+8.2.new")>=0,
           "orphans: Clear removes the stores and a crash's temps, and counts only stores");
+    bool kept=true;
+    for(size_t i=0;i<sizeof(kNotTemps)/sizeof(kNotTemps[0]);i++) kept=kept && fake_file(kNotTemps[i])>=0;
+    check(kept,"orphans: a name that only looks like a temp outlives the sweep and Clear");
     yonder_storage_free(st);
     fake_reset();
 }
