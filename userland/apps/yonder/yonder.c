@@ -7560,7 +7560,7 @@ static void unshown_go(Page *p, int32_t delta)
     if (!back && (p->nback > 0 || p->nahead > 0))
         return;
     // How far past the entry next to its own the delta reaches: 0 is that
-    // entry; and where that entry is, counted from the page on screen.
+    // entry; `at` is where its own entry stands (unshown_at).
     int64_t past = back ? (int64_t)delta + 1 + p->nback : (int64_t)delta - 1 - p->nahead;
     int64_t at;
     if (unshown_at(p, &at) && !back)
