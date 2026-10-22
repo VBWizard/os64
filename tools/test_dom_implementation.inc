@@ -435,6 +435,7 @@ static void implementation_control_type_cases(void)
     if (!fixture_ready(&f)) return;
     dom_script(&f, IMPL_ASSERT
         "var i=document.createElement('input');assert(i.type==='text','absent is text');"
+        "i.checked=true;assert(i.checked===true,'a text input keeps its checkedness');i.checked=false;"
         "i.setAttribute('type','CheckBox');assert(i.type==='checkbox','its keyword in any case');"
         "i.setAttribute('type','nonsense');assert(i.type==='text','another word is text');"
         "i.type='RADIO';assert(i.getAttribute('type')==='RADIO'&&i.type==='radio','setting it sets the attribute');"
