@@ -535,7 +535,9 @@ as it does today while sheets are awaited, until the arriving page's parse
 begins: then it is unloaded, as HTML unloads the document a navigation
 replaces, and its scripts stop (yonder's `page_departs`; MODERN_WEB.md §
 Slice 1a, as built), so no task of the departed page writes storage the
-arriving page's scripts read. Two pages can exist at once
+arriving page's scripts read. It stays unloaded, scriptless, if nothing
+then replaces it (Stop, or a page that cannot be laid out); a navigation
+that never reached a parse leaves it live. Two pages can exist at once
 (the one shown, and the one loading or waiting for its sheets), each with
 its own runtime, both on the window's thread. A third cannot:
 `start_trip` already drops the one that was coming.

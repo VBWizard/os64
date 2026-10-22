@@ -670,7 +670,7 @@ rows in `modern.c`, a file each in libdom, and yonder's store.
 | the statuses | OK; FULL (past the quota: nothing kept, the page reads the store back); FAILED (the area keeps its map in memory for the page's life); BUSY (another window has the store: the changes are handed over again a second later, or at drain; at drain itself they are lost and the provider says so) |
 | commits | coalesced to one a second (`os64_dom_storage_settle`, `_due`, `OS64_DOM_STORAGE_COMMIT_MS`); sooner when the change list would pass the quota or the keys' cap, and a change it could not make room for (a busy store) is refused as a full store's is, so the list never passes its bound; once more at drain, the last |
 | `page_departs()` (yonder.c) | the one place the page on screen departs: where every navigation's page is first parsed (`stream_parser`) and as the window closes. It unloads the page, as HTML does: `yonder_scripts_depart` retires its runtime, so none of its queued scripts, timers or handlers runs again, and drain makes its storage's last commit then, so the next page's scripts read what it wrote. The page stays on screen, scriptless, until the new one is laid out; a navigation that never becomes a page is not a departure |
-| the store | `<profile>/storage/<origin>`, the origin with every byte outside `[A-Za-z0-9.-]` as `%XX`; read, merged and published by temp and rename under `<store>+lock` (an exclusive create holding `<task> <second>`), broken when its task is gone, a zombie, this window's own, or ten seconds old; a live one waited for 200 ms (2 s at the last commit, which nothing on screen waits for); the store's identity read again before the rename, and a moved store merged onto again. Clear page storage takes each store's lock the same way, so a window mid-commit finishes first, and a store held past the wait is reported, not cleared. What the second look cannot see is an unlocked writer's same-size image in the same second, or one landing between the look and the rename (DEBTS) |
+| the store | `<profile>/storage/<origin>`, the origin with every byte outside `[A-Za-z0-9.-]` as `%XX`; read, merged and published by temp and rename under `<store>+lock` (an exclusive create holding `<task> <second>`), broken when its task is gone, a zombie, this window's own, or ten seconds old; a live one waited for 200 ms (2 s at the last commit, which nothing on screen waits for); the store's identity read again before the rename, and a moved store merged onto again. Clear page storage takes each store's lock the same way, and every lock with no store yet (a window making an origin's first store), so a window mid-commit finishes first, and a store held past the wait is reported, not cleared. What the second look cannot see is an unlocked writer's same-size image in the same second, or one landing between the look and the rename (DEBTS) |
 | the image format | `os64 storage 1\n`, then `+<key bytes> <value bytes>\n` key value `\n` for a set, `-<key bytes>\n` key `\n` for a removal (an image holds sets only; no store is no image, and a file without the magic line, an empty one included, is not one); `os64_dom_storage_merge` and `os64_dom_storage_walk` are libdom's, and yonder only moves bytes |
 | `options.now_us`, `options.timing` | the host's microsecond clock, and the navigation's origin and milestones (`os64_dom_timing_t`), read as the binding is made and whenever a script asks |
 | `options.screen`, `options.zoom` | the display in device pixels, and the zoom in thousandths when asked |
@@ -711,8 +711,9 @@ least one of `localStorage` (466 records, 46,635 asks), `sessionStorage`
 141), `screen` (247, 274) or `devicePixelRatio` (54, 61); `btoa` 161
 records and `atob` 53 besides.
 
-Host: the DOM host 3,810 / 22,416 → 6,602 / 34,924 checks, with 5,160
-allocation sweeps; the scripted-page host 5,888 → 6,007; all 0 failed. The
+Host: the DOM host from 3,810 / 22,416 checks to about 6,600 / 35,000,
+with about 5,200 allocation sweeps; the scripted-page host from 5,888 to
+about 6,000; all 0 failed (the PR states the counts at its head). The
 mutant harnesses were not run (the briefs' rule).
 
 **The cold read** found eight, all fixed: performance's private buffer
@@ -721,7 +722,16 @@ too late for the next page (P1), quadratic removals (P2), two yonders
 merging onto one image (P2), a lookup stale after a Proxy trap, answered
 arrays filled through setters, orphaned temps, and a comment (P3s). **The
 design read** passed it with the WTF-8 ruling and the last commit's longer
-wait.
+wait. **Codex's first round** found eight: six fixed (the change list's
+bound under a busy store, the departed page's tasks, an empty file taken
+for an image, Clear against a live commit, measure's negative duration,
+`navigationStart` without a wall clock), and two declined on WebIDL's
+text (`new URLSearchParams(null)` is `null=`; a sequence's conversion has
+no IteratorClose), the second with a conversion-order bug found beside it
+and fixed. **A second cold read** found five, all fixed: a quadratic
+record conversion behind keys holding U+FFFD, Clear missing a window
+making an origin's first store, a commit out of memory retried every
+turn, and two comments.
 
 **Stacked on this branch**, slice 2 (fetch) moves `d_origin` onto libway's
 `way_origin_*` (Fable's ruling 8: the slice that lands second does it).

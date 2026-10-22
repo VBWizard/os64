@@ -2924,8 +2924,10 @@ static void stream_drop(void)
 // that arrived and is waiting for its sheets: somewhere else was asked
 // for. The pool's own cancellation reaches its fetch, any question it is
 // waiting on, and a post waiting for room in the ring. The page on screen
-// and its scripts stay live until another page replaces it (DOM.md § What
-// the old page does meanwhile).
+// stays; its scripts stay live only if the navigation never reached a
+// parse, since page_departs unloads it there, and a page unloaded so keeps
+// no scripts even when nothing replaces it (DOM.md § What the old page
+// does meanwhile).
 static void stop_trip(void)
 {
     coming_drop();
@@ -9892,8 +9894,9 @@ static void settings_use(const char *agent, bool scripts, uint32_t script_second
         return;
     g.scripts_on = scripts;
     status_set(g.status_rest);
-    // The page on screen keeps its scripts across a navigation, but not
-    // across a change of the mode its document was parsed in.
+    // The page on screen keeps its scripts while a navigation is only
+    // asked for (they go when the next page's parse begins: page_departs),
+    // and never across a change of the mode its document was parsed in.
     inputs_drop();
     yonder_scripts_free(g.page.scripts);
     g.page.scripts = NULL;
