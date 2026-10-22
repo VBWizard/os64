@@ -20,9 +20,11 @@
  *
  * An area's map and change list are not the binding's budget's: each is
  * held to the quota (OS64_DOM_STORAGE_QUOTA) and to OS64_DOM_STORAGE_KEYS
- * keys, and freed with the binding. The keys' cap bounds what the quota
- * cannot: a key of one character costs the quota two bytes and the heap a
- * record, and a page could otherwise make millions of them. */
+ * keys, and freed with the binding. A setItem past either throws; a change
+ * list that would pass either is committed early instead, since what it
+ * holds is the page's own writes and removals. The keys' cap bounds what
+ * the quota cannot: a key of one character costs the quota two bytes and
+ * the heap a record, and a page could otherwise make millions of them. */
 
 #define MAGIC "os64 storage 1\n"
 #define MAGIC_LENGTH (sizeof(MAGIC) - 1)
@@ -55,7 +57,8 @@ typedef struct {
     size_t count, cap;
     uint32_t *slots;
     size_t nslots;
-    size_t used;            /* the quota's count: two bytes per UTF-16 unit */
+    size_t used;            /* the quota's count: two bytes per UTF-16 unit
+                               of every key and value it holds */
 } DMap;
 
 typedef struct DStorageArea {
@@ -171,10 +174,12 @@ static bool item_make(DItem *item, const char *key, size_t key_length, const cha
     return true;
 }
 
+/* A removal (a change list's) costs its key: the list holds it until the
+ * commit. */
 static size_t cost_of(const DItem *item)
 {
-    return item->removed ? 0 : item_cost(item->key_length, item->bytes, item->value_length,
-                                         item->bytes + item->key_length);
+    return item_cost(item->key_length, item->bytes, item->value_length,
+                     item->removed ? NULL : item->bytes + item->key_length);
 }
 
 /* Puts a made item in its key's place, or at the end for a new key; the
@@ -583,11 +588,28 @@ void d_storage_free(os64_dom_t *dom)
 
 /* ── The Storage interface ───────────────────────────────────────────── */
 
+/* Room in the change list for `count` more records costing `cost`. A list
+ * that would pass the quota or the keys' cap is committed now rather than
+ * when it is due: a page that sets and removes key after key in one task
+ * would otherwise hold every key it removed until its next commit. */
+static void changes_room(DStorageArea *area, size_t count, size_t cost)
+{
+    const DMap *changes = &area->changes;
+    if (changes->count != 0 && kept(area->dom, area) &&
+        (count > OS64_DOM_STORAGE_KEYS - (changes->count < OS64_DOM_STORAGE_KEYS ? changes->count
+                                                                                  : OS64_DOM_STORAGE_KEYS) ||
+         cost > OS64_DOM_STORAGE_QUOTA - (changes->used < OS64_DOM_STORAGE_QUOTA ? changes->used
+                                                                                 : OS64_DOM_STORAGE_QUOTA)))
+        area_commit(area);
+}
+
 /* A change, made to the map and remembered for the commit together, or
  * not at all: false on no memory, with neither touched. */
 static bool area_change(DStorageArea *area, const char *key, size_t key_length, const char *value,
                         size_t value_length)
 {
+    changes_room(area, map_find(&area->changes, key, key_length, hash_of(key, key_length)) < 0 ? 1 : 0,
+                 item_cost(key_length, key, value_length, value));
     bool remember = kept(area->dom, area);
     DItem in_map = {0}, in_changes = {0};
     if (value != NULL && (!map_reserve(&area->map) || !item_make(&in_map, key, key_length, value, value_length)))
@@ -614,6 +636,12 @@ static bool area_clear(DStorageArea *area)
 {
     size_t count = area->map.count;
     if (count == 0) return true;
+    size_t cost = 0;
+    for (size_t i = 0; i < count; i++) {
+        const DItem *item = &area->map.items[i];
+        cost += item_cost(item->key_length, item->bytes, 0, NULL);
+    }
+    changes_room(area, count, cost);
     if (kept(area->dom, area)) {
         DItem *made = os64_malloc(count * sizeof(*made));
         if (made == NULL || !map_reserve_n(&area->changes, count)) {

@@ -486,6 +486,24 @@ static void dom_storage_provider_cases(void)
     fixture_free(&f);
     fake_store_free(&store);
 
+    /* Key after key set and removed in one task: the change list would
+     * hold every removed key until its commit, so past the quota it is
+     * committed early, and what reaches the store is the page's last word. */
+    f = storage_fixture("http://example.test/", &store);
+    if (!fixture_ready(&f)) { fake_store_free(&store); return; }
+    dom_script(&f, STORAGE_ASSERT "var big='x'.repeat(200000);"
+               "for(var i=0;i<40;i++){localStorage.setItem(i+big,'v');localStorage.removeItem(i+big)}"
+               "localStorage.setItem('last','1');assert(localStorage.length===1);"
+               "for(var j=0;j<10;j++)localStorage.setItem('k'+j+big,'');localStorage.clear();"
+               "assert(localStorage.length===0);",
+               "storage: a task that sets and removes key after key");
+    unsigned early = store.commits;
+    check(early >= 2, "storage: a change list past the quota is committed before it is due");
+    os64_dom_drain(f.binding);
+    check(store.length == 0 && store.commits >= early, "storage: and the store holds the page's last word");
+    fixture_free(&f);
+    fake_store_free(&store);
+
     /* Forgetting: the maps and their uncommitted changes go, and the next
      * touch reads the store. */
     f = storage_fixture("http://example.test/", &store);

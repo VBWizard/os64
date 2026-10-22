@@ -15,7 +15,8 @@ typedef struct os64_dom os64_dom_t;
 #define OS64_DOM_TIMERS_MAX 4096
 
 /* The screen a page is told it is on (CSSOM View § The Screen interface),
- * in CSS pixels: the whole display, and what of it a window may take. */
+ * in device pixels: the whole display, and what of it a window may take.
+ * A page reads them in CSS pixels at its zoom. */
 typedef struct {
     int32_t width, height, avail_width, avail_height;
     uint32_t color_depth;
@@ -277,11 +278,12 @@ void os64_dom_set_cookies(os64_dom_t *dom, const os64_dom_cookies_t *cookies);
  * U+0000 included, as WTF-8; the store is bytes the host moves and does
  * not read. An area holds at most OS64_DOM_STORAGE_QUOTA bytes, counted as
  * the standard's quota counts them: the UTF-16 code units of every key and
- * value, two bytes each. A setItem that would pass it throws
- * QuotaExceededError and changes nothing. */
+ * value, two bytes each, and at most 65536 keys. A setItem that would pass
+ * either throws QuotaExceededError and changes nothing. */
 #define OS64_DOM_STORAGE_QUOTA ((size_t)5 * 1024 * 1024)
 /* Changes are handed over at most this often, and once more as the
- * binding is drained. */
+ * binding is drained; sooner only when the changes not yet handed over
+ * would pass the quota or the keys' cap. */
 #define OS64_DOM_STORAGE_COMMIT_MS 1000
 typedef enum {
     OS64_DOM_STORAGE_LOCAL = 0,
@@ -306,7 +308,8 @@ typedef enum {
  * loaded means the store moved and is loaded again.
  * load: the store's image, written into `out` when it fits in `cap`;
  * answers its length either way (0 for none), negative when it cannot be
- * read. The binding asks again with room when it did not fit.
+ * read. The binding asks again with room when it did not fit, a few
+ * times; a store still outgrowing its room is read at the next task.
  * commit: this page's changes since its last commit (a change list in
  * os64_dom_storage_merge's format), merged onto the store as it stands. */
 typedef struct {
@@ -381,8 +384,9 @@ os64_dom_geometry_stats_t os64_dom_geometry_stats(os64_dom_t *dom, bool reset);
 /* Owner-thread only, outside JS callbacks. Idempotent; NULL is a no-op.
  * Drain closes bindings and releases C-retained JS values even when libjs
  * has entered a sticky failed state. It first commits each storage area's
- * changes to its provider, which is a page's departure commit. Native records remain alive through
- * engine finalizers; os64_dom_free releases their native node holds.
+ * changes to its provider, which is a page's departure commit. Native
+ * records remain alive through engine finalizers; os64_dom_free releases
+ * their native node holds.
  * The required order is drain, os64_js_destroy (or destroy_report), then
  * os64_dom_free, followed by model/state/document teardown. */
 void os64_dom_drain(os64_dom_t *dom);
