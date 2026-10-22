@@ -20,6 +20,7 @@
 #include "way/way.h"
 #include "image/image.h"
 #include "os64/os64.h"
+#include "os64/date.h"
 #include "os64/draw.h"
 #include "os64/fmt.h"
 #include "os64/font_backend.h"
@@ -1669,28 +1670,78 @@ static void diag_kept(int64_t answer);
 // number another yonder took meanwhile is passed over. A record that can
 // claim no name is kept for the badge and never written (diag_write).
 // NULL on no memory: the load goes on unrecorded.
+// THE SETTINGS A RECORD SAYS ITS PAGE WAS READ UNDER, by key, as in force
+// now: what the claim writes, and what a write compares the record with.
+static const char *const kDiagSettings[] = {"modern", "zoom", "appearance", "motion", "animate", "script seconds"};
+static void diag_setting(const char *key, char *out, size_t cap)
+{
+    if (os64_streq(key, "modern"))
+        os64_strcopy(out, cap, g.modern ? "on" : "off");
+    else if (os64_streq(key, "zoom"))
+        os64_snprintf(out, cap, "%lu", (unsigned long)g.zoom);
+    else if (os64_streq(key, "appearance"))
+        os64_strcopy(out, cap, s_dark ? "dark" : "light");
+    else if (os64_streq(key, "motion"))
+        os64_strcopy(out, cap, s_reduce_motion ? "reduce" : "full");
+    else if (os64_streq(key, "animate"))
+        // `animate`, not `animations`: that key says how the page's own
+        // animations are faring.
+        os64_strcopy(out, cap, s_animations ? "on" : "off");
+    else
+        os64_snprintf(out, cap, "%lu", (unsigned long)(g.script_ms / 1000));
+}
+
 static yonder_diag_t *diag_begin(const char *url)
 {
     yonder_diag_t *d = yonder_diag_new(url, s_diag.next, os64_micros());
-    // THE WINDOW A REPLAY READS THE PAGE IN, as in force for this load (the
-    // view's size, the zoom, dark pages, reduced motion, whether animations
-    // run, the modern switch, scripts and their time limit), so a replay
-    // sets each from the record and assumes none. The arrival writes the laid-out size again.
+    // THE INPUTS A REPLAY READS THE PAGE WITH, as in force for this load
+    // (REPLAY.md § 3): the agent first, which marks a record of this form;
+    // the cookies a script on the page could read (libway's script door,
+    // which keeps HttpOnly cookies from scripts); the clock and its zone;
+    // the view's size, scripts, and the settings (kDiagSettings). A replay
+    // sets each from the record and assumes none; the arrival writes the
+    // laid-out size again, and a write that finds a setting changed marks
+    // the record unjudged (diag_write).
     if (d != NULL) {
         char v[48];
-        yonder_diag_head_fact(d, "modern", g.modern ? "on" : "off");
+        yonder_diag_head_fact(d, "agent", g.way.agent != NULL ? g.way.agent : YONDER_AGENT);
+        bool encrypted = os64_strlen(url) >= 6 && os64_memcmp(url, "https:", 6) == 0;
+        bool whole = false;
+        size_t cap = 512;
+        char *cookies = NULL;
+        while (!whole && cap <= ((size_t)1 << 20)) {
+            os64_free(cookies);
+            cookies = os64_malloc(cap);
+            if (cookies == NULL)
+                break;
+            (void)way_script_cookies(g.way.jar, url, encrypted, cookies, cap, &whole);
+            cap *= 2;
+        }
+        if (cookies != NULL && whole)
+            yonder_diag_head_fact(d, "cookies", cookies);
+        else
+            yonder_diag_short(d);
+        os64_free(cookies);
+        os64_time_t t;
+        if (os64_time(&t) == 0 && t.ticks_per_second != 0) {
+            os64_snprintf(v, sizeof(v), "%lld", (long long)t.epoch * 1000 +
+                          (long long)((uint64_t)t.ticks_into_second * 1000 / t.ticks_per_second));
+            yonder_diag_head_fact(d, "clock", v);
+            const char *zone = os64_getenv("TZ");
+            if (zone != NULL && zone[0] != '\0')
+                yonder_diag_head_fact(d, "tz", zone);
+            else {
+                os64_snprintf(v, sizeof(v), "%dm", (int)t.tz_offset_minutes);
+                yonder_diag_head_fact(d, "tz", v);
+            }
+        }
         os64_snprintf(v, sizeof(v), "%dx%d px", (int)g.view.bounds.w, (int)g.view.bounds.h);
         yonder_diag_head_fact(d, "laid out at", v);
-        os64_snprintf(v, sizeof(v), "%lu", (unsigned long)g.zoom);
-        yonder_diag_head_fact(d, "zoom", v);
-        yonder_diag_head_fact(d, "appearance", s_dark ? "dark" : "light");
-        yonder_diag_head_fact(d, "motion", s_reduce_motion ? "reduce" : "full");
-        // `animate`, not `animations`: that key says how the page's own
-        // animations are faring.
-        yonder_diag_head_fact(d, "animate", s_animations ? "on" : "off");
         yonder_diag_head_fact(d, "scripts", g.scripts_on ? "on" : "off");
-        os64_snprintf(v, sizeof(v), "%lu", (unsigned long)(g.script_ms / 1000));
-        yonder_diag_head_fact(d, "script seconds", v);
+        for (size_t i = 0; i < sizeof(kDiagSettings) / sizeof(kDiagSettings[0]); i++) {
+            diag_setting(kDiagSettings[i], v, sizeof(v));
+            yonder_diag_head_fact(d, kDiagSettings[i], v);
+        }
     }
     if (d != NULL && s_diag.dir[0] != '\0') {
         int64_t claimed = yonder_diag_claim(d, s_diag.dir, s_diag.keep);
@@ -1706,10 +1757,19 @@ static yonder_diag_t *diag_begin(const char *url)
 // that could claim no name is never written, and a failure is not either:
 // each is said once a run, in the log and on the status line, when the
 // record would have been written, after its load's own words.
-static bool diag_write(const yonder_diag_t *d)
+static bool diag_write(yonder_diag_t *d)
 {
     if (d == NULL || s_diag.dir[0] == '\0')
         return false;
+    // A record is of one window: a setting that is not what the claim
+    // wrote makes it a record no replay can read the page again by.
+    char now[48];
+    for (size_t i = 0; i < sizeof(kDiagSettings) / sizeof(kDiagSettings[0]); i++) {
+        const char *then = yonder_diag_fact_value(d, kDiagSettings[i]);
+        diag_setting(kDiagSettings[i], now, sizeof(now));
+        if (then != NULL && !os64_streq(then, now))
+            yonder_diag_unjudged(d, "settings changed during the load");
+    }
     const yonder_diag_claim_t *c = yonder_diag_claimed(d);
     if (c == NULL) {
         if (!s_diag.claim_said) {

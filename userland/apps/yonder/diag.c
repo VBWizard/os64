@@ -46,6 +46,9 @@ struct yonder_diag {
     uint32_t head_facts;
     // A line went with no memory even to name it (yonder_diag_short).
     bool short_of_memory;
+    // Why the record says it cannot be judged, besides lost lines (a
+    // setting changed during the load: yonder_diag_unjudged); NULL for none.
+    const char *unjudged;
     // THE PAGE KEPT (diag.h): the folder its name claimed (yonder_diag_
     // claim; NULL when none was), the temporary file the page's bytes are
     // appended to while its parser is fed them (`open`, its `handle` and
@@ -315,6 +318,20 @@ void yonder_diag_short(yonder_diag_t *d)
         d->short_of_memory = true;
 }
 
+void yonder_diag_unjudged(yonder_diag_t *d, const char *why)
+{
+    if (d != NULL && d->unjudged == NULL)
+        d->unjudged = why;
+}
+
+const char *yonder_diag_fact_value(const yonder_diag_t *d, const char *key)
+{
+    for (uint32_t i = 0; d != NULL && i < d->facts.n; i++)
+        if (os64_streq(d->facts.lines[i].a, key))
+            return d->facts.lines[i].count == 0 ? d->facts.lines[i].b : NULL;
+    return NULL;
+}
+
 void yonder_diag_failed_seen(yonder_diag_t *d, const char *what, const char *message)
 {
     Line *l = d != NULL ? table_line(&d->failed, what, message, true, YONDER_DIAG_RECORDS_MAX) : NULL;
@@ -482,6 +499,11 @@ size_t yonder_diag_render(const yonder_diag_t *d, char *out, size_t cap)
         lost |= d->facts.lines[i].count != 0;
     if (lost)
         puts_(&o, YONDER_DIAG_LINES_LOST "\n");
+    if (d->unjudged != NULL) {
+        puts_(&o, YONDER_DIAG_UNJUDGED);
+        put_text(&o, d->unjudged);
+        puts_(&o, "\n");
+    }
     // The last line, which a reader of a kept page's record requires, so a
     // record cut short anywhere is never read as a page.
     puts_(&o, YONDER_DIAG_END "\n");

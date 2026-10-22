@@ -5150,6 +5150,28 @@ static void diag_keep_cases(void) {
         keep_end();
     }
 
+    /* THE INPUTS A REPLAY READS THE PAGE WITH (REPLAY.md § 3), written at
+     * the claim: the agent, the cookies a script could read, the clock and
+     * its zone, the window. A setting changed before the record is written
+     * makes the record one no replay can read the page again by. */
+    keep_begin(true);
+    loop_page("<p>inputs</p>");
+    check(loop_settle() && g.page.tree!=NULL,"inputs: the page arrives");
+    {
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        uint32_t zoom=g.zoom;
+        g.zoom=zoom+100;
+        loop_drop();
+        g.zoom=zoom;
+        const char *text=diag_file("/tmp/kept",name);
+        check(has(text,"\nagent: ") && has(text,"\ncookies: session=abc; theme=dark\n") &&
+              has(text,"\nclock: 1700000000370\n") && has(text,"\ntz: ") && has(text,"\nzoom: 1000\n"),
+              "inputs: the agent, the script-visible cookies, the clock and its zone are on the record");
+        check(has(text,"\n" YONDER_DIAG_UNJUDGED "settings changed during the load\n"),
+              "inputs: a setting changed during the load marks the record unjudged");
+    }
+    keep_end();
+
     /* The setting off: the page files are written and nothing is kept. */
     keep_begin(false);
     loop_page("<p>plain</p>");

@@ -49,7 +49,8 @@
 // take such a record as one they cannot judge; the census tally counts the
 // lines it kept, since what a page asked for is asked for however much of
 // it was written down, and says how many records lost lines.
-#define YONDER_DIAG_LINES_LOST "REPLAY unjudged: lines lost"
+#define YONDER_DIAG_UNJUDGED "REPLAY unjudged: "
+#define YONDER_DIAG_LINES_LOST YONDER_DIAG_UNJUDGED "lines lost"
 // A claimed name's file before its record is written: its second line.
 // A replay and the diff take it as a record they cannot judge; the tally
 // takes it as damage (a yonder that stopped between claim and write) and
@@ -110,6 +111,13 @@ void yonder_diag_forget(yonder_diag_t *d, const char *prefix);
 // A line the caller could not even name for want of memory: the file
 // says some lines are not on it, as it counts those that met no room.
 void yonder_diag_short(yonder_diag_t *d);
+// The record cannot be judged, for `why` (a static string: a setting
+// changed during the load): it says so on a line YONDER_DIAG_UNJUDGED
+// begins, which no replay or diff judges. The first reason stands.
+void yonder_diag_unjudged(yonder_diag_t *d, const char *why);
+// A plain line's value as it stands; NULL when there is none, or its
+// value had no memory to keep.
+const char *yonder_diag_fact_value(const yonder_diag_t *d, const char *key);
 
 // Distinct record lines of each token: the verdict's numbers, the badge's.
 uint32_t yonder_diag_missing_lines(const yonder_diag_t *d);
