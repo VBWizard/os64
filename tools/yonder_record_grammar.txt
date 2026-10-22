@@ -198,15 +198,30 @@ REFUSED	note: ab
 REFUSED	address: https://a.test/[2J
 REFUSED	FAILED page: no  (1)
 fact	note: a	b
-# what a replay says it took from the harness, for a kept page of version 1
-defaulted	REPLAY inputs defaulted: agent cookies clock tz
-defaulted	REPLAY inputs defaulted: agent cookies clock tz job-identity
+# what a replay of a kept page of version 1 took from the harness (the
+# cookies and the clock, never anything else), what the person stated
+# (`--window`), and that it assumed a page with no `kept:` kept whole
+defaulted	REPLAY inputs defaulted: cookies clock
+defaulted	REPLAY inputs defaulted: clock
+REFUSED	REPLAY inputs defaulted: agent cookies clock tz
+REFUSED	REPLAY inputs defaulted: cookies clock job-identity
 REFUSED	REPLAY inputs defaulted: view-height
-REFUSED	REPLAY inputs defaulted: agent zoom
-REFUSED	REPLAY inputs defaulted: agent global
-REFUSED	REPLAY inputs defaulted: agent agent
+REFUSED	REPLAY inputs defaulted: cookies global
+REFUSED	REPLAY inputs defaulted: clock clock
 REFUSED	REPLAY inputs defaulted: 
-REFUSED	REPLAY inputs defaulted: agent  tz
+REFUSED	REPLAY inputs defaulted: cookies  clock
+stated	REPLAY inputs stated: zoom=1000 appearance=dark motion=full animate=on modern=on scripts=on script-seconds=5 laid-out-at=2526x1282\x20px agent=Mozilla/5.0\x20(X11) tz=EST5EDT
+stated	REPLAY inputs stated: tz=-120m
+REFUSED	REPLAY inputs stated: 
+REFUSED	REPLAY inputs stated: zoom
+REFUSED	REPLAY inputs stated: zoom=
+REFUSED	REPLAY inputs stated: cookies=a
+REFUSED	REPLAY inputs stated: zoom=1 zoom=2
+REFUSED	REPLAY inputs stated: agent=a b
+REFUSED	REPLAY inputs stated: zoom=1  tz=0m
+assumed	REPLAY kept: assumed whole (version 1)
+REFUSED	REPLAY kept: assumed whole
+REFUSED	REPLAY kept: assumed whole (version 2)
 # an index of version 1: six fields, no job identity
 index:entry-v1	1	script	https://a.test/x.js	came	https://a.test/x.js	
 index:REFUSED	01	script	https://a.test/x.js	came	https://a.test/x.js		1

@@ -8,7 +8,8 @@
  * per page (§ 6), and the proof (§ 7). What follows is how this file
  * meets it.
  *
- *     test_yonder_replay_host KEPT-DIR OUT-DIR [--seconds N] [--only TEXT] [--crash-page NAME]
+ *     test_yonder_replay_host KEPT-DIR OUT-DIR [--seconds N] [--only TEXT] [--window KEY=VALUE,...]
+ *                             [--crash-page NAME]
  *     test_yonder_replay_host --self-test WORK-DIR
  *
  * A whole replay is written into an OUT-DIR with no records in it, and is
@@ -17,7 +18,10 @@
  * add to one, saying how many it found there, and a page it finds no
  * longer kept replaces its earlier record with one saying it is unjudged.
  * An OUT-DIR or KEPT-DIR that cannot be listed, or an OUT-DIR that is the
- * KEPT-DIR, refuses the run before anything is written. Every file this
+ * KEPT-DIR, refuses the run before anything is written. `--window
+ * KEY=VALUE,...` states what a version 1 corpus's window was when it was
+ * recorded (REPLAY.md § 3; rp_window_state), and states nothing for a
+ * version 2 page. Every file this
  * runner touches goes through test_yonder_replay_fs.h, whose writes are
  * whole or not at all and whose faults become an UNJUDGED page or a
  * refused run, never an empty answer, and the host's file functions are
@@ -33,11 +37,12 @@
  * record whether a page is one to replay, forks a child for it, and
  * trusts what the child says only when its exit status and its record
  * agree; the child (rp_replay_page) reads the page's inputs from its record
- * (rp_window_of: every one required, of either version, but the agent,
- * the cookies, the clock and the zone, which a version 1 page takes from
- * the harness and names on its record), sets them where the window reads
- * them (rp_run, rp_apply_inputs), feeds the page to the window, writes its
- * record with the state rp_decide gave it, and exits.
+ * (rp_window_of: every one required of a version 2 page; a version 1
+ * page's window, agent and zone, when its record does not say them, as
+ * `--window` states them, and its cookies and clock the harness's, each
+ * named on its record), sets them where the window reads them (rp_run,
+ * rp_apply_inputs), feeds the page to the window, writes its record with
+ * the state rp_decide gave it, and exits.
  *
  * THE REPLAY ITSELF (rp_run). The window and every fake are
  * tools/test_yonder_scripts_host.c's, the headless binding: this file
@@ -310,15 +315,30 @@ typedef struct {
     const char *f[7]; size_t fl[7]; int nf;
 } RpLine;
 
-/* WHAT A REPLAY OF A VERSION 1 PAGE NAMES on its `REPLAY inputs defaulted:`
- * line, in this order (REPLAY.md § 3): the four inputs version 2 added,
- * which a version 1 record does not say and the replay takes from the
- * harness, and `job-identity`, which its index does not record, so its
- * jobs are matched by kind and address in the kept order. Nothing else is
- * ever taken from the harness. tools/yonder_records.py's DEFAULTABLE is
- * the same set. */
-static const char *const kDefaultable[]={"agent","cookies","clock","tz","job-identity"};
+/* WHAT A REPLAY OF A VERSION 1 PAGE TAKES FROM OUTSIDE ITS RECORD
+ * (REPLAY.md § 3), never silently. DEFAULTED, from the harness, named on
+ * its `REPLAY inputs defaulted:` line in this order: the cookies and the
+ * clock, which nobody can state for a page recorded before them. STATED,
+ * by the person running the replay (`--window KEY=VALUE,...`), each with
+ * the fact it stands for, named with its value on its `REPLAY inputs
+ * stated:` line in this order: the window's inputs, the agent and the
+ * zone, each taken only when the record does not say it. A version 1
+ * record missing one that is not stated is unjudged.
+ * tools/yonder_records.py's DEFAULTABLE and STATABLE are the same sets. */
+static const char *const kDefaultable[]={"cookies","clock"};
 #define RP_DEFAULTABLE (sizeof(kDefaultable)/sizeof(kDefaultable[0]))
+static const struct { const char *key; int fact; } kStatable[]={
+    {"zoom",F_ZOOM},{"appearance",F_APPEARANCE},{"motion",F_MOTION},{"animate",F_ANIMATIONS},{"modern",F_MODERN},
+    {"scripts",F_SCRIPTS},{"script-seconds",F_SCRIPT_SECONDS},{"laid-out-at",F_LAID},{"agent",F_AGENT},{"tz",F_TZ}};
+#define RP_STATABLE (sizeof(kStatable)/sizeof(kStatable[0]))
+/* What `--window` states, by kStatable, as the fact's value (`laid-out-at`
+ * as `<W>x<H> px`); NULL for what it does not. */
+static char *rp_stated[RP_STATABLE];
+/* Where a page's inputs came from besides its record: `defaulted` and
+ * `stated` by kDefaultable and kStatable, and `assumed`, a version 1 page
+ * whose record predates `kept:` taken as kept whole (rp_is_kept). */
+typedef struct { bool defaulted[RP_DEFAULTABLE], stated[RP_STATABLE], assumed; } RpFrom;
+#define RP_KEPT_ASSUMED "REPLAY kept: assumed whole (version 1)"
 
 /* A fact value a reader parses, matched whole: NULL, or why it is not. */
 static const char *rp_head_value(const char *key, size_t klen, const char *v, size_t n) {
@@ -441,6 +461,29 @@ static RpLine rp_classify(const char *line, size_t len, bool index) {
         l.kind="defaulted"; l.why=NULL; l.a=p; l.alen=(size_t)(end-p);
         return l;
     }
+    /* `REPLAY inputs stated: <key>=<value> ...`: what the person said a
+     * version 1 page's window was, each key once, from kStatable, each
+     * value escaped (a space in it spelled `\x20`) and not empty. */
+    if(rp_starts(line,len,"REPLAY inputs stated: ")) {
+        const char *p=line+22;
+        bool seen[RP_STATABLE]={false};
+        l.why="a REPLAY inputs stated line naming no input a person states, or none twice";
+        for(const char *w=p; ; ) {
+            const char *sp=memchr(w,' ',(size_t)(end-w));
+            size_t n=sp!=NULL ? (size_t)(sp-w) : (size_t)(end-w);
+            const char *eq=memchr(w,'=',n);
+            if(eq==NULL || eq+1==w+n) return l;
+            size_t k=0;
+            while(k<RP_STATABLE && !rp_is(w,(size_t)(eq-w),kStatable[k].key)) k++;
+            if(k==RP_STATABLE || seen[k]) return l;
+            seen[k]=true;
+            if(sp==NULL) break;
+            w=sp+1;
+        }
+        l.kind="stated"; l.why=NULL; l.a=p; l.alen=(size_t)(end-p);
+        return l;
+    }
+    if(rp_is(line,len,RP_KEPT_ASSUMED)) { l.kind="assumed"; return l; }
     if(rp_starts(line,len,"address: ")) { l.kind="address"; l.a=line+9; l.alen=len-9; return l; }
     if(rp_starts(line,len,"verdict: ")) {
         const char *p=line+9; size_t rest=len-9, d;
@@ -1189,12 +1232,12 @@ static const char *rp_written(const char *dir, const char *address, uint32_t seq
 /* A page's outcome: its state, why (UNJUDGED's reason, or what the first
  * REPLAY line of its state says), for a VERDICT the window record's lines
  * of the kinds a replay reproduces, and, for a judged page of version 1,
- * the inputs it took from the harness (`taken`, by kDefaultable). */
+ * where its inputs came from besides its record (`from`). */
 typedef struct {
     RpState state;
     char why[1100];
     unsigned missing, failed;
-    bool taken[RP_DEFAULTABLE];
+    RpFrom from;
 } RpOutcome;
 
 /* THE ONE PLACE A PAGE'S STATE IS DECIDED, from the page's own run, never
@@ -1205,7 +1248,7 @@ typedef struct {
  * page and its kept fetches did not meet one for one; else VERDICT, with
  * the window's record lines of the kinds a replay reproduces (`window`),
  * none of which is clean. */
-static RpOutcome rp_decide(const char *unjudged, const RpRecord *window, const bool *taken) {
+static RpOutcome rp_decide(const char *unjudged, const RpRecord *window, const RpFrom *from) {
     RpOutcome o; memset(&o,0,sizeof(o));
     if(unjudged!=NULL) {
         o.state=RP_UNJUDGED;
@@ -1215,12 +1258,12 @@ static RpOutcome rp_decide(const char *unjudged, const RpRecord *window, const b
     o.state=rp_unfinished ? RP_UNFINISHED : rp_incomplete ? RP_INCOMPLETE : RP_VERDICT;
     if(o.state!=RP_VERDICT) snprintf(o.why,sizeof(o.why),"%s",rp_first[o.state]);
     o.missing=window->replayed_missing; o.failed=window->replayed_failed;
-    if(taken!=NULL) memcpy(o.taken,taken,sizeof(o.taken));
+    if(from!=NULL) o.from=*from;
     return o;
 }
 /* Whether a judged page took any input from the harness. */
 static bool rp_any_taken(const RpOutcome *o) {
-    for(size_t k=0;k<RP_DEFAULTABLE;k++) if(o->taken[k]) return true;
+    for(size_t k=0;k<RP_DEFAULTABLE;k++) if(o->from.defaulted[k]) return true;
     return false;
 }
 
@@ -1249,12 +1292,27 @@ static RpText rp_compose(const RpOutcome *o, const char *address, const char *wi
         if(blen>=4 && !memcmp(body+blen-4,YONDER_DIAG_END "\n",4) && (blen==4 || body[blen-5]=='\n')) blen-=4;
         rp_add(&t,body,blen);
         if(rp_said.n) rp_add(&t,rp_said.p,rp_said.n);
+        bool stated=false;
+        for(size_t k=0;k<RP_STATABLE;k++) {
+            if(!o->from.stated[k]) continue;
+            rp_add(&t,stated ? " " : "REPLAY inputs stated: ",stated ? 1 : 22);
+            rp_add(&t,kStatable[k].key,strlen(kStatable[k].key)); rp_add(&t,"=",1);
+            /* The value as a page file writes data, its spaces `\x20` so
+             * the line splits at the spaces between its items alone. */
+            RpText value={0}; rp_add_escaped(&value,rp_stated[k]);
+            for(size_t i=0;i<value.n;i++)
+                if(value.p[i]==' ') rp_add(&t,"\\x20",4); else rp_add(&t,value.p+i,1);
+            free(value.p);
+            stated=true;
+        }
+        if(stated) rp_add(&t,"\n",1);
         if(rp_any_taken(o)) {
             rp_add(&t,"REPLAY inputs defaulted:",24);
             for(size_t k=0;k<RP_DEFAULTABLE;k++)
-                if(o->taken[k]) { rp_add(&t," ",1); rp_add(&t,kDefaultable[k],strlen(kDefaultable[k])); }
+                if(o->from.defaulted[k]) { rp_add(&t," ",1); rp_add(&t,kDefaultable[k],strlen(kDefaultable[k])); }
             rp_add(&t,"\n",1);
         }
+        if(o->from.assumed) rp_add(&t,RP_KEPT_ASSUMED "\n",strlen(RP_KEPT_ASSUMED)+1);
         rp_add(&t,kNot,sizeof(kNot)-1);
     }
     rp_add(&t,"end\n",4);
@@ -1332,9 +1390,57 @@ static void rp_report(const char *name, const RpOutcome *o, bool leaked, RpTally
     printf("\n");
 }
 
-/* `name` marked in `taken`, in kDefaultable's order. */
-static void rp_defaulted(bool *taken, const char *name) {
-    for(size_t k=0;k<RP_DEFAULTABLE;k++) if(!strcmp(kDefaultable[k],name)) taken[k]=true;
+/* Whether `s` begins with a key of kStatable and its `=`. */
+static bool rp_statable_at(const char *s) {
+    for(size_t k=0;k<RP_STATABLE;k++) {
+        size_t n=strlen(kStatable[k].key);
+        if(!strncmp(s,kStatable[k].key,n) && s[n]=='=') return true;
+    }
+    return false;
+}
+/* What is stated forgotten. */
+static void rp_window_clear(void) {
+    for(size_t k=0;k<RP_STATABLE;k++) { free(rp_stated[k]); rp_stated[k]=NULL; }
+}
+/* `--window KEY=VALUE,...` (REPLAY.md § 3): what the person running the
+ * replay states a version 1 corpus's window was, into rp_stated. An item
+ * ends at a comma that a key of kStatable and its `=` follow, so a value
+ * may hold commas (an agent string does); each key once, each value one
+ * the record's grammar takes for its fact (`laid-out-at` as `<W>x<H>`, a
+ * width and a height). NULL, or why not. */
+static const char *rp_window_state(const char *arg) {
+    static char why[300];
+    for(const char *p=arg; *p; ) {
+        const char *eq=strchr(p,'=');
+        size_t k=0;
+        while(eq!=NULL && k<RP_STATABLE && !rp_is(p,(size_t)(eq-p),kStatable[k].key)) k++;
+        if(eq==NULL || k==RP_STATABLE) {
+            snprintf(why,sizeof(why),"--window: `%.40s` names no input a person states",p);
+            return why;
+        }
+        if(rp_stated[k]!=NULL) { snprintf(why,sizeof(why),"--window: `%s` is stated twice",kStatable[k].key); return why; }
+        const char *v=eq+1, *e=v;
+        for(;;) {
+            const char *c=strchr(e,',');
+            if(c==NULL) { e=v+strlen(v); break; }
+            if(rp_statable_at(c+1)) { e=c; break; }
+            e=c+1;
+        }
+        size_t n=(size_t)(e-v);
+        bool laid=kStatable[k].fact==F_LAID;
+        char *value=malloc(n+4);
+        snprintf(value,n+4,"%.*s%s",(int)n,v,laid ? " px" : "");
+        const char *fact=kFacts[kStatable[k].fact];
+        if(n==0 || rp_head_value(fact,strlen(fact),value,strlen(value))!=NULL ||
+           (laid && v[rp_digit_run(v,e)]!='x')) {
+            snprintf(why,sizeof(why),"--window: `%s=%.*s` is not a value a record says",kStatable[k].key,(int)n,v);
+            free(value);
+            return why;
+        }
+        rp_stated[k]=value;
+        p=*e!='\0' ? e+1 : e;
+    }
+    return NULL;
 }
 
 /* THE PAGE'S INPUTS (REPLAY.md § 3), the window it was read in and its
@@ -1346,34 +1452,52 @@ static void rp_defaulted(bool *taken, const char *name) {
  * limit, its agent, the cookies a script could read, its clock and zone;
  * a page from the network its status, content-type, charset and
  * encryption too (a fact may be empty: the server named none). A record
- * of VERSION 1 predates four of them, the agent, the cookies, the clock
- * and the zone, and the replay takes those four, and only those, from the
- * harness (rp_harness_inputs), marking each in `taken`; a version 1
- * index's missing job identity is marked too. Each value has passed the
- * grammar (rp_classify). `index` is the page's kept index, whose line
- * count the record's `kept lines` must be. */
-static const char *rp_window_of(const RpRecord *r, bool local, const RpIndex *index, RpLoad *load, bool *taken) {
+ * of VERSION 1 is read by its own rules, each named in `from`: the
+ * cookies and the clock, which it cannot say, are the harness's
+ * (`defaulted`); the window's inputs, the agent and the zone it does not
+ * say are what `--window` states (`stated`, rp_stated), and one neither
+ * says nor states leaves the page unjudged; its `kept lines` binds the
+ * index only when it says one. Each value has passed the grammar
+ * (rp_classify). `index` is the page's kept index. */
+static const char *rp_window_of(const RpRecord *r, bool local, const RpIndex *index, RpLoad *load, RpFrom *from) {
     static const int kNeeded[]={F_FINAL,F_BODY,F_KEPT_LINES,F_LAID,F_ZOOM,F_APPEARANCE,F_MOTION,F_ANIMATIONS,F_MODERN,
         F_SCRIPTS,F_SCRIPT_SECONDS,F_AGENT,F_COOKIES,F_CLOCK,F_TZ,F_STATUS,F_TYPE,F_CHARSET,F_ENCRYPTED};
-    static char why[160], clock[32], zone[64];
+    static char why[200], clock[32];
     const char *f[F_N];
     memcpy(f,r->facts,sizeof(f));
-    if(rp_version(r)<2) {
+    bool v1=rp_version(r)<2;
+    if(v1) {
         RpLoad harness; rp_harness_inputs(&harness);
         snprintf(clock,sizeof(clock),"%llu",(unsigned long long)harness.clock_ms);
-        const char *tz=getenv("TZ");
-        if(tz!=NULL && tz[0]!='\0') snprintf(zone,sizeof(zone),"%s",tz);
-        else snprintf(zone,sizeof(zone),"%dm",(int)js_test_clock.tz_offset_minutes);
-        f[F_AGENT]=harness.agent; f[F_COOKIES]=harness.cookies; f[F_CLOCK]=clock; f[F_TZ]=zone;
-        rp_defaulted(taken,"agent"); rp_defaulted(taken,"cookies"); rp_defaulted(taken,"clock"); rp_defaulted(taken,"tz");
+        f[F_COOKIES]=harness.cookies; f[F_CLOCK]=clock;
+        from->defaulted[0]=from->defaulted[1]=true;
+        /* The version 1 builds wrote `content-type` and `charset` only
+         * when the server named one (yonder.c at 08cf5de6), so a version 1
+         * record without one says the server named none: that is its
+         * format's spelling of empty, not an input taken from elsewhere. */
+        if(!local && f[F_TYPE]==NULL) f[F_TYPE]="";
+        if(!local && f[F_CHARSET]==NULL) f[F_CHARSET]="";
+        /* A census-era `laid out at` says the page's width, not the view's
+         * width and height: it says no view. */
+        if(f[F_LAID]!=NULL && f[F_LAID][rp_digit_run(f[F_LAID],f[F_LAID]+strlen(f[F_LAID]))]!='x') f[F_LAID]=NULL;
+        for(size_t i=0;i<RP_STATABLE;i++) {
+            int k=kStatable[i].fact;
+            if(f[k]!=NULL) continue;
+            if(rp_stated[i]==NULL) {
+                snprintf(why,sizeof(why),"its record does not say its `%s` and --window does not state it",kFacts[k]);
+                return why;
+            }
+            f[k]=rp_stated[i];
+            from->stated[i]=true;
+        }
     }
     for(size_t i=0;i<sizeof(kNeeded)/sizeof(kNeeded[0]);i++)
         if(f[kNeeded[i]]==NULL && !(local && (kNeeded[i]==F_STATUS || kNeeded[i]==F_TYPE ||
-                                              kNeeded[i]==F_CHARSET || kNeeded[i]==F_ENCRYPTED))) {
+                                              kNeeded[i]==F_CHARSET || kNeeded[i]==F_ENCRYPTED)) &&
+           !(v1 && kNeeded[i]==F_KEPT_LINES)) {
             snprintf(why,sizeof(why),"its record does not say its `%s`",kFacts[kNeeded[i]]);
             return why;
         }
-    if(index->version==1) rp_defaulted(taken,"job-identity");
     /* `<width>x<height> px`, perhaps ` in <n> ms`. */
     const char *laid=f[F_LAID], *x=laid+rp_digit_run(laid,laid+strlen(laid)), *px=strstr(laid," px");
     if(*x!='x') x=NULL;
@@ -1387,7 +1511,8 @@ static const char *rp_window_of(const RpRecord *r, bool local, const RpIndex *in
     if(!rp_decimal(f[F_SCRIPT_SECONDS],strlen(f[F_SCRIPT_SECONDS]),&load->script_seconds))
         return "its record's `script seconds` is none yonder writes";
     uint32_t want_lines=0;
-    if(!rp_decimal(f[F_KEPT_LINES],strlen(f[F_KEPT_LINES]),&want_lines) || want_lines!=index->lines) {
+    if(f[F_KEPT_LINES]!=NULL && (!rp_decimal(f[F_KEPT_LINES],strlen(f[F_KEPT_LINES]),&want_lines) ||
+                                 want_lines!=index->lines)) {
         snprintf(why,sizeof(why),"its record says its index holds %u lines, and it holds %u",want_lines,index->lines);
         return why;
     }
@@ -1420,10 +1545,24 @@ static const char *rp_window_of(const RpRecord *r, bool local, const RpIndex *in
 }
 
 /* Whether a whole record is a KEPT PAGE's (REPLAY.md § 3): one that says
- * `kept:` (whole or not), of either version. yonder writes it when the
+ * `kept:` (whole or not), of either version, yonder writing it when the
  * page's bytes are done, last, so for a version 1 record, which may lack
- * `end`, it is the line that says the record reached its end. */
-static bool rp_is_kept(const RpRecord *r) { return r->facts[F_KEPT]!=NULL; }
+ * `end`, it stands for that end. A version 1 record that predates `kept:`
+ * (and says none) is kept when its page's bytes are beside it
+ * (`<base>.html`), ASSUMED whole (`*assumed`): its `bytes:` must then
+ * match them, and its `kept lines`, when it says one, its index, and the
+ * replay's record says the assumption. */
+static RpFs rp_is_kept(const char *base, const RpRecord *r, bool *kept, bool *assumed, RpFault *fault) {
+    *kept=r->facts[F_KEPT]!=NULL; *assumed=false;
+    if(*kept || rp_version(r)>=2) return RP_FS_OK;
+    char *html=rp_cat(base,".html","");
+    bool dir=false;
+    RpFs got=rp_fs_kind(html,&dir,fault);
+    free(html);
+    if(got==RP_FS_FAULT) return got;
+    *kept=*assumed=got==RP_FS_OK && !dir;
+    return RP_FS_OK;
+}
 /* THE END RULE (REPLAY.md § 2): a kept page's record of version 2 (one
  * that says `kept lines:`, written at its claim, or `kept:`) ends with
  * `end`, so one cut short anywhere after its claim is never replayed. */
@@ -1453,7 +1592,7 @@ static int rp_replay_page(const char *kept, const char *out, const char *name, u
     RpRecord r, window; memset(&r,0,sizeof(r)); memset(&window,0,sizeof(window));
     RpIndex index; memset(&index,0,sizeof(index));
     RpTally t; memset(&t,0,sizeof(t));
-    bool taken[RP_DEFAULTABLE]={false};
+    RpFrom from; memset(&from,0,sizeof(from));
     char *text=NULL, *bytes=NULL;
     const char *unjudged=NULL, *record=NULL;
     char why[1100];
@@ -1467,7 +1606,7 @@ static int rp_replay_page(const char *kept, const char *out, const char *name, u
     if((unjudged=rp_record_read(text,size,&r))!=NULL) goto judge;
     if((unjudged=r.unjudged)!=NULL) goto judge;
     if(rp_cut_short(&r)) { unjudged="its record has no `end`: it was cut short"; goto judge; }
-    is_kept=rp_is_kept(&r);
+    if(rp_is_kept(base,&r,&is_kept,&from.assumed,&fault)==RP_FS_FAULT) { unjudged=fault.why; goto judge; }
     if(!is_kept) { unjudged="it is not a kept page (its record does not say `kept:`)"; goto judge; }
     if(r.facts[F_KEPT]!=NULL && strcmp(r.facts[F_KEPT],"whole")) {
         snprintf(why,sizeof(why),"it was kept %s",r.facts[F_KEPT]);
@@ -1500,7 +1639,7 @@ static int rp_replay_page(const char *kept, const char *out, const char *name, u
     }
     bool local=!strncmp(r.address,"file://",7);
     RpLoad load={0};
-    if((unjudged=rp_window_of(&r,local,&index,&load,taken))!=NULL) goto judge;
+    if((unjudged=rp_window_of(&r,local,&index,&load,&from))!=NULL) goto judge;
     load.address=r.address; load.seq=rp_seq(name); load.bytes=(const uint8_t *)bytes; load.len=len;
     load.local=local;
     load.dir="/tmp/replay"; load.budget_ms=budget_ms;
@@ -1527,7 +1666,7 @@ static int rp_replay_page(const char *kept, const char *out, const char *name, u
         unjudged=why;
     }
 judge:;
-    RpOutcome o=rp_decide(unjudged,&window,taken);
+    RpOutcome o=rp_decide(unjudged,&window,&from);
     RpText whole=rp_compose(&o,r.address,o.state==RP_UNJUDGED ? NULL : record,wlen);
     path=rp_cat(out,"/",name);
     if(rp_fs_write(path,whole.p,whole.n,&fault)!=RP_FS_OK && o.state!=RP_UNJUDGED) {
@@ -1634,7 +1773,8 @@ static bool rp_one_process(const char *kept, const char *out, const char *name, 
         char *stem=strndup(name,strlen(name)-4), *base=rp_cat(kept,"/",stem), *path=rp_cat(base,".txt","");
         char *text=NULL; size_t size=0; RpRecord r; bool is_kept=true;
         if(rp_fs_read(path,&text,&size,&fault)==RP_FS_OK && rp_record_read(text,size,&r)==NULL) {
-            if(r.unjudged==NULL && !rp_cut_short(&r)) is_kept=rp_is_kept(&r);
+            bool k=false, assumed=false;
+            if(r.unjudged==NULL && !rp_cut_short(&r) && rp_is_kept(base,&r,&k,&assumed,&fault)==RP_FS_OK) is_kept=k;
             rp_record_free(&r);
         }
         free(text); free(path); free(base); free(stem);
@@ -2223,7 +2363,7 @@ static int rp_replay_copy(const char *dir, const char *name, uint64_t budget_ms,
     return rc;
 }
 
-static unsigned rp_corpus_cases(const char *work, const char *kept, const char *name) {
+static unsigned rp_corpus_cases(const char *work, const char *kept, const char *name, const char *other) {
     unsigned bad=0;
     RpTally t; char *record; int rc;
     char *dir;
@@ -2366,6 +2506,9 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
     char *f3=rp_cat(dfolder,"/index",""), *f4=rp_cat(dfolder,"/1.js","");
     if(!rp_put_record_of(f1,kTwiceRecord,kTwicePage,1,1) || !rp_put(f2,kTwicePage,sizeof(kTwicePage)-1) ||
        !rp_put(f3,kTwiceIndex,sizeof(kTwiceIndex)-1) || !rp_put(f4,"1",1)) bad++;
+    /* The agent and the zone this version 1 record does not say, stated
+     * as the harness's own for the runs of it below. */
+    if(rp_window_state("agent=" YONDER_AGENT ",tz=330m")!=NULL) bad++;
     rc=rp_replay_copy(dir,"fixture.test-0001.txt",60000,&t,&record);
     if(rc!=0 || t.states[RP_UNFINISHED]!=1 || t.clean!=0 || record==NULL ||
        strstr(record,"\nREPLAY incomplete script http://fixture.test/t.js\n")==NULL) {
@@ -2381,6 +2524,7 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
     if(rp_replay_dir(dir,again,60000,"fixture",&t2)!=0 || rp_replayed(&t2)!=1) {
         printf("  a partial replay into a directory holding records was refused\n"); bad++;
     }
+    rp_window_clear();
     free(again); free(f1); free(f2); free(f3); free(f4); free(dfolder); free(dir);
 
     /* Two async scripts that came back in the reverse of the order they
@@ -2744,27 +2888,118 @@ static unsigned rp_corpus_cases(const char *work, const char *kept, const char *
     }
     free(record); free(f1); free(f2); free(f3); free(f4); free(f5); free(dfolder); free(dir);
 
-    /* A KEPT PAGE OF VERSION 1 (REPLAY.md § 3): a record whole but for the
-     * four inputs version 2 added and its `end`, and an index of six
-     * fields. It is judged, its job matched by kind and address in the
-     * kept order, those four taken from the harness and named on its
-     * record with the identity its index lacks. */
-    dir=rp_cat(work,"/version1page","");
-    dfolder=rp_cat(dir,"/fixture.test-0001.d","");
-    if(!rp_put_dir(dir) || !rp_put_dir(dfolder)) bad++;
+    /* KEPT PAGES OF VERSION 1 (REPLAY.md § 3): a record whole but for the
+     * four inputs version 2 added and its `end`, an index of six fields,
+     * and `--window` stating the agent and the zone. It is judged, its job
+     * matched by kind and address in the kept order, the cookies and the
+     * clock the harness's and named, the agent and the zone named with
+     * the values stated. Then the same record without its `kept:` (one
+     * kept before that fact existed): kept, its bytes beside it matching
+     * its `bytes:`, and its record saying the assumption. Then one without
+     * its `zoom`, which nobody stated: unjudged, saying so. */
     static const char kOldPage[]="<!doctype html><p>old</p><script src=a.js></script>";
     static const char kOldRecord[]="address: http://fixture.test/old\nverdict: clean\nstatus: 200 OK\n"
         "final address: http://fixture.test/old\nbody: html\ncontent-type: text/html\ncharset: \nencrypted: no\nkept: whole\n";
     static const char kOldIndex[]="# yonder kept index 1\n"
         "1\tscript\thttp://fixture.test/a.js\tcame\thttp://fixture.test/a.js\t\n";
-    f1=rp_cat(dir,"/fixture.test-0001.txt",""); f2=rp_cat(dir,"/fixture.test-0001.html","");
-    f3=rp_cat(dfolder,"/index",""); f4=rp_cat(dfolder,"/1.js","");
-    if(!rp_put_record_of(f1,kOldRecord,kOldPage,1,1) || !rp_put(f2,kOldPage,sizeof(kOldPage)-1) ||
-       !rp_put(f3,kOldIndex,sizeof(kOldIndex)-1) || !rp_put(f4,"document.title='old'",20)) bad++;
-    rc=rp_replay_copy(dir,"fixture.test-0001.txt",60000,&t,&record);
-    if(rc!=0 || t.clean!=1 || t.defaulted!=1 || record==NULL ||
-       strstr(record,"\nREPLAY inputs defaulted: agent cookies clock tz job-identity\n")==NULL) {
-        printf("  a kept page of version 1 was not judged with its inputs defaulted and named (%d)\n",rc); bad++;
+    static const char *const kStrip[]={NULL,"kept: whole\n","zoom: 1000\n"};
+    char statement[256], stated_line[256];
+    snprintf(statement,sizeof(statement),"agent=%s,tz=330m",YONDER_AGENT);
+    {
+        RpText said={0}; rp_add_escaped(&said,YONDER_AGENT);
+        snprintf(stated_line,sizeof(stated_line),"\nREPLAY inputs stated: agent=");
+        for(size_t i=0;i<said.n;i++) {
+            size_t at=strlen(stated_line);
+            if(said.p[i]==' ') snprintf(stated_line+at,sizeof(stated_line)-at,"\\x20");
+            else { stated_line[at]=said.p[i]; stated_line[at+1]='\0'; }
+        }
+        size_t at=strlen(stated_line);
+        snprintf(stated_line+at,sizeof(stated_line)-at," tz=330m\nREPLAY inputs defaulted: cookies clock\n");
+        free(said.p);
+    }
+    for(int variant=0;variant<3;variant++) {
+        static const char *const kDirs[]={"/version1page","/version1assumed","/version1unstated"};
+        dir=rp_cat(work,kDirs[variant],"");
+        dfolder=rp_cat(dir,"/fixture.test-0001.d","");
+        if(!rp_put_dir(dir) || !rp_put_dir(dfolder)) bad++;
+        f1=rp_cat(dir,"/fixture.test-0001.txt",""); f2=rp_cat(dir,"/fixture.test-0001.html","");
+        f3=rp_cat(dfolder,"/index",""); f4=rp_cat(dfolder,"/1.js","");
+        if(!rp_put_record_of(f1,kOldRecord,kOldPage,1,1) || !rp_put(f2,kOldPage,sizeof(kOldPage)-1) ||
+           !rp_put(f3,kOldIndex,sizeof(kOldIndex)-1) || !rp_put(f4,"document.title='old'",20)) bad++;
+        if(kStrip[variant]!=NULL) {
+            size_t n=0; char *text=rp_file(f1,&n), *at=text!=NULL ? strstr(text,kStrip[variant]) : NULL;
+            if(at==NULL) { printf("  %s: the record has no %s",kDirs[variant],kStrip[variant]); bad++; }
+            else { memmove(at,at+strlen(kStrip[variant]),strlen(at+strlen(kStrip[variant]))+1); if(!rp_put(f1,text,strlen(text))) bad++; }
+            free(text);
+        }
+        if(rp_window_state(statement)!=NULL) bad++;
+        rc=rp_replay_copy(dir,"fixture.test-0001.txt",60000,&t,&record);
+        rp_window_clear();
+        bool judged=rc==0 && t.clean==1 && t.defaulted==1 && record!=NULL && strstr(record,stated_line)!=NULL &&
+                    (strstr(record,"\n" RP_KEPT_ASSUMED "\n")!=NULL)==(variant==1);
+        if(variant<2 && !judged) {
+            printf("  %s: a kept page of version 1 was not judged with what it took named (%d)\n",kDirs[variant],rc); bad++;
+        }
+        if(variant==2 && (rc!=2 || record==NULL ||
+           strstr(record,"\nREPLAY state: unjudged its record does not say its `zoom` and --window does not state it\n")==NULL)) {
+            printf("  %s: a version 1 page missing an input nobody stated was judged (%d)\n",kDirs[variant],rc); bad++;
+        }
+        if(variant<2) { free(record); free(f1); free(f2); free(f3); free(f4); free(dfolder); free(dir); }
+    }
+
+    /* A VERSION 1 PAGE READ IN THE WINDOW `--window` STATES: the page read
+     * with every input unlike the harness's, its record made version 1
+     * (none of the four inputs version 2 added, no window, no `end`, and
+     * no `charset:`, which the version 1 builds left out when empty), and
+     * replayed with the window it was read in stated. Its script writes
+     * each stated input into its record as it did where it was kept; the
+     * cookies and the clock are the harness's, and named. */
+    {
+        static const char *const kWindowFacts[]={"agent","cookies","clock","tz","laid out at","scripts","modern","zoom",
+                                                 "appearance","motion","animate","script seconds","charset"};
+        char *wdir=rp_cat(work,"/version1stated",""), *stem=strndup(other,strlen(other)-4);
+        char *from=rp_cat(kept,"/",stem), *to=rp_cat(wdir,"/",stem);
+        if(!rp_put_dir(wdir)) bad++;
+        for(int part=0;part<2;part++) {
+            char *a=rp_cat(from,part ? ".html" : ".txt",""), *b=rp_cat(to,part ? ".html" : ".txt","");
+            size_t n=0; char *text=rp_file(a,&n);
+            if(text==NULL) { printf("  the page read with other inputs was not kept\n"); bad++; }
+            else {
+                if(!part) {
+                    RpText v1={0};
+                    for(char *l=text; *l; ) {
+                        char *e=strchr(l,'\n'); size_t len=e!=NULL ? (size_t)(e-l)+1 : strlen(l);
+                        bool drop=!strncmp(l,"end\n",4) && len==4;
+                        for(size_t k=0;!drop && k<sizeof(kWindowFacts)/sizeof(kWindowFacts[0]);k++) {
+                            size_t kl=strlen(kWindowFacts[k]);
+                            drop=!strncmp(l,kWindowFacts[k],kl) && l[kl]==':';
+                        }
+                        if(!drop) rp_add(&v1,l,len);
+                        l+=len;
+                    }
+                    free(text); text=v1.p; n=v1.n;
+                }
+                if(!rp_put(b,text,n)) bad++;
+            }
+            free(text); free(a); free(b);
+        }
+        if(rp_window_state("zoom=1250,appearance=dark,motion=reduce,animate=off,modern=on,scripts=on,"
+                           "script-seconds=5,laid-out-at=900x700,agent=other-agent/2,tz=-120m")!=NULL) bad++;
+        char *wrecord=NULL;
+        rc=rp_replay_copy(wdir,other,60000,&t,&wrecord);
+        rp_window_clear();
+        static const char *const kSaid[]={"agent_other_agent_2","zone_120","dark_111","motion_122","wide_720",
+                                          "high_280","animate_704"};
+        bool all=rc==0 && wrecord!=NULL && t.defaulted==1 &&
+                 strstr(wrecord,"\nREPLAY inputs stated: zoom=1250 appearance=dark motion=reduce animate=off modern=on "
+                               "scripts=on script-seconds=5 laid-out-at=900x700\\x20px agent=other-agent/2 tz=-120m\n")!=NULL &&
+                 strstr(wrecord,"\nREPLAY inputs defaulted: cookies clock\n")!=NULL;
+        for(size_t k=0;all && k<sizeof(kSaid)/sizeof(kSaid[0]);k++) {
+            char line[96]; snprintf(line,sizeof(line),"\nMISSING global %s (1)\n",kSaid[k]);
+            all=strstr(wrecord,line)!=NULL;
+        }
+        if(!all) { printf("  a version 1 page was not read in the window --window states (%d)\n",rc); bad++; }
+        free(wrecord); free(from); free(to); free(stem); free(wdir);
     }
     free(record); free(f1); free(f2); free(f3); free(f4); free(dfolder); free(dir);
     return bad;
@@ -2819,6 +3054,34 @@ static unsigned rp_grammar_vectors(void) {
     }
     free(text);
     if(n<100) { printf("  the grammar has only %u vectors\n",n); bad++; }
+    return bad;
+}
+
+/* WHAT `--window` TAKES AND REFUSES: an agent holding commas, split only
+ * where a known key follows; and, each refused, a key nobody states, one
+ * stated twice, a view without its height, and a value no record says.
+ * The problems found. */
+static unsigned rp_window_cases(void) {
+    unsigned bad=0;
+    size_t agent=0, zoom=0, laid=0;
+    for(size_t k=0;k<RP_STATABLE;k++) {
+        if(kStatable[k].fact==F_AGENT) agent=k;
+        if(kStatable[k].fact==F_ZOOM) zoom=k;
+        if(kStatable[k].fact==F_LAID) laid=k;
+    }
+    if(rp_window_state("agent=Mozilla/5.0 (KHTML, like Gecko) X/1,zoom=1250,laid-out-at=10x20")!=NULL ||
+       rp_stated[agent]==NULL || strcmp(rp_stated[agent],"Mozilla/5.0 (KHTML, like Gecko) X/1") ||
+       rp_stated[zoom]==NULL || strcmp(rp_stated[zoom],"1250") ||
+       rp_stated[laid]==NULL || strcmp(rp_stated[laid],"10x20 px")) {
+        printf("  --window did not take an agent holding commas, a zoom and a view\n"); bad++;
+    }
+    rp_window_clear();
+    static const char *const kRefused[]={"cookies=a=1","zoom=1000,zoom=1250","laid-out-at=2526","zoom=01000",
+                                         "appearance=dim","zoom","tz="};
+    for(size_t i=0;i<sizeof(kRefused)/sizeof(kRefused[0]);i++) {
+        if(rp_window_state(kRefused[i])==NULL) { printf("  --window took `%s`\n",kRefused[i]); bad++; }
+        rp_window_clear();
+    }
     return bad;
 }
 
@@ -2922,14 +3185,15 @@ static int rp_self_test(const char *work) {
     const char *dirs[]={"tools/yonder_loop_fixture","tools/yonder_script_fixture","tools/pages"};
     unsigned pages=0, bad=0;
     uint32_t seq=0;
-    char name[256], first_hand[256]="";
+    char name[256], first_hand[256]="", other_hand[256]="";
     char *said=rp_cat(work,"/fixtures","");
     /* Each page loaded as a person browsing with keep_pages on would load
      * it, and what yonder kept written out, IN A CHILD OF ITS OWN (REPLAY.md
      * § 6): the window and its fakes run there, so every process that
      * replays a page starts from a parent none of that has touched. The
-     * child says how many pages it kept and the first hand-made page's
-     * name in WORK-DIR/fixtures, and exits with its problems. */
+     * child says how many pages it kept, the first hand-made page's name
+     * and that of the page read with inputs unlike the harness's in
+     * WORK-DIR/fixtures, and exits with its problems. */
     fflush(stdout); fflush(stderr);
     pid_t keeper=fork();
     if(keeper<0) { printf("  no process to keep the fixtures in\n"); free(said); return 2; }
@@ -2976,6 +3240,7 @@ static int rp_self_test(const char *work) {
                 size_t wlen;
                 const char *record=rp_written("/tmp/kept",address,load.seq,name,sizeof(name),&wlen);
                 if(set==3 && i==0 && record!=NULL) snprintf(first_hand,sizeof(first_hand),"%s",name);
+                if(set==3 && hand[i].other && record!=NULL) snprintf(other_hand,sizeof(other_hand),"%s",name);
                 if(record==NULL || !rp_copy_kept(kept) || ran.harness_failures!=0 || ran.live_after!=live_before) {
                     printf("  %s (%s): %s\n",address,set<3 ? files[i] : hand[i].what,
                         record==NULL ? "no record" : ran.harness_failures ? "harness checks failed" :
@@ -3000,8 +3265,8 @@ static int rp_self_test(const char *work) {
             }
             rp_fs_names_free(files,nfiles);
         }
-        char kept_said[512];
-        snprintf(kept_said,sizeof(kept_said),"%u\n%s\n",pages,first_hand);
+        char kept_said[600];
+        snprintf(kept_said,sizeof(kept_said),"%u\n%s\n%s\n",pages,first_hand,other_hand);
         if(!rp_put(said,kept_said,strlen(kept_said))) bad++;
         bad+=rp_faults;
         fflush(stdout); fflush(stderr);
@@ -3017,9 +3282,13 @@ static int rp_self_test(const char *work) {
     }
     {
         char *text=rp_file(said,NULL), *nl=text!=NULL ? strchr(text,'\n') : NULL;
-        if(nl==NULL || !rp_decimal(text,(size_t)(nl-text),&pages) || strlen(nl+1)<2) {
+        char *second=nl!=NULL ? strchr(nl+1,'\n') : NULL;
+        if(second==NULL || !rp_decimal(text,(size_t)(nl-text),&pages) || second-nl<3 || strlen(second+1)<2) {
             printf("  the fixtures' child did not say what it kept\n"); bad++;
-        } else snprintf(first_hand,sizeof(first_hand),"%.*s",(int)strcspn(nl+1,"\n"),nl+1);
+        } else {
+            snprintf(first_hand,sizeof(first_hand),"%.*s",(int)(second-nl-1),nl+1);
+            snprintf(other_hand,sizeof(other_hand),"%.*s",(int)strcspn(second+1,"\n"),second+1);
+        }
         free(text);
     }
     free(said);
@@ -3038,8 +3307,9 @@ static int rp_self_test(const char *work) {
         free(x); free(y); free(a); free(b);
     }
     rp_fs_names_free(records,nrecords);
-    bad+=rp_corpus_cases(work,kept,first_hand);
+    bad+=rp_corpus_cases(work,kept,first_hand,other_hand);
     bad+=rp_grammar_vectors();
+    bad+=rp_window_cases();
     bad+=rp_faults;
     printf("replay self-test: %u pages kept and replayed, %u problems\n",pages,bad);
     return bad!=0;
@@ -3056,6 +3326,11 @@ int main(int argc, char **argv) {
     } else if(argc>=3) {
         uint32_t seconds=60; const char *only=NULL;
         for(int i=3;i<argc;i++) {
+            if(!strcmp(argv[i],"--window") && i+1<argc) {
+                const char *bad=rp_window_state(argv[++i]);
+                if(bad!=NULL) { fprintf(stderr,"replay: %s\n",rp_display(bad)); return 2; }
+                continue;
+            }
             if(!strcmp(argv[i],"--seconds") && i+1<argc) {
                 ++i;
                 if(!rp_decimal(argv[i],strlen(argv[i]),&seconds)) {
@@ -3070,7 +3345,7 @@ int main(int argc, char **argv) {
         RpTally t={0};
         rc=rp_replay_dir(argv[1],argv[2],(uint64_t)seconds*1000,only,&t);
     } else {
-        fprintf(stderr,"usage: %s KEPT-DIR OUT-DIR [--seconds N] [--only TEXT] [--crash-page NAME]\n"
+        fprintf(stderr,"usage: %s KEPT-DIR OUT-DIR [--seconds N] [--only TEXT] [--window KEY=VALUE,...] [--crash-page NAME]\n"
                        "       %s --self-test WORK-DIR\n",argv[0],argv[0]);
         return 2;
     }

@@ -1712,10 +1712,10 @@ static yonder_diag_t *diag_begin(const char *url)
     // scripts); the clock and its zone (the agent, the cookies, the clock
     // and the zone are what make a record version 2); the view's size; and
     // the rest of kDiagSettings. A replay sets each from the record and
-    // assumes none. The arrival writes the laid-out size again, and a
-    // record whose page was laid out in another view, or whose window is
-    // not the one the claim wrote when it is written, is marked unjudged
-    // (diag_arrived, diag_write).
+    // assumes none. The arrival writes the laid-out size again; a record
+    // whose page was laid out in another view than the claim's
+    // (diag_arrived), or whose settings are not the ones the claim wrote
+    // when it is written (diag_write), is marked unjudged.
     if (d != NULL) {
         char v[48];
         yonder_diag_head_fact(d, kDiagSettings[0], diag_setting(kDiagSettings[0], v, sizeof(v)));
@@ -1773,16 +1773,16 @@ static bool diag_write(yonder_diag_t *d)
     if (d == NULL || s_diag.dir[0] == '\0')
         return false;
     // A record is of one window: a setting that is not what the claim
-    // wrote, or a view that is not the one the page was laid out in, makes
-    // it a record no replay can read the page again by.
+    // wrote makes it a record no replay can read the page again by. (The
+    // view is compared once, at arrival, against the claim's: after it,
+    // the view also moves when yonder's own bars come and go, which a
+    // replay of the page reproduces.)
     char now[48];
     for (size_t i = 0; i < sizeof(kDiagSettings) / sizeof(kDiagSettings[0]); i++) {
         const char *then = yonder_diag_fact_value(d, kDiagSettings[i]);
         if (then != NULL && !os64_streq(then, diag_setting(kDiagSettings[i], now, sizeof(now))))
             yonder_diag_unjudged(d, "settings changed during the load");
     }
-    if (!diag_same_view(yonder_diag_fact_value(d, "laid out at"), g.view.bounds.w, g.view.bounds.h))
-        yonder_diag_unjudged(d, "settings changed during the load");
     const yonder_diag_claim_t *c = yonder_diag_claimed(d);
     if (c == NULL) {
         if (!s_diag.claim_said) {

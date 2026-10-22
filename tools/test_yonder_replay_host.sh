@@ -2,10 +2,13 @@
 # The replay corpus on the host (MODERN_WEB.md rule 3; the runner's own
 # comment, tools/test_yonder_replay_host.c, says what a replay is).
 #
-#   tools/test_yonder_replay_host.sh KEPT-DIR OUT-DIR [--seconds N] [--only TEXT]
+#   tools/test_yonder_replay_host.sh KEPT-DIR OUT-DIR [--seconds N] [--only TEXT] [--window KEY=VALUE,...]
 #       replays every page kept in KEPT-DIR (yonder.conf's keep_pages) and
 #       writes its record again into OUT-DIR; compare two such directories
-#       with tools/yonder_corpus_diff.py
+#       with tools/yonder_corpus_diff.py. A corpus kept before its records
+#       said their window (version 1, REPLAY.md § 3) needs `--window` to
+#       state it, and both replays a diff compares must be run with the
+#       same statement, or the diff judges none of those pages
 #   tools/test_yonder_replay_host.sh --mutants [WORKERS]
 #       the proof's own proof (REPLAY.md § 7): every mutant in
 #       tools/test_yonder_replay_mutants.py, each breaking one rule, run

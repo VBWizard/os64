@@ -5173,9 +5173,10 @@ static void diag_keep_cases(void) {
     }
     keep_end();
     /* Each other change to the window during the load marks it too (the
-     * scripts switch, the agent, the view resized after the page arrived,
-     * and a page laid out in another view than its claim's), and a load
-     * in an unchanged window is not marked. */
+     * scripts switch, the agent, and a page laid out in another view than
+     * its claim's), and a load in an unchanged window is not marked; nor
+     * is a view that moves after the page arrived, as it does when
+     * yonder's own bars come and go, which a replay reproduces. */
     for(int change=0;change<5;change++) {
         keep_begin(true);
         int32_t width=g.view.bounds.w;
@@ -5196,11 +5197,12 @@ static void diag_keep_cases(void) {
         loop_drop();
         g.scripts_on=scripts; g.way.agent=agent; g.view.bounds.w=width;
         const char *text=diag_file("/tmp/kept",name);
-        static const char *const kChange[]={"nothing changed","the scripts switch","the agent","the view resized",
-                                            "a claim in another view"};
+        static const char *const kChange[]={"nothing changed","the scripts switch","the agent",
+                                            "the view moving after the arrival","a claim in another view"};
         char what[96]; snprintf(what,sizeof(what),"inputs: %s %s the record unjudged",kChange[change],
-                                change==0 ? "leaves" : "marks");
-        check(text!=NULL && has(text,"\n" YONDER_DIAG_UNJUDGED "settings changed during the load\n")==(change!=0),what);
+                                change==0 || change==3 ? "leaves" : "marks");
+        check(text!=NULL && has(text,"\n" YONDER_DIAG_UNJUDGED "settings changed during the load\n")==
+              (change!=0 && change!=3),what);
         keep_end();
     }
     /* Cookies the jar cannot hand over whole are not written cut short:

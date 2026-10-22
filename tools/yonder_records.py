@@ -106,11 +106,14 @@ class Record:
     name): count}, its FAILED lines as {(what, message): count}, its
     `state` and, for UNJUDGED, its `reason`; whether a replay wrote it
     (`replay`), and on a replay's record its REPLAY detail lines
-    (`incomplete`, `unfinished`) and the kinds its `REPLAY not reproduced:`
-    line names (`not_reproduced`). A record yonder wrote that is UNJUDGED
-    says why in a flag too: `lost`, it lost lines (the lines it kept are
-    read, and a census counts them), or `unwritten`, it is a claimed
-    name's placeholder."""
+    (`incomplete`, `unfinished`), the kinds its `REPLAY not reproduced:`
+    line names (`not_reproduced`), and, for a page of version 1, what it
+    took from outside its record: the inputs the harness gave
+    (`defaulted`), those `--window` stated, {key: value} (`stated`), and
+    whether it was assumed kept whole (`assumed`). A record yonder wrote
+    that is UNJUDGED says why in a flag too: `marked`, it says so itself,
+    and `lost`, it lost lines (the lines it kept are read, and a census
+    counts them), or `unwritten`, it is a claimed name's placeholder."""
 
     def __init__(self, path, address):
         self.path = path
@@ -127,6 +130,8 @@ class Record:
         self.marked = False
         self.unwritten = False
         self.defaulted = set()
+        self.stated = {}
+        self.assumed = False
         self.not_reproduced = set()
 
 
@@ -206,11 +211,15 @@ HEAD = {k: re.compile(v) for k, v in HEAD.items()}
 # says any of them is of version 2, and one that says none of version 1.
 V2_FACTS = (b'agent: ', b'cookies: ', b'clock: ', b'tz: ')
 
-# What a replay of a version 1 page names on its `REPLAY inputs defaulted:`
-# line (REPLAY.md § 3): the four inputs version 2 added, which it takes
-# from the harness, and `job-identity`, which a version 1 index does not
-# record. Nothing else is ever taken from the harness.
-DEFAULTABLE = {'agent', 'cookies', 'clock', 'tz', 'job-identity'}
+# What a replay of a version 1 page takes from outside its record
+# (REPLAY.md § 3), never silently: DEFAULTED, from the harness, the
+# cookies and the clock, which nobody can state for a page recorded
+# before them; STATED, by the person running the replay (`--window`), the
+# window's inputs, the agent and the zone.
+DEFAULTABLE = {'cookies', 'clock'}
+STATABLE = {'zoom', 'appearance', 'motion', 'animate', 'modern', 'scripts', 'script-seconds', 'laid-out-at',
+            'agent', 'tz'}
+KEPT_ASSUMED = b'REPLAY kept: assumed whole (version 1)'
 
 
 def classify(line, index=False):
@@ -250,6 +259,17 @@ def classify(line, index=False):
             if not all(w.decode('ascii', 'replace') in DEFAULTABLE for w in words) or len(set(words)) != len(words):
                 return 'REFUSED', 'a REPLAY inputs defaulted line naming no input a replay defaults'
             return 'defaulted', {w.decode('ascii') for w in words}
+        if line.startswith(b'REPLAY inputs stated: '):
+            stated = {}
+            for item in line[len(b'REPLAY inputs stated: '):].split(b' '):
+                key, eq, value = item.partition(b'=')
+                key = key.decode('ascii', 'replace')
+                if not eq or not value or key not in STATABLE or key in stated:
+                    return 'REFUSED', 'a REPLAY inputs stated line naming no input a person states, or none twice'
+                stated[key] = value
+            return 'stated', stated
+        if line == KEPT_ASSUMED:
+            return 'assumed', None
         if line.startswith(b'address: '):
             return 'address', line[len(b'address: '):]
         if line.startswith(b'verdict: '):
@@ -350,6 +370,10 @@ def read_body(lines, rec, replay):
                               else 'its record says: ' + unescape(f))
         elif kind == 'defaulted' and replay:
             rec.defaulted |= f
+        elif kind == 'stated' and replay:
+            rec.stated.update({k: unescape(v) for k, v in f.items()})
+        elif kind == 'assumed' and replay:
+            rec.assumed = True
         elif kind == 'incomplete' and replay:
             rec.incomplete.append(unescape(f))
         elif kind == 'unfinished' and replay:
@@ -358,7 +382,7 @@ def read_body(lines, rec, replay):
             rec.not_reproduced |= f
         elif kind == 'REFUSED':
             raise Malformed(f'not a whole page file: {f}')
-        elif kind in ('incomplete', 'unfinished', 'not-reproduced', 'marked', 'defaulted', 'state'):
+        elif kind in ('incomplete', 'unfinished', 'not-reproduced', 'marked', 'defaulted', 'stated', 'assumed', 'state'):
             raise Malformed('a REPLAY line of no kind this reader knows')
         else:
             raise Malformed(f'not a whole page file: {kind} out of its place')

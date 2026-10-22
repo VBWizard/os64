@@ -9,8 +9,8 @@ outcomes of fetches the replay says it does not reproduce, compared on
 neither side, and pictures and fonts decided without a fetch, compared; a
 page file cut short (a replay's without its `end`), whose counts do not
 reconcile, that says it is unjudged, or a `*.txt` that is not a page file,
-each unjudged; a pair read with different inputs from the harness,
-unjudged; and a page file or directories that cannot be read. Run with
+each unjudged; a pair read with different inputs from the harness, or
+different --window statements, unjudged; and a page file or directories that cannot be read. Run with
 `python3 -I`;
 tools/test_yonder_replay_host.sh runs it."""
 import contextlib
@@ -140,12 +140,23 @@ class DiffCases(unittest.TestCase):
         self.settle_the_rest()
         (self.after / 'better-0002.txt').write_text(
             'address: https://better.test/\nREPLAY state: verdict\nverdict: clean\n'
-            'REPLAY inputs defaulted: agent cookies clock tz\n'
+            'REPLAY inputs defaulted: cookies clock\n'
             'REPLAY not reproduced: font-fetch image picture-fetch\nend\n')
         rc, out = self.run_main(self.before, self.after)
         self.assertEqual(rc, 2)
         self.assertIn('progress: 0 pages\n', out)
-        self.assertIn('its replays took different inputs from the harness, none and agent clock cookies tz', out)
+        self.assertIn('its replays took different inputs from the harness, none and clock cookies', out)
+
+    def test_records_run_with_different_statements_are_unjudged(self):
+        # One page under two --window statements: no comparison.
+        self.settle_the_rest()
+        (self.after / 'better-0002.txt').write_text(
+            'address: https://better.test/\nREPLAY state: verdict\nverdict: clean\n'
+            'REPLAY inputs stated: zoom=1500\n'
+            'REPLAY not reproduced: font-fetch image picture-fetch\nend\n')
+        rc, out = self.run_main(self.before, self.after)
+        self.assertEqual(rc, 2)
+        self.assertIn('its replays were run with different --window statements, none and zoom=1500', out)
 
     def test_a_record_no_replay_wrote_is_unjudged(self):
         # A kept record has no state line: the diff compares replays only.
