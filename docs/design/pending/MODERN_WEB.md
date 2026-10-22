@@ -1008,19 +1008,30 @@ the style object and WPT all see it go with the switch.
 - **`text-overflow`** (Overflow 4 § 4.1): `clip | ellipsis`. A block that
   clips (`overflow` not `visible`) and asks for an ellipsis has one laid out
   once in its own fonts (`flow_box_t.ellipsis`: U+2026, or three periods
-  where the fonts have no glyph for it). libflow's walk hands the painter
-  that block's LINE boxes after each line's pieces, and the painter draws
-  the ellipsis then: text past the limit is cut at the last character that
-  fits, an inline box's piece where the kept content ends, and an atom
-  past the limit is left out whole with everything in it
-  (`past_ellipsis`). Spaces that hang at a pre-wrap line's end do not count
-  as content passing the end (`content_end`). A line with no room before
-  the ellipsis keeps its first character or atom, clipped rather than
-  ellipsed, and the ellipsis follows it, clipped by the box with it. The
-  end is where the block's scroll shows it, so content scrolled into view
-  is drawn and a line scrolled to its end has no ellipsis. The painter
-  works a line's cut once a paint (`LineCuts`), not once a piece.
-- **`outline`** and its four longhands (UI 4 § 3): a square ring of a
+  where the fonts have no glyph for it). Where a line ends in it is ONE
+  rule in libflow with two doors (`flow_line_cut`, beside the box tree it
+  reads): what must end by the limit — the end edge less the ellipsis — is
+  kept, the ellipsis starts where that ends, and nothing at or past it is
+  drawn by the painter or hit by `flow_hit`, which answers the block there
+  (the ellipsis stands in no inline box, as in Chrome). It lives in
+  libflow and not the painter because hit testing is libflow's and the
+  painter can call it unchanged; a rule written twice is two rules. A text
+  across the limit keeps the characters that end by it
+  (`flow_text_kept`), an inline box's piece ends where the kept content
+  does, an atom at or past the cut is left out whole with everything in
+  it. Spaces that hang at a pre-wrap line's end do not count as content
+  passing the end. A line with no room before the ellipsis keeps its first
+  character or atom, clipped rather than ellipsed, and the ellipsis
+  follows it, clipped by the box with it. The end is where the block's
+  scroll shows it, so content scrolled into view is drawn and a line
+  scrolled to its end has no ellipsis. libflow's walk hands the painter
+  the block's LINE boxes after each line's pieces, and the painter draws
+  the ellipsis then, filled as the block's text is (`text_fill`); it works
+  a line's cut once a paint (`LineCuts`), and `flow_hit` once a hit, never
+  once a piece.
+- **`outline`** and its four longhands (UI 4 § 3), the shorthand's parts
+  read in any order (`auto` is a style and a colour both, so `outline:
+  auto solid` is read by backing up, `outline_rest`): a square ring of a
   border's styles round the border box, `outline-offset` past it, taking no
   room and counted in the box's ink (`flow_outline_rect`). `auto` is drawn
   solid. The width kept is the computed one whatever the style, so
@@ -1080,6 +1091,7 @@ keywords may appear once.
 | libdom's style object | every property name libgarb reads is a member three ways (CSSOM § 6.6.1): camel-cased, webkit-cased for a `-webkit-` name, and dashed as written, for shorthands and aliases too (`garb_prop_name_at`, `garb_prop_known`); a marked one goes with the switch |
 | `flow_visitor_t.outline` | its last member: handed each ring last in its stacking context; NULL (as `flow_visit` passes it) means no outline step |
 | the LINE visit | the walk (`flow_visit`, `flow_visit_groups`) hands a LINE box over only for a block with an ellipsis, after the line's pieces |
+| `flow_line_cut`, `flow_text_kept` (libflow) | where a line ends in its ellipsis: the one rule the painter and `flow_hit` both read |
 | `os64_text_layout_t.letter_spacing` | tracking after every cluster but a tab, the last too; trimming it at a line's end is the caller's |
 | `width_limits`, `hold_width`, `ratio_width_held` (libflow) | the one door every width a ratio makes or holds passes through, in every formatting context |
 | motion | `copy_prop` covers all thirteen longhands, so `same_value` does too; `letter-spacing`, `outline-width`, `-offset`, `-color`, `object-position` and `aspect-ratio` (by its logarithm, Values 4 § 5.7.1) interpolate, and the keywords are discrete at half way |
@@ -1132,8 +1144,8 @@ flow-relative property in 512 records and 127,354 asks. danlegt's asks:
 missing: the flow-relative radii (84 to 92 records each),
 `scroll-padding-block` (51), `contain-intrinsic-block-size` (36).
 
-Host: libflow 21,382 → 21,678 checks, yonder 1,716 → 1,860, the DOM host
-22,416 → 38,935, garb declarations 626, text 7,369, the scripted-page host
+Host: libflow 21,382 → 21,682 checks, yonder 1,716 → 1,869, the DOM host
+22,416 → 38,935, garb declarations 632, text 7,369, the scripted-page host
 5,888; all 0 failed. The mutant harnesses were not run (the briefs' rule).
 
 **Booked** (DEBTS.md § Browser layout, unless named): `direction` and

@@ -974,8 +974,9 @@ struct flow_box {
     // `overflow` is not visible: the ellipsis its lines end in where their
     // content passes their end, laid out in its own fonts — U+2026, or
     // three periods where those fonts have no glyph for it — and owned by
-    // the tree. Where it goes is the painter's, when flow_visit hands it
-    // each of the box's lines. NULL otherwise.
+    // the tree. Where it goes is flow_line_cut's, which the painter reads
+    // when flow_visit hands it each of the box's lines, and flow_hit
+    // too. NULL otherwise.
     const os64_text_run_t *ellipsis;
     // TEXT: where those bytes are in the node's processed text — what a
     // selection maps a pixel back through — when the node is a TEXT node.
