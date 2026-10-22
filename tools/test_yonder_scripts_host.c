@@ -2159,6 +2159,95 @@ static void input_links(void) {
     check(status_says("background workers"),"input: an uncancelled click follows its link after its listeners");
     probe_drop();
 }
+/* A `javascript:` link (MODERN_WEB.md slice 0c): the person's click runs
+ * the address's code in the page, by the door an inline script runs
+ * through, so it is on the page's record as a script; no request is made
+ * and libway is not asked. The page's own script defines what the link
+ * calls, as a login dropdown's does. */
+static void javascript_page(const char *html, bool scripts) {
+    probe_page(html,scripts);
+    g.page.diag=diag_new_claimed("https://fixture.test/page",1);
+    if(!scripts) return;
+    yonder_scripts_free(g.page.scripts);
+    g.page.scripts=scripts_host(g.page.way.doc,os64_page_shared_state(g.page.way.model),
+        g.page.way.url,false,++g.pages_made,g.page.diag,g.page.modern);
+    for (os64_html_node_t *n=g.page.way.doc->document;n;n=(os64_html_node_t *)next_within(n,g.page.way.doc->document))
+        if(os64_dom_script_kind(n)==OS64_DOM_SCRIPT_CLASSIC && os64_html_attr(n,"src")==NULL)
+            yonder_scripts_connected(g.page.scripts,n);
+    script_turn();
+}
+static bool javascript_record_has(const char *line) {
+    static char record[8192];
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    return strstr(record,line)!=NULL;
+}
+static void javascript_drop(void) {
+    yonder_diag_free(g.page.diag); g.page.diag=NULL;
+    probe_drop();
+}
+static void input_javascript_links(void) {
+    static const char page[]=
+        "<p><a id=login href=\"javascript:toggle('open');\">log in</a></p>"
+        "<p><a id=coded href=\"javascript:note(%27a%20b#c%27)\">coded</a></p>"
+        "<p><a id=broken href=\"javascript:nothere()\">broken</a></p>"
+        "<p><a id=nothing href=\"javascript:void(0)\">nothing</a></p><p id=log>-</p>"
+        "<script>function toggle(how){document.getElementById('log').textContent=how}"
+        "function note(text){document.getElementById('log').textContent=text}</script>";
+    javascript_page(page,true);
+    uint64_t requests=g.nav.id;
+    input_click_at("login");
+    check(probe_text_is("log","-"),"javascript link: the code waits for the page's next turn, as a task");
+    check(script_turn() && probe_text_is("log","open"),"javascript link: a click runs the address's code in the page");
+    check(g.nav.id==requests && !javascript_record_has("link refused"),
+        "javascript link: no request is made and libway refuses nothing");
+    check(javascript_record_has("script javascript:#inline-1: ran in"),
+        "javascript link: the page's record lists it as a script");
+    input_click_at("coded");
+    check(script_turn() && probe_text_is("log","a b#c"),
+        "javascript link: the address is percent-decoded, its fragment included");
+    input_click_at("broken");
+    script_turn();
+    check(javascript_record_has("FAILED script javascript:#inline-3: ReferenceError"),
+        "javascript link: a script that throws is a FAILED script line");
+    check(javascript_record_has("script javascript:#inline-3: failed in"),
+        "javascript link: and its task is listed as failed");
+    /* The failure's badge lays the window out again, and the fixture's
+     * root has no size of its own: the view is put back where it was. */
+    g.view.bounds=(os64_gui_rect_t){0,0,800,600};
+    input_click_at("nothing");
+    check(script_turn() && javascript_record_has("script javascript:#inline-4: ran in"),
+        "javascript link: void(0) runs, and does nothing");
+    /* The page's own click() follows the link by the same door. */
+    yonder_scripts_t *host=g.page.scripts;
+    check(yonder_scripts_address(host,"javascript:toggle('clicked')",NULL) && script_turn() &&
+          probe_text_is("log","clicked"),"javascript link: queued directly, the same task");
+    /* A byte the decoding makes that is not UTF-8 is U+FFFD; an escape cut
+     * short, or not hex, stays as written. */
+    check(yonder_scripts_address(host,"JavaScript:note('%FF|%4|%zz|%')",NULL) && script_turn() &&
+          probe_text_is("log","\xEF\xBF\xBD|%4|%zz|%"),"javascript link: decoded as the standard decodes it");
+    size_t cap=os64_js_default_limits().source_bytes;
+    char *long_url=malloc(cap+32);
+    if(long_url==NULL) abort();
+    memcpy(long_url,"javascript:",11);
+    memset(long_url+11,'1',cap+1);
+    long_url[11+cap+1]='\0';
+    check(!yonder_scripts_address(host,long_url,NULL),"javascript link: code longer than a script may be is not queued");
+    long_url[11+cap-1]='\0';
+    check(!yonder_scripts_address(host,long_url,"12"),"javascript link: nor is one its fragment takes past it");
+    free(long_url);
+    check(!yonder_scripts_address(NULL,"javascript:1",NULL) && !yonder_scripts_address(host,NULL,NULL),
+          "javascript link: no host or no address queues nothing");
+    yonder_scripts_depart(host);
+    check(!yonder_scripts_address(host,"javascript:1",NULL),"javascript link: a departed page's host queues nothing");
+    javascript_drop();
+
+    javascript_page(page,false);
+    input_click_at("login");
+    check(probe_text_is("log","-") && status_says("scripts are off") && g.nav.id==0 &&
+          !javascript_record_has("link refused"),
+        "javascript link: with scripts off the link does nothing, and the status line says why");
+    javascript_drop();
+}
 static void input_hover(void) {
     probe_page("<p id=quiet>no handlers here</p><script>var x=1;</script>",true);
     script_turn();
@@ -2244,6 +2333,7 @@ static void input_cases(void) {
     yonder_bar_lower(&g.bar);
 
     input_links();
+    input_javascript_links();
     input_hover();
     input_forms();
 }
