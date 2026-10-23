@@ -672,12 +672,17 @@ typedef struct {
  * run: a synchronous XMLHttpRequest's request, run to its end before this
  * returns, filling `*response`, which stays the host's until `release`;
  * false when it could not be run, which the page sees as a network error.
+ * The run asks `stop(stop_ctx)` between its waits and gives up when it says
+ * yes: the binding's answer is the script task's own budget (the task's
+ * deadline, and libjs's cancel), so a synchronous request ends when the
+ * task that made it would, as one mechanism.
  * With no network, every request is a network error. Copied; NULL removes
  * it. Install before the first script. */
 typedef struct {
     uint64_t (*start)(void *opaque, const os64_dom_request_t *request, uint32_t token);
     void (*cancel)(void *opaque, uint64_t id);
-    bool (*run)(void *opaque, const os64_dom_request_t *request, os64_dom_response_t *response);
+    bool (*run)(void *opaque, const os64_dom_request_t *request, bool (*stop)(void *stop_ctx), void *stop_ctx,
+                os64_dom_response_t *response);
     void (*release)(void *opaque, os64_dom_response_t *response);
     void *opaque;
 } os64_dom_network_t;

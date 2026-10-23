@@ -79,7 +79,8 @@ typedef struct {
     // its end on this thread, filling `*response`, which `release` frees.
     // A NULL `request`: every request is a network error.
     uint64_t (*request)(void *opaque, uint64_t serial, uint32_t token, const os64_dom_request_t *request);
-    bool (*run)(void *opaque, uint64_t serial, const os64_dom_request_t *request, os64_dom_response_t *response);
+    bool (*run)(void *opaque, uint64_t serial, const os64_dom_request_t *request, bool (*stop)(void *stop_ctx),
+                void *stop_ctx, os64_dom_response_t *response);
     void (*release)(void *opaque, os64_dom_response_t *response);
 } yonder_scripts_options_t;
 

@@ -34,8 +34,10 @@ typedef struct {
     size_t count;
     unsigned cancels, runs, releases;
     bool refuse;
-    /* What run answers: false is "could not be run". */
-    bool run_ok;
+    /* What run answers: false is "could not be run". With run_stalls, the
+     * run plays a server that never finishes: the clock moves a second at
+     * each wait until the binding's stop says yes (run_stopped). */
+    bool run_ok, run_stalls, run_stopped;
     os64_dom_response_t run_answer;
 } FakeNet;
 
@@ -75,11 +77,19 @@ static void net_cancel(void *opaque, uint64_t id)
         if (n->seen[i].id == id) n->seen[i].cancelled = true;
 }
 
-static bool net_run(void *opaque, const os64_dom_request_t *q, os64_dom_response_t *out)
+static bool net_run(void *opaque, const os64_dom_request_t *q, bool (*stop)(void *), void *stop_ctx,
+                    os64_dom_response_t *out)
 {
     FakeNet *n = opaque;
     n->runs++;
     if (n->count < sizeof(n->seen) / sizeof(n->seen[0])) net_record(&n->seen[n->count++], q);
+    for (int wait = 0; n->run_stalls && wait < 100000; wait++) {
+        dom_clock += 1000000;
+        if (stop(stop_ctx)) {
+            n->run_stopped = true;
+            return false;
+        }
+    }
     if (!n->run_ok) return false;
     *out = n->run_answer;
     return true;
@@ -679,6 +689,24 @@ static void dom_xhr_cases(void)
     fixture_free(&f);
 }
 
+/* A synchronous request whose server never finishes ends when the script
+ * task that made it is out of time: the run asks the binding's stop, which
+ * is the task's budget, and the task ends as any script out of time does. */
+static void dom_xhr_sync_stall_case(void)
+{
+    FakeNet net = {0};
+    DomFixture f = net_fixture("http://example.test/", &net);
+    if (!fixture_ready(&f)) return;
+    net.run_stalls = true;
+    static const char source[] = "var x=new XMLHttpRequest();x.open('GET','/hang',false);x.send();";
+    os64_js_outcome_t outcome;
+    os64_js_status_t status = os64_js_run(f.runtime, source, sizeof(source) - 1, "stall.js", &outcome);
+    check(net.run_stopped, "xhr: a stalled synchronous request is stopped by the task's budget");
+    check(status == OS64_JS_LIMIT && outcome.limit == OS64_JS_LIMIT_EXECUTION,
+          "xhr: and the task ends as a script out of time ends");
+    fixture_free(&f);
+}
+
 /* ── What a page or a server can size, held to its bound by count ───── */
 
 /* The steps a header list's work takes (fetch.c's d_request_steps): a
@@ -811,6 +839,7 @@ static void dom_fetch_cases(void)
     dom_fetch_network_cases();
     dom_fetch_abort_cases();
     dom_xhr_cases();
+    dom_xhr_sync_stall_case();
     dom_fetch_bound_cases();
     dom_fetch_memory_cases();
     dom_fetch_modern_off_cases();

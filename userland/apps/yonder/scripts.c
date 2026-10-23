@@ -293,10 +293,12 @@ static void net_cancel(void *opaque, uint64_t id)
         s->options.cancel(s->options.opaque, id);
 }
 
-static bool net_run(void *opaque, const os64_dom_request_t *request, os64_dom_response_t *response)
+static bool net_run(void *opaque, const os64_dom_request_t *request, bool (*stop)(void *stop_ctx), void *stop_ctx,
+                    os64_dom_response_t *response)
 {
     yonder_scripts_t *s = opaque;
-    return s->options.run != NULL && s->options.run(s->options.opaque, s->options.serial, request, response);
+    return s->options.run != NULL &&
+           s->options.run(s->options.opaque, s->options.serial, request, stop, stop_ctx, response);
 }
 
 static void net_release(void *opaque, os64_dom_response_t *response)

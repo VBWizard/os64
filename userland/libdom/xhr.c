@@ -674,13 +674,25 @@ static void request_of(const DXhr *x, os64_dom_t *dom, const char *headers, size
     };
 }
 
+/* A synchronous request's stop: the script task's own budget. libjs's
+ * check answers no once the task's deadline has passed or the runtime was
+ * cancelled, and latches it, so a request that outlives the task ends the
+ * task the way any script out of time ends: one mechanism, not two. */
+static bool sync_stop(void *ctx)
+{
+    os64_dom_t *dom = ctx;
+    os64_js_outcome_t outcome;
+    return os64_js_check_budget(dom->runtime, OS64_JS_ABI_ID, &outcome) != OS64_JS_OK;
+}
+
 /* A synchronous request: run by the host to its end, then the events a
  * synchronous request fires (none before; readystatechange, load and
  * loadend after), or a NetworkError thrown. */
 static JSValue send_sync(os64_dom_t *dom, JSContext *ctx, JSValueConst self, const os64_dom_request_t *request)
 {
     os64_dom_response_t response = {0};
-    bool ran = dom->network.run != NULL && dom->network.run(dom->network.opaque, request, &response);
+    bool ran = dom->network.run != NULL &&
+               dom->network.run(dom->network.opaque, request, sync_stop, dom, &response);
     DXhr *x = xhr_state(self);
     int taken = ran && response.ok ? response_take(ctx, x, &response) : -1;
     if (ran && dom->network.release != NULL) dom->network.release(dom->network.opaque, &response);

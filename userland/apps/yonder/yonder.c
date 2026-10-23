@@ -2781,7 +2781,8 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
                       const os64_js_outcome_t *out, int64_t began);
 static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc, bool shown);
 static uint64_t script_request(void *opaque, uint64_t serial, uint32_t token, const os64_dom_request_t *q);
-static bool script_run(void *opaque, uint64_t serial, const os64_dom_request_t *q, os64_dom_response_t *response);
+static bool script_run(void *opaque, uint64_t serial, const os64_dom_request_t *q, bool (*stop)(void *stop_ctx),
+                       void *stop_ctx, os64_dom_response_t *response);
 static void script_release(void *opaque, os64_dom_response_t *response);
 static void request_arrived(const yonder_fetch_job_t *job, const yonder_fetched_t *got);
 static bool scripts_live(void);
@@ -7718,19 +7719,25 @@ static void request_arrived(const yonder_fetch_job_t *job, const yonder_fetched_
 }
 
 // A synchronous XMLHttpRequest: the job run here, on the window thread,
-// to its end. Its job and answer are kept until the binding lets the
-// answer go (script_release): the binding runs one at a time.
+// to its end or until the script task that made it is out of time (the
+// binding's `stop`), whichever is first: the window waits for a sync
+// request exactly as long as it waits for any script. Its job and answer
+// are kept until the binding lets the answer go (script_release): the
+// binding runs one at a time.
 static yonder_fetch_job_t *s_sync_job;
 static yonder_fetched_t *s_sync_got;
 
-static bool script_run(void *opaque, uint64_t serial, const os64_dom_request_t *q, os64_dom_response_t *response)
+static bool script_run(void *opaque, uint64_t serial, const os64_dom_request_t *q, bool (*stop)(void *stop_ctx),
+                       void *stop_ctx, os64_dom_response_t *response)
 {
     (void)opaque;
     yonder_fetch_job_t *job = request_job(serial, 0, q);
     if (job == NULL)
         return false;
     void *product = NULL;
-    (void)yonder_fetch_run(job, NULL, NULL, &product);
+    // `stop` is the binding's: the script task's own deadline (and libjs's
+    // cancel), asked by the job and by libfetch before each wait.
+    (void)yonder_fetch_run(job, stop, stop_ctx, &product);
     yonder_scripts_t *host = scripts_for(serial);
     if (host != NULL)
         request_record(host, job, product, true);
