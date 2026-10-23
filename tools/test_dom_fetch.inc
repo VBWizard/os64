@@ -458,6 +458,14 @@ static void dom_fetch_object_cases(void)
         "formData: a body line that begins like the boundary");
     dom_script(&f, FETCH_ASSERT "assert(mlog.join()==='\"one\\\\r\\\\n--b-extra\\\\r\\\\ntwo\"|W',mlog.join());",
                "formData: only a whole delimiter ends a part");
+    /* A preamble before the first delimiter is skipped (RFC 2046 § 5.1.1),
+     * a line in it that only begins like the boundary included. */
+    dom_script(&f,
+        "globalThis.mlog=[];var m='notice\\r\\n--b-not\\r\\n--b\\r\\nContent-Disposition: form-data; name=\"p\"\\r\\n\\r\\nP\\r\\n--b--\\r\\n';"
+        "new Response(m,{headers:{'content-type':'multipart/form-data; boundary=b'}}).formData().then(g=>{"
+        "mlog.push(g.get('p'))}).catch(x=>mlog.push('refused:'+x.message));",
+        "formData: a preamble");
+    dom_script(&f, FETCH_ASSERT "assert(mlog.join()==='P',mlog.join());", "formData: a preamble is skipped");
     fixture_free(&f);
 }
 

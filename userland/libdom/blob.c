@@ -1229,8 +1229,15 @@ static int multipart_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst form, c
     char delimiter[96];
     size_t dlen = (size_t)os64_snprintf(delimiter, sizeof(delimiter), "--%s", boundary);
     size_t at = 0;
-    int tail = dlen < sizeof(delimiter) && length >= dlen && os64_memcmp(bytes, delimiter, dlen) == 0
-        ? delimiter_tail(bytes, length, dlen, &at) : 0;
+    int tail = 0;
+    /* The first delimiter: at the start, or after a preamble and its CRLF
+     * (RFC 2046 § 5.1.1: [preamble CRLF] dash-boundary), the first that is
+     * a whole delimiter line. */
+    if (dlen < sizeof(delimiter))
+        for (size_t s = 0; tail == 0 && s + dlen <= length; s++)
+            if ((s == 0 || (s >= 2 && bytes[s - 2] == '\r' && bytes[s - 1] == '\n')) &&
+                os64_memcmp(bytes + s, delimiter, dlen) == 0)
+                tail = delimiter_tail(bytes, length, s + dlen, &at);
     for (;;) {
         if (tail == 2) return 0;   /* the close */
         if (tail == 0) break;
