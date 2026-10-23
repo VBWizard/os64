@@ -3786,13 +3786,14 @@ static int32_t picture_for(Page *p, const char *url)
 
 // ── The page's sheets ───────────────────────────────────────────────────
 
-// Whether two addresses share an origin: scheme, host and port.
+// Whether two addresses share an origin (libway's origin.h; an address
+// with no tuple origin shares none).
 static bool same_origin(const char *a, const char *b)
 {
-    os64_url_t ua, ub;
-    return os64_url_parse(a, &ua) == OS64_URL_OK && os64_url_parse(b, &ub) == OS64_URL_OK &&
-           os64_streq(ua.scheme, ub.scheme) && os64_streq(ua.host, ub.host) &&
-           ua.port == ub.port;
+    way_origin_t oa, ob;
+    way_origin_of(a, 0, &oa);
+    way_origin_of(b, 0, &ob);
+    return way_origin_same(&oa, &ob);
 }
 
 // Whether the first paint waits for a sheet: its media holds on this glass
