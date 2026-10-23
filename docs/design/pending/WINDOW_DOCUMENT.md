@@ -819,7 +819,7 @@ scan pages.
 | `document` | ro attr | html | classic, partial |  | 328 |  |  | a writable data property; HTML makes it [LegacyUnforgeable]; P1-W |
 | `scrollTo` | method | cssom-view | modern |  | 307 |  |  |  |
 | `dispatchEvent` | method | dom | classic |  | 301 |  |  |  |
-| `isSecureContext` | ro attr | html | absent |  | 241 |  | a P1-W | the page's address potentially trustworthy (Secure Contexts § 3.1) as libway judges it for mixed content (`way_url_trustworthy`): https, wss, data: and 127.0.0.0/8; the name localhost is not (ORIGIN.md's ruling), and a file is not (its origin is opaque) |
+| `isSecureContext` | ro attr | html | absent |  | 241 |  | a P1-W | the page's address potentially trustworthy (Secure Contexts § 3.1) as libway judges it for mixed content (`way_url_trustworthy`): about:blank and about:srcdoc, https, wss, data: and 127.0.0.0/8; the name localhost is not (ORIGIN.md's ruling), and a file is not (its origin is opaque) |
 | `screen` | ro attr | cssom-view | modern |  | 223 |  |  |  |
 | `reportError` | method | html | absent |  | 114 | 10/16 | b P2a | reports through the same error path as onerror |
 | `frameElement` | ro attr | html | absent |  | 101 | 13/16 | a P1-W | null: a top-level window |

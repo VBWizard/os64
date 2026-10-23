@@ -972,8 +972,9 @@ their arguments, `captureEvents` and `releaseEvents` no-ops,
 `crossOriginIsolated` false, `originAgentCluster` true, `origin` the page's
 origin serialized (`d_origin`), and `isSecureContext` whether the page's
 address is potentially trustworthy as libway judges it
-(`way_url_trustworthy`, the browser's one copy of that judgement; the name
-`localhost` is not, a binding with no address is not). `ononline`,
+(`way_url_trustworthy`, the browser's one copy of that judgement: about:blank
+and about:srcdoc are, as Secure Contexts says, so a binding with no address
+is; the name `localhost` is not). `ononline`,
 `onoffline` and `onlanguagechange` are window's handler slots, whose events
 nothing fires. `queueMicrotask(callback)` queues a job on the engine's one
 job queue, in order with promise reactions; the checkpoint that drains the

@@ -97,7 +97,9 @@ static void dom_window_member_cases(void)
         {"http://127.0.0.1/x", true, "http://127.0.0.1"},
         {"http://localhost/x", false, "http://localhost"},
         {"file:///home/page.html", false, "null"},
-        {NULL, false, "null"},
+        {"about:srcdoc", true, "null"},
+        {"about:blank?x", false, "null"},
+        {NULL, true, "null"},
     };
     for (size_t i = 0; i < sizeof(kPages) / sizeof(kPages[0]); i++) {
         options = window_options(kPages[i].url);

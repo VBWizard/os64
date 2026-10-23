@@ -27,7 +27,7 @@
  *     (way_url_trustworthy): the page's own address stands for HTML's
  *     top-level creation URL, the two being one for a page that is never
  *     a frame. A binding with no address is about:blank, which that
- *     judgement does not count;
+ *     judgement counts, as Secure Contexts does;
  *   - captureEvents() and releaseEvents() do nothing, as HTML defines them;
  *   - clientInformation is the navigator object again;
  *   - the six BarProps (locationbar, menubar, personalbar, scrollbars,
