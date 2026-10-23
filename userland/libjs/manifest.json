@@ -129,6 +129,11 @@
       "path": "patches/0010-compile-refuses-failed-emit.patch",
       "sha256": "7ccfb396787e504edf8c2f5a657b9e528cc84adb82feb54eea2cec5559534e3b",
       "reason": "Refuse, with an out-of-memory exception, to make a function from a def whose bytecode emit failed: the parser never reads the buffer's sticky error, and transforming cut-short bytecode reads one instruction as another."
+    },
+    {
+      "path": "patches/0011a-parser-ignored-failures-throw.patch",
+      "sha256": "ef018afc2aa8b8dfbbe33757d87ac066a21e96ff0fb14c8c32db8c530857efa3",
+      "reason": "Throw out of memory where the parser ignored a failed allocation: a child definition with no constant-pool slot (upstream asserted), a failed closure-variable add in resolve_scope_var (used as an index, emitted as nothing, or read as a position), a failed arguments or function-name add there (captured as a wild argument slot, or looked up as a global), and a failed bytecode buffer read by get_lvalue as a SyntaxError."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

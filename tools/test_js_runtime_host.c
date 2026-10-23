@@ -250,28 +250,15 @@ static void allocation_cases(void)
     os64_js_destroy(runtime);
 }
 
-/* Patch 0010: a parse whose bytecode emit ran out of memory is an
- * exception, never a function. Every allocation an eval of a script with
- * a function inside a function makes is failed in turn, on the raw
- * engine, under ASan: no cut crashes (the unpatched engine turns a cut in
- * the child's emit into a function from cut-short bytecode, reading a
- * garbage atom), each cut that lets the script finish answers its value,
- * and the cuts it cannot finish answer an InternalError: "out of memory",
- * which the emit's cut is, or the engine's own "stack underflow" check,
- * which a failed closure-variable add in resolve_scope_var trips instead
- * (booked in DEBTS.md with the parser's other paths). The script is
- * straight-line: a loop's labels reach resolve_labels, whose relocations
- * write into a failed output buffer (booked there too). It runs on the
- * target core only (tools/test_js_runtime_host.sh): the instrumented
- * engine fails each small allocation alone, and so reaches the parser's
- * other unchecked paths, one of them an assertion (DEBTS.md). */
-static void compile_failure_cases(void)
+/* Every allocation an eval of one script makes is failed in turn, on a
+ * fresh raw engine: no cut crashes or asserts, each cut that lets the
+ * script finish answers its value, each cut it cannot finish answers
+ * exactly InternalError: "out of memory", and the engine's storage is all
+ * reclaimed. Both probes run it (tools/test_js_runtime_host.sh): the
+ * target core fails an arena at a time, the instrumented engine each
+ * small allocation alone, which is what reaches the parser's paths. */
+static void compile_failure_sweep(const char *name, const char *source)
 {
-    static const char source[] =
-        "(function outer(seed){var total=seed;"
-        "function inner(step){var a=step+1,b=a*2,c=b-3,d=c/4,e=d%5,f=e+total;"
-        "return [a,b,c,d,e,f,'alpha','beta','gamma','delta'].length+f}"
-        "return inner(1)+inner(2)+inner(3)+total})(1)";
     JSRuntime *engine = JS_NewRuntime();
     JSContext *context = engine != NULL ? JS_NewContext(engine) : NULL;
     if (context == NULL) {
@@ -279,8 +266,9 @@ static void compile_failure_cases(void)
         if (engine) JS_FreeRuntime(engine);
         return;
     }
+    size_t length = strlen(source);
     size_t start = attempts;
-    JSValue whole = JS_Eval(context, source, sizeof(source) - 1, "compile.js", JS_EVAL_TYPE_GLOBAL);
+    JSValue whole = JS_Eval(context, source, length, "compile.js", JS_EVAL_TYPE_GLOBAL);
     size_t count = attempts - start;
     int32_t expected = 0;
     check(!JS_IsException(whole) && JS_ToInt32(context, &expected, whole) == 0, "compile failure: the script runs whole");
@@ -288,29 +276,102 @@ static void compile_failure_cases(void)
     unsigned out_of_memory = 0, wrong = 0;
     for (size_t cut = 1; cut <= count; cut++) {
         fail_at = attempts + cut;
-        JSValue value = JS_Eval(context, source, sizeof(source) - 1, "compile.js", JS_EVAL_TYPE_GLOBAL);
+        JSValue value = JS_Eval(context, source, length, "compile.js", JS_EVAL_TYPE_GLOBAL);
         fail_at = 0;
         if (!JS_IsException(value)) {
             int32_t got = 0;
-            if (JS_ToInt32(context, &got, value) != 0 || got != expected) wrong++;
+            if (JS_ToInt32(context, &got, value) != 0 || got != expected) {
+                fprintf(stderr, "compile failure: %s cut %zu answered %d, not %d\n",
+                        name, cut, (int)got, (int)expected);
+                wrong++;
+            }
             JS_FreeValue(context, value);
             continue;
         }
         JSValue error = JS_GetException(context);
         const char *text = JS_ToCString(context, error);
         if (text != NULL && strcmp(text, "InternalError: out of memory") == 0) out_of_memory++;
-        else if (text == NULL || strncmp(text, "InternalError: stack underflow", 30) != 0) {
-            fprintf(stderr, "compile failure: cut %zu answered %s\n", cut, text != NULL ? text : "(no text)");
+        else {
+            fprintf(stderr, "compile failure: %s cut %zu answered %s\n", name, cut, text != NULL ? text : "(no text)");
             wrong++;
         }
         if (text) JS_FreeCString(context, text);
         JS_FreeValue(context, error);
     }
-    check(wrong == 0, "compile failure: each cut is the script's value or an InternalError");
+    printf("libjs compile failure: %s: %zu cuts, %u out of memory\n", name, count, out_of_memory);
+    check(wrong == 0, "compile failure: each cut is the script's value or out of memory");
     check(out_of_memory > 0, "compile failure: the sweep reaches cuts that are out of memory");
     JS_FreeContext(context);
     JS_FreeRuntime(engine);
     check(live == 0, "compile failure: every cut's storage is reclaimed");
+}
+
+/* Patches 0010 and 0011a: an out-of-memory while a script is parsed and
+ * made into functions is an exception through the paths they cover. Each
+ * script is named for what its sweep reaches:
+ * - nested: 0010's script (a child's bytecode emit cut short, read as
+ *   another instruction); on the instrumented engine it also reaches a
+ *   failed constant-pool add (upstream asserted), a failed closure-variable
+ *   add for a local of an enclosing function (upstream's "stack
+ *   underflow"), a failed resolve_scope_var read as the next position, and
+ *   an emit failure get_lvalue named "invalid assignment left-hand side".
+ * - eval_closure: a direct eval in strict code, whose compiled function
+ *   reaches the eval's closure and a global through closure-variable adds.
+ * - args_arrow, name_arrow: an arrow reading its enclosing function's
+ *   `arguments` or name, whose failed add upstream captured as a wild
+ *   argument slot (a SEGV).
+ * - args_local, name_local: a function reading its own `arguments` or
+ *   name, whose failed add upstream looked up as a global (a
+ *   ReferenceError, or the wrong answer).
+ * None has a jump, a with or a sloppy direct eval: each of those is
+ * compiled through a label, and a label reaches resolve_labels, whose
+ * output-buffer failure still crashes (DEBTS.md). */
+static void compile_failure_cases(void)
+{
+    compile_failure_sweep("nested",
+        "(function outer(seed){var total=seed;"
+        "function inner(step){var a=step+1,b=a*2,c=b-3,d=c/4,e=d%5,f=e+total;"
+        "return [a,b,c,d,e,f,'alpha','beta','gamma','delta'].length+f}"
+        "return inner(1)+inner(2)+inner(3)+total})(1)");
+    compile_failure_sweep("eval_closure",
+        "(function(){'use strict';var v=41;return eval('(function(){return v+1})')()})()");
+    compile_failure_sweep("args_arrow", "(function f(){return (()=>arguments.length)()})(1,2)");
+    compile_failure_sweep("name_arrow", "(function h(){return (()=>typeof h)().length})()");
+    compile_failure_sweep("args_local", "(function f(){return arguments.length})(1,2)");
+    compile_failure_sweep("name_local", "(function g(){return (typeof g).length})()");
+}
+
+/* Sweeps that reach a parser out-of-memory path DEBTS.md still books, so
+ * the suite does not run them; `--compile-failure-pending [name]` runs
+ * them by hand, and each becomes a suite case when its path is paid.
+ * - with, eval_var, eval_arg, eval_with: the closure-variable adds 0011a
+ *   checks for a with object, a sloppy direct eval's variable object, its
+ *   parameter-scope variable object, and the variables of code a direct
+ *   eval compiles inside a with, plus the assignment through a with
+ *   (OP_scope_make_ref). A with or a variable object is tested through a
+ *   label, so each also reaches resolve_labels' failed output buffer.
+ * - loop_arrow_class: a loop (resolve_labels' relocations written through
+ *   a failed buffer, a SEGV), an arrow and a destructuring swap (the
+ *   lookahead that swallows a failed atom, then a SyntaxError) and a class
+ *   method's `this` (a failed pseudo-variable add, a wrong value). */
+static void compile_failure_pending(const char *only)
+{
+    static const struct { const char *name, *source; } pending[] = {
+        {"with", "(function(o){var t=0;with(o){(function(){t=x+1})()}return t})({x:41})"},
+        {"eval_var", "var q=1;(function(){eval('var y=40');return function(){return y+q+1}})()()"},
+        {"eval_arg", "var q=40;(function(a=eval('1'),f=function(){return a+q+1}){return f()})()"},
+        {"eval_with", "(function(o){with(o){return eval('(function(){return w+1})')()}})({w:41})"},
+        {"loop_arrow_class",
+         "(function outer(seed){var total=seed;"
+         "function inner(step){var a=step+1,b=a*2,c=b-3,d=c/4,e=d%5,f=e+total;"
+         "return [a,b,c,d,e,f,'alpha','beta','gamma','delta'].length+f}"
+         "var sum=(x,y)=>x+y,p=1,q=2;[p,q]=[q,p];"
+         "for(var i=0;i<3;i++)total=sum(total,inner(i)+p);"
+         "class Box{v=total;get(){return this.v}}"
+         "return new Box().get()})(1)"},
+    };
+    for (size_t i = 0; i < sizeof(pending) / sizeof(pending[0]); i++)
+        if (only == NULL || !strcmp(only, pending[i].name)) compile_failure_sweep(pending[i].name, pending[i].source);
 }
 
 static JSClassID shared_slot, distinct_slots[8], shared_ids[8];
@@ -991,8 +1052,10 @@ static void task_cases(void)
 }
 int main(int argc, char **argv)
 {
-    if (argc == 2 && !strcmp(argv[1], "--compile-failure")) {
-        compile_failure_cases();
+    if ((argc == 2 && !strcmp(argv[1], "--compile-failure")) ||
+        ((argc == 2 || argc == 3) && !strcmp(argv[1], "--compile-failure-pending"))) {
+        if (!strcmp(argv[1], "--compile-failure")) compile_failure_cases();
+        else compile_failure_pending(argc == 3 ? argv[2] : NULL);
         printf("libjs compile failure: %u checks, %u failures\n", checks, failures);
         return failures != 0;
     }
