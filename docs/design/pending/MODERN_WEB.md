@@ -1909,7 +1909,23 @@ first raised seven questions the builder put to Fable, and all seven
 stood: weak sets with no engine internals, honouring DOM's GC clause at
 the three release points; one EventTarget; one origin comparison; one
 DOMException; a network error that tells the page nothing; and the
-synchronous request's stop as the task's own budget.
+synchronous request's stop as the task's own budget. A second cold read
+found a quadratic in a signal's links (now linear, held by step counts)
+and three P3s. Codex's first round found one P1 and eight P2s: the P1
+(an interim head's fields) already held in libfetch and is now pinned;
+four were fixed; two were declined with the standards' own words and
+their rules pinned (a known zero is not lengthComputable; a data: URL's
+`;base64` follows spaces only); two were declined as what-ifs. Its
+second round found ten P2s, nine fixed (among them a preflighted URL
+kept before its grants, the multipart parser's short headers, whole
+delimiters and empty body, a body's stream closing at its one chunk,
+the data: URL's MIME type serialized whole, the quoted-comma-aware
+"extract a MIME type", and a Request's referrer started over by a
+non-empty init) and one declined with WebIDL's enumeration setter rule.
+Fable then read origins and CORS against the tree and approved them,
+with two text items, both done: the "no Origin on HEAD" row was the
+standard's own rule and went, and a redirect's Referrer-Policy was
+booked.
 
 **Booked** (DEBTS.md § A script's requests, unless named): the same-site
 stand-in; SameSite not enforced for script requests; the HTTP cache
@@ -1919,6 +1935,9 @@ failing closed; `FormData(form)` reading the window's forms only; an
 address libpage's grammar refuses; a clone's body not reached by an
 abort; an XHR the host would not start erroring inside `send()`; a
 request the pool has no slot for; non-enumerable operations; QuickJS's
-Proxy `ownKeys` duplicates; the WPT runner's port. QuickJS's further
-parser paths (§ libjs). The deliberate departures from the standard are
+Proxy `ownKeys` duplicates; the WPT runner's port; a released reader's
+`closed` not marked handled; a redirect's `Referrer-Policy` not applied.
+QuickJS's four further parser paths (§ libjs) become libjs patch 0011, a
+small PR of its own right after this slice merges (Fable's ruling); the
+row stays until it lands. The deliberate departures from the standard are
 DIVERGENCES.md § The browser's script requests.
