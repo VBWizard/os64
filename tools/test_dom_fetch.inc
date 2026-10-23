@@ -274,6 +274,17 @@ static void dom_fetch_object_cases(void)
 {
     DomFixture f = net_fixture("http://example.test/dir/page", NULL);
     if (!fixture_ready(&f)) return;
+    /* DOMException's code is WebIDL's names table: a name with a legacy
+     * code has it, and the three codes the table names no error for
+     * (2, 6, 16) have their constants and no name. */
+    dom_script(&f, FETCH_ASSERT
+        "assert(new DOMException('','NotFoundError').code===8&&new DOMException('','DataCloneError').code===25);"
+        "assert(new DOMException('','QuotaExceededError').code===22&&new DOMException('','EncodingError').code===0);"
+        "for(const n of ['DOMStringSizeError','NoDataAllowedError','ValidationError','Bogus'])"
+        "assert(new DOMException('',n).code===0,n);"
+        "assert(DOMException.DOMSTRING_SIZE_ERR===2&&DOMException.NO_DATA_ALLOWED_ERR===6&&DOMException.VALIDATION_ERR===16);"
+        "assert(new DOMException().VALIDATION_ERR===16);",
+        "DOMException: codes by WebIDL's names table");
     dom_script(&f, FETCH_ASSERT
         "var q=new Request('a?b#c');assert(q.url==='http://example.test/dir/a?b#c'&&q.method==='GET');"
         "assert(q.mode==='cors'&&q.credentials==='same-origin'&&q.redirect==='follow'&&q.cache==='default');"

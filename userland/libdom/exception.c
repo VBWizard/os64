@@ -14,12 +14,15 @@ typedef struct {
     char *name, *message;       /* js_malloc'd, UTF-8 */
 } DException;
 
-/* WebIDL's table: the names with a legacy code, in code order (1..25). */
+/* WebIDL's names table: the names with a legacy code, in code order
+ * (1..25). Codes 2, 6 and 16 keep their constants (DOMSTRING_SIZE_ERR,
+ * NO_DATA_ALLOWED_ERR, VALIDATION_ERR) but no name has them, so no
+ * instance's code is one of them. */
 static const char *const kCodes[] = {
-    NULL, "IndexSizeError", "DOMStringSizeError", "HierarchyRequestError", "WrongDocumentError",
-    "InvalidCharacterError", "NoDataAllowedError", "NoModificationAllowedError", "NotFoundError",
+    NULL, "IndexSizeError", NULL, "HierarchyRequestError", "WrongDocumentError",
+    "InvalidCharacterError", NULL, "NoModificationAllowedError", "NotFoundError",
     "NotSupportedError", "InUseAttributeError", "InvalidStateError", "SyntaxError",
-    "InvalidModificationError", "NamespaceError", "InvalidAccessError", "ValidationError",
+    "InvalidModificationError", "NamespaceError", "InvalidAccessError", NULL,
     "TypeMismatchError", "SecurityError", "NetworkError", "AbortError", "URLMismatchError",
     "QuotaExceededError", "TimeoutError", "InvalidNodeTypeError", "DataCloneError",
 };
@@ -35,7 +38,7 @@ static const char *const kConstants[] = {
 static int32_t code_of(const char *name)
 {
     for (int32_t i = 1; i < (int32_t)(sizeof(kCodes) / sizeof(kCodes[0])); i++)
-        if (os64_streq(kCodes[i], name)) return i;
+        if (kCodes[i] != NULL && os64_streq(kCodes[i], name)) return i;
     return 0;
 }
 
