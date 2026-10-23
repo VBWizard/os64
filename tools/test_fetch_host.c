@@ -1670,6 +1670,20 @@ static void case_methods(void)
         os64_fetch_close(f);
     }
 
+    // An empty Accept is sent as one; no accept at all sends none.
+    reset();
+    peer_add("a.test", 80, reply_len("200 OK", "", "ok"));
+    opt = (os64_fetch_options_t){ .method_name = "GET", .accept = "" };
+    f = os64_fetch_open("http://a.test/", &opt);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && strstr(request_n(0), "\r\nAccept: \r\n") != NULL);
+    os64_fetch_close(f);
+    reset();
+    peer_add("a.test", 80, reply_len("200 OK", "", "ok"));
+    opt = (os64_fetch_options_t){ .method_name = "GET" };
+    f = os64_fetch_open("http://a.test/", &opt);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && strstr(request_n(0), "\r\nAccept:") == NULL);
+    os64_fetch_close(f);
+
     // identity, for a Range.
     reset();
     peer_add("a.test", 80, reply_len("206 Partial Content", "", "ab"));

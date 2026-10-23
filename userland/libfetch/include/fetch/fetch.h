@@ -225,6 +225,9 @@ typedef struct {
     // open, so the caller's strings need not outlive the call. Every byte
     // is judged by http.h's field-byte rule and a bad one is REQUEST_FAILED.
     const char *user_agent;
+    // An empty Accept is sent as one (`Accept: `), unlike the others: a
+    // page's script may set it empty, and Fetch installs its default only
+    // when the header list holds no Accept at all.
     const char *accept;
     // The Accept of a hop that is a GET when it differs from a POST's: a
     // POST redirected by 301, 302 or 303 goes on as a GET and asks with

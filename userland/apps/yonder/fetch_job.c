@@ -183,6 +183,7 @@ static way_response_t hop_response(const Hop *h, int32_t status)
 
 typedef struct {
     char accept[OS64_FETCH_ACCEPT_MAX];
+    size_t accepts;                          // Accept lines the page wrote, empty ones included
     char body[OS64_FETCH_EXTRA_MAX];         // the representation headers
     char extra[OS64_FETCH_EXTRA_MAX];        // the rest, and this hop's Origin
     bool identity;                           // a Range: the representation's own bytes
@@ -234,9 +235,10 @@ static bool fields_of(const way_request_t *r, Fields *f)
             continue;
         if (is_accept(h.name, h.name_len)) {
             size_t used = os64_strlen(f->accept);
-            if (used + (used ? 2 : 0) + h.value_len + 1 > sizeof(f->accept))
+            bool joined = f->accepts++ > 0;
+            if (used + (joined ? 2 : 0) + h.value_len + 1 > sizeof(f->accept))
                 return false;
-            if (used) {
+            if (joined) {
                 f->accept[used++] = ',';
                 f->accept[used++] = ' ';
             }
@@ -250,7 +252,9 @@ static bool fields_of(const way_request_t *r, Fields *f)
         if (!append_line(into, sizeof(f->body), h.name, h.name_len, h.value, h.value_len))
             return false;
     }
-    if (f->accept[0] == '\0')
+    // Fetch installs `*/*` only when the list does not CONTAIN Accept: an
+    // Accept the page set empty goes empty (libfetch sends an empty one).
+    if (f->accepts == 0)
         os64_strcopy(f->accept, sizeof(f->accept), "*/*");
     return true;
 }

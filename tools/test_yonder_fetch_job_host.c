@@ -614,6 +614,18 @@ static void fields(void)
                                      "Cookie: forged=1\r\nOrigin: https://evil.test\r\nX-Kept: yes\r\n"});
     expect("fields: ok", g != NULL && g->ok, g ? g->why : NULL);
     expect_text("fields: Accept joined", fake_requests[0].accept, "application/json, text/plain");
+    yonder_fetched_free(g);
+    // An Accept the page set EMPTY is in the list, so Fetch's */* default
+    // does not apply: it goes empty, and joins as "get" joins with another.
+    g = run(&(Ask){"https://a.test/page", "https://a.test/x", "GET", "Accept: \r\n"});
+    expect("fields: an empty Accept goes empty", g != NULL && g->ok && fake_requests[1].accept_given &&
+           fake_requests[1].accept[0] == '\0', fake_requests[1].accept);
+    yonder_fetched_free(g);
+    g = run(&(Ask){"https://a.test/page", "https://a.test/x", "GET", "Accept: \r\nAccept: a/b\r\n"});
+    expect_text("fields: an empty Accept joins", fake_requests[2].accept, ", a/b");
+    yonder_fetched_free(g);
+    g = run(&(Ask){"https://a.test/page", "https://a.test/x", "GET", "X-Other: 1\r\n"});
+    expect_text("fields: no Accept is */*", fake_requests[3].accept, "*/*");
     expect("fields: a Range asks for identity", fake_requests[0].identity, NULL);
     expect("fields: a forbidden header never goes", strstr(fake_requests[0].extra, "forged") == NULL &&
            strstr(fake_requests[0].extra, "evil") == NULL, fake_requests[0].extra);
