@@ -283,7 +283,13 @@ static void dom_fetch_object_cases(void)
         "for(const n of ['DOMStringSizeError','NoDataAllowedError','ValidationError','Bogus'])"
         "assert(new DOMException('',n).code===0,n);"
         "assert(DOMException.DOMSTRING_SIZE_ERR===2&&DOMException.NO_DATA_ALLOWED_ERR===6&&DOMException.VALIDATION_ERR===16);"
-        "assert(new DOMException().VALIDATION_ERR===16);",
+        "assert(new DOMException().VALIDATION_ERR===16);"
+        /* Slice 0d's refusals go through d_error, so they are real ones. */
+        "var at=document.createAttribute('x');document.documentElement.setAttributeNode(at);var ie=null;"
+        "try{document.createElement('i').setAttributeNode(at)}catch(e){ie=e}"
+        "assert(ie instanceof DOMException&&ie.name==='InUseAttributeError'&&ie.code===10,String(ie));"
+        "var nf=null;try{document.documentElement.removeAttributeNode(document.createAttribute('y'))}catch(e){nf=e}"
+        "assert(nf instanceof DOMException&&nf.name==='NotFoundError'&&nf.code===8,String(nf));",
         "DOMException: codes by WebIDL's names table");
     /* A Blob's parts are converted once, before its options: a generator
      * among them is iterated once, and "native" endings apply to what it
