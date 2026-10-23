@@ -1208,20 +1208,30 @@ static int urlencoded_parse(JSContext *ctx, JSValueConst form, const uint8_t *by
 
 /* A multipart/form-data body's parts, into `form`. -1 with a TypeError when
  * it is not one. */
+/* What follows "--boundary" at `at` (RFC 2046 § 5.1.1): "--", the close
+ * (2); transport padding (spaces and tabs) then CRLF, a part follows, from
+ * *next (1); anything else, which makes it no delimiter at all, only bytes
+ * that begin like one (0). */
+static int delimiter_tail(const uint8_t *bytes, size_t length, size_t at, size_t *next)
+{
+    if (at + 2 <= length && bytes[at] == '-' && bytes[at + 1] == '-') return 2;
+    while (at < length && (bytes[at] == ' ' || bytes[at] == '\t')) at++;
+    if (at + 2 > length || bytes[at] != '\r' || bytes[at + 1] != '\n') return 0;
+    *next = at + 2;
+    return 1;
+}
+
 static int multipart_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst form, const uint8_t *bytes, size_t length,
                            const char *boundary)
 {
     char delimiter[96];
     size_t dlen = (size_t)os64_snprintf(delimiter, sizeof(delimiter), "--%s", boundary);
-    if (dlen >= sizeof(delimiter) || length < dlen || os64_memcmp(bytes, delimiter, dlen) != 0) {
-        JS_ThrowTypeError(ctx, "The body is not multipart/form-data");
-        return -1;
-    }
-    size_t at = dlen;
+    size_t at = 0;
+    int tail = dlen < sizeof(delimiter) && length >= dlen && os64_memcmp(bytes, delimiter, dlen) == 0
+        ? delimiter_tail(bytes, length, dlen, &at) : 0;
     for (;;) {
-        if (at + 2 <= length && bytes[at] == '-' && bytes[at + 1] == '-') return 0;   /* the close */
-        if (at + 2 > length || bytes[at] != '\r' || bytes[at + 1] != '\n') break;
-        at += 2;
+        if (tail == 2) return 0;   /* the close */
+        if (tail == 0) break;
         /* The part's headers, to the blank line. */
         char name[1024] = "", file_name[1024] = "", type[256] = "";
         bool has_name = false, is_file = false;
@@ -1260,15 +1270,16 @@ static int multipart_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst form, c
             at = end + 2;
         }
         if (!has_name) goto refused;
-        /* The part's body, to the next CRLF delimiter. */
-        size_t end = at;
-        bool found = false;
+        /* The part's body, to the next CRLF delimiter: "--boundary" then
+         * the close or padding and CRLF. A body line that only begins with
+         * the boundary ("--b-extra" for "b") is the body's. */
+        size_t end = at, next = 0;
+        tail = 0;
         for (; end + 2 + dlen <= length; end++)
-            if (bytes[end] == '\r' && bytes[end + 1] == '\n' && os64_memcmp(bytes + end + 2, delimiter, dlen) == 0) {
-                found = true;
+            if (bytes[end] == '\r' && bytes[end + 1] == '\n' && os64_memcmp(bytes + end + 2, delimiter, dlen) == 0 &&
+                (tail = delimiter_tail(bytes, length, end + 2 + dlen, &next)) != 0)
                 break;
-            }
-        if (!found) goto refused;
+        if (tail == 0) goto refused;
         if (is_file) {
             uint8_t *copy = js_malloc(ctx, end - at + 1);
             char *t = copy != NULL ? type_normalized(ctx, type, os64_strlen(type)) : NULL;
@@ -1298,7 +1309,7 @@ static int multipart_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst form, c
             js_free(ctx, v8);
             if (added < 0) return -1;
         }
-        at = end + 2 + dlen;
+        at = next;
     }
 refused:
     JS_ThrowTypeError(ctx, "The body is not multipart/form-data");

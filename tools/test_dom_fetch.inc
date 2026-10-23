@@ -411,6 +411,17 @@ static void dom_fetch_object_cases(void)
         "mlog.push(g.get('f').type)}).catch(x=>mlog.push('refused:'+x.message));",
         "formData: a short Content-Type");
     dom_script(&f, FETCH_ASSERT "assert(mlog.join()==='x/y',mlog.join());", "formData: a short header is read");
+    /* A delimiter is "--boundary" then the close or (padding and) CRLF: a
+     * body line "--b-extra" for boundary b is the body's, and a delimiter
+     * line with transport padding still delimits (RFC 2046 § 5.1.1). */
+    dom_script(&f,
+        "globalThis.mlog=[];var m='--b \\t\\r\\nContent-Disposition: form-data; name=\"v\"\\r\\n\\r\\n"
+        "one\\r\\n--b-extra\\r\\ntwo\\r\\n--b  \\r\\nContent-Disposition: form-data; name=\"w\"\\r\\n\\r\\nW\\r\\n--b--\\r\\n';"
+        "new Response(m,{headers:{'content-type':'multipart/form-data; boundary=b'}}).formData().then(g=>{"
+        "mlog.push(JSON.stringify(g.get('v'))+'|'+g.get('w'))}).catch(x=>mlog.push('refused:'+x.message));",
+        "formData: a body line that begins like the boundary");
+    dom_script(&f, FETCH_ASSERT "assert(mlog.join()==='\"one\\\\r\\\\n--b-extra\\\\r\\\\ntwo\"|W',mlog.join());",
+               "formData: only a whole delimiter ends a part");
     fixture_free(&f);
 }
 
