@@ -31,16 +31,17 @@
  * DETACHMENT HAPPENS AT THE ONE DOOR. An attribute leaves its element by a
  * removal, and every attribute the binding sets or removes goes through
  * d_set_attr: removeAttribute, toggleAttribute, a dataset delete,
- * removeAttributeNode and removeNamedItem among them. The parser sets an
- * element's attributes only as it makes the element, and libpage keeps a
- * control's state beside the attribute list, never by removing from it; so
- * the door sees every removal, copies the attribute's last value into the
- * Attr (binding-allocated, charged before the removal is made), and clears
- * its `target`. A detached Attr keeps and takes a value of its own and
- * answers ownerElement null. Its entry is in the binding's registry until
- * os64_dom_free, like every entry, and charged to the binding's budget: a
- * page that makes ten thousand of them meets QuotaExceededError, not a
- * leak.
+ * removeAttributeNode and removeNamedItem among them. The parser removes
+ * none (it sets an element's attributes as it makes the element, and a
+ * second html or body tag only adds the ones the element lacks), and
+ * libpage keeps a control's state beside the attribute list, never by
+ * removing from it; so the door sees every removal, copies the attribute's
+ * last value into the Attr (binding-allocated, charged before the removal
+ * is made), and clears its `target`. A detached Attr keeps and takes a
+ * value of its own and answers ownerElement null. Its entry is in the
+ * binding's registry until os64_dom_free, like every entry, and charged to
+ * the binding's budget: a page that makes them without end meets
+ * QuotaExceededError, not a leak.
  *
  * THE LAZY BACKSTOP names the invariant if it ever stops being true: an
  * attached Attr whose name libhtml no longer finds on its element reads as
@@ -142,8 +143,8 @@ static const os64_html_attr_t *attr_ns(const os64_html_node_t *element, const ch
 }
 
 /* THE TABLE OF ATTACHED ATTRS, by element and qualified name: what makes
- * finding an attribute's Attr one step however many Attrs an element has,
- * so a walk over all of an element's attributes stays linear. Made at
+ * finding an attribute's Attr a step or two however many Attrs an element
+ * has, so a walk over all of an element's attributes stays linear. Made at
  * install; it doubles when it holds twice its slots, and keeps its size
  * when there is no room to double, its chains growing longer. */
 static size_t record_slot(const os64_dom_t *dom, const os64_html_node_t *element, const char *name)

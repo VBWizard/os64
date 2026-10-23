@@ -516,9 +516,10 @@ uint64_t d_storage_steps(void);
  * host. */
 uint64_t d_url_record_probes(void);
 /* ATTRIBUTES (attr.c). THE ONE DOOR: every attribute the binding sets or
- * removes goes through d_set_attr, libpage's verb, so that a removal
+ * removes goes through d_set_attr to libpage's verb, so that a removal
  * detaches the Attr that stood for the attribute, with its last value.
- * libhtml's status; on a refusal nothing changed. */
+ * libhtml's status; on a refusal the attribute and its Attr are as they
+ * were. */
 int64_t d_set_attr(os64_dom_t *dom, const os64_html_node_t *node, const char *name,
                    const char *value, size_t length, bool remove);
 /* Whether a value is an Attr of this binding. */
