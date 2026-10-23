@@ -285,6 +285,17 @@ static void dom_fetch_object_cases(void)
         "assert(DOMException.DOMSTRING_SIZE_ERR===2&&DOMException.NO_DATA_ALLOWED_ERR===6&&DOMException.VALIDATION_ERR===16);"
         "assert(new DOMException().VALIDATION_ERR===16);",
         "DOMException: codes by WebIDL's names table");
+    /* A Blob's parts are converted once, before its options: a generator
+     * among them is iterated once, and "native" endings apply to what it
+     * gave; the options' getters run after the parts' toString. */
+    dom_script(&f, FETCH_ASSERT
+        "var g=function*(){yield 'a\\r\\nb\\rc';yield new Uint8Array([13,10]);};"
+        "assert(new Blob(g(),{endings:'native'}).size===7,'native '+new Blob(g(),{endings:'native'}).size);"
+        "assert(new Blob(g()).size===8&&new Blob(g(),{endings:'transparent'}).size===8);"
+        "var order=[];new Blob([{toString(){order.push('part');return 'x'}}],{get endings(){order.push('endings');return 'native'}});"
+        "assert(order.join()==='part,endings',order.join());"
+        "assert(new File(g(),'n',{endings:'native'}).size===7);",
+        "Blob: parts converted once, endings applied to them");
     dom_script(&f, FETCH_ASSERT
         "var q=new Request('a?b#c');assert(q.url==='http://example.test/dir/a?b#c'&&q.method==='GET');"
         "assert(q.mode==='cors'&&q.credentials==='same-origin'&&q.redirect==='follow'&&q.cache==='default');"

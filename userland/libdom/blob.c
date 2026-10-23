@@ -307,38 +307,81 @@ JSValue d_blob_new(os64_dom_t *dom, JSContext *ctx, DBytes *bytes)
     return blob;
 }
 
-/* The File API's "process blob parts": each part's bytes, a string's as
- * UTF-8 with its line endings made "\n" when `native`. */
-static int blob_parts(os64_dom_t *dom, JSContext *ctx, JSValueConst parts, bool native, Buf *out)
-{
-    if (JS_IsUndefined(parts)) return 0;
+/* sequence<BlobPart>, converted ONCE, as WebIDL converts the argument
+ * before the options are read: the items, and for each one that is
+ * neither a BufferSource nor a Blob its USVString (engine memory; NULL for
+ * the others, whose bytes are read when the parts are processed). */
+typedef struct {
     JSValue *items;
+    char **texts;
+    size_t *lengths;
     size_t count;
-    if (d_sequence(dom, ctx, parts, D_SEQUENCE_MAX, &items, &count) < 0) return -1;
-    int result = 0;
-    for (size_t i = 0; result == 0 && i < count; i++) {
+} Parts;
+
+static void parts_free(JSContext *ctx, Parts *p)
+{
+    for (size_t i = 0; p->texts != NULL && i < p->count; i++) js_free(ctx, p->texts[i]);
+    js_free(ctx, p->texts);
+    js_free(ctx, p->lengths);
+    d_sequence_free(ctx, p->items, p->count);
+    *p = (Parts){0};
+}
+
+static int parts_convert(os64_dom_t *dom, JSContext *ctx, JSValueConst parts, Parts *out)
+{
+    *out = (Parts){0};
+    if (JS_IsUndefined(parts)) return 0;
+    if (d_sequence(dom, ctx, parts, D_SEQUENCE_MAX, &out->items, &out->count) < 0) return -1;
+    if (out->count == 0) return 0;
+    out->texts = js_mallocz(ctx, out->count * sizeof(*out->texts));
+    out->lengths = js_mallocz(ctx, out->count * sizeof(*out->lengths));
+    if (out->texts == NULL || out->lengths == NULL) {
+        parts_free(ctx, out);
+        return -1;
+    }
+    for (size_t i = 0; i < out->count; i++) {
         const uint8_t *bytes;
         size_t length;
         const char *type;
-        int kind = d_buffer_source(dom, ctx, items[i], &bytes, &length);
-        if (kind < 0) { result = -1; break; }
-        if (kind > 0 || d_blob_get(items[i], &bytes, &length, &type)) {
-            if (!buf_put(ctx, out, bytes, length)) result = -1;
+        int kind = d_buffer_source(dom, ctx, out->items[i], &bytes, &length);
+        if (kind < 0 ||
+            (kind == 0 && !d_blob_get(out->items[i], &bytes, &length, &type) &&
+             !engine_text(ctx, out->items[i], true, &out->texts[i], &out->lengths[i]))) {
+            parts_free(ctx, out);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* The File API's "process blob parts", over the parts converted above:
+ * each part's bytes, a string's as UTF-8 with its line endings made "\n"
+ * when `native`. */
+static int parts_process(os64_dom_t *dom, JSContext *ctx, const Parts *p, bool native, Buf *out)
+{
+    for (size_t i = 0; i < p->count; i++) {
+        const char *text = p->texts[i];
+        size_t n = p->lengths[i];
+        if (text == NULL) {
+            const uint8_t *bytes;
+            size_t length;
+            const char *type;
+            int kind = d_buffer_source(dom, ctx, p->items[i], &bytes, &length);
+            if (kind < 0) return -1;
+            if ((kind > 0 || d_blob_get(p->items[i], &bytes, &length, &type)) && !buf_put(ctx, out, bytes, length))
+                return -1;
             continue;
         }
-        char *text;
-        size_t n;
-        if (!engine_text(ctx, items[i], true, &text, &n)) { result = -1; break; }
-        for (size_t k = 0; result == 0 && k < n; k++) {
+        for (size_t k = 0; k < n; k++) {
+            bool put;
             if (native && text[k] == '\r') {
                 if (k + 1 < n && text[k + 1] == '\n') k++;
-                if (!buf_put(ctx, out, "\n", 1)) result = -1;
-            } else if (!buf_put(ctx, out, text + k, 1)) result = -1;
+                put = buf_put(ctx, out, "\n", 1);
+            } else put = buf_put(ctx, out, text + k, 1);
+            if (!put) return -1;
         }
-        js_free(ctx, text);
     }
-    d_sequence_free(ctx, items, count);
-    return result;
+    return 0;
 }
 
 /* BlobPropertyBag (endings, type) and FilePropertyBag's lastModified, read
@@ -418,27 +461,22 @@ static JSValue blob_construct(JSContext *ctx, JSValueConst new_target, int argc,
     bool native = false;
     int64_t last_modified = now_epoch_ms();
     JSValueConst options = argc > (file ? 2 : 1) ? argv[file ? 2 : 1] : JS_UNDEFINED;
-    if (blob_parts(dom, ctx, argc > 0 ? argv[0] : JS_UNDEFINED, false, &bytes) < 0 ||
+    /* WebIDL's argument order: the parts converted, the name, the options;
+     * then the parts processed, once, with the endings the options chose
+     * (a generator among the parts is iterated once). */
+    Parts parts;
+    if (parts_convert(dom, ctx, argc > 0 ? argv[0] : JS_UNDEFINED, &parts) < 0 ||
         (file && !engine_text(ctx, argv[1], true, &name, &name_length)) ||
-        blob_options(dom, ctx, options, file, &native, &type, &last_modified) < 0) {
+        blob_options(dom, ctx, options, file, &native, &type, &last_modified) < 0 ||
+        parts_process(dom, ctx, &parts, native, &bytes) < 0) {
+        parts_free(ctx, &parts);
         js_free(ctx, bytes.bytes);
         js_free(ctx, name);
         js_free(ctx, type);
         JS_FreeValue(ctx, prototype);
         return JS_EXCEPTION;
     }
-    /* "native" endings apply to the strings among the parts, which were
-     * read before the options in WebIDL's argument order: read again. */
-    if (native) {
-        js_free(ctx, bytes.bytes);
-        bytes = (Buf){0};
-        if (blob_parts(dom, ctx, argc > 0 ? argv[0] : JS_UNDEFINED, true, &bytes) < 0) {
-            js_free(ctx, name);
-            js_free(ctx, type);
-            JS_FreeValue(ctx, prototype);
-            return JS_EXCEPTION;
-        }
-    }
+    parts_free(ctx, &parts);
     JSValue made = blob_make(ctx, prototype, bytes.bytes, bytes.length, type, file, name, last_modified);
     JS_FreeValue(ctx, prototype);
     return made;
