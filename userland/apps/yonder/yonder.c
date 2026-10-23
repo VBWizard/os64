@@ -582,6 +582,17 @@ typedef struct {
     flow_point_t at;
 } BoxScroll;
 
+// One of the history's events a page owes its scripts (MODERN_WEB.md
+// § Slice 1b), with what it carries captured when it was owed (os64_dom_
+// history_event_t): a hashchange's two addresses, or a popstate's entry,
+// named by the binding, and that entry's state. All owned.
+#define PAGE_EVENTS_MAX 16
+typedef struct {
+    bool hashchange;
+    char *old_url, *new_url, *state;
+    uint64_t entry;
+} PageEvent;
+
 // A page as the window holds it: libway's page (the tree, what it means,
 // the reader's flips) and its layout at the size it was laid out at. A
 // text/plain page has no tree of its own, so it is given one.
@@ -659,6 +670,40 @@ typedef struct Page {
     os64_page_request_t sent;
     BoxScroll *box_scrolls;
     int32_t nbox_scrolls, cap_box_scrolls;
+    // THE PAGE'S PLACE IN THE SESSION (MODERN_WEB.md § Slice 1b; the
+    // session's entries, below). `document` names its document to the
+    // history's crumbs (way_crumb_t.document) for the page's life, where
+    // `serial` moves with every rebuild: a crumb naming it is an entry of
+    // this document, reached with no fetch; 0 for a page that never came
+    // through the stream. `entry` names the entry the page is at
+    // (way_crumb_t.entry): a traversal's target keeps its name, a reload is
+    // the same entry, a push makes a new one. `arrives_at` is the session
+    // entry a fetched traversal is bringing back, by its name, whatever the
+    // page's scripts push before it is shown, and still is for a page that
+    // replaces such a page before it was shown (start_trip); 0 for any
+    // other arrival. `entry_state` is the current entry's state as its
+    // script left it (JSON, NULL for none). The session (g.way) holds the
+    // entries of the page on screen; a page not yet shown keeps the ones
+    // its scripts make, and those of a page not yet shown that it replaced,
+    // in two stacks of its own, `back` and `ahead`, each nearest last,
+    // which arriving moves in.
+    // `events` are the history's events the page owes its scripts, in
+    // order (page_event_run). A scroll its script asked for before it was
+    // shown is made when it is (`scroll_asked`, in CSS pixels). `loaded`
+    // is HTML's "completely loaded": false until the page is shown and its
+    // `load` task, the navigation that task asked for included, is over
+    // (arrive_now), and a navigation by address or a form its script asks
+    // for before then replaces its entry (page_navigation_replaces). A
+    // struct copy of a Page borrows what these point at; page_clear frees
+    // it.
+    uint64_t document, entry, arrives_at;
+    char *entry_state;
+    way_crumb_t *back, *ahead;
+    int32_t nback, nahead;
+    PageEvent events[PAGE_EVENTS_MAX];
+    int32_t nevents;
+    bool scroll_asked, loaded;
+    double ask_x, ask_y;
 } Page;
 
 static void webfonts_families_shown(const Page *p);
@@ -719,9 +764,35 @@ static void sheets_free(Page *p)
 }
 
 static void diag_leave(Page *p);
+static void page_event_free(PageEvent *e)
+{
+    os64_free(e->old_url);
+    os64_free(e->new_url);
+    os64_free(e->state);
+    e->old_url = e->new_url = e->state = NULL;
+}
+
+// A page's own entries and their states, and the events it owes.
+static void page_session_free(Page *p)
+{
+    for (int32_t i = 0; i < p->nback; i++)
+        os64_free(p->back[i].state);
+    for (int32_t i = 0; i < p->nahead; i++)
+        os64_free(p->ahead[i].state);
+    for (int32_t i = 0; i < p->nevents; i++)
+        page_event_free(&p->events[i]);
+    os64_free(p->back);
+    os64_free(p->ahead);
+    os64_free(p->entry_state);
+    p->back = p->ahead = NULL;
+    p->entry_state = NULL;
+    p->nback = p->nahead = p->nevents = 0;
+}
+
 static void page_clear(Page *p)
 {
     measured_forget(page_doc(p));
+    page_session_free(p);
     // The host borrows the record (its miss hook), so the record goes after
     // it, while the tree and the cascade it looks at are still here.
     yonder_scripts_free(p->scripts);
@@ -801,13 +872,21 @@ static int32_t sheet_emit(Page *p, int32_t e, garb_sheet_in_t *in, int32_t *entr
 }
 
 // A view `w` x `h` device pixels as the page's sheets see it: in CSS
-// pixels at `zoom` (thousandths), never less than one.
+// pixels at `zoom` (thousandths), never less than one; and the screen the
+// window is on (s_screen, or libdom's default when none was read, as
+// `screen` reports it), in CSS pixels at `zoom` as `screen.width` is, for
+// the device-* media features, which a window's size does not move; and
+// the zoom as `resolution`, as devicePixelRatio reports it.
 static garb_env_t css_view(int32_t w, int32_t h, uint32_t zoom)
 {
     int64_t cw = ((int64_t)w * 1000 + zoom / 2) / zoom;
     int64_t ch = ((int64_t)h * 1000 + zoom / 2) / zoom;
+    os64_dom_screen_t screen = s_screen.width > 0 && s_screen.height > 0 ? s_screen : os64_dom_default_options().screen;
     return (garb_env_t){.width = cw > 0 ? (int32_t)cw : 1, .height = ch > 0 ? (int32_t)ch : 1,
-                        .dark = s_dark, .reduced_motion = s_reduce_motion};
+                        .dark = s_dark, .reduced_motion = s_reduce_motion,
+                        .device_width = (double)((int64_t)screen.width * 1000 / zoom),
+                        .device_height = (double)((int64_t)screen.height * 1000 / zoom),
+                        .resolution = zoom / 1000.0};
 }
 
 // `n` CSS pixels as device pixels at `zoom` (thousandths; 0 is 1000),
@@ -950,12 +1029,17 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     int32_t entry[SHEETS_MAX] = {0};
     garb_env_t view = css_view(width, height, zoom);
     view.modern_off = !p->modern;
+    view.scripting = p->scripting;
     if (cascade == NULL || p->sheets_changed || (cascade != NULL && (garb_cascade_env(cascade).width != view.width ||
                                                   garb_cascade_env(cascade).height != view.height ||
                                                   garb_cascade_env(cascade).dark != view.dark ||
                                                   garb_cascade_env(cascade).reduced_motion !=
                                                       view.reduced_motion ||
-                                                  garb_cascade_env(cascade).modern_off != view.modern_off))) {
+                                                  garb_cascade_env(cascade).modern_off != view.modern_off ||
+                                                  garb_cascade_env(cascade).scripting != view.scripting ||
+                                                  garb_cascade_env(cascade).device_width != view.device_width ||
+                                                  garb_cascade_env(cascade).device_height != view.device_height ||
+                                                  garb_cascade_env(cascade).resolution != view.resolution))) {
         garb_sheet_in_t in[SHEETS_MAX];
         int32_t n = 0;
         const os64_page_t *model = page_model(p);
@@ -1192,6 +1276,9 @@ static struct {
     // several times, and a big page takes long enough to lay out that
     // doing it per event would freeze the window.
     bool relayout_due;
+    // The window's frame as the compositor last said it was, for a
+    // script's outerWidth and outerHeight; 0 until it has said.
+    int32_t frame_w, frame_h;
     uint8_t seq;                    // the view's VT100 key-burst state
 
     way_session_t way;
@@ -1217,7 +1304,9 @@ static struct {
     // The page stream_finish holds while its DOMContentLoaded runs: no
     // longer the stream's, not yet coming or shown. A fragment its scripts
     // ask for lands in `fragment`, which arrive scrolls to; a measurement
-    // they make is of `page` (measured_layout).
+    // they make is of `page` (measured_layout). `kind` is how it came;
+    // `abandoned` says its scripts went back or forward past it
+    // (unshown_go), so it is never shown.
     struct {
         Page *page;
         const yonder_scripts_t *scripts;
@@ -1225,6 +1314,8 @@ static struct {
         char *fragment;
         size_t cap;
         bool *has_fragment;
+        NavKind kind;
+        bool abandoned;
     } finishing;
     // THE PAGE ARRIVING (DOM_D4.md): parsed here, on the window's thread, a
     // slice per turn of the loop, from what the fetch posts down the
@@ -1293,6 +1384,26 @@ static struct {
     // Which page is on screen, so a picture finished for another is let go.
     uint64_t page_serial;
     uint64_t pages_made;            // the last Page.serial handed out
+    uint64_t documents_made;        // the last Page.document handed out
+    uint64_t entries_made;          // the last Page.entry handed out
+    // A TRAVERSAL BEING FETCHED (session_go): the session stays as it was
+    // asked until the entry arrives (arrive_now). HTML runs a traversal and
+    // the state updates and fragment navigations that come after it on one
+    // session history traversal queue, in order, and finalizes each
+    // same-document change only while its document is still the active one
+    // (§ Finalize a same-document navigation), so what the page on screen
+    // changes while the other entry is fetched never joins the session: its
+    // document is gone when that runs. The page's own address and state do
+    // change, as HTML's do at once. `held` is the entry it was at when the
+    // first such change came, which is what the session keeps; `held_push`
+    // says one of them was a push, for a traversal that is stopped instead
+    // (stop_trip), where the change does join, as one entry.
+    bool traversing, has_held, held_push;
+    way_crumb_t held;
+    // The page not yet shown whose navigation by address is being started
+    // (navigation_perform), which takes its place in the session
+    // (start_trip); NULL otherwise.
+    Page *replacing;
     // A page that arrived and is waiting for its linked sheets, with what
     // arriving needs; the page on screen stays until it is shown (GARB.md,
     // G4). `due` is when it is shown whatever is still coming.
@@ -2321,6 +2432,17 @@ static void sync_bars(void)
 static void hover(int32_t x, int32_t y);
 static void forms_place(void);
 
+// A page's scroll coordinate in device pixels, rounded and then held to
+// int32_t: a script may ask for any finite double (and a sum of two may
+// be infinite), and a value rounded past the bound must not be cast.
+static int32_t device_px(double v)
+{
+    if (!(v == v))
+        return 0;
+    v = v < 0 ? v - 0.5 : v + 0.5;
+    return v >= (double)INT32_MAX ? INT32_MAX : v <= (double)INT32_MIN ? INT32_MIN : (int32_t)v;
+}
+
 static void scroll_to(int32_t x, int32_t y)
 {
     g.sx = x;
@@ -2709,6 +2831,21 @@ static void page_mark(yonder_scripts_t *host, os64_dom_milestone_t which)
 // A page is shown: laid out BESIDE the one on screen and swapped in only
 // once the layout exists, so a page this machine cannot lay out costs a
 // sentence and not the page the person was reading.
+static way_crumb_t page_entry_left(Page *p);
+static void traverse_end(bool stopped);
+
+// Whether the session holds the entry named `entry` behind the page on
+// screen (`back`) or ahead of it.
+static bool session_holds(bool back, uint64_t entry)
+{
+    const way_crumb_t *stack = back ? g.way.history : g.way.forward;
+    int32_t n = back ? g.way.depth : g.way.ahead;
+    for (int32_t i = 0; entry != 0 && i < n; i++)
+        if (stack[i].entry == entry)
+            return true;
+    return false;
+}
+
 static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
                        const char *fragment)
 {
@@ -2734,16 +2871,44 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
         status_rest("Out of memory laying that page out; this is still the page you were on.");
         return;
     }
-    way_position_t here = position_now();
+    // The entry left goes into the session whole, its document named and
+    // its state with it — the entry it was at when a traversal began
+    // fetching, if the page changed since (g.held). A traversal's entry is
+    // found by the name it was fetched for (Page.arrives_at), wherever the
+    // list holds it now and whatever the arriving page pushed before it was
+    // shown, and the entries between go to the other side as they were,
+    // each with its own scroll and state; the page's own entries join after
+    // it (below), as pushes from that entry. The arrived crumb's state is
+    // the page's own already (stream_entry), so the crumb's copy goes. An
+    // entry the list no longer holds (let go past its cap) arrives as a new
+    // way.
     bool had = g.page.tree != NULL;
-    if (had) {
-        if (kind == NAV_GO)
-            way_remember(&g.way, g.page.way.url, &here);
-        else if (kind == NAV_BACK)
-            way_went_back(&g.way, g.page.way.url, &here);
-        else if (kind == NAV_FORWARD)
-            way_went_forward(&g.way, g.page.way.url, &here);
+    if (had && (kind == NAV_GO || kind == NAV_BACK || kind == NAV_FORWARD)) {
+        way_crumb_t left = page_entry_left(&g.page), arrived;
+        if (g.has_held) {
+            way_position_t at = left.position;
+            os64_free(left.state);
+            left = g.held;
+            left.position = at;
+            os64_memset(&g.held, 0, sizeof(g.held));
+            g.has_held = false;
+        }
+        if (kind != NAV_GO && session_holds(kind == NAV_BACK, fresh->arrives_at)) {
+            for (;;) {
+                if (kind == NAV_BACK)
+                    way_went_back_entry(&g.way, &left, &arrived);
+                else
+                    way_went_forward_entry(&g.way, &left, &arrived);
+                if (arrived.entry == fresh->arrives_at)
+                    break;
+                left = arrived;
+            }
+            os64_free(arrived.state);
+        } else {
+            way_remember_entry(&g.way, &left);
+        }
     }
+    traverse_end(false);
     // The page on screen is being replaced, and its question and its
     // pictures in flight with it: a page that fails to lay out (above)
     // leaves them all where they were.
@@ -2759,6 +2924,21 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
     webfonts_leave();
     g.page = *fresh;
     os64_memset(fresh, 0, sizeof(*fresh));
+    // The entries its scripts made before it was shown join the session:
+    // those behind it each a new way, as a pushState is, and those ahead
+    // of it (a Back before it was shown made them) where Forward goes. A
+    // page with entries of its own pushed at least once, which let go of
+    // what was ahead of its entry, whether or not it went back after.
+    if (g.page.nback > 0 || g.page.nahead > 0)
+        way_forget_ahead(&g.way);
+    for (int32_t i = 0; i < g.page.nback; i++)
+        way_remember_entry(&g.way, &g.page.back[i]);
+    for (int32_t i = 0; i < g.page.nahead; i++)
+        way_forward_entry(&g.way, &g.page.ahead[i]);
+    os64_free(g.page.back);
+    os64_free(g.page.ahead);
+    g.page.back = g.page.ahead = NULL;
+    g.page.nback = g.page.nahead = 0;
     // What the last page's paints kept is not this one's.
     yonder_paint_cache_empty(g.paint_cache);
     yonder_scratch_drop(g.paint_scratch);
@@ -2805,6 +2985,15 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
         clamp_scroll();
     else
         g.sx = g.sy = 0;
+    // A scroll its script asked for while it arrived is made now, in the
+    // zoom the page is laid out at.
+    if (g.page.scroll_asked) {
+        double z = (g.page.laid_zoom != 0 ? g.page.laid_zoom : g.zoom) / 1000.0;
+        g.sx = device_px(g.page.ask_x * z);
+        g.sy = device_px(g.page.ask_y * z);
+        g.page.scroll_asked = false;
+        clamp_scroll();
+    }
     sync_bars();
     forms_place();
     pictures_schedule();
@@ -2834,6 +3023,7 @@ static void arrive_now(Page *fresh, NavKind kind, const way_position_t *crumb,
         if (note != NULL && page_doc(&g.page) == doc)
             status_rest(note);
     }
+    g.page.loaded = true;
     // The arrival write: what the page was once it was shown and its `load`
     // had run. Its departure writes the file again, complete.
     diag_arrived(&g.page, g.laid_ms);
@@ -2984,6 +3174,8 @@ static void open_local(const char *path, NavKind kind, const way_position_t *cru
     g.stream.scripting = g.scripts_on;
     stream_modern_capture();
     g.stream.serial = ++g.pages_made;
+    g.stream.page.document = ++g.documents_made;
+    g.stream.page.entry = ++g.entries_made;
     g.stream.has_head = true;
     g.stream.head.body = WAY_BODY_HTML;
     os64_snprintf(g.stream.head.url, sizeof(g.stream.head.url), "file://%s", path);
@@ -3095,6 +3287,7 @@ static void stream_drop(void)
     // document, which goes last.
     sheets_leave(&g.stream.page);
     sheets_free(&g.stream.page);
+    page_session_free(&g.stream.page);
     measured_forget(doc);
     yonder_scripts_free(g.stream.scripts);
     // A load that never became a page writes its record here, with what it
@@ -3120,9 +3313,12 @@ static void stream_drop(void)
 // stays; its scripts stay live only if the navigation never reached a
 // parse, since page_departs unloads it there, and a page unloaded so keeps
 // no scripts even when nothing replaces it (DOM.md § What the old page
-// does meanwhile).
+// does meanwhile). A traversal it ends is ended as stopped
+// (traverse_end).
 static void stop_trip(void)
 {
+    if (g.traversing)
+        traverse_end(true);
     coming_drop();
     if (g.nav.id != 0 && g.pool != NULL)
         os64_work_cancel(g.pool, g.nav.id);
@@ -3147,10 +3343,97 @@ static const char *file_path(const char *after)
     return path;
 }
 
+// A page not yet shown's place in the session, which the navigation that
+// replaces its entry takes (g.replacing): how it is coming, the entry a
+// traversal arrives at, and the entries its scripts made, which stay where
+// they are around the entry. `kind` is how the new page comes: as the
+// replaced page did, but a reload's successor comes as a refresh, a new
+// document in the entry on screen. `from` is the page it was taken from.
+typedef struct {
+    bool taken;
+    Page *from;
+    NavKind kind;
+    uint64_t arrives_at;
+    way_crumb_t *back, *ahead;
+    int32_t nback, nahead;
+} Place;
+
+static NavKind unshown_kind(const Page *p);
+static void page_stack_clear(way_crumb_t *stack, int32_t *n);
+
+static void place_take(Place *place)
+{
+    os64_memset(place, 0, sizeof(*place));
+    Page *p = g.replacing;
+    g.replacing = NULL;
+    if (p == NULL)
+        return;
+    NavKind kind = unshown_kind(p);
+    place->taken = true;
+    place->from = p;
+    place->kind = kind == NAV_RELOAD ? NAV_REFRESH : kind;
+    place->arrives_at = p->arrives_at;
+    place->back = p->back;
+    place->ahead = p->ahead;
+    place->nback = p->nback;
+    place->nahead = p->nahead;
+    p->back = p->ahead = NULL;
+    p->nback = p->nahead = 0;
+}
+
+static void trip_send(const char *url, os64_page_request_t *request, NavKind kind,
+                      const way_position_t *crumb);
+
 // Sends `url` (with `request`'s body, if it is a form: MOVED into the job)
 // to a worker. The navigation it replaces is stopped first: one at a time.
+// One started by a page not yet shown (g.replacing) takes that page's place
+// (Place) instead of coming from the page on screen, and a traversal the
+// page was coming by goes on as the new page's: the session moves to that
+// entry when the new page arrives (arrive_now), and the page on screen's
+// changes meanwhile stay held (g.held). Its scroll is the top, as a new
+// document's.
 static void start_trip(const char *url, os64_page_request_t *request, NavKind kind,
                        const way_position_t *crumb)
+{
+    Place place;
+    place_take(&place);
+    bool traversal = place.taken && g.traversing && (place.kind == NAV_BACK || place.kind == NAV_FORWARD);
+    if (traversal)
+        g.traversing = false;           // stop_trip must not end it
+    trip_send(url, request, place.taken ? place.kind : kind, crumb);
+    if (!place.taken)
+        return;
+    if (!g.stream.active) {
+        // Nothing was started. A page held at its DOMContentLoaded
+        // (g.finishing) outlives the stop and still arrives: its place, and
+        // the traversal it was coming by, are its own again. Any other went
+        // with the stop, and its place goes too, a traversal as one stopped.
+        if (place.from == g.finishing.page) {
+            place.from->back = place.back;
+            place.from->ahead = place.ahead;
+            place.from->nback = place.nback;
+            place.from->nahead = place.nahead;
+            g.traversing = traversal;
+            return;
+        }
+        page_stack_clear(place.back, &place.nback);
+        page_stack_clear(place.ahead, &place.nahead);
+        os64_free(place.back);
+        os64_free(place.ahead);
+        if (traversal)
+            traverse_end(true);
+        return;
+    }
+    g.stream.page.arrives_at = place.arrives_at;
+    g.stream.page.back = place.back;
+    g.stream.page.ahead = place.ahead;
+    g.stream.page.nback = place.nback;
+    g.stream.page.nahead = place.nahead;
+    g.traversing = traversal;
+}
+
+static void trip_send(const char *url, os64_page_request_t *request, NavKind kind,
+                      const way_position_t *crumb)
 {
     // A QUESTION IS ABOUT THE PAGE ON SCREEN, and going anywhere leaves it:
     // whoever asked, it goes (a form's request with it) before this goes.
@@ -3229,6 +3512,8 @@ static void start_trip(const char *url, os64_page_request_t *request, NavKind ki
     g.nav.id = id;
     g.stream.active = true;
     g.stream.serial = ++g.pages_made;
+    g.stream.page.document = ++g.documents_made;
+    g.stream.page.entry = ++g.entries_made;
     g.stream.diag = diag;
     g.stream.mail = mail;
     g.stream.kind = kind;
@@ -3514,6 +3799,7 @@ static bool sheet_holds(const Page *p, const Sheet *sh)
     if (sh->lapsed)
         return false;
     garb_env_t view = css_view(g.view.bounds.w, g.view.bounds.h, g.zoom);
+    view.scripting = p->scripting;
     if (sh->importer >= 0) {
         const garb_import_t *im = &p->sheets[sh->importer].imports[sh->import_index];
         return p->sheets[sh->importer].holds && garb_media_matches(im->media, im->nmedia, view);
@@ -6221,6 +6507,17 @@ static void before_paint(void)
     (void)motion_pause_said();
 }
 
+// The window's frame, as the compositor says it is now: what a script's
+// outerWidth and outerHeight read (view_read).
+static void frame_follow(void)
+{
+    os64_gui_window_state_t st;
+    if (os64_gui_window_get_state(g.win, &st) == 0) {
+        g.frame_w = st.width > INT32_MAX ? INT32_MAX : (int32_t)st.width;
+        g.frame_h = st.height > INT32_MAX ? INT32_MAX : (int32_t)st.height;
+    }
+}
+
 // The window was covered or uncovered. The flag is the truth and the event
 // only the nudge, since a full queue drops events.
 static void window_seen(void)
@@ -6511,8 +6808,10 @@ static void forms_flush(void)
 
 // Sends a form: the button pressed (CONTROL) or Enter in a field (IMPLICIT).
 // libpage decides what goes and where; libway judges it; an INVALID
-// refusal puts the focus on the control that failed.
-static void form_send(int32_t control, os64_page_activation_t how)
+// refusal puts the focus on the control that failed. `kind` is how the
+// reply comes: a new way, or a refresh when a script sends the form before
+// its page has completely loaded (navigation_perform).
+static void form_send_as(int32_t control, os64_page_activation_t how, NavKind kind)
 {
     forms_flush();
     os64_page_what_t what = {how, control, 0, 0};
@@ -6520,7 +6819,7 @@ static void form_send(int32_t control, os64_page_activation_t how)
     os64_page_verdict_t verdict = os64_page_activate(page_model(&g.page), what, &request);
     if (verdict == OS64_PAGE_NAVIGATE) {
         g.chain = 0;
-        request_navigate(&request, NAV_GO, WAY_ASK_SEND);
+        request_navigate(&request, kind, WAY_ASK_SEND);
         return;
     }
     if (verdict == OS64_PAGE_FRAGMENT) {
@@ -6536,6 +6835,11 @@ static void form_send(int32_t control, os64_page_activation_t how)
             os64_ui_set_focus(&g.ui, failed->w);
     }
     os64_page_request_free(&request);
+}
+
+static void form_send(int32_t control, os64_page_activation_t how)
+{
+    form_send_as(control, how, NAV_GO);
 }
 
 // The keys of a focused password field, taken before libui sees them: its
@@ -7087,14 +7391,25 @@ static void script_cookies_set(void *opaque, const char *text, size_t length)
                       length);
 }
 
+static void view_read(void *opaque, os64_dom_view_t *out);
+static bool view_scroll(void *opaque, double x, double y, os64_dom_geometry_stats_t *cost);
+static bool script_computed(void *opaque, const os64_html_node_t *element, os64_dom_computed_t *out);
+static bool history_update(void *opaque, const char *url, const char *state, size_t length, bool push);
+static bool history_fragment(void *opaque, const char *url, bool replace);
+static uint32_t history_length(void *opaque);
+
 static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state_t *state,
                                       const char *url, bool encrypted, uint64_t serial,
                                       yonder_diag_t *diag, bool modern)
 {
-    yonder_scripts_options_t options = {url, g.script_ms, serial, script_alert, script_fetch,
-                                        script_cancel, script_activate, script_write, script_now,
-                                        script_geometry, doc, diag, encrypted, modern,
-                                        s_storage, &g.stream.timing, s_screen, script_zoom};
+    yonder_scripts_options_t options = {
+        .url = url, .execution_ms = g.script_ms, .serial = serial, .alert = script_alert,
+        .fetch = script_fetch, .cancel = script_cancel, .activate = script_activate,
+        .write = script_write, .now_ms = script_now, .geometry = script_geometry, .opaque = doc,
+        .view = {view_read, view_scroll, doc}, .computed = script_computed,
+        .history = {history_update, history_fragment, history_length, doc},
+        .diag = diag, .encrypted = encrypted, .modern = modern,
+        .storage = s_storage, .timing = &g.stream.timing, .screen = s_screen, .zoom = script_zoom};
     yonder_scripts_t *host = yonder_scripts_new(doc, state, &options);
     yonder_scripts_set_user_agent(host, script_user_agent, NULL);
     const os64_dom_cookies_t cookies = {script_cookies_get, script_cookies_set, host};
@@ -7306,6 +7621,130 @@ static bool unshown_place(const yonder_scripts_t *host, const char **url, char *
 // from https to http without the question bar. `shown` says whether the
 // asking page is on screen; a page still arriving has no model, so a link
 // or a form of its own waits for it (DOM.md § D7b, as built: Booked).
+static Page *page_of_host(const yonder_scripts_t *host);
+static bool page_fragment(Page *p, const char *url, bool replace, bool tell);
+static void fragment_scroll(const os64_html_node_t *target, const char *name);
+static bool page_traverse(Page *p, int32_t delta);
+static void session_go(int32_t delta);
+
+// How many entries a history delta moves, in a type that holds every one:
+// a page's history.go() takes any WebIDL `long`, and INT32_MIN has no
+// int32_t magnitude, so a delta is never negated as itself.
+static int64_t steps_of(int32_t delta)
+{
+    return delta < 0 ? -(int64_t)delta : (int64_t)delta;
+}
+
+// How a page not yet shown is coming, from wherever its arrival holds it:
+// the stream, its DOMContentLoaded, or the wait for its sheets.
+static NavKind unshown_kind(const Page *p)
+{
+    return p == &g.stream.page ? g.stream.kind : p == g.finishing.page ? g.finishing.kind : g.coming.kind;
+}
+
+// Where the entry a page not yet shown arrives at stands, counted from the
+// page on screen (0). A new way's page is the entry after the one on screen
+// and the newest, its commit having let go of what was ahead (1). A reload
+// or a refresh is the entry on screen again (0). A traversal's page is the
+// session's entry it named (Page.arrives_at), which stays where it is; one
+// the session let go past its cap arrives as a new way's (arrive_now).
+// True when it arrives as a new way's: nothing is ahead of it.
+static bool unshown_at(const Page *p, int64_t *at)
+{
+    NavKind kind = unshown_kind(p);
+    if (kind == NAV_BACK || kind == NAV_FORWARD) {
+        for (int32_t i = 0; i < g.way.depth; i++)
+            if (g.way.history[i].entry == p->arrives_at) {
+                *at = (int64_t)i - g.way.depth;
+                return false;
+            }
+        for (int32_t j = 0; j < g.way.ahead; j++)
+            if (g.way.forward[j].entry == p->arrives_at) {
+                *at = (int64_t)g.way.ahead - j;
+                return false;
+            }
+    } else if (kind != NAV_GO) {
+        *at = 0;
+        return false;
+    }
+    *at = 1;
+    return true;
+}
+
+// Whether a navigation a page's script asks for replaces the page's own
+// entry: until the page has completely loaded (Page.loaded), HTML navigates
+// with historyHandling "replace", by address (§ 7.2.4 The Location
+// interface, "Location-object navigate", step 3, short of transient
+// activation) and by a form (§ 4.10.22.3 Form submission algorithm, step
+// 25). No activation is weighed: a page is shown and its `load` runs in one
+// turn (arrive_now), so a person's input has no task in that window. A
+// fragment navigation is not held to it (DEBTS.md § Classic browser
+// scripting).
+static bool page_navigation_replaces(const Page *p)
+{
+    return p != NULL && !p->loaded;
+}
+
+// Back or Forward from a page not yet shown, past its own entries (`delta`
+// as asked; page_traverse has answered within them). ONE RULE WHEREVER THE
+// PAGE IS in its arrival — parsing, at its DOMContentLoaded, waiting for its
+// sheets — because by HTML its navigation committed when its response came
+// and its document was made (§ Finalize a cross-document navigation, which
+// puts its entry in the session before any of its scripts run): it is an
+// entry already, and going back or forward from it lands where doing so
+// from that entry would (§ Traverse the history by a delta: the step that
+// many entries away, and nothing when there is none). So, when there is
+// such an entry, the page is never shown, a new way's own entries join the
+// session as its commit would have put them (a traversal's or a reload's go
+// with the page: DEBTS.md § Classic browser scripting), and the window goes
+// to the entry asked for from the page on screen: no fetch when that is the
+// page on screen. Once it is shown (its `load` and every later task) the
+// page on screen IS it, and session_go answers.
+static void unshown_go(Page *p, int32_t delta)
+{
+    if (g.page.tree == NULL || delta == 0)
+        return;                     // no session around it to go into
+    NavKind kind = unshown_kind(p);
+    bool back = delta < 0;
+    // A page with entries of its own pushed at least once, which let go of
+    // what was ahead of its entry (arrive_now): forward past its own is
+    // nothing, however it came.
+    if (!back && (p->nback > 0 || p->nahead > 0))
+        return;
+    // How far past the entry next to its own the delta reaches: 0 is that
+    // entry; `at` is where its own entry stands (unshown_at).
+    int64_t past = back ? (int64_t)delta + 1 + p->nback : (int64_t)delta - 1 - p->nahead;
+    int64_t at;
+    if (unshown_at(p, &at) && !back)
+        return;
+    int64_t next = at + (back ? -1 : 1);
+    int64_t target = next + past;
+    if (target < -(int64_t)g.way.depth || target > (int64_t)g.way.ahead)
+        return;                     // no entry there: nothing happens, and the page arrives
+    // A new way's entries go ahead of the page on screen, nearest last
+    // (way_forward_entry), as its own commit would have put them, and that
+    // commit let go of what was ahead first.
+    if (kind == NAV_GO) {
+        way_forget_ahead(&g.way);
+        for (int32_t i = 0; i < p->nahead; i++)
+            way_forward_entry(&g.way, &p->ahead[i]);
+        way_crumb_t current = page_entry_left(p);
+        way_forward_entry(&g.way, &current);
+        for (int32_t i = p->nback - 1; i >= 0; i--)
+            way_forward_entry(&g.way, &p->back[i]);
+        page_stack_clear(p->back, &p->nback);
+        page_stack_clear(p->ahead, &p->nahead);
+    }
+    if (p == g.finishing.page)
+        g.finishing.abandoned = true;
+    // Stopping a traversal can add the page on screen's held change to the
+    // session (traverse_end) after `target` was measured (DEBTS.md § Classic
+    // browser scripting).
+    stop_trip();
+    if (target != 0)
+        session_go((int32_t)target);
+}
+
 static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navigation_t *ask,
                                bool shown)
 {
@@ -7324,10 +7763,20 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
             here = g.page.way.url;
         else if (!unshown_place(host, &here, &fragment, &cap, &has_fragment))
             here = NULL;
+        // A fragment navigation (MODERN_WEB.md § Slice 1b): an entry, and
+        // for the page on screen the scroll; one not yet shown scrolls when
+        // it arrives. The binding asked for it here only when it did not
+        // make it itself (dom.h § HISTORY): its page's events are owed all
+        // the same, and are heard when the arc's surface is on. With no
+        // memory for the entry it is the scroll alone.
         if (here != NULL && ask->url[n] == '#' && n == before_fragment(here) &&
             os64_memcmp(ask->url, here, n) == 0) {
+            bool replace = ask->kind == OS64_DOM_NAVIGATE_REPLACE || os64_strcmp(ask->url, here) == 0;
+            Page *p = shown ? &g.page : page_of_host(host);
+            if (p != NULL)
+                (void)page_fragment(p, ask->url, replace, true);
             if (shown) {
-                scroll_to_fragment(ask->url + n + 1);
+                fragment_scroll(NULL, ask->url + n + 1);
             } else {
                 os64_strcopy(fragment, cap, ask->url + n + 1);
                 *has_fragment = true;
@@ -7339,20 +7788,38 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
             say_failed(g.page.diag, "navigation", "A script asked for an address this browser cannot go to.");
             return;
         }
-        request_navigate(&request, ask->kind == OS64_DOM_NAVIGATE_REPLACE ? NAV_REFRESH : NAV_GO,
+        // A page's navigation is from its own entry, which replace()
+        // replaces, and so does an ordinary navigation until the page has
+        // completely loaded (page_navigation_replaces). For the page on
+        // screen, whose `load` is running, that entry is the one on screen.
+        // A page not yet shown is the session's entry already (unshown_go
+        // says why), not the page on screen's: the new page takes its place
+        // (start_trip). One that waits on the question bar is asked as the
+        // page on screen's, and a page not yet shown's place is not taken.
+        Page *p = shown ? &g.page : page_of_host(host);
+        bool replaces = page_navigation_replaces(p);
+        g.replacing = replaces && p != &g.page ? p : NULL;
+        request_navigate(&request,
+                         ask->kind == OS64_DOM_NAVIGATE_REPLACE || (replaces && p == &g.page) ? NAV_REFRESH
+                                                                                                : NAV_GO,
                          WAY_ASK_GO);
+        g.replacing = NULL;
         return;
     }
     case OS64_DOM_NAVIGATE_RELOAD:
         if (shown)
             click_reload(NULL, NULL);
         return;
-    case OS64_DOM_NAVIGATE_HISTORY:
-        if (ask->delta < 0)
-            click_back(NULL, NULL);
-        else
-            click_forward(NULL, NULL);
+    case OS64_DOM_NAVIGATE_HISTORY: {
+        // A page not yet shown goes through the entries its scripts made;
+        // Back or Forward past them is unshown_go's.
+        Page *p = shown ? NULL : page_of_host(host);
+        if (p == NULL)
+            session_go(ask->delta);
+        else if (!page_traverse(p, ask->delta))
+            unshown_go(p, ask->delta);
         return;
+    }
     case OS64_DOM_NAVIGATE_FOLLOW:
         if (shown) {
             int32_t link = os64_page_link_for(page_model(&g.page), ask->node);
@@ -7362,12 +7829,15 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
         return;
     case OS64_DOM_NAVIGATE_SUBMIT:
         if (shown) {
+            // A form sent before its page has completely loaded replaces
+            // the page's entry, as an address does.
+            NavKind kind = page_navigation_replaces(&g.page) ? NAV_REFRESH : NAV_GO;
             int32_t control = ask->submitter != NULL
                 ? os64_page_control_for(page_model(&g.page), ask->submitter) : -1;
             if (control >= 0)
-                form_send(control, OS64_PAGE_ACTIVATE_CONTROL);
+                form_send_as(control, OS64_PAGE_ACTIVATE_CONTROL, kind);
             else
-                form_send(os64_page_form_for(page_model(&g.page), ask->node), OS64_PAGE_ACTIVATE_FORM);
+                form_send_as(os64_page_form_for(page_model(&g.page), ask->node), OS64_PAGE_ACTIVATE_FORM, kind);
         }
         return;
     case OS64_DOM_NAVIGATE_NONE:
@@ -7423,10 +7893,17 @@ static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc
 
 // One task of a page's: a ready script, else a due timer. True when one
 // ran. `shown` decides whether its asks may reach the page on screen.
+static bool page_event_run(Page *p, bool shown);
+
 static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc, bool shown)
 {
     if (host == NULL || !yonder_scripts_alive(host))
         return false;
+    // The history's events a page is owed come first, in order: each was
+    // owed by a task or a traversal that is over.
+    Page *p = page_of_host(host);
+    if (p != NULL && page_event_run(p, shown))
+        return true;
     os64_js_outcome_t out;
     int64_t began = task_begin(host);
     const char *what = "script";
@@ -7442,10 +7919,13 @@ static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc
     return true;
 }
 
-// Whether a host has a task to run now: a script ready, or a timer due.
+// Whether a host has a task to run now: a history event owed its page, a
+// script ready, or a timer due.
 static bool scripts_owed(const yonder_scripts_t *host)
 {
-    return yonder_scripts_pending(host) || yonder_scripts_timer_next(host) <= yonder_now_ms();
+    const Page *p = page_of_host(host);
+    return (p != NULL && p->nevents > 0 && yonder_scripts_alive(host)) || yonder_scripts_pending(host) ||
+           yonder_scripts_timer_next(host) <= yonder_now_ms();
 }
 
 // The measured layout of the page whose document is `doc`, when that page
@@ -7501,7 +7981,748 @@ static bool script_geometry(void *opaque, const os64_html_node_t *node,
     return ready && ended >= began;
 }
 
+// ── The session's entries (MODERN_WEB.md § Slice 1b) ───────────────────
+//
+// HTML's session history, the window's half. The entries of the page on
+// screen are crumbs in g.way, each naming its document (Page.document) and
+// carrying its state, and moving between two of one document's is no
+// fetch. A page not yet shown keeps the entries its scripts make itself,
+// and arriving moves them in (arrive_now). Three ways an entry changes,
+// three event rules (MODERN_WEB_BRIEFS.md § Slice 1b): a STATE UPDATE
+// (pushState, replaceState) moves the address and fires nothing; a
+// FRAGMENT NAVIGATION adds an entry (replaces the current one when the
+// address is the same), scrolls, and fires popstate — inside the script
+// when the page's binding made it, else owed — then owes hashchange when
+// the fragment moved; a TRAVERSAL to an entry of this document fetches
+// nothing, owes the same two, and puts the scroll back where it was unless
+// the page keeps its own. One to an entry of another document fetches it
+// and moves the session when it arrives (session_go, g.traversing).
+
+// The page whose document `doc` is: on screen, held by stream_finish,
+// waiting for its sheets, or arriving. NULL for none.
+static Page *page_of_doc(const os64_html_document_t *doc)
+{
+    if (doc == NULL)
+        return NULL;
+    if (page_doc(&g.page) == doc)
+        return &g.page;
+    if (g.finishing.page != NULL && page_doc(g.finishing.page) == doc)
+        return g.finishing.page;
+    if (g.coming.active && page_doc(&g.coming.page) == doc)
+        return &g.coming.page;
+    if (g.stream.parser != NULL && os64_html_parser_document(g.stream.parser) == doc)
+        return stream_page();
+    return NULL;
+}
+
+// The arriving page's scripts are the stream's until stream_finish gives
+// them to the page.
+static yonder_scripts_t *page_scripts(const Page *p)
+{
+    return p == &g.stream.page ? g.stream.scripts : p->scripts;
+}
+
+static Page *page_of_host(const yonder_scripts_t *host)
+{
+    if (host == NULL)
+        return NULL;
+    if (host == g.page.scripts)
+        return &g.page;
+    if (g.finishing.page != NULL && host == g.finishing.scripts)
+        return g.finishing.page;
+    if (g.coming.active && host == g.coming.page.scripts)
+        return &g.coming.page;
+    if (g.stream.active && host == g.stream.scripts)
+        return stream_page();
+    return NULL;
+}
+
+// Where a page keeps its address: the head's while it streams, which
+// stream_page and the page's arrival read it from; the page's own after.
+static char *page_address(Page *p, size_t *cap)
+{
+    if (p == &g.stream.page) {
+        *cap = sizeof(g.stream.head.url);
+        return g.stream.head.url;
+    }
+    *cap = sizeof(p->way.url);
+    return p->way.url;
+}
+
+// Where a page not yet shown keeps the fragment its arrival scrolls to.
+static bool page_fragment_slot(Page *p, char **fragment, size_t *cap, bool **has)
+{
+    if (p == &g.stream.page) {
+        *fragment = g.stream.fragment;
+        *cap = sizeof(g.stream.fragment);
+        *has = &g.stream.has_fragment;
+    } else if (p == g.finishing.page) {
+        *fragment = g.finishing.fragment;
+        *cap = g.finishing.cap;
+        *has = g.finishing.has_fragment;
+    } else if (g.coming.active && p == &g.coming.page) {
+        *fragment = g.coming.fragment;
+        *cap = sizeof(g.coming.fragment);
+        *has = &g.coming.has_fragment;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+// Whether two addresses' fragments differ, a missing one included.
+static bool fragments_differ(const char *a, const char *b)
+{
+    const char *x = a + before_fragment(a), *y = b + before_fragment(b);
+    return os64_strcmp(x, y) != 0;
+}
+
+// The event a page is owed for the move it just made: a hashchange from
+// `old_url` to where it is now, or a popstate for the entry it is now at
+// and that entry's state, captured now (a later move must not change what
+// this one's event says).
+static void page_event_owe(Page *p, bool hashchange, const char *old_url)
+{
+    // A page with no scripts has nothing that could hear it, and one owed
+    // more than it can hold has its newest let go: a script that traverses
+    // in a loop is owed its events in order, not all of them. An event
+    // with no memory for what it carries is let go the same way.
+    if (page_scripts(p) == NULL || p->nevents == PAGE_EVENTS_MAX)
+        return;
+    size_t cap;
+    PageEvent e = {.hashchange = hashchange};
+    bool kept;
+    if (hashchange) {
+        e.old_url = copy_text(old_url);
+        e.new_url = copy_text(page_address(p, &cap));
+        kept = e.old_url != NULL && e.new_url != NULL;
+    } else {
+        e.entry = yonder_scripts_history_entry(page_scripts(p));
+        e.state = p->entry_state != NULL ? copy_text(p->entry_state) : NULL;
+        kept = p->entry_state == NULL || e.state != NULL;
+    }
+    if (!kept) {
+        page_event_free(&e);
+        return;
+    }
+    p->events[p->nevents++] = e;
+}
+
+// The links resolve against the address a page is at now (`<base href>`
+// aside): after a state update or a traversal, its model is built again
+// at the new one, sharing its control state. One that cannot be built
+// leaves the old, whose links resolve against where the page came from.
+static void page_rebase(Page *p)
+{
+    os64_page_t *old = p->way.model;
+    if (old == NULL)
+        return;
+    os64_page_t *model = os64_page_build(page_doc(p), p->way.url, NULL, os64_page_shared_state(old));
+    if (model == NULL || os64_page_incomplete(model)) {
+        os64_page_free(model);
+        return;
+    }
+    p->way.model = model;
+    os64_page_free(old);
+    if (p == &g.page)
+        g.hover_link = g.pressed_link = -1;
+}
+
+// What follows a page's address wherever it moved: its scripts' base, the
+// address field for the page on screen, the model's links.
+static void page_address_moved(Page *p)
+{
+    size_t cap;
+    const char *address = page_address(p, &cap);
+    yonder_scripts_set_url(page_scripts(p), address);
+    if (p == &g.page)
+        os64_ui_textfield_set(&g.ui, &g.field, address);
+    if (p != &g.stream.page)
+        page_rebase(p);
+}
+
+// Room on a page's own stack of `n` crumbs for `more` pushes (the session's
+// cap counted: a push there lets the oldest go), so the pushes cannot
+// fail. False on no memory, with the stack as it was.
+static bool page_stack_room(way_crumb_t **stack, int32_t n, int32_t more)
+{
+    int32_t want = n + more < WAY_HISTORY_MAX ? n + more : WAY_HISTORY_MAX;
+    if (want <= n)
+        return true;
+    way_crumb_t *grown = os64_realloc(*stack, (size_t)want * sizeof(**stack));
+    if (grown == NULL)
+        return false;
+    *stack = grown;
+    return true;
+}
+
+// `crumb` (its state taken) onto a page's own stack that page_stack_room
+// made room on, the oldest let go past the session's cap, as the session
+// lets it go.
+static void page_stack_push(way_crumb_t *stack, int32_t *n, way_crumb_t *crumb)
+{
+    if (*n == WAY_HISTORY_MAX) {
+        os64_free(stack[0].state);
+        os64_memmove(stack, stack + 1, (size_t)(*n - 1) * sizeof(*stack));
+        (*n)--;
+    }
+    stack[(*n)++] = *crumb;
+    crumb->state = NULL;
+}
+
+static void page_stack_clear(way_crumb_t *stack, int32_t *n)
+{
+    for (int32_t i = 0; i < *n; i++) {
+        os64_free(stack[i].state);
+        stack[i].state = NULL;
+    }
+    *n = 0;
+}
+
+// The entry a page is at, as a crumb, its state moved into it.
+static way_crumb_t page_entry_left(Page *p)
+{
+    way_crumb_t left;
+    os64_memset(&left, 0, sizeof(left));
+    size_t cap;
+    os64_strcopy(left.url, sizeof(left.url), page_address(p, &cap));
+    if (p == &g.page)
+        left.position = position_now();
+    left.document = p->document;
+    left.entry = p->entry;
+    left.state = p->entry_state;
+    p->entry_state = NULL;
+    return left;
+}
+
+// The entry the page on screen is at while a traversal is fetched, kept
+// once, before the first change the session will not take (g.held). False
+// on no memory, with nothing kept.
+static bool page_hold(void)
+{
+    if (g.has_held)
+        return true;
+    char *state = g.page.entry_state != NULL ? copy_text(g.page.entry_state) : NULL;
+    if (g.page.entry_state != NULL && state == NULL)
+        return false;
+    os64_memset(&g.held, 0, sizeof(g.held));
+    os64_strcopy(g.held.url, sizeof(g.held.url), g.page.way.url);
+    g.held.document = g.page.document;
+    g.held.entry = g.page.entry;
+    g.held.state = state;
+    g.has_held = true;
+    return true;
+}
+
+// The traversal is over or stopped: what it held is let go. `stopped`
+// when it never arrived, where a push the page made meanwhile joins the
+// session after all, as the one entry it had then (g.held).
+static void traverse_end(bool stopped)
+{
+    if (g.has_held && stopped && g.held_push)
+        way_remember_entry(&g.way, &g.held);
+    os64_free(g.held.state);
+    os64_memset(&g.held, 0, sizeof(g.held));
+    g.traversing = g.has_held = g.held_push = false;
+}
+
+// Whether a traversal is still on its way: its fetch, its DOMContentLoaded
+// or its sheets. One that failed on the way (no memory to read or lay it
+// out) is ended here, as stopped.
+static bool traverse_pending(void)
+{
+    if (!g.traversing)
+        return false;
+    if (g.stream.active || g.coming.active || g.finishing.page != NULL)
+        return true;
+    traverse_end(true);
+    return false;
+}
+
+// A STATE UPDATE: the page's address `url` and its state a copy of
+// `state` (NULL for none), the entry that was current kept behind it when
+// `push`; told to the page's binding when `tell` (the binding did not make
+// the move itself), after everything that could fail on the window's side
+// and before any of it changes, so the two agree. Nothing is owed. False
+// on no memory, with nothing changed on either side.
+static bool page_update(Page *p, const char *url, const char *state, size_t length, bool push, bool tell)
+{
+    size_t cap;
+    char *address = page_address(p, &cap);
+    if (os64_strlen(url) >= cap)
+        return false;
+    char *kept = NULL;
+    if (state != NULL) {
+        kept = os64_malloc(length + 1);
+        if (kept == NULL)
+            return false;
+        os64_memcpy(kept, state, length);
+        kept[length] = '\0';
+    }
+    // The page on screen while a traversal is fetched changes its own
+    // address and state and not the session (g.traversing).
+    bool held = p == &g.page && traverse_pending();
+    if ((push && p != &g.page && !page_stack_room(&p->back, p->nback, 1)) || (held && !page_hold()) ||
+        (tell && !yonder_scripts_history_moved(page_scripts(p), url, state, length))) {
+        os64_free(kept);
+        return false;
+    }
+    if (held) {
+        g.held_push = g.held_push || push;
+    } else if (push) {
+        way_crumb_t left = page_entry_left(p);
+        if (p == &g.page) {
+            way_remember_entry(&g.way, &left);
+        } else {
+            page_stack_push(p->back, &p->nback, &left);
+            page_stack_clear(p->ahead, &p->nahead);
+        }
+    }
+    if (push)
+        p->entry = ++g.entries_made;
+    os64_free(p->entry_state);
+    p->entry_state = kept;
+    os64_strcopy(address, cap, url);
+    page_address_moved(p);
+    return true;
+}
+
+// A FRAGMENT NAVIGATION of a page to `url`: an entry added (the current
+// one replaced when `replace`) with no state, and hashchange from where it
+// was owed when the fragment moved. `tell` when the page's binding has not
+// made the move itself, which then owes popstate too; a move the binding
+// made fires its popstate there (os64_dom_history_t.fragment). The scroll
+// is the caller's. False on no memory, with nothing changed (page_update).
+static bool page_fragment(Page *p, const char *url, bool replace, bool tell)
+{
+    size_t cap;
+    char old[OS64_FETCH_URL_MAX];
+    os64_strcopy(old, sizeof(old), page_address(p, &cap));
+    if (!page_update(p, url, NULL, 0, !replace, tell))
+        return false;
+    if (tell)
+        page_event_owe(p, false, NULL);
+    if (fragments_differ(old, url))
+        page_event_owe(p, true, old);
+    return true;
+}
+
+// A fragment navigation's scroll on the page on screen: to `target`, or
+// by the fragment's name; a name nothing in the page claims scrolls
+// nowhere, but `top`, which is the page's top (HTML § Scroll to the
+// fragment).
+static void fragment_scroll(const os64_html_node_t *target, const char *name)
+{
+    if (target != NULL) {
+        scroll_to_node(target);
+        return;
+    }
+    const os64_html_node_t *node = NULL;
+    if (os64_page_resolve_fragment(page_model(&g.page), name, &node) == OS64_PAGE_REASON_OK)
+        scroll_to_node(node);
+    else if (name[0] == '\0' || os64_streq_nocase(name, "top"))
+        scroll_to(g.sx, 0);
+}
+
+// A TRAVERSAL of the page on screen `delta` entries back (below 0) or
+// forward, when every entry it crosses is this document's: no fetch; the
+// address and the state the entry's; popstate owed, and hashchange when
+// the fragment moved; the scroll put back where it was unless the page
+// keeps its own. False, with nothing changed, when they are not all its;
+// true, with nothing changed but the status line, when the page's binding
+// had no memory to move.
+static bool session_traverse(int32_t delta)
+{
+    bool back = delta < 0;
+    const way_crumb_t *stack = back ? g.way.history : g.way.forward;
+    int32_t count = back ? g.way.depth : g.way.ahead;
+    if (g.page.document == 0 || delta == 0 || steps_of(delta) > count)
+        return false;
+    int32_t n = (int32_t)steps_of(delta);
+    for (int32_t k = 1; k <= n; k++)
+        if (stack[count - k].document != g.page.document)
+            return false;
+    // The binding hears the entry first, as the one step that can fail:
+    // a window that moved without it would show one address while the
+    // page's scripts read another.
+    const way_crumb_t *target = &stack[count - n];
+    if (!yonder_scripts_history_moved(g.page.scripts, target->url, target->state,
+                                      target->state != NULL ? os64_strlen(target->state) : 0)) {
+        status_rest("Out of memory moving this page to that entry; it is where it was.");
+        return true;
+    }
+    char old[OS64_FETCH_URL_MAX];
+    os64_strcopy(old, sizeof(old), g.page.way.url);
+    // Only the entry being left takes where the person is now; each one
+    // passed over goes to the other side as it was, its own scroll and
+    // state with it.
+    way_crumb_t left = page_entry_left(&g.page), arrived;
+    for (int32_t k = 0; k < n; k++) {
+        if (back)
+            way_went_back_entry(&g.way, &left, &arrived);
+        else
+            way_went_forward_entry(&g.way, &left, &arrived);
+        if (k + 1 < n)
+            left = arrived;
+    }
+    os64_strcopy(g.page.way.url, sizeof(g.page.way.url), arrived.url);
+    g.page.entry = arrived.entry;
+    g.page.entry_state = arrived.state;
+    way_position_t at = arrived.position;
+    page_address_moved(&g.page);
+    page_event_owe(&g.page, false, NULL);
+    if (fragments_differ(old, g.page.way.url))
+        page_event_owe(&g.page, true, old);
+    if (!yonder_scripts_scroll_manual(g.page.scripts)) {
+        position_restore(&at);
+        scroll_to(g.sx, g.sy);
+    }
+    g.chain = 0;
+    buttons_follow();
+    return true;
+}
+
+// The same for a page not yet shown, within the entries its scripts made:
+// false when they do not reach `delta` away, and true, with nothing
+// changed, when there was no memory to move.
+static bool page_traverse(Page *p, int32_t delta)
+{
+    bool back = delta < 0;
+    way_crumb_t **from = back ? &p->back : &p->ahead, **to = back ? &p->ahead : &p->back;
+    int32_t *nfrom = back ? &p->nback : &p->nahead, *nto = back ? &p->nahead : &p->nback;
+    if (delta == 0 || steps_of(delta) > *nfrom)
+        return false;
+    int32_t n = (int32_t)steps_of(delta);
+    // Everything that can fail before anything moves, the binding last
+    // (session_traverse says why).
+    const way_crumb_t *target = &(*from)[*nfrom - n];
+    if (!page_stack_room(to, *nto, n) ||
+        !yonder_scripts_history_moved(page_scripts(p), target->url, target->state,
+                                      target->state != NULL ? os64_strlen(target->state) : 0))
+        return true;
+    size_t cap;
+    char *address = page_address(p, &cap);
+    char old[OS64_FETCH_URL_MAX];
+    os64_strcopy(old, sizeof(old), address);
+    for (int32_t k = 0; k < n; k++) {
+        way_crumb_t left = page_entry_left(p);
+        page_stack_push(*to, nto, &left);
+        way_crumb_t arrived = (*from)[--*nfrom];
+        os64_strcopy(address, cap, arrived.url);
+        p->entry = arrived.entry;
+        p->entry_state = arrived.state;
+    }
+    page_address_moved(p);
+    page_event_owe(p, false, NULL);
+    if (fragments_differ(old, address))
+        page_event_owe(p, true, old);
+    // Its arrival scrolls to the fragment the entry it is at names.
+    char *fragment;
+    bool *has;
+    if (page_fragment_slot(p, &fragment, &cap, &has)) {
+        size_t at = before_fragment(address);
+        *has = address[at] == '#';
+        if (*has)
+            os64_strcopy(fragment, cap, address + at + 1);
+    }
+    return true;
+}
+
+// The page arriving is the entry `entry`, which a traversal or a reload
+// brings back: its document reads that entry's state, a copy of `state`
+// (HTML § Restore the history object state), from before its first script
+// (stream_scripts_entry). No memory for the copy leaves it none.
+static void stream_entry(uint64_t entry, const char *state, bool traversal)
+{
+    if (!g.stream.active)
+        return;
+    g.stream.page.entry = entry;
+    g.stream.page.arrives_at = traversal ? entry : 0;
+    os64_free(g.stream.page.entry_state);
+    g.stream.page.entry_state = state != NULL ? copy_text(state) : NULL;
+}
+
+// A host just made for the arriving page reads its entry's state before
+// any of its scripts run. No memory to tell it leaves the page's state
+// none, so the window and the page agree.
+static void stream_scripts_entry(void)
+{
+    const char *state = g.stream.page.entry_state;
+    if (g.stream.scripts == NULL || state == NULL)
+        return;
+    if (!yonder_scripts_history_moved(g.stream.scripts, g.stream.head.url, state, os64_strlen(state))) {
+        os64_free(g.stream.page.entry_state);
+        g.stream.page.entry_state = NULL;
+    }
+}
+
+// history.go(delta), Back and Forward for the page on screen: a traversal
+// within its document when every entry it crosses is its own; else the
+// entry `delta` away fetched, which the session moves to, by its name,
+// when it arrives (arrive_now; g.traversing until then). Nothing when
+// there is no such entry, which the status line says.
+static void session_go(int32_t delta)
+{
+    // A traversal asked while another is fetched is measured from the
+    // entry on screen: the one in flight is stopped first (the HTML queue
+    // would run the second after the first; this window runs one).
+    if (traverse_pending())
+        stop_trip();
+    if (delta == 0 || session_traverse(delta))
+        return;
+    bool back = delta < 0;
+    way_crumb_t crumb;
+    if (!(back ? way_last(&g.way, &crumb) : way_next(&g.way, &crumb))) {
+        say_way();
+        return;
+    }
+    if (steps_of(delta) > (back ? g.way.depth : g.way.ahead)) {
+        status_rest(back ? "This window has not been that far back." : "This window has not been that far forward.");
+        return;
+    }
+    int32_t n = (int32_t)steps_of(delta);
+    crumb = back ? g.way.history[g.way.depth - n] : g.way.forward[g.way.ahead - n];
+    // The state stays the session's crumb's: the arriving page takes a
+    // copy (stream_entry), and the session is untouched until it arrives.
+    char *state = crumb.state != NULL ? copy_text(crumb.state) : NULL;
+    crumb.state = NULL;
+    g.chain = 0;
+    start_trip(crumb.url, NULL, back ? NAV_BACK : NAV_FORWARD, &crumb.position);
+    if (g.stream.active) {
+        stream_entry(crumb.entry, state, true);
+        g.traversing = true;
+    }
+    os64_free(state);
+}
+
+// How many entries a page's session holds, for history.length: the
+// session's and the page on screen's; for a page not yet shown, its own
+// and, when a page is shown, the session as its arrival leaves it
+// (arrive_now): the entries before the one it arrives at (unshown_at), its
+// own, and those after that entry, of which there are none for a new way's
+// page or for a page that pushed, its push having let go of them.
+static uint32_t page_entries(const Page *p)
+{
+    uint32_t session = (uint32_t)g.way.depth + 1 + (uint32_t)g.way.ahead;
+    if (p == &g.page)
+        return session;
+    uint32_t own = (uint32_t)p->nback + 1 + (uint32_t)p->nahead;
+    if (g.page.tree == NULL)
+        return own;
+    int64_t at;
+    bool fresh = unshown_at(p, &at);
+    int64_t after = fresh || p->nback > 0 || p->nahead > 0 ? 0 : (int64_t)g.way.ahead - at;
+    return (uint32_t)((int64_t)g.way.depth + at + own + after);
+}
+
+// The first event a page owes, as one task: true when one ran.
+static bool page_event_run(Page *p, bool shown)
+{
+    yonder_scripts_t *host = page_scripts(p);
+    while (p->nevents > 0) {
+        PageEvent e = p->events[0];
+        os64_memmove(p->events, p->events + 1, (size_t)(p->nevents - 1) * sizeof(p->events[0]));
+        p->nevents--;
+        const os64_html_document_t *doc = page_doc(p);
+        os64_js_outcome_t out;
+        int64_t began = task_begin(host);
+        os64_dom_history_event_t what = {e.hashchange, e.old_url, e.new_url, e.state,
+                                         e.state != NULL ? os64_strlen(e.state) : 0, e.entry};
+        bool ran = yonder_scripts_history_event(host, &what, &out);
+        page_event_free(&e);
+        if (!ran)
+            continue;
+        task_said(host, true, e.hashchange ? "hashchange" : "popstate", &out, began);
+        if (!shown || script_rebuild())
+            asks_perform(host, doc, shown);
+        return true;
+    }
+    return false;
+}
+
+// ── The binding's providers for the session and the view ────────────────
+
+static bool history_update(void *opaque, const char *url, const char *state, size_t length, bool push)
+{
+    Page *p = page_of_doc(opaque);
+    return p != NULL && page_update(p, url, state, length, push, false);
+}
+
+static bool history_fragment(void *opaque, const char *url, bool replace)
+{
+    Page *p = page_of_doc(opaque);
+    if (p == NULL || !page_fragment(p, url, replace, false))
+        return false;
+    const char *name = url + before_fragment(url);
+    name += *name == '#';
+    char *fragment;
+    size_t cap;
+    bool *has;
+    if (p == &g.page)
+        fragment_scroll(NULL, name);
+    else if (page_fragment_slot(p, &fragment, &cap, &has)) {
+        os64_strcopy(fragment, cap, name);
+        *has = true;
+    }
+    return true;
+}
+
+static uint32_t history_length(void *opaque)
+{
+    const Page *p = page_of_doc(opaque);
+    return p != NULL ? page_entries(p) : 1;
+}
+
+// Device pixels at `zoom` (thousandths) as CSS pixels.
+static double css_px(int32_t device, uint32_t zoom)
+{
+    return (double)device * 1000.0 / (zoom != 0 ? zoom : 1000);
+}
+
+static void view_read(void *opaque, os64_dom_view_t *out)
+{
+    const Page *p = page_of_doc(opaque);
+    int32_t w = g.view.bounds.w > 0 ? g.view.bounds.w : 1, h = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
+    garb_env_t css = css_view(w, h, g.zoom);
+    os64_memset(out, 0, sizeof(*out));
+    out->width = (int32_t)css.width;
+    out->height = (int32_t)css.height;
+    os64_gui_rect_t root = os64_ui_widget_planned_bounds(&g.root);
+    out->outer_width = g.frame_w > 0 ? g.frame_w : root.w;
+    out->outer_height = g.frame_h > 0 ? g.frame_h : root.h;
+    out->dark = s_dark;
+    out->reduced_motion = s_reduce_motion;
+    if (p == &g.page) {
+        uint32_t zoom = g.page.laid_zoom != 0 ? g.page.laid_zoom : g.zoom;
+        out->scroll_x = css_px(g.sx, zoom);
+        out->scroll_y = css_px(g.sy, zoom);
+    } else if (p != NULL && p->scroll_asked) {
+        out->scroll_x = p->ask_x;
+        out->scroll_y = p->ask_y;
+    }
+}
+
+// The page whose document is `doc` laid out as it stands, at the view's
+// size, for a script: the page on screen's own layout made current (its
+// pending rebuild, an owed relayout), or a page not on screen measured
+// beside itself (measured_layout). The tree, and in `env` what it was laid
+// out with; NULL when no current layout could be made. What it cost goes
+// in `layouts` and `elapsed_us`, as geometry's does.
+static const flow_tree_t *layout_current(const os64_html_document_t *doc, flow_env_t *env,
+                                         uint64_t *layouts, uint64_t *elapsed_us)
+{
+    int64_t began = os64_micros();
+    uint64_t before = geometry_layout_total;
+    int32_t width = g.view.bounds.w > 0 ? g.view.bounds.w : 1;
+    int32_t height = g.view.bounds.h > 0 ? g.view.bounds.h : 1;
+    const Page *p = page_of_doc(doc);
+    const flow_tree_t *tree = NULL;
+    *env = s_env;
+    env->timeline = NULL;
+    env->ticks = false;
+    if (p == &g.page) {
+        bool ready = script_rebuild();
+        if (ready && (g.page.tree == NULL || flow_incomplete(g.page.tree) || g.page.laid_width != width ||
+                      g.page.laid_height != height || g.page.laid_zoom != g.zoom || g.page.sheets_changed))
+            ready = relayout(true);
+        if (ready && g.page.tree != NULL) {
+            tree = g.page.tree;
+            env->cascade = g.page.cascade;
+            env->zoom = g.page.laid_zoom;
+            env->viewport_height = (int32_t)css_view(1, g.page.laid_height, g.page.laid_zoom).height;
+            env->scripting = g.page.scripting;
+        }
+    } else if (p != NULL && measured_for(doc, width, height)) {
+        tree = s_measured.tree;
+        env->cascade = s_measured.cascade;
+        env->zoom = s_measured.zoom;
+        env->viewport_height = (int32_t)css_view(1, s_measured.height, s_measured.zoom).height;
+        env->scripting = p->scripting;
+    }
+    int64_t ended = os64_micros();
+    *layouts = geometry_layout_total - before;
+    *elapsed_us = *layouts != 0 && began >= 0 && ended >= began ? (uint64_t)(ended - began) : 0;
+    return tree;
+}
+
+static bool view_scroll(void *opaque, double x, double y, os64_dom_geometry_stats_t *cost)
+{
+    Page *p = page_of_doc(opaque);
+    if (p == NULL)
+        return false;
+    // Before it is shown a page's scroll is only asked for: it is made
+    // when the page is, and reads back as asked meanwhile.
+    if (p != &g.page) {
+        p->scroll_asked = true;
+        p->ask_x = x > 0 ? x : 0;
+        p->ask_y = y > 0 ? y : 0;
+        return true;
+    }
+    flow_env_t env;
+    if (layout_current(opaque, &env, &cost->layouts, &cost->elapsed_us) == NULL)
+        return false;
+    double z = (g.page.laid_zoom != 0 ? g.page.laid_zoom : g.zoom) / 1000.0;
+    scroll_to(device_px(x * z), device_px(y * z));
+    return true;
+}
+
+// A background url() a sheet wrote, resolved as the page on screen's
+// painter fetches it (css_url).
+static bool computed_url(void *ctx, const char *written, uint32_t len, int32_t sheet, char *out, size_t cap)
+{
+    flow_layer_t layer;
+    os64_memset(&layer, 0, sizeof(layer));
+    layer.image = written;
+    layer.image_len = len;
+    layer.sheet = sheet;
+    return css_url(ctx, &layer, out, cap);
+}
+
+// getComputedStyle's provider: the element's resolved style read from the
+// page's current layout (libflow's flow_computed), every property of
+// libgarb's table put. An element with no style puts nothing.
+static bool script_computed(void *opaque, const os64_html_node_t *element, os64_dom_computed_t *out)
+{
+    const os64_html_document_t *doc = opaque;
+    if (!os64_html_owns_node(doc, element))
+        return false;
+    flow_env_t env;
+    uint64_t layouts = 0, elapsed_us = 0;
+    const flow_tree_t *tree = layout_current(doc, &env, &layouts, &elapsed_us);
+    os64_dom_computed_cost(out, layouts, elapsed_us);
+    if (tree == NULL)
+        return false;
+    const Page *p = page_of_doc(doc);
+    // Only the page on screen's sheet table is its cascade's: a measured
+    // page's url() is written as its sheet wrote it.
+    flow_computed_options_t options = {p == &g.page ? computed_url : NULL, (void *)p};
+    flow_computed_t *c = flow_computed_new(tree, &env, element, &options);
+    if (c == NULL)
+        return false;
+    bool kept = true;
+    char small[512];
+    for (int32_t i = 0; kept && flow_computed_styled(c) && i < GARB_NPROPS; i++) {
+        size_t n = flow_computed_text(c, i, small, sizeof(small));
+        if (n < sizeof(small)) {
+            kept = os64_dom_computed_put(out, i, small, n);
+            continue;
+        }
+        char *big = os64_malloc(n + 1);
+        kept = big != NULL;
+        if (kept) {
+            flow_computed_text(c, i, big, n + 1);
+            kept = os64_dom_computed_put(out, i, big, n);
+        }
+        os64_free(big);
+    }
+    flow_computed_free(c);
+    return kept;
+}
+
 // THE SHOWN PAGE'S TURN: at most one task, then the rendering step.
+// Whether the turn just ran one of the view's events: more may be owed.
+static bool s_view_ran;
+
 static bool script_turn(void)
 {
     // A font-capacity retry may have released the old tree. Keep retrying
@@ -7515,6 +8736,9 @@ static bool script_turn(void)
     if (!g.scripts_on || g.page.scripts == NULL)
         return false;
     forms_flush();
+    // The history's events the page is owed come before its other tasks.
+    if (page_event_run(&g.page, true))
+        return true;
     const os64_html_document_t *doc = page_doc(&g.page);
     os64_js_outcome_t out;
     int64_t began = task_begin(g.page.scripts);
@@ -7523,6 +8747,14 @@ static bool script_turn(void)
     if (!ran) {
         what = "timer";
         ran = yonder_scripts_timer_fire(g.page.scripts, yonder_now_ms(), &out);
+    }
+    // Then the rendering step's events (MODERN_WEB.md § Slice 1b): the
+    // view's resize and scroll, and the media lists' changes, one a turn;
+    // the loop comes back for the next while one ran (s_view_ran).
+    s_view_ran = false;
+    if (!ran) {
+        what = "view";
+        ran = s_view_ran = yonder_scripts_view_step(g.page.scripts, &out);
     }
     if (!ran)
         return false;
@@ -8149,6 +9381,7 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
             os64_page_state_free(g.stream.state);
             g.stream.state = NULL;
         }
+        stream_scripts_entry();
     }
     fresh.scripts = g.stream.scripts;
     fresh.state = g.stream.state;
@@ -8205,6 +9438,25 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     // and keep their jobs, which name this serial: no sheet is fetched
     // twice in one page's life (arrive adds the rest).
     Page *found = &g.stream.page;
+    // Its place in the session moves with it: its document's name, the
+    // current entry's state, the entries its scripts made, the events it
+    // owes, a scroll it asked for.
+    fresh.document = found->document;
+    fresh.entry = found->entry;
+    fresh.arrives_at = found->arrives_at;
+    fresh.entry_state = found->entry_state;
+    fresh.back = found->back;
+    fresh.ahead = found->ahead;
+    fresh.nback = found->nback;
+    fresh.nahead = found->nahead;
+    os64_memcpy(fresh.events, found->events, sizeof(fresh.events));
+    fresh.nevents = found->nevents;
+    fresh.scroll_asked = found->scroll_asked;
+    fresh.ask_x = found->ask_x;
+    fresh.ask_y = found->ask_y;
+    found->entry_state = NULL;
+    found->back = found->ahead = NULL;
+    found->nback = found->nahead = found->nevents = 0;
     fresh.sheets = found->sheets;
     fresh.nsheets = found->nsheets;
     fresh.sheets_waiting = found->sheets_waiting;
@@ -8274,13 +9526,15 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
         g.finishing.fragment = fragment;
         g.finishing.cap = sizeof(fragment);
         g.finishing.has_fragment = &has_fragment;
+        g.finishing.kind = kind;
         page_mark(fresh.scripts, OS64_DOM_TIMING_DOM_CONTENT_LOADED_START);
         yonder_scripts_dispatch(fresh.scripts, doc->document, &loaded, NULL, &out);
         page_mark(fresh.scripts, OS64_DOM_TIMING_DOM_CONTENT_LOADED_END);
         task_said(fresh.scripts, true, "DOMContentLoaded", &out, began);
         asks_perform(fresh.scripts, doc, false);
+        bool abandoned = g.finishing.abandoned;
         os64_memset(&g.finishing, 0, sizeof(g.finishing));
-        if (g.stream.active) {
+        if (g.stream.active || abandoned) {
             sheets_leave(&fresh);
             page_clear(&fresh);
             return;
@@ -8358,6 +9612,7 @@ static yonder_stop_t stream_stop(os64_html_node_t *script)
             status_rest("Out of memory for the page's scripts; it is read without them.");
             return YONDER_STOP_RESUME;
         }
+        stream_scripts_entry();
     }
     return yonder_scripts_parser_stop(g.stream.scripts, script);
 }
@@ -8544,6 +9799,10 @@ static bool stream_turn(void)
     uint64_t serial = g.stream.serial;
     if (yonder_scripts_connected_pending(host))
         return stream_connected();
+    // The history's events a task left the page owing (a history.back()
+    // while it is parsed) are tasks queued before the parse's next slice.
+    if (g.stream.page.nevents > 0 && yonder_scripts_alive(host))
+        return stream_task();
     if (g.stream.stopped) {
         // The script the parse waits for: run it when its source is in
         // hand (a dead runtime runs nothing), then carry on. The resume is
@@ -9032,7 +10291,7 @@ static FrameLabel frame_label(const flow_box_t *b)
         os64_snprintf(text, sizeof(text), "Frame: %s", l->href.url);
     else
         os64_strcopy(text, sizeof(text), "Frame (it names no document)");
-    const flow_family_list_t sans = {NULL, 0, FLOW_GENERIC_SANS};
+    const flow_family_list_t sans = {.generic = FLOW_GENERIC_SANS};
     os64_text_font_t *const *fonts;
     size_t nfonts;
     os64_font_face_info_t face;
@@ -9900,8 +11159,26 @@ static void follow_link_asked(int32_t link, way_ask_t ask)
     os64_page_what_t what = {OS64_PAGE_ACTIVATE_LINK, link, 0, 0};
     os64_page_request_t request;
     os64_page_verdict_t verdict = os64_page_activate(page_model(&g.page), what, &request);
-    if (verdict == OS64_PAGE_FRAGMENT) {
-        scroll_to_node(request.anchor);
+    // A place in this page is a fragment navigation (MODERN_WEB.md § Slice
+    // 1b): an entry, the scroll, and the page's popstate, then hashchange
+    // when the fragment moved. A
+    // name nothing in the page claims is one too, scrolling nowhere: a
+    // router that hears hashchange is what such a link is for. With no
+    // memory for the entry it is the scroll alone, the address unmoved.
+    bool unclaimed = verdict == OS64_PAGE_NOTHING && request.reason == OS64_PAGE_REASON_NO_ANCHOR &&
+                     request.has_fragment && request.fragment != NULL;
+    if (verdict == OS64_PAGE_FRAGMENT || unclaimed) {
+        char url[OS64_FETCH_URL_MAX];
+        size_t keep = before_fragment(g.page.way.url);
+        const char *name = request.fragment != NULL ? request.fragment : "";
+        if (keep + 1 + os64_strlen(name) < sizeof(url)) {
+            os64_snprintf(url, sizeof(url), "%.*s#%s", (int)keep, g.page.way.url, name);
+            (void)page_fragment(&g.page, url, os64_strcmp(url, g.page.way.url) == 0, true);
+        }
+        if (verdict == OS64_PAGE_FRAGMENT)
+            scroll_to_node(request.anchor);
+        else
+            fragment_scroll(NULL, name);
         os64_page_request_free(&request);
     } else if (verdict == OS64_PAGE_NAVIGATE) {
         g.chain = 0;
@@ -10096,30 +11373,20 @@ static void hover(int32_t x, int32_t y)
 
 // ── The toolbar ─────────────────────────────────────────────────────────
 
+// Back and Forward: within the page's document when the entry is its own,
+// else a fetch (session_go).
 static void click_back(os64_ui_widget_t *w, void *user)
 {
     (void)w;
     (void)user;
-    way_crumb_t crumb;
-    if (!way_last(&g.way, &crumb)) {
-        say_way();
-        return;
-    }
-    g.chain = 0;
-    start_trip(crumb.url, NULL, NAV_BACK, &crumb.position);
+    session_go(-1);
 }
 
 static void click_forward(os64_ui_widget_t *w, void *user)
 {
     (void)w;
     (void)user;
-    way_crumb_t crumb;
-    if (!way_next(&g.way, &crumb)) {
-        say_way();
-        return;
-    }
-    g.chain = 0;
-    start_trip(crumb.url, NULL, NAV_FORWARD, &crumb.position);
+    session_go(1);
 }
 
 static void click_reload(os64_ui_widget_t *w, void *user)
@@ -10136,6 +11403,8 @@ static void click_reload(os64_ui_widget_t *w, void *user)
     char url[OS64_FETCH_URL_MAX];
     os64_strcopy(url, sizeof(url), g.page.way.url);
     start_trip(url, NULL, NAV_RELOAD, NULL);
+    // A reload is the same entry again, its state with it.
+    stream_entry(g.page.entry, g.page.entry_state, false);
 }
 
 // A mode change stops queued execution immediately. Reload re-parses noscript;
@@ -10582,6 +11851,7 @@ int main(int argc, char **argv)
     // queue is EMPTY: anything waiting may have been done before the bar
     // could be seen, so it is dispatched to a disarmed bar first.
     g.running = true;
+    frame_follow();
     glass_paint();
     os64_gui_event_t ev;
     bool held = false;              // an event taken while looking for an empty queue
@@ -10623,6 +11893,7 @@ int main(int argc, char **argv)
         }
         if (g.relayout_due) {
             g.relayout_due = false;
+            frame_follow();
             relayout(false);
         }
         if (!g.running || g.ui.quit)
@@ -10639,7 +11910,7 @@ int main(int argc, char **argv)
             glass_paint();
         if (stream_more)
             (void)os64_gui_event_ring(g.win, BELL_STREAM);
-        if (coming_more || (scripts_ready && scripts_owed(g.page.scripts)))
+        if (coming_more || (scripts_ready && (scripts_owed(g.page.scripts) || s_view_ran)))
             (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
         // A task may have set or cleared a timer, and a frame for an
         // animation has its whole cost now: the ticker hears of both.
@@ -10679,6 +11950,7 @@ int main(int argc, char **argv)
     forms_drop();
     page_clear(&g.page);
     page_clear(&g.coming.page);
+    way_history_clear(&g.way);
     // After the departure write (page_clear), which reads its counts.
     yonder_paint_cache_free(g.paint_cache);
     g.paint_cache = NULL;

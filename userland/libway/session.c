@@ -77,24 +77,72 @@ bool way_details_flip(way_page_t *p, const os64_html_node_t *details)
 
 // ── The history ─────────────────────────────────────────────────────────
 
-static void push(way_crumb_t *stack, int32_t *depth, const char *url, const way_position_t *where)
+// `crumb` onto `stack`, its state taken.
+static void push(way_crumb_t *stack, int32_t *depth, way_crumb_t *crumb)
 {
     if (*depth >= WAY_HISTORY_MAX) {
         // Drop the OLDEST crumb rather than refuse to go on: somebody
         // sixty-four pages in wants the sixty-fifth more than the first.
+        os64_free(stack[0].state);
         for (int32_t i = 1; i < WAY_HISTORY_MAX; i++)
             stack[i - 1] = stack[i];
         *depth = WAY_HISTORY_MAX - 1;
     }
-    os64_strcopy(stack[*depth].url, sizeof(stack[*depth].url), url);
-    stack[*depth].position = *where;
+    way_crumb_t *top = &stack[*depth];
+    os64_strcopy(top->url, sizeof(top->url), crumb->url);
+    top->position = crumb->position;
+    top->document = crumb->document;
+    top->entry = crumb->entry;
+    top->state = crumb->state;
+    crumb->state = NULL;
     (*depth)++;
+}
+
+// The top of `stack` out to `out` (zeroed when there is none), its state
+// with it.
+static void pop(way_crumb_t *stack, int32_t *depth, way_crumb_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (*depth == 0)
+        return;
+    (*depth)--;
+    *out = stack[*depth];
+    stack[*depth].state = NULL;
+}
+
+static void drop(way_crumb_t *stack, int32_t *depth)
+{
+    way_crumb_t gone;
+    pop(stack, depth, &gone);
+    os64_free(gone.state);
+}
+
+// A crumb for a face that names no document and keeps no state.
+static way_crumb_t plain(const char *url, const way_position_t *where)
+{
+    way_crumb_t crumb;
+    os64_memset(&crumb, 0, sizeof(crumb));
+    os64_strcopy(crumb.url, sizeof(crumb.url), url);
+    crumb.position = *where;
+    return crumb;
+}
+
+void way_forget_ahead(way_session_t *s)
+{
+    while (s->ahead > 0)
+        drop(s->forward, &s->ahead);
+}
+
+void way_remember_entry(way_session_t *s, way_crumb_t *left)
+{
+    push(s->history, &s->depth, left);
+    way_forget_ahead(s);
 }
 
 void way_remember(way_session_t *s, const char *url, const way_position_t *where)
 {
-    push(s->history, &s->depth, url, where);
-    s->ahead = 0;
+    way_crumb_t left = plain(url, where);
+    way_remember_entry(s, &left);
 }
 
 bool way_last(way_session_t *s, way_crumb_t *out)
@@ -109,14 +157,20 @@ bool way_last(way_session_t *s, way_crumb_t *out)
 
 void way_forget_last(way_session_t *s)
 {
-    if (s->depth > 0)
-        s->depth--;
+    drop(s->history, &s->depth);
+}
+
+void way_went_back_entry(way_session_t *s, way_crumb_t *left, way_crumb_t *arrived)
+{
+    pop(s->history, &s->depth, arrived);
+    push(s->forward, &s->ahead, left);
 }
 
 void way_went_back(way_session_t *s, const char *url, const way_position_t *where)
 {
-    way_forget_last(s);
-    push(s->forward, &s->ahead, url, where);
+    way_crumb_t left = plain(url, where), arrived;
+    way_went_back_entry(s, &left, &arrived);
+    os64_free(arrived.state);
 }
 
 bool way_next(way_session_t *s, way_crumb_t *out)
@@ -129,11 +183,30 @@ bool way_next(way_session_t *s, way_crumb_t *out)
     return true;
 }
 
+void way_went_forward_entry(way_session_t *s, way_crumb_t *left, way_crumb_t *arrived)
+{
+    pop(s->forward, &s->ahead, arrived);
+    push(s->history, &s->depth, left);
+}
+
 void way_went_forward(way_session_t *s, const char *url, const way_position_t *where)
 {
-    if (s->ahead > 0)
-        s->ahead--;
-    push(s->history, &s->depth, url, where);
+    way_crumb_t left = plain(url, where), arrived;
+    way_went_forward_entry(s, &left, &arrived);
+    os64_free(arrived.state);
+}
+
+void way_forward_entry(way_session_t *s, way_crumb_t *ahead)
+{
+    push(s->forward, &s->ahead, ahead);
+}
+
+void way_history_clear(way_session_t *s)
+{
+    while (s->depth > 0)
+        drop(s->history, &s->depth);
+    while (s->ahead > 0)
+        drop(s->forward, &s->ahead);
 }
 
 // ── Judgements ──────────────────────────────────────────────────────────

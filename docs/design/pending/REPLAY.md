@@ -228,10 +228,12 @@ the rows that say so are the whole of what a replay fakes.
 | the cookie jar | the harness | — | stated: read-only, and it holds the record's string and nothing more; what the page sets with `document.cookie=`, a `Set-Cookie` from any fetch the page makes after the head (one its first script waits for included), a cookie the page still on screen set, and an expiry are not seen in a replay, so a script that read the jar after any of those where the page was kept reads the head's string here |
 | the text face | the harness | — | stated: bitmap face, so measurements differ from the P5's |
 | pictures and fonts | not fetched | — | stated: their fetch-decided outcomes are not reproduced (§ 5) |
-| the screen | the harness | — | stated: `screen` answers libdom's default, 1024 × 768, not the display the page was kept on |
+| the screen | the harness | — | stated: `screen`, and the device-width, device-height and device-aspect-ratio media features, answer libdom's default, 1024 × 768, not the display the page was kept on |
 | page storage | the harness | — | stated: `localStorage` and `sessionStorage` start empty and live in memory for the replay alone; no profile folder is read or written |
 | how the page was reached | the harness | — | stated: by its address, always (`performance.navigation.type` 0, the navigation entry's `navigate`), whether it was kept on a reload, Back or a link |
 | the redirects followed | the harness | — | stated: `redirectCount` is 0; the record keeps no count |
+| the session history | the harness | — | stated: every page arrives as a new way in a window with no history: `history.length` 1, `history.state` null, no scroll restored, whether it was kept on a reload, Back, Forward or a link, and whatever entries were around it |
+| the window's frame | the harness | — | stated: `outerWidth` and `outerHeight` answer the root's bounds as the harness lays them out around the record's view, not the frame the page was kept in; the replay never sets yonder's frame size (`g.frame_w`, `g.frame_h`), and the record does not keep it |
 
 **A kept file is bound to its record by what the record says of it, and
 nothing else** (version 2; version 1 by what it says, § 3's versions
@@ -429,10 +431,12 @@ Each is a row in DEBTS.md § The replay corpus.
 | debt | trigger |
 |---|---|
 | the text face is the harness's bitmap face, so measured layout differs from the P5's | a replay regression that is a measurement |
-| `screen` answers libdom's default, not the display the page was kept on | a page whose MISSING lines, or whose layout, depend on it |
+| `screen` and the device-* media features answer libdom's default, not the display the page was kept on | a page whose MISSING lines, or whose layout, depend on it |
 | page storage starts empty on a replay | a kept page whose record differs from its replay's by what it had stored (a consent banner shown or not) |
 | a replay is always reached by address | a kept page reached by a reload or Back whose scripts read how it was reached |
 | `redirectCount` is 0 on a replay | a census page that reads `redirectCount` |
+| a replay's session history is a new window's | a kept page reached by a reload, Back or Forward, or with entries around it, whose scripts read `history.length` or `history.state`, or whose replay differs by where it is scrolled |
+| `outerWidth` and `outerHeight` answer the harness's root | a kept page whose MISSING lines, or whose layout, depend on the window's outer size |
 | a kept corpus holds script-visible cookies | the day the filesystem has modes, the record is written closed |
 | keep_pages writes on the window's thread | browsing with it on visibly hitching while a page's scripts arrive |
 | a page that navigates replays only as far as going | pages that redirect by script often enough that their incomplete records hide what slices change |

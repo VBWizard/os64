@@ -26,6 +26,13 @@ static int32_t css(const os64_dom_t *dom, int32_t device)
     return device > 0 ? (int32_t)((int64_t)device * 1000 / zoom_of(dom)) : 0;
 }
 
+void d_screen_media(const os64_dom_t *dom, double *width, double *height, double *ratio)
+{
+    *width = css(dom, dom->options.screen.width);
+    *height = css(dom, dom->options.screen.height);
+    *ratio = zoom_of(dom) / 1000.0;
+}
+
 enum {
     W_SCREEN, W_RATIO, S_WIDTH, S_HEIGHT, S_AVAIL_WIDTH, S_AVAIL_HEIGHT, S_COLOR_DEPTH, S_ORIENTATION,
     O_TYPE, O_ANGLE, O_LOCK, O_UNLOCK
@@ -163,7 +170,7 @@ int d_screen_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_accessor(dom, ctx, orientation_prototype, "angle", screen_member, O_ANGLE, false) < 0 ||
         d_method(dom, ctx, orientation_prototype, "lock", screen_member, 1, O_LOCK) < 0 ||
         d_method(dom, ctx, orientation_prototype, "unlock", screen_member, 0, O_UNLOCK) < 0 ||
-        d_event_target(dom, ctx, orientation_prototype, orientation_id) < 0 ||
+        d_event_target(dom, ctx, orientation_prototype, orientation_id, NULL) < 0 ||
         d_event_handler(dom, ctx, orientation_prototype, D_EVENT_CHANGE) < 0)
         return -1;
     JSValue screen = JS_NewObjectClass(ctx, (int)screen_id);

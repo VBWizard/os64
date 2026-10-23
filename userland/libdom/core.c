@@ -24,6 +24,16 @@ void d_free(os64_dom_t *dom, void *ptr)
     os64_free(block);
 }
 
+int d_dictionary(JSContext *ctx, int argc, JSValueConst *argv, int at)
+{
+    if (argc <= at || JS_IsUndefined(argv[at]) || JS_IsNull(argv[at])) return 0;
+    if (!JS_IsObject(argv[at])) {
+        JS_ThrowTypeError(ctx, "A dictionary argument must be an object");
+        return -1;
+    }
+    return 1;
+}
+
 JSValue d_error(JSContext *ctx, const char *name, const char *message)
 {
     JSValue error = JS_NewError(ctx);
@@ -112,6 +122,20 @@ int d_method(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
 {
     JSValue function = JS_NewCFunctionData(ctx, fn, argc, magic, 1, &dom->anchor->value);
     if (JS_IsException(function)) return -1;
+    return JS_DefinePropertyValueStr(ctx, target, name, function, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+}
+
+int d_method_named(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
+                   const char *name, JSCFunctionData *fn, int argc, int magic)
+{
+    JSValue function = JS_NewCFunctionData(ctx, fn, argc, magic, 1, &dom->anchor->value);
+    if (JS_IsException(function)) return -1;
+    JSValue text = JS_NewString(ctx, name);
+    if (JS_IsException(text) ||
+        JS_DefinePropertyValueStr(ctx, function, "name", text, JS_PROP_CONFIGURABLE) < 0) {
+        JS_FreeValue(ctx, function);
+        return -1;
+    }
     return JS_DefinePropertyValueStr(ctx, target, name, function, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }
 
@@ -348,6 +372,7 @@ void os64_dom_free(os64_dom_t *dom)
     }
     d_timer_free(dom);
     d_window_free(dom);
+    d_view_free(dom);
     d_storage_free(dom);
     for (DValue *entry = dom->values; entry != NULL;) {
         DValue *next = entry->next;

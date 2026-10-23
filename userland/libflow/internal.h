@@ -516,7 +516,20 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
 // NULL for a node with no style: not an element, or inside a
 // `display: none` subtree, which pass 1 does not descend into.
 const FStyled *f_style_of(const FStyles *styles, const os64_html_node_t *node);
+// An element's style when pass 1 did not reach it, for getComputedStyle
+// (flow_computed_new): it and the elements between it and the nearest
+// ancestor pass 1 styled are styled into `extra` — empty, with `styles`'
+// document, an environment whose cascade is `styles`' and no timeline, so
+// no animation runs — from a copy of that ancestor's record; that and the
+// root element's font size (`rem`) are all of `styles` it reads, and it
+// writes nothing there. `styles`' own record when it has one; NULL for
+// a node that is no element, one whose ancestors reach no styled element
+// (detached, or in a template's contents), and on no memory.
+const FStyled *f_style_beyond(const FStyles *styles, FStyles *extra, const os64_page_t *model,
+                              const os64_html_node_t *element);
 void f_style_free(FStyles *styles);
+// The styles pass 1 made for a tree, which live as long as it does.
+const FStyles *f_tree_styles(const flow_tree_t *tree);
 // The style of an ANONYMOUS box: its parent's inherited properties and the
 // initial value of every other (CSS 2.1 §9.2.1.1) — never a copy of the
 // parent's struct, which would give an anonymous block its parent's margins

@@ -1,0 +1,752 @@
+# WPT's css/cssom in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh css/cssom --update
+# rewrites [passing].
+[required]
+# Slice 1b: getComputedStyle's declaration: live, read-only, empty for a
+# detached element, in CSSOM's order, resolved values. Each fails with the
+# switch off.
+cssstyledeclaration-properties.html	CSS Test: CSSStyleDeclaration properties are defined as WebIDL attributes, not using getOwnPropertyNames()
+computed-style-001.html	inherited_property_values
+computed-style-001.html	property_values
+computed-style-001.html	relative_property_values
+computed-style-005.html	absolute_computed_left_and_right
+computed-style-005.html	absolute_computed_margins
+computed-style-005.html	relative_computed_left_and_right
+computed-style-005.html	relative_computed_margins
+cssstyledeclaration-csstext.html	cssText on computed style declaration returns the empty string
+getComputedStyle-basic.html	Sanity check
+getComputedStyle-basic.html	cssText
+getComputedStyle-detached-subtree.html	getComputedStyle returns no style for detached element
+getComputedStyle-important.html	getComputedStyle should return !important stylesheet value over inline style
+getComputedStyle-line-height.html	line-height: 1
+getComputedStyle-line-height.html	line-height: 10px
+getComputedStyle-line-height.html	line-height: normal
+getComputedStyle-live.html	getComputedStyle() returns live values
+getComputedStyle-math-function-percentage.html	getComputedStyle() returns computed value for width: 50%
+getComputedStyle-mutations.html	Assigning to attribute updates the computed style
+getComputedStyle-property-order.html	Computed style properties should be sorted lexicographically
+[excluded]
+[passing]
+StyleSheet-properties.html	StyleSheet and CSSStyleSheet properties
+computed-style-001.html	inherited_property_values
+computed-style-001.html	property_values
+computed-style-001.html	relative_property_values
+computed-style-005.html	absolute_computed_left_and_right
+computed-style-005.html	absolute_computed_margins
+computed-style-005.html	relative_computed_left_and_right
+computed-style-005.html	relative_computed_margins
+computed-style-set-property.html	Computed style parent (should be null)
+css-style-attr-decl-block.html	Changes to style attribute should reflect on CSS declaration block
+css-style-attr-decl-block.html	Expansion of all:unset and all:revert treated identically
+css-style-attr-decl-block.html	Style attribute should create CSS declaration block based on its content
+css-style-attribute-modifications.html	Mutating the style declaration doesn't remove the style attribute
+cssom-cssstyledeclaration-set.html	CSSStyleDeclaration on HTMLElement represents inline style changes
+cssom-setProperty-shorthand.html	shorthand background can be removed with removeProperty
+cssom-setProperty-shorthand.html	shorthand background can be removed with removeProperty even when set with !important
+cssom-setProperty-shorthand.html	shorthand background can be set with setProperty
+cssom-setProperty-shorthand.html	shorthand background can be set with setProperty and priority !important
+cssom-setProperty-shorthand.html	shorthand background-position can be removed with removeProperty
+cssom-setProperty-shorthand.html	shorthand background-position can be removed with removeProperty even when set with !important
+cssom-setProperty-shorthand.html	shorthand background-position can be set with setProperty
+cssom-setProperty-shorthand.html	shorthand background-position can be set with setProperty and priority !important
+cssom-setProperty-shorthand.html	shorthand background-repeat can be removed with removeProperty
+cssom-setProperty-shorthand.html	shorthand background-repeat can be removed with removeProperty even when set with !important
+cssom-setProperty-shorthand.html	shorthand background-repeat can be set with setProperty
+cssom-setProperty-shorthand.html	shorthand background-repeat can be set with setProperty and priority !important
+cssom-setProperty-shorthand.html	shorthand border can be removed with removeProperty
+cssom-setProperty-shorthand.html	shorthand border can be removed with removeProperty even when set with !important
+cssom-setProperty-shorthand.html	shorthand border can be set with setProperty
+cssom-setProperty-shorthand.html	shorthand border can be set with setProperty and priority !important
+cssom-setProperty-shorthand.html	shorthand border-bottom can be removed with removeProperty
+cssom-setProperty-shorthand.html	shorthand border-bottom can be removed with removeProperty even when set with !important
+cssom-setProperty-shorthand.html	shorthand border-bottom can be set with setProperty
+cssom-setProperty-shorthand.html	shorthand border-bottom can be set with setProperty and priority !important
+cssom-setProperty-shorthand.html	shorthand border-color can be removed with removeProperty
+cssom-setProperty-shorthand.html	shorthand border-color can be removed with removeProperty even when set with !important
+cssom-setProperty-shorthand.html	shorthand border-color can be set with setProperty
+cssom-setProperty-shorthand.html	shorthand border-color can be set with setProperty and priority !important
+cssom-setProperty-shorthand.html	shorthand border-left can be removed with removeProperty
+cssom-setProperty-shorthand.html	shorthand border-left can be removed with removeProperty even when set with !important
+cssom-setProperty-shorthand.html	shorthand border-left can be set with setProperty
+cssom-setProperty-shorthand.html	shorthand border-left can be set with setProperty and priority !important
+cssom-setProperty-shorthand.html	shorthand border-radius can be removed with removeProperty
+cssom-setProperty-shorthand.html	shorthand border-radius can be removed with removeProperty even when set with !important
+cssom-setProperty-shorthand.html	shorthand border-radius can be set with setProperty
+cssom-setProperty-shorthand.html	shorthand border-radius can be set with setProperty and priority !important
+cssom-setProperty-shorthand.html	shorthand border-right can be removed with removeProperty
+cssom-setProperty-shorthand.html	shorthand border-right can be removed with removeProperty even when set with !important
+cssom-setProperty-shorthand.html	shorthand border-right can be set with setProperty
+cssom-setProperty-shorthand.html	shorthand border-right can be set with setProperty and priority !important
+cssom-setProperty-shorthand.html	shorthand border-spacing can be removed with removeProperty
+cssom-setProperty-shorthand.html	shorthand border-spacing can be removed with removeProperty even when set with !important
+cssom-setProperty-shorthand.html	shorthand border-spacing can be set with setProperty
+cssom-setProperty-shorthand.html	shorthand border-spacing can be set with setProperty and priority !important
+cssom-setProperty-shorthand.html	shorthand border-style can be removed with removeProperty
+cssom-setProperty-shorthand.html	shorthand border-style can be removed with removeProperty even when set with !important
+cssom-setProperty-shorthand.html	shorthand border-style can be set with setProperty
+cssom-setProperty-shorthand.html	shorthand border-style can be set with setProperty and priority !important
+cssom-setProperty-shorthand.html	shorthand border-top can be removed with removeProperty
+cssom-setProperty-shorthand.html	shorthand border-top can be removed with removeProperty even when set with !important
+cssom-setProperty-shorthand.html	shorthand border-top can be set with setProperty
+cssom-setProperty-shorthand.html	shorthand border-top can be set with setProperty and priority !important
+cssom-setProperty-shorthand.html	shorthand border-width can be removed with removeProperty
+cssom-setProperty-shorthand.html	shorthand border-width can be removed with removeProperty even when set with !important
+cssom-setProperty-shorthand.html	shorthand border-width can be set with setProperty
+cssom-setProperty-shorthand.html	shorthand border-width can be set with setProperty and priority !important
+cssom-setProperty-shorthand.html	shorthand font can be removed with removeProperty
+cssom-setProperty-shorthand.html	shorthand font can be removed with removeProperty even when set with !important
+cssom-setProperty-shorthand.html	shorthand font can be set with setProperty
+cssom-setProperty-shorthand.html	shorthand font can be set with setProperty and priority !important
+cssom-setProperty-shorthand.html	shorthand list-style can be removed with removeProperty
+cssom-setProperty-shorthand.html	shorthand list-style can be removed with removeProperty even when set with !important
+cssom-setProperty-shorthand.html	shorthand list-style can be set with setProperty
+cssom-setProperty-shorthand.html	shorthand list-style can be set with setProperty and priority !important
+cssom-setProperty-shorthand.html	shorthand margin can be removed with removeProperty
+cssom-setProperty-shorthand.html	shorthand margin can be removed with removeProperty even when set with !important
+cssom-setProperty-shorthand.html	shorthand margin can be set with setProperty
+cssom-setProperty-shorthand.html	shorthand margin can be set with setProperty and priority !important
+cssom-setProperty-shorthand.html	shorthand outline can be removed with removeProperty
+cssom-setProperty-shorthand.html	shorthand outline can be removed with removeProperty even when set with !important
+cssom-setProperty-shorthand.html	shorthand outline can be set with setProperty
+cssom-setProperty-shorthand.html	shorthand outline can be set with setProperty and priority !important
+cssom-setProperty-shorthand.html	shorthand overflow can be removed with removeProperty
+cssom-setProperty-shorthand.html	shorthand overflow can be removed with removeProperty even when set with !important
+cssom-setProperty-shorthand.html	shorthand overflow can be set with setProperty
+cssom-setProperty-shorthand.html	shorthand overflow can be set with setProperty and priority !important
+cssom-setProperty-shorthand.html	shorthand padding can be removed with removeProperty
+cssom-setProperty-shorthand.html	shorthand padding can be removed with removeProperty even when set with !important
+cssom-setProperty-shorthand.html	shorthand padding can be set with setProperty
+cssom-setProperty-shorthand.html	shorthand padding can be set with setProperty and priority !important
+cssstyledeclaration-all-shorthand.html	getPropertyValue('all') returns empty string
+cssstyledeclaration-all-shorthand.html	getPropertyValue('all') returns empty string when property overridden after 'all'
+cssstyledeclaration-all-shorthand.html	getPropertyValue('all') returns empty string when property overridden after 'all' via setProperty
+cssstyledeclaration-all-shorthand.html	getPropertyValue('all') returns empty string when single property overriden
+cssstyledeclaration-all-shorthand.html	getPropertyValue('all') returns empty string when single property overriden via setProperty
+cssstyledeclaration-all-shorthand.html	getPropertyValue('all') returns empty string with shorthand 'margin'
+cssstyledeclaration-all-shorthand.html	getPropertyValue('all') returns empty string with shorthand 'margin' via setProperty
+cssstyledeclaration-all-shorthand.html	removeProperty('all') removes an 'all' declaration
+cssstyledeclaration-csstext-all-shorthand.html	all:initial should not exclude custom from cssText
+cssstyledeclaration-csstext-final-delimiter.html	inline style - text - delimiters - zero declarations
+cssstyledeclaration-csstext.html	cssText on computed style declaration returns the empty string
+cssstyledeclaration-csstext.html	uppercase property
+cssstyledeclaration-mutability.html	HTMLElement's CSSStyleDeclaration is mutable
+cssstyledeclaration-properties.html	CSS Test: CSSStyleDeclaration properties are defined as WebIDL attributes, not using getOwnPropertyNames()
+cssstyledeclaration-removeProperty-all.html	CSSStyleDeclaration.removeProperty("all") 1
+cssstyledeclaration-setter-attr.html	Setting an invalid property via the declaration setter doesn't create a declaration
+cssstyledeclaration-setter-attr.html	Setting an invalid value via the declaration setter doesn't create a declaration
+cssstyledeclaration-setter-form-controls.html	button element
+cssstyledeclaration-setter-form-controls.html	button input element
+cssstyledeclaration-setter-form-controls.html	checkbox input element
+cssstyledeclaration-setter-form-controls.html	radio input element
+cssstyledeclaration-setter-form-controls.html	select element
+cssstyledeclaration-setter-form-controls.html	submit input element
+cssstyledeclaration-setter-form-controls.html	text input element
+cssstyledeclaration-setter-form-controls.html	textarea element
+getComputedStyle-basic.html	Sanity check
+getComputedStyle-basic.html	cssText
+getComputedStyle-detached-subtree.html	getComputedStyle returns no style for detached element
+getComputedStyle-getter-v-properties.tentative.html	border
+getComputedStyle-getter-v-properties.tentative.html	border-bottom
+getComputedStyle-getter-v-properties.tentative.html	border-left
+getComputedStyle-getter-v-properties.tentative.html	border-right
+getComputedStyle-getter-v-properties.tentative.html	border-top
+getComputedStyle-getter-v-properties.tentative.html	font
+getComputedStyle-getter-v-properties.tentative.html	font-size
+getComputedStyle-getter-v-properties.tentative.html	margin-top
+getComputedStyle-getter-v-properties.tentative.html	max-width
+getComputedStyle-getter-v-properties.tentative.html	width
+getComputedStyle-important.html	getComputedStyle should return !important stylesheet value over inline style
+getComputedStyle-important.html	getComputedStyle should return !important stylesheet value rather than the subsequent stylesheet value
+getComputedStyle-layout-dependent-removed-ib-sibling.html	getComputedStyle() should return the correct used value for nodes that have had an IB-split sibling removed
+getComputedStyle-layout-dependent-replaced-into-ib-split.html	getComputedStyle() should return used value correctly for nodes just inserted into the document, even if they're in an IB-split
+getComputedStyle-line-height.html	line-height: 1
+getComputedStyle-line-height.html	line-height: 10px
+getComputedStyle-line-height.html	line-height: normal
+getComputedStyle-live.html	getComputedStyle() returns live values
+getComputedStyle-math-function-percentage.html	getComputedStyle() returns computed value for font-size: calc(100% + 20px)
+getComputedStyle-math-function-percentage.html	getComputedStyle() returns computed value for font-size: calc(50% + 1rem)
+getComputedStyle-math-function-percentage.html	getComputedStyle() returns computed value for margin-left: calc(50% - 0.5rem)
+getComputedStyle-math-function-percentage.html	getComputedStyle() returns computed value for width: 50%
+getComputedStyle-math-function-percentage.html	getComputedStyle() returns computed value for width: calc(100% - 1em)
+getComputedStyle-math-function-percentage.html	getComputedStyle() returns computed value for width: calc(100% - 1rem)
+getComputedStyle-math-function-percentage.html	getComputedStyle() returns computed value for width: calc(2rem + 8px)
+getComputedStyle-mutations.html	Assigning to attribute updates the computed style
+getComputedStyle-mutations.html	Emptying an element updates the computed style
+getComputedStyle-mutations.html	Initial style value
+getComputedStyle-mutations.html	Inserting an element updates the computed style
+getComputedStyle-mutations.html	Removing an attribute updates the computed style
+getComputedStyle-mutations.html	Removing an element updates the computed style
+getComputedStyle-mutations.html	Replacing an element updates the computed style
+getComputedStyle-mutations.html	Setting an attribute updates the computed style
+getComputedStyle-pointerEvents.html	Body element has the initial value for pointerEvents
+getComputedStyle-pointerEvents.html	Child element inherits the pointerEvents value from its parent
+getComputedStyle-pointerEvents.html	Parent element returns the directly specified value for pointerEvents
+getComputedStyle-property-order.html	Computed style properties should be sorted lexicographically
+getComputedStyle-pseudo-checkmark.html	Resolution of width is correct when pseudo-element argument is ignored (due to no colon)
+getComputedStyle-pseudo-checkmark.html	Resolution of width is correct when pseudo-element argument is ignored (due to single-colon)
+getComputedStyle-pseudo-class.html	getComputedStyle should return the default style, not :hover style
+getComputedStyle-pseudo-picker-icon.html	Resolution of width is correct when pseudo-element argument is ignored (due to single-colon)
+getComputedStyle-pseudo-picker.html	Invalid pseudo-element should return empty style: ::picker
+getComputedStyle-pseudo-picker.html	Invalid pseudo-element should return empty style: ::picker( )
+getComputedStyle-pseudo-picker.html	Invalid pseudo-element should return empty style: ::picker()
+getComputedStyle-pseudo-picker.html	Invalid pseudo-element should return empty style: ::picker(div)
+getComputedStyle-pseudo-picker.html	Invalid pseudo-element should return empty style: ::picker(select)a
+getComputedStyle-pseudo-picker.html	Invalid pseudo-element should return empty style: :picker(select)
+getComputedStyle-pseudo-shadow.html	getComputedStyle() returns an empty declaration for ::part(foo)
+getComputedStyle-pseudo-shadow.html	getComputedStyle() returns an empty declaration for ::slotted(foo)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::before(test)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::highlight
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::highlight (name)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::highlight(
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::highlight($)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::highlight()
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::highlight(1)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::highlight(name)a
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::view-transition-group(*)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::view-transition-image-pair(*)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::view-transition-new(*)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: ::view-transition-old(*)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: :highlight(name)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: :view-transition-group(name)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: :view-transition-image-pair(name)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: :view-transition-new(name)
+getComputedStyle-pseudo-with-argument.html	This pseudo-element should not parse: :view-transition-old(name)
+getComputedStyle-pseudo.html	Prefixed ::-webkit-file-upload-button does not resolve in getComputedStyle
+getComputedStyle-pseudo.html	Resolution of width is correct when pseudo-element argument is ignored (due to no colon)
+getComputedStyle-pseudo.html	Resolution of width is correct when pseudo-element argument is invalid (due to a trailing token)
+getComputedStyle-pseudo.html	Unknown pseudo-elements
+getComputedStyle-resolved-colors.html	The resolved value for 'background-color' is the used value
+getComputedStyle-resolved-colors.html	The resolved value for 'border-bottom-color' is the used value
+getComputedStyle-resolved-colors.html	The resolved value for 'border-left-color' is the used value
+getComputedStyle-resolved-colors.html	The resolved value for 'border-right-color' is the used value
+getComputedStyle-resolved-colors.html	The resolved value for 'border-top-color' is the used value
+getComputedStyle-resolved-colors.html	The resolved value for 'color' is the used value
+getComputedStyle-resolved-colors.html	The resolved value for 'outline-color' is the used value
+getComputedStyle-resolved-min-max-clamping.html	Resolved value of width / height when there's no used value isn't clamped by min/max properties
+getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="block-with-degenerate-aspect-ratio"
+getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="block-with-two-part-degenerate-aspect-ratio"
+getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="block-with-two-part-valid-aspect-ratio"
+getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="block-with-valid-aspect-ratio"
+getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="flex-item-column"
+getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="flex-item-row"
+getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="grid-item"
+getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="inline-with-degenerate-aspect-ratio"
+getComputedStyle-resolved-min-size-auto.html	Resolved value of min-width & min-height 'auto' keyword behaves as expected on element with id="inline-with-valid-aspect-ratio"
+getComputedStyle-style-element-updates.html	Removing the inserted CSS element updates the computed style back to original value
+getComputedStyle-style-element-updates.html	Sanity check: getComputedStyle works as expected
+getComputedStyle-visibility-nominal-case.html	Real check: getComputedStyle returns hidden visibility
+getComputedStyle-visibility-nominal-case.html	Sanity check: getComputedStyle returns apparent visibility
+getComputedStyle-visibility-override.html	Sanity check: Parent is actually visibly hidden
+getComputedStyle-visibility-override.html	computed visibility can be visible even if the parent is not
+getComputedStyle-visibility-unset.html	Sanity check: Parent is actually visibly hidden
+getComputedStyle-visibility-unset.html	computed visibility gets unset and inherits from parent
+getComputedStyle-width-scroll.tentative.html	getComputedStyle() round-trips in presence of scrollbars
+historical.html	Historical CSSStyleDeclaration member: getPropertyCSSValue
+historical.html	Historical CSSStyleDeclaration member: setPropertyPriority
+historical.html	Historical CSSStyleDeclaration member: setPropertyValue
+historical.html	Historical Element member: cascadedStyle
+historical.html	Historical Element member: defaultStyle
+historical.html	Historical Element member: rawComputedStyle
+historical.html	Historical Element member: usedStyle
+historical.html	Historical interface: CSS2Properties
+historical.html	Historical interface: CSSPrimitiveValue
+historical.html	Historical interface: CSSValue
+historical.html	Historical interface: CSSValueList
+historical.html	Historical interface: RGBColor
+historical.html	Historical interface: Rect
+inline-style-001.html	CSSStyleDeclaration_accessible
+inline-style-001.html	read
+mediaquery-sort-dedup.html	Media queries are not deduplicated
+mediaquery-sort-dedup.html	Media queries are not sorted lexicographically
+serialization-CSSDeclaration-with-important.html	Inline style declaration without whitespace between '!' and 'important'.
+serialization-CSSDeclaration-with-important.html	Style set dynamically via cssText without whitespace between '!' and 'important'.
+serialize-all-longhands.html	Computed style
+serialize-custom-props.html	z-index can take a 12-digit integer
+serialize-custom-props.html	z-index can take a 25-digit integer
+serialize-custom-props.html	z-index can take a 4-digit integer
+serialize-custom-props.html	z-index can take a 6-digit integer
+serialize-custom-props.html	z-index can take a 8-digit integer
+serialize-custom-props.html	z-index can take a custom property set to a 12-digit integer
+serialize-custom-props.html	z-index can take a custom property set to a 25-digit integer
+serialize-custom-props.html	z-index can take a custom property set to a 4-digit integer
+serialize-custom-props.html	z-index can take a custom property set to a 6-digit integer
+serialize-custom-props.html	z-index can take a custom property set to a 8-digit integer
+serialize-values.html	background-color: black
+serialize-values.html	background-color: inherit
+serialize-values.html	background-color: red
+serialize-values.html	background-color: rgb(50, 75, 100)
+serialize-values.html	background-color: rgba(5, 7, 10, 0.5)
+serialize-values.html	background-color: transparent
+serialize-values.html	background-image: inherit
+serialize-values.html	background-image: none
+serialize-values.html	background-image: url("http://localhost/")
+serialize-values.html	background-position: -1px -1px
+serialize-values.html	background-position: -1px -5%
+serialize-values.html	background-position: -1px 0px
+serialize-values.html	background-position: -1px 1px
+serialize-values.html	background-position: -1px 5%
+serialize-values.html	background-position: -1px bottom
+serialize-values.html	background-position: -1px center
+serialize-values.html	background-position: -1px top
+serialize-values.html	background-position: -5% -1px
+serialize-values.html	background-position: -5% -5%
+serialize-values.html	background-position: -5% 0px
+serialize-values.html	background-position: -5% 1px
+serialize-values.html	background-position: -5% 5%
+serialize-values.html	background-position: -5% bottom
+serialize-values.html	background-position: -5% center
+serialize-values.html	background-position: -5% top
+serialize-values.html	background-position: 0px -1px
+serialize-values.html	background-position: 0px -5%
+serialize-values.html	background-position: 0px 0px
+serialize-values.html	background-position: 0px 1px
+serialize-values.html	background-position: 0px 5%
+serialize-values.html	background-position: 0px bottom
+serialize-values.html	background-position: 0px center
+serialize-values.html	background-position: 0px top
+serialize-values.html	background-position: 1px -1px
+serialize-values.html	background-position: 1px -5%
+serialize-values.html	background-position: 1px 0px
+serialize-values.html	background-position: 1px 1px
+serialize-values.html	background-position: 1px 5%
+serialize-values.html	background-position: 1px bottom
+serialize-values.html	background-position: 1px center
+serialize-values.html	background-position: 1px top
+serialize-values.html	background-position: 5% -1px
+serialize-values.html	background-position: 5% -5%
+serialize-values.html	background-position: 5% 0px
+serialize-values.html	background-position: 5% 1px
+serialize-values.html	background-position: 5% 5%
+serialize-values.html	background-position: 5% bottom
+serialize-values.html	background-position: 5% center
+serialize-values.html	background-position: 5% top
+serialize-values.html	background-position: center -1px
+serialize-values.html	background-position: center -5%
+serialize-values.html	background-position: center 0px
+serialize-values.html	background-position: center 1px
+serialize-values.html	background-position: center 5%
+serialize-values.html	background-position: center bottom
+serialize-values.html	background-position: center center
+serialize-values.html	background-position: center top
+serialize-values.html	background-position: inherit
+serialize-values.html	background-position: left -1px
+serialize-values.html	background-position: left -5%
+serialize-values.html	background-position: left 0px
+serialize-values.html	background-position: left 1px
+serialize-values.html	background-position: left 5%
+serialize-values.html	background-position: left bottom
+serialize-values.html	background-position: left center
+serialize-values.html	background-position: left top
+serialize-values.html	background-position: right -1px
+serialize-values.html	background-position: right -5%
+serialize-values.html	background-position: right 0px
+serialize-values.html	background-position: right 1px
+serialize-values.html	background-position: right 5%
+serialize-values.html	background-position: right bottom
+serialize-values.html	background-position: right center
+serialize-values.html	background-position: right top
+serialize-values.html	background-repeat: inherit
+serialize-values.html	background-repeat: no-repeat
+serialize-values.html	background-repeat: repeat
+serialize-values.html	background-repeat: repeat-x
+serialize-values.html	background-repeat: repeat-y
+serialize-values.html	border-bottom-color: black
+serialize-values.html	border-bottom-color: inherit
+serialize-values.html	border-bottom-color: red
+serialize-values.html	border-bottom-color: rgb(50, 75, 100)
+serialize-values.html	border-bottom-color: rgba(5, 7, 10, 0.5)
+serialize-values.html	border-bottom-color: transparent
+serialize-values.html	border-bottom-style: dashed
+serialize-values.html	border-bottom-style: dotted
+serialize-values.html	border-bottom-style: double
+serialize-values.html	border-bottom-style: groove
+serialize-values.html	border-bottom-style: hidden
+serialize-values.html	border-bottom-style: inherit
+serialize-values.html	border-bottom-style: inset
+serialize-values.html	border-bottom-style: none
+serialize-values.html	border-bottom-style: outset
+serialize-values.html	border-bottom-style: ridge
+serialize-values.html	border-bottom-style: solid
+serialize-values.html	border-bottom-width: 0px
+serialize-values.html	border-bottom-width: 1px
+serialize-values.html	border-bottom-width: inherit
+serialize-values.html	border-bottom-width: medium
+serialize-values.html	border-bottom-width: thick
+serialize-values.html	border-bottom-width: thin
+serialize-values.html	border-collapse: collapse
+serialize-values.html	border-collapse: inherit
+serialize-values.html	border-collapse: separate
+serialize-values.html	border-left-color: black
+serialize-values.html	border-left-color: inherit
+serialize-values.html	border-left-color: red
+serialize-values.html	border-left-color: rgb(50, 75, 100)
+serialize-values.html	border-left-color: rgba(5, 7, 10, 0.5)
+serialize-values.html	border-left-color: transparent
+serialize-values.html	border-left-style: dashed
+serialize-values.html	border-left-style: dotted
+serialize-values.html	border-left-style: double
+serialize-values.html	border-left-style: groove
+serialize-values.html	border-left-style: hidden
+serialize-values.html	border-left-style: inherit
+serialize-values.html	border-left-style: inset
+serialize-values.html	border-left-style: none
+serialize-values.html	border-left-style: outset
+serialize-values.html	border-left-style: ridge
+serialize-values.html	border-left-style: solid
+serialize-values.html	border-left-width: 0px
+serialize-values.html	border-left-width: 1px
+serialize-values.html	border-left-width: inherit
+serialize-values.html	border-left-width: medium
+serialize-values.html	border-left-width: thick
+serialize-values.html	border-left-width: thin
+serialize-values.html	border-right-color: black
+serialize-values.html	border-right-color: inherit
+serialize-values.html	border-right-color: red
+serialize-values.html	border-right-color: rgb(50, 75, 100)
+serialize-values.html	border-right-color: rgba(5, 7, 10, 0.5)
+serialize-values.html	border-right-color: transparent
+serialize-values.html	border-right-style: dashed
+serialize-values.html	border-right-style: dotted
+serialize-values.html	border-right-style: double
+serialize-values.html	border-right-style: groove
+serialize-values.html	border-right-style: hidden
+serialize-values.html	border-right-style: inherit
+serialize-values.html	border-right-style: inset
+serialize-values.html	border-right-style: none
+serialize-values.html	border-right-style: outset
+serialize-values.html	border-right-style: ridge
+serialize-values.html	border-right-style: solid
+serialize-values.html	border-right-width: 0px
+serialize-values.html	border-right-width: 1px
+serialize-values.html	border-right-width: inherit
+serialize-values.html	border-right-width: medium
+serialize-values.html	border-right-width: thick
+serialize-values.html	border-right-width: thin
+serialize-values.html	border-spacing: 0px
+serialize-values.html	border-spacing: 1px
+serialize-values.html	border-spacing: inherit
+serialize-values.html	border-top-color: black
+serialize-values.html	border-top-color: inherit
+serialize-values.html	border-top-color: red
+serialize-values.html	border-top-color: rgb(50, 75, 100)
+serialize-values.html	border-top-color: rgba(5, 7, 10, 0.5)
+serialize-values.html	border-top-color: transparent
+serialize-values.html	border-top-style: dashed
+serialize-values.html	border-top-style: dotted
+serialize-values.html	border-top-style: double
+serialize-values.html	border-top-style: groove
+serialize-values.html	border-top-style: hidden
+serialize-values.html	border-top-style: inherit
+serialize-values.html	border-top-style: inset
+serialize-values.html	border-top-style: none
+serialize-values.html	border-top-style: outset
+serialize-values.html	border-top-style: ridge
+serialize-values.html	border-top-style: solid
+serialize-values.html	border-top-width: 0px
+serialize-values.html	border-top-width: 1px
+serialize-values.html	border-top-width: inherit
+serialize-values.html	border-top-width: medium
+serialize-values.html	border-top-width: thick
+serialize-values.html	border-top-width: thin
+serialize-values.html	bottom: 0px
+serialize-values.html	bottom: 1px
+serialize-values.html	bottom: 5%
+serialize-values.html	bottom: auto
+serialize-values.html	bottom: inherit
+serialize-values.html	caption-side: bottom
+serialize-values.html	caption-side: inherit
+serialize-values.html	caption-side: top
+serialize-values.html	clear: both
+serialize-values.html	clear: inherit
+serialize-values.html	clear: left
+serialize-values.html	clear: none
+serialize-values.html	clear: right
+serialize-values.html	clip: auto
+serialize-values.html	clip: inherit
+serialize-values.html	clip: rect(1em, auto, 0.5px, 2000em)
+serialize-values.html	color: black
+serialize-values.html	color: inherit
+serialize-values.html	color: red
+serialize-values.html	color: rgb(50, 75, 100)
+serialize-values.html	color: rgba(5, 7, 10, 0.5)
+serialize-values.html	cursor: auto
+serialize-values.html	cursor: crosshair
+serialize-values.html	cursor: default
+serialize-values.html	cursor: e-resize
+serialize-values.html	cursor: help
+serialize-values.html	cursor: inherit
+serialize-values.html	cursor: move
+serialize-values.html	cursor: n-resize
+serialize-values.html	cursor: ne-resize
+serialize-values.html	cursor: nw-resize
+serialize-values.html	cursor: pointer
+serialize-values.html	cursor: progress
+serialize-values.html	cursor: s-resize
+serialize-values.html	cursor: se-resize
+serialize-values.html	cursor: sw-resize
+serialize-values.html	cursor: text
+serialize-values.html	cursor: w-resize
+serialize-values.html	cursor: wait
+serialize-values.html	display: block
+serialize-values.html	display: inherit
+serialize-values.html	display: inline
+serialize-values.html	display: inline-block
+serialize-values.html	display: inline-table
+serialize-values.html	display: list-item
+serialize-values.html	display: none
+serialize-values.html	display: table
+serialize-values.html	display: table-caption
+serialize-values.html	display: table-cell
+serialize-values.html	display: table-column
+serialize-values.html	display: table-column-group
+serialize-values.html	display: table-footer-group
+serialize-values.html	display: table-header-group
+serialize-values.html	display: table-row
+serialize-values.html	display: table-row-group
+serialize-values.html	float: inherit
+serialize-values.html	float: left
+serialize-values.html	float: none
+serialize-values.html	float: right
+serialize-values.html	font-family: Arial
+serialize-values.html	font-family: inherit
+serialize-values.html	font-family: sans-serif
+serialize-values.html	font-family: serif
+serialize-values.html	font-size: 0px
+serialize-values.html	font-size: 1px
+serialize-values.html	font-size: 5%
+serialize-values.html	font-size: inherit
+serialize-values.html	font-size: large
+serialize-values.html	font-size: larger
+serialize-values.html	font-size: medium
+serialize-values.html	font-size: small
+serialize-values.html	font-size: smaller
+serialize-values.html	font-size: x-large
+serialize-values.html	font-size: x-small
+serialize-values.html	font-size: xx-large
+serialize-values.html	font-size: xx-small
+serialize-values.html	font-style: inherit
+serialize-values.html	font-style: italic
+serialize-values.html	font-style: normal
+serialize-values.html	font-style: oblique
+serialize-values.html	font-variant: inherit
+serialize-values.html	font-variant: normal
+serialize-values.html	font-variant: small-caps
+serialize-values.html	font-weight: 100
+serialize-values.html	font-weight: 200
+serialize-values.html	font-weight: 300
+serialize-values.html	font-weight: 400
+serialize-values.html	font-weight: 500
+serialize-values.html	font-weight: 600
+serialize-values.html	font-weight: 700
+serialize-values.html	font-weight: 800
+serialize-values.html	font-weight: 900
+serialize-values.html	font-weight: bold
+serialize-values.html	font-weight: bolder
+serialize-values.html	font-weight: inherit
+serialize-values.html	font-weight: lighter
+serialize-values.html	font-weight: normal
+serialize-values.html	height: 0px
+serialize-values.html	height: 1px
+serialize-values.html	height: 5%
+serialize-values.html	height: auto
+serialize-values.html	height: inherit
+serialize-values.html	left: 0px
+serialize-values.html	left: 1px
+serialize-values.html	left: 5%
+serialize-values.html	left: auto
+serialize-values.html	left: inherit
+serialize-values.html	letter-spacing: 0px
+serialize-values.html	letter-spacing: 1px
+serialize-values.html	letter-spacing: inherit
+serialize-values.html	letter-spacing: normal
+serialize-values.html	line-height: 0
+serialize-values.html	line-height: 0.9
+serialize-values.html	line-height: 0px
+serialize-values.html	line-height: 1000
+serialize-values.html	line-height: 1px
+serialize-values.html	line-height: 5%
+serialize-values.html	line-height: inherit
+serialize-values.html	line-height: normal
+serialize-values.html	list-style-image: inherit
+serialize-values.html	list-style-image: none
+serialize-values.html	list-style-image: url("http://localhost/")
+serialize-values.html	list-style-position: inherit
+serialize-values.html	list-style-position: inside
+serialize-values.html	list-style-position: outside
+serialize-values.html	list-style-type: armenian
+serialize-values.html	list-style-type: circle
+serialize-values.html	list-style-type: decimal
+serialize-values.html	list-style-type: decimal-leading-zero
+serialize-values.html	list-style-type: disc
+serialize-values.html	list-style-type: disclosure-closed
+serialize-values.html	list-style-type: disclosure-open
+serialize-values.html	list-style-type: georgian
+serialize-values.html	list-style-type: inherit
+serialize-values.html	list-style-type: lower-alpha
+serialize-values.html	list-style-type: lower-greek
+serialize-values.html	list-style-type: lower-latin
+serialize-values.html	list-style-type: lower-roman
+serialize-values.html	list-style-type: none
+serialize-values.html	list-style-type: square
+serialize-values.html	list-style-type: upper-alpha
+serialize-values.html	list-style-type: upper-latin
+serialize-values.html	list-style-type: upper-roman
+serialize-values.html	margin-bottom: 0px
+serialize-values.html	margin-bottom: 1px
+serialize-values.html	margin-bottom: 5%
+serialize-values.html	margin-bottom: auto
+serialize-values.html	margin-bottom: inherit
+serialize-values.html	margin-left: 0px
+serialize-values.html	margin-left: 1px
+serialize-values.html	margin-left: 5%
+serialize-values.html	margin-left: auto
+serialize-values.html	margin-left: inherit
+serialize-values.html	margin-right: 0px
+serialize-values.html	margin-right: 1px
+serialize-values.html	margin-right: 5%
+serialize-values.html	margin-right: auto
+serialize-values.html	margin-right: inherit
+serialize-values.html	margin-top: 0px
+serialize-values.html	margin-top: 1px
+serialize-values.html	margin-top: 5%
+serialize-values.html	margin-top: auto
+serialize-values.html	margin-top: inherit
+serialize-values.html	max-height: 0px
+serialize-values.html	max-height: 1px
+serialize-values.html	max-height: 5%
+serialize-values.html	max-height: inherit
+serialize-values.html	max-height: none
+serialize-values.html	max-width: 0px
+serialize-values.html	max-width: 1px
+serialize-values.html	max-width: 5%
+serialize-values.html	max-width: inherit
+serialize-values.html	max-width: none
+serialize-values.html	min-height: 0px
+serialize-values.html	min-height: 1px
+serialize-values.html	min-height: 5%
+serialize-values.html	min-height: inherit
+serialize-values.html	min-width: 0px
+serialize-values.html	min-width: 1px
+serialize-values.html	min-width: 5%
+serialize-values.html	min-width: inherit
+serialize-values.html	outline-color: black
+serialize-values.html	outline-color: inherit
+serialize-values.html	outline-color: red
+serialize-values.html	outline-color: rgb(50, 75, 100)
+serialize-values.html	outline-color: rgba(5, 7, 10, 0.5)
+serialize-values.html	outline-style: dashed
+serialize-values.html	outline-style: dotted
+serialize-values.html	outline-style: double
+serialize-values.html	outline-style: groove
+serialize-values.html	outline-style: inherit
+serialize-values.html	outline-style: inset
+serialize-values.html	outline-style: none
+serialize-values.html	outline-style: outset
+serialize-values.html	outline-style: ridge
+serialize-values.html	outline-style: solid
+serialize-values.html	outline-width: 0px
+serialize-values.html	outline-width: 1px
+serialize-values.html	outline-width: inherit
+serialize-values.html	outline-width: medium
+serialize-values.html	outline-width: thick
+serialize-values.html	outline-width: thin
+serialize-values.html	overflow: auto
+serialize-values.html	overflow: hidden
+serialize-values.html	overflow: inherit
+serialize-values.html	overflow: scroll
+serialize-values.html	overflow: visible
+serialize-values.html	padding-bottom: 0px
+serialize-values.html	padding-bottom: 1px
+serialize-values.html	padding-bottom: 5%
+serialize-values.html	padding-bottom: inherit
+serialize-values.html	padding-left: 0px
+serialize-values.html	padding-left: 1px
+serialize-values.html	padding-left: 5%
+serialize-values.html	padding-left: inherit
+serialize-values.html	padding-right: 0px
+serialize-values.html	padding-right: 1px
+serialize-values.html	padding-right: 5%
+serialize-values.html	padding-right: inherit
+serialize-values.html	padding-top: 0px
+serialize-values.html	padding-top: 1px
+serialize-values.html	padding-top: 5%
+serialize-values.html	padding-top: inherit
+serialize-values.html	position: absolute
+serialize-values.html	position: fixed
+serialize-values.html	position: inherit
+serialize-values.html	position: relative
+serialize-values.html	position: static
+serialize-values.html	right: 0px
+serialize-values.html	right: 1px
+serialize-values.html	right: 5%
+serialize-values.html	right: auto
+serialize-values.html	right: inherit
+serialize-values.html	text-align: center
+serialize-values.html	text-align: inherit
+serialize-values.html	text-align: justify
+serialize-values.html	text-align: left
+serialize-values.html	text-align: right
+serialize-values.html	text-decoration: blink
+serialize-values.html	text-decoration: inherit
+serialize-values.html	text-decoration: line-through
+serialize-values.html	text-decoration: none
+serialize-values.html	text-decoration: overline
+serialize-values.html	text-decoration: underline
+serialize-values.html	text-indent: 0px
+serialize-values.html	text-indent: 1px
+serialize-values.html	text-indent: 5%
+serialize-values.html	text-indent: inherit
+serialize-values.html	text-transform: capitalize
+serialize-values.html	text-transform: inherit
+serialize-values.html	text-transform: lowercase
+serialize-values.html	text-transform: none
+serialize-values.html	text-transform: uppercase
+serialize-values.html	top: 0px
+serialize-values.html	top: 1px
+serialize-values.html	top: 5%
+serialize-values.html	top: auto
+serialize-values.html	top: inherit
+serialize-values.html	visibility: collapse
+serialize-values.html	visibility: hidden
+serialize-values.html	visibility: inherit
+serialize-values.html	visibility: visible
+serialize-values.html	white-space: inherit
+serialize-values.html	white-space: normal
+serialize-values.html	white-space: nowrap
+serialize-values.html	white-space: pre
+serialize-values.html	white-space: pre-line
+serialize-values.html	white-space: pre-wrap
+serialize-values.html	width: 0px
+serialize-values.html	width: 1px
+serialize-values.html	width: 5%
+serialize-values.html	width: auto
+serialize-values.html	width: inherit
+serialize-values.html	z-index: -51
+serialize-values.html	z-index: 0
+serialize-values.html	z-index: 101
+serialize-values.html	z-index: auto
+serialize-values.html	z-index: inherit
+serialize-variable-reference.html	Longhand with variable preserves original serialization: with whitespace
+serialize-variable-reference.html	Shorthand with variable preserves original serialization: with whitespace
+serialize-whitespace.html	Serialize whitespace
+setproperty-null-undefined.html	Verify that setting a CSS property to undefined has no effect.
+shorthand-serialization.html	Shorthand serialization with 'initial' value, longhands set individually, one with important flag.
+shorthand-serialization.html	Shorthand serialization with 'initial' value.
+shorthand-serialization.html	Shorthand serialization with variable and variable from other shorthand.
+style-background-position.html	Invalid values
+style-background-position.html	Sanity check
+style-background-repeat.html	1 value
+style-background-repeat.html	Sanity check
+style-backgroundcolor-table-row.html	CSSOM: Setting style.backgroundColor on table rows
+style-backgroundimage-lineargradient.html	CSSOM: Setting style.backgroundImage
+style-color-values.html	Color keyword
+style-color-values.html	Global keyword
+style-color-values.html	Sanity check
+style-color.html	Setting a color with a decimal transparency should update the style
+style-color.html	Setting a mixed percent and value color should NOT update the style
+style-element-insertion-removal-computed.html	Styles should be recomputed correctly after a <style> element is removed.
+style-global-variable.html	Setting CSS global variables
+system-color-inherit.html	Dynamically override inherited color
+system-color-inherit.html	Test color inheritance
+system-color-lowercase.html	Color with upper cased kelvin sign

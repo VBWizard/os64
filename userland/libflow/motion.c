@@ -1680,6 +1680,23 @@ static bool shadows_same(const flow_shadow_t *a, int32_t na, const flow_shadow_t
     return true;
 }
 
+// Two family lists by what they say, not where it is kept: two keyframes'
+// declarations of one list are two slices of the sheet.
+static bool families_same(const flow_family_list_t *a, const flow_family_list_t *b)
+{
+    if (a->generic != b->generic || a->count != b->count || a->nwritten != b->nwritten)
+        return false;
+    for (uint32_t i = 0; i < a->count; i++)
+        if (a->names[i].len != b->names[i].len ||
+            os64_memcmp(a->names[i].name, b->names[i].name, a->names[i].len) != 0)
+            return false;
+    for (uint32_t i = 0; i < a->nwritten; i++)
+        if (a->written[i].keyword != b->written[i].keyword || a->written[i].len != b->written[i].len ||
+            os64_memcmp(a->written[i].name, b->written[i].name, a->written[i].len) != 0)
+            return false;
+    return true;
+}
+
 // Whether styles `a` and `b` give property `p` one value — every
 // field it sets equal, and a list item by item, since copy_prop moves a
 // list by its pointer. Two values called different that are not cost a
@@ -1689,6 +1706,7 @@ static bool shadows_same(const flow_shadow_t *a, int32_t na, const flow_shadow_t
 static bool same_value(garb_prop_t p, const flow_style_t *a, const flow_style_t *b)
 {
     switch (p) {
+    case GARB_FONT_FAMILY: return families_same(&a->family, &b->family);
     case GARB_TRANSFORM:
         if (a->ntransform != b->ntransform)
             return false;

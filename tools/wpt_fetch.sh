@@ -38,7 +38,7 @@ WPT_DIRS=(
     encoding
     hr-time
     user-timing
-    cssom-view
+    css/cssom-view
     html/browsers/history
     css/cssom
     css/mediaqueries

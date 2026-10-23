@@ -88,21 +88,23 @@ user-select-valid.html	e.style['user-select'] = "auto" should set the property v
 user-select-valid.html	e.style['user-select'] = "none" should set the property value
 user-select-valid.html	e.style['user-select'] = "text" should set the property value
 [excluded]
-# Pages whose tests read getComputedStyle, which slice 1b brings; each runs
-# again once it lands.
-box-sizing-computed.html	needs getComputedStyle (slice 1b)
-canonical-order-outline-sub-properties-001.html	needs getComputedStyle (slice 1b)
-caret-color-computed.html	needs getComputedStyle (slice 1b)
-cursor-computed.html	needs getComputedStyle (slice 1b)
-field-sizing-computed.html	needs getComputedStyle (slice 1b)
-interactivity-computed.html	needs getComputedStyle (slice 1b)
-outline-color-computed.html	needs getComputedStyle (slice 1b)
-outline-offset-computed.html	needs getComputedStyle (slice 1b)
-outline-style-computed.html	needs getComputedStyle (slice 1b)
-outline-width-computed.html	needs getComputedStyle (slice 1b)
-resize-computed.html	needs getComputedStyle (slice 1b)
-user-select-computed-contain.html	needs getComputedStyle (slice 1b)
-user-select-computed.html	needs getComputedStyle (slice 1b)
+# Pages whose tests ask CSS.supports first (css/support/computed-
+# testcommon.js), which libdom does not have: they fail whole at "'CSS' is
+# not defined" before reading getComputedStyle. DEBTS.md § Classic browser
+# scripting books CSS.supports.
+box-sizing-computed.html	needs CSS.supports
+canonical-order-outline-sub-properties-001.html	needs CSS.supports
+caret-color-computed.html	needs CSS.supports
+cursor-computed.html	needs CSS.supports
+field-sizing-computed.html	needs CSS.supports
+interactivity-computed.html	needs CSS.supports
+outline-color-computed.html	needs CSS.supports
+outline-offset-computed.html	needs CSS.supports
+outline-style-computed.html	needs CSS.supports
+outline-width-computed.html	needs CSS.supports
+resize-computed.html	needs CSS.supports
+user-select-computed-contain.html	needs CSS.supports
+user-select-computed.html	needs CSS.supports
 [passing]
 box-sizing-invalid.html	e.style['box-sizing'] = "auto" should not set the property value
 box-sizing-invalid.html	e.style['box-sizing'] = "content-box border-box" should not set the property value

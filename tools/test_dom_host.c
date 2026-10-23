@@ -219,6 +219,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_modern.inc"
 #include "test_dom_storage.inc"
 #include "test_dom_text.inc"
+#include "test_dom_platform.inc"
 #include "test_dom_view.inc"
 #define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
     "function throws(n,f){let ok=false;try{f()}catch(e){ok=e.name===n}assert(ok,n)}"
@@ -388,6 +389,7 @@ int main(int argc, char **argv)
     bool mutation_mode=argc==2&&!strcmp(argv[1],"--mutants");
     dom_classic_cases();
     dom_modern_cases();
+    dom_view_cases();
     dom_storage_cases();
     dom_base64_cases();
     dom_encoding_cases();
@@ -417,7 +419,7 @@ int main(int argc, char **argv)
     dom_fragment_mode_cases();
     dom_budget_cases();
     dom_event_cases();
-    if(!mutation_mode){dom_allocation_cases();dom_clone_allocation_cases();}
+    if(!mutation_mode){dom_allocation_cases();dom_clone_allocation_cases();dom_view_allocation_cases();dom_view_host_allocation_cases();}
     printf("DOM host: %u checks, %u failed; binding allocation sweeps=%zu\n", checks, failures, dom_sweeps);
     return failures ? 1 : 0;
 }

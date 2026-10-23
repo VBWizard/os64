@@ -133,12 +133,25 @@ typedef struct {
     uint32_t len;
 } flow_family_name_t;
 
+// A family as the page wrote it in its list: a name, or a generic keyword
+// (`keyword`), a slice of the sheet or the attribute as the names are.
+typedef struct {
+    const char *name;
+    uint32_t len;
+    bool keyword;
+} flow_family_written_t;
+
 // The names in order, then the generic a resolver falls back to. A
-// resolver that matches no name takes the generic.
+// resolver that matches no name takes the generic. `written` is the list
+// as the page declared it, in its order, generic keywords where they were
+// written: what the property computes to (computed.c), which the
+// resolver's two halves cannot say. NULL and 0 when nothing declared it.
 typedef struct {
     const flow_family_name_t *names;
     uint32_t count;
     flow_generic_t generic;
+    const flow_family_written_t *written;
+    uint32_t nwritten;
 } flow_family_list_t;
 
 typedef enum { FLOW_FONT_NORMAL = 0, FLOW_FONT_ITALIC } flow_font_style_t;
@@ -1547,6 +1560,44 @@ const flow_box_t *flow_control(const flow_tree_t *tree, int32_t i);
 // The laid-out tree as text, for the harness and a probe in the guest.
 // Like snprintf: answers the length the whole dump needs, writes what fits.
 int64_t flow_dump(const flow_tree_t *tree, char *out, size_t cap);
+
+// ── Computed values (CSSOM § getComputedStyle) ──────────────────────────
+//
+// AN ELEMENT'S STYLE AS A SCRIPT READS IT: each of libgarb's properties
+// (garb_prop_t, `prop` below) as its RESOLVED value — the computed value,
+// but the used one for the properties CSSOM names when the element has a
+// box (width and height, margins and padding, a positioned box's insets, a
+// line height that is not `normal`, transform and transform-origin) — in
+// CSS pixels, as the browsers serialise it (garb_css_number's numbers,
+// rgb() and rgba() colours, keywords in lower case). An element pass 1 did
+// not reach, one inside a `display: none` element, is styled for the
+// asking with `env`, which must be the environment `tree` was laid out
+// with, its cascade alive. A property libflow does not model is what the
+// page's sheets declared for it, as libgarb writes a value, whole at any
+// length: on the element, or on the ancestors its value comes from — an
+// inherited property's nearest declaring one, and any property's parent
+// through `inherit`, or `unset` (`revert`, `revert-layer`) on an inherited
+// property — or its initial value, which is the property's own word or
+// nothing. `url` resolves a url() a sheet wrote as the face fetches it; a
+// url it leaves (NULL, or false) is written as the sheet wrote it.
+typedef struct flow_computed flow_computed_t;
+typedef struct {
+    bool (*url)(void *ctx, const char *written, uint32_t len, int32_t sheet, char *out, size_t cap);
+    void *ctx;
+} flow_computed_options_t;
+// NULL on no memory. The tree, the element and env's cascade outlive it;
+// `options` is copied.
+flow_computed_t *flow_computed_new(const flow_tree_t *tree, const flow_env_t *env,
+                                   const os64_html_node_t *element,
+                                   const flow_computed_options_t *options);
+// Whether the element has a computed style: false for a node that is no
+// element, or one not in the document's tree (detached, a template's).
+bool flow_computed_styled(const flow_computed_t *c);
+// Property `prop`'s resolved value, like snprintf: the length the whole
+// text needs, what fits written. "" for an element with no style or a
+// `prop` past the table.
+size_t flow_computed_text(const flow_computed_t *c, int32_t prop, char *out, size_t cap);
+void flow_computed_free(flow_computed_t *c);
 
 #pragma GCC visibility pop
 

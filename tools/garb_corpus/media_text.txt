@@ -1,0 +1,117 @@
+# Media query lists as CSSOM serialises them (garb_media_text_serialize),
+# worked by hand from CSSOM § Serializing media queries and Media Queries
+# 4 § 3's grammar, with the cases WPT's css/mediaqueries/match-media-parsing
+# and css/cssom-view/matchMedia hold a browser to. IN is the list between
+# double quotes, since white space at its ends is part of the case; OUT is
+# the text in brackets. The driver also cuts it at every shorter buffer and
+# holds each cut to the whole text's prefix and length.
+IN: ""
+OUT: []
+IN: " "
+OUT: []
+IN: "all"
+OUT: [all]
+IN: "   all   "
+OUT: [all]
+IN: "all,all"
+OUT: [all, all]
+IN: " all , all "
+OUT: [all, all]
+IN: "(color)"
+OUT: [(color)]
+IN: "(color"
+OUT: [(color)]
+IN: " ( color  )  "
+OUT: [(color)]
+IN: " ( color   "
+OUT: [(color)]
+IN: "color)"
+OUT: [not all]
+IN: "  color ), ( color"
+OUT: [not all, (color)]
+IN: " foo "
+OUT: [foo]
+IN: ","
+OUT: [not all, not all]
+IN: " , "
+OUT: [not all, not all]
+IN: ",,"
+OUT: [not all, not all, not all]
+IN: " foo,"
+OUT: [foo, not all]
+IN: "::"
+OUT: [not all]
+IN: "(min-width: 1px)"
+OUT: [(min-width: 1px)]
+IN: "(MIN-WIDTH:1.0PX)"
+OUT: [(min-width: 1px)]
+IN: "(max-width: 199px), all and (min-width: 200px)"
+OUT: [(max-width: 199px), (min-width: 200px)]
+IN: "SCREEN AND (COLOR)"
+OUT: [screen and (color)]
+IN: "not all and (color)"
+OUT: [not all and (color)]
+IN: "only screen and (orientation: LANDSCAPE)"
+OUT: [only screen and (orientation: landscape)]
+IN: "only"
+OUT: [not all]
+IN: "only (color)"
+OUT: [not all]
+IN: "not"
+OUT: [not all]
+IN: "not (color)"
+OUT: [not (color)]
+IN: "not (color) and (hover)"
+OUT: [not all]
+IN: "(color) and (hover) and (pointer: fine)"
+OUT: [(color) and (hover) and (pointer: fine)]
+IN: "(color) or (hover)"
+OUT: [(color) or (hover)]
+IN: "(color) and (hover) or (pointer)"
+OUT: [not all]
+IN: "screen and (color) or (hover)"
+OUT: [not all]
+IN: "screen and"
+OUT: [not all]
+IN: "and"
+OUT: [not all]
+IN: "layer"
+OUT: [not all]
+IN: "((color) and (hover))"
+OUT: [((color) and (hover))]
+IN: "(not (color))"
+OUT: [(not (color))]
+IN: "(aspect-ratio: 1/3)"
+OUT: [(aspect-ratio: 1 / 3)]
+IN: "(aspect-ratio:16 /  9)"
+OUT: [(aspect-ratio: 16 / 9)]
+IN: "(min-resolution: 1x)"
+OUT: [(min-resolution: 1x)]
+IN: "(resolution: 600DPI)"
+OUT: [(resolution: 600dpi)]
+IN: "(width >= 600px)"
+OUT: [(width >= 600px)]
+IN: "(400px<=width<=700px)"
+OUT: [(400px <= width <= 700px)]
+IN: "(400px <= width >= 700px)"
+OUT: [(400px <= width >= 700px)]
+IN: "(width = 50em)"
+OUT: [(width = 50em)]
+IN: "(min-width: 33.3333333px)"
+OUT: [(min-width: 33.3333px)]
+IN: "(min-width: 1e3px)"
+OUT: [(min-width: 1000px)]
+IN: "(foo)"
+OUT: [(foo)]
+IN: "(FOO:  Bar  baz)"
+OUT: [(FOO: Bar baz)]
+IN: "(width: foo bar)"
+OUT: [(width: foo bar)]
+IN: "(min-width: calc(1px + 2px))"
+OUT: [(min-width: calc(1px + 2px))]
+IN: "foo(bar)"
+OUT: [foo(bar)]
+IN: "[color]"
+OUT: [not all]
+IN: "screen, (color), print and (hover)"
+OUT: [screen, (color), print and (hover)]

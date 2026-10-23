@@ -13,9 +13,11 @@ aspect-ratio-valid.html	e.style['aspect-ratio'] = "16.3 / 1" should set the prop
 aspect-ratio-valid.html	e.style['aspect-ratio'] = "16.3 / 9.4" should set the property value
 aspect-ratio-valid.html	e.style['aspect-ratio'] = "auto" should set the property value
 [excluded]
-# Pages whose tests read getComputedStyle, which slice 1b brings; each runs
-# again once it lands.
-aspect-ratio-computed.html	needs getComputedStyle (slice 1b)
+# Pages whose tests ask CSS.supports first (css/support/computed-
+# testcommon.js), which libdom does not have: they fail whole at "'CSS' is
+# not defined" before reading getComputedStyle. DEBTS.md § Classic browser
+# scripting books CSS.supports.
+aspect-ratio-computed.html	needs CSS.supports
 [passing]
 aspect-ratio-invalid.html	e.style['aspect-ratio'] = "1 invalid" should not set the property value
 aspect-ratio-invalid.html	e.style['aspect-ratio'] = "16 / -9" should not set the property value
