@@ -299,8 +299,10 @@ static void dom_window_sweep_cases(void)
     size_t n = sizeof(kOperations) / sizeof(kOperations[0]);
     binding_sweep("window", kOperations, n, &options);
     /* Not the last: reading onlanguagechange compiles the body's handler,
-     * and a compile cut short reaches the engine's unchecked parser paths
-     * (DEBTS.md, libjs patch 0011), which are the engine's to prove. */
+     * and a compile cut short still reaches `resolve_labels`, which writes
+     * through a buffer that failed to grow (a SEGV in put_u32): the
+     * unchecked parser path libjs patch 0011b owes (DEBTS.md), the
+     * engine's to prove. */
     engine_sweep("window", kOperations, n - 1, &options);
 }
 

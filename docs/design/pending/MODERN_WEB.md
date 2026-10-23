@@ -2242,20 +2242,22 @@ target-core profile, the bindings sanitized as the host builds them):
 | `document` | 556.9 ms | 60.3 ms |
 | `history` | 353.7 ms | 60.9 ms |
 
-**The scope guard stopped one thing.** The scripted-page host fails at the
-head, and only in `loop_view_refetch_short`, which fails every allocation
-of a page's arrival in turn, its scripts' compiles included. At cut 441 the
-engine's `add_closure_var` fails inside `resolve_scope_var`, and the
-bytecode emitted anyway sends `resolve_variables` reading garbage: an ASan
-SEGV in `find_private_class_field_all`. That is the third of the four
-unchecked parser paths DEBTS books for libjs patch 0011 (the failed
-closure-variable add, there recorded as reaching `stack underflow`).
-P1-W's new atoms and objects moved the engine's arena boundaries so that a
-cut now lands on it; the base passes (7,512 checks). It needs the engine
-change patch 0011 makes, which the brief's scope guard keeps out of this
-branch; nothing here works around it. With that one case skipped by
-hand, the host is 6,701 checks and 0 failed, the end-to-end cases
-(`tools/test_yonder_window.inc`) among them.
+**The scope guard stopped the build once, and libjs patch 0011a is why it
+could go on.** As first built, the scripted-page host failed in one case,
+`loop_view_refetch_short`, which fails every allocation of a page's
+arrival in turn, its scripts' compiles included: at one cut the engine's
+`add_closure_var` failed inside `resolve_scope_var`, the bytecode was
+emitted anyway, and `resolve_variables` read garbage (an ASan SEGV).
+That was one of the unchecked parser paths DEBTS booked for libjs patch
+0011; P1-W's new atoms and objects had moved the engine's arena
+boundaries so that a cut landed on it, and the base passed. An engine
+change is outside P1-W's scope guard, so the builder stopped and reported
+it with nothing worked around. The path became patch 0011a (its own PR),
+merged into this branch: the scripted-page host is green at the head,
+`loop_view_refetch_short` and the end-to-end cases
+(`tools/test_yonder_window.inc`) among it. The DOM host's engine sweep
+still leaves out a handler compile, for `resolve_labels`, which patch
+0011b owes (DEBTS).
 
 **Review.** The builder's adversarial pass looked for page code reaching
 the binding's state (a view's kind is its class, never its getters; the
