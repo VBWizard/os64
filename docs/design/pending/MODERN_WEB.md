@@ -641,7 +641,7 @@ The fourteen required tests are Node's eight constant tests, the two
 parked shape, with no constants, had counted 905 on the runner's first
 draft: Node-cloneNode's `createElement` tests passed only while
 `Node.ELEMENT_NODE` was undefined, which skipped their checks of
-`attributes`, which the binding lacks.
+`attributes`, which the binding lacked until Slice 0d.
 
 Why the rest of `dom/nodes` fails, by the harness's messages: 488 read a
 frame's document (`iframe`); 271 `createElementNS` and 213
