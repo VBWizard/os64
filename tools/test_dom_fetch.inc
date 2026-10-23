@@ -380,6 +380,14 @@ static void dom_fetch_object_cases(void)
         "assert(typeof ReadableStream==='undefined'||true);"
         "throws('RangeError',()=>new Response('x').body.getReader({mode:'byob'}));",
         "stream: one chunk, then done");
+    /* The body is enqueued whole and closed: taking its one chunk closes
+     * the stream, so `closed` resolves with no further read. */
+    dom_script(&f,
+        "globalThis.slog=[];var rd5=new Response('abc').body.getReader();"
+        "rd5.read().then(a=>slog.push('chunk:'+a.value.length));rd5.closed.then(()=>slog.push('closed'));",
+        "stream: the one chunk read");
+    dom_script(&f, FETCH_ASSERT "assert(slog.join()==='chunk:3,closed',slog.join());",
+               "stream: closed once its only chunk is taken");
     /* A body method read it whole with a reader it keeps; a FormData body
      * reads back as one, and an empty one is the close delimiter alone
      * (as Chrome and Firefox send it), which reads back as no entries. */

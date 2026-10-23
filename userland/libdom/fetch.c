@@ -1393,7 +1393,15 @@ static JSValue stream_member(JSContext *ctx, JSValueConst self, int argc, JSValu
             reader_closed(ctx, r, JS_UNDEFINED);
             return d_promise_settled(ctx, result_object(ctx, JS_UNDEFINED, true));
         }
-        return d_promise_settled(ctx, result_object(ctx, d_uint8_array(ctx, bytes != NULL ? bytes : (const uint8_t *)"", length), false));
+        /* The body was enqueued whole and closed, so taking its one chunk
+         * empties the queue and closes the stream (Streams' default
+         * controller's pull steps: close requested, queue empty): `closed`
+         * resolves now, not at a read that finds it done. */
+        JSValue chunk = result_object(ctx, d_uint8_array(ctx, bytes != NULL ? bytes : (const uint8_t *)"", length), false);
+        if (JS_IsException(chunk)) return d_promise_settled(ctx, chunk);
+        s->state = ST_CLOSED;
+        reader_closed(ctx, r, JS_UNDEFINED);
+        return d_promise_settled(ctx, chunk);
     }
     DStream *s = stream_state(self);
     if (s == NULL) {
