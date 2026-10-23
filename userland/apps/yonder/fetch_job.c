@@ -379,18 +379,18 @@ bool yonder_fetch_data_url(const char *url, uint64_t max_body, uint8_t **body, s
         os64_free(bytes);
         return false;
     }
-    // Its type: what was written, `text/plain` before a bare parameter list,
-    // and US-ASCII text when what was written is not a MIME type.
-    char essence[WAY_MIME_ESSENCE_MAX], charset[WAY_MIME_CHARSET_MAX];
-    char written[512];
+    // Its type: what was written (`text/plain` before a bare parameter
+    // list), parsed and serialized whole, every parameter that parses kept;
+    // US-ASCII text when what was written is not a MIME type, or is longer
+    // than WAY_MIME_SERIALIZE_IN_MAX.
+    char written[WAY_MIME_SERIALIZE_IN_MAX + 1];
     size_t wlen = (size_t)(mt_end - mt);
+    bool fit;
     if (wlen > 0 && mt[0] == ';')
-        os64_snprintf(written, sizeof(written), "text/plain%.*s", (int)wlen, mt);
+        fit = os64_snprintf(written, sizeof(written), "text/plain%.*s", (int)wlen, mt) < (int32_t)sizeof(written);
     else
-        os64_snprintf(written, sizeof(written), "%.*s", (int)(wlen < sizeof(written) ? wlen : 0), mt);
-    if (way_mime_parse(written, os64_strlen(written), essence, sizeof(essence), charset, sizeof(charset)))
-        os64_snprintf(type, type_cap, charset[0] ? "%s;charset=%s" : "%s", essence, charset);
-    else
+        fit = os64_snprintf(written, sizeof(written), "%.*s", (int)wlen, mt) < (int32_t)sizeof(written);
+    if (!fit || !way_mime_serialize(written, os64_strlen(written), type, type_cap))
         os64_strcopy(type, type_cap, "text/plain;charset=US-ASCII");
     *body = bytes;
     *len = n;
@@ -606,7 +606,7 @@ int64_t yonder_fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
         if (kind == WAY_HOP_DATA) {
             uint8_t *bytes;
             size_t len;
-            char type[WAY_MIME_ESSENCE_MAX + WAY_MIME_CHARSET_MAX + 16];
+            char type[WAY_MIME_SERIALIZED_MAX];
             if (!yonder_fetch_data_url(current, max_body, &bytes, &len, type, sizeof(type))) {
                 network_error(got, "a data: URL that is not one, or is past the body's cap");
                 break;

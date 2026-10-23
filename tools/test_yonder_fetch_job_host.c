@@ -528,6 +528,11 @@ static void data_and_limits(void)
     g = run(&(Ask){"https://a.test/page", "data:text/plain;base64,a"});
     expect("data: bad base64", g != NULL && !g->ok, NULL);
     yonder_fetched_free(g);
+    // The type is the MIME type serialized whole: every parameter kept.
+    g = run(&(Ask){"https://a.test/page", "data:Text/Plain;foo=bar;Q=\"a b\";base64,aGk="});
+    expect("data: every parameter kept", g != NULL && g->ok && has_line(g, "Content-Type: text/plain;foo=bar;q=\"a b\"\r\n"),
+           g ? g->headers : NULL);
+    yonder_fetched_free(g);
     // Fetch's data: URL processor: ";" then zero or more U+0020 SPACE, then
     // "base64" in any case. Spaces only: after a tab the body is not base64.
     g = run(&(Ask){"https://a.test/page", "data:text/plain;  BASE64,aGk="});

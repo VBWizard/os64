@@ -349,6 +349,23 @@ static void mime(void)
            strcmp(c, "utf") == 0, c);
     char tiny[4];
     expect("mime: an essence too long for the buffer", !way_mime_parse("text/plain", 10, tiny, sizeof(tiny), NULL, 0), NULL);
+    // Serialized (MIME Sniffing § 4.6): every parameter that parses, the
+    // first of each name, lowercased, a value quoted unless it is a token.
+    static const struct { const char *in, *out; } kSerial[] = {
+        {"text/plain;foo=bar", "text/plain;foo=bar"},
+        {" Text/Plain ; Foo=\"b a\" ; CHARSET=UTF-8;foo=x", "text/plain;foo=\"b a\";charset=UTF-8"},
+        {"a/b;x=\"q\\\"\\\\\";y=\"\";z", "a/b;x=\"q\\\"\\\\\";y=\"\""},
+        {"a/b;bad name=1;ok=1;=2;n=\"\x01\"", "a/b;ok=1"},
+        {"a/b;x=\"a;b\"", "a/b;x=\"a;b\""},
+    };
+    for (size_t i = 0; i < sizeof(kSerial) / sizeof(kSerial[0]); i++) {
+        char out[WAY_MIME_SERIALIZED_MAX];
+        bool ok = way_mime_serialize(kSerial[i].in, strlen(kSerial[i].in), out, sizeof(out));
+        expect("mime: serialized whole", ok && strcmp(out, kSerial[i].out) == 0, ok ? out : kSerial[i].in);
+    }
+    char out[WAY_MIME_SERIALIZED_MAX];
+    expect("mime: not a MIME type serializes to nothing", !way_mime_serialize("text", 4, out, sizeof(out)), NULL);
+    expect("mime: too small an output is refused", !way_mime_serialize("text/plain;a=b", 14, tiny, sizeof(tiny)), NULL);
 }
 
 static void response_names(void)

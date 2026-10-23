@@ -643,11 +643,21 @@ static bool quoted_token_byte(unsigned char c)
     return c == 0x09 || (c >= 0x20 && c <= 0x7E) || c >= 0x80;
 }
 
-bool way_mime_parse(const char *value, size_t len, char *essence, size_t ecap, char *charset,
-                    size_t ccap)
+// MIME Sniffing § 4.4 "parse a MIME type": the essence ("type/subtype",
+// lowercased) into `essence`, and each parameter that is valid there (a
+// token name, a value of quoted-string token code points, with a quoted
+// value's quotes and escapes off) handed to `each` in order, its value
+// unfit (`fits` false) past WAY_MIME_VALUE_MAX bytes. Which of a repeated
+// name stands is the caller's: the standard keeps the first valid one.
+// One walk for both the charset and the serializer, so the two cannot
+// disagree about what a parameter is.
+typedef void (*mime_param_fn)(void *ctx, const char *name, size_t name_len, const char *value, size_t value_len,
+                              bool fits);
+
+#define WAY_MIME_VALUE_MAX 512
+
+static bool mime_walk(const char *value, size_t len, char *essence, size_t ecap, mime_param_fn each, void *ctx)
 {
-    if (charset != NULL && ccap > 0)
-        charset[0] = '\0';
     way_header_value_normalize(&value, &len);
     size_t at = 0;
     while (at < len && value[at] != '/')
@@ -672,8 +682,6 @@ bool way_mime_parse(const char *value, size_t len, char *essence, size_t ecap, c
     for (size_t i = sub; i < sub_end; i++)
         essence[e++] = lower(value[i]);
     essence[e] = '\0';
-    // The parameters, of which only the first valid charset is kept.
-    bool have_charset = false;
     while (at < len) {
         at++;                                   // the ';'
         while (at < len && http_whitespace(value[at]))
@@ -689,7 +697,7 @@ bool way_mime_parse(const char *value, size_t len, char *essence, size_t ecap, c
         at++;                                   // the '='
         if (at >= len)
             break;
-        char got[WAY_MIME_CHARSET_MAX];
+        char got[WAY_MIME_VALUE_MAX];
         size_t got_len = 0;
         bool fits = true, valid = true;
         if (value[at] == '"') {
@@ -734,13 +742,117 @@ bool way_mime_parse(const char *value, size_t len, char *essence, size_t ecap, c
             }
         }
         got[got_len] = '\0';
-        if (name_len > 0 && is_token(value + name, name_len) && valid && !have_charset &&
-            is_nocase(value + name, name_len, "charset")) {
-            have_charset = true;
-            if (fits && charset != NULL)
-                os64_strcopy(charset, ccap, got);
-        }
+        if (name_len > 0 && is_token(value + name, name_len) && valid)
+            each(ctx, value + name, name_len, got, got_len, fits);
     }
+    return true;
+}
+
+typedef struct {
+    char *charset;
+    size_t ccap;
+    bool have;
+} CharsetWalk;
+
+static void charset_param(void *ctx, const char *name, size_t name_len, const char *value, size_t value_len,
+                          bool fits)
+{
+    CharsetWalk *w = ctx;
+    (void)value_len;
+    if (w->have || !is_nocase(name, name_len, "charset"))
+        return;
+    w->have = true;
+    if (fits && w->charset != NULL && value_len < WAY_MIME_CHARSET_MAX)
+        os64_strcopy(w->charset, w->ccap, value);
+}
+
+bool way_mime_parse(const char *value, size_t len, char *essence, size_t ecap, char *charset,
+                    size_t ccap)
+{
+    if (charset != NULL && ccap > 0)
+        charset[0] = '\0';
+    CharsetWalk w = {charset, ccap, false};
+    return mime_walk(value, len, essence, ecap, charset_param, &w);
+}
+
+// The serializer's walk: each parameter whose (lowercased) name is not
+// already written goes on as ";name=value", the value quoted (each quote and
+// backslash escaped) unless it is a non-empty token (MIME Sniffing § 4.6). Names are
+// compared against the ones written before, a walk per parameter, which the
+// input's cap (WAY_MIME_SERIALIZE_IN_MAX) keeps small.
+typedef struct {
+    char *out;
+    size_t cap, used;
+    bool overflow;
+    const char *names[WAY_MIME_SERIALIZE_IN_MAX / 4];
+    size_t lens[WAY_MIME_SERIALIZE_IN_MAX / 4];
+    size_t count;
+} SerializeWalk;
+
+static void serial_put(SerializeWalk *w, char c)
+{
+    if (w->used + 1 >= w->cap) {
+        w->overflow = true;
+        return;
+    }
+    w->out[w->used++] = c;
+    w->out[w->used] = '\0';
+}
+
+static void serialize_param(void *ctx, const char *name, size_t name_len, const char *value, size_t value_len,
+                            bool fits)
+{
+    SerializeWalk *w = ctx;
+    for (size_t i = 0; i < w->count; i++)
+        if (w->lens[i] == name_len) {
+            bool same = true;
+            for (size_t j = 0; same && j < name_len; j++)
+                same = lower(w->names[i][j]) == lower(name[j]);
+            if (same)
+                return;
+        }
+    if (!fits || w->count == sizeof(w->names) / sizeof(w->names[0])) {
+        w->overflow = true;
+        return;
+    }
+    w->names[w->count] = name;
+    w->lens[w->count++] = name_len;
+    serial_put(w, ';');
+    for (size_t i = 0; i < name_len; i++)
+        serial_put(w, lower(name[i]));
+    serial_put(w, '=');
+    bool token = value_len > 0 && is_token(value, value_len);
+    if (!token)
+        serial_put(w, '"');
+    for (size_t i = 0; i < value_len; i++) {
+        if (!token && (value[i] == '"' || value[i] == '\\'))
+            serial_put(w, '\\');
+        serial_put(w, value[i]);
+    }
+    if (!token)
+        serial_put(w, '"');
+}
+
+bool way_mime_serialize(const char *value, size_t len, char *out, size_t cap)
+{
+    if (cap == 0 || len > WAY_MIME_SERIALIZE_IN_MAX)
+        return false;
+    out[0] = '\0';
+    SerializeWalk w;
+    w.out = out;
+    w.cap = cap;
+    w.used = 0;
+    w.overflow = false;
+    w.count = 0;
+    char essence[WAY_MIME_ESSENCE_MAX];
+    if (!mime_walk(value, len, essence, sizeof(essence), serialize_param, &w) || w.overflow)
+        return false;
+    // The essence goes first: moved in front of the parameters written.
+    size_t elen = os64_strlen(essence);
+    if (elen + w.used + 1 > cap)
+        return false;
+    os64_memmove(out + elen, out, w.used + 1);
+    os64_memcpy(out, essence, elen);
     return true;
 }
 

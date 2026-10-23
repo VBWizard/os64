@@ -130,6 +130,15 @@ int32_t way_cors_unsafe_names(const char *block, size_t len, char *out, size_t c
 bool way_mime_parse(const char *value, size_t len, char *essence, size_t ecap, char *charset,
                     size_t ccap);
 
+// `value` parsed as a MIME type and serialized (MIME Sniffing § 4.6): the
+// essence, then every parameter that parses, the first of each name, its
+// name lowercased, its value quoted unless it is a token. False when it is
+// not a MIME type, it is longer than WAY_MIME_SERIALIZE_IN_MAX, or the
+// result does not fit `cap` (WAY_MIME_SERIALIZED_MAX always does).
+#define WAY_MIME_SERIALIZE_IN_MAX 512
+#define WAY_MIME_SERIALIZED_MAX (WAY_MIME_ESSENCE_MAX + 2 * WAY_MIME_SERIALIZE_IN_MAX + 16)
+bool way_mime_serialize(const char *value, size_t len, char *out, size_t cap);
+
 // ── A request, hop by hop (Fetch § 4.1 main fetch) ─────────────────────
 
 typedef enum { WAY_MODE_CORS = 0, WAY_MODE_SAME_ORIGIN, WAY_MODE_NO_CORS } way_mode_t;
