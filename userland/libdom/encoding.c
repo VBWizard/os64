@@ -453,11 +453,8 @@ static void decode_run(DSink *sink, const uint8_t *bytes, size_t length, bool fl
  * TypeError. -1 with an exception pending. */
 static int option(JSContext *ctx, int argc, JSValueConst *argv, int at, const char *name)
 {
-    if (argc <= at || JS_IsUndefined(argv[at]) || JS_IsNull(argv[at])) return 0;
-    if (!JS_IsObject(argv[at])) {
-        JS_ThrowTypeError(ctx, "Options must be an object");
-        return -1;
-    }
+    int dictionary = d_dictionary(ctx, argc, argv, at);
+    if (dictionary <= 0) return dictionary;
     JSValue value = JS_GetPropertyStr(ctx, argv[at], name);
     if (JS_IsException(value)) return -1;
     int truth = JS_ToBool(ctx, value);

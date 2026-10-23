@@ -322,7 +322,8 @@ static void media(const char *text)
         return;
     }
     // `WIDTHxHEIGHT dark ...`: the person's scheme is dark; `reduce ...`:
-    // they asked for less motion.
+    // they asked for less motion; `scripting ...`: the document runs
+    // scripts.
     if (strncmp(text + used, "dark ", 5) == 0) {
         env.dark = true;
         used += 5;
@@ -331,7 +332,44 @@ static void media(const char *text)
         env.reduced_motion = true;
         used += 7;
     }
+    if (strncmp(text + used, "scripting ", 10) == 0) {
+        env.scripting = true;
+        used += 10;
+    }
+    // `device WxH ...`: the screen, which the device-* features answer.
+    int more = 0;
+    if (sscanf(text + used, "device %lfx%lf %n", &env.device_width, &env.device_height, &more) == 2)
+        used += more;
+    // `resolution N ...`: the zoom, in dppx, which `resolution` answers.
+    more = 0;
+    if (sscanf(text + used, "resolution %lf %n", &env.resolution, &more) == 1)
+        used += more;
     puts(garb_media_text_matches(text + used, env) ? "true" : "false");
+}
+
+// A media query list as CSSOM serialises it (garb_media_text_serialize),
+// whole, and again into each smaller buffer: what fits is the whole text's
+// prefix, and the length answered is the whole text's every time.
+static void media_text(const char *text)
+{
+    char whole[512];
+    size_t n = garb_media_text_serialize(text, whole, sizeof(whole));
+    if (n >= sizeof(whole)) {
+        puts("too long for the case");
+        return;
+    }
+    for (size_t cap = 0; cap <= n; cap++) {
+        char cut[512];
+        memset(cut, 'x', sizeof(cut));
+        size_t again = garb_media_text_serialize(text, cut, cap);
+        bool fits = cap == 0 ? cut[0] == 'x'
+                             : strlen(cut) == (cap - 1 < n ? cap - 1 : n) && memcmp(cut, whole, strlen(cut)) == 0;
+        if (again != n || !fits) {
+            printf("cut at %zu: %zu, %s\n", cap, again, fits ? "fits" : "spills");
+            return;
+        }
+    }
+    printf("[%s]\n", whole);
 }
 
 // The faces mode: each face garb_cascade_font_faces answers, in order —
@@ -842,7 +880,69 @@ static int sweep_lists(void)
     }
     printf("libgarb sweep, every list parse: every allocation failed in turn, %s\n",
            failures == 0 ? "each ended with a prefix, nothing leaked" : "FAILED");
-    return failures;
+    // A media query list's serialization is the whole list's or none: a
+    // parse that ran short would serialize another list.
+    const char *media_list = "screen and (min-width: 600px), (color) or (hover), print";
+    char whole[256], part[256];
+    allocations = 0;
+    fail_at = 0;
+    size_t wanted = garb_media_text_serialize(media_list, whole, sizeof(whole));
+    size_t worst = allocations;
+    int media_failures = 0;
+    for (size_t at = 1; at <= worst; at++) {
+        allocations = 0;
+        fail_at = at;
+        size_t got = garb_media_text_serialize(media_list, part, sizeof(part));
+        fail_at = 0;
+        if (!(got == wanted && strcmp(part, whole) == 0) && !(got == (size_t)-1 && part[0] == '\0'))
+            media_failures++;
+        if (live != s_live_base) {
+            media_failures++;
+            live = s_live_base;
+        }
+    }
+    printf("libgarb sweep, media text: each of %zu allocations failed in turn, %s\n", worst,
+           media_failures == 0 ? "each answer the whole list or none, nothing leaked" : "FAILED");
+    // The same of the grown form, whose buffer is one allocation more.
+    allocations = 0;
+    size_t grown_length = 0;
+    char *grown = garb_media_text_serialized(media_list, &grown_length, NULL, NULL);
+    size_t grown_worst = allocations;
+    int grown_failures = grown == NULL || strcmp(grown, whole) != 0 || grown_length != wanted;
+    os64_free(grown);
+    live = s_live_base;
+    for (size_t at = 1; at <= grown_worst; at++) {
+        allocations = 0;
+        fail_at = at;
+        grown = garb_media_text_serialized(media_list, &grown_length, NULL, NULL);
+        fail_at = 0;
+        if (grown != NULL ? strcmp(grown, whole) != 0 || grown_length != wanted : grown_length != 0)
+            grown_failures++;
+        os64_free(grown);
+        if (live != s_live_base) {
+            grown_failures++;
+            live = s_live_base;
+        }
+    }
+    printf("libgarb sweep, grown media text: each of %zu allocations failed in turn, %s\n", grown_worst,
+           grown_failures == 0 ? "each answer the whole list or none, nothing leaked" : "FAILED");
+    media_failures += grown_failures;
+    // Brackets nested past GARB_DEPTH_MAX lose their contents: none either;
+    // nested within it, the list is read.
+    static char deep[4 * GARB_DEPTH_MAX + 1], shallow_text[GARB_DEPTH_MAX + 1];
+    for (int i = 0; i < 2 * GARB_DEPTH_MAX; i++) {
+        deep[i] = '(';
+        deep[4 * GARB_DEPTH_MAX - 1 - i] = ')';
+    }
+    for (int i = 0; i < GARB_DEPTH_MAX / 2; i++) {
+        shallow_text[i] = '(';
+        shallow_text[GARB_DEPTH_MAX - 1 - i] = ')';
+    }
+    size_t nested = garb_media_text_serialize(deep, part, sizeof(part));
+    size_t shallow = garb_media_text_serialize(shallow_text, part, sizeof(part));
+    bool depth_ok = nested == (size_t)-1 && shallow != (size_t)-1;
+    printf("libgarb media text nested past GARB_DEPTH_MAX: %s\n", depth_ok ? "none" : "FAILED");
+    return failures + media_failures + !depth_ok;
 }
 
 // A selector list with every allocation failing in turn: an answer that
@@ -1135,7 +1235,37 @@ static int numbers(void)
     int ok = st == GARB_OK && n > 0 && inf != NULL && strstr(inf + 1, "Infinity") == NULL;
     printf("libgarb numbers: past int64_t and past a double: %s\n", ok ? "dumped" : "FAILED");
     garb_free(&r);
-    return ok ? 0 : 1;
+    // A number as a script reads it (garb_css_number): six significant
+    // digits, no trailing zeros, no exponent, no negative zero; every
+    // double, the largest included, fits its own length.
+    static const struct { double v; const char *want; } css[] = {
+        {0, "0"}, {-0.0, "0"}, {1, "1"}, {-1, "-1"}, {0.5, "0.5"}, {33.333333333, "33.3333"},
+        {1234.5678, "1234.57"}, {123456.7, "123457"}, {1e15, "1000000000000000"},
+        {0.000001234, "0.000001234"}, {-0.0000001, "-0.0000001"}, {-0.00000000000000000001, "-0.00000000000000000001"}, {-1e-25, "0"},
+        {1e-30, "0"}, {0.1, "0.1"}, {2.675, "2.675"}, {100, "100"}, {99.9999999, "100"},
+        {1.5e20, "150000000000000000000"}, {-2.5e19, "-25000000000000000000"},
+        {1.0 / 0.0, "0"}, {0.0 / 0.0, "0"}, {9007199254740993.0, "9007199254740992"},
+    };
+    int css_failed = 0;
+    for (size_t i = 0; i < sizeof(css) / sizeof(css[0]); i++) {
+        char b[8];
+        size_t n = garb_css_number(css[i].v, b, sizeof(b));
+        char whole[400];
+        size_t again = garb_css_number(css[i].v, whole, sizeof(whole));
+        bool cut = strlen(b) == (n < sizeof(b) ? n : sizeof(b) - 1) && strncmp(b, whole, strlen(b)) == 0;
+        if (strcmp(whole, css[i].want) != 0 || again != n || n != strlen(whole) || !cut) {
+            printf("FAIL css number %.17g: got %s (%zu), want %s\n", css[i].v, whole, n, css[i].want);
+            css_failed++;
+        }
+    }
+    char largest[400];
+    size_t n_largest = garb_css_number(1.7976931348623157e308, largest, sizeof(largest));
+    if (n_largest != strlen(largest) || n_largest != 309 || strncmp(largest, "179769", 6) != 0) {
+        printf("FAIL css number: the largest double came out %zu long\n", n_largest);
+        css_failed++;
+    }
+    printf("libgarb css numbers: %s\n", css_failed ? "FAILED" : "as a script reads them");
+    return ok && css_failed == 0 ? 0 : 1;
 }
 
 // What a parse COSTS, GARB.md § The cost: a sheet shaped like the web's
@@ -1559,6 +1689,42 @@ static int modern_marks(void)
                               GARB_SETS_MAX) == 1, "quirks still reads beside modern_off");
     MODERN_CHECK(modern_reads("animation-name: var(--a)", off, p, GARB_SETS_MAX) == 0,
                  "a marked name holding var() is unknown, not held, with modern_off");
+    // The list of names a style object makes members of: each once, every
+    // one read with the marked names known, the marked ones unknown without.
+    int32_t names = 0;
+    bool once = true, all_known = true;
+    for (const char *nm; (nm = garb_prop_name_at(names)) != NULL; names++) {
+        for (int32_t j = 0; j < names; j++)
+            once &= strcmp(garb_prop_name_at(j), nm) != 0;
+        all_known &= garb_prop_known(nm, strlen(nm), false);
+    }
+    MODERN_CHECK(names > GARB_NPROPS && once && all_known && garb_prop_name_at(-1) == NULL &&
+                 strcmp(garb_prop_name_at(0), garb_prop_name(0)) == 0,
+                 "the names are the longhands' and the rest, each once, each read");
+    // Every name the switch takes away, read by name with it off and on: a
+    // CSS-wide keyword, which every property takes, is no declaration at
+    // all with it off and sets at least one longhand with it on.
+    int32_t marked = 0;
+    for (int32_t k = 0; garb_prop_name_at(k) != NULL; k++) {
+        const char *nm = garb_prop_name_at(k);
+        if (garb_prop_known(nm, strlen(nm), true))
+            continue;
+        char decl[96];
+        snprintf(decl, sizeof(decl), "%s: inherit", nm);
+        marked++;
+        if (modern_reads(decl, off, p, GARB_SETS_MAX) != 0 ||
+            modern_reads(decl, on, p, GARB_SETS_MAX) <= 0) {
+            printf("libgarb modern: %s is read with modern_off, or not without it - FAILED\n", nm);
+            failed++;
+        }
+    }
+    MODERN_CHECK(marked >= 3, "the names the switch takes away are read by name");
+    MODERN_CHECK(!garb_prop_known("animation-name", 14, true) &&
+                 !garb_prop_known("grid-gap", 8, true) &&
+                 !garb_prop_known("-webkit-transform", 17, true) &&
+                 garb_prop_known("Animation", 9, true) && garb_prop_known("margin", 6, true) &&
+                 !garb_prop_known("marginx", 7, false),
+                 "a marked name is not known with modern_off, a shorthand with a longhand left is");
 
     garb_prop_t w[64];
     bool name, gap;
@@ -1584,8 +1750,68 @@ static int modern_marks(void)
     return failed ? 1 : 0;
 }
 
+// A media query's cost against its depth, by the steps media.c counts
+// (GARB_MEDIA_COUNT, which the build defines): `(width)` in d brackets,
+// matched, serialised and serialised into a grown buffer. Each bracket
+// level must add the same steps as the one before; a reading that judged
+// a level and then wrote it doubled them at every level.
+extern size_t garb_media_visits;
+static int media_depth(void)
+{
+    int failed = 0;
+    size_t last[3] = {0, 0, 0}, step[3] = {0, 0, 0};
+    garb_env_t env = {.width = 800, .height = 600};
+    // It stops at the first level that costs more than the one before: a
+    // cost that doubles would otherwise take days to reach the bound.
+    for (int d = 0; d < GARB_DEPTH_MAX - 2 && !failed; d++) {
+        char q[2 * GARB_DEPTH_MAX + 16];
+        int k = 0;
+        for (int i = 0; i < d; i++) q[k++] = '(';
+        k += snprintf(q + k, sizeof(q) - (size_t)k, "(width)");
+        for (int i = 0; i < d; i++) q[k++] = ')';
+        q[k] = '\0';
+        size_t visits[3];
+        garb_media_visits = 0;
+        bool matched = garb_media_text_matches(q, env);
+        visits[0] = garb_media_visits;
+        char out[256];
+        garb_media_visits = 0;
+        size_t n = garb_media_text_serialize(q, out, sizeof(out));
+        visits[1] = garb_media_visits;
+        size_t grown_length = 0;
+        garb_media_visits = 0;
+        char *grown = garb_media_text_serialized(q, &grown_length, NULL, NULL);
+        visits[2] = garb_media_visits;
+        if (!matched || n != (size_t)k || strcmp(out, q) != 0 || grown == NULL ||
+            grown_length != n || strcmp(grown, out) != 0) {
+            printf("media depth %d: matched %d, [%s] %zu, grown [%s]\n", d, matched, out, n, grown ? grown : "NULL");
+            failed = 1;
+        }
+        os64_free(grown);
+        for (int f = 0; f < 3; f++) {
+            if (d >= 2 && visits[f] - last[f] != step[f]) {
+                printf("media depth %d: %s took %zu steps, %zu more than at %d (the level before added %zu)\n", d,
+                       f == 0 ? "a match" : f == 1 ? "a serialization" : "a grown serialization", visits[f],
+                       visits[f] - last[f], d - 1, step[f]);
+                failed = 1;
+            }
+            step[f] = visits[f] - last[f];
+            last[f] = visits[f];
+        }
+    }
+    if (step[0] == 0 || step[1] == 0 || step[2] == 0) {
+        printf("media depth: a level cost no steps: the count is not counting\n");
+        failed = 1;
+    }
+    printf("libgarb media depth: %s (a level costs %zu, %zu and %zu steps)\n",
+           failed ? "FAILED" : "each bracket level adds the same steps", step[0], step[1], step[2]);
+    return failed;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "--media-depth") == 0)
+        return media_depth();
     if (argc == 2 && strcmp(argv[1], "--modern") == 0)
         return modern_marks();
     if (argc == 2 && strcmp(argv[1], "--keyframes-scale") == 0)
@@ -1622,6 +1848,8 @@ int main(int argc, char **argv)
             declaration(text, len);
         else if (strcmp(argv[1], "media") == 0)
             media(text);
+        else if (strcmp(argv[1], "media-text") == 0)
+            media_text(text);
         else if (strcmp(argv[1], "cascade") == 0)
             cascade(text, len, pabsent ? NULL : protocol, CASCADE_WINNERS);
         else if (strcmp(argv[1], "skips") == 0)

@@ -1,349 +1,921 @@
-/* screen and devicePixelRatio (libdom/screen.c), performance
- * (libdom/performance.c) and URL and URLSearchParams (libdom/url.c): a
- * case per sentence of each file's contract, and the binding's allocations
- * failed in turn. */
+/* SLICE 1b, THE WINDOW'S VIEW, THE SCROLL AND THE HISTORY (MODERN_WEB.md
+ * § Slice 1b; dom.h § THE VIEW, GETCOMPUTEDSTYLE, HISTORY), on fake
+ * providers, a case per sentence of the contract: the scroll and size
+ * members, scrollingElement, the view's events, matchMedia and its lists,
+ * getComputedStyle's declaration, and the history's state updates,
+ * fragment navigations and traversal events; each name absent and nothing
+ * dispatched with the switch off; and every binding allocation the new
+ * operations make failed in turn. */
 
-static uint32_t view_zoom = 1000;
-static uint32_t view_zoom_of(void *opaque) { (void)opaque; return view_zoom; }
+#include "garb/values.h"
 
-static void dom_private_container_cases(void);
-static void dom_screen_cases(void)
+#define VIEW_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
+    "function throws(n,f){let caught=false;try{f()}catch(e){caught=true;assert(e.name===n,'wanted '+n+' got '+e.name)}assert(caught,'no '+n);}"
+
+typedef struct {
+    os64_dom_view_t view;
+    unsigned reads, scrolls;
+    double asked_x, asked_y;
+    bool refuse;
+} ViewFake;
+
+static void fake_view_read(void *opaque, os64_dom_view_t *out)
 {
-    DomFixture f = fixture_new(NULL);
-    if (!fixture_ready(&f)) return;
-    dom_script(&f, STORAGE_ASSERT
-        "assert(screen.width===1024&&screen.height===768&&screen.availWidth===1024&&screen.availHeight===768,"
-        "'a host that says nothing is told the default');"
-        "assert(screen.colorDepth===24&&screen.pixelDepth===24&&devicePixelRatio===1);"
-        "assert(screen===window.screen&&screen instanceof Screen&&Object.prototype.toString.call(screen)==='[object Screen]');"
-        "var o=screen.orientation;assert(o===screen.orientation&&o instanceof ScreenOrientation);"
-        "assert(o.type==='landscape-primary'&&o.angle===0&&o.onchange===null&&o.unlock()===undefined);"
-        "throws('TypeError',()=>new Screen());throws('TypeError',()=>new ScreenOrientation());"
-        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(Screen.prototype,'width').get.call({}));"
-        "globalThis.locked=[];for(const a of [[],['sideways'],['portrait']])o.lock(...a).then(()=>locked.push('kept'),e=>locked.push(e.name));"
-        /* An EventTarget: its listeners and its onchange run on a dispatch,
-         * though nothing here ever changes the orientation. */
-        "var heard=[];o.addEventListener('change',e=>heard.push('listener:'+(e.target===o)));"
-        "o.onchange=e=>heard.push('handler');o.dispatchEvent(new Event('change'));"
-        "assert(heard.join()==='listener:true,handler',heard.join());"
-        "o.onchange=null;assert(o.onchange===null);",
-        "screen: the default display, Screen and ScreenOrientation");
-    dom_script(&f, STORAGE_ASSERT "assert(locked.join()==='TypeError,TypeError,NotSupportedError',locked.join());",
-               "screen: lock() rejects: its argument's errors as TypeError, any lock as NotSupportedError");
-    dom_script(&f, STORAGE_ASSERT
-        "screen=5;assert(screen===5);devicePixelRatio=3;assert(devicePixelRatio===3);"
-        "assert(Object.getOwnPropertyDescriptor(window,'screen').value===5,'[Replaceable]: an own data property');",
-        "screen: screen and devicePixelRatio are [Replaceable]");
-    fixture_free(&f);
+    ViewFake *f = opaque;
+    f->reads++;
+    *out = f->view;
+}
+
+/* Clamped as a host clamps: to 0, and to 1000 by 2000. */
+static bool fake_view_scroll(void *opaque, double x, double y, os64_dom_geometry_stats_t *cost)
+{
+    ViewFake *f = opaque;
+    f->scrolls++;
+    f->asked_x = x;
+    f->asked_y = y;
+    cost->layouts = 1;
+    cost->elapsed_us = 7;
+    if (f->refuse) return false;
+    f->view.scroll_x = x < 0 ? 0 : x > 1000 ? 1000 : x;
+    f->view.scroll_y = y < 0 ? 0 : y > 2000 ? 2000 : y;
+    return true;
+}
+
+typedef struct {
+    unsigned calls;
+    bool refuse, spill;
+    const char *root_overflow, *body_overflow, *body_display, *root_display;
+    const os64_html_node_t *last;
+    const os64_html_document_t *document;
+} ComputedFake;
+
+/* Every property `p<index>`, but those a case reads: `width` counts the
+ * calls, so a held declaration is seen to ask again. */
+static bool fake_computed(void *opaque, const os64_html_node_t *element, os64_dom_computed_t *out)
+{
+    ComputedFake *f = opaque;
+    f->calls++;
+    f->last = element;
+    os64_dom_computed_cost(out, 1, 3);
+    if (f->refuse) return false;
+    if (element->parent == NULL) return true;           // detached: no style
+    bool body = element->tag == OS64_HTML_TAG_BODY, root = element->tag == OS64_HTML_TAG_HTML;
+    for (int32_t i = 0; i < GARB_NPROPS; i++) {
+        char text[64];
+        if (i == GARB_WIDTH) snprintf(text, sizeof(text), "%upx", f->calls);
+        else if (i == GARB_COLOR) snprintf(text, sizeof(text), "rgb(1, 2, 3)");
+        else if (i == GARB_DISPLAY)
+            snprintf(text, sizeof(text), "%s", body && f->body_display ? f->body_display
+                                                : root && f->root_display ? f->root_display : "block");
+        else if (i == GARB_OVERFLOW_X || i == GARB_OVERFLOW_Y)
+            snprintf(text, sizeof(text), "%s", body && f->body_overflow ? f->body_overflow
+                                                : root && f->root_overflow ? f->root_overflow : "visible");
+        else snprintf(text, sizeof(text), "p%d", (int)i);
+        size_t length = strlen(text);
+        if (f->spill && i == GARB_FLOAT) {
+            static char big[1024 * 1024];
+            memset(big, 'z', sizeof(big));
+            if (!os64_dom_computed_put(out, i, big, sizeof(big))) return false;
+            continue;
+        }
+        if (!os64_dom_computed_put(out, i, text, length)) return false;
+    }
+    return true;
+}
+
+typedef struct {
+    char url[OS64_DOM_URL_MAX], state[OS64_DOM_STATE_MAX + 1], fragment[OS64_DOM_URL_MAX];
+    bool has_state, push, replace, refuse;
+    unsigned updates, fragments;
+    uint32_t length;
+} HistoryFake;
+
+static bool fake_history_update(void *opaque, const char *url, const char *state, size_t length, bool push)
+{
+    HistoryFake *h = opaque;
+    h->updates++;
+    if (h->refuse) return false;
+    snprintf(h->url, sizeof(h->url), "%s", url);
+    h->has_state = state != NULL;
+    memcpy(h->state, state != NULL ? state : "", state != NULL ? length : 0);
+    h->state[state != NULL ? length : 0] = '\0';
+    check(state == NULL || strlen(h->state) == length, "history: the state's length is its text's");
+    h->push = push;
+    if (push) h->length++;
+    return true;
+}
+
+static bool fake_history_fragment(void *opaque, const char *url, bool replace)
+{
+    HistoryFake *h = opaque;
+    h->fragments++;
+    if (h->refuse) return false;
+    snprintf(h->fragment, sizeof(h->fragment), "%s", url);
+    h->replace = replace;
+    if (!replace) h->length++;
+    return true;
+}
+
+static uint32_t fake_history_length(void *opaque)
+{
+    return ((HistoryFake *)opaque)->length;
+}
+
+/* A fixture whose document has an address, for location and history. */
+static DomFixture view_fixture(bool modern, const char *url)
+{
     os64_dom_options_t options = os64_dom_default_options();
-    options.screen = (os64_dom_screen_t){1920, 1080, 1920, 1040, 30};
-    options.zoom = view_zoom_of;
-    view_zoom = 1250;
-    f = fixture_new(&options);
-    if (!fixture_ready(&f)) return;
-    dom_script(&f, STORAGE_ASSERT
-        "assert(devicePixelRatio===1.25&&screen.width===1536&&screen.height===864&&screen.availHeight===832,"
-        "'CSS pixels at the zoom: '+[devicePixelRatio,screen.width,screen.height,screen.availHeight]);"
-        "assert(screen.colorDepth===30&&screen.pixelDepth===30);",
-        "screen: the host's display, in CSS pixels at the zoom");
-    view_zoom = 500;
-    dom_script(&f, STORAGE_ASSERT "assert(devicePixelRatio===0.5&&screen.width===3840);",
-               "screen: the zoom is read when asked");
-    view_zoom = 1000;
-    fixture_free(&f);
-    options.screen = (os64_dom_screen_t){768, 1024, 768, 1024, 24};
-    options.zoom = NULL;
-    f = fixture_new(&options);
-    if (!fixture_ready(&f)) return;
-    dom_script(&f, STORAGE_ASSERT "assert(screen.orientation.type==='portrait-primary'&&devicePixelRatio===1);",
-               "screen: a display taller than wide is portrait");
-    fixture_free(&f);
-    static const char *const kEngine[] = {
-        "screen.orientation.lock('any').catch(()=>{});screen.width+screen.orientation.type",
-        "var o=screen.orientation;o.onchange=()=>1;o.addEventListener('change',()=>2);o.dispatchEvent(new Event('change'))",
-    };
-    engine_sweep("screen", kEngine, sizeof(kEngine) / sizeof(kEngine[0]), NULL);
+    options.modern = modern;
+    options.url = url;
+    return fixture_new(&options);
 }
 
-/* The host's timing: an origin and milestones a case sets. */
-static os64_dom_timing_t view_timing;
-static uint64_t view_us;
-static void view_timing_of(void *opaque, os64_dom_timing_t *out) { (void)opaque; *out = view_timing; }
-static uint64_t view_now_us(void *opaque) { (void)opaque; return view_us; }
-
-static void dom_performance_cases(void)
+static bool view_step(DomFixture *f, const char *what)
 {
-    view_timing = (os64_dom_timing_t){.origin_us = 1000000, .origin_epoch_us = 1700000000123456};
-    for (int i = 0; i < OS64_DOM_TIMING_COUNT; i++) view_timing.at[i] = OS64_DOM_TIMING_NOT_YET;
-    view_timing.at[OS64_DOM_TIMING_FETCH_START] = 0;
-    view_timing.at[OS64_DOM_TIMING_RESPONSE_START] = 2000;
-    view_timing.at[OS64_DOM_TIMING_DOM_LOADING] = 2500;
-    view_timing.type = OS64_DOM_NAVIGATE_RELOADED;
-    view_timing.redirects = 2;
-    view_us = 1000000 + 12345678;        /* 12345.678 ms after the origin */
-    os64_dom_options_t options = os64_dom_default_options();
-    options.url = "https://example.test/page?q";
-    options.timing = view_timing_of;
-    options.now_us = view_now_us;
-    DomFixture f = fixture_new(&options);
-    if (!fixture_ready(&f)) return;
-    dom_script(&f, STORAGE_ASSERT
-        "assert(performance===window.performance&&performance instanceof Performance);"
-        "assert(Object.prototype.toString.call(performance)==='[object Performance]');"
-        "assert(performance.now()===12345.6,'coarsened to 100 microseconds: '+performance.now());"
-        "assert(performance.timeOrigin===1700000000123.4,''+performance.timeOrigin);"
-        "var t=performance.timing;assert(t===performance.timing&&t instanceof PerformanceTiming);"
-        "assert(t.navigationStart===1700000000123&&t.fetchStart===1700000000123&&t.requestStart===t.fetchStart);"
-        "assert(t.responseStart===1700000000125&&t.domLoading===1700000000125&&t.domInteractive===0);"
-        "assert(t.secureConnectionStart===t.fetchStart&&t.unloadEventStart===0&&t.redirectEnd===0);"
-        "assert(t.loadEventEnd===0&&t.toJSON().responseStart===t.responseStart&&Object.keys(t.toJSON()).length===21);"
-        "var n=performance.navigation;assert(n.type===1&&n.redirectCount===2&&n.TYPE_RELOAD===1&&PerformanceNavigation.TYPE_BACK_FORWARD===2);"
-        "var nav=performance.getEntriesByType('navigation');assert(nav.length===1);nav=nav[0];"
-        "assert(nav.name==='https://example.test/page?q'&&nav.entryType==='navigation'&&nav.startTime===0);"
-        "assert(nav.duration===0&&nav.responseStart===2&&nav.domInteractive===0&&nav.type==='reload'&&nav.redirectCount===2);"
-        "assert(nav.initiatorType==='navigation'&&nav.nextHopProtocol==='http/1.1'&&Array.isArray(nav.serverTiming));"
-        "assert(nav instanceof PerformanceEntry&&!('PerformanceNavigationTiming' in window)&&!('PerformanceResourceTiming' in window));"
-        "assert(Object.prototype.toString.call(nav)==='[object PerformanceNavigationTiming]');"
-        "var j=nav.toJSON();assert(j.name===nav.name&&j.domLoading===undefined&&j.type==='reload'&&j.responseStart===2);"
-        "var p=performance.toJSON();assert(p.timeOrigin===performance.timeOrigin&&p.timing.domLoading===t.domLoading&&p.navigation.type===1);"
-        "assert(performance.getEntriesByType('resource').length===0&&performance.getEntriesByType('paint').length===0);"
-        "throws('TypeError',()=>new Performance());throws('TypeError',()=>performance.now.call({}));"
-        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(PerformanceTiming.prototype,'fetchStart').get.call(nav));",
-        "performance: the clock, timing, navigation and the navigation entry");
-    /* Milestones the host reaches later are read when asked. */
-    view_timing.at[OS64_DOM_TIMING_DOM_INTERACTIVE] = 3000;
-    view_timing.at[OS64_DOM_TIMING_LOAD_END] = 9000;
-    dom_script(&f, STORAGE_ASSERT
-        "assert(performance.timing.domInteractive===1700000000126&&performance.timing.loadEventEnd===1700000000132);"
-        "var nav=performance.getEntriesByType('navigation')[0];assert(nav.duration===9&&nav.domInteractive===3);",
-        "performance: a later milestone is read when asked");
-    view_us += 1000;
-    dom_script(&f, STORAGE_ASSERT
-        "var m=performance.mark('m1');assert(m instanceof PerformanceMark&&m.entryType==='mark'&&m.name==='m1');"
-        "assert(m.startTime===12346.6&&m.duration===0&&m.detail===null);"
-        "var m2=performance.mark('m2',{startTime:5,detail:{a:[1,2]}});assert(m2.startTime===5&&m2.detail.a[1]===2);"
-        "var d={x:1};var m3=performance.mark('m3',{detail:d});d.x=2;assert(m3.detail.x===1&&m3.detail!==d,'detail is cloned');"
-        "assert(m3.detail===m3.detail,'the same clone each read');"
-        "throws('DataCloneError',()=>performance.mark('bad',{detail:{s:Symbol()}}));"
-        "throws('DataCloneError',()=>performance.mark('bad',{detail:()=>1}));"
-        "throws('TypeError',()=>performance.mark('neg',{startTime:-1}));"
-        "throws('TypeError',()=>performance.mark('nan',{startTime:NaN}));"
-        "throws('TypeError',()=>performance.mark('n',5));throws('TypeError',()=>performance.mark());"
-        "throws('SyntaxError',()=>performance.mark('navigationStart'));throws('SyntaxError',()=>new PerformanceMark('domComplete'));"
-        "var e=performance.getEntries();assert(e.length===4&&e[0].entryType==='navigation'&&e[1]===m2&&e[2]===m&&e[3]===m3,"
-        "'in startTime order');"
-        "for(var k=2000;k>0;k--)performance.mark('many',{startTime:k%500+100});"
-        "var many=performance.getEntriesByName('many');assert(many.length===2000,'every one');"
-        "for(var q=1;q<many.length;q++)assert(many[q-1].startTime<=many[q].startTime,'many marks in startTime order');"
-        "assert(many[0].startTime===100&&many[1].startTime===100&&many[0]!==many[1]);"
-        "performance.clearMarks('many');assert(performance.getEntries().length===4);"
-        "assert(performance.getEntriesByName('m1')[0]===m&&performance.getEntriesByName('m1','measure').length===0);"
-        "var c=new PerformanceMark('c',{startTime:1});assert(c.startTime===1&&performance.getEntriesByName('c').length===0);"
-        "class Sub extends PerformanceMark{};assert(new Sub('s') instanceof Sub);"
-        "throws('TypeError',()=>PerformanceMark('x'));throws('TypeError',()=>new PerformanceEntry());"
-        "assert(JSON.stringify(m.toJSON())==='{\"name\":\"m1\",\"entryType\":\"mark\",\"startTime\":12346.6,\"duration\":0}');",
-        "performance: mark and PerformanceMark");
-    dom_script(&f, STORAGE_ASSERT
-        "var a=performance.measure('all');assert(a.startTime===0&&a.duration===12346.6&&a instanceof PerformanceMeasure);"
-        "var b=performance.measure('between','m2','m1');assert(b.startTime===5&&Math.abs(b.duration-12341.6)<1e-9);"
-        "assert(performance.measure('to','fetchStart','m2').startTime===0);"
-        "var c=performance.measure('c',{start:'m2',duration:10});assert(c.startTime===5&&c.duration===10);"
-        "var d=performance.measure('d',{duration:4,end:20,detail:'x'});assert(d.startTime===16&&d.detail==='x');"
-        "var e=performance.measure('e',{start:7});assert(e.startTime===7);"
-        "var g=performance.measure('g',undefined,'m2');assert(g.startTime===0&&g.duration===5);"
-        "var h=performance.measure('h',null,'m2');assert(h.startTime===0);"
-        "throws('TypeError',()=>performance.measure('x',{start:1},'m1'));"
-        "throws('TypeError',()=>performance.measure('x',{duration:1}));"
-        "throws('TypeError',()=>performance.measure('x',{start:1,end:2,duration:1}));"
-        "throws('TypeError',()=>performance.measure('x',{start:-1}));"
-        "throws('SyntaxError',()=>performance.measure('x','no such mark'));"
-        "throws('InvalidAccessError',()=>performance.measure('x','loadEventStart'));"
-        "throws('DataCloneError',()=>performance.measure('x',{start:0,detail:Symbol()}));"
-        "assert(performance.getEntriesByType('measure').length===8);"
-        "performance.clearMarks('m1');assert(performance.getEntriesByName('m1').length===0&&performance.getEntriesByType('mark').length===2);"
-        "performance.clearMarks();assert(performance.getEntriesByType('mark').length===0&&performance.getEntriesByType('measure').length===8);"
-        "performance.clearMeasures('all');assert(performance.getEntriesByType('measure').length===7);"
-        "performance.clearMeasures();assert(performance.getEntries().length===1,'the navigation entry stays');"
-        "throws('SyntaxError',()=>performance.measure('x','m1'));",
-        "performance: measure, the queries and clearing");
-    dom_script(&f, STORAGE_ASSERT
-        "var heard=0;performance.addEventListener('x',()=>heard++,{once:true});"
-        "performance.dispatchEvent(new Event('x'));performance.dispatchEvent(new Event('x'));assert(heard===1);"
-        "performance=7;assert(performance===7,'[Replaceable]');",
-        "performance: an EventTarget, and [Replaceable]");
-    fixture_free(&f);
-    /* With no timing from the host: the origin is the binding's making and
-     * nothing has happened. */
-    options.timing = NULL;
-    options.url = "http://plain.test/";
-    view_us = 5000000;
-    f = fixture_new(&options);
-    if (!fixture_ready(&f)) return;
-    view_us += 2500;
-    dom_script(&f, STORAGE_ASSERT
-        "assert(performance.now()===2.5&&performance.timing.fetchStart===0&&performance.timing.secureConnectionStart===0);"
-        "assert(performance.navigation.type===0&&performance.getEntriesByType('navigation')[0].type==='navigate');",
-        "performance: a host with no timing");
-    fixture_free(&f);
-    static const char *const kOperations[] = {
-        "performance.mark('m')", "performance.mark('m',{detail:{a:1}})", "performance.measure('x')",
-        "performance.mark('a');performance.getEntries()", "performance.getEntriesByName('x','mark')",
-        "performance.clearMarks('a')", "performance.toJSON()",
-    };
-    binding_sweep("performance", kOperations, sizeof(kOperations) / sizeof(kOperations[0]), &options);
-    static const char *const kEngine[] = {
-        "performance.mark('a',{detail:{x:[1,2]}});performance.measure('b','a');performance.getEntries().length",
-        "performance.getEntriesByType('navigation')[0].toJSON()",
-        "JSON.stringify(performance.toJSON())",
-        "new PerformanceMark('n').toJSON()",
-    };
-    engine_sweep("performance", kEngine, sizeof(kEngine) / sizeof(kEngine[0]), &options);
+    os64_js_outcome_t outcome;
+    bool ran = os64_dom_view_step(f->binding, &outcome);
+    if (ran && outcome.status != OS64_JS_OK) fprintf(stderr, "%s: %s\n", what, outcome.message);
+    check(!ran || outcome.status == OS64_JS_OK, what);
+    return ran;
 }
 
-static void dom_url_cases(void)
+static void dom_view_scroll_cases(void)
 {
-    DomFixture f = fixture_new(NULL);
+    DomFixture f = view_fixture(true, "http://view.test/page.html");
     if (!fixture_ready(&f)) return;
-    dom_script(&f, STORAGE_ASSERT
-        "var u=new URL('HTTPS://Example.COM:443/a/../b?x=1&y=%41#frag');"
-        "assert(u.href==='https://example.com/b?x=1&y=%41#frag',u.href);"
-        "assert(u.protocol==='https:'&&u.host==='example.com'&&u.hostname==='example.com'&&u.port===''&&u.origin==='https://example.com');"
-        "assert(u.pathname==='/b'&&u.search==='?x=1&y=%41'&&u.hash==='#frag'&&u.username===''&&u.password==='');"
-        "assert(String(u)===u.href&&u.toString()===u.href&&u.toJSON()===u.href&&JSON.stringify({u})==='{\"u\":\"'+u.href+'\"}');"
-        "assert(u instanceof URL&&Object.prototype.toString.call(u)==='[object URL]'&&URL.length===1);"
-        "assert(new URL('../c?d#e','http://h.test:8080/a/b/f').href==='http://h.test:8080/a/c?d#e');"
-        "assert(new URL('//cdn.test/x','https://h.test/').href==='https://cdn.test/x');"
-        "assert(new URL('?q','http://h.test/p?old#f').href==='http://h.test/p?q');"
-        "assert(new URL('#n','http://h.test/p?old#f').href==='http://h.test/p?old#n');"
-        "assert(new URL('','http://h.test/p?old#f').href==='http://h.test/p?old');"
-        "assert(new URL('http://h.test/a b?c d').href==='http://h.test/a%20b?c%20d','a space is escaped');"
-        "assert(new URL('  http://h.test/\\t\\nx  ').href==='http://h.test/x','surrounding spaces and tab and newline go');"
-        "assert(new URL('http://h.test/\\u00e9').pathname==='/%C3%A9');"
-        "assert(new URL('\\u0000http://h.test/\\u0000x').href==='http://h.test/%00x','a NUL: trimmed at the ends, %00 within');"
-        "assert(new URL('mailto:someone@example.test').href==='mailto:someone@example.test');"
-        "var m=new URL('MAILTO:me');assert(m.protocol==='mailto:'&&m.pathname==='me'&&m.host===''&&m.origin==='null');"
-        "assert(new URL('http://h.test','http://other.test/').href==='http://h.test/');"
-        "assert(new URL('blob:https://h.test/uuid').origin==='https://h.test'&&new URL('blob:foo').origin==='null');"
-        "assert(new URL('file:///tmp/x').origin==='null'&&new URL('ftp://h.test:21/').href==='ftp://h.test/');"
-        "assert(new URL('ws://h.test:81/').origin==='ws://h.test:81');"
-        "for(const bad of ['','relative','//h.test/x','http://','http://user@h.test/','http://[::1]/','http://h.test:99999/'])"
-        "throws('TypeError',()=>new URL(bad));"
-        "throws('TypeError',()=>new URL('x','not a base'));throws('TypeError',()=>new URL('x',null));"
-                "throws('TypeError',()=>URL('http://h.test/'));throws('TypeError',()=>new URL());"
-        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(URL.prototype,'href').get.call({}));"
-        "assert(URL.canParse('http://h.test/')===true&&URL.canParse('nope')===false&&URL.canParse('x','http://h.test/')===true);"
-        "assert(URL.parse('nope')===null&&URL.parse('x','http://h.test/a').href==='http://h.test/x');"
-        "assert(URL.parse.call(null,'http://h.test/') instanceof URL);"
-        "class U2 extends URL{};assert(new U2('http://h.test/') instanceof U2);"
-        "assert('a'.repeat(9000).length&&URL.canParse('http://h.test/'+'a'.repeat(9000))===false,'past OS64_URL_REF_MAX');"
-        /* A query its URLSearchParams grew past what a parse takes is
-         * held; a setter that would need the parse leaves it as it is. */
-        "var big=new URL('http://h.test/a?x=1#f');big.searchParams.append('k','a'.repeat(9000));"
-        "assert(big.href.length>9000&&big.hash==='#f'&&big.search.length>9000&&big.searchParams.get('x')==='1');"
-        "var held=big.href;big.pathname='/p';big.hash='g';big.host='other.test';assert(big.href===held,'unchanged');"
-        "big.searchParams.delete('k');assert(big.href==='http://h.test/a?x=1#f');"
-        "var small=new URL('http://h.test/a');small.pathname='a'.repeat(9000);small.hash='b'.repeat(9000);"
-        "small.search='c'.repeat(9000);assert(small.href==='http://h.test/a','a setter past the limit changes nothing');",
-        "url: parsing, resolving and the components");
-    dom_script(&f, STORAGE_ASSERT
-        "var u=new URL('http://h.test:8080/p/q?a=1#f');"
-        "u.search='b=2&c=3';assert(u.href==='http://h.test:8080/p/q?b=2&c=3#f');"
-        "u.search='?x y';assert(u.search==='?x%20y');u.search='#?';assert(u.search==='?%23?'&&u.hash==='#f');"
-        "u.search='';assert(u.href==='http://h.test:8080/p/q#f');u.search='?';assert(u.href==='http://h.test:8080/p/q?#f');"
-        "u.hash='g';assert(u.hash==='#g');u.hash='';assert(u.href==='http://h.test:8080/p/q?');"
-        "u.hash='#';assert(u.href==='http://h.test:8080/p/q?#');"
-        "u.pathname='a?b#c';assert(u.pathname==='/a%3Fb%23c',u.pathname);u.pathname='';assert(u.pathname==='/');"
-        "u.port='9090';assert(u.port==='9090');u.port='81abc';assert(u.port==='81');u.port='abc';assert(u.port==='81');"
-        "u.port='99999';assert(u.port==='81');u.port='80';assert(u.port==='','a scheme\\'s own port is no port');"
-        "u.port='81';u.port='';assert(u.port===''&&u.host==='h.test');"
-        "u.host='other.test:81';assert(u.host==='other.test:81');u.host='third.test';assert(u.host==='third.test:81');"
-        "u.hostname='fourth.test';assert(u.host==='fourth.test:81');u.hostname='x.test:5';assert(u.hostname==='fourth.test');"
-        "u.hostname='';assert(u.hostname==='fourth.test');u.host='bad host';assert(u.hostname==='fourth.test');"
-        "u.protocol='https';assert(u.protocol==='https:'&&u.port==='81');u.port='443';assert(u.port==='');"
-        "u.protocol='foo';assert(u.protocol==='https:');u.protocol='1x';assert(u.protocol==='https:');"
-        "u.username='me';u.password='pw';assert(u.username===''&&u.password===''&&u.href.indexOf('@')<0);"
-        "u.href='http://new.test/n';assert(u.href==='http://new.test/n');"
-        "throws('TypeError',()=>{u.href='not an address'});assert(u.href==='http://new.test/n');"
-        "var o=new URL('mailto:a');o.pathname='b';assert(o.href==='mailto:a','an opaque path is not set');",
-        "url: the setters");
-    dom_script(&f, STORAGE_ASSERT
-        "var u=new URL('http://h.test/?a=1&b=2&a=3');var p=u.searchParams;"
-        "assert(p===u.searchParams&&p instanceof URLSearchParams&&p.get('a')==='1'&&p.getAll('a').join()==='1,3');"
-        "p.append('c','x y');assert(u.search==='?a=1&b=2&a=3&c=x+y');"
-        "p.delete('a');assert(u.search==='?b=2&c=x+y');p.delete('b','nope');assert(p.has('b'));p.delete('b','2');assert(!p.has('b'));"
-        "u.search='?q=%41+b';assert(p.get('q')==='A b'&&p.size===1);"
-        "p.delete('q');assert(u.href==='http://h.test/','an empty list takes the query away');"
-        "u.href='http://h.test/?z=1&a=2';assert(p.get('z')==='1'&&p.size===2);"
-        "var q=new URLSearchParams('?a=1&a=2&b=&=c&&d');"
-        "assert(q.toString()==='a=1&a=2&b=&=c&d='&&q.size===5&&q.get('d')===''&&q.get('nope')===null);"
-        "assert(new URLSearchParams({x:'1',y:'2'}).toString()==='x=1&y=2');"
-        "assert(new URLSearchParams([['x','1'],['y','2']]).toString()==='x=1&y=2');"
-        "assert(new URLSearchParams(new URLSearchParams('a=b')).toString()==='a=b');"
-        "assert(new URLSearchParams(new Map([['m','n']])).toString()==='m=n');"
-        "throws('TypeError',()=>new URLSearchParams([['x']]));throws('TypeError',()=>new URLSearchParams([['x','1','2']]));"
-        "throws('TypeError',()=>new URLSearchParams([5]));throws('TypeError',()=>URLSearchParams());"
-        "assert(new URLSearchParams({'\\ud835x':'1','xx':'2','\\ud83dx':'3'}).toString()==='%EF%BF%BDx=3&xx=2','a key the strings repeat is replaced');"
-        "var s=new URLSearchParams('a b=c d&e~*-._=%7E&\\u00e9=\\ud83d\\ude00');"
-        "assert(s.toString()==='a+b=c+d&e%7E*-._=%7E&%C3%A9=%F0%9F%98%80',s.toString());"
-        "assert(new URLSearchParams('%zz=%4&x=%C3').toString()==='%25zz=%254&x=%EF%BF%BD');"
-        "var t=new URLSearchParams('z=1&\\ufffd=2&\\ud83d\\ude00=3&a=4&z=0');t.sort();"
-        "assert([...t.keys()].join()==='a,z,z,\\ud83d\\ude00,\\ufffd'&&t.getAll('z').join()==='1,0','sorted in UTF-16 code units, stably');"
-        "var many=new URLSearchParams();for(var n=3000;n>0;n--)many.append('k'+(n%1000+1000),String(n));many.sort();"
-        "var order=[...many];assert(order.length===3000&&order[0][0]==='k1000'&&order[0][1]==='3000'&&order[2][1]==='1000');"
-        "for(var m=1;m<order.length;m++)if(order[m-1][0]>order[m][0]||(order[m-1][0]===order[m][0]&&+order[m-1][1]<+order[m][1]))"
-        "assert(false,'many pairs sorted, stably, at '+m);"
-        "t.set('z','9');assert(t.getAll('z').join()==='9'&&[...t.keys()].indexOf('z')===1);t.set('new','n');assert(t.get('new')==='n');"
-        "var seen=[];t.forEach(function(v,k,o){seen.push(k+'='+v+(o===t)+(this===seen))},seen);assert(seen[0]==='a=4truetrue');"
-        "var it=t.entries();assert(Object.prototype.toString.call(it)==='[object URLSearchParams Iterator]');"
-        "assert(it.next().value.join()==='a,4');t.append('late','1');assert([...it].pop().join()==='late,1','live');"
-        "assert(t[Symbol.iterator]===t.entries&&Object.getPrototypeOf(Object.getPrototypeOf(it))===Iterator.prototype);"
-        "assert([...t.values()].length===t.size);"
-        "throws('TypeError',()=>t.append('a'));throws('TypeError',()=>t.get());throws('TypeError',()=>t.forEach());"
-        "throws('TypeError',()=>URLSearchParams.prototype.get.call({},'a'));"
-        "assert(new URLSearchParams().toString()===''&&new URLSearchParams(undefined).size===0);",
-        "url: URLSearchParams, and a URL's query live both ways");
+    dom_script(&f, VIEW_ASSERT
+        "assert(scrollX===0&&scrollY===0&&pageXOffset===0&&pageYOffset===0,'no view reads zeros');"
+        "assert(innerWidth===0&&innerHeight===0&&outerWidth===0&&outerHeight===0);"
+        "assert(scrollTo(5,5)===undefined&&scrollY===0,'no view scrolls nowhere');",
+        "view: without a provider");
+    ViewFake v = {.view = {.width = 800, .height = 600, .outer_width = 820, .outer_height = 700,
+                           .scroll_x = 3, .scroll_y = 40.5}};
+    os64_dom_view_provider_t provider = {fake_view_read, fake_view_scroll, &v};
+    os64_dom_set_view(f.binding, &provider);
+    dom_script(&f, VIEW_ASSERT
+        "assert(scrollX===3&&pageXOffset===3&&scrollY===40.5&&pageYOffset===40.5,'the scroll');"
+        "assert(innerWidth===800&&innerHeight===600&&outerWidth===820&&outerHeight===700,'the sizes');"
+        "scrollTo(10,20);assert(scrollX===10&&scrollY===20,'two numbers');"
+        "scroll(11,21);assert(scrollX===11&&scrollY===21,'scroll is scrollTo');"
+        "scrollTo({top:30});assert(scrollX===11&&scrollY===30,'a missing member keeps its axis');"
+        "scrollTo({left:1,top:2,behavior:'smooth'});assert(scrollX===1&&scrollY===2,'smooth scrolls at once');"
+        "scrollTo({left:4,behavior:'instant'});scrollTo({left:5,behavior:'auto'});assert(scrollX===5);"
+        "scrollTo();scrollTo(undefined);scrollTo(null);scrollTo({});assert(scrollX===5&&scrollY===2,'nothing asked moves nothing');"
+        "scrollBy(1,3);assert(scrollX===6&&scrollY===5,'scrollBy adds');"
+        "scrollBy({top:10});assert(scrollX===6&&scrollY===15,'scrollBy one axis');"
+        "scrollTo(NaN,Infinity);assert(scrollX===0&&scrollY===0,'non-finite is 0');"
+        "assert(focus()===undefined&&blur()===undefined&&document.defaultView.focus===focus&&focus.name==='focus','window focus and blur do nothing');"
+        "scrollTo(5000,-9);assert(scrollX===1000&&scrollY===0,'the host clamps');"
+        "throws('TypeError',()=>scrollTo(5));throws('TypeError',()=>scrollBy(5));throws('TypeError',()=>scroll('x'));"
+        "throws('TypeError',()=>scrollTo({behavior:''}));throws('TypeError',()=>scrollTo({left:1,behavior:'abcd'}));"
+        "throws('TypeError',()=>scrollTo({behavior:200}));"
+        "var order=[];scrollTo({get top(){order.push('top');return 1},get left(){order.push('left');return 1},"
+        "get behavior(){order.push('behavior');return 'auto'}});assert(order.join()==='behavior,left,top','WebIDL member order');"
+        "var bad={valueOf(){throw Error('valueOf')}};var r;try{scrollTo(bad,1)}catch(e){r=e.message}assert(r==='valueOf');"
+        "innerWidth=5;assert(innerWidth===5&&Object.getOwnPropertyDescriptor(window,'innerWidth').value===5,'[Replaceable]');"
+        "scrollY='mine';assert(scrollY==='mine');"
+        "assert(scrollTo.name==='scrollTo'&&scroll.name==='scroll'&&scrollBy.name==='scrollBy','named as WebIDL names them');",
+        "view: scroll and size");
+    check(v.scrolls >= 10, "view: every scroll asks the host");
+    os64_dom_geometry_stats_t before = os64_dom_geometry_stats(f.binding, true);
+    dom_script(&f, "scrollTo(1,1);scrollBy(1,1);", "view: cost");
+    os64_dom_geometry_stats_t cost = os64_dom_geometry_stats(f.binding, false);
+    check(before.layouts > 0 && cost.layouts == 2 && cost.elapsed_us == 14,
+          "view: what a scroll's layout cost is counted as geometry's");
+    v.refuse = true;
+    dom_script(&f, VIEW_ASSERT "throws('InvalidStateError',()=>scrollTo(1,1));", "view: a refused scroll");
+    v.refuse = false;
+    // A scroll whose layout runs out the task's time stops the script, as
+    // a geometry read does.
+    dom_clock_step = 600000;
+    os64_js_outcome_t outcome;
+    const char *source = "for(;;){try{scrollTo(1,1)}catch(e){}}";
+    check(os64_js_run(f.runtime, source, strlen(source), "view-overrun", &outcome) == OS64_JS_LIMIT,
+          "view: a scroll past the budget is a sticky limit");
+    dom_clock_step = 0;
     fixture_free(&f);
-    static const char *const kOperations[] = {
-        "new URL('http://h.test/p?a=1')", "new URL('x','http://h.test/a/')",
-        "var u=new URL('http://h.test/');u.search='a=1'", "URL.canParse('http://h.test/')",
-        "new URLSearchParams('a=1&b=2').toString()", "new URLSearchParams({a:'1'}).get('a')",
-    };
-    binding_sweep("URL", kOperations, sizeof(kOperations) / sizeof(kOperations[0]), NULL);
-    static const char *const kEngine[] = {
-        "var u=new URL('http://h.test/p?a=1&b=2#f');u.searchParams.append('c','3');u.hash='g';u.href",
-        "var p=new URLSearchParams([['a','1'],['b','2']]);p.sort();[...p.entries()].join()",
-        "var p=new URLSearchParams({x:'1'});p.forEach(function(){});p.set('x','2');p.toString()",
-        "URL.parse('x','http://h.test/').origin",
-    };
-    engine_sweep("URL", kEngine, sizeof(kEngine) / sizeof(kEngine[0]), NULL);
-    dom_private_container_cases();
 }
 
-/* WHAT THE PAGE CAN REACH THROUGH THE PROTOTYPES (Array.prototype and
- * Object.prototype with an index's setter on them): no private container
- * of the binding's is ever handed to page code, so a setter that keeps its
- * `this` keeps nothing of the binding's; and every Array the slice answers
- * DEFINES its elements (WebIDL's CreateArrayFromList), so a setter there
- * swallows none of them. */
-static void dom_private_container_cases(void)
+static void dom_view_scrolling_element_cases(void)
 {
-    DomFixture f = fixture_new(NULL);
+    DomFixture f = view_fixture(true, "http://view.test/page.html");
     if (!fixture_ready(&f)) return;
-    dom_script(&f, STORAGE_ASSERT
-        "var caught=0,leaked=null;"
-        "for(const index of ['0','1','2']){"
-        "Object.defineProperty(Array.prototype,index,{set:function(v){caught++;leaked=this},configurable:true});"
-        "Object.defineProperty(Object.prototype,index,{set:function(v){caught++;leaked=this},configurable:true});}"
-        "performance.mark('m');performance.mark('n');performance.measure('x','m','n');"
-        "performance.clearMarks('n');performance.mark('o');"
-        "var all=performance.getEntries(),marks=performance.getEntriesByType('mark'),named=performance.getEntriesByName('m');"
-        "var p=new URLSearchParams('a=1&a=2&b=3');var got=p.getAll('a'),pairs=[...p],keys=[...p.keys()];"
-        "for(const index of ['0','1','2']){delete Array.prototype[index];delete Object.prototype[index];}"
-        "assert(caught===0&&leaked===null,'no setter ran: '+caught);"
-        "assert(all.length===4&&all[0].entryType==='navigation'&&all[1].name==='m','getEntries defines its elements');"
-        "assert(marks.length===2&&marks[0].name==='m'&&marks[1].name==='o'&&named[0].name==='m');"
-        "assert(got.length===2&&got[0]==='1'&&got[1]==='2','getAll defines its elements');"
-        "assert(pairs[0][0]==='a'&&pairs[0][1]==='1'&&pairs[2][0]==='b','an entry pair defines its elements');",
-        "prototypes: no private container leaks, no answered element is swallowed");
+    dom_script(&f, VIEW_ASSERT
+        "assert(document.scrollingElement===document.documentElement,'standards: the root');"
+        "var d=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(document),'scrollingElement')||"
+        "Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Object.getPrototypeOf(document)),'scrollingElement');"
+        "assert(d&&d.get&&!d.set,'read-only');throws('TypeError',()=>d.get.call(document.body));",
+        "scrollingElement: standards mode");
+    fixture_free(&f);
+
+    // A quirks document: the body, unless it and the root both scroll.
+    DomFixture q = {0};
+    os64_html_options_t html_options = os64_html_options_default();
+    html_options.charset = "utf-8";
+    os64_html_parser_t *parser = os64_html_parser_new(&html_options);
+    static const char quirks[] = "<html><body><p>quirks</p></body></html>";
+    os64_html_parser_feed(parser, quirks, sizeof(quirks) - 1);
+    q.document = os64_html_parser_finish(parser);
+    q.state = os64_page_state_create(q.document, 0);
+    os64_js_config_t config = fixture_config();
+    q.runtime = create_fixture(&config);
+    os64_js_outcome_t outcome;
+    q.binding = os64_dom_create(q.runtime, q.document, q.state, NULL, &outcome);
+    if (!fixture_ready(&q)) return;
+    dom_script(&q, VIEW_ASSERT "assert(document.scrollingElement===document.body,'quirks: the body, with no style to ask');",
+               "scrollingElement: quirks without a provider");
+    ComputedFake c = {.document = q.document};
+    os64_dom_set_computed(q.binding, fake_computed, &c);
+    dom_script(&q, VIEW_ASSERT "assert(document.scrollingElement===document.body);", "scrollingElement: nothing scrolls");
+    c.root_overflow = "clip";
+    c.body_overflow = "auto";
+    dom_script(&q, VIEW_ASSERT "assert(document.scrollingElement===null,'a clip root counts as hidden');",
+               "scrollingElement: both scroll");
+    c.body_overflow = "clip";
+    dom_script(&q, VIEW_ASSERT "assert(document.scrollingElement===document.body,'a clip body does not');",
+               "scrollingElement: the body clips");
+    c.root_overflow = "visible";
+    c.body_overflow = "scroll";
+    dom_script(&q, VIEW_ASSERT "assert(document.scrollingElement===document.body,'the root does not scroll');",
+               "scrollingElement: only the body");
+    c.root_overflow = "scroll";
+    c.body_display = "none";
+    dom_script(&q, VIEW_ASSERT "assert(document.scrollingElement===document.body,'a body with no box');",
+               "scrollingElement: an undisplayed body");
+    c.body_display = "contents";
+    dom_script(&q, VIEW_ASSERT "assert(document.scrollingElement===document.body,'a contents body has no box');",
+               "scrollingElement: a contents body");
+    c.body_display = NULL;
+    c.body_overflow = "auto";
+    c.root_display = "none";
+    dom_script(&q, VIEW_ASSERT "assert(document.scrollingElement===document.body,'a root with no box: nor has the body');",
+               "scrollingElement: an undisplayed root");
+    c.root_display = "contents";
+    dom_script(&q, VIEW_ASSERT "assert(document.scrollingElement===null,'a contents root leaves the body its box');",
+               "scrollingElement: a contents root");
+    c.root_display = NULL;
+    dom_script(&q, VIEW_ASSERT "document.documentElement.removeChild(document.body);"
+               "assert(document.scrollingElement===null,'no body');", "scrollingElement: no body");
+    fixture_free(&q);
+}
+
+static void dom_view_event_cases(void)
+{
+    DomFixture f = view_fixture(true, "http://view.test/page.html");
+    if (!fixture_ready(&f)) return;
+    os64_js_outcome_t outcome;
+    check(!os64_dom_view_step(f.binding, &outcome), "view step: nothing owed without a view");
+    ViewFake v = {.view = {.width = 800, .height = 600}};
+    os64_dom_view_provider_t provider = {fake_view_read, fake_view_scroll, &v};
+    os64_dom_set_view(f.binding, &provider);
+    check(!view_step(&f, "view step: unmoved"), "view step: a view that has not moved owes nothing");
+    v.view.scroll_y = 10;
+    check(!view_step(&f, "view step: scroll heard by nothing"), "view step: a scroll nothing hears costs no task");
+    dom_script(&f, "var heard=[];"
+        "addEventListener('resize',e=>heard.push('resize:'+e.bubbles+':'+(e.target===window)+':'+e.isTrusted));"
+        "document.addEventListener('scroll',e=>heard.push('doc:'+e.bubbles+':'+(e.target===document)));"
+        "addEventListener('scroll',e=>heard.push('win:'+(e.currentTarget===window)));"
+        "onscroll=e=>heard.push('onscroll');", "view step: listeners");
+    v.view.width = 640;
+    v.view.scroll_y = 20;
+    check(view_step(&f, "view step: resize"), "view step: a resize runs");
+    check(view_step(&f, "view step: scroll"), "view step: then the scroll");
+    check(!view_step(&f, "view step: done"), "view step: then nothing");
+    dom_script(&f, VIEW_ASSERT
+        "assert(heard.join()==='resize:false:true:true,doc:true:true,win:true,onscroll','resize at window, scroll at the document bubbling to window: '+heard.join());",
+        "view step: what was heard");
+    // matchMedia and the lists' change events.
+    dom_script(&f, VIEW_ASSERT
+        "assert(typeof matchMedia==='function');"
+        "var wide=matchMedia('(min-width: 700px)'),narrow=matchMedia('(max-width:700PX)');"
+        "assert(wide instanceof MediaQueryList&&!wide.matches&&narrow.matches,'judged at the view now');"
+        "assert(wide.media==='(min-width: 700px)'&&narrow.media==='(max-width: 700px)','serialised');"
+        "assert(matchMedia('').media===''&&matchMedia('').matches,'an empty list');"
+        "assert(matchMedia('::').media==='not all'&&!matchMedia('::').matches,'not a query');"
+        "assert(matchMedia('all and (min-width:1px)').media==='(min-width: 1px)');"
+        "throws('TypeError',()=>matchMedia());throws('TypeError',()=>new MediaQueryList());"
+        "assert(Object.prototype.toString.call(wide)==='[object MediaQueryList]');"
+        "var changes=[];wide.addEventListener('change',e=>changes.push('wide:'+e.matches+':'+e.media+':'+(e instanceof MediaQueryListEvent)+':'+(e.target===wide)+':'+e.bubbles+e.cancelable));"
+        "narrow.onchange=e=>changes.push('narrow:'+e.matches);"
+        "var gone=matchMedia('(min-width: 700px)');gone.addListener(e=>changes.push('gone'));"
+        "var cb=e=>changes.push('removed');gone.addListener(cb);gone.removeListener(cb);gone.addListener(null);"
+        "var silent=matchMedia('(min-width: 700px)');"
+        "var dark=matchMedia('(prefers-color-scheme: dark)');dark.addEventListener('change',e=>changes.push('dark:'+e.matches));",
+        "matchMedia: lists");
+    v.view.width = 900;
+    check(view_step(&f, "media: the resize"), "media: the resize comes before the lists");
+    check(view_step(&f, "media: first"), "media: the first list that changed");
+    check(view_step(&f, "media: second"), "media: the second, a call later");
+    check(view_step(&f, "media: third"), "media: the third");
+    check(!view_step(&f, "media: done"), "media: a list nothing hears owes no task");
+    dom_script(&f, VIEW_ASSERT
+        "assert(changes.join()==='wide:true:(min-width: 700px):true:true:falsefalse,narrow:false,gone','in the order made: '+changes.join());"
+        "assert(wide.matches&&!narrow.matches&&silent.matches);changes.length=0;",
+        "media: what was heard");
+    v.view.width = 500;
+    v.view.width = 900;
+    check(!view_step(&f, "media: undone"), "media: a change undone before a step owes nothing");
+    v.view.dark = true;
+    check(view_step(&f, "media: dark"), "media: the person's scheme");
+    check(!view_step(&f, "media: dark done"), "media: and nothing after");
+    dom_script(&f, VIEW_ASSERT "assert(changes.join()==='dark:true'&&dark.matches,changes.join());"
+        "var e=new MediaQueryListEvent('test');assert(e.type==='test'&&e.media===''&&e.matches===false&&!e.bubbles&&!e.cancelable);"
+        "e=new MediaQueryListEvent('change',{media:'x',matches:1,bubbles:true,cancelable:true});"
+        "assert(e.media==='x'&&e.matches===true&&e.bubbles&&e.cancelable&&e instanceof Event);"
+        "throws('TypeError',()=>MediaQueryListEvent('change'));"
+        "assert(Object.getPrototypeOf(MediaQueryListEvent)===Event);"
+        "var n=0;wide.dispatchEvent(new Event('change'));wide.onchange=()=>n++;wide.dispatchEvent(new Event('change'));"
+        "assert(n===1,'a script dispatches at a list');wide.onchange=null;"
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(MediaQueryList.prototype,'media').get.call({}));",
+        "media: events and the constructor");
+    // A list nobody keeps is collected and its record freed at the next
+    // matchMedia; one a listener holds is kept.
+    size_t base = os64_dom_bytes(f.binding);
+    dom_script(&f, "for(var i=0;i<200;i++)matchMedia('(min-width: '+i+'px)');", "media: lists dropped");
+    size_t grown = os64_dom_bytes(f.binding);
+    dom_script(&f, "matchMedia('(color)');", "media: one more");
+    size_t swept = os64_dom_bytes(f.binding);
+    check(grown < base + 512 && swept < base + 512,
+          "media: a list nobody keeps is freed by the next matchMedia, so dropped lists cost nothing");
+    dom_script(&f, "changes.length=0;", "media: forget");
+    v.view.width = 100;
+    check(view_step(&f, "media: held resize"), "media: the resize");
+    check(view_step(&f, "media: held"), "media: a list a listener holds still hears its change");
+    dom_script(&f, VIEW_ASSERT "assert(changes[0]==='wide:false:(min-width: 700px):true:true:falsefalse',changes.join());",
+               "media: held, heard");
+    // A list is held only while something listens on it (the fourth cold
+    // read): an add then a remove, a read of onchange, a remove from a list
+    // nothing was added to, a handler set and cleared, and a dispatch at a
+    // list nothing hears each leave the binding where it was once the lists
+    // are dropped and the next step sweeps; and the list a listener still
+    // holds keeps hearing.
+    for (int i = 0; i < 8 && view_step(&f, "media: settle"); i++) {}
+    dom_script(&f, "changes.length=0;", "media: forget what settling heard");
+    size_t entries = os64_dom_registry_count(f.binding);
+    dom_script(&f, VIEW_ASSERT "var kept=matchMedia('(color)');assert(kept.onchange===null);"
+        "kept.removeEventListener('change',()=>0);kept.onchange=null;", "media: a read and a remove");
+    check(os64_dom_registry_count(f.binding) == entries,
+          "media: reading onchange, removing a listener and clearing the handler make no entry");
+    dom_script(&f, "kept=null;", "media: drop it");
+    size_t before = os64_dom_bytes(f.binding), held = os64_dom_registry_count(f.binding);
+    dom_script(&f, VIEW_ASSERT "var h=()=>0;"
+        "for(var i=0;i<200;i++){var m=matchMedia('(min-width: '+i+'px)');m.addEventListener('change',h);"
+        "m.removeEventListener('change',h);}"
+        "for(var i=0;i<50;i++){var r=matchMedia('(color)');assert(r.onchange===null);r.removeEventListener('change',h);"
+        "r.onchange=null;}"
+        "for(var i=0;i<50;i++){var s=matchMedia('(color)');s.onchange=h;s.onchange=null;s.dispatchEvent(new Event('change'));}"
+        "m=r=s=null;", "media: lists listened to and let go");
+    check(!view_step(&f, "media: swept"), "media: the step that sweeps owes nothing");
+    size_t after = os64_dom_bytes(f.binding);
+    if (after > before + 512 || os64_dom_registry_count(f.binding) != held)
+        fprintf(stderr, "media release: %zu bytes before, %zu after; registry %zu before, %zu after\n", before, after,
+                held, os64_dom_registry_count(f.binding));
+    check(after <= before + 512 && os64_dom_registry_count(f.binding) == held,
+          "media: a list nothing listens on any more is let go and swept, whatever was done to it");
+    dom_script(&f, "changes.length=0;", "media: forget again");
+    v.view.width = 900;
+    check(view_step(&f, "media: held again resize"), "media: the resize back");
+    check(view_step(&f, "media: held again"), "media: the held list still hears");
+    dom_script(&f, VIEW_ASSERT "assert(changes[0]==='wide:true:(min-width: 700px):true:true:falsefalse',changes.join());",
+               "media: held, heard again");
     fixture_free(&f);
 }
+
+static void dom_view_computed_cases(void)
+{
+    DomFixture f = view_fixture(true, "http://view.test/page.html");
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, VIEW_ASSERT
+        "var cs=getComputedStyle(document.body);throws('InvalidStateError',()=>cs.color);"
+        "assert(getComputedStyle(document.body,'::before').color==='','a pseudo-element answers empty with no provider');",
+        "computed: without a provider");
+    ComputedFake c = {.document = f.document};
+    os64_dom_set_computed(f.binding, fake_computed, &c);
+    dom_script(&f, VIEW_ASSERT
+        "var b=document.body,cs=getComputedStyle(b);assert(document.defaultView===window);"
+        "assert(typeof CSSStyleDeclaration==='function'&&cs instanceof CSSStyleDeclaration&&b.style instanceof CSSStyleDeclaration,"
+        "'one interface, both declarations');throws('TypeError',()=>new CSSStyleDeclaration());"
+        "assert(Object.prototype.toString.call(cs)==='[object CSSStyleDeclaration]'&&CSSStyleDeclaration.prototype.constructor===CSSStyleDeclaration);"
+        "assert(cs.setProperty!==b.style.setProperty&&cs.color!==undefined,'the computed members shadow the style object\\'s');"
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(Object.getPrototypeOf(document),'defaultView').get.call(b));"
+        "assert(cs.color==='rgb(1, 2, 3)'&&cs.getPropertyValue('COLOR')==='rgb(1, 2, 3)','camel case, any case');"
+        "assert(cs.backgroundColor===cs['background-color']&&cs.backgroundColor==='p2','dashed attributes');"
+        "assert(cs.WebkitTextFillColor===cs.webkitTextFillColor&&cs['-webkit-text-fill-color']===cs.webkitTextFillColor,'webkit-cased');"
+        "assert(cs.cssFloat===cs.float&&cs.cssFloat===cs.getPropertyValue('float'));"
+        "assert(cs.getPropertyValue('--custom')===''&&cs.getPropertyValue('nonsense')===''&&cs.getPropertyPriority('color')==='');"
+        "var a=cs.width,z=cs.width;assert(a!==z,'every read asks again: live');"
+        "assert(cs.cssText===''&&cs.parentRule===null);"
+        "assert(cs.length>100&&cs.item(0)===cs[0]&&cs.item(cs.length)===''&&cs[cs.length]===undefined);"
+        "var names=[...cs];assert(names.length===cs.length&&names.indexOf('color')>=0);"
+        "var sorted=names.slice().sort((x,y)=>(x[0]==='-')!==(y[0]==='-')?(x[0]==='-'?1:-1):(x<y?-1:1));"
+        "assert(names.join()===sorted.join(),'lexicographic, prefixed names last');"
+        "assert(names[names.length-1]==='-webkit-text-fill-color');"
+        "throws('NoModificationAllowedError',()=>cs.setProperty('color','red'));"
+        "throws('NoModificationAllowedError',()=>cs.removeProperty('color'));"
+        "throws('NoModificationAllowedError',()=>{cs.color='red'});"
+        "throws('NoModificationAllowedError',()=>{cs.cssText='color:red'});"
+        "assert(getComputedStyle(b)!==cs,'a new declaration each call');"
+        "var p=getComputedStyle(b,'::after');assert(p.color===''&&p.length===0,'a pseudo-element answers empty');"
+        "assert(getComputedStyle(b,'after').color==='rgb(1, 2, 3)','no colon: the element');"
+        "assert(getComputedStyle(b,null).color==='rgb(1, 2, 3)'&&getComputedStyle(b,'').color==='rgb(1, 2, 3)');"
+        "throws('TypeError',()=>getComputedStyle());throws('TypeError',()=>getComputedStyle(document));"
+        "throws('TypeError',()=>getComputedStyle({}));throws('TypeError',()=>getComputedStyle(document.createTextNode('t')));"
+        "throws('TypeError',()=>Object.getOwnPropertyDescriptor(Object.getPrototypeOf(cs),'color').get.call(b.style));"
+        "var loose=document.createElement('div'),lcs=getComputedStyle(loose);"
+        "assert(lcs.color===''&&lcs.length===0&&lcs.item(0)===''&&[...lcs].length===0,'a detached element has no style');"
+        "document.body.appendChild(loose);assert(lcs.color==='rgb(1, 2, 3)'&&lcs.length>0,'connected, it has');"
+        "loose.remove();assert(lcs.length===0);",
+        "computed: the declaration");
+    check(c.last != NULL && c.last->kind == OS64_HTML_ELEMENT, "computed: the provider is asked for the element");
+    os64_dom_geometry_stats(f.binding, true);
+    unsigned calls = c.calls;
+    dom_script(&f, "getComputedStyle(document.body).color;getComputedStyle(document.body).display;", "computed: cost");
+    check(c.calls == calls + 2 && os64_dom_geometry_stats(f.binding, false).layouts == 2,
+          "computed: each read's style costs what the provider said");
+    c.refuse = true;
+    dom_script(&f, VIEW_ASSERT "throws('InvalidStateError',()=>getComputedStyle(document.body).color);", "computed: refused");
+    c.refuse = false;
+    size_t base = os64_dom_bytes(f.binding);
+    dom_script(&f, "for(var i=0;i<500;i++)getComputedStyle(document.body).color;", "computed: in a loop");
+    check(os64_dom_bytes(f.binding) == base, "computed: a declaration is engine memory, the snapshot one buffer");
+    fixture_free(&f);
+    // A snapshot past the binding's budget is refused whole.
+    os64_dom_options_t small = os64_dom_default_options();
+    small.max_bytes = 512 * 1024;
+    DomFixture tight = fixture_new(&small);
+    if (fixture_ready(&tight)) {
+        ComputedFake spill = {.spill = true, .document = tight.document};
+        os64_dom_set_computed(tight.binding, fake_computed, &spill);
+        size_t before = os64_dom_bytes(tight.binding);
+        for (int i = 0; i < 4; i++)
+            dom_script(&tight, VIEW_ASSERT "throws('QuotaExceededError',()=>getComputedStyle(document.body).float);",
+                       "computed: a snapshot past the budget");
+        spill.spill = false;
+        dom_script(&tight, VIEW_ASSERT "assert(getComputedStyle(document.body).color==='rgb(1, 2, 3)');",
+                   "computed: a snapshot that fits, after one that did not");
+        check(os64_dom_bytes(tight.binding) <= before + 64 * 1024,
+              "computed: a refused snapshot keeps nothing it grew for");
+        fixture_free(&tight);
+    }
+}
+
+static void dom_view_history_cases(void)
+{
+    DomFixture f = view_fixture(true, "http://view.test/dir/page.html?q=1#start");
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, VIEW_ASSERT
+        "assert(history.state===null&&history.length===1&&history.scrollRestoration==='auto');"
+        "history.pushState({a:1,b:[1,'two',null,true],c:{d:undefined,e:'\\u2603'}},'');"
+        "var s=history.state;assert(s.a===1&&s.b[1]==='two'&&s.b[2]===null&&s.c.e==='\\u2603'&&!('d' in s.c),'JSON carries it');"
+        "assert(history.state===s,'the same object each read');"
+        "var mine={x:1};history.replaceState(mine,'');assert(history.state!==mine&&history.state.x===1,'a fresh copy');"
+        "assert(location.href==='http://view.test/dir/page.html?q=1#start','no address: the same one');"
+        "history.pushState(null,'','other.html#frag');assert(location.href==='http://view.test/dir/other.html#frag'&&history.state===null);"
+        "history.pushState(2,'','?x=1');assert(location.search==='?x=1'&&location.pathname==='/dir/other.html'&&history.state===2);"
+        "history.pushState(undefined,'');assert(history.state===null,'undefined is null');"
+        "history.pushState([undefined],'');assert(history.state[0]===null,'in an array undefined is null');"
+        "assert(location.href==='http://view.test/dir/other.html?x=1','no address: unchanged');"
+        "history.pushState(3,'','#keep');history.pushState(4,'','');assert(location.hash==='#keep'&&history.state===4,'an empty address is none');",
+        "history: state updates");
+    dom_script(&f, VIEW_ASSERT
+        "throws('SecurityError',()=>history.pushState(1,'','http://elsewhere.test/'));"
+        "throws('SecurityError',()=>history.pushState(1,'','https://view.test/'));"
+        "throws('SecurityError',()=>history.replaceState(1,'','http://view.test:8080/'));"
+        "throws('SecurityError',()=>history.pushState(1,'','javascript:1'));"
+        "throws('DataCloneError',()=>history.pushState(()=>1,''));"
+        "throws('DataCloneError',()=>history.pushState({f(){}},''));"
+        "throws('DataCloneError',()=>history.pushState(Symbol('s'),''));"
+        "throws('DataCloneError',()=>history.pushState(1n,''));"
+        "throws('DataCloneError',()=>history.pushState(NaN,''));"
+        "throws('DataCloneError',()=>history.pushState({n:-Infinity},''));"
+        "throws('DataCloneError',()=>history.pushState(-0,''));"
+        "throws('DataCloneError',()=>history.pushState(new Date(0),''));"
+        "throws('DataCloneError',()=>history.pushState(new Map(),''));"
+        "throws('DataCloneError',()=>history.pushState(document.body,''));"
+        "throws('DataCloneError',()=>history.pushState([1,,3],''));"
+        "var named=[1];named.x=2;throws('DataCloneError',()=>history.pushState(named,''));"
+        "var loop={};loop.self=loop;throws('DataCloneError',()=>history.pushState(loop,''));"
+        "var deep={};for(var i=0,at=deep;i<100;i++)at=at.n={};throws('DataCloneError',()=>history.pushState(deep,''));"
+        "throws('QuotaExceededError',()=>history.pushState('x'.repeat(70000),''));"
+        "throws('TypeError',()=>history.pushState(1));"
+        "throws('TypeError',()=>history.pushState(1,Symbol('t')));"
+        "var shared={k:1};history.pushState({a:shared,b:shared},'');assert(history.state.a.k===1&&history.state.b.k===1);"
+        "var gets=0;history.pushState({get g(){gets++;return 5}},'');assert(gets===1&&history.state.g===5,'a getter runs once');"
+        "var refused;try{history.pushState(()=>1,'','http://elsewhere.test/')}catch(e){refused=e.name}"
+        "assert(refused==='DataCloneError','the state is judged before the address');"
+        "assert(history.state.g===5,'a refusal changes nothing');"
+        "history.scrollRestoration='manual';assert(history.scrollRestoration==='manual');"
+        "history.scrollRestoration='nonsense';assert(history.scrollRestoration==='manual');"
+        "history.scrollRestoration='auto';assert(history.scrollRestoration==='auto');history.scrollRestoration='manual';",
+        "history: refusals");
+    check(os64_dom_history_manual(f.binding), "history: the page's scroll restoration reaches the host");
+    HistoryFake h = {.length = 4};
+    os64_dom_history_t host = {fake_history_update, fake_history_fragment, fake_history_length, &h};
+    os64_dom_set_history(f.binding, &host);
+    dom_script(&f, VIEW_ASSERT
+        "assert(history.length===4,'the host counts the entries');"
+        "history.pushState({k:'v'},'','/next');assert(history.length===5&&location.pathname==='/next');",
+        "history: through the host");
+    check(h.updates == 1 && h.push && strcmp(h.url, "http://view.test/next") == 0 && h.has_state &&
+          strcmp(h.state, "{\"k\":\"v\"}") == 0, "history: the host hears the entry, its address and its JSON");
+    dom_script(&f, "history.replaceState(null,'');", "history: replace through the host");
+    check(h.updates == 2 && !h.push && !h.has_state, "history: replace, and a null state is no state");
+    h.refuse = true;
+    dom_script(&f, VIEW_ASSERT
+        "throws('QuotaExceededError',()=>history.pushState(9,'','/refused'));"
+        "assert(location.pathname==='/next'&&history.state===null,'the host refused: nothing changed');",
+        "history: the host refuses");
+    h.refuse = false;
+    // A fragment navigation is the host's, at once.
+    unsigned fragments = h.fragments;
+    dom_script(&f, VIEW_ASSERT
+        "location.hash='part';assert(location.hash==='#part'&&location.href==='http://view.test/next#part','at once');"
+        "assert(history.state===null);location.hash='#part';location.hash='part';location.href=location.href;",
+        "history: location.hash");
+    check(h.fragments == fragments + 2 && h.replace && strcmp(h.fragment, "http://view.test/next#part") == 0,
+          "history: the host takes each, the hash it has already no navigation, the same address replacing");
+    os64_dom_navigation_t ask;
+    check(!os64_dom_take_navigation(f.binding, &ask), "history: a fragment the host took is no ask");
+    dom_script(&f, "location.href='#two';location.replace('#three');", "history: href and replace");
+    check(h.fragments == fragments + 4 && h.replace && strcmp(h.fragment, "http://view.test/next#three") == 0,
+          "history: replace() replaces");
+    dom_script(&f, "location.href='/elsewhere#x';", "history: another document");
+    check(os64_dom_take_navigation(f.binding, &ask) && ask.kind == OS64_DOM_NAVIGATE_URL &&
+              strcmp(ask.url, "http://view.test/elsewhere#x") == 0,
+          "history: another address is still an ask");
+    h.refuse = true;
+    dom_script(&f, VIEW_ASSERT "location.hash='refused';assert(location.hash==='#three','refused: unchanged');",
+               "history: a refused fragment");
+    check(os64_dom_take_navigation(f.binding, &ask) && strcmp(ask.url, "http://view.test/next#refused") == 0,
+          "history: a fragment the host refused is asked for instead");
+    h.refuse = false;
+    // A traversal, then its events.
+    dom_script(&f, "var events=[];addEventListener('popstate',e=>events.push('pop:'+JSON.stringify(e.state)+':'+"
+        "(e.state===history.state)+':'+(e instanceof PopStateEvent)+':'+e.bubbles+e.cancelable+e.hasUAVisualTransition));"
+        "onhashchange=e=>events.push('hash:'+e.oldURL+'>'+e.newURL+':'+(e instanceof HashChangeEvent));",
+        "history: listeners");
+    check(os64_dom_history_moved(f.binding, "http://view.test/next#back", "{\"n\":7}", 7),
+          "history: the host moves the document");
+    os64_js_outcome_t outcome;
+    os64_dom_history_event_t pop = {.state = "{\"n\":7}", .length = 7, .entry = os64_dom_history_entry(f.binding)};
+    check(os64_dom_history_event(f.binding, &pop, &outcome) == OS64_JS_OK, "history: popstate");
+    os64_dom_history_event_t hash = {true, "http://view.test/next#three", "http://view.test/next#back", NULL, 0, 0};
+    check(os64_dom_history_event(f.binding, &hash, &outcome) == OS64_JS_OK, "history: hashchange");
+    dom_script(&f, VIEW_ASSERT
+        "assert(events.join()==='pop:{\"n\":7}:true:true:falsefalsefalse,hash:http://view.test/next#three>http://view.test/next#back:true',events.join());"
+        "assert(location.href==='http://view.test/next#back'&&history.state.n===7);"
+        "var e=new PopStateEvent('popstate');assert(e.state===null&&e.hasUAVisualTransition===false);"
+        "var o={};e=new PopStateEvent('x',{state:o,hasUAVisualTransition:1,bubbles:true});assert(e.state===o&&e.hasUAVisualTransition===true&&e.bubbles);"
+        "e=new HashChangeEvent('hashchange',{oldURL:'a',newURL:'b'});assert(e.oldURL==='a'&&e.newURL==='b');"
+        "assert(new HashChangeEvent('x').oldURL==='');throws('TypeError',()=>PopStateEvent('x'));"
+        "assert(Object.getPrototypeOf(PopStateEvent.prototype)===Event.prototype);",
+        "history: what was heard");
+    // An init dictionary that is a primitive other than undefined or null
+    // is a TypeError (WebIDL § 3.2.17), for every Event interface alike;
+    // undefined and null are an empty one. Codex round 2.
+    dom_script(&f, VIEW_ASSERT
+        "throws('TypeError',()=>new PopStateEvent('x',1));throws('TypeError',()=>new HashChangeEvent('x','bad'));"
+        "throws('TypeError',()=>new MediaQueryListEvent('x',true));throws('TypeError',()=>new Event('x',0));"
+        "assert(new PopStateEvent('x',null).state===null&&new HashChangeEvent('x',undefined).newURL===''&&"
+        "new MediaQueryListEvent('x',null).media===''&&new Event('x',null).type==='x');"
+        "var order=[];new Event({toString(){order.push('type');return 'x'}},{get bubbles(){order.push('init');return 1}});"
+        "assert(order.join()==='type,init',order.join());",
+        "event constructors: a primitive init is a TypeError, undefined and null are empty, the type converts first");
+    check(!os64_dom_history_moved(f.binding, NULL, NULL, 0) && !os64_dom_history_moved(f.binding, "x", NULL, 3),
+          "history: a move with no address, or a length with no state, is refused");
+    os64_dom_history_event_t no_old = {true, NULL, "http://view.test/x", NULL, 0, 0};
+    os64_dom_history_event_t no_new = {true, "http://view.test/x", NULL, NULL, 0, 0};
+    os64_dom_history_event_t no_state = {false, NULL, NULL, NULL, 3, 0};
+    check(os64_dom_history_event(f.binding, &no_old, &outcome) == OS64_JS_BAD_ARGUMENT &&
+              os64_dom_history_event(f.binding, &no_new, &outcome) == OS64_JS_BAD_ARGUMENT,
+          "history: a hashchange needs both addresses");
+    check(os64_dom_history_event(f.binding, &no_state, &outcome) == OS64_JS_BAD_ARGUMENT &&
+              os64_dom_history_event(f.binding, NULL, &outcome) == OS64_JS_BAD_ARGUMENT,
+          "history: a popstate's length needs its state, and an event is needed");
+    check(os64_dom_history_event(NULL, &pop, &outcome) == OS64_JS_BAD_ARGUMENT, "history: NULL binding");
+    check(os64_dom_history_entry(NULL) == 0, "history: a NULL binding names no entry");
+    os64_dom_set_history(f.binding, NULL);
+    dom_script(&f, VIEW_ASSERT "assert(history.length===1,'no host: one entry');", "history: no host");
+    fixture_free(&f);
+}
+
+static void dom_view_off_cases(void)
+{
+    DomFixture f = view_fixture(false, "http://view.test/page.html");
+    if (!fixture_ready(&f)) return;
+    ViewFake v = {.view = {.width = 800, .height = 600}};
+    os64_dom_view_provider_t provider = {fake_view_read, fake_view_scroll, &v};
+    os64_dom_set_view(f.binding, &provider);
+    HistoryFake h = {.length = 3};
+    os64_dom_history_t host = {fake_history_update, fake_history_fragment, fake_history_length, &h};
+    os64_dom_set_history(f.binding, &host);
+    dom_script(&f, VIEW_ASSERT
+        "for(const n of ['scrollX','pageYOffset','innerWidth','outerHeight','scroll','scrollTo','scrollBy','focus','blur',"
+        "'onscroll','onresize','matchMedia','MediaQueryList','MediaQueryListEvent','getComputedStyle',"
+        "'onpopstate','onhashchange','PopStateEvent','HashChangeEvent','CSSStyleDeclaration'])assert(!(n in window),n);"
+        "assert(!('pushState' in history)&&!('replaceState' in history)&&!('state' in history)&&!('scrollRestoration' in history));"
+        "assert(!('scrollingElement' in document)&&!('defaultView' in document)&&!('onscroll' in document.body)&&!('onscroll' in document));"
+        "assert(history.length===1,'the classic length');"
+        "var heard=0;addEventListener('scroll',()=>heard++);addEventListener('popstate',()=>heard++);"
+        "location.hash='x';",
+        "modern off: the view's names are absent");
+    os64_dom_navigation_t ask;
+    check(os64_dom_take_navigation(f.binding, &ask) && strcmp(ask.url, "http://view.test/page.html#x") == 0 &&
+              h.fragments == 0,
+          "modern off: a fragment is the ask it always was");
+    dom_script(&f, "history.back();history.go(-2);", "modern off: two traversals");
+    check(os64_dom_take_navigation(f.binding, &ask) && ask.kind == OS64_DOM_NAVIGATE_HISTORY && ask.delta == -2,
+          "modern off: the last traversal asked wins, as before the arc");
+    v.view.scroll_y = 50;
+    os64_js_outcome_t outcome;
+    check(!os64_dom_view_step(f.binding, &outcome), "modern off: the view owes no event");
+    os64_dom_history_event_t pop = {.entry = os64_dom_history_entry(f.binding)};
+    check(os64_dom_history_event(f.binding, &pop, &outcome) == OS64_JS_OK, "modern off: popstate is OK");
+    dom_script(&f, VIEW_ASSERT "assert(heard===0,'nothing dispatched');", "modern off: nothing heard");
+    fixture_free(&f);
+}
+
+/* What a history event carries is what it was owed with, and a script's
+ * fragment navigation fires its popstate inside the script: the hash
+ * setter's own rule, the synchronous popstate, and an owed event read
+ * after other moves came between. */
+static void dom_view_owed_cases(void)
+{
+    DomFixture f = view_fixture(true, "http://view.test/p#a%20b");
+    if (!fixture_ready(&f)) return;
+    HistoryFake h = {.length = 1};
+    os64_dom_history_t host = {fake_history_update, fake_history_fragment, fake_history_length, &h};
+    os64_dom_set_history(f.binding, &host);
+    dom_script(&f, VIEW_ASSERT
+        "location.hash='a b';location.hash='#a b';location.hash='a%20b';"
+        "assert(location.href==='http://view.test/p#a%20b','the fragment it has: nothing');",
+        "owed: the hash setter's own rule");
+    check(h.fragments == 0, "owed: a hash the address already has is no navigation (HTML's hash setter)");
+    dom_script(&f, VIEW_ASSERT
+        "location.hash='q\"<>`';assert(location.hash==='#q%22%3C%3E%60','the fragment percent-encode set');"
+        "var log=[];addEventListener('popstate',e=>log.push('pop:'+JSON.stringify(e.state)+location.hash+':'+(e.state===history.state)));"
+        "location.hash='x';log.push('after');history.pushState({n:1},'');"
+        "assert(log.join()==='pop:null#x:true,after',log.join());"
+        "var thrower=()=>{throw Error('a listener that throws')};addEventListener('popstate',thrower);"
+        "location.hash='y';log.push('went on');removeEventListener('popstate',thrower);"
+        "assert(log.join()==='pop:null#x:true,after,pop:null#y:true,went on',log.join());",
+        "owed: a script's fragment navigation fires popstate inside it");
+    check(h.fragments == 3, "owed: each fragment navigation reached the host");
+    os64_js_outcome_t outcome;
+    check(os64_dom_take_report(f.binding, &outcome) && strstr(outcome.message, "a listener that throws") != NULL,
+          "owed: the throwing listener is reported, as a nested dispatch's is");
+    dom_script(&f, "var heard=[];onhashchange=e=>heard.push(e.oldURL.split('#')[1]+'>'+e.newURL.split('#')[1]);"
+        "addEventListener('popstate',e=>heard.push('pop:'+JSON.stringify(e.state)+':'+(e.state===history.state)));",
+        "owed: listeners");
+    uint64_t owed_for = os64_dom_history_entry(f.binding);
+    check(os64_dom_history_moved(f.binding, "http://view.test/p#c", "{\"now\":3}", 9),
+          "owed: another move comes before the owed events run");
+    os64_dom_history_event_t hash = {true, "http://view.test/p#a", "http://view.test/p#b", NULL, 0, 0};
+    os64_dom_history_event_t stale = {false, NULL, NULL, "{\"then\":1}", 10, owed_for};
+    os64_dom_history_event_t current = {.state = "{\"now\":3}", .length = 9,
+                                        .entry = os64_dom_history_entry(f.binding)};
+    check(os64_dom_history_event(f.binding, &hash, &outcome) == OS64_JS_OK &&
+              os64_dom_history_event(f.binding, &stale, &outcome) == OS64_JS_OK &&
+              os64_dom_history_event(f.binding, &current, &outcome) == OS64_JS_OK,
+          "owed: the events run");
+    dom_script(&f, VIEW_ASSERT
+        "assert(heard.join()==='a>b,pop:{\"then\":1}:false,pop:{\"now\":3}:true',heard.join());",
+        "owed: each carries what it was owed with; only the current entry's is history.state");
+    fixture_free(&f);
+}
+
+/* The arc's handler types are handlers only with the switch on, as
+ * properties and as content attributes alike: with it off a
+ * `<body onhashchange>` or a `<div onscroll>` is an ordinary attribute,
+ * which an event the page dispatches itself does not run. */
+static void dom_view_attribute_cases(void)
+{
+    for (int modern = 0; modern < 2; modern++) {
+        DomFixture f = view_fixture(modern != 0, "http://view.test/page.html");
+        if (!fixture_ready(&f)) continue;
+        char source[1024];
+        snprintf(source, sizeof(source), VIEW_ASSERT
+            "var ran=[];document.body.setAttribute('onhashchange','ran.push(\"hash\")');"
+            "document.body.setAttribute('onpopstate','ran.push(\"pop\")');"
+            "var d=document.createElement('div');d.setAttribute('onscroll','ran.push(\"scroll\")');"
+            "d.setAttribute('onresize','ran.push(\"resize\")');document.body.appendChild(d);"
+            "dispatchEvent(new Event('hashchange'));dispatchEvent(new Event('popstate'));"
+            "d.dispatchEvent(new Event('scroll'));d.dispatchEvent(new Event('resize'));"
+            "assert(ran.join()===%s,ran.join());"
+            "assert(typeof onhashchange===%s&&typeof d.onscroll===%s);",
+            modern ? "'hash,pop,scroll,resize'" : "''", modern ? "'function'" : "'undefined'",
+            modern ? "'function'" : "'undefined'");
+        dom_script(&f, source, modern ? "attributes: the arc's handlers with the switch on"
+                                      : "attributes: no arc handler with the switch off");
+        check(os64_dom_listens(f.binding, "hashchange") == (modern != 0) &&
+                  os64_dom_listens(f.binding, "scroll") == (modern != 0),
+              "attributes: listens counts the arc's attributes only with the switch on");
+        fixture_free(&f);
+    }
+}
+
+/* Every binding allocation the slice's operations make, failed in turn:
+ * the script sees QuotaExceededError (or the operation is whole), and what
+ * it would have changed is as it was. */
+static void dom_view_allocation_cases(void)
+{
+    static const char *const operations[] = {
+        "history.pushState({a:[1,2,'three']},'','?n=1')",
+        "history.replaceState('kept','','#r')",
+        "matchMedia('(min-width: 1px)').addEventListener('change',()=>{})",
+        "getComputedStyle(document.body).color",
+        "location.hash='frag'",
+        "addEventListener('popstate',e=>{globalThis.heard=e.state});location.hash='frag'",
+        "history.state",
+    };
+    for (size_t op = 0; op < sizeof(operations) / sizeof(operations[0]); op++) {
+        DomFixture f = view_fixture(true, "http://view.test/page.html");
+        if (!fixture_ready(&f)) continue;
+        ComputedFake c = {.document = f.document};
+        HistoryFake h = {.length = 1};
+        os64_dom_history_t host = {fake_history_update, fake_history_fragment, fake_history_length, &h};
+        os64_dom_set_computed(f.binding, fake_computed, &c);
+        os64_dom_set_history(f.binding, &host);
+        size_t start = dom_attempts;
+        dom_script(&f, operations[op], "view-allocation-baseline.js");
+        size_t count = dom_attempts - start;
+        fixture_free(&f);
+        for (size_t cut = 1; cut <= count; cut++) {
+            f = view_fixture(true, "http://view.test/page.html");
+            if (!fixture_ready(&f)) break;
+            c = (ComputedFake){.document = f.document};
+            h = (HistoryFake){.length = 1};
+            os64_dom_set_computed(f.binding, fake_computed, &c);
+            os64_dom_set_history(f.binding, &host);
+            char source[1024];
+            snprintf(source, sizeof(source),
+                     "var before=location.href;try{%s;globalThis.refused=false}catch(e){"
+                     "if(e.name!=='QuotaExceededError')throw e;globalThis.refused=true}", operations[op]);
+            size_t target = dom_attempts + cut;
+            dom_fail_at = target;
+            int ok = dom_script(&f, source, "view-allocation-cut.js");
+            dom_fail_at = 0;
+            dom_sweeps++;
+            check(dom_attempts >= target, "view: injection point reached");
+            if (ok)
+                dom_script(&f, VIEW_ASSERT "assert(!refused||location.href===before,'a refusal moved the address');",
+                           "view-allocation-caught.js");
+            fixture_free(&f);
+        }
+    }
+}
+
+/* The host's half under the same sweep: a move, the two history events and
+ * each kind of view step, every binding allocation each makes failed in
+ * turn. A refused move answers false and leaves the address and the state
+ * as they were; an event that could not be built or delivered reports
+ * through its outcome; neither leaks (fixture_free counts). */
+enum { HOST_MOVE, HOST_POP, HOST_POP_STALE, HOST_HASH, HOST_RESIZE, HOST_SCROLL, HOST_CHANGE, HOST_OPS };
+
+static DomFixture host_op_fixture(int op, ViewFake *v, os64_dom_view_provider_t *provider)
+{
+    DomFixture f = view_fixture(true, "http://view.test/page.html");
+    if (!fixture_ready(&f)) return f;
+    *v = (ViewFake){.view = {.width = 400, .height = 300}};
+    *provider = (os64_dom_view_provider_t){fake_view_read, fake_view_scroll, v};
+    os64_dom_set_view(f.binding, provider);
+    dom_script(&f, "globalThis.heard=[];"
+        "addEventListener('popstate',e=>heard.push('pop:'+JSON.stringify(e.state)));"
+        "onhashchange=e=>heard.push('hash:'+e.newURL);"
+        "addEventListener('scroll',()=>heard.push('scroll'));"
+        "var mq=matchMedia('(min-width: 500px)');mq.onchange=e=>heard.push('change:'+e.matches+':'+e.media);"
+        "history.replaceState({was:1},'');",
+        "host op: listeners");
+    if (op == HOST_RESIZE)
+        dom_script(&f, "addEventListener('resize',()=>heard.push('resize'));", "host op: resize listener");
+    return f;
+}
+
+static bool host_op(DomFixture *f, ViewFake *v, int op, os64_js_status_t *status)
+{
+    os64_js_outcome_t outcome = {0};
+    *status = OS64_JS_OK;
+    switch (op) {
+    case HOST_MOVE:
+        return os64_dom_history_moved(f->binding, "http://view.test/page.html#moved", "{\"n\":1}", 7);
+    case HOST_POP: {
+        os64_dom_history_event_t pop = {.entry = os64_dom_history_entry(f->binding)};
+        *status = os64_dom_history_event(f->binding, &pop, &outcome);
+        return true;
+    }
+    case HOST_POP_STALE: {
+        // Owed for an entry that is no longer the current one: its state
+        // is read from the JSON it carried.
+        os64_dom_history_event_t pop = {.state = "{\"old\":2}", .length = 9,
+                                        .entry = os64_dom_history_entry(f->binding) + 1};
+        *status = os64_dom_history_event(f->binding, &pop, &outcome);
+        return true;
+    }
+    case HOST_HASH: {
+        os64_dom_history_event_t hash = {true, "http://view.test/page.html#old", "http://view.test/page.html",
+                                         NULL, 0, 0};
+        *status = os64_dom_history_event(f->binding, &hash, &outcome);
+        return true;
+    }
+    case HOST_RESIZE:
+        v->view.height = 320;            // the list reads only the width
+        break;
+    case HOST_SCROLL:
+        v->view.scroll_y = 25;
+        break;
+    case HOST_CHANGE:
+        v->view.width = 800;
+        break;
+    }
+    bool ran = os64_dom_view_step(f->binding, &outcome);
+    *status = outcome.status;
+    return ran;
+}
+
+static void dom_view_host_allocation_cases(void)
+{
+    // What the page heard, as JS string literals.
+    static const char *const heard[HOST_OPS] = {
+        "''", "'pop:{\"was\":1}'", "'pop:{\"old\":2}'", "'hash:http://view.test/page.html'", "'resize'", "'scroll'",
+        "'change:true:(min-width: 500px)'",
+    };
+    for (int op = 0; op < HOST_OPS; op++) {
+        ViewFake v;
+        os64_dom_view_provider_t provider;
+        DomFixture f = host_op_fixture(op, &v, &provider);
+        if (!fixture_ready(&f)) continue;
+        os64_js_status_t status;
+        size_t start = dom_attempts;
+        bool done = host_op(&f, &v, op, &status);
+        size_t count = dom_attempts - start;
+        check(done && status == OS64_JS_OK, "host op: the baseline runs");
+        char source[1024];
+        snprintf(source, sizeof(source), VIEW_ASSERT "assert(heard.join()===%s,heard.join());", heard[op]);
+        dom_script(&f, source, "host op: the baseline is heard");
+        fixture_free(&f);
+        for (size_t cut = 1; cut <= count; cut++) {
+            f = host_op_fixture(op, &v, &provider);
+            if (!fixture_ready(&f)) break;
+            size_t target = dom_attempts + cut;
+            dom_fail_at = target;
+            done = host_op(&f, &v, op, &status);
+            dom_fail_at = 0;
+            dom_sweeps++;
+            check(dom_attempts >= target, "host op: injection point reached");
+            if (op == HOST_MOVE && !done)
+                dom_script(&f, VIEW_ASSERT "assert(location.href==='http://view.test/page.html'&&history.state.was===1,"
+                               "'a refused move changed the document');",
+                           "host op: a refused move");
+            else if (op == HOST_MOVE)
+                dom_script(&f, VIEW_ASSERT "assert(location.hash==='#moved'&&history.state.n===1);", "host op: moved");
+            // Whatever the cut cost, the binding is whole: a page task runs.
+            dom_script(&f, VIEW_ASSERT "assert(Array.isArray(heard)&&mq.media==='(min-width: 500px)');",
+                       "host op: the binding after a cut");
+            fixture_free(&f);
+        }
+    }
+}
+
+/* Edges a hostile page reaches for: a query nested past libgarb's depth or
+ * a megabyte long, a NUL inside a name or a query (a script string's NUL
+ * is U+FFFD by the time a C string sees it, so it ends nothing), and a
+ * state exactly at its cap and one byte past it. */
+static void dom_view_edge_cases(void)
+{
+    DomFixture f = view_fixture(true, "http://view.test/page.html");
+    if (!fixture_ready(&f)) return;
+    ViewFake v = {.view = {.width = 800, .height = 600}};
+    os64_dom_view_provider_t provider = {fake_view_read, fake_view_scroll, &v};
+    os64_dom_set_view(f.binding, &provider);
+    ComputedFake c = {.document = f.document};
+    os64_dom_set_computed(f.binding, fake_computed, &c);
+    dom_script(&f, VIEW_ASSERT
+        "var deep=matchMedia('('.repeat(100000)+')'.repeat(100000));assert(!deep.matches&&deep.media==='not all');"
+        "var q='(width)';for(var i=0;i<60;i++)q='('+q+')';var nested=matchMedia(q);"
+        "assert(nested.matches&&nested.media===q,'nested within the bound: read once a level');"
+        "var long=matchMedia('(min-width: 1px) and '.repeat(50000)+'(color)');assert(long.matches,'a long list');"
+        "var big=matchMedia('x'.repeat(1<<20));assert(!big.matches&&big.media.length===1<<20,'a long unknown type');"
+        "assert(!matchMedia('screen\\0, print').matches,'a NUL is part of the type, not its end');"
+        "assert(matchMedia('screen\\0, print').media==='screen\\ufffd, print');"
+        "assert(getComputedStyle(document.body).getPropertyValue('color\\0')==='','a NUL is part of the name');"
+        "history.pushState('x'.repeat(65534),'');assert(history.state.length===65534,'JSON exactly at the cap');"
+        "throws('QuotaExceededError',()=>history.pushState('x'.repeat(65535),''));"
+        "assert(history.state.length===65534,'a refusal keeps the state');"
+        "throws('QuotaExceededError',()=>history.pushState({k:'x'.repeat(65530)},''));",
+        "edges: queries, names and the state's cap");
+    fixture_free(&f);
+}
+
+static void dom_view_cases(void)
+{
+    dom_view_scroll_cases();
+    dom_view_scrolling_element_cases();
+    dom_view_event_cases();
+    dom_view_computed_cases();
+    dom_view_history_cases();
+    dom_view_off_cases();
+    dom_view_edge_cases();
+    dom_view_owed_cases();
+    dom_view_attribute_cases();
+}
+#undef VIEW_ASSERT

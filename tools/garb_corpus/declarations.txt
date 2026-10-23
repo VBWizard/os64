@@ -287,6 +287,12 @@ IN: text-indent: -10px
 OUT: text-indent: -10px
 IN: text-indent: 5% hanging
 OUT: text-indent: 5%
+IN: text-indent: each-line 1em hanging
+OUT: text-indent: 1em
+IN: text-indent: hanging 20% hanging
+OUT: invalid
+IN: text-indent: each-line each-line 1em
+OUT: invalid
 IN: text-transform: uppercase
 OUT: text-transform: uppercase
 
@@ -500,6 +506,16 @@ IN: background-image: linear-gradient(to, red, blue)
 OUT: invalid
 IN: background-image: radial-gradient(at, red, blue)
 OUT: invalid
+# A gradient's centre is a <position> (Values 4 § 8.3), which has no
+# three-part form: that is a background's alone (Backgrounds 3 § 3.6).
+IN: background-image: radial-gradient(at right 3% center, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(at left 4px top, red, blue)
+OUT: invalid
+IN: background-image: radial-gradient(at right 30% top 60px, red, blue)
+OUT: background-image: radial-gradient(...)
+IN: background-position: right 3% center
+OUT: background-position-x: calc(100% - 3%); background-position-y: 50%
 IN: background-image: radial-gradient(circle 20%, red, blue)
 OUT: invalid
 IN: background-image: radial-gradient(circle 10px 20px, red, blue)
@@ -1062,4 +1078,286 @@ OUT: invalid
 IN: will-change: transform, all
 OUT: invalid
 IN: will-change: 3px
+OUT: invalid
+
+# ── cursor (CSS UI 4 § 5.1.1): the keyword a pointer falls back to, the
+# pictures before it read and not kept ──
+IN: cursor: pointer
+OUT: cursor: pointer
+IN: cursor: NWSE-Resize
+OUT: cursor: nwse-resize
+IN: cursor: url(hand.cur), pointer
+OUT: cursor: pointer
+IN: cursor: url("a.svg") 1 calc(2 + 0), url(b.png), copy
+OUT: cursor: copy
+IN: cursor: url(a.png) 3 -4, move
+OUT: cursor: move
+IN: cursor: image-set("a.png" 1x, "b.png" 2x) 5 6, grab
+OUT: cursor: grab
+IN: cursor: image-set(url(a.png) 1x type("image/png"), "b.png") 5 6, grab
+OUT: cursor: grab
+IN: cursor: -webkit-image-set("a.png" 192dpi), pointer
+OUT: cursor: pointer
+IN: cursor: image-set(garbage!!), pointer
+OUT: invalid
+IN: cursor: image-set(), pointer
+OUT: invalid
+IN: cursor: image-set("a.png" 1x 2x), pointer
+OUT: invalid
+IN: cursor: image-set(linear-gradient(red, blue) 1x), pointer
+OUT: invalid
+IN: cursor: inherit
+OUT: cursor: inherit
+IN: cursor: url(a.png)
+OUT: invalid
+IN: cursor: url(a.png) alias
+OUT: invalid
+IN: cursor: url(a.png) 1px 2px, copy
+OUT: invalid
+IN: cursor: url(a.png) 3, move
+OUT: invalid
+IN: cursor: linear-gradient(red, blue), pointer
+OUT: invalid
+IN: cursor: pointer, auto
+OUT: invalid
+IN: cursor: en-resize
+OUT: invalid
+IN: cursor: hand
+OUT: invalid
+
+# ── user-select (CSS UI 4 § 6.1) ──
+IN: user-select: none
+OUT: user-select: none
+IN: user-select: contain
+OUT: user-select: contain
+IN: user-select: text contain
+OUT: invalid
+IN: user-select: visible
+OUT: invalid
+
+# ── word-break and overflow-wrap (Text 3 § 5.1, § 5.4) ──
+IN: word-break: break-all
+OUT: word-break: break-all
+IN: word-break: Keep-All
+OUT: word-break: keep-all
+IN: word-break: break-word
+OUT: word-break: break-word
+IN: word-break: manual
+OUT: invalid
+IN: word-break: normal keep-all
+OUT: invalid
+IN: overflow-wrap: anywhere
+OUT: overflow-wrap: anywhere
+IN: overflow-wrap: break-word
+OUT: overflow-wrap: break-word
+IN: overflow-wrap: break-all
+OUT: invalid
+# word-wrap is overflow-wrap's legacy name (Text 3 § 5.4).
+IN: word-wrap: break-word
+OUT: overflow-wrap: break-word
+IN: word-wrap: anywhere anywhere
+OUT: invalid
+
+# ── letter-spacing (Text 3 § 7.2: Text 4's percentage is not read) ──
+IN: letter-spacing: normal
+OUT: letter-spacing: normal
+IN: letter-spacing: 0
+OUT: letter-spacing: 0px
+IN: letter-spacing: -0.05em
+OUT: letter-spacing: -0.05em
+IN: letter-spacing: 10%
+OUT: invalid
+IN: letter-spacing: calc(2px + 1em)
+OUT: letter-spacing: calc(2px + 1em)
+IN: letter-spacing: 2
+OUT: invalid
+IN: quirks letter-spacing: 2
+OUT: letter-spacing: 2px
+IN: letter-spacing: normal 10px
+OUT: invalid
+IN: letter-spacing: auto
+OUT: invalid
+
+# ── text-overflow (Overflow 4 § 4.1, one value: clip or ellipsis) ──
+IN: text-overflow: ellipsis
+OUT: text-overflow: ellipsis
+IN: text-overflow: CLIP
+OUT: text-overflow: clip
+IN: text-overflow: "-"
+OUT: invalid
+IN: text-overflow: clip ellipsis
+OUT: invalid
+IN: text-overflow: fade
+OUT: invalid
+
+# ── outline (CSS UI 4 § 3) ──
+IN: outline: 2px dashed red
+OUT: outline-width: 2px; outline-style: dashed; outline-color: rgb(255, 0, 0)
+IN: outline: red solid
+OUT: outline-width: medium; outline-style: solid; outline-color: rgb(255, 0, 0)
+IN: outline: auto
+OUT: outline-width: medium; outline-style: auto; outline-color: auto
+IN: outline: auto solid
+OUT: outline-width: medium; outline-style: solid; outline-color: auto
+IN: outline: solid auto
+OUT: outline-width: medium; outline-style: solid; outline-color: auto
+IN: outline: auto 2px solid
+OUT: outline-width: 2px; outline-style: solid; outline-color: auto
+IN: outline: auto auto
+OUT: outline-width: medium; outline-style: auto; outline-color: auto
+IN: outline: auto red
+OUT: outline-width: medium; outline-style: auto; outline-color: rgb(255, 0, 0)
+IN: outline: auto auto auto
+OUT: invalid
+IN: outline: none
+OUT: outline-width: medium; outline-style: none; outline-color: auto
+IN: outline: thick
+OUT: outline-width: thick; outline-style: none; outline-color: auto
+IN: outline: inherit
+OUT: outline-width: inherit; outline-style: inherit; outline-color: inherit
+IN: outline: thin outset thick
+OUT: invalid
+IN: outline: invert solid
+OUT: invalid
+IN: outline: hidden
+OUT: invalid
+IN: outline-width: 0
+OUT: outline-width: 0px
+IN: outline-width: 1%
+OUT: invalid
+IN: outline-width: -1px
+OUT: invalid
+IN: quirks outline-width: 3
+OUT: invalid
+IN: outline-style: auto
+OUT: outline-style: auto
+IN: outline-style: hidden
+OUT: invalid
+IN: outline-color: auto
+OUT: outline-color: auto
+IN: outline-color: currentColor
+OUT: outline-color: currentcolor
+IN: outline-color: invert
+OUT: invalid
+IN: outline-offset: -2px
+OUT: outline-offset: -2px
+IN: outline-offset: calc(3rem + 4vw)
+OUT: outline-offset: calc(3rem + 4vw)
+IN: outline-offset: 1%
+OUT: invalid
+IN: outline-offset: auto
+OUT: invalid
+
+# ── object-fit and object-position (Images 3 § 4.5, § 4.6) ──
+IN: object-fit: cover
+OUT: object-fit: cover
+IN: object-fit: Scale-Down
+OUT: object-fit: scale-down
+IN: object-fit: cover scale-down
+OUT: invalid
+IN: object-fit: auto
+OUT: invalid
+IN: object-position: center
+OUT: object-position: 50% 50%
+IN: object-position: left bottom
+OUT: object-position: 0% 100%
+IN: object-position: top
+OUT: object-position: 50% 0%
+IN: object-position: 10px 20%
+OUT: object-position: 10px 20%
+IN: object-position: right 30% top 60px
+OUT: object-position: calc(100% - 30%) 60px
+IN: object-position: bottom 10% right 20%
+OUT: object-position: calc(100% - 20%) calc(100% - 10%)
+IN: object-position: right 3% center
+OUT: invalid
+IN: object-position: 1px 2px 3px
+OUT: invalid
+IN: object-position: left right
+OUT: invalid
+IN: quirks object-position: 10 20
+OUT: invalid
+IN: object-position: inherit
+OUT: object-position: inherit
+
+# ── aspect-ratio (Sizing 4 § 4.1): auto || <ratio>, a height left out 1 ──
+IN: aspect-ratio: auto
+OUT: aspect-ratio: auto
+IN: aspect-ratio: 16 / 9
+OUT: aspect-ratio: 16 / 9
+IN: aspect-ratio: 16/9
+OUT: aspect-ratio: 16 / 9
+IN: aspect-ratio: 1.5
+OUT: aspect-ratio: 1.5 / 1
+IN: aspect-ratio: auto 4 / 3
+OUT: aspect-ratio: auto 4 / 3
+IN: aspect-ratio: 4 / 3 auto
+OUT: aspect-ratio: auto 4 / 3
+IN: aspect-ratio: 0 / 0
+OUT: aspect-ratio: 0 / 0
+IN: aspect-ratio: calc(2 + 1) / calc(4 - 3)
+OUT: aspect-ratio: 3 / 1
+IN: aspect-ratio: 16 / -9
+OUT: invalid
+IN: aspect-ratio: 16 9
+OUT: invalid
+IN: aspect-ratio: 16px / 9px
+OUT: invalid
+IN: aspect-ratio: auto / 16
+OUT: invalid
+IN: aspect-ratio: 16 /
+OUT: invalid
+IN: aspect-ratio: auto auto
+OUT: invalid
+IN: aspect-ratio: auto 1 / 1 auto
+OUT: invalid
+
+# ── CSS Logical 1: each flow-relative name sets the physical longhand it
+# maps to in a horizontal, left-to-right writing mode ──
+IN: inline-size: 50%
+OUT: width: 50%
+IN: max-block-size: 10em
+OUT: max-height: 10em
+IN: margin-inline-start: auto
+OUT: margin-left: auto
+IN: padding-block-end: 3px
+OUT: padding-bottom: 3px
+IN: inset-inline-end: -2px
+OUT: right: -2px
+IN: border-block-start-color: red
+OUT: border-top-color: rgb(255, 0, 0)
+IN: border-inline-end: 1px solid
+OUT: border-right-width: 1px; border-right-style: solid; border-right-color: currentcolor
+IN: margin-inline: 1px 2px
+OUT: margin-left: 1px; margin-right: 2px
+IN: margin-block: auto
+OUT: margin-top: auto; margin-bottom: auto
+IN: padding-inline: 5%
+OUT: padding-left: 5%; padding-right: 5%
+IN: inset-block: 0 auto
+OUT: top: 0px; bottom: auto
+IN: border-inline-width: thin thick
+OUT: border-left-width: thin; border-right-width: thick
+IN: border-block-style: dotted
+OUT: border-top-style: dotted; border-bottom-style: dotted
+IN: border-inline-color: red blue
+OUT: border-left-color: rgb(255, 0, 0); border-right-color: rgb(0, 0, 255)
+IN: border-block: 2px dashed
+OUT: border-top-width: 2px; border-top-style: dashed; border-top-color: currentcolor; border-bottom-width: 2px; border-bottom-style: dashed; border-bottom-color: currentcolor
+IN: margin-inline: inherit
+OUT: margin-left: inherit; margin-right: inherit
+IN: margin-inline: 1px 2px 3px
+OUT: invalid
+IN: padding-block: -1px
+OUT: invalid
+IN: inline-size: auto auto
+OUT: invalid
+# The Quirks standard's unitless lengths are the physical properties' only.
+IN: quirks margin-left: 7
+OUT: margin-left: 7px
+IN: quirks margin-inline-start: 7
+OUT: invalid
+IN: quirks margin-inline: 7
+OUT: invalid
+IN: quirks inline-size: 7
 OUT: invalid

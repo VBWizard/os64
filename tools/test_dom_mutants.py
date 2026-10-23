@@ -16,6 +16,7 @@ parser.add_argument('objects',type=pathlib.Path)
 parser.add_argument('--logs',type=pathlib.Path,default=pathlib.Path('/tmp/dom-d5a-mutants'))
 parser.add_argument('--reclaim',action='store_true',help='run D6 binding ownership mutants')
 parser.add_argument('--events',action='store_true',help='run D7a event, timer and ask mutants')
+parser.add_argument('--only',default='',help='run only the mutants whose names hold this text')
 args=parser.parse_args()
 root=pathlib.Path(__file__).resolve().parent.parent
 args.logs.mkdir(parents=True,exist_ok=True)
@@ -47,7 +48,7 @@ mutants=[
  ('attribute-state-routing','node','os64_page_node_set_attr(dom->state, node, name.data, value.data,\n                                                value.length, magic == D_REMOVE_ATTR)','(magic == D_REMOVE_ATTR ? os64_html_remove_attr(dom->document, (os64_html_node_t *)node, name.data) : os64_html_set_attr(dom->document, (os64_html_node_t *)node, name.data, value.data, value.length))'),
  ('structural-state-routing','node','return os64_page_node_insert(dom->state, parent, node, before);','return os64_html_insert(dom->document, parent, node, before);'),
  ('registry-drain','core','dom->retained = 0;','dom->retained += 0;'),
- ('fragment-scripting-mode','content','string.length, dom->options.scripting, &status);','string.length, true, &status);'),
+ ('fragment-scripting-mode','content','string.length, d_scripting(dom, node), &status);','string.length, true, &status);'),
  ('numeric-readonly-hook','collection','return JS_DefineProperty(ctx, query->dom->index_guard->value, atom,','return JS_DefineProperty(ctx, object, atom,'),
  ('undefined-nullable-content','content','(JS_IsUndefined(value) && (property == D_NODE_VALUE || property == D_TEXT_CONTENT))','(false && JS_IsUndefined(value) && (property == D_NODE_VALUE || property == D_TEXT_CONTENT))'),
  ('attribute-name-equals','content'," || *at == '='",''),
@@ -68,6 +69,28 @@ mutants=[
  ('tokens-no-empty-attribute','mixin','result = changed && !(attr == NULL && n == 0) ?','result = changed ?'),
  ('dataset-camel-case','mixin',"out[used++] = (char)(at[1] - ('a' - 'A')); at++;","out[used++] = *at;"),
  ('tabindex-focusable','mixin','return JS_NewInt32(ctx, focusable(self) ? 0 : -1);','return JS_NewInt32(ctx, ((void)focusable, -1));'),
+ # Slice 0c: documents of their own (LIBDOM.md § Documents of their own).
+ ('impl-same-object','implementation','if (entry->implementation != NULL) return JS_DupValue(ctx, entry->implementation->value);','if (false) return JS_DupValue(ctx, entry->implementation->value);'),
+ ('impl-title-only-when-given','implementation','bool titled = argc > 0 && !JS_IsUndefined(argv[0]);','bool titled = argc > 0;'),
+ ('impl-doctype-name-rule','implementation',"if (c == '\\0' || c == '>' || c == ' '","if (c == '\\0' || c == ' '"),
+ ('impl-owner-record-read','implementation','return entry != NULL && entry->document != NULL ? entry->document : window_document(dom);','return ((void)entry, window_document(dom));'),
+ ('impl-leaving-records','implementation','    if (entry == NULL) return;\n    const os64_html_node_t *document = d_node_document(dom, node);','    if (entry != NULL || entry == NULL) return;\n    const os64_html_node_t *document = d_node_document(dom, node);'),
+ ('impl-made-in-records','implementation','if (entry != NULL) entry->document = document != window_document(dom) ? document : NULL;','(void)entry; (void)document;'),
+ ('impl-scripting-per-document','implementation','return dom->options.scripting && d_window_document(dom, node);','return ((void)node, dom->options.scripting);'),
+ ('impl-xml-keeps-case','node','if (type == D_DOCUMENT_HTML) d_fold(string.data);','d_fold(string.data);'),
+ ('impl-control-type-default','node','return JS_NewString(ctx, keywords == kInput ? "text" : "submit");','return JS_NewString(ctx, "submit");'),
+ ('impl-reflected-window-only','event','return d_window_document(dom, node) ? 1 : -1;','return ((void)dom, 1);'),
+ ('impl-windowless-handler-compile','event','!d_window_document(dom, entry->node))\n        return JS_NULL;','false)\n        return JS_NULL;'),
+ ('impl-windowless-script-marked','window','} else if (d_connected(script)) {\n            (void)d_script_mark(dom, script);','} else if (false) {\n            (void)d_script_mark(dom, script);'),
+ ('impl-windowless-link','window','if (d_window_document(dom, node)) d_navigate(dom, OS64_DOM_NAVIGATE_FOLLOW','if (true) d_navigate(dom, OS64_DOM_NAVIGATE_FOLLOW'),
+ ('impl-windowless-submit','window','if (!d_window_document(dom, form)) return 1;','(void)0;'),
+ ('impl-windowless-notify','window','if (dom->options.activate != NULL && d_window_document(dom, node))','if (dom->options.activate != NULL)'),
+ ('impl-windowless-write','window','        if (windowless(dom, self)) return d_error(ctx, "InvalidStateError", WRITE_UNOPENED);\n        return document_write','        return document_write'),
+ ('impl-windowless-location','window','    if (windowless(dom, self))\n        return magic & D_SET','    if (((void)self, false))\n        return magic & D_SET'),
+ ('impl-windowless-cookie','classic','if (!d_window_document(dom, node)) return set ? JS_UNDEFINED : JS_NewString(ctx, "");','(void)0;'),
+ ('impl-connected-any-document','window','return tree_root(node)->kind == OS64_HTML_DOCUMENT;','return ((void)node, false);'),
+ ('impl-form-lookup-own-tree','collection','if (root->kind != OS64_HTML_DOCUMENT) root = query->owner;','root = query->owner;'),
+ ('impl-checked-every-input','page-state','if (on == NULL || !node_kind(state, node, &element, &input) || element != OS64_PAGE_EL_INPUT)','if (on == NULL || !node_kind(state, node, &element, &input) || element != OS64_PAGE_EL_INPUT ||\n        (input != OS64_PAGE_INPUT_CHECKBOX && input != OS64_PAGE_INPUT_RADIO))'),
 ]
 if args.reclaim:
     mutants=[
@@ -149,6 +172,7 @@ objects=sorted(args.objects.glob('*.o'))
 objects=[p for p in objects if p.name!='userland_libos64_str.c.o']
 objects.append(args.objects/'userland_libos64_str.c.o-local')
 if not (args.objects/'engine-quickjs.o').exists(): raise SystemExit('fully sanitized baseline objects required')
+if args.only: mutants=[m for m in mutants if args.only in m[0]]
 caught=compiled=0
 with tempfile.TemporaryDirectory(prefix='os64-dom-mutants.') as directory:
     directory=pathlib.Path(directory)

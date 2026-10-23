@@ -780,6 +780,45 @@ static void pictures_are_pages_for_a_face_that_shows_them(void)
         expect("pictures: a POST redirected to a GET asks for them on the GET", hopened && asked, hop_leg.status);
     }
     {
+        // Navigation Timing's redirectCount: the redirects followed while
+        // every one stayed on the asked origin; 0 when none, or one left it.
+        static way_session_t r_session = {.name="fixture", .agent="fixture", .accept="text/html"};
+        static const char kOk[] = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nok";
+        uint32_t counts[4];
+        for (int c = 0; c < 4; c++) {
+            fresh();
+            if (c == 0) {
+                script("r.test", "HTTP/1.1 302 Found\r\nLocation: /two\r\nContent-Length: 0\r\n\r\n");
+                script("r.test", "HTTP/1.1 301 Moved\r\nLocation: http://r.test:80/three\r\nContent-Length: 0\r\n\r\n");
+                script("r.test", kOk);
+            } else if (c == 1) {
+                script("r.test", "HTTP/1.1 302 Found\r\nLocation: http://other.test/x\r\nContent-Length: 0\r\n\r\n");
+                script("other.test", "HTTP/1.1 302 Found\r\nLocation: http://r.test/back\r\nContent-Length: 0\r\n\r\n");
+                script("r.test", kOk);
+            } else if (c == 2) {
+                script("r.test", kOk);
+            } else {
+                // The last 302 names nowhere, so it is not followed: it is
+                // the page, and the one redirect before it still counts.
+                script("r.test", "HTTP/1.1 302 Found\r\nLocation: /two\r\nContent-Length: 0\r\n\r\n");
+                script("r.test", "HTTP/1.1 302 Found\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nno");
+            }
+            way_leg_t r_leg = way_leg(&r_session);
+            way_opening_t ro;
+            os64_fetch_status_t rwhy;
+            bool ropened = way_open(&r_leg, "http://r.test/one", NULL, &ro, &rwhy);
+            counts[c] = ropened ? ro.head.redirects : 99;
+            if (ropened)
+                os64_fetch_close(ro.fetch);
+        }
+        expect("redirectCount: two redirects on the asked origin, a port spelled out included, count",
+               counts[0] == 2, NULL);
+        expect("redirectCount: a chain that left the origin, even to come back, counts 0", counts[1] == 0, NULL);
+        expect("redirectCount: no redirect counts 0", counts[2] == 0, NULL);
+        expect("redirectCount: a last redirect that was not followed leaves the count of those that were",
+               counts[3] == 1, NULL);
+    }
+    {
         char out[40];
         expect("accept: a picture type that would not fit is left off whole",
                strcmp(way_accept_compose("text/html", "image/png, image/x-portable-pixmap", out, sizeof(out)),

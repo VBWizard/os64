@@ -27,7 +27,8 @@
  * did not wait for them: the domain lookup, the connection and the request
  * read as fetchStart (a connection already open), the secure connection as
  * fetchStart for an https page and 0 for any other, and the unload and
- * redirect pairs 0. */
+ * redirect pairs 0 (a redirect's times are not measured, though their
+ * count, redirectCount, is the host's: os64_dom_timing_t.redirects). */
 
 static JSClassID performance_slot, entry_slot, timing_slot, navigation_slot;
 
@@ -195,18 +196,6 @@ static JSValue detail_clone(JSContext *ctx, JSValueConst value)
     return clone;
 }
 
-/* A dictionary argument: undefined or null is an empty one, anything else
- * that is not an object a TypeError. 1 an object, 0 empty, -1 thrown. */
-static int dictionary(JSContext *ctx, int argc, JSValueConst *argv, int at)
-{
-    if (argc <= at || JS_IsUndefined(argv[at]) || JS_IsNull(argv[at])) return 0;
-    if (!JS_IsObject(argv[at])) {
-        JS_ThrowTypeError(ctx, "The options must be an object");
-        return -1;
-    }
-    return 1;
-}
-
 /* A DOMHighResTimeStamp, which is a restricted double: NaN and the
  * infinities are refused. */
 static int timestamp(JSContext *ctx, JSValueConst value, double *out)
@@ -336,8 +325,8 @@ done:
 /* ── User Timing ─────────────────────────────────────────────────────── */
 
 /* "Convert a mark to a timestamp": a name of PerformanceTiming's is that
- * attribute after navigationStart (InvalidAccessError when it has not
- * happened); another name is the latest mark by that name (SyntaxError when
+ * attribute after navigationStart (navigationStart itself 0;
+ * InvalidAccessError for one that has not happened); another name is the latest mark by that name (SyntaxError when
  * there is none); a number is itself, and may not be negative. -1 thrown. */
 static int mark_time(os64_dom_t *dom, JSContext *ctx, JSValueConst mark, double *out)
 {
@@ -358,6 +347,12 @@ static int mark_time(os64_dom_t *dom, JSContext *ctx, JSValueConst mark, double 
     JS_FreeCString(ctx, text);
     if (timing >= 0) {
         JS_FreeValue(ctx, name);
+        /* "If name is navigationStart, return 0" (User Timing § 3.2),
+         * whatever the wall clock the host could or could not read. */
+        if (timing == 0) {
+            *out = 0;
+            return 0;
+        }
         os64_dom_timing_t t;
         timing_read(dom, &t);
         uint64_t at = timing_epoch(dom, &t, (size_t)timing);
@@ -382,7 +377,7 @@ static int mark_time(os64_dom_t *dom, JSContext *ctx, JSValueConst mark, double 
     return -1;
 }
 
-/* The PerformanceMark constructor's steps (User Timing § 3.1.1), which
+/* The PerformanceMark constructor's steps (User Timing § 2.2.1), which
  * mark() runs too: a new mark, not yet in the buffer. */
 static JSValue mark_make(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, int argc, JSValueConst *argv)
 {
@@ -393,7 +388,7 @@ static JSValue mark_make(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype
      * names' order; then the constructor's steps, in theirs. */
     JSValue detail = JS_UNDEFINED, start = JS_UNDEFINED, result = JS_EXCEPTION;
     double time = 0;
-    int options = dictionary(ctx, argc, argv, 1);
+    int options = d_dictionary(ctx, argc, argv, 1);
     if (options > 0) {
         detail = JS_GetPropertyStr(ctx, argv[1], "detail");
         if (JS_IsException(detail)) goto done;
@@ -424,7 +419,17 @@ done:
     return result;
 }
 
-/* measure(name, startOrMeasureOptions, endMark) (User Timing § 3.1.3). */
+/* `duration`, already a DOMHighResTimeStamp, run through "convert a mark
+ * to a timestamp" where measure() uses it: a negative one is a TypeError.
+ * -1 thrown. */
+static int duration_time(JSContext *ctx, double duration)
+{
+    if (duration >= 0) return 0;
+    JS_ThrowTypeError(ctx, "A measure's duration may not be negative");
+    return -1;
+}
+
+/* measure(name, startOrMeasureOptions, endMark) (User Timing § 2.1.3). */
 static JSValue measure(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv)
 {
     if (argc < 1) return JS_ThrowTypeError(ctx, "A measure needs a name");
@@ -462,6 +467,10 @@ static JSValue measure(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *
     if (JS_IsException(end_mark)) goto done;
     bool has_start = !JS_IsUndefined(member[3]), has_end = !JS_IsUndefined(member[2]);
     bool has_duration = !JS_IsUndefined(member[1]);
+    /* User Timing § 2.1.3 step 1 checks the options only when "at least one
+     * of start, end, duration, and detail exist": an empty dictionary, or
+     * one of undefineds, skips them, and an endMark beside it is used
+     * (WPT measure-with-dict's measure8 and measure20). */
     if (options && any) {
         const char *why = !JS_IsUndefined(end_mark) ? "An end mark may not be given beside measure options"
                         : !has_start && !has_end ? "Measure options need a start or an end"
@@ -479,12 +488,16 @@ static JSValue measure(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *
     else if (has_end) ok = mark_time(dom, ctx, member[2], &end);
     else if (has_start && has_duration) {
         ok = mark_time(dom, ctx, member[3], &begin);
+        if (ok == 0) ok = duration_time(ctx, duration);
         end = begin + duration;
     } else end = coarse((int64_t)(now_us(dom) - dom->time_origin_us));
     JS_FreeValue(ctx, end_mark);
     if (ok == 0) {
         if (has_start) ok = mark_time(dom, ctx, member[3], &begin);
-        else if (has_duration && has_end) begin = end - duration;
+        else if (has_duration && has_end) {
+            ok = duration_time(ctx, duration);
+            begin = end - duration;
+        }
         else if (!options) ok = mark_time(dom, ctx, start_text, &begin);
         else begin = 0;
     }
@@ -551,6 +564,26 @@ static JSValue navigation_json(os64_dom_t *dom, JSContext *ctx)
  * PerformanceEntry's four alone, and for the navigation entry all of them. */
 static JSValue entry_json(JSContext *ctx, JSValueConst self, const DEntry *entry);
 
+/* serverTiming: a FrozenArray, a new one at each read, and os64 reads no
+ * Server-Timing header, so it is empty. Frozen by definition (its length
+ * made unwritable, the array closed), never by calling Object.freeze or
+ * setting anything, which a page's script could have replaced. */
+static JSValue frozen_empty_array(JSContext *ctx)
+{
+    JSValue array = JS_NewArray(ctx);
+    if (JS_IsException(array)) return array;
+    JSAtom length = JS_NewAtom(ctx, "length");
+    int done = length == JS_ATOM_NULL ? -1
+             : JS_DefineProperty(ctx, array, length, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED,
+                                 JS_PROP_HAS_WRITABLE | JS_PROP_THROW);
+    if (length != JS_ATOM_NULL) JS_FreeAtom(ctx, length);
+    if (done < 0 || JS_PreventExtensions(ctx, array) < 0) {
+        JS_FreeValue(ctx, array);
+        return JS_EXCEPTION;
+    }
+    return array;
+}
+
 static JSValue performance_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
                                   JSValue *data)
 {
@@ -605,7 +638,7 @@ static JSValue performance_member(JSContext *ctx, JSValueConst self, int argc, J
         case R_INITIATOR: return JS_NewString(ctx, "navigation");
         case R_PROTOCOL:
             return JS_NewString(ctx, page_is(dom, "http:") || page_is(dom, "https:") ? "http/1.1" : "");
-        case R_SERVER_TIMING: return JS_NewArray(ctx);
+        case R_SERVER_TIMING: return frozen_empty_array(ctx);
         case R_NAV_TYPE: return JS_NewString(ctx, kTypeNames[t.type <= 2 ? t.type : 0]);
         case R_NAV_REDIRECTS: return JS_NewUint32(ctx, t.redirects);
         case R_ZERO: return JS_NewInt32(ctx, 0);
@@ -812,7 +845,7 @@ int d_performance_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (d_accessor(dom, ctx, on, "timeOrigin", performance_member, M_TIME_ORIGIN, false) < 0 ||
         d_accessor(dom, ctx, on, "timing", performance_member, M_TIMING, false) < 0 ||
         d_accessor(dom, ctx, on, "navigation", performance_member, M_NAVIGATION, false) < 0 ||
-        d_event_target(dom, ctx, on, performance_id) < 0)
+        d_event_target(dom, ctx, on, performance_id, NULL) < 0)
         return -1;
 
     /* PerformanceEntry and its kinds. */

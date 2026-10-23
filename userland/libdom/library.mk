@@ -2,10 +2,12 @@
 # control state. Consumers acquire these edges through this shared library.
 LIBDOM_SRCS := libdom/core.c libdom/node.c libdom/collection.c libdom/content.c \
     libdom/event.c libdom/timer.c libdom/window.c libdom/geometry.c libdom/classic.c libdom/style.c \
-    libdom/mixin.c libdom/modern.c
+    libdom/mixin.c libdom/modern.c libdom/view.c
 # The Modern Web's slice 1a: storage, performance, URL, encoding, screen, base64.
 LIBDOM_SRCS += libdom/storage.c libdom/performance.c libdom/url.c libdom/encoding.c libdom/screen.c \
     libdom/base64.c
+# Slice 0c: DOMImplementation and the documents it makes.
+LIBDOM_SRCS += libdom/implementation.c
 # The Modern Web's slice 2: fetch and its objects, XMLHttpRequest, DOMException.
 LIBDOM_SRCS += libdom/fetch.c libdom/abort.c libdom/blob.c libdom/xhr.c libdom/exception.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))

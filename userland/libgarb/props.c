@@ -135,6 +135,19 @@ static const Prop kProps[GARB_NPROPS] = {
     [GARB_ANIMATION_DELAY] = {"animation-delay", false, false},
     [GARB_ANIMATION_FILL_MODE] = {"animation-fill-mode", false, false},
     [GARB_WILL_CHANGE] = {"will-change", false, false},
+    [GARB_CURSOR] = {"cursor", true, true},
+    [GARB_USER_SELECT] = {"user-select", false, true},
+    [GARB_WORD_BREAK] = {"word-break", true, true},
+    [GARB_OVERFLOW_WRAP] = {"overflow-wrap", true, true},
+    [GARB_LETTER_SPACING] = {"letter-spacing", true, true},
+    [GARB_TEXT_OVERFLOW] = {"text-overflow", false, true},
+    [GARB_OUTLINE_WIDTH] = {"outline-width", false, true},
+    [GARB_OUTLINE_STYLE] = {"outline-style", false, true},
+    [GARB_OUTLINE_COLOR] = {"outline-color", false, true},
+    [GARB_OUTLINE_OFFSET] = {"outline-offset", false, true},
+    [GARB_OBJECT_FIT] = {"object-fit", false, true},
+    [GARB_OBJECT_POSITION] = {"object-position", false, true},
+    [GARB_ASPECT_RATIO] = {"aspect-ratio", false, true},
 };
 
 const char *garb_prop_name(garb_prop_t prop)
@@ -425,7 +438,7 @@ static const char *const kClear[] = {"none", "left", "right", "both", "inline-st
                                      "inline-end", NULL};
 static const char *const kOverflow[] = {"visible", "hidden", "clip", "scroll", "auto", NULL};
 static const char *const kPosition[] = {"static", "relative", "absolute", "fixed", "sticky", NULL};
-// CSS UI 4 § 5.1 for HTML, and SVG 2's values, which an HTML box treats as
+// CSS UI 4 § 6.2 for HTML, and SVG 2's values, which an HTML box treats as
 // auto: read so a sheet written for both keeps its declaration.
 static const char *const kPointerEvents[] = {"auto", "none", "visiblepainted", "visiblefill",
                                              "visiblestroke", "visible", "painted", "fill",
@@ -485,6 +498,27 @@ static const char *const kDirection[] = {"normal", "reverse", "alternate", "alte
                                          NULL};
 static const char *const kPlayState[] = {"running", "paused", NULL};
 static const char *const kFillMode[] = {"none", "forwards", "backwards", "both", NULL};
+// CSS UI 4 § 5.1.1: the shapes a cursor names.
+static const char *const kCursor[] = {
+    "auto", "default", "none", "context-menu", "help", "pointer", "progress", "wait", "cell",
+    "crosshair", "text", "vertical-text", "alias", "copy", "move", "no-drop", "not-allowed",
+    "grab", "grabbing", "e-resize", "n-resize", "ne-resize", "nw-resize", "s-resize",
+    "se-resize", "sw-resize", "w-resize", "ew-resize", "ns-resize", "nesw-resize",
+    "nwse-resize", "col-resize", "row-resize", "all-scroll", "zoom-in", "zoom-out", NULL};
+// CSS UI 4 § 6.1.
+static const char *const kUserSelect[] = {"auto", "text", "none", "contain", "all", NULL};
+// CSS Text 3 § 5.1 (`break-word` is its legacy value, read as `normal`
+// beside `overflow-wrap: anywhere`) and § 5.4.
+static const char *const kWordBreak[] = {"normal", "keep-all", "break-all", "break-word", NULL};
+static const char *const kOverflowWrap[] = {"normal", "break-word", "anywhere", NULL};
+// CSS Overflow 4 § 4.1 as one value: its strings, fade() and the second
+// value of a pair are not read, and a value using one is invalid.
+static const char *const kTextOverflow[] = {"clip", "ellipsis", NULL};
+// CSS UI 4 § 3.3: a border's styles but `hidden`, and `auto`.
+static const char *const kOutlineStyle[] = {"auto", "none", "dotted", "dashed", "solid", "double",
+                                            "groove", "ridge", "inset", "outset", NULL};
+// CSS Images 3 § 4.5; Images 4's pairs (`cover scale-down`) are not read.
+static const char *const kObjectFit[] = {"fill", "contain", "cover", "none", "scale-down", NULL};
 // The identifiers a <custom-ident> may not be (Values 4 § 4.2): the
 // CSS-wide keywords and `default`.
 static const char *const kNotCustom[] = {"inherit", "initial", "unset", "revert",
@@ -1106,7 +1140,11 @@ static bool edge_offset(Sets *s, const char *edge, const garb_val_t *offset, gar
     return true;
 }
 
-static bool position(Sets *s, VCur *c, garb_val_t *x, garb_val_t *y)
+// A position, x and y (Values 4 § 8.3): one keyword or length-percentage, two,
+// or two keywords each with an offset. `three` also takes Backgrounds 3's
+// three-part form, a keyword pair with one offset (`<bg-position>`), which
+// only a background's position may be written in.
+static bool position(Sets *s, VCur *c, bool three, garb_val_t *x, garb_val_t *y)
 {
     // Up to four parts, each a keyword or a length-percentage.
     const char *word[4] = {NULL, NULL, NULL, NULL};
@@ -1162,6 +1200,8 @@ static bool position(Sets *s, VCur *c, garb_val_t *x, garb_val_t *y)
     }
     // Three or four: keyword-offset pairs, an offset after any keyword but
     // center, one pair horizontal and one vertical, in either order.
+    if (n == 3 && !three)
+        return false;
     const char *pw[2];
     const garb_val_t *po[2];
     int pairs = 0;
@@ -1336,7 +1376,7 @@ static bool radial_prelude(Sets *s, const Group *g)
         Sets strict = *s;
         strict.quirks = false;
         garb_val_t x, y;
-        bool ok = position(&strict, &c, &x, &y);
+        bool ok = position(&strict, &c, false, &x, &y);
         s->a.short_of_memory |= strict.a.short_of_memory;
         if (!ok)
             return false;
@@ -1511,7 +1551,7 @@ static bool radial_geometry(Sets *s, const Group *g, bool have, garb_val_t *out)
         if (vc_keyword(&c, kAt) != NULL) {
             Sets strict = *s;
             strict.quirks = false;
-            bool ok = position(&strict, &c, &parts[2], &parts[3]);
+            bool ok = position(&strict, &c, false, &parts[2], &parts[3]);
             s->a.short_of_memory |= strict.a.short_of_memory;
             if (!ok)
                 return false;
@@ -1702,7 +1742,7 @@ static bool background_layers(Sets *s, VCur *c, Layers lists[L_N], garb_val_t *c
                 have_img = true;
             } else if (!have_pos &&
                        (knows(s, GARB_BACKGROUND_POSITION_X) || knows(s, GARB_BACKGROUND_POSITION_Y)) &&
-                       position(s, c, &x, &y)) {
+                       position(s, c, true, &x, &y)) {
                 l[L_X] = x;
                 l[L_Y] = y;
                 have_pos = true;
@@ -1946,6 +1986,13 @@ typedef enum {
     G_ITERATIONS,           // infinite | <number [0,∞]>
     G_ANIM_KEYWORD,
     G_WILL_CHANGE,          // auto | <animateable-feature>#
+    G_CURSOR,               // [[<url> | image-set()] [<x> <y>]?,]* <keyword>
+    G_SPACING_TEXT,         // normal | <length>, a unitless one in quirks
+    G_OUTLINE_WIDTH,        // <line-width>, never unitless
+    G_OUTLINE_COLOR,        // auto | <color>
+    G_LENGTH,               // <length>, negative too
+    G_POSITION,             // <position>, as x and y
+    G_RATIO,                // auto || <ratio>
 } Grammar;
 
 typedef struct {
@@ -2024,6 +2071,16 @@ static const Longhand kLonghands[] = {
     {GARB_ANIMATION_PLAY_STATE, G_ANIM_KEYWORD, kPlayState},
     {GARB_ANIMATION_DELAY, G_DELAY, NULL}, {GARB_ANIMATION_FILL_MODE, G_ANIM_KEYWORD, kFillMode},
     {GARB_WILL_CHANGE, G_WILL_CHANGE, NULL},
+    {GARB_CURSOR, G_CURSOR, kCursor}, {GARB_USER_SELECT, G_KEYWORDS, kUserSelect},
+    {GARB_WORD_BREAK, G_KEYWORDS, kWordBreak}, {GARB_OVERFLOW_WRAP, G_KEYWORDS, kOverflowWrap},
+    // Text 3 § 7.2; the Quirks standard's unitless lengths include it (§
+    // 3.2). Text 4's percentage of the font size is not read.
+    {GARB_LETTER_SPACING, G_SPACING_TEXT, NULL},
+    {GARB_TEXT_OVERFLOW, G_KEYWORDS, kTextOverflow},
+    {GARB_OUTLINE_WIDTH, G_OUTLINE_WIDTH, NULL}, {GARB_OUTLINE_STYLE, G_KEYWORDS, kOutlineStyle},
+    {GARB_OUTLINE_COLOR, G_OUTLINE_COLOR, NULL}, {GARB_OUTLINE_OFFSET, G_LENGTH, NULL},
+    {GARB_OBJECT_FIT, G_KEYWORDS, kObjectFit}, {GARB_OBJECT_POSITION, G_POSITION, NULL},
+    {GARB_ASPECT_RATIO, G_RATIO, NULL},
 };
 
 static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out);
@@ -2726,6 +2783,131 @@ static bool layered(const Longhand *l)
            l->g == G_EASING || l->g == G_ITERATIONS || l->g == G_ANIM_KEYWORD;
 }
 
+// One number of a <ratio> (Values 4 § 5.7): <number [0,∞]>, a calc()
+// worked out as it is written, and held at 0 below.
+static bool ratio_number(Sets *s, VCur *c, garb_val_t *out)
+{
+    garb_val_t v;
+    double n = 0;
+    bool number = true;
+    if (!vc_dim(c, ACCEPT_NUMBER, false, false, &s->a, &v))
+        return false;
+    if (v.kind == GARB_V_NUMBER)
+        n = v.number;
+    else if (!(v.kind == GARB_V_CALC && calc_settled(v.calc, &n, &number) && number))
+        return false;
+    *out = number_val(n > 0 ? n : 0);
+    return true;
+}
+
+// `aspect-ratio` (CSS Sizing 4 § 4.1): auto, a ratio — a width and an
+// optional `/ height`, which is 1 when it is left out — or both, either
+// order.
+static bool aspect_ratio(Sets *s, VCur *c, garb_val_t *out)
+{
+    bool have_auto = false, have_ratio = false;
+    garb_val_t two[2];
+    while (!vc_done(c)) {
+        if (!have_auto && vc_keyword(c, kAuto) != NULL) {
+            have_auto = true;
+            continue;
+        }
+        if (have_ratio || !ratio_number(s, c, &two[0]))
+            return false;
+        two[1] = number_val(1);
+        if (is_delim_v(vc_peek(c), '/')) {
+            c->i++;
+            if (!ratio_number(s, c, &two[1]))
+                return false;
+        }
+        have_ratio = true;
+    }
+    if (!have_ratio) {
+        *out = kw("auto");
+        return have_auto;
+    }
+    os64_memset(out, 0, sizeof(*out));
+    out->kind = GARB_V_RATIO;
+    out->keyword = have_auto ? "auto" : NULL;
+    out->items = keep(s, two, 2);
+    out->nitems = 2;
+    return out->items != NULL;
+}
+
+// A cursor's image-set() (CSS UI 4 § 5.1.1's <url-set>, Images 4 § 2.2):
+// options split by commas, each a url or a string, then a resolution
+// (`2x`, `192dpi`, `2dppx`, `75dpcm`) and a type(<string>), each at most
+// once, in either order. Read and dropped, as the cursor's url is.
+static bool url_set(const garb_value_t *f)
+{
+    VCur args[64];
+    int32_t n = fn_args(f, args, 64);
+    if (n < 1)
+        return false;
+    static const char *const kRes[] = {"x", "dppx", "dpi", "dpcm", NULL};
+    for (int32_t i = 0; i < n; i++) {
+        VCur *a = &args[i];
+        garb_val_t u;
+        const garb_value_t *t = vc_peek(a);
+        if (t != NULL && t->kind == GARB_STRING)
+            a->i++;
+        else if (!vc_url(a, &u))
+            return false;
+        bool res = false, type = false;
+        while ((t = vc_peek(a)) != NULL) {
+            bool is_res = false;
+            for (int k = 0; t->kind == GARB_DIMENSION && kRes[k] != NULL; k++)
+                is_res |= ieq(t->unit, t->unit_len, kRes[k]);
+            if (!res && is_res && t->number > 0) {
+                res = true;
+            } else if (!type && is_fn(t, "type")) {
+                VCur in = {t->children, t->nchildren, 0};
+                const garb_value_t *s = vc_peek(&in);
+                if (s == NULL || s->kind != GARB_STRING)
+                    return false;
+                in.i++;
+                if (!vc_done(&in))
+                    return false;
+                type = true;
+            } else {
+                return false;
+            }
+            a->i++;
+        }
+    }
+    return true;
+}
+
+// `cursor` (CSS UI 4 § 5.1.1): pictures to try, each a url or an image-set()
+// (url_set) with an optional hotspot of two numbers and a comma after it,
+// then the keyword the pointer falls back to. The pictures are read and
+// dropped: what is kept is the keyword.
+static bool cursor(Sets *s, VCur *c, const char *const *words, garb_val_t *out)
+{
+    const char *k;
+    for (;;) {
+        if ((k = vc_keyword(c, words)) != NULL) {
+            *out = kw(k);
+            return true;
+        }
+        garb_val_t picture, x, y;
+        const garb_value_t *t = vc_peek(c);
+        if ((is_fn(t, "image-set") || is_fn(t, "-webkit-image-set")) && url_set(t))
+            c->i++;
+        else if (!vc_url(c, &picture))
+            return false;
+        t = vc_peek(c);
+        if (t != NULL && t->kind != GARB_COMMA &&
+            (!vc_dim(c, ACCEPT_NUMBER, true, false, &s->a, &x) ||
+             !vc_dim(c, ACCEPT_NUMBER, true, false, &s->a, &y)))
+            return false;
+        t = vc_peek(c);
+        if (t == NULL || t->kind != GARB_COMMA)
+            return false;
+        c->i++;
+    }
+}
+
 static bool longhand(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
 {
     if (!layered(l))
@@ -2782,10 +2964,18 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
         return kw_or_dim(s, c, kVerticalAlign, ACCEPT_LENGTH | ACCEPT_PERCENT, true, true, out);
     case G_DECORATION_LINE: return decoration_line(s, c, out);
     case G_INDENT: {
+        // Text 3 § 8.1: a length-percentage && hanging? && each-line?, each
+        // keyword at most once.
         bool got = false;
+        const char *said[2] = {NULL, NULL};
         while (!vc_done(c)) {
-            if (vc_keyword(c, kIndentWords) != NULL)
+            if ((k = vc_keyword(c, kIndentWords)) != NULL) {
+                int slot = os64_streq(k, "hanging") ? 0 : 1;
+                if (said[slot] != NULL)
+                    return false;
+                said[slot] = k;
                 continue;
+            }
             if (got || !vc_dim(c, ACCEPT_LENGTH | ACCEPT_PERCENT, true, s->quirks, &s->a, out))
                 return false;
             got = true;
@@ -2986,6 +3176,34 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
     case G_EASING: return easing(s, c, out);
     case G_ITERATIONS: return iterations(s, c, out);
     case G_WILL_CHANGE: return will_change(s, c, out);
+    case G_CURSOR: return cursor(s, c, l->words, out);
+    case G_SPACING_TEXT:
+        return kw_or_dim(s, c, kNormal, ACCEPT_LENGTH, true, true, out);
+    case G_OUTLINE_WIDTH: return kw_or_dim(s, c, kBorderWidth, ACCEPT_LENGTH, false, false, out);
+    case G_OUTLINE_COLOR:
+        if (vc_keyword(c, kAuto) != NULL) {
+            *out = kw("auto");
+            return true;
+        }
+        return vc_color(c, out);
+    case G_LENGTH: return vc_dim(c, ACCEPT_LENGTH, true, false, &s->a, out);
+    case G_RATIO: return aspect_ratio(s, c, out);
+    case G_POSITION: {
+        // Not quirky: the Quirks standard's unitless lengths are a
+        // background position's, not this one's.
+        Sets strict = *s;
+        strict.quirks = false;
+        garb_val_t xy[2];
+        bool ok = position(&strict, c, false, &xy[0], &xy[1]);
+        s->a.short_of_memory |= strict.a.short_of_memory;
+        if (!ok)
+            return false;
+        os64_memset(out, 0, sizeof(*out));
+        out->kind = GARB_V_LENGTH;
+        out->items = keep(s, xy, 2);
+        out->nitems = 2;
+        return out->items != NULL;
+    }
     }
     return false;
 }
@@ -2998,7 +3216,12 @@ typedef enum {
     SH_BACKGROUND_POSITION, SH_FONT, SH_LIST_STYLE, SH_TEXT_DECORATION, SH_OVERFLOW, SH_INSET,
     SH_FLEX, SH_FLEX_FLOW, SH_GAP,
     SH_GRID_COLUMN, SH_GRID_ROW, SH_GRID_AREA, SH_PLACE_ITEMS, SH_PLACE_SELF, SH_PLACE_CONTENT,
-    SH_BORDER_RADIUS, SH_ANIMATION,
+    SH_BORDER_RADIUS, SH_ANIMATION, SH_OUTLINE,
+    // CSS Logical 1's flow-relative pairs, each a start and an end.
+    SH_MARGIN_INLINE, SH_MARGIN_BLOCK, SH_PADDING_INLINE, SH_PADDING_BLOCK, SH_INSET_INLINE,
+    SH_INSET_BLOCK, SH_BORDER_INLINE, SH_BORDER_BLOCK, SH_BORDER_INLINE_WIDTH,
+    SH_BORDER_BLOCK_WIDTH, SH_BORDER_INLINE_STYLE, SH_BORDER_BLOCK_STYLE,
+    SH_BORDER_INLINE_COLOR, SH_BORDER_BLOCK_COLOR,
 } Shorthand;
 
 // `modern` as Prop's.
@@ -3019,8 +3242,52 @@ static const struct { const char *name; Shorthand sh; bool modern; } kShorthands
     {"grid-area", SH_GRID_AREA, false},
     {"place-items", SH_PLACE_ITEMS, false}, {"place-self", SH_PLACE_SELF, false},
     {"place-content", SH_PLACE_CONTENT, false}, {"border-radius", SH_BORDER_RADIUS, false},
-    {"animation", SH_ANIMATION, false},
+    {"animation", SH_ANIMATION, false}, {"outline", SH_OUTLINE, true},
+    {"margin-inline", SH_MARGIN_INLINE, true}, {"margin-block", SH_MARGIN_BLOCK, true},
+    {"padding-inline", SH_PADDING_INLINE, true}, {"padding-block", SH_PADDING_BLOCK, true},
+    {"inset-inline", SH_INSET_INLINE, true}, {"inset-block", SH_INSET_BLOCK, true},
+    {"border-inline", SH_BORDER_INLINE, true}, {"border-block", SH_BORDER_BLOCK, true},
+    {"border-inline-width", SH_BORDER_INLINE_WIDTH, true},
+    {"border-block-width", SH_BORDER_BLOCK_WIDTH, true},
+    {"border-inline-style", SH_BORDER_INLINE_STYLE, true},
+    {"border-block-style", SH_BORDER_BLOCK_STYLE, true},
+    {"border-inline-color", SH_BORDER_INLINE_COLOR, true},
+    {"border-block-color", SH_BORDER_BLOCK_COLOR, true},
 };
+
+// A flow-relative pair's physical sides (CSS Logical 1 § 4): the first
+// longhand of the four it is two of, top-right-bottom-left, and whether
+// it is the inline axis — start and end left and right in a horizontal,
+// left-to-right writing mode, which is the only one libflow lays out
+// (`direction` and `writing-mode` are not read: DEBTS.md) — or the block
+// axis, top and bottom.
+static const struct { Shorthand sh; garb_prop_t first; bool inline_axis; } kPairs[] = {
+    {SH_MARGIN_INLINE, GARB_MARGIN_TOP, true}, {SH_MARGIN_BLOCK, GARB_MARGIN_TOP, false},
+    {SH_PADDING_INLINE, GARB_PADDING_TOP, true}, {SH_PADDING_BLOCK, GARB_PADDING_TOP, false},
+    {SH_INSET_INLINE, GARB_TOP, true}, {SH_INSET_BLOCK, GARB_TOP, false},
+    {SH_BORDER_INLINE_WIDTH, GARB_BORDER_TOP_WIDTH, true},
+    {SH_BORDER_BLOCK_WIDTH, GARB_BORDER_TOP_WIDTH, false},
+    {SH_BORDER_INLINE_STYLE, GARB_BORDER_TOP_STYLE, true},
+    {SH_BORDER_BLOCK_STYLE, GARB_BORDER_TOP_STYLE, false},
+    {SH_BORDER_INLINE_COLOR, GARB_BORDER_TOP_COLOR, true},
+    {SH_BORDER_BLOCK_COLOR, GARB_BORDER_TOP_COLOR, false},
+};
+
+static int pair_of(Shorthand sh)
+{
+    for (int k = 0; k < (int)(sizeof(kPairs) / sizeof(kPairs[0])); k++)
+        if (kPairs[k].sh == sh)
+            return k;
+    return -1;
+}
+
+// A pair's start and end longhands.
+static void pair_sides(int k, garb_prop_t *start, garb_prop_t *end)
+{
+    // Top, right, bottom, left: the inline pair is left and right.
+    *start = (garb_prop_t)(kPairs[k].first + (kPairs[k].inline_axis ? 3 : 0));
+    *end = (garb_prop_t)(kPairs[k].first + (kPairs[k].inline_axis ? 1 : 2));
+}
 
 // What `animation` sets, in the order libgarb lists the longhands.
 static const garb_prop_t kAnimationProps[] = {
@@ -3079,6 +3346,26 @@ static int shorthand_longhands(Shorthand sh, garb_prop_t *out)
     case SH_PLACE_CONTENT: out[n++] = GARB_ALIGN_CONTENT; out[n++] = GARB_JUSTIFY_CONTENT; break;
     case SH_BORDER_RADIUS: for (int k = 0; k < 4; k++) out[n++] = (garb_prop_t)(GARB_BORDER_TOP_LEFT_RADIUS + k); break;
     case SH_ANIMATION: for (int k = 0; k < A_N; k++) out[n++] = kAnimationProps[k]; break;
+    case SH_OUTLINE:
+        out[n++] = GARB_OUTLINE_WIDTH; out[n++] = GARB_OUTLINE_STYLE; out[n++] = GARB_OUTLINE_COLOR;
+        break;
+    case SH_BORDER_INLINE: case SH_BORDER_BLOCK:
+        // The width, style and colour of the start side, then the end's.
+        for (int k = 0; k < 2; k++) {
+            garb_prop_t side = (garb_prop_t)(sh == SH_BORDER_INLINE ? (k == 0 ? 3 : 1) : 2 * k);
+            out[n++] = (garb_prop_t)(GARB_BORDER_TOP_WIDTH + side);
+            out[n++] = (garb_prop_t)(GARB_BORDER_TOP_STYLE + side);
+            out[n++] = (garb_prop_t)(GARB_BORDER_TOP_COLOR + side);
+        }
+        break;
+    default: {
+        int k = pair_of(sh);
+        if (k >= 0) {
+            pair_sides(k, &out[0], &out[1]);
+            n = 2;
+        }
+        break;
+    }
     }
     return n;
 }
@@ -3249,6 +3536,78 @@ static bool flex_shorthand(Sets *s, VCur *c)
     return true;
 }
 
+// A flow-relative pair (CSS Logical 1 § 4): the start's value and the
+// end's, the end the start's when it is left out.
+static bool logical_pair(Sets *s, VCur *c, int k, bool (*one)(Sets *, VCur *, garb_val_t *))
+{
+    garb_prop_t start, end;
+    pair_sides(k, &start, &end);
+    garb_val_t a, b;
+    if (!one(s, c, &a))
+        return false;
+    b = a;
+    int given = 1;
+    if (!vc_done(c)) {
+        if (!one(s, c, &b))
+            return false;
+        given = 2;
+    }
+    if (!vc_done(c) || !pair_known(s, start, end, given))
+        return false;
+    set(s, start, &a);
+    set(s, end, &b);
+    return true;
+}
+
+// The rest of an outline from the cursor on: each part not yet had tried
+// in turn, and the next tried after it, back to the next part where the
+// rest cannot be read. `||` takes the parts in any order (Values 4 §
+// 2.2), and `auto` is both a style and a colour, so the first part that
+// reads a component is not always the one it is: `outline: auto solid` is
+// the colour auto and the style solid. Three parts, so six orders at
+// most.
+static bool outline_rest(Sets *s, VCur *c, const Longhand *parts, garb_val_t *v, bool *have)
+{
+    if (vc_done(c))
+        return true;
+    int32_t at = c->i;
+    for (int k = 0; k < 3; k++) {
+        // A reader that refuses may have written its answer: each tries
+        // into its own.
+        garb_val_t one;
+        if (have[k] || !knows(s, parts[k].prop) || !longhand_one(s, c, &parts[k], &one)) {
+            c->i = at;
+            continue;
+        }
+        garb_val_t was = v[k];
+        v[k] = one;
+        have[k] = true;
+        if (outline_rest(s, c, parts, v, have))
+            return true;
+        v[k] = was;
+        have[k] = false;
+        c->i = at;
+    }
+    return false;
+}
+
+// `outline` (CSS UI 4 § 3.1): a width, a style and a colour, any order,
+// each at most once (outline_rest); each left out is its initial value
+// (medium, none, auto).
+static bool outline_shorthand(Sets *s, VCur *c)
+{
+    static const Longhand kParts[3] = {
+        {GARB_OUTLINE_WIDTH, G_OUTLINE_WIDTH, NULL}, {GARB_OUTLINE_STYLE, G_KEYWORDS, kOutlineStyle},
+        {GARB_OUTLINE_COLOR, G_OUTLINE_COLOR, NULL}};
+    garb_val_t v[3] = {kw("medium"), kw("none"), kw("auto")};
+    bool have[3] = {false, false, false};
+    if (vc_done(c) || !outline_rest(s, c, kParts, v, have))
+        return false;
+    for (int k = 0; k < 3; k++)
+        set(s, kParts[k].prop, &v[k]);
+    return true;
+}
+
 static bool shorthand(Sets *s, VCur *c, Shorthand sh)
 {
     static const garb_prop_t kAll[4] = {0, 1, 2, 3};
@@ -3269,12 +3628,28 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
     case SH_BORDER_COLOR: return box4(s, c, GARB_BORDER_TOP_COLOR, bcolor_one);
     case SH_BACKGROUND: return background(s, c);
     case SH_ANIMATION: return animation(s, c);
+    case SH_OUTLINE: return outline_shorthand(s, c);
+    case SH_BORDER_INLINE: case SH_BORDER_BLOCK: {
+        const garb_prop_t sides[2] = {sh == SH_BORDER_INLINE ? 3 : 0,
+                                      sh == SH_BORDER_INLINE ? 1 : 2};
+        return border_side(s, c, sides, 2);
+    }
+    case SH_MARGIN_INLINE: case SH_MARGIN_BLOCK: case SH_INSET_INLINE: case SH_INSET_BLOCK:
+        return logical_pair(s, c, pair_of(sh), margin_one);
+    case SH_PADDING_INLINE: case SH_PADDING_BLOCK:
+        return logical_pair(s, c, pair_of(sh), padding_one);
+    case SH_BORDER_INLINE_WIDTH: case SH_BORDER_BLOCK_WIDTH:
+        return logical_pair(s, c, pair_of(sh), bwidth_one);
+    case SH_BORDER_INLINE_STYLE: case SH_BORDER_BLOCK_STYLE:
+        return logical_pair(s, c, pair_of(sh), bstyle_one);
+    case SH_BORDER_INLINE_COLOR: case SH_BORDER_BLOCK_COLOR:
+        return logical_pair(s, c, pair_of(sh), bcolor_one);
     case SH_BACKGROUND_POSITION: {
         // A position per layer, each split into its two longhands' lists.
         Layers xs = {0}, ys = {0};
         bool ok = knows(s, GARB_BACKGROUND_POSITION_X) || knows(s, GARB_BACKGROUND_POSITION_Y);
         while (ok) {
-            if (!position(s, c, &x, &y) || !layers_add(s, &xs, &x) || !layers_add(s, &ys, &y)) {
+            if (!position(s, c, true, &x, &y) || !layers_add(s, &xs, &x) || !layers_add(s, &ys, &y)) {
                 ok = false;
                 break;
             }
@@ -3403,14 +3778,16 @@ static bool shorthand(Sets *s, VCur *c, Shorthand sh)
     return false;
 }
 
-// The Compatibility Standard's legacy name aliases (§ 3.4.1) that are read:
-// a prefixed name every engine reads as its standard twin is no one
-// engine's dialect, so it is the twin — a longhand's or a shorthand's.
-// `modern` as Prop's; an alias of a marked twin is unknown with it anyway.
+// The legacy name aliases that are read — the Compatibility Standard's (§
+// 3.4.1), and those a specification names itself: a prefixed name every
+// engine reads as its standard twin is no one engine's dialect, so it is
+// the twin — a longhand's or a shorthand's. `modern` as Prop's; an alias
+// of a marked twin is unknown with it anyway.
 static const struct {
     const char *name, *twin;
     bool modern;
 } kAliases[] = {
+    {"word-wrap", "overflow-wrap", true},       // Text 3 § 5.4
     {"-webkit-background-clip", "background-clip", false},
     {"-webkit-transform", "transform", false},
     {"-webkit-transform-origin", "transform-origin", false},
@@ -3425,9 +3802,60 @@ static const struct {
     {"-webkit-animation-fill-mode", "animation-fill-mode", false},
 };
 
+// CSS Logical 1's flow-relative longhands (§ 4) and the border sides'
+// shorthands, each the physical name it maps to in a horizontal,
+// left-to-right writing mode — the only one libflow lays out — so the
+// cascade orders a flow-relative declaration against its physical twin by
+// importance, specificity and order as one property, which is what the
+// standard's mapping comes to for one writing mode. All marked: the Modern
+// Web arc added them. `direction: rtl`, which flips inline start and end,
+// is not read (DEBTS.md).
+static const struct {
+    const char *name, *twin;
+} kLogical[] = {
+    {"inline-size", "width"}, {"block-size", "height"},
+    {"min-inline-size", "min-width"}, {"min-block-size", "min-height"},
+    {"max-inline-size", "max-width"}, {"max-block-size", "max-height"},
+    {"margin-inline-start", "margin-left"}, {"margin-inline-end", "margin-right"},
+    {"margin-block-start", "margin-top"}, {"margin-block-end", "margin-bottom"},
+    {"padding-inline-start", "padding-left"}, {"padding-inline-end", "padding-right"},
+    {"padding-block-start", "padding-top"}, {"padding-block-end", "padding-bottom"},
+    {"inset-inline-start", "left"}, {"inset-inline-end", "right"},
+    {"inset-block-start", "top"}, {"inset-block-end", "bottom"},
+    {"border-inline-start", "border-left"}, {"border-inline-end", "border-right"},
+    {"border-block-start", "border-top"}, {"border-block-end", "border-bottom"},
+    {"border-inline-start-width", "border-left-width"},
+    {"border-inline-end-width", "border-right-width"},
+    {"border-block-start-width", "border-top-width"},
+    {"border-block-end-width", "border-bottom-width"},
+    {"border-inline-start-style", "border-left-style"},
+    {"border-inline-end-style", "border-right-style"},
+    {"border-block-start-style", "border-top-style"},
+    {"border-block-end-style", "border-bottom-style"},
+    {"border-inline-start-color", "border-left-color"},
+    {"border-inline-end-color", "border-right-color"},
+    {"border-block-start-color", "border-top-color"},
+    {"border-block-end-color", "border-bottom-color"},
+};
+
+// Whether a name is a flow-relative one (kLogical's, or a pair's): the
+// Quirks standard's unitless lengths (§ 3.2) are the physical properties'
+// alone, so a declaration by one of these names is read without them.
+static bool logical_name(const char *name, size_t len)
+{
+    for (size_t k = 0; k < sizeof(kLogical) / sizeof(kLogical[0]); k++)
+        if (ieq(name, len, kLogical[k].name))
+            return true;
+    for (size_t k = 0; k < sizeof(kShorthands) / sizeof(kShorthands[0]); k++)
+        if (ieq(name, len, kShorthands[k].name))
+            return pair_of(kShorthands[k].sh) >= 0 || kShorthands[k].sh == SH_BORDER_INLINE ||
+                   kShorthands[k].sh == SH_BORDER_BLOCK;
+    return false;
+}
+
 // The name a declaration's name stands for: its twin's when it is an
-// alias, else itself. False for an alias marked modern when those are not
-// known, which names nothing.
+// alias or a flow-relative longhand, else itself. False for one marked
+// modern when those are not known, which names nothing.
 static bool unalias(const char **name, size_t *len, bool modern_off)
 {
     for (size_t k = 0; k < sizeof(kAliases) / sizeof(kAliases[0]); k++)
@@ -3435,6 +3863,12 @@ static bool unalias(const char **name, size_t *len, bool modern_off)
             *name = kAliases[k].twin;
             *len = os64_strlen(kAliases[k].twin);
             return !(modern_off && marked(kAliases[k].name, kAliases[k].modern));
+        }
+    for (size_t k = 0; k < sizeof(kLogical) / sizeof(kLogical[0]); k++)
+        if (ieq(*name, *len, kLogical[k].name)) {
+            *name = kLogical[k].twin;
+            *len = os64_strlen(kLogical[k].twin);
+            return !(modern_off && marked(kLogical[k].name, true));
         }
     return true;
 }
@@ -3480,6 +3914,32 @@ int32_t prop_longhands(const char *name, size_t len, bool modern_off, garb_prop_
     return kept;
 }
 
+#define NSHORTHANDS ((int32_t)(sizeof(kShorthands) / sizeof(kShorthands[0])))
+#define NALIASES ((int32_t)(sizeof(kAliases) / sizeof(kAliases[0])))
+#define NLOGICAL ((int32_t)(sizeof(kLogical) / sizeof(kLogical[0])))
+
+const char *garb_prop_name_at(int32_t k)
+{
+    if (k < 0)
+        return NULL;
+    if (k < GARB_NPROPS)
+        return kProps[k].name;
+    k -= GARB_NPROPS;
+    if (k < NSHORTHANDS)
+        return kShorthands[k].name;
+    k -= NSHORTHANDS;
+    if (k < NALIASES)
+        return kAliases[k].name;
+    k -= NALIASES;
+    return k < NLOGICAL ? kLogical[k].name : NULL;
+}
+
+bool garb_prop_known(const char *name, size_t len, bool modern_off)
+{
+    garb_prop_t props[GARB_SETS_MAX];
+    return prop_longhands(name, len, modern_off, props) > 0;
+}
+
 // ── Declarations ────────────────────────────────────────────────────────
 
 // var() and env() alike: each is replaced before the value can be read
@@ -3510,7 +3970,8 @@ bool garb_decl_is_custom(const garb_decl_t *decl)
 int32_t garb_read_declaration(garb_parsed_t *owner, const garb_decl_t *decl, garb_reading_t how,
                               garb_set_t *out)
 {
-    Sets s = {out, 0, {owner->arena, false}, how.quirks, how.modern_off};
+    Sets s = {out, 0, {owner->arena, false}, how.quirks && !logical_name(decl->name, decl->len),
+              how.modern_off};
     VCur c = {decl->value, decl->nvalue, 0};
     const Longhand *l = longhand_named(decl->name, decl->len, how.modern_off);
     int sh = l == NULL ? shorthand_named(decl->name, decl->len, how.modern_off) : -1;
@@ -3676,6 +4137,13 @@ static void val(Out *o, const garb_val_t *v)
         put(o, ")");
         return;
     }
+    if (v->kind == GARB_V_RATIO) {
+        put(o, v->keyword != NULL ? "auto " : "");
+        val(o, &v->items[0]);
+        put(o, " / ");
+        val(o, &v->items[1]);
+        return;
+    }
     if (v->nitems > 0) {
         for (int32_t k = 0; k < v->nitems; k++) {
             if (k > 0)
@@ -3714,6 +4182,7 @@ static void val(Out *o, const garb_val_t *v)
     case GARB_V_CALC: calc(o, v->calc, AT_TOP); break;
     case GARB_V_IMAGE: put_n(o, v->text, v->len); put(o, "(...)"); break;
     case GARB_V_TRACKS: case GARB_V_FUNCTION: case GARB_V_LAYERS: case GARB_V_FUNCTIONS:
+    case GARB_V_RATIO:
         break;                      // always with items, above
     }
 }

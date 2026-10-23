@@ -56,18 +56,21 @@ static void modern_names_free(char **names, size_t n)
 
 /* The shape of the binding's prototype chains, for nodes of every kind it
  * tells apart: for each, each level down to Object.prototype, as the names
- * the binding put there, leaving out what the interface row adds (each
- * prototype's `constructor`, Node's constants; its Symbol.toStringTag is
- * a symbol, which no list of names holds). malloc'd; NULL when the
- * script did not run. */
+ * the binding put there, leaving out what the table's rows add to them
+ * (each prototype's `constructor` and Node's constants, the interface
+ * row's; onscroll, onresize and the document's scrollingElement, the
+ * view's; its defaultView, getComputedStyle's; Symbol.toStringTag is a
+ * symbol, which no list of names holds).
+ * malloc'd; NULL when the script did not run. */
 static char *modern_chain_shape(DomFixture *f)
 {
     if (!dom_script(f, MODERN_ASSERT
         "var holder=document.createElement('div');holder.innerHTML='<svg><circle/></svg>';"
         "var nodes=[document,document.body,document.createElement('div'),document.createElement('input'),"
         "document.createElement('a'),document.createElement('script'),holder.firstChild,"
-        "document.createTextNode('t'),document.createComment('c'),document.createDocumentFragment()];"
-        "var row=/(^constructor$|_NODE$|^DOCUMENT_POSITION_)/;"
+        "document.createTextNode('t'),document.createComment('c'),document.createDocumentFragment(),"
+        "document.doctype,document.implementation,document.implementation.createHTMLDocument('')];"
+        "var row=/(^constructor$|_NODE$|^DOCUMENT_POSITION_|^onscroll$|^onresize$|^scrollingElement$|^defaultView$)/;"
         "globalThis.chainShape=nodes.map(function(n){var levels=[];"
         "for(var p=Object.getPrototypeOf(n);p&&p!==Object.prototype;p=Object.getPrototypeOf(p))"
         "levels.push(Object.getOwnPropertyNames(p).filter(function(k){return !row.test(k)}).sort().join(','));"
@@ -99,6 +102,10 @@ static void dom_modern_cases(void)
     char **on = modern_global_names(&f, &non);
     dom_script(&f, MODERN_ASSERT
         "var s=document.body.style;assert('animationName' in s);"
+        /* slice 4's names: longhands, shorthands, aliases, flow-relative names */
+        "assert('aspectRatio' in s&&'outline' in s&&'outline-offset' in s&&'wordWrap' in s);"
+        "assert('marginInlineStart' in s&&'margin-inline' in s&&'borderBlockEnd' in s);"
+        "s.marginInlineStart='3px';assert(s.getPropertyValue('margin-inline-start')==='3px'&&s.marginLeft==='');"
         "s.setProperty('animation-name','spin');assert(s.getPropertyValue('animation-name')==='spin');",
         "modern-on-style-member");
     dom_script(&f, MODERN_ASSERT
@@ -131,7 +138,12 @@ static void dom_modern_cases(void)
         "assert(Object.prototype.toString.call(b)==='[object Object]'&&"
         "Object.getOwnPropertySymbols(Object.getPrototypeOf(b)).indexOf(Symbol.toStringTag)<0);"
         /* tools/test_dom_host.sh marks animation-name as the arc's */
-        "assert(!('animationName' in b.style)&&'color' in b.style);"
+        "assert(!('animationName' in b.style)&&!('animation-name' in b.style)&&'color' in b.style);"
+        /* the shorthand is still read, for the longhands that are not marked */
+        "assert('animation' in b.style);"
+        "assert(!('aspectRatio' in b.style)&&!('outline' in b.style)&&!('wordWrap' in b.style)&&"
+        "!('marginInlineStart' in b.style)&&!('margin-inline' in b.style)&&!('cursor' in b.style));"
+        "b.style.setProperty('margin-inline-start','3px');assert(b.style.getPropertyValue('margin-inline-start')==='');"
         "b.style.setProperty('animation-name','spin');b.style.color='red';"
         "assert(b.style.getPropertyValue('animation-name')===''&&b.style.color==='red');"
         "assert(typeof Image==='function'&&new Image().tagName==='IMG');",

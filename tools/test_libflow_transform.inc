@@ -731,7 +731,7 @@ static void transform_through_cases(void)
            NULL);
     XformGroups gr = {0};
     gr.watch = cb;
-    flow_visitor_t vis = {xform_group_visit, xform_group_open, xform_group_close, &gr};
+    flow_visitor_t vis = {xform_group_visit, xform_group_open, xform_group_close, &gr, NULL};
     flow_visit_groups(t, (os64_gui_rect_t){0, 0, 400, 600}, top, &vis);
     expect("transform: a turned box is a group, its bounds its own",
            gr.opens == 1 && gr.closes == 1 && gr.box == tb && rect_is(gr.bounds, 100, 100, 100, 20) &&

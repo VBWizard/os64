@@ -41,6 +41,14 @@ typedef struct {
     // built, at the view's size. NULL: a script's measurement throws.
     os64_dom_geometry_provider_t geometry;
     void *opaque;
+    // The window's view, the computed style's provider (given `opaque`)
+    // and the session's history, for the Modern Web arc's surface
+    // (MODERN_WEB.md § Slice 1b; dom.h): installed in the binding when it
+    // is made. The view's and the history's carry their own opaque. Zeroed,
+    // a page's view reads as zeros and its history is its own.
+    os64_dom_view_provider_t view;
+    os64_dom_computed_provider_t computed;
+    os64_dom_history_t history;
     // The page's record (diag.h), borrowed for the host's life: a global
     // the page reached for and did not find, and a module script, are
     // written there as they happen. NULL keeps no record.
@@ -124,6 +132,15 @@ bool yonder_scripts_connected_pending(const yonder_scripts_t *scripts);
 // A connected script, as libdom reports one (and the finished-document
 // fixtures queue them): inline is ready at once, `src` is fetched.
 void yonder_scripts_connected(yonder_scripts_t *scripts, const os64_html_node_t *script);
+// A `javascript:` link followed (HTML § 7.4.2.3.3): the address after its
+// scheme, percent-decoded, then `#` and the fragment when it has one, which
+// arrives decoded (libpage's os64_page_request_t), all read as UTF-8, is
+// queued as a classic script of the page's, ready now and run as one task
+// in its turn, named `javascript:#inline-<n>` on the page's record. A
+// string it evaluates to is not made the page (DECLINED.md). False, and
+// nothing queued, when the host is retired, the code is longer than a
+// script may be, the page has run out of scripts, or memory ran out.
+bool yonder_scripts_address(yonder_scripts_t *scripts, const char *url, const char *fragment);
 // A fetch came back: `source` is UTF-8 and borrowed, NULL when it failed.
 void yonder_scripts_fetched(yonder_scripts_t *scripts, uint32_t token, const char *source,
                             size_t length);
@@ -150,9 +167,6 @@ bool yonder_scripts_timer_fire(yonder_scripts_t *scripts, uint64_t now, os64_js_
 // task. False when nothing ran: the runtime is gone, or never was.
 bool yonder_scripts_answered(yonder_scripts_t *scripts, uint32_t token, const os64_dom_response_t *response,
                              os64_js_outcome_t *outcome);
-// The page departs: every request its scripts have out is cancelled and
-// forgotten, and nothing of the page hears it (os64_dom_fetches_cancel).
-void yonder_scripts_requests_cancel(yonder_scripts_t *scripts);
 // The navigation the last task asked for; nodes arrive held.
 bool yonder_scripts_take_navigation(yonder_scripts_t *scripts, os64_dom_navigation_t *ask);
 // A new task budget, from the next task on, and the budget tasks have.
@@ -164,6 +178,10 @@ bool yonder_scripts_alive(const yonder_scripts_t *scripts);
 // source name (OS64_JS_SOURCE_NAME_CAP) may cut short; NULL when the task
 // was an inline script, an event or a timer. Good until the host is freed.
 const char *yonder_scripts_task_address(const yonder_scripts_t *scripts);
+// How long the engine took to evaluate the script the last task ran
+// (os64_js_run, compiling it included), in microseconds; -1 when the last
+// task was an event or a timer, or ran no script.
+int64_t yonder_scripts_task_us(const yonder_scripts_t *scripts);
 // The record the host was given (options.diag).
 yonder_diag_t *yonder_scripts_diag(const yonder_scripts_t *scripts);
 // The serial a script's fetch job carries back.
@@ -177,24 +195,57 @@ void yonder_scripts_set_user_agent(yonder_scripts_t *scripts, const char *(*prov
 // document.cookie's provider (os64_dom_set_cookies), copied, for the
 // binding made now or later. NULL: the document is cookie-averse.
 void yonder_scripts_set_cookies(yonder_scripts_t *scripts, const os64_dom_cookies_t *cookies);
-// The address the page's scripts run at (the options' url), and whether
-// the page arrived encrypted (the options' encrypted).
+// The address the page's scripts run at (the options' url, until the
+// session moves the document), and whether the page arrived encrypted (the
+// options' encrypted).
 const char *yonder_scripts_url(const yonder_scripts_t *scripts);
 bool yonder_scripts_encrypted(const yonder_scripts_t *scripts);
 
+// THE SESSION'S HALF (MODERN_WEB.md § Slice 1b). The document's address
+// moved (a state update, a fragment navigation, a traversal): what a
+// script's name and a `src` resolve against from now on. NULL is a no-op.
+void yonder_scripts_set_url(yonder_scripts_t *scripts, const char *url);
+// The session is moving the document to another of its entries without a
+// fetch, or a page arriving is given its entry's state: its address and
+// its state (JSON, NULL for none), told to the binding
+// (os64_dom_history_moved), or kept for it until the first task makes it,
+// and taken as the address. False, with nothing taken, when there was no
+// room to keep them; the caller moves the window only on true. True for
+// NULL scripts, which have nothing to tell.
+bool yonder_scripts_history_moved(yonder_scripts_t *scripts, const char *url, const char *state,
+                                  size_t length);
+// The binding's name for the document's current entry (os64_dom_history_
+// entry), which an owed popstate carries; 0 with no binding.
+uint64_t yonder_scripts_history_entry(const yonder_scripts_t *scripts);
+// popstate or hashchange as it was owed, as one task (os64_dom_history_
+// event). False when nothing ran: no binding, a dead one, or nothing that
+// could hear it; the outcome is judged as a task's.
+bool yonder_scripts_history_event(yonder_scripts_t *scripts, const os64_dom_history_event_t *event,
+                                  os64_js_outcome_t *outcome);
+// The view's events, one task a call (os64_dom_view_step). False when
+// nothing ran.
+bool yonder_scripts_view_step(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
+// Whether the page asked to keep its own scroll across its entries
+// (history.scrollRestoration = "manual").
+bool yonder_scripts_scroll_manual(const yonder_scripts_t *scripts);
 // A milestone of the page's navigation timing reached at `now_us`
 // (os64_micros' clock), for performance.timing and the navigation entry.
 void yonder_scripts_mark(yonder_scripts_t *scripts, os64_dom_milestone_t which, uint64_t now_us);
 // The page's storage (dom.h § Web storage): every task the host runs ends
 // with os64_dom_storage_settle, which commits what is due; `due` is when
 // the next commit is (UINT64_MAX for none, yonder_now_ms' clock), and
-// `settle` commits it when no task has. `flush` commits whatever is left,
-// due or not, as the page departs (yonder.c's page_departs). `forget` drops
-// the page's maps and the changes it has not committed: "Clear page
-// storage". The host's teardown commits what is left once more.
+// `settle` commits it when no task has. `forget` drops the page's maps and
+// the changes it has not committed: "Clear page storage". What is left is
+// committed as the runtime is retired (yonder_scripts_depart, or the
+// host's teardown), the last of the page's commits.
 uint64_t yonder_scripts_storage_due(const yonder_scripts_t *scripts);
 void yonder_scripts_storage_settle(yonder_scripts_t *scripts);
-void yonder_scripts_storage_flush(yonder_scripts_t *scripts);
+// THE PAGE DEPARTS (HTML's unload, yonder.c's page_departs): its runtime
+// is retired at once, as a runtime that failed is. Its queued scripts,
+// timers and handlers never run, the fetches for its scripts are let go,
+// it asks the window nothing more, and its storage makes its last commit
+// now. The host stays, dead, until the page is freed. Idempotent.
+void yonder_scripts_depart(yonder_scripts_t *scripts);
 void yonder_scripts_storage_forget(yonder_scripts_t *scripts);
 
 #endif

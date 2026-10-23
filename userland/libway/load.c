@@ -272,12 +272,36 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
     return served;
 }
 
+// A URL's port, the scheme's own (http 80, https 443) when it names none.
+static uint16_t origin_port(const os64_url_t *u)
+{
+    if (u->port != 0)
+        return u->port;
+    return os64_streq(u->scheme, "https") ? 443 : os64_streq(u->scheme, "http") ? 80 : 0;
+}
+
+// Whether two URLs are on one origin: the same scheme, host and port.
+static bool same_origin(const os64_url_t *a, const os64_url_t *b)
+{
+    return os64_streq(a->scheme, b->scheme) && os64_streq(a->host, b->host) && origin_port(a) == origin_port(b);
+}
+
 // A DOWNGRADE IS A PERSON'S DECISION, which is the whole reason libfetch
 // takes a callback: a script may not follow https into http, and somebody at
-// a keyboard may. Every other hop takes the library's own verdict.
+// a keyboard may. Every other hop takes the library's own verdict. Every
+// hop is also where the load learns whether it left the asked origin.
 static os64_fetch_verdict_t hop_ask(void *ctx, const os64_fetch_hop_t *hop)
 {
     way_leg_t *s = ctx;
+    // The first hop whose target is off the asked origin, or has no parsed
+    // target to compare, is noted by its number: the load's redirectCount
+    // is 0 when that hop was one of those followed (way_head_t.redirects).
+    // A hop that is not followed (none named, refused, declined, past the
+    // limit) asks here all the same, and its number is past the followed.
+    bool parsed = hop->kind == OS64_FETCH_HOP_WHOLE || hop->kind == OS64_FETCH_HOP_DOWNGRADE ||
+                  hop->kind == OS64_FETCH_HOP_SELF;
+    if (s->left_at == 0 && (!s->asked_parsed || !parsed || !same_origin(&s->asked_origin, &hop->target)))
+        s->left_at = hop->number;
     if (hop->kind != OS64_FETCH_HOP_DOWNGRADE)
         return OS64_FETCH_HOP_DEFAULT;
     char question[WAY_SENTENCE_MAX];
@@ -347,6 +371,8 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
         *why = OS64_FETCH_OK;
     leg_say(s, " fetching %s", url);
     show(s);
+    s->asked_parsed = os64_url_parse(url, &s->asked_origin) == OS64_URL_OK;
+    s->left_at = 0;
 
     os64_html_options_t limits = os64_html_options_default();
     os64_fetch_options_t opt = {0};
@@ -424,6 +450,7 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
     }
     out->fetch = f;
     head_copy(&out->head, head, html ? WAY_BODY_HTML : image ? WAY_BODY_IMAGE : WAY_BODY_TEXT);
+    out->head.redirects = s->left_at != 0 && s->left_at <= head->hops ? 0 : head->hops;
     const os64_fetch_detail_t *detail = os64_fetch_detail(f);
     out->head.tls_version = detail->tls_version;
     out->head.tls_fallback = detail->tls_fallback;

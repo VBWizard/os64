@@ -1608,6 +1608,34 @@ static void copy_prop(garb_prop_t p, flow_style_t *d, const flow_style_t *s)
     case GARB_TRANSLATE: d->translate = s->translate; break;
     case GARB_ROTATE: d->rotate = s->rotate; break;
     case GARB_SCALE: d->scale = s->scale; break;
+    case GARB_CURSOR: d->cursor = s->cursor; break;
+    case GARB_USER_SELECT: d->user_select = s->user_select; break;
+    case GARB_WORD_BREAK: d->word_break = s->word_break; break;
+    case GARB_OVERFLOW_WRAP: d->overflow_wrap = s->overflow_wrap; break;
+    case GARB_LETTER_SPACING: d->letter_spacing = s->letter_spacing; break;
+    case GARB_TEXT_OVERFLOW: d->text_overflow = s->text_overflow; break;
+    // An outline's style alone, as a border side's: its width is its own
+    // property, and none has no width once every animation is laid over.
+    case GARB_OUTLINE_WIDTH: d->outline_width = s->outline_width; break;
+    case GARB_OUTLINE_STYLE:
+        d->outline_style = s->outline_style;
+        d->outline_auto = s->outline_auto;
+        break;
+    case GARB_OUTLINE_COLOR:
+        d->outline_color = s->outline_color;
+        d->current_colours = (uint8_t)((d->current_colours & ~FLOW_CURRENT_OUTLINE) |
+                                       (s->current_colours & FLOW_CURRENT_OUTLINE));
+        break;
+    case GARB_OUTLINE_OFFSET: d->outline_offset = s->outline_offset; break;
+    case GARB_OBJECT_FIT: d->object_fit = s->object_fit; break;
+    case GARB_OBJECT_POSITION:
+        d->object_position[0] = s->object_position[0];
+        d->object_position[1] = s->object_position[1];
+        break;
+    case GARB_ASPECT_RATIO:
+        d->aspect_ratio = s->aspect_ratio;
+        d->aspect_natural = s->aspect_natural;
+        break;
     default: break;
     }
 }
@@ -1652,6 +1680,23 @@ static bool shadows_same(const flow_shadow_t *a, int32_t na, const flow_shadow_t
     return true;
 }
 
+// Two family lists by what they say, not where it is kept: two keyframes'
+// declarations of one list are two slices of the sheet.
+static bool families_same(const flow_family_list_t *a, const flow_family_list_t *b)
+{
+    if (a->generic != b->generic || a->count != b->count || a->nwritten != b->nwritten)
+        return false;
+    for (uint32_t i = 0; i < a->count; i++)
+        if (a->names[i].len != b->names[i].len ||
+            os64_memcmp(a->names[i].name, b->names[i].name, a->names[i].len) != 0)
+            return false;
+    for (uint32_t i = 0; i < a->nwritten; i++)
+        if (a->written[i].keyword != b->written[i].keyword || a->written[i].len != b->written[i].len ||
+            os64_memcmp(a->written[i].name, b->written[i].name, a->written[i].len) != 0)
+            return false;
+    return true;
+}
+
 // Whether styles `a` and `b` give property `p` one value — every
 // field it sets equal, and a list item by item, since copy_prop moves a
 // list by its pointer. Two values called different that are not cost a
@@ -1661,6 +1706,7 @@ static bool shadows_same(const flow_shadow_t *a, int32_t na, const flow_shadow_t
 static bool same_value(garb_prop_t p, const flow_style_t *a, const flow_style_t *b)
 {
     switch (p) {
+    case GARB_FONT_FAMILY: return families_same(&a->family, &b->family);
     case GARB_TRANSFORM:
         if (a->ntransform != b->ntransform)
             return false;
@@ -1900,6 +1946,34 @@ static bool mix_prop(garb_prop_t p, const flow_style_t *a, const flow_style_t *b
                                        : p == GARB_ROTATE ? &d->rotate : &d->scale,
                               alloc, ctx);
     }
+    case GARB_LETTER_SPACING:
+        d->letter_spacing = round_i32(lerp(a->letter_spacing, b->letter_spacing, t));
+        return true;
+    case GARB_OUTLINE_WIDTH:
+        d->outline_width = round_i32(fmax(lerp(a->outline_width, b->outline_width, t), 0));
+        return true;
+    case GARB_OUTLINE_OFFSET:
+        d->outline_offset = round_i32(lerp(a->outline_offset, b->outline_offset, t));
+        return true;
+    case GARB_OUTLINE_COLOR:
+        d->outline_color = mix_colour(a->outline_color, b->outline_color, t);
+        hand_current(d, a, b, FLOW_CURRENT_OUTLINE);
+        return true;
+    case GARB_OBJECT_POSITION:
+        if (!mix_length(a->object_position[0], b->object_position[0], t, NULL) ||
+            !mix_length(a->object_position[1], b->object_position[1], t, NULL))
+            break;
+        (void)mix_length(a->object_position[0], b->object_position[0], t, &d->object_position[0]);
+        (void)mix_length(a->object_position[1], b->object_position[1], t, &d->object_position[1]);
+        return true;
+    case GARB_ASPECT_RATIO:
+        // Two ratios of one kind mix by their logarithms (Values 4 §
+        // 5.7.1); `auto`, or a ratio against `auto <ratio>`, is discrete.
+        if (a->aspect_ratio <= 0 || b->aspect_ratio <= 0 || a->aspect_natural != b->aspect_natural)
+            break;
+        d->aspect_ratio = exp(lerp(log(a->aspect_ratio), log(b->aspect_ratio), t));
+        d->aspect_natural = a->aspect_natural;
+        return true;
     case GARB_TRANSFORM_ORIGIN:
         if (!mix_length(a->transform_origin[0], b->transform_origin[0], t, NULL) ||
             !mix_length(a->transform_origin[1], b->transform_origin[1], t, NULL))
@@ -2053,6 +2127,8 @@ static void follow_colour(flow_style_t *out)
     }
     if (out->current_colours & FLOW_CURRENT_FILL)
         out->fill = out->color;
+    if (out->current_colours & FLOW_CURRENT_OUTLINE)
+        out->outline_color = out->color;
 }
 
 // The animations' values laid over the look's style at its time. Font
@@ -2130,7 +2206,9 @@ static bool motion_walk(const FMotion *m, Look *look, bool record)
 
 // What every animation leaves together, worked once from the style they
 // leave: what is in currentColor follows the colour as it moves; a side
-// drawn as none or hidden has no width (Backgrounds 3 § 4.3).
+// drawn as none or hidden has no width (Backgrounds 3 § 4.3). An outline
+// keeps its width whatever its style, as its computed value does (CSS UI
+// 4 § 3.2); a style of none draws nothing (flow_outline_rect).
 static void motion_settle(flow_style_t *out)
 {
     follow_colour(out);

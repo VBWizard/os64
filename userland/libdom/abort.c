@@ -477,7 +477,7 @@ int d_abort_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (d_accessor(dom, ctx, sp, "aborted", abort_member, S_ABORTED, false) < 0 ||
         d_accessor(dom, ctx, sp, "reason", abort_member, S_REASON, false) < 0 ||
         d_method(dom, ctx, sp, "throwIfAborted", abort_member, 0, S_THROW) < 0 ||
-        d_event_target(dom, ctx, sp, signal_id) < 0 || d_event_handler_named(dom, ctx, sp, "abort") < 0 ||
+        d_event_target(dom, ctx, sp, signal_id, NULL) < 0 || d_event_handler_named(dom, ctx, sp, "abort") < 0 ||
         d_accessor(dom, ctx, cp, "signal", abort_member, C_SIGNAL, false) < 0 ||
         d_method(dom, ctx, cp, "abort", abort_member, 0, C_ABORT) < 0)
         return -1;

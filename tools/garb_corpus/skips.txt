@@ -7,12 +7,12 @@
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>
-p { color: red; aspect-ratio: 1; --mine: 3 }
-div { ASPECT-RATIO: 2 }
+p { color: red; contain: paint; --mine: 3 }
+div { CONTAIN: none }
 </style>
 <p>x
 WANT
-property aspect-ratio 2
+property contain 2
 (end)
 END
 
@@ -87,10 +87,10 @@ END
 VIEWPORT 800x600
 PAGE
 <!doctype html><style>p { filter: var(--x) }</style>
-<p style="cursor: pointer; color: var(--c)">x
+<p style="resize: both; color: var(--c)">x
 WANT
 property filter 1
-property cursor 1
+property resize 1
 (end)
 END
 

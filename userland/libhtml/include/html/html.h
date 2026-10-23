@@ -326,6 +326,21 @@ os64_html_node_t *os64_html_create_text(os64_html_document_t *doc, const char *u
 os64_html_node_t *os64_html_create_comment(os64_html_document_t *doc, const char *utf8, size_t len,
                                            int64_t *status);
 os64_html_node_t *os64_html_create_fragment(os64_html_document_t *doc, int64_t *status);
+/* A SECOND DOCUMENT, as DOMImplementation makes one (DOM § 4.5.1): a
+ * DOCUMENT node, empty, that lives in `doc`'s arena and carries its mark,
+ * so a node moves between it and `doc`'s own tree as any of `doc`'s nodes
+ * moves, and the verbs build its tree. They give it the DOM Standard's
+ * rules for a document's children (one element, a doctype only before it,
+ * no text) and nothing more: its element may be anything and may be taken
+ * away, and `doc`'s `html`, `head` and `body` stay `doc->document`'s. It is
+ * no node's child, so it is never inserted, and like any node never
+ * inserted it stays charged until `doc` is freed. `create_doctype` makes a
+ * doctype with the name and identifiers given, each copied (UTF-8 with no
+ * NUL, else OS64_HTML_BAD_TEXT; "" is a value, NULL is BAD_ARGUMENT). */
+os64_html_node_t *os64_html_create_document(os64_html_document_t *doc, int64_t *status);
+os64_html_node_t *os64_html_create_doctype(os64_html_document_t *doc, const char *name,
+                                           const char *public_id, const char *system_id,
+                                           int64_t *status);
 os64_html_node_t *os64_html_clone(os64_html_document_t *doc, const os64_html_node_t *node,
                                   bool deep, int64_t *status);
 

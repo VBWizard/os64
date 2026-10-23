@@ -1074,7 +1074,8 @@ int d_xhr_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (upload == NULL) return -1;
     JS_SetClassProto(ctx, xhr_id, JS_DupValue(ctx, xhr->value));
     JS_SetClassProto(ctx, upload_id, JS_DupValue(ctx, upload->value));
-    if (d_event_target(dom, ctx, base->value, xhr_id) < 0 || d_event_target(dom, ctx, base->value, upload_id) < 0)
+    if (d_event_target(dom, ctx, base->value, xhr_id, NULL) < 0 ||
+        d_event_target(dom, ctx, base->value, upload_id, NULL) < 0)
         return -1;
     static const char *const kHandlers[] = {"loadstart", "progress", "abort", "error", "load", "timeout", "loadend"};
     for (size_t i = 0; i < sizeof(kHandlers) / sizeof(kHandlers[0]); i++)

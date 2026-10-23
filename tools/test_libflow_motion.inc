@@ -1362,7 +1362,7 @@ static void motion_effect_cases(void)
     expect("motion: will-change: opacity stacks it",
            w != NULL && w->stacked && w->style->animating == 0, NULL);
     MotionGroups seen = {{NULL}, 0};
-    flow_visitor_t v = {motion_group_visit, motion_group_open, NULL, &seen};
+    flow_visitor_t v = {motion_group_visit, motion_group_open, NULL, &seen, NULL};
     flow_visit_groups(m.tree, (os64_gui_rect_t){0, 0, 800, 600}, (flow_point_t){0, 0}, &v);
     bool g1_open = false, w_open = false;
     for (int32_t i = 0; i < seen.n; i++) {
@@ -4349,8 +4349,83 @@ static void motion_sweep(void)
     motion_incomplete_cases();
 }
 
+static void motion_no_visit(void *ctx, const flow_box_t *b)
+{
+    (void)ctx;
+    (void)b;
+}
+
+static void motion_count_ring(void *ctx, const flow_box_t *b)
+{
+    (void)b;
+    (*(int32_t *)ctx)++;
+}
+
+// Slice 4's longhands under @keyframes (MODERN_WEB_BRIEFS.md § Slice 4):
+// each animatable by its computed value mixes halfway as its type does —
+// a length, a colour, a position, a <ratio> by its logarithm (Values 4 §
+// 5.7.1) — and a keyword is discrete, the first value until halfway.
+// Paused at half of a linear second.
+static void motion_batch_a_cases(void)
+{
+    static const char kPage[] =
+        "<!doctype html><style>div { animation: m 1s linear -500ms paused }"
+        " #k { animation-delay: -250ms }"
+        " @keyframes m { from { letter-spacing: 0; outline: 2px solid #ff0000;"
+        " outline-offset: 0; object-position: 0% 0%; aspect-ratio: 1; cursor: pointer;"
+        " word-break: normal }"
+        " to { letter-spacing: 10px; outline: 6px solid #0000ff; outline-offset: 4px;"
+        " object-position: 100% 100%; aspect-ratio: 4; cursor: wait; word-break: break-all } }"
+        "</style><div id=h>a</div><div id=k>b</div>";
+    Moving m;
+    moving_open(&m, kPage, 0);
+    const flow_style_t *h = moving_style(&m, "h"), *k = moving_style(&m, "k");
+    expect("animation: letter-spacing halfway, 5px", h != NULL && h->letter_spacing == 5 * 64, NULL);
+    expect("animation: outline-width and -offset halfway",
+           h != NULL && h->outline_width == 4 * 64 && h->outline_offset == 2 * 64 &&
+               h->outline_style == FLOW_BORDER_SOLID, NULL);
+    expect("animation: outline-color halfway",
+           h != NULL && h->outline_color == 0x800080u, NULL);
+    expect("animation: object-position halfway, 50% 50%",
+           h != NULL && h->object_position[0].kind == FLOW_LENGTH_PERCENT &&
+               h->object_position[0].value == 50 * 64 && h->object_position[1].value == 50 * 64,
+           NULL);
+    expect("animation: aspect-ratio halfway by its logarithm, 2",
+           h != NULL && fabs(h->aspect_ratio - 2) < 1e-9, NULL);
+    expect("animation: a keyword is the second value from halfway",
+           h != NULL && h->cursor == FLOW_CURSOR_WAIT && h->word_break == FLOW_WORD_BREAK_BREAK_ALL,
+           NULL);
+    expect("animation: and the first before it",
+           k != NULL && k->cursor == FLOW_CURSOR_POINTER && k->word_break == FLOW_WORD_BREAK_NORMAL &&
+               k->letter_spacing == 160, NULL);
+    moving_close(&m);
+    // A style animated to solid brings the outline's own width, medium
+    // when nothing declares one.
+    moving_open(&m, "<!doctype html><style>div { animation: n 1s linear -750ms paused }"
+                    " @keyframes n { from { outline-style: none } to { outline-style: solid } }"
+                    "</style><div id=s>a</div>", 0);
+    const flow_style_t *s = moving_style(&m, "s");
+    expect("animation: an outline style animated to solid draws medium",
+           s != NULL && s->outline_style == FLOW_BORDER_SOLID && s->outline_width == 3 * 64, NULL);
+    moving_close(&m);
+    // A tick grows the ink of what it changed and leaves standing what the
+    // layout found below it: an outline under an element whose shadow
+    // ticks is still handed to the outline step after the tick.
+    moving_open_for(&m, MOTION_STYLE "@keyframes s{from{box-shadow:0 0 0 red}"
+                        "to{box-shadow:0 0 10px red}}#p{animation:s 1s linear}"
+                        "#c{outline:1px solid;height:10px}</style><div id=p><div id=c></div></div>",
+                    0, true);
+    bool ticked = flow_motion_tick(m.tree, 500, (flow_point_t){0, 0}, NULL, NULL, NULL);
+    int32_t rings = 0;
+    flow_visitor_t vis = {motion_no_visit, NULL, NULL, &rings, motion_count_ring};
+    flow_visit_groups(m.tree, (os64_gui_rect_t){0, 0, 800, 600}, (flow_point_t){0, 0}, &vis);
+    expect("tick: an outline below a ticked shadow is still painted", ticked && rings == 1, NULL);
+    moving_close(&m);
+}
+
 static void motion_cases(void)
 {
+    motion_batch_a_cases();
     motion_easing_cases();
     motion_chrome_cases();
     motion_sparse_cases();

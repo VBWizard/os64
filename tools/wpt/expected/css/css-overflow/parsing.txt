@@ -1,0 +1,146 @@
+# WPT's css/css-overflow/parsing in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh css/css-overflow/parsing --update
+# rewrites [passing].
+[required]
+# Slice 4: text-overflow's clip and ellipsis. Each fails with the switch off.
+text-overflow-valid.html	e.style['text-overflow'] = "clip" should set the property value
+text-overflow-valid.html	e.style['text-overflow'] = "ellipsis" should set the property value
+[excluded]
+# Pages whose tests ask CSS.supports first (css/support/computed-
+# testcommon.js), which libdom does not have: they fail whole at "'CSS' is
+# not defined" before reading getComputedStyle. DEBTS.md § Classic browser
+# scripting books CSS.supports.
+getComputedStyle-scroll-button.html	needs CSS.supports
+overflow-clip-margin-computed.html	needs CSS.supports
+overflow-computed.html	needs CSS.supports
+scroll-axis-lock-computed.html	needs CSS.supports
+scroll-markers-computed.html	needs CSS.supports
+scroll-markers-computed.tentative.html	needs CSS.supports
+scroll-target-group-computed.html	needs CSS.supports
+text-overflow-computed.html	needs CSS.supports
+webkit-box-computed.html	needs CSS.supports
+webkit-line-clamp-computed.html	needs CSS.supports
+[passing]
+block-ellipsis-invalid.html	e.style['block-ellipsis'] = "\\"first\\" \\"second\\"" should not set the property value
+block-ellipsis-invalid.html	e.style['block-ellipsis'] = "\\"string\\" no-ellipsis" should not set the property value
+block-ellipsis-invalid.html	e.style['block-ellipsis'] = "\\"string\\" none" should not set the property value
+block-ellipsis-invalid.html	e.style['block-ellipsis'] = "auto \\"string\\"" should not set the property value
+block-ellipsis-invalid.html	e.style['block-ellipsis'] = "auto" should not set the property value
+block-ellipsis-invalid.html	e.style['block-ellipsis'] = "ellipsis \\"string\\"" should not set the property value
+block-ellipsis-invalid.html	e.style['block-ellipsis'] = "ellipsis auto" should not set the property value
+block-ellipsis-invalid.html	e.style['block-ellipsis'] = "hidden" should not set the property value
+block-ellipsis-invalid.html	e.style['block-ellipsis'] = "no-ellipsis auto" should not set the property value
+block-ellipsis-invalid.html	e.style['block-ellipsis'] = "none auto" should not set the property value
+block-ellipsis-invalid.html	e.style['block-ellipsis'] = "none" should not set the property value
+continue-invalid.html	e.style['continue'] = "auto -webkit-legacy" should not set the property value
+continue-invalid.html	e.style['continue'] = "auto collapse" should not set the property value
+continue-invalid.html	e.style['continue'] = "auto discard" should not set the property value
+continue-invalid.html	e.style['continue'] = "auto" should not set the property value
+continue-invalid.html	e.style['continue'] = "collapse -webkit-legacy" should not set the property value
+continue-invalid.html	e.style['continue'] = "none" should not set the property value
+continue-invalid.html	e.style['continue'] = "normal -webkit-legacy" should not set the property value
+continue-invalid.html	e.style['continue'] = "normal collapse" should not set the property value
+continue-invalid.html	e.style['continue'] = "normal discard" should not set the property value
+line-clamp-invalid.html	e.style['line-clamp'] = "-5" should not set the property value
+line-clamp-invalid.html	e.style['line-clamp'] = "-webkit-legacy" should not set the property value
+line-clamp-invalid.html	e.style['line-clamp'] = "0 -webkit-legacy" should not set the property value
+line-clamp-invalid.html	e.style['line-clamp'] = "0" should not set the property value
+line-clamp-invalid.html	e.style['line-clamp'] = "3 none" should not set the property value
+line-clamp-invalid.html	e.style['line-clamp'] = "none 2" should not set the property value
+line-clamp-invalid.html	e.style['line-clamp'] = "none no-ellipsis" should not set the property value
+max-lines-invalid.html	e.style['max-lines'] = "-5" should not set the property value
+max-lines-invalid.html	e.style['max-lines'] = "0" should not set the property value
+max-lines-invalid.html	e.style['max-lines'] = "1 none" should not set the property value
+max-lines-invalid.html	e.style['max-lines'] = "3 4" should not set the property value
+max-lines-invalid.html	e.style['max-lines'] = "auto auto" should not set the property value
+max-lines-invalid.html	e.style['max-lines'] = "none 2" should not set the property value
+max-lines-invalid.html	e.style['max-lines'] = "none none" should not set the property value
+max-lines-invalid.html	e.style['max-lines'] = "none" should not set the property value
+overflow-clip-margin.html	e.style['overflow-clip-margin'] = "50px 50px" should not set the property value
+overflow-clip-margin.html	e.style['overflow-clip-margin'] = "border-box calc(0.5em - 100%)" should not set the property value
+overflow-clip-margin.html	e.style['overflow-clip-margin'] = "calc(100% - 0.5em)" should not set the property value
+overflow-clip-margin.html	e.style['overflow-clip-margin'] = "calc(100% - 50px)" should not set the property value
+overflow-clip-margin.html	e.style['overflow-clip-margin'] = "inset(10px)" should not set the property value
+overflow-clip-margin.html	e.style['overflow-clip-margin'] = "margin-box" should not set the property value
+overflow-invalid.html	e.style['overflow'] = "none" should not set the property value
+overflow-invalid.html	e.style['overflow'] = "visible clip auto" should not set the property value
+overflow-invalid.html	e.style['overflow-block'] = "hidden scroll" should not set the property value
+overflow-invalid.html	e.style['overflow-inline'] = "scroll auto" should not set the property value
+overflow-invalid.html	e.style['overflow-x'] = "visible clip" should not set the property value
+overflow-invalid.html	e.style['overflow-y'] = "clip hidden" should not set the property value
+overflow-valid.html	e.style['overflow'] = "auto" should set the property value
+overflow-valid.html	e.style['overflow'] = "clip" should set the property value
+overflow-valid.html	e.style['overflow'] = "hidden visible" should set the property value
+overflow-valid.html	e.style['overflow'] = "hidden" should set the property value
+overflow-valid.html	e.style['overflow'] = "scroll auto" should set the property value
+overflow-valid.html	e.style['overflow'] = "scroll" should set the property value
+overflow-valid.html	e.style['overflow'] = "visible" should set the property value
+overflow-valid.html	e.style['overflow-x'] = "scroll" should set the property value
+overflow-valid.html	e.style['overflow-x'] = "visible" should set the property value
+overflow-valid.html	e.style['overflow-y'] = "auto" should set the property value
+overflow-valid.html	e.style['overflow-y'] = "clip" should set the property value
+scroll-axis-lock-invalid.html	e.style['scroll-axis-lock'] = "10" should not set the property value
+scroll-axis-lock-invalid.html	e.style['scroll-axis-lock'] = "all" should not set the property value
+scroll-axis-lock-invalid.html	e.style['scroll-axis-lock'] = "always" should not set the property value
+scroll-axis-lock-invalid.html	e.style['scroll-axis-lock'] = "auto, none" should not set the property value
+scroll-axis-lock-invalid.html	e.style['scroll-axis-lock'] = "both" should not set the property value
+scroll-axis-lock-invalid.html	e.style['scroll-axis-lock'] = "default" should not set the property value
+scroll-axis-lock-invalid.html	e.style['scroll-axis-lock'] = "proximity" should not set the property value
+scroll-axis-lock-invalid.html	e.style['scroll-axis-lock'] = "true" should not set the property value
+scroll-markers-invalid.html	e.style['scroll-marker-group'] = "10" should not set the property value
+scroll-markers-invalid.html	e.style['scroll-marker-group'] = "before, after" should not set the property value
+scroll-markers-invalid.html	e.style['scroll-marker-group'] = "default" should not set the property value
+scroll-markers-invalid.html	e.style['scroll-marker-group'] = "set" should not set the property value
+scroll-markers-invalid.html	e.style['scroll-marker-group'] = "true" should not set the property value
+scroll-markers-invalid.tentative.html	e.style['scroll-marker-group'] = "after before" should not set the property value
+scroll-markers-invalid.tentative.html	e.style['scroll-marker-group'] = "after link" should not set the property value
+scroll-markers-invalid.tentative.html	e.style['scroll-marker-group'] = "after tab" should not set the property value
+scroll-markers-invalid.tentative.html	e.style['scroll-marker-group'] = "after, links" should not set the property value
+scroll-markers-invalid.tentative.html	e.style['scroll-marker-group'] = "after, tabs" should not set the property value
+scroll-markers-invalid.tentative.html	e.style['scroll-marker-group'] = "before before" should not set the property value
+scroll-markers-invalid.tentative.html	e.style['scroll-marker-group'] = "links after" should not set the property value
+scroll-markers-invalid.tentative.html	e.style['scroll-marker-group'] = "tabs before" should not set the property value
+scroll-target-group-invalid.html	e.style['scroll-target-group'] = "10" should not set the property value
+scroll-target-group-invalid.html	e.style['scroll-target-group'] = "all" should not set the property value
+scroll-target-group-invalid.html	e.style['scroll-target-group'] = "auto, auto" should not set the property value
+scroll-target-group-invalid.html	e.style['scroll-target-group'] = "default" should not set the property value
+scroll-target-group-invalid.html	e.style['scroll-target-group'] = "true" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "0" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "1 2 3" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "1px" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "3em" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "always both force" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "always both" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "always force" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "always stable" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "always" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "auto always" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "auto both" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "auto both-edges" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "auto stable" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "both" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "both-edges auto" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "both-edges" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "force auto" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "force both" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "force" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "none" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "red" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "stable auto" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "stable both force" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "stable both" should not set the property value
+scrollbar-gutter-invalid.html	e.style['scrollbar-gutter'] = "stable force" should not set the property value
+text-overflow-invalid.html	e.style['text-overflow'] = "\\"marker string\\" clip clip" should not set the property value
+text-overflow-invalid.html	e.style['text-overflow'] = "auto" should not set the property value
+text-overflow-invalid.html	e.style['text-overflow'] = "clip ellipsis clip" should not set the property value
+text-overflow-valid.html	e.style['text-overflow'] = "clip" should set the property value
+text-overflow-valid.html	e.style['text-overflow'] = "ellipsis" should set the property value
+webkit-line-clamp-invalid.html	e.style['-webkit-line-clamp'] = "-5" should not set the property value
+webkit-line-clamp-invalid.html	e.style['-webkit-line-clamp'] = "0" should not set the property value
+webkit-line-clamp-invalid.html	e.style['-webkit-line-clamp'] = "1 -webkit-legacy" should not set the property value
+webkit-line-clamp-invalid.html	e.style['-webkit-line-clamp'] = "1 \\"~\\"" should not set the property value
+webkit-line-clamp-invalid.html	e.style['-webkit-line-clamp'] = "1 no-ellipsis" should not set the property value
+webkit-line-clamp-invalid.html	e.style['-webkit-line-clamp'] = "auto" should not set the property value
+webkit-line-clamp-invalid.html	e.style['-webkit-line-clamp'] = "none \\"~\\"" should not set the property value

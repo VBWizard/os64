@@ -20,13 +20,14 @@ typedef enum {
     MODE_BLOCKING,      // parser-inserted, neither defer nor async: the parse waits
     MODE_DEFER,         // parser-inserted `defer src`: after the parse, in order
     MODE_ASYNC,         // `async src`, or a connected `src`: as it lands
-    MODE_INLINE         // a connected inline script: ready at once
+    MODE_INLINE,        // a connected inline script: ready at once
+    MODE_ADDRESS        // a `javascript:` link's code: ready at once, no node
 } Mode;
 
 typedef enum { STATE_FETCHING, STATE_READY, STATE_FAILED, STATE_DONE } State;
 
 typedef struct {
-    const os64_html_node_t *node;   // held
+    const os64_html_node_t *node;   // held; NULL for MODE_ADDRESS
     Mode mode;
     State state;
     uint64_t job;                   // while FETCHING
@@ -45,6 +46,10 @@ struct yonder_scripts {
     os64_page_state_t *state;
     yonder_scripts_options_t options;
     char url[OS64_DOM_URL_MAX];
+    // The entry state the session moved the document to before its
+    // binding was made (yonder_scripts_history_moved), handed to the
+    // binding when ensure_runtime makes it. JSON, owned; NULL for none.
+    char *entry_state;
     os64_js_runtime_t *runtime;
     os64_dom_t *dom;
     // The layout counts a retired binding had, kept for the report that
@@ -64,6 +69,7 @@ struct yonder_scripts {
     uint32_t ready_head, ready_count;
     uint32_t defer_next;            // the next `defer` item to consider, by index
     uint32_t inline_count;          // names an inline script: #inline-<n>
+    uint32_t address_count;         // names a link's script: javascript:#inline-<n>
     uint64_t tasks;
     // The blocking script is running: its document.write reaches the
     // parser. `written` is what the last task handed over, for the audit.
@@ -81,6 +87,10 @@ struct yonder_scripts {
     const char *task_address;
     // The page's navigation timing, which its binding reads when asked.
     os64_dom_timing_t timing;
+    // How long the last task's script took the engine to evaluate, in
+    // microseconds; -1 when the last task evaluated none
+    // (yonder_scripts_task_us).
+    int64_t task_us;
 };
 
 static void release_item(yonder_scripts_t *s, Item *it)
@@ -241,10 +251,10 @@ static int64_t local_load(void *opaque, const char *origin, void *out, size_t ca
 }
 
 static os64_dom_storage_status_t local_commit(void *opaque, const char *origin, const void *changes,
-                                              size_t length, bool last)
+                                              size_t length)
 {
     yonder_scripts_t *s = opaque;
-    return yonder_storage_commit(s->options.storage, OS64_DOM_STORAGE_LOCAL, origin, changes, length, last,
+    return yonder_storage_commit(s->options.storage, OS64_DOM_STORAGE_LOCAL, origin, changes, length,
                                  s->options.diag);
 }
 
@@ -261,10 +271,10 @@ static int64_t session_load(void *opaque, const char *origin, void *out, size_t 
 }
 
 static os64_dom_storage_status_t session_commit(void *opaque, const char *origin, const void *changes,
-                                                size_t length, bool last)
+                                                size_t length)
 {
     yonder_scripts_t *s = opaque;
-    return yonder_storage_commit(s->options.storage, OS64_DOM_STORAGE_SESSION, origin, changes, length, last,
+    return yonder_storage_commit(s->options.storage, OS64_DOM_STORAGE_SESSION, origin, changes, length,
                                  s->options.diag);
 }
 
@@ -330,6 +340,22 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     options.host_opaque = s;
     s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
     os64_dom_set_geometry(s->dom, s->options.geometry, s->options.opaque);
+    if (s->options.view.read != NULL)
+        os64_dom_set_view(s->dom, &s->options.view);
+    os64_dom_set_computed(s->dom, s->options.computed, s->options.opaque);
+    if (s->options.history.update != NULL)
+        os64_dom_set_history(s->dom, &s->options.history);
+    // The state the session gave the document before there was a binding
+    // to tell (a traversal's or a reload's entry): a binding that cannot
+    // take it is not built, so the page never reads a state the window
+    // does not have.
+    if (s->dom != NULL && s->entry_state != NULL &&
+        !os64_dom_history_moved(s->dom, s->url, s->entry_state, os64_strlen(s->entry_state))) {
+        out->status = OS64_JS_HOST_FAILURE;
+        return false;
+    }
+    os64_free(s->entry_state);
+    s->entry_state = NULL;
     os64_dom_set_user_agent(s->dom, s->user_agent, s->user_agent_opaque);
     os64_dom_set_cookies(s->dom, &s->cookies);
     if (s->options.storage != NULL) {
@@ -367,6 +393,7 @@ yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc, os64_page_state_
     s->options.timing = NULL;
     os64_strcopy(s->url, sizeof(s->url), options->url != NULL ? options->url : "about:blank");
     s->blocking = -1;
+    s->task_us = -1;
     if (options->timing != NULL) {
         s->timing = *options->timing;
     } else {
@@ -405,12 +432,10 @@ void yonder_scripts_free(yonder_scripts_t *s)
     }
     os64_free(s->items);
     os64_free(s->ready);
+    os64_free(s->entry_state);
     os64_free(s);
 }
 
-// A new item for `script`, holding it. NULL past the page's cap or out of
-// memory: that script does not run, as a script past a browser's limit does
-// not.
 // A copy of `text`, NULL for none or no memory: the address is for the
 // page's record, and a script runs the same without it.
 static char *keep(const char *text)
@@ -424,6 +449,9 @@ static char *keep(const char *text)
     return c;
 }
 
+// A new item for `script`, holding it (a link's script has no element, and
+// holds nothing). NULL past the page's cap or out of memory: that script
+// does not run, as a script past a browser's limit does not.
 static Item *item_new(yonder_scripts_t *s, const os64_html_node_t *script, Mode mode)
 {
     if (s->count == SCRIPT_COUNT_MAX)
@@ -450,7 +478,8 @@ static Item *item_new(yonder_scripts_t *s, const os64_html_node_t *script, Mode 
     it->node = script;
     it->mode = mode;
     it->state = STATE_READY;
-    os64_html_hold(s->doc, script);
+    if (script != NULL)
+        os64_html_hold(s->doc, script);
     return it;
 }
 
@@ -578,27 +607,37 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
     os64_memset(out, 0, sizeof(*out));
     s->written = 0;
     Item *it = &s->items[index];
+    // A link's script has no element to be connected or typed: it is the
+    // page's own code, and runs while the page does.
     const os64_html_node_t *root = it->node;
-    while (root->parent != NULL)
+    while (root != NULL && root->parent != NULL)
         root = root->parent;
-    bool runs = it->state == STATE_READY && root == s->doc->document &&
-                os64_dom_script_kind(it->node) == OS64_DOM_SCRIPT_CLASSIC;
+    bool runs = it->state == STATE_READY &&
+                (it->mode == MODE_ADDRESS ||
+                 (root == s->doc->document && os64_dom_script_kind(it->node) == OS64_DOM_SCRIPT_CLASSIC));
     char name[OS64_JS_SOURCE_NAME_CAP];
     os64_strcopy(name, sizeof(name), it->name);
     s->task_address = it->address;
+    s->task_us = -1;
     if (it->state == STATE_FAILED) {
         out->status = OS64_JS_EXCEPTION;
         os64_strcopy(out->message, sizeof(out->message), it->why);
         os64_strcopy(out->source_name, sizeof(out->source_name), name);
     }
     if (runs && ensure_runtime(s, out)) {
-        (void)os64_dom_script_start(s->dom, it->node);
+        if (it->node != NULL)
+            (void)os64_dom_script_start(s->dom, it->node);
         // The source moves out of the table before the run, for the same
         // reason the item is named by its index.
         char *source = it->source;
         size_t length = it->length;
         it->source = NULL;
+        // The engine's whole evaluation, compiling the source included: the
+        // number a bytecode cache would make smaller (MODERN_WEB.md slice 7).
+        int64_t began = os64_micros();
         os64_js_run(s->runtime, source, length, name, out);
+        int64_t ended = os64_micros();
+        s->task_us = began >= 0 && ended >= began ? ended - began : -1;
         os64_free(source);
         if (out->status == OS64_JS_EXCEPTION && out->jobs_pending)
             drain_after_exception(s, out);
@@ -723,6 +762,71 @@ void yonder_scripts_connected(yonder_scripts_t *s, const os64_html_node_t *scrip
     make_ready(s, it);
 }
 
+// A hex digit's value, or -1.
+static int hex_value(char c)
+{
+    return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 :
+           c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+}
+
+// HTML's "navigate to a javascript: URL": the address after its scheme,
+// percent-decoded, its fragment joined as given, then read as UTF-8, each
+// byte that is not UTF-8 becoming U+FFFD.
+bool yonder_scripts_address(yonder_scripts_t *s, const char *url, const char *fragment)
+{
+    if (s == NULL || s->dead || url == NULL)
+        return false;
+    const char *rest = os64_strchr(url, ':');
+    rest = rest != NULL ? rest + 1 : url;
+    size_t length = os64_strlen(rest), extra = fragment != NULL ? os64_strlen(fragment) + 1 : 0;
+    size_t cap = os64_js_default_limits().source_bytes;
+    if (length > cap || extra > cap - length)
+        return false;
+    // What the percent-decoding leaves, then the same as UTF-8: no byte
+    // grows past three, the replacement character's.
+    char *bytes = os64_malloc(length + extra + 1);
+    char *source = bytes != NULL ? os64_malloc(3 * (length + extra) + 1) : NULL;
+    if (source == NULL) {
+        os64_free(bytes);
+        return false;
+    }
+    size_t n = 0;
+    for (size_t i = 0; rest[i] != '\0'; i++) {
+        int high = rest[i] == '%' ? hex_value(rest[i + 1]) : -1;
+        int low = high >= 0 ? hex_value(rest[i + 2]) : -1;
+        if (low >= 0) {
+            bytes[n++] = (char)(high * 16 + low);
+            i += 2;
+        } else {
+            bytes[n++] = rest[i];
+        }
+    }
+    // libpage hands a fragment over decoded already: it is joined as it is.
+    if (fragment != NULL) {
+        bytes[n++] = '#';
+        for (size_t i = 0; fragment[i] != '\0'; i++)
+            bytes[n++] = fragment[i];
+    }
+    size_t at = 0;
+    for (size_t i = 0; i < n;) {
+        uint32_t cp;
+        i += os64_utf8_decode(bytes + i, n - i, &cp);
+        at += os64_utf8_encode(cp, source + at);
+    }
+    source[at] = '\0';
+    os64_free(bytes);
+    Item *it = item_new(s, NULL, MODE_ADDRESS);
+    if (it == NULL) {
+        os64_free(source);
+        return false;
+    }
+    os64_snprintf(it->name, sizeof(it->name), "javascript:#inline-%u", ++s->address_count);
+    it->source = source;
+    it->length = at;
+    make_ready(s, it);
+    return true;
+}
+
 void yonder_scripts_fetched(yonder_scripts_t *s, uint32_t token, const char *source, size_t length)
 {
     if (s == NULL || s->dead || token == 0 || token > s->count)
@@ -764,8 +868,10 @@ os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *s, const os64_html_no
                                          os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
-    if (s != NULL)
+    if (s != NULL) {
         s->task_address = NULL;
+        s->task_us = -1;
+    }
     if (prevented != NULL)
         *prevented = false;
     if (s == NULL || s->dead)
@@ -818,6 +924,7 @@ bool yonder_scripts_timer_fire(yonder_scripts_t *s, uint64_t now, os64_js_outcom
     if (s != NULL) {
         s->written = 0;
         s->task_address = NULL;
+        s->task_us = -1;
     }
     if (s == NULL || s->dead || !os64_dom_timer_fire(s->dom, now, out))
         return false;
@@ -836,12 +943,6 @@ bool yonder_scripts_answered(yonder_scripts_t *s, uint32_t token, const os64_dom
     os64_dom_fetched(s->dom, token, response, out);
     judged(s, out);
     return true;
-}
-
-void yonder_scripts_requests_cancel(yonder_scripts_t *s)
-{
-    if (s != NULL && !s->dead)
-        os64_dom_fetches_cancel(s->dom);
 }
 
 bool yonder_scripts_take_navigation(yonder_scripts_t *s, os64_dom_navigation_t *ask)
@@ -885,6 +986,11 @@ const char *yonder_scripts_task_address(const yonder_scripts_t *s)
     return s != NULL ? s->task_address : NULL;
 }
 
+int64_t yonder_scripts_task_us(const yonder_scripts_t *s)
+{
+    return s != NULL ? s->task_us : -1;
+}
+
 yonder_diag_t *yonder_scripts_diag(const yonder_scripts_t *s)
 {
     return s != NULL ? s->options.diag : NULL;
@@ -913,6 +1019,74 @@ bool yonder_scripts_encrypted(const yonder_scripts_t *s)
     return s != NULL && s->options.encrypted;
 }
 
+void yonder_scripts_set_url(yonder_scripts_t *s, const char *url)
+{
+    if (s != NULL && url != NULL)
+        os64_strcopy(s->url, sizeof(s->url), url);
+}
+
+bool yonder_scripts_history_moved(yonder_scripts_t *s, const char *url, const char *state, size_t length)
+{
+    if (url == NULL)
+        return false;
+    if (s == NULL)
+        return true;
+    if (s->dom != NULL && !s->dead && !os64_dom_history_moved(s->dom, url, state, length))
+        return false;
+    if (s->dom == NULL && !s->dead) {
+        // No binding yet: the state waits for the one ensure_runtime makes.
+        char *kept = NULL;
+        if (state != NULL) {
+            kept = os64_malloc(length + 1);
+            if (kept == NULL)
+                return false;
+            os64_memcpy(kept, state, length);
+            kept[length] = '\0';
+        }
+        os64_free(s->entry_state);
+        s->entry_state = kept;
+    }
+    os64_strcopy(s->url, sizeof(s->url), url);
+    return true;
+}
+
+uint64_t yonder_scripts_history_entry(const yonder_scripts_t *s)
+{
+    return s != NULL && s->dom != NULL ? os64_dom_history_entry(s->dom) : 0;
+}
+
+bool yonder_scripts_history_event(yonder_scripts_t *s, const os64_dom_history_event_t *event,
+                                  os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s == NULL || s->dead || s->dom == NULL ||
+        !os64_dom_listens(s->dom, event->hashchange ? "hashchange" : "popstate"))
+        return false;
+    s->written = 0;
+    s->task_address = NULL;
+    os64_dom_history_event(s->dom, event, out);
+    judged(s, out);
+    return true;
+}
+
+bool yonder_scripts_view_step(yonder_scripts_t *s, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s == NULL || s->dead || s->dom == NULL)
+        return false;
+    s->written = 0;
+    s->task_address = NULL;
+    if (!os64_dom_view_step(s->dom, out))
+        return false;
+    judged(s, out);
+    return true;
+}
+
+bool yonder_scripts_scroll_manual(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead && os64_dom_history_manual(s->dom);
+}
+
 void yonder_scripts_set_user_agent(yonder_scripts_t *s, const char *(*provider)(void *), void *opaque)
 {
     if (s == NULL) return;
@@ -939,10 +1113,10 @@ void yonder_scripts_storage_settle(yonder_scripts_t *s)
         os64_dom_storage_settle(s->dom);
 }
 
-void yonder_scripts_storage_flush(yonder_scripts_t *s)
+void yonder_scripts_depart(yonder_scripts_t *s)
 {
-    if (s != NULL && s->dom != NULL)
-        os64_dom_storage_flush(s->dom);
+    if (s != NULL && !s->dead)
+        retire(s);
 }
 
 void yonder_scripts_storage_forget(yonder_scripts_t *s)

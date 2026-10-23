@@ -21,6 +21,7 @@ static int node_prototype_kind(const os64_html_node_t *node)
     if (node->kind == OS64_HTML_FRAGMENT) return D_PROTO_FRAGMENT;
     if (node->kind == OS64_HTML_TEXT || node->kind == OS64_HTML_COMMENT)
         return D_PROTO_CHARACTER_DATA;
+    if (node->kind == OS64_HTML_DOCTYPE) return D_PROTO_DOCTYPE;
     if (node->kind != OS64_HTML_ELEMENT) return D_PROTO_NODE;
     if (node->ns == OS64_HTML_NS_HTML) {
         if (node->tag == OS64_HTML_TAG_INPUT) return D_PROTO_INPUT;
@@ -95,6 +96,9 @@ const os64_html_node_t *d_node(os64_dom_t *dom, JSContext *ctx, JSValueConst val
     return node;
 }
 
+/* The binding's tree changes. A node one of them takes out of its tree
+ * records first the document it leaves (d_leaving), whether or not the
+ * change then happens: the record is read only while the node is a root. */
 int64_t d_insert(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *node,
                   os64_html_node_t *before)
 {
@@ -102,11 +106,13 @@ int64_t d_insert(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *no
 }
 int64_t d_remove(os64_dom_t *dom, os64_html_node_t *node)
 {
+    d_leaving(dom, node);
     return os64_page_node_remove(dom->state, node);
 }
 int64_t d_replace(os64_dom_t *dom, os64_html_node_t *parent, os64_html_node_t *node,
                    os64_html_node_t *old)
 {
+    d_leaving(dom, old);
     return os64_page_node_replace(dom->state, parent, node, old);
 }
 
@@ -189,17 +195,66 @@ static bool filename_input(const os64_html_node_t *node)
     return value[4] == '\0';
 }
 
-static const os64_html_node_t *document_part(os64_dom_t *dom, bool body)
+/* A document's element: its element child, which is the window's
+ * document's `html` once the parser has seated it. Read from the tree
+ * either way, so a document of its own has one too. */
+static const os64_html_node_t *document_element(const os64_html_node_t *document)
 {
-    const os64_html_node_t *html = dom->document->html;
-    if (html == NULL || html->parent != dom->document->document ||
-        html->ns != OS64_HTML_NS_HTML || html->tag != OS64_HTML_TAG_HTML)
+    const os64_html_node_t *at = document->first_child;
+    while (at != NULL && at->kind != OS64_HTML_ELEMENT) at = at->next;
+    return at;
+}
+
+/* Its head or body (HTML § 3.1): the first such child of its element, when
+ * that element is an HTML `html`; a frameset is a body. */
+static const os64_html_node_t *document_part(const os64_html_node_t *document, bool body)
+{
+    const os64_html_node_t *html = document_element(document);
+    if (html == NULL || html->ns != OS64_HTML_NS_HTML || html->tag != OS64_HTML_TAG_HTML)
         return NULL;
     for (const os64_html_node_t *at = html->first_child; at != NULL; at = at->next)
         if (at->kind == OS64_HTML_ELEMENT && at->ns == OS64_HTML_NS_HTML &&
             (body ? at->tag == OS64_HTML_TAG_BODY || at->tag == OS64_HTML_TAG_FRAMESET :
                     at->tag == OS64_HTML_TAG_HEAD)) return at;
     return NULL;
+}
+
+/* A control's `type` (HTML § 4.10): an input's state, the keyword its
+ * attribute names in any case or "text"; a button's, "submit" unless the
+ * attribute says "reset" or "button"; a select's, by its `multiple`; a
+ * textarea's, always "textarea". */
+static JSValue control_type(JSContext *ctx, const os64_html_node_t *node)
+{
+    static const char *const kInput[] = {
+        "hidden", "text", "search", "tel", "url", "email", "password", "date", "month", "week", "time",
+        "datetime-local", "number", "range", "color", "checkbox", "radio", "file", "submit", "image",
+        "reset", "button", NULL
+    };
+    static const char *const kButton[] = {"submit", "reset", "button", NULL};
+    if (node->tag == OS64_HTML_TAG_TEXTAREA) return JS_NewString(ctx, "textarea");
+    if (node->tag == OS64_HTML_TAG_SELECT)
+        return JS_NewString(ctx, os64_html_attr(node, "multiple") != NULL ? "select-multiple" : "select-one");
+    const char *const *keywords = node->tag == OS64_HTML_TAG_INPUT ? kInput : kButton;
+    const os64_html_attr_t *type = os64_html_attr(node, "type");
+    for (size_t i = 0; type != NULL && keywords[i] != NULL; i++) {
+        const char *a = type->value, *b = keywords[i];
+        while (*a != '\0' && *b != '\0' && (*a >= 'A' && *a <= 'Z' ? *a + ('a' - 'A') : *a) == *b) { a++; b++; }
+        if (*a == '\0' && *b == '\0') return JS_NewString(ctx, keywords[i]);
+    }
+    return JS_NewString(ctx, keywords == kInput ? "text" : "submit");
+}
+
+/* Setting it sets the attribute, as a reflected attribute does; a select's
+ * and a textarea's are read-only and ignore it. */
+static JSValue control_type_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
+                                JSValueConst value)
+{
+    if (node->tag == OS64_HTML_TAG_TEXTAREA || node->tag == OS64_HTML_TAG_SELECT) return JS_UNDEFINED;
+    DString string = {0};
+    if (!d_string(dom, ctx, value, &string)) return JS_EXCEPTION;
+    int64_t status = os64_page_node_set_attr(dom->state, node, "type", string.data, string.length, false);
+    d_string_free(dom, &string);
+    return status < 0 ? d_html_error(ctx, status) : JS_UNDEFINED;
 }
 
 static JSValue property(JSContext *ctx, JSValueConst self, int argc,
@@ -262,6 +317,13 @@ static JSValue property(JSContext *ctx, JSValueConst self, int argc,
         } else status = os64_page_node_checked(dom->state, node, &on);
         return status < 0 ? d_page_error(ctx, status) : set ? JS_UNDEFINED : JS_NewBool(ctx, on);
     }
+    if (magic == D_CONTROL_TYPE) {
+        if (node->kind != OS64_HTML_ELEMENT || node->ns != OS64_HTML_NS_HTML ||
+            (node->tag != OS64_HTML_TAG_INPUT && node->tag != OS64_HTML_TAG_BUTTON &&
+             node->tag != OS64_HTML_TAG_SELECT && node->tag != OS64_HTML_TAG_TEXTAREA))
+            return JS_ThrowTypeError(ctx, "type requires a form control");
+        return set ? control_type_set(dom, ctx, node, value) : control_type(ctx, node);
+    }
     if (magic == D_SELECTED_INDEX) {
         int32_t index;
         int64_t status;
@@ -279,7 +341,7 @@ static JSValue property(JSContext *ctx, JSValueConst self, int argc,
     case D_LAST: return d_wrap(dom, ctx, node->last_child);
     case D_PREV: return d_wrap(dom, ctx, node->prev);
     case D_NEXT: return d_wrap(dom, ctx, node->next);
-    case D_OWNER: return d_wrap(dom, ctx, node->kind == OS64_HTML_DOCUMENT ? NULL : dom->document->document);
+    case D_OWNER: return d_wrap(dom, ctx, node->kind == OS64_HTML_DOCUMENT ? NULL : d_node_document(dom, node));
     case D_CHILD_NODES: return d_children(dom, ctx, node, false);
     case D_CHILDREN: return d_children(dom, ctx, node, true);
     case D_FIRST_ELEMENT: return d_wrap(dom, ctx, element_sibling(node->first_child, true));
@@ -302,10 +364,8 @@ static JSValue property(JSContext *ctx, JSValueConst self, int argc,
         return node_name(dom, ctx, node);
     case D_DOCUMENT_ELEMENT: case D_HEAD: case D_BODY:
         if (node->kind != OS64_HTML_DOCUMENT) return JS_ThrowTypeError(ctx, "Document getter requires a document");
-        return d_wrap(dom, ctx, magic == D_DOCUMENT_ELEMENT ?
-                               (dom->document->html != NULL && dom->document->html->parent == dom->document->document ?
-                                dom->document->html : NULL) :
-                               document_part(dom, magic == D_BODY));
+        return d_wrap(dom, ctx, magic == D_DOCUMENT_ELEMENT ? document_element(node) :
+                               document_part(node, magic == D_BODY));
     default: return JS_ThrowTypeError(ctx, "Unknown DOM property");
     }
 }
@@ -394,9 +454,13 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
         DValue *entry = wrapper_prepare(dom, ctx, node, JS_UNDEFINED);
         if (entry == NULL) return JS_EXCEPTION;
         os64_html_node_t *copy = os64_page_node_clone(dom->state, node, deep != 0, &status);
-        /* HTML's cloning steps carry a script's ALREADY STARTED to its copy. */
-        if (copy != NULL && d_script_copy_marks(dom, node, copy) >= 0)
-            return wrapper_attach(dom, ctx, entry, copy);
+        /* HTML's cloning steps carry a script's ALREADY STARTED to its copy,
+         * and DOM's give the copy the original's node document. */
+        if (copy != NULL && d_script_copy_marks(dom, node, copy) >= 0) {
+            JSValue made = wrapper_attach(dom, ctx, entry, copy);
+            d_made_in(dom, copy, d_node_document(dom, node));
+            return made;
+        }
         if (copy != NULL) status = OS64_HTML_NO_MEMORY;
         dom->values = entry->next;
         dom->retained--;
@@ -435,12 +499,23 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
     if (magic != D_CREATE_FRAGMENT && argc < 1) return JS_ThrowTypeError(ctx, "Missing creation argument");
     DString string = {0};
     if (magic != D_CREATE_FRAGMENT && !d_string(dom, ctx, argv[0], &string)) return JS_EXCEPTION;
+    /* An HTML document folds an element's name; an XML document keeps it,
+     * and makes HTML elements only when it was made for that namespace
+     * (DOM § 4.5's createElement). One that was not would make an element
+     * in no namespace, which this tree cannot hold. */
+    int type = d_document_type(dom, node);
     if (magic == D_CREATE_ELEMENT) {
         if (!d_element_name_valid(string.data)) {
             d_string_free(dom, &string);
             return d_error(ctx, "InvalidCharacterError", "Invalid element name");
         }
-        d_fold(string.data);
+        if (type == D_DOCUMENT_XML) {
+            d_string_free(dom, &string);
+            return d_error(ctx, "NotSupportedError",
+                           "This XML document's createElement would make an element in no namespace, "
+                           "which this browser's documents cannot hold");
+        }
+        if (type == D_DOCUMENT_HTML) d_fold(string.data);
     }
     int64_t status;
     os64_html_node_t *created = magic == D_CREATE_ELEMENT ?
@@ -449,7 +524,10 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
         magic == D_CREATE_COMMENT ? os64_html_create_comment(dom->document, string.data, string.length, &status) :
         os64_html_create_fragment(dom->document, &status);
     d_string_free(dom, &string);
-    return created != NULL ? d_wrap(dom, ctx, created) : d_html_error(ctx, status);
+    if (created == NULL) return d_html_error(ctx, status);
+    JSValue value = d_wrap(dom, ctx, created);
+    if (!JS_IsException(value)) d_made_in(dom, created, node);
+    return value;
 }
 
 static unsigned property_prototypes(int magic)
@@ -472,6 +550,9 @@ static unsigned property_prototypes(int magic)
         return 1u << D_PROTO_INPUT;
     case D_SELECTED_INDEX:
         return 1u << D_PROTO_SELECT;
+    case D_CONTROL_TYPE:
+        return (1u << D_PROTO_INPUT) | (1u << D_PROTO_TEXTAREA) |
+            (1u << D_PROTO_SELECT) | (1u << D_PROTO_BUTTON);
     default:
         return 1u << D_PROTO_NODE;
     }
@@ -526,7 +607,8 @@ int d_node_install(os64_dom_t *dom, JSContext *ctx)
         {"textContent", D_TEXT_CONTENT, true}, {"nodeValue", D_NODE_VALUE, true}, {"data", D_DATA, true},
         {"innerHTML", D_INNER_HTML, true}, {"outerHTML", D_OUTER_HTML, false},
         {"id", D_ID, true}, {"className", D_CLASS, true}, {"value", D_VALUE, true},
-        {"checked", D_CHECKED, true}, {"selectedIndex", D_SELECTED_INDEX, true}
+        {"checked", D_CHECKED, true}, {"selectedIndex", D_SELECTED_INDEX, true},
+        {"type", D_CONTROL_TYPE, true}
     };
     static const struct { const char *name; int magic, argc; } methods[] = {
         {"appendChild", D_APPEND, 1}, {"insertBefore", D_INSERT, 2},

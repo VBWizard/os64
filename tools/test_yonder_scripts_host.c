@@ -20,32 +20,33 @@ os64_js_status_t __real_os64_js_create_with_teardown(const os64_js_config_t *,
 #include "../userland/apps/yonder/settings.c"
 #undef s
 
+static yonder_diag_t *diag_new_claimed(const char *url, uint32_t seq);
+
 /* THE DISK, FAKED, for the page files (YONDER_DIAGNOSTICS.md): directories
  * and files in memory, reached only under a directory a case made or
  * seeded. Every other path opens nothing, as the window's fixtures always
- * had it. Handles from FAKE_HANDLE up are the fake's. */
+ * had it. Handles from FAKE_HANDLE up are the fake's: written whole by
+ * `w` and `x`, read from the start by `r`. */
 #define FAKE_HANDLE 1000
 #define FAKE_FILES 128
 /* A file's modification time is the fake second it was last published in
  * (fake_second, which a case moves), as a real disk's is in whole
  * seconds. */
-static struct { char path[256]; char *data; size_t len; bool used; uint64_t mtime; } fake_files[FAKE_FILES];
+static struct { char path[256]; char *data; size_t len, read_at; bool used; uint64_t mtime; } fake_files[FAKE_FILES];
 static char fake_dirs[16][256];
 static int nfake_dirs, fake_writes, fake_dir_at;
 static bool fake_fail_open;
 /* A disk that writes a byte a call, or refuses a write, a sync or a
  * rename. */
 static bool fake_short_write, fake_fail_write, fake_fail_sync, fake_fail_rename;
-/* The task this window is, and the tasks that are running (a store lock's
- * holder is asked after through os64_proc_read); fake_live_zombie makes
- * the first of them a zombie. os64_sleep runs fake_sleep_hook once, at the
- * sleep fake_sleep_hook_at names (the next, when it is 0): another
- * window's commit, landing while this one waits for the lock. */
+/* A disk error on the file at this path (NULL for none): its writes, or
+ * its close, fail. */
+static const char *fake_fail_write_at, *fake_fail_close_at;
+/* The task this window is, and the tasks that are running (a temp's
+ * owner is asked after through os64_proc_read); fake_live_zombie makes the
+ * first of them a zombie. */
 static uint64_t fake_task = 7, fake_live[4];
 static bool fake_live_zombie;
-static unsigned fake_sleeps;
-static void (*fake_sleep_hook)(void);
-static unsigned fake_sleep_hook_at;     /* the sleep it runs at, counted in fake_sleeps; 0 the next */
 /* fake_sync_hook runs once, at the next sync: another window's write
  * landing between this one's read and its rename. */
 static void (*fake_sync_hook)(void);
@@ -68,8 +69,9 @@ static void fake_reset(void) {
     for(int i=0;i<FAKE_FILES;i++) free(fake_files[i].data);
     memset(fake_files,0,sizeof(fake_files)); nfake_dirs=0; fake_writes=0; fake_fail_open=false;
     fake_short_write=fake_fail_write=fake_fail_sync=fake_fail_rename=false;
-    fake_task=7; memset(fake_live,0,sizeof(fake_live)); fake_live_zombie=false; fake_sleeps=0; fake_sleep_hook=NULL; fake_sleep_hook_at=0; fake_sync_hook=NULL;
+    fake_task=7; memset(fake_live,0,sizeof(fake_live)); fake_live_zombie=false; fake_sync_hook=NULL;
     fake_second=1;
+    fake_fail_write_at=fake_fail_close_at=NULL;
     snprintf(fake_dirs[nfake_dirs++],256,"/tmp");
 }
 static const char *fake_text(const char *path) {
@@ -78,8 +80,13 @@ static const char *fake_text(const char *path) {
 int64_t os64_open(const char *p, const char *m) {
     char parent[256];
     if(fake_fail_open || fake_parent(p,parent,sizeof(parent))==NULL || !fake_is_dir(parent) ||
-       (strcmp(m,"w") && strcmp(m,"x"))) return -1;
+       (strcmp(m,"w") && strcmp(m,"x") && strcmp(m,"r"))) return -1;
     int f=fake_file(p);
+    if(!strcmp(m,"r")) {
+        if(f<0) return -1;
+        fake_files[f].read_at=0;
+        return FAKE_HANDLE+f;
+    }
     if(f>=0 && !strcmp(m,"x")) return -1;
     if(f<0) for(f=0;f<FAKE_FILES && fake_files[f].used;f++) {}
     if(f==FAKE_FILES) return -1;
@@ -92,14 +99,26 @@ int64_t os64_write(int32_t h, const void *b, size_t n) {
     if(h<FAKE_HANDLE) return port_os64_write(h,b,n);
     int f=h-FAKE_HANDLE;
     if(fake_fail_write) return -1;
+    if(fake_fail_write_at!=NULL && !strcmp(fake_files[f].path,fake_fail_write_at)) return -1;
     if(fake_short_write && n>1) n=1;
     fake_files[f].data=realloc(fake_files[f].data,fake_files[f].len+n+1);
     memcpy(fake_files[f].data+fake_files[f].len,b,n); fake_files[f].len+=n;
     fake_files[f].data[fake_files[f].len]='\0';
     return (int64_t)n;
 }
-int64_t os64_read(int32_t h, void *b, size_t n) { (void)h; (void)b; (void)n; return -1; }
-int64_t os64_close(int32_t h) { (void)h; return 0; }
+int64_t os64_read(int32_t h, void *b, size_t n) {
+    if(h<FAKE_HANDLE || h>=FAKE_HANDLE+FAKE_FILES || !fake_files[h-FAKE_HANDLE].used) return -1;
+    int f=h-FAKE_HANDLE;
+    size_t left=fake_files[f].len-fake_files[f].read_at, take=n<left ? n : left;
+    memcpy(b,fake_files[f].data+fake_files[f].read_at,take);
+    fake_files[f].read_at+=take;
+    return (int64_t)take;
+}
+int64_t os64_close(int32_t h) {
+    int f=h-FAKE_HANDLE;
+    return f>=0 && f<FAKE_FILES && fake_files[f].used && fake_fail_close_at!=NULL &&
+           !strcmp(fake_files[f].path,fake_fail_close_at) ? -1 : 0;
+}
 int64_t os64_rename(const char *from, const char *to) {
     int f=fake_file(from);
     if(f<0 || fake_fail_rename) return -1;
@@ -117,9 +136,19 @@ int64_t os64_sync(int32_t h) {
     if(hook!=NULL) hook();
     return fake_fail_sync ? -1 : 0;
 }
+/* A file, or a directory with nothing in it, as os64_unlink removes either. */
 int64_t os64_unlink(const char *p) {
     int f=fake_file(p);
-    if(f<0) return -1;
+    if(f<0) {
+        char parent[256];
+        for(int i=0;i<FAKE_FILES;i++)
+            if(fake_files[i].used && fake_parent(fake_files[i].path,parent,sizeof(parent)) && !strcmp(parent,p))
+                return -1;
+        for(int i=0;i<nfake_dirs;i++) if(!strcmp(fake_dirs[i],p)) {
+            memmove(fake_dirs[i],fake_dirs[i+1],(size_t)(nfake_dirs-i-1)*sizeof(fake_dirs[0])); nfake_dirs--; return 0;
+        }
+        return -1;
+    }
     free(fake_files[f].data); memset(&fake_files[f],0,sizeof(fake_files[f])); return 0;
 }
 int64_t os64_mkdir(const char *p) {
@@ -167,14 +196,6 @@ int32_t os64_proc_read(uint64_t pid, os64_proc_info_t *out) {
         return 0;
     }
     return pid==fake_task ? (out->pid=pid, out->state=OS64_PROC_RUNNING, 0) : -1;
-}
-int64_t os64_sleep(uint64_t ms) {
-    (void)ms; fake_sleeps++;
-    if(fake_sleeps<fake_sleep_hook_at) return 0;
-    void (*hook)(void)=fake_sleep_hook;
-    fake_sleep_hook=NULL;
-    if(hook!=NULL) hook();
-    return 0;
 }
 /* The clocks stand still unless a case moves them: micros steps by
  * clock_step at every read (an overrun is a loop that reads it) and by
@@ -283,8 +304,15 @@ os64_font_status_t __wrap_os64_text_font_open(os64_text_context_t *c, const uint
     if(font_open_refusals>0) { font_open_refusals--; *out=NULL; return OS64_FONT_LIMIT; }
     return __real_os64_text_font_open(c,bytes,len,o,out);
 }
+/* A program that includes this file to drive pages of its own (the replay
+ * runner, tools/test_yonder_replay_host.c) may run the pool itself: when
+ * set, the first takes every submission, and the second every cancellation
+ * of a job it holds, answering whether it did. */
+static os64_work_id_t (*pool_submit_hook)(const os64_work_t *work);
+static bool (*pool_cancel_hook)(os64_work_id_t id);
 void os64_work_cancel(os64_work_pool_t *pool, os64_work_id_t id) {
     (void)pool;
+    if(pool_cancel_hook!=NULL && pool_cancel_hook(id)) return;
     for(int i=0;i<nscript_jobs;i++) if(script_jobs[i].id==id) {
         os64_free(script_jobs[i].job); script_jobs[i]=script_jobs[--nscript_jobs]; script_cancels++; return;
     }
@@ -306,6 +334,7 @@ void os64_work_cancel(os64_work_pool_t *pool, os64_work_id_t id) {
 os64_work_id_t os64_work_submit(os64_work_pool_t *pool, const os64_work_t *work) {
     (void)pool;
     if(!pool_open) { check(false,"unexpected background submission"); return 0; }
+    if(pool_submit_hook!=NULL) return pool_submit_hook(work);
     if(*(const uint32_t *)work->job==YONDER_JOB_SCRIPT) {
         if(nscript_jobs==32) return 0;
         script_jobs[nscript_jobs].id=++pool_ids; script_jobs[nscript_jobs].job=work->job;
@@ -327,6 +356,11 @@ os64_work_id_t os64_work_submit(os64_work_pool_t *pool, const os64_work_t *work)
         font_jobs[nfont_jobs].id=++pool_ids; font_jobs[nfont_jobs].job=work->job;
         return font_jobs[nfont_jobs++].id;
     }
+    /* One slot: a picture that comes while another holds it is refused, as
+     * a full pool refuses, and yonder frees it; taking it would drop the
+     * held job's only reference. */
+    if(*(const uint32_t *)work->job==YONDER_JOB_PICTURE && pool_work.job!=NULL &&
+       *(const uint32_t *)pool_work.job==YONDER_JOB_PICTURE) return 0;
     pool_work=*work; pool_work_id=++pool_ids; return pool_work_id;
 }
 bool os64_work_reap(os64_work_pool_t *pool, os64_work_id_t *id, int64_t *verdict, void **job,
@@ -457,7 +491,7 @@ int64_t yonder_sheet_run(void *job, bool (*cancelled)(void *), void *ctx, void *
 /* As sheet.c releases a sheet job and what it made. */
 void yonder_sheet_release(void *job, void *product) {
     yonder_sheet_t *got=product;
-    if(got) { garb_free(&got->parsed); os64_free(got); }
+    if(got) { garb_free(&got->parsed); os64_free(got->kept); os64_free(got); }
     os64_free(job);
 }
 int64_t yonder_script_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
@@ -506,10 +540,14 @@ const os64_image_frame_t *os64_image_sequence_frame(const os64_image_sequence_t 
     if(sequence==NULL) { check(false,"unexpected animation read"); return NULL; }
     return &sequence->frame;
 }
-/* A file a case serves (open_local), or none; and the fake disk's files
- * (page storage reads its stores this way), whole. fake_slurp_fail makes
- * every read of a fake file fail, as a disk that cannot be read does. */
+/* A file a case serves (open_local), or none: `slurp_length` bytes, or a
+ * string's when that is zero; and the fake disk's files (page storage
+ * reads its stores this way), whole. fake_slurp_fail makes every read of
+ * a fake file fail, as a disk that cannot be read does; reading the case's
+ * file takes slurp_us on the clock. */
 static const char *slurp_path, *slurp_bytes;
+static size_t slurp_length;
+static int64_t slurp_us;
 static bool fake_slurp_fail;
 os64_slurp_status_t os64_slurp(const char *path, size_t cap, uint8_t **bytes, size_t *length) {
     *bytes=NULL; *length=0;
@@ -524,7 +562,9 @@ os64_slurp_status_t os64_slurp(const char *path, size_t cap, uint8_t **bytes, si
         return OS64_SLURP_OK;
     }
     if(slurp_path==NULL || !os64_streq(path,slurp_path)) return OS64_SLURP_NO_FILE;
-    *length=strlen(slurp_bytes); *bytes=os64_malloc(*length+1); memcpy(*bytes,slurp_bytes,*length+1);
+    clock_us+=slurp_us;
+    *length=slurp_length!=0 ? slurp_length : strlen(slurp_bytes);
+    *bytes=os64_malloc(*length+1); memcpy(*bytes,slurp_bytes,*length); (*bytes)[*length]=0;
     return OS64_SLURP_OK;
 }
 
@@ -532,7 +572,8 @@ bool os64_ui_theme_session(os64_ui_theme_t *theme, uint64_t *installed, uint64_t
     (void)theme; (void)installed; (void)hint; return false;
 }
 static char saved_scripts[8], saved_zoom[8], saved_seconds[8], saved_diagnostics[256], saved_appearance[8],
-    saved_animations[8], saved_motion[16], saved_modern[16], saved_profile[300], settings_report[256];
+    saved_animations[8], saved_motion[16], saved_keep_pages[16], saved_modern[16], saved_profile[300],
+    settings_report[256];
 /* What reading yonder.conf's profile answers instead, when not 0. */
 static int64_t profile_conf_failure;
 int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) {
@@ -541,7 +582,8 @@ int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) 
         os64_streq(key,"zoom") ? saved_zoom : os64_streq(key,"script_seconds") ? saved_seconds :
         os64_streq(key,"diagnostics") ? saved_diagnostics : os64_streq(key,"appearance") ? saved_appearance :
         os64_streq(key,"animations") ? saved_animations : os64_streq(key,"motion") ? saved_motion :
-        os64_streq(key,"modern") ? saved_modern : os64_streq(key,"profile") ? saved_profile : "";
+        os64_streq(key,"keep_pages") ? saved_keep_pages : os64_streq(key,"modern") ? saved_modern :
+        os64_streq(key,"profile") ? saved_profile : "";
     if(os64_streq(key,"profile") && profile_conf_failure!=0) return profile_conf_failure;
     if(!value[0]) return OS64_CONF_NO_KEY;
     /* A value too long for `out` is TRUNCATED, as the real reader says. */
@@ -567,10 +609,14 @@ void os64_ui_settings_report(os64_ui_settings_t *dialog, const char *text) {
 static char fake_cookie_url[256], fake_cookie_set[256];
 static int fake_cookie_encrypted=-1;    /* what the window said of the page's transport */
 static const char *fake_cookie_read="session=abc; theme=dark";
+static bool fake_cookie_short;          /* the jar says the string did not fit, whatever the room */
+/* A jar that answers by the page's address and transport, as libway's
+ * does (NULL: every page reads fake_cookie_read). */
+static const char *(*fake_cookie_answer)(const char *page_url, bool encrypted);
 size_t way_script_cookies(way_jar_t *jar, const char *page_url, bool encrypted, char *out, size_t cap, bool *whole) {
-    (void)jar; *whole=true; snprintf(fake_cookie_url,sizeof(fake_cookie_url),"%s",page_url?page_url:"");
+    (void)jar; *whole=!fake_cookie_short; snprintf(fake_cookie_url,sizeof(fake_cookie_url),"%s",page_url?page_url:"");
     fake_cookie_encrypted=encrypted;
-    return (size_t)snprintf(out,cap,"%s",fake_cookie_read);
+    return (size_t)snprintf(out,cap,"%s",fake_cookie_answer!=NULL ? fake_cookie_answer(page_url,encrypted) : fake_cookie_read);
 }
 void way_script_cookie(way_jar_t *jar, const char *page_url, bool encrypted, const char *text, size_t len) {
     (void)jar; snprintf(fake_cookie_url,sizeof(fake_cookie_url),"%s",page_url?page_url:"");
@@ -690,6 +736,7 @@ static void probe_drop(void) {
     inputs_drop();
     yonder_scripts_free(g.page.scripts); g.page.scripts=NULL;
     forms_drop(); page_clear(&g.page); os64_ui_font_release(&g.ui);
+    way_history_clear(&g.way);
 }
 
 static os64_html_node_t *probe_id_in(const os64_html_document_t *doc, const char *id) {
@@ -1244,7 +1291,7 @@ static void tick_cases(void) {
     check(g.tick_painting && g.tick_began==690 && tick_x("t")==59,
         "ticks: one not taken lays out instead, as the tick's frame");
     motion_painted();
-    g.page.diag=yonder_diag_new("http://t.test/",1,0);
+    g.page.diag=diag_new_claimed("http://t.test/",1);
     now_ms=710;
     motion_tick();
     clock_us+=201000; now_ms=911;
@@ -1314,7 +1361,7 @@ static void tick_cases(void) {
     clock_us+=1000;
     motion_painted();
     geometry_layout_delay=0;
-    g.page.diag=yonder_diag_new("http://t.test/",2,0);
+    g.page.diag=diag_new_claimed("http://t.test/",2);
     said=motion_pause_said();
     yonder_diag_render(g.page.diag,record,sizeof(record));
     check(said && motion_next()==YONDER_NEVER &&
@@ -1531,7 +1578,7 @@ static void motion_cases(void) {
     check(motion_next()==YONDER_NEVER && ticker_due==YONDER_NEVER,"motion: a covered window lays out for none");
     g.covered=false;
     geometry_layout_delay=201000; now_ms=800;
-    g.page.diag=yonder_diag_new("http://m.test/",1,0);
+    g.page.diag=diag_new_claimed("http://m.test/",1);
     motion_tick();
     check(g.motion_began==800 && motion_next()==YONDER_NEVER,
         "motion: a page whose frame for an animation took more than MOTION_COST_MS lays out for none");
@@ -1558,7 +1605,7 @@ static void motion_cases(void) {
     now_ms=1000;
     probe_page(kMotionPage,false);
     relayout(true);
-    g.page.diag=yonder_diag_new("http://m.test/",2,0);
+    g.page.diag=diag_new_claimed("http://m.test/",2);
     say_laid_out(MOTION_COST_MS+1);
     check(motion_next()==YONDER_NEVER,"motion: a page whose own layout was too slow lays out for no animation");
     check(strstr(g.status_text,"ANIMATIONS PAUSED: the layout took 201 ms, over 200")!=NULL,
@@ -1599,7 +1646,7 @@ static void motion_cases(void) {
     probe_page("<!doctype html><style>@keyframes tint{to{color:red}}"
         "p{animation:tint 1s linear 1}</style><p>once</p>",false);
     relayout(true);
-    g.page.diag=yonder_diag_new("http://m.test/",3,0);
+    g.page.diag=diag_new_claimed("http://m.test/",3);
     say_laid_out(MOTION_COST_MS+1);
     check(strstr(g.status_text,"ANIMATIONS PAUSED")!=NULL,
         "motion: a slow page with an animation still to run pauses it");
@@ -2139,6 +2186,101 @@ static void input_links(void) {
     check(status_says("background workers"),"input: an uncancelled click follows its link after its listeners");
     probe_drop();
 }
+/* A `javascript:` link (MODERN_WEB.md slice 0c): the person's click runs
+ * the address's code in the page, by the door an inline script runs
+ * through, so it is on the page's record as a script; no request is made
+ * and libway is not asked. The page's own script defines what the link
+ * calls, as a login dropdown's does. */
+static void javascript_page(const char *html, bool scripts) {
+    probe_page(html,scripts);
+    g.page.diag=diag_new_claimed("https://fixture.test/page",1);
+    if(!scripts) return;
+    yonder_scripts_free(g.page.scripts);
+    g.page.scripts=scripts_host(g.page.way.doc,os64_page_shared_state(g.page.way.model),
+        g.page.way.url,false,++g.pages_made,g.page.diag,g.page.modern);
+    for (os64_html_node_t *n=g.page.way.doc->document;n;n=(os64_html_node_t *)next_within(n,g.page.way.doc->document))
+        if(os64_dom_script_kind(n)==OS64_DOM_SCRIPT_CLASSIC && os64_html_attr(n,"src")==NULL)
+            yonder_scripts_connected(g.page.scripts,n);
+    script_turn();
+}
+static bool javascript_record_has(const char *line) {
+    static char record[8192];
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    return strstr(record,line)!=NULL;
+}
+static void javascript_drop(void) {
+    yonder_diag_free(g.page.diag); g.page.diag=NULL;
+    probe_drop();
+}
+static void input_javascript_links(void) {
+    static const char page[]=
+        "<p><a id=login href=\"javascript:toggle('open');\">log in</a></p>"
+        "<p><a id=coded href=\"javascript:note(%27a%20b#c%27)\">coded</a></p>"
+        "<p><a id=twice href=\"javascript:note('%2541#%2541')\">twice</a></p>"
+        "<p><a id=broken href=\"javascript:nothere()\">broken</a></p>"
+        "<p><a id=nothing href=\"javascript:void(0)\">nothing</a></p><p id=log>-</p>"
+        "<script>function toggle(how){document.getElementById('log').textContent=how}"
+        "function note(text){document.getElementById('log').textContent=text}</script>";
+    javascript_page(page,true);
+    uint64_t requests=g.nav.id;
+    input_click_at("login");
+    check(probe_text_is("log","-"),"javascript link: the code waits for the page's next turn, as a task");
+    check(script_turn() && probe_text_is("log","open"),"javascript link: a click runs the address's code in the page");
+    check(g.nav.id==requests && !javascript_record_has("link refused"),
+        "javascript link: no request is made and libway refuses nothing");
+    check(javascript_record_has("script javascript:#inline-1: ran in"),
+        "javascript link: the page's record lists it as a script");
+    input_click_at("coded");
+    check(script_turn() && probe_text_is("log","a b#c"),
+        "javascript link: the address is percent-decoded, its fragment included");
+    /* The fragment arrives decoded (libpage's request): it is not decoded
+     * a second time, so an escaped percent sign stays one. */
+    input_click_at("twice");
+    check(script_turn() && probe_text_is("log","%41#%41"),
+        "javascript link: the fragment is decoded once, as the address is");
+    input_click_at("broken");
+    script_turn();
+    check(javascript_record_has("FAILED script javascript:#inline-4: ReferenceError"),
+        "javascript link: a script that throws is a FAILED script line");
+    check(javascript_record_has("script javascript:#inline-4: failed in"),
+        "javascript link: and its task is listed as failed");
+    /* The failure's badge lays the window out again, and the fixture's
+     * root has no size of its own: the view is put back where it was. */
+    g.view.bounds=(os64_gui_rect_t){0,0,800,600};
+    input_click_at("nothing");
+    check(script_turn() && javascript_record_has("script javascript:#inline-5: ran in"),
+        "javascript link: void(0) runs, and does nothing");
+    /* The page's own click() follows the link by the same door. */
+    yonder_scripts_t *host=g.page.scripts;
+    check(yonder_scripts_address(host,"javascript:toggle('clicked')",NULL) && script_turn() &&
+          probe_text_is("log","clicked"),"javascript link: queued directly, the same task");
+    /* A byte the decoding makes that is not UTF-8 is U+FFFD; an escape cut
+     * short, or not hex, stays as written. */
+    check(yonder_scripts_address(host,"JavaScript:note('%FF|%4|%zz|%')",NULL) && script_turn() &&
+          probe_text_is("log","\xEF\xBF\xBD|%4|%zz|%"),"javascript link: decoded as the standard decodes it");
+    size_t cap=os64_js_default_limits().source_bytes;
+    char *long_url=malloc(cap+32);
+    if(long_url==NULL) abort();
+    memcpy(long_url,"javascript:",11);
+    memset(long_url+11,'1',cap+1);
+    long_url[11+cap+1]='\0';
+    check(!yonder_scripts_address(host,long_url,NULL),"javascript link: code longer than a script may be is not queued");
+    long_url[11+cap-1]='\0';
+    check(!yonder_scripts_address(host,long_url,"12"),"javascript link: nor is one its fragment takes past it");
+    free(long_url);
+    check(!yonder_scripts_address(NULL,"javascript:1",NULL) && !yonder_scripts_address(host,NULL,NULL),
+          "javascript link: no host or no address queues nothing");
+    yonder_scripts_depart(host);
+    check(!yonder_scripts_address(host,"javascript:1",NULL),"javascript link: a departed page's host queues nothing");
+    javascript_drop();
+
+    javascript_page(page,false);
+    input_click_at("login");
+    check(probe_text_is("log","-") && status_says("scripts are off") && g.nav.id==0 &&
+          !javascript_record_has("link refused"),
+        "javascript link: with scripts off the link does nothing, and the status line says why");
+    javascript_drop();
+}
 static void input_hover(void) {
     probe_page("<p id=quiet>no handlers here</p><script>var x=1;</script>",true);
     script_turn();
@@ -2224,6 +2366,7 @@ static void input_cases(void) {
     yonder_bar_lower(&g.bar);
 
     input_links();
+    input_javascript_links();
     input_hover();
     input_forms();
 }
@@ -2264,6 +2407,7 @@ static void stream_window_drop(void) {
     if(g.stream.active) stream_drop();
     if(pool_work.job!=NULL) { yonder_trip_release(pool_work.job,NULL); memset(&pool_work,0,sizeof(pool_work)); }
     inputs_drop(); forms_drop(); page_clear(&g.page); page_clear(&g.coming.page); os64_ui_font_release(&g.ui);
+    way_history_clear(&g.way);
     while(nsheet_jobs>0) os64_free(sheet_jobs[--nsheet_jobs].job);
 }
 /* The worker's part: a head for `url`, the body in `chunk`-sized posts, the verdict. */
@@ -3079,8 +3223,11 @@ static void loop_hash_unshown(void) {
     const char *pages[2]={at_dcl,mid_parse};
     for(int i=0;i<2;i++) {
         loop_page(pages[i]);
+        /* A fragment navigation: the page arrives at the address with its
+         * fragment, the entry it left behind it in the session. */
         check(loop_settle() && !g.stream.active && g.page.tree!=NULL &&
-              os64_streq(g.page.way.url,"http://fixture.test/final"),
+              os64_streq(g.page.way.url,"http://fixture.test/final#x") && g.way.depth>=1 &&
+              os64_streq(g.way.history[g.way.depth-1].url,"http://fixture.test/final"),
             i==0 ? "loop: location.hash at DOMContentLoaded arrives instead of fetching the page again"
                  : "loop: location.hash mid-parse arrives instead of fetching the page again");
         check(!status_says("fragment") && !status_says("anchor"),
@@ -3145,7 +3292,873 @@ static void loop_string_timer_throws(void) {
     loop_drop();
 }
 static void loop_modern(void);
+/* SLICE 1b IN THE WINDOW (MODERN_WEB.md § Slice 1b): the binding's view,
+ * computed-style and history providers are yonder's own, so what a page's
+ * script asks reaches the window's layout, scroll and session, and what
+ * the window does reaches the script as the events the brief rules. */
+
+/* The tasks a shown page is owed run, as the loop runs them: false when
+ * one never ends. */
+static bool view_turns(void) {
+    for(int i=0;i<64;i++) if(!script_turn()) return true;
+    return false;
+}
+/* getComputedStyle reads the page's laid-out boxes: on a page still
+ * arriving (its measured layout) and on the page shown. */
+static void loop_view_computed(void) {
+    loop_page("<style>body{margin:0}#b{width:200px;height:30px;color:rgb(10,20,30);padding:5%}"
+        "#h{display:none}</style><div id=b></div><div id=h><span id=s></span></div>"
+        "<p id=early>-</p><p id=late>-</p><script>"
+        "function read(){var cs=getComputedStyle(document.getElementById('b'));"
+        "return [cs.width,cs.color,cs.paddingLeft,getComputedStyle(document.getElementById('s')).display,"
+        "getComputedStyle(document.createElement('i')).color==='',cs.length>100].join('|')}"
+        "document.getElementById('early').textContent=read();"
+        "onload=function(){document.getElementById('b').style.width='321px';"
+        "document.getElementById('late').textContent=read()}</script>");
+    check(loop_settle() && g.page.tree!=NULL,"view: a page asking for computed styles arrives");
+    // 5% of the view's width: the body has no margin.
+    char padding[32], early[96], late[96];
+    garb_css_number(g.view.bounds.w*0.05,padding,sizeof(padding));
+    snprintf(early,sizeof(early),"200px|rgb(10, 20, 30)|%spx|inline|true|true",padding);
+    snprintf(late,sizeof(late),"321px|rgb(10, 20, 30)|%spx|inline|true|true",padding);
+    check(probe_text_is("early",early),
+        "view: getComputedStyle on a page still arriving reads its measured layout");
+    check(probe_text_is("late",late),
+        "view: on the page shown it reads the layout made current, a script's change included");
+    loop_drop();
+}
+/* A script's scroll moves g.view's, and any scroll of the view owes the
+ * page a scroll event, at the document and bubbling to window. */
+static void loop_view_scroll(void) {
+    loop_page("<style>body{margin:0;height:3000px}</style><p id=out>-</p><p id=size>-</p><script>"
+        "var n=0;addEventListener('scroll',function(e){n++;document.getElementById('out').textContent="
+        "'scrolled '+scrollY+' '+n+' '+(e.target===document)});"
+        "document.getElementById('size').textContent=[innerWidth,innerHeight,outerWidth>0].join(',');"
+        "onload=function(){scrollTo({top:300,behavior:'smooth'})}</script>");
+    check(loop_settle() && g.page.tree!=NULL && g.sy==300,"view: a script's scrollTo scrolls the page shown");
+    char size[48];
+    snprintf(size,sizeof(size),"%d,%d,true",(int)g.view.bounds.w,(int)g.view.bounds.h);
+    check(probe_text_is("size",size),"view: innerWidth and innerHeight are the view in CSS pixels");
+    check(view_turns() && probe_text_is("out","scrolled 300 1 true"),"view: the scroll is a task's event");
+    scroll_to(0,500);
+    check(view_turns() && probe_text_is("out","scrolled 500 2 true"),"view: a person's scroll is one too");
+    check(view_turns() && probe_text_is("out","scrolled 500 2 true"),"view: and only once");
+    loop_drop();
+    // A scroll asked for before the page is shown is made when it is.
+    loop_page("<style>body{margin:0;height:3000px}</style><script>scrollTo(0,400)</script><p>tail</p>");
+    check(loop_settle() && g.page.tree!=NULL && g.sy==400,"view: a scroll asked for while the page arrived is made");
+    loop_drop();
+}
+/* A resize owes resize, and a list whose answer moved its change. */
+static void loop_view_media(void) {
+    loop_page("<p id=out>-</p><script>var log=[];var m=matchMedia('(min-width: 700px)');"
+        "function o(){document.getElementById('out').textContent=log.join(',')}"
+        "m.onchange=function(e){log.push('change:'+e.matches+':'+e.media);o()};"
+        "addEventListener('resize',function(){log.push('resize:'+innerWidth+':'+m.matches);o()});"
+        "log.push('matches:'+m.matches);o()</script>");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","matches:true"),"media: judged at the view");
+    g.view.bounds.w=600;
+    check(view_turns() && probe_text_is("out","matches:true,resize:600:false,change:false:(min-width: 700px)"),
+        "media: a resize fires resize, then the list's change");
+    loop_drop();
+}
+/* The three routes and their events (MODERN_WEB_BRIEFS.md § Slice 1b). */
+static void loop_view_history(void) {
+    loop_page("<p id=out>-</p><script>var log=[];"
+        "function o(){document.getElementById('out').textContent=log.join(',')}"
+        "addEventListener('popstate',function(e){log.push('pop:'+JSON.stringify(e.state)+':'+location.pathname+location.hash);o()});"
+        "addEventListener('hashchange',function(e){log.push('hash:'+e.oldURL.split('#')[1]+'>'+e.newURL.split('#')[1]);o()});"
+        "onload=function(){history.pushState({n:1},'','/one');history.pushState({n:2},'','#frag');"
+        "log.push('len:'+history.length);o()}</script>");
+    check(loop_settle() && g.page.tree!=NULL && os64_streq(g.page.way.url,"http://fixture.test/one#frag") &&
+          g.way.depth==2 && os64_streq(g.field_buf,"http://fixture.test/one#frag"),
+        "history: a state update moves the address, the field and the session");
+    check(view_turns() && probe_text_is("out","len:3"),
+        "history: pushState to another fragment fires neither popstate nor hashchange");
+    os64_work_id_t submitted=pool_ids;
+    click_back(NULL,NULL);
+    check(!g.stream.active && pool_ids==submitted && os64_streq(g.page.way.url,"http://fixture.test/one"),
+        "history: Back into a pushed entry fetches nothing");
+    check(view_turns() && probe_text_is("out","len:3,pop:{\"n\":1}:/one,hash:frag>undefined"),
+        "history: a traversal fires popstate with the entry's state, then hashchange");
+    click_forward(NULL,NULL);
+    check(view_turns() && probe_text_is("out","len:3,pop:{\"n\":1}:/one,hash:frag>undefined,"
+                                              "pop:{\"n\":2}:/one#frag,hash:undefined>frag"),
+        "history: Forward the same");
+    click_back(NULL,NULL); click_back(NULL,NULL);
+    check(!g.stream.active && pool_ids==submitted && os64_streq(g.page.way.url,"http://fixture.test/final") &&
+          g.way.ahead==2,
+        "history: back to the entry the page arrived at");
+    loop_drop();
+    // A person's fragment link: an entry, the scroll, then popstate and
+    // hashchange; a link to a name no element has changes the address
+    // and scrolls nowhere.
+    loop_page("<style>body{margin:0}</style><a id=l href=#target>go</a><a id=r href=#route>route</a>"
+        "<div style=height:2000px></div><h2 id=target>t</h2><p id=out>-</p><script>var log=[];"
+        "addEventListener('popstate',function(e){log.push('pop:'+e.state+':'+(scrollY>0))});"
+        "addEventListener('hashchange',function(e){log.push('hash:'+location.hash);"
+        "document.getElementById('out').textContent=log.join(',')})</script>");
+    check(loop_settle() && g.page.tree!=NULL,"history: a page of fragment links arrives");
+    input_click_at("l");
+    check(g.sy>0 && g.way.depth==1 && os64_streq(g.page.way.url,"http://fixture.test/final#target"),
+        "history: a fragment link scrolls and adds an entry");
+    check(view_turns() && probe_text_is("out","pop:null:true,hash:#target"),
+        "history: then popstate and hashchange, the scroll already made");
+    scroll_to(0,0);
+    input_click_at("r");
+    check(g.sy==0 && g.way.depth==2 && os64_streq(g.page.way.url,"http://fixture.test/final#route"),
+        "history: a name nothing claims is still a navigation, scrolling nowhere");
+    check(view_turns() && probe_text_is("out","pop:null:true,hash:#target,pop:null:false,hash:#route"),
+        "history: a router hears it");
+    scroll_to(0,300);
+    click_back(NULL,NULL);
+    check(!g.stream.active && g.sy==0 && os64_streq(g.page.way.url,"http://fixture.test/final#target"),
+        "history: Back puts the scroll back where it was when the entry was left");
+    click_forward(NULL,NULL);
+    check(!g.stream.active && g.sy==300 && os64_streq(g.page.way.url,"http://fixture.test/final#route"),
+        "history: and Forward to where it was on the entry Back left");
+    loop_drop();
+    // A page that keeps its own scroll is not scrolled by a traversal.
+    loop_page("<style>body{margin:0;height:3000px}</style><script>history.scrollRestoration='manual';"
+        "onload=function(){history.pushState(null,'','#a')}</script>");
+    check(loop_settle() && g.page.tree!=NULL && g.way.depth==1,"history: a manual page pushes an entry");
+    scroll_to(0,700);
+    click_back(NULL,NULL);
+    check(g.sy==700 && os64_streq(g.page.way.url,"http://fixture.test/final"),
+        "history: scrollRestoration manual leaves the scroll where it is");
+    loop_drop();
+    // Entries a page made before it was shown join the session when it is.
+    loop_page("<p id=out>-</p><script>history.pushState(1,'','?a');history.pushState(2,'','?b');history.back();"
+        "addEventListener('popstate',function(e){document.getElementById('out').textContent="
+        "e.state+':'+location.search+':'+history.length})</script><p>tail</p>");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","1:?a:3"),
+        "history: a page arriving traverses its own entries");
+    check(g.way.depth==1 && os64_streq(g.way.history[0].url,"http://fixture.test/final") && g.way.ahead==1 &&
+          os64_streq(g.page.way.url,"http://fixture.test/final?a") &&
+          os64_streq(g.way.forward[0].url,"http://fixture.test/final?b") &&
+          os64_streq(g.way.forward[0].state,"2"),
+        "history: and they join the session when it is shown, the one ahead with its state");
+    loop_drop();
+}
+/* Short of memory at any allocation of a state update, a replacement, a
+ * fragment navigation and a traversal, the session and the page still
+ * agree: history.length counts the entries the window keeps and
+ * location.href is the address the window shows. (The harness's last
+ * check counts what a cut leaked.) */
+static void loop_view_history_short(void) {
+    static const char page[]="<style>body{margin:0}p{height:20px;margin:0}</style>"
+        "<p id=a onclick=\"history.pushState({n:1},'','/one');history.replaceState({n:2},'','#r');"
+        "location.hash='h';history.back()\">a</p>"
+        "<p id=c onclick=\"document.getElementById('out').textContent=history.length+'|'+location.href\">c</p>"
+        "<p id=out>-</p><script>var ready=1</script>";
+    size_t count=0;
+    unsigned asked=0, retired=0, moved=0;
+    for(size_t cut=0;cut==0 || cut<=count;cut++) {
+        loop_page(page);
+        if(!loop_settle() || g.page.tree==NULL) { check(false,"history short: the page arrives"); loop_drop(); return; }
+        size_t start=attempts;
+        if(cut) fail_at=attempts+cut;
+        input_click_at("a");
+        view_turns();
+        if(!cut) check(g.way.depth==1 && g.way.ahead==1 && os64_streq(g.page.way.url,"http://fixture.test/one#r"),
+                       "history short: the baseline lands one back from the fragment");
+        moved+=g.way.depth>0;
+        click_back(NULL,NULL);            // a person's traversal, under the same cut
+        view_turns();
+        fail_at=0;
+        if(!cut) count=attempts-start;
+        if(!cut) check(g.way.depth==0 && os64_streq(g.page.way.url,"http://fixture.test/final"),
+                       "history short: and Back to where the page arrived");
+        view_turns();
+        // A cut the engine took retires the page's scripts (scripts.h):
+        // there is no page left to ask.
+        if(!yonder_scripts_alive(g.page.scripts)) { retired++; loop_drop(); continue; }
+        input_click_at("c");
+        view_turns();
+        char want[OS64_FETCH_URL_MAX+32];
+        os64_snprintf(want,sizeof(want),"%d|%s",(int)(g.way.depth+1+g.way.ahead),g.page.way.url);
+        bool agree=probe_text_is("out",want);
+        asked++;
+        if(!agree) {
+            os64_html_node_t *o=probe_id("out");
+            fprintf(stderr,"history short: cut %zu: page says %s, window %s\n",cut,
+                    o && o->first_child ? o->first_child->text : "?",want);
+        }
+        check(agree,"history short: the page and the window agree on the entries and the address");
+        loop_drop();
+    }
+    check(count>0 && moved>0 && asked>retired,"history short: the sweep reaches the session's allocations");
+}
+/* The body of the page the trip in flight fetched (loop_page's, without
+ * starting a trip). */
+static void post_arriving(const char *rest) {
+    char *html=pad_page(rest);
+    way_head_t h=stream_head("text/html","",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body((const uint8_t *)html,strlen(html),YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    free(html);
+}
+/* Whether the session is `back` behind the page on screen (oldest first,
+ * by address), the page at `here`, and `ahead` before it (nearest first);
+ * each list is addresses joined by `,` after http://fixture.test. */
+static bool session_is(const char *back, const char *here, const char *ahead) {
+    char got_back[512]="", got_ahead[512]="";
+    for(int32_t i=0;i<g.way.depth;i++)
+        os64_snprintf(got_back+strlen(got_back),sizeof(got_back)-strlen(got_back),"%s%s",i?",":"",
+                      g.way.history[i].url+strlen("http://fixture.test"));
+    for(int32_t i=g.way.ahead-1;i>=0;i--)
+        os64_snprintf(got_ahead+strlen(got_ahead),sizeof(got_ahead)-strlen(got_ahead),"%s%s",
+                      i<g.way.ahead-1?",":"",g.way.forward[i].url+strlen("http://fixture.test"));
+    bool same=os64_streq(got_back,back) && os64_streq(g.page.way.url+strlen("http://fixture.test"),here) &&
+              os64_streq(got_ahead,ahead);
+    if(!same)
+        fprintf(stderr,"session: [%s] %s [%s], wanted [%s] %s [%s]\n",got_back,
+                g.page.way.url+strlen("http://fixture.test"),got_ahead,back,here,ahead);
+    return same;
+}
+/* The cold reader's findings on slice 1b, each a case (the orchestrator's
+ * rulings, MODERN_WEB_BRIEFS.md § Slice 1b). */
+static void loop_view_owed(void) {
+    // A hashchange carries the addresses it was owed with, and a script's
+    // fragment navigation fires its popstate there and then, with the
+    // fragment entry's state.
+    loop_page("<p id=out>-</p><script>var log=[];function o(){document.getElementById('out').textContent=log.join(',')}"
+        "addEventListener('hashchange',function(e){log.push(e.oldURL.split('#')[1]+'>'+e.newURL.split('#')[1]);o()});"
+        "addEventListener('popstate',function(e){log.push('pop:'+JSON.stringify(e.state)+location.hash);o()});"
+        "onload=function(){location.hash='a';location.hash='b';history.pushState({n:1},'');log.push('then');o()}</script>");
+    check(loop_settle() && view_turns() && probe_text_is("out","pop:null#a,pop:null#b,then,undefined>a,a>b"),
+        "owed: each hashchange carries its own addresses, each popstate its entry's state, at once");
+    loop_drop();
+    // The hash a page already has is no navigation: no entry, no event.
+    loop_page("<p id=out>-</p><script>var log=[];function o(){document.getElementById('out').textContent=log.join(',')}"
+        "addEventListener('popstate',function(){log.push('pop');o()});"
+        "addEventListener('hashchange',function(){log.push('hash');o()});"
+        "onload=function(){location.hash='a';setTimeout(function(){log.push('then');location.hash='a';o()},10)}</script>");
+    check(loop_settle() && view_turns(),"owed: the hash page arrives");
+    now_ms+=100;
+    check(loop_settle() && view_turns() && probe_text_is("out","pop,hash,then") && g.way.depth==1,
+        "owed: setting the hash it has changes nothing (HTML's hash setter)");
+    loop_drop();
+}
+static void loop_view_refetched(void) {
+    // A fetched Back gives the document its entry's state; so does a
+    // reload, which is the same entry again.
+    loop_page("<p id=out>-</p><script>onload=function(){history.pushState({k:1},'','/kept')}</script>");
+    check(loop_settle() && view_turns() && os64_streq(g.page.way.url,"http://fixture.test/kept"),
+        "refetched: the page pushes its state");
+    start_trip("http://fixture.test/other",NULL,NAV_GO,NULL);
+    post_arriving("<p>other</p>");
+    check(loop_settle() && view_turns() && g.way.depth==2,"refetched: another page");
+    click_back(NULL,NULL);
+    check(g.stream.active,"refetched: Back to the pushed entry fetches it");
+    post_arriving("<p id=out>-</p><script>document.getElementById('out').textContent="
+        "JSON.stringify(history.state)+':'+history.length</script>");
+    check(loop_settle() && view_turns() && probe_text_is("out","{\"k\":1}:3") &&
+          g.page.entry_state!=NULL && os64_streq(g.page.entry_state,"{\"k\":1}"),
+        "refetched: the document that comes back reads the entry's state (HTML's restore)");
+    click_reload(NULL,NULL);
+    post_arriving("<p id=out>-</p><script>document.getElementById('out').textContent=JSON.stringify(history.state)</script>");
+    check(loop_settle() && view_turns() && probe_text_is("out","{\"k\":1}"),
+        "refetched: a reload is the same entry, its state with it");
+    loop_drop();
+}
+static void loop_view_identity(void) {
+    // A fragment link on the page on screen while Back fetches another
+    // entry: the traversal lands on the entry it named, and the change the
+    // page made meanwhile never joins the session (HTML's traversal queue
+    // finalizes it only while its document is still the active one).
+    loop_page("<p>P</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns(),"identity: P");
+    start_trip("http://fixture.test/A",NULL,NAV_GO,NULL);
+    post_arriving("<style>body{margin:0}</style><a id=l href=#sec>go</a><div style=height:2000px></div>"
+        "<h2 id=sec>s</h2><script>history.replaceState(null,'','/A')</script>");
+    check(loop_settle() && view_turns() && session_is("/P","/A",""),"identity: on A, P behind");
+    click_back(NULL,NULL);
+    input_click_at("l");
+    check(g.stream.active && session_is("/P","/A#sec",""),
+        "identity: the link moves A's address, and not the session, while P is fetched");
+    post_arriving("<p>P again</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns() && session_is("","/P","/A"),
+        "identity: Back lands on the entry it named, A ahead as it was");
+    // The same change with the traversal stopped instead joins the session.
+    click_forward(NULL,NULL);
+    post_arriving("<a id=l href=#sec>go</a><script>history.replaceState(null,'','/A')</script>");
+    check(loop_settle() && view_turns() && session_is("/P","/A",""),"identity: Forward to A");
+    click_back(NULL,NULL);
+    input_click_at("l");
+    stop_trip();
+    check(!g.stream.active && session_is("/P,/A","/A#sec",""),
+        "identity: a stopped traversal leaves the change the page made, as its entry");
+    loop_drop();
+}
+static void unshown_back_case(const char *when, const char *script) {
+    char body[512];
+    loop_page("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns(),"unshown back: P");
+    start_trip("http://fixture.test/A",NULL,NAV_GO,NULL);
+    os64_snprintf(body,sizeof(body),"<p id=out>A</p><script>history.replaceState(null,'','/A');%s</script><p>tail</p>",
+                  script);
+    post_arriving(body);
+    loop_settle();
+    view_turns();
+    if(g.stream.active) {                   // `load`'s Back fetches P
+        post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
+        loop_settle();
+        view_turns();
+    }
+    char what[160];
+    os64_snprintf(what,sizeof(what),"unshown back: history.back() %s lands on P, A ahead",when);
+    check(probe_text_is("out","P") && session_is("","/P","/A"),what);
+    loop_drop();
+}
+static void loop_view_unshown_back(void) {
+    // One rule wherever the page is in its arrival: its navigation
+    // committed when its response came, so Back from it is P.
+    unshown_back_case("during the parse","history.back()");
+    unshown_back_case("at DOMContentLoaded","document.addEventListener('DOMContentLoaded',function(){history.back()})");
+    unshown_back_case("at load","onload=function(){history.back()}");
+    unshown_back_case("in a later task","onload=function(){setTimeout(function(){history.back()},0)}");
+}
+static void loop_view_passed_over(void) {
+    // A traversal over more than one entry: only the entry left takes the
+    // scroll the person is at; the ones passed over keep their own.
+    loop_page("<style>body{margin:0;height:5000px}</style><p id=x>x</p>");
+    check(loop_settle() && view_turns(),"passed over: a tall page");
+    scroll_to(0,100); page_update(&g.page,"http://fixture.test/final#a",NULL,0,true,true);
+    scroll_to(0,200); page_update(&g.page,"http://fixture.test/final#b",NULL,0,true,true);
+    scroll_to(0,300);
+    session_go(-2);
+    check(os64_streq(g.page.way.url,"http://fixture.test/final") && g.sy==100,"passed over: go(-2) lands at 100");
+    session_go(1);
+    check(os64_streq(g.page.way.url,"http://fixture.test/final#a") && g.sy==200,
+        "passed over: Forward to the entry passed over is at its own 200");
+    session_go(1);
+    check(os64_streq(g.page.way.url,"http://fixture.test/final#b") && g.sy==300,
+        "passed over: and the one left is at 300");
+    loop_drop();
+}
+/* Short of memory at any allocation of a fetched Back that brings a state
+ * back (the copy session_go takes, the arriving page's, the host's keep
+ * and the binding's), the arrived page and the window agree on its state:
+ * what history.state reads is the window's Page.entry_state. */
+static void loop_view_refetch_short(void) {
+    size_t clicked=0, arrived=0;
+    unsigned asked=0, kept=0;
+    // The cuts fall in the click (1 to `clicked`) or the arrival after it
+    // (the rest); posting the page is the fake mailbox's and is not cut.
+    for(size_t cut=0;cut==0 || cut<=clicked+arrived;cut++) {
+        loop_page("<script>onload=function(){history.pushState({k:1},'','/kept')}</script>");
+        if(!loop_settle() || !view_turns()) { check(false,"refetch short: the page arrives"); loop_drop(); return; }
+        start_trip("http://fixture.test/other",NULL,NAV_GO,NULL);
+        post_arriving("<p>other</p>");
+        loop_settle();
+        view_turns();
+        size_t start=attempts;
+        if(cut && cut<=clicked) fail_at=attempts+cut;
+        click_back(NULL,NULL);
+        fail_at=0;
+        if(!cut) clicked=attempts-start;
+        if(g.stream.active)
+            post_arriving("<p id=out>-</p><script src=wait.js></script><script>document.getElementById('out')"
+                          ".textContent=JSON.stringify(history.state)</script>");
+        // The arrival is cut up to its first script, held by `wait.js`:
+        // the stream's host made and the state kept for its binding. What
+        // runs after is the engine's, whose compile under a failed
+        // allocation is booked in DEBTS.md (libjs), and not this sweep's.
+        start=attempts;
+        if(cut>clicked) fail_at=attempts+(cut-clicked);
+        loop_settle();
+        fail_at=0;
+        if(!cut) arrived=attempts-start;
+        script_land("wait.js","0");
+        loop_settle();
+        view_turns();
+        // A page whose own script could not write its answer under the
+        // cut (no text, or the parse's `-`) is not asked.
+        os64_html_node_t *out=probe_id("out");
+        const char *said=out && out->first_child && out->first_child->kind==OS64_HTML_TEXT ? out->first_child->text : "";
+        if(g.page.tree!=NULL && os64_streq(g.page.way.url,"http://fixture.test/final") &&
+           yonder_scripts_alive(g.page.scripts) && (os64_streq(said,"null") || said[0]=='{')) {
+            asked++;
+            const char *state=g.page.entry_state;
+            bool agree=state==NULL ? probe_text_is("out","null") : probe_text_is("out",state);
+            kept+=state!=NULL;
+            if(!agree) {
+                os64_html_node_t *o=probe_id("out");
+                fprintf(stderr,"refetch short: cut %zu (%zu in the click): page says %s, window %s\n",cut,clicked,
+                        o && o->first_child ? o->first_child->text : "?",state ? state : "NULL");
+            }
+            check(agree,"refetch short: the page reads the state the window keeps");
+        }
+        loop_drop();
+    }
+    check(clicked>0 && asked>0 && kept>0,"refetch short: the sweep reaches the arrivals that keep a state");
+}
+/* The corpus replay's suspects: what a page reaches through what this
+ * slice hands it must be there. statcounter's load listener focuses
+ * `document.defaultView`; a page asks `instanceof CSSStyleDeclaration` of a
+ * computed style. */
+static void loop_view_reached(void) {
+    loop_page("<p id=out>-</p><script>addEventListener('load',function(){var t=document.defaultView;"
+        "t&&t.focus();document.getElementById('out').textContent=(getComputedStyle(document.body) instanceof "
+        "CSSStyleDeclaration)+':'+(document.body.style instanceof CSSStyleDeclaration)})</script>");
+    char record[8192];
+    check(loop_settle() && view_turns() && probe_text_is("out","true:true"),
+        "reached: window.focus() from defaultView, and CSSStyleDeclaration for both declarations");
+    yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(strstr(record,"FAILED")==NULL,"reached: the load listener does not fail");
+    loop_drop();
+}
+/* Codex's round on slice 1b. A history delta of any WebIDL `long` and a
+ * scroll of any double: INT32_MIN has no int32_t magnitude, and a rounded
+ * coordinate past the bound must not be cast. */
+static void loop_view_extremes(void) {
+    loop_page("<style>body{margin:0;height:5000px}</style><p id=out>-</p><script>"
+        "var log=[];function o(){document.getElementById('out').textContent=log.join(',')}"
+        "onload=function(){history.pushState(1,'','#a');history.pushState(2,'','#b');"
+        "setTimeout(function(){history.go(-2147483648);"
+        "setTimeout(function(){history.go(2147483647);"
+        "setTimeout(function(){history.go(Math.pow(2,53)+2);"
+        "setTimeout(function(){history.go(-(Math.pow(2,53)+2));"
+        "setTimeout(function(){log.push(location.hash);scrollTo(2147483647.6,-2147483648.7);log.push(scrollY===0);"
+        "scrollBy(1e308,1e308);log.push(scrollY>0);scrollTo(-1e308,1e308);log.push(scrollX===0&&scrollY>0);o()},10)},10)},10)},10)},10)}</script>");
+    check(loop_settle() && view_turns(),"extremes: the page arrives");
+    for(int i=0;i<8;i++) { now_ms+=20; loop_settle(); view_turns(); }
+    {
+        os64_html_node_t *o=probe_id("out");
+        if(!probe_text_is("out",",true,true,true"))
+            fprintf(stderr,"extremes: page says %s at %s, depth %d ahead %d\n",o && o->first_child ? o->first_child->text : "?",
+                    g.page.way.url,(int)g.way.depth,(int)g.way.ahead);
+    }
+    check(probe_text_is("out",",true,true,true") && os64_streq(g.page.way.url,"http://fixture.test/final") &&
+          g.way.depth==0 && g.way.ahead==2,
+        "extremes: deltas past any session are nothing; 2^53+2 is 2 and -(2^53+2) is -2 (WebIDL long)");
+    check(g.sy>0 && g.sx==0,"extremes: scrolls past every bound are held to the page");
+    loop_drop();
+    // The same delta from a page not yet shown: nothing, and it arrives.
+    loop_page("<p id=out>P</p>");
+    check(loop_settle() && view_turns(),"extremes: P");
+    start_trip("http://fixture.test/A",NULL,NAV_GO,NULL);
+    // Two scripts, two tasks: in one task the two would add up to -1.
+    post_arriving("<p id=out>A</p><script>history.go(-2147483648)</script><script>history.go(2147483647)</script>"
+                  "<p>tail</p>");
+    loop_settle();
+    view_turns();
+    if(!probe_text_is("out","A") || g.way.depth!=1)
+        fprintf(stderr,"extremes arriving: %s depth %d stream %d\n",g.page.way.url,(int)g.way.depth,(int)g.stream.active);
+    check(probe_text_is("out","A") && g.way.depth==1,"extremes: from an arriving page too, and the page arrives");
+    loop_drop();
+}
+/* history.forward() past the entries an arriving page made: the same one
+ * rule as Back. The page arrives by a Back to T, P ahead of it; forward
+ * from T is P, the page on screen, at every point in the arrival. */
+static void unshown_forward_case(const char *when, const char *script) {
+    char body[512];
+    loop_page("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
+    check(loop_settle() && view_turns(),"unshown forward: T");
+    start_trip("http://fixture.test/P",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns() && session_is("/T","/P",""),"unshown forward: on P, T behind");
+    click_back(NULL,NULL);
+    os64_snprintf(body,sizeof(body),"<p id=out>T</p><script>history.replaceState(null,'','/T');%s</script><p>tail</p>",
+                  script);
+    post_arriving(body);
+    loop_settle();
+    view_turns();
+    if(g.stream.active) {                   // `load`'s Forward fetches P
+        post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
+        loop_settle();
+        view_turns();
+    }
+    char what[160];
+    os64_snprintf(what,sizeof(what),"unshown forward: history.forward() %s lands on P, T behind",when);
+    check(probe_text_is("out","P") && session_is("/T","/P",""),what);
+    loop_drop();
+}
+static void loop_view_unshown_forward(void) {
+    unshown_forward_case("during the parse","history.forward()");
+    unshown_forward_case("at DOMContentLoaded","document.addEventListener('DOMContentLoaded',function(){history.forward()})");
+    unshown_forward_case("at load","onload=function(){history.forward()}");
+    unshown_forward_case("in a later task","onload=function(){setTimeout(function(){history.forward()},0)}");
+    // A new way's page is the newest entry: forward from it is nothing,
+    // and it arrives.
+    loop_page("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns(),"unshown forward: P");
+    start_trip("http://fixture.test/A",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>A</p><script>history.replaceState(null,'','/A');history.forward()</script><p>tail</p>");
+    check(loop_settle() && view_turns() && probe_text_is("out","A") && session_is("/P","/A",""),
+        "unshown forward: from a new way's page, nothing is ahead, and it arrives");
+    loop_drop();
+}
+/* A page fetched by Back that pushes before it is shown: the traversal
+ * lands on the entry it was fetched for, and the push is from that entry
+ * (it lets go of what was ahead, P), as HTML runs the two. */
+static void loop_view_pushed_while_arriving(void) {
+    loop_page("<p id=out>T</p><script>history.replaceState({t:1},'','/T')</script>");
+    check(loop_settle() && view_turns(),"pushed while arriving: T");
+    start_trip("http://fixture.test/P",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns() && session_is("/T","/P",""),"pushed while arriving: on P");
+    click_back(NULL,NULL);
+    post_arriving("<p id=out>-</p><script>var was=JSON.stringify(history.state);"
+        "history.replaceState(history.state,'','/T');history.pushState({n:2},'','/T2');document.getElementById('out').textContent=was+':'+history.length</script>");
+    check(loop_settle() && view_turns() && session_is("/T","/T2","") && probe_text_is("out","{\"t\":1}:2") &&
+          g.way.depth==1 && g.way.history[0].state!=NULL && os64_streq(g.way.history[0].state,"{\"t\":1}"),
+        "pushed while arriving: the target entry once, the push after it, nothing ahead");
+    click_back(NULL,NULL);
+    check(!g.stream.active && session_is("","/T","/T2"),"pushed while arriving: and Back to T is in the document");
+    loop_drop();
+    // Pushed and then back among its own: it arrives at the target with its
+    // push ahead, and P, which the push let go of, is not.
+    loop_page("<p id=out>T</p><script>history.replaceState({t:1},'','/T')</script>");
+    check(loop_settle() && view_turns(),"pushed and back: T");
+    start_trip("http://fixture.test/P",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns() && session_is("/T","/P",""),"pushed and back: on P");
+    click_back(NULL,NULL);
+    post_arriving("<p id=out>T</p><script>history.replaceState(history.state,'','/T');"
+        "history.pushState({n:2},'','/T2')</script><script>history.back()</script><p>tail</p>");
+    check(loop_settle() && view_turns() && session_is("","/T","/T2"),
+        "pushed and back: the push's entry ahead, and P let go as the push let it go");
+    loop_drop();
+}
+/* The second cold read of Codex round 1's fixes. A page that pushed before
+ * it was shown let go of what was ahead of its entry: forward() past its
+ * own entries is nothing, and it arrives, whether it came by Back or by a
+ * reload. */
+static void loop_view_pushed_then_forward(void) {
+    loop_page("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
+    check(loop_settle() && view_turns(),"pushed then forward: T");
+    start_trip("http://fixture.test/P",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns() && session_is("/T","/P",""),"pushed then forward: on P, T behind");
+    click_back(NULL,NULL);
+    post_arriving("<p id=out>T</p><script>history.replaceState(null,'','/T');history.pushState(null,'','/T2');"
+        "history.forward()</script><p>tail</p>");
+    check(loop_settle() && view_turns() && !g.stream.active && probe_text_is("out","T") &&
+          session_is("/T","/T2",""),
+        "pushed then forward: by Back, the push let P go, and T arrives at its push");
+    loop_drop();
+    // The same from a reload of T with P ahead.
+    loop_page("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
+    check(loop_settle() && view_turns(),"pushed then forward: T again");
+    start_trip("http://fixture.test/P",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns() && session_is("/T","/P",""),"pushed then forward: on P again");
+    click_back(NULL,NULL);
+    post_arriving("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
+    check(loop_settle() && view_turns() && session_is("","/T","/P"),"pushed then forward: on T, P ahead");
+    click_reload(NULL,NULL);
+    post_arriving("<p id=out>R</p><script>history.replaceState(null,'','/T');history.pushState(null,'','/T2');"
+        "history.forward()</script><p>tail</p>");
+    check(loop_settle() && view_turns() && !g.stream.active && probe_text_is("out","R") &&
+          session_is("/T","/T2",""),
+        "pushed then forward: by a reload, the same");
+    loop_drop();
+}
+/* history.length read by an arriving page after it pushed counts only up
+ * to its own entry, and its own: the push let go of what was ahead. It
+ * reads the same while it arrives and once it is shown. */
+static void loop_view_pushed_length(void) {
+    static const char page[]="<p id=out>-</p><script>var log=[];history.replaceState(null,'','/T');"
+        "history.pushState(null,'','/T2');log.push(history.length);"
+        "onload=function(){log.push(history.length);document.getElementById('out').textContent=log.join()}</script>";
+    loop_page("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
+    check(loop_settle() && view_turns(),"pushed length: T");
+    start_trip("http://fixture.test/P",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns() && session_is("/T","/P",""),"pushed length: on P, T behind");
+    click_back(NULL,NULL);
+    post_arriving(page);
+    check(loop_settle() && view_turns() && session_is("/T","/T2","") && probe_text_is("out","2,2"),
+        "pushed length: by Back, 2 while arriving and 2 once shown");
+    loop_drop();
+    // A reload of T with P ahead: the entry on screen again, then its push.
+    loop_page("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
+    check(loop_settle() && view_turns(),"pushed length: T again");
+    start_trip("http://fixture.test/P",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns(),"pushed length: on P again");
+    click_back(NULL,NULL);
+    post_arriving("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
+    check(loop_settle() && view_turns() && session_is("","/T","/P"),"pushed length: on T, P ahead");
+    click_reload(NULL,NULL);
+    post_arriving(page);
+    check(loop_settle() && view_turns() && session_is("/T","/T2","") && probe_text_is("out","2,2"),
+        "pushed length: by a reload, the same");
+    loop_drop();
+}
+/* A new way's page that pushed and goes back past its own entries before
+ * it is shown: its commit let go of what was ahead of the page on screen,
+ * so the session keeps its entries ahead and not F. */
+static void loop_view_new_way_back(void) {
+    loop_page("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns(),"new way back: S");
+    start_trip("http://fixture.test/F",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>F</p><script>history.replaceState(null,'','/F')</script>");
+    check(loop_settle() && view_turns(),"new way back: F");
+    click_back(NULL,NULL);
+    post_arriving("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns() && session_is("","/S","/F"),"new way back: on S, F ahead");
+    start_trip("http://fixture.test/A",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>A</p><script>history.replaceState(null,'','/A');history.pushState(null,'','/A2');"
+        "history.go(-2)</script><p>tail</p>");
+    check(loop_settle() && view_turns() && !g.stream.active && probe_text_is("out","S") &&
+          session_is("","/S","/A,/A2"),
+        "new way back: go(-2) from A2 is S, A and A2 ahead, F let go");
+    loop_drop();
+}
+/* A page not yet shown that navigates by address does so from its own
+ * entry, which the navigation replaces: replace() does, and so does an
+ * ordinary navigation before the page has completely loaded (HTML's
+ * Location-object navigate). A redirector reached by a link leaves the
+ * page it was reached from behind; one reached by Back is replaced, so
+ * Back past it is the entry before it. */
+static void unshown_redirect_case(const char *how) {
+    char body[256], what[160];
+    loop_page("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns(),"unshown redirect: S");
+    start_trip("http://fixture.test/R",NULL,NAV_GO,NULL);
+    os64_snprintf(body,sizeof(body),"<p id=out>R</p><script>history.replaceState(null,'','/R');%s</script><p>tail</p>",how);
+    post_arriving(body);
+    loop_settle();
+    view_turns();
+    os64_snprintf(what,sizeof(what),"unshown redirect: %s from a new way's page fetches X",how);
+    check(g.stream.active && !probe_text_is("out","R"),what);
+    post_arriving("<p id=out>X</p><script>history.replaceState(null,'','/X')</script>");
+    os64_snprintf(what,sizeof(what),"unshown redirect: %s from a new way's page replaces it, S behind",how);
+    check(loop_settle() && view_turns() && probe_text_is("out","X") && session_is("/S","/X",""),what);
+    loop_drop();
+}
+static void unshown_redirect_back_case(const char *how) {
+    char body[256], what[160];
+    loop_page("<p id=out>U</p><script>history.replaceState(null,'','/U')</script>");
+    check(loop_settle() && view_turns(),"unshown redirect back: U");
+    start_trip("http://fixture.test/T",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
+    check(loop_settle() && view_turns(),"unshown redirect back: T");
+    start_trip("http://fixture.test/S",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns() && session_is("/U,/T","/S",""),"unshown redirect back: on S");
+    click_back(NULL,NULL);
+    os64_snprintf(body,sizeof(body),"<p id=out>T</p><script>history.replaceState(null,'','/T');%s</script><p>tail</p>",how);
+    post_arriving(body);
+    loop_settle();
+    view_turns();
+    post_arriving("<p id=out>X</p><script>history.replaceState(null,'','/X')</script>");
+    os64_snprintf(what,sizeof(what),"unshown redirect back: %s from T reached by Back replaces T, S ahead",how);
+    check(loop_settle() && view_turns() && probe_text_is("out","X") && session_is("/U","/X","/S"),what);
+    click_back(NULL,NULL);
+    post_arriving("<p id=out>U</p><script>history.replaceState(null,'','/U')</script>");
+    os64_snprintf(what,sizeof(what),"unshown redirect back: %s, and Back from X is U",how);
+    check(loop_settle() && view_turns() && probe_text_is("out","U") && session_is("","/U","/X,/S"),what);
+    loop_drop();
+}
+static void loop_view_unshown_redirect(void) {
+    unshown_redirect_case("location.replace('/X')");
+    unshown_redirect_case("location.href='/X'");
+    unshown_redirect_back_case("location.href='/X'");
+    unshown_redirect_back_case("location.replace('/X')");
+    unshown_redirect_back_case("document.addEventListener('DOMContentLoaded',function(){location.href='/X'})");
+    // A redirector that pushed first: the push's entry is the one replaced,
+    // and the entry it pushed from stays behind it.
+    loop_page("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns(),"unshown redirect pushed: S");
+    start_trip("http://fixture.test/R",NULL,NAV_GO,NULL);
+    post_arriving("<p id=out>R</p><script>history.replaceState(null,'','/R');history.pushState(null,'','/R2');"
+        "location.replace('/X')</script><p>tail</p>");
+    loop_settle();
+    view_turns();
+    post_arriving("<p id=out>X</p><script>history.replaceState(null,'','/X')</script>");
+    check(loop_settle() && view_turns() && probe_text_is("out","X") && session_is("/S,/R","/X",""),
+        "unshown redirect pushed: X replaces R2, R and S behind");
+    loop_drop();
+}
+/* The third cold read: a page shown has not completely loaded until its
+ * `load` task is over, so a redirect from onload, <body onload> or a form
+ * a script sends there replaces the page's entry, as HTML's
+ * Location-object navigate and form submission do. A timer after load and
+ * a person's click push. `how` is R's markup after its own name. */
+static void loading_redirect_case(const char *how, const char *what, bool replaces) {
+    char body[512], line[200];
+    loop_page("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns(),"loading redirect: S");
+    start_trip("http://fixture.test/R",NULL,NAV_GO,NULL);
+    os64_snprintf(body,sizeof(body),"<p id=out>R</p><script>history.replaceState(null,'','/R')</script>%s",how);
+    post_arriving(body);
+    loop_settle();
+    view_turns();
+    if(!g.stream.active && probe_id("l")!=NULL)
+        input_click_at("l");
+    for(int i=0;i<4 && !g.stream.active;i++) { now_ms+=20; loop_settle(); view_turns(); }
+    os64_snprintf(line,sizeof(line),"loading redirect: %s fetches X",what);
+    check(g.stream.active,line);
+    post_arriving("<p id=out>X</p><script>history.replaceState(null,'','/X')</script>");
+    os64_snprintf(line,sizeof(line),"loading redirect: %s %s",what,replaces ? "replaces R, S behind" : "pushes, R behind");
+    check(loop_settle() && view_turns() && probe_text_is("out","X") &&
+          (replaces ? session_is("/S","/X","") : session_is("/S,/R","/X","")),line);
+    if(replaces) {
+        click_back(NULL,NULL);
+        post_arriving("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+        os64_snprintf(line,sizeof(line),"loading redirect: %s, and Back from X is S",what);
+        check(loop_settle() && view_turns() && probe_text_is("out","S") && session_is("","/S","/X"),line);
+    }
+    loop_drop();
+}
+static void loop_view_loading_redirect(void) {
+    loading_redirect_case("<script>onload=function(){location.href='/X'}</script>","onload's href",true);
+    loading_redirect_case("<body onload=\"location.replace('/X')\">","<body onload>'s replace",true);
+    loading_redirect_case("<form method=post action=/X><input name=a value=1></form>"
+        "<script>onload=function(){document.forms[0].submit()}</script>","a form sent in onload",true);
+    loading_redirect_case("<script>onload=function(){setTimeout(function(){location.href='/X'},0)}</script>",
+        "a timer after load",false);
+    loading_redirect_case("<a id=l href=/X>x</a>","a person's click once it is shown",false);
+}
+/* A page at its DOMContentLoaded whose replacing navigation cannot start
+ * (the pool refuses the trip) still arrives, and with the entries its
+ * scripts made. */
+static os64_work_id_t refuse_trips(const os64_work_t *work) {
+    if(*(const uint32_t *)work->job==YONDER_JOB_TRIP) return 0;
+    pool_submit_hook=NULL;
+    os64_work_id_t id=os64_work_submit(NULL,work);
+    pool_submit_hook=refuse_trips;
+    return id;
+}
+static void loop_view_replacing_refused(void) {
+    loop_page("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns(),"replacing refused: S");
+    start_trip("http://fixture.test/R",NULL,NAV_GO,NULL);
+    pool_submit_hook=refuse_trips;
+    post_arriving("<p id=out>R</p><script>history.replaceState(null,'','/R');history.pushState(null,'','/R2');"
+        "document.addEventListener('DOMContentLoaded',function(){location.href='/X'})</script>");
+    bool settled=loop_settle();
+    pool_submit_hook=NULL;
+    check(settled && view_turns() && !g.stream.active && probe_text_is("out","R") && session_is("/S,/R","/R2",""),
+        "replacing refused: the page still arrives, with the entry it pushed from");
+    loop_drop();
+}
+/* Codex round 2 on slice 1b. `scripting` answers the document's own state,
+ * in a sheet and in matchMedia: enabled when the page's scripts are on,
+ * none when they are off. */
+static void loop_view_media_scripting(void) {
+    static const char sheet[]="<style>#on,#off{display:none}@media (scripting){#on{display:block}}"
+        "@media (scripting: none){#off{display:block}}</style><p id=on>on</p><p id=off>off</p>";
+    for(int scripts=0;scripts<2;scripts++) {
+        probe_page(sheet,scripts!=0);
+        bool on=flow_box_for(g.page.tree,probe_id("on"))!=NULL, off=flow_box_for(g.page.tree,probe_id("off"))!=NULL;
+        check(scripts ? on && !off : off && !on,
+            scripts ? "media scripting: a sheet's (scripting) holds with scripts on"
+                    : "media scripting: and (scripting: none) with them off");
+        probe_drop();
+    }
+    loop_page("<p id=out>-</p><script>document.getElementById('out').textContent=[matchMedia('(scripting)').matches,"
+        "matchMedia('(scripting: enabled)').matches,matchMedia('(scripting: none)').matches].join()</script>");
+    check(loop_settle() && view_turns() && probe_text_is("out","true,true,false"),
+        "media scripting: matchMedia answers enabled for a page whose scripts run");
+    loop_drop();
+}
+/* Codex round 2: device-width, device-height and device-aspect-ratio are
+ * the screen's (what `screen` reports), not the viewport's, in a sheet and
+ * in matchMedia, and a window's size does not move them. A window that
+ * read no screen answers libdom's default, as `screen` does, which is
+ * what a replay answers. */
+static void loop_view_media_device(void) {
+    static const char page[]="<style>#d{display:none}@media (min-device-width: 1900px){#d{display:block}}</style>"
+        "<p id=d>d</p><p id=out>-</p><script>var log=[];function o(){log.push([screen.width,"
+        "matchMedia('(device-width: '+screen.width+'px)').matches,matchMedia('(device-height: '+screen.height+'px)').matches,"
+        "matchMedia('(width: '+screen.width+'px)').matches].join(':'));document.getElementById('out').textContent=log.join()}"
+        "o();setTimeout(o,100)</script>";
+    loop_page(page);
+    check(loop_settle() && view_turns() && probe_text_is("out","1024:true:true:false") &&
+          flow_box_for(g.page.tree,probe_id("d"))==NULL,
+        "media device: with no screen read, the default's, as screen reports it");
+    loop_drop();
+    s_screen=(os64_dom_screen_t){1920,1080,1920,1040,24};
+    loop_page(page);
+    bool shown=loop_settle() && view_turns() && probe_text_is("out","1920:true:true:false") &&
+               flow_box_for(g.page.tree,probe_id("d"))!=NULL;
+    check(shown,"media device: the screen's size, in a sheet and in matchMedia, not the viewport's");
+    g.view.bounds.w=640;
+    now_ms+=200; loop_settle(); view_turns();
+    check(probe_text_is("out","1920:true:true:false,1920:true:true:false"),
+        "media device: and a narrower window does not move it");
+    loop_drop();
+    s_screen=(os64_dom_screen_t){0};
+}
+/* The fourth cold read: `resolution` and the WebKit pixel ratio answer the
+ * zoom, as devicePixelRatio does, in a sheet and in matchMedia. */
+static void loop_view_media_resolution(void) {
+    loop_page("<style>#r{display:none}@media (min-resolution: 2dppx){#r{display:block}}</style><p id=r>r</p>"
+        "<p id=out>-</p><script>document.getElementById('out').textContent=[devicePixelRatio,"
+        "matchMedia('(min-resolution: 2dppx)').matches,matchMedia('(-webkit-min-device-pixel-ratio: 2)').matches,"
+        "matchMedia('(resolution: '+devicePixelRatio+'dppx)').matches].join()</script>");
+    g.zoom=2000;
+    check(loop_settle() && view_turns() && probe_text_is("out","2,true,true,true") &&
+          flow_box_for(g.page.tree,probe_id("r"))!=NULL,
+        "media resolution: at 200% the resolution is 2dppx, as devicePixelRatio says");
+    loop_drop();
+    loop_page("<p id=out>-</p><script>document.getElementById('out').textContent=[devicePixelRatio,"
+        "matchMedia('(min-resolution: 2dppx)').matches,matchMedia('(-webkit-device-pixel-ratio: 1)').matches].join()</script>");
+    check(loop_settle() && view_turns() && probe_text_is("out","1,false,true"),
+        "media resolution: and at 100%, 1dppx");
+    loop_drop();
+}
+static void loop_view_cold2_cases(void) {
+    loop_view_media_resolution();
+    loop_view_media_device();
+    loop_view_media_scripting();
+    loop_view_replacing_refused();
+    loop_view_loading_redirect();
+    loop_view_pushed_then_forward();
+    loop_view_pushed_length();
+    loop_view_new_way_back();
+    loop_view_unshown_redirect();
+}
+static void loop_view_cold_cases(void) {
+    loop_view_cold2_cases();
+    loop_view_extremes();
+    loop_view_unshown_forward();
+    loop_view_pushed_while_arriving();
+    loop_view_reached();
+    loop_view_refetch_short();
+    loop_view_owed();
+    loop_view_refetched();
+    loop_view_identity();
+    loop_view_unshown_back();
+    loop_view_passed_over();
+}
+/* With the switch off the names are absent, and the window's own history
+ * (a fragment link's entry) is the window's whatever the switch says. */
+static void loop_view_off(void) {
+    loop_modern_off=true;
+    loop_page("<a id=l href=#t>t</a><h2 id=t>t</h2><p id=out>-</p><script>var heard=0;"
+        "addEventListener('popstate',function(){heard++});addEventListener('scroll',function(){heard++});"
+        "document.getElementById('out').textContent=[typeof matchMedia,typeof getComputedStyle,"
+        "typeof history.pushState,typeof scrollTo,'scrollingElement' in document,typeof innerWidth].join()+':'+heard"
+        "</script>");
+    loop_modern_off=false;
+    check(loop_settle() && g.page.tree!=NULL &&
+          probe_text_is("out","undefined,undefined,undefined,undefined,false,undefined:0"),
+        "modern off: the view's, the computed style's and the history's names are absent");
+    input_click_at("l");
+    check(view_turns() && g.way.depth==1 && os64_streq(g.page.way.url,"http://fixture.test/final#t"),
+        "modern off: a fragment link is still an entry of the window's");
+    check(view_turns() && probe_text_is("out","undefined,undefined,undefined,undefined,false,undefined:0"),
+        "modern off: nothing is dispatched");
+    loop_drop();
+}
+static void loop_view_cases(void) {
+    loop_view_computed();
+    loop_view_scroll();
+    loop_view_media();
+    loop_view_history();
+    loop_view_history_short();
+    loop_view_cold_cases();
+    loop_view_off();
+}
 static void loop_cases(void) {
+    loop_view_cases();
     loop_throw_after_queue();
     loop_string_timer_throws();
     loop_parse_first();
@@ -3171,7 +4184,7 @@ static void loop_cases(void) {
 }
 /* THE MODERN SWITCH, in the window: a page takes the switch its navigation
  * found, so its script surface has the arc's names or not, its record says
- * `modern: off` when it was off, and flipping the switch reaches the next
+ * which (`modern: on` or `off`), and flipping the switch reaches the next
  * page and not the one on screen. */
 static void loop_modern(void) {
     static const char page[]="<p id=out>start</p><script>document.getElementById('out').textContent="
@@ -3181,7 +4194,7 @@ static void loop_modern(void) {
     check(loop_settle() && g.page.tree!=NULL && g.page.modern && probe_text_is("out","function function true"),
         "modern on: a page's scripts see the arc's names");
     yonder_diag_render(g.page.diag,record,sizeof(record));
-    check(strstr(record,"modern:")==NULL,"modern on: the record says nothing of it");
+    check(strstr(record,"\nmodern: on\n")!=NULL,"modern on: the record says so, as a replay reads it");
     check(!garb_cascade_env(g.page.cascade).modern_off,"modern on: the page's cascade knows the arc's properties");
     modern_use(false);
     check(g.page.modern && !g.modern,"modern: Settings' switch leaves the page on screen as it was made");
@@ -3917,6 +4930,10 @@ static void classic_browser_cases(void)
     check(mark!=NULL && os64_streq(mark->value,"420:20:400"),"classic controls: page, client and body scroll coordinates agree");
     probe_drop();
 }
+/* What reads the host's own files directly is the suite's alone: a unit
+ * that includes this file for its fakes (YONDER_HOST_FAKES_ONLY) gets none
+ * of it, so the replay runner's every file goes through its own door. */
+#ifndef YONDER_HOST_FAKES_ONLY
 /* Optional consumer proof reads locally downloaded primary scripts. Site
  * sources stay outside the repository; regular regressions are original. */
 static char *classic_source(const char *directory, const char *name)
@@ -4007,6 +5024,7 @@ static void classic_downloaded_cases(void)
     check(script_rebuild(),"Million: original zoom edits render through the browser");
     probe_drop();
 }
+#endif
 
 typedef struct {
     const os64_gui_event_t *events;
@@ -4096,6 +5114,7 @@ static double hover_seconds(void)
     struct timespec ts;clock_gettime(CLOCK_MONOTONIC,&ts);
     return ts.tv_sec+ts.tv_nsec/1e9;
 }
+#ifndef YONDER_HOST_FAKES_ONLY
 static void classic_hover_profile(void)
 {
     const char *directory=getenv("D11_HOVER_PROFILE");if(directory==NULL) return;
@@ -4120,6 +5139,7 @@ static void classic_hover_profile(void)
     }
     probe_drop();
 }
+#endif
 
 /* ── THE PAGE FILES (YONDER_DIAGNOSTICS.md) ───────────────────────────── */
 /* The text of the file `name` in `dir`, or NULL. YONDER_DIAG_DUMP=1 prints
@@ -4130,6 +5150,14 @@ static const char *diag_file(const char *dir, const char *name) {
     return fake_text(path);
 }
 static bool has(const char *text, const char *needle) { return text!=NULL && strstr(text,needle)!=NULL; }
+/* A page's record as a load makes one (diag_begin): its name claimed in
+ * the directory yonder.conf names, when it names one, since a record with
+ * no claim is never written. */
+static yonder_diag_t *diag_new_claimed(const char *url, uint32_t seq) {
+    yonder_diag_t *d=yonder_diag_new(url,seq,0);
+    if(d!=NULL && s_diag.dir[0]!='\0') yonder_diag_claim(d,s_diag.dir,false);
+    return d;
+}
 /* The keyword rule: MISSING and FAILED begin record lines, sit on the
  * verdict line, and appear nowhere else, in every file any case wrote. */
 static void diag_tokens_exclusive(void) {
@@ -4179,7 +5207,7 @@ static void diag_picture_case(void) {
     probe_page("<img src=file:///logo.svg><img src=file:///broken.png><img src=http://x.test/gone.png>"
         "<img src=http://x.test/far.png><img src=file:///absent.png>",true);
     pictures_start(&g.page);
-    g.page.diag=yonder_diag_new("http://x.test/",1,0);
+    g.page.diag=diag_new_claimed("http://x.test/",1);
     for(int i=0;i<5;i++) g.page.pics[i].state=PIC_WAITING;
     g.page.waiting=g.page.in_flight=5;
     yonder_picture_job_t job={.kind=YONDER_JOB_PICTURE,.index=0,.generation=g.page_serial};
@@ -4214,7 +5242,7 @@ static void diag_picture_case(void) {
           "diag: unsupported WebP keeps both the format census and animation reason");
     check(g.page.waiting==0 && has(file,"\nwritten: when its pictures and fonts were in\n") &&
         has(file,"\npictures: 5, 0 shown, 5 could not be read, 0 past the memory kept, 0 still coming, 0 not asked for\n") &&
-        has(file,"FAILED picture: file:///absent.png"),
+        has(file,"FAILED picture-fetch: file:///absent.png"),
         "diag: the last picture in rewrites the file, every failure named");
     /* A picture of a page already gone takes nothing to zero: no write. */
     int writes=fake_writes;
@@ -4225,12 +5253,12 @@ static void diag_picture_case(void) {
     bool all_failed=true;
     for(int i=0;i<5;i++) all_failed=all_failed && g.page.pics[i].state==PIC_FAILED;
     check(has(text,"\nverdict: 1 MISSING, 4 FAILED\nMISSING image svg (1)\n") && all_failed,
-        "diag: a picture in a format yonder lacks is MISSING image; one that failed otherwise is FAILED picture");
+        "diag: a picture in a format yonder lacks is MISSING image; one whose fetch failed otherwise is FAILED picture-fetch");
     check(has(text,"\npicture file:///logo.svg: svg, which yonder does not decode\n") &&
-        has(text,"\nFAILED picture: file:///broken.png: would not decode (malformed image) (1)\n") &&
-        has(text,"\nFAILED picture: http://x.test/gone.png: HTTP 404 (1)\n") &&
-        has(text,"\nFAILED picture: http://x.test/far.png: did not fetch (tls-failed) (1)\n") &&
-        has(text,"\nFAILED picture: file:///absent.png: could not be read (1)\n"),
+        has(text,"\nFAILED picture-fetch: file:///broken.png: would not decode (malformed image) (1)\n") &&
+        has(text,"\nFAILED picture-fetch: http://x.test/gone.png: HTTP 404 (1)\n") &&
+        has(text,"\nFAILED picture-fetch: http://x.test/far.png: did not fetch (tls-failed) (1)\n") &&
+        has(text,"\nFAILED picture-fetch: file:///absent.png: could not be read (1)\n"),
         "diag: every picture not shown is named by its address, with the worker's why");
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     probe_drop();
@@ -4241,7 +5269,7 @@ static void diag_picture_case(void) {
 static void diag_picture_unshown_case(void) {
     probe_page("<img src=file:///kept.png><img src=file:///asked.png>",true);
     pictures_start(&g.page);
-    g.page.diag=yonder_diag_new("http://x.test/",1,0);
+    g.page.diag=diag_new_claimed("http://x.test/",1);
     g.page.pics[0].state=PIC_WAITING;
     g.page.waiting=g.page.in_flight=1;
     g.page.kept_bytes=PICTURES_KEPT_MAX;
@@ -4266,7 +5294,7 @@ static void diag_picture_unshown_case(void) {
  * Workers that stop with pictures out leave each of those named. */
 static void diag_picture_workerless_case(void) {
     probe_page("<img src=file:///one.png><img src=file:///two.png>",true);
-    g.page.diag=yonder_diag_new("http://w.test/",1,0);
+    g.page.diag=diag_new_claimed("http://w.test/",1);
     g.badge_missing=g.badge_failed=UINT32_MAX;
     pictures_start(&g.page);        /* this harness has no worker pool */
     char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
@@ -4281,7 +5309,7 @@ static void diag_picture_workerless_case(void) {
     probe_drop();
     probe_page("<img src=file:///out.png>",true);
     pictures_start(&g.page);        /* the table, before the record exists */
-    g.page.diag=yonder_diag_new("http://w.test/",2,0);
+    g.page.diag=diag_new_claimed("http://w.test/",2);
     g.page.pics[0].state=PIC_WAITING; g.page.waiting=g.page.in_flight=1;
     /* What the record learned silently since arrival reaches the badge when
      * the last picture is in, even one that arrives whole. */
@@ -4306,7 +5334,7 @@ static void diag_picture_workerless_case(void) {
     /* One with the workers and one still queued behind them: both named. */
     probe_page("<img src=file:///with.png><img src=file:///behind.png>",true);
     pictures_start(&g.page);
-    g.page.diag=yonder_diag_new("http://w.test/",3,0);
+    g.page.diag=diag_new_claimed("http://w.test/",3);
     g.page.pics[0].state=PIC_WAITING; g.page.pics[1].state=PIC_QUEUED;
     g.page.next_pic=1; g.page.waiting=2; g.page.in_flight=1;
     pictures_orphaned(&g.page);
@@ -4325,7 +5353,7 @@ static void diag_picture_workerless_case(void) {
 static void diag_picture_unasked_case(void) {
     probe_page("<img src='data:image/png;base64,iVBORw0KGgo='><img src='http://[bad'>"
         "<img src=file:///slow.png><img src='x:asset'>",true);
-    g.page.diag=yonder_diag_new("http://u.test/",1,0);
+    g.page.diag=diag_new_claimed("http://u.test/",1);
     pictures_start(&g.page);        /* no workers: slow.png is refused too */
     char text[4096]; yonder_diag_render(g.page.diag,text,sizeof(text));
     check(has(text,"MISSING picture-scheme data (1)") && has(text,"FAILED picture: http://[bad: the address was refused (") &&
@@ -4404,7 +5432,7 @@ static void diag_lost_overflow_case(void) {
 static void diag_arriving_released_case(void) {
     static Page p;
     memset(&p,0,sizeof(p));
-    p.diag=yonder_diag_new("http://fixture.test/",77,0);
+    p.diag=diag_new_claimed("http://fixture.test/",77);
     s_arriving.staged=true; s_arriving.seq=yonder_diag_seq(p.diag);
     webfonts_served(&s_arriving.families,"Staged",6,WF_SERVED_NONE,"Test Sans");
     diag_leave(&p);
@@ -4442,7 +5470,7 @@ static void diag_css_unasked_case(void) {
     /* A page whose only picture is refused before the table: nothing will
      * ever come in to write the record, so meeting it writes it. */
     probe_page("<img src='data:image/png;base64,iVBORw0KGgo='>",true);
-    g.page.diag=yonder_diag_new("http://only.test/",1,0);
+    g.page.diag=diag_new_claimed("http://only.test/",1);
     pictures_start(&g.page);
     char only[64]; yonder_diag_file_name(g.page.diag,only,sizeof(only));
     check(g.page.npics==0 && has(diag_file("/tmp/diag",only),"MISSING picture-scheme data (1)"),
@@ -4450,7 +5478,7 @@ static void diag_css_unasked_case(void) {
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     probe_drop();
     probe_page("<style>p{background-image:url('data:image/png;base64,AAAA')}</style><p>x</p>",true);
-    g.page.diag=yonder_diag_new("http://c.test/",1,0);
+    g.page.diag=diag_new_claimed("http://c.test/",1);
     css_pictures(&g.page);
     css_pictures(&g.page);          /* every layout meets it again */
     char text[2048]; yonder_diag_render(g.page.diag,text,sizeof(text));
@@ -4670,7 +5698,7 @@ static void picture_tick_cases(void) {
 static void diag_picture_moves_case(void) {
     probe_page("<img src=file:///grows.png>",true);
     pictures_start(&g.page);
-    g.page.diag=yonder_diag_new("http://m.test/",1,0);
+    g.page.diag=diag_new_claimed("http://m.test/",1);
     g.page.pics[0].state=PIC_WAITING; g.page.waiting=g.page.in_flight=1;
     g.pictures_moved=true;
     yonder_picture_job_t *job=os64_calloc(1,sizeof(*job));
@@ -4703,7 +5731,7 @@ static void diag_unit_cases(void) {
     yonder_diag_t *d=yonder_diag_new("http://Example.COM:8080/FAILED?x=MISSING",3,0);
     char text[4096];
     yonder_diag_render(d,text,sizeof(text));
-    check(!strncmp(text,"address: http://Example.COM:8080/F%41ILED?x=M%49SSING\nverdict: clean\n",70),
+    check(!strcmp(text,"address: http://Example.COM:8080/F%41ILED?x=M%49SSING\nverdict: clean\n" YONDER_DIAG_END "\n"),
         "diag: a clean record's verdict, and a token in a plain line spelled with its second letter encoded");
     yonder_diag_missing(d,"global","fetch",1); yonder_diag_missing(d,"global","fetch",2);
     yonder_diag_missing_seen(d,"element","canvas",3); yonder_diag_missing_seen(d,"element","canvas",2);
@@ -4767,8 +5795,9 @@ static void diag_page_cases(void) {
     const char *text=diag_file("/tmp/diag",name);
     check(has(text,"address: http://fixture.test/p\nverdict: clean\n") && !has(text,"MISSING") && !has(text,"FAILED") &&
         has(text,"\nwritten: when the page arrived\n") && has(text,"\nfinal address: http://fixture.test/final\n") &&
-        has(text,"\nscript http://fixture.test/final#inline-1: ran\n") && !has(text,"script load"),
-        "diag: a clean page's file says clean, carries no token, and says what ran");
+        has(text,"\nscript http://fixture.test/final#inline-1: ran in 0 us\n") && !has(text,"script load"),
+        "diag: a clean page's file says clean, carries no token, and says what ran and how long the "
+        "engine took over it, on the clock that stood still");
     check(g.badge_text[0]=='\0' && g.badge.hidden,"diag: a clean page shows no badge");
     loop_drop();
     check(has(diag_file("/tmp/diag",name),"\nwritten: when the page was left\n"),"diag: leaving rewrites the file");
@@ -4803,13 +5832,13 @@ static void diag_page_cases(void) {
         "diag: the timer's death is in the departure write");
 
     /* A module script and a canvas, each by its kind; a skipped property. */
-    loop_page("<style>p{aspect-ratio:1;background-image:conic-gradient(red,blue);background-clip:text}"
+    loop_page("<style>p{contain:paint;background-image:conic-gradient(red,blue);background-clip:text}"
         "h1{display:inline frob}</style><p id=out>x</p><canvas></canvas><canvas></canvas>"
         "<my-widget></my-widget><script type=module>1</script>");
     check(loop_settle() && g.page.tree!=NULL,"diag: a page with a module, canvases and a custom element arrives");
     yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
     check(has(text,"MISSING script module (1)\n") && has(text,"MISSING element canvas (2)\n") &&
-        has(text,"MISSING element my-widget (1)\n") && has(text,"MISSING css-property aspect-ratio (1)\n") &&
+        has(text,"MISSING element my-widget (1)\n") && has(text,"MISSING css-property contain (1)\n") &&
         has(text,"MISSING css-value background-image: conic-gradient (1)\n") &&
         has(text,"MISSING css-value display: inline frob (1)\n") && !has(text,"background-clip"),
         "diag: a module script, an element drawn as nothing, a property the cascade skipped and a value it "
@@ -4909,6 +5938,520 @@ static void diag_long_source_case(void) {
     loop_drop();
 }
 
+/* THE SCRIPT LINE'S TIME (MODERN_WEB.md slice 7's instrument): the engine's
+ * evaluation of a script, on the harness's clock, which a forced layout
+ * moves by geometry_layout_delay and nothing else moves here. */
+static void diag_script_time_case(void) {
+    geometry_layout_delay=2500;
+    loop_page("<p id=out>x</p><script>document.getElementById('out').textContent=String(document.body.offsetWidth>0)</script>"
+        "<script>nothere()</script>");
+    check(loop_settle() && probe_text_is("out","true"),"diag time: a script that measures runs");
+    geometry_layout_delay=0;
+    char text[4096]; yonder_diag_render(g.page.diag,text,sizeof(text));
+    check(has(text,"\nscript http://fixture.test/final#inline-1: ran in 2500 us\n") &&
+        has(text,"\nscript http://fixture.test/final#inline-2: failed in 0 us\n"),
+        "diag time: a script's line says how long the engine took over it, the layout it forced included, "
+        "and a script that died says it too");
+    loop_drop();
+}
+
+/* A sheet job answered as sheet.c answers it: `css` parsed under `label`
+ * and the document's encoding, and, for a window that keeps its pages,
+ * carrying back the bytes it was parsed from and the label. NULL `css` is a
+ * fetch that failed. False when no such job is out. */
+static bool sheet_land_as_worker(const char *tail, const char *css, const char *label) {
+    for(int i=0;i<nsheet_jobs;i++) {
+        yonder_sheet_job_t *job=sheet_jobs[i].job;
+        size_t n=strlen(job->url), t=strlen(tail);
+        if(n<t || strcmp(job->url+n-t,tail)!=0) continue;
+        os64_work_id_t id=sheet_jobs[i].id;
+        sheet_jobs[i]=sheet_jobs[--nsheet_jobs];
+        yonder_sheet_t *got=os64_calloc(1,sizeof(*got));
+        os64_strcopy(got->url,sizeof(got->url),job->url);
+        if(css!=NULL) {
+            got->ok=garb_parse_sheet((const uint8_t *)css,strlen(css),label[0] ? label : NULL,
+                job->environment[0] ? job->environment : NULL,&got->parsed)==GARB_OK;
+            os64_strcopy(got->label,sizeof(got->label),label);
+            if(got->ok && job->keep) {
+                got->kept=os64_malloc(strlen(css)); memcpy(got->kept,css,strlen(css)); got->kept_len=strlen(css);
+            }
+        }
+        reaped(id,job,got);
+        return true;
+    }
+    return false;
+}
+/* A file on the fake disk, its bytes and length; NULL when there is none. */
+static const char *fake_bytes(const char *path, size_t *len) {
+    int f=fake_file(path); *len=f>=0 ? fake_files[f].len : 0;
+    return f>=0 ? fake_files[f].data : NULL;
+}
+/* Whether any file on the fake disk is a temporary one still standing. */
+static bool fake_temp_left(void) {
+    for(int f=0;f<FAKE_FILES;f++)
+        if(fake_files[f].used && strlen(fake_files[f].path)>4 &&
+           !strcmp(fake_files[f].path+strlen(fake_files[f].path)-4,".new")) return true;
+    return false;
+}
+static unsigned fake_count(const char *suffix) {
+    unsigned n=0;
+    for(int f=0;f<FAKE_FILES;f++) {
+        size_t a=strlen(fake_files[f].path), b=strlen(suffix);
+        n+=fake_files[f].used && a>=b && !strcmp(fake_files[f].path+a-b,suffix);
+    }
+    return n;
+}
+/* keep_pages starting a run, in a fresh /tmp/kept. */
+static void keep_begin(bool on) {
+    fake_reset();
+    memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
+    snprintf(saved_diagnostics,sizeof(saved_diagnostics),"/tmp/kept");
+    snprintf(saved_keep_pages,sizeof(saved_keep_pages),"%s",on ? "on" : "off");
+    check(diag_dir_open()==NULL && s_diag.keep==on,"keep: keep_pages is read with the diagnostics directory");
+}
+/* Jars for the cookie cases (diag_keep_cases): one holding a Secure cookie
+ * it hands only to an https page, one that has heard the response's own
+ * Set-Cookie (`fake_cookie_heard`), and one that hands back what the page's
+ * script set beside what it held. */
+static bool fake_cookie_heard;
+static const char *cookie_jar_secure(const char *url, bool encrypted) {
+    return encrypted && !strncmp(url,"https://fixture.test/",21) ? "secure=1; plain=1" : "plain=1";
+}
+static const char *cookie_jar_heard(const char *url, bool encrypted) {
+    (void)url; (void)encrypted;
+    return fake_cookie_heard ? "heard=1" : "";
+}
+static const char *cookie_jar_scripted(const char *url, bool encrypted) {
+    static char text[300];
+    (void)url; (void)encrypted;
+    snprintf(text,sizeof(text),"first=1%s%s",fake_cookie_set[0] ? "; " : "",fake_cookie_set);
+    return text;
+}
+static void keep_end(void) {
+    saved_diagnostics[0]=saved_keep_pages[0]='\0';
+    memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
+    fake_reset();
+}
+
+/* THE PAGE KEPT (keep_pages, diag.h): the bytes as the parser was fed them,
+ * each script and sheet as the window received it, the index naming them,
+ * and the facts a replay rebuilds the head from. */
+static void diag_keep_cases(void) {
+    keep_begin(true);
+    stream_window(); g.scripts_on=true; g.script_ms=5000; now_ms=100;
+    start_trip("http://fixture.test/kept",NULL,NAV_GO,NULL);
+    uint32_t seq=yonder_diag_seq(g.stream.diag);
+    way_head_t h=stream_head("text/html","windows-1252",false);
+    h.encrypted=true; os64_strcopy(h.url,sizeof(h.url),"https://fixture.test/final");
+    yonder_mail_post_head(g.stream.mail,&h);
+    /* A byte that is a character only in the page's encoding, a NUL, and
+     * a body cut into many small chunks: the kept file is the bytes
+     * whatever the chunks and whatever they decode to. */
+    char *body=pad_page("<link rel=stylesheet href=k.css><p id=out>caf\xE9</p><p>\x01" "a\xFF" "z</p>"
+        "<script src=k.js></script><script src=gone.js></script><p id=after>end</p>");
+    size_t len=strlen(body);
+    body[len-2]='\0';                   /* a NUL inside the page's last tag */
+    stream_post_body((const uint8_t *)body,len,97);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    check(loop_settle() && g.stream.stopped,"keep: the page stops at its script");
+    check(sheet_land_as_worker("/k.css","@import 'i.css'; #out{color:red}","utf-8"),"keep: its sheet lands");
+    check(sheet_land_as_worker("/i.css","p{margin:0}",""),"keep: the sheet's @import lands");
+    check(script_land("/k.js","document.getElementById('out').textContent='ran'"),"keep: its script lands");
+    check(loop_settle() && g.stream.stopped && script_land("/gone.js",NULL),"keep: the next script's fetch fails");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","ran"),"keep: the page arrives");
+    char base[64], path[128]; size_t n;
+    snprintf(base,sizeof(base),"/tmp/kept/fixture.test-%04u",(unsigned)seq);
+    snprintf(path,sizeof(path),"%s.html",base);
+    const char *kept=fake_bytes(path,&n);
+    check(kept!=NULL && n==len && memcmp(kept,body,len)==0,
+        "keep: the page's bytes are kept as the parser was fed them, undecoded, in however many chunks");
+    snprintf(path,sizeof(path),"%s.d/index",base);
+    const char *index=fake_text(path);
+    check(index!=NULL && !strncmp(index,"# yonder kept index 2\n",22) &&
+        has(index,"\n1\tsheet\thttps://fixture.test/k.css\tcame\thttps://fixture.test/k.css\tutf-8\t0\n"
+        "2\tsheet\thttps://fixture.test/i.css\tcame\thttps://fixture.test/i.css\t\t1\n"
+        "3\tscript\thttps://fixture.test/k.js\tcame\thttps://fixture.test/k.js\t\t1\n"
+        "4\tscript\thttps://fixture.test/gone.js\tfailed\thttps://fixture.test/gone.js\t\t2\n") &&
+        has(index,"fonts and pictures are not kept"),
+        "keep: the index names its version, then each sheet and script in the order it came back, whether "
+        "it came, its addresses, label and job, under a header saying what is not kept");
+    snprintf(path,sizeof(path),"%s.d/4.js",base);
+    check(fake_text(path)==NULL,"keep: a script that did not come has a line and no file");
+    snprintf(path,sizeof(path),"%s.d/1.css",base);
+    check(fake_text(path)!=NULL && !strcmp(fake_text(path),"@import 'i.css'; #out{color:red}"),
+        "keep: a sheet is kept as the bytes it was parsed from");
+    snprintf(path,sizeof(path),"%s.d/3.js",base);
+    check(fake_text(path)!=NULL && !strcmp(fake_text(path),"document.getElementById('out').textContent='ran'"),
+        "keep: a script is kept as the source the page ran");
+    char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+    const char *text=diag_file("/tmp/kept",name);
+    check(has(text,"\nstatus: 200 OK\nfinal address: https://fixture.test/final\nbody: html\n"
+        "content-type: text/html\ncharset: windows-1252\nencrypted: yes\n") && !has(text,"\nscripts: off\n") &&
+        has(text,"\nkept: whole\n"),
+        "keep: the page file carries the facts a replay rebuilds the head from");
+    check(!fake_temp_left(),"keep: no temporary file is left");
+    loop_drop();
+    free(body);
+
+    /* A page let go unshown: its sheet never comes, and another address is
+     * asked for while it waits. It was kept when its parse ended. */
+    stream_window(); g.scripts_on=true; g.script_ms=5000; now_ms=100;
+    start_trip("http://fixture.test/unshown",NULL,NAV_GO,NULL);
+    seq=yonder_diag_seq(g.stream.diag);
+    h=stream_head("text/html","",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    const char *waits="<link rel=stylesheet href=never.css><p>waiting</p>";
+    stream_post_body((const uint8_t *)waits,strlen(waits),YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    check(loop_settle() && g.coming.active && g.page.tree==NULL,"keep: the page waits for its sheet");
+    start_trip("http://fixture.test/elsewhere",NULL,NAV_GO,NULL);
+    snprintf(base,sizeof(base),"/tmp/kept/fixture.test-%04u",(unsigned)seq);
+    snprintf(path,sizeof(path),"%s.html",base);
+    kept=fake_bytes(path,&n);
+    snprintf(name,sizeof(name),"fixture.test-%04u.txt",(unsigned)seq);
+    check(kept!=NULL && n==strlen(waits) && memcmp(kept,waits,n)==0 &&
+        has(diag_file("/tmp/kept",name),"\nwritten: when the page was left\n"),
+        "keep: a page let go unshown is kept, and its record is written at its departure");
+    /* A stream let go before its verdict keeps nothing, and leaves nothing. */
+    seq=yonder_diag_seq(g.stream.diag);
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body((const uint8_t *)"<p>half",7,YONDER_STREAM_CHUNK);
+    (void)stream_turn();
+    stop_trip();
+    snprintf(path,sizeof(path),"/tmp/kept/fixture.test-%04u.html",(unsigned)seq);
+    snprintf(name,sizeof(name),"fixture.test-%04u.txt",(unsigned)seq);
+    check(fake_text(path)==NULL && !fake_temp_left() && diag_file("/tmp/kept",name)!=NULL,
+        "keep: a page stopped before all its bytes came keeps none, its temporary file goes, and its record is written");
+    loop_drop();
+
+    /* No room for the page's folder: no name with fresh kept files can be
+     * claimed, the page is not whole, its record says so, and the log and
+     * the status line say so once a run. */
+    stream_window(); g.scripts_on=true; g.script_ms=5000; now_ms=100;
+    while(nfake_dirs<16) { snprintf(fake_dirs[nfake_dirs],256,"/full/%d",nfake_dirs); nfake_dirs++; }
+    start_trip("http://fixture.test/nofolder",NULL,NAV_GO,NULL);
+    check(s_diag.keep_said && has(last_debug,"could not be kept in /tmp/kept"),
+        "keep failed: a page whose kept files cannot be claimed is said as it starts");
+    h=stream_head("text/html","",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    const char *needs="<p id=out>x</p><script src=s.js></script>";
+    stream_post_body((const uint8_t *)needs,strlen(needs),YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    check(loop_settle() && g.stream.stopped,"keep failed: the page stops at its script");
+    check(script_land("/s.js","1") && loop_settle() && g.page.tree!=NULL,"keep failed: the page arrives all the same");
+    yonder_diag_file_name(g.page.diag,name,sizeof(name));
+    text=diag_file("/tmp/kept",name);
+    snprintf(path,sizeof(path),"/tmp/kept/%.*s.html",(int)(strlen(name)-4),name);
+    check(has(text,"\nkept: not whole: a step of keeping the page failed\n") && fake_text(path)==NULL &&
+        !fake_temp_left(),
+        "keep failed: the record says the page is not whole, and nothing more of it is kept");
+    loop_drop();
+    keep_end();
+
+    /* The token spelling is injective: an address that holds `M%49SSING`
+     * of its own and one that holds MISSING are written apart. */
+    {
+        yonder_diag_t *d=yonder_diag_new("http://fixture.test/a?x=M%49SSING&y=MISSING&z=%2",1,0);
+        yonder_diag_fact(d,"literal","%25 and 75%");
+        char text[512]; yonder_diag_render(d,text,sizeof(text));
+        const char *want="address: http://fixture.test/a?x=M%2549SSING&y=M%49SSING&z=%2\n";
+        check(!strncmp(text,want,strlen(want)),
+            "diag: a `%` a reader would take for part of a spelling is written %25, so a literal M%49SSING "
+            "never reads back as the token, and any other `%` is written as it is");
+        check(has(text,"\nliteral: %2525 and 75%\n"),"diag: a literal %25 is written %2525, a lone `%` as it is");
+        yonder_diag_free(d);
+    }
+
+    /* A head fact has room the page's other plain lines cannot take. */
+    {
+        yonder_diag_t *d=yonder_diag_new("http://fixture.test/many",1,0);
+        for(unsigned i=0;i<YONDER_DIAG_FACTS_MAX+5;i++) { char k[16]; snprintf(k,sizeof(k),"script %u",i); yonder_diag_fact(d,k,"ran"); }
+        yonder_diag_head_fact(d,"body","html");
+        yonder_diag_fact(d,"one more","lost");
+        char *big=malloc(1<<16); yonder_diag_render(d,big,1<<16);
+        check(has(big,"\nbody: html\n") && !has(big,"one more") && has(big,"\nfacts not kept: 6\n") &&
+              has(big,"\n" YONDER_DIAG_LINES_LOST "\n"),
+            "keep: a head fact is kept on a page whose plain lines fill the table, which still counts the rest, "
+            "and says it lost lines");
+        free(big); yonder_diag_free(d);
+        /* Exactly the ordinary quota, and the head besides, one head fact
+         * set before them all (as a claim sets `kept lines:`): the head's
+         * room is its own, so nothing is lost and the record ends whole. */
+        d=yonder_diag_new("http://fixture.test/full",1,0);
+        yonder_diag_head_fact(d,"kept lines","0");
+        for(unsigned i=0;i<YONDER_DIAG_FACTS_MAX;i++) { char k[16]; snprintf(k,sizeof(k),"script %u",i); yonder_diag_fact(d,k,"ran"); }
+        static const char *const kHead[]={"status","final address","body","content-type","charset","encrypted",
+            "TLS","scripts","laid out at","kept","kept lines"};
+        for(size_t i=0;i<sizeof(kHead)/sizeof(kHead[0]);i++) yonder_diag_head_fact(d,kHead[i],"x");
+        big=malloc(1<<16); yonder_diag_render(d,big,1<<16);
+        check(has(big,"\nscript 511: ran\n") && has(big,"\nkept lines: x\n") && !has(big,"not kept") &&
+              !has(big,YONDER_DIAG_LINES_LOST) && strlen(big)>4 && !strcmp(big+strlen(big)-4,YONDER_DIAG_END "\n"),
+              "keep: 512 ordinary facts and the head's together lose nothing, and the record ends with `end`");
+        free(big); yonder_diag_free(d);
+    }
+
+    /* THE NAME IS CLAIMED: another yonder's record at the next number, a
+     * page's bytes left from before at the one after, and a folder at the
+     * one after that are each passed over; the record and what is kept
+     * beside it take the first number all of whose names are fresh, and
+     * touch nothing of the others'. */
+    keep_begin(true);
+    uint32_t next=s_diag.next;
+    char other[64], left[64], folder[64];
+    snprintf(other,sizeof(other),"/tmp/kept/fixture.test-%04u.txt",(unsigned)next);
+    snprintf(left,sizeof(left),"/tmp/kept/fixture.test-%04u.html",(unsigned)next+1);
+    snprintf(folder,sizeof(folder),"/tmp/kept/fixture.test-%04u.d",(unsigned)next+2);
+    int64_t fh=os64_open(other,"w"); os64_write((int32_t)fh,"address: another yonder's\n",26); os64_close((int32_t)fh);
+    fh=os64_open(left,"w"); os64_write((int32_t)fh,"<p>left from before",19); os64_close((int32_t)fh);
+    os64_mkdir(folder);
+    loop_page("<p id=out>x</p><script src=c.js></script>");
+    check(loop_settle() && script_land("/c.js","1") && loop_settle() && g.page.tree!=NULL,
+        "claim: the page arrives");
+    check(yonder_diag_seq(g.page.diag)==next+3 && s_diag.next==next+4,"claim: the record takes the first fresh number");
+    snprintf(path,sizeof(path),"/tmp/kept/fixture.test-%04u.d/index",(unsigned)next+3);
+    char html_path[64]; snprintf(html_path,sizeof(html_path),"/tmp/kept/fixture.test-%04u.html",(unsigned)next+3);
+    check(!strcmp(fake_text(other),"address: another yonder's\n") && !strcmp(fake_text(left),"<p>left from before") &&
+        fake_is_dir(folder) && fake_text(path)!=NULL && fake_text(html_path)!=NULL,
+        "claim: the others' files are untouched, and the kept bytes and index are under the claimed name");
+    loop_drop();
+    /* A page that fetched nothing to keep leaves no folder behind. */
+    loop_page("<p>nothing to fetch</p>");
+    seq=yonder_diag_seq(g.stream.diag);
+    check(loop_settle() && g.page.tree!=NULL,"claim: a page with nothing to fetch arrives");
+    loop_drop();
+    snprintf(path,sizeof(path),"/tmp/kept/fixture.test-%04u.d",(unsigned)seq);
+    snprintf(html_path,sizeof(html_path),"/tmp/kept/fixture.test-%04u.html",(unsigned)seq);
+    check(!fake_is_dir(path) && fake_text(html_path)!=NULL,"claim: its empty folder goes, its bytes stay");
+    keep_end();
+
+    /* A NAME BESIDE ANOTHER'S KEPT FILES IS NOT FRESH, kept or not: with
+     * keep_pages off, a number whose page bytes or folder are there is
+     * passed over too, so a record is never paired with another load's kept
+     * page. The claimed file holds only `verdict: unwritten` and the
+     * claim's nonce until the record is written. */
+    keep_begin(false);
+    next=s_diag.next;
+    snprintf(left,sizeof(left),"/tmp/kept/fixture.test-%04u.html",(unsigned)next);
+    snprintf(folder,sizeof(folder),"/tmp/kept/fixture.test-%04u.d",(unsigned)next+1);
+    fh=os64_open(left,"w"); os64_write((int32_t)fh,"<p>another's",12); os64_close((int32_t)fh);
+    os64_mkdir(folder);
+    loop_page("<p>revisit</p>");
+    snprintf(path,sizeof(path),"/tmp/kept/fixture.test-%04u.txt",(unsigned)next+2);
+    check(yonder_diag_seq(g.stream.diag)==next+2 && fake_text(path)!=NULL &&
+          has(fake_text(path),"\n" YONDER_DIAG_UNWRITTEN " ") && !has(fake_text(path),"verdict: clean"),
+          "claim, keep off: a number beside another's kept bytes or folder is passed over, and the claim reads unwritten");
+    check(loop_settle() && g.page.tree!=NULL,"claim, keep off: the page arrives");
+    loop_drop();
+    check(has(fake_text(path),"\nverdict: clean\n") && !strcmp(fake_text(left),"<p>another's") &&
+          fake_is_dir(folder),"claim, keep off: the record replaces its placeholder, and touches nothing of theirs");
+    keep_end();
+
+    /* THE NAME IS PROVED OURS BY THE CLAIM'S NONCE: a claimed file removed
+     * and claimed again by another yonder (its placeholder, its nonce) is
+     * not written over, at arrival or at departure. */
+    keep_begin(false);
+    loop_page("<p>reclaimed</p>");
+    {
+        char name[64], theirs[160]; yonder_diag_file_name(g.stream.diag,name,sizeof(name));
+        snprintf(path,sizeof(path),"/tmp/kept/%s",name);
+        snprintf(theirs,sizeof(theirs),"address: http://other.test/\n" YONDER_DIAG_UNWRITTEN " 0123456789abcdef\n");
+        check(os64_unlink(path)==0,"claim: its placeholder is removed from under it");
+        fh=os64_open(path,"x"); os64_write((int32_t)fh,theirs,strlen(theirs)); os64_close((int32_t)fh);
+        check(loop_settle() && g.page.tree!=NULL,"claim: the page arrives under a name another claimed");
+        loop_drop();
+        check(fake_text(path)!=NULL && !strcmp(fake_text(path),theirs),
+              "claim: a name another yonder claimed after ours went is not written over");
+    }
+    keep_end();
+
+    /* EVERY NAME TAKEN: with each of the claim's numbers holding another's
+     * record, the load has no claim, and nothing of it is written, neither
+     * over one of theirs nor beside it; when the record would have been
+     * written, the log and the status line say so. */
+    for(int keep=0;keep<2;keep++) {
+        keep_begin(keep==1);
+        next=s_diag.next;
+        for(unsigned i=0;i<YONDER_DIAG_CLAIM_TRIES;i++) {
+            snprintf(other,sizeof(other),"/tmp/kept/fixture.test-%04u.txt",(unsigned)next+i);
+            fh=os64_open(other,"w"); os64_write((int32_t)fh,"address: another's\n",19); os64_close((int32_t)fh);
+        }
+        audit_lines[0]='\0'; audit_keep=true;
+        loop_page("<p>taken</p>");
+        check(yonder_diag_claimed(g.stream.diag)==NULL && s_diag.next==next+1,
+              keep ? "claim, keeping: every name taken, the load has no claim"
+                   : "claim: every name taken, the load has no claim");
+        check(loop_settle() && g.page.tree!=NULL,keep ? "claim, keeping: the page arrives" : "claim: the page arrives");
+        audit_keep=false;
+        char said[128]; snprintf(said,sizeof(said),"No page file for this page: none of 64 names from %u on",(unsigned)next);
+        check(s_diag.claim_said && has(audit_lines,said) && has(g.status_text,said),
+              keep ? "claim, keeping: when the record would be written, the log and the status line say it is not"
+                   : "claim: when the record would be written, the log and the status line say it is not");
+        loop_drop();
+        unsigned untouched=0;
+        for(unsigned i=0;i<YONDER_DIAG_CLAIM_TRIES;i++) {
+            snprintf(other,sizeof(other),"/tmp/kept/fixture.test-%04u.txt",(unsigned)next+i);
+            untouched+=fake_text(other)!=NULL && !strcmp(fake_text(other),"address: another's\n");
+        }
+        check(untouched==YONDER_DIAG_CLAIM_TRIES && fake_count(".txt")==YONDER_DIAG_CLAIM_TRIES &&
+              fake_count(".html")==0 && fake_count("/index")==0 && !fake_temp_left(),
+              keep ? "claim, keeping: nothing of the page is written, and no record of theirs is touched"
+                   : "claim: nothing of the page is written, and no record of theirs is touched");
+        keep_end();
+    }
+
+    /* A PLACEHOLDER THAT IS NOT WHOLE IS NO CLAIM: with no memory for its
+     * text, or a write or a close of it that fails, its file is removed
+     * and its number passed over, and the claim is made on the next. */
+    {
+        static const char *const kHow[]={"no memory for the placeholder","a write of the placeholder that fails",
+                                         "a close of the placeholder that fails"};
+        for(int how=0;how<3;how++) {
+            keep_begin(false);
+            char passed[64], taken[64];
+            snprintf(passed,sizeof(passed),"/tmp/kept/p.test-%04u.txt",1u);
+            snprintf(taken,sizeof(taken),"/tmp/kept/p.test-%04u.txt",2u);
+            yonder_diag_t *d=yonder_diag_new("http://p.test/",1,0);
+            if(how==0) fail_at=attempts+1;
+            if(how==1) fake_fail_write_at=passed;
+            if(how==2) fake_fail_close_at=passed;
+            int64_t got=d!=NULL ? yonder_diag_claim(d,"/tmp/kept",false) : -9;
+            fail_at=0; fake_fail_write_at=fake_fail_close_at=NULL;
+            char what[160]; snprintf(what,sizeof(what),"claim: %s is no claim; its file goes and the next number is claimed",
+                                     kHow[how]);
+            check(got==0 && yonder_diag_seq(d)==2 && fake_text(passed)==NULL &&
+                  has(fake_text(taken),"\n" YONDER_DIAG_UNWRITTEN " ") && yonder_diag_write(yonder_diag_claimed(d))==0 &&
+                  has(fake_text(taken),"\nverdict: clean\n"),what);
+            yonder_diag_free(d);
+            keep_end();
+        }
+    }
+
+    /* THE INPUTS A REPLAY READS THE PAGE WITH (REPLAY.md § 3), written at
+     * the claim: the agent, the clock and its zone, the window; and the
+     * cookies a script could read, at the head. A setting changed before the record is written
+     * makes the record one no replay can read the page again by. */
+    keep_begin(true);
+    loop_page("<p>inputs</p>");
+    check(loop_settle() && g.page.tree!=NULL,"inputs: the page arrives");
+    {
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        uint32_t zoom=g.zoom;
+        g.zoom=zoom+100;
+        loop_drop();
+        g.zoom=zoom;
+        const char *text=diag_file("/tmp/kept",name);
+        check(has(text,"\nagent: ") && has(text,"\ncookies: session=abc; theme=dark\n") &&
+              has(text,"\nclock: 1700000000370\n") && has(text,"\ntz: ") && has(text,"\nzoom: 1000\n"),
+              "inputs: the agent, the script-visible cookies, the clock and its zone are on the record");
+        check(has(text,"\n" YONDER_DIAG_UNJUDGED "settings changed during the load\n"),
+              "inputs: a setting changed during the load marks the record unjudged");
+    }
+    keep_end();
+    /* Each other change to the window during the load marks it too (the
+     * scripts switch, the agent, and a page laid out in another view than
+     * its claim's), and a load in an unchanged window is not marked; nor
+     * is a view that moves after the page arrived, as it does when
+     * yonder's own bars come and go, which a replay reproduces. */
+    for(int change=0;change<5;change++) {
+        keep_begin(true);
+        int32_t width=g.view.bounds.w;
+        loop_page("<p>window</p>");
+        /* A claim made in another view than the one the page is then laid
+         * out in: only the arrival can see it, since the departure finds
+         * the window as the page was laid out. */
+        if(change==4) {
+            check(g.stream.diag!=NULL,"inputs: the page has not arrived when its claim's view is set");
+            yonder_diag_head_fact(g.stream.diag,"laid out at","1x1 px");
+        }
+        check(loop_settle() && g.page.tree!=NULL,"inputs: the page arrives in its window");
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        bool scripts=g.scripts_on; const char *agent=g.way.agent;
+        if(change==1) g.scripts_on=!scripts;
+        if(change==2) g.way.agent="another/1";
+        if(change==3) g.view.bounds.w+=40;
+        loop_drop();
+        g.scripts_on=scripts; g.way.agent=agent; g.view.bounds.w=width;
+        const char *text=diag_file("/tmp/kept",name);
+        static const char *const kChange[]={"nothing changed","the scripts switch","the agent",
+                                            "the view moving after the arrival","a claim in another view"};
+        char what[96]; snprintf(what,sizeof(what),"inputs: %s %s the record unjudged",kChange[change],
+                                change==0 || change==3 ? "leaves" : "marks");
+        check(text!=NULL && has(text,"\n" YONDER_DIAG_UNJUDGED "settings changed during the load\n")==
+              (change!=0 && change!=3),what);
+        keep_end();
+    }
+    /* Cookies the jar cannot hand over whole are not written cut short:
+     * the record says it lost lines. */
+    keep_begin(true);
+    fake_cookie_short=true;
+    loop_page("<p>cookies</p>");
+    check(loop_settle() && g.page.tree!=NULL,"inputs: a page whose cookies do not fit arrives");
+    {
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        loop_drop();
+        fake_cookie_short=false;
+        const char *text=diag_file("/tmp/kept",name);
+        check(text!=NULL && !has(text,"\ncookies: ") && has(text,"\n" YONDER_DIAG_LINES_LOST "\n"),
+              "inputs: cookies that do not fit are not written, and the record says it lost lines");
+    }
+    keep_end();
+    /* THE COOKIES ARE THE FINAL ADDRESS'S, TAKEN AT THE HEAD (REPLAY.md
+     * § 3): a load asked for in the clear and redirected to https carries
+     * the Secure cookie its page's script reads there; a response's own
+     * Set-Cookie, heard after the claim and before the head, is on it; and
+     * a cookie the page's first script sets is not, since the record says
+     * what the jar held at the head. */
+    for(int how=0;how<3;how++) {
+        static const char *const kWant[]={"\ncookies: secure=1; plain=1\n","\ncookies: heard=1\n","\ncookies: first=1\n"};
+        static const char *const kWhat[]={
+            "inputs: a load redirected from http to https records the cookies its page reads there, Secure ones too",
+            "inputs: a cookie the response itself sets is on the record",
+            "inputs: a cookie the page's first script sets is not on the record"};
+        keep_begin(false);
+        fake_cookie_heard=false; fake_cookie_set[0]='\0';
+        fake_cookie_answer=how==0 ? cookie_jar_secure : how==1 ? cookie_jar_heard : cookie_jar_scripted;
+        stream_window(); g.scripts_on=true; g.script_ms=5000; now_ms=100;
+        start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+        if(how==1) fake_cookie_heard=true;
+        way_head_t h=stream_head("text/html","",false);
+        if(how==0) { os64_strcopy(h.url,sizeof(h.url),"https://fixture.test/final"); h.encrypted=true; }
+        yonder_mail_post_head(g.stream.mail,&h);
+        char *html=pad_page(how==2 ? "<p>c</p><script>document.cookie='late=1'</script>" : "<p>c</p>");
+        stream_post_body((const uint8_t *)html,strlen(html),YONDER_STREAM_CHUNK);
+        stream_post_verdict(true,OS64_FETCH_OK,"");
+        free(html);
+        check(loop_settle() && g.page.tree!=NULL,"inputs: a page whose cookies the jar answers by address arrives");
+        char name[64]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        loop_drop();
+        fake_cookie_answer=NULL;
+        check(has(diag_file("/tmp/kept",name),kWant[how]) && (how!=2 || has(fake_cookie_set,"late=1")),kWhat[how]);
+        keep_end();
+    }
+    /* THE CLAIM IS PROVED AGAIN BEFORE A WRITE: a claimed record removed
+     * while its page is up is not written again under a name that may be
+     * anyone's now. */
+    keep_begin(false);
+    loop_page("<p>gone</p>");
+    check(loop_settle() && g.page.tree!=NULL,"claim: the page arrives");
+    {
+        char name[64], path[128]; yonder_diag_file_name(g.page.diag,name,sizeof(name));
+        snprintf(path,sizeof(path),"/tmp/kept/%s",name);
+        check(os64_unlink(path)==0,"claim: its record is removed from under it");
+        loop_drop();
+        check(fake_text(path)==NULL,"claim: a record whose file is gone is not written again");
+    }
+    keep_end();
+
+    /* The setting off: the page files are written and nothing is kept. */
+    keep_begin(false);
+    loop_page("<p>plain</p>");
+    check(loop_settle() && g.page.tree!=NULL,"keep off: the page arrives");
+    loop_drop();
+    check(fake_count(".txt")==1 && fake_count(".html")==0 && fake_count("/index")==0 && nfake_dirs==2,
+        "keep off: the page file is written and nothing beside it");
+    keep_end();
+}
+
 /* The font job whose address ends with `tail` answered: an SFNT of
  * `bytes`, or no file and `why`. False when no such job is out. */
 static bool font_land(const char *tail, const char *bytes, const char *why) {
@@ -4952,7 +6495,7 @@ static int32_t web_file(const char *url) {
 static void web_page_scripted(const char *html, bool scripts) {
     probe_web=true;
     probe_page(html,scripts);
-    g.page.diag=yonder_diag_new(g.page.way.url,1,0);
+    g.page.diag=diag_new_claimed(g.page.way.url,1);
     check(g.page.diag!=NULL && page_lay_out(&g.page,800,600,g.zoom,&g.page),"web fonts: the page laid out on its record");
     g.pool=(os64_work_pool_t *)&pool_fake; pool_open=true;
     webfonts_feed(true);
@@ -5344,7 +6887,7 @@ static void webfont_cases(void) {
         pictures_settle();
         const char *file=diag_file("/tmp/diag",name);
         check(!g.page.record_owed && has(file,"\nwritten: when its pictures and fonts were in\n") &&
-              has(file,"FAILED font: https://fixture.test/gone.ttf: HTTP 404") &&
+              has(file,"FAILED font-fetch: https://fixture.test/gone.ttf: HTTP 404") &&
               has(file,"\nfont face 1: Web 400 normal: https://fixture.test/gone.ttf failed\n"),
               "web fonts: then the file names the font that failed");
     }
@@ -5969,7 +7512,7 @@ static void webfont_cases(void) {
                      "<p style='font-family:Aa'>a</p><p style='font-family:Bb'>b</p>");
             /* A fresh record, so the lines are this layout's alone. */
             yonder_diag_free(g.page.diag);
-            g.page.diag=yonder_diag_new(g.page.way.url,1,0);
+            g.page.diag=diag_new_claimed(g.page.way.url,1);
             fail_at=attempts+cut;
             bool laid=lay_out_page(&g.page,800,600);
             diag_fonts(&g.page);
@@ -6070,7 +7613,7 @@ static void webfont_cases(void) {
         memset(&g.page,0,sizeof(g.page));
         /* Its own record, so its MISSING line is the staged one's. */
         yonder_diag_free(fresh.diag);
-        fresh.diag=yonder_diag_new("http://fixture.test/fresh",99,0);
+        fresh.diag=diag_new_claimed("http://fixture.test/fresh",99);
         s_arriving.staged=true; s_arriving.seq=yonder_diag_seq(fresh.diag);
         webfonts_served(&s_arriving.families,"Nope",4,WF_SERVED_NONE,"Test Sans");
         diag_observe(&fresh,"when the page was left");
@@ -6243,7 +7786,7 @@ static void webfont_cases(void) {
     check(font_land("b.ttf",NULL,"HTTP 404") && s_web.files[0].state==WF_FAILED && s_web.moved,
           "web fonts: a failed file");
     yonder_diag_render(g.page.diag,record,sizeof(record));
-    check(strstr(record,"FAILED font: https://fixture.test/b.ttf: HTTP 404")!=NULL,
+    check(strstr(record,"FAILED font-fetch: https://fixture.test/b.ttf: HTTP 404")!=NULL,
           "web fonts: the failure is on the record");
     pictures_settle();
     check(web_file("https://fixture.test/c.ttf")==1 && s_web.files[1].state==WF_WAITING,
@@ -6320,7 +7863,7 @@ static void webfont_cases(void) {
         Page other=g.page;
         other.way.doc=parse_file((const uint8_t *)"<p>other",8,false);
         flow_family_name_t web={"Web",3};
-        flow_family_list_t ask={&web,1,FLOW_GENERIC_SERIF};
+        flow_family_list_t ask={.names=&web,.count=1,.generic=FLOW_GENERIC_SERIF};
         os64_text_font_t *const *list; size_t n; os64_font_face_info_t info;
         s_laying.cascade=g.page.cascade; s_laying.entry=g.page.cascade_entry;
         int32_t files=s_web.nfiles; uint32_t handles=(uint32_t)s_web.nhandles;
@@ -6444,7 +7987,7 @@ static void webfont_cases(void) {
     check(font_land("w.ttf","A",NULL) && s_web.files[0].state==WF_FAILED,
           "web fonts: past the held bytes, a file refused room fails");
     yonder_diag_render(g.page.diag,record,sizeof(record));
-    check(strstr(record,"FAILED font: https://fixture.test/w.ttf: no room to open it")!=NULL,
+    check(strstr(record,"FAILED font-fetch: https://fixture.test/w.ttf: no room to open it")!=NULL,
           "web fonts: and says why");
     font_open_refusals=0;
     s_web.held_bytes=0;
@@ -6511,7 +8054,7 @@ static void webfont_cases(void) {
     pictures_settle();
     {
         flow_family_name_t names[]={{"test serif",10},{"Web",3}};
-        flow_family_list_t ask={names,2,FLOW_GENERIC_SERIF};
+        flow_family_list_t ask={.names=names,.count=2,.generic=FLOW_GENERIC_SERIF};
         os64_text_font_t *const *list; size_t n; os64_font_face_info_t info, second;
         s_laying.cascade=g.page.cascade; s_laying.entry=g.page.cascade_entry;
         check(page_fonts(&g.page,&ask,false,false,16,&list,&n,&info)==OS64_FONT_OK && n>=3 &&
@@ -6532,7 +8075,7 @@ static void webfont_cases(void) {
         flow_family_name_t names[36]; char text[36][16];
         for(int i=0;i<34;i++) { snprintf(text[i],16,"n%d",i); names[i]=(flow_family_name_t){text[i],(uint32_t)strlen(text[i])}; }
         names[34]=(flow_family_name_t){"test sans",9};
-        flow_family_list_t ask={names,35,FLOW_GENERIC_SERIF};
+        flow_family_list_t ask={.names=names,.count=35,.generic=FLOW_GENERIC_SERIF};
         os64_text_font_t *const *list; size_t n; os64_font_face_info_t info;
         s_laying.cascade=g.page.cascade; s_laying.entry=g.page.cascade_entry;
         check(page_fonts(&g.page,&ask,false,false,16,&list,&n,&info)==OS64_FONT_OK && strcmp(info.family,"Test Sans")==0,
@@ -6800,12 +8343,12 @@ static void storage_disk_cases(void) {
     yonder_storage_t *st=yonder_storage_new("/tmp/profile");
     check(yonder_storage_identity(st,L,origin)==0 && yonder_storage_load(st,L,origin,out,sizeof(out))==0 &&
           yonder_storage_problem(st)==NULL,"storage disk: no file is an empty store, and no problem");
-    check(yonder_storage_commit(st,L,origin,kGone,strlen(kGone),false,NULL)==OS64_DOM_STORAGE_OK &&
+    check(yonder_storage_commit(st,L,origin,kGone,strlen(kGone),NULL)==OS64_DOM_STORAGE_OK &&
           fake_file(STORE_FILE)<0,"storage disk: removing from no store leaves no file");
-    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_OK && store_holds("k","1") &&
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK && store_holds("k","1") &&
           yonder_storage_identity(st,L,origin)!=0,"storage disk: a commit makes the file");
     int writes=fake_writes;
-    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_OK && store_holds("k","1") &&
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK && store_holds("k","1") &&
           fake_writes==writes+1 && fake_file(STORE_FILE)>=0 && fake_files[fake_file(STORE_FILE)].len==strlen(kOne),
           "storage disk: the same commit twice writes the same image");
     int64_t length=yonder_storage_load(st,L,origin,out,sizeof(out));
@@ -6814,7 +8357,7 @@ static void storage_disk_cases(void) {
     check(yonder_storage_load(st,L,origin,out,4)==(int64_t)strlen(kOne) && out[0]=='z',
           "storage disk: a store bigger than the room answers its length and writes nothing");
     fake_short_write=true;
-    check(yonder_storage_commit(st,L,origin,kTwo,strlen(kTwo),false,NULL)==OS64_DOM_STORAGE_OK && store_holds("k","2"),
+    check(yonder_storage_commit(st,L,origin,kTwo,strlen(kTwo),NULL)==OS64_DOM_STORAGE_OK && store_holds("k","2"),
           "storage disk: a disk that writes a byte at a time is written whole");
     fake_short_write=false;
     /* A write, a sync, a rename refused: the old image stays, whole, and
@@ -6824,7 +8367,7 @@ static void storage_disk_cases(void) {
     for(size_t i=0;i<3;i++) {
         char name[96];
         *refusals[i]=true;
-        os64_dom_storage_status_t status=yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL);
+        os64_dom_storage_status_t status=yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL);
         *refusals[i]=false;
         snprintf(name,sizeof(name),"storage disk: a refused %s keeps the old image, leaves no temp, and says so",names[i]);
         check(status==OS64_DOM_STORAGE_FAILED && store_holds("k","2") && fake_temps()==0 &&
@@ -6834,7 +8377,7 @@ static void storage_disk_cases(void) {
     fake_slurp_fail=true;
     check(yonder_storage_load(st,L,origin,out,sizeof(out))<0 && problem_has(st,"cannot be read."),
           "storage disk: an unreadable store loads as broken and says so");
-    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_FAILED,
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED,
           "storage disk: and refuses a commit");
     fake_slurp_fail=false;
     check(store_holds("k","2"),"storage disk: the unreadable store is as it was");
@@ -6847,59 +8390,67 @@ static void storage_disk_cases(void) {
     fake_files[f].len=real;
     /* Not libdom's format. */
     fake_put(STORE_FILE,"hello\n",6);
-    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_FAILED &&
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
           problem_has(st,"its file is not one yonder wrote") && !strcmp(fake_text(STORE_FILE),"hello\n"),
           "storage disk: a file not in the format is never written over");
+    /* An empty file where the store should be: there, and no image. */
+    fake_put(STORE_FILE,"",0);
+    check(yonder_storage_load(st,L,origin,out,sizeof(out))<0 && problem_has(st,"its file is not one yonder wrote"),
+          "storage disk: an empty file at the store's name loads as broken");
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
+          fake_file(STORE_FILE)>=0 && fake_files[fake_file(STORE_FILE)].len==0 && fake_temps()==0,
+          "storage disk: and is never written over");
     /* A folder where the file should be. */
     (void)os64_unlink(STORE_FILE);
     snprintf(fake_dirs[nfake_dirs++],256,"%s",STORE_FILE);
     check(yonder_storage_load(st,L,origin,out,sizeof(out))<0 && problem_has(st,"cannot be read."),
           "storage disk: a folder at the store's name loads as broken");
-    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_FAILED && fake_temps()==0 &&
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED && fake_temps()==0 &&
           fake_file(STORE_FILE)<0,"storage disk: and is never written over");
     nfake_dirs--;
     /* An origin whose store name is another's temp name as spelled before
      * the '+': the other's store is untouched. */
     static const char kOther[]="/tmp/profile/storage/http%3A%2F%2Ffixture.test.7.7.new";
     fake_put(kOther,kTwo,strlen(kTwo));
-    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_OK && store_holds("k","1") &&
+    check(yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK && store_holds("k","1") &&
           fake_text(kOther)!=NULL && !strcmp(fake_text(kOther),kTwo),
           "storage disk: no origin's store is another's temp");
     (void)os64_unlink(kOther);
     /* An origin too long to name a file, with its temp, in a path. */
     char longest[300]="http://";
     memset(longest+7,'a',240); longest[247]='\0';
-    check(yonder_storage_commit(st,L,longest,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_FAILED &&
+    check(yonder_storage_commit(st,L,longest,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
           problem_has(st,"its address is too long to name a file") &&
           yonder_storage_load(st,L,longest,out,sizeof(out))<0 && yonder_storage_identity(st,L,longest)==0,
           "storage disk: an origin too long to name a file is kept in no file, and the problem names it");
     yonder_storage_t *relative=yonder_storage_new("profile");
-    check(yonder_storage_commit(relative,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_FAILED &&
+    check(yonder_storage_commit(relative,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
           problem_has(relative,"the profile folder is not a full path (profile)"),
           "storage disk: a profile that is not a full path is said to be so");
     yonder_storage_free(relative);
     char deep[256]="/";
     memset(deep+1,'d',250); deep[251]='\0';
     yonder_storage_t *tall=yonder_storage_new(deep);
-    check(yonder_storage_commit(tall,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_FAILED &&
+    check(yonder_storage_commit(tall,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
           problem_has(tall,"the profile folder's path is too long"),
           "storage disk: a profile with no room for its storage folder is said to be too long");
     yonder_storage_free(tall);
     /* A file in the way of the profile folder. */
     yonder_storage_t *blocked=yonder_storage_new("/tmp/blocked/profile");
     fake_put("/tmp/blocked","x",1);
-    check(yonder_storage_commit(blocked,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_FAILED &&
+    check(yonder_storage_commit(blocked,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_FAILED &&
           problem_has(blocked,"/tmp/blocked/profile/storage cannot be made."),
           "storage disk: a file where a folder must be refuses the commit");
     yonder_storage_free(blocked);
     /* The last key removed: the file goes; a file another window removed
      * first is gone as asked. */
-    check(yonder_storage_commit(st,L,origin,kGone,strlen(kGone),false,NULL)==OS64_DOM_STORAGE_OK && fake_file(STORE_FILE)<0,
+    check(yonder_storage_commit(st,L,origin,kGone,strlen(kGone),NULL)==OS64_DOM_STORAGE_OK && fake_file(STORE_FILE)<0,
           "storage disk: a store left empty is removed");
     /* Clear twice, and the sessions with it. */
-    check(yonder_storage_commit(st,S,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_OK &&
-          yonder_storage_commit(st,L,origin,kOne,strlen(kOne),false,NULL)==OS64_DOM_STORAGE_OK,"storage disk: both areas kept");
-    check(yonder_storage_clear(st)==1 && yonder_storage_clear(st)==0 && yonder_storage_identity(st,S,origin)==0 &&
+    check(yonder_storage_commit(st,S,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK &&
+          yonder_storage_commit(st,L,origin,kOne,strlen(kOne),NULL)==OS64_DOM_STORAGE_OK,"storage disk: both areas kept");
+    check(yonder_storage_clear(st)==1 && yonder_storage_clear(st)==0 &&
+          yonder_storage_identity(st,S,origin)==0 &&
           yonder_storage_load(st,S,origin,out,sizeof(out))==0 && yonder_storage_problem(st)==NULL,
           "storage disk: Clear page storage twice: the files and the sessions go once, and the problem with them");
     /* Every allocation failed in turn, each area: an answer of OK or
@@ -6909,10 +8460,10 @@ static void storage_disk_cases(void) {
         for(size_t cut=1;cut<200 && !swept;cut++) {
             fake_reset();
             yonder_storage_t *sw=yonder_storage_new("/tmp/profile");
-            if(yonder_storage_commit(sw,area?S:L,origin,kOne,strlen(kOne),false,NULL)!=OS64_DOM_STORAGE_OK) { whole=false; break; }
+            if(yonder_storage_commit(sw,area?S:L,origin,kOne,strlen(kOne),NULL)!=OS64_DOM_STORAGE_OK) { whole=false; break; }
             size_t before=live;
             attempts=0; fail_at=cut;
-            os64_dom_storage_status_t status=yonder_storage_commit(sw,area?S:L,origin,kTwo,strlen(kTwo),false,NULL);
+            os64_dom_storage_status_t status=yonder_storage_commit(sw,area?S:L,origin,kTwo,strlen(kTwo),NULL);
             int64_t loaded=yonder_storage_load(sw,area?S:L,origin,out,sizeof(out));
             swept=attempts<cut;
             fail_at=0;
@@ -6930,174 +8481,158 @@ static void storage_disk_cases(void) {
     yonder_storage_free(NULL);
     fake_reset();
 }
-/* TWO YONDERS, ONE STORE (storage.c § Two yonders): two windows' commits
- * interleaved on the fake disk, each a separate task. Neither's changes
- * are lost: the store's lock is waited for, a crash's lock is broken, a
- * live holder past the wait makes the commit BUSY, and a store another
- * writer moved between the read and the rename is merged onto again. */
-#define STORE_LOCK STORE_FILE "+lock"
-static yonder_storage_t *other_window;
-static const char kOtherChange[]="os64 storage 1\n+5 1\nother1\n";
-/* The other window, task 8, holding the lock: it commits and lets go. */
-static void other_commits_and_lets_go(void) {
-    uint64_t me=fake_task;
-    fake_task=8;
-    (void)os64_unlink(STORE_LOCK);
-    check(yonder_storage_commit(other_window,OS64_DOM_STORAGE_LOCAL,"http://fixture.test",kOtherChange,
-                                sizeof(kOtherChange)-1,false,NULL)==OS64_DOM_STORAGE_OK,"two yonders: the other window commits");
-    fake_task=me;
-}
-/* Another writer that took no lock, between this one's read and rename. */
-static void other_writes_unlocked(void) {
-    static const char kImage[]="os64 storage 1\n+1 1\nw1\n";
-    fake_put(STORE_FILE,kImage,sizeof(kImage)-1);
-}
-/* The lock's holder lets go. */
-static void let_go(void) {
-    (void)os64_unlink(STORE_LOCK);
-}
-static void plant_lock(uint64_t task, uint64_t taken) {
-    char text[48];
-    int n=snprintf(text,sizeof(text),"%lu %lu\n",(unsigned long)task,(unsigned long)taken);
-    fake_put(STORE_LOCK,text,(size_t)n);
-}
-static void storage_departure_busy_case(void) {
-    /* A store another window holds as the page departs: the flush is
-     * refused and the changes wait (the next page reads the store without
-     * them); the departed page's last commit, as its host goes at the next
-     * page's arrival, waits longer and lands them. */
-    storage_departure_page();
-    fake_live[0]=8;
-    plant_lock(8,(uint64_t)js_test_clock.epoch);
-    fake_sleep_hook=let_go;
-    fake_sleep_hook_at=fake_sleeps+140;     /* past the flush's wait and a live commit's after it */
+/* A DEPARTED PAGE RUNS NOTHING MORE (HTML unloads its document): its queued
+ * timer, due while the next page streams in, neither runs nor writes, now
+ * or at the departed page's teardown. */
+static void storage_departed_tasks_case(void) {
+    fake_reset();
+    s_storage=yonder_storage_new("/tmp/profile");
+    loop_page("<p id=out>start</p><script>localStorage.setItem('a','1');"
+        "setTimeout(function(){localStorage.setItem('late','1');document.title='ran'},500);</script>");
+    check(loop_settle() && g.page.tree!=NULL,"departed: the first page arrives");
+    yonder_scripts_t *departing=g.page.scripts;
     storage_page_as("http://fixture.test/two","<p id=out>start</p><script>"
-        "document.getElementById('out').textContent=localStorage.getItem('tok')+' '+sessionStorage.getItem('tok');"
-        "</script>",NAV_GO);
-    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","null y"),
-        "departure: a busy store's refusal at the flush leaves the next page without the write");
-    check(store_holds("tok","x") && fake_file(STORE_LOCK)<0,
-        "departure: and the departed page's last commit lands it");
+        "document.getElementById('out').textContent=String(localStorage.getItem('late'));</script>",NAV_GO);
+    /* The next page's parse begins: the page on screen departs. */
+    for(int i=0;i<5 && g.stream.parser==NULL && g.stream.active;i++) stream_turn();
+    check(g.page.scripts==departing && !yonder_scripts_alive(departing),
+          "departed: the page on screen is unloaded as the next one's parse begins");
+    now_ms+=1000;
+    (void)script_turn();
+    check(store_holds("late",NULL),"departed: and wrote nothing");
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","null") && store_holds("late",NULL) &&
+          store_holds("a","1"),"departed: nor at its teardown, and the next page reads the store without it");
     loop_drop();
     yonder_storage_free(s_storage);
     s_storage=NULL;
+}
+/* TWO YONDERS, ONE STORE (storage.c § Two yonders): another window's
+ * commit lands between this one's read and its rename; the store's
+ * identity, read again before the rename, sees it, and the merge is made
+ * again onto what that window wrote, so neither's changes are lost. */
+static yonder_storage_t *other_window;
+static const char kOtherChange[]="os64 storage 1\n+5 1\nother1\n";
+/* The other window, task 8, commits. */
+static void other_commits(void) {
+    uint64_t me=fake_task;
+    fake_task=8;
+    fake_second++;          /* a later second: its store's identity moves */
+    check(yonder_storage_commit(other_window,OS64_DOM_STORAGE_LOCAL,"http://fixture.test",kOtherChange,
+                                sizeof(kOtherChange)-1,NULL)==OS64_DOM_STORAGE_OK,"two yonders: the other window commits");
+    fake_task=me;
 }
 static void storage_two_yonder_cases(void) {
     static const char kMine[]="os64 storage 1\n+4 1\nmine1\n";
     const os64_dom_storage_area_t L=OS64_DOM_STORAGE_LOCAL;
     const char *origin="http://fixture.test";
-    uint64_t now=(uint64_t)js_test_clock.epoch;
-    /* A live holder lets go during the wait: this commit lands after its. */
     fake_reset();
     yonder_storage_t *st=yonder_storage_new("/tmp/profile");
     other_window=yonder_storage_new("/tmp/profile");
-    check(yonder_storage_commit(st,L,origin,"os64 storage 1\n+4 1\nseed1\n",26,false,NULL)==OS64_DOM_STORAGE_OK,
+    check(yonder_storage_commit(st,L,origin,"os64 storage 1\n+4 1\nseed1\n",26,NULL)==OS64_DOM_STORAGE_OK,
           "two yonders: a store to start from");
-    fake_live[0]=8;
-    plant_lock(8,now);
-    fake_sleep_hook=other_commits_and_lets_go;
-    check(yonder_storage_commit(st,L,origin,kMine,sizeof(kMine)-1,false,NULL)==OS64_DOM_STORAGE_OK && fake_sleeps>=1,
-          "two yonders: a commit waits for a live holder's lock");
-    check(store_holds("seed","1") && store_holds("other","1") && store_holds("mine","1") &&
-          fake_file(STORE_LOCK)<0 && fake_temps()==0,
-          "two yonders: neither window's changes are lost, and the lock is let go");
-    /* Another writer moves the store between the read and the rename: the
-     * merge is made again onto what it wrote. */
-    fake_sync_hook=other_writes_unlocked;
-    check(yonder_storage_commit(st,L,origin,kMine,sizeof(kMine)-1,false,NULL)==OS64_DOM_STORAGE_OK &&
-          store_holds("w","1") && store_holds("mine","1") && fake_temps()==0,
-          "two yonders: a store moved before the rename is merged onto again");
-    /* A crash's lock: its task gone, a zombie, or too old. Broken at once. */
-    static const struct { uint64_t task, taken; bool zombie; const char *name; } kStale[]={
-        {9,0,false,"two yonders: a lock whose task is gone is broken"},
-        {8,0,true,"two yonders: a lock whose task is a zombie is broken"},
-        {8,60,false,"two yonders: a lock older than a commit could be is broken"},
-        {7,0,false,"two yonders: a lock naming this window, which holds none between commits, is broken"},
-    };
-    for(size_t i=0;i<sizeof(kStale)/sizeof(kStale[0]);i++) {
-        fake_live_zombie=kStale[i].zombie;
-        plant_lock(kStale[i].task,now-kStale[i].taken);
-        fake_sleeps=0;
-        check(yonder_storage_commit(st,L,origin,kMine,sizeof(kMine)-1,false,NULL)==OS64_DOM_STORAGE_OK && fake_sleeps==0 &&
-              fake_file(STORE_LOCK)<0,kStale[i].name);
-        fake_live_zombie=false;
-    }
-    /* A lock that names nothing: waited for, then broken. */
-    fake_put(STORE_LOCK,"",0);
-    fake_sleeps=0;
-    check(yonder_storage_commit(st,L,origin,kMine,sizeof(kMine)-1,false,NULL)==OS64_DOM_STORAGE_OK && fake_sleeps==40 &&
-          fake_file(STORE_LOCK)<0,"two yonders: a half-made lock is broken at the end of the wait");
-    /* A live holder that keeps it: BUSY, nothing written, the lock its. */
-    plant_lock(8,now);
-    static const char kLater[]="os64 storage 1\n+5 1\nlater1\n";
-    yonder_diag_t *diag=yonder_diag_new("http://fixture.test/",1,0);
-    check(yonder_storage_commit(st,L,origin,kLater,sizeof(kLater)-1,false,diag)==OS64_DOM_STORAGE_BUSY &&
-          store_holds("later",NULL) && fake_file(STORE_LOCK)>=0 && fake_temps()==0,
-          "two yonders: a lock held past the wait makes the commit BUSY, and nothing is written");
-    char record[2048];
-    yonder_diag_render(diag,record,sizeof(record));
-    check(strstr(record,"FAILED storage: localStorage of http://fixture.test is busy")!=NULL,
-          "two yonders: and the page's record says its changes wait");
-    /* The last commit waits longer: a lock let go past a live commit's
-     * wait but inside the last's is waited out, and the changes kept. */
-    fake_sleep_hook=let_go;
-    fake_sleep_hook_at=fake_sleeps+100;
-    unsigned slept=fake_sleeps;
-    check(yonder_storage_commit(st,L,origin,kLater,sizeof(kLater)-1,false,NULL)==OS64_DOM_STORAGE_BUSY &&
-          fake_sleeps-slept==40,"two yonders: a live commit gives up at its wait");
-    check(yonder_storage_commit(st,L,origin,kLater,sizeof(kLater)-1,true,NULL)==OS64_DOM_STORAGE_OK &&
-          store_holds("later","1") && fake_file(STORE_LOCK)<0,
-          "two yonders: the last commit waits past it for a lock let go in time, and keeps the changes");
-    /* One still held at the end of the last's wait: lost, and said. */
-    plant_lock(8,now);
-    static const char kTwoKeys[]="os64 storage 1\n+4 1\nlost1\n-5\nlater\n";
-    slept=fake_sleeps;
-    check(yonder_storage_commit(st,L,origin,kTwoKeys,sizeof(kTwoKeys)-1,true,diag)==OS64_DOM_STORAGE_BUSY &&
-          fake_sleeps-slept==400 && store_holds("later","1") && store_holds("lost",NULL),
-          "two yonders: a lock held past the last commit's wait refuses it");
-    yonder_diag_render(diag,record,sizeof(record));
-    check(strstr(record,"localStorage of http://fixture.test was busy (another window was writing it) as the page "
-                        "left; 2 keys not kept")!=NULL,
-          "two yonders: and the page's record names the origin and how many keys were not kept");
-    (void)os64_unlink(STORE_LOCK);
-    yonder_diag_free(diag);
+    fake_sync_hook=other_commits;
+    check(yonder_storage_commit(st,L,origin,kMine,sizeof(kMine)-1,NULL)==OS64_DOM_STORAGE_OK &&
+          store_holds("seed","1") && store_holds("other","1") && store_holds("mine","1") && fake_temps()==0,
+          "two yonders: a store another window moved before the rename is merged onto again, and neither loses");
     yonder_storage_free(st);
     yonder_storage_free(other_window);
     other_window=NULL;
     fake_reset();
 }
-/* What a crash leaves (finding 7): temps and locks whose task is gone. The
- * first touch of the profile's stores removes them, and Clear page storage
- * does, counting only stores; a live window's temp and lock stay. */
+/* Clear page storage removes every store, one unlink each; a window that
+ * commits after it publishes only its own changes. */
+static void storage_clear_cases(void) {
+    const os64_dom_storage_area_t L=OS64_DOM_STORAGE_LOCAL;
+    fake_reset();
+    yonder_storage_t *st=yonder_storage_new("/tmp/profile");
+    other_window=yonder_storage_new("/tmp/profile");
+    check(yonder_storage_commit(st,L,"http://fixture.test","os64 storage 1\n+4 1\nseed1\n",26,NULL)==
+          OS64_DOM_STORAGE_OK &&
+          yonder_storage_commit(st,L,"http://two.test","os64 storage 1\n+4 1\nseed1\n",26,NULL)==OS64_DOM_STORAGE_OK,
+          "clear: two stores");
+    check(yonder_storage_clear(st)==2 && fake_file(STORE_FILE)<0 &&
+          fake_file("/tmp/profile/storage/http%3A%2F%2Ftwo.test")<0,"clear: every store goes");
+    other_commits();
+    check(store_holds("other","1") && store_holds("seed",NULL),
+          "clear: a window committing after it publishes its own changes, and nothing that was cleared");
+    check(yonder_storage_commit(st,L,"http://two.test","os64 storage 1\n+4 1\nseed1\n",26,NULL)==OS64_DOM_STORAGE_OK,
+          "clear: a store to clear from Settings");
+    yonder_storage_t *window_store=s_storage;
+    s_storage=st;
+    char line[200];
+    storage_clear(line,sizeof(line));
+    s_storage=window_store;
+    check(strstr(line,"Cleared page storage: 2 stored sites gone.")!=NULL,line);
+    yonder_storage_free(st);
+    yonder_storage_free(other_window);
+    other_window=NULL;
+    fake_reset();
+}
+/* What a crash leaves: temps whose task is gone (or is this one, or a
+ * zombie). The first touch of the profile's stores removes them, and Clear
+ * page storage does, counting only stores; a live window's temp stays. */
 static void storage_orphan_cases(void) {
     fake_reset();
     snprintf(fake_dirs[nfake_dirs++],256,"/tmp/profile");
     snprintf(fake_dirs[nfake_dirs++],256,"/tmp/profile/storage");
     static const char kImage[]="os64 storage 1\n+1 1\nk1\n";
-    char lock[64];
-    uint64_t now=(uint64_t)js_test_clock.epoch;
     fake_live[0]=8;
     fake_put(STORE_FILE,kImage,sizeof(kImage)-1);
     fake_put(STORE_FILE "+9.3.new",kImage,sizeof(kImage)-1);       /* task 9: gone */
     fake_put(STORE_FILE "+7.1.new",kImage,sizeof(kImage)-1);       /* this task's, from before it was */
     fake_put(STORE_FILE "+8.2.new",kImage,sizeof(kImage)-1);       /* task 8: live, mid-commit */
-    int n=snprintf(lock,sizeof(lock),"9 %lu\n",(unsigned long)now);
-    fake_put("/tmp/profile/storage/http%3A%2F%2Fother.test+lock",lock,(size_t)n);
-    n=snprintf(lock,sizeof(lock),"8 %lu\n",(unsigned long)now);
-    fake_put("/tmp/profile/storage/http%3A%2F%2Flive.test+lock",lock,(size_t)n);
+    /* Names a dead or this task's number follows a '+' in, that are not a
+     * temp by its whole spelling (a lock an older yonder left among them):
+     * never ours to remove. */
+    static const char *const kNotTemps[]={
+        "/tmp/profile/storage/notes+9", "/tmp/profile/storage/x+9.1.new.bak", "/tmp/profile/storage/x+9.new",
+        "/tmp/profile/storage/x+.1.new", "/tmp/profile/storage/x+09.1.new", "/tmp/profile/storage/x+7.01.new",
+        "/tmp/profile/storage/+9.1.new", "/tmp/profile/storage/x+9.1.newer",
+        "/tmp/profile/storage/http%3A%2F%2Fother.test+lock",
+    };
+    for(size_t i=0;i<sizeof(kNotTemps)/sizeof(kNotTemps[0]);i++) fake_put(kNotTemps[i],"mine",4);
     yonder_storage_t *st=yonder_storage_new("/tmp/profile");
     (void)yonder_storage_identity(st,OS64_DOM_STORAGE_LOCAL,"http://fixture.test");
-    check(fake_file(STORE_FILE "+9.3.new")<0 && fake_file(STORE_FILE "+7.1.new")<0 &&
-          fake_file("/tmp/profile/storage/http%3A%2F%2Fother.test+lock")<0,
-          "orphans: the first touch removes what a crash left");
-    check(fake_file(STORE_FILE "+8.2.new")>=0 && fake_file("/tmp/profile/storage/http%3A%2F%2Flive.test+lock")>=0 &&
-          fake_file(STORE_FILE)>=0,"orphans: a live window's temp and lock, and the store, stay");
+    check(fake_file(STORE_FILE "+9.3.new")<0 && fake_file(STORE_FILE "+7.1.new")<0,
+          "orphans: the first touch removes the temps a crash left");
+    check(fake_file(STORE_FILE "+8.2.new")>=0 && fake_file(STORE_FILE)>=0,
+          "orphans: a live window's temp, and the store, stay");
     fake_put(STORE_FILE "+9.4.new",kImage,sizeof(kImage)-1);
+    fake_put(STORE_FILE "+8.5.new",kImage,sizeof(kImage)-1);
+    fake_live_zombie=true;      /* task 8 died, its parent not yet told: its temps are a crash's */
+    fake_put(STORE_FILE "+8.2.new",kImage,sizeof(kImage)-1);
+    check(yonder_storage_clear(st)==1 && fake_file(STORE_FILE "+8.5.new")<0 && fake_file(STORE_FILE "+8.2.new")<0,
+          "orphans: a zombie's temps are a crash's");
+    fake_live_zombie=false;
+    fake_put(STORE_FILE,kImage,sizeof(kImage)-1);
+    fake_put(STORE_FILE "+8.2.new",kImage,sizeof(kImage)-1);
     check(yonder_storage_clear(st)==1 && fake_file(STORE_FILE)<0 && fake_file(STORE_FILE "+9.4.new")<0 &&
           fake_file(STORE_FILE "+8.2.new")>=0,
           "orphans: Clear removes the stores and a crash's temps, and counts only stores");
+    bool kept=true;
+    for(size_t i=0;i<sizeof(kNotTemps)/sizeof(kNotTemps[0]);i++) kept=kept && fake_file(kNotTemps[i])>=0;
+    check(kept,"orphans: a name that only looks like a temp outlives the sweep and Clear");
     yonder_storage_free(st);
     fake_reset();
+}
+/* The redirects the head says libway followed on the asked origin are the
+ * page's redirectCount, both spellings. */
+static void timing_redirect_case(void) {
+    fake_reset();
+    stream_window();
+    g.scripts_on=true; g.script_ms=5000; now_ms=100;
+    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    char *html=pad_page("<p id=out>start</p><script>document.getElementById('out').textContent="
+        "performance.navigation.redirectCount+' '+performance.getEntriesByType('navigation')[0].redirectCount;</script>");
+    way_head_t h=stream_head("text/html","",false);
+    h.redirects=2;
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body((const uint8_t *)html,strlen(html),YONDER_STREAM_CHUNK);
+    stream_post_verdict(true,OS64_FETCH_OK,"");
+    free(html);
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","2 2"),
+          "timing: the head's same-origin redirects are the page's redirectCount");
+    loop_drop();
 }
 /* The page reads its navigation's timing and the screen it is on. */
 static void timing_window_cases(void) {
@@ -7119,6 +8654,22 @@ static void timing_window_cases(void) {
         "timing: after its load, the page reads every milestone");
     loop_drop();
 }
+/* A page from disk: its navigation begins before the read, and its
+ * response is the read. */
+static void timing_file_case(void) {
+    stream_window();
+    g.scripts_on=true; g.script_ms=5000;
+    slurp_path="/pages/local.html";
+    slurp_bytes="<p id=out>start</p><script>var t=performance.timing;document.getElementById('out').textContent="
+        "[t.fetchStart===t.navigationStart,t.responseStart-t.fetchStart<10,t.responseEnd-t.responseStart>=50].join();</script>";
+    slurp_us=50000;
+    open_address("/pages/local.html",NAV_GO,NULL,NULL);
+    slurp_us=0;
+    check(loop_settle() && g.page.tree!=NULL && probe_text_is("out","true,true,true"),
+        "timing: a file's response starts as its read does and ends when the read has");
+    slurp_path=NULL;
+    loop_drop();
+}
 /* With the switch off, none of slice 1a's names exists. */
 static void storage_modern_off_cases(void) {
     loop_modern_off=true;
@@ -7138,9 +8689,12 @@ static void storage_cases(void) {
     storage_departure_cases();
     storage_disk_cases();
     storage_two_yonder_cases();
-    storage_departure_busy_case();
+    storage_departed_tasks_case();
+    storage_clear_cases();
     storage_orphan_cases();
     timing_window_cases();
+    timing_redirect_case();
+    timing_file_case();
     storage_modern_off_cases();
 }
 
@@ -7163,7 +8717,9 @@ static void diag_cases(void) {
     diag_arriving_released_case();
     diag_picture_moves_case();
     diag_long_source_case();
+    diag_script_time_case();
     diag_tokens_exclusive();
+    diag_keep_cases();
     /* Setting absent: no file, while the badge still counts. */
     int writes=fake_writes;
     memset(&s_diag,0,sizeof(s_diag)); s_diag.next=1;
@@ -7232,12 +8788,29 @@ static void covered_link_cases(void) {
     check(probe_field("blank")!=NULL && probe_field("blank")->w->cls->paint==NULL,
         "invisible gadget: an empty name submits nothing, so it names nothing");
     probe_drop();
+    /* A control the ellipsis cuts away is not there to be pointed at
+     * (flow_box_cut_away), so its widget is not drawn over the ellipsis:
+     * after abcd, 32 of a 40-wide line, a checkbox in an inline-block with
+     * a transform — stacked, a layer of its own — is past the limit; one
+     * kept as the line's first atom is drawn. */
+    probe_page("<!doctype html><style>body{margin:0} div{width:40px;overflow:hidden;"
+        "white-space:nowrap;text-overflow:ellipsis} input{margin:0;width:12px;height:6px}"
+        " span{display:inline-block;transform:translate(1px,0)}</style>"
+        "<div>abcd<span><input type=checkbox name=past id=past></span></div>"
+        "<div><span><input type=checkbox name=kept id=kept></span>abcdefghij</div>",false);
+    forms_place();
+    check(probe_field("past")!=NULL && probe_field("past")->w->hidden,
+        "ellipsis: a control past the cut has no widget over the ellipsis");
+    check(probe_field("kept")!=NULL && !probe_field("kept")->w->hidden,
+        "ellipsis: a control the cut keeps has its widget");
+    probe_drop();
 }
 
 #include "test_yonder_requests.inc"
 
 /* A unit that includes this file for the window and its fakes alone (the
- * WPT runner) defines YONDER_HOST_FAKES_ONLY and brings its own main. */
+ * WPT runner, the replay runner) defines YONDER_HOST_FAKES_ONLY and brings
+ * its own main. */
 #ifndef YONDER_HOST_FAKES_ONLY
 int main(void)
 {

@@ -131,8 +131,9 @@ value it dropped or approximated. A tally that finds no room never marks
 the cascade incomplete. `MISSING font` is the font resolver's
 (PILE3.md § Web fonts), not this tally's.
 
-**A file, as the guest wrote it** (`/tests/pages/diag.html`, left by
-Reload, so this is the departure write):
+**A file, in the shape the build writes** (`/tests/pages/diag.html`, left
+by Reload, so this is the departure write; the times are an example, and
+a timer's task keeps the plain `failed`, since it evaluates no script):
 
     address: file:///tests/pages/diag.html
     verdict: 7 MISSING, 2 FAILED
@@ -145,15 +146,26 @@ Reload, so this is the departure write):
     MISSING css-at-rule keyframes (1)
     FAILED script file:///tests/pages/diag.html#inline-1: ReferenceError: 'nothere' is not defined (1)
     FAILED script file:///tests/pages/diag.html#timer-1: TypeError: cannot read property 'x' of null (1)
-    script file:///tests/pages/diag.html#inline-1: failed
+    script file:///tests/pages/diag.html#inline-1: failed in 1840 us
     bytes: 967
     final address: file:///tests/pages/diag.html
+    body: html
     arrived after: 271 ms
     laid out at: 828 px in 70 ms
     written: when the page was left
     pictures: 0, 0 shown, 0 could not be read, 0 past the memory kept, 0 still coming, 0 not asked for
     sheets: 1, 1 ready
     script file:///tests/pages/diag.html#timer-1: failed
+
+**A `javascript:` link's script** (MODERN_WEB.md slice 0c) is a script of
+the page's, run as one task, and recorded as one: `script
+javascript:#inline-<n>: ran in <n> us`, numbered apart from the page's
+inline scripts (the first link followed is `#inline-1`, whatever the page
+holds), and a failure `FAILED script javascript:#inline-<n>: <message>`.
+A link whose script could not be queued (the page out of scripts, or
+memory) says `FAILED script javascript:: the link's script could not be
+queued`. The libway refusal such a link used to leave, `FAILED link
+refused`, no longer happens.
 
 ### The page's fonts (S9a4, PILE3.md § Web fonts)
 
@@ -215,8 +227,11 @@ gets plain lines for its fonts at every write, after `sheets:`:
   was abandoned) writes its fonts section from its own rules and the
   families its layout staged, with their MISSING lines — never from the
   files the page on screen fetched.
-- The records: `FAILED font: <address>: <why>` for a file that did not
-  fetch, unwrap or open, or that the page's table of files could not keep,
+- The records: `FAILED font-fetch: <address>: <why>` for a file that did
+  not fetch, unwrap or open (its fetch decided it, which a replay cannot
+  reproduce: § The page kept), `FAILED font` for one never fetched (the
+  page's table of files could not keep it, or the workers would not take
+  it),
   and `MISSING font <family>` for a family with neither a page face nor a
   system family, its count the most lookups one layout made for it (each
   run of text in it, each time a list names it).
@@ -330,8 +345,12 @@ was shown, or since its record was last written on asking:
   0001, and the second run into `/home/yonder/pages` would write over the
   first run's census, host for host. The first write of a run starts one
   past the highest `-NNNN.txt` already in the directory, so `ls` still
-  lists in browse order across runs. Two yonders running at once share one
-  sequence and can collide on a name; that is left alone.
+  lists in browse order across runs. Each load then CLAIMS its name as it
+  begins (`yonder_diag_claim`, § The page kept, below): its file is made
+  only where nothing is, and a number another yonder took meanwhile is
+  passed over, so two yonders on one directory never write one name; a
+  load that finds no name it can make in 64 has no file this time, and
+  never writes over another's.
 - **A load that never became a page has a file too**: no such file, a 404
   that was not a page, out of memory starting it, too busy to start. Each
   is `FAILED page: <the status line's sentence>`. "One file per page load"
@@ -348,9 +367,20 @@ was shown, or since its record was last written on asking:
   MISSING record, and `grep -c FAILED` is the FAILED count, plus one for
   the verdict when there are any. A byte below 0x20, 0x7F and a backslash
   are written `\xHH` and `\\` on every line, so no message can begin a
-  record line of its own.
+  record line of its own. **The spelling is injective** (Codex on #326):
+  a `%` of the data's own that a reader would take for part of a
+  spelling, one beginning `%25` or one standing where `M%49SSING`'s or
+  `F%41ILED`'s does, is written `%25`, so an address holding a literal
+  `M%49SSING` is written `M%2549SSING` and reads back as itself, never as
+  MISSING; every other `%` (`75%`, `%20`) is written as it is. A reader
+  gets the data's bytes back by undoing `\\` and `\xHH`, then `M%49SSING`,
+  `F%41ILED` and `%25` in one pass from the left (`tools/yonder_records.py`'s
+  `unescape`, the replay's `rp_unescape`). Records written before this
+  wrote a `%25` of their own as it was, so in those a literal `%25` reads
+  back as `%`.
 - **The kinds are** `global`, `script` (`module`), `element`,
-  `css-property`, `css-at-rule`, `css-function`, `css-value` and `font`.
+  `css-property`, `css-at-rule`, `css-function`, `css-value` and `font`,
+  and for pictures `picture-scheme` and `image`.
   `css-value` (Fable's round-one P3, ruled in by Chris) is `<property>:
   <words>` for a property libgarb reads, in two shapes. One is a
   declaration dropped though its value is bare words (`display: inline
@@ -421,6 +451,153 @@ was shown, or since its record was last written on asking:
 | Mutants (`tools/test_yonder_diag_mutants.py`): the brief's three and fifteen more | 18 caught, none missed. The first run missed a token leaking into a fact's value; the address that spells both tokens was written for it. Round one added the token in record data, the verdict naming an empty token, and the two `css-value` shapes |
 | Guest (QEMU, ext2 root, desktop): `/tests/pages/diag.html`, Reload, files read host-side with `debugfs` | Badge `MISSING 7  FAILED 2`; the page reads `fetch: undefined, in window: false`; the arrival file has seven MISSING lines and one FAILED; the departure write adds the timer's FAILED; a second boot's first page is `-0002`, so the first run's `-0001` is kept. Not a P5 run |
 
+### The page kept, and what a replay needs (Modern Web slice 0b, 2026-10-21)
+
+REPLAY.md is the contract a kept page and a replay are held to, and
+MODERN_WEB.md § Slice 0b, as built, says what was built against it; this
+is what it added to the page file and beside it.
+
+**`keep_pages = on`** in yonder.conf, beside `diagnostics =` (it keeps
+nothing without it, and says so in the log), keeps each page next to its
+file `<name>.txt`:
+
+- `<name>.html`: the bytes as the parser was fed them, after the
+  transfer's decoding and before the characters'. They are appended to a
+  temporary file as the stream takes them and renamed into place when the
+  parse has had them all, so a page let go before then keeps nothing.
+- `<name>.d/`: each script and sheet the page fetched, as the window
+  received it, in the order each came back: `<n>.js` (a script's decoded
+  source), `<n>.css` (the bytes a sheet was parsed from). A fetch that
+  failed is a line with no file.
+- `<name>.d/index`, written whole again with each new line. Its first line
+  is `# yonder kept index 2`; more `#` lines say what the rest hold; every
+  other line is `<n> TAB <kind> TAB` what that kind carries, numbered 1 to
+  N in the order kept, a script's and a sheet's being `<url> TAB
+  came|failed TAB <final> TAB <label> TAB <job>`, `<job>` the job's own
+  identity (a script's token, a sheet's place in its page's table), so a
+  replay gives two jobs of one address each its own outcome. The index
+  grows by kind (a `fetch` line, a `storage` image), and the version moves
+  when a shape that exists changes (2 added `<job>`). Fonts and pictures are not
+  kept, and the header says so.
+
+**Each name is claimed as the load begins** (`yonder_diag_claim`): the
+record's file is made where nothing is (os64_open's `x`), no
+`<name>.html` and no `<name>.d` may be there already, kept or not, and
+with `keep_pages` the folder is then made; a number that fails any of
+these is passed over for the next. So two yonders writing one directory,
+a directory whose `.txt` was deleted and whose kept files were not, or a
+keep-off load landing on a kept page's number, never pair a record with
+another's kept files, and the bytes are never renamed over a `.html`
+already there. A folder that kept nothing is removed when the record is
+let go. The claim is what every write under the name takes
+(`yonder_diag_claim_t`), so a record that could make none of 64 fresh
+names has no claim: nothing of it is written, it is said once a run on
+the status line and in the log, and no file of anyone else's is written
+over. The claim writes a random nonce into its placeholder (`verdict:
+unwritten <nonce>`) and every record it writes after (`claim: <nonce>`),
+and the record's write proves the claimed file is still its own, by that
+nonce, before replacing it: one gone, or claimed by another yonder after
+it went, is not written over. A placeholder not known to be whole on
+disk (no memory for it, a write or a close that failed) is therefore no
+claim, since its name is not known to be this claim's: its file is
+removed, or left as a file no reader takes for a page when the unlink
+cannot remove it, and its number passed over.
+
+A step of keeping that fails, or a fresh name whose folder cannot be
+made, ends the keeping of that page,
+is said once a run on the status line and in the log, and leaves the
+plain line `kept: not whole: a step of keeping the page failed` on the
+record. The scripts and
+sheets kept before it stay, and so do the page's bytes if they were
+already whole.
+
+**A replay does not reproduce what a fetch it never performs decided**:
+pictures and fonts are not kept and never fetched in a replay. So yonder
+writes those outcomes under kinds of their own, MISSING `image` (a fetched
+picture's format) and FAILED `picture-fetch` and `font-fetch` (what a
+fetch, or the bytes it brought, came to); a replay's record names those
+kinds on a `REPLAY not reproduced:` line, and their lines are judged on
+neither side of a comparison (`tools/yonder_corpus_diff.py`). A picture or
+a font decided without a fetch (`MISSING picture-scheme`, `FAILED
+picture` for an address refused or never asked for, `MISSING font`) is
+reproduced and compared.
+
+**What a record is when it cannot be judged.** A claimed name holds
+`address: ...` and `verdict: unwritten` until the record replaces it, so a
+yonder that dies after claiming leaves a file no reader judges or counts
+(the census tally names it as damage), never a page that met nothing. And
+a record that lost ANY line (no room in its tables, no memory to keep a
+line or a value) says so with one marker, `REPLAY unjudged: lines lost`,
+beside the counts of what went; a replay and the corpus diff take it as
+unjudged, since the line it lost may be the one a change made, while the
+tally counts the lines it kept. A record whose window changed under its
+load says so the same way, `REPLAY unjudged: settings changed during the
+load`: a setting it records that is not what the claim wrote when the
+record is written (the agent, scripts on or off, the modern switch, zoom,
+appearance, motion, animations, the script time limit), or a page laid
+out in another view than the claim's. A replay cannot read one page in
+two windows. A view that moves after the page arrived is not marked: it
+also moves when yonder's own bars come and go, which a replay reproduces.
+A page kept whole says `kept: whole`, the kept page a replay replays (one
+of version 1, recorded before that fact, it assumes kept whole when its
+bytes are beside it, and says so), and every record says `bytes: N`, what
+the parser was fed, and every kept page's says `kept lines: N`, from 0
+at its claim, how many lines its index holds: on the host nothing else
+binds a record to its kept files (REPLAY.md § 3 states that as the rule,
+and DECLINED.md's row "Kept bytes bound to their record by length" why
+no digest binds them by content).
+
+**The facts a replay rebuilds the head from**, on every page's record now:
+`final address` (written when the parse ends, so a page let go unshown
+has one too), `body` (`html`, `text` or `image`: what libway judged the
+body to be), and for a page from the network `content-type` and `charset`
+as the server named them (empty when it named none) and `encrypted`
+(`yes`/`no`), and its `status` (`0` when its protocol has none). And the
+page's other inputs, written at the claim as in force for the load,
+first: `agent` (the User-Agent the window's requests carry), `clock` (the wall clock
+in epoch milliseconds, which a script's `Date` starts from) and `tz` (the
+zone it reads local time in: the `TZ` in force, or `<n>m`, the machine's
+configured minutes east, when there is none); and, at the head, before
+the parser is fed a byte, `cookies` (the jar's `document.cookie` string
+then, for the final address and the transport it arrived over, with
+every Set-Cookie of the head's own hops heard: libway's script door, so
+never an HttpOnly cookie; one past 1 MiB, or with no memory to hold it,
+is not written, and the record says it lost lines; a load that never had
+a head has none). The jar can move after the head and before a script
+reads it (a script's own `src` response, a sheet a script waits for, the
+page still on screen, an expiry), and a replay sees none of that
+(REPLAY.md § 3's jar row). A record that says any of
+those four is of VERSION 2 (REPLAY.md § 3), and a replay requires all of
+them; a kept page recorded before them is of version 1, and a replay of
+it takes its cookies and clock from its harness, and its agent, zone and
+any window input its record does not say from what the person running
+it states (`--window`), saying which on its record (REPLAY.md § 3). Then
+the window
+it was read in: `modern` (`on`/`off`), `laid out at` (the view's `<width>x<height> px`,
+again at arrival with ` in <n> ms`), `zoom` (per mille), `appearance`
+(`light`/`dark`), `motion` (`full`/`reduce`), `animate` (`on`/`off`: whether
+animations run),
+`scripts` (`on`/`off`) and
+`script seconds`. These, `TLS`, `kept` and `kept lines` have room of their
+own (24 lines, counted apart from the 512 the other plain lines may take:
+`yonder_diag_head_fact`), so
+a page with more plain lines than that never loses one of these; it does
+lose the others, and is unjudged. A replay requires every one of them its
+page needs (a file's page has no status, type, charset or encryption)
+rather than assume any, reads the page in the window they say, and reads
+every line of the record by one grammar
+(`tools/yonder_record_grammar.txt` holds its vectors). Every record
+yonder writes ends with the line `end`, which both readers require of a
+replay's record and of a kept page's record of version 2 (one that says
+`kept:` or `kept lines:`); a kept page of version 1 may lack it, and its
+`kept: whole`, written last, stands for it.
+
+**A script's line carries its evaluation time**: `script <address>: ran in
+1520 us`, or `failed in ...`, the time `os64_js_run` took, compiling
+included. An event's or a timer's task, and a script that never reached
+the engine (its fetch failed), keep the plain `ran`/`failed`. QEMU's
+numbers are not a speed; the P5's are.
+
 ## Batch 1: what the first census taught the instrument
 
 Chris's first P5 census (google.com, danlegt.com, theoldnet.com and its
@@ -445,7 +622,8 @@ now worth trusting.
   <format>`**, named by its first bytes (`yonder_diag_image_format`:
   `svg`, past an XML prolog, `webp`, `avif`, `ico`, `tiff`, or
   `unknown`), with its address on a plain line. A picture that failed
-  any other way is `FAILED picture` (Batch 3).
+  any other way is `FAILED picture-fetch` when its fetch decided it, and
+  `FAILED picture` when it was never fetched (Batch 3; § The page kept).
 - **A script is recorded by its whole address.** The engine's source name
   stops at OS64_JS_SOURCE_NAME_CAP (128); the host keeps each `src`
   script's address and the record names the task's script by it
@@ -517,7 +695,7 @@ each was a page dying on something that browsers have had since the 2000s.
   `pictures: 82, 0 shown`: that was the arrival write, from before any
   picture had come, and the failed picture had no line naming it. Now a
   picture that would not fetch, came with an error, or would not decode
-  is `FAILED picture: <address>: <why>`. The worker writes the why
+  is `FAILED picture-fetch: <address>: <why>`. The worker writes the why
   (`yonder_picture_t.why`): `HTTP 404`, `did not fetch (tls-failed)`,
   `could not be read`, `would not decode (malformed image)`. An error's
   body is no longer decoded as the picture: an HTML 404 page used to be

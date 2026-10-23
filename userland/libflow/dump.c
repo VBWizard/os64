@@ -288,7 +288,7 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
     // the initial style a root inherits from.
     if (parent == NULL) {
         os64_memset(&base, 0, sizeof(base));
-        base.family = (flow_family_list_t){NULL, 0, env->default_generic};
+        base.family = (flow_family_list_t){.generic = env->default_generic};
         base.font_weight = 400;
         base.font_size = (flow_unit_t)env->viewport_font_px * FLOW_UNITS_PER_PX;
         base.color = env->ink;
@@ -392,6 +392,12 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         }
     if (s->box_sizing == FLOW_BORDER_BOX)
         puts_(b, " border-box");
+    if (s->aspect_ratio > 0) {
+        // To three places: the ratio is a double, and a dump is text.
+        int64_t milli = (int64_t)(s->aspect_ratio * 1000 + 0.5);
+        putf(b, " aspect-ratio=%s%lld.%03lld", s->aspect_natural ? "auto/" : "",
+             (long long)(milli / 1000), (long long)(milli % 1000));
+    }
     static const char *const kOverflow[] = {"visible", "hidden", "clip", "scroll", "auto"};
     if (s->overflow_x != FLOW_OVERFLOW_VISIBLE || s->overflow_y != FLOW_OVERFLOW_VISIBLE)
         putf(b, " overflow=%s/%s", kOverflow[s->overflow_x], kOverflow[s->overflow_y]);
@@ -417,12 +423,34 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
     }
     if (s->text_transform != parent->text_transform)
         putf(b, " transform=%s", s_transform[s->text_transform]);
+    static const char *const kWordBreak[] = {"normal", "keep-all", "break-all", "break-word"};
+    static const char *const kOverflowWrap[] = {"normal", "break-word", "anywhere"};
+    if (s->word_break != parent->word_break)
+        putf(b, " word-break=%s", kWordBreak[s->word_break]);
+    if (s->overflow_wrap != parent->overflow_wrap)
+        putf(b, " overflow-wrap=%s", kOverflowWrap[s->overflow_wrap]);
+    if (s->letter_spacing != parent->letter_spacing) {
+        puts_(b, " letter-spacing=");
+        unit(b, s->letter_spacing);
+    }
     if (s->text_decoration & FLOW_DECORATION_UNDERLINE)
         puts_(b, " underline");
     if (s->text_decoration & FLOW_DECORATION_LINE_THROUGH)
         puts_(b, " line-through");
     if (s->visibility != parent->visibility)
         putf(b, " visibility=%s", s_visibility[s->visibility]);
+    if (s->text_overflow == FLOW_TEXT_OVERFLOW_ELLIPSIS)
+        puts_(b, " text-overflow=ellipsis");
+    static const char *const kObjectFit[] = {"fill", "contain", "cover", "none", "scale-down"};
+    if (s->object_fit != FLOW_OBJECT_FILL)
+        putf(b, " object-fit=%s", kObjectFit[s->object_fit]);
+    const flow_length_t half = {FLOW_LENGTH_PERCENT, 50 * 64, 0};
+    if (!length_eq(s->object_position[0], half) || !length_eq(s->object_position[1], half)) {
+        puts_(b, " object-position=");
+        length(b, s->object_position[0]);
+        puts_(b, "/");
+        length(b, s->object_position[1]);
+    }
     if (s->pixelated != parent->pixelated)
         puts_(b, s->pixelated ? " pixelated" : " smooth");
     if (s->list_style_type != parent->list_style_type)
@@ -457,6 +485,21 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
         putf(b, " opacity=%d.%03d", s->opacity / 1000, s->opacity % 1000);
     if (s->pointer_events_none != parent->pointer_events_none)
         puts_(b, s->pointer_events_none ? " pointer-events=none" : " pointer-events=auto");
+    if (s->outline_width > 0 && s->outline_style != FLOW_BORDER_NONE) {
+        puts_(b, " outline=");
+        unit(b, s->outline_width);
+        putf(b, ":%s:", s->outline_auto ? "auto" : s_border[s->outline_style]);
+        color(b, env, s->outline_color);
+        if (s->outline_offset != 0) {
+            puts_(b, " outline-offset=");
+            unit(b, s->outline_offset);
+        }
+    }
+    if (s->cursor != parent->cursor)
+        putf(b, " cursor=%s", f_cursor_words[s->cursor]);
+    static const char *const kUserSelect[] = {"auto", "text", "none", "contain", "all"};
+    if (s->user_select != FLOW_USER_SELECT_AUTO)
+        putf(b, " user-select=%s", kUserSelect[s->user_select]);
     if (s->flex_direction != FLOW_FLEX_ROW)
         putf(b, " flex-direction=%s", s_direction[s->flex_direction]);
     if (s->flex_wrap != FLOW_FLEX_NOWRAP)

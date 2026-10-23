@@ -65,7 +65,7 @@ static bool matches(const DQuery *query, const os64_html_node_t *node)
             ? os64_html_attr(node, "name") : NULL;
         return name != NULL && os64_streq(name->value, query->named);
     }
-    if (query->kind != D_QUERY_GENERIC && !d_classic_match(query->dom, query->owner != NULL ? query->owner : query->root, node, query->kind)) return false;
+    if (query->kind != D_QUERY_GENERIC && !d_classic_match(query->owner != NULL ? query->owner : query->root, node, query->kind)) return false;
     if (query->named != NULL && !d_named_match(node, query->named)) return false;
     if (query->name == NULL || os64_strcmp(query->name, "*") == 0) return true;
     return node->kind == OS64_HTML_ELEMENT && node->name != NULL &&
@@ -80,7 +80,7 @@ static bool refresh(DQuery *query, JSContext *ctx)
     if (query->kind == D_QUERY_CONTROLS && query->owner != NULL) {
         const os64_html_node_t *root = query->owner;
         while (root->parent != NULL) root = root->parent;
-        if (root != query->dom->document->document) root = query->owner;
+        if (root->kind != OS64_HTML_DOCUMENT) root = query->owner;
         if (root != query->root) {
             os64_html_hold(query->dom->document, root);
             os64_html_release(query->dom->document, query->root);

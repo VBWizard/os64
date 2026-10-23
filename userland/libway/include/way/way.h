@@ -43,9 +43,10 @@
 
 // WHERE A PERSON WAS ON A PAGE, in the face's own terms — wend keeps a row
 // and a selection, yonder a scroll offset in pixels. The library stores it
-// and hands it back without reading it. It is a HINT: going back is a fetch,
-// and the page that comes back need not be the page that was left, so a
-// face checks it against what arrived before trusting it into an array.
+// and hands it back without reading it. It is a HINT: going back to another
+// document is a fetch, and the page that comes back need not be the page
+// that was left, so a face checks it against what arrived before trusting
+// it into an array.
 typedef struct {
     uint8_t bytes[WAY_POSITION_MAX];
 } way_position_t;
@@ -95,9 +96,24 @@ typedef struct {
     void (*progress)(void *ctx, const char *sentence);
 } way_face_t;
 
+// ONE ENTRY OF THE HISTORY (HTML § Session history): where it was, and
+// where on it the person was. `document` is the face's own name for the
+// document the entry was shown in, 0 for none: two crumbs naming one
+// nonzero document are entries of that one document, and moving between
+// them is no fetch. `entry` is the face's own name for the entry itself, 0
+// for none, so a face can find one again wherever the list has moved it.
+// `state` is what the document's script left with the entry
+// (history.pushState's, serialised as the face's binding chose),
+// NUL-terminated, NULL for none. The library stores them and reads none.
+// A crumb IN THE SESSION OWNS its state: way_last and way_next copy one out
+// with its state BORROWED, good until the session next changes, and only
+// the _entry calls below hand a state in or out.
 typedef struct {
     char url[OS64_FETCH_URL_MAX];
     way_position_t position;
+    uint64_t document;
+    uint64_t entry;
+    char *state;
 } way_crumb_t;
 
 // A session is LARGE — its history is WAY_HISTORY_MAX addresses of up to
@@ -158,6 +174,11 @@ typedef struct {
     // a refresh — which its Referer names (way_referrer). Empty for an
     // address typed, Back, Forward and Reload.
     char referrer[OS64_FETCH_URL_MAX];
+    // way_open's own, for way_head_t.redirects: the origin of the address
+    // asked for, and the number of the first hop that left it (0 for none).
+    os64_url_t asked_origin;
+    bool asked_parsed;
+    uint32_t left_at;
 } way_leg_t;
 
 // A leg for `session`, with the session's own face and agent and an empty
@@ -224,6 +245,10 @@ typedef struct {
     uint16_t tls_version;
     bool tls_fallback;
     way_body_t body;
+    // Navigation Timing's redirectCount: the redirects followed to get here
+    // when every one stayed on the origin of the address asked for, and 0
+    // when there were none or any left it. way_open's alone.
+    uint32_t redirects;
 } way_head_t;
 
 // A fetch open with its head read and judged a page. The fetch is the
@@ -339,22 +364,43 @@ bool way_details_flip(way_page_t *page, const os64_html_node_t *details);
 // ── The history ─────────────────────────────────────────────────────────
 
 // Remembers the page being left, and where on it the person was. This is
-// a NEW way, so Forward has nowhere left to go.
+// a NEW way, so Forward has nowhere left to go, and the states of the
+// crumbs that were ahead are freed.
 void way_remember(way_session_t *session, const char *url, const way_position_t *where);
+// The same, for an entry the face describes whole: the crumb is copied in
+// and its state TAKEN (`left->state` is NULL after).
+void way_remember_entry(way_session_t *session, way_crumb_t *left);
+// What is ahead is let go and its states freed, as a push lets it go.
+void way_forget_ahead(way_session_t *session);
 
-// The crumb Back would return to. False, with the sentence, when there is
-// none. The crumb stays until the face says it went: Back is a fetch, and
-// one that fails must leave the history as it was.
+// The crumb Back would return to, its state borrowed. False, with the
+// sentence, when there is none. The crumb stays until the face says it
+// went: Back to another document is a fetch, and one that fails must leave
+// the history as it was.
 bool way_last(way_session_t *session, way_crumb_t *out);
 // Back arrived and nothing is kept for Forward (wend has no Forward).
 void way_forget_last(way_session_t *session);
 // Back arrived: the crumb is spent, and the page left is where Forward goes.
 void way_went_back(way_session_t *session, const char *url, const way_position_t *where);
+// The same, for entries the face describes whole: the crumb way_last
+// answered is moved out to `arrived`, its state the caller's now (zeroed
+// when there was none), and `left` is copied in where Forward goes, its
+// state taken.
+void way_went_back_entry(way_session_t *session, way_crumb_t *left, way_crumb_t *arrived);
 
 // The crumb Forward would go to, and its arrival, the mirror of Back's:
 // the page left joins the history without emptying what is ahead.
 bool way_next(way_session_t *session, way_crumb_t *out);
 void way_went_forward(way_session_t *session, const char *url, const way_position_t *where);
+void way_went_forward_entry(way_session_t *session, way_crumb_t *left, way_crumb_t *arrived);
+// An entry put where Forward goes next, its state taken, so a face pushes
+// the furthest first; past WAY_HISTORY_MAX the furthest is let go. What a
+// face does with entries a page made ahead of itself before it was shown.
+void way_forward_entry(way_session_t *session, way_crumb_t *ahead);
+
+// Every crumb's state freed and both lists emptied: what a face does with
+// a session it is done with.
+void way_history_clear(way_session_t *session);
 
 // ── Judgements: what to do about a request a page makes ────────────────
 

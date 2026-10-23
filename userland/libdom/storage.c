@@ -15,16 +15,20 @@
  * of its own writes, and a commit hands over the change list alone, which
  * the host merges onto the store as the store then stands: two windows on
  * one origin lose nothing of each other's but the same key written by
- * both, where the later commit wins. clear() is a removal of every key the
+ * both, where the later commit wins, as far as the host's merge sees each
+ * commit (two in the same instant are the host's to settle). clear() is a
+ * removal of every key the
  * page could see, so it cannot take away a key another window added after.
  *
  * An area's map and change list are not the binding's budget's: each is
  * held to the quota (OS64_DOM_STORAGE_QUOTA) and to OS64_DOM_STORAGE_KEYS
  * keys, and freed with the binding. A setItem past either throws; a change
  * list that would pass either is committed early instead, since what it
- * holds is the page's own writes and removals. The keys' cap bounds what
- * the quota cannot: a key of one character costs the quota two bytes and
- * the heap a record, and a page could otherwise make millions of them. */
+ * holds is the page's own writes and removals, and a change it still has
+ * no room for (no memory to write the list) is refused as a full store's
+ * is. The keys' cap bounds what the quota cannot: a key of one character
+ * costs the quota two bytes and the heap a record, and a page could
+ * otherwise make millions of them. */
 
 #define MAGIC "os64 storage 1\n"
 #define MAGIC_LENGTH (sizeof(MAGIC) - 1)
@@ -378,7 +382,10 @@ os64_dom_storage_status_t os64_dom_storage_merge(const void *image, size_t image
 {
     if (out != NULL) *out = NULL;
     if (out_length != NULL) *out_length = 0;
-    if (out == NULL || out_length == NULL || (image == NULL && image_length != 0) || changes == NULL)
+    /* No store is NULL; an image, even an empty file's bytes, is in the
+     * format or is not one this binding wrote. */
+    if (out == NULL || out_length == NULL || (image == NULL && image_length != 0) ||
+        (image != NULL && image_length == 0) || changes == NULL)
         return OS64_DOM_STORAGE_FAILED;
     DMap map = {0};
     if (!map_read(&map, image, image_length)) {
@@ -529,22 +536,23 @@ static DStorageArea *area_touch(os64_dom_t *dom, JSContext *ctx, os64_dom_storag
  * window's changes merged in. A store that could not be written leaves the
  * area to memory; one that was full drops the changes, so the page reads
  * back what the store kept. Changes that could not be written down for
- * want of memory, or that a busy store could not take, wait for the next
- * commit. */
-static void area_commit(DStorageArea *area, bool last)
+ * want of memory wait for the next commit, COMMIT_MS on. */
+static void area_commit(DStorageArea *area)
 {
     os64_dom_t *dom = area->dom;
     if (!kept(dom, area) || area->changes.count == 0) return;
     size_t length;
     char *changes = map_write(&area->changes, &length);
+    /* A commit that could not be made for want of memory counts as one
+     * for the schedule: the next is COMMIT_MS on, and the host's loop waits
+     * for it rather than asking again every turn. */
+    area->committed = true;
+    area->committed_at = now_ms(dom);
     if (changes == NULL) return;
     const os64_dom_storage_t *provider = &dom->storage_providers[area->which];
     os64_dom_storage_status_t status = provider->commit != NULL
-        ? provider->commit(provider->opaque, area->origin, changes, length, last) : OS64_DOM_STORAGE_FAILED;
+        ? provider->commit(provider->opaque, area->origin, changes, length) : OS64_DOM_STORAGE_FAILED;
     os64_free(changes);
-    area->committed = true;
-    area->committed_at = now_ms(dom);
-    if (status == OS64_DOM_STORAGE_BUSY) return;
     map_free(&area->changes);
     if (status == OS64_DOM_STORAGE_FAILED) area->memory = true;
     else area->loaded = false;
@@ -577,7 +585,7 @@ void os64_dom_storage_settle(os64_dom_t *dom)
         DStorageArea *area = dom->storage[i];
         if (area == NULL) continue;
         area->asked = false;
-        if (area_due(area) <= now) area_commit(area, false);
+        if (area_due(area) <= now) area_commit(area);
     }
 }
 
@@ -604,20 +612,10 @@ void os64_dom_storage_forget(os64_dom_t *dom)
     }
 }
 
-static void commit_all(os64_dom_t *dom, bool last)
-{
-    for (int i = 0; i < OS64_DOM_STORAGE_AREAS; i++)
-        if (dom->storage[i] != NULL) area_commit(dom->storage[i], last);
-}
-
-void os64_dom_storage_flush(os64_dom_t *dom)
-{
-    if (dom != NULL) commit_all(dom, false);
-}
-
 void d_storage_drain(os64_dom_t *dom)
 {
-    commit_all(dom, true);
+    for (int i = 0; i < OS64_DOM_STORAGE_AREAS; i++)
+        if (dom->storage[i] != NULL) area_commit(dom->storage[i]);
 }
 
 void d_storage_free(os64_dom_t *dom)
@@ -634,28 +632,42 @@ void d_storage_free(os64_dom_t *dom)
 
 /* ── The Storage interface ───────────────────────────────────────────── */
 
+/* Whether `count` more records costing `cost` fit the change list beside
+ * what it holds: at most the keys' cap and the quota. */
+static bool changes_fit(const DMap *changes, size_t count, size_t cost)
+{
+    return count <= OS64_DOM_STORAGE_KEYS - (changes->count < OS64_DOM_STORAGE_KEYS ? changes->count
+                                                                                    : OS64_DOM_STORAGE_KEYS) &&
+           cost <= OS64_DOM_STORAGE_QUOTA - (changes->used < OS64_DOM_STORAGE_QUOTA ? changes->used
+                                                                                    : OS64_DOM_STORAGE_QUOTA);
+}
+
 /* Room in the change list for `count` more records costing `cost`. A list
  * that would pass the quota or the keys' cap is committed now rather than
  * when it is due: a page that sets and removes key after key in one task
- * would otherwise hold every key it removed until its next commit. */
-static void changes_room(DStorageArea *area, size_t count, size_t cost)
+ * would otherwise hold every key it removed until its next commit. False
+ * when the commit did not make the room (no memory to write the list): the
+ * change is refused, so what this page writes never takes the list past
+ * its bound. A clear() of a map another window grew past the keys' cap
+ * can, until the next commit. */
+static bool changes_room(DStorageArea *area, size_t count, size_t cost)
 {
-    const DMap *changes = &area->changes;
-    if (changes->count != 0 && kept(area->dom, area) &&
-        (count > OS64_DOM_STORAGE_KEYS - (changes->count < OS64_DOM_STORAGE_KEYS ? changes->count
-                                                                                  : OS64_DOM_STORAGE_KEYS) ||
-         cost > OS64_DOM_STORAGE_QUOTA - (changes->used < OS64_DOM_STORAGE_QUOTA ? changes->used
-                                                                                 : OS64_DOM_STORAGE_QUOTA)))
-        area_commit(area, false);
+    if (!kept(area->dom, area) || changes_fit(&area->changes, count, cost)) return true;
+    area_commit(area);
+    return !kept(area->dom, area) || changes_fit(&area->changes, count, cost);
 }
 
 /* A change, made to the map and remembered for the commit together, or
- * not at all: false on no memory, with neither touched. */
+ * not at all: false on no memory, or with no room in the change list
+ * (changes_room), with neither touched. */
 static bool area_change(DStorageArea *area, const char *key, size_t key_length, const char *value,
                         size_t value_length)
 {
-    changes_room(area, map_find(&area->changes, key, key_length, hash_of(key, key_length)) < 0 ? 1 : 0,
-                 item_cost(key_length, key, value_length, value));
+    /* A change to a key already in the list replaces its record there. */
+    ptrdiff_t listed = map_find(&area->changes, key, key_length, hash_of(key, key_length));
+    size_t cost = item_cost(key_length, key, value_length, value);
+    size_t replaced = listed >= 0 ? cost_of(&area->changes.items[listed]) : 0;
+    if (!changes_room(area, listed < 0 ? 1 : 0, cost > replaced ? cost - replaced : 0)) return false;
     bool remember = kept(area->dom, area);
     DItem in_map = {0}, in_changes = {0};
     if (value != NULL && (!map_reserve(&area->map) || !item_make(&in_map, key, key_length, value, value_length)))
@@ -676,18 +688,24 @@ static bool area_change(DStorageArea *area, const char *key, size_t key_length, 
 
 /* clear(): a removal of each key the page can see, remembered for the
  * commit, so a key another window adds before it is not taken with them.
- * Every removal is made before any is kept: false on no memory, with
- * nothing changed. */
+ * Every removal is made before any is kept: false on no memory, or with
+ * no room in the change list, with nothing changed. A key already in the
+ * list has its record there replaced, so the room asked for is the keys
+ * not yet listed and what the removals cost past the records they
+ * replace, as area_change asks for one. */
 static bool area_clear(DStorageArea *area)
 {
     size_t count = area->map.count;
     if (count == 0) return true;
-    size_t cost = 0;
+    size_t fresh = 0, cost = 0, replaced = 0;
     for (size_t i = 0; i < count; i++) {
         const DItem *item = &area->map.items[i];
         cost += item_cost(item->key_length, item->bytes, 0, NULL);
+        ptrdiff_t listed = map_find(&area->changes, item->bytes, item->key_length, item->hash);
+        if (listed >= 0) replaced += cost_of(&area->changes.items[listed]);
+        else fresh++;
     }
-    changes_room(area, count, cost);
+    if (!changes_room(area, fresh, cost > replaced ? cost - replaced : 0)) return false;
     if (kept(area->dom, area)) {
         DItem *made = os64_malloc(count * sizeof(*made));
         if (made == NULL || !map_reserve_n(&area->changes, count)) {

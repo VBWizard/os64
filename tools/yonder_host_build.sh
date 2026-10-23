@@ -7,6 +7,9 @@
 #   . tools/yonder_host_build.sh        (after cd to the top of the tree)
 #   yonder_host_build "$work" <unit.c> <binary> [flags for the unit alone]
 #
+# YONDER_HOST_UNITS names more sources of the suite's own, built beside the
+# unit as translation units of their own (the replay runner's file door).
+#
 # A failed build says so on stderr and answers 2, not only in a log nobody
 # reads: a mutant harness counts any failure as its catch.
 
@@ -32,16 +35,16 @@ yonder_host_build() {
         -Iabi/include -Itools -Itools/fonts
         -isystem userland/obj/js/upstream -fsanitize=address,undefined -fno-sanitize-recover=all)
     local objects=() source object private
-    for source in "$unit" tools/test_js_port_calendar.c tools/test_libflow_fonts.c \
-        userland/libjs/runtime/runtime.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin,modern}.c \
-        userland/libdom/{storage,performance,url,encoding,screen,base64}.c \
+    for source in "$unit" ${YONDER_HOST_UNITS:-} tools/test_js_port_calendar.c tools/test_libflow_fonts.c \
+        userland/libjs/runtime/runtime.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin,modern,view}.c \
+        userland/libdom/{storage,performance,url,encoding,screen,base64,implementation}.c \
         userland/libdom/{exception,abort,blob,fetch,xhr}.c \
         userland/apps/yonder/{scripts,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag}.c \
         userland/apps/yonder/storage.c \
         userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize}.c \
         userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \
         userland/libpage/upstream/ryu/ryu/d2s.c \
-        userland/libflow/{store,attrs,style,motion,dump,boxes,layout,flow}.c \
+        userland/libflow/{store,attrs,style,motion,dump,boxes,layout,flow,computed}.c \
         userland/libgarb/{tokenize,parse,decode,dump,select,values,props,media,cascade}.c \
         userland/libway/session.c userland/libway/origin.c userland/libway/jar.c \
         userland/apps/yonder/fetch_job.c \

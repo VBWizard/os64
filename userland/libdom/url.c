@@ -665,11 +665,18 @@ static int url_assign(os64_dom_t *dom, JSContext *ctx, DUrl *url, int which, JSV
     case U_HOST: case U_HOSTNAME: {
         /* The host state's override: up to the path, the query or the
          * fragment. host takes a port with it, and keeps the address's
-         * when it names none; hostname is refused one. */
+         * when it names none; hostname is refused one. A file address
+         * has no port, and an empty value takes its host away
+         * (file://server/share becomes file:///share, the file host
+         * state's empty host); no other special scheme's host is empty. */
         if (!p.authority) break;
         size_t end = span_until(&text, 0, scheme_special ? "/?#\\" : "/?#");
         size_t colon = span_until(&text, 0, ":");
-        if (which == U_HOSTNAME && colon < end) break;
+        if (file && end == 0) {
+            built = splice(href, length, p.host, p.host_end, "", 0, candidate, OS64_DOM_URL_MAX);
+            break;
+        }
+        if ((which == U_HOSTNAME || file) && colon < end) break;
         if (colon == 0 || (end == 0 && scheme_special)) break;
         size_t to = which == U_HOST && colon < end ? p.port_end : p.host_end;
         built = splice(href, length, p.host, to, text.data, end, candidate, OS64_DOM_URL_MAX);
@@ -796,7 +803,9 @@ static JSValue url_member(JSContext *ctx, JSValueConst self, int argc, JSValueCo
 /* Each value an iterable yields, by ECMAScript's iteration (what WebIDL's
  * sequence conversion runs) through `method`, its @@iterator, handed to
  * `each`, which owns it and answers -1 to stop with an exception pending.
- * -1 thrown. */
+ * -1 thrown. A stop does not call the iterator's `return`: WebIDL's
+ * "create a sequence from an iterable" converts each item as it comes and
+ * lets a failure propagate with no IteratorClose. */
 static int each_value(JSContext *ctx, JSValueConst iterable, JSValueConst method,
                       int (*each)(void *opaque, JSValue value), void *opaque)
 {
@@ -841,18 +850,25 @@ static JSValue iterator_method(os64_dom_t *dom, JSContext *ctx, JSValueConst obj
     return method;
 }
 
-/* One inner sequence: its first two items, and how many it had. */
+/* One inner sequence, sequence<USVString>: each item converted as it
+ * arrives, as WebIDL converts a sequence's items, its first two kept, and
+ * how many it had. */
 typedef struct {
+    os64_dom_t *dom;
     JSContext *ctx;
-    JSValue items[2];
+    DString items[2];
     uint32_t count;
 } Pair;
 
 static int pair_item(void *opaque, JSValue value)
 {
     Pair *pair = opaque;
-    if (pair->count < 2) pair->items[pair->count] = value;
-    else JS_FreeValue(pair->ctx, value);
+    DString text = {0};
+    bool ok = d_string_text(pair->dom, pair->ctx, value, &text, true);
+    JS_FreeValue(pair->ctx, value);
+    if (!ok) return -1;
+    if (pair->count < 2) pair->items[pair->count] = text;
+    else d_string_free(pair->dom, &text);
     if (pair->count < UINT32_MAX) pair->count++;
     return 0;
 }
@@ -861,37 +877,96 @@ typedef struct {
     os64_dom_t *dom;
     JSContext *ctx;
     DParams *params;
+    bool odd;                   /* an inner sequence's size was not 2 */
 } Pairs;
 
-/* sequence<sequence<USVString>>'s outer item: an inner sequence of exactly
- * two strings, which becomes a pair. */
+/* sequence<sequence<USVString>>'s outer item, an inner sequence, which
+ * becomes a pair. Its size is judged by the constructor once the whole
+ * sequence is converted, as the URL Standard's steps judge it. */
 static int pairs_item(void *opaque, JSValue value)
 {
     Pairs *pairs = opaque;
     JSContext *ctx = pairs->ctx;
     os64_dom_t *dom = pairs->dom;
-    Pair pair = {ctx, {JS_UNDEFINED, JS_UNDEFINED}, 0};
+    Pair pair = {dom, ctx, {{0}, {0}}, 0};
     JSValue method = JS_IsObject(value) ? iterator_method(dom, ctx, value) : JS_UNDEFINED;
     int result = -1;
     if (!JS_IsException(method) && (JS_IsUndefined(method) || JS_IsNull(method)))
         JS_ThrowTypeError(ctx, "Each pair must be a sequence");
     else if (!JS_IsException(method) && each_value(ctx, value, method, pair_item, &pair) == 0) {
-        if (pair.count != 2) JS_ThrowTypeError(ctx, "Each pair must have exactly two items");
-        else {
-            DString text[2] = {{0}, {0}};
-            if (d_string_text(dom, ctx, pair.items[0], &text[0], true) &&
-                d_string_text(dom, ctx, pair.items[1], &text[1], true))
-                result = pair_add(ctx, pairs->params, text[0].data, text[0].length, text[1].data, text[1].length,
-                                  false);
-            d_string_free(dom, &text[0]);
-            d_string_free(dom, &text[1]);
+        if (pair.count != 2) {
+            pairs->odd = true;
+            result = 0;
+        } else if (!pairs->odd) {
+            result = pair_add(ctx, pairs->params, pair.items[0].data, pair.items[0].length, pair.items[1].data,
+                              pair.items[1].length, false);
+        } else {
+            result = 0;
         }
     }
-    JS_FreeValue(ctx, pair.items[0]);
-    JS_FreeValue(ctx, pair.items[1]);
+    d_string_free(dom, &pair.items[0]);
+    d_string_free(dom, &pair.items[1]);
     JS_FreeValue(ctx, method);
     JS_FreeValue(ctx, value);
     return result;
+}
+
+/* The record's keys that hold U+FFFD once converted, an open-addressed
+ * index of pair positions (plus one) over them: only such keys can meet
+ * one another, two different JavaScript strings becoming one USVString, so
+ * only they are looked up, and each lookup is a few probes whatever the
+ * record's size. */
+typedef struct {
+    uint32_t *slots;
+    size_t nslots, used;
+} Replaced;
+
+/* The probes made, for the DOM host to hold record conversion to a bound;
+ * a count to read, not synchronized. */
+static uint64_t s_record_probes;
+
+uint64_t d_url_record_probes(void)
+{
+    return s_record_probes;
+}
+
+static uint32_t key_hash(const char *key, size_t length)
+{
+    uint32_t hash = 2166136261u;
+    for (size_t i = 0; i < length; i++) hash = (hash ^ (unsigned char)key[i]) * 16777619u;
+    return hash;
+}
+
+/* The slot holding the pair named `key`, or the empty slot where it goes. */
+static size_t replaced_slot(const Replaced *r, const DParams *params, const char *key, size_t length)
+{
+    size_t mask = r->nslots - 1;
+    for (size_t at = key_hash(key, length) & mask;; at = (at + 1) & mask) {
+        s_record_probes++;
+        uint32_t held = r->slots[at];
+        if (held == 0) return at;
+        const DPair *pair = &params->pairs[held - 1];
+        if (pair->name_length == length && os64_memcmp(pair->name, key, length) == 0) return at;
+    }
+}
+
+/* Room for one more key, at most half the slots in use. False on no
+ * memory. */
+static bool replaced_reserve(JSContext *ctx, Replaced *r, const DParams *params)
+{
+    if (r->nslots != 0 && (r->used + 1) * 2 <= r->nslots) return true;
+    size_t nslots = r->nslots != 0 ? r->nslots * 2 : 64;
+    uint32_t *slots = js_mallocz(ctx, nslots * sizeof(*slots));
+    if (slots == NULL) return false;
+    Replaced grown = {slots, nslots, r->used};
+    for (size_t i = 0; i < r->nslots; i++)
+        if (r->slots[i] != 0) {
+            const DPair *pair = &params->pairs[r->slots[i] - 1];
+            slots[replaced_slot(&grown, params, pair->name, pair->name_length)] = r->slots[i];
+        }
+    js_free(ctx, r->slots);
+    *r = grown;
+    return true;
 }
 
 /* WebIDL's record<USVString, USVString>: the object's own enumerable
@@ -901,6 +976,7 @@ static int params_from_record(os64_dom_t *dom, JSContext *ctx, DParams *params, 
     JSPropertyEnum *keys;
     uint32_t count;
     if (JS_GetOwnPropertyNames(ctx, &keys, &count, record, JS_GPN_STRING_MASK) < 0) return -1;
+    Replaced index = {NULL, 0, 0};
     int result = 0;
     for (uint32_t i = 0; result == 0 && i < count; i++) {
         JSPropertyDescriptor desc;
@@ -926,11 +1002,15 @@ static int params_from_record(os64_dom_t *dom, JSContext *ctx, DParams *params, 
         for (size_t at = 0; ok && at + 2 < text[0].length && !replaced; at++)
             replaced = (unsigned char)text[0].data[at] == 0xef && (unsigned char)text[0].data[at + 1] == 0xbf &&
                        (unsigned char)text[0].data[at + 2] == 0xbd;
+        size_t slot = 0;
         DPair *same_key = NULL;
-        for (size_t at = 0; ok && replaced && at < params->count && same_key == NULL; at++)
-            if (params->pairs[at].name_length == text[0].length &&
-                os64_memcmp(params->pairs[at].name, text[0].data, text[0].length) == 0)
-                same_key = &params->pairs[at];
+        if (ok && replaced) {
+            ok = replaced_reserve(ctx, &index, params);
+            if (ok) {
+                slot = replaced_slot(&index, params, text[0].data, text[0].length);
+                if (index.slots[slot] != 0) same_key = &params->pairs[index.slots[slot] - 1];
+            }
+        }
         if (ok && same_key != NULL) {
             char *copy = js_malloc(ctx, text[1].length + 1);
             if (copy == NULL) ok = false;
@@ -941,12 +1021,17 @@ static int params_from_record(os64_dom_t *dom, JSContext *ctx, DParams *params, 
                 same_key->value = copy;
                 same_key->value_length = text[1].length;
             }
-        } else if (ok && pair_add(ctx, params, text[0].data, text[0].length, text[1].data, text[1].length, false) < 0)
+        } else if (ok && pair_add(ctx, params, text[0].data, text[0].length, text[1].data, text[1].length, false) < 0) {
             ok = false;
+        } else if (ok && replaced) {
+            index.slots[slot] = (uint32_t)params->count;
+            index.used++;
+        }
         d_string_free(dom, &text[0]);
         d_string_free(dom, &text[1]);
         if (!ok) result = -1;
     }
+    js_free(ctx, index.slots);
     JS_FreePropertyEnum(ctx, keys, count);
     return result;
 }
@@ -967,10 +1052,14 @@ static JSValue params_constructor(JSContext *ctx, JSValueConst new_target, int a
         /* (sequence<sequence<USVString>> or record<USVString, USVString>):
          * an object with an iterator is the sequence. */
         JSValue method = iterator_method(dom, ctx, init);
-        Pairs pairs = {dom, ctx, params};
+        Pairs pairs = {dom, ctx, params, false};
         if (JS_IsException(method)) result = -1;
         else if (JS_IsUndefined(method) || JS_IsNull(method)) result = params_from_record(dom, ctx, params, init);
         else result = each_value(ctx, init, method, pairs_item, &pairs);
+        if (result == 0 && pairs.odd) {
+            JS_ThrowTypeError(ctx, "Each pair must have exactly two items");
+            result = -1;
+        }
         JS_FreeValue(ctx, method);
     } else if (!JS_IsUndefined(init)) {
         DString text = {0};

@@ -183,11 +183,6 @@ void d_fetch_drain(os64_dom_t *dom)
     while (dom->requests != NULL) d_request_end(dom, dom->requests, true);
 }
 
-void os64_dom_fetches_cancel(os64_dom_t *dom)
-{
-    if (dom != NULL && !dom->closed) d_fetch_drain(dom);
-}
-
 /* After the engine is gone: drain has emptied the list, so this frees
  * records only, and touches no engine value. */
 void d_fetch_free(os64_dom_t *dom)

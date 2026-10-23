@@ -104,6 +104,30 @@ typedef enum {
     // Will Change 1 § 2: the KEYWORD auto, or what it names, each a STRING
     // in lowercase (a list, as the animations' are).
     GARB_WILL_CHANGE,
+    // CSS UI 4 § 5.1.1: the KEYWORD a pointer over the box is shaped as; the
+    // pictures (urls, and image-set()s of urls and strings) and their
+    // hotspots written before it are read against their grammar, and only
+    // the keyword they fall back to is kept.
+    GARB_CURSOR,
+    // CSS UI 4 § 6.1: a KEYWORD.
+    GARB_USER_SELECT,
+    // CSS Text 3 § 5.1 and § 5.4, each a KEYWORD; `word-wrap` is the
+    // second's legacy name.
+    GARB_WORD_BREAK, GARB_OVERFLOW_WRAP,
+    // CSS Text 3 § 7.2: the KEYWORD normal, or a LENGTH.
+    GARB_LETTER_SPACING,
+    // CSS Overflow 4 § 4.1's one-value form, clip or ellipsis: a KEYWORD.
+    GARB_TEXT_OVERFLOW,
+    // CSS UI 4 § 3.2-3.5: a width (a LENGTH, or the KEYWORD thin, medium or
+    // thick), a style (a KEYWORD, a border's but hidden, or auto), a colour
+    // (a COLOR, or the KEYWORD auto) and an offset (a LENGTH).
+    GARB_OUTLINE_WIDTH, GARB_OUTLINE_STYLE, GARB_OUTLINE_COLOR, GARB_OUTLINE_OFFSET,
+    // CSS Images 3 § 4.5-4.6: a KEYWORD, and a position as a LENGTH whose
+    // two items are x and y, each a length-percentage, its keywords as the
+    // percentages they are (`right 10px` a calc(100% - 10px)).
+    GARB_OBJECT_FIT, GARB_OBJECT_POSITION,
+    // CSS Sizing 4 § 4.1: the KEYWORD auto, or a RATIO.
+    GARB_ASPECT_RATIO,
     GARB_NPROPS
 } garb_prop_t;
 
@@ -115,6 +139,15 @@ bool garb_prop_inherited(garb_prop_t prop);
 // the arc's switch (MODERN_WEB.md, rule 4) takes it away whole, as if
 // libgarb had never read it.
 bool garb_prop_modern(garb_prop_t prop);
+// Every name a declaration may set a property by, each once, for whatever
+// lists them (an inline style object's members): the longhands' in
+// garb_prop_t's order, then the shorthands', the aliases' and the
+// flow-relative names' (CSS Logical 1). NULL past
+// the last. garb_prop_known says whether a reading with `modern_off` reads
+// a name: a marked name, and a shorthand all of whose longhands are
+// marked, are not read with it.
+const char *garb_prop_name_at(int32_t k);
+bool garb_prop_known(const char *name, size_t len, bool modern_off);
 
 // ── Typed values ────────────────────────────────────────────────────────
 
@@ -166,6 +199,10 @@ typedef enum {
     GARB_V_FUNCTIONS,
     // `number` in `unit`, GARB_U_S or GARB_U_MS (Values 4 § 7.3).
     GARB_V_TIME,
+    // A <ratio> (Values 4 § 5.7): its width and height in `items`, two
+    // NUMBERs, neither negative, a calc() worked out; `keyword` "auto" when
+    // aspect-ratio wrote auto beside it, NULL otherwise.
+    GARB_V_RATIO,
 } garb_vkind_t;
 
 typedef enum {

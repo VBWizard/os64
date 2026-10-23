@@ -41,8 +41,14 @@ works in the address field too.
 - **The address field** takes an address (`https://...`, `http://...`, or
   a bare `host/path`, which means http) or a path that begins with `/`.
   Press Enter to go.
-- **Back and Forward** walk the pages you have been to; yonder remembers
-  where on each one you were.
+- **Back and Forward** walk the pages you have been to, and the places
+  within a page you went to by its `#` links or, with the modern web
+  surface on (Settings, below), that its scripts added (a single-page
+  app's views); going back to one of those fetches nothing. yonder
+  remembers where on each one you were and puts you back there, unless the
+  page keeps its own place (a script that sets `history.scrollRestoration`
+  to `manual`). A page fetched again by Back or Forward, or by Reload, gets
+  back what its scripts left with that entry, as a browser gives it.
 - **Reload** fetches the page again. Its pictures and style sheets come
   from the cache when the server said they may (see "The cache" below).
 - **Stop** is lit while a page loads, and stops it.
@@ -126,7 +132,9 @@ Click the Settings icon in the title bar.
   that page's diagnostics file says `modern: off`.
 - **Clear page storage**, at that row's right: removes what every site
   has kept in its page storage (below), at once, and the pages open now
-  forget theirs.
+  forget theirs. A page in another yonder window that writes at that
+  moment keeps what it writes then, and may bring back what its site had
+  kept.
 - **Apply** changes this window from the next page on. **Save as default**
   also writes the settings to `yonder.conf`, where every new yonder reads
   them.

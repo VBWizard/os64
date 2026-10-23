@@ -135,7 +135,8 @@ os64_font_status_t os64_text_layout(os64_text_context_t *c, const uint8_t *bytes
     if (!c || !out || !o || (!bytes && length) || !o->fonts || !o->font_count ||
         o->font_count>OS64_TEXT_FALLBACK_MAX || o->encoding>OS64_TEXT_CP437 ||
         o->encoding<OS64_TEXT_UTF8_WESTERN_V1 || o->tab_interval<=0 || o->cell_advance<0 ||
-        (o->cell_advance && o->encoding==OS64_TEXT_UTF8_WESTERN_V1)) return OS64_FONT_BAD_ARGUMENT;
+        (o->cell_advance && o->encoding==OS64_TEXT_UTF8_WESTERN_V1) ||
+        (o->cell_advance && o->letter_spacing)) return OS64_FONT_BAD_ARGUMENT;
     if (length>OS64_TEXT_BYTES_MAX) return OS64_FONT_LIMIT;
     for (size_t n=0;n<o->font_count;n++) {
         if (!o->fonts[n] || o->fonts[n]->context!=c) return OS64_FONT_BAD_ARGUMENT;
@@ -190,6 +191,12 @@ os64_font_status_t os64_text_layout(os64_text_context_t *c, const uint8_t *bytes
                 previous=NULL;previous_index=0;
                 status=add_glyph(r,TEXT_MARKER,at,d.end,&pen,r->view.caret_count-1,&previous,&previous_index);
                 if (status!=OS64_FONT_OK) goto fail;
+            }
+            if (o->letter_spacing) {
+                int64_t from=carets[r->view.caret_count-1].x;
+                pen+=o->letter_spacing;
+                if (pen<from) pen=from;
+                if (pen>INT32_MAX) {status=OS64_FONT_LIMIT;goto fail;}
             }
         }
         carets[r->view.caret_count++]=(os64_text_caret_t){d.end,(int32_t)pen};at=d.end;

@@ -516,7 +516,20 @@ FStyles *f_style_build(const os64_html_document_t *doc, const os64_page_t *model
 // NULL for a node with no style: not an element, or inside a
 // `display: none` subtree, which pass 1 does not descend into.
 const FStyled *f_style_of(const FStyles *styles, const os64_html_node_t *node);
+// An element's style when pass 1 did not reach it, for getComputedStyle
+// (flow_computed_new): it and the elements between it and the nearest
+// ancestor pass 1 styled are styled into `extra` — empty, with `styles`'
+// document, an environment whose cascade is `styles`' and no timeline, so
+// no animation runs — from a copy of that ancestor's record; that and the
+// root element's font size (`rem`) are all of `styles` it reads, and it
+// writes nothing there. `styles`' own record when it has one; NULL for
+// a node that is no element, one whose ancestors reach no styled element
+// (detached, or in a template's contents), and on no memory.
+const FStyled *f_style_beyond(const FStyles *styles, FStyles *extra, const os64_page_t *model,
+                              const os64_html_node_t *element);
 void f_style_free(FStyles *styles);
+// The styles pass 1 made for a tree, which live as long as it does.
+const FStyles *f_tree_styles(const flow_tree_t *tree);
 // The style of an ANONYMOUS box: its parent's inherited properties and the
 // initial value of every other (CSS 2.1 §9.2.1.1) — never a copy of the
 // parent's struct, which would give an anonymous block its parent's margins
@@ -530,6 +543,9 @@ void f_style_anonymous(const FStyles *styles, const flow_style_t *parent,
 // reads as the rules that fired. Like snprintf, it answers the length the
 // whole dump needs and writes what fits.
 int64_t f_style_dump(const FStyles *styles, char *out, size_t cap);
+// `cursor`'s keywords in flow_cursor_t's order (CSS UI 4 § 5.1.1): what
+// pass 1 reads a keyword as, and what a dump writes back.
+extern const char *const f_cursor_words[FLOW_CURSOR_ZOOM_OUT + 1];
 
 // ── Pass 2: the box tree (boxes.c) ──────────────────────────────────────
 //
@@ -650,6 +666,9 @@ struct FBox {
     // formatting context with items — never both. Out-of-flow children may
     // hang under either kind.
     bool ifc;
+    // An inline formatting context's ellipsis (flow_box_t.ellipsis), made
+    // once, the first time its lines are laid out; NULL for none.
+    os64_text_run_t *ellipsis;
     // POSITION.md. `positioned`: a block-level box whose position is not
     // static — but a table's row, group or column, laid out static (booked)
     // — whose public box is stacked (flow_box_t.stacked): reached from the
@@ -908,6 +927,9 @@ typedef struct {
     // How many steps the exclusion spaces walked, read and moved (FLOATS.md
     // § Bounds): what the harness holds linear in the floats and lines.
     uint64_t float_walk;
+    // How many carets word_pieces stepped through cutting words at their
+    // characters: what the harness holds linear in the text.
+    uint64_t piece_carets;
     // The most table working memory held at once, which shares the arena's
     // budget: what the harness holds to it.
     size_t scratch_peak;

@@ -169,6 +169,7 @@ verb and turn a status into an exception.
 | Verb | What it does |
 |---|---|
 | `create_element(doc, ns, name)`, `create_text`, `create_comment`, `create_fragment` | a detached node, owned by the document |
+| `create_document(doc)`, `create_doctype(doc, name, public_id, system_id)` | a second document in the document's arena, under the DOM Standard's rules for a document's children and none of the page's own (DOMImplementation's documents), and a doctype for one |
 | `clone(doc, node, deep)` | a detached copy; form-owner records are not copied. `node` may be another document's, and the copy then shares no memory with it |
 | `insert(doc, parent, node, before)` | moves `node` (or a fragment's children) under `parent`; adjacent text is not merged, as the DOM does not |
 | `remove(doc, node)` | unlinks it; an unheld subtree can retire and be reclaimed after older pins leave |
@@ -531,7 +532,13 @@ on or off, so the path a script-free page takes is the path that is
 tested every day.
 
 **What the old page does meanwhile.** It stays on screen and stays live,
-as it does today while sheets are awaited. Two pages can exist at once
+as it does today while sheets are awaited, until the arriving page's parse
+begins: then it is unloaded, as HTML unloads the document a navigation
+replaces, and its scripts stop (yonder's `page_departs`; MODERN_WEB.md §
+Slice 1a, as built), so no task of the departed page writes storage the
+arriving page's scripts read. It stays unloaded, scriptless, if nothing
+then replaces it (Stop, or a page that cannot be laid out); a navigation
+that never reached a parse leaves it live. Two pages can exist at once
 (the one shown, and the one loading or waiting for its sheets), each with
 its own runtime, both on the window's thread. A third cannot:
 `start_trip` already drops the one that was coming.
@@ -2135,7 +2142,8 @@ is one teardown road.
 - **The page on screen keeps running while the next one loads.** D5b dropped
   its scripts at `stop_trip`; DOM.md says the old page stays live, so its
   scripts and timers stop when it is replaced or when the scripts mode
-  changes, and not before.
+  changes, and not before. Since Modern Web slice 1a they stop earlier, as
+  the arriving page's parse begins (§ What the old page does meanwhile).
 - **A file from disk takes the stream.** `open_local` parsed whole; a file's
   bytes now ride the same turn as a fetch's (a local source beside the
   mailbox), so there is one order scripts run in.

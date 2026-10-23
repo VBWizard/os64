@@ -58,12 +58,13 @@ Element's. The supported properties and methods are placed on those chains:
 
 | Kind | Surface beyond Node |
 | --- | --- |
-| Document | documentElement/head/body, child-element access, ID/tag/class/name/selector queries, creation |
+| Document | documentElement/head/body, doctype, implementation, child-element access, ID/tag/class/name/selector queries, creation |
 | Element | tagName, id/className, innerHTML/outerHTML, attributes, tag/class/selector queries, child-element access and element siblings, § The classic methods |
 | Text and Comment (CharacterData) | data and element siblings |
+| DocumentType | name, publicId, systemId |
 | DocumentFragment | child-element access, ID and selector queries |
-| HTML input/textarea/select/button | value |
-| HTML input | checked (native control-state operations support checkbox/radio) |
+| HTML input/textarea/select/button | value, type (an input's state keyword, else "text"; a button's "submit", "reset" or "button"; "select-one" or "select-multiple"; "textarea") |
+| HTML input | checked (every input's checkedness, which only a checkbox and a radio show and send) |
 | HTML select | selectedIndex |
 
 Node supplies tree navigation, ownerDocument, childNodes, nodeType/nodeName,
@@ -114,7 +115,7 @@ standard's steps over the verbs appendChild already uses, so a script these
 connect runs and a moved control keeps its form:
 
 - **ParentNode** (document, element, fragment): `append`, `prepend`,
-  `replaceChildren`. **ChildNode** (element, text, comment): `before`,
+  `replaceChildren`. **ChildNode** (element, text, comment, doctype): `before`,
   `after`, `replaceWith`, `remove`. Arguments are nodes or strings (a string
   is a Text node), and several are gathered into a fragment first, as the
   standard does, so a refused insertion leaves them in that fragment. Every
@@ -123,8 +124,10 @@ connect runs and a moved control keeps its form:
   (`os64_html_may_insert`) before it is moved anywhere.
   A document keeps its `<html>` element (libhtml's rule, which every reader
   of the tree relies on), so `document.replaceChildren(...)` is refused as
-  `document.removeChild(document.documentElement)` always was; on an
-  element or a fragment, where pages call it, it is the standard's.
+  `document.removeChild(document.documentElement)` always was, and a
+  document of its own's is refused the same way (libpage's children verb
+  takes an element or a fragment); on an element or a fragment, where pages
+  call it, it is the standard's.
 - `contains`, `isConnected`; `matches` and `closest` (the selectors
   `querySelector` uses); `getElementsByClassName` (live; a quirks document
   compares classes without regard to ASCII case) and `getElementsByName`.
@@ -247,14 +250,21 @@ host's clock), `isTrusted`, and the writable old spellings `returnValue` and
 (`key`, `keyCode`, `charCode`, `which`) and the modifier flags, as data.
 
 **Where the values live.** A target's listener list hangs off its wrapper
-record, in the order listeners were added; window's off a record of its own.
+record, in the order listeners were added; window's off a record of its own;
+a plain target's off its entry, which is its object's opaque, or for a
+MediaQueryList one its resolver makes when a listener is added, its
+handler set or an event dispatched at it (a read of `onchange`, a removal
+or a null handler makes none). That entry holds the list, and is let go,
+unlinked and freed, at the next matchMedia or view step once no listener
+or handler is left on it, so a list the page then drops is collected.
 Each listener's callback is a C-held engine value, the registry's second
 list, released by drain. An Event's own state is engine memory traced by the
 collector (`gc_mark`), because a script may keep an event long after its
 dispatch: its finalizer frees engine storage and nothing native.
 
 **Dispatch** is the DOM Standard's: the path is the target and its ancestors,
-then window past the document (except for `load`); capture listeners top
+then window past the document (except for `load`), and a plain target,
+which is in no tree, alone; capture listeners top
 down, then the target's capture listeners and its others, then bubbling up
 when the event bubbles. A list is cut where it ended when its target was
 reached, so a listener added during the dispatch waits for the next one; a
@@ -290,7 +300,11 @@ the first click.
 `mouseout`, `mousemove`, `keydown`, `keypress`, `keyup`, `input`, `change`,
 `submit`, `reset`, `focus`, `blur` and `load`, elements, the document and
 window have an on<type> property, and an on<type> content attribute is a
-handler. A target's handler is one slot in its listener list, in the place
+handler. With the Modern Web switch on, so do `scroll` and `resize`; window
+alone has `onpopstate` and `onhashchange`, and a MediaQueryList `onchange`
+(§ The view, computed style and the session's history). With it off none
+of the four is a property, and their content attributes are ordinary
+attributes that no event runs. A target's handler is one slot in its listener list, in the place
 it was first set; a slot for an attribute the parser or innerHTML wrote goes
 first (an element has its attributes before any script can reach it), and a
 script's `setAttribute` makes its slot then. Window's slots come from the
@@ -304,7 +318,8 @@ needs it: `function on<type>(event){BODY}` inside `with(document)
 with(form owner) with(element)`, HTML's three scopes. A body that does not
 compile is reported once and stays absent until the attribute changes;
 reading the property answers null. A handler that returns `false` cancels.
-The body's window-reflecting handlers (`load`, `focus`, `blur`) are window's,
+The body's window-reflecting handlers (`load`, `focus`, `blur`, and with the
+switch on `scroll`, `resize`, `popstate` and `hashchange`) are window's,
 from `<body onload>` or `document.body.onload` alike.
 
 The body is first checked by the intrinsic Function constructor, taken
@@ -342,11 +357,17 @@ of the page is recorded and performed by the host after the task.
 (`os64_dom_take_navigation`): `location.href =`, `location = `,
 `location.assign`, `replace`, `reload`, `hash =` (the address with its
 fragment replaced), `history.back/forward/go` (`go(0)` reloads), a link's
-`click()`, and a form's submission. Addresses are resolved exactly as a
-link's are, by libpage's own steps with the base as the tree stands
+`click()`, and a form's submission. With the Modern Web switch on,
+consecutive `back/forward/go` in one task add up to one traversal of their
+sum. Addresses are resolved exactly as
+a link's are, by libpage's own steps with the base as the tree stands
 (`os64_dom_resolve`, which a host uses for a script's `src` too); `hash =`
-stays in the page. A taken ask's nodes come held. `location` reads the page's
-address and its parts; `history.length` reads 1. `window.status` and
+stays in the page. With the Modern Web switch on and a history host
+installed, an address that moves only the fragment is no ask: the host makes
+it at once (§ The view, computed style and the session's history), and one
+it refuses is asked for instead. A taken ask's nodes come held. `location`
+reads the page's address and its parts; `history.length` reads the host's
+count of entries, and 1 with no host or the switch off. `window.status` and
 `defaultStatus` accept an assignment and read empty: the status line is the
 browser's.
 
@@ -371,8 +392,9 @@ a script the host runs, a script innerHTML parses is born started, and a
 clone of a started script is started. When a verb connects a classic script
 that has not started (an `appendChild` of a `createElement('script')`), the
 binding marks it and tells the host through `options.script_connected`;
-moving a started script tells nobody. A host that sets no callback gets no
-notices and no marks.
+moving a started script tells nobody, and one connected to a document of
+its own (§ Documents of their own) is marked and tells nobody. A host that
+sets no callback gets no notices and no marks.
 
 ## `document.write`
 
@@ -399,13 +421,78 @@ it acts only on a parser `open()` made, and none is ever made. Which writes
 have an insertion point is the host's rule, not this library's (yonder's is
 DOM_D9.md's: only the script the parse is stopped at, while it runs).
 
+## Documents of their own
+
+`document.implementation` (`implementation.c`; DOM § 4.5.1) is on every
+page, the switch off included: it is in every browser that ever ran
+jQuery, whose `parseHTML` builds its nodes in a document of its own so
+that the markup runs nothing and fetches nothing until it is put in the
+page. One DOMImplementation per document, made when first asked for.
+`createHTMLDocument(title)` makes `<!DOCTYPE html><html><head><title>
+title</title></head><body></body></html>`, the title element and its text
+only when a title is given; `createDocument(namespace, qualifiedName,
+doctype)` an XML document holding the doctype and then the element
+createElementNS would make, either absent when not asked for;
+`createDocumentType` a doctype; `hasFeature()` answers true, as it is
+specified to. The `DOMImplementation` interface object is a Modern Web
+row.
+
+**A new document lives in the page's arena** (libhtml's
+`os64_html_create_document`): a second DOCUMENT node there, under the DOM
+Standard's rules for a document's children and none of the window's own
+(its element may be anything and may go). Its nodes are the page's nodes
+to every verb, hold and wrapper, so one appended to the page is MOVED and
+keeps its identity, wrapper, expandos and listeners: that is what
+adoption does here. It is freed with the page and charged to its caps, as
+a fragment is.
+
+**Which document a node belongs to** is the document its tree hangs from;
+a tree that hangs from none remembers the document it was made in, copied
+from, or last taken out of, on its root's wrapper (`DValue.document`,
+written by `d_made_in` and `d_leaving`). A root with no wrapper (a child
+innerHTML replaced, never handed to a script) says nothing and reads as
+the window's: a script reaches it only through a descendant it held
+before. While no document of its own exists, every node is the window's
+and none of this runs.
+
+**It has no window.** Its `location` is null and assigning to it throws;
+it is cookie-averse; `write`, `writeln` and `open` throw
+InvalidStateError, since writing would open it; a link in it navigates
+nowhere, a form in it submits nothing (not even the event), focus and
+blur there reach no host, and a form's reset there fires its event and
+resets no control, since the host carries resets out on the page's model
+(DEBTS.md). A script connected to it is marked
+started and runs nowhere, then or after it moves into the page, as a
+script innerHTML parses is; a handler attribute in it is not compiled and
+reads null until its element is the window's. Its body reflects no handler
+onto window (HTML § 8.1.8.1): `onload` there reads null and an assignment
+changes nothing. Scripting is off for its nodes (`d_scripting`), so
+innerHTML and insertAdjacentHTML parse a `noscript`'s contents there as
+markup. It is connected as DOM means it (`d_connected`: isConnected, a
+`form` attribute's lookup), and not in the window's tree, which is what a
+script must be in to run (`d_in_window_tree`).
+
+**An XML document** keeps an element name's case at creation, and its
+createElement makes HTML elements when it was made for the HTML namespace
+and refuses otherwise. Past creation such an element reads as an HTML
+document's would (`nodeName` uppercased, a tag query and attribute names
+folded, selectors case-blind), since the binding asks an element's
+namespace and not its document (DEBTS.md). libhtml's tree holds elements of the HTML, SVG and MathML
+namespaces only, so an element in no namespace, or another, is a
+NotSupportedError, from `createDocument` and from such a document's
+`createElement`; `createElementNS` is not built. A new document is in
+no-quirks mode in a browser; here a query or a style attribute in it reads
+with the window's mode, which a quirks page's class selectors show.
+
 ## Proof boundary
 
 `tools/test_dom_host.sh` tests the actual target engine core and a separately
 ASan-instrumented target-profile engine, with sanitized bindings/tree/state.
 `tools/test_dom_events.inc` holds a case per rule of § Events, § Timers,
 § Asks, § Script elements and § `document.write`, and
-`tools/test_dom_mutants.py --events` a mutant per rule. `domtest` exercises
+`tools/test_dom_mutants.py --events` a mutant per rule;
+`tools/test_dom_implementation.inc` holds a case per rule of § Documents of
+their own, and runs jQuery 3.5.1 and 1.12.4 whole. `domtest` exercises
 the shared-library boundary and heap in ring 3. These are library proofs; yonder's loop is proven with its own
 harness. Result counts are recorded in DOM.md after the final source freeze.
 
@@ -464,6 +551,78 @@ the native picture-loading path. Source-preserving CSS text and attribute image
 dimensions are bounded consumer implementations, not complete CSSOM/image
 interfaces. Host acceptance and remaining J5/P5 work are in the design record.
 
+## The view, computed style and the session's history
+
+Three owner-thread providers, each installed outside callbacks; dom.h
+holds their contracts, `view.c` and `window.c` the binding's half. All of
+it is the Modern Web arc's surface, in four rows of `modern.c`'s table (the
+view's members with `onscroll`, `onresize` and window's `focus` and `blur`,
+which do nothing, the window being the person's to raise; `matchMedia`,
+`MediaQueryList` and `MediaQueryListEvent`; `getComputedStyle` and the
+`CSSStyleDeclaration` interface, which names the style object's prototype
+and which the computed declaration's inherits; and
+`onpopstate`, `onhashchange`, `PopStateEvent` and `HashChangeEvent`, with
+`pushState`, `replaceState`, `state` and `scrollRestoration` on history).
+With the switch off none of those names exists, nor
+`document.scrollingElement`, `document.defaultView` or an element's
+`onscroll`; the arc's handler types' content attributes are not handlers
+(§ Events); `history.length` reads 1, a fragment navigation is an ask, the
+hash setter asks whatever it is given, and history deltas do not add up
+(§ Asks): what the binding did before the arc.
+
+**The view** (`os64_dom_set_view`) is read, never cached: `scrollX`/
+`pageXOffset`, `scrollY`/`pageYOffset`, `innerWidth`/`innerHeight` and
+`outerWidth`/`outerHeight` ask it at every read, and `scroll`, `scrollTo`
+and `scrollBy` ask it to scroll (smoothly asked is done at once), adding
+what its layout cost to the geometry counts. With no view they read zeros
+and move nothing. `document.scrollingElement` is CSSOM View's: the root
+element, or in quirks mode the body, and null when that body is
+potentially scrollable (which the computed style says). `os64_dom_view_step` is
+the host's rendering step: one event a call, `resize` at window, else
+`scroll` at the document bubbling to window, else `change` at the first
+MediaQueryList whose answer moved, until it answers false.
+
+**matchMedia** keeps the query as written and serialises it once, in one
+pass by libgarb (`garb_media_text_serialized`, into the binding's own
+storage), for `media`; `matches` is judged at every read, against the
+view (its size, the person's scheme and motion), the screen (the device-*
+features and `resolution`, from `options.screen` and the zoom, as `screen`
+and devicePixelRatio report them) and the document's scripting
+(`options.scripting`). A list libgarb could not read whole (nested past
+its depth, or no memory) is `not all`. A list nothing holds is freed by
+the next matchMedia or view step; one listened to (`addEventListener`,
+`addListener`, `onchange`) is held while a listener or a handler is left
+on it, and let go at the next matchMedia or view step after the last one
+goes (§ Events, Where the values live).
+
+**getComputedStyle** (`os64_dom_set_computed`) answers a read-only
+declaration whose properties are libgarb's table, which is therefore the
+list a page enumerates, in CSSOM's order (lexicographic, prefixed names
+last). Every read asks the provider for the whole element into one snapshot
+buffer, so a held declaration is live and keeps no copy of its own; a
+snapshot past the binding's budget is refused whole (QuotaExceededError).
+An element outside the document and a pseudo-element answer an empty
+declaration without asking. `document.defaultView` is window.
+
+**History** (`os64_dom_set_history`) is the host's session: `pushState`
+and `replaceState` give it the entry's address (one the document may
+rewrite its own to, or SecurityError) and its state as JSON (dom.h § HISTORY says what JSON may
+carry; DataCloneError otherwise, QuotaExceededError past 64 KiB or when the
+host refuses), and fire nothing. `history.state` is that JSON read once,
+the same object until the entry changes. A fragment navigation a script
+makes goes to the host at once, and its `popstate` fires inside that
+script, with the new entry's null state; the host queues the `hashchange`.
+`location.hash` set to the fragment the address already has (as the URL
+parser's fragment state writes it) navigates nowhere. A traversal is the
+host's: it tells the binding (`os64_dom_history_moved`) before it moves its
+own entries, then owes `popstate` and, when the fragment changed,
+`hashchange`. An owed event carries what it was owed with
+(`os64_dom_history_event_t`): a hashchange its two addresses, a popstate
+the entry's state and name (`os64_dom_history_entry`), its state being
+history.state itself only while that entry is still the current one.
+`history.scrollRestoration` is the host's to read
+(`os64_dom_history_manual`).
+
 ## The Modern Web's surface
 
 `os64_dom_options_t.modern` is the Modern Web arc's kill switch
@@ -488,15 +647,24 @@ whatever it answered, and so does the creation: QuickJS's function
 constructors define `length` and `name` without saying when that ran out
 of memory.
 
-The style object follows the same switch for the CSS the arc adds: a
-property libgarb marks (`garb_prop_modern`) has no camel-case member while
-the option is clear, and a declaration of it is read as one libgarb does
-not know (`garb_reading_t.modern_off`), so `'aspectRatio' in el.style` and
-`setProperty` answer as they did before the arc.
+Every property name libgarb reads is a member of the style object three
+ways (CSSOM § 6.6.1): camel-cased (`marginInlineStart`, `WebkitTransform`),
+webkit-cased for a `-webkit-` name (`webkitTransform`), and dashed as
+written (`margin-inline-start`), for shorthands and aliases as well as
+longhands and the flow-relative names (`garb_prop_name_at` lists them
+all). The style object follows the same switch for the CSS the arc adds: a
+name libgarb does not read with the switch off (`garb_prop_known`: a
+marked property, or a shorthand whose longhands are all marked) has none
+of those members while the option is clear,
+and a declaration of it is read as one libgarb does not know
+(`garb_reading_t.modern_off`), so `'aspectRatio' in el.style` and
+`setProperty` answer as they did before the arc. A value reads back as it
+was written, not in CSSOM's canonical form, and a shorthand's longhands do
+not read back (DEBTS.md § Classic browser scripting).
 
 The first row is the interface objects (`classic.c`'s
 `d_interfaces_install`): `Node`, `CharacterData`, `DocumentFragment`,
-`Document`, `Element`, `HTMLElement` and the HTML element interfaces that
+`Document`, `DocumentType`, `Element`, `HTMLElement` and the HTML element interfaces that
 have a prototype of their own, each named for exactly one of the binding's
 prototypes (WebIDL § 3.7), so `instanceof` answers truly and a page may
 patch `Element.prototype`. Each interface object inherits its parent's
@@ -554,14 +722,16 @@ the records). An area reads the store at the first touch in a task when
 its identity moved, replays its own change list over it, and hands only
 the change list back: a `clear()` is a removal of each key the page could
 see. A commit answers OK; FULL (past the quota: nothing kept, the page sees
-the store again); FAILED (the area keeps its map in memory from then on);
-or BUSY (another window has the store: the changes are handed over again a
-second later, or at drain, whichever is first). Commits are coalesced
-(`os64_dom_storage_settle` between tasks, `os64_dom_storage_due` for the
-host's clock, `OS64_DOM_STORAGE_COMMIT_MS`), sooner when the change list
-would pass the quota or the keys' cap, at `os64_dom_storage_flush` (the page
-departing), and once more at drain, the last (`last` set: the provider may
-wait longer there, and a BUSY loses the changes).
+the store again); or FAILED (the area keeps its map in memory from then
+on). Commits are coalesced (`os64_dom_storage_settle` between tasks,
+`os64_dom_storage_due` for the host's clock, `OS64_DOM_STORAGE_COMMIT_MS`),
+sooner when the change list would pass the quota or the keys' cap, and once
+more at drain, the last. What a page writes never takes the change list
+past its bound: a change it cannot make room for (no memory to write the
+list down for the early commit) is refused with `QuotaExceededError` as a
+full store's is. A `clear()` of a map another window grew past the keys'
+cap can pass it, until the next commit. A host that unloads a page
+(yonder's departure) drains it, which is that page's last commit.
 `os64_dom_storage_forget` drops both maps for "Clear page storage". The
 image format is `os64 storage 1\n`, then `+<key bytes> <value bytes>\n` and
 the key, the value and `\n` for a set, `-<key bytes>\n`, the key and `\n`

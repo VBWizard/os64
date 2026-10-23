@@ -96,10 +96,15 @@ slice is made, not where it lands. Four rules.
    object never lands behind the kill switch either; the switch is for
    finished surface that turns out to hurt, not for drafts.
 2. **The oracle, before the sites.** Every slice names its web-platform-tests
-   directory and its pass rate is the acceptance. A slice cannot regress a
-   directory that passed. § The oracle, below.
+   directory, and TWO gates read it (Quinn, 2026-10-21: a regression
+   baseline alone lets an interface ship passing a tenth of its tests): a
+   REQUIRED set, the tests named one by one as the interface's essential
+   behaviour, every one of which passes before the interface's row joins
+   the table enabled; and the baseline, every test that passes, which a
+   slice cannot shrink. What a slice knowingly does not run is excluded
+   BY NAME with its reason, never as a count. § The oracle, below.
 3. **The corpus, before every merge.** Two instruments, because the
-   P5's page files are RECORDS and not pages: each of the 401 under
+   P5's page files are RECORDS and not pages: each of the 1,601 under
    `/home/tmp/yonder/backup` names what a real page asked for and what
    failed (YONDER_DIAGNOSTICS.md), and nothing on the P5 keeps a page's
    bytes (the cache keeps sheets and pictures, never pages; CACHE.md § 2).
@@ -318,7 +323,10 @@ A layout that reuses the boxes a change did not touch; then
 `html/webappapis/animation-frames/`, `dom/nodes/MutationObserver-*`.
 Acceptance: the perf record's layouts-per-second on danlegt, unchanged
 with rAF on. **Fable design**, because it changes what libflow's tree IS
-between layouts.
+between layouts: [RELAYOUT.md](RELAYOUT.md) (2026-10-21), which cuts it
+into 5a (the change log in libhtml, `MutationObserver`, the instrument),
+5b (the cascade updated in place, pass 1 reused), 5c (the layout memo)
+and 5d (`requestAnimationFrame`).
 
 **Slice 6: SVG.** Inline `<svg>` in the tree, and SVG as a picture
 (`<img src="x.svg">`, the census's `MISSING image svg`): a renderer for
@@ -327,7 +335,13 @@ paths, the basic shapes, fills and strokes, transforms, `use`/`symbol`,
 libgarb already parses. Oracle: WPT `svg/` (structure and painting; the
 reftests when the runner can compare pictures). Acceptance: Google's and
 GitHub's icons, suckless's logo. **Fable design** for the renderer's seam
-(what libflow hands it, what it hands back, and where it runs), Opus builds.
+(what libflow hands it, what it hands back, and where it runs), Opus
+builds: [SVG.md](SVG.md) (2026-10-21), which makes an `<svg>` a replaced
+box to the layout, puts the renderer in a library of its own that fills
+and strokes through FreeType's rasterizer and stroker behind one new verb
+on the font backend table, and cuts it into 6a (the reftest runner, which
+slices 4 and 8 need too), 6b (the renderer's core) and 6c (gradients, text,
+the picture path).
 
 **Slice 7: the bytecode cache.** Per bundle, keyed by the cache's own entry
 identity (the response's validators), capped in bytes, compressed with
@@ -360,12 +374,22 @@ what keeps eight builders from colliding in one tree, and it is as much
 design as the slices themselves.
 
 **The order.** Slices 0a and 0b first, side by side: they touch different
-files. The fan-out (1a, 1b, 2, 3, 4, 7) starts once 0a's table exists,
-because every one of them registers in it; a fan-out slice that opens
-before 0a has merged branches from 0a's branch and says so in its PR
-(DOM_BRIEFS.md's stacking rule). Slices 5, 6 and 8 wait: 5 and 6 are
-Fable designs written while the fan-out builds, and 8 shares libgarb with
-4.
+files (both built 2026-10-21, PRs #327 and #326). The fan-out starts once
+0a's table exists, because every one of them registers in it; a fan-out
+slice that opens before 0a has merged branches from `opus/tmw-0a-runner`
+and says so in its PR (DOM_BRIEFS.md's stacking rule). **Three builders at
+a time, not six** (ruled 2026-10-21 after two builders spent a percent of
+the five-hour usage window a minute: the weekly budget was the plan's
+premise, the five-hour window is the real pacing limit, and a builder
+paused by a wall mid-edit is worse than one that never started). The
+first three: **1a, 1b and 4**, none of which needs fetch, each in its own
+worktree off 0a's branch. The second three, when the first three's PRs
+are open: **2, 3 and 7**; 3 after 2 if the window is tight, because its
+inline import rides 2's transport. Then 5a and 6a, which 0a alone
+unblocks, and 5b, 5c, 6b, 6c in their documents' order. Slice 8 follows 4.
+Every builder reads MODERN_WEB_BRIEFS.md as it stands on
+`fable/modern-web` AFTER Quinn's review (2512ba11 and later), not the
+copy a 0a or 0b branch carries, which predates it.
 
 **The table, which is the switch.** libdom gains `modern.c`: one static
 table of rows, each a name and an installer, walked once at runtime
@@ -403,7 +427,7 @@ adds rather than edits.
 
 **What every PR states**, so Chris can judge it without re-deriving: its
 WPT directory and its count before and after (the expectation file's
-diff is the proof); how many of the 401 records named its surface (the
+diff is the proof); how many of the P5's records named its surface (the
 tally); the corpus count before and after once kept pages exist; and the
 P5 reading if it claims a speed. A builder commits on its own branch and
 opens the PR; Chris tests before anything merges; Fable reads 0a's table
@@ -456,6 +480,33 @@ From 2026-10-07, so they are not re-argued from scratch:
 - Every PR states: the WPT directory and its count before and after, the
   corpus count before and after, and the P5 reading if the slice claims a
   speed.
+
+## Review record
+
+**Quinn, 2026-10-21, at `30833121`** ([MODERN_WEB_REVIEW.md](MODERN_WEB_REVIEW.md)):
+eleven findings, all taken, the direction kept. Five P1: the pinned
+QuickJS resolves imports even under compile-only, so modules need a
+no-resolve flag and an explicit link step (slice 3, verified against
+`quickjs.c`); a synchronous request through `way_fetch_whole` would be a
+second, less protected transport, so sync XHR and dynamic `import()` run
+the one fetch job inline (slices 2 and 3, verified against `load.c`);
+per-window `localStorage` snapshots lose each other's writes, so the file
+is the shared state and a window commits its own changes by read, merge,
+write (slice 1a); `MutationObserver` cannot be rebuilt from a lossy
+layout log, so the document gains one mutation-time callback and the
+binding queues records as the standard does (RELAYOUT.md); a source
+digest does not validate bytecode, so the blob carries a payload digest
+and framing and a mismatch is a miss (slice 7). Six P2: a module's
+top-level await outlives the drain, so evaluation has a state asked after
+every turn (slice 3); the memo compared a counter every update moved, so
+the cascade has a sheet generation and an update counter, and untouched
+is a bit of its own beside steady (RELAYOUT.md); the replay index grows
+with the features that fetch, and an unrecorded request is "incomplete",
+not a failure (slice 0b); the WPT gate gains the required set and named
+exclusions (rule 2, slice 0a); a standalone SVG picture owns its own
+cascade (SVG.md); `pushState` fires nothing, fragment navigation and
+traversal each their own events (slice 1b). The two builders already
+running (0a, 0b) were told their changes the same afternoon.
 
 ## As built
 
@@ -616,6 +667,296 @@ engine's function constructors, there too. The mutant harnesses were not
 run (the briefs' rule); their anchors were checked against the changed
 files.
 
+### Slice 0b, as built
+
+Built by Opus on `opus/tmw-0b-corpus`, from `fable/modern-web` at
+`a5152d17` (`userland` 44768c2f and the arc's two docs commits), on
+2026-10-21, with Quinn's finding 8 (MODERN_WEB_REVIEW.md) taken the same
+afternoon. The brief is MODERN_WEB_BRIEFS.md § Slice 0b. **The contract
+it is held to is REPLAY.md** (Fable, 2026-10-22, after five Codex rounds
+and five cold reads found the same kinds of hole again): the grammar of a
+record and an index, a replay's inputs and the versions of a kept page,
+the index, what a replay reproduces and judges, one process per page, and
+the proof. What follows is what was built against it.
+
+**The census, as it stood on 2026-10-21.** The P5's records under
+`/home/tmp/yonder/backup` are 1,601 page files from 268 sites, not 401
+(401 is the number of lines os64's `ls` prints there, four names a line).
+They were fetched one `cat` a file and tallied with
+`python3 -I tools/yonder_tally.py DIR`. Read it with three things in mind:
+FILES weight what was loaded often (www.bing.com is 174 of them,
+danlegt.com 145), so the sites column is the fairer rank for a platform
+name; a page's own globals rank high by files on one site (danlegt's
+`HomeChat`, `Scratch2000` and `umami`, 142 files each); and the records span
+several builds of yonder, so a name since built (`float` as a `css-value`,
+before floats were laid out) still counts.
+
+| files | sites | asks | MISSING global |
+|---:|---:|---:|---|
+| 466 | 37 | 46,635 | localStorage |
+| 289 | 48 | 9,264 | XMLHttpRequest |
+| 275 | 35 | 315 | module |
+| 253 | 47 | 1,059 | performance |
+| 252 | 34 | 324 | URL |
+| 247 | 23 | 274 | screen |
+| 246 | 29 | 479 | matchMedia |
+| 232 | 43 | 546 | MutationObserver |
+| 215 | 35 | 508 | fetch |
+| 195 | 23 | 9,312 | ActiveXObject |
+| 187 | 14 | 192 | getComputedStyle |
+| 169 | 33 | 206 | requestAnimationFrame |
+| 168 | 23 | 239 | setImmediate |
+| 162 | 30 | 169 | Element |
+| 161 | 11 | 208 | btoa |
+| 146 | 39 | 229 | global |
+| 144 | 23 | 241 | WebKitMutationObserver |
+| 144 | 11 | 147 | TextEncoder |
+
+(891 global names in all; the next rows are danlegt's own names.)
+
+| files | sites | asks | MISSING css-property |
+|---:|---:|---:|---|
+| 919 | 129 | 49,437 | cursor |
+| 865 | 110 | 27,133 | outline |
+| 776 | 113 | 89,647 | content |
+| 726 | 95 | 18,240 | letter-spacing |
+| 717 | 86 | 13,699 | filter |
+| 699 | 103 | 34,099 | transition |
+| 650 | 78 | 7,857 | text-overflow |
+| 627 | 78 | 8,753 | user-select |
+| 585 | 72 | 22,465 | fill |
+| 556 | 66 | 3,720 | overflow-wrap |
+| 553 | 74 | 13,070 | outline-offset |
+| 520 | 78 | 4,297 | word-break |
+| 428 | 68 | 9,864 | object-fit |
+| 425 | 50 | 5,915 | clip-path |
+| 389 | 33 | 4,157 | stroke |
+| 387 | 66 | 2,292 | word-wrap |
+| 377 | 44 | 1,488 | backdrop-filter |
+| 373 | 60 | 4,559 | appearance |
+| 364 | 39 | 794 | scroll-behavior |
+| 357 | 25 | 3,459 | margin-inline |
+| 356 | 43 | 3,884 | aspect-ratio |
+
+(377 property names in all.) The other kinds, by files: elements `svg`
+496 (65 sites), `canvas` 162 (8), `iframe` 146 (41), then one site's custom
+elements (GitHub's `react-partial` 53); at-rules `keyframes` 228 (48),
+`property` 125 (13), `container` 116 (18); `MISSING script module` 259
+(62); pictures `image svg` 198 (44), `picture-scheme data` 308 (20);
+values `background-image: conic-gradient` 168 (6), `float: left` 107
+(35), `clear: both` 100 (29); fonts `Arial` 209 (19), `Helvetica` 165
+(10). The FAILED lines, ranked by `--failed`: a picture that would not
+decode 269 files (19 sites), then the script deaths the globals above
+explain: `'URL' is not defined` 155 (13), `'matchMedia' is not a function`
+148 (7), `cannot convert to object` 144 (3), `'getComputedStyle' is not
+defined` 143 (2), `'performance' is not defined` 133 (12), `cannot read
+property of undefined` 130 (19), `'btoa' is not defined` 109 (2).
+
+**The number a fan-out PR states** is `python3 -I tools/yonder_tally.py
+DIR --surface NAME...`: how many files, and sites, name ANY of the
+slice's names (on 2026-10-21, `localStorage sessionStorage` is 480 of
+1,601 files, 42 of 268 sites). `--kind` narrows it to one kind; a name is
+matched exactly. `--failed` ranks the FAILED lines with the pages they
+were on, a picture's or a font's by its reason rather than its address.
+The tool reads `*.txt` in the directories it is given through the one
+reader (below). A census is not a diff: it COUNTS a record that lost
+lines (what it kept is what the page asked for; partial is still asked)
+and says on stderr how many records lost lines; it counts a replay's
+record only when its page reached a verdict, and lists the others by
+state on stderr; and a claimed name's placeholder that was never written
+(`verdict: unwritten`) is damage, named, and the answer is 2, as it is for
+any `*.txt` the reader cannot judge. It imports nothing outside the
+standard library.
+
+**keep_pages** (`keep_pages = on` beside `diagnostics =` in yonder.conf;
+YONDER_DIAGNOSTICS.md § The page kept has the file shapes). The page's
+bytes are kept in `stream_take`, the one place every byte the parser is
+fed passes, so a body of any chunking and any encoding is kept exactly;
+they go to a temporary file renamed into place at `stream_finish`, cut
+short or not. The builder's call the brief left open: a page let go before
+then keeps NOTHING and its temporary is removed with its record, rather
+than left for a later write to replace, since a page without all its bytes
+cannot be fed again as it was. Scripts are kept in `script_arrived` as the
+decoded source the host is handed. A sheet's product is a parse, which
+cannot be written, so `sheet.c` hands back, when the job says the window
+keeps pages, the bytes it parsed and the charset its response named, and a
+replay parses them again with the same call; the bytes are held only until
+the window writes them. A fetch that failed is kept as a line saying so:
+without it a replay could not tell a page's real 404 from a request the
+corpus never saw. The keepers are diag.c's, beside the record they belong
+to; a step that fails ends that page's keeping, is said once a run, and
+leaves `kept: not whole` on the record; a page whose bytes were kept whole
+says `kept: whole`, and a replay replays only such a record (or, of a
+page kept before that fact existed, one whose bytes are beside it:
+REPLAY.md § 3). **Each record
+CLAIMS its name as the load begins** (`yonder_diag_claim`): its file is
+made only where nothing is, holding `verdict: unwritten` (which every
+reader takes as unjudged) until the record replaces it, and no `.html` or
+`.d` may be there whether or not this record keeps its page, so two
+yonders on one directory, a `.txt` deleted from beside its kept files, or
+a keep-off load landing on a kept page's number, never pair a record with
+another's pages, and the bytes are never renamed over a `.html` already
+there. A record that can claim no name has no claim, and nothing of it is
+written; the record's write proves its claimed file is still its own
+first, by the nonce its claim wrote in the placeholder (`verdict:
+unwritten <nonce>`) and in every record after (`claim: <nonce>`), so a
+placeholder not known to be whole on disk (no memory for it, a write or
+close that failed) is no claim, its name not known to be this claim's:
+it is removed, or left as a file no reader takes for a page when the
+unlink cannot remove it, and its number passed over.
+No Settings line: there is none for `diagnostics` either.
+
+
+**The record's inputs** (REPLAY.md § 3 is the table). `diag_begin`
+writes them as head facts at the claim, as in force for the load: `agent`
+first (`g.way.agent`), `clock` (`os64_time` in epoch milliseconds) and
+`tz` (the `TZ` in force, or `<n>m`, the configured minutes east, when
+there is none), then `laid out at` (the view's `<width>x<height> px`,
+written again at arrival with the layout's time), and the rest of the
+settings `kDiagSettings` names: `scripts`, `modern`, `zoom`,
+`appearance`, `motion`, `animate` (not `animations`, which the census
+already uses for how a page's animations fare) and `script seconds`.
+`diag_cookies` writes `cookies` at the head, when the stream takes it
+(or `open_local` makes a file's) and before the parser is fed a byte:
+the string libway's script door, `way_script_cookies`, answers at that
+moment for the FINAL address and the transport the page arrived over,
+as the page's script host asks it, with every Set-Cookie of the head's
+own hops already heard, so never an HttpOnly cookie (what the jar gains
+after the head reaches no script in a replay: REPLAY.md § 3's jar row);
+asked again with twice the room up
+to 1 MiB, and a string that does not fit, or no memory for one, leaves
+the record saying it lost lines.
+`diag_write` compares each of `kDiagSettings`, the agent among them,
+with what the claim wrote, and `diag_arrived` the layout's view with the
+claim's (a view that moves after the arrival is not compared: yonder's
+own bars move it, and a replay reproduces them); one that differs marks
+the record `REPLAY unjudged: settings changed
+during the load` (`yonder_diag_unjudged`; the first reason stands). The
+head facts, `TLS` and `kept` have a room of their own, 24 lines counted
+apart from the 512 the other plain lines may take
+(`yonder_diag_head_fact`); `bytes` is a plain line. Every record ends
+with `end` (`YONDER_DIAG_END`). The index is version 2: each script's
+and sheet's line ends with the job's own identity (a script's token, a
+sheet's place in its page's table).
+
+**The readers.** `tools/yonder_records.py` is the one Python reader, which
+the tally and the diff read records through; `rp_record_read` and
+`rp_index_read` are the runner's. Each classifies every line by REPLAY.md
+§ 2 (`classify()`, `rp_classify`), so a control byte anywhere, or a field
+that decodes to a NUL, refuses a record or an index; both run every
+vector in
+`tools/yonder_record_grammar.txt` (the `escape:` vectors hold their two
+unescapes equal, one pass from the left), and every number goes through
+one parser each (`decimal()`, `rp_decimal`). A record is of version 2 when
+it says any of `agent`, `cookies`, `clock` or `tz`; `end` is required of
+one that is a kept page's, and of every replay's. Every page-written string either tool prints
+goes through `display()`, and every one the runner prints through
+`rp_display`, the same rule.
+
+**The replay runner** (`tools/test_yonder_replay_host.{c,sh} KEPT-DIR
+OUT-DIR`; its header says how it meets REPLAY.md). It includes
+`tools/test_yonder_scripts_host.c` with `YONDER_HOST_FAKES_ONLY`, which
+leaves that file's `main` out; two hooks there let it run the pool itself
+(the scripted host's fake keeps 32 jobs of each kind and parks pictures
+in the navigation's slot, which a real page overruns), and the file fake
+serves a length. The build list is `tools/yonder_host_build.sh`, which
+both suites source, so they link the same thing. Every file it touches
+goes through `tools/test_yonder_replay_fs.{h,c}`, its own translation
+unit, whose writes go to a temporary file made new (`O_EXCL|O_NOFOLLOW`),
+flushed and renamed into place, whose reads refuse a symbolic link, and
+whose every call answers done, absent or a fault; the runner poisons,
+after including its header, the host's file functions that unit could
+reach. **One process per page**: the parent reads each kept record to
+decide whether it is a page to replay (`rp_is_kept`: one that says
+`kept:`, or of version 1 one whose `.html` is beside it), forks a child for it, and waits for it ten
+minutes at most (`rp_wait`): blocked in `waitpid`, which a 100 ms timer
+interrupts so the clock can be read, retried on `EINTR` alone, the child
+killed at its limit (SIGCHLD is reset to its default at start). It
+removes the temporary a child killed inside its write leaves, and trusts
+the child only when its exit status (`RP_CHILD_*`, 64 to 95) and its
+record agree: the state, the defaulted line, and the clean flag against
+the record's own lines of the kinds a replay reproduces; whether a page
+let go of what it held the record does not say, and that flag can only
+make the answer worse. Otherwise it writes the page unjudged itself,
+saying why. The child (`rp_replay_page`) reads the page's inputs from
+its record (`rp_window_of`): each is required (`kNeeded`) of a version
+2 record. A version 1 record takes nothing silently: its window, agent
+and zone, where it does not say them, are what the person states with
+`--window KEY=VALUE,...` (`rp_window_state`; an item ends at a comma a
+known key follows, so an agent string may hold commas), each named with
+its value on `REPLAY inputs stated:`, and one neither said nor stated
+leaves the page unjudged; its cookies and clock are the harness's, named
+on `REPLAY inputs defaulted: cookies clock`; its absent `content-type`
+or `charset` reads as empty, which is how its builds spelled empty; its
+`kept lines` binds the index when it says one; and its jobs are matched
+by kind and address in the kept order. A version 1 record that says no
+`kept:` is a kept page when its `.html` is beside it, assumed whole, its
+`bytes:` matching, and its replay record says `REPLAY kept: assumed
+whole (version 1)`. A record and its index of different versions are
+unjudged. It sets them where the window
+reads them (`rp_apply_inputs`): the agent on the session, the cookie
+string in the fake jar's script door, the clock the JS `Date` reads (to
+the millisecond, and still), and the zone (a `TZ` into the environment,
+or the configured offset with `TZ` unset). The page is fed, its jobs
+answered from the index in the kept order, the clock moved a tick an idle
+turn up to 60 virtual seconds, a navigation it starts ending the replay
+there, and it is left as yonder leaves it when it closes (the header says
+each step); `rp_decide` gives its state and `rp_compose` its record.
+
+**The diff** (`tools/yonder_corpus_diff.py BEFORE AFTER`) judges only
+pages replayed to a verdict on both sides, comparing their record lines
+of the kinds a replay reproduces, with counts left out: a gained line is a
+regression (exit 1), a lost one progress. A page whose after-record is
+unfinished is BROKEN, a regression when the before-record reached a
+verdict, never progress; one NEWLY INCOMPLETE exits 1 under its own
+heading (the corpus must be recorded again before the change can be
+judged on it); one incomplete on both sides is listed to be recorded
+again; one that reached a verdict where it had not is recovered, and not
+compared. A page the after directory lacks is a regression, one only the
+after directory has is unjudged, and so is a pair of records of one name
+and two addresses, or that took different inputs from the harness; a
+directory it cannot list answers 2, and so does any `*.txt` the reader
+cannot judge, each listed with why.
+
+**The instrument** (slice 7's before-and-after): a script's line is
+`script <address>: ran in <n> us`, the time `os64_js_run` took, compiling
+included (`yonder_scripts_task_us`). On the host the clock moves only when
+a case moves it, so the line is exact in the cases; in QEMU it is a number
+and not a speed.
+
+**Proof.**
+
+| Check | Result |
+|---|---|
+| Scripted-page host (`tools/test_yonder_scripts_host.sh`): the keep cases (a windows-1252 page posted in 97-byte chunks with a NUL inside kept byte for byte; the index, its version, each file, a failed script's line and no file; the facts; a page let go unshown; a stream stopped before its verdict leaving nothing; a folder that cannot be made; a name another yonder took, bytes and a folder left from before, each passed over; an empty folder removed; a head fact kept past a full table; an address's own `%` written apart from the token spelling; every one of the claim's 64 names taken, with keep_pages and without, writing nothing of the page and saying so; with keep_pages off, a number beside another's kept bytes or folder passed over, the claimed file reading `verdict: unwritten` until the record replaces it; a record that lost a line saying so; `kept: whole` on a page kept whole; picture and font failures a fetch decided written as `picture-fetch` and `font-fetch`; the setting off keeping nothing; 512 ordinary facts and the head's together losing nothing, the record ending with `end`; the agent, the cookies a script could read, the clock and the zone on the record; a zoom, the scripts switch, the agent or the view changed before the page was left, and a page laid out in another view than its claim's, each marking it unjudged, and an unchanged window not; cookies the jar cannot hand over whole not written and the record saying it lost lines; the cookies taken at the head for the final address, so an http load redirected to https records its Secure cookie, a response's own Set-Cookie is on the record, and a cookie the page's first script sets is not; a claimed record removed from under its page not written again, nor one another yonder claimed after it went, by its nonce; a placeholder with no memory for its text, or whose write or close fails, removed and its number passed over) and the script time | 6,062 checks, zero failures |
+| The replay's self-test (`tools/test_yonder_replay_host.sh`): the 29 fixture pages of `tools/yonder_loop_fixture`, `yonder_script_fixture` and `pages`, and twelve hand-made (a sheet that imports another from its redirected address and is read under its label, a page in windows-1252 from an encrypted fetch, a text body, a file's page and its script and timer, an error page, a failed script with a module and a global, a page too deep to read to its end, a picture by itself, a 1,400-pixel window, scripts off, an address holding `M%49SSING` of its own beside MISSING, the modern switch off, and a page read with every other input unlike the harness's, its agent, cookie string, clock, zone, view, zoom, dark pages, reduced motion and animations off, whose script writes each into its record), kept with keep_pages on in a child of their own, written to real files, replayed | 41 pages; every replayed record is the kept one (the paint stages aside, which the processor's counter times), the fixture pages having been kept with no input, as a replay reads them (REPLAY.md § 5); the corpus replayed again diffs clean, and replays the same from a runner started with SIGCHLD ignored. Then, each a corpus of its own: twenty-nine refusals, each checked by the reason its one rule gives (a damaged index line's number, a record that lost a line with no memory or past a full table, a `*.txt` that is not a record, a record cut before its `end` and one cut between its `kept lines:` and its `kept:`, a count of twenty digits, a quoted terminal sequence, index lines short of their fields or of a kind cut short, two sheets' lines numbered each as the other, a `kept lines` past UINT32_MAX and one short of its index, a `bytes` with something after its digits or a zero before them, an index of version 1 beside a record of version 2, an index of version 3, an empty index, an index with no version line, a carriage return in a fact, a control byte in an index field, a second `address:`, a second `kept:` after `kept: whole`, an index's version line again after its lines, a plain fact that is not UTF-8, a line past `end`, a second verdict, the claim's placeholder never replaced, an agent escaped to a byte that is no part of UTF-8); each of the nineteen inputs a record must say, taken out in turn; a child whose status names a state its record does not say, one that calls clean a page its record does not, one killed inside its write (its temporary removed), one that never ends (killed at its time), and two that exit outside the table (1, as a sanitizer does, and 97), each unjudged by the parent; two sheets of one address kept in the reverse order, each taking its own line; a kept page of version 1 judged with what was stated and defaulted named, one with no `kept:` judged as assumed kept whole and saying so, and one without a `zoom` nobody stated, unjudged; the page read with other inputs made version 1 and replayed in the window `--window` states, its script writing each stated input; `--window` taking an agent holding commas and refusing a key nobody states, a key twice, a view without its height and values no record says; a script asked for twice beside a version 1 index that kept it once, answered once; and the cases of the rounds before (a request the index lacks, no time (a corpus the diff compares with none given 60 s, by their budgets), two async scripts in their kept order, a navigation, a picture's failed fetch, a harness check failing, a partial run's rules, kept bytes of the wrong length, a record not UTF-8, a link planted at a temporary's name, a page whose replay dies or dirties the fakes); the whole-record vectors (a line a reader parses one value from, twice); and the child's elapsed wall-clock time with and without a borrow across a second, equal, backwards and past 2^32 ms |
+| `tools/test_yonder_replay_mutants.py`, run by `tools/test_yonder_replay_host.sh --mutants` through `tools/mutants_parallel.py` | 108 mutants, 108 caught, each by its own case (its log names the case that failed): with `tools/test_yonder_diag_mutants.py`'s (56 caught of 56, which hold yonder's own page-file rules, § 1's placeholder that is not whole among them), one for every rule of REPLAY.md § 1-7. Each of the 19 inputs taken out of `kNeeded`; the record's inputs not read; each input not applied (all of them, and the agent, cookies, clock, zone, zoom, appearance, motion, animations and height alone); the defaulted line not written; an unknown index version read; two versions let be; the identity compare, the numbering check, the index's version line standing once and one-line-one-job dropped; `kept lines` not bound to the index; the leading-zero refusal, the UINT32_MAX bound, the control-byte refusal, the NUL-field refusal and the end rule each dropped in both readers; the C reader's whole-record UTF-8 check, lines past `end`, a second verdict and the placeholder each read; a second head fact and a second address read in the C reader, and in the Python reader a second head fact, a second state, and a second of each of the five `REPLAY` lines that stand once, each alone; a not-reproduced kind named twice read, in both readers; a field escaped to bytes that are not UTF-8 read, in both readers; the budget line unwritten, and not required by the Python reader; the parent's agreement check, clean-flag check, exit-table bound, `EINTR` retry, time limit, temp removal and SIGCHLD reset each dropped, and the time limit's elapsed milliseconds taken without the nanoseconds' borrow, or a backwards span read as a forward one; version 1's stated inputs taken from the harness (the zoom, the agent), an unstated input not refused, the stated and assumed lines unwritten, a page with no `kept:` not kept, its absent `charset` not read as empty, and `--window` splitting at every comma or taking a view without its height; yonder's claim proof and its nonce comparison, whole-cookies check, setting-change mark, scripts setting and arrival view check each dropped; the cookies not taken at the head, taken for the clear, taken again after the scripts at arrival, and not taken for a file's page; and the diff's defaulted-set and address pairing, the `--window` statements' pairing, the budgets' pairing, unfinished-is-broken, regression, broken, newly-incomplete, missing-from-after, only-after, not-reproduced and unjudged rules each dropped |
+| `tools/test_yonder_records.py`, `tools/test_yonder_tally.py`, `tools/test_yonder_corpus_diff.py` | 13, 14 and 25 tests pass, every grammar vector among them |
+| The P5's 1,601 census records | all read as verdicts by the new grammar; none is a kept page |
+| Chris's kept pages of 2026-10-21 and 2026-10-22 (601 records), with the `--window` below | 2026-10-21: `replayed 341, clean 4, incomplete 107, unfinished 11; 341 of version 1, their inputs defaulted; 16 records are not kept pages; 10 unjudged; 2 did not let go of what they held` (every one assumed kept whole: none says `kept:`). 2026-10-22: `replayed 224, clean 15, incomplete 7, unfinished 4; 224 of version 1, their inputs defaulted; 4 records are not kept pages; 6 unjudged`. Every replayed record names what was stated and defaulted; the 16 unjudged lost lines (3 kept records, 13 the replay window's own); the 20 not kept pages have no bytes beside them; the two that did not let go are www.bing.com pages, a window leak on a real page the fixtures do not have |
+| Anchors of every mutant harness that names a file this slice touched | 1,079 anchors, each found once |
+
+**The corpus count**: 565 of the 601 records kept on 2026-10-21 and
+2026-10-22 replay (436 to a verdict, 19 of them clean; 114 incomplete;
+15 unfinished), 16 are unjudged and 20 are not kept pages, run with
+
+    --window zoom=1000,appearance=dark,motion=full,animate=on,modern=on,scripts=on,script-seconds=5,laid-out-at=2526x1282,agent=<the Chrome on Windows preset>,tz=EST5EDT
+
+The settings are the P5's yonder.conf as Fable stated them; the width is
+what 536 of the records' `laid out at` lines say; the height (1282) was
+inferred from the records' whole-view paint areas, and `tz` and the
+agent were read from notes and yonder's own Chrome preset, because the
+P5 did not answer that day. Chris confirms or corrects those three, and
+both sides of any measurement are run with the same statement. A page
+recorded from now on is version 2 and says them all.
+
+**Deferred**, each a DEBTS.md row (§ The replay corpus): a replay lays
+text out in the harness's bitmap face; `screen` answers libdom's
+default, not the display the page was kept on; a kept corpus holds the cookies a page's scripts
+could read; keep_pages writes on the window's thread; a page that
+navigates replays only as far as going; a replay does not reproduce what
+a picture's or a font's fetch decides; a form's reply replays as a GET.
+
 ### Slice 1a, as built
 
 Built by Opus on `opus/tmw-1a-storage`, from MODERN_WEB_BRIEFS.md § Slice
@@ -666,12 +1007,12 @@ rows in `modern.c`, a file each in libdom, and yonder's store.
 
 | Seam | What it is now |
 |---|---|
-| `os64_dom_storage_t` | a provider per area: `identity` (asked at a task's first touch; a value other than the last loaded means the store moved), `load` (the image, asked again with room, a few times, when it outgrew the room), `commit(changes, last)` (this page's change list only, merged by the host onto the store as it stands; `last` is drain's) |
-| the statuses | OK; FULL (past the quota: nothing kept, the page reads the store back); FAILED (the area keeps its map in memory for the page's life); BUSY (another window has the store: the changes are handed over again a second later, or at drain; at drain itself they are lost and the provider says so) |
-| commits | coalesced to one a second (`os64_dom_storage_settle`, `_due`, `OS64_DOM_STORAGE_COMMIT_MS`); sooner when the change list would pass the quota or the keys' cap; at `os64_dom_storage_flush`; once more at drain, the last |
-| `page_departs()` (yonder.c) | the one place the page on screen departs: where every navigation's page is first parsed (`stream_parser`) and as the window closes. It flushes, so the next page's scripts read what the last wrote; a navigation that never becomes a page is not a departure |
-| the store | `<profile>/storage/<origin>`, the origin with every byte outside `[A-Za-z0-9.-]` as `%XX`; read, merged and published by temp and rename under `<store>+lock` (an exclusive create holding `<task> <second>`), broken when its task is gone, a zombie, this window's own, or ten seconds old; a live one waited for 200 ms (2 s at the last commit, which nothing on screen waits for); the store's identity read again before the rename, and a moved store merged onto again. What the second look cannot see is an unlocked writer's same-size image in the same second, or one landing between the look and the rename (DEBTS) |
-| the image format | `os64 storage 1\n`, then `+<key bytes> <value bytes>\n` key value `\n` for a set, `-<key bytes>\n` key `\n` for a removal (an image holds sets only); `os64_dom_storage_merge` and `os64_dom_storage_walk` are libdom's, and yonder only moves bytes |
+| `os64_dom_storage_t` | a provider per area: `identity` (asked at a task's first touch; a value other than the last loaded means the store moved), `load` (the image, asked again with room, a few times, when it outgrew the room), `commit(changes)` (this page's change list only, merged by the host onto the store as it stands) |
+| the statuses | OK; FULL (past the quota: nothing kept, the page reads the store back); FAILED (the area keeps its map in memory for the page's life) |
+| commits | coalesced to one a second (`os64_dom_storage_settle`, `_due`, `OS64_DOM_STORAGE_COMMIT_MS`); sooner when the change list would pass the quota or the keys' cap, and a change it could not make room for (no memory to write the list) is refused as a full store's is, so what a page writes never takes the list past its bound (a `clear()` of a map another window grew past the keys' cap can, until the next commit); once more at drain, the last |
+| `page_departs()` (yonder.c) | the one place the page on screen departs: where every navigation's page is first parsed (`stream_parser`) and as the window closes. It unloads the page, as HTML does: `yonder_scripts_depart` retires its runtime, so none of its queued scripts, timers or handlers runs again, and drain makes its storage's last commit then, so the next page's scripts read what it wrote. The page stays on screen, scriptless, until the new one is laid out; a navigation that never becomes a page is not a departure |
+| the store | `<profile>/storage/<origin>`, the origin with every byte outside `[A-Za-z0-9.-]` as `%XX`; read, merged and published by temp and rename, which is atomic (a reader meets the old image or the new one); the store's identity read again just before the rename, and a store another window published since merged onto again. There is no lock between windows (Chris's ruling: one person on one machine), so two committing one origin in the same instant can lose one window's changes (DEBTS). Clear page storage removes each store with one unlink; a window mid-commit may then publish the store as it read it before the clear, with its own changes. The first touch of the profile removes the temps a crash left |
+| the image format | `os64 storage 1\n`, then `+<key bytes> <value bytes>\n` key value `\n` for a set, `-<key bytes>\n` key `\n` for a removal (an image holds sets only; no store is no image, and a file without the magic line, an empty one included, is not one); `os64_dom_storage_merge` and `os64_dom_storage_walk` are libdom's, and yonder only moves bytes |
 | `options.now_us`, `options.timing` | the host's microsecond clock, and the navigation's origin and milestones (`os64_dom_timing_t`), read as the binding is made and whenever a script asks |
 | `options.screen`, `options.zoom` | the display in device pixels, and the zoom in thousandths when asked |
 | the plain EventTarget | `d_event_target(prototype, class)` gives a class's objects the three EventTarget methods, `d_event_handler` an `on<type>`, `d_dispatch_plain` a dispatch whose path is the target alone; performance and `screen.orientation` use it |
@@ -711,8 +1052,9 @@ least one of `localStorage` (466 records, 46,635 asks), `sessionStorage`
 141), `screen` (247, 274) or `devicePixelRatio` (54, 61); `btoa` 161
 records and `atob` 53 besides.
 
-Host: the DOM host 3,810 / 22,416 → 6,602 / 34,924 checks, with 5,160
-allocation sweeps; the scripted-page host 5,888 → 6,007; all 0 failed. The
+Host: the DOM host from 3,810 / 22,416 checks to about 6,600 / 35,000,
+with about 5,200 allocation sweeps; the scripted-page host from 5,888 to
+about 6,000; all 0 failed (the PR states the counts at its head). The
 mutant harnesses were not run (the briefs' rule).
 
 **The cold read** found eight, all fixed: performance's private buffer
@@ -721,7 +1063,22 @@ too late for the next page (P1), quadratic removals (P2), two yonders
 merging onto one image (P2), a lookup stale after a Proxy trap, answered
 arrays filled through setters, orphaned temps, and a comment (P3s). **The
 design read** passed it with the WTF-8 ruling and the last commit's longer
-wait.
+wait (since retired with the lock, below). **Codex's first round** found eight: six fixed (the change list's
+bound under a busy store, the departed page's tasks, an empty file taken
+for an image, Clear against a live commit, measure's negative duration,
+`navigationStart` without a wall clock), and two declined on WebIDL's
+text (`new URLSearchParams(null)` is `null=`; a sequence's conversion has
+no IteratorClose), the second with a conversion-order bug found beside it
+and fixed. **A second cold read** found five, all fixed: a quadratic
+record conversion behind keys holding U+FFFD, Clear missing a window
+making an origin's first store, a commit out of memory retried every
+turn, and two comments. **Codex's second round** found three: the orphan
+sweep's grammar and redirectCount fixed, an empty measure dictionary
+declined on User Timing's step 1. **Its third round** found a race
+between two windows breaking one crashed lock; Chris ruled the
+cross-window lock out (one person on one machine), so a commit is read,
+merge, second look, rename, with BUSY and the last commit's wait retired
+and the same-instant loss booked.
 
 **Stacked on this branch**, slice 2 (fetch) moves `d_origin` onto libway's
 `way_origin_*` (Fable's ruling 8: the slice that lands second does it).
@@ -732,4 +1089,611 @@ entries; `DOMException` with `code` and `structuredClone` (raised with
 Chris as a small libdom slice); libos64's URL grammar gaps (userinfo, IPv6,
 IDNA, `aaa:/b`, an opaque path's trailing space); the legacy multi-byte
 decoders; a store's identity at whole-second resolution; sessionStorage's
-memory per window; and what the store lock's second look cannot see.
+memory per window; and two windows committing one origin's store in the
+same instant.
+
+### Slice 4, as built
+
+Built by Opus on `opus/tmw-4-css`, from MODERN_WEB_BRIEFS.md § Slice 4,
+then read cold by a fresh Opus (eleven findings, all fixed on the branch)
+and read for design. Every property is a libgarb row marked `modern`, with
+its grammar, and a consumer in libflow or yonder's painter; the cascade,
+the style object and WPT all see it go with the switch.
+
+**What was built.**
+
+- **The flow-relative properties** (CSS Logical 1 § 4). Each
+  flow-relative longhand, and each border side's flow-relative shorthand,
+  is a NAME for its physical twin in a horizontal, left-to-right writing
+  mode (`kLogical` in `libgarb/props.c`), so the cascade orders
+  `margin-inline-start` against `margin-left` by importance, specificity
+  and order as one property, which is what the standard's mapping comes to
+  for the one writing mode libflow lays out. The fourteen two-sided ones
+  (`margin-inline`, `padding-block`, `inset-inline`, `border-inline-width`
+  and the rest) are new shorthands, each a pair of physical sides
+  (`kPairs`). Quirks mode's unitless lengths are the physical names' alone.
+  `direction` and `writing-mode` are not read (DEBTS.md § Browser layout).
+- **`cursor`** (UI 4 § 5.1.1): every keyword, inherited, kept on
+  `flow_style_t`. Pictures (`url()`, and `image-set()` read against its
+  grammar) with their hotspots are read and dropped, so the fallback
+  keyword is what is kept. Nothing draws a pointer shape yet (the
+  honey-do's work).
+- **`user-select`** (UI 4 § 6.1): read and kept; nothing selects
+  differently.
+- **`word-break` and `overflow-wrap`**, with `word-wrap` as its alias (Text
+  3 § 5.1, § 5.4). `break-all` makes a break between every two clusters;
+  `anywhere` and `break-word` make EMERGENCY ones, taken only where a line
+  holds no other, cut at the clusters the run's carets give
+  (`word_pieces`). Min-content counts `break-all`'s and `anywhere`'s and
+  not `break-word`'s, as § 5.4 says; `Segs.measuring` says which is being
+  worked. Each word's first caret is found by halving, so cutting is
+  linear in the text (LAYOUT.md § Bounds). `keep-all` is `normal`, since
+  libflow breaks only at spaces.
+- **`letter-spacing`** (Text 3 § 7.2): a `<length>`; Text 4's percentages
+  are refused. The text engine adds it (`os64_text_layout_t.letter_spacing`)
+  after every cluster but a tab, the run's last included, so characters on
+  either side of an element's edge are spaced as any two are. libflow
+  leaves the spacing after a line's last character out of the line — in
+  the fit, the fragment's width and min- and max-content
+  (`trailing_spacing`). **That is a deliberate divergence from Chrome and
+  Firefox**, which keep the trailing gap: § 7.2 says a UA must not append
+  letter spacing at the end of a line. On the P5 it shows as a centred,
+  letter-spaced heading sitting half a gap off where Chrome puts it;
+  matching Chrome is a one-line flip, `trailing_spacing` answering 0.
+- **`text-overflow`** (Overflow 4 § 4.1): `clip | ellipsis`. A block that
+  clips (`overflow` not `visible`) and asks for an ellipsis has one laid out
+  once in its own fonts (`flow_box_t.ellipsis`: U+2026, or three periods
+  where the fonts have no glyph for it). Where a line ends in it, and what
+  of each box on it is kept, is ONE predicate in libflow with two doors,
+  beside the box tree it reads: `flow_line_cut` gives the limit (the end
+  edge less the ellipsis) and where the ellipsis starts, and
+  `flow_line_cut_keeps` is the one place the keep rule is written — an
+  atom or a marker kept whole only when it ends by the limit, a text kept
+  to its last character that does, an inline box's piece kept up to where
+  the ellipsis starts. `flow_box_cut_away` asks it of a box and every box
+  it is inside, so a box stacked out of a piece left out is left out too.
+  The painter draws only what is kept, and `flow_hit` hits only that: it
+  asks the predicate of each piece on a cut line and `flow_box_cut_away`
+  of each layer, and past the ellipsis's start answers the block (the
+  ellipsis stands in no inline box, as in Chrome). It lives in libflow and
+  not the painter because hit testing is libflow's and the painter can
+  call it unchanged; a rule written twice is two rules. An absolute box in
+  an inline is out of flow, not on the line, and is not hidden: § 4.1
+  hides a line's characters and atomic inline-level elements. Spaces that
+  hang at a pre-wrap line's end do not count as content passing the end.
+  A line with no room before the ellipsis keeps its first character or
+  atom, clipped rather than ellipsed, and the ellipsis follows it, clipped
+  by the box with it. The end is where the block's scroll shows it, so
+  content scrolled into view is drawn and a line scrolled to its end has no
+  ellipsis. libflow's walk hands the painter the block's LINE boxes after
+  each line's pieces, and the painter draws the ellipsis then as it draws
+  the block's text, its shadows and then its fill (`text_run`); a text
+  clip's walk hands it the line
+  too, so a `background-clip: text` heading's ellipsis takes the gradient,
+  or the clip's solid pen where the face refuses the clip. Cuts are kept
+  in a memo keyed by the line that grows (`flow_cut_memo_t`), one for a
+  paint and one for a hit, so each line is worked once whatever order its
+  boxes and layers are asked in; a hit works only the lines under the
+  point or that a layer holding the point is inside.
+- **`outline`** and its four longhands (UI 4 § 3), the shorthand's parts
+  read in any order (`auto` is a style and a colour both, so `outline:
+  auto solid` is read by backing up, `outline_rest`): a square ring of a
+  border's styles round the border box, `outline-offset` past it, taking no
+  room and counted in the box's ink (`flow_outline_rect`). `auto` is drawn
+  solid. The width kept is the computed one whatever the style, so
+  `inherit` passes it on; a style of none draws nothing. A negative offset
+  is held so the ring's outside is never under twice its width each way
+  (§ 3.5). It is painted LAST in its stacking context (CSS 2.1 Appendix E,
+  step 10): `flow_visit_groups` hands each ring that meets the view to
+  `flow_visitor_t.outline` in a layer of its own, after the context's
+  members and before its group closes. The ring, not the box's overflow,
+  is what is asked to meet the view. There was no default focus ring to
+  move: `:focus` never matches, and yonder's widgets draw their own.
+- **`object-fit` and `object-position`** (Images 3 § 4.5, § 4.6): a
+  picture is placed by `yonder_object_rect` and cut to its content box.
+  Images 4's pairs (`cover scale-down`) are not read.
+- **`aspect-ratio`** (Sizing 4 § 4.1; a new value kind, `GARB_V_RATIO`). A
+  block's height follows its width and its width a given height, measured
+  on the content box under `auto && <ratio>` whatever box-sizing says (§
+  4.1: "in all cases"). Whichever size the ratio gives, the box is held to
+  its automatic minimum there where that minimum is auto and it does not
+  scroll: at least its content's height, at least its min-content width,
+  capped by its maximum (§ 4.3; `ratio_content_h`, `ratio_floor_w`). The
+  limits travel across the ratio by one door, so every formatting context
+  answers alike: a width made from a height takes the height held to its
+  own limits first (`ratio_width_held`, CSS 2 § 10.3.2's order), and a
+  width the ratio box leaves to itself is held to its own limits and to
+  its definite min- and max-height carried across onto a min- or max-width
+  the page left unset (§ 4.4, `width_limits`) — so a stretched block with
+  `max-height: 80px` is as wide as that height makes it. A picture's own
+  ratio loses to the page's unless `auto` is written beside it, and a
+  picture not yet measured takes its other side from the page's ratio,
+  held by the limits an arrived one is (`replaced_hold`, which every
+  replaced box with a side given ends in, an `<input type=image>` before
+  its picture comes too); with one side given and a ratio of its own (not
+  `auto <ratio>`) it is fixed, so its arrival lays nothing out again —
+  unless it is a flex item whose main size, basis or main minimum leaves
+  the flex algorithm reading the picture's own size
+  (`flow_replaced_fixed`, asked of the box). A
+  float or an absolute box with a height and no width takes the ratio's
+  width rather than shrinking to fit. An absolute box whose two sizes are
+  left to it takes its BLOCK axis as the ratio-dependent one unless only
+  its inline axis has an auto inset (Position 3 § 4.1), so four insets
+  set do not stretch its height. A flex item with a definite cross size
+  (given, or its single line's that stretches it, Flexbox 1 § 9.8) has its
+  flex base size through the ratio (§ 9.2.3 B), under `flex-basis:
+  content` even where its main size is given; its automatic minimum stays
+  its content's, since § 4.5's transferred size suggestion is a replaced
+  item's. A grid item under `normal` starts down its area and stretches
+  across it: the inline axis keeps `stretch`, as Chrome and Firefox do for
+  the `aspect-ratio` tile pattern (a grid of `aspect-ratio: 1` cards fills
+  each column and is as tall as it is wide). A written `stretch` still
+  stretches it down. Intrinsic widths follow a given height through the
+  ratio. A table's inner boxes take none, as § 4.1 says, and a table's own
+  box is booked.
+
+The two grammar laxities WPT exposed in passing are fixed too: a radial
+gradient's `at` is a full `<position>`, and each of `text-indent`'s
+keywords may appear once.
+
+**The seams, as they ended.**
+
+| Seam | What it is now |
+|---|---|
+| `kLogical`, `kPairs` (libgarb) | a flow-relative longhand is its physical twin's name; a two-sided one is a shorthand of a physical pair |
+| libdom's style object | every property name libgarb reads is a member three ways (CSSOM § 6.6.1): camel-cased, webkit-cased for a `-webkit-` name, and dashed as written, for shorthands and aliases too (`garb_prop_name_at`, `garb_prop_known`); a marked one goes with the switch |
+| `flow_visitor_t.outline` | its last member: handed each ring last in its stacking context; NULL (as `flow_visit` passes it) means no outline step |
+| the LINE visit | the walk (`flow_visit`, `flow_visit_groups`) hands a LINE box over only for a block with an ellipsis, after the line's pieces |
+| `flow_line_cut`, `flow_line_cut_keeps`, `flow_box_cut_away`, `flow_cut_memo_t` (libflow) | where a line ends in its ellipsis and what of each box on it is kept: the one predicate the painter and `flow_hit` both read, and the memo each keeps its cuts in |
+| `os64_text_layout_t.letter_spacing` | tracking after every cluster but a tab, the last too; trimming it at a line's end is the caller's |
+| `width_limits`, `hold_width`, `ratio_width_held` (libflow) | the one door every width a ratio makes or holds passes through, in every formatting context |
+| motion | `copy_prop` covers all thirteen longhands, so `same_value` does too; `letter-spacing`, `outline-width`, `-offset`, `-color`, `object-position` and `aspect-ratio` (by its logarithm, Values 4 § 5.7.1) interpolate, and the keywords are discrete at half way |
+
+**Numbers.** WPT, before (the baseline commit, nothing built) → after:
+
+| directory | before | after | `--modern-off` | `[required]` | excluded pages |
+|---|---|---|---|---|---|
+| `css/css-logical/parsing` | 150 | 269 | 155 | 114 | 16 |
+| `css/css-sizing/aspect-ratio/parsing` | 11 | 18 | 11 | 7 | 1 |
+| `css/css-images/parsing` | 348 | 287 | 271 | 16 | 7 |
+| `css/css-text/parsing` | 224 | 268 | 254 | 14 | 30 |
+| `css/css-ui/parsing` | 67 | 151 | 69 | 82 | 13 |
+| `css/css-overflow/parsing` | 109 | 122 | 120 | 2 | 10 |
+
+The 235 required tests pass with the switch on and all fail with it off;
+none leaks. The `--modern-off` column is above "before" because the style
+object's dashed and webkit-cased members and the two grammar fixes are not
+the arc's surface and stay with the switch off. The excluded pages are
+every page whose tests read `getComputedStyle`, which waits on slice 1b.
+
+**css-images went DOWN, 348 → 287.** All 97 lost tests are
+`conic-gradient` values in `-invalid` pages (95 in
+`gradient-interpolation-method-invalid.html`, 2 in
+`conic-gradient-calc-angle-percentage-invalid.html`). They passed only
+because `background-image` was unreachable by its dashed name; once the
+style object answered it, libgarb's ruling that a conic gradient is taken
+by name (GARB.md's module table) makes every one of those values valid.
+The 36 gained are the slice's 16 (`object-fit`, `object-position`) and 20
+that are not the slice's surface and pass with the switch off too:
+gradient positions (the dashed names reach them, and the radial `at` fix
+holds them), `image-rendering`, and one conic case. One page,
+`gradient-interpolation-method-valid.html`, times out: its thousands of
+style writes run the runner's script clock out. It passed nothing before.
+
+Most `-valid` tests that still fail fail on serialization. The style
+object returns a value as it was written, not CSSOM's canonical form (`0`
+for `0px`, `16/9` for `16 / 9`). It also cannot read back a shorthand's
+longhands, and there is no `CSS.supports`. That is a libdom slice of its
+own (DEBTS.md § Classic browser scripting).
+
+**The census** (the P5's 1,601 page records): 985 name at least one of the
+slice's properties as missing. By records: `cursor` 919, `outline` 865,
+`letter-spacing` 726, `text-overflow` 650, `user-select` 627,
+`overflow-wrap` 556, `outline-offset` 553, `word-break` 520, `object-fit`
+428, `word-wrap` 387, `aspect-ratio` 356, `object-position` 296; some
+flow-relative property in 512 records and 127,354 asks. danlegt's asks:
+`object-fit` 7,537, `letter-spacing` 6,297, `cursor` 4,865, `outline`
+2,438, `word-break` 572, `overflow-wrap` 286. Not in the brief and still
+missing: the flow-relative radii (84 to 92 records each),
+`scroll-padding-block` (51), `contain-intrinsic-block-size` (36).
+
+Host: libflow 21,382 → 23,667 checks, yonder 1,716 → 1,914, the DOM host
+22,416 → 38,935, garb declarations 632, text 7,369, the scripted-page host
+5,888; all 0 failed. The mutant harnesses were not run (the briefs' rule).
+
+**Booked** (DEBTS.md § Browser layout, unless named): `direction` and
+`writing-mode`; `aspect-ratio` on a table's own box; the flow-relative
+radii; an outline on an inline box, and one that follows `border-radius`;
+`text-overflow` on an anonymous block's lines; `overflow-wrap` beside a
+float; the `-computed` WPT pages once slice 1b lands; and the style
+object's serialization (§ Classic browser scripting). CSS system colours
+(`highlight` and the rest) are booked beside them, though older than the
+slice: libgarb never read them. Noted and not booked:
+`word-break: break-all` over a megabyte of text makes a segment per
+character, the same class of cost libflow already pays per word.
+
+### Slice 1b, as built
+
+Built by Opus on `opus/tmw-1b-view`, from MODERN_WEB_BRIEFS.md § Slice 1b,
+then read cold by a fresh Opus (nine findings, all fixed on the branch,
+and a tenth the new cases found) and read for design. Four rows in
+`modern.c`, `libdom/view.c` and the history half of `window.c`, libflow's
+`computed.c`, libgarb's serializer for a media list, and yonder's session.
+
+**What was built.**
+
+- **The view** (`view.c`): `scrollX`/`pageXOffset`, `scrollY`/
+  `pageYOffset`, `innerWidth`/`innerHeight` (the viewport less its
+  scrollbars, what a media query reads), `outerWidth`/`outerHeight` (the
+  window's frame, unzoomed), `scroll`/`scrollTo`/`scrollBy` (two numbers
+  or a ScrollToOptions; `smooth` done at once; non-finite is 0; the
+  host clamps), `document.scrollingElement` (CSSOM View's, quirks
+  included), `onscroll`/`onresize`, and window's `focus()` and `blur()`,
+  which do nothing (the window is the person's to raise; added when the
+  corpus replay showed a site's analytics script reaching
+  `defaultView.focus()`).
+  `resize` at window and `scroll` at the document, bubbling, are fired by
+  the host's rendering step.
+- **`matchMedia`, `MediaQueryList`, `MediaQueryListEvent`**: `media` is
+  CSSOM's serialisation of the list (libgarb's new
+  `garb_media_serialize`/`_text_serialize`/`_text_serialized`), `matches`
+  judged at every read, `change` when the answer moved since the last
+  step (a change and its undoing owe nothing), `addListener`/
+  `removeListener`, and a list nothing holds freed by the next
+  `matchMedia`.
+- **`getComputedStyle`**: a live, read-only declaration over libflow's
+  `flow_computed_*` (resolved values: used ones off the laid-out box for
+  the sizes, margins, padding, a positioned box's insets, line height and
+  transform), camel, dashed and webkit spellings, `cssFloat`, indices and
+  iteration in CSSOM's order; a pseudo-element and a detached element read
+  an empty declaration. `CSSStyleDeclaration` is an interface on window,
+  naming the style object's prototype, which the computed one inherits
+  and shadows, so `instanceof` answers truly for both (added for the
+  corpus replay's check that every interface the slice hands out is on
+  window). `document.defaultView` is window (beyond the brief: it is how
+  pages reach `getComputedStyle`).
+- **History**: `pushState`, `replaceState` (an empty URL is none, whatwg/
+  html#9343), `state` (JSON: plain data, finite numbers but -0, no holes;
+  DataCloneError otherwise, QuotaExceededError past 64 KiB),
+  `scrollRestoration`, `length` from the window's session, `onpopstate`,
+  `onhashchange`, `PopStateEvent`, `HashChangeEvent`; the location hash
+  setter's own rule (the fragment it already has, as the URL parser's
+  fragment state writes it, navigates nowhere).
+- **yonder**: the three providers, the session's entries (below), Back
+  and Forward within a document with no fetch, and the owed events run
+  before a page's other tasks.
+
+**The seams, as they ended.**
+
+| Seam | What it is now |
+|---|---|
+| `os64_dom_view_provider_t`, `os64_dom_view_step` | `read` (the view now, no layout) and `scroll` (a layout made current, then the view scrolled, its cost added to the geometry counts). The step fires at most one event a call — `resize`, else `scroll`, else the first list whose `matches` moved — and the host calls it until it answers false |
+| `os64_dom_set_computed` | the provider puts each property of libgarb's table (`garb_prop_t`) as CSSOM serialises it; **the table is the property list**: a declaration's length, order and names are the table's, so slice 4's `-computed` WPT pages read exactly what libgarb models. Every read asks again for the whole element into one snapshot buffer; one past the binding's budget is refused whole |
+| the three routes (`os64_dom_history_t`) | a STATE UPDATE (`update`: the address and its JSON, push or replace) fires nothing; a FRAGMENT NAVIGATION (`fragment`) adds an entry, scrolls, fires `popstate` inside the script that made it (HTML § Navigate to a fragment) and owes `hashchange` when the fragment moved; a TRAVERSAL is the host's: it tells the binding (`os64_dom_history_moved`) before its own entries move, then owes `popstate` and, when the fragment moved, `hashchange` |
+| owed events (`os64_dom_history_event_t`) | carry what they were owed with: a hashchange its two addresses, a popstate its entry's state and name (`os64_dom_history_entry`); its state is `history.state` itself only while that entry is still the current one |
+| entries (`way_crumb_t.document`, `.entry`, `.state`) | a crumb names its document (moving between two of one document's is no fetch), the entry itself (a fetched traversal finds its target by name wherever the list has moved it, the entries between keeping their own scroll and state) and its state, owned by the session |
+| `stream_entry` | a Back, Forward or Reload that fetches gives the arriving document the entry's state before its first script (HTML § Restore the history object state); a host whose binding is not made yet keeps it for the binding |
+| `g.traversing` | while a traversal is fetched, the page on screen's state updates and fragment navigations change the page and not the session (HTML § Finalize a same-document navigation drops a change whose document is no longer active) |
+| `unshown_go` | `history.back()` or `forward()` past a page not yet shown is ONE rule wherever its arrival is (parse, DOMContentLoaded, waiting for sheets): its navigation committed when its response came (HTML § Finalize a cross-document navigation), so when there is an entry that far (§ Traverse the history by a delta) the page is never shown, a new way's entries go ahead (a traversal's are let go with it: DEBTS.md), and the window goes there from the page on screen, with no fetch when that is the page on screen; when there is none, nothing happens and the page arrives. A new way's page has nothing ahead, and neither has a page that pushed before it was shown, however it came: the push let go of what was ahead of its entry; a reload is the entry on screen again; a traversal's page is the entry it was fetched for (`Page.arrives_at`), which its arrival lands on whatever it pushed before it was shown. From `load` on, the page is the one on screen |
+| `Page.loaded`, `g.replacing` | a page's navigation by address (`location.replace`, `location.href`) or a form its script sends replaces the page's own entry until the page has completely loaded, which in yonder is when its `load` task, and the navigation that task asked for, is over (`page_navigation_replaces`; HTML § 7.2.4, Location-object navigate, step 3, and § 4.10.22.3 Form submission algorithm, step 25). `replace()` replaces whenever it runs. No transient activation is weighed: a page is shown and its `load` runs in one turn, so a person's input has no task in that window, and a timer or a click after `load` pushes. For the page on screen (its `load` running) the entry replaced is the one on screen. A page not yet shown (its parse, its DOMContentLoaded, its wait for sheets) is the session's entry already, so the new page takes its place (`start_trip`): it comes as the replaced page came (a reload's as a refresh), at the entry a traversal was fetched for, with the entries its scripts made around it, and a traversal goes on as its own. A redirector reached by a link leaves the page before it behind; one reached by Back is replaced, so Back past it is the entry before it. A page not yet shown whose navigation waits on the question bar is asked as the page on screen's, and its place is not taken (DEBTS.md) |
+| the switch | with it off: none of the four rows' names, nor `scrollingElement`, `defaultView` or an element's `onscroll`; the arc's handler types are not handlers as content attributes either; `history.length` is 1, a fragment navigation is an ask, the hash setter asks whatever it is given, and history deltas do not add up. What it does not reach: the window's own session (a fragment link's entry, Back within a document, the entries named by crumbs), which is yonder's own history, not web surface (the design read's ruling) |
+
+**The scroll-restoration ruling.** The brief said a traversal within a
+document "scrolls to the fragment". It restores the scroll position the
+entry was left at, and the design read ruled the brief wrong: HTML's
+"update document for history step application" runs "restore persisted
+state", which restores the entry's scroll position data when its scroll
+restoration mode is `auto` (HTML § Restoring persisted state), and that
+is what browsers do. A page that sets `history.scrollRestoration` to
+`manual` keeps its own.
+
+**Numbers.** WPT, before (`2bbb9f60`, the baseline commit) → after, with
+the switch on and off:
+
+| directory | before | after | after, switch off | `[required]` | excluded pages |
+|---|---|---|---|---|---|
+| `css/cssom-view` | 217 | 229 | 217 | 8 | 9 (frames) |
+| `html/browsers/history/the-history-interface` | 4 | 50 | 4 | 19 | 0 |
+| `css/cssom` | 459 | 589 | 459 | 20 | 0 |
+| `css/mediaqueries` | 0 | 117 | 0 | 13 | 0 |
+
+Every required test passes with the switch on and fails with it off.
+`dom/nodes` is unchanged (858). What still fails, by cause: frames (the
+excluded pages, and history's pages that open one), `DOMException`'s
+`code`, computed custom properties and shorthands, and the members of
+cssom-view's element geometry outside this slice.
+
+**The census** (the P5's 1,601 page records, slice 0b's
+`yonder_tally.py`): 316 records, 57 of 268 sites and 9,668 asks name at
+least one of the slice's names: `getComputedStyle` (187 records, 192
+asks), `matchMedia` (246, 479), `innerWidth` (62, 2,552), `innerHeight`
+(68, 2,385), `outerWidth` (14, 15), `outerHeight` (9, 10), `scrollY` (13,
+15), `pageXOffset` (12, 1,984), `pageYOffset` (12, 1,986), `scrollTo` (1,
+2), `CSSStyleDeclaration` (37, 42), `focus` (1, 6). The history members
+are not window misses, so the census cannot count them.
+
+**The corpus replay** (230 pages Chris kept on the P5, 222 judged, run by
+the orchestrator) found four failure groups that could have been this
+slice's, each traced to its cause: a CDN's bot challenge (five sites)
+dies at `crypto.getRandomValues`, before and after, its timer then
+calling a callback (`window.qpPe1`) that the dead script would have made;
+the only change is the address, which now carries the challenge's token
+because `replaceState` runs and no script `load` event puts it back (both
+booked). React's `getActiveElementDeep` (two sites)
+now reaches `instanceof window.HTMLIFrameElement`, slice 0a's booked
+interface. A site's analytics script now reaches `""+document.referrer` (slice 1a's
+booked row) and `document.defaultView.focus()`, for which this slice
+added window's `focus`/`blur`; checking every interface the slice hands
+out added `CSSStyleDeclaration`. Two sites' unjudged records
+are the record's own capacity (its facts past `YONDER_DIAG_FACTS_MAX`).
+
+Host: the DOM host 3,810 / 22,416 → 4,709 / 36,995 checks, with 5,715
+allocation sweeps; the scripted-page host 5,888 → 6,361 (its refetch
+sweep cuts an arrival only up to the page's first script, below); all 0
+failed.
+libgarb's harness took 27 minutes with the media serializer as first
+built, its allocation sweep paying the cost that doubled at every bracket
+level (the cold read's P1); in one pass it takes 10 seconds. The mutant harnesses were not
+run (the briefs' rule).
+
+**The cold read** found nine, all fixed: the media serializer's cost
+doubling at every bracket level (P1); a fetched Back losing the entry's
+state, `hashchange`'s addresses and `popstate`'s state read when the event
+ran rather than when it was owed, a fetched traversal popping by count,
+and `history.back()` from an arriving page landing differently by when it
+ran (P2s); the switch leaking through content attributes, the hash setter
+navigating to the fragment it had, and a multi-step traversal stamping the
+live scroll on every entry (P3s). The new cases found a tenth:
+`history.length` counting a page arriving by a traversal as a new entry.
+**Codex round 1** found seven, all fixed but one that did not reproduce:
+a delta of INT32_MIN negated past int32_t into an out-of-bounds index
+(P1; every delta's magnitude is now int64_t, and the class audit found a
+scroll rounded after its clamp); `history.forward()` from an arriving
+page dropped (`unshown_go` now answers both ways); a refetched page that
+pushed before it was shown losing its target (`Page.arrives_at`); the
+computed fallback's CSS-wide keywords, and its 511-byte cut; and a quirks
+body under a boxless root. The hidden descendant's `rem` already read the
+root's font; a case pins it. Its adversarial pass found a page that
+pushed and went back among its own entries keeping P ahead
+(`way_forget_ahead`), and a QuickJS crash compiling under a failed
+allocation (booked).
+**The second cold read**, of round 1's fixes, found: `history.forward()`
+from an arriving page that had pushed abandoning it, where the push had let
+go of what was ahead and forward is nothing; and `history.length`, read
+by such a page, still counting what its push let go of; and a new way's
+page going back past its own entries putting them ahead of what its commit
+had let go of; and a page not yet shown that navigated by address doing so
+from the page on screen (`g.replacing`), so a JavaScript redirector's
+`location.replace` erased the page its link was on, and a redirector
+reached by Back left its entry behind, where Back reached it again.
+It also found that a replay's session history and window frame are the
+harness's, which REPLAY.md § 3 now states, and Back from an arriving page
+measuring its target before a held push joins the session (booked).
+**The third cold read** found that "not yet shown" is not "not yet
+completely loaded": yonder shows a page before its `load`, so a redirect
+or a script's form in `onload` still pushed, and Back from where it went
+reached the redirector again (`Page.loaded`); and a page at its
+DOMContentLoaded whose replacing navigation could not start arriving
+without the entries its scripts made, which it now takes back.
+It booked the question bar answered for a page not yet shown; the round
+also booked a page not yet shown sending the page on screen's Referer, and
+a fragment navigation before load pushing.
+**The design read** passed it with the scroll-restoration ruling, the two
+accepted departures from HTML's traversal queue below, and the session's
+being outside the switch.
+
+**Merged with 1a and 4**: a MediaQueryList is one of 1a's plain event
+targets (`d_event_target`, `d_event_handler`, `d_dispatch_plain`, the
+host's `d_host_dispatch` at a plain target's entry). 1a's helper gained a
+per-class resolver for it: a list's entry is made only when a listener
+is added, its handler set or an event dispatched at it (`media_entry`),
+and let go once nothing listens on it, at the next matchMedia or view step
+(`media_release`), so a list nothing listens to is not held, however it
+was listened to before; performance and screen.orientation keep theirs as
+their opaque. The
+interface objects are 1a's `d_interface_new`; 1b's own installer is gone.
+The two `DOMException` rows are one. Slice 4's thirteen longhands
+(`cursor`, `user-select`, `word-break`, `overflow-wrap`, `letter-spacing`,
+`text-overflow`, the four `outline-*`, `object-fit`, `object-position`,
+`aspect-ratio`) are computed from libflow's style (`aspect-ratio` as the
+page declared its pair), since libgarb's table is the property list and
+each must serialise (WPT's `serialize-all-longhands`). At the merge, with
+4's properties parsed: `css/cssom` 722, `css/cssom-view` 248,
+`css/mediaqueries` 118.
+
+**Codex round 2**, after the merge, found seven. Fixed: `font-family`
+computing to libflow's names and its fallback, where the computed value is
+the declared list as written (`flow_family_list_t.written`); an event's
+init dictionary that is a primitive accepted, now a TypeError for every
+Event interface through libdom's one gate (`d_dictionary`); the
+`scripting` media feature fixed at `none`, now the document's
+(`garb_env_t.scripting`); and the device-* features answering the
+viewport, now the screen's (`garb_env_t.device_width`, from `s_screen` and
+the binding's `options.screen`), which put `css/mediaqueries` at 120.
+Booked: a grid template's resolved value as the used track sizes. Declined
+as what-ifs or as WebIDL's own rule: an options getter that scrolls the
+window, and `scrollRestoration` refusing an unknown word (WebIDL ignores
+it).
+
+**The fourth cold read**, of the merge and round 2, found six. A
+MediaQueryList was held for the page's life by any target operation on it
+(a read of `onchange`, a removal, a dispatch) and never let go when its
+last listener went, so a hook that makes a list and adds and removes a
+listener every render kept every list; now an entry is made only to add, to
+set a handler or to dispatch, and `media_release` lets it go, in one walk
+of the registry, at the next matchMedia or view step. `resolution`
+answered 1 at any zoom; it is the zoom now, as devicePixelRatio is, and
+libgarb knows the WebKit pixel ratio. A quoted family name that spells a
+keyword is written quoted, and a keyword in its canonical lowercase. And
+three texts: slice 4's `-computed` pages wait on `CSS.supports` (booked),
+not on getComputedStyle; a comment that headed the wrong function; and
+what matchMedia's answer reads.
+
+**Booked** (DEBTS.md § Classic browser scripting): computed custom
+properties and shorthands; `DOMException` (raised with Chris as a small
+libdom slice); frames and `window.open`; an entry's state living only as
+long as its crumb; history deltas adding up to nothing; `scrollRestoration`
+per document; `matchMedia` writing `calc()` as given; the out-of-memory
+`not all`; a second traversal stopping the first; a stopped traversal
+collapsing held changes; Back from an arriving page with nothing on
+screen; from the corpus replay, `crypto.getRandomValues` and a script
+element's `load` and `error`; from Codex's round, QuickJS compiling a
+parse that ran out of memory; and from the second cold read, Back from an
+arriving page measured before a held push joins; and from the third, the
+question bar answered for a page not yet shown, a page not yet shown's
+Referer, and a fragment navigation before load; from Codex's second
+round, a grid template's used track sizes; and from the fourth cold read,
+`CSS.supports`. In § The replay corpus:
+a replay's session history and window frame.
+
+### Slice 0c, as built
+
+Built by Opus on `opus/tmw-0c-jquery`, from MODERN_WEB_BRIEFS.md § Slice
+0c (the reviewed copy on `fable/modern-web`): the first slice the corpus
+named rather than the plan. Read cold by a fresh Opus (six P3s: five fixed
+on the branch, the sixth Slice 0d) and read for design. jQuery 3 died at
+load on `document.implementation.createHTMLDocument`, and every script after
+it on `jQuery is not defined`; a banking site's login was a `javascript:`
+link yonder refused.
+
+**What was built.**
+
+- **`document.implementation`** (DOM § 4.5.1; libdom `implementation.c`),
+  classic surface, on every page with the switch off too: one
+  DOMImplementation per document, made when first asked for, with
+  `createHTMLDocument(title)` (the standard tree; a title element only
+  when a title is given, the empty string being one), `createDocument
+  (namespace, qualifiedName, doctype)` (an XML document holding the doctype
+  and then the element createElementNS would make, the name held to DOM's
+  "validate and extract"), `createDocumentType` and `hasFeature()` (true).
+  `Document.doctype`, and DocumentType, a prototype of its own with `name`,
+  `publicId`, `systemId` and ChildNode. The `DOMImplementation` interface
+  object is a Modern Web row; `DocumentType` joins the interface row.
+- **A new document lives in the page's arena** (libhtml's
+  `os64_html_create_document`, a second DOCUMENT node there under the DOM
+  Standard's rules for a document's children and none of the window's own;
+  `os64_html_create_doctype` beside it). A node made in it and appended to
+  the page is MOVED, keeping its identity, wrapper, expandos and listeners:
+  jQuery.parseHTML's nodes are the page's, found by its `querySelector`.
+  This is the brief's open choice, taken for that reason (a second arena
+  would make adoption a copy, and jQuery appends the exact nodes it
+  parsed). It is freed with the page and charged to its caps; a change in
+  it moves the page's version, so yonder rebuilds the page's model after
+  that task.
+- **Which document a node belongs to** is the document its tree hangs
+  from; a detached tree's root's wrapper records the one it was made in,
+  copied from or last taken out of (`DValue.document`, written by
+  `d_made_in` and `d_leaving`). `ownerDocument` was the window's for every
+  node before.
+- **A document with no window**: `location` is null (assigning throws),
+  it is cookie-averse, `write`/`writeln`/`open` throw InvalidStateError
+  (a write would otherwise have reached the page's own parser), a link, a
+  form, focus, blur or reset in it asks nothing of the host, a script
+  connected to it is marked started and never runs, a handler attribute in
+  it is not compiled, its body reflects no handler onto window, and its
+  fragment parses and serializations run with scripting off
+  (`d_scripting`). DOM's connected (`d_connected`, any document) and
+  "in the window's document" (`d_in_window_tree`, what a script must be in
+  to run) are two names.
+- **The second wall**, jQuery 1.12.4's support probe
+  `c.type="checkbox",c.checked=!0`: `type` was an expando, the input stayed
+  text, and libpage refused its checkedness ("Control property refused").
+  Inputs, buttons, selects and textareas reflect `type`, and libpage keeps
+  every input's checkedness, as HTML does (jQuery's `serializeArray` reads
+  `.checked` of every field). Past that probe 1.12.4 reads
+  `e.attributes[name]`: the acceptance is met for 3.5.1 and moves to Slice
+  0d for 1.12.4.
+- **`javascript:` links** (HTML § 7.4.2.3.3): `follow_link_asked`, which a
+  person's click and a script's `click()` both reach, hands such an
+  address to the page's script host before libway is asked
+  (`yonder_scripts_address`): the address after its scheme percent-decoded,
+  then its fragment as libpage hands it over (decoded already), read as
+  UTF-8, queued as a classic script with no element and run as one task,
+  recorded as `script javascript:#inline-<n>` (YONDER_DIAGNOSTICS.md). With
+  scripts off the link does nothing and the status line says so. A string
+  result replacing the page is DECLINED.md's.
+
+**The seams, as they ended.**
+
+| Seam | What it is now |
+|---|---|
+| `os64_html_create_document`, `os64_html_create_doctype` | libhtml's: a second DOCUMENT node and a doctype in `doc`'s arena and mark; never inserted, charged until `doc` is freed |
+| `d_node_document`, `d_window_document` | the node's document (its tree's DOCUMENT root, else its root's record, else the window's), and whether that is the window's; while no document of its own exists, every node is the window's and neither walks |
+| `d_made_in`, `d_leaving` | the record written as a node is made or copied, and as a binding verb (`d_remove`, `d_replace`, `d_replace_content`) takes it out; only a wrapped node keeps one |
+| `d_connected`, `d_in_window_tree` | DOM's connected (isConnected, a `form` attribute's lookup, the controls and names collections), and the window's tree (a script's start) |
+| `d_scripting` | the page's scripting, for a node of the window's document: innerHTML's parse and serialization, insertAdjacentHTML's parse |
+| `yonder_scripts_address` | a `javascript:` link's code queued as a classic script (`MODE_ADDRESS`, no element) |
+
+**Numbers.** WPT `dom/nodes`, the baseline (858 passes of 4,406) → 1,095
+of 4,969, none lost: pages that died at `document.implementation` now run
+to their end. `[required]` 14 → 21, the 7 that need the DOMImplementation
+and DocumentType interface objects; `--modern-off` passes (21 required,
+none passing with the switch off). The 230 the slice made pass that pass
+with the switch off too are in `[passing]`: a ruling against the brief's
+"`[required]` grows by the ones this slice makes pass", since
+`[required]` means "needs the switch" and `document.implementation` is
+classic. What still fails there: DOMException codes, `compatMode` and
+`characterSet`, the HTML element interfaces, elements in no namespace.
+
+The census, `tools/yonder_tally.py --failed`: `createHTMLDocument' of
+undefined` was 141 records over the two older pulls (84 and 57) and 51 in
+2026-10-22b's (26 sites); a replay of all three at this slice has none.
+On 2026-10-22b's replay, `Control property refused` 11 → 0, `'jQuery' is
+not defined` 47 → 8, `'$' is not defined` 33 → 6. The surface's own names
+are missing in 4 of the 886 kept records (`DocumentType`, 4 sites;
+`DOMImplementation`, none).
+
+The replay diff (REPLAY.md § 7) of 2026-10-22b, the slice's base against
+its head: 56 pages of progress (259 lines lost), and 54 pages
+"regressions" (908 lines gained), which are THE NEXT WALLS: 50 of them
+carried one of the two walls before, and the other 4 are one site whose
+jQuery died elsewhere and now boots. What the gained FAILED lines ask for:
+`getComputedStyle` (26 lines), `matchMedia` (14), `document.referrer` (11),
+`getClientRects` (3), `fetch` (3), `DOMParser` (1), a module (1), and
+reads of undefined behind them. Three pages are newly unfinished: the
+scripts that now run ask for scripts in an order and number the kept index
+does not hold, so a blocking request goes unanswered (to record again,
+DEBTS.md § The replay corpus); 6 were unfinished before and are still, 33
+are to record again and 15 unjudged on both sides. The older pulls,
+replayed at the head only, read more pages incomplete for the same reason
+(2026-10-21: 147 of 340; 2026-10-22: 33 of 223).
+
+Host, the slice's base → its head: libhtml's verbs 540,023 → 540,042
+checks, libpage 254,138 → 254,141, the DOM host 6,841 / 51,471 → 7,676 /
+53,450 (allocation sweeps 561 / 7,913 → 653 / 8,187), the scripted-page
+host 6,186 → 6,206; all 0 failed. `tools/test_dom_implementation.inc` holds a case per
+rule of LIBDOM.md § Documents of their own and runs jQuery 3.5.1 and
+1.12.4, upstream copies, licence headers intact, in `tools/fixtures/`
+(1.12.4 stops at the next wall, `attributes`, and says so); the corpus's
+own 1.12.4 build carries its vendor's additions and is not in the tree:
+it runs when `OS64_JQUERY_AEM` names a copy. `tools/test_dom_mutants.py
+--only impl-` runs a mutant per rule of the slice, 21 of 21 caught; the
+other mutant harnesses were not run (the briefs' rule), their anchors
+checked against the changed files.
+
+**Review.** The builder's own pass counted a new document from its making
+and walked to a root only for a wrapped node. The cold read found no P1
+or P2 (isolation and memory held under an ASan churn of 300 documents)
+and six P3s, five fixed: a new document's body reflecting its handlers
+onto window, a `javascript:` fragment decoded twice, a displaced comment,
+the two meanings of connected under one name, and the fragment parser's
+scripting taken from the page rather than the context's document. The
+sixth, `Element.attributes`, is Slice 0d. The design read passed the
+shared arena. **Codex's first round** found four P2s: a creation's status
+read in the same argument list that wrote it, fixed; a windowless form's
+reset not carried out, declined under the one-user rule, with its comment
+made true and the gap booked; createDocument's name rule, declined as a
+change (the standard dropped XML's QName in 2025, and WPT's table at the
+pin holds the split at the first colon), its comment made exact and the
+rule pinned; and an XHTML document's elements reading as an HTML
+document's, booked, since the fix reaches the selector engine.
+
+**Booked** (DEBTS.md § Classic browser scripting, unless named):
+`Element.attributes`, for Slice 0d; `createElementNS` and elements in no
+namespace; a new document's quirks mode; a detached root that never had a
+wrapper reading as the window's; `javascript:` through location
+assignment, and a link whose fragment decodes to U+0000; a windowless
+form's reset; an XHTML document's elements reading as an HTML
+document's; the three
+newly unfinished kept pages (§ The replay corpus). Declined: a
+`javascript:` result that is a string (DECLINED.md).
