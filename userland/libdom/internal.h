@@ -33,16 +33,20 @@ enum {
  * for the node kinds, Element's for HTMLElement, HTMLElement's for the kinds
  * after it; -1 for Node, which inherits Object's. */
 int d_proto_parent(int kind);
-/* The event types the host dispatches, which are the ones on<type> names
- * and os64_dom_listens count. A script may listen for any other type. The
- * handler properties of the ones from SCROLL on are the Modern Web arc's,
- * installed by its table's rows (d_event_handler), not with the rest. */
+/* The event types the binding names, which are the ones on<type> names and
+ * os64_dom_listens count: the ones the host dispatches, and online,
+ * offline and languagechange, whose window handlers exist though nothing
+ * here ever fires them (browsing.c says why). A script may listen for any
+ * other type. The handler properties of the ones from SCROLL on are the
+ * Modern Web arc's, installed by its table's rows (d_event_handler), not
+ * with the rest. */
 enum {
     D_EVENT_CLICK, D_EVENT_MOUSEDOWN, D_EVENT_MOUSEUP, D_EVENT_MOUSEOVER,
     D_EVENT_MOUSEOUT, D_EVENT_MOUSEMOVE, D_EVENT_KEYDOWN, D_EVENT_KEYPRESS,
     D_EVENT_KEYUP, D_EVENT_INPUT, D_EVENT_CHANGE, D_EVENT_SUBMIT, D_EVENT_RESET,
     D_EVENT_FOCUS, D_EVENT_BLUR, D_EVENT_LOAD, D_EVENT_SCROLL, D_EVENT_RESIZE,
-    D_EVENT_POPSTATE, D_EVENT_HASHCHANGE, D_EVENT_DOM_CONTENT_LOADED,
+    D_EVENT_POPSTATE, D_EVENT_HASHCHANGE, D_EVENT_ONLINE, D_EVENT_OFFLINE,
+    D_EVENT_LANGUAGECHANGE, D_EVENT_DOM_CONTENT_LOADED,
     D_EVENT_COUNT
 };
 /* A wrapper, or another engine value the binding holds strongly. A node's
@@ -259,8 +263,10 @@ struct os64_dom {
     int64_t time_origin_epoch_us;
     /* screen and screen.orientation (screen.c), each made once. */
     DValue *screen, *orientation;
-    /* window.status's string as a script last set it (window.c). */
-    DValue *status;
+    /* window.status's string as a script last set it, a classic member
+     * (window.c); P1-W's six BarProps, `external` and `crypto`, each made
+     * once (browsing.c, crypto.c). */
+    DValue *status, *bars[6], *external, *crypto;
     /* Symbol.iterator as the engine made it, for reading an iterable a
      * page hands over (url.c). */
     DValue *iterator_symbol;
@@ -528,6 +534,25 @@ int d_screen_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 void d_screen_media(const os64_dom_t *dom, double *width, double *height, double *ratio);
 int d_base64_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_implementation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* P1-W, window's low-hanging fruit (WINDOW_DOCUMENT.md § P1-W): the
+ * window's members as a browsing context (browsing.c), its BarProps and
+ * `external` (the same file), and `crypto` (crypto.c). */
+int d_browsing_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_bars_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_external_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_crypto_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* An interface whose objects the binding makes (WebIDL § 3.7): its class
+ * registered in this runtime, its prototype made and held for the page's
+ * life, and its interface object, an Illegal constructor, named on
+ * window. `*out` borrows the prototype from the entry that holds it. */
+int d_interface_class(os64_dom_t *dom, JSContext *ctx, JSValueConst global, JSClassID id,
+                      const JSClassDef *definition, JSValue *out);
+/* WebIDL's ArrayBufferView (encoding.c): the kind of typed array `value`
+ * is (a JSTypedArrayEnum), D_VIEW_DATA_VIEW for a DataView, -1 for
+ * anything else, and -2 with an exception pending when the engine's
+ * classes could not be learned. Nothing of the value is read. */
+#define D_VIEW_DATA_VIEW 12
+int d_view_kind(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
 /* DOCUMENTS OF THEIR OWN (implementation.c). document.implementation and
  * DOMImplementation's prototype, which every page has (classic), and the
  * DocumentType members. */

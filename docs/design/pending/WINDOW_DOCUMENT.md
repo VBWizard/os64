@@ -321,8 +321,9 @@ Window to 60.7% C / 76.2% scan.
 - The six BarProps (`locationbar`, `toolbar`, `statusbar`, `menubar`,
   `personalbar`, `scrollbars`): Chrome 13.4% down to 4.8%. Each is
   `{visible: true}`.
-- `closed` (false) and `close()` (a no-op: a window not opened by script is
-  not script-closable).
+- `closed` (false) and `close()` (a no-op: HTML lets a script close a
+  top-level window whose session history holds one entry, and yonder lets
+  no page close the person's window; DIVERGENCES.md).
 - `clientInformation`: the navigator object, again.
 - `moveTo`, `moveBy`, `resizeTo` and `resizeBy`: no-ops (CSSOM View). Only a
   script-opened window may be moved or sized.
@@ -782,7 +783,7 @@ scan pages.
 | `createImageBitmap` | method | html | absent | 1.76 | 7 |  | d | canvas: no slice plans it; counter `CreateImageBitmap` |
 | `launchQueue` | ro attr | web-app-launch | absent | 1.32 W |  |  | e | Chromium-only or near-zero usage, meaningless for one user on one machine; webstatus.dev feature `app-launch-handler` (feature-level) |
 | `cancelAnimationFrame` | method | html | absent | 1.31 | 207 | 19/33 | c slice 5d | RELAYOUT.md 5d; proxy: a frame cancelled within its frame; lower bound |
-| `close` | method | html | absent | 0.52 | 14 |  | a P1-W | no-op: a window not opened by script is not script-closable (HTML § close) |
+| `close` | method | html | absent | 0.52 | 14 |  | a P1-W | no-op: no page closes the person's window, where HTML would let one close a window with a single history entry (DIVERGENCES.md) |
 | `alert` | method | html | classic | 0.37 | 3 |  |  |  |
 | `confirm` | method | html | classic, stub | 0.25 | 13 |  |  | answers false without asking |
 | `navigation` | ro attr | html | absent | 0.23 W | 54 |  | d | the Navigation API: a second session model beside history; webstatus.dev feature `navigation` (feature-level) |
@@ -818,7 +819,7 @@ scan pages.
 | `document` | ro attr | html | classic, partial |  | 328 |  |  | a writable data property; HTML makes it [LegacyUnforgeable]; P1-W |
 | `scrollTo` | method | cssom-view | modern |  | 307 |  |  |  |
 | `dispatchEvent` | method | dom | classic |  | 301 |  |  |  |
-| `isSecureContext` | ro attr | html | absent |  | 241 |  | a P1-W | a potentially trustworthy origin (Secure Contexts § 3.1) read from the page URL: https and wss, file, and localhost, 127.0.0.0/8 and ::1 |
+| `isSecureContext` | ro attr | html | absent |  | 241 |  | a P1-W | the page's address potentially trustworthy (Secure Contexts § 3.1) as libway judges it for mixed content (`way_url_trustworthy`): https, wss, data: and 127.0.0.0/8; the name localhost is not (ORIGIN.md's ruling), and a file is not (its origin is opaque) |
 | `screen` | ro attr | cssom-view | modern |  | 223 |  |  |  |
 | `reportError` | method | html | absent |  | 114 | 10/16 | b P2a | reports through the same error path as onerror |
 | `frameElement` | ro attr | html | absent |  | 101 | 13/16 | a P1-W | null: a top-level window |

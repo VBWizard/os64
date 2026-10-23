@@ -324,9 +324,10 @@ the first click.
 window have an on<type> property, and an on<type> content attribute is a
 handler. With the Modern Web switch on, so do `scroll` and `resize`; window
 alone has `onpopstate` and `onhashchange`, and a MediaQueryList `onchange`
-(§ The view, computed style and the session's history). With it off none
-of the four is a property, and their content attributes are ordinary
-attributes that no event runs. A target's handler is one slot in its listener list, in the place
+(§ The view, computed style and the session's history), and window alone
+has `ononline`, `onoffline` and `onlanguagechange`, whose events nothing
+here fires (§ P1-W's rows). With it off none of these is a property, and
+their content attributes are ordinary attributes that no event runs. A target's handler is one slot in its listener list, in the place
 it was first set; a slot for an attribute the parser or innerHTML wrote goes
 first (an element has its attributes before any script can reach it), and a
 script's `setAttribute` makes its slot then. Window's slots come from the
@@ -341,8 +342,9 @@ with(form owner) with(element)`, HTML's three scopes. A body that does not
 compile is reported once and stays absent until the attribute changes;
 reading the property answers null. A handler that returns `false` cancels.
 The body's window-reflecting handlers (`load`, `focus`, `blur`, and with the
-switch on `scroll`, `resize`, `popstate` and `hashchange`) are window's,
-from `<body onload>` or `document.body.onload` alike.
+switch on `scroll`, `resize`, `popstate`, `hashchange`, `online`, `offline`
+and `languagechange`) are window's, from `<body onload>` or
+`document.body.onload` alike.
 
 The body is first checked by the intrinsic Function constructor, taken
 before any page script could replace it. QuickJS builds that function by
@@ -593,7 +595,8 @@ ASan-instrumented target-profile engine, with sanitized bindings/tree/state.
 `tools/test_dom_implementation.inc` holds a case per rule of § Documents of
 their own, and runs jQuery 3.5.1 and 1.12.4 whole;
 `tools/test_dom_attributes.inc` a case per rule of § Attributes as nodes,
-and `tools/test_dom_mutants.py --only attr-` a mutant per rule. `domtest` exercises
+and `tools/test_dom_mutants.py --only attr-` a mutant per rule;
+`tools/test_dom_window.inc` a case per rule of § P1-W's rows. `domtest` exercises
 the shared-library boundary and heap in ring 3. These are library proofs; yonder's loop is proven with its own
 harness. Result counts are recorded in DOM.md after the final source freeze.
 
@@ -951,3 +954,50 @@ with no page code between them, which is what makes a duplicate link one
 comparison and a dependent source one walk (abort.c, `d_signal_follow`).
 `d_signal_dependents` is the weak-set cases' count of what a collection
 left linked.
+
+### P1-W's rows: window's low-hanging fruit
+
+Four rows (MODERN_WEB.md § P1-W, as built; WINDOW_DOCUMENT.md § P1-W is the
+plan). Every yonder page is the one document of a top-level window the
+person opened, never a frame and never a window a script opened, and each
+member answers what HTML gives such a window (browsing.c's header has the
+reason for each).
+
+**The window as a browsing context** (`browsing.c`): `opener` null (an
+assignment of anything but null makes it window's own data property),
+`closed` false and `close()` a no-op (no page closes the person's window),
+`moveTo`, `moveBy`, `resizeTo` and `resizeBy` no-ops that still convert
+their arguments, `captureEvents` and `releaseEvents` no-ops,
+`clientInformation` the navigator, `frameElement` null,
+`crossOriginIsolated` false, `originAgentCluster` true, `origin` the page's
+origin serialized (`d_origin`), and `isSecureContext` whether the page's
+address is potentially trustworthy as libway judges it
+(`way_url_trustworthy`, the browser's one copy of that judgement; the name
+`localhost` is not, a binding with no address is not). `ononline`,
+`onoffline` and `onlanguagechange` are window's handler slots, whose events
+nothing fires. `queueMicrotask(callback)` queues a job on the engine's one
+job queue, in order with promise reactions; the checkpoint that drains the
+queue calls it with `this` undefined, and a throw is that job's failure,
+reported as the task's (the first one a task meets is its outcome) while
+the jobs after it run, never thrown into the script that queued it.
+**The BarProps** (`locationbar`, `menubar`, `personalbar`, `scrollbars`,
+`statusbar`, `toolbar`, and `BarProp`): six objects, `visible` true.
+**`external`** and `External`: `AddSearchProvider()` and
+`IsSearchProviderInstalled()` do nothing.
+
+**`crypto`** (`crypto.c`; Web Cryptography § 10) and `Crypto`:
+`getRandomValues` fills an integer typed array of at most 65,536 bytes and
+answers it (a float array or a DataView is TypeMismatchError, more bytes is
+QuotaExceededError, anything that is no view a TypeError), and
+`randomUUID`, [SecureContext], answers a version 4 UUID. `subtle` is absent
+(WINDOW_DOCUMENT.md, ruling 1). The bytes are the host's
+(`options.entropy`; yonder's is libtls's door, `os64_tls_entropy`, over
+`/dev/random`), written into the binding's scratch and copied into the
+array only when the host says every one is there: a host that refuses, or
+has no hook, is an OperationError, and the page never gets zeros or a
+short fill as randomness. A view is told by its class, never through its
+getters, so nothing here runs page code.
+
+The classic fixes beside them are every page's, the switch on or off:
+`window` and `document` [LegacyUnforgeable] (§ Objects and collections),
+`history` a read-only accessor, `status` kept (§ Asks).

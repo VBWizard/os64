@@ -581,7 +581,9 @@ potentially trustworthy; Fetch § 4.1 calls it on every hop)
   **DIVERGES (permitted):** the name `localhost` is NOT trustworthy here: the
   standard trusts it only when the UA guarantees it resolves to loopback, and
   os64's resolver reads a user-editable hosts file. `data:` URLs are
-  trustworthy and allowed.
+  trustworthy and allowed. The judgement is libway's `way_url_trustworthy`,
+  the browser's one copy of it: a window's `isSecureContext` is the same
+  judgement of the page's own address (MODERN_WEB.md § P1-W, as built).
 - Blocked → network error → `TypeError` (or XHR `error`), checked BEFORE the
   request leaves, on the first hop and on every redirect hop, and the page's
   record gets one fact line (`mixed content: <url> from <page origin>`, the

@@ -20,8 +20,9 @@ static int encoder_mark;
  * arrays' are read at installation, which runs no function; DataView's
  * needs its constructor run, so it is read at the first decode that meets
  * an object of neither kind, through the constructor the binding took
- * before any page ran. `typed_classes[0]` is Uint8Array's. */
-static JSClassID array_buffer_class, data_view_class, typed_classes[12];
+ * before any page ran. `typed_classes[0]` is Uint8Array's; `typed_kinds`
+ * holds the same classes by JSTypedArrayEnum, for d_view_kind. */
+static JSClassID array_buffer_class, data_view_class, typed_classes[12], typed_kinds[12];
 static bool buffer_classes_known, data_view_known;
 
 bool d_string_text(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DString *out, bool scalar)
@@ -120,6 +121,7 @@ static int buffer_classes(JSContext *ctx)
     typed_classes[0] = typed[JS_TYPED_ARRAY_UINT8];
     for (int kind = 0, at = 1; kind < 12; kind++)
         if (kind != JS_TYPED_ARRAY_UINT8) typed_classes[at++] = typed[kind];
+    for (int kind = 0; kind < 12; kind++) typed_kinds[kind] = typed[kind];
     buffer_classes_known = true;
     return 0;
 }
@@ -131,6 +133,33 @@ static bool is_typed(JSClassID id)
     return false;
 }
 
+/* DataView's class, learned once through the constructor the binding took
+ * before any page ran. -1 with an exception pending. */
+static int data_view_learn(os64_dom_t *dom, JSContext *ctx)
+{
+    if (data_view_known) return 0;
+    JSValue buffer = JS_NewArrayBufferCopy(ctx, NULL, 0);
+    JSValue view = JS_IsException(buffer) ? JS_EXCEPTION
+                 : JS_CallConstructor(ctx, dom->data_view[0]->value, 1, (JSValueConst *)&buffer);
+    JS_FreeValue(ctx, buffer);
+    if (JS_IsException(view)) return -1;
+    data_view_class = JS_GetClassID(view);
+    data_view_known = true;
+    JS_FreeValue(ctx, view);
+    return 0;
+}
+
+int d_view_kind(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
+{
+    if (buffer_classes(ctx) < 0) return -2;
+    if (!JS_IsObject(value)) return -1;
+    JSClassID id = JS_GetClassID(value);
+    for (int kind = 0; kind < 12; kind++)
+        if (typed_kinds[kind] == id) return kind;
+    if (data_view_learn(dom, ctx) < 0) return -2;
+    return id == data_view_class ? D_VIEW_DATA_VIEW : -1;
+}
+
 /* WebIDL's BufferSource: an ArrayBuffer, a typed array or a DataView.
  * 1 for one, 0 for anything else, -1 with an exception pending (DataView's
  * class could not be learned). Nothing of the value is read. */
@@ -139,16 +168,7 @@ static int buffer_kind(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
     if (!JS_IsObject(value)) return 0;
     JSClassID id = JS_GetClassID(value);
     if (id == array_buffer_class || is_typed(id)) return 1;
-    if (!data_view_known) {
-        JSValue buffer = JS_NewArrayBufferCopy(ctx, NULL, 0);
-        JSValue view = JS_IsException(buffer) ? JS_EXCEPTION
-                     : JS_CallConstructor(ctx, dom->data_view[0]->value, 1, (JSValueConst *)&buffer);
-        JS_FreeValue(ctx, buffer);
-        if (JS_IsException(view)) return -1;
-        data_view_class = JS_GetClassID(view);
-        data_view_known = true;
-        JS_FreeValue(ctx, view);
-    }
+    if (data_view_learn(dom, ctx) < 0) return -1;
     return id == data_view_class;
 }
 

@@ -125,24 +125,6 @@ static JSValue screen_member(JSContext *ctx, JSValueConst self, int argc, JSValu
     }
 }
 
-/* An interface's prototype, made once, named on window with its interface
- * object; borrowed back from the registry entry that holds it. */
-static int prototype_of(os64_dom_t *dom, JSContext *ctx, JSValueConst global, JSClassID id,
-                        const JSClassDef *definition, JSValue *out)
-{
-    if (!JS_IsRegisteredClass(dom->engine, id) && JS_NewClass(dom->engine, id, definition) < 0) return -1;
-    JSValue prototype = JS_NewObject(ctx);
-    DValue *held = d_retain(dom, ctx, prototype);
-    if (held == NULL) return -1;
-    JS_SetClassProto(ctx, id, JS_DupValue(ctx, prototype));
-    JSValue f = d_interface_new(ctx, definition->class_name, 0, NULL, prototype, JS_UNDEFINED);
-    if (JS_IsException(f) ||
-        JS_DefinePropertyValueStr(ctx, global, definition->class_name, f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
-        return -1;
-    *out = held->value;
-    return 0;
-}
-
 static void clear(JSRuntime *rt, JSValue value)
 {
     (void)rt;
@@ -155,8 +137,8 @@ int d_screen_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     static const JSClassDef orientation_class = {.class_name = "ScreenOrientation", .finalizer = clear};
     JSClassID screen_id = os64_js_class_id(&screen_slot), orientation_id = os64_js_class_id(&orientation_slot);
     JSValue screen_prototype, orientation_prototype;
-    if (prototype_of(dom, ctx, global, screen_id, &screen_class, &screen_prototype) < 0 ||
-        prototype_of(dom, ctx, global, orientation_id, &orientation_class, &orientation_prototype) < 0)
+    if (d_interface_class(dom, ctx, global, screen_id, &screen_class, &screen_prototype) < 0 ||
+        d_interface_class(dom, ctx, global, orientation_id, &orientation_class, &orientation_prototype) < 0)
         return -1;
     static const struct { const char *name; int magic; } kScreen[] = {
         {"width", S_WIDTH}, {"height", S_HEIGHT}, {"availWidth", S_AVAIL_WIDTH},
