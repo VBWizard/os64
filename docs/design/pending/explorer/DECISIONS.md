@@ -329,3 +329,17 @@ requirements remain in force even where this log has no separate decision entry.
   successful launch, using the configured association destination and preserving
   other mappings. Cancellation and failed launches do not persist.
 - **Affected:** [E5C](E05C_ROAM_LAUNCH.md), shared file dialog, launch/config helpers.
+
+## D022 — Shared window placement, Roam and Scribe first
+
+- **Status:** Customer authorization, 2026-10-23; engineering design awaiting review.
+- **Source:** Chris approved E5D, requested simple initialization opt-in for any
+  application and named Scribe alongside Roam. Kernel work goes past Fable.
+- **Decision:** Design reusable normal-position/content-size persistence. Keep
+  per-role preferences independent and migrate file dialogs through size-only
+  policy. Prepare the kernel completion-event contract for Fable before coding.
+- **Deferred:** Executable/file attributes are on Chris's separate to-do list;
+  FAT policy is not an active concern for that future work. Thread lifetime
+  remains outside this slice.
+- **Affected:** [E5D design](E05D_WINDOW_PLACEMENT.md), native GUI events, libos64,
+  Roam, Scribe and shared file dialogs.

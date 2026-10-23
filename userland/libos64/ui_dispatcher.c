@@ -74,7 +74,9 @@ int64_t os64_ui_dispatcher_turn(os64_ui_dispatcher_t *d,bool wait)
         if(rc==0) { d->entries[i].drained=true; ++idle; continue; }
         idle=0; ++events;
         if(d->observe) d->observe(d->observe_user,entry.handle,&e);
-        bool consumed=entry.ui&&entry.ui->menu_event&&entry.ui->menu_event(entry.ui,&e);
+        bool consumed=entry.ui && e.type==OS64_GUI_EVENT_WINDOW_PLACEMENT &&
+            entry.ui->placement_event && entry.ui->placement_event(entry.ui,&e);
+        if(!consumed) consumed=entry.ui&&entry.ui->menu_event&&entry.ui->menu_event(entry.ui,&e);
         if(!consumed) {
             if(entry.event) entry.event(entry.user,&e);
             else if(entry.ui) (void)os64_ui_dispatch(entry.ui,&e);

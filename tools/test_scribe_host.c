@@ -233,6 +233,7 @@ static void sh_scribe(uint32_t size, const char *doc, size_t len)
     g.ctx.surf.width = SH_W;
     g.ctx.surf.height = SH_H;
     g.ctx.surf.pitch_px = SH_W;
+    os64_ui_init(&g.ui, &g.ctx);
     CHECK(scribe_build() == NULL);
     CHECK(ui_test_adopt(&g.ui, sh_dir, size) == OS64_FONT_OK);
     sh_put("/doc", doc, len);
@@ -795,6 +796,7 @@ static void scribe_saves_what_it_loaded(void)
     g.ctx.surf.width = SH_W;
     g.ctx.surf.height = SH_H;
     g.ctx.surf.pitch_px = SH_W;
+    os64_ui_init(&g.ui, &g.ctx);
     CHECK(scribe_build() == NULL);
     sh_rm("/new");
     do_load("/new");

@@ -2,6 +2,7 @@
 #include "os64/ui_menu.h"
 #include "os64/ui_action.h"
 #include "os64/ui_dispatcher.h"
+#include "os64/ui_window.h"
 #include "os64/proc.h"
 #include "os64/launch.h"
 #include "os64/conf.h"
@@ -533,14 +534,12 @@ static void paint(void *user)
 
 static bool initialize(roam_t *a,const char *initial)
 {
-    a->window=os64_gui_window_create("Roam",72,48,880,630,0);
-    if(a->window<=0) {
+    os64_ui_window_options_t options={.title="Roam",.x=72,.y=48,
+        .content_width=880,.content_height=630,
+        .remember={"roam-window.conf",OS64_WINDOW_REMEMBER_POSITION_AND_SIZE}};
+    if(os64_ui_window_open(&a->ui,&a->draw,&a->window,&options)!=OS64_UI_OK) {
         os64_printf("roam: window unavailable (%ld)\n",(long)a->window); return false;
     }
-    if(os64_draw_ctx_init(&a->draw,a->window)!=0) {
-        os64_printf("roam: window surface unavailable\n"); return false;
-    }
-    os64_ui_init(&a->ui,&a->draw);
     os64_ui_panel(&a->root);
     a->root.bounds=(os64_gui_rect_t){0,0,(int32_t)a->draw.surf.width,(int32_t)a->draw.surf.height};
     a->root.user=a;

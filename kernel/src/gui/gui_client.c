@@ -46,6 +46,8 @@ _Static_assert(GUI_WINDOW_TITLE_UTF8 == OS64_GUI_WINDOW_TITLE_UTF8, "title encod
 _Static_assert(sizeof(rect_t) == 16, "rect_t drifted from the GUI ABI (os64/rect.h)");
 _Static_assert(sizeof(surface_t) == 24, "surface_t drifted from the GUI ABI (os64/gui.h)");
 _Static_assert(sizeof(input_event_t) == 32, "input_event_t drifted from the GUI ABI (os64/gui.h)");
+_Static_assert(__builtin_offsetof(input_event_t, placement.changed) == 20,
+               "input_event_t placement mask ABI");
 _Static_assert(__builtin_offsetof(input_event_t, focus.other_handle) == 6, "focus handle ABI");
 _Static_assert(__builtin_offsetof(input_event_t, doorbell.mask) == 4,
                "input_event_t doorbell moved — GUI ABI break");

@@ -2,6 +2,19 @@
 
 int gui_event_queue_push(gui_event_queue_t *q, const input_event_t *ev)
 {
+    if (ev->type == INPUT_EVENT_WINDOW_PLACEMENT) {
+        uint32_t mask = ev->placement.changed & OS64_GUI_PLACEMENT_ALL;
+        if (!mask) return 1;
+        if (mask & OS64_GUI_PLACEMENT_X) q->placement.placement.x = ev->placement.x;
+        if (mask & OS64_GUI_PLACEMENT_Y) q->placement.placement.y = ev->placement.y;
+        if (mask & OS64_GUI_PLACEMENT_WIDTH) q->placement.placement.width = ev->placement.width;
+        if (mask & OS64_GUI_PLACEMENT_HEIGHT) q->placement.placement.height = ev->placement.height;
+        q->placement.placement.changed |= mask;
+        q->placement.type = INPUT_EVENT_WINDOW_PLACEMENT;
+        q->placement.tick = ev->tick;
+        q->placement_pending = true;
+        return 1;
+    }
     if (ev->type == INPUT_EVENT_DOORBELL) {
         q->doorbell_mask |= ev->doorbell.mask;
         q->doorbell_tick = ev->tick;
@@ -40,13 +53,37 @@ bool gui_event_queue_pop(gui_event_queue_t *q, input_event_t *out)
         q->appearance_pending = false;
         return true;
     }
-    if (q->doorbell_pending &&
-        (!q->doorbell_yield_input || q->head == q->tail)) {
+    // Rotate eligible doorbell/placement/ring-loss turns: a member that stays
+    // eligible is served before another gets a second turn. Appearance above
+    // has priority, and pointer below waits for the ring's drain. A loss plus
+    // its retained control form one ring turn, so repeated overflow cannot
+    // postpone that control. Preserve the legacy empty-ring doorbell priority
+    // when there is no placement; a loss alone then waits behind doorbells.
+    unsigned source = 3;
+    if (q->doorbell_pending && q->head == q->tail && !q->placement_pending)
+        source = 0;
+    else for (unsigned i = 0; i < 3; ++i) {
+        unsigned candidate = (q->service_next + i) % 3;
+        if ((candidate == 0 && q->doorbell_pending) ||
+            (candidate == 1 && q->placement_pending) ||
+            (candidate == 2 && (q->lost_pending || q->head != q->tail))) {
+            source = candidate;
+            break;
+        }
+    }
+    if (source == 0) {
         *out = (input_event_t){.type = INPUT_EVENT_DOORBELL,
             .doorbell = {.mask = q->doorbell_mask}, .tick = q->doorbell_tick};
         q->doorbell_mask = 0;
         q->doorbell_pending = false;
-        q->doorbell_yield_input = true;
+        q->service_next = 1;
+        return true;
+    }
+    if (source == 1) {
+        *out = q->placement;
+        q->placement = (input_event_t){0};
+        q->placement_pending = false;
+        q->service_next = 2;
         return true;
     }
     if (q->lost_pending) {
@@ -67,6 +104,7 @@ bool gui_event_queue_pop(gui_event_queue_t *q, input_event_t *out)
         if (!q->lost_yield_control || q->head == q->tail) {
             q->lost_pending = false;
             q->lost_yield_control = q->head != q->tail;
+            q->service_next = q->head != q->tail ? 2 : 0;
             *out = (input_event_t){.type = INPUT_EVENT_INPUT_LOST};
             return true;
         }
@@ -74,7 +112,7 @@ bool gui_event_queue_pop(gui_event_queue_t *q, input_event_t *out)
     if (q->head != q->tail) {
         *out = q->events[q->tail];
         q->tail = (q->tail + 1) % GUI_WINDOW_EVENTS_MAX;
-        q->doorbell_yield_input = false;
+        q->service_next = 0;
         q->lost_yield_control = false;
         return true;
     }

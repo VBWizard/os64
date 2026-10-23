@@ -238,6 +238,7 @@ static void scribe_build_refusals(void)
         memset(&g,0,sizeof(g));
         g.ctx.surf=(os64_gui_surface_t){sh_px,SH_W,SH_H,SH_W};
         deny_countdown=k;
+        os64_ui_init(&g.ui, &g.ctx);
         (void)scribe_build();
         deny_countdown=-1;
         CHECK(scribe_dispose());

@@ -6,6 +6,8 @@
 #include "../userland/libos64/ui_file_dialog.c"
 #include "os64/work.h"
 #include "os64/date.h"
+#include "os64/conf.h"
+#include "os64/slurp.h"
 #include <malloc.h>
 #include <time.h>
 
@@ -23,21 +25,41 @@ static void native_resize(uint32_t width, uint32_t height)
     native_surface=(os64_gui_surface_t){calloc((size_t)width*height,4),width,height,width};
     CHECK(native_surface.pixels != NULL);
 }
-int64_t os64_conf_get(const char *name,const char *key,char *out,size_t cap)
+int64_t __wrap_os64_conf_find(const char *name,char *out,size_t cap)
 {
-    CHECK(!strcmp(name,"file-dialog.conf") && !strcmp(key,"size"));
-    if (!*saved_size) { *out=0;return OS64_CONF_NO_FILE; }
-    if (strlen(saved_size)>=cap) { *out=0;return OS64_CONF_TRUNCATED; }
-    snprintf(out,cap,"%s",saved_size);return 0;
+    CHECK(!strcmp(name,"file-dialog.conf"));
+    if (!*saved_size) return OS64_CONF_NO_FILE;
+    snprintf(out,cap,"/config/file-dialog.conf"); return 0;
 }
-int64_t os64_conf_write_checked(const char *name,const os64_conf_pair_t *pairs,size_t count,
+int64_t __wrap_os64_conf_target(const char *name,char *out,size_t cap)
+{
+    CHECK(!strcmp(name,"file-dialog.conf"));
+    snprintf(out,cap,"/config/file-dialog.conf"); return 0;
+}
+os64_slurp_status_t os64_slurp(const char *path,size_t cap,uint8_t **out,size_t *length)
+{
+    (void)cap; CHECK(!strcmp(path,"/config/file-dialog.conf"));
+    *out=NULL;*length=0;
+    char text[96];int n=snprintf(text,sizeof(text),"size = %s\n",saved_size);
+    *out=os64_malloc((size_t)n+1);
+    if (!*out) return OS64_SLURP_NO_MEMORY;
+    memcpy(*out,text,(size_t)n+1);*length=(size_t)n;return OS64_SLURP_OK;
+}
+int64_t __wrap_os64_conf_create_checked(const char *path,const os64_conf_pair_t *pairs,size_t count,
     bool (*validate)(const char *,size_t,void *),void *user)
 {
-    (void)validate;(void)user;
-    CHECK(!strcmp(name,"file-dialog.conf") && count==1 && !strcmp(pairs[0].key,"size"));
+    CHECK(!strcmp(path,"/config/file-dialog.conf") && count==1 && !strcmp(pairs[0].key,"size"));
+    char text[96];int n=snprintf(text,sizeof(text),"size = %s\n",pairs[0].value);
+    CHECK(validate(text,(size_t)n,user));
     ++size_writes;
     if(fail_size_write)return OS64_CONF_IO_ERROR;
     snprintf(saved_size,sizeof(saved_size),"%s",pairs[0].value);return 0;
+}
+int64_t __wrap_os64_conf_merge_checked(const char *source,const char *path,const os64_conf_pair_t *pairs,size_t count,
+    bool (*validate)(const char *,size_t,void *),void *user)
+{
+    CHECK(!strcmp(source,path));
+    return __wrap_os64_conf_create_checked(path,pairs,count,validate,user);
 }
 uint64_t file_test_syscall(uint64_t nr,uint64_t a,uint64_t b,uint64_t c,
     uint64_t e,uint64_t f,uint64_t g)
@@ -206,6 +228,7 @@ static os64_ui_file_dialog_t *dialog_new(os64_ui_file_mode_t mode)
     d->draw.surf=(os64_gui_surface_t){calloc(880u*700u,4),880,700,880};
     native_surface=d->draw.surf;
     os64_ui_file_options_t options={.mode=mode,.offer_association=true,.filename=mode==OS64_UI_FILE_SAVE?"download.html":NULL};
+    os64_ui_init(&d->ui,&d->draw);
     CHECK(file_compose(d,&options)==OS64_UI_OK);
     CHECK(os64_browser_navigate(d->browser,"/home")==OS64_UI_OK);
     os64_ui_file_dialog_update(d);
@@ -402,11 +425,18 @@ static void lifecycle_tests(void)
     CHECK(os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_INVALID && !d->window);
     free(d);
 }
-static void resize_event(os64_ui_file_dialog_t *d,uint32_t w,uint32_t h,uint32_t flags)
+static void resize_event(os64_ui_file_dialog_t *d,uint32_t w,uint32_t h,uint32_t flags,bool user_resize)
 {
+    uint32_t changed=(w!=native_surface.width?OS64_GUI_PLACEMENT_WIDTH:0) |
+        (h!=native_surface.height?OS64_GUI_PLACEMENT_HEIGHT:0);
     native_flags=flags;native_resize(w,h);
     os64_gui_event_t event={.type=OS64_GUI_EVENT_WINDOW_RESIZE};
     os64_ui_file_dialog_event(d,&event);
+    if (user_resize && changed) {
+        event=(os64_gui_event_t){.type=OS64_GUI_EVENT_WINDOW_PLACEMENT,
+            .placement={.width=w,.height=h,.changed=changed}};
+        os64_ui_file_dialog_event(d,&event);
+    }
     os64_ui_file_dialog_update(d);
 }
 static void size_tests(const char *font_dir)
@@ -417,7 +447,7 @@ static void size_tests(const char *font_dir)
     size_writes=0;
     CHECK(os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_OK);
     CHECK(d->draw.surf.width==880 && d->draw.surf.height==700 && size_writes==0);
-    resize_event(d,960,760,0);
+    resize_event(d,960,760,0,true);
     CHECK(size_writes==1 && !strcmp(saved_size,"960,760"));
     key(d,27,0x01,0);CHECK(d->result==OS64_UI_FILE_CANCELLED);
     CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK && size_writes==1);
@@ -426,12 +456,12 @@ static void size_tests(const char *font_dir)
     CHECK(d->draw.surf.width==960 && d->draw.surf.height==760);
     /* Another process publishes a new size while this dialog stays open. */
     strcpy(saved_size,"1100,800");
-    resize_event(d,960,760,0);
+    resize_event(d,960,760,0,false);
     CHECK(size_writes==1 && !strcmp(saved_size,"1100,800"));
-    resize_event(d,1600,1000,OS64_GUI_WINDOW_MAXIMIZED);
-    resize_event(d,960,760,0);
+    resize_event(d,1600,1000,OS64_GUI_WINDOW_MAXIMIZED,false);
+    resize_event(d,960,760,0,false);
     CHECK(size_writes==1 && !strcmp(saved_size,"1100,800"));
-    fail_size_write=true;resize_event(d,1000,780,0);fail_size_write=false;
+    fail_size_write=true;resize_event(d,1000,780,0,true);fail_size_write=false;
     CHECK(size_writes==2 && !strcmp(saved_size,"1100,800") && d->result==OS64_UI_FILE_PENDING);
     CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK && size_writes==2);
     CHECK(os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_OK);
@@ -523,16 +553,16 @@ static void review_resize_tests(const char *font_dir)
     strcpy(saved_size,"960,760");
     os64_ui_file_options_t options={.mode=OS64_UI_FILE_OPEN,.directory="/home"};
     CHECK(os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_OK);
-    resize_event(d,1600,1000,OS64_GUI_WINDOW_MAXIMIZED);
-    resize_event(d,1200,850,0); /* WM clears MAXIMIZED before the drag's event. */
+    resize_event(d,1600,1000,OS64_GUI_WINDOW_MAXIMIZED,false);
+    resize_event(d,1200,850,0,true); /* WM clears MAXIMIZED before the drag's event. */
     CHECK(size_writes==before+1 && !strcmp(saved_size,"1200,850"));
     key(d,27,0x01,0);
     CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK);
     options.mode=OS64_UI_FILE_SAVE;
     CHECK(os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_OK);
     CHECK(d->draw.surf.width==1200 && d->draw.surf.height==850);
-    resize_event(d,1600,1000,OS64_GUI_WINDOW_MAXIMIZED);
-    resize_event(d,1200,850,0); /* A true restore must not republish stale settings. */
+    resize_event(d,1600,1000,OS64_GUI_WINDOW_MAXIMIZED,false);
+    resize_event(d,1200,850,0,false); /* A true restore must not republish stale settings. */
     CHECK(size_writes==before+1);
     CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK);
     saved_size[0]=0;free(d);
@@ -610,6 +640,45 @@ static void application_tests(const char *font_dir)
     d=dialog_new(OS64_UI_FILE_APPLICATION);d->offer_association=false;file_controls(d);file_resize(&d->ui);
     CHECK(d->remember.w.hidden && !d->layout_pending);dialog_free(d);
 }
+static bool placement_pending;
+static unsigned placement_filtered;
+static int64_t placement_poll(void *user,int64_t win,os64_gui_event_t *event)
+{
+    (void)user;(void)win;
+    if (!placement_pending) return 0;
+    placement_pending=false;
+    *event=(os64_gui_event_t){.type=OS64_GUI_EVENT_WINDOW_PLACEMENT,
+        .placement={.width=950,.changed=OS64_GUI_PLACEMENT_WIDTH}};
+    return 1;
+}
+static bool placement_menu(os64_ui_t *ui,const os64_gui_event_t *event)
+{ (void)ui;(void)event;++placement_filtered;return true; }
+static void placement_command(void *user,const os64_gui_event_t *event)
+{ (void)user;(void)event;++placement_filtered; }
+static void placement_dispatch_tests(void)
+{
+    current="placement precedes root/modal filters";
+    os64_ui_file_dialog_t *d=calloc(1,sizeof(*d));CHECK(d!=NULL);
+    os64_ui_file_options_t options={.mode=OS64_UI_FILE_OPEN,.directory="/home"};
+    saved_size[0]=0;
+    CHECK(os64_ui_file_dialog_open(d,NULL,0,&options)==OS64_UI_OK);
+    unsigned before=size_writes;
+    os64_ui_widget_t *root=d->ui.root;d->ui.root=NULL;
+    os64_gui_event_t event={.type=OS64_GUI_EVENT_WINDOW_PLACEMENT,
+        .placement={.height=710,.changed=OS64_GUI_PLACEMENT_HEIGHT}};
+    CHECK(os64_ui_dispatch(&d->ui,&event));
+    CHECK(size_writes==before+1 && !strcmp(saved_size,"880,710"));
+    os64_ui_dispatcher_t dispatcher;
+    os64_ui_window_backend_t backend={.poll=placement_poll};
+    os64_ui_dispatcher_init(&dispatcher,&backend);
+    CHECK(os64_ui_dispatcher_add(&dispatcher,d->window,&d->ui,placement_command,NULL,NULL)==OS64_UI_OK);
+    d->ui.menu_event=placement_menu;placement_pending=true;placement_filtered=0;
+    CHECK(os64_ui_dispatcher_turn(&dispatcher,false)==1);
+    CHECK(size_writes==before+2 && !strcmp(saved_size,"950,710") && !placement_filtered);
+    d->ui.menu_event=NULL;d->ui.root=root;
+    CHECK(os64_ui_file_dialog_close(d)==OS64_UI_OK);
+    saved_size[0]=0;free(d);
+}
 int main(int argc,char **argv)
 {
     add_file("/",true);add_file("/home",true);add_file("/home/existing.txt",false);
@@ -617,6 +686,7 @@ int main(int argc,char **argv)
     save_tests();open_tests();folder_tests();navigation_tests();lifecycle_tests();
     compact_tests();size_tests(argc>1?argv[1]:"userland/libfreetype/fixtures");
     display_size_tests();
+    placement_dispatch_tests();
     application_tests(argc>1?argv[1]:"userland/libfreetype/fixtures");
     review_resize_tests(argc>1?argv[1]:"userland/libfreetype/fixtures");
     layout_tests(argc>1?argv[1]:"userland/libfreetype/fixtures",argc>2?argv[2]:NULL);

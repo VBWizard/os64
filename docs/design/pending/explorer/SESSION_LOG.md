@@ -1095,3 +1095,91 @@ Next: independent review and Chris’s P5 acceptance of the refinement in #325.
 
 Publication: refinement `2800bef2` is pushed to PR #325. The PR remains a draft
 on `userland`, awaiting independent review and P5 feedback.
+
+## 2026-10-23 — E5C accepted; E5D placement design
+
+PR #325 merged as `12dc6b64` after a clean review of `20dcf0ec`. Chris reports
+the latest refinement works beautifully on the P5; no binary hash was captured.
+He noticed extensionless executables open the chooser. We inspected the metadata
+path: ext2 stores permissions but the public file flags do not expose executable
+status. Chris deferred file attributes to his own list and deprioritized FAT.
+No executable-detection or file-attribute code was changed.
+
+Chris authorized reusable remembered placement with a simple initialization
+opt-in, Roam and Scribe as consumers, and Fable review for kernel work. Created
+`codex/window-placement` / `.worktrees/window-placement` from current userland.
+The inspection found no move notification and no intent distinction in resize
+events. [E5D revision 1](E05D_WINDOW_PLACEMENT.md) proposes a masked completion
+event using the existing 32-byte event layout, coalesced outside the input ring,
+plus a shared app-owned persistence helper and opt-in window initializer.
+Shared file dialogs retain size-only compatibility through the helper.
+
+The design specifies cancellation, queue/wake fairness, ownership and partial
+initialization failure, component-wise preference preservation across resolution
+changes, checked first publication, same-role publication semantics and the
+required regression matrix. [Fable's review request](E05D_FABLE_REVIEW_REQUEST.md)
+is ready beside it. No implementation or runtime validation is claimed.
+Next: obtain Fable's architectural review and resolve findings before coding.
+
+## 2026-10-23 — E5D review disposition
+
+Fable committed his review as `3b15a4c8`, approving building with rulings.
+Quinn incorporated the snapshot/helper, explicit clamped resize, ownership-table,
+ordinary-dialog and evidence clarifications in design revision 2. The
+[response](E05D_REVIEW_RESPONSE.md) identifies a conflict in the queue ruling:
+universal coalesced-source fairness cannot preserve both strict appearance
+priority and pointer-after-ring-drain. It proposes a cursor for the eligible
+doorbell/placement/ring-loss group and requests Fable's confirmation. Source
+inspection confirms a pointer leave clears hover while an older mouse motion
+can restore it, making the ordering issue behavioral rather than stylistic.
+
+The accepted last-complete-publication policy is unchanged, but its limitation
+now explicitly includes lost edits to different fields after concurrent reads.
+The root debt ledger records the future shared-live-state gate. No executable
+changes or runtime validation are claimed. Next: settle the queue invariant,
+then implement and validate the reviewed contract.
+
+## 2026-10-23 — E5D implemented after Fable's disposition
+
+Fable's `a6ca1f16` confirmed both corrections and approved revision 2. Implemented
+the masked completion event, retained queue slot/service cursor, gesture-ending
+and teardown paths, app-owned configuration helper, checked first publication
+and opt-in UI initializer. Roam and Scribe remember position/content size; shared
+dialogs keep their size-only format and parent-relative position. Scribe and
+the dialogs no longer repeat UI initialization after native creation.
+
+Kernel and full userland cross-builds passed. Leak-enabled ASan/UBSan host runs
+passed: placement/parser/writer/ownership and nine queue mutants; 4,840 dialog
+checks, 2,584 Scribe checks, 1,655 menu checks, existing appearance/input/queue
+regressions and Roam launch/config/lifecycle checks. LSan's sandbox attachment
+EPERM was diagnosed with TracerPid zero; supported outside-sandbox runs retained
+leak detection.
+
+Native QEMU evidence covers both wait APIs, titlebar/chord movement, four resize
+corners, cancellation, teardown with handle reuse, VT transition, clamped values,
+minimum/no-op shrinking and resizing out of maximized state. A scratch mutation
+that published automatic resize geometry failed the startup-fit case; restored
+production code passed. Real Roam/Scribe saved their geometry and survived a
+1024×768 → 800×600 → 1024×768 reboot round trip. Moving clamped Roam on the
+smaller screen preserved its larger preferred size. The scratch guest is stopped.
+
+[Evidence and as-built notes](evidence/e05d/README.md) include binary hashes,
+event traces, screenshots, API/queue rules and accepted publication limits.
+The old resize comment's claim that no geometry query existed was false; it
+now explains repaint/layout notifications and the separate user-placement event.
+Next: independent implementation review and Chris's P5 acceptance, with a
+matching rebuilt kernel and userland. No P5 result is claimed for this slice.
+
+## 2026-10-23 — PR #334 R1: case-insensitive placement settings
+
+Accepted the review finding: replacing `os64_conf_get` with the placement
+callback had made setting-name reads case-sensitive while writes remained
+case-insensitive. Uppercase `SIZE` could be ignored on open and then lose its
+saved width during a height-only edit. Both `size` and `geometry` now use
+`os64_streq_nocase`. Added regression coverage failed before the fix and passed
+afterward, including mixed-case duplicates and rereading before saving.
+
+The placement/queue suite passed with ASan/UBSan/LSan and rejected all nine
+queue mutants. LSan attachment EPERM in the sandbox was resolved by running
+the built tests outside it with leak detection enabled. Full userland build
+passed. No new native or P5 run is claimed for this parser correction.
