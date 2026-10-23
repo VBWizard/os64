@@ -352,8 +352,13 @@ static void headers_changed(JSContext *ctx, DHeaders *h)
     if (h->sorted_valid || h->sorted != NULL) headers_sorted_clear(JS_GetRuntime(ctx), h);
 }
 
-/* A name and value appended as given (both taken). -1 on no memory. */
-static int list_append(JSContext *ctx, DHeaders *h, char *name, size_t nlen, char *value, size_t vlen)
+/* A name and value put on the list as given (both taken), UNGUARDED: what
+ * may call it is the guarded append (headers_append) and set, which have
+ * judged the header, and the two places a list arrives already judged: a
+ * network's filtered block (d_headers_from_block) and a copy of a list
+ * (headers_copy). A header the binding writes itself goes through
+ * headers_author. -1 on no memory. */
+static int list_take(JSContext *ctx, DHeaders *h, char *name, size_t nlen, char *value, size_t vlen)
 {
     if (h->count == h->cap) {
         size_t cap = h->cap ? h->cap * 2 : 8;
@@ -609,9 +614,25 @@ static int headers_append(JSContext *ctx, DHeaders *h, char *name, size_t nlen, 
             return 0;
         }
     }
-    if (list_append(ctx, h, name, nlen, value, vlen) < 0) return -1;
+    if (list_take(ctx, h, name, nlen, value, vlen) < 0) return -1;
     remove_privileged(ctx, h);
     return 0;
+}
+
+/* A header the binding writes itself (a body's Content-Type, a redirect's
+ * Location): Fetch's constructors say "append" to the object's headers,
+ * which is the guarded append, so a no-cors request's guard drops a type
+ * that is not safelisted as it drops a page's own. -1 on no memory. */
+static int headers_author(JSContext *ctx, DHeaders *h, const char *name, const char *value)
+{
+    size_t nlen = os64_strlen(name), vlen = os64_strlen(value);
+    char *n = engine_dup(ctx, name, nlen);
+    char *v = n != NULL ? engine_dup(ctx, value, vlen) : NULL;
+    if (v == NULL) {
+        js_free(ctx, n);
+        return -1;
+    }
+    return headers_append(ctx, h, n, nlen, v, vlen);
 }
 
 /* § 5.1 "fill": a record, or a sequence of pairs, or another Headers. -1
@@ -742,7 +763,7 @@ JSValue d_headers_from_block(os64_dom_t *dom, JSContext *ctx, const char *block,
         d_request_steps++;
         char *name = engine_dup(ctx, line.name, line.name_len);
         char *value = name != NULL ? engine_dup(ctx, line.value, line.value_len) : NULL;
-        if (value == NULL || list_append(ctx, h, name, line.name_len, value, line.value_len) < 0) {
+        if (value == NULL || list_take(ctx, h, name, line.name_len, value, line.value_len) < 0) {
             if (value == NULL) js_free(ctx, name);
             JS_FreeValue(ctx, object);
             return JS_EXCEPTION;
@@ -763,7 +784,7 @@ static int headers_copy(JSContext *ctx, DHeaders *to, const DHeaders *from)
             js_free(ctx, name);
             return -1;
         }
-        if (list_append(ctx, to, name, from->list[i].name_length, value, from->list[i].value_length) < 0) return -1;
+        if (list_take(ctx, to, name, from->list[i].name_length, value, from->list[i].value_length) < 0) return -1;
     }
     return 0;
 }
@@ -907,7 +928,7 @@ static JSValue headers_member(JSContext *ctx, JSValueConst self, int argc, JSVal
             remove_privileged(ctx, h);
             return JS_UNDEFINED;
         }
-        if (list_append(ctx, h, name, nlen, value, vlen) < 0) return JS_EXCEPTION;
+        if (list_take(ctx, h, name, nlen, value, vlen) < 0) return JS_EXCEPTION;
         remove_privileged(ctx, h);
         return JS_UNDEFINED;
     }
@@ -1817,14 +1838,9 @@ static int request_init(os64_dom_t *dom, JSContext *ctx, JSValueConst object, JS
             q->body.length = extracted.length;
             q->body.has = true;
             DHeaders *h = headers_state(q->headers);
-            if (has_type && extracted.type != NULL && !list_contains(h, "content-type", 12)) {
-                char *name = engine_dup(ctx, "Content-Type", 12);
-                char *value = name != NULL ? engine_dup(ctx, extracted.type, os64_strlen(extracted.type)) : NULL;
-                if (value == NULL || list_append(ctx, h, name, 12, value, os64_strlen(extracted.type)) < 0) {
-                    if (value == NULL) js_free(ctx, name);
-                    result = -1;
-                }
-            }
+            if (has_type && extracted.type != NULL && !list_contains(h, "content-type", 12) &&
+                headers_author(ctx, h, "Content-Type", extracted.type) < 0)
+                result = -1;
             js_free(ctx, extracted.type);
         }
     } else if (result == 0 && input_body) {
@@ -2073,14 +2089,9 @@ static int response_initialize(os64_dom_t *dom, JSContext *ctx, JSValueConst obj
             r->body.has = true;
             body->bytes = NULL;
             DHeaders *h = headers_state(r->headers);
-            if (has_type && body->type != NULL && !list_contains(h, "content-type", 12)) {
-                char *name = engine_dup(ctx, "Content-Type", 12);
-                char *value = name != NULL ? engine_dup(ctx, body->type, os64_strlen(body->type)) : NULL;
-                if (value == NULL || list_append(ctx, h, name, 12, value, os64_strlen(body->type)) < 0) {
-                    if (value == NULL) js_free(ctx, name);
-                    result = -1;
-                }
-            }
+            if (has_type && body->type != NULL && !list_contains(h, "content-type", 12) &&
+                headers_author(ctx, h, "Content-Type", body->type) < 0)
+                result = -1;
         }
     }
     js_free(ctx, text);
@@ -2149,12 +2160,9 @@ static JSValue response_member(JSContext *ctx, JSValueConst self, int argc, JSVa
             r = response_state(object);
             r->status = status;
             DHeaders *h = headers_state(r->headers);
-            char *name = engine_dup(ctx, "Location", 8);
-            char *value = name != NULL ? engine_dup(ctx, url, os64_strlen(url)) : NULL;
-            size_t length = os64_strlen(url);
+            int added = headers_author(ctx, h, "Location", url);
             d_free(dom, url);
-            if (value == NULL || list_append(ctx, h, name, 8, value, length) < 0) {
-                if (value == NULL) js_free(ctx, name);
+            if (added < 0) {
                 JS_FreeValue(ctx, object);
                 return JS_EXCEPTION;
             }

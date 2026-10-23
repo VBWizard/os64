@@ -239,6 +239,18 @@ static void dom_fetch_headers_cases(void)
         "n.headers.append('Content-Type','application/json');assert(n.headers.get('content-type')==='text/plain');"
         "n.headers.append('Range','bytes=0-1');assert(!n.headers.has('range'));",
         "headers: request, response, immutable and no-cors guards");
+    /* A header the binding writes itself meets the same guard: a no-cors
+     * request's body type that is not safelisted is dropped, as the page's
+     * own would be (a JSON CSRF otherwise: an opaque POST, no preflight,
+     * Content-Type: application/json); a safelisted one stays. */
+    dom_script(&f, FETCH_ASSERT
+        "var j=new Request('http://other.test/api',{mode:'no-cors',method:'POST',"
+        "body:new Blob(['{}'],{type:'application/json'})});assert(!j.headers.has('content-type'),j.headers.get('content-type'));"
+        "var t=new Request('http://other.test/api',{mode:'no-cors',method:'POST',body:'x'});"
+        "assert(t.headers.get('content-type')==='text/plain;charset=UTF-8');"
+        "var c=new Request('/x',{method:'POST',body:new Blob(['{}'],{type:'application/json'})});"
+        "assert(c.headers.get('content-type')==='application/json');",
+        "headers: the binding's own headers through the guard");
     fixture_free(&f);
 }
 
@@ -406,10 +418,17 @@ static void dom_fetch_network_cases(void)
     check(!strcmp(net.seen[2].url, "data:,hello"), "fetch: a data: address goes to the host trimmed and unparsed");
     check(net.seen[3].mode == WAY_MODE_NO_CORS && net.seen[3].redirect == WAY_REDIRECT_MANUAL,
           "fetch: no-cors and manual reach the host");
+    /* The cold read's JSON CSRF: a credentialed no-cors POST with a body
+     * typed application/json reaches the host with no such Content-Type. */
+    dom_script(&f, "fetch('http://other.test/api',{mode:'no-cors',method:'POST',credentials:'include',"
+               "body:new Blob(['{\"transfer\":1}'],{type:'application/json'})});", "fetch: no-cors JSON");
+    check(net.seen[4].mode == WAY_MODE_NO_CORS && strstr(net.seen[4].headers, "application/json") == NULL &&
+          strstr(net.seen[4].headers, "Content-Type") == NULL,
+          "fetch: a no-cors body's type that is not safelisted never reaches the host");
     /* Drain cancels what is out. */
     unsigned cancels = net.cancels;
     fixture_free(&f);
-    check(net.cancels == cancels + 2, "fetch: drain cancels each request out");
+    check(net.cancels == cancels + 3, "fetch: drain cancels each request out");
 
     /* No network at all: a TypeError. */
     f = net_fixture("http://example.test/", NULL);
