@@ -466,6 +466,20 @@ static void dom_fetch_object_cases(void)
         "mlog.push(g.get('p'))}).catch(x=>mlog.push('refused:'+x.message));",
         "formData: a preamble");
     dom_script(&f, FETCH_ASSERT "assert(mlog.join()==='P',mlog.join());", "formData: a preamble is skipped");
+    /* A header line or a parameter too long to read whole refuses the body
+     * rather than being read from its prefix: a filename past a 2 KiB line,
+     * and a 1,100-byte name. One that fits is read whole. */
+    dom_script(&f,
+        "globalThis.mlog=[];function mp(cd){return '--b\\r\\nContent-Disposition: form-data; '+cd+'\\r\\n\\r\\nV\\r\\n--b--\\r\\n'}"
+        "function rd(cd,tag){return new Response(mp(cd),{headers:{'content-type':'multipart/form-data; boundary=b'}}).formData()"
+        ".then(g=>{var k=[...g.keys()][0];var v=g.get(k);mlog.push(tag+':'+k.length+':'+(v instanceof File))},"
+        "e=>mlog.push(tag+':'+e.name))}"
+        "rd('name=\"'+'n'.repeat(1500)+'\"; filename=\"'+'f'.repeat(600)+'\"','line');"
+        "rd('name=\"'+'n'.repeat(1100)+'\"','name');"
+        "rd('name=\"'+'n'.repeat(1000)+'\"; filename=\"a\"','fits');",
+        "formData: long part headers");
+    dom_script(&f, FETCH_ASSERT "assert(mlog.join()==='line:TypeError,name:TypeError,fits:1000:true',mlog.join());",
+               "formData: a part header is read whole or refused");
     fixture_free(&f);
 }
 

@@ -1115,9 +1115,11 @@ int d_form_data_encode(os64_dom_t *dom, JSContext *ctx, JSValueConst form, DByte
 }
 
 /* A MIME type's (or a Content-Disposition's) parameter `name`, matched
- * without regard to case: whether it is PRESENT, and its value, quoted or
- * not, into `out` ("" for an empty one, which is still present). */
-static bool mime_parameter(const char *type, const char *name, char *out, size_t cap)
+ * without regard to case: 1 when it is PRESENT, its value, quoted or not,
+ * in `out` ("" for an empty one, which is still present); 0 when absent;
+ * -1 when present and longer than `cap` holds, so that no caller reads a
+ * value cut short as if it were whole. */
+static int mime_parameter(const char *type, const char *name, char *out, size_t cap)
 {
     size_t nlen = os64_strlen(name);
     const char *p = os64_strchr(type, ';');
@@ -1132,22 +1134,25 @@ static bool mime_parameter(const char *type, const char *name, char *out, size_t
         if (*p == '=' && match) {
             p++;
             size_t n = 0;
+            bool whole;
             if (*p == '"') {
                 p++;
                 while (*p != '\0' && *p != '"' && n + 1 < cap) {
                     if (*p == '\\' && p[1] != '\0') p++;
                     out[n++] = *p++;
                 }
+                whole = *p == '\0' || *p == '"';
             } else {
                 while (*p != '\0' && *p != ';' && *p != ' ' && *p != '\t' && n + 1 < cap) out[n++] = *p++;
+                whole = *p == '\0' || *p == ';' || *p == ' ' || *p == '\t';
             }
             out[n] = '\0';
-            return true;
+            return whole ? 1 : -1;
         }
         p = os64_strchr(p, ';');
     }
     if (cap > 0) out[0] = '\0';
-    return false;
+    return 0;
 }
 
 static int hex_digit(uint8_t c)
@@ -1252,8 +1257,14 @@ static int multipart_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst form, c
                 at += 2;
                 break;
             }
+            /* A part's header line is read whole or the body is refused: one
+             * longer than the line holds, or holding a NUL, would be read
+             * from a prefix, a name cut short and a filename past the cut
+             * gone (a file read as a string). The same holds for each value
+             * below that its buffer cannot hold whole. */
             char line[2048];
-            size_t n = end - at < sizeof(line) - 1 ? end - at : sizeof(line) - 1;
+            size_t n = end - at;
+            if (n >= sizeof(line) || os64_memchr(bytes + at, '\0', n) != NULL) goto refused;
             os64_memcpy(line, bytes + at, n);
             line[n] = '\0';
             /* Each header recognised by its whole name, however short its
@@ -1272,9 +1283,13 @@ static int multipart_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst form, c
                     /* A part with a name parameter, an empty one included,
                      * is an entry; one with a filename parameter (in any
                      * case, an empty one included) is a file. */
-                    has_name = mime_parameter(value, "name", name, sizeof(name));
-                    is_file = mime_parameter(value, "filename", file_name, sizeof(file_name));
-                } else if (content_type) os64_strcopy(type, sizeof(type), value);
+                    int got_name = mime_parameter(value, "name", name, sizeof(name));
+                    int got_file = mime_parameter(value, "filename", file_name, sizeof(file_name));
+                    if (got_name < 0 || got_file < 0) goto refused;
+                    has_name = got_name > 0;
+                    is_file = got_file > 0;
+                } else if (content_type && os64_strcopy(type, sizeof(type), value) >= sizeof(type))
+                    goto refused;
             }
             at = end + 2;
         }
@@ -1332,7 +1347,7 @@ JSValue d_form_data_parse(os64_dom_t *dom, JSContext *ctx, const uint8_t *bytes,
         return JS_ThrowTypeError(ctx, "The body's type is not a form's");
     bool urlencoded = os64_streq(essence, "application/x-www-form-urlencoded");
     char boundary[80];
-    if (!urlencoded && (!os64_streq(essence, "multipart/form-data") || !mime_parameter(type, "boundary", boundary, sizeof(boundary)) ||
+    if (!urlencoded && (!os64_streq(essence, "multipart/form-data") || mime_parameter(type, "boundary", boundary, sizeof(boundary)) <= 0 ||
                         boundary[0] == '\0'))
         return JS_ThrowTypeError(ctx, "The body's type is not a form's");
     JSValue prototype = dom->form_prototype != NULL ? JS_DupValue(ctx, dom->form_prototype->value) : JS_UNDEFINED;
