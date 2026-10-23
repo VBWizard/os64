@@ -1095,3 +1095,28 @@ Next: independent review and Chris’s P5 acceptance of the refinement in #325.
 
 Publication: refinement `2800bef2` is pushed to PR #325. The PR remains a draft
 on `userland`, awaiting independent review and P5 feedback.
+
+## 2026-10-23 — E5C accepted; E5D placement design
+
+PR #325 merged as `12dc6b64` after a clean review of `20dcf0ec`. Chris reports
+the latest refinement works beautifully on the P5; no binary hash was captured.
+He noticed extensionless executables open the chooser. We inspected the metadata
+path: ext2 stores permissions but the public file flags do not expose executable
+status. Chris deferred file attributes to his own list and deprioritized FAT.
+No executable-detection or file-attribute code was changed.
+
+Chris authorized reusable remembered placement with a simple initialization
+opt-in, Roam and Scribe as consumers, and Fable review for kernel work. Created
+`codex/window-placement` / `.worktrees/window-placement` from current userland.
+The inspection found no move notification and no intent distinction in resize
+events. [E5D revision 1](E05D_WINDOW_PLACEMENT.md) proposes a masked completion
+event using the existing 32-byte event layout, coalesced outside the input ring,
+plus a shared app-owned persistence helper and opt-in window initializer.
+Shared file dialogs retain size-only compatibility through the helper.
+
+The design specifies cancellation, queue/wake fairness, ownership and partial
+initialization failure, component-wise preference preservation across resolution
+changes, checked first publication, same-role publication semantics and the
+required regression matrix. [Fable's review request](E05D_FABLE_REVIEW_REQUEST.md)
+is ready beside it. No implementation or runtime validation is claimed.
+Next: obtain Fable's architectural review and resolve findings before coding.

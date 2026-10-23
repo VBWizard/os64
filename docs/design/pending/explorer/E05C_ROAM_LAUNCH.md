@@ -2,11 +2,12 @@
 
 ## Status and ownership
 
-Reviewing, 2026-10-21. Quinn owns `codex/roam-file-actions` in
-`.worktrees/roam-file-actions`, including the merged PR #322 dialog polish.
-Implementation `9f31fb0f` is pushed in [draft PR #325](https://github.com/VBWizard/os64/pull/325). Scribe's shared dialogs are merged through #319. The PR targets `userland`; the worker-lifetime design remains deferred.
-D012 architectural review does not apply: this is userland work, without kernel
-or syscall changes. Ordinary review and P5 acceptance remain required.
+Accepted, 2026-10-23. PR #325 merged into userland as `12dc6b64`.
+Codex review of final head `20dcf0ec` completed without findings; Chris reports
+the latest Open With refinement works beautifully on the P5. No installed
+binary hash was captured. Quinn's implementation and refinement records remain
+below; [E5D window placement](E05D_WINDOW_PLACEMENT.md) is the next active slice.
+No kernel or syscall changes were made by E5C.
 
 ## Outcome and contract
 
@@ -53,16 +54,17 @@ cross-build passed; native file launch, chooser cancellation/selection, clipboar
 terminal cwd, child-process collection and live custom configuration passed.
 Chris reports that all initial additions work on the P5. His follow-up requests
 were association persistence and a compact Open With browser. The refinement
-passes host and native checks; independent review and its P5 acceptance remain
-pending. See [refinement evidence](evidence/e05c/open-with/README.md).
+passes host and native checks; final independent review and user-reported P5
+acceptance are complete. See [refinement evidence](evidence/e05c/open-with/README.md).
 
 Open With refinement implementation `2800bef2` is pushed to PR #325.
 
 ## Handoff
 
-Next: independent review and P5 acceptance of the Open With refinement in
-PR #325. Merge remains pending. Thread lifetime remains a separate
-slice, including the known dialog close delay and exited worker retention.
+Next: E5D reusable remembered window placement for Roam and Scribe.
+Thread lifetime remains a separate slice, including the known dialog close
+delay and exited worker retention. File attributes and direct executable
+activation are deferred at Chris’s request.
 
 ## Open With refinement — 2026-10-21
 

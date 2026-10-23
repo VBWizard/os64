@@ -1,6 +1,6 @@
 # Roam — latest handoff
 
-Updated: 2026-10-21. Design owner: Quinn.
+Updated: 2026-10-23. Design owner: Quinn.
 
 E1A is accepted. PR #254 merged into `userland` as `c6cc6e3c`; gallery relocation
 `2bc9f2f4` followed. Chris confirmed the P5 test complete. The diagnostic launches
@@ -10,21 +10,24 @@ user-reported, without a captured installed-binary hash.
 
 ## Resume point
 
-Chris requested [E5D remembered window placement](E05D_WINDOW_PLACEMENT.md) as
-a separate future slice. Record only: implementation has not started.
+Active slice: [E5D reusable remembered window placement](E05D_WINDOW_PLACEMENT.md).
+Chris authorized implementation and named Roam and Scribe as initial consumers,
+with initialization-time opt-in and reuse of the same helper for size-only file
+dialogs. Design revision 1 is ready for [Fable review](E05D_FABLE_REVIEW_REQUEST.md).
+It proposes a masked, coalesced user-placement event; persistence remains in
+libos64. Per Chris's kernel-review instruction, review precedes implementation.
+No code or runtime test results are claimed for E5D.
 
-Active work is [E5C Roam file actions](E05C_ROAM_LAUNCH.md), owned by Quinn in
-`.worktrees/roam-file-actions`, branch `codex/roam-file-actions`.
-[Draft PR #325](https://github.com/VBWizard/os64/pull/325) targets `userland`;
-PR #322 is merged and its review conversations are resolved. Chris reports
-that the initial Roam additions work on the P5, without a captured binary hash.
+Owner: Quinn, branch `codex/window-placement`, worktree `.worktrees/window-placement`,
+based on `12dc6b64`. Next: Fable's architectural review, disposition, then the
+implementation order and acceptance matrix in the design.
 
-His Open With feedback is implemented: a compact application picker and an
-optional remember checkbox. Saves preserve other mappings and honor the config
-path selected by `roam.conf`. Host sanitizer and QEMU evidence is in the
-[refinement packet](evidence/e05c/open-with/README.md). Next: independent review
-and P5 acceptance of this refinement. Thread lifetime and E5D window placement
-remain deferred. No kernel work is included here.
+E5C is accepted: PR #325 merged into userland as `12dc6b64`; review of final head
+`20dcf0ec` had no findings. Chris reports the latest Open With refinement works
+beautifully on the P5; no installed binary hash was captured. PR #322 is also
+merged with its review conversations resolved. The extensionless executable
+case is deferred with file attributes on Chris's separate to-do list. Worker
+lifetime remains deferred.
 
 
 **E5's Scribe consumer is accepted.** [PR #319](https://github.com/VBWizard/os64/pull/319)
