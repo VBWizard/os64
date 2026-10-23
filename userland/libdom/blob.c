@@ -1112,7 +1112,9 @@ int d_form_data_encode(os64_dom_t *dom, JSContext *ctx, JSValueConst form, DByte
     return 0;
 }
 
-/* A MIME type's parameter `name`'s value, quoted or not, into `out`. */
+/* A MIME type's (or a Content-Disposition's) parameter `name`, matched
+ * without regard to case: whether it is PRESENT, and its value, quoted or
+ * not, into `out` ("" for an empty one, which is still present). */
 static bool mime_parameter(const char *type, const char *name, char *out, size_t cap)
 {
     size_t nlen = os64_strlen(name);
@@ -1138,10 +1140,11 @@ static bool mime_parameter(const char *type, const char *name, char *out, size_t
                 while (*p != '\0' && *p != ';' && *p != ' ' && *p != '\t' && n + 1 < cap) out[n++] = *p++;
             }
             out[n] = '\0';
-            return n > 0;
+            return true;
         }
         p = os64_strchr(p, ';');
     }
+    if (cap > 0) out[0] = '\0';
     return false;
 }
 
@@ -1245,12 +1248,11 @@ static int multipart_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst form, c
                 const char *value = colon + 1;
                 while (*value == ' ' || *value == '\t') value++;
                 if (disposition) {
+                    /* A part with a name parameter, an empty one included,
+                     * is an entry; one with a filename parameter (in any
+                     * case, an empty one included) is a file. */
                     has_name = mime_parameter(value, "name", name, sizeof(name));
-                    /* A file part says filename=, an empty one included. */
-                    mime_parameter(value, "filename", file_name, sizeof(file_name));
-                    size_t left = os64_strlen(value);
-                    for (size_t s = 0; s + 10 <= left && !is_file; s++)
-                        is_file = (value[s] == ';' || value[s] == ' ') && os64_memcmp(value + s + 1, "filename=", 9) == 0;
+                    is_file = mime_parameter(value, "filename", file_name, sizeof(file_name));
                 } else if (content_type) os64_strcopy(type, sizeof(type), value);
             }
             at = end + 2;
@@ -1308,7 +1310,8 @@ JSValue d_form_data_parse(os64_dom_t *dom, JSContext *ctx, const uint8_t *bytes,
         return JS_ThrowTypeError(ctx, "The body's type is not a form's");
     bool urlencoded = os64_streq(essence, "application/x-www-form-urlencoded");
     char boundary[80];
-    if (!urlencoded && (!os64_streq(essence, "multipart/form-data") || !mime_parameter(type, "boundary", boundary, sizeof(boundary))))
+    if (!urlencoded && (!os64_streq(essence, "multipart/form-data") || !mime_parameter(type, "boundary", boundary, sizeof(boundary)) ||
+                        boundary[0] == '\0'))
         return JS_ThrowTypeError(ctx, "The body's type is not a form's");
     JSValue prototype = dom->form_prototype != NULL ? JS_DupValue(ctx, dom->form_prototype->value) : JS_UNDEFINED;
     JSValue form = form_make(ctx, prototype);

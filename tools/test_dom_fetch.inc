@@ -391,6 +391,18 @@ static void dom_fetch_object_cases(void)
     dom_script(&f, FETCH_ASSERT "assert(log.join()==='locked:TypeError,false:chunk,true:undefined,false,form:v, w/n.txt,empty:0',"
                "log.join());",
                "stream: read");
+    /* A part's parameters are read without regard to case, by one parse:
+     * Filename= makes a File, filename="" a File named "", name="" an
+     * entry named "". */
+    dom_script(&f,
+        "globalThis.mlog=[];var m='--b\\r\\nContent-Disposition: form-data; Name=\"a\"; Filename=\"a.txt\"\\r\\n"
+        "Content-Type: text/plain\\r\\n\\r\\nA\\r\\n--b\\r\\nContent-Disposition: form-data; name=\"e\"; filename=\"\"\\r\\n"
+        "\\r\\nE\\r\\n--b\\r\\nContent-Disposition: form-data; name=\"\"\\r\\n\\r\\nN\\r\\n--b--\\r\\n';"
+        "new Response(m,{headers:{'content-type':'multipart/form-data; boundary=b'}}).formData().then(g=>{"
+        "var a=g.get('a'),e=g.get('e');mlog.push((a instanceof File)+':'+a.name+':'+(e instanceof File)+':'+e.name+':'+g.get(''))})"
+        ".catch(x=>mlog.push('refused:'+x.message));",
+        "formData: a part's parameters");
+    dom_script(&f, FETCH_ASSERT "assert(mlog.join()==='true:a.txt:true::N',mlog.join());", "formData: parameters read by one parse");
     fixture_free(&f);
 }
 
