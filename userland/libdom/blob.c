@@ -1237,8 +1237,10 @@ static int multipart_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst form, c
             size_t n = end - at < sizeof(line) - 1 ? end - at : sizeof(line) - 1;
             os64_memcpy(line, bytes + at, n);
             line[n] = '\0';
-            if (n > 20 && (line[0] | 0x20) == 'c' && os64_strchr(line, ':') != NULL) {
-                const char *colon = os64_strchr(line, ':');
+            /* Each header recognised by its whole name, however short its
+             * value ("Content-Type: a/b" is one). */
+            const char *colon = os64_strchr(line, ':');
+            if (colon != NULL) {
                 size_t key = (size_t)(colon - line);
                 bool disposition = key == 19, content_type = key == 12;
                 for (size_t i = 0; disposition && i < key; i++)

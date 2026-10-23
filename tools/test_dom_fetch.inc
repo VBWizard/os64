@@ -403,6 +403,14 @@ static void dom_fetch_object_cases(void)
         ".catch(x=>mlog.push('refused:'+x.message));",
         "formData: a part's parameters");
     dom_script(&f, FETCH_ASSERT "assert(mlog.join()==='true:a.txt:true::N',mlog.join());", "formData: parameters read by one parse");
+    /* A short header is a header: "Content-Type: x/y" types its File. */
+    dom_script(&f,
+        "globalThis.mlog=[];var m='--b\\r\\nContent-Disposition: form-data; name=\"f\"; filename=\"f\"\\r\\n"
+        "Content-Type: x/y\\r\\n\\r\\nF\\r\\n--b--\\r\\n';"
+        "new Response(m,{headers:{'content-type':'multipart/form-data; boundary=b'}}).formData().then(g=>{"
+        "mlog.push(g.get('f').type)}).catch(x=>mlog.push('refused:'+x.message));",
+        "formData: a short Content-Type");
+    dom_script(&f, FETCH_ASSERT "assert(mlog.join()==='x/y',mlog.join());", "formData: a short header is read");
     fixture_free(&f);
 }
 
