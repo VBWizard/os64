@@ -866,34 +866,44 @@ bool os64_dom_listens(os64_dom_t *dom, const char *type)
 /* SCRIPT SURFACE. */
 
 /* A plain target's entry, for an object of a class d_event_target
- * registered: its opaque, or what the class's resolver makes of it. 1 with
- * the entry, 0 for any other value, -1 with an exception pending. */
-static int plain_entry(os64_dom_t *dom, JSContext *ctx, JSValueConst self, DValue **entry)
+ * registered: its opaque, or what the class's resolver makes of it (only
+ * when `make`). 1 with the entry, which is NULL for a resolver's target
+ * that has none and was not to make one; 0 for any other value; -1 with an
+ * exception pending. */
+static int plain_entry(os64_dom_t *dom, JSContext *ctx, JSValueConst self, bool make, DValue **entry)
 {
     if (!JS_IsObject(self)) return 0;
     JSClassID id = JS_GetClassID(self);
     for (unsigned i = 0; i < dom->target_class_count; i++) {
         if (dom->target_classes[i] != id) continue;
-        if (dom->target_resolvers[i] != NULL) return dom->target_resolvers[i](dom, ctx, self, entry);
+        if (dom->target_resolvers[i] != NULL) return dom->target_resolvers[i](dom, ctx, self, make, entry);
         *entry = JS_GetOpaque(self, id);
         return *entry != NULL ? 1 : 0;
     }
     return 0;
 }
 
-static DValue *target_entry(os64_dom_t *dom, JSContext *ctx, JSValueConst self)
+/* The listener record of the target `self`: window's, a node's, or a plain
+ * target's. A plain target whose entry is made on demand gets one only
+ * when `make` (something is added to it, or it is dispatched at); else
+ * *out is NULL when it has none, and there is nothing to read or remove.
+ * 0, or -1 with an exception pending. */
+static int target_entry(os64_dom_t *dom, JSContext *ctx, JSValueConst self, bool make, DValue **out)
 {
+    *out = NULL;
     if (JS_IsUndefined(self) || JS_IsNull(self) ||
-        (JS_IsObject(self) && JS_VALUE_GET_PTR(self) == JS_VALUE_GET_PTR(dom->window->value)))
-        return dom->window;
-    DValue *plain = NULL;
-    int found = plain_entry(dom, ctx, self, &plain);
-    if (found != 0) return found > 0 ? plain : NULL;
+        (JS_IsObject(self) && JS_VALUE_GET_PTR(self) == JS_VALUE_GET_PTR(dom->window->value))) {
+        *out = dom->window;
+        return 0;
+    }
+    int found = plain_entry(dom, ctx, self, make, out);
+    if (found != 0) return found > 0 ? 0 : -1;
     const os64_html_node_t *node = d_node(dom, ctx, self);
-    if (node == NULL) return NULL;
-    DValue *entry = d_find(dom, node);
-    if (entry == NULL) JS_ThrowTypeError(ctx, "Missing node wrapper");
-    return entry;
+    if (node == NULL) return -1;
+    *out = d_find(dom, node);
+    if (*out != NULL) return 0;
+    JS_ThrowTypeError(ctx, "Missing node wrapper");
+    return -1;
 }
 
 static int listener_options(JSContext *ctx, int argc, JSValueConst *argv, bool *capture, bool *once)
@@ -924,8 +934,8 @@ enum { M_ADD, M_REMOVE, M_DISPATCH };
 static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst self, int argc,
                                 JSValueConst *argv, int magic)
 {
-    DValue *entry = target_entry(dom, ctx, self);
-    if (entry == NULL) return JS_EXCEPTION;
+    DValue *entry;
+    if (target_entry(dom, ctx, self, magic != M_REMOVE, &entry) < 0) return JS_EXCEPTION;
     if (magic == M_DISPATCH) {
         if (argc < 1) return JS_ThrowTypeError(ctx, "dispatchEvent needs an event");
         DEvent *event = event_of(dom, ctx, argv[0]);
@@ -948,7 +958,7 @@ static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst se
     DString type = {0};
     if (!d_string(dom, ctx, argv[0], &type)) return JS_EXCEPTION;
     DListener *found = NULL;
-    for (DListener *listener = entry->listeners; listener != NULL; listener = listener->next)
+    for (DListener *listener = entry != NULL ? entry->listeners : NULL; listener != NULL; listener = listener->next)
         if (listener->handler == D_LISTENER && !listener->removed && listener->capture == capture &&
             JS_VALUE_GET_PTR(listener->callback) == JS_VALUE_GET_PTR(argv[1]) &&
             os64_strcmp(listener->type, type.data) == 0) found = listener;
@@ -992,8 +1002,11 @@ static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSV
     if (dom == NULL) return JS_EXCEPTION;
     bool set = (magic & D_SET) != 0;
     int kind = magic & ~D_SET;
-    DValue *entry = target_entry(dom, ctx, self);
-    if (entry == NULL) return JS_EXCEPTION;
+    // A plain target made on demand gets its entry for a handler set, and
+    // reads null, or is set to nothing, without one.
+    DValue *entry;
+    if (target_entry(dom, ctx, self, set && argc > 0 && JS_IsObject(argv[0]), &entry) < 0) return JS_EXCEPTION;
+    if (entry == NULL) return set ? JS_UNDEFINED : JS_NULL;
     if (entry != dom->window && body_like(entry->node) && window_reflecting(kind)) entry = dom->window;
     if (!set) {
         DListener *slot = slot_find(entry, kinds[kind]);
@@ -1208,7 +1221,8 @@ int d_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 }
 
 int d_event_target(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, JSClassID class_id,
-                   int (*resolve)(os64_dom_t *dom, JSContext *ctx, JSValueConst self, DValue **entry))
+                   int (*resolve)(os64_dom_t *dom, JSContext *ctx, JSValueConst self, bool make,
+                                  DValue **entry))
 {
     bool known = false;
     for (unsigned i = 0; i < dom->target_class_count; i++) known = known || dom->target_classes[i] == class_id;

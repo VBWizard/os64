@@ -137,7 +137,7 @@ struct os64_dom {
     /* The classes of plain event targets (d_event_target), and each one's
      * resolver, NULL for a class whose opaque is its entry. */
     JSClassID target_classes[8];
-    int (*target_resolvers[8])(os64_dom_t *, JSContext *, JSValueConst, DValue **);
+    int (*target_resolvers[8])(os64_dom_t *, JSContext *, JSValueConst, bool, DValue **);
     unsigned target_class_count;
     bool sweep_pending;
     DListener *invoking;
@@ -270,14 +270,17 @@ int d_dispatch(os64_dom_t *dom, JSContext *ctx, JSValueConst event, const os64_h
  * registers the object's class and gives its prototype the three
  * EventTarget methods with d_event_target, and an on<type> property for one
  * of the binding's event types with d_event_handler. The entry is the
- * object's opaque when `resolve` is NULL; a class whose objects come and go
- * (a MediaQueryList) gives a resolver instead, which makes the entry the
- * first time it is asked for, so an object nothing listens to is not held:
- * 1 with the entry, 0 when `self` is not its kind, -1 with an exception
- * pending. d_dispatch_plain is d_dispatch at one: the path is the target
- * alone. */
+ * object's opaque when `resolve` is NULL. A class whose objects come and go
+ * (a MediaQueryList) gives a resolver instead: it makes the entry only when
+ * `make` (a listener added, a handler set, a dispatch), and answers a NULL
+ * entry otherwise when there is none, which a read, a removal or a null
+ * handler acts on as nothing; the class releases an entry once nothing
+ * listens on it (view.c's media_sweep). 1 with the entry, 0 when `self` is
+ * not its kind, -1 with an exception pending. d_dispatch_plain is
+ * d_dispatch at one: the path is the target alone. */
 int d_event_target(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, JSClassID class_id,
-                   int (*resolve)(os64_dom_t *dom, JSContext *ctx, JSValueConst self, DValue **entry));
+                   int (*resolve)(os64_dom_t *dom, JSContext *ctx, JSValueConst self, bool make,
+                                  DValue **entry));
 int d_event_handler(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, int kind);
 int d_dispatch_plain(os64_dom_t *dom, JSContext *ctx, JSValueConst event, DValue *target);
 JSValue d_event_new(os64_dom_t *dom, JSContext *ctx, const char *type, bool bubbles,

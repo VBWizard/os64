@@ -249,8 +249,11 @@ host's clock), `isTrusted`, and the writable old spellings `returnValue` and
 **Where the values live.** A target's listener list hangs off its wrapper
 record, in the order listeners were added; window's off a record of its own;
 a plain target's off its entry, which is its object's opaque, or for a
-MediaQueryList one its resolver makes when it is first listened to, which
-holds the list from then on.
+MediaQueryList one its resolver makes when a listener is added, its
+handler set or an event dispatched at it (a read of `onchange`, a removal
+or a null handler makes none). That entry holds the list, and is let go,
+unlinked and freed, at the next matchMedia or view step once no listener
+or handler is left on it, so a list the page then drops is collected.
 Each listener's callback is a C-held engine value, the registry's second
 list, released by drain. An Event's own state is engine memory traced by the
 collector (`gc_mark`), because a script may keep an event long after its

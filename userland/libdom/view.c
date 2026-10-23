@@ -709,8 +709,62 @@ static void media_free(os64_dom_t *dom, DMedia *m)
 }
 
 // The records whose objects are gone and that nothing holds.
+// Whether anything listens on a list's entry: a listener, or a handler slot
+// holding a handler, of any type.
+static bool listened(const DValue *entry)
+{
+    for (const DListener *l = entry->listeners; l != NULL; l = l->next)
+        if (!l->removed &&
+            (l->handler == D_LISTENER || l->handler == D_SLOT_FUNCTION || l->handler == D_SLOT_UNCOMPILED))
+            return true;
+    return false;
+}
+
+// THE ENTRIES NOTHING LISTENS ON are let go: unlinked from the registry,
+// their records freed, and the list they held released, so a list the page
+// drops is collected and swept (media_sweep) as one never listened to is.
+// They are let go here, in one walk of the registry for all of them, and
+// not at the last removal, because the registry is a singly linked list a
+// removal would walk alone (a page that adds and removes a listener every
+// render would pay that walk every time); and only outside a dispatch,
+// which walks the records it would free.
+static void media_release(os64_dom_t *dom)
+{
+    if (dom->dispatching != 0)
+        return;
+    bool any = false;
+    for (DMedia *m = dom->media; m != NULL && !any; m = m->next)
+        any = m->entry != NULL && !listened(m->entry);
+    if (!any)
+        return;
+    DValue *gone = NULL;
+    for (DValue **link = &dom->values; *link != NULL;) {
+        DValue *e = *link;
+        DMedia *m = JS_IsObject(e->value) && JS_GetClassID(e->value) == dom->media_class
+                        ? JS_GetOpaque(e->value, dom->media_class) : NULL;
+        if (m != NULL && m->entry == e && !listened(e)) {
+            *link = e->next;
+            dom->retained--;
+            m->entry = NULL;
+            e->next = gone;
+            gone = e;
+        } else {
+            link = &e->next;
+        }
+    }
+    // The values go after the walk: freeing a list runs its finalizer.
+    while (gone != NULL) {
+        DValue *e = gone;
+        gone = e->next;
+        d_event_free(dom, e);
+        JS_FreeValueRT(dom->engine, e->value);
+        d_free(dom, e);
+    }
+}
+
 static void media_sweep(os64_dom_t *dom)
 {
+    media_release(dom);
     DMedia **link = &dom->media;
     dom->media_last = NULL;
     while (*link != NULL) {
@@ -725,9 +779,12 @@ static void media_sweep(os64_dom_t *dom)
     }
 }
 
-// A MediaQueryList's event target entry (d_event_target's resolver), made
-// the first time it is asked for, so a list nothing listens to is not held.
-static int media_entry(os64_dom_t *dom, JSContext *ctx, JSValueConst self, DValue **entry)
+// A MediaQueryList's event target entry (d_event_target's resolver): made
+// when something is added to the list, its handler is set or an event is
+// dispatched at it (`make`), and NULL otherwise while it has none, so
+// reading onchange or removing a listener holds nothing. The entry holds
+// the list; media_sweep lets it go once nothing listens on it.
+static int media_entry(os64_dom_t *dom, JSContext *ctx, JSValueConst self, bool make, DValue **entry)
 {
     if (dom->media_class == 0 || !JS_IsObject(self) || JS_GetClassID(self) != dom->media_class) return 0;
     DMedia *m = JS_GetOpaque(self, dom->media_class);
@@ -735,7 +792,7 @@ static int media_entry(os64_dom_t *dom, JSContext *ctx, JSValueConst self, DValu
         JS_ThrowTypeError(ctx, "This MediaQueryList belongs to no page");
         return -1;
     }
-    if (m->entry == NULL && (m->entry = d_retain(dom, ctx, JS_DupValue(ctx, self))) == NULL) return -1;
+    if (m->entry == NULL && make && (m->entry = d_retain(dom, ctx, JS_DupValue(ctx, self))) == NULL) return -1;
     *entry = m->entry;
     return 1;
 }
@@ -936,6 +993,9 @@ bool os64_dom_view_step(os64_dom_t *dom, os64_js_outcome_t *outcome)
     // Every list is judged again when what a query reads moved since the
     // lists were last judged; each one whose answer moved is owed an event,
     // and they are dispatched one a call, in the order the page made them.
+    // The lists nothing holds go first, so a list the page dropped is not
+    // judged again.
+    media_sweep(dom);
     os64_dom_view_t *judged = &dom->media_judged;
     if (now.width != judged->width || now.height != judged->height || now.dark != judged->dark ||
         now.reduced_motion != judged->reduced_motion) {

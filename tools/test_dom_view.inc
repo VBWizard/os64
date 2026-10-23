@@ -343,6 +343,41 @@ static void dom_view_event_cases(void)
     check(view_step(&f, "media: held"), "media: a list a listener holds still hears its change");
     dom_script(&f, VIEW_ASSERT "assert(changes[0]==='wide:false:(min-width: 700px):true:true:falsefalse',changes.join());",
                "media: held, heard");
+    // A list is held only while something listens on it (the fourth cold
+    // read): an add then a remove, a read of onchange, a remove from a list
+    // nothing was added to, a handler set and cleared, and a dispatch at a
+    // list nothing hears each leave the binding where it was once the lists
+    // are dropped and the next step sweeps; and the list a listener still
+    // holds keeps hearing.
+    for (int i = 0; i < 8 && view_step(&f, "media: settle"); i++) {}
+    dom_script(&f, "changes.length=0;", "media: forget what settling heard");
+    size_t entries = os64_dom_registry_count(f.binding);
+    dom_script(&f, VIEW_ASSERT "var kept=matchMedia('(color)');assert(kept.onchange===null);"
+        "kept.removeEventListener('change',()=>0);kept.onchange=null;", "media: a read and a remove");
+    check(os64_dom_registry_count(f.binding) == entries,
+          "media: reading onchange, removing a listener and clearing the handler make no entry");
+    dom_script(&f, "kept=null;", "media: drop it");
+    size_t before = os64_dom_bytes(f.binding), held = os64_dom_registry_count(f.binding);
+    dom_script(&f, VIEW_ASSERT "var h=()=>0;"
+        "for(var i=0;i<200;i++){var m=matchMedia('(min-width: '+i+'px)');m.addEventListener('change',h);"
+        "m.removeEventListener('change',h);}"
+        "for(var i=0;i<50;i++){var r=matchMedia('(color)');assert(r.onchange===null);r.removeEventListener('change',h);"
+        "r.onchange=null;}"
+        "for(var i=0;i<50;i++){var s=matchMedia('(color)');s.onchange=h;s.onchange=null;s.dispatchEvent(new Event('change'));}"
+        "m=r=s=null;", "media: lists listened to and let go");
+    check(!view_step(&f, "media: swept"), "media: the step that sweeps owes nothing");
+    size_t after = os64_dom_bytes(f.binding);
+    if (after > before + 512 || os64_dom_registry_count(f.binding) != held)
+        fprintf(stderr, "media release: %zu bytes before, %zu after; registry %zu before, %zu after\n", before, after,
+                held, os64_dom_registry_count(f.binding));
+    check(after <= before + 512 && os64_dom_registry_count(f.binding) == held,
+          "media: a list nothing listens on any more is let go and swept, whatever was done to it");
+    dom_script(&f, "changes.length=0;", "media: forget again");
+    v.view.width = 900;
+    check(view_step(&f, "media: held again resize"), "media: the resize back");
+    check(view_step(&f, "media: held again"), "media: the held list still hears");
+    dom_script(&f, VIEW_ASSERT "assert(changes[0]==='wide:true:(min-width: 700px):true:true:falsefalse',changes.join());",
+               "media: held, heard again");
     fixture_free(&f);
 }
 

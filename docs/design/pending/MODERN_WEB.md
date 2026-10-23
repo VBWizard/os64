@@ -1484,9 +1484,12 @@ being outside the switch.
 **Merged with 1a and 4**: a MediaQueryList is one of 1a's plain event
 targets (`d_event_target`, `d_event_handler`, `d_dispatch_plain`, the
 host's `d_host_dispatch` at a plain target's entry). 1a's helper gained a
-per-class resolver for it: a list's entry is made the first time the list
-is listened to (`media_entry`), so a list nothing listens to is not held,
-where performance and screen.orientation keep theirs as their opaque. The
+per-class resolver for it: a list's entry is made only when a listener
+is added, its handler set or an event dispatched at it (`media_entry`),
+and let go once nothing listens on it, at the next matchMedia or view step
+(`media_release`), so a list nothing listens to is not held, however it
+was listened to before; performance and screen.orientation keep theirs as
+their opaque. The
 interface objects are 1a's `d_interface_new`; 1b's own installer is gone.
 The two `DOMException` rows are one. Slice 4's thirteen longhands
 (`cursor`, `user-select`, `word-break`, `overflow-wrap`, `letter-spacing`,
