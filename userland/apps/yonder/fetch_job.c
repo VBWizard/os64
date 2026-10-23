@@ -351,7 +351,9 @@ bool yonder_fetch_data_url(const char *url, uint64_t max_body, uint8_t **body, s
             bytes[n++] = (uint8_t)*q;
         }
     }
-    // "…;base64", the space before base64 allowed, its case not regarded.
+    // "…;base64", its case not regarded, with zero or more U+0020 SPACE
+    // between: SPACE only, not ASCII whitespace, as Fetch's data: URL
+    // processor says (a tab there leaves the body as written).
     const char *b = mt_end;
     bool base64 = false;
     if (b - mt >= 6) {

@@ -526,6 +526,15 @@ static void data_and_limits(void)
     g = run(&(Ask){"https://a.test/page", "data:text/plain;base64,a"});
     expect("data: bad base64", g != NULL && !g->ok, NULL);
     yonder_fetched_free(g);
+    // Fetch's data: URL processor: ";" then zero or more U+0020 SPACE, then
+    // "base64" in any case. Spaces only: after a tab the body is not base64.
+    g = run(&(Ask){"https://a.test/page", "data:text/plain;  BASE64,aGk="});
+    expect("data: spaces before base64", g != NULL && g->ok && g->body_len == 2 && !memcmp(g->body, "hi", 2), NULL);
+    yonder_fetched_free(g);
+    g = run(&(Ask){"https://a.test/page", "data:text/plain;\tbase64,aGk="});
+    expect("data: a tab before base64 is not the marker", g != NULL && g->ok && g->body_len == 4 &&
+           !memcmp(g->body, "aGk=", 4), NULL);
+    yonder_fetched_free(g);
     g = run(&(Ask){"https://a.test/page", "data:no-comma"});
     expect("data: no comma", g != NULL && !g->ok, NULL);
     yonder_fetched_free(g);
