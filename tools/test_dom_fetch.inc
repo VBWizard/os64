@@ -388,6 +388,13 @@ static void dom_fetch_object_cases(void)
         "stream: the one chunk read");
     dom_script(&f, FETCH_ASSERT "assert(slog.join()==='chunk:3,closed',slog.join());",
                "stream: closed once its only chunk is taken");
+    /* releaseLock(): a pending `closed` rejects with a TypeError. */
+    dom_script(&f,
+        "globalThis.rlog=[];var rd6=new Response('abc').body.getReader();rd6.closed.catch(e=>rlog.push('pending:'+e.name));"
+        "rd6.releaseLock();",
+        "stream: releaseLock");
+    dom_script(&f, FETCH_ASSERT "assert(rlog.join()==='pending:TypeError',rlog.join());",
+               "stream: a released reader's closed is a TypeError");
     /* A body method read it whole with a reader it keeps; a FormData body
      * reads back as one, and an empty one is the close delimiter alone
      * (as Chrome and Firefox send it), which reads back as no entries. */

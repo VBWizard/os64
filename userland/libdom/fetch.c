@@ -1350,8 +1350,14 @@ static JSValue stream_member(JSContext *ctx, JSValueConst self, int argc, JSValu
             s->reader = JS_UNDEFINED;
             JS_FreeValue(ctx, r->stream);
             r->stream = JS_UNDEFINED;
-            JSValue error = JS_NewError(ctx);
-            if (!JS_IsException(error)) reader_closed(ctx, r, error);
+            /* Streams' ReadableStreamReaderGenericRelease rejects a pending
+             * `closed` with a TypeError. (It also replaces a settled one
+             * with a rejected promise, and marks either handled; libjs has
+             * no verb to mark a promise handled, so neither is done:
+             * DEBTS.md § A script's requests.) */
+            JS_ThrowTypeError(ctx, "The reader was released");
+            JSValue error = JS_GetException(ctx);
+            reader_closed(ctx, r, error);
             JS_FreeValue(ctx, error);
             return JS_UNDEFINED;
         }
