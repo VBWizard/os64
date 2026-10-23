@@ -340,6 +340,18 @@ static void dom_fetch_object_cases(void)
         "var e=new Request(o,{});assert(e.referrer==='http://example.test/from'&&e.referrerPolicy==='origin');"
         "var t=new Request(o,{referrerPolicy:'no-referrer'});assert(t.referrer==='about:client'&&t.referrerPolicy==='no-referrer');",
         "request: a Request's referrer and policy, kept or started over");
+    /* A Request made from a Request takes its body: the input's is
+     * disturbed and its stream locked, whether the page took the stream
+     * before (it cannot read it after) or asks for it after. */
+    dom_script(&f, FETCH_ASSERT
+        "var o=new Request('/x',{method:'POST',body:'abc'});var s=o.body;var n=new Request(o);"
+        "assert(o.bodyUsed&&s.locked&&!n.bodyUsed,'taken');throws('TypeError',()=>s.getReader());"
+        "var o2=new Request('/x',{method:'POST',body:'abc'});new Request(o2);"
+        "assert(o2.body.locked);throws('TypeError',()=>o2.body.getReader());"
+        "throws('TypeError',()=>new Request(o2));"
+        "var o3=new Request('/x',{method:'POST',body:'abc'});new Request(o3,{body:'other'});"
+        "assert(!o3.bodyUsed&&!o3.body.locked,'an init body leaves the input alone');",
+        "request: a Request from a Request takes its body");
     /* WebIDL reads a dictionary's members in name order, each once. */
     dom_script(&f, FETCH_ASSERT
         "var order=[];var init={};"
