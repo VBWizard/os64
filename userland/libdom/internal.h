@@ -259,6 +259,8 @@ struct os64_dom {
     int64_t time_origin_epoch_us;
     /* screen and screen.orientation (screen.c), each made once. */
     DValue *screen, *orientation;
+    /* window.status's string as a script last set it (window.c). */
+    DValue *status;
     /* Symbol.iterator as the engine made it, for reading an iterable a
      * page hands over (url.c). */
     DValue *iterator_symbol;

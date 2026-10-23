@@ -45,9 +45,13 @@ classification belongs to the guarded libjs operation.
 The D5 surface follows `docs/design/pending/DOM_BRIEFS.md`: document landmarks,
 queries, creation, tree mutation/navigation, attributes, text and markup,
 and control properties. `window` names the global object, and so do `self`, `frames`, `parent` and
-`top`, as they do for a window with no frames: the first three are
-[Replaceable] (a page may assign over them), `top` is read-only and
-unconfigurable, and the window's `length`, its frame count, is 0. Document landmarks
+`top`, as they do for a window with no frames: `self`, `frames` and
+`parent` are [Replaceable] (a page may assign over them), `top` is read-only
+and unconfigurable, and the window's `length`, its frame count, is 0.
+`window` and `document` are [LegacyUnforgeable] (core.c): own accessors of
+the global with no setter, neither configurable, so an assignment is
+ignored outside strict mode and a TypeError in it, and a page can neither
+delete nor redefine them. `history` is a read-only accessor. Document landmarks
 are read from the attached tree rather than trusted parser-time pointers.
 
 Kind prototypes inherit Node. An HTML element's prototype is HTMLElement's,
@@ -385,9 +389,10 @@ installed, an address that moves only the fragment is no ask: the host makes
 it at once (§ The view, computed style and the session's history), and one
 it refuses is asked for instead. A taken ask's nodes come held. `location`
 reads the page's address and its parts; `history.length` reads the host's
-count of entries, and 1 with no host or the switch off. `window.status` and
-`defaultStatus` accept an assignment and read empty: the status line is the
-browser's.
+count of entries, and 1 with no host or the switch off. `window.status`
+reads back the last string a script set, as HTML keeps it, and
+`defaultStatus`, which no standard has, accepts an assignment and reads
+empty; the status line itself is the browser's and shows neither.
 
 **Element actions.** `click()` is a synthetic click: the event, then the
 element's activation unless a listener cancelled it. A checkbox or radio

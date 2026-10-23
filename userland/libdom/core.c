@@ -205,6 +205,36 @@ static JSValue dialog(JSContext *ctx, JSValueConst self, int argc,
     return magic == 1 ? JS_FALSE : magic == 2 ? JS_NULL : JS_UNDEFINED;
 }
 
+/* window.window and window.document are [LegacyUnforgeable] (HTML
+ * § Window): own accessors of the global with a getter and no setter,
+ * neither configurable, so no page can delete or redefine them, a `let
+ * document` at a script's top level is the SyntaxError a browser throws,
+ * and an assignment is ignored outside strict mode (a TypeError in it), as
+ * browsers ignore one. This is the binding's one definition of each. */
+enum { U_WINDOW, U_DOCUMENT };
+
+static JSValue unforgeable_get(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
+                               int magic, JSValue *data)
+{
+    (void)self;
+    (void)argc;
+    (void)argv;
+    if (magic == U_WINDOW) return JS_GetGlobalObject(ctx);
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    return dom != NULL ? d_wrap(dom, ctx, dom->document->document) : JS_EXCEPTION;
+}
+
+static int unforgeable(os64_dom_t *dom, JSContext *ctx, JSValueConst global, const char *name, int magic)
+{
+    JSAtom atom = JS_NewAtom(ctx, name);
+    if (atom == JS_ATOM_NULL) return -1;
+    JSValue get = JS_NewCFunctionData(ctx, unforgeable_get, 0, magic, 1, &dom->anchor->value);
+    int result = JS_IsException(get)
+        ? -1 : JS_DefinePropertyGetSet(ctx, global, atom, get, JS_UNDEFINED, JS_PROP_ENUMERABLE);
+    JS_FreeAtom(ctx, atom);
+    return result;
+}
+
 static void construction_error(JSContext *ctx, os64_js_outcome_t *outcome)
 {
     JSValue error = JS_GetException(ctx);
@@ -319,9 +349,13 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
     dom->options.url = NULL;
     JSValue global = JS_GetGlobalObject(ctx);
     if (JS_IsException(global)) goto fail;
+    /* The document's wrapper is made now, so a binding that cannot wrap its
+     * document fails at creation rather than at a page's first `document`. */
     JSValue doc = d_wrap(dom, ctx, document->document);
-    int installed = JS_IsException(doc) ? -1 : JS_SetPropertyStr(ctx, global, "document", doc);
-    if (installed >= 0) installed = JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
+    int installed = JS_IsException(doc) ? -1 : 0;
+    JS_FreeValue(ctx, doc);
+    if (installed >= 0) installed = unforgeable(dom, ctx, global, "window", U_WINDOW);
+    if (installed >= 0) installed = unforgeable(dom, ctx, global, "document", U_DOCUMENT);
     /* A window with no frames is its own self, frames, parent and top
      * (HTML § Window): the first three are [Replaceable], so a page may
      * assign over them, and `top` is [LegacyUnforgeable] and read-only.
