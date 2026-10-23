@@ -820,7 +820,8 @@ memory; `slice`, `text`, `arrayBuffer`, `bytes`; `File`'s name and
 `lastModified`. `FormData(form)` reads the form's entries through libpage
 (`os64_page_form_entries`, its model of the window's document: a form in
 a document of its own answers none); a submitter is a NotSupportedError.
-multipart/form-data is written here (an empty FormData is no bytes) and
+multipart/form-data is written here (an empty FormData is the close
+delimiter alone, as browsers send it) and
 read back by `formData()`, as is urlencoded.
 
 **`fetch`, `Headers`, `Request`, `Response`** (`fetch.c`): the Fetch

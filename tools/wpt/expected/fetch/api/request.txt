@@ -92,7 +92,6 @@ request-bad-port.any.html	Request on bad port 990 should throw TypeError.
 request-bad-port.any.html	Request on bad port 993 should throw TypeError.
 request-bad-port.any.html	Request on bad port 995 should throw TypeError.
 request-consume-empty.any.html	Consume empty ArrayBuffer request body as text
-request-consume-empty.any.html	Consume empty FormData request body as text
 request-consume-empty.any.html	Consume empty URLSearchParams request body as text
 request-consume-empty.any.html	Consume empty blob request body as arrayBuffer
 request-consume-empty.any.html	Consume empty blob request body as text
@@ -390,7 +389,6 @@ request-bad-port.any.html	Request on bad port 995 should throw TypeError.
 request-clone.sub.html	Check cloning a request copies the headers
 request-constructor-init-body-override.any.html	Check that the body of a new request can be overridden when created from an existing Request object
 request-consume-empty.any.html	Consume empty ArrayBuffer request body as text
-request-consume-empty.any.html	Consume empty FormData request body as text
 request-consume-empty.any.html	Consume empty URLSearchParams request body as text
 request-consume-empty.any.html	Consume empty blob request body as arrayBuffer
 request-consume-empty.any.html	Consume empty blob request body as text

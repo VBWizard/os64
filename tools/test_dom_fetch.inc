@@ -381,14 +381,18 @@ static void dom_fetch_object_cases(void)
         "throws('RangeError',()=>new Response('x').body.getReader({mode:'byob'}));",
         "stream: one chunk, then done");
     /* A body method read it whole with a reader it keeps; a FormData body
-     * reads back as one, and an empty one is no bytes. */
+     * reads back as one, and an empty one is the close delimiter alone
+     * (as Chrome and Firefox send it), which reads back as no entries. */
     dom_script(&f, FETCH_ASSERT
         "var r=new Response('x');r.text();assert(r.body.locked);throws('TypeError',()=>r.body.getReader());"
         "var fd=new FormData();fd.append('k','v, w');fd.append('f',new File(['bytes'],'n.txt',{type:'text/plain'}));"
         "new Request('/x',{method:'POST',body:fd}).formData().then(g=>{log.push('form:'+g.get('k')+'/'+g.get('f').name)});"
-        "new Request('/x',{method:'POST',body:new FormData()}).text().then(t=>log.push('empty:'+t.length));",
+        "var er=new Request('/x',{method:'POST',body:new FormData()});"
+        "var eb=er.headers.get('content-type').split('boundary=')[1];"
+        "er.clone().text().then(t=>log.push('empty:'+(t==='--'+eb+'--\\r\\n')));"
+        "er.formData().then(g=>log.push('entries:'+[...g].length));",
         "stream: a body method locks it; FormData both ways");
-    dom_script(&f, FETCH_ASSERT "assert(log.join()==='locked:TypeError,false:chunk,true:undefined,false,form:v, w/n.txt,empty:0',"
+    dom_script(&f, FETCH_ASSERT "assert(log.join()==='locked:TypeError,false:chunk,true:undefined,false,form:v, w/n.txt,empty:true,entries:0',"
                "log.join());",
                "stream: read");
     /* A part's parameters are read without regard to case, by one parse:

@@ -1097,9 +1097,11 @@ int d_form_data_encode(os64_dom_t *dom, JSContext *ctx, JSValueConst form, DByte
                  newlines_normalized(ctx, &b, e->value, e->value_length, put_raw) && buf_text(ctx, &b, "\r\n");
         }
     }
-    /* No entries is no body at all, as a browser sends one. */
-    if (f->count != 0)
-        ok = ok && buf_text(ctx, &b, "--") && buf_put(ctx, &b, boundary, blen) && buf_text(ctx, &b, "--\r\n");
+    /* The close delimiter ends every multipart body, an empty entry list's
+     * included: HTML's encoding is RFC 7578's, whose body (RFC 2046)
+     * always ends with it, and Chrome and Firefox send it for an empty
+     * FormData too (a body of the close delimiter alone). */
+    ok = ok && buf_text(ctx, &b, "--") && buf_put(ctx, &b, boundary, blen) && buf_text(ctx, &b, "--\r\n");
     char type[128];
     os64_snprintf(type, sizeof(type), "multipart/form-data; boundary=%s", boundary);
     out->type = ok ? engine_copy(ctx, type, os64_strlen(type)) : NULL;
