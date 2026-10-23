@@ -267,6 +267,9 @@ struct os64_dom {
      * (window.c); P1-W's six BarProps, `external` and `crypto`, each made
      * once (browsing.c, crypto.c). */
     DValue *status, *bars[6], *external, *crypto;
+    /* The engine's typed-array `buffer` getter and ArrayBuffer's
+     * `resizable` getter, taken before any page ran (crypto.c). */
+    DValue *crypto_getters[2];
     /* Symbol.iterator as the engine made it, for reading an iterable a
      * page hands over (url.c). */
     DValue *iterator_symbol;

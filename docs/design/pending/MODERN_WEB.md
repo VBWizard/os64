@@ -2263,6 +2263,5 @@ reading empty. html/dom is checked out whole for one test, its other 247
 pages excluded by name: a later phase un-excludes what it names.
 
 **Booked** (DEBTS.md § Classic browser scripting): the QuotaExceededError
-interface; `getRandomValues` filling a view of a resizable buffer, which
-WebIDL refuses. Not booked, by ruling: `subtle` (ruling 1), and `close()`
+interface. Not booked, by ruling: `subtle` (ruling 1), and `close()`
 (DIVERGENCES.md).

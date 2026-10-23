@@ -985,18 +985,23 @@ the jobs after it run, never thrown into the script that queued it.
 **`external`** and `External`: `AddSearchProvider()` and
 `IsSearchProviderInstalled()` do nothing.
 
-**`crypto`** (`crypto.c`; Web Cryptography § 10) and `Crypto`:
+**`crypto`** (`crypto.c`; Web Cryptography's Crypto interface) and `Crypto`:
 `getRandomValues` fills an integer typed array of at most 65,536 bytes and
-answers it (a float array or a DataView is TypeMismatchError, more bytes is
-QuotaExceededError, anything that is no view a TypeError), and
+answers it (anything that is no view, or a view of a resizable buffer, is a
+TypeError, as WebIDL makes one without `[AllowResizable]`; then a float
+array or a DataView is TypeMismatchError, and more bytes
+QuotaExceededError), and
 `randomUUID`, [SecureContext], answers a version 4 UUID. `subtle` is absent
 (WINDOW_DOCUMENT.md, ruling 1). The bytes are the host's
 (`options.entropy`; yonder's is libtls's door, `os64_tls_entropy`, over
 `/dev/random`), written into the binding's scratch and copied into the
 array only when the host says every one is there: a host that refuses, or
 has no hook, is an OperationError, and the page never gets zeros or a
-short fill as randomness. A view is told by its class, never through its
-getters, so nothing here runs page code.
+short fill as randomness. A view is told by its class, and its buffer and
+the buffer's resizability are read through the engine's own getters, taken
+before any page ran (a resizable buffer's view keeps the length it was made
+with in the engine's books, so it could not be filled whole), so nothing
+here runs page code.
 
 The classic fixes beside them are every page's, the switch on or off:
 `window` and `document` [LegacyUnforgeable] (§ Objects and collections),

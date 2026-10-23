@@ -47,11 +47,30 @@ static bool entropy(os64_dom_t *dom, JSContext *ctx, uint8_t *out, size_t length
  * so what is no view at all is a TypeError, and a DataView or a float
  * array is a view of the wrong type, TypeMismatchError. There is no
  * SharedArrayBuffer to view (libjs removes it from every runtime). A view
- * of a resizable ArrayBuffer is filled like any other, where WebIDL would
- * refuse one with a TypeError (DEBTS). A view whose buffer is detached
- * holds no bytes, and is answered as it is. Nothing here runs page code:
- * the view is told by its class and read through the engine, never
- * through its getters. */
+ * of a resizable ArrayBuffer is a TypeError, as WebIDL makes one for an
+ * argument without [AllowResizable]: the engine reports such a view's
+ * length as it was made and never as the buffer grows or shrinks, so
+ * filling one would fill short and call it whole. A view whose fixed
+ * buffer is detached holds no bytes, and is answered as it is. Nothing here
+ * runs page code: the view is told by its class, and its buffer and that
+ * buffer's resizability are read through the engine's own getters, taken
+ * before any page ran (d_crypto_install), never through a page's. */
+
+/* Whether the buffer of `array`, a view of `kind` (d_view_kind), is
+ * resizable: 1, 0, or -1 with an exception pending. */
+static int resizable_view(os64_dom_t *dom, JSContext *ctx, JSValueConst array, int kind)
+{
+    JSValueConst getter = kind == D_VIEW_DATA_VIEW ? dom->data_view[1]->value : dom->crypto_getters[0]->value;
+    JSValue buffer = JS_Call(ctx, getter, array, 0, NULL);
+    if (JS_IsException(buffer)) return -1;
+    JSValue resizable = JS_Call(ctx, dom->crypto_getters[1]->value, buffer, 0, NULL);
+    JS_FreeValue(ctx, buffer);
+    if (JS_IsException(resizable)) return -1;
+    int answer = JS_ToBool(ctx, resizable);
+    JS_FreeValue(ctx, resizable);
+    return answer;
+}
+
 static JSValue get_random_values(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv)
 {
     if (argc < 1) return JS_ThrowTypeError(ctx, "getRandomValues needs an array");
@@ -59,6 +78,9 @@ static JSValue get_random_values(os64_dom_t *dom, JSContext *ctx, int argc, JSVa
     int kind = d_view_kind(dom, ctx, array);
     if (kind == -2) return JS_EXCEPTION;
     if (kind < 0) return JS_ThrowTypeError(ctx, "getRandomValues needs an ArrayBufferView");
+    int resizable = resizable_view(dom, ctx, array, kind);
+    if (resizable < 0) return JS_EXCEPTION;
+    if (resizable) return JS_ThrowTypeError(ctx, "getRandomValues does not fill a view of a resizable buffer");
     if (kind == D_VIEW_DATA_VIEW || kind == JS_TYPED_ARRAY_FLOAT16 || kind == JS_TYPED_ARRAY_FLOAT32 ||
         kind == JS_TYPED_ARRAY_FLOAT64)
         return d_error(ctx, "TypeMismatchError", "getRandomValues fills an integer typed array");
@@ -115,11 +137,59 @@ static JSValue crypto_member(JSContext *ctx, JSValueConst self, int argc, JSValu
     return magic == C_GET_RANDOM_VALUES ? get_random_values(dom, ctx, argc, argv) : random_uuid(dom, ctx);
 }
 
+/* `object`'s own accessor `name`'s getter, held in *out; -1 with an
+ * exception pending. */
+static int take_getter(os64_dom_t *dom, JSContext *ctx, JSValueConst object, const char *name, DValue **out)
+{
+    JSAtom atom = JS_NewAtom(ctx, name);
+    if (atom == JS_ATOM_NULL) return -1;
+    JSPropertyDescriptor descriptor;
+    int found = JS_GetOwnProperty(ctx, &descriptor, object, atom);
+    JS_FreeAtom(ctx, atom);
+    if (found <= 0) {
+        if (found == 0) JS_ThrowTypeError(ctx, "The engine has no %s getter", name);
+        return -1;
+    }
+    JS_FreeValue(ctx, descriptor.value);
+    JS_FreeValue(ctx, descriptor.setter);
+    if (!JS_IsFunction(ctx, descriptor.getter)) {
+        JS_FreeValue(ctx, descriptor.getter);
+        JS_ThrowTypeError(ctx, "The engine has no %s getter", name);
+        return -1;
+    }
+    *out = d_retain(dom, ctx, descriptor.getter);
+    return *out != NULL ? 0 : -1;
+}
+
+/* The typed arrays' `buffer` getter (%TypedArray%.prototype's) and
+ * ArrayBuffer.prototype's `resizable`, as the engine made them, before any
+ * page could replace either: what resizable_view reads a view through. */
+static int take_buffer_getters(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    JSValue uint8 = JS_GetPropertyStr(ctx, global, "Uint8Array");
+    JSValue uint8_prototype = JS_IsException(uint8) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, uint8, "prototype");
+    JS_FreeValue(ctx, uint8);
+    JSValue typed_prototype = JS_IsException(uint8_prototype) ? JS_EXCEPTION : JS_GetPrototype(ctx, uint8_prototype);
+    JS_FreeValue(ctx, uint8_prototype);
+    if (JS_IsException(typed_prototype)) return -1;
+    int result = take_getter(dom, ctx, typed_prototype, "buffer", &dom->crypto_getters[0]);
+    JS_FreeValue(ctx, typed_prototype);
+    if (result < 0) return -1;
+    JSValue buffer = JS_GetPropertyStr(ctx, global, "ArrayBuffer");
+    JSValue buffer_prototype = JS_IsException(buffer) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, buffer, "prototype");
+    JS_FreeValue(ctx, buffer);
+    if (JS_IsException(buffer_prototype)) return -1;
+    result = take_getter(dom, ctx, buffer_prototype, "resizable", &dom->crypto_getters[1]);
+    JS_FreeValue(ctx, buffer_prototype);
+    return result;
+}
+
 int d_crypto_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     static const JSClassDef crypto_class = {.class_name = "Crypto"};
     JSClassID id = os64_js_class_id(&crypto_slot);
     JSValue prototype;
+    if (take_buffer_getters(dom, ctx, global) < 0) return -1;
     if (d_interface_class(dom, ctx, global, id, &crypto_class, &prototype) < 0 ||
         d_method_named(dom, ctx, prototype, "getRandomValues", crypto_member, 1, C_GET_RANDOM_VALUES) < 0)
         return -1;

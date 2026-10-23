@@ -189,6 +189,23 @@ static void dom_window_crypto_cases(void)
         "const big=new Uint8Array(65536);assert(crypto.getRandomValues(big)===big);at+=65536;"
         "const over=new Uint32Array(16385);let q;try{crypto.getRandomValues(over)}catch(x){q=x}"
         "assert(q&&q.name==='QuotaExceededError'&&q.code===22&&over.every(x=>x===0),'past the quota');"
+        /* A view of a resizable buffer is refused whatever the buffer did
+         * since the view was made: grown past the quota, shrunk, or not
+         * resized at all; and a float view of one is a TypeError before it
+         * is the wrong type. A page replacing the getters changes nothing. */
+        "const grown=new ArrayBuffer(16,{maxByteLength:200000}),gv=new Uint8Array(grown);grown.resize(100000);"
+        "throws('TypeError',()=>crypto.getRandomValues(gv));assert(gv.every(x=>x===0),'grown: untouched');"
+        "const shrunk=new ArrayBuffer(64,{maxByteLength:64}),sv=new Uint8Array(shrunk);shrunk.resize(8);"
+        "throws('TypeError',()=>crypto.getRandomValues(sv));"
+        "throws('TypeError',()=>crypto.getRandomValues(new Uint8Array(new ArrayBuffer(4,{maxByteLength:8}))));"
+        "throws('TypeError',()=>crypto.getRandomValues(new Float32Array(new ArrayBuffer(4,{maxByteLength:8}))));"
+        "throws('TypeError',()=>crypto.getRandomValues(new DataView(new ArrayBuffer(4,{maxByteLength:8}))));"
+        "Object.defineProperty(ArrayBuffer.prototype,'resizable',{get(){return false}});"
+        "Object.defineProperty(Object.getPrototypeOf(Uint8Array.prototype),'buffer',{get(){return new ArrayBuffer(1)}});"
+        "throws('TypeError',()=>crypto.getRandomValues(new Uint8Array(new ArrayBuffer(4,{maxByteLength:8}))));"
+        /* A fixed-length buffer is filled as before. */
+        "const fixed=new Uint8Array(new ArrayBuffer(6));assert(crypto.getRandomValues(fixed)===fixed);"
+        "assert(same(Array.from(fixed),fake(at,6)),'a fixed buffer is filled');at+=6;"
         "globalThis.at=at;",
         "crypto: getRandomValues");
     check(window_entropy_most == 65536, "crypto: the host is never asked for more than 65,536 bytes");
