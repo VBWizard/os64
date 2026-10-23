@@ -862,6 +862,13 @@ static void dom_xhr_cases(void)
         {"new URLSearchParams('a=1')", "Content-Type: application/x-www-form-urlencoded;charset=UTF-8\r\n"},
         {"new Blob(['a=1'])", "Content-Type: application/x-www-form-urlencoded;charset=windows-1252\r\n"},
     };
+    /* The charset parameter is found by libway's walk: a ';' inside a quoted
+     * value is the value's, and the record is serialized. */
+    dom_script(&f, "var x=new XMLHttpRequest();x.open('POST','/cq');"
+               "x.setRequestHeader('Content-Type','text/plain;note=\"a;charset=latin1;x\";charset=windows-1252');x.send('t');",
+               "xhr: a quoted ';' before the charset");
+    check(strstr(net.seen[net.count - 1].headers, "Content-Type: text/plain;note=\"a;charset=latin1;x\";charset=UTF-8\r\n") != NULL,
+          "xhr: the charset rewritten is the parameter, not a quoted value's text");
     for (size_t i = 0; i < sizeof(kCharsets) / sizeof(kCharsets[0]); i++) {
         char script[384];
         snprintf(script, sizeof(script),

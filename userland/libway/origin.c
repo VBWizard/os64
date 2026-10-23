@@ -865,6 +865,7 @@ typedef struct {
     const char *names[WAY_MIME_SERIALIZE_IN_MAX / 4];
     size_t lens[WAY_MIME_SERIALIZE_IN_MAX / 4];
     size_t count;
+    const char *charset;    // non-NULL: the charset parameter's value is this instead
 } SerializeWalk;
 
 static void serial_put(SerializeWalk *w, char c)
@@ -895,6 +896,10 @@ static void serialize_param(void *ctx, const char *name, size_t name_len, const 
     }
     w->names[w->count] = name;
     w->lens[w->count++] = name_len;
+    if (w->charset != NULL && is_nocase(name, name_len, "charset")) {
+        value = w->charset;
+        value_len = os64_strlen(w->charset);
+    }
     serial_put(w, ';');
     for (size_t i = 0; i < name_len; i++)
         serial_put(w, lower(name[i]));
@@ -913,6 +918,11 @@ static void serialize_param(void *ctx, const char *name, size_t name_len, const 
 
 bool way_mime_serialize(const char *value, size_t len, char *out, size_t cap)
 {
+    return way_mime_serialize_charset(value, len, NULL, out, cap);
+}
+
+bool way_mime_serialize_charset(const char *value, size_t len, const char *charset, char *out, size_t cap)
+{
     if (cap == 0 || len > WAY_MIME_SERIALIZE_IN_MAX)
         return false;
     out[0] = '\0';
@@ -922,6 +932,7 @@ bool way_mime_serialize(const char *value, size_t len, char *out, size_t cap)
     w.used = 0;
     w.overflow = false;
     w.count = 0;
+    w.charset = charset;
     char essence[WAY_MIME_ESSENCE_MAX];
     if (!mime_walk(value, len, essence, sizeof(essence), serialize_param, &w) || w.overflow)
         return false;

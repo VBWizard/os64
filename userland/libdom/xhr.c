@@ -632,42 +632,29 @@ static XHeader *header_named(DXhr *x, const char *name, size_t nlen)
     return NULL;
 }
 
-/* A string's or a URLSearchParams body's author Content-Type keeps its words, but a charset in it
- * that is not UTF-8 says UTF-8, which is what the bytes are (XHR § send(),
- * step 4.4.3; the parameter's value is replaced where it stands). -1 on no
- * memory. */
+/* A string's or a URLSearchParams body's author Content-Type, when its
+ * charset is not UTF-8, is the parsed record with charset UTF-8,
+ * serialized, which is what the bytes are (XHR § send(): "Set
+ * contentTypeRecord's parameters["charset"] to "UTF-8"", then serialize
+ * it). One that names no charset, or names UTF-8, keeps its words. -1 on
+ * no memory. */
 static int charset_utf8(JSContext *ctx, XHeader *h)
 {
-    char essence[WAY_MIME_ESSENCE_MAX], charset[WAY_MIME_CHARSET_MAX];
+    char essence[WAY_MIME_ESSENCE_MAX], charset[WAY_MIME_CHARSET_MAX], out[WAY_MIME_SERIALIZED_MAX];
     if (!way_mime_parse(h->value, h->value_length, essence, sizeof(essence), charset, sizeof(charset)) ||
         charset[0] == '\0' || os64_streq_nocase(charset, "utf-8"))
         return 0;
-    /* The charset parameter: its value's span, quoted or not. */
-    for (size_t i = 0; i + 8 <= h->value_length; i++) {
-        if (h->value[i] != ';') continue;
-        size_t at = i + 1;
-        while (at < h->value_length && (h->value[at] == ' ' || h->value[at] == '\t')) at++;
-        if (at + 8 > h->value_length || !d_same_nocase(h->value + at, 8, "charset=", 8)) continue;
-        size_t start = at + 8, end = start;
-        if (end < h->value_length && h->value[end] == '"') {
-            end++;
-            while (end < h->value_length && h->value[end] != '"') end += h->value[end] == '\\' ? 2 : 1;
-            if (end < h->value_length) end++;
-            if (end > h->value_length) end = h->value_length;
-        } else
-            while (end < h->value_length && h->value[end] != ';') end++;
-        size_t length = start + 5 + (h->value_length - end);
-        char *value = js_malloc(ctx, length + 1);
-        if (value == NULL) return -1;
-        os64_memcpy(value, h->value, start);
-        os64_memcpy(value + start, "UTF-8", 5);
-        os64_memcpy(value + start + 5, h->value + end, h->value_length - end);
-        value[length] = '\0';
-        js_free(ctx, h->value);
-        h->value = value;
-        h->value_length = length;
-        return 0;
-    }
+    /* The record with its charset set to UTF-8, serialized: libway's walk
+     * finds the charset parameter, so a ';' inside a quoted value is the
+     * value's. One past the serializer's cap is left as written. */
+    if (!way_mime_serialize_charset(h->value, h->value_length, "UTF-8", out, sizeof(out))) return 0;
+    size_t length = os64_strlen(out);
+    char *value = js_malloc(ctx, length + 1);
+    if (value == NULL) return -1;
+    os64_memcpy(value, out, length + 1);
+    js_free(ctx, h->value);
+    h->value = value;
+    h->value_length = length;
     return 0;
 }
 
