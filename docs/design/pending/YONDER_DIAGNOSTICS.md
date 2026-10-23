@@ -418,7 +418,9 @@ was shown, or since its record was last written on asking:
   twice does not count twice. A sheet that came and went between the two
   is not seen. `iframe` is not on the elements list: libpage makes it a
   link.
-- **The FAILED vocabulary**: `page` (reading or fetching it), `layout`
+- **The FAILED vocabulary**: `page` (reading or fetching it, or a rule
+  the script binding keeps found broken: `FAILED page: an attribute left
+  its element outside libdom`, libdom's `options.broken`), `layout`
   (out of memory, or the layout stopped partway), `controls`, `scripts`
   (no memory for the host), `script <source name>`, `link refused`,
   `form refused` and `navigation`. A person's own form left invalid, a

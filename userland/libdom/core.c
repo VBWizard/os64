@@ -377,6 +377,7 @@ void os64_dom_free(os64_dom_t *dom)
     for (DValue *entry = dom->values; entry != NULL;) {
         DValue *next = entry->next;
         d_event_free(dom, entry);
+        d_attr_free(dom, entry);
         if (entry->node != NULL)
             os64_html_release(dom->document, entry->node);
         if (entry->target != NULL)

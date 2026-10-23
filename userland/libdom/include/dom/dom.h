@@ -121,6 +121,12 @@ typedef struct {
      * a page zoomed to 125% is told 1.25, as Chrome tells it. NULL is
      * 1000. It must not enter JS. */
     uint32_t (*zoom)(void *opaque);
+    /* A rule the binding keeps was found broken, `sentence` (static text)
+     * naming it: an Attr's attribute left its element by a verb outside
+     * the binding (attr.c's backstop). On the owner thread, inside a
+     * script's task; the host records it and must not enter JS. NULL: no
+     * one is told, and the binding carries on as the sentence says. */
+    void (*broken)(void *opaque, const char *sentence);
     void *host_opaque;
 } os64_dom_options_t;
 

@@ -209,6 +209,14 @@ static void global_missed(void *opaque, const char *name)
     yonder_diag_missing(s->options.diag, "global", name, 1);
 }
 
+// A rule the binding keeps, found broken (libdom's attribute backstop): the
+// page's record says which, as a page failure, since no one script did it.
+static void broken(void *opaque, const char *sentence)
+{
+    yonder_scripts_t *s = opaque;
+    yonder_diag_failed(s->options.diag, "page", sentence);
+}
+
 static uint64_t now_ms(void *opaque)
 {
     yonder_scripts_t *s = opaque;
@@ -309,6 +317,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     if (s->options.screen.width > 0 && s->options.screen.height > 0)
         options.screen = s->options.screen;
     options.zoom = zoom;
+    options.broken = broken;
     options.host_opaque = s;
     s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
     os64_dom_set_geometry(s->dom, s->options.geometry, s->options.opaque);

@@ -25,8 +25,9 @@ static bool is_html(const os64_html_node_t *node, os64_html_tag_t tag)
  * runs script, and that script may move or reclaim any node a position was
  * read from; so every method here converts first, and only then reads a
  * parent or a sibling, and nothing between that read and the change runs
- * script. One converted argument: a node of this document, or text. */
-typedef struct { const os64_html_node_t *node; DString text; } Arg;
+ * script. One converted argument: a node of this document, text, or an
+ * Attr, a Node no tree holds, which converting it into a node refuses. */
+typedef struct { const os64_html_node_t *node; DString text; bool attr; } Arg;
 
 static void args_free(os64_dom_t *dom, Arg *args, int count)
 {
@@ -44,7 +45,9 @@ static bool args_of(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *arg
     *args = d_alloc(dom, (size_t)argc * sizeof(**args));
     if (*args == NULL) { d_error(ctx, "QuotaExceededError", "DOM argument quota exceeded"); return false; }
     for (int i = 0; i < argc; i++) {
-        if (JS_GetOpaque(argv[i], dom->node_class) != NULL) {
+        if (d_is_attr(dom, argv[i])) {
+            (*args)[i].attr = true;
+        } else if (JS_GetOpaque(argv[i], dom->node_class) != NULL) {
             (*args)[i].node = d_node(dom, ctx, argv[i]);
             if ((*args)[i].node == NULL) { args_free(dom, *args, i); *args = NULL; return false; }
         } else if (!d_string(dom, ctx, argv[i], &(*args)[i].text)) {
@@ -59,9 +62,15 @@ static bool args_of(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *arg
 /* DOM § "convert nodes into a node", over converted arguments: a node is
  * itself, text is a new Text node, and more than one are gathered, in
  * order, into a new fragment. The answer is HELD: the caller releases it.
- * NULL with the exception thrown. Runs no script. */
+ * NULL with the exception thrown: an Attr among them is the
+ * HierarchyRequestError inserting it anywhere would be. Runs no script. */
 static os64_html_node_t *into_node(os64_dom_t *dom, JSContext *ctx, const Arg *args, int count)
 {
+    for (int i = 0; i < count; i++)
+        if (args[i].attr) {
+            d_error(ctx, "HierarchyRequestError", "An Attr has no place in the tree");
+            return NULL;
+        }
     int64_t status = OS64_HTML_OK;
     os64_html_node_t *fragment = NULL;
     if (count != 1) {
@@ -274,7 +283,7 @@ static bool attribute_name(os64_dom_t *dom, JSContext *ctx, const os64_html_node
 static JSValue set_attribute(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
                              const char *name, const char *value, size_t length, bool remove)
 {
-    int64_t status = os64_page_node_set_attr(dom->state, node, name, value, length, remove);
+    int64_t status = d_set_attr(dom, node, name, value, length, remove);
     return status < 0 ? d_html_error(ctx, status) : JS_UNDEFINED;
 }
 
@@ -334,7 +343,8 @@ static JSValue mixin_method(JSContext *ctx, JSValueConst this_value, int argc,
     case D_BEFORE: case D_AFTER: case D_REPLACE_WITH: case D_REMOVE_SELF:
         return tree_change(dom, ctx, self, magic, argc, argv);
     case D_CONTAINS: {
-        if (argc < 1 || JS_IsNull(argv[0])) return JS_FALSE;
+        /* An Attr is a Node, and no tree node's descendant. */
+        if (argc < 1 || JS_IsNull(argv[0]) || d_is_attr(dom, argv[0])) return JS_FALSE;
         const os64_html_node_t *other = d_node(dom, ctx, argv[0]);
         if (other == NULL) return JS_EXCEPTION;
         while (other != NULL && other != self) other = other->parent;

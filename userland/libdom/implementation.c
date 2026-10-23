@@ -209,7 +209,7 @@ static JSValue create_document_type(os64_dom_t *dom, JSContext *ctx, DValue *own
 
 /* DOM's "valid namespace prefix": not empty, and no ASCII whitespace, NUL,
  * '/' or '>'. */
-static bool prefix_valid(const char *text, size_t length)
+bool d_prefix_valid(const char *text, size_t length)
 {
     if (length == 0) return false;
     for (size_t i = 0; i < length; i++) {
@@ -232,7 +232,7 @@ static bool same(const char *text, size_t length, const char *word)
  * DOM's "validate and extract" as the standard has had it since 2025, which
  * WPT's createElementNS table at the pin holds, and not XML's QName: the
  * name splits at its FIRST colon, the part before it must be a valid
- * namespace prefix (prefix_valid) and everything after it, colons
+ * namespace prefix (d_prefix_valid) and everything after it, colons
  * included, a valid element local name (d_element_name_valid), else
  * InvalidCharacterError; so `0:a`, `f:o:o` and `prefix::local` are names
  * and `a:0`, `:a` and `a:` are not. Then the namespace rules, in the
@@ -269,7 +269,7 @@ static JSValue create_document(os64_dom_t *dom, JSContext *ctx, int argc, JSValu
         const char *local = colon != NULL ? colon + 1 : name.data;
         bool xmlns = same(name.data, name.length, "xmlns") || (colon != NULL && same(name.data, prefix, "xmlns"));
         bool is_xmlns_ns = has_ns && same(ns.data, ns.length, NS_XMLNS);
-        if ((colon != NULL && !prefix_valid(name.data, prefix)) || !d_element_name_valid(local))
+        if ((colon != NULL && !d_prefix_valid(name.data, prefix)) || !d_element_name_valid(local))
             result = d_error(ctx, "InvalidCharacterError", "That is not an element's qualified name");
         else if ((colon != NULL && !has_ns) ||
                  (colon != NULL && same(name.data, prefix, "xml") && !(has_ns && same(ns.data, ns.length, NS_XML))) ||
