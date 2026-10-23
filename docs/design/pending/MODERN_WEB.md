@@ -2011,9 +2011,10 @@ response) body as text" expect no bytes, while every engine sends the
 close delimiter for an empty FormData and fails them, as yonder now
 does. The one
 DOMException made other slices' pages pass: `dom/nodes` 1,097 → 1,401
-(the pre-insertion checks, classList, createDocument's names),
-`user-timing` 466 → 538, `css/cssom` 729 → 737, the history interface
-52 → 54, each written into `[passing]`. Every one of the 22 expectation
+(the pre-insertion checks, classList, createDocument's names), and with
+Slice 0d merged, 0d's 1,229 → 1,537 (its attribute refusals become real
+DOMExceptions too), `user-timing` 466 → 538, `css/cssom` 729 → 738, the
+history interface 52 → 54, each written into `[passing]`. Every one of the 22 expectation
 directories passes at the head, and with `--modern-off`.
 
 The census, before the slice (the P5's kept pages of 2026-10-21 and
@@ -2031,10 +2032,11 @@ page record said `200 cors, 0 hops` for the first and named the CORS
 refusal for the last.
 
 Host, at the head, all 0 failed: origin.c's 151 cases (ORIGIN.md's
-list, one each) with their step bounds, 426 checks; libfetch's host 905
+list, one each) with their step bounds, 430 checks; libfetch's host 905
 checks; the job's host (`test_yonder_fetch_job_host.sh`, 312 checks,
 every allocation failed in turn and each one failed alone); the DOM
-host 78,780 checks with 12,183 binding allocation sweeps, `tools/test_dom_fetch.inc` holding the rows; the scripted-page
+host 82,990 checks with 12,734 binding allocation sweeps (Slice 0d's
+included), `tools/test_dom_fetch.inc` holding the rows; the scripted-page
 host with `tools/test_yonder_requests.inc` end to end. Mutants by hand,
 one per finding fixed after the cold reads and Codex's rounds (each
 named in its commit);
@@ -2071,7 +2073,13 @@ non-empty init) and one declined with WebIDL's enumeration setter rule.
 Fable then read origins and CORS against the tree and approved them,
 with two text items, both done: the "no Origin on HEAD" row was the
 standard's own rule and went, and a redirect's Referrer-Policy was
-booked.
+booked. Slice 0d merged in after that (its attribute errors now real
+DOMExceptions, with a case for their codes), and Codex's third round
+found six P2s: five fixed (a multipart preamble skipped, a part header
+read whole or the body refused, a body's type taken by "extract a MIME
+type" serialized, an errored body's cancel() answering its error, a
+URLSearchParams body's author charset said as UTF-8) and one booked
+(XMLHttpRequest.send(document)).
 
 **Booked** (DEBTS.md § A script's requests, unless named): the same-site
 stand-in; SameSite not enforced for script requests; the HTTP cache
@@ -2082,7 +2090,8 @@ address libpage's grammar refuses; a clone's body not reached by an
 abort; an XHR the host would not start erroring inside `send()`; a
 request the pool has no slot for; non-enumerable operations; QuickJS's
 Proxy `ownKeys` duplicates; the WPT runner's port; a released reader's
-`closed` not marked handled; a redirect's `Referrer-Policy` not applied.
+`closed` not marked handled; a redirect's `Referrer-Policy` not applied;
+`XMLHttpRequest.send(document)` sending the object's string.
 QuickJS's four further parser paths (§ libjs) become libjs patch 0011, a
 small PR of its own right after this slice merges (Fable's ruling); the
 row stays until it lands. The deliberate departures from the standard are
