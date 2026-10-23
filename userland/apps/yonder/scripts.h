@@ -122,6 +122,15 @@ bool yonder_scripts_connected_pending(const yonder_scripts_t *scripts);
 // A connected script, as libdom reports one (and the finished-document
 // fixtures queue them): inline is ready at once, `src` is fetched.
 void yonder_scripts_connected(yonder_scripts_t *scripts, const os64_html_node_t *script);
+// A `javascript:` link followed (HTML § 7.4.2.3.3): the address after its
+// scheme, percent-decoded, then `#` and the fragment when it has one, which
+// arrives decoded (libpage's os64_page_request_t), all read as UTF-8, is
+// queued as a classic script of the page's, ready now and run as one task
+// in its turn, named `javascript:#inline-<n>` on the page's record. A
+// string it evaluates to is not made the page (DECLINED.md). False, and
+// nothing queued, when the host is retired, the code is longer than a
+// script may be, the page has run out of scripts, or memory ran out.
+bool yonder_scripts_address(yonder_scripts_t *scripts, const char *url, const char *fragment);
 // A fetch came back: `source` is UTF-8 and borrowed, NULL when it failed.
 void yonder_scripts_fetched(yonder_scripts_t *scripts, uint32_t token, const char *source,
                             size_t length);

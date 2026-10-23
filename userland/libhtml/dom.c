@@ -897,6 +897,55 @@ os64_html_node_t *os64_html_create_fragment(os64_html_document_t *doc, int64_t *
     say(status, why);
     return n;
 }
+os64_html_node_t *os64_html_create_document(os64_html_document_t *doc, int64_t *status)
+{
+    HDoc *d = (HDoc *)doc;
+    int64_t why = d ? OS64_HTML_OK : OS64_HTML_BAD_ARGUMENT;
+    HNode *n = d ? node_new(d, DOCUMENT, &why) : NULL;
+    say(status, why);
+    return n;
+}
+/* A string of the doctype's in a permanent chunk, as the parser keeps the
+ * ones it reads: a doctype's strings are never replaced. */
+static bool doctype_string(HDoc *d, const char *s, const char **out, int64_t *why)
+{
+    size_t len = h_len(s);
+    char *copy = d_permanent(d, len + 1, why);
+    if (!copy)
+        return false;
+    for (size_t i = 0; i < len; i++)
+        copy[i] = s[i];
+    *out = copy;
+    return true;
+}
+os64_html_node_t *os64_html_create_doctype(os64_html_document_t *doc, const char *name,
+                                           const char *public_id, const char *system_id,
+                                           int64_t *status)
+{
+    HDoc *d = (HDoc *)doc;
+    int64_t why = OS64_HTML_OK;
+    if (!d || !name || !public_id || !system_id) {
+        say(status, OS64_HTML_BAD_ARGUMENT);
+        return NULL;
+    }
+    if (!d_text_ok(name, h_len(name)) || !d_text_ok(public_id, h_len(public_id)) ||
+        !d_text_ok(system_id, h_len(system_id))) {
+        say(status, OS64_HTML_BAD_TEXT);
+        return NULL;
+    }
+    const char *strings[3] = {NULL, NULL, NULL};
+    bool copied = doctype_string(d, name, &strings[0], &why) &&
+                  doctype_string(d, public_id, &strings[1], &why) &&
+                  doctype_string(d, system_id, &strings[2], &why);
+    HNode *n = copied ? node_new(d, DOCTYPE, &why) : NULL;
+    if (n) {
+        n->name = strings[0];
+        n->public_id = strings[1];
+        n->system_id = strings[2];
+    }
+    say(status, why);
+    return n;
+}
 
 /* ── Attributes ──────────────────────────────────────────────────────────
  *

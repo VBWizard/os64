@@ -20,13 +20,14 @@ typedef enum {
     MODE_BLOCKING,      // parser-inserted, neither defer nor async: the parse waits
     MODE_DEFER,         // parser-inserted `defer src`: after the parse, in order
     MODE_ASYNC,         // `async src`, or a connected `src`: as it lands
-    MODE_INLINE         // a connected inline script: ready at once
+    MODE_INLINE,        // a connected inline script: ready at once
+    MODE_ADDRESS        // a `javascript:` link's code: ready at once, no node
 } Mode;
 
 typedef enum { STATE_FETCHING, STATE_READY, STATE_FAILED, STATE_DONE } State;
 
 typedef struct {
-    const os64_html_node_t *node;   // held
+    const os64_html_node_t *node;   // held; NULL for MODE_ADDRESS
     Mode mode;
     State state;
     uint64_t job;                   // while FETCHING
@@ -68,6 +69,7 @@ struct yonder_scripts {
     uint32_t ready_head, ready_count;
     uint32_t defer_next;            // the next `defer` item to consider, by index
     uint32_t inline_count;          // names an inline script: #inline-<n>
+    uint32_t address_count;         // names a link's script: javascript:#inline-<n>
     uint64_t tasks;
     // The blocking script is running: its document.write reaches the
     // parser. `written` is what the last task handed over, for the audit.
@@ -402,9 +404,6 @@ void yonder_scripts_free(yonder_scripts_t *s)
     os64_free(s);
 }
 
-// A new item for `script`, holding it. NULL past the page's cap or out of
-// memory: that script does not run, as a script past a browser's limit does
-// not.
 // A copy of `text`, NULL for none or no memory: the address is for the
 // page's record, and a script runs the same without it.
 static char *keep(const char *text)
@@ -418,6 +417,9 @@ static char *keep(const char *text)
     return c;
 }
 
+// A new item for `script`, holding it (a link's script has no element, and
+// holds nothing). NULL past the page's cap or out of memory: that script
+// does not run, as a script past a browser's limit does not.
 static Item *item_new(yonder_scripts_t *s, const os64_html_node_t *script, Mode mode)
 {
     if (s->count == SCRIPT_COUNT_MAX)
@@ -444,7 +446,8 @@ static Item *item_new(yonder_scripts_t *s, const os64_html_node_t *script, Mode 
     it->node = script;
     it->mode = mode;
     it->state = STATE_READY;
-    os64_html_hold(s->doc, script);
+    if (script != NULL)
+        os64_html_hold(s->doc, script);
     return it;
 }
 
@@ -572,11 +575,14 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
     os64_memset(out, 0, sizeof(*out));
     s->written = 0;
     Item *it = &s->items[index];
+    // A link's script has no element to be connected or typed: it is the
+    // page's own code, and runs while the page does.
     const os64_html_node_t *root = it->node;
-    while (root->parent != NULL)
+    while (root != NULL && root->parent != NULL)
         root = root->parent;
-    bool runs = it->state == STATE_READY && root == s->doc->document &&
-                os64_dom_script_kind(it->node) == OS64_DOM_SCRIPT_CLASSIC;
+    bool runs = it->state == STATE_READY &&
+                (it->mode == MODE_ADDRESS ||
+                 (root == s->doc->document && os64_dom_script_kind(it->node) == OS64_DOM_SCRIPT_CLASSIC));
     char name[OS64_JS_SOURCE_NAME_CAP];
     os64_strcopy(name, sizeof(name), it->name);
     s->task_address = it->address;
@@ -587,7 +593,8 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
         os64_strcopy(out->source_name, sizeof(out->source_name), name);
     }
     if (runs && ensure_runtime(s, out)) {
-        (void)os64_dom_script_start(s->dom, it->node);
+        if (it->node != NULL)
+            (void)os64_dom_script_start(s->dom, it->node);
         // The source moves out of the table before the run, for the same
         // reason the item is named by its index.
         char *source = it->source;
@@ -721,6 +728,71 @@ void yonder_scripts_connected(yonder_scripts_t *s, const os64_html_node_t *scrip
         return;
     }
     make_ready(s, it);
+}
+
+// A hex digit's value, or -1.
+static int hex_value(char c)
+{
+    return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 :
+           c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+}
+
+// HTML's "navigate to a javascript: URL": the address after its scheme,
+// percent-decoded, its fragment joined as given, then read as UTF-8, each
+// byte that is not UTF-8 becoming U+FFFD.
+bool yonder_scripts_address(yonder_scripts_t *s, const char *url, const char *fragment)
+{
+    if (s == NULL || s->dead || url == NULL)
+        return false;
+    const char *rest = os64_strchr(url, ':');
+    rest = rest != NULL ? rest + 1 : url;
+    size_t length = os64_strlen(rest), extra = fragment != NULL ? os64_strlen(fragment) + 1 : 0;
+    size_t cap = os64_js_default_limits().source_bytes;
+    if (length > cap || extra > cap - length)
+        return false;
+    // What the percent-decoding leaves, then the same as UTF-8: no byte
+    // grows past three, the replacement character's.
+    char *bytes = os64_malloc(length + extra + 1);
+    char *source = bytes != NULL ? os64_malloc(3 * (length + extra) + 1) : NULL;
+    if (source == NULL) {
+        os64_free(bytes);
+        return false;
+    }
+    size_t n = 0;
+    for (size_t i = 0; rest[i] != '\0'; i++) {
+        int high = rest[i] == '%' ? hex_value(rest[i + 1]) : -1;
+        int low = high >= 0 ? hex_value(rest[i + 2]) : -1;
+        if (low >= 0) {
+            bytes[n++] = (char)(high * 16 + low);
+            i += 2;
+        } else {
+            bytes[n++] = rest[i];
+        }
+    }
+    // libpage hands a fragment over decoded already: it is joined as it is.
+    if (fragment != NULL) {
+        bytes[n++] = '#';
+        for (size_t i = 0; fragment[i] != '\0'; i++)
+            bytes[n++] = fragment[i];
+    }
+    size_t at = 0;
+    for (size_t i = 0; i < n;) {
+        uint32_t cp;
+        i += os64_utf8_decode(bytes + i, n - i, &cp);
+        at += os64_utf8_encode(cp, source + at);
+    }
+    source[at] = '\0';
+    os64_free(bytes);
+    Item *it = item_new(s, NULL, MODE_ADDRESS);
+    if (it == NULL) {
+        os64_free(source);
+        return false;
+    }
+    os64_snprintf(it->name, sizeof(it->name), "javascript:#inline-%u", ++s->address_count);
+    it->source = source;
+    it->length = at;
+    make_ready(s, it);
+    return true;
 }
 
 void yonder_scripts_fetched(yonder_scripts_t *s, uint32_t token, const char *source, size_t length)

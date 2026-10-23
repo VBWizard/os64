@@ -169,6 +169,7 @@ verb and turn a status into an exception.
 | Verb | What it does |
 |---|---|
 | `create_element(doc, ns, name)`, `create_text`, `create_comment`, `create_fragment` | a detached node, owned by the document |
+| `create_document(doc)`, `create_doctype(doc, name, public_id, system_id)` | a second document in the document's arena, under the DOM Standard's rules for a document's children and none of the page's own (DOMImplementation's documents), and a doctype for one |
 | `clone(doc, node, deep)` | a detached copy; form-owner records are not copied. `node` may be another document's, and the copy then shares no memory with it |
 | `insert(doc, parent, node, before)` | moves `node` (or a fragment's children) under `parent`; adjacent text is not merged, as the DOM does not |
 | `remove(doc, node)` | unlinks it; an unheld subtree can retire and be reclaimed after older pins leave |

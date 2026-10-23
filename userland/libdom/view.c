@@ -329,13 +329,14 @@ enum {
 #define READ_ONLY "This declaration is a computed style, which a script cannot change"
 
 /* Whether a declaration answers nothing: a pseudo-element's, or an
- * element's that is not in the document now (CSSOM: its declarations are
- * then an empty list). */
+ * element's that is not in the window's document now (CSSOM: an element
+ * whose root has no browsing context, a document made by
+ * document.implementation included, has an empty list). */
 static bool computed_empty(os64_dom_t *dom, JSContext *ctx, const DComputed *c)
 {
     if (c->empty) return true;
     const os64_html_node_t *node = d_node(dom, ctx, c->element);
-    return node == NULL || !d_connected(dom, node);
+    return node == NULL || !d_in_window_tree(dom, node);
 }
 
 static JSValue computed_value(os64_dom_t *dom, JSContext *ctx, const DComputed *c, int32_t prop)
@@ -442,7 +443,8 @@ static void camel(const char *name, char *out, size_t cap, bool webkit)
 }
 
 // document.defaultView: the window, which is where a page that reaches
-// getComputedStyle through its document finds it.
+// getComputedStyle through its document finds it; null for a document with
+// no window (HTML: one made by document.implementation).
 static JSValue default_view(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                             int magic, JSValue *data)
 {
@@ -451,7 +453,8 @@ static JSValue default_view(JSContext *ctx, JSValueConst self, int argc, JSValue
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *node = d_node(dom, ctx, self);
     if (node == NULL) return JS_EXCEPTION;
-    if (node != dom->document->document) return JS_ThrowTypeError(ctx, "Expected the document");
+    if (node->kind != OS64_HTML_DOCUMENT) return JS_ThrowTypeError(ctx, "Expected a document");
+    if (node != dom->document->document) return JS_NULL;
     return JS_DupValue(ctx, dom->window->value);
 }
 
@@ -616,8 +619,13 @@ static JSValue view_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
     if (magic == V_SCROLLING_ELEMENT) {
         const os64_html_node_t *node = d_node(dom, ctx, self);
         if (node == NULL) return JS_EXCEPTION;
-        if (node != dom->document->document) return JS_ThrowTypeError(ctx, "Expected the document");
-        return scrolling_element(dom, ctx);
+        if (node->kind != OS64_HTML_DOCUMENT) return JS_ThrowTypeError(ctx, "Expected a document");
+        if (node == dom->document->document) return scrolling_element(dom, ctx);
+        /* A document made by document.implementation is in no-quirks mode,
+         * so its scrolling element is its root element (CSSOM View). */
+        for (const os64_html_node_t *n = node->first_child; n != NULL; n = n->next)
+            if (n->kind == OS64_HTML_ELEMENT) return d_wrap(dom, ctx, n);
+        return JS_NULL;
     }
     os64_dom_view_t v = view_now(dom);
     switch (magic) {

@@ -157,6 +157,16 @@ a timer's task keeps the plain `failed`, since it evaluates no script):
     sheets: 1, 1 ready
     script file:///tests/pages/diag.html#timer-1: failed
 
+**A `javascript:` link's script** (MODERN_WEB.md slice 0c) is a script of
+the page's, run as one task, and recorded as one: `script
+javascript:#inline-<n>: ran in <n> us`, numbered apart from the page's
+inline scripts (the first link followed is `#inline-1`, whatever the page
+holds), and a failure `FAILED script javascript:#inline-<n>: <message>`.
+A link whose script could not be queued (the page out of scripts, or
+memory) says `FAILED script javascript:: the link's script could not be
+queued`. The libway refusal such a link used to leave, `FAILED link
+refused`, no longer happens.
+
 ### The page's fonts (S9a4, PILE3.md § Web fonts)
 
 A page with `@font-face` rules, or one whose layout asked for a family,

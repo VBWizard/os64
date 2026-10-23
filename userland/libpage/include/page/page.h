@@ -561,8 +561,11 @@ int64_t os64_page_node_set_text(os64_page_state_t *state, os64_html_node_t *node
 // mode decides storage: text/textarea use dirty state; hidden/button/tick
 // values write the HTML value attribute; a file accepts only empty. Select
 // value chooses the first matching option, or clears its selection.
-// Checkedness is for checkbox/radio; selectedIndex is for select, with an
-// out-of-range index clearing it (including -1). Options are keyed by node.
+// Checkedness is every input's (HTML § 4.10.5), though only a checkbox's
+// and a radio's is shown, sent or grouped: a script may set a text input's,
+// and it is the input's still when its type becomes checkbox. selectedIndex
+// is for select, with an out-of-range index clearing it (including -1).
+// Options are keyed by node.
 // WRONG_KIND refuses foreign nodes, unsupported kinds and invalid arguments;
 // NO_MEMORY includes state cap and HTML budget exhaustion. Failure changes
 // neither state, published views nor the HTML version.

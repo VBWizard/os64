@@ -11151,9 +11151,10 @@ static int32_t link_at(int32_t x, int32_t y)
 }
 
 // A link followed: libpage says what it is — a place in this page is a
-// move, anywhere else is judged by libway with `ask`. A person pressing it
-// is never asked about (WAY_ASK_NEVER); a script's click() is judged as
-// the page's own choice (WAY_ASK_GO).
+// move, a `javascript:` address is the page's own script, anywhere else is
+// judged by libway with `ask`. A person pressing it is never asked about
+// (WAY_ASK_NEVER); a script's click() is judged as the page's own choice
+// (WAY_ASK_GO).
 static void follow_link_asked(int32_t link, way_ask_t ask)
 {
     os64_page_what_t what = {OS64_PAGE_ACTIVATE_LINK, link, 0, 0};
@@ -11179,6 +11180,18 @@ static void follow_link_asked(int32_t link, way_ask_t ask)
             scroll_to_node(request.anchor);
         else
             fragment_scroll(NULL, name);
+        os64_page_request_free(&request);
+    } else if (verdict == OS64_PAGE_NAVIGATE && os64_streq(request.scheme, "javascript")) {
+        // A `javascript:` link is the page's own code in an address: it
+        // runs in the page, by the door an inline script runs through, and
+        // nothing is fetched, so libway is not asked about it.
+        if (!scripts_live())
+            status_rest(g.scripts_on && g.page.scripts != NULL
+                            ? "That link runs a script, and this page's scripts have stopped."
+                            : "That link runs a script, and scripts are off.");
+        else if (!yonder_scripts_address(g.page.scripts, request.url,
+                                         request.has_fragment ? request.fragment : NULL))
+            say_failed(g.page.diag, "script javascript:", "the link's script could not be queued");
         os64_page_request_free(&request);
     } else if (verdict == OS64_PAGE_NAVIGATE) {
         g.chain = 0;

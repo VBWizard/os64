@@ -341,12 +341,25 @@ static int handler_kind(const char *name)
     return -1;
 }
 
+/* HTML's "determining the target of an event handler": a body's (or a
+ * frameset's) window-reflecting handler is window's when the body is the
+ * window's document's, and nobody's when its document has no window
+ * (implementation.c). 1 for window's, 0 for the element's own, -1 for
+ * nobody's. */
+static int reflected(os64_dom_t *dom, const os64_html_node_t *node, int kind)
+{
+    if (!body_like(node) || !window_reflecting(kind)) return 0;
+    return d_window_document(dom, node) ? 1 : -1;
+}
+
 int d_handler_attribute_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
                             const char *name)
 {
     int kind = handler_kind(name);
     if (kind < 0 || !handler_on(dom, kind) || node->kind != OS64_HTML_ELEMENT) return 0;
-    DValue *entry = body_like(node) && window_reflecting(kind) ? dom->window : d_find(dom, node);
+    int target = reflected(dom, node, kind);
+    if (target < 0) return 0;
+    DValue *entry = target > 0 ? dom->window : d_find(dom, node);
     if (entry == NULL) return 0;
     return slot_for(dom, ctx, entry, kind, false) != NULL ? 0 : -1;
 }
@@ -407,7 +420,7 @@ static int slot_compile(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListene
         slot_state(dom, slot, D_SLOT_ERROR);
         return -1;
     }
-    const os64_html_node_t *form = element != NULL ? d_form_owner(dom, element) : NULL;
+    const os64_html_node_t *form = element != NULL ? d_form_owner(element) : NULL;
     JSValue scopes[3] = {
         d_wrap(dom, ctx, document_node(dom)),
         form != NULL ? d_wrap(dom, ctx, form) : JS_NewObject(ctx),
@@ -432,10 +445,16 @@ static int slot_compile(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListene
 }
 
 /* The slot's function, compiling it if its attribute has not been: a new
- * reference, JS_NULL when there is none, JS_EXCEPTION when compiling threw. */
+ * reference, JS_NULL when there is none, JS_EXCEPTION when compiling threw.
+ * An attribute on an element of a document with no window is not compiled
+ * (scripting is disabled for it) and reads as none, until the element is
+ * the window's. */
 static JSValue slot_value(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListener *slot)
 {
     if (slot_refresh(dom, ctx, entry, slot) < 0) return JS_EXCEPTION;
+    if (slot->handler == D_SLOT_UNCOMPILED && entry != dom->window && entry->node != NULL &&
+        !d_window_document(dom, entry->node))
+        return JS_NULL;
     if (slot->handler == D_SLOT_UNCOMPILED && slot_compile(dom, ctx, entry, slot) < 0)
         return JS_EXCEPTION;
     return slot->handler == D_SLOT_FUNCTION ? JS_DupValue(ctx, slot->callback) : JS_NULL;
@@ -993,8 +1012,10 @@ static JSValue target_method(JSContext *ctx, JSValueConst self, int argc, JSValu
 }
 
 /* on<type> for an element, the document, window or a plain target (a
- * MediaQueryList's or screen.orientation's onchange). The body's window-reflecting handlers are
- * window's, whichever object is asked. */
+ * MediaQueryList's or screen.orientation's onchange). The body's
+ * window-reflecting handlers are window's, whichever object is asked; a
+ * body of a document with no window has none, reads null and ignores an
+ * assignment. */
 static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                                 int magic, JSValue *data)
 {
@@ -1007,7 +1028,9 @@ static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSV
     DValue *entry;
     if (target_entry(dom, ctx, self, set && argc > 0 && JS_IsObject(argv[0]), &entry) < 0) return JS_EXCEPTION;
     if (entry == NULL) return set ? JS_UNDEFINED : JS_NULL;
-    if (entry != dom->window && body_like(entry->node) && window_reflecting(kind)) entry = dom->window;
+    int target = entry != dom->window ? reflected(dom, entry->node, kind) : 0;
+    if (target < 0) return set ? JS_UNDEFINED : JS_NULL;
+    if (target > 0) entry = dom->window;
     if (!set) {
         DListener *slot = slot_find(entry, kinds[kind]);
         if (slot == NULL) {

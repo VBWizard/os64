@@ -380,9 +380,7 @@ int64_t os64_page_node_checked(os64_page_state_t *state, const os64_html_node_t 
 {
     os64_page_element_t element;
     os64_page_input_t input;
-    if (on == NULL || !node_kind(state, node, &element, &input) ||
-        element != OS64_PAGE_EL_INPUT ||
-        (input != OS64_PAGE_INPUT_CHECKBOX && input != OS64_PAGE_INPUT_RADIO))
+    if (on == NULL || !node_kind(state, node, &element, &input) || element != OS64_PAGE_EL_INPUT)
         return -OS64_PAGE_REASON_WRONG_KIND;
     *on = checked_raw(state, node);
     if (*on && input == OS64_PAGE_INPUT_RADIO) {

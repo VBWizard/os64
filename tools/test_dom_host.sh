@@ -8,7 +8,7 @@ cleanup() {
 }
 trap cleanup EXIT
 for name in core node collection content event timer window geometry classic style mixin modern view \
-    storage performance url encoding screen base64; do
+    storage performance url encoding screen base64 implementation; do
     test -f "userland/libdom/$name.c" || { echo "libdom implementation pending: $name.c" >&2; exit 1; }
 done
 make -C userland -j8 js-runtime-test > "$work/build.log" 2>&1 || { cat "$work/build.log"; exit 1; }
@@ -42,7 +42,7 @@ done
 # engine or tree allocations to the binding's own failure sweep. The private
 # allocator name is distinct because these DSOs share one host executable.
 for name in core node collection content event timer window geometry classic style mixin modern view \
-    storage performance url encoding screen base64; do
+    storage performance url encoding screen base64 implementation; do
     object="$work/dom-$name.o"
     cc "${flags[@]}" -Dd_alloc=dom_host_private_alloc -Dos64_malloc=dom_host_malloc -Dos64_calloc=dom_host_calloc \
         -Dos64_realloc=dom_host_realloc -Dos64_free=dom_host_free \

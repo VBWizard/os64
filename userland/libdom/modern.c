@@ -24,7 +24,7 @@ typedef struct {
 } DModernRow;
 
 static const DModernRow kModern[] = {
-    {(const char *const[]){"Node", "CharacterData", "DocumentFragment", "Document", "Element",
+    {(const char *const[]){"Node", "CharacterData", "DocumentFragment", "Document", "DocumentType", "Element",
                            "HTMLElement", "HTMLFormElement", "HTMLInputElement",
                            "HTMLTextAreaElement", "HTMLSelectElement", "HTMLButtonElement",
                            "HTMLImageElement", "HTMLScriptElement", "HTMLAnchorElement",
@@ -46,6 +46,7 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"TextEncoder", "TextDecoder", NULL}, d_encoding_install},
     {(const char *const[]){"screen", "devicePixelRatio", "Screen", "ScreenOrientation", NULL}, d_screen_install},
     {(const char *const[]){"btoa", "atob", NULL}, d_base64_install},
+    {(const char *const[]){"DOMImplementation", NULL}, d_implementation_install},
 };
 
 int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)

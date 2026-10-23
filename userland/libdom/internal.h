@@ -21,7 +21,7 @@ typedef struct DActiveEvent { struct DActiveEvent *previous; JSValue value; } DA
  * an element of another namespace is an ELEMENT. */
 enum {
     D_PROTO_NODE, D_PROTO_DOCUMENT, D_PROTO_ELEMENT, D_PROTO_CHARACTER_DATA,
-    D_PROTO_FRAGMENT, D_PROTO_HTML_ELEMENT, D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT,
+    D_PROTO_FRAGMENT, D_PROTO_DOCTYPE, D_PROTO_HTML_ELEMENT, D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT,
     D_PROTO_BUTTON, D_PROTO_FORM, D_PROTO_IMAGE, D_PROTO_SCRIPT, D_PROTO_ANCHOR,
     D_PROTO_LINK, D_PROTO_COUNT
 };
@@ -54,7 +54,21 @@ struct DValue {
     DValue *style, *class_list, *dataset;
     DQuery *child_nodes, *children, *images, *forms, *elements;
     DListener *listeners, *last_listener;
+    /* The document the node was made in, copied from or last taken out of,
+     * when that is not the window's (implementation.c); NULL is the
+     * window's. Read only while the node is the root of a tree no document
+     * holds (d_node_document). */
+    const os64_html_node_t *document;
+    /* A document's DOMImplementation, made when first asked for, and what
+     * kind of document it is. */
+    DValue *implementation;
+    uint8_t document_type;
 };
+/* DValue.document_type: the window's document and createHTMLDocument's are
+ * HTML documents; createDocument makes an XML document, whose createElement
+ * makes HTML elements when it was made for the HTML namespace
+ * (application/xhtml+xml) and elements in no namespace otherwise. */
+enum { D_DOCUMENT_HTML = 0, D_DOCUMENT_XHTML, D_DOCUMENT_XML };
 struct DQuery {
     os64_dom_t *dom;
     const os64_html_node_t *root, *owner;
@@ -210,6 +224,10 @@ struct os64_dom {
     /* Symbol.iterator as the engine made it, for reading an iterable a
      * page hands over (url.c). */
     DValue *iterator_symbol;
+    /* DOMImplementation (implementation.c): its prototype, and how many
+     * documents of their own it has made, none of which has a window. */
+    DValue *implementation_prototype;
+    size_t documents;
 };
 typedef struct { char *data; size_t length; } DString;
 
@@ -312,8 +330,14 @@ int d_script_copy_marks(os64_dom_t *dom, const os64_html_node_t *from, const os6
 void d_script_connected(os64_dom_t *dom, const os64_html_node_t *const *scripts, size_t count);
 size_t d_script_collect(const os64_html_node_t *node,
                         const os64_html_node_t **out, size_t cap);
-bool d_connected(const os64_dom_t *dom, const os64_html_node_t *node);
-const os64_html_node_t *d_form_owner(const os64_dom_t *dom, const os64_html_node_t *node);
+/* TWO KINDS OF CONNECTED. d_connected is DOM's: the node's tree hangs from
+ * a document, any document, a document of its own (implementation.c)
+ * included; isConnected and a `form` attribute's lookup ask it.
+ * d_in_window_tree is narrower: the tree hangs from the window's document,
+ * which is what a script must be in to run. */
+bool d_connected(const os64_html_node_t *node);
+bool d_in_window_tree(const os64_dom_t *dom, const os64_html_node_t *node);
+const os64_html_node_t *d_form_owner(const os64_html_node_t *node);
 JSValue d_element_action(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, int action);
 void d_navigate(os64_dom_t *dom, os64_dom_navigation_kind_t kind, const os64_html_node_t *node,
                 const os64_html_node_t *submitter, const char *url, int32_t delta);
@@ -367,7 +391,7 @@ enum {
     D_FIRST_ELEMENT, D_LAST_ELEMENT, D_PREV_ELEMENT, D_NEXT_ELEMENT,
     D_CHILD_ELEMENT_COUNT, D_PARENT_ELEMENT, D_TYPE, D_NAME, D_TAG, D_DOCUMENT_ELEMENT, D_HEAD, D_BODY,
     D_TEXT_CONTENT, D_NODE_VALUE, D_DATA, D_INNER_HTML, D_OUTER_HTML,
-    D_ID, D_CLASS, D_VALUE, D_CHECKED, D_SELECTED_INDEX
+    D_ID, D_CLASS, D_VALUE, D_CHECKED, D_SELECTED_INDEX, D_CONTROL_TYPE
 };
 enum {
     D_APPEND, D_INSERT, D_REMOVE, D_REPLACE, D_CLONE, D_GET_ID, D_GET_TAG,
@@ -383,7 +407,7 @@ enum {
 enum { D_QUERY_GENERIC, D_QUERY_IMAGES, D_QUERY_FORMS, D_QUERY_CONTROLS, D_QUERY_DOCUMENT_NAMES,
        D_QUERY_CLASSES, D_QUERY_NAME };
 bool d_named_match(const os64_html_node_t *node, const char *name);
-bool d_classic_match(os64_dom_t *dom, const os64_html_node_t *root, const os64_html_node_t *node, unsigned kind);
+bool d_classic_match(const os64_html_node_t *root, const os64_html_node_t *node, unsigned kind);
 JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root, unsigned kind, const char *named);
 JSValue d_classic_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, unsigned kind);
 int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
@@ -414,6 +438,32 @@ int d_screen_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
  * and `resolution` answer (view.c). */
 void d_screen_media(const os64_dom_t *dom, double *width, double *height, double *ratio);
 int d_base64_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_implementation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* DOCUMENTS OF THEIR OWN (implementation.c). document.implementation and
+ * DOMImplementation's prototype, which every page has (classic), and the
+ * DocumentType members. */
+int d_implementation_classic(os64_dom_t *dom, JSContext *ctx);
+/* A node's node document: a document itself; else the document its tree
+ * hangs from; else, for a tree no document holds, the one it was made in
+ * or last left (its root's record), the window's when there is none. */
+const os64_html_node_t *d_node_document(os64_dom_t *dom, const os64_html_node_t *node);
+/* Whether a node's node document is the window's: a node of a document
+ * with no window navigates, submits and takes focus nowhere, compiles no
+ * handler, and as a document reads no cookies. */
+bool d_window_document(os64_dom_t *dom, const os64_html_node_t *node);
+/* Whether scripting is enabled for a node (HTML § 8.1.3.2): the page's
+ * scripting, for a node of the window's document. What a fragment parse and
+ * a serialization read `noscript` by. */
+bool d_scripting(os64_dom_t *dom, const os64_html_node_t *node);
+/* A verb is about to take `node` out of its tree: its record says which
+ * document it leaves, for when it is a root. */
+void d_leaving(os64_dom_t *dom, const os64_html_node_t *node);
+/* A node made for, or copied from a node of, `document`: its record says
+ * so, the window's leaving none. */
+void d_made_in(os64_dom_t *dom, const os64_html_node_t *node, const os64_html_node_t *document);
+/* The kind of document `node` is (D_DOCUMENT_*); a node that is no
+ * document is the window's kind. */
+int d_document_type(os64_dom_t *dom, const os64_html_node_t *node);
 /* An interface object for a prototype a row made (WebIDL § 3.7): its
  * `prototype` and the prototype's `constructor` and Symbol.toStringTag
  * (`name`). `constructor` makes an instance, given new.target, and refuses
