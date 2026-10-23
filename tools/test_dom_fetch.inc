@@ -772,6 +772,19 @@ static void dom_xhr_cases(void)
         "ev.join());assert(xe.status===204&&xe.response==='');",
         "xhr: an empty answer's events");
 
+    /* The upload's events come before the response is the object's: an
+     * upload listener reads no status, no headers and no responseURL. */
+    dom_script(&f,
+        "globalThis.ulog=[];var x=new XMLHttpRequest();x.open('POST','/u');"
+        "x.upload.onload=()=>ulog.push(x.readyState+':'+x.status+':'+x.statusText+':'+x.getAllResponseHeaders()+':'"
+        "+x.responseURL+':'+x.getResponseHeader('x-u'));"
+        "x.onreadystatechange=()=>{if(x.readyState===2)ulog.push('2:'+x.status+':'+x.getResponseHeader('x-u'))};"
+        "x.send('up');", "xhr: an upload listener");
+    os64_dom_response_t uploaded = net_answer_of(200, "http://example.test/u", "X-U: 1\r\n", "ok");
+    net_answer(&f, &net, net.count - 1, &uploaded);
+    dom_script(&f, FETCH_ASSERT "assert(ulog.join()==='1:0::::null,2:200:1',ulog.join());",
+               "xhr: the response is the object's after the upload's events");
+
     /* A KNOWN zero is not computable (XHR § "fire a progress event": "if
      * length is not 0"): an empty upload's events and a Content-Length: 0
      * answer's say lengthComputable false, total 0, as browsers do. */

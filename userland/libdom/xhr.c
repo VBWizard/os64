@@ -397,13 +397,17 @@ static void xhr_answered(os64_dom_t *dom, JSContext *ctx, DRequest *request, con
         x->timer = 0;
     }
     uint32_t generation = x->generation;
-    if (!response->ok || response_take(ctx, x, response) < 0) {
+    if (!response->ok) {
         (void)request_error(dom, ctx, self, "error", outcome);
         JS_FreeValue(ctx, self);
         return;
     }
     int failed = 0;
-    /* The request's body went first (processRequestEndOfBody). */
+    /* The request's body went first (processRequestEndOfBody), while the
+     * object has no response yet: its upload listeners read status 0, no
+     * headers and no responseURL, as the standard's order gives them. The
+     * response becomes the object's at processResponse, below, which is
+     * the one rule every getter follows. */
     if (!x->upload_complete) {
         x->upload_complete = true;
         double sent = (double)x->request_length;
@@ -415,7 +419,12 @@ static void xhr_answered(os64_dom_t *dom, JSContext *ctx, DRequest *request, con
                 failed = fire(dom, ctx, upload_target(x), "loadend", true, sent, sent, outcome);
         }
     }
-    /* processResponse: the headers. */
+    /* processResponse: the response is the object's, then the headers. */
+    if (failed == 0 && xhr_state(self)->generation == generation && response_take(ctx, x, response) < 0) {
+        (void)request_error(dom, ctx, self, "error", outcome);
+        JS_FreeValue(ctx, self);
+        return;
+    }
     if (failed == 0 && xhr_state(self)->generation == generation) {
         x->state = HEADERS_RECEIVED;
         failed = fire(dom, ctx, &x->target, "readystatechange", false, 0, 0, outcome);
