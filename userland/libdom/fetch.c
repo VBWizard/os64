@@ -1570,6 +1570,10 @@ typedef struct {
     int cache, credentials, mode, redirect, policy, priority;   /* -1: not given */
     char *integrity;
     bool has_integrity, keepalive, has_keepalive, has_method;
+    /* Any member present: Fetch's "init is not empty", which makes a
+     * request from a Request no longer the input's (its referrer and
+     * policy start over). */
+    bool given;
     char method[WAY_METHOD_MAX];
 } Init;
 
@@ -1589,6 +1593,14 @@ static int init_member(JSContext *ctx, JSValueConst init, const char *name, JSVa
     return JS_IsUndefined(*out) ? 0 : 1;
 }
 
+/* A RequestInit member, noting that the init is not empty. */
+static int init_given_member(Init *read, JSContext *ctx, JSValueConst init, const char *name, JSValue *out)
+{
+    int has = init_member(ctx, init, name, out);
+    if (has > 0) read->given = true;
+    return has;
+}
+
 static int init_read(JSContext *ctx, JSValueConst value, Init *init)
 {
     os64_memset(init, 0, sizeof(*init));
@@ -1601,22 +1613,22 @@ static int init_read(JSContext *ctx, JSValueConst value, Init *init)
     }
     JSValue v;
     int has;
-    if ((has = init_member(ctx, value, "body", &init->body)) < 0) return -1;
+    if ((has = init_given_member(init, ctx, value, "body", &init->body)) < 0) return -1;
     init->has_body = has > 0;
-    if ((has = init_member(ctx, value, "cache", &v)) < 0) return -1;
+    if ((has = init_given_member(init, ctx, value, "cache", &v)) < 0) return -1;
     if (has) { init->cache = enum_value(ctx, v, kCaches, 6, "cache mode"); JS_FreeValue(ctx, v); if (init->cache < 0) return -1; }
-    if ((has = init_member(ctx, value, "credentials", &v)) < 0) return -1;
+    if ((has = init_given_member(init, ctx, value, "credentials", &v)) < 0) return -1;
     if (has) { init->credentials = enum_value(ctx, v, kCredentials, 3, "credentials mode"); JS_FreeValue(ctx, v); if (init->credentials < 0) return -1; }
-    if ((has = init_member(ctx, value, "duplex", &v)) < 0) return -1;
+    if ((has = init_given_member(init, ctx, value, "duplex", &v)) < 0) return -1;
     if (has) {
         static const char *const kDuplex[] = {"half"};
         int d = enum_value(ctx, v, kDuplex, 1, "duplex");
         JS_FreeValue(ctx, v);
         if (d < 0) return -1;
     }
-    if ((has = init_member(ctx, value, "headers", &init->headers)) < 0) return -1;
+    if ((has = init_given_member(init, ctx, value, "headers", &init->headers)) < 0) return -1;
     init->has_headers = has > 0;
-    if ((has = init_member(ctx, value, "integrity", &v)) < 0) return -1;
+    if ((has = init_given_member(init, ctx, value, "integrity", &v)) < 0) return -1;
     if (has) {
         size_t n;
         const char *text = JS_ToCStringLen(ctx, &n, v);
@@ -1627,9 +1639,9 @@ static int init_read(JSContext *ctx, JSValueConst value, Init *init)
         if (init->integrity == NULL) return -1;
         init->has_integrity = true;
     }
-    if ((has = init_member(ctx, value, "keepalive", &v)) < 0) return -1;
+    if ((has = init_given_member(init, ctx, value, "keepalive", &v)) < 0) return -1;
     if (has) { init->keepalive = JS_ToBool(ctx, v) > 0; init->has_keepalive = true; JS_FreeValue(ctx, v); }
-    if ((has = init_member(ctx, value, "method", &v)) < 0) return -1;
+    if ((has = init_given_member(init, ctx, value, "method", &v)) < 0) return -1;
     if (has) {
         char *bytes;
         size_t n;
@@ -1645,7 +1657,7 @@ static int init_read(JSContext *ctx, JSValueConst value, Init *init)
         way_method_normalize(init->method);
         init->has_method = true;
     }
-    if ((has = init_member(ctx, value, "mode", &v)) < 0) return -1;
+    if ((has = init_given_member(init, ctx, value, "mode", &v)) < 0) return -1;
     if (has) {
         const char *text = JS_ToCString(ctx, v);
         bool navigate = text != NULL && os64_streq(text, "navigate");
@@ -1654,13 +1666,13 @@ static int init_read(JSContext *ctx, JSValueConst value, Init *init)
         JS_FreeValue(ctx, v);
         if (init->mode == -1) return -1;
     }
-    if ((has = init_member(ctx, value, "priority", &v)) < 0) return -1;
+    if ((has = init_given_member(init, ctx, value, "priority", &v)) < 0) return -1;
     if (has) { init->priority = enum_value(ctx, v, kPriorities, 3, "priority"); JS_FreeValue(ctx, v); if (init->priority < 0) return -1; }
-    if ((has = init_member(ctx, value, "redirect", &v)) < 0) return -1;
+    if ((has = init_given_member(init, ctx, value, "redirect", &v)) < 0) return -1;
     if (has) { init->redirect = enum_value(ctx, v, kRedirects, 3, "redirect mode"); JS_FreeValue(ctx, v); if (init->redirect < 0) return -1; }
-    if ((has = init_member(ctx, value, "referrer", &init->referrer)) < 0) return -1;
+    if ((has = init_given_member(init, ctx, value, "referrer", &init->referrer)) < 0) return -1;
     init->has_referrer = has > 0;
-    if ((has = init_member(ctx, value, "referrerPolicy", &v)) < 0) return -1;
+    if ((has = init_given_member(init, ctx, value, "referrerPolicy", &v)) < 0) return -1;
     if (has) {
         const char *text = JS_ToCString(ctx, v);
         bool empty = text != NULL && text[0] == '\0';
@@ -1669,9 +1681,9 @@ static int init_read(JSContext *ctx, JSValueConst value, Init *init)
         JS_FreeValue(ctx, v);
         if (init->policy == -1) return -1;
     }
-    if ((has = init_member(ctx, value, "signal", &init->signal)) < 0) return -1;
+    if ((has = init_given_member(init, ctx, value, "signal", &init->signal)) < 0) return -1;
     init->has_signal = has > 0;
-    if ((has = init_member(ctx, value, "window", &v)) < 0) return -1;
+    if ((has = init_given_member(init, ctx, value, "window", &v)) < 0) return -1;
     bool window_ok = !has || JS_IsNull(v);
     JS_FreeValue(ctx, v);
     if (!window_ok) {
@@ -1751,7 +1763,16 @@ static int request_init(os64_dom_t *dom, JSContext *ctx, JSValueConst object, JS
     q->cache = in != NULL ? in->cache : 0;
     q->keepalive = in != NULL && in->keepalive;
     q->priority = in != NULL ? in->priority : 0;
-    q->referrer = engine_dup(ctx, in != NULL ? in->referrer : "about:client", os64_strlen(in != NULL ? in->referrer : "about:client"));
+    /* Fetch's Request constructor: the input's referrer and policy are
+     * copied (step 12), and an init that is not empty starts them over,
+     * the referrer "client" and the policy "" (step 13), before the init's
+     * own referrer and referrerPolicy are read. */
+    if (in != NULL && init.given) {
+        q->policy = WAY_POLICY_STRICT_ORIGIN_WHEN_CROSS_ORIGIN;
+        q->policy_given = false;
+    }
+    const char *from = in != NULL && !init.given ? in->referrer : "about:client";
+    q->referrer = engine_dup(ctx, from, os64_strlen(from));
     q->integrity = engine_dup(ctx, in != NULL ? in->integrity : "", in != NULL ? os64_strlen(in->integrity) : 0);
     if (q->referrer == NULL || q->integrity == NULL) result = -1;
     if (result == 0 && init.has_referrer) {

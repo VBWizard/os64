@@ -315,6 +315,17 @@ static void dom_fetch_object_cases(void)
         "r=new Request('/x',{referrerPolicy:'origin'});assert(r.referrerPolicy==='origin');"
         "r=new Request('/x',{referrer:'about:client'});assert(r.referrer==='about:client');",
         "request: the constructor's defaults and refusals");
+    /* From a Request: its referrer and policy are copied (Fetch's Request
+     * constructor, step 12); an init that is not empty starts them over,
+     * "client" and "" (step 13), then the init's own apply. */
+    dom_script(&f, FETCH_ASSERT
+        "var o=new Request('/x',{referrer:'/from',referrerPolicy:'origin'});"
+        "var k=new Request(o);assert(k.referrer==='http://example.test/from'&&k.referrerPolicy==='origin',k.referrer+' '+k.referrerPolicy);"
+        "var p=new Request(o,{method:'POST'});assert(p.referrer==='about:client'&&p.referrerPolicy==='',p.referrer+' '+p.referrerPolicy);"
+        "var w=new Request(o,{window:null});assert(w.referrer==='about:client'&&w.referrerPolicy==='');"
+        "var e=new Request(o,{});assert(e.referrer==='http://example.test/from'&&e.referrerPolicy==='origin');"
+        "var t=new Request(o,{referrerPolicy:'no-referrer'});assert(t.referrer==='about:client'&&t.referrerPolicy==='no-referrer');",
+        "request: a Request's referrer and policy, kept or started over");
     /* WebIDL reads a dictionary's members in name order, each once. */
     dom_script(&f, FETCH_ASSERT
         "var order=[];var init={};"
