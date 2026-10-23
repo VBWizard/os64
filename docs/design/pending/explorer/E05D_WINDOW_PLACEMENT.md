@@ -4,7 +4,8 @@
 
 Design revision 2, 2026-10-23. Owner: Quinn. Branch `codex/window-placement`,
 worktree `.worktrees/window-placement`, based on userland `12dc6b64` (merged
-PR #325). Implementation has not started; this document proposes the contract.
+PR #325). Implementation is ready for independent review; see the
+[as-built record and evidence](evidence/e05d/README.md).
 
 Chris authorized this slice and named Scribe as a second consumer alongside
 Roam. Applications should opt in during window initialization. His instruction
@@ -13,11 +14,13 @@ Fable before we're done.” The design adds a kernel event and queue state; get
 Fable's review before implementing that contract. [Review request](E05D_FABLE_REVIEW_REQUEST.md).
 This extends the review scope of D012 for this specific slice.
 
-[Fable's review](E05D_FABLE_REVIEW.md) approves building with rulings. This
-revision incorporates the accepted clarifications. The queue scheduling ruling
-has conflicting requirements; [Quinn's response](E05D_REVIEW_RESPONSE.md)
-proposes a narrower invariant for Fable to confirm before queue implementation.
-No implementation or runtime validation is claimed.
+[Fable's review](E05D_FABLE_REVIEW.md), [Quinn's response](E05D_REVIEW_RESPONSE.md)
+and [Fable's disposition](E05D_FABLE_DISPOSITION.md) settle the contract. Fable
+confirmed the narrower queue invariant and the cross-component publication
+limitation, and explicitly approved building revision 2. Implementation now
+covers the kernel event, shared helper, Roam/Scribe and size-only file dialogs;
+host/native validation passed. Independent implementation review and P5 acceptance
+remain separate from this architectural approval.
 
 E5C is merged and Chris reports the final Open With refinement works on the P5.
 Executable/file attributes are on his separate to-do list. Worker lifetime,
@@ -143,7 +146,7 @@ through `wm_deliver_event` to use the existing waiter wake-or-owe protocol.
 No allocation, filesystem operation, new worker or new scheduler lock is needed.
 The record dies with its owning window and is zero-initialized on creation.
 
-Scheduling revision, proposed for Fable's follow-up: use one selection function
+Scheduling revision, confirmed by Fable: use one selection function
 and a service cursor for doorbell, placement and ring/loss, rather than adding
 pairwise yield flags for placement. Within that group, a continuously eligible
 source gets a turn before another member gets its second turn. Ring/loss remains
@@ -158,8 +161,11 @@ that never drains can delay a pointer snapshot. Both follow the existing
 ordering contract. Delivering a final pointer leave before old queued motion
 can restore stale hover state. A broader fairness change needs a different
 ordering contract and corresponding client analysis; it is outside this proposal.
-The precise selector and its ordering cases remain subject to the narrow review
-response, not silently approved by the first review.
+Fable confirmed these eligibility constraints in the disposition. The as-built
+selector retains the legacy empty-ring doorbell priority when no placement is
+pending, including ahead of a loss-only notification. A loss report plus its
+retained control constitutes one ring/loss turn; repeated overflow cannot
+postpone the retained control. These exceptions are explicit regression cases.
 
 Require a host queue harness with replenishment cases and a mutant per rule:
 masked coalescing, priority/eligibility, group progress, loss-before-retained-input,
@@ -170,7 +176,7 @@ harness cannot prove the scheduler wakes a sleeping client.
 ## Application opt-in and ownership
 
 Add an opt-in window initializer layered over native create, draw-context init
-and `os64_ui_init`. Proposed shape (names subject to review):
+and `os64_ui_init`. As-built shape (`os64/ui_window.h`):
 
 ```c
 os64_ui_window_options_t options = {
@@ -297,8 +303,8 @@ not a guarantee that a crash before the UI consumes an event saves that gesture.
 
 ## Consumer changes and implementation order
 
-1. Obtain Fable review of this kernel/event and library contract; record findings
-   and disposition beside this design. No executable changes precede that review.
+1. Architectural review complete: see the review, response and disposition.
+   Implementation follows revision 2 and its confirmed queue constraints.
 2. Add the ABI payload, coalesced queue slot and compositor completion/cancellation
    hooks, with kernel/host tests. Correct touched comments that claim resize is
    the only geometry observation or that placement is saved only at exit.
@@ -329,7 +335,7 @@ Use ASan/UBSan with LeakSanitizer enabled for host coverage, escalating the run
 if sandbox thread attachment prevents leak checking. Build and native evidence
 must identify tested binaries and distinguish QEMU from Chris's P5 report.
 
-## Questions for Fable
+## Review questions (answered in the disposition)
 
 1. Is the masked, coalesced completion event the right boundary between user
    intent in the compositor and policy in libos64, including cancellation?

@@ -3,7 +3,7 @@
 #include "os64/io.h"
 #include "os64/str.h"
 #include "os64/fmt.h"
-#include "os64/conf.h"
+#include "os64/ui_window.h"
 
 static const char file_remember_label[] = "Remember for this file type";
 
@@ -372,51 +372,6 @@ static void file_changed(os64_ui_dataview_t *view,
     }
 }
 
-/* Width and height are one value so concurrent applications publish a whole
- * pair. Read at every open; closing an older dialog never writes it back. */
-static bool file_size_parse(const char *text, uint32_t *width, uint32_t *height)
-{
-    uint32_t size[2] = {0};
-    for (size_t i = 0; i < 2; ++i) {
-        if (*text < '0' || *text > '9') return false;
-        while (*text >= '0' && *text <= '9') {
-            size[i] = size[i] * 10 + (uint32_t)(*text++ - '0');
-            /* Bound arithmetic before native creation. Open clamps to the
-             * screen; FIT_SCREEN then accounts for its decorations. */
-            if (size[i] > 32767) return false;
-        }
-        if (!size[i] || (i == 0 ? *text++ != ',' : *text != 0)) return false;
-    }
-    *width = size[0]; *height = size[1];
-    return true;
-}
-static void file_size_baseline(os64_ui_file_dialog_t *d)
-{
-    d->size_width = d->draw.surf.width;
-    d->size_height = d->draw.surf.height;
-}
-static void file_size_remember(os64_ui_file_dialog_t *d)
-{
-    bool changed = d->size_width != d->draw.surf.width ||
-        d->size_height != d->draw.surf.height;
-    os64_gui_window_state_t state;
-    if (os64_gui_window_get_state(d->window, &state) != 0) return;
-    bool suspended = (state.flags & (OS64_GUI_WINDOW_MAXIMIZED | OS64_GUI_WINDOW_MINIMIZED)) != 0;
-    /* Keep the last normal dimensions through maximize/minimize. A restore
-     * matches them; a manual resize out of maximized state is a new choice. */
-    if (suspended) return;
-    file_size_baseline(d);
-    if (!d->size_ready || !changed || d->layout_pending) return;
-    char value[32];
-    os64_snprintf(value, sizeof(value), "%u,%u", d->size_width, d->size_height);
-    os64_conf_pair_t pair = {"size", value};
-    /* The WM emits resize on completion of a drag. Persistence is best effort:
-     * a read-only configuration destination must not prevent choosing a file.
-     * The checked writer atomically replaces the pair, preserving the old file
-     * on failure; this generated decimal value needs no extra validator. */
-    (void)os64_conf_write_checked("file-dialog.conf", &pair, 1, NULL, NULL);
-}
-
 void os64_ui_file_dialog_event(os64_ui_file_dialog_t *d, const os64_gui_event_t *event)
 {
     if (!d || d->window <= 0 || !event || d->result != OS64_UI_FILE_PENDING) return;
@@ -446,7 +401,6 @@ void os64_ui_file_dialog_event(os64_ui_file_dialog_t *d, const os64_gui_event_t 
         }
     }
     (void)os64_ui_dispatch(&d->ui, event);
-    if (event->type == OS64_GUI_EVENT_WINDOW_RESIZE) file_size_remember(d);
     if (d->ui.quit) d->result = OS64_UI_FILE_CANCELLED;
     else file_activate_pending(d);
 }
@@ -526,7 +480,6 @@ void os64_ui_file_dialog_update(os64_ui_file_dialog_t *d)
             d->root.bounds.w = (int32_t)d->draw.surf.width;
             d->root.bounds.h = (int32_t)d->draw.surf.height;
             file_resize(&d->ui);
-            file_size_baseline(d);
         }
     }
     os64_ui_paint(&d->ui);
@@ -542,7 +495,6 @@ static os64_ui_status_code_t file_compose(os64_ui_file_dialog_t *d,
     const os64_ui_file_options_t *options)
 {
     d->offer_association = d->mode == OS64_UI_FILE_APPLICATION && options->offer_association;
-    os64_ui_init(&d->ui, &d->draw);
     os64_ui_panel(&d->root);
     d->root.bounds = (os64_gui_rect_t){0,0,(int32_t)d->draw.surf.width,(int32_t)d->draw.surf.height};
     d->root.user = d;
@@ -638,26 +590,14 @@ os64_ui_status_code_t os64_ui_file_dialog_open(os64_ui_file_dialog_t *d,
     }
     const char *title = options->title ? options->title :
         options->mode == OS64_UI_FILE_SAVE ? "Save As" : "Open";
-    uint32_t width = 880, height = 700;
-    char value[32];
-    if (os64_conf_get("file-dialog.conf", "size", value, sizeof(value)) == 0)
-        (void)file_size_parse(value, &width, &height);
-    /* The kernel checks its dimension ceiling before FIT_SCREEN. Bound the
-     * request first; FIT_SCREEN then subtracts the current frame's insets.
-     * Without screen info, the ABI ceiling is safe on supported displays.
-     * These opening adjustments must not overwrite the saved preference. */
-    uint32_t screen_width, screen_height;
-    if (os64_gui_screen_info(&screen_width, &screen_height) != 0)
-        screen_width = screen_height = OS64_GUI_WINDOW_DIM_MAX;
-    if (width > screen_width) width = screen_width;
-    if (height > screen_height) height = screen_height;
-    /* Composition raises the native floor to the measured controls. */
-    if (width < OS64_GUI_MIN_CONTENT) width = OS64_GUI_MIN_CONTENT;
-    if (height < OS64_GUI_MIN_CONTENT) height = OS64_GUI_MIN_CONTENT;
-    d->window = os64_gui_window_create_content(title,x,y,width,height,OS64_GUI_CREATE_FIT_SCREEN);
-    if (d->window <= 0) { d->window = 0; return OS64_UI_ERROR; }
-    os64_ui_status_code_t rc = OS64_UI_ERROR;
-    if (os64_draw_ctx_init(&d->draw, d->window) != 0) goto fail;
+    os64_ui_window_options_t window_options={.title=title,.x=x,.y=y,
+        .content_width=880,.content_height=700,
+        .remember={"file-dialog.conf",OS64_WINDOW_REMEMBER_SIZE}};
+    os64_ui_status_code_t rc=os64_ui_window_open(&d->ui,&d->draw,&d->window,&window_options);
+    if (rc) {
+        if (d->window<=0) d->window=0;
+        goto fail;
+    }
     rc = file_compose(d, options);
     if (rc) goto fail;
     file_resize(&d->ui);
@@ -669,8 +609,6 @@ os64_ui_status_code_t os64_ui_file_dialog_open(os64_ui_file_dialog_t *d,
         d->registered = true;
     }
     os64_ui_file_dialog_update(d);
-    file_size_baseline(d);
-    d->size_ready = true;
     return OS64_UI_OK;
 fail:
     (void)os64_ui_file_dialog_close(d);

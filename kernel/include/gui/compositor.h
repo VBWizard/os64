@@ -56,8 +56,11 @@ void gui_cancel_decoration(const struct window *w);
 // through the remaining button releases. Client grabs and moves are unaffected.
 // Used when size constraints change or the resize target is destroyed.
 void gui_cancel_resize(const struct window *w);
-// Cancel WM geometry gestures and drain their releases under kGuiLock.
+// Finish applied moves, cancel resize outlines and drain releases under kGuiLock.
 void gui_decoration_changed(void);
+// Finish/cancel a gesture on this window before an automatic WM adjustment.
+// Caller holds kGuiLock; unrelated windows' gestures are left alone.
+void gui_geometry_changing(const struct window *w);
 
 // ── VT8 glass ownership (the VT8 chapter in GRAPHICS.md, 2026-08-19) ────────
 // True once gui_start has seated the compositor as VT8's shell. Stays false

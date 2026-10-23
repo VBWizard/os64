@@ -13,18 +13,16 @@ user-reported, without a captured installed-binary hash.
 Active slice: [E5D reusable remembered window placement](E05D_WINDOW_PLACEMENT.md).
 Chris authorized implementation and named Roam and Scribe as initial consumers,
 with initialization-time opt-in and reuse of the same helper for size-only file
-dialogs. [Fable approved building with rulings](E05D_FABLE_REVIEW.md).
-[Revision 2](E05D_WINDOW_PLACEMENT.md) incorporates the accepted clarifications;
-[Quinn's response](E05D_REVIEW_RESPONSE.md) requests one queue-ordering
-clarification before implementing that contract. The universal fairness ruling
-conflicts with the existing pointer-after-drain and appearance-priority rules.
-The proposed resolution limits the service cursor to doorbell/placement/ring-loss.
-Persistence remains in libos64.
-No code or runtime test results are claimed for E5D.
+dialogs. [Fable's disposition](E05D_FABLE_DISPOSITION.md) confirms revision 2,
+including the narrower queue invariant and publication limitation. Implementation
+covers the completion event, queue rotation, shared persistence/initializer and
+all three consumers. [Host and native validation passed](evidence/e05d/README.md);
+no P5 acceptance or independent implementation review is claimed.
 
 Owner: Quinn, branch `codex/window-placement`, worktree `.worktrees/window-placement`,
-based on `12dc6b64`. Next: confirm the queue invariant in the review response,
-then follow the implementation order and acceptance matrix in the design.
+based on `12dc6b64`. Next: independent implementation review and Chris's P5 test.
+Architecture is approved; there is no outstanding design gate. Install a matching
+rebuilt kernel and userland because the toolkit's public window storage changed.
 
 E5C is accepted: PR #325 merged into userland as `12dc6b64`; review of final head
 `20dcf0ec` had no findings. Chris reports the latest Open With refinement works

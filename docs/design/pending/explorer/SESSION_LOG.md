@@ -1138,3 +1138,34 @@ now explicitly includes lost edits to different fields after concurrent reads.
 The root debt ledger records the future shared-live-state gate. No executable
 changes or runtime validation are claimed. Next: settle the queue invariant,
 then implement and validate the reviewed contract.
+
+## 2026-10-23 — E5D implemented after Fable's disposition
+
+Fable's `a6ca1f16` confirmed both corrections and approved revision 2. Implemented
+the masked completion event, retained queue slot/service cursor, gesture-ending
+and teardown paths, app-owned configuration helper, checked first publication
+and opt-in UI initializer. Roam and Scribe remember position/content size; shared
+dialogs keep their size-only format and parent-relative position. Scribe and
+the dialogs no longer repeat UI initialization after native creation.
+
+Kernel and full userland cross-builds passed. Leak-enabled ASan/UBSan host runs
+passed: placement/parser/writer/ownership and nine queue mutants; 4,840 dialog
+checks, 2,584 Scribe checks, 1,655 menu checks, existing appearance/input/queue
+regressions and Roam launch/config/lifecycle checks. LSan's sandbox attachment
+EPERM was diagnosed with TracerPid zero; supported outside-sandbox runs retained
+leak detection.
+
+Native QEMU evidence covers both wait APIs, titlebar/chord movement, four resize
+corners, cancellation, teardown with handle reuse, VT transition, clamped values,
+minimum/no-op shrinking and resizing out of maximized state. A scratch mutation
+that published automatic resize geometry failed the startup-fit case; restored
+production code passed. Real Roam/Scribe saved their geometry and survived a
+1024×768 → 800×600 → 1024×768 reboot round trip. Moving clamped Roam on the
+smaller screen preserved its larger preferred size. The scratch guest is stopped.
+
+[Evidence and as-built notes](evidence/e05d/README.md) include binary hashes,
+event traces, screenshots, API/queue rules and accepted publication limits.
+The old resize comment's claim that no geometry query existed was false; it
+now explains repaint/layout notifications and the separate user-placement event.
+Next: independent implementation review and Chris's P5 acceptance, with a
+matching rebuilt kernel and userland. No P5 result is claimed for this slice.

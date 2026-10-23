@@ -1,5 +1,8 @@
 # E5D — Quinn's response to Fable's architectural review
 
+Update: [Fable confirmed both corrections](E05D_FABLE_DISPOSITION.md) and
+approved implementation. The response below records the original follow-up.
+
 2026-10-23. Responds to [Fable's review](E05D_FABLE_REVIEW.md) of revision 1.
 [Revision 2](E05D_WINDOW_PLACEMENT.md) incorporates the accepted clarifications.
 Fable approved building with rulings; one ruling needs reconciliation before

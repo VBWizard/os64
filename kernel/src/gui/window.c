@@ -559,6 +559,7 @@ void wm_set_maximized(window_t *w, bool maximized)
 		return;
 	if (maximized) {
 		if (wm_decoration_disabled(w) & (1u<<OS64_DECOR_MAXIMIZE)) return;
+		gui_geometry_changing(w);
 		w->restoreFrame = w->frame;
 		w->flags |= GUI_WINDOW_MAXIMIZED;
 		// Raised as well: a maximized window you cannot see (focused but
@@ -580,6 +581,7 @@ void wm_set_maximized(window_t *w, bool maximized)
 		}
 		bool already_there = target.x == w->frame.x && target.y == w->frame.y &&
 		                     target.w == w->frame.w && target.h == w->frame.h;
+		gui_geometry_changing(w);
 		if (already_there || wm_resize(w, target))
 			w->flags &= ~GUI_WINDOW_MAXIMIZED;
 	}
@@ -594,6 +596,7 @@ void wm_set_minimized(window_t *w, bool minimized)
 	if (minimized == wm_is_hidden(w))
 		return;
 	if (minimized) {
+		gui_geometry_changing(w);
 		gui_cancel_decoration(w);
 		w->flags |= GUI_WINDOW_MINIMIZED;
 		gui_damage_add_locked(w->frame);   // what it covered comes back
@@ -716,6 +719,7 @@ bool wm_set_min_size(window_t *w, uint32_t width, uint32_t height)
 	if (width > w->canvas_cap_w || height > w->canvas_cap_h)
 		return false;
 	if (width != w->min_content_w || height != w->min_content_h) {
+		gui_geometry_changing(w);
 		// An outline computed with the previous limits must not commit later.
 		gui_cancel_resize(w);
 		gui_cancel_decoration(w);
@@ -784,10 +788,9 @@ bool wm_resize(window_t *w, rect_t frame)
 	w->frame = frame;
 	gui_damage_add_locked(rect_union(old_frame, w->frame));
 
-	// Tell the owner. This is the ONLY way an app finds out — there is no
-	// polling interface for geometry, deliberately (see the event type's
-	// comment in input.h). An app that ignores it keeps drawing a correct
-	// picture at the wrong size, which is a bug with a very obvious shape.
+	// Tell the owner to refresh its surface and layout after a size change.
+	// This covers automatic adjustments as well as gestures; the compositor
+	// separately reports completed user placement for preference persistence.
 	input_event_t ev = {
 		.type = INPUT_EVENT_WINDOW_RESIZE,
 		.resize = { .w = content_w, .h = content_h },

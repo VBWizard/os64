@@ -1,0 +1,12 @@
+doorbell: coalescing, full ring, input fairness, mask reset and libui delivery passed
+font install: refused preview refreshes list without changing draft/undo/fonts; discovery failure is reported
+font page: an unchanged Web face that will not reopen keeps the one lent; a changed one refuses
+font fit: unchanged interface rows allow terminal/document changes; initial, changed-height and retry checks passed
+font envelopes: preserving component CAS, reload serials, malformed input, conflicts, allocation/I/O failure and 4096-byte refusal passed
+appearance: startup preservation, session store, cache, races, independent contexts, and queue pressure passed
+appearance responsive: 17/24/28/32px, all tabs, visible footer, atomic 96px refusal and shrinking minimum passed
+appearance customizer: native layout, palette edits, hex validation, Undo and page cancellation passed
+gterm input: overflow cancels selection drag and toolkit grab without copying
+controlcenter responsive: 28px adoption, fewer rows, every tool reachable, refusal and shrinking minimum passed
+PASS: Mouse Settings selection, Apply/Save/Forget, conflict/error feedback, defaults and 28px font layout
+appearance: palettes, legacy themes, rounded paint, color picker, interaction and pointer queue contracts passed

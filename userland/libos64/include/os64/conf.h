@@ -310,4 +310,11 @@ int64_t os64_conf_merge_checked(const char *source, const char *destination,
     const os64_conf_pair_t *pairs, size_t count,
     bool (*validate)(const char *, size_t, void *), void *user);
 
+// First publication to an absolute destination: merge from empty and publish
+// with NOREPLACE. An existing destination (including one unreadable by this
+// process) is preserved. No failed open is treated as evidence of absence.
+int64_t os64_conf_create_checked(const char *destination,
+    const os64_conf_pair_t *pairs, size_t count,
+    bool (*validate)(const char *, size_t, void *), void *user);
+
 #endif
