@@ -3,7 +3,8 @@
 # bits a channel and 1 dppx; the document runs no scripts and the person's
 # choices are a light scheme and full motion, unless a case says `dark`,
 # `reduce` or `scripting` (in that order) after its viewport; the screen is
-# the viewport unless `device WxH` follows them.
+# the viewport unless `device WxH` follows them, and the resolution 1dppx
+# unless `resolution N` follows that.
 IN: 800x600
 OUT: true
 IN: 800x600 all
@@ -148,13 +149,34 @@ IN: 800x600 screen and (max-width: 700px), print
 OUT: false
 # Level 4's third value: a feature this machine does not know is UNKNOWN,
 # and so is its negation; a query left UNKNOWN is false.
+IN: 800x600 (-moz-touch-enabled: 1)
+OUT: false
+IN: 800x600 not (-moz-touch-enabled: 1)
+OUT: false
+IN: 800x600 (color) or (-moz-touch-enabled: 1)
+OUT: true
+IN: 800x600 not ((monochrome) or (-moz-touch-enabled: 1))
+OUT: false
+# The resolution is the zoom's (`resolution N` after the rest of the env),
+# 1dppx without one; the WebKit pixel ratio is the same number, its bounds
+# -webkit-min- and -webkit-max-.
 IN: 800x600 (-webkit-min-device-pixel-ratio: 2)
 OUT: false
 IN: 800x600 not (-webkit-min-device-pixel-ratio: 2)
-OUT: false
-IN: 800x600 (color) or (-webkit-min-device-pixel-ratio: 2)
 OUT: true
-IN: 800x600 not ((monochrome) or (-webkit-min-device-pixel-ratio: 2))
+IN: 800x600 (-webkit-device-pixel-ratio: 1)
+OUT: true
+IN: 800x600 resolution 2 (min-resolution: 2dppx)
+OUT: true
+IN: 800x600 resolution 2 (resolution: 192dpi)
+OUT: true
+IN: 800x600 resolution 2 (-webkit-min-device-pixel-ratio: 2)
+OUT: true
+IN: 800x600 resolution 2 (-webkit-max-device-pixel-ratio: 1.5)
+OUT: false
+IN: 800x600 resolution 1.25 (-webkit-device-pixel-ratio: 1.25) and (max-resolution: 1.25x)
+OUT: true
+IN: 800x600 resolution 2 (-webkit-min-device-pixel-ratio: 2dppx)
 OUT: false
 # `and` and `or` do not mix without parentheses.
 IN: 800x600 (min-width: 700px) and (max-width: 900px) or (color)

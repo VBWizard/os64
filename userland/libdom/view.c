@@ -697,7 +697,7 @@ static bool media_matches(const os64_dom_t *dom, const DMedia *m, const os64_dom
 {
     garb_env_t env = {.width = v->width, .height = v->height, .dark = v->dark,
                       .reduced_motion = v->reduced_motion, .scripting = dom->options.scripting};
-    d_screen_size(dom, &env.device_width, &env.device_height);
+    d_screen_media(dom, &env.device_width, &env.device_height, &env.resolution);
     return !m->unread && garb_media_text_matches(m->query, env);
 }
 

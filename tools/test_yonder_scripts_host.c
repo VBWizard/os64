@@ -3969,7 +3969,26 @@ static void loop_view_media_device(void) {
     loop_drop();
     s_screen=(os64_dom_screen_t){0};
 }
+/* The fourth cold read: `resolution` and the WebKit pixel ratio answer the
+ * zoom, as devicePixelRatio does, in a sheet and in matchMedia. */
+static void loop_view_media_resolution(void) {
+    loop_page("<style>#r{display:none}@media (min-resolution: 2dppx){#r{display:block}}</style><p id=r>r</p>"
+        "<p id=out>-</p><script>document.getElementById('out').textContent=[devicePixelRatio,"
+        "matchMedia('(min-resolution: 2dppx)').matches,matchMedia('(-webkit-min-device-pixel-ratio: 2)').matches,"
+        "matchMedia('(resolution: '+devicePixelRatio+'dppx)').matches].join()</script>");
+    g.zoom=2000;
+    check(loop_settle() && view_turns() && probe_text_is("out","2,true,true,true") &&
+          flow_box_for(g.page.tree,probe_id("r"))!=NULL,
+        "media resolution: at 200% the resolution is 2dppx, as devicePixelRatio says");
+    loop_drop();
+    loop_page("<p id=out>-</p><script>document.getElementById('out').textContent=[devicePixelRatio,"
+        "matchMedia('(min-resolution: 2dppx)').matches,matchMedia('(-webkit-device-pixel-ratio: 1)').matches].join()</script>");
+    check(loop_settle() && view_turns() && probe_text_is("out","1,false,true"),
+        "media resolution: and at 100%, 1dppx");
+    loop_drop();
+}
 static void loop_view_cold2_cases(void) {
+    loop_view_media_resolution();
     loop_view_media_device();
     loop_view_media_scripting();
     loop_view_replacing_refused();

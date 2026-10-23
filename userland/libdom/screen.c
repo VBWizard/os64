@@ -26,10 +26,11 @@ static int32_t css(const os64_dom_t *dom, int32_t device)
     return device > 0 ? (int32_t)((int64_t)device * 1000 / zoom_of(dom)) : 0;
 }
 
-void d_screen_size(const os64_dom_t *dom, double *width, double *height)
+void d_screen_media(const os64_dom_t *dom, double *width, double *height, double *ratio)
 {
     *width = css(dom, dom->options.screen.width);
     *height = css(dom, dom->options.screen.height);
+    *ratio = zoom_of(dom) / 1000.0;
 }
 
 enum {

@@ -340,6 +340,10 @@ static void media(const char *text)
     int more = 0;
     if (sscanf(text + used, "device %lfx%lf %n", &env.device_width, &env.device_height, &more) == 2)
         used += more;
+    // `resolution N ...`: the zoom, in dppx, which `resolution` answers.
+    more = 0;
+    if (sscanf(text + used, "resolution %lf %n", &env.resolution, &more) == 1)
+        used += more;
     puts(garb_media_text_matches(text + used, env) ? "true" : "false");
 }
 

@@ -6,11 +6,11 @@
 // maybe)` does not turn into true. A whole query that ends UNKNOWN is
 // false.
 //
-// What the machine answers: a screen, a mouse (fine pointer, can hover), 8
-// bits a colour channel and 1 dppx; and from the env (garb_env_t) the
-// screen's size, whether the document's scripts run, and what the person
-// asked for, a light or dark scheme and full or reduced motion, each the
-// first unless the env says otherwise.
+// What the machine answers: a screen, a mouse (fine pointer, can hover) and
+// 8 bits a colour channel; and from the env (garb_env_t) the screen's size,
+// the resolution (1dppx unless it says otherwise), whether the document's
+// scripts run, and what the person asked for, a light or dark scheme and
+// full or reduced motion, each the first unless the env says otherwise.
 
 #include <float.h>
 
@@ -114,7 +114,7 @@ static bool resolution_dppx(const garb_value_t *t, double *dppx)
     return true;
 }
 
-typedef enum { F_UNKNOWN, F_WIDTH, F_HEIGHT, F_ASPECT, F_RESOLUTION, F_COLOR, F_ZERO, F_WORDS } FKind;
+typedef enum { F_UNKNOWN, F_WIDTH, F_HEIGHT, F_ASPECT, F_RESOLUTION, F_PIXEL_RATIO, F_COLOR, F_ZERO, F_WORDS } FKind;
 
 typedef struct {
     const char *name;
@@ -127,7 +127,11 @@ static const Feature kFeatures[] = {
     {"width", F_WIDTH, NULL, true}, {"height", F_HEIGHT, NULL, true},
     {"device-width", F_WIDTH, NULL, true}, {"device-height", F_HEIGHT, NULL, true},
     {"aspect-ratio", F_ASPECT, NULL, true}, {"device-aspect-ratio", F_ASPECT, NULL, true},
-    {"resolution", F_RESOLUTION, NULL, true}, {"color", F_COLOR, NULL, true},
+    {"resolution", F_RESOLUTION, NULL, true},
+    // The Compatibility Standard's: `resolution` in dppx, written as a
+    // number, its bounds `-webkit-min-` and `-webkit-max-` (feature_bounded).
+    {"-webkit-device-pixel-ratio", F_PIXEL_RATIO, NULL, true},
+    {"color", F_COLOR, NULL, true},
     {"color-index", F_ZERO, NULL, true}, {"monochrome", F_ZERO, NULL, true},
     {"grid", F_ZERO, NULL, false},
     {"orientation", F_WORDS, NULL, false}, {"hover", F_WORDS, "hover", false},
@@ -158,7 +162,8 @@ static bool actual(const Feature *f, garb_env_t env, double *out)
     case F_WIDTH: *out = env.width; return true;
     case F_HEIGHT: *out = env.height; return true;
     case F_ASPECT: *out = env.height > 0 ? env.width / env.height : 0; return true;
-    case F_RESOLUTION: *out = 1; return true;
+    case F_RESOLUTION:
+    case F_PIXEL_RATIO: *out = env.resolution > 0 ? env.resolution : 1; return true;
     case F_COLOR: *out = 8; return true;
     case F_ZERO: *out = 0; return true;
     default: return false;
@@ -181,6 +186,12 @@ static bool written(const Feature *f, MCur *c, double *out)
     case F_RESOLUTION:
         if (!resolution_dppx(t, out))
             return false;
+        c->i++;
+        return true;
+    case F_PIXEL_RATIO:
+        if (t->kind != GARB_NUMBER || t->number < 0)
+            return false;
+        *out = t->number;
         c->i++;
         return true;
     case F_ASPECT: {
@@ -254,6 +265,36 @@ static const Feature *feature_named(const char *s, size_t n)
     return NULL;
 }
 
+// A feature by a name that may carry its bound: `min-` or `max-` before
+// it (-1 or 1 in *bound), or, for the WebKit pixel ratio, `-webkit-min-`
+// and `-webkit-max-` in place of its `-webkit-`. NULL for a name this
+// machine does not know, or a bound on a feature that takes none.
+static const Feature *feature_bounded(const char *s, size_t n, int *bound)
+{
+    *bound = 0;
+    const Feature *f;
+    if (n > 12 && (ieq(s, 12, "-webkit-min-") || ieq(s, 12, "-webkit-max-"))) {
+        char name[48];
+        if (n - 12 + 8 >= sizeof(name))
+            return NULL;
+        os64_memcpy(name, "-webkit-", 8);
+        os64_memcpy(name + 8, s + 12, n - 12);
+        f = feature_named(name, n - 4);
+        if (f != NULL && f->kind == F_PIXEL_RATIO) {
+            *bound = ieq(s + 8, 4, "min-") ? -1 : 1;
+            return f;
+        }
+    }
+    if (n > 4 && (ieq(s, 4, "min-") || ieq(s, 4, "max-"))) {
+        f = feature_named(s + 4, n - 4);
+        if (f == NULL || !f->ranged)
+            return NULL;
+        *bound = ieq(s, 4, "min-") ? -1 : 1;
+        return f;
+    }
+    return feature_named(s, n);
+}
+
 // What a word feature answers here: the machine's, for the two the person
 // chooses what they chose, and for `scripting` the document's.
 static const char *answer_of(const Feature *f, garb_env_t env)
@@ -307,20 +348,9 @@ static Tri feature(const garb_value_t *block, garb_env_t env)
         return ok ? M_TRUE : M_FALSE;
     }
     // A name, perhaps with min- or max-.
-    const char *s = t->text;
-    size_t n = t->len;
-    int bound = 0;
-    if (n > 4 && ieq(s, 4, "min-")) {
-        bound = -1;
-        s += 4;
-        n -= 4;
-    } else if (n > 4 && ieq(s, 4, "max-")) {
-        bound = 1;
-        s += 4;
-        n -= 4;
-    }
-    const Feature *f = feature_named(s, n);
-    if (f == NULL || (bound != 0 && !f->ranged))
+    int bound;
+    const Feature *f = feature_bounded(t->text, t->len, &bound);
+    if (f == NULL)
         return M_UNKNOWN;
     c.i++;
     const garb_value_t *after = peek(&c);
@@ -729,11 +759,8 @@ static bool known_name(const garb_value_t *t)
 {
     if (t == NULL || t->kind != GARB_IDENT)
         return false;
-    const char *s = t->text;
-    size_t n = t->len;
-    bool bounded = n > 4 && (ieq(s, 4, "min-") || ieq(s, 4, "max-"));
-    const Feature *f = feature_named(bounded ? s + 4 : s, bounded ? n - 4 : n);
-    return f != NULL && (!bounded || f->ranged);
+    int bound;
+    return feature_bounded(t->text, t->len, &bound) != NULL;
 }
 
 // <media-feature>, in a block's contents: `name`, `name: value`, or a range

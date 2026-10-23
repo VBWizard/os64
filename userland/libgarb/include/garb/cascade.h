@@ -36,6 +36,9 @@ typedef struct {
     // device-height and device-aspect-ratio answer. Either 0 answers them
     // from the viewport, for a host that knows no screen.
     double device_width, device_height;
+    // The device pixels a CSS pixel is drawn with (the page's zoom): what
+    // `resolution` and the WebKit pixel ratio answer, in dppx. 0 is 1.
+    double resolution;
     // Whether the Modern Web arc's properties are taken away
     // (garb_reading_t): the cascade reads every declaration, and every
     // `@supports` condition, with this answer, and records a marked

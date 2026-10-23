@@ -410,8 +410,9 @@ int d_url_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_encoding_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_screen_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* The screen's width and height as `screen` reports them, in CSS pixels at
- * the page's zoom: what the device-* media features answer (view.c). */
-void d_screen_size(const os64_dom_t *dom, double *width, double *height);
+ * the page's zoom, and devicePixelRatio: what the device-* media features
+ * and `resolution` answer (view.c). */
+void d_screen_media(const os64_dom_t *dom, double *width, double *height, double *ratio);
 int d_base64_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* An interface object for a prototype a row made (WebIDL § 3.7): its
  * `prototype` and the prototype's `constructor` and Symbol.toStringTag
