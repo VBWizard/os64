@@ -1855,16 +1855,20 @@ switch off):
 | Directory | Before | After | `[required]` | `[excluded]` pages |
 |---|---|---|---|---|
 | `fetch/api/headers` | 0 | 222 of 287 | 214 | 0 |
-| `fetch/api/request` | 0 | 365 of 496 | 285 | 9 |
-| `fetch/api/response` | 0 | 184 of 277 | 166 | 2 |
-| `fetch/api/abort` | 0 | 63 of 79 | 63 | 4 |
+| `fetch/api/request` | 0 | 364 of 496 | 284 | 9 |
+| `fetch/api/response` | 0 | 186 of 277 | 165 | 2 |
+| `fetch/api/abort` | 0 | 65 of 79 | 63 | 4 |
 | `fetch/api/basic` | 0 | 148 of 392 | 106 | 3 |
 | `xhr` | 1 | 345 of 1,188 | 220 | 0 |
 
 The excluded pages need what yonder has none of: service workers, the
 Cache API, frames and other realms, MediaSource, a streaming upload.
 Most of what still fails needs a `.py` handler, `ReadableStream`, a
-document from a response, or the runner's port (DEBTS.md). The one
+document from a response, or the runner's port (DEBTS.md). Two
+subtests left `[required]`: "Consume empty FormData request (and
+response) body as text" expect no bytes, while every engine sends the
+close delimiter for an empty FormData and fails them, as yonder now
+does. The one
 DOMException made other slices' pages pass: `dom/nodes` 1,097 → 1,401
 (the pre-insertion checks, classList, createDocument's names),
 `user-timing` 466 → 538, `css/cssom` 729 → 737, the history interface
@@ -1886,12 +1890,13 @@ page record said `200 cors, 0 hops` for the first and named the CORS
 refusal for the last.
 
 Host, at the head, all 0 failed: origin.c's 151 cases (ORIGIN.md's
-list, one each) with their step bounds; libfetch's host 892 checks; the
-job's host (`test_yonder_fetch_job_host.sh`, every allocation failed in
-turn); the DOM host 78,726 checks with 12,181 binding allocation
-sweeps, `tools/test_dom_fetch.inc` holding the rows; the scripted-page
+list, one each) with their step bounds, 426 checks; libfetch's host 905
+checks; the job's host (`test_yonder_fetch_job_host.sh`, 312 checks,
+every allocation failed in turn and each one failed alone); the DOM
+host 78,780 checks with 12,183 binding allocation sweeps, `tools/test_dom_fetch.inc` holding the rows; the scripted-page
 host with `tools/test_yonder_requests.inc` end to end. Mutants by hand,
-one per finding fixed after the cold read (each named in its commit);
+one per finding fixed after the cold reads and Codex's rounds (each
+named in its commit);
 the mutant harnesses were not run (the briefs' rule).
 
 **Review.** Fable read the design before code and ruled eight questions
