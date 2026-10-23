@@ -525,12 +525,15 @@ element's names with an uppercase letter left out, unenumerable, and
 hidden behind a name the prototype chain has) walk the element's list at
 each call. A walk that runs page code in its middle reads the list as it
 stands at its next step; a name is looked for after the prototype chain is
-asked, which may run page code. The map is iterable as an array. Where the
-last walk stopped is kept and used only while the element's list is the
-one it walked (libhtml's version has not moved and the list starts where
-it did), so a walk over all of an element's n attributes in one call (an
-iteration, `Object.keys`, `for..in`) takes a number of steps linear in n,
-and the DOM host holds it to that (`d_attr_steps`).
+asked, which may run page code. The map is iterable as an array. The last
+element walked is kept as an array of its attributes, used only while the
+element's list is the one copied (libhtml's version has not moved, the
+list starts where it did and its last attribute is still last), so
+`length` and the i-th attribute are a step each, and a walk over all of an
+element's n attributes in one call, forwards or back (an iteration,
+`Object.keys`, `for..in`, a countdown from `length`), takes a number of
+steps linear in n; the DOM host holds each kind of walk to that
+(`d_attr_steps`).
 
 **An Attr leaves its element at one door.** Every attribute the binding
 sets or removes goes through `d_set_attr`, and the parser and libpage
