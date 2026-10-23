@@ -872,6 +872,15 @@ static void dom_xhr_cases(void)
     net_answer(&f, &net, net.count - 1, &latin);
     dom_script(&f, FETCH_ASSERT "assert(xl.responseText==='caf\\u00e9',escape(xl.responseText));", "xhr: the override's charset");
 
+    /* The answer's type is "extract a MIME type"'s: a comma inside a
+     * quoted parameter does not split it, so the charset stands. */
+    dom_script(&f, "var x=new XMLHttpRequest();x.open('GET','/q');x.send();globalThis.xq=x;", "xhr: a quoted comma");
+    os64_dom_response_t quoted = net_answer_of(200, "http://example.test/q",
+                                               "Content-Type: text/plain;charset=windows-1252;note=\"a,b\"\r\n", "caf\xe9");
+    net_answer(&f, &net, net.count - 1, &quoted);
+    dom_script(&f, FETCH_ASSERT "assert(xq.responseText==='caf\\u00e9',escape(xq.responseText));",
+               "xhr: a quoted comma is the value's");
+
     /* Synchronous: run by the host, no events before, a NetworkError on
      * failure. */
     net.run_ok = true;

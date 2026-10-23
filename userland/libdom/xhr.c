@@ -335,13 +335,9 @@ static char *final_type(JSContext *ctx, const DXhr *x, char *charset, size_t cha
     size_t length = 0;
     char *joined = response_header(ctx, x, "content-type", 12, &length, &no_memory);
     if (no_memory) return NULL;
-    /* The last type of a combined value is the one "extract a MIME type"
-     * keeps. */
-    const char *last = joined;
-    for (size_t i = 0; joined != NULL && i < length; i++)
-        if (joined[i] == ',') last = joined + i + 1;
-    bool parsed = last != NULL &&
-                  way_mime_parse(last, length - (size_t)(last - joined), essence, sizeof(essence), charset, charset_cap);
+    /* Fetch's "extract a MIME type", libway's: split with a quoted value's
+     * commas kept, the last type that parses, its charset carried. */
+    bool parsed = joined != NULL && way_mime_extract(joined, length, essence, sizeof(essence), charset, charset_cap);
     js_free(ctx, joined);
     if (!parsed) {
         charset[0] = '\0';

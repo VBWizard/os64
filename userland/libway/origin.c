@@ -775,6 +775,35 @@ bool way_mime_parse(const char *value, size_t len, char *essence, size_t ecap, c
     return mime_walk(value, len, essence, ecap, charset_param, &w);
 }
 
+bool way_mime_extract(const char *value, size_t len, char *essence, size_t ecap, char *charset, size_t ccap)
+{
+    char e[WAY_MIME_ESSENCE_MAX], c[WAY_MIME_CHARSET_MAX], remembered[WAY_MIME_CHARSET_MAX] = "";
+    bool found = false;
+    size_t at = 0;
+    bool started = false;
+    const char *v;
+    size_t vlen;
+    if (charset != NULL && ccap > 0)
+        charset[0] = '\0';
+    // Split as "get, decode, and split" does, so a comma inside a quoted
+    // parameter value is the value's.
+    while (split_next(value, len, &at, &started, &v, &vlen)) {
+        if (!way_mime_parse(v, vlen, e, sizeof(e), c, sizeof(c)) || os64_streq(e, "*/*"))
+            continue;
+        if (!found || !os64_streq(e, essence)) {
+            if (os64_strcopy(essence, ecap, e) >= ecap)
+                return false;
+            os64_strcopy(remembered, sizeof(remembered), c);
+        }
+        found = true;
+        // The type's own charset, else the one its essence's first type
+        // carried ("set mimeType's parameters[charset] to charset").
+        if (charset != NULL)
+            os64_strcopy(charset, ccap, c[0] != '\0' ? c : remembered);
+    }
+    return found;
+}
+
 // The serializer's walk: each parameter whose (lowercased) name is not
 // already written goes on as ";name=value", the value quoted (each quote and
 // backslash escaped) unless it is a non-empty token (MIME Sniffing § 4.6). Names are

@@ -130,6 +130,15 @@ int32_t way_cors_unsafe_names(const char *block, size_t len, char *out, size_t c
 bool way_mime_parse(const char *value, size_t len, char *essence, size_t ecap, char *charset,
                     size_t ccap);
 
+// Fetch § 2.2.2 "extract a MIME type" over a Content-Type's combined value
+// (its lines joined with ", "): split as "get, decode, and split" splits,
+// so a comma in a quoted value is the value's; each part that parses and
+// is not */* replaces the type, a new essence resetting the charset and
+// the same essence keeping the earlier charset when it names none. The
+// result's essence and charset ("" for none, as way_mime_parse gives it).
+// False when no part is a MIME type.
+bool way_mime_extract(const char *value, size_t len, char *essence, size_t ecap, char *charset, size_t ccap);
+
 // `value` parsed as a MIME type and serialized (MIME Sniffing § 4.6): the
 // essence, then every parameter that parses, the first of each name, its
 // name lowercased, its value quoted unless it is a token. False when it is

@@ -349,6 +349,23 @@ static void mime(void)
            strcmp(c, "utf") == 0, c);
     char tiny[4];
     expect("mime: an essence too long for the buffer", !way_mime_parse("text/plain", 10, tiny, sizeof(tiny), NULL, 0), NULL);
+    // Fetch's "extract a MIME type" over a combined value: the standard's
+    // own table, and a comma inside a quoted value kept as the value's.
+    static const struct { const char *in, *essence, *charset; } kExtract[] = {
+        {"text/plain;charset=gbk, text/html", "text/html", ""},
+        {"text/html;charset=gbk;a=b, text/html;x=y", "text/html", "gbk"},
+        {"text/html;charset=gbk, x/x, text/html;x=y", "text/html", ""},
+        {"text/html, */*", "text/html", ""},
+        {"text/html, ", "text/html", ""},
+        {"text/plain;charset=windows-1252;note=\"a,b\"", "text/plain", "windows-1252"},
+        {"text/plain;note=\"a, x/y\"", "text/plain", ""},
+    };
+    for (size_t i = 0; i < sizeof(kExtract) / sizeof(kExtract[0]); i++) {
+        bool ok = way_mime_extract(kExtract[i].in, strlen(kExtract[i].in), e, sizeof(e), c, sizeof(c));
+        expect("mime: extracted as Fetch's table says",
+               ok && strcmp(e, kExtract[i].essence) == 0 && strcmp(c, kExtract[i].charset) == 0, kExtract[i].in);
+    }
+    expect("mime: nothing to extract", !way_mime_extract("bogus, */*", 10, e, sizeof(e), c, sizeof(c)), NULL);
     // Serialized (MIME Sniffing § 4.6): every parameter that parses, the
     // first of each name, lowercased, a value quoted unless it is a token.
     static const struct { const char *in, *out; } kSerial[] = {
