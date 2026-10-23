@@ -183,6 +183,7 @@ static way_response_t hop_response(const Hop *h, int32_t status)
 
 typedef struct {
     char accept[OS64_FETCH_ACCEPT_MAX];
+    size_t accepts;                          // Accept lines the page wrote, empty ones included
     char body[OS64_FETCH_EXTRA_MAX];         // the representation headers
     char extra[OS64_FETCH_EXTRA_MAX];        // the rest, and this hop's Origin
     bool identity;                           // a Range: the representation's own bytes
@@ -234,9 +235,10 @@ static bool fields_of(const way_request_t *r, Fields *f)
             continue;
         if (is_accept(h.name, h.name_len)) {
             size_t used = os64_strlen(f->accept);
-            if (used + (used ? 2 : 0) + h.value_len + 1 > sizeof(f->accept))
+            bool joined = f->accepts++ > 0;
+            if (used + (joined ? 2 : 0) + h.value_len + 1 > sizeof(f->accept))
                 return false;
-            if (used) {
+            if (joined) {
                 f->accept[used++] = ',';
                 f->accept[used++] = ' ';
             }
@@ -250,7 +252,9 @@ static bool fields_of(const way_request_t *r, Fields *f)
         if (!append_line(into, sizeof(f->body), h.name, h.name_len, h.value, h.value_len))
             return false;
     }
-    if (f->accept[0] == '\0')
+    // Fetch installs `*/*` only when the list does not CONTAIN Accept: an
+    // Accept the page set empty goes empty (libfetch sends an empty one).
+    if (f->accepts == 0)
         os64_strcopy(f->accept, sizeof(f->accept), "*/*");
     return true;
 }
@@ -496,18 +500,27 @@ static bool read_body(os64_fetch_t *f, uint64_t cap, uint8_t **out, size_t *len,
 
 // ── The hops ────────────────────────────────────────────────────────────
 
-// The URLs whose hop took § 4.1's preflight branch: a network error anywhere
-// after clears their cache entries ("clear cache entries using request").
+// The hops that took § 4.1's preflight branch: a network error anywhere
+// after clears their cache entries ("clear cache entries using request"),
+// every one. An entry's key is the page's site, the SERIALIZED REQUEST
+// ORIGIN and the URL, and the request origin turns to "null" once a
+// redirect taints the request, so each branch keeps the redirect-taint it
+// had when its preflight was made, beside its URL, and is cleared under
+// that: a later hop's taint must not make the clear miss an earlier grant.
 typedef struct {
     char *urls[WAY_REDIRECTS_MAX + 1];
+    way_rtaint_t rtaints[WAY_REDIRECTS_MAX + 1];
     int32_t n;
 } Branches;
 
-static void branches_clear(Branches *b, yonder_fetch_job_t *job, way_request_t *r, bool failed)
+static void branches_clear(Branches *b, yonder_fetch_job_t *job, const way_request_t *r, bool failed)
 {
     for (int32_t i = 0; i < b->n; i++) {
-        if (failed)
-            way_preflight_clear(job->preflight, r, b->urls[i]);
+        if (failed) {
+            way_request_t then = *r;        // the key reads the origin and the taint alone
+            then.rtaint = b->rtaints[i];
+            way_preflight_clear(job->preflight, &then, b->urls[i]);
+        }
         os64_free(b->urls[i]);
     }
     b->n = 0;
@@ -638,10 +651,10 @@ int64_t yonder_fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
         }
         bool branch = kind == WAY_HOP_CORS && way_preflight_capable(r);
         if (branch) {
-            // The URL is kept BEFORE anything is cached under it, and a copy
-            // there is no memory for ends the request: a branch the clear
-            // cannot name would leave this hop's grants standing after a
-            // network error.
+            // The URL and the taint the key is made under are kept BEFORE
+            // anything is cached under them, and a copy there is no memory
+            // for ends the request: a branch the clear cannot name would
+            // leave this hop's grants standing after a network error.
             char *kept = NULL;
             if (branches.n < (int32_t)(sizeof(branches.urls) / sizeof(branches.urls[0]))) {
                 kept = copy_text(current, os64_strlen(current));
@@ -649,6 +662,7 @@ int64_t yonder_fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
                     network_error(got, "out of memory");
                     break;
                 }
+                branches.rtaints[branches.n] = r->rtaint;
                 branches.urls[branches.n++] = kept;
             }
             if (way_preflight_needed(job->preflight, r, current, yonder_now_ms()) &&

@@ -302,8 +302,17 @@ typedef struct os64_gui_surface
 // notification, so pre-loss presses cannot re-arm clients after their reset.
 // Window/control records and coalesced state remain. The first loss precedes
 // ring events; repeated loss yields to a retained control between notices.
-// Appearance and eligible doorbells have priority; no payload.
+// Appearance and selected doorbell/placement turns can precede it; no payload.
 #define OS64_GUI_EVENT_INPUT_LOST       16
+// Completed user move/resize, coalesced by component outside the input ring.
+// Frame x/y and content width/height; use only fields named by changed.
+// Automatic fitting, maximize/restore and layout changes do not originate it.
+#define OS64_GUI_EVENT_WINDOW_PLACEMENT 17
+#define OS64_GUI_PLACEMENT_X      (1u << 0)
+#define OS64_GUI_PLACEMENT_Y      (1u << 1)
+#define OS64_GUI_PLACEMENT_WIDTH  (1u << 2)
+#define OS64_GUI_PLACEMENT_HEIGHT (1u << 3)
+#define OS64_GUI_PLACEMENT_ALL    15u
 _Static_assert(OS64_GUI_EVENT_INPUT_LOST == 16, "input-loss event ABI");
 _Static_assert(OS64_GUI_EVENT_MOUSE_WHEEL == 13, "wheel event ABI");
 
@@ -367,6 +376,10 @@ typedef struct os64_gui_event
         struct {
             uint32_t mask;
         } doorbell;
+        struct {
+            int32_t x, y;
+            uint32_t width, height, changed;
+        } placement;
     };
     uint64_t tick;              // enqueue ticks; zero for synthesized INPUT_LOST
 } os64_gui_event_t;
@@ -550,6 +563,9 @@ static inline int64_t os64_gui_popup_create(const char *title, int64_t owner,
 _Static_assert(sizeof(os64_gui_rect_t) == 16, "gui rect ABI: 16 bytes");
 _Static_assert(sizeof(os64_gui_surface_t) == 24, "gui surface ABI: 24 bytes");
 _Static_assert(sizeof(os64_gui_event_t) == 32, "gui event ABI: 32 bytes");
+_Static_assert(OS64_GUI_EVENT_WINDOW_PLACEMENT == 17, "placement event ABI");
+_Static_assert(__builtin_offsetof(os64_gui_event_t, placement.changed) == 20,
+               "gui placement mask ABI");
 _Static_assert(__builtin_offsetof(os64_gui_event_t, focus.other_handle) == 6, "focus handle ABI");
 _Static_assert(__builtin_offsetof(os64_gui_event_t, doorbell.mask) == 4,
                "gui event ABI: doorbell at offset 4");

@@ -44,6 +44,7 @@
 #include <stdbool.h>
 #include "os64/draw.h"
 #include "os64/gui.h"
+#include "os64/window_placement.h"
 #include "os64/font_adopt.h"
 
 // ── The theme table ─────────────────────────────────────────────────────────
@@ -363,6 +364,9 @@ struct os64_ui_widget
 
 struct os64_ui
 {
+    os64_window_placement_t placement;
+    // Installed by ui_window_open. Dispatched before application/menu filters.
+    bool (*placement_event)(os64_ui_t *, const os64_gui_event_t *);
     os64_draw_ctx_t *ctx;        // the window's draw context (app-owned)
     os64_ui_theme_t  theme;
     // Opaque libui-owned binding, created on first text/context use.

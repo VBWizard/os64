@@ -1,0 +1,12 @@
+Artifacts: /tmp/e05d-host
+placement queue: masked overflow, pending, rotation, priority, pointer drain and loss progress passed
+placement: real parser/writer, component merge, display fitting, failures, NOREPLACE and initializer ownership passed
+Killed queue mutant: legacy_empty_ring_priority
+Killed queue mutant: snapshot_overwrite
+Killed queue mutant: stale_mask
+Killed queue mutant: placement_starves_ring
+Killed queue mutant: doorbell_starves_placement
+Killed queue mutant: appearance_loses_priority
+Killed queue mutant: pointer_precedes_drain
+Killed queue mutant: loss_starves_control
+Killed queue mutant: pending_omits_placement

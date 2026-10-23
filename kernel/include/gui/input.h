@@ -27,14 +27,10 @@ typedef enum input_event_type
     INPUT_EVENT_MOUSE_MOVE,
     INPUT_EVENT_MOUSE_BUTTON_DOWN,
     INPUT_EVENT_MOUSE_BUTTON_UP,
-    // Not an INPUT event by origin — the window system synthesizes this one
-    // and delivers it straight to a window's queue when its content area
-    // changes size. It rides this ring's TYPE space (never the ring itself)
-    // because an app already has exactly one place it learns things: its
-    // event queue. Geometry news on its own channel would mean every app
-    // grows a second thing to poll. X11 made the same call — ConfigureNotify
-    // is an ordinary event, not a signal — and it is why an event loop is a
-    // loop instead of a switchboard.
+    // The WM sends content-size changes to the window's queue for layout and
+    // repaint, covering gestures and automatic adjustments. Sharing the event
+    // loop with input avoids a separate geometry channel. This record does
+    // not pass through the device-input ring consumed by the compositor.
     INPUT_EVENT_WINDOW_RESIZE,
     // Synthesized like RESIZE (2026-08-23): the user asked for this window
     // to go away (Alt+F4). It is a REQUEST, delivered to the owner, because
@@ -64,6 +60,7 @@ typedef enum input_event_type
     INPUT_EVENT_DOORBELL,
     INPUT_EVENT_SETTINGS,
     INPUT_EVENT_INPUT_LOST,
+    INPUT_EVENT_WINDOW_PLACEMENT,
 } input_event_type_t;
 
 _Static_assert(INPUT_EVENT_WINDOW_RESIZE    == OS64_GUI_EVENT_WINDOW_RESIZE,    "event ABI: resize");
@@ -78,6 +75,7 @@ _Static_assert(INPUT_EVENT_MOUSE_WHEEL == OS64_GUI_EVENT_MOUSE_WHEEL, "event ABI
 _Static_assert(INPUT_EVENT_SETTINGS == OS64_GUI_EVENT_SETTINGS, "event ABI: settings");
 _Static_assert(INPUT_EVENT_INPUT_LOST == OS64_GUI_EVENT_INPUT_LOST, "event ABI: input loss");
 _Static_assert(INPUT_EVENT_DOORBELL == OS64_GUI_EVENT_DOORBELL, "event ABI: doorbell");
+_Static_assert(INPUT_EVENT_WINDOW_PLACEMENT == OS64_GUI_EVENT_WINDOW_PLACEMENT, "event ABI: placement");
 
 // Mouse button bit positions (in `buttons`, and named in `button` for the
 // BUTTON_DOWN/UP events). These numbers are ABI — they ride out to ring 3 in
@@ -135,6 +133,10 @@ typedef struct input_event
         struct {
             uint32_t mask;
         } doorbell;
+        struct {
+            int32_t x, y;
+            uint32_t width, height, changed;
+        } placement;
     };
     uint64_t tick;  // enqueue ticks; zero for synthesized INPUT_LOST
 } input_event_t;

@@ -1064,6 +1064,21 @@ static bool body_unusable(const DBody *b)
     return s != NULL && s->locked;
 }
 
+/* A body read whole by something that keeps its reader: a body method's
+ * "fully read", or a Request made from this one (whose body is a proxy
+ * reading this one's stream to its end). Disturbed, and the stream, made
+ * now or later, closed and locked. */
+static void body_take(DBody *b)
+{
+    b->used = b->has;
+    b->consumed = b->has;
+    DStream *s = JS_IsUndefined(b->stream) ? NULL : stream_state(b->stream);
+    if (s != NULL) {
+        s->locked = true;
+        s->state = ST_CLOSED;
+    }
+}
+
 int d_body_extract(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DBytes *out, bool *has_type)
 {
     os64_memset(out, 0, sizeof(*out));
@@ -1185,16 +1200,9 @@ static JSValue body_consume(os64_dom_t *dom, JSContext *ctx, JSValueConst self, 
         return d_promise_settled(ctx, JS_Throw(ctx, JS_DupValue(ctx, b->aborted)));
     }
     if (body_unusable(b)) return d_promise_settled(ctx, JS_ThrowTypeError(ctx, "The body has already been read"));
-    b->used = b->has;
+    /* "Fully read" takes a reader it never releases. */
+    body_take(b);
     response_settled(ctx, response_state(self));
-    /* "Fully read" takes a reader it never releases: the stream, made now
-     * or later, is closed and locked. */
-    b->consumed = b->has;
-    DStream *s = JS_IsUndefined(b->stream) ? NULL : stream_state(b->stream);
-    if (s != NULL) {
-        s->locked = true;
-        s->state = ST_CLOSED;
-    }
     const uint8_t *bytes = b->bytes != NULL ? b->bytes : (const uint8_t *)"";
     size_t length = b->has ? b->length : 0;
     (void)self;
@@ -1235,9 +1243,10 @@ static JSValue body_stream(os64_dom_t *dom, JSContext *ctx, JSValueConst self, D
         if (JS_IsException(stream)) return stream;
         b = body_of(self);
         b->stream = stream;
-        /* A body already read is a stream already closed, and one a body
-         * method read is locked by the reader it took. */
-        if (b->used) stream_state(stream)->state = ST_CLOSED;
+        /* A body already read is a stream already closed, and so is one
+         * with no bytes (enqueued whole, nothing to enqueue, then closed);
+         * one a body method read is locked by the reader it took. */
+        if (b->used || b->length == 0) stream_state(stream)->state = ST_CLOSED;
         if (b->consumed) stream_state(stream)->locked = true;
     }
     return JS_DupValue(ctx, b->stream);
@@ -1315,7 +1324,10 @@ static JSValue stream_make(os64_dom_t *dom, JSContext *ctx, JSValueConst owner, 
 
 JSValue d_stream_new(os64_dom_t *dom, JSContext *ctx, const uint8_t *bytes, size_t length)
 {
-    return stream_make(dom, ctx, JS_UNDEFINED, bytes, length);
+    JSValue stream = stream_make(dom, ctx, JS_UNDEFINED, bytes, length);
+    /* No bytes: closed at creation, as a body's is. */
+    if (!JS_IsException(stream) && length == 0) stream_state(stream)->state = ST_CLOSED;
+    return stream;
 }
 
 /* Settles a reader's `closed`: resolved (`error` undefined) or rejected. */
@@ -1933,7 +1945,10 @@ static int request_init(os64_dom_t *dom, JSContext *ctx, JSValueConst object, JS
                 if (in->body.length != 0) os64_memcpy(q->body.bytes, in->body.bytes, in->body.length);
                 q->body.length = in->body.length;
                 q->body.has = true;
-                in->body.used = true;
+                /* The new body is a proxy reading the input's stream to
+                 * its end: the input's is disturbed, and its stream locked,
+                 * one made later included. */
+                body_take(&in->body);
             }
         }
     }
@@ -2447,7 +2462,8 @@ void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, void *answer
         return;
     }
     /* Answered: a body not yet read is read as the reason; an empty one
-     * closed before it could error, and reads as empty. */
+     * reads as empty, its stream closed from its creation (body_stream),
+     * so there is nothing for the abort to error. */
     DResp *r = answered;
     if (r != NULL && JS_IsUndefined(r->body.aborted) && r->body.has && r->body.length != 0 && !r->body.used) {
         r->body.aborted = JS_DupValue(ctx, reason);

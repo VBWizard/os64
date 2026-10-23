@@ -42,7 +42,8 @@ sources = ['shared/damage.c', 'tools/test_file_dialog_host.c'] + ['userland/libo
      'ui_dispatcher', 'ui_icon', 'ui_action', 'ui_status', 'ui_font', 'ui',
      'ui_controls', 'ui_list', 'ui_text', 'font_provider', 'font_adopt', 'text',
      'text_cache', 'text_decode', 'text_bitmap', 'text_draw', 'draw', 'str',
-     'fmt', 'ui_theme']]
+     'fmt', 'ui_theme', 'ui_window', 'window_placement', 'conf']]
+flags += ['-Wl,--wrap=os64_conf_' + name for name in ['find', 'target', 'create_checked', 'merge_checked']]
 binary = out / 'test_file_dialog'
 subprocess.run(['cc', *flags, *[str(root / source) for source in sources],
                 *objects, '-o', str(binary)], check=True)

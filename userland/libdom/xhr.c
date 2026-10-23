@@ -319,42 +319,60 @@ static double response_length(const DXhr *x)
     return length < 0 ? 0 : length;
 }
 
-/* XHR § "final MIME type" (engine memory): the override, else the
- * answer's Content-Type, else text/xml; `charset` gets its charset ("" for
- * none). */
-static char *final_type(JSContext *ctx, const DXhr *x, char *charset, size_t charset_cap)
+/* XHR § "get a response MIME type": Fetch's "extract a MIME type" over the
+ * answer's Content-Type (libway's: a quoted value's commas kept, the last
+ * type that parses, its charset carried), serialized whole into `out`;
+ * text/xml when there is none. `charset` gets its charset ("" for none).
+ * False on no memory. */
+static bool response_type(JSContext *ctx, const DXhr *x, char *out, size_t cap, char *charset, size_t charset_cap)
 {
-    char essence[WAY_MIME_ESSENCE_MAX], out[WAY_MIME_ESSENCE_MAX + WAY_MIME_CHARSET_MAX + 16];
+    char essence[WAY_MIME_ESSENCE_MAX];
     charset[0] = '\0';
-    if (x->override_type != NULL) {
-        if (way_mime_parse(x->override_type, os64_strlen(x->override_type), essence, sizeof(essence), charset, charset_cap))
-            return engine_copy(ctx, x->override_type, os64_strlen(x->override_type));
-        return engine_copy(ctx, "application/octet-stream", 24);
-    }
     bool no_memory;
     size_t length = 0;
     char *joined = response_header(ctx, x, "content-type", 12, &length, &no_memory);
-    if (no_memory) return NULL;
-    /* Fetch's "extract a MIME type", libway's: split with a quoted value's
-     * commas kept, the last type that parses, its charset carried. */
-    bool parsed = joined != NULL && way_mime_extract(joined, length, essence, sizeof(essence), charset, charset_cap);
+    if (no_memory) return false;
+    bool parsed = joined != NULL && way_mime_extract(joined, length, essence, sizeof(essence), charset, charset_cap) &&
+                  way_mime_extract_serialized(joined, length, out, cap);
     js_free(ctx, joined);
     if (!parsed) {
         charset[0] = '\0';
-        return engine_copy(ctx, "text/xml", 8);
+        os64_strcopy(out, cap, "text/xml");
     }
-    os64_snprintf(out, sizeof(out), charset[0] ? "%s;charset=%s" : "%s", essence, charset);
+    return true;
+}
+
+/* XHR § "get a final MIME type" (engine memory): the override MIME type,
+ * else the response MIME type, each with every parameter. */
+static char *final_type(JSContext *ctx, const DXhr *x)
+{
+    if (x->override_type != NULL) return engine_copy(ctx, x->override_type, os64_strlen(x->override_type));
+    char out[WAY_MIME_SERIALIZED_MAX], charset[WAY_MIME_CHARSET_MAX];
+    if (!response_type(ctx, x, out, sizeof(out), charset, sizeof(charset))) return NULL;
     return engine_copy(ctx, out, os64_strlen(out));
 }
 
-/* The body as text, in the final MIME type's charset (UTF-8 without one). */
+/* XHR § "get a final encoding", which deliberately does not read the final
+ * MIME type: the response MIME type's charset, then the override's charset
+ * in its place when it names one; "" for none. False on no memory. */
+static bool final_charset(JSContext *ctx, const DXhr *x, char *charset, size_t cap)
+{
+    char out[WAY_MIME_SERIALIZED_MAX];
+    if (!response_type(ctx, x, out, sizeof(out), charset, cap)) return false;
+    char essence[WAY_MIME_ESSENCE_MAX], own[WAY_MIME_CHARSET_MAX];
+    if (x->override_type != NULL &&
+        way_mime_parse(x->override_type, os64_strlen(x->override_type), essence, sizeof(essence), own, sizeof(own)) &&
+        own[0] != '\0')
+        os64_strcopy(charset, cap, own);
+    return true;
+}
+
+/* The body as text, in the final encoding (UTF-8 without one). */
 static JSValue response_text(JSContext *ctx, const DXhr *x)
 {
     if (x->error || !x->has_body || x->body_length == 0) return JS_NewString(ctx, "");
     char charset[WAY_MIME_CHARSET_MAX];
-    char *type = final_type(ctx, x, charset, sizeof(charset));
-    if (type == NULL) return JS_EXCEPTION;
-    js_free(ctx, type);
+    if (!final_charset(ctx, x, charset, sizeof(charset))) return JS_EXCEPTION;   /* js_malloc threw */
     return d_text_decode(ctx, charset[0] != '\0' ? charset : "utf-8", x->body, x->body_length);
 }
 
@@ -614,42 +632,29 @@ static XHeader *header_named(DXhr *x, const char *name, size_t nlen)
     return NULL;
 }
 
-/* A string's or a URLSearchParams body's author Content-Type keeps its words, but a charset in it
- * that is not UTF-8 says UTF-8, which is what the bytes are (XHR § send(),
- * step 4.4.3; the parameter's value is replaced where it stands). -1 on no
- * memory. */
+/* A string's or a URLSearchParams body's author Content-Type, when its
+ * charset is not UTF-8, is the parsed record with charset UTF-8,
+ * serialized, which is what the bytes are (XHR § send(): "Set
+ * contentTypeRecord's parameters["charset"] to "UTF-8"", then serialize
+ * it). One that names no charset, or names UTF-8, keeps its words. -1 on
+ * no memory. */
 static int charset_utf8(JSContext *ctx, XHeader *h)
 {
-    char essence[WAY_MIME_ESSENCE_MAX], charset[WAY_MIME_CHARSET_MAX];
+    char essence[WAY_MIME_ESSENCE_MAX], charset[WAY_MIME_CHARSET_MAX], out[WAY_MIME_SERIALIZED_MAX];
     if (!way_mime_parse(h->value, h->value_length, essence, sizeof(essence), charset, sizeof(charset)) ||
         charset[0] == '\0' || os64_streq_nocase(charset, "utf-8"))
         return 0;
-    /* The charset parameter: its value's span, quoted or not. */
-    for (size_t i = 0; i + 8 <= h->value_length; i++) {
-        if (h->value[i] != ';') continue;
-        size_t at = i + 1;
-        while (at < h->value_length && (h->value[at] == ' ' || h->value[at] == '\t')) at++;
-        if (at + 8 > h->value_length || !d_same_nocase(h->value + at, 8, "charset=", 8)) continue;
-        size_t start = at + 8, end = start;
-        if (end < h->value_length && h->value[end] == '"') {
-            end++;
-            while (end < h->value_length && h->value[end] != '"') end += h->value[end] == '\\' ? 2 : 1;
-            if (end < h->value_length) end++;
-            if (end > h->value_length) end = h->value_length;
-        } else
-            while (end < h->value_length && h->value[end] != ';') end++;
-        size_t length = start + 5 + (h->value_length - end);
-        char *value = js_malloc(ctx, length + 1);
-        if (value == NULL) return -1;
-        os64_memcpy(value, h->value, start);
-        os64_memcpy(value + start, "UTF-8", 5);
-        os64_memcpy(value + start + 5, h->value + end, h->value_length - end);
-        value[length] = '\0';
-        js_free(ctx, h->value);
-        h->value = value;
-        h->value_length = length;
-        return 0;
-    }
+    /* The record with its charset set to UTF-8, serialized: libway's walk
+     * finds the charset parameter, so a ';' inside a quoted value is the
+     * value's. One past the serializer's cap is left as written. */
+    if (!way_mime_serialize_charset(h->value, h->value_length, "UTF-8", out, sizeof(out))) return 0;
+    size_t length = os64_strlen(out);
+    char *value = js_malloc(ctx, length + 1);
+    if (value == NULL) return -1;
+    os64_memcpy(value, out, length + 1);
+    js_free(ctx, h->value);
+    h->value = value;
+    h->value_length = length;
     return 0;
 }
 
@@ -898,8 +903,7 @@ static JSValue response_object(os64_dom_t *dom, JSContext *ctx, JSValueConst sel
     switch (x->response_type) {
     case RT_ARRAYBUFFER: made = JS_NewArrayBufferCopy(ctx, bytes, x->body_length); break;
     case RT_BLOB: {
-        char charset[WAY_MIME_CHARSET_MAX];
-        DBytes copy = {js_malloc(ctx, x->body_length + 1), x->body_length, final_type(ctx, x, charset, sizeof(charset))};
+        DBytes copy = {js_malloc(ctx, x->body_length + 1), x->body_length, final_type(ctx, x)};
         if (copy.bytes == NULL || copy.type == NULL) {
             d_bytes_free(ctx, &copy);
             made = JS_EXCEPTION;
@@ -998,10 +1002,16 @@ static JSValue xhr_member(JSContext *ctx, JSValueConst self, int argc, JSValueCo
             JS_FreeCString(ctx, text);
             return d_dom_exception(dom, ctx, "InvalidStateError", "The response is already arriving");
         }
-        char essence[WAY_MIME_ESSENCE_MAX], charset[WAY_MIME_CHARSET_MAX], out[WAY_MIME_ESSENCE_MAX + WAY_MIME_CHARSET_MAX + 16];
-        if (way_mime_parse(text, n, essence, sizeof(essence), charset, sizeof(charset)))
-            os64_snprintf(out, sizeof(out), charset[0] ? "%s;charset=%s" : "%s", essence, charset);
-        else os64_strcopy(out, sizeof(out), "application/octet-stream");
+        /* "Set this's override MIME type to the result of parsing mime",
+         * kept serialized whole, every parameter; failure is
+         * application/octet-stream. A type past the serializer's cap keeps
+         * its essence and charset, the two the object reads. */
+        char essence[WAY_MIME_ESSENCE_MAX], charset[WAY_MIME_CHARSET_MAX], out[WAY_MIME_SERIALIZED_MAX];
+        if (!way_mime_serialize(text, n, out, sizeof(out))) {
+            if (way_mime_parse(text, n, essence, sizeof(essence), charset, sizeof(charset)))
+                os64_snprintf(out, sizeof(out), charset[0] ? "%s;charset=%s" : "%s", essence, charset);
+            else os64_strcopy(out, sizeof(out), "application/octet-stream");
+        }
         JS_FreeCString(ctx, text);
         char *copy = engine_copy(ctx, out, os64_strlen(out));
         if (copy == NULL) return JS_EXCEPTION;

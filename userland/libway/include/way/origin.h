@@ -156,6 +156,11 @@ bool way_mime_extract_serialized(const char *value, size_t len, char *out, size_
 #define WAY_MIME_SERIALIZE_IN_MAX 512
 #define WAY_MIME_SERIALIZED_MAX (WAY_MIME_ESSENCE_MAX + 2 * WAY_MIME_SERIALIZE_IN_MAX + 16)
 bool way_mime_serialize(const char *value, size_t len, char *out, size_t cap);
+// The same, with the charset parameter's value replaced by `charset` where
+// the type has one (XHR's send(): "set contentTypeRecord's
+// parameters["charset"] to "UTF-8"", then serialize); a type without one is
+// serialized as it is.
+bool way_mime_serialize_charset(const char *value, size_t len, const char *charset, char *out, size_t cap);
 
 // ── A request, hop by hop (Fetch § 4.1 main fetch) ─────────────────────
 

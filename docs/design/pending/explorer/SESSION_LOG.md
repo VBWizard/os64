@@ -1015,6 +1015,40 @@ workers. The jobs pipe tracks one waiting reader; the displaced reader waits
 for the one-second backstop. [E5B](E05B_CLOSE_LATENCY.md) records source, native
 timings and follow-up scope. No production fix was made during this diagnosis.
 
+
+## 2026-10-21 — E5C Roam file actions
+
+Chris approved resuming Roam while deferring the worker-lifetime fix. Quinn
+created `codex/roam-file-actions` from `328cba6d` (PR #322) and implemented
+shared extension associations with a configurable file location, literal argv
+launching, one-off Open With, Copy Full Path and Open Terminal Here. Gterm
+accepts --directory; Roam collects launched children on its UI thread.
+
+The [slice contract](E05C_ROAM_LAUNCH.md) and [evidence](evidence/e05c/README.md)
+record the interfaces, host failure injection, ASan/UBSan/LSan success outside
+the sandbox, cross-build and QEMU results. The initial QEMU setup selected the
+old FAT root; selecting the updated ext2 root corrected the test setup before
+acceptance. Real file launching, cancellation, explicit application selection,
+clipboard, directory-with-spaces terminal launch and live config override passed.
+No P5 or independent-review result is claimed. Publication is the next action;
+this branch stacks on #322. The existing dialog-worker issues remain deferred.
+
+
+E5C publication: implementation `9f31fb0f` pushed to origin and opened as
+[draft PR #325](https://github.com/VBWizard/os64/pull/325), based on
+`codex/file-dialog-polish`. #322 remains open. Next: independent review and P5
+acceptance, then retarget #325 to userland after #322 merges. No review request
+comment or merge was sent. Worktree is clean after the handoff record commit.
+
+
+## 2026-10-21 — Window placement follow-up requested
+
+Chris requested saving Roam's position and size whenever they change and
+restoring them next launch, noting other windows would benefit. Recorded
+[E5D](E05D_WINDOW_PLACEMENT.md) as a separate planned slice with shared support
+and Roam first. No implementation started; PR #322's two new review findings
+are the immediate task. The missing move-notification contract needs design.
+
 ## 2026-10-21 — PR #322 second-review fixes
 
 Chris assigned two additional findings. Both reproduced: the unplanned early
@@ -1025,3 +1059,127 @@ baseline through special window states. Five regression failures became 4,693
 passing ASan/UBSan/LSan checks, with cross-build and native QEMU validation in
 [the evidence packet](evidence/e05a/review-r2/README.md). P5 and independent
 re-review remain pending. The worker-lifetime fix remains deferred.
+
+Integration: parent fix `eeee450d` from PR #322 brought into E5C. The session-log
+merge retained both histories. Roam/Scribe/gterm cross-build and the Roam launch
+suite passed with ASan/UBSan/LSan enabled. Native dialog evidence is the parent's
+640×480 run; the earlier E5C native screenshots remain evidence for `9f31fb0f`,
+not a new full native run of this merge. The window-placement request is recorded
+in `334dcb0c` as a planned slice, without implementation.
+
+## 2026-10-21 — E5C Open With refinement
+
+Chris reports that the initial Roam file actions work on the P5, then requested
+a remember-association option and a compact Open With browser. PR #322 is
+merged; #325 targets userland. Thread lifetime and E5D placement stay deferred.
+
+Added application-picker mode: toolbar, location, directory list and a compact
+Open/Cancel/remember footer. Selection is derived from the live row because
+there is no editable filename. Other Open/Save controls are retained in their
+existing modes. Errors and incomplete listings remain visible when needed.
+
+Association persistence honors the chosen `roam.conf` value, validates the
+readable source and merged result, and atomically publishes through the shared
+checked config writer. The first bare-name override preserves lower-ladder
+defaults. Cancellation, unchecked choices and failed launches do not save.
+
+[Evidence](evidence/e05c/open-with/README.md): launch/config/lifecycle tests and
+4,760 dialog checks pass with ASan/UBSan/LSan outside the sandbox (sandbox LSan
+attachment failed with EPERM). Cross-build passes. QEMU verified compact layout,
+keyboard and mouse acceptance, custom-file persistence preserving other rules,
+and ordinary Open using the association after reboot. The QMP standalone
+button-event driver was unreliable; controlled HMP press/release passed.
+Temporary diagnostics were removed before clean-build validation.
+
+Next: independent review and Chris’s P5 acceptance of the refinement in #325.
+
+Publication: refinement `2800bef2` is pushed to PR #325. The PR remains a draft
+on `userland`, awaiting independent review and P5 feedback.
+
+## 2026-10-23 — E5C accepted; E5D placement design
+
+PR #325 merged as `12dc6b64` after a clean review of `20dcf0ec`. Chris reports
+the latest refinement works beautifully on the P5; no binary hash was captured.
+He noticed extensionless executables open the chooser. We inspected the metadata
+path: ext2 stores permissions but the public file flags do not expose executable
+status. Chris deferred file attributes to his own list and deprioritized FAT.
+No executable-detection or file-attribute code was changed.
+
+Chris authorized reusable remembered placement with a simple initialization
+opt-in, Roam and Scribe as consumers, and Fable review for kernel work. Created
+`codex/window-placement` / `.worktrees/window-placement` from current userland.
+The inspection found no move notification and no intent distinction in resize
+events. [E5D revision 1](E05D_WINDOW_PLACEMENT.md) proposes a masked completion
+event using the existing 32-byte event layout, coalesced outside the input ring,
+plus a shared app-owned persistence helper and opt-in window initializer.
+Shared file dialogs retain size-only compatibility through the helper.
+
+The design specifies cancellation, queue/wake fairness, ownership and partial
+initialization failure, component-wise preference preservation across resolution
+changes, checked first publication, same-role publication semantics and the
+required regression matrix. [Fable's review request](E05D_FABLE_REVIEW_REQUEST.md)
+is ready beside it. No implementation or runtime validation is claimed.
+Next: obtain Fable's architectural review and resolve findings before coding.
+
+## 2026-10-23 — E5D review disposition
+
+Fable committed his review as `3b15a4c8`, approving building with rulings.
+Quinn incorporated the snapshot/helper, explicit clamped resize, ownership-table,
+ordinary-dialog and evidence clarifications in design revision 2. The
+[response](E05D_REVIEW_RESPONSE.md) identifies a conflict in the queue ruling:
+universal coalesced-source fairness cannot preserve both strict appearance
+priority and pointer-after-ring-drain. It proposes a cursor for the eligible
+doorbell/placement/ring-loss group and requests Fable's confirmation. Source
+inspection confirms a pointer leave clears hover while an older mouse motion
+can restore it, making the ordering issue behavioral rather than stylistic.
+
+The accepted last-complete-publication policy is unchanged, but its limitation
+now explicitly includes lost edits to different fields after concurrent reads.
+The root debt ledger records the future shared-live-state gate. No executable
+changes or runtime validation are claimed. Next: settle the queue invariant,
+then implement and validate the reviewed contract.
+
+## 2026-10-23 — E5D implemented after Fable's disposition
+
+Fable's `a6ca1f16` confirmed both corrections and approved revision 2. Implemented
+the masked completion event, retained queue slot/service cursor, gesture-ending
+and teardown paths, app-owned configuration helper, checked first publication
+and opt-in UI initializer. Roam and Scribe remember position/content size; shared
+dialogs keep their size-only format and parent-relative position. Scribe and
+the dialogs no longer repeat UI initialization after native creation.
+
+Kernel and full userland cross-builds passed. Leak-enabled ASan/UBSan host runs
+passed: placement/parser/writer/ownership and nine queue mutants; 4,840 dialog
+checks, 2,584 Scribe checks, 1,655 menu checks, existing appearance/input/queue
+regressions and Roam launch/config/lifecycle checks. LSan's sandbox attachment
+EPERM was diagnosed with TracerPid zero; supported outside-sandbox runs retained
+leak detection.
+
+Native QEMU evidence covers both wait APIs, titlebar/chord movement, four resize
+corners, cancellation, teardown with handle reuse, VT transition, clamped values,
+minimum/no-op shrinking and resizing out of maximized state. A scratch mutation
+that published automatic resize geometry failed the startup-fit case; restored
+production code passed. Real Roam/Scribe saved their geometry and survived a
+1024×768 → 800×600 → 1024×768 reboot round trip. Moving clamped Roam on the
+smaller screen preserved its larger preferred size. The scratch guest is stopped.
+
+[Evidence and as-built notes](evidence/e05d/README.md) include binary hashes,
+event traces, screenshots, API/queue rules and accepted publication limits.
+The old resize comment's claim that no geometry query existed was false; it
+now explains repaint/layout notifications and the separate user-placement event.
+Next: independent implementation review and Chris's P5 acceptance, with a
+matching rebuilt kernel and userland. No P5 result is claimed for this slice.
+
+## 2026-10-23 — PR #334 R1: case-insensitive placement settings
+
+Accepted the review finding: replacing `os64_conf_get` with the placement
+callback had made setting-name reads case-sensitive while writes remained
+case-insensitive. Uppercase `SIZE` could be ignored on open and then lose its
+saved width during a height-only edit. Both `size` and `geometry` now use
+`os64_streq_nocase`. Added regression coverage failed before the fix and passed
+afterward, including mixed-case duplicates and rereading before saving.
+
+The placement/queue suite passed with ASan/UBSan/LSan and rejected all nine
+queue mutants. LSan attachment EPERM in the sandbox was resolved by running
+the built tests outside it with leak detection enabled. Full userland build
+passed. No new native or P5 run is claimed for this parser correction.

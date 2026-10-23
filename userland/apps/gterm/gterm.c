@@ -455,6 +455,15 @@ static void paste_step(int32_t master)
 
 int main(int argc, char **argv)
 {
+    // Set the child's working directory before creating workers or seating a
+    // program. Roam passes this as a literal argv value, including spaces.
+    if(argc>1 && os64_streq(argv[1],"--directory")) {
+        if(argc<3 || !argv[2][0] || os64_chdir(argv[2])<0) {
+            os64_hprintf(OS64_STDERR,"gterm: cannot open the requested directory\n");
+            return 1;
+        }
+        argc-=2; argv+=2;
+    }
     gHistoryLimit=gterm_history_load();
 	os64_text_options_t options = {.memory = {NULL, font_allocate, font_release}};
 	os64_font_set_t *initial = NULL;
@@ -480,7 +489,7 @@ int main(int argc, char **argv)
 	uint32_t content_h=WANT_ROWS*(uint32_t)font.row_height_px;
 	int32_t initial_x=140,initial_y=120;
 	// The WM fits the preferred grid and its current decoration together.
-	// `gterm [program args...]` seats that program instead of husk — the
+	// `gterm [--directory PATH] [program args...]` seats that program instead of husk — the
 	// root menu's way of running a console program in a window (`item
 	// "Top" /bin/gterm /bin/top`). Full path: there is no shell in that
 	// chain to search PATH. The window wears the program's name.

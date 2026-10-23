@@ -409,6 +409,45 @@ static uint8_t s_drag_buttons;
 static window_t *s_drag_window = NULL;
 static int32_t s_drag_dx, s_drag_dy;   // grab offset: cursor minus frame origin
 
+// The start snapshot makes an unchanged gesture decidable; grab offsets do
+// not record the original frame or content size. kGuiLock owns gesture state.
+static struct {
+	int32_t x, y;
+	uint32_t width, height;
+	bool maximized;
+} s_placement_start;
+
+static void placement_begin_locked(const window_t *w)
+{
+	s_placement_start.x = w->frame.x;
+	s_placement_start.y = w->frame.y;
+	s_placement_start.width = w->content.width;
+	s_placement_start.height = w->content.height;
+	s_placement_start.maximized = (w->flags & GUI_WINDOW_MAXIMIZED) != 0;
+}
+
+// Automatic geometry changes do not reach this helper: its callers complete
+// user gestures, before any cancellation-triggered automatic adjustment.
+// Moving an already fitted window reports positions, preserving preferred size.
+static void placement_complete_locked(window_t *w, bool resized)
+{
+	if ((w->flags & GUI_WINDOW_DESKTOP) || w->popup_owner_id) return;
+	uint32_t changed = 0;
+	if (w->frame.x != s_placement_start.x) changed |= OS64_GUI_PLACEMENT_X;
+	if (w->frame.y != s_placement_start.y) changed |= OS64_GUI_PLACEMENT_Y;
+	if (resized && w->content.width != s_placement_start.width)
+		changed |= OS64_GUI_PLACEMENT_WIDTH;
+	if (resized && w->content.height != s_placement_start.height)
+		changed |= OS64_GUI_PLACEMENT_HEIGHT;
+	if (!changed) return;
+	if (s_placement_start.maximized) changed = OS64_GUI_PLACEMENT_ALL;
+	input_event_t ev = { .type = INPUT_EVENT_WINDOW_PLACEMENT,
+		.placement = { .x = w->frame.x, .y = w->frame.y,
+			.width = w->content.width, .height = w->content.height,
+			.changed = changed }, .tick = kTicksSinceStart };
+	wm_deliver_event(w, &ev);
+}
+
 // An Alt+F4 escalation decided by the router (under kGuiLock) and carried
 // out by the frame loop after the lock drops. The owner's task id, 0 = none.
 static uint64_t s_terminate_owner = 0;
@@ -999,8 +1038,10 @@ void gui_grab_release(const struct window *w)
 	gui_cancel_decoration(w);
 	// Called from wm_destroy under kGuiLock while the window is still linked
 	// and alive. Clear its control state before releasing pointer references.
-	if (s_drag_window == (const window_t *)w)
+	if (s_drag_window == (const window_t *)w) {
+		s_wm_buttons |= s_drag_buttons;
 		s_drag_window = NULL;
+	}
 	if (s_pointer_window == (const window_t *)w)
 		s_pointer_window = NULL;   // a window that dies mid-drag lets go
 	if (s_hover_window == (const window_t *)w)
@@ -1022,9 +1063,18 @@ void gui_cancel_resize(const struct window *w)
 void gui_decoration_changed(void)
 {
 	gui_cancel_decoration(NULL);
-	if (s_drag_window) { s_wm_buttons |= s_drag_buttons; s_drag_window=NULL; }
+	if (s_drag_window) {
+		placement_complete_locked(s_drag_window, false);
+		s_wm_buttons |= s_drag_buttons;
+		s_drag_window = NULL;
+	}
 	if (s_band_window) gui_cancel_resize(s_band_window);
 	s_titlebar_click_window=0;
+}
+
+void gui_geometry_changing(const struct window *w)
+{
+	if (s_drag_window == w || s_band_window == w) gui_decoration_changed();
 }
 
 // Deliver a mouse event to a window, in ITS coordinates. `require_inside`
@@ -1070,6 +1120,8 @@ static void chord_report(const window_t *w, uint32_t bit, bool before,
 
 static void route_event_locked(const input_event_t *ev)
 {
+	// Finalize a live move before a text-VT event can consume its release.
+	if (!gui_owns_glass() || s_glass_regained) gui_decoration_changed();
 	if (s_drag_window) {
 		if (ev->type == INPUT_EVENT_MOUSE_BUTTON_DOWN) s_drag_buttons |= (uint8_t)(1u << ev->mouse.button);
 		if (ev->type == INPUT_EVENT_MOUSE_BUTTON_UP) s_drag_buttons &= (uint8_t)~(1u << ev->mouse.button);
@@ -1221,11 +1273,13 @@ static void route_event_locked(const input_event_t *ev)
 		} else if (wm_chord_held(ev)) {
 			if (ev->mouse.button == INPUT_MOUSE_BUTTON_LEFT) {
 				s_drag_window = w;
-			s_drag_buttons = ev->mouse.buttons;
+				placement_begin_locked(w);
+				s_drag_buttons = ev->mouse.buttons;
 				s_drag_dx = ev->mouse.x - w->frame.x;
 				s_drag_dy = ev->mouse.y - w->frame.y;
 			} else if (ev->mouse.button == INPUT_MOUSE_BUTTON_RIGHT) {
 				s_band_window = w;
+				placement_begin_locked(w);
 				s_wm_buttons = ev->mouse.buttons;
 				s_band_origin = w->frame;
 				s_band_rect   = w->frame;
@@ -1266,6 +1320,7 @@ static void route_event_locked(const input_event_t *ev)
 			// Grab for dragging; remember where in the frame we grabbed so
 			// the window doesn't jump under the cursor.
 			s_drag_window = w;
+			placement_begin_locked(w);
 			s_drag_buttons = ev->mouse.buttons;
 			s_drag_dx = ev->mouse.x - w->frame.x;
 			s_drag_dy = ev->mouse.y - w->frame.y;
@@ -1292,11 +1347,14 @@ static void route_event_locked(const input_event_t *ev)
 			rect_t final = s_band_rect;
 			band_damage_locked(s_band_rect);   // erase the outline
 			s_band_window = NULL;
-			w->flags &= ~GUI_WINDOW_MAXIMIZED;   // a hand-sized window is not "the maximized one"
-			wm_resize(w, final);
+			uint32_t maximized = w->flags & GUI_WINDOW_MAXIMIZED;
+			w->flags &= ~GUI_WINDOW_MAXIMIZED;
+			if (wm_resize(w, final)) placement_complete_locked(w, true);
+			else w->flags |= maximized;
 			break;
 		}
 		if (s_drag_window && ev->mouse.button == INPUT_MOUSE_BUTTON_LEFT) {
+			placement_complete_locked(s_drag_window, false);
 			s_drag_window = NULL;
 			break;
 		}
@@ -1554,6 +1612,8 @@ bool guicomp_thread(bool daemon)
 
 		// -------- Drain input, route events, recomposite (one lock hold) ---
 		uint64_t irqflags = gui_lock(GUI_LOCK_COMPOSITE);
+		// A VT transition can occur without another pointer event.
+		if (!gui_owns_glass() || s_glass_regained) gui_decoration_changed();
 
 		input_event_t ev;
 		while (input_pop(&ev))

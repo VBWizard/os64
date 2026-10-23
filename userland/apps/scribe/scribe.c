@@ -19,6 +19,7 @@
 #include "os64/gui.h"
 #include "os64/draw.h"
 #include "os64/ui.h"
+#include "os64/ui_window.h"
 #include "os64/ui_menu.h"
 #include "os64/ui_file_dialog.h"
 #include "os64/proc.h"
@@ -1128,19 +1129,18 @@ int scribe_main(int argc, char **argv, const scribe_hooks_t *hooks)
     os64_snprintf(title, sizeof(title), "scribe%s%s",
                   base ? " - " : "", base ? base : "");
 
-    g.win = os64_gui_window_create(title, 140, 90, 640, 440, 0);
+    os64_ui_window_options_t options = {.title=title,.x=140,.y=90,
+        .content_width=640,.content_height=440,
+        .remember={"scribe-window.conf",OS64_WINDOW_REMEMBER_POSITION_AND_SIZE}};
+    os64_ui_status_code_t open_result=os64_ui_window_open(&g.ui,&g.ctx,&g.win,&options);
     if (g.win == OS64_GUI_ERR_NOT_RUNNING) {
         os64_printf("scribe: no GUI on this boot\n");
         return 0;
     }
-    if (g.win <= 0) {
-        os64_hprintf(OS64_STDERR, "scribe: window create failed (%ld)\n",
+    if (open_result != OS64_UI_OK) {
+        os64_hprintf(OS64_STDERR, "scribe: window initialization failed (%ld)\n",
                      (long)g.win);
-        return 1;
-    }
-    if (os64_draw_ctx_init(&g.ctx, g.win) != 0) {
-        os64_hprintf(OS64_STDERR, "scribe: no surface\n");
-        os64_gui_window_destroy(g.win);
+        if (g.win > 0) (void)os64_gui_window_destroy(g.win);
         return 1;
     }
 
@@ -1199,7 +1199,6 @@ static const char *scribe_build(void)
     g.textbuf = sbuf_textbuf_template;
     g.textbuf.user = &g.buf;
 
-    os64_ui_init(&g.ui, &g.ctx);
     g.ui.on_resize = on_resize;
     g.ui.on_close  = on_close_request;   // Alt+F4 asks; scribe answers
 

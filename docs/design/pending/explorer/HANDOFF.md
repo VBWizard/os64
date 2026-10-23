@@ -1,6 +1,6 @@
 # Roam — latest handoff
 
-Updated: 2026-10-20. Design owner: Quinn.
+Updated: 2026-10-23. Design owner: Quinn.
 
 E1A is accepted. PR #254 merged into `userland` as `c6cc6e3c`; gallery relocation
 `2bc9f2f4` followed. Chris confirmed the P5 test complete. The diagnostic launches
@@ -10,14 +10,38 @@ user-reported, without a captured installed-binary hash.
 
 ## Resume point
 
+Active slice: [E5D reusable remembered window placement](E05D_WINDOW_PLACEMENT.md).
+Chris authorized implementation and named Roam and Scribe as initial consumers,
+with initialization-time opt-in and reuse of the same helper for size-only file
+dialogs. [Fable's disposition](E05D_FABLE_DISPOSITION.md) confirms revision 2,
+including the narrower queue invariant and publication limitation. Implementation
+covers the completion event, queue rotation, shared persistence/initializer and
+all three consumers. [Host and native validation passed](evidence/e05d/README.md);
+no P5 acceptance or independent implementation review is claimed.
+
+Owner: Quinn, branch `codex/window-placement`, worktree `.worktrees/window-placement`,
+based on `12dc6b64`. Implementation `703523de` is published in draft
+[PR #334](https://github.com/VBWizard/os64/pull/334), targeting `userland`.
+Next: independent implementation review and Chris's P5 test.
+Architecture is approved; there is no outstanding design gate. Install a matching
+rebuilt kernel and userland because the toolkit's public window storage changed.
+
+E5C is accepted: PR #325 merged into userland as `12dc6b64`; review of final head
+`20dcf0ec` had no findings. Chris reports the latest Open With refinement works
+beautifully on the P5; no installed binary hash was captured. PR #322 is also
+merged with its review conversations resolved. The extensionless executable
+case is deferred with file attributes on Chris's separate to-do list. Worker
+lifetime remains deferred.
+
+
 **E5's Scribe consumer is accepted.** [PR #319](https://github.com/VBWizard/os64/pull/319)
 merged as `ddaad166`; Chris reported a clean review and successful P5 use,
 including resizing. No installed binary hash was captured.
 
-Active follow-up: [E5A compact footer and shared size memory](E05A_DIALOG_POLISH.md),
+Prerequisite follow-up: [E5A compact footer and shared size memory](E05A_DIALOG_POLISH.md),
 owned by Quinn on `codex/file-dialog-polish`, worktree `.worktrees/file-dialog-polish`,
 based on `5fb5f7a6`. Implementation `5efff386` is in
-[draft PR #322](https://github.com/VBWizard/os64/pull/322), with host/native checks
+[PR #322](https://github.com/VBWizard/os64/pull/322), with host/native checks
 complete. Chris reported P5 acceptance at 2560 × 1440 with his Appearance
 Workshop appearance and Frame Studio composition: size sharing survived
 reopening and reboot; navigation and New Folder passed. No installed binary
@@ -25,7 +49,7 @@ hash was captured. Review R1 fixes restored sizes exceeding the native creation 
 display change; [details and evidence](E05A_DIALOG_POLISH.md#review-r1--saved-size-after-a-display-change).
 Chris approved R1 after a P5 2560×1440 → 1024×768 → 2560×1440 reboot round trip:
 the dialog fitted the smaller display and restored its original large size.
-Review and merge remain pending. His X/Cancel/Escape close-delay report is
+R1 was resolved and fresh review requested on October 21; review and merge remain pending. His X/Cancel/Escape close-delay report is
 [diagnosed separately in E5B](E05B_CLOSE_LATENCY.md): two idle workers share a
 single-waiter pipe and one can wait for the one-second fallback wake.
 No production latency fix has been implemented. Parent-owned
@@ -63,7 +87,7 @@ was captured. [E2 evidence](evidence/e02/README.md) preserves that distinction.
 E3A/E3B are merged through [PR #264](https://github.com/VBWizard/os64/pull/264).
 [Evidence](evidence/e03/README.md) records host, native, packaging and delivery
 scope. The E3 design and implementation worktrees remain separate historical
-checkpoints; active dialog work belongs in `.worktrees/file-dialog-polish`.
+checkpoints; dialog polish remains in `.worktrees/file-dialog-polish`.
 
 | Work | State | Next action |
 | --- | --- | --- |
@@ -118,4 +142,5 @@ contracts before destructive transfers.
 R2/R3 fixes and [evidence](evidence/e05a/review-r2/README.md) address unsafe early
 font adoption and lost manual resizes from maximized state. Host sanitizers,
 leak checks and cross-build passed. Independent re-review and P5 acceptance of
-these new fixes remain pending. Bring this parent forward into the E5C branch.
+these new fixes remain pending. Parent fix `eeee450d` is integrated into E5C;
+its matching dialog consumers are rebuilt with the shared-header update.

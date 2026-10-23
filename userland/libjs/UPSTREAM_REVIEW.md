@@ -31,8 +31,14 @@ bytecode that they read, so a parse whose emit ran out of memory was
 transformed as if whole and read one instruction as another (a garbage
 atom; an ASan SEGV in yonder's allocation sweeps). The check sits at
 `js_create_function`'s entry, which every definition passes through.
-Upstream still lacks checks on the parser's other allocation failures
-(DEBTS.md lists them).
+
+Patch 0011a throws out of memory where upstream ignored a failed
+allocation and went on: a child definition with no constant-pool slot
+(upstream asserted), a closure-variable add in `resolve_scope_var` (upstream
+used the -1 as an index, emitted nothing, or let `resolve_variables` read
+it as a position), and `get_lvalue` reading a failed bytecode buffer as a
+SyntaxError. Upstream still lacks checks on the parser's other allocation
+failures (DEBTS.md lists them).
 
 Selected upstream test sources are retained separately in
 `tools/js_acceptance/upstream`, with archive/file hashes and the original

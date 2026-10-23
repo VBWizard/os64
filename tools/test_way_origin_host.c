@@ -395,6 +395,12 @@ static void mime(void)
     }
     char out[WAY_MIME_SERIALIZED_MAX];
     expect("mime: not a MIME type serializes to nothing", !way_mime_serialize("text", 4, out, sizeof(out)), NULL);
+    const char *quoted = "text/plain;note=\"a;charset=x\";Charset=latin1;charset=y";
+    expect("mime: the charset parameter, not a quoted value's text, is replaced",
+           way_mime_serialize_charset(quoted, strlen(quoted), "UTF-8", out, sizeof(out)) &&
+           strcmp(out, "text/plain;note=\"a;charset=x\";charset=UTF-8") == 0, out);
+    expect("mime: a type with no charset keeps none",
+           way_mime_serialize_charset("a/b;x=1", 7, "UTF-8", out, sizeof(out)) && strcmp(out, "a/b;x=1") == 0, out);
     expect("mime: too small an output is refused", !way_mime_serialize("text/plain;a=b", 14, tiny, sizeof(tiny)), NULL);
 }
 

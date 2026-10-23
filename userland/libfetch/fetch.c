@@ -30,6 +30,7 @@ struct os64_fetch {
     os64_fetch_options_t opt;
     char user_agent[OS64_FETCH_AGENT_MAX];
     char accept[OS64_FETCH_ACCEPT_MAX];
+    bool accept_given;                          // `accept` was passed, empty or not
     char accept_get[OS64_FETCH_ACCEPT_MAX];     // empty: `accept` on a GET too
     char extra[OS64_FETCH_EXTRA_MAX];
     char content_type[OS64_FETCH_CONTENT_TYPE_MAX];
@@ -569,11 +570,11 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
         }
         if (f->opt.headers_for && cancelled(f))
             return OS64_FETCH_INTERRUPTED;
-        const char *accept = f->method == OS64_FETCH_METHOD_GET && f->accept_get[0] ? f->accept_get
-                                                                                     : f->accept;
+        bool get_accept = f->method == OS64_FETCH_METHOD_GET && f->accept_get[0];
+        const char *accept = get_accept ? f->accept_get : f->accept;
         http_request_extras_t extras = {
             .user_agent    = f->user_agent[0] ? f->user_agent : NULL,
-            .accept        = accept[0] ? accept : NULL,
+            .accept        = get_accept || f->accept_given ? accept : NULL,
             .extra_headers = extraForHop[0] ? extraForHop : NULL,
             .method = f->method == OS64_FETCH_METHOD_POST ? HTTP_METHOD_POST : HTTP_METHOD_GET,
             .body_len = sends_body(f) ? f->opt.body_len : 0,
@@ -1058,6 +1059,7 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
 
     // The caller's strings, copied now so they need not outlive the call;
     // one that does not fit is a header this library will not send.
+    f->accept_given = opt != NULL && opt->accept != NULL;
     if ((opt && opt->user_agent &&
          os64_strcopy(f->user_agent, sizeof(f->user_agent), opt->user_agent) >= sizeof(f->user_agent)) ||
         (opt && opt->accept &&
@@ -1079,7 +1081,7 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
     // composes, and the refusal must not cost a connection to find out.
     http_request_extras_t extras = {
         .user_agent    = f->user_agent[0] ? f->user_agent : NULL,
-        .accept        = f->accept[0] ? f->accept : NULL,
+        .accept        = f->accept_given ? f->accept : NULL,
         .extra_headers = f->extra[0] ? f->extra : NULL,
         .method = f->method == OS64_FETCH_METHOD_POST ? HTTP_METHOD_POST : HTTP_METHOD_GET,
         .body_len = f->opt.body_len,

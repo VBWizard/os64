@@ -650,10 +650,11 @@ JSValue d_uint8_array(JSContext *ctx, const uint8_t *bytes, size_t length)
     return array;
 }
 
-JSValue d_text_decode(JSContext *ctx, const char *label, const uint8_t *bytes, size_t length)
+static JSValue text_decode(JSContext *ctx, const char *label, const uint8_t *bytes, size_t length, bool keep_bom)
 {
     DDecoder d = {0};
     d.encoding = DEC_UTF8;
+    d.ignore_bom = keep_bom;
     const char *name = label != NULL ? os64_html_encoding_for_label(label, os64_strlen(label)) : NULL;
     for (int i = 0; name != NULL && i < 4; i++)
         if (os64_streq(name, kEncodingNames[i])) d.encoding = (DecoderEncoding)i;
@@ -677,7 +678,17 @@ JSValue d_text_decode(JSContext *ctx, const char *label, const uint8_t *bytes, s
     return text;
 }
 
+JSValue d_text_decode(JSContext *ctx, const char *label, const uint8_t *bytes, size_t length)
+{
+    return text_decode(ctx, label, bytes, length, false);
+}
+
 JSValue d_utf8_decode(JSContext *ctx, const uint8_t *bytes, size_t length)
 {
-    return d_text_decode(ctx, NULL, bytes, length);
+    return text_decode(ctx, NULL, bytes, length, false);
+}
+
+JSValue d_utf8_decode_without_bom(JSContext *ctx, const uint8_t *bytes, size_t length)
+{
+    return text_decode(ctx, NULL, bytes, length, true);
 }

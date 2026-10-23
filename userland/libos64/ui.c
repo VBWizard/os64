@@ -96,6 +96,8 @@ static void clean(os64_ui_t *ui)
 
 void os64_ui_init(os64_ui_t *ui, os64_draw_ctx_t *ctx)
 {
+	ui->placement = (os64_window_placement_t){0};
+	ui->placement_event = NULL;
 	ui->ctx = ctx;
 	os64_ui_theme_defaults(&ui->theme);
 	ui->appearance_generation = 0;
@@ -312,6 +314,8 @@ static void update_hover(os64_ui_t *ui, int32_t x, int32_t y)
 
 bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev)
 {
+	if (ev->type == OS64_GUI_EVENT_WINDOW_PLACEMENT && ui->placement_event)
+		return ui->placement_event(ui, ev);
 	if (ev->type == OS64_GUI_EVENT_DOORBELL) {
 		if (!ui->on_doorbell) return false;
 		ui->on_doorbell(ui, ev);

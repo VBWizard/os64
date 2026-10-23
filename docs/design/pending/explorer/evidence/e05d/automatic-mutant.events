@@ -1,0 +1,14 @@
+CREATE 1 2
+WAIT any
+EVENT 1 17 mask=12 x=0 y=0 w=550 h=320
+WAIT any
+EVENT 1 8
+WAIT any
+EVENT 1 9
+WAIT any
+EVENT 1 6
+WAIT any
+EVENT 1 10
+WAIT any
+EVENT 1 11
+WAIT any

@@ -302,6 +302,14 @@ static void dom_fetch_object_cases(void)
         "assert(order.join()==='part,endings',order.join());"
         "assert(new File(g(),'n',{endings:'native'}).size===7);",
         "Blob: parts converted once, endings applied to them");
+    /* slice()'s offsets are [Clamp] long long, converted before the sign
+     * is judged: -0.5 is 0 (the start), a half rounds to even, NaN is 0. */
+    dom_script(&f, FETCH_ASSERT
+        "var b=new Blob(['abcd']);"
+        "assert(b.slice(-0.5).size===4&&b.slice(0,-0.5).size===0,'-0.5 '+b.slice(-0.5).size+' '+b.slice(0,-0.5).size);"
+        "assert(b.slice(-1.5).size===2&&b.slice(1.5).size===2&&b.slice(2.5).size===2&&b.slice(-0.6).size===1);"
+        "assert(b.slice(NaN).size===4&&b.slice(-Infinity).size===4&&b.slice(0,Infinity).size===4);",
+        "Blob: slice's offsets are converted, then their sign judged");
     dom_script(&f, FETCH_ASSERT
         "var q=new Request('a?b#c');assert(q.url==='http://example.test/dir/a?b#c'&&q.method==='GET');"
         "assert(q.mode==='cors'&&q.credentials==='same-origin'&&q.redirect==='follow'&&q.cache==='default');"
@@ -332,6 +340,18 @@ static void dom_fetch_object_cases(void)
         "var e=new Request(o,{});assert(e.referrer==='http://example.test/from'&&e.referrerPolicy==='origin');"
         "var t=new Request(o,{referrerPolicy:'no-referrer'});assert(t.referrer==='about:client'&&t.referrerPolicy==='no-referrer');",
         "request: a Request's referrer and policy, kept or started over");
+    /* A Request made from a Request takes its body: the input's is
+     * disturbed and its stream locked, whether the page took the stream
+     * before (it cannot read it after) or asks for it after. */
+    dom_script(&f, FETCH_ASSERT
+        "var o=new Request('/x',{method:'POST',body:'abc'});var s=o.body;var n=new Request(o);"
+        "assert(o.bodyUsed&&s.locked&&!n.bodyUsed,'taken');throws('TypeError',()=>s.getReader());"
+        "var o2=new Request('/x',{method:'POST',body:'abc'});new Request(o2);"
+        "assert(o2.body.locked);throws('TypeError',()=>o2.body.getReader());"
+        "throws('TypeError',()=>new Request(o2));"
+        "var o3=new Request('/x',{method:'POST',body:'abc'});new Request(o3,{body:'other'});"
+        "assert(!o3.bodyUsed&&!o3.body.locked,'an init body leaves the input alone');",
+        "request: a Request from a Request takes its body");
     /* WebIDL reads a dictionary's members in name order, each once. */
     dom_script(&f, FETCH_ASSERT
         "var order=[];var init={};"
@@ -413,6 +433,14 @@ static void dom_fetch_object_cases(void)
         "stream: the one chunk read");
     dom_script(&f, FETCH_ASSERT "assert(slog.join()==='chunk:3,closed',slog.join());",
                "stream: closed once its only chunk is taken");
+    /* A body with no bytes is a stream closed at its creation: its reader's
+     * closed settles with no read, and so does an empty Blob's stream. */
+    dom_script(&f,
+        "globalThis.elog=[];new Response('').body.getReader().closed.then(()=>elog.push('response'));"
+        "new Blob([]).stream().getReader().closed.then(()=>elog.push('blob'));",
+        "stream: empty bodies");
+    dom_script(&f, FETCH_ASSERT "assert(elog.join()==='response,blob',elog.join());",
+               "stream: an empty body's stream is closed at its creation");
     /* releaseLock(): a pending `closed` rejects with a TypeError. */
     dom_script(&f,
         "globalThis.rlog=[];var rd6=new Response('abc').body.getReader();rd6.closed.catch(e=>rlog.push('pending:'+e.name));"
@@ -447,6 +475,31 @@ static void dom_fetch_object_cases(void)
         ".catch(x=>mlog.push('refused:'+x.message));",
         "formData: a part's parameters");
     dom_script(&f, FETCH_ASSERT "assert(mlog.join()==='true:a.txt:true::N',mlog.join());", "formData: parameters read by one parse");
+    /* The urlencoded parser decodes UTF-8 WITHOUT taking a BOM off: a
+     * leading U+FEFF, written raw or percent-encoded, stays in the name and
+     * the value, as URLSearchParams' own parser keeps it. */
+    dom_script(&f,
+        "globalThis.blog=[];var ct={headers:{'content-type':'application/x-www-form-urlencoded'}};"
+        "new Response('\\ufeffkey=\\ufeffvalue',ct).formData().then(g=>blog.push('raw:'+g.get('\\ufeffkey')));"
+        "new Response('%EF%BB%BFk=%EF%BB%BFv',ct).formData().then(g=>blog.push('pct:'+g.get('\\ufeffk')));"
+        "var sp=new URLSearchParams('%EF%BB%BFk=%EF%BB%BFv');blog.push('params:'+sp.get('\\ufeffk'));"
+        "new Response(sp).formData().then(g=>blog.push('trip:'+g.get('\\ufeffk')));",
+        "formData: a BOM in a urlencoded field");
+    dom_script(&f, FETCH_ASSERT
+        "assert(blog.join()==='params:\\ufeffv,raw:\\ufeffvalue,pct:\\ufeffv,trip:\\ufeffv',escape(blog.join()));",
+        "formData: a urlencoded field keeps its BOM");
+    /* A quoted value is passed over whole when another parameter is looked
+     * for: a name holding "; filename=" names no filename, whether written
+     * by hand (an escaped quote inside) or by this FormData's encoder. */
+    dom_script(&f,
+        "globalThis.qlog=[];var q='--b\\r\\nContent-Disposition: form-data; name=\"a\\\\\"; filename=\\\\\"x\"\\r\\n\\r\\nA\\r\\n--b--\\r\\n';"
+        "new Response(q,{headers:{'content-type':'multipart/form-data; boundary=b'}}).formData().then(g=>{"
+        "var k=[...g.keys()][0];qlog.push(k+'|'+(g.get(k) instanceof File)+'|'+g.get(k))}).catch(x=>qlog.push('refused:'+x.message));"
+        "var fd=new FormData();fd.append('field; filename=not-a-file','hello');"
+        "new Response(fd).formData().then(g=>{var v=g.get('field; filename=not-a-file');qlog.push((v instanceof File)+'|'+v)});",
+        "formData: a quoted value holding a separator");
+    dom_script(&f, FETCH_ASSERT "assert(qlog.join()==='a\"; filename=\"x|false|A,false|hello',qlog.join());",
+               "formData: a quoted value is passed over whole");
     /* A short header is a header: "Content-Type: x/y" types its File. */
     dom_script(&f,
         "globalThis.mlog=[];var m='--b\\r\\nContent-Disposition: form-data; name=\"f\"; filename=\"f\"\\r\\n"
@@ -829,6 +882,13 @@ static void dom_xhr_cases(void)
         {"new URLSearchParams('a=1')", "Content-Type: application/x-www-form-urlencoded;charset=UTF-8\r\n"},
         {"new Blob(['a=1'])", "Content-Type: application/x-www-form-urlencoded;charset=windows-1252\r\n"},
     };
+    /* The charset parameter is found by libway's walk: a ';' inside a quoted
+     * value is the value's, and the record is serialized. */
+    dom_script(&f, "var x=new XMLHttpRequest();x.open('POST','/cq');"
+               "x.setRequestHeader('Content-Type','text/plain;note=\"a;charset=latin1;x\";charset=windows-1252');x.send('t');",
+               "xhr: a quoted ';' before the charset");
+    check(strstr(net.seen[net.count - 1].headers, "Content-Type: text/plain;note=\"a;charset=latin1;x\";charset=UTF-8\r\n") != NULL,
+          "xhr: the charset rewritten is the parameter, not a quoted value's text");
     for (size_t i = 0; i < sizeof(kCharsets) / sizeof(kCharsets[0]); i++) {
         char script[384];
         snprintf(script, sizeof(script),
@@ -953,6 +1013,31 @@ static void dom_xhr_cases(void)
                                               "caf\xe9");
     net_answer(&f, &net, net.count - 1, &latin);
     dom_script(&f, FETCH_ASSERT "assert(xl.responseText==='caf\\u00e9',escape(xl.responseText));", "xhr: the override's charset");
+    /* The final encoding is the response's charset unless the override
+     * names one (XHR § "get a final encoding"): an override with no
+     * charset leaves the answer's windows-1252 in force. */
+    dom_script(&f, "var x=new XMLHttpRequest();x.open('GET','/m');x.overrideMimeType('text/plain');"
+               "x.send();globalThis.xm=x;", "xhr: an override without a charset");
+    os64_dom_response_t latin2 = net_answer_of(200, "http://example.test/m",
+                                               "Content-Type: text/plain;charset=windows-1252\r\n", "caf\xe9");
+    net_answer(&f, &net, net.count - 1, &latin2);
+    dom_script(&f, FETCH_ASSERT "assert(xm.responseText==='caf\\u00e9',escape(xm.responseText));",
+               "xhr: the response's charset stands under an override that names none");
+    /* A blob response's type is the final MIME type serialized whole, the
+     * response's or the override's, every parameter kept. */
+    dom_script(&f, "var x=new XMLHttpRequest();x.open('GET','/p');x.responseType='blob';x.send();globalThis.xp=x;"
+               "var y=new XMLHttpRequest();y.open('GET','/q2');y.responseType='blob';"
+               "y.overrideMimeType('Application/LD+JSON; Profile=\"p q\"');y.send();globalThis.yp=y;",
+               "xhr: blob types");
+    os64_dom_response_t ld = net_answer_of(200, "http://example.test/p",
+                                           "Content-Type: application/ld+json;profile=\"urn:x:a b\";charset=utf-8\r\n", "{}");
+    os64_dom_response_t ld2 = net_answer_of(200, "http://example.test/q2", "Content-Type: text/plain\r\n", "{}");
+    net_answer(&f, &net, net.count - 2, &ld);
+    net_answer(&f, &net, net.count - 1, &ld2);
+    dom_script(&f, FETCH_ASSERT
+        "assert(xp.response.type==='application/ld+json;profile=\"urn:x:a b\";charset=utf-8',xp.response.type);"
+        "assert(yp.response.type==='application/ld+json;profile=\"p q\"',yp.response.type);",
+        "xhr: a blob's type keeps every parameter");
 
     /* The answer's type is "extract a MIME type"'s: a comma inside a
      * quoted parameter does not split it, so the charset stands. */

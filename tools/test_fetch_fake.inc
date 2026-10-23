@@ -50,6 +50,7 @@ typedef struct {
     char extra[9000];           /* extra_headers */
     char body_headers[1024];
     char accept[512];
+    bool accept_given;          /* opt.accept was passed, "" included (sent empty) */
     bool identity;
     char body[256];
     size_t body_len;
@@ -123,6 +124,7 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt) 
         snprintf(q->extra,sizeof(q->extra),"%s",opt->extra_headers?opt->extra_headers:"");
         snprintf(q->body_headers,sizeof(q->body_headers),"%s",opt->body_headers?opt->body_headers:"");
         snprintf(q->accept,sizeof(q->accept),"%s",opt->accept?opt->accept:"");
+        q->accept_given=opt->accept!=NULL;
         q->identity=opt->identity;
         q->body_len=opt->body_len;
         if(opt->body) memcpy(q->body,opt->body,opt->body_len<sizeof(q->body)?opt->body_len:sizeof(q->body)-1);

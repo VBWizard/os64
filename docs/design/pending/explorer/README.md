@@ -6,14 +6,20 @@ The repository records are the handoff; conversation memory is not required.
 
 ## Current position
 
-Updated: 2026-10-20.
+Updated: 2026-10-23.
 
-Active slice: [E5A — compact footer and shared size memory](E05A_DIALOG_POLISH.md).
+Active slice: [E5D — remembered window placement](E05D_WINDOW_PLACEMENT.md),
+design revision 2 is [confirmed by Fable](E05D_FABLE_DISPOSITION.md).
+Implementation is ready for independent review; [host/native validation passed](evidence/e05d/README.md).
+Roam and Scribe are initial consumers; file dialogs share the size-only helper.
+E5C is accepted: PR #325 merged, final review clean and latest P5 test passed.
+E5A dialog polish is merged in PR #322.
+The worker-lifetime follow-up is deferred at Chris's request.
 The Scribe consumer is accepted: PR #319 merged as `ddaad166`, with a clean
 review and successful P5 use reported by Chris. E4 is merged through PR #267
 as `a3dd4b65`. Yonder integration remains separate.
 Chris settled the association-storage requirement: Roam configuration must
-select the associations-file path. Association implementation is separate.
+select the associations-file path. E5C implements that requirement.
 
 - Application name: **Roam**, confirmed by Chris (D007).
 - Surrounding panes and bars, including the menu, must be independently
@@ -50,6 +56,10 @@ select the associations-file path. Association implementation is separate.
 - D016 settles E2's visual family and installable sets. E6 still needs its
   standalone channel design and Fable review.
 
+Active design: [E5D remembered window position and size](E05D_WINDOW_PLACEMENT.md),
+with initialization opt-in for Roam, Scribe and other applications. Its kernel
+event contract has [Fable's final disposition](E05D_FABLE_DISPOSITION.md).
+
 ## Read in this order
 
 1. [Latest handoff](HANDOFF.md): where to resume, concrete next action, blockers.
@@ -75,7 +85,8 @@ Create slice records when work begins, rather than maintaining 15 empty designs.
 | E2 | Icon vocabulary | Merged; P5 gallery visually accepted before final review fix | Quinn | [E2 contract](E02_ICONS.md), PR #261 `f39b0ae0` | [Host, packaging and QEMU evidence](evidence/e02/README.md) |
 | E3 | Data view and selection | Merged PR #264 `5a521b63`; P5 evidence separate | Quinn | [Contract](E03_DATA_VIEW.md), [implementation packet](E03_HANDOFF.md); [PR #264](https://github.com/VBWizard/os64/pull/264), original native source `8b5d13a7`; clock diagnostic follow-up recorded | [Evidence and transition map](evidence/e03/README.md) |
 | E4 | Directory browser | Merged PR #267; P5 evidence separate | Quinn (design/integration), Sol (model/UI) | [Contract](E04_ROAM.md), [handoff](E04_HANDOFF.md), [PR #267](https://github.com/VBWizard/os64/pull/267), `243663dc` | [Host and native evidence](evidence/e04/README.md); no P5 claim |
-| E5 | Open/Save picker and launch reuse | Scribe accepted, PR #319 merged; E5A follow-up active; associations separate | Quinn | [Scribe record](E05_SCRIBE.md), [PR #319](https://github.com/VBWizard/os64/pull/319), `29252438` | [Layout/size follow-up](E05A_DIALOG_POLISH.md) |
+| E5 | Open/Save picker and launch reuse | Scribe, E5A and E5C accepted; PRs #319/#322/#325 merged | Quinn | [Scribe record](E05_SCRIBE.md), [PR #319](https://github.com/VBWizard/os64/pull/319), `29252438` | [Layout/size follow-up](E05A_DIALOG_POLISH.md), [file actions](E05C_ROAM_LAUNCH.md), [PR #325](https://github.com/VBWizard/os64/pull/325), `9f31fb0f` |
+| E5D | Reusable window placement | Ready for implementation review and P5 test | Quinn | [Design](E05D_WINDOW_PLACEMENT.md), [disposition](E05D_FABLE_DISPOSITION.md) | [Host/native evidence](evidence/e05d/README.md) |
 | E6 | Local channel foundation | Planned | Unassigned | — | None |
 | E7 | Safe operation engine | Planned | Unassigned | — | None |
 | E8 | Transfer service | Planned | Unassigned | — | None |
