@@ -343,8 +343,12 @@ compile is reported once and stays absent until the attribute changes;
 reading the property answers null. A handler that returns `false` cancels.
 The body's window-reflecting handlers (`load`, `focus`, `blur`, and with the
 switch on `scroll`, `resize`, `popstate`, `hashchange`, `online`, `offline`
-and `languagechange`) are window's, from `<body onload>` or
-`document.body.onload` alike.
+and `languagechange`) are window's. For the ones every element has a
+property for (`load`, `focus`, `blur`, `scroll`, `resize`) that is so from
+`<body onload>` and `document.body.onload` alike; for `popstate`,
+`hashchange`, `online`, `offline` and `languagechange` it is so from the
+body's content attribute only, since the body has no such IDL property
+(`document.body.onpopstate` is an ordinary expando; DEBTS.md).
 
 The body is first checked by the intrinsic Function constructor, taken
 before any page script could replace it. QuickJS builds that function by
