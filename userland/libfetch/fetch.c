@@ -577,6 +577,7 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
             .extra_headers = extraForHop[0] ? extraForHop : NULL,
             .method = f->method == OS64_FETCH_METHOD_POST ? HTTP_METHOD_POST : HTTP_METHOD_GET,
             .body_len = sends_body(f) ? f->opt.body_len : 0,
+            .body_present = sends_body(f) && f->opt.body != NULL,
             .content_type = f->method == OS64_FETCH_METHOD_POST && f->content_type[0]
                                 ? f->content_type : NULL,
             .method_name = f->method_name[0] ? f->method_name : NULL,
@@ -1082,6 +1083,7 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
         .extra_headers = f->extra[0] ? f->extra : NULL,
         .method = f->method == OS64_FETCH_METHOD_POST ? HTTP_METHOD_POST : HTTP_METHOD_GET,
         .body_len = f->opt.body_len,
+        .body_present = sends_body(f) && f->opt.body != NULL,
         .content_type = f->content_type[0] ? f->content_type : NULL,
         .method_name = f->method_name[0] ? f->method_name : NULL,
         .body_headers = f->body_headers[0] ? f->body_headers : NULL,

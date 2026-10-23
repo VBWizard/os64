@@ -1559,6 +1559,26 @@ static void case_methods(void)
     f = os64_fetch_open("http://a.test/", &opt);
     CHECK(strstr(request_n(0), "Content-Length: 0\r\n") != NULL);        // an empty PUT says so
     os64_fetch_close(f);
+    // An EMPTY body (a page's "") is not no body: any method says its
+    // length, so the server can tell the two apart. A GET or HEAD refuses one.
+    static const char *const empties[] = {"PATCH", "DELETE", "OPTIONS", "PROPFIND"};
+    for (size_t i = 0; i < sizeof(empties) / sizeof(empties[0]); i++) {
+        reset();
+        peer_add("a.test", 80, reply_len("204 No Content", "", ""));
+        opt = (os64_fetch_options_t){ .method_name = empties[i], .body = "", .body_len = 0 };
+        f = os64_fetch_open("http://a.test/", &opt);
+        CHECK(os64_fetch_status(f) == OS64_FETCH_OK && strstr(request_n(0), "Content-Length: 0\r\n") != NULL);
+        os64_fetch_close(f);
+    }
+    {
+        http_url_t u;
+        CHECK(http_url_parse("http://a.test/", &u) == HTTP_URL_OK);
+        char rendered[512];
+        http_request_extras_t e = { .method_name = "HEAD", .body_present = true };
+        CHECK(!http_request(rendered, sizeof(rendered), &u, false, &e));
+        e = (http_request_extras_t){ .body_present = true };
+        CHECK(!http_request(rendered, sizeof(rendered), &u, false, &e));
+    }
     reset();
     peer_add("a.test", 80, reply_len("200 OK", "", ""));
     opt = (os64_fetch_options_t){ .method_name = "POST", .body = "x=1", .body_len = 3,

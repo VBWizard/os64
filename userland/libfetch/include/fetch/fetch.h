@@ -258,7 +258,9 @@ typedef struct {
     void *ctx;
     // POST bytes (or a method_name's) are borrowed, immutable and needed
     // through open, including 307/308 replay. NULL body is legal only when
-    // body_len is zero. GET requires NULL body/content_type and zero
+    // body_len is zero, and means NO body; a non-NULL body of length zero is
+    // an EMPTY one, sent with Content-Length: 0 by any method but GET and HEAD, so the
+    // server can tell the two apart. GET requires NULL body/content_type and zero
     // body_len. A failed upload is
     // not retried: the server may already have acted. 301/302/303 turn POST
     // into GET without body metadata; 307/308 preserve it. on_hop can refuse.

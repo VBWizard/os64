@@ -291,12 +291,12 @@ bool http_request_extras_ok(const http_request_extras_t *extras)
             !method_name_ok(extras->method_name))
             return false;
         if ((method_is(extras->method_name, "GET") || method_is(extras->method_name, "HEAD")) &&
-            extras->body_len)
+            (extras->body_len || extras->body_present))
             return false;
     } else {
         if (extras->body_headers != NULL)
             return false;
-        if (extras->method == HTTP_METHOD_GET && (extras->body_len || extras->content_type))
+        if (extras->method == HTTP_METHOD_GET && (extras->body_len || extras->body_present || extras->content_type))
             return false;
     }
     return extras_clean(extras->content_type, CLEAN_VALUE) &&
@@ -338,12 +338,13 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
         requestTarget = target;
     }
 
-    // A body is framed by its length; a POST or a PUT says its emptiness
-    // too, since a server may refuse one that says nothing (Fetch § 4.6).
+    // A body is framed by its length, an empty one included, so a server can
+    // tell it from none; a POST or a PUT says its emptiness even with no
+    // body, since a server may refuse one that says nothing (Fetch § 4.6).
     const char *method = extras->method_name != NULL ? extras->method_name
                        : extras->method == HTTP_METHOD_POST ? "POST" : "GET";
     char length[64] = {0};
-    if (extras->body_len || method_is(method, "POST") || method_is(method, "PUT"))
+    if (extras->body_len || extras->body_present || method_is(method, "POST") || method_is(method, "PUT"))
         os64_snprintf(length, sizeof(length), "Content-Length: %lu\r\n",
                       (uint64_t)extras->body_len);
 

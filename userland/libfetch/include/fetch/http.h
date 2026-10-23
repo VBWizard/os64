@@ -161,6 +161,11 @@ typedef struct {
     // Content-Length, and so does an empty POST or PUT (Fetch § 4.6). GET
     // and HEAD carry no body.
     const char *method_name;
+    // A body is present even when body_len is zero (a page's empty string
+    // is a body; null is none): it goes with `Content-Length: 0`, whatever
+    // the method (GET and HEAD refuse one), so a server can tell an empty
+    // body from no body.
+    bool body_present;
     // The representation headers a caller's page chose, as whole lines:
     // Content-Type, Content-Encoding, Content-Language and Content-Location
     // only, and only beside a method_name, whose redirects the caller
@@ -178,7 +183,7 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
 // cannot supply Host, Content-Length, Content-Type, Content-Encoding,
 // Content-Language, Content-Location, Transfer-Encoding, Connection, Expect,
 // Trailer, TE, Upgrade, Accept-Encoding, User-Agent or Accept.
-// GET rejects body_len/content_type; POST permits an empty body. A
+// GET rejects body_len/body_present/content_type; POST permits an empty body. A
 // method_name that is not a token, a body with GET or HEAD, body_headers
 // without a method_name or naming anything else, and content_type beside a
 // method_name are refused.
