@@ -7,18 +7,20 @@
 text-overflow-valid.html	e.style['text-overflow'] = "clip" should set the property value
 text-overflow-valid.html	e.style['text-overflow'] = "ellipsis" should set the property value
 [excluded]
-# Pages whose tests read getComputedStyle, which slice 1b brings; each runs
-# again once it lands.
-getComputedStyle-scroll-button.html	needs getComputedStyle (slice 1b)
-overflow-clip-margin-computed.html	needs getComputedStyle (slice 1b)
-overflow-computed.html	needs getComputedStyle (slice 1b)
-scroll-axis-lock-computed.html	needs getComputedStyle (slice 1b)
-scroll-markers-computed.html	needs getComputedStyle (slice 1b)
-scroll-markers-computed.tentative.html	needs getComputedStyle (slice 1b)
-scroll-target-group-computed.html	needs getComputedStyle (slice 1b)
-text-overflow-computed.html	needs getComputedStyle (slice 1b)
-webkit-box-computed.html	needs getComputedStyle (slice 1b)
-webkit-line-clamp-computed.html	needs getComputedStyle (slice 1b)
+# Pages whose tests ask CSS.supports first (css/support/computed-
+# testcommon.js), which libdom does not have: they fail whole at "'CSS' is
+# not defined" before reading getComputedStyle. DEBTS.md § Classic browser
+# scripting books CSS.supports.
+getComputedStyle-scroll-button.html	needs CSS.supports
+overflow-clip-margin-computed.html	needs CSS.supports
+overflow-computed.html	needs CSS.supports
+scroll-axis-lock-computed.html	needs CSS.supports
+scroll-markers-computed.html	needs CSS.supports
+scroll-markers-computed.tentative.html	needs CSS.supports
+scroll-target-group-computed.html	needs CSS.supports
+text-overflow-computed.html	needs CSS.supports
+webkit-box-computed.html	needs CSS.supports
+webkit-line-clamp-computed.html	needs CSS.supports
 [passing]
 block-ellipsis-invalid.html	e.style['block-ellipsis'] = "\\"first\\" \\"second\\"" should not set the property value
 block-ellipsis-invalid.html	e.style['block-ellipsis'] = "\\"string\\" no-ellipsis" should not set the property value
