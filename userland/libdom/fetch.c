@@ -78,7 +78,15 @@ typedef struct {
     char *url;                  /* "" for none */
     bool redirected;
     JSValue headers;
+    /* A fetched Response whose body has yet to settle keeps its request's
+     * signal alive (`signal`), so an abort still reaches the body, and that
+     * signal's state (`abort_signal`, abort.c's) to tell when it settles;
+     * abort.c clears `abort_signal` when the signal goes first. */
+    JSValue signal;
+    void *abort_signal;
 } DResp;
+
+static void response_settled(JSContext *ctx, DResp *r);
 
 enum { ST_READABLE, ST_CLOSED, ST_ERRORED };
 
@@ -1174,6 +1182,7 @@ static JSValue body_consume(os64_dom_t *dom, JSContext *ctx, JSValueConst self, 
     }
     if (body_unusable(b)) return d_promise_settled(ctx, JS_ThrowTypeError(ctx, "The body has already been read"));
     b->used = b->has;
+    response_settled(ctx, response_state(self));
     /* "Fully read" takes a reader it never releases: the stream, made now
      * or later, is closed and locked. */
     b->consumed = b->has;
@@ -1352,6 +1361,7 @@ static JSValue stream_member(JSContext *ctx, JSValueConst self, int argc, JSValu
                 s->state = ST_CLOSED;
                 DBody *b = body_of(s->owner);
                 if (b != NULL) b->used = true;
+                response_settled(ctx, response_state(s->owner));
                 reader_closed(ctx, r, JS_UNDEFINED);
             }
             return d_promise_settled(ctx, JS_UNDEFINED);
@@ -1377,6 +1387,7 @@ static JSValue stream_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         const uint8_t *bytes = b != NULL ? b->bytes : s->bytes;
         size_t length = b != NULL ? b->length : s->length;
         if (b != NULL) b->used = true;
+        response_settled(ctx, response_state(s->owner));
         if (length == 0) {
             s->state = ST_CLOSED;
             reader_closed(ctx, r, JS_UNDEFINED);
@@ -1398,6 +1409,7 @@ static JSValue stream_member(JSContext *ctx, JSValueConst self, int argc, JSValu
             s->state = ST_CLOSED;
             DBody *b = body_of(s->owner);
             if (b != NULL) b->used = true;
+            response_settled(ctx, response_state(s->owner));
         }
         return d_promise_settled(ctx, JS_UNDEFINED);
     case S_GET_READER: {
@@ -1467,11 +1479,25 @@ static void response_finalizer(JSRuntime *rt, JSValue value)
 {
     DResp *r = response_state(value);
     if (r == NULL) return;
+    if (r->abort_signal != NULL) d_signal_fetch_settled(rt, r->abort_signal, &r->abort_signal);
+    JS_FreeValueRT(rt, r->signal);
     body_free(rt, &r->body);
     js_free_rt(rt, r->status_text);
     js_free_rt(rt, r->url);
     JS_FreeValueRT(rt, r->headers);
     js_free_rt(rt, r);
+}
+
+/* A fetched body settled (read, errored by an abort, or never there): the
+ * signal's algorithm for it goes, and so does the Response's hold on the
+ * signal, after. */
+static void response_settled(JSContext *ctx, DResp *r)
+{
+    if (r == NULL) return;
+    if (r->abort_signal != NULL) d_signal_fetch_settled(JS_GetRuntime(ctx), r->abort_signal, &r->abort_signal);
+    JSValue signal = r->signal;
+    r->signal = JS_UNDEFINED;
+    JS_FreeValue(ctx, signal);
 }
 
 static void response_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
@@ -1480,6 +1506,7 @@ static void response_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
     if (r == NULL) return;
     body_mark(rt, &r->body, mark);
     JS_MarkValue(rt, r->headers, mark);
+    JS_MarkValue(rt, r->signal, mark);
 }
 
 static const char *const kModes[] = {"cors", "same-origin", "no-cors"};          /* way_mode_t */
@@ -1994,7 +2021,7 @@ static JSValue response_alloc(JSContext *ctx, JSValueConst prototype)
         JS_FreeValue(ctx, object);
         return JS_EXCEPTION;
     }
-    r->body.stream = r->body.aborted = r->headers = JS_UNDEFINED;
+    r->body.stream = r->body.aborted = r->headers = r->signal = JS_UNDEFINED;
     r->status_text = text;
     r->url = url;
     r->type = WAY_TYPE_DEFAULT;
@@ -2335,8 +2362,19 @@ static void fetch_answered(os64_dom_t *dom, JSContext *ctx, DRequest *request, c
         if (JS_IsException(value)) {
             ok = false;
             value = JS_GetException(ctx);
-        } else if (q != NULL) d_signal_fetch_answered(ctx, q->signal, token, value);
+        } else if (q != NULL) {
+            /* A body an abort could still error keeps the signal, and the
+             * signal's algorithm points at it; any other answer ends the
+             * algorithm here. */
+            DResp *r = response_state(value);
+            if (r->body.has && r->body.length != 0) {
+                r->signal = JS_DupValue(ctx, q->signal);
+                d_signal_fetch_answered(ctx, q->signal, token, r, &r->abort_signal);
+            } else d_signal_fetch_answered(ctx, q->signal, token, NULL, NULL);
+        }
     }
+    /* A fetch that failed has no body for its signal to reach. */
+    if (!ok && q != NULL) d_signal_remove_fetch(ctx, q->signal, token);
     settle(dom, ok ? resolve : reject, value, outcome);
     JS_FreeValue(ctx, value);
     JS_FreeValue(ctx, resolve);
@@ -2344,7 +2382,7 @@ static void fetch_answered(os64_dom_t *dom, JSContext *ctx, DRequest *request, c
     JS_FreeValue(ctx, object);
 }
 
-void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, JSValueConst response, JSValueConst reason)
+void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, void *answered, JSValueConst reason)
 {
     DRequest *request = d_request_find(dom, token);
     if (request != NULL) {
@@ -2358,7 +2396,7 @@ void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, JSValueConst
     }
     /* Answered: a body not yet read is read as the reason; an empty one
      * closed before it could error, and reads as empty. */
-    DResp *r = response_state(response);
+    DResp *r = answered;
     if (r != NULL && JS_IsUndefined(r->body.aborted) && r->body.has && r->body.length != 0 && !r->body.used) {
         r->body.aborted = JS_DupValue(ctx, reason);
         DStream *s = JS_IsUndefined(r->body.stream) ? NULL : stream_state(r->body.stream);
@@ -2370,12 +2408,8 @@ void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, JSValueConst
             if (rd != NULL) reader_closed(ctx, rd, reason);
         }
     }
-}
-
-bool d_response_body_settled(JSValueConst response)
-{
-    DResp *r = response_state(response);
-    return r == NULL || !r->body.has || r->body.used || !JS_IsUndefined(r->body.aborted);
+    /* Reached by the abort, or read already: settled either way. */
+    response_settled(ctx, r);
 }
 
 /* The request as the host takes it. */

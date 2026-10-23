@@ -11,6 +11,8 @@
 
 /* fetch.c's count of a header list's steps (libdom/internal.h). */
 extern uint64_t d_request_steps;
+/* abort.c's count of the dependents a signal's weak set links. */
+size_t d_signal_dependents(JSValue signal);
 
 #define FETCH_ASSERT STORAGE_ASSERT
 
@@ -519,10 +521,72 @@ static void dom_fetch_abort_cases(void)
                "r5.text().then(t=>log.push('empty:'+t.length));", "abort: after the answer");
     dom_script(&f, FETCH_ASSERT "assert(log.join()==='1:AbortError,2:AbortError,empty:0',log.join());",
                "abort: the reason twice, and an empty body read");
-    /* One controller over many requests keeps none of them past use. */
+    fixture_free(&f);
+}
+
+/* The dependents a global signal's weak set links, after a collection. */
+static size_t weak_dependents(DomFixture *f, const char *name)
+{
+    os64_js_outcome_t outcome;
+    JSContext *ctx = os64_js_context(f->runtime, OS64_JS_ABI_ID, &outcome);
+    JS_RunGC(JS_GetRuntime(ctx));
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue signal = JS_GetPropertyStr(ctx, global, name);
+    JS_FreeValue(ctx, global);
+    size_t n = d_signal_dependents(signal);
+    JS_FreeValue(ctx, signal);
+    return n;
+}
+
+/* DOM'S WEAK SETS (abort.c): a source holds its dependents by C link, not
+ * reference, so a dependent nobody can observe is collected however many
+ * a page makes; DOM's GC clause holds one with an abort listener; and the
+ * hold is released at exactly three points, each pinned here. */
+static void dom_weak_set_cases(void)
+{
+    DomFixture f = net_fixture("http://example.test/", NULL);
+    if (!fixture_ready(&f)) return;
+    /* The bound: ten thousand dependents of one source, dropped, are
+     * gone; a Request's signal per request likewise. */
+    dom_script(&f, "globalThis.root=new AbortController();globalThis.rs=root.signal;"
+               "for(let i=0;i<10000;i++)AbortSignal.any([rs]);for(let i=0;i<10000;i++)new Request('/x',{signal:rs});",
+               "weak: ten thousand dependents, dropped");
+    check(weak_dependents(&f, "rs") == 0, "weak: dropped dependents leave the source's set");
+    /* A dependent the page keeps is linked, and an abort reaches it. */
+    dom_script(&f, "globalThis.kept=AbortSignal.any([rs]);", "weak: a dependent kept");
+    check(weak_dependents(&f, "rs") == 1, "weak: a kept dependent stays linked");
+    /* Held for its listener: dropped by the page, still there, and heard. */
+    dom_script(&f, "globalThis.heard=0;(function(){AbortSignal.any([rs]).onabort=function(){heard++}})();",
+               "weak: a dependent only its listener wants");
+    check(weak_dependents(&f, "rs") == 2, "weak: a dependent with an abort listener is held");
+    /* Release point three, the source aborts (and with it point one, each
+     * dependent is aborted): the held one is heard, then let go. */
+    dom_script(&f, FETCH_ASSERT "root.abort();assert(heard===1&&kept.aborted,'heard '+heard);", "weak: the source aborts");
+    dom_script(&f, "globalThis.kept=undefined;", "weak: the kept one dropped");
+    check(weak_dependents(&f, "rs") == 0, "weak: a source's abort releases what it held");
+    /* Release point two, the last abort listener goes. */
+    dom_script(&f, "globalThis.r2=new AbortController();globalThis.s2=r2.signal;globalThis.f2=function(){};"
+               "globalThis.d2=AbortSignal.any([s2]);d2.addEventListener('abort',f2);d2.addEventListener('abort',function(){},{once:false});",
+               "weak: a dependent with two listeners");
+    dom_script(&f, "d2.onabort=null;globalThis.d2held=d2;globalThis.d2=undefined;", "weak: still listened");
+    dom_script(&f, "d2held=undefined;", "weak: dropped while listened");
+    check(weak_dependents(&f, "s2") == 1, "weak: a listened dependent stays held");
+    dom_script(&f, "globalThis.d3=AbortSignal.any([s2]);var h=function(){};d3.addEventListener('abort',h);"
+               "d3.removeEventListener('abort',h);d3=undefined;", "weak: the last listener goes");
+    check(weak_dependents(&f, "s2") == 1, "weak: a dependent whose last listener went is let go");
+    /* Release point one, the dependent is aborted (by another source)
+     * while this source lives on. */
+    dom_script(&f, "globalThis.other=new AbortController();"
+               "(function(){AbortSignal.any([s2,other.signal]).onabort=function(){}})();",
+               "weak: a dependent of two sources");
+    check(weak_dependents(&f, "s2") == 2, "weak: held for its listener");
+    dom_script(&f, "other.abort();", "weak: aborted by its other source");
+    check(weak_dependents(&f, "s2") == 1, "weak: a dependent aborted is let go by every source");
+    /* DOM's set is ordered: the dependents' events fire in link order. */
     dom_script(&f, FETCH_ASSERT
-        "var c=new AbortController();for(let i=0;i<2000;i++)new Request('/x',{signal:c.signal});c.abort();",
-        "abort: one controller, many requests");
+        "var o=new AbortController(),seen=[];var a=AbortSignal.any([o.signal]),b=AbortSignal.any([o.signal]);"
+        "a.onabort=()=>seen.push('a');b.onabort=()=>seen.push('b');o.abort();assert(seen.join()==='a,b',seen.join());",
+        "weak: dependents abort in the order they were linked");
     fixture_free(&f);
 }
 
@@ -838,6 +902,7 @@ static void dom_fetch_cases(void)
     dom_fetch_object_cases();
     dom_fetch_network_cases();
     dom_fetch_abort_cases();
+    dom_weak_set_cases();
     dom_xhr_cases();
     dom_xhr_sync_stall_case();
     dom_fetch_bound_cases();

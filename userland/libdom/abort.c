@@ -1,32 +1,65 @@
 #include "internal.h"
 
-/* AbortController and AbortSignal (DOM § 3.1, § 3.2). A signal is a
- * COLLECTABLE plain event target (event.c): a page makes one per request,
- * and it goes with the garbage like any object. What a signal does when it
- * aborts is a list of ALGORITHMS kept in C, never a container a page can
- * reach: abort a fetch (fetch.c's d_fetch_abort, by its token), or abort a
- * dependent signal (AbortSignal.any, and a Request's signal that follows
- * its input's). The list is taken whole before it runs, so nothing a run
- * does can change what is walked. */
+/* AbortController and AbortSignal (DOM § 3.1, § 3.2). A signal is a plain
+ * event target whose entry is IN THE OBJECT (internal.h, A PLAIN EVENT
+ * TARGET): a page makes one per request, and it goes with the garbage like
+ * any object.
+ *
+ * DOM'S WEAK SETS. A signal's "source signals" and "dependent signals" are
+ * weak sets, and so are they here: a LINK between a source and a dependent
+ * is a C record on two lists (the source's dependents, the dependent's
+ * sources), holding neither object, and each signal's finalizer unlinks
+ * itself from the other side, so either may go first, in either order a
+ * collection takes them. No engine internals are read. DOM's GC clause
+ * keeps a dependent someone could still observe: while it has a live
+ * `abort` listener or a pending algorithm, and is not aborted, each of its
+ * links HOLDS it (a reference the source's gc_mark traces), so its sources
+ * keep it alive. The hold is released at exactly three points: the
+ * dependent is aborted; its last abort listener goes (the plain-target
+ * listener-change hook, signal_listened, which nothing else reads); its
+ * source aborts, after which it can abort nothing more. A dependent is
+ * never itself a source: a dependent's dependents are linked to its
+ * sources (DOM's "create a dependent abort signal" flattens), so an abort
+ * walks one level.
+ *
+ * A signal's ALGORITHMS are C's, never a container a page can reach: each
+ * a fetch's abort (fetch.c's d_fetch_abort), by its request's token, and,
+ * once answered, the Response it errors, known by C pointer both ways
+ * (d_signal_fetch_answered/d_signal_fetch_settled): the Response holds the signal
+ * until its body settles, the algorithm points at the Response, and each
+ * side's finalizer clears the other's pointer. The list is taken whole
+ * before it runs, so nothing a run does can change what is walked. */
 
 static JSClassID signal_slot, controller_slot;
 
-enum { A_FETCH = 1, A_FOLLOW };
+typedef struct DSignal DSignal;
+typedef struct DLink DLink;
 
 typedef struct {
-    int kind;
-    uint32_t token;             /* A_FETCH: the request's */
-    JSValue target;             /* A_FOLLOW: the dependent signal; A_FETCH: its Response, once made */
+    uint32_t token;             /* the request's */
+    void *answered;             /* its Response's state once answered (fetch.c's), else NULL */
+    void **back;                /* where that Response keeps this signal, cleared when this one goes */
 } DAlgorithm;
 
-typedef struct {
-    DValue target;              /* first: the collectable plain target's record */
+struct DLink {
+    DSignal *source, *dependent;
+    DLink *next_dependent, *prev_dependent;     /* on source->dependents */
+    DLink *next_source, *prev_source;           /* on dependent->sources */
+    JSValue hold;               /* the dependent, while the GC clause keeps it; else undefined */
+};
+
+struct DSignal {
+    DValue target;              /* first: the plain target's entry, in the object */
     bool aborted;
+    bool dependent;             /* made by AbortSignal.any or for a Request */
     JSValue reason;
     DAlgorithm *algorithms;     /* js_malloc'd */
     size_t count, cap;
     uint32_t timer;             /* AbortSignal.timeout's, until it fires */
-} DSignal;
+    /* The dependents in the order they were linked (DOM's ordered set: an
+     * abort runs their steps in that order), and the sources. */
+    DLink *dependents, *dependents_last, *sources;
+};
 
 typedef struct {
     JSValue signal;
@@ -34,24 +67,103 @@ typedef struct {
 
 /* ── State ───────────────────────────────────────────────────────────── */
 
+static DSignal *signal_state(JSValueConst value)
+{
+    return JS_GetOpaque(value, os64_js_class_id(&signal_slot));
+}
+
+static void link_unlink(DLink *l)
+{
+    if (l->prev_dependent != NULL) l->prev_dependent->next_dependent = l->next_dependent;
+    else l->source->dependents = l->next_dependent;
+    if (l->next_dependent != NULL) l->next_dependent->prev_dependent = l->prev_dependent;
+    else l->source->dependents_last = l->prev_dependent;
+    if (l->prev_source != NULL) l->prev_source->next_source = l->next_source;
+    else l->dependent->sources = l->next_source;
+    if (l->next_source != NULL) l->next_source->prev_source = l->prev_source;
+}
+
+/* Whether a listener waits on the signal's `abort`. */
+static bool abort_listened(const DSignal *s)
+{
+    for (const DListener *l = s->target.listeners; l != NULL; l = l->next)
+        if (!l->removed && !JS_IsUndefined(l->callback) && os64_streq(l->type, "abort")) return true;
+    return false;
+}
+
+/* DOM's GC clause for one dependent: its links hold it while it is not
+ * aborted and has an abort listener or a pending algorithm; else they
+ * hold nothing. Every caller holds the dependent itself (the page's call
+ * on it, the walk of an abort, the Response that keeps it), so a release
+ * here never finalizes it under the walk. */
+static void hold_update(JSRuntime *rt, DSignal *d)
+{
+    bool keep = !d->aborted && (d->count != 0 || abort_listened(d));
+    for (DLink *l = d->sources; l != NULL; l = l->next_source) {
+        if (keep && JS_IsUndefined(l->hold)) l->hold = JS_DupValueRT(rt, d->target.value);
+        else if (!keep && !JS_IsUndefined(l->hold)) {
+            JSValue released = l->hold;
+            l->hold = JS_UNDEFINED;
+            JS_FreeValueRT(rt, released);
+        }
+    }
+}
+
+/* The listener-change hook (event.c), for a signal's entry. */
+static void signal_listened(JSRuntime *rt, DValue *entry)
+{
+    hold_update(rt, (DSignal *)entry);
+}
+
 static void signal_finalizer(JSRuntime *rt, JSValue value)
 {
-    DSignal *s = JS_GetOpaque(value, os64_js_class_id(&signal_slot));
+    DSignal *s = signal_state(value);
     if (s == NULL) return;
+    /* Both sides unlinked, the holds this one's links had (on its
+     * dependents) freed after: freeing one may finalize that dependent,
+     * which no longer finds a link to this one. */
+    JSValue *holds = NULL;
+    size_t nholds = 0, cap = 0;
+    while (s->dependents != NULL) {
+        DLink *l = s->dependents;
+        link_unlink(l);
+        if (!JS_IsUndefined(l->hold)) {
+            if (nholds == cap) {
+                size_t grown_cap = cap ? cap * 2 : 8;
+                JSValue *grown = js_realloc_rt(rt, holds, grown_cap * sizeof(*grown));
+                if (grown != NULL) {
+                    holds = grown;
+                    cap = grown_cap;
+                }
+            }
+            if (nholds < cap) holds[nholds++] = l->hold;
+            else JS_FreeValueRT(rt, l->hold);
+        }
+        js_free_rt(rt, l);
+    }
+    while (s->sources != NULL) {
+        DLink *l = s->sources;
+        link_unlink(l);
+        JS_FreeValueRT(rt, l->hold);
+        js_free_rt(rt, l);
+    }
+    for (size_t i = 0; i < s->count; i++)
+        if (s->algorithms[i].back != NULL) *s->algorithms[i].back = NULL;
     d_event_target_finalize(rt, &s->target);
     JS_FreeValueRT(rt, s->reason);
-    for (size_t i = 0; i < s->count; i++) JS_FreeValueRT(rt, s->algorithms[i].target);
     js_free_rt(rt, s->algorithms);
     js_free_rt(rt, s);
+    for (size_t i = 0; i < nholds; i++) JS_FreeValueRT(rt, holds[i]);
+    js_free_rt(rt, holds);
 }
 
 static void signal_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
 {
-    DSignal *s = JS_GetOpaque(value, os64_js_class_id(&signal_slot));
+    DSignal *s = signal_state(value);
     if (s == NULL) return;
     d_event_target_mark(rt, &s->target, mark);
     JS_MarkValue(rt, s->reason, mark);
-    for (size_t i = 0; i < s->count; i++) JS_MarkValue(rt, s->algorithms[i].target, mark);
+    for (DLink *l = s->dependents; l != NULL; l = l->next_dependent) JS_MarkValue(rt, l->hold, mark);
 }
 
 static void controller_finalizer(JSRuntime *rt, JSValue value)
@@ -68,11 +180,6 @@ static void controller_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark
     if (c != NULL) JS_MarkValue(rt, c->signal, mark);
 }
 
-static DSignal *signal_state(JSValueConst value)
-{
-    return JS_GetOpaque(value, os64_js_class_id(&signal_slot));
-}
-
 bool d_signal_is(JSValueConst value)
 {
     return signal_state(value) != NULL;
@@ -84,6 +191,14 @@ bool d_signal_aborted(JSValueConst signal, JSValue *reason, JSContext *ctx)
     if (s == NULL || !s->aborted) return false;
     if (reason != NULL) *reason = JS_DupValue(ctx, s->reason);
     return true;
+}
+
+size_t d_signal_dependents(JSValueConst signal)
+{
+    size_t n = 0;
+    const DSignal *s = signal_state(signal);
+    for (const DLink *l = s != NULL ? s->dependents : NULL; l != NULL; l = l->next_dependent) n++;
+    return n;
 }
 
 JSValue d_signal_new(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype)
@@ -98,101 +213,66 @@ JSValue d_signal_new(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype)
         return JS_EXCEPTION;
     }
     d_event_target_init(dom, &s->target, object);
+    s->target.listeners_changed = signal_listened;
     s->reason = JS_UNDEFINED;
     JS_SetOpaque(object, s);
     return object;
 }
 
-/* True when `value` is held by the one reference the caller has: nothing
- * else (no page variable, no other object) can reach it, so nothing that
- * happens to it can be seen. A cycle reads as held, which only keeps. */
-static bool held_once(JSValueConst value)
-{
-    return !JS_VALUE_HAS_REF_COUNT(value) || __js_rc(JS_VALUE_GET_PTR(value))->ref_count <= 1;
-}
-
-/* A dependent signal whose abort nobody could see: only this list holds
- * it, no listener waits on it, and each of its own algorithms is a fetch
- * that has ended whose Response (if any) is likewise unreachable or has
- * no body left to error. Its A_FOLLOW may go. */
-static bool dependent_inert(const DAlgorithm *a)
-{
-    if (a->kind != A_FOLLOW || !held_once(a->target)) return false;
-    DSignal *d = signal_state(a->target);
-    if (d == NULL) return true;
-    for (const DListener *l = d->target.listeners; l != NULL; l = l->next)
-        if (!l->removed) return false;
-    for (size_t i = 0; i < d->count; i++) {
-        const DAlgorithm *own = &d->algorithms[i];
-        if (own->kind != A_FETCH) return false;
-        if (!JS_IsUndefined(own->target) && !held_once(own->target) && !d_response_body_settled(own->target))
-            return false;
-    }
-    return true;
-}
-
-static int algorithm_add(JSContext *ctx, DSignal *s, int kind, uint32_t token, JSValue target)
-{
-    if (s->count == s->cap) {
-        /* A source signal holds its dependents (a Request's signal per
-         * request) where the standard holds them weakly; a page that
-         * reuses one controller for every request would otherwise keep
-         * every request's signal, and its Response, until the controller
-         * goes. So a full list is swept first: an entry nobody could see
-         * abort is dropped. One sweep per doubling keeps adding linear. */
-        size_t kept = 0;
-        for (size_t i = 0; i < s->count; i++) {
-            if (dependent_inert(&s->algorithms[i])) {
-                JS_FreeValue(ctx, s->algorithms[i].target);
-                continue;
-            }
-            s->algorithms[kept++] = s->algorithms[i];
-        }
-        s->count = kept;
-    }
-    if (s->count == s->cap) {
-        size_t cap = s->cap ? s->cap * 2 : 4;
-        DAlgorithm *grown = js_realloc(ctx, s->algorithms, cap * sizeof(*grown));
-        if (grown == NULL) {
-            JS_FreeValue(ctx, target);
-            return -1;
-        }
-        s->algorithms = grown;
-        s->cap = cap;
-    }
-    s->algorithms[s->count++] = (DAlgorithm){kind, token, target};
-    return 0;
-}
-
 int d_signal_add_fetch(JSContext *ctx, JSValueConst signal, uint32_t token)
 {
     DSignal *s = signal_state(signal);
-    return s == NULL ? 0 : algorithm_add(ctx, s, A_FETCH, token, JS_UNDEFINED);
+    if (s == NULL) return 0;
+    if (s->count == s->cap) {
+        size_t cap = s->cap ? s->cap * 2 : 4;
+        DAlgorithm *grown = js_realloc(ctx, s->algorithms, cap * sizeof(*grown));
+        if (grown == NULL) return -1;
+        s->algorithms = grown;
+        s->cap = cap;
+    }
+    s->algorithms[s->count++] = (DAlgorithm){token, NULL, NULL};
+    hold_update(JS_GetRuntime(ctx), s);
+    return 0;
 }
 
-void d_signal_fetch_answered(JSContext *ctx, JSValueConst signal, uint32_t token, JSValueConst response)
+/* The algorithm for `token` dropped (both pointers cleared), and the GC
+ * clause asked again. */
+static void algorithm_drop(JSRuntime *rt, DSignal *s, size_t i)
+{
+    if (s->algorithms[i].back != NULL) *s->algorithms[i].back = NULL;
+    s->algorithms[i] = s->algorithms[--s->count];
+    hold_update(rt, s);
+}
+
+void d_signal_fetch_answered(JSContext *ctx, JSValueConst signal, uint32_t token, void *answered, void **back)
 {
     DSignal *s = signal_state(signal);
     for (size_t i = 0; s != NULL && i < s->count; i++)
-        if (s->algorithms[i].kind == A_FETCH && s->algorithms[i].token == token) {
-            JS_FreeValue(ctx, s->algorithms[i].target);
-            s->algorithms[i].target = JS_DupValue(ctx, response);
+        if (s->algorithms[i].token == token) {
+            if (answered == NULL) {
+                algorithm_drop(JS_GetRuntime(ctx), s, i);
+                return;
+            }
+            s->algorithms[i].answered = answered;
+            s->algorithms[i].back = back;
+            *back = s;
+            return;
+        }
+}
+
+void d_signal_fetch_settled(JSRuntime *rt, void *signal, void **back)
+{
+    DSignal *s = signal;
+    for (size_t i = 0; s != NULL && i < s->count; i++)
+        if (s->algorithms[i].back == back) {
+            algorithm_drop(rt, s, i);
+            return;
         }
 }
 
 void d_signal_remove_fetch(JSContext *ctx, JSValueConst signal, uint32_t token)
 {
-    DSignal *s = signal_state(signal);
-    if (s == NULL) return;
-    size_t kept = 0;
-    for (size_t i = 0; i < s->count; i++) {
-        if (s->algorithms[i].kind == A_FETCH && s->algorithms[i].token == token) {
-            JS_FreeValue(ctx, s->algorithms[i].target);
-            continue;
-        }
-        s->algorithms[kept++] = s->algorithms[i];
-    }
-    s->count = kept;
+    d_signal_fetch_answered(ctx, signal, token, NULL, NULL);
 }
 
 /* ── Aborting (DOM § 3.2 "signal abort") ─────────────────────────────── */
@@ -222,8 +302,7 @@ static bool mark_aborted(os64_dom_t *dom, JSContext *ctx, DSignal *s, JSValue re
 
 /* A signal's abort steps: its fetches aborted, then its `abort` event. The
  * list is taken whole: what a run adds goes nowhere, since an aborted
- * signal never runs again; its dependents were gathered before (below).
- * -1 when the runtime is finished with. */
+ * signal never runs again. -1 when the runtime is finished with. */
 static int abort_steps(os64_dom_t *dom, JSContext *ctx, JSValueConst signal)
 {
     DSignal *s = signal_state(signal);
@@ -234,8 +313,9 @@ static int abort_steps(os64_dom_t *dom, JSContext *ctx, JSValueConst signal)
     s->count = s->cap = 0;
     JSValue reason = JS_DupValue(ctx, s->reason);
     for (size_t i = 0; i < count; i++) {
-        if (list[i].kind == A_FETCH) d_fetch_abort(dom, ctx, list[i].token, list[i].target, reason);
-        JS_FreeValue(ctx, list[i].target);
+        /* The Response no longer keeps a pointer to this signal's list. */
+        if (list[i].back != NULL) *list[i].back = NULL;
+        d_fetch_abort(dom, ctx, list[i].token, list[i].answered, reason);
     }
     js_free(ctx, list);
     JS_FreeValue(ctx, reason);
@@ -247,10 +327,9 @@ static int abort_steps(os64_dom_t *dom, JSContext *ctx, JSValueConst signal)
 }
 
 /* DOM § 3.2 "signal abort": the reason set; every dependent not yet
- * aborted marked with it, and theirs in turn (a Request's signal follows
- * its input's, so a page can chain them as deep as it likes: the walk is a
- * worklist, never recursion); then the signal's own steps, its event
- * first, then each dependent's in the order gathered. -1 with an exception
+ * aborted marked with it, and the holds released (the source has aborted,
+ * and so has each dependent); then the signal's own steps, its event
+ * first, then each dependent's in its list's order. -1 with an exception
  * pending only when the runtime failed under it. */
 static int signal_abort(os64_dom_t *dom, JSContext *ctx, JSValueConst signal, JSValueConst reason)
 {
@@ -260,32 +339,36 @@ static int signal_abort(os64_dom_t *dom, JSContext *ctx, JSValueConst signal, JS
                                            : JS_DupValue(ctx, reason);
     if (JS_IsException(value)) return -1;
     mark_aborted(dom, ctx, s, value);
-    JSValue *gathered = NULL;
-    size_t count = 0, cap = 0;
-    int result = 0;
-    /* signal first, then each gathered dependent, scanned in turn. */
-    for (size_t at = 0; result == 0; at++) {
-        JSValueConst from = at == 0 ? signal : gathered[at - 1];
-        DSignal *f = signal_state(from);
-        for (size_t i = 0; f != NULL && i < f->count && result == 0; i++) {
-            DSignal *d = f->algorithms[i].kind == A_FOLLOW ? signal_state(f->algorithms[i].target) : NULL;
-            if (d == NULL || !mark_aborted(dom, ctx, d, JS_DupValue(ctx, s->reason))) continue;
-            if (count == cap) {
-                size_t grown_cap = cap ? cap * 2 : 8;
-                JSValue *grown = js_realloc(ctx, gathered, grown_cap * sizeof(*grown));
-                if (grown == NULL) {
-                    result = -1;
-                    break;
-                }
-                gathered = grown;
-                cap = grown_cap;
-            }
-            gathered[count++] = JS_DupValue(ctx, f->algorithms[i].target);
-        }
-        if (at == count) break;
+    size_t count = 0;
+    for (DLink *l = s->dependents; l != NULL; l = l->next_dependent) count += !l->dependent->aborted;
+    JSValue *gathered = count != 0 ? js_malloc(ctx, count * sizeof(*gathered)) : NULL;
+    if (count != 0 && gathered == NULL) return -1;
+    size_t n = 0;
+    for (DLink *l = s->dependents; l != NULL; l = l->next_dependent) {
+        DSignal *d = l->dependent;
+        if (n < count && mark_aborted(dom, ctx, d, JS_DupValue(ctx, s->reason)))
+            gathered[n++] = JS_DupValue(ctx, d->target.value);
     }
-    if (result == 0) result = abort_steps(dom, ctx, signal);
-    for (size_t i = 0; i < count; i++) {
+    /* Release points one and three: each dependent is aborted, and the
+     * source can abort nothing more. The dependents gathered are held by
+     * the walk until their steps have run. */
+    for (size_t i = 0; i < n; i++) hold_update(JS_GetRuntime(ctx), signal_state(gathered[i]));
+    JSValue *released = NULL;
+    size_t nreleased = 0;
+    for (DLink *l = s->dependents; l != NULL; l = l->next_dependent)
+        nreleased += !JS_IsUndefined(l->hold);
+    if (nreleased != 0 && (released = js_malloc(ctx, nreleased * sizeof(*released))) != NULL) {
+        size_t r = 0;
+        for (DLink *l = s->dependents; l != NULL && r < nreleased; l = l->next_dependent)
+            if (!JS_IsUndefined(l->hold)) {
+                released[r++] = l->hold;
+                l->hold = JS_UNDEFINED;
+            }
+        for (size_t i = 0; i < r; i++) JS_FreeValue(ctx, released[i]);
+        js_free(ctx, released);
+    }
+    int result = abort_steps(dom, ctx, signal);
+    for (size_t i = 0; i < n; i++) {
         if (result == 0) result = abort_steps(dom, ctx, gathered[i]);
         JS_FreeValue(ctx, gathered[i]);
     }
@@ -298,13 +381,43 @@ int d_signal_abort(os64_dom_t *dom, JSContext *ctx, JSValueConst signal, JSValue
     return signal_abort(dom, ctx, signal, reason);
 }
 
-/* A dependent of `source`: aborted now when it is, else when it is. */
+/* One link, `source` to `dependent`, unless there is one already. -1 on no
+ * memory. */
+static int link_add(JSContext *ctx, DSignal *source, DSignal *dependent)
+{
+    for (DLink *l = dependent->sources; l != NULL; l = l->next_source)
+        if (l->source == source) return 0;
+    DLink *l = js_mallocz(ctx, sizeof(*l));
+    if (l == NULL) return -1;
+    l->source = source;
+    l->dependent = dependent;
+    l->hold = JS_UNDEFINED;
+    l->prev_dependent = source->dependents_last;
+    if (source->dependents_last != NULL) source->dependents_last->next_dependent = l;
+    else source->dependents = l;
+    source->dependents_last = l;
+    l->next_source = dependent->sources;
+    if (dependent->sources != NULL) dependent->sources->prev_source = l;
+    dependent->sources = l;
+    return 0;
+}
+
+/* DOM's "create a dependent abort signal", one source at a time: aborted
+ * now when the source is, else linked to it, or, when the source is a
+ * dependent itself, to each of its sources. */
 int d_signal_follow(os64_dom_t *dom, JSContext *ctx, JSValueConst dependent, JSValueConst source)
 {
-    DSignal *s = signal_state(source);
-    if (s == NULL) return 0;
+    DSignal *s = signal_state(source), *d = signal_state(dependent);
+    if (s == NULL || d == NULL) return 0;
+    d->dependent = true;
     if (s->aborted) return signal_abort(dom, ctx, dependent, s->reason);
-    return algorithm_add(ctx, s, A_FOLLOW, 0, JS_DupValue(ctx, dependent));
+    if (!s->dependent) {
+        if (link_add(ctx, s, d) < 0) return -1;
+    } else
+        for (DLink *l = s->sources; l != NULL; l = l->next_source)
+            if (link_add(ctx, l->source, d) < 0) return -1;
+    hold_update(JS_GetRuntime(ctx), d);
+    return 0;
 }
 
 /* ── The script surface ──────────────────────────────────────────────── */

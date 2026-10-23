@@ -144,6 +144,8 @@ void d_report(os64_dom_t *dom, JSContext *ctx, JSValueConst error)
  * plain target's are its own (DListener.engine): traced and freed with it,
  * and not counted, as the host never dispatches to such a target. */
 
+static void listeners_changed(os64_dom_t *dom, DValue *entry);
+
 static void count(os64_dom_t *dom, const DListener *listener, int delta)
 {
     if (listener->kind >= 0 && !listener->engine) dom->listen_counts[listener->kind] += (uint32_t)delta;
@@ -592,7 +594,10 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
         if (runs && slot) runs = listener->handler == D_SLOT_FUNCTION || listener->handler == D_SLOT_UNCOMPILED;
         if (runs) {
             JSValue callback = slot ? JS_UNDEFINED : JS_DupValue(d->ctx, listener->callback);
-            if (listener->once) remove_listener(dom, entry, listener);
+            if (listener->once) {
+                remove_listener(dom, entry, listener);
+                listeners_changed(dom, entry);
+            }
             if (d->host != NULL) {
                 JSValue args[2] = {d->object, callback};
                 os64_js_outcome_t call, point;
@@ -966,6 +971,13 @@ static int listener_options(JSContext *ctx, int argc, JSValueConst *argv, bool *
 
 enum { M_ADD, M_REMOVE, M_DISPATCH };
 
+/* A plain target's listener-change hook (DValue.listeners_changed), after
+ * a listener was added or removed or a handler set. */
+static void listeners_changed(os64_dom_t *dom, DValue *entry)
+{
+    if (entry != NULL && entry->listeners_changed != NULL) entry->listeners_changed(dom->engine, entry);
+}
+
 static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst self, int argc,
                                 JSValueConst *argv, int magic)
 {
@@ -1016,6 +1028,7 @@ static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst se
         }
     }
     d_string_free(dom, &type);
+    listeners_changed(dom, entry);
     return result;
 }
 
@@ -1072,6 +1085,7 @@ static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSV
         slot_state(dom, slot, D_SLOT_FUNCTION);
         set_callback(dom, slot, JS_DupValue(ctx, value));
     } else slot_state(dom, slot, D_SLOT_EMPTY);
+    listeners_changed(dom, entry);
     return JS_UNDEFINED;
 }
 
@@ -1366,6 +1380,7 @@ static JSValue named_handler_property(JSContext *ctx, JSValueConst self, int arg
             slot_state(dom, slot, D_SLOT_FUNCTION);
             set_callback(dom, slot, JS_DupValue(ctx, value));
         } else slot_state(dom, slot, D_SLOT_EMPTY);
+        listeners_changed(dom, entry);
     }
     JS_FreeCString(ctx, type);
     return result;

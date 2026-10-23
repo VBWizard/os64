@@ -65,11 +65,15 @@ struct DValue {
      * kind of document it is. */
     DValue *implementation;
     uint8_t document_type;
-    /* A COLLECTABLE plain target's (d_event_target_init): this record is
-     * the first member of the object's own state, outside the registry;
-     * `value` is the object itself, not a reference; its listeners'
-     * callbacks are traced by the object's gc_mark and freed with it. */
+    /* A plain target's entry IN THE OBJECT (d_event_target_init): this
+     * record is the first member of the object's own state, outside the
+     * registry; `value` is the object itself, not a reference; its
+     * listeners' callbacks are traced by the object's gc_mark and freed
+     * with it. `listeners_changed`, when the class sets it, is called after
+     * a listener is added or removed or a handler set on it (an
+     * AbortSignal's GC clause, abort.c); nothing else reads it. */
     bool engine_held;
+    void (*listeners_changed)(JSRuntime *rt, DValue *entry);
 };
 /* DValue.document_type: the window's document and createHTMLDocument's are
  * HTML documents; createDocument makes an XML document, whose createElement
@@ -589,14 +593,19 @@ bool d_signal_aborted(JSValueConst signal, JSValue *reason, JSContext *ctx);
 int d_signal_abort(os64_dom_t *dom, JSContext *ctx, JSValueConst signal, JSValueConst reason);
 int d_signal_follow(os64_dom_t *dom, JSContext *ctx, JSValueConst dependent, JSValueConst source);
 int d_signal_add_fetch(JSContext *ctx, JSValueConst signal, uint32_t token);
-void d_signal_fetch_answered(JSContext *ctx, JSValueConst signal, uint32_t token, JSValueConst response);
+/* A fetch answered: its algorithm now aborts the Response whose state is
+ * `answered` (NULL: there is no body to error, and the algorithm goes),
+ * and the Response keeps this signal's state at *back, which this side
+ * clears when it goes; d_signal_fetch_settled drops it when the body
+ * settles or the Response goes, from either side's finalizer too. */
+void d_signal_fetch_answered(JSContext *ctx, JSValueConst signal, uint32_t token, void *answered, void **back);
+void d_signal_fetch_settled(JSRuntime *rt, void *signal, void **back);
 void d_signal_remove_fetch(JSContext *ctx, JSValueConst signal, uint32_t token);
-/* fetch.c: a fetch's abort, the algorithm its signal runs. `response` is
- * the Response once the fetch answered, else undefined. */
-void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, JSValueConst response, JSValueConst reason);
-/* True when an abort could no longer reach `response`'s body: it has none,
- * it has been read, or an abort already reached it. */
-bool d_response_body_settled(JSValueConst response);
+/* How many dependents a signal's weak set links (the DOM host's bound). */
+size_t d_signal_dependents(JSValueConst signal);
+/* fetch.c: a fetch's abort, the algorithm its signal runs. `answered` is
+ * the Response's state once the fetch answered, else NULL. */
+void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, void *answered, JSValueConst reason);
 /* Bytes and their type (blob.c, fetch.c): js_malloc'd; `type` NULL or "" for none. */
 typedef struct {
     uint8_t *bytes;
