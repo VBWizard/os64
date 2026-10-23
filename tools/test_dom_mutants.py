@@ -113,6 +113,7 @@ mutants=[
  ('attr-cursor-checked','attr','    return c->element == element && c->head == element->attrs &&','    return c->element == element; return c->head == element->attrs &&'),
  ('attr-names-behind-prototype','attr','    int shown = visible(ctx, object, atom);\n    *found =','    int shown = 1;\n    *found ='),
  ('attr-looked-up-again','attr','    int shown = visible(ctx, object, atom);\n    *found = shown > 0 ? listed(dom, element, text, length) : NULL;','    *found = listed(dom, element, text, length);\n    int shown = visible(ctx, object, atom);\n    if (shown <= 0) *found = NULL;'),
+ ('attr-own-property-hides-name','attr','    if (own != 0) return own < 0 ? -1 : 0;','    (void)own;'),
  ('attr-index-read-only','attr','return JS_DefineProperty(ctx, refused ? entry->dom->index_guard->value : object, atom,','return JS_DefineProperty(ctx, object, atom,'),
  ('attr-shadow-whole','attr','        {"parentNode", A_NO_NODE, false}, {"parentElement", A_NO_NODE, false},','        {"parentElement", A_NO_NODE, false},'),
  ('attr-an-event-target','attr','if (d_event_target(dom, ctx, attr, dom->attr_class, NULL) < 0) return -1;','(void)0;'),

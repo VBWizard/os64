@@ -288,6 +288,14 @@ static void attributes_map_cases(void)
         "'the prototype\\'s names win');"
         "assert(Object.getOwnPropertyNames(m).indexOf('item')<0,'and are not listed');"
         "b.removeAttribute('item');b.removeAttribute('length');"
+        /* WebIDL's visibility, step 2: an expando of the map's own hides
+         * the attribute of its name, which is then listed once */
+        "m.shadow=1;b.setAttribute('shadow','x');"
+        "assert(m.shadow===1&&m.getNamedItem('shadow').value==='x','the expando wins');"
+        "assert(Reflect.ownKeys(m).filter(k=>k==='shadow').length===1,'listed once: '+Reflect.ownKeys(m).join());"
+        "assert(Object.getOwnPropertyNames(m).filter(k=>k==='shadow').length===1);"
+        "delete m.shadow;assert(m.shadow.value==='x','its expando gone, the attribute shows');"
+        "b.removeAttribute('shadow');"
         "b.setAttribute('0','zero');assert(m[0].name==='id'&&m.getNamedItem('0').value==='zero','an index is an index');"
         "assert(Object.getOwnPropertyNames(m).filter(k=>k==='0').length===1,'and listed once');"
         "b.removeAttribute('0');",

@@ -839,10 +839,18 @@ static int key_text(JSContext *ctx, JSAtom atom, const char **text, size_t *leng
 }
 
 /* WebIDL's named property visibility: a listed name is a property of the
- * map only when its prototype chain has none by that name, so
- * `attributes.item` is always the method. 1, 0, or -1 on an exception. */
-static int visible(JSContext *ctx, JSValueConst object, JSAtom atom)
+ * map only when the map has no ordinary property of its own by that name
+ * (an expando a page set) and its prototype chain has none, so
+ * `attributes.item` is always the method and no name is listed twice. The
+ * map's own ordinary property is asked of the engine with the map's named
+ * properties turned off for the question (`attr_ordinary`), since the
+ * engine asks them after its own. 1, 0, or -1 on an exception. */
+static int visible(os64_dom_t *dom, JSContext *ctx, JSValueConst object, JSAtom atom)
 {
+    dom->attr_ordinary = true;
+    int own = JS_GetOwnProperty(ctx, NULL, object, atom);
+    dom->attr_ordinary = false;
+    if (own != 0) return own < 0 ? -1 : 0;
     JSValue prototype = JS_GetPrototype(ctx, object);
     if (JS_IsException(prototype)) return -1;
     int shadowed = JS_IsNull(prototype) ? 0 : JS_HasProperty(ctx, prototype, atom);
@@ -851,8 +859,9 @@ static int visible(JSContext *ctx, JSValueConst object, JSAtom atom)
 }
 
 /* The attribute a non-index key names visibly: 1 (with *found), 0, -1.
- * The prototype chain is asked first, as a collection asks it, so a read of
- * the map's own members (`length`, `item`) costs no walk of the list; and
+ * Visibility is asked first, the prototype chain as a collection asks it,
+ * so a read of the map's own members (`length`, `item`) costs no look at
+ * the list; and
  * since asking it may run page code (a Proxy prototype's `has`) that changes
  * the element's attributes, the list is read after it. */
 static int named(os64_dom_t *dom, JSContext *ctx, JSValueConst object, const os64_html_node_t *element,
@@ -862,7 +871,7 @@ static int named(os64_dom_t *dom, JSContext *ctx, JSValueConst object, const os6
     size_t length;
     int is = key_text(ctx, atom, &text, &length);
     if (is <= 0) return is;
-    int shown = visible(ctx, object, atom);
+    int shown = visible(dom, ctx, object, atom);
     *found = shown > 0 ? listed(dom, element, text, length) : NULL;
     JS_FreeCString(ctx, text);
     return shown < 0 ? -1 : *found != NULL;
@@ -872,6 +881,7 @@ static int map_own_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueC
 {
     DValue *entry = map_receiver(ctx, object);
     if (entry == NULL) return -1;
+    if (entry->dom->attr_ordinary) return 0;
     const os64_html_node_t *element = entry->target;
     uint32_t index;
     int numeric = d_index_key(ctx, atom, &index);
@@ -935,7 +945,7 @@ static int map_own_names(JSContext *ctx, JSPropertyEnum **table, uint32_t *lengt
     }
     uint32_t kept = indices;
     for (uint32_t k = indices; k < used; k++) {
-        int shown = visible(ctx, object, names[k].atom);
+        int shown = visible(entry->dom, ctx, object, names[k].atom);
         if (shown < 0) {
             for (uint32_t r = k; r < used; r++) JS_FreeAtom(ctx, names[r].atom);
             used = kept;

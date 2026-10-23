@@ -153,6 +153,9 @@ struct os64_dom {
         uint64_t version;
         uint32_t count, found;
     } attr_cursor;
+    /* Set while the map's own ordinary property is asked of the engine,
+     * which the map's named properties then do not answer (attr.c). */
+    bool attr_ordinary;
     DValue *values, *anchor, *index_guard, *window, *location, *history, *function_ctor;
     DValue *invoke, *navigator, *style_prototype, *static_list;
     const char *(*user_agent)(void *opaque);
