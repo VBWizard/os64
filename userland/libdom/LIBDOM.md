@@ -215,7 +215,8 @@ not claim a single combined page allocator.
 | Wrong receiver or unsupported native argument | `TypeError` |
 | Retired binding or nonempty file-input value assignment | `InvalidStateError` |
 
-A refusal named `TypeError` is the engine's own TypeError. Every other
+A refusal named `TypeError` or `RangeError` is the engine's own
+TypeError or RangeError. Every other
 named refusal is a DOMException (exception.c) with that name, its
 message and its legacy `code`, made by `d_error` once the Modern Web's
 DOMException row has installed the interface; with the modern switch
