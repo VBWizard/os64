@@ -205,7 +205,7 @@ static os64_ui_file_dialog_t *dialog_new(os64_ui_file_mode_t mode)
     d->mode=mode;d->window=1;
     d->draw.surf=(os64_gui_surface_t){calloc(880u*700u,4),880,700,880};
     native_surface=d->draw.surf;
-    os64_ui_file_options_t options={.mode=mode,.filename=mode==OS64_UI_FILE_SAVE?"download.html":NULL};
+    os64_ui_file_options_t options={.mode=mode,.offer_association=true,.filename=mode==OS64_UI_FILE_SAVE?"download.html":NULL};
     CHECK(file_compose(d,&options)==OS64_UI_OK);
     CHECK(os64_browser_navigate(d->browser,"/home")==OS64_UI_OK);
     os64_ui_file_dialog_update(d);
@@ -557,6 +557,59 @@ static void compact_tests(void)
     CHECK(d->name.w.bounds.w>0 && d->accept.bounds.y+d->accept.bounds.h<=d->root.bounds.h);
     dialog_free(d);
 }
+static void dialog_click(os64_ui_file_dialog_t *d,os64_ui_widget_t *w)
+{
+    os64_gui_event_t event={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+    event.mouse.x=w->bounds.x+w->bounds.w/2;
+    event.mouse.y=w->bounds.y+w->bounds.h/2;
+    event.mouse.button=OS64_GUI_MOUSE_LEFT;
+    os64_ui_file_dialog_event(d,&event);
+    os64_ui_file_dialog_update(d);
+    event.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
+    os64_ui_file_dialog_event(d,&event);
+    os64_ui_file_dialog_update(d);
+}
+static void application_tests(const char *font_dir)
+{
+    current="compact application picker";
+    os64_ui_file_dialog_t *d=dialog_new(OS64_UI_FILE_APPLICATION);
+    CHECK(d->name.w.hidden && d->name_label.hidden && d->hidden.w.hidden && d->new_folder.hidden);
+    CHECK(!d->remember.w.hidden && !d->remember.checked && d->ui.focus==&d->browser_ui.details.w);
+    for(int i=0;i<OS64_UI_BROWSER_PARTS;++i)
+        CHECK(d->browser_ui.visible[i]==(i<=OS64_UI_BROWSER_ADDRESS));
+    key(d,6,0x21,OS64_GUI_MOD_CTRL);CHECK(d->ui.focus!=&d->browser_ui.filter.w);
+    key(d,8,0x23,OS64_GUI_MOD_CTRL);CHECK(!os64_browser_hidden(d->browser));
+    key(d,12,0x26,OS64_GUI_MOD_CTRL);CHECK(d->ui.focus==&d->browser_ui.address.w);
+    CHECK(ui_test_adopt(&d->ui,font_dir,24)==OS64_FONT_OK);
+    CHECK(d->remember.w.bounds.x+d->remember.w.bounds.w<d->cancel.bounds.x);
+    d->root.bounds.w=d->min_width;file_resize(&d->ui);
+    CHECK(!d->layout_pending && d->remember.w.bounds.y<d->cancel.bounds.y);
+    CHECK(d->cancel.bounds.y+d->cancel.bounds.h<=d->root.bounds.h);
+    uint64_t id=id_named(d,"existing.txt");
+    CHECK(os64_ui_dataview_command(&d->browser_ui.details,OS64_UI_SELECTION_CHOOSE,id,true)==OS64_UI_OK);
+    os64_ui_file_dialog_update(d);CHECK(!d->accept.disabled);
+    CHECK(os64_ui_dataview_command(&d->browser_ui.details,OS64_UI_SELECTION_CLEAR,0,false)==OS64_UI_OK);
+    os64_ui_file_dialog_update(d);CHECK(d->accept.disabled && !*d->name.buf);
+    id=id_named(d,"folder");
+    CHECK(os64_ui_dataview_command(&d->browser_ui.details,OS64_UI_SELECTION_CHOOSE,id,true)==OS64_UI_OK);
+    file_submit(d);os64_ui_file_dialog_update(d);
+    CHECK(!strcmp(os64_browser_location(d->browser),"/home/folder"));
+    key(d,0,0x48,OS64_GUI_MOD_ALT);os64_ui_file_dialog_update(d);
+    CHECK(!strcmp(os64_browser_location(d->browser),"/home"));
+    CHECK(os64_browser_navigate(d->browser,"/missing")==OS64_UI_OK);
+    os64_ui_file_dialog_update(d);CHECK(d->browser_ui.visible[OS64_UI_BROWSER_STATUS]);
+    CHECK(os64_browser_refresh(d->browser)==OS64_UI_OK);
+    os64_ui_file_dialog_update(d);CHECK(!d->browser_ui.visible[OS64_UI_BROWSER_STATUS]);
+    id=id_named(d,"existing.txt");
+    CHECK(os64_ui_dataview_command(&d->browser_ui.details,OS64_UI_SELECTION_CHOOSE,id,true)==OS64_UI_OK);
+    os64_ui_file_dialog_update(d);
+    dialog_click(d,&d->remember.w);CHECK(d->remember.checked);
+    dialog_click(d,&d->accept);
+    CHECK(d->result==OS64_UI_FILE_ACCEPTED && d->remember_association && !strcmp(d->path,"/home/existing.txt"));
+    dialog_free(d);
+    d=dialog_new(OS64_UI_FILE_APPLICATION);d->offer_association=false;file_controls(d);file_resize(&d->ui);
+    CHECK(d->remember.w.hidden && !d->layout_pending);dialog_free(d);
+}
 int main(int argc,char **argv)
 {
     add_file("/",true);add_file("/home",true);add_file("/home/existing.txt",false);
@@ -564,6 +617,7 @@ int main(int argc,char **argv)
     save_tests();open_tests();folder_tests();navigation_tests();lifecycle_tests();
     compact_tests();size_tests(argc>1?argv[1]:"userland/libfreetype/fixtures");
     display_size_tests();
+    application_tests(argc>1?argv[1]:"userland/libfreetype/fixtures");
     review_resize_tests(argc>1?argv[1]:"userland/libfreetype/fixtures");
     layout_tests(argc>1?argv[1]:"userland/libfreetype/fixtures",argc>2?argv[2]:NULL);
     printf("file dialogs: %lu checks, %d failures\n",checks,failures);

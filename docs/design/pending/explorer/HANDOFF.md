@@ -1,6 +1,6 @@
 # Roam — latest handoff
 
-Updated: 2026-10-20. Design owner: Quinn.
+Updated: 2026-10-21. Design owner: Quinn.
 
 E1A is accepted. PR #254 merged into `userland` as `c6cc6e3c`; gallery relocation
 `2bc9f2f4` followed. Chris confirmed the P5 test complete. The diagnostic launches
@@ -10,14 +10,31 @@ user-reported, without a captured installed-binary hash.
 
 ## Resume point
 
+Chris requested [E5D remembered window placement](E05D_WINDOW_PLACEMENT.md) as
+a separate future slice. Record only: implementation has not started.
+
+Active work is [E5C Roam file actions](E05C_ROAM_LAUNCH.md), owned by Quinn in
+`.worktrees/roam-file-actions`, branch `codex/roam-file-actions`.
+[Draft PR #325](https://github.com/VBWizard/os64/pull/325) targets `userland`;
+PR #322 is merged and its review conversations are resolved. Chris reports
+that the initial Roam additions work on the P5, without a captured binary hash.
+
+His Open With feedback is implemented: a compact application picker and an
+optional remember checkbox. Saves preserve other mappings and honor the config
+path selected by `roam.conf`. Host sanitizer and QEMU evidence is in the
+[refinement packet](evidence/e05c/open-with/README.md). Next: independent review
+and P5 acceptance of this refinement. Thread lifetime and E5D window placement
+remain deferred. No kernel work is included here.
+
+
 **E5's Scribe consumer is accepted.** [PR #319](https://github.com/VBWizard/os64/pull/319)
 merged as `ddaad166`; Chris reported a clean review and successful P5 use,
 including resizing. No installed binary hash was captured.
 
-Active follow-up: [E5A compact footer and shared size memory](E05A_DIALOG_POLISH.md),
+Prerequisite follow-up: [E5A compact footer and shared size memory](E05A_DIALOG_POLISH.md),
 owned by Quinn on `codex/file-dialog-polish`, worktree `.worktrees/file-dialog-polish`,
 based on `5fb5f7a6`. Implementation `5efff386` is in
-[draft PR #322](https://github.com/VBWizard/os64/pull/322), with host/native checks
+[PR #322](https://github.com/VBWizard/os64/pull/322), with host/native checks
 complete. Chris reported P5 acceptance at 2560 × 1440 with his Appearance
 Workshop appearance and Frame Studio composition: size sharing survived
 reopening and reboot; navigation and New Folder passed. No installed binary
@@ -25,7 +42,7 @@ hash was captured. Review R1 fixes restored sizes exceeding the native creation 
 display change; [details and evidence](E05A_DIALOG_POLISH.md#review-r1--saved-size-after-a-display-change).
 Chris approved R1 after a P5 2560×1440 → 1024×768 → 2560×1440 reboot round trip:
 the dialog fitted the smaller display and restored its original large size.
-Review and merge remain pending. His X/Cancel/Escape close-delay report is
+R1 was resolved and fresh review requested on October 21; review and merge remain pending. His X/Cancel/Escape close-delay report is
 [diagnosed separately in E5B](E05B_CLOSE_LATENCY.md): two idle workers share a
 single-waiter pipe and one can wait for the one-second fallback wake.
 No production latency fix has been implemented. Parent-owned
@@ -63,7 +80,7 @@ was captured. [E2 evidence](evidence/e02/README.md) preserves that distinction.
 E3A/E3B are merged through [PR #264](https://github.com/VBWizard/os64/pull/264).
 [Evidence](evidence/e03/README.md) records host, native, packaging and delivery
 scope. The E3 design and implementation worktrees remain separate historical
-checkpoints; active dialog work belongs in `.worktrees/file-dialog-polish`.
+checkpoints; dialog polish remains in `.worktrees/file-dialog-polish`.
 
 | Work | State | Next action |
 | --- | --- | --- |
@@ -118,4 +135,5 @@ contracts before destructive transfers.
 R2/R3 fixes and [evidence](evidence/e05a/review-r2/README.md) address unsafe early
 font adoption and lost manual resizes from maximized state. Host sanitizers,
 leak checks and cross-build passed. Independent re-review and P5 acceptance of
-these new fixes remain pending. Bring this parent forward into the E5C branch.
+these new fixes remain pending. Parent fix `eeee450d` is integrated into E5C;
+its matching dialog consumers are rebuilt with the shared-header update.

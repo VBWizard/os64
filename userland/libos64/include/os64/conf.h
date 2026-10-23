@@ -302,4 +302,12 @@ int64_t os64_conf_update_checked(const char *name, const os64_conf_pair_t *pairs
 // One setting, same three rules. `os64_conf_write` with a count of one.
 int64_t os64_conf_set(const char *name, const char *key, const char *value);
 
+/* Merge a readable absolute source into an absolute destination. Validate both
+ * the original and merged text before atomic publication. This permits a first
+ * user override to preserve defaults from a lower config-search directory.
+ * Source and destination may be identical. Concurrent saves are last-writer-wins. */
+int64_t os64_conf_merge_checked(const char *source, const char *destination,
+    const os64_conf_pair_t *pairs, size_t count,
+    bool (*validate)(const char *, size_t, void *), void *user);
+
 #endif

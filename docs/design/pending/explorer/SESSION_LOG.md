@@ -1015,6 +1015,40 @@ workers. The jobs pipe tracks one waiting reader; the displaced reader waits
 for the one-second backstop. [E5B](E05B_CLOSE_LATENCY.md) records source, native
 timings and follow-up scope. No production fix was made during this diagnosis.
 
+
+## 2026-10-21 — E5C Roam file actions
+
+Chris approved resuming Roam while deferring the worker-lifetime fix. Quinn
+created `codex/roam-file-actions` from `328cba6d` (PR #322) and implemented
+shared extension associations with a configurable file location, literal argv
+launching, one-off Open With, Copy Full Path and Open Terminal Here. Gterm
+accepts --directory; Roam collects launched children on its UI thread.
+
+The [slice contract](E05C_ROAM_LAUNCH.md) and [evidence](evidence/e05c/README.md)
+record the interfaces, host failure injection, ASan/UBSan/LSan success outside
+the sandbox, cross-build and QEMU results. The initial QEMU setup selected the
+old FAT root; selecting the updated ext2 root corrected the test setup before
+acceptance. Real file launching, cancellation, explicit application selection,
+clipboard, directory-with-spaces terminal launch and live config override passed.
+No P5 or independent-review result is claimed. Publication is the next action;
+this branch stacks on #322. The existing dialog-worker issues remain deferred.
+
+
+E5C publication: implementation `9f31fb0f` pushed to origin and opened as
+[draft PR #325](https://github.com/VBWizard/os64/pull/325), based on
+`codex/file-dialog-polish`. #322 remains open. Next: independent review and P5
+acceptance, then retarget #325 to userland after #322 merges. No review request
+comment or merge was sent. Worktree is clean after the handoff record commit.
+
+
+## 2026-10-21 — Window placement follow-up requested
+
+Chris requested saving Roam's position and size whenever they change and
+restoring them next launch, noting other windows would benefit. Recorded
+[E5D](E05D_WINDOW_PLACEMENT.md) as a separate planned slice with shared support
+and Roam first. No implementation started; PR #322's two new review findings
+are the immediate task. The missing move-notification contract needs design.
+
 ## 2026-10-21 — PR #322 second-review fixes
 
 Chris assigned two additional findings. Both reproduced: the unplanned early
@@ -1025,3 +1059,39 @@ baseline through special window states. Five regression failures became 4,693
 passing ASan/UBSan/LSan checks, with cross-build and native QEMU validation in
 [the evidence packet](evidence/e05a/review-r2/README.md). P5 and independent
 re-review remain pending. The worker-lifetime fix remains deferred.
+
+Integration: parent fix `eeee450d` from PR #322 brought into E5C. The session-log
+merge retained both histories. Roam/Scribe/gterm cross-build and the Roam launch
+suite passed with ASan/UBSan/LSan enabled. Native dialog evidence is the parent's
+640×480 run; the earlier E5C native screenshots remain evidence for `9f31fb0f`,
+not a new full native run of this merge. The window-placement request is recorded
+in `334dcb0c` as a planned slice, without implementation.
+
+## 2026-10-21 — E5C Open With refinement
+
+Chris reports that the initial Roam file actions work on the P5, then requested
+a remember-association option and a compact Open With browser. PR #322 is
+merged; #325 targets userland. Thread lifetime and E5D placement stay deferred.
+
+Added application-picker mode: toolbar, location, directory list and a compact
+Open/Cancel/remember footer. Selection is derived from the live row because
+there is no editable filename. Other Open/Save controls are retained in their
+existing modes. Errors and incomplete listings remain visible when needed.
+
+Association persistence honors the chosen `roam.conf` value, validates the
+readable source and merged result, and atomically publishes through the shared
+checked config writer. The first bare-name override preserves lower-ladder
+defaults. Cancellation, unchecked choices and failed launches do not save.
+
+[Evidence](evidence/e05c/open-with/README.md): launch/config/lifecycle tests and
+4,760 dialog checks pass with ASan/UBSan/LSan outside the sandbox (sandbox LSan
+attachment failed with EPERM). Cross-build passes. QEMU verified compact layout,
+keyboard and mouse acceptance, custom-file persistence preserving other rules,
+and ordinary Open using the association after reboot. The QMP standalone
+button-event driver was unreliable; controlled HMP press/release passed.
+Temporary diagnostics were removed before clean-build validation.
+
+Next: independent review and Chris’s P5 acceptance of the refinement in #325.
+
+Publication: refinement `2800bef2` is pushed to PR #325. The PR remains a draft
+on `userland`, awaiting independent review and P5 feedback.

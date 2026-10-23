@@ -1,0 +1,2 @@
+Roam lifecycle: 3 chooser opens, 5 close attempts; literal argv verified.
+PASS: launch configuration, failure paths, Roam activation and chooser lifecycle

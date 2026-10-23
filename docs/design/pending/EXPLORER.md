@@ -451,7 +451,7 @@ the first browser to simulate it.
 view and selection implementation; [evidence](explorer/evidence/e03/README.md)
 records validation scope. E3 and E4 are merged. [E5's Scribe record](explorer/E05_SCRIBE.md)
 describes the shared Open/Save dialog consumer and its verification. File
-associations remain separate; Roam configuration must select their
-configuration-file path. The [project tracker](explorer/README.md) owns current
+associations are implemented in [E5C](explorer/E05C_ROAM_LAUNCH.md), with
+Roam configuration selecting their configuration-file path. The [project tracker](explorer/README.md) owns current
 review and hardware acceptance status. E6 still requires its separate channel
 architecture.

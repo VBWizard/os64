@@ -483,6 +483,7 @@ int64_t os64_conf_target(const char *name, char *path_out, size_t cap)
 
 static int64_t conf_write(const char *name, const os64_conf_pair_t *pairs,
                           size_t count, bool atomic_replace, bool delete_keys,
+                          const char *source, const char *destination,
                           bool (*validate)(const char *, size_t, void *), void *user)
 {
 	if (pairs == NULL || count == 0)
@@ -501,13 +502,17 @@ static int64_t conf_write(const char *name, const os64_conf_pair_t *pairs,
 		if (!setting_is_writable(&checked)) return OS64_CONF_BAD_SETTING;
 	}
 
-	// RULE 1: the TOP of the ladder, never where we read from. `true` asks
-	// the kernel for the path this name WOULD have at position 0 — the file
-	// does not exist yet the first time, which is exactly the case a probing
-	// resolve cannot answer.
+	// Named settings target the top of the ladder. Explicit merges supply
+	// their own destination and require a readable source, possibly elsewhere.
 	char path[OS64_CONF_PATH_MAX];
-	if (os64_conf_target(name, path, sizeof(path)) != 0)
+	if (destination) {
+		if (!source || source[0] != '/' || destination[0] != '/' ||
+		    os64_strlen(source) >= sizeof(path) || os64_strlen(destination) >= sizeof(path))
+			return OS64_CONF_BAD_SETTING;
+		os64_strcopy(path, sizeof(path), destination);
+	} else if (os64_conf_target(name, path, sizeof(path)) != 0) {
 		return OS64_CONF_NO_FILE;
+	}
 
 	// Room for the old text plus every pair appended, plus the ".new" name.
 	size_t room = OS64_CONF_MAX * 2;
@@ -519,8 +524,8 @@ static int64_t conf_write(const char *name, const os64_conf_pair_t *pairs,
 		return OS64_CONF_NO_MEMORY;
 	}
 
-	// Read whatever is there. ABSENT IS FINE — this is a first save, and the
-	// merge below simply has nothing to merge with.
+	// Named saves allow a missing destination on first save. Explicit merges
+	// require their source: a failed open must not discard inherited settings.
 	//
 	// AN ERROR IS NOT AN ENDING (Codex #29 rd12). This loop used to break on
 	// `n <= 0`, folding "the file ended" together with "the read failed" —
@@ -535,7 +540,8 @@ static int64_t conf_write(const char *name, const os64_conf_pair_t *pairs,
 	size_t got = 0;
 	bool too_big = false;
 	bool io_error = false;
-	int64_t fd = os64_open(path, "r");
+	int64_t fd = os64_open(source ? source : path, "r");
+	if (source && fd < 0) io_error = true;
 	if (fd >= 0) {
 		for (;;) {
 			int64_t n = os64_read((int32_t)fd, old + got, OS64_CONF_MAX - 1 - got);
@@ -576,6 +582,10 @@ static int64_t conf_write(const char *name, const os64_conf_pair_t *pairs,
 		return OS64_CONF_TRUNCATED;
 	}
 	old[got] = '\0';
+	if (source && validate && !validate(old, got, user)) {
+		os64_free(old); os64_free(neu);
+		return OS64_CONF_BAD_SETTING;
+	}
 
 	// RULE 2: MERGE. Rewrite line by line, replacing only what we own.
 	// count is <= OS64_CONF_WRITE_MAX (refused above), so every pair has a
@@ -724,13 +734,13 @@ static int64_t conf_write(const char *name, const os64_conf_pair_t *pairs,
 
 int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t count)
 {
-	return conf_write(name, pairs, count, false, false, NULL, NULL);
+	return conf_write(name, pairs, count, false, false, NULL, NULL, NULL, NULL);
 }
 
 int64_t os64_conf_write_checked(const char *name, const os64_conf_pair_t *pairs, size_t count,
 	bool (*validate)(const char *, size_t, void *), void *user)
 {
-	return conf_write(name, pairs, count, true, false, validate, user);
+	return conf_write(name, pairs, count, true, false, NULL, NULL, validate, user);
 }
 
 int64_t os64_conf_set(const char *name, const char *key, const char *value)
@@ -742,5 +752,13 @@ int64_t os64_conf_set(const char *name, const char *key, const char *value)
 int64_t os64_conf_update_checked(const char *name, const os64_conf_pair_t *pairs,
 	size_t count, bool (*validate)(const char *, size_t, void *), void *user)
 {
-	return conf_write(name, pairs, count, true, true, validate, user);
+	return conf_write(name, pairs, count, true, true, NULL, NULL, validate, user);
+}
+
+int64_t os64_conf_merge_checked(const char *source, const char *destination,
+    const os64_conf_pair_t *pairs, size_t count,
+    bool (*validate)(const char *, size_t, void *), void *user)
+{
+    if (!source || !destination) return OS64_CONF_BAD_SETTING;
+    return conf_write(NULL, pairs, count, true, false, source, destination, validate, user);
 }
