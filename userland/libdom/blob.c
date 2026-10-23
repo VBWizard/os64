@@ -1149,6 +1149,13 @@ static int mime_parameter(const char *type, const char *name, char *out, size_t 
             out[n] = '\0';
             return whole ? 1 : -1;
         }
+        /* Another parameter: its whole value is passed over, a quoted one
+         * to its closing quote with its escapes, before the next ';' is
+         * looked for, so `name="a; filename=b"` names no filename. */
+        if (*p == '=' && p[1] == '"') {
+            p += 2;
+            while (*p != '\0' && *p != '"') p += p[0] == '\\' && p[1] != '\0' ? 2 : 1;
+        }
         p = os64_strchr(p, ';');
     }
     if (cap > 0) out[0] = '\0';

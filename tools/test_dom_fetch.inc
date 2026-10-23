@@ -447,6 +447,18 @@ static void dom_fetch_object_cases(void)
         ".catch(x=>mlog.push('refused:'+x.message));",
         "formData: a part's parameters");
     dom_script(&f, FETCH_ASSERT "assert(mlog.join()==='true:a.txt:true::N',mlog.join());", "formData: parameters read by one parse");
+    /* A quoted value is passed over whole when another parameter is looked
+     * for: a name holding "; filename=" names no filename, whether written
+     * by hand (an escaped quote inside) or by this FormData's encoder. */
+    dom_script(&f,
+        "globalThis.qlog=[];var q='--b\\r\\nContent-Disposition: form-data; name=\"a\\\\\"; filename=\\\\\"x\"\\r\\n\\r\\nA\\r\\n--b--\\r\\n';"
+        "new Response(q,{headers:{'content-type':'multipart/form-data; boundary=b'}}).formData().then(g=>{"
+        "var k=[...g.keys()][0];qlog.push(k+'|'+(g.get(k) instanceof File)+'|'+g.get(k))}).catch(x=>qlog.push('refused:'+x.message));"
+        "var fd=new FormData();fd.append('field; filename=not-a-file','hello');"
+        "new Response(fd).formData().then(g=>{var v=g.get('field; filename=not-a-file');qlog.push((v instanceof File)+'|'+v)});",
+        "formData: a quoted value holding a separator");
+    dom_script(&f, FETCH_ASSERT "assert(qlog.join()==='a\"; filename=\"x|false|A,false|hello',qlog.join());",
+               "formData: a quoted value is passed over whole");
     /* A short header is a header: "Content-Type: x/y" types its File. */
     dom_script(&f,
         "globalThis.mlog=[];var m='--b\\r\\nContent-Disposition: form-data; name=\"f\"; filename=\"f\"\\r\\n"
