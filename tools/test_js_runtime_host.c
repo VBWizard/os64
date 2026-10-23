@@ -250,6 +250,69 @@ static void allocation_cases(void)
     os64_js_destroy(runtime);
 }
 
+/* Patch 0010: a parse whose bytecode emit ran out of memory is an
+ * exception, never a function. Every allocation an eval of a script with
+ * a function inside a function makes is failed in turn, on the raw
+ * engine, under ASan: no cut crashes (the unpatched engine turns a cut in
+ * the child's emit into a function from cut-short bytecode, reading a
+ * garbage atom), each cut that lets the script finish answers its value,
+ * and the cuts it cannot finish answer an InternalError: "out of memory",
+ * which the emit's cut is, or the engine's own "stack underflow" check,
+ * which a failed closure-variable add in resolve_scope_var trips instead
+ * (booked in DEBTS.md with the parser's other paths). The script is
+ * straight-line: a loop's labels reach resolve_labels, whose relocations
+ * write into a failed output buffer (booked there too). It runs on the
+ * target core only (tools/test_js_runtime_host.sh): the instrumented
+ * engine fails each small allocation alone, and so reaches the parser's
+ * other unchecked paths, one of them an assertion (DEBTS.md). */
+static void compile_failure_cases(void)
+{
+    static const char source[] =
+        "(function outer(seed){var total=seed;"
+        "function inner(step){var a=step+1,b=a*2,c=b-3,d=c/4,e=d%5,f=e+total;"
+        "return [a,b,c,d,e,f,'alpha','beta','gamma','delta'].length+f}"
+        "return inner(1)+inner(2)+inner(3)+total})(1)";
+    JSRuntime *engine = JS_NewRuntime();
+    JSContext *context = engine != NULL ? JS_NewContext(engine) : NULL;
+    if (context == NULL) {
+        check(false, "compile failure: an engine to compile in");
+        if (engine) JS_FreeRuntime(engine);
+        return;
+    }
+    size_t start = attempts;
+    JSValue whole = JS_Eval(context, source, sizeof(source) - 1, "compile.js", JS_EVAL_TYPE_GLOBAL);
+    size_t count = attempts - start;
+    int32_t expected = 0;
+    check(!JS_IsException(whole) && JS_ToInt32(context, &expected, whole) == 0, "compile failure: the script runs whole");
+    JS_FreeValue(context, whole);
+    unsigned out_of_memory = 0, wrong = 0;
+    for (size_t cut = 1; cut <= count; cut++) {
+        fail_at = attempts + cut;
+        JSValue value = JS_Eval(context, source, sizeof(source) - 1, "compile.js", JS_EVAL_TYPE_GLOBAL);
+        fail_at = 0;
+        if (!JS_IsException(value)) {
+            int32_t got = 0;
+            if (JS_ToInt32(context, &got, value) != 0 || got != expected) wrong++;
+            JS_FreeValue(context, value);
+            continue;
+        }
+        JSValue error = JS_GetException(context);
+        const char *text = JS_ToCString(context, error);
+        if (text != NULL && strcmp(text, "InternalError: out of memory") == 0) out_of_memory++;
+        else if (text == NULL || strncmp(text, "InternalError: stack underflow", 30) != 0) {
+            fprintf(stderr, "compile failure: cut %zu answered %s\n", cut, text != NULL ? text : "(no text)");
+            wrong++;
+        }
+        if (text) JS_FreeCString(context, text);
+        JS_FreeValue(context, error);
+    }
+    check(wrong == 0, "compile failure: each cut is the script's value or an InternalError");
+    check(out_of_memory > 0, "compile failure: the sweep reaches cuts that are out of memory");
+    JS_FreeContext(context);
+    JS_FreeRuntime(engine);
+    check(live == 0, "compile failure: every cut's storage is reclaimed");
+}
+
 static JSClassID shared_slot, distinct_slots[8], shared_ids[8];
 static void *class_worker(void *opaque)
 {
@@ -928,6 +991,11 @@ static void task_cases(void)
 }
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--compile-failure")) {
+        compile_failure_cases();
+        printf("libjs compile failure: %u checks, %u failures\n", checks, failures);
+        return failures != 0;
+    }
     if (argc >= 2 && !strcmp(argv[1], "--raw-construction")) {
         fail_at = attempts + (argc == 3 ? strtoul(argv[2], NULL, 10) : 12);
         JSRuntime *engine = JS_NewRuntime();

@@ -3662,17 +3662,21 @@ static void loop_view_refetch_short(void) {
         if(g.stream.active)
             post_arriving("<p id=out>-</p><script src=wait.js></script><script>document.getElementById('out')"
                           ".textContent=JSON.stringify(history.state)</script>");
-        // The arrival is cut up to its first script, held by `wait.js`:
-        // the stream's host made and the state kept for its binding. What
-        // runs after is the engine's, whose compile under a failed
-        // allocation is booked in DEBTS.md (libjs), and not this sweep's.
+        // The arrival is cut through to its last script: the stream's host
+        // made, the state kept for its binding, and the scripts compiled
+        // and run (a compile that runs out of memory is an exception,
+        // libjs patch 0010). Landing `wait.js` is the worker's, and is not.
         start=attempts;
         if(cut>clicked) fail_at=attempts+(cut-clicked);
         loop_settle();
+        size_t settled=attempts-start, left=fail_at>attempts ? fail_at-attempts : 0;
         fail_at=0;
-        if(!cut) arrived=attempts-start;
         script_land("wait.js","0");
+        start=attempts;
+        if(left) fail_at=attempts+left;
         loop_settle();
+        fail_at=0;
+        if(!cut) arrived=settled+(attempts-start);
         view_turns();
         // A page whose own script could not write its answer under the
         // cut (no text, or the parse's `-`) is not asked.

@@ -50,6 +50,12 @@ class PrepareTests(unittest.TestCase):
         # 0009 names the method only at the call the record was made for.
         self.assertIn('                if (unlikely(ctx->nc_atom != JS_ATOM_NULL) &&\n'
                       '                    !JS_IsFunction(ctx, call_argv[-1])) {', source)
+        # 0010 refuses a definition whose emit failed, before anything is
+        # transformed.
+        self.assertIn('    BOOL strip_var_debug;\n    \n    /* os64: a parse whose emit ran out of memory',
+                      source)
+        self.assertIn('    if (dbuf_error(&fd->byte_code)) {\n        JS_ThrowOutOfMemory(ctx);\n'
+                      '        goto fail;\n    }\n\n    /* recompute scope linkage */', source)
 
     def test_line_shifts_preserve_output(self):
         result = self.prepare()
