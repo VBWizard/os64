@@ -189,6 +189,29 @@ textencoder-utf16-surrogates.any.html	USVString handling: properly encoded MUSIC
 textencoder-utf16-surrogates.any.html	USVString handling: swapped surrogate pair
 textencoder-utf16-surrogates.any.html	USVString handling: unmatched surrogate lead
 textencoder-utf16-surrogates.any.html	USVString handling: unmatched surrogate trail
+# Slice 2: pages that load their test data with fetch() or XMLHttpRequest
+# (urltestdata.json, IdnaTestV2.json, toascii.json and the like), which
+# ran to their end once a script could fetch. Each fails with the switch off.
+replacement-encodings.any.html	csiso2022kr - empty input decodes to empty output.
+replacement-encodings.any.html	hz-gb-2312 - empty input decodes to empty output.
+replacement-encodings.any.html	iso-2022-cn - empty input decodes to empty output.
+replacement-encodings.any.html	iso-2022-cn-ext - empty input decodes to empty output.
+replacement-encodings.any.html	iso-2022-kr - empty input decodes to empty output.
+replacement-encodings.any.html	replacement - empty input decodes to empty output.
+unsupported-encodings.any.html	UTF-32 with BOM should decode as UTF-16LE
+unsupported-encodings.any.html	UTF-32 with no BOM should decode as UTF-8
+unsupported-encodings.any.html	UTF-32LE with BOM should decode as UTF-16LE
+unsupported-encodings.any.html	UTF-32LE with no BOM should decode as UTF-8
+unsupported-encodings.any.html	UTF-32be with BOM should decode as UTF-8
+unsupported-encodings.any.html	UTF-32be with no BOM should decode as UTF-8
+unsupported-encodings.any.html	UTF-7 should not be supported
+unsupported-encodings.any.html	utf-32 with BOM should decode as UTF-16LE
+unsupported-encodings.any.html	utf-32 with no BOM should decode as UTF-8
+unsupported-encodings.any.html	utf-32be with BOM should decode as UTF-8
+unsupported-encodings.any.html	utf-32be with no BOM should decode as UTF-8
+unsupported-encodings.any.html	utf-32le with BOM should decode as UTF-16LE
+unsupported-encodings.any.html	utf-32le with no BOM should decode as UTF-8
+unsupported-encodings.any.html	utf-7 should not be supported
 [excluded]
 big5-encoder.html	a legacy multi-byte encoding's table: out of slice 1a's scope (TextDecoder decodes UTF-8, UTF-16 and windows-1252)
 iso-2022-jp-decoder.any.html	a legacy multi-byte encoding's table: out of slice 1a's scope (TextDecoder decodes UTF-8, UTF-16 and windows-1252)
@@ -4893,6 +4916,12 @@ encodeInto.any.html	encodeInto() into ArrayBuffer with 𝌆A and destination len
 encodeInto.any.html	encodeInto() into ArrayBuffer with 𝌆A and destination length 3, offset 4, filler 0
 encodeInto.any.html	encodeInto() into ArrayBuffer with 𝌆A and destination length 3, offset 4, filler 128
 encodeInto.any.html	encodeInto() into ArrayBuffer with 𝌆A and destination length 3, offset 4, filler random
+replacement-encodings.any.html	csiso2022kr - empty input decodes to empty output.
+replacement-encodings.any.html	hz-gb-2312 - empty input decodes to empty output.
+replacement-encodings.any.html	iso-2022-cn - empty input decodes to empty output.
+replacement-encodings.any.html	iso-2022-cn-ext - empty input decodes to empty output.
+replacement-encodings.any.html	iso-2022-kr - empty input decodes to empty output.
+replacement-encodings.any.html	replacement - empty input decodes to empty output.
 single-byte-decoder.any.html?TextDecoder	windows-1252: ansi_x3.4-1968 (TextDecoder)
 single-byte-decoder.any.html?TextDecoder	windows-1252: ascii (TextDecoder)
 single-byte-decoder.any.html?TextDecoder	windows-1252: cp1252 (TextDecoder)
@@ -5353,3 +5382,17 @@ textencoder-utf16-surrogates.any.html	USVString handling: properly encoded MUSIC
 textencoder-utf16-surrogates.any.html	USVString handling: swapped surrogate pair
 textencoder-utf16-surrogates.any.html	USVString handling: unmatched surrogate lead
 textencoder-utf16-surrogates.any.html	USVString handling: unmatched surrogate trail
+unsupported-encodings.any.html	UTF-32 with BOM should decode as UTF-16LE
+unsupported-encodings.any.html	UTF-32 with no BOM should decode as UTF-8
+unsupported-encodings.any.html	UTF-32LE with BOM should decode as UTF-16LE
+unsupported-encodings.any.html	UTF-32LE with no BOM should decode as UTF-8
+unsupported-encodings.any.html	UTF-32be with BOM should decode as UTF-8
+unsupported-encodings.any.html	UTF-32be with no BOM should decode as UTF-8
+unsupported-encodings.any.html	UTF-7 should not be supported
+unsupported-encodings.any.html	utf-32 with BOM should decode as UTF-16LE
+unsupported-encodings.any.html	utf-32 with no BOM should decode as UTF-8
+unsupported-encodings.any.html	utf-32be with BOM should decode as UTF-8
+unsupported-encodings.any.html	utf-32be with no BOM should decode as UTF-8
+unsupported-encodings.any.html	utf-32le with BOM should decode as UTF-16LE
+unsupported-encodings.any.html	utf-32le with no BOM should decode as UTF-8
+unsupported-encodings.any.html	utf-7 should not be supported
