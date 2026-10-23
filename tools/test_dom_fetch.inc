@@ -953,6 +953,31 @@ static void dom_xhr_cases(void)
                                               "caf\xe9");
     net_answer(&f, &net, net.count - 1, &latin);
     dom_script(&f, FETCH_ASSERT "assert(xl.responseText==='caf\\u00e9',escape(xl.responseText));", "xhr: the override's charset");
+    /* The final encoding is the response's charset unless the override
+     * names one (XHR § "get a final encoding"): an override with no
+     * charset leaves the answer's windows-1252 in force. */
+    dom_script(&f, "var x=new XMLHttpRequest();x.open('GET','/m');x.overrideMimeType('text/plain');"
+               "x.send();globalThis.xm=x;", "xhr: an override without a charset");
+    os64_dom_response_t latin2 = net_answer_of(200, "http://example.test/m",
+                                               "Content-Type: text/plain;charset=windows-1252\r\n", "caf\xe9");
+    net_answer(&f, &net, net.count - 1, &latin2);
+    dom_script(&f, FETCH_ASSERT "assert(xm.responseText==='caf\\u00e9',escape(xm.responseText));",
+               "xhr: the response's charset stands under an override that names none");
+    /* A blob response's type is the final MIME type serialized whole, the
+     * response's or the override's, every parameter kept. */
+    dom_script(&f, "var x=new XMLHttpRequest();x.open('GET','/p');x.responseType='blob';x.send();globalThis.xp=x;"
+               "var y=new XMLHttpRequest();y.open('GET','/q2');y.responseType='blob';"
+               "y.overrideMimeType('Application/LD+JSON; Profile=\"p q\"');y.send();globalThis.yp=y;",
+               "xhr: blob types");
+    os64_dom_response_t ld = net_answer_of(200, "http://example.test/p",
+                                           "Content-Type: application/ld+json;profile=\"urn:x:a b\";charset=utf-8\r\n", "{}");
+    os64_dom_response_t ld2 = net_answer_of(200, "http://example.test/q2", "Content-Type: text/plain\r\n", "{}");
+    net_answer(&f, &net, net.count - 2, &ld);
+    net_answer(&f, &net, net.count - 1, &ld2);
+    dom_script(&f, FETCH_ASSERT
+        "assert(xp.response.type==='application/ld+json;profile=\"urn:x:a b\";charset=utf-8',xp.response.type);"
+        "assert(yp.response.type==='application/ld+json;profile=\"p q\"',yp.response.type);",
+        "xhr: a blob's type keeps every parameter");
 
     /* The answer's type is "extract a MIME type"'s: a comma inside a
      * quoted parameter does not split it, so the charset stands. */
