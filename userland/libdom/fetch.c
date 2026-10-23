@@ -1235,9 +1235,10 @@ static JSValue body_stream(os64_dom_t *dom, JSContext *ctx, JSValueConst self, D
         if (JS_IsException(stream)) return stream;
         b = body_of(self);
         b->stream = stream;
-        /* A body already read is a stream already closed, and one a body
-         * method read is locked by the reader it took. */
-        if (b->used) stream_state(stream)->state = ST_CLOSED;
+        /* A body already read is a stream already closed, and so is one
+         * with no bytes (enqueued whole, nothing to enqueue, then closed);
+         * one a body method read is locked by the reader it took. */
+        if (b->used || b->length == 0) stream_state(stream)->state = ST_CLOSED;
         if (b->consumed) stream_state(stream)->locked = true;
     }
     return JS_DupValue(ctx, b->stream);
@@ -1315,7 +1316,10 @@ static JSValue stream_make(os64_dom_t *dom, JSContext *ctx, JSValueConst owner, 
 
 JSValue d_stream_new(os64_dom_t *dom, JSContext *ctx, const uint8_t *bytes, size_t length)
 {
-    return stream_make(dom, ctx, JS_UNDEFINED, bytes, length);
+    JSValue stream = stream_make(dom, ctx, JS_UNDEFINED, bytes, length);
+    /* No bytes: closed at creation, as a body's is. */
+    if (!JS_IsException(stream) && length == 0) stream_state(stream)->state = ST_CLOSED;
+    return stream;
 }
 
 /* Settles a reader's `closed`: resolved (`error` undefined) or rejected. */
@@ -2447,7 +2451,8 @@ void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, void *answer
         return;
     }
     /* Answered: a body not yet read is read as the reason; an empty one
-     * closed before it could error, and reads as empty. */
+     * reads as empty, its stream closed from its creation (body_stream),
+     * so there is nothing for the abort to error. */
     DResp *r = answered;
     if (r != NULL && JS_IsUndefined(r->body.aborted) && r->body.has && r->body.length != 0 && !r->body.used) {
         r->body.aborted = JS_DupValue(ctx, reason);

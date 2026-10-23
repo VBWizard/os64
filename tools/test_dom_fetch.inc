@@ -421,6 +421,14 @@ static void dom_fetch_object_cases(void)
         "stream: the one chunk read");
     dom_script(&f, FETCH_ASSERT "assert(slog.join()==='chunk:3,closed',slog.join());",
                "stream: closed once its only chunk is taken");
+    /* A body with no bytes is a stream closed at its creation: its reader's
+     * closed settles with no read, and so does an empty Blob's stream. */
+    dom_script(&f,
+        "globalThis.elog=[];new Response('').body.getReader().closed.then(()=>elog.push('response'));"
+        "new Blob([]).stream().getReader().closed.then(()=>elog.push('blob'));",
+        "stream: empty bodies");
+    dom_script(&f, FETCH_ASSERT "assert(elog.join()==='response,blob',elog.join());",
+               "stream: an empty body's stream is closed at its creation");
     /* releaseLock(): a pending `closed` rejects with a TypeError. */
     dom_script(&f,
         "globalThis.rlog=[];var rd6=new Response('abc').body.getReader();rd6.closed.catch(e=>rlog.push('pending:'+e.name));"
