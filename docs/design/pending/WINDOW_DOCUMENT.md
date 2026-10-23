@@ -34,7 +34,9 @@ There are two weightings because no one public source measures every member
   measure, which is the niche members.
 - **Corpus-weighted** weights each member by how many of our 839 kept pages
   (163 sites) mention it in their own bytes, found by a static scan. It
-  covers every member. It is our pages and not the web.
+  covers every member. It is our pages and not the web. The 839 are the
+  three pulls of 2026-10-21, -22 and -22b together; the baseline pull,
+  -22b, is one of the three (§ Usage, 4).
 
 **The owner's target** is at least 50% of what pages regularly use, and
 preferably 75%. Window already passes 50% on both measures, and Document
@@ -61,8 +63,9 @@ What blocks pages today is mostly not exotic, and the corpus says so plainly:
   (229, 316, 271, 298 and 378 pages).
 - `window.origin`, `isSecureContext`, `queueMicrotask` and `crypto` are
   absent (`crypto` is 49.2% of Chrome page loads by `getRandomValues` alone).
-- `window.opener` is absent: 143 MISSING asks in 20 of the 198 tallied page
-  files.
+- `window.opener` is absent: 143 MISSING asks in 20 of the 198 page files
+  the census tallied in the baseline pull's replay (2026-10-22b, at Slice
+  0d).
 
 Every one of these is low-hanging fruit: the state is already in the binding
 or in yonder.
@@ -85,12 +88,25 @@ or in yonder.
 | P6a–d | `trustedTypes`, `document.fonts`, `cookieStore`, `scheduler` | 4 | 86.0% / 88.5% | 86.5% / 95.6% |
 | slices 2, 5d | `fetch`, `requestAnimationFrame`, `cancelAnimationFrame` | 3 | 92.6% / 94.7% | — |
 
-What stays out after all of that is 79 Window and 98 Document members that
-need a subsystem no slice plans (class d), plus 30 and 20 that are
-deliberately skipped (class e). The largest groups are Selection and Range,
+What stays out after all of that is 78 Window and 98 Document members that
+need a subsystem no slice plans (class d), `print()` (class a, in no phase:
+§ Classification), plus 30 and 20 that are deliberately skipped (class e). The largest groups are Selection and Range,
 editing, XPath, CSSOM style sheets, pointer and drag events, and media. Most
-of the rest are event handlers, and adding a handler before the events it
-announces actively harms pages that feature-detect (§ The handler hazard).
+of the rest are event handlers, for the reason below.
+
+**The handler hazard, which binds every phase.** A handler's existence is
+how pages detect a feature. `'ontouchstart' in window` reads as "this is a
+phone"; `'onpointerdown' in window` makes pointer-event libraries stop
+listening for mouse events; `ontransitionend` makes a transition helper
+wait for an event yonder never fires. So adding a handler before the
+events it announces actively harms the pages that feature-detect, and **an
+`on<type>` handler joins only with the events it names, in the phase that
+makes yonder fire them**. That is rule 1 (whole API or none) at the
+granularity of a single property. § The handler hazard has it in full.
+P1-W's three handlers (`ononline`, `onoffline`, `onlanguagechange`) keep
+the rule rather than break it: their events are owed only when
+`navigator.onLine` or the person's languages change, and yonder has
+neither to change.
 
 ## How the binding was measured
 
@@ -191,15 +207,20 @@ Each member carries up to four numbers. Appendices A and B have the columns.
    BigQuery tables (`httparchive.*`), which this session cannot query. The
    Web Almanac publishes only selected APIs, chapter by chapter, and none of
    them per member of Window or Document. **No HTTP Archive number is used.**
-4. **Our corpus**, in two instruments:
-   - **MISSING files/asks** (Window only) is the census tally, `python3 -I
+4. **Our corpus**, in two instruments, over two different sets of pulls.
+   The corpus is pulled from the P5 as it grows, and the baseline a slice is
+   judged against is one pull, 2026-10-22b, the third. Each count below
+   names its pulls, so a later pull adds to the corpus without moving any
+   number here:
+   - **MISSING files/asks** (Window only) is the census tally over the
+     baseline pull alone, replayed at Slice 0d: `python3 -I
      tools/yonder_tally.py --kind global --top 400
      ~/os64-corpus/replays/2026-10-22b_0d-after`. It counted 198 page files
      from 86 sites, and set aside 32 incomplete, 9 unfinished and 19
      unjudged records. The global-miss hook hears only lookups on `window`,
      so a missing *document* member is never a MISSING line.
-   - **Scan pages** is a static scan of the 839 kept pages (163 sites) in
-     the three kept corpora of 2026-10-21, -22 and -22b. Each page is its
+   - **Scan pages** is a static scan of the 839 kept pages (163 sites) of
+     all three pulls, 2026-10-21, -22 and -22b, together. Each page is its
      `.html` and every script kept beside it. A Document member counts when
      the bytes say `document.X` or `document['X']`. A Window member counts
      on `window.X`, `self.X` or `globalThis.X`, or as a bare identifier not
@@ -224,10 +245,20 @@ each member's class, phase and the reason.
 | class | meaning | Window | Document |
 |---|---|---:|---:|
 | present | classic or modern today | 64 | 58 |
-| (a) low-hanging fruit | reads or forwards state the binding or yonder already has, or a small self-contained algorithm | 27 | 35 |
+| (a) low-hanging fruit | reads or forwards state the binding or yonder already has, or a small self-contained algorithm | 28 | 35 |
 | (b) medium | a new piece of state, a host hook or a new interface, no new subsystem | 37 | 22 |
 | (c) planned slice | slice 2 (`fetch`), slice 5d (`requestAnimationFrame`, `cancelAnimationFrame`), Tier 1 (custom elements, CSP's `onsecuritypolicyviolation`) | 5 | 2 |
-| (d) new subsystem | needs something no slice plans | 79 | 98 |
+| (d) new subsystem | needs something no slice plans | 78 | 98 |
+
+**`print()` is (a), in no phase.** HTML § 8.9.2's printing steps begin:
+"The user agent may display a message to the user or return (or both).
+For instance, a kiosk browser could silently ignore any invocations of the
+print() method." A `print()` that returns there is conformant, and since it
+returns before the steps that fire them, `beforeprint` and `afterprint`
+never fire. It was classed (d) when the phases were counted, so no phase
+holds it and the coverage tables leave it out (Window's are 0.01 points
+C and 0.14 scan short of what it adds). Its two handlers stay (d),
+printing: they announce a print path that a no-op does not have.
 | (e) skip | obsolete, Chromium-only, harmful to expose, or meaningless for one user on one machine | 30 | 20 |
 
 **The handler hazard.** Most (d) rows are `on<type>` handlers, and the reason
@@ -256,7 +287,7 @@ would be half an object.
   absent. Pages detect `crypto.subtle` separately, and 49.2% of Chrome page
   loads call `getRandomValues` while `SubtleCryptoDigest`, the most common
   subtle call, is 12.2%.
-- **The ruling is Chris's** (§ Rulings this needs).
+- **Ruled for the lean** (§ Rulings this needs).
 
 ## The phase plan
 
@@ -608,8 +639,8 @@ Cumulative, each interface separately. **unw** is members present over the
 | P6a–d | 128 | 52.9% | 86.0% | 88.5% | 115 | 48.9% | 86.5% | 95.6% |
 | slices 2 and 5d | 131 | 54.1% | 92.6% | 94.7% | 115 | 48.9% | 86.5% | 95.6% |
 
-Unweighted coverage stays near half by design. 109 Window and 118 Document
-members are (d) or (e), and 162 of those 227 are event handlers. The
+Unweighted coverage stays near half by design. 108 Window and 118 Document
+members are (d) or (e), and 162 of those 226 are event handlers. The
 unweighted ceiling of everything this plan and the arc's slices name is 133
 Window and 117 Document members.
 
@@ -629,7 +660,7 @@ The lean for each is stated. All of them are Chris's.
 1. **`crypto` without `subtle` on an `https:` page.** The lean is to ship
    it: the call pages make is `getRandomValues`, and `subtle`'s absence is
    detected separately. The alternative is to wait for a WebCrypto design
-   over BearSSL (d).
+   over BearSSL (d). **Ruled for the lean** (2026-10-23); P1-W ships it.
 2. **`createElementNS` for a namespace other than HTML, SVG and MathML.**
    The lean is to refuse it with NotSupportedError, as `createDocument`
    already does, rather than teach libhtml an element in an arbitrary
@@ -659,9 +690,6 @@ The lean for each is stated. All of them are Chris's.
   `confirm`/`prompt` are libdom's (`core.c`) and yonder sets no option that
   changes them; `alert` reaches yonder's `script_alert`. This was read from
   the source, not probed in the scripted-page host.
-- **`print()`.** It is classed (d), printing, together with
-  `onbeforeprint`/`onafterprint`. Whether a no-op is conformant on a machine
-  with no printer was not settled from HTML's text.
 
 ## Sources
 
@@ -672,8 +700,8 @@ The lean for each is stated. All of them are Chris's.
 | Chrome use counters (chromestatus.com `/data/featurepopularity`) | the day 2026-10-21, fetched 2026-10-23 | the C column |
 | webstatus.dev API, with web-features 3.44.0 | as served 2026-10-23 | the W numbers |
 | HTTP Archive / Web Almanac | not usable per member (BigQuery only) | nothing |
-| yonder_tally over `2026-10-22b_0d-after` | 198 page files, 86 sites | MISSING files/asks |
-| static scan of the kept corpora 2026-10-21, -22, -22b | 839 pages, 163 sites | scan pages |
+| yonder_tally over `2026-10-22b_0d-after`: the baseline pull alone, replayed at Slice 0d | 198 page files, 86 sites | MISSING files/asks |
+| static scan of the three pulls 2026-10-21, -22 and -22b together | 839 pages, 163 sites | scan pages |
 | the DOM host probe at `userland` 47e960c1 | 2026-10-23 | present, classic/modern, stub |
 | WPT | the runner's pin `a699fb16` (directory names checked against it) | each phase's oracle |
 
@@ -687,8 +715,8 @@ Columns:
   "stub", "constant" or "partial" where the probe found one; else absent.
 - **Chrome %**: § Usage 1. A **W** suffix is a webstatus.dev feature
   figure.
-- **scan pages**: of 839.
-- **MISSING files/asks**: of 198 page files.
+- **scan pages**: of 839, the three pulls together.
+- **MISSING files/asks**: of 198 page files, the baseline pull's.
 - **class**: (a)–(e) and its phase.
 
 Members with Chrome numbers come first, ordered by them; then the rest by
@@ -760,7 +788,7 @@ scan pages.
 | `navigation` | ro attr | html | absent | 0.23 W | 54 |  | d | the Navigation API: a second session model beside history; webstatus.dev feature `navigation` (feature-level) |
 | `resizeTo` | method | cssom-view | absent | 0.15 | 4 |  | a P1-W | no-op: only a script-opened auxiliary window may be moved or sized (CSSOM View); WindowResize covers resizeTo and resizeBy |
 | `resizeBy` | method | cssom-view | absent | 0.15 | 1 |  | a P1-W | no-op: only a script-opened auxiliary window may be moved or sized (CSSOM View); counter `WindowResize` |
-| `print` | method | html | absent | 0.14 | 26 |  | d | printing |
+| `print` | method | html | absent | 0.14 | 26 |  | a, no phase | a no-op, which HTML's printing steps permit (§ Classification); in no phase's count |
 | `credentialless` | ro attr | anonymous-iframe | absent | 0.10 W |  |  | e | Chromium-only or near-zero usage, meaningless for one user on one machine; webstatus.dev feature `iframe-credentialless` (feature-level) |
 | `moveTo` | method | cssom-view | absent | 0.08 | 21 |  | a P1-W | no-op: only a script-opened auxiliary window may be moved or sized (CSSOM View); WindowMove covers moveTo and moveBy |
 | `moveBy` | method | cssom-view | absent | 0.08 | 2 |  | a P1-W | no-op: only a script-opened auxiliary window may be moved or sized (CSSOM View); counter `WindowMove` |
