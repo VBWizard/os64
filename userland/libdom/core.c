@@ -386,15 +386,14 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
     int installed = JS_IsException(doc) ? -1 : unforgeable_window(ctx, global);
     if (installed >= 0) installed = d_held_getter(dom, ctx, global, "document", doc, JS_PROP_ENUMERABLE);
     JS_FreeValue(ctx, doc);
-    /* A window with no frames is its own self, frames, parent and top
-     * (HTML § Window): the first three are [Replaceable], so a page may
-     * assign over them, and `top` is [LegacyUnforgeable] and read-only.
-     * `frames` is the window, so its `length` is the window's: no frames. */
+    /* The window is its own self and frames (HTML § Window), both
+     * [Replaceable], so a page may assign over them. Its top, parent and
+     * length are its browsing context's answers, asked as P1-W's members
+     * are (browsing.c, d_browsing_classic): for a window with no frames,
+     * itself, itself and 0. */
     if (installed >= 0) installed = JS_DefinePropertyValueStr(ctx, global, "self", JS_DupValue(ctx, global), JS_PROP_C_W_E);
     if (installed >= 0) installed = JS_DefinePropertyValueStr(ctx, global, "frames", JS_DupValue(ctx, global), JS_PROP_C_W_E);
-    if (installed >= 0) installed = JS_DefinePropertyValueStr(ctx, global, "parent", JS_DupValue(ctx, global), JS_PROP_C_W_E);
-    if (installed >= 0) installed = JS_DefinePropertyValueStr(ctx, global, "top", JS_DupValue(ctx, global), JS_PROP_ENUMERABLE);
-    if (installed >= 0) installed = JS_DefinePropertyValueStr(ctx, global, "length", JS_NewInt32(ctx, 0), JS_PROP_C_W_E);
+    if (installed >= 0) installed = d_browsing_classic(dom, ctx, global);
     if (installed >= 0) installed = d_method(dom, ctx, global, "alert", dialog, 1, 0);
     if (installed >= 0) installed = d_method(dom, ctx, global, "confirm", dialog, 1, 1);
     if (installed >= 0) installed = d_method(dom, ctx, global, "prompt", dialog, 2, 2);

@@ -45,9 +45,12 @@ classification belongs to the guarded libjs operation.
 The D5 surface follows `docs/design/pending/DOM_BRIEFS.md`: document landmarks,
 queries, creation, tree mutation/navigation, attributes, text and markup,
 and control properties. `window` names the global object, and so do `self`, `frames`, `parent` and
-`top`, as they do for a window with no frames: `self`, `frames` and
-`parent` are [Replaceable] (a page may assign over them), `top` is read-only
-and unconfigurable, and the window's `length`, its frame count, is 0.
+`top`, as they do for a window with no frames: `self`, `frames`, `parent`
+and `length` are [Replaceable] (a page may assign over them), `top` is
+read-only and unconfigurable, and the window's `length`, its frame count,
+is 0.
+`top`, `parent` and `length` are accessors that ask the window's browsing
+context (browsing.c, § P1-W's rows), which answers so for a root.
 `window` and `document` are [LegacyUnforgeable] (core.c): own accessors of
 the global with no setter, neither configurable, so an assignment is
 ignored outside strict mode and a TypeError in it, and a page can neither
@@ -967,7 +970,14 @@ person opened, never a frame and never a window a script opened, and each
 member answers what HTML gives such a window (browsing.c's header has the
 reason for each).
 
-**The window as a browsing context** (`browsing.c`): `opener` null (an
+**The window as a browsing context** (`browsing.c`). `frameElement`,
+`length`, `top`, `parent`, `origin`, `isSecureContext` and
+`originAgentCluster` are each asked of one function of the window's
+browsing context (`context_answer`) and none is installed as a constant,
+as IFRAME.md § What the open slices do now rules, so a frame's context is
+taught there; today every context is a root, and the answers are these.
+`[SecureContext]` members ask the same context (`d_secure_context`).
+`opener` null (an
 assignment of anything but null makes it window's own data property),
 `closed` false and `close()` a no-op (no page closes the person's window),
 `moveTo`, `moveBy`, `resizeTo` and `resizeBy` no-ops that still convert

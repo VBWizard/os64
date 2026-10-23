@@ -131,6 +131,8 @@ static void dom_window_classic_cases(void)
             "for(const n of ['window','document']){const d=Object.getOwnPropertyDescriptor(window,n);"
             "assert(typeof d.get==='function'&&d.set===undefined&&!d.configurable&&d.enumerable,n);}"
             "assert(window===globalThis&&window.window===window&&document.nodeType===9);"
+            "assert(top===window&&parent===window&&length===0&&frames===window,'the root context, either way');"
+            "for(const n of ['top','parent','length'])assert(typeof Object.getOwnPropertyDescriptor(window,n).get==='function',n);"
             "window=1;document=2;window.document=3;self.window=4;"
             "assert(window===win&&document===doc&&globalThis.window===win,'an assignment is ignored');"
             "throws('TypeError',()=>{'use strict';window.document=1});"

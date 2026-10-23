@@ -1,5 +1,4 @@
 #include "internal.h"
-#include "way/origin.h"
 
 /* `crypto` (Web Cryptography's Crypto interface): getRandomValues and
  * randomUUID, over the host's entropy (options.entropy; yonder's is
@@ -7,9 +6,9 @@
  * a design of its own, and pages detect it apart from getRandomValues
  * (WINDOW_DOCUMENT.md, ruling 1), so a secure page's crypto lacks the one
  * member a browser's has, and what it has is whole. randomUUID is
- * [SecureContext]: it exists only on a page whose address libway judges
- * potentially trustworthy, the judgement isSecureContext reads
- * (browsing.c).
+ * [SecureContext]: it exists only in a secure context, as the window's
+ * browsing context answers it (browsing.c's d_secure_context, the answer
+ * isSecureContext reads).
  *
  * THE BYTES ARE THE HOST'S OR NONE. A hook that fails throws an
  * OperationError, and nothing it wrote reaches the page: it writes into
@@ -194,7 +193,7 @@ int d_crypto_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_method_named(dom, ctx, prototype, "getRandomValues", crypto_member, 1, C_GET_RANDOM_VALUES) < 0)
         return -1;
     /* [SecureContext]: on a page that is not one, the member is not there. */
-    if (way_url_trustworthy(dom->url != NULL ? dom->url : "about:blank") &&
+    if (d_secure_context(dom) &&
         d_method_named(dom, ctx, prototype, "randomUUID", crypto_member, 0, C_RANDOM_UUID) < 0)
         return -1;
     JSValue crypto = JS_NewObjectClass(ctx, (int)id);

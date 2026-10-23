@@ -17,17 +17,21 @@
  *   - moveTo, moveBy, resizeTo and resizeBy do nothing, as CSSOM View
  *     makes them for any window a script did not open; their arguments
  *     are still converted, as WebIDL converts them before any step;
- *   - frameElement is null (no frame holds it), crossOriginIsolated is
- *     false (yonder sends no COOP or COEP isolation), originAgentCluster
- *     is true (each page's runtime is its own, so its agent cluster is
- *     keyed by no more than its origin);
- *   - origin is the page's origin serialized, d_origin's, which storage
- *     keys on, and isSecureContext whether the page's address is
- *     potentially trustworthy, libway's one judgement of it
- *     (way_url_trustworthy): the page's own address stands for HTML's
- *     top-level creation URL, the two being one for a page that is never
- *     a frame. A binding with no address is about:blank, which that
- *     judgement counts, as Secure Contexts does;
+ *   - frameElement, length, top, parent, origin, isSecureContext and
+ *     originAgentCluster are what the window's browsing context answers,
+ *     asked of one function (context_answer, below) and none installed as
+ *     a constant; for a root: frameElement null (no frame holds it),
+ *     length 0, top and parent the window itself, origin the page's
+ *     origin serialized (d_origin's, which storage keys on),
+ *     isSecureContext whether the page's address is potentially
+ *     trustworthy (libway's one judgement, way_url_trustworthy, which
+ *     counts about:blank, what a binding with no address is), and
+ *     originAgentCluster true (each page's runtime is its own, so its
+ *     agent cluster is keyed by no more than its origin). top, parent and
+ *     length are every page's (d_browsing_classic), the rest this file's
+ *     rows';
+ *   - crossOriginIsolated is false (yonder sends no COOP or COEP
+ *     isolation);
  *   - captureEvents() and releaseEvents() do nothing, as HTML defines them;
  *   - clientInformation is the navigator object again;
  *   - the six BarProps (locationbar, menubar, personalbar, scrollbars,
@@ -50,16 +54,23 @@
  *     checkpoint carries on past it, and a host drains on past a script
  *     whose jobs threw, as yonder's scripts.c does).
  *
- * [Replaceable] members (clientInformation, origin, the BarProps,
- * external) take an assignment as window's own data property. */
+ * [Replaceable] members (clientInformation, origin, length, parent, the
+ * BarProps, external) take an assignment as window's own data property;
+ * top, [LegacyUnforgeable], has no setter and cannot be redefined. */
 
 static JSClassID bar_slot, external_slot;
 static int bar_mark, external_mark;
 
+/* What window answers from its browsing context (context_answer). */
+enum { C_FRAME_ELEMENT, C_LENGTH, C_TOP, C_PARENT, C_ORIGIN, C_SECURE, C_AGENT_CLUSTER };
+
 enum {
     B_OPENER, B_CLOSED, B_CLOSE, B_CLIENT_INFORMATION, B_MOVE_TO, B_MOVE_BY, B_RESIZE_TO, B_RESIZE_BY,
-    B_CAPTURE_EVENTS, B_RELEASE_EVENTS, B_QUEUE_MICROTASK, B_SECURE, B_FRAME_ELEMENT, B_ORIGIN, B_ISOLATED,
-    B_AGENT_CLUSTER, B_EXTERNAL, B_SEARCH_PROVIDER, B_VISIBLE, B_BAR
+    B_CAPTURE_EVENTS, B_RELEASE_EVENTS, B_QUEUE_MICROTASK, B_ISOLATED, B_EXTERNAL, B_SEARCH_PROVIDER,
+    B_VISIBLE,
+    /* window's members that ask the browsing context, each B_CONTEXT + its
+     * C_ question. */
+    B_CONTEXT, B_BAR = B_CONTEXT + C_AGENT_CLUSTER + 1
 };
 
 static const char *const kBars[6] = {"locationbar", "menubar", "personalbar", "scrollbars", "statusbar",
@@ -90,6 +101,36 @@ static const char *page_address(const os64_dom_t *dom)
     return dom->url != NULL ? dom->url : "about:blank";
 }
 
+/* WHAT WINDOW ANSWERS FROM ITS BROWSING CONTEXT (IFRAME.md § What the open
+ * slices do now): frameElement, length, top, parent, origin,
+ * isSecureContext and originAgentCluster, every one asked here and none
+ * installed as a constant, so the frame slice teaches this one function
+ * what a frame's context answers instead of reshaping seven members.
+ * `context` is the binding whose window is asked; today every binding's
+ * window is the root of its tree, with no frame element, no child frames
+ * and itself for top and parent; its address stands for HTML's top-level
+ * creation URL, which for a root it is. */
+bool d_secure_context(const os64_dom_t *context)
+{
+    return way_url_trustworthy(page_address(context));
+}
+
+static JSValue context_answer(os64_dom_t *context, JSContext *ctx, int question)
+{
+    switch (question) {
+    case C_FRAME_ELEMENT: return JS_NULL;
+    case C_LENGTH: return JS_NewInt32(ctx, 0);
+    case C_TOP: case C_PARENT: return JS_GetGlobalObject(ctx);
+    case C_ORIGIN: {
+        char origin[WAY_ORIGIN_TEXT_MAX];
+        return JS_NewString(ctx, d_origin(page_address(context), origin, sizeof(origin)) ? origin : "null");
+    }
+    case C_SECURE: return JS_NewBool(ctx, d_secure_context(context));
+    case C_AGENT_CLUSTER: return JS_TRUE;
+    default: return JS_ThrowTypeError(ctx, "Unknown browsing-context member");
+    }
+}
+
 static JSValue browsing_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
                                JSValue *data)
 {
@@ -115,15 +156,7 @@ static JSValue browsing_member(JSContext *ctx, JSValueConst self, int argc, JSVa
         if (argc < 1 || !JS_IsFunction(ctx, argv[0]))
             return JS_ThrowTypeError(ctx, "queueMicrotask needs a function");
         return JS_EnqueueJob(ctx, microtask, 1, argv) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
-    case B_SECURE: return JS_NewBool(ctx, way_url_trustworthy(page_address(dom)));
-    case B_FRAME_ELEMENT: return JS_NULL;
-    case B_ORIGIN: {
-        if (set) return own_property(ctx, "origin", argc, argv);
-        char origin[WAY_ORIGIN_TEXT_MAX];
-        return JS_NewString(ctx, d_origin(page_address(dom), origin, sizeof(origin)) ? origin : "null");
-    }
     case B_ISOLATED: return JS_FALSE;
-    case B_AGENT_CLUSTER: return JS_TRUE;
     case B_EXTERNAL:
         return set ? own_property(ctx, "external", argc, argv) : JS_DupValue(ctx, dom->external->value);
     case B_SEARCH_PROVIDER:
@@ -134,21 +167,48 @@ static JSValue browsing_member(JSContext *ctx, JSValueConst self, int argc, JSVa
         if (JS_GetOpaque(self, os64_js_class_id(&bar_slot)) == NULL)
             return JS_ThrowTypeError(ctx, "Expected a BarProp");
         return JS_TRUE;
-    default: {
+    default:
+        if (magic >= B_CONTEXT && magic < B_BAR) {
+            /* length, parent and origin are [Replaceable]; the others have
+             * no setter. */
+            static const char *const kReplaceable[C_AGENT_CLUSTER + 1] = {
+                [C_LENGTH] = "length", [C_PARENT] = "parent", [C_ORIGIN] = "origin"};
+            int question = magic - B_CONTEXT;
+            if (set)
+                return kReplaceable[question] != NULL ? own_property(ctx, kReplaceable[question], argc, argv)
+                                                      : JS_UNDEFINED;
+            return context_answer(dom, ctx, question);
+        }
         int bar = magic - B_BAR;
         if (bar < 0 || bar >= 6) return JS_ThrowTypeError(ctx, "Unknown window member");
         return set ? own_property(ctx, kBars[bar], argc, argv) : JS_DupValue(ctx, dom->bars[bar]->value);
     }
-    }
+}
+
+/* top, parent and length: every page's, the Modern Web switch on or off,
+ * as they were when core.c installed them as the window itself and 0.
+ * top is [LegacyUnforgeable], so its accessor is not configurable. */
+int d_browsing_classic(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    if (d_accessor(dom, ctx, global, "parent", browsing_member, B_CONTEXT + C_PARENT, true) < 0 ||
+        d_accessor(dom, ctx, global, "length", browsing_member, B_CONTEXT + C_LENGTH, true) < 0)
+        return -1;
+    JSAtom atom = JS_NewAtom(ctx, "top");
+    if (atom == JS_ATOM_NULL) return -1;
+    JSValue get = JS_NewCFunctionData(ctx, browsing_member, 0, B_CONTEXT + C_TOP, 1, &dom->anchor->value);
+    int result = JS_IsException(get) ? -1 : JS_DefinePropertyGetSet(ctx, global, atom, get, JS_UNDEFINED,
+                                                                     JS_PROP_ENUMERABLE);
+    JS_FreeAtom(ctx, atom);
+    return result;
 }
 
 int d_browsing_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     static const struct { const char *name; int magic; bool writable; } kAttributes[] = {
         {"opener", B_OPENER, true}, {"closed", B_CLOSED, false},
-        {"clientInformation", B_CLIENT_INFORMATION, true}, {"isSecureContext", B_SECURE, false},
-        {"frameElement", B_FRAME_ELEMENT, false}, {"origin", B_ORIGIN, true},
-        {"crossOriginIsolated", B_ISOLATED, false}, {"originAgentCluster", B_AGENT_CLUSTER, false},
+        {"clientInformation", B_CLIENT_INFORMATION, true}, {"isSecureContext", B_CONTEXT + C_SECURE, false},
+        {"frameElement", B_CONTEXT + C_FRAME_ELEMENT, false}, {"origin", B_CONTEXT + C_ORIGIN, true},
+        {"crossOriginIsolated", B_ISOLATED, false}, {"originAgentCluster", B_CONTEXT + C_AGENT_CLUSTER, false},
     };
     static const struct { const char *name; int magic, length; } kMethods[] = {
         {"close", B_CLOSE, 0}, {"moveTo", B_MOVE_TO, 2}, {"moveBy", B_MOVE_BY, 2},

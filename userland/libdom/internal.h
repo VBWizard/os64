@@ -547,6 +547,12 @@ int d_implementation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
  * window's members as a browsing context (browsing.c), its BarProps and
  * `external` (the same file), and `crypto` (crypto.c). */
 int d_browsing_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* top, parent and length, every page's (browsing.c), asked of the window's
+ * browsing context as P1-W's members are; and whether that context is a
+ * secure context, the answer isSecureContext and every [SecureContext]
+ * member read. */
+int d_browsing_classic(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+bool d_secure_context(const os64_dom_t *context);
 int d_bars_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_external_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_crypto_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);

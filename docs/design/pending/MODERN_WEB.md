@@ -2157,6 +2157,21 @@ adversarial and truth passes are done; the cold read is next.
 - **The WPT runner** loads a page whose name says `.https.` over https, as
   WPT's own runner does, so a `[SecureContext]` member is there to test.
 
+**The frame rule.** P1-W follows IFRAME.md § What the open slices do now
+(Fable's frame design): `frameElement`, `length`, `top`, `parent`,
+`origin`, `isSecureContext` and `originAgentCluster` are each asked of one
+function of the window's browsing context (`browsing.c`'s
+`context_answer`), none installed as a constant, so the frame slice
+teaches that function what a frame's context answers. Today every context
+is a root: null, 0, the window, the window, the page's origin, the page's
+address judged by `way_url_trustworthy`, and true. `top`, `parent` and
+`length` were core.c's data properties (the window itself and 0); they
+are now accessors there too, every page's whatever the switch says, `top`
+unforgeable and the other two [Replaceable]. `randomUUID`'s
+`[SecureContext]` asks the same context (`d_secure_context`). P1-W's one
+yonder change, the entropy hook, holds no page and adds no file-level
+static (that document's rule for every yonder change).
+
 **Classic or modern.** The 27 members are Modern Web rows, four of them:
 they are globals the arc adds to window, which rule 4 says the switch takes
 away. The three classic fixes are corrections to members every page has

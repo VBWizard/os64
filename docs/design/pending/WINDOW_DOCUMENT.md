@@ -726,7 +726,7 @@ scan pages.
 | member | kind | spec | yonder | Chrome % | scan pages | MISSING files/asks | class | note |
 |---|---|---|---|---|---|---|---|---|
 | `location` | ro attr | html | classic | 96.03 | 635 |  |  |  |
-| `top` | ro attr | html | classic | 80.25 | 254 |  |  | a data property, as [LegacyUnforgeable] wants; read-only |
+| `top` | ro attr | html | classic | 80.25 | 254 |  |  | a read-only data property when measured; since P1-W an unforgeable accessor asking the browsing context (IFRAME.md's rule) |
 | `localStorage` | ro attr | html | modern | 79.76 | 463 |  |  | proxy: DOMStorageRead counts any Web Storage read (both areas) |
 | `sessionStorage` | ro attr | html | modern | 79.76 | 354 |  |  | proxy: DOMStorageRead counts any Web Storage read (both areas) |
 | `fetch` | method | fetch | absent | 72.62 | 502 | 55/82 | c slice 2 | fetch, in review; counter `Fetch` |
@@ -745,7 +745,7 @@ scan pages.
 | `opener` | attr | html | absent | 51.60 | 19 | 20/143 | a P1-W | null: no yonder window is opened by a script (settable, [Replaceable]-like per HTML) |
 | `crypto` | ro attr | webcrypto | absent | 49.19 | 210 | 34/87 | a P1-W | Crypto with getRandomValues and randomUUID over a host entropy hook (/dev/random, the source libtls reads); subtle is [SecureContext] and (d); proxy: crypto.getRandomValues calls; lower bound for the attribute |
 | `scrollY` | ro attr | cssom-view | modern | 45.27 | 299 |  |  | counter `WindowScrollY` |
-| `length` | ro attr | html | classic, constant | 44.55 | 17 |  |  | 0: no frames |
+| `length` | ro attr | html | classic, constant | 44.55 | 17 |  |  | 0: no frames; since P1-W asked of the browsing context, not installed as a constant (IFRAME.md's rule) |
 | `outerWidth` | ro attr | cssom-view | modern | 31.56 | 141 |  |  | counter `WindowOuterWidth` |
 | `outerHeight` | ro attr | cssom-view | modern | 30.12 | 139 |  |  | counter `WindowOuterHeight` |
 | `event` | ro attr | dom | classic | 28.99 | 171 |  |  | counter `WindowEvent` |
