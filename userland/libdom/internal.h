@@ -55,9 +55,8 @@ struct DValue {
     const os64_html_node_t *node, *target;
     os64_dom_t *dom;
     DValue *style, *class_list, *dataset, *attributes;
-    /* An element's wrapper: the Attrs made for its attributes, one per
-     * name. An Attr's own entry: its record. Both attr.c's. */
-    struct DAttr *attrs, *attr;
+    /* An Attr's own entry: its record (attr.c). */
+    struct DAttr *attr;
     DQuery *child_nodes, *children, *images, *forms, *elements;
     DListener *listeners, *last_listener;
     /* The document the node was made in, copied from or last taken out of,
@@ -138,9 +137,20 @@ struct os64_dom {
     void *geometry_opaque;
     os64_dom_geometry_stats_t geometry_stats;
     JSClassID anchor_class, node_class, collection_class, event_class, style_class, token_class, map_class;
-    /* Attr and NamedNodeMap (attr.c), and the map's prototype. */
+    /* Attr and NamedNodeMap (attr.c), and the map's prototype. The
+     * attached Attrs, found by element and name (a table of chains that
+     * doubles as it fills), and where the last walk of an element's
+     * attribute list stopped, good only while the list is as it was. */
     JSClassID attr_class, named_map_class;
     DValue *named_map_prototype;
+    struct DAttr **attr_table;
+    size_t attr_capacity, attr_attached;
+    struct {
+        const os64_html_node_t *element;
+        const os64_html_attr_t *head, *at;
+        uint64_t version;
+        uint32_t index;
+    } attr_cursor;
     DValue *values, *anchor, *index_guard, *window, *location, *history, *function_ctor;
     DValue *invoke, *navigator, *style_prototype, *static_list;
     const char *(*user_agent)(void *opaque);
@@ -518,8 +528,12 @@ bool d_is_attr(os64_dom_t *dom, JSValueConst value);
 int d_attr_classic(os64_dom_t *dom, JSContext *ctx);
 /* The NamedNodeMap interface object (the interfaces row's). */
 JSValue d_attr_map_interface(os64_dom_t *dom, JSContext *ctx);
-/* An Attr entry's record freed, after the engine (os64_dom_free). */
+/* An Attr entry's record freed, after the engine (os64_dom_free), and the
+ * table of attached ones. */
 void d_attr_free(os64_dom_t *dom, DValue *entry);
+void d_attr_table_free(os64_dom_t *dom);
+/* The attribute walks' steps so far (attr.c's s_steps), for the DOM host. */
+uint64_t d_attr_steps(void);
 /* DOM's "valid namespace prefix" (implementation.c). */
 bool d_prefix_valid(const char *text, size_t length);
 JSValue d_style(os64_dom_t *dom, JSContext *ctx, JSValueConst self);

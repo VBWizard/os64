@@ -10,22 +10,23 @@
  * element's attributes as a list of names and values on the element, never
  * as nodes, so an Attr is what `style`, `classList` and `dataset` are: a
  * registry entry with no `node`, whose `target` is the element it stands
- * for, given a name (DAttr). The element's wrapper keeps its Attrs, one per
- * qualified name, each made the first time it is asked for, so the same
- * object comes back for as long as the attribute exists. The name is the
- * identity because libhtml's is: its verbs find an attribute by qualified
- * name, first match, and no verb makes two of one name.
+ * for, given a name (DAttr). The binding keeps an element's Attrs in a
+ * table by element and qualified name, one per name, each made the first
+ * time it is asked for, so the same object comes back for as long as the
+ * attribute exists. The name is the identity because libhtml's is: its
+ * verbs find an attribute by qualified name, first match, and no verb
+ * makes two of one name.
  *
  * NOTHING IS HELD ACROSS PAGE CODE. An attached Attr's value is read from
  * libhtml by name at every read, never through a pointer kept from an
  * earlier one: libhtml retires an attribute's bytes when its value changes.
- * The map holds no index and no snapshot: `length`, `item(i)` and every
- * indexed or named property walk the element's list at the call, so a
- * getter that removes an attribute in the middle of a walk is seen by the
- * walk's next step, which is the standard's answer too. Walking to the i-th
- * attribute costs i steps, so a page that reads all n of an element's
- * attributes pays n² steps; making those n attributes cost it the same
- * (each set walks the list), so the walk is never the larger bill.
+ * The map holds no snapshot: `length`, `item(i)` and every indexed or named
+ * property walk the element's list at the call, so a getter that removes an
+ * attribute in the middle of a walk is seen by the walk's next step, which
+ * is the standard's answer too. Where the last walk stopped is remembered,
+ * and used only while the list is provably the one it walked (the walk's
+ * cursor, below), so a walk over all n attributes in one call (an
+ * iteration, Object.keys) takes n steps and not n².
  *
  * DETACHMENT HAPPENS AT THE ONE DOOR. An attribute leaves its element by a
  * removal, and every attribute the binding sets or removes goes through
@@ -49,8 +50,8 @@
  * outside the door, which reads as the same attribute with its new value.
  *
  * MOVING ONE. setAttributeNode takes a detached Attr onto an element (its
- * stored value set through the door, the entry moved onto the element's
- * list), answers the Attr it replaced, now detached, or null; an Attr of
+ * stored value set through the door, the Attr made the element's), answers
+ * the Attr it replaced, now detached, or null; an Attr of
  * another element is InUseAttributeError, and one of this element is
  * answered as it is.
  *
@@ -65,10 +66,11 @@
 
 static JSClassID attr_slot, map_slot;
 
-/* An Attr's record, on its own entry (DValue.attr) and, while attached, on
- * its element's wrapper's list (DValue.attrs). */
+/* An Attr's record, on its own entry (DValue.attr) and, while attached, in
+ * the binding's table of attached Attrs (os64_dom.attr_table), chained by
+ * `hash_next`. */
 struct DAttr {
-    struct DAttr *next;
+    struct DAttr *hash_next;
     DValue *entry;
     /* The qualified name and the namespace (NULL: none), both the
      * binding's copies, fixed for the Attr's life. */
@@ -84,6 +86,16 @@ struct DAttr {
 typedef struct DAttr DAttr;
 
 static const char kBroken[] = "an attribute left its element outside libdom";
+
+/* Steps taken along an element's attribute list and the table's chains,
+ * for the DOM host, which holds a walk over all of an element's attributes
+ * to a number of steps linear in them. */
+static uint64_t s_steps;
+
+uint64_t d_attr_steps(void)
+{
+    return s_steps;
+}
 
 static char *copy_bytes(os64_dom_t *dom, const char *text, size_t length)
 {
@@ -129,11 +141,64 @@ static const os64_html_attr_t *attr_ns(const os64_html_node_t *element, const ch
     return NULL;
 }
 
-static DAttr *record_of(DValue *owner, const char *name)
+/* THE TABLE OF ATTACHED ATTRS, by element and qualified name: what makes
+ * finding an attribute's Attr one step however many Attrs an element has,
+ * so a walk over all of an element's attributes stays linear. Made at
+ * install; it doubles when it holds twice its slots, and keeps its size
+ * when there is no room to double, its chains growing longer. */
+static size_t record_slot(const os64_dom_t *dom, const os64_html_node_t *element, const char *name)
 {
-    for (DAttr *rec = owner != NULL ? owner->attrs : NULL; rec != NULL; rec = rec->next)
-        if (os64_strcmp(rec->name, name) == 0) return rec;
+    uint64_t key = (uint64_t)(uintptr_t)element * 0x9E3779B97F4A7C15ull;
+    for (const unsigned char *at = (const unsigned char *)name; *at != 0; at++)
+        key = (key ^ *at) * 0x100000001B3ull;
+    return (size_t)(key ^ (key >> 29)) & (dom->attr_capacity - 1);
+}
+
+static DAttr *record_of(os64_dom_t *dom, const os64_html_node_t *element, const char *name)
+{
+    for (DAttr *rec = dom->attr_table[record_slot(dom, element, name)]; rec != NULL; rec = rec->hash_next) {
+        s_steps++;
+        if (rec->entry->target == element && os64_strcmp(rec->name, name) == 0) return rec;
+    }
     return NULL;
+}
+
+static void record_add(os64_dom_t *dom, DAttr *rec)
+{
+    if (dom->attr_attached >= dom->attr_capacity * 2) {
+        size_t capacity = dom->attr_capacity * 2;
+        DAttr **table = capacity <= SIZE_MAX / sizeof(*table) ? d_alloc(dom, capacity * sizeof(*table)) : NULL;
+        if (table != NULL) {
+            DAttr **old = dom->attr_table;
+            size_t old_capacity = dom->attr_capacity;
+            dom->attr_table = table;
+            dom->attr_capacity = capacity;
+            for (size_t i = 0; i < old_capacity; i++)
+                for (DAttr *at = old[i], *next; at != NULL; at = next) {
+                    next = at->hash_next;
+                    size_t slot = record_slot(dom, at->entry->target, at->name);
+                    at->hash_next = table[slot];
+                    table[slot] = at;
+                }
+            d_free(dom, old);
+        }
+    }
+    size_t slot = record_slot(dom, rec->entry->target, rec->name);
+    rec->hash_next = dom->attr_table[slot];
+    dom->attr_table[slot] = rec;
+    dom->attr_attached++;
+}
+
+static void record_remove(os64_dom_t *dom, DAttr *rec)
+{
+    for (DAttr **at = &dom->attr_table[record_slot(dom, rec->entry->target, rec->name)]; *at != NULL;
+         at = &(*at)->hash_next)
+        if (*at == rec) {
+            *at = rec->hash_next;
+            rec->hash_next = NULL;
+            dom->attr_attached--;
+            return;
+        }
 }
 
 /* A new Attr, detached, with no value: its record and its object, the
@@ -165,12 +230,11 @@ static DAttr *attr_make(os64_dom_t *dom, JSContext *ctx, const char *name, const
     return rec;
 }
 
-/* Onto the element's list, reading its value from the element from now on. */
-static void attach(os64_dom_t *dom, DValue *owner, DAttr *rec, const os64_html_node_t *element)
+/* Onto the element, reading its value from the element from now on. */
+static void attach(os64_dom_t *dom, DAttr *rec, const os64_html_node_t *element)
 {
-    rec->next = owner->attrs;
-    owner->attrs = rec;
     rec->entry->target = element;
+    record_add(dom, rec);
     os64_html_hold(dom->document, element);
     d_free(dom, rec->value);
     rec->value = NULL;
@@ -179,13 +243,12 @@ static void attach(os64_dom_t *dom, DValue *owner, DAttr *rec, const os64_html_n
 }
 
 /* Off it, keeping `value` (the record's from now on) and the document the
- * element was in. The element's own wrapper (`owner`) holds it, so letting
- * go of the Attr's hold reclaims nothing. */
-static void detach(os64_dom_t *dom, DValue *owner, DAttr *rec, char *value, size_t length)
+ * element was in. The element's own wrapper holds it (an Attr is reached
+ * only through its element's wrapper or its map), so letting go of the
+ * Attr's hold reclaims nothing. */
+static void detach(os64_dom_t *dom, DAttr *rec, char *value, size_t length)
 {
-    for (DAttr **at = &owner->attrs; *at != NULL; at = &(*at)->next)
-        if (*at == rec) { *at = rec->next; break; }
-    rec->next = NULL;
+    record_remove(dom, rec);
     const os64_html_node_t *element = rec->entry->target;
     const os64_html_node_t *document = d_node_document(dom, element);
     rec->document = document != window_document(dom) ? document : NULL;
@@ -203,23 +266,20 @@ static void attr_live(os64_dom_t *dom, DAttr *rec)
 {
     const os64_html_node_t *element = rec->entry->target;
     if (element == NULL || os64_html_attr(element, rec->name) != NULL) return;
-    detach(dom, d_find(dom, element), rec, NULL, 0);
+    detach(dom, rec, NULL, 0);
     if (dom->options.broken != NULL) dom->options.broken(dom->options.host_opaque, kBroken);
 }
 
 /* The Attr standing for an attribute `element` has: the one made for its
- * name, else a new one. The element's wrapper exists (it is the receiver,
- * or the map's, which is made from it). */
+ * name, else a new one. */
 static JSValue attr_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *element,
                         const os64_html_attr_t *a)
 {
-    DValue *owner = d_find(dom, element);
-    if (owner == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
-    DAttr *rec = record_of(owner, a->name);
+    DAttr *rec = record_of(dom, element, a->name);
     if (rec == NULL) {
         rec = attr_make(dom, ctx, a->name, a->ns);
         if (rec == NULL) return JS_EXCEPTION;
-        attach(dom, owner, rec, element);
+        attach(dom, rec, element);
     }
     return JS_DupValue(ctx, rec->entry->value);
 }
@@ -227,7 +287,7 @@ static JSValue attr_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t 
 int64_t d_set_attr(os64_dom_t *dom, const os64_html_node_t *node, const char *name,
                    const char *value, size_t length, bool remove)
 {
-    DAttr *rec = remove ? record_of(d_find(dom, node), name) : NULL;
+    DAttr *rec = remove ? record_of(dom, node, name) : NULL;
     const os64_html_attr_t *a = rec != NULL ? os64_html_attr(node, name) : NULL;
     if (rec != NULL && a == NULL) {
         attr_live(dom, rec);
@@ -244,7 +304,7 @@ int64_t d_set_attr(os64_dom_t *dom, const os64_html_node_t *node, const char *na
         d_free(dom, kept);
         return status;
     }
-    if (rec != NULL) detach(dom, d_find(dom, node), rec, kept, kept_length);
+    if (rec != NULL) detach(dom, rec, kept, kept_length);
     return status;
 }
 
@@ -499,8 +559,7 @@ static JSValue set_attribute_node(os64_dom_t *dom, JSContext *ctx, const os64_ht
      * slot an on<type> name takes. */
     JSValue previous = old != NULL ? attr_get(dom, ctx, element, old) : JS_NULL;
     if (JS_IsException(previous)) return previous;
-    DValue *owner = d_find(dom, element);
-    DAttr *gone = old != NULL ? record_of(owner, old->name) : NULL;
+    DAttr *gone = old != NULL ? record_of(dom, element, old->name) : NULL;
     size_t kept_length = gone != NULL ? os64_strlen(old->value) : 0;
     char *kept = gone != NULL ? copy_bytes(dom, old->value, kept_length) : NULL;
     if (gone != NULL && kept == NULL) {
@@ -518,8 +577,8 @@ static JSValue set_attribute_node(os64_dom_t *dom, JSContext *ctx, const os64_ht
         JS_FreeValue(ctx, previous);
         return d_html_error(ctx, status);
     }
-    if (gone != NULL) detach(dom, owner, gone, kept, kept_length);
-    attach(dom, owner, rec, element);
+    if (gone != NULL) detach(dom, gone, kept, kept_length);
+    attach(dom, rec, element);
     return previous;
 }
 
@@ -655,10 +714,45 @@ static DValue *map_receiver(JSContext *ctx, JSValueConst object)
     return d_context(entry->dom, ctx, OS64_JS_ABI_ID) ? entry : NULL;
 }
 
-static const os64_html_attr_t *attr_at(const os64_html_node_t *element, uint32_t index)
+/* THE WALK'S CURSOR. An element's attributes are a list, so the i-th is i
+ * steps from the first; a walk over them all (an iteration, Object.keys,
+ * for..in) asks for each in turn, and would cost n² steps in one call. So
+ * the binding remembers where the last walk stopped: the element, the
+ * attribute and its position, good only while the element's list is the
+ * one it walked (libhtml's version has not moved, and the list starts
+ * where it did; a parser's late attribute goes on its end). Nothing is
+ * trusted across page code: every use asks again. */
+static bool cursor_good(const os64_dom_t *dom, const os64_html_node_t *element)
+{
+    return dom->attr_cursor.element == element && dom->attr_cursor.head == element->attrs &&
+           dom->attr_cursor.version == os64_html_version(dom->document);
+}
+
+static void cursor_set(os64_dom_t *dom, const os64_html_node_t *element, const os64_html_attr_t *at,
+                       uint32_t index)
+{
+    dom->attr_cursor.element = element;
+    dom->attr_cursor.head = element->attrs;
+    dom->attr_cursor.version = os64_html_version(dom->document);
+    dom->attr_cursor.at = at;
+    dom->attr_cursor.index = index;
+}
+
+/* The index-th attribute, from the cursor when it is at or before it. */
+static const os64_html_attr_t *attr_at(os64_dom_t *dom, const os64_html_node_t *element, uint32_t index)
 {
     const os64_html_attr_t *a = element->attrs;
-    while (a != NULL && index-- != 0) a = a->next;
+    uint32_t at = 0;
+    if (cursor_good(dom, element) && dom->attr_cursor.index <= index) {
+        a = dom->attr_cursor.at;
+        at = dom->attr_cursor.index;
+    }
+    while (a != NULL && at != index) {
+        a = a->next;
+        at++;
+        s_steps++;
+    }
+    if (a != NULL) cursor_set(dom, element, a, at);
     return a;
 }
 
@@ -669,23 +763,41 @@ static uint32_t attr_count(const os64_html_node_t *element)
     return count;
 }
 
-/* The attribute a property name names (DOM § 4.9.1's supported property
- * names): an attribute's qualified name exactly, except that an HTML
- * element's names with an ASCII uppercase letter are not listed, since its
- * named getter folds and could never answer them. NULL for none. */
-static const os64_html_attr_t *listed(const os64_html_node_t *element, const char *name, size_t length)
+/* Whether the map lists a name (DOM § 4.9.1's supported property names):
+ * an HTML element's names with an ASCII uppercase letter are not listed,
+ * since its named getter folds and could never answer them. libhtml holds
+ * no two attributes of one name, so no name is listed twice. */
+static bool name_listed(const os64_html_node_t *element, const char *name, size_t length)
 {
     for (size_t i = 0; folds(element) && i < length; i++)
-        if (name[i] >= 'A' && name[i] <= 'Z') return NULL;
-    for (const os64_html_attr_t *a = element->attrs; a != NULL; a = a->next)
-        if (os64_strlen(a->name) == length && os64_memcmp(a->name, name, length) == 0) return a;
-    return NULL;
+        if (name[i] >= 'A' && name[i] <= 'Z') return false;
+    return true;
 }
 
-static bool name_listed(const os64_html_node_t *element, const os64_html_attr_t *a)
+/* The attribute a listed property name names, NULL for none: looked for
+ * from the cursor on, then from the first up to it, so names asked for in
+ * the list's order cost a step each. */
+static const os64_html_attr_t *listed(os64_dom_t *dom, const os64_html_node_t *element, const char *name,
+                                      size_t length)
 {
-    const os64_html_attr_t *first = listed(element, a->name, os64_strlen(a->name));
-    return first == a;
+    if (!name_listed(element, name, length)) return NULL;
+    bool good = cursor_good(dom, element);
+    const os64_html_attr_t *start = good ? dom->attr_cursor.at : element->attrs;
+    uint32_t index = good ? dom->attr_cursor.index : 0;
+    for (int lap = 0; lap < 2; lap++) {
+        for (const os64_html_attr_t *a = start; a != NULL; a = a->next, index++) {
+            s_steps++;
+            if (lap == 1 && a == dom->attr_cursor.at) return NULL;
+            if (os64_strlen(a->name) == length && os64_memcmp(a->name, name, length) == 0) {
+                cursor_set(dom, element, a, index);
+                return a;
+            }
+        }
+        if (!good) return NULL;
+        start = element->attrs;
+        index = 0;
+    }
+    return NULL;
 }
 
 /* A property key's text, as the engine holds it: 1, 0 for a Symbol, -1
@@ -712,25 +824,22 @@ static int visible(JSContext *ctx, JSValueConst object, JSAtom atom)
     return shadowed < 0 ? -1 : !shadowed;
 }
 
-/* The attribute a non-index key names visibly: 1 (with *found), 0, -1. */
-static int named(JSContext *ctx, JSValueConst object, const os64_html_node_t *element, JSAtom atom,
-                 const os64_html_attr_t **found)
+/* The attribute a non-index key names visibly: 1 (with *found), 0, -1.
+ * The prototype chain is asked first, as a collection asks it, so a read of
+ * the map's own members (`length`, `item`) costs no walk of the list; and
+ * since asking it may run page code (a Proxy prototype's `has`) that changes
+ * the element's attributes, the list is read after it. */
+static int named(os64_dom_t *dom, JSContext *ctx, JSValueConst object, const os64_html_node_t *element,
+                 JSAtom atom, const os64_html_attr_t **found)
 {
     const char *text;
     size_t length;
     int is = key_text(ctx, atom, &text, &length);
     if (is <= 0) return is;
-    bool there = listed(element, text, length) != NULL;
-    JS_FreeCString(ctx, text);
-    if (!there) return 0;
     int shown = visible(ctx, object, atom);
-    if (shown <= 0) return shown;
-    /* `visible` may have run page code (a Proxy prototype's `has`) that
-     * changed the element's attributes, so the name is looked up again. */
-    if (key_text(ctx, atom, &text, &length) < 0) return -1;
-    *found = listed(element, text, length);
+    *found = shown > 0 ? listed(dom, element, text, length) : NULL;
     JS_FreeCString(ctx, text);
-    return *found != NULL;
+    return shown < 0 ? -1 : *found != NULL;
 }
 
 static int map_own_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst object, JSAtom atom)
@@ -743,10 +852,10 @@ static int map_own_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueC
     if (numeric < 0) return -1;
     const os64_html_attr_t *a = NULL;
     if (numeric) {
-        a = attr_at(element, index);
+        a = attr_at(entry->dom, element, index);
         if (a == NULL) return 0;
     } else {
-        int found = named(ctx, object, element, atom, &a);
+        int found = named(entry->dom, ctx, object, element, atom, &a);
         if (found <= 0) return found;
     }
     if (desc != NULL) {
@@ -785,7 +894,7 @@ static int map_own_names(JSContext *ctx, JSPropertyEnum **table, uint32_t *lengt
     uint32_t indices = used;
     i = 0;
     for (const os64_html_attr_t *a = element->attrs; a != NULL && i < count; a = a->next, i++) {
-        if (!name_listed(element, a)) continue;
+        if (!name_listed(element, a->name, os64_strlen(a->name))) continue;
         JSAtom atom = JS_NewAtom(ctx, a->name);
         if (atom == JS_ATOM_NULL) goto fail;
         uint32_t ignored;
@@ -836,7 +945,7 @@ static int map_define(JSContext *ctx, JSValueConst object, JSAtom atom, JSValueC
         int is = key_text(ctx, atom, &text, &length);
         if (is < 0) return -1;
         if (is > 0) {
-            refused = listed(entry->target, text, length) != NULL;
+            refused = listed(entry->dom, entry->target, text, length) != NULL;
             JS_FreeCString(ctx, text);
         }
     }
@@ -870,7 +979,7 @@ static JSValue map_member(JSContext *ctx, JSValueConst self, int argc, JSValueCo
         uint32_t index;
         if (JS_ToUint32(ctx, &index, argv[0]) < 0) return JS_EXCEPTION;
         /* The conversion may have run page code: the list is walked after. */
-        const os64_html_attr_t *a = attr_at(element, index);
+        const os64_html_attr_t *a = attr_at(entry->dom, element, index);
         return a != NULL ? attr_get(entry->dom, ctx, element, a) : JS_NULL;
     }
     return element_verb(entry->dom, ctx, element, magic, argc, argv);
@@ -884,6 +993,13 @@ static void attr_finalizer(JSRuntime *rt, JSValue value)
 
 int d_attr_classic(os64_dom_t *dom, JSContext *ctx)
 {
+    dom->attr_capacity = 64;
+    dom->attr_table = d_alloc(dom, dom->attr_capacity * sizeof(*dom->attr_table));
+    if (dom->attr_table == NULL) {
+        dom->attr_capacity = 0;
+        d_error(ctx, "QuotaExceededError", "DOM attribute table quota exceeded");
+        return -1;
+    }
     dom->attr_class = os64_js_class_id(&attr_slot);
     dom->named_map_class = os64_js_class_id(&map_slot);
     static const JSClassDef attr_definition = {.class_name = "Attr", .finalizer = attr_finalizer};
@@ -956,6 +1072,13 @@ int d_attr_classic(os64_dom_t *dom, JSContext *ctx)
 JSValue d_attr_map_interface(os64_dom_t *dom, JSContext *ctx)
 {
     return d_interface_new(ctx, "NamedNodeMap", 0, NULL, dom->named_map_prototype->value, JS_UNDEFINED);
+}
+
+void d_attr_table_free(os64_dom_t *dom)
+{
+    d_free(dom, dom->attr_table);
+    dom->attr_table = NULL;
+    dom->attr_capacity = dom->attr_attached = 0;
 }
 
 void d_attr_free(os64_dom_t *dom, DValue *entry)

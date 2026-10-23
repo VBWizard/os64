@@ -501,8 +501,8 @@ row's.
 **An Attr is a view of its element, not a tree node.** libhtml keeps an
 element's attributes as a list of names and values, so an Attr is what
 `style`, `classList` and `dataset` are: a registry entry whose `target` is
-its element, given a qualified name and a namespace. The element's wrapper
-keeps one per name, made when first asked for, so the same object comes
+its element, given a qualified name and a namespace. The binding keeps one
+per element and name, made when first asked for, so the same object comes
 back for as long as the attribute exists (`attributes[0] ===
 getAttributeNode('id')`). Its value is read from the element by name at
 every read and written through the element's attribute; nothing is held
@@ -519,13 +519,18 @@ to remove one, `contains` false); a `Node.prototype` member called on an
 Attr itself is the TypeError "an Attr is a Node with no place in the tree"
 (DIVERGENCES.md).
 
-**The map holds nothing either.** `length`, `item(i)`, the indices (live,
-read-only) and the names (each attribute's qualified name, an HTML
+**The map holds no snapshot either.** `length`, `item(i)`, the indices
+(live, read-only) and the names (each attribute's qualified name, an HTML
 element's names with an uppercase letter left out, unenumerable, and
 hidden behind a name the prototype chain has) walk the element's list at
 each call. A walk that runs page code in its middle reads the list as it
-stands at its next step; a name the visibility check's page code removed is
-looked up again. The map is iterable as an array.
+stands at its next step; a name is looked for after the prototype chain is
+asked, which may run page code. The map is iterable as an array. Where the
+last walk stopped is kept and used only while the element's list is the
+one it walked (libhtml's version has not moved and the list starts where
+it did), so a walk over all of an element's n attributes in one call (an
+iteration, `Object.keys`, `for..in`) takes a number of steps linear in n,
+and the DOM host holds it to that (`d_attr_steps`).
 
 **An Attr leaves its element at one door.** Every attribute the binding
 sets or removes goes through `d_set_attr`, and the parser and libpage

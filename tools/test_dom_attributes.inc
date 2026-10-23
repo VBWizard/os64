@@ -13,6 +13,8 @@
 
 #define ATTR_ASSERT STORAGE_ASSERT
 
+uint64_t d_attr_steps(void);
+
 static void attributes_shape_cases(void)
 {
     DomFixture f = fixture_new(NULL);
@@ -298,13 +300,50 @@ static void attributes_map_cases(void)
         "assert(m.item({valueOf(){e.removeAttribute('a');return 0}}).name==='c','item: the list after its argument');"
         "e.setAttribute('d','4');assert(m.length===2&&m[1].name==='d','a set is seen at once');"
         /* the visibility check runs a Proxy prototype's `has`: what it
-         * removes is not answered */
+         * removes is not answered, the list being read after it */
         "var x=document.createElement('div');x.setAttribute('gone','1');var xm=x.attributes;"
         "Object.setPrototypeOf(xm,new Proxy(NamedNodeMap.prototype,{has(t,k){if(k==='gone')x.removeAttribute('gone');"
         "return Reflect.has(t,k)}}));"
-        "assert(xm.gone===undefined&&!x.hasAttribute('gone'),'looked up again after page code ran');"
+        "assert(xm.gone===undefined&&!x.hasAttribute('gone'),'the list read after page code ran');"
         "x.setAttribute('kept','1');assert(Object.getOwnPropertyNames(xm).join()==='0,kept');",
         "NamedNodeMap: page code running in the middle of a walk");
+    /* The walk's cursor is asked again at every use: another element, a
+     * change to the list, or a backward step each walk from the first. */
+    dom_script(&f, ATTR_ASSERT
+        "var p=document.createElement('p'),q=document.createElement('q');"
+        "for(var i=0;i<6;i++){p.setAttribute('p'+i,i);q.setAttribute('q'+i,i)}"
+        "var pm=p.attributes,qm=q.attributes;"
+        "assert(pm[4].name==='p4'&&qm[4].name==='q4'&&pm[5].name==='p5'&&pm[1].name==='p1','two elements, either order');"
+        "assert(pm.p3.name==='p3'&&qm.q5.name==='q5'&&pm.p0.name==='p0'&&pm.p5.name==='p5','names, either way round');"
+        "pm[4];p.removeAttribute('p2');assert(pm[4].name==='p5'&&pm[2].name==='p3','a removal before the cursor');"
+        "pm[1];p.setAttribute('p1','changed');assert(pm[1].value==='changed'&&pm[3].name==='p4');"
+        "pm[4];p.removeAttribute('p0');assert(pm[0].name==='p1'&&pm.p0===undefined&&pm[4]===undefined,"
+        "'the first attribute gone');",
+        "NamedNodeMap: the walk's cursor never answers a list that moved");
+    fixture_free(&f);
+
+    /* A walk over all of an element's n attributes, in one call, takes a
+     * number of steps linear in n (attr.c's cursor and table), however it
+     * walks: n² would be a million here. */
+    f = fixture_new(NULL);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, "globalThis.w=document.createElement('div');for(var i=0;i<1000;i++)w.setAttribute('a'+i,i);"
+                   "globalThis.wm=w.attributes;", "walks: an element with 1000 attributes");
+    static const char *const kWalks[] = {
+        "Array.from(wm).length===1000||fail()", "[...wm].length===1000||fail()",
+        "Object.keys(wm).length===1000||fail()", "Object.getOwnPropertyNames(wm).forEach(k=>wm[k])",
+        "for(var k in wm);", "for(var i=0;i<wm.length;i++)wm.item(i)",
+        "for(var i=0;i<1000;i++)wm['a'+i]",
+    };
+    for (size_t i = 0; i < sizeof(kWalks) / sizeof(kWalks[0]); i++) {
+        uint64_t before = d_attr_steps();
+        dom_script(&f, kWalks[i], "walks: a walk over every attribute");
+        uint64_t steps = d_attr_steps() - before;
+        char line[160];
+        snprintf(line, sizeof(line), "walks: %s takes %llu steps, linear in 1000", kWalks[i],
+                 (unsigned long long)steps);
+        check(steps <= 10 * 1000, line);
+    }
     fixture_free(&f);
 }
 
