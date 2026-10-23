@@ -1425,8 +1425,8 @@ replayed at the head only, read more pages incomplete for the same reason
 (2026-10-21: 147 of 340; 2026-10-22: 33 of 223).
 
 Host, the slice's base → its head: libhtml's verbs 540,023 → 540,042
-checks, libpage 254,138 → 254,141, the DOM host 6,841 / 51,471 → 7,664 /
-53,438 (allocation sweeps 561 / 7,913 → 653 / 8,187), the scripted-page
+checks, libpage 254,138 → 254,141, the DOM host 6,841 / 51,471 → 7,676 /
+53,450 (allocation sweeps 561 / 7,913 → 653 / 8,187), the scripted-page
 host 6,186 → 6,206; all 0 failed. `tools/test_dom_implementation.inc` holds a case per
 rule of LIBDOM.md § Documents of their own and runs jQuery 3.5.1 and
 1.12.4, upstream copies, licence headers intact, in `tools/fixtures/`
@@ -1445,12 +1445,21 @@ onto window, a `javascript:` fragment decoded twice, a displaced comment,
 the two meanings of connected under one name, and the fragment parser's
 scripting taken from the page rather than the context's document. The
 sixth, `Element.attributes`, is Slice 0d. The design read passed the
-shared arena.
+shared arena. **Codex's first round** found four P2s: a creation's status
+read in the same argument list that wrote it, fixed; a windowless form's
+reset not carried out, declined under the one-user rule, with its comment
+made true and the gap booked; createDocument's name rule, declined as a
+change (the standard dropped XML's QName in 2025, and WPT's table at the
+pin holds the split at the first colon), its comment made exact and the
+rule pinned; and an XHTML document's elements reading as an HTML
+document's, booked, since the fix reaches the selector engine.
 
 **Booked** (DEBTS.md § Classic browser scripting, unless named):
 `Element.attributes`, for Slice 0d; `createElementNS` and elements in no
 namespace; a new document's quirks mode; a detached root that never had a
 wrapper reading as the window's; `javascript:` through location
-assignment, and a link whose fragment decodes to U+0000; the three
+assignment, and a link whose fragment decodes to U+0000; a windowless
+form's reset; an XHTML document's elements reading as an HTML
+document's; the three
 newly unfinished kept pages (§ The replay corpus). Declined: a
 `javascript:` result that is a string (DECLINED.md).
