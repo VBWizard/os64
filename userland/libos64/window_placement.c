@@ -46,7 +46,7 @@ static bool setting(const char *key, const char *value, void *user)
 {
     placement_parse_t *p=user;
     if (!key) { p->syntax_ok=false; return false; }
-    if (os64_streq(key,p->mode==OS64_WINDOW_REMEMBER_SIZE ? "size" : "geometry")) {
+    if (os64_streq_nocase(key,p->mode==OS64_WINDOW_REMEMBER_SIZE ? "size" : "geometry")) {
         p->value=p->fallback; // a later invalid duplicate must not revive an earlier value
         (void)parse_geometry(value,p->mode,&p->value);
     }

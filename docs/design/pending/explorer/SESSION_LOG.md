@@ -1169,3 +1169,17 @@ The old resize comment's claim that no geometry query existed was false; it
 now explains repaint/layout notifications and the separate user-placement event.
 Next: independent implementation review and Chris's P5 acceptance, with a
 matching rebuilt kernel and userland. No P5 result is claimed for this slice.
+
+## 2026-10-23 — PR #334 R1: case-insensitive placement settings
+
+Accepted the review finding: replacing `os64_conf_get` with the placement
+callback had made setting-name reads case-sensitive while writes remained
+case-insensitive. Uppercase `SIZE` could be ignored on open and then lose its
+saved width during a height-only edit. Both `size` and `geometry` now use
+`os64_streq_nocase`. Added regression coverage failed before the fix and passed
+afterward, including mixed-case duplicates and rereading before saving.
+
+The placement/queue suite passed with ASan/UBSan/LSan and rejected all nine
+queue mutants. LSan attachment EPERM in the sandbox was resolved by running
+the built tests outside it with leak detection enabled. Full userland build
+passed. No new native or P5 run is claimed for this parser correction.

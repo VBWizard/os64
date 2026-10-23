@@ -127,6 +127,48 @@ static void geometry_tests(void)
     edit(&p,OS64_GUI_PLACEMENT_HEIGHT,0,0,700);
     assert(strstr(data,"size = 1900,700"));
 }
+static void setting_case_tests(void)
+{
+    const char *size_keys[]={"size","SIZE","SiZe"};
+    const char *geometry_keys[]={"geometry","GEOMETRY","GeOmEtRy"};
+    for (unsigned i=0;i<3;++i) {
+        char text[160];
+        snprintf(text,sizeof(text),"# keep\n%s = 1900,1000\n",size_keys[i]);record(text);
+        os64_window_placement_t p=tracker(OS64_WINDOW_REMEMBER_SIZE);
+        assert(!p.status && p.preferred.width==1900 && p.preferred.height==1000);
+        edit(&p,OS64_GUI_PLACEMENT_HEIGHT,0,0,700);
+        assert(!p.status && strstr(data,"1900,700") && strstr(data,"# keep"));
+        p=tracker(OS64_WINDOW_REMEMBER_SIZE);
+        assert(p.preferred.width==1900 && p.preferred.height==700);
+
+        snprintf(text,sizeof(text),"%s = 1,-30,40,1900,1000\n",geometry_keys[i]);record(text);
+        p=tracker(OS64_WINDOW_REMEMBER_POSITION_AND_SIZE);
+        assert(!p.status && p.preferred.x==-30 && p.preferred.y==40 &&
+            p.preferred.width==1900 && p.preferred.height==1000);
+        edit(&p,OS64_GUI_PLACEMENT_HEIGHT,0,0,700);
+        assert(!p.status && strstr(data,"1,-30,40,1900,700"));
+        p=tracker(OS64_WINDOW_REMEMBER_POSITION_AND_SIZE);
+        assert(p.preferred.x==-30 && p.preferred.y==40 &&
+            p.preferred.width==1900 && p.preferred.height==700);
+    }
+    // A save must also reread mixed-case settings changed since initialization.
+    record("size = 900,600\n");
+    os64_window_placement_t p=tracker(OS64_WINDOW_REMEMBER_SIZE);
+    record("SiZe = 1900,1000\n");edit(&p,OS64_GUI_PLACEMENT_HEIGHT,0,0,700);
+    assert(!p.status && p.preferred.width==1900 && strstr(data,"1900,700"));
+
+    // Duplicate keys keep last-setting precedence regardless of letter case.
+    record("size = 900,600\nSIZE = 1900,1000\n");p=tracker(OS64_WINDOW_REMEMBER_SIZE);
+    assert(p.preferred.width==1900 && p.preferred.height==1000);
+    record("geometry = 1,1,2,900,600\nGEOMETRY = 1,-30,40,1900,1000\n");
+    p=tracker(OS64_WINDOW_REMEMBER_POSITION_AND_SIZE);
+    assert(p.preferred.x==-30 && p.preferred.width==1900);
+    record("size = 1900,1000\nSiZe = invalid\n");p=tracker(OS64_WINDOW_REMEMBER_SIZE);
+    assert(p.preferred.width==640 && p.preferred.height==440);
+    record("geometry = 1,-30,40,1900,1000\nGeOmEtRy = invalid\n");
+    p=tracker(OS64_WINDOW_REMEMBER_POSITION_AND_SIZE);
+    assert(p.preferred.x==10 && p.preferred.width==640 && p.preferred.height==440);
+}
 static void failure_tests(void)
 {
     const char *bad[]={"", "2,1,2,640,440", "1,2147483648,2,640,440", "1,-2147483649,2,640,440",
@@ -189,6 +231,6 @@ static void ownership_tests(void)
 }
 int main(void)
 {
-    geometry_tests();failure_tests();ownership_tests();
-    puts("placement: real parser/writer, component merge, display fitting, failures, NOREPLACE and initializer ownership passed");
+    geometry_tests();setting_case_tests();failure_tests();ownership_tests();
+    puts("placement: real parser/writer, case-insensitive settings, component merge, display fitting, failures, NOREPLACE and initializer ownership passed");
 }

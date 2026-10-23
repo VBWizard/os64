@@ -115,3 +115,18 @@ sizes and their stored positions. [Restored capture](apps-restored.png),
 [Roam record](roam-restored.conf), [Scribe record](scribe-restored.conf).
 Maximize/restore and minimize/return commands left those records unchanged.
 The scratch VM was stopped after testing. No P5 result is claimed for E5D.
+
+## PR #334 R1 — setting-name case compatibility
+
+The placement reader now uses the configuration library's case-insensitive
+setting-name comparison for both `size` and `geometry`. The added regression
+failed on uppercase `SIZE` before the fix. Lowercase, uppercase and mixed-case
+records now restore and survive a height-only edit without losing width or
+position. Tests also cover rereading an externally changed mixed-case record
+and last-setting precedence for valid and invalid mixed-case duplicates.
+
+The placement/queue host suite passed with ASan, UBSan and leak detection;
+all nine queue mutants were rejected. The sandbox denied LSan attachment with
+EPERM, so the same binaries were run successfully outside it. The full userland
+cross-build passed. Native traces, screenshots and hashes above describe the
+initial implementation; this parser correction was verified on the host.
