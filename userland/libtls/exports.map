@@ -22,6 +22,7 @@
     os64_tls_trust_reload;
     os64_tls_trust_reload_path;
     os64_tls_store_status_name;
+    os64_tls_entropy;
     os64_tls_transport_create;
     os64_tls_transport_state;
     os64_tls_transport_step;
