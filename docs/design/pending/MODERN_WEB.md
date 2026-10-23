@@ -2035,7 +2035,7 @@ Host, at the head, all 0 failed: origin.c's 151 cases (ORIGIN.md's
 list, one each) with their step bounds, 430 checks; libfetch's host 905
 checks; the job's host (`test_yonder_fetch_job_host.sh`, 312 checks,
 every allocation failed in turn and each one failed alone); the DOM
-host 82,990 checks with 12,734 binding allocation sweeps (Slice 0d's
+host 82,998 checks with 12,734 binding allocation sweeps (Slice 0d's
 included), `tools/test_dom_fetch.inc` holding the rows; the scripted-page
 host with `tools/test_yonder_requests.inc` end to end. Mutants by hand,
 one per finding fixed after the cold reads and Codex's rounds (each
@@ -2079,7 +2079,12 @@ found six P2s: five fixed (a multipart preamble skipped, a part header
 read whole or the body refused, a body's type taken by "extract a MIME
 type" serialized, an errored body's cancel() answering its error, a
 URLSearchParams body's author charset said as UTF-8) and one booked
-(XMLHttpRequest.send(document)).
+(XMLHttpRequest.send(document)). Its fourth round found four P2s, all
+fixed: XMLHttpRequest's final encoding computed apart from its final
+MIME type, as XHR says, and the final MIME type kept whole (a blob's
+type and the override with every parameter); a multipart parameter's
+quoted value passed over whole; and a urlencoded field's leading BOM
+kept.
 
 **Booked** (DEBTS.md § A script's requests, unless named): the same-site
 stand-in; SameSite not enforced for script requests; the HTTP cache
