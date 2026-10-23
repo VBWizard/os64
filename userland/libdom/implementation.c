@@ -229,10 +229,18 @@ static bool same(const char *text, size_t length, const char *word)
 /* createDocument(namespace, qualifiedName, doctype) (DOM § 4.5.1): an XML
  * document, holding the doctype and then the element createElementNS would
  * make, either one absent when not asked for. The element's name is
- * DOM's "validate and extract" (InvalidCharacterError, NamespaceError);
- * then its namespace must be one the page's tree holds, HTML, SVG or
- * MathML: an element in no namespace or another is a NotSupportedError,
- * since libhtml has nowhere to put it. */
+ * DOM's "validate and extract" as the standard has had it since 2025, which
+ * WPT's createElementNS table at the pin holds, and not XML's QName: the
+ * name splits at its FIRST colon, the part before it must be a valid
+ * namespace prefix (prefix_valid) and everything after it, colons
+ * included, a valid element local name (d_element_name_valid), else
+ * InvalidCharacterError; so `0:a`, `f:o:o` and `prefix::local` are names
+ * and `a:0`, `:a` and `a:` are not. Then the namespace rules, in the
+ * standard's order (a prefix with no namespace, `xml` outside the XML
+ * namespace, `xmlns` outside the XMLNS one and the XMLNS one without it),
+ * each a NamespaceError. Then its namespace must be one the page's tree
+ * holds, HTML, SVG or MathML: an element in no namespace or another is a
+ * NotSupportedError, since libhtml has nowhere to put it. */
 static JSValue create_document(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv)
 {
     if (argc < 2) return JS_ThrowTypeError(ctx, "createDocument needs a namespace and a qualified name");

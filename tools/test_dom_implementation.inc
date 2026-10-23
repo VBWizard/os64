@@ -389,7 +389,13 @@ static void implementation_document_cases(void)
         "throws('InvalidCharacterError',()=>I.createDocument(HTML,'a b'));"
         "throws('TypeError',()=>I.createDocument(HTML,'html',document.body));"
         "throws('TypeError',()=>I.createDocument(HTML));"
-        "assert(I.createDocument(SVG,'svg:svg').documentElement.nodeName==='svg:svg','a prefix');",
+        "assert(I.createDocument(SVG,'svg:svg').documentElement.nodeName==='svg:svg','a prefix');"
+        /* the standard's split at the first colon, as WPT's createElementNS
+         * table at the pin has it: not XML's QName */
+        "for(const ok of ['0:a','f:o:o','prefix::local','a:_','\u037E:a'])"
+        "assert(I.createDocument(SVG,ok).documentElement.nodeName===ok,ok);"
+        "for(const bad of ['a:0','foo:',':foo','namespaceURI:{','a: b'])"
+        "throws('InvalidCharacterError',()=>I.createDocument(SVG,bad));",
         "createDocument: the XML document's createElement, and the refusals");
     dom_script(&f, IMPL_ASSERT
         "var I=document.implementation;var d=I.createHTMLDocument('');"
