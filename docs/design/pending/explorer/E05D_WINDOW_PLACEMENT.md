@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-Design revision 1, 2026-10-23. Owner: Quinn. Branch `codex/window-placement`,
+Design revision 2, 2026-10-23. Owner: Quinn. Branch `codex/window-placement`,
 worktree `.worktrees/window-placement`, based on userland `12dc6b64` (merged
 PR #325). Implementation has not started; this document proposes the contract.
 
@@ -12,6 +12,12 @@ for this slice is: “if it requires kernel we just need to run the design past
 Fable before we're done.” The design adds a kernel event and queue state; get
 Fable's review before implementing that contract. [Review request](E05D_FABLE_REVIEW_REQUEST.md).
 This extends the review scope of D012 for this specific slice.
+
+[Fable's review](E05D_FABLE_REVIEW.md) approves building with rulings. This
+revision incorporates the accepted clarifications. The queue scheduling ruling
+has conflicting requirements; [Quinn's response](E05D_REVIEW_RESPONSE.md)
+proposes a narrower invariant for Fable to confirm before queue implementation.
+No implementation or runtime validation is claimed.
 
 E5C is merged and Chris reports the final Open With refinement works on the P5.
 Executable/file attributes are on his separate to-do list. Worker lifetime,
@@ -88,14 +94,23 @@ or a promise of global ordering among application instances.
 Track gesture-start frame, content dimensions and maximized state under
 `kGuiLock`, alongside the existing drag/band state. On release compare the
 actual final geometry with that start snapshot and populate changed components.
+The compositor comment must explain that the start snapshot makes an unchanged
+gesture decidable; grab offsets alone do not supply that information.
 For a changed gesture that started maximized, publish all four components: the
 result is now a deliberate normal window. A no-op gesture emits nothing.
 
 Publish after a successful resize commit, using actual clamped dimensions.
+A deliberate resize on a small screen replaces the remembered dimensions that
+the gesture changed with their actual clamped values. This differs from the
+automatic clamp during restoration, which changes no preference.
 A refused resize emits no placement update. For a normal move, report changed
 position components only. Do not put persistence notifications in `wm_move`
 or `wm_resize` themselves: their automatic callers must remain distinguishable.
 Both titlebar moves and Ctrl+Alt moves/resizes use the same completion helper.
+Call that helper from band commit, drag release, decoration-change cancellation
+of a live move, and loss of the graphical VT. Document its invariant: automatic
+geometry changes do not reach it. A mutation that publishes from `wm_resize`
+must fail a test that fits a window automatically during creation.
 
 Live moves need an explicit cancellation rule. If a surviving window's move
 is cancelled by a VT transition, decoration change or another WM transition,
@@ -128,18 +143,29 @@ through `wm_deliver_event` to use the existing waiter wake-or-owe protocol.
 No allocation, filesystem operation, new worker or new scheduler lock is needed.
 The record dies with its owning window and is zero-initialized on creation.
 
-Proposed pop order preserves appearance first and eligible doorbells next,
-then placement, then the existing loss/ring/pointer logic. Placement yields to
-one ring/control record after it is delivered when the ring is nonempty.
-When the ring is empty but placement is pending, a doorbell that has just been
-delivered must yield to placement rather than using the empty-ring exemption.
-A delivered placement clears that doorbell yield so the two coalesced sources
-can alternate without ring input. With queued input, reset placement's yield
-when a ring/control record is consumed. With no placement pending, retain the
-existing queue policy. Tests must demonstrate bounded progress for all three
-sources under replenishment, and preserve INPUT_LOST-before-retained-input rules.
-Placement normally precedes a queued close so the last completed gesture can
-be saved before a conventional app exits.
+Scheduling revision, proposed for Fable's follow-up: use one selection function
+and a service cursor for doorbell, placement and ring/loss, rather than adding
+pairwise yield flags for placement. Within that group, a continuously eligible
+source gets a turn before another member gets its second turn. Ring/loss remains
+responsible for purging invalid gestures and allowing retained controls between
+repeated loss reports. Appearance retains priority; pointer snapshots remain
+ineligible until the ring drains. With no placement pending, preserve the
+existing observable policy, including the empty-ring doorbell case.
+
+This is intentionally not unconditional fairness among all pending sources.
+An endlessly replenished appearance slot can preempt other sources, and a ring
+that never drains can delay a pointer snapshot. Both follow the existing
+ordering contract. Delivering a final pointer leave before old queued motion
+can restore stale hover state. A broader fairness change needs a different
+ordering contract and corresponding client analysis; it is outside this proposal.
+The precise selector and its ordering cases remain subject to the narrow review
+response, not silently approved by the first review.
+
+Require a host queue harness with replenishment cases and a mutant per rule:
+masked coalescing, priority/eligibility, group progress, loss-before-retained-input,
+control progress under repeated loss, and placement in the pending predicate.
+Native wait/wait-any tests additionally verify wake integration; a pure queue
+harness cannot prove the scheduler wakes a sleeping client.
 
 ## Application opt-in and ownership
 
@@ -177,6 +203,19 @@ and retain valid app-owned storage for retry, matching the file-dialog lifetime
 contract. Document this on the initializer; apps must not drop a positive handle
 merely because initialization returned an error. No heap-owned global tracker
 outlives the window. Reinitialization resets the tracker for the new handle.
+Include this ownership table in the public initializer's header comment:
+
+| Outcome | Caller ownership |
+| --- | --- |
+| Invalid options | Nothing created; no native handle held |
+| Native creation fails | No native handle held |
+| Post-create initialization fails; cleanup succeeds | No native handle held |
+| Post-create initialization fails; cleanup is refused | Positive `*out_window` remains caller-owned; keep app storage valid for cleanup retry |
+| Success | Caller owns the native window and its UI/draw/tracker storage |
+
+Document the concrete desktop/popup flags excluded by the completion helper in
+the as-built record. File dialogs are ordinary windows, not owned popups, and
+must receive placement events for the size-only consumer.
 
 The dispatcher processes opted-in placement events before application command
 filters and menu routing. Consume handled events there to avoid duplicate
@@ -246,6 +285,13 @@ Independent applications write independent files. For concurrent instances of
 the same role, the last successful complete publication wins. Re-reading before
 merge reduces stale-component overwrites but is not a serialized transaction;
 we do not promise physical gesture-time ordering between delayed processes.
+Even edits to different components can be lost: two instances can read the same
+record, merge X and width separately, then publish whole records; the later
+publication can restore the earlier X or width. This is an accepted limitation
+of last-complete-publication semantics, not a promise of per-field concurrency.
+Before shared live state between same-role instances becomes a requirement,
+replace this with serialized updates or another conflict-preserving protocol;
+track that feature gate in the root debt ledger.
 Closing an old instance writes nothing. Persisted geometry is a preference,
 not a guarantee that a crash before the UI consumes an event saves that gesture.
 

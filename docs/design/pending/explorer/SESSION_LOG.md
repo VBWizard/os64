@@ -1120,3 +1120,21 @@ changes, checked first publication, same-role publication semantics and the
 required regression matrix. [Fable's review request](E05D_FABLE_REVIEW_REQUEST.md)
 is ready beside it. No implementation or runtime validation is claimed.
 Next: obtain Fable's architectural review and resolve findings before coding.
+
+## 2026-10-23 — E5D review disposition
+
+Fable committed his review as `3b15a4c8`, approving building with rulings.
+Quinn incorporated the snapshot/helper, explicit clamped resize, ownership-table,
+ordinary-dialog and evidence clarifications in design revision 2. The
+[response](E05D_REVIEW_RESPONSE.md) identifies a conflict in the queue ruling:
+universal coalesced-source fairness cannot preserve both strict appearance
+priority and pointer-after-ring-drain. It proposes a cursor for the eligible
+doorbell/placement/ring-loss group and requests Fable's confirmation. Source
+inspection confirms a pointer leave clears hover while an older mouse motion
+can restore it, making the ordering issue behavioral rather than stylistic.
+
+The accepted last-complete-publication policy is unchanged, but its limitation
+now explicitly includes lost edits to different fields after concurrent reads.
+The root debt ledger records the future shared-live-state gate. No executable
+changes or runtime validation are claimed. Next: settle the queue invariant,
+then implement and validate the reviewed contract.

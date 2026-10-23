@@ -1,5 +1,9 @@
 # E5D — Request for Fable architectural review
 
+Update: [review received](E05D_FABLE_REVIEW.md); see the
+[response and narrow follow-up](E05D_REVIEW_RESPONSE.md). The original request
+below records the revision 1 handoff.
+
 2026-10-23. Quinn's design revision 1:
 [E05D_WINDOW_PLACEMENT.md](E05D_WINDOW_PLACEMENT.md).
 

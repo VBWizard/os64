@@ -9,7 +9,8 @@ The repository records are the handoff; conversation memory is not required.
 Updated: 2026-10-23.
 
 Active slice: [E5D — remembered window placement](E05D_WINDOW_PLACEMENT.md),
-design revision 1 prepared for Fable review before kernel implementation.
+design revision 2 incorporates Fable's review; a narrow queue-ordering
+clarification is requested in [Quinn's response](E05D_REVIEW_RESPONSE.md).
 Roam and Scribe are initial consumers; file dialogs share the size-only helper.
 E5C is accepted: PR #325 merged, final review clean and latest P5 test passed.
 E5A dialog polish is merged in PR #322.
@@ -57,7 +58,8 @@ select the associations-file path. E5C implements that requirement.
 
 Active design: [E5D remembered window position and size](E05D_WINDOW_PLACEMENT.md),
 with initialization opt-in for Roam, Scribe and other applications. Its kernel
-event contract is ready for [Fable review](E05D_FABLE_REVIEW_REQUEST.md).
+event contract has [Fable's review](E05D_FABLE_REVIEW.md); the queue invariant
+needs the clarification above before implementation.
 
 ## Read in this order
 
@@ -85,7 +87,7 @@ Create slice records when work begins, rather than maintaining 15 empty designs.
 | E3 | Data view and selection | Merged PR #264 `5a521b63`; P5 evidence separate | Quinn | [Contract](E03_DATA_VIEW.md), [implementation packet](E03_HANDOFF.md); [PR #264](https://github.com/VBWizard/os64/pull/264), original native source `8b5d13a7`; clock diagnostic follow-up recorded | [Evidence and transition map](evidence/e03/README.md) |
 | E4 | Directory browser | Merged PR #267; P5 evidence separate | Quinn (design/integration), Sol (model/UI) | [Contract](E04_ROAM.md), [handoff](E04_HANDOFF.md), [PR #267](https://github.com/VBWizard/os64/pull/267), `243663dc` | [Host and native evidence](evidence/e04/README.md); no P5 claim |
 | E5 | Open/Save picker and launch reuse | Scribe, E5A and E5C accepted; PRs #319/#322/#325 merged | Quinn | [Scribe record](E05_SCRIBE.md), [PR #319](https://github.com/VBWizard/os64/pull/319), `29252438` | [Layout/size follow-up](E05A_DIALOG_POLISH.md), [file actions](E05C_ROAM_LAUNCH.md), [PR #325](https://github.com/VBWizard/os64/pull/325), `9f31fb0f` |
-| E5D | Reusable window placement | Designing; revision 1 ready for Fable review | Quinn | [Design](E05D_WINDOW_PLACEMENT.md), [review request](E05D_FABLE_REVIEW_REQUEST.md) | No implementation evidence |
+| E5D | Reusable window placement | Revision 2; queue ruling clarification requested | Quinn | [Design](E05D_WINDOW_PLACEMENT.md), [review response](E05D_REVIEW_RESPONSE.md) | No implementation evidence |
 | E6 | Local channel foundation | Planned | Unassigned | — | None |
 | E7 | Safe operation engine | Planned | Unassigned | — | None |
 | E8 | Transfer service | Planned | Unassigned | — | None |
