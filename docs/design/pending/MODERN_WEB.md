@@ -359,7 +359,9 @@ mechanism), `filter` and `clip-path` basics, `mix-blend-mode`, the
 
 **Tier 1 slices**, designed when Tier 0 is done and the P5 has been used
 on it for a week: `iframe` and `postMessage` (**Fable design**, its own
-document), CSP, referrer and cookie rules across redirects, `SameSite` and
+document: [IFRAME.md](IFRAME.md), 2026-10-23, written early so its
+§ What the open slices do now shapes 0e, 3, 5c and WIRE.md before they
+harden), CSP, referrer and cookie rules across redirects, `SameSite` and
 the public-suffix list. Custom elements (`customElements.define`, GitHub's
 `react-partial` and friends) join here or the end of Tier 0 as the census
 says once modules run.

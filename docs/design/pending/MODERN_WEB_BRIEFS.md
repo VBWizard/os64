@@ -24,6 +24,7 @@ MODERN_WEB.md and its brief here is struck.
 
 | 5a–5d relayout, the observer, the frame | Opus | Fable (5b's rule, 5c's graft), Chris | [RELAYOUT.md](RELAYOUT.md) is the brief; 5a after 0a, 5b/5c in sequence, 5d after 5c |
 | 6a–6c SVG | Opus | Fable (6b's door and backend verb), Chris | [SVG.md](SVG.md) is the brief; 6a after 0a, 6b after 0a's mark in libgarb, 6c after 6b |
+| F1–F3 frames (Tier 1) | Opus | Fable (F1's proxy gate and realm lifetimes, F2's departure order), Chris | [IFRAME.md](IFRAME.md) is the brief; after Tier 0 and a week on the P5; its § What the open slices do now binds 0e, 3, 5b/5c and WIRE.md today |
 
 Slices 5 and 6 are Fable designs (2026-10-21) and their documents are
 their briefs: each names its cuts, the seams, the oracle and what is left
