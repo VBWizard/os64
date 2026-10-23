@@ -1504,10 +1504,15 @@ void way_preflight_store(way_preflight_t *cache, const way_request_t *r, const c
         return;
     bool include = r->credentials == WAY_CREDENTIALS_INCLUDE;
     uint64_t expires = now_ms + (uint64_t)max_age * 1000u;
-    // Read outside the lock, which is spun on: the lists are the long part
-    // (up to WAY_CORS_LIST_MAX names each). Under it, each grant kept is
-    // given its own copy of the key and the item (one allocation apiece, in
-    // grant_put) and the rest is the grants' bookkeeping.
+    // The lists are read and sorted outside the lock, which is spun on. What
+    // the lock holds is the larger part: an expiry pass and a key lookup over
+    // the grants, a number for a new key, then for each of up to 2 *
+    // WAY_CORS_LIST_MAX items the server named, grant_put's scan of up to
+    // WAY_PREFLIGHT_ENTRIES_MAX grants for one to renew, and, for a grant
+    // kept, an allocation (its copy of the key and the item), plus, past the
+    // cap, an eviction scan of the same grants and a free. O(items *
+    // WAY_PREFLIGHT_ENTRIES_MAX), bounded by the two constants whatever the
+    // server sends.
     Names lists[2];
     names_read(resp, "access-control-allow-methods", &lists[0]);
     names_read(resp, "access-control-allow-headers", &lists[1]);
