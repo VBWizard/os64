@@ -444,7 +444,13 @@ nowhere, a form in it submits nothing (not even the event), and focus,
 blur and reset there reach no host. A script connected to it is marked
 started and runs nowhere, then or after it moves into the page, as a
 script innerHTML parses is; a handler attribute in it is not compiled and
-reads null until its element is the window's.
+reads null until its element is the window's. Its body reflects no handler
+onto window (HTML § 8.1.8.1): `onload` there reads null and an assignment
+changes nothing. Scripting is off for its nodes (`d_scripting`), so
+innerHTML and insertAdjacentHTML parse a `noscript`'s contents there as
+markup. It is connected as DOM means it (`d_connected`: isConnected, a
+`form` attribute's lookup), and not in the window's tree, which is what a
+script must be in to run (`d_in_window_tree`).
 
 **An XML document** keeps an element name's case, and its createElement
 makes HTML elements when it was made for the HTML namespace and refuses
