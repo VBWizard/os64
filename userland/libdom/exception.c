@@ -5,8 +5,8 @@
  * TimeoutError, NetworkError...), with its legacy `code`. An instance's name
  * and message are its own, in engine memory; its prototype inherits
  * Error.prototype, as WebIDL puts it. The binding's older refusals
- * (d_error) are Error objects with a name, as LIBDOM.md § Budgets and
- * errors says; what this slice throws is a DOMException (d_dom_exception). */
+ * (d_error) are DOMExceptions too, made through this file, once it is
+ * installed (core.c's d_error says how). */
 
 static JSClassID exception_slot;
 

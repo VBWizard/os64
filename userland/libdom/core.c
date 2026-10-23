@@ -34,8 +34,23 @@ int d_dictionary(JSContext *ctx, int argc, JSValueConst *argv, int at)
     return 1;
 }
 
+/* ONE DOMEXCEPTION FOR THE BINDING. A refusal by a WebIDL error name is a
+ * TypeError or a RangeError thrown as the engine's own; any other name is a
+ * DOMException with that name and its legacy code (exception.c), once the
+ * DOMException row has installed it; with the modern switch off there is
+ * no DOMException to make, and it is an Error carrying the name. The
+ * binding is reached through its anchor without d_context, which itself
+ * throws through here. */
 JSValue d_error(JSContext *ctx, const char *name, const char *message)
 {
+    if (os64_streq(name, "TypeError")) return JS_ThrowTypeError(ctx, "%s", message);
+    if (os64_streq(name, "RangeError")) return JS_ThrowRangeError(ctx, "%s", message);
+    JSClassID id = os64_js_class_id(&anchor_slot);
+    JSValue anchor = JS_GetClassProto(ctx, id);
+    os64_dom_t *dom = JS_GetOpaque(anchor, id);
+    JS_FreeValue(ctx, anchor);
+    if (dom != NULL && !dom->closed && dom->exception_prototype != NULL)
+        return d_dom_exception(dom, ctx, name, message);
     JSValue error = JS_NewError(ctx);
     if (JS_IsException(error)) return error;
     JSValue text = JS_NewString(ctx, name);

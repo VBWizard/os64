@@ -215,8 +215,12 @@ not claim a single combined page allocator.
 | Wrong receiver or unsupported native argument | `TypeError` |
 | Retired binding or nonempty file-input value assignment | `InvalidStateError` |
 
-Named native refusals are Error objects with own name/message properties;
-this slice does not install a DOMException constructor.
+A refusal named `TypeError` is the engine's own TypeError. Every other
+named refusal is a DOMException (exception.c) with that name, its
+message and its legacy `code`, made by `d_error` once the Modern Web's
+DOMException row has installed the interface; with the modern switch
+off there is no DOMException, and the refusal is an Error with own
+name/message properties, as it was before Slice 2 built the interface.
 
 During evaluation, engine memory exhaustion follows libjs's sticky `LIMIT/MEMORY` result. It
 cannot be caught and resumed as a native DOM quota exception. Ordinary
