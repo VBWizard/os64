@@ -760,6 +760,19 @@ static void dom_xhr_cases(void)
         "ev.join());assert(xe.status===204&&xe.response==='');",
         "xhr: an empty answer's events");
 
+    /* A KNOWN zero is not computable (XHR § "fire a progress event": "if
+     * length is not 0"): an empty upload's events and a Content-Length: 0
+     * answer's say lengthComputable false, total 0, as browsers do. */
+    dom_script(&f, XHR_RECORDER "var x=new XMLHttpRequest();rec(x);x.open('POST','/z');x.send('');globalThis.xz=x;",
+               "xhr: an empty upload");
+    os64_dom_response_t zero = net_answer_of(200, "http://example.test/z", "Content-Length: 0\r\n", "");
+    net_answer(&f, &net, net.count - 1, &zero);
+    dom_script(&f, FETCH_ASSERT
+        "var want=[1,'loadstart(0,0,false)','upload.loadstart(0,0,false)','upload.progress(0,0,false)',"
+        "'upload.load(0,0,false)','upload.loadend(0,0,false)',2,'progress(0,0,false)',4,'load(0,0,false)',"
+        "'loadend(0,0,false)'].join();assert(ev.join()===want,ev.join());",
+        "xhr: a known zero is not computable");
+
     /* Response types. */
     static const struct { const char *type, *holds; } kTypes[] = {
         {"arraybuffer", "xt.response instanceof ArrayBuffer&&xt.response.byteLength===9&&xt.response===xt.response"},

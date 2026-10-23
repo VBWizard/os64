@@ -159,7 +159,10 @@ static uint64_t now_ms(const os64_dom_t *dom)
 /* An event at `target`: a progress event (`progress`) with transmitted and
  * length, else a plain one. From a host task (`outcome`), each listener is
  * the task's call; from a page's own call, a nested one. -1 when the
- * runtime is finished with. */
+ * runtime is finished with. lengthComputable is `length != 0` because XHR
+ * § "fire a progress event" says exactly that ("if length is not 0"): a
+ * KNOWN zero (an empty upload, a Content-Length: 0 answer) is not
+ * computable either, as in browsers, so no flag beside the length. */
 static int fire(os64_dom_t *dom, JSContext *ctx, DValue *target, const char *type, bool progress, double transmitted,
                 double length, os64_js_outcome_t *outcome)
 {
