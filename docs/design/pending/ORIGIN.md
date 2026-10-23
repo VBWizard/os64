@@ -62,8 +62,9 @@ and a network error carries nothing at all.
 
 The stated divergences, accepted, each a DIVERGENCES.md row: `User-Agent`
 forbidden, `*` preflight-cache entries never credentialed, `max-age` capped
-at 7200 s, `localhost` not potentially trustworthy, no `Origin` on `HEAD`,
-the `https` to `http` refusal.
+at 7200 s, `localhost` not potentially trustworthy, the `https` to `http`
+refusal. (No `Origin` on a `HEAD` that is not cors-tainted is the
+standard's own rule, § 11, not a divergence.)
 
 **The six requirements**, and where each stands (MODERN_WEB.md's as-built
 says more): A, a `data:` body is capped by the same `max_body` as a network
@@ -555,8 +556,10 @@ that goes to the network, the preflight included)
 So a same-origin `POST` from `fetch` carries `Origin` (mode `cors`, method
 not GET/HEAD), a same-origin `GET` does not, and a cross-origin `GET` does.
 **Note against the brief:** it says "every CORS request and every non-GET";
-the standard says neither `GET` nor `HEAD`, so a `HEAD` sends none. This
-design follows the standard.
+the standard's second branch names neither `GET` nor `HEAD`, so a `HEAD`
+that is not cors-tainted sends none, while a cors-tainted `HEAD` carries
+one by the first branch. That is the standard, not a divergence, and this
+design follows it.
 The page can never supply `Origin` itself (forbidden request header).
 
 **`Referer`** goes with each hop by the request's referrer and referrer
