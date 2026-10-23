@@ -299,6 +299,9 @@ static void attributes_map_cases(void)
         "assert(seen.join()==='a,c','the walk reads the list as it stands at each step');"
         "assert(m.item({valueOf(){e.removeAttribute('a');return 0}}).name==='c','item: the list after its argument');"
         "e.setAttribute('d','4');assert(m.length===2&&m[1].name==='d','a set is seen at once');"
+        "e.setAttribute('f','6');var keys=[];"
+        "for(var k in m){if(/^[0-9]+$/.test(k))keys.push(k);if(k==='0')e.removeAttribute(m[1].name);}"
+        "assert(keys.join()==='0,1','for..in: an index gone before it is reached is not visited: '+keys);"
         /* the visibility check runs a Proxy prototype's `has`: what it
          * removes is not answered, the list being read after it */
         "var x=document.createElement('div');x.setAttribute('gone','1');var xm=x.attributes;"
