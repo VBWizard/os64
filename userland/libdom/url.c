@@ -69,17 +69,14 @@ static bool special(const char *scheme, size_t length)
     return default_port(scheme, length) != 0 || (length == 4 && os64_memcmp(scheme, "file", 4) == 0);
 }
 
+/* libway's, the one serialization of an origin in the tree: storage files
+ * are named by it, so location.origin, URL's origin and a fetch's Origin
+ * header may never disagree with it. */
 bool d_origin(const char *url, char *out, size_t cap)
 {
-    os64_url_t parsed;
-    if (os64_url_parse(url, &parsed) != OS64_URL_OK ||
-        default_port(parsed.scheme, os64_strlen(parsed.scheme)) == 0)
-        return os64_strcopy(out, cap, "null") < cap;
-    uint16_t standard = default_port(parsed.scheme, os64_strlen(parsed.scheme));
-    int n = parsed.port != 0 && parsed.port != standard
-        ? os64_snprintf(out, cap, "%s://%s:%u", parsed.scheme, parsed.host, (unsigned)parsed.port)
-        : os64_snprintf(out, cap, "%s://%s", parsed.scheme, parsed.host);
-    return n > 0 && (size_t)n < cap;
+    way_origin_t origin;
+    way_origin_of(url, 0, &origin);
+    return way_origin_serialize(&origin, out, cap);
 }
 
 /* An address taken apart: each component's span in the href. The
@@ -762,18 +759,9 @@ static JSValue url_component(JSContext *ctx, const DUrl *url, int which)
         return p.fragment_end - p.fragment > 1 ? JS_NewStringLen(ctx, href + p.fragment, p.fragment_end - p.fragment)
                                                : JS_NewString(ctx, "");
     case U_ORIGIN: {
-        /* A tuple origin for the special schemes but file; a blob: address
-         * has its inner address's, when that is http or https. */
-        char origin[OS64_URL_SCHEME_MAX + OS64_URL_HOST_MAX + 16];
-        if (p.scheme_end == 4 && os64_memcmp(href, "blob", 4) == 0) {
-            const char *inner = href + p.path;
-            size_t inner_length = url->length - p.path;
-            if (((inner_length >= 5 && os64_memcmp(inner, "http:", 5) == 0) ||
-                 (inner_length >= 6 && os64_memcmp(inner, "https:", 6) == 0)) &&
-                d_origin(inner, origin, sizeof(origin)))
-                return JS_NewString(ctx, origin);
-            return JS_NewString(ctx, "null");
-        }
+        /* d_origin's: a tuple for the special schemes but file, a blob:
+         * address's inner http(s) address's, else "null". */
+        char origin[WAY_ORIGIN_TEXT_MAX];
         return JS_NewString(ctx, d_origin(href, origin, sizeof(origin)) ? origin : "null");
     }
     default: return JS_UNDEFINED;
@@ -1433,4 +1421,57 @@ int d_url_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
                                   JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
         return -1;
     return 0;
+}
+
+char *d_params_text(JSContext *ctx, JSValueConst value, size_t *length)
+{
+    DParams *params = JS_GetOpaque(value, os64_js_class_id(&params_slot));
+    if (params == NULL) return NULL;
+    return form_serialize(ctx, params, length);
+}
+
+bool d_params_is(JSValueConst value)
+{
+    return JS_GetOpaque(value, os64_js_class_id(&params_slot)) != NULL;
+}
+
+int d_url_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst input, char **out)
+{
+    *out = NULL;
+    DString text = {0};
+    if (!d_string_text(dom, ctx, input, &text, true)) return -1;
+    if (!address_text(dom, ctx, &text, true)) {
+        d_string_free(dom, &text);
+        return -1;
+    }
+    *out = d_alloc(dom, OS64_DOM_URL_MAX);
+    if (*out == NULL) {
+        d_string_free(dom, &text);
+        d_error(ctx, "QuotaExceededError", "URL quota exceeded");
+        return -1;
+    }
+    /* The document's base URL (its <base href> as the tree stands), then
+     * the API's parse against it: UTF-8, whatever the document's own
+     * encoding, which only its links' queries are written in. */
+    bool parsed = os64_dom_resolve(dom->document, dom->url != NULL ? dom->url : "about:blank", "", *out,
+                                   OS64_DOM_URL_MAX);
+    char *base = parsed ? d_alloc(dom, OS64_DOM_URL_MAX) : NULL;
+    if (parsed && base == NULL) {
+        d_free(dom, *out);
+        *out = NULL;
+        d_string_free(dom, &text);
+        d_error(ctx, "QuotaExceededError", "URL quota exceeded");
+        return -1;
+    }
+    if (parsed) {
+        os64_memcpy(base, *out, OS64_DOM_URL_MAX);
+        parsed = resolve(text.data, base, *out, OS64_DOM_URL_MAX);
+        d_free(dom, base);
+    }
+    d_string_free(dom, &text);
+    if (!parsed) {
+        d_free(dom, *out);
+        *out = NULL;
+    }
+    return parsed ? 1 : 0;
 }

@@ -461,3 +461,17 @@ branch (`o.m(f())`), a bare call (`x()`), and every case Quinn found on
 lookup, a private getter, an increment's fetch consumed before a `super`
 or private call). The record is replaced by the next such fetch, dropped
 at the call that reads it, and released at teardown.
+
+### A compile that ran out of memory
+
+Patch 0010 adds no export. What it changes: a parse whose bytecode emit
+ran out of memory is an exception (`InternalError: out of memory`), never
+a function. The parser writes bytecode through a buffer that, on a failed
+allocation, stops growing and marks itself failed, a mark the parser never
+reads; `js_create_function` checks it on entry, before anything is
+transformed, and that is the one place every function definition becomes
+a function (eval, `new Function`, modules, class bodies, and each child
+definition through the same call). `tools/test_js_runtime_host.sh
+--compile-failure` fails each allocation of such a compile in turn on the
+target core. The parser's other unchecked out-of-memory paths are booked
+in DEBTS.md.

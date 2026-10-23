@@ -150,6 +150,11 @@ static JSValue location_part(os64_dom_t *dom, JSContext *ctx, int part)
     while (*hash != '\0' && *hash != '#') hash++;
     if (part == L_HREF) return JS_NewString(ctx, url);
     if (part == L_HASH) return JS_NewString(ctx, hash[0] == '#' && hash[1] != '\0' ? hash : "");
+    if (part == L_ORIGIN) {
+        /* d_origin's, the one serialization: storage is kept by it. */
+        char origin[WAY_ORIGIN_TEXT_MAX];
+        return JS_NewString(ctx, d_origin(url, origin, sizeof(origin)) ? origin : "null");
+    }
     os64_url_t parsed;
     if (os64_url_parse(url, &parsed) != OS64_URL_OK) {
         char scheme[OS64_URL_SCHEME_MAX + 1];
@@ -157,7 +162,7 @@ static JSValue location_part(os64_dom_t *dom, JSContext *ctx, int part)
             os64_strcopy(scheme + os64_strlen(scheme), 2, ":");
             return JS_NewString(ctx, scheme);
         }
-        return JS_NewString(ctx, part == L_ORIGIN ? "null" : "");
+        return JS_NewString(ctx, "");
     }
     const char *query = parsed.path;
     while (*query != '\0' && *query != '?') query++;
@@ -169,17 +174,11 @@ static JSValue location_part(os64_dom_t *dom, JSContext *ctx, int part)
         if (parsed.port == 0) return JS_NewString(ctx, "");
         os64_snprintf(text, sizeof(text), "%u", (unsigned)parsed.port);
         break;
-    case L_HOST: case L_ORIGIN: {
-        size_t at = 0;
-        if (part == L_ORIGIN) {
-            os64_snprintf(text, sizeof(text), "%s://", parsed.scheme);
-            at = os64_strlen(text);
-        }
+    case L_HOST:
         if (parsed.port != 0)
-            os64_snprintf(text + at, sizeof(text) - at, "%s:%u", parsed.host, (unsigned)parsed.port);
-        else os64_snprintf(text + at, sizeof(text) - at, "%s", parsed.host);
+            os64_snprintf(text, sizeof(text), "%s:%u", parsed.host, (unsigned)parsed.port);
+        else os64_snprintf(text, sizeof(text), "%s", parsed.host);
         break;
-    }
     case L_PATHNAME: return JS_NewStringLen(ctx, parsed.path, (size_t)(query - parsed.path));
     case L_SEARCH: return JS_NewString(ctx, query[0] == '?' && query[1] != '\0' ? query : "");
     default: return JS_NewString(ctx, "");

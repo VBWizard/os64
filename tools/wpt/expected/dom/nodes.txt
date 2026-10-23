@@ -103,6 +103,10 @@ Attr-prefix.html	Attr.prefix absent (SVG)
 Attr-prefix.html	Attr.prefix present (HTML)
 Attr-prefix.html	Attr.prefix present (MathML)
 Attr-prefix.html	Attr.prefix present (SVG)
+CharacterData-appendChild.html	Comment.appendChild(Comment)
+CharacterData-appendChild.html	Comment.appendChild(Text)
+CharacterData-appendChild.html	Text.appendChild(Comment)
+CharacterData-appendChild.html	Text.appendChild(Text)
 CharacterData-appendData.html	Comment.appendData()
 CharacterData-appendData.html	Text.appendData()
 CharacterData-substringData.html	Comment.substringData() with too few arguments
@@ -234,7 +238,108 @@ DOMImplementation-createDocument-no-browsing-context.html	createDocument: defaul
 DOMImplementation-createDocument-no-browsing-context.html	createHTMLDocument: defaultView is null
 DOMImplementation-createDocument-no-browsing-context.html	new DOMImplementation() throws
 DOMImplementation-createDocument.html	DOMImplementation.createDocument(namespace, qualifiedName, doctype)
+DOMImplementation-createDocument.html	createDocument test: "",":foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "","f:oo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "","foo:",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "/","1foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "/",":foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "/","foo:",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "/","xml:foo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "/","xmlns",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "/","xmlns:foo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "foo:","1foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "foo:",":foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "foo:","foo:",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "foo:","xml:foo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "foo:","xmlns",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "foo:","xmlns:foo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","-foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/",".foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","1foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/",":foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","<foo>",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","a:0",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","foo:",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:!",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:#",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:$",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:%",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:&",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:'",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:(",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:)",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:*",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:+",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:,",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:/",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:;",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:<",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:=",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:>",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:@",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:[",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:\\"",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:\\\\",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:]",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:^",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:`",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:a ",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:{",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:}",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","namespaceURI:~",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","xml:foo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","xml:test",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","xmlns",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","xmlns:foo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://example.com/","xmlns:test",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/2000/xmlns/","1foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/2000/xmlns/",":foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/2000/xmlns/","f1oo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/2000/xmlns/","f:oo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/2000/xmlns/","foo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/2000/xmlns/","foo1",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/2000/xmlns/","foo:",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/2000/xmlns/","foo:xmlns",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/2000/xmlns/","xml",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/2000/xmlns/","xml:foo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/2000/xmlns/","xmlfoo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/2000/xmlns/","xmlfoo:bar",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/XML/1998/namespace","1foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/XML/1998/namespace",":foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/XML/1998/namespace","foo:",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/XML/1998/namespace","xmlns",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/XML/1998/namespace","xmlns:foo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/XML/1998/namespaces","xml:foo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/xml/1998/namespace","xml:foo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: null,"-foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: null,".foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: null,"1foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: null,":",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: null,":foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: null,"<foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: null,"<foo>",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: null,"^^",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: null,"f:o:o",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: null,"f:oo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: null,"fo o",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: null,"foo:",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: null,"foo>",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: null,"null:xml",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: null,"xml:foo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: null,"xmlfoo:bar",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: null,"xmlns",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: null,"xmlns:foo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: null,"}foo",null,"INVALID_CHARACTER_ERR"
 DOMImplementation-createDocument.html	createDocument test: null,null,false,function "function TypeError() {\n    [native code]\n}"
+DOMImplementation-createDocument.html	createDocument test: undefined,"1foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: undefined,":foo",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: undefined,"f::oo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: undefined,"f:oo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: undefined,"foo:",null,"INVALID_CHARACTER_ERR"
+DOMImplementation-createDocument.html	createDocument test: undefined,"xml:foo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: undefined,"xmlfoo:bar",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: undefined,"xmlns",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: undefined,"xmlns:foo",null,"NAMESPACE_ERR"
 DOMImplementation-createDocument.html	createDocument with missing arguments
 DOMImplementation-createDocumentType.html	DOMImplementation.createDocumentType(qualifiedName, publicId, systemId)
 DOMImplementation-createDocumentType.html	createDocumentType("", "", "") should work
@@ -275,6 +380,7 @@ DOMImplementation-createDocumentType.html	createDocumentType("edi:/", "", "") sh
 DOMImplementation-createDocumentType.html	createDocumentType("edi:;", "", "") should work
 DOMImplementation-createDocumentType.html	createDocumentType("edi:<", "", "") should work
 DOMImplementation-createDocumentType.html	createDocumentType("edi:=", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:>", "", "") should throw INVALID_CHARACTER_ERR
 DOMImplementation-createDocumentType.html	createDocumentType("edi:@", "", "") should work
 DOMImplementation-createDocumentType.html	createDocumentType("edi:[", "", "") should work
 DOMImplementation-createDocumentType.html	createDocumentType("edi:\\"", "", "") should work
@@ -282,6 +388,7 @@ DOMImplementation-createDocumentType.html	createDocumentType("edi:\\\\", "", "")
 DOMImplementation-createDocumentType.html	createDocumentType("edi:]", "", "") should work
 DOMImplementation-createDocumentType.html	createDocumentType("edi:^", "", "") should work
 DOMImplementation-createDocumentType.html	createDocumentType("edi:`", "", "") should work
+DOMImplementation-createDocumentType.html	createDocumentType("edi:a ", "", "") should throw INVALID_CHARACTER_ERR
 DOMImplementation-createDocumentType.html	createDocumentType("edi:{", "", "") should work
 DOMImplementation-createDocumentType.html	createDocumentType("edi:}", "", "") should work
 DOMImplementation-createDocumentType.html	createDocumentType("edi:~", "", "") should work
@@ -455,6 +562,7 @@ DOMImplementation-hasFeature.html	hasFeature()
 DOMImplementation-hasFeature.html	hasFeature(null, "")
 DOMImplementation-hasFeature.html	hasFeature(undefined, "")
 Document-adoptNode.html	Inserting an Element into another document should adopt its Attr nodes.
+Document-createAttribute.html	HTML document.createAttribute("") should throw
 Document-createAttribute.html	HTML document.createAttribute("'")
 Document-createAttribute.html	HTML document.createAttribute("0")
 Document-createAttribute.html	HTML document.createAttribute("0:a")
@@ -472,6 +580,7 @@ Document-createAttribute.html	HTML document.createAttribute("x:y:x")
 Document-createAttribute.html	HTML document.createAttribute("~")
 Document-createAttribute.html	HTML document.createAttribute(null)
 Document-createAttribute.html	HTML document.createAttribute(undefined)
+Document-createAttribute.html	XML document.createAttribute("") should throw
 Document-createAttribute.html	XML document.createAttribute("'")
 Document-createAttribute.html	XML document.createAttribute("0")
 Document-createAttribute.html	XML document.createAttribute("0:a")
@@ -489,6 +598,16 @@ Document-createAttribute.html	XML document.createAttribute("x:y:x")
 Document-createAttribute.html	XML document.createAttribute("~")
 Document-createAttribute.html	XML document.createAttribute(null)
 Document-createAttribute.html	XML document.createAttribute(undefined)
+Document-createElement.html	createElement("") in HTML document
+Document-createElement.html	createElement("-foo") in HTML document
+Document-createElement.html	createElement(".foo") in HTML document
+Document-createElement.html	createElement("1:foo") in HTML document
+Document-createElement.html	createElement("1foo") in HTML document
+Document-createElement.html	createElement("<foo") in HTML document
+Document-createElement.html	createElement("<foo>") in HTML document
+Document-createElement.html	createElement("fo o") in HTML document
+Document-createElement.html	createElement("foo>") in HTML document
+Document-createElement.html	createElement("}foo") in HTML document
 Document-createEvent.https.html	EVENT should be an alias for Event.
 Document-createEvent.https.html	EVENTS should be an alias for Event.
 Document-createEvent.https.html	Event should be an alias for Event.
@@ -602,7 +721,15 @@ Element-childElementCount-nochild.html	childElementCount without Child Element N
 Element-childElementCount.html	childElementCount
 Element-classlist.html	.supports() must throw TypeError (HTML node)
 Element-classlist.html	Assigning to classList (HTML node)
+Element-classlist.html	classList.add(" ") with attribute value null (HTML node)
+Element-classlist.html	classList.add(" a") with attribute value null (HTML node)
+Element-classlist.html	classList.add("") with attribute value null (HTML node)
 Element-classlist.html	classList.add("AA") with attribute value "aa" (HTML node)
+Element-classlist.html	classList.add("\\fa") with attribute value null (HTML node)
+Element-classlist.html	classList.add("\\na") with attribute value null (HTML node)
+Element-classlist.html	classList.add("\\ra") with attribute value null (HTML node)
+Element-classlist.html	classList.add("\\ta") with attribute value null (HTML node)
+Element-classlist.html	classList.add("a ") with attribute value null (HTML node)
 Element-classlist.html	classList.add("a") with attribute value "   \\f" (HTML node)
 Element-classlist.html	classList.add("a") with attribute value "   a  a b" (HTML node)
 Element-classlist.html	classList.add("a") with attribute value " " (HTML node)
@@ -611,9 +738,16 @@ Element-classlist.html	classList.add("a") with attribute value "a a a  b" (HTML 
 Element-classlist.html	classList.add("a") with attribute value "a b c" (HTML node)
 Element-classlist.html	classList.add("a") with attribute value "a" (HTML node)
 Element-classlist.html	classList.add("a") with attribute value null (HTML node)
+Element-classlist.html	classList.add("a", " ") with attribute value null (HTML node)
+Element-classlist.html	classList.add("a", "") with attribute value null (HTML node)
 Element-classlist.html	classList.add("a", "a") with attribute value "a b c " (HTML node)
+Element-classlist.html	classList.add("a", "aa ") with attribute value null (HTML node)
 Element-classlist.html	classList.add("a", "b") with attribute value "" (HTML node)
 Element-classlist.html	classList.add("a", "b") with attribute value null (HTML node)
+Element-classlist.html	classList.add("a\\f") with attribute value null (HTML node)
+Element-classlist.html	classList.add("a\\n") with attribute value null (HTML node)
+Element-classlist.html	classList.add("a\\r") with attribute value null (HTML node)
+Element-classlist.html	classList.add("a\\t") with attribute value null (HTML node)
 Element-classlist.html	classList.add("b") with attribute value "a" (HTML node)
 Element-classlist.html	classList.add("c") with attribute value "   a  a b" (HTML node)
 Element-classlist.html	classList.add("c") with attribute value "\\t\\n\\f\\r a\\t\\n\\f\\r b\\t\\n\\f\\r " (HTML node)
@@ -682,8 +816,16 @@ Element-classlist.html	classList.length when set to "a a" (HTML node)
 Element-classlist.html	classList.length when set to "a b c c b a a b c c" (HTML node)
 Element-classlist.html	classList.length when set to "a" (HTML node)
 Element-classlist.html	classList.length when set to "a\\tb\\nc\\fd\\re f" (HTML node)
+Element-classlist.html	classList.remove(" ") with attribute value null (HTML node)
+Element-classlist.html	classList.remove(" a") with attribute value " a" (HTML node)
+Element-classlist.html	classList.remove("") with attribute value null (HTML node)
 Element-classlist.html	classList.remove("A") with attribute value "a b  c" (HTML node)
 Element-classlist.html	classList.remove("AA") with attribute value "AA BB aa CC AA dd aa" (HTML node)
+Element-classlist.html	classList.remove("\\fa") with attribute value "\\fa" (HTML node)
+Element-classlist.html	classList.remove("\\na") with attribute value "\\na" (HTML node)
+Element-classlist.html	classList.remove("\\ra") with attribute value "\\ra" (HTML node)
+Element-classlist.html	classList.remove("\\ta") with attribute value "\\ta" (HTML node)
+Element-classlist.html	classList.remove("a ") with attribute value "a " (HTML node)
 Element-classlist.html	classList.remove("a") with attribute value " a a a " (HTML node)
 Element-classlist.html	classList.remove("a") with attribute value "" (HTML node)
 Element-classlist.html	classList.remove("a") with attribute value "\\ra\\na\\ta\\f" (HTML node)
@@ -699,6 +841,11 @@ Element-classlist.html	classList.remove("a", "b") with attribute value "" (HTML 
 Element-classlist.html	classList.remove("a", "b") with attribute value "a b c " (HTML node)
 Element-classlist.html	classList.remove("a", "b") with attribute value null (HTML node)
 Element-classlist.html	classList.remove("a", "c") with attribute value "a b c " (HTML node)
+Element-classlist.html	classList.remove("a\\f") with attribute value "a\\f" (HTML node)
+Element-classlist.html	classList.remove("a\\n") with attribute value "a\\n" (HTML node)
+Element-classlist.html	classList.remove("a\\r") with attribute value "a\\r" (HTML node)
+Element-classlist.html	classList.remove("a\\t") with attribute value "a\\t" (HTML node)
+Element-classlist.html	classList.remove("aa ") with attribute value "aa " (HTML node)
 Element-classlist.html	classList.remove("aa") with attribute value "aa aa bb" (HTML node)
 Element-classlist.html	classList.remove("b") with attribute value " a  b  c " (HTML node)
 Element-classlist.html	classList.remove("b") with attribute value "a  b  c" (HTML node)
@@ -714,7 +861,18 @@ Element-classlist.html	classList.remove() with attribute value "a a" (HTML node)
 Element-classlist.html	classList.remove() with attribute value "a b c " (HTML node)
 Element-classlist.html	classList.remove(null) with attribute value "null" (HTML node)
 Element-classlist.html	classList.remove(undefined) with attribute value "undefined" (HTML node)
+Element-classlist.html	classList.replace(" ", "a") with attribute value null (HTML node)
+Element-classlist.html	classList.replace(" a", "b") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("", " ") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("", "a") with attribute value null (HTML node)
 Element-classlist.html	classList.replace("A", "b") with attribute value "a" (HTML node)
+Element-classlist.html	classList.replace("\\fa", "b") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("\\na", "b") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("\\ra", "b") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("\\ta", "b") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("a ", "b") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("a", " ") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("a", "") with attribute value null (HTML node)
 Element-classlist.html	classList.replace("a", "a") with attribute value "a a a  b" (HTML node)
 Element-classlist.html	classList.replace("a", "a") with attribute value "a" (HTML node)
 Element-classlist.html	classList.replace("a", "b") with attribute value " " (HTML node)
@@ -727,7 +885,21 @@ Element-classlist.html	classList.replace("a", "c") with attribute value "\\t\\n\
 Element-classlist.html	classList.replace("a", "c") with attribute value "a b a" (HTML node)
 Element-classlist.html	classList.replace("a", null) with attribute value "a b" (HTML node)
 Element-classlist.html	classList.replace("a", undefined) with attribute value "a b" (HTML node)
+Element-classlist.html	classList.replace("a\\f", "b") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("a\\n", "b") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("a\\r", "b") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("a\\t", "b") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("b", " a") with attribute value null (HTML node)
 Element-classlist.html	classList.replace("b", "A") with attribute value "a b" (HTML node)
+Element-classlist.html	classList.replace("b", "\\fa") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("b", "\\na") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("b", "\\ra") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("b", "\\ta") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("b", "a ") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("b", "a\\f") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("b", "a\\n") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("b", "a\\r") with attribute value null (HTML node)
+Element-classlist.html	classList.replace("b", "a\\t") with attribute value null (HTML node)
 Element-classlist.html	classList.replace("b", "c") with attribute value "   a  a b" (HTML node)
 Element-classlist.html	classList.replace("b", "c") with attribute value "\\t\\n\\f\\r a\\t\\n\\f\\r b\\t\\n\\f\\r " (HTML node)
 Element-classlist.html	classList.replace("b", "c") with attribute value "a b a" (HTML node)
@@ -742,10 +914,27 @@ Element-classlist.html	classList.replace(undefined, "b") with attribute value "a
 Element-classlist.html	classList.toString() when removed (HTML node)
 Element-classlist.html	classList.toString() when set to "   a  a b" (HTML node)
 Element-classlist.html	classList.toString() when set to "foo" (HTML node)
+Element-classlist.html	classList.toggle(" ", false) with attribute value null (HTML node)
+Element-classlist.html	classList.toggle(" ", true) with attribute value null (HTML node)
+Element-classlist.html	classList.toggle(" a", false) with attribute value " a" (HTML node)
+Element-classlist.html	classList.toggle(" a", true) with attribute value null (HTML node)
+Element-classlist.html	classList.toggle("") with attribute value null (HTML node)
+Element-classlist.html	classList.toggle("", false) with attribute value null (HTML node)
+Element-classlist.html	classList.toggle("", true) with attribute value null (HTML node)
 Element-classlist.html	classList.toggle("A") with attribute value "a" (HTML node)
 Element-classlist.html	classList.toggle("A", false) with attribute value "a b  c" (HTML node)
 Element-classlist.html	classList.toggle("AA", false) with attribute value "AA BB aa CC AA dd aa" (HTML node)
 Element-classlist.html	classList.toggle("AA", true) with attribute value "aa" (HTML node)
+Element-classlist.html	classList.toggle("\\fa", false) with attribute value "\\fa" (HTML node)
+Element-classlist.html	classList.toggle("\\fa", true) with attribute value null (HTML node)
+Element-classlist.html	classList.toggle("\\na", false) with attribute value "\\na" (HTML node)
+Element-classlist.html	classList.toggle("\\na", true) with attribute value null (HTML node)
+Element-classlist.html	classList.toggle("\\ra", false) with attribute value "\\ra" (HTML node)
+Element-classlist.html	classList.toggle("\\ra", true) with attribute value null (HTML node)
+Element-classlist.html	classList.toggle("\\ta", false) with attribute value "\\ta" (HTML node)
+Element-classlist.html	classList.toggle("\\ta", true) with attribute value null (HTML node)
+Element-classlist.html	classList.toggle("a ", false) with attribute value "a " (HTML node)
+Element-classlist.html	classList.toggle("a ", true) with attribute value null (HTML node)
 Element-classlist.html	classList.toggle("a") with attribute value "   \\f" (HTML node)
 Element-classlist.html	classList.toggle("a") with attribute value " " (HTML node)
 Element-classlist.html	classList.toggle("a") with attribute value " A A A " (HTML node)
@@ -773,6 +962,16 @@ Element-classlist.html	classList.toggle("a", true) with attribute value "a a a  
 Element-classlist.html	classList.toggle("a", true) with attribute value "a b c" (HTML node)
 Element-classlist.html	classList.toggle("a", true) with attribute value "a" (HTML node)
 Element-classlist.html	classList.toggle("a", true) with attribute value null (HTML node)
+Element-classlist.html	classList.toggle("a\\f", false) with attribute value "a\\f" (HTML node)
+Element-classlist.html	classList.toggle("a\\f", true) with attribute value null (HTML node)
+Element-classlist.html	classList.toggle("a\\n", false) with attribute value "a\\n" (HTML node)
+Element-classlist.html	classList.toggle("a\\n", true) with attribute value null (HTML node)
+Element-classlist.html	classList.toggle("a\\r", false) with attribute value "a\\r" (HTML node)
+Element-classlist.html	classList.toggle("a\\r", true) with attribute value null (HTML node)
+Element-classlist.html	classList.toggle("a\\t", false) with attribute value "a\\t" (HTML node)
+Element-classlist.html	classList.toggle("a\\t", true) with attribute value null (HTML node)
+Element-classlist.html	classList.toggle("aa ") with attribute value null (HTML node)
+Element-classlist.html	classList.toggle("aa ", false) with attribute value "aa " (HTML node)
 Element-classlist.html	classList.toggle("aa", false) with attribute value "aa aa bb" (HTML node)
 Element-classlist.html	classList.toggle("b") with attribute value "   a  a b" (HTML node)
 Element-classlist.html	classList.toggle("b") with attribute value " a b c " (HTML node)
@@ -842,14 +1041,18 @@ Element-getElementsByTagName.html	getElementsByTagName('*')
 Element-hasAttribute.html	hasAttribute should work with all attribute casings
 Element-hasAttributes.html	element.hasAttributes() must return false when the element does not have attribute.
 Element-hasAttributes.html	element.hasAttributes() must return true when the element has attribute.
+Element-insertAdjacentElement.html	Adding more than one child to document should cause a HierarchyRequestError exception
 Element-insertAdjacentElement.html	Inserted element should be target element's first child for 'afterbegin' case
 Element-insertAdjacentElement.html	Inserted element should be target element's last child for 'beforeend' case
 Element-insertAdjacentElement.html	Inserted element should be target element's next sibling for 'afterend' case
 Element-insertAdjacentElement.html	Inserted element should be target element's previous sibling for 'beforebegin' case
+Element-insertAdjacentElement.html	Inserting to an invalid location should cause a Syntax Error exception
+Element-insertAdjacentText.html	Adding more than one child to document should cause a HierarchyRequestError exception
 Element-insertAdjacentText.html	Inserted text node should be target element's first child for 'afterbegin' case
 Element-insertAdjacentText.html	Inserted text node should be target element's last child for 'beforeend' case
 Element-insertAdjacentText.html	Inserted text node should be target element's next sibling for 'afterend' case
 Element-insertAdjacentText.html	Inserted text node should be target element's previous sibling for 'beforebegin' case
+Element-insertAdjacentText.html	Inserting to an invalid location should cause a Syntax Error exception
 Element-lastElementChild.html	lastElementChild
 Element-matches-active-pseudo-class.html	Button should not match :active by default
 Element-matches-active-pseudo-class.html	Link should not match :active by default
@@ -882,7 +1085,10 @@ Element-tagName.html	tagName should be updated when changing ownerDocument
 Node-appendChild.html	Appending null to a comment
 Node-appendChild.html	Appending null to a doctype
 Node-appendChild.html	Appending null to a text node
+Node-appendChild.html	Appending to a comment
+Node-appendChild.html	Appending to a doctype
 Node-appendChild.html	Appending to a leaf node.
+Node-appendChild.html	Appending to a text node
 Node-appendChild.html	WebIDL tests
 Node-baseURI.html	For attributes in elements belonging to document fragments in document, baseURI should be document URL
 Node-baseURI.html	For attributes in elements belonging to document fragments, baseURI should be document URL
@@ -973,12 +1179,42 @@ Node-constants.html	Constants for nodeType on Element object.
 Node-constants.html	Constants for nodeType on Node interface object.
 Node-constants.html	Constants for nodeType on Node prototype object.
 Node-constants.html	Constants for nodeType on Text object.
+Node-insertBefore.html	Calling insertBefore an a leaf node Comment must throw HIERARCHY_REQUEST_ERR.
+Node-insertBefore.html	Calling insertBefore an a leaf node DocumentType must throw HIERARCHY_REQUEST_ERR.
+Node-insertBefore.html	Calling insertBefore an a leaf node Text must throw HIERARCHY_REQUEST_ERR.
 Node-insertBefore.html	Calling insertBefore with a non-Node first argument must throw TypeError.
 Node-insertBefore.html	Calling insertBefore with a non-Node first argument on a leaf node Comment must throw TypeError.
 Node-insertBefore.html	Calling insertBefore with a non-Node first argument on a leaf node DocumentType must throw TypeError.
 Node-insertBefore.html	Calling insertBefore with a non-Node first argument on a leaf node Text must throw TypeError.
+Node-insertBefore.html	Calling insertBefore with a reference child whose parent is not the context node must throw a NotFoundError.
+Node-insertBefore.html	Calling insertBefore with an inclusive ancestor of the context object must throw HIERARCHY_REQUEST_ERR.
 Node-insertBefore.html	Calling insertBefore with second argument missing, or other than Node, null, or undefined, must throw TypeError.
+Node-insertBefore.html	If node is a DocumentFragment with an element and parent is a document with another element, then throw a HierarchyRequestError DOMException.
+Node-insertBefore.html	If node is a DocumentFragment with multiple elements and parent is a document, then throw a HierarchyRequestError DOMException.
+Node-insertBefore.html	If node is a Text node and parent is a document, then throw a HierarchyRequestError DOMException.
+Node-insertBefore.html	If node is a doctype and parent is a document with an element, then throw a HierarchyRequestError DOMException.
+Node-insertBefore.html	If node is a doctype and parent is a document with another doctype, then throw a HierarchyRequestError DOMException.
+Node-insertBefore.html	If node is a doctype and parent is not a document, then throw a HierarchyRequestError DOMException.
+Node-insertBefore.html	If node is a host-including inclusive ancestor of parent, then throw a HierarchyRequestError DOMException.
+Node-insertBefore.html	If node is an Element and parent is a document with another element, then throw a HierarchyRequestError DOMException.
+Node-insertBefore.html	If node is not a DocumentFragment, DocumentType, Element, Text, ProcessingInstruction, or Comment node, then throw a HierarchyRequestError DOMException.
+Node-insertBefore.html	If the context node is a DocumentFragment, inserting a document or a doctype should throw a HierarchyRequestError.
+Node-insertBefore.html	If the context node is a document and a doctype is following the reference child, inserting a DocumentFragment with an element should throw a HierarchyRequestError.
+Node-insertBefore.html	If the context node is a document and a doctype is following the reference child, inserting an element should throw a HierarchyRequestError.
+Node-insertBefore.html	If the context node is a document with and element child, appending a doctype should throw a HierarchyRequestError.
+Node-insertBefore.html	If the context node is a document, inserting a DocumentFragment that contains a text node or too many elements should throw a HierarchyRequestError.
+Node-insertBefore.html	If the context node is a document, inserting a DocumentFragment with an element before the doctype should throw a HierarchyRequestError.
+Node-insertBefore.html	If the context node is a document, inserting a DocumentFragment with an element if there already is an element child should throw a HierarchyRequestError.
+Node-insertBefore.html	If the context node is a document, inserting a doctype after the document element should throw a HierarchyRequestError.
+Node-insertBefore.html	If the context node is a document, inserting a doctype if there already is a doctype child should throw a HierarchyRequestError.
+Node-insertBefore.html	If the context node is a document, inserting a document or text node should throw a HierarchyRequestError.
+Node-insertBefore.html	If the context node is a document, inserting an element before the doctype should throw a HierarchyRequestError.
+Node-insertBefore.html	If the context node is a document, inserting an element if there already is an element child should throw a HierarchyRequestError.
+Node-insertBefore.html	If the context node is an element, inserting a document or a doctype should throw a HierarchyRequestError.
 Node-insertBefore.html	Inserting a node before itself should not move the node
+Node-insertBefore.html	Should check that 'node' is not an ancestor of 'parent' before checking whether 'child' is a child of 'parent'
+Node-insertBefore.html	Should check whether 'child' is a child of 'parent' before checking whether 'node' can be inserted into the document given the kids the document has right now.
+Node-insertBefore.html	Should check whether 'child' is a child of 'parent' before checking whether 'node' is of a type that can have a parent.
 Node-isConnected.html	Test with ordinary child nodes
 Node-mutation-adoptNode.html	Adopting an element into a different document update's the element's owner doc as well as the owner docs of it's attributes
 Node-mutation-adoptNode.html	simple append of foreign div with text
@@ -1005,8 +1241,39 @@ Node-parentElement.html	parentElement should work correctly in disconnected subt
 Node-parentElement.html	parentElement should work correctly in disconnected subtrees (text)
 Node-parentElement.html	parentElement should work correctly with DocumentFragments (element)
 Node-parentElement.html	parentElement should work correctly with DocumentFragments (text)
+Node-removeChild.html	Calling removeChild on a comment from a synthetic document with no children should throw NOT_FOUND_ERR.
+Node-removeChild.html	Calling removeChild on a comment from the main document with no children should throw NOT_FOUND_ERR.
+Node-removeChild.html	Calling removeChild on a element from a synthetic document with no children should throw NOT_FOUND_ERR.
+Node-removeChild.html	Calling removeChild on a element from the main document with no children should throw NOT_FOUND_ERR.
+Node-removeChild.html	Calling removeChild on a text from a synthetic document with no children should throw NOT_FOUND_ERR.
+Node-removeChild.html	Calling removeChild on a text from the main document with no children should throw NOT_FOUND_ERR.
+Node-removeChild.html	Passing a detached comment from a synthetic document to removeChild should not affect it.
+Node-removeChild.html	Passing a detached comment from the main document to removeChild should not affect it.
+Node-removeChild.html	Passing a detached element from a synthetic document to removeChild should not affect it.
+Node-removeChild.html	Passing a detached element from the main document to removeChild should not affect it.
+Node-removeChild.html	Passing a detached text from a synthetic document to removeChild should not affect it.
+Node-removeChild.html	Passing a detached text from the main document to removeChild should not affect it.
+Node-removeChild.html	Passing a non-detached comment from a synthetic document to removeChild should not affect it.
+Node-removeChild.html	Passing a non-detached comment from the main document to removeChild should not affect it.
+Node-removeChild.html	Passing a non-detached element from a synthetic document to removeChild should not affect it.
+Node-removeChild.html	Passing a non-detached element from the main document to removeChild should not affect it.
+Node-removeChild.html	Passing a non-detached text from a synthetic document to removeChild should not affect it.
+Node-removeChild.html	Passing a non-detached text from the main document to removeChild should not affect it.
 Node-removeChild.html	Passing a value that is not a Node reference to removeChild should throw TypeError.
+Node-replaceChild.html	If child's parent is not the context node, a NotFoundError exception should be thrown
+Node-replaceChild.html	If node is an inclusive ancestor of the context node, a HierarchyRequestError should be thrown.
+Node-replaceChild.html	If the context node is a DocumentFragment, inserting a document or a doctype should throw a HierarchyRequestError.
+Node-replaceChild.html	If the context node is a document (without element children), inserting a DocumentFragment that contains multiple elements should throw a HierarchyRequestError.
+Node-replaceChild.html	If the context node is a document, inserting a DocumentFragment that contains a text node or too many elements should throw a HierarchyRequestError.
+Node-replaceChild.html	If the context node is a document, inserting a DocumentFragment with an element before the doctype should throw a HierarchyRequestError.
+Node-replaceChild.html	If the context node is a document, inserting a DocumentFragment with an element if there already is an element child should throw a HierarchyRequestError.
+Node-replaceChild.html	If the context node is a document, inserting a doctype after the document element should throw a HierarchyRequestError.
+Node-replaceChild.html	If the context node is a document, inserting a doctype if there already is a doctype child should throw a HierarchyRequestError.
+Node-replaceChild.html	If the context node is a document, inserting a document or text node should throw a HierarchyRequestError.
 Node-replaceChild.html	If the context node is a document, inserting a new doctype should work.
+Node-replaceChild.html	If the context node is a document, inserting an element before the doctype should throw a HierarchyRequestError.
+Node-replaceChild.html	If the context node is a document, inserting an element if there already is an element child should throw a HierarchyRequestError.
+Node-replaceChild.html	If the context node is an element, inserting a document or a doctype should throw a HierarchyRequestError.
 Node-replaceChild.html	Passing null to replaceChild should throw a TypeError.
 Node-replaceChild.html	Replacing a node with its next sibling should work (2 children)
 Node-replaceChild.html	Replacing a node with its next sibling should work (4 children)
@@ -1015,6 +1282,9 @@ Node-replaceChild.html	Replacing an element with a DocumentFragment should allow
 Node-replaceChild.html	Replacing the document element with a DocumentFragment containing a single element and comments should work.
 Node-replaceChild.html	Replacing the document element with a DocumentFragment containing a single element should work.
 Node-replaceChild.html	Replacing the document element with a single element should work.
+Node-replaceChild.html	Should check that 'node' is not an ancestor of 'parent' before checking whether 'child' is a child of 'parent'
+Node-replaceChild.html	Should check whether 'child' is a child of 'parent' before checking whether 'node' can be inserted into the document given the kids the document has right now.
+Node-replaceChild.html	Should check whether 'child' is a child of 'parent' before checking whether 'node' is of a type that can have a parent.
 Node-replaceChild.html	replaceChild should work in the presence of mutation events.
 NodeList-Iterable.html	NodeList has Symbol.iterator.
 NodeList-Iterable.html	NodeList has entries method.
@@ -1049,6 +1319,15 @@ ParentNode-append.html	Element.append() with only text as an argument, on a pare
 ParentNode-append.html	Element.append() with the same element twice.
 ParentNode-append.html	Element.append() with undefined as an argument, on a parent having no child.
 ParentNode-append.html	Element.append() without any argument, on a parent having no child.
+ParentNode-append.html	If node is a DocumentFragment with an element and parent is a document with another element, then throw a HierarchyRequestError DOMException.
+ParentNode-append.html	If node is a DocumentFragment with multiple elements and parent is a document, then throw a HierarchyRequestError DOMException.
+ParentNode-append.html	If node is a Text node and parent is a document, then throw a HierarchyRequestError DOMException.
+ParentNode-append.html	If node is a doctype and parent is a document with an element, then throw a HierarchyRequestError DOMException.
+ParentNode-append.html	If node is a doctype and parent is a document with another doctype, then throw a HierarchyRequestError DOMException.
+ParentNode-append.html	If node is a doctype and parent is not a document, then throw a HierarchyRequestError DOMException.
+ParentNode-append.html	If node is a host-including inclusive ancestor of parent, then throw a HierarchyRequestError DOMException.
+ParentNode-append.html	If node is an Element and parent is a document with another element, then throw a HierarchyRequestError DOMException.
+ParentNode-append.html	If node is not a DocumentFragment, DocumentType, Element, Text, ProcessingInstruction, or Comment node, then throw a HierarchyRequestError DOMException.
 ParentNode-prepend.html	DocumentFragment.prepend() with null as an argument, on a parent having a child.
 ParentNode-prepend.html	DocumentFragment.prepend() with null as an argument, on a parent having no child.
 ParentNode-prepend.html	DocumentFragment.prepend() with one element and text as argument, on a parent having a child.
@@ -1063,6 +1342,14 @@ ParentNode-prepend.html	Element.prepend() with only one element as an argument, 
 ParentNode-prepend.html	Element.prepend() with only text as an argument, on a parent having no child.
 ParentNode-prepend.html	Element.prepend() with undefined as an argument, on a parent having no child.
 ParentNode-prepend.html	Element.prepend() without any argument, on a parent having no child.
+ParentNode-prepend.html	If node is a DocumentFragment with an element and parent is a document with another element, then throw a HierarchyRequestError DOMException.
+ParentNode-prepend.html	If node is a DocumentFragment with multiple elements and parent is a document, then throw a HierarchyRequestError DOMException.
+ParentNode-prepend.html	If node is a Text node and parent is a document, then throw a HierarchyRequestError DOMException.
+ParentNode-prepend.html	If node is a doctype and parent is a document with another doctype, then throw a HierarchyRequestError DOMException.
+ParentNode-prepend.html	If node is a doctype and parent is not a document, then throw a HierarchyRequestError DOMException.
+ParentNode-prepend.html	If node is a host-including inclusive ancestor of parent, then throw a HierarchyRequestError DOMException.
+ParentNode-prepend.html	If node is an Element and parent is a document with another element, then throw a HierarchyRequestError DOMException.
+ParentNode-prepend.html	If node is not a DocumentFragment, DocumentType, Element, Text, ProcessingInstruction, or Comment node, then throw a HierarchyRequestError DOMException.
 ParentNode-properties.html	Document.childElementCount
 ParentNode-properties.html	Document.firstElementChild
 ParentNode-properties.html	Document.lastElementChild
@@ -1161,8 +1448,13 @@ ParentNode-querySelector-escapes.html	"􀀀00" should match with "#\\\\10000000"
 ParentNode-querySelector-escapes.html	"􏿿" should match with "#\\\\10fFfF"
 ParentNode-querySelector-escapes.html	"􏿿0" should match with "#\\\\10fFfF0"
 ParentNode-querySelector-hyphen-prefix.html	Class selector with hyphen-prefix followed by letters
+ParentNode-querySelector-hyphen-prefix.html	Class selector with hyphen-prefix followed by numbers
 ParentNode-querySelector-hyphen-prefix.html	ID selector with hyphen-prefix followed by letters
+ParentNode-querySelector-hyphen-prefix.html	ID selector with hyphen-prefix followed by numbers
 ParentNode-querySelector-innerHTML.html	querySelector matches nodes inserted by innerHTML
+ParentNode-querySelector-invalid-comment-like.html	matches throws SyntaxError for comment-like selector
+ParentNode-querySelector-invalid-comment-like.html	querySelector throws SyntaxError for comment-like selector
+ParentNode-querySelector-invalid-comment-like.html	querySelectorAll throws SyntaxError for comment-like selector
 ParentNode-querySelector-is-nested-pseudo-class.html	Complex nested :is selector with attribute and :not selectors should work
 ParentNode-querySelector-is-nested-pseudo-class.html	Simple nested :is selector should match all inputs and buttons
 ParentNode-querySelector-is-not.html	querySelector with :is():not() combined
@@ -1201,6 +1493,8 @@ ParentNode-querySelectorAll-svg-class.html	Selecting a svg element with a class 
 ParentNode-querySelectors-exclusive.html	querySelector/querySelectorAll should not include their thisArg
 ParentNode-querySelectors-space-and-dash-attribute-value.html	querySelector
 ParentNode-querySelectors-space-and-dash-attribute-value.html	querySelectorAll
+ParentNode-replaceChildren.html	Document.replaceChildren() with text throws a HierarchyRequestError.
+ParentNode-replaceChildren.html	Document.replaceChildren() with two elements throws a HierarchyRequestError.
 ParentNode-replaceChildren.html	DocumentFragment.replaceChildren() with null as an argument, on a parent having a child.
 ParentNode-replaceChildren.html	DocumentFragment.replaceChildren() with null as an argument, on a parent having no child.
 ParentNode-replaceChildren.html	DocumentFragment.replaceChildren() with one element and text as argument, on a parent having a child.
@@ -1217,6 +1511,11 @@ ParentNode-replaceChildren.html	Element.replaceChildren() with only text as an a
 ParentNode-replaceChildren.html	Element.replaceChildren() with undefined as an argument, on a parent having no child.
 ParentNode-replaceChildren.html	Element.replaceChildren() without any argument, on a parent having a child.
 ParentNode-replaceChildren.html	Element.replaceChildren() without any argument, on a parent having no child.
+ParentNode-replaceChildren.html	If node is a DocumentFragment with multiple elements and parent is a document, then throw a HierarchyRequestError DOMException.
+ParentNode-replaceChildren.html	If node is a Text node and parent is a document, then throw a HierarchyRequestError DOMException.
+ParentNode-replaceChildren.html	If node is a doctype and parent is not a document, then throw a HierarchyRequestError DOMException.
+ParentNode-replaceChildren.html	If node is a host-including inclusive ancestor of parent, then throw a HierarchyRequestError DOMException.
+ParentNode-replaceChildren.html	If node is not a DocumentFragment, DocumentType, Element, Text, ProcessingInstruction, or Comment node, then throw a HierarchyRequestError DOMException.
 attributes-namednodemap.html	an attribute set by setAttribute should be accessible as a field on the `attributes` field of an Element
 attributes-namednodemap.html	setNamedItem and removeNamedItem on `attributes` should add and remove fields from `attributes`
 attributes-namednodemap.html	setNamedItem and removeNamedItem on `attributes` should not interfere with existing method names
@@ -1228,13 +1527,17 @@ attributes.html	Basic functionality of setAttributeNode
 attributes.html	Basic functionality should be intact.
 attributes.html	Basic functionality should be intact. (toggleAttribute)
 attributes.html	Entities in attributes should have been expanded while parsing.
+attributes.html	If attr’s element is neither null nor element, throw an InUseAttributeError.
 attributes.html	Own property correctness with basic attributes
 attributes.html	Replacing an attr by itself
 attributes.html	Specified attributes should be accessible.
+attributes.html	When qualifiedName does not match the Name production, an INVALID_CHARACTER_ERR exception is to be thrown. (setAttribute)
+attributes.html	When qualifiedName does not match the Name production, an INVALID_CHARACTER_ERR exception is to be thrown. (toggleAttribute)
 attributes.html	setAttribute should not change the order of previously set attributes.
 attributes.html	setAttribute should not throw even if a load is not allowed
 attributes.html	setAttribute should not throw even when qualifiedName starts with 'xmlns'
 attributes.html	setAttributeNode called with an Attr that has the same name as an existing one should not change attribute order
+attributes.html	setAttributeNode on bound attribute should throw InUseAttributeError
 attributes.html	setAttributeNode, if it fires mutation events, should fire one with the new node when resetting an existing attribute
 attributes.html	setAttributeNode, if it fires mutation events, should fire one with the new node when resetting an existing attribute (outer shell)
 attributes.html	toggleAttribute should not change the order of previously set attributes.
@@ -1316,7 +1619,11 @@ insert-adjacent.html	insertAdjacentText(afterbegin, tartiflette )
 insert-adjacent.html	insertAdjacentText(afterend, gateau aux pommes )
 insert-adjacent.html	insertAdjacentText(beforebegin, raclette )
 insert-adjacent.html	insertAdjacentText(beforeend, lasagne )
+insert-adjacent.html	invalid caller object insertAdjacentElement
+insert-adjacent.html	invalid caller object insertAdjacentText
 insert-adjacent.html	invalid object argument insertAdjacentElement
+insert-adjacent.html	invalid syntax for insertAdjacentElement
+insert-adjacent.html	invalid syntax for insertAdjacentText
 insertion-removing-steps/blur-event.window.html	<button> element does not fire blur/focusout events upon DOM removal
 insertion-removing-steps/blur-event.window.html	<input> element does not fire blur event upon DOM removal
 insertion-removing-steps/later-script-removed-by-earlier-script.html	A later-inserted script removed by an earlier-inserted script in the same append() call should not run
@@ -1325,4 +1632,5 @@ insertion-removing-steps/script-does-not-run-on-child-removal.window.html	Script
 live-collections-batched-mutations.window.html	childNodes on Node instances remains live across batched mutations and supported access methods
 moveBefore/Node-moveBefore.html	Calling moveBefore with a non-Node first argument must throw TypeError.
 moveBefore/Node-moveBefore.html	Calling moveBefore with second argument missing, or other than Node, null, or undefined, must throw TypeError.
+name-validation.html	Valid and invalid characters in createDocumentType.
 querySelector-id-nth-child.html	querySelectorAll matching #id + constant nth-child()

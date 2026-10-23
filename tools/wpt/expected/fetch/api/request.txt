@@ -1,0 +1,664 @@
+# WPT's fetch/api/request in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh fetch/api/request --update
+# rewrites [passing].
+[required]
+forbidden-method.any.html	Request() with a forbidden method CONNECT must throw.
+forbidden-method.any.html	Request() with a forbidden method TRACE must throw.
+forbidden-method.any.html	Request() with a forbidden method TRACK must throw.
+forbidden-method.any.html	Request() with a forbidden method connect must throw.
+forbidden-method.any.html	Request() with a forbidden method trace must throw.
+forbidden-method.any.html	Request() with a forbidden method track must throw.
+request-bad-port.any.html	Request on bad port 1 should throw TypeError.
+request-bad-port.any.html	Request on bad port 10080 should throw TypeError.
+request-bad-port.any.html	Request on bad port 101 should throw TypeError.
+request-bad-port.any.html	Request on bad port 102 should throw TypeError.
+request-bad-port.any.html	Request on bad port 103 should throw TypeError.
+request-bad-port.any.html	Request on bad port 104 should throw TypeError.
+request-bad-port.any.html	Request on bad port 109 should throw TypeError.
+request-bad-port.any.html	Request on bad port 11 should throw TypeError.
+request-bad-port.any.html	Request on bad port 110 should throw TypeError.
+request-bad-port.any.html	Request on bad port 111 should throw TypeError.
+request-bad-port.any.html	Request on bad port 113 should throw TypeError.
+request-bad-port.any.html	Request on bad port 115 should throw TypeError.
+request-bad-port.any.html	Request on bad port 117 should throw TypeError.
+request-bad-port.any.html	Request on bad port 119 should throw TypeError.
+request-bad-port.any.html	Request on bad port 123 should throw TypeError.
+request-bad-port.any.html	Request on bad port 13 should throw TypeError.
+request-bad-port.any.html	Request on bad port 135 should throw TypeError.
+request-bad-port.any.html	Request on bad port 137 should throw TypeError.
+request-bad-port.any.html	Request on bad port 139 should throw TypeError.
+request-bad-port.any.html	Request on bad port 143 should throw TypeError.
+request-bad-port.any.html	Request on bad port 15 should throw TypeError.
+request-bad-port.any.html	Request on bad port 161 should throw TypeError.
+request-bad-port.any.html	Request on bad port 17 should throw TypeError.
+request-bad-port.any.html	Request on bad port 1719 should throw TypeError.
+request-bad-port.any.html	Request on bad port 1720 should throw TypeError.
+request-bad-port.any.html	Request on bad port 1723 should throw TypeError.
+request-bad-port.any.html	Request on bad port 179 should throw TypeError.
+request-bad-port.any.html	Request on bad port 19 should throw TypeError.
+request-bad-port.any.html	Request on bad port 20 should throw TypeError.
+request-bad-port.any.html	Request on bad port 2049 should throw TypeError.
+request-bad-port.any.html	Request on bad port 21 should throw TypeError.
+request-bad-port.any.html	Request on bad port 22 should throw TypeError.
+request-bad-port.any.html	Request on bad port 23 should throw TypeError.
+request-bad-port.any.html	Request on bad port 25 should throw TypeError.
+request-bad-port.any.html	Request on bad port 3659 should throw TypeError.
+request-bad-port.any.html	Request on bad port 37 should throw TypeError.
+request-bad-port.any.html	Request on bad port 389 should throw TypeError.
+request-bad-port.any.html	Request on bad port 4045 should throw TypeError.
+request-bad-port.any.html	Request on bad port 4190 should throw TypeError.
+request-bad-port.any.html	Request on bad port 42 should throw TypeError.
+request-bad-port.any.html	Request on bad port 427 should throw TypeError.
+request-bad-port.any.html	Request on bad port 43 should throw TypeError.
+request-bad-port.any.html	Request on bad port 465 should throw TypeError.
+request-bad-port.any.html	Request on bad port 5060 should throw TypeError.
+request-bad-port.any.html	Request on bad port 5061 should throw TypeError.
+request-bad-port.any.html	Request on bad port 512 should throw TypeError.
+request-bad-port.any.html	Request on bad port 513 should throw TypeError.
+request-bad-port.any.html	Request on bad port 514 should throw TypeError.
+request-bad-port.any.html	Request on bad port 515 should throw TypeError.
+request-bad-port.any.html	Request on bad port 526 should throw TypeError.
+request-bad-port.any.html	Request on bad port 53 should throw TypeError.
+request-bad-port.any.html	Request on bad port 530 should throw TypeError.
+request-bad-port.any.html	Request on bad port 531 should throw TypeError.
+request-bad-port.any.html	Request on bad port 532 should throw TypeError.
+request-bad-port.any.html	Request on bad port 540 should throw TypeError.
+request-bad-port.any.html	Request on bad port 548 should throw TypeError.
+request-bad-port.any.html	Request on bad port 554 should throw TypeError.
+request-bad-port.any.html	Request on bad port 556 should throw TypeError.
+request-bad-port.any.html	Request on bad port 563 should throw TypeError.
+request-bad-port.any.html	Request on bad port 587 should throw TypeError.
+request-bad-port.any.html	Request on bad port 6000 should throw TypeError.
+request-bad-port.any.html	Request on bad port 601 should throw TypeError.
+request-bad-port.any.html	Request on bad port 636 should throw TypeError.
+request-bad-port.any.html	Request on bad port 6566 should throw TypeError.
+request-bad-port.any.html	Request on bad port 6665 should throw TypeError.
+request-bad-port.any.html	Request on bad port 6666 should throw TypeError.
+request-bad-port.any.html	Request on bad port 6667 should throw TypeError.
+request-bad-port.any.html	Request on bad port 6668 should throw TypeError.
+request-bad-port.any.html	Request on bad port 6669 should throw TypeError.
+request-bad-port.any.html	Request on bad port 6679 should throw TypeError.
+request-bad-port.any.html	Request on bad port 6697 should throw TypeError.
+request-bad-port.any.html	Request on bad port 69 should throw TypeError.
+request-bad-port.any.html	Request on bad port 7 should throw TypeError.
+request-bad-port.any.html	Request on bad port 77 should throw TypeError.
+request-bad-port.any.html	Request on bad port 79 should throw TypeError.
+request-bad-port.any.html	Request on bad port 87 should throw TypeError.
+request-bad-port.any.html	Request on bad port 9 should throw TypeError.
+request-bad-port.any.html	Request on bad port 95 should throw TypeError.
+request-bad-port.any.html	Request on bad port 989 should throw TypeError.
+request-bad-port.any.html	Request on bad port 990 should throw TypeError.
+request-bad-port.any.html	Request on bad port 993 should throw TypeError.
+request-bad-port.any.html	Request on bad port 995 should throw TypeError.
+request-consume-empty.any.html	Consume empty ArrayBuffer request body as text
+request-consume-empty.any.html	Consume empty URLSearchParams request body as text
+request-consume-empty.any.html	Consume empty blob request body as arrayBuffer
+request-consume-empty.any.html	Consume empty blob request body as text
+request-consume-empty.any.html	Consume empty text request body as arrayBuffer
+request-consume-empty.any.html	Consume empty text request body as text
+request-consume-empty.any.html	Consume request's body as arrayBuffer
+request-consume-empty.any.html	Consume request's body as blob
+request-consume-empty.any.html	Consume request's body as formData with correct multipart type (error case)
+request-consume-empty.any.html	Consume request's body as formData with correct urlencoded type
+request-consume-empty.any.html	Consume request's body as formData without correct type (error case)
+request-consume-empty.any.html	Consume request's body as json (error case)
+request-consume-empty.any.html	Consume request's body as text
+request-consume.any.html	Consume ArrayBuffer request's body as JSON
+request-consume.any.html	Consume ArrayBuffer request's body as arrayBuffer
+request-consume.any.html	Consume ArrayBuffer request's body as blob
+request-consume.any.html	Consume ArrayBuffer request's body as bytes
+request-consume.any.html	Consume ArrayBuffer request's body as text
+request-consume.any.html	Consume DataView request's body as JSON
+request-consume.any.html	Consume DataView request's body as arrayBuffer
+request-consume.any.html	Consume DataView request's body as blob
+request-consume.any.html	Consume DataView request's body as bytes
+request-consume.any.html	Consume DataView request's body as text
+request-consume.any.html	Consume Float32Array request's body as JSON
+request-consume.any.html	Consume Float32Array request's body as arrayBuffer
+request-consume.any.html	Consume Float32Array request's body as blob
+request-consume.any.html	Consume Float32Array request's body as bytes
+request-consume.any.html	Consume Float32Array request's body as text
+request-consume.any.html	Consume FormData request's body as FormData
+request-consume.any.html	Consume Int8Array request's body as JSON
+request-consume.any.html	Consume Int8Array request's body as arrayBuffer
+request-consume.any.html	Consume Int8Array request's body as blob
+request-consume.any.html	Consume Int8Array request's body as bytes
+request-consume.any.html	Consume Int8Array request's body as text
+request-consume.any.html	Consume JSON from text: '"1"'
+request-consume.any.html	Consume JSON from text: '"\\"string\\""'
+request-consume.any.html	Consume JSON from text: '"null"'
+request-consume.any.html	Consume JSON from text: '"true"'
+request-consume.any.html	Consume String request's body as JSON
+request-consume.any.html	Consume String request's body as arrayBuffer
+request-consume.any.html	Consume String request's body as blob
+request-consume.any.html	Consume String request's body as bytes
+request-consume.any.html	Consume String request's body as text
+request-consume.any.html	Consume Uint8Array request's body as JSON
+request-consume.any.html	Consume Uint8Array request's body as arrayBuffer
+request-consume.any.html	Consume Uint8Array request's body as blob
+request-consume.any.html	Consume Uint8Array request's body as bytes
+request-consume.any.html	Consume Uint8Array request's body as text
+request-consume.any.html	Consume blob response's body as arrayBuffer
+request-consume.any.html	Consume blob response's body as blob
+request-consume.any.html	Consume blob response's body as blob (empty blob as input)
+request-consume.any.html	Consume blob response's body as bytes
+request-consume.any.html	Consume blob response's body as json
+request-consume.any.html	Consume blob response's body as text
+request-consume.any.html	Trying to consume bad JSON text as JSON: '['
+request-consume.any.html	Trying to consume bad JSON text as JSON: 'a'
+request-consume.any.html	Trying to consume bad JSON text as JSON: 'undefined'
+request-consume.any.html	Trying to consume bad JSON text as JSON: '{'
+request-disturbed.any.html	Check cloning a disturbed request
+request-disturbed.any.html	Check consuming a disturbed request
+request-disturbed.any.html	Check creating a new request from a disturbed request
+request-disturbed.any.html	Check creating a new request with a new body from a disturbed request
+request-disturbed.any.html	Input request used for creating new request became disturbed
+request-disturbed.any.html	Input request used for creating new request with a new body is not disturbed
+request-disturbed.any.html	Request construction failure should not set "bodyUsed"
+request-disturbed.any.html	Request without body cannot be disturbed
+request-error.any.html	Bad cache init parameter value
+request-error.any.html	Bad credentials init parameter value
+request-error.any.html	Bad mode init parameter value
+request-error.any.html	Bad redirect init parameter value
+request-error.any.html	Bad referrerPolicy init parameter value
+request-error.any.html	Input URL has credentials
+request-error.any.html	Input URL is not valid
+request-error.any.html	Request error
+request-error.any.html	Request should get its content-type from init headers if one is provided
+request-error.any.html	Request should get its content-type from the body if none is provided
+request-error.any.html	Request should get its content-type from the init request
+request-error.any.html	Request should not get its content-type from the init request if init headers are provided
+request-error.any.html	Request with cache mode: only-if-cached and fetch mode cors
+request-error.any.html	Request with cache mode: only-if-cached and fetch mode no-cors
+request-error.any.html	Request with cache mode: only-if-cached and fetch mode: same-origin
+request-error.any.html	RequestInit's cache mode is only-if-cached and mode is not same-origin
+request-error.any.html	RequestInit's method is forbidden
+request-error.any.html	RequestInit's method is invalid
+request-error.any.html	RequestInit's mode is navigate
+request-error.any.html	RequestInit's mode is no-cors and method is not simple
+request-error.any.html	RequestInit's referrer is invalid
+request-error.any.html	RequestInit's window is not null
+request-headers.any.html	Adding invalid no-cors request header "Content-Type: KO"
+request-headers.any.html	Adding invalid no-cors request header "Empty-Value: "
+request-headers.any.html	Adding invalid no-cors request header "Potato: KO"
+request-headers.any.html	Adding invalid no-cors request header "proxy: KO"
+request-headers.any.html	Adding invalid no-cors request header "proxya: KO"
+request-headers.any.html	Adding invalid no-cors request header "sec: KO"
+request-headers.any.html	Adding invalid no-cors request header "secb: KO"
+request-headers.any.html	Adding invalid request header "ACCEPT-ENCODING: KO"
+request-headers.any.html	Adding invalid request header "Accept-Charset: KO"
+request-headers.any.html	Adding invalid request header "Accept-Encoding: KO"
+request-headers.any.html	Adding invalid request header "Access-Control-Request-Headers: KO"
+request-headers.any.html	Adding invalid request header "Access-Control-Request-Method: KO"
+request-headers.any.html	Adding invalid request header "Connection: KO"
+request-headers.any.html	Adding invalid request header "Content-Length: KO"
+request-headers.any.html	Adding invalid request header "Cookie2: KO"
+request-headers.any.html	Adding invalid request header "Cookie: KO"
+request-headers.any.html	Adding invalid request header "DNT: KO"
+request-headers.any.html	Adding invalid request header "Date: KO"
+request-headers.any.html	Adding invalid request header "Expect: KO"
+request-headers.any.html	Adding invalid request header "Host: KO"
+request-headers.any.html	Adding invalid request header "Keep-Alive: KO"
+request-headers.any.html	Adding invalid request header "Origin: KO"
+request-headers.any.html	Adding invalid request header "Proxy-: KO"
+request-headers.any.html	Adding invalid request header "Referer: KO"
+request-headers.any.html	Adding invalid request header "Sec-: KO"
+request-headers.any.html	Adding invalid request header "Set-Cookie: KO"
+request-headers.any.html	Adding invalid request header "TE: KO"
+request-headers.any.html	Adding invalid request header "Trailer: KO"
+request-headers.any.html	Adding invalid request header "Transfer-Encoding: KO"
+request-headers.any.html	Adding invalid request header "Upgrade: KO"
+request-headers.any.html	Adding invalid request header "Via: KO"
+request-headers.any.html	Adding invalid request header "accept-charset: KO"
+request-headers.any.html	Adding invalid request header "proxy-a: KO"
+request-headers.any.html	Adding invalid request header "sec-b: KO"
+request-headers.any.html	Adding valid no-cors request header "Accept-Language: OK"
+request-headers.any.html	Adding valid no-cors request header "Accept: OK"
+request-headers.any.html	Adding valid no-cors request header "CONTENT-type: text/plain;charset=UTF-8"
+request-headers.any.html	Adding valid no-cors request header "content-TYPE: text/plain"
+request-headers.any.html	Adding valid no-cors request header "content-language: OK"
+request-headers.any.html	Adding valid no-cors request header "content-type: application/x-www-form-urlencoded"
+request-headers.any.html	Adding valid no-cors request header "content-type: application/x-www-form-urlencoded;charset=UTF-8"
+request-headers.any.html	Adding valid no-cors request header "content-type: multipart/form-data"
+request-headers.any.html	Adding valid no-cors request header "content-type: multipart/form-data;charset=UTF-8"
+request-headers.any.html	Adding valid request header "Content-Type: OK"
+request-headers.any.html	Adding valid request header "Potato: OK"
+request-headers.any.html	Adding valid request header "Set-Cookie2: OK"
+request-headers.any.html	Adding valid request header "proxy: OK"
+request-headers.any.html	Adding valid request header "proxya: OK"
+request-headers.any.html	Adding valid request header "sec: OK"
+request-headers.any.html	Adding valid request header "secb: OK"
+request-headers.any.html	Check that no-cors request constructor is filtering headers provided as init parameter
+request-headers.any.html	Check that no-cors request constructor is filtering headers provided as part of request parameter
+request-headers.any.html	Check that request constructor is filtering headers provided as init parameter
+request-headers.any.html	Request should get its content-type from init headers if one is provided
+request-headers.any.html	Request should get its content-type from the body if none is provided
+request-headers.any.html	Request should get its content-type from the init request
+request-headers.any.html	Request should not get its content-type from the init request if init headers are provided
+request-headers.any.html	Test that Request.headers has the [SameObject] extended attribute
+request-headers.any.html	Testing empty Request Content-Type header
+request-headers.any.html	Testing request header creations with various objects
+request-init-002.any.html	Initialize Request with headers values
+request-init-002.any.html	Initialize Request's body with "This is a USVString", text/plain;charset=UTF-8
+request-init-002.any.html	Initialize Request's body with "[object Blob]", application/octet-binary
+request-init-002.any.html	Initialize Request's body with "[object FormData]", multipart/form-data
+request-init-002.any.html	Initialize Request's body with "hi!", text/plain;charset=UTF-8
+request-init-002.any.html	Initialize Request's body with "name=value", application/x-www-form-urlencoded;charset=UTF-8
+request-init-002.any.html	Initialize Request's body with "null", null
+request-init-002.any.html	Initialize Request's body with "undefined", undefined
+request-init-contenttype.any.html	Can override Content-Type for Request with Blob body (empty type)
+request-init-contenttype.any.html	Can override Content-Type for Request with Blob body (no type set)
+request-init-contenttype.any.html	Can override Content-Type for Request with Blob body (set type)
+request-init-contenttype.any.html	Can override Content-Type for Request with FormData body
+request-init-contenttype.any.html	Can override Content-Type for Request with URLSearchParams body
+request-init-contenttype.any.html	Can override Content-Type for Request with buffer source body
+request-init-contenttype.any.html	Can override Content-Type for Request with empty body
+request-init-contenttype.any.html	Can override Content-Type for Request with string body
+request-init-contenttype.any.html	Default Content-Type for Request with Blob body (empty type)
+request-init-contenttype.any.html	Default Content-Type for Request with Blob body (no type set)
+request-init-contenttype.any.html	Default Content-Type for Request with Blob body (set type)
+request-init-contenttype.any.html	Default Content-Type for Request with FormData body
+request-init-contenttype.any.html	Default Content-Type for Request with URLSearchParams body
+request-init-contenttype.any.html	Default Content-Type for Request with buffer source body
+request-init-contenttype.any.html	Default Content-Type for Request with empty body
+request-init-contenttype.any.html	Default Content-Type for Request with string body
+request-structure.any.html	Check bodyUsed attribute
+request-structure.any.html	Check cache attribute
+request-structure.any.html	Check credentials attribute
+request-structure.any.html	Check destination attribute
+request-structure.any.html	Check duplex attribute
+request-structure.any.html	Check headers attribute
+request-structure.any.html	Check integrity attribute
+request-structure.any.html	Check isHistoryNavigation attribute
+request-structure.any.html	Check isReloadNavigation attribute
+request-structure.any.html	Check method attribute
+request-structure.any.html	Check mode attribute
+request-structure.any.html	Check redirect attribute
+request-structure.any.html	Check referrer attribute
+request-structure.any.html	Check referrerPolicy attribute
+request-structure.any.html	Check url attribute
+request-structure.any.html	Request does not expose blocking attribute
+request-structure.any.html	Request does not expose internalpriority attribute
+request-structure.any.html	Request does not expose priority attribute
+request-structure.any.html	Request has arrayBuffer method
+request-structure.any.html	Request has blob method
+request-structure.any.html	Request has clone method
+request-structure.any.html	Request has formData method
+request-structure.any.html	Request has json method
+request-structure.any.html	Request has text method
+[excluded]
+destination/fetch-destination-frame.https.html	service workers, which this browser does not have
+destination/fetch-destination-iframe.https.html	service workers, which this browser does not have
+destination/fetch-destination-no-load-event.https.html	service workers, which this browser does not have
+destination/fetch-destination-prefetch.https.html	service workers, which this browser does not have
+destination/fetch-destination-worker.https.html	service workers, which this browser does not have
+destination/fetch-destination.https.html	service workers, which this browser does not have
+multi-globals/construct-in-detached-frame.window.html	another realm's globals, and this browser draws no frames
+multi-globals/url-parsing.html	another realm's globals, and this browser draws no frames
+request-reset-attributes.https.html	service workers, which this browser does not have
+[passing]
+forbidden-method.any.html	Request() with a forbidden method CONNECT must throw.
+forbidden-method.any.html	Request() with a forbidden method TRACE must throw.
+forbidden-method.any.html	Request() with a forbidden method TRACK must throw.
+forbidden-method.any.html	Request() with a forbidden method connect must throw.
+forbidden-method.any.html	Request() with a forbidden method trace must throw.
+forbidden-method.any.html	Request() with a forbidden method track must throw.
+request-bad-port.any.html	Request on bad port 1 should throw TypeError.
+request-bad-port.any.html	Request on bad port 10080 should throw TypeError.
+request-bad-port.any.html	Request on bad port 101 should throw TypeError.
+request-bad-port.any.html	Request on bad port 102 should throw TypeError.
+request-bad-port.any.html	Request on bad port 103 should throw TypeError.
+request-bad-port.any.html	Request on bad port 104 should throw TypeError.
+request-bad-port.any.html	Request on bad port 109 should throw TypeError.
+request-bad-port.any.html	Request on bad port 11 should throw TypeError.
+request-bad-port.any.html	Request on bad port 110 should throw TypeError.
+request-bad-port.any.html	Request on bad port 111 should throw TypeError.
+request-bad-port.any.html	Request on bad port 113 should throw TypeError.
+request-bad-port.any.html	Request on bad port 115 should throw TypeError.
+request-bad-port.any.html	Request on bad port 117 should throw TypeError.
+request-bad-port.any.html	Request on bad port 119 should throw TypeError.
+request-bad-port.any.html	Request on bad port 123 should throw TypeError.
+request-bad-port.any.html	Request on bad port 13 should throw TypeError.
+request-bad-port.any.html	Request on bad port 135 should throw TypeError.
+request-bad-port.any.html	Request on bad port 137 should throw TypeError.
+request-bad-port.any.html	Request on bad port 139 should throw TypeError.
+request-bad-port.any.html	Request on bad port 143 should throw TypeError.
+request-bad-port.any.html	Request on bad port 15 should throw TypeError.
+request-bad-port.any.html	Request on bad port 161 should throw TypeError.
+request-bad-port.any.html	Request on bad port 17 should throw TypeError.
+request-bad-port.any.html	Request on bad port 1719 should throw TypeError.
+request-bad-port.any.html	Request on bad port 1720 should throw TypeError.
+request-bad-port.any.html	Request on bad port 1723 should throw TypeError.
+request-bad-port.any.html	Request on bad port 179 should throw TypeError.
+request-bad-port.any.html	Request on bad port 19 should throw TypeError.
+request-bad-port.any.html	Request on bad port 20 should throw TypeError.
+request-bad-port.any.html	Request on bad port 2049 should throw TypeError.
+request-bad-port.any.html	Request on bad port 21 should throw TypeError.
+request-bad-port.any.html	Request on bad port 22 should throw TypeError.
+request-bad-port.any.html	Request on bad port 23 should throw TypeError.
+request-bad-port.any.html	Request on bad port 25 should throw TypeError.
+request-bad-port.any.html	Request on bad port 3659 should throw TypeError.
+request-bad-port.any.html	Request on bad port 37 should throw TypeError.
+request-bad-port.any.html	Request on bad port 389 should throw TypeError.
+request-bad-port.any.html	Request on bad port 4045 should throw TypeError.
+request-bad-port.any.html	Request on bad port 4190 should throw TypeError.
+request-bad-port.any.html	Request on bad port 42 should throw TypeError.
+request-bad-port.any.html	Request on bad port 427 should throw TypeError.
+request-bad-port.any.html	Request on bad port 43 should throw TypeError.
+request-bad-port.any.html	Request on bad port 465 should throw TypeError.
+request-bad-port.any.html	Request on bad port 5060 should throw TypeError.
+request-bad-port.any.html	Request on bad port 5061 should throw TypeError.
+request-bad-port.any.html	Request on bad port 512 should throw TypeError.
+request-bad-port.any.html	Request on bad port 513 should throw TypeError.
+request-bad-port.any.html	Request on bad port 514 should throw TypeError.
+request-bad-port.any.html	Request on bad port 515 should throw TypeError.
+request-bad-port.any.html	Request on bad port 526 should throw TypeError.
+request-bad-port.any.html	Request on bad port 53 should throw TypeError.
+request-bad-port.any.html	Request on bad port 530 should throw TypeError.
+request-bad-port.any.html	Request on bad port 531 should throw TypeError.
+request-bad-port.any.html	Request on bad port 532 should throw TypeError.
+request-bad-port.any.html	Request on bad port 540 should throw TypeError.
+request-bad-port.any.html	Request on bad port 548 should throw TypeError.
+request-bad-port.any.html	Request on bad port 554 should throw TypeError.
+request-bad-port.any.html	Request on bad port 556 should throw TypeError.
+request-bad-port.any.html	Request on bad port 563 should throw TypeError.
+request-bad-port.any.html	Request on bad port 587 should throw TypeError.
+request-bad-port.any.html	Request on bad port 6000 should throw TypeError.
+request-bad-port.any.html	Request on bad port 601 should throw TypeError.
+request-bad-port.any.html	Request on bad port 636 should throw TypeError.
+request-bad-port.any.html	Request on bad port 6566 should throw TypeError.
+request-bad-port.any.html	Request on bad port 6665 should throw TypeError.
+request-bad-port.any.html	Request on bad port 6666 should throw TypeError.
+request-bad-port.any.html	Request on bad port 6667 should throw TypeError.
+request-bad-port.any.html	Request on bad port 6668 should throw TypeError.
+request-bad-port.any.html	Request on bad port 6669 should throw TypeError.
+request-bad-port.any.html	Request on bad port 6679 should throw TypeError.
+request-bad-port.any.html	Request on bad port 6697 should throw TypeError.
+request-bad-port.any.html	Request on bad port 69 should throw TypeError.
+request-bad-port.any.html	Request on bad port 7 should throw TypeError.
+request-bad-port.any.html	Request on bad port 77 should throw TypeError.
+request-bad-port.any.html	Request on bad port 79 should throw TypeError.
+request-bad-port.any.html	Request on bad port 87 should throw TypeError.
+request-bad-port.any.html	Request on bad port 9 should throw TypeError.
+request-bad-port.any.html	Request on bad port 95 should throw TypeError.
+request-bad-port.any.html	Request on bad port 989 should throw TypeError.
+request-bad-port.any.html	Request on bad port 990 should throw TypeError.
+request-bad-port.any.html	Request on bad port 993 should throw TypeError.
+request-bad-port.any.html	Request on bad port 995 should throw TypeError.
+request-clone.sub.html	Check cloning a request copies the headers
+request-constructor-init-body-override.any.html	Check that the body of a new request can be overridden when created from an existing Request object
+request-consume-empty.any.html	Consume empty ArrayBuffer request body as text
+request-consume-empty.any.html	Consume empty URLSearchParams request body as text
+request-consume-empty.any.html	Consume empty blob request body as arrayBuffer
+request-consume-empty.any.html	Consume empty blob request body as text
+request-consume-empty.any.html	Consume empty text request body as arrayBuffer
+request-consume-empty.any.html	Consume empty text request body as text
+request-consume-empty.any.html	Consume request's body as arrayBuffer
+request-consume-empty.any.html	Consume request's body as blob
+request-consume-empty.any.html	Consume request's body as formData with correct multipart type (error case)
+request-consume-empty.any.html	Consume request's body as formData with correct urlencoded type
+request-consume-empty.any.html	Consume request's body as formData without correct type (error case)
+request-consume-empty.any.html	Consume request's body as json (error case)
+request-consume-empty.any.html	Consume request's body as text
+request-consume.any.html	Consume ArrayBuffer request's body as JSON
+request-consume.any.html	Consume ArrayBuffer request's body as arrayBuffer
+request-consume.any.html	Consume ArrayBuffer request's body as blob
+request-consume.any.html	Consume ArrayBuffer request's body as bytes
+request-consume.any.html	Consume ArrayBuffer request's body as text
+request-consume.any.html	Consume DataView request's body as JSON
+request-consume.any.html	Consume DataView request's body as arrayBuffer
+request-consume.any.html	Consume DataView request's body as blob
+request-consume.any.html	Consume DataView request's body as bytes
+request-consume.any.html	Consume DataView request's body as text
+request-consume.any.html	Consume Float32Array request's body as JSON
+request-consume.any.html	Consume Float32Array request's body as arrayBuffer
+request-consume.any.html	Consume Float32Array request's body as blob
+request-consume.any.html	Consume Float32Array request's body as bytes
+request-consume.any.html	Consume Float32Array request's body as text
+request-consume.any.html	Consume FormData request's body as FormData
+request-consume.any.html	Consume Int8Array request's body as JSON
+request-consume.any.html	Consume Int8Array request's body as arrayBuffer
+request-consume.any.html	Consume Int8Array request's body as blob
+request-consume.any.html	Consume Int8Array request's body as bytes
+request-consume.any.html	Consume Int8Array request's body as text
+request-consume.any.html	Consume JSON from text: '"1"'
+request-consume.any.html	Consume JSON from text: '"\\"string\\""'
+request-consume.any.html	Consume JSON from text: '"null"'
+request-consume.any.html	Consume JSON from text: '"true"'
+request-consume.any.html	Consume String request's body as JSON
+request-consume.any.html	Consume String request's body as arrayBuffer
+request-consume.any.html	Consume String request's body as blob
+request-consume.any.html	Consume String request's body as bytes
+request-consume.any.html	Consume String request's body as text
+request-consume.any.html	Consume Uint8Array request's body as JSON
+request-consume.any.html	Consume Uint8Array request's body as arrayBuffer
+request-consume.any.html	Consume Uint8Array request's body as blob
+request-consume.any.html	Consume Uint8Array request's body as bytes
+request-consume.any.html	Consume Uint8Array request's body as text
+request-consume.any.html	Consume blob response's body as arrayBuffer
+request-consume.any.html	Consume blob response's body as blob
+request-consume.any.html	Consume blob response's body as blob (empty blob as input)
+request-consume.any.html	Consume blob response's body as bytes
+request-consume.any.html	Consume blob response's body as json
+request-consume.any.html	Consume blob response's body as text
+request-consume.any.html	Trying to consume bad JSON text as JSON: '['
+request-consume.any.html	Trying to consume bad JSON text as JSON: 'a'
+request-consume.any.html	Trying to consume bad JSON text as JSON: 'undefined'
+request-consume.any.html	Trying to consume bad JSON text as JSON: '{'
+request-disturbed.any.html	Check cloning a disturbed request
+request-disturbed.any.html	Check consuming a disturbed request
+request-disturbed.any.html	Check creating a new request from a disturbed request
+request-disturbed.any.html	Check creating a new request with a new body from a disturbed request
+request-disturbed.any.html	Input request used for creating new request became disturbed
+request-disturbed.any.html	Input request used for creating new request with a new body is not disturbed
+request-disturbed.any.html	Request construction failure should not set "bodyUsed"
+request-disturbed.any.html	Request without body cannot be disturbed
+request-error.any.html	Bad cache init parameter value
+request-error.any.html	Bad credentials init parameter value
+request-error.any.html	Bad mode init parameter value
+request-error.any.html	Bad redirect init parameter value
+request-error.any.html	Bad referrerPolicy init parameter value
+request-error.any.html	Input URL has credentials
+request-error.any.html	Input URL is not valid
+request-error.any.html	Request error
+request-error.any.html	Request should get its content-type from init headers if one is provided
+request-error.any.html	Request should get its content-type from the body if none is provided
+request-error.any.html	Request should get its content-type from the init request
+request-error.any.html	Request should not get its content-type from the init request if init headers are provided
+request-error.any.html	Request with cache mode: only-if-cached and fetch mode cors
+request-error.any.html	Request with cache mode: only-if-cached and fetch mode no-cors
+request-error.any.html	Request with cache mode: only-if-cached and fetch mode: same-origin
+request-error.any.html	RequestInit's cache mode is only-if-cached and mode is not same-origin
+request-error.any.html	RequestInit's method is forbidden
+request-error.any.html	RequestInit's method is invalid
+request-error.any.html	RequestInit's mode is navigate
+request-error.any.html	RequestInit's mode is no-cors and method is not simple
+request-error.any.html	RequestInit's referrer is invalid
+request-error.any.html	RequestInit's window is not null
+request-headers.any.html	Adding invalid no-cors request header "Content-Type: KO"
+request-headers.any.html	Adding invalid no-cors request header "Empty-Value: "
+request-headers.any.html	Adding invalid no-cors request header "Potato: KO"
+request-headers.any.html	Adding invalid no-cors request header "proxy: KO"
+request-headers.any.html	Adding invalid no-cors request header "proxya: KO"
+request-headers.any.html	Adding invalid no-cors request header "sec: KO"
+request-headers.any.html	Adding invalid no-cors request header "secb: KO"
+request-headers.any.html	Adding invalid request header "ACCEPT-ENCODING: KO"
+request-headers.any.html	Adding invalid request header "Accept-Charset: KO"
+request-headers.any.html	Adding invalid request header "Accept-Encoding: KO"
+request-headers.any.html	Adding invalid request header "Access-Control-Request-Headers: KO"
+request-headers.any.html	Adding invalid request header "Access-Control-Request-Method: KO"
+request-headers.any.html	Adding invalid request header "Connection: KO"
+request-headers.any.html	Adding invalid request header "Content-Length: KO"
+request-headers.any.html	Adding invalid request header "Cookie2: KO"
+request-headers.any.html	Adding invalid request header "Cookie: KO"
+request-headers.any.html	Adding invalid request header "DNT: KO"
+request-headers.any.html	Adding invalid request header "Date: KO"
+request-headers.any.html	Adding invalid request header "Expect: KO"
+request-headers.any.html	Adding invalid request header "Host: KO"
+request-headers.any.html	Adding invalid request header "Keep-Alive: KO"
+request-headers.any.html	Adding invalid request header "Origin: KO"
+request-headers.any.html	Adding invalid request header "Proxy-: KO"
+request-headers.any.html	Adding invalid request header "Referer: KO"
+request-headers.any.html	Adding invalid request header "Sec-: KO"
+request-headers.any.html	Adding invalid request header "Set-Cookie: KO"
+request-headers.any.html	Adding invalid request header "TE: KO"
+request-headers.any.html	Adding invalid request header "Trailer: KO"
+request-headers.any.html	Adding invalid request header "Transfer-Encoding: KO"
+request-headers.any.html	Adding invalid request header "Upgrade: KO"
+request-headers.any.html	Adding invalid request header "Via: KO"
+request-headers.any.html	Adding invalid request header "accept-charset: KO"
+request-headers.any.html	Adding invalid request header "proxy-a: KO"
+request-headers.any.html	Adding invalid request header "sec-b: KO"
+request-headers.any.html	Adding valid no-cors request header "Accept-Language: OK"
+request-headers.any.html	Adding valid no-cors request header "Accept: OK"
+request-headers.any.html	Adding valid no-cors request header "CONTENT-type: text/plain;charset=UTF-8"
+request-headers.any.html	Adding valid no-cors request header "content-TYPE: text/plain"
+request-headers.any.html	Adding valid no-cors request header "content-language: OK"
+request-headers.any.html	Adding valid no-cors request header "content-type: application/x-www-form-urlencoded"
+request-headers.any.html	Adding valid no-cors request header "content-type: application/x-www-form-urlencoded;charset=UTF-8"
+request-headers.any.html	Adding valid no-cors request header "content-type: multipart/form-data"
+request-headers.any.html	Adding valid no-cors request header "content-type: multipart/form-data;charset=UTF-8"
+request-headers.any.html	Adding valid request header "Content-Type: OK"
+request-headers.any.html	Adding valid request header "Potato: OK"
+request-headers.any.html	Adding valid request header "Set-Cookie2: OK"
+request-headers.any.html	Adding valid request header "proxy: OK"
+request-headers.any.html	Adding valid request header "proxya: OK"
+request-headers.any.html	Adding valid request header "sec: OK"
+request-headers.any.html	Adding valid request header "secb: OK"
+request-headers.any.html	Check that no-cors request constructor is filtering headers provided as init parameter
+request-headers.any.html	Check that no-cors request constructor is filtering headers provided as part of request parameter
+request-headers.any.html	Check that request constructor is filtering headers provided as init parameter
+request-headers.any.html	Request should get its content-type from init headers if one is provided
+request-headers.any.html	Request should get its content-type from the body if none is provided
+request-headers.any.html	Request should get its content-type from the init request
+request-headers.any.html	Request should not get its content-type from the init request if init headers are provided
+request-headers.any.html	Test that Request.headers has the [SameObject] extended attribute
+request-headers.any.html	Testing empty Request Content-Type header
+request-headers.any.html	Testing request header creations with various objects
+request-init-001.sub.html	Check cache init value of default and associated getter
+request-init-001.sub.html	Check cache init value of force-cache and associated getter
+request-init-001.sub.html	Check cache init value of no-cache and associated getter
+request-init-001.sub.html	Check cache init value of no-store and associated getter
+request-init-001.sub.html	Check cache init value of reload and associated getter
+request-init-001.sub.html	Check credentials init value of include and associated getter
+request-init-001.sub.html	Check credentials init value of omit and associated getter
+request-init-001.sub.html	Check credentials init value of same-origin and associated getter
+request-init-001.sub.html	Check integrity init value of  and associated getter
+request-init-001.sub.html	Check integrity init value of AZERTYUIOP1234567890 and associated getter
+request-init-001.sub.html	Check method init value of DELETE and associated getter
+request-init-001.sub.html	Check method init value of GET and associated getter
+request-init-001.sub.html	Check method init value of Get and associated getter
+request-init-001.sub.html	Check method init value of HEAD and associated getter
+request-init-001.sub.html	Check method init value of OPTIONS and associated getter
+request-init-001.sub.html	Check method init value of PATCH and associated getter
+request-init-001.sub.html	Check method init value of POST and associated getter
+request-init-001.sub.html	Check method init value of PUT and associated getter
+request-init-001.sub.html	Check method init value of Put and associated getter
+request-init-001.sub.html	Check method init value of deleTe and associated getter
+request-init-001.sub.html	Check method init value of delete and associated getter
+request-init-001.sub.html	Check method init value of get and associated getter
+request-init-001.sub.html	Check method init value of hEad and associated getter
+request-init-001.sub.html	Check method init value of head and associated getter
+request-init-001.sub.html	Check method init value of optionS and associated getter
+request-init-001.sub.html	Check method init value of options and associated getter
+request-init-001.sub.html	Check method init value of patCh and associated getter
+request-init-001.sub.html	Check method init value of patch and associated getter
+request-init-001.sub.html	Check method init value of poSt and associated getter
+request-init-001.sub.html	Check method init value of post and associated getter
+request-init-001.sub.html	Check method init value of put and associated getter
+request-init-001.sub.html	Check mode init value of cors and associated getter
+request-init-001.sub.html	Check mode init value of no-cors and associated getter
+request-init-001.sub.html	Check mode init value of same-origin and associated getter
+request-init-001.sub.html	Check redirect init value of error and associated getter
+request-init-001.sub.html	Check redirect init value of follow and associated getter
+request-init-001.sub.html	Check redirect init value of manual and associated getter
+request-init-001.sub.html	Check referrer init value of  and associated getter
+request-init-001.sub.html	Check referrer init value of about:client and associated getter
+request-init-001.sub.html	Check referrer init value of http://test.url and associated getter
+request-init-001.sub.html	Check referrerPolicy init value of  and associated getter
+request-init-001.sub.html	Check referrerPolicy init value of no-referrer and associated getter
+request-init-001.sub.html	Check referrerPolicy init value of no-referrer-when-downgrade and associated getter
+request-init-001.sub.html	Check referrerPolicy init value of origin and associated getter
+request-init-001.sub.html	Check referrerPolicy init value of origin-when-cross-origin and associated getter
+request-init-001.sub.html	Check referrerPolicy init value of same-origin and associated getter
+request-init-001.sub.html	Check referrerPolicy init value of strict-origin and associated getter
+request-init-001.sub.html	Check referrerPolicy init value of strict-origin-when-cross-origin and associated getter
+request-init-001.sub.html	Check referrerPolicy init value of unsafe-url and associated getter
+request-init-001.sub.html	Check window init value of null and associated getter
+request-init-002.any.html	Initialize Request with headers values
+request-init-002.any.html	Initialize Request's body with "This is a USVString", text/plain;charset=UTF-8
+request-init-002.any.html	Initialize Request's body with "[object Blob]", application/octet-binary
+request-init-002.any.html	Initialize Request's body with "[object FormData]", multipart/form-data
+request-init-002.any.html	Initialize Request's body with "hi!", text/plain;charset=UTF-8
+request-init-002.any.html	Initialize Request's body with "name=value", application/x-www-form-urlencoded;charset=UTF-8
+request-init-002.any.html	Initialize Request's body with "null", null
+request-init-002.any.html	Initialize Request's body with "undefined", undefined
+request-init-003.sub.html	Check request values when initialized from url string
+request-init-contenttype.any.html	Can override Content-Type for Request with Blob body (empty type)
+request-init-contenttype.any.html	Can override Content-Type for Request with Blob body (no type set)
+request-init-contenttype.any.html	Can override Content-Type for Request with Blob body (set type)
+request-init-contenttype.any.html	Can override Content-Type for Request with FormData body
+request-init-contenttype.any.html	Can override Content-Type for Request with URLSearchParams body
+request-init-contenttype.any.html	Can override Content-Type for Request with buffer source body
+request-init-contenttype.any.html	Can override Content-Type for Request with empty body
+request-init-contenttype.any.html	Can override Content-Type for Request with string body
+request-init-contenttype.any.html	Default Content-Type for Request with Blob body (empty type)
+request-init-contenttype.any.html	Default Content-Type for Request with Blob body (no type set)
+request-init-contenttype.any.html	Default Content-Type for Request with Blob body (set type)
+request-init-contenttype.any.html	Default Content-Type for Request with FormData body
+request-init-contenttype.any.html	Default Content-Type for Request with URLSearchParams body
+request-init-contenttype.any.html	Default Content-Type for Request with buffer source body
+request-init-contenttype.any.html	Default Content-Type for Request with empty body
+request-init-contenttype.any.html	Default Content-Type for Request with string body
+request-init-priority.any.html	fetch() with a 'auto' priority completes successfully
+request-init-priority.any.html	fetch() with a 'high' priority completes successfully
+request-init-priority.any.html	fetch() with a 'low' priority completes successfully
+request-init-priority.any.html	fetch() with an invalid priority returns a rejected promise with a TypeError
+request-init-priority.any.html	new Request() throws a TypeError if any of RequestInit's members' values are invalid
+request-init-priority.any.html	new Request() with a 'auto' priority does not throw an error
+request-init-priority.any.html	new Request() with a 'high' priority does not throw an error
+request-init-priority.any.html	new Request() with a 'low' priority does not throw an error
+request-init-stream.any.html	Constructing a Request with a Request on which body.getReader() is called
+request-init-stream.any.html	Constructing a Request with a Request on which body.getReader().read() is called
+request-init-stream.any.html	Constructing a Request with a Request on which read() and releaseLock() are called
+request-init-stream.any.html	It is OK to omit .duplex when the body is a Blob.
+request-init-stream.any.html	It is OK to omit .duplex when the body is a Uint8Array.
+request-init-stream.any.html	It is OK to omit .duplex when the body is a string.
+request-init-stream.any.html	It is OK to omit .duplex when the body is null.
+request-init-stream.any.html	It is OK to set .duplex = 'half' when the body is a Blob.
+request-init-stream.any.html	It is OK to set .duplex = 'half' when the body is a Uint8Array.
+request-init-stream.any.html	It is OK to set .duplex = 'half' when the body is a string.
+request-init-stream.any.html	It is OK to set .duplex = 'half' when the body is null.
+request-init-stream.any.html	It is error to set .duplex = 'full' when the body is a Blob.
+request-init-stream.any.html	It is error to set .duplex = 'full' when the body is a Uint8Array.
+request-init-stream.any.html	It is error to set .duplex = 'full' when the body is a string.
+request-init-stream.any.html	It is error to set .duplex = 'full' when the body is null.
+request-keepalive-quota.html?include=fast	A Keep-Alive fetch() with a body over the Quota Limit should reject.
+request-keepalive.any.html	keepalive flag
+request-structure.any.html	Check bodyUsed attribute
+request-structure.any.html	Check cache attribute
+request-structure.any.html	Check credentials attribute
+request-structure.any.html	Check destination attribute
+request-structure.any.html	Check duplex attribute
+request-structure.any.html	Check headers attribute
+request-structure.any.html	Check integrity attribute
+request-structure.any.html	Check isHistoryNavigation attribute
+request-structure.any.html	Check isReloadNavigation attribute
+request-structure.any.html	Check method attribute
+request-structure.any.html	Check mode attribute
+request-structure.any.html	Check redirect attribute
+request-structure.any.html	Check referrer attribute
+request-structure.any.html	Check referrerPolicy attribute
+request-structure.any.html	Check url attribute
+request-structure.any.html	Request does not expose blocking attribute
+request-structure.any.html	Request does not expose internalpriority attribute
+request-structure.any.html	Request does not expose priority attribute
+request-structure.any.html	Request has arrayBuffer method
+request-structure.any.html	Request has blob method
+request-structure.any.html	Request has clone method
+request-structure.any.html	Request has formData method
+request-structure.any.html	Request has json method
+request-structure.any.html	Request has text method
+url-encoding.html	URL encoding and Request
+url-encoding.html	URL encoding and fetch()

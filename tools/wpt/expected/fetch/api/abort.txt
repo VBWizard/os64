@@ -1,0 +1,139 @@
+# WPT's fetch/api/abort in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh fetch/api/abort --update
+# rewrites [passing].
+[required]
+general.any.html	Aborting rejects with AbortError
+general.any.html	Aborting rejects with AbortError - no-cors
+general.any.html	Aborting rejects with abort reason
+general.any.html	Aborting rejects with abort reason when aborted after fetch() called
+general.any.html	Already aborted signal rejects immediately
+general.any.html	Call text() twice on aborted response
+general.any.html	Clone aborts with original controller
+general.any.html	Request is still 'used' if signal is aborted before fetching
+general.any.html	Request objects have a signal property
+general.any.html	Signal can be used to abort other fetches, even if another fetch succeeded before aborting
+general.any.html	Signal on request object
+general.any.html	Signal on request object created from request object
+general.any.html	Signal on request object created from request object, with signal on second request
+general.any.html	Signal on request object created from request object, with signal on second request overriding another
+general.any.html	Signal on request object should also have abort reason
+general.any.html	Signal removed by setting to null
+general.any.html	Signal retained after unrelated properties are overridden by fetch
+general.any.html	Signal state is cloned
+general.any.html	Stream will not error if body is empty. It's closed with an empty queue before it errors.
+general.any.html	TypeError from request constructor takes priority - Bad cache init parameter value
+general.any.html	TypeError from request constructor takes priority - Bad credentials init parameter value
+general.any.html	TypeError from request constructor takes priority - Bad mode init parameter value
+general.any.html	TypeError from request constructor takes priority - Bad redirect init parameter value
+general.any.html	TypeError from request constructor takes priority - Bad referrerPolicy init parameter value
+general.any.html	TypeError from request constructor takes priority - Input URL has credentials
+general.any.html	TypeError from request constructor takes priority - Input URL is not valid
+general.any.html	TypeError from request constructor takes priority - Request with cache mode: only-if-cached and fetch mode cors
+general.any.html	TypeError from request constructor takes priority - Request with cache mode: only-if-cached and fetch mode no-cors
+general.any.html	TypeError from request constructor takes priority - RequestInit's cache mode is only-if-cached and mode is not same-origin
+general.any.html	TypeError from request constructor takes priority - RequestInit's method is forbidden
+general.any.html	TypeError from request constructor takes priority - RequestInit's method is invalid
+general.any.html	TypeError from request constructor takes priority - RequestInit's mode is navigate
+general.any.html	TypeError from request constructor takes priority - RequestInit's mode is no-cors and method is not simple
+general.any.html	TypeError from request constructor takes priority - RequestInit's referrer is invalid
+general.any.html	TypeError from request constructor takes priority - RequestInit's window is not null
+general.any.html	response.arrayBuffer() rejects if already aborted
+general.any.html	response.arrayBuffer() rejects with abort reason if already aborted
+general.any.html	response.blob() rejects if already aborted
+general.any.html	response.blob() rejects with abort reason if already aborted
+general.any.html	response.bytes() rejects if already aborted
+general.any.html	response.bytes() rejects with abort reason if already aborted
+general.any.html	response.formData() rejects if already aborted
+general.any.html	response.formData() rejects with abort reason if already aborted
+general.any.html	response.json() rejects if already aborted
+general.any.html	response.json() rejects with abort reason if already aborted
+general.any.html	response.text() rejects if already aborted
+general.any.html	response.text() rejects with abort reason if already aborted
+request.any.html	Aborting a request after calling arrayBuffer()
+request.any.html	Aborting a request after calling blob()
+request.any.html	Aborting a request after calling json()
+request.any.html	Aborting a request after calling text()
+request.any.html	Calling arrayBuffer() on an aborted consumed empty request
+request.any.html	Calling arrayBuffer() on an aborted consumed nonempty request
+request.any.html	Calling arrayBuffer() on an aborted request
+request.any.html	Calling blob() on an aborted consumed empty request
+request.any.html	Calling blob() on an aborted consumed nonempty request
+request.any.html	Calling blob() on an aborted request
+request.any.html	Calling formData() on an aborted consumed nonempty request
+request.any.html	Calling json() on an aborted consumed nonempty request
+request.any.html	Calling json() on an aborted request
+request.any.html	Calling text() on an aborted consumed empty request
+request.any.html	Calling text() on an aborted consumed nonempty request
+request.any.html	Calling text() on an aborted request
+[excluded]
+cache.https.any.html	the Cache API, which this browser does not have
+destroyed-context.html	an iframe's window, and this browser draws no frames
+keepalive.html	an iframe's window, and this browser draws no frames
+serviceworker-intercepted.https.html	service workers, which this browser does not have
+[passing]
+general.any.html	Aborting rejects with AbortError
+general.any.html	Aborting rejects with AbortError - no-cors
+general.any.html	Aborting rejects with abort reason
+general.any.html	Aborting rejects with abort reason when aborted after fetch() called
+general.any.html	Already aborted signal rejects immediately
+general.any.html	Call text() twice on aborted response
+general.any.html	Clone aborts with original controller
+general.any.html	Request is still 'used' if signal is aborted before fetching
+general.any.html	Request objects have a signal property
+general.any.html	Signal can be used to abort other fetches, even if another fetch succeeded before aborting
+general.any.html	Signal on request object
+general.any.html	Signal on request object created from request object
+general.any.html	Signal on request object created from request object, with signal on second request
+general.any.html	Signal on request object created from request object, with signal on second request overriding another
+general.any.html	Signal on request object should also have abort reason
+general.any.html	Signal removed by setting to null
+general.any.html	Signal retained after unrelated properties are overridden by fetch
+general.any.html	Signal state is cloned
+general.any.html	Stream will not error if body is empty. It's closed with an empty queue before it errors.
+general.any.html	TypeError from request constructor takes priority - Bad cache init parameter value
+general.any.html	TypeError from request constructor takes priority - Bad credentials init parameter value
+general.any.html	TypeError from request constructor takes priority - Bad mode init parameter value
+general.any.html	TypeError from request constructor takes priority - Bad redirect init parameter value
+general.any.html	TypeError from request constructor takes priority - Bad referrerPolicy init parameter value
+general.any.html	TypeError from request constructor takes priority - Input URL has credentials
+general.any.html	TypeError from request constructor takes priority - Input URL is not valid
+general.any.html	TypeError from request constructor takes priority - Request with cache mode: only-if-cached and fetch mode cors
+general.any.html	TypeError from request constructor takes priority - Request with cache mode: only-if-cached and fetch mode no-cors
+general.any.html	TypeError from request constructor takes priority - RequestInit's cache mode is only-if-cached and mode is not same-origin
+general.any.html	TypeError from request constructor takes priority - RequestInit's method is forbidden
+general.any.html	TypeError from request constructor takes priority - RequestInit's method is invalid
+general.any.html	TypeError from request constructor takes priority - RequestInit's mode is navigate
+general.any.html	TypeError from request constructor takes priority - RequestInit's mode is no-cors and method is not simple
+general.any.html	TypeError from request constructor takes priority - RequestInit's referrer is invalid
+general.any.html	TypeError from request constructor takes priority - RequestInit's window is not null
+general.any.html	response.arrayBuffer() rejects if already aborted
+general.any.html	response.arrayBuffer() rejects with abort reason if already aborted
+general.any.html	response.blob() rejects if already aborted
+general.any.html	response.blob() rejects with abort reason if already aborted
+general.any.html	response.bytes() rejects if already aborted
+general.any.html	response.bytes() rejects with abort reason if already aborted
+general.any.html	response.formData() rejects if already aborted
+general.any.html	response.formData() rejects with abort reason if already aborted
+general.any.html	response.json() rejects if already aborted
+general.any.html	response.json() rejects with abort reason if already aborted
+general.any.html	response.text() rejects if already aborted
+general.any.html	response.text() rejects with abort reason if already aborted
+request.any.html	Aborting a request after calling arrayBuffer()
+request.any.html	Aborting a request after calling blob()
+request.any.html	Aborting a request after calling formData()
+request.any.html	Aborting a request after calling json()
+request.any.html	Aborting a request after calling text()
+request.any.html	Calling arrayBuffer() on an aborted consumed empty request
+request.any.html	Calling arrayBuffer() on an aborted consumed nonempty request
+request.any.html	Calling arrayBuffer() on an aborted request
+request.any.html	Calling blob() on an aborted consumed empty request
+request.any.html	Calling blob() on an aborted consumed nonempty request
+request.any.html	Calling blob() on an aborted request
+request.any.html	Calling formData() on an aborted consumed nonempty request
+request.any.html	Calling formData() on an aborted request
+request.any.html	Calling json() on an aborted consumed nonempty request
+request.any.html	Calling json() on an aborted request
+request.any.html	Calling text() on an aborted consumed empty request
+request.any.html	Calling text() on an aborted consumed nonempty request
+request.any.html	Calling text() on an aborted request

@@ -1477,6 +1477,246 @@ static void case_keep(void)
     }
 }
 
+// A METHOD BY NAME (fetch.h's method_name), for the Fetch standard's job:
+// any token on the request line, its body and Content-Length, the body's
+// representation headers, no redirect followed, a HEAD's and a 205's reply
+// read as bodiless, identity on request, and every final-head field heard.
+typedef struct { int fields, omitted, hops; char seen[512]; } header_test_t;
+static void header_heard(void *ctx, const char *name, size_t nlen, const char *value, size_t vlen)
+{
+    header_test_t *t = ctx;
+    t->fields++;
+    if (value == NULL) {
+        t->omitted++;
+        return;
+    }
+    size_t at = strlen(t->seen);
+    snprintf(t->seen + at, sizeof(t->seen) - at, "%.*s=%.*s;", (int)nlen, name, (int)vlen, value);
+}
+static os64_fetch_verdict_t header_hop(void *ctx, const os64_fetch_hop_t *hop)
+{
+    (void)hop;
+    ((header_test_t *)ctx)->hops++;
+    return OS64_FETCH_HOP_FOLLOW;               // asked to follow; a named method still stops
+}
+
+static void case_methods(void)
+{
+    // Today's bug, the reason for the rest: a HEAD answered with a length
+    // was framed by it, and the read waited for bytes no server sends.
+    for (int mode = 0; mode < 3; mode++) {
+        reset(); chunk_mode = mode;
+        const char *head = "HTTP/1.1 200 OK\r\nContent-Length: 40\r\nContent-Type: text/html\r\n\r\n";
+        peer_t *p = peer_add("a.test", 80, head);
+        p->silent_after = strlen(head);
+        os64_fetch_options_t opt = { .method_name = "HEAD" };
+        os64_fetch_t *f = os64_fetch_open("http://a.test/x", &opt);
+        CHECK(os64_fetch_status(f) == OS64_FETCH_OK && strncmp(request_n(0), "HEAD /x HTTP/1.1\r\n", 18) == 0);
+        CHECK(strstr(request_n(0), "Content-Length") == NULL);
+        uint8_t out[8];
+        uint64_t before = now_ms;
+        CHECK(os64_fetch_read(f, out, sizeof(out)) == 0 && os64_fetch_status(f) == OS64_FETCH_OK && now_ms == before);
+        CHECK(os64_fetch_head(f)->has_length && os64_fetch_head(f)->length == 0);
+        os64_fetch_close(f);
+    }
+    // A 205 has no body either.
+    reset();
+    const char *reset_reply = "HTTP/1.1 205 Reset Content\r\nContent-Length: 10\r\n\r\n";
+    peer_t *p = peer_add("a.test", 80, reset_reply);
+    p->silent_after = strlen(reset_reply);
+    os64_fetch_t *f = os64_fetch_open("http://a.test/", NULL);
+    uint8_t out[64];
+    CHECK(os64_fetch_read(f, out, sizeof(out)) == 0 && os64_fetch_status(f) == OS64_FETCH_OK);
+    os64_fetch_close(f);
+
+    // Any token, its body with a length, and its representation headers.
+    reset();
+    peer_add("a.test", 80, reply_len("200 OK", "", "done"));
+    os64_fetch_options_t opt = { .method_name = "PUT", .body = "{\"a\":1}", .body_len = 7,
+                                 .body_headers = "Content-Type: application/json\r\nContent-Language: de\r\n" };
+    f = os64_fetch_open("http://a.test/item", &opt);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK);
+    CHECK(slurp(f, out, sizeof(out), 0) == 4 && memcmp(out, "done", 4) == 0);
+    os64_fetch_close(f);
+    CHECK(strncmp(request_n(0), "PUT /item HTTP/1.1\r\n", 20) == 0);
+    CHECK(strstr(request_n(0), "Content-Length: 7\r\n") && strstr(request_n(0), "Content-Type: application/json\r\n") &&
+          strstr(request_n(0), "Content-Language: de\r\n") && strstr(request_n(0), "\r\n\r\n{\"a\":1}"));
+    const char *names[] = {"DELETE", "OPTIONS", "PATCH", "CHICKEN", "patch"};
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        reset();
+        peer_add("a.test", 80, reply_len("204 No Content", "", ""));
+        opt = (os64_fetch_options_t){ .method_name = names[i] };
+        f = os64_fetch_open("http://a.test/", &opt);
+        char line[32];
+        snprintf(line, sizeof(line), "%s / HTTP/1.1\r\n", names[i]);
+        CHECK(os64_fetch_status(f) == OS64_FETCH_OK && strncmp(request_n(0), line, strlen(line)) == 0);
+        CHECK(strstr(request_n(0), "Content-Length") == NULL);   // no body, and not POST or PUT
+        os64_fetch_close(f);
+    }
+    reset();
+    peer_add("a.test", 80, reply_len("200 OK", "", ""));
+    opt = (os64_fetch_options_t){ .method_name = "PUT" };
+    f = os64_fetch_open("http://a.test/", &opt);
+    CHECK(strstr(request_n(0), "Content-Length: 0\r\n") != NULL);        // an empty PUT says so
+    os64_fetch_close(f);
+    // An EMPTY body (a page's "") is not no body: any method says its
+    // length, so the server can tell the two apart. A GET or HEAD refuses one.
+    static const char *const empties[] = {"PATCH", "DELETE", "OPTIONS", "PROPFIND"};
+    for (size_t i = 0; i < sizeof(empties) / sizeof(empties[0]); i++) {
+        reset();
+        peer_add("a.test", 80, reply_len("204 No Content", "", ""));
+        opt = (os64_fetch_options_t){ .method_name = empties[i], .body = "", .body_len = 0 };
+        f = os64_fetch_open("http://a.test/", &opt);
+        CHECK(os64_fetch_status(f) == OS64_FETCH_OK && strstr(request_n(0), "Content-Length: 0\r\n") != NULL);
+        os64_fetch_close(f);
+    }
+    {
+        http_url_t u;
+        CHECK(http_url_parse("http://a.test/", &u) == HTTP_URL_OK);
+        char rendered[512];
+        http_request_extras_t e = { .method_name = "HEAD", .body_present = true };
+        CHECK(!http_request(rendered, sizeof(rendered), &u, false, &e));
+        e = (http_request_extras_t){ .body_present = true };
+        CHECK(!http_request(rendered, sizeof(rendered), &u, false, &e));
+    }
+    reset();
+    peer_add("a.test", 80, reply_len("200 OK", "", ""));
+    opt = (os64_fetch_options_t){ .method_name = "POST", .body = "x=1", .body_len = 3,
+                                  .body_headers = "Content-Type: text/plain\r\n" };
+    f = os64_fetch_open("http://a.test/", &opt);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && strstr(request_n(0), "Content-Length: 3\r\n") &&
+          strstr(request_n(0), "\r\n\r\nx=1"));
+    os64_fetch_close(f);
+
+    // What is refused before a dial.
+    const os64_fetch_options_t refused[] = {
+        { .method_name = "GE T" },
+        { .method_name = "" },
+        { .method_name = "HEAD", .body = "x", .body_len = 1 },
+        { .method_name = "GET", .body = "x", .body_len = 1 },
+        { .method_name = "PUT", .content_type = "text/plain", .body = "x", .body_len = 1 },
+        { .method_name = "PUT", .method = OS64_FETCH_METHOD_POST },
+        { .method_name = "PUT", .body_headers = "X-Foo: 1\r\n" },
+        { .method_name = "PUT", .body_headers = "Content-Type: a\nb\r\n" },
+        { .method_name = "PUT", .extra_headers = "Content-Type: text/plain\r\n" },
+        { .body_headers = "Content-Type: text/plain\r\n" },
+        { .method_name = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
+    };
+    for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
+        reset();
+        peer_add("a.test", 80, reply_len("200 OK", "", ""));
+        f = os64_fetch_open("http://a.test/", &refused[i]);
+        CHECK(os64_fetch_status(f) == OS64_FETCH_REQUEST_FAILED && dials == 0);
+        os64_fetch_close(f);
+    }
+
+    // No redirect is followed for a named method, whatever on_hop says: the
+    // caller rewrites it by its own rule. Every final field is heard.
+    reset();
+    peer_add("a.test", 80, reply_len("307 Temporary Redirect", "Location: http://b.test/\r\nX-A: 1\r\n", ""));
+    peer_add("b.test", 80, reply_len("200 OK", "", "b"));
+    header_test_t t = {0};
+    opt = (os64_fetch_options_t){ .method_name = "POST", .body = "x", .body_len = 1, .on_hop = header_hop,
+                                  .on_header = header_heard, .ctx = &t };
+    f = os64_fetch_open("http://a.test/", &opt);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_REDIRECT_STOPPED && dials == 1 && t.hops == 1);
+    CHECK(os64_fetch_head(f)->status == 307 && strstr(t.seen, "Location=http://b.test/;") && strstr(t.seen, "X-A=1;"));
+    os64_fetch_close(f);
+
+    // The observer hears a line too long to read by its name alone.
+    reset();
+    static char longer[HTTP_LINE_MAX + 200];
+    int n = snprintf(longer, sizeof(longer), "Access-Control-Allow-Origin: http://");
+    memset(longer + n, 'x', HTTP_LINE_MAX + 50);
+    snprintf(longer + n + HTTP_LINE_MAX + 50, sizeof(longer) - (size_t)n - HTTP_LINE_MAX - 50, "\r\nX-B: 2\r\n");
+    peer_add("a.test", 80, reply_len("200 OK", longer, "ok"));
+    memset(&t, 0, sizeof(t));
+    opt = (os64_fetch_options_t){ .method_name = "GET", .on_header = header_heard, .ctx = &t };
+    f = os64_fetch_open("http://a.test/", &opt);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && t.omitted == 1 && strstr(t.seen, "X-B=2;") &&
+          strstr(t.seen, "Access-Control") == NULL);
+    os64_fetch_close(f);
+
+    // An interim head's fields are never the answer's: a 103 granting
+    // Access-Control-Allow-Origin (and a line too long to read, and a
+    // Set-Cookie) before a final 200 that grants nothing reaches the
+    // observers as the 200's fields alone, for a GET and for an upload
+    // whose head is read between its writes. The fetch job's CORS check
+    // reads exactly what on_header heard.
+    static char interim_wire[HTTP_LINE_MAX + 512];
+    n = snprintf(interim_wire, sizeof(interim_wire),
+                 "HTTP/1.1 103 Early Hints\r\nAccess-Control-Allow-Origin: *\r\nSet-Cookie: early=1\r\n"
+                 "X-Early-Long: ");
+    memset(interim_wire + n, 'x', HTTP_LINE_MAX + 10);
+    snprintf(interim_wire + n + HTTP_LINE_MAX + 10, sizeof(interim_wire) - (size_t)n - HTTP_LINE_MAX - 10,
+             "\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\nX-Final: 1\r\n\r\nok");
+    for (int upload = 0; upload < 2; upload++) {
+        reset();
+        peer_add("a.test", 80, interim_wire);
+        memset(&t, 0, sizeof(t));
+        cookie_test_t heard = {0};
+        opt = (os64_fetch_options_t){ .method_name = upload ? "PUT" : "GET", .body = upload ? "x" : NULL,
+                                      .body_len = upload ? 1 : 0, .on_header = header_heard, .ctx = &t };
+        f = os64_fetch_open("http://a.test/", &opt);
+        CHECK(os64_fetch_status(f) == OS64_FETCH_OK && os64_fetch_head(f)->status == 200);
+        CHECK(strcmp(t.seen, "Content-Length=2;X-Final=1;") == 0 && t.omitted == 0);
+        os64_fetch_close(f);
+        reset();
+        peer_add("a.test", 80, interim_wire);
+        opt = (os64_fetch_options_t){ .method_name = upload ? "PUT" : "GET", .body = upload ? "x" : NULL,
+                                      .body_len = upload ? 1 : 0, .on_set_cookie = cookie_received, .ctx = &heard };
+        f = os64_fetch_open("http://a.test/", &opt);
+        CHECK(os64_fetch_status(f) == OS64_FETCH_OK && heard.received == 0);
+        os64_fetch_close(f);
+    }
+
+    // An empty Accept is sent as one; no accept at all sends none.
+    reset();
+    peer_add("a.test", 80, reply_len("200 OK", "", "ok"));
+    opt = (os64_fetch_options_t){ .method_name = "GET", .accept = "" };
+    f = os64_fetch_open("http://a.test/", &opt);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && strstr(request_n(0), "\r\nAccept: \r\n") != NULL);
+    os64_fetch_close(f);
+    reset();
+    peer_add("a.test", 80, reply_len("200 OK", "", "ok"));
+    opt = (os64_fetch_options_t){ .method_name = "GET" };
+    f = os64_fetch_open("http://a.test/", &opt);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && strstr(request_n(0), "\r\nAccept:") == NULL);
+    os64_fetch_close(f);
+
+    // identity, for a Range.
+    reset();
+    peer_add("a.test", 80, reply_len("206 Partial Content", "", "ab"));
+    opt = (os64_fetch_options_t){ .method_name = "GET", .identity = true, .extra_headers = "Range: bytes=0-1\r\n" };
+    f = os64_fetch_open("http://a.test/", &opt);
+    CHECK(strstr(request_n(0), "Accept-Encoding: identity\r\n") && strstr(request_n(0), "Range: bytes=0-1\r\n"));
+    os64_fetch_close(f);
+    reset();
+    peer_add("a.test", 80, reply_len("200 OK", "", "ab"));
+    f = os64_fetch_open("http://a.test/", NULL);
+    CHECK(strstr(request_n(0), "Accept-Encoding: gzip, identity\r\n"));
+    os64_fetch_close(f);
+
+    // The caller's fields may be as long as OS64_FETCH_EXTRA_MAX: a bearer
+    // token of 6 KiB goes; one past the cap is refused before a dial.
+    static char extra[OS64_FETCH_EXTRA_MAX + 64];
+    n = snprintf(extra, sizeof(extra), "Authorization: Bearer ");
+    memset(extra + n, 't', 6000);
+    snprintf(extra + n + 6000, sizeof(extra) - (size_t)n - 6000, "\r\n");
+    reset();
+    peer_add("a.test", 80, reply_len("200 OK", "", "ok"));
+    opt = (os64_fetch_options_t){ .method_name = "GET", .extra_headers = extra };
+    f = os64_fetch_open("http://a.test/", &opt);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && strstr(request_n(0), extra) != NULL);
+    os64_fetch_close(f);
+    memset(extra + n, 't', OS64_FETCH_EXTRA_MAX);
+    snprintf(extra + OS64_FETCH_EXTRA_MAX, 8, "\r\n");        // one line, a byte past the cap with its NUL
+    reset();
+    f = os64_fetch_open("http://a.test/", &opt);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_REQUEST_FAILED && dials == 0);
+    os64_fetch_close(f);
+}
+
 static void case_tls_version_fallback(void)
 {
     reset();
@@ -1535,6 +1775,7 @@ int main(int argc, char **argv)
     case_cookies();
     case_early_post();
     case_keep();
+    case_methods();
     printf("test_fetch_host: %d checks passed\n", checks);
     return 0;
 }

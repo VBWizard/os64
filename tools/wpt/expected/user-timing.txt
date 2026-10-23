@@ -593,6 +593,27 @@ clear_one_mark.any.html	Clearing an existent mark doesn't affect other existing 
 clear_one_measure.any.html	Clearing an existent measure doesn't affect other existing measures
 entry_type.any.html	Validate the user timing entry type PerformanceMark
 entry_type.any.html	Validate the user timing entry type PerformanceMeasure
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute connectEnd
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute connectStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute domComplete
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute domContentLoadedEventEnd
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute domContentLoadedEventStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute domInteractive
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute domLoading
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute domainLookupEnd
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute domainLookupStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute fetchStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute loadEventEnd
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute loadEventStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute navigationStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute redirectEnd
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute redirectStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute requestStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute responseEnd
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute responseStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute secureConnectionStart
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute unloadEventEnd
+invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute unloadEventStart
 invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute connectEnd
 invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute connectStart
 invoke_with_timing_attributes.html	performance.measure should not throw if used with timing attribute domComplete
@@ -780,14 +801,59 @@ mark.html	Second loop step 5: checking entries of name "abc".Entry_list 1. entry
 mark.html	Second loop step 5: checking entries of name "abc".Entry_list 1. startTime should greater than 0.
 mark.html	Second loop step 5: checking entries of name "abc".There should be 2 entries.
 mark.html	There should be 0 marks
+mark_exceptions.html	window.performance.mark("connectEnd") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("connectStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("domComplete") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("domContentLoadedEventEnd") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("domContentLoadedEventStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("domInteractive") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("domLoading") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("domainLookupEnd") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("domainLookupStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("fetchStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("loadEventEnd") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("loadEventStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("navigationStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("redirectEnd") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("redirectStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("requestStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("responseEnd") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("responseStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("secureConnectionStart") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("unloadEventEnd") throws a SyntaxError exception.
+mark_exceptions.html	window.performance.mark("unloadEventStart") throws a SyntaxError exception.
 mark_exceptions.html	window.performance.mark() throws a TypeError exception.
+measure-exceptions.html	Passing 'domComplete' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'domContentLoadedEventEnd' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'domContentLoadedEventStart' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'domInteractive' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'loadEventEnd' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'loadEventStart' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'redirectEnd' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'redirectStart' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'secureConnectionStart' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'unloadEventEnd' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 'unloadEventStart' as a mark to measure API should cause error when the mark is empty.
+measure-exceptions.html	Passing 51.15 as a mark to measure API should cause error.
+measure-exceptions.html	Passing DoesNotExist as a mark to measure API should cause error.
 measure-l3.any.html	When start and end mark are both given, the start time and end time of the measure entry should be the marks' time, repectively
 measure-l3.any.html	When the end mark is given and the start is unprovided, the end time of the measure entry should be the end mark's time, the start time should be 0.
 measure-l3.any.html	When the start mark is given and the end is unprovided, the start time of the measure entry should be the start mark's time, the end should be now.
 measure-with-dict.any.html	measure should throw a TypeError when passed an invalid argument combination
+measure_exception.html	Invocation of performance.measure("Exception1", "NonExistMark1") should throw SYNTAX_ERR Exception.
+measure_exception.html	Invocation of performance.measure("Exception2", "NonExistMark1", "navigationStart") should throw SYNTAX_ERR Exception.
+measure_exception.html	Invocation of performance.measure("Exception3", "navigationStart", "NonExistMark1") should throw SYNTAX_ERR Exception.
+measure_exception.html	Invocation of performance.measure("Exception4", "NonExistMark1", "ExistMark") should throw SYNTAX_ERR Exception.
+measure_exception.html	Invocation of performance.measure("Exception5", "ExistMark", "NonExistMark1") should throw SYNTAX_ERR Exception.
+measure_exception.html	Invocation of performance.measure("Exception6", "NonExistMark1", "NonExistMark2") should throw SYNTAX_ERR Exception.
+measure_exception.html	Invocation of performance.measure("Exception7", "redirectStart") should throw INVALID_ACCESS_ERR Exception.
 measure_exception.html	Invocation of performance.measure("Exception8", {"detail": "non-empty"}) should throw TypeError Exception.
 measure_exception.html	Invocation of performance.measure("Exception9", {"start": 1, "duration": 2, "end": 3}) should throw TypeError Exception.
 measure_exception.html	Invocation of performance.measure() should throw TypeError Exception.
+measure_exceptions_navigation_timing.html	window.performance.measure("measure", "loadEventEnd"), where "loadEventEnd" is a navigation timing attribute with a value of 0, throws a InvalidAccessError exception.
+measure_exceptions_navigation_timing.html	window.performance.measure("measure", "loadEventEnd", "loadEventEnd"), where "loadEventEnd" is a navigation timing attribute with a value of 0, throws a InvalidAccessError exception.
+measure_exceptions_navigation_timing.html	window.performance.measure("measure", "loadEventEnd", "responseEnd"), where "loadEventEnd" is a navigation timing attribute with a value of 0, throws a InvalidAccessError exception.
+measure_exceptions_navigation_timing.html	window.performance.measure("measure", "navigationStart", "loadEventEnd"), where "loadEventEnd" is a navigation timing attribute with a value of 0, throws a InvalidAccessError exception.
 measure_navigation_timing.html	window.performance is defined
 measure_navigation_timing.html	window.performance.getEntriesByName("measure_mark_start_nav_end")[0].duration is approximately correct (up to 20ms difference allowed)
 measure_navigation_timing.html	window.performance.getEntriesByName("measure_mark_start_nav_end")[0].entryType == "measure"
@@ -805,6 +871,10 @@ measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_
 measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_no_end")[0].name == "measure_nav_start_no_end"
 measure_navigation_timing.html	window.performance.getEntriesByName("measure_nav_start_no_end")[0].startTime is correct
 measure_syntax_err.any.html	Create a mark "existing_mark"
+measure_syntax_err.any.html	self.performance.measure("measure", "existing_mark", "mark"), where "mark" is a non-existent mark, throws a SyntaxError exception.
+measure_syntax_err.any.html	self.performance.measure("measure", "mark"), where "mark" is a non-existent mark, throws a SyntaxError exception.
+measure_syntax_err.any.html	self.performance.measure("measure", "mark", "existing_mark"), where "mark" is a non-existent mark, throws a SyntaxError exception.
+measure_syntax_err.any.html	self.performance.measure("measure", "mark", "mark"), where "mark" is a non-existent mark, throws a SyntaxError exception.
 measures.html	Checking all doubly measured entries.Entries in entrylist should be in order.
 measures.html	Checking all doubly measured entries.Entry_list 0. Entry "" should be one that we have set.
 measures.html	Checking all doubly measured entries.Entry_list 0. duration should be a number.
@@ -924,6 +994,8 @@ measures.html	Second loop step 5: checking entry of name "2".Entry_list 1. entry
 measures.html	Second loop step 5: checking entry of name "2".Entry_list 1. startTime should be a number.
 measures.html	Second loop step 5: checking entry of name "2".There should be 2 entries.
 measures.html	There should be 0 entries returned.
+structured-serialize-detail.any.html	Mark: Throw an exception when the detail property cannot be structured-serialized.
+structured-serialize-detail.any.html	Measure: Throw an exception when the detail property cannot be structured-serialized.
 structured-serialize-detail.any.html	The detail object is cloned when passed to mark API.
 structured-serialize-detail.any.html	The detail property in the mark constructor should be structured-clone.
 structured-serialize-detail.any.html	The detail property in the mark method should be structured-clone.

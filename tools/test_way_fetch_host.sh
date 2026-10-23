@@ -20,6 +20,7 @@ cc -std=c11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined \
    -I userland/libpage/include -I userland/libpage/upstream/ryu -I abi/include \
    tools/test_way_fetch_host.c \
    userland/libway/load.c userland/libway/session.c userland/libway/jar.c userland/libway/cache.c \
+   userland/libway/origin.c \
    userland/libfetch/fetch.c userland/libfetch/http.c \
    userland/libfetch/transport.c userland/libfetch/proxy.c \
    userland/libgzip/inflate.c userland/libgzip/deflate.c userland/libgzip/gzip.c \

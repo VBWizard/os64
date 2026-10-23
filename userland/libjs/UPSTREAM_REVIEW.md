@@ -24,6 +24,16 @@ reproduces the crash before this patch and returns HOST_FAILURE after it.
 The acceptance suite runs that case against the actual target core and an
 ASan-instrumented engine. Source hashes cover the additional patch.
 
+Patch 0010 refuses to make a function from a definition whose bytecode
+emit failed. Upstream checks the buffer's failure mark only on the output
+of `resolve_variables` and `resolve_labels`, never on the parser's own
+bytecode that they read, so a parse whose emit ran out of memory was
+transformed as if whole and read one instruction as another (a garbage
+atom; an ASan SEGV in yonder's allocation sweeps). The check sits at
+`js_create_function`'s entry, which every definition passes through.
+Upstream still lacks checks on the parser's other allocation failures
+(DEBTS.md lists them).
+
 Selected upstream test sources are retained separately in
 `tools/js_acceptance/upstream`, with archive/file hashes and the original
 licence. Their assertions remain unchanged; separate drivers report individual

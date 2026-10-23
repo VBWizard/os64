@@ -24,6 +24,9 @@ typedef struct {
     double time;
     uint8_t phase;
     bool bubbles, cancelable, canceled, stop, stop_now, dispatching, initialized, trusted;
+    /* A ProgressEvent's (XHR § 4): its three attributes. */
+    bool progress, length_computable;
+    double loaded, total;
 } DEvent;
 
 int d_event_kind(const char *type)
@@ -137,21 +140,25 @@ void d_report(os64_dom_t *dom, JSContext *ctx, JSValueConst error)
 }
 
 /* LISTENER RECORDS. A callback held by a record is one of the registry's
- * values: listeners_held counts them and drain releases them. */
+ * values: listeners_held counts them and drain releases them. A collectable
+ * plain target's are its own (DListener.engine): traced and freed with it,
+ * and not counted, as the host never dispatches to such a target. */
+
+static void listeners_changed(os64_dom_t *dom, DValue *entry);
 
 static void count(os64_dom_t *dom, const DListener *listener, int delta)
 {
-    if (listener->kind >= 0) dom->listen_counts[listener->kind] += (uint32_t)delta;
+    if (listener->kind >= 0 && !listener->engine) dom->listen_counts[listener->kind] += (uint32_t)delta;
 }
 
 static void set_callback(os64_dom_t *dom, DListener *listener, JSValue value)
 {
     if (!JS_IsUndefined(listener->callback)) {
         JS_FreeValueRT(dom->engine, listener->callback);
-        dom->listeners_held--;
+        if (!listener->engine) dom->listeners_held--;
     }
     listener->callback = value;
-    if (!JS_IsUndefined(value)) dom->listeners_held++;
+    if (!JS_IsUndefined(value) && !listener->engine) dom->listeners_held++;
 }
 
 static void slot_state(os64_dom_t *dom, DListener *slot, uint8_t state)
@@ -217,6 +224,7 @@ static DListener *listener_new(os64_dom_t *dom, JSContext *ctx, DValue *entry, c
     listener->type = copy;
     listener->kind = d_event_kind(type);
     listener->callback = JS_UNDEFINED;
+    listener->engine = entry->engine_held;
     if (at_head || entry->listeners == NULL) {
         listener->next = entry->listeners;
         entry->listeners = listener;
@@ -537,7 +545,7 @@ static bool sticky(os64_js_status_t status)
         status == OS64_JS_HOST_FAILURE || status == OS64_JS_FAILED_RUNTIME;
 }
 
-static void fold(os64_js_outcome_t *into, const os64_js_outcome_t *from)
+void d_outcome_fold(os64_js_outcome_t *into, const os64_js_outcome_t *from)
 {
     if (from->status == OS64_JS_OK || from->status == OS64_JS_MORE_JOBS) return;
     if (into->status == OS64_JS_OK || (sticky(from->status) && !sticky(into->status)))
@@ -586,7 +594,10 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
         if (runs && slot) runs = listener->handler == D_SLOT_FUNCTION || listener->handler == D_SLOT_UNCOMPILED;
         if (runs) {
             JSValue callback = slot ? JS_UNDEFINED : JS_DupValue(d->ctx, listener->callback);
-            if (listener->once) remove_listener(dom, entry, listener);
+            if (listener->once) {
+                remove_listener(dom, entry, listener);
+                listeners_changed(dom, entry);
+            }
             if (d->host != NULL) {
                 JSValue args[2] = {d->object, callback};
                 os64_js_outcome_t call, point;
@@ -597,10 +608,10 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
                 dom->invoking = NULL;
                 dom->invoking_entry = NULL;
                 JS_FreeValueRT(dom->engine, callback);
-                fold(d->host, &call);
+                d_outcome_fold(d->host, &call);
                 if (!sticky(call.status)) {
                     os64_js_checkpoint(dom->runtime, OS64_JS_ABI_ID, &point);
-                    fold(d->host, &point);
+                    d_outcome_fold(d->host, &point);
                     if (sticky(point.status)) { result = -1; break; }
                 } else { result = -1; break; }
             } else {
@@ -693,6 +704,8 @@ static int dispatch(Dispatch *d, const os64_html_node_t *node)
     event->current = JS_NULL;
     d_free(dom, path);
     sweep(dom);
+    /* sweep walks the registry; a collectable target is not on it. */
+    if (d->plain != NULL && d->plain->engine_held && dom->dispatching == 0) unlink_removed(dom, d->plain);
     return result < 0 ? -1 : event->canceled ? 0 : 1;
 }
 
@@ -706,6 +719,14 @@ int d_dispatch(os64_dom_t *dom, JSContext *ctx, JSValueConst object, const os64_
 int d_dispatch_plain(os64_dom_t *dom, JSContext *ctx, JSValueConst object, DValue *target)
 {
     Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), NULL, false, target};
+    if (d.event == NULL) { JS_ThrowTypeError(ctx, "Expected an Event"); return -1; }
+    return dispatch(&d, NULL);
+}
+
+int d_dispatch_plain_task(os64_dom_t *dom, JSContext *ctx, JSValueConst object, DValue *target,
+                          os64_js_outcome_t *outcome)
+{
+    Dispatch d = {dom, ctx, (JSValue)object, JS_GetOpaque(object, dom->event_class), outcome, false, target};
     if (d.event == NULL) { JS_ThrowTypeError(ctx, "Expected an Event"); return -1; }
     return dispatch(&d, NULL);
 }
@@ -759,11 +780,11 @@ static void discard(JSContext *ctx)
     JS_FreeValue(ctx, error);
 }
 
-static os64_js_status_t finish_task(os64_dom_t *dom, os64_js_outcome_t *outcome)
+os64_js_status_t d_task_finish(os64_dom_t *dom, os64_js_outcome_t *outcome)
 {
     os64_js_outcome_t end;
     os64_js_task_end(dom->runtime, OS64_JS_ABI_ID, &end);
-    fold(outcome, &end);
+    d_outcome_fold(outcome, &end);
     if (outcome->status == OS64_JS_OK && dom->report.status != OS64_JS_OK) {
         *outcome = dom->report;
         os64_memset(&dom->report, 0, sizeof(dom->report));
@@ -784,9 +805,9 @@ os64_js_status_t d_host_dispatch(os64_dom_t *dom, const os64_html_node_t *node, 
     }
     os64_js_outcome_t access;
     JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
-    if (ctx == NULL) return finish_task(dom, outcome);
+    if (ctx == NULL) return d_task_finish(dom, outcome);
     JSValue object = make(dom, ctx, arg);
-    if (JS_IsException(object)) { discard(ctx); return finish_task(dom, outcome); }
+    if (JS_IsException(object)) { discard(ctx); return d_task_finish(dom, outcome); }
     Dispatch d = {dom, ctx, object, JS_GetOpaque(object, dom->event_class), outcome,
                   plain == NULL && node == NULL && d_event_kind(type) == D_EVENT_LOAD, plain};
     /* Engine refusals between the wrapper's calls are latched by libjs and
@@ -798,7 +819,7 @@ os64_js_status_t d_host_dispatch(os64_dom_t *dom, const os64_html_node_t *node, 
     }
     if (prevented != NULL) *prevented = d.event->canceled;
     JS_FreeValue(ctx, object);
-    return finish_task(dom, outcome);
+    return d_task_finish(dom, outcome);
 }
 
 /* A host event as os64_dom_event_t describes it: an Event with its mouse
@@ -950,6 +971,13 @@ static int listener_options(JSContext *ctx, int argc, JSValueConst *argv, bool *
 
 enum { M_ADD, M_REMOVE, M_DISPATCH };
 
+/* A plain target's listener-change hook (DValue.listeners_changed), after
+ * a listener was added or removed or a handler set. */
+static void listeners_changed(os64_dom_t *dom, DValue *entry)
+{
+    if (entry != NULL && entry->listeners_changed != NULL) entry->listeners_changed(dom->engine, entry);
+}
+
 static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst self, int argc,
                                 JSValueConst *argv, int magic)
 {
@@ -1000,6 +1028,7 @@ static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst se
         }
     }
     d_string_free(dom, &type);
+    listeners_changed(dom, entry);
     return result;
 }
 
@@ -1056,6 +1085,7 @@ static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSV
         slot_state(dom, slot, D_SLOT_FUNCTION);
         set_callback(dom, slot, JS_DupValue(ctx, value));
     } else slot_state(dom, slot, D_SLOT_EMPTY);
+    listeners_changed(dom, entry);
     return JS_UNDEFINED;
 }
 
@@ -1287,6 +1317,97 @@ int d_event_handler(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, int
     return d_accessor(dom, ctx, prototype, name, handler_property, kind, true);
 }
 
+/* A PLAIN TARGET'S ENTRY IN THE OBJECT (internal.h, A PLAIN EVENT TARGET).
+ * A plain target a page makes as often as it
+ * likes (an AbortSignal, an XMLHttpRequest) cannot be a registry entry,
+ * which holds its object until drain: its record lives in the object's own
+ * state instead, and its listeners' callbacks go with the object. The
+ * dispatch, the listener records and the methods are the same ones. */
+
+void d_event_target_init(os64_dom_t *dom, DValue *entry, JSValueConst object)
+{
+    os64_memset(entry, 0, sizeof(*entry));
+    entry->value = (JSValue)object;
+    entry->dom = dom;
+    entry->engine_held = true;
+}
+
+void d_event_target_mark(JSRuntime *rt, const DValue *entry, JS_MarkFunc *mark)
+{
+    for (const DListener *listener = entry->listeners; listener != NULL; listener = listener->next)
+        JS_MarkValue(rt, listener->callback, mark);
+}
+
+void d_event_target_finalize(JSRuntime *rt, DValue *entry)
+{
+    if (entry->dom == NULL) return;
+    for (DListener *listener = entry->listeners; listener != NULL; listener = listener->next) {
+        JS_FreeValueRT(rt, listener->callback);
+        listener->callback = JS_UNDEFINED;
+    }
+    d_event_free(entry->dom, entry);
+    entry->dom = NULL;
+}
+
+/* on<type> for a plain target, for any type: data[1] is the type. */
+static JSValue named_handler_property(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
+                                      int magic, JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    bool set = (magic & D_SET) != 0;
+    /* As handler_property: an entry made on demand is made for a handler
+     * set, and its absence reads null. */
+    DValue *entry = NULL;
+    int found = plain_entry(dom, ctx, self, set && argc > 0 && JS_IsObject(argv[0]), &entry);
+    if (found < 0) return JS_EXCEPTION;
+    if (found == 0) return JS_ThrowTypeError(ctx, "Expected an event target");
+    if (entry == NULL) return set ? JS_UNDEFINED : JS_NULL;
+    const char *type = JS_ToCString(ctx, data[1]);
+    if (type == NULL) return JS_EXCEPTION;
+    JSValue result = JS_UNDEFINED;
+    DListener *slot = slot_find(entry, type);
+    if ((magic & D_SET) == 0) {
+        result = slot != NULL && slot->handler == D_SLOT_FUNCTION ? JS_DupValue(ctx, slot->callback) : JS_NULL;
+    } else {
+        if (slot == NULL) {
+            slot = listener_new(dom, ctx, entry, type, false);
+            if (slot != NULL) slot->handler = D_SLOT_EMPTY;
+        }
+        JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
+        if (slot == NULL) result = JS_EXCEPTION;
+        else if (JS_IsObject(value)) {
+            slot_state(dom, slot, D_SLOT_FUNCTION);
+            set_callback(dom, slot, JS_DupValue(ctx, value));
+        } else slot_state(dom, slot, D_SLOT_EMPTY);
+        listeners_changed(dom, entry);
+    }
+    JS_FreeCString(ctx, type);
+    return result;
+}
+
+int d_event_handler_named(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, const char *type)
+{
+    char name[48] = "on";
+    os64_strcopy(name + 2, sizeof(name) - 2, type);
+    JSValue data[2] = {JS_DupValue(ctx, dom->anchor->value), JS_NewString(ctx, type)};
+    JSAtom atom = JS_IsException(data[1]) ? JS_ATOM_NULL : JS_NewAtom(ctx, name);
+    JSValue get = atom == JS_ATOM_NULL ? JS_EXCEPTION : JS_NewCFunctionData(ctx, named_handler_property, 0, 0, 2, data);
+    JSValue set = JS_IsException(get) ? JS_EXCEPTION
+                                      : JS_NewCFunctionData(ctx, named_handler_property, 1, D_SET, 2, data);
+    JS_FreeValue(ctx, data[0]);
+    JS_FreeValue(ctx, data[1]);
+    if (JS_IsException(set)) {
+        JS_FreeValue(ctx, get);
+        if (atom != JS_ATOM_NULL) JS_FreeAtom(ctx, atom);
+        return -1;
+    }
+    int result = JS_DefinePropertyGetSet(ctx, prototype, atom, get, set, JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+    JS_FreeAtom(ctx, atom);
+    return result;
+}
+
+
 /* Drain: every listener's callback goes with the registry. Records stay, as
  * native storage, until os64_dom_free. */
 void d_event_drain(os64_dom_t *dom)
@@ -1310,4 +1431,116 @@ void d_event_free(os64_dom_t *dom, DValue *entry)
         listener = next;
     }
     entry->listeners = entry->last_listener = NULL;
+}
+
+/* PROGRESS EVENTS (XHR § 4): an Event with three more attributes, which an
+ * XMLHttpRequest fires and a page may construct. Its state is the Event's
+ * own record, so dispatch needs nothing new. */
+
+enum { P_COMPUTABLE, P_LOADED, P_TOTAL };
+
+static JSValue progress_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                               JSValue *data)
+{
+    (void)argc; (void)argv;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    DEvent *event = JS_GetOpaque(self, dom->event_class);
+    if (event == NULL || !event->progress) return JS_ThrowTypeError(ctx, "Expected a ProgressEvent");
+    if (magic == P_COMPUTABLE) return JS_NewBool(ctx, event->length_computable);
+    return JS_NewFloat64(ctx, magic == P_LOADED ? event->loaded : event->total);
+}
+
+JSValue d_progress_event_new(os64_dom_t *dom, JSContext *ctx, const char *type, bool computable, double loaded,
+                             double total, bool trusted)
+{
+    JSValue object = d_event_new_proto(dom, ctx, dom->progress_prototype != NULL ? dom->progress_prototype->value
+                                                                                 : JS_UNDEFINED,
+                                       type, false, false, trusted);
+    if (JS_IsException(object)) return object;
+    DEvent *event = JS_GetOpaque(object, dom->event_class);
+    event->progress = true;
+    event->length_computable = computable;
+    event->loaded = loaded;
+    event->total = total;
+    return object;
+}
+
+/* new ProgressEvent(type, init): the dictionary read as WebIDL reads an
+ * inherited one, EventInit's members first, then its own in name order;
+ * loaded and total are WebIDL doubles: finite, or a TypeError. */
+static JSValue progress_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    os64_dom_t *dom = d_binding(ctx);
+    if (dom == NULL) return JS_EXCEPTION;
+    if (argc < 1) return JS_ThrowTypeError(ctx, "ProgressEvent needs a type");
+    const char *type = JS_ToCString(ctx, argv[0]);
+    if (type == NULL) return JS_EXCEPTION;
+    bool flags[4] = {false, false, false, false};     /* bubbles, cancelable, composed, lengthComputable */
+    double numbers[2] = {0, 0};
+    JSValueConst init = argc > 1 ? argv[1] : JS_UNDEFINED;
+    if (!JS_IsUndefined(init) && !JS_IsNull(init) && !JS_IsObject(init)) {
+        JS_FreeCString(ctx, type);
+        return JS_ThrowTypeError(ctx, "ProgressEventInit must be a dictionary");
+    }
+    if (JS_IsObject(init)) {
+        static const char *const names[] = {"bubbles", "cancelable", "composed", "lengthComputable", "loaded", "total"};
+        for (int i = 0; i < 6; i++) {
+            JSValue value = JS_GetPropertyStr(ctx, init, names[i]);
+            double n = 0;
+            int got = JS_IsException(value) ? -1
+                    : i < 4 ? JS_ToBool(ctx, value)
+                    : JS_IsUndefined(value) ? 0 : JS_ToFloat64(ctx, &n, value);
+            JS_FreeValue(ctx, value);
+            if (got < 0) {
+                JS_FreeCString(ctx, type);
+                return JS_EXCEPTION;
+            }
+            if (i < 4) flags[i] = got != 0;
+            else if (n != n || n - n != 0) {
+                JS_FreeCString(ctx, type);
+                return JS_ThrowTypeError(ctx, "loaded and total are finite numbers");
+            } else numbers[i - 4] = n;
+        }
+    }
+    JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+    if (JS_IsException(prototype)) {
+        JS_FreeCString(ctx, type);
+        return prototype;
+    }
+    JSValue object = d_event_new_proto(dom, ctx, JS_IsObject(prototype) ? (JSValueConst)prototype
+                                                 : dom->progress_prototype->value,
+                                       type, flags[0], flags[1], false);
+    JS_FreeValue(ctx, prototype);
+    JS_FreeCString(ctx, type);
+    if (JS_IsException(object)) return object;
+    DEvent *event = JS_GetOpaque(object, dom->event_class);
+    event->progress = true;
+    event->length_computable = flags[3];
+    event->loaded = numbers[0];
+    event->total = numbers[1];
+    return object;
+}
+
+int d_progress_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    JSValue event_prototype = JS_GetClassProto(ctx, dom->event_class);
+    JSValue event_interface = JS_GetPropertyStr(ctx, global, "Event");
+    dom->progress_prototype = d_retain(dom, ctx, JS_NewObjectProto(ctx, event_prototype));
+    JS_FreeValue(ctx, event_prototype);
+    if (dom->progress_prototype == NULL || JS_IsException(event_interface)) {
+        JS_FreeValue(ctx, event_interface);
+        return -1;
+    }
+    JSValueConst prototype = dom->progress_prototype->value;
+    static const char *const names[] = {"lengthComputable", "loaded", "total"};
+    for (int i = 0; i < 3; i++)
+        if (d_accessor(dom, ctx, prototype, names[i], progress_member, i, false) < 0) {
+            JS_FreeValue(ctx, event_interface);
+            return -1;
+        }
+    JSValue interface = d_interface_new(ctx, "ProgressEvent", 1, progress_constructor, prototype, event_interface);
+    JS_FreeValue(ctx, event_interface);
+    if (JS_IsException(interface)) return -1;
+    return JS_DefinePropertyValueStr(ctx, global, "ProgressEvent", interface, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }

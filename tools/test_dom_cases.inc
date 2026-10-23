@@ -402,9 +402,28 @@ static void dom_exception_ownership_cases(void)
         "try {for(const n of names)Object.defineProperty(Error.prototype,n,{configurable:true,set(){intercepted++;throw TypeError('intercepted')}});"
         "const box=document.getElementById('box'),one=document.getElementById('one');"
         "for(const [expected,action] of [['HierarchyRequestError',()=>one.appendChild(box)],['NotFoundError',()=>box.removeChild(document.body)]]){"
-        "try{action();assert(false,'missing exception')}catch(e){assert(e.name===expected);assert(Object.hasOwn(e,'name')&&Object.hasOwn(e,'message'));assert(!Object.getOwnPropertyDescriptor(e,'name').enumerable);}}"
+        "try{action();assert(false,'missing exception')}catch(e){assert(e.name===expected);assert(e instanceof DOMException&&e instanceof Error);"
+        "assert(e.code===(expected==='HierarchyRequestError'?3:8));assert(!Object.hasOwn(e,'name')&&!Object.hasOwn(e,'message'));}}"
         "assert(intercepted===0);}finally{for(let i=0;i<names.length;i++){if(saved[i])Object.defineProperty(Error.prototype,names[i],saved[i]);else delete Error.prototype[names[i]];}}",
-        "native-error-own-properties.js");fixture_free(&f);
+        "native-error-own-properties.js");
+    /* One DOMException for the binding: a storage refusal by name is one
+     * too, code and all, and a refusal named TypeError is the engine's. */
+    dom_script(&f,DOM_ASSERT
+        "var big='x'.repeat(6*1024*1024),q;try{localStorage.setItem('k',big)}catch(e){q=e}"
+        "assert(q&&q instanceof DOMException&&q.name==='QuotaExceededError'&&q.code===22,String(q));"
+        "var t;try{document.body.appendChild(1)}catch(e){t=e}assert(t instanceof TypeError,String(t));",
+        "native-error-one-domexception.js");
+    fixture_free(&f);
+    /* With the switch off there is no DOMException: the refusal is an
+     * Error carrying its name. */
+    os64_dom_options_t off=os64_dom_default_options();off.modern=false;
+    f=fixture_new(&off);if(!fixture_ready(&f))return;
+    dom_script(&f,DOM_ASSERT
+        "var box=document.getElementById('box'),one=document.getElementById('one'),r;"
+        "try{one.appendChild(box)}catch(e){r=e}"
+        "assert(r instanceof Error&&r.name==='HierarchyRequestError'&&Object.hasOwn(r,'name')&&typeof DOMException==='undefined');",
+        "native-error-switch-off.js");
+    fixture_free(&f);
 }
 static void dom_fragment_mode_cases(void)
 {

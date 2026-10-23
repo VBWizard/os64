@@ -124,6 +124,11 @@
       "path": "patches/0009-browser-name-not-a-function.patch",
       "sha256": "0c9eafda826788c605b389c4ae2f6ae6c1cea3c6df4ec7a2d088f1206db1fd9e",
       "reason": "Name the method in \"not a function\" only for a call proved to be its fetch's: same frame, slot and value, straight-line bytecode between, and the fetched value never popped on the way, sitting under exactly the call's arguments; every other call keeps the plain message."
+    },
+    {
+      "path": "patches/0010-compile-refuses-failed-emit.patch",
+      "sha256": "7ccfb396787e504edf8c2f5a657b9e528cc84adb82feb54eea2cec5559534e3b",
+      "reason": "Refuse, with an out-of-memory exception, to make a function from a def whose bytecode emit failed: the parser never reads the buffer's sticky error, and transforming cut-short bytecode reads one instruction as another."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

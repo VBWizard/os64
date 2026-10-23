@@ -10,16 +10,20 @@ LIBDOM_SRCS += libdom/storage.c libdom/performance.c libdom/url.c libdom/encodin
 LIBDOM_SRCS += libdom/implementation.c
 # Slice 0d: Element.attributes, NamedNodeMap and Attr.
 LIBDOM_SRCS += libdom/attr.c
+# The Modern Web's slice 2: fetch and its objects, XMLHttpRequest, DOMException.
+LIBDOM_SRCS += libdom/fetch.c libdom/abort.c libdom/blob.c libdom/xhr.c libdom/exception.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))
 LIBDOM_SO := $(BIN)/libdom.so
 LIBDOM_BASE = $(patsubst libdom.so=%,%,$(filter libdom.so=%,$(LIB_BASE_PAIRS)))
-LIBDOM_CFLAGS = $(LIBJS_FLAGS) -I$(CURDIR)/libdom/include -I$(CURDIR)/libgarb/include
+LIBDOM_CFLAGS = $(LIBJS_FLAGS) -I$(CURDIR)/libdom/include -I$(CURDIR)/libgarb/include -I$(CURDIR)/libway/include
 
-$(LIBDOM_SO): $(LIBDOM_OBJS) $(LIBJS_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBGARB_SO) $(LIBOS64_SO) \
+# libway for one copy of the origin and CORS rules (way/origin.h), which a
+# script's Headers and Request ask as the fetch job does.
+$(LIBDOM_SO): $(LIBDOM_OBJS) $(LIBJS_SO) $(LIBHTML_SO) $(LIBPAGE_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBOS64_SO) \
     link/lib.ld GNUmakefile libdom/library.mk tools/app_bases.py
 	$(LD) --defsym LIB_BASE=$(LIBDOM_BASE) --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) \
 	    $(SHARED_LIB_LDFLAGS) -soname libdom.so --no-undefined --no-as-needed \
-	    -o $@ $(LIBDOM_OBJS) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBGARB_SO) $(LIBOS64_SO)
+	    -o $@ $(LIBDOM_OBJS) $(LIBJS_SO) $(LIBPAGE_SO) $(LIBHTML_SO) $(LIBGARB_SO) $(LIBWAY_SO) $(LIBOS64_SO)
 
 $(OBJ)/pic/libdom/%.c.o: libdom/%.c $(LIBJS_GENERATED)/.prepared libdom/library.mk GNUmakefile
 	@mkdir -p "$(@D)"

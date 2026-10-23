@@ -1,0 +1,360 @@
+# WPT's fetch/api/response in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh fetch/api/response --update
+# rewrites [passing].
+[required]
+response-clone.any.html	Cannot clone a disturbed response
+response-clone.any.html	Check Response's clone has the expected attribute values
+response-clone.any.html	Check Response's clone with default values, without body
+response-clone.any.html	Check cloned response's body
+response-clone.any.html	Check original response's body after cloning
+response-consume-empty.any.html	Consume empty ArrayBuffer response body as text
+response-consume-empty.any.html	Consume empty URLSearchParams response body as text
+response-consume-empty.any.html	Consume empty blob response body as arrayBuffer
+response-consume-empty.any.html	Consume empty blob response body as text
+response-consume-empty.any.html	Consume empty text response body as arrayBuffer
+response-consume-empty.any.html	Consume empty text response body as text
+response-consume-empty.any.html	Consume response's body as arrayBuffer
+response-consume-empty.any.html	Consume response's body as blob
+response-consume-empty.any.html	Consume response's body as formData with correct multipart type (error case)
+response-consume-empty.any.html	Consume response's body as formData with correct urlencoded type
+response-consume-empty.any.html	Consume response's body as formData without correct type (error case)
+response-consume-empty.any.html	Consume response's body as json (error case)
+response-consume-empty.any.html	Consume response's body as text
+response-consume.html	Consume response's body: from FormData to arrayBuffer
+response-consume.html	Consume response's body: from FormData to formData
+response-consume.html	Consume response's body: from FormData to text
+response-consume.html	Consume response's body: from FormData without correct type to formData (error case)
+response-consume.html	Consume response's body: from URLSearchParams to arrayBuffer
+response-consume.html	Consume response's body: from URLSearchParams to formData
+response-consume.html	Consume response's body: from URLSearchParams to text
+response-consume.html	Consume response's body: from URLSearchParams without correct type to formData (error case)
+response-consume.html	Consume response's body: from blob to arrayBuffer
+response-consume.html	Consume response's body: from blob to json
+response-consume.html	Consume response's body: from blob to text
+response-consume.html	Consume response's body: from blob with correct multipart type to formData
+response-consume.html	Consume response's body: from blob with correct urlencoded type to formData
+response-consume.html	Consume response's body: from blob without correct multipart type to formData (error case)
+response-consume.html	Consume response's body: from blob without correct urlencoded type to formData (error case)
+response-consume.html	Consume response's body: from fetch to arrayBuffer
+response-consume.html	Consume response's body: from fetch to text
+response-consume.html	Consume response's body: from fetch without correct type to formData (error case)
+response-consume.html	Consume response's body: from text to arrayBuffer
+response-consume.html	Consume response's body: from text to json
+response-consume.html	Consume response's body: from text to text
+response-consume.html	Consume response's body: from text with correct multipart type to formData
+response-consume.html	Consume response's body: from text with correct urlencoded type to formData
+response-consume.html	Consume response's body: from text without correct multipart type to formData (error case)
+response-consume.html	Consume response's body: from text without correct urlencoded type to formData (error case)
+response-error.any.html	Throws RangeError when responseInit's status is 0
+response-error.any.html	Throws RangeError when responseInit's status is 100
+response-error.any.html	Throws RangeError when responseInit's status is 1000
+response-error.any.html	Throws RangeError when responseInit's status is 199
+response-error.any.html	Throws RangeError when responseInit's status is 600
+response-error.any.html	Throws TypeError when building a response with body and a body status of 204
+response-error.any.html	Throws TypeError when building a response with body and a body status of 205
+response-error.any.html	Throws TypeError when building a response with body and a body status of 304
+response-error.any.html	Throws TypeError when responseInit's statusText is \n
+response-error.any.html	Throws TypeError when responseInit's statusText is Ā
+response-form-data.html	Validate buggy form data - boundary
+response-form-data.html	Validate buggy form data - cr1
+response-form-data.html	Validate buggy form data - cr2
+response-form-data.html	Validate buggy form data - cr3
+response-form-data.html	Validate buggy form data - cr_
+response-form-data.html	Validate buggy form data - dashes
+response-form-data.html	Validate form data - onePartWithEpilogue
+response-form-data.html	Validate form data - onePartWithoutEpilogue
+response-form-data.html	Validate form data - twoPartsWithEpilogue
+response-form-data.html	Validate form data - twoPartsWithoutEpilogue
+response-init-001.any.html	Check default value for body attribute
+response-init-001.any.html	Check default value for ok attribute
+response-init-001.any.html	Check default value for status attribute
+response-init-001.any.html	Check default value for statusText attribute
+response-init-001.any.html	Check default value for type attribute
+response-init-001.any.html	Check default value for url attribute
+response-init-001.any.html	Check status init values and associated getter
+response-init-001.any.html	Check statusText init values and associated getter
+response-init-001.any.html	Test that Response.headers has the [SameObject] extended attribute
+response-init-002.any.html	Initialize Response with headers values
+response-init-002.any.html	Initialize Response's body with application/octet-binary
+response-init-002.any.html	Initialize Response's body with application/x-www-form-urlencoded;charset=UTF-8
+response-init-002.any.html	Initialize Response's body with multipart/form-data
+response-init-002.any.html	Initialize Response's body with text/plain;charset=UTF-8
+response-init-002.any.html	Read Response's body as readableStream
+response-init-002.any.html	Testing empty Response Content-Type header
+response-init-002.any.html	Testing null Response body
+response-init-contenttype.any.html	Can override Content-Type for Response with Blob body (empty type)
+response-init-contenttype.any.html	Can override Content-Type for Response with Blob body (no type set)
+response-init-contenttype.any.html	Can override Content-Type for Response with Blob body (set type)
+response-init-contenttype.any.html	Can override Content-Type for Response with FormData body
+response-init-contenttype.any.html	Can override Content-Type for Response with URLSearchParams body
+response-init-contenttype.any.html	Can override Content-Type for Response with buffer source body
+response-init-contenttype.any.html	Can override Content-Type for Response with empty body
+response-init-contenttype.any.html	Can override Content-Type for Response with string body
+response-init-contenttype.any.html	Default Content-Type for Response with Blob body (empty type)
+response-init-contenttype.any.html	Default Content-Type for Response with Blob body (no type set)
+response-init-contenttype.any.html	Default Content-Type for Response with Blob body (set type)
+response-init-contenttype.any.html	Default Content-Type for Response with FormData body
+response-init-contenttype.any.html	Default Content-Type for Response with URLSearchParams body
+response-init-contenttype.any.html	Default Content-Type for Response with buffer source body
+response-init-contenttype.any.html	Default Content-Type for Response with empty body
+response-init-contenttype.any.html	Default Content-Type for Response with string body
+response-static-error.any.html	Check response returned by static method error()
+response-static-error.any.html	the 'guard' of the Headers instance should be immutable
+response-static-json.any.html	Check response returned by static json() with init undefined
+response-static-json.any.html	Check response returned by static json() with init {"headers":{"content-type":"foo/bar"}}
+response-static-json.any.html	Check response returned by static json() with init {"headers":{"x-foo":"bar"}}
+response-static-json.any.html	Check response returned by static json() with init {"headers":{}}
+response-static-json.any.html	Check response returned by static json() with init {"status":400}
+response-static-json.any.html	Check response returned by static json() with init {"statusText":"foo"}
+response-static-json.any.html	Check response returned by static json() with input U+dead
+response-static-json.any.html	Check response returned by static json() with input U+df06U+d834
+response-static-json.any.html	Check response returned by static json() with input 𝌆
+response-static-json.any.html	Check static json() encodes JSON objects correctly
+response-static-json.any.html	Check static json() propagates JSON serializer errors
+response-static-json.any.html	Check static json() throws when data is circular
+response-static-json.any.html	Check static json() throws when data is not encodable
+response-static-json.any.html	Throws TypeError when calling static json() with a status of 204
+response-static-json.any.html	Throws TypeError when calling static json() with a status of 205
+response-static-json.any.html	Throws TypeError when calling static json() with a status of 304
+response-static-redirect.any.html	Check default redirect response
+response-static-redirect.any.html	Check error returned when giving invalid status to redirect(), status = 200
+response-static-redirect.any.html	Check error returned when giving invalid status to redirect(), status = 309
+response-static-redirect.any.html	Check error returned when giving invalid status to redirect(), status = 400
+response-static-redirect.any.html	Check error returned when giving invalid status to redirect(), status = 500
+response-static-redirect.any.html	Check error returned when giving invalid url to redirect()
+response-static-redirect.any.html	Check response returned by static method redirect(), status = 301
+response-static-redirect.any.html	Check response returned by static method redirect(), status = 302
+response-static-redirect.any.html	Check response returned by static method redirect(), status = 303
+response-static-redirect.any.html	Check response returned by static method redirect(), status = 307
+response-static-redirect.any.html	Check response returned by static method redirect(), status = 308
+response-stream-disturbed-1.any.html	Getting arrayBuffer after getting the Response body - not disturbed, not locked (body source: fetch)
+response-stream-disturbed-1.any.html	Getting arrayBuffer after getting the Response body - not disturbed, not locked (body source: string)
+response-stream-disturbed-1.any.html	Getting blob after getting the Response body - not disturbed, not locked (body source: fetch)
+response-stream-disturbed-1.any.html	Getting blob after getting the Response body - not disturbed, not locked (body source: string)
+response-stream-disturbed-1.any.html	Getting json after getting the Response body - not disturbed, not locked (body source: fetch)
+response-stream-disturbed-1.any.html	Getting json after getting the Response body - not disturbed, not locked (body source: string)
+response-stream-disturbed-1.any.html	Getting text after getting the Response body - not disturbed, not locked (body source: fetch)
+response-stream-disturbed-1.any.html	Getting text after getting the Response body - not disturbed, not locked (body source: string)
+response-stream-disturbed-2.any.html	Getting arrayBuffer after getting a locked Response body (body source: fetch)
+response-stream-disturbed-2.any.html	Getting arrayBuffer after getting a locked Response body (body source: string)
+response-stream-disturbed-2.any.html	Getting blob after getting a locked Response body (body source: fetch)
+response-stream-disturbed-2.any.html	Getting blob after getting a locked Response body (body source: string)
+response-stream-disturbed-2.any.html	Getting json after getting a locked Response body (body source: fetch)
+response-stream-disturbed-2.any.html	Getting json after getting a locked Response body (body source: string)
+response-stream-disturbed-2.any.html	Getting text after getting a locked Response body (body source: fetch)
+response-stream-disturbed-2.any.html	Getting text after getting a locked Response body (body source: string)
+response-stream-disturbed-3.any.html	Getting arrayBuffer after reading the Response body (body source: fetch)
+response-stream-disturbed-3.any.html	Getting arrayBuffer after reading the Response body (body source: string)
+response-stream-disturbed-3.any.html	Getting blob after reading the Response body (body source: fetch)
+response-stream-disturbed-3.any.html	Getting blob after reading the Response body (body source: string)
+response-stream-disturbed-3.any.html	Getting json after reading the Response body (body source: fetch)
+response-stream-disturbed-3.any.html	Getting json after reading the Response body (body source: string)
+response-stream-disturbed-3.any.html	Getting text after reading the Response body (body source: fetch)
+response-stream-disturbed-3.any.html	Getting text after reading the Response body (body source: string)
+response-stream-disturbed-4.any.html	Getting arrayBuffer after cancelling the Response body (body source: fetch)
+response-stream-disturbed-4.any.html	Getting arrayBuffer after cancelling the Response body (body source: string)
+response-stream-disturbed-4.any.html	Getting blob after cancelling the Response body (body source: fetch)
+response-stream-disturbed-4.any.html	Getting blob after cancelling the Response body (body source: string)
+response-stream-disturbed-4.any.html	Getting json after cancelling the Response body (body source: fetch)
+response-stream-disturbed-4.any.html	Getting json after cancelling the Response body (body source: string)
+response-stream-disturbed-4.any.html	Getting text after cancelling the Response body (body source: fetch)
+response-stream-disturbed-4.any.html	Getting text after cancelling the Response body (body source: string)
+response-stream-disturbed-5.any.html	Getting a body reader after consuming as arrayBuffer (body source: fetch)
+response-stream-disturbed-5.any.html	Getting a body reader after consuming as arrayBuffer (body source: string)
+response-stream-disturbed-5.any.html	Getting a body reader after consuming as blob (body source: fetch)
+response-stream-disturbed-5.any.html	Getting a body reader after consuming as blob (body source: string)
+response-stream-disturbed-5.any.html	Getting a body reader after consuming as json (body source: fetch)
+response-stream-disturbed-5.any.html	Getting a body reader after consuming as json (body source: string)
+response-stream-disturbed-5.any.html	Getting a body reader after consuming as text (body source: fetch)
+response-stream-disturbed-5.any.html	Getting a body reader after consuming as text (body source: string)
+[excluded]
+multi-globals/url-parsing.html	another realm's globals, and this browser draws no frames
+response-clone-iframe.window.html	an iframe's window, and this browser draws no frames
+[passing]
+json.any.html	Ensure UTF-16 results in an error
+json.any.html	Ensure the correct JSON parser is used
+response-cancel-stream.any.html	Accessing .body after canceling it
+response-cancel-stream.any.html	Cancelling a closed Response stream
+response-cancel-stream.any.html	Cancelling a closed blob Response stream
+response-cancel-stream.any.html	Cancelling a loading blob Response stream
+response-cancel-stream.any.html	Cancelling a starting blob Response stream
+response-clone.any.html	Cannot clone a disturbed response
+response-clone.any.html	Check Response's clone has the expected attribute values
+response-clone.any.html	Check Response's clone with default values, without body
+response-clone.any.html	Check cloned response's body
+response-clone.any.html	Check original response's body after cloning
+response-consume-empty.any.html	Consume empty ArrayBuffer response body as text
+response-consume-empty.any.html	Consume empty URLSearchParams response body as text
+response-consume-empty.any.html	Consume empty blob response body as arrayBuffer
+response-consume-empty.any.html	Consume empty blob response body as text
+response-consume-empty.any.html	Consume empty text response body as arrayBuffer
+response-consume-empty.any.html	Consume empty text response body as text
+response-consume-empty.any.html	Consume response's body as arrayBuffer
+response-consume-empty.any.html	Consume response's body as blob
+response-consume-empty.any.html	Consume response's body as formData with correct multipart type (error case)
+response-consume-empty.any.html	Consume response's body as formData with correct urlencoded type
+response-consume-empty.any.html	Consume response's body as formData without correct type (error case)
+response-consume-empty.any.html	Consume response's body as json (error case)
+response-consume-empty.any.html	Consume response's body as text
+response-consume-stream.any.html	Getting a redirect Response stream
+response-consume-stream.any.html	Getting an error Response stream
+response-consume-stream.any.html	Read URLSearchParams response's body as readableStream with mode=undefined
+response-consume-stream.any.html	Read array buffer response's body as readableStream with mode=undefined
+response-consume-stream.any.html	Read blob response's body as readableStream with mode=undefined
+response-consume-stream.any.html	Read empty blob response's body as readableStream
+response-consume-stream.any.html	Read empty text response's body as readableStream
+response-consume-stream.any.html	Read form data response's body as readableStream with mode=undefined
+response-consume-stream.any.html	Read text response's body as readableStream with mode=undefined
+response-consume.html	Consume response's body: from FormData to arrayBuffer
+response-consume.html	Consume response's body: from FormData to formData
+response-consume.html	Consume response's body: from FormData to text
+response-consume.html	Consume response's body: from FormData without correct type to formData (error case)
+response-consume.html	Consume response's body: from URLSearchParams to arrayBuffer
+response-consume.html	Consume response's body: from URLSearchParams to formData
+response-consume.html	Consume response's body: from URLSearchParams to text
+response-consume.html	Consume response's body: from URLSearchParams without correct type to formData (error case)
+response-consume.html	Consume response's body: from blob to arrayBuffer
+response-consume.html	Consume response's body: from blob to json
+response-consume.html	Consume response's body: from blob to text
+response-consume.html	Consume response's body: from blob with correct multipart type to formData
+response-consume.html	Consume response's body: from blob with correct urlencoded type to formData
+response-consume.html	Consume response's body: from blob without correct multipart type to formData (error case)
+response-consume.html	Consume response's body: from blob without correct urlencoded type to formData (error case)
+response-consume.html	Consume response's body: from fetch to arrayBuffer
+response-consume.html	Consume response's body: from fetch to text
+response-consume.html	Consume response's body: from fetch without correct type to formData (error case)
+response-consume.html	Consume response's body: from text to arrayBuffer
+response-consume.html	Consume response's body: from text to json
+response-consume.html	Consume response's body: from text to text
+response-consume.html	Consume response's body: from text with correct multipart type to formData
+response-consume.html	Consume response's body: from text with correct urlencoded type to formData
+response-consume.html	Consume response's body: from text without correct multipart type to formData (error case)
+response-consume.html	Consume response's body: from text without correct urlencoded type to formData (error case)
+response-error.any.html	Throws RangeError when responseInit's status is 0
+response-error.any.html	Throws RangeError when responseInit's status is 100
+response-error.any.html	Throws RangeError when responseInit's status is 1000
+response-error.any.html	Throws RangeError when responseInit's status is 199
+response-error.any.html	Throws RangeError when responseInit's status is 600
+response-error.any.html	Throws TypeError when building a response with body and a body status of 204
+response-error.any.html	Throws TypeError when building a response with body and a body status of 205
+response-error.any.html	Throws TypeError when building a response with body and a body status of 304
+response-error.any.html	Throws TypeError when responseInit's statusText is \n
+response-error.any.html	Throws TypeError when responseInit's statusText is Ā
+response-form-data.html	Empty form data
+response-form-data.html	Validate buggy form data - boundary
+response-form-data.html	Validate buggy form data - cr1
+response-form-data.html	Validate buggy form data - cr2
+response-form-data.html	Validate buggy form data - cr3
+response-form-data.html	Validate buggy form data - cr_
+response-form-data.html	Validate buggy form data - dashes
+response-form-data.html	Validate form data - onePartWithEpilogue
+response-form-data.html	Validate form data - onePartWithTransportPadding
+response-form-data.html	Validate form data - onePartWithoutEpilogue
+response-form-data.html	Validate form data - twoPartsWithEpilogue
+response-form-data.html	Validate form data - twoPartsWithTransportPadding
+response-form-data.html	Validate form data - twoPartsWithoutEpilogue
+response-headers-guard.any.html	Ensure response headers are immutable
+response-init-001.any.html	Check default value for body attribute
+response-init-001.any.html	Check default value for ok attribute
+response-init-001.any.html	Check default value for status attribute
+response-init-001.any.html	Check default value for statusText attribute
+response-init-001.any.html	Check default value for type attribute
+response-init-001.any.html	Check default value for url attribute
+response-init-001.any.html	Check status init values and associated getter
+response-init-001.any.html	Check statusText init values and associated getter
+response-init-001.any.html	Test that Response.headers has the [SameObject] extended attribute
+response-init-002.any.html	Initialize Response with headers values
+response-init-002.any.html	Initialize Response's body with application/octet-binary
+response-init-002.any.html	Initialize Response's body with application/x-www-form-urlencoded;charset=UTF-8
+response-init-002.any.html	Initialize Response's body with multipart/form-data
+response-init-002.any.html	Initialize Response's body with text/plain;charset=UTF-8
+response-init-002.any.html	Read Response's body as readableStream
+response-init-002.any.html	Testing empty Response Content-Type header
+response-init-002.any.html	Testing null Response body
+response-init-contenttype.any.html	Can override Content-Type for Response with Blob body (empty type)
+response-init-contenttype.any.html	Can override Content-Type for Response with Blob body (no type set)
+response-init-contenttype.any.html	Can override Content-Type for Response with Blob body (set type)
+response-init-contenttype.any.html	Can override Content-Type for Response with FormData body
+response-init-contenttype.any.html	Can override Content-Type for Response with URLSearchParams body
+response-init-contenttype.any.html	Can override Content-Type for Response with buffer source body
+response-init-contenttype.any.html	Can override Content-Type for Response with empty body
+response-init-contenttype.any.html	Can override Content-Type for Response with string body
+response-init-contenttype.any.html	Default Content-Type for Response with Blob body (empty type)
+response-init-contenttype.any.html	Default Content-Type for Response with Blob body (no type set)
+response-init-contenttype.any.html	Default Content-Type for Response with Blob body (set type)
+response-init-contenttype.any.html	Default Content-Type for Response with FormData body
+response-init-contenttype.any.html	Default Content-Type for Response with URLSearchParams body
+response-init-contenttype.any.html	Default Content-Type for Response with buffer source body
+response-init-contenttype.any.html	Default Content-Type for Response with empty body
+response-init-contenttype.any.html	Default Content-Type for Response with string body
+response-static-error.any.html	Check response returned by static method error()
+response-static-error.any.html	the 'guard' of the Headers instance should be immutable
+response-static-json.any.html	Check response returned by static json() with init undefined
+response-static-json.any.html	Check response returned by static json() with init {"headers":{"content-type":"foo/bar"}}
+response-static-json.any.html	Check response returned by static json() with init {"headers":{"x-foo":"bar"}}
+response-static-json.any.html	Check response returned by static json() with init {"headers":{}}
+response-static-json.any.html	Check response returned by static json() with init {"status":400}
+response-static-json.any.html	Check response returned by static json() with init {"statusText":"foo"}
+response-static-json.any.html	Check response returned by static json() with input U+dead
+response-static-json.any.html	Check response returned by static json() with input U+df06U+d834
+response-static-json.any.html	Check response returned by static json() with input 𝌆
+response-static-json.any.html	Check static json() encodes JSON objects correctly
+response-static-json.any.html	Check static json() propagates JSON serializer errors
+response-static-json.any.html	Check static json() throws when data is circular
+response-static-json.any.html	Check static json() throws when data is not encodable
+response-static-json.any.html	Throws TypeError when calling static json() with a status of 204
+response-static-json.any.html	Throws TypeError when calling static json() with a status of 205
+response-static-json.any.html	Throws TypeError when calling static json() with a status of 304
+response-static-redirect.any.html	Check default redirect response
+response-static-redirect.any.html	Check error returned when giving invalid status to redirect(), status = 200
+response-static-redirect.any.html	Check error returned when giving invalid status to redirect(), status = 309
+response-static-redirect.any.html	Check error returned when giving invalid status to redirect(), status = 400
+response-static-redirect.any.html	Check error returned when giving invalid status to redirect(), status = 500
+response-static-redirect.any.html	Check error returned when giving invalid url to redirect()
+response-static-redirect.any.html	Check response returned by static method redirect(), status = 301
+response-static-redirect.any.html	Check response returned by static method redirect(), status = 302
+response-static-redirect.any.html	Check response returned by static method redirect(), status = 303
+response-static-redirect.any.html	Check response returned by static method redirect(), status = 307
+response-static-redirect.any.html	Check response returned by static method redirect(), status = 308
+response-stream-disturbed-1.any.html	Getting arrayBuffer after getting the Response body - not disturbed, not locked (body source: fetch)
+response-stream-disturbed-1.any.html	Getting arrayBuffer after getting the Response body - not disturbed, not locked (body source: string)
+response-stream-disturbed-1.any.html	Getting blob after getting the Response body - not disturbed, not locked (body source: fetch)
+response-stream-disturbed-1.any.html	Getting blob after getting the Response body - not disturbed, not locked (body source: string)
+response-stream-disturbed-1.any.html	Getting json after getting the Response body - not disturbed, not locked (body source: fetch)
+response-stream-disturbed-1.any.html	Getting json after getting the Response body - not disturbed, not locked (body source: string)
+response-stream-disturbed-1.any.html	Getting text after getting the Response body - not disturbed, not locked (body source: fetch)
+response-stream-disturbed-1.any.html	Getting text after getting the Response body - not disturbed, not locked (body source: string)
+response-stream-disturbed-2.any.html	Getting arrayBuffer after getting a locked Response body (body source: fetch)
+response-stream-disturbed-2.any.html	Getting arrayBuffer after getting a locked Response body (body source: string)
+response-stream-disturbed-2.any.html	Getting blob after getting a locked Response body (body source: fetch)
+response-stream-disturbed-2.any.html	Getting blob after getting a locked Response body (body source: string)
+response-stream-disturbed-2.any.html	Getting json after getting a locked Response body (body source: fetch)
+response-stream-disturbed-2.any.html	Getting json after getting a locked Response body (body source: string)
+response-stream-disturbed-2.any.html	Getting text after getting a locked Response body (body source: fetch)
+response-stream-disturbed-2.any.html	Getting text after getting a locked Response body (body source: string)
+response-stream-disturbed-3.any.html	Getting arrayBuffer after reading the Response body (body source: fetch)
+response-stream-disturbed-3.any.html	Getting arrayBuffer after reading the Response body (body source: string)
+response-stream-disturbed-3.any.html	Getting blob after reading the Response body (body source: fetch)
+response-stream-disturbed-3.any.html	Getting blob after reading the Response body (body source: string)
+response-stream-disturbed-3.any.html	Getting json after reading the Response body (body source: fetch)
+response-stream-disturbed-3.any.html	Getting json after reading the Response body (body source: string)
+response-stream-disturbed-3.any.html	Getting text after reading the Response body (body source: fetch)
+response-stream-disturbed-3.any.html	Getting text after reading the Response body (body source: string)
+response-stream-disturbed-4.any.html	Getting arrayBuffer after cancelling the Response body (body source: fetch)
+response-stream-disturbed-4.any.html	Getting arrayBuffer after cancelling the Response body (body source: string)
+response-stream-disturbed-4.any.html	Getting blob after cancelling the Response body (body source: fetch)
+response-stream-disturbed-4.any.html	Getting blob after cancelling the Response body (body source: string)
+response-stream-disturbed-4.any.html	Getting json after cancelling the Response body (body source: fetch)
+response-stream-disturbed-4.any.html	Getting json after cancelling the Response body (body source: string)
+response-stream-disturbed-4.any.html	Getting text after cancelling the Response body (body source: fetch)
+response-stream-disturbed-4.any.html	Getting text after cancelling the Response body (body source: string)
+response-stream-disturbed-5.any.html	Getting a body reader after consuming as arrayBuffer (body source: fetch)
+response-stream-disturbed-5.any.html	Getting a body reader after consuming as arrayBuffer (body source: string)
+response-stream-disturbed-5.any.html	Getting a body reader after consuming as blob (body source: fetch)
+response-stream-disturbed-5.any.html	Getting a body reader after consuming as blob (body source: string)
+response-stream-disturbed-5.any.html	Getting a body reader after consuming as json (body source: fetch)
+response-stream-disturbed-5.any.html	Getting a body reader after consuming as json (body source: string)
+response-stream-disturbed-5.any.html	Getting a body reader after consuming as text (body source: fetch)
+response-stream-disturbed-5.any.html	Getting a body reader after consuming as text (body source: string)
+response-stream-with-broken-then.any.html	intercepting arraybuffer to text conversion via Object.prototype.then should not be possible

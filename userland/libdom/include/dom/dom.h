@@ -5,6 +5,7 @@
 #include <page/page.h>
 #include <os64/js.h>
 #include <os64/url.h>
+#include <way/origin.h>
 
 typedef struct os64_dom os64_dom_t;
 
@@ -622,6 +623,89 @@ int os64_dom_script_start(os64_dom_t *dom, const os64_html_node_t *node);
  * not fit in cap. Works without a binding. */
 bool os64_dom_resolve(const os64_html_document_t *document, const char *document_url,
                       const char *reference, char *out, size_t cap);
+
+/* A SCRIPT'S REQUESTS (MODERN_WEB.md § Slice 2): fetch() and
+ * XMLHttpRequest build a request; the HOST runs it, and every judgement
+ * the Fetch standard makes of it (the origin rules, CORS, the cookies, the
+ * redirects) is the host's (yonder's fetch job, over libway's origin.c).
+ * The page's origin is the host's too: the binding never says what it is.
+ * What comes back is already filtered for the page.
+ *
+ * The request, borrowed for the call: its URL (absolute, as the binding
+ * parsed it), its normalized method, its author headers as a header block
+ * (way/origin.h), its body bytes (NULL for none), its mode, credentials
+ * mode, redirect mode and referrer policy, whether an upload listener asks
+ * for a preflight, and the address its Referer names ("" for none). */
+typedef struct {
+    const char *url;
+    const char *method;
+    const char *headers;
+    size_t headers_length;
+    const void *body;
+    size_t body_length;
+    way_mode_t mode;
+    way_credentials_t credentials;
+    way_redirect_t redirect;
+    way_policy_t policy;
+    bool preflight;
+    const char *referrer;
+} os64_dom_request_t;
+/* The answer, borrowed for the call: `ok` false is a network error, which
+ * carries nothing else (Fetch: a network error tells the page nothing; the
+ * host keeps its reason for its own record); else the response's type,
+ * status and status text, URL ("" for an opaque one), whether it was
+ * redirected, its filtered header block, and its body (has_body false: a
+ * null body). */
+typedef struct {
+    bool ok;
+    way_type_t type;
+    int32_t status;
+    const char *status_text;
+    const char *url;
+    bool redirected;
+    const char *headers;
+    size_t headers_length;
+    bool has_body;
+    const void *body;
+    size_t body_length;
+} os64_dom_response_t;
+/* The host's network, all on the owner thread, none entering JS.
+ * start: begin `request` for the binding's request `token`, answering an id
+ * for cancel, or 0 when it could not be begun (the request fails as a
+ * network error); its answer comes back through os64_dom_fetched.
+ * cancel: the id's answer is no longer wanted (a fetch aborted, an XHR's
+ * abort(), a page leaving); a cancelled request never answers.
+ * run: a synchronous XMLHttpRequest's request, run to its end before this
+ * returns, filling `*response`, which stays the host's until `release`;
+ * false when it could not be run, which the page sees as a network error.
+ * The run asks `stop(stop_ctx)` between its waits and gives up when it says
+ * yes: the binding's answer is the script task's own budget (the task's
+ * deadline, and libjs's cancel), so a synchronous request ends when the
+ * task that made it would, as one mechanism.
+ * With no network, every request is a network error. Copied; NULL removes
+ * it. Install before the first script. */
+typedef struct {
+    uint64_t (*start)(void *opaque, const os64_dom_request_t *request, uint32_t token);
+    void (*cancel)(void *opaque, uint64_t id);
+    bool (*run)(void *opaque, const os64_dom_request_t *request, bool (*stop)(void *stop_ctx), void *stop_ctx,
+                os64_dom_response_t *response);
+    void (*release)(void *opaque, os64_dom_response_t *response);
+    void *opaque;
+} os64_dom_network_t;
+void os64_dom_set_network(os64_dom_t *dom, const os64_dom_network_t *network);
+/* The answer to request `token`, as ONE TASK: the bytes are copied into the
+ * runtime's memory (a body the runtime has no room for is the runtime's
+ * memory limit, as any allocation a script makes is), the fetch's promise
+ * is settled or the XMLHttpRequest's events fire, and the microtasks run.
+ * An answer for a token nothing waits on (aborted, or after drain) does
+ * nothing. The outcome is the task's, as os64_dom_dispatch's is. */
+os64_js_status_t os64_dom_fetched(os64_dom_t *dom, uint32_t token, const os64_dom_response_t *response,
+                                  os64_js_outcome_t *outcome);
+/* How many requests the binding has out. os64_dom_drain cancels each
+ * through the network's cancel and forgets it. */
+size_t os64_dom_fetches_pending(const os64_dom_t *dom);
+/* Whether request `token` is out, so its answer would run a task. */
+bool os64_dom_fetch_waiting(const os64_dom_t *dom, uint32_t token);
 
 #pragma GCC visibility pop
 #endif

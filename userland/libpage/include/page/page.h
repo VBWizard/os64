@@ -400,6 +400,19 @@ int32_t os64_page_nforms(const os64_page_t *page);
 const os64_page_form_t *os64_page_form(const os64_page_t *page, int32_t i);
 int32_t os64_page_form_for(const os64_page_t *page, const os64_html_node_t *node);
 
+// HTML's "constructing the entry list" for the form element `form`, as a
+// script's `new FormData(form)` asks it: the entries a form.submit() would
+// send (no submitter), in order, each handed to `each` (name and value
+// UTF-8, borrowed for the call; a file control's value is its file's name,
+// "" while nothing can choose one). Builds a model of `doc` over `state`
+// for the asking and frees it. A form the document does not hold answers
+// no entries. -1 when memory ran out, possibly after some entries.
+int64_t os64_page_form_entries(const os64_html_document_t *doc, const char *document_url, os64_page_state_t *state,
+                               const os64_html_node_t *form,
+                               void (*each)(void *opaque, const char *name, size_t name_len, const char *value,
+                                            size_t value_len, bool is_file),
+                               void *opaque);
+
 int32_t os64_page_ncontrols(const os64_page_t *page);
 const os64_page_control_t *os64_page_control(const os64_page_t *page, int32_t i);
 int32_t os64_page_control_for(const os64_page_t *page, const os64_html_node_t *node);

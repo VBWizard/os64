@@ -30,10 +30,24 @@ struct os64_fetch {
     os64_fetch_options_t opt;
     char user_agent[OS64_FETCH_AGENT_MAX];
     char accept[OS64_FETCH_ACCEPT_MAX];
+    bool accept_given;                          // `accept` was passed, empty or not
     char accept_get[OS64_FETCH_ACCEPT_MAX];     // empty: `accept` on a GET too
     char extra[OS64_FETCH_EXTRA_MAX];
     char content_type[OS64_FETCH_CONTENT_TYPE_MAX];
+    char method_name[OS64_FETCH_METHOD_MAX];    // empty: `method`
+    char body_headers[OS64_FETCH_EXTRA_MAX];
     os64_fetch_method_t method; // current request; opt.method is the initial method
+
+    // One hop's request, composed before its dial, and the fields it carries.
+    // Here rather than on the stack because the caller's fields may be as
+    // long as OS64_FETCH_EXTRA_MAX, and a fetch runs on threads whose stacks
+    // are not the library's to choose. Room for each variable part at its
+    // longest (the target, the Host line's host, the caller's fields), and
+    // 256 for the fixed text.
+    char request[HTTP_TARGET_MAX + HTTP_HOST_MAX + OS64_FETCH_AGENT_MAX + OS64_FETCH_ACCEPT_MAX +
+                 2 * OS64_FETCH_EXTRA_MAX + OS64_FETCH_HOP_FIELDS_MAX + OS64_FETCH_CONTENT_TYPE_MAX +
+                 HTTP_METHOD_NAME_MAX + 256];
+    char hop_extra[OS64_FETCH_EXTRA_MAX + OS64_FETCH_HOP_FIELDS_MAX];
 
     // One conversation with the world: the connection, the stream reading
     // it, and the head that came back. A redirect throws all three away and
@@ -81,6 +95,15 @@ static bool cancelled(os64_fetch_t *f)
 static bool cancel_predicate(void *ctx)
 {
     return cancelled((os64_fetch_t *)ctx);
+}
+
+// Whether the current request carries the caller's body: a POST does, and
+// a method by name does unless it is GET or HEAD.
+static bool sends_body(const os64_fetch_t *f)
+{
+    if (f->method_name[0] != '\0')
+        return !os64_streq(f->method_name, "GET") && !os64_streq(f->method_name, "HEAD");
+    return f->method == OS64_FETCH_METHOD_POST;
 }
 
 static void proxy_facts(const fetch_proxy_t *p, bool *via, char *host, size_t cap, uint16_t *port)
@@ -240,7 +263,8 @@ static bool hop_followed(os64_fetch_t *f, os64_fetch_hop_t *hop, fetch_proxy_t *
     os64_fetch_verdict_t verdict = OS64_FETCH_HOP_DEFAULT;
     if (f->opt.on_hop != NULL)
         verdict = f->opt.on_hop(f->opt.ctx, hop);
-    if (verdict == OS64_FETCH_HOP_STOP)
+    // A method by name belongs to a caller that rewrites its own redirects.
+    if (verdict == OS64_FETCH_HOP_STOP || f->method_name[0] != '\0')
         return false;
     switch (hop->kind) {
         case OS64_FETCH_HOP_WHOLE:
@@ -370,7 +394,7 @@ static bool request_extras(os64_fetch_t *f, char *out, size_t cap, bool encrypte
     extras_for_hop(f, out, cap, encrypted);
     if (!f->opt.headers_for)
         return true;
-    char dynamic[OS64_FETCH_EXTRA_MAX];
+    char dynamic[OS64_FETCH_HOP_FIELDS_MAX];
     os64_memset(dynamic, 0xff, sizeof(dynamic));
     dynamic[0] = '\0';
     os64_url_t url;
@@ -437,10 +461,17 @@ static void keep_field(os64_fetch_keep_t *k, char *field, const char *value, siz
     field[at + len] = '\0';
 }
 
+// Every field of a FINAL head, and nothing of an interim one: http.c offers
+// a field only once its head's status is 200 or more (header_take and the
+// over-long path), so a 1xx's fields never reach on_header, the kept
+// caching fields or on_set_cookie. A CORS check made of what on_header
+// heard is made of the answer alone (tools/test_fetch_host.c pins it).
 static void response_header(void *ctx, const char *name, size_t name_len,
                              const char *value, size_t value_len)
 {
     os64_fetch_t *f = ctx;
+    if (f->opt.on_header != NULL)
+        f->opt.on_header(f->opt.ctx, name, name_len, value, value_len);
     os64_fetch_keep_t *k = &f->head.keep;
     static const struct { const char *name; size_t at; } kKept[] = {
         {"cache-control", offsetof(os64_fetch_keep_t, cache_control)},
@@ -532,28 +563,29 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
 
         bool encrypted = os64_streq(f->current.scheme, "https") && !f->proxy.inUse;
         // Compose before dialing so a refused callback costs no connection.
-        // Room for each variable part at its longest (the target, the Host
-        // line's host, the caller's fields), and 256 for the fixed text.
-        char request[HTTP_TARGET_MAX + HTTP_HOST_MAX + OS64_FETCH_AGENT_MAX + OS64_FETCH_ACCEPT_MAX + 2 * OS64_FETCH_EXTRA_MAX + OS64_FETCH_CONTENT_TYPE_MAX + 256];
-        char extraForHop[2 * OS64_FETCH_EXTRA_MAX];
-        if (!request_extras(f, extraForHop, sizeof(extraForHop), encrypted)) {
+        char *request = f->request, *extraForHop = f->hop_extra;
+        if (!request_extras(f, extraForHop, sizeof(f->hop_extra), encrypted)) {
             os64_strcopy(f->detail.why, sizeof(f->detail.why), "per-hop headers were refused or malformed");
             return cancelled(f) ? OS64_FETCH_INTERRUPTED : OS64_FETCH_REQUEST_FAILED;
         }
         if (f->opt.headers_for && cancelled(f))
             return OS64_FETCH_INTERRUPTED;
-        const char *accept = f->method == OS64_FETCH_METHOD_GET && f->accept_get[0] ? f->accept_get
-                                                                                     : f->accept;
+        bool get_accept = f->method == OS64_FETCH_METHOD_GET && f->accept_get[0];
+        const char *accept = get_accept ? f->accept_get : f->accept;
         http_request_extras_t extras = {
             .user_agent    = f->user_agent[0] ? f->user_agent : NULL,
-            .accept        = accept[0] ? accept : NULL,
+            .accept        = get_accept || f->accept_given ? accept : NULL,
             .extra_headers = extraForHop[0] ? extraForHop : NULL,
             .method = f->method == OS64_FETCH_METHOD_POST ? HTTP_METHOD_POST : HTTP_METHOD_GET,
-            .body_len = f->method == OS64_FETCH_METHOD_POST ? f->opt.body_len : 0,
+            .body_len = sends_body(f) ? f->opt.body_len : 0,
+            .body_present = sends_body(f) && f->opt.body != NULL,
             .content_type = f->method == OS64_FETCH_METHOD_POST && f->content_type[0]
                                 ? f->content_type : NULL,
+            .method_name = f->method_name[0] ? f->method_name : NULL,
+            .body_headers = f->body_headers[0] ? f->body_headers : NULL,
+            .identity = f->opt.identity,
         };
-        if (!http_request(request, sizeof(request), &f->current, f->proxy.inUse, &extras)) {
+        if (!http_request(request, sizeof(f->request), &f->current, f->proxy.inUse, &extras)) {
             os64_strcopy(f->detail.why, sizeof(f->detail.why),
                          "the request does not fit, or a header holds a byte a header cannot");
             return OS64_FETCH_REQUEST_FAILED;
@@ -639,7 +671,7 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
         // A redirect's caching fields are not its target's.
         os64_memset(&f->head.keep, 0, sizeof(f->head.keep));
         size_t head_sent = 0, body_sent = 0;
-        bool head_done = false, body_done = f->method != OS64_FETCH_METHOD_POST || !f->opt.body_len;
+        bool head_done = false, body_done = !sends_body(f) || !f->opt.body_len;
         unsigned interim = 0;
         http_head_result_t hrc;
         for (;;) {
@@ -760,7 +792,8 @@ static uint64_t gzip_limit_for(const http_response_t *reply)
 // whatever it has not learned is refused by name.
 static os64_fetch_status_t body_prepare(os64_fetch_t *f)
 {
-    // A 204 and a 304 carry NO body whatever their headers say (RFC 9112
+    // A 204, a 205, a 304 and a HEAD's reply carry NO body whatever their
+    // headers say (RFC 9112
     // §6.3: a Content-Length or a Content-Encoding on a 304 describes the
     // representation that was NOT sent), so both the framing and the
     // coding are cleared here — the framing forced to zero bytes so the
@@ -770,8 +803,12 @@ static os64_fetch_status_t body_prepare(os64_fetch_t *f)
     // headers as metadata; head_fill has already copied them. A 304 is
     // reachable: a caller may send If-Modified-Since in extra_headers. 1xx
     // never reaches here — the head reader consumes interim replies and
-    // refuses 101.
-    if (f->reply.status == 204 || f->reply.status == 304) {
+    // refuses 101. A 205 carries none either (RFC 9110 § 15.3.6), and
+    // neither does the reply to a HEAD, whose Content-Length is the length
+    // of what a GET WOULD have sent: framed by it, the read would wait for
+    // bytes no server sends until the idle deadline.
+    if (f->reply.status == 204 || f->reply.status == 205 || f->reply.status == 304 ||
+        os64_streq(f->method_name, "HEAD")) {
         f->reply.hasLength = true;
         f->reply.length = 0;
         f->reply.transferEncoding[0] = '\0';
@@ -1004,9 +1041,16 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
     f->trust = f->opt.trust;              // caller-owned: trust_owned stays false
     f->io.handle = -1;
     f->method = f->opt.method;
+    bool named = f->opt.method_name != NULL;
+    if (named && os64_strcopy(f->method_name, sizeof(f->method_name), f->opt.method_name) >=
+                     sizeof(f->method_name))
+        f->method_name[0] = '\0';                   // judged below as no name at all
     if ((f->method != OS64_FETCH_METHOD_GET && f->method != OS64_FETCH_METHOD_POST) ||
         (f->opt.body_len && !f->opt.body) ||
-        (f->method == OS64_FETCH_METHOD_GET &&
+        (named && (f->method_name[0] == '\0' || f->method != OS64_FETCH_METHOD_GET ||
+                   f->opt.content_type != NULL || (f->opt.body_len && !sends_body(f)))) ||
+        (!named && f->opt.body_headers != NULL) ||
+        (!named && f->method == OS64_FETCH_METHOD_GET &&
          (f->opt.body || f->opt.body_len || f->opt.content_type))) {
         os64_strcopy(f->detail.why, sizeof(f->detail.why), "invalid request method or body options");
         f->status = OS64_FETCH_REQUEST_FAILED;
@@ -1015,6 +1059,7 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
 
     // The caller's strings, copied now so they need not outlive the call;
     // one that does not fit is a header this library will not send.
+    f->accept_given = opt != NULL && opt->accept != NULL;
     if ((opt && opt->user_agent &&
          os64_strcopy(f->user_agent, sizeof(f->user_agent), opt->user_agent) >= sizeof(f->user_agent)) ||
         (opt && opt->accept &&
@@ -1024,7 +1069,9 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
         (opt && opt->content_type &&
          os64_strcopy(f->content_type, sizeof(f->content_type), opt->content_type) >= sizeof(f->content_type)) ||
         (opt && opt->extra_headers &&
-         os64_strcopy(f->extra, sizeof(f->extra), opt->extra_headers) >= sizeof(f->extra))) {
+         os64_strcopy(f->extra, sizeof(f->extra), opt->extra_headers) >= sizeof(f->extra)) ||
+        (opt && opt->body_headers &&
+         os64_strcopy(f->body_headers, sizeof(f->body_headers), opt->body_headers) >= sizeof(f->body_headers))) {
         os64_strcopy(f->detail.why, sizeof(f->detail.why), "a request header is longer than this will send");
         f->status = OS64_FETCH_REQUEST_FAILED;
         return f;
@@ -1034,11 +1081,15 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
     // composes, and the refusal must not cost a connection to find out.
     http_request_extras_t extras = {
         .user_agent    = f->user_agent[0] ? f->user_agent : NULL,
-        .accept        = f->accept[0] ? f->accept : NULL,
+        .accept        = f->accept_given ? f->accept : NULL,
         .extra_headers = f->extra[0] ? f->extra : NULL,
         .method = f->method == OS64_FETCH_METHOD_POST ? HTTP_METHOD_POST : HTTP_METHOD_GET,
         .body_len = f->opt.body_len,
+        .body_present = sends_body(f) && f->opt.body != NULL,
         .content_type = f->content_type[0] ? f->content_type : NULL,
+        .method_name = f->method_name[0] ? f->method_name : NULL,
+        .body_headers = f->body_headers[0] ? f->body_headers : NULL,
+        .identity = f->opt.identity,
     };
     http_request_extras_t get_extras = extras;
     get_extras.accept = f->accept_get[0] ? f->accept_get : NULL;

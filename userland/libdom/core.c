@@ -34,8 +34,23 @@ int d_dictionary(JSContext *ctx, int argc, JSValueConst *argv, int at)
     return 1;
 }
 
+/* ONE DOMEXCEPTION FOR THE BINDING. A refusal by a WebIDL error name is a
+ * TypeError or a RangeError thrown as the engine's own; any other name is a
+ * DOMException with that name and its legacy code (exception.c), once the
+ * DOMException row has installed it; with the modern switch off there is
+ * no DOMException to make, and it is an Error carrying the name. The
+ * binding is reached through its anchor without d_context, which itself
+ * throws through here. */
 JSValue d_error(JSContext *ctx, const char *name, const char *message)
 {
+    if (os64_streq(name, "TypeError")) return JS_ThrowTypeError(ctx, "%s", message);
+    if (os64_streq(name, "RangeError")) return JS_ThrowRangeError(ctx, "%s", message);
+    JSClassID id = os64_js_class_id(&anchor_slot);
+    JSValue anchor = JS_GetClassProto(ctx, id);
+    os64_dom_t *dom = JS_GetOpaque(anchor, id);
+    JS_FreeValue(ctx, anchor);
+    if (dom != NULL && !dom->closed && dom->exception_prototype != NULL)
+        return d_dom_exception(dom, ctx, name, message);
     JSValue error = JS_NewError(ctx);
     if (JS_IsException(error)) return error;
     JSValue text = JS_NewString(ctx, name);
@@ -353,6 +368,8 @@ void os64_dom_drain(os64_dom_t *dom)
     d_storage_drain(dom);
     d_event_drain(dom);
     d_timer_drain(dom);
+    /* The requests out are cancelled with the host and forgotten. */
+    d_fetch_drain(dom);
     for (DValue *entry = dom->values; entry != NULL; entry = entry->next) {
         JS_FreeValueRT(dom->engine, entry->value);
         entry->value = JS_UNDEFINED;
@@ -371,6 +388,7 @@ void os64_dom_free(os64_dom_t *dom)
         query = next;
     }
     d_timer_free(dom);
+    d_fetch_free(dom);
     d_window_free(dom);
     d_view_free(dom);
     d_storage_free(dom);
@@ -390,9 +408,9 @@ void os64_dom_free(os64_dom_t *dom)
 }
 
 size_t os64_dom_bytes(const os64_dom_t *dom) { return dom != NULL ? dom->bytes : 0; }
-/* The three registries: wrappers and other held values, listener callbacks,
- * and timer callbacks with their arguments. */
+/* The four registries: wrappers and other held values, listener callbacks,
+ * timer callbacks with their arguments, and what the requests out hold. */
 size_t os64_dom_registry_count(const os64_dom_t *dom)
 {
-    return dom != NULL ? dom->retained + dom->listeners_held + dom->timers_held : 0;
+    return dom != NULL ? dom->retained + dom->listeners_held + dom->timers_held + dom->requests_held : 0;
 }

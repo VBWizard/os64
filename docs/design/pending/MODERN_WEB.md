@@ -1838,3 +1838,281 @@ missing `getRootNode`, `isEqualNode`, `isSameNode`, `compareDocumentPosition`
 and `normalize`, which an Attr will answer when Node has them; an Attr kept
 until the page goes, about 270 bytes of the default budget each. Not built:
 the brief's answers for those five Node members, Node having none.
+
+### Slice 2, as built
+
+Built by Opus on `opus/tmw-2-fetch`, from MODERN_WEB_BRIEFS.md § Slice 2:
+a script's requests. The origin and CORS rules were written first as a
+design (`docs/design/pending/ORIGIN.md`), read by Fable before any code
+(eight rulings, six requirements, A to F), and are kept there as built;
+this section is the record of the slice around them. Read cold by a fresh
+Opus after the build, and the findings fixed one commit each.
+
+**What was built.**
+
+- **`libway/origin.c`** (`way/origin.h`), pure judgements with no I/O:
+  an origin and its serialization, same origin and the same-site
+  stand-in, the method and header lists, when a request is preflighted,
+  the preflight's lines and its judgement, the preflight cache, the hop's
+  decision and response type, the redirect-taint, credentials across
+  redirects and `Authorization`'s strip, the CORS check, the exposed
+  headers, the `Origin` header and mixed content. Every walk over a list
+  a page or a server sizes is n log n, a server's list capped at
+  `WAY_CORS_LIST_MAX` elements, a longer one read as a list that does
+  not parse. ONE origin for the whole browser (ruling 8): 1a's
+  `d_origin` is `way_origin_serialize`, and libway's load (a load's
+  redirect count) and yonder's quirks-mode sheets compare through
+  `way_origin_same`; their private copies are gone, and with them a
+  comparison that took `http://a/` and `http://a:80/` for two origins.
+- **libfetch**: a method by name (any token; the library then follows
+  no redirect and ends `REDIRECT_STOPPED`), the four representation
+  headers a page may set, every head field heard (`on_header`),
+  `identity` for a Range, a HEAD's reply and a 205 bodiless whatever
+  their framing says, and 8 KiB of caller fields (the per-hop request
+  moved off the stack into the fetch object).
+- **`yonder/fetch_job.c`, the job**: `yonder_fetch_run` drives the Fetch
+  standard's main fetch hop by hop, asking origin.c every question, with
+  libfetch asked one hop at a time. An opaque body is never read; a
+  `data:` URL is answered without the wire under the same `max_body`
+  (16 MiB) as a network one, its text capped too (requirement A); the
+  head is kept whole up to 64 KiB or the fetch fails and says so. A
+  hop's `Set-Cookie` is heard inside the open, before the CORS check can
+  fail it (requirement C). The product handed up is FILTERED: libdom
+  never sees a response it may not expose, and a network error carries
+  nothing. ONE path for every caller: `fetch` and an asynchronous
+  XMLHttpRequest are pool jobs, a synchronous one runs the same function
+  inline on the window. Script requests bypass the HTTP cache (ruling 5).
+- **libdom's five rows** (LIBDOM.md § Slice 2's rows): `DOMException`;
+  `AbortController`/`AbortSignal`; `Blob`/`File`/`FormData`;
+  `fetch`/`Headers`/`Request`/`Response`; `XMLHttpRequest` with its
+  upload and `ProgressEvent`. A body crossing into the engine is the
+  runtime's memory like any allocation a script makes (requirement B,
+  the sticky LIMIT, with a case). A network error tells the page one
+  fixed thing, "Failed to fetch"; the reason stays in the page's record.
+- **One DOMException.** Every refusal the binding throws by a standard
+  name, the older rows' included (1a's QuotaExceededError, 0c's and 1b's
+  InvalidCharacterError, HierarchyRequestError and the rest), is a real
+  DOMException with its legacy code once the switch has installed the
+  interface; TypeError and RangeError are the engine's own; with the
+  switch off a refusal is an Error carrying its name, as before.
+- **One EventTarget.** Every plain target registers through
+  `d_event_target` with its resolver; where its entry lives (the
+  object's opaque, a resolver's on-demand registry entry as 1b's
+  MediaQueryList has, or in the object for a class a page makes per
+  request: AbortSignal, XMLHttpRequest and its upload) is the class's
+  choice, documented once in internal.h, and the listener records, the
+  methods and the dispatch are the same for all three.
+- **The WPT runner serves two sites** (`wpt.test`, its subdomains, and
+  `wpt-alt.test`) from the one checkout, fills wptserve's host and port
+  templates, and answers a fetch job's request as wptserve answers a
+  static file, its `.headers` sidecars included; a `.py` handler is a
+  network error. The page record has a line per request
+  (`request GET <address>: 200 cors, 0 hops`, or a FAILED line with the
+  reason).
+
+**The seams, as they ended.**
+
+| Seam | What it is now |
+|---|---|
+| `os64_dom_set_network` (`start`, `run`, `release`, `cancel`) | the binding's host for a script's requests: `start` submits one and answers an id (0 is a network error), `run` runs a synchronous one to its end on the window thread, handed the `stop` below |
+| `os64_dom_fetched` | an answer, as one task: the bytes copied into the runtime's memory, the promise settled or the XHR's events fired, the microtasks run |
+| `yonder_scripts_options_t.request/.run/.release`, `yonder_scripts_answered` | the same, through the scripts host; a page's departure retires its runtime, whose drain cancels the requests still out |
+| `yonder_fetch_run`, `yonder_fetch_release` | the job, a pool job's `run` or called inline; its cancellation predicate is the pool's or the script task's |
+| `way/origin.h` | every origin and CORS question, one copy; libdom's guards ask the same lists the job does |
+| `way_preflight_t` | the browser's preflight cache, every page's, with its own lock |
+| `DValue.listeners_changed` | the plain target's listener-change hook; called after every add, removal, handler set and once-removal; abort.c is its one reader |
+| `d_signal_fetch_answered`, `d_signal_fetch_settled` | a fetch's abort algorithm and its answered Response, knowing each other by C pointer both ways |
+| `tools/test_fetch_fake.inc` | libfetch faked by its contract, recording each request, for the job's host, the scripted-page host and the WPT runner |
+
+**The locks.** A hop takes the jar's lock (choosing cookies, hearing
+them) and the preflight cache's (asking, storing, clearing), each
+briefly and NEVER one inside the other, and holds neither across
+libfetch or across a call back into the job. A synchronous XHR runs the
+job on the window thread, so nothing on the window thread holds either
+while it runs: the window takes them only through those same calls.
+libfetch's own credential rule (keep `Cookie` and `Authorization` to
+the TYPED origin) never fires inside a job, because each hop is typed
+afresh (ruling 2); the standard's rule replaces it there and libfetch
+keeps its own for its other callers.
+
+**A synchronous XMLHttpRequest and a script out of time are one
+mechanism.** The run is handed a `stop` that is the script task's own
+budget (`os64_js_check_budget`: the task's deadline, Settings' script
+seconds, or libjs's cancel), asked by the job before every hop and by
+libfetch before every wait. A request that outlives its task fails as a
+network error and the task ends LIMIT/EXECUTION, as any script out of
+time does; what ends a script ends its request, through the same door.
+Nothing polls the window while it runs, so no event is taken early,
+deferred or reordered: the person's input waits in the window's queue
+as it does behind any running script. The bound is the task's budget
+plus at most one of libfetch's waits (its 30 s idle deadline), since a
+wait is not interrupted; booked.
+
+**AbortSignal's weak sets.** "Source signals" and "dependent signals"
+are DOM's weak sets: a link is a C record on both lists holding neither
+object, each signal's finalizer unlinks itself from the other side (a
+collection may take the two in either order), and no engine internals
+are read (the build before this read QuickJS's private refcount).
+Dependents are flattened and kept in link order, the order an abort
+runs them. DOM's GC clause keeps a dependent someone could still
+observe: while it has a live `abort` listener or a pending algorithm and
+is not aborted, its links hold it, and the hold is released at exactly
+three points, each pinned by a DOM host case: (1) the dependent is
+aborted (by any source, so every other source lets it go); (2) its last
+abort listener goes, which the listener-change hook reports and nothing
+else reads; (3) its source aborts. Ten thousand dropped `any()`
+dependents and ten thousand dropped Request signals leave the set empty
+after a collection. A Response holds its request's signal until its body
+settles, so an abort after the answer still errors the body. Making the
+links is linear in what the page hands over: a dependent is linked only
+by the call that makes it, with no page code between its links, so a
+duplicate is one comparison (the source's last link) and a dependent
+source is flattened once per new dependent. The DOM host counts the
+steps (`d_signal_steps`): `AbortSignal.any` of 65,536 distinct signals
+takes 131,072 (it took 2^32 when each link walked the dependent's
+sources), 1,024 copies of a 1,024-source dependent 2,048 (538 million
+before).
+
+**Libjs patch 0010.** The merge of 0b, 1a, 4, 1b and 0c shifted the
+scripted-page host's allocation numbering onto an upstream bug: a
+failed allocation while the parser emits bytecode leaves the buffer's
+sticky error unread, and `js_create_function` transformed the cut-short
+bytecode (an ASan SEGV in 1b's `loop_view_history_short`, cut 17 of
+138). Fable's ruling put the check at `js_create_function`'s entry,
+before any transform and before the child loop; a failed emit is now an
+out-of-memory exception. Two proofs: `test_js_runtime_host.sh
+--compile-failure` cuts each allocation of a script with a nested
+function on the target core (every cut is the value or an InternalError,
+some "out of memory"; without the patch the cuts answer "bytecode buffer
+overflow" and the case fails), and the scripted-page host is green,
+with `loop_view_refetch_short` now cutting through its scripts' compile.
+The instrumented engine reaches four more unchecked parser paths, one
+an assertion; DEBTS.md's row replaced the one the patch paid.
+
+**Numbers.** WPT, before the slice → its head (passes of tests run;
+`[required]` is what needs the switch, none of it passing with the
+switch off):
+
+| Directory | Before | After | `[required]` | `[excluded]` pages |
+|---|---|---|---|---|
+| `fetch/api/headers` | 0 | 222 of 287 | 214 | 0 |
+| `fetch/api/request` | 0 | 364 of 496 | 284 | 9 |
+| `fetch/api/response` | 0 | 186 of 277 | 165 | 2 |
+| `fetch/api/abort` | 0 | 65 of 79 | 63 | 4 |
+| `fetch/api/basic` | 0 | 148 of 392 | 106 | 3 |
+| `xhr` | 1 | 345 of 1,188 | 220 | 0 |
+
+The excluded pages need what yonder has none of: service workers, the
+Cache API, frames and other realms, MediaSource, a streaming upload.
+Most of what still fails needs a `.py` handler, `ReadableStream`, a
+document from a response, or the runner's port (DEBTS.md). Two
+subtests left `[required]`: "Consume empty FormData request (and
+response) body as text" expect no bytes, while every engine sends the
+close delimiter for an empty FormData and fails them, as yonder now
+does. The one
+DOMException made other slices' pages pass: `dom/nodes` 1,097 → 1,401
+(the pre-insertion checks, classList, createDocument's names), and with
+Slice 0d merged, 0d's 1,229 → 1,537 (its attribute refusals become real
+DOMExceptions too), `user-timing` 466 → 538, `css/cssom` 729 → 738, the
+history interface 52 → 54, each written into `[passing]`. A script
+that can fetch also ran other slices' pages to their end: `url`'s pages
+that load their test data by fetch() (urltestdata.json, IdnaTestV2.json
+and the like) stopped at "Loading data" before, and 4,074 of their
+tests pass now (150 → 4,224), and 20 of `encoding`'s, which decode
+through XMLHttpRequest, pass too (3,955 → 3,975). Every one fails with
+the switch off ("'fetch' is not defined"), so they are in `[required]`
+under a slice 2 heading. Every one of the 22 expectation
+directories passes at the head, and with `--modern-off`.
+
+The census, before the slice (the P5's kept pages of 2026-10-21 and
+2026-10-22, 601 records from 130 sites): 346 records from 85 sites name
+at least one of the seven, by name `XMLHttpRequest` 293 records (68
+sites), `fetch` 147 (49), `AbortController` 38 (11), `Headers` 21 (4),
+`Request` 17 (3), `FormData` 16 (6), `Response` 14 (1). The acceptance
+on the P5 (the chat page the plan names, and the census pages asking
+for `fetch`) is Chris's to run. In QEMU (`make run-net`, requirement D),
+a page on one origin fetched JSON from a second with a preflighted
+header (the OPTIONS asked for `x-probe` and was granted), an
+XMLHttpRequest read the same answer, and a request to an endpoint
+without `Access-Control-Allow-Origin` rejected with a TypeError; the
+page record said `200 cors, 0 hops` for the first and named the CORS
+refusal for the last.
+
+Host, at the head, all 0 failed: origin.c's 151 cases (ORIGIN.md's
+list, one each) with their step bounds, 432 checks; libfetch's host 907
+checks; the job's host (`test_yonder_fetch_job_host.sh`, 319 checks,
+every allocation failed in turn and each one failed alone); the DOM
+host 83,004 checks with 12,734 binding allocation sweeps (Slice 0d's
+included), `tools/test_dom_fetch.inc` holding the rows; the scripted-page
+host with `tools/test_yonder_requests.inc` end to end. Mutants by hand,
+one per finding fixed after the cold reads and Codex's rounds (each
+named in its commit);
+the mutant harnesses were not run (the briefs' rule).
+
+**Review.** Fable read the design before code and ruled eight questions
+(ORIGIN.md § The rulings) and six requirements, and ruled patch 0010.
+The cold read found two P1s, a P2 and a P3, each fixed in its own
+commit: a no-cors request could carry a body's non-safelisted
+`Content-Type`, because the binding wrote its own headers past the
+guard (every header the binding writes now goes through it, with a case
+and a mutant); a network error's reason reached the page (it is the
+fixed message now); a synchronous XMLHttpRequest had no stop, so a
+server trickling bytes froze the window without bound (the mechanism
+above, with a case and a mutant); and the preflight cache's lock
+comment claimed more than the lock held. Merging the slices that landed
+first raised seven questions the builder put to Fable, and all seven
+stood: weak sets with no engine internals, honouring DOM's GC clause at
+the three release points; one EventTarget; one origin comparison; one
+DOMException; a network error that tells the page nothing; and the
+synchronous request's stop as the task's own budget. A second cold read
+found a quadratic in a signal's links (now linear, held by step counts)
+and three P3s. Codex's first round found one P1 and eight P2s: the P1
+(an interim head's fields) already held in libfetch and is now pinned;
+four were fixed; two were declined with the standards' own words and
+their rules pinned (a known zero is not lengthComputable; a data: URL's
+`;base64` follows spaces only); two were declined as what-ifs. Its
+second round found ten P2s, nine fixed (among them a preflighted URL
+kept before its grants, the multipart parser's short headers, whole
+delimiters and empty body, a body's stream closing at its one chunk,
+the data: URL's MIME type serialized whole, the quoted-comma-aware
+"extract a MIME type", and a Request's referrer started over by a
+non-empty init) and one declined with WebIDL's enumeration setter rule.
+Fable then read origins and CORS against the tree and approved them,
+with two text items, both done: the "no Origin on HEAD" row was the
+standard's own rule and went, and a redirect's Referrer-Policy was
+booked. Slice 0d merged in after that (its attribute errors now real
+DOMExceptions, with a case for their codes), and Codex's third round
+found six P2s: five fixed (a multipart preamble skipped, a part header
+read whole or the body refused, a body's type taken by "extract a MIME
+type" serialized, an errored body's cancel() answering its error, a
+URLSearchParams body's author charset said as UTF-8) and one booked
+(XMLHttpRequest.send(document)). Its fourth round found four P2s, all
+fixed: XMLHttpRequest's final encoding computed apart from its final
+MIME type, as XHR says, and the final MIME type kept whole (a blob's
+type and the override with every parameter); a multipart parameter's
+quoted value passed over whole; and a urlencoded field's leading BOM
+kept. Its fifth found three: Blob.slice()'s offsets converted as
+[Clamp] long long before their sign is judged, an Accept the page set
+empty sent empty (libfetch sends an empty Accept for one), and the
+author charset rewrite made through libway's walk, so a quoted ';' is
+the value's. Its sixth found three: each preflight branch cleared under
+the redirect-taint it was made with (a later hop's taint had let an
+earlier grant survive a network error), a body with no bytes a stream
+closed at its creation, and a Request made from a Request taking the
+input's body with its stream locked.
+
+**Booked** (DEBTS.md § A script's requests, unless named): the same-site
+stand-in; SameSite not enforced for script requests; the HTTP cache
+bypassed; the synchronous request's bound; no `ReadableStream` or
+streaming bodies; no document from a response; Subresource Integrity
+failing closed; `FormData(form)` reading the window's forms only; an
+address libpage's grammar refuses; a clone's body not reached by an
+abort; an XHR the host would not start erroring inside `send()`; a
+request the pool has no slot for; non-enumerable operations; QuickJS's
+Proxy `ownKeys` duplicates; the WPT runner's port; a released reader's
+`closed` not marked handled; a redirect's `Referrer-Policy` not applied;
+`XMLHttpRequest.send(document)` sending the object's string.
+QuickJS's four further parser paths (§ libjs) become libjs patch 0011, a
+small PR of its own right after this slice merges (Fable's ruling); the
+row stays until it lands. The deliberate departures from the standard are
+DIVERGENCES.md § The browser's script requests.

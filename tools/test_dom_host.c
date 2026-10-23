@@ -14,6 +14,9 @@ int64_t os64_read(int32_t handle, void *buffer, size_t size)
 { (void)handle; (void)buffer; (void)size; return -1; }
 int64_t os64_close(int32_t handle)
 { (void)handle; return 0; }
+/* libway's preflight cache lock yields under contention; one thread never
+ * contends. */
+void os64_yield(void) {}
 /* A clock that stands still unless a case makes it step, so a deadline is
  * met only where a case means it to be. */
 static int64_t dom_clock = 10000000, dom_clock_step;
@@ -223,6 +226,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_view.inc"
 #include "test_dom_implementation.inc"
 #include "test_dom_attributes.inc"
+#include "test_dom_fetch.inc"
 #define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
     "function throws(n,f){let ok=false;try{f()}catch(e){ok=e.name===n}assert(ok,n)}"
 
@@ -308,7 +312,8 @@ static void heard_miss(void *opaque, const char *name)
     snprintf(m->names+at,sizeof(m->names)-at,"%s|",name);
     m->heard++;
 }
-/* One form of lookup, and the names it should be heard to miss. */
+/* One form of lookup, and the names it should be heard to miss. The cases'
+ * missing name, noSuchGlobal, is one no row installs. */
 static void miss_form(DomFixture *f, MissFixture *m, const char *source, const char *heard, const char *what)
 {
     *m=(MissFixture){0};
@@ -326,14 +331,14 @@ static void dom_global_miss_cases(void)
     JSContext *ctx=os64_js_context(f.runtime,OS64_JS_ABI_ID,&outcome);
     MissFixture m={0};
     JS_SetGlobalMissHandler(ctx,heard_miss,&m);
-    miss_form(&f,&m,"assert(typeof fetch==='undefined');","fetch|","global miss: typeof a bare name");
-    miss_form(&f,&m,"assert(window.fetch===undefined);","fetch|","global miss: a property of window");
-    miss_form(&f,&m,"assert(window['fetch']===undefined&&globalThis.fetch===undefined);","fetch|fetch|",
+    miss_form(&f,&m,"assert(typeof noSuchGlobal==='undefined');","noSuchGlobal|","global miss: typeof a bare name");
+    miss_form(&f,&m,"assert(window.noSuchGlobal===undefined);","noSuchGlobal|","global miss: a property of window");
+    miss_form(&f,&m,"assert(window['noSuchGlobal']===undefined&&globalThis.noSuchGlobal===undefined);","noSuchGlobal|noSuchGlobal|",
               "global miss: a computed property, and globalThis");
-    miss_form(&f,&m,"assert(window.fetch?.('x')===undefined);","fetch|","global miss: an optional call");
-    miss_form(&f,&m,"throws('ReferenceError',()=>fetch);","fetch|",
+    miss_form(&f,&m,"assert(window.noSuchGlobal?.('x')===undefined);","noSuchGlobal|","global miss: an optional call");
+    miss_form(&f,&m,"throws('ReferenceError',()=>noSuchGlobal);","noSuchGlobal|",
               "global miss: a bare name in a closure, which still throws");
-    miss_form(&f,&m,"var r;try{fetch}catch(e){r=e.name}assert(r==='ReferenceError');","fetch|",
+    miss_form(&f,&m,"var r;try{noSuchGlobal}catch(e){r=e.name}assert(r==='ReferenceError');","noSuchGlobal|",
               "global miss: a bare name at top level, which still throws");
     miss_form(&f,&m,"(function(){assert(typeof requestAnimationFrame==='undefined')})();",
               "requestAnimationFrame|","global miss: typeof inside a function");
@@ -342,11 +347,11 @@ static void dom_global_miss_cases(void)
     miss_form(&f,&m,"assert(typeof document==='object'&&window.document===document);"
               "var mine=1;assert(window.mine===1);let scoped=2;assert(scoped===2);","",
               "global miss: what is found is not heard");
-    miss_form(&f,&m,"assert(!('fetch' in window)&&!window.hasOwnProperty('fetch'));"
-              "assert(Object.getOwnPropertyDescriptor(window,'fetch')===undefined);","",
+    miss_form(&f,&m,"assert(!('noSuchGlobal' in window)&&!window.hasOwnProperty('noSuchGlobal'));"
+              "assert(Object.getOwnPropertyDescriptor(window,'noSuchGlobal')===undefined);","",
               "global miss: in, hasOwnProperty and a descriptor are feature tests, not lookups");
     JS_SetGlobalMissHandler(ctx,NULL,NULL);
-    miss_form(&f,&m,"assert(typeof fetch==='undefined');","","global miss: nobody asked, nothing is heard");
+    miss_form(&f,&m,"assert(typeof noSuchGlobal==='undefined');","","global miss: nobody asked, nothing is heard");
     dom_script(&f,GEOMETRY_ASSERT
         "function msg(f){try{f()}catch(e){return e.message}return 'none'}"
         "var o={ok:function(){return 1},n:5},plain=5,k='bogus';"
@@ -388,8 +393,9 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--clone")){dom_clone_control_cases();dom_clone_native_cases();dom_clone_state_cap_cases();dom_clone_character_data_cases();dom_clone_allocation_cases();printf("DOM clone probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--implementation")){dom_implementation_cases();implementation_allocation_cases();printf("DOM implementation probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--attributes")){dom_attributes_cases();attributes_allocation_cases();implementation_jquery_cases();printf("DOM attributes probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--fetch")){dom_fetch_cases();printf("DOM fetch probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--events")){dom_event_cases();printf("DOM events probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
-    if(argc==2&&!strcmp(argv[1],"--modern")){dom_modern_cases();dom_storage_cases();dom_base64_cases();dom_encoding_cases();dom_screen_cases();dom_performance_cases();dom_url_cases();dom_storage_engine_cases();printf("DOM modern probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--modern")){dom_modern_cases();dom_storage_cases();dom_base64_cases();dom_encoding_cases();dom_screen_cases();dom_performance_cases();dom_url_cases();dom_storage_engine_cases();dom_fetch_cases();printf("DOM modern probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     bool mutation_mode=argc==2&&!strcmp(argv[1],"--mutants");
     dom_classic_cases();
     dom_modern_cases();
@@ -401,6 +407,7 @@ int main(int argc, char **argv)
     dom_performance_cases();
     dom_url_cases();
     dom_storage_engine_cases();
+    dom_fetch_cases();
     dom_geometry_cases();
     dom_global_miss_cases();
     dom_surface_cases();

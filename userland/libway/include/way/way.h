@@ -29,6 +29,7 @@
 #include "page/page.h"
 #include "way/cache.h"
 #include "way/jar.h"
+#include "way/origin.h"
 
 #pragma GCC visibility push(default)
 
@@ -175,9 +176,10 @@ typedef struct {
     // address typed, Back, Forward and Reload.
     char referrer[OS64_FETCH_URL_MAX];
     // way_open's own, for way_head_t.redirects: the origin of the address
-    // asked for, and the number of the first hop that left it (0 for none).
-    os64_url_t asked_origin;
-    bool asked_parsed;
+    // asked for (origin.h's, opaque and equal to nothing for an address
+    // with no tuple origin), and the number of the first hop that left it
+    // (0 for none).
+    way_origin_t asked_origin;
     uint32_t left_at;
 } way_leg_t;
 

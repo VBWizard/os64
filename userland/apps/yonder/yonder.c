@@ -48,6 +48,7 @@
 #include "scripts.h"
 #include "diag.h"
 #include "script_job.h"
+#include "fetch_job.h"
 #include "geometry.h"
 #include "events.h"
 #include "ticker.h"
@@ -2779,6 +2780,11 @@ static int64_t task_begin(yonder_scripts_t *host);
 static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
                       const os64_js_outcome_t *out, int64_t began);
 static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc, bool shown);
+static uint64_t script_request(void *opaque, uint64_t serial, uint32_t token, const os64_dom_request_t *q);
+static bool script_run(void *opaque, uint64_t serial, const os64_dom_request_t *q, bool (*stop)(void *stop_ctx),
+                       void *stop_ctx, os64_dom_response_t *response);
+static void script_release(void *opaque, os64_dom_response_t *response);
+static void request_arrived(const yonder_fetch_job_t *job, const yonder_fetched_t *got);
 static bool scripts_live(void);
 static void input_queue(InputKind kind, const os64_html_node_t *node, const os64_html_node_t *related,
                         int32_t x, int32_t y, bool was);
@@ -2814,7 +2820,8 @@ static void refresh_if_declared(void)
 // scripts read it: localStorage in the file, sessionStorage in the
 // window's image. The page stays on screen, scriptless, until the new one
 // is laid out, and stays so if that one never is (Stop, or a layout out of
-// memory).
+// memory). The requests its scripts have out go with the runtime:
+// draining it cancels each one.
 static void page_departs(void)
 {
     yonder_scripts_depart(g.page.scripts);
@@ -3780,13 +3787,14 @@ static int32_t picture_for(Page *p, const char *url)
 
 // ── The page's sheets ───────────────────────────────────────────────────
 
-// Whether two addresses share an origin: scheme, host and port.
+// Whether two addresses share an origin (libway's origin.h; an address
+// with no tuple origin shares none).
 static bool same_origin(const char *a, const char *b)
 {
-    os64_url_t ua, ub;
-    return os64_url_parse(a, &ua) == OS64_URL_OK && os64_url_parse(b, &ub) == OS64_URL_OK &&
-           os64_streq(ua.scheme, ub.scheme) && os64_streq(ua.host, ub.host) &&
-           ua.port == ub.port;
+    way_origin_t oa, ob;
+    way_origin_of(a, 0, &oa);
+    way_origin_of(b, 0, &ob);
+    return way_origin_same(&oa, &ob);
 }
 
 // Whether the first paint waits for a sheet: its media holds on this glass
@@ -7409,7 +7417,8 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .view = {view_read, view_scroll, doc}, .computed = script_computed,
         .history = {history_update, history_fragment, history_length, doc},
         .diag = diag, .encrypted = encrypted, .modern = modern,
-        .storage = s_storage, .timing = &g.stream.timing, .screen = s_screen, .zoom = script_zoom};
+        .storage = s_storage, .timing = &g.stream.timing, .screen = s_screen, .zoom = script_zoom,
+        .request = script_request, .run = script_run, .release = script_release};
     yonder_scripts_t *host = yonder_scripts_new(doc, state, &options);
     yonder_scripts_set_user_agent(host, script_user_agent, NULL);
     const os64_dom_cookies_t cookies = {script_cookies_get, script_cookies_set, host};
@@ -7552,6 +7561,199 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
     badge_follow();
     status_rest(line);
     yonder_scripts_set_note(host, line);
+}
+
+// ── A script's requests (MODERN_WEB.md § Slice 2) ──────────────────────
+//
+// fetch() and XMLHttpRequest hand their request to the window: a fetch job
+// (fetch_job.h) on the pool, or, for a synchronous XMLHttpRequest, the same
+// job run here on the window thread. Its answer is the page's task when it
+// is reaped. The page departing cancels what is out (page_departs).
+
+// The browser's CORS preflight cache (way/origin.h), every page's; NULL
+// sends a preflight every time one is needed.
+static way_preflight_t *s_preflight;
+
+// The page's origin for a job, from the address its scripts run at; an
+// opaque one is this page's own, named by its serial.
+static void request_origin(uint64_t serial, way_origin_t *out)
+{
+    yonder_scripts_t *host = scripts_for(serial);
+    const char *url = host != NULL ? yonder_scripts_url(host) : scripts_page_url(serial);
+    way_origin_of(url, serial != 0 ? serial : 1, out);
+}
+
+// A job for a page's request, its bytes its own. NULL on no memory, and
+// for an address longer than a data: URL may be (fetch_job.h), which the
+// page sees as a network error.
+static yonder_fetch_job_t *request_job(uint64_t serial, uint32_t token, const os64_dom_request_t *q)
+{
+    size_t url_len = os64_strlen(q->url);
+    if (url_len > YONDER_FETCH_DATA_URL_MAX)
+        return NULL;
+    yonder_fetch_job_t *job = os64_calloc(1, sizeof(*job));
+    if (job == NULL)
+        return NULL;
+    job->kind = YONDER_JOB_FETCH;
+    job->page = serial;
+    job->token = token;
+    job->agent = g.way.agent;
+    job->url = os64_malloc(url_len + 1);
+    job->headers = os64_malloc(q->headers_length + 1);
+    job->body = q->body != NULL ? os64_malloc(q->body_length + 1) : NULL;
+    if (job->url == NULL || job->headers == NULL || (q->body != NULL && job->body == NULL)) {
+        yonder_fetch_release(job, NULL);
+        return NULL;
+    }
+    os64_memcpy(job->url, q->url, url_len + 1);
+    if (q->headers_length != 0)
+        os64_memcpy(job->headers, q->headers, q->headers_length);
+    job->headers[q->headers_length] = '\0';
+    job->headers_len = q->headers_length;
+    if (q->body != NULL && q->body_length != 0)
+        os64_memcpy(job->body, q->body, q->body_length);
+    job->body_len = q->body != NULL ? q->body_length : 0;
+    request_origin(serial, &job->request.origin);
+    job->request.mode = q->mode;
+    job->request.credentials = q->credentials;
+    job->request.redirect = q->redirect;
+    job->request.policy = q->policy;
+    job->request.preflight_flag = q->preflight;
+    os64_strcopy(job->request.method, sizeof(job->request.method), q->method);
+    // A referrer too long to keep whole goes as none: a cut address would
+    // name a page that is not this one.
+    const char *referrer = q->referrer != NULL ? q->referrer : "";
+    os64_strcopy(job->referrer, sizeof(job->referrer),
+                 os64_strlen(referrer) < sizeof(job->referrer) ? referrer : "");
+    job->jar = g.way.jar;
+    job->preflight = s_preflight;
+    return job;
+}
+
+static uint64_t script_request(void *opaque, uint64_t serial, uint32_t token, const os64_dom_request_t *q)
+{
+    (void)opaque;
+    yonder_fetch_job_t *job = g.pool != NULL ? request_job(serial, token, q) : NULL;
+    if (job == NULL)
+        return 0;
+    os64_work_t work = {yonder_fetch_run, yonder_fetch_release, job, YONDER_FETCH_RESERVE};
+    os64_work_id_t id = os64_work_submit(g.pool, &work);
+    if (id == 0)
+        yonder_fetch_release(job, NULL);
+    return id;
+}
+
+// The job's answer as the binding reads it, borrowed from `got`. A network
+// error's reason stays here, for the page's record (request_record): the
+// binding is handed none, and the page learns only that it failed.
+static void request_response(const yonder_fetched_t *got, os64_dom_response_t *out)
+{
+    if (got == NULL) {
+        *out = (os64_dom_response_t){.ok = false};
+        return;
+    }
+    *out = (os64_dom_response_t){
+        .ok = got->ok, .type = got->type, .status = got->status,
+        .status_text = got->status_text, .url = got->url != NULL ? got->url : "", .redirected = got->redirected,
+        .headers = got->headers, .headers_length = got->headers_len, .has_body = got->has_body,
+        .body = got->body, .body_length = got->body_len,
+    };
+}
+
+// The page's record of a request: a line per address with what came back
+// and how many redirects it took (each was a dial), and a failure said as
+// one. A synchronous one says so: it stopped the page while it ran.
+static void request_record(yonder_scripts_t *host, const yonder_fetch_job_t *job, const yonder_fetched_t *got,
+                           bool sync)
+{
+    yonder_diag_t *diag = yonder_scripts_diag(host);
+    if (diag == NULL)
+        return;
+    if (got == NULL || !got->ok) {
+        char line[OS64_FETCH_URL_MAX + 320];
+        os64_snprintf(line, sizeof(line), "%s %s: %s%s", job->request.method, job->url,
+                      got != NULL ? got->why : "out of memory", sync ? " (synchronous)" : "");
+        yonder_diag_failed(diag, "request", line);
+        return;
+    }
+    char key[OS64_FETCH_URL_MAX + 48];
+    char value[96];
+    os64_snprintf(key, sizeof(key), "request %s %s", job->request.method, job->url);
+    os64_snprintf(value, sizeof(value), "%d %s, %u hops%s", (int)got->status, way_type_name(got->type),
+                  (unsigned)got->hops, sync ? ", synchronous" : "");
+    yonder_diag_fact(diag, key, value);
+}
+
+// The document a host's page is, for the asks its task made.
+static const os64_html_document_t *scripts_doc(const yonder_scripts_t *host)
+{
+    if (host == g.page.scripts)
+        return page_doc(&g.page);
+    if (g.coming.active && host == g.coming.page.scripts)
+        return page_doc(&g.coming.page);
+    if (host == g.stream.scripts && g.stream.parser != NULL)
+        return os64_html_parser_document(g.stream.parser);
+    return NULL;
+}
+
+// A request's job was reaped: its answer is the page's task, as a timer's
+// is, and what the task asked of the widgets is performed after it.
+static void request_arrived(const yonder_fetch_job_t *job, const yonder_fetched_t *got)
+{
+    yonder_scripts_t *host = scripts_for(job->page);
+    if (host == NULL)
+        return;
+    request_record(host, job, got, false);
+    os64_dom_response_t response;
+    request_response(got, &response);
+    os64_js_outcome_t out;
+    int64_t began = task_begin(host);
+    if (!yonder_scripts_answered(host, job->token, &response, &out))
+        return;
+    task_said(host, true, "request", &out, began);
+    const os64_html_document_t *doc = scripts_doc(host);
+    if (host != g.page.scripts)
+        asks_perform(host, doc, false);
+    else if (script_rebuild())
+        asks_perform(host, doc, true);
+}
+
+// A synchronous XMLHttpRequest: the job run here, on the window thread,
+// to its end or until the script task that made it is out of time (the
+// binding's `stop`), whichever is first: the window waits for a sync
+// request exactly as long as it waits for any script. Its job and answer
+// are kept until the binding lets the answer go (script_release): the
+// binding runs one at a time.
+static yonder_fetch_job_t *s_sync_job;
+static yonder_fetched_t *s_sync_got;
+
+static bool script_run(void *opaque, uint64_t serial, const os64_dom_request_t *q, bool (*stop)(void *stop_ctx),
+                       void *stop_ctx, os64_dom_response_t *response)
+{
+    (void)opaque;
+    yonder_fetch_job_t *job = request_job(serial, 0, q);
+    if (job == NULL)
+        return false;
+    void *product = NULL;
+    // `stop` is the binding's: the script task's own deadline (and libjs's
+    // cancel), asked by the job and by libfetch before each wait.
+    (void)yonder_fetch_run(job, stop, stop_ctx, &product);
+    yonder_scripts_t *host = scripts_for(serial);
+    if (host != NULL)
+        request_record(host, job, product, true);
+    s_sync_job = job;
+    s_sync_got = product;
+    request_response(product, response);
+    return true;
+}
+
+static void script_release(void *opaque, os64_dom_response_t *response)
+{
+    (void)opaque;
+    (void)response;
+    yonder_fetch_release(s_sync_job, s_sync_got);
+    s_sync_job = NULL;
+    s_sync_got = NULL;
 }
 
 // A request for an address a script named, owning its own storage as
@@ -9207,10 +9409,10 @@ static bool coming_turn(void)
 
 // ── The doorbell ────────────────────────────────────────────────────────
 
-// A job the pool finished. A picture's or a sheet's is read here; a
-// navigation's fetch said everything it had to say down the mailbox before
-// it returned, so its job is only let go, and one finished before its
-// cancel was noticed is let go the same way.
+// A job the pool finished, read here by its kind and handed to what asked
+// for it. A navigation's fetch said everything it had to say down
+// the mailbox before it returned, so its job is only let go, and one
+// finished before its cancel was noticed is let go the same way.
 static void reaped(os64_work_id_t id, void *job, void *product)
 {
     if (*(const uint32_t *)job == YONDER_JOB_PICTURE) {
@@ -9239,6 +9441,11 @@ static void reaped(os64_work_id_t id, void *job, void *product)
     if (*(const uint32_t *)job == YONDER_JOB_SCRIPT) {
         script_arrived(job, product);
         yonder_script_release(job, product);
+        return;
+    }
+    if (*(const uint32_t *)job == YONDER_JOB_FETCH) {
+        request_arrived(job, product);
+        yonder_fetch_release(job, product);
         return;
     }
     // A fetch is done. Everything it had to say went down the mailbox
@@ -11737,6 +11944,7 @@ int main(int argc, char **argv)
     char profile[OS64_PATH_MAX];
     const char *profile_refused = yonder_settings_saved_profile(profile, sizeof(profile));
     s_storage = yonder_storage_new(profile);    // NULL keeps each page's storage for its own life
+    s_preflight = way_preflight_new();          // NULL sends every preflight
     yonder_settings_on_clear_storage(storage_clear);
     int address_arg = s_script_audit ? 2 : 1;
     const char *first = argc > address_arg ? argv[address_arg] : NULL;
@@ -11970,6 +12178,8 @@ int main(int argc, char **argv)
     yonder_scratch_free(g.paint_scratch);
     g.paint_scratch = NULL;
     way_jar_free(g.way.jar);
+    way_preflight_free(s_preflight);    // the workers that asked it are gone
+    s_preflight = NULL;
     if (g.cache != NULL)
         way_cache_close(g.cache);
     // Every page's scripts' host is gone by here, and each made its

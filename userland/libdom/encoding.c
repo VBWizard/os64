@@ -610,3 +610,65 @@ int d_encoding_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         return -1;
     return 0;
 }
+
+/* ── For the other rows: a buffer source's bytes, a Uint8Array made ─── */
+
+int d_buffer_source(os64_dom_t *dom, JSContext *ctx, JSValueConst value, const uint8_t **bytes, size_t *length)
+{
+    if (buffer_classes(ctx) < 0) return -1;
+    int kind = buffer_kind(dom, ctx, value);
+    if (kind <= 0) return kind;
+    return buffer_bytes(dom, ctx, value, bytes, length) < 0 ? -1 : 1;
+}
+
+JSValue d_uint8_array(JSContext *ctx, const uint8_t *bytes, size_t length)
+{
+    JSValue buffer = JS_NewArrayBufferCopy(ctx, bytes, length);
+    if (JS_IsException(buffer)) return buffer;
+    JSValue array = typed_over(ctx, buffer, JS_TYPED_ARRAY_UINT8);
+    JS_FreeValue(ctx, buffer);
+    return array;
+}
+
+static JSValue text_decode(JSContext *ctx, const char *label, const uint8_t *bytes, size_t length, bool keep_bom)
+{
+    DDecoder d = {0};
+    d.encoding = DEC_UTF8;
+    d.ignore_bom = keep_bom;
+    const char *name = label != NULL ? os64_html_encoding_for_label(label, os64_strlen(label)) : NULL;
+    for (int i = 0; name != NULL && i < 4; i++)
+        if (os64_streq(name, kEncodingNames[i])) d.encoding = (DecoderEncoding)i;
+    /* "decode" sniffs a BOM, which outranks the label; "UTF-8 decode" (no
+     * label) takes only UTF-8's off, which the sink does. */
+    if (label != NULL && length >= 3 && bytes[0] == 0xef && bytes[1] == 0xbb && bytes[2] == 0xbf) d.encoding = DEC_UTF8;
+    else if (label != NULL && length >= 2 && bytes[0] == 0xfe && bytes[1] == 0xff) d.encoding = DEC_UTF16BE;
+    else if (label != NULL && length >= 2 && bytes[0] == 0xff && bytes[1] == 0xfe) d.encoding = DEC_UTF16LE;
+    decoder_reset(&d);
+    /* Counted, then written, as decode does; in the runtime's memory,
+     * since what is decoded here is a response body. */
+    DDecoder counting = d;
+    DSink sink = {&counting, NULL, 0, false};
+    decode_run(&sink, bytes, length, true);
+    char *out = js_malloc(ctx, sink.used + 1);
+    if (out == NULL) return JS_EXCEPTION;
+    DSink writing = {&d, out, 0, false};
+    decode_run(&writing, bytes, length, true);
+    JSValue text = JS_NewStringLen(ctx, out, writing.used);
+    js_free(ctx, out);
+    return text;
+}
+
+JSValue d_text_decode(JSContext *ctx, const char *label, const uint8_t *bytes, size_t length)
+{
+    return text_decode(ctx, label, bytes, length, false);
+}
+
+JSValue d_utf8_decode(JSContext *ctx, const uint8_t *bytes, size_t length)
+{
+    return text_decode(ctx, NULL, bytes, length, false);
+}
+
+JSValue d_utf8_decode_without_bom(JSContext *ctx, const uint8_t *bytes, size_t length)
+{
+    return text_decode(ctx, NULL, bytes, length, true);
+}

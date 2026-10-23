@@ -46,6 +46,8 @@ pushstate-replacestate-empty-string/pushstate.html	history.pushState() with an e
 007.html	popstate event should fire before onload fires
 007.html	popstate event should not fire after onload fires
 007.html	the correct state should be restored when navigating during initial load
+008.html	history.pushState URL resolving should be done relative to the document, not the script
+008.html	history.replaceState URL resolving should be done relative to the document, not the script
 011.html	pushState should be able to set the location state
 011.html	pushed location should be reflected immediately
 011.html	pushed location should be retained after the page has loaded
@@ -65,9 +67,11 @@ history_forward.html	history forward
 history_go_minus.html	history go minus
 history_go_plus.html	history go plus
 history_pushstate.html	history pushState
+history_pushstate_err.html	history pushState SECURITY_ERR
 history_pushstate_nooptionalparam.html	history pushState NoOptionalParam
 history_pushstate_url.html	history pushState sets url
 history_replacestate.html	history replaceState
+history_replacestate_err.html	history replaceState SECURITY_ERR
 history_replacestate_nooptionalparam.html	history replaceStateNoOptionalParam
 history_state.html	history state
 pushstate-replacestate-empty-string/pushstate-base.html	history.pushState() with an empty string URL and base URL different from document's URL

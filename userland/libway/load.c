@@ -272,20 +272,6 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
     return served;
 }
 
-// A URL's port, the scheme's own (http 80, https 443) when it names none.
-static uint16_t origin_port(const os64_url_t *u)
-{
-    if (u->port != 0)
-        return u->port;
-    return os64_streq(u->scheme, "https") ? 443 : os64_streq(u->scheme, "http") ? 80 : 0;
-}
-
-// Whether two URLs are on one origin: the same scheme, host and port.
-static bool same_origin(const os64_url_t *a, const os64_url_t *b)
-{
-    return os64_streq(a->scheme, b->scheme) && os64_streq(a->host, b->host) && origin_port(a) == origin_port(b);
-}
-
 // A DOWNGRADE IS A PERSON'S DECISION, which is the whole reason libfetch
 // takes a callback: a script may not follow https into http, and somebody at
 // a keyboard may. Every other hop takes the library's own verdict. Every
@@ -300,8 +286,13 @@ static os64_fetch_verdict_t hop_ask(void *ctx, const os64_fetch_hop_t *hop)
     // limit) asks here all the same, and its number is past the followed.
     bool parsed = hop->kind == OS64_FETCH_HOP_WHOLE || hop->kind == OS64_FETCH_HOP_DOWNGRADE ||
                   hop->kind == OS64_FETCH_HOP_SELF;
-    if (s->left_at == 0 && (!s->asked_parsed || !parsed || !same_origin(&s->asked_origin, &hop->target)))
-        s->left_at = hop->number;
+    if (s->left_at == 0) {
+        way_origin_t target;
+        if (parsed)
+            way_origin_of(hop->whole, 0, &target);
+        if (!parsed || !way_origin_same(&s->asked_origin, &target))
+            s->left_at = hop->number;
+    }
     if (hop->kind != OS64_FETCH_HOP_DOWNGRADE)
         return OS64_FETCH_HOP_DEFAULT;
     char question[WAY_SENTENCE_MAX];
@@ -371,7 +362,7 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
         *why = OS64_FETCH_OK;
     leg_say(s, " fetching %s", url);
     show(s);
-    s->asked_parsed = os64_url_parse(url, &s->asked_origin) == OS64_URL_OK;
+    way_origin_of(url, 0, &s->asked_origin);
     s->left_at = 0;
 
     os64_html_options_t limits = os64_html_options_default();

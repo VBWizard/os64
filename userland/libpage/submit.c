@@ -555,3 +555,29 @@ void p_entries_free(PEntries *entries)
     entries->items = NULL;
     entries->count = entries->cap = 0;
 }
+
+int64_t os64_page_form_entries(const os64_html_document_t *doc, const char *document_url, os64_page_state_t *state,
+                               const os64_html_node_t *form,
+                               void (*each)(void *opaque, const char *name, size_t name_len, const char *value,
+                                            size_t value_len, bool is_file),
+                               void *opaque)
+{
+    os64_page_t *page = os64_page_build(doc, document_url, NULL, state);
+    if (page == NULL)
+        return -1;
+    int32_t index = os64_page_form_for(page, form);
+    int64_t result = 0;
+    if (index >= 0) {
+        // A form submitting itself, as form.submit() does: no submitter.
+        PEntries entries;
+        os64_page_what_t what = {OS64_PAGE_ACTIVATE_FORM, index, 0, 0};
+        if (!p_entry_list(page, index, -1, what, &entries))
+            result = -1;
+        for (int32_t i = 0; result == 0 && i < entries.count; i++)
+            each(opaque, entries.items[i].name, entries.items[i].name_len, entries.items[i].value,
+                 entries.items[i].value_len, entries.items[i].is_file);
+        p_entries_free(&entries);
+    }
+    os64_page_free(page);
+    return result;
+}
