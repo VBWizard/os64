@@ -478,18 +478,23 @@ target core and on the instrumented engine.
 ### Allocations the parser ignored
 
 Patch 0011a adds no export. What it changes: an out-of-memory during a
-parse is an exception (`InternalError: out of memory`) through three more
-paths where the parser ignored a failed allocation and went on:
+parse is an exception (`InternalError: out of memory`) through more paths
+where the parser ignored a failed allocation and went on:
 
 - a child definition whose constant-pool slot could not be added
   (`js_create_function` asserted on it, which ended the program);
 - a closure variable `resolve_scope_var` could not add (its failure was
   used as an index, emitted as nothing, or taken by `resolve_variables`
   as the next position to read);
+- an `arguments` or function-name binding `resolve_scope_var` could not
+  add (an enclosing function's failure was captured as a wild argument
+  slot, which crashed; the function's own was looked up as a global,
+  which answered wrongly);
 - a bytecode buffer that failed to grow, which `get_lvalue` reported as a
   SyntaxError about the script's assignment.
 
 This is not yet every path: a parse that reaches `resolve_labels` with a
 failed output buffer can still crash, a failed atom in the tokenizer's
-lookahead still reads as a SyntaxError, and a failed pseudo-variable add
-can still compile to a wrong value. DEBTS.md books them.
+lookahead still reads as a SyntaxError, a failed pseudo-variable add can
+still compile to a wrong value, and `add_eval_variables` still ignores a
+failed closure-variable add. DEBTS.md books them.

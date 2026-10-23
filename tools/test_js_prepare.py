@@ -86,12 +86,33 @@ class PrepareTests(unittest.TestCase):
                 '        if (idx < 0)\n            return -1;\n    has_global_idx:',
                 '        if (idx < 0)\n            return -1;\n        if (idx >= 0) {\n        has_idx:'):
             self.assertIn(check, source)
+        # 0011a: a failed `arguments` or function-name add in
+        # resolve_scope_var returns its failure, in the function's own scope
+        # and in an enclosing one.
+        for check in (
+                '            var_idx = add_arguments_var(ctx, s);\n'
+                '            /* os64: the binding exists, so -1 is a failed add; upstream\n'
+                '               went on to the enclosing scopes and the global */\n'
+                '            if (var_idx < 0)\n                return -1;\n',
+                '            var_idx = add_func_var(ctx, s, var_name);\n'
+                '            /* os64: the name exists, so -1 is a failed add; upstream\n'
+                '               went on to the enclosing scopes and the global */\n'
+                '            if (var_idx < 0)\n                return -1;\n',
+                '            var_idx = add_arguments_var(ctx, fd);\n'
+                '            /* os64: the binding exists, so -1 is a failed add; upstream\n'
+                '               broke out with it and captured fd->args[-1 - offset] */\n'
+                '            if (var_idx < 0)\n                return -1;\n            break;\n',
+                '            var_idx = add_func_var(ctx, fd, var_name);\n'
+                '            /* os64: the name exists, so -1 is a failed add; upstream\n'
+                '               broke out with it and captured fd->args[-1 - offset] */\n'
+                '            if (var_idx < 0)\n                return -1;\n            break;\n'):
+            self.assertIn(check, source)
         # 0011a: resolve_variables takes a failed resolve_scope_var to its
         # fail path before the atom is freed, at both calls.
-        self.assertIn('NULL, NULL, pos_next);\n            /* os64: -1 is a failed closure-variable add;', source)
+        self.assertIn('NULL, NULL, pos_next);\n            /* os64: -1 is a failed variable add;', source)
         self.assertIn('            if (pos_next < 0)\n                goto fail;\n            JS_FreeAtom(ctx, var_name);\n'
                       '            break;\n        case OP_scope_make_ref:', source)
-        self.assertIn('bc_buf, ls, pos_next);\n                /* os64: as above, -1 is a failed closure-variable add */\n'
+        self.assertIn('bc_buf, ls, pos_next);\n                /* os64: as above, -1 is a failed variable add */\n'
                       '                if (pos_next < 0)\n                    goto fail;\n'
                       '                JS_FreeAtom(ctx, var_name);', source)
         # 0011a: a child with no constant-pool slot is out of memory, before

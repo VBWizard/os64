@@ -132,8 +132,8 @@
     },
     {
       "path": "patches/0011a-parser-ignored-failures-throw.patch",
-      "sha256": "5af934b4a68798173e3e5cd1989104a59ee0cd3863050730484e215f788a0119",
-      "reason": "Throw out of memory where the parser ignored a failed allocation: a child definition with no constant-pool slot (upstream asserted), a failed closure-variable add in resolve_scope_var (used as an index, emitted as nothing, or read as a position), and a failed bytecode buffer read by get_lvalue as a SyntaxError."
+      "sha256": "ef018afc2aa8b8dfbbe33757d87ac066a21e96ff0fb14c8c32db8c530857efa3",
+      "reason": "Throw out of memory where the parser ignored a failed allocation: a child definition with no constant-pool slot (upstream asserted), a failed closure-variable add in resolve_scope_var (used as an index, emitted as nothing, or read as a position), a failed arguments or function-name add there (captured as a wild argument slot, or looked up as a global), and a failed bytecode buffer read by get_lvalue as a SyntaxError."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
