@@ -209,7 +209,7 @@ static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
         char number[16];
         for (int i = 0; i < argc && i < 2; i++) {
             os64_snprintf(number,sizeof(number),"%u",i == 0 ? width : height);
-            status = os64_page_node_set_attr(dom->state,node,i == 0 ? "width" : "height",number,os64_strlen(number),false);
+            status = d_set_attr(dom,node,i == 0 ? "width" : "height",number,os64_strlen(number),false);
             if (status != OS64_HTML_OK) { JS_FreeValue(ctx,value); return d_page_error(ctx,status); }
         }
         return value;
@@ -237,11 +237,11 @@ static JSValue classic(JSContext *ctx, JSValueConst self, int argc,
             uint32_t number;
             if (argc < 1 || JS_ToUint32(ctx,&number,argv[0]) < 0) return JS_EXCEPTION;
             char digits[16];os64_snprintf(digits,sizeof(digits),"%u",number);
-            int64_t status = os64_page_node_set_attr(dom->state,node,name,digits,os64_strlen(digits),false);
+            int64_t status = d_set_attr(dom,node,name,digits,os64_strlen(digits),false);
             return status == OS64_HTML_OK ? JS_UNDEFINED : d_page_error(ctx,status);
         }
         if (!d_string(dom,ctx,argc > 0 ? argv[0] : JS_UNDEFINED,&text)) return JS_EXCEPTION;
-        int64_t status = os64_page_node_set_attr(dom->state,node,name,text.data,text.length,false);
+        int64_t status = d_set_attr(dom,node,name,text.data,text.length,false);
         d_string_free(dom,&text);
         return status == OS64_HTML_OK ? JS_UNDEFINED : d_page_error(ctx,status);
     }
@@ -396,15 +396,16 @@ static int string_tag(JSContext *ctx, JSValueConst prototype, JSAtom key, const 
  * (DocumentFragment); the rest are Illegal constructors, as WebIDL makes
  * an interface without one (`new Document()`, which makes an XML document,
  * is one of these here). Node's constants come with Node, and each
- * prototype's Symbol.toStringTag with its interface. The Modern Web
- * table's row (modern.c), so all of it exists only while options.modern is
- * set. */
+ * prototype's Symbol.toStringTag with its interface. NamedNodeMap, whose
+ * objects are no nodes, comes after them, over attr.c's prototype. The
+ * Modern Web table's row (modern.c), so all of it exists only while
+ * options.modern is set. */
 int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     static const struct { const char *name; unsigned proto; } kInterfaces[] = {
         {"Node", D_PROTO_NODE}, {"CharacterData", D_PROTO_CHARACTER_DATA},
         {"DocumentFragment", D_PROTO_FRAGMENT}, {"Document", D_PROTO_DOCUMENT},
-        {"DocumentType", D_PROTO_DOCTYPE},
+        {"DocumentType", D_PROTO_DOCTYPE}, {"Attr", D_PROTO_ATTR},
         {"Element", D_PROTO_ELEMENT}, {"HTMLElement", D_PROTO_HTML_ELEMENT},
         {"HTMLFormElement", D_PROTO_FORM}, {"HTMLInputElement", D_PROTO_INPUT},
         {"HTMLTextAreaElement", D_PROTO_TEXTAREA}, {"HTMLSelectElement", D_PROTO_SELECT},
@@ -446,7 +447,12 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         result = 0;
     }
     JS_FreeAtom(ctx, tag);
-    return result;
+    if (result < 0) return -1;
+    /* NamedNodeMap's objects are no nodes, so its prototype is attr.c's. */
+    JSValue map = d_attr_map_interface(dom, ctx);
+    if (JS_IsException(map)) return -1;
+    return JS_DefinePropertyValueStr(ctx, global, "NamedNodeMap", map, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0
+        ? -1 : 0;
 }
 
 JSValue d_interface_new(JSContext *ctx, const char *name, int length, JSCFunction *constructor,
@@ -492,7 +498,7 @@ int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_accessor(dom,ctx,image,"height",classic,C_HEIGHT,true) < 0 ||
         d_method(dom,ctx,doc,"captureEvents",classic,1,C_CAPTURE) < 0 ||
         d_method(dom,ctx,doc,"releaseEvents",classic,1,C_CAPTURE) < 0 ||
-        d_implementation_classic(dom,ctx) < 0) return -1;
+        d_implementation_classic(dom,ctx) < 0 || d_attr_classic(dom,ctx) < 0) return -1;
     const unsigned named_kinds[] = {D_PROTO_IMAGE,D_PROTO_FORM,D_PROTO_INPUT,
         D_PROTO_TEXTAREA,D_PROTO_SELECT,D_PROTO_BUTTON};
     for (unsigned i = 0; i < sizeof(named_kinds)/sizeof(named_kinds[0]); i++)

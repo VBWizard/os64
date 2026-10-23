@@ -147,7 +147,7 @@ static JSValue write(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *no
     }
     text[used] = '\0';
     if (!budget(dom,ctx)) { d_free(dom,text);return JS_EXCEPTION; }
-    int64_t status = os64_page_node_set_attr(dom->state,node,"style",text,used,false);
+    int64_t status = d_set_attr(dom,node,"style",text,used,false);
     d_free(dom,text);
     if (status != OS64_HTML_OK) return d_page_error(ctx,status);
     return budget(dom,ctx) ? JS_UNDEFINED : JS_EXCEPTION;
@@ -176,7 +176,7 @@ static JSValue member(JSContext *ctx, JSValueConst self, int argc,
         DString value = {0};
         if (!d_string(dom,ctx,argc > 0 ? argv[0] : JS_UNDEFINED,&value)) return JS_EXCEPTION;
         int64_t status = value.length > STYLE_MAX ? -OS64_PAGE_REASON_TOO_LONG :
-            os64_page_node_set_attr(dom->state,node,"style",value.data,value.length,false);
+            d_set_attr(dom,node,"style",value.data,value.length,false);
         d_string_free(dom,&value);
         if (status != OS64_HTML_OK) return d_page_error(ctx,status);
         return budget(dom,ctx) ? JS_UNDEFINED : JS_EXCEPTION;

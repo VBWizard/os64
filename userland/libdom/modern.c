@@ -24,7 +24,8 @@ typedef struct {
 } DModernRow;
 
 static const DModernRow kModern[] = {
-    {(const char *const[]){"Node", "CharacterData", "DocumentFragment", "Document", "DocumentType", "Element",
+    {(const char *const[]){"Node", "CharacterData", "DocumentFragment", "Document", "DocumentType", "Attr",
+                           "NamedNodeMap", "Element",
                            "HTMLElement", "HTMLFormElement", "HTMLInputElement",
                            "HTMLTextAreaElement", "HTMLSelectElement", "HTMLButtonElement",
                            "HTMLImageElement", "HTMLScriptElement", "HTMLAnchorElement",

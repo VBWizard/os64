@@ -29,8 +29,80 @@ Document-doctype.html	Window document with doctype
 Document-implementation.html	Getting implementation off the same document
 DocumentType-literal.html	DocumentType literals
 Node-cloneNode.html	implementation.createDocumentType
+# Slice 0d: Element.attributes, NamedNodeMap and Attr. The tests this slice
+# makes pass that need the switch: NamedNodeMap's own and cloneNode's, whose
+# checks compare attributes and read Node's constants. Each fails with the
+# switch off; the ones that pass with it off too are in [passing].
+Node-cloneNode.html	createAttribute
+Node-cloneNode.html	createAttributeNS
+Node-cloneNode.html	createElement with attributes
+Node-cloneNode.html	createElement(a)
+Node-cloneNode.html	createElement(abbr)
+Node-cloneNode.html	createElement(acronym)
+Node-cloneNode.html	createElement(address)
+Node-cloneNode.html	createElement(article)
+Node-cloneNode.html	createElement(aside)
+Node-cloneNode.html	createElement(b)
+Node-cloneNode.html	createElement(bdi)
+Node-cloneNode.html	createElement(bdo)
+Node-cloneNode.html	createElement(bgsound)
+Node-cloneNode.html	createElement(big)
+Node-cloneNode.html	createElement(blockquote)
+Node-cloneNode.html	createElement(button)
+Node-cloneNode.html	createElement(center)
+Node-cloneNode.html	createElement(cite)
+Node-cloneNode.html	createElement(code)
+Node-cloneNode.html	createElement(dd)
+Node-cloneNode.html	createElement(details)
+Node-cloneNode.html	createElement(dfn)
+Node-cloneNode.html	createElement(dt)
+Node-cloneNode.html	createElement(figcaption)
+Node-cloneNode.html	createElement(figure)
+Node-cloneNode.html	createElement(footer)
+Node-cloneNode.html	createElement(form)
+Node-cloneNode.html	createElement(header)
+Node-cloneNode.html	createElement(hgroup)
+Node-cloneNode.html	createElement(i)
+Node-cloneNode.html	createElement(img)
+Node-cloneNode.html	createElement(input)
+Node-cloneNode.html	createElement(isindex)
+Node-cloneNode.html	createElement(kbd)
+Node-cloneNode.html	createElement(link)
+Node-cloneNode.html	createElement(main)
+Node-cloneNode.html	createElement(mark)
+Node-cloneNode.html	createElement(marquee)
+Node-cloneNode.html	createElement(nav)
+Node-cloneNode.html	createElement(nobr)
+Node-cloneNode.html	createElement(noframes)
+Node-cloneNode.html	createElement(noscript)
+Node-cloneNode.html	createElement(rp)
+Node-cloneNode.html	createElement(rt)
+Node-cloneNode.html	createElement(ruby)
+Node-cloneNode.html	createElement(s)
+Node-cloneNode.html	createElement(samp)
+Node-cloneNode.html	createElement(script)
+Node-cloneNode.html	createElement(section)
+Node-cloneNode.html	createElement(select)
+Node-cloneNode.html	createElement(small)
+Node-cloneNode.html	createElement(spacer)
+Node-cloneNode.html	createElement(strike)
+Node-cloneNode.html	createElement(sub)
+Node-cloneNode.html	createElement(summary)
+Node-cloneNode.html	createElement(sup)
+Node-cloneNode.html	createElement(textarea)
+Node-cloneNode.html	createElement(tt)
+Node-cloneNode.html	createElement(u)
+Node-cloneNode.html	createElement(var)
+Node-cloneNode.html	createElement(wbr)
+attributes-namednodemap.html	setNamedItem and removeNamedItem on `attributes` should not interfere with existing method names
 [excluded]
 [passing]
+Attr-prefix.html	Attr.prefix absent (HTML)
+Attr-prefix.html	Attr.prefix absent (MathML)
+Attr-prefix.html	Attr.prefix absent (SVG)
+Attr-prefix.html	Attr.prefix present (HTML)
+Attr-prefix.html	Attr.prefix present (MathML)
+Attr-prefix.html	Attr.prefix present (SVG)
 CharacterData-appendChild.html	Comment.appendChild(Comment)
 CharacterData-appendChild.html	Comment.appendChild(Text)
 CharacterData-appendChild.html	Text.appendChild(Comment)
@@ -489,6 +561,43 @@ DOMImplementation-hasFeature.html	hasFeature("xml", null)
 DOMImplementation-hasFeature.html	hasFeature()
 DOMImplementation-hasFeature.html	hasFeature(null, "")
 DOMImplementation-hasFeature.html	hasFeature(undefined, "")
+Document-adoptNode.html	Inserting an Element into another document should adopt its Attr nodes.
+Document-createAttribute.html	HTML document.createAttribute("") should throw
+Document-createAttribute.html	HTML document.createAttribute("'")
+Document-createAttribute.html	HTML document.createAttribute("0")
+Document-createAttribute.html	HTML document.createAttribute("0:a")
+Document-createAttribute.html	HTML document.createAttribute(":")
+Document-createAttribute.html	HTML document.createAttribute(":a")
+Document-createAttribute.html	HTML document.createAttribute("TITLE")
+Document-createAttribute.html	HTML document.createAttribute("X")
+Document-createAttribute.html	HTML document.createAttribute("\\"")
+Document-createAttribute.html	HTML document.createAttribute("\\\\")
+Document-createAttribute.html	HTML document.createAttribute("a:0")
+Document-createAttribute.html	HTML document.createAttribute("invalid^Name")
+Document-createAttribute.html	HTML document.createAttribute("title")
+Document-createAttribute.html	HTML document.createAttribute("x")
+Document-createAttribute.html	HTML document.createAttribute("x:y:x")
+Document-createAttribute.html	HTML document.createAttribute("~")
+Document-createAttribute.html	HTML document.createAttribute(null)
+Document-createAttribute.html	HTML document.createAttribute(undefined)
+Document-createAttribute.html	XML document.createAttribute("") should throw
+Document-createAttribute.html	XML document.createAttribute("'")
+Document-createAttribute.html	XML document.createAttribute("0")
+Document-createAttribute.html	XML document.createAttribute("0:a")
+Document-createAttribute.html	XML document.createAttribute(":")
+Document-createAttribute.html	XML document.createAttribute(":a")
+Document-createAttribute.html	XML document.createAttribute("TITLE")
+Document-createAttribute.html	XML document.createAttribute("X")
+Document-createAttribute.html	XML document.createAttribute("\\"")
+Document-createAttribute.html	XML document.createAttribute("\\\\")
+Document-createAttribute.html	XML document.createAttribute("a:0")
+Document-createAttribute.html	XML document.createAttribute("invalid^Name")
+Document-createAttribute.html	XML document.createAttribute("title")
+Document-createAttribute.html	XML document.createAttribute("x")
+Document-createAttribute.html	XML document.createAttribute("x:y:x")
+Document-createAttribute.html	XML document.createAttribute("~")
+Document-createAttribute.html	XML document.createAttribute(null)
+Document-createAttribute.html	XML document.createAttribute(undefined)
 Document-createElement.html	createElement("") in HTML document
 Document-createElement.html	createElement("-foo") in HTML document
 Document-createElement.html	createElement(".foo") in HTML document
@@ -581,6 +690,7 @@ Document-getElementById.html	Document.getElementById must not return nodes not p
 Document-getElementById.html	Ensure that the id attribute only affects elements present in a document
 Document-getElementById.html	Inserting an id by inserting its parent node
 Document-getElementById.html	Modern browsers optimize this method with using internal id cache. This test checks that their optimization should effect only append to `Document`, not append to `Node`.
+Document-getElementById.html	changing attribute's value via `Attr` gotten from `Element.attribute`.
 Document-getElementById.html	in tree order, within the context object's tree
 Document-getElementById.html	remove id attribute via innerHTML
 Document-getElementById.html	update `id` attribute via element.id
@@ -980,6 +1090,11 @@ Node-appendChild.html	Appending to a doctype
 Node-appendChild.html	Appending to a leaf node.
 Node-appendChild.html	Appending to a text node
 Node-appendChild.html	WebIDL tests
+Node-baseURI.html	For attributes in elements belonging to document fragments in document, baseURI should be document URL
+Node-baseURI.html	For attributes in elements belonging to document fragments, baseURI should be document URL
+Node-baseURI.html	For attributes in elements belonging to document, baseURI should be document URL
+Node-baseURI.html	For attributes in elements unassigned to document, baseURI should be document URL
+Node-baseURI.html	For attributes unassigned to element, baseURI should be document URL
 Node-baseURI.html	For elements belonging to document fragments in document, baseURI should be document URL
 Node-baseURI.html	For elements belonging to document fragments, baseURI should be document URL
 Node-baseURI.html	For elements belonging to document, baseURI should be document URL
@@ -991,7 +1106,70 @@ Node-childNodes.html	Node.childNodes on a DocumentFragment.
 Node-childNodes.html	Node.childNodes on an Element.
 Node-cloneNode-parser-created-names.html	cloneNode on elements with names containing angle brackets
 Node-cloneNode-parser-created-names.html	cloneNode on elements with names containing colons
+Node-cloneNode-svg.html	cloned <svg>'s xmlns:xlink attribute should have the right properties
+Node-cloneNode-svg.html	cloned <use>'s xlink:href attribute should have the right properties
+Node-cloneNode.html	createAttribute
+Node-cloneNode.html	createAttributeNS
 Node-cloneNode.html	createDocumentFragment
+Node-cloneNode.html	createElement with attributes
+Node-cloneNode.html	createElement(a)
+Node-cloneNode.html	createElement(abbr)
+Node-cloneNode.html	createElement(acronym)
+Node-cloneNode.html	createElement(address)
+Node-cloneNode.html	createElement(article)
+Node-cloneNode.html	createElement(aside)
+Node-cloneNode.html	createElement(b)
+Node-cloneNode.html	createElement(bdi)
+Node-cloneNode.html	createElement(bdo)
+Node-cloneNode.html	createElement(bgsound)
+Node-cloneNode.html	createElement(big)
+Node-cloneNode.html	createElement(blockquote)
+Node-cloneNode.html	createElement(button)
+Node-cloneNode.html	createElement(center)
+Node-cloneNode.html	createElement(cite)
+Node-cloneNode.html	createElement(code)
+Node-cloneNode.html	createElement(dd)
+Node-cloneNode.html	createElement(details)
+Node-cloneNode.html	createElement(dfn)
+Node-cloneNode.html	createElement(dt)
+Node-cloneNode.html	createElement(figcaption)
+Node-cloneNode.html	createElement(figure)
+Node-cloneNode.html	createElement(footer)
+Node-cloneNode.html	createElement(form)
+Node-cloneNode.html	createElement(header)
+Node-cloneNode.html	createElement(hgroup)
+Node-cloneNode.html	createElement(i)
+Node-cloneNode.html	createElement(img)
+Node-cloneNode.html	createElement(input)
+Node-cloneNode.html	createElement(isindex)
+Node-cloneNode.html	createElement(kbd)
+Node-cloneNode.html	createElement(link)
+Node-cloneNode.html	createElement(main)
+Node-cloneNode.html	createElement(mark)
+Node-cloneNode.html	createElement(marquee)
+Node-cloneNode.html	createElement(nav)
+Node-cloneNode.html	createElement(nobr)
+Node-cloneNode.html	createElement(noframes)
+Node-cloneNode.html	createElement(noscript)
+Node-cloneNode.html	createElement(rp)
+Node-cloneNode.html	createElement(rt)
+Node-cloneNode.html	createElement(ruby)
+Node-cloneNode.html	createElement(s)
+Node-cloneNode.html	createElement(samp)
+Node-cloneNode.html	createElement(script)
+Node-cloneNode.html	createElement(section)
+Node-cloneNode.html	createElement(select)
+Node-cloneNode.html	createElement(small)
+Node-cloneNode.html	createElement(spacer)
+Node-cloneNode.html	createElement(strike)
+Node-cloneNode.html	createElement(sub)
+Node-cloneNode.html	createElement(summary)
+Node-cloneNode.html	createElement(sup)
+Node-cloneNode.html	createElement(textarea)
+Node-cloneNode.html	createElement(tt)
+Node-cloneNode.html	createElement(u)
+Node-cloneNode.html	createElement(var)
+Node-cloneNode.html	createElement(wbr)
 Node-cloneNode.html	implementation.createDocumentType
 Node-constants.html	Constants for createDocumentPosition on Element object.
 Node-constants.html	Constants for createDocumentPosition on Node interface object.
@@ -1038,6 +1216,7 @@ Node-insertBefore.html	Should check that 'node' is not an ancestor of 'parent' b
 Node-insertBefore.html	Should check whether 'child' is a child of 'parent' before checking whether 'node' can be inserted into the document given the kids the document has right now.
 Node-insertBefore.html	Should check whether 'child' is a child of 'parent' before checking whether 'node' is of a type that can have a parent.
 Node-isConnected.html	Test with ordinary child nodes
+Node-mutation-adoptNode.html	Adopting an element into a different document update's the element's owner doc as well as the owner docs of it's attributes
 Node-mutation-adoptNode.html	simple append of foreign div with text
 Node-nodeName.html	For Comment nodes, nodeName should return "#comment".
 Node-nodeName.html	For Document nodes, nodeName should return "#document".
@@ -1337,19 +1516,42 @@ ParentNode-replaceChildren.html	If node is a Text node and parent is a document,
 ParentNode-replaceChildren.html	If node is a doctype and parent is not a document, then throw a HierarchyRequestError DOMException.
 ParentNode-replaceChildren.html	If node is a host-including inclusive ancestor of parent, then throw a HierarchyRequestError DOMException.
 ParentNode-replaceChildren.html	If node is not a DocumentFragment, DocumentType, Element, Text, ProcessingInstruction, or Comment node, then throw a HierarchyRequestError DOMException.
+attributes-namednodemap.html	an attribute set by setAttribute should be accessible as a field on the `attributes` field of an Element
+attributes-namednodemap.html	setNamedItem and removeNamedItem on `attributes` should add and remove fields from `attributes`
+attributes-namednodemap.html	setNamedItem and removeNamedItem on `attributes` should not interfere with existing method names
+attributes.html	Attribute loses its owner when removed
+attributes.html	Attribute values should not be parsed.
+attributes.html	Attributes should work in document fragments.
+attributes.html	Basic functionality of removeAttributeNode
+attributes.html	Basic functionality of setAttributeNode
 attributes.html	Basic functionality should be intact.
 attributes.html	Basic functionality should be intact. (toggleAttribute)
+attributes.html	Entities in attributes should have been expanded while parsing.
+attributes.html	If attr’s element is neither null nor element, throw an InUseAttributeError.
+attributes.html	Own property correctness with basic attributes
+attributes.html	Replacing an attr by itself
+attributes.html	Specified attributes should be accessible.
 attributes.html	When qualifiedName does not match the Name production, an INVALID_CHARACTER_ERR exception is to be thrown. (setAttribute)
 attributes.html	When qualifiedName does not match the Name production, an INVALID_CHARACTER_ERR exception is to be thrown. (toggleAttribute)
+attributes.html	setAttribute should not change the order of previously set attributes.
 attributes.html	setAttribute should not throw even if a load is not allowed
 attributes.html	setAttribute should not throw even when qualifiedName starts with 'xmlns'
+attributes.html	setAttributeNode called with an Attr that has the same name as an existing one should not change attribute order
+attributes.html	setAttributeNode on bound attribute should throw InUseAttributeError
 attributes.html	setAttributeNode, if it fires mutation events, should fire one with the new node when resetting an existing attribute
+attributes.html	setAttributeNode, if it fires mutation events, should fire one with the new node when resetting an existing attribute (outer shell)
+attributes.html	toggleAttribute should not change the order of previously set attributes.
 attributes.html	toggleAttribute should not throw even when qualifiedName starts with 'xmlns'
 case.html	getAttribute ABC
 case.html	getAttribute Abc
 case.html	getAttribute abc
 case.html	getAttribute Ä
 case.html	getAttribute ä
+case.html	setAttribute ABC
+case.html	setAttribute Abc
+case.html	setAttribute abc
+case.html	setAttribute Ä
+case.html	setAttribute ä
 getElementsByClassName-01.htm	document.getElementsByClassName(): simple
 getElementsByClassName-02.htm	document.getElementsByClassName(): also simple
 getElementsByClassName-03.htm	document.getElementsByClassName(): changing classes

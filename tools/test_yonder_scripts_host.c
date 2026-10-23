@@ -2281,6 +2281,22 @@ static void input_javascript_links(void) {
         "javascript link: with scripts off the link does nothing, and the status line says why");
     javascript_drop();
 }
+/* libdom's attribute backstop (MODERN_WEB.md slice 0d): an attribute an
+ * Attr stood for, removed beneath the binding by a verb outside it, is a
+ * broken rule the page's record names, once. */
+static void input_attribute_backstop(void) {
+    javascript_page("<p id=box class=old>box</p><script>var k=document.getElementById('box')"
+        ".getAttributeNode('class');</script>",true);
+    os64_html_node_t *box=probe_id("box");
+    check(box!=NULL && os64_page_node_set_attr(os64_page_shared_state(g.page.way.model),box,"class",NULL,0,true)==0,
+        "attribute backstop: a host verb removes the attribute beneath the binding");
+    yonder_scripts_t *host=g.page.scripts;
+    check(yonder_scripts_address(host,"javascript:void(k.value+k.value)",NULL) && script_turn(),
+        "attribute backstop: the page reads the Attr twice");
+    check(javascript_record_has("FAILED page: an attribute left its element outside libdom (1)"),
+        "attribute backstop: the record names the broken rule, once");
+    javascript_drop();
+}
 static void input_hover(void) {
     probe_page("<p id=quiet>no handlers here</p><script>var x=1;</script>",true);
     script_turn();
@@ -2367,6 +2383,7 @@ static void input_cases(void) {
 
     input_links();
     input_javascript_links();
+    input_attribute_backstop();
     input_hover();
     input_forms();
 }

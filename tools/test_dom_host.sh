@@ -8,9 +8,17 @@ cleanup() {
 }
 trap cleanup EXIT
 for name in core node collection content event timer window geometry classic style mixin modern view \
-    storage performance url encoding screen base64 implementation exception abort blob fetch xhr; do
+    storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr; do
     test -f "userland/libdom/$name.c" || { echo "libdom implementation pending: $name.c" >&2; exit 1; }
 done
+# THE ONE DOOR (attr.c): libdom sets and removes attributes through d_set_attr
+# alone, which is what lets a removal detach the Attr standing for it. A call
+# to an attribute verb anywhere else in libdom would remove one unseen.
+if grep -n 'os64_page_node_set_attr\|os64_html_set_attr\|os64_html_remove_attr' userland/libdom/*.c |
+    grep -v '^userland/libdom/attr\.c:'; then
+    echo "libdom: an attribute verb outside attr.c's d_set_attr (above)" >&2
+    exit 1
+fi
 make -C userland -j8 js-runtime-test > "$work/build.log" 2>&1 || { cat "$work/build.log"; exit 1; }
 flags=(-O2 -g -std=gnu11 -Wall -Wextra -Werror -ffreestanding -fno-builtin
     -fno-tree-loop-distribute-patterns -fno-stack-protector -DOS64_JS_TARGET
@@ -43,7 +51,7 @@ done
 # engine or tree allocations to the binding's own failure sweep. The private
 # allocator name is distinct because these DSOs share one host executable.
 for name in core node collection content event timer window geometry classic style mixin modern view \
-    storage performance url encoding screen base64 implementation exception abort blob fetch xhr; do
+    storage performance url encoding screen base64 implementation attr exception abort blob fetch xhr; do
     object="$work/dom-$name.o"
     cc "${flags[@]}" -Dd_alloc=dom_host_private_alloc -Dos64_malloc=dom_host_malloc -Dos64_calloc=dom_host_calloc \
         -Dos64_realloc=dom_host_realloc -Dos64_free=dom_host_free \

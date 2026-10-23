@@ -260,3 +260,16 @@ differently from `/dev/fb0`'s memory map: a read returns a CHANGED
 rectangle and blocks until there is one, which is what a remote viewer
 needs, where a flat framebuffer file would make every reader diff frames
 itself.
+
+## The browser's script binding (libdom)
+
+Parts from the DOM Standard rather than from Unix, recorded here because a
+page's script can see them.
+
+- **A Node member called on an Attr through `Node.prototype` itself**
+  (`Node.prototype.appendChild.call(attr, x)`) is a TypeError, "an Attr is
+  a Node with no place in the tree", where the standard would answer as
+  the member does for any node with no children. Every `attr.x` is
+  answered by `Attr.prototype`, which shadows each of Node's members with
+  the standard's answer (LIBDOM.md § Attributes as nodes); the shared
+  member takes a tree node, which an Attr is not.

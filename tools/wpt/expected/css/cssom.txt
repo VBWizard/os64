@@ -185,6 +185,7 @@ getComputedStyle-mutations.html	Initial style value
 getComputedStyle-mutations.html	Inserting an element updates the computed style
 getComputedStyle-mutations.html	Removing an attribute updates the computed style
 getComputedStyle-mutations.html	Removing an element updates the computed style
+getComputedStyle-mutations.html	Replacing an attribute updates the computed style
 getComputedStyle-mutations.html	Replacing an element updates the computed style
 getComputedStyle-mutations.html	Setting an attribute updates the computed style
 getComputedStyle-pointerEvents.html	Body element has the initial value for pointerEvents
