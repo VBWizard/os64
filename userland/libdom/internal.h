@@ -714,6 +714,9 @@ JSValue d_promise_settled(JSContext *ctx, JSValue value);
  * invalid sequence U+FFFD. Engine memory. d_utf8_decode is UTF-8 decode. */
 JSValue d_text_decode(JSContext *ctx, const char *label, const uint8_t *bytes, size_t length);
 JSValue d_utf8_decode(JSContext *ctx, const uint8_t *bytes, size_t length);
+/* "UTF-8 decode without BOM": a leading U+FEFF is text, not a mark (what
+ * the urlencoded parser decodes names and values with). */
+JSValue d_utf8_decode_without_bom(JSContext *ctx, const uint8_t *bytes, size_t length);
 /* url.c: `input` parsed as a URL against the document's base URL (its
  * <base href> as the tree stands), by the API's parser: a query is UTF-8
  * whatever the document's encoding. 1 with the address (d_alloc'd, the

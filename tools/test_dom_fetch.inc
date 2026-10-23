@@ -447,6 +447,19 @@ static void dom_fetch_object_cases(void)
         ".catch(x=>mlog.push('refused:'+x.message));",
         "formData: a part's parameters");
     dom_script(&f, FETCH_ASSERT "assert(mlog.join()==='true:a.txt:true::N',mlog.join());", "formData: parameters read by one parse");
+    /* The urlencoded parser decodes UTF-8 WITHOUT taking a BOM off: a
+     * leading U+FEFF, written raw or percent-encoded, stays in the name and
+     * the value, as URLSearchParams' own parser keeps it. */
+    dom_script(&f,
+        "globalThis.blog=[];var ct={headers:{'content-type':'application/x-www-form-urlencoded'}};"
+        "new Response('\\ufeffkey=\\ufeffvalue',ct).formData().then(g=>blog.push('raw:'+g.get('\\ufeffkey')));"
+        "new Response('%EF%BB%BFk=%EF%BB%BFv',ct).formData().then(g=>blog.push('pct:'+g.get('\\ufeffk')));"
+        "var sp=new URLSearchParams('%EF%BB%BFk=%EF%BB%BFv');blog.push('params:'+sp.get('\\ufeffk'));"
+        "new Response(sp).formData().then(g=>blog.push('trip:'+g.get('\\ufeffk')));",
+        "formData: a BOM in a urlencoded field");
+    dom_script(&f, FETCH_ASSERT
+        "assert(blog.join()==='params:\\ufeffv,raw:\\ufeffvalue,pct:\\ufeffv,trip:\\ufeffv',escape(blog.join()));",
+        "formData: a urlencoded field keeps its BOM");
     /* A quoted value is passed over whole when another parameter is looked
      * for: a name holding "; filename=" names no filename, whether written
      * by hand (an escaped quote inside) or by this FormData's encoder. */

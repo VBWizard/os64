@@ -1198,10 +1198,13 @@ static int urlencoded_parse(JSContext *ctx, JSValueConst form, const uint8_t *by
                 parts[k][n] = '\0';
                 lengths[k] = n;
             }
-            /* The bytes are UTF-8 decoded, an invalid sequence U+FFFD. */
+            /* The bytes are "UTF-8 decode without BOM"ed (the urlencoded
+             * parser's own words): an invalid sequence is U+FFFD, and a
+             * leading U+FEFF is part of the name or value. */
             int result = 0;
-            JSValue name = d_utf8_decode(ctx, (const uint8_t *)parts[0], lengths[0]);
-            JSValue value = JS_IsException(name) ? JS_EXCEPTION : d_utf8_decode(ctx, (const uint8_t *)parts[1], lengths[1]);
+            JSValue name = d_utf8_decode_without_bom(ctx, (const uint8_t *)parts[0], lengths[0]);
+            JSValue value = JS_IsException(name) ? JS_EXCEPTION
+                                                 : d_utf8_decode_without_bom(ctx, (const uint8_t *)parts[1], lengths[1]);
             js_free(ctx, parts[0]);
             js_free(ctx, parts[1]);
             char *n8 = NULL, *v8 = NULL;
