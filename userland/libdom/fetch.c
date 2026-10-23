@@ -1332,6 +1332,22 @@ static void reader_closed(JSContext *ctx, DReader *r, JSValueConst error)
     r->closed_resolve = r->closed_reject = JS_UNDEFINED;
 }
 
+/* Whether the stream is errored. A body an abort errored after the answer
+ * errors its stream (the Response's abort steps); the stream learns it
+ * here, the first time anything asks, rejecting a reader's `closed` (`r`,
+ * NULL for none). */
+static bool stream_errored(JSContext *ctx, DStream *s, DReader *r)
+{
+    DBody *b = body_of(s->owner);
+    if (s->state == ST_READABLE && b != NULL && !JS_IsUndefined(b->aborted)) {
+        s->state = ST_ERRORED;
+        JS_FreeValue(ctx, s->error);
+        s->error = JS_DupValue(ctx, b->aborted);
+        if (r != NULL) reader_closed(ctx, r, s->error);
+    }
+    return s->state == ST_ERRORED;
+}
+
 enum { S_LOCKED, S_GET_READER, S_CANCEL, S_TEE, R_READ, R_RELEASE, R_CLOSED, R_CANCEL };
 
 static JSValue stream_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic, JSValue *data)
@@ -1367,6 +1383,8 @@ static JSValue stream_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         }
         if (s == NULL) return d_promise_settled(ctx, JS_ThrowTypeError(ctx, "The reader has been released"));
         if (magic == R_CANCEL) {
+            /* ReadableStreamCancel: an errored stream answers its error. */
+            if (stream_errored(ctx, s, r)) return d_promise_settled(ctx, JS_Throw(ctx, JS_DupValue(ctx, s->error)));
             if (s->state == ST_READABLE) {
                 s->state = ST_CLOSED;
                 DBody *b = body_of(s->owner);
@@ -1377,15 +1395,8 @@ static JSValue stream_member(JSContext *ctx, JSValueConst self, int argc, JSValu
             return d_promise_settled(ctx, JS_UNDEFINED);
         }
         /* read(): the whole body as one chunk, then done. */
-        if (s->state == ST_ERRORED) return d_promise_settled(ctx, JS_Throw(ctx, JS_DupValue(ctx, s->error)));
+        if (stream_errored(ctx, s, r)) return d_promise_settled(ctx, JS_Throw(ctx, JS_DupValue(ctx, s->error)));
         DBody *b = body_of(s->owner);
-        if (b != NULL && !JS_IsUndefined(b->aborted) && s->state == ST_READABLE) {
-            s->state = ST_ERRORED;
-            JS_FreeValue(ctx, s->error);
-            s->error = JS_DupValue(ctx, b->aborted);
-            reader_closed(ctx, r, s->error);
-            return d_promise_settled(ctx, JS_Throw(ctx, JS_DupValue(ctx, s->error)));
-        }
         if (s->state == ST_CLOSED || s->delivered) {
             if (s->state != ST_CLOSED) {
                 s->state = ST_CLOSED;
@@ -1423,6 +1434,8 @@ static JSValue stream_member(JSContext *ctx, JSValueConst self, int argc, JSValu
     case S_TEE: return d_dom_exception(dom, ctx, "NotSupportedError", "tee() is not supported by this browser");
     case S_CANCEL:
         if (s->locked) return d_promise_settled(ctx, JS_ThrowTypeError(ctx, "The stream is locked"));
+        /* ReadableStreamCancel: an errored stream answers its error. */
+        if (stream_errored(ctx, s, NULL)) return d_promise_settled(ctx, JS_Throw(ctx, JS_DupValue(ctx, s->error)));
         if (s->state == ST_READABLE) {
             s->state = ST_CLOSED;
             DBody *b = body_of(s->owner);

@@ -642,6 +642,22 @@ static void dom_fetch_abort_cases(void)
                "r5.text().then(t=>log.push('empty:'+t.length));", "abort: after the answer");
     dom_script(&f, FETCH_ASSERT "assert(log.join()==='1:AbortError,2:AbortError,empty:0',log.join());",
                "abort: the reason twice, and an empty body read");
+    /* A body an abort errored is an errored stream: cancel() answers its
+     * error, through the stream and through a reader (ReadableStreamCancel). */
+    dom_script(&f, "globalThis.c6=new AbortController();fetch('/s6',{signal:c6.signal}).then(r=>{globalThis.r6=r});"
+               "globalThis.c7=new AbortController();fetch('/s7',{signal:c7.signal}).then(r=>{globalThis.r7=r});",
+               "abort: two requests to cancel");
+    os64_dom_response_t s6 = net_answer_of(200, "http://example.test/s6", "", "six");
+    os64_dom_response_t s7 = net_answer_of(200, "http://example.test/s7", "", "seven");
+    net_answer(&f, &net, net.count - 2, &s6);
+    net_answer(&f, &net, net.count - 1, &s7);
+    dom_script(&f, "globalThis.clog=[];c6.abort();c7.abort();"
+               "r6.body.cancel().then(()=>clog.push('stream:fulfilled'),e=>clog.push('stream:'+e.name));"
+               "var rd=r7.body.getReader();rd.closed.catch(e=>clog.push('closed:'+e.name));"
+               "rd.cancel().then(()=>clog.push('reader:fulfilled'),e=>clog.push('reader:'+e.name));",
+               "abort: cancel an errored body");
+    dom_script(&f, FETCH_ASSERT "assert(clog.join()==='stream:AbortError,closed:AbortError,reader:AbortError',clog.join());",
+               "abort: an errored stream's cancel answers its error");
     fixture_free(&f);
 }
 
