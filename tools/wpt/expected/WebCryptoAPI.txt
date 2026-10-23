@@ -1,0 +1,243 @@
+# WPT's WebCryptoAPI in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh WebCryptoAPI --update
+# rewrites [passing].
+[required]
+# P1-W: crypto.getRandomValues and crypto.randomUUID. Each fails with the
+# switch off. getRandomValues' nine "Large length" tests are not here: they
+# want the QuotaExceededError interface WebIDL made a DOMException of its
+# own (requested, quota), which the binding's one DOMException is not (DEBTS).
+getRandomValues.any.html	DataView
+getRandomValues.any.html	Float arrays
+getRandomValues.any.html	Float16 arrays
+getRandomValues.any.html	Integer array: BigInt64Array
+getRandomValues.any.html	Integer array: BigUint64Array
+getRandomValues.any.html	Integer array: Int16Array
+getRandomValues.any.html	Integer array: Int32Array
+getRandomValues.any.html	Integer array: Int8Array
+getRandomValues.any.html	Integer array: Uint16Array
+getRandomValues.any.html	Integer array: Uint32Array
+getRandomValues.any.html	Integer array: Uint8Array
+getRandomValues.any.html	Integer array: Uint8ClampedArray
+getRandomValues.any.html	Null arrays: BigInt64Array
+getRandomValues.any.html	Null arrays: BigUint64Array
+getRandomValues.any.html	Null arrays: Int16Array
+getRandomValues.any.html	Null arrays: Int32Array
+getRandomValues.any.html	Null arrays: Int8Array
+getRandomValues.any.html	Null arrays: Uint16Array
+getRandomValues.any.html	Null arrays: Uint32Array
+getRandomValues.any.html	Null arrays: Uint8Array
+getRandomValues.any.html	Null arrays: Uint8ClampedArray
+getRandomValues.any.html	Subclass of BigInt64Array
+getRandomValues.any.html	Subclass of BigUint64Array
+getRandomValues.any.html	Subclass of Int16Array
+getRandomValues.any.html	Subclass of Int32Array
+getRandomValues.any.html	Subclass of Int8Array
+getRandomValues.any.html	Subclass of Uint16Array
+getRandomValues.any.html	Subclass of Uint32Array
+getRandomValues.any.html	Subclass of Uint8Array
+getRandomValues.any.html	Subclass of Uint8ClampedArray
+randomUUID.https.any.html	namespace format
+randomUUID.https.any.html	variant set
+randomUUID.https.any.html	version set
+[excluded]
+algorithm-discards-context.https.window.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+crypto_key_cached_slots.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+derive_bits_keys/cfrg_curves_bits_curve25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+derive_bits_keys/cfrg_curves_keys_curve25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+derive_bits_keys/derive_key_and_encrypt.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+derive_bits_keys/derived_bits_length.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+derive_bits_keys/ecdh_bits.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+derive_bits_keys/ecdh_keys.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+derive_bits_keys/hkdf.https.any.html?1-1000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+derive_bits_keys/hkdf.https.any.html?1001-2000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+derive_bits_keys/hkdf.https.any.html?2001-3000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+derive_bits_keys/hkdf.https.any.html?3001-last	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+derive_bits_keys/pbkdf2.https.any.html?1-1000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+derive_bits_keys/pbkdf2.https.any.html?1001-2000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+derive_bits_keys/pbkdf2.https.any.html?2001-3000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+derive_bits_keys/pbkdf2.https.any.html?3001-4000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+derive_bits_keys/pbkdf2.https.any.html?4001-5000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+derive_bits_keys/pbkdf2.https.any.html?5001-6000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+derive_bits_keys/pbkdf2.https.any.html?6001-7000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+derive_bits_keys/pbkdf2.https.any.html?7001-8000	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+derive_bits_keys/pbkdf2.https.any.html?8001-last	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+digest/digest.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+encrypt_decrypt/aes_cbc.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+encrypt_decrypt/aes_ctr.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+encrypt_decrypt/aes_gcm.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+encrypt_decrypt/aes_gcm_256_iv.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+encrypt_decrypt/rsa_oaep.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+export-key-error-order.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/failures_AES-CBC.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/failures_AES-CTR.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/failures_AES-GCM.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/failures_AES-KW.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/failures_ECDH.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/failures_ECDSA.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/failures_Ed25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/failures_HMAC.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/failures_RSA-OAEP.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/failures_RSA-PSS.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/failures_RSASSA-PKCS1-v1_5.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/failures_X25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/failures_bad_algorithm.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_AES-CBC.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_AES-CTR.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_AES-GCM.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_AES-KW.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_ECDH.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_ECDSA.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_Ed25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_HMAC.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-OAEP.https.any.html?1-10	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-OAEP.https.any.html?101-110	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-OAEP.https.any.html?11-20	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-OAEP.https.any.html?111-120	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-OAEP.https.any.html?121-130	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-OAEP.https.any.html?131-140	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-OAEP.https.any.html?141-150	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-OAEP.https.any.html?151-last	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-OAEP.https.any.html?21-30	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-OAEP.https.any.html?31-40	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-OAEP.https.any.html?41-50	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-OAEP.https.any.html?51-60	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-OAEP.https.any.html?61-70	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-OAEP.https.any.html?71-80	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-OAEP.https.any.html?81-90	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-OAEP.https.any.html?91-100	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-PSS.https.any.html?1-10	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-PSS.https.any.html?11-20	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-PSS.https.any.html?21-30	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSA-PSS.https.any.html?31-last	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSASSA-PKCS1-v1_5.https.any.html?1-10	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSASSA-PKCS1-v1_5.https.any.html?11-20	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSASSA-PKCS1-v1_5.https.any.html?21-30	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_RSASSA-PKCS1-v1_5.https.any.html?31-last	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+generateKey/successes_X25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+historical.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+idlharness.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+import_export/crashtests/importKey-unsettled-promise.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+import_export/ec_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+import_export/ec_importKey_failures_ECDH.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+import_export/ec_importKey_failures_ECDSA.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+import_export/okp_fixed_length.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+import_export/okp_importKey_Ed25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+import_export/okp_importKey_X25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+import_export/okp_importKey_failures_Ed25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+import_export/okp_importKey_failures_X25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+import_export/okp_malformed_asn1.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+import_export/rsa_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+import_export/symmetric_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/derive_bits_keys/argon2.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/digest/cshake.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/digest/kangarootwelve.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/digest/sha3.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/digest/turboshake.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/encap_decap/encap_decap_bits.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/encap_decap/encap_decap_keys.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/encrypt_decrypt/aes_ocb.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/encrypt_decrypt/chacha20_poly1305.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/generateKey/failures_AES-OCB.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/generateKey/failures_Hybrid-KEM.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/generateKey/failures_ML-DSA.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/generateKey/failures_ML-KEM.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/generateKey/failures_chacha20_poly1305.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/generateKey/failures_kmac.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/generateKey/successes_AES-OCB.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/generateKey/successes_Hybrid-KEM.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/generateKey/successes_ML-DSA.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/generateKey/successes_ML-KEM.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/generateKey/successes_chacha20_poly1305.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/generateKey/successes_kmac.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/getPublicKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/idlharness.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/import_export/AES-OCB_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/import_export/Argon2_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/import_export/ChaCha20-Poly1305_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/import_export/Hybrid-KEM_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/import_export/KMAC_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/import_export/ML-DSA_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/import_export/ML-KEM_importKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/import_export/raw_format_aliases.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/serialization/aes-ocb.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/serialization/chacha20-poly1305.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/serialization/hybridkem.https.window.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/serialization/kmac.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/serialization/mldsa.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/serialization/mlkem.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/sign_verify/kmac.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/sign_verify/mldsa.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/supports-modern.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+modern-algos/supports.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+normalize-algorithm-name.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+secure-curves/derive_bits_keys/cfrg_curves_bits_curve448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+secure-curves/derive_bits_keys/cfrg_curves_keys_curve448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+secure-curves/generateKey/failures_Ed448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+secure-curves/generateKey/failures_X448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+secure-curves/generateKey/successes_Ed448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+secure-curves/generateKey/successes_X448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+secure-curves/idlharness.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+secure-curves/import_export/okp_importKey_Ed448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+secure-curves/import_export/okp_importKey_X448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+secure-curves/import_export/okp_importKey_failures_Ed448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+secure-curves/import_export/okp_importKey_failures_X448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+secure-curves/serialization/ed448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+secure-curves/serialization/x448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+secure-curves/sign_verify/eddsa_curve448.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+secure_context/crypto-subtle-secure-context-available.https.sub.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+serialization/aes-cbc.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+serialization/aes-ctr.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+serialization/aes-gcm.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+serialization/aes-kw.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+serialization/ecdh.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+serialization/ecdsa.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+serialization/ed25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+serialization/hmac.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+serialization/rsa-oaep.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+serialization/rsa-pss.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+serialization/rsassa-pkcs1-v1_5.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+serialization/x25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+sharedarraybuffer.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+sign_verify/ecdsa.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+sign_verify/eddsa_curve25519.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+sign_verify/eddsa_small_order_points.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+sign_verify/hmac.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+sign_verify/rsa_pkcs.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+sign_verify/rsa_pss.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+wrapKey_unwrapKey/aes_kw_unwrapKey_failures.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+wrapKey_unwrapKey/wrapKey_unwrapKey.https.any.html	SubtleCrypto (crypto.subtle), which this browser does not have (WINDOW_DOCUMENT.md, ruling 1)
+[passing]
+getRandomValues.any.html	DataView
+getRandomValues.any.html	Float arrays
+getRandomValues.any.html	Float16 arrays
+getRandomValues.any.html	Integer array: BigInt64Array
+getRandomValues.any.html	Integer array: BigUint64Array
+getRandomValues.any.html	Integer array: Int16Array
+getRandomValues.any.html	Integer array: Int32Array
+getRandomValues.any.html	Integer array: Int8Array
+getRandomValues.any.html	Integer array: Uint16Array
+getRandomValues.any.html	Integer array: Uint32Array
+getRandomValues.any.html	Integer array: Uint8Array
+getRandomValues.any.html	Integer array: Uint8ClampedArray
+getRandomValues.any.html	Null arrays: BigInt64Array
+getRandomValues.any.html	Null arrays: BigUint64Array
+getRandomValues.any.html	Null arrays: Int16Array
+getRandomValues.any.html	Null arrays: Int32Array
+getRandomValues.any.html	Null arrays: Int8Array
+getRandomValues.any.html	Null arrays: Uint16Array
+getRandomValues.any.html	Null arrays: Uint32Array
+getRandomValues.any.html	Null arrays: Uint8Array
+getRandomValues.any.html	Null arrays: Uint8ClampedArray
+getRandomValues.any.html	Subclass of BigInt64Array
+getRandomValues.any.html	Subclass of BigUint64Array
+getRandomValues.any.html	Subclass of Int16Array
+getRandomValues.any.html	Subclass of Int32Array
+getRandomValues.any.html	Subclass of Int8Array
+getRandomValues.any.html	Subclass of Uint16Array
+getRandomValues.any.html	Subclass of Uint32Array
+getRandomValues.any.html	Subclass of Uint8Array
+getRandomValues.any.html	Subclass of Uint8ClampedArray
+randomUUID.https.any.html	namespace format
+randomUUID.https.any.html	variant set
+randomUUID.https.any.html	version set
