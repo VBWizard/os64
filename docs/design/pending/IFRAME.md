@@ -75,8 +75,7 @@ host names from the corpus appear here; counts only.*
    own current document and entry and pushes nothing. The standard's
    joint session history makes Back step through a page's ad rotations,
    which is the web's most-complained-about behaviour, and one person on
-   one machine gets the useful half. DIVERGENCES.md row. Chris's ruling
-   (§ Rulings this needs).
+   one machine gets the useful half. DIVERGENCES.md row. Ruled (§ Rulings).
 7. **A frame departs at the end of the task that removed it, and its
    document lives while anything still holds it.** Removal from the
    tree, a navigation of the frame, or the parent's own departure all
@@ -556,7 +555,11 @@ on the Tier 1 acceptance pages beside Chrome, by outcome and not by name.
 MODERN_WEB.md gains the as-built sections; DEBTS.md:418 is struck when F2
 lands and the rows § What this settles 9 names are written with F1.
 
-## Rulings this needs
+## Rulings
+
+Both ruled by Chris on 2026-10-23 as leaned, "until I actually use it
+and have a chance to regret my decision": the day the P5 says otherwise,
+the row reopens and this section says why.
 
 1. **A frame's navigation adds no session entry** (ruling 6). The lean
    is stated there. The alternative is the standard's joint history,
@@ -568,6 +571,7 @@ lands and the rows § What this settles 9 names are written with F1.
    tabs" and a design about windows, not frames.
 
 Everything else here is web semantics, decided and told.
+
 
 ## Risks named
 
