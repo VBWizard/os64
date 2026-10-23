@@ -158,6 +158,8 @@ ChildNode-replaceWith.html	Text.replaceWith() with only text as an argument.
 ChildNode-replaceWith.html	Text.replaceWith() with sibling of child as arguments.
 ChildNode-replaceWith.html	Text.replaceWith() with undefined as an argument.
 ChildNode-replaceWith.html	Text.replaceWith() without any argument.
+DOMImplementation-createDocument-no-browsing-context.html	createDocument: defaultView is null
+DOMImplementation-createDocument-no-browsing-context.html	createHTMLDocument: defaultView is null
 DOMImplementation-createDocument-no-browsing-context.html	new DOMImplementation() throws
 DOMImplementation-createDocument.html	DOMImplementation.createDocument(namespace, qualifiedName, doctype)
 DOMImplementation-createDocument.html	createDocument test: null,null,false,function "function TypeError() {\n    [native code]\n}"
