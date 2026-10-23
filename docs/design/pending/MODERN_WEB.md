@@ -1330,7 +1330,8 @@ and a tenth the new cases found) and read for design. Four rows in
   host clamps), `document.scrollingElement` (CSSOM View's, quirks
   included), `onscroll`/`onresize`, and window's `focus()` and `blur()`,
   which do nothing (the window is the person's to raise; added when the
-  corpus replay showed statcounter reaching `defaultView.focus()`).
+  corpus replay showed a site's analytics script reaching
+  `defaultView.focus()`).
   `resize` at window and `scroll` at the document, bubbling, are fired by
   the host's rendering step.
 - **`matchMedia`, `MediaQueryList`, `MediaQueryListEvent`**: `media` is
@@ -1413,17 +1414,17 @@ are not window misses, so the census cannot count them.
 
 **The corpus replay** (230 pages Chris kept on the P5, 222 judged, run by
 the orchestrator) found four failure groups that could have been this
-slice's, each traced to its cause: Cloudflare's challenge (five sites)
+slice's, each traced to its cause: a CDN's bot challenge (five sites)
 dies at `crypto.getRandomValues`, before and after, its timer then
 calling a callback (`window.qpPe1`) that the dead script would have made;
 the only change is the address, which now carries the challenge's token
 because `replaceState` runs and no script `load` event puts it back (both
-booked). React's `getActiveElementDeep` (att.com, javascriptminigames)
+booked). React's `getActiveElementDeep` (two sites)
 now reaches `instanceof window.HTMLIFrameElement`, slice 0a's booked
-interface. statcounter now reaches `""+document.referrer` (slice 1a's
+interface. A site's analytics script now reaches `""+document.referrer` (slice 1a's
 booked row) and `document.defaultView.focus()`, for which this slice
 added window's `focus`/`blur`; checking every interface the slice hands
-out added `CSSStyleDeclaration`. amazon's and ms.now's unjudged records
+out added `CSSStyleDeclaration`. Two sites' unjudged records
 are the record's own capacity (its facts past `YONDER_DIAG_FACTS_MAX`).
 
 Host: the DOM host 3,810 / 22,416 → 4,709 / 36,995 checks, with 5,715
@@ -1514,6 +1515,20 @@ as what-ifs or as WebIDL's own rule: an options getter that scrolls the
 window, and `scrollRestoration` refusing an unknown word (WebIDL ignores
 it).
 
+**The fourth cold read**, of the merge and round 2, found six. A
+MediaQueryList was held for the page's life by any target operation on it
+(a read of `onchange`, a removal, a dispatch) and never let go when its
+last listener went, so a hook that makes a list and adds and removes a
+listener every render kept every list; now an entry is made only to add, to
+set a handler or to dispatch, and `media_release` lets it go, in one walk
+of the registry, at the next matchMedia or view step. `resolution`
+answered 1 at any zoom; it is the zoom now, as devicePixelRatio is, and
+libgarb knows the WebKit pixel ratio. A quoted family name that spells a
+keyword is written quoted, and a keyword in its canonical lowercase. And
+three texts: slice 4's `-computed` pages wait on `CSS.supports` (booked),
+not on getComputedStyle; a comment that headed the wrong function; and
+what matchMedia's answer reads.
+
 **Booked** (DEBTS.md § Classic browser scripting): computed custom
 properties and shorthands; `DOMException` (raised with Chris as a small
 libdom slice); frames and `window.open`; an entry's state living only as
@@ -1526,6 +1541,7 @@ element's `load` and `error`; from Codex's round, QuickJS compiling a
 parse that ran out of memory; and from the second cold read, Back from an
 arriving page measured before a held push joins; and from the third, the
 question bar answered for a page not yet shown, a page not yet shown's
-Referer, and a fragment navigation before load; and from Codex's second
-round, a grid template's used track sizes. In § The replay corpus:
+Referer, and a fragment navigation before load; from Codex's second
+round, a grid template's used track sizes; and from the fourth cold read,
+`CSS.supports`. In § The replay corpus:
 a replay's session history and window frame.
