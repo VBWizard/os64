@@ -614,6 +614,9 @@ JSValue d_uint8_array(JSContext *ctx, const uint8_t *bytes, size_t length);
  * `value` is one; NULL and no exception when it is not one; NULL with an
  * exception pending when there was no memory. */
 char *d_params_text(JSContext *ctx, JSValueConst value, size_t *length);
+/* Whether `value` is a URLSearchParams (XHR's send() treats one as it
+ * treats a string when it rewrites a charset). */
+bool d_params_is(JSValueConst value);
 /* AbortSignal (abort.c). A signal's algorithms are C's: a fetch's abort,
  * by its request's token, and a dependent signal's. */
 JSValue d_signal_new(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype);

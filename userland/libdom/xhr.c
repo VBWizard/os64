@@ -614,7 +614,7 @@ static XHeader *header_named(DXhr *x, const char *name, size_t nlen)
     return NULL;
 }
 
-/* A string body's author Content-Type keeps its words, but a charset in it
+/* A string's or a URLSearchParams body's author Content-Type keeps its words, but a charset in it
  * that is not UTF-8 says UTF-8, which is what the bytes are (XHR § send(),
  * step 4.4.3; the parameter's value is replaced where it stands). -1 on no
  * memory. */
@@ -729,10 +729,12 @@ static JSValue xhr_send(os64_dom_t *dom, JSContext *ctx, JSValueConst self, int 
         d_bytes_free(ctx, &body);
         return d_dom_exception(dom, ctx, "InvalidStateError", "The request is not open, or has been sent");
     }
-    /* The body's type: the author's Content-Type, with a string's charset
-     * said truly; else the type the body gave. */
+    /* The body's type: the author's Content-Type, with the charset said
+     * truly for the bodies XHR § send() names (a string or a
+     * URLSearchParams, both UTF-8 encoded; a Document is not sent as one
+     * here, DEBTS.md); else the type the body gave. */
     XHeader *author = has_body ? header_named(x, "content-type", 12) : NULL;
-    bool text = has_body && JS_IsString(value);
+    bool text = has_body && (JS_IsString(value) || d_params_is(value));
     if (author != NULL && text && charset_utf8(ctx, author) < 0) {
         d_bytes_free(ctx, &body);
         return JS_EXCEPTION;

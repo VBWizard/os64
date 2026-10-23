@@ -821,6 +821,25 @@ static void dom_xhr_cases(void)
         "throws('TypeError',()=>ProgressEvent.prototype.loaded);",
         "xhr: the surface and its refusals");
 
+    /* An author Content-Type's charset says UTF-8 for the bodies XHR's
+     * send() encodes as UTF-8, a string and a URLSearchParams, and is left
+     * as written for any other (a Blob's bytes are its own). */
+    static const struct { const char *body, *want; } kCharsets[] = {
+        {"'a=1'", "Content-Type: application/x-www-form-urlencoded;charset=UTF-8\r\n"},
+        {"new URLSearchParams('a=1')", "Content-Type: application/x-www-form-urlencoded;charset=UTF-8\r\n"},
+        {"new Blob(['a=1'])", "Content-Type: application/x-www-form-urlencoded;charset=windows-1252\r\n"},
+    };
+    for (size_t i = 0; i < sizeof(kCharsets) / sizeof(kCharsets[0]); i++) {
+        char script[384];
+        snprintf(script, sizeof(script),
+                 "var x=new XMLHttpRequest();x.open('POST','/cs');"
+                 "x.setRequestHeader('Content-Type','application/x-www-form-urlencoded;charset=windows-1252');x.send(%s);",
+                 kCharsets[i].body);
+        dom_script(&f, script, "xhr: an author charset");
+        check(strstr(net.seen[net.count - 1].headers, kCharsets[i].want) != NULL,
+              "xhr: a string's and a URLSearchParams' charset says UTF-8, a Blob's is kept");
+    }
+
     /* Async, with an upload: WPT's send-response-event-order. */
     dom_script(&f, XHR_RECORDER
         "var x=new XMLHttpRequest();rec(x);x.open('POST','content.py');globalThis.xr=x;"

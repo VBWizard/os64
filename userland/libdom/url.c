@@ -1430,6 +1430,11 @@ char *d_params_text(JSContext *ctx, JSValueConst value, size_t *length)
     return form_serialize(ctx, params, length);
 }
 
+bool d_params_is(JSValueConst value)
+{
+    return JS_GetOpaque(value, os64_js_class_id(&params_slot)) != NULL;
+}
+
 int d_url_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst input, char **out)
 {
     *out = NULL;
