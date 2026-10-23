@@ -196,18 +196,6 @@ static JSValue detail_clone(JSContext *ctx, JSValueConst value)
     return clone;
 }
 
-/* A dictionary argument: undefined or null is an empty one, anything else
- * that is not an object a TypeError. 1 an object, 0 empty, -1 thrown. */
-static int dictionary(JSContext *ctx, int argc, JSValueConst *argv, int at)
-{
-    if (argc <= at || JS_IsUndefined(argv[at]) || JS_IsNull(argv[at])) return 0;
-    if (!JS_IsObject(argv[at])) {
-        JS_ThrowTypeError(ctx, "The options must be an object");
-        return -1;
-    }
-    return 1;
-}
-
 /* A DOMHighResTimeStamp, which is a restricted double: NaN and the
  * infinities are refused. */
 static int timestamp(JSContext *ctx, JSValueConst value, double *out)
@@ -400,7 +388,7 @@ static JSValue mark_make(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype
      * names' order; then the constructor's steps, in theirs. */
     JSValue detail = JS_UNDEFINED, start = JS_UNDEFINED, result = JS_EXCEPTION;
     double time = 0;
-    int options = dictionary(ctx, argc, argv, 1);
+    int options = d_dictionary(ctx, argc, argv, 1);
     if (options > 0) {
         detail = JS_GetPropertyStr(ctx, argv[1], "detail");
         if (JS_IsException(detail)) goto done;
@@ -857,7 +845,7 @@ int d_performance_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (d_accessor(dom, ctx, on, "timeOrigin", performance_member, M_TIME_ORIGIN, false) < 0 ||
         d_accessor(dom, ctx, on, "timing", performance_member, M_TIMING, false) < 0 ||
         d_accessor(dom, ctx, on, "navigation", performance_member, M_NAVIGATION, false) < 0 ||
-        d_event_target(dom, ctx, on, performance_id) < 0)
+        d_event_target(dom, ctx, on, performance_id, NULL) < 0)
         return -1;
 
     /* PerformanceEntry and its kinds. */

@@ -264,6 +264,25 @@ def main():
         media_failed += 1
     print(f'media queries: {len(cases)} cases, {media_failed} failed')
 
+    # Media query lists as CSSOM serialises them (tools/garb_corpus/media_text.txt).
+    cases = []
+    for line in (SUITE.parent / 'garb_corpus' / 'media_text.txt').read_text().splitlines():
+        if line.startswith('IN: "') and line.endswith('"'):
+            cases.append([line[5:-1], None])
+        elif line.startswith('OUT: '):
+            cases[-1][1] = line[5:]
+    feed = b''.join(record(given.encode('utf-8')) + b'-1\n-1\n' for given, _ in cases)
+    run = subprocess.run([driver, 'media-text'], input=feed, capture_output=True)
+    lines = run.stdout.decode().splitlines()
+    for (given, want), line in zip(cases, lines):
+        if line != want:
+            print(f'FAIL media text: {given!r} want {want} got {line}')
+            media_failed += 1
+    if run.returncode != 0 or len(lines) != len(cases):
+        print(f'FAIL media text: the driver answered {len(lines)} of {len(cases)}')
+        media_failed += 1
+    print(f'media query text: {len(cases)} cases')
+
     cascade_failed = cascade_pages(driver, 'cascade')
     skips_failed = cascade_pages(driver, 'skips')
     keyframes_failed = cascade_pages(driver, 'keyframes')

@@ -283,7 +283,7 @@ static void border_color(Spec *sp, uint32_t rgb)
 
 static void monospace(Spec *sp)
 {
-    sp->s.family = (flow_family_list_t){NULL, 0, FLOW_GENERIC_MONO};
+    sp->s.family = (flow_family_list_t){.generic = FLOW_GENERIC_MONO};
 }
 
 // "Maps to the dimension property": the attribute, read as a dimension,
@@ -342,7 +342,7 @@ static flow_style_t initial(const Ctx *c)
     flow_style_t s;
     os64_memset(&s, 0, sizeof(s));
     s.display = FLOW_DISPLAY_INLINE;
-    s.family = (flow_family_list_t){NULL, 0, c->env->default_generic};
+    s.family = (flow_family_list_t){.generic = c->env->default_generic};
     s.font_weight = 400;
     s.font_style = FLOW_FONT_NORMAL;
     s.font_size = css(c, c->env->viewport_font_px);
@@ -505,7 +505,8 @@ static flow_generic_t guess_generic(const char *s, uint32_t len)
 // `<font face="Verdana, Arial, sans-serif">`: the names as written, each a
 // slice of the attribute, and the generic the list ends in — the first
 // generic keyword the page wrote, else a guess from the first name. A
-// generic keyword is a family, not a name, so it is not passed as one.
+// generic keyword is a family, not a name, so it is not passed as one;
+// the list as written keeps it where it stood.
 static bool font_face(Ctx *c, const char *v, flow_family_list_t *out)
 {
     uint32_t count = 0;
@@ -514,9 +515,10 @@ static bool font_face(Ctx *c, const char *v, flow_family_list_t *out)
             count++;
     count++;
     flow_family_name_t *names = f_arena_alloc(&c->out->arena, count * sizeof(*names));
-    if (names == NULL)
+    flow_family_written_t *written = names != NULL ? f_arena_alloc(&c->out->arena, count * sizeof(*written)) : NULL;
+    if (written == NULL)
         return false;
-    uint32_t n = 0;
+    uint32_t n = 0, nwritten = 0;
     bool have_generic = false;
     flow_generic_t generic = FLOW_GENERIC_SANS;
     const char *p = v;
@@ -538,8 +540,10 @@ static bool font_face(Ctx *c, const char *v, flow_family_list_t *out)
                 generic = g;
                 have_generic = true;
             }
+            written[nwritten++] = (flow_family_written_t){start, len, true};
         } else if (len > 0) {
             names[n++] = (flow_family_name_t){start, len};
+            written[nwritten++] = (flow_family_written_t){start, len, false};
         }
         if (*p == '\0')
             break;
@@ -550,7 +554,7 @@ static bool font_face(Ctx *c, const char *v, flow_family_list_t *out)
         return true;
     if (!have_generic)
         generic = guess_generic(names[0].name, names[0].len);
-    *out = (flow_family_list_t){n > 0 ? names : NULL, n, generic};
+    *out = (flow_family_list_t){n > 0 ? names : NULL, n, generic, written, nwritten};
     return true;
 }
 
@@ -1668,10 +1672,11 @@ static bool author_generic(const char *k, flow_generic_t *out)
 }
 
 // `font-family`: the names in order and the first generic, as `<font
-// face>` builds them. The names point into the sheet.
-// The names are copied for every element the declaration reaches: a
-// `* { font-family: … }` reset costs one list an element (48 bytes for
-// three names), out of the lists' budget (list_alloc), past which the
+// face>` builds them, and the list as written. The names point into the
+// sheet.
+// The lists are copied for every element the declaration reaches: a
+// `* { font-family: … }` reset costs one pair an element (96 bytes for
+// three families), out of the lists' budget (list_alloc), past which the
 // element keeps the family it inherited; one list per winning set would
 // cost it once.
 static bool author_family(Author *a, const garb_val_t *v, flow_family_list_t *out)
@@ -1679,10 +1684,13 @@ static bool author_family(Author *a, const garb_val_t *v, flow_family_list_t *ou
     if (v->items == NULL || v->nitems <= 0)
         return true;
     bool spent;
-    flow_family_name_t *names = list_alloc(a->c, (size_t)v->nitems * sizeof(*names), &spent);
+    // One allocation: the names, then the list as written.
+    flow_family_name_t *names =
+        list_alloc(a->c, (size_t)v->nitems * (sizeof(*names) + sizeof(flow_family_written_t)), &spent);
     if (names == NULL)
         return spent;
-    uint32_t n = 0;
+    flow_family_written_t *written = (flow_family_written_t *)(names + v->nitems);
+    uint32_t n = 0, nwritten = 0;
     bool have_generic = false;
     flow_generic_t generic = FLOW_GENERIC_SANS;
     for (int32_t i = 0; i < v->nitems; i++) {
@@ -1693,13 +1701,15 @@ static bool author_family(Author *a, const garb_val_t *v, flow_family_list_t *ou
                 generic = g;
                 have_generic = true;
             }
+            written[nwritten++] = (flow_family_written_t){it->keyword, (uint32_t)os64_strlen(it->keyword), true};
         } else if (it->kind == GARB_V_STRING && it->len > 0) {
             names[n++] = (flow_family_name_t){it->text, (uint32_t)it->len};
+            written[nwritten++] = (flow_family_written_t){it->text, (uint32_t)it->len, false};
         }
     }
     if (!have_generic && n > 0)
         generic = guess_generic(names[0].name, names[0].len);
-    *out = (flow_family_list_t){n > 0 ? names : NULL, n, generic};
+    *out = (flow_family_list_t){n > 0 ? names : NULL, n, generic, nwritten > 0 ? written : NULL, nwritten};
     return true;
 }
 
@@ -4447,6 +4457,42 @@ void f_style_anonymous(const FStyles *styles, const flow_style_t *parent,
 const FStyled *f_style_of(const FStyles *styles, const os64_html_node_t *node)
 {
     return styles != NULL ? f_map_get(&styles->map, node) : NULL;
+}
+
+const FStyled *f_style_beyond(const FStyles *styles, FStyles *extra, const os64_page_t *model,
+                              const os64_html_node_t *element)
+{
+    // The nearest ancestor the build styled, and the elements between.
+    int32_t depth = 0;
+    const os64_html_node_t *styled = element;
+    while (styled != NULL && styled->kind == OS64_HTML_ELEMENT && f_style_of(styles, styled) == NULL) {
+        styled = styled->parent;
+        depth++;
+    }
+    if (styled == NULL || styled->kind != OS64_HTML_ELEMENT || depth == 0)
+        return depth == 0 ? f_style_of(styles, element) : NULL;
+    // The ancestor's record is copied in, so styling its children reads it
+    // and writes nothing of the tree's (a child `rp` marks its parent).
+    FStyled *seed = f_arena_alloc(&extra->arena, sizeof(*seed));
+    if (seed == NULL)
+        return NULL;
+    *seed = *f_style_of(styles, styled);
+    if (!f_map_put(&extra->map, styled, seed))
+        return NULL;
+    const FStyled *root = f_style_of(styles, extra->doc->html);
+    Ctx c = {.doc = extra->doc, .model = model, .env = extra->env, .out = extra,
+             .quirks = extra->doc->quirks == OS64_HTML_QUIRKS,
+             .zoom = extra->env->zoom != 0 ? extra->env->zoom / 1000.0 : 1.0};
+    c.root_font = root != NULL ? root->style.font_size : css(&c, extra->env->viewport_font_px);
+    // Outermost first, each from the parent styled before it.
+    for (int32_t d = depth; d > 0; d--) {
+        const os64_html_node_t *n = element;
+        for (int32_t up = 1; up < d; up++)
+            n = n->parent;
+        if (style_element(&c, n) == NULL)
+            return NULL;
+    }
+    return f_map_get(&extra->map, element);
 }
 
 void f_style_free(FStyles *styles)

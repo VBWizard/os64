@@ -29,6 +29,16 @@ typedef struct {
     // `prefers-reduced-motion` answers, `reduce` when true and
     // `no-preference` when false.
     bool reduced_motion;
+    // Whether the document's scripts run: what `scripting` answers,
+    // `enabled` when true and `none` when false.
+    bool scripting;
+    // The output device, the screen, in CSS pixels: what device-width,
+    // device-height and device-aspect-ratio answer. Either 0 answers them
+    // from the viewport, for a host that knows no screen.
+    double device_width, device_height;
+    // The device pixels a CSS pixel is drawn with (the page's zoom): what
+    // `resolution` and the WebKit pixel ratio answer, in dppx. 0 is 1.
+    double resolution;
     // Whether the Modern Web arc's properties are taken away
     // (garb_reading_t): the cascade reads every declaration, and every
     // `@supports` condition, with this answer, and records a marked
@@ -217,6 +227,31 @@ int32_t garb_cascade_skips(const garb_cascade_t *c, garb_skip_t *out, int32_t ca
 // parse is false (`not all`).
 bool garb_media_matches(const garb_value_t *v, int32_t n, garb_env_t env);
 bool garb_media_text_matches(const char *text, garb_env_t env);
+// The same list as CSSOM serialises it, which is what a MediaQueryList's
+// `media` reads (CSSOM § Serializing media queries): the queries joined by
+// `, `; each one that is not a query's shape, an empty one included, as
+// `not all`; `not` or `only`, the type and a known feature's name and
+// keywords in lower case; `all and` left out of a query nothing negates; a
+// number to six significant digits (garb_css_number), a ratio as `a / b`;
+// anything else in brackets kept as written, its white space made single
+// spaces. A list with no content is "". A query's shape is the grammar's:
+// a feature this machine does not know changes what the query evaluates
+// to, not how it is written. Each query is read once, so the cost is
+// linear in the list however deep its brackets nest. Like snprintf; the
+// text form answers (size_t)-1, with "" written, when it could not read the
+// text whole: no memory, or brackets nested past GARB_DEPTH_MAX.
+size_t garb_media_serialize(const garb_value_t *v, int32_t n, char *out, size_t cap);
+size_t garb_media_text_serialize(const char *text, char *out, size_t cap);
+// Memory for a buffer libgarb grows for its caller: a block of `new_size`
+// bytes holding the first `old_size` of `old` (which it lets go), or NULL
+// with `old` untouched; `new_size` 0 lets `old` go and answers NULL.
+typedef void *(*garb_grow_t)(void *ctx, void *old, size_t old_size, size_t new_size);
+// The text form in one pass into a buffer it grows with `grow` (NULL:
+// libos64's os64_realloc and os64_free): NUL-terminated, its length in
+// *length, the caller's to let go the way `grow` would. NULL where the
+// text form answers (size_t)-1, and when there was no memory for the
+// buffer, with nothing left held.
+char *garb_media_text_serialized(const char *text, size_t *length, garb_grow_t grow, void *ctx);
 
 // Every element's winners as text, in document order: `tag#id.class:
 // prop: value; ...`, for the harness and a probe. Like snprintf.

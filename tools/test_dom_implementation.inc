@@ -5,8 +5,8 @@
  * new document adopted into the page and found there; which document a
  * node belongs to through every way it can be made, moved, taken out and
  * copied; what a document with no window cannot do (location, cookies,
- * write, navigation, submission, focus, its scripts and its handler
- * attributes); createDocument and createDocumentType with their
+ * defaultView, write, navigation, submission, focus, its scripts and its
+ * handler attributes); createDocument and createDocumentType with their
  * refusals; hasFeature; the receivers; every allocation the binding
  * makes failed in turn; and the two jQuerys the kept corpus carries,
  * whole and unedited, booting. */
@@ -271,8 +271,10 @@ static void implementation_windowless_cases(void)
         "throws('TypeError',()=>{d.location='http://fixture.test/'});"
         "assert(d.cookie===''&&document.cookie==='a=1; b=2','cookie-averse');d.cookie='z=9';"
         "throws('InvalidStateError',()=>d.write('<p>'));throws('InvalidStateError',()=>d.writeln('<p>'));"
-        "throws('InvalidStateError',()=>d.open());assert(d.close()===undefined);",
-        "windowless: location, cookies and the parser");
+        "throws('InvalidStateError',()=>d.open());assert(d.close()===undefined);"
+        "assert(d.defaultView===null&&document.defaultView===window,'no window for defaultView');"
+        "assert(d.scrollingElement===d.documentElement,'its root scrolls');",
+        "windowless: location, cookies, the parser and its view");
     check(cookie_heard[0] == 0, "windowless: a cookie set reaches no provider");
     check(writes == 0, "windowless: a write reaches no parser");
     os64_dom_navigation_t ask;

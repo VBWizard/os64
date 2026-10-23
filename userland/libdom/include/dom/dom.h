@@ -387,6 +387,158 @@ void os64_dom_set_geometry(os64_dom_t *dom, os64_dom_geometry_provider_t provide
  * the start of a host task; records survive script exceptions/failed reads. */
 os64_dom_geometry_stats_t os64_dom_geometry_stats(os64_dom_t *dom, bool reset);
 
+/* THE VIEW (CSSOM View § Extensions to the Window interface; MODERN_WEB.md
+ * § Slice 1b): what the window shows the page through, in CSS pixels. All
+ * of it is the Modern Web arc's surface: with options.modern clear none of
+ * the names exists and nothing below dispatches. */
+typedef struct {
+    /* The viewport: innerWidth and innerHeight, and the width and height a
+     * media query reads. */
+    int32_t width, height;
+    /* The window's frame: outerWidth and outerHeight. */
+    int32_t outer_width, outer_height;
+    /* Where the page is scrolled to: scrollX and scrollY. */
+    double scroll_x, scroll_y;
+    /* What prefers-color-scheme and prefers-reduced-motion answer. */
+    bool dark, reduced_motion;
+} os64_dom_view_t;
+
+typedef struct {
+    /* The view as it is now: no layout. */
+    void (*read)(void *opaque, os64_dom_view_t *out);
+    /* scrollTo's door: the page's layout made current, then the view
+     * scrolled to (x, y), clamped as the host clamps any scroll; what the
+     * layout cost goes in `cost`, which the binding adds to its geometry
+     * counts (os64_dom_geometry_stats). False when no current layout could
+     * be made: the script sees InvalidStateError. */
+    bool (*scroll)(void *opaque, double x, double y, os64_dom_geometry_stats_t *cost);
+    void *opaque;
+} os64_dom_view_provider_t;
+/* Copied; NULL removes it, after which the view reads as zeros and a
+ * scroll moves nothing. Both callbacks are owner-thread and must not enter
+ * JS or pump events. The view is read once now, so the first
+ * os64_dom_view_step compares against the view as it stood here. Install
+ * outside callbacks. */
+void os64_dom_set_view(os64_dom_t *dom, const os64_dom_view_provider_t *view);
+/* THE VIEW'S EVENTS (HTML § Update the rendering, the steps CSSOM View
+ * adds), at most ONE per call, as one task: `resize` at window when the
+ * view's size moved since the last step; else `scroll` at the document,
+ * bubbling to window, when the scroll moved; else `change` at the first
+ * MediaQueryList, in the order the page made them, whose `matches` moved,
+ * as a MediaQueryListEvent. A change nothing could hear is noted and
+ * passed over without a task. True when one ran, its outcome filled;
+ * false when nothing was owed, the binding has no view, or modern is off.
+ * Owner thread, between tasks: the host calls it until it answers false. */
+bool os64_dom_view_step(os64_dom_t *dom, os64_js_outcome_t *outcome);
+
+/* GETCOMPUTEDSTYLE (CSSOM § getComputedStyle): the provider writes an
+ * element's resolved style, one text per property of libgarb's table
+ * (garb_prop_t is `prop`; the table is the list, and a declaration's
+ * length, order and names are the table's), each as CSSOM serialises it.
+ * The binding asks for the whole element at every read, so a declaration a
+ * script holds is live; an element not in the document, and a
+ * pseudo-element, answer an empty declaration without asking. */
+typedef struct os64_dom_computed os64_dom_computed_t;
+/* The provider makes the element's style current (a layout, when it was
+ * stale), puts every property it knows, and answers true; an element with
+ * no style puts nothing and answers true. False when no current style could
+ * be made: the script sees InvalidStateError. Must not enter JS or pump
+ * events. */
+typedef bool (*os64_dom_computed_provider_t)(void *opaque, const os64_html_node_t *element,
+                                            os64_dom_computed_t *out);
+/* The provider's pen: property `prop` is `length` bytes of UTF-8 `value`,
+ * copied. A property not put reads "". False when the binding could not
+ * keep it (its budget), which the provider answers as its own false. */
+bool os64_dom_computed_put(os64_dom_computed_t *out, int32_t prop, const char *value, size_t length);
+/* What making the style current cost, added to os64_dom_geometry_stats. */
+void os64_dom_computed_cost(os64_dom_computed_t *out, uint64_t layouts, uint64_t elapsed_us);
+/* NULL removes it; a declaration's read then throws InvalidStateError for
+ * an element in the document, and reads "" for a pseudo-element or an
+ * element outside it. Install outside callbacks. */
+void os64_dom_set_computed(os64_dom_t *dom, os64_dom_computed_provider_t provider, void *opaque);
+
+/* HISTORY (HTML § The History interface; MODERN_WEB.md § Slice 1b): the
+ * session's entries are the host's, and a script reaches them through
+ * these. The state a script leaves with an entry is JSON text: what JSON
+ * can carry of a structured clone (null, booleans, finite numbers but -0,
+ * strings, arrays without holes and plain objects of them; `undefined` in
+ * an object is left out, as JSON leaves it, and in an array it is null),
+ * anything else a DataCloneError, and at most OS64_DOM_STATE_MAX bytes, a
+ * QuotaExceededError past that. */
+#define OS64_DOM_STATE_MAX ((size_t)64 * 1024)
+typedef struct {
+    /* pushState (push) or replaceState: the session's current entry
+     * becomes `url` (absolute, and a URL the document may rewrite its own
+     * to, which the binding has checked) with `state`, `length` bytes of
+     * JSON (NULL for null; copied), and when `push` the entry that was
+     * current stays behind it. No event, whatever the fragment did. False
+     * when the host could not (no memory): QuotaExceededError, and nothing
+     * changed. */
+    bool (*update)(void *opaque, const char *url, const char *state, size_t length, bool push);
+    /* A fragment navigation the document's script asked for (location.hash
+     * =, or an address that differs from the document's only in its
+     * fragment): the host adds the entry `url` (replaces the current one
+     * when `replace`), scrolls to its fragment, and owes hashchange when
+     * the fragment moved (os64_dom_history_event). On true the binding
+     * makes `url` the document's address and null its state, and fires
+     * popstate itself, inside the script that asked (HTML § Navigate to a
+     * fragment, whose "update document for history step application"
+     * fires it then and there). False when the host could not: nothing
+     * changed, and the binding asks for the address as a navigation
+     * instead (os64_dom_take_navigation). */
+    bool (*fragment)(void *opaque, const char *url, bool replace);
+    /* history.length: the entries in the session. */
+    uint32_t (*length)(void *opaque);
+    void *opaque;
+} os64_dom_history_t;
+/* Copied; NULL removes it, after which pushState and replaceState change
+ * only the document's own address and state, a fragment navigation is an
+ * ask (os64_dom_take_navigation), and history.length reads 1. The
+ * callbacks are owner-thread, inside a script's task: they must not enter
+ * JS. Install outside callbacks. */
+void os64_dom_set_history(os64_dom_t *dom, const os64_dom_history_t *history);
+/* The session moved to another entry of this document without a fetch: a
+ * traversal (Back, Forward, history.go) or a fragment navigation the host
+ * began (a link to `#x`). The document's address becomes `url`, its state
+ * `length` bytes of the JSON the host kept (NULL for null), read the next
+ * time history.state is. Nothing is dispatched: the host follows with
+ * os64_dom_history_event. False on no memory, nothing changed; it is the
+ * step of a move that can fail, so a host calls it before its own entries
+ * move and moves them only on true, or the window would show one address
+ * while the page's scripts read another. Owner thread, outside JS. */
+bool os64_dom_history_moved(os64_dom_t *dom, const char *url, const char *state, size_t length);
+/* The document's current entry and its state, named: a new name at every
+ * state update, fragment navigation and move. A host takes it when it owes
+ * a popstate, so the event knows whether its entry is still the current
+ * one. 0 for a NULL binding. */
+uint64_t os64_dom_history_entry(const os64_dom_t *dom);
+/* One of the history's events as the host OWED it: what it carries is
+ * captured then, not read when it runs, since other moves may come
+ * between. */
+typedef struct {
+    bool hashchange;
+    /* hashchange: the document's address before and after the move it was
+     * owed for. */
+    const char *old_url, *new_url;
+    /* popstate: the state of the entry it was owed for, `length` bytes of
+     * NUL-terminated JSON (NULL for null), and that entry's name
+     * (os64_dom_history_entry) when it was owed. While that entry is still
+     * the current one the event's state is history.state itself; after,
+     * it is read from this JSON. */
+    const char *state;
+    size_t length;
+    uint64_t entry;
+} os64_dom_history_event_t;
+/* `popstate` or `hashchange` at window, as one task. OK with nothing run
+ * when modern is off or nothing could hear it; BAD_ARGUMENT for a
+ * hashchange without both addresses, or a length with no state. */
+os64_js_status_t os64_dom_history_event(os64_dom_t *dom, const os64_dom_history_event_t *event,
+                                        os64_js_outcome_t *outcome);
+/* Whether the page set history.scrollRestoration to "manual": the host
+ * then leaves the scroll where it is when it traverses to another entry
+ * of this document. */
+bool os64_dom_history_manual(const os64_dom_t *dom);
+
 /* Owner-thread only, outside JS callbacks. Idempotent; NULL is a no-op.
  * Drain closes bindings and releases C-retained JS values even when libjs
  * has entered a sticky failed state. It first commits each storage area's
@@ -422,7 +574,9 @@ os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node
 bool os64_dom_listens(os64_dom_t *dom, const char *type);
 /* Which event types the document's on<type> content attributes name, as a
  * mask os64_dom_handler_bit reads: the walk os64_dom_listens counts with.
- * It needs no runtime, so a host can ask before making one. */
+ * It needs no runtime, so a host can ask before making one. It knows no
+ * binding, so it names the Modern Web arc's types whatever the switch
+ * says; os64_dom_listens counts them only with the switch on. */
 uint32_t os64_dom_handler_attributes(const os64_html_document_t *doc);
 /* The bit for `type` in that mask; 0 for a type no attribute can name
  * (DOMContentLoaded, or one outside the types the host dispatches). */
@@ -437,7 +591,9 @@ uint64_t os64_dom_timer_next(const os64_dom_t *dom);
 bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
 
 /* The navigation a script asked for since the last take, if any: the last
- * ask wins. False when there is none. */
+ * ask wins, but with the Modern Web switch on history.go()s in a row add
+ * up to one delta (OS64_DOM_NAVIGATE_HISTORY), as HTML runs each after the
+ * one before it. False when there is none. */
 bool os64_dom_take_navigation(os64_dom_t *dom, os64_dom_navigation_t *ask);
 /* An error a nested dispatch or a handler compile reported inside a task the
  * host did not open through libdom (a script run with os64_js_run). The

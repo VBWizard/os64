@@ -131,6 +131,23 @@ static way_session_t session(void)
 
 // ── Pages ───────────────────────────────────────────────────────────────
 
+// A crumb a face describes whole: its document, and a state the session
+// takes (NULL for none).
+static way_crumb_t crumb_of(const char *url, uint64_t document, const char *state)
+{
+    way_crumb_t c;
+    memset(&c, 0, sizeof(c));
+    snprintf(c.url, sizeof(c.url), "%s", url);
+    c.document = document;
+    if (state != NULL) {
+        c.state = os64_malloc(strlen(state) + 1);
+        if (c.state == NULL)
+            abort();
+        strcpy(c.state, state);
+    }
+    return c;
+}
+
 static way_page_t page_of(const char *html, const char *url)
 {
     way_page_t p;
@@ -369,6 +386,101 @@ static void forward(void)
            leg.session == &s && leg.face.confirm == face_confirm && leg.status[0] == '\0', NULL);
 }
 
+// Entries a face describes whole (HTML § Session history): each crumb's
+// document and state ride with it between the lists, the session owns a
+// state while the crumb is in it, and every way a crumb leaves the session
+// either hands its state over or frees it (`live` is the proof).
+static void entries(void)
+{
+    way_session_t s = session();
+    way_crumb_t crumb, arrived;
+    size_t before = live;
+    way_crumb_t left = crumb_of("http://h/a", 7, "{\"n\":1}");
+    way_remember_entry(&s, &left);
+    expect("entries: remembering takes the state", left.state == NULL && s.depth == 1 &&
+           s.history[0].document == 7 && strcmp(s.history[0].state, "{\"n\":1}") == 0, NULL);
+    left = crumb_of("http://h/a#two", 7, "2");
+    left.entry = 41;
+    way_remember_entry(&s, &left);
+    expect("entries: Back's crumb is copied out with its state borrowed",
+           way_last(&s, &crumb) && crumb.document == 7 && crumb.state == s.history[1].state &&
+               crumb.entry == 41 && s.depth == 2, NULL);
+    left = crumb_of("http://h/a#three", 7, NULL);
+    left.entry = 42;
+    way_went_back_entry(&s, &left, &arrived);
+    expect("entries: Back hands the crumb's state to the face and keeps the left one for Forward",
+           s.depth == 1 && s.ahead == 1 && strcmp(arrived.state, "2") == 0 &&
+               strcmp(arrived.url, "http://h/a#two") == 0 && s.forward[0].state == NULL &&
+               s.forward[0].document == 7 && strcmp(s.forward[0].url, "http://h/a#three") == 0, NULL);
+    expect("entries: an entry keeps its name wherever it moves", arrived.entry == 41 && s.forward[0].entry == 42,
+           NULL);
+    {
+        way_session_t f = session();
+        way_crumb_t a = crumb_of("http://h/x", 1, "{}"), b = crumb_of("http://h/y", 1, "1");
+        way_forward_entry(&f, &a);
+        way_forward_entry(&f, &b);
+        way_forget_ahead(&f);
+        expect("entries: forgetting what is ahead empties Forward and frees the states", f.ahead == 0 && f.depth == 0,
+               NULL);
+        way_history_clear(&f);
+    }
+    left = arrived;                         // the state goes back in with the entry it came with
+    way_went_forward_entry(&s, &left, &arrived);
+    expect("entries: Forward is the mirror, the state taken back in",
+           left.state == NULL && s.depth == 2 && s.ahead == 0 && arrived.state == NULL &&
+               strcmp(s.history[1].state, "2") == 0 && strcmp(arrived.url, "http://h/a#three") == 0,
+           NULL);
+    way_went_back_entry(&s, &arrived, &crumb);
+    os64_free(crumb.state);
+    left = crumb_of("http://h/b", 9, "ahead");
+    way_went_forward_entry(&s, &left, &arrived);    // nothing ahead now but a#three
+    os64_free(arrived.state);
+    left = crumb_of("http://h/c", 9, "{}");
+    way_remember_entry(&s, &left);
+    expect("entries: a new way frees the states that were ahead", s.ahead == 0, NULL);
+    way_went_back_entry(&s, &left, &arrived);
+    expect("entries: an entry whose state was taken goes ahead with none",
+           s.ahead == 1 && s.forward[0].state == NULL && strcmp(s.forward[0].url, "http://h/c") == 0,
+           NULL);
+    os64_free(arrived.state);
+    // Back with nowhere to go hands back a zeroed crumb and still keeps the
+    // page left for Forward, as way_went_back always has.
+    while (s.depth > 0) {
+        way_crumb_t here = crumb_of("http://h/x", 1, "x");
+        way_went_back_entry(&s, &here, &arrived);
+        os64_free(arrived.state);
+    }
+    way_crumb_t here = crumb_of("http://h/y", 1, "y");
+    way_went_back_entry(&s, &here, &arrived);
+    expect("entries: Back past the first crumb answers a zeroed crumb",
+           arrived.url[0] == '\0' && arrived.state == NULL && arrived.document == 0, NULL);
+    for (int i = 0; i <= WAY_HISTORY_MAX + 2; i++) {
+        way_crumb_t c = crumb_of("http://h/many", (uint64_t)i, "kept");
+        way_remember_entry(&s, &c);
+    }
+    expect("entries: the oldest crumb dropped past the cap takes its state with it",
+           s.depth == WAY_HISTORY_MAX && s.history[0].document == 3 && s.ahead == 0, NULL);
+    left = crumb_of("http://h/far", 4, "far");
+    way_forward_entry(&s, &left);
+    left = crumb_of("http://h/near", 4, "near");
+    way_forward_entry(&s, &left);
+    expect("entries: an entry put ahead takes its state, nearest last",
+           left.state == NULL && way_next(&s, &crumb) && strcmp(crumb.url, "http://h/near") == 0 &&
+               strcmp(crumb.state, "near") == 0 && s.ahead == 2, NULL);
+    way_history_clear(&s);
+    expect("entries: clearing frees every state and empties both lists",
+           s.depth == 0 && s.ahead == 0 && live == before, NULL);
+    // A plain face's calls free a state they move out of the session.
+    left = crumb_of("http://h/p", 2, "p");
+    way_remember_entry(&s, &left);
+    way_went_back(&s, "http://h/q", &(way_position_t){{0}});
+    way_went_forward(&s, "http://h/p", &(way_position_t){{0}});
+    way_forget_last(&s);
+    way_history_clear(&s);
+    expect("entries: way_went_back, way_went_forward and way_forget_last free what they spend",
+           live == before, NULL);
+}
+
 // ── Typed addresses and details ─────────────────────────────────────────
 
 static void typed(void)
@@ -558,6 +670,7 @@ int main(void)
     refreshes();
     history();
     forward();
+    entries();
     typed();
     notes();
     sweep();

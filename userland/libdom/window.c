@@ -14,7 +14,16 @@ static const char *page_url(const os64_dom_t *dom)
 void d_navigate(os64_dom_t *dom, os64_dom_navigation_kind_t kind, const os64_html_node_t *node,
                 const os64_html_node_t *submitter, const char *url, int32_t delta)
 {
-    /* The last ask of a task wins, as the last location= does in a browser. */
+    /* The last ask of a task wins, as the last location= does in a browser;
+     * but with the Modern Web switch on, history.go()s add up, as HTML
+     * queues each traversal after the one before it: go(-2) then go(-1) is
+     * three back. */
+    if (kind == OS64_DOM_NAVIGATE_HISTORY && dom->navigation.kind == OS64_DOM_NAVIGATE_HISTORY &&
+        dom->options.modern) {
+        int64_t sum = (int64_t)dom->navigation.delta + delta;
+        dom->navigation.delta = sum > INT32_MAX ? INT32_MAX : sum < INT32_MIN ? INT32_MIN : (int32_t)sum;
+        return;
+    }
     if (node != NULL) os64_html_hold(dom->document, node);
     if (submitter != NULL) os64_html_hold(dom->document, submitter);
     if (dom->navigation.node != NULL) os64_html_release(dom->document, dom->navigation.node);
@@ -178,6 +187,34 @@ static JSValue location_part(os64_dom_t *dom, JSContext *ctx, int part)
     return JS_NewString(ctx, text);
 }
 
+static size_t before_fragment(const char *url)
+{
+    size_t n = 0;
+    while (url[n] != '\0' && url[n] != '#') n++;
+    return n;
+}
+
+static int fragment_navigation(os64_dom_t *dom, JSContext *ctx, const char *url, bool replace);
+
+/* `name` as the URL parser's fragment state writes it: the fragment
+ * percent-encode set (C0 controls, space, `"`, `<`, `>`, backtick, and
+ * every byte past ASCII) as %XX. False when it does not fit `cap`. */
+static bool fragment_encoded(const char *name, char *out, size_t cap)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    size_t n = 0;
+    for (const unsigned char *s = (const unsigned char *)name; *s != '\0'; s++) {
+        bool encode = *s <= 0x20 || *s >= 0x7F || *s == '"' || *s == '<' || *s == '>' || *s == '`';
+        if (n + (encode ? 3 : 1) >= cap) return false;
+        if (!encode) { out[n++] = (char)*s; continue; }
+        out[n++] = '%';
+        out[n++] = hex[*s >> 4];
+        out[n++] = hex[*s & 15];
+    }
+    out[n] = '\0';
+    return true;
+}
+
 static JSValue ask_url(os64_dom_t *dom, JSContext *ctx, os64_dom_navigation_kind_t kind, JSValueConst value,
                        bool fragment)
 {
@@ -187,16 +224,43 @@ static JSValue ask_url(os64_dom_t *dom, JSContext *ctx, os64_dom_navigation_kind
     bool resolved;
     if (fragment) {
         /* hash = names a place in this page: the address with its fragment
-         * replaced, which the host reaches without a request. */
+         * replaced, which the host reaches without a request (HTML § The
+         * Location interface, the hash setter): one leading `#` taken off,
+         * the rest parsed in the fragment state, and nothing at all when
+         * that is the fragment the address already has (none counting as
+         * the empty one). With the Modern Web switch off the name is
+         * written as given and always asked for, as before the arc. */
         const char *base = page_url(dom);
-        size_t keep = 0;
-        while (base[keep] != '\0' && base[keep] != '#') keep++;
+        size_t keep = before_fragment(base);
         const char *name = text.data[0] == '#' ? text.data + 1 : text.data;
-        resolved = keep + 1 + os64_strlen(name) < sizeof(url);
-        if (resolved) os64_snprintf(url, sizeof(url), "%.*s#%s", (int)keep, base, name);
+        char encoded[OS64_DOM_URL_MAX];
+        if (dom->options.modern) {
+            resolved = fragment_encoded(name, encoded, sizeof(encoded));
+            const char *has = base[keep] == '#' ? base + keep + 1 : "";
+            if (resolved && os64_strcmp(encoded, has) == 0) {
+                d_string_free(dom, &text);
+                return JS_UNDEFINED;
+            }
+        } else {
+            resolved = os64_strlen(name) < sizeof(encoded);
+            if (resolved) os64_strcopy(encoded, sizeof(encoded), name);
+        }
+        resolved = resolved && keep + 1 + os64_strlen(encoded) < sizeof(url);
+        if (resolved) os64_snprintf(url, sizeof(url), "%.*s#%s", (int)keep, base, encoded);
     } else resolved = resolve(dom, text.data, url, sizeof(url));
     d_string_free(dom, &text);
     if (!resolved) return d_error(ctx, "SyntaxError", "The address cannot be resolved against this page");
+    /* An address that differs from the document's only in a fragment it has
+     * is HTML's navigation to a fragment, which happens now, inside the
+     * script, when the host takes it (fragment_navigation): the same
+     * address again replaces the entry rather than adding one. */
+    const char *here = page_url(dom);
+    size_t keep = before_fragment(url);
+    if (url[keep] == '#' && keep == before_fragment(here) && os64_memcmp(url, here, keep) == 0) {
+        bool same = os64_strcmp(url, here) == 0;
+        int made = fragment_navigation(dom, ctx, url, kind == OS64_DOM_NAVIGATE_REPLACE || same);
+        if (made != 0) return made < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+    }
     d_navigate(dom, kind, NULL, NULL, url, 0);
     return JS_UNDEFINED;
 }
@@ -232,7 +296,13 @@ static JSValue window_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         else d_navigate(dom, OS64_DOM_NAVIGATE_HISTORY, NULL, NULL, NULL, delta);
         return JS_UNDEFINED;
     }
-    case H_LENGTH: return JS_NewInt32(ctx, 1);
+    case H_LENGTH: {
+        /* The session's entries are the host's to count once the arc's
+         * history is on; a window with no host is one entry. */
+        uint32_t entries = dom->options.modern && dom->history_host.length != NULL
+            ? dom->history_host.length(dom->history_host.opaque) : 1;
+        return JS_NewUint32(ctx, entries > 0 ? entries : 1);
+    }
     case W_STATUS:
         /* The status line is the browser's; the old web assigns window.status
          * on every mouseover and expects no complaint. */
@@ -542,6 +612,554 @@ int d_window_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     return d_classic_install(dom, ctx, global);
 }
 
+/* HISTORY (HTML § The History interface; MODERN_WEB.md § Slice 1b): the
+ * Modern Web table's row. A state update (pushState, replaceState) changes
+ * the address and the state and fires nothing; a fragment navigation and
+ * a traversal to an entry of this document are the host's, which fires
+ * popstate, then hashchange when the fragment moved, through
+ * os64_dom_history_event. */
+
+void os64_dom_set_history(os64_dom_t *dom, const os64_dom_history_t *history)
+{
+    if (dom == NULL || dom->closed) return;
+    if (history != NULL) dom->history_host = *history;
+    else os64_memset(&dom->history_host, 0, sizeof(dom->history_host));
+}
+
+bool os64_dom_history_manual(const os64_dom_t *dom)
+{
+    return dom != NULL && dom->scroll_manual;
+}
+
+/* A state's JSON, as the binding writes it: what JSON can carry of a
+ * structured clone, and nothing else (dom.h § HISTORY). */
+typedef struct {
+    os64_dom_t *dom;
+    char *text;
+    size_t used, cap;
+    JSValueConst path[64];      // the objects the walk is inside, for a cycle
+} DJson;
+
+static int json_put(DJson *j, JSContext *ctx, const char *s, size_t n)
+{
+    if (n > OS64_DOM_STATE_MAX - j->used) {
+        d_error(ctx, "QuotaExceededError", "A history state may be at most 64 KiB of JSON");
+        return -1;
+    }
+    if (j->used + n + 1 > j->cap) {
+        size_t cap = j->cap > 0 ? j->cap : 256;
+        while (cap < j->used + n + 1) cap *= 2;
+        char *grown = d_alloc(j->dom, cap);
+        if (grown == NULL) {
+            d_error(ctx, "QuotaExceededError", "No room for a history state");
+            return -1;
+        }
+        if (j->used > 0) os64_memcpy(grown, j->text, j->used);
+        d_free(j->dom, j->text);
+        j->text = grown;
+        j->cap = cap;
+    }
+    os64_memcpy(j->text + j->used, s, n);
+    j->used += n;
+    j->text[j->used] = '\0';
+    return 0;
+}
+
+static int json_puts(DJson *j, JSContext *ctx, const char *s)
+{
+    return json_put(j, ctx, s, os64_strlen(s));
+}
+
+/* A value the engine writes for us: a number's or a string's JSON, which
+ * the engine's own JSON.stringify writes for a primitive without running
+ * any of the page's code. */
+static int json_engine(DJson *j, JSContext *ctx, JSValue text)
+{
+    if (JS_IsException(text)) return -1;
+    size_t length;
+    const char *s = JS_ToCStringLen(ctx, &length, text);
+    JS_FreeValue(ctx, text);
+    if (s == NULL) return -1;
+    int result = json_put(j, ctx, s, length);
+    JS_FreeCString(ctx, s);
+    return result;
+}
+
+#define CLONE_REFUSED(what) d_error(ctx, "DataCloneError", what " cannot be kept in a history state")
+
+/* One value; 1 for an `undefined` an object leaves out, as JSON does. */
+static int json_value(DJson *j, JSContext *ctx, JSValueConst v, int depth, bool in_array)
+{
+    if (JS_IsUndefined(v)) return in_array ? json_puts(j, ctx, "null") : 1;
+    if (JS_IsNull(v)) return json_puts(j, ctx, "null");
+    if (JS_IsBool(v)) return json_puts(j, ctx, JS_ToBool(ctx, v) ? "true" : "false");
+    if (JS_IsNumber(v)) {
+        double d;
+        if (JS_ToFloat64(ctx, &d, v) < 0) return -1;
+        union { double d; uint64_t bits; } sign = {d};
+        if (!(d == d) || d > 1.7976931348623157e308 || d < -1.7976931348623157e308 ||
+            (d == 0 && (sign.bits >> 63) != 0)) {
+            CLONE_REFUSED("NaN, an infinity or -0");
+            return -1;
+        }
+        return json_engine(j, ctx, JS_ToString(ctx, v));
+    }
+    if (JS_IsString(v)) return json_engine(j, ctx, JS_JSONStringify(ctx, v, JS_UNDEFINED, JS_UNDEFINED));
+    if (!JS_IsObject(v)) {
+        CLONE_REFUSED("A symbol or a BigInt");
+        return -1;
+    }
+    JSClassID id = JS_GetClassID(v);
+    bool array = id == j->dom->array_class;
+    if (!array && id != j->dom->plain_class) {
+        CLONE_REFUSED("Only plain objects and arrays; this object");
+        return -1;
+    }
+    if (depth >= (int)(sizeof(j->path) / sizeof(j->path[0]))) {
+        CLONE_REFUSED("An object nested this deep");
+        return -1;
+    }
+    for (int i = 0; i < depth; i++)
+        if (JS_VALUE_GET_PTR(j->path[i]) == JS_VALUE_GET_PTR(v)) {
+            CLONE_REFUSED("An object that holds itself");
+            return -1;
+        }
+    j->path[depth] = v;
+    JSPropertyEnum *props = NULL;
+    uint32_t count = 0;
+    if (JS_GetOwnPropertyNames(ctx, &props, &count, v, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) < 0) return -1;
+    int result = json_puts(j, ctx, array ? "[" : "{");
+    if (array && result == 0) {
+        /* A clone of an array keeps its holes and its named properties,
+         * which JSON cannot carry (it writes a hole as null and leaves a
+         * name out): only an array that is its own properties 0 to
+         * length - 1 and nothing else is kept. */
+        uint32_t length = 0;
+        JSValue n = JS_GetPropertyStr(ctx, v, "length");
+        result = JS_IsException(n) || JS_ToUint32(ctx, &length, n) < 0 ? -1 : 0;
+        JS_FreeValue(ctx, n);
+        for (uint32_t i = 0; result == 0 && i < count; i++) {
+            JSAtom index = JS_NewAtomUInt32(ctx, i);
+            bool listed = index == props[i].atom;
+            JS_FreeAtom(ctx, index);
+            if (!listed) result = -2;
+        }
+        if (result == 0 && count != length) result = -2;
+        if (result == -2) {
+            CLONE_REFUSED("An array with holes or named properties");
+            result = -1;
+        }
+        for (uint32_t i = 0; result == 0 && i < count; i++) {
+            if (i > 0) result = json_puts(j, ctx, ",");
+            JSValue item = result == 0 ? JS_GetPropertyUint32(ctx, v, i) : JS_UNDEFINED;
+            if (JS_IsException(item)) result = -1;
+            if (result == 0) result = json_value(j, ctx, item, depth + 1, true);
+            JS_FreeValue(ctx, item);
+        }
+    } else {
+        bool first = true;
+        for (uint32_t i = 0; result == 0 && i < count; i++) {
+            JSValue item = JS_GetProperty(ctx, v, props[i].atom);
+            if (JS_IsException(item)) { result = -1; break; }
+            if (JS_IsUndefined(item)) continue;
+            JSValue key = JS_AtomToString(ctx, props[i].atom);
+            result = JS_IsException(key) ? -1 : 0;
+            if (result == 0 && !first) result = json_puts(j, ctx, ",");
+            if (result == 0) result = json_engine(j, ctx, JS_JSONStringify(ctx, key, JS_UNDEFINED, JS_UNDEFINED));
+            JS_FreeValue(ctx, key);
+            if (result == 0) result = json_puts(j, ctx, ":");
+            if (result == 0) result = json_value(j, ctx, item, depth + 1, false);
+            JS_FreeValue(ctx, item);
+            first = false;
+        }
+    }
+    JS_FreePropertyEnum(ctx, props, count);
+    if (result == 0) result = json_puts(j, ctx, array ? "]" : "}");
+    return result < 0 ? -1 : 0;
+}
+
+/* HTML's "can have its URL rewritten": the same scheme, host and port
+ * (the user and password, which os64's parser refuses, by the text), and
+ * outside http and https the same path too; only the query and the
+ * fragment may move then. */
+static uint16_t port_of(const os64_url_t *u)
+{
+    if (u->port != 0) return u->port;
+    return os64_strcmp(u->scheme, "https") == 0 ? 443 : os64_strcmp(u->scheme, "http") == 0 ? 80 : 0;
+}
+
+static size_t before_query(const char *s)
+{
+    size_t n = 0;
+    while (s[n] != '\0' && s[n] != '?' && s[n] != '#') n++;
+    return n;
+}
+
+static bool rewritable(const char *document, const char *target)
+{
+    os64_url_t a, b;
+    bool pa = os64_url_parse(document, &a) == OS64_URL_OK;
+    bool pb = os64_url_parse(target, &b) == OS64_URL_OK;
+    if (pa != pb) return false;
+    if (pa) {
+        if (os64_strcmp(a.scheme, b.scheme) != 0 || os64_strcmp(a.host, b.host) != 0 ||
+            port_of(&a) != port_of(&b))
+            return false;
+        if (os64_strcmp(b.scheme, "http") == 0 || os64_strcmp(b.scheme, "https") == 0) return true;
+        size_t n = before_query(a.path);
+        return n == before_query(b.path) && os64_memcmp(a.path, b.path, n) == 0;
+    }
+    size_t n = before_query(document);
+    return n == before_query(target) && os64_memcmp(document, target, n) == 0;
+}
+
+static char *copy_text(os64_dom_t *dom, const char *text, size_t length)
+{
+    char *copy = d_alloc(dom, length + 1);
+    if (copy != NULL) {
+        if (length > 0) os64_memcpy(copy, text, length);
+        copy[length] = '\0';
+    }
+    return copy;
+}
+
+/* history.state's value: the current entry's JSON read once (a fresh
+ * value, as StructuredDeserialize makes) and the same object every read
+ * after, until the entry or its state changes. JS_EXCEPTION when it could
+ * not be read; a new reference otherwise. */
+static JSValue state_value(os64_dom_t *dom, JSContext *ctx)
+{
+    if (!dom->entry_state_read) {
+        JSValue value = dom->entry_state != NULL
+            ? JS_ParseJSON(ctx, dom->entry_state, dom->entry_state_length, "<history state>") : JS_NULL;
+        if (JS_IsException(value)) return value;
+        if (dom->entry_state_value == NULL) {
+            if ((dom->entry_state_value = d_retain(dom, ctx, value)) == NULL) return JS_EXCEPTION;
+        } else {
+            JS_FreeValue(ctx, dom->entry_state_value->value);
+            dom->entry_state_value->value = value;
+        }
+        dom->entry_state_read = true;
+    }
+    return JS_DupValue(ctx, dom->entry_state_value->value);
+}
+
+static JSValue update_state(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv, bool push)
+{
+    if (argc < 2) return JS_ThrowTypeError(ctx, "%s needs a state and a title", push ? "pushState" : "replaceState");
+    /* WebIDL converts every argument before a step runs: the unused title
+     * to a string, the address to one unless it is null or undefined. */
+    DString unused = {0}, url = {0};
+    if (!d_string(dom, ctx, argv[1], &unused)) return JS_EXCEPTION;
+    d_string_free(dom, &unused);
+    bool has_url = argc > 2 && !JS_IsUndefined(argv[2]) && !JS_IsNull(argv[2]);
+    if (has_url && !d_string(dom, ctx, argv[2], &url)) return JS_EXCEPTION;
+    /* An empty address is none (HTML, after whatwg/html#9343): the entry
+     * keeps the document's, its fragment included. */
+    if (has_url && url.length == 0) {
+        d_string_free(dom, &url);
+        has_url = false;
+    }
+    DJson json = {.dom = dom};
+    int written = JS_IsUndefined(argv[0]) ? json_puts(&json, ctx, "null")
+                                          : json_value(&json, ctx, argv[0], 0, false);
+    char target[OS64_DOM_URL_MAX];
+    JSValue result = JS_UNDEFINED;
+    if (written < 0) {
+        result = JS_EXCEPTION;
+    } else if (has_url && (!resolve(dom, url.data, target, sizeof(target)) || !rewritable(page_url(dom), target))) {
+        result = d_error(ctx, "SecurityError", "A history entry's address must be this document's own origin");
+    } else {
+        if (!has_url) os64_strcopy(target, sizeof(target), page_url(dom));
+        bool null_state = os64_strcmp(json.text, "null") == 0;
+        char *address = copy_text(dom, target, os64_strlen(target));
+        JSValue value = address != NULL ? JS_ParseJSON(ctx, json.text, json.used, "<history state>")
+                                        : JS_EXCEPTION;
+        if (address == NULL) d_error(ctx, "QuotaExceededError", "No room for a history entry's address");
+        if (!JS_IsException(value) && dom->entry_state_value == NULL) {
+            dom->entry_state_value = d_retain(dom, ctx, JS_NULL);
+            if (dom->entry_state_value == NULL) {
+                JS_FreeValue(ctx, value);
+                value = JS_EXCEPTION;
+            }
+        }
+        if (!JS_IsException(value) && dom->history_host.update != NULL &&
+            !dom->history_host.update(dom->history_host.opaque, target, null_state ? NULL : json.text,
+                                      null_state ? 0 : json.used, push)) {
+            JS_FreeValue(ctx, value);
+            value = d_error(ctx, "QuotaExceededError", "The browser could not keep another history entry");
+        }
+        if (JS_IsException(value)) {
+            d_free(dom, address);
+            result = JS_EXCEPTION;
+        } else {
+            d_free(dom, dom->url);
+            dom->url = address;
+            d_free(dom, dom->entry_state);
+            dom->entry_state = null_state ? NULL : json.text;
+            dom->entry_state_length = null_state ? 0 : json.used;
+            if (!null_state) json.text = NULL;
+            JS_FreeValue(ctx, dom->entry_state_value->value);
+            dom->entry_state_value->value = value;
+            dom->entry_state_read = true;
+            dom->entry_name++;
+        }
+    }
+    d_free(dom, json.text);
+    d_string_free(dom, &url);
+    return result;
+}
+
+static JSValue history_event(os64_dom_t *dom, JSContext *ctx, void *arg);
+
+/* A fragment navigation a script made (HTML § Navigate to a fragment): the
+ * host takes the entry, the document's address and its null state follow,
+ * and then — inside the script that asked, before it goes on — `popstate`,
+ * because the navigation's "update document for history step application"
+ * fires it there and then. The hashchange it owes is the host's to queue
+ * (os64_dom_history_t.fragment). 1 when it was made, its popstate
+ * dispatched or, when the binding had no room for it, reported, since the
+ * navigation the script asked for stands; 0, with nothing changed and
+ * nothing fired, when the host could not take it; -1 when it was made and
+ * the runtime failed under a listener, with the exception pending, so the
+ * script ends as it would have in dispatchEvent. */
+static int fragment_navigation(os64_dom_t *dom, JSContext *ctx, const char *url, bool replace)
+{
+    if (!dom->options.modern || dom->history_host.fragment == NULL) return 0;
+    char *address = copy_text(dom, url, os64_strlen(url));
+    if (address == NULL) return 0;
+    if (!dom->history_host.fragment(dom->history_host.opaque, url, replace)) {
+        d_free(dom, address);
+        return 0;
+    }
+    d_free(dom, dom->url);
+    dom->url = address;
+    d_free(dom, dom->entry_state);
+    dom->entry_state = NULL;
+    dom->entry_state_length = 0;
+    dom->entry_state_read = false;
+    dom->entry_name++;
+    if (dom->popstate_prototype == NULL || !os64_dom_listens(dom, "popstate")) return 1;
+    os64_dom_history_event_t popstate = {.entry = dom->entry_name};
+    JSValue event = history_event(dom, ctx, &popstate);
+    int dispatched = JS_IsException(event) ? -1 : d_dispatch(dom, ctx, event, NULL);
+    JS_FreeValue(ctx, event);
+    if (dispatched >= 0) return 1;
+    os64_js_outcome_t probe;
+    if (os64_js_context(dom->runtime, OS64_JS_ABI_ID, &probe) == NULL) return -1;
+    JSValue error = JS_GetException(ctx);
+    d_report(dom, ctx, error);
+    JS_FreeValue(ctx, error);
+    return 1;
+}
+
+bool os64_dom_history_moved(os64_dom_t *dom, const char *url, const char *state, size_t length)
+{
+    if (dom == NULL || dom->closed || url == NULL || (state == NULL && length != 0)) return false;
+    char *address = copy_text(dom, url, os64_strlen(url));
+    char *kept = state != NULL ? copy_text(dom, state, length) : NULL;
+    if (address == NULL || (state != NULL && kept == NULL)) {
+        d_free(dom, address);
+        d_free(dom, kept);
+        return false;
+    }
+    d_free(dom, dom->url);
+    dom->url = address;
+    d_free(dom, dom->entry_state);
+    dom->entry_state = kept;
+    dom->entry_state_length = kept != NULL ? length : 0;
+    dom->entry_state_read = false;
+    dom->entry_name++;
+    return true;
+}
+
+uint64_t os64_dom_history_entry(const os64_dom_t *dom)
+{
+    return dom != NULL ? dom->entry_name : 0;
+}
+
+/* A popstate's state: history.state itself while the entry it was owed
+ * for is still the current one (the same object, as HTML's event and
+ * history.state share one deserialization), else that entry's state read
+ * from the JSON it carried. */
+static JSValue owed_state(os64_dom_t *dom, JSContext *ctx, const os64_dom_history_event_t *what)
+{
+    if (what->entry == dom->entry_name) return state_value(dom, ctx);
+    if (what->state == NULL) return JS_NULL;
+    return JS_ParseJSON(ctx, what->state, what->length, "<history state>");
+}
+
+static JSValue history_event(os64_dom_t *dom, JSContext *ctx, void *arg)
+{
+    const os64_dom_history_event_t *what = arg;
+    JSValueConst prototype = what->hashchange ? dom->hashchange_prototype->value : dom->popstate_prototype->value;
+    JSValue event = d_event_new_proto(dom, ctx, prototype, what->hashchange ? "hashchange" : "popstate",
+                                      false, false, true);
+    if (JS_IsException(event)) return event;
+    int defined;
+    if (what->hashchange) {
+        JSValue old_url = JS_NewString(ctx, what->old_url);
+        defined = JS_IsException(old_url) ? -1
+            : JS_DefinePropertyValueStr(ctx, event, "oldURL", old_url, JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE);
+        JSValue new_url = defined < 0 ? JS_EXCEPTION : JS_NewString(ctx, what->new_url);
+        if (defined >= 0)
+            defined = JS_IsException(new_url) ? -1
+                : JS_DefinePropertyValueStr(ctx, event, "newURL", new_url, JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE);
+    } else {
+        JSValue state = owed_state(dom, ctx, what);
+        defined = JS_IsException(state) ? -1
+            : JS_DefinePropertyValueStr(ctx, event, "state", state, JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE);
+        if (defined >= 0)
+            defined = JS_DefinePropertyValueStr(ctx, event, "hasUAVisualTransition", JS_FALSE,
+                                                JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE);
+    }
+    if (defined < 0) {
+        JS_FreeValue(ctx, event);
+        return JS_EXCEPTION;
+    }
+    return event;
+}
+
+os64_js_status_t os64_dom_history_event(os64_dom_t *dom, const os64_dom_history_event_t *event,
+                                        os64_js_outcome_t *outcome)
+{
+    if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
+    os64_memset(outcome, 0, sizeof(*outcome));
+    if (dom == NULL || event == NULL ||
+        (event->hashchange ? event->old_url == NULL || event->new_url == NULL
+                           : event->state == NULL && event->length != 0)) {
+        outcome->status = OS64_JS_BAD_ARGUMENT;
+        return outcome->status;
+    }
+    if (dom->closed) {
+        outcome->status = OS64_JS_FAILED_RUNTIME;
+        return outcome->status;
+    }
+    const char *type = event->hashchange ? "hashchange" : "popstate";
+    if (!dom->options.modern || dom->popstate_prototype == NULL || !os64_dom_listens(dom, type))
+        return OS64_JS_OK;
+    return d_host_dispatch(dom, NULL, NULL, type, history_event, (void *)event, NULL, outcome);
+}
+
+enum { HS_PUSH, HS_REPLACE, HS_STATE, HS_RESTORATION };
+
+static JSValue history_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
+                              int magic, JSValue *data)
+{
+    (void)self;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    bool set = (magic & D_SET) != 0;
+    magic &= ~D_SET;
+    switch (magic) {
+    case HS_PUSH: case HS_REPLACE: return update_state(dom, ctx, argc, argv, magic == HS_PUSH);
+    case HS_STATE: return state_value(dom, ctx);
+    case HS_RESTORATION: {
+        if (!set) return JS_NewString(ctx, dom->scroll_manual ? "manual" : "auto");
+        /* An enum attribute ignores a word it does not have (WebIDL). */
+        const char *word = JS_ToCString(ctx, argc > 0 ? argv[0] : JS_UNDEFINED);
+        if (word == NULL) return JS_EXCEPTION;
+        if (os64_strcmp(word, "manual") == 0) dom->scroll_manual = true;
+        else if (os64_strcmp(word, "auto") == 0) dom->scroll_manual = false;
+        JS_FreeCString(ctx, word);
+        return JS_UNDEFINED;
+    }
+    default: return JS_ThrowTypeError(ctx, "Unknown History member");
+    }
+}
+
+/* `new PopStateEvent(type, {state, hasUAVisualTransition, ...})` and
+ * `new HashChangeEvent(type, {oldURL, newURL, ...})`: an Event, and the
+ * members of its own dictionary in WebIDL's order. */
+static JSValue history_event_construct(JSContext *ctx, JSValueConst new_target, int argc,
+                                       JSValueConst *argv, bool hashchange)
+{
+    os64_dom_t *dom = d_binding(ctx);
+    if (dom == NULL) return JS_EXCEPTION;
+    JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+    if (JS_IsException(prototype)) return prototype;
+    JSValueConst own = hashchange ? dom->hashchange_prototype->value : dom->popstate_prototype->value;
+    JSValue event = d_event_construct(dom, ctx, argc, argv, JS_IsObject(prototype) ? prototype : own);
+    JS_FreeValue(ctx, prototype);
+    if (JS_IsException(event)) return event;
+    static const char *const kHash[] = {"newURL", "oldURL"};
+    static const char *const kPop[] = {"hasUAVisualTransition", "state"};
+    const char *const *names = hashchange ? kHash : kPop;
+    for (int i = 0; i < 2; i++) {
+        JSValue value = argc > 1 && JS_IsObject(argv[1]) ? JS_GetPropertyStr(ctx, argv[1], names[i]) : JS_UNDEFINED;
+        if (!JS_IsException(value)) {
+            if (hashchange) {
+                JSValue text = JS_IsUndefined(value) ? JS_NewString(ctx, "") : JS_ToString(ctx, value);
+                JS_FreeValue(ctx, value);
+                value = text;
+            } else if (i == 0) {
+                int flag = JS_ToBool(ctx, value);
+                JS_FreeValue(ctx, value);
+                value = flag < 0 ? JS_EXCEPTION : JS_NewBool(ctx, flag != 0);
+            } else if (JS_IsUndefined(value)) {
+                value = JS_NULL;
+            }
+        }
+        if (JS_IsException(value) ||
+            JS_DefinePropertyValueStr(ctx, event, names[i], value, JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE) < 0) {
+            JS_FreeValue(ctx, event);
+            return JS_EXCEPTION;
+        }
+    }
+    return event;
+}
+
+static JSValue popstate_construct(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    return history_event_construct(ctx, new_target, argc, argv, false);
+}
+
+static JSValue hashchange_construct(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    return history_event_construct(ctx, new_target, argc, argv, true);
+}
+
+int d_history_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    JSValue plain = JS_NewObject(ctx), array = JS_NewArray(ctx);
+    if (JS_IsException(plain) || JS_IsException(array)) {
+        JS_FreeValue(ctx, plain);
+        JS_FreeValue(ctx, array);
+        return -1;
+    }
+    dom->plain_class = JS_GetClassID(plain);
+    dom->array_class = JS_GetClassID(array);
+    JS_FreeValue(ctx, plain);
+    JS_FreeValue(ctx, array);
+    JSValueConst history = dom->history->value;
+    if (d_method_named(dom, ctx, history, "pushState", history_member, 2, HS_PUSH) < 0 ||
+        d_method_named(dom, ctx, history, "replaceState", history_member, 2, HS_REPLACE) < 0 ||
+        d_accessor(dom, ctx, history, "state", history_member, HS_STATE, false) < 0 ||
+        d_accessor(dom, ctx, history, "scrollRestoration", history_member, HS_RESTORATION, true) < 0 ||
+        d_event_handler(dom, ctx, global, D_EVENT_POPSTATE) < 0 ||
+        d_event_handler(dom, ctx, global, D_EVENT_HASHCHANGE) < 0)
+        return -1;
+    JSValue event_prototype = JS_GetClassProto(ctx, dom->event_class);
+    JSValue event = JS_GetPropertyStr(ctx, global, "Event");
+    JSValue popstate = JS_NewObjectProto(ctx, event_prototype);
+    dom->popstate_prototype = d_retain(dom, ctx, popstate);
+    JSValue hashchange = dom->popstate_prototype != NULL ? JS_NewObjectProto(ctx, event_prototype) : JS_EXCEPTION;
+    dom->hashchange_prototype = dom->popstate_prototype != NULL ? d_retain(dom, ctx, hashchange) : NULL;
+    int result = dom->hashchange_prototype == NULL || JS_IsException(event) ? -1 : 0;
+    static const char *const names[] = {"PopStateEvent", "HashChangeEvent"};
+    JSCFunction *const constructs[] = {popstate_construct, hashchange_construct};
+    for (int i = 0; result == 0 && i < 2; i++) {
+        JSValueConst own = i == 0 ? dom->popstate_prototype->value : dom->hashchange_prototype->value;
+        JSValue f = d_interface_new(ctx, names[i], 1, constructs[i], own, event);
+        if (JS_IsException(f) ||
+            JS_DefinePropertyValueStr(ctx, global, names[i], f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+            result = -1;
+    }
+    JS_FreeValue(ctx, event_prototype);
+    JS_FreeValue(ctx, event);
+    return result;
+}
+
 /* SCRIPT ELEMENTS. */
 
 static bool ascii_space(unsigned char c)
@@ -716,4 +1334,6 @@ void d_window_free(os64_dom_t *dom)
         }
     d_free(dom, dom->url);
     dom->url = NULL;
+    d_free(dom, dom->entry_state);
+    dom->entry_state = NULL;
 }

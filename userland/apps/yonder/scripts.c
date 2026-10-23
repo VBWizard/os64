@@ -46,6 +46,10 @@ struct yonder_scripts {
     os64_page_state_t *state;
     yonder_scripts_options_t options;
     char url[OS64_DOM_URL_MAX];
+    // The entry state the session moved the document to before its
+    // binding was made (yonder_scripts_history_moved), handed to the
+    // binding when ensure_runtime makes it. JSON, owned; NULL for none.
+    char *entry_state;
     os64_js_runtime_t *runtime;
     os64_dom_t *dom;
     // The layout counts a retired binding had, kept for the report that
@@ -308,6 +312,22 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     options.host_opaque = s;
     s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
     os64_dom_set_geometry(s->dom, s->options.geometry, s->options.opaque);
+    if (s->options.view.read != NULL)
+        os64_dom_set_view(s->dom, &s->options.view);
+    os64_dom_set_computed(s->dom, s->options.computed, s->options.opaque);
+    if (s->options.history.update != NULL)
+        os64_dom_set_history(s->dom, &s->options.history);
+    // The state the session gave the document before there was a binding
+    // to tell (a traversal's or a reload's entry): a binding that cannot
+    // take it is not built, so the page never reads a state the window
+    // does not have.
+    if (s->dom != NULL && s->entry_state != NULL &&
+        !os64_dom_history_moved(s->dom, s->url, s->entry_state, os64_strlen(s->entry_state))) {
+        out->status = OS64_JS_HOST_FAILURE;
+        return false;
+    }
+    os64_free(s->entry_state);
+    s->entry_state = NULL;
     os64_dom_set_user_agent(s->dom, s->user_agent, s->user_agent_opaque);
     os64_dom_set_cookies(s->dom, &s->cookies);
     if (s->options.storage != NULL) {
@@ -380,6 +400,7 @@ void yonder_scripts_free(yonder_scripts_t *s)
     }
     os64_free(s->items);
     os64_free(s->ready);
+    os64_free(s->entry_state);
     os64_free(s);
 }
 
@@ -951,6 +972,74 @@ const char *yonder_scripts_url(const yonder_scripts_t *s)
 bool yonder_scripts_encrypted(const yonder_scripts_t *s)
 {
     return s != NULL && s->options.encrypted;
+}
+
+void yonder_scripts_set_url(yonder_scripts_t *s, const char *url)
+{
+    if (s != NULL && url != NULL)
+        os64_strcopy(s->url, sizeof(s->url), url);
+}
+
+bool yonder_scripts_history_moved(yonder_scripts_t *s, const char *url, const char *state, size_t length)
+{
+    if (url == NULL)
+        return false;
+    if (s == NULL)
+        return true;
+    if (s->dom != NULL && !s->dead && !os64_dom_history_moved(s->dom, url, state, length))
+        return false;
+    if (s->dom == NULL && !s->dead) {
+        // No binding yet: the state waits for the one ensure_runtime makes.
+        char *kept = NULL;
+        if (state != NULL) {
+            kept = os64_malloc(length + 1);
+            if (kept == NULL)
+                return false;
+            os64_memcpy(kept, state, length);
+            kept[length] = '\0';
+        }
+        os64_free(s->entry_state);
+        s->entry_state = kept;
+    }
+    os64_strcopy(s->url, sizeof(s->url), url);
+    return true;
+}
+
+uint64_t yonder_scripts_history_entry(const yonder_scripts_t *s)
+{
+    return s != NULL && s->dom != NULL ? os64_dom_history_entry(s->dom) : 0;
+}
+
+bool yonder_scripts_history_event(yonder_scripts_t *s, const os64_dom_history_event_t *event,
+                                  os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s == NULL || s->dead || s->dom == NULL ||
+        !os64_dom_listens(s->dom, event->hashchange ? "hashchange" : "popstate"))
+        return false;
+    s->written = 0;
+    s->task_address = NULL;
+    os64_dom_history_event(s->dom, event, out);
+    judged(s, out);
+    return true;
+}
+
+bool yonder_scripts_view_step(yonder_scripts_t *s, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s == NULL || s->dead || s->dom == NULL)
+        return false;
+    s->written = 0;
+    s->task_address = NULL;
+    if (!os64_dom_view_step(s->dom, out))
+        return false;
+    judged(s, out);
+    return true;
+}
+
+bool yonder_scripts_scroll_manual(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead && os64_dom_history_manual(s->dom);
 }
 
 void yonder_scripts_set_user_agent(yonder_scripts_t *s, const char *(*provider)(void *), void *opaque)

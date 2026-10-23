@@ -172,6 +172,20 @@ arena budget, the depth bound or a run limit stopped it partway — what
 is there is real), and the image and control boxes as lists so the face
 can place pictures and widgets without walking.
 
+**And an element's style as a script reads it** (`flow_computed_new`,
+`flow_computed_text`; the Modern Web arc's slice 1b, for
+`getComputedStyle`): each of libgarb's properties as CSSOM's RESOLVED
+value, in CSS pixels, serialised as the browsers write it. That is the
+computed value, but the used one — read off the laid-out box — for the
+properties CSSOM names when the element has a box: the sizes, margins and
+padding, a positioned box's insets (a relative one's by CSS 2.1 § 9.4.3,
+an absolute one's against its containing block), a line height that is
+not `normal`, a transform and its origin. An element pass 1 did not reach
+(inside a `display: none`) is styled for the asking against the same
+environment; a property libflow does not model reads what the page's
+sheets declared for it, the CSS-wide keywords meaning what the cascade
+gives them, or its initial value. `flow.h` holds the contract.
+
 ## The three passes
 
 Like libpage's build, three dependency-ordered passes over the tree, and

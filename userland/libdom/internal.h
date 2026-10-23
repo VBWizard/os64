@@ -30,12 +30,15 @@ enum {
  * after it; -1 for Node, which inherits Object's. */
 int d_proto_parent(int kind);
 /* The event types the host dispatches, which are the ones on<type> names
- * and os64_dom_listens count. A script may listen for any other type. */
+ * and os64_dom_listens count. A script may listen for any other type. The
+ * handler properties of the ones from SCROLL on are the Modern Web arc's,
+ * installed by its table's rows (d_event_handler), not with the rest. */
 enum {
     D_EVENT_CLICK, D_EVENT_MOUSEDOWN, D_EVENT_MOUSEUP, D_EVENT_MOUSEOVER,
     D_EVENT_MOUSEOUT, D_EVENT_MOUSEMOVE, D_EVENT_KEYDOWN, D_EVENT_KEYPRESS,
     D_EVENT_KEYUP, D_EVENT_INPUT, D_EVENT_CHANGE, D_EVENT_SUBMIT, D_EVENT_RESET,
-    D_EVENT_FOCUS, D_EVENT_BLUR, D_EVENT_LOAD, D_EVENT_DOM_CONTENT_LOADED,
+    D_EVENT_FOCUS, D_EVENT_BLUR, D_EVENT_LOAD, D_EVENT_SCROLL, D_EVENT_RESIZE,
+    D_EVENT_POPSTATE, D_EVENT_HASHCHANGE, D_EVENT_DOM_CONTENT_LOADED,
     D_EVENT_COUNT
 };
 /* A wrapper, or another engine value the binding holds strongly. A node's
@@ -145,8 +148,10 @@ struct os64_dom {
     bool attribute_scanned;
     unsigned dispatching;
     DActiveEvent *current_event;
-    /* The classes of plain event targets (d_event_target). */
+    /* The classes of plain event targets (d_event_target), and each one's
+     * resolver, NULL for a class whose opaque is its entry. */
     JSClassID target_classes[8];
+    int (*target_resolvers[8])(os64_dom_t *, JSContext *, JSValueConst, bool, DValue **);
     unsigned target_class_count;
     bool sweep_pending;
     DListener *invoking;
@@ -161,6 +166,39 @@ struct os64_dom {
     char *url;
     DNavigation navigation;
     os64_js_outcome_t report;
+    /* THE VIEW (view.c): the host's provider, and the view as the last
+     * os64_dom_view_step saw it, what its events are owed against. */
+    os64_dom_view_provider_t view;
+    os64_dom_view_t view_seen;
+    /* The view the MediaQueryLists were last judged against. */
+    os64_dom_view_t media_judged;
+    /* getComputedStyle's provider, and the snapshot it writes into, made
+     * at the first read and reused. */
+    os64_dom_computed_provider_t computed;
+    void *computed_opaque;
+    struct os64_dom_computed *snapshot;
+    JSClassID computed_class, media_class;
+    DValue *computed_prototype, *media_prototype, *media_event_prototype;
+    /* The page's MediaQueryLists, in the order they were made (view.c's
+     * DMedia): a list is the binding's while its object lives, and while a
+     * listener holds it. */
+    struct DMedia *media, *media_last;
+    /* HISTORY (window.c): the host's provider; the current entry's state as
+     * JSON, NULL for null; its value, parsed at the first read of
+     * history.state and the same object every read after (`entry_state_read`);
+     * the entry's name (os64_dom_history_entry), a new one at every change
+     * of the entry or its state; and whether the page asked to keep its own
+     * scroll. */
+    os64_dom_history_t history_host;
+    char *entry_state;
+    size_t entry_state_length;
+    DValue *entry_state_value;
+    uint64_t entry_name;
+    bool entry_state_read, scroll_manual;
+    DValue *popstate_prototype, *hashchange_prototype;
+    /* JS_GetClassID of a plain object and of an array: the only objects
+     * a state's JSON carries. */
+    JSClassID plain_class, array_class;
     /* DataView's constructor and its buffer, byteOffset and byteLength
      * getters as the engine made them, for reading a buffer source
      * (encoding.c). */
@@ -200,6 +238,10 @@ bool d_context(os64_dom_t *dom, JSContext *ctx, const char *abi);
 void *d_alloc(os64_dom_t *dom, size_t size);
 void d_free(os64_dom_t *dom, void *ptr);
 JSValue d_error(JSContext *ctx, const char *name, const char *message);
+/* A dictionary argument (WebIDL § 3.2.17): argv[at] undefined, null or
+ * missing is an empty one, any other value that is not an object a
+ * TypeError. 1 an object, 0 empty, -1 with the exception pending. */
+int d_dictionary(JSContext *ctx, int argc, JSValueConst *argv, int at);
 JSValue d_html_error(JSContext *ctx, int64_t status);
 JSValue d_page_error(JSContext *ctx, int64_t status);
 DValue *d_retain(os64_dom_t *dom, JSContext *ctx, JSValue value);
@@ -207,6 +249,10 @@ int d_method(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
              const char *name, JSCFunctionData *fn, int argc, int magic);
 int d_accessor(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
                const char *name, JSCFunctionData *fn, int magic, bool writable);
+/* d_method whose function's `name` is its own, as WebIDL names an
+ * operation; the Modern Web's rows make theirs so. */
+int d_method_named(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
+                   const char *name, JSCFunctionData *fn, int argc, int magic);
 JSValue d_wrap(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
 /* d_wrap for an interface's constructor: a node with no wrapper yet gets
  * one whose prototype is `prototype` when that is an object (new.target's,
@@ -237,17 +283,46 @@ int d_handler_attribute_set(os64_dom_t *dom, JSContext *ctx, const os64_html_nod
  * when the binding refused its own storage or the runtime failed under it. */
 int d_dispatch(os64_dom_t *dom, JSContext *ctx, JSValueConst event, const os64_html_node_t *node);
 /* A PLAIN EVENT TARGET: an object that is neither a node nor window and
- * is an EventTarget all the same (performance, screen.orientation), whose
- * opaque is its own registry entry, which holds its listeners. A row
+ * is an EventTarget all the same (performance, screen.orientation, a
+ * MediaQueryList), whose registry entry holds its listeners. A row
  * registers the object's class and gives its prototype the three
  * EventTarget methods with d_event_target, and an on<type> property for one
- * of the binding's event types with d_event_handler. d_dispatch_plain is
+ * of the binding's event types with d_event_handler. The entry is the
+ * object's opaque when `resolve` is NULL. A class whose objects come and go
+ * (a MediaQueryList) gives a resolver instead: it makes the entry only when
+ * `make` (a listener added, a handler set, a dispatch), and answers a NULL
+ * entry otherwise when there is none, which a read, a removal or a null
+ * handler acts on as nothing; the class releases an entry once nothing
+ * listens on it (view.c's media_sweep). 1 with the entry, 0 when `self` is
+ * not its kind, -1 with an exception pending. d_dispatch_plain is
  * d_dispatch at one: the path is the target alone. */
-int d_event_target(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, JSClassID class_id);
+int d_event_target(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, JSClassID class_id,
+                   int (*resolve)(os64_dom_t *dom, JSContext *ctx, JSValueConst self, bool make,
+                                  DValue **entry));
 int d_event_handler(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, int kind);
 int d_dispatch_plain(os64_dom_t *dom, JSContext *ctx, JSValueConst event, DValue *target);
 JSValue d_event_new(os64_dom_t *dom, JSContext *ctx, const char *type, bool bubbles,
                     bool cancelable, bool trusted);
+/* d_event_new with the event's prototype `prototype` when it is an object
+ * (an Event interface's own, PopStateEvent's and the rest), else Event's. */
+JSValue d_event_new_proto(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, const char *type,
+                          bool bubbles, bool cancelable, bool trusted);
+/* `new Event(type, {bubbles, cancelable})`'s steps, the event's prototype
+ * `prototype` (d_event_new_proto): what an Event interface's constructor
+ * does before it reads the members of its own. */
+JSValue d_event_construct(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv,
+                          JSValueConst prototype);
+/* One event the host dispatches as one task, as os64_dom_dispatch does: at
+ * `node`, at window (both NULL), or at `plain`, a plain event target's
+ * entry. `make` builds the Event inside the task (its own prototype and
+ * fields); the caller has already asked whether anything listens. */
+os64_js_status_t d_host_dispatch(os64_dom_t *dom, const os64_html_node_t *node, DValue *plain,
+                                 const char *type, JSValue (*make)(os64_dom_t *, JSContext *, void *),
+                                 void *arg, bool *prevented, os64_js_outcome_t *outcome);
+/* MediaQueryList's legacy addListener and removeListener: the `change`
+ * listener `callback` added to or removed from `self`. */
+JSValue d_listener_change(os64_dom_t *dom, JSContext *ctx, JSValueConst self, JSValueConst callback,
+                          bool add);
 void d_report(os64_dom_t *dom, JSContext *ctx, JSValueConst error);
 int d_script_mark(os64_dom_t *dom, const os64_html_node_t *node);
 int d_script_mark_tree(os64_dom_t *dom, const os64_html_node_t *root);
@@ -347,11 +422,21 @@ int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 const char *d_modern_name(size_t index);
 /* The table's rows' installers, each in the file its slice owns. */
 int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_view_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_media_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_computed_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_history_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The view's records freed, after the engine (os64_dom_free). */
+void d_view_free(os64_dom_t *dom);
 int d_storage_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_performance_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_url_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_encoding_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_screen_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The screen's width and height as `screen` reports them, in CSS pixels at
+ * the page's zoom, and devicePixelRatio: what the device-* media features
+ * and `resolution` answer (view.c). */
+void d_screen_media(const os64_dom_t *dom, double *width, double *height, double *ratio);
 int d_base64_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_implementation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* DOCUMENTS OF THEIR OWN (implementation.c). document.implementation and

@@ -288,7 +288,7 @@ static void element(Buf *b, const FStyles *styles, const os64_html_node_t *n,
     // the initial style a root inherits from.
     if (parent == NULL) {
         os64_memset(&base, 0, sizeof(base));
-        base.family = (flow_family_list_t){NULL, 0, env->default_generic};
+        base.family = (flow_family_list_t){.generic = env->default_generic};
         base.font_weight = 400;
         base.font_size = (flow_unit_t)env->viewport_font_px * FLOW_UNITS_PER_PX;
         base.color = env->ink;

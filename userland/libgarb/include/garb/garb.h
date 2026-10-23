@@ -207,6 +207,13 @@ bool garb_items_of(garb_parsed_t *owner, const garb_value_t *values, int32_t n,
 // already-freed result is fine.
 void garb_free(garb_parsed_t *parsed);
 
+// A number as CSS serialises it for a script (CSSOM § Serializing CSS
+// values, as the browsers do it): to six significant digits, with no
+// trailing zeros and no exponent, `-` only when it is less than zero once
+// rounded; NaN and the infinities, which no CSS value holds, as 0. Like
+// snprintf: answers the length and writes what fits in `cap`.
+size_t garb_css_number(double v, char *out, size_t cap);
+
 // ── Dumps ───────────────────────────────────────────────────────────────
 //
 // JSON in css-parsing-tests' own representation, for the harness and a

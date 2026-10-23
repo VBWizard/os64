@@ -121,24 +121,26 @@ padding-block-inline-valid.html	e.style['padding-inline'] = "20%" should set the
 padding-block-inline-valid.html	e.style['padding-inline-end'] = "calc(2em + 2ex)" should set the property value
 padding-block-inline-valid.html	e.style['padding-inline-start'] = "20%" should set the property value
 [excluded]
-# Pages whose tests read getComputedStyle, which slice 1b brings; each runs
-# again once it lands.
-block-size-computed.html	needs getComputedStyle (slice 1b)
-border-block-color-computed.html	needs getComputedStyle (slice 1b)
-border-block-style-computed.html	needs getComputedStyle (slice 1b)
-border-block-width-computed.html	needs getComputedStyle (slice 1b)
-border-inline-color-computed.html	needs getComputedStyle (slice 1b)
-border-inline-style-computed.html	needs getComputedStyle (slice 1b)
-border-inline-width-computed.html	needs getComputedStyle (slice 1b)
-inline-size-computed.html	needs getComputedStyle (slice 1b)
-inset-block-inline-computed.html	needs getComputedStyle (slice 1b)
-inset-computed.html	needs getComputedStyle (slice 1b)
-margin-block-inline-computed.html	needs getComputedStyle (slice 1b)
-max-block-size-computed.html	needs getComputedStyle (slice 1b)
-max-inline-size-computed.html	needs getComputedStyle (slice 1b)
-min-block-size-computed.html	needs getComputedStyle (slice 1b)
-min-inline-size-computed.html	needs getComputedStyle (slice 1b)
-padding-block-inline-computed.html	needs getComputedStyle (slice 1b)
+# Pages whose tests ask CSS.supports first (css/support/computed-
+# testcommon.js), which libdom does not have: they fail whole at "'CSS' is
+# not defined" before reading getComputedStyle. DEBTS.md § Classic browser
+# scripting books CSS.supports.
+block-size-computed.html	needs CSS.supports
+border-block-color-computed.html	needs CSS.supports
+border-block-style-computed.html	needs CSS.supports
+border-block-width-computed.html	needs CSS.supports
+border-inline-color-computed.html	needs CSS.supports
+border-inline-style-computed.html	needs CSS.supports
+border-inline-width-computed.html	needs CSS.supports
+inline-size-computed.html	needs CSS.supports
+inset-block-inline-computed.html	needs CSS.supports
+inset-computed.html	needs CSS.supports
+margin-block-inline-computed.html	needs CSS.supports
+max-block-size-computed.html	needs CSS.supports
+max-inline-size-computed.html	needs CSS.supports
+min-block-size-computed.html	needs CSS.supports
+min-inline-size-computed.html	needs CSS.supports
+padding-block-inline-computed.html	needs CSS.supports
 [passing]
 block-size-invalid.html	e.style['block-size'] = "-10px" should not set the property value
 block-size-invalid.html	e.style['block-size'] = "-20%" should not set the property value

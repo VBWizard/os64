@@ -1,0 +1,78 @@
+# WPT's html/browsers/history/the-history-interface in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/browsers/history/the-history-interface --update
+# rewrites [passing].
+[required]
+# Slice 1b: pushState, replaceState, state, length, and the traversals
+# that fire popstate and hashchange. Each fails with the switch off.
+005.html	<body onpopstate="..."> should register a listener for the popstate event
+005.html	window.onpopstate should register a listener for the popstate event
+007.html	popstate event should fire before onload fires
+007.html	the correct state should be restored when navigating during initial load
+011.html	pushed location should be reflected immediately
+012.html	replaced location should be reflected immediately
+back-pushstate-back-history-state.html	history.state is null after pushState+back+pushState+back
+combination_history_001.html	Combine pushState and replaceSate methods
+combination_history_004.html	After calling of back method, check length
+combination_history_005.html	After calling of forward method, check length
+combination_history_007.html	After calling of back and pushState method, check length
+history_back.html	history back
+history_forward.html	history forward
+history_go_minus.html	history go minus
+history_pushstate.html	history pushState
+history_pushstate_url.html	history pushState sets url
+history_replacestate.html	history replaceState
+history_state.html	history state
+pushstate-replacestate-empty-string/pushstate.html	history.pushState() with an empty string URL
+[excluded]
+[passing]
+004.html	.go commands should be queued until the thread has ended
+004.html	browser needs to support hashchange events for this testcase
+004.html	history position should be calculated when executing, not when calling the .go command
+005.html	<body onpopstate="..."> should register a listener for the popstate event
+005.html	history.pushState support is needed for this testcase
+005.html	window.onpopstate should register a listener for the popstate event
+006.html	history.state should initially be null
+006.html	history.state should still be null after onload
+006.html	history.state should still be null onload
+006.html	popstate event should not fire after onload fires
+006.html	popstate event should not fire before onload fires
+006.html	writing to history.state should be silently ignored and not throw an error
+007.html	history.pushState support is needed for this testcase
+007.html	history.state should initially be null
+007.html	history.state should reflect pushed state
+007.html	history.state should reflect the navigated state after onload
+007.html	history.state should reflect the navigated state onload
+007.html	popstate event should fire before onload fires
+007.html	popstate event should not fire after onload fires
+007.html	the correct state should be restored when navigating during initial load
+011.html	pushState should be able to set the location state
+011.html	pushed location should be reflected immediately
+011.html	pushed location should be retained after the page has loaded
+012.html	replaceState should be able to set the location state
+012.html	replaced location should be reflected immediately
+012.html	replaced location should be retained after the page has loaded
+back-pushstate-back-history-state.html	history.state is null after pushState+back+pushState+back
+combination_history_001.html	Combine pushState and replaceSate methods
+combination_history_002.html	After calling of pushState method, check length
+combination_history_003.html	After calling of pushState and replaceState methods, check length
+combination_history_004.html	After calling of back method, check length
+combination_history_005.html	After calling of forward method, check length
+combination_history_006.html	After calling of go method, check length
+combination_history_007.html	After calling of back and pushState method, check length
+history_back.html	history back
+history_forward.html	history forward
+history_go_minus.html	history go minus
+history_go_plus.html	history go plus
+history_pushstate.html	history pushState
+history_pushstate_nooptionalparam.html	history pushState NoOptionalParam
+history_pushstate_url.html	history pushState sets url
+history_replacestate.html	history replaceState
+history_replacestate_nooptionalparam.html	history replaceStateNoOptionalParam
+history_state.html	history state
+pushstate-replacestate-empty-string/pushstate-base.html	history.pushState() with an empty string URL and base URL different from document's URL
+pushstate-replacestate-empty-string/pushstate-whitespace.html	history.pushState() with a whitespace URL
+pushstate-replacestate-empty-string/pushstate.html	history.pushState() with an empty string URL
+pushstate-replacestate-empty-string/replacestate-base.html	history.replaceState() with an empty string URL and base URL different from document's URL
+pushstate-replacestate-empty-string/replacestate-whitespace.html	history.replaceState() with a whitespace URL
+pushstate-replacestate-empty-string/replacestate.html	history.replaceState() with an empty string URL

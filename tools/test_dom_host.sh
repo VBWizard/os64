@@ -7,7 +7,7 @@ cleanup() {
     if [ "$result" -eq 0 ] && [ "${DOM_HOST_KEEP:-0}" = 0 ]; then rm -rf "$work"; else echo "DOM host artifacts: $work" >&2; fi
 }
 trap cleanup EXIT
-for name in core node collection content event timer window geometry classic style mixin modern \
+for name in core node collection content event timer window geometry classic style mixin modern view \
     storage performance url encoding screen base64 implementation; do
     test -f "userland/libdom/$name.c" || { echo "libdom implementation pending: $name.c" >&2; exit 1; }
 done
@@ -41,7 +41,7 @@ done
 # Source-local interception counts binding allocations without attributing
 # engine or tree allocations to the binding's own failure sweep. The private
 # allocator name is distinct because these DSOs share one host executable.
-for name in core node collection content event timer window geometry classic style mixin modern \
+for name in core node collection content event timer window geometry classic style mixin modern view \
     storage performance url encoding screen base64 implementation; do
     object="$work/dom-$name.o"
     cc "${flags[@]}" -Dd_alloc=dom_host_private_alloc -Dos64_malloc=dom_host_malloc -Dos64_calloc=dom_host_calloc \

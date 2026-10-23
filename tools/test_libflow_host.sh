@@ -31,7 +31,7 @@ host_sources=(
    tools/test_libflow_host.c userland/libflow/store.c userland/libflow/attrs.c
    userland/libflow/style.c userland/libflow/dump.c userland/libflow/boxes.c
    userland/libflow/layout.c userland/libflow/flow.c userland/libflow/motion.c
-   tools/test_libflow_fonts.c userland/libgarb/tokenize.c userland/libgarb/parse.c
+   userland/libflow/computed.c tools/test_libflow_fonts.c userland/libgarb/tokenize.c userland/libgarb/parse.c
    userland/libgarb/decode.c userland/libgarb/dump.c userland/libgarb/select.c
    userland/libgarb/values.c userland/libgarb/props.c userland/libgarb/media.c
    userland/libgarb/cascade.c userland/libos64/arena.c userland/libos64/text.c

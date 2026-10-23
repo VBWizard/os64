@@ -1312,6 +1312,240 @@ slice: libgarb never read them. Noted and not booked:
 `word-break: break-all` over a megabyte of text makes a segment per
 character, the same class of cost libflow already pays per word.
 
+### Slice 1b, as built
+
+Built by Opus on `opus/tmw-1b-view`, from MODERN_WEB_BRIEFS.md § Slice 1b,
+then read cold by a fresh Opus (nine findings, all fixed on the branch,
+and a tenth the new cases found) and read for design. Four rows in
+`modern.c`, `libdom/view.c` and the history half of `window.c`, libflow's
+`computed.c`, libgarb's serializer for a media list, and yonder's session.
+
+**What was built.**
+
+- **The view** (`view.c`): `scrollX`/`pageXOffset`, `scrollY`/
+  `pageYOffset`, `innerWidth`/`innerHeight` (the viewport less its
+  scrollbars, what a media query reads), `outerWidth`/`outerHeight` (the
+  window's frame, unzoomed), `scroll`/`scrollTo`/`scrollBy` (two numbers
+  or a ScrollToOptions; `smooth` done at once; non-finite is 0; the
+  host clamps), `document.scrollingElement` (CSSOM View's, quirks
+  included), `onscroll`/`onresize`, and window's `focus()` and `blur()`,
+  which do nothing (the window is the person's to raise; added when the
+  corpus replay showed a site's analytics script reaching
+  `defaultView.focus()`).
+  `resize` at window and `scroll` at the document, bubbling, are fired by
+  the host's rendering step.
+- **`matchMedia`, `MediaQueryList`, `MediaQueryListEvent`**: `media` is
+  CSSOM's serialisation of the list (libgarb's new
+  `garb_media_serialize`/`_text_serialize`/`_text_serialized`), `matches`
+  judged at every read, `change` when the answer moved since the last
+  step (a change and its undoing owe nothing), `addListener`/
+  `removeListener`, and a list nothing holds freed by the next
+  `matchMedia`.
+- **`getComputedStyle`**: a live, read-only declaration over libflow's
+  `flow_computed_*` (resolved values: used ones off the laid-out box for
+  the sizes, margins, padding, a positioned box's insets, line height and
+  transform), camel, dashed and webkit spellings, `cssFloat`, indices and
+  iteration in CSSOM's order; a pseudo-element and a detached element read
+  an empty declaration. `CSSStyleDeclaration` is an interface on window,
+  naming the style object's prototype, which the computed one inherits
+  and shadows, so `instanceof` answers truly for both (added for the
+  corpus replay's check that every interface the slice hands out is on
+  window). `document.defaultView` is window (beyond the brief: it is how
+  pages reach `getComputedStyle`).
+- **History**: `pushState`, `replaceState` (an empty URL is none, whatwg/
+  html#9343), `state` (JSON: plain data, finite numbers but -0, no holes;
+  DataCloneError otherwise, QuotaExceededError past 64 KiB),
+  `scrollRestoration`, `length` from the window's session, `onpopstate`,
+  `onhashchange`, `PopStateEvent`, `HashChangeEvent`; the location hash
+  setter's own rule (the fragment it already has, as the URL parser's
+  fragment state writes it, navigates nowhere).
+- **yonder**: the three providers, the session's entries (below), Back
+  and Forward within a document with no fetch, and the owed events run
+  before a page's other tasks.
+
+**The seams, as they ended.**
+
+| Seam | What it is now |
+|---|---|
+| `os64_dom_view_provider_t`, `os64_dom_view_step` | `read` (the view now, no layout) and `scroll` (a layout made current, then the view scrolled, its cost added to the geometry counts). The step fires at most one event a call — `resize`, else `scroll`, else the first list whose `matches` moved — and the host calls it until it answers false |
+| `os64_dom_set_computed` | the provider puts each property of libgarb's table (`garb_prop_t`) as CSSOM serialises it; **the table is the property list**: a declaration's length, order and names are the table's, so slice 4's `-computed` WPT pages read exactly what libgarb models. Every read asks again for the whole element into one snapshot buffer; one past the binding's budget is refused whole |
+| the three routes (`os64_dom_history_t`) | a STATE UPDATE (`update`: the address and its JSON, push or replace) fires nothing; a FRAGMENT NAVIGATION (`fragment`) adds an entry, scrolls, fires `popstate` inside the script that made it (HTML § Navigate to a fragment) and owes `hashchange` when the fragment moved; a TRAVERSAL is the host's: it tells the binding (`os64_dom_history_moved`) before its own entries move, then owes `popstate` and, when the fragment moved, `hashchange` |
+| owed events (`os64_dom_history_event_t`) | carry what they were owed with: a hashchange its two addresses, a popstate its entry's state and name (`os64_dom_history_entry`); its state is `history.state` itself only while that entry is still the current one |
+| entries (`way_crumb_t.document`, `.entry`, `.state`) | a crumb names its document (moving between two of one document's is no fetch), the entry itself (a fetched traversal finds its target by name wherever the list has moved it, the entries between keeping their own scroll and state) and its state, owned by the session |
+| `stream_entry` | a Back, Forward or Reload that fetches gives the arriving document the entry's state before its first script (HTML § Restore the history object state); a host whose binding is not made yet keeps it for the binding |
+| `g.traversing` | while a traversal is fetched, the page on screen's state updates and fragment navigations change the page and not the session (HTML § Finalize a same-document navigation drops a change whose document is no longer active) |
+| `unshown_go` | `history.back()` or `forward()` past a page not yet shown is ONE rule wherever its arrival is (parse, DOMContentLoaded, waiting for sheets): its navigation committed when its response came (HTML § Finalize a cross-document navigation), so when there is an entry that far (§ Traverse the history by a delta) the page is never shown, a new way's entries go ahead (a traversal's are let go with it: DEBTS.md), and the window goes there from the page on screen, with no fetch when that is the page on screen; when there is none, nothing happens and the page arrives. A new way's page has nothing ahead, and neither has a page that pushed before it was shown, however it came: the push let go of what was ahead of its entry; a reload is the entry on screen again; a traversal's page is the entry it was fetched for (`Page.arrives_at`), which its arrival lands on whatever it pushed before it was shown. From `load` on, the page is the one on screen |
+| `Page.loaded`, `g.replacing` | a page's navigation by address (`location.replace`, `location.href`) or a form its script sends replaces the page's own entry until the page has completely loaded, which in yonder is when its `load` task, and the navigation that task asked for, is over (`page_navigation_replaces`; HTML § 7.2.4, Location-object navigate, step 3, and § 4.10.22.3 Form submission algorithm, step 25). `replace()` replaces whenever it runs. No transient activation is weighed: a page is shown and its `load` runs in one turn, so a person's input has no task in that window, and a timer or a click after `load` pushes. For the page on screen (its `load` running) the entry replaced is the one on screen. A page not yet shown (its parse, its DOMContentLoaded, its wait for sheets) is the session's entry already, so the new page takes its place (`start_trip`): it comes as the replaced page came (a reload's as a refresh), at the entry a traversal was fetched for, with the entries its scripts made around it, and a traversal goes on as its own. A redirector reached by a link leaves the page before it behind; one reached by Back is replaced, so Back past it is the entry before it. A page not yet shown whose navigation waits on the question bar is asked as the page on screen's, and its place is not taken (DEBTS.md) |
+| the switch | with it off: none of the four rows' names, nor `scrollingElement`, `defaultView` or an element's `onscroll`; the arc's handler types are not handlers as content attributes either; `history.length` is 1, a fragment navigation is an ask, the hash setter asks whatever it is given, and history deltas do not add up. What it does not reach: the window's own session (a fragment link's entry, Back within a document, the entries named by crumbs), which is yonder's own history, not web surface (the design read's ruling) |
+
+**The scroll-restoration ruling.** The brief said a traversal within a
+document "scrolls to the fragment". It restores the scroll position the
+entry was left at, and the design read ruled the brief wrong: HTML's
+"update document for history step application" runs "restore persisted
+state", which restores the entry's scroll position data when its scroll
+restoration mode is `auto` (HTML § Restoring persisted state), and that
+is what browsers do. A page that sets `history.scrollRestoration` to
+`manual` keeps its own.
+
+**Numbers.** WPT, before (`2bbb9f60`, the baseline commit) → after, with
+the switch on and off:
+
+| directory | before | after | after, switch off | `[required]` | excluded pages |
+|---|---|---|---|---|---|
+| `css/cssom-view` | 217 | 229 | 217 | 8 | 9 (frames) |
+| `html/browsers/history/the-history-interface` | 4 | 50 | 4 | 19 | 0 |
+| `css/cssom` | 459 | 589 | 459 | 20 | 0 |
+| `css/mediaqueries` | 0 | 117 | 0 | 13 | 0 |
+
+Every required test passes with the switch on and fails with it off.
+`dom/nodes` is unchanged (858). What still fails, by cause: frames (the
+excluded pages, and history's pages that open one), `DOMException`'s
+`code`, computed custom properties and shorthands, and the members of
+cssom-view's element geometry outside this slice.
+
+**The census** (the P5's 1,601 page records, slice 0b's
+`yonder_tally.py`): 316 records, 57 of 268 sites and 9,668 asks name at
+least one of the slice's names: `getComputedStyle` (187 records, 192
+asks), `matchMedia` (246, 479), `innerWidth` (62, 2,552), `innerHeight`
+(68, 2,385), `outerWidth` (14, 15), `outerHeight` (9, 10), `scrollY` (13,
+15), `pageXOffset` (12, 1,984), `pageYOffset` (12, 1,986), `scrollTo` (1,
+2), `CSSStyleDeclaration` (37, 42), `focus` (1, 6). The history members
+are not window misses, so the census cannot count them.
+
+**The corpus replay** (230 pages Chris kept on the P5, 222 judged, run by
+the orchestrator) found four failure groups that could have been this
+slice's, each traced to its cause: a CDN's bot challenge (five sites)
+dies at `crypto.getRandomValues`, before and after, its timer then
+calling a callback (`window.qpPe1`) that the dead script would have made;
+the only change is the address, which now carries the challenge's token
+because `replaceState` runs and no script `load` event puts it back (both
+booked). React's `getActiveElementDeep` (two sites)
+now reaches `instanceof window.HTMLIFrameElement`, slice 0a's booked
+interface. A site's analytics script now reaches `""+document.referrer` (slice 1a's
+booked row) and `document.defaultView.focus()`, for which this slice
+added window's `focus`/`blur`; checking every interface the slice hands
+out added `CSSStyleDeclaration`. Two sites' unjudged records
+are the record's own capacity (its facts past `YONDER_DIAG_FACTS_MAX`).
+
+Host: the DOM host 3,810 / 22,416 → 4,709 / 36,995 checks, with 5,715
+allocation sweeps; the scripted-page host 5,888 → 6,361 (its refetch
+sweep cuts an arrival only up to the page's first script, below); all 0
+failed.
+libgarb's harness took 27 minutes with the media serializer as first
+built, its allocation sweep paying the cost that doubled at every bracket
+level (the cold read's P1); in one pass it takes 10 seconds. The mutant harnesses were not
+run (the briefs' rule).
+
+**The cold read** found nine, all fixed: the media serializer's cost
+doubling at every bracket level (P1); a fetched Back losing the entry's
+state, `hashchange`'s addresses and `popstate`'s state read when the event
+ran rather than when it was owed, a fetched traversal popping by count,
+and `history.back()` from an arriving page landing differently by when it
+ran (P2s); the switch leaking through content attributes, the hash setter
+navigating to the fragment it had, and a multi-step traversal stamping the
+live scroll on every entry (P3s). The new cases found a tenth:
+`history.length` counting a page arriving by a traversal as a new entry.
+**Codex round 1** found seven, all fixed but one that did not reproduce:
+a delta of INT32_MIN negated past int32_t into an out-of-bounds index
+(P1; every delta's magnitude is now int64_t, and the class audit found a
+scroll rounded after its clamp); `history.forward()` from an arriving
+page dropped (`unshown_go` now answers both ways); a refetched page that
+pushed before it was shown losing its target (`Page.arrives_at`); the
+computed fallback's CSS-wide keywords, and its 511-byte cut; and a quirks
+body under a boxless root. The hidden descendant's `rem` already read the
+root's font; a case pins it. Its adversarial pass found a page that
+pushed and went back among its own entries keeping P ahead
+(`way_forget_ahead`), and a QuickJS crash compiling under a failed
+allocation (booked).
+**The second cold read**, of round 1's fixes, found: `history.forward()`
+from an arriving page that had pushed abandoning it, where the push had let
+go of what was ahead and forward is nothing; and `history.length`, read
+by such a page, still counting what its push let go of; and a new way's
+page going back past its own entries putting them ahead of what its commit
+had let go of; and a page not yet shown that navigated by address doing so
+from the page on screen (`g.replacing`), so a JavaScript redirector's
+`location.replace` erased the page its link was on, and a redirector
+reached by Back left its entry behind, where Back reached it again.
+It also found that a replay's session history and window frame are the
+harness's, which REPLAY.md § 3 now states, and Back from an arriving page
+measuring its target before a held push joins the session (booked).
+**The third cold read** found that "not yet shown" is not "not yet
+completely loaded": yonder shows a page before its `load`, so a redirect
+or a script's form in `onload` still pushed, and Back from where it went
+reached the redirector again (`Page.loaded`); and a page at its
+DOMContentLoaded whose replacing navigation could not start arriving
+without the entries its scripts made, which it now takes back.
+It booked the question bar answered for a page not yet shown; the round
+also booked a page not yet shown sending the page on screen's Referer, and
+a fragment navigation before load pushing.
+**The design read** passed it with the scroll-restoration ruling, the two
+accepted departures from HTML's traversal queue below, and the session's
+being outside the switch.
+
+**Merged with 1a and 4**: a MediaQueryList is one of 1a's plain event
+targets (`d_event_target`, `d_event_handler`, `d_dispatch_plain`, the
+host's `d_host_dispatch` at a plain target's entry). 1a's helper gained a
+per-class resolver for it: a list's entry is made only when a listener
+is added, its handler set or an event dispatched at it (`media_entry`),
+and let go once nothing listens on it, at the next matchMedia or view step
+(`media_release`), so a list nothing listens to is not held, however it
+was listened to before; performance and screen.orientation keep theirs as
+their opaque. The
+interface objects are 1a's `d_interface_new`; 1b's own installer is gone.
+The two `DOMException` rows are one. Slice 4's thirteen longhands
+(`cursor`, `user-select`, `word-break`, `overflow-wrap`, `letter-spacing`,
+`text-overflow`, the four `outline-*`, `object-fit`, `object-position`,
+`aspect-ratio`) are computed from libflow's style (`aspect-ratio` as the
+page declared its pair), since libgarb's table is the property list and
+each must serialise (WPT's `serialize-all-longhands`). At the merge, with
+4's properties parsed: `css/cssom` 722, `css/cssom-view` 248,
+`css/mediaqueries` 118.
+
+**Codex round 2**, after the merge, found seven. Fixed: `font-family`
+computing to libflow's names and its fallback, where the computed value is
+the declared list as written (`flow_family_list_t.written`); an event's
+init dictionary that is a primitive accepted, now a TypeError for every
+Event interface through libdom's one gate (`d_dictionary`); the
+`scripting` media feature fixed at `none`, now the document's
+(`garb_env_t.scripting`); and the device-* features answering the
+viewport, now the screen's (`garb_env_t.device_width`, from `s_screen` and
+the binding's `options.screen`), which put `css/mediaqueries` at 120.
+Booked: a grid template's resolved value as the used track sizes. Declined
+as what-ifs or as WebIDL's own rule: an options getter that scrolls the
+window, and `scrollRestoration` refusing an unknown word (WebIDL ignores
+it).
+
+**The fourth cold read**, of the merge and round 2, found six. A
+MediaQueryList was held for the page's life by any target operation on it
+(a read of `onchange`, a removal, a dispatch) and never let go when its
+last listener went, so a hook that makes a list and adds and removes a
+listener every render kept every list; now an entry is made only to add, to
+set a handler or to dispatch, and `media_release` lets it go, in one walk
+of the registry, at the next matchMedia or view step. `resolution`
+answered 1 at any zoom; it is the zoom now, as devicePixelRatio is, and
+libgarb knows the WebKit pixel ratio. A quoted family name that spells a
+keyword is written quoted, and a keyword in its canonical lowercase. And
+three texts: slice 4's `-computed` pages wait on `CSS.supports` (booked),
+not on getComputedStyle; a comment that headed the wrong function; and
+what matchMedia's answer reads.
+
+**Booked** (DEBTS.md § Classic browser scripting): computed custom
+properties and shorthands; `DOMException` (raised with Chris as a small
+libdom slice); frames and `window.open`; an entry's state living only as
+long as its crumb; history deltas adding up to nothing; `scrollRestoration`
+per document; `matchMedia` writing `calc()` as given; the out-of-memory
+`not all`; a second traversal stopping the first; a stopped traversal
+collapsing held changes; Back from an arriving page with nothing on
+screen; from the corpus replay, `crypto.getRandomValues` and a script
+element's `load` and `error`; from Codex's round, QuickJS compiling a
+parse that ran out of memory; and from the second cold read, Back from an
+arriving page measured before a held push joins; and from the third, the
+question bar answered for a page not yet shown, a page not yet shown's
+Referer, and a fragment navigation before load; from Codex's second
+round, a grid template's used track sizes; and from the fourth cold read,
+`CSS.supports`. In § The replay corpus:
+a replay's session history and window frame.
+
 ### Slice 0c, as built
 
 Built by Opus on `opus/tmw-0c-jquery`, from MODERN_WEB_BRIEFS.md § Slice

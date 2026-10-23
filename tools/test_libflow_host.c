@@ -1399,6 +1399,7 @@ static void layout_sweep(void)
 #include "test_libflow_transform.inc"
 #include "test_libflow_cliptext.inc"
 #include "test_libflow_motion.inc"
+#include "test_libflow_computed.inc"
 
 int main(int argc, char **argv)
 {
@@ -1518,6 +1519,9 @@ int main(int argc, char **argv)
     transform_cases();
     cliptext_cases();
     motion_cases();
+    computed_cases();
+    computed_round1_cases();
+    computed_round2_cases();
     fixed_cases();
     paint_cases();
     decoration_colour_cases();

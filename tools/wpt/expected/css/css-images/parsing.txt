@@ -22,15 +22,17 @@ object-position-valid.html	e.style['object-position'] = "left center" should set
 object-position-valid.html	e.style['object-position'] = "right 30% top 60px" should set the property value
 object-position-valid.html	e.style['object-position'] = "right 40%" should set the property value
 [excluded]
-# Pages whose tests read getComputedStyle, which slice 1b brings; each runs
-# again once it lands.
-gradient-interpolation-method-computed.html	needs getComputedStyle (slice 1b)
-gradient-position-computed.html	needs getComputedStyle (slice 1b)
-image-function-computed.html	needs getComputedStyle (slice 1b)
-image-orientation-computed.html	needs getComputedStyle (slice 1b)
-image-rendering-computed.html	needs getComputedStyle (slice 1b)
-object-fit-computed.html	needs getComputedStyle (slice 1b)
-object-position-computed.html	needs getComputedStyle (slice 1b)
+# Pages whose tests ask CSS.supports first (css/support/computed-
+# testcommon.js), which libdom does not have: they fail whole at "'CSS' is
+# not defined" before reading getComputedStyle. DEBTS.md § Classic browser
+# scripting books CSS.supports.
+gradient-interpolation-method-computed.html	needs CSS.supports
+gradient-position-computed.html	needs CSS.supports
+image-function-computed.html	needs CSS.supports
+image-orientation-computed.html	needs CSS.supports
+image-rendering-computed.html	needs CSS.supports
+object-fit-computed.html	needs CSS.supports
+object-position-computed.html	needs CSS.supports
 [passing]
 conic-gradient-calc-angle-percentage-invalid.html	e.style['background-image'] = "linear-gradient(red calc(50% + 30deg), blue)" should not set the property value
 conic-gradient-calc-angle-percentage-invalid.html	e.style['background-image'] = "radial-gradient(red calc(50% + 30deg), blue)" should not set the property value

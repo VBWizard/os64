@@ -20,38 +20,40 @@ word-wrap-valid.html	e.style['word-wrap'] = "anywhere" should set the property v
 word-wrap-valid.html	e.style['word-wrap'] = "break-word" should set the property value
 word-wrap-valid.html	e.style['word-wrap'] = "normal" should set the property value
 [excluded]
-# Pages whose tests read getComputedStyle, which slice 1b brings; each runs
-# again once it lands.
-hyphenate-character-computed.html	needs getComputedStyle (slice 1b)
-hyphenate-limit-chars-computed.html	needs getComputedStyle (slice 1b)
-hyphenate-limit-lines-computed.html	needs getComputedStyle (slice 1b)
-hyphens-computed.html	needs getComputedStyle (slice 1b)
-letter-spacing-computed.html	needs getComputedStyle (slice 1b)
-letter-spacing-inherited-computed.html	needs getComputedStyle (slice 1b)
-line-break-computed.html	needs getComputedStyle (slice 1b)
-overflow-wrap-computed.html	needs getComputedStyle (slice 1b)
-tab-size-computed.html	needs getComputedStyle (slice 1b)
-text-align-computed.html	needs getComputedStyle (slice 1b)
-text-align-last-computed.html	needs getComputedStyle (slice 1b)
-text-autospace-computed.html	needs getComputedStyle (slice 1b)
-text-fit-computed.html	needs getComputedStyle (slice 1b)
-text-indent-computed.html	needs getComputedStyle (slice 1b)
-text-justify-computed-legacy.html	needs getComputedStyle (slice 1b)
-text-justify-computed.html	needs getComputedStyle (slice 1b)
-text-spacing-computed.html	needs getComputedStyle (slice 1b)
-text-spacing-trim-computed.html	needs getComputedStyle (slice 1b)
-text-transform-computed.html	needs getComputedStyle (slice 1b)
-text-wrap-computed.html	needs getComputedStyle (slice 1b)
-text-wrap-mode-computed.html	needs getComputedStyle (slice 1b)
-text-wrap-pretty.html	needs getComputedStyle (slice 1b)
-text-wrap-style-computed.html	needs getComputedStyle (slice 1b)
-white-space-collapse-computed.html	needs getComputedStyle (slice 1b)
-white-space-computed.html	needs getComputedStyle (slice 1b)
-white-space-shorthand-text-wrap.html	needs getComputedStyle (slice 1b)
-word-break-computed.html	needs getComputedStyle (slice 1b)
-word-space-transform-computed.html	needs getComputedStyle (slice 1b)
-word-spacing-computed.html	needs getComputedStyle (slice 1b)
-word-wrap-computed.html	needs getComputedStyle (slice 1b)
+# Pages whose tests ask CSS.supports first (css/support/computed-
+# testcommon.js), which libdom does not have: they fail whole at "'CSS' is
+# not defined" before reading getComputedStyle. DEBTS.md § Classic browser
+# scripting books CSS.supports.
+hyphenate-character-computed.html	needs CSS.supports
+hyphenate-limit-chars-computed.html	needs CSS.supports
+hyphenate-limit-lines-computed.html	needs CSS.supports
+hyphens-computed.html	needs CSS.supports
+letter-spacing-computed.html	needs CSS.supports
+letter-spacing-inherited-computed.html	needs CSS.supports
+line-break-computed.html	needs CSS.supports
+overflow-wrap-computed.html	needs CSS.supports
+tab-size-computed.html	needs CSS.supports
+text-align-computed.html	needs CSS.supports
+text-align-last-computed.html	needs CSS.supports
+text-autospace-computed.html	needs CSS.supports
+text-fit-computed.html	needs CSS.supports
+text-indent-computed.html	needs CSS.supports
+text-justify-computed-legacy.html	needs CSS.supports
+text-justify-computed.html	needs CSS.supports
+text-spacing-computed.html	needs CSS.supports
+text-spacing-trim-computed.html	needs CSS.supports
+text-transform-computed.html	needs CSS.supports
+text-wrap-computed.html	needs CSS.supports
+text-wrap-mode-computed.html	needs CSS.supports
+text-wrap-pretty.html	needs CSS.supports
+text-wrap-style-computed.html	needs CSS.supports
+white-space-collapse-computed.html	needs CSS.supports
+white-space-computed.html	needs CSS.supports
+white-space-shorthand-text-wrap.html	needs CSS.supports
+word-break-computed.html	needs CSS.supports
+word-space-transform-computed.html	needs CSS.supports
+word-spacing-computed.html	needs CSS.supports
+word-wrap-computed.html	needs CSS.supports
 [passing]
 hanging-punctuation-invalid.html	e.style['hanging-punctuation'] = "20px" should not set the property value
 hanging-punctuation-invalid.html	e.style['hanging-punctuation'] = "allow-end last force-end" should not set the property value

@@ -250,14 +250,21 @@ host's clock), `isTrusted`, and the writable old spellings `returnValue` and
 (`key`, `keyCode`, `charCode`, `which`) and the modifier flags, as data.
 
 **Where the values live.** A target's listener list hangs off its wrapper
-record, in the order listeners were added; window's off a record of its own.
+record, in the order listeners were added; window's off a record of its own;
+a plain target's off its entry, which is its object's opaque, or for a
+MediaQueryList one its resolver makes when a listener is added, its
+handler set or an event dispatched at it (a read of `onchange`, a removal
+or a null handler makes none). That entry holds the list, and is let go,
+unlinked and freed, at the next matchMedia or view step once no listener
+or handler is left on it, so a list the page then drops is collected.
 Each listener's callback is a C-held engine value, the registry's second
 list, released by drain. An Event's own state is engine memory traced by the
 collector (`gc_mark`), because a script may keep an event long after its
 dispatch: its finalizer frees engine storage and nothing native.
 
 **Dispatch** is the DOM Standard's: the path is the target and its ancestors,
-then window past the document (except for `load`); capture listeners top
+then window past the document (except for `load`), and a plain target,
+which is in no tree, alone; capture listeners top
 down, then the target's capture listeners and its others, then bubbling up
 when the event bubbles. A list is cut where it ended when its target was
 reached, so a listener added during the dispatch waits for the next one; a
@@ -293,7 +300,11 @@ the first click.
 `mouseout`, `mousemove`, `keydown`, `keypress`, `keyup`, `input`, `change`,
 `submit`, `reset`, `focus`, `blur` and `load`, elements, the document and
 window have an on<type> property, and an on<type> content attribute is a
-handler. A target's handler is one slot in its listener list, in the place
+handler. With the Modern Web switch on, so do `scroll` and `resize`; window
+alone has `onpopstate` and `onhashchange`, and a MediaQueryList `onchange`
+(§ The view, computed style and the session's history). With it off none
+of the four is a property, and their content attributes are ordinary
+attributes that no event runs. A target's handler is one slot in its listener list, in the place
 it was first set; a slot for an attribute the parser or innerHTML wrote goes
 first (an element has its attributes before any script can reach it), and a
 script's `setAttribute` makes its slot then. Window's slots come from the
@@ -307,7 +318,8 @@ needs it: `function on<type>(event){BODY}` inside `with(document)
 with(form owner) with(element)`, HTML's three scopes. A body that does not
 compile is reported once and stays absent until the attribute changes;
 reading the property answers null. A handler that returns `false` cancels.
-The body's window-reflecting handlers (`load`, `focus`, `blur`) are window's,
+The body's window-reflecting handlers (`load`, `focus`, `blur`, and with the
+switch on `scroll`, `resize`, `popstate` and `hashchange`) are window's,
 from `<body onload>` or `document.body.onload` alike.
 
 The body is first checked by the intrinsic Function constructor, taken
@@ -345,11 +357,17 @@ of the page is recorded and performed by the host after the task.
 (`os64_dom_take_navigation`): `location.href =`, `location = `,
 `location.assign`, `replace`, `reload`, `hash =` (the address with its
 fragment replaced), `history.back/forward/go` (`go(0)` reloads), a link's
-`click()`, and a form's submission. Addresses are resolved exactly as a
-link's are, by libpage's own steps with the base as the tree stands
+`click()`, and a form's submission. With the Modern Web switch on,
+consecutive `back/forward/go` in one task add up to one traversal of their
+sum. Addresses are resolved exactly as
+a link's are, by libpage's own steps with the base as the tree stands
 (`os64_dom_resolve`, which a host uses for a script's `src` too); `hash =`
-stays in the page. A taken ask's nodes come held. `location` reads the page's
-address and its parts; `history.length` reads 1. `window.status` and
+stays in the page. With the Modern Web switch on and a history host
+installed, an address that moves only the fragment is no ask: the host makes
+it at once (§ The view, computed style and the session's history), and one
+it refuses is asked for instead. A taken ask's nodes come held. `location`
+reads the page's address and its parts; `history.length` reads the host's
+count of entries, and 1 with no host or the switch off. `window.status` and
 `defaultStatus` accept an assignment and read empty: the status line is the
 browser's.
 
@@ -532,6 +550,78 @@ storage. Detached image prefetch is deferred with Chris; displayed images use
 the native picture-loading path. Source-preserving CSS text and attribute image
 dimensions are bounded consumer implementations, not complete CSSOM/image
 interfaces. Host acceptance and remaining J5/P5 work are in the design record.
+
+## The view, computed style and the session's history
+
+Three owner-thread providers, each installed outside callbacks; dom.h
+holds their contracts, `view.c` and `window.c` the binding's half. All of
+it is the Modern Web arc's surface, in four rows of `modern.c`'s table (the
+view's members with `onscroll`, `onresize` and window's `focus` and `blur`,
+which do nothing, the window being the person's to raise; `matchMedia`,
+`MediaQueryList` and `MediaQueryListEvent`; `getComputedStyle` and the
+`CSSStyleDeclaration` interface, which names the style object's prototype
+and which the computed declaration's inherits; and
+`onpopstate`, `onhashchange`, `PopStateEvent` and `HashChangeEvent`, with
+`pushState`, `replaceState`, `state` and `scrollRestoration` on history).
+With the switch off none of those names exists, nor
+`document.scrollingElement`, `document.defaultView` or an element's
+`onscroll`; the arc's handler types' content attributes are not handlers
+(§ Events); `history.length` reads 1, a fragment navigation is an ask, the
+hash setter asks whatever it is given, and history deltas do not add up
+(§ Asks): what the binding did before the arc.
+
+**The view** (`os64_dom_set_view`) is read, never cached: `scrollX`/
+`pageXOffset`, `scrollY`/`pageYOffset`, `innerWidth`/`innerHeight` and
+`outerWidth`/`outerHeight` ask it at every read, and `scroll`, `scrollTo`
+and `scrollBy` ask it to scroll (smoothly asked is done at once), adding
+what its layout cost to the geometry counts. With no view they read zeros
+and move nothing. `document.scrollingElement` is CSSOM View's: the root
+element, or in quirks mode the body, and null when that body is
+potentially scrollable (which the computed style says). `os64_dom_view_step` is
+the host's rendering step: one event a call, `resize` at window, else
+`scroll` at the document bubbling to window, else `change` at the first
+MediaQueryList whose answer moved, until it answers false.
+
+**matchMedia** keeps the query as written and serialises it once, in one
+pass by libgarb (`garb_media_text_serialized`, into the binding's own
+storage), for `media`; `matches` is judged at every read, against the
+view (its size, the person's scheme and motion), the screen (the device-*
+features and `resolution`, from `options.screen` and the zoom, as `screen`
+and devicePixelRatio report them) and the document's scripting
+(`options.scripting`). A list libgarb could not read whole (nested past
+its depth, or no memory) is `not all`. A list nothing holds is freed by
+the next matchMedia or view step; one listened to (`addEventListener`,
+`addListener`, `onchange`) is held while a listener or a handler is left
+on it, and let go at the next matchMedia or view step after the last one
+goes (§ Events, Where the values live).
+
+**getComputedStyle** (`os64_dom_set_computed`) answers a read-only
+declaration whose properties are libgarb's table, which is therefore the
+list a page enumerates, in CSSOM's order (lexicographic, prefixed names
+last). Every read asks the provider for the whole element into one snapshot
+buffer, so a held declaration is live and keeps no copy of its own; a
+snapshot past the binding's budget is refused whole (QuotaExceededError).
+An element outside the document and a pseudo-element answer an empty
+declaration without asking. `document.defaultView` is window.
+
+**History** (`os64_dom_set_history`) is the host's session: `pushState`
+and `replaceState` give it the entry's address (one the document may
+rewrite its own to, or SecurityError) and its state as JSON (dom.h § HISTORY says what JSON may
+carry; DataCloneError otherwise, QuotaExceededError past 64 KiB or when the
+host refuses), and fire nothing. `history.state` is that JSON read once,
+the same object until the entry changes. A fragment navigation a script
+makes goes to the host at once, and its `popstate` fires inside that
+script, with the new entry's null state; the host queues the `hashchange`.
+`location.hash` set to the fragment the address already has (as the URL
+parser's fragment state writes it) navigates nowhere. A traversal is the
+host's: it tells the binding (`os64_dom_history_moved`) before it moves its
+own entries, then owes `popstate` and, when the fragment changed,
+`hashchange`. An owed event carries what it was owed with
+(`os64_dom_history_event_t`): a hashchange its two addresses, a popstate
+the entry's state and name (`os64_dom_history_entry`), its state being
+history.state itself only while that entry is still the current one.
+`history.scrollRestoration` is the host's to read
+(`os64_dom_history_manual`).
 
 ## The Modern Web's surface
 
