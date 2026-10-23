@@ -28,15 +28,20 @@ getComputedStyle-mutations.html	Assigning to attribute updates the computed styl
 getComputedStyle-property-order.html	Computed style properties should be sorted lexicographically
 [excluded]
 [passing]
+CSS-escape-numeric-id.html	Sanity check
 StyleSheet-properties.html	StyleSheet and CSSStyleSheet properties
 computed-style-001.html	inherited_property_values
 computed-style-001.html	property_values
+computed-style-001.html	read_only
 computed-style-001.html	relative_property_values
 computed-style-005.html	absolute_computed_left_and_right
 computed-style-005.html	absolute_computed_margins
 computed-style-005.html	relative_computed_left_and_right
 computed-style-005.html	relative_computed_margins
 computed-style-set-property.html	Computed style parent (should be null)
+computed-style-set-property.html	Exception thrown when trying to change a computed style alias via setProperty
+computed-style-set-property.html	Exception thrown when trying to change a computed style declaration via property
+computed-style-set-property.html	Exception thrown when trying to change a computed style declaration via setProperty
 css-style-attr-decl-block.html	Changes to style attribute should reflect on CSS declaration block
 css-style-attr-decl-block.html	Expansion of all:unset and all:revert treated identically
 css-style-attr-decl-block.html	Style attribute should create CSS declaration block based on its content
@@ -131,6 +136,7 @@ cssstyledeclaration-csstext-final-delimiter.html	inline style - text - delimiter
 cssstyledeclaration-csstext.html	cssText on computed style declaration returns the empty string
 cssstyledeclaration-csstext.html	uppercase property
 cssstyledeclaration-mutability.html	HTMLElement's CSSStyleDeclaration is mutable
+cssstyledeclaration-mutability.html	getComputedStyle's CSSStyleDeclaration is not mutable
 cssstyledeclaration-properties.html	CSS Test: CSSStyleDeclaration properties are defined as WebIDL attributes, not using getOwnPropertyNames()
 cssstyledeclaration-removeProperty-all.html	CSSStyleDeclaration.removeProperty("all") 1
 cssstyledeclaration-setter-attr.html	Setting an invalid property via the declaration setter doesn't create a declaration
@@ -145,6 +151,8 @@ cssstyledeclaration-setter-form-controls.html	text input element
 cssstyledeclaration-setter-form-controls.html	textarea element
 getComputedStyle-basic.html	Sanity check
 getComputedStyle-basic.html	cssText
+getComputedStyle-basic.html	removeProperty
+getComputedStyle-basic.html	setProperty
 getComputedStyle-detached-subtree.html	getComputedStyle returns no style for detached element
 getComputedStyle-getter-v-properties.tentative.html	border
 getComputedStyle-getter-v-properties.tentative.html	border-bottom
@@ -245,6 +253,13 @@ getComputedStyle-width-scroll.tentative.html	getComputedStyle() round-trips in p
 historical.html	Historical CSSStyleDeclaration member: getPropertyCSSValue
 historical.html	Historical CSSStyleDeclaration member: setPropertyPriority
 historical.html	Historical CSSStyleDeclaration member: setPropertyValue
+historical.html	Historical Document member: enableStyleSheetsForSet
+historical.html	Historical Document member: lastStyleSheetSet
+historical.html	Historical Document member: preferredStyleSheetSet
+historical.html	Historical Document member: preferredStylesheetSet
+historical.html	Historical Document member: selectedStyleSheetSet
+historical.html	Historical Document member: selectedStylesheetSet
+historical.html	Historical Document member: styleSheetSets
 historical.html	Historical Element member: cascadedStyle
 historical.html	Historical Element member: defaultStyle
 historical.html	Historical Element member: rawComputedStyle
