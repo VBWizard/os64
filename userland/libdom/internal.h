@@ -18,10 +18,12 @@ typedef struct DActiveEvent { struct DActiveEvent *previous; JSValue value; } DA
 /* The wrappers' prototypes, one per kind of node the binding tells apart
  * (node.c's d_node_install builds the chain). An HTML element is an
  * HTML_ELEMENT, or one of the kinds after it when it has one of its own;
- * an element of another namespace is an ELEMENT. */
+ * an element of another namespace is an ELEMENT. ATTR is Attr's, which is
+ * a Node and no tree node: no Node member is installed on it, and it
+ * shadows every one with its own answer (attr.c). */
 enum {
     D_PROTO_NODE, D_PROTO_DOCUMENT, D_PROTO_ELEMENT, D_PROTO_CHARACTER_DATA,
-    D_PROTO_FRAGMENT, D_PROTO_DOCTYPE, D_PROTO_HTML_ELEMENT, D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT,
+    D_PROTO_FRAGMENT, D_PROTO_DOCTYPE, D_PROTO_ATTR, D_PROTO_HTML_ELEMENT, D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT,
     D_PROTO_BUTTON, D_PROTO_FORM, D_PROTO_IMAGE, D_PROTO_SCRIPT, D_PROTO_ANCHOR,
     D_PROTO_LINK, D_PROTO_COUNT
 };
@@ -44,14 +46,17 @@ enum {
 /* A wrapper, or another engine value the binding holds strongly. A node's
  * wrapper also carries the node's listener list, in the order listeners and
  * handler slots were first added, and the element's views (its style, its
- * classList, its dataset), each made once. A view's own entry holds the
- * element it stands for as `target`. */
+ * classList, its dataset, its attributes), each made once. A view's own
+ * entry holds the element it stands for as `target`; so does an Attr's
+ * while it is attached (attr.c). */
 struct DValue {
     JSValue value;
     DValue *next, *hash_next;
     const os64_html_node_t *node, *target;
     os64_dom_t *dom;
-    DValue *style, *class_list, *dataset;
+    DValue *style, *class_list, *dataset, *attributes;
+    /* An Attr's own entry: its record (attr.c). */
+    struct DAttr *attr;
     DQuery *child_nodes, *children, *images, *forms, *elements;
     DListener *listeners, *last_listener;
     /* The document the node was made in, copied from or last taken out of,
@@ -132,6 +137,25 @@ struct os64_dom {
     void *geometry_opaque;
     os64_dom_geometry_stats_t geometry_stats;
     JSClassID anchor_class, node_class, collection_class, event_class, style_class, token_class, map_class;
+    /* Attr and NamedNodeMap (attr.c), and the map's prototype. The
+     * attached Attrs, found by element and name (a table of chains that
+     * doubles as it fills), and the last element walked as an array of
+     * its attributes, good only while its list is as it was. */
+    JSClassID attr_class, named_map_class;
+    DValue *named_map_prototype;
+    struct DAttr **attr_table;
+    size_t attr_capacity, attr_attached;
+    struct DAttrCursor {
+        const os64_html_node_t *element;
+        const os64_html_attr_t *head;
+        const os64_html_attr_t **list;
+        size_t capacity;
+        uint64_t version;
+        uint32_t count, found;
+    } attr_cursor;
+    /* Set while the map's own ordinary property is asked of the engine,
+     * which the map's named properties then do not answer (attr.c). */
+    bool attr_ordinary;
     DValue *values, *anchor, *index_guard, *window, *location, *history, *function_ctor;
     DValue *invoke, *navigator, *style_prototype, *static_list;
     const char *(*user_agent)(void *opaque);
@@ -260,6 +284,9 @@ JSValue d_wrap(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
  * holds and the registry are d_wrap's. */
 JSValue d_wrap_constructed(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
                            JSValueConst prototype);
+/* The tree node a value wraps, or NULL with a TypeError thrown: one that
+ * names an Attr when the value is one, which is a Node with no place in the
+ * tree. */
 const os64_html_node_t *d_node(os64_dom_t *dom, JSContext *ctx, JSValueConst value);
 DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node);
 int d_geometry_install(os64_dom_t *dom, JSContext *ctx);
@@ -493,6 +520,28 @@ uint64_t d_storage_steps(void);
 /* URLSearchParams' record conversion's probes so far (url.c), for the DOM
  * host. */
 uint64_t d_url_record_probes(void);
+/* ATTRIBUTES (attr.c). THE ONE DOOR: every attribute the binding sets or
+ * removes goes through d_set_attr to libpage's verb, so that a removal
+ * detaches the Attr that stood for the attribute, with its last value.
+ * libhtml's status; on a refusal the attribute and its Attr are as they
+ * were. */
+int64_t d_set_attr(os64_dom_t *dom, const os64_html_node_t *node, const char *name,
+                   const char *value, size_t length, bool remove);
+/* Whether a value is an Attr of this binding. */
+bool d_is_attr(os64_dom_t *dom, JSValueConst value);
+/* Element.attributes, the Attr members and the attribute-node methods of
+ * Document and Element: the classic surface, on every page. */
+int d_attr_classic(os64_dom_t *dom, JSContext *ctx);
+/* The NamedNodeMap interface object (the interfaces row's). */
+JSValue d_attr_map_interface(os64_dom_t *dom, JSContext *ctx);
+/* An Attr entry's record freed, after the engine (os64_dom_free), and the
+ * table of attached ones with the walk's cursor. */
+void d_attr_free(os64_dom_t *dom, DValue *entry);
+void d_attr_table_free(os64_dom_t *dom);
+/* The attribute walks' steps so far (attr.c's s_steps), for the DOM host. */
+uint64_t d_attr_steps(void);
+/* DOM's "valid namespace prefix" (implementation.c). */
+bool d_prefix_valid(const char *text, size_t length);
 JSValue d_style(os64_dom_t *dom, JSContext *ctx, JSValueConst self);
 int d_style_install(os64_dom_t *dom, JSContext *ctx);
 extern JSClassExoticMethods d_node_exotic;

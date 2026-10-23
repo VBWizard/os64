@@ -89,6 +89,10 @@ const os64_html_node_t *d_node(os64_dom_t *dom, JSContext *ctx, JSValueConst val
 {
     DValue *entry = JS_GetOpaque(value, dom->node_class);
     const os64_html_node_t *node = entry != NULL ? entry->node : NULL;
+    if (node == NULL && d_is_attr(dom, value)) {
+        JS_ThrowTypeError(ctx, "An Attr is a Node with no place in the tree");
+        return NULL;
+    }
     if (node == NULL || !os64_html_owns_node(dom->document, node)) {
         JS_ThrowTypeError(ctx, "Expected a node from this document");
         return NULL;
@@ -252,7 +256,7 @@ static JSValue control_type_set(os64_dom_t *dom, JSContext *ctx, const os64_html
     if (node->tag == OS64_HTML_TAG_TEXTAREA || node->tag == OS64_HTML_TAG_SELECT) return JS_UNDEFINED;
     DString string = {0};
     if (!d_string(dom, ctx, value, &string)) return JS_EXCEPTION;
-    int64_t status = os64_page_node_set_attr(dom->state, node, "type", string.data, string.length, false);
+    int64_t status = d_set_attr(dom, node, "type", string.data, string.length, false);
     d_string_free(dom, &string);
     return status < 0 ? d_html_error(ctx, status) : JS_UNDEFINED;
 }
@@ -278,7 +282,7 @@ static JSValue property(JSContext *ctx, JSValueConst self, int argc,
         }
         DString string = {0};
         if (!d_string(dom, ctx, value, &string)) return JS_EXCEPTION;
-        int64_t status = os64_page_node_set_attr(dom->state, node, name, string.data, string.length, false);
+        int64_t status = d_set_attr(dom, node, name, string.data, string.length, false);
         d_string_free(dom, &string);
         return status < 0 ? d_html_error(ctx, status) : JS_UNDEFINED;
     }
@@ -411,8 +415,7 @@ static JSValue attribute(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t
          * listeners now, before the attribute it will read exists. */
         result = JS_EXCEPTION;
     } else {
-        int64_t status = os64_page_node_set_attr(dom->state, node, name.data, value.data,
-                                                value.length, magic == D_REMOVE_ATTR);
+        int64_t status = d_set_attr(dom, node, name.data, value.data, value.length, magic == D_REMOVE_ATTR);
         result = status < 0 ? d_html_error(ctx, status) : JS_UNDEFINED;
     }
     d_string_free(dom, &value);
@@ -433,6 +436,24 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
     if (magic <= D_REPLACE) {
         int needed = magic == D_INSERT || magic == D_REPLACE ? 2 : 1;
         if (argc < needed) return JS_ThrowTypeError(ctx, "Missing node argument");
+        /* An Attr is a Node no tree holds (attr.c). Both arguments are
+         * WebIDL's Nodes, insertBefore's reference a nullable one; then
+         * DOM's steps: a reference that is not this parent's child (an Attr
+         * never is) is NotFoundError, as is removing one, and an Attr to be
+         * inserted is HierarchyRequestError. */
+        if (d_is_attr(dom, argv[0]) || (needed == 2 && d_is_attr(dom, argv[1]))) {
+            if (!d_is_attr(dom, argv[0]) && d_node(dom, ctx, argv[0]) == NULL) return JS_EXCEPTION;
+            const os64_html_node_t *reference = NULL;
+            if (needed == 2 && !d_is_attr(dom, argv[1]) &&
+                !(magic == D_INSERT && (JS_IsNull(argv[1]) || JS_IsUndefined(argv[1])))) {
+                reference = d_node(dom, ctx, argv[1]);
+                if (reference == NULL) return JS_EXCEPTION;
+            }
+            if (magic == D_REMOVE || (needed == 2 && (d_is_attr(dom, argv[1]) ||
+                                                      (reference != NULL && reference->parent != node))))
+                return d_error(ctx, "NotFoundError", "Node is not a child of this parent");
+            return d_error(ctx, "HierarchyRequestError", "An Attr has no place in the tree");
+        }
         const os64_html_node_t *child = d_node(dom, ctx, argv[0]);
         if (child == NULL) return JS_EXCEPTION;
         const os64_html_node_t *other = NULL;

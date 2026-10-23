@@ -59,7 +59,7 @@ Element's. The supported properties and methods are placed on those chains:
 | Kind | Surface beyond Node |
 | --- | --- |
 | Document | documentElement/head/body, doctype, implementation, child-element access, ID/tag/class/name/selector queries, creation |
-| Element | tagName, id/className, innerHTML/outerHTML, attributes, tag/class/selector queries, child-element access and element siblings, § The classic methods |
+| Element | tagName, id/className, innerHTML/outerHTML, the attribute methods and `attributes` (§ Attributes as nodes), tag/class/selector queries, child-element access and element siblings, § The classic methods |
 | Text and Comment (CharacterData) | data and element siblings |
 | DocumentType | name, publicId, systemId |
 | DocumentFragment | child-element access, ID and selector queries |
@@ -156,7 +156,8 @@ connect runs and a moved control keeps its form:
 ## Mutation and control state
 
 Property edits delegate to D3. Attribute writes, including id/className,
-delegate to `os64_page_node_set_attr`: it stages prospective attributes and
+go through one door, `d_set_attr` (§ Attributes as nodes), to
+`os64_page_node_set_attr`: it stages prospective attributes and
 control effects, then commits the HTML attribute batch before publishing
 state. This observes type/constraint/group transitions even when no property
 getter runs between them. `os64_html_set_attrs` stages a complete final list,
@@ -212,6 +213,9 @@ not claim a single combined page allocator.
 | Invalid placement or required document root | `HierarchyRequestError` |
 | Reference/old child not under the specified parent | `NotFoundError` |
 | Invalid element/attribute name | `InvalidCharacterError` |
+| A qualified name and namespace DOM does not pair | `NamespaceError` |
+| An Attr another element holds, set on this one | `InUseAttributeError` |
+| A node or an attribute the tree cannot hold as asked (an element in no namespace, an Attr whose namespace the tree would lose) | `NotSupportedError` |
 | Wrong receiver or unsupported native argument | `TypeError` |
 | Retired binding or nonempty file-input value assignment | `InvalidStateError` |
 
@@ -484,6 +488,82 @@ NotSupportedError, from `createDocument` and from such a document's
 no-quirks mode in a browser; here a query or a style attribute in it reads
 with the window's mode, which a quirks page's class selectors show.
 
+## Attributes as nodes
+
+`Element.attributes` (DOM § 4.9.1, NamedNodeMap) and its items, each an
+`Attr` (§ 4.9.2), with `document.createAttribute`/`createAttributeNS` and
+Element's `getAttributeNode`/`NS`, `setAttributeNode`/`NS` and
+`removeAttributeNode` (`attr.c`). Classic surface, on every page, the switch
+off included: it is DOM Level 1's, and jQuery 1's support probes read it at
+load. The `Attr` and `NamedNodeMap` interface objects are the interfaces
+row's.
+
+**An Attr is a view of its element, not a tree node.** libhtml keeps an
+element's attributes as a list of names and values, so an Attr is what
+`style`, `classList` and `dataset` are: a registry entry whose `target` is
+its element, given a qualified name and a namespace. The binding keeps one
+per element and name, made when first asked for, so the same object comes
+back for as long as the attribute exists (`attributes[0] ===
+getAttributeNode('id')`). Its value is read from the element by name at
+every read and written through the element's attribute; nothing is held
+across page code. It is a Node: `nodeType` 2, `instanceof Node`, and
+`Attr.prototype` answers every member `Node.prototype` has for itself
+(`nodeName` its name, `nodeValue` and `textContent` its value, no parent,
+siblings or children, `childNodes` an empty list, not connected,
+`ownerDocument` its element's document or the one it was made in or left,
+the insertion verbs HierarchyRequestError, `removeChild` NotFoundError,
+`cloneNode` a detached copy, `contains` itself), and is an EventTarget
+whose dispatch path is itself. A tree verb handed an Attr refuses it as DOM
+does (HierarchyRequestError to insert one, NotFoundError as a reference or
+to remove one, `contains` false); a `Node.prototype` member called on an
+Attr itself is the TypeError "an Attr is a Node with no place in the tree"
+(DIVERGENCES.md).
+
+**The map holds no snapshot either.** `length`, `item(i)`, the indices
+(live, read-only) and the names (each attribute's qualified name, an HTML
+element's names with an uppercase letter left out, unenumerable, and
+hidden behind a name the prototype chain has) walk the element's list at
+each call. A walk that runs page code in its middle reads the list as it
+stands at its next step; a name is looked for after the prototype chain is
+asked, which may run page code. The map is iterable as an array. The last
+element walked is kept as an array of its attributes, used only while the
+element's list is the one copied (libhtml's version has not moved, the
+list starts where it did and its last attribute is still last), so
+`length` and the i-th attribute are a step each, and a walk over all of an
+element's n attributes in one call, forwards or back (an iteration,
+`Object.keys`, `for..in`, a countdown from `length`), takes a number of
+steps linear in n; the DOM host holds each kind of walk to that
+(`d_attr_steps`).
+
+**An Attr leaves its element at one door.** Every attribute the binding
+sets or removes goes through `d_set_attr`, and the parser and libpage
+remove none, so a removal by any verb (`removeAttribute`,
+`toggleAttribute`, a `dataset` delete, `removeAttributeNode`,
+`removeNamedItem`, a replacement by `setAttributeNode`) copies the value
+into the Attr before the attribute goes and detaches it: `ownerElement`
+null, its last value kept, a value of its own taken from then on. A removal
+with no room for that copy is refused whole (QuotaExceededError). A
+detached Attr is charged to the binding's budget until the page goes, like
+every entry. `tools/test_dom_host.sh` refuses a build that calls an
+attribute verb anywhere else in libdom. **The backstop:** an attached Attr
+whose attribute its element no longer has reads as detached and empty, and
+the host is told the rule was broken (`options.broken`: yonder's record
+says `FAILED page: an attribute left its element outside libdom`).
+
+**Setting an Attr.** `setAttributeNode` takes a detached Attr onto the
+element (its value set through the door; a new name goes last, a replaced
+one keeps its place), answers the Attr it replaced, detached with its
+value, or null; an Attr this element holds is answered as it is; one
+another element holds is InUseAttributeError. libhtml's verbs set an
+attribute by qualified name, keeping the namespace of one that is there and
+giving a new one none, so an Attr is set only where the tree would keep its
+name and namespace both: an Attr in a namespace where the element holds
+that name in it, one in none where the element does not hold its name in a
+namespace. Anything else is NotSupportedError (DEBTS.md). `createAttribute`
+folds its name in an HTML document; `createAttributeNS` is DOM's "validate
+and extract", split at the first colon as `createDocument` splits an
+element's name.
+
 ## Proof boundary
 
 `tools/test_dom_host.sh` tests the actual target engine core and a separately
@@ -492,7 +572,9 @@ ASan-instrumented target-profile engine, with sanitized bindings/tree/state.
 § Asks, § Script elements and § `document.write`, and
 `tools/test_dom_mutants.py --events` a mutant per rule;
 `tools/test_dom_implementation.inc` holds a case per rule of § Documents of
-their own, and runs jQuery 3.5.1 and 1.12.4 whole. `domtest` exercises
+their own, and runs jQuery 3.5.1 and 1.12.4 whole;
+`tools/test_dom_attributes.inc` a case per rule of § Attributes as nodes,
+and `tools/test_dom_mutants.py --only attr-` a mutant per rule. `domtest` exercises
 the shared-library boundary and heap in ring 3. These are library proofs; yonder's loop is proven with its own
 harness. Result counts are recorded in DOM.md after the final source freeze.
 

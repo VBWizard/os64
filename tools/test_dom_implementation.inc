@@ -40,12 +40,10 @@ static char *implementation_file(const char *path, size_t *length)
 
 /* A library run whole in a page of the classic fixture, then `after`,
  * which holds it to what booting means. The page's engine takes a source
- * of a megabyte, as a page's does in yonder. `past`, when not NULL, names
- * a wall the library is known to stop at beyond the one this slice moved
- * (`moved`, a message it must no longer die with): it is said, and the
- * library is held only to getting past `moved`. */
+ * of a megabyte, as a page's does in yonder. `moved` is the message it
+ * died with before, said by name when it dies with it again. */
 static void implementation_library(const char *path, const char *after, const char *what,
-                                   const char *moved, const char *past)
+                                   const char *moved)
 {
     size_t length = 0;
     char *source = implementation_file(path, &length);
@@ -66,16 +64,12 @@ static void implementation_library(const char *path, const char *after, const ch
         snprintf(line, sizeof(line), "%s: no longer stops at \"%s\"", what, moved);
         check(result == OS64_JS_OK || strstr(outcome.message, moved) == NULL, line);
     }
-    if (result != OS64_JS_OK && past != NULL && strstr(outcome.message, past) != NULL) {
-        printf("DOM implementation: %s stops at the next wall, %s: %s\n", what, past, outcome.message);
-    } else {
-        if (result != OS64_JS_OK)
-            fprintf(stderr, "%s: status=%d message=%s\n%s\n", what, result, outcome.message, outcome.stack_trace);
-        snprintf(line, sizeof(line), "%s: the library runs to its end", what);
-        check(result == OS64_JS_OK, line);
-        snprintf(line, sizeof(line), "%s: it works", what);
-        if (result == OS64_JS_OK) dom_script(&f, after, line);
-    }
+    if (result != OS64_JS_OK)
+        fprintf(stderr, "%s: status=%d message=%s\n%s\n", what, result, outcome.message, outcome.stack_trace);
+    snprintf(line, sizeof(line), "%s: the library runs to its end", what);
+    check(result == OS64_JS_OK, line);
+    snprintf(line, sizeof(line), "%s: it works", what);
+    if (result == OS64_JS_OK) dom_script(&f, after, line);
     free(source);
     fixture_free(&f);
 }
@@ -99,10 +93,12 @@ static void implementation_library(const char *path, const char *after, const ch
 /* jQuery 1.12's support probes set an input's type and then its checked
  * (`c.type="checkbox",c.checked=!0`): with no `type` the input stayed a
  * text input and libpage refused its checkedness. Past that, the library
- * reads `e.attributes[name]` (its focusin probe), and the binding has no
- * `attributes`: that wall is named here, not passed (Slice 0d builds it). */
-#define JQUERY_1_WALL "Control property refused"
-#define JQUERY_1_NEXT "cannot read property of undefined"
+ * reads `e.attributes[name].expando` (its focusin probe), which died while
+ * the binding had no `attributes` (attr.c builds it). The library is held
+ * to booting whole, which is past both. */
+#define JQUERY_1_ATTRIBUTES "cannot read property of undefined"
+#define JQUERY_1_WORKS "assert(jQuery.support.appendChecked===true&&jQuery.support.checkClone===true," \
+    "'support.appendChecked');assert(jQuery.support.focusin===false,'the focusin probe read attributes');"
 
 static void implementation_jquery_cases(void)
 {
@@ -110,18 +106,16 @@ static void implementation_jquery_cases(void)
         "assert(jQuery.fn.jquery==='3.5.1');"
         /* the feature test the library ran at load */
         "assert(jQuery.support.createHTMLDocument===true,'support.createHTMLDocument');",
-        "jQuery 3.5.1", "createHTMLDocument", NULL);
+        "jQuery 3.5.1", "createHTMLDocument");
     implementation_library("tools/fixtures/jquery-1.12.4.js", JQUERY_WORKS
-        "assert(jQuery.fn.jquery==='1.12.4');"
-        "assert(jQuery.support.appendChecked===true&&jQuery.support.checkClone===true,'support.appendChecked');",
-        "jQuery 1.12.4", JQUERY_1_WALL, JQUERY_1_NEXT);
+        "assert(jQuery.fn.jquery==='1.12.4');" JQUERY_1_WORKS, "jQuery 1.12.4", JQUERY_1_ATTRIBUTES);
     /* The corpus's own build is not in the tree (it carries the vendor's
      * additions to the library); it is run when the harness is told where
      * a copy is, and said to be skipped when not. */
     const char *aem = getenv("OS64_JQUERY_AEM");
     if (aem != NULL && *aem != '\0')
-        implementation_library(aem, JQUERY_WORKS "assert(jQuery.fn.jquery==='1.12.4-aem');", "jQuery 1.12.4-aem",
-                               JQUERY_1_WALL, JQUERY_1_NEXT);
+        implementation_library(aem, JQUERY_WORKS "assert(jQuery.fn.jquery==='1.12.4-aem');" JQUERY_1_WORKS,
+                               "jQuery 1.12.4-aem", JQUERY_1_ATTRIBUTES);
     else
         printf("DOM implementation: jQuery 1.12.4-aem skipped: OS64_JQUERY_AEM names no copy of it\n");
 }

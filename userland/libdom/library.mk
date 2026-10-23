@@ -8,6 +8,8 @@ LIBDOM_SRCS += libdom/storage.c libdom/performance.c libdom/url.c libdom/encodin
     libdom/base64.c
 # Slice 0c: DOMImplementation and the documents it makes.
 LIBDOM_SRCS += libdom/implementation.c
+# Slice 0d: Element.attributes, NamedNodeMap and Attr.
+LIBDOM_SRCS += libdom/attr.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))
 LIBDOM_SO := $(BIN)/libdom.so
 LIBDOM_BASE = $(patsubst libdom.so=%,%,$(filter libdom.so=%,$(LIB_BASE_PAIRS)))

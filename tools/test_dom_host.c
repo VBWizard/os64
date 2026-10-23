@@ -222,6 +222,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_platform.inc"
 #include "test_dom_view.inc"
 #include "test_dom_implementation.inc"
+#include "test_dom_attributes.inc"
 #define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
     "function throws(n,f){let ok=false;try{f()}catch(e){ok=e.name===n}assert(ok,n)}"
 
@@ -386,6 +387,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--reclaim")){dom_reclaim_cases();printf("DOM reclaim probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--clone")){dom_clone_control_cases();dom_clone_native_cases();dom_clone_state_cap_cases();dom_clone_character_data_cases();dom_clone_allocation_cases();printf("DOM clone probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--implementation")){dom_implementation_cases();implementation_allocation_cases();printf("DOM implementation probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--attributes")){dom_attributes_cases();attributes_allocation_cases();implementation_jquery_cases();printf("DOM attributes probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--events")){dom_event_cases();printf("DOM events probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--modern")){dom_modern_cases();dom_storage_cases();dom_base64_cases();dom_encoding_cases();dom_screen_cases();dom_performance_cases();dom_url_cases();dom_storage_engine_cases();printf("DOM modern probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     bool mutation_mode=argc==2&&!strcmp(argv[1],"--mutants");
@@ -422,7 +424,8 @@ int main(int argc, char **argv)
     dom_budget_cases();
     dom_event_cases();
     dom_implementation_cases();
-    if(!mutation_mode){dom_allocation_cases();dom_clone_allocation_cases();dom_view_allocation_cases();dom_view_host_allocation_cases();implementation_allocation_cases();}
+    dom_attributes_cases();
+    if(!mutation_mode){dom_allocation_cases();dom_clone_allocation_cases();dom_view_allocation_cases();dom_view_host_allocation_cases();implementation_allocation_cases();attributes_allocation_cases();}
     printf("DOM host: %u checks, %u failed; binding allocation sweeps=%zu\n", checks, failures, dom_sweeps);
     return failures ? 1 : 0;
 }
