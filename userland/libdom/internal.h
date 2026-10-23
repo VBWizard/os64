@@ -553,7 +553,7 @@ uint64_t d_storage_steps(void);
  * host. */
 uint64_t d_url_record_probes(void);
 /* ── Slice 2: a script's requests (fetch.c, xhr.c, blob.c, abort.c,
- * exception.c). LIBDOM.md § Requests is the record. ── */
+ * exception.c). LIBDOM.md § Slice 2's rows is the record. ── */
 int d_exception_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_abort_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_blob_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);

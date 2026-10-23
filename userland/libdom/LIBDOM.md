@@ -260,7 +260,16 @@ MediaQueryList one its resolver makes when a listener is added, its
 handler set or an event dispatched at it (a read of `onchange`, a removal
 or a null handler makes none). That entry holds the list, and is let go,
 unlinked and freed, at the next matchMedia or view step once no listener
-or handler is left on it, so a list the page then drops is collected.
+or handler is left on it, so a list the page then drops is collected. A
+class a page makes one of per request (an AbortSignal, an XMLHttpRequest
+and its upload) keeps the entry IN the object, the first member of its
+state: it is on no registry, its listeners' callbacks are the object's to
+trace (`gc_mark`) and free (finalizer), and the object goes with the
+garbage whatever listens on it. Registration, the listener records, the
+methods and the dispatch are the same for all three (internal.h, A PLAIN
+EVENT TARGET); `d_event_handler_named` gives a plain target an `on<type>`
+for any type, and a class may set `DValue.listeners_changed` to hear its
+listeners come and go (the AbortSignal's GC clause is its one reader).
 Each listener's callback is a C-held engine value, the registry's second
 list, released by drain. An Event's own state is engine memory traced by the
 collector (`gc_mark`), because a script may keep an event long after its
@@ -699,7 +708,8 @@ prototype, inherited from `Object.prototype` for the rest).
 Six rows, a file each (MODERN_WEB.md § Slice 1a, as built).
 
 **`localStorage`, `sessionStorage`, `Storage`** (`storage.c`; HTML §
-12.2). Each area is a map of strings for the page's origin (`d_origin`:
+12.2). Each area is a map of strings for the page's origin (`d_origin`,
+libway's `way_origin_serialize`:
 scheme, host and a port that is not the scheme's own; anything else is an
 opaque origin, `null`, whose areas work and are kept nowhere). Strings keep
 every code unit, a lone surrogate and U+0000 included, as WTF-8: browsers
@@ -775,3 +785,73 @@ bytes either way, `InvalidCharacterError` before any work.
 
 Every Array these rows answer DEFINES its elements, so a setter a page put
 on `Array.prototype` neither runs nor swallows one.
+
+### Slice 2's rows: a script's requests
+
+Five rows (MODERN_WEB.md § Slice 2, as built; docs/design/pending/ORIGIN.md
+is the record of the origin and CORS rules, which are the host's).
+
+**`DOMException`** (`exception.c`): WebIDL's, `name`, `message` and the
+legacy `code` and its constants, its prototype inheriting
+`Error.prototype`. It is the binding's one: every refusal by a standard
+name, the older rows' included, is one (§ Budgets and errors).
+
+**`AbortController`, `AbortSignal`** (`abort.c`): `abort`, `timeout` (a
+page timer), `any`, `reason`, `throwIfAborted`, `onabort`. A signal's
+"source signals" and "dependent signals" are DOM's WEAK SETS: a link
+between two signals is a C record on both lists holding neither object,
+and each signal's finalizer unlinks itself from the other side, so a
+collection may take them in either order and no engine internals are
+read. Dependents are flattened (a dependent's dependents link to its
+sources) and kept in link order, the order an abort runs them: the
+source's steps and event first, then each dependent's. DOM's GC clause
+keeps a dependent someone could still observe: while it has a live
+`abort` listener or a pending algorithm and is not aborted, its links hold
+it, and the hold is released at exactly three points, the dependent
+aborted, its last abort listener gone (the listener-change hook), and its
+source's abort. A signal's algorithms are C's: a fetch's abort by its
+request's token and, once answered, the Response it errors, the two
+knowing each other by C pointer both ways; the Response holds the signal
+until its body settles.
+
+**`Blob`, `File`, `FormData`** (`blob.c`): bytes and a type in engine
+memory; `slice`, `text`, `arrayBuffer`, `bytes`; `File`'s name and
+`lastModified`. `FormData(form)` reads the form's entries through libpage
+(`os64_page_form_entries`, its model of the window's document: a form in
+a document of its own answers none); a submitter is a NotSupportedError.
+multipart/form-data is written here (an empty FormData is no bytes) and
+read back by `formData()`, as is urlencoded.
+
+**`fetch`, `Headers`, `Request`, `Response`** (`fetch.c`): the Fetch
+standard's § 5. A header list is a C array, its sort-and-combine kept
+until it changes, so a walk is n log n; the guards (request, no-cors,
+response, immutable) ask libway's lists, and every header the binding
+writes itself (a body's Content-Type, a redirect's Location) goes through
+the guarded append, so a no-cors request never carries a Content-Type
+that is not safelisted. RequestInit and ResponseInit are read in WebIDL's
+order; a record init converts each key before its value. Bodies are
+engine memory, read whole: a stream hands the body over as one chunk, a
+body method locks it, and there is no `ReadableStream` global (a page
+that detects one would find a half API). `integrity` fails closed.
+`fetch()` hands the request to the host (`os64_dom_set_network`) and its
+answer comes back as one task (`os64_dom_fetched`), copied into the
+runtime's memory: a body past the runtime's limit is the sticky LIMIT, as
+any allocation a script makes. A network error is `ok` false and nothing
+else, and the page sees one fixed TypeError, "Failed to fetch".
+
+**`XMLHttpRequest`, `XMLHttpRequestEventTarget`, `XMLHttpRequestUpload`,
+`ProgressEvent`** (`xhr.c`, `event.c`): the XHR standard over the same
+host request; the request out holds its object, as the standard keeps one
+with pending activity. The host answers whole, so readystatechange to
+LOADING fires for the one chunk and the one progress event at the end of
+the body (the order WPT's event-order tests hold). A synchronous request
+is the host's `run`, handed a `stop` that is the script task's own budget
+(`os64_js_check_budget`): it ends when the task would, and a task it
+outlives ends LIMIT, as any script out of time does. `responseType`
+`document` and `responseXML` answer null.
+
+The requests out are the registry's fourth list (`DRequest.held`), counted
+by `os64_dom_registry_count` and cancelled with the host at drain; the work
+a page or a server can size (a header list's sort, a server's block, a
+signal's dependents) is linear or n log n and held to it by counts in the
+DOM host (`d_request_steps`, `d_signal_dependents`).

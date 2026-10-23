@@ -118,6 +118,23 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 
 ---
 
+## The browser's script requests (yonder, Modern Web slice 2, 2026-10-23)
+
+Where yonder's fetch and XMLHttpRequest depart from the Fetch standard on
+purpose; ORIGIN.md carries each argument.
+
+| The standard / browsers | yonder | Why | Recorded |
+|---|---|---|---|
+| A script may set `User-Agent` (no longer a forbidden request-header) | `User-Agent` stays forbidden: a page's own is dropped, the browser's goes | The agent is the person's setting (Settings), and a page rewriting it per request is fingerprinting yonder's agent setting exists to prevent | ORIGIN.md § 3 |
+| A preflight-cache entry from `Access-Control-Allow-Methods: *` (or `-Headers: *`) serves a later request by the standard's match rule | A `*` grant is kept as an UNCREDENTIALED one whatever request earned it | The standard's match would let a `*` from a credentialed answer that also named one method stand in for a method it never named | ORIGIN.md § 5 |
+| `Access-Control-Max-Age` caps vary by browser (Chrome 7200 s, Firefox 86400 s) | Capped at 7200 s | The shorter of the common caps: a grant outlives a server's change of mind for less time | ORIGIN.md § 5 |
+| `http://localhost` is a potentially trustworthy origin | Only `127.0.0.0/8` literals are; the NAME `localhost` is not | os64 cannot promise the name resolves to loopback | ORIGIN.md § 12 |
+| `Origin` is sent on a cross-origin `HEAD` like any other non-GET | No `Origin` on `HEAD` | The standard's rule names GET and HEAD together where the header is optional; yonder keeps HEAD with GET | ORIGIN.md § 11 |
+| An `http` page's script follows an `https` to `http` redirect | Every `https` to `http` redirect of a script request is a network error | A 307 replays a body in the clear to an address the page never named; a page may still name an `http` address itself | ORIGIN.md § 8 (ruling 3), `fetch.h`'s house policy |
+| A header name repeated in a list takes its first spelling (§ 2.2.2 "append") | The request's header names go on the wire as written | No script-visible reader shows a spelling and HTTP folds case, while the rule costs a scan per append, quadratic over a list a page or a server hands over whole | LIBDOM.md § Slice 2's rows, `fetch.c` `list_take` |
+
+---
+
 ## The tree & filesystems
 
 | Unix/Linux | os64 | Why | Recorded |
