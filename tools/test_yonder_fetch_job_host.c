@@ -21,12 +21,14 @@
 
 // ── The heap, the clocks, the console ───────────────────────────────────
 
+// fail_at: the allocation that fails first; with fail_once, the only one.
 static size_t allocations, fail_at, live;
+static bool fail_once;
 
 void *os64_malloc(size_t size)
 {
     allocations++;
-    if (fail_at != 0 && allocations >= fail_at)
+    if (fail_at != 0 && (fail_once ? allocations == fail_at : allocations >= fail_at))
         return NULL;
     void *at = malloc(size != 0 ? size : 1);
     if (at != NULL)
@@ -45,7 +47,7 @@ void *os64_calloc(size_t count, size_t size)
 void *os64_realloc(void *ptr, size_t size)
 {
     allocations++;
-    if (fail_at != 0 && allocations >= fail_at)
+    if (fail_at != 0 && (fail_once ? allocations == fail_at : allocations >= fail_at))
         return NULL;
     void *at = realloc(ptr, size != 0 ? size : 1);
     if (at != NULL && ptr == NULL)
@@ -644,6 +646,11 @@ static void sweep(void)
         expect(name, g == NULL || g->ok || g->type == WAY_TYPE_ERROR, NULL);
         snprintf(name, sizeof(name), "sweep %zu: a whole answer when ok", n);
         expect(name, g == NULL || !g->ok || (g->body_len == 3 && g->url != NULL && g->headers != NULL), NULL);
+        // A request that ended in a network error leaves no grant its
+        // preflight stored ("clear cache entries using request"), whichever
+        // allocation failed: the cache is security state.
+        snprintf(name, sizeof(name), "sweep %zu: a failure leaves no preflight grant", n);
+        expect(name, (g != NULL && g->ok) || way_preflight_count(cache) == 0, NULL);
         yonder_fetched_free(g);
         snprintf(name, sizeof(name), "sweep %zu: nothing leaked", n);
         expect(name, live == base, NULL);
@@ -651,6 +658,40 @@ static void sweep(void)
             break;
     }
     expect("sweep reached the end", n < 400, NULL);
+}
+
+// Each allocation failed ALONE, in a request whose preflight is granted and
+// whose answer then fails the CORS check: whichever one failed (the copy of
+// a preflighted URL among them), the network error clears every grant the
+// preflight stored.
+static void sweep_once(void)
+{
+    size_t n;
+    for (n = 1; n < 400; n++) {
+        fresh();
+        fake_answer("OPTIONS", "https://b.test/api", 204,
+                    "Access-Control-Allow-Origin: https://a.test\r\nAccess-Control-Allow-Methods: PUT\r\n"
+                    "Access-Control-Max-Age: 600\r\n", NULL);
+        fake_answer("PUT", "https://b.test/api", 200, "X-No-Grant: 1\r\n", "end");
+        size_t base = live;
+        allocations = 0;
+        fail_at = n;
+        fail_once = true;
+        yonder_fetched_t *g = run(&(Ask){"https://a.test/page", "https://b.test/api", "PUT", NULL, "x"});
+        fail_at = 0;
+        fail_once = false;
+        char name[80];
+        snprintf(name, sizeof(name), "sweep once %zu: a network error", n);
+        expect(name, g == NULL || !g->ok, NULL);
+        snprintf(name, sizeof(name), "sweep once %zu: no preflight grant left", n);
+        expect(name, way_preflight_count(cache) == 0, NULL);
+        yonder_fetched_free(g);
+        snprintf(name, sizeof(name), "sweep once %zu: nothing leaked", n);
+        expect(name, live == base, NULL);
+        if (allocations < n)
+            break;
+    }
+    expect("sweep once reached the end", n < 400, NULL);
 }
 
 int main(void)
@@ -663,6 +704,7 @@ int main(void)
     data_and_limits();
     fields();
     sweep();
+    sweep_once();
     way_jar_free(jar);
     way_preflight_free(cache);
     expect("nothing leaked", live == 0, NULL);

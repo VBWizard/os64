@@ -638,8 +638,19 @@ int64_t yonder_fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
         }
         bool branch = kind == WAY_HOP_CORS && way_preflight_capable(r);
         if (branch) {
-            if (branches.n < (int32_t)(sizeof(branches.urls) / sizeof(branches.urls[0])))
-                branches.urls[branches.n++] = copy_text(current, os64_strlen(current));
+            // The URL is kept BEFORE anything is cached under it, and a copy
+            // there is no memory for ends the request: a branch the clear
+            // cannot name would leave this hop's grants standing after a
+            // network error.
+            char *kept = NULL;
+            if (branches.n < (int32_t)(sizeof(branches.urls) / sizeof(branches.urls[0]))) {
+                kept = copy_text(current, os64_strlen(current));
+                if (kept == NULL) {
+                    network_error(got, "out of memory");
+                    break;
+                }
+                branches.urls[branches.n++] = kept;
+            }
             if (way_preflight_needed(job->preflight, r, current, yonder_now_ms()) &&
                 !preflight(&h, job, r, current, got))
                 break;
