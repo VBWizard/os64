@@ -121,6 +121,7 @@ general.any.html	response.text() rejects if already aborted
 general.any.html	response.text() rejects with abort reason if already aborted
 request.any.html	Aborting a request after calling arrayBuffer()
 request.any.html	Aborting a request after calling blob()
+request.any.html	Aborting a request after calling formData()
 request.any.html	Aborting a request after calling json()
 request.any.html	Aborting a request after calling text()
 request.any.html	Calling arrayBuffer() on an aborted consumed empty request
@@ -130,6 +131,7 @@ request.any.html	Calling blob() on an aborted consumed empty request
 request.any.html	Calling blob() on an aborted consumed nonempty request
 request.any.html	Calling blob() on an aborted request
 request.any.html	Calling formData() on an aborted consumed nonempty request
+request.any.html	Calling formData() on an aborted request
 request.any.html	Calling json() on an aborted consumed nonempty request
 request.any.html	Calling json() on an aborted request
 request.any.html	Calling text() on an aborted consumed empty request
