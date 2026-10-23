@@ -2014,7 +2014,14 @@ DOMException made other slices' pages pass: `dom/nodes` 1,097 → 1,401
 (the pre-insertion checks, classList, createDocument's names), and with
 Slice 0d merged, 0d's 1,229 → 1,537 (its attribute refusals become real
 DOMExceptions too), `user-timing` 466 → 538, `css/cssom` 729 → 738, the
-history interface 52 → 54, each written into `[passing]`. Every one of the 22 expectation
+history interface 52 → 54, each written into `[passing]`. A script
+that can fetch also ran other slices' pages to their end: `url`'s pages
+that load their test data by fetch() (urltestdata.json, IdnaTestV2.json
+and the like) stopped at "Loading data" before, and 4,074 of their
+tests pass now (150 → 4,224), and 20 of `encoding`'s, which decode
+through XMLHttpRequest, pass too (3,955 → 3,975). Every one fails with
+the switch off ("'fetch' is not defined"), so they are in `[required]`
+under a slice 2 heading. Every one of the 22 expectation
 directories passes at the head, and with `--modern-off`.
 
 The census, before the slice (the P5's kept pages of 2026-10-21 and
@@ -2032,10 +2039,10 @@ page record said `200 cors, 0 hops` for the first and named the CORS
 refusal for the last.
 
 Host, at the head, all 0 failed: origin.c's 151 cases (ORIGIN.md's
-list, one each) with their step bounds, 430 checks; libfetch's host 905
-checks; the job's host (`test_yonder_fetch_job_host.sh`, 312 checks,
+list, one each) with their step bounds, 432 checks; libfetch's host 907
+checks; the job's host (`test_yonder_fetch_job_host.sh`, 315 checks,
 every allocation failed in turn and each one failed alone); the DOM
-host 82,998 checks with 12,734 binding allocation sweeps (Slice 0d's
+host 83,001 checks with 12,734 binding allocation sweeps (Slice 0d's
 included), `tools/test_dom_fetch.inc` holding the rows; the scripted-page
 host with `tools/test_yonder_requests.inc` end to end. Mutants by hand,
 one per finding fixed after the cold reads and Codex's rounds (each
@@ -2084,7 +2091,11 @@ fixed: XMLHttpRequest's final encoding computed apart from its final
 MIME type, as XHR says, and the final MIME type kept whole (a blob's
 type and the override with every parameter); a multipart parameter's
 quoted value passed over whole; and a urlencoded field's leading BOM
-kept.
+kept. Its fifth found three: Blob.slice()'s offsets converted as
+[Clamp] long long before their sign is judged, an Accept the page set
+empty sent empty (libfetch sends an empty Accept for one), and the
+author charset rewrite made through libway's walk, so a quoted ';' is
+the value's.
 
 **Booked** (DEBTS.md § A script's requests, unless named): the same-site
 stand-in; SameSite not enforced for script requests; the HTTP cache
