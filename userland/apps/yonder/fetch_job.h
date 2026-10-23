@@ -9,7 +9,10 @@
 // § Slice 2's origins and CORS): the tainting, the preflight, the Origin
 // header, whether cookies go and Set-Cookie is heard, the Authorization
 // strip, the CORS check. What it hands back is the FILTERED response: a
-// page never receives a header or a byte it may not see.
+// page never receives a header or a byte it may not see. A network error's
+// `why` is the page record's (yonder's request_record); the answer the
+// binding is handed carries none, and the page's TypeError says only
+// "Failed to fetch".
 
 #include <stdbool.h>
 #include <stddef.h>

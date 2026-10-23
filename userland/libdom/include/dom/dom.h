@@ -644,13 +644,14 @@ typedef struct {
     bool preflight;
     const char *referrer;
 } os64_dom_request_t;
-/* The answer, borrowed for the call: `ok` false is a network error, with
- * `why` saying so for the console; else the response's type, status and
- * status text, URL ("" for an opaque one), whether it was redirected, its
- * filtered header block, and its body (has_body false: a null body). */
+/* The answer, borrowed for the call: `ok` false is a network error, which
+ * carries nothing else (Fetch: a network error tells the page nothing; the
+ * host keeps its reason for its own record); else the response's type,
+ * status and status text, URL ("" for an opaque one), whether it was
+ * redirected, its filtered header block, and its body (has_body false: a
+ * null body). */
 typedef struct {
     bool ok;
-    const char *why;
     way_type_t type;
     int32_t status;
     const char *status_text;

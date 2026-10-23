@@ -7642,15 +7642,17 @@ static uint64_t script_request(void *opaque, uint64_t serial, uint32_t token, co
     return id;
 }
 
-// The job's answer as the binding reads it, borrowed from `got`.
+// The job's answer as the binding reads it, borrowed from `got`. A network
+// error's reason stays here, for the page's record (request_record): the
+// binding is handed none, and the page learns only that it failed.
 static void request_response(const yonder_fetched_t *got, os64_dom_response_t *out)
 {
     if (got == NULL) {
-        *out = (os64_dom_response_t){.ok = false, .why = "out of memory"};
+        *out = (os64_dom_response_t){.ok = false};
         return;
     }
     *out = (os64_dom_response_t){
-        .ok = got->ok, .why = got->why, .type = got->type, .status = got->status,
+        .ok = got->ok, .type = got->type, .status = got->status,
         .status_text = got->status_text, .url = got->url != NULL ? got->url : "", .redirected = got->redirected,
         .headers = got->headers, .headers_length = got->headers_len, .has_body = got->has_body,
         .body = got->body, .body_length = got->body_len,

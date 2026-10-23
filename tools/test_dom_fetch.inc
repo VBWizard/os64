@@ -397,19 +397,19 @@ static void dom_fetch_network_cases(void)
     /* A network error rejects with a TypeError; so does a host that would
      * not start the request, and a request this browser will not make. */
     dom_script(&f, FETCH_ASSERT
-        "globalThis.log=[];fetch('/fail').catch(e=>log.push('net:'+e.name));"
+        "globalThis.log=[];fetch('/fail').catch(e=>log.push('net:'+e.name+'('+e.message+')'));"
         "fetch('/x',{integrity:'sha256-abc'}).catch(e=>log.push('sri:'+e.name));"
         "fetch('/x',{method:'POST',keepalive:true,body:'x'.repeat(65537)}).catch(e=>log.push('keep:'+e.name));"
         "fetch('http://a b/').catch(e=>log.push('url:'+e.name));fetch().catch(e=>log.push('none:'+e.name));",
         "fetch: refusals");
     check(net.count == 2, "fetch: only the network error's request reached the host");
-    os64_dom_response_t error = {.ok = false, .why = "CORS"};
+    os64_dom_response_t error = {.ok = false};
     net_answer(&f, &net, 1, &error);
     net.refuse = true;
     dom_script(&f, "fetch('/r').catch(e=>log.push('refused:'+e.name));", "fetch: a host that will not start it");
     net.refuse = false;
     dom_script(&f, FETCH_ASSERT
-        "assert(log.join()==='sri:TypeError,keep:TypeError,url:TypeError,none:TypeError,net:TypeError,refused:TypeError',"
+        "assert(log.join()==='sri:TypeError,keep:TypeError,url:TypeError,none:TypeError,net:TypeError(Failed to fetch),refused:TypeError',"
         "log.join());", "fetch: each refusal rejects");
 
     /* data: goes to the host as written; the page's base resolves the
@@ -575,7 +575,7 @@ static void dom_xhr_cases(void)
     /* A network error: send-no-response's CORS failure. */
     dom_script(&f, XHR_RECORDER "var x=new XMLHttpRequest();rec(x);x.open('POST','/c');x.send('Test Message');",
                "xhr: a request that fails");
-    os64_dom_response_t failure = {.ok = false, .why = "CORS"};
+    os64_dom_response_t failure = {.ok = false};
     net_answer(&f, &net, net.count - 1, &failure);
     dom_script(&f, FETCH_ASSERT
         "var want=[1,'loadstart(0,0,false)','upload.loadstart(0,12,true)',4,'upload.error(0,0,false)',"

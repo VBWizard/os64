@@ -2327,8 +2327,8 @@ static void fetch_answered(os64_dom_t *dom, JSContext *ctx, DRequest *request, c
     JSValue value;
     bool ok = response->ok;
     if (!ok) {
-        JS_ThrowTypeError(ctx, "Failed to fetch%s%s", response->why != NULL ? ": " : "",
-                          response->why != NULL ? response->why : "");
+        /* One fixed message: a network error tells the page nothing. */
+        JS_ThrowTypeError(ctx, "Failed to fetch");
         value = JS_GetException(ctx);
     } else {
         value = response_from_network(dom, ctx, response);
