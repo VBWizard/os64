@@ -308,6 +308,12 @@ int d_method(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
              const char *name, JSCFunctionData *fn, int argc, int magic);
 int d_accessor(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
                const char *name, JSCFunctionData *fn, int magic, bool writable);
+/* A getter-only accessor `name` on `target`, with `flags`, answering
+ * `held` (which its function holds) while the binding is open: the
+ * cheapest member there is, for a read a page makes on nearly every line
+ * (core.c). */
+int d_held_getter(os64_dom_t *dom, JSContext *ctx, JSValueConst target, const char *name, JSValueConst held,
+                  int flags);
 /* d_method whose function's `name` is its own, as WebIDL names an
  * operation; the Modern Web's rows make theirs so. */
 int d_method_named(os64_dom_t *dom, JSContext *ctx, JSValueConst target,

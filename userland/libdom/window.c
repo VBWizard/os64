@@ -75,8 +75,7 @@ static bool resolve(os64_dom_t *dom, const char *reference, char *out, size_t ca
 enum {
     L_HREF, L_PROTOCOL, L_HOST, L_HOSTNAME, L_PORT, L_PATHNAME, L_SEARCH, L_HASH, L_ORIGIN,
     L_ASSIGN, L_REPLACE, L_RELOAD, L_TO_STRING,
-    H_BACK, H_FORWARD, H_GO, H_LENGTH, W_STATUS, W_DEFAULT_STATUS, W_HISTORY, W_WRITE, W_WRITELN, W_OPEN,
-    W_CLOSE
+    H_BACK, H_FORWARD, H_GO, H_LENGTH, W_STATUS, W_DEFAULT_STATUS, W_WRITE, W_WRITELN, W_OPEN, W_CLOSE
 };
 
 /* document.write is the host's parser taking the text (LIBDOM.md
@@ -317,7 +316,6 @@ static JSValue window_member(JSContext *ctx, JSValueConst self, int argc, JSValu
         /* No standard has defaultStatus: the old web assigns it and expects
          * no complaint, and it reads empty. */
         return set ? JS_UNDEFINED : JS_NewString(ctx, "");
-    case W_HISTORY: return JS_DupValue(ctx, dom->history->value);
     case W_WRITE: case W_WRITELN:
         if (windowless(dom, self)) return d_error(ctx, "InvalidStateError", WRITE_UNOPENED);
         return document_write(dom, ctx, argc, argv, magic == W_WRITELN);
@@ -607,10 +605,12 @@ int d_window_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     JSValueConst element_prototype = dom->prototypes[D_PROTO_ELEMENT]->value;
     JSValueConst form_prototype = dom->prototypes[D_PROTO_FORM]->value;
     /* history is a read-only accessor (HTML § Window): an assignment to it
-     * is ignored outside strict mode, a TypeError in it. */
+     * is ignored outside strict mode, a TypeError in it. Its getter answers
+     * the one history object, held, as cheaply as a getter can. */
     if (d_accessor(dom, ctx, global, "location", location_property, 0, true) < 0 ||
         d_accessor(dom, ctx, document_prototype, "location", location_property, 0, true) < 0 ||
-        d_accessor(dom, ctx, global, "history", window_member, W_HISTORY, false) < 0 ||
+        d_held_getter(dom, ctx, global, "history", dom->history->value,
+                      JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE) < 0 ||
         d_accessor(dom, ctx, global, "status", window_member, W_STATUS, true) < 0 ||
         d_accessor(dom, ctx, global, "defaultStatus", window_member, W_DEFAULT_STATUS, true) < 0 ||
         d_method(dom, ctx, document_prototype, "write", window_member, 1, W_WRITE) < 0 ||

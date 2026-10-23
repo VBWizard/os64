@@ -2227,6 +2227,21 @@ its stream and fetch-job hosts, the webfont, os64get and html-dom hosts,
 the replay proof, the WPT runner's self-test, the TLS input and engine
 suites and both TLS audits, all 0 failed; `make -C userland` builds.
 
+**What a read of `document` costs.** Making `document` and `history`
+accessors put a getter on reads a page makes on nearly every line, and the
+first getters went through the binding's whole callback check and, for
+`document`, a wrapper lookup. Each now answers a value its function holds
+(`d_held_getter`) after one check that the binding is open. A million bare
+reads in the DOM host (`tools/test_dom_host.sh --window-reads`, the
+target-core profile, the bindings sanitized as the host builds them):
+
+| read | as first built | now |
+|---|---|---|
+| a plain global | 17.6 ms | 16.3 ms |
+| `window` | 58.0 ms | 31.0 ms |
+| `document` | 556.9 ms | 60.3 ms |
+| `history` | 353.7 ms | 60.9 ms |
+
 **The scope guard stopped one thing.** The scripted-page host fails at the
 head, and only in `loop_view_refetch_short`, which fails every allocation
 of a page's arrival in turn, its scripts' compiles included. At cut 441 the

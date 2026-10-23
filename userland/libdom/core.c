@@ -210,27 +210,57 @@ static JSValue dialog(JSContext *ctx, JSValueConst self, int argc,
  * neither configurable, so no page can delete or redefine them, a `let
  * document` at a script's top level is the SyntaxError a browser throws,
  * and an assignment is ignored outside strict mode (a TypeError in it), as
- * browsers ignore one. This is the binding's one definition of each. */
-enum { U_WINDOW, U_DOCUMENT };
-
-static JSValue unforgeable_get(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
-                               int magic, JSValue *data)
+ * browsers ignore one. This is the binding's one definition of each.
+ *
+ * They are read on nearly every line of a page's script, so each getter is
+ * as short as a getter can be: window's answers the global, and
+ * document's answers the document's wrapper it holds (d_held_getter). */
+static JSValue window_get(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
 {
     (void)self;
     (void)argc;
     (void)argv;
-    if (magic == U_WINDOW) return JS_GetGlobalObject(ctx);
-    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
-    return dom != NULL ? d_wrap(dom, ctx, dom->document->document) : JS_EXCEPTION;
+    return JS_GetGlobalObject(ctx);
 }
 
-static int unforgeable(os64_dom_t *dom, JSContext *ctx, JSValueConst global, const char *name, int magic)
+static int unforgeable_window(JSContext *ctx, JSValueConst global)
+{
+    JSAtom atom = JS_NewAtom(ctx, "window");
+    if (atom == JS_ATOM_NULL) return -1;
+    JSValue get = JS_NewCFunction2(ctx, window_get, "get window", 0, JS_CFUNC_generic, 0);
+    int result = JS_IsException(get)
+        ? -1 : JS_DefinePropertyGetSet(ctx, global, atom, get, JS_UNDEFINED, JS_PROP_ENUMERABLE);
+    JS_FreeAtom(ctx, atom);
+    return result;
+}
+
+/* A getter that answers the value it holds (its data[1]) once the binding
+ * is open, the one check every binding member makes first. It reads no
+ * native state and enters nothing, so d_context's ABI identity, which
+ * guards an entry into the engine, is not asked. The value is held by
+ * the function, so it lives as long as the property does; after drain the
+ * closed binding refuses it, as d_context refuses every member. */
+static JSValue held_get(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                        JSValue *data)
+{
+    (void)self;
+    (void)argc;
+    (void)argv;
+    (void)magic;
+    JSClassID id;
+    os64_dom_t *dom = JS_GetAnyOpaque(data[0], &id);
+    if (dom == NULL || dom->closed) return d_error(ctx, "InvalidStateError", "DOM binding is closed");
+    return JS_DupValue(ctx, data[1]);
+}
+
+int d_held_getter(os64_dom_t *dom, JSContext *ctx, JSValueConst target, const char *name, JSValueConst held,
+                  int flags)
 {
     JSAtom atom = JS_NewAtom(ctx, name);
     if (atom == JS_ATOM_NULL) return -1;
-    JSValue get = JS_NewCFunctionData(ctx, unforgeable_get, 0, magic, 1, &dom->anchor->value);
-    int result = JS_IsException(get)
-        ? -1 : JS_DefinePropertyGetSet(ctx, global, atom, get, JS_UNDEFINED, JS_PROP_ENUMERABLE);
+    JSValueConst data[2] = {dom->anchor->value, held};
+    JSValue get = JS_NewCFunctionData(ctx, held_get, 0, 0, 2, data);
+    int result = JS_IsException(get) ? -1 : JS_DefinePropertyGetSet(ctx, target, atom, get, JS_UNDEFINED, flags);
     JS_FreeAtom(ctx, atom);
     return result;
 }
@@ -349,13 +379,13 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
     dom->options.url = NULL;
     JSValue global = JS_GetGlobalObject(ctx);
     if (JS_IsException(global)) goto fail;
-    /* The document's wrapper is made now, so a binding that cannot wrap its
-     * document fails at creation rather than at a page's first `document`. */
+    /* The document's wrapper is made now and held by `document`'s getter:
+     * the wrapper table keeps one wrapper per node for the page's life, so
+     * the one made here is the one every read answers. */
     JSValue doc = d_wrap(dom, ctx, document->document);
-    int installed = JS_IsException(doc) ? -1 : 0;
+    int installed = JS_IsException(doc) ? -1 : unforgeable_window(ctx, global);
+    if (installed >= 0) installed = d_held_getter(dom, ctx, global, "document", doc, JS_PROP_ENUMERABLE);
     JS_FreeValue(ctx, doc);
-    if (installed >= 0) installed = unforgeable(dom, ctx, global, "window", U_WINDOW);
-    if (installed >= 0) installed = unforgeable(dom, ctx, global, "document", U_DOCUMENT);
     /* A window with no frames is its own self, frames, parent and top
      * (HTML § Window): the first three are [Replaceable], so a page may
      * assign over them, and `top` is [LegacyUnforgeable] and read-only.

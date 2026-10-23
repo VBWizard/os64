@@ -4,6 +4,8 @@
  * unforgeable, history read-only, status kept), and every allocation the
  * new members make failed in turn. */
 
+#include <time.h>
+
 /* The host's entropy, faked: byte n of all the bytes ever asked for is
  * (n * 37 + 11) & 255, so a case can say exactly what a fill holds.
  * window_entropy_fail refuses every ask after writing a byte, as a source
@@ -300,6 +302,29 @@ static void dom_window_sweep_cases(void)
      * and a compile cut short reaches the engine's unchecked parser paths
      * (DEBTS.md, libjs patch 0011), which are the engine's to prove. */
     engine_sweep("window", kOperations, n - 1, &options);
+}
+
+/* `--window-reads`: what a million bare reads of a plain global, `window`,
+ * `document` and `history` cost, on the host's monotonic clock. A
+ * measurement printed, never a check: the clock is the machine's. */
+static void dom_window_read_timing(void)
+{
+    os64_dom_options_t options = window_options(WINDOW_URL);
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, "globalThis.plain=1", "reads: a plain global");
+    static const char *const kReads[] = {"plain", "window", "document", "history"};
+    for (size_t i = 0; i < sizeof(kReads) / sizeof(kReads[0]); i++) {
+        char source[160];
+        snprintf(source, sizeof(source), "for(let i=0,x;i<1000000;i++)x=%s", kReads[i]);
+        struct timespec began, ended;
+        clock_gettime(CLOCK_MONOTONIC, &began);
+        dom_script(&f, source, "reads: a million");
+        clock_gettime(CLOCK_MONOTONIC, &ended);
+        double ms = (double)(ended.tv_sec - began.tv_sec) * 1000.0 + (double)(ended.tv_nsec - began.tv_nsec) / 1e6;
+        printf("reads: 1e6 bare `%s` in %.1f ms\n", kReads[i], ms);
+    }
+    fixture_free(&f);
 }
 
 static void dom_window_cases(void)
