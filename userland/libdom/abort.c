@@ -56,6 +56,10 @@ struct DSignal {
     DAlgorithm *algorithms;     /* js_malloc'd */
     size_t count, cap;
     uint32_t timer;             /* AbortSignal.timeout's, until it fires */
+    /* This signal's number in its binding, never reused (from 1), and, for
+     * a dependent, the number of the last dependent its sources were
+     * flattened into (d_signal_follow's walk once per new dependent). */
+    uint64_t serial, flattened_into;
     /* The dependents in the order they were linked (DOM's ordered set: an
      * abort runs their steps in that order), and the sources. */
     DLink *dependents, *dependents_last, *sources;
@@ -66,6 +70,8 @@ typedef struct {
 } DController;
 
 /* ── State ───────────────────────────────────────────────────────────── */
+
+uint64_t d_signal_steps;
 
 static DSignal *signal_state(JSValueConst value)
 {
@@ -100,6 +106,7 @@ static void hold_update(JSRuntime *rt, DSignal *d)
 {
     bool keep = !d->aborted && (d->count != 0 || abort_listened(d));
     for (DLink *l = d->sources; l != NULL; l = l->next_source) {
+        d_signal_steps++;
         if (keep && JS_IsUndefined(l->hold)) l->hold = JS_DupValueRT(rt, d->target.value);
         else if (!keep && !JS_IsUndefined(l->hold)) {
             JSValue released = l->hold;
@@ -215,6 +222,7 @@ JSValue d_signal_new(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype)
     d_event_target_init(dom, &s->target, object);
     s->target.listeners_changed = signal_listened;
     s->reason = JS_UNDEFINED;
+    s->serial = ++dom->signal_serial;
     JS_SetOpaque(object, s);
     return object;
 }
@@ -382,11 +390,15 @@ int d_signal_abort(os64_dom_t *dom, JSContext *ctx, JSValueConst signal, JSValue
 }
 
 /* One link, `source` to `dependent`, unless there is one already. -1 on no
- * memory. */
+ * memory. The duplicate check is one comparison, not a walk of the
+ * dependent's sources: a dependent is linked only by the call that makes
+ * it (d_signal_follow's rule), and no page code runs between its links, so
+ * no other signal gains a dependent meanwhile and a link this call already
+ * made from `source` is always the source's LAST one. */
 static int link_add(JSContext *ctx, DSignal *source, DSignal *dependent)
 {
-    for (DLink *l = dependent->sources; l != NULL; l = l->next_source)
-        if (l->source == source) return 0;
+    d_signal_steps++;
+    if (source->dependents_last != NULL && source->dependents_last->dependent == dependent) return 0;
     DLink *l = js_mallocz(ctx, sizeof(*l));
     if (l == NULL) return -1;
     l->source = source;
@@ -404,19 +416,28 @@ static int link_add(JSContext *ctx, DSignal *source, DSignal *dependent)
 
 /* DOM's "create a dependent abort signal", one source at a time: aborted
  * now when the source is, else linked to it, or, when the source is a
- * dependent itself, to each of its sources. */
+ * dependent itself, to each of its sources.
+ *
+ * `dependent` is the signal the caller's own call has just made (any's
+ * result, a Request's signal, a clone's), followed with no page code
+ * between its sources. Three things rest on that. It has no listener and
+ * no algorithm yet, so its links hold nothing and no hold is updated
+ * here. link_add's duplicate check is one comparison. And a dependent
+ * source already flattened into it (AbortSignal.any(Array(n).fill(d)))
+ * is walked once, not once per copy: the work is linear in the copies
+ * and the sources, which a page sizes and no budget can interrupt in C. */
 int d_signal_follow(os64_dom_t *dom, JSContext *ctx, JSValueConst dependent, JSValueConst source)
 {
     DSignal *s = signal_state(source), *d = signal_state(dependent);
     if (s == NULL || d == NULL) return 0;
+    d_signal_steps++;
     d->dependent = true;
     if (s->aborted) return signal_abort(dom, ctx, dependent, s->reason);
-    if (!s->dependent) {
-        if (link_add(ctx, s, d) < 0) return -1;
-    } else
-        for (DLink *l = s->sources; l != NULL; l = l->next_source)
-            if (link_add(ctx, l->source, d) < 0) return -1;
-    hold_update(JS_GetRuntime(ctx), d);
+    if (!s->dependent) return link_add(ctx, s, d);
+    if (s->flattened_into == d->serial) return 0;
+    s->flattened_into = d->serial;
+    for (DLink *l = s->sources; l != NULL; l = l->next_source)
+        if (link_add(ctx, l->source, d) < 0) return -1;
     return 0;
 }
 

@@ -677,8 +677,8 @@ above depend on:
   `AbortSignal`'s algorithm list snapshotted in C before its `abort` event
   runs listeners. A third rule joined them while building: no C work a page
   or a server can size is worse than n log n, and each such walk is held to
-  its bound by a count in a host case (`WAY_ORIGIN_STEPS`, libdom's
-  `d_request_steps`).
+  its bound by a count of its steps in a host case (`WAY_ORIGIN_STEPS`,
+  libdom's `d_request_steps` and `d_signal_steps`).
 
 ## Host cases for `origin.c` (one line each)
 

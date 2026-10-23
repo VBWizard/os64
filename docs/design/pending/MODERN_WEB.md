@@ -1822,7 +1822,15 @@ abort listener goes, which the listener-change hook reports and nothing
 else reads; (3) its source aborts. Ten thousand dropped `any()`
 dependents and ten thousand dropped Request signals leave the set empty
 after a collection. A Response holds its request's signal until its body
-settles, so an abort after the answer still errors the body.
+settles, so an abort after the answer still errors the body. Making the
+links is linear in what the page hands over: a dependent is linked only
+by the call that makes it, with no page code between its links, so a
+duplicate is one comparison (the source's last link) and a dependent
+source is flattened once per new dependent. The DOM host counts the
+steps (`d_signal_steps`): `AbortSignal.any` of 65,536 distinct signals
+takes 131,072 (it took 2^32 when each link walked the dependent's
+sources), 1,024 copies of a 1,024-source dependent 2,048 (538 million
+before).
 
 **Libjs patch 0010.** The merge of 0b, 1a, 4, 1b and 0c shifted the
 scripted-page host's allocation numbering onto an upstream bug: a

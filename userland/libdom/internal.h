@@ -250,6 +250,8 @@ struct os64_dom {
     DRequest *requests;
     uint32_t request_token;
     size_t requests_held;
+    /* The last AbortSignal's number (abort.c's DSignal.serial). */
+    uint64_t signal_serial;
 };
 typedef struct { char *data; size_t length; } DString;
 
@@ -603,6 +605,12 @@ void d_signal_fetch_settled(JSRuntime *rt, void *signal, void **back);
 void d_signal_remove_fetch(JSContext *ctx, JSValueConst signal, uint32_t token);
 /* How many dependents a signal's weak set links (the DOM host's bound). */
 size_t d_signal_dependents(JSValueConst signal);
+/* The steps a signal's links took (abort.c): each source followed, each
+ * link made or found a duplicate, each link a hold update walked. Not
+ * synchronized: a count for
+ * the DOM host to hold the work a page can size to its bound, as
+ * d_request_steps is. */
+extern uint64_t d_signal_steps;
 /* fetch.c: a fetch's abort, the algorithm its signal runs. `answered` is
  * the Response's state once the fetch answered, else NULL. */
 void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, void *answered, JSValueConst reason);

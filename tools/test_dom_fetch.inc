@@ -11,6 +11,8 @@
 
 /* fetch.c's count of a header list's steps (libdom/internal.h). */
 extern uint64_t d_request_steps;
+/* abort.c's count of the steps a signal's links take (libdom/internal.h). */
+extern uint64_t d_signal_steps;
 /* abort.c's count of the dependents a signal's weak set links. */
 size_t d_signal_dependents(JSValue signal);
 
@@ -590,6 +592,68 @@ static void dom_weak_set_cases(void)
     fixture_free(&f);
 }
 
+/* The steps one script's links take (abort.c's d_signal_steps), after a
+ * setup that is not counted. */
+static uint64_t signal_steps_for(DomFixture *f, const char *setup, const char *measured)
+{
+    dom_script(f, setup, "bound: signals made");
+    uint64_t before = d_signal_steps;
+    dom_script(f, measured, "bound: signals linked");
+    return d_signal_steps - before;
+}
+
+/* What a page can size in a signal's links, held to linear by count: an
+ * AbortSignal.any of distinct sources, one of N copies of a dependent
+ * with M sources (each flattened to the same M), and a Request following
+ * such a dependent. Each grows its input sixteen to two hundred and fifty
+ * six times and holds the steps to twice that, so a walk of a list per
+ * link fails by count, not by a clock. */
+static void dom_signal_bound_cases(void)
+{
+    /* Room for 65,536 controllers and their signals. */
+    DomFixture f = net_fixture_engine("http://example.test/", NULL, (size_t)256 << 20);
+    if (!fixture_ready(&f)) return;
+    char setup[512], measured[256];
+    uint64_t steps[2];
+    /* AbortSignal.any of 256, then of 65,536 (D_SEQUENCE_MAX), distinct. */
+    static const size_t kDistinct[2] = {256, 65536};
+    for (int i = 0; i < 2; i++) {
+        snprintf(setup, sizeof(setup),
+                 "globalThis.cs=[];for(let i=0;i<%zu;i++)cs.push(new AbortController().signal);", kDistinct[i]);
+        steps[i] = signal_steps_for(&f, setup, "globalThis.big=AbortSignal.any(cs);big=undefined;cs=undefined;");
+    }
+    fprintf(stderr, "bound: any of 256 distinct %llu steps, of 65536 %llu\n",
+            (unsigned long long)steps[0], (unsigned long long)steps[1]);
+    check(steps[0] > 0 && steps[1] <= steps[0] * 256 * 2, "bound: AbortSignal.any is linear in its sources");
+    /* AbortSignal.any(Array(N).fill(d)), d a dependent of M sources: N and
+     * M 64, then 1,024. */
+    static const size_t kFill[2] = {64, 1024};
+    for (int i = 0; i < 2; i++) {
+        snprintf(setup, sizeof(setup),
+                 "globalThis.cs=[];for(let i=0;i<%zu;i++)cs.push(new AbortController().signal);"
+                 "globalThis.dd=AbortSignal.any(cs);globalThis.fill=Array(%zu).fill(dd);", kFill[i], kFill[i]);
+        steps[i] = signal_steps_for(&f, setup, "globalThis.big=AbortSignal.any(fill);big=undefined;");
+    }
+    fprintf(stderr, "bound: any of 64 x a 64-source dependent %llu steps, of 1024 x 1024 %llu\n",
+            (unsigned long long)steps[0], (unsigned long long)steps[1]);
+    check(steps[0] > 0 && steps[1] <= steps[0] * 16 * 2,
+          "bound: AbortSignal.any of copies of a dependent is linear in the copies and its sources");
+    /* new Request following a dependent of M sources: 64, then 4,096. */
+    static const size_t kRequest[2] = {64, 4096};
+    for (int i = 0; i < 2; i++) {
+        snprintf(setup, sizeof(setup),
+                 "globalThis.cs=[];for(let i=0;i<%zu;i++)cs.push(new AbortController().signal);"
+                 "globalThis.dd=AbortSignal.any(cs);", kRequest[i]);
+        snprintf(measured, sizeof(measured), "new Request('/x',{signal:dd});");
+        steps[i] = signal_steps_for(&f, setup, measured);
+    }
+    fprintf(stderr, "bound: a Request following a 64-source dependent %llu steps, a 4096-source one %llu\n",
+            (unsigned long long)steps[0], (unsigned long long)steps[1]);
+    check(steps[0] > 0 && steps[1] <= steps[0] * 64 * 2, "bound: a Request's signal is linear in its sources");
+    dom_script(&f, "cs=undefined;dd=undefined;fill=undefined;", "bound: signals dropped");
+    fixture_free(&f);
+}
+
 /* ── XMLHttpRequest ──────────────────────────────────────────────────── */
 
 /* The event order WPT's xhr/resources/xmlhttprequest-event-order.js
@@ -903,6 +967,7 @@ static void dom_fetch_cases(void)
     dom_fetch_network_cases();
     dom_fetch_abort_cases();
     dom_weak_set_cases();
+    dom_signal_bound_cases();
     dom_xhr_cases();
     dom_xhr_sync_stall_case();
     dom_fetch_bound_cases();

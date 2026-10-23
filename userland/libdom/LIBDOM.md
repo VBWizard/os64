@@ -851,7 +851,14 @@ outlives ends LIMIT, as any script out of time does. `responseType`
 `document` and `responseXML` answer null.
 
 The requests out are the registry's fourth list (`DRequest.held`), counted
-by `os64_dom_registry_count` and cancelled with the host at drain; the work
-a page or a server can size (a header list's sort, a server's block, a
-signal's dependents) is linear or n log n and held to it by counts in the
-DOM host (`d_request_steps`, `d_signal_dependents`).
+by `os64_dom_registry_count` and cancelled with the host at drain. The
+work a page or a server can size (a header list's sort, a server's block,
+a signal's links: `AbortSignal.any` of distinct sources or of copies of
+one dependent, a Request following a dependent) is linear or n log n, and
+the DOM host holds it there by counting its STEPS (`d_request_steps`,
+`d_signal_steps`) at sizes far apart, so a quadratic walk fails by count,
+not by a clock. A dependent's links are made by the call that makes it,
+with no page code between them, which is what makes a duplicate link one
+comparison and a dependent source one walk (abort.c, `d_signal_follow`).
+`d_signal_dependents` is the weak-set cases' count of what a collection
+left linked.
