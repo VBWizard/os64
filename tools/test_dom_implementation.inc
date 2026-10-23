@@ -409,6 +409,30 @@ static void implementation_document_cases(void)
     fixture_free(&f);
 }
 
+/* The page's arena running out under createHTMLDocument and
+ * createDocument is refused by its name, whichever node's creation it
+ * stops at: the status is read after the call that wrote it. */
+static void implementation_arena_cases(void)
+{
+    static const char *const kMakers[] = {
+        "document.implementation.createHTMLDocument('a title')",
+        "document.implementation.createDocument('http://www.w3.org/1999/xhtml','html')",
+    };
+    for (size_t m = 0; m < sizeof(kMakers) / sizeof(kMakers[0]); m++) {
+        DomFixture f = fixture_base(24 * 1024, 0, 0);
+        if (f.runtime == NULL || f.state == NULL) return;
+        os64_js_outcome_t outcome;
+        f.binding = os64_dom_create(f.runtime, f.document, f.state, NULL, &outcome);
+        if (!fixture_ready(&f)) return;
+        char source[512];
+        snprintf(source, sizeof(source), IMPL_ASSERT
+                 "var name='none';for(var i=0;i<100000;i++){try{%s}catch(e){name=e.name;break}}"
+                 "assert(name==='QuotaExceededError','the arena refusal: '+name);", kMakers[m]);
+        dom_script(&f, source, "arena: a document made past the page's arena is QuotaExceededError");
+        fixture_free(&f);
+    }
+}
+
 /* Every allocation each operation makes, the binding's own and the
  * engine's, failed in turn (test_dom_storage.inc's sweeps). */
 static void implementation_allocation_cases(void)
@@ -461,6 +485,7 @@ static void dom_implementation_cases(void)
     implementation_connected_cases();
     implementation_document_cases();
     implementation_control_type_cases();
+    implementation_arena_cases();
     implementation_jquery_cases();
 }
 #undef IMPL_ASSERT

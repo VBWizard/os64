@@ -119,10 +119,12 @@ static JSValue document_new(os64_dom_t *dom, JSContext *ctx, const os64_html_nod
 }
 
 /* Created, or the refusal thrown: an element, a doctype, a text. NULL when
- * libhtml refused, the status said by d_html_error. */
-static os64_html_node_t *made(JSContext *ctx, os64_html_node_t *node, int64_t status)
+ * libhtml refused, the status said by d_html_error. The status is read
+ * through its address, here, after the creating call in the same argument
+ * list has written it: C does not order the arguments' evaluation. */
+static os64_html_node_t *made(JSContext *ctx, os64_html_node_t *node, const int64_t *status)
 {
-    if (node == NULL) d_html_error(ctx, status);
+    if (node == NULL) d_html_error(ctx, *status);
     return node;
 }
 
@@ -141,13 +143,13 @@ static JSValue create_html_document(os64_dom_t *dom, JSContext *ctx, int argc, J
     os64_html_node_t *document = NULL, *doctype = NULL, *html = NULL, *head = NULL, *body = NULL,
                      *title_element = NULL, *text = NULL;
     bool built = (document = document_made(dom, ctx)) != NULL &&
-        (doctype = made(ctx, os64_html_create_doctype(doc, "html", "", "", &status), status)) != NULL &&
-        (html = made(ctx, os64_html_create_element(doc, OS64_HTML_NS_HTML, "html", &status), status)) != NULL &&
-        (head = made(ctx, os64_html_create_element(doc, OS64_HTML_NS_HTML, "head", &status), status)) != NULL &&
-        (body = made(ctx, os64_html_create_element(doc, OS64_HTML_NS_HTML, "body", &status), status)) != NULL &&
+        (doctype = made(ctx, os64_html_create_doctype(doc, "html", "", "", &status), &status)) != NULL &&
+        (html = made(ctx, os64_html_create_element(doc, OS64_HTML_NS_HTML, "html", &status), &status)) != NULL &&
+        (head = made(ctx, os64_html_create_element(doc, OS64_HTML_NS_HTML, "head", &status), &status)) != NULL &&
+        (body = made(ctx, os64_html_create_element(doc, OS64_HTML_NS_HTML, "body", &status), &status)) != NULL &&
         (!titled ||
-         ((title_element = made(ctx, os64_html_create_element(doc, OS64_HTML_NS_HTML, "title", &status), status)) != NULL &&
-          (text = made(ctx, os64_html_create_text(doc, title.data, title.length, &status), status)) != NULL));
+         ((title_element = made(ctx, os64_html_create_element(doc, OS64_HTML_NS_HTML, "title", &status), &status)) != NULL &&
+          (text = made(ctx, os64_html_create_text(doc, title.data, title.length, &status), &status)) != NULL));
     d_string_free(dom, &title);
     if (!built) return JS_EXCEPTION;
     status = os64_html_insert(doc, document, doctype, NULL);
@@ -274,7 +276,7 @@ static JSValue create_document(os64_dom_t *dom, JSContext *ctx, int argc, JSValu
     os64_html_node_t *element = NULL, *document = NULL;
     int64_t status = OS64_HTML_OK;
     if (JS_IsUndefined(result) && name.length != 0)
-        element = made(ctx, os64_html_create_element(dom->document, space, name.data, &status), status);
+        element = made(ctx, os64_html_create_element(dom->document, space, name.data, &status), &status);
     if (JS_IsUndefined(result) && (name.length == 0 || element != NULL))
         document = document_made(dom, ctx);
     d_string_free(dom, &name);
