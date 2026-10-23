@@ -56,6 +56,49 @@ class PrepareTests(unittest.TestCase):
                       source)
         self.assertIn('    if (dbuf_error(&fd->byte_code)) {\n        JS_ThrowOutOfMemory(ctx);\n'
                       '        goto fail;\n    }\n\n    /* recompute scope linkage */', source)
+        # 0011a: get_lvalue reads a failed bytecode buffer as out of memory.
+        self.assertIn('        if (dbuf_error(&fd->byte_code)) {\n            JS_ThrowOutOfMemory(s->ctx);\n'
+                      '            return -1;\n        }\n    invalid_lvalue:', source)
+        # 0011a: each closure-variable add in resolve_scope_var returns its
+        # failure (a with object, the two eval variable objects, a direct
+        # eval's closure and its variable objects, a global, a local).
+        for check in (
+                'vd->var_name, FALSE, FALSE, JS_VAR_NORMAL);\n'
+                '                /* os64: upstream skipped the with-object test on failure */\n'
+                '                if (idx < 0)\n                    return -1;\n'
+                '                dbuf_putc(bc, OP_get_var_ref);',
+                'fd->var_object_idx, vd->var_name,\n                                  FALSE, FALSE, JS_VAR_NORMAL);\n'
+                '            /* os64: upstream emitted index -1 on failure */\n'
+                '            if (idx < 0)\n                return -1;\n',
+                'fd->arg_var_object_idx, vd->var_name,\n                                  FALSE, FALSE, JS_VAR_NORMAL);\n'
+                '            /* os64: upstream emitted index -1 on failure */\n'
+                '            if (idx < 0)\n                return -1;\n',
+                '                    idx = idx1;\n                }\n'
+                '                /* os64: upstream used index -1 on failure */\n'
+                '                if (idx < 0)\n                    return -1;\n'
+                '                if (cv->closure_type == JS_CLOSURE_GLOBAL ||',
+                '                    idx = idx1;\n                }\n'
+                '                /* os64: upstream emitted index -1 on failure */\n'
+                '                if (idx < 0)\n                    return -1;\n'
+                '                dbuf_putc(bc, OP_get_var_ref);',
+                '            idx = idx1;\n        }\n'
+                '        /* os64: upstream emitted index -1 on failure */\n'
+                '        if (idx < 0)\n            return -1;\n    has_global_idx:',
+                '        if (idx < 0)\n            return -1;\n        if (idx >= 0) {\n        has_idx:'):
+            self.assertIn(check, source)
+        # 0011a: resolve_variables takes a failed resolve_scope_var to its
+        # fail path before the atom is freed, at both calls.
+        self.assertIn('NULL, NULL, pos_next);\n            /* os64: -1 is a failed closure-variable add;', source)
+        self.assertIn('            if (pos_next < 0)\n                goto fail;\n            JS_FreeAtom(ctx, var_name);\n'
+                      '            break;\n        case OP_scope_make_ref:', source)
+        self.assertIn('bc_buf, ls, pos_next);\n                /* os64: as above, -1 is a failed closure-variable add */\n'
+                      '                if (pos_next < 0)\n                    goto fail;\n'
+                      '                JS_FreeAtom(ctx, var_name);', source)
+        # 0011a: a child with no constant-pool slot is out of memory, before
+        # the child is made; the assertion is gone.
+        self.assertIn('        if (cpool_idx < 0) {\n            JS_ThrowOutOfMemory(ctx);\n            goto fail;\n'
+                      '        }\n        func_obj = js_create_function(ctx, fd1);', source)
+        self.assertNotIn('assert(cpool_idx >= 0);', source)
 
     def test_line_shifts_preserve_output(self):
         result = self.prepare()

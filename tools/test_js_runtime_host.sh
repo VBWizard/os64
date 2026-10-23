@@ -51,10 +51,10 @@ for probe in probe sanitized-probe; do
     # This arena-allocation index is a separate regression for the actual
     # target core; the sanitized sweep measures its own larger inventory.
     if [ "$probe" = probe ]; then "$js_runtime_work/$probe" --raw-construction; fi
-    # Patch 0010's sweep, on the target core's own allocation granularity;
-    # the instrumented engine's per-allocation sweep reaches the parser's
-    # other unchecked out-of-memory paths (DEBTS.md), not 0010's.
-    if [ "$probe" = probe ]; then "$js_runtime_work/$probe" --compile-failure; fi
+    # Patches 0010 and 0011a's compile sweeps, on both allocation
+    # granularities: the target core's arenas and the instrumented
+    # engine's single allocations, which reach the parser's own paths.
+    "$js_runtime_work/$probe" --compile-failure
     for mode in --leak --active-destroy --reclaim-raw-leak --reclaim-active-destroy --reclaim-fatal; do
         set +e
         "$js_runtime_work/$probe" "$mode" > "$js_runtime_work/fatal.out" 2> "$js_runtime_work/fatal.err"
