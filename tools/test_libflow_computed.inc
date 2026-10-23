@@ -348,9 +348,11 @@ static void computed_round2_cases(void)
 {
     static const char page[] =
         "<!doctype html><style>body{margin:0}#a{font-family:Arial}#g{font-family:serif,Arial}"
-        "#k{font-family:cursive}#q{font-family:\"My Face\",monospace,Arial}</style>"
+        "#k{font-family:cursive}#q{font-family:\"My Face\",monospace,Arial}"
+        "#qm{font-family:\"monospace\"}#qi{font-family:\"Inherit\",'Default',\"Serif\",serif}</style>"
         "<span id=a>a<b id=ai>i</b></span><span id=g>g</span><span id=k>k</span><span id=q>q</span>"
-        "<font id=f face=\"Verdana, sans-serif\">f</font><font id=fv face=Verdana>v</font><span id=none>n</span>";
+        "<font id=f face=\"Verdana, sans-serif\">f</font><font id=fv face=Verdana>v</font><span id=none>n</span>"
+        "<span id=qm>m</span><span id=qi>i</span><font id=fc face=\"Arial, Sans-Serif\">c</font>";
     Sheeted p;
     sheeted_open(&p, page, 800, 600);
     flow_tree_t *tree = flow_layout(p.doc, p.page, 800, &p.env);
@@ -367,6 +369,10 @@ static void computed_round2_cases(void)
         {"q", "\"My Face\", monospace, Arial", "computed: names and generics in the order written"},
         {"f", "Verdana, sans-serif", "computed: <font face>'s list as written"},
         {"fv", "Verdana", "computed: and with no generic, none added"},
+        {"qm", "\"monospace\"", "computed: a quoted name that spells a generic stays quoted"},
+        {"qi", "\"Inherit\", \"Default\", \"Serif\", serif",
+         "computed: and so does one that spells a CSS-wide keyword or default, in any case"},
+        {"fc", "Arial, sans-serif", "computed: a generic keyword in its canonical lowercase"},
     };
     const os64_html_node_t *root = p.doc->document;
     for (size_t i = 0; i < sizeof(kFamily) / sizeof(kFamily[0]); i++) {

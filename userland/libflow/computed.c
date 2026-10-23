@@ -469,10 +469,38 @@ static void inset(const flow_computed_t *c, Out *o, int side)
 
 // ── The lists ───────────────────────────────────────────────────────────
 
+// Whether a family name, ignoring ASCII case, spells a word a family list
+// reads as a keyword (a generic family, a CSS-wide keyword, `default`), so
+// it must be quoted to stay a name.
+static bool family_reserved(const char *name, uint32_t len)
+{
+    static const char *const kReserved[] = {
+        "serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif",
+        "ui-sans-serif", "ui-monospace", "ui-rounded", "math", "emoji", "fangsong",
+        "initial", "inherit", "unset", "revert", "revert-layer", "default"};
+    for (size_t r = 0; r < F_ARRAY(kReserved); r++) {
+        uint32_t k = 0;
+        while (k < len && kReserved[r][k] != '\0') {
+            char ch = name[k];
+            if (ch >= 'A' && ch <= 'Z')
+                ch = (char)(ch - 'A' + 'a');
+            if (ch != kReserved[r][k])
+                break;
+            k++;
+        }
+        if (k == len && kReserved[r][k] == '\0')
+            return true;
+    }
+    return false;
+}
+
 // The list as the page declared it (CSS Fonts 4 § 2.1: the computed value
 // is "list, as specified"), in its order, a generic keyword where it was
-// written and nothing added; a name that is not one identifier is quoted,
-// as Chrome does. A family nothing declared is libflow's own generic.
+// written, in its canonical lowercase however the page cased it, and
+// nothing added. A name is quoted, as Chrome quotes it, when it is not one
+// identifier, or when it spells a keyword (`"monospace"` is a family named
+// monospace, not the generic). A family nothing declared is libflow's own
+// generic.
 static void families(Out *o, const flow_family_list_t *f)
 {
     if (f->nwritten == 0) {
@@ -483,8 +511,17 @@ static void families(Out *o, const flow_family_list_t *f)
         const flow_family_written_t *w = &f->written[i];
         if (i > 0)
             puts_(o, ", ");
-        bool plain = w->keyword || w->len > 0;
-        for (uint32_t k = 0; !w->keyword && plain && k < w->len; k++) {
+        if (w->keyword) {
+            for (uint32_t k = 0; k < w->len; k++) {
+                char ch = w->name[k];
+                if (ch >= 'A' && ch <= 'Z')
+                    ch = (char)(ch - 'A' + 'a');
+                put(o, &ch, 1);
+            }
+            continue;
+        }
+        bool plain = w->len > 0 && !family_reserved(w->name, w->len);
+        for (uint32_t k = 0; plain && k < w->len; k++) {
             char ch = w->name[k];
             plain = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '-' || ch == '_' ||
                     (k > 0 && ch >= '0' && ch <= '9') || (unsigned char)ch >= 0x80;
