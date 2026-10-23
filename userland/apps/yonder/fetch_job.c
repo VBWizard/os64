@@ -500,18 +500,27 @@ static bool read_body(os64_fetch_t *f, uint64_t cap, uint8_t **out, size_t *len,
 
 // ── The hops ────────────────────────────────────────────────────────────
 
-// The URLs whose hop took § 4.1's preflight branch: a network error anywhere
-// after clears their cache entries ("clear cache entries using request").
+// The hops that took § 4.1's preflight branch: a network error anywhere
+// after clears their cache entries ("clear cache entries using request"),
+// every one. An entry's key is the page's site, the SERIALIZED REQUEST
+// ORIGIN and the URL, and the request origin turns to "null" once a
+// redirect taints the request, so each branch keeps the redirect-taint it
+// had when its preflight was made, beside its URL, and is cleared under
+// that: a later hop's taint must not make the clear miss an earlier grant.
 typedef struct {
     char *urls[WAY_REDIRECTS_MAX + 1];
+    way_rtaint_t rtaints[WAY_REDIRECTS_MAX + 1];
     int32_t n;
 } Branches;
 
-static void branches_clear(Branches *b, yonder_fetch_job_t *job, way_request_t *r, bool failed)
+static void branches_clear(Branches *b, yonder_fetch_job_t *job, const way_request_t *r, bool failed)
 {
     for (int32_t i = 0; i < b->n; i++) {
-        if (failed)
-            way_preflight_clear(job->preflight, r, b->urls[i]);
+        if (failed) {
+            way_request_t then = *r;        // the key reads the origin and the taint alone
+            then.rtaint = b->rtaints[i];
+            way_preflight_clear(job->preflight, &then, b->urls[i]);
+        }
         os64_free(b->urls[i]);
     }
     b->n = 0;
@@ -642,10 +651,10 @@ int64_t yonder_fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
         }
         bool branch = kind == WAY_HOP_CORS && way_preflight_capable(r);
         if (branch) {
-            // The URL is kept BEFORE anything is cached under it, and a copy
-            // there is no memory for ends the request: a branch the clear
-            // cannot name would leave this hop's grants standing after a
-            // network error.
+            // The URL and the taint the key is made under are kept BEFORE
+            // anything is cached under them, and a copy there is no memory
+            // for ends the request: a branch the clear cannot name would
+            // leave this hop's grants standing after a network error.
             char *kept = NULL;
             if (branches.n < (int32_t)(sizeof(branches.urls) / sizeof(branches.urls[0]))) {
                 kept = copy_text(current, os64_strlen(current));
@@ -653,6 +662,7 @@ int64_t yonder_fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
                     network_error(got, "out of memory");
                     break;
                 }
+                branches.rtaints[branches.n] = r->rtaint;
                 branches.urls[branches.n++] = kept;
             }
             if (way_preflight_needed(job->preflight, r, current, yonder_now_ms()) &&

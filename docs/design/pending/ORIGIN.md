@@ -310,7 +310,10 @@ fetch, and clears the cache entries for (partition, origin, URL), § 4.1):
 - **Clearing:** a failed preflight, or a failed actual request that was
   preflighted (§ 4.1: "If corsWithPreflightResponse is a network error, then
   clear cache entries using request"), removes every entry for its (partition,
-  origin, URL).
+  origin, URL), for every hop of the request that took the preflight
+  branch, each under the request origin as it was when that hop's
+  preflight was made (a later redirect-taint makes the origin `null`, and
+  must not make the clear miss an earlier hop's grant).
 
 ## 6. The hop: tainting, mode and the response type
 

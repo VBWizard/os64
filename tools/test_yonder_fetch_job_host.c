@@ -306,6 +306,28 @@ static void cross_origin(void)
     yonder_fetched_free(g);
 }
 
+// A preflight granted on one hop, a redirect that taints the request, and a
+// later hop whose preflight fails: the network error clears the FIRST
+// hop's grant, cached under the request origin as it was then
+// (https://a.test), though the request origin is "null" by the end.
+static void preflight_cleared_across_a_taint(void)
+{
+    fresh();
+    fake_answer("OPTIONS", "https://b.test/api", 204,
+                "Access-Control-Allow-Origin: https://a.test\r\nAccess-Control-Allow-Methods: PUT\r\n"
+                "Access-Control-Max-Age: 600\r\n", NULL);
+    fake_answer("PUT", "https://b.test/api", 307,
+                "Location: https://c.test/x\r\nAccess-Control-Allow-Origin: https://a.test\r\n", NULL);
+    fake_answer("OPTIONS", "https://c.test/x", 204, "X-No-Grant: 1\r\n", NULL);
+    yonder_fetched_t *g = run(&(Ask){"https://a.test/page", "https://b.test/api", "PUT", NULL, "x"});
+    expect("taint: the chain ends in a network error", g != NULL && !g->ok, g ? g->why : NULL);
+    expect("taint: it went b's OPTIONS, b's PUT, c's OPTIONS", nfake_requests == 3 &&
+           !strcmp(fake_requests[2].method, "OPTIONS") && !strcmp(fake_requests[2].url, "https://c.test/x"), NULL);
+    expect_text("taint: c's preflight carried the tainted origin", field(2, "Origin"), "null");
+    expect("taint: b's grant is cleared too", way_preflight_count(cache) == 0, NULL);
+    yonder_fetched_free(g);
+}
+
 static void preflights(void)
 {
     fresh();
@@ -716,6 +738,7 @@ int main(void)
     same_origin();
     cross_origin();
     preflights();
+    preflight_cleared_across_a_taint();
     redirects();
     opaque_and_refusals();
     data_and_limits();
