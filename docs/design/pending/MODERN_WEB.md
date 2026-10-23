@@ -1697,3 +1697,144 @@ form's reset; an XHTML document's elements reading as an HTML
 document's; the three
 newly unfinished kept pages (§ The replay corpus). Declined: a
 `javascript:` result that is a string (DECLINED.md).
+
+### Slice 0d, as built
+
+Built by Opus on `opus/tmw-0d-attributes`, from MODERN_WEB_BRIEFS.md § Slice
+0d (Fable's design, the reviewed copy on `fable/modern-web`): the wall behind
+jQuery 1.12.4. Its focusin support probe reads `e.attributes[name].expando`
+at load, libdom had no `attributes`, and the library and every script after
+it died on the kept pages that carry it. Read cold by a fresh Opus (one P2,
+two P3s, all fixed on the branch) after the builder's own adversarial and
+truth passes.
+
+**What was built** (libdom `attr.c`; LIBDOM.md § Attributes as nodes).
+
+- **The surface**, classic, on every page with the switch off too:
+  `Element.attributes` (a NamedNodeMap: `length`, `item`, `getNamedItem`/
+  `NS`, `setNamedItem`/`NS`, `removeNamedItem`/`NS`, indexed and named
+  properties, iteration), `document.createAttribute`/`createAttributeNS`, and
+  Element's `getAttributeNode`/`NS`, `setAttributeNode`/`NS` and
+  `removeAttributeNode`. The `Attr` and `NamedNodeMap` interface objects
+  join the interfaces row.
+- **An Attr is a view of its element, not a tree node.** A registry entry
+  whose `target` is its element, with a record (`DAttr`) holding its
+  qualified name and namespace, kept in a table by element and name, one per
+  name, so the same object comes back while the attribute exists. Its value
+  is read from libhtml by name at every read and written through the door.
+  It is a Node: `Attr.prototype` (a prototype kind of its own, a Node's)
+  answers every member `Node.prototype` has with the standard's answer for a
+  node with no place in the tree, and the DOM host fails the build of any
+  Node member it does not shadow. It is an EventTarget whose path is itself.
+  The tree verbs refuse one as DOM does; a `Node.prototype` member called on
+  one itself is the TypeError "an Attr is a Node with no place in the tree"
+  (DIVERGENCES.md).
+- **The map trusts no snapshot.** Every read answers the element's list as
+  it is at the call. The last element walked is kept as an array of its
+  attributes, used only while the list is provably the one copied (the same
+  element, libhtml's version unmoved, the same first and last attribute), so
+  `length` and the i-th are a step and every whole walk is linear. Names are
+  unenumerable, an HTML element's names with an uppercase letter unlisted,
+  and a name is hidden by the map's own expando and by the prototype chain
+  (WebIDL's visibility), both asked before the list is read.
+- **Detachment at one door.** Every attribute libdom sets or removes goes
+  through `d_set_attr` to libpage's verb; a removal copies the last value
+  into the Attr before the attribute goes (refused whole, QuotaExceededError,
+  when there is no room) and detaches it. The parser removes no attribute
+  and libpage none of its own, and the DOM host refuses a libdom that calls
+  an attribute verb anywhere else. **The backstop:** an attached Attr whose
+  attribute is gone reads as detached and empty, and the host hears
+  `options.broken`, which yonder records as `FAILED page: an attribute left
+  its element outside libdom` (YONDER_DIAGNOSTICS.md).
+- **Setting an Attr.** `setAttributeNode` takes a detached Attr on (a
+  replaced attribute keeps its place), answers the one it replaced detached
+  with its value, answers one this element holds as it is, and refuses one
+  another element holds (InUseAttributeError). libhtml's verbs carry no
+  namespace, so an Attr is set only where the tree keeps its name and
+  namespace both; elsewhere it is NotSupportedError.
+- **The names thrown**, all named Error objects through `d_error` for a later
+  DOMException to fold: TypeError, HierarchyRequestError, NotFoundError,
+  InUseAttributeError, NotSupportedError, NamespaceError,
+  InvalidCharacterError, QuotaExceededError.
+
+**The seams, as they ended.**
+
+| Seam | What it is now |
+|---|---|
+| `d_set_attr` | the one door for every attribute libdom sets or removes; a removal detaches the Attr with its last value |
+| `D_PROTO_ATTR` | Attr's prototype, a Node's, with no Node member installed by node.c: attr.c shadows them all |
+| `d_is_attr`, `d_node` | an Attr is told from a tree node; `d_node` names it in its TypeError |
+| `os64_dom.attr_table`, `attr_cursor` | the attached Attrs by element and name; the last element walked as an array of its attributes |
+| `os64_dom_options_t.broken` | a rule the binding keeps found broken, told to the host (yonder: a `FAILED page` line) |
+| `d_attr_steps` | the walks' steps, for the DOM host's linearity cases |
+
+**Numbers.** WPT `dom/nodes` 1,097 → 1,229 passes of 4,969, none lost;
+with the switch off, 1,144 pass. `[required]` 21 → 83: the 62 the slice
+makes pass that need the switch (NamedNodeMap's method-names test, and
+Node-cloneNode's 61, whose checks compare attributes and read Node's
+constants). The other 70 pass with the switch off too and are in
+`[passing]`. What still fails there wants `setAttributeNS` and its kin,
+`createElementNS`, a DOMException, or a namespaced `setAttributeNode`.
+
+The census: `NamedNodeMap` was a missing global in 76 of 886 kept records
+(23 sites) over the three pulls; `Attr` in none.
+
+The replay of 2026-10-22b, the slice's base against its head (REPLAY.md
+§ 7). The 16 pages the wall held (14 that died in jQuery 1.x with `TypeError:
+cannot read property of undefined`, one of them jQuery 1.11, and 2 with
+`'Symbol.iterator' of undefined` from `Array.from(el.attributes)`) all lose
+their death line. On judged pages: `cannot read property of undefined`
+28 → 17, `'Symbol.iterator' of undefined` 2 → 0, `'jQuery' is not defined`
+8 → 0, `'$' is not defined` 6 → 0, `'length' of undefined` 26 → 21, a
+missing `NamedNodeMap` 16 → 0. What those 16 ask for next: XMLHttpRequest
+first (jQuery's ajax probes, on most of them, and a FAILED line on the
+second bank's page, which still does not finish its parse in the replay's
+60 s), then `document.referrer`, `getClientRects`, a JSON string the engine
+calls a bad control character, and globals of their own and their ads.
+The replay diff: 40 pages of progress (73 lines lost) and 24
+"regressions" (91 lines gained), every one of them a page that also
+progressed, its scripts running further to the next wall (jQuery's
+XMLHttpRequest probes, `DOMParser`, interfaces not yet built, a `data:`
+picture). Beyond the 16, 12 pages lost `'length' of undefined` (a read of
+`el.attributes.length`). One page is newly incomplete, its scripts now
+asking for sheets the kept index does not hold (to record again); 9 were
+unfinished before and are still.
+
+Host at the head: the DOM host 10,765 and 73,193 checks (allocation sweeps 961 and 11,253), its attribute probe (`--attributes`)
+1,921 and 2,663; the scripted-page host 6,857; all 0 failed. On 1,000 attributes
+each whole walk takes 1,982 to 5,964 steps (n² would be a million): an
+iteration, `Array.from`, `Object.keys`, `for..in`, an index loop on
+`length`, jQuery's countdown from `length`, and named walks either way
+round. Both jQuery 1.12.4 copies boot: upstream's fixture, and the second
+bank's build, which is not in the tree and runs when `OS64_JQUERY_AEM`
+names a copy. `tools/test_dom_mutants.py` gains a mutant per rule
+(`--only attr-`, 31); the mutant harnesses were not run (the briefs' rule),
+their anchors checked against the changed files.
+
+**Review.** The builder's adversarial pass found single calls doing n² work
+on an element with n attributes, out of the engine deadline's reach (every
+index walked from the list's start, every property read scanning every
+name, an Attr found by scanning its element's), fixed with the table and the
+cursor, and the cases refused at each allocation. The truth pass fixed four
+comments. The cold read found no P1 (lifetime, the door, allocation failure
+and the jQuery probes held, under two 30,000-operation ASan fuzzers) and:
+a P2, the walks still n² (`length` walked the list at every call, which the
+array iterator reads at every step, and the cursor served forward steps
+only, so jQuery's countdown walked from the start; the harness missed it
+because the length walk counted no steps), fixed with the array cursor; a P3,
+a name listed twice when an expando shadowed it (WebIDL's visibility step
+2), fixed; and a P3 of text, two DEBTS counts already stale, now page names.
+
+**Rulings.** The `Attr` and `NamedNodeMap` interface objects are the
+interfaces row's, as every interface object has been since 0a; the surface
+is classic. The 60 Node-cloneNode tests stay in `[required]`: they need
+Node's constants, which the switch gates. A Proxy prototype's `has` trap is
+called for a name the map does not list, which WebIDL's order would not do:
+a what-if no page meets, left.
+
+**Booked** (DEBTS.md § Classic browser scripting): no namespaced attribute
+verbs, and an Attr's namespace kept only where the tree keeps it; Node's
+missing `getRootNode`, `isEqualNode`, `isSameNode`, `compareDocumentPosition`
+and `normalize`, which an Attr will answer when Node has them; an Attr kept
+until the page goes, about 270 bytes of the default budget each. Not built:
+the brief's answers for those five Node members, Node having none.
