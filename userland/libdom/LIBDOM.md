@@ -454,9 +454,12 @@ markup. It is connected as DOM means it (`d_connected`: isConnected, a
 `form` attribute's lookup), and not in the window's tree, which is what a
 script must be in to run (`d_in_window_tree`).
 
-**An XML document** keeps an element name's case, and its createElement
-makes HTML elements when it was made for the HTML namespace and refuses
-otherwise. libhtml's tree holds elements of the HTML, SVG and MathML
+**An XML document** keeps an element name's case at creation, and its
+createElement makes HTML elements when it was made for the HTML namespace
+and refuses otherwise. Past creation such an element reads as an HTML
+document's would (`nodeName` uppercased, a tag query and attribute names
+folded, selectors case-blind), since the binding asks an element's
+namespace and not its document (DEBTS.md). libhtml's tree holds elements of the HTML, SVG and MathML
 namespaces only, so an element in no namespace, or another, is a
 NotSupportedError, from `createDocument` and from such a document's
 `createElement`; `createElementNS` is not built. A new document is in
