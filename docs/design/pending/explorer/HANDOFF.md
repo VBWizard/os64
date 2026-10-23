@@ -20,7 +20,9 @@ all three consumers. [Host and native validation passed](evidence/e05d/README.md
 no P5 acceptance or independent implementation review is claimed.
 
 Owner: Quinn, branch `codex/window-placement`, worktree `.worktrees/window-placement`,
-based on `12dc6b64`. Next: independent implementation review and Chris's P5 test.
+based on `12dc6b64`. Implementation `703523de` is published in draft
+[PR #334](https://github.com/VBWizard/os64/pull/334), targeting `userland`.
+Next: independent implementation review and Chris's P5 test.
 Architecture is approved; there is no outstanding design gate. Install a matching
 rebuilt kernel and userland because the toolkit's public window storage changed.
 
