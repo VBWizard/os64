@@ -524,10 +524,30 @@ JSValue d_promise_settled(JSContext *ctx, JSValue value)
 
 enum { B_SIZE, B_TYPE, B_SLICE, B_TEXT, B_ARRAY_BUFFER, B_BYTES, B_STREAM, B_NAME, B_LAST_MODIFIED, B_RELATIVE };
 
-/* A position for slice: from the end when negative, clamped to the size. */
+/* WebIDL's [Clamp] long long, which the File API declares slice()'s
+ * offsets as: NaN is 0, the value is clamped to the type's range and
+ * rounded to the nearest integer, a tie to the even one, and -0 is +0.
+ * The result is integral. */
+static double clamp_long_long(double x)
+{
+    if (x != x) return 0;
+    if (x <= -9223372036854775808.0) return -9223372036854775808.0;
+    if (x >= 9223372036854775807.0) return 9223372036854775807.0;
+    if (x >= 9007199254740992.0 || x <= -9007199254740992.0) return x;   /* already integral */
+    double floor = (double)(int64_t)x;
+    if (floor > x) floor -= 1;
+    double frac = x - floor;
+    double rounded = frac > 0.5 ? floor + 1 : frac < 0.5 ? floor
+                   : ((int64_t)floor % 2 == 0 ? floor : floor + 1);
+    return rounded == 0 ? 0 : rounded;   /* -0 is +0 */
+}
+
+/* A position for slice, its offset converted first: from the end when
+ * negative, clamped to the size. Converted before the sign is judged, so
+ * -0.5 (which converts to 0) is the start, not the end. */
 static size_t relative(double value, size_t size)
 {
-    if (value != value) return 0;
+    value = clamp_long_long(value);
     if (value < 0) return -value >= (double)size ? 0 : size - (size_t)(-value);
     return value >= (double)size ? size : (size_t)value;
 }

@@ -302,6 +302,14 @@ static void dom_fetch_object_cases(void)
         "assert(order.join()==='part,endings',order.join());"
         "assert(new File(g(),'n',{endings:'native'}).size===7);",
         "Blob: parts converted once, endings applied to them");
+    /* slice()'s offsets are [Clamp] long long, converted before the sign
+     * is judged: -0.5 is 0 (the start), a half rounds to even, NaN is 0. */
+    dom_script(&f, FETCH_ASSERT
+        "var b=new Blob(['abcd']);"
+        "assert(b.slice(-0.5).size===4&&b.slice(0,-0.5).size===0,'-0.5 '+b.slice(-0.5).size+' '+b.slice(0,-0.5).size);"
+        "assert(b.slice(-1.5).size===2&&b.slice(1.5).size===2&&b.slice(2.5).size===2&&b.slice(-0.6).size===1);"
+        "assert(b.slice(NaN).size===4&&b.slice(-Infinity).size===4&&b.slice(0,Infinity).size===4);",
+        "Blob: slice's offsets are converted, then their sign judged");
     dom_script(&f, FETCH_ASSERT
         "var q=new Request('a?b#c');assert(q.url==='http://example.test/dir/a?b#c'&&q.method==='GET');"
         "assert(q.mode==='cors'&&q.credentials==='same-origin'&&q.redirect==='follow'&&q.cache==='default');"
