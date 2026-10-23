@@ -1617,6 +1617,39 @@ static void case_methods(void)
           strstr(t.seen, "Access-Control") == NULL);
     os64_fetch_close(f);
 
+    // An interim head's fields are never the answer's: a 103 granting
+    // Access-Control-Allow-Origin (and a line too long to read, and a
+    // Set-Cookie) before a final 200 that grants nothing reaches the
+    // observers as the 200's fields alone, for a GET and for an upload
+    // whose head is read between its writes. The fetch job's CORS check
+    // reads exactly what on_header heard.
+    static char interim_wire[HTTP_LINE_MAX + 512];
+    n = snprintf(interim_wire, sizeof(interim_wire),
+                 "HTTP/1.1 103 Early Hints\r\nAccess-Control-Allow-Origin: *\r\nSet-Cookie: early=1\r\n"
+                 "X-Early-Long: ");
+    memset(interim_wire + n, 'x', HTTP_LINE_MAX + 10);
+    snprintf(interim_wire + n + HTTP_LINE_MAX + 10, sizeof(interim_wire) - (size_t)n - HTTP_LINE_MAX - 10,
+             "\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\nX-Final: 1\r\n\r\nok");
+    for (int upload = 0; upload < 2; upload++) {
+        reset();
+        peer_add("a.test", 80, interim_wire);
+        memset(&t, 0, sizeof(t));
+        cookie_test_t heard = {0};
+        opt = (os64_fetch_options_t){ .method_name = upload ? "PUT" : "GET", .body = upload ? "x" : NULL,
+                                      .body_len = upload ? 1 : 0, .on_header = header_heard, .ctx = &t };
+        f = os64_fetch_open("http://a.test/", &opt);
+        CHECK(os64_fetch_status(f) == OS64_FETCH_OK && os64_fetch_head(f)->status == 200);
+        CHECK(strcmp(t.seen, "Content-Length=2;X-Final=1;") == 0 && t.omitted == 0);
+        os64_fetch_close(f);
+        reset();
+        peer_add("a.test", 80, interim_wire);
+        opt = (os64_fetch_options_t){ .method_name = upload ? "PUT" : "GET", .body = upload ? "x" : NULL,
+                                      .body_len = upload ? 1 : 0, .on_set_cookie = cookie_received, .ctx = &heard };
+        f = os64_fetch_open("http://a.test/", &opt);
+        CHECK(os64_fetch_status(f) == OS64_FETCH_OK && heard.received == 0);
+        os64_fetch_close(f);
+    }
+
     // identity, for a Range.
     reset();
     peer_add("a.test", 80, reply_len("206 Partial Content", "", "ab"));

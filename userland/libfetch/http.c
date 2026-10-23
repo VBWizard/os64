@@ -587,6 +587,9 @@ static http_head_result_t header_take(char *line, http_response_t *out,
         if (!is_field_byte(value[i]))
             return HTTP_HEAD_SYNTAX;  // a Location that would clear the screen
 
+    // An interim (1xx) head's fields are not the answer's: an observer that
+    // judged them would let a 103's Access-Control-Allow-Origin or
+    // Set-Cookie stand for a final head that has neither.
     if (on_header && out->status >= 200)
         on_header(ctx, line, (size_t)(colon - line), value, vlen);
 

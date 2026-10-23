@@ -460,6 +460,11 @@ static void keep_field(os64_fetch_keep_t *k, char *field, const char *value, siz
     field[at + len] = '\0';
 }
 
+// Every field of a FINAL head, and nothing of an interim one: http.c offers
+// a field only once its head's status is 200 or more (header_take and the
+// over-long path), so a 1xx's fields never reach on_header, the kept
+// caching fields or on_set_cookie. A CORS check made of what on_header
+// heard is made of the answer alone (tools/test_fetch_host.c pins it).
 static void response_header(void *ctx, const char *name, size_t name_len,
                              const char *value, size_t value_len)
 {
