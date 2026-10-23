@@ -15,8 +15,9 @@
  *
  * IT HAS NO WINDOW. Its location is null, it is cookie-averse, it cannot be
  * written to, a script connected to it is marked started and never runs, a
- * handler attribute in it is not compiled, and a link, a form, a focus, a
- * blur or a reset in it asks nothing of the host. Its body reflects no
+ * handler attribute in it is not compiled, a link, a form's submission, a
+ * focus or a blur in it asks nothing of the host, and a form's reset there
+ * fires its event and resets no control (DEBTS.md). Its body reflects no
  * handler onto window, and scripting is off for its nodes (d_scripting).
  *
  * WHICH DOCUMENT A NODE BELONGS TO is the document its tree hangs from, and

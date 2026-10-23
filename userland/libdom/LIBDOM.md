@@ -440,8 +440,10 @@ and none of this runs.
 **It has no window.** Its `location` is null and assigning to it throws;
 it is cookie-averse; `write`, `writeln` and `open` throw
 InvalidStateError, since writing would open it; a link in it navigates
-nowhere, a form in it submits nothing (not even the event), and focus,
-blur and reset there reach no host. A script connected to it is marked
+nowhere, a form in it submits nothing (not even the event), focus and
+blur there reach no host, and a form's reset there fires its event and
+resets no control, since the host carries resets out on the page's model
+(DEBTS.md). A script connected to it is marked
 started and runs nowhere, then or after it moves into the page, as a
 script innerHTML parses is; a handler attribute in it is not compiled and
 reads null until its element is the window's. Its body reflects no handler

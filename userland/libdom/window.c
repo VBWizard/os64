@@ -356,8 +356,12 @@ static int fire(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, c
     return result;
 }
 
-/* What the host performs for an element: only for one of the window's,
- * since a document with no window has nothing on screen. */
+/* What the host performs for an element: focus and blur, which move the
+ * window's focus, and a form's reset, which the host carries out on the
+ * page's model and widgets. Only for an element of the window's document:
+ * a document with no window has nothing on screen to focus, and no model,
+ * so a form's reset there fires its event and resets no control (DEBTS.md
+ * § Classic browser scripting). */
 static void notify(os64_dom_t *dom, const os64_html_node_t *node, os64_dom_activation_t what)
 {
     if (dom->options.activate != NULL && d_window_document(dom, node))
