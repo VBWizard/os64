@@ -1311,3 +1311,146 @@ object's serialization (§ Classic browser scripting). CSS system colours
 slice: libgarb never read them. Noted and not booked:
 `word-break: break-all` over a megabyte of text makes a segment per
 character, the same class of cost libflow already pays per word.
+
+### Slice 0c, as built
+
+Built by Opus on `opus/tmw-0c-jquery`, from MODERN_WEB_BRIEFS.md § Slice
+0c (the reviewed copy on `fable/modern-web`): the first slice the corpus
+named rather than the plan. Read cold by a fresh Opus (six P3s: five fixed
+on the branch, the sixth Slice 0d) and read for design. jQuery 3 died at
+load on `document.implementation.createHTMLDocument`, and every script after
+it on `jQuery is not defined`; a banking site's login was a `javascript:`
+link yonder refused.
+
+**What was built.**
+
+- **`document.implementation`** (DOM § 4.5.1; libdom `implementation.c`),
+  classic surface, on every page with the switch off too: one
+  DOMImplementation per document, made when first asked for, with
+  `createHTMLDocument(title)` (the standard tree; a title element only
+  when a title is given, the empty string being one), `createDocument
+  (namespace, qualifiedName, doctype)` (an XML document holding the doctype
+  and then the element createElementNS would make, the name held to DOM's
+  "validate and extract"), `createDocumentType` and `hasFeature()` (true).
+  `Document.doctype`, and DocumentType, a prototype of its own with `name`,
+  `publicId`, `systemId` and ChildNode. The `DOMImplementation` interface
+  object is a Modern Web row; `DocumentType` joins the interface row.
+- **A new document lives in the page's arena** (libhtml's
+  `os64_html_create_document`, a second DOCUMENT node there under the DOM
+  Standard's rules for a document's children and none of the window's own;
+  `os64_html_create_doctype` beside it). A node made in it and appended to
+  the page is MOVED, keeping its identity, wrapper, expandos and listeners:
+  jQuery.parseHTML's nodes are the page's, found by its `querySelector`.
+  This is the brief's open choice, taken for that reason (a second arena
+  would make adoption a copy, and jQuery appends the exact nodes it
+  parsed). It is freed with the page and charged to its caps; a change in
+  it moves the page's version, so yonder rebuilds the page's model after
+  that task.
+- **Which document a node belongs to** is the document its tree hangs
+  from; a detached tree's root's wrapper records the one it was made in,
+  copied from or last taken out of (`DValue.document`, written by
+  `d_made_in` and `d_leaving`). `ownerDocument` was the window's for every
+  node before.
+- **A document with no window**: `location` is null (assigning throws),
+  it is cookie-averse, `write`/`writeln`/`open` throw InvalidStateError
+  (a write would otherwise have reached the page's own parser), a link, a
+  form, focus, blur or reset in it asks nothing of the host, a script
+  connected to it is marked started and never runs, a handler attribute in
+  it is not compiled, its body reflects no handler onto window, and its
+  fragment parses and serializations run with scripting off
+  (`d_scripting`). DOM's connected (`d_connected`, any document) and
+  "in the window's document" (`d_in_window_tree`, what a script must be in
+  to run) are two names.
+- **The second wall**, jQuery 1.12.4's support probe
+  `c.type="checkbox",c.checked=!0`: `type` was an expando, the input stayed
+  text, and libpage refused its checkedness ("Control property refused").
+  Inputs, buttons, selects and textareas reflect `type`, and libpage keeps
+  every input's checkedness, as HTML does (jQuery's `serializeArray` reads
+  `.checked` of every field). Past that probe 1.12.4 reads
+  `e.attributes[name]`: the acceptance is met for 3.5.1 and moves to Slice
+  0d for 1.12.4.
+- **`javascript:` links** (HTML § 7.4.2.3.3): `follow_link_asked`, which a
+  person's click and a script's `click()` both reach, hands such an
+  address to the page's script host before libway is asked
+  (`yonder_scripts_address`): the address after its scheme percent-decoded,
+  then its fragment as libpage hands it over (decoded already), read as
+  UTF-8, queued as a classic script with no element and run as one task,
+  recorded as `script javascript:#inline-<n>` (YONDER_DIAGNOSTICS.md). With
+  scripts off the link does nothing and the status line says so. A string
+  result replacing the page is DECLINED.md's.
+
+**The seams, as they ended.**
+
+| Seam | What it is now |
+|---|---|
+| `os64_html_create_document`, `os64_html_create_doctype` | libhtml's: a second DOCUMENT node and a doctype in `doc`'s arena and mark; never inserted, charged until `doc` is freed |
+| `d_node_document`, `d_window_document` | the node's document (its tree's DOCUMENT root, else its root's record, else the window's), and whether that is the window's; while no document of its own exists, every node is the window's and neither walks |
+| `d_made_in`, `d_leaving` | the record written as a node is made or copied, and as a binding verb (`d_remove`, `d_replace`, `d_replace_content`) takes it out; only a wrapped node keeps one |
+| `d_connected`, `d_in_window_tree` | DOM's connected (isConnected, a `form` attribute's lookup, the controls and names collections), and the window's tree (a script's start) |
+| `d_scripting` | the page's scripting, for a node of the window's document: innerHTML's parse and serialization, insertAdjacentHTML's parse |
+| `yonder_scripts_address` | a `javascript:` link's code queued as a classic script (`MODE_ADDRESS`, no element) |
+
+**Numbers.** WPT `dom/nodes`, the baseline (858 passes of 4,406) → 1,095
+of 4,969, none lost: pages that died at `document.implementation` now run
+to their end. `[required]` 14 → 21, the 7 that need the DOMImplementation
+and DocumentType interface objects; `--modern-off` passes (21 required,
+none passing with the switch off). The 230 the slice made pass that pass
+with the switch off too are in `[passing]`: a ruling against the brief's
+"`[required]` grows by the ones this slice makes pass", since
+`[required]` means "needs the switch" and `document.implementation` is
+classic. What still fails there: DOMException codes, `compatMode` and
+`characterSet`, the HTML element interfaces, elements in no namespace.
+
+The census, `tools/yonder_tally.py --failed`: `createHTMLDocument' of
+undefined` was 141 records over the two older pulls (84 and 57) and 51 in
+2026-10-22b's (26 sites); a replay of all three at this slice has none.
+On 2026-10-22b's replay, `Control property refused` 11 → 0, `'jQuery' is
+not defined` 47 → 8, `'$' is not defined` 33 → 6. The surface's own names
+are missing in 4 of the 886 kept records (`DocumentType`, 4 sites;
+`DOMImplementation`, none).
+
+The replay diff (REPLAY.md § 7) of 2026-10-22b, the slice's base against
+its head: 56 pages of progress (259 lines lost), and 54 pages
+"regressions" (908 lines gained), which are THE NEXT WALLS: 50 of them
+carried one of the two walls before, and the other 4 are one site whose
+jQuery died elsewhere and now boots. What the gained FAILED lines ask for:
+`getComputedStyle` (26 lines), `matchMedia` (14), `document.referrer` (11),
+`getClientRects` (3), `fetch` (3), `DOMParser` (1), a module (1), and
+reads of undefined behind them. Three pages are newly unfinished: the
+scripts that now run ask for scripts in an order and number the kept index
+does not hold, so a blocking request goes unanswered (to record again,
+DEBTS.md § The replay corpus); 6 were unfinished before and are still, 33
+are to record again and 15 unjudged on both sides. The older pulls,
+replayed at the head only, read more pages incomplete for the same reason
+(2026-10-21: 147 of 340; 2026-10-22: 33 of 223).
+
+Host, the slice's base → its head: libhtml's verbs 540,023 → 540,042
+checks, libpage 254,138 → 254,141, the DOM host 6,841 / 51,471 → 7,664 /
+53,438 (allocation sweeps 561 / 7,913 → 653 / 8,187), the scripted-page
+host 6,186 → 6,206; all 0 failed. `tools/test_dom_implementation.inc` holds a case per
+rule of LIBDOM.md § Documents of their own and runs jQuery 3.5.1 and
+1.12.4, upstream copies, licence headers intact, in `tools/fixtures/`
+(1.12.4 stops at the next wall, `attributes`, and says so); the corpus's
+own 1.12.4 build carries its vendor's additions and is not in the tree:
+it runs when `OS64_JQUERY_AEM` names a copy. `tools/test_dom_mutants.py
+--only impl-` runs a mutant per rule of the slice, 21 of 21 caught; the
+other mutant harnesses were not run (the briefs' rule), their anchors
+checked against the changed files.
+
+**Review.** The builder's own pass counted a new document from its making
+and walked to a root only for a wrapped node. The cold read found no P1
+or P2 (isolation and memory held under an ASan churn of 300 documents)
+and six P3s, five fixed: a new document's body reflecting its handlers
+onto window, a `javascript:` fragment decoded twice, a displaced comment,
+the two meanings of connected under one name, and the fragment parser's
+scripting taken from the page rather than the context's document. The
+sixth, `Element.attributes`, is Slice 0d. The design read passed the
+shared arena.
+
+**Booked** (DEBTS.md § Classic browser scripting, unless named):
+`Element.attributes`, for Slice 0d; `createElementNS` and elements in no
+namespace; a new document's quirks mode; a detached root that never had a
+wrapper reading as the window's; `javascript:` through location
+assignment, and a link whose fragment decodes to U+0000; the three
+newly unfinished kept pages (§ The replay corpus). Declined: a
+`javascript:` result that is a string (DECLINED.md).

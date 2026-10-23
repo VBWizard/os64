@@ -100,7 +100,7 @@ static void implementation_library(const char *path, const char *after, const ch
  * (`c.type="checkbox",c.checked=!0`): with no `type` the input stayed a
  * text input and libpage refused its checkedness. Past that, the library
  * reads `e.attributes[name]` (its focusin probe), and the binding has no
- * `attributes`: that wall is named here, not passed. */
+ * `attributes`: that wall is named here, not passed (Slice 0d builds it). */
 #define JQUERY_1_WALL "Control property refused"
 #define JQUERY_1_NEXT "cannot read property of undefined"
 
@@ -259,7 +259,7 @@ static void implementation_owner_cases(void)
  * page's parser does nothing, or says why not. */
 static void implementation_windowless_cases(void)
 {
-    DomFixture f = event_fixture(event_html, "http://example.test:8080/dir/page.html");
+    DomFixture f = event_fixture(event_html, "http://fixture.test/dir/page.html");
     if (!fixture_ready(&f)) return;
     os64_dom_cookies_t cookies = {cookie_get, cookie_set, NULL};
     os64_dom_set_cookies(f.binding, &cookies);
@@ -268,7 +268,7 @@ static void implementation_windowless_cases(void)
     dom_script(&f, IMPL_ASSERT
         "var d=document.implementation.createHTMLDocument('');globalThis.d=d;"
         "assert(d.location===null&&document.location===location,'no location');"
-        "throws('TypeError',()=>{d.location='http://example.test/'});"
+        "throws('TypeError',()=>{d.location='http://fixture.test/'});"
         "assert(d.cookie===''&&document.cookie==='a=1; b=2','cookie-averse');d.cookie='z=9';"
         "throws('InvalidStateError',()=>d.write('<p>'));throws('InvalidStateError',()=>d.writeln('<p>'));"
         "throws('InvalidStateError',()=>d.open());assert(d.close()===undefined);",
