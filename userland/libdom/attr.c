@@ -20,13 +20,14 @@
  * NOTHING IS HELD ACROSS PAGE CODE. An attached Attr's value is read from
  * libhtml by name at every read, never through a pointer kept from an
  * earlier one: libhtml retires an attribute's bytes when its value changes.
- * The map holds no snapshot: `length`, `item(i)` and every indexed or named
- * property walk the element's list at the call, so a getter that removes an
- * attribute in the middle of a walk is seen by the walk's next step, which
- * is the standard's answer too. Where the last walk stopped is remembered,
- * and used only while the list is provably the one it walked (the walk's
- * cursor, below), so a walk over all n attributes in one call (an
- * iteration, Object.keys) takes n steps and not n².
+ * The map trusts no snapshot: `length`, `item(i)` and every indexed or
+ * named property answer the element's list as it is at the call, so a
+ * getter that removes an attribute in the middle of a walk is seen by the
+ * walk's next step, which is the standard's answer too. The last element
+ * walked is kept as an array of its attributes, used only while its list
+ * is provably the one copied (the walk's cursor, below), so `length` and
+ * the i-th attribute are a step each, and a whole walk over n attributes,
+ * forwards or back, is linear in n.
  *
  * DETACHMENT HAPPENS AT THE ONE DOOR. An attribute leaves its element by a
  * removal, and every attribute the binding sets or removes goes through
@@ -88,9 +89,9 @@ typedef struct DAttr DAttr;
 
 static const char kBroken[] = "an attribute left its element outside libdom";
 
-/* Steps taken along an element's attribute list and the table's chains,
- * for the DOM host, which holds a walk over all of an element's attributes
- * to a number of steps linear in them. */
+/* Steps taken along an element's attribute list, the cursor's array and the
+ * table's chains, for the DOM host, which holds each kind of whole walk over
+ * an element's attributes to a number of steps linear in them. */
 static uint64_t s_steps;
 
 uint64_t d_attr_steps(void)
@@ -716,51 +717,71 @@ static DValue *map_receiver(JSContext *ctx, JSValueConst object)
 }
 
 /* THE WALK'S CURSOR. An element's attributes are a list, so the i-th is i
- * steps from the first; a walk over them all (an iteration, Object.keys,
- * for..in) asks for each in turn, and would cost n² steps in one call. So
- * the binding remembers where the last walk stopped: the element, the
- * attribute and its position, good only while the element's list is the
- * one it walked (libhtml's version has not moved, and the list starts
- * where it did; a parser's late attribute goes on its end). Nothing is
- * trusted across page code: every use asks again. */
+ * steps from the first, and its length a walk of it all; a walk over them
+ * all (an iteration, which reads `length` at every step, a countdown from
+ * `length`, Object.keys, for..in) would cost n² steps in one call. So the
+ * binding keeps the last element walked as an array of its attributes,
+ * with their count: `length` and the i-th are a step, either way round.
+ * The array is good only while the element's list is the one it copied:
+ * the same element, libhtml's version unmoved, the list starting where it
+ * did and its last attribute still the last (a parser's late attribute on
+ * html or body goes on the end without moving the version). Nothing is
+ * trusted across page code: every use asks again, and the array is made
+ * again when the answer is no. It is charged to the binding's budget; with
+ * no room for it, the list is walked as it is. */
 static bool cursor_good(const os64_dom_t *dom, const os64_html_node_t *element)
 {
-    return dom->attr_cursor.element == element && dom->attr_cursor.head == element->attrs &&
-           dom->attr_cursor.version == os64_html_version(dom->document);
+    const struct DAttrCursor *c = &dom->attr_cursor;
+    return c->element == element && c->head == element->attrs &&
+           c->version == os64_html_version(dom->document) &&
+           (c->count == 0 || c->list[c->count - 1]->next == NULL);
 }
 
-static void cursor_set(os64_dom_t *dom, const os64_html_node_t *element, const os64_html_attr_t *at,
-                       uint32_t index)
+/* The cursor made for `element`, or false when there is no room for it. */
+static bool cursor_for(os64_dom_t *dom, const os64_html_node_t *element)
 {
-    dom->attr_cursor.element = element;
-    dom->attr_cursor.head = element->attrs;
-    dom->attr_cursor.version = os64_html_version(dom->document);
-    dom->attr_cursor.at = at;
-    dom->attr_cursor.index = index;
-}
-
-/* The index-th attribute, from the cursor when it is at or before it. */
-static const os64_html_attr_t *attr_at(os64_dom_t *dom, const os64_html_node_t *element, uint32_t index)
-{
-    const os64_html_attr_t *a = element->attrs;
-    uint32_t at = 0;
-    if (cursor_good(dom, element) && dom->attr_cursor.index <= index) {
-        a = dom->attr_cursor.at;
-        at = dom->attr_cursor.index;
-    }
-    while (a != NULL && at != index) {
-        a = a->next;
-        at++;
+    if (cursor_good(dom, element)) return true;
+    struct DAttrCursor *c = &dom->attr_cursor;
+    c->element = NULL;
+    size_t count = 0;
+    for (const os64_html_attr_t *a = element->attrs; a != NULL && count < UINT32_MAX; a = a->next) {
+        count++;
         s_steps++;
     }
-    if (a != NULL) cursor_set(dom, element, a, at);
+    if (count > c->capacity) {
+        size_t capacity = c->capacity * 2 > count ? c->capacity * 2 : count < 16 ? 16 : count;
+        const os64_html_attr_t **list = capacity <= SIZE_MAX / sizeof(*list) ?
+            d_alloc(dom, capacity * sizeof(*list)) : NULL;
+        if (list == NULL) return false;
+        d_free(dom, c->list);
+        c->list = list;
+        c->capacity = capacity;
+    }
+    size_t i = 0;
+    for (const os64_html_attr_t *a = element->attrs; i < count; a = a->next) c->list[i++] = a;
+    c->count = (uint32_t)count;
+    c->found = 0;
+    c->element = element;
+    c->head = element->attrs;
+    c->version = os64_html_version(dom->document);
+    return true;
+}
+
+/* The index-th attribute. */
+static const os64_html_attr_t *attr_at(os64_dom_t *dom, const os64_html_node_t *element, uint32_t index)
+{
+    if (cursor_for(dom, element)) return index < dom->attr_cursor.count ? dom->attr_cursor.list[index] : NULL;
+    const os64_html_attr_t *a = element->attrs;
+    for (; a != NULL && index != 0; index--, s_steps++) a = a->next;
     return a;
 }
 
-static uint32_t attr_count(const os64_html_node_t *element)
+static uint32_t attr_count(os64_dom_t *dom, const os64_html_node_t *element)
 {
+    if (cursor_for(dom, element)) return dom->attr_cursor.count;
     uint32_t count = 0;
-    for (const os64_html_attr_t *a = element->attrs; a != NULL && count < UINT32_MAX; a = a->next) count++;
+    for (const os64_html_attr_t *a = element->attrs; a != NULL && count < UINT32_MAX; a = a->next, s_steps++)
+        count++;
     return count;
 }
 
@@ -776,28 +797,32 @@ static bool name_listed(const os64_html_node_t *element, const char *name, size_
 }
 
 /* The attribute a listed property name names, NULL for none: looked for
- * from the cursor on, then from the first up to it, so names asked for in
- * the list's order cost a step each. */
+ * in the cursor outward from the last one found, a step after it and a
+ * step before it in turn, so names asked for in the list's order, either
+ * way round, cost a step or two each. */
 static const os64_html_attr_t *listed(os64_dom_t *dom, const os64_html_node_t *element, const char *name,
                                       size_t length)
 {
     if (!name_listed(element, name, length)) return NULL;
-    bool good = cursor_good(dom, element);
-    const os64_html_attr_t *start = good ? dom->attr_cursor.at : element->attrs;
-    uint32_t index = good ? dom->attr_cursor.index : 0;
-    for (int lap = 0; lap < 2; lap++) {
-        for (const os64_html_attr_t *a = start; a != NULL; a = a->next, index++) {
+    if (!cursor_for(dom, element)) {
+        for (const os64_html_attr_t *a = element->attrs; a != NULL; a = a->next, s_steps++)
+            if (os64_strlen(a->name) == length && os64_memcmp(a->name, name, length) == 0) return a;
+        return NULL;
+    }
+    struct DAttrCursor *c = &dom->attr_cursor;
+    if (c->count == 0) return NULL;
+    uint32_t from = c->found < c->count ? c->found : 0;
+    for (uint32_t d = 0; d <= c->count / 2; d++)
+        for (int side = 0; side < 2; side++) {
+            if (side == 1 && (d == 0 || 2 * d == c->count)) continue;
+            uint32_t i = side == 0 ? (from + d) % c->count : (from + c->count - d) % c->count;
+            const os64_html_attr_t *a = c->list[i];
             s_steps++;
-            if (lap == 1 && a == dom->attr_cursor.at) return NULL;
             if (os64_strlen(a->name) == length && os64_memcmp(a->name, name, length) == 0) {
-                cursor_set(dom, element, a, index);
+                c->found = i;
                 return a;
             }
         }
-        if (!good) return NULL;
-        start = element->attrs;
-        index = 0;
-    }
     return NULL;
 }
 
@@ -875,7 +900,7 @@ static int map_own_names(JSContext *ctx, JSPropertyEnum **table, uint32_t *lengt
     DValue *entry = map_receiver(ctx, object);
     if (entry == NULL) return -1;
     const os64_html_node_t *element = entry->target;
-    uint32_t count = attr_count(element);
+    uint32_t count = attr_count(entry->dom, element);
     if ((size_t)count * 2 > SIZE_MAX / sizeof(**table)) {
         d_error(ctx, "QuotaExceededError", "Too many attributes");
         return -1;
@@ -974,7 +999,7 @@ static JSValue map_member(JSContext *ctx, JSValueConst self, int argc, JSValueCo
     DValue *entry = map_receiver(ctx, self);
     if (entry == NULL) return JS_EXCEPTION;
     const os64_html_node_t *element = entry->target;
-    if (magic == M_LENGTH) return JS_NewUint32(ctx, attr_count(element));
+    if (magic == M_LENGTH) return JS_NewUint32(ctx, attr_count(entry->dom, element));
     if (magic == M_ITEM) {
         if (argc < 1) return JS_ThrowTypeError(ctx, "Missing index");
         uint32_t index;
@@ -1079,6 +1104,9 @@ void d_attr_table_free(os64_dom_t *dom)
 {
     d_free(dom, dom->attr_table);
     dom->attr_table = NULL;
+    d_free(dom, dom->attr_cursor.list);
+    dom->attr_cursor.list = NULL;
+    dom->attr_cursor.element = NULL;
     dom->attr_capacity = dom->attr_attached = 0;
 }
 

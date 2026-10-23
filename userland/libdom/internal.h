@@ -139,17 +139,19 @@ struct os64_dom {
     JSClassID anchor_class, node_class, collection_class, event_class, style_class, token_class, map_class;
     /* Attr and NamedNodeMap (attr.c), and the map's prototype. The
      * attached Attrs, found by element and name (a table of chains that
-     * doubles as it fills), and where the last walk of an element's
-     * attribute list stopped, good only while the list is as it was. */
+     * doubles as it fills), and the last element walked as an array of
+     * its attributes, good only while its list is as it was. */
     JSClassID attr_class, named_map_class;
     DValue *named_map_prototype;
     struct DAttr **attr_table;
     size_t attr_capacity, attr_attached;
-    struct {
+    struct DAttrCursor {
         const os64_html_node_t *element;
-        const os64_html_attr_t *head, *at;
+        const os64_html_attr_t *head;
+        const os64_html_attr_t **list;
+        size_t capacity;
         uint64_t version;
-        uint32_t index;
+        uint32_t count, found;
     } attr_cursor;
     DValue *values, *anchor, *index_guard, *window, *location, *history, *function_ctor;
     DValue *invoke, *navigator, *style_prototype, *static_list;
@@ -530,7 +532,7 @@ int d_attr_classic(os64_dom_t *dom, JSContext *ctx);
 /* The NamedNodeMap interface object (the interfaces row's). */
 JSValue d_attr_map_interface(os64_dom_t *dom, JSContext *ctx);
 /* An Attr entry's record freed, after the engine (os64_dom_free), and the
- * table of attached ones. */
+ * table of attached ones with the walk's cursor. */
 void d_attr_free(os64_dom_t *dom, DValue *entry);
 void d_attr_table_free(os64_dom_t *dom);
 /* The attribute walks' steps so far (attr.c's s_steps), for the DOM host. */

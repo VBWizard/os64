@@ -325,9 +325,11 @@ static void attributes_map_cases(void)
         "NamedNodeMap: the walk's cursor never answers a list that moved");
     fixture_free(&f);
 
-    /* A walk over all of an element's n attributes, in one call, takes a
-     * number of steps linear in n (attr.c's cursor and table), however it
-     * walks: n² would be a million here. */
+    /* Each of these walks over all of an element's n attributes in one
+     * call, forwards or back, reading `length` once or at every step, by
+     * index, by name or through the engine's own enumeration, and each
+     * takes a number of steps linear in n (attr.c's cursor and table): n²
+     * would be a million here. The countdown is jQuery 1.x's .data(). */
     f = fixture_new(NULL);
     if (!fixture_ready(&f)) return;
     dom_script(&f, "globalThis.w=document.createElement('div');for(var i=0;i<1000;i++)w.setAttribute('a'+i,i);"
@@ -336,7 +338,8 @@ static void attributes_map_cases(void)
         "Array.from(wm).length===1000||fail()", "[...wm].length===1000||fail()",
         "Object.keys(wm).length===1000||fail()", "Object.getOwnPropertyNames(wm).forEach(k=>wm[k])",
         "for(var k in wm);", "for(var i=0;i<wm.length;i++)wm.item(i)",
-        "for(var i=0;i<1000;i++)wm['a'+i]",
+        "for(var i=0;i<1000;i++)wm['a'+i]", "for(var i=0;i<wm.length;i++)wm[i]",
+        "var i=wm.length;while(i--)wm[i].name", "for(var i=999;i>=0;i--)wm['a'+i]",
     };
     for (size_t i = 0; i < sizeof(kWalks) / sizeof(kWalks[0]); i++) {
         uint64_t before = d_attr_steps();
@@ -345,6 +348,7 @@ static void attributes_map_cases(void)
         char line[160];
         snprintf(line, sizeof(line), "walks: %s takes %llu steps, linear in 1000", kWalks[i],
                  (unsigned long long)steps);
+        printf("walks: %s: %llu steps\n", kWalks[i], (unsigned long long)steps);
         check(steps <= 10 * 1000, line);
     }
     fixture_free(&f);

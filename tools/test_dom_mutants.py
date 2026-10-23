@@ -110,7 +110,7 @@ mutants=[
  ('attr-prefix-only-in-namespace','attr','const char *colon = ns != NULL ? os64_strchr(name, \':\') : NULL;','const char *colon = ((void)ns, os64_strchr(name, \':\'));'),
  ('attr-names-unenumerable','attr','.flags = JS_PROP_CONFIGURABLE | (numeric ? JS_PROP_ENUMERABLE : 0),','.flags = JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE,'),
  ('attr-uppercase-unlisted','attr','for (size_t i = 0; folds(element) && i < length; i++)','for (size_t i = 0; false && i < length; i++)'),
- ('attr-cursor-checked','attr','    return dom->attr_cursor.element == element && dom->attr_cursor.head == element->attrs &&\n           dom->attr_cursor.version == os64_html_version(dom->document);','    return dom->attr_cursor.element == element;'),
+ ('attr-cursor-checked','attr','    return c->element == element && c->head == element->attrs &&','    return c->element == element; return c->head == element->attrs &&'),
  ('attr-names-behind-prototype','attr','    int shown = visible(ctx, object, atom);\n    *found =','    int shown = 1;\n    *found ='),
  ('attr-looked-up-again','attr','    int shown = visible(ctx, object, atom);\n    *found = shown > 0 ? listed(dom, element, text, length) : NULL;','    *found = listed(dom, element, text, length);\n    int shown = visible(ctx, object, atom);\n    if (shown <= 0) *found = NULL;'),
  ('attr-index-read-only','attr','return JS_DefineProperty(ctx, refused ? entry->dom->index_guard->value : object, atom,','return JS_DefineProperty(ctx, object, atom,'),
