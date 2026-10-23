@@ -366,6 +366,19 @@ static void mime(void)
                ok && strcmp(e, kExtract[i].essence) == 0 && strcmp(c, kExtract[i].charset) == 0, kExtract[i].in);
     }
     expect("mime: nothing to extract", !way_mime_extract("bogus, */*", 10, e, sizeof(e), c, sizeof(c)), NULL);
+    // The same, serialized whole: the chosen part's parameters kept, a
+    // carried charset added (quoted when it is not a token).
+    static const struct { const char *in, *out; } kExtracted[] = {
+        {"text/plain;a=b, bogus", "text/plain;a=b"},
+        {"text/html;charset=gbk;a=b, text/html;x=y", "text/html;x=y;charset=gbk"},
+        {"multipart/form-data; boundary=q, bogus", "multipart/form-data;boundary=q"},
+        {"text/html;charset=\"a b\", text/html", "text/html;charset=\"a b\""},
+    };
+    for (size_t i = 0; i < sizeof(kExtracted) / sizeof(kExtracted[0]); i++) {
+        char got[WAY_MIME_SERIALIZED_MAX];
+        bool ok = way_mime_extract_serialized(kExtracted[i].in, strlen(kExtracted[i].in), got, sizeof(got));
+        expect("mime: extracted and serialized", ok && strcmp(got, kExtracted[i].out) == 0, ok ? got : kExtracted[i].in);
+    }
     // Serialized (MIME Sniffing § 4.6): every parameter that parses, the
     // first of each name, lowercased, a value quoted unless it is a token.
     static const struct { const char *in, *out; } kSerial[] = {

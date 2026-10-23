@@ -138,6 +138,11 @@ bool way_mime_parse(const char *value, size_t len, char *essence, size_t ecap, c
 // result's essence and charset ("" for none, as way_mime_parse gives it).
 // False when no part is a MIME type.
 bool way_mime_extract(const char *value, size_t len, char *essence, size_t ecap, char *charset, size_t ccap);
+// The same algorithm's MIME type serialized whole (way_mime_serialize's
+// rules), every parameter of the part it chose kept, a carried charset
+// added: what blob() types a Blob and where formData() finds a boundary.
+// False when no part is a MIME type or the result does not fit.
+bool way_mime_extract_serialized(const char *value, size_t len, char *out, size_t cap);
 
 // `value` parsed as a MIME type and serialized (MIME Sniffing § 4.6): the
 // essence, then every parameter that parses, the first of each name, its

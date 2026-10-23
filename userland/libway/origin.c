@@ -775,7 +775,12 @@ bool way_mime_parse(const char *value, size_t len, char *essence, size_t ecap, c
     return mime_walk(value, len, essence, ecap, charset_param, &w);
 }
 
-bool way_mime_extract(const char *value, size_t len, char *essence, size_t ecap, char *charset, size_t ccap)
+// The walk both extractors share: the essence and charset the algorithm
+// ends with, and the part it chose (`*part`, borrowed from `value`), with
+// whether that part named its own charset (else the charset is carried
+// from the first part of its essence).
+static bool mime_extract(const char *value, size_t len, char *essence, size_t ecap, char *charset, size_t ccap,
+                         const char **part, size_t *part_len, bool *own_charset)
 {
     char e[WAY_MIME_ESSENCE_MAX], c[WAY_MIME_CHARSET_MAX], remembered[WAY_MIME_CHARSET_MAX] = "";
     bool found = false;
@@ -796,12 +801,56 @@ bool way_mime_extract(const char *value, size_t len, char *essence, size_t ecap,
             os64_strcopy(remembered, sizeof(remembered), c);
         }
         found = true;
+        *part = v;
+        *part_len = vlen;
+        *own_charset = c[0] != '\0';
         // The type's own charset, else the one its essence's first type
         // carried ("set mimeType's parameters[charset] to charset").
         if (charset != NULL)
             os64_strcopy(charset, ccap, c[0] != '\0' ? c : remembered);
     }
     return found;
+}
+
+bool way_mime_extract(const char *value, size_t len, char *essence, size_t ecap, char *charset, size_t ccap)
+{
+    const char *part;
+    size_t part_len;
+    bool own;
+    return mime_extract(value, len, essence, ecap, charset, ccap, &part, &part_len, &own);
+}
+
+bool way_mime_extract_serialized(const char *value, size_t len, char *out, size_t cap)
+{
+    char essence[WAY_MIME_ESSENCE_MAX], charset[WAY_MIME_CHARSET_MAX];
+    const char *part;
+    size_t part_len;
+    bool own;
+    if (!mime_extract(value, len, essence, sizeof(essence), charset, sizeof(charset), &part, &part_len, &own))
+        return false;
+    if (own || charset[0] == '\0')
+        return way_mime_serialize(part, part_len, out, cap);
+    // A carried charset is a parameter the chosen part did not name: it
+    // is given one, quoted with its quotes and backslashes escaped, and the
+    // whole is serialized as one type.
+    static const char kName[] = ";charset=\"";
+    char with[WAY_MIME_SERIALIZE_IN_MAX + 1];
+    size_t clen = os64_strlen(charset);
+    if (part_len + (sizeof(kName) - 1) + 2 * clen + 2 > sizeof(with))
+        return false;   // past what the serializer takes, as a longer value is
+    size_t n = 0;
+    for (size_t i = 0; i < part_len; i++)
+        with[n++] = part[i];
+    for (size_t i = 0; kName[i] != '\0'; i++)
+        with[n++] = kName[i];
+    for (size_t i = 0; i < clen; i++) {
+        if (charset[i] == '"' || charset[i] == '\\')
+            with[n++] = '\\';
+        with[n++] = charset[i];
+    }
+    with[n++] = '"';
+    with[n] = '\0';
+    return way_mime_serialize(with, n, out, cap);
 }
 
 // The serializer's walk: each parameter whose (lowercased) name is not

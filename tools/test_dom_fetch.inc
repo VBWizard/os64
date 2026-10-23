@@ -381,11 +381,19 @@ static void dom_fetch_object_cases(void)
         "new Response('a=1&b=2',{headers:{'content-type':'application/x-www-form-urlencoded'}}).formData()"
         ".then(f=>log.push('form:'+f.get('b')));"
         "new Response('x').formData().catch(e=>log.push('form-refused:'+e.name));"
-        "new Response('{').json().catch(e=>log.push('json-bad:'+e.name));",
+        "new Response('{').json().catch(e=>log.push('json-bad:'+e.name));"
+        /* The type is "extract a MIME type"'s: a valid line then an
+         * invalid one is the valid one's, and a multipart type then an
+         * invalid line still finds its boundary. */
+        "new Response('x',{headers:[['content-type','text/plain;a=b'],['content-type','bogus']]}).blob()"
+        ".then(b=>log.push('last-valid:'+b.type));"
+        "new Response('--q\\r\\nContent-Disposition: form-data; name=\"k\"\\r\\n\\r\\nv\\r\\n--q--\\r\\n',"
+        "{headers:[['content-type','multipart/form-data; boundary=q'],['content-type','bogus']]}).formData()"
+        ".then(g=>log.push('multipart:'+g.get('k')));",
         "response: the constructor, error, redirect, json and every body reader");
     dom_script(&f, FETCH_ASSERT
-        "var want='json:1,text:{\"b\":[1]},bytes:hi,u8:true3,blob:text/weird; charset=x3,form:2,"
-        "form-refused:TypeError,json-bad:SyntaxError';assert(log.join()===want,log.join());",
+        "var want='json:1,text:{\"b\":[1]},bytes:hi,u8:true3,blob:text/weird;charset=x3,form:2,"
+        "form-refused:TypeError,json-bad:SyntaxError,last-valid:text/plain;a=b,multipart:v';assert(log.join()===want,log.join());",
         "response: bodies read");
     /* The stream a body is: one chunk, then done; a reader locks it. */
     dom_script(&f, FETCH_ASSERT

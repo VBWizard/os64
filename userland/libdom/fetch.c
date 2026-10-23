@@ -1139,19 +1139,23 @@ int d_body_extract(os64_dom_t *dom, JSContext *ctx, JSValueConst value, DBytes *
 }
 
 /* The MIME type a body's headers give it, for blob() and formData()
- * (engine memory, "" for none): the last Content-Type line as written,
- * when it is a MIME type at all. A multipart body's boundary is one of its
- * parameters, and may hold a comma, so the line is not taken from the
- * combined value; blob() lowercases it, as a Blob's type is. */
+ * (engine memory, "" for none): Fetch's "extract a MIME type" over the
+ * Content-Type lines combined, serialized (libway's): the last part that
+ * parses, a quoted parameter's commas kept as its own, so a valid type
+ * followed by an invalid line is still the type, and a multipart body's
+ * boundary arrives as a parameter. blob() lowercases it, as a Blob's type
+ * is. */
 static char *body_type(JSContext *ctx, JSValueConst headers)
 {
     const DHeaders *h = headers_state(headers);
-    const DHeader *line = NULL;
-    for (size_t i = 0; h != NULL && i < h->count; i++)
-        if (d_same_nocase(h->list[i].name, h->list[i].name_length, "content-type", 12)) line = &h->list[i];
-    char essence[WAY_MIME_ESSENCE_MAX];
-    bool type = line != NULL && way_mime_parse(line->value, line->value_length, essence, sizeof(essence), NULL, 0);
-    return engine_dup(ctx, type ? line->value : "", type ? line->value_length : 0);
+    bool no_memory = false;
+    size_t length = 0;
+    char *joined = h != NULL ? list_get(ctx, h, "content-type", 12, &length, &no_memory) : NULL;
+    if (no_memory) return NULL;
+    char type[WAY_MIME_SERIALIZED_MAX];
+    bool found = joined != NULL && way_mime_extract_serialized(joined, length, type, sizeof(type));
+    js_free(ctx, joined);
+    return engine_dup(ctx, found ? type : "", found ? os64_strlen(type) : 0);
 }
 
 /* WebIDL's JSON.parse, as the engine's own. */
