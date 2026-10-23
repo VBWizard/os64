@@ -317,7 +317,13 @@ static void compile_failure_sweep(const char *name, const char *source)
  *   an emit failure get_lvalue named "invalid assignment left-hand side".
  * - eval_closure: a direct eval in strict code, whose compiled function
  *   reaches the eval's closure and a global through closure-variable adds.
- * Neither has a jump, a with or a sloppy direct eval: each of those is
+ * - args_arrow, name_arrow: an arrow reading its enclosing function's
+ *   `arguments` or name, whose failed add upstream captured as a wild
+ *   argument slot (a SEGV).
+ * - args_local, name_local: a function reading its own `arguments` or
+ *   name, whose failed add upstream looked up as a global (a
+ *   ReferenceError, or the wrong answer).
+ * None has a jump, a with or a sloppy direct eval: each of those is
  * compiled through a label, and a label reaches resolve_labels, whose
  * output-buffer failure still crashes (DEBTS.md). */
 static void compile_failure_cases(void)
@@ -329,6 +335,10 @@ static void compile_failure_cases(void)
         "return inner(1)+inner(2)+inner(3)+total})(1)");
     compile_failure_sweep("eval_closure",
         "(function(){'use strict';var v=41;return eval('(function(){return v+1})')()})()");
+    compile_failure_sweep("args_arrow", "(function f(){return (()=>arguments.length)()})(1,2)");
+    compile_failure_sweep("name_arrow", "(function h(){return (()=>typeof h)().length})()");
+    compile_failure_sweep("args_local", "(function f(){return arguments.length})(1,2)");
+    compile_failure_sweep("name_local", "(function g(){return (typeof g).length})()");
 }
 
 /* Sweeps that reach a parser out-of-memory path DEBTS.md still books, so
