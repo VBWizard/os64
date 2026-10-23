@@ -217,6 +217,7 @@ static void attributes_node_cases(void)
         "throws('TypeError',()=>a.contains({}));"
         "var p=document.createElement('p');"
         "throws('HierarchyRequestError',()=>a.appendChild(p));throws('HierarchyRequestError',()=>a.insertBefore(p,null));"
+        "throws('HierarchyRequestError',()=>a.insertBefore(p,undefined));assert(a.contains(undefined)===false,'contains(undefined)');"
         "throws('HierarchyRequestError',()=>a.replaceChild(p,p));throws('NotFoundError',()=>a.removeChild(p));"
         "throws('HierarchyRequestError',()=>a.appendChild(document.createAttribute('x')));"
         "throws('TypeError',()=>a.appendChild(5));throws('TypeError',()=>a.insertBefore(p,5));"

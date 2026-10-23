@@ -357,10 +357,11 @@ static JSValue attr_value_set(os64_dom_t *dom, JSContext *ctx, DAttr *rec, DStri
 }
 
 /* A value a Node member takes as a node: a tree node of this document or an
- * Attr, or (`nullable`) null. 0, or -1 with the TypeError thrown. */
+ * Attr, or (`nullable`) null or undefined, which WebIDL converts to null
+ * for a `Node?`. 0, or -1 with the TypeError thrown. */
 static int node_argument(os64_dom_t *dom, JSContext *ctx, JSValueConst value, bool nullable)
 {
-    if (d_is_attr(dom, value) || (nullable && JS_IsNull(value))) return 0;
+    if (d_is_attr(dom, value) || (nullable && (JS_IsNull(value) || JS_IsUndefined(value)))) return 0;
     return d_node(dom, ctx, value) != NULL ? 0 : -1;
 }
 
@@ -467,7 +468,7 @@ static JSValue attr_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
         return attr_clone(dom, ctx, rec);
     }
     case A_CONTAINS:
-        if (JS_IsNull(arg)) return JS_FALSE;
+        if (JS_IsNull(arg) || JS_IsUndefined(arg)) return JS_FALSE;
         if (node_argument(dom, ctx, arg, false) < 0) return JS_EXCEPTION;
         return JS_NewBool(ctx, JS_VALUE_GET_PTR(arg) == JS_VALUE_GET_PTR(self));
     default: return JS_ThrowTypeError(ctx, "Unknown Attr member");
