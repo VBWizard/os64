@@ -215,7 +215,7 @@ static bool loopback_literal(const char *host)
 
 // Secure Contexts § 3.1, for a URL: https, wss and data: are; an http URL
 // is when its host is loopback.
-static bool trustworthy(const char *url)
+bool way_url_trustworthy(const char *url)
 {
     char scheme[OS64_URL_SCHEME_MAX];
     if (url == NULL || !os64_url_scheme_of(url, scheme, sizeof(scheme)))
@@ -229,7 +229,7 @@ static bool trustworthy(const char *url)
 
 bool way_mixed_blocked(const way_origin_t *page, const char *url)
 {
-    return way_origin_prohibits_mixed(page) && !trustworthy(url);
+    return way_origin_prohibits_mixed(page) && !way_url_trustworthy(url);
 }
 
 bool way_port_bad(const char *url)
@@ -1103,7 +1103,7 @@ bool way_referrer_for(const way_request_t *r, const char *referrer, const char *
     way_origin_of(referrer, 0, &from);
     way_origin_of(url, 0, &to);
     bool same = way_origin_same(&from, &to);
-    bool downgrade = trustworthy(referrer) && !trustworthy(url);
+    bool downgrade = way_url_trustworthy(referrer) && !way_url_trustworthy(url);
     bool whole;
     switch (r->policy) {
     case WAY_POLICY_ORIGIN: whole = false; break;

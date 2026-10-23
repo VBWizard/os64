@@ -60,10 +60,14 @@ bool way_origin_serialize(const way_origin_t *o, char *out, size_t cap);
 // Whether a page of this origin may not fetch plain http (Mixed Content
 // § 4.3 "prohibits mixed security contexts"): its origin is https.
 bool way_origin_prohibits_mixed(const way_origin_t *page);
+// Whether `url` is potentially trustworthy (Secure Contexts § 3.1, for a
+// URL): https, wss, data:, or an http host in 127.0.0.0/8 written as four
+// decimal parts. The NAME localhost is not, since os64 cannot promise it
+// resolves to loopback. The browser's one judgement of it: whatever asks
+// whether an address is trustworthy asks here, and keeps no copy.
+bool way_url_trustworthy(const char *url);
 // Whether a fetch of `url` from `page` is blocked as mixed content: the page
-// prohibits it and the URL is not potentially trustworthy (https, data:, or
-// an http host in 127.0.0.0/8; the NAME localhost is not, since os64 cannot
-// promise it resolves to loopback).
+// prohibits it and the URL is not potentially trustworthy.
 bool way_mixed_blocked(const way_origin_t *page, const char *url);
 // Fetch § 2.9: an http(s) URL on a port the standard blocks, or one whose
 // port cannot be read at all.
