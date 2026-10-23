@@ -307,6 +307,9 @@ LIBWAY_PROGRAMS := wend yonder
 # The page's garb (libgarb): its probe, and whoever parses a page's sheets
 # and cascades them for libflow.
 LIBGARB_PROGRAMS := garbdump flowdump yonder
+# libtls's own probes, and yonder, which calls the entropy door
+# (os64_tls_entropy) itself for crypto.getRandomValues.
+LIBTLS_PROGRAMS := tlslibtest tlstransportprobe yonder
 
 # pngtest directly checks the codec; gview and desktop use libimage.
 # libpng carries its own DT_NEEDED edge on
@@ -520,7 +523,7 @@ APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),htmltest wend pagetest flowdump yonder
                        $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO)) \
                        $(if $(filter $(1),$(LIBPNG_PROGRAMS)),$(LIBPNG_SO)) \
                        $(if $(filter $(1),$(LIBFETCH_PROGRAMS)),$(LIBFETCH_SO)) \
-                       $(if $(filter $(1),tlslibtest tlstransportprobe),$(LIBTLS_SO)) \
+                       $(if $(filter $(1),$(LIBTLS_PROGRAMS)),$(LIBTLS_SO)) \
                        $(if $(filter $(1),bearssltest tlstrusttest tlsinputtest sshd sshtest),$(BEARSSL_ARCHIVE))
 APP_BASE_STAMP_$(1) := $(OBJ)/$(2)/$(1)/.base-$(APP_BASE_$(1))
 $$(APP_BASE_STAMP_$(1)):
