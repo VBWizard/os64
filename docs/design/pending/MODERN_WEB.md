@@ -2040,9 +2040,9 @@ refusal for the last.
 
 Host, at the head, all 0 failed: origin.c's 151 cases (ORIGIN.md's
 list, one each) with their step bounds, 432 checks; libfetch's host 907
-checks; the job's host (`test_yonder_fetch_job_host.sh`, 315 checks,
+checks; the job's host (`test_yonder_fetch_job_host.sh`, 319 checks,
 every allocation failed in turn and each one failed alone); the DOM
-host 83,001 checks with 12,734 binding allocation sweeps (Slice 0d's
+host 83,004 checks with 12,734 binding allocation sweeps (Slice 0d's
 included), `tools/test_dom_fetch.inc` holding the rows; the scripted-page
 host with `tools/test_yonder_requests.inc` end to end. Mutants by hand,
 one per finding fixed after the cold reads and Codex's rounds (each
@@ -2095,7 +2095,11 @@ kept. Its fifth found three: Blob.slice()'s offsets converted as
 [Clamp] long long before their sign is judged, an Accept the page set
 empty sent empty (libfetch sends an empty Accept for one), and the
 author charset rewrite made through libway's walk, so a quoted ';' is
-the value's.
+the value's. Its sixth found three: each preflight branch cleared under
+the redirect-taint it was made with (a later hop's taint had let an
+earlier grant survive a network error), a body with no bytes a stream
+closed at its creation, and a Request made from a Request taking the
+input's body with its stream locked.
 
 **Booked** (DEBTS.md § A script's requests, unless named): the same-site
 stand-in; SameSite not enforced for script requests; the HTTP cache
