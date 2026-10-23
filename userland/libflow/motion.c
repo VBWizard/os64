@@ -1680,12 +1680,6 @@ static bool shadows_same(const flow_shadow_t *a, int32_t na, const flow_shadow_t
     return true;
 }
 
-// Whether styles `a` and `b` give property `p` one value — every
-// field it sets equal, and a list item by item, since copy_prop moves a
-// list by its pointer. Two values called different that are not cost a
-// layout for nothing; two called the same that are not would miss one, so
-// what is not compared field by field is compared byte by byte, where
-// padding can only tell two equal values apart.
 // Two family lists by what they say, not where it is kept: two keyframes'
 // declarations of one list are two slices of the sheet.
 static bool families_same(const flow_family_list_t *a, const flow_family_list_t *b)
@@ -1703,6 +1697,12 @@ static bool families_same(const flow_family_list_t *a, const flow_family_list_t 
     return true;
 }
 
+// Whether styles `a` and `b` give property `p` one value — every
+// field it sets equal, and a list item by item, since copy_prop moves a
+// list by its pointer. Two values called different that are not cost a
+// layout for nothing; two called the same that are not would miss one, so
+// what is not compared field by field is compared byte by byte, where
+// padding can only tell two equal values apart.
 static bool same_value(garb_prop_t p, const flow_style_t *a, const flow_style_t *b)
 {
     switch (p) {
