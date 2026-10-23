@@ -516,10 +516,15 @@ MediaQueryList whose answer moved, until it answers false.
 **matchMedia** keeps the query as written and serialises it once, in one
 pass by libgarb (`garb_media_text_serialized`, into the binding's own
 storage), for `media`; `matches` is judged at every read, against the
-view. A list libgarb could not read whole (nested past its depth, or no
-memory) is `not all`. A list nothing holds is freed by the next matchMedia; one listened
-to (`addEventListener`, `addListener`, `onchange`) is held from then until
-the page goes.
+view (its size, the person's scheme and motion), the screen (the device-*
+features and `resolution`, from `options.screen` and the zoom, as `screen`
+and devicePixelRatio report them) and the document's scripting
+(`options.scripting`). A list libgarb could not read whole (nested past
+its depth, or no memory) is `not all`. A list nothing holds is freed by
+the next matchMedia or view step; one listened to (`addEventListener`,
+`addListener`, `onchange`) is held while a listener or a handler is left
+on it, and let go at the next matchMedia or view step after the last one
+goes (§ Events, Where the values live).
 
 **getComputedStyle** (`os64_dom_set_computed`) answers a read-only
 declaration whose properties are libgarb's table, which is therefore the
