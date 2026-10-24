@@ -830,7 +830,8 @@ static void discard(JSContext *ctx)
 
 /* What the task left owed is settled inside it (d_task_settle), so its
  * events run under its deadline. The binding's own report, folded in, is
- * named by the task it happened in. */
+ * named by the task it happened in; the rejections the task only counted
+ * are told as it closes (d_task_close). */
 os64_js_status_t d_task_finish(os64_dom_t *dom, os64_js_outcome_t *outcome)
 {
     d_task_settle(dom, NULL, outcome);
@@ -843,6 +844,7 @@ os64_js_status_t d_task_finish(os64_dom_t *dom, os64_js_outcome_t *outcome)
             os64_strcopy(outcome->source_name, sizeof(outcome->source_name), end.source_name);
         os64_memset(&dom->report, 0, sizeof(dom->report));
     }
+    d_task_close(dom, end.source_name, outcome);
     return outcome->status;
 }
 

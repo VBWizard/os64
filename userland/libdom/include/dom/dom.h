@@ -132,9 +132,13 @@ typedef struct {
      * unhandled rejection (`message` begins "unhandled rejection: ") of a
      * task whose outcome already holds a failure, which the host records
      * as it records the outcome's, under `task`, the task's source name.
-     * Every one is told, so no rejection a page left goes unrecorded. On
-     * the owner thread, between a task's calls; it must not enter JS.
-     * NULL: only the outcome's failure is known. */
+     * The first sixteen of a task are told one by one, and the rest as
+     * one line as the task closes, `and <n> more unhandled rejections`:
+     * a page can leave hundreds of thousands in one task, and what each
+     * costs the host must not be its to size (report.c's
+     * D_REJECTIONS_TOLD). On the owner thread, between a task's calls or
+     * as it closes; it must not enter JS. NULL: only the outcome's
+     * failure is known. */
     void (*failed)(void *opaque, const char *task, const char *message);
     /* crypto.getRandomValues' and randomUUID's randomness: `length` bytes
      * (never more than 65,536) written into `out` from the host's
@@ -588,7 +592,7 @@ size_t os64_dom_registry_count(const os64_dom_t *dom);
  * rejection events, as os64_dom_script_ended says), and closes it. A
  * listener that throws is reported and the next one runs; a sticky failure
  * ends the dispatch. The outcome is the task's: its first exception or
- * unhandled rejection (each rejection after it told to options.failed), else a reported error
+ * unhandled rejection (the rejections after it told to options.failed), else a reported error
  * from a nested dispatch, else OK; a sticky status means the runtime is
  * finished with. *prevented answers whether the default action is cancelled.
  * Owner thread, between tasks. Costs no engine entry when listens() says no. */
@@ -643,7 +647,7 @@ bool os64_dom_take_report(os64_dom_t *dom, os64_js_outcome_t *outcome);
  * no event: HTML's muted errors. The failures are folded into `outcome`
  * after the script's own: a rejection no listener cancelled is an
  * UNHANDLED_REJECTION whose message begins "unhandled rejection: ", and
- * each one past the outcome's first failure is told to options.failed. No
+ * those past the outcome's first failure are told to options.failed. No
  * engine entry when nothing is owed. False for a missing argument or a
  * drained binding. */
 bool os64_dom_script_ended(os64_dom_t *dom, const char *name, const char *address, os64_js_outcome_t *outcome);

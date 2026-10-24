@@ -305,6 +305,10 @@ struct os64_dom {
     size_t pending_held;
     const void *rejection_firing;
     bool rejection_handled, reporting_error;
+    /* The rejections past the task's first failure told to the host one by
+     * one so far, and those only counted (report.c's D_REJECTIONS_TOLD). */
+    uint32_t rejections_told;
+    uint64_t rejections_untold;
 };
 typedef struct { char *data; size_t length; } DString;
 
@@ -599,6 +603,9 @@ void d_errors_fire(os64_dom_t *dom, const char *filename, os64_js_outcome_t *out
  * handler reached, until a checkpoint leaves nothing. A rejection no
  * handler cancelled is the task's failure. */
 void d_task_settle(os64_dom_t *dom, const char *filename, os64_js_outcome_t *outcome);
+/* As a task named `task` closes: the rejections it only counted, past the
+ * ones told one by one, told to the host as one line. */
+void d_task_close(os64_dom_t *dom, const char *task, os64_js_outcome_t *outcome);
 /* After a script the host ran with os64_js_run (and a string timer the
  * binding did): what it left owed, settled in a task of its own named
  * `name`, folded into `outcome`. No engine entry when nothing is owed. */

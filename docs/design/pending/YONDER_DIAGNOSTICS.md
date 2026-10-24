@@ -172,9 +172,11 @@ checkpoint, and no `unhandledrejection` listener cancelled, is a failure of
 that task (MODERN_WEB.md § P2a): `FAILED script <the script's address, or
 the event's or timer's name>: unhandled rejection: <reason>`, the reason
 said as libdom reads it without running the page's code (an Error's name
-and message, a primitive as it is). Each one the task left is a line, not
-only the first; the status line says the task's first failure, as it
-always has.
+and message, a primitive as it is). The task's first failure and sixteen
+rejections after it are a line each, and the rest one line counting them,
+`... : and <n> more unhandled rejections`; the status line says the task's
+first failure, as it always has. A record finds a line by its key, so a
+page that fails without end costs each failure a few probes.
 
 ### The page's fonts (S9a4, PILE3.md § Web fonts)
 

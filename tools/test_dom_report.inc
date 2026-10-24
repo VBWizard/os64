@@ -397,6 +397,41 @@ static void dom_report_flood_cases(void)
     fixture_free(&f);
 }
 
+/* The bound on what one task tells the host (report.c's D_REJECTIONS_TOLD):
+ * two hundred thousand rejections in one script, none heard by a listener,
+ * are taken with no script running, so the host's work for them must not
+ * be per rejection. The hook is called 17 times: sixteen lines, then one
+ * that counts the rest. */
+static size_t bound_calls;
+static char bound_last[160];
+static void bound_hook(void *opaque, const char *task, const char *message)
+{
+    (void)opaque; (void)task;
+    bound_calls++;
+    snprintf(bound_last, sizeof(bound_last), "%s", message);
+}
+static void dom_report_bound_cases(void)
+{
+    os64_dom_options_t options = report_options(true);
+    options.failed = bound_hook;
+    DomFixture f = fixture_base(0, 0, 64u << 20);
+    if (!f.runtime || !f.state) return;
+    os64_js_outcome_t outcome;
+    f.binding = os64_dom_create(f.runtime, f.document, f.state, &options, &outcome);
+    if (!fixture_ready(&f)) return;
+    bound_calls = 0;
+    check(report_script(&f, "for(let i=0;i<200000;i++)Promise.reject(i)", "flood.js", NULL, &outcome) ==
+          OS64_JS_UNHANDLED_REJECTION && !strcmp(outcome.message, "unhandled rejection: 0"),
+          "bound: two hundred thousand rejections, the first the script's failure");
+    check(bound_calls == 17 && !strcmp(bound_last, "and 199983 more unhandled rejections"),
+          "bound: sixteen are told one by one and the rest in one counted line");
+    bound_calls = 0;
+    check(report_script(&f, "Promise.reject('a');Promise.reject('b')", "after.js", NULL, &outcome) ==
+          OS64_JS_UNHANDLED_REJECTION && bound_calls == 1 && !strcmp(bound_last, "unhandled rejection: b"),
+          "bound: the next task counts afresh");
+    fixture_free(&f);
+}
+
 /* A sweep's one run: the setup, then the operation, as a script and its end
  * (`listener` false) or as a resize listener's task (true), with
  * allocation `cut` of its kind refused (0: none); how many it made. The
@@ -463,4 +498,5 @@ static void dom_report_cases(void)
     dom_report_interface_cases();
     dom_report_switch_cases();
     dom_report_flood_cases();
+    dom_report_bound_cases();
 }

@@ -101,8 +101,26 @@ static void window_rejection_case(void) {
     loop_drop();
 }
 
+/* A flood of rejections in one task costs the record seventeen lines past
+ * the task's first failure, the last counting the rest, and the record's
+ * lookups stay a few probes a line (diag.c's index). */
+static void window_rejection_flood_case(void) {
+    loop_page("<script>for(var i=0;i<1000;i++)Promise.reject(i)</script>");
+    uint64_t before=yonder_diag_steps();
+    check(loop_settle(),"window: a page that leaves a thousand rejections arrives");
+    check(window_record_has("FAILED script http://fixture.test/final#inline-1: unhandled rejection: 0 (1)") &&
+          window_record_has("FAILED script http://fixture.test/final#inline-1: unhandled rejection: 16 (1)") &&
+          strstr(window_record_text(),"unhandled rejection: 17 (1)")==NULL &&
+          window_record_has("FAILED script http://fixture.test/final#inline-1: and 983 more unhandled "
+                            "rejections (1)"),
+        "window: the first, sixteen more, and one line counting the rest");
+    check(yonder_diag_steps()-before<2000,"window: and the record found its lines in a few probes each");
+    loop_drop();
+}
+
 static void window_cases(void) {
     window_rejection_case();
+    window_rejection_flood_case();
     window_crypto_case();
     window_microtask_case();
 }

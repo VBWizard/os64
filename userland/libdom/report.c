@@ -28,8 +28,9 @@
  * THE RECORD. A rejection no unhandledrejection listener cancelled is the
  * task's failure, UNHANDLED_REJECTION with "unhandled rejection: <reason>",
  * which the host writes as a FAILED line: the first a task meets is its
- * outcome, unless the task already failed, and each after that goes to
- * options.failed. With the switch off no event is fired and every
+ * outcome, unless the task already failed, and those after it go to
+ * options.failed, sixteen one by one and the rest counted into one line
+ * (D_REJECTIONS_TOLD). With the switch off no event is fired and every
  * unhandled rejection is one. An exception's outcome is the wrapper's
  * diagnostic, whatever an error listener did with its event.
  *
@@ -42,6 +43,29 @@ struct DPending {
     struct DPending *next;
     JSValue value;
 };
+
+/* How many rejections past a task's first failure are each told to the host
+ * as a line of their own (options.failed). The rest are only counted, and
+ * told as one line when the task closes (d_task_close): a page can leave
+ * hundreds of thousands in one task with no script running while they are
+ * taken, so what each costs the host must not be what a page sizes, and
+ * sixteen lines say what kind of failure it was as well as all of them. */
+#define D_REJECTIONS_TOLD 16
+
+static bool sticky(os64_js_status_t status);
+
+void d_task_close(os64_dom_t *dom, const char *task, os64_js_outcome_t *outcome)
+{
+    bool tell = !sticky(outcome->status) && dom->options.failed != NULL;
+    if (dom->rejections_untold != 0 && tell) {
+        char line[96];
+        os64_snprintf(line, sizeof(line), "and %llu more unhandled rejections",
+                      (unsigned long long)dom->rejections_untold);
+        dom->options.failed(dom->options.host_opaque, task != NULL ? task : "", line);
+    }
+    dom->rejections_told = 0;
+    dom->rejections_untold = 0;
+}
 
 static bool sticky(os64_js_status_t status)
 {
@@ -411,7 +435,13 @@ static void unhandled(os64_dom_t *dom, JSValue promise, JSValue reason, const ch
             JS_FreeValue(ctx, event);
         }
     }
-    if (ctx != NULL && !cancelled) {
+    bool first = ctx != NULL && !cancelled && outcome->status == OS64_JS_OK;
+    bool told = ctx != NULL && !cancelled && !first && !sticky(outcome->status) && dom->options.failed != NULL;
+    if (told && dom->rejections_told == D_REJECTIONS_TOLD) {
+        dom->rejections_untold++;
+        told = false;
+    } else if (told) dom->rejections_told++;
+    if (first || told) {
         os64_js_outcome_t failure = {.status = OS64_JS_UNHANDLED_REJECTION};
         char text[OS64_JS_MESSAGE_CAP];
         d_error_text(dom, ctx, reason, text, sizeof(text));
@@ -419,9 +449,8 @@ static void unhandled(os64_dom_t *dom, JSValue promise, JSValue reason, const ch
             (size_t)os64_snprintf(failure.message, sizeof(failure.message), "unhandled rejection: %s", text) >=
             sizeof(failure.message);
         os64_strcopy(failure.source_name, sizeof(failure.source_name), task);
-        if (outcome->status == OS64_JS_OK) d_outcome_fold(outcome, &failure);
-        else if (!sticky(outcome->status) && dom->options.failed != NULL)
-            dom->options.failed(dom->options.host_opaque, task, failure.message);
+        if (first) d_outcome_fold(outcome, &failure);
+        else dom->options.failed(dom->options.host_opaque, task, failure.message);
     }
     JS_FreeValueRT(dom->engine, promise);
     JS_FreeValueRT(dom->engine, reason);

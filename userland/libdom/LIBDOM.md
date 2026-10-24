@@ -1091,8 +1091,11 @@ reason.
 **The record.** A rejection no `unhandledrejection` listener cancelled is
 the task's failure: UNHANDLED_REJECTION, `unhandled rejection: <reason>`,
 the reason read as an event's message is. The first a task meets is its
-outcome, unless the task already failed; each after that is told to the
-host through `options.failed`, so no rejection goes unrecorded. An
+outcome, unless the task already failed; those after it are told to the
+host through `options.failed`, the first sixteen one by one and the rest
+as one counted line as the task closes (`and <n> more unhandled
+rejections`), so what a page's flood costs the host is not the page's to
+size, and none goes unrecorded. An
 exception's outcome is libjs's diagnostic as before, whatever an error
 listener did with its event.
 
