@@ -879,7 +879,7 @@ static void wpt_run(const wpt_page_t *page, wpt_outcome_t *out) {
     g.scripts_on=true; g.script_ms=5000; now_ms=100; clock_step=1000;
     g.modern=!wpt_modern_off;
     wpt_navigated=false;
-    start_trip(url,NULL,NAV_GO,NULL);
+    start_trip(url,NULL,NULL,NAV_GO,NULL);
     if(pool_work.job==NULL || !g.stream.active) {
         out->unjudged=true;
         out->why="the window did not start the navigation";
