@@ -223,6 +223,10 @@ setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argume
 setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argument checks 1
 setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argument checks 2
 setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argument checks 3
+# P2a: an error thrown in a request's load listener or handler reaches
+# window.onerror. Each fails with the switch off.
+thrown-error-in-events.html	errors thrown in XMLHttpRequest's load event (using addEventListener) goes to window.onerror
+thrown-error-in-events.html	errors thrown in XMLHttpRequest's load event (using onload) goes to window.onerror
 [excluded]
 [passing]
 XMLHttpRequest-withCredentials.any.html	can also be set in OPEN state
@@ -561,6 +565,8 @@ setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argume
 setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argument checks 2
 setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argument checks 3
 status-error.htm	Unknown scheme
+thrown-error-in-events.html	errors thrown in XMLHttpRequest's load event (using addEventListener) goes to window.onerror
+thrown-error-in-events.html	errors thrown in XMLHttpRequest's load event (using onload) goes to window.onerror
 timeout-sync.htm	open() with async false when timeout is set
 timeout-sync.htm	setting timeout attribute on sync request
 xhr-timeout-longtask.any.html	Long tasks should not trigger load timeout
