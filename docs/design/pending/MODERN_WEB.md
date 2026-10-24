@@ -2303,8 +2303,8 @@ interface. Not booked, by ruling: `subtle` (ruling 1), and `close()`
 
 Built on `opus/yonder-loud-elements`, from `userland` `c8d87b53` (it needs
 none of P2a's record lines: the FAILED line is diag.c's, as every one is).
-The builder's adversarial and truth passes are done; the cold read is
-next.
+The builder's adversarial and truth passes, the cold read and the answers
+to its findings are done (**Cold read**, below).
 
 **Why.** Two things a page asked for that a person could not tell had
 failed. A canvas laid its fallback out (usually nothing) and the record
@@ -2367,14 +2367,20 @@ HTMLIFrameElement` was in 8) to their next wall: `createElementNS` in 2,
 `HTMLStyleElement` in 1, a custom element and `PerformanceObserver` in 2.
 Replayed 239, clean 21, unfinished 13 and 19 unjudged on both sides.
 
-Host, at the head, all 0 failed: the DOM host (iframe `src`, its
-interface, and both absent with the switch off); the scripted-page host
-(a frame inserted every way, both ways; the canvas line, once, with a
-script's canvas, and none with scripts off); yonder's host (the stand-in
-painted at a canvas's size, a bad attribute's default, the fallback with
-scripting off); libflow's (the sizes, the ratio, the fallback); the replay
-proof, a hand-made page of canvases and an inserted frame replayed to the
-same record; wend and libpage; `make -C userland` builds.
+Host, at the head, all 0 failed: the DOM host, 12,522 / 85,602 checks
+(iframe `src`, its interface, and both absent with the switch off); the
+scripted-page host, 7,672 (a frame inserted every way, both ways; the
+canvas line, once, with a script's canvas, none with scripts off and
+none for an svg's canvas; the stand-ins painted through the real panes:
+the page under a full-viewport canvas, the labels' text, and their cost);
+yonder's host, 1,959 (the stand-in at a canvas's size, a bad attribute's
+default, the fallback with scripting off, an inline-block's and an
+inline-flex's fallback alone); libflow's, 23,779 (the sizes, the ratio,
+the fallback, `display: contents`); the replay proof, a hand-made page of
+canvases and an inserted frame replayed to the same record, held to
+whole lines; wend and libpage; `make -C userland` builds. The corpus
+replayed again after the cold read's answers differs from the first in no
+line.
 
 **Review.** The builder's adversarial pass looked for work a page can
 size (the canvas tally is diag's existing walk of the tree; a label is laid
@@ -2389,4 +2395,28 @@ corrected YONDER_DIAGNOSTICS.md's element and FAILED lists, diag_elements'
 comment (a canvas and a frame are stand-ins, not nothing), and paint.h's
 verb, renamed for what it now draws.
 
-**Booked** (DEBTS.md § Browser layout): loud for canvas only.
+**Cold read** (a fresh Opus, on e76b1570): no crash, no out-of-bounds,
+the hostile sizes clamped, iframe `src` as IFRAME.md shapes it. Its
+findings, each answered in a commit of its own:
+
+- A canvas made inline-block (or inline-flex, -grid, -table) with
+  scripting off painted the stand-in over its fallback: the painter asked
+  the tag. libflow now says which boxes are replaced
+  (`flow_box_t.replaced`), and the painter asks that.
+- An overlay canvas hid the page under the panel. Opus ruled a canvas's
+  stand-in has no paper (above).
+- The replay case was held to words, so `(3)` was met by the MISSING
+  line; it now holds whole record lines (a list that begins with a
+  newline), and forbids a frame's FAILED line.
+- Nothing tested the real label path: the scripted-page host now paints
+  through it, reads the labels' text, and checks an svg's canvas is no
+  failure.
+- Each visible canvas laid its label out every paint: once a paint now,
+  and none where the top strip is out of view, bounded by a case.
+- `display: contents` on a replaced element showed its content; it now
+  computes to `none`, as CSS Display 3 Appendix B says.
+- `canvas.width = 800` is booked (above), and the text findings (DEBTS'
+  interface-object row, the one kill switch, `yet`) are fixed.
+
+**Booked** (DEBTS.md § Browser layout): loud for canvas only; a canvas's
+size a script sets.
