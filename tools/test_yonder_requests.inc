@@ -296,7 +296,73 @@ static void navigation_cases(void) {
     loop_drop();
 }
 
+/* A page at an address longer than its scripts' host keeps
+ * (OS64_DOM_URL_MAX) holds only its start there, and a cut address names
+ * a page that is not this one: its script fetch, its fetch() and its
+ * navigation go with no Referer at all. */
+static void request_long_address_case(void) {
+    static char address[OS64_DOM_URL_MAX+1024];
+    int n=snprintf(address,sizeof(address),"https://fixture.test/long?q=");
+    memset(address+n,'a',sizeof(address)-1-n);
+    address[sizeof(address)-1]='\0';
+    check(sizeof(((way_head_t *)0)->url)>sizeof(address),"long address: the head holds it whole");
+    fake_fetch_reset();
+    fake_answer("GET","https://fixture.test/f.json",200,"Content-Type: application/json\r\n","{}");
+    loop_asked=address; loop_final=address; loop_encrypted=true;
+    loop_page("<script>document.addEventListener('DOMContentLoaded',()=>{"
+        "var s=document.createElement('script');s.src='/s.js';document.head.appendChild(s);"
+        "fetch('/f.json')});setTimeout(()=>{location.href='/next'},10)</script>");
+    loop_asked=loop_final=NULL; loop_encrypted=false;
+    check(loop_settle() && os64_streq(g.page.way.url,address) && nrequest_jobs==1,
+          "long address: the page arrives, and its fetch is out");
+    bool script=false;
+    for(int i=0;i<nscript_jobs;i++) {
+        const yonder_script_job_t *job=script_jobs[i].job;
+        if(os64_streq(job->url,"https://fixture.test/s.js")) script=job->hooks.referrer[0]=='\0';
+    }
+    check(script,"long address: its script's fetch names no Referer");
+    char origin[WAY_ORIGIN_TEXT_MAX];
+    way_origin_serialize(&request_jobs[0].job->request.origin,origin,sizeof(origin));
+    check(request_jobs[0].job->referrer[0]=='\0' && os64_streq(origin,"https://fixture.test"),
+          "long address: its fetch() names no Referer, and is still the page's own origin");
+    check(request_land("/f.json") && loop_settle(),"long address: the fetch is answered");
+    char referer[64]="x";
+    fake_field(request_sent("/f.json"),"Referer",referer,sizeof(referer));
+    check(referer[0]=='\0',"long address: no Referer reaches the wire");
+    now_ms+=20;
+    check(script_turn() && nav_sent("https://fixture.test/next",""),
+          "long address: its navigation names no Referer");
+    request_drop();
+    /* The page's address moves the same way: a binding refuses to push an
+     * address past its own limit, so a page gets back to its long address
+     * by traversing to the entry it arrived at, and away from it by
+     * traversing to the one it pushed. Each move is kept or cut as the
+     * arrival was: the long entry names nothing, the short one names it. */
+    loop_asked=address; loop_final=address; loop_encrypted=true;
+    loop_page("<script>onload=()=>history.pushState(null,'','/short');"
+        "onpopstate=()=>{var s=document.createElement('script');"
+        "s.src=location.pathname=='/short'?'/whole.js':'/cut.js';document.head.appendChild(s)}</script>");
+    loop_asked=loop_final=NULL; loop_encrypted=false;
+    check(loop_settle() && view_turns() && os64_streq(g.page.way.url,"https://fixture.test/short"),
+          "long address: the page pushes a short address");
+    session_go(-1);
+    check(loop_settle() && view_turns() && os64_streq(g.page.way.url,address),"long address: Back to the long one");
+    session_go(1);
+    check(loop_settle() && view_turns() && os64_streq(g.page.way.url,"https://fixture.test/short"),
+          "long address: Forward to the short one");
+    bool cut=false, whole=false;
+    for(int i=0;i<nscript_jobs;i++) {
+        const yonder_script_job_t *job=script_jobs[i].job;
+        if(os64_streq(job->url,"https://fixture.test/cut.js")) cut=job->hooks.referrer[0]=='\0';
+        if(os64_streq(job->url,"https://fixture.test/whole.js"))
+            whole=os64_streq(job->hooks.referrer,"https://fixture.test/short");
+    }
+    check(cut && whole,"long address: a move to the long address names nothing, and back from it names the page");
+    request_drop();
+}
+
 static void request_cases(void) {
+    request_long_address_case();
     navigation_cases();
     request_redirected_page_case();
     request_same_origin_case();

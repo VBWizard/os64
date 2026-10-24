@@ -7342,7 +7342,10 @@ static yonder_scripts_t *scripts_for(uint64_t serial)
 }
 
 // A `src` script's fetch, its Referer the address its page's scripts run
-// at; 0, not begun, for a page that is gone.
+// at (none when that address was too long to keep whole:
+// yonder_scripts_referrer). 0, not begun, for a page that is gone, an
+// address that is not http, https or file, no pool, no memory for the job,
+// or a pool that will not take it.
 static uint64_t script_fetch(void *opaque, uint64_t serial, uint32_t token, const char *url,
                              const char *fallback)
 {
@@ -7360,7 +7363,8 @@ static uint64_t script_fetch(void *opaque, uint64_t serial, uint32_t token, cons
     os64_strcopy(job->fallback, sizeof(job->fallback), fallback);
     job->hooks.jar = g.way.jar;
     job->hooks.cache = g.cache;
-    os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), yonder_scripts_url(host));
+    const char *referrer = yonder_scripts_referrer(host);
+    os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), referrer != NULL ? referrer : "");
     os64_work_t work = {yonder_script_run, yonder_script_release, job, SCRIPT_RESERVE};
     os64_work_id_t id = os64_work_submit(g.pool, &work);
     if (id == 0)
@@ -7592,27 +7596,20 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
 // sends a preflight every time one is needed.
 static way_preflight_t *s_preflight;
 
-// The page's origin for a job, from the address its scripts run at; an
-// opaque one is this page's own, named by its serial. False when no page
-// has that serial (scripts_for).
-static bool request_origin(uint64_t serial, way_origin_t *out)
-{
-    yonder_scripts_t *host = scripts_for(serial);
-    if (host == NULL)
-        return false;
-    way_origin_of(yonder_scripts_url(host), serial != 0 ? serial : 1, out);
-    return true;
-}
-
-// A job for a page's request, its bytes its own. NULL on no memory, for
-// an address longer than a data: URL may be (fetch_job.h), and for a
-// serial no page has, each of which the page sees as a network error.
+// A job for a page's request, its bytes its own, from the page its serial
+// names (scripts_for). NULL on no memory, for an address longer than a
+// data: URL may be (fetch_job.h), and for a serial no page has, each of
+// which the page sees as a network error.
 static yonder_fetch_job_t *request_job(uint64_t serial, uint32_t token, const os64_dom_request_t *q)
 {
     size_t url_len = os64_strlen(q->url);
-    way_origin_t origin;
-    if (url_len > YONDER_FETCH_DATA_URL_MAX || !request_origin(serial, &origin))
+    yonder_scripts_t *host = scripts_for(serial);
+    if (url_len > YONDER_FETCH_DATA_URL_MAX || host == NULL)
         return NULL;
+    // The page's origin, from the address its scripts run at; an opaque
+    // one is this page's own, named by its serial.
+    way_origin_t origin;
+    way_origin_of(yonder_scripts_url(host), serial != 0 ? serial : 1, &origin);
     yonder_fetch_job_t *job = os64_calloc(1, sizeof(*job));
     if (job == NULL)
         return NULL;
@@ -7643,8 +7640,12 @@ static yonder_fetch_job_t *request_job(uint64_t serial, uint32_t token, const os
     job->request.preflight_flag = q->preflight;
     os64_strcopy(job->request.method, sizeof(job->request.method), q->method);
     // A referrer too long to keep whole goes as none: a cut address would
-    // name a page that is not this one.
+    // name a page that is not this one. The page's own address is one when
+    // the host kept only its start (yonder_scripts_referrer), which is the
+    // address the binding names for "about:client".
     const char *referrer = q->referrer != NULL ? q->referrer : "";
+    if (yonder_scripts_referrer(host) == NULL && os64_streq(referrer, yonder_scripts_url(host)))
+        referrer = "";
     os64_strcopy(job->referrer, sizeof(job->referrer),
                  os64_strlen(referrer) < sizeof(job->referrer) ? referrer : "");
     job->jar = g.way.jar;
@@ -8012,12 +8013,13 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
             return;
         }
         // The navigation is the asking page's, wherever that page is: its
-        // address is the request's Referer and what a downgrade is judged
-        // from, and its record takes a refusal's line.
-        const char *from = yonder_scripts_url(host);
+        // address is what a downgrade is judged from and the request's
+        // Referer (none when it was too long to keep whole:
+        // yonder_scripts_referrer), and its record takes a refusal's line.
+        const char *from = yonder_scripts_referrer(host);
         yonder_diag_t *record = yonder_scripts_diag(host);
         os64_page_request_t request;
-        if (!request_for(ask->url, from, &request)) {
+        if (!request_for(ask->url, yonder_scripts_url(host), &request)) {
             say_failed(record, "navigation", "A script asked for an address this browser cannot go to.");
             return;
         }
