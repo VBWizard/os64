@@ -6,8 +6,7 @@
 # P2a: window.onerror and the ErrorEvent, unhandledrejection and
 # rejectionhandled and the PromiseRejectionEvent, reportError. Each fails
 # with the switch off. What still fails: an inline script's line counted
-# from the script, not the document; a thrown non-Error's line; reportError's
-# filename, which is the page's (no running script is known to the binding);
+# from the script, not the document; a thrown non-Error's line;
 # body.onerror as a property (no element has onerror); data: scripts; the
 # rejection tests that queue a task with <details> toggle or a microtask
 # with MutationObserver; readystatechange; requestAnimationFrame;
@@ -81,6 +80,9 @@ processing-model-2/window-onerror-runtime-error-throw.html	correct url passed to
 processing-model-2/window-onerror-runtime-error.html	correct number of calls to window.onerror
 processing-model-2/window-onerror-runtime-error.html	correct url passed to window.onerror
 reporterror.any.html	self.reportError() doesn't invoke getters
+reporterror.any.html	self.reportError(1)
+reporterror.any.html	self.reportError(TypeError)
+reporterror.any.html	self.reportError(undefined)
 [excluded]
 [passing]
 event-loops/microtask_after_script.html	Microtask immediately after script
@@ -191,3 +193,6 @@ processing-model-2/window-onerror-runtime-error.html	correct number of calls to 
 processing-model-2/window-onerror-runtime-error.html	correct url passed to window.onerror
 reporterror.any.html	self.reportError() (without arguments) throws
 reporterror.any.html	self.reportError() doesn't invoke getters
+reporterror.any.html	self.reportError(1)
+reporterror.any.html	self.reportError(TypeError)
+reporterror.any.html	self.reportError(undefined)
