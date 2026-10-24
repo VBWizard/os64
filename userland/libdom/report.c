@@ -214,7 +214,7 @@ static const char *script_address(const os64_dom_t *dom, uint32_t script)
 }
 
 /* The script whose failure it is when the stack does not say: the one
- * whose function the binding is calling, else the last it called in this
+ * whose callback the binding is calling, else the last it called in this
  * task, else the one being run, else the page. */
 static uint32_t current_script(const os64_dom_t *dom)
 {

@@ -2308,7 +2308,8 @@ interface. Not booked, by ruling: `subtle` (ruling 1), and `close()`
 
 Built on `opus/tmw-p2a-errors`, from `userland` `c8d87b53`, from the P2a
 brief and WINDOW_DOCUMENT.md § P2a. The builder's adversarial and truth
-passes are done; the cold read is next.
+passes, the cold read, and the answers to its six findings are done
+(**Cold read**, below).
 
 **Why.** Pages on which "nothing happens": a Run button that does
 nothing, and a record whose every script "ran". The brief's premise, that
@@ -2420,14 +2421,14 @@ yonder's, not surface a page detects.
 
 | Directory | Before | After | `[required]` |
 |---|---|---|---|
-| `html/webappapis/scripting` (new) | 39 of 271 | 108 of 277 | 69 |
+| `html/webappapis/scripting` (new) | 39 of 271 | 111 of 277 | 72 |
 | `html/webappapis/microtask-queuing` | 5 of 8 | 6 of 8 | 6 (+1) |
 | `xhr` | 345 of 1188 | 347 of 1188 | +2 |
 | `secure-contexts` | 0 | 1 of 34 | 0 |
 
 Every required test fails with the switch off. What still fails in the new
 directory: an inline script's line, counted from the script; a thrown
-non-Error's line; `reportError`'s filename, the page's; `body.onerror` as a
+non-Error's line; `body.onerror` as a
 property; `data:` scripts; the rejection pages that queue a task with
 `<details>` toggle or a microtask with MutationObserver (the main
 `promise-rejection-events.html` fails whole on them); readystatechange,
@@ -2489,16 +2490,20 @@ globals of its own that are not there (no FAILED line). 9 records are newly
 incomplete: they now ask for a navigation (a challenge script that gets
 further) or a script the corpus did not keep, which a re-recorded corpus
 answers. Replayed 239, clean 21, unfinished 13 and 19 unjudged on both
-sides.
+sides. Replayed again at the head after the cold read's answers
+(`2026-10-22b_p2a-final`), the corpus differs from the first head's in no
+line of any page: muting decides events, which no record holds, and no
+kept page's record moved for the stack's new names.
 
-Host, at the head: libjs's runtime host 1,153 checks (the script host's
-cases among them) and its sanitized profile, 0 failed; the DOM host 14,052
-/ 89,056 checks, allocation sweeps 1,125 / 13,393, 0 failed,
-`tools/test_dom_report.inc` holding a case per rule of § P2a's rows; the
-scripted-page host 7,601 at the base → 7,614, 0 failed; yonder's host
-1,914, 0 failed; the replay proof, 42 fixture pages (`failures.html` new)
-kept and replayed the same; the WPT runner's self-test, its three new
-pages among it; `make -C userland` builds.
+Host, at the head: libjs's runtime host 1,154 checks (the script host's
+cases among them, the `rejected` tag's) and its sanitized profile, 0
+failed; the DOM host 13,221 / 89,918 checks, allocation sweeps 1,142 /
+13,505, 0 failed, `tools/test_dom_report.inc` holding a case per rule of
+§ P2a's rows and one per cold-read probe; the scripted-page host 7,601 at
+the base → 7,666, 0 failed; yonder's host 1,914, 0 failed; the replay
+proof, 42 fixture pages (`failures.html` new) kept and replayed the same;
+the WPT runner's self-test, its three new pages among it; `make -C
+userland` builds.
 
 **Review.** The builder's adversarial pass looked for page code a failure's
 description could run (getters, proxy traps, a page's `toString`, a page's
@@ -2515,7 +2520,9 @@ muting from the script's address alone to the thrown Error's frames as
 well, made a non-Error object's message readable, and stopped one proxy
 trap that reading an error's place could reach. The truth pass corrected
 dom.h's dispatch and take-report comments, the handler lists in LIBDOM.md
-§ Events, and CONTRACT.md's rejection paragraph.
+§ Events, and CONTRACT.md's rejection paragraph. (The muting this pass
+built, by address and by an Error's frames, is the one the cold read
+walked past; what replaced it is above, under **Muted errors**.)
 
 **Rulings taken by the builder, for the cold read.**
 
@@ -2531,8 +2538,62 @@ dom.h's dispatch and take-report comments, the handler lists in LIBDOM.md
 4. `onerror`'s location is the engine's (DEBTS): an inline script's line
    from the script, a non-Error's line 0.
 
+**Cold read** (a fresh Opus, after the runner's ruling): one P1, three
+P2s on muting, a P3 and a sixth, each answered in a commit of its own.
+
+- **P1, a freeze a page sizes.** Every rejection past a task's first
+  failure went to `options.failed`, and yonder's record found each line
+  by walking every kept and lost line, all in C that the take loop runs
+  with no script running, so no deadline ended it: a `setInterval`
+  rejecting 200,000 promises froze the window about 22 s a task, for
+  ever. libdom now tells a task's first sixteen one by one
+  (`D_REJECTIONS_TOLD`, named once) and counts the rest into one line as
+  the task closes, `and <n> more unhandled rejections`, computing no
+  text for them; yonder's record finds every line by its key through an
+  index of its own and counts its probes. The bound cases: 200,000
+  rejections in one script call the host 17 times, the last line `and
+  199983 more unhandled rejections`; 100,000 failures over 6,000 lines
+  cost the record under eight probes each; a page's thousand rejections
+  are 18 lines found in under 2,000 probes.
+- **P2s, muting walked past** (one probe each, now a case each in
+  `tools/test_dom_report.inc`'s muting cases): an address with `?(` in it
+  left the stack's place unreadable, so the listener's Error was told
+  whole; a value that is no Error (a thrown or rejected string) carries
+  no stack, so it was told whole; and a muted rejection a handler
+  reached later fired `rejectionhandled` with its reason. Opus ruled the
+  rule above, **Muted errors**, recorded here and in LIBDOM.md: one
+  rule, never parsed from stack text, by the binding's own names for
+  scripts. No QuickJS change was needed: `JS_GetScriptOrModuleName` and
+  `Function.prototype.fileName` are public, and the `rejected` hook is
+  the wrapper's. CONTRACT.md's `handled()` text is made true for a
+  rejection the runtime could not hold (an allocation refused in the
+  tracker fails the runtime, and a failed runtime calls no hook). The
+  cases: the `?(` address, the later-handled rejection (by its own
+  script's listener and by the page), a non-Error thrown and rejected by
+  a listener and thrown at a script's top level, `reportError` from the
+  script and from its listener, a bound listener, a function `eval`
+  made, a bound microtask and a bound timer, and a function of theirs
+  the page calls rejecting: each "Script error." or no event. A
+  same-origin script's listener error and rejectionhandled are told
+  whole. A report sweep runs another site's script, so muting's own
+  allocations are refused in turn. With each script known by name, an
+  error event names the address of the script whose failure it is, a
+  listener's and `reportError`'s included, so `reporterror.any.js`'s
+  three value tests now pass and are required (scripting 108 → 111);
+  the other 27 directories are unchanged, both ways.
+- **P3, an error event after its microtasks.** A timer callback's
+  exception is now fired between the call and the checkpoint after it,
+  as a listener's was. A script the host ran is not local (libjs opens no
+  task while jobs wait), so it is booked beside "A failure's events fire
+  in its own task", and the WHEN paragraphs say so.
+- **The binding's own report stood past its task** when the task had
+  failed otherwise, to be taken by the next task under that one's name.
+  `d_task_close` now settles it whatever the outcome: the outcome when
+  that is OK, else a line through `options.failed`.
+
 **Booked** (DEBTS.md): an error event's place; the events in the failing
-task; muted `crossorigin` scripts; a task's second exception; the body's
+task; a script's microtasks before its error event; the stack naming
+`os64-script:<n>`; muted `crossorigin` scripts; a task's second exception; the body's
 IDL for the three new handlers; and, for 0011b and Fable, an Error made by
 code compiled under memory pressure reading past a heap block in
 `build_backtrace`, which P2a's first engine sweep (compile and run both
