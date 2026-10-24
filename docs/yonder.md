@@ -20,8 +20,8 @@ yonder /home/page.html          open a file on this machine
 ```
 
 The window is named after the page on screen, `<title> - yonder`, and
-follows it: to the next page, and when the page's own scripts change its
-title. A page with no title leaves it "yonder". Pictures, style
+follows it: to the next page, and when the page's `<title>` changes, by
+its scripts or otherwise. A page with no title leaves it "yonder". Pictures, style
 sheets and links beside a file are read from beside it, and `file:///path`
 works in the address field too.
 
