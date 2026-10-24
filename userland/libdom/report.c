@@ -57,6 +57,20 @@ static bool sticky(os64_js_status_t status);
 void d_task_close(os64_dom_t *dom, const char *task, os64_js_outcome_t *outcome)
 {
     bool tell = !sticky(outcome->status) && dom->options.failed != NULL;
+    /* The binding's own report (d_report's first error) is this task's,
+     * whatever its outcome: the outcome when that is OK, under the task's
+     * name, else a line told to the host; it never stands to be taken by
+     * the next task under that one's name. */
+    if (dom->report.status != OS64_JS_OK) {
+        if (outcome->status == OS64_JS_OK) {
+            *outcome = dom->report;
+            if (task != NULL && task[0] != '\0')
+                os64_strcopy(outcome->source_name, sizeof(outcome->source_name), task);
+        } else if (tell) {
+            dom->options.failed(dom->options.host_opaque, task != NULL ? task : "", dom->report.message);
+        }
+        os64_memset(&dom->report, 0, sizeof(dom->report));
+    }
     if (dom->rejections_untold != 0 && tell) {
         char line[96];
         os64_snprintf(line, sizeof(line), "and %llu more unhandled rejections",
@@ -567,6 +581,9 @@ bool os64_dom_script_ended(os64_dom_t *dom, const char *name, const char *addres
 {
     if (dom == NULL || dom->closed || name == NULL || outcome == NULL) return false;
     d_script_settle(dom, name, address, outcome);
+    /* A script that left nothing owed opened no task, and a report of its
+     * (a nested dispatch's error) is told here all the same. */
+    d_task_close(dom, name, outcome);
     return true;
 }
 

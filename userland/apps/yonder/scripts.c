@@ -680,13 +680,10 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
         if (out->status == OS64_JS_EXCEPTION && out->jobs_pending)
             drain_after_exception(s, out);
         // What the script left owed: the window's error event for what it
-        // threw, and an unhandledrejection for each rejection nothing
-        // handled, which is a failure of this script's when no listener
-        // cancels it (libdom's report.c).
+        // threw, an unhandledrejection for each rejection nothing handled,
+        // which is a failure of this script's when no listener cancels it,
+        // and an error a nested dispatch reported (libdom's report.c).
         os64_dom_script_ended(s->dom, name, s->task_address, out);
-        os64_js_outcome_t nested;
-        if (out->status == OS64_JS_OK && os64_dom_take_report(s->dom, &nested))
-            *out = nested;
         judged(s, out);
     } else if (runs) {
         os64_strcopy(out->source_name, sizeof(out->source_name), name);

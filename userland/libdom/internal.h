@@ -603,8 +603,10 @@ void d_errors_fire(os64_dom_t *dom, const char *filename, os64_js_outcome_t *out
  * handler reached, until a checkpoint leaves nothing. A rejection no
  * handler cancelled is the task's failure. */
 void d_task_settle(os64_dom_t *dom, const char *filename, os64_js_outcome_t *outcome);
-/* As a task named `task` closes: the rejections it only counted, past the
- * ones told one by one, told to the host as one line. */
+/* As a task named `task` closes: the binding's own report (d_report's first
+ * error) is the outcome when that is OK, else a line told to the host, and
+ * is cleared either way; and the rejections it only counted, past the ones
+ * told one by one, are told as one line. */
 void d_task_close(os64_dom_t *dom, const char *task, os64_js_outcome_t *outcome);
 /* After a script the host ran with os64_js_run (and a string timer the
  * binding did): what it left owed, settled in a task of its own named

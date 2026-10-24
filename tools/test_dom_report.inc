@@ -397,6 +397,39 @@ static void dom_report_flood_cases(void)
     fixture_free(&f);
 }
 
+/* The binding's own report is its task's whatever the task's outcome: a
+ * task that reportError'd and left a rejection has the rejection as its
+ * outcome and the report told to the host, and the next task, which does
+ * nothing, reports nothing (the cold read's finding 6). */
+static void dom_report_close_cases(void)
+{
+    os64_dom_options_t options = report_options(true);
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    os64_js_outcome_t outcome;
+    bool prevented;
+    report_failed[0] = '\0';
+    dom_script(&f, "addEventListener('resize',function(){reportError(new Error('first task'));"
+               "Promise.reject('also first task')},{once:true});addEventListener('scroll',function(){})",
+               "close: a task that reports and rejects");
+    os64_dom_event_t resize = {.type = "resize"}, scroll = {.type = "scroll"};
+    check(os64_dom_dispatch(f.binding, NULL, &resize, &prevented, &outcome) == OS64_JS_UNHANDLED_REJECTION &&
+          !strcmp(outcome.message, "unhandled rejection: also first task") &&
+          !strcmp(report_failed, "resize event: Error: first task"),
+          "close: the rejection is the outcome and the report is told beside it, under the task's name");
+    check(os64_dom_dispatch(f.binding, NULL, &scroll, &prevented, &outcome) == OS64_JS_OK,
+          "close: and the next task, which does nothing, reports nothing");
+    report_failed[0] = '\0';
+    dom_script(&f, "globalThis.d=document.createElement('div');d.addEventListener('x',()=>{throw Error('nested')})",
+               "close: a nested listener that throws");
+    check(report_script(&f, "d.dispatchEvent(new Event('x'));throw Error('own')", "page.html#inline-9", NULL,
+                        &outcome) == OS64_JS_EXCEPTION && strstr(outcome.message, "own") != NULL &&
+          !strcmp(report_failed, "page.html#inline-9: Error: nested") && !os64_dom_take_report(f.binding, &outcome),
+          "close: a script's nested error is told beside its own and taken");
+    report_failed[0] = '\0';
+    fixture_free(&f);
+}
+
 /* The bound on what one task tells the host (report.c's D_REJECTIONS_TOLD):
  * two hundred thousand rejections in one script, none heard by a listener,
  * are taken with no script running, so the host's work for them must not
@@ -499,4 +532,5 @@ static void dom_report_cases(void)
     dom_report_switch_cases();
     dom_report_flood_cases();
     dom_report_bound_cases();
+    dom_report_close_cases();
 }

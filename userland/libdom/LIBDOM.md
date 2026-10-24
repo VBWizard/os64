@@ -308,8 +308,10 @@ no checkpoint between them, which is what DOM.md asks: a checkpoint follows a
 callback that returns with no script on the stack. A nested listener's error
 is kept in the binding (`os64_dom_take_report`) rather than thrown into the
 script that dispatched, as the standard reports it, and is the window's
-error event at once; the host folds it into the task's outcome when it
-opened the task through libdom, under the task's name. Every engine
+error event at once; as the task closes (a task libdom opened, or a script
+`os64_dom_script_ended` settles) it is the task's outcome under the task's
+name when that is OK, else a line told to `options.failed`, and it is
+cleared either way. Every engine
 entry the binding makes is inside a task or a turn: the host's own calls are
 `os64_js_call` on one invoking function, and everything else runs under a
 call or an evaluation that is already armed.

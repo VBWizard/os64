@@ -275,10 +275,9 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
     for (int i = 0; i < argc; i++) JS_FreeValueRT(dom->engine, args[i]);
     d_free(dom, args);
     d_free(dom, source);
-    if (outcome->status == OS64_JS_OK && dom->report.status != OS64_JS_OK) {
-        *outcome = dom->report;
-        os64_memset(&dom->report, 0, sizeof(dom->report));
-    }
+    /* A report the timer's code left is the timer's (d_task_close), told
+     * whatever its outcome, never left for the next task. */
+    d_task_close(dom, name, outcome);
     return true;
 }
 

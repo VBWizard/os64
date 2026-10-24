@@ -632,9 +632,9 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
 bool os64_dom_take_navigation(os64_dom_t *dom, os64_dom_navigation_t *ask);
 /* An error a nested dispatch or a handler compile reported inside a task the
  * host did not open through libdom (a script run with os64_js_run). The
- * first one is kept until taken, here or by os64_dom_script_ended when it
- * settles anything (it folds the error into its outcome). False when there
- * is none. */
+ * first one is kept until taken, here or by os64_dom_script_ended, which
+ * always takes it: the outcome when that is OK, else a line told to
+ * options.failed. False when there is none. */
 bool os64_dom_take_report(os64_dom_t *dom, os64_js_outcome_t *outcome);
 /* After a script the host ran with os64_js_run (and drained): what it left
  * owed, settled as one task named `name` (MODERN_WEB.md § P2a). The window's
