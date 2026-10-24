@@ -8027,8 +8027,10 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
         // screen, whose `load` is running, that entry is the one on screen.
         // A page not yet shown is the session's entry already (unshown_go
         // says why), not the page on screen's: the new page takes its place
-        // (start_trip). One that waits on the question bar is asked as the
-        // page on screen's, and a page not yet shown's place is not taken.
+        // (start_trip). One that waits on the question bar is still judged
+        // and named as the asking page's (its downgrade, and its Referer on
+        // a yes), but its place in the session is the page on screen's: a
+        // page not yet shown's place is not taken (DEBTS.md).
         Page *p = shown ? &g.page : page_of_host(host);
         bool replaces = page_navigation_replaces(p);
         g.replacing = replaces && p != &g.page ? p : NULL;
