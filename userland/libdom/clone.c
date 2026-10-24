@@ -65,8 +65,12 @@
  * frees an object it already wrote cannot let a new one take its address
  * and pass for it); a Map's or Set's entries are copied out by its own
  * forEach as the engine made it, never by an iterator a page can replace.
- * The work is linear in what the value holds plus what its getters do,
- * under the task's deadline.
+ * The work is linear in what the value holds plus what its getters do. The
+ * task's deadline is checked only where the walk calls into the engine (a
+ * getter, a view's or a buffer's own getters, a Map's forEach, the
+ * constructors the reader calls): a clone of plain data (objects, arrays,
+ * strings and numbers) is bounded by its size, which the page paid to
+ * build, as JSON.parse's is, not by the deadline (DEBTS.md).
  *
  * Not kept: a length-tracking view tracks no length in the copy (the
  * engine does not say which views track), and a DOMException's name or
