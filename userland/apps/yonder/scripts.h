@@ -82,6 +82,16 @@ typedef struct {
     bool (*run)(void *opaque, uint64_t serial, const os64_dom_request_t *request, bool (*stop)(void *stop_ctx),
                 void *stop_ctx, os64_dom_response_t *response);
     void (*release)(void *opaque, os64_dom_response_t *response);
+    // The document's own request, for P1-Da's members (os64_dom_options_t):
+    // the Referer it carried ("" or NULL for none), copied; and its
+    // response's Last-Modified, epoch seconds, 0 for none (which a zeroed
+    // options struct says; no server dates a page to 1970).
+    const char *referrer;
+    int64_t last_modified;
+    // What has focus, given `opaque` (os64_dom_options_t.focus): the
+    // element focused in this page's document, or NULL, and whether the
+    // page has the window's focus. NULL: nothing has, and neither has it.
+    bool (*focus)(void *opaque, const os64_html_node_t **focused);
 } yonder_scripts_options_t;
 
 // A host for `doc`, whose control state is `state` (which must outlive it).

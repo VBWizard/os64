@@ -352,6 +352,7 @@ static void head_copy(way_head_t *out, const os64_fetch_head_t *head, way_body_t
     out->posted = head->method == OS64_FETCH_METHOD_POST;
     out->encrypted = head->encrypted;
     out->body = body;
+    os64_strcopy(out->last_modified, sizeof(out->last_modified), head->keep.last_modified);
 }
 
 bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
