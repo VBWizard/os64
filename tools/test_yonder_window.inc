@@ -167,6 +167,24 @@ static void window_message_case(void) {
     loop_drop();
 }
 
+/* A page whose every message posts another still has its view's events:
+ * once a rendering opportunity they run first in the turn. */
+static void window_message_view_case(void) {
+    loop_page("<p id=out>-</p><script>var n=0;onmessage=function(){n++;postMessage(0,'*')};postMessage(0,'*');"
+        "addEventListener('resize',function(){document.getElementById('out').textContent='resized '+innerWidth})"
+        "</script>");
+    check(loop_settle(),"window: a page that posts itself messages for ever arrives");
+    check(script_turn(),"window: a turn that asks the view (nothing owed) and runs a message");
+    g.view.bounds.w=600;
+    for(int i=0;i<5;i++) check(script_turn(),"window: each turn runs a task");
+    check(probe_text_is("out","-"),"window: inside a rendering opportunity the messages run");
+    now_ms+=YONDER_SCRIPTS_VIEW_CADENCE_MS;
+    check(script_turn() && script_rebuild() && probe_text_is("out","resized 600"),
+        "window: past one, the resize runs first in the turn, the messages notwithstanding");
+    check(script_turn() && scripts_owed(g.page.scripts),"window: and the messages go on");
+    loop_drop();
+}
+
 static void window_idle_case(void) {
     loop_page("<p id=out>-</p><script>var log=[];function say(){document.getElementById('out').textContent=log.join(',')}"
         "requestIdleCallback(function(d){log.push('idle:'+d.didTimeout);say()});"
@@ -190,6 +208,7 @@ static void window_idle_case(void) {
 
 static void window_cases(void) {
     window_message_case();
+    window_message_view_case();
     window_idle_case();
     window_redirect_case("http://other.test/lib.js",true);
     window_redirect_case("http://fixture.test/moved/lib.js",false);

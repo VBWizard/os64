@@ -64,6 +64,9 @@ struct yonder_scripts {
     void *user_agent_opaque;
     os64_dom_cookies_t cookies;
     os64_dom_geometry_stats_t last_geometry_stats;
+    // When the view's events were last asked for (yonder_scripts_view_step),
+    // on the now_ms clock: what yonder_scripts_view_due measures against.
+    uint64_t view_asked_ms;
     bool dead;                      // a sticky outcome retired the runtime
     bool parse_ended;
     Item *items;
@@ -1235,12 +1238,19 @@ bool yonder_scripts_view_step(yonder_scripts_t *s, os64_js_outcome_t *out)
     os64_memset(out, 0, sizeof(*out));
     if (s == NULL || s->dead || s->dom == NULL)
         return false;
+    s->view_asked_ms = now_ms(s);
     s->written = 0;
     s->task_address = NULL;
     if (!os64_dom_view_step(s->dom, out))
         return false;
     judged(s, out);
     return true;
+}
+
+bool yonder_scripts_view_due(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead && s->dom != NULL &&
+           now_ms((void *)s) - s->view_asked_ms >= YONDER_SCRIPTS_VIEW_CADENCE_MS;
 }
 
 bool yonder_scripts_scroll_manual(const yonder_scripts_t *s)

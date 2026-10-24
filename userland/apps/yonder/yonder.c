@@ -9159,14 +9159,23 @@ static bool script_turn(void)
     const os64_html_document_t *doc = page_doc(&g.page);
     os64_js_outcome_t out;
     int64_t began = task_begin(g.page.scripts);
-    const char *what = "script";
-    bool ran = yonder_scripts_step(g.page.scripts, &out);
+    // The rendering step's events (MODERN_WEB.md § Slice 1b): the view's
+    // resize and scroll, and the media lists' changes, one a turn, after
+    // the page's tasks, and the loop comes back for the next while one ran
+    // (s_view_ran). While the tasks keep coming (a message that posts
+    // another) they still run once a rendering opportunity
+    // (yonder_scripts_view_due), first in the turn, as HTML's event loop
+    // updates the rendering between tasks.
+    s_view_ran = false;
+    const char *what = "view";
+    bool ran = yonder_scripts_view_due(g.page.scripts) &&
+               (s_view_ran = yonder_scripts_view_step(g.page.scripts, &out));
+    if (!ran) {
+        what = "script";
+        ran = yonder_scripts_step(g.page.scripts, &out);
+    }
     if (!ran)
         ran = queued_task(g.page.scripts, &what, &out);
-    // Then the rendering step's events (MODERN_WEB.md § Slice 1b): the
-    // view's resize and scroll, and the media lists' changes, one a turn;
-    // the loop comes back for the next while one ran (s_view_ran).
-    s_view_ran = false;
     if (!ran) {
         what = "view";
         ran = s_view_ran = yonder_scripts_view_step(g.page.scripts, &out);
@@ -9174,7 +9183,8 @@ static bool script_turn(void)
     // And when the turn found nothing else, an idle callback (MODERN_WEB.md
     // § P2b): the loop is idle. The loop comes back for the next while one
     // is due (main's bell), and the ticker wakes it for one that waits
-    // (pictures_schedule).
+    // (pictures_schedule). Tasks that keep coming leave none idle, which
+    // HTML allows: an idle period starts only when the loop is idle.
     if (!ran) {
         what = "idle";
         ran = yonder_scripts_idle_run(g.page.scripts, &out);

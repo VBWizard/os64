@@ -260,6 +260,13 @@ bool yonder_scripts_history_event(yonder_scripts_t *scripts, const os64_dom_hist
 // The view's events, one task a call (os64_dom_view_step). False when
 // nothing ran.
 bool yonder_scripts_view_step(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
+// Whether the view's events have gone unasked for a rendering opportunity
+// (YONDER_SCRIPTS_VIEW_CADENCE_MS on yonder_now_ms' clock): a page whose
+// tasks keep coming (a message that posts another) still has its resize,
+// scroll and media events run, as HTML's event loop updates the rendering
+// between tasks.
+#define YONDER_SCRIPTS_VIEW_CADENCE_MS 16
+bool yonder_scripts_view_due(const yonder_scripts_t *scripts);
 // Whether the page asked to keep its own scroll across its entries
 // (history.scrollRestoration = "manual").
 bool yonder_scripts_scroll_manual(const yonder_scripts_t *scripts);

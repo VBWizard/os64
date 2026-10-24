@@ -3113,7 +3113,12 @@ same-window `postMessage` is that design with the target the caller:
 3. **Messages and timers are run by when each was queued.** HTML leaves
    task sources' order to the browser; a fixed order (messages first)
    would let a page whose every message posts another starve its own
-   timers, and the setImmediate trick is exactly that shape.
+   timers, and the setImmediate trick is exactly that shape. Such a page
+   still has its view's events (a resize, a scroll): they are asked for
+   first in the turn once a rendering opportunity (16 ms) however many
+   tasks are waiting, as HTML updates the rendering between tasks. Its
+   idle callbacks may wait for as long as it posts, which HTML allows.
+   (The view step's cadence is the cold read's finding 7.)
 4. **A page's idle callbacks wait until it is shown**: only the shown
    page's turn is the loop being idle (DEBTS.md).
 5. **Nothing is detached unless the whole clone succeeds.** HTML detaches
