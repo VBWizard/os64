@@ -864,9 +864,56 @@ static void who_is_asking(void)
     yonder_fetched_free(g);
 }
 
+// ── How it asks: the preset's order, Connection line and fetch Accept ───
+
+static const way_identity_t kAsks = {
+    .keep_alive = true, .accept = {[WAY_DEST_EMPTY] = "*/*;q=0.9"},
+    .order = {[WAY_ORDER_NO_CORS] = "Accept", [WAY_ORDER_CORS] = "Origin, Accept",
+              [WAY_ORDER_PREFLIGHT] = "Access-Control-Request-Method, Accept"},
+};
+
+static void how_it_asks(void)
+{
+    // A preflighted request: the preflight in the preset's preflight
+    // order, the request in its cors order, both saying keep-alive; the
+    // preset's fetch Accept stands in for Fetch's `*/*` on the request.
+    fresh();
+    fake_answer("OPTIONS", "https://b.test/api", 204,
+                "Access-Control-Allow-Origin: https://a.test\r\nAccess-Control-Allow-Methods: PUT\r\n", NULL);
+    fake_answer("PUT", "https://b.test/api", 200, "Access-Control-Allow-Origin: https://a.test\r\n", "done");
+    yonder_fetched_t *g = run(&(Ask){"https://a.test/page", "https://b.test/api", "PUT", .identity = &kAsks});
+    expect("asks: the preflighted PUT", g != NULL && g->ok && nfake_requests == 2, g ? g->why : NULL);
+    expect_text("asks: the preflight's order", fake_requests[0].order, "Access-Control-Request-Method, Accept");
+    expect_text("asks: the request's order", fake_requests[1].order, "Origin, Accept");
+    expect("asks: both say keep-alive", fake_requests[0].keep_alive && fake_requests[1].keep_alive, NULL);
+    expect_text("asks: a preflight's Accept is Fetch's own", fake_requests[0].accept, "*/*");
+    expect_text("asks: the request's is the preset's", fake_requests[1].accept, "*/*;q=0.9");
+    yonder_fetched_free(g);
+
+    // no-cors takes the no-cors order; a page's own Accept stands.
+    fresh();
+    fake_answer(NULL, "https://b.test/pixel", 200, "", "x");
+    g = run(&(Ask){"https://a.test/page", "https://b.test/pixel", "GET", "Accept: text/x-page\r\n",
+                   .mode = WAY_MODE_NO_CORS, .identity = &kAsks});
+    expect("asks: a no-cors fetch", g != NULL && g->ok, g ? g->why : NULL);
+    expect_text("asks: its order", fake_requests[0].order, "Accept");
+    expect_text("asks: the page's Accept stands", fake_requests[0].accept, "text/x-page");
+    yonder_fetched_free(g);
+
+    // No preset: no order, no Connection line, Fetch's `*/*`.
+    fresh();
+    fake_answer(NULL, "https://a.test/api", 200, "", "x");
+    g = run(&(Ask){"https://a.test/page", "https://a.test/api"});
+    expect("asks: no preset", g != NULL && g->ok && fake_requests[0].order[0] == '\0' &&
+                                  !fake_requests[0].keep_alive, g ? g->why : NULL);
+    expect_text("asks: and Fetch's own Accept", fake_requests[0].accept, "*/*");
+    yonder_fetched_free(g);
+}
+
 int main(void)
 {
     who_is_asking();
+    how_it_asks();
     same_origin();
     cross_origin();
     preflights();

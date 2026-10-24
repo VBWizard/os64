@@ -9,7 +9,8 @@
 
 // Negotiated image types, then anything: a server that labels a GIF
 // as text/plain still sent a GIF, and the decoder reads the bytes, not the
-// label.
+// label. A preset that is a browser asks with its browser's list instead
+// (agent.c; way_fetch_hooks puts it in).
 #define PICTURE_ACCEPT OS64_IMAGE_ACCEPT ", */*;q=0.5"
 _Static_assert(sizeof(PICTURE_ACCEPT) <= OS64_FETCH_ACCEPT_MAX,
                "libfetch refuses an Accept longer than OS64_FETCH_ACCEPT_MAX");

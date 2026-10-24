@@ -1,0 +1,262 @@
+// test_fetch_pool_host.c — libfetch's kept connections (pool.c) under
+// threads: the proof that a connection belongs to one fetch between its
+// take and its put (WIRE.md § 2, "two threads taking from one key never
+// sharing a connection").
+//
+// pool.c runs UNMODIFIED with its own lock; what it holds are fake
+// connections whose handles this harness numbers. Each thread is a fetch
+// that, over and over, takes a connection for one of eight keys (dialling a
+// new one when none is kept), claims it, works on it, and gives it back —
+// or closes it, as a fetch whose exchange did not allow keeping it would.
+// A claim is an atomic exchange on the connection's owner, so two holders
+// at once is caught where it happens; so is a close of a held connection, a
+// second close, and a take of a closed one. The clock jumps now and then, so
+// the idle expiry runs against the takers; the whole pool's cap is reached;
+// and two of the threads also let everything kept go, or the least recent,
+// now and then. At the end every connection ever made has been closed
+// exactly once. Before the sweep, two cases on their own: the stale clock,
+// and the system's trust store read once whatever number of threads ask.
+//
+// Run by tools/test_fetch_pool_host.sh twice: under ASan and UBSan, and
+// under TSan, which sees a write to a kept connection's fields that the
+// lock does not order.
+
+#define _POSIX_C_SOURCE 200809L      // sem_timedwait, clock_gettime under -std=c11
+#include <pthread.h>
+#include <semaphore.h>
+#include <sched.h>
+#include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "pool.h"
+#include "os64/os64.h"
+
+#define THREADS 4
+#define ROUNDS  20000
+#define HANDLES (THREADS * ROUNDS + 64)
+
+static _Atomic int owner[HANDLES];       // 0: nobody; else the thread that holds it
+static _Atomic int closed[HANDLES];
+static _Atomic int next_handle = 1;
+static _Atomic uint64_t clock_ms;
+static _Atomic int failures;
+static _Atomic size_t most_kept;           // the most the pool was seen holding
+
+#define CHECK(cond) do { if (!(cond)) { \
+    fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); atomic_fetch_add(&failures, 1); } } while (0)
+
+void os64_yield(void) { sched_yield(); }
+
+// The race case's hook: a thread marked `stalls` stops inside its clock
+// read, says so, and waits up to 300 ms for the other thread's put.
+static __thread bool stalls;
+static sem_t read_the_clock, put_done;
+
+int64_t os64_ticks(os64_ticks_t *t)
+{
+    *t = (os64_ticks_t){ .ticks = atomic_load(&clock_ms), .per_second = 1000 };
+    if (stalls) {
+        sem_post(&read_the_clock);
+        struct timespec until;
+        clock_gettime(CLOCK_REALTIME, &until);
+        until.tv_nsec += 300 * 1000000L;
+        if (until.tv_nsec >= 1000000000L) { until.tv_sec++; until.tv_nsec -= 1000000000L; }
+        sem_timedwait(&put_done, &until);
+    }
+    return 0;
+}
+// The pool's only way to let a connection go. One the pool closes is one
+// nobody holds and nobody closed before.
+void fetch_transport_close(fetch_transport_t *io, bool normal)
+{
+    (void)normal;
+    int h = io->handle;
+    CHECK(h > 0 && h < HANDLES);
+    CHECK(atomic_load(&owner[h]) == 0);
+    CHECK(atomic_exchange(&closed[h], 1) == 0);
+    io->handle = -1;
+}
+
+static void claim(int h, int me)
+{
+    int nobody = 0;
+    CHECK(atomic_compare_exchange_strong(&owner[h], &nobody, me));
+    CHECK(atomic_load(&closed[h]) == 0);
+}
+static void unclaim(int h, int me)
+{
+    int mine = me;
+    CHECK(atomic_compare_exchange_strong(&owner[h], &mine, 0));
+}
+
+static void *fetcher(void *arg)
+{
+    int me = (int)(intptr_t)arg;
+    unsigned rng = (unsigned)me * 2654435761u;
+    // Eight keys, more than the whole pool's cap holds at six apiece, so
+    // the least recent of all is evicted as well as the least recent of a
+    // key.
+    fetch_pool_key_t keys[8];
+    for (int k = 0; k < 8; k++)
+        keys[k] = (fetch_pool_key_t){ .tls = k & 1, .host = "one.test", .port = (uint16_t)(80 + k / 2) };
+    for (int round = 0; round < ROUNDS; round++) {
+        rng = rng * 1103515245u + 12345u;
+        const fetch_pool_key_t *key = &keys[(rng >> 9) & 7];
+        // And everything kept is let go now and then, or the least recent
+        // alone, while the others take and put.
+        if (me == 1 && round % 997 == 0)
+            fetch_pool_drain();
+        if (me == 2 && round % 389 == 0)
+            fetch_pool_evict_one();
+        fetch_transport_t io;
+        if (fetch_pool_take(key, &io)) {
+            // What was kept for this key comes back as it was given.
+            CHECK(io.encrypted == key->tls && io.cancelled == NULL && io.cancel_ctx == NULL);
+            claim(io.handle, me);
+        } else {
+            memset(&io, 0, sizeof(io));
+            io.handle = atomic_fetch_add(&next_handle, 1);
+            io.encrypted = key->tls;
+            io.cancel_ctx = &io;       // a fetch's, which the pool must drop
+            CHECK(io.handle < HANDLES);
+            claim(io.handle, me);
+        }
+        // The exchange: its fields are this thread's alone now.
+        io.received += (uint64_t)round;
+        if ((rng >> 4) % 3 == 0)
+            sched_yield();
+        unclaim(io.handle, me);
+        if ((rng >> 12) % 8 == 0) {
+            // A reply that may not be kept: the fetch closes its connection.
+            fetch_transport_close(&io, false);
+        } else {
+            fetch_pool_put(key, &io);
+        }
+        size_t idle = fetch_pool_idle();
+        CHECK(idle <= FETCH_POOL_TOTAL);
+        size_t seen = atomic_load(&most_kept);
+        while (idle > seen && !atomic_compare_exchange_weak(&most_kept, &seen, idle))
+            ;
+        // Now and then a minute passes, and what was kept expires.
+        if ((rng >> 16) % 1024 == 0)
+            atomic_fetch_add(&clock_ms, FETCH_POOL_IDLE_MS);
+        else
+            atomic_fetch_add(&clock_ms, 1);
+    }
+    return NULL;
+}
+
+// A TAKE'S CLOCK IS NEVER OLDER THAN A PUT IT SEES (the cold read's stale
+// clock). One thread takes for another key and stops inside its clock read;
+// meanwhile a connection is put, a tick later. Read under the lock, the
+// put waits for the take, and its connection is kept; read before the
+// lock, the take would carry its older `now` past the put and close the
+// new connection as one kept in the future.
+static fetch_pool_key_t race_a = { .host = "a.test", .port = 80 },
+                        race_b = { .host = "b.test", .port = 80 };
+static void *race_taker(void *x)
+{
+    (void)x;
+    stalls = true;
+    fetch_transport_t io;
+    CHECK(!fetch_pool_take(&race_b, &io));
+    return NULL;
+}
+static void *race_putter(void *x)
+{
+    (void)x;
+    fetch_transport_t io;
+    memset(&io, 0, sizeof(io));
+    io.handle = atomic_fetch_add(&next_handle, 1);
+    atomic_fetch_add(&clock_ms, 1);
+    fetch_pool_put(&race_a, &io);
+    return NULL;
+}
+static void stale_clock_case(void)
+{
+    sem_init(&read_the_clock, 0, 0);
+    sem_init(&put_done, 0, 0);
+    pthread_t taker, putter;
+    pthread_create(&taker, NULL, race_taker, NULL);
+    sem_wait(&read_the_clock);            // the take has its `now`
+    pthread_create(&putter, NULL, race_putter, NULL);
+    pthread_join(putter, NULL);
+    sem_post(&put_done);
+    pthread_join(taker, NULL);
+    int closed_now = 0;
+    for (int h = 1; h < atomic_load(&next_handle); h++)
+        closed_now += atomic_load(&closed[h]);
+    CHECK(closed_now == 0 && fetch_pool_idle() == 1);
+    fetch_pool_drain();
+}
+
+// THE SYSTEM'S STORE IS READ ONCE, however many threads ask for it at once:
+// the read is slow on purpose, every thread asks, one read happens, and
+// every thread is handed the same store.
+static _Atomic int store_reads, store_frees;
+static char the_store;
+os64_tls_store_status_t os64_tls_trust_reload(os64_tls_trust **current, os64_tls_store_report_t *report)
+{
+    (void)report;
+    atomic_fetch_add(&store_reads, 1);
+    for (int i = 0; i < 2000; i++)
+        sched_yield();
+    *current = (os64_tls_trust *)&the_store;
+    return OS64_TLS_STORE_OK;
+}
+void os64_tls_trust_free(os64_tls_trust *store)
+{
+    CHECK(store == (os64_tls_trust *)&the_store);
+    atomic_fetch_add(&store_frees, 1);
+}
+static os64_tls_trust *handed[THREADS];
+static void *store_asker(void *arg)
+{
+    int me = (int)(intptr_t)arg;
+    os64_tls_store_report_t report;
+    CHECK(fetch_pool_trust(&handed[me], &report) == OS64_TLS_STORE_OK);
+    return NULL;
+}
+static void one_store_case(void)
+{
+    pthread_t t[THREADS];
+    for (int i = 0; i < THREADS; i++)
+        pthread_create(&t[i], NULL, store_asker, (void *)(intptr_t)i);
+    for (int i = 0; i < THREADS; i++)
+        pthread_join(t[i], NULL);
+    CHECK(atomic_load(&store_reads) == 1);
+    for (int i = 0; i < THREADS; i++)
+        CHECK(handed[i] == (os64_tls_trust *)&the_store);
+    fetch_pool_trust_drop();
+    CHECK(atomic_load(&store_frees) == 1);
+}
+
+int main(void)
+{
+    stale_clock_case();
+    one_store_case();
+    pthread_t t[THREADS];
+    for (int i = 0; i < THREADS; i++)
+        pthread_create(&t[i], NULL, fetcher, (void *)(intptr_t)(i + 1));
+    for (int i = 0; i < THREADS; i++)
+        pthread_join(t[i], NULL);
+    // The whole pool's cap was reached, and never passed.
+    CHECK(atomic_load(&most_kept) == FETCH_POOL_TOTAL);
+    fetch_pool_drain();
+    CHECK(fetch_pool_idle() == 0);
+    int made = atomic_load(&next_handle) - 1, shut = 0;
+    for (int h = 1; h <= made; h++) {
+        shut += atomic_load(&closed[h]);
+        CHECK(atomic_load(&owner[h]) == 0);
+    }
+    CHECK(shut == made);
+    if (atomic_load(&failures) != 0) {
+        fprintf(stderr, "test_fetch_pool_host: %d failures\n", atomic_load(&failures));
+        return 1;
+    }
+    printf("test_fetch_pool_host: %d threads, %d connections made, each held by one fetch at a time"
+           " and closed once\n", THREADS, made);
+    return 0;
+}

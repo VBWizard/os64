@@ -19,6 +19,7 @@
 #include "fetch/fetch.h"
 #include "fetch/transport.h"
 #include "os64/os64.h"
+#include "pool.h"
 #include "fixtures.h"
 
 // ── The heap, with one injectable failure ───────────────────────────────
@@ -31,6 +32,8 @@ void *os64_malloc(size_t size)
 }
 void os64_free(void *p) { free(p); }
 int64_t os64_write(int32_t h, const void *buf, size_t len) { (void)h; (void)buf; return (int64_t)len; }
+// The pool's lock never waits here: this harness is one thread.
+void os64_yield(void) {}
 
 // ── The clock ───────────────────────────────────────────────────────────
 
@@ -75,9 +78,26 @@ typedef struct {
     bool        tls_bad_prefix; // authenticated bytes accompanied by protocol failure
     os64_tls_status_t tls_default_error, tls12_error;
     bool        tls_truncate;  // (https) the record layer ends without close_notify
+    // KEEP-ALIVE (peer_answers). A server that answers request by request on
+    // one connection: the n-th answer is released when the n-th whole
+    // request has arrived, and `reply` is all of them in a row. Without
+    // answers a peer is the old world: its one reply, then the close.
+    size_t      nanswers;
+    size_t      answer_len[8];
+    size_t      hangup_after;  // closes once it has answered this many (0: keeps the connection)
+    size_t      drop_request;  // closes when this request (1 = the first) arrives, unanswered
+    size_t      fail_write_at; // a write of this request (1 = the first) breaks
+    // How a dropped request's close shows: 0 to anyone who looks, a poll
+    // included; 1 a close only a read finds (the request went, then the
+    // close), 2 a reset only a read finds.
+    int         drop_unseen;
+    uint64_t    idle_close_ms; // closes an idle connection after this long (0: never)
 } peer_t;
 
-static peer_t peers[16];
+// Room for the pool's whole capacity and one more, each its own peer.
+#define NPEERS 40
+#define NCONNS 40
+static peer_t peers[NPEERS];
 static size_t npeers;
 static void peer_reset(void) { npeers = 0; }
 static peer_t *peer_add(const char *host, uint16_t port, const char *reply)
@@ -101,8 +121,82 @@ typedef struct {
     size_t   served;
     char     request[131072];
     size_t   reqlen;
+    int      dialled;          // which dial made it: its entry in history[]
+    uint64_t last_ms;          // when it last served a byte
 } conn_t;
-static conn_t conns[16];
+static conn_t conns[NCONNS];
+
+static const char *find(const char *hay, size_t len, const char *needle)
+{
+    size_t n = strlen(needle);
+    for (size_t i = 0; i + n <= len; i++)
+        if (memcmp(hay + i, needle, n) == 0) return hay + i;
+    return NULL;
+}
+// How many whole requests have arrived on a connection: each head to its
+// blank line, and the body its Content-Length promised.
+static size_t requests_in(const conn_t *c)
+{
+    size_t n = 0, at = 0;
+    for (;;) {
+        const char *end = find(c->request + at, c->reqlen - at, "\r\n\r\n");
+        if (end == NULL) return n;
+        size_t head_end = (size_t)(end - c->request) + 4, body = 0;
+        const char *cl = find(c->request + at, head_end - at, "Content-Length: ");
+        if (cl != NULL) body = strtoul(cl + strlen("Content-Length: "), NULL, 10);
+        if (head_end + body > c->reqlen) return n;
+        at = head_end + body;
+        n++;
+    }
+}
+// The bytes the peer has said so far on this connection.
+static size_t released(const conn_t *c)
+{
+    const peer_t *p = c->peer;
+    if (p->nanswers == 0) return p->len;
+    size_t k = requests_in(c), n = 0;
+    if (p->drop_request && k >= p->drop_request) k = p->drop_request - 1;
+    for (size_t i = 0; i < k && i < p->nanswers; i++) n += p->answer_len[i];
+    return n;
+}
+// The peer closed on the request it drops.
+static bool dropped(const conn_t *c)
+{
+    return c->peer->drop_request && requests_in(c) >= c->peer->drop_request;
+}
+// Everything said and the connection closed by the peer. The old world's
+// peer closes after its one reply; a keep-alive peer after `hangup_after`
+// answers, on the request it drops, or after `idle_close_ms` idle.
+// The idle close alone: the server gave up on a connection nobody used.
+static bool idle_closed(const conn_t *c)
+{
+    const peer_t *p = c->peer;
+    return p->nanswers && p->idle_close_ms && c->served > 0 && c->served == released(c) &&
+           now_ms - c->last_ms >= p->idle_close_ms;
+}
+static bool hung_up(const conn_t *c)
+{
+    const peer_t *p = c->peer;
+    if (c->served < released(c)) return false;
+    if (p->nanswers == 0) return p->len > 0;
+    size_t k = requests_in(c);
+    if (dropped(c)) return true;
+    if (idle_closed(c)) return true;
+    return p->hangup_after && k >= p->hangup_after;
+}
+// What a poll, or the TLS engine's state, can see of that close: all of
+// it, but a dropped request's close that only a read finds.
+static bool poll_sees_close(const conn_t *c)
+{
+    return hung_up(c) && !(c->peer->drop_unseen && dropped(c));
+}
+// Data the peer has released and not yet sent, on a keep-alive peer only:
+// the old world's reply is all there from the start, and the upload's
+// lookahead must not see it before the request is sent.
+static bool pending(const conn_t *c)
+{
+    return c->peer->nanswers && c->served < released(c);
+}
 static int dials, closes;
 static char last_dial[300];
 static int  chunk_mode;        // 0 = as asked, 1 = one byte, 2 = random
@@ -114,19 +208,27 @@ static size_t chunk_of(size_t asked)
     return asked;
 }
 
+// A task's handle table, shrunk: with this many connections open a dial is
+// refused as the kernel refuses one with no handle to give (0: no ceiling).
+static int open_limit;
+
 int64_t os64_dial(const char *dialstring)
 {
     dials++;
     snprintf(last_dial, sizeof(last_dial), "%s", dialstring);
     char host[256]; unsigned port;
     if (sscanf(dialstring, "tcp!%255[^!]!%u", host, &port) != 2) return -1;
+    int open = 0;
+    for (int h = 0; h < NCONNS; h++) open += conns[h].open;
+    if (open_limit && open >= open_limit) return OS64_NET_ERR_NO_RESOURCES;
     for (size_t i = 0; i < npeers; i++) {
         if (strcmp(peers[i].host, host) == 0 && peers[i].port == port) {
             if (peers[i].refuse) return -3;
-            for (int h = 0; h < 16; h++)
+            for (int h = 0; h < NCONNS; h++)
                 if (!conns[h].open) {
                     memset(&conns[h], 0, sizeof(conns[h]));
                     conns[h].open = true; conns[h].peer = &peers[i];
+                    conns[h].dialled = dials - 1;
                     return 100 + h;
                 }
             abort();
@@ -135,26 +237,23 @@ int64_t os64_dial(const char *dialstring)
     return -2;
 }
 const char *os64_dial_reason(int64_t err) { return err == -3 ? "connection refused" : "no such host"; }
-// Every request in the order it was sent, kept past its connection's close
-// (slots are reused hop to hop, so `conns[]` alone holds only the latest).
-static char history[16][131072];
+// What was sent on each connection, by the order they were dialled, kept
+// past its close (slots are reused hop to hop, so `conns[]` alone holds only
+// the latest). A kept connection's requests follow one another in its entry.
+static char history[NCONNS][131072];
 static size_t write_limit, write_stop;
 static bool upload_cancel;
 int64_t os64_close(int32_t h)
 {
-    assert(h >= 100 && h < 116 && conns[h - 100].open);
+    assert(h >= 100 && h < 100 + NCONNS && conns[h - 100].open);
     conns[h - 100].open = false;
-    if (closes < 16) memcpy(history[closes], conns[h - 100].request, sizeof(history[0]));
     closes++;
     return 0;
 }
-// The i-th request sent: a closed connection's from the history, the one
-// still open from its slot.
+// What was sent on the i-th connection dialled.
 static const char *request_n(int i)
 {
-    if (i < closes) return history[i];
-    for (int h = 0; h < 16; h++) if (conns[h].open) return conns[h].request;
-    return "";
+    return i >= 0 && i < NCONNS ? history[i] : "";
 }
 static bool upload_complete(const conn_t *c)
 {
@@ -178,22 +277,29 @@ static int64_t conn_read(conn_t *c, void *buf, size_t cap, uint64_t wait_ms, boo
     if (c->peer->interim_len && c->served >= c->peer->interim_len && !upload_complete(c)) {
         now_ms += wait_ms; *timed_out = true; return 0;
     }
-    size_t left = c->peer->len - c->served;
+    size_t left = released(c) - c->served;
     if (c->peer->interim_len && c->served < c->peer->interim_len && !upload_complete(c))
         left = c->peer->interim_len - c->served;
+    if (left == 0 && c->peer->nanswers && !hung_up(c)) {
+        now_ms += wait_ms; *timed_out = true; return 0;   // a kept connection, waiting for a request
+    }
+    if (left == 0 && c->peer->drop_unseen == 2 && dropped(c)) return -1;   // the reset
     if (left == 0) return 0;
     size_t n = chunk_of(cap < left ? cap : left);
     if (c->peer->silent_after && c->served + n > c->peer->silent_after)
         n = c->peer->silent_after - c->served;
     memcpy(buf, c->peer->reply + c->served, n);
     c->served += n;
+    c->last_ms = now_ms;
     return (int64_t)n;
 }
 int64_t os64_read_for(int32_t h, void *buf, size_t cap, uint64_t ms)
 {
     conn_t *c = &conns[h - 100];
     assert(c->open);
-    if (!ms && !early_ready(c)) return OS64_ERR_TIMEOUT;
+    // A poll: a byte the peer has said, the close it has made, or nothing.
+    if (!ms && !early_ready(c) && !pending(c))
+        return poll_sees_close(c) ? 0 : OS64_ERR_TIMEOUT;
     bool timed_out;
     int64_t n = conn_read(c, buf, cap, ms, &timed_out);
     return timed_out ? OS64_ERR_TIMEOUT : n;
@@ -203,18 +309,27 @@ int64_t os64_write_for(int32_t h, const void *buf, size_t n, uint64_t ms)
     (void)ms;
     conn_t *c = &conns[h - 100];
     if (write_stop && c->reqlen >= write_stop) return -1;
+    if (c->peer->fail_write_at && requests_in(c) + 1 >= c->peer->fail_write_at) return -1;
     if (write_limit && n > write_limit) n = write_limit;
     assert(c->open && c->reqlen + n < sizeof(c->request));
     memcpy(c->request + c->reqlen, buf, n);
+    if (c->dialled < NCONNS)
+        memcpy(history[c->dialled] + c->reqlen, buf, n);
     c->reqlen += n;
     return (int64_t)n;
 }
 
 // ── TLS: the transport stubbed over the same connections ────────────────
 
-struct os64_tls_transport { int32_t handle; os64_tls_status_t status; bool closing; uint16_t version; };
+// `heard_ms`: when the engine last read the wire (a step or a read). A
+// close an idle server sends after that is ciphertext nobody has read yet,
+// and the engine's state does not know it, as a real engine does not.
+struct os64_tls_transport { int32_t handle; os64_tls_status_t status; bool closing; uint16_t version;
+                            uint64_t heard_ms; };
 static int tls_creates, tls_frees, trust_loads, trust_frees;
 static os64_tls_trust *fake_trust = (os64_tls_trust *)"trust";
+static const os64_tls_trust *last_trust;   // what the last TLS client was verified under
+static bool trust_fail_next;               // the next store read fails
 os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t h,
                                             const os64_tls_transport_limits_t *limits,
                                             os64_tls_transport **out)
@@ -223,6 +338,7 @@ os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t 
     assert(c && c->trust != NULL);
     assert(c->protocol==OS64_TLS_PROTOCOL_DEFAULT || c->protocol==OS64_TLS_PROTOCOL_TLS12_FALLBACK);
     tls_creates++;
+    last_trust = c->trust;
     struct os64_tls_transport *t = calloc(1, sizeof(*t));
     t->handle = h;
     t->status = c->protocol == OS64_TLS_PROTOCOL_TLS12_FALLBACK ? conns[h-100].peer->tls12_error : conns[h-100].peer->tls_default_error;
@@ -232,13 +348,21 @@ os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t 
 }
 os64_tls_state_t os64_tls_transport_state(os64_tls_transport *t)
 {
-    return (os64_tls_state_t){ .status = t->status, .flags = OS64_TLS_HANDSHAKE_DONE | OS64_TLS_SEND_PLAIN |
-                                   (early_ready(&conns[t->handle - 100]) ? OS64_TLS_RECV_PLAIN | OS64_TLS_SEND_CIPHER : 0),
+    conn_t *c = &conns[t->handle - 100];
+    // A peer that has said everything and closed: authenticated, unless it
+    // truncates.
+    os64_tls_status_t status = t->status;
+    bool unheard = idle_closed(c) && t->heard_ms < c->last_ms + c->peer->idle_close_ms;
+    if (status == OS64_TLS_OK && poll_sees_close(c) && !unheard)
+        status = c->peer->tls_truncate ? OS64_TLS_TRUNCATED : OS64_TLS_CLEAN_EOF;
+    return (os64_tls_state_t){ .status = status, .flags = OS64_TLS_HANDSHAKE_DONE | OS64_TLS_SEND_PLAIN |
+                                   (early_ready(c) || pending(c) ? OS64_TLS_RECV_PLAIN | OS64_TLS_SEND_CIPHER : 0),
                                .policy_reason = 0, .upstream_error = 0, .alpn = "http/1.1", .version = t->version };
 }
 os64_tls_status_t os64_tls_transport_step(os64_tls_transport *t, uint64_t ms)
 {
     now_ms += write_limit ? 0 : ms;
+    t->heard_ms = now_ms;
     if (t->closing) return t->status = OS64_TLS_CLEAN_EOF;
     return t->status == OS64_TLS_OK ? OS64_TLS_NEED_PROGRESS : t->status;
 }
@@ -252,9 +376,11 @@ os64_tls_transfer_t os64_tls_transport_read(os64_tls_transport *t, void *p, size
 {
     if (t->status != OS64_TLS_OK) return (os64_tls_transfer_t){ t->status, 0 };
     conn_t *c = &conns[t->handle - 100];
+    t->heard_ms = now_ms;
     bool timed_out;
     int64_t got = conn_read(c, p, n, 1000, &timed_out);
     if (timed_out) return (os64_tls_transfer_t){ OS64_TLS_NEED_PROGRESS, 0 };
+    if (got < 0) return (os64_tls_transfer_t){ t->status = OS64_TLS_TRANSPORT, 0 };
     if (got == 0) {
         t->status = c->peer->tls_truncate ? OS64_TLS_TRUNCATED : OS64_TLS_CLEAN_EOF;
         return (os64_tls_transfer_t){ t->status, 0 };
@@ -275,6 +401,10 @@ os64_tls_store_status_t os64_tls_trust_reload(os64_tls_trust **current, os64_tls
 {
     (void)report;
     trust_loads++;
+    if (trust_fail_next) {
+        trust_fail_next = false;
+        return OS64_TLS_STORE_OPEN;
+    }
     *current = fake_trust;
     return OS64_TLS_STORE_OK;
 }
@@ -285,7 +415,7 @@ const char *os64_tls_store_status_name(os64_tls_store_status_t s) { (void)s; ret
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-static char replies[32][262144];
+static char replies[NPEERS + 8][262144];
 static size_t nreplies;
 static const char *reply(const char *head, const char *body)
 {
@@ -319,13 +449,38 @@ static const char *reply_chunked_bytes(const char *status, const char *extra, co
     return r;
 }
 
+// A keep-alive peer: `answers` (NULL-terminated) said one per request, in
+// order, on every connection made to it.
+static peer_t *peer_answers(const char *host, uint16_t port, const char *const *answers)
+{
+    char *all = replies[nreplies++];
+    peer_t *p = peer_add(host, port, NULL);
+    size_t at = 0;
+    for (; answers[p->nanswers] != NULL; p->nanswers++) {
+        size_t n = strlen(answers[p->nanswers]);
+        assert(p->nanswers < 8 && at + n < sizeof(replies[0]));
+        memcpy(all + at, answers[p->nanswers], n);
+        p->answer_len[p->nanswers] = n;
+        at += n;
+    }
+    p->reply = (const uint8_t *)all;
+    p->len = at;
+    return p;
+}
+
 static void reset(void)
 {
+    // What an earlier case left in the pool closes first, so its closes are
+    // not this case's, and the system's store goes, so its read is.
+    fetch_pool_drain();
+    fetch_pool_trust_drop();
     peer_reset(); clear_env(); nreplies = 0;
     memset(conns, 0, sizeof(conns));
+    memset(history, 0, sizeof(history));
     dials = closes = tls_creates = tls_frees = trust_loads = trust_frees = 0;
+    last_trust = NULL; trust_fail_next = false;
     now_ms = 0; chunk_mode = 0; fail_next_malloc = false;
-    write_limit = write_stop = 0; upload_cancel = false;
+    write_limit = write_stop = 0; upload_cancel = false; open_limit = 0;
 }
 
 // Read the whole body into `out`, returning the byte count; the fetch's
@@ -381,7 +536,11 @@ static void case_plain(int mode)
     const os64_fetch_progress_t *p = os64_fetch_progress(f);
     CHECK(p->wire == n && p->produced == n && p->has_length && p->length == n);
     os64_fetch_close(f);
-    CHECK(closes == 1 && dials == 1);
+    // A 1.1 reply framed by its length and read to the end: the connection
+    // is kept, not closed (the peer's close is the next take's to find).
+    CHECK(closes == 0 && dials == 1 && fetch_pool_idle() == 1);
+    // And the request said nothing of its connection.
+    CHECK(strstr(req, "Connection") == NULL);
 }
 
 static void case_chunked_and_gzip(int mode)
@@ -516,11 +675,13 @@ static void case_redirects(void)
     const os64_fetch_head_t *h = os64_fetch_head(f);
     CHECK(h->status == 200 && h->hops == 2 && strcmp(h->url_text, "http://c.test/three?x=1") == 0);
     CHECK(hops.calls == 2 && hops.kinds[0] == OS64_FETCH_HOP_WHOLE && hops.kinds[1] == OS64_FETCH_HOP_WHOLE);
-    CHECK(dials == 3 && closes == 2);                 // two hops closed, the third open
+    // Two hops' connections kept (each redirect's body was empty), the
+    // third open.
+    CHECK(dials == 3 && closes == 0 && fetch_pool_idle() == 2);
     uint8_t out[4096];
     CHECK(slurp(f, out, sizeof(out), 0) == strlen(page));
     os64_fetch_close(f);
-    CHECK(closes == 3);
+    CHECK(closes == 0 && fetch_pool_idle() == 3);
 
     // A redirect to itself: stopped by default, the head readable; a
     // permissive caller follows it round until the cap.
@@ -588,7 +749,26 @@ static void case_https_and_downgrade(void)
     uint8_t out[4096];
     CHECK(slurp(f, out, sizeof(out), 0) == strlen(page) && os64_fetch_status(f) == OS64_FETCH_OK);
     os64_fetch_close(f);
-    CHECK(trust_frees == 1 && tls_frees == 1 && closes == 1);
+    // The system's store is the process's, kept for the next fetch.
+    CHECK(trust_frees == 0 && tls_frees == 1 && closes == 1);
+
+    // ONE SYSTEM STORE FOR EVERY FETCH THAT GIVES NONE: read once, every
+    // connection verified under it (the transport is handed it), and a read
+    // that failed is not kept — the next fetch reads again.
+    reset();
+    peer_add("secure.test", 443, reply_len("200 OK", "", page));
+    peer_add("other.test", 443, reply_len("200 OK", "", page));
+    trust_fail_next = true;
+    f = os64_fetch_open("https://secure.test/", NULL);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_TLS_FAILED && os64_fetch_detail(f)->store_failed && dials == 0);
+    os64_fetch_close(f);
+    f = os64_fetch_open("https://secure.test/", NULL);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && trust_loads == 2 && last_trust == fake_trust);
+    os64_fetch_close(f);
+    f = os64_fetch_open("https://other.test/", NULL);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && trust_loads == 2 && tls_creates == 2 && last_trust == fake_trust);
+    os64_fetch_close(f);
+    CHECK(trust_frees == 0);
 
     // A caller-owned store is never freed.
     reset();
@@ -629,7 +809,7 @@ static void case_https_and_downgrade(void)
     CHECK(os64_fetch_status(f) == OS64_FETCH_OK && !os64_fetch_head(f)->encrypted);
     CHECK(strcmp(os64_fetch_head(f)->url_text, "http://plain.test/") == 0 && os64_fetch_head(f)->hops == 1);
     os64_fetch_close(f);
-    CHECK(trust_frees == 1);   // loaded for the first hop, freed at close
+    CHECK(trust_loads == 1 && trust_frees == 0);   // read for the first hop, kept for the process
 }
 
 static void case_proxy(void)
@@ -891,15 +1071,18 @@ static void case_round1(void)
     os64_fetch_close(f);
 
     // A cancellation that lands while the trust store is loading must not
-    // leak the store: the predicate's second call (after the load) says yes.
+    // lose the store: the predicate's second call (after the load) says
+    // yes, and the store read is kept for the next fetch, not read again.
     reset(); cancel_now = false; cancel_after_calls = 2;
     peer_add("secure.test", 443, reply_len("200 OK", "", page));
     os64_fetch_options_t cancel = { .cancelled = cancelled_cb };
     f = os64_fetch_open("https://secure.test/", &cancel);
     CHECK(os64_fetch_status(f) == OS64_FETCH_INTERRUPTED && trust_loads == 1);
     os64_fetch_close(f);
-    CHECK(trust_frees == 1);
     cancel_now = false; cancel_after_calls = 0;
+    f = os64_fetch_open("https://secure.test/", NULL);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && trust_loads == 1 && trust_frees == 0);
+    os64_fetch_close(f);
 
     // The hop names who carried the hop that ANSWERED, so a caller can warn
     // about a proxied first leg even when the final head went direct.
@@ -1144,7 +1327,9 @@ static void case_post(void)
                 CHECK(*bytes == '\0');
                 CHECK(strstr(req, "Content-Length:") == NULL && strstr(req, "Content-Type:") == NULL);
             }
-            os64_fetch_close(f); CHECK(closes == 2);
+            // The redirect's empty body leaves its connection kept; the final
+            // reply's, never read, closes its own.
+            os64_fetch_close(f); CHECK(closes == 1 && fetch_pool_idle() == 1);
         }
     }
     reset();
@@ -1219,13 +1404,18 @@ static void case_early_post(void)
             unsigned char out[16];
             CHECK(slurp(f,out,sizeof(out),0)==5 && !memcmp(out,"hello",5));
             CHECK(os64_fetch_status(f)==OS64_FETCH_OK);
-            os64_fetch_close(f); CHECK(dials==1 && closes==1);
+            // Kept only when the upload went whole: an answer that stopped it
+            // leaves the server reading a body that never ends. (Over TLS this
+            // peer's close is authenticated with the reply, so none is kept.)
+            os64_fetch_close(f);
+            CHECK(dials==1 && closes + (int)fetch_pool_idle()==1);
+            CHECK((fetch_pool_idle()==1) == (!tls && (kind==2 || kind==3)));
         }
     }
 }
 
 typedef struct {
-    unsigned asked, received, hops;
+    unsigned asked, received, hops, headers;
     const char *output;
     bool fail, unterminated, chain, encrypted, cancelled, cancel_header, cancel_cookie;
     char values[8][HTTP_LINE_MAX], hosts[8][OS64_URL_HOST_MAX];
@@ -1288,7 +1478,7 @@ static void case_cookies(void)
         CHECK(strcmp(t.hosts[0], "a.test") == 0 && strcmp(t.hosts[1], "a.test") == 0 && strcmp(t.hosts[2], "b.test") == 0);
         CHECK(strstr(request_n(0), "Cookie: first=1\r\n") && strstr(request_n(0), "Authorization: secret\r\n"));
         CHECK(strstr(request_n(1), "Cookie: second=2\r\n") && !strstr(request_n(1), "Authorization:"));
-        os64_fetch_close(f); CHECK(closes == 2);
+        os64_fetch_close(f); CHECK(closes == 1 && fetch_pool_idle() == 1);   // the empty redirect's kept
 
         // 1xx and trailers cannot set a cookie; an oversized cookie is
         // ignored whole rather than shortened into a different value.
@@ -1782,6 +1972,726 @@ static void case_tls_version_fallback(void)
     CHECK(os64_fetch_detail(f)->tls_fallback); os64_fetch_close(f);
 }
 
+// ── Keep-alive: one connection, many requests (WIRE.md § 2) ─────────────
+
+static const char *const kFirst = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nfirst";
+static const char *const kSecond = "HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nsecond";
+
+// One fetch, read to its end and closed: its final status, its body in
+// `out`, and its reason in `why`.
+static os64_fetch_status_t fetch_all(const char *url, const os64_fetch_options_t *opt, char *out,
+                                     size_t cap, char *why, size_t why_cap)
+{
+    os64_fetch_t *f = os64_fetch_open(url, opt);
+    CHECK(f != NULL);
+    size_t n = os64_fetch_head(f) ? slurp(f, (uint8_t *)out, cap - 1, 0) : 0;
+    out[n] = '\0';
+    os64_fetch_status_t st = os64_fetch_status(f);
+    if (why != NULL)
+        snprintf(why, why_cap, "%s", os64_fetch_reason(f));
+    os64_fetch_close(f);
+    return st;
+}
+
+// How many requests went on the i-th connection dialled.
+static int requests_on(int i)
+{
+    int n = 0;
+    for (const char *p = request_n(i); (p = strstr(p, " HTTP/1.1\r\nHost: ")) != NULL; p++) n++;
+    return n;
+}
+
+static void case_keepalive_reuse(void)
+{
+    // Each first answer leaves the connection at a message's end, and the
+    // second request goes on the same one: a length-framed body, a chunked
+    // one with trailers, and the three bodiless answers (HEAD's, a 204, a
+    // 304 whose Content-Length describes what was not sent), each closed
+    // with and without its body read.
+    static const struct { const char *first, *method, *body; } ok[] = {
+        { "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nfirst", NULL, "first" },
+        { "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nfi\r\n3\r\nrst\r\n0\r\n"
+          "X-Trailer: 1\r\nX-Other: 2\r\n\r\n", NULL, "first" },
+        { "HTTP/1.1 200 OK\r\nContent-Length: 999\r\n\r\n", "HEAD", "" },
+        { "HTTP/1.1 204 No Content\r\n\r\n", NULL, "" },
+        { "HTTP/1.1 304 Not Modified\r\nContent-Length: 999\r\nETag: \"v\"\r\n\r\n", NULL, "" },
+        { "HTTP/1.1 205 Reset Content\r\nContent-Length: 0\r\n\r\n", NULL, "" },
+        { "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n", NULL, "" },
+        // A HEAD's 205 sends nothing, whatever its length says.
+        { "HTTP/1.1 205 Reset Content\r\nContent-Length: 5\r\n\r\n", "HEAD", "" },
+    };
+    for (int tls = 0; tls < 2; tls++)
+        for (int mode = 0; mode < 3; mode++)
+            for (size_t i = 0; i < sizeof(ok) / sizeof(ok[0]); i++)
+                for (int read = 0; read < 2; read++) {
+                    reset(); chunk_mode = mode;
+                    const char *answers[] = { ok[i].first, kSecond, NULL };
+                    peer_answers("keep.test", tls ? 443 : 80, answers);
+                    const char *url = tls ? "https://keep.test/a" : "http://keep.test/a";
+                    os64_fetch_options_t opt = { .method_name = ok[i].method };
+                    os64_fetch_t *f = os64_fetch_open(url, &opt);
+                    CHECK(os64_fetch_status(f) == OS64_FETCH_OK);
+                    char out[64] = {0};
+                    // Unread, only a body that was never sent is whole.
+                    bool empty = ok[i].body[0] == '\0';
+                    if (read || !empty) {
+                        size_t n = slurp(f, (uint8_t *)out, sizeof(out) - 1, mode == 1 ? 1 : 0);
+                        CHECK(n == strlen(ok[i].body) && memcmp(out, ok[i].body, n) == 0);
+                        CHECK(os64_fetch_status(f) == OS64_FETCH_OK);
+                    }
+                    os64_fetch_close(f);
+                    CHECK(closes == 0 && fetch_pool_idle() == 1);
+                    char why[256];
+                    CHECK(fetch_all(url, NULL, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_OK);
+                    CHECK(strcmp(out, "second") == 0 && dials == 1 && requests_on(0) == 2);
+                    CHECK(strstr(why, "retried") == NULL);
+                    CHECK(trust_loads == tls);           // the kept connection needs no store
+                    CHECK(fetch_pool_idle() == 1 && closes == 0);
+                }
+}
+
+static void case_keepalive_refused(void)
+{
+    // Each of these leaves the connection where it may not carry another
+    // request: closed when the fetch is, and the next request dials.
+    static const struct { const char *first; size_t read; const char *why; } no[] = {
+        { "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 5\r\n\r\nfirst", 99, "the reply's close" },
+        { "HTTP/1.1 200 OK\r\nConnection: Keep-Alive, CLOSE\r\nContent-Length: 5\r\n\r\nfirst", 99, "close in a list" },
+        { "HTTP/1.1 200 OK\r\nConnection: x\r\nconnection: close\r\nContent-Length: 5\r\n\r\nfirst", 99, "close on a second line" },
+        { "HTTP/1.0 200 OK\r\nContent-Length: 5\r\n\r\nfirst", 99, "a 1.0 reply" },
+        { "HTTP/1.0 200 OK\r\nConnection: keep-alive\r\nContent-Length: 5\r\n\r\nfirst", 99, "a 1.0 keep-alive" },
+        { "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nfirst", 2, "a body abandoned" },
+        { "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nfirst\r\n0\r\n\r\n", 3, "a chunked body abandoned" },
+        { "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n", 99, "a framing refused" },
+        { "HTTP/1.1 200 OK\r\nContent-Encoding: br\r\nContent-Length: 5\r\n\r\nfirst", 99, "a coding refused" },
+        { "HTTP/1.1 205 Reset Content\r\nContent-Length: 5\r\n\r\nfirst", 99, "a 205 that sent bytes" },
+        { "HTTP/1.1 200 OK\r\n\r\nfirst", 99, "a body read to the close" },
+        // Framed whole on the wire, and still a fetch that failed.
+        { "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 5\r\n\r\nfirst", 99,
+          "a gzip body that did not decode" },
+    };
+    for (int tls = 0; tls < 2; tls++)
+        for (int mode = 0; mode < 3; mode++)
+            for (size_t i = 0; i < sizeof(no) / sizeof(no[0]); i++) {
+                reset(); chunk_mode = mode;
+                const char *answers[] = { no[i].first, kSecond, NULL };
+                peer_t *p = peer_answers("keep.test", tls ? 443 : 80, answers);
+                // A body framed by the close ends only at the close.
+                if (strstr(no[i].first, "Length") == NULL && strstr(no[i].first, "chunked") == NULL)
+                    p->hangup_after = 1;
+                const char *url = tls ? "https://keep.test/a" : "http://keep.test/a";
+                os64_fetch_t *f = os64_fetch_open(url, NULL);
+                if (os64_fetch_head(f) != NULL) {
+                    char out[64];
+                    size_t at = 0;
+                    while (at < no[i].read) {
+                        int64_t n = os64_fetch_read(f, out, no[i].read - at < sizeof(out) ? no[i].read - at : sizeof(out));
+                        if (n <= 0) break;
+                        at += (size_t)n;
+                    }
+                }
+                os64_fetch_close(f);
+                if (fetch_pool_idle() != 0 || closes != 1)
+                    fprintf(stderr, "kept after %s (tls %d, mode %d)\n", no[i].why, tls, mode);
+                CHECK(fetch_pool_idle() == 0 && closes == 1);
+                char out[64];
+                fetch_all(url, NULL, out, sizeof(out), NULL, 0);
+                CHECK(dials == 2);
+            }
+
+    // The transport's own failure: authenticated bytes beside a TLS protocol
+    // failure are not a connection to keep.
+    reset();
+    const char *answers[] = { kFirst, kSecond, NULL };
+    peer_t *p = peer_answers("keep.test", 443, answers);
+    p->tls_bad_prefix = true;
+    char out[64];
+    fetch_all("https://keep.test/a", NULL, out, sizeof(out), NULL, 0);
+    CHECK(fetch_pool_idle() == 0 && closes == 1);
+
+    // The request never says Connection: close, and says keep-alive only
+    // when asked.
+    reset();
+    peer_answers("keep.test", 80, answers);
+    os64_fetch_options_t ka = { .keep_alive = true };
+    fetch_all("http://keep.test/a", &ka, out, sizeof(out), NULL, 0);
+    fetch_all("http://keep.test/b", NULL, out, sizeof(out), NULL, 0);
+    CHECK(dials == 1 && strstr(request_n(0), "\r\nConnection: keep-alive\r\n") != NULL);
+    CHECK(strstr(strstr(request_n(0), "GET /b"), "Connection") == NULL);
+    CHECK(strstr(request_n(0), "close") == NULL);
+}
+
+static void case_keepalive_hostile(void)
+{
+    char out[64], why[256];
+    for (int tls = 0; tls < 2; tls++)
+        for (int mode = 0; mode < 3; mode++) {
+            const char *url = tls ? "https://evil.test/" : "http://evil.test/";
+            uint16_t port = tls ? 443 : 80;
+
+            // A SMUGGLED REPLY: a body that says two bytes, and a whole
+            // second reply behind it in the same answer. Whether its bytes
+            // are already read (leftover at the put) or still on the wire
+            // (the probe at the take), the next request never reads it.
+            reset(); chunk_mode = mode;
+            const char *smuggle[] = { "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"
+                                      "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nevil", kSecond, NULL };
+            peer_answers("evil.test", port, smuggle);
+            CHECK(fetch_all(url, NULL, out, sizeof(out), NULL, 0) == OS64_FETCH_OK && !strcmp(out, "hi"));
+            CHECK(fetch_all(url, NULL, out, sizeof(out), NULL, 0) == OS64_FETCH_OK);
+            CHECK(strcmp(out, "evil") != 0 && dials == 2 && requests_on(0) == 1);
+
+            // A LENGTH THAT LIES, past the bytes sent, on a server that keeps
+            // the connection: the read waits out its patience, and the
+            // connection is not kept.
+            reset(); chunk_mode = mode;
+            const char *lie[] = { "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nhello", kSecond, NULL };
+            peer_answers("evil.test", port, lie);
+            os64_fetch_options_t quick = { .idle_ms = 500 };
+            CHECK(fetch_all(url, &quick, out, sizeof(out), NULL, 0) == OS64_FETCH_SILENT);
+            CHECK(fetch_pool_idle() == 0 && closes == 1);
+
+            // A 1xx FLOOD: more interim replies than a fetch reads.
+            reset(); chunk_mode = mode;
+            static char flood[1024];
+            size_t at = 0;
+            for (int i = 0; i < HTTP_INTERIM_MAX + 1; i++)
+                at += (size_t)snprintf(flood + at, sizeof(flood) - at, "HTTP/1.1 103 Early Hints\r\n\r\n");
+            snprintf(flood + at, sizeof(flood) - at, "%s", kFirst);
+            const char *floods[] = { flood, kSecond, NULL };
+            peer_answers("evil.test", port, floods);
+            CHECK(fetch_all(url, NULL, out, sizeof(out), NULL, 0) == OS64_FETCH_BAD_HEAD);
+            CHECK(fetch_pool_idle() == 0 && closes == 1);
+            // ...and exactly as many as it reads is a reply, and kept.
+            reset(); chunk_mode = mode;
+            at = 0;
+            for (int i = 0; i < HTTP_INTERIM_MAX; i++)
+                at += (size_t)snprintf(flood + at, sizeof(flood) - at, "HTTP/1.1 103 Early Hints\r\n\r\n");
+            snprintf(flood + at, sizeof(flood) - at, "%s", kFirst);
+            peer_answers("evil.test", port, floods);
+            CHECK(fetch_all(url, NULL, out, sizeof(out), NULL, 0) == OS64_FETCH_OK && !strcmp(out, "first"));
+            CHECK(fetch_pool_idle() == 1);
+
+            // A SERVER THAT NEVER CLOSES: a body framed by nothing on a
+            // connection the server holds open is never whole; the read waits
+            // out its patience and nothing is kept.
+            reset(); chunk_mode = mode;
+            const char *endless[] = { "HTTP/1.1 200 OK\r\n\r\nand on", kSecond, NULL };
+            peer_answers("evil.test", port, endless);
+            CHECK(fetch_all(url, &quick, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_SILENT);
+            CHECK(fetch_pool_idle() == 0 && closes == 1);
+            // ...and one that keeps an idle connection forever is closed by
+            // the pool once sixty seconds have gone, not used again.
+            reset(); chunk_mode = mode;
+            const char *answers[] = { kFirst, kSecond, NULL };
+            peer_answers("evil.test", port, answers);
+            fetch_all(url, NULL, out, sizeof(out), NULL, 0);
+            now_ms += FETCH_POOL_IDLE_MS - 1;
+            CHECK(fetch_all(url, NULL, out, sizeof(out), NULL, 0) == OS64_FETCH_OK && !strcmp(out, "second"));
+            CHECK(dials == 1);
+            now_ms += FETCH_POOL_IDLE_MS;
+            CHECK(fetch_all(url, NULL, out, sizeof(out), NULL, 0) == OS64_FETCH_OK && !strcmp(out, "first"));
+            CHECK(dials == 2 && closes == 1);
+        }
+}
+
+static bool flag_cancelled(void *ctx) { return *(bool *)ctx; }
+
+static void case_keepalive_owner(void)
+{
+    // CANCEL AND STOP: a fetch its owner cancels closes its connection,
+    // whether the cancel lands mid-body or after the body was whole.
+    char out[64];
+    for (int tls = 0; tls < 2; tls++)
+        for (int when = 0; when < 2; when++) {
+            reset();
+            const char *answers[] = { kFirst, kSecond, NULL };
+            peer_answers("own.test", tls ? 443 : 80, answers);
+            bool stop = false;
+            os64_fetch_options_t opt = { .cancelled = flag_cancelled, .ctx = &stop };
+            os64_fetch_t *f = os64_fetch_open(tls ? "https://own.test/" : "http://own.test/", &opt);
+            CHECK(os64_fetch_status(f) == OS64_FETCH_OK);
+            if (when == 0) {
+                CHECK(os64_fetch_read(f, out, 2) == 2);
+                stop = true;
+                CHECK(os64_fetch_read(f, out, sizeof(out)) < 0 && os64_fetch_status(f) == OS64_FETCH_INTERRUPTED);
+            } else {
+                CHECK(slurp(f, (uint8_t *)out, sizeof(out), 0) == 5 && os64_fetch_status(f) == OS64_FETCH_OK);
+                stop = true;           // the window's stop, as the fetch is closed
+            }
+            os64_fetch_close(f);
+            CHECK(fetch_pool_idle() == 0 && closes == 1);
+        }
+
+    // A TLS CONNECTION IS KEPT FOR ITS TRUST, and no other: the caller's
+    // store, another store, and the library's own loading are three keys.
+    static char store_a, store_b;
+    os64_tls_trust *a = (os64_tls_trust *)&store_a, *b = (os64_tls_trust *)&store_b;
+    reset();
+    const char *many[] = { kFirst, kFirst, kFirst, kFirst, kFirst, kFirst, NULL };
+    peer_answers("trust.test", 443, many);
+    os64_fetch_options_t with_a = { .trust = a }, with_b = { .trust = b };
+    fetch_all("https://trust.test/", &with_a, out, sizeof(out), NULL, 0);
+    fetch_all("https://trust.test/", &with_b, out, sizeof(out), NULL, 0);
+    CHECK(dials == 2);
+    fetch_all("https://trust.test/", NULL, out, sizeof(out), NULL, 0);
+    CHECK(dials == 3 && trust_loads == 1);
+    fetch_all("https://trust.test/", &with_a, out, sizeof(out), NULL, 0);
+    fetch_all("https://trust.test/", &with_b, out, sizeof(out), NULL, 0);
+    fetch_all("https://trust.test/", NULL, out, sizeof(out), NULL, 0);
+    CHECK(dials == 3 && trust_loads == 1 && fetch_pool_idle() == 3);
+    CHECK(requests_on(0) == 2 && requests_on(1) == 2 && requests_on(2) == 2);
+    // ...and a plain connection to the same host and port is not a TLS one.
+    reset();
+    peer_answers("trust.test", 443, many);
+    fetch_all("https://trust.test/", NULL, out, sizeof(out), NULL, 0);
+    fetch_all("http://trust.test:443/", NULL, out, sizeof(out), NULL, 0);
+    CHECK(dials == 2);
+
+    // PROXIES: a plain proxy's connection carries any host it serves, and is
+    // the proxy's alone: a direct request to another host does not share it.
+    reset();
+    set_env("http_proxy", "proxy.test:3128");
+    peer_answers("proxy.test", 3128, many);
+    fetch_all("http://one.test/x", NULL, out, sizeof(out), NULL, 0);
+    fetch_all("http://two.test/y", NULL, out, sizeof(out), NULL, 0);
+    CHECK(dials == 1 && strstr(request_n(0), "GET http://one.test/x HTTP/1.1\r\nHost: one.test\r\n"));
+    CHECK(strstr(request_n(0), "GET http://two.test/y HTTP/1.1\r\nHost: two.test\r\n"));
+    CHECK(strstr(request_n(0), "Proxy-Connection") == NULL);
+    clear_env();
+    peer_answers("one.test", 80, many);
+    fetch_all("http://one.test/x", NULL, out, sizeof(out), NULL, 0);
+    CHECK(dials == 2 && strcmp(last_dial, "tcp!one.test!80") == 0);
+}
+
+static void case_keepalive_caps(void)
+{
+    char out[64];
+    // SIX FOR ONE KEY: seven fetches open at once to one host, closed in
+    // order, leave six kept and the first one closed — the least recent.
+    reset();
+    const char *many[] = { kFirst, kFirst, kFirst, NULL };
+    peer_answers("cap.test", 80, many);
+    os64_fetch_t *f[FETCH_POOL_PER_KEY + 1];
+    for (int i = 0; i <= FETCH_POOL_PER_KEY; i++)
+        f[i] = os64_fetch_open("http://cap.test/", NULL);
+    for (int i = 0; i <= FETCH_POOL_PER_KEY; i++) {
+        CHECK(slurp(f[i], (uint8_t *)out, sizeof(out), 0) == 5);
+        now_ms++;
+        os64_fetch_close(f[i]);
+    }
+    CHECK(dials == FETCH_POOL_PER_KEY + 1 && fetch_pool_idle() == FETCH_POOL_PER_KEY);
+    CHECK(closes == 1 && !conns[0].open && conns[1].open);
+    // The next request takes the most recently kept.
+    fetch_all("http://cap.test/", NULL, out, sizeof(out), NULL, 0);
+    CHECK(requests_on(FETCH_POOL_PER_KEY) == 2 && requests_on(1) == 1);
+
+    // THE WHOLE POOL'S CAP: one connection to each of one host more than it
+    // holds, and the first kept is the one let go.
+    reset();
+    static char names[FETCH_POOL_TOTAL + 1][32];
+    for (int i = 0; i <= FETCH_POOL_TOTAL; i++) {
+        snprintf(names[i], sizeof(names[i]), "h%d.test", i);
+        peer_answers(names[i], 80, many);
+    }
+    for (int i = 0; i <= FETCH_POOL_TOTAL; i++) {
+        char url[64];
+        snprintf(url, sizeof(url), "http://%s/", names[i]);
+        now_ms++;
+        fetch_all(url, NULL, out, sizeof(out), NULL, 0);
+    }
+    CHECK(fetch_pool_idle() == FETCH_POOL_TOTAL && closes == 1 && !conns[0].open);
+    fetch_all("http://h1.test/", NULL, out, sizeof(out), NULL, 0);
+    fetch_all("http://h0.test/", NULL, out, sizeof(out), NULL, 0);
+    CHECK(dials == FETCH_POOL_TOTAL + 2 && requests_on(1) == 2);
+
+    // OUT OF HANDLES: the pool at its cap and a task with no handle left
+    // for another connection. The dial is refused, a kept connection is let
+    // go — the least recent — and the dial tried once more, which succeeds.
+    reset();
+    for (int i = 0; i <= FETCH_POOL_TOTAL; i++)
+        peer_answers(names[i], 80, many);
+    for (int i = 0; i < FETCH_POOL_TOTAL; i++) {
+        char url[64];
+        snprintf(url, sizeof(url), "http://%s/", names[i]);
+        now_ms++;
+        fetch_all(url, NULL, out, sizeof(out), NULL, 0);
+    }
+    CHECK(fetch_pool_idle() == FETCH_POOL_TOTAL && closes == 0);
+    open_limit = FETCH_POOL_TOTAL;
+    char url[64], why[256];
+    snprintf(url, sizeof(url), "http://%s/", names[FETCH_POOL_TOTAL]);
+    CHECK(fetch_all(url, NULL, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_OK && !strcmp(out, "first"));
+    // The least recent (the first host's) went: asking it again dials.
+    CHECK(dials == FETCH_POOL_TOTAL + 2 && closes == 1 && fetch_pool_idle() == FETCH_POOL_TOTAL);
+    open_limit = 0;
+    fetch_all("http://h0.test/", NULL, out, sizeof(out), NULL, 0);
+    CHECK(dials == FETCH_POOL_TOTAL + 3);
+    // A CLOCK THAT WENT BACKWARDS: a connection kept "later" than now has
+    // an age nobody can know, and is closed rather than trusted.
+    reset();
+    peer_answers("clock.test", 80, many);
+    now_ms = 5000;
+    fetch_all("http://clock.test/", NULL, out, sizeof(out), NULL, 0);
+    CHECK(fetch_pool_idle() == 1);
+    now_ms = 4000;
+    fetch_all("http://clock.test/", NULL, out, sizeof(out), NULL, 0);
+    CHECK(dials == 2 && closes == 1 && requests_on(0) == 1);
+    reset();
+    for (int i = 0; i <= FETCH_POOL_TOTAL; i++)
+        peer_answers(names[i], 80, many);
+    // ...and with nothing kept to let go, the refusal is the fetch's.
+    fetch_pool_drain();
+    open_limit = 1;
+    conns[1].open = true;              // a handle the program holds itself
+    CHECK(fetch_all(url, NULL, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_DIAL_FAILED);
+    conns[1].open = false;
+}
+
+// Every final-head field an observer hears, counted.
+static void count_header(void *ctx, const char *name, size_t name_len, const char *value, size_t value_len)
+{
+    (void)name; (void)name_len; (void)value; (void)value_len;
+    ((cookie_test_t *)ctx)->headers++;
+}
+
+static void case_keepalive_retry(void)
+{
+    char out[64], why[256];
+    for (int tls = 0; tls < 2; tls++) {
+        const char *url = tls ? "https://again.test/" : "http://again.test/";
+        uint16_t port = tls ? 443 : 80;
+        const char *answers[] = { kFirst, kSecond, NULL };
+
+        // A KEPT CONNECTION THE SERVER CLOSED, found by the request: a GET
+        // goes once more on a fresh connection, and the reason says so.
+        // Four ways to find it: the close seen as the request is written
+        // (the upload's poll), a write that breaks, and — the request
+        // written whole first — a close or a reset that only the reply's
+        // read finds.
+        for (int how = 0; how < 4; how++) {
+            reset();
+            peer_t *p = peer_answers("again.test", port, answers);
+            if (how == 1) p->fail_write_at = 2; else p->drop_request = 2;
+            p->drop_unseen = how >= 2 ? how - 1 : 0;
+            CHECK(fetch_all(url, NULL, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_OK);
+            CHECK(strstr(why, "retried") == NULL);
+            CHECK(fetch_all(url, NULL, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_OK);
+            CHECK(strcmp(out, "first") == 0 && dials == 2);
+            CHECK(strstr(why, "retried once on a fresh connection") != NULL);
+        }
+
+        // Each idempotent method the same; a POST and a method the list does
+        // not name fail as they would have, sent once.
+        static const struct { const char *method; bool again; } methods[] = {
+            {"GET", true}, {"HEAD", true}, {"OPTIONS", true}, {"PUT", true}, {"DELETE", true},
+            {"POST", false}, {"PATCH", false}, {"get", false},
+        };
+        for (size_t i = 0; i < sizeof(methods) / sizeof(methods[0]); i++) {
+            reset();
+            peer_t *p = peer_answers("again.test", port, answers);
+            p->drop_request = 2;
+            fetch_all(url, NULL, out, sizeof(out), NULL, 0);
+            os64_fetch_options_t opt = { .method_name = methods[i].method };
+            os64_fetch_status_t st = fetch_all(url, &opt, out, sizeof(out), why, sizeof(why));
+            CHECK((st == OS64_FETCH_OK) == methods[i].again);
+            CHECK(dials == (methods[i].again ? 2 : 1));
+            CHECK((strstr(why, "retried") != NULL) == methods[i].again);
+            CHECK(requests_on(0) == 2);
+        }
+        // A PUT's body goes again with it, whole: the server that closed may
+        // never have read the first.
+        reset();
+        peer_t *put_peer = peer_answers("again.test", port, answers);
+        put_peer->drop_request = 2;
+        put_peer->drop_unseen = 1;
+        fetch_all(url, NULL, out, sizeof(out), NULL, 0);
+        os64_fetch_options_t put = { .method_name = "PUT", .body = "a=1&b=2", .body_len = 7 };
+        CHECK(fetch_all(url, &put, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_OK);
+        CHECK(dials == 2 && strstr(why, "retried") != NULL);
+        const char *again_put = request_n(1);
+        CHECK(strncmp(again_put, "PUT / HTTP/1.1\r\n", 16) == 0 && strstr(again_put, "Content-Length: 7\r\n") &&
+              strcmp(again_put + strlen(again_put) - 11, "\r\n\r\na=1&b=2") == 0);
+        // The POST of the options' own method, with a body, is not sent twice.
+        reset();
+        peer_t *p = peer_answers("again.test", port, answers);
+        p->drop_request = 2;
+        fetch_all(url, NULL, out, sizeof(out), NULL, 0);
+        os64_fetch_options_t post = { .method = OS64_FETCH_METHOD_POST, .body = "x=1", .body_len = 3 };
+        // (Plain, the closed connection is found by the upload's own
+        // lookahead, REQUEST_FAILED; over TLS, by the head, BAD_HEAD.)
+        CHECK(fetch_all(url, &post, out, sizeof(out), why, sizeof(why)) != OS64_FETCH_OK);
+        CHECK(dials == 1 && strstr(why, "retried") == NULL);
+
+        // A FRESH CONNECTION IS NEVER RETRIED, whatever the method.
+        reset();
+        p = peer_answers("again.test", port, answers);
+        p->drop_request = 1;
+        CHECK(fetch_all(url, NULL, out, sizeof(out), why, sizeof(why)) != OS64_FETCH_OK);
+        CHECK(dials == 1 && strstr(why, "retried") == NULL);
+
+        // TWO REQUESTS, EACH RETRIED: a redirect from one host to another,
+        // and a dead kept connection waiting at both. The reason counts them.
+        reset();
+        const char *to_b[] = { tls ? "HTTP/1.1 302 Found\r\nLocation: https://b.test/\r\nContent-Length: 0\r\n\r\n"
+                                   : "HTTP/1.1 302 Found\r\nLocation: http://b.test/\r\nContent-Length: 0\r\n\r\n",
+                               NULL };
+        peer_t *pa = peer_answers("a.test", port, to_b), *pb = peer_answers("b.test", port, answers);
+        pa->drop_request = pb->drop_request = 2;
+        pa->drop_unseen = pb->drop_unseen = 1;
+        os64_fetch_options_t stop = { .method_name = "GET" };       // a method by name stops at the 302
+        fetch_all(tls ? "https://b.test/" : "http://b.test/", NULL, out, sizeof(out), NULL, 0);
+        fetch_all(tls ? "https://a.test/" : "http://a.test/", &stop, out, sizeof(out), NULL, 0);
+        CHECK(fetch_pool_idle() == 2);
+        CHECK(fetch_all(tls ? "https://a.test/" : "http://a.test/", NULL, out, sizeof(out), why, sizeof(why)) ==
+              OS64_FETCH_OK && !strcmp(out, "first") && dials == 4);
+        CHECK(strstr(why, "(2 requests retried, each once on a fresh connection)") != NULL);
+
+        // A 408 ON THE KEPT CONNECTION: the server timed it out and says
+        // so. A GET goes again on a fresh one, and nothing of the 408 —
+        // not a header, not a cookie — reaches the caller; a POST hears
+        // the 408 as its answer; and a fresh connection's 408 is an answer.
+        for (int post = 0; post < 2; post++) {
+            reset();
+            const char *timed_out[] = { kFirst, "HTTP/1.1 408 Request Timeout\r\nSet-Cookie: stale=1\r\n"
+                                                "X-From: the-408\r\nContent-Length: 0\r\n\r\n", NULL };
+            peer_answers("again.test", port, timed_out);
+            fetch_all(url, NULL, out, sizeof(out), NULL, 0);
+            cookie_test_t t = { .output = "" };
+            os64_fetch_options_t opt = { .on_set_cookie = cookie_received, .on_header = count_header, .ctx = &t };
+            if (post) { opt.method = OS64_FETCH_METHOD_POST; opt.body = "x=1"; opt.body_len = 3; }
+            os64_fetch_t *f = os64_fetch_open(url, &opt);
+            CHECK(f != NULL && os64_fetch_head(f) != NULL);
+            CHECK(os64_fetch_head(f)->status == (post ? 408 : 200));
+            // The 408's three fields and its cookie, or kFirst's one field.
+            CHECK(dials == (post ? 1 : 2) && t.received == (post ? 1u : 0u) && t.headers == (post ? 3u : 1u));
+            CHECK((strstr(os64_fetch_reason(f), "retried") != NULL) == !post);
+            os64_fetch_close(f);
+        }
+        reset();
+        const char *fresh408[] = { "HTTP/1.1 408 Request Timeout\r\nContent-Length: 0\r\n\r\n", NULL };
+        peer_answers("again.test", port, fresh408);
+        CHECK(fetch_all(url, NULL, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_OK && dials == 1 &&
+              strstr(why, "retried") == NULL);
+
+        // ONCE: the fresh connection failing too is the fetch's failure.
+        reset();
+        p = peer_answers("again.test", port, answers);
+        p->drop_request = 2;
+        fetch_all(url, NULL, out, sizeof(out), NULL, 0);
+        p->refuse = true;
+        CHECK(fetch_all(url, NULL, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_DIAL_FAILED);
+        CHECK(dials == 2 && strstr(why, "retried once on a fresh connection") != NULL);
+
+        // A SILENCE is not a closed connection: the request may be in hand.
+        reset();
+        const char *one[] = { kFirst, NULL };
+        peer_answers("again.test", port, one);
+        fetch_all(url, NULL, out, sizeof(out), NULL, 0);
+        os64_fetch_options_t quick = { .idle_ms = 500 };
+        CHECK(fetch_all(url, &quick, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_SILENT);
+        CHECK(dials == 1 && strstr(why, "retried") == NULL);
+
+        // A reply that BEGAN is not retried either: bytes arrived.
+        reset();
+        const char *cut[] = { kFirst, "HTTP/1.1 200", NULL };
+        p = peer_answers("again.test", port, cut);
+        p->hangup_after = 2;
+        fetch_all(url, NULL, out, sizeof(out), NULL, 0);
+        CHECK(fetch_all(url, NULL, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_BAD_HEAD);
+        CHECK(dials == 1 && strstr(why, "retried") == NULL);
+    }
+}
+
+static void case_keepalive_paths(void)
+{
+    char out[64], why[256];
+    const char *answers[] = { kFirst, kSecond, NULL };
+    for (int tls = 0; tls < 2; tls++) {
+        const char *url = tls ? "https://idle.test/" : "http://idle.test/";
+        // THE PROBE AT THE TAKE: a server that closed its idle side after
+        // the connection was kept. The probe finds the close (a TLS one by
+        // stepping the engine, a plain one by a poll), the connection is
+        // closed, and a new one is dialled: no request is sent to find out,
+        // and none is retried.
+        reset();
+        peer_t *p = peer_answers("idle.test", tls ? 443 : 80, answers);
+        p->idle_close_ms = 1000;
+        CHECK(fetch_all(url, NULL, out, sizeof(out), NULL, 0) == OS64_FETCH_OK && fetch_pool_idle() == 1);
+        now_ms += 2000;
+        CHECK(fetch_all(url, NULL, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_OK && !strcmp(out, "first"));
+        CHECK(dials == 2 && closes == 1 && requests_on(0) == 1 && strstr(why, "retried") == NULL);
+    }
+
+    // A REDIRECT'S COURTESY BODY STILL ON ITS WAY: a 302 that promises
+    // thirteen bytes and has sent none. Nobody reads them, so the
+    // connection is not kept for its key, whatever arrives on it later.
+    reset();
+    const char *redirect[] = { "HTTP/1.1 302 Found\r\nLocation: http://next.test/\r\nContent-Length: 13\r\n\r\n", NULL };
+    peer_answers("from.test", 80, redirect);
+    peer_answers("next.test", 80, answers);
+    CHECK(fetch_all("http://from.test/", NULL, out, sizeof(out), NULL, 0) == OS64_FETCH_OK && !strcmp(out, "first"));
+    CHECK(fetch_pool_idle() == 1 && closes == 1);       // next.test's kept, from.test's closed
+
+    // AN ANSWER BEFORE THE REQUEST'S OWN HEAD WAS WHOLE: a server that
+    // replies after fifty bytes of a long head has read a request that
+    // never ended, body or no body.
+    reset(); write_limit = 17;
+    static char pad[400];
+    memset(pad, 0, sizeof(pad));
+    strcpy(pad, "X-Pad: ");
+    memset(pad + 7, 'p', 300);
+    strcat(pad, "\r\n");
+    peer_t *early = peer_add("early.test", 80, "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nfirst");
+    early->early_after = 50;
+    os64_fetch_options_t padded = { .extra_headers = pad };
+    CHECK(fetch_all("http://early.test/", &padded, out, sizeof(out), NULL, 0) == OS64_FETCH_OK);
+    CHECK(conns[0].reqlen < 300 && fetch_pool_idle() == 0 && closes == 1);
+}
+
+// The rule itself, clause by clause.
+static void case_reusable_rule(void)
+{
+    const fetch_reuse_facts_t base = {
+        .request_http11 = true, .request_whole = true, .response_http11 = true,
+        .framing = HTTP_FRAMING_LENGTH, .consumed = true, .transport_ok = true,
+    };
+    fetch_reuse_facts_t x = base;
+    CHECK(connection_reusable(&x));
+    x = base; x.framing = HTTP_FRAMING_CHUNKED;  CHECK(connection_reusable(&x));
+    x = base; x.request_http11 = false;          CHECK(!connection_reusable(&x));
+    x = base; x.response_http11 = false;         CHECK(!connection_reusable(&x));
+    x = base; x.request_close = true;            CHECK(!connection_reusable(&x));
+    x = base; x.response_close = true;           CHECK(!connection_reusable(&x));
+    x = base; x.request_whole = false;           CHECK(!connection_reusable(&x));
+    x = base; x.consumed = false;                CHECK(!connection_reusable(&x));
+    x = base; x.framing = HTTP_FRAMING_CLOSE;    CHECK(!connection_reusable(&x));
+    x = base; x.leftover = true;                 CHECK(!connection_reusable(&x));
+    x = base; x.transport_ok = false;            CHECK(!connection_reusable(&x));
+    // A bodiless reply needs no framing read, and still every other clause.
+    x = base; x.bodiless = true; x.framing = HTTP_FRAMING_CLOSE; x.consumed = false;
+    CHECK(connection_reusable(&x));
+    x.response_close = true;                     CHECK(!connection_reusable(&x));
+    x.response_close = false; x.leftover = true; CHECK(!connection_reusable(&x));
+}
+
+// The status line's version and the Connection line, as the head reader
+// reads them.
+static const char *mem_bytes;
+static size_t mem_at, mem_len;
+static int64_t mem_source(void *ctx, void *buf, size_t cap)
+{
+    (void)ctx;
+    size_t n = mem_len - mem_at < cap ? mem_len - mem_at : cap;
+    memcpy(buf, mem_bytes + mem_at, n);
+    mem_at += n;
+    return (int64_t)n;
+}
+static void case_reply_connection(void)
+{
+    static const struct { const char *head; bool http11, close; } cases[] = {
+        { "HTTP/1.1 200 OK\r\n\r\n", true, false },
+        { "HTTP/1.0 200 OK\r\n\r\n", false, false },
+        { "HTTP/1.2 200 OK\r\n\r\n", true, false },
+        { "HTTP/2.0 200 OK\r\n\r\n", false, false },
+        { "HTTP/1.10 200 OK\r\n\r\n", false, false },
+        { "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n", true, true },
+        { "HTTP/1.1 200 OK\r\nConnection: CLOSE\r\n\r\n", true, true },
+        { "HTTP/1.1 200 OK\r\nConnection:\tupgrade ,close\r\n\r\n", true, true },
+        { "HTTP/1.1 200 OK\r\nConnection: closed\r\n\r\n", true, false },
+        { "HTTP/1.1 200 OK\r\nConnection: keep-alive\r\n\r\n", true, false },
+        { "HTTP/1.1 200 OK\r\nX-Connection: close\r\n\r\n", true, false },
+        { "HTTP/1.1 103 Hints\r\nConnection: close\r\n\r\nHTTP/1.1 200 OK\r\n\r\n", true, false },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        mem_bytes = cases[i].head; mem_at = 0; mem_len = strlen(cases[i].head);
+        http_stream_t s;
+        http_response_t r;
+        http_stream_init(&s, mem_source, NULL);
+        CHECK(http_head_read(&s, &r) == HTTP_HEAD_OK);
+        CHECK(r.http11 == cases[i].http11 && r.connectionClose == cases[i].close);
+    }
+    // A Connection line too long to read might have said close.
+    static char longline[HTTP_LINE_MAX + 200];
+    int n = snprintf(longline, sizeof(longline), "HTTP/1.1 200 OK\r\nConnection: ");
+    memset(longline + n, 'k', HTTP_LINE_MAX);
+    snprintf(longline + n + HTTP_LINE_MAX, sizeof(longline) - (size_t)n - HTTP_LINE_MAX, "\r\n\r\n");
+    mem_bytes = longline; mem_at = 0; mem_len = strlen(longline);
+    http_stream_t s;
+    http_response_t r;
+    http_stream_init(&s, mem_source, NULL);
+    CHECK(http_head_read(&s, &r) == HTTP_HEAD_OK && r.connectionClose);
+}
+
+// The writer's order: Host first, the named lines where the order puts
+// them, every other line after in the writer's own order.
+static void case_request_order(void)
+{
+    http_url_t url;
+    CHECK(http_url_parse("http://order.test/p", &url) == HTTP_URL_OK);
+    char out[2048];
+    http_request_extras_t x = {
+        .user_agent = "UA", .accept = "*/*", .keep_alive = true,
+        .extra_headers = "X-B: 2\r\nReferer: http://r.test/\r\nX-A: 1\r\nAccept-Language: en\r\n",
+        .order = "connection, Referer,ACCEPT , x-a, Host, referer, Nobody",
+    };
+    CHECK(http_request(out, sizeof(out), &url, false, &x));
+    CHECK(strcmp(out, "GET /p HTTP/1.1\r\nHost: order.test\r\n"
+                      "Connection: keep-alive\r\nReferer: http://r.test/\r\nAccept: */*\r\nX-A: 1\r\n"
+                      "User-Agent: UA\r\nAccept-Encoding: gzip, identity\r\n"
+                      "X-B: 2\r\nAccept-Language: en\r\n\r\n") == 0);
+    // No order is the writer's own, as it always was, less the close.
+    x.order = NULL; x.keep_alive = false;
+    CHECK(http_request(out, sizeof(out), &url, false, &x));
+    CHECK(strcmp(out, "GET /p HTTP/1.1\r\nHost: order.test\r\nUser-Agent: UA\r\nAccept: */*\r\n"
+                      "Accept-Encoding: gzip, identity\r\nX-B: 2\r\nReferer: http://r.test/\r\n"
+                      "X-A: 1\r\nAccept-Language: en\r\n\r\n") == 0);
+    // A body's length goes where it is named, the body's lines too.
+    http_request_extras_t put = { .method_name = "PUT", .body_len = 2, .body_present = true,
+                                  .body_headers = "Content-Type: text/plain\r\n",
+                                  .order = "Content-Length, Content-Type, Accept-Encoding" };
+    CHECK(http_request(out, sizeof(out), &url, false, &put));
+    CHECK(strcmp(out, "PUT /p HTTP/1.1\r\nHost: order.test\r\nContent-Length: 2\r\n"
+                      "Content-Type: text/plain\r\nAccept-Encoding: gzip, identity\r\n\r\n") == 0);
+    // An order holding anything but names, commas and blanks is refused.
+    x.order = "Accept;q";
+    CHECK(!http_request_extras_ok(&x) && !http_request(out, sizeof(out), &url, false, &x));
+    x.order = "Accept\r\nX: y";
+    CHECK(!http_request_extras_ok(&x));
+    // CONNECT, in any case, is refused before a dial: its reply would make
+    // the connection a tunnel, and no kept connection may be one.
+    static const char *const tunnels[] = {"CONNECT", "connect", "Connect"};
+    for (size_t i = 0; i < 3; i++) {
+        reset();
+        peer_add("order.test", 80, reply_len("200 OK", "", page));
+        os64_fetch_options_t tunnel = { .method_name = tunnels[i] };
+        os64_fetch_t *t = os64_fetch_open("http://order.test/", &tunnel);
+        CHECK(os64_fetch_status(t) == OS64_FETCH_REQUEST_FAILED && dials == 0);
+        os64_fetch_close(t);
+    }
+    http_request_extras_t connect = { .method_name = "CONNECT" };
+    CHECK(!http_request_extras_ok(&connect));
+    // A fetch's order reaches the per-hop lines too, on every hop.
+    reset();
+    peer_add("order.test", 80, reply_len("200 OK", "", page));
+    cookie_test_t t = { .output = "Cookie: c=1\r\nReferer: http://r.test/\r\n" };
+    os64_fetch_options_t opt = { .user_agent = "UA", .headers_for = cookie_headers, .ctx = &t,
+                                 .order = "Referer, User-Agent", .keep_alive = true };
+    os64_fetch_t *f = os64_fetch_open("http://order.test/p", &opt);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK);
+    CHECK(strncmp(request_n(0), "GET /p HTTP/1.1\r\nHost: order.test\r\nReferer: http://r.test/\r\n"
+                                "User-Agent: UA\r\nAccept-Encoding: gzip, identity\r\n"
+                                "Connection: keep-alive\r\nCookie: c=1\r\n\r\n", strlen(request_n(0))) == 0);
+    os64_fetch_close(f);
+    // ...and an order too long to hold is a request this will not send.
+    static char longorder[OS64_FETCH_ORDER_MAX + 8];
+    memset(longorder, 'a', sizeof(longorder) - 1);
+    os64_fetch_options_t big = { .order = longorder };
+    f = os64_fetch_open("http://order.test/p", &big);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_REQUEST_FAILED && dials == 1);
+    os64_fetch_close(f);
+}
+
 int main(int argc, char **argv)
 {
     unsigned seed = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 12345u;
@@ -1809,6 +2719,21 @@ int main(int argc, char **argv)
     case_early_post();
     case_keep();
     case_methods();
+    case_reusable_rule();
+    case_reply_connection();
+    case_request_order();
+    case_keepalive_reuse();
+    case_keepalive_refused();
+    case_keepalive_hostile();
+    case_keepalive_owner();
+    case_keepalive_caps();
+    case_keepalive_retry();
+    case_keepalive_paths();
+    // Nothing is left kept at exit: the sanitizer's leak check is the proof
+    // that what the pool holds it also lets go.
+    fetch_pool_drain();
+    fetch_pool_trust_drop();
+    CHECK(fetch_pool_idle() == 0);
     printf("test_fetch_host: %d checks passed\n", checks);
     return 0;
 }

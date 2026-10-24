@@ -158,7 +158,8 @@ capture or a standard disagreed with § 1 above, the build follows them:
 - **`Accept` is not copied.** Chrome's navigation `Accept` names JPEG XL,
   AVIF, APNG and signed exchanges, and its `Accept-Encoding` is `gzip,
   deflate, br, zstd`; yonder keeps its own lists, which name only what it
-  decodes (DIVERGENCES, "The browser's identity").
+  decodes (DIVERGENCES, "The browser's identity"). (W2 replaced this: each
+  browser's own `Accept` less what yonder cannot decode, § 2 as built.)
 - **A font is asked for as `no-cors`.** Browsers fetch fonts in cors mode,
   and yonder runs no CORS check on one, so it does not say it does.
 - **`Priority` (RFC 9218) is the preset's, per destination.** Firefox sends
@@ -189,7 +190,8 @@ capture or a standard disagreed with § 1 above, the build follows them:
   involved.
 - **Header order is libfetch's, not each browser's**, booked in
   BROWSER_DEBTS beside § 2, whose change to the `Connection` line touches
-  the same request writer.
+  the same request writer. (Paid by W2: each preset's order per kind of
+  request, § 2 as built.)
 
 ## 2. Keep-alive: one connection carries many requests
 
@@ -252,7 +254,9 @@ object, invisible to callers:
 **What stops sending.** `Connection: close` leaves the fixed block; the
 request writer sends nothing for `Connection` on HTTP/1.1 (persistent is
 the default). A caller that wants a one-shot connection (none today)
-would ask through the options, not by header.
+would ask through the options, not by header. (As built, the browser
+presets send `Connection: keep-alive`, as their browsers do: § 2 as
+built.)
 
 **Proof.** libfetch host cases (`tools/test_fetch_host.c`), each with a
 mutant: reuse after a Content-Length body; after a chunked body with
@@ -268,6 +272,155 @@ connection carrying them. The measurement that justifies it: the kept
 record's `arrived after` on the storefront page before and after, in the
 PR body, with the connection count the wire showed; the expectation is
 seconds where there were sixty.
+
+### W2, as built (2026-10-24, Opus)
+
+The pool is `userland/libfetch/pool.c`, its rule `connection_reusable`
+there too; fetch.c takes before it dials and puts back at close (and at a
+redirect it follows itself). Where the build departs from the brief, or
+says more than it did:
+
+- **Sixteen kept in all, not thirty-two.** Every kept connection holds one
+  of a task's 64 handles (`OS64_TASK_HANDLES`), and thirty-two kept beside
+  a dozen in use was most of a browser's table before it opened a file
+  (the cold read's finding). The pool keeps at most a quarter of the table,
+  asserted at build; and a dial the kernel refuses for want of resources
+  lets the least recently kept connection go and dials once more.
+- **One clause more: the request went whole.** A server that answers
+  before an upload is complete (a 401 or a 413 to a POST) has stopped
+  reading a body that never ends, and its connection is not kept
+  (`request_whole`). The brief's list is RFC 9112 § 9.3's; this one is its
+  § 9.5's consequence.
+- **A 205 is not bodiless on the wire.** libfetch hands a 205's body to
+  nobody (RFC 9110 § 15.3.6), but RFC 9112 § 6.3 frames it like any reply,
+  so one whose head promised bytes is not kept; the bodiless three are a
+  HEAD's answer, a 204 and a 304.
+- **A kept connection is probed when it is taken**: a zero-wait read on a
+  plain one, a zero-wait step on a TLS one. A server that closed its idle
+  side, or one that said anything nobody asked for, is closed then and
+  another taken or dialled. The retry rule is for the close that lands
+  between the probe and the request.
+- **Nothing past the message.** Bytes already read past a reply's end, a
+  plain lookahead byte, or TLS plaintext waiting are a reply nobody asked
+  for, and the connection goes (`leftover`); one that arrives later is the
+  probe's to find. Either way only a later request on the same key could
+  be confused by it. Direct, that is the same server, which answers its own
+  requests anyway; through a proxy the key is the proxy's, and a request to
+  ANOTHER origin may follow on the connection, so bytes past a reply there
+  would be the proxy's error (it frames every reply it relays), which the
+  leftover check and the probe exist to catch, not a trust any origin is
+  given.
+- **One trust store per connection, and per process.** A connection is
+  keyed by the store it was verified under, by pointer, which a kept TLS
+  client's own reference makes an identity. A fetch whose caller gives no
+  store used to read the system's for itself, every fetch; it now shares
+  the one libfetch reads on the first https hop and keeps for the process
+  (`fetch_pool_trust`, the cold read's tenth finding), so every such
+  connection is verified under the same store and keyed by it, and the
+  roots are parsed once a program rather than once a request. An edit to
+  the store reaches the programs started after it (DEBTS § libfetch).
+- **The retry rule is per request**: each request a fetch makes (a
+  redirect's next hop is another) goes at most twice, and the reason
+  string counts them: "(retried once on a fresh connection)", or "(2
+  requests retried, each once on a fresh connection)". A silence is not a
+  closed connection, and a reply that began is not retried — except a 408
+  on a kept connection, which is the server's idle timeout said in words:
+  an idempotent request goes again on a fresh connection as Chrome sends
+  it, and nothing of the 408's head reaches an observer (its fields, its
+  cookies), since the answer the caller gets is the retry's.
+- **Through a proxy**: libfetch sends https through a plain proxy in
+  absolute form, not by `CONNECT`, so every proxied connection is plain to
+  the proxy and keyed by it alone; the brief's `CONNECT` clause has nothing
+  to apply to.
+- **Concurrency is not capped.** The pool keeps at most six IDLE
+  connections to a key; it does not make a seventh fetch to a busy host
+  wait for one, as Chrome's six-per-host limit does. A page that asks for
+  a dozen sheets at once opens a dozen connections, which then carry the
+  rest of the page between them (DEBTS § libfetch).
+
+**The `Connection` line (Chris and Opus, after the P5 capture).** The
+brief said to send nothing for `Connection` on HTTP/1.1. Chrome 156 and
+Firefox 158 both send `Connection: keep-alive` (capture-01..08, 25..27;
+run1-overwritten/capture-01..09 and 17), so each browser preset says it,
+where its browser does. yonder's own says it too: it keeps every
+connection it can now, and the line says what it does. Netscape 4 and
+Lynx, the costumes, and an agent typed claim nothing beyond their
+strings. `Connection: close` is never sent: libfetch's option is
+`keep_alive`, and a caller that wanted one-shot connections would ask
+through the options, not the line.
+
+**`Accept` per destination (the same ruling).** Each browser preset sends
+its browser's captured `Accept` for a navigation, a sheet, a script, a
+picture and a fetch, LESS the types yonder cannot decode. The minus is
+JPEG XL, AVIF, SVG as a picture and signed exchanges, and also **WebP and
+APNG**: the ruling named Chrome's navigation list with `image/webp` kept
+and asked that WebP be verified first. It was: libimage decodes WebP and
+APNG STILLS, by signature, and neither ANIMATION (an animated WebP is
+refused as unsupported; an APNG draws its default image, still), and WEBP.md
+§ Accept keeps `image/webp` out of every Accept until animation ships,
+because naming it makes a server that would send a working GIF send an
+animated WebP instead. So Chrome's navigation asks
+`text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8`, its
+pictures `image/*,*/*;q=0.8`; Firefox's navigation is as captured and its
+pictures `image/png,image/*;q=0.8,*/*;q=0.5`. Wildcards stay: they are
+the browser's "anything else", not a type. No font was captured, so a
+font keeps yonder's list. Safari's navigation list is MDN's for it.
+yonder's own asks `text/html,application/xhtml+xml,text/*;q=0.9,*/*;q=0.8`
+for a page (its other destinations' lists already named only what it
+decodes); a costume keeps the session's list and its pictures. The one
+table is `agent.c`, beside the presets.
+
+**Header ORDER per preset** (booked by W1 in BROWSER_DEBTS, paid here).
+libfetch writes Host first, then the lines the caller's order names
+(`os64_fetch_options_t.order`, comma-separated names), each where the
+order puts it, then every line it does not name in libfetch's own order.
+`way_order_of` says which kind a request is (a navigation, a no-cors
+request, a cors one, a preflight) and the preset carries an order for
+each: Chrome's navigation, its every other request (no-cors and cors
+alike, capture-02..06 and -08) and its preflight; Firefox's navigation,
+no-cors, cors and preflight, each its own. Captured requests match byte
+for byte but for the two values yonder says differently
+(`Accept-Encoding`, and `Accept` as above); a page's own line (the
+captures' `X-W1`) goes after the named lines, where both browsers put
+it among them. A Cookie, which no capture carried, goes there too.
+
+**On the wire (QEMU, `make run-net`'s virtio NIC and dump, 2026-10-24).**
+A local page of twelve sheets, twelve scripts and twelve pictures from
+one host, served over plain HTTP by a listener that logs each request's
+connection: under yonder's own preset with scripts off, ONE connection
+carried all 25 requests, and the slirp side's dump shows one SYN to it.
+Under the Chrome preset, scripts on, one connection carried 30 of the
+page's 37 requests and five more the parallel rest; the logged heads are
+Chrome's order (`Host`, `Connection: keep-alive`,
+`Upgrade-Insecure-Requests`, `User-Agent`, `Accept`, `Referer`,
+`Accept-Encoding`, `Accept-Language`; plain http to a private address
+carries no Fetch Metadata or hints, so those are absent, not misplaced).
+
+**The measurement.** The P5 is where a page waits on its network; QEMU
+under TCG (no KVM here) mostly waits on its own CPU, so its clocks say
+less than its connection counts do. Each figure is a fresh VM, the
+Chrome preset, scripts on, the kept record's `arrived after`, and the
+SYNs the dump shows to the page's host. Base is this PR's parent:
+
+| Page | Base | Keep-alive |
+|---|---|---|
+| the local page above | 1311, 1350 ms; 37 connections | 867, 947 ms; 5 and 6 |
+| a blog page from the corpus, 13 sheets and 13 pictures | 2814, 2781, 2784, 2765 ms; 79-80 connections | 3646, 2838, 2854, 3036 ms; 21-22 |
+| a course page from the corpus, 38 same-host scripts | 23637, 20866 ms; 64-65 connections | 23834, 23115 ms; 12-13 |
+
+Run again once the cold read's fixes were in (sixteen kept, the shared
+store): the local page in 964 ms on 5 connections under the Chrome
+preset, and in 456 ms on ONE under yonder's own with scripts off (25
+requests, one SYN in the dump); the blog page in 2893 ms on 21, several
+of them carrying a dozen requests or more.
+
+Connections, and with them TLS handshakes, fall to a fifth or a quarter
+of what they were on the corpus pages and a sixth on the local one. Only
+the local page's arrival follows them down. The blog page's
+arrival waits on its sheets, which it asks for at once, so each one
+dials either way (the uncapped concurrency above); the course page's is
+QuickJS under TCG. The storefront's sixty seconds on the P5 is the
+measurement this table cannot stand in for.
 
 ## 3. Order and ownership
 

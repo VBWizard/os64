@@ -100,6 +100,11 @@ void way_fetch_hooks(way_hooks_t *hooks, os64_fetch_options_t *opt)
     opt->on_set_cookie = hooks_cookie;
     opt->cancelled = hooks_cancelled;
     opt->ctx = hooks;
+    opt->order = way_identity_order(hooks->identity, &hooks->metadata);
+    opt->keep_alive = way_identity_keep_alive(hooks->identity);
+    const char *accept = way_identity_accept(hooks->identity, hooks->metadata.dest);
+    if (accept != NULL)
+        opt->accept = accept;
 }
 
 // ── A body read whole, through the cache ────────────────────────────────
@@ -408,6 +413,15 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
         with_pictures = pages = s->session->accept;
     opt.accept = posting ? pages : with_pictures;
     opt.accept_get = with_pictures;
+    // A preset that names a navigation list of its own asks with it, on a
+    // form's POST as on any navigation, as a browser does.
+    const char *preset = way_identity_accept(s->identity, WAY_DEST_DOCUMENT);
+    if (preset != NULL) {
+        opt.accept = preset;
+        opt.accept_get = NULL;
+    }
+    opt.order = way_identity_order(s->identity, &s->metadata);
+    opt.keep_alive = way_identity_keep_alive(s->identity);
     opt.max_body = limits.max_bytes;     // the same page, the same cap
     opt.cancelled = fetch_cancelled;
     opt.on_hop = hop_ask;

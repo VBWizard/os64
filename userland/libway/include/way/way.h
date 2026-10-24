@@ -132,7 +132,9 @@ typedef struct {
     // What its agent's preset sends beside it (way/origin.h), NULL for none.
     const way_identity_t *identity;
     // The Accept list of the pages it renders. A leg that shows pictures
-    // (way_leg_t.pictures) adds them on a GET (way_accept_compose).
+    // (way_leg_t.pictures) adds them on a GET (way_accept_compose). A leg
+    // whose preset names a navigation list of its own sends that instead
+    // (way_identity_accept).
     const char *accept;
     // What the face offers for a page that asks to send the reader on after
     // a delay, appended to the sentence saying so: wend's " - press g to
@@ -181,7 +183,8 @@ typedef struct {
     bool scripting;
     // The pictures the face shows, as an Accept list of their types (yonder's
     // is libimage's OS64_IMAGE_ACCEPT), or NULL for none. A GET asks for
-    // them after the session's pages (way_accept_compose), and a picture
+    // them after the session's pages (way_accept_compose) unless the
+    // preset names its own list (way_session_t.accept), and a picture
     // asked for by itself, of a type it names, is a page, WAY_BODY_IMAGE, whose
     // body the face does not read — it writes the page that shows the
     // picture. Any other picture is not a page. way_open's alone: way_load
@@ -327,7 +330,10 @@ bool way_load(way_leg_t *leg, const char *url, const os64_page_request_t *reques
 // For a fetch a face makes itself — a picture a page names — the same
 // cookies and Referer a page's own fetch carries, the lines that say who is
 // asking, and the browser's cache. way_fetch_hooks takes over `opt`'s
-// headers_for, on_set_cookie, cancelled and ctx: the caller's own
+// headers_for, on_set_cookie, cancelled and ctx, sets its order and
+// keep_alive from the preset (way_identity_order, way_identity_keep_alive),
+// and its accept when the preset names one for the hooks' destination
+// (way_identity_accept): the caller's own
 // cancellation goes in the hooks instead, and the hooks must live until the
 // fetch is closed.
 typedef struct {

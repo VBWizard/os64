@@ -24,7 +24,9 @@
 //
 // DELIBERATELY NOT HERE, each a rung of BROWSER.md's ladder or a ruling of
 // its own: content codings beyond gzip, transfer codings other than chunked,
-// authentication policy, cookie storage, keep-alive, IPv6 literals. What is missing is
+// authentication policy, cookie storage, IPv6 literals, and the keeping of
+// connections, which is fetch.c's and pool.c's (this file only reads what a
+// reply says about it: its version and its Connection line). What is missing is
 // REFUSED BY NAME rather than mis-read: a response this code cannot honestly
 // turn into bytes for a consumer must never become those bytes. gzip
 // decoding stays in fetch.c because http.c is the transport parser; libgzip
@@ -123,11 +125,16 @@ const char *http_url_reason(http_url_result_t rc);
 // reply may look like: a 1.1 client must read chunked framing, because a 1.1
 // server may answer any request with it (a 1.0 client is owed a length or a
 // close, which is what this asked for until http_body_read learned chunks).
-// `Connection: close` is sent because keep-alive is not spoken here — one
-// request, one connection, and a reply framed by neither length nor chunks
-// still ends at the close. `Host:` because name-based virtual hosting means a
-// request without it reaches whatever the address answers with by default —
-// usually not the page asked for.
+// It is also how the request asks to keep the connection: persistence is
+// HTTP/1.1's default (RFC 9112 § 9.3), so nothing is said for it unless the
+// caller asks for `Connection: keep-alive` (`keep_alive`, below: a browser
+// says it anyway), and `Connection: close` is never sent — a reply framed by
+// neither length nor chunks still ends at the server's close. Whether a
+// connection is kept after a reply is fetch.c's judgement, with every
+// clause of RFC 9112 § 9.3 (pool.h's connection_reusable). `Host:` because name-based
+// virtual hosting means a request without it reaches whatever the address
+// answers with by default — usually not the page asked for. Host is always
+// the first line after the request line.
 //
 // `absoluteForm` puts the WHOLE URL in the request line instead of the path,
 // which is what a proxy needs to know which origin the request is for (RFC
@@ -174,6 +181,18 @@ typedef struct {
     // Accept-Encoding: identity, for a request that asks for a byte Range
     // of the representation (Fetch § 4.6: a coding would number other bytes).
     bool identity;
+    // `Connection: keep-alive`, which a browser sends though HTTP/1.1 keeps
+    // the connection without it.
+    bool keep_alive;
+    // The order of the lines after Host, as field names separated by commas
+    // ("Connection, User-Agent, Accept"), matched without case: each named
+    // line goes where the list puts it, and the lines it does not name
+    // follow in this writer's own order — User-Agent, Accept,
+    // Accept-Encoding, Connection, Content-Length, Content-Type, then
+    // `body_headers` and `extra_headers` line by line as given. A name
+    // listed twice counts once, and Host, which is always first, is not
+    // moved by naming it. NULL: this writer's own order throughout.
+    const char *order;
 } http_request_extras_t;
 
 bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteForm,
@@ -184,9 +203,11 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
 // Content-Language, Content-Location, Transfer-Encoding, Connection, Expect,
 // Trailer, TE, Upgrade, Accept-Encoding, User-Agent or Accept.
 // GET rejects body_len/body_present/content_type; POST permits an empty body. A
-// method_name that is not a token, a body with GET or HEAD, body_headers
+// method_name that is not a token or is CONNECT (in any case: its reply
+// makes the connection a tunnel), a body with GET or HEAD, body_headers
 // without a method_name or naming anything else, and content_type beside a
-// method_name are refused.
+// method_name are refused, and so is an `order` that holds anything but field
+// names, commas and blanks.
 // The field-byte judgement on its own, so a caller can refuse a bad header
 // BEFORE dialling anybody about it. http_request applies it again.
 bool http_request_extras_ok(const http_request_extras_t *extras);
@@ -238,6 +259,12 @@ typedef struct {
     char     charset[HTTP_CHARSET_MAX];
     bool     hasLocation;                     // a Location line was seen, even an empty one
     char     location[HTTP_LINE_MAX];         // valid only when hasLocation; "" = it named nowhere
+    // What the reply says about its connection (RFC 9112 § 9.3): whether its
+    // status line said HTTP/1.1 (or a later 1.x), and whether a Connection
+    // line named `close` — or was too long to read, which is taken as one
+    // that did, since what it said cannot be known.
+    bool     http11;
+    bool     connectionClose;
 } http_response_t;
 
 typedef enum {

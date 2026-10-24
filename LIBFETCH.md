@@ -91,10 +91,13 @@ void          os64_fetch_close(os64_fetch_t *f);
   says what happened, so the caller has the detail (which hop, which TLS
   reason, which dial code) to explain it. It blocks, on purpose: a fetch
   is a thread's work, and the browser that wants twenty images at once
-  runs twenty fetches on twenty threads — which is why the library has NO
-  STATIC STATE. os64get's transfer buffers were `static` ("transfer state,
-  not call state"); here every buffer belongs to the fetch object, and two
-  fetches on two threads never touch one byte in common.
+  runs twenty fetches on twenty threads — which is why every buffer
+  belongs to the fetch object. os64get's transfer buffers were `static`
+  ("transfer state, not call state"); here two fetches on two threads
+  never touch one byte of their own in common. The library's one piece of
+  shared state is the connections a finished fetch leaves open for the
+  next to the same peer (WIRE.md § 2, `pool.c`): a table under one lock
+  held only to take or put, each connection owned by one fetch at a time.
 - **A non-200 answer is still an answer.** os64get calls a 404 a refusal;
   a browser shows the 404 page, and it is the server's page to show. So
   `open` succeeds for ANY final status and the head carries it; the body
@@ -137,7 +140,7 @@ typedef struct {
     const char *user_agent;        // NULL = none sent
     const char *accept;            // NULL = none sent
     const char *extra_headers;     // "Name: value\r\n"..., refused by name if a byte is not a field byte
-    os64_tls_trust *trust;         // caller-owned; NULL = the library loads the store for this fetch
+    os64_tls_trust *trust;         // caller-owned; NULL = the system's, read once per process
     uint64_t max_body;             // decoded bytes; 0 = no cap
     uint32_t idle_ms;              // 0 = the default (30 s, os64get's URL_IDLE_MS)
     uint32_t max_hops;             // 0 = the default (5)
@@ -163,7 +166,11 @@ typedef struct {
   is optional, copied with a 256-byte storage bound (including NUL), and
   checked for field bytes. Invalid method/body/header options fail before
   dialing. A send failure closes the connection without retrying a request
-  the server may already have acted on. Cancellation applies during upload.
+  the server may already have acted on, which a POST may be; a PUT, DELETE
+  or OPTIONS that failed on a kept connection before any byte of a reply
+  goes once more on a fresh one, body and all (WIRE.md § 2's retry rule:
+  each is idempotent, so twice does what once would). Cancellation applies
+  during upload.
   Upload `idle_ms` restarts after accepted bytes or TLS transport progress,
   including ciphertext drain. Empty/interrupted waits do not restart it;
   a steadily progressing upload may exceed 30 seconds overall. Read calls
@@ -234,11 +241,15 @@ typedef struct {
   caller that wants Ctrl+C to end a fetch installs the handler that sets
   the flag the predicate reads — as os64get does today.
 - **Trust has one ownership rule: the library frees only what it
-  loaded.** A caller that loads the store once (the browser, per process)
-  passes it and keeps it. A caller that passes NULL (os64get, per
-  invocation) gets the store loaded on the first https hop and freed at
-  close, with the store's report kept in the status detail when loading
-  failed — the "trust once per invocation" rule of #89, now the library's.
+  loaded.** A caller that loads a store passes it and keeps it. A caller
+  that passes NULL gets the system's store, which the library reads once
+  per process, on the first https hop any fetch makes, and shares with
+  every fetch that passes NULL after it (`pool.c`'s `fetch_pool_trust`),
+  with the store's report kept in the status detail when reading failed —
+  the "trust once per invocation" rule of #89, per program. One store per
+  process is what lets a kept connection be keyed by the store it was
+  verified under (WIRE.md § 2 as built). An edit to the store reaches the
+  programs started after it.
 
 ### The status vocabulary, and os64get's exit codes
 
@@ -282,9 +293,12 @@ so a capped fetch never hands a consumer a prefix it then has to unlearn.
   the API: `read` COPIES into the caller's buffer. The head's strings
   (`reason`, `content_type`, the final URL text) are arrays inside the
   head struct, inside the object, valid until `close` and never after.
-- **A redirect closes its connection before the next dial**, unread
-  courtesy body and all; keep-alive is not spoken, so nothing is kept.
-  The transport object is re-initialized per hop, and its ERROR SNAPSHOT
+- **A redirect gives up its connection before the next hop asks**: kept
+  for a later request to the same peer when its courtesy body is empty
+  and HTTP allows it (`connection_reusable`, `pool.h`), closed otherwise,
+  unread courtesy body and all. The next hop takes a kept connection to
+  its own peer or dials one. The transport object is re-initialized per
+  hop, and its ERROR SNAPSHOT
   survives the close on purpose (url_io.c's rule: "error detail survives
   cleanup so the caller can explain a failed read after releasing I/O").
 - **A fetch that failed is still closed**, and close is idempotent. The
@@ -350,7 +364,7 @@ one resident libfetch serving two programs at once.
 | What | Why deferred | Trigger |
 |---|---|---|
 | `gopher://` as a libfetch scheme | the gopher client's own wire code works and its menu parser is the UI's; moving it buys nothing until a second program wants gopher bytes | the browser's first `gopher://` link |
-| Keep-alive / a connection pool | not spoken today; the object is a FETCH, not a connection, so a pool slides underneath without an API change | `/sys/net/tcp` showing a page's image fetches paying a handshake apiece |
+| ~~Keep-alive / a connection pool~~ **PAID** (WIRE.md § 2): connections kept between fetches, under the API as this row said they could be (`pool.c`) | — | a storefront page's 172 scripts and sheets paying a handshake apiece |
 | `Range:` and resume (BROWSER.md 3e) | `extra_headers` can carry the header; 206 semantics and the resume discipline want a consumer | a download worth resuming |
 | Cookie jar | per-hop request and response hooks exist; storage and domain/path/expiry policy belong to the navigator | the first site that will not show a page without one |
 | A `data:` scheme | inline images in HTML use it; it is a decoder, not a fetch | the graphical browser's first inline image |
