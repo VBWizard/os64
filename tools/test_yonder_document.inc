@@ -112,6 +112,20 @@ static void document_current_script_case(void) {
     check(script_turn() && document_out_is("first|second|made|null"),
         "document: currentScript is each script as it runs, and null in a timer");
     loop_drop();
+    /* The microtasks a script queued drain before currentScript goes back
+     * (HTML's checkpoint ends "run a classic script"), whether the script
+     * finished or threw. */
+    loop_page("<p id=out>x</p><script id=calm>var seen=[];"
+        "Promise.resolve().then(function(){seen.push(document.currentScript.id)})</script>"
+        "<script id=thrown>Promise.resolve().then(function(){seen.push(document.currentScript.id)});"
+        "throw 1</script>"
+        "<script>setTimeout(function(){seen.push(String(document.currentScript));"
+        "document.getElementById('out').textContent=seen.join('|')},10)</script>");
+    check(loop_settle() && g.page.tree!=NULL,"document: the page arrives");
+    now_ms=200;
+    check(script_turn() && document_out_is("calm|thrown|null"),
+        "document: a script's microtasks see it as currentScript, even when it threw");
+    loop_drop();
 }
 
 static void document_focus_case(void) {

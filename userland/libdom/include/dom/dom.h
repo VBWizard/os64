@@ -630,8 +630,8 @@ os64_dom_readiness_t os64_dom_readiness_after(os64_dom_readiness_t now, const os
                                               const os64_html_node_t *node, const char *type);
 /* document.currentScript (HTML § Document.currentScript): the classic script
  * element the host is about to run, set before it runs and set back to
- * NULL after (a host that runs a script inside another's run sets back
- * the outer one). The binding holds the node while it is set. A node that
+ * NULL after it and the microtask checkpoint that ends its run (a host
+ * that runs a script inside another's run sets back the outer one). The binding holds the node while it is set. A node that
  * is not of the binding's arena, or not an element, sets nothing. Owner
  * thread, outside JS callbacks. */
 void os64_dom_set_current_script(os64_dom_t *dom, const os64_html_node_t *script);

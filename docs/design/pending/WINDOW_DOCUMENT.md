@@ -373,7 +373,8 @@ Document to 42.1% C / 90.5% scan. Each line names the state the member reads.
 - `activeElement` and `hasFocus()`: 298 and 78 pages. They read yonder's
   `g.focus_node` through a host hook; the body when nothing has focus.
 - `currentScript`: 271 pages. It is the script element yonder is running,
-  set by `scripts.c` around `os64_js_run`.
+  set by `scripts.c` around `os64_js_run` and the microtasks the script
+  queued, which HTML drains before putting it back.
 - `title`: 229 pages. It is the first `title` element, the rule yonder's
   `title_of` already walks.
   - The setter makes one in `head`.

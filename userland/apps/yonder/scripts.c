@@ -685,16 +685,21 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
         // The engine's whole evaluation, compiling the source included: the
         // number a bytecode cache would make smaller (MODERN_WEB.md slice 7).
         int64_t began = os64_micros();
-        // document.currentScript, while it runs; a link's script has no
+        // document.currentScript, while it runs AND while the microtasks it
+        // queued drain: HTML's "run a classic script" ends in the microtask
+        // checkpoint, and only then does executing the script element put
+        // currentScript back (WPT's Document.currentScript "Script
+        // microtask" sees the element). os64_js_run drains them itself;
+        // a run that threw drains them below. A link's script has no
         // element, and leaves it null.
         os64_dom_set_current_script(s->dom, it->node);
         os64_js_run(s->runtime, source, length, name, out);
-        os64_dom_set_current_script(s->dom, NULL);
         int64_t ended = os64_micros();
         s->task_us = began >= 0 && ended >= began ? ended - began : -1;
         os64_free(source);
         if (out->status == OS64_JS_EXCEPTION && out->jobs_pending)
             drain_after_exception(s, out);
+        os64_dom_set_current_script(s->dom, NULL);
         os64_js_outcome_t nested;
         if (out->status == OS64_JS_OK && os64_dom_take_report(s->dom, &nested))
             *out = nested;
