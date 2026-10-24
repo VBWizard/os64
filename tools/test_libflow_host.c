@@ -366,6 +366,7 @@ static void style_case(const char *name, const char *html, const char *expected)
 #include "test_libflow_layout.inc"
 #include "test_libflow_tables.inc"
 #include "test_libflow_cascade.inc"
+#include "test_libflow_origin.inc"
 #include "test_libflow_batch_a.inc"
 
 // ── The corpus, and the allocation sweep ────────────────────────────────
@@ -1491,6 +1492,7 @@ int main(int argc, char **argv)
     attrs_cases();
     style_cases();
     cascade_cases();
+    origin_cases();
     batch_a_cases();
     boxes_cases();
     layout_cases();

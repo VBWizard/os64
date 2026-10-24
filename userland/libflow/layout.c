@@ -74,11 +74,34 @@ static int64_t margins_sum(Margins m)
 // vertical margins adjoining that point that no box has resolved yet, and
 // where the first content inside the current container was placed, if any
 // has been.
+//
+// `first` is a y like any other, and a y may be negative: a box laid out
+// from 0 to be moved into place after (an inline-block's content, an
+// absolute box, a float) puts a negative top margin above its origin, and
+// a page's first box can stand above the canvas. So "nothing placed yet"
+// is no coordinate a box can have — held lengths never reach INT64_MIN —
+// and is written and asked through the two helpers below, never as a
+// comparison of its own.
 typedef struct {
     int64_t y;
     Margins pm;
-    int64_t first;      // -1 until content resolves the pending margins
+    int64_t first;      // cursor_open's mark until content resolves the pending margins
 } Cursor;
+
+#define CURSOR_NOTHING_PLACED INT64_MIN
+
+// A cursor at `y` with `pm` pending, nothing inside placed yet.
+static Cursor cursor_open(int64_t y, Margins pm)
+{
+    return (Cursor){y, pm, CURSOR_NOTHING_PLACED};
+}
+
+// Whether content inside has resolved the pending margins: `first` is then
+// where it was placed.
+static bool cursor_placed(const Cursor *c)
+{
+    return c->first != CURSOR_NOTHING_PLACED;
+}
 
 // The longest length layout resolves, in 26.6: as many pixels as a face
 // can read. A page can nest percentages of percentages (`width=1000000%`
@@ -1722,7 +1745,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
     again:;
         // Where the line stands if it has height, and the room beside the
         // floats there.
-        int64_t y_at = cur->y + (cur->first < 0 ? margins_sum(cur->pm) : 0);
+        int64_t y_at = cur->y + (!cursor_placed(cur) ? margins_sum(cur->pm) : 0);
         int64_t lx, lw;
         line_room(l, y_at, ask_h, cx, cw, &lx, &lw);
         // A line whose band holds none of its first piece moves down to
@@ -1733,7 +1756,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
             first_unit(&s, start, indent) > lw) {
             int64_t next = room_next(l, y_at);
             if (next != INT64_MAX && next > y_at) {
-                if (cur->first < 0) {
+                if (!cursor_placed(cur)) {
                     cur->y += margins_sum(cur->pm);
                     cur->pm = kNoMargins;
                     cur->first = cur->y;
@@ -1931,7 +1954,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                     // is the element's own box, against the line it was
                     // measured on — its percentages are of the line's
                     // width, once — with the width the line gave it.
-                    Cursor c = {0, kNoMargins, -1};
+                    Cursor c = cursor_open(0, kNoMargins);
                     g->item->content->atom_sized = true;
                     g->item->content->atom_w = g->atom.w;
                     if (!g->done)
@@ -2080,7 +2103,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                     break;
                 g->done = true;
                 FBox *f = g->item->floated;
-                if (cur->first < 0 && !content) {
+                if (!cursor_placed(cur) && !content) {
                     float_at(l, styles, f, cx, cw, cur, rel_x, rel_y);
                     break;
                 }
@@ -2224,7 +2247,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
         if (height > 0) {
             cur->y += margins_sum(cur->pm);
             cur->pm = kNoMargins;
-            if (cur->first < 0)
+            if (!cursor_placed(cur))
                 cur->first = cur->y;
             if (floats_waiting(l)) {
                 settle(l, cur->y);
@@ -2320,7 +2343,7 @@ static void lines(L *l, const FStyles *styles, FBox *ifc, int64_t cx, int64_t cw
                 sp->inl->last_span = sp;
             }
         cur->y += height;
-        if (height > 0 && cur->first < 0)
+        if (height > 0 && !cursor_placed(cur))
             cur->first = line->y;
         // The floats that did not fit beside what was on it go below it.
         for (size_t k = 0; k < nlater && !l->failed; k++)
@@ -3054,7 +3077,7 @@ static void clearance(L *l, FBox *b, Cursor *cur, int64_t mt)
     if (below <= at)
         return;
     cur->y += margins_sum(cur->pm);
-    if (cur->first < 0)
+    if (!cursor_placed(cur))
         cur->first = cur->y;
     b->clearance = below - at;
     cur->y = below - mt;
@@ -3093,7 +3116,7 @@ static void avoid_floats(L *l, Cursor *cur, int64_t mt, int64_t need, int64_t h,
     }
     if (y + sp->rel_y > at) {
         cur->y += margins_sum(cur->pm);
-        if (cur->first < 0)
+        if (!cursor_placed(cur))
             cur->first = cur->y;
         cur->y = y + sp->rel_y - mt;
         cur->pm = kNoMargins;
@@ -3122,7 +3145,7 @@ static void float_at(L *l, const FStyles *styles, FBox *f, int64_t cx, int64_t c
     Space *sp = l->space;
     if (l->failed || sp == NULL)
         return;
-    if (at->first < 0) {
+    if (!cursor_placed(at)) {
         if (sp->nwait == sp->cap_wait) {
             int32_t cap = sp->cap_wait != 0 ? sp->cap_wait * 2 : 4;
             Wait *grown = scratch_realloc(l, sp->wait, (size_t)cap * sizeof(*grown));
@@ -4125,7 +4148,7 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
             c->flex_sized = true;
             c->flex_w = max64(0, it->target - it->frame);
             c->flex_ml = it->m0;
-            Cursor cur = {top, kNoMargins, -1};
+            Cursor cur = cursor_open(top, kNoMargins);
             block(l, styles, c, at[i], cw, &cur);
         }
     } else {
@@ -4162,7 +4185,7 @@ static void flex(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_t cw, C
                 c->flex_ml = r.wraps ? (ml_auto ? 0 : len(cs->margin[FLOW_LEFT], cw))
                                      : column_ml(s, c, cw, frame + cwid);
             }
-            Cursor cur = {top, kNoMargins, -1};
+            Cursor cur = cursor_open(top, kNoMargins);
             block(l, styles, c, cx, cw, &cur);
         }
     }
@@ -5199,7 +5222,7 @@ static void grid_layout(L *l, const FStyles *styles, FBox *b, int64_t cx, int64_
         const flow_style_t *cs = c->style;
         const GTrack *c0 = &cols[it->at[0][0]], *c1 = &cols[it->at[0][1] - 1];
         int64_t ax = cx + c0->pos, aw = max64(0, c1->pos + c1->size - c0->pos);
-        Cursor cur = {top, kNoMargins, -1};
+        Cursor cur = cursor_open(top, kNoMargins);
         if (c->kind != FB_TABLE) {
             bool ml_auto = cs->margin[FLOW_LEFT].kind == FLOW_LENGTH_AUTO;
             bool mr_auto = cs->margin[FLOW_RIGHT].kind == FLOW_LENGTH_AUTO;
@@ -5308,7 +5331,7 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     }
     Cursor moved = *cur;
     moved.y += dy;
-    if (moved.first >= 0)
+    if (cursor_placed(&moved))
         moved.first += dy;
     // What flows round a float inside it sees the float unmoved (Space).
     if (l->space != NULL) {
@@ -5322,7 +5345,7 @@ static void block(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t cbw
     }
     *cur = moved;
     cur->y -= dy;
-    if (cur->first >= 0)
+    if (cursor_placed(cur))
         cur->first -= dy;
 }
 
@@ -5424,10 +5447,10 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
     Cursor in;
     int64_t y_border = 0;
     if (top_open) {
-        in = (Cursor){cur->y, pm, -1};
+        in = cursor_open(cur->y, pm);
     } else {
         y_border = cur->y + margins_sum(pm);
-        in = (Cursor){y_border + b->border[FLOW_TOP] + b->padding[FLOW_TOP], kNoMargins, -1};
+        in = cursor_open(y_border + b->border[FLOW_TOP] + b->padding[FLOW_TOP], kNoMargins);
         in.first = in.y;
         // The margins above resolve at its border edge, where the floats
         // waiting for them go.
@@ -5475,11 +5498,11 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
         // Layout stopped inside this box: it holds what was laid out.
         b->placed = true;
         b->unfinished = true;
-        b->y = top_open ? (in.first >= 0 ? in.first : cur->y + margins_sum(pm)) : y_border;
+        b->y = top_open ? (cursor_placed(&in) ? in.first : cur->y + margins_sum(pm)) : y_border;
         b->h = max64(0, in.y - b->y);
         // And the parent's cursor stops at its bottom, so every box above
         // holds what was laid out and the page can be scrolled to it.
-        if (cur->first < 0)
+        if (!cursor_placed(cur))
             cur->first = b->y;
         cur->y = b->y + b->h;
         cur->pm = kNoMargins;
@@ -5489,13 +5512,13 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
     // An item with nothing in it still shows its marker, and the marker
     // stands on a line: the item holds one line of its own font, as a line
     // with content would, margins above resolved there.
-    if (b->marker != NULL && (top_open ? in.first < 0 : in.y == content_top)) {
+    if (b->marker != NULL && (top_open ? !cursor_placed(&in) : in.y == content_top)) {
         Fonts f;
         if (fonts_for(l, s, &f)) {
             Extent fb = font_box(s, f.info.ascent, f.info.descent, f.info.line_height);
             in.y += margins_sum(in.pm);
             in.pm = kNoMargins;
-            if (in.first < 0)
+            if (!cursor_placed(&in))
                 in.first = in.y;
             settle(l, in.y);
             in.y += fb.bottom - fb.top;
@@ -5504,7 +5527,7 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
 
     // Nothing inside resolved a position: the box is empty, and its top
     // and bottom margins collapse together with whatever adjoins them.
-    if (top_open && in.first < 0 && height_auto && bottom_open) {
+    if (top_open && !cursor_placed(&in) && height_auto && bottom_open) {
         b->placed = true;
         b->y = cur->y + margins_sum(pm);
         b->h = b->content_h = 0;
@@ -5526,12 +5549,12 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
         return;
     }
     if (top_open) {
-        y_border = in.first >= 0 ? in.first : cur->y + margins_sum(pm);
+        y_border = cursor_placed(&in) ? in.first : cur->y + margins_sum(pm);
         content_top = y_border;
         // Nothing inside resolved the margins above it, but its border edge
         // does, there being no collapsing through it — where its content
         // is whole, which could have resolved them first.
-        if (in.first < 0 && in_flow(b) && !b->unfinished)
+        if (!cursor_placed(&in) && in_flow(b) && !b->unfinished)
             settle(l, y_border);
     }
     // Margins that do not pass its bottom resolve there, at the end of
@@ -5570,7 +5593,7 @@ static void block_at(L *l, const FStyles *styles, FBox *b, int64_t cbx, int64_t 
            b->border[FLOW_BOTTOM];
     cur->y = b->y + b->h;
     cur->pm = pm_out;
-    if (cur->first < 0)
+    if (!cursor_placed(cur))
         cur->first = y_border;
     if (b->marker != NULL)
         place_marker(l, styles, b, cx, y_border + b->border[FLOW_TOP] + b->padding[FLOW_TOP]);
@@ -5729,7 +5752,7 @@ static void absolute_table(L *l, const FStyles *styles, FBox *t, Rect cb, int64_
     Axis h = axis_of(s, FLOW_LEFT, FLOW_RIGHT, cb.w, cb.w);
     Axis v = axis_of(s, FLOW_TOP, FLOW_BOTTOM, cb.h, cb.w);
     int64_t room = max64(0, cb.w - (h.auto0 ? 0 : h.in0) - (h.auto1 ? 0 : h.in1));
-    Cursor c = {0, kNoMargins, -1};
+    Cursor c = cursor_open(0, kNoMargins);
     table(l, styles, t, 0, room, &c);
     if (l->failed)
         return;
@@ -5830,7 +5853,7 @@ static void absolute(L *l, const FStyles *styles, FBox *a, Rect cb)
     }
     a->abs_sized = true;
     a->abs_ml = ml;
-    Cursor c = {0, kNoMargins, -1};
+    Cursor c = cursor_open(0, kNoMargins);
     block(l, styles, a, cb.x + x - ml, cb.w, &c);
     if (l->failed || !a->placed)
         return;
@@ -6841,7 +6864,7 @@ static void table(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_t cbw
     if (in_flow(t))
         settle(l, y);
     if (t->unfinished) {
-        if (cur->first < 0)
+        if (!cursor_placed(cur))
             cur->first = y;
         cur->y = y;
         cur->pm = kNoMargins;
@@ -6957,7 +6980,7 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
     t->w = used;
     int64_t mt = len(s->margin[FLOW_TOP], cbw), mb = len(s->margin[FLOW_BOTTOM], cbw);
     int64_t y = cur->y + margins_sum(margins_join(cur->pm, margin_of(mt)));
-    if (cur->first < 0)
+    if (!cursor_placed(cur))
         cur->first = y;
 
     // Top captions, as wide as the table.
@@ -7394,7 +7417,7 @@ FLayout *f_layout(FBoxes *boxes, const os64_html_document_t *doc, const os64_pag
     int64_t w = (int64_t)width * 64;
     out->width = w;
     if (boxes->root != NULL) {
-        Cursor cur = {0, kNoMargins, -1};
+        Cursor cur = cursor_open(0, kNoMargins);
         block(&l, boxes->styles, boxes->root, 0, w, &cur);
         // A root floated right stands at the right of the initial
         // containing block.
