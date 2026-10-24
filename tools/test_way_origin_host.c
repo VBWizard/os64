@@ -1144,6 +1144,10 @@ static void metadata(void)
     hop_lines(&m, NULL, "https://a.test:8443/1", false);
     expect_text("site: same-site, then another site, is cross-site",
                 line_value(hop_lines(&m, NULL, "https://c.test/2", false), "Sec-Fetch-Site"), "cross-site");
+    m = request_from("https://a.test/p", WAY_DEST_SCRIPT, WAY_MODE_NO_CORS);
+    hop_lines(&m, NULL, "https://c.test/1", false);
+    expect_text("site: cross-site, then the same site, stays cross-site",
+                line_value(hop_lines(&m, NULL, "https://a.test:8443/2", false), "Sec-Fetch-Site"), "cross-site");
     m = navigation_from(WAY_BY_BROWSER, "https://a.test/p");
     hop_lines(&m, NULL, "https://a.test/", false);
     expect_text("site: none stays none through a cross-site redirect",

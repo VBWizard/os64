@@ -719,9 +719,12 @@ static os64_font_status_t probe_fonts(void *ctx, const flow_family_list_t *famil
     return OS64_FONT_OK;
 }
 static bool probe_modern_off;  /* the next probe_page's window: the modern switch off */
+/* The window's agent's preset lines: not NULL, so a job handed none is told
+ * from one handed the window's. */
+static const way_identity_t s_window_identity={"sec-ch-ua: \"Window\";v=\"1\"\r\n","en"};
 static void probe_page(const char *html, bool scripts) {
     os64_memset(&g,0,sizeof(g));
-    g.scripts_on=scripts; g.way.agent=YONDER_AGENT; g.settle_due=YONDER_NEVER;
+    g.scripts_on=scripts; g.way.agent=YONDER_AGENT; g.way.identity=&s_window_identity; g.settle_due=YONDER_NEVER;
     g.modern=g.page.modern=!probe_modern_off;
     g.zoom=g.zoom_default=1000;
     os64_ui_init(&g.ui,NULL);
@@ -2417,7 +2420,8 @@ static void input_cases(void) {
  * arrive() a worker's page used to take. */
 static void stream_window(void) {
     os64_memset(&g,0,sizeof(g));
-    g.scripts_on=false; g.way.agent=YONDER_AGENT; g.way.name="yonder"; g.settle_due=YONDER_NEVER;
+    g.scripts_on=false; g.way.agent=YONDER_AGENT; g.way.identity=&s_window_identity; g.way.name="yonder";
+    g.settle_due=YONDER_NEVER;
     g.modern=true;
     g.zoom=g.zoom_default=1000;
     os64_ui_init(&g.ui,NULL);
