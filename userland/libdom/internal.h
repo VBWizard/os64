@@ -11,7 +11,7 @@
 #define D_BUCKETS 256
 #define D_SET 0x1000
 /* The intrinsics the structured clone holds (clone.c's H_COUNT). */
-#define D_CLONE_HELD 32
+#define D_CLONE_HELD 33
 typedef struct DValue DValue;
 typedef struct DQuery DQuery;
 typedef struct DListener DListener;
@@ -361,7 +361,9 @@ struct os64_dom {
     const os64_html_node_t *current_script;
     DValue *custom_prototype;
     /* P2b, clone, message, idle. The intrinsics the structured clone calls,
-     * taken before any page ran (clone.c's d_clone_setup). The window's
+     * taken before any page ran (clone.c's d_clone_setup), and whether this
+     * binding has learned the engine's classes it tells values by (at its
+     * first clone, clone.c's learn_classes). The window's
      * posted messages, oldest first, and how many values they hold (the
      * registry's sixth list), and MessageEvent's prototype (message.c,
      * event.c). The idle callbacks (idle.c): every entry in request order,
@@ -374,6 +376,7 @@ struct os64_dom {
      * the next may begin for one made inside; and whether a period's
      * callback is running. */
     DValue *clone_held[D_CLONE_HELD];
+    bool clone_classes;
     DMessage *messages, *messages_last;
     size_t messages_held;
     DValue *message_prototype;

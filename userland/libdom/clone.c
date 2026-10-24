@@ -3,9 +3,9 @@
 /* STRUCTURED CLONE (HTML § 2.7, "Safe passing of structured data"): the
  * StructuredSerializeWithTransfer and StructuredDeserializeWithTransfer
  * pair, and structuredClone, P2b's row (WINDOW_DOCUMENT.md § P2b). The
- * pair is the binding's one copy of the algorithm: structuredClone,
- * postMessage (message.c) and a performance mark's detail
- * (performance.c) all go through it.
+ * pair is the binding's one copy of the algorithm, which every clone a
+ * page asks for goes through, so no two of them can disagree about what a
+ * value's copy is.
  *
  * THE RECORD IS NO REALM'S. d_clone_write reads a value in the realm of
  * the context it is given and d_clone_read builds the copy in the realm of
@@ -44,11 +44,12 @@
  *
  * TRANSFER: the transfer list's ArrayBuffers (anything else, a duplicate, a
  * SharedArrayBuffer or a detached one is a DataCloneError) are detached
- * once the value is written, their bytes moving into the record, and are
- * new buffers in the copy wherever the value named them. HTML checks and
- * detaches them one by one; this checks them all, then detaches them all,
- * which differs only in what a refusal halfway leaves detached (here,
- * nothing).
+ * once the value is written, their bytes copied into the record first
+ * (the engine can detach a buffer but not hand its bytes over; DEBTS.md),
+ * and are new buffers in the copy wherever the value named them. HTML
+ * checks and detaches them one by one; this checks and copies them all,
+ * then detaches them all, which differs only in what a refusal halfway
+ * leaves detached (here, nothing).
  *
  * WHAT A PAGE CAN SIZE. Both directions walk iteratively, on stacks of
  * their own in engine memory, so a graph a million objects deep is a
@@ -70,7 +71,6 @@ static JSClassID collector_slot;
  * same in every runtime, since the engine numbers its own classes). */
 static JSClassID s_object, s_array, s_error, s_date, s_regexp, s_map, s_set, s_boolean, s_number, s_string,
     s_bigint, s_buffer, s_shared;
-static bool s_classes_known;
 
 /* The intrinsics the pair calls, taken before any page ran. */
 enum {
@@ -78,7 +78,7 @@ enum {
     H_REGEXP, H_REGEXP_SOURCE, H_FLAG_FIRST, H_FLAG_LAST = H_FLAG_FIRST + 7,
     H_BUFFER, H_BUFFER_RESIZABLE, H_BUFFER_MAX,
     H_MAP, H_MAP_SET, H_MAP_FOR_EACH, H_SET, H_SET_ADD, H_SET_FOR_EACH,
-    H_ERROR_FIRST, H_ERROR_LAST = H_ERROR_FIRST + 6,
+    H_ERROR_FIRST, H_ERROR_LAST = H_ERROR_FIRST + 6, H_SHARED,
     H_COUNT
 };
 _Static_assert(H_COUNT == D_CLONE_HELD, "internal.h's clone_held holds every intrinsic the pair calls");
@@ -176,11 +176,21 @@ static JSClassID class_of(JSValue value)
     return id;
 }
 
-/* The engine's classes, read once off instances made through the
- * constructors setup took. -1 with an exception pending. */
-static int learn_classes(os64_dom_t *dom, JSContext *ctx, JSValueConst shared)
+/* The engine's classes, read off instances made through the constructors
+ * setup took, at a binding's first clone. Not at setup: the calls are
+ * engine calls, the first of which asks the runtime whether to stop, and
+ * outside a task an allocation the engine refused before it makes that
+ * the runtime's failure (libjs CONTRACT.md), where a refused binding
+ * creation must leave it usable. And once a binding, not once a process:
+ * the calls count toward the engine's interrupt checks, which read the
+ * clock, so a binding's work must not depend on whether another binding
+ * cloned before it in the process (a replay runs each page in a process of
+ * its own and must time it as the window that kept it did). -1 with an
+ * exception pending. */
+static int learn_classes(os64_dom_t *dom, JSContext *ctx)
 {
-    if (s_classes_known) return 0;
+    if (dom->clone_classes) return 0;
+    JSValueConst shared = dom->clone_held[H_SHARED]->value;
     JSValue made[13];
     made[0] = JS_NewObject(ctx);
     made[1] = JS_NewArray(ctx);
@@ -205,7 +215,7 @@ static int learn_classes(os64_dom_t *dom, JSContext *ctx, JSValueConst shared)
         s_string = class_of(made[9]); s_bigint = class_of(made[10]); s_buffer = class_of(made[11]);
         /* No SharedArrayBuffer: no object can have its class. */
         s_shared = JS_IsObject(made[12]) ? class_of(made[12]) : 0;
-        s_classes_known = true;
+        dom->clone_classes = true;
     }
     for (int i = 0; i < 13; i++) JS_FreeValue(ctx, made[i]);
     return failed ? -1 : 0;
@@ -271,11 +281,8 @@ int d_clone_setup(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         JS_FreeValue(ctx, constructor);
         if (result < 0) return -1;
     }
-    JSValue shared = JS_GetPropertyStr(ctx, global, "SharedArrayBuffer");
-    if (JS_IsException(shared)) return -1;
-    int learned = learn_classes(dom, ctx, shared);
-    JS_FreeValue(ctx, shared);
-    return learned;
+    /* SharedArrayBuffer's constructor, or undefined where there is none. */
+    return take_value(dom, ctx, global, "SharedArrayBuffer", H_SHARED);
 }
 
 /* ── Writing ──────────────────────────────────────────────────────────── */
@@ -678,6 +685,27 @@ static int write_blob(DWriter *w, JSAtom key, JSValueConst value, const uint8_t 
     return number(w, value, index);
 }
 
+/* A RegExp's item: its source and flags, read through the getters taken
+ * before any page ran. -1 with an exception pending. */
+static int write_regexp(DWriter *w, JSAtom key, JSValueConst value, size_t index)
+{
+    JSContext *ctx = w->ctx;
+    JSValue source = call_held(w, H_REGEXP_SOURCE, value);
+    if (JS_IsException(source)) return -1;
+    uint8_t flags = 0;
+    for (int i = 0; i < 8; i++) {
+        JSValue flag = call_held(w, H_FLAG_FIRST + i, value);
+        if (JS_IsException(flag)) { JS_FreeValue(ctx, source); return -1; }
+        if (JS_ToBool(ctx, flag)) flags |= (uint8_t)(1u << i);
+        JS_FreeValue(ctx, flag);
+    }
+    DItem *item = item_new(w, key, K_REGEXP);
+    if (item == NULL) { JS_FreeValue(ctx, source); return -1; }
+    item->value = source;
+    item->sub = flags;
+    return number(w, value, index);
+}
+
 /* One value: a primitive's item, a reference to an object already written,
  * or an object's item, its children left to a frame. */
 static int write_value(DWriter *w, JSAtom key, JSValueConst value)
@@ -724,22 +752,7 @@ static int write_value(DWriter *w, JSAtom key, JSValueConst value)
         item->value = time;
         return number(w, value, index);
     }
-    if (id == s_regexp) {
-        JSValue source = call_held(w, H_REGEXP_SOURCE, value);
-        if (JS_IsException(source)) return -1;
-        uint8_t flags = 0;
-        for (int i = 0; i < 8; i++) {
-            JSValue flag = call_held(w, H_FLAG_FIRST + i, value);
-            if (JS_IsException(flag)) { JS_FreeValue(ctx, source); return -1; }
-            if (JS_ToBool(ctx, flag)) flags |= (uint8_t)(1u << i);
-            JS_FreeValue(ctx, flag);
-        }
-        DItem *item = item_new(w, key, K_REGEXP);
-        if (item == NULL) { JS_FreeValue(ctx, source); return -1; }
-        item->value = source;
-        item->sub = flags;
-        return number(w, value, index);
-    }
+    if (id == s_regexp) return write_regexp(w, key, value, index);
     if (id == s_buffer || (s_shared != 0 && id == s_shared)) {
         DItem *item = item_new(w, key, K_BUFFER);
         DData *data = item != NULL ? data_new(w, item) : NULL;
@@ -847,6 +860,7 @@ static void writer_end(DWriter *w)
 DClone *d_clone_write(os64_dom_t *dom, JSContext *ctx, JSValueConst value, const JSValue *transfer,
                       size_t transfer_count)
 {
+    if (learn_classes(dom, ctx) < 0) return NULL;
     DClone *out = js_mallocz(ctx, sizeof(*out));
     if (out == NULL) return NULL;
     DWriter w = {.dom = dom, .ctx = ctx, .rt = dom->engine, .out = out};
@@ -1152,6 +1166,7 @@ static int read_items(DReader *r)
 
 JSValue d_clone_read(os64_dom_t *dom, JSContext *ctx, DClone *clone)
 {
+    if (learn_classes(dom, ctx) < 0) return JS_EXCEPTION;
     DReader r = {.dom = dom, .ctx = ctx, .in = clone, .root = JS_UNDEFINED};
     if (clone->objects != 0) {
         r.objects = js_malloc(ctx, (size_t)clone->objects * sizeof(*r.objects));

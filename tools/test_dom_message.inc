@@ -204,6 +204,31 @@ static void dom_clone_hostile_cases(void)
         "if(!(c.e instanceof RangeI)||c.b.byteLength!==2)throw Error('the copy, again');",
         "clone: no page code it replaced runs");
     fixture_free(&f);
+
+    /* A getter that re-enters the clone, posts a message, detaches a
+     * buffer in the transfer list, or grows a buffer already written. */
+    options = p2b_options(P2B_URL);
+    f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    p2b_script(&f,
+        "let n=0;const o={get a(){return n++<40?structuredClone(o):'end'}};"
+        "let c=structuredClone(o),depth=0;while(typeof c.a==='object'){c=c.a;depth++}"
+        "assert(depth===40&&c.a==='end','a clone inside a getter is a clone of its own: '+depth);"
+        "let e;const forever={get a(){return structuredClone(forever)}};try{structuredClone(forever)}catch(x){e=x}"
+        "assert(e instanceof RangeError||e instanceof InternalError,'endless re-entry ends as the engine ends recursion: '+e);"
+        "globalThis.order=[];addEventListener('message',m=>order.push(m.data.tag));"
+        "postMessage({tag:'outer',get x(){postMessage({tag:'inner'},'*');return 1}},'*');"
+        "const buf=new ArrayBuffer(4);throws('DataCloneError',()=>structuredClone({get x(){structuredClone(buf,{transfer:[buf]});return 1}},{transfer:[buf]}));"
+        "const rb=new ArrayBuffer(8,{maxByteLength:64});"
+        "const grown={v:new Uint8Array(rb,0,4),get g(){rb.resize(64);return 0},get late(){return new Uint8Array(rb,32,8)}};"
+        "let r;try{structuredClone(grown)}catch(x){r=x}assert(r instanceof RangeError,'a view past the buffer it names is refused as it is made: '+r);",
+        "clone: getters that reach back in");
+    os64_js_outcome_t outcome;
+    check(os64_dom_message_fire(f.binding, &outcome) && os64_dom_message_fire(f.binding, &outcome),
+          "clone: both messages run");
+    p2b_script(&f, "assert(order.join()==='inner,outer',order.join());",
+               "clone: the one posted while the other was being cloned was queued first");
+    fixture_free(&f);
 }
 
 /* A fixture whose engine has room for a large graph and its copy. */
@@ -216,10 +241,12 @@ static DomFixture p2b_large_fixture(const os64_dom_options_t *options)
     return f;
 }
 
-/* What a page can size: a graph forty thousand objects deep both ways
+/* What a page can size: a graph thirty thousand objects deep both ways
  * (never the C stack's: a recursive walk's frames would be megabytes), a
- * Map of forty thousand entries and as wide an array, each a linear walk,
- * timed against twice their count. */
+ * Map of thirty thousand entries and as wide an array, each a linear walk:
+ * timed against half their count, the work doubles, never quadruples. The
+ * sizes keep the sanitized profile well inside the fixture's one second a
+ * script. */
 static void dom_clone_bound_cases(void)
 {
     os64_dom_options_t options = p2b_options(P2B_URL);
@@ -227,7 +254,7 @@ static void dom_clone_bound_cases(void)
         DomFixture f = p2b_large_fixture(&options);
         if (!fixture_ready(&f)) return;
         char source[1024];
-        int n = 20000 * scale;
+        int n = 15000 * scale;
         snprintf(source, sizeof(source), STORAGE_ASSERT
                  "const N=%d;let head={n:0};const first=head;for(let i=1;i<N;i++){head={n:i,next:head}};first.loop=head;"
                  "const m=new Map();for(let i=0;i<N;i++)m.set(i,{i});const arr=[];for(let i=0;i<N;i++)arr.push([i]);"
