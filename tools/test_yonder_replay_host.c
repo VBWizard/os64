@@ -3301,6 +3301,15 @@ static int rp_self_test(const char *work) {
          "<!doctype html><p>percent</p><script src=s.js></script>",
          rp_head(200,"OK","text/html","","http://fixture.test/M%49SSING/MISSING/p.html",false,WAY_BODY_HTML),
          NULL,"M%2549SSING/M%49SSING/s.js: ran",0,false,false,false},
+        /* Canvases, one a script makes, are one FAILED line, and a frame a
+         * script inserts with its src property is no failure: a replay
+         * writes the same lines. */
+        {"canvases and an inserted frame","http://fixture.test/loud",
+         "<!doctype html><canvas></canvas><canvas width=10 height=10></canvas><script>"
+         "var f=document.createElement('iframe');f.src='/poll';document.body.appendChild(f);"
+         "document.body.appendChild(document.createElement('canvas'))</script>",
+         rp_head(200,"OK","text/html","","http://fixture.test/loud",false,WAY_BODY_HTML),
+         NULL,"unsupported: canvas (3)",0,false,false,false},
         /* Read with every input unlike the harness's, its script writing
          * each into its record as the name of a global it looks for, so a
          * replay that takes the harness's value for any of them writes
