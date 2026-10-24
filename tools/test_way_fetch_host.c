@@ -1028,6 +1028,50 @@ static void who_is_asking(void)
                                   "Sec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: image\r\nAccept-Language: en-US,en;q=0.9\r\n") &&
            !has(s_last_request[0], "Upgrade-Insecure-Requests"), s_last_request[0]);
 
+    // THE COOKIES KEEP THEIR KILOBYTE. A cookie of most of a kilobyte goes
+    // whole beside the identity lines, and an identity past
+    // WAY_IDENTITY_MAX goes without its lines rather than crowd the
+    // cookies out or refuse the hop.
+    {
+        char cookie[1001];
+        memset(cookie, 'c', sizeof(cookie) - 1);
+        memcpy(cookie, "big=", 4);
+        cookie[sizeof(cookie) - 1] = '\0';
+        os64_url_t site;
+        os64_url_parse("http://127.0.0.1/", &site);
+        way_jar_hear(s_jar, &site, false, cookie, strlen(cookie), s_clock);
+        static char huge_hints[WAY_IDENTITY_MAX + 64];
+        memset(huge_hints, 0, sizeof(huge_hints));
+        strcpy(huge_hints, "sec-ch-ua: \"");
+        memset(huge_hints + strlen(huge_hints), 'x', WAY_IDENTITY_MAX);
+        strcat(huge_hints, "\"\r\n");
+        const way_identity_t huge = {.hints = huge_hints, .language = "en"};
+        for (int i = 0; i < 2; i++) {
+            fresh();
+            script("127.0.0.1", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nPNG");
+            way_hooks_t hooks;
+            memset(&hooks, 0, sizeof(hooks));
+            hooks.jar = s_jar;
+            hooks.identity = i == 0 ? &kWho : &huge;
+            way_origin_t o;
+            way_origin_of("http://127.0.0.1/page", 0, &o);
+            way_metadata_request(&hooks.metadata, &o, WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+            os64_fetch_options_t opt;
+            memset(&opt, 0, sizeof(opt));
+            way_whole_t got;
+            bool ok = way_fetch_whole(&hooks, "http://127.0.0.1/i.png", &opt, 1 << 20, &got);
+            free(got.bytes);
+            expect(i == 0 ? "who: a kilobyte's cookie goes whole beside the identity lines"
+                          : "who: an identity past its room goes without its lines, the cookie whole",
+                   ok && has(s_last_request[0], cookie) &&
+                       (i == 0 ? has(s_last_request[0], "Sec-Fetch-Dest: image\r\n")
+                               : !has(s_last_request[0], "sec-ch-ua") && !has(s_last_request[0], "Sec-Fetch-")),
+                   s_last_request[0]);
+        }
+        way_jar_free(s_jar);
+        s_jar = way_jar_new();
+    }
+
     // Asked again after another resource's 304: the URL list starts again,
     // so the hop that went elsewhere does not make the new ask cross-site.
     fresh();
