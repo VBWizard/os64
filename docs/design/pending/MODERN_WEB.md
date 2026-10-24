@@ -2330,7 +2330,11 @@ there, which is accepted. The paint verb that draws both is now
 one `FAILED unsupported: canvas (1)` line however many canvases it has, a
 script's among them, beside `MISSING element canvas (N)` as before. Opus
 ruled canvas alone loud (2026-10-24): video, audio, embed and svg stay
-counted and silent, booked as one DEBTS row with their corpus counts.
+counted and silent, booked as one DEBTS row with their corpus counts. A
+canvas a script sizes with `canvas.width = 800` keeps the size its
+attributes gave it, since there is no HTMLCanvasElement to reflect `width`
+and `height` (booked: HTMLCanvasElement is the canvas question's, which is
+Fable's).
 
 **A frame a script inserts** (libdom `frames.c`, the frames row). The cause
 was libdom's: an iframe had no `src`, so `f.src = url`, the way scripts most
@@ -2340,7 +2344,8 @@ which lists a frame's `src` attribute as its link, never saw it;
 iframe is a prototype kind of its own, `D_PROTO_IFRAME`, the
 HTMLIFrameElement IFRAME.md shapes (§ The cluster and the window proxy),
 and a modern row of its own puts the interface and `src` on it, so phase
-F1 extends this one shape and its frames switch can take it away whole.
+F1 extends this one shape and the modern switch takes it away whole (rule
+4; there is one kill switch).
 With the modern switch off an iframe stays as it was, `src` a script's
 own property, which the scripted-page host's cases hold both ways. A frame
 is never unsupported: its stand-in takes a click to its document (Chris

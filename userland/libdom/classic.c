@@ -413,8 +413,8 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         {"HTMLScriptElement", D_PROTO_SCRIPT}, {"HTMLAnchorElement", D_PROTO_ANCHOR},
         {"HTMLLinkElement", D_PROTO_LINK},
     };
-    /* HTMLIFrameElement's is the frames row's (frames.c), so that row can
-     * be taken away whole. */
+    /* HTMLIFrameElement's is the frames row's (frames.c), with its members:
+     * IFRAME.md's HTMLIFrameElement is one row. */
     _Static_assert(sizeof(kInterfaces) / sizeof(kInterfaces[0]) == D_PROTO_COUNT - 1,
                    "an interface object for each of the binding's prototypes but the frames row's");
     /* Each interface object made so far, by prototype kind, borrowed from

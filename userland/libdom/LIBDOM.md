@@ -1028,8 +1028,8 @@ The classic fixes beside them are every page's, the switch on or off:
 prototype, `D_PROTO_IFRAME`, and `src`, reflected as `script.src` is (read
 resolved against the document's base, set as written). It is the start of
 the HTMLIFrameElement IFRAME.md shapes (§ The cluster and the window
-proxy), a modern row of its own so the frames switch phase F1 brings can
-take it away whole, and F1 adds the rest of its members to it. Setting
+proxy), a modern row of its own, so the modern switch takes it away whole,
+and phase F1 adds the rest of its members to it. Setting
 `src` sets the attribute, which libpage lists as the frame's link, and
 loads nothing: a frame a script inserts and addresses this way, as scripts
 most often do, is the stand-in a parsed one is. With the modern switch off

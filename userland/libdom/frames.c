@@ -2,16 +2,16 @@
 
 /* THE FRAMES ROW (IFRAME.md § The cluster and the window proxy, whose
  * HTMLIFrameElement this is the start of): the interface over the
- * binding's iframe prototype, D_PROTO_IFRAME, and the members it has so
- * far. A modern row, so the switch takes the interface and every member
- * away whole; the prototype itself is every page's, as each kind's is, and
- * with the switch off an iframe has HTMLElement's members alone.
+ * binding's iframe prototype, D_PROTO_IFRAME, and its members. A modern
+ * row, so the modern switch takes the interface and every member away
+ * whole; the prototype itself is every page's, as each kind's is, and with
+ * the switch off an iframe has HTMLElement's members alone.
  *
- * `src` is the one member: the address the frame's stand-in names, which
- * libpage lists as a link, so a frame a script inserts and gives its
- * address this way, as scripts most often do, is the stand-in a parsed
- * one is. Setting it sets the attribute and loads nothing: no document is
- * loaded inside a document yet. */
+ * `src`: the address the frame's stand-in names, which libpage lists as a
+ * link, so a frame a script inserts and gives its address this way, as
+ * scripts most often do, is the stand-in a parsed one is. Setting it sets
+ * the attribute and loads nothing: no document is loaded inside a
+ * document. */
 int d_frames_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     JSValueConst prototype = dom->prototypes[D_PROTO_IFRAME]->value;
