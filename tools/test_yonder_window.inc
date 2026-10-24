@@ -1,7 +1,9 @@
 /* P1-W END TO END (MODERN_WEB.md § P1-W, as built): crypto through
  * yonder's entropy (scripts.c's hook over libtls's door, faked by this
  * host as fake_entropy_*), and a queueMicrotask callback that throws,
- * reported on the page's record while the page carries on. */
+ * reported on the page's record while the page carries on. And P2a's
+ * (§ P2a, as built): rejections nothing handled on the record, and the
+ * window's error and rejection events. */
 
 static const char *window_record_text(void) {
     static char text[16384];
@@ -52,7 +54,55 @@ static void window_microtask_case(void) {
     loop_drop();
 }
 
+/* P2a END TO END (MODERN_WEB.md § P2a, as built): the page's record says a
+ * rejection nothing handled, by the script, event or timer whose task left
+ * it, and the window's events reach the page's handlers. */
+static void window_rejection_case(void) {
+    loop_page("<p id=b>button</p><p id=log>-</p><script>var log=[];"
+        "function note(s){log.push(s);document.getElementById('log').textContent=log.join('|')}"
+        "onunhandledrejection=function(e){note('unhandled '+e.reason.message)};"
+        "onrejectionhandled=function(e){note('handled '+e.reason.message)};"
+        "var kept=Promise.reject(new Error('from the script'));Promise.reject(new Error('and another'));"
+        "Promise.reject(new Error('caught')).catch(function(){});"
+        "document.getElementById('b').addEventListener('click',async function(){throw new TypeError('in a click')});"
+        "async function later(){await new Promise(function(r){setTimeout(r,10)});throw new Error('after a timer')}"
+        "later();setTimeout(function(){kept.catch(function(){})},50);</script>");
+    check(loop_settle() && script_rebuild(),"window: a page that leaves rejections unhandled arrives");
+    check(window_record_has("FAILED script http://fixture.test/final#inline-1: unhandled rejection: "
+                            "Error: from the script (1)"),
+        "window: a script's unhandled rejection is its FAILED line, said as one");
+    check(window_record_has("FAILED script http://fixture.test/final#inline-1: unhandled rejection: "
+                            "Error: and another (1)"),
+        "window: and each rejection it left is a line of its own");
+    check(strstr(window_record_text(),"caught")==NULL,"window: a caught rejection is no failure");
+    input_click_at("b");
+    check(window_record_has("FAILED script click event: unhandled rejection: TypeError: in a click (1)"),
+        "window: an async click handler that throws is the click's FAILED line");
+    check(status_says("unhandled rejection: TypeError: in a click"),
+        "window: and the status line says it, as it says a script's error");
+    now_ms+=100;
+    for(int i=0;i<4;i++) script_turn();
+    check(window_record_has("FAILED script http://fixture.test/final#timer-1: unhandled rejection: "
+                            "Error: after a timer (1)"),
+        "window: one a timer's task left is the timer's");
+    check(script_rebuild() && probe_text_is("log","unhandled from the script|unhandled and another|"
+                                                 "unhandled in a click|unhandled after a timer|handled from the script"),
+        "window: each was the page's unhandledrejection, and the late handler its rejectionhandled");
+    loop_drop();
+    loop_page("<p id=log>-</p><script>onunhandledrejection=function(e){e.preventDefault()};"
+        "onerror=function(m,f,l,c){document.getElementById('log').textContent=[m,f,l,c].join(' ')};"
+        "Promise.reject(new Error('handled by the page'))</script><script>missing()</script>");
+    check(loop_settle() && script_rebuild() && strstr(window_record_text(),"handled by the page")==NULL,
+        "window: a rejection the page's listener cancelled is no failure");
+    check(probe_text_is("log","Uncaught ReferenceError: 'missing' is not defined http://fixture.test/final 1 1") &&
+          window_record_has("FAILED script http://fixture.test/final#inline-2: ReferenceError: 'missing' is not "
+                            "defined (1)"),
+        "window: window.onerror hears a script's error, which is its FAILED line as before");
+    loop_drop();
+}
+
 static void window_cases(void) {
+    window_rejection_case();
     window_crypto_case();
     window_microtask_case();
 }

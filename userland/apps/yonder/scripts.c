@@ -221,6 +221,18 @@ static void broken(void *opaque, const char *sentence)
     yonder_diag_failed(s->options.diag, "page", sentence);
 }
 
+// A rejection the task left beyond the failure its outcome carries
+// (libdom's options.failed): a FAILED line under the key the outcome's
+// gets (yonder.c's task_said), the script's whole address when the task
+// is a `src` script's.
+static void failed(void *opaque, const char *task, const char *message)
+{
+    yonder_scripts_t *s = opaque;
+    char key[OS64_DOM_URL_MAX + 16];
+    os64_snprintf(key, sizeof(key), "script %s", s->task_address != NULL ? s->task_address : task);
+    yonder_diag_failed(s->options.diag, key, message);
+}
+
 static uint64_t now_ms(void *opaque)
 {
     yonder_scripts_t *s = opaque;
@@ -360,6 +372,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
         options.screen = s->options.screen;
     options.zoom = zoom;
     options.broken = broken;
+    options.failed = failed;
     options.entropy = entropy;
     options.host_opaque = s;
     s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
@@ -666,6 +679,11 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
         os64_free(source);
         if (out->status == OS64_JS_EXCEPTION && out->jobs_pending)
             drain_after_exception(s, out);
+        // What the script left owed: the window's error event for what it
+        // threw, and an unhandledrejection for each rejection nothing
+        // handled, which is a failure of this script's when no listener
+        // cancels it (libdom's report.c).
+        os64_dom_script_ended(s->dom, name, s->task_address, out);
         os64_js_outcome_t nested;
         if (out->status == OS64_JS_OK && os64_dom_take_report(s->dom, &nested))
             *out = nested;
