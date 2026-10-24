@@ -874,6 +874,9 @@ typedef struct {
     bool collapsible;       // WORD: its spaces vanish at a line's end
     bool hang;              // WORD: its spaces stay but do not count (pre-wrap)
     bool keep_round;        // ATOM: a quirks-mode picture, no opportunity either side
+    // OPEN: the OPEN segment of the inline it is inside, -1 for none: the
+    // open inlines as a chain (Holders, below).
+    int32_t up;
     // WORD whose spaces hold a tab: the stops (the block's interval) and a
     // space's advance, so the spaces are measured where the line puts them
     // — a tab's width depends on the pen it starts from.
@@ -1180,16 +1183,82 @@ static int64_t ratio_floor_w(L *l, FBox *b, int64_t w, int64_t base, int64_t fra
     return max64(w, least);
 }
 
+// WHO DECIDES THE BREAK BESIDE AN INLINE-BLOCK. A soft wrap opportunity
+// between two pieces of content — an atom and the text or atom before or
+// after it — is the `white-space` of the nearest element holding both
+// (CSS Text 3 § 5.1; CSS 2.1 § 16.6), not the atom's own, which governs
+// only what is inside it: a strip of inline-blocks in a nowrap box stays
+// one line however each sets its content, and one that opens a nowrap
+// span may still go to the next line. The open inlines are a chain through
+// their OPEN segments (Seg.up); `held` is the outermost of them the walk
+// has stood in since the last piece of content, which is the element that
+// holds that piece and the next — the block itself at -1. Each step is
+// constant work.
+typedef struct {
+    int32_t open, depth;        // the innermost open inline's OPEN segment (-1: none), how deep
+    int32_t held, held_depth;   // the nearest element holding the last content and what comes
+    int32_t pending;            // an atom whose break after waits for its neighbour, or -1
+} Holders;
+
+static const flow_style_t *holder_style(const Segs *s, const FBox *ifc, int32_t at)
+{
+    return at < 0 ? ifc->style : s->v[at].style;
+}
+
+// An inline opens (its OPEN segment is the last) or closes.
+static void holders_open(Holders *h, Segs *s)
+{
+    s->v[s->n - 1].up = h->open;
+    h->open = (int32_t)(s->n - 1);
+    h->depth++;
+}
+
+static void holders_close(Holders *h, const Segs *s)
+{
+    if (h->open < 0)
+        return;
+    h->open = s->v[h->open].up;
+    h->depth--;
+    if (h->depth < h->held_depth) {
+        h->held = h->open;
+        h->held_depth = h->depth;
+    }
+}
+
+// Content is met: the atom waiting since the last content learns whether
+// a line may break after it, from what holds both; then what the next
+// content shares with this one is, so far, where the walk stands.
+static void holders_meet(Holders *h, Segs *s, const FBox *ifc)
+{
+    if (h->pending >= 0) {
+        Seg *a = &s->v[h->pending];
+        a->wrap_after = f_ws_wraps(holder_style(s, ifc, h->held)->white_space) && !a->keep_round;
+        h->pending = -1;
+    }
+}
+
+static void holders_passed(Holders *h)
+{
+    h->held = h->open;
+    h->held_depth = h->depth;
+}
+
 static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
 {
     l->out->measures++;
     int64_t tabs = 0;
+    Holders h = {-1, 0, -1, 0, -1};
     for (const FItem *it = ifc->items; it != NULL && !l->failed; it = it->next) {
         switch (it->kind) {
         case FI_TEXT: {
             if (tabs == 0 && !f_ws_collapses(it->style->white_space))
                 tabs = tab_interval_for(l, ifc->style);
+            size_t had = s->n;
             text_segments(l, s, it, it->text, it->len, it->style, tabs, cw);
+            if (s->n > had) {
+                holders_meet(&h, s, ifc);
+                holders_passed(&h);
+            }
             break;
         }
         case FI_ATOMIC: {
@@ -1228,7 +1297,12 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
                     s->drop_space = ends_in_space(s);
                     break;
                 }
+                size_t had = s->n;
                 text_segments(l, s, it, alt, n, st, tabs, cw);
+                if (s->n > had) {
+                    holders_meet(&h, s, ifc);
+                    holders_passed(&h);
+                }
                 break;
             }
             if (r.none) {
@@ -1287,19 +1361,18 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
             g->atom = r;
             g->w = g->ml + fw + r.w + g->mr;
             g->keep_round = quirk_no_wrap_round(l, ifc, it);
-            // Whether a line may break either side of it is its parent's
-            // `white-space` to say, not its own (FItem.around): a strip of
-            // inline-blocks in a nowrap box stays one line however each
-            // sets its own content. The rule names the nearest ancestor the
-            // atom shares with its neighbour. The parent is that, except
-            // where the parent is an inline the neighbour is outside of —
-            // the atom first or last in a span — and the shared ancestor is
-            // further out (DEBTS.md, "Breaks beside an inline-block").
-            const flow_style_t *around = it->around != NULL ? it->around : ifc->style;
-            bool wrap = f_ws_wraps(around->white_space) && !g->keep_round;
-            g->wrap_after = wrap;
+            // The breaks either side of it are the white-space of what holds
+            // it and its neighbour (Holders, above): before it, what holds
+            // it and the last content, which also settles the break after
+            // an atom waiting for it; after it, provisionally its parent's,
+            // until the next content says what they share.
+            bool wrap = f_ws_wraps(holder_style(s, ifc, h.held)->white_space) && !g->keep_round;
+            holders_meet(&h, s, ifc);
             if (wrap && s->n >= 2 && s->v[s->n - 2].kind != SG_BREAK)
                 s->v[s->n - 2].wrap_after = true;
+            g->wrap_after = f_ws_wraps(holder_style(s, ifc, h.open)->white_space) && !g->keep_round;
+            h.pending = (int32_t)(s->n - 1);
+            holders_passed(&h);
             break;
         }
         case FI_OPEN:
@@ -1308,6 +1381,10 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
             if (g != NULL) {
                 g->item = it;
                 g->style = it->style;
+                if (it->kind == FI_OPEN)
+                    holders_open(&h, s);
+                else
+                    holders_close(&h, s);
             }
             break;
         }
@@ -1373,6 +1450,8 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
             // the space and the text that follows (CSS Text 3 § 5).
             g->wrap_after = it->len > 0 && it->text[it->len - 1] == ' ' &&
                             f_ws_wraps(it->style->white_space);
+            holders_meet(&h, s, ifc);
+            holders_passed(&h);
             break;
         }
         }

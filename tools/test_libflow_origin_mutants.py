@@ -38,6 +38,19 @@ mutants = [
      '                    y0 = any && y0 >= 0 ? min64(y0, row->y) : row->y;\n'
      '                    y1 = any ? max64(y1, row->y + row->h) : row->y + row->h;\n'
      '                    any = row->y >= 0;'),
+    # The break beside an inline-block: who decides it.
+    ('the-atom-decides-the-break-before-it', LAYOUT,
+     '            bool wrap = f_ws_wraps(holder_style(s, ifc, h.held)->white_space) && !g->keep_round;',
+     '            bool wrap = f_ws_wraps(st->white_space) && !g->keep_round;'),
+    ('the-parent-decides-the-break-before-it', LAYOUT,
+     '            bool wrap = f_ws_wraps(holder_style(s, ifc, h.held)->white_space) && !g->keep_round;',
+     '            bool wrap = f_ws_wraps(holder_style(s, ifc, h.open)->white_space) && !g->keep_round;'),
+    ('the-parent-decides-the-break-after-it', LAYOUT,
+     '        a->wrap_after = f_ws_wraps(holder_style(s, ifc, h->held)->white_space) && !a->keep_round;',
+     '        (void)a, (void)ifc;'),
+    ('a-closing-inline-is-not-left', LAYOUT,
+     '    if (h->depth < h->held_depth) {',
+     '    if (false) {'),
 ]
 
 caught, missed, unbuilt = [], [], []

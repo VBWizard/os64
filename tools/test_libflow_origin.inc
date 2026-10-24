@@ -7,9 +7,10 @@
 // A negative y is a place like any other (CSS 2.1 § 10.6.3, § 8.3.1): the
 // blocks round it keep their heights.
 //
-// NOWRAP: the break opportunities either side of an inline-block are its
-// parent's `white-space` to give (CSS Text 3 § 5.1, CSS 2.1 § 16.6), not
-// the inline-block's own, which governs only its content.
+// NOWRAP: the break opportunity between an inline-block and its neighbour
+// is the `white-space` of the nearest element holding both (CSS Text 3 §
+// 5.1, CSS 2.1 § 16.6), not the inline-block's own, which governs only
+// its content.
 
 static void origin_cases(void)
 {
@@ -129,6 +130,73 @@ static void nowrap_atom_cases(void)
         "          atomic div 200 0 100 50\n"
         "            block div 200 0 100 50\n"
         "    block div 0 50 800 10\n");
+
+    // The other way round: two inline-blocks nowrap inside, in a normal
+    // box 150 wide. Their own white-space is not asked; the box's is, so
+    // the second goes to a line of its own. Empty, each sits on its bottom
+    // margin edge: 20 above the baseline and the strut's 6 below, 26 a line.
+    cascade_layout_case("nowrap inside inline-blocks does not join them on one line",
+        "<!doctype html><style>body{margin:0}</style><div style='width:150px'>"
+        "<b style='display:inline-block;width:100px;height:20px;white-space:nowrap'></b>"
+        "<b style='display:inline-block;width:100px;height:20px;white-space:nowrap'></b></div>",
+        800,
+        "page 800 52\n"
+        "block html 0 0 800 52\n"
+        "  block body 0 0 800 52\n"
+        "    block div 0 0 150 52\n"
+        "      line 0 0 150 26 base 20\n"
+        "        atomic b 0 0 100 20\n"
+        "          block b 0 0 100 20\n"
+        "      line 0 26 150 26 base 20\n"
+        "        atomic b 0 26 100 20\n"
+        "          block b 0 26 100 20\n");
+
+    // The element holding both sides of a break, not the atom's parent:
+    // "xxxx" and the inline-block opening a nowrap span are held by the
+    // normal div, so the line may break between them, and the 100px box
+    // does not fit after 32 in 120: it starts the second line, the span's
+    // empty first piece left at the end of the first.
+    cascade_layout_case("an inline-block opening a nowrap span may still go to the next line",
+        "<!doctype html><style>body{margin:0}"
+        " .i{display:inline-block;vertical-align:top;width:100px;height:20px}</style>"
+        "<div style='width:120px'>xxxx<span style='white-space:nowrap'>"
+        "<b class=i style='white-space:normal'></b></span></div>", 800,
+        "page 800 40\n"
+        "block html 0 0 800 40\n"
+        "  block body 0 0 800 40\n"
+        "    block div 0 0 120 40\n"
+        "      line 0 0 120 20 base 14\n"
+        "        span span 32 2 0 16\n"
+        "        text \"xxxx\" 0 2 32 16 serif 16\n"
+        "      line 0 20 120 20 base 14\n"
+        "        span span 0 22 100 16\n"
+        "        atomic b 0 20 100 20\n"
+        "          block b 0 20 100 20\n");
+
+    // And inside a nowrap box, a normal span lets its own two inline-blocks
+    // part and nothing else: "xxxx" and the first are held by the box,
+    // the two by the span, the second and "yyyy" by the box again. One
+    // break, between the two: "xxxx" and the first (132, past the 120),
+    // then the second and "yyyy".
+    cascade_layout_case("a normal span in a nowrap box breaks only between what it holds",
+        "<!doctype html><style>body{margin:0}"
+        " .i{display:inline-block;vertical-align:top;width:100px;height:20px}</style>"
+        "<div style='width:120px;white-space:nowrap'>xxxx<span style='white-space:normal'>"
+        "<b class=i></b><b class=i></b></span>yyyy</div>", 800,
+        "page 800 40\n"
+        "block html 0 0 800 40\n"
+        "  block body 0 0 800 40\n"
+        "    block div 0 0 120 40\n"
+        "      line 0 0 120 20 base 14\n"
+        "        span span 32 2 100 16\n"
+        "        text \"xxxx\" 0 2 32 16 serif 16\n"
+        "        atomic b 32 0 100 20\n"
+        "          block b 32 0 100 20\n"
+        "      line 0 20 120 20 base 14\n"
+        "        span span 0 22 100 16\n"
+        "        atomic b 0 20 100 20\n"
+        "          block b 0 20 100 20\n"
+        "        text \"yyyy\" 100 22 32 16 serif 16\n");
 
     // The run is unbreakable, so its min-content width is all of it,
     // 3 x 40 = 120, and a float shrinking to fit in 100 is 120 (§ 10.3.5).
