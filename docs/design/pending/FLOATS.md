@@ -242,8 +242,8 @@ sits at the div's content top, which is 30px down once the margin
 resolves. ONE rule covers every place a float can be met:
 
 - **A float met while its container's top is unresolved waits**, whether
-  it is met in `children()` or leading a line in `lines()`: the cursor's
-  `first` is still `-1`, so the container's top margin can still collapse
+  it is met in `children()` or leading a line in `lines()`: nothing is
+  placed yet (`cursor_placed`), so the container's top margin can still collapse
   with what comes next. A float met on a line AFTER something with width
   does not wait: that line has height, so the margins resolve at its top,
   which is already known, and the float takes the mid-line rule below
