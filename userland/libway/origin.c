@@ -184,6 +184,46 @@ bool way_origin_same_site(const way_origin_t *a, const way_origin_t *b)
     return os64_streq(a->scheme, b->scheme) && os64_streq(a->host, b->host);
 }
 
+// An IPv6 literal (os64's URL keeps it without its brackets, so it holds a
+// colon) or an IPv4 one (dotted digits, as the URL parser writes it): its
+// site is itself.
+static bool ip_literal(const char *host)
+{
+    bool letters = false;
+    for (const char *p = host; *p != '\0'; p++) {
+        if (*p == ':')
+            return true;
+        if (!is_digit(*p) && *p != '.')
+            letters = true;
+    }
+    return !letters && host[0] != '\0';
+}
+
+// The last two labels of a host, or the whole of a host with fewer.
+static const char *last_two_labels(const char *host)
+{
+    size_t n = os64_strlen(host);
+    int32_t dots = 0;
+    for (size_t i = n; i > 0; i--)
+        if (host[i - 1] == '.' && ++dots == 2)
+            return host + i;
+    return host;
+}
+
+way_site_t way_origin_site(const way_origin_t *a, const way_origin_t *b)
+{
+    if (way_origin_same(a, b))
+        return WAY_SITE_SAME_ORIGIN;
+    if (a->opaque || b->opaque || !os64_streq(a->scheme, b->scheme))
+        return WAY_SITE_CROSS_SITE;
+    if (os64_streq(a->host, b->host))
+        return WAY_SITE_SAME_SITE;
+    if (ip_literal(a->host) || ip_literal(b->host) ||
+        !os64_streq(last_two_labels(a->host), last_two_labels(b->host)))
+        return WAY_SITE_CROSS_SITE;
+    return WAY_SITE_UNKNOWN;
+}
+
 bool way_origin_serialize(const way_origin_t *o, char *out, size_t cap)
 {
     if (o->opaque)
@@ -1212,15 +1252,19 @@ way_metadata_t way_metadata_preflight(const way_metadata_t *m)
     return p;
 }
 
-// Fetch Metadata § 2.3 step 5, one URL at a time: same-origin continues,
-// same-site at most, anything else is cross-site for good.
+// Fetch Metadata § 2.3 step 5, one URL at a time: the furthest answer so
+// far stands (same-origin, same-site, unknown, cross-site, in that order),
+// and none stays none.
 void way_metadata_hop(way_metadata_t *m, const way_origin_t *to)
 {
-    if (m->site == WAY_SITE_NONE || m->site == WAY_SITE_CROSS_SITE || way_origin_same(&m->origin, to))
+    if (m->site == WAY_SITE_NONE)
         return;
-    m->site = way_origin_same_site(&m->origin, to) ? WAY_SITE_SAME_SITE : WAY_SITE_CROSS_SITE;
+    way_site_t here = way_origin_site(&m->origin, to);
+    if (here > m->site)
+        m->site = here;
 }
 
+// UNKNOWN has no token: a request whose site is unknown says none of it.
 static const char *site_token(way_site_t site)
 {
     switch (site) {
@@ -1228,6 +1272,7 @@ static const char *site_token(way_site_t site)
     case WAY_SITE_SAME_SITE: return "same-site";
     case WAY_SITE_CROSS_SITE: return "cross-site";
     case WAY_SITE_NONE: return "none";
+    case WAY_SITE_UNKNOWN: break;
     }
     return "cross-site";
 }
@@ -1290,7 +1335,9 @@ bool way_identity_lines(const way_identity_t *id, const way_metadata_t *m, const
     // goes; a trustworthy one is the answer it prefers.
     if (ok && m->dest == WAY_DEST_DOCUMENT)
         ok = lines_add(out, cap, &at, "Upgrade-Insecure-Requests: 1", "\r\n");
-    if (ok && trustworthy) {
+    // A site nobody can name yet (WAY_SITE_UNKNOWN) silences all four:
+    // the others alone would describe a request whose site is missing.
+    if (ok && trustworthy && m->site != WAY_SITE_UNKNOWN) {
         ok = lines_add(out, cap, &at, "Sec-Fetch-Site: ", site_token(m->site)) &&
              lines_add(out, cap, &at, "\r\n", NULL) &&
              lines_add(out, cap, &at, "Sec-Fetch-Mode: ", mode_token(m)) &&

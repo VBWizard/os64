@@ -54,8 +54,10 @@ void way_origin_of_url(const os64_url_t *url, uint64_t opaque_id, way_origin_t *
 bool way_origin_same(const way_origin_t *a, const way_origin_t *b);
 // "Same site" until the public-suffix list lands (DEBTS): the same scheme and
 // the same host, ports aside. FINER than the real partition, so every answer
-// it changes is the restrictive one; never "the last two labels", which would
-// make evil.co.uk and bank.co.uk one site.
+// it changes in the CORS redirect-taint it serves is the restrictive one;
+// never "the last two labels", which would make evil.co.uk and bank.co.uk
+// one site. Fetch Metadata, where calling a site's own subdomain
+// cross-site is NOT the restrictive answer, asks way_origin_site instead.
 bool way_origin_same_site(const way_origin_t *a, const way_origin_t *b);
 // "null" for an opaque origin; "scheme://host" with ":port" only when it is
 // not the scheme's default. False when it does not fit in `cap`.
@@ -286,13 +288,31 @@ typedef enum {
 
 // Sec-Fetch-Site: the request's origin against every URL of its URL list
 // so far, the furthest of them; NONE for a navigation the browser's own
-// controls started, which stays NONE through its redirects.
+// controls started, which stays NONE through its redirects. UNKNOWN is the
+// answer nobody can give without the public-suffix list (way_origin_site),
+// and a request whose site is UNKNOWN sends no Fetch Metadata at all, as a
+// browser from before Fetch Metadata would: nothing it says is false, and
+// a server's resource-isolation policy lets such a request through. The
+// order is the URL list's: a later URL moves the answer only rightward.
 typedef enum {
     WAY_SITE_SAME_ORIGIN = 0,
     WAY_SITE_SAME_SITE,
+    WAY_SITE_UNKNOWN,
     WAY_SITE_CROSS_SITE,
     WAY_SITE_NONE,
 } way_site_t;
+
+// What is KNOWN of how `b` stands to `a` (HTML § same site) without the
+// public-suffix list (DEBTS), beside way_origin_same_site. The same
+// origin; the same scheme and host, ports aside, is the same site; an
+// opaque origin, another scheme, two hosts either of which is an IP
+// literal, or two hosts whose last two labels differ are certainly
+// cross-site (a registrable domain is a public suffix and one label more,
+// so it holds at least a host's last two labels); two different hosts that
+// share their last two labels (www.a.test and static.a.test, but also two
+// sites under one public suffix like a.github.io and b.github.io) are
+// UNKNOWN until the list says which.
+way_site_t way_origin_site(const way_origin_t *a, const way_origin_t *b);
 
 // Who started a navigation, which decides its Sec-Fetch-Site and whether
 // it carries Sec-Fetch-User.
@@ -359,7 +379,8 @@ typedef struct {
 
 // A hop to `to`'s lines, in this order: the client hints,
 // Upgrade-Insecure-Requests (a document's, on every hop), Sec-Fetch-Site,
-// -Mode, -User and -Dest (a trustworthy `to` only), Accept-Language, and
+// -Mode, -User and -Dest (a trustworthy `to` only, and none while the
+// site is WAY_SITE_UNKNOWN), Accept-Language, and
 // the preset's Priority for the request's destination, on every hop. A
 // line the request already holds, because a page set it (`given`, the
 // WAY_GIVEN_ bits), is not written again: Fetch appends the browser's

@@ -1293,6 +1293,64 @@ static void metadata(void)
     expect_text("priority: a preset without a table sends none",
                 line_value(hop_lines(&m, &hinted, "https://a.test/i.png", false), "Priority"), "<absent>");
 
+    // WHAT IS KNOWN OF A SITE without the public-suffix list
+    // (way_origin_site): each class, and the sibling hosts nobody can
+    // judge yet.
+    static const struct { const char *a, *b; way_site_t want; const char *name; } kin[] = {
+        {"https://www.a.test/", "https://www.a.test/x", WAY_SITE_SAME_ORIGIN, "the same origin"},
+        {"https://www.a.test/", "https://www.a.test:8443/", WAY_SITE_SAME_SITE, "the same host, another port"},
+        {"https://www.a.test/", "http://www.a.test/", WAY_SITE_CROSS_SITE, "the same host, another scheme"},
+        {"https://www.a.test/", "https://www.b.test/", WAY_SITE_CROSS_SITE, "the last two labels differ"},
+        {"https://a.test/", "https://b.a.test.evil/", WAY_SITE_CROSS_SITE, "a name inside another's tail"},
+        {"https://www.a.test/", "https://static.a.test/", WAY_SITE_UNKNOWN, "sibling subdomains"},
+        {"https://a.test/", "https://www.a.test/", WAY_SITE_UNKNOWN, "a host and its subdomain"},
+        {"https://a.github.io/", "https://b.github.io/", WAY_SITE_UNKNOWN, "two sites under one public suffix"},
+        {"https://x.a.com/", "https://y.b.a.com/", WAY_SITE_UNKNOWN, "deeper siblings"},
+        {"https://10.1.2.3/", "https://11.1.2.3/", WAY_SITE_CROSS_SITE, "two IPv4 literals sharing a tail"},
+        {"https://10.1.2.3/", "https://www.2.3/", WAY_SITE_CROSS_SITE, "an IPv4 literal and a name"},
+        {"http://intranet/", "http://other/", WAY_SITE_CROSS_SITE, "two single-label hosts"},
+        {"http://intranet/", "http://www.intranet/", WAY_SITE_CROSS_SITE, "a single label and a name under it"},
+        {"file:///x", "https://a.test/", WAY_SITE_CROSS_SITE, "an opaque origin"},
+    };
+    for (size_t i = 0; i < sizeof(kin) / sizeof(kin[0]); i++) {
+        way_origin_t a, b;
+        way_origin_of(kin[i].a, 7, &a);
+        way_origin_of(kin[i].b, 0, &b);
+        char name[96];
+        snprintf(name, sizeof(name), "site known: %s", kin[i].name);
+        // Tuples, but for the one case about an opaque origin: a URL that
+        // did not parse would answer by the opaque rule, not its own.
+        bool tuples = (!a.opaque && !b.opaque) || strncmp(kin[i].a, "file:", 5) == 0;
+        expect(name, tuples && way_origin_site(&a, &b) == kin[i].want && way_origin_site(&b, &a) == kin[i].want,
+               NULL);
+    }
+    // os64's URL grammar refuses an IPv6 literal today, so the origin is
+    // made by hand: its site is itself, whatever tail it shares.
+    way_origin_t six_a = {.scheme = "https", .host = "::ffff:10.1.2.3", .port = 443};
+    way_origin_t six_b = {.scheme = "https", .host = "::ffff:11.1.2.3", .port = 443};
+    expect("site known: two IPv6 literals sharing a tail", way_origin_site(&six_a, &six_b) == WAY_SITE_CROSS_SITE,
+           NULL);
+    // A request whose site is unknown says no Fetch Metadata, all four
+    // together; the browser's own lines still go.
+    m = request_from("https://www.a.test/p", WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+    expect_text("unknown: a sibling's picture says none of it",
+                hop_lines(&m, &hinted, "https://static.a.test/i.png", false),
+                "sec-ch-ua: \"B\";v=\"1\"\r\nsec-ch-ua-mobile: ?0\r\nAccept-Language: en-US,en;q=0.9\r\n");
+    m = navigation_from(WAY_BY_PERSON, "https://www.a.test/p");
+    expect_text("unknown: a person's link to a sibling keeps only the upgrade",
+                hop_lines(&m, NULL, "https://static.a.test/", false), "Upgrade-Insecure-Requests: 1\r\n");
+    m = request_from("https://www.a.test/p", WAY_DEST_SCRIPT, WAY_MODE_NO_CORS);
+    hop_lines(&m, NULL, "https://www.a.test/1", false);
+    expect_text("unknown: a hop to a sibling silences a same-origin request from there on",
+                hop_lines(&m, NULL, "https://static.a.test/2", false), "");
+    expect_text("unknown: and back on the origin it stays silent",
+                hop_lines(&m, NULL, "https://www.a.test/3", false), "");
+    expect_text("unknown: a hop that is certainly cross-site speaks again",
+                line_value(hop_lines(&m, NULL, "https://www.b.test/4", false), "Sec-Fetch-Site"), "cross-site");
+    m = navigation_from(WAY_BY_BROWSER, "https://www.a.test/p");
+    expect_text("unknown: the browser's own navigation is none, wherever it goes",
+                line_value(hop_lines(&m, NULL, "https://static.a.test/", false), "Sec-Fetch-Site"), "none");
+
     // Too little room: nothing, not part of it.
     m = navigation_from(WAY_BY_BROWSER, "https://a.test/p");
     way_origin_t a;
