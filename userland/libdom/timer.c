@@ -119,6 +119,7 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
             timer->argc = extra;
         }
         timer->callback = JS_DupValue(ctx, handler);
+        timer->script = d_callback_script(dom, ctx, handler);
         dom->timers_held += held_values(timer);
     } else {
         timer->source = source.data;
@@ -234,7 +235,7 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
         timer->argc = 0;
         timer->source = NULL;
     }
-    uint32_t nesting = timer->nesting;
+    uint32_t nesting = timer->nesting, script = timer->script;
     if (!timer->interval) d_free(dom, timer);
     dom->timer_nesting = nesting;
     if (refused) {
@@ -246,13 +247,22 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
     } else if (!JS_IsUndefined(held)) {
         os64_js_outcome_t call;
         if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, name, outcome) == OS64_JS_OK) {
+            /* What the callback throws is its script's (report.c). */
+            d_script_calling(dom, script);
             os64_js_call(dom->runtime, OS64_JS_ABI_ID, held, dom->window->value, argc, args, NULL, &call);
+            dom->calling_script = D_NO_SCRIPT;
             fold(outcome, &call);
             /* What the callback left owed (report.c) runs in its task. */
             d_task_finish(dom, outcome);
         }
     } else if (source != NULL) {
-        os64_js_run(dom->runtime, source, source_length, name, outcome);
+        /* A string is the page's script, as HTML's timer steps make it
+         * (no muted errors), compiled under the page's name (report.c's
+         * THE SCRIPTS' NAMES); the outcome keeps the timer's. */
+        char engine_name[32];
+        if (!os64_dom_script_name(dom, NULL, engine_name, sizeof(engine_name)))
+            os64_strcopy(engine_name, sizeof(engine_name), "os64-script:0");
+        os64_js_run(dom->runtime, source, source_length, engine_name, outcome);
         /* A string that threw leaves the jobs it queued: `run` drains only
          * after a source that finishes, and the binding is this run's host
          * (CONTRACT.md § Results). Until they run every later task is
@@ -267,8 +277,10 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
                 r != OS64_JS_UNHANDLED_REJECTION)
                 break;
         }
+        os64_strcopy(outcome->source_name, sizeof(outcome->source_name), name);
         /* What the string left owed (report.c), in a task of its own. */
-        d_script_settle(dom, name, NULL, outcome);
+        d_script_settle(dom, name, outcome);
+        dom->running_script = D_NO_SCRIPT;
     }
     dom->timer_nesting = 0;
     if (!JS_IsUndefined(held)) JS_FreeValueRT(dom->engine, held);

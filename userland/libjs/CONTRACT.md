@@ -400,17 +400,27 @@ failure. `os64_js_set_script_host(runtime, abi, host, outcome)`
   ends an overrun) is not handed over: the runtime is finished with.
 - **Rejections are the host's to take.** With a host set, no checkpoint and
   no turn's end judges a rejection or releases one: each waits, oldest
-  first, until `os64_js_take_rejection(runtime, abi, &promise, &reason)`
-  hands its promise and reason over as new references. A rejection a later
+  first, until `os64_js_take_rejection(runtime, abi, &promise, &reason,
+  &tag)` hands its promise and reason over as new references, with the
+  host's `rejected` answer for it. A rejection a later
   handler reaches before it is taken leaves as it always did. Taking is
-  refused (false, both values undefined) inside a call, on a failed
+  refused (false, both values undefined, the tag 0) inside a call, on a failed
   runtime, without a host, and while jobs are runnable, since a rejection
   is unhandled only once the checkpoint that could have handled it has run.
+- **`rejected(opaque, context, promise)`** is called when a promise is
+  rejected with no handler and the runtime starts holding it, at once,
+  while the code that rejected it may still be on the stack
+  (`JS_GetScriptOrModuleName`); its answer is kept with the rejection and
+  handed back by `os64_js_take_rejection`'s `tag`. A browser decides there
+  which script's rejection it is, which it cannot once the stack is gone.
 - **`handled(opaque, context, promise)`** is called when a handler is added
   to a rejected promise the runtime no longer holds, which is one the host
   took: what `rejectionhandled` is fired from. The engine asks once per
-  promise.
-- Both hooks run inside the wrapper's guard, so they must run no script and
+  promise. A rejection the runtime could not hold (its table's or its
+  record's memory refused) is no exception to "one the host took": every
+  refused allocation fails the runtime, and a failed runtime's tracker
+  calls no hook again.
+- The hooks run inside the wrapper's guard, so they must run no script and
   make no wrapper call; they keep what they need (`JS_DupValue`) and act on
   it after the call returns. The outcome is unchanged by a host: a call that
   threw is still EXCEPTION with its diagnostic.
@@ -422,7 +432,9 @@ failure. `os64_js_set_script_host(runtime, abi, host, outcome)`
 `tools/test_js_runtime_host.c`'s script host cases hold each rule:
 exceptions from eval, a call and a checkpoint's job reaching the host beside
 their outcome; rejections taken oldest first, never inside a call or with
-jobs runnable; one handled before it was taken gone, and five thousand
+jobs runnable; a rejection's tag, `rejected`'s answer asked while the
+script that rejected it was on the stack; one handled before it was taken
+gone, and five thousand
 handled newest first leaving nothing; a handler added to a taken one
 reaching `handled`; a cleared host handing rejections back to the
 checkpoint; an overrun's exception kept from the host; and a host cleared

@@ -34,14 +34,28 @@
  * unhandled rejection is one. An exception's outcome is the wrapper's
  * diagnostic, whatever an error listener did with its event.
  *
- * MUTED ERRORS. What another site's script threw is told to the page as
- * "Script error." and nothing more (error_event), and its rejections fire
- * no event (unhandled), so no page reads another site's code through them.
+ * MUTED ERRORS. What another site's script threw or reported is told to
+ * the page as "Script error." and nothing more (error_event), and its
+ * rejections fire no event, not even a rejectionhandled when a handler
+ * reaches one later (unhandled, handled_fire), so no page reads another
+ * site's code through them. Whose failure it is is decided one way: by
+ * the script that was running when the value was thrown, rejected or
+ * reported, as the binding knows each script, by the name it was compiled
+ * under (THE SCRIPTS' NAMES below), never by an address or a stack's text.
+ * A rejection and reportError are asked of the engine's stack as they
+ * happen (running_script). An exception has left its frames by the time
+ * it is caught, so it is the script being run, or the one whose callback
+ * the binding called: a listener, a timer, a queueMicrotask job, each
+ * callback's script asked as it was handed over (d_callback_script). So a
+ * function of another site's that the page's own code calls, and that
+ * throws through it, is the page's failure, as HTML's "run a classic
+ * script" reports it; a rejection that function makes is the other site's.
  * The record keeps them whole: it is the person's, not the page's. */
 
 struct DPending {
     struct DPending *next;
     JSValue value;
+    uint32_t script;        // an exception's: the script whose it was
 };
 
 /* How many rejections past a task's first failure are each told to the host
@@ -79,6 +93,7 @@ void d_task_close(os64_dom_t *dom, const char *task, os64_js_outcome_t *outcome)
     }
     dom->rejections_told = 0;
     dom->rejections_untold = 0;
+    dom->task_script = dom->thrown_script = D_NO_SCRIPT;
 }
 
 static bool sticky(os64_js_status_t status)
@@ -105,11 +120,12 @@ static void discard(JSContext *ctx)
 
 /* A value kept for later, on one of the two lists. Past the binding's
  * budget it is not kept, and its event is not fired. */
-static void pending_push(os64_dom_t *dom, JSContext *ctx, JSValueConst value, bool error)
+static void pending_push(os64_dom_t *dom, JSContext *ctx, JSValueConst value, bool error, uint32_t script)
 {
     struct DPending *item = d_alloc(dom, sizeof(*item));
     if (item == NULL) return;
     item->value = JS_DupValue(ctx, value);
+    item->script = script;
     dom->pending_held++;
     struct DPending **head = error ? &dom->errors : &dom->handled;
     struct DPending **last = error ? &dom->errors_last : &dom->handled_last;
@@ -118,25 +134,163 @@ static void pending_push(os64_dom_t *dom, JSContext *ctx, JSValueConst value, bo
     *last = item;
 }
 
-static JSValue pending_pop(os64_dom_t *dom, bool error)
+static JSValue pending_pop(os64_dom_t *dom, bool error, uint32_t *script)
 {
     struct DPending **head = error ? &dom->errors : &dom->handled;
     struct DPending *item = *head;
     *head = item->next;
     if (*head == NULL) *(error ? &dom->errors_last : &dom->handled_last) = NULL;
     JSValue value = item->value;
+    if (script != NULL) *script = item->script;
     d_free(dom, item);
     dom->pending_held--;
     return value;
 }
 
+/* THE SCRIPTS' NAMES (the MUTED ERRORS paragraph above). A script's name in
+ * the engine is the binding's, `os64-script:<n>`, never one the page or the
+ * address gives, so a frame or a function names its script by a lookup and
+ * nothing is read back out of text a page can shape. */
+#define D_SCRIPT_PREFIX "os64-script:"
+#define D_SCRIPT_FOREIGN 1u
+
+static bool foreign(const os64_dom_t *dom, const char *address);
+
+/* A record for `address` (NULL: the page's own), its number or D_NO_SCRIPT
+ * when the binding's budget refused it. */
+static uint32_t script_record(os64_dom_t *dom, const char *address, bool muted)
+{
+    if (dom->script_name_count == dom->script_name_cap) {
+        uint32_t cap = dom->script_name_cap != 0 ? dom->script_name_cap * 2 : 8;
+        struct DScriptName *grown = d_alloc(dom, (size_t)cap * sizeof(*grown));
+        if (grown == NULL) return D_NO_SCRIPT;
+        if (dom->script_name_count != 0)
+            os64_memcpy(grown, dom->script_names, (size_t)dom->script_name_count * sizeof(*grown));
+        d_free(dom, dom->script_names);
+        dom->script_names = grown;
+        dom->script_name_cap = cap;
+    }
+    char *copy = NULL;
+    if (address != NULL) {
+        size_t n = os64_strlen(address) + 1;
+        copy = d_alloc(dom, n);
+        if (copy == NULL) return D_NO_SCRIPT;
+        os64_memcpy(copy, address, n);
+    }
+    dom->script_names[dom->script_name_count] = (struct DScriptName){copy, muted};
+    return dom->script_name_count++;
+}
+
+/* The number a name of the binding's names, or D_NO_SCRIPT for any other
+ * name (a handler attribute's, code a page compiled with eval or Function). */
+static uint32_t script_named(const os64_dom_t *dom, const char *name)
+{
+    size_t prefix = sizeof(D_SCRIPT_PREFIX) - 1;
+    if (name == NULL || os64_memcmp(name, D_SCRIPT_PREFIX, prefix) != 0 || name[prefix] == '\0')
+        return D_NO_SCRIPT;
+    uint64_t n = 0;
+    for (const char *p = name + prefix; *p != '\0'; p++) {
+        if (*p < '0' || *p > '9' || n > UINT32_MAX) return D_NO_SCRIPT;
+        n = n * 10 + (uint64_t)(*p - '0');
+    }
+    return n < dom->script_name_count ? (uint32_t)n : D_NO_SCRIPT;
+}
+
+static bool script_muted(const os64_dom_t *dom, uint32_t script)
+{
+    return script < dom->script_name_count && dom->script_names[script].muted;
+}
+
+/* The address an error event names for a script: its own, else the page's. */
+static const char *script_address(const os64_dom_t *dom, uint32_t script)
+{
+    const char *own = script < dom->script_name_count ? dom->script_names[script].address : NULL;
+    return own != NULL ? own : dom->url != NULL ? dom->url : "about:blank";
+}
+
+/* The script whose failure it is when the stack does not say: the one
+ * whose function the binding is calling, else the last it called in this
+ * task, else the one being run, else the page. */
+static uint32_t current_script(const os64_dom_t *dom)
+{
+    if (dom->calling_script != D_NO_SCRIPT) return dom->calling_script;
+    if (dom->task_script != D_NO_SCRIPT) return dom->task_script;
+    if (dom->running_script != D_NO_SCRIPT) return dom->running_script;
+    return D_SCRIPT_PAGE;
+}
+
+/* The running script, as the engine's stack names it: the nearest frame of
+ * a script the binding named (QuickJS's JS_GetScriptOrModuleName, which
+ * answers nothing for a native frame and passes over eval's), else
+ * current_script. The walk stops a few native frames past the last script. */
+static uint32_t running_script(const os64_dom_t *dom, JSContext *ctx)
+{
+    for (int level = 0, misses = 0; level < 32 && misses < 8; level++) {
+        JSAtom atom = JS_GetScriptOrModuleName(ctx, level);
+        if (atom == JS_ATOM_NULL) { misses++; continue; }
+        misses = 0;
+        const char *name = JS_AtomToCString(ctx, atom);
+        JS_FreeAtom(ctx, atom);
+        if (name == NULL) { discard(ctx); break; }
+        uint32_t script = script_named(dom, name);
+        JS_FreeCString(ctx, name);
+        if (script != D_NO_SCRIPT) return script;
+    }
+    return current_script(dom);
+}
+
+uint32_t d_callback_script(os64_dom_t *dom, JSContext *ctx, JSValueConst function)
+{
+    uint32_t script = D_NO_SCRIPT;
+    /* The getter is the engine's own, so asking runs no page code; it
+     * answers undefined for any function that is not a script's. */
+    if (dom->filename_getter != NULL && JS_IsFunction(ctx, function)) {
+        JSValue name = JS_Call(ctx, dom->filename_getter->value, function, 0, NULL);
+        const char *text = JS_IsException(name) ? NULL : JS_IsString(name) ? JS_ToCString(ctx, name) : NULL;
+        if (JS_IsException(name)) discard(ctx);
+        JS_FreeValue(ctx, name);
+        script = script_named(dom, text);
+        if (text != NULL) JS_FreeCString(ctx, text);
+    }
+    return script != D_NO_SCRIPT ? script : running_script(dom, ctx);
+}
+
+void d_script_calling(os64_dom_t *dom, uint32_t script)
+{
+    dom->calling_script = script;
+    if (script != D_NO_SCRIPT) dom->task_script = script;
+}
+
+bool os64_dom_script_name(os64_dom_t *dom, const char *address, char *out, size_t cap)
+{
+    if (dom == NULL || dom->closed || out == NULL || cap == 0) return false;
+    uint32_t script = D_SCRIPT_PAGE;
+    if (address != NULL) {
+        bool muted = foreign(dom, address);
+        script = script_record(dom, address, muted);
+        if (script == D_NO_SCRIPT) script = muted ? D_SCRIPT_FOREIGN : D_SCRIPT_PAGE;
+    }
+    dom->running_script = script;
+    return (size_t)os64_snprintf(out, cap, D_SCRIPT_PREFIX "%u", script) < cap;
+}
+
 /* THE SCRIPT HOST'S HOOKS, called inside the wrapper's guard: each keeps
- * the value and runs nothing. */
+ * the value, or answers, and runs nothing. */
 static void host_exception(void *opaque, JSContext *ctx, JSValue error)
 {
     os64_dom_t *dom = opaque;
+    uint32_t script = dom->thrown_script != D_NO_SCRIPT ? dom->thrown_script : current_script(dom);
+    dom->thrown_script = D_NO_SCRIPT;
     if (dom->closed || !dom->options.modern || dom->reporting_error) return;
-    pending_push(dom, ctx, error, true);
+    pending_push(dom, ctx, error, true, script);
+}
+
+static uint32_t host_rejected(void *opaque, JSContext *ctx, JSValue promise)
+{
+    (void)promise;
+    os64_dom_t *dom = opaque;
+    if (dom->closed || !dom->options.modern) return D_SCRIPT_PAGE;
+    return running_script(dom, ctx);
 }
 
 static void host_handled(void *opaque, JSContext *ctx, JSValue promise)
@@ -144,12 +298,15 @@ static void host_handled(void *opaque, JSContext *ctx, JSValue promise)
     os64_dom_t *dom = opaque;
     if (dom->closed || !dom->options.modern) return;
     if (JS_VALUE_GET_PTR(promise) == dom->rejection_firing) dom->rejection_handled = true;
-    else pending_push(dom, ctx, promise, false);
+    else pending_push(dom, ctx, promise, false, D_SCRIPT_PAGE);
 }
 
 bool d_report_host(os64_dom_t *dom)
 {
-    const os64_js_script_host_t host = {dom, host_exception, host_handled};
+    dom->running_script = dom->calling_script = dom->task_script = dom->thrown_script = D_NO_SCRIPT;
+    if (script_record(dom, NULL, false) != D_SCRIPT_PAGE || script_record(dom, NULL, true) != D_SCRIPT_FOREIGN)
+        return false;
+    const os64_js_script_host_t host = {dom, host_exception, host_handled, host_rejected};
     os64_js_outcome_t outcome;
     return os64_js_set_script_host(dom->runtime, OS64_JS_ABI_ID, &host, &outcome) == OS64_JS_OK;
 }
@@ -158,8 +315,16 @@ void d_report_drain(os64_dom_t *dom)
 {
     os64_js_outcome_t outcome;
     (void)os64_js_set_script_host(dom->runtime, OS64_JS_ABI_ID, NULL, &outcome);
-    while (dom->errors != NULL) JS_FreeValueRT(dom->engine, pending_pop(dom, true));
-    while (dom->handled != NULL) JS_FreeValueRT(dom->engine, pending_pop(dom, false));
+    while (dom->errors != NULL) JS_FreeValueRT(dom->engine, pending_pop(dom, true, NULL));
+    while (dom->handled != NULL) JS_FreeValueRT(dom->engine, pending_pop(dom, false, NULL));
+}
+
+void d_report_free(os64_dom_t *dom)
+{
+    for (uint32_t i = 0; i < dom->script_name_count; i++) d_free(dom, dom->script_names[i].address);
+    d_free(dom, dom->script_names);
+    dom->script_names = NULL;
+    dom->script_name_count = dom->script_name_cap = 0;
 }
 
 /* A string-valued data property, the object's own or its nearest
@@ -254,19 +419,17 @@ static bool number_before(const char *text, const char *end, const char **start,
     return true;
 }
 
-/* Where an error was made, from its own stack text as the engine writes it,
- * a frame a line, "    at f (name:line:col)", or "    at name:line:col" for
- * a script that did not compile: the first frame that names a place, which
- * skips the native ones; and that frame's name, the source name the script
- * was compiled under (`file`, empty when there is none), which for a `src`
- * script is its address. Only an Error's is read, and only as a data
- * property, so no page code runs; a stack the page wrote there is read the
- * same way and believed: it is the page's own error. */
-static void error_location(JSContext *ctx, JSValueConst error, uint32_t *line, uint32_t *col, char *file,
-                           size_t cap)
+/* Where an error was made, its line and column, from its own stack text as
+ * the engine writes it, a frame a line, "    at f (name:line:col)", or
+ * "    at name:line:col" for a script that did not compile: the first frame
+ * that names a place, which skips the native ones. Only an Error's is
+ * read, and only as a data property, so no page code runs; a stack the
+ * page wrote there is read the same way and believed: it is the page's own
+ * error. It says where, never whose: that is the script's name's
+ * (running_script), which no text decides. */
+static void error_location(JSContext *ctx, JSValueConst error, uint32_t *line, uint32_t *col)
 {
     *line = *col = 0;
-    if (cap != 0) file[0] = '\0';
     if (!JS_IsError(ctx, error)) return;
     JSAtom atom = JS_NewAtom(ctx, "stack");
     if (atom == JS_ATOM_NULL) { discard(ctx); return; }
@@ -290,20 +453,6 @@ static void error_location(JSContext *ctx, JSValueConst error, uint32_t *line, u
             number_before(start, at - 1, &at, &l) && at > start && at[-1] == ':') {
             *line = l;
             *col = c;
-            /* The name runs back to the frame's last '(', or, with none,
-             * to "at ": a name holding a '(' of its own is read short. */
-            const char *name_end = at - 1, *name = name_end;
-            while (name > start && name[-1] != '(') name--;
-            if (name == start) {
-                for (const char *p = start; p + 3 <= name_end; p++)
-                    if (p[0] == 'a' && p[1] == 't' && p[2] == ' ') { name = p + 3; break; }
-            }
-            size_t n = (size_t)(name_end - name);
-            if (cap != 0) {
-                if (n >= cap) n = cap - 1;
-                os64_memcpy(file, name, n);
-                file[n] = '\0';
-            }
             break;
         }
         start = *end == '\n' ? end + 1 : end;
@@ -319,32 +468,24 @@ static void here_location(os64_dom_t *dom, JSContext *ctx, uint32_t *line, uint3
 {
     JSValue here = JS_CallConstructor(ctx, dom->error_constructor->value, 0, NULL);
     if (JS_IsException(here)) { discard(ctx); return; }
-    error_location(ctx, here, line, col, NULL, 0);
+    error_location(ctx, here, line, col);
     JS_FreeValue(ctx, here);
 }
 
-static bool foreign(const os64_dom_t *dom, const char *address);
-
-/* HTML's muted errors: what a script from another origin threw is told to
- * the page as "Script error." and nothing else, so no page reads another
- * site's script's failure. `muted` says the script that ran was one; an
- * Error made in another site's code (its first placed frame names a
- * script of another origin, as a listener or a function that script
- * defined does) is muted wherever it was caught. */
-static JSValue error_event(os64_dom_t *dom, JSContext *ctx, JSValueConst error, const char *filename, bool running,
-                           bool muted)
+/* The error event for `error`, `script`'s: HTML's muted errors make one of
+ * another site's script "Script error." and nothing else, so no page reads
+ * another site's failure; any other names the script's address and the
+ * place the error was made. */
+static JSValue error_event(os64_dom_t *dom, JSContext *ctx, JSValueConst error, uint32_t script, bool running)
 {
+    if (script_muted(dom, script)) return d_error_event_new(dom, ctx, "Script error.", "", 0, 0, JS_NULL);
     uint32_t line, col;
-    char file[OS64_JS_SOURCE_NAME_CAP];
-    error_location(ctx, error, &line, &col, file, sizeof(file));
-    if (muted || (file[0] != '\0' && foreign(dom, file)))
-        return d_error_event_new(dom, ctx, "Script error.", "", 0, 0, JS_NULL);
+    error_location(ctx, error, &line, &col);
     char text[OS64_JS_MESSAGE_CAP], message[OS64_JS_MESSAGE_CAP + 16];
     d_error_text(dom, ctx, error, text, sizeof(text));
     os64_snprintf(message, sizeof(message), "Uncaught %s", text);
     if (line == 0 && running) here_location(dom, ctx, &line, &col);
-    const char *page = dom->url != NULL ? dom->url : "about:blank";
-    return d_error_event_new(dom, ctx, message, filename != NULL ? filename : page, line, col, error);
+    return d_error_event_new(dom, ctx, message, script_address(dom, script), line, col, error);
 }
 
 /* Fires `event` at window inside the open task, through os64_js_call:
@@ -370,17 +511,17 @@ static JSValue fire(JSContext *ctx, JSValueConst self, int argc, JSValueConst *a
     return JS_NewBool(ctx, result != 0);
 }
 
-void d_report_error(os64_dom_t *dom, JSContext *ctx, JSValueConst error)
+void d_report_error(os64_dom_t *dom, JSContext *ctx, JSValueConst error, uint32_t script)
 {
     if (dom->closed || !dom->options.modern || dom->reporting_error || dom->error_event_prototype == NULL) return;
     os64_js_outcome_t probe;
     os64_js_status_t running = os64_js_check_budget(dom->runtime, OS64_JS_ABI_ID, &probe);
     if (running == OS64_JS_BAD_ARGUMENT) {
-        pending_push(dom, ctx, error, true);
+        pending_push(dom, ctx, error, true, script);
         return;
     }
     if (running != OS64_JS_OK || !os64_dom_listens(dom, "error")) return;
-    JSValue event = error_event(dom, ctx, error, NULL, true, false);
+    JSValue event = error_event(dom, ctx, error, script, true);
     if (JS_IsException(event)) { discard(ctx); return; }
     dom->reporting_error = true;
     int result = d_dispatch(dom, ctx, event, NULL);
@@ -391,14 +532,15 @@ void d_report_error(os64_dom_t *dom, JSContext *ctx, JSValueConst error)
     if (result < 0 && JS_HasException(ctx)) discard(ctx);
 }
 
-static void errors_fire(os64_dom_t *dom, const char *filename, bool muted, os64_js_outcome_t *outcome)
+void d_errors_fire(os64_dom_t *dom, os64_js_outcome_t *outcome)
 {
     os64_js_outcome_t access;
     JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
     while (dom->errors != NULL) {
-        JSValue error = pending_pop(dom, true);
+        uint32_t script;
+        JSValue error = pending_pop(dom, true, &script);
         if (ctx != NULL && !sticky(outcome->status) && os64_dom_listens(dom, "error")) {
-            JSValue event = error_event(dom, ctx, error, filename, false, muted);
+            JSValue event = error_event(dom, ctx, error, script, false);
             if (JS_IsException(event)) discard(ctx);
             else {
                 dom->reporting_error = true;
@@ -411,32 +553,45 @@ static void errors_fire(os64_dom_t *dom, const char *filename, bool muted, os64_
     }
 }
 
-void d_errors_fire(os64_dom_t *dom, const char *filename, os64_js_outcome_t *outcome)
+/* HTML puts no muted promise among those a later handler is owed a
+ * rejectionhandled for: the binding's set holds each muted promise it
+ * took, made with the intrinsic WeakSet at the first, and handled_fire
+ * asks it. False when the promise could not be kept (the budget refused
+ * the set, or the engine its memory), which the caller remembers as
+ * muted_forgotten: from then on no rejectionhandled fires at all, since
+ * the binding can no longer tell which are another site's. */
+static bool remember_muted(os64_dom_t *dom, JSContext *ctx, JSValueConst promise)
 {
-    errors_fire(dom, filename, false, outcome);
+    if (dom->weak_set[0] == NULL) return false;
+    if (dom->muted_promises == NULL) {
+        JSValue set = JS_CallConstructor(ctx, dom->weak_set[0]->value, 0, NULL);
+        dom->muted_promises = d_retain(dom, ctx, set);
+        if (dom->muted_promises == NULL) {
+            discard(ctx);
+            return false;
+        }
+    }
+    JSValue added = JS_Call(ctx, dom->weak_set[1]->value, dom->muted_promises->value, 1, &promise);
+    bool kept = !JS_IsException(added);
+    if (!kept) discard(ctx);
+    JS_FreeValue(ctx, added);
+    return kept;
 }
 
 /* One rejection the runtime handed over: its unhandledrejection, the
  * task's failure unless a listener cancelled it, and, unless a handler
  * reached it during the event, its place among the promises a later
- * handler names (host_handled). One a script from another origin left
- * (`muted`), or whose reason is an Error made in such a script's code, is
- * the task's failure and no page's event, as HTML's rejection tracker
- * ignores a muted script's. */
-static void unhandled(os64_dom_t *dom, JSValue promise, JSValue reason, const char *task, bool muted,
+ * handler names (host_handled). One another site's script made (`script`,
+ * the running script when it was rejected: host_rejected) is the task's
+ * failure and no page's event, as HTML's rejection tracker ignores a muted
+ * script's. */
+static void unhandled(os64_dom_t *dom, JSValue promise, JSValue reason, const char *task, uint32_t script,
                       os64_js_outcome_t *outcome)
 {
     os64_js_outcome_t access;
     JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
-    bool cancelled = false;
-    if (ctx != NULL && !muted) {
-        /* A reason made in another site's code is that site's, as an
-         * error is (error_event). */
-        uint32_t line, col;
-        char file[OS64_JS_SOURCE_NAME_CAP];
-        error_location(ctx, reason, &line, &col, file, sizeof(file));
-        muted = file[0] != '\0' && foreign(dom, file);
-    }
+    bool cancelled = false, muted = script_muted(dom, script);
+    if (ctx != NULL && muted && !remember_muted(dom, ctx, promise)) dom->muted_forgotten = true;
     if (ctx != NULL && !muted && dom->options.modern && dom->rejection_event_prototype != NULL &&
         !sticky(outcome->status) && os64_dom_listens(dom, "unhandledrejection")) {
         JSValue event = d_rejection_event_new(dom, ctx, "unhandledrejection", promise, reason, true);
@@ -478,8 +633,17 @@ static bool handled_fire(os64_dom_t *dom, os64_js_outcome_t *outcome)
     os64_js_outcome_t access;
     JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
     while (dom->handled != NULL) {
-        JSValue promise = pending_pop(dom, false);
-        if (ctx != NULL && !sticky(outcome->status) && os64_dom_listens(dom, "rejectionhandled")) {
+        JSValue promise = pending_pop(dom, false, NULL);
+        /* A muted promise leaves the set as its handler is heard; one the
+         * set could not be asked about is taken for muted. */
+        bool muted = dom->muted_forgotten;
+        if (!muted && ctx != NULL && dom->muted_promises != NULL) {
+            JSValue gone = JS_Call(ctx, dom->weak_set[2]->value, dom->muted_promises->value, 1, &promise);
+            if (JS_IsException(gone)) discard(ctx);
+            muted = JS_IsException(gone) || JS_ToBool(ctx, gone) != 0;
+            JS_FreeValue(ctx, gone);
+        }
+        if (ctx != NULL && !muted && !sticky(outcome->status) && os64_dom_listens(dom, "rejectionhandled")) {
             JSValue reason = JS_PromiseResult(ctx, promise);
             JSValue event = JS_IsException(reason) ? JS_EXCEPTION
                 : d_rejection_event_new(dom, ctx, "rejectionhandled", promise, reason, false);
@@ -495,7 +659,7 @@ static bool handled_fire(os64_dom_t *dom, os64_js_outcome_t *outcome)
     return any;
 }
 
-void d_task_settle(os64_dom_t *dom, const char *filename, os64_js_outcome_t *outcome)
+void d_task_settle(os64_dom_t *dom, os64_js_outcome_t *outcome)
 {
     for (;;) {
         if (sticky(outcome->status)) return;
@@ -504,12 +668,13 @@ void d_task_settle(os64_dom_t *dom, const char *filename, os64_js_outcome_t *out
         fold(outcome, &point);
         if (checked != OS64_JS_OK && checked != OS64_JS_EXCEPTION) return;
         bool owed = dom->errors != NULL;
-        d_errors_fire(dom, filename, outcome);
+        d_errors_fire(dom, outcome);
         JSValue promise, reason;
+        uint32_t script;
         while (!sticky(outcome->status) &&
-               os64_js_take_rejection(dom->runtime, OS64_JS_ABI_ID, &promise, &reason)) {
+               os64_js_take_rejection(dom->runtime, OS64_JS_ABI_ID, &promise, &reason, &script)) {
             owed = true;
-            unhandled(dom, promise, reason, point.source_name, false, outcome);
+            unhandled(dom, promise, reason, point.source_name, script, outcome);
         }
         if (handled_fire(dom, outcome)) owed = true;
         if (!owed) return;
@@ -544,10 +709,11 @@ static bool foreign(const os64_dom_t *dom, const char *address)
     return !origin_of(dom->url != NULL ? dom->url : "about:blank", page, sizeof(page)) || !os64_streq(page, script);
 }
 
-void d_script_settle(os64_dom_t *dom, const char *name, const char *filename, os64_js_outcome_t *outcome)
+void d_script_settle(os64_dom_t *dom, const char *name, os64_js_outcome_t *outcome)
 {
     JSValue promise, reason;
-    bool taken = os64_js_take_rejection(dom->runtime, OS64_JS_ABI_ID, &promise, &reason);
+    uint32_t script;
+    bool taken = os64_js_take_rejection(dom->runtime, OS64_JS_ABI_ID, &promise, &reason, &script);
     if (!taken && dom->errors == NULL && dom->handled == NULL) return;
     /* The bracket's failures go after the script's own, so a rejection
      * after a script that threw is told to the host (options.failed). */
@@ -560,30 +726,21 @@ void d_script_settle(os64_dom_t *dom, const char *name, const char *filename, os
         return;
     }
     /* The script's own exception came before the checkpoint that left the
-     * rejection; both are said to come from where the script came from. A
-     * script from another origin has its failures muted: every rejection it
-     * left is taken first, firing nothing, so none is left for the page's
-     * listeners after its error event. */
-    bool muted = filename != NULL && foreign(dom, filename);
-    if (muted) {
-        for (bool more = taken; more; more = os64_js_take_rejection(dom->runtime, OS64_JS_ABI_ID, &promise, &reason))
-            unhandled(dom, promise, reason, name, true, &task);
-        errors_fire(dom, filename, true, &task);
-    } else {
-        errors_fire(dom, filename, false, &task);
-        if (taken) unhandled(dom, promise, reason, name, false, &task);
-    }
+     * rejection. Each is muted or not by its own script. */
+    d_errors_fire(dom, &task);
+    if (taken) unhandled(dom, promise, reason, name, script, &task);
     d_task_finish(dom, &task);
     *outcome = task;
 }
 
-bool os64_dom_script_ended(os64_dom_t *dom, const char *name, const char *address, os64_js_outcome_t *outcome)
+bool os64_dom_script_ended(os64_dom_t *dom, const char *name, os64_js_outcome_t *outcome)
 {
     if (dom == NULL || dom->closed || name == NULL || outcome == NULL) return false;
-    d_script_settle(dom, name, address, outcome);
+    d_script_settle(dom, name, outcome);
     /* A script that left nothing owed opened no task, and a report of its
      * (a nested dispatch's error) is told here all the same. */
     d_task_close(dom, name, outcome);
+    dom->running_script = D_NO_SCRIPT;
     return true;
 }
 
@@ -594,8 +751,61 @@ static JSValue report_error(JSContext *ctx, JSValueConst self, int argc, JSValue
     os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     if (argc < 1) return JS_ThrowTypeError(ctx, "reportError needs the error to report");
-    d_report(dom, ctx, argv[0]);
+    /* The script that called it is the one reporting (HTML's "report an
+     * exception" from the running script). */
+    d_report_as(dom, ctx, argv[0], running_script(dom, ctx));
     return JS_UNDEFINED;
+}
+
+/* `object`'s own property `name` as the engine made it, before any page
+ * ran: its getter when `getter`, else its value; NULL when there is none
+ * or no memory. */
+static DValue *intrinsic(os64_dom_t *dom, JSContext *ctx, JSValueConst object, const char *name, bool getter)
+{
+    JSAtom atom = JS_NewAtom(ctx, name);
+    if (atom == JS_ATOM_NULL) return NULL;
+    JSPropertyDescriptor descriptor;
+    int present = JS_GetOwnProperty(ctx, &descriptor, object, atom);
+    JS_FreeAtom(ctx, atom);
+    if (present <= 0) return NULL;
+    JSValue kept = getter ? descriptor.getter : descriptor.value;
+    if (getter) descriptor.getter = JS_UNDEFINED;
+    else descriptor.value = JS_UNDEFINED;
+    JS_FreeValue(ctx, descriptor.value);
+    JS_FreeValue(ctx, descriptor.getter);
+    JS_FreeValue(ctx, descriptor.setter);
+    if (!JS_IsFunction(ctx, kept)) {
+        JS_FreeValue(ctx, kept);
+        return NULL;
+    }
+    return d_retain(dom, ctx, kept);
+}
+
+/* What muting needs of the engine, taken now, before any page ran:
+ * Function.prototype's fileName getter (d_callback_script), and WeakSet
+ * with WeakSet.prototype's add and delete (remember_muted, handled_fire). */
+static int muting_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    JSValue function = JS_GetPropertyStr(ctx, global, "Function");
+    JSValue prototype = JS_IsException(function) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, function, "prototype");
+    JS_FreeValue(ctx, function);
+    if (JS_IsException(prototype)) return -1;
+    dom->filename_getter = intrinsic(dom, ctx, prototype, "fileName", true);
+    JS_FreeValue(ctx, prototype);
+    /* The set itself is made at the first muted rejection (remember_muted):
+     * a call here could hear an allocation refused earlier in the
+     * installer and fail the runtime under it. */
+    dom->weak_set[0] = intrinsic(dom, ctx, global, "WeakSet", false);
+    JSValue weak_prototype = dom->weak_set[0] != NULL ? JS_GetPropertyStr(ctx, dom->weak_set[0]->value, "prototype")
+                                                      : JS_EXCEPTION;
+    if (!JS_IsException(weak_prototype)) {
+        dom->weak_set[1] = intrinsic(dom, ctx, weak_prototype, "add", false);
+        dom->weak_set[2] = intrinsic(dom, ctx, weak_prototype, "delete", false);
+    }
+    JS_FreeValue(ctx, weak_prototype);
+    /* Muting is all of it or no binding: a part missing would tell a page
+     * what another site's script failed with. */
+    return dom->filename_getter != NULL && dom->weak_set[1] != NULL && dom->weak_set[2] != NULL ? 0 : -1;
 }
 
 int d_report_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
@@ -603,7 +813,7 @@ int d_report_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     dom->report_fire = d_retain(dom, ctx, JS_NewCFunctionData(ctx, fire, 1, 0, 1, &dom->anchor->value));
     dom->error_constructor = dom->report_fire != NULL ? d_retain(dom, ctx, JS_GetPropertyStr(ctx, global, "Error"))
                                                       : NULL;
-    if (dom->error_constructor == NULL) return -1;
+    if (dom->error_constructor == NULL || muting_install(dom, ctx, global) < 0) return -1;
     return d_error_events_install(dom, ctx, global) < 0 ||
         d_event_handler(dom, ctx, global, D_EVENT_ERROR) < 0 ||
         d_event_handler(dom, ctx, global, D_EVENT_UNHANDLEDREJECTION) < 0 ||

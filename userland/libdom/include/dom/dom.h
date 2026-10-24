@@ -235,8 +235,9 @@ typedef struct { uint64_t layouts, elapsed_us; } os64_dom_geometry_stats_t;
  * is used. Console output is granted separately by os64_js_install_output.
  * The binding becomes the runtime's script host (libjs CONTRACT.md § A
  * script host) until os64_dom_drain: from then on no os64_js_run judges an
- * unhandled rejection, and a host that runs a script itself follows it
- * with os64_dom_script_ended, which does.
+ * unhandled rejection, and a host that runs a script itself names it with
+ * os64_dom_script_name and follows it with os64_dom_script_ended, which
+ * judges.
  *
  * NULL reports failure in outcome. Registration may have published engine
  * objects: destroy that runtime without further evaluation before retrying
@@ -636,21 +637,28 @@ bool os64_dom_take_navigation(os64_dom_t *dom, os64_dom_navigation_t *ask);
  * always takes it: the outcome when that is OK, else a line told to
  * options.failed. False when there is none. */
 bool os64_dom_take_report(os64_dom_t *dom, os64_js_outcome_t *outcome);
-/* After a script the host ran with os64_js_run (and drained): what it left
- * owed, settled as one task named `name` (MODERN_WEB.md § P2a). The window's
- * error event for each exception it threw, said to come from `address`
- * (the script's own, NULL for an inline one, which is the page's); an
- * unhandledrejection for each rejection it left unhandled; and what those
- * events' listeners leave in turn. A script from another origin than the
- * page's (and an Error made in such a script's code, wherever it is
- * caught) is told to the page as "Script error." and its rejections fire
- * no event: HTML's muted errors. The failures are folded into `outcome`
- * after the script's own: a rejection no listener cancelled is an
- * UNHANDLED_REJECTION whose message begins "unhandled rejection: ", and
+/* A script the host is about to run with os64_js_run is compiled under the
+ * name this writes to `out` (`os64-script:<n>`, the binding's), never its
+ * address: `address` is the script's own, NULL for an inline one, which is
+ * the page's. The name is how the binding knows a script's code wherever
+ * it runs later (a listener it added, a promise it rejected), so it is
+ * how HTML's muted errors are decided: a script from another origin than
+ * the page's tells the page "Script error." for anything it throws or
+ * reports, and its rejections fire no event, not even rejectionhandled
+ * when a handler reaches one later. The record keeps them whole. False
+ * for a missing argument, a drained binding, or `cap` too small. */
+bool os64_dom_script_name(os64_dom_t *dom, const char *address, char *out, size_t cap);
+/* After that script ran (and drained): what it left owed, settled as one
+ * task named `name`, the host's own name for it (MODERN_WEB.md § P2a). The
+ * window's error event for each exception it threw, said to come from its
+ * address; an unhandledrejection for each rejection it left unhandled; and
+ * what those events' listeners leave in turn. The failures are folded into
+ * `outcome` after the script's own: a rejection no listener cancelled is
+ * an UNHANDLED_REJECTION whose message begins "unhandled rejection: ", and
  * those past the outcome's first failure are told to options.failed. No
  * engine entry when nothing is owed. False for a missing argument or a
  * drained binding. */
-bool os64_dom_script_ended(os64_dom_t *dom, const char *name, const char *address, os64_js_outcome_t *outcome);
+bool os64_dom_script_ended(os64_dom_t *dom, const char *name, os64_js_outcome_t *outcome);
 
 /* SCRIPT ELEMENTS. kind follows HTML's "prepare the script element" type
  * rules (type, else language, the sixteen JavaScript MIME essences, module);

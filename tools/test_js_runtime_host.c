@@ -1076,6 +1076,22 @@ static void host_handled_hook(void *opaque, JSContext *context, JSValue promise)
     host_handled++;
     host_handled_promise = promise;
 }
+/* The script on the stack as a promise is rejected: 7 for the fixture's
+ * own evaluation, which defines `reject`, else 1. */
+static uint32_t host_rejected_hook(void *opaque, JSContext *context, JSValue promise)
+{
+    (void)opaque; (void)promise;
+    uint32_t answer = 1;
+    for (int n = 0; n < 8 && answer == 1; n++) {
+        JSAtom name = JS_GetScriptOrModuleName(context, n);
+        if (name == JS_ATOM_NULL) continue;
+        const char *text = JS_AtomToCString(context, name);
+        if (text != NULL && !strcmp(text, "runtime-fixture.js")) answer = 7;
+        if (text != NULL) JS_FreeCString(context, text);
+        JS_FreeAtom(context, name);
+    }
+    return answer;
+}
 static bool host_value_is(JSValue value, const char *want)
 {
     const char *text = JS_ToCString(task_context, value);
@@ -1087,7 +1103,7 @@ static JSValue native_take(JSContext *context, JSValueConst self, int argc, JSVa
 {
     (void)self; (void)argc; (void)argv;
     JSValue promise, reason;
-    bool taken = os64_js_take_rejection(fixture_runtime, OS64_JS_ABI_ID, &promise, &reason);
+    bool taken = os64_js_take_rejection(fixture_runtime, OS64_JS_ABI_ID, &promise, &reason, NULL);
     return JS_NewBool(context, taken);
 }
 static void script_host_cases(void)
@@ -1106,9 +1122,9 @@ static void script_host_cases(void)
     check(install_native(runtime, "takeInside", native_take) >= 0 &&
           install_native(runtime, "queueJob", native_enqueue_throw) >= 0, "script host natives installed");
     JSValue promise, reason;
-    check(!os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason) &&
+    check(!os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason, NULL) &&
           JS_IsUndefined(promise) && JS_IsUndefined(reason), "nothing is taken without a script host");
-    const os64_js_script_host_t host = {&host_heard, host_exception, host_handled_hook};
+    const os64_js_script_host_t host = {&host_heard, host_exception, host_handled_hook, host_rejected_hook};
     check(os64_js_set_script_host(runtime, "other-abi", &host, &outcome) == OS64_JS_ABI_MISMATCH &&
           os64_js_set_script_host(runtime, OS64_JS_ABI_ID, &host, &outcome) == OS64_JS_OK, "a script host is set");
     check(execute_fixture(runtime, "throw Error('evaluated')", &outcome) == OS64_JS_EXCEPTION &&
@@ -1116,21 +1132,23 @@ static void script_host_cases(void)
           "an evaluation's exception reaches the host and its outcome both");
     check(execute_fixture(runtime, "reject(3)", &outcome) == OS64_JS_OK,
           "with a script host a turn's rejections are not its outcome");
-    check(os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason) &&
+    uint32_t tag = 0;
+    check(os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason, &tag) &&
           JS_IsObject(promise) && host_value_is(reason, "r0"), "the oldest rejection is taken first");
+    check(tag == 7, "with the host's answer, asked while the script that rejected was on the stack");
     task_free(runtime, promise);
     task_free(runtime, reason);
     check(execute_fixture(runtime, "handleAll()", &outcome) == OS64_JS_OK &&
-          host_handled == 1 && !os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason),
+          host_handled == 1 && !os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason, NULL),
           "rejections handled before they were taken are gone; a taken one's handler reaches the host");
     check(execute_fixture(runtime, "reject(5000);handleAll()", &outcome) == OS64_JS_OK &&
-          !os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason),
+          !os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason, NULL),
           "five thousand rejections handled newest first leave nothing to take");
     check(execute_fixture(runtime, "reject(2);if(takeInside())throw Error('taken inside')", &outcome) == OS64_JS_OK,
           "nothing is taken from inside a call");
     check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "hosted", &outcome) == OS64_JS_OK &&
           task_call(runtime, "jobThrows", NULL, &outcome) == OS64_JS_OK && outcome.jobs_pending &&
-          !os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason),
+          !os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason, NULL),
           "nothing is taken while jobs are runnable");
     host_heard[0] = '\0';
     check(os64_js_checkpoint(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_EXCEPTION &&
@@ -1141,7 +1159,7 @@ static void script_host_cases(void)
     check(os64_js_set_script_host(runtime, OS64_JS_ABI_ID, &host, &outcome) == OS64_JS_OK,
           "a script host may be set between a task's calls");
     for (int i = 0; i < 2; i++) {
-        check(os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason) &&
+        check(os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason, NULL) &&
               host_value_is(reason, i == 0 ? "r0" : "r1"), "the rest are taken in order after the checkpoint");
         task_free(runtime, promise);
         task_free(runtime, reason);
@@ -1149,7 +1167,7 @@ static void script_host_cases(void)
     host_handled = 0;
     check(task_call(runtime, "keep", NULL, &outcome) == OS64_JS_OK &&
           os64_js_checkpoint(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_OK &&
-          os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason),
+          os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason, NULL),
           "a rejection is taken inside a task");
     check(task_call(runtime, "handleKept", NULL, &outcome) == OS64_JS_OK && host_handled == 1 &&
           JS_VALUE_GET_PTR(host_handled_promise) == JS_VALUE_GET_PTR(promise),

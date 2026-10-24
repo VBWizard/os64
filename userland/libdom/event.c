@@ -154,11 +154,16 @@ static void first_report(os64_dom_t *dom, JSContext *ctx, JSValueConst error)
 
 /* An exception the binding caught itself: the first is kept for the task's
  * outcome (os64_dom_take_report), and each is the window's error event
- * (d_report_error). */
+ * (d_report_error), the page's (d_report) or `script`'s (d_report_as). */
 void d_report(os64_dom_t *dom, JSContext *ctx, JSValueConst error)
 {
+    d_report_as(dom, ctx, error, D_SCRIPT_PAGE);
+}
+
+void d_report_as(os64_dom_t *dom, JSContext *ctx, JSValueConst error, uint32_t script)
+{
     if (dom->report.status == OS64_JS_OK) first_report(dom, ctx, error);
-    d_report_error(dom, ctx, error);
+    d_report_error(dom, ctx, error, script);
 }
 
 /* LISTENER RECORDS. A callback held by a record is one of the registry's
@@ -188,7 +193,10 @@ static void slot_state(os64_dom_t *dom, DListener *slot, uint8_t state)
     if (slot->handler == D_SLOT_FUNCTION && state != D_SLOT_FUNCTION) count(dom, slot, -1);
     if (slot->handler != D_SLOT_FUNCTION && state == D_SLOT_FUNCTION) count(dom, slot, 1);
     slot->handler = state;
-    if (state != D_SLOT_FUNCTION) set_callback(dom, slot, JS_UNDEFINED);
+    if (state != D_SLOT_FUNCTION) {
+        set_callback(dom, slot, JS_UNDEFINED);
+        slot->script = D_SCRIPT_PAGE;
+    }
 }
 
 static void unlink_removed(os64_dom_t *dom, DValue *entry)
@@ -478,6 +486,7 @@ static int slot_compile(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListene
     }
     slot_state(dom, slot, D_SLOT_FUNCTION);
     set_callback(dom, slot, function);
+    slot->script = D_SCRIPT_PAGE;
     return 0;
 }
 
@@ -643,6 +652,10 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
                 remove_listener(dom, entry, listener);
                 listeners_changed(dom, entry);
             }
+            /* What the listener throws is its script's (report.c's MUTED
+             * ERRORS), whichever call it is reported from. */
+            uint32_t calling = dom->calling_script;
+            d_script_calling(dom, listener->script);
             if (d->host != NULL) {
                 JSValue args[2] = {d->object, callback};
                 os64_js_outcome_t call, point;
@@ -652,18 +665,21 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
                              NULL, &call);
                 dom->invoking = NULL;
                 dom->invoking_entry = NULL;
+                dom->calling_script = calling;
                 JS_FreeValueRT(dom->engine, callback);
                 d_outcome_fold(d->host, &call);
                 /* A listener that threw is reported before the checkpoint
                  * that cleans up after it, as HTML's callback steps do. */
-                if (call.status == OS64_JS_EXCEPTION) d_errors_fire(dom, NULL, d->host);
+                if (call.status == OS64_JS_EXCEPTION) d_errors_fire(dom, d->host);
                 if (!sticky(call.status)) {
                     os64_js_checkpoint(dom->runtime, OS64_JS_ABI_ID, &point);
                     d_outcome_fold(d->host, &point);
                     if (sticky(point.status)) { result = -1; break; }
                 } else { result = -1; break; }
             } else {
+                uint32_t script = listener->script;
                 JSValue value = run_record(dom, d->ctx, entry, listener, callback, d->object);
+                dom->calling_script = calling;
                 JS_FreeValue(d->ctx, callback);
                 if (JS_IsException(value)) {
                     JSValue error = JS_GetException(d->ctx);
@@ -672,7 +688,7 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
                         result = -1;
                         break;
                     }
-                    d_report(dom, d->ctx, error);
+                    d_report_as(dom, d->ctx, error, script);
                     JS_FreeValue(d->ctx, error);
                 } else JS_FreeValue(d->ctx, value);
             }
@@ -833,7 +849,7 @@ static void discard(JSContext *ctx)
  * and the rejections it only counted are told (d_task_close). */
 os64_js_status_t d_task_finish(os64_dom_t *dom, os64_js_outcome_t *outcome)
 {
-    d_task_settle(dom, NULL, outcome);
+    d_task_settle(dom, outcome);
     os64_js_outcome_t end;
     os64_js_task_end(dom->runtime, OS64_JS_ABI_ID, &end);
     d_outcome_fold(outcome, &end);
@@ -1073,6 +1089,7 @@ static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst se
             listener->capture = capture;
             listener->once = once;
             set_callback(dom, listener, JS_DupValue(ctx, argv[1]));
+            listener->script = d_callback_script(dom, ctx, argv[1]);
             count(dom, listener, 1);
         }
     }
@@ -1133,6 +1150,7 @@ static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSV
     if (JS_IsObject(value)) {
         slot_state(dom, slot, D_SLOT_FUNCTION);
         set_callback(dom, slot, JS_DupValue(ctx, value));
+        slot->script = d_callback_script(dom, ctx, value);
     } else slot_state(dom, slot, D_SLOT_EMPTY);
     listeners_changed(dom, entry);
     return JS_UNDEFINED;
@@ -1428,6 +1446,7 @@ static JSValue named_handler_property(JSContext *ctx, JSValueConst self, int arg
         else if (JS_IsObject(value)) {
             slot_state(dom, slot, D_SLOT_FUNCTION);
             set_callback(dom, slot, JS_DupValue(ctx, value));
+            slot->script = d_callback_script(dom, ctx, value);
         } else slot_state(dom, slot, D_SLOT_EMPTY);
         listeners_changed(dom, entry);
     }

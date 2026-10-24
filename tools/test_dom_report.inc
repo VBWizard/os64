@@ -31,7 +31,11 @@ static os64_dom_options_t report_options(bool modern)
 static os64_js_status_t report_script(DomFixture *f, const char *source, const char *name, const char *address,
                                       os64_js_outcome_t *outcome)
 {
-    os64_js_run(f->runtime, source, strlen(source), name, outcome);
+    char engine_name[32];
+    check(os64_dom_script_name(f->binding, address, engine_name, sizeof(engine_name)),
+          "report: the script is named by the binding");
+    check(strncmp(engine_name, "os64-script:", 12) == 0, "report: the script's name is the binding's own");
+    os64_js_run(f->runtime, source, strlen(source), engine_name, outcome);
     os64_js_outcome_t jobs = *outcome;
     while (outcome->status == OS64_JS_EXCEPTION && jobs.jobs_pending) {
         os64_js_status_t r = os64_js_drain_jobs(f->runtime, UINT64_MAX, &jobs);
@@ -40,7 +44,8 @@ static os64_js_status_t report_script(DomFixture *f, const char *source, const c
             break;
         }
     }
-    check(os64_dom_script_ended(f->binding, name, address, outcome), "report: the script's end is settled");
+    snprintf(outcome->source_name, sizeof(outcome->source_name), "%s", name);
+    check(os64_dom_script_ended(f->binding, name, outcome), "report: the script's end is settled");
     return outcome->status;
 }
 
@@ -87,19 +92,6 @@ static void dom_report_error_cases(void)
     check(report_script(&f, "Promise.reject('ours')", "data.js", "data:text/javascript,x", &outcome) ==
           OS64_JS_UNHANDLED_REJECTION, "report: a data: script's rejection");
     report_log_is(&f, "'rejection ours'", "report: is no other site's");
-    /* Code another site's script defined, failing later in the page's own
-     * task: told as that site's, by the place the engine says it failed. */
-    check(report_script(&f, "addEventListener('resize',function(){theirSecretName()});"
-                        "addEventListener('resize',async function(){theirOtherName()})",
-                        "https://other.test/lib.js", "https://example.test/same.js", &outcome) == OS64_JS_OK,
-          "report: a script named for another site defines two listeners");
-    os64_dom_event_t resize = {.type = "resize"};
-    bool prevented;
-    check(os64_dom_dispatch(f.binding, NULL, &resize, &prevented, &outcome) == OS64_JS_EXCEPTION &&
-          strstr(outcome.message, "theirSecretName") != NULL,
-          "report: they throw and reject, the dispatch's failure as any is");
-    report_log_is(&f, "'string Script error.  0 0 '",
-                  "report: the page hears \"Script error.\", and no rejection event for the other");
     dom_script(&f, "onunhandledrejection=null", "report: rejections no longer heard");
     dom_script(&f,
         "onerror=function(){log.push('returns true');return true};"
@@ -131,6 +123,105 @@ static void dom_report_error_cases(void)
     check(report_script(&f, "throw new Error('ours')", "https://example.test/lib.js", "https://example.test/lib.js",
                         &outcome) == OS64_JS_EXCEPTION, "report: its own script throws");
     report_log_is(&f, "'Uncaught Error: ours'", "report: and is not taken for another site's");
+    fixture_free(&f);
+}
+
+/* HTML'S MUTED ERRORS (report.c): whatever another site's script throws,
+ * rejects or reports is "Script error." or no event at all, decided by the
+ * script that was running, which the binding knows by its own name for
+ * each script and no address or stack text decides. Each case is a way
+ * past an earlier design, and the page's own script is still told whole. */
+#define MUTED_SETUP "globalThis.log=[];onerror=function(m,s,l,c,e){log.push(['error',m,s,l,e&&e.message||e].join(' '))};" \
+    "onunhandledrejection=e=>log.push('unhandled '+(e.reason&&e.reason.message||e.reason));" \
+    "onrejectionhandled=e=>log.push('handled '+(e.reason&&e.reason.message||e.reason));"
+#define MUTED_ERROR "'error Script error.  0 '"
+
+static void dom_report_muting_cases(void)
+{
+    os64_dom_options_t options = report_options(true);
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    os64_js_outcome_t outcome;
+    bool prevented;
+    os64_dom_event_t resize = {.type = "resize"}, scroll = {.type = "scroll"};
+    report_failed[0] = '\0';
+    dom_script(&f, MUTED_SETUP, "muting: the page listens for everything");
+    /* An address with "?(" in it once made the stack's place unreadable. */
+    report_script(&f, "addEventListener('resize',function(){throw new Error('their secret A')})", "lib.js",
+                  "https://other.test/lib.js?(", &outcome);
+    check(os64_dom_dispatch(f.binding, NULL, &resize, &prevented, &outcome) == OS64_JS_EXCEPTION &&
+          strstr(outcome.message, "their secret A") != NULL,
+          "muting: another site's listener throws, the record's whole failure");
+    report_log_is(&f, MUTED_ERROR, "muting: an address the stack text could not name is muted all the same");
+    fixture_free(&f);
+
+    f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    report_failed[0] = '\0';
+    dom_script(&f, MUTED_SETUP, "muting: the page listens again");
+    /* A value that is no Error carries no place a stack could name. */
+    report_script(&f, "addEventListener('resize',function(){Promise.reject('their secret B2');throw 'their secret B1'})",
+                  "lib.js", "https://other.test/lib.js", &outcome);
+    check(os64_dom_dispatch(f.binding, NULL, &resize, &prevented, &outcome) == OS64_JS_EXCEPTION &&
+          strstr(outcome.message, "their secret B1") != NULL && strstr(report_failed, "their secret B2") != NULL,
+          "muting: another site's listener throws and rejects values that are no Error, the record's whole");
+    report_log_is(&f, MUTED_ERROR, "muting: the page hears \"Script error.\" and no rejection event");
+    check(report_script(&f, "throw 'their secret E'", "top.js", "https://other.test/top.js", &outcome) ==
+          OS64_JS_EXCEPTION, "muting: another site's script throws a string at its top level");
+    report_log_is(&f, MUTED_ERROR, "muting: which is \"Script error.\" too");
+    /* A muted rejection a handler reaches later, its own script's or the
+     * page's, is no rejectionhandled either. */
+    check(report_script(&f, "const p=Promise.reject(new Error('their secret C'));globalThis.theirs=Promise.reject('their secret C2');"
+                        "addEventListener('scroll',function(){p.catch(()=>{})})",
+                        "late.js", "https://other.test/late.js", &outcome) == OS64_JS_UNHANDLED_REJECTION &&
+          strstr(outcome.message, "their secret C") != NULL, "muting: another site's script leaves two rejections");
+    report_log_is(&f, "''", "muting: and no unhandledrejection is fired for them");
+    check(os64_dom_dispatch(f.binding, NULL, &scroll, &prevented, &outcome) == OS64_JS_OK,
+          "muting: its own listener handles one later");
+    dom_script(&f, "theirs.catch(()=>{})", "muting: the page handles the other");
+    os64_dom_dispatch(f.binding, NULL, &scroll, &prevented, &outcome);
+    report_log_is(&f, "''", "muting: neither is a rejectionhandled");
+    check(report_script(&f, "reportError(new Error('their secret D'));reportError('their secret D2');"
+                        "addEventListener('resize',function(){reportError(new Error('their secret D3'))})",
+                        "report.js", "https://other.test/report.js", &outcome) == OS64_JS_EXCEPTION &&
+          strstr(outcome.message, "their secret D") != NULL,
+          "muting: another site's script reports errors, the first its outcome, whole");
+    os64_dom_dispatch(f.binding, NULL, &resize, &prevented, &outcome);
+    report_log_is(&f, MUTED_ERROR "+'|'+" MUTED_ERROR "+'|'+" MUTED_ERROR "+'|'+" MUTED_ERROR,
+                  "muting: each is \"Script error.\", reported from its script or from its listener");
+    fixture_free(&f);
+
+    f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, MUTED_SETUP, "muting: the page listens a third time");
+    /* A callback whose own name says nothing (bound, made by eval) is the
+     * script's that handed it over; a function of theirs the page calls
+     * rejects as theirs. */
+    report_script(&f, "addEventListener('resize',function(){throw new Error('their secret G1')}.bind(null));"
+                  "addEventListener('scroll',(0,eval)('(function(){throw new Error(\"their secret G2\")})'));"
+                  "queueMicrotask(function(){throw new Error('their secret G3')}.bind(null));"
+                  "setTimeout(function(){throw new Error('their secret G4')}.bind(null));"
+                  "globalThis.theirReject=function(){Promise.reject(new Error('their secret G5'))};",
+                  "bound.js", "https://other.test/bound.js", &outcome);
+    report_log_is(&f, MUTED_ERROR, "muting: their bound microtask's throw is \"Script error.\"");
+    os64_dom_dispatch(f.binding, NULL, &resize, &prevented, &outcome);
+    os64_dom_dispatch(f.binding, NULL, &scroll, &prevented, &outcome);
+    check(os64_dom_timer_fire(f.binding, UINT64_MAX - 1, &outcome) && outcome.status == OS64_JS_EXCEPTION,
+          "muting: their bound timer throws");
+    report_log_is(&f, MUTED_ERROR "+'|'+" MUTED_ERROR "+'|'+" MUTED_ERROR,
+                  "muting: their bound listener, eval's function and bound timer are \"Script error.\"");
+    check(report_script(&f, "theirReject()", "page.html#inline-1", NULL, &outcome) == OS64_JS_UNHANDLED_REJECTION,
+          "muting: the page calls their function, which rejects");
+    report_log_is(&f, "''", "muting: their rejection is no event, though the page's script called it");
+    /* The page's own script, external or inline, is told whole. */
+    report_script(&f, "addEventListener('resize',function(){throw new Error('ours F')});"
+                  "globalThis.ours=Promise.reject(new Error('ours F2'))", "own.js", "https://example.test/own.js",
+                  &outcome);
+    report_log_is(&f, "'unhandled ours F2'", "muting: the page's own rejection is told");
+    dom_script(&f, "ours.catch(()=>{})", "muting: and handled later");
+    os64_dom_dispatch(f.binding, NULL, &resize, &prevented, &outcome);
+    report_log_is(&f, MUTED_ERROR "+'|error Uncaught Error: ours F https://example.test/own.js 1 ours F"
+                  "|handled ours F2'", "muting: its listener's error and its rejectionhandled are told whole");
     fixture_free(&f);
 }
 
@@ -471,7 +562,8 @@ static void dom_report_bound_cases(void)
  * listener is compiled before the cut, as the window's sweeps compile
  * theirs: the engine's compiler under a refused allocation is libjs's to
  * prove, not this binding's. */
-static size_t report_sweep_run(const char *operation, bool listener, bool engine, size_t cut)
+static size_t report_sweep_run(const char *operation, const char *address, bool listener, bool engine,
+                               size_t cut)
 {
     os64_dom_options_t options = report_options(true);
     DomFixture f = fixture_new(&options);
@@ -482,7 +574,7 @@ static size_t report_sweep_run(const char *operation, bool listener, bool engine
     report_script(&f, "0", "sweep-setup.js", NULL, &outcome);
     char source[512];
     snprintf(source, sizeof(source), "addEventListener('resize',function(){%s})", operation);
-    if (listener) dom_script(&f, source, "sweep: the operation as a listener");
+    if (listener) report_script(&f, source, "sweep-listener.js", address, &outcome);
     size_t *counter = engine ? &attempts : &dom_attempts;
     size_t start = *counter;
     if (cut != 0) {
@@ -493,7 +585,7 @@ static size_t report_sweep_run(const char *operation, bool listener, bool engine
         os64_dom_event_t resize = {.type = "resize"};
         bool prevented;
         os64_dom_dispatch(f.binding, NULL, &resize, &prevented, &outcome);
-    } else report_script(&f, operation, "sweep.js", NULL, &outcome);
+    } else report_script(&f, operation, "sweep.js", address, &outcome);
     fail_at = 0;
     dom_fail_at = 0;
     size_t count = *counter - start;
@@ -507,16 +599,20 @@ static size_t report_sweep_run(const char *operation, bool listener, bool engine
  * teardown balances (fixture_free). */
 static void dom_report_sweep_cases(void)
 {
+    /* The second is another site's script, so muting's own allocations
+     * (the set its rejections are kept in) are refused in turn too. */
     static const char *const kOperations[] = {
         "Promise.reject(new Error('swept'));queueMicrotask(()=>{throw 3});later.catch(()=>{});"
         "reportError(new TypeError('r'));throw Error('own')",
+        "Promise.reject(new Error('theirs'));Promise.reject(2);reportError(1);throw Error('theirs')",
     };
+    static const char *const kAddresses[] = {NULL, "https://other.test/sweep.js"};
     for (size_t op = 0; op < sizeof(kOperations) / sizeof(kOperations[0]); op++)
         for (int listener = 0; listener < 2; listener++) {
-            size_t count = report_sweep_run(kOperations[op], listener, listener, 0);
+            size_t count = report_sweep_run(kOperations[op], kAddresses[op], listener, listener, 0);
             printf("report operation %zu %s allocation points: %zu\n", op, listener ? "engine" : "binding", count);
             for (size_t cut = 1; cut <= count; cut++) {
-                report_sweep_run(kOperations[op], listener, listener, cut);
+                report_sweep_run(kOperations[op], kAddresses[op], listener, listener, cut);
                 dom_sweeps++;
             }
         }
@@ -525,6 +621,7 @@ static void dom_report_sweep_cases(void)
 static void dom_report_cases(void)
 {
     dom_report_error_cases();
+    dom_report_muting_cases();
     dom_report_nested_cases();
     dom_report_task_cases();
     dom_report_rejection_cases();

@@ -459,6 +459,7 @@ void os64_dom_free(os64_dom_t *dom)
     d_view_free(dom);
     d_storage_free(dom);
     d_attr_table_free(dom);
+    d_report_free(dom);
     for (DValue *entry = dom->values; entry != NULL;) {
         DValue *next = entry->next;
         d_event_free(dom, entry);

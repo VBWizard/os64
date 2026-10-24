@@ -16,6 +16,7 @@
 typedef struct Rejection {
     struct Rejection *next, *prev;
     JSValue promise, reason;
+    uint32_t tag;           // the script host's answer when it was rejected
 } Rejection;
 
 struct os64_js_runtime {
@@ -216,6 +217,10 @@ static void rejection(JSContext *context, JSValueConst promise,
     if (runtime->rejection_table[at] == NULL) runtime->rejection_used++;
     runtime->rejection_table[at] = item;
     runtime->rejection_count++;
+    /* Asked now, while the script that rejected may still be on the stack;
+     * kept with the rejection for the host that takes it. */
+    if (runtime->hosted && runtime->host.rejected != NULL)
+        item->tag = runtime->host.rejected(runtime->host.opaque, context, promise);
 }
 
 /* An exception the wrapper caught, for a host that reports script failures
@@ -864,10 +869,11 @@ JS_PUBLIC os64_js_status_t os64_js_set_script_host(os64_js_runtime_t *runtime, c
 }
 
 JS_PUBLIC bool os64_js_take_rejection(os64_js_runtime_t *runtime, const char *caller_abi,
-                                     JSValue *promise, JSValue *reason)
+                                     JSValue *promise, JSValue *reason, uint32_t *tag)
 {
     if (promise != NULL) *promise = JS_UNDEFINED;
     if (reason != NULL) *reason = JS_UNDEFINED;
+    if (tag != NULL) *tag = 0;
     if (runtime == NULL || caller_abi == NULL || promise == NULL || reason == NULL ||
         os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0 || !runtime->hosted || runtime->active ||
         runtime->failure != OS64_JS_OK || runtime->rejections == NULL || JS_IsJobPending(runtime->engine))
@@ -876,6 +882,7 @@ JS_PUBLIC bool os64_js_take_rejection(os64_js_runtime_t *runtime, const char *ca
     rejection_unlink(runtime, rejection_place(runtime, JS_VALUE_GET_PTR(item->promise)));
     *promise = item->promise;
     *reason = item->reason;
+    if (tag != NULL) *tag = item->tag;
     js_free_rt(runtime->engine, item);
     return true;
 }

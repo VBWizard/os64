@@ -61,8 +61,14 @@ os64_js_status_t os64_js_set_execution_ms(os64_js_runtime_t *runtime, uint64_t m
  *   exception: every exception eval, run, a call, a job drain or a
  *     checkpoint catches, before its outcome is written; never one a
  *     sticky failure threw.
+ *   rejected: a promise was rejected with no handler and the runtime now
+ *     holds it, asked at once, while the code that rejected it may be on
+ *     the stack (JS_GetScriptOrModuleName); its answer is kept with the
+ *     rejection and handed back by os64_js_take_rejection.
  *   handled: a handler was added to a rejected promise the runtime no
- *     longer holds, which is one the host took.
+ *     longer holds, which is one the host took (one the runtime could not
+ *     hold, its memory refused, failed the runtime, so nothing more is
+ *     heard of it).
  * With a host set, unhandled rejections are not judged at checkpoints:
  * they wait, oldest first, for os64_js_take_rejection. NULL clears the
  * host, which is accepted from a failed runtime too; BUSY during a call. */
@@ -70,16 +76,18 @@ typedef struct {
     void *opaque;
     void (*exception)(void *opaque, JSContext *context, JSValue error);
     void (*handled)(void *opaque, JSContext *context, JSValue promise);
+    uint32_t (*rejected)(void *opaque, JSContext *context, JSValue promise);
 } os64_js_script_host_t;
 os64_js_status_t os64_js_set_script_host(os64_js_runtime_t *runtime, const char *caller_abi,
                                          const os64_js_script_host_t *host, os64_js_outcome_t *outcome);
 /* The oldest rejection still unhandled, its promise and reason handed over
- * as new references. False with both JS_UNDEFINED when there is none, and
- * when one may not be taken now: no script host, inside a call, a failed
- * runtime, or jobs still runnable (a rejection is unhandled only once the
- * microtask checkpoint that could have handled it has run). */
+ * as new references, and the host's `rejected` answer for it in *tag (may
+ * be NULL; 0 without that hook). False with both JS_UNDEFINED when there is
+ * none, and when one may not be taken now: no script host, inside a call, a
+ * failed runtime, or jobs still runnable (a rejection is unhandled only
+ * once the microtask checkpoint that could have handled it has run). */
 bool os64_js_take_rejection(os64_js_runtime_t *runtime, const char *caller_abi,
-                            JSValue *promise, JSValue *reason);
+                            JSValue *promise, JSValue *reason, uint32_t *tag);
 /* Native-callback budget boundary: uses a separate caller-owned outcome.
  * Requires an active budgeted call; does not enter JS, drain jobs, reset a
  * deadline or release the outer call's guard. Observed failures remain sticky.

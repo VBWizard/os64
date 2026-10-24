@@ -1050,9 +1050,11 @@ host), on every page and from the end of `os64_dom_create` to drain: libjs
 hands it every exception it catches and leaves it the rejections a
 checkpoint left unhandled. With the switch on it fires the window's events
 for them; on or off, a rejection nothing handled is a failure the host
-records (below). A host that runs a script with `os64_js_run` follows it
-with `os64_dom_script_ended`, which settles what the script left in a task
-of the script's name; a task the binding opens (a dispatch, a timer, a
+records (below). A host that runs a script with `os64_js_run` compiles it
+under the name `os64_dom_script_name` gives it (`os64-script:<n>`, the
+binding's own, standing for the script's address) and follows it with
+`os64_dom_script_ended`, which settles what the script left in a task of
+the host's name for it; a task the binding opens (a dispatch, a timer, a
 fetch's answer) settles its own before it closes.
 
 **When each event fires.** An exception the binding caught while a script
@@ -1076,19 +1078,37 @@ DOMException's or an Error's name and message (read only through data
 properties of ordinary objects and errors, so no getter and no proxy trap
 runs), another object's message read the same way, a primitive as it is,
 else a fixed phrase.
-Its filename is the address of the script that threw when the host said
-one (`os64_dom_script_ended`), else the page's; its line and column are the
-first placed frame of an Error's own stack, counted from the start of the
-script the engine compiled (an inline script's from the script, not the
-document), else where the running script is when the binding is the one
-reporting, else 0. A script from another origin than the page's (HTML's
-muted errors; the host fetches every script without CORS) is told as
-`Script error.` with no filename, place or error, and its rejections fire
-no event; so is an Error made in such a script's code, by the name its
-first placed frame gives (a `src` script is compiled under its address),
-wherever it is caught, and a rejection whose reason is one. The record
-keeps them whole. A PromiseRejectionEvent carries the promise and its
-reason.
+Its filename is the address of the script whose failure it is (the one
+the host gave `os64_dom_script_name`), else the page's; its line and
+column are the first placed frame of an Error's own stack, counted from
+the start of the script the engine compiled (an inline script's from the
+script, not the document), else where the running script is when the
+binding is the one reporting, else 0. The place is read from the stack's
+text; whose failure it is never is.
+
+**Muted errors.** What a script from another origin than the page's
+(HTML's muted errors; the host fetches every script without CORS) throws
+or reports is told as `Script error.` with no filename, place or error,
+and its rejections fire no event, not even a `rejectionhandled` when a
+handler reaches one later, whoever's handler it is. One rule decides
+whose failure it is: the script that was running when the value was
+thrown, rejected or reported, as the binding knows each script, by the
+name it compiled it under. A rejection and `reportError` are asked of the
+engine's stack as they happen (QuickJS's `JS_GetScriptOrModuleName`, the
+nearest frame of a script the binding named). An exception has left its
+frames when it is caught, so it is the script the host was running, or
+the one whose callback the binding called (a listener, a handler
+property, a timer, a `queueMicrotask` job), each callback's script asked
+as it was handed over: the name it was compiled under when that is one of
+the binding's, else the script handing it over (a bound function, one
+`eval` made). A handler compiled from an attribute, and a string timer,
+are the page's, as HTML makes them. So a function of another site's that
+the page's own code calls, and that throws through it, is the page's
+failure, as HTML's "run a classic script" reports it, while a rejection
+it makes is the other site's. The record keeps them all whole. The cost
+of the names: a page's `error.stack` and a function's `fileName` say
+`os64-script:<n>` where a browser names the address (DEBTS.md). A
+PromiseRejectionEvent carries the promise and its reason.
 
 **The record.** A rejection no `unhandledrejection` listener cancelled is
 the task's failure: UNHANDLED_REJECTION, `unhandled rejection: <reason>`,

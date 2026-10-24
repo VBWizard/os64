@@ -672,18 +672,25 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
         it->source = NULL;
         // The engine's whole evaluation, compiling the source included: the
         // number a bytecode cache would make smaller (MODERN_WEB.md slice 7).
+        // The engine knows the script by the binding's name for it, which is
+        // how the binding tells another site's script's failures from the
+        // page's (libdom's report.c); the outcome keeps the item's name.
+        char engine_name[32];
+        if (!os64_dom_script_name(s->dom, s->task_address, engine_name, sizeof(engine_name)))
+            os64_strcopy(engine_name, sizeof(engine_name), name);
         int64_t began = os64_micros();
-        os64_js_run(s->runtime, source, length, name, out);
+        os64_js_run(s->runtime, source, length, engine_name, out);
         int64_t ended = os64_micros();
         s->task_us = began >= 0 && ended >= began ? ended - began : -1;
         os64_free(source);
         if (out->status == OS64_JS_EXCEPTION && out->jobs_pending)
             drain_after_exception(s, out);
+        os64_strcopy(out->source_name, sizeof(out->source_name), name);
         // What the script left owed: the window's error event for what it
         // threw, an unhandledrejection for each rejection nothing handled,
         // which is a failure of this script's when no listener cancels it,
         // and an error a nested dispatch reported (libdom's report.c).
-        os64_dom_script_ended(s->dom, name, s->task_address, out);
+        os64_dom_script_ended(s->dom, name, out);
         judged(s, out);
     } else if (runs) {
         os64_strcopy(out->source_name, sizeof(out->source_name), name);

@@ -2328,8 +2328,10 @@ every rule).
 
 - **libjs's script host** (CONTRACT.md § A script host, the one change to
   the wrapper; QuickJS itself is untouched). `os64_js_set_script_host`
-  gives a host every exception the wrapper catches and a hook for a
-  handler added to a rejection it took; with a host set, no checkpoint
+  gives a host every exception the wrapper catches, a hook for a handler
+  added to a rejection it took, and one asked as a promise is rejected,
+  whose answer the rejection carries to the host (the binding answers
+  with the rejecting script); with a host set, no checkpoint
   judges a rejection, and `os64_js_take_rejection` hands them over, oldest
   first, only between calls with no job runnable. The tracker's list,
   walked for every rejection and every handler (n squared in a turn's
@@ -2350,13 +2352,30 @@ every rule).
   objects and errors only (no getter, no proxy trap), the place from the
   first placed frame of an Error's own stack (where the running script is
   when the binding reports and the value has none), the filename the
-  script's address when the host gives one, else the page's.
-- **Muted errors.** A script from another origin than the page's (the
-  host fetches every script without CORS), and an Error made in such a
-  script's code wherever it is caught (by its first frame's source name,
-  which for a `src` script is its address), is told to the page as
-  `Script error.` and nothing more, and its rejections fire no event. The
-  record keeps them whole: it is the person's.
+  address of the script whose failure it is, else the page's.
+- **Muted errors.** What a script from another origin than the page's (the
+  host fetches every script without CORS) throws or reports is told to the
+  page as `Script error.` and nothing more, and its rejections fire no
+  event, nor a `rejectionhandled` when a handler reaches one later. ONE
+  rule, never parsed from stack text (Opus's ruling on the cold read):
+  every script is compiled under a synthetic name the binding owns,
+  `os64-script:<n>`, which it maps to the script's address and whether it
+  is muted, and a failure is muted by the script that was RUNNING when the
+  value was thrown, rejected or reported. A rejection and `reportError`
+  ask QuickJS's public `JS_GetScriptOrModuleName` as they happen (libjs's
+  new `rejected` hook asks it while the rejecting code is still on the
+  stack); an exception, whose frames are gone when it is caught, is the
+  script the host was running or the one whose callback the binding
+  called, each callback's script read through `Function.prototype`'s own
+  `fileName` getter as it was handed over, else the script handing it over
+  (a bound function, one `eval` made). Muted promises the binding took are
+  kept in a WeakSet of its own, so a later handler's `rejectionhandled` is
+  swallowed. A handler attribute and a string timer are the page's, as
+  HTML makes them; a function of another site's that the page's own code
+  calls and that throws through it is the page's failure, as HTML's "run a
+  classic script" reports it. The record keeps them all whole: it is the
+  person's. Its cost: `error.stack` names `os64-script:<n>`, not the
+  address (DEBTS).
 - **The record.** A rejection no listener cancelled is the task's failure,
   `unhandled rejection: <reason>`; the first a task meets is its outcome
   (unless it already failed), and each after it reaches the host through
@@ -2364,8 +2383,9 @@ every rule).
   switch off no event is fired and every unhandled rejection is a line.
   The console the brief names is yonder's status line, which says a
   task's first failure as it always has.
-- **yonder** follows each script it runs with `os64_dom_script_ended`
-  (scripts.c's `run_item`), and gives libdom `options.failed`.
+- **yonder** runs each script under `os64_dom_script_name`'s name for it
+  and follows it with `os64_dom_script_ended` (scripts.c's `run_item`),
+  and gives libdom `options.failed`.
 
 The record line, for the brief's case (an async click handler that
 throws):
@@ -2385,9 +2405,10 @@ it was.
 
 | Seam | What it is now |
 |---|---|
-| `os64_js_set_script_host` (libjs `js_engine.h`) | a host's `exception` and `handled` hooks; with one set, rejections wait to be taken; NULL clears it, even on a failed runtime |
-| `os64_js_take_rejection` | the oldest rejection still unhandled, as new references; false inside a call, on a failed runtime, without a host, or with jobs runnable |
-| `os64_dom_script_ended` (libdom `dom.h`) | what a script the host ran left owed, settled in a task of its name, folded into its outcome |
+| `os64_js_set_script_host` (libjs `js_engine.h`) | a host's `exception`, `handled` and `rejected` hooks (`rejected` asked as a rejection is tracked, its answer the rejection's tag); with one set, rejections wait to be taken; NULL clears it, even on a failed runtime |
+| `os64_js_take_rejection` | the oldest rejection still unhandled, as new references, with its tag; false inside a call, on a failed runtime, without a host, or with jobs runnable |
+| `os64_dom_script_name` (libdom `dom.h`) | the name the host compiles a script under, `os64-script:<n>`, standing for its address |
+| `os64_dom_script_ended` | what a script the host ran left owed, settled in a task of its name, folded into its outcome |
 | `os64_dom_options_t.failed` | a rejection past a task's first failure, told to the host for its record |
 | `D_EVENT_ERROR`, `_UNHANDLEDREJECTION`, `_REJECTIONHANDLED` | event kinds window has handlers for, which the body reflects and the binding fires |
 
@@ -2508,7 +2529,7 @@ dom.h's dispatch and take-report comments, the handler lists in LIBDOM.md
    `error` event dispatched at it: nothing fires `error` at an element yet.
 3. A failure's events fire in its own task, where HTML queues one (DEBTS).
 4. `onerror`'s location is the engine's (DEBTS): an inline script's line
-   from the script, a non-Error's line 0, a listener's filename the page's.
+   from the script, a non-Error's line 0.
 
 **Booked** (DEBTS.md): an error event's place; the events in the failing
 task; muted `crossorigin` scripts; a task's second exception; the body's

@@ -119,6 +119,9 @@ struct DListener {
     /* On a collectable plain target: its callback is the target's to trace
      * and free, not one of the registry's values. */
     bool engine;
+    /* The script the callback is (d_callback_script); a handler compiled
+     * from its attribute is the page's. */
+    uint32_t script;
 };
 /* DListener.handler: zero for a listener, else the state of a handler slot.
  * An ERROR slot failed to compile its attribute and stays absent until the
@@ -128,6 +131,8 @@ struct DTimer {
     DTimer *next;
     uint64_t due, delay;
     uint32_t id, nesting;
+    /* The callback's script (d_callback_script); a string's is the page's. */
+    uint32_t script;
     bool interval;
     JSValue callback;
     char *source;
@@ -309,6 +314,34 @@ struct os64_dom {
      * one so far, and those only counted (report.c's D_REJECTIONS_TOLD). */
     uint32_t rejections_told;
     uint64_t rejections_untold;
+    /* THE SCRIPTS' NAMES (report.c, MUTED ERRORS): every script the host
+     * runs is compiled under a name the binding gives it, `os64-script:<n>`,
+     * and `n` is its place here: its address (NULL: the page's own) and
+     * whether it is another site's. 0 is the page's, 1 another site's
+     * whose record could not be made. The script being run
+     * (os64_dom_script_name to os64_dom_script_ended); the one whose
+     * callback the binding is calling (a listener's, a timer's); the last
+     * such of the task; and the one whose queueMicrotask callback threw,
+     * until the exception is heard: D_NO_SCRIPT for none (report.c's
+     * current_script). Function.prototype's own fileName getter, and
+     * WeakSet with WeakSet.prototype's add and delete, taken before any
+     * page ran; the switch's row installs them, and with it off they are
+     * NULL and nothing is muted, as no event fires. The set made with them
+     * at the first muted rejection, which holds the muted promises taken
+     * so a handler added to one later is no event, and whether one could
+     * not be kept, after which no rejectionhandled fires (report.c's
+     * remember_muted). */
+    struct DScriptName *script_names;
+    uint32_t script_name_count, script_name_cap;
+    uint32_t running_script, calling_script, task_script, thrown_script;
+    DValue *filename_getter, *weak_set[3], *muted_promises;
+    bool muted_forgotten;
+};
+#define D_NO_SCRIPT UINT32_MAX
+#define D_SCRIPT_PAGE 0u
+struct DScriptName {
+    char *address;
+    bool muted;
 };
 typedef struct { char *data; size_t length; } DString;
 
@@ -584,25 +617,41 @@ int d_crypto_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
  * The row is the switch's; being the runtime's script host is every
  * page's (d_report_host, from os64_dom_create), so the record can say a
  * rejection went unhandled with the switch off too, though no event is
- * fired then. d_report_drain lets go of the host and the values waiting. */
+ * fired then. d_report_drain lets go of the host and the values waiting;
+ * d_report_free, after the engine, the scripts' names. */
 int d_report_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 bool d_report_host(os64_dom_t *dom);
 void d_report_drain(os64_dom_t *dom);
+void d_report_free(os64_dom_t *dom);
 /* An exception the binding caught itself (d_report's): its error event is
  * fired now when a script is running, which is HTML's timing, or else left
- * for the task's next turn between calls. Nothing with the switch off,
- * while an error event is being fired, or after a sticky failure. */
-void d_report_error(os64_dom_t *dom, JSContext *ctx, JSValueConst error);
+ * for the task's next turn between calls. `script` is the script whose
+ * failure it is, which decides whether it is muted. Nothing with the switch off, while an
+ * error event is being fired, or after a sticky failure. */
+void d_report_error(os64_dom_t *dom, JSContext *ctx, JSValueConst error, uint32_t script);
+/* d_report for `script`'s failure (event.c): a nested dispatch's listener's,
+ * or reportError's, whose script is the one that called it. d_report
+ * itself is for failures that are the page's: a handler attribute that did
+ * not compile, the binding's own refusal. */
+void d_report_as(os64_dom_t *dom, JSContext *ctx, JSValueConst error, uint32_t script);
+/* The script a callback handed to the binding belongs to, asked as it is
+ * handed over: the name it was compiled under when that is one of the
+ * binding's (read through Function.prototype's own fileName getter), else
+ * the running script's, the one handing it over (a bound function, one
+ * made by eval). And the script whose callback the binding is about to
+ * call (D_NO_SCRIPT once the call is over): what an exception the call
+ * ends in is muted by. */
+uint32_t d_callback_script(os64_dom_t *dom, JSContext *ctx, JSValueConst function);
+void d_script_calling(os64_dom_t *dom, uint32_t script);
 /* Inside an open task, between its calls: the error events the exceptions
- * the wrapper caught are owed, fired at window; `filename` is the address
- * they are said to come from, NULL for the page's. */
-void d_errors_fire(os64_dom_t *dom, const char *filename, os64_js_outcome_t *outcome);
+ * the wrapper caught are owed, fired at window, each named for its script. */
+void d_errors_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
 /* Inside an open task, before it ends: checkpoints and what each leaves
  * owed, the error events, an unhandledrejection for each rejection the
  * runtime hands over and a rejectionhandled for each reported promise a
  * handler reached, until a checkpoint leaves nothing. A rejection no
  * handler cancelled is the task's failure. */
-void d_task_settle(os64_dom_t *dom, const char *filename, os64_js_outcome_t *outcome);
+void d_task_settle(os64_dom_t *dom, os64_js_outcome_t *outcome);
 /* As a task named `task` closes: the binding's own report (d_report's first
  * error) is the outcome when that is OK, else a line told to the host, and
  * is cleared either way; and the rejections it only counted, past the ones
@@ -611,7 +660,7 @@ void d_task_close(os64_dom_t *dom, const char *task, os64_js_outcome_t *outcome)
 /* After a script the host ran with os64_js_run (and a string timer the
  * binding did): what it left owed, settled in a task of its own named
  * `name`, folded into `outcome`. No engine entry when nothing is owed. */
-void d_script_settle(os64_dom_t *dom, const char *name, const char *filename, os64_js_outcome_t *outcome);
+void d_script_settle(os64_dom_t *dom, const char *name, os64_js_outcome_t *outcome);
 /* ErrorEvent and PromiseRejectionEvent (event.c): the interfaces, and one
  * of each made for a dispatch, trusted. */
 int d_error_events_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);

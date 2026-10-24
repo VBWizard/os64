@@ -89,11 +89,16 @@ static JSValue own_property(JSContext *ctx, const char *name, int argc, JSValueC
 
 /* The job queueMicrotask queues: its callback, called with no arguments
  * and `this` undefined. What it throws is the job's failure, which the
- * draining checkpoint reports. */
+ * draining checkpoint reports as the callback's script's (argv[1],
+ * d_callback_script). */
 static JSValue microtask(JSContext *ctx, int argc, JSValueConst *argv)
 {
     (void)argc;
-    return JS_Call(ctx, argv[0], JS_UNDEFINED, 0, NULL);
+    JSValue result = JS_Call(ctx, argv[0], JS_UNDEFINED, 0, NULL);
+    os64_dom_t *dom = JS_IsException(result) ? d_binding(ctx) : NULL;
+    uint32_t script;
+    if (dom != NULL && JS_ToUint32(ctx, &script, argv[1]) == 0) dom->thrown_script = script;
+    return result;
 }
 
 static const char *page_address(const os64_dom_t *dom)
@@ -152,10 +157,12 @@ static JSValue browsing_member(JSContext *ctx, JSValueConst self, int argc, JSVa
         if (JS_ToInt32(ctx, &x, argv[0]) < 0 || JS_ToInt32(ctx, &y, argv[1]) < 0) return JS_EXCEPTION;
         return JS_UNDEFINED;
     }
-    case B_QUEUE_MICROTASK:
+    case B_QUEUE_MICROTASK: {
         if (argc < 1 || !JS_IsFunction(ctx, argv[0]))
             return JS_ThrowTypeError(ctx, "queueMicrotask needs a function");
-        return JS_EnqueueJob(ctx, microtask, 1, argv) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+        JSValueConst job[2] = {argv[0], JS_NewUint32(ctx, d_callback_script(dom, ctx, argv[0]))};
+        return JS_EnqueueJob(ctx, microtask, 2, job) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+    }
     case B_ISOLATED: return JS_FALSE;
     case B_EXTERNAL:
         return set ? own_property(ctx, "external", argc, argv) : JS_DupValue(ctx, dom->external->value);
