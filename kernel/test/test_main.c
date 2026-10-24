@@ -56,6 +56,7 @@
 
 extern bool test_window_minimum_clamp(void);
 extern bool test_window_opacity(void);
+extern bool test_window_title(void);
 extern bool test_surface_blit(void);
 extern volatile uint64_t kTicksSinceStart;
 extern volatile uint64_t kPageFaultCount;
@@ -6120,6 +6121,7 @@ static void register_builtin_tests(void)
     test_register("doorbell_wakes_sleeper", test_doorbell_wakes_sleeper, TEST_PHASE_LATE);
     test_register("wake_owed", test_wake_owed, TEST_PHASE_LATE);
     test_register("window_opacity", test_window_opacity, TEST_PHASE_LATE);
+    test_register("window_title", test_window_title, TEST_PHASE_LATE);
     test_register("ext2_real_partition", test_ext2_real_partition, TEST_PHASE_POSTBOOT);
     test_register("mount_table", test_mount_table, TEST_PHASE_POSTBOOT);
     test_register("devfs", test_devfs, TEST_PHASE_POSTBOOT);

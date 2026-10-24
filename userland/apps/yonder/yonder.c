@@ -11978,7 +11978,10 @@ static void title_of(const os64_html_document_t *doc, char *out, size_t cap)
 // "<page> - yonder" in the title's capacity, which the boundary refuses to
 // exceed rather than cutting (gui.h): a long page title is shortened with
 // "..." first. A character past ASCII becomes one '?', because the title
-// bar is drawn in the kernel's face, not the page's.
+// bar is drawn in the kernel's face, not the page's. So does a control
+// character: a page can spell one (`&#27;`), and the kernel logs the title
+// it is given, so an ESC kept here would be an escape sequence written by
+// the page into whatever terminal shows that log.
 static void fit_title(const char *page, char out[OS64_GUI_TITLE_MAX])
 {
     static const char kTail[] = " - yonder";
@@ -11990,7 +11993,7 @@ static void fit_title(const char *page, char out[OS64_GUI_TITLE_MAX])
         unsigned char ch = (unsigned char)page[i];
         if (ch >= 0x80 && (ch & 0xC0) == 0x80)
             continue;           // the rest of a character already marked
-        out[at++] = ch < 0x80 ? (char)ch : '?';
+        out[at++] = ch >= 0x20 && ch < 0x7F ? (char)ch : '?';
     }
     if (cut)
         for (int i = 0; i < 3; i++)
@@ -11998,6 +12001,37 @@ static void fit_title(const char *page, char out[OS64_GUI_TITLE_MAX])
     for (size_t i = 0; i < sizeof(kTail) - 1; i++)
         out[at++] = kTail[i];
     out[at] = '\0';
+}
+
+// The name the window wears, and the page and DOM version it was last
+// worked out from.
+static char s_title_worn[OS64_GUI_TITLE_MAX] = "yonder";
+static uint64_t s_title_page, s_title_version;
+
+// THE WINDOW'S NAME FOLLOWS THE PAGE ON SCREEN: "<title> - yonder", or
+// "yonder" for a page with none. Called once per pass of the main loop,
+// after the turns that run the page's tasks, so a script that sets the
+// title many times between two passes costs one rename. The name is worked
+// out again only when another page is on screen (g.page_serial) or its tree
+// has moved (os64_html_version, which moves on every change a reader could
+// see, a write to the <title> element's text included), and the GUI is
+// asked only when the name differs from the one worn.
+static void title_follow(void)
+{
+    const os64_html_document_t *doc = page_doc(&g.page);
+    uint64_t version = doc != NULL ? os64_html_version(doc) : 0;
+    if (g.page_serial == s_title_page && version == s_title_version)
+        return;
+    s_title_page = g.page_serial;
+    s_title_version = version;
+    char named[120], title[OS64_GUI_TITLE_MAX] = "yonder";
+    title_of(doc, named, sizeof(named));
+    if (named[0] != '\0')
+        fit_title(named, title);
+    if (os64_streq(title, s_title_worn))
+        return;
+    if (os64_gui_window_set_title(g.win, title, 0) == 0)
+        os64_strcopy(s_title_worn, sizeof(s_title_worn), title);
 }
 
 static int64_t event_poll(void *opaque, os64_gui_event_t *event)
@@ -12013,9 +12047,9 @@ int main(int argc, char **argv)
         os64_printf("yonder: %s\n", why);
         return 1;
     }
-    // The window is named after the page, and a window is named once, so a
-    // FILE given on the command line is read before the window exists. A
-    // page from the network arrives after it, and the window keeps its name.
+    // The window is named after the page (title_follow). A FILE given on
+    // the command line is read before the window exists, so the window is
+    // born with that page's name rather than taking it a moment later.
     s_script_audit = argc > 1 && os64_streq(argv[1], "--script-audit");
     g.scripts_on = yonder_settings_saved_scripts();
     s_dark = yonder_settings_saved_dark();
@@ -12051,6 +12085,7 @@ int main(int argc, char **argv)
         os64_printf("yonder: no window (is the desktop running?)\n");
         return 1;
     }
+    os64_strcopy(s_title_worn, sizeof(s_title_worn), title);
     if (os64_draw_ctx_init(&g.ctx, g.win) != 0) {
         os64_gui_window_destroy(g.win);
         return 1;
@@ -12208,6 +12243,7 @@ int main(int argc, char **argv)
         bool scripts_ready = script_turn();
         storage_turn();
         pictures_settle();
+        title_follow();
         before_paint();
         glass_paint();
         motion_painted();

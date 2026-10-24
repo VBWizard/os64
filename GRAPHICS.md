@@ -922,8 +922,9 @@ list box, and went horizontal only once there were icons to put in it.
   a guess. 16 rows max (`ALTTAB_RING_MAX`); the strip is sized to the count.
 - **The snapshot now carries titles and dim flags**, not just ids. The draw
   path then dereferences no window at all, and the picture cannot reflow
-  under the user's hand mid-walk. (Nothing in the scene is allowed to change
-  during a hold anyway, so a live re-read could only differ by being wrong.)
+  under the user's hand mid-walk. The switcher moves no window during a
+  hold, but a client can rename one (`gui_window_set_title`): its row keeps
+  the name it had when the hold began until Alt is released.
 - **Tab / Shift+Tab move the highlight, and so do Up/Down.** Nothing else.
   The vertical arrows are free precisely because the keyboard driver spends
   Alt+Left/Right on the virtual-terminal cycle: horizontal arrows walk

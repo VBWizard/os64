@@ -289,6 +289,17 @@ void gui_damage_add_locked(rect_t screen_rect)
 		s_composite_counts.collapses++;
 }
 
+uint32_t gui_damage_take_locked(rect_t *out, uint32_t cap)
+{
+	uint32_t n = kPendingDamageCount < cap ? kPendingDamageCount : cap;
+	for (uint32_t i = 0; i < n; i++)
+		out[i] = kPendingDamage[i];
+	for (uint32_t i = n; i < kPendingDamageCount; i++)
+		kPendingDamage[i - n] = kPendingDamage[i];
+	kPendingDamageCount -= n;
+	return n;
+}
+
 void gui_damage_add(rect_t screen_rect)
 {
 	uint64_t flags = gui_lock(GUI_LOCK_DAMAGE);
@@ -514,9 +525,11 @@ static uint64_t s_titlebar_click_tick = 0;
 // Copying the TITLES too, rather than reading them back through the window
 // on every repaint, is the same argument one level up: the draw path then
 // dereferences nothing at all, and the picture the user is choosing from
-// cannot reflow under their hand halfway through a walk. Nothing in the
-// scene is allowed to change during a hold anyway, so a live re-read could
-// only ever differ from the snapshot by being wrong.
+// cannot reflow under their hand halfway through a walk. The switcher moves
+// no window during a hold, but a client can still rename one
+// (gui_window_set_title — a browser does it unprompted as pages load): its
+// row keeps the name it had when the hold began, and the new one shows from
+// the next hold on.
 static bool     s_alttab_active = false;
 static uint32_t s_alttab_ring[ALTTAB_RING_MAX];
 static char     s_alttab_titles[ALTTAB_RING_MAX][GUI_WINDOW_TITLE_MAX];
