@@ -27,7 +27,7 @@ enum {
     D_PROTO_NODE, D_PROTO_DOCUMENT, D_PROTO_ELEMENT, D_PROTO_CHARACTER_DATA,
     D_PROTO_FRAGMENT, D_PROTO_DOCTYPE, D_PROTO_ATTR, D_PROTO_HTML_ELEMENT, D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT,
     D_PROTO_BUTTON, D_PROTO_FORM, D_PROTO_IMAGE, D_PROTO_SCRIPT, D_PROTO_ANCHOR,
-    D_PROTO_LINK, D_PROTO_COUNT
+    D_PROTO_LINK, D_PROTO_IFRAME, D_PROTO_COUNT
 };
 /* The kind a kind's prototype inherits, as its interface inherits: Node's
  * for the node kinds, Element's for HTMLElement, HTMLElement's for the kinds
@@ -449,6 +449,10 @@ int d_collection_install(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype
 void d_query_free(os64_dom_t *dom, DQuery *query);
 int d_static_list_install(os64_dom_t *dom, JSContext *ctx);
 int d_mixin_install(os64_dom_t *dom, JSContext *ctx);
+/* A URL-valued reflection `name` on `prototype`, as script.src is: read
+ * resolved against the document's base, set as written (mixin.c). The
+ * attribute is `src` on a script or an iframe, else `href`. */
+int d_url_reflection(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, const char *name);
 extern JSClassExoticMethods d_token_exotic, d_map_exotic;
 /* A live list's index keys: 1 and *index for a canonical array index, 0
  * for any other key, -1 on an exception. */
@@ -556,6 +560,9 @@ bool d_secure_context(const os64_dom_t *context);
 int d_bars_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_external_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_crypto_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The frames row (frames.c; IFRAME.md § The cluster and the window proxy):
+ * the HTMLIFrameElement interface over D_PROTO_IFRAME, and its members. */
+int d_frames_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* An interface whose objects the binding makes (WebIDL § 3.7): its class
  * registered in this runtime, its prototype made and held for the page's
  * life, and its interface object, an Illegal constructor, named on

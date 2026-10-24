@@ -714,10 +714,11 @@ static os64_font_status_t probe_fonts(void *ctx, const flow_family_list_t *famil
     info->ascent=12*64; info->descent=4*64; info->line_height=20*64;
     return OS64_FONT_OK;
 }
+static bool probe_modern_off;  /* the next probe_page's window: the modern switch off */
 static void probe_page(const char *html, bool scripts) {
     os64_memset(&g,0,sizeof(g));
     g.scripts_on=scripts; g.way.agent=YONDER_AGENT; g.settle_due=YONDER_NEVER;
-    g.modern=g.page.modern=true;
+    g.modern=g.page.modern=!probe_modern_off;
     g.zoom=g.zoom_default=1000;
     os64_ui_init(&g.ui,NULL);
     if(probe_borrow_font)
@@ -4909,6 +4910,53 @@ static void join_cases(void) {
     join_lost_wrapper();
 }
 
+/* A frame a script inserts is the stand-in a parsed one is: it names its
+ * document, and a click there goes to it, however the script gave it its
+ * address. The `src` property, the way scripts most often do, is the
+ * frames row's (libdom frames.c), so with the modern switch off it makes a
+ * property of the script's own and the frame names nothing, as before;
+ * setAttribute and innerHTML name it either way. */
+static void inserted_frame_case(const char *how, const char *html, bool modern, bool named)
+{
+    unsigned before=failures;
+    probe_modern_off=!modern;
+    probe_page(html,true);
+    probe_modern_off=false;
+    while(yonder_scripts_pending(g.page.scripts)) script_turn();
+    const os64_html_node_t *f=probe_id("f");
+    int32_t link=f!=NULL ? os64_page_link_for(page_model(&g.page),f) : -1;
+    const os64_page_link_t *l=link>=0 ? os64_page_link(page_model(&g.page),link) : NULL;
+    if(named) {
+        check(l!=NULL && l->href.url!=NULL && os64_streq(l->href.url,"https://fixture.test/poll"),
+            "inserted frame: it names its document as a parsed one does");
+        check(link>=0 && link_at(20,20)==link,"inserted frame: a click on its stand-in goes to its document");
+    } else {
+        check(f!=NULL && link<0 && link_at(20,20)<0,
+            "inserted frame: with the switch off, src set as a property names nothing, as before");
+    }
+    probe_drop();
+    if(failures!=before) fprintf(stderr,"inserted frame: %s, the switch %s\n",how,modern ? "on" : "off");
+}
+static void inserted_frame_cases(void)
+{
+    for(int modern=0;modern<2;modern++) {
+        inserted_frame_case("parsed","<iframe id=f src=/poll></iframe>",modern,true);
+        inserted_frame_case("parsed, a block","<iframe id=f src=/poll style=display:block></iframe>",modern,true);
+        inserted_frame_case("src set after insertion",
+            "<script>var f=document.createElement('iframe');f.id='f';document.body.appendChild(f);f.src='/poll';</script>",
+            modern,modern);
+        inserted_frame_case("src set before insertion",
+            "<script>var f=document.createElement('iframe');f.id='f';f.src='/poll';document.body.appendChild(f);</script>",
+            modern,modern);
+        inserted_frame_case("setAttribute",
+            "<script>var f=document.createElement('iframe');f.id='f';f.setAttribute('src','/poll');"
+            "document.body.appendChild(f);</script>",modern,true);
+        inserted_frame_case("innerHTML",
+            "<div id=d></div><script>document.getElementById('d').innerHTML='<iframe id=f src=/poll></iframe>';</script>",
+            modern,true);
+    }
+}
+
 static void classic_browser_cases(void)
 {
     probe_page("<!doctype html><style>body{margin:0}img{display:block;width:200px;height:100px;"
@@ -8862,6 +8910,7 @@ int main(void)
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
     classic_browser_cases();
+    inserted_frame_cases();
     covered_link_cases();
     classic_downloaded_cases();
     hover_batch_cases();
