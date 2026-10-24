@@ -1061,7 +1061,7 @@ static void origin_headers(void)
 // ── Who is asking: Fetch Metadata and the identity lines ────────────────
 
 // The lines a hop to `to` carries, after stepping `m` to it.
-static const char *hop_lines(way_metadata_t *m, const way_identity_t *id, const char *to, bool given)
+static const char *hop_lines(way_metadata_t *m, const way_identity_t *id, const char *to, unsigned given)
 {
     static char out[WAY_IDENTITY_MAX];
     way_origin_t o;
@@ -1255,7 +1255,8 @@ static void metadata(void)
     // A page's own Accept-Language stands alone; no identity, no lines of it.
     m = request_from("https://a.test/p", WAY_DEST_EMPTY, WAY_MODE_CORS);
     expect_text("language: a page's own is not doubled",
-                line_value(hop_lines(&m, &hinted, "https://a.test/api", true), "Accept-Language"), "<absent>");
+                line_value(hop_lines(&m, &hinted, "https://a.test/api", WAY_GIVEN_LANGUAGE), "Accept-Language"),
+                "<absent>");
     m = request_from("https://a.test/p", WAY_DEST_EMPTY, WAY_MODE_CORS);
     expect_text("identity: none, only the request's lines", hop_lines(&m, NULL, "https://a.test/api", false),
                 "Sec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Dest: empty\r\n");
@@ -1282,6 +1283,12 @@ static void metadata(void)
     pre = way_metadata_preflight(&m);
     expect_text("priority: a preflight's is the empty destination's",
                 line_value(hop_lines(&pre, &prioritised, "https://b.test/s.js", false), "Priority"), "u=4");
+    m = request_from("https://a.test/p", WAY_DEST_EMPTY, WAY_MODE_CORS);
+    expect_text("priority: a page's own is not doubled, and the language still goes",
+                hop_lines(&m, &prioritised, "http://a.test/api", WAY_GIVEN_PRIORITY), "Accept-Language: en\r\n");
+    m = request_from("https://a.test/p", WAY_DEST_EMPTY, WAY_MODE_CORS);
+    expect_text("given: both of a page's own stand alone",
+                hop_lines(&m, &prioritised, "http://a.test/api", WAY_GIVEN_PRIORITY | WAY_GIVEN_LANGUAGE), "");
     m = request_from("https://a.test/p", WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
     expect_text("priority: a preset without a table sends none",
                 line_value(hop_lines(&m, &hinted, "https://a.test/i.png", false), "Priority"), "<absent>");

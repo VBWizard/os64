@@ -1273,7 +1273,7 @@ static bool lines_add(char *out, size_t cap, size_t *at, const char *a, const ch
 }
 
 bool way_identity_lines(const way_identity_t *id, const way_metadata_t *m, const way_origin_t *to,
-                        bool language_given, char *out, size_t cap)
+                        unsigned given, char *out, size_t cap)
 {
     if (cap == 0)
         return false;
@@ -1300,12 +1300,13 @@ bool way_identity_lines(const way_identity_t *id, const way_metadata_t *m, const
              lines_add(out, cap, &at, "Sec-Fetch-Dest: ", dest_token(m->dest)) &&
              lines_add(out, cap, &at, "\r\n", NULL);
     }
-    if (ok && !language_given && id != NULL && id->language != NULL)
+    if (ok && !(given & WAY_GIVEN_LANGUAGE) && id != NULL && id->language != NULL)
         ok = lines_add(out, cap, &at, "Accept-Language: ", id->language) &&
              lines_add(out, cap, &at, "\r\n", NULL);
     // A preflight's destination is empty (way_metadata_preflight), and so
     // is its Priority's row, as Firefox sends it.
-    if (ok && id != NULL && m->dest < WAY_DESTS && id->priority[m->dest] != NULL)
+    if (ok && !(given & WAY_GIVEN_PRIORITY) && id != NULL && m->dest < WAY_DESTS &&
+        id->priority[m->dest] != NULL)
         ok = lines_add(out, cap, &at, "Priority: ", id->priority[m->dest]) &&
              lines_add(out, cap, &at, "\r\n", NULL);
     if (!ok)

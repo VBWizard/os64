@@ -48,7 +48,7 @@ static size_t hop_identity(const way_identity_t *id, way_metadata_t *m, const os
     way_origin_t to;
     way_origin_of_url(hop, 0, &to);
     way_metadata_hop(m, &to);
-    if (!way_identity_lines(id, m, &to, false, out, cap < WAY_IDENTITY_MAX ? cap : WAY_IDENTITY_MAX))
+    if (!way_identity_lines(id, m, &to, 0, out, cap < WAY_IDENTITY_MAX ? cap : WAY_IDENTITY_MAX))
         return 0;
     return os64_strlen(out);
 }

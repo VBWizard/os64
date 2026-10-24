@@ -811,6 +811,38 @@ static void who_is_asking(void)
     expect_text("who: plain http, the language", field(0, "Accept-Language"), "en-US,en;q=0.9");
     yonder_fetched_free(g);
 
+    // A page's own Priority goes alone, as its Accept-Language does: the
+    // preset's beside it would be a duplicate, which libfetch refuses.
+    fresh();
+    fake_answer(NULL, "https://a.test/api", 200, "", "x");
+    g = run(&(Ask){"https://a.test/page", "https://a.test/api", "GET", "Priority: u=1\r\n", .identity = &kWho});
+    expect("who: a page's Priority", g != NULL && g->ok, g ? g->why : NULL);
+    expect_text("who: the page's Priority goes", field(0, "Priority"), "u=1");
+    expect("who: and the preset's does not", strstr(fake_requests[0].fields, "Priority") == NULL,
+           fake_requests[0].fields);
+    yonder_fetched_free(g);
+
+    // With a preflight: it carries none of the page's lines, so the
+    // preset's Accept-Language and Priority go with it; the request after
+    // it carries the page's alone.
+    fresh();
+    fake_answer("OPTIONS", "https://b.test/api", 204,
+                "Access-Control-Allow-Origin: https://a.test\r\nAccess-Control-Allow-Methods: PUT\r\n"
+                "Access-Control-Allow-Headers: priority\r\n", NULL);
+    fake_answer("PUT", "https://b.test/api", 200, "Access-Control-Allow-Origin: https://a.test\r\n", "done");
+    g = run(&(Ask){"https://a.test/page", "https://b.test/api", "PUT",
+                   "Accept-Language: fr\r\nPriority: u=1\r\n", .identity = &kWho});
+    expect("who: a preflighted request with the page's own lines", g != NULL && g->ok && nfake_requests == 2,
+           g ? g->why : NULL);
+    expect_text("who: the preflight's language is the preset's", field(0, "Accept-Language"), "en-US,en;q=0.9");
+    expect_text("who: the preflight's priority is the preset's", field(0, "Priority"), "u=4");
+    expect_text("who: the request's language is the page's", field(1, "Accept-Language"), "fr");
+    expect_text("who: the request's priority is the page's", field(1, "Priority"), "u=1");
+    expect("who: and the preset's lines are not beside them",
+           strstr(fake_requests[1].fields, "Accept-Language") == NULL &&
+           strstr(fake_requests[1].fields, "Priority") == NULL, fake_requests[1].fields);
+    yonder_fetched_free(g);
+
     // A page's own Accept-Language goes alone; a page cannot write the
     // browser's lines, nor a Sec- or Proxy- header of any name.
     fresh();

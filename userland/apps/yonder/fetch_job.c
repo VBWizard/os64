@@ -39,10 +39,10 @@ typedef struct {
     const char *url;                // this hop's address
     bool preflight;                 // a preflight: no cookies go, none are heard
     // The request's Fetch Metadata, stepped at every hop of its URL list,
-    // and whether the page set an Accept-Language of its own, which the
-    // browser's then does not double.
+    // and the lines the page set of its own (WAY_GIVEN_: Accept-Language,
+    // Priority), which the browser's then does not double.
     way_metadata_t metadata;
-    bool page_language;
+    unsigned page_given;
     bool (*cancelled)(void *ctx);
     void *cancel_ctx;
     // The head as libfetch read it: its lines as a header block, and the
@@ -104,8 +104,8 @@ static size_t hop_identity(Hop *h, const os64_url_t *to, char *out, size_t cap)
     way_metadata_hop(&h->metadata, &where);
     way_metadata_t m = h->preflight ? way_metadata_preflight(&h->metadata) : h->metadata;
     // A preflight carries none of the page's headers, so the browser's
-    // Accept-Language goes with it whatever the page set.
-    bool given = h->page_language && !h->preflight;
+    // Accept-Language and Priority go with it whatever the page set.
+    unsigned given = h->preflight ? 0 : h->page_given;
     if (!way_identity_lines(h->job->identity, &m, &where, given, out,
                             cap < WAY_IDENTITY_MAX ? cap : WAY_IDENTITY_MAX))
         return 0;
@@ -251,16 +251,22 @@ static bool is_accept(const char *name, size_t len)
     return is_named(name, len, "accept");
 }
 
-// Whether the page's headers hold an Accept-Language: Fetch appends the
-// browser's only when they do not.
-static bool page_sets_language(const way_request_t *r)
+// The browser's lines the page's headers already hold (WAY_GIVEN_): an
+// Accept-Language, which Fetch appends the browser's only when there is
+// none, and a Priority, which a second one would make a duplicate libfetch
+// refuses.
+static unsigned page_sets(const way_request_t *r)
 {
+    unsigned given = 0;
     size_t at = 0;
     way_header_t h;
-    while (way_header_next(r->headers, r->headers_len, &at, &h))
+    while (way_header_next(r->headers, r->headers_len, &at, &h)) {
         if (is_named(h.name, h.name_len, "accept-language"))
-            return true;
-    return false;
+            given |= WAY_GIVEN_LANGUAGE;
+        if (is_named(h.name, h.name_len, "priority"))
+            given |= WAY_GIVEN_PRIORITY;
+    }
+    return given;
 }
 
 // The author headers sorted into libfetch's places: Accept (joined, as
@@ -646,7 +652,7 @@ int64_t yonder_fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
     // A script's request is fetch()'s or XMLHttpRequest's: destination
     // empty, the page's mode.
     way_metadata_request(&h.metadata, &r->origin, WAY_DEST_EMPTY, r->mode);
-    h.page_language = page_sets_language(r);
+    h.page_given = page_sets(r);
     int64_t verdict = 0;
     for (;;) {
         if (cancelled != NULL && cancelled(ctx)) {

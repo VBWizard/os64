@@ -359,13 +359,17 @@ typedef struct {
 
 // A hop to `to`'s lines, in this order: the client hints,
 // Upgrade-Insecure-Requests (a document's, on every hop), Sec-Fetch-Site,
-// -Mode, -User and -Dest (a trustworthy `to` only), Accept-Language
-// unless `language_given` (the request already holds one a page set:
-// Fetch appends the browser's only when there is none), and the preset's
-// Priority for the request's destination, on every hop. `id` may be NULL.
-// False when they do not fit in `cap`, with `out` empty.
+// -Mode, -User and -Dest (a trustworthy `to` only), Accept-Language, and
+// the preset's Priority for the request's destination, on every hop. A
+// line the request already holds, because a page set it (`given`, the
+// WAY_GIVEN_ bits), is not written again: Fetch appends the browser's
+// Accept-Language only when there is none, and a second Priority would be
+// a duplicate libfetch refuses. `id` may be NULL. False when they do not
+// fit in `cap`, with `out` empty.
+#define WAY_GIVEN_LANGUAGE 0x1u
+#define WAY_GIVEN_PRIORITY 0x2u
 bool way_identity_lines(const way_identity_t *id, const way_metadata_t *m, const way_origin_t *to,
-                        bool language_given, char *out, size_t cap);
+                        unsigned given, char *out, size_t cap);
 
 // ── A response's headers, for the judgements ────────────────────────────
 
