@@ -97,13 +97,14 @@ thread_join_t* thread_join_create(void* taskv, uint64_t entry, uint64_t arg,
 	// TASK's tables, then write through the HHDM alias (valid while
 	// allocated). See CLAUDE.md § Writing to Task Memory.
 	//
-	// t->regs.RSP is a USER-SUPPLIED stack pointer (the `thread` syscall's
-	// arg), so it is resolved through paging_resolve_user_writable, not a
-	// bare walk (2026-08-24): a plain walk accepted ANY present page, so a
-	// stack pointer forged at the kernel's upper-half or a read-only shared
-	// page would have had the kernel write `exit_stub` there — the same
-	// ring-3 -> ring-0 write Codex found in signal delivery, wearing thread
-	// creation's clothes. The guard demands lower-half + USER + WRITABLE.
+	// t->regs.RSP is createThread's: the top of the user stack the kernel
+	// just allocated for this thread (the `thread` syscall's arg becomes RDI
+	// and is never dereferenced). It is still resolved through
+	// paging_resolve_user_writable rather than a bare walk, as a guard: a
+	// plain walk accepts ANY present page, and the kernel writing `exit_stub`
+	// through a pointer that ever came to name the kernel's half or a
+	// read-only shared page would be the ring-3 -> ring-0 write Codex found
+	// in signal delivery. The guard demands lower-half + USER + WRITABLE.
 	uintptr_t phys_rsp = paging_resolve_user_writable((pt_entry_t*)task->pml4v, t->regs.RSP);
 	if (phys_rsp == 0)
 	{

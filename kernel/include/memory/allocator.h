@@ -27,7 +27,9 @@ extern memory_status_t *kMemoryStatus;
 // tables and leaf alike — liveness-verified before it is dereferenced, so
 // neither a concurrent unmap (data page) nor a concurrent burial (table
 // pages, whose recycled garbage entries would otherwise send the walk
-// through a wild HHDM alias) can fault ring 0. False = the caller reports
+// through a wild HHDM alias) can fault ring 0. A range reaching
+// USER_CANONICAL_MAX is refused: it is not the task's, and the walk would
+// alias kernel memory. False = the caller reports
 // "unreadable". pml4v is the task's pt_entry_t* (void* to keep paging.h out
 // of this header). len must stay within one source page; the lock is
 // interrupts-off, so chunk per page and touch nothing that allocates.

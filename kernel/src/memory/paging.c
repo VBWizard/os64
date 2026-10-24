@@ -419,7 +419,7 @@ uintptr_t paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address)
 uintptr_t paging_resolve_user_writable(pt_entry_t *pml4v, uint64_t va)
 {
 	if (va >= USER_CANONICAL_MAX)
-		return 0;   // upper half: the kernel's own, never a user target
+		return 0;   // non-canonical, or the kernel's own half: never a user target
 	uintptr_t pte = paging_walk_paging_table_keep_flags(pml4v, va, true);
 	if (pte == 0xbadbadba)
 		return 0;   // not mapped

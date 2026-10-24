@@ -156,6 +156,9 @@ static const fixture_t kFixtures[] = {
     { "/tests/rawtty",          NULL, 0x2A710000,  0,          "raw mode: cooked by default, 0x03/0x04 arrive as bytes on request, the foreground's wish, cooked again, reset at the asker's exit, strangers refused" },
     { "/tests/df_test",         NULL, 0x0DF00000,  0,          "the direction flag does not cross a ring boundary (syscall, and into a handler)" },
     { "/tests/regleak_test",    NULL, 0x02E60000,  0,          "a syscall returns no kernel state in its scratch registers" },
+    // A kernel whose user-copy bound is wrong does not report a failure
+    // here: it panics, on the copy.
+    { "/tests/badptr",          NULL, 0xBADA0000,  0,          "a pointer ring 3 cannot own (non-canonical, kernel, NULL, crossing the ceiling) is refused by the copy helpers, a thread's entry and exit stub, and an ELF entry point" },
     // PASSES BY DYING, like the nx_test pair above: 141 is SIGPIPE's default
     // action (128 + 13), and reaching it proves the kernel still applies that
     // default when a handler is installed but CANNOT BE DELIVERED. Surviving

@@ -1376,9 +1376,14 @@ typedef struct
 // don't, which a hex editor shows as ??. Populating them on the reader's
 // behalf is v2, booked — "depending on whether ?? is annoying".
 //
-// The stream has no end. SEEK_END is refused (there is nothing to measure
-// from); SEEK_SET/SEEK_CUR land anywhere in 0..INT64_MAX and the walk
-// answers for whether anything is there.
+// The stream ends where the task's address space does: USER_CANONICAL_MAX.
+// Above it lies non-canonical space, which the page walk would answer for
+// with some OTHER slot — the kernel half's, the HHDM among them — so a seek
+// past the ceiling is refused and a read stops at it (and
+// allocator_copy_from_task_va refuses it besides). SEEK_SET/SEEK_CUR land
+// anywhere in 0..USER_CANONICAL_MAX and the walk answers for whether anything
+// is there. SEEK_END stays refused: that end is the hardware's, not the
+// task's, and no program wants to count back from it.
 static int proc_mem_read(proc_file_handle_t *h, void *buffer, size_t size)
 {
 	if (buffer == NULL || size == 0)
@@ -1394,8 +1399,8 @@ static int proc_mem_read(proc_file_handle_t *h, void *buffer, size_t size)
 	while (done < size)
 	{
 		uintptr_t va = (uintptr_t)h->mem_pos + done;
-		if (va < (uintptr_t)h->mem_pos)
-			break;                                  // wrapped the address space
+		if (va >= USER_CANONICAL_MAX)
+			break;                                  // the task's address space ends here
 		size_t in_page = (size_t)(va & (PAGE_SIZE - 1));
 		size_t chunk = PAGE_SIZE - in_page;
 		if (chunk > size - done)
@@ -1425,7 +1430,7 @@ static int proc_mem_seek(proc_file_handle_t *h, long offset, int whence)
 	    (offset < 0 && base < INT64_MIN - offset))
 		return -1;
 	int64_t target = base + offset;
-	if (target < 0)
+	if (target < 0 || (uint64_t)target > USER_CANONICAL_MAX)
 		return -1;
 	h->mem_pos = (uint64_t)target;
 	return 0;

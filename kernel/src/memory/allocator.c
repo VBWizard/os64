@@ -260,6 +260,15 @@ bool allocator_copy_from_task_va(void *pml4v, uintptr_t va,
 	// paging.h's types out of allocator.h's face. It IS a pt_entry_t*.
 	if (dst == NULL || len == 0 || pml4v == NULL)
 		return false;
+	// A TASK's address space ends at USER_CANONICAL_MAX. The walk below
+	// indexes with bits 39-47 and ignores 48-63, so an address at or above
+	// the ceiling walks some other slot — with bit 47 set, the kernel half's
+	// shared entries, the HHDM among them — and would copy out live kernel
+	// memory and other tasks' frames. Ring 3 chooses the VA for some callers
+	// (/proc/<id>/mem's offset, a heap-report pointer), so the bound lives
+	// here rather than with each of them.
+	if (va >= USER_CANONICAL_MAX || len > USER_CANONICAL_MAX - va)
+		return false;
 	if (((va & (uintptr_t)0xFFF) + len) > PAGE_SIZE)
 		return false;   // caller must chunk per page — see RULES above
 

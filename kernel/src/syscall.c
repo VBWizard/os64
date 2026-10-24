@@ -270,7 +270,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	// arg0/arg2 are CODE addresses in the caller's own text, not buffers —
 	// they are not in the pointer mask because user_range_accessible checks
 	// data reachability, and thread_join_create validates the stack mapping
-	// it actually writes to.
+	// it actually writes to. The handler bounds both by USER_CANONICAL_MAX.
 	SYSCALL_DEFINE(SYSCALL_THREAD,      "thread",      syscall_thread,      false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_THREAD_EXIT, "thread_exit", syscall_thread_exit, false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_MKDIR,       "mkdir",       syscall_mkdir,       false, 0x01),  // arg0 = path
@@ -700,6 +700,14 @@ void restore_user_cr3(void)
 // An app must not be able to panic the OS by handing a syscall a garbage
 // pointer (ls did exactly that, 2026-07-22), so every page of a user range is
 // vetted before the memcpy touches it:
+//   - Any byte at or above USER_CANONICAL_MAX → reject the whole range. That
+//     is the ceiling of a USER address, and this function enforces it itself
+//     so no caller can forget it. Above it lies non-canonical space, where a
+//     ring-0 access is a #GP with no fixup — a panic — and then the kernel's
+//     own half. The page walk below cannot be trusted with either: it indexes
+//     with bits 39-47 and never looks at 48-63, so a non-canonical address
+//     walks SOME real table (a shared kernel-half one when bit 47 is set, the
+//     task's own when it is clear) and comes back "present".
 //   - First virtual page → reject: the pager cannot resolve the NULL guard,
 //     even if a VMA covers it.
 //   - Other VMA-covered pages → legal: a not-present page is demand paging waiting
@@ -717,12 +725,17 @@ static bool user_range_accessible(const void *user_ptr, size_t length, bool for_
 	if (addr < PAGE_SIZE)
 		return false;
 
+	// The subtraction form, so a length that would wrap addr + length past
+	// zero is refused rather than turned into a small end.
+	if (addr >= USER_CANONICAL_MAX || length > USER_CANONICAL_MAX - addr)
+		return false;
+
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = cls ? cls->task : NULL;
 	if (task == NULL)
 		return false;
 
-	uintptr_t end = addr + length;   // no overflow: callers range-check vs kHHDMOffset first
+	uintptr_t end = addr + length;   // <= USER_CANONICAL_MAX: no overflow, nothing above the ceiling
 
 	for (uintptr_t page = addr & ~(uintptr_t)(PAGE_SIZE - 1); page < end; page += PAGE_SIZE)
 	{
@@ -751,16 +764,7 @@ bool validate_and_copy_user_data(const void* user_ptr, size_t length, void* kern
 		return false;
 	}
 
-	uintptr_t user_address = (uintptr_t)user_ptr;
-
-	// Reject ranges that start in — or run into — kernel-mapped memory.  The
-	// subtraction form also catches user_address+length overflowing to wrap
-	// back below kHHDMOffset.
-	if (user_address >= kHHDMOffset || length > kHHDMOffset - user_address)
-	{
-		return false;
-	}
-
+	// The ceiling, the NULL guard and the mapping, all in one place.
 	if (!user_range_accessible(user_ptr, length, false))
 	{
 		return false;
@@ -806,7 +810,10 @@ static inline uint32_t get_current_cpu_index(void)
 // user_ptr_arg_mask.  Only args the table declares as pointers are checked —
 // see the mask's comment in syscall.h for why checking all six is a bug, not
 // extra safety.  NULL is allowed through here so handlers can give it a
-// per-call meaning (the copy helpers reject NULL where it matters).
+// per-call meaning (the copy helpers reject NULL where it matters).  The
+// bound is USER_CANONICAL_MAX, the same ceiling user_range_accessible
+// enforces for the copy helpers; this is only the early refusal, before the
+// handler runs.
 static bool prepare_syscall_args(const syscall_entry_t *entry, const uint64_t incoming[6], uint64_t prepared[6])
 {
 	memcpy(prepared, incoming, sizeof(uint64_t) * 6);
@@ -823,7 +830,7 @@ static bool prepare_syscall_args(const syscall_entry_t *entry, const uint64_t in
 			continue;
 		}
 
-		if (prepared[i] >= kHHDMOffset)
+		if (prepared[i] >= USER_CANONICAL_MAX)
 		{
 			return false;
 		}
@@ -940,8 +947,7 @@ static int user_string_length(const char *user_str, size_t cap, size_t *len)
                 {
                         chunk = cap - n;
                 }
-                if (at >= kHHDMOffset || chunk > kHHDMOffset - at ||
-                    !user_range_accessible((const void *)at, chunk, false))
+                if (!user_range_accessible((const void *)at, chunk, false))
                 {
                         verdict = -1;
                         break;
@@ -986,17 +992,11 @@ static bool copy_user_buffer(const void *user_src, void *kernel_dst, size_t leng
 }
 
 // Copy `length` bytes from a kernel buffer OUT to user space — the reverse of
-// copy_user_buffer, for read()'s result. Range-checks the destination the same
-// way (reject any dst that reaches into kernel-mapped memory, overflow-safe).
+// copy_user_buffer, for read()'s result. The destination is vetted the same
+// way (user_range_accessible: below the ceiling, mapped, and writable).
 static bool copy_to_user_buffer(void *user_dst, const void *kernel_src, size_t length)
 {
         if (!user_dst || !kernel_src || length == 0)
-        {
-                return false;
-        }
-
-        uintptr_t user_address = (uintptr_t)user_dst;
-        if (user_address >= kHHDMOffset || length > kHHDMOffset - user_address)
         {
                 return false;
         }
@@ -5073,10 +5073,16 @@ static uint64_t syscall_thread(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		       task->exename, arg0, arg2);
 		return SYSCALL_RESULT_INVALID;
 	}
-	// Both must live in the caller's own (lower-half) address space. A
-	// ring-3 thread that starts executing in the kernel's half is the
-	// whole reason ring 3 exists.
-	if (arg0 >= kHHDMOffset || arg2 >= kHHDMOffset)
+	// Both must live in the caller's own (lower-half) address space, below
+	// USER_CANONICAL_MAX. A ring-3 thread that starts executing in the
+	// kernel's half is the whole reason ring 3 exists — and a NON-CANONICAL
+	// entry is worse than refused by the hardware: IRETQ checks the new RIP
+	// before it leaves ring 0, so the #GP would be the kernel's, a panic.
+	// (QEMU's TCG does not model that check; there the thread dies in ring
+	// 3 instead, so a QEMU boot surviving this proves nothing.)
+	// (A bad exit stub would only fault the program, at its `ret`; it is the
+	// same bound.)
+	if (arg0 >= USER_CANONICAL_MAX || arg2 >= USER_CANONICAL_MAX)
 	{
 		printd(DEBUG_THREAD, "syscall_thread: %s passed a non-user address (entry=0x%lx stub=0x%lx) — refused\n",
 		       task->exename, arg0, arg2);

@@ -2176,6 +2176,22 @@ static bool elf_resolve_dynamic_dependencies(task_t *task, const char *path)
 		return false;
 	}
 
+	// The entry point becomes the first thread's RIP, and IRETQ checks a new
+	// RIP before it leaves ring 0: a non-canonical one would be the KERNEL's
+	// #GP, a panic, on the program's first dispatch. The sum is the address
+	// the thread will run (why it is a sum: the entryPoint assignment below);
+	// one that wraps, or lands at or above USER_CANONICAL_MAX, is not a user
+	// address.
+	// Refused BEFORE the closure is mapped, so the one reference the load
+	// took is all there is to give back.
+	uint64_t entry = main_so->load_bias + main_so->image->ehdr.e_entry;
+	if (entry < main_so->load_bias || entry >= USER_CANONICAL_MAX) {
+		printd(DEBUG_TASK, "task_create: '%s' has entry point 0x%016lx, not a user address — not spawning\n",
+		       path, entry);
+		shared_object_release(main_so);
+		return false;
+	}
+
 	if (!task_map_shared_object_closure(task, main_so)) {
 		printd(DEBUG_TASK, "task_create: cannot map '%s' and its libraries — not spawning\n", path);
 		// The load above took this task's ONE reference (the pairing rule in
@@ -2228,12 +2244,12 @@ static bool elf_resolve_dynamic_dependencies(task_t *task, const char *path)
 	}
 
 	task->elf = main_so->image;
-	// Uniform for both image kinds: an ET_DYN image's e_entry is
-	// load_bias-relative and its bias is its window slot; an ET_EXEC image's
-	// e_entry is already absolute and its bias is 0. One expression, because
-	// load_bias carries the difference.
+	// `entry` is load_bias + e_entry, uniform for both image kinds: an ET_DYN
+	// image's e_entry is load_bias-relative and its bias is its window slot;
+	// an ET_EXEC image's e_entry is already absolute and its bias is 0. One
+	// expression, because load_bias carries the difference.
 	task->loadBias = main_so->load_bias;
-	task->entryPoint = main_so->load_bias + main_so->image->ehdr.e_entry;
+	task->entryPoint = entry;
 	if (task->threads != NULL) {
 		task->threads->regs.RIP = task->entryPoint;
 	}

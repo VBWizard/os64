@@ -136,8 +136,13 @@ off: no waiting on interrupt-delivered events, keep bodies short.
   ever ran). The mask is correctness, not laziness.
 - **User data crosses the boundary through the copy helpers only** —
   `copy_user_string` (NUL-bounded, byte-walked) and `copy_user_buffer`
-  (length-exact). Both validate the range against kHHDMOffset with
-  overflow-safe arithmetic and ferry through bounded kernel chunks
+  (length-exact). Both validate the range against USER_CANONICAL_MAX, the
+  top of the canonical lower half, with overflow-safe arithmetic — inside
+  `user_range_accessible`, the vetting step the copy helpers share, so the
+  bound travels with the vetting instead of with each caller. (The bound
+  is NOT kHHDMOffset: the gap between the two is non-canonical, and a
+  ring-0 touch there is a #GP, a panic.) They ferry through bounded kernel
+  chunks
   (write() uses 512 bytes) so a user-supplied length can never become
   unbounded kernel stack use. The helpers run inside a "user-CR3 window"
   that re-opens the user address space if a (future) CR3-switched handler

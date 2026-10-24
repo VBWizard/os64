@@ -93,6 +93,19 @@ static bool elf_validate_ehdr(const Elf64_Ehdr *ehdr)
         return false;
     }
 
+    // The entry point becomes the first thread's RIP, and IRETQ checks a new
+    // RIP before it leaves ring 0: a non-canonical one is the KERNEL's #GP, a
+    // panic, on the program's first dispatch. An e_entry at or above
+    // USER_CANONICAL_MAX names no user address in any image type (a
+    // load_bias only adds to it), so the header is refused here — which is
+    // what lets elf_can_load turn such a program away before task_create
+    // builds anything. A dynamic image's entry is load_bias + e_entry, and
+    // that sum needs its own bound where it is formed
+    // (elf_resolve_dynamic_dependencies).
+    if (ehdr->e_entry >= USER_CANONICAL_MAX) {
+        return false;
+    }
+
     return true;
 }
 
@@ -133,7 +146,14 @@ static int elf_map_segment(task_t *task, vfs_file_t *file, const Elf64_Phdr *phd
         return -1;
     }
 
-    if (seg_end >= kHHDMOffset) {
+    // A segment lies wholly below USER_CANONICAL_MAX or not at all. Above it
+    // nothing can ever fault the pages in (a non-canonical access is a #GP,
+    // never a #PF), and a page-table walk ignores bits 48-63, so such an
+    // address aliases another slot — for the gap just above the ceiling, the
+    // kernel half's, which every task shares. A VMA there is a promise no
+    // mapping could keep without writing into tables that are not this
+    // task's.
+    if (seg_end > USER_CANONICAL_MAX) {
         return -1;
     }
 

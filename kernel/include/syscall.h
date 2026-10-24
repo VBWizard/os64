@@ -25,8 +25,8 @@ typedef struct {
     // range-check before the handler runs.  A mask (not a blanket "check all
     // six") because unused argument registers carry ring-3 garbage — and
     // right after a previous syscall that garbage is kernel addresses our own
-    // clobber convention left behind, which a blanket >= kHHDMOffset scan
-    // "helpfully" rejects.  (write() was the first casualty: R10 held a
+    // clobber convention left behind, which a blanket >= USER_CANONICAL_MAX
+    // scan "helpfully" rejects.  (write() was the first casualty: R10 held a
     // leftover kernel pointer from yield(), so a perfectly valid write got
     // SYSCALL_RESULT_BAD_USER_DATA without the handler ever running.)
     uint8_t user_ptr_arg_mask;
