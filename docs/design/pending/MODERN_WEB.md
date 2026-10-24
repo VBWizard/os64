@@ -3019,7 +3019,8 @@ size a script sets.
 
 Built by Opus on `opus/tmw-p2b-message`, from `userland` `bd7e1b75`, from
 the P2b brief and WINDOW_DOCUMENT.md § P2b. The builder's adversarial and
-truth passes are done; the cold read is next.
+truth passes and a cold read are done, the cold read's eight findings
+fixed (§ Review).
 
 **Why.** Three of the most-used members window lacked: `requestIdleCallback`
 (Chrome 54.2%, 343 kept pages), `postMessage` (52.1%, 194; its common use
@@ -3059,8 +3060,10 @@ of the table (LIBDOM.md § P2b's rows has every rule):
   again at every `timeRemaining()`; a `timeout` is a timer of the
   window's, which calls the callback timed out if no period ran it first.
 - **yonder** runs a page's posted messages and due timers by when each was
-  queued, a timer first on a tie, in every page's turn (`queued_task`), and
-  the shown page's idle callbacks when its turn finds nothing else to run;
+  queued, a timer first on a tie, in every page's turn (`queued_task`),
+  the view's events first in a turn once a rendering opportunity while
+  those keep coming (`yonder_scripts_view_due`), and the shown page's idle
+  callbacks when its turn finds nothing else to run;
   the bell brings the loop back while one is due and the ticker is offered
   the time the next idle period may start.
 
@@ -3142,6 +3145,7 @@ same-window `postMessage` is that design with the target the caller:
 | `d_clone_setup` | the intrinsics the pair calls, taken from a binding's global before any page ran, by each row that clones |
 | `D_EVENT_MESSAGE`, `_MESSAGEERROR` | event kinds window has handlers for, which the body reflects and a message's task fires |
 | `yonder_scripts_message_next` / `_fire`, `_idle_next` / `_run` (yonder `scripts.h`) | the binding's four, judged as a task's outcome |
+| `yonder_scripts_view_due`, `YONDER_SCRIPTS_VIEW_CADENCE_MS` | whether the view's events have gone unasked for a rendering opportunity (16 ms), which puts the view step first in `script_turn` |
 
 **Classic or modern.** All of it is the switch's: three rows, eight names.
 With it off nothing is queued and no idle callback exists, and a body's
@@ -3188,13 +3192,14 @@ failure. Replayed 232, clean 21, incomplete 46, unfinished 13 and 26
 unjudged on both sides.
 
 **Host**, the base → the head: the DOM host 14,052 / 92,372 checks →
-14,975 / 98,021 (allocation sweeps 1,211 / 13,827 → 1,333 / 14,729), 0
+15,149 / 100,625 (allocation sweeps 1,211 / 13,827 → 1,356 / 15,120), 0
 failed, `tools/test_dom_message.inc` holding a case per rule, the hostile
 cases (every intrinsic the clone calls replaced by the page first, getters
 that reach back in) and the sweeps of a clone, a message and an idle
-callback, binding and engine; the scripted-page host 7,864 → 7,912, 0
-failed, its new cases the setImmediate trick and an idle callback through
-yonder's loop; yonder's host, its stream and fetch-job hosts, the html-dom
+callback, binding and engine; the scripted-page host 7,864 → 7,925, 0
+failed, its new cases the setImmediate trick, an idle callback, and a
+page that posts itself messages for ever still hearing its resize, each
+through yonder's loop; yonder's host, its stream and fetch-job hosts, the html-dom
 host, the replay proof (43 fixture pages kept and replayed the same) and
 the WPT runner's self-test, all 0 failed; `make -C userland` builds.
 
@@ -3221,8 +3226,42 @@ handler lists, createEvent table, performance `detail` and proof
 boundary, DEBTS.md's body-handler row, and retired its "no DOMException,
 no structuredClone" row, both halves now paid.
 
+The cold read found eight, each fixed in its own commit with a case and a hand mutant
+that fails it, except where the fix is text:
+
+1. A getter that resized a resizable buffer mid-clone made the reader's
+   view refuse, after the transfer had detached the buffer. The view is
+   made in a copy grown through ArrayBuffer's own `resize` and shrunk
+   back, so it is out of bounds as the page's was; and nothing is
+   detached unless the whole clone succeeds (decision 5).
+2. A binding that took an exception could swallow the engine's
+   uncatchable interrupt: the clone's DataView getters turned a deadline
+   into a DataCloneError a page's catch heard. `d_exception_catchable` is
+   asked before every such take; every `JS_GetException` in libdom was
+   read and each fixed or left with its reason (the commit lists them).
+3. An unheard message dropped those behind it past a timer whose task
+   adds the listener; the queue now stops at one posted after the next
+   timer.
+4. `clearTimeout` of a guessed id cancelled an idle callback's timeout
+   (or `AbortSignal.timeout`'s); a timer the binding sets for itself is
+   flagged and only the binding cancels it.
+5. `initMessageEvent` changed the event before converting its later
+   arguments; it converts all eight first.
+6. clone.c claimed every walk runs under the task's deadline; it is
+   checked only where the walk calls into the engine (text, and a
+   DEBTS.md row).
+7. A page whose every message posts another starved the view's events;
+   they are asked first in the turn once a rendering opportunity
+   (decision 3).
+8. Three hand mutants survived: `messageerror` no page can reach (said
+   so in message.c, LIBDOM.md and here, the path kept for frames); a
+   refusal as the writer's memory table grows, which the allocation
+   sweep never met (its value holds more than 16 objects now); and
+   finding 2's, covered by its case.
+
 **Booked** (DEBTS.md § Classic browser scripting): a cloned
 length-tracking view tracks no length; a transferred ArrayBuffer is
 copied, not moved; a cloned DOMException's name and message end at a NUL;
 an idle period can start between any two of a busy page's tasks; a page's
-idle callbacks wait until it is shown.
+idle callbacks wait until it is shown; a clone of plain data is not
+stopped by its task's deadline.
