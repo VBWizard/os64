@@ -490,6 +490,11 @@ static void dom_message_event_cases(void)
         "c.initMessageEvent('t',true,false,{v:1},'o','id',window,[]);"
         "assert(c.type==='t'&&c.bubbles&&!c.cancelable&&c.data.v===1&&c.origin==='o'&&c.lastEventId==='id'&&c.source===window);"
         "throws('TypeError',()=>c.initMessageEvent('t',false,false,1,'','',null,[{}]));"
+        "const fresh=document.createEvent('MessageEvent');"
+        "throws('TypeError',()=>fresh.initMessageEvent('changed',true,true,2,'o','l',null,[{}]));"
+        "assert(fresh.type===''&&!fresh.bubbles&&fresh.data===null,'a throwing initMessageEvent leaves the event untouched');"
+        "throws('TypeError',()=>fresh.initMessageEvent('changed',true,true,2,'o','l',{}));"
+        "assert(fresh.type==='','nor does a source that is no window');"
         "let during;addEventListener('t',ev=>{ev.initMessageEvent('changed');during=ev.type});dispatchEvent(c);"
         "assert(during==='t','initMessageEvent does nothing during a dispatch');",
         "message: MessageEvent's interface");

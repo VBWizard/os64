@@ -1208,9 +1208,16 @@ enum {
  * the arguments in order), bubbles and cancelable, the stop-propagation,
  * stop-immediate and canceled flags cleared, isTrusted false (a host
  * event a page keeps and re-initializes is its own from then on), and no
- * target. -1 with an exception pending. */
-static int event_init(JSContext *ctx, DEvent *event, int argc, JSValueConst *argv, const char *who)
+ * target. -1 with an exception pending. Its two halves, the arguments
+ * converted (event_init_read: the type, engine memory, the caller's to
+ * free or hand to event_init_set) and the event changed, are for an init
+ * with arguments of its own to convert between them, so a conversion that
+ * throws leaves the event untouched. */
+typedef struct { char *type; bool bubbles, cancelable; } DInit;
+
+static int event_init_read(JSContext *ctx, int argc, JSValueConst *argv, const char *who, DInit *out)
 {
+    out->type = NULL;
     if (argc < 1) {
         JS_ThrowTypeError(ctx, "%s needs a type", who);
         return -1;
@@ -1223,15 +1230,29 @@ static int event_init(JSContext *ctx, DEvent *event, int argc, JSValueConst *arg
     int bubbles = argc > 1 ? JS_ToBool(ctx, argv[1]) : 0;
     int cancelable = argc > 2 ? JS_ToBool(ctx, argv[2]) : 0;
     if (bubbles < 0 || cancelable < 0) { js_free(ctx, copy); return -1; }
+    *out = (DInit){copy, bubbles != 0, cancelable != 0};
+    return 0;
+}
+
+static void event_init_set(JSContext *ctx, DEvent *event, DInit *init)
+{
     js_free(ctx, event->type);
-    event->type = copy;
-    event->bubbles = bubbles != 0;
-    event->cancelable = cancelable != 0;
+    event->type = init->type;
+    init->type = NULL;
+    event->bubbles = init->bubbles;
+    event->cancelable = init->cancelable;
     event->initialized = true;
     event->canceled = event->stop = event->stop_now = false;
     event->trusted = false;
     JS_FreeValue(ctx, event->target);
     event->target = JS_NULL;
+}
+
+static int event_init(JSContext *ctx, DEvent *event, int argc, JSValueConst *argv, const char *who)
+{
+    DInit init;
+    if (event_init_read(ctx, argc, argv, who, &init) < 0) return -1;
+    event_init_set(ctx, event, &init);
     return 0;
 }
 
@@ -2092,23 +2113,24 @@ static JSValue message_event_member(JSContext *ctx, JSValueConst self, int argc,
     if (event == NULL || !event->message_event) return JS_ThrowTypeError(ctx, "Expected a MessageEvent");
     if (magic != G_INIT) return JS_DupValue(ctx, event->detail[magic]);
     /* initMessageEvent(type, bubbles, cancelable, data, origin,
-     * lastEventId, source, ports): during a dispatch it does nothing, its
-     * arguments converted all the same. */
+     * lastEventId, source, ports): every argument converted, in order,
+     * before the event changes, so one that throws leaves it as it was;
+     * during a dispatch it then does nothing. */
     JSValueConst at[8];
     for (int i = 0; i < 8; i++) at[i] = i < argc ? argv[i] : JS_UNDEFINED;
+    DInit init;
+    if (event_init_read(ctx, argc, argv, "initMessageEvent", &init) < 0) return JS_EXCEPTION;
+    JSValue members[4];
+    if (message_members(dom, ctx, at[4], at[5], at[6], at[7], members) < 0) {
+        js_free(ctx, init.type);
+        return JS_EXCEPTION;
+    }
     if (event->dispatching) {
-        if (argc < 1) return JS_ThrowTypeError(ctx, "initMessageEvent needs a type");
-        const char *type = JS_ToCString(ctx, at[0]);
-        if (type == NULL) return JS_EXCEPTION;
-        JS_FreeCString(ctx, type);
-        JSValue members[4];
-        if (message_members(dom, ctx, at[4], at[5], at[6], at[7], members) < 0) return JS_EXCEPTION;
+        js_free(ctx, init.type);
         for (int i = 0; i < 4; i++) JS_FreeValue(ctx, members[i]);
         return JS_UNDEFINED;
     }
-    if (event_init(ctx, event, argc, argv, "initMessageEvent") < 0) return JS_EXCEPTION;
-    JSValue members[4];
-    if (message_members(dom, ctx, at[4], at[5], at[6], at[7], members) < 0) return JS_EXCEPTION;
+    event_init_set(ctx, event, &init);
     message_fields(ctx, event, JS_IsUndefined(at[3]) ? JS_NULL : JS_DupValue(ctx, at[3]), members[0], members[1],
                    members[2], members[3]);
     return JS_UNDEFINED;
