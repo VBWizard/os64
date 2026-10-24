@@ -513,6 +513,26 @@ int64_t gui_window_get_state(int64_t handle, os64_gui_window_state_t *out)
 	return 0;
 }
 
+// SYSCALL_GUI_WINDOW_SET_TITLE (65). The title arrives already copied into
+// kernel memory, so nothing here touches ring 3 while kGuiLock is held.
+// Only the encoding bit is a legal flag. Any other is refused rather than
+// ignored, so it stays free to mean something later.
+int64_t gui_window_set_title(int64_t handle, const char *title, uint64_t flags)
+{
+	if (title == NULL || (flags & ~(uint64_t)GUI_WINDOW_TITLE_UTF8) != 0)
+		return GUI_ERR_BAD_ARGS;
+	int64_t err;
+	uint64_t irqflags = gui_lock(GUI_LOCK_WINDOW);
+	window_t *win = handle_lookup_owned(handle, &err);
+	if (!win) {
+		gui_unlock(irqflags);
+		return err;
+	}
+	wm_set_title(win, title, (flags & GUI_WINDOW_TITLE_UTF8) != 0);
+	gui_unlock(irqflags);
+	return 0;
+}
+
 int64_t gui_window_focus(int64_t handle)
 {
     int64_t err;

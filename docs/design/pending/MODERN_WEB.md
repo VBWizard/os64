@@ -544,7 +544,12 @@ commit, in three sections: `[required]` (each must pass, or the run fails
 naming it), `[passing]` (the baseline: a lost pass fails the run, a new one
 is listed) and `[excluded]` (a page not run, with its reason). `--update`
 rewrites `[passing]` alone. A page whose harness did not end OK fails
-whole: a pass it reported prints as a FAIL that says so. Only a page run
+whole: a pass it reported prints as a FAIL that says so. (Since
+2026-10-24, by Opus's ruling on P2a, matching wpt.fyi: a harness that
+ended in ERROR on the page's own uncaught error or unhandled rejection,
+which the report script tells by testharness.js's own status and
+message, counts the tests the page completed; a timeout or any other
+harness error still fails the page whole.) Only a page run
 to a verdict may change the expectations, so `--update` writes last, and
 only for a run with no fault, at least one page, and no page left unrun (a
 source missing, too large or not read whole, or a file a page asked for
@@ -2298,6 +2303,595 @@ pages excluded by name: a later phase un-excludes what it names.
 **Booked** (DEBTS.md § Classic browser scripting): the QuotaExceededError
 interface. Not booked, by ruling: `subtle` (ruling 1), and `close()`
 (DIVERGENCES.md).
+
+### P1-Da, as built
+
+Built by Opus on `opus/tmw-p1da-document`, from `userland` at `c8d87b53`
+(#337 merged), from WINDOW_DOCUMENT.md § P1-Da (the contract) and Chris's
+addition of CustomEvent. The builder's adversarial and truth passes are
+done; the cold read is next.
+
+**What was built.** The 25 members of § P1-Da, the classic fix
+(`document.body`'s setter), and CustomEvent with createEvent's table
+(LIBDOM.md § P1-Da's rows):
+
+- **The document's state** (libdom `document.c`, a row of the Modern Web
+  table that puts nothing on window): `readyState` and
+  `onreadystatechange`, `visibilityState`, `hidden` and
+  `onvisibilitychange`, `prerendering` and `onprerenderingchange`,
+  `wasDiscarded`, `referrer`, `activeElement` and `hasFocus()`,
+  `currentScript`, `title` and its setter, `domain` and its setter, `URL`,
+  `documentURI`, `compatMode`, `dir`, `characterSet`, `charset`,
+  `inputEncoding`, `contentType`, `lastModified`, `rootElement` and
+  `clear()`. Each answers for the document it is asked of; a document of
+  its own answers what HTML gives one with no browsing context
+  (`complete`, `hidden`, no referrer, no focus, `about:blank`, its making's
+  content type).
+- **`document.body`'s setter**, HTML's: a body or frameset replaces the
+  body where it is, or is appended to the root; anything else is a
+  HierarchyRequestError (a non-HTML-element a TypeError), through the verbs
+  appendChild uses.
+- **CustomEvent** (`event.c`, a row of its own): the constructor, `detail`
+  (held in the Event's own record and traced with it, never a property a
+  page can reach) and `initCustomEvent`. **createEvent** reads DOM's table
+  (below).
+
+**The page in hand** (IFRAME.md § What the open slices do now). Every
+per-document answer comes from the host of the page the asking document
+is: the readiness is the page's script host's (`scripts.c`), the referrer
+and Last-Modified come from the stream that is fetching that page
+(`stream_request_facts`, from `g.stream`, which `scripts_host` already
+reads for the timing), `currentScript` is set by that page's own `run_item`,
+and the focus answer compares the asking document with the window's
+focused one (`script_focus`), so a page not yet shown has no focus and no
+`hasFocus()`. No new file-level static; the stream gained two fields (the
+address its navigation was asked from, and for a Reload the reloaded
+page's own referrer, which the page replacing it keeps though the Reload's
+request names nothing; a Reload is always of the page on screen).
+
+**How readyState tracks the host's dispatches.** One rule, one copy:
+`os64_dom_readiness_after` (dom.h) says DOMContentLoaded at the document
+moves `loading` to `interactive` and load at window moves either to
+`complete`. `os64_dom_dispatch` moves the binding's readiness by it before
+anything else, heard or not, and with the switch on fires
+`readystatechange` at the document as a task of its own just before the
+event, folding the two outcomes into one. yonder's host would not call the
+binding for an event nothing listens to, so it moves its own readiness by
+the same rule at every dispatch it is asked for, calls the binding when
+the readiness moved even if nothing hears the event, and hands the
+readiness to a binding it makes late (a page whose first script is a click
+after its load is born `complete`). The divergence, booked: yonder runs a
+page's deferred scripts before its DOMContentLoaded, so they read
+`loading` where HTML's are `interactive`.
+
+**createEvent's table, as built** (DOM § 4.5, matched without regard to
+ASCII case, with the switch on):
+
+| Asked | Made |
+|---|---|
+| `event`, `events`, `htmlevents`, `svgevents` | Event |
+| `customevent` | CustomEvent |
+| `hashchangeevent` | HashChangeEvent (its `oldURL` and `newURL` "") |
+| `touchevent` | NotSupportedError: on the table only where the legacy touch APIs are exposed, which a desktop does not do |
+| `beforeunloadevent`, `compositionevent`, `devicemotionevent`, `deviceorientationevent`, `dragevent`, `focusevent`, `keyboardevent`, `messageevent`, `mouseevent`, `mouseevents`, `storageevent`, `textevent`, `uievent`, `uievents` | a plain Event (the builder's ruling, below) |
+| anything else (`popstateevent`, `progressevent`, `foo`, `UİEvent`) | NotSupportedError |
+
+With the switch off `createEvent` makes a plain Event whatever it is
+asked, as before the arc, so the refusal goes with the switch.
+
+**Classic or modern.** The 25 members and CustomEvent are Modern Web rows:
+with the switch off none exists and no `readystatechange` fires. The body
+setter is a classic fix, every page's.
+
+**The seams, as they ended.**
+
+| Seam | What it is now |
+|---|---|
+| `os64_dom_options_t.readiness` | where the document stands as the binding is made; `LOADING`, the zero value, during the parse |
+| `os64_dom_readiness_after` (dom.h) | the readiness rule, pure; the binding's dispatch and yonder's host both move by it |
+| `os64_dom_options_t.referrer` | `document.referrer`, copied as the binding is made (`d_document_setup`) |
+| `os64_dom_options_t.last_modified` | the response's Last-Modified in epoch seconds, `OS64_DOM_NO_DATE` for none |
+| `os64_dom_options_t.focus` | the host's focused element in the window's document and whether the document has focus, asked at every read |
+| `os64_dom_set_current_script` | the script the host is running, held while named |
+| `way_head_t.last_modified` (libway) | the response's Last-Modified as written, copied from libfetch's head |
+| `yonder_scripts_options_t.referrer`, `.last_modified`, `.focus` | the same, from yonder's page in hand |
+| `D_EVENT_READYSTATECHANGE`, `_VISIBILITYCHANGE`, `_PRERENDERINGCHANGE` | the document's handler types, with no content attribute (`content_attribute` in event.c) |
+
+**Numbers.** WPT, the base (`c8d87b53`) → the head, passes of tests run
+with the same exclusions on both sides (every `[required]` test fails with
+the switch off):
+
+| Directory | Before | After | `[required]` | `[excluded]` pages |
+|---|---|---|---|---|
+| `html/dom` (its `documents/` pages now run) | 33 of 115 | 79 of 115 | 39 (+ P1-W's 1) | 230 |
+| `page-visibility` | 0 of 8 | 8 of 8 | 8 | 8 |
+| `html/interaction/focus` | 10 of 120 | 13 of 120 | 2 | 168 |
+| `dom/events` | 167 of 461 | 170 of 461 | 2 | 114 |
+| `dom/nodes` | 1,537 of 4,969 | 1,718 of 4,969 | 190 (+ 0a's) | 0 |
+| `xhr` | 346 of 1,188 | 346 of 1,188 | 37 renamed | as before |
+
+What the numbers say:
+
+- html/dom's base passes include 21 of `document.title-05`'s and one of
+  `-03`'s, which an expando passes with no title at all, and ten of
+  `Document.body`'s classic getter; [required] leaves those out. What still
+  fails there wants something else: `createElementNS` (P1-Db), the
+  HTML element interfaces (`HTMLBodyElement`, `HTMLTitleElement`),
+  `DOMParser`, an XML document in no namespace, and `Document.currentScript`'s
+  page, whose harness times out on its `data:` and cross-origin scripts and
+  its frame, and whose DOM-inserted inline script runs after the
+  `appendChild` that connected it rather than inside it.
+- html/interaction/focus's one P1-Da page (`document-level-apis`) runs 2 of
+  3; the third is `focus()` taking effect inside its task (the scope guard,
+  below). Its frame test never starts, and `document-has-system-focus`
+  opens a window.
+- dom/nodes' `Document-URL`, `Document-characterSet-normalization-*` and
+  `Document-contentType/` pages, which the contract named, load frames,
+  and run no test here; dom/nodes' gain is createEvent's table (Document-
+  createEvent's aliases and refusals) and the documents of their own's
+  content types. It also LOST nine: `Node-baseURI`'s tests passed while
+  both `node.baseURI` and `document.URL` read undefined, and fail now the
+  URL is there (DEBTS.md books `baseURI`).
+- xhr's required tests are named by their page's title (`undefined
+  (CONNECT)` while there was none); the expectation file names them by the
+  titles they have now.
+
+- Elsewhere, css/cssom-view gains one (`compatMode` in quirks mode) and
+  encoding two (`characterSet` after a BOM and without sniffing).
+
+Every expectation directory (30) passes at the head both ways.
+
+The corpus, 2026-10-22b replayed at the base and the head
+(`2026-10-22b_p1da-before` and `-after`). The records census window
+globals only, so of P1-Da's names only CustomEvent can be MISSING: it was
+in 46 page files (73 asks) and is in none. The FAILED lines that named a
+P1-Da member are gone: `'initCustomEvent' is not a function` 11 → 0 (in 11
+records; the banking SDK's common.js is in 3 of them and now runs) and
+`'CustomEvent' is not defined` 16 → 0. Over the 232 pages judged on both
+sides, FAILED lines 383 → 233. Replayed 239 → 232, clean 21 → 21,
+incomplete 24 → 37, unfinished 13 → 13, unjudged 19 → 26. The diff: 57
+pages of progress and 34 "regressions", all next walls (pages that died
+at `currentScript`, `referrer`, `readyState` or `CustomEvent` now run on
+into `ResizeObserver`, `IntersectionObserver`, `getClientRects`,
+`ReadableStream`, `createElementNS`, `requestAnimationFrame` and the like;
+two pages of one site now run their DOMContentLoaded handler on past the
+replay's 5 s, where it died at once before). The seven newly unjudged
+pages are one site's: its scripts now get far enough to run a timer about
+every 100 ms for the whole 60 s replay, and each of its 617 timer tasks is
+a fact line, past the record's 512 (`YONDER_DIAG_FACTS_MAX`), so the
+record says it lost lines. 17 pages are newly incomplete (and 4 that were
+are not): they ask for scripts their kept copies never fetched, because
+they now get far enough to, and the corpus must be recorded again to judge
+them.
+
+Host, the base → the head: the DOM host 12,285 / 85,476 checks → 13,032 /
+87,637 (allocation sweeps 1,093 / 13,109 → 1,161 / 13,400),
+`tools/test_dom_document.inc` holding a case per sentence of document.c's
+contract; the scripted-page host 7,601 → 7,629 checks,
+`tools/test_yonder_document.inc` holding the end-to-end cases; yonder's
+host 1,914 checks; the replay proof and the WPT runner's self-test pass;
+`make -C userland` builds.
+
+**The acceptance.** A banking SDK's common.js died at load on `TypeError:
+'initCustomEvent' is not a function`. Its idiom (`createEvent('CustomEvent')`,
+`initCustomEvent('x', true, true, {a:1})`, `dispatchEvent`) works in the
+DOM host and end to end through yonder's loop, and the corpus's kept copy
+of that file runs without the failure in all three records that had it.
+
+**What the scope guard stopped.** Two things, each reported with nothing
+worked around:
+
+- **The window's title.** The contract said yonder's window title follows
+  `document.title` after the task. It cannot: yonder names its window once,
+  before any page arrives, and the GUI has no verb that renames a window
+  (`SYSCALL_GUI_WINDOW_CREATE` takes the only title). That is a kernel GUI
+  change. `document.title` and its setter are built, and the end-to-end
+  case proves the title yonder reads of the page (`title_of`) is the one
+  the script set; the title bar does not move here. Chris ruled that it
+  follows: the GUI verb and yonder's call to it are their own branch and
+  PR (`opus/gui-window-title`), which pays the DEBTS.md row.
+- **`focus()` inside its task.** `activeElement` reads yonder's focus
+  through the hook, but a script's `focus()` is an ask the window carries
+  out after the task, so `el.focus(); document.activeElement === el` is
+  false in that task. Making it synchronous means a script's task reaching
+  the widgets, which the asks design keeps it from; that is more than a
+  hook (DEBTS.md). `activeElement` also follows only the form controls the
+  widgets focus.
+
+`readyState` needed no more than a hook: the readiness move above is the
+host's own dispatch function and its host struct.
+
+**Review.** The builder's adversarial pass looked for page code reaching
+the binding's state (detail lives in the Event's record; createEvent's
+`HashChangeEvent` defaults are defined on the new object, as its
+constructor does), a value's conversion running page code after the tree
+was read (title's setter converted first; `dir`'s did not, and a
+conversion that took the html element away left the setter writing to the
+element it had found: fixed, with a case), work a page can size (title's
+walk and text are linear, the table is fixed), the readiness skipping a
+move nothing heard (yonder's host now calls the binding for a move), a
+`readystatechange` that throws or runs out of time (its failure is the
+dispatch's outcome; a sticky one ends the dispatch), the focus hook
+answering for another page's document (it compares documents), and a held
+`currentScript` outliving its binding (released at free). The truth pass
+corrected WINDOW_DOCUMENT.md's two contract sentences (the title bar, and
+"which the binding already sees"), the appendix's `hasFocus` rows, and
+DEBTS.md's row that listed `document.title` and `document.referrer` as
+absent.
+
+A fresh cold read of `8db3cf0c` found no P1 or P2, and four P3s, each
+fixed with a case where it is code: title's setter wrote an HTML title
+inside a document whose root is in neither the SVG nor the HTML namespace
+(it now changes nothing there); `initEvent` and `initCustomEvent` left a
+host event's `isTrusted` true (DOM's "initialize" clears it); a Reload
+lost the page's `document.referrer` (now kept, for the button, a form
+sent again and `location.reload()`); and WINDOW_DOCUMENT.md's appendix
+still said `body` had no setter. The arc lead's design read then ruled on
+the two questions below: createEvent as built, and the title bar to its
+own PR.
+
+**Rulings taken by the builder, for the cold read.**
+
+- **createEvent's unbuilt interfaces make a plain Event, not
+  NotSupportedError.** DOM refuses a name on its table whose interface is
+  not exposed, and Chris asked for the refusal. The corpus says
+  `createEvent('MouseEvents')` is in 66 kept pages' scripts and is followed
+  by `initEvent` 56 times (by `initMouseEvent` 23), which is how pages
+  dispatch a synthetic click: today that works, and the refusal would turn
+  every one into an exception. So the table's names whose interfaces are
+  not built answer as every name did before, and a name off the table is
+  refused; `TouchEvent` is refused because a desktop does not expose it
+  (its success tells touch detection the machine is a phone: 15 kept
+  pages ask). Flipping the ruling is one table column (`creatable` in
+  event.c). The arc lead's design read agreed with it.
+- **`hasFocus()` is "the page on screen".** yonder does not follow its GUI
+  window's focus events; following them is a small yonder change no
+  contract line names (DEBTS.md).
+- **`lastModified` of a kept or replayed page is "now"**: replay records do
+  not keep the Last-Modified header. A Last-Modified of exactly the epoch
+  reads as none (yonder's options use 0 for none).
+- **html/interaction/focus and dom/events are run whole but for their frame,
+  test_driver and second-window pages**, excluded by name with that
+  reason, so their baselines hold the event and focus machinery P1-Da
+  sits on.
+
+**Booked** (DEBTS.md § Classic browser scripting): the title bar,
+`focus()` after its task, `hasFocus` and visibility without the window's
+state, deferred scripts' `loading`, the referrer after a traversal,
+`domain` without the public-suffix list, createEvent's plain Event for
+unbuilt interfaces, and `Node.baseURI`.
+
+### P2a, as built
+
+Built on `opus/tmw-p2a-errors`, from `userland` `c8d87b53`, from the P2a
+brief and WINDOW_DOCUMENT.md § P2a. The builder's adversarial and truth
+passes, the cold read, and the answers to its six findings are done
+(**Cold read**, below).
+
+**Why.** Pages on which "nothing happens": a Run button that does
+nothing, and a record whose every script "ran". The brief's premise, that
+a rejection was dropped, was half right. libjs already judged the first
+unhandled rejection of a turn or a task, and yonder wrote it as a FAILED
+line with the bare reason (`FAILED script X: lost`, indistinguishable from
+an exception's). What was silent: every rejection after the first in a
+task, and every one in a task that also threw; no page could hear any of
+its own failures. Both are answered here.
+
+**What was built.** The five members and two interfaces of § P2a, one row
+of the table: window's `onerror`, `onunhandledrejection`,
+`onrejectionhandled` and `reportError`, the document's `onerror`, and
+`ErrorEvent` and `PromiseRejectionEvent` (libdom `report.c`; the
+interfaces and the handler rules in `event.c`; LIBDOM.md § P2a's rows has
+every rule).
+
+- **libjs's script host** (CONTRACT.md § A script host, the one change to
+  the wrapper; QuickJS itself is untouched). `os64_js_set_script_host`
+  gives a host every exception the wrapper catches, a hook for a handler
+  added to a rejection it took, and one asked as a promise is rejected,
+  whose answer the rejection carries to the host (the binding answers
+  with the rejecting script); with a host set, no checkpoint
+  judges a rejection, and `os64_js_take_rejection` hands them over, oldest
+  first, only between calls with no job runnable. The tracker's list,
+  walked for every rejection and every handler (n squared in a turn's
+  rejections, bounded only by the deadline), is a table keyed by promise.
+- **The binding is the host** on every page. An exception libjs caught is
+  the window's `error` event at the task's next turn between calls; one the
+  binding caught while a script ran (a nested dispatch, a handler compile,
+  `reportError`) is the event at once; a rejection a checkpoint left
+  unhandled is an `unhandledrejection` after it, each followed by a
+  checkpoint; a reported promise a later handler reaches is a
+  `rejectionhandled`, and one reached during its own event is not. All of
+  it runs in the task the failure happened in, under its deadline (a
+  listener that rejects for ever ends as any loop does). Window's `onerror`
+  keeps HTML's special handling: called with five arguments, cancelled by
+  `true`, compiled from the body's attribute as a function of five.
+- **What an event says is read without page code**: an Error's or a
+  DOMException's name and message through data properties of ordinary
+  objects and errors only (no getter, no proxy trap), the place from the
+  first placed frame of an Error's own stack (where the running script is
+  when the binding reports and the value has none), the filename the
+  address of the script whose failure it is, else the page's.
+- **Muted errors.** What a script from another origin than the page's (the
+  host fetches every script without CORS) throws or reports is told to the
+  page as `Script error.` and nothing more, and its rejections fire no
+  event, nor a `rejectionhandled` when a handler reaches one later. ONE
+  rule, never parsed from stack text (Opus's ruling on the cold read):
+  every script is compiled under a synthetic name the binding owns,
+  `os64-script:<n>`, which it maps to the script's address and whether it
+  is muted, and a failure is muted by the script that was RUNNING when the
+  value was thrown, rejected or reported. A rejection and `reportError`
+  ask QuickJS's public `JS_GetScriptOrModuleName` as they happen (libjs's
+  new `rejected` hook asks it while the rejecting code is still on the
+  stack); an exception, whose frames are gone when it is caught, is the
+  script the host was running or the one whose callback the binding
+  called, each callback's script read through `Function.prototype`'s own
+  `fileName` getter as it was handed over, else the script handing it over
+  (a bound function, one `eval` made). Muted promises the binding took are
+  kept in a WeakSet of its own, so a later handler's `rejectionhandled` is
+  swallowed. A handler attribute and a string timer are the page's, as
+  HTML makes them; a function of another site's that the page's own code
+  calls and that throws through it is the page's failure, as HTML's "run a
+  classic script" reports it. The record keeps them all whole: it is the
+  person's. Its cost: `error.stack` names `os64-script:<n>`, not the
+  address (DEBTS).
+- **The record.** A rejection no listener cancelled is the task's failure,
+  `unhandled rejection: <reason>`; the first a task meets is its outcome
+  (unless it already failed), and each after it reaches the host through
+  `options.failed`, which yonder records under the same key. With the
+  switch off no event is fired and every unhandled rejection is a line.
+  The console the brief names is yonder's status line, which says a
+  task's first failure as it always has.
+- **yonder** runs each script under `os64_dom_script_name`'s name for it
+  and follows it with `os64_dom_script_ended` (scripts.c's `run_item`),
+  and gives libdom `options.failed`. A `src` script is named, muted and
+  recorded by the address its response came from after any redirects
+  (`yonder_scripts_fetched`), not the one asked for: a same-origin address
+  that redirects to another site is that site's script.
+
+The record line, for the brief's case (an async click handler that
+throws):
+
+    FAILED script click event: unhandled rejection: TypeError: in a click (1)
+
+and for a script's: `FAILED script http://fixture.test/final#inline-1:
+unhandled rejection: Error: from the script (1)`.
+
+**The frame rule** (IFRAME.md § What the open slices do now, last
+bullet). yonder's one change is in `yonder_scripts_t`, the page's own
+script host: no `g.page`, no new file-level static. The events go to the
+window of the binding whose runtime failed, which is the page whose script
+it was.
+
+**The seams, as they ended.**
+
+| Seam | What it is now |
+|---|---|
+| `os64_js_set_script_host` (libjs `js_engine.h`) | a host's `exception`, `handled` and `rejected` hooks (`rejected` asked as a rejection is tracked, its answer the rejection's tag); with one set, rejections wait to be taken; NULL clears it, even on a failed runtime |
+| `os64_js_take_rejection` | the oldest rejection still unhandled, as new references, with its tag; false inside a call, on a failed runtime, without a host, or with jobs runnable |
+| `os64_dom_script_name` (libdom `dom.h`) | the name the host compiles a script under, `os64-script:<n>`, standing for its address |
+| `os64_dom_script_ended` | what a script the host ran left owed, settled in a task of its name, folded into its outcome |
+| `os64_dom_options_t.failed` | a rejection past a task's first failure, told to the host for its record |
+| `D_EVENT_ERROR`, `_UNHANDLEDREJECTION`, `_REJECTIONHANDLED` | event kinds window has handlers for, which the body reflects and the binding fires |
+
+**Classic or modern.** The seven names are one row. Being the script
+host, and the record's rejection lines, are every page's: the record is
+yonder's, not surface a page detects.
+
+**Numbers.** WPT, the base (`c8d87b53`) → the head:
+
+| Directory | Before | After | `[required]` |
+|---|---|---|---|
+| `html/webappapis/scripting` (new) | 39 of 271 | 111 of 277 | 72 |
+| `html/webappapis/microtask-queuing` | 5 of 8 | 6 of 8 | 6 (+1) |
+| `xhr` | 345 of 1188 | 347 of 1188 | +2 |
+| `secure-contexts` | 0 | 1 of 34 | 0 |
+
+Every required test fails with the switch off. What still fails in the new
+directory: an inline script's line, counted from the script; a thrown
+non-Error's line; `body.onerror` as a
+property; `data:` scripts; the rejection pages that queue a task with
+`<details>` toggle or a microtask with MutationObserver (the main
+`promise-rejection-events.html` fails whole on them); readystatechange,
+requestAnimationFrame, createImageBitmap; frames and workers.
+
+**Four directories lost passes, and the runner's rule was ruled.**
+Before P2a no harness could hear a page's uncaught error; now
+testharness.js does, as in every browser, ends the page in ERROR, and the
+runner failed such a page whole. As first built, five pages lost 330
+passes, 9 of them required, none of it a change in what yonder does:
+
+| Directory | Page | The page's own failure | Lost (required) |
+|---|---|---|---|
+| `dom/nodes` | `Element-classlist.html` | `createElementNS` absent (P1-Db) | 283 (0) |
+| `dom/nodes` | `insertion-removing-steps/later-script-removed-by-earlier-script.html` | an inserted script runs after its insertion, not during it, so its own assertion fails | 2 (0) |
+| `html/browsers/the-window-object` | `window-properties.https.html` | no frame (`contentWindow`) | 36 (0) |
+| `css/cssom` | `getComputedStyle-detached-subtree.html` | no frame (`contentDocument`) | 1 (1) |
+| `fetch/api/response` | `response-stream-disturbed-1.any.html` | a released reader's `closed` rejects unhandled (DEBTS; the binding cannot mark it handled) | 8 (8) |
+
+Opus ruled, 2026-10-24, matching wpt.fyi, for the builder's lean: a
+harness that ended in ERROR on the page's own uncaught error or unhandled
+rejection counts the tests the page completed; a timeout or any other
+harness error still fails the page whole. The report script tells the
+two apart by what testharness.js reports, not by the wording: the
+harness's status is ERROR and its message is the one testharness.js made
+of an `error` or `unhandledrejection` event the page raised at window,
+which capturing listeners of the report script's, running before
+testharness.js's own, wrote down; it writes such a harness PAGE_ERROR,
+and the runner says so on the page's HARNESS line and in its summary
+(§ Slice 0a, as built, has the dated rule; three selftest pages hold the
+page's own error, its own rejection, and a harness error that is neither).
+Under it all five pages recover, all 330 passes and all 9 required tests
+(response-stream-disturbed-1's eight too: its harness ends on the page's
+own unhandled rejection, the DEBTS row's); no pass is lost in any of the
+28 directories, each passing both ways; and three are new: xhr's
+`thrown-error-in-events.html` pair (an error in a request's load listener
+reaching `window.onerror`, P2a's, now required) and secure-contexts'
+`basic-dedicated-worker.https.html` "HTTP worker", completed before its
+page's own error.
+
+The ruling also found a muting bug: a page whose address has a query the
+address parser refuses (a space the WPT runner's variant addresses leave
+unescaped) read no origin, so every script on it, its own included, was
+taken for another site's, and xhr's timeout pages said `Script error.`.
+An origin is read now from the address before its query and fragment,
+and a name that is no address with a tuple origin is never another
+site's.
+
+**The corpus**, 2026-10-22b replayed at the base and the head
+(`2026-10-22b_p2a-before` and `-after`): 10 page records now carry an
+`unhandled rejection:` FAILED line (16 lines), every one a failure the
+base already recorded under the bare message; none newly visible in this
+corpus. FAILED lines 428 → 428 in 142 pages both sides; MISSING 9070 →
+9052 (the row's names: `PromiseRejectionEvent`, `onerror`,
+`onunhandledrejection`, `reportError`). The diff's 16 "regressions" are
+those 6 relabelled records and 10 records of one site whose own
+error-reporting code now runs, finds `onerror`, and reads three or four
+globals of its own that are not there (no FAILED line). 9 records are newly
+incomplete: they now ask for a navigation (a challenge script that gets
+further) or a script the corpus did not keep, which a re-recorded corpus
+answers. Replayed 239, clean 21, unfinished 13 and 19 unjudged on both
+sides. Replayed again at the head after the cold read's answers
+(`2026-10-22b_p2a-final`), the corpus differs from the first head's in no
+line of any page: muting decides events, which no record holds, and no
+kept page's record moved for the stack's new names.
+
+Host, at the head: libjs's runtime host 1,154 checks (the script host's
+cases among them, the `rejected` tag's) and its sanitized profile, 0
+failed; the DOM host 13,294 / 90,070 checks, allocation sweeps 1,143 /
+13,513, 0 failed, `tools/test_dom_report.inc` holding a case per rule of
+§ P2a's rows and one per cold-read probe and Codex finding; the
+scripted-page host 7,601 at the base → 7,678, 0 failed; yonder's host 1,914, 0 failed; the replay
+proof, 42 fixture pages (`failures.html` new) kept and replayed the same;
+the WPT runner's self-test, its three new pages among it; `make -C
+userland` builds.
+
+**Review.** The builder's adversarial pass looked for page code a failure's
+description could run (getters, proxy traps, a page's `toString`, a page's
+`Error`: each read is a data property of an ordinary object or error, and
+the place-finding Error is the intrinsic constructor, taken before any page
+ran), work a page can size (a thousand rejections or ninety throwing
+microtasks in one task, each an event, linear; the wrapper's table), a page
+that never stops failing (a rejection made in its own `unhandledrejection`
+ends at the task's deadline), recursion (an error inside an error listener
+reaches no page), a cross-origin script's failures (muted by its address
+and by the frames of what it threw), and what the binding keeps (two lists
+in the budget, released at drain, counted in the registry). It moved
+muting from the script's address alone to the thrown Error's frames as
+well, made a non-Error object's message readable, and stopped one proxy
+trap that reading an error's place could reach. The truth pass corrected
+dom.h's dispatch and take-report comments, the handler lists in LIBDOM.md
+§ Events, and CONTRACT.md's rejection paragraph. (The muting this pass
+built, by address and by an Error's frames, is the one the cold read
+walked past; what replaced it is above, under **Muted errors**.)
+
+**Rulings taken by the builder, for the cold read.**
+
+1. An exception's FAILED line is written whatever an error listener did:
+   a page that cancels its errors (`onerror` returning true) keeps them
+   on the record. A rejection follows the brief: cancelled, no line. The
+   lean is that the record is the person's, so neither should be
+   hideable; the brief's rule for rejections is kept as given.
+2. No element has an `onerror` property (`document.body.onerror` is an
+   expando), though any element's `onerror` attribute is a handler for an
+   `error` event dispatched at it: nothing fires `error` at an element yet.
+3. A failure's events fire in its own task, where HTML queues one (DEBTS).
+4. `onerror`'s location is the engine's (DEBTS): an inline script's line
+   from the script, a non-Error's line 0.
+
+**Cold read** (a fresh Opus, after the runner's ruling): one P1, three
+P2s on muting, a P3 and a sixth, each answered in a commit of its own.
+
+- **P1, a freeze a page sizes.** Every rejection past a task's first
+  failure went to `options.failed`, and yonder's record found each line
+  by walking every kept and lost line, all in C that the take loop runs
+  with no script running, so no deadline ended it: a `setInterval`
+  rejecting 200,000 promises froze the window about 22 s a task, for
+  ever. libdom now tells a task's first sixteen one by one
+  (`D_REJECTIONS_TOLD`, named once) and counts the rest into one line as
+  the task closes, `and <n> more unhandled rejections`, computing no
+  text for them; yonder's record finds every line by its key through an
+  index of its own and counts its probes. The bound cases: 200,000
+  rejections in one script call the host 17 times, the last line `and
+  199983 more unhandled rejections`; 100,000 failures over 6,000 lines
+  cost the record under eight probes each; a page's thousand rejections
+  are 18 lines found in under 2,000 probes.
+- **P2s, muting walked past** (one probe each, now a case each in
+  `tools/test_dom_report.inc`'s muting cases): an address with `?(` in it
+  left the stack's place unreadable, so the listener's Error was told
+  whole; a value that is no Error (a thrown or rejected string) carries
+  no stack, so it was told whole; and a muted rejection a handler
+  reached later fired `rejectionhandled` with its reason. Opus ruled the
+  rule above, **Muted errors**, recorded here and in LIBDOM.md: one
+  rule, never parsed from stack text, by the binding's own names for
+  scripts. No QuickJS change was needed: `JS_GetScriptOrModuleName` and
+  `Function.prototype.fileName` are public, and the `rejected` hook is
+  the wrapper's. CONTRACT.md's `handled()` text is made true for a
+  rejection the runtime could not hold (an allocation refused in the
+  tracker fails the runtime, and a failed runtime calls no hook). The
+  cases: the `?(` address, the later-handled rejection (by its own
+  script's listener and by the page), a non-Error thrown and rejected by
+  a listener and thrown at a script's top level, `reportError` from the
+  script and from its listener, a bound listener, a function `eval`
+  made, a bound microtask and a bound timer, and a function of theirs
+  the page calls rejecting: each "Script error." or no event. A
+  same-origin script's listener error and rejectionhandled are told
+  whole. A report sweep runs another site's script, so muting's own
+  allocations are refused in turn. With each script known by name, an
+  error event names the address of the script whose failure it is, a
+  listener's and `reportError`'s included, so `reporterror.any.js`'s
+  three value tests now pass and are required (scripting 108 → 111);
+  the other 27 directories are unchanged, both ways.
+- **P3, an error event after its microtasks.** A timer callback's
+  exception is now fired between the call and the checkpoint after it,
+  as a listener's was. A script the host ran is not local (libjs opens no
+  task while jobs wait), so it is booked beside "A failure's events fire
+  in its own task", and the WHEN paragraphs say so.
+- **The binding's own report stood past its task** when the task had
+  failed otherwise, to be taken by the next task under that one's name.
+  `d_task_close` now settles it whatever the outcome: the outcome when
+  that is OK, else a line through `options.failed`.
+
+**Codex, round 1** (on 3dbf313a): three P2s, each fixed with its case.
+A rejectionhandled fired in the same pass as the listener that earned it,
+before the handler's reaction ran; the settle now fires those reached
+before each checkpoint and leaves the rest for the pass after the next.
+A task's first report was written down with JS_ToCString, which runs a
+value's getters and toString; it is read as an event's message is. And a
+same-origin `src` that redirected to another site was muted (and named)
+by the address asked for; the response's address after its redirects is
+now the script's. What else turns a page value into record text: libjs's
+exception diagnostic, which converts the thrown value as it always has,
+inside the wrapper's guard and under the task's deadline (runtime.c's
+`diagnostic`); every reader of the binding's own is non-executing.
+
+**Codex, round 2** (on 09433ee1): a P1 and a P2 fixed, a third declined
+with evidence. The P1: a script that dispatched to another script's
+listener came back with the task's last-called script naming the
+listener's, so another site's script that dispatched to a page listener
+and then threw was told whole. Every call into a page callback now goes
+through one pair, `d_script_enter` and `d_script_leave`, which keeps all
+the muting state and puts it back (a nested dispatch's listener, and the
+error events fired at once, all of it; a host dispatch's listener and a
+timer's callback, a task's own calls, keep the task's last-called script
+for the checkpoint after them). The P2: two rejectionhandled events in
+one pass fired back to back; an event that leaves a job runnable now
+sends the rest to the pass after the next checkpoint, as an
+unhandledrejection already waited. The third, the runner's classifier
+reading a rejection reason's message twice, matters only for a reason
+whose message changes between reads, and no page of the pinned WPT
+makes one (the one `get message()` there is reportError's argument in
+`reporterror.any.js`, which no rejection carries).
+
+**Booked** (DEBTS.md): an error event's place; the events in the failing
+task; a script's microtasks before its error event; the stack naming
+`os64-script:<n>`; muted `crossorigin` scripts; a task's second exception; the body's
+IDL for the three new handlers; and, for 0011b and Fable, an Error made by
+code compiled under memory pressure reading past a heap block in
+`build_backtrace`, which P2a's first engine sweep (compile and run both
+inside the cut) reached and the reshaped one (compiled first) does not.
+The released reader's `closed` row is re-stated: its cure is an engine
+verb that sets a promise's handled flag, which is a libjs patch and
+Fable's to rule.
 
 ### Loud elements, as built
 

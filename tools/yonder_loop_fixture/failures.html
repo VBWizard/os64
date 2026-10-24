@@ -1,0 +1,33 @@
+<!doctype html><meta charset="utf-8"><title>A script's failures</title>
+<h1>A script's failures</h1>
+<p>Each line below is a failure the page's own handlers heard. The page's
+record lists the ones nothing handled as FAILED lines.</p>
+<button id="async">An async click handler that throws</button>
+<ol id="heard"></ol>
+<script>
+function heard(what) {
+  var li = document.createElement('li');
+  li.textContent = what;
+  document.getElementById('heard').appendChild(li);
+}
+window.onerror = function (message, source, lineno, colno) {
+  heard('error: ' + message + ' (line ' + lineno + ', column ' + colno + ')');
+};
+window.onunhandledrejection = function (event) {
+  heard('unhandledrejection: ' + event.reason);
+};
+window.onrejectionhandled = function (event) {
+  heard('rejectionhandled: ' + event.reason);
+};
+var late = Promise.reject(new Error('handled late'));
+Promise.reject(new Error('never handled'));
+Promise.reject(new Error('caught at once')).catch(function () {});
+document.getElementById('async').addEventListener('click', async function () {
+  throw new TypeError('thrown by an async click handler');
+});
+setTimeout(function () { late.catch(function () {}); }, 20);
+setTimeout(async function () { throw new RangeError('thrown by an async timer'); }, 40);
+</script>
+<script>
+undefinedFunction();
+</script>

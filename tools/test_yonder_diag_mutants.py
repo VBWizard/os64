@@ -169,8 +169,12 @@ mutants = [
      '        if ((void)waiting, g.page.waiting == 0 && s_web.waiting == 0)', WINDOW),
     # #280 round 4: a line that met no room is counted once.
     ('lost-lines-recount', DIAG,
-     '    for (uint32_t i = 0; i < t->ngone; i++)\n        if (same_key(&t->gone[i], a, b, both))\n            return;\n',
+     '    if (list_find(&t->by_gone, t->gone, t->ngone, a, b, both) >= 0)\n        return;\n',
      '    (void)both;\n', WINDOW),
+    # P2a's cold read: a line is found by its key, never by walking the record.
+    ('lookup-walks', DIAG,
+     '    if (slot != NULL)\n        return *slot != 0 ? (int64_t)*slot - 1 : -1;\n',
+     '    (void)slot;\n', WINDOW),
     ('forget-keeps-the-lost', DIAG,
      '    for (int k = 0; k < 2; k++) {',
      '    for (int k = 0; k < 1; k++) {', WINDOW),

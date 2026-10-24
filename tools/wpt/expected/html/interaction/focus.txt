@@ -1,0 +1,187 @@
+# WPT's html/interaction/focus in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/interaction/focus --update
+# rewrites [passing].
+[required]
+# P1-Da: activeElement and hasFocus(). Each fails with the switch off.
+document-level-focus-apis/document-level-apis.html	The body element must be the active element if no element is focused
+document-level-focus-apis/document-level-apis.html	The hasFocus() method must return false if the Document has no browsing context
+[excluded]
+chrome-object-tab-focus-bug.html	needs test_driver input, which the runner does not have
+document-level-focus-apis/document-has-system-focus.html	opens a second window (P3a)
+focus-01.html	needs test_driver input, which the runner does not have
+focus-02.html	needs test_driver input, which the runner does not have
+focus-input-type-switch.html	needs test_driver input, which the runner does not have
+focus-keyboard-js.html	needs test_driver input, which the runner does not have
+focus-management/focus-event-view.html	needs a frame (IFRAME.md, Tier 1)
+focusgroup/tentative/ax-role-inference-children.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/ax-role-inference-top-layer.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/does-not-move-when-on-focusgroup-root.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/does-not-move-when-on-non-focusgroup-item.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/does-not-move-when-only-one-item-and-wraps.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/does-not-move-when-only-one-item.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/does-not-move-when-outside-focusgroup.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/does-not-wrap-when-not-supported.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/horizontal/does-not-ascend-out-of-focusgroup.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/horizontal/does-not-move-when-axis-not-supported.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/horizontal/does-not-wrap-in-orthogonal-axis.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/horizontal/moves-when-only-current-axis-supported.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/horizontal/wraps-in-axis.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/moves-to-previous-item-and-skips-focusable-item.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/moves-to-previous-item.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/skips-non-focusgroup-subtree.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/skips-root-focusgroup-complex-case.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/skips-root-focusgroup.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/vertical/does-not-ascend-out-of-focusgroup.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/vertical/does-not-move-when-axis-not-supported.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/vertical/does-not-wrap-in-orthogonal-axis.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/vertical/moves-when-only-current-axis-supported.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/vertical/wraps-in-axis.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/wraps-successfully-complex-case.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/backward-navigation/wraps-successfully.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/behavior-first-requirement.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/behavior-token-anywhere.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/behavior-tokens/grid.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/behavior-tokens/listbox.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/behavior-tokens/menu.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/behavior-tokens/menubar.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/behavior-tokens/none.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/behavior-tokens/radiogroup.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/behavior-tokens/tablist.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/behavior-tokens/toolbar.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/descendant-navigation/deeply-nested-items.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/descendant-navigation/mixed-content-navigation.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/descendant-navigation/simple-descendant-test.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/descendant-navigation/various-element-types.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/descendant-navigation/wrapping-with-descendants.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/feed-navigation.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/feed-role-inference-item.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/feed-role-inference-owner.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/focusgroupstart-basic.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/focusgroupstart-scope-owners.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/focusgroupstart-tree-pattern.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/forward-navigation/does-not-move-when-on-focusgroup-root.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/forward-navigation/does-not-move-when-on-non-item.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/forward-navigation/does-not-move-when-only-one-item-and-wraps.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/forward-navigation/does-not-move-when-only-one-item.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/forward-navigation/does-not-move-when-outside-focusgroup.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/forward-navigation/does-not-wrap-when-not-supported.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/forward-navigation/horizontal/does-not-move-when-axis-not-supported.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/forward-navigation/horizontal/moves-when-only-current-axis-supported.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/forward-navigation/horizontal/rtl-inline-only.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/forward-navigation/mixed-ltr-rtl-visual-order.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/forward-navigation/moves-to-next-item-and-skips-non-focusable.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/forward-navigation/moves-to-next-item.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/forward-navigation/nested-focusgroup-is-item-of-parent.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/forward-navigation/rtl-direction-reverses-inline.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/forward-navigation/rtl-wraps-correctly.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/forward-navigation/vertical/does-not-move-when-axis-not-supported.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/forward-navigation/vertical/moves-when-only-current-axis-supported.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/forward-navigation/vertical-writing-mode.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/forward-navigation/wraps-successfully.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/col-flow-only.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/col-wrap-and-row-flow.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/col-wrap-only.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/colspan.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/css-table-not-focusgroup.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/css-table.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/does-not-wrap-or-flow.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/empty-spaces.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/flows-in-both-axes.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/grid-grammar-conflicts.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/moves-across-table-sections.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/non-table.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/relayout-before-navigation.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/row-flow-only.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/row-wrap-and-col-flow.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/row-wrap-only.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/rowspan.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/simple-case-with-non-focusable-cell-in-the-center.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/simple-case.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/grid-navigation/wraps-in-both-axes.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/home-end-keys.optional.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/none-anywhere-opts-out.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/opt-out-barriers/complex-nested-opt-out.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/opt-out-barriers/none-creates-barriers.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/opt-out-barriers/none-opt-out-direct-child.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/reading-flow-navigation/explicit-visual-reordering.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/reading-flow-navigation/fallback-to-dom-order.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/reading-flow-navigation/flex-visual-order-basic.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/reading-flow-navigation/nested-containers.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/reading-flow-navigation/partial-reordering.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/reading-flow-navigation/simple-mixed.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/basic-tab-behavior.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/directional-input-handler-contenteditable.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/directional-input-handler-multi-tab-stop.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/directional-input-handler-multiple-in-segment.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/directional-input-handler-nested-focusgroup.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/directional-input-handler-number.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/directional-input-handler-only-item.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/directional-input-handler-radio.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/directional-input-handler-range.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/directional-input-handler-scrollable-container.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/directional-input-handler-select.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/directional-input-handler-tab-escape-adjacency.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/directional-input-handler-tab-escape.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/directional-input-handler-text.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/directional-input-handler-textarea.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/directional-input-handler-with-explicit-optout.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/directional-input-handler-with-priority.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/dynamic-changes.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/empty-and-non-focusable.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/focusgroup-segments.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/focusgroupstart-shadow-tabindex.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/guaranteed-tab-stop-priority.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/memory-behavior.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/nested-focusgroups.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/segment-barrier-tabindex-minus1.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/tabindex-minus-one-home-end.optional.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/sequential-navigation/tabindex-minus-one-tab-escape.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/shadow/shadow-items-basic.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/shadow/shadow-nested-scope.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/shadow/shadow-reattach.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/top-layer-dialog-excluded.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/top-layer-dynamic-exclusion.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/top-layer-inner-focusgroup.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/top-layer-popover-excluded.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/top-layer-popover-invoker.html	needs test_driver input, which the runner does not have
+focusgroup/tentative/untraversable-tabindex-minus-one.html	needs test_driver input, which the runner does not have
+focusreset/focusreset-iframe.tentative.html	needs a frame (IFRAME.md, Tier 1)
+processing-model/focusVisible.html	needs test_driver input, which the runner does not have
+processing-model/preventScroll.html	needs a frame (IFRAME.md, Tier 1)
+sequential-focus-navigation-after-disabled.html	needs test_driver input, which the runner does not have
+sequential-focus-navigation-and-the-tabindex-attribute/focus-tabindex-negative.html	needs test_driver input, which the runner does not have
+sequential-focus-navigation-and-the-tabindex-attribute/focus-tabindex-order.html	needs test_driver input, which the runner does not have
+sequential-focus-navigation-and-the-tabindex-attribute/focus-tabindex-positive.html	needs test_driver input, which the runner does not have
+sequential-focus-navigation-and-the-tabindex-attribute/focus-tabindex-zero.html	needs test_driver input, which the runner does not have
+sequential-focus-navigation-and-the-tabindex-attribute/tabindex-getter-frame.html	needs a frame (IFRAME.md, Tier 1)
+sequential-focus-navigation-and-the-tabindex-attribute/tabindex-getter.html	needs a frame (IFRAME.md, Tier 1)
+sequential-focus-navigation-starting-point.tentative.html	needs test_driver input, which the runner does not have
+setSequentialFocusStartingPoint.tentative.html	needs test_driver input, which the runner does not have
+tab-table-caption.html?caption-side=bottom	needs test_driver input, which the runner does not have
+tab-table-caption.html?caption-side=top	needs test_driver input, which the runner does not have
+tabindex-focus-flag.html	needs a frame (IFRAME.md, Tier 1)
+the-autofocus-attribute/autofocus-dialog.html	opens a second window (P3a)
+the-autofocus-attribute/document-with-fragment-empty.html	needs a frame (IFRAME.md, Tier 1)
+the-autofocus-attribute/document-with-fragment-nonexistent.html	needs a frame (IFRAME.md, Tier 1)
+the-autofocus-attribute/document-with-fragment-removed-target.html	opens a second window (P3a)
+the-autofocus-attribute/document-with-fragment-top.html	needs a frame (IFRAME.md, Tier 1)
+the-autofocus-attribute/document-with-fragment-valid.html	needs a frame (IFRAME.md, Tier 1)
+the-autofocus-attribute/focusable-area-in-top-document.html	needs a frame (IFRAME.md, Tier 1)
+the-autofocus-attribute/no-cross-origin-autofocus.html	needs test_driver input, which the runner does not have
+the-autofocus-attribute/no-sandboxed-automatic-features.html	needs a frame (IFRAME.md, Tier 1)
+the-autofocus-attribute/same-origin-autofocus.html	needs test_driver input, which the runner does not have
+the-autofocus-attribute/skip-another-top-level-browsing-context.html	opens a second window (P3a)
+the-autofocus-attribute/skip-not-fully-active.html	needs a frame (IFRAME.md, Tier 1)
+the-autofocus-attribute/supported-elements.html	opens a second window (P3a)
+the-autofocus-attribute/update-the-rendering.html	opens a second window (P3a)
+[passing]
+document-level-focus-apis/document-level-apis.html	The body element must be the active element if no element is focused
+document-level-focus-apis/document-level-apis.html	The hasFocus() method must return false if the Document has no browsing context
+focusgroup/tentative/ax-role-inference-owner.html	accessibilityController not available (noop)
+focusgroup/tentative/idl-reflection.html	focusGroup satisfies [SameObject]
+focusreset/focusreset-basic.tentative.html	onfocusreset is only defined on Document
+processing-model/legend.html	legend
+sequential-focus-navigation-and-the-tabindex-attribute/focus-tabindex-default-value.html	The default value of tabIndex attribute must be -1 for elements that are not focusable
+sequential-focus-navigation-and-the-tabindex-attribute/focus-tabindex-default-value.html	The default value of tabIndex attribute must be 0 for elements that are focusable
+the-autofocus-attribute/not-on-first-task.html	The element is not focused during the initial parsing task

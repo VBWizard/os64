@@ -4860,6 +4860,7 @@ api-surrogates-utf8.any.html	Invalid surrogates encoded into UTF-8: Surrogate ha
 api-surrogates-utf8.any.html	Invalid surrogates encoded into UTF-8: Surrogate half (low)
 api-surrogates-utf8.any.html	Invalid surrogates encoded into UTF-8: Surrogate half (low), in a string
 api-surrogates-utf8.any.html	Invalid surrogates encoded into UTF-8: Wrong order
+bom-handling.html	document.characterSet should match the BOM
 encodeInto.any.html	Invalid encodeInto() destination: ArrayBuffer
 encodeInto.any.html	Invalid encodeInto() destination: BigInt64Array, backed by: ArrayBuffer
 encodeInto.any.html	Invalid encodeInto() destination: BigUint64Array, backed by: ArrayBuffer
@@ -4939,6 +4940,7 @@ single-byte-decoder.any.html?TextDecoder	windows-1252: latin1 (TextDecoder)
 single-byte-decoder.any.html?TextDecoder	windows-1252: us-ascii (TextDecoder)
 single-byte-decoder.any.html?TextDecoder	windows-1252: windows-1252 (TextDecoder)
 single-byte-decoder.any.html?TextDecoder	windows-1252: x-cp1252 (TextDecoder)
+sniffing.html	No (UTF-8) sniffing allowed
 textdecoder-arguments.any.html	TextDecoder decode() with array buffer detached during arg conversion
 textdecoder-arguments.any.html	TextDecoder decode() with explicit undefined
 textdecoder-arguments.any.html	TextDecoder decode() with undefined and options

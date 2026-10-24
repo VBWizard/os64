@@ -82,6 +82,17 @@ typedef struct {
     bool (*run)(void *opaque, uint64_t serial, const os64_dom_request_t *request, bool (*stop)(void *stop_ctx),
                 void *stop_ctx, os64_dom_response_t *response);
     void (*release)(void *opaque, os64_dom_response_t *response);
+    // The document's own request, for P1-Da's members (os64_dom_options_t):
+    // the Referer it carried ("" or NULL for none), copied; and its
+    // response's Last-Modified, epoch seconds, 0 for none (which a zeroed
+    // options struct says; no server dates a page to 1970).
+    const char *referrer;
+    int64_t last_modified;
+    // What has focus, given `opaque` (os64_dom_options_t.focus): the
+    // element focused in this page's document, or NULL, and whether the
+    // page has the focus (yonder's: whether it is the page on screen).
+    // NULL: nothing has, and neither has it.
+    bool (*focus)(void *opaque, const os64_html_node_t **focused);
 } yonder_scripts_options_t;
 
 // A host for `doc`, whose control state is `state` (which must outlive it).
@@ -142,9 +153,12 @@ void yonder_scripts_connected(yonder_scripts_t *scripts, const os64_html_node_t 
 // nothing queued, when the host is retired, the code is longer than a
 // script may be, the page has run out of scripts, or memory ran out.
 bool yonder_scripts_address(yonder_scripts_t *scripts, const char *url, const char *fragment);
-// A fetch came back: `source` is UTF-8 and borrowed, NULL when it failed.
+// A fetch came back: `source` is UTF-8 and borrowed, NULL when it failed;
+// `final_url` the response's address after its redirects (NULL or empty:
+// the address asked for), which the script is named and muted by from
+// then on.
 void yonder_scripts_fetched(yonder_scripts_t *scripts, uint32_t token, const char *source,
-                            size_t length);
+                            size_t length, const char *final_url);
 
 // One event at `node`, or at window (NULL), as os64_dom_dispatch. A page
 // whose script never ran makes its runtime here if an element carries an
@@ -207,6 +221,9 @@ bool yonder_scripts_encrypted(const yonder_scripts_t *scripts);
 // holds only its start — a cut address would name a page that is not this
 // one, so such a request names none.
 const char *yonder_scripts_referrer(const yonder_scripts_t *scripts);
+// The page's own document.referrer (the options' referrer, kept): what a
+// Reload of the page keeps for the page that replaces it. "" for none.
+const char *yonder_scripts_document_referrer(const yonder_scripts_t *scripts);
 
 // THE SESSION'S HALF (MODERN_WEB.md § Slice 1b). The document's address
 // moved (a state update, a fragment navigation, a traversal): what a

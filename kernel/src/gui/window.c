@@ -26,6 +26,7 @@ _Static_assert(GUI_WINDOW_TITLE_MAX == OS64_GUI_TITLE_MAX,
 #include "printd.h"
 #include "scheduler.h"   // scheduler_wake_or_owe — event_wait's alarm bell
 #include "strcpy.h"
+#include "strcmp.h"      // strncmp — wm_set_title's no-change test
 #include <limits.h>
 #include "os64/text_profile.h"
 #include "video.h"       // kFrameBuffer — the screen IS the canvas capacity
@@ -503,6 +504,27 @@ static bool popup_declines(const window_t *w, const char *verb)
 		return false;
 	printd(DEBUG_GUI, "wm: %s declined — window %u is a popup\n", verb, w->id);
 	return true;
+}
+
+void wm_set_title(window_t *w, const char *title, bool utf8)
+{
+	char next[GUI_WINDOW_TITLE_MAX];
+	strncpy(next, title ? title : "", GUI_WINDOW_TITLE_MAX);
+	next[GUI_WINDOW_TITLE_MAX - 1] = '\0';
+	uint32_t flags = utf8 ? (w->flags | GUI_WINDOW_TITLE_UTF8)
+	                      : (w->flags & ~GUI_WINDOW_TITLE_UTF8);
+	if (flags == w->flags && strncmp(next, w->title, GUI_WINDOW_TITLE_MAX) == 0)
+		return;
+	strncpy(w->title, next, GUI_WINDOW_TITLE_MAX);
+	w->flags = flags;
+	// The encoding bit changes how the text is drawn and no inset
+	// (decoration_insets does not read it), so the frame and content stay
+	// put and only the titlebar is repainted. A window showing no titlebar
+	// has nothing to repaint; showing it again repaints the frame.
+	if (wm_has_titlebar(w->flags))
+		gui_damage_add_locked((rect_t){w->frame.x, w->frame.y, w->frame.w,
+		                               wm_chrome_top(w->flags)});
+	printd(DEBUG_GUI, "wm: window %u retitled '%s'\n", w->id, w->title);
 }
 
 void wm_set_pinned(window_t *w, bool pinned)

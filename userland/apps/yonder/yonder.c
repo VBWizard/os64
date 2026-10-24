@@ -1373,6 +1373,15 @@ static struct {
         // started: its scripts' host is handed it when it is made, and
         // hears the milestones after that (stream_mark).
         os64_dom_timing_t timing;
+        // The address of the page it was asked for from, "" for none
+        // (trip_send's: a link followed, a form sent, a script's
+        // navigation): what its Referer was made from, and so its
+        // document.referrer (stream_request_facts).
+        char referrer[OS64_FETCH_URL_MAX];
+        // A Reload's: the reloaded page's own document.referrer, which
+        // the page that replaces it keeps, as a browser's does, though
+        // the Reload's request names nothing ("" for none).
+        char kept_referrer[OS64_DOM_URL_MAX];
         // THE STREAM'S PAGE (DOM_D7.md § D7d): the parse so far as a page
         // with a sheet table, filled as the parse reveals sheets
         // (stream_sheets) and moved to the page that arrives. Its
@@ -3502,6 +3511,13 @@ static void trip_send(const char *url, os64_page_request_t *request, const char 
     os64_strcopy(trip->url, sizeof(trip->url), url);
     os64_strcopy(trip->referrer, sizeof(trip->referrer), named);
     os64_memset(&g.stream, 0, sizeof(g.stream));
+    os64_strcopy(g.stream.referrer, sizeof(g.stream.referrer), named);
+    // A Reload is of the page on screen (click_reload, a form sent again,
+    // and location.reload(), which only the page on screen's asks reach):
+    // its document.referrer goes with it, though its Referer did not.
+    if (kind == NAV_RELOAD)
+        os64_strcopy(g.stream.kept_referrer, sizeof(g.stream.kept_referrer),
+                     yonder_scripts_document_referrer(g.page.scripts));
     timing_start(&g.stream.timing, kind);
     if (request != NULL) {
         g.stream.has_fragment = request->has_fragment;
@@ -7450,10 +7466,42 @@ static bool history_update(void *opaque, const char *url, const char *state, siz
 static bool history_fragment(void *opaque, const char *url, bool replace);
 static uint32_t history_length(void *opaque);
 
+// document.activeElement's and hasFocus()'s answer for the page whose
+// document is `opaque`: the element focused in it (the window keeps focus
+// in the page on screen's document alone), and whether it is the page on
+// screen. Whether the window itself has the person's focus is not
+// followed (DEBTS.md), so the page on screen always says it has.
+static bool script_focus(void *opaque, const os64_html_node_t **focused)
+{
+    *focused = g.focus_node != NULL && g.focus_doc == opaque ? g.focus_node : NULL;
+    return opaque == page_doc(&g.page);
+}
+
+// What the arriving page's document says of its own request: its referrer,
+// the Referer that request carried (way_referrer from the page it was asked
+// for from to the address it arrived from, "" for none) or, for a Reload,
+// the reloaded page's own; and its Last-Modified (0 for none or a date
+// that does not read).
+static void stream_request_facts(char *referrer, size_t cap, int64_t *modified)
+{
+    os64_url_t to;
+    referrer[0] = '\0';
+    if (g.stream.kept_referrer[0] != '\0')
+        os64_strcopy(referrer, cap, g.stream.kept_referrer);
+    else if (g.stream.referrer[0] == '\0' || os64_url_parse(g.stream.head.url, &to) != OS64_URL_OK ||
+             !way_referrer(g.stream.referrer, &to, referrer, cap))
+        referrer[0] = '\0';
+    if (!way_cookie_date(g.stream.head.last_modified, os64_strlen(g.stream.head.last_modified), modified))
+        *modified = 0;
+}
+
 static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state_t *state,
                                       const char *url, bool encrypted, uint64_t serial,
                                       yonder_diag_t *diag, bool modern)
 {
+    char referrer[OS64_URL_REF_MAX];
+    int64_t modified;
+    stream_request_facts(referrer, sizeof(referrer), &modified);
     yonder_scripts_options_t options = {
         .url = url, .execution_ms = g.script_ms, .serial = serial, .alert = script_alert,
         .fetch = script_fetch, .cancel = script_cancel, .activate = script_activate,
@@ -7462,7 +7510,8 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .history = {history_update, history_fragment, history_length, doc},
         .diag = diag, .encrypted = encrypted, .modern = modern,
         .storage = s_storage, .timing = &g.stream.timing, .screen = s_screen, .zoom = script_zoom,
-        .request = script_request, .run = script_run, .release = script_release};
+        .request = script_request, .run = script_run, .release = script_release,
+        .referrer = referrer, .last_modified = modified, .focus = script_focus};
     yonder_scripts_t *host = yonder_scripts_new(doc, state, &options);
     yonder_scripts_set_user_agent(host, script_user_agent, NULL);
     const os64_dom_cookies_t cookies = {script_cookies_get, script_cookies_set, host};
@@ -7480,8 +7529,8 @@ static void script_arrived(const yonder_script_job_t *job, const yonder_script_t
         diag_keep(yonder_scripts_diag(host), YONDER_DIAG_KEPT_SCRIPT, job->token, job->url,
                   came ? got->url : job->url, "", came ? got->source : NULL, came ? got->length : 0);
     if (host != NULL)
-        yonder_scripts_fetched(host, job->token, got != NULL && got->ok ? got->source : NULL,
-                               got != NULL ? got->length : 0);
+        yonder_scripts_fetched(host, job->token, came ? got->source : NULL, got != NULL ? got->length : 0,
+                               came ? got->url : NULL);
 }
 
 // When the task running began (task_begin), for its cost (task_cost). A
@@ -11990,7 +12039,10 @@ static void title_of(const os64_html_document_t *doc, char *out, size_t cap)
 // "<page> - yonder" in the title's capacity, which the boundary refuses to
 // exceed rather than cutting (gui.h): a long page title is shortened with
 // "..." first. A character past ASCII becomes one '?', because the title
-// bar is drawn in the kernel's face, not the page's.
+// bar is drawn in the kernel's face, not the page's. So does a control
+// character: a page can spell one (`&#27;`), and the kernel logs the title
+// it is given, so an ESC kept here would be an escape sequence written by
+// the page into whatever terminal shows that log.
 static void fit_title(const char *page, char out[OS64_GUI_TITLE_MAX])
 {
     static const char kTail[] = " - yonder";
@@ -12002,7 +12054,7 @@ static void fit_title(const char *page, char out[OS64_GUI_TITLE_MAX])
         unsigned char ch = (unsigned char)page[i];
         if (ch >= 0x80 && (ch & 0xC0) == 0x80)
             continue;           // the rest of a character already marked
-        out[at++] = ch < 0x80 ? (char)ch : '?';
+        out[at++] = ch >= 0x20 && ch < 0x7F ? (char)ch : '?';
     }
     if (cut)
         for (int i = 0; i < 3; i++)
@@ -12010,6 +12062,37 @@ static void fit_title(const char *page, char out[OS64_GUI_TITLE_MAX])
     for (size_t i = 0; i < sizeof(kTail) - 1; i++)
         out[at++] = kTail[i];
     out[at] = '\0';
+}
+
+// The name the window wears, and the page and DOM version it was last
+// worked out from.
+static char s_title_worn[OS64_GUI_TITLE_MAX] = "yonder";
+static uint64_t s_title_page, s_title_version;
+
+// THE WINDOW'S NAME FOLLOWS THE PAGE ON SCREEN: "<title> - yonder", or
+// "yonder" for a page with none. Called once per pass of the main loop,
+// after the turns that run the page's tasks, so a script that sets the
+// title many times between two passes costs one rename. The name is worked
+// out again only when another page is on screen (g.page_serial) or its tree
+// has moved (os64_html_version, which moves on every change a reader could
+// see, a write to the <title> element's text included), and the GUI is
+// asked only when the name differs from the one worn.
+static void title_follow(void)
+{
+    const os64_html_document_t *doc = page_doc(&g.page);
+    uint64_t version = doc != NULL ? os64_html_version(doc) : 0;
+    if (g.page_serial == s_title_page && version == s_title_version)
+        return;
+    s_title_page = g.page_serial;
+    s_title_version = version;
+    char named[120], title[OS64_GUI_TITLE_MAX] = "yonder";
+    title_of(doc, named, sizeof(named));
+    if (named[0] != '\0')
+        fit_title(named, title);
+    if (os64_streq(title, s_title_worn))
+        return;
+    if (os64_gui_window_set_title(g.win, title, 0) == 0)
+        os64_strcopy(s_title_worn, sizeof(s_title_worn), title);
 }
 
 static int64_t event_poll(void *opaque, os64_gui_event_t *event)
@@ -12025,9 +12108,9 @@ int main(int argc, char **argv)
         os64_printf("yonder: %s\n", why);
         return 1;
     }
-    // The window is named after the page, and a window is named once, so a
-    // FILE given on the command line is read before the window exists. A
-    // page from the network arrives after it, and the window keeps its name.
+    // The window is named after the page (title_follow). A FILE given on
+    // the command line is read before the window exists, so the window is
+    // born with that page's name rather than taking it a moment later.
     s_script_audit = argc > 1 && os64_streq(argv[1], "--script-audit");
     g.scripts_on = yonder_settings_saved_scripts();
     s_dark = yonder_settings_saved_dark();
@@ -12063,6 +12146,7 @@ int main(int argc, char **argv)
         os64_printf("yonder: no window (is the desktop running?)\n");
         return 1;
     }
+    os64_strcopy(s_title_worn, sizeof(s_title_worn), title);
     if (os64_draw_ctx_init(&g.ctx, g.win) != 0) {
         os64_gui_window_destroy(g.win);
         return 1;
@@ -12220,6 +12304,7 @@ int main(int argc, char **argv)
         bool scripts_ready = script_turn();
         storage_turn();
         pictures_settle();
+        title_follow();
         before_paint();
         glass_paint();
         motion_painted();

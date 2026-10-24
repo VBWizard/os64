@@ -54,8 +54,8 @@ person moves around them.
   boundaries and other event types keep their order; question bars arm after
   their pending input drains. [D11's regression record](../pending/DOM_D11.md#p5-testing-hover-repaint-starvation)
   records the evidence and the current bounded policy.
-- **The window's title is the page's `<title>`** if the GUI can retitle a
-  window; if it cannot, that is a booked ask, not a workaround.
+- **The window's title is the page's `<title>`**, and follows the page on
+  screen (`os64_gui_window_set_title`).
 
 ## Settings
 
@@ -252,9 +252,12 @@ at all: a page that declares windows-1252 and is UTF-8 is read as UTF-8.
 **The window is named `<title> - yonder`**, fitted to the title's 31
 bytes (the boundary refuses a longer one rather than cutting it) with an
 ellipsis, and ASCII only, because the title bar is drawn in the kernel's
-face. Named once, at creation: a page given on the command line is read
-before the window exists; one opened later leaves the name as it was
-(booked).
+face. The name follows the page on screen (`title_follow`, through
+`os64_gui_window_set_title`): worked out again once per pass of the main
+loop when another page is shown or the shown page's tree has moved, and
+sent only when it differs from the one the window wears. A page given on
+the command line is still read before the window exists, so the window
+is born with its name.
 
 **Fonts.** Every page view shares ONE text context of its own, apart from
 libui's chrome context, and on it packet 04's family cache: serif, sans
@@ -874,7 +877,6 @@ page failed with "out of handles or ports"; the table is 64 now
 | A way to see and clear cookies | nothing in the window lists them yet | the first time a site needs its cookies cleared |
 | A page's `Referrer-Policy` | the default is the browsers' own and sends no more than they do | a page that asks for less |
 | A hand pointer over links | the compositor draws one fixed arrow; a pointer shape is a kernel and ABI change | somebody misses it more than the status line answers it |
-| Retitling a window | there is no call for it; a window is named at creation | a page opened from the address field wants its name |
 | Unequal border widths, tested | the diagonal corner rule is exercised only where sides differ, and no producer sets one side alone until the cascade (a mutation to the corner arithmetic survives today for that reason) | the cascade |
 | An inline box's borders | the public tree does not mark a span's first and last piece | a page that needs them |
 | Layout time on big pages | On the P5, Wikipedia (800 KB) lays out in 600 ms; fetch.spec.whatwg.org (1.9 MB) takes 4 s to load and 6 s to lay out again at full screen (Chris, 2026-09-25) | a libflow profiling slice, with those two pages as its benchmark |

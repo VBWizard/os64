@@ -308,6 +308,11 @@ void wm_raise(window_t *w);
 // Move the frame origin (drag). Damages the vacated and occupied areas.
 void wm_move(window_t *w, int32_t x, int32_t y);
 
+// Replace the title and its encoding (GUI_WINDOW_TITLE_UTF8 set or clear),
+// and damage the titlebar if the window has one. `title` is copied and cut
+// to GUI_WINDOW_TITLE_MAX as wm_create cuts it. A no-op when neither changes.
+void wm_set_title(window_t *w, const char *title, bool utf8);
+
 // Pin (or unpin) a window — see GUI_WINDOW_PINNED. Re-places it at the top
 // of its new band and damages its frame. A no-op if already in that state.
 void wm_set_pinned(window_t *w, bool pinned);

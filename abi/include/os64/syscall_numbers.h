@@ -715,6 +715,9 @@ typedef enum os64_shutdown_mode
 // Any-window readiness and content-origin snapshot; see os64/gui.h.
 #define SYSCALL_GUI_EVENT_WAIT_ANY 63
 #define SYSCALL_GUI_WINDOW_GET_CONTENT_RECT 64
+// Rename an owned window: arg0 = handle, arg1 = title string, arg2 = flags
+// (OS64_GUI_WINDOW_TITLE_UTF8 or 0). See os64/gui.h.
+#define SYSCALL_GUI_WINDOW_SET_TITLE 65
 
 // Owner-task notification: arg0 = window handle, arg1 = nonzero uint32 mask.
 // Bits coalesce outside the input ring; see os64/gui.h.

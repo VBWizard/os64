@@ -523,7 +523,11 @@ void yonder_script_release(void *job, void *product) {
 /* The worker's answer to the script job whose address ends with `tail`:
  * its source, or NULL for a fetch that failed. False when no such job is
  * out. */
-static bool script_land(const char *tail, const char *source) {
+static bool script_land_from(const char *tail, const char *source, const char *final);
+static bool script_land(const char *tail, const char *source) { return script_land_from(tail,source,NULL); }
+/* The same, the response having come from `final` after its redirects
+ * (NULL: from the address asked for). */
+static bool script_land_from(const char *tail, const char *source, const char *final) {
     for(int i=0;i<nscript_jobs;i++) {
         const char *url=script_jobs[i].job->url;
         size_t n=strlen(url), t=strlen(tail);
@@ -535,7 +539,7 @@ static bool script_land(const char *tail, const char *source) {
             got->ok=true; got->length=strlen(source);
             got->source=os64_malloc(got->length+1); memcpy(got->source,source,got->length+1);
         }
-        os64_strcopy(got->url,sizeof(got->url),url);
+        os64_strcopy(got->url,sizeof(got->url),final!=NULL ? final : url);
         reaped(id,job,got);
         return true;
     }
@@ -5587,6 +5591,24 @@ static void diag_lost_overflow_case(void) {
           "diag: past the lines it can tell apart, the record says there are more and counts none twice");
     yonder_diag_free(d);
 }
+/* A line is found by its key, not by walking what the record holds: a
+ * page's failures fill the FAILED lines and the lost ones (512 and 4,096),
+ * and 100,000 asks across them, each a new or a repeated failure, cost a
+ * few probes each (MODERN_WEB.md § P2a, as built: the cold read's freeze). */
+static void diag_lookup_bound_case(void) {
+    yonder_diag_t *d=yonder_diag_new("http://fixture.test/",1,0);
+    char key[48];
+    uint64_t before=yonder_diag_steps();
+    for(int i=0;i<100000;i++) {
+        snprintf(key,sizeof(key),"unhandled rejection: %d",i%6000);
+        yonder_diag_failed(d,"script click event",key);
+    }
+    uint64_t steps=yonder_diag_steps()-before;
+    check(yonder_diag_failed_lines(d)==YONDER_DIAG_RECORDS_MAX && steps<100000u*8,
+          "diag: 100,000 failures over 6,000 lines are found in under eight probes each");
+    if(steps>=100000u*8) fprintf(stderr,"diag lookup steps: %llu\n",(unsigned long long)steps);
+    yonder_diag_free(d);
+}
 /* A page let go before it was shown takes the families staged for it. */
 static void diag_arriving_released_case(void) {
     static Page p;
@@ -8906,6 +8928,7 @@ static void diag_cases(void) {
     round_picture_glass_cases();
     diag_fact_short_case();
     diag_lost_overflow_case();
+    diag_lookup_bound_case();
     diag_arriving_released_case();
     diag_picture_moves_case();
     diag_long_source_case();
@@ -9000,6 +9023,35 @@ static void covered_link_cases(void) {
 
 #include "test_yonder_requests.inc"
 #include "test_yonder_window.inc"
+#include "test_yonder_document.inc"
+
+/* The window's name: the page's title through fit_title. A control
+ * character the page spells is a '?', never a byte the kernel would log
+ * raw; past ASCII is one '?' a character; a long title is cut with "...". */
+static void title_fit_cases(void)
+{
+    char out[OS64_GUI_TITLE_MAX];
+    fit_title("A\x1b[2J\x7f" "B", out);
+    check(os64_streq(out, "A?[2J?B - yonder"), "title: an ESC and a DEL become '?'");
+    fit_title("Caf\xc3\xa9", out);
+    check(os64_streq(out, "Caf? - yonder"), "title: a character past ASCII is one '?'");
+    fit_title("An extremely long page title that cannot fit", out);
+    check(os64_strlen(out) == OS64_GUI_TITLE_MAX - 1 &&
+          os64_streq(out, "An extremely long p... - yonder"), "title: cut with an ellipsis to the capacity");
+    const char *page = "<!doctype html><title>\x1b]0;x\x07 Name\t</title><body></body>";
+    os64_html_options_t opt = os64_html_options_default();
+    os64_html_parser_t *p = os64_html_parser_new(&opt);
+    check(p != NULL, "title: a parser");
+    if (p == NULL)
+        return;
+    os64_html_parser_feed(p, page, os64_strlen(page));
+    os64_html_document_t *doc = os64_html_parser_finish(p);
+    char named[120];
+    title_of(doc, named, sizeof(named));
+    fit_title(named, out);
+    check(os64_streq(out, "?]0;x? Name - yonder"), "title: a page's controls never reach the window");
+    os64_html_document_free(doc);
+}
 
 /* A unit that includes this file for the window and its fakes alone (the
  * WPT runner, the replay runner) defines YONDER_HOST_FAKES_ONLY and brings
@@ -9051,9 +9103,11 @@ int main(void)
     if(getenv("YONDER_NO_STREAM")==NULL) storage_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) request_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) window_cases();
+    if(getenv("YONDER_NO_STREAM")==NULL) document_cases();
     webfont_cases();
     paint_cost_cases();
     whole_view_cases();
+    title_fit_cases();
     os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"all layout text released");
     check(live==0,"native and engine heap is empty");

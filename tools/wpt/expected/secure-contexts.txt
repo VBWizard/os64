@@ -8,3 +8,4 @@
 # whole before its own window's test.
 [excluded]
 [passing]
+basic-dedicated-worker.https.html	HTTP worker

@@ -59,6 +59,17 @@ typedef struct {
     uint32_t redirects;
 } os64_dom_timing_t;
 
+/* A document's readiness (HTML § Current document readiness), what
+ * document.readyState reads. */
+typedef enum {
+    OS64_DOM_LOADING = 0,
+    OS64_DOM_INTERACTIVE,
+    OS64_DOM_COMPLETE
+} os64_dom_readiness_t;
+
+/* Last-Modified's absence (os64_dom_options_t.last_modified). */
+#define OS64_DOM_NO_DATE INT64_MIN
+
 /* What a script asked the host to do to a node, after its task. These reach
  * widgets and the model, which a script's task must not. */
 typedef enum {
@@ -128,6 +139,18 @@ typedef struct {
      * script's task; the host records it and must not enter JS. NULL: no
      * one is told, and the binding carries on as the sentence says. */
     void (*broken)(void *opaque, const char *sentence);
+    /* A failure of the task being run past the one its outcome carries: an
+     * unhandled rejection (`message` begins "unhandled rejection: ") of a
+     * task whose outcome already holds a failure, which the host records
+     * as it records the outcome's, under `task`, the task's source name.
+     * The first sixteen of a task are told one by one, and the rest as
+     * one line as the task closes, `and <n> more unhandled rejections`:
+     * a page can leave hundreds of thousands in one task, and what each
+     * costs the host must not be its to size (report.c's
+     * D_REJECTIONS_TOLD). On the owner thread, between a task's calls or
+     * as it closes; it must not enter JS. NULL: only the outcome's
+     * failure is known. */
+    void (*failed)(void *opaque, const char *task, const char *message);
     /* crypto.getRandomValues' and randomUUID's randomness: `length` bytes
      * (never more than 65,536) written into `out` from the host's
      * cryptographically strong source, true when every one was. False is
@@ -135,6 +158,28 @@ typedef struct {
      * wrote then is never handed to the page. On the owner thread, inside
      * a script's task; it must not enter JS. NULL refuses every ask. */
     bool (*entropy)(void *opaque, uint8_t *out, size_t length);
+    /* P1-Da, the document's state (WINDOW_DOCUMENT.md § P1-Da). Each is
+     * the window's document's; a document of its own answers what HTML
+     * gives a document with no browsing context.
+     * readiness: what the document's readiness is as the binding is made;
+     * from then on the host's own DOMContentLoaded and load dispatches
+     * move it (os64_dom_readiness_after). A binding made during the parse
+     * is LOADING, the zero value; one made after the page's load, COMPLETE.
+     * referrer: document.referrer, the Referer the document's own request
+     * carried (NULL or "" for none), copied.
+     * last_modified: the response's Last-Modified, seconds since the Unix
+     * epoch, OS64_DOM_NO_DATE when it said none (document.lastModified
+     * then reads the time it is asked, as HTML says).
+     * focus: what has focus, asked at every read of document.activeElement
+     * and hasFocus(): the element focused in the window's document, or
+     * NULL, into *focused (borrowed for the call), answering whether the
+     * document has the system's focus. On the owner thread, inside a
+     * script's task; it must not enter JS. NULL: nothing has focus, and
+     * neither has the document. */
+    os64_dom_readiness_t readiness;
+    const char *referrer;
+    int64_t last_modified;
+    bool (*focus)(void *opaque, const os64_html_node_t **focused);
     void *host_opaque;
 } os64_dom_options_t;
 
@@ -142,7 +187,7 @@ static inline os64_dom_options_t os64_dom_default_options(void)
 {
     const os64_dom_options_t options = {
         .max_bytes = OS64_DOM_DEFAULT_MAX_BYTES, .scripting = true, .modern = true,
-        .screen = {1024, 768, 1024, 768, 24}
+        .screen = {1024, 768, 1024, 768, 24}, .last_modified = OS64_DOM_NO_DATE
     };
     return options;
 }
@@ -221,6 +266,11 @@ typedef struct { uint64_t layouts, elapsed_us; } os64_dom_geometry_stats_t;
  * three handles are borrowed; state must belong to document. NULL options
  * select the defaults; outcome is required. No runtime/context opaque slot
  * is used. Console output is granted separately by os64_js_install_output.
+ * The binding becomes the runtime's script host (libjs CONTRACT.md § A
+ * script host) until os64_dom_drain: from then on no os64_js_run judges an
+ * unhandled rejection, and a host that runs a script itself names it with
+ * os64_dom_script_name and follows it with os64_dom_script_ended, which
+ * judges.
  *
  * NULL reports failure in outcome. Registration may have published engine
  * objects: destroy that runtime without further evaluation before retrying
@@ -572,21 +622,47 @@ size_t os64_dom_registry_count(const os64_dom_t *dom);
 /* EVENTS. The host dispatches at a node, or at window when node is NULL
  * (`load`, whose target reads as the document). One TASK: libdom opens it,
  * builds the Event, runs each listener as one os64_js_call followed by a
- * microtask checkpoint, and closes it. A listener that throws is reported and
- * the next one runs; a sticky failure ends the dispatch. The outcome is the
- * task's: its first exception or unhandled rejection, else a reported error
+ * microtask checkpoint, settles what they left owed (window's error and
+ * rejection events, as os64_dom_script_ended says), and closes it. A
+ * listener that throws is reported and the next one runs; a sticky failure
+ * ends the dispatch. The outcome is the task's: its first exception or
+ * unhandled rejection (the rejections after it told to options.failed), else a reported error
  * from a nested dispatch, else OK; a sticky status means the runtime is
  * finished with. *prevented answers whether the default action is cancelled.
- * Owner thread, between tasks. Costs no engine entry when listens() says no. */
+ * Owner thread, between tasks. Costs no engine entry when listens() says no.
+ * A dispatch that moves the document's readiness (os64_dom_readiness_after)
+ * moves it first, whether or not anything listens to the event itself, and
+ * with the Modern Web switch on fires readystatechange at the document as
+ * a task of its own just before it, the two outcomes folded into one (the
+ * first failure, a sticky one over one that is not); a sticky outcome of
+ * readystatechange's ends the dispatch there. */
 os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node,
                                    const os64_dom_event_t *event, bool *prevented,
                                    os64_js_outcome_t *outcome);
+/* HTML's readiness steps as the host's dispatches make them: DOMContentLoaded
+ * at `doc`'s document node moves LOADING to INTERACTIVE, and load at window
+ * (node NULL) moves either to COMPLETE; anything else leaves `now` as it is.
+ * Pure, and the one copy of the rule: os64_dom_dispatch moves the binding's
+ * readiness by it, and a host that makes its binding late (a page's first
+ * script after its load) keeps the readiness it hands over by it. */
+os64_dom_readiness_t os64_dom_readiness_after(os64_dom_readiness_t now, const os64_html_document_t *doc,
+                                              const os64_html_node_t *node, const char *type);
+/* document.currentScript (HTML § Document.currentScript): the classic script
+ * element the host is about to run, set before it runs and set back to
+ * NULL after it and the microtask checkpoint that ends its run (a host
+ * that runs a script inside another's run sets back the outer one). The binding holds the node while it is set. A node that
+ * is not of the binding's arena, or not an element, sets nothing. Owner
+ * thread, outside JS callbacks. */
+void os64_dom_set_current_script(os64_dom_t *dom, const os64_html_node_t *script);
 /* Whether anything on the page could hear `type`: a listener, a handler
  * property, or an on<type> content attribute in the document. O(1) unless the
  * tree moved since the last answer, when the attributes are counted again.
- * The types counted are the ones the host dispatches, and online, offline
- * and languagechange, which window has handlers for and nothing fires; any
- * other type is not counted and answers true. */
+ * The types counted are the ones the host dispatches; the error,
+ * unhandledrejection and rejectionhandled the binding fires at window;
+ * readystatechange, which the binding fires at the document; and online,
+ * offline, languagechange, visibilitychange and prerenderingchange, which
+ * window or the document has handlers for and nothing fires. Any other type
+ * is not counted and answers true. */
 bool os64_dom_listens(os64_dom_t *dom, const char *type);
 /* Which event types the document's on<type> content attributes name, as a
  * mask os64_dom_handler_bit reads: the walk os64_dom_listens counts with.
@@ -595,7 +671,9 @@ bool os64_dom_listens(os64_dom_t *dom, const char *type);
  * says; os64_dom_listens counts them only with the switch on. */
 uint32_t os64_dom_handler_attributes(const os64_html_document_t *doc);
 /* The bit for `type` in that mask; 0 for a type no attribute can name
- * (DOMContentLoaded, or one outside the types os64_dom_listens counts). */
+ * (DOMContentLoaded; readystatechange, visibilitychange and
+ * prerenderingchange, whose handlers are the document's IDL properties
+ * alone; or one outside the types os64_dom_listens counts). */
 uint32_t os64_dom_handler_bit(const char *type);
 
 /* TIMERS, in the host's clock (options.now_ms). next answers the earliest due
@@ -613,8 +691,33 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
 bool os64_dom_take_navigation(os64_dom_t *dom, os64_dom_navigation_t *ask);
 /* An error a nested dispatch or a handler compile reported inside a task the
  * host did not open through libdom (a script run with os64_js_run). The
- * first one is kept until taken. False when there is none. */
+ * first one is kept until taken, here or by os64_dom_script_ended, which
+ * always takes it: the outcome when that is OK, else a line told to
+ * options.failed. False when there is none. */
 bool os64_dom_take_report(os64_dom_t *dom, os64_js_outcome_t *outcome);
+/* A script the host is about to run with os64_js_run is compiled under the
+ * name this writes to `out` (`os64-script:<n>`, the binding's), never its
+ * address: `address` is the script's own, where its response came from
+ * after any redirects (HTML mutes a script by its response), NULL for an
+ * inline one, which is the page's. The name is how the binding knows a script's code wherever
+ * it runs later (a listener it added, a promise it rejected), so it is
+ * how HTML's muted errors are decided: a script from another origin than
+ * the page's tells the page "Script error." for anything it throws or
+ * reports, and its rejections fire no event, not even rejectionhandled
+ * when a handler reaches one later. The record keeps them whole. False
+ * for a missing argument, a drained binding, or `cap` too small. */
+bool os64_dom_script_name(os64_dom_t *dom, const char *address, char *out, size_t cap);
+/* After that script ran (and drained): what it left owed, settled as one
+ * task named `name`, the host's own name for it (MODERN_WEB.md § P2a). The
+ * window's error event for each exception it threw, said to come from its
+ * address; an unhandledrejection for each rejection it left unhandled; and
+ * what those events' listeners leave in turn. The failures are folded into
+ * `outcome` after the script's own: a rejection no listener cancelled is
+ * an UNHANDLED_REJECTION whose message begins "unhandled rejection: ", and
+ * those past the outcome's first failure are told to options.failed. No
+ * engine entry when nothing is owed. False for a missing argument or a
+ * drained binding. */
+bool os64_dom_script_ended(os64_dom_t *dom, const char *name, os64_js_outcome_t *outcome);
 
 /* SCRIPT ELEMENTS. kind follows HTML's "prepare the script element" type
  * rules (type, else language, the sixteen JavaScript MIME essences, module);

@@ -169,6 +169,17 @@ memory) says `FAILED script javascript:: the link's script could not be
 queued`. The libway refusal such a link used to leave, `FAILED link
 refused`, no longer happens.
 
+A promise a task rejected and nothing handled by the end of its microtask
+checkpoint, and no `unhandledrejection` listener cancelled, is a failure of
+that task (MODERN_WEB.md § P2a): `FAILED script <the script's address, or
+the event's or timer's name>: unhandled rejection: <reason>`, the reason
+said as libdom reads it without running the page's code (an Error's name
+and message, a primitive as it is). The task's first failure and sixteen
+rejections after it are a line each, and the rest one line counting them,
+`... : and <n> more unhandled rejections`; the status line says the task's
+first failure, as it always has. A record finds a line by its key, so a
+page that fails without end costs each failure a few probes.
+
 ### The page's fonts (S9a4, PILE3.md § Web fonts)
 
 A page with `@font-face` rules, or one whose layout asked for a family,

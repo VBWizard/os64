@@ -87,4 +87,11 @@ const char *gui_lock_site_name(gui_lock_site_t site);
 // the wrong one deadlocks — hence the loud name.
 void gui_damage_add_locked(rect_t screen_rect);
 
+// Move up to `cap` pending damage rects into `out`, oldest first, and answer
+// how many were moved; any beyond `cap` stay pending. Caller holds kGuiLock.
+// For a test that must see exactly what one call damaged: it takes the list
+// out, makes the call, takes what the call added, and gives the first list
+// back through gui_damage_add_locked, which repaints at least as much.
+uint32_t gui_damage_take_locked(rect_t *out, uint32_t cap);
+
 #endif // GUI_INTERNAL_H

@@ -1,0 +1,198 @@
+# WPT's html/webappapis/scripting in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/webappapis/scripting --update
+# rewrites [passing].
+[required]
+# P2a: window.onerror and the ErrorEvent, unhandledrejection and
+# rejectionhandled and the PromiseRejectionEvent, reportError. Each fails
+# with the switch off. What still fails: an inline script's line counted
+# from the script, not the document; a thrown non-Error's line;
+# body.onerror as a property (no element has onerror); data: scripts; the
+# rejection tests that queue a task with <details> toggle or a microtask
+# with MutationObserver; readystatechange; requestAnimationFrame;
+# createImageBitmap; frames and workers (MODERN_WEB.md § P2a, as built).
+events/event-handler-processing-algorithm-error/body-element-synthetic-errorevent.html	error event has the right 5 args on Window, with a synthetic ErrorEvent
+events/event-handler-processing-algorithm-error/document-synthetic-errorevent.html	Initial values of ErrorEvent members
+events/event-handler-processing-algorithm-error/document-synthetic-errorevent.html	error event is normal (return true does not cancel; one arg) on Document, with a synthetic ErrorEvent
+events/event-handler-processing-algorithm-error/document-synthetic-errorevent.html	error member can be set to arbitrary
+events/event-handler-processing-algorithm-error/document-synthetic-errorevent.html	error member can be set to null
+events/event-handler-processing-algorithm-error/document-synthetic-errorevent.html	error member can be set to undefined
+events/event-handler-processing-algorithm-error/synthetic-errorevent-click.html	click event is normal (return true does not cancel; one arg) on Document, with a synthetic ErrorEvent
+events/event-handler-processing-algorithm-error/synthetic-errorevent-click.html	click event is normal (return true does not cancel; one arg) on Window, with a synthetic ErrorEvent
+events/event-handler-processing-algorithm-error/synthetic-errorevent-click.html	click event is normal (return true does not cancel; one arg) on a script element, with a synthetic ErrorEvent
+events/event-handler-processing-algorithm-error/window-runtime-error.html	error event has the right 5 args on Window, with a runtime error
+events/event-handler-processing-algorithm-error/window-runtime-error.html	error event is weird (return true cancels; many args) on Window, with a runtime error
+events/event-handler-processing-algorithm-error/window-synthetic-errorevent.html	error event has the right 5 args on Window, with a synthetic ErrorEvent
+events/event-handler-processing-algorithm-error/window-synthetic-errorevent.html	error event is weird (return true cancels; many args) on Window, with a synthetic ErrorEvent
+events/invalid-uncompiled-raw-handler-compiled-late.window.html	Invalid uncompiled raw handlers should only be compiled when about to call them
+events/invalid-uncompiled-raw-handler-compiled-once.window.html	Invalid uncompiled raw handlers should only be compiled once
+events/invalid-uncompiled-raw-handler-keeps-position.window.html	Compiling invalid uncompiled raw handlers should keep the position in event listener list
+processing-model-2/addEventListener.html	window.onerror - addEventListener
+processing-model-2/body-onerror-compile-error.html	<body onerror> - compile error in <script>
+processing-model-2/body-onerror-runtime-error.html	<body onerror> - runtime error in <script>
+processing-model-2/compile-error-cross-origin-setInterval.html	window.onerror - compile error in cross-origin setInterval
+processing-model-2/compile-error-cross-origin-setTimeout.html	window.onerror - compile error in cross-origin setTimeout
+processing-model-2/compile-error-cross-origin.html	window.onerror - compile error in <script src=//www1...> (column)
+processing-model-2/compile-error-cross-origin.html	window.onerror - compile error in <script src=//www1...>
+processing-model-2/compile-error-in-attribute.html	window.onerror - compile error in attribute (column)
+processing-model-2/compile-error-in-attribute.html	window.onerror - compile error in attribute
+processing-model-2/compile-error-in-setInterval.html	window.onerror - compile error in setInterval (column)
+processing-model-2/compile-error-in-setInterval.html	window.onerror - compile error in setInterval
+processing-model-2/compile-error-in-setTimeout.html	window.onerror - compile error in setTimeout (column)
+processing-model-2/compile-error-in-setTimeout.html	window.onerror - compile error in setTimeout
+processing-model-2/compile-error-same-origin-with-hash.html	window.onerror - compile error in <script src=...> with hash (column)
+processing-model-2/compile-error-same-origin-with-hash.html	window.onerror - compile error in <script src=...> with hash
+processing-model-2/compile-error-same-origin.html	window.onerror - compile error in <script src=...> (column)
+processing-model-2/compile-error-same-origin.html	window.onerror - compile error in <script src=...>
+processing-model-2/compile-error.html	window.onerror - compile error in <script> (column)
+processing-model-2/compile-error.html	window.onerror - compile error in <script>
+processing-model-2/runtime-error-cross-origin-setInterval.html	window.onerror - runtime error in cross-origin setInterval
+processing-model-2/runtime-error-cross-origin-setTimeout.html	window.onerror - runtime error in cross-origin setTimeout
+processing-model-2/runtime-error-cross-origin.html	window.onerror - runtime error in <script src=//www1...> (column)
+processing-model-2/runtime-error-cross-origin.html	window.onerror - runtime error in <script src=//www1...>
+processing-model-2/runtime-error-in-attribute.html	window.onerror - runtime error in attribute (column)
+processing-model-2/runtime-error-in-attribute.html	window.onerror - runtime error in attribute
+processing-model-2/runtime-error-in-body-onerror.html	runtime error in <body onerror>
+processing-model-2/runtime-error-in-setInterval.html	window.onerror - runtime error in setInterval (column)
+processing-model-2/runtime-error-in-setInterval.html	window.onerror - runtime error in setInterval
+processing-model-2/runtime-error-in-setTimeout.html	window.onerror - runtime error in setTimeout (column)
+processing-model-2/runtime-error-in-setTimeout.html	window.onerror - runtime error in setTimeout
+processing-model-2/runtime-error-in-window-onerror.html	runtime error in window.onerror
+processing-model-2/runtime-error-same-origin-with-hash.html	window.onerror - runtime error in <script src=...> with hash (column)
+processing-model-2/runtime-error-same-origin-with-hash.html	window.onerror - runtime error in <script src=...> with hash
+processing-model-2/runtime-error-same-origin.html	window.onerror - runtime error in <script src=...> (column)
+processing-model-2/runtime-error-same-origin.html	window.onerror - runtime error in <script src=...>
+processing-model-2/runtime-error.html	window.onerror - runtime error in <script> (column)
+processing-model-2/runtime-error.html	window.onerror - runtime error in <script>
+processing-model-2/unhandled-promise-rejections/promise-rejection-event-constructor.html	This tests the constructor for the PromiseRejectionEvent DOM class.
+processing-model-2/unhandled-promise-rejections/promise-rejection-events-attached-in-event.html	Attaching a handler in unhandledrejection should not trigger rejectionhandled.
+processing-model-2/unhandled-promise-rejections/promise-rejection-events-many-promises.html	rejectionhandled: fires once for each of many rejections handled after they were reported
+processing-model-2/unhandled-promise-rejections/promise-rejection-events-many-promises.html	unhandledrejection: does not fire when many rejections are all handled in the same turn
+processing-model-2/unhandled-promise-rejections/promise-rejection-events-many-promises.html	unhandledrejection: does not fire when many rejections are handled in reverse order
+processing-model-2/unhandled-promise-rejections/promise-rejection-events-many-promises.html	unhandledrejection: fires once for each of many rejections in one turn
+processing-model-2/unhandled-promise-rejections/promise-rejection-events-many-promises.html	unhandledrejection: fires only for the rejections left unhandled
+processing-model-2/unhandled-promise-rejections/promise-rejection-events-many-promises.html	unhandledrejection: handling a reported batch does not suppress a batch rejected after it
+processing-model-2/window-onerror-event-throw-null.html	Throwing null in event listener
+processing-model-2/window-onerror-parse-error.html	correct number of calls to window.onerror
+processing-model-2/window-onerror-parse-error.html	correct url passed to window.onerror
+processing-model-2/window-onerror-runtime-error-throw.html	correct number of calls to window.onerror
+processing-model-2/window-onerror-runtime-error-throw.html	correct url passed to window.onerror
+processing-model-2/window-onerror-runtime-error.html	correct number of calls to window.onerror
+processing-model-2/window-onerror-runtime-error.html	correct url passed to window.onerror
+reporterror.any.html	self.reportError() doesn't invoke getters
+reporterror.any.html	self.reportError(1)
+reporterror.any.html	self.reportError(TypeError)
+reporterror.any.html	self.reportError(undefined)
+[excluded]
+[passing]
+event-loops/microtask_after_script.html	Microtask immediately after script
+event-loops/task_microtask_ordering.html	Basic task and microtask ordering
+events/body-onload.html	body.onload should set the window.onload handler
+events/event-handler-javascript.html	Event handlers starting with 'javascript:' should treat that as a label.
+events/event-handler-no-browsing-context.html	Event handler IDL attribute runs on an element in a createHTMLDocument document
+events/event-handler-no-browsing-context.html	Event handler content attribute does not run on an element in a createHTMLDocument document
+events/event-handler-no-browsing-context.html	Event handler content attribute is not compiled on an element in a createHTMLDocument document
+events/event-handler-no-browsing-context.html	addEventListener() listener runs on an element in a createHTMLDocument document
+events/event-handler-non-content-document-idl-attributes.html	body.onreadystatechange is not an event handler content attribute
+events/event-handler-non-content-document-idl-attributes.html	body.onvisibilitychange is not an event handler content attribute
+events/event-handler-non-content-document-idl-attributes.html	div.onreadystatechange is not an event handler content attribute
+events/event-handler-non-content-document-idl-attributes.html	div.onvisibilitychange is not an event handler content attribute
+events/event-handler-non-content-document-idl-attributes.html	frameset.onreadystatechange is not an event handler content attribute
+events/event-handler-non-content-document-idl-attributes.html	frameset.onvisibilitychange is not an event handler content attribute
+events/event-handler-onresize.html	body.onresize should set the window.onresize handler
+events/event-handler-onresize.html	document.onresize should set the document.onresize handler
+events/event-handler-onresize.html	meta.onresize should set the meta.onresize handler
+events/event-handler-processing-algorithm-error/body-element-synthetic-errorevent.html	error event has the right 5 args on Window, with a synthetic ErrorEvent
+events/event-handler-processing-algorithm-error/body-element-synthetic-event.html	error event is normal (return true does not cancel; one arg) on Window, with a synthetic Event
+events/event-handler-processing-algorithm-error/document-synthetic-errorevent.html	Initial values of ErrorEvent members
+events/event-handler-processing-algorithm-error/document-synthetic-errorevent.html	error event is normal (return true does not cancel; one arg) on Document, with a synthetic ErrorEvent
+events/event-handler-processing-algorithm-error/document-synthetic-errorevent.html	error member can be set to arbitrary
+events/event-handler-processing-algorithm-error/document-synthetic-errorevent.html	error member can be set to null
+events/event-handler-processing-algorithm-error/document-synthetic-errorevent.html	error member can be set to undefined
+events/event-handler-processing-algorithm-error/document-synthetic-event.html	error event is normal (return true does not cancel; one arg) on Document, with a synthetic Event
+events/event-handler-processing-algorithm-error/synthetic-errorevent-click.html	click event is normal (return true does not cancel; one arg) on Document, with a synthetic ErrorEvent
+events/event-handler-processing-algorithm-error/synthetic-errorevent-click.html	click event is normal (return true does not cancel; one arg) on Window, with a synthetic ErrorEvent
+events/event-handler-processing-algorithm-error/synthetic-errorevent-click.html	click event is normal (return true does not cancel; one arg) on a script element, with a synthetic ErrorEvent
+events/event-handler-processing-algorithm-error/window-runtime-error.html	error event has the right 5 args on Window, with a runtime error
+events/event-handler-processing-algorithm-error/window-runtime-error.html	error event is weird (return true cancels; many args) on Window, with a runtime error
+events/event-handler-processing-algorithm-error/window-synthetic-errorevent.html	error event has the right 5 args on Window, with a synthetic ErrorEvent
+events/event-handler-processing-algorithm-error/window-synthetic-errorevent.html	error event is weird (return true cancels; many args) on Window, with a synthetic ErrorEvent
+events/event-handler-processing-algorithm-error/window-synthetic-event.html	error event is normal (return true does not cancel; one arg) on Window, with a synthetic Event
+events/event-handler-processing-algorithm.html	blur listener returning false cancels event
+events/event-handler-processing-algorithm.html	click listener returning false cancels event
+events/event-handler-processing-algorithm.html	mouseover listener returning false cancels event (using Event)
+events/event-handler-processing-algorithm.html	mouseover listener returning true doesn't cancel event (using Event)
+events/event-handler-removal.window.html	Event handler set through IDL should NOT be deactivated when the content attribute is removed.
+events/event-handler-spec-example.window.html	Event handler listeners should be registered when they are first set to an object value (function "function() {}").
+events/event-handler-spec-example.window.html	Event handler listeners should be registered when they are first set to an object value (object "").
+events/event-handler-spec-example.window.html	Event handler listeners should be registered when they are first set to an object value (object "42").
+events/event-handler-spec-example.window.html	Event handler listeners should be registered when they are first set to an object value (object "[object Object]").
+events/event-handler-spec-example.window.html	Event handler listeners should be registered when they are first set to an object value.
+events/inline-event-handler-ordering.html	Inline event handlers retain their ordering when invalid and force-compiled
+events/inline-event-handler-ordering.html	Inline event handlers retain their ordering when invalid and force-compiled via dispatch
+events/inline-event-handler-ordering.html	Inline event handlers retain their ordering when invalid and lazy-compiled
+events/invalid-uncompiled-raw-handler-compiled-late.window.html	Invalid uncompiled raw handlers should only be compiled when about to call them
+events/invalid-uncompiled-raw-handler-compiled-once.window.html	Invalid uncompiled raw handlers should only be compiled once
+events/invalid-uncompiled-raw-handler-keeps-position.window.html	Compiling invalid uncompiled raw handlers should keep the position in event listener list
+events/messageevent-constructor.https.html	Passing null for ports parameter to initMessageEvent
+processing-model-2/addEventListener.html	window.onerror - addEventListener
+processing-model-2/body-onerror-compile-error-data-url.html	<body onerror> - compile error in <script src=data:...> (column)
+processing-model-2/body-onerror-compile-error.html	<body onerror> - compile error in <script>
+processing-model-2/body-onerror-compile-error.html	<body onerror> - compile error in <script> (column)
+processing-model-2/body-onerror-runtime-error.html	<body onerror> - runtime error in <script>
+processing-model-2/body-onerror-runtime-error.html	<body onerror> - runtime error in <script> (column)
+processing-model-2/compile-error-cross-origin-setInterval.html	window.onerror - compile error in cross-origin setInterval
+processing-model-2/compile-error-cross-origin-setTimeout.html	window.onerror - compile error in cross-origin setTimeout
+processing-model-2/compile-error-cross-origin.html	window.onerror - compile error in <script src=//www1...> (column)
+processing-model-2/compile-error-cross-origin.html	window.onerror - compile error in <script src=//www1...>
+processing-model-2/compile-error-in-attribute.html	window.onerror - compile error in attribute (column)
+processing-model-2/compile-error-in-attribute.html	window.onerror - compile error in attribute
+processing-model-2/compile-error-in-body-onerror.html	window.onerror - compile error in <body onerror>
+processing-model-2/compile-error-in-setInterval.html	window.onerror - compile error in setInterval (column)
+processing-model-2/compile-error-in-setInterval.html	window.onerror - compile error in setInterval
+processing-model-2/compile-error-in-setTimeout.html	window.onerror - compile error in setTimeout (column)
+processing-model-2/compile-error-in-setTimeout.html	window.onerror - compile error in setTimeout
+processing-model-2/compile-error-same-origin-with-hash.html	window.onerror - compile error in <script src=...> with hash (column)
+processing-model-2/compile-error-same-origin-with-hash.html	window.onerror - compile error in <script src=...> with hash
+processing-model-2/compile-error-same-origin.html	window.onerror - compile error in <script src=...> (column)
+processing-model-2/compile-error-same-origin.html	window.onerror - compile error in <script src=...>
+processing-model-2/compile-error.html	window.onerror - compile error in <script> (column)
+processing-model-2/compile-error.html	window.onerror - compile error in <script>
+processing-model-2/runtime-error-cross-origin-setInterval.html	window.onerror - runtime error in cross-origin setInterval
+processing-model-2/runtime-error-cross-origin-setTimeout.html	window.onerror - runtime error in cross-origin setTimeout
+processing-model-2/runtime-error-cross-origin.html	window.onerror - runtime error in <script src=//www1...> (column)
+processing-model-2/runtime-error-cross-origin.html	window.onerror - runtime error in <script src=//www1...>
+processing-model-2/runtime-error-in-attribute.html	window.onerror - runtime error in attribute (column)
+processing-model-2/runtime-error-in-attribute.html	window.onerror - runtime error in attribute
+processing-model-2/runtime-error-in-body-onerror.html	runtime error in <body onerror>
+processing-model-2/runtime-error-in-setInterval.html	window.onerror - runtime error in setInterval (column)
+processing-model-2/runtime-error-in-setInterval.html	window.onerror - runtime error in setInterval
+processing-model-2/runtime-error-in-setTimeout.html	window.onerror - runtime error in setTimeout (column)
+processing-model-2/runtime-error-in-setTimeout.html	window.onerror - runtime error in setTimeout
+processing-model-2/runtime-error-in-window-onerror.html	runtime error in window.onerror
+processing-model-2/runtime-error-same-origin-with-hash.html	window.onerror - runtime error in <script src=...> with hash (column)
+processing-model-2/runtime-error-same-origin-with-hash.html	window.onerror - runtime error in <script src=...> with hash
+processing-model-2/runtime-error-same-origin.html	window.onerror - runtime error in <script src=...> (column)
+processing-model-2/runtime-error-same-origin.html	window.onerror - runtime error in <script src=...>
+processing-model-2/runtime-error.html	window.onerror - runtime error in <script> (column)
+processing-model-2/runtime-error.html	window.onerror - runtime error in <script>
+processing-model-2/unhandled-promise-rejections/promise-rejection-event-constructor.html	This tests the constructor for the PromiseRejectionEvent DOM class.
+processing-model-2/unhandled-promise-rejections/promise-rejection-events-attached-in-event.html	Attaching a handler in unhandledrejection should not trigger rejectionhandled.
+processing-model-2/unhandled-promise-rejections/promise-rejection-events-many-promises.html	rejectionhandled: fires once for each of many rejections handled after they were reported
+processing-model-2/unhandled-promise-rejections/promise-rejection-events-many-promises.html	unhandledrejection: does not fire when many rejections are all handled in the same turn
+processing-model-2/unhandled-promise-rejections/promise-rejection-events-many-promises.html	unhandledrejection: does not fire when many rejections are handled in reverse order
+processing-model-2/unhandled-promise-rejections/promise-rejection-events-many-promises.html	unhandledrejection: fires once for each of many rejections in one turn
+processing-model-2/unhandled-promise-rejections/promise-rejection-events-many-promises.html	unhandledrejection: fires only for the rejections left unhandled
+processing-model-2/unhandled-promise-rejections/promise-rejection-events-many-promises.html	unhandledrejection: handling a reported batch does not suppress a batch rejected after it
+processing-model-2/window-onerror-event-throw-null.html	Throwing null in event listener
+processing-model-2/window-onerror-parse-error.html	correct number of calls to window.onerror
+processing-model-2/window-onerror-parse-error.html	correct url passed to window.onerror
+processing-model-2/window-onerror-runtime-error-throw.html	correct number of calls to window.onerror
+processing-model-2/window-onerror-runtime-error-throw.html	correct url passed to window.onerror
+processing-model-2/window-onerror-runtime-error.html	correct number of calls to window.onerror
+processing-model-2/window-onerror-runtime-error.html	correct url passed to window.onerror
+reporterror.any.html	self.reportError() (without arguments) throws
+reporterror.any.html	self.reportError() doesn't invoke getters
+reporterror.any.html	self.reportError(1)
+reporterror.any.html	self.reportError(TypeError)
+reporterror.any.html	self.reportError(undefined)

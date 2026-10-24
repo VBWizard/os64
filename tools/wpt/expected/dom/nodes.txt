@@ -98,6 +98,197 @@ attributes-namednodemap.html	setNamedItem and removeNamedItem on `attributes` sh
 # The frames row (frames.c): HTMLIFrameElement's interface. It fails with
 # the switch off.
 Node-cloneNode.html	createElement(iframe)
+# P1-Da: createEvent's table (CustomEvent and HashChangeEvent made as themselves, a name off it refused) and contentType. Each fails with the switch off.
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "",null,null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "/","",null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "/",null,null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "foo",null,DocumentType node <!DOCTYPE foo>
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "foo:","",null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "foo:",null,null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "http://example.com/","",null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "http://example.com/",null,null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "http://www.w3.org/1998/Math/MathML","",null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "http://www.w3.org/1999/xhtml","",null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "http://www.w3.org/2000/svg","",null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "http://www.w3.org/2000/xmlns/","",null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "http://www.w3.org/2000/xmlns/",null,null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "http://www.w3.org/XML/1998/namespace","",null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "http://www.w3.org/XML/1998/namespace",null,null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for null,"",null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for null,null,DocumentType node <!DOCTYPE bar>
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for null,null,DocumentType node <!DOCTYPE baz>
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for null,null,DocumentType node <!DOCTYPE foo>
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for null,null,DocumentType node <!DOCTYPE html>
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for null,null,DocumentType node <!DOCTYPE quz>
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for null,null,null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for undefined,"",undefined
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for undefined,null,null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for undefined,null,undefined
+DOMImplementation-createHTMLDocument.html	createHTMLDocument(): characterSet aliases
+Document-contentType/contentType/createDocument.html	document.implementation.createDocument: document.contentType === 'application/xhtml+xml'
+Document-contentType/contentType/createHTMLDocument.html	document.implementation.createHTMLDocument: document.contentType === 'text/html'
+Document-createEvent-touchevent.window.html	document.createEvent('TOUCHEVENT') should throw if 'expose legacy touch event APIs' is false
+Document-createEvent-touchevent.window.html	document.createEvent('TouchEvent') should throw if 'expose legacy touch event APIs' is false
+Document-createEvent-touchevent.window.html	document.createEvent('touchevent') should throw if 'expose legacy touch event APIs' is false
+Document-createEvent.https.html	CUSTOMEVENT should be an alias for CustomEvent.
+Document-createEvent.https.html	CustomEvent should be an alias for CustomEvent.
+Document-createEvent.https.html	HASHCHANGEEVENT should be an alias for HashChangeEvent.
+Document-createEvent.https.html	HashChangeEvent should be an alias for HashChangeEvent.
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "AnimationEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "AnimationPlaybackEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "AnimationPlayerEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ApplicationCacheErrorEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "AudioProcessingEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "AutocompleteErrorEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "BeforeInstallPromptEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "BlobEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ClipboardEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "CloseEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "CommandEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "DataContainerEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ErrorEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ExtendableEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ExtendableMessageEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "FetchEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "FontFaceSetLoadEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "GamepadEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "GeofencingEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "IDBVersionChangeEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "InstallEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "KeyEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MIDIConnectionEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MIDIMessageEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MediaEncryptedEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MediaKeyEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MediaKeyMessageEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MediaQueryListEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MediaStreamEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MediaStreamTrackEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MouseScrollEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MutationEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "NotificationEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "NotifyPaintEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "OfflineAudioCompletionEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "OrientationEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "PageTransition"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "PageTransitionEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "PointerEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "PopStateEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "PopUpEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "PresentationConnectionAvailableEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "PresentationConnectionCloseEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ProgressEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "PromiseRejectionEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "PushEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "RTCDTMFToneChangeEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "RTCDataChannelEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "RTCIceCandidateEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "RelatedEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ResourceProgressEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "SVGEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "SVGZoomEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ScrollAreaEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "SecurityPolicyViolationEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ServicePortConnectEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ServiceWorkerMessageEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "SimpleGestureEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "SpeechRecognitionError"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "SpeechRecognitionEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "SpeechSynthesisEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "SyncEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "TimeEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "TrackEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "TransitionEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "WebGLContextEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "WebKitAnimationEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "WebKitTransitionEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "WheelEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "XULCommandEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "BeforeUnloadEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "CompositionEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "CustomEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "DeviceMotionEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "DeviceOrientationEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "DragEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "FocusEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "HashChangeEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "KeyboardEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "MessageEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "StorageEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "TextEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "TouchEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "AnimationEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "AnimationPlaybackEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "AnimationPlayerEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ApplicationCacheErrorEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "AudioProcessingEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "AutocompleteErrorEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "BeforeInstallPromptEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "BlobEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ClipboardEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "CloseEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "CommandEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "DataContainerEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ErrorEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ExtendableEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ExtendableMessageEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "FetchEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "FontFaceSetLoadEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "GamepadEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "GeofencingEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "IDBVersionChangeEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "InstallEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "KeyEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MIDIConnectionEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MIDIMessageEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MediaEncryptedEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MediaKeyEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MediaKeyMessageEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MediaQueryListEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MediaStreamEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MediaStreamTrackEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MouseScrollEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MutationEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "NotificationEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "NotifyPaintEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "OfflineAudioCompletionEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "OrientationEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "PageTransitionEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "PageTransitions"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "PointerEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "PopStateEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "PopUpEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "PresentationConnectionAvailableEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "PresentationConnectionCloseEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ProgressEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "PromiseRejectionEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "PushEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "RTCDTMFToneChangeEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "RTCDataChannelEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "RTCIceCandidateEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "RelatedEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ResourceProgressEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "SVGZoomEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ScrollAreaEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "SecurityPolicyViolationEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ServicePortConnectEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ServiceWorkerMessageEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "SimpleGestureEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "SpeechRecognitionErrors"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "SpeechRecognitionEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "SpeechSynthesisEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "SyncEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "TimeEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "TrackEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "TransitionEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "WebGLContextEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "WebKitAnimationEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "WebKitTransitionEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "WheelEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "XULCommandEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for unrecognized arguments
+Document-createEvent.https.html	customevent should be an alias for CustomEvent.
+Document-createEvent.https.html	hashchangeevent should be an alias for HashChangeEvent.
 [excluded]
 [passing]
 Attr-prefix.html	Attr.prefix absent (HTML)
@@ -314,6 +505,31 @@ DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/XM
 DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/XML/1998/namespace","xmlns:foo",null,"NAMESPACE_ERR"
 DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/XML/1998/namespaces","xml:foo",null,"NAMESPACE_ERR"
 DOMImplementation-createDocument.html	createDocument test: "http://www.w3.org/xml/1998/namespace","xml:foo",null,"NAMESPACE_ERR"
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "",null,null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "/","",null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "/",null,null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "foo",null,DocumentType node <!DOCTYPE foo>
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "foo:","",null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "foo:",null,null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "http://example.com/","",null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "http://example.com/",null,null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "http://www.w3.org/1998/Math/MathML","",null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "http://www.w3.org/1999/xhtml","",null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "http://www.w3.org/2000/svg","",null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "http://www.w3.org/2000/xmlns/","",null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "http://www.w3.org/2000/xmlns/",null,null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "http://www.w3.org/XML/1998/namespace","",null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "http://www.w3.org/XML/1998/namespace",null,null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for null,"",null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for null,null,DocumentType node <!DOCTYPE bar>
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for null,null,DocumentType node <!DOCTYPE baz>
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for null,null,DocumentType node <!DOCTYPE foo>
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for null,null,DocumentType node <!DOCTYPE html>
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for null,null,DocumentType node <!DOCTYPE quz>
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for null,null,null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for undefined,"",undefined
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for undefined,null,null
+DOMImplementation-createDocument.html	createDocument test: characterSet aliases for undefined,null,undefined
 DOMImplementation-createDocument.html	createDocument test: null,"-foo",null,"INVALID_CHARACTER_ERR"
 DOMImplementation-createDocument.html	createDocument test: null,".foo",null,"INVALID_CHARACTER_ERR"
 DOMImplementation-createDocument.html	createDocument test: null,"1foo",null,"INVALID_CHARACTER_ERR"
@@ -426,6 +642,7 @@ DOMImplementation-createDocumentType.html	createDocumentType("test:root", "test"
 DOMImplementation-createDocumentType.html	createDocumentType("{", "", "") should work
 DOMImplementation-createDocumentType.html	createDocumentType("}", "", "") should work
 DOMImplementation-createDocumentType.html	createDocumentType("~", "", "") should work
+DOMImplementation-createHTMLDocument.html	createHTMLDocument(): characterSet aliases
 DOMImplementation-createHTMLDocument.html	createHTMLDocument(): document location getter is null
 DOMImplementation-hasFeature.html	DOMImplementation.hasFeature(feature, version)
 DOMImplementation-hasFeature.html	hasFeature(" Core", "")
@@ -565,6 +782,8 @@ DOMImplementation-hasFeature.html	hasFeature()
 DOMImplementation-hasFeature.html	hasFeature(null, "")
 DOMImplementation-hasFeature.html	hasFeature(undefined, "")
 Document-adoptNode.html	Inserting an Element into another document should adopt its Attr nodes.
+Document-contentType/contentType/createDocument.html	document.implementation.createDocument: document.contentType === 'application/xhtml+xml'
+Document-contentType/contentType/createHTMLDocument.html	document.implementation.createHTMLDocument: document.contentType === 'text/html'
 Document-createAttribute.html	HTML document.createAttribute("") should throw
 Document-createAttribute.html	HTML document.createAttribute("'")
 Document-createAttribute.html	HTML document.createAttribute("0")
@@ -611,14 +830,174 @@ Document-createElement.html	createElement("<foo>") in HTML document
 Document-createElement.html	createElement("fo o") in HTML document
 Document-createElement.html	createElement("foo>") in HTML document
 Document-createElement.html	createElement("}foo") in HTML document
+Document-createEvent-touchevent.window.html	document.createEvent('TOUCHEVENT') should throw if 'expose legacy touch event APIs' is false
+Document-createEvent-touchevent.window.html	document.createEvent('TouchEvent') should throw if 'expose legacy touch event APIs' is false
+Document-createEvent-touchevent.window.html	document.createEvent('touchevent') should throw if 'expose legacy touch event APIs' is false
+Document-createEvent.https.html	CUSTOMEVENT should be an alias for CustomEvent.
+Document-createEvent.https.html	CustomEvent should be an alias for CustomEvent.
 Document-createEvent.https.html	EVENT should be an alias for Event.
 Document-createEvent.https.html	EVENTS should be an alias for Event.
 Document-createEvent.https.html	Event should be an alias for Event.
 Document-createEvent.https.html	Events should be an alias for Event.
+Document-createEvent.https.html	HASHCHANGEEVENT should be an alias for HashChangeEvent.
 Document-createEvent.https.html	HTMLEVENTS should be an alias for Event.
 Document-createEvent.https.html	HTMLEvents should be an alias for Event.
+Document-createEvent.https.html	HashChangeEvent should be an alias for HashChangeEvent.
 Document-createEvent.https.html	SVGEVENTS should be an alias for Event.
 Document-createEvent.https.html	SVGEvents should be an alias for Event.
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "AnimationEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "AnimationPlaybackEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "AnimationPlayerEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ApplicationCacheErrorEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "AudioProcessingEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "AutocompleteErrorEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "BeforeInstallPromptEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "BlobEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ClipboardEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "CloseEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "CommandEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "DataContainerEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ErrorEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ExtendableEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ExtendableMessageEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "FetchEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "FontFaceSetLoadEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "GamepadEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "GeofencingEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "IDBVersionChangeEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "InstallEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "KeyEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MIDIConnectionEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MIDIMessageEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MediaEncryptedEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MediaKeyEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MediaKeyMessageEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MediaQueryListEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MediaStreamEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MediaStreamTrackEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MouseScrollEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "MutationEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "NotificationEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "NotifyPaintEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "OfflineAudioCompletionEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "OrientationEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "PageTransition"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "PageTransitionEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "PointerEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "PopStateEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "PopUpEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "PresentationConnectionAvailableEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "PresentationConnectionCloseEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ProgressEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "PromiseRejectionEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "PushEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "RTCDTMFToneChangeEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "RTCDataChannelEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "RTCIceCandidateEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "RelatedEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ResourceProgressEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "SVGEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "SVGZoomEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ScrollAreaEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "SecurityPolicyViolationEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ServicePortConnectEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "ServiceWorkerMessageEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "SimpleGestureEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "SpeechRecognitionError"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "SpeechRecognitionEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "SpeechSynthesisEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "SyncEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "TimeEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "TrackEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "TransitionEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "WebGLContextEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "WebKitAnimationEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "WebKitTransitionEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "WheelEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "XULCommandEvent"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "BeforeUnloadEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "CompositionEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "CustomEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "DeviceMotionEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "DeviceOrientationEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "DragEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "FocusEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "HashChangeEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "KeyboardEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "MessageEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "StorageEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "TextEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized legacy event interface "TouchEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "AnimationEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "AnimationPlaybackEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "AnimationPlayerEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ApplicationCacheErrorEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "AudioProcessingEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "AutocompleteErrorEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "BeforeInstallPromptEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "BlobEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ClipboardEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "CloseEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "CommandEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "DataContainerEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ErrorEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ExtendableEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ExtendableMessageEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "FetchEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "FontFaceSetLoadEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "GamepadEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "GeofencingEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "IDBVersionChangeEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "InstallEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "KeyEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MIDIConnectionEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MIDIMessageEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MediaEncryptedEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MediaKeyEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MediaKeyMessageEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MediaQueryListEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MediaStreamEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MediaStreamTrackEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MouseScrollEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "MutationEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "NotificationEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "NotifyPaintEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "OfflineAudioCompletionEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "OrientationEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "PageTransitionEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "PageTransitions"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "PointerEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "PopStateEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "PopUpEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "PresentationConnectionAvailableEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "PresentationConnectionCloseEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ProgressEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "PromiseRejectionEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "PushEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "RTCDTMFToneChangeEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "RTCDataChannelEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "RTCIceCandidateEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "RelatedEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ResourceProgressEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "SVGZoomEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ScrollAreaEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "SecurityPolicyViolationEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ServicePortConnectEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "ServiceWorkerMessageEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "SimpleGestureEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "SpeechRecognitionErrors"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "SpeechRecognitionEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "SpeechSynthesisEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "SyncEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "TimeEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "TrackEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "TransitionEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "WebGLContextEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "WebKitAnimationEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "WebKitTransitionEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "WheelEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized non-legacy event interface "XULCommandEvents"
+Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for unrecognized arguments
 Document-createEvent.https.html	createEvent('BEFOREUNLOADEVENT') should be initialized correctly.
 Document-createEvent.https.html	createEvent('BeforeUnloadEvent') should be initialized correctly.
 Document-createEvent.https.html	createEvent('COMPOSITIONEVENT') should be initialized correctly.
@@ -679,8 +1058,10 @@ Document-createEvent.https.html	createEvent('svgevents') should be initialized c
 Document-createEvent.https.html	createEvent('textevent') should be initialized correctly.
 Document-createEvent.https.html	createEvent('uievent') should be initialized correctly.
 Document-createEvent.https.html	createEvent('uievents') should be initialized correctly.
+Document-createEvent.https.html	customevent should be an alias for CustomEvent.
 Document-createEvent.https.html	event should be an alias for Event.
 Document-createEvent.https.html	events should be an alias for Event.
+Document-createEvent.https.html	hashchangeevent should be an alias for HashChangeEvent.
 Document-createEvent.https.html	htmlevents should be an alias for Event.
 Document-createEvent.https.html	svgevents should be an alias for Event.
 Document-createProcessingInstruction.html	Document.createProcessingInstruction in HTML documents
@@ -1093,15 +1474,6 @@ Node-appendChild.html	Appending to a doctype
 Node-appendChild.html	Appending to a leaf node.
 Node-appendChild.html	Appending to a text node
 Node-appendChild.html	WebIDL tests
-Node-baseURI.html	For attributes in elements belonging to document fragments in document, baseURI should be document URL
-Node-baseURI.html	For attributes in elements belonging to document fragments, baseURI should be document URL
-Node-baseURI.html	For attributes in elements belonging to document, baseURI should be document URL
-Node-baseURI.html	For attributes in elements unassigned to document, baseURI should be document URL
-Node-baseURI.html	For attributes unassigned to element, baseURI should be document URL
-Node-baseURI.html	For elements belonging to document fragments in document, baseURI should be document URL
-Node-baseURI.html	For elements belonging to document fragments, baseURI should be document URL
-Node-baseURI.html	For elements belonging to document, baseURI should be document URL
-Node-baseURI.html	For elements unassigned to document, baseURI should be document URL
 Node-childNodes-cache-2.html	Node.childNodes caching bug with replaceChild
 Node-childNodes-cache.html	Node.childNodes caching bug
 Node-childNodes.html	Caching of Node.childNodes

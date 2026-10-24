@@ -55,8 +55,12 @@ WPT_DIRS=(
     html/browsers/the-window-object
     html/dom
     html/webappapis/microtask-queuing
+    html/webappapis/scripting
     secure-contexts
     WebCryptoAPI
+    page-visibility
+    html/interaction/focus
+    dom/events
 )
 
 top=$(git rev-parse --show-toplevel)

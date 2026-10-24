@@ -19,8 +19,9 @@ yonder danlegt.com              the same, over http: a bare name means http
 yonder /home/page.html          open a file on this machine
 ```
 
-A file named on the command line gives the window its title (a window is
-named once, so a page from the network leaves it "yonder"). Pictures, style
+The window is named after the page on screen, `<title> - yonder`, and
+follows it: to the next page, and when the page's `<title>` changes, by
+its scripts or otherwise. A page with no title leaves it "yonder". Pictures, style
 sheets and links beside a file are read from beside it, and `file:///path`
 works in the address field too.
 
