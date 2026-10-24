@@ -2757,6 +2757,16 @@ static void stream_keeps_the_form(void) {
     check(stream_turn()==false && g.page.way.posted && g.page.sent.url!=NULL &&
         os64_streq(g.page.sent.url,"http://fixture.test/send") && g.page.sent.body_len==3,
         "stream: the reply to a form keeps the form");
+    /* The page's own location.reload() of it asks first, then sends it
+     * again as the page's: its origin, nobody's activation. */
+    os64_strcopy(g.page.sent.scheme,sizeof(g.page.sent.scheme),"http");   /* as libpage spells a sent form's */
+    reload_as(WAY_BY_PAGE);
+    check(g.asker==ASK_REQUEST,"who: a page's reload of a form's reply asks first");
+    bar_answered(true);
+    const yonder_trip_t *again=pool_work.job;
+    check(again!=NULL && again->kind==YONDER_JOB_TRIP && again->has_request && !again->metadata.activation &&
+          again->metadata.site==WAY_SITE_SAME_ORIGIN && os64_streq(again->metadata.origin.host,"fixture.test"),
+        "who: a page's reload of a form's reply resends as the page's");
     stream_window_drop();
 }
 static void stream_mail_wiring(void) {
@@ -3711,12 +3721,12 @@ static void loop_view_passed_over(void) {
     scroll_to(0,100); page_update(&g.page,"http://fixture.test/final#a",NULL,0,true,true);
     scroll_to(0,200); page_update(&g.page,"http://fixture.test/final#b",NULL,0,true,true);
     scroll_to(0,300);
-    session_go(-2);
+    session_go(-2,WAY_BY_BROWSER,NULL);
     check(os64_streq(g.page.way.url,"http://fixture.test/final") && g.sy==100,"passed over: go(-2) lands at 100");
-    session_go(1);
+    session_go(1,WAY_BY_BROWSER,NULL);
     check(os64_streq(g.page.way.url,"http://fixture.test/final#a") && g.sy==200,
         "passed over: Forward to the entry passed over is at its own 200");
-    session_go(1);
+    session_go(1,WAY_BY_BROWSER,NULL);
     check(os64_streq(g.page.way.url,"http://fixture.test/final#b") && g.sy==300,
         "passed over: and the one left is at 300");
     loop_drop();
@@ -4093,6 +4103,37 @@ static void loading_redirect_case(const char *how, const char *what, bool replac
     }
     loop_drop();
 }
+/* WHO ASKED, for a page's own navigation (Fetch Metadata § 2.3 and § 2.4):
+ * the page's script, in a task after its load, with `markup` on the page
+ * and `how` the script. Its site is from the page's own origin and it is
+ * nobody's: no person's activation, whatever kind of navigation it is. */
+static void page_initiator_case(const char *markup, const char *how, const char *what, const char *to) {
+    char body[512], line[200];
+    loop_page("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns(),"page initiator: S");
+    start_trip("http://fixture.test/R",NULL,NULL,NAV_GO,WAY_BY_BROWSER,NULL);
+    os64_snprintf(body,sizeof(body),"<p id=out>R</p>%s<script>history.replaceState(null,'','/R');"
+                  "onload=function(){setTimeout(function(){%s},0)}</script>",markup,how);
+    post_arriving(body);
+    loop_settle();
+    view_turns();
+    for(int i=0;i<4 && !g.stream.active;i++) { now_ms+=20; loop_settle(); view_turns(); }
+    const yonder_trip_t *t=g.stream.active ? pool_work.job : NULL;
+    size_t n=t!=NULL ? strlen(t->url) : 0, k=strlen(to);
+    os64_snprintf(line,sizeof(line),"who: %s goes to %s as the page's own, and nobody's",what,to);
+    check(t!=NULL && t->kind==YONDER_JOB_TRIP && n>=k && strcmp(t->url+n-k,to)==0 &&
+          t->metadata.site==WAY_SITE_SAME_ORIGIN && !t->metadata.activation &&
+          os64_streq(t->metadata.origin.host,"fixture.test"),line);
+    loop_drop();
+}
+static void loop_view_page_initiators(void) {
+    page_initiator_case("","location.reload()","location.reload()","/R");
+    page_initiator_case("","history.back()","history.back()","/S");
+    page_initiator_case("","history.go(-1)","history.go(-1)","/S");
+    page_initiator_case("<a id=l href=/X>x</a>","document.getElementById('l').click()","a script's click()","/X");
+    page_initiator_case("<form action=/X><input name=a value=1></form>","document.forms[0].submit()",
+                        "a script's submit()","/X?a=1");
+}
 static void loop_view_loading_redirect(void) {
     loading_redirect_case("<script>onload=function(){location.href='/X'}</script>","onload's href",true);
     loading_redirect_case("<body onload=\"location.replace('/X')\">","<body onload>'s replace",true);
@@ -4197,6 +4238,7 @@ static void loop_view_cold2_cases(void) {
     loop_view_media_scripting();
     loop_view_replacing_refused();
     loop_view_loading_redirect();
+    loop_view_page_initiators();
     loop_view_pushed_then_forward();
     loop_view_pushed_length();
     loop_view_new_way_back();

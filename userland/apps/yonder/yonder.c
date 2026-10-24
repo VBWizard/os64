@@ -2796,6 +2796,7 @@ static void script_alert(void *opaque, const char *text, size_t length);
 static void click_back(os64_ui_widget_t *w, void *user);
 static void click_forward(os64_ui_widget_t *w, void *user);
 static void click_reload(os64_ui_widget_t *w, void *user);
+static void reload_as(way_initiator_t by);
 static void follow_link_asked(int32_t link, way_ask_t ask, way_initiator_t by);
 static void follow_link(int32_t link);
 static bool script_rebuild(void);
@@ -3521,8 +3522,8 @@ static void trip_send(const char *url, os64_page_request_t *request, const char 
     os64_strcopy(trip->referrer, sizeof(trip->referrer), named);
     os64_memset(&g.stream, 0, sizeof(g.stream));
     os64_strcopy(g.stream.referrer, sizeof(g.stream.referrer), named);
-    // A Reload is of the page on screen (click_reload, a form sent again,
-    // and location.reload(), which only the page on screen's asks reach):
+    // A Reload is of the page on screen (reload_as: the button, a form sent
+    // again, and location.reload(), which only the page on screen's asks reach):
     // its document.referrer goes with it, though its Referer did not.
     if (kind == NAV_RELOAD)
         os64_strcopy(g.stream.kept_referrer, sizeof(g.stream.kept_referrer),
@@ -3641,8 +3642,9 @@ static bool request_copy(const os64_page_request_t *from, os64_page_request_t *t
 // Reload on the reply to a form: the form sent again, which is asked
 // first, since whatever it did — an order, a post — it does twice. When
 // the form goes out in the clear, libway's own question is the one put:
-// it says that, and a yes to it is a yes to sending.
-static void resend_form(void)
+// it says that, and a yes to it is a yes to sending. `by` is who asked for
+// the reload (reload_as).
+static void resend_form(way_initiator_t by)
 {
     os64_page_request_t again;
     if (!request_copy(&g.page.sent, &again)) {
@@ -3659,9 +3661,11 @@ static void resend_form(void)
             j.kind == WAY_QUESTION ? j.question
                                    : "This page is the reply to a form. Send the form again?");
     g.pending = again;
-    g.pending_referrer[0] = '\0';       // a Reload names nothing
+    // The page it is sent from: a Reload names nothing in its Referer
+    // (trip_send), and a page's own reload starts from this origin.
+    os64_strcopy(g.pending_referrer, sizeof(g.pending_referrer), g.page.way.url);
     g.pending_kind = NAV_RELOAD;
-    g.pending_by = WAY_BY_BROWSER;      // a Reload is the browser's own (click_reload)
+    g.pending_by = by;
     g.pending_refused = j.kind == WAY_QUESTION ? j.refused : "The form was not sent again.";
 }
 
@@ -7942,7 +7946,7 @@ static Page *page_of_host(const yonder_scripts_t *host);
 static bool page_fragment(Page *p, const char *url, bool replace, bool tell);
 static void fragment_scroll(const os64_html_node_t *target, const char *name);
 static bool page_traverse(Page *p, int32_t delta);
-static void session_go(int32_t delta);
+static void session_go(int32_t delta, way_initiator_t by, const char *from);
 
 // How many entries a history delta moves, in a type that holds every one:
 // a page's history.go() takes any WebIDL `long`, and INT32_MIN has no
@@ -8054,12 +8058,16 @@ static void unshown_go(Page *p, int32_t delta)
     }
     if (p == g.finishing.page)
         g.finishing.abandoned = true;
+    // The traversal is the page's own, from its address, read before the
+    // stop below can let the page go.
+    char from[OS64_FETCH_URL_MAX];
+    os64_strcopy(from, sizeof(from), p->way.url);
     // Stopping a traversal can add the page on screen's held change to the
     // session (traverse_end) after `target` was measured (DEBTS.md § Classic
     // browser scripting).
     stop_trip();
     if (target != 0)
-        session_go((int32_t)target);
+        session_go((int32_t)target, WAY_BY_PAGE, from);
 }
 
 static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navigation_t *ask,
@@ -8133,14 +8141,15 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
     }
     case OS64_DOM_NAVIGATE_RELOAD:
         if (shown)
-            click_reload(NULL, NULL);
+            reload_as(WAY_BY_PAGE);
         return;
     case OS64_DOM_NAVIGATE_HISTORY: {
         // A page not yet shown goes through the entries its scripts made;
-        // Back or Forward past them is unshown_go's.
+        // Back or Forward past them is unshown_go's. Either is the page's
+        // own traversal.
         Page *p = shown ? NULL : page_of_host(host);
         if (p == NULL)
-            session_go(ask->delta);
+            session_go(ask->delta, WAY_BY_PAGE, g.page.way.url);
         else if (!page_traverse(p, ask->delta))
             unshown_go(p, ask->delta);
         return;
@@ -8786,8 +8795,9 @@ static void stream_scripts_entry(void)
 // within its document when every entry it crosses is its own; else the
 // entry `delta` away fetched, which the session moves to, by its name,
 // when it arrives (arrive_now; g.traversing until then). Nothing when
-// there is no such entry, which the status line says.
-static void session_go(int32_t delta)
+// there is no such entry, which the status line says. `by` is who asked:
+// the browser's Back and Forward, or the page at `from` (its history.go).
+static void session_go(int32_t delta, way_initiator_t by, const char *from)
 {
     // A traversal asked while another is fetched is measured from the
     // entry on screen: the one in flight is stopped first (the HTML queue
@@ -8813,9 +8823,10 @@ static void session_go(int32_t delta)
     char *state = crumb.state != NULL ? copy_text(crumb.state) : NULL;
     crumb.state = NULL;
     g.chain = 0;
-    // A traversal is the browser's own, whoever asked: the entry does not
-    // keep who started it the first time.
-    start_trip(crumb.url, NULL, NULL, back ? NAV_BACK : NAV_FORWARD, WAY_BY_BROWSER, &crumb.position);
+    // Who asked now, not who started the entry the first time: a history
+    // entry keeps no record of that. A traversal's Referer names nothing
+    // (trip_send), whatever `from` is.
+    start_trip(crumb.url, NULL, from, back ? NAV_BACK : NAV_FORWARD, by, &crumb.position);
     if (g.stream.active) {
         stream_entry(crumb.entry, state, true);
         g.traversing = true;
@@ -11778,33 +11789,42 @@ static void click_back(os64_ui_widget_t *w, void *user)
 {
     (void)w;
     (void)user;
-    session_go(-1);
+    session_go(-1, WAY_BY_BROWSER, NULL);
 }
 
 static void click_forward(os64_ui_widget_t *w, void *user)
 {
     (void)w;
     (void)user;
-    session_go(1);
+    session_go(1, WAY_BY_BROWSER, NULL);
+}
+
+// The page on screen again, asked for by `by`: the browser's own Reload,
+// or the page's location.reload(), which starts from the page's own
+// origin and is nobody's.
+static void reload_as(way_initiator_t by)
+{
+    if (g.page.tree == NULL)
+        return;
+    g.chain = 0;
+    if (g.page.sent.url != NULL) {
+        resend_form(by);
+        return;
+    }
+    char url[OS64_FETCH_URL_MAX];
+    os64_strcopy(url, sizeof(url), g.page.way.url);
+    // The address goes as the page it starts from; a Reload's Referer
+    // names nothing all the same (trip_send).
+    start_trip(url, NULL, url, NAV_RELOAD, by, NULL);
+    // A reload is the same entry again, its state with it.
+    stream_entry(g.page.entry, g.page.entry_state, false);
 }
 
 static void click_reload(os64_ui_widget_t *w, void *user)
 {
     (void)w;
     (void)user;
-    if (g.page.tree == NULL)
-        return;
-    g.chain = 0;
-    if (g.page.sent.url != NULL) {
-        resend_form();
-        return;
-    }
-    char url[OS64_FETCH_URL_MAX];
-    os64_strcopy(url, sizeof(url), g.page.way.url);
-    // The browser's own, as a traversal is, location.reload()'s included.
-    start_trip(url, NULL, NULL, NAV_RELOAD, WAY_BY_BROWSER, NULL);
-    // A reload is the same entry again, its state with it.
-    stream_entry(g.page.entry, g.page.entry_state, false);
+    reload_as(WAY_BY_BROWSER);
 }
 
 // A mode change stops queued execution immediately. Reload re-parses noscript;
