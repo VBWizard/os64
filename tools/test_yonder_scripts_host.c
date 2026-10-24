@@ -4952,8 +4952,8 @@ static uint32_t *stand_in_shot(void) {
     return screen.surf.pixels;
 }
 /* THE STAND-INS' OWN PAINTING (yonder.c's pane_stand_in, stand_in_label,
- * glass_stand_in), which the yonder host's recorder stands in for: that a
- * canvas has no paper, and what laying labels out costs. */
+ * glass_stand_in), which the yonder host's recorder stands in for: what a
+ * label says, that a canvas has no paper, and what laying labels out costs. */
 static void stand_in_paint_cases(void)
 {
     /* A full-viewport canvas over the page, as confetti and snow are: the
@@ -4972,9 +4972,16 @@ static void stand_in_paint_cases(void)
     check(dark>20 && grey==0,"stand-in: text under a full-viewport canvas is drawn, and no panel covers it");
     check((px[(size_t)400*800+400]&0xffffffu)==0xffffffu,"stand-in: a canvas's middle is the page's own paper");
     check((px[(size_t)300*800+0]&0xffffffu)!=0xffffffu,"stand-in: a canvas is outlined at its edge");
+    const flow_box_t *box=flow_box_for(g.page.tree,probe_id("c"));
+    char text[128]="";
+    if(box!=NULL) stand_in_text(box,text,sizeof(text));
+    check(os64_streq(text,"Canvas: not supported"),"stand-in: a canvas's label says it is not supported");
     os64_free(px); probe_drop();
 
     probe_page("<!doctype html><iframe id=f src=/poll></iframe>",true);
+    box=flow_box_for(g.page.tree,probe_id("f")); text[0]='\0';
+    if(box!=NULL) stand_in_text(box,text,sizeof(text));
+    check(os64_streq(text,"Frame: https://fixture.test/poll"),"stand-in: a frame's label names its document");
     px=stand_in_shot();
     check((px[(size_t)100*800+150]&0xffffffu)==0xf0f0f0u,"stand-in: a frame keeps its panel");
     os64_free(px); probe_drop();
@@ -6036,6 +6043,11 @@ static void diag_page_cases(void) {
     yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
     check(!has(text,"unsupported") && has(text,"MISSING element canvas (1)\n"),
         "diag: with scripts off a canvas shows its fallback and is no failure");
+    loop_drop();
+    loop_page("<p>x</p><svg><canvas></canvas></svg>");
+    check(loop_settle() && g.page.tree!=NULL,"diag: a page with a canvas inside an svg arrives");
+    yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
+    check(!has(text,"unsupported"),"diag: an svg's canvas is no HTML canvas, and no failure");
     loop_drop();
 
     /* An address that spells a token keeps it out of the plain lines. */

@@ -10541,18 +10541,24 @@ typedef struct {
 // The labels stand_in_label has laid out, for the bound cases.
 static uint64_t s_stand_in_labels;
 
+// What a stand-in's label says, into `text`.
+static void stand_in_text(const flow_box_t *b, char *text, size_t cap)
+{
+    const os64_page_link_t *l = os64_page_link(flow_model(g.page.tree), b->link);
+    if (b->node != NULL && b->node->tag == OS64_HTML_TAG_CANVAS)
+        os64_strcopy(text, cap, "Canvas: not supported");
+    else if (l != NULL && l->href.url != NULL)
+        os64_snprintf(text, cap, "Frame: %s", l->href.url);
+    else
+        os64_strcopy(text, cap, "Frame (it names no document)");
+}
+
 static StandInLabel stand_in_label(const flow_box_t *b)
 {
     s_stand_in_labels++;
     StandInLabel fl = {NULL, 0, 0};
-    const os64_page_link_t *l = os64_page_link(flow_model(g.page.tree), b->link);
     char text[STAND_IN_LABEL_MAX];
-    if (b->node != NULL && b->node->tag == OS64_HTML_TAG_CANVAS)
-        os64_strcopy(text, sizeof(text), "Canvas: not supported");
-    else if (l != NULL && l->href.url != NULL)
-        os64_snprintf(text, sizeof(text), "Frame: %s", l->href.url);
-    else
-        os64_strcopy(text, sizeof(text), "Frame (it names no document)");
+    stand_in_text(b, text, sizeof(text));
     const flow_family_list_t sans = {.generic = FLOW_GENERIC_SANS};
     os64_text_font_t *const *fonts;
     size_t nfonts;
