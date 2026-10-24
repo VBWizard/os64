@@ -321,12 +321,13 @@ static void rec_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gu
     out(&rec->out, "\n");
 }
 
-static void rec_frame(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip,
-                      uint32_t ink, uint32_t paper)
+static void rec_stand_in(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip,
+                         uint32_t ink, uint32_t paper)
 {
     (void)clip;
     Rec *rec = ctx;
-    out(&rec->out, "frame link %d %d %d %d %d ink %06x paper %06x\n", b->link, c.x, c.y, c.w, c.h,
+    out(&rec->out, "stand-in %s link %d %d %d %d %d ink %06x paper %06x\n",
+        b->node != NULL && b->node->name != NULL ? b->node->name : "?", b->link, c.x, c.y, c.w, c.h,
         ink & 0xffffffu, paper & 0xffffffu);
 }
 
@@ -501,7 +502,7 @@ static yonder_verbs_t verbs_of(Rec *rec)
 {
     return (yonder_verbs_t){rec,          rec_fill,     rec_text,       rec_image,
                             rec_control,  rec_backdrop, rec_group_open, rec_group_close,
-                            rec_mask,     rec_pixels,   rec_frame,      rec_through_open,
+                            rec_mask,     rec_pixels,   rec_stand_in,   rec_through_open,
                             rec_through_close, rec_clip_open, rec_clip_fill, rec_clip_close};
 }
 
@@ -582,6 +583,8 @@ static void paint_oracle(flow_tree_t *t, os64_page_t *page, os64_gui_rect_t view
 // paints it, when `s_paint_scrolls` says so.
 static bool s_paint_scrolls;
 static flow_point_t s_paint_scroll;
+// The page a paint_of lays out is laid out as scripting-enabled, when set.
+static bool s_paint_scripting;
 
 static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect_t view,
                       bool *escaped, bool css)
@@ -605,6 +608,7 @@ static char *paint_of(const char *html, size_t len, int32_t width, os64_gui_rect
     flow_env_t env = kEnv;
     env.cascade = c;
     env.viewport_height = view.h;
+    env.scripting = s_paint_scripting;
     flow_tree_t *t = flow_layout(doc, page, width, &env);
     if (t != NULL && s_paint_scrolls)
         (void)flow_scroll_set(t, 0, s_paint_scroll);

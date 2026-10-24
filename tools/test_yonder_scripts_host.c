@@ -2809,12 +2809,13 @@ static char *pad_page(const char *rest) {
 }
 static bool loop_encrypted;     /* the next loop_page's head: arrived encrypted */
 static bool loop_modern_off;    /* the next loop_page's window: the modern switch off */
+static bool loop_scripts_off;   /* the next loop_page's window: scripts off */
 /* The next loop_page's address as asked for, and as its head says it ended
  * after redirects: NULL for the usual pair. */
 static const char *loop_asked, *loop_final;
 static void loop_page(const char *rest) {
     stream_window();
-    g.scripts_on=true; g.script_ms=5000; now_ms=100;
+    g.scripts_on=!loop_scripts_off; g.script_ms=5000; now_ms=100;
     g.modern=!loop_modern_off;
     start_trip(loop_asked!=NULL ? loop_asked : "http://fixture.test/p",NULL,NULL,NAV_GO,NULL);
     char *html=pad_page(rest);
@@ -5946,6 +5947,34 @@ static void diag_page_cases(void) {
     check(has(text,"MISSING element iframe (2)\n") && has(text,"MISSING element embed (1)\n") &&
         !has(text,"MISSING element object"),
         "diag: frames and embeds are recorded as drawn as nothing, an object with its fallback is not");
+    check(!has(text,"unsupported"),"diag: a frame, whose stand-in takes a click to its document, is never unsupported");
+    loop_drop();
+
+    /* A canvas is the page's failure, one line for the kind however many
+     * there are, a script's own among them; with scripts off it is its
+     * fallback, and no failure. */
+    loop_page("<canvas></canvas><canvas width=10 height=10></canvas>"
+        "<script>document.body.appendChild(document.createElement('canvas'))</script>");
+    check(loop_settle() && g.page.tree!=NULL,"diag: a page with canvases arrives");
+    yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
+    check(has(text,"\nFAILED unsupported: canvas (1)\n") && has(text,"MISSING element canvas (3)\n") &&
+        !has(text,"FAILED unsupported: canvas (2)"),
+        "diag: three canvases, one a script made, are one FAILED line, and their MISSING count stays");
+    loop_drop();
+    text=diag_file("/tmp/diag",name);
+    check(has(text,"\nFAILED unsupported: canvas (1)\n"),"diag: looking again at departure keeps one line");
+    loop_page("<p>x</p><script>document.body.appendChild(document.createElement('canvas'))</script>");
+    check(loop_settle() && g.page.tree!=NULL,"diag: a page whose script makes its only canvas arrives");
+    yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
+    check(has(text,"\nFAILED unsupported: canvas (1)\n"),"diag: a canvas a script inserted is the page's failure");
+    loop_drop();
+    loop_scripts_off=true;
+    loop_page("<canvas>fallback</canvas>");
+    loop_scripts_off=false;
+    check(loop_settle() && g.page.tree!=NULL,"diag: a canvas page with scripts off arrives");
+    yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
+    check(!has(text,"unsupported") && has(text,"MISSING element canvas (1)\n"),
+        "diag: with scripts off a canvas shows its fallback and is no failure");
     loop_drop();
 
     /* An address that spells a token keeps it out of the plain lines. */

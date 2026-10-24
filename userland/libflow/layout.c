@@ -592,6 +592,18 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     int32_t iw = 0, ih = 0;
     bool known = l->env->replaced_size != NULL &&
                  l->env->replaced_size(l->env->ctx, node, &iw, &ih) && iw >= 0 && ih >= 0;
+    // A canvas's own size is its width and height attributes, each 300 by
+    // 150 where it is absent or no non-negative integer (HTML § 4.12.5),
+    // whatever the face draws in it.
+    if (node->ns == OS64_HTML_NS_HTML && node->tag == OS64_HTML_TAG_CANVAS) {
+        const os64_html_attr_t *a = os64_html_attr(node, "width");
+        if (a == NULL || !f_parse_nonnegative(a->value, &iw))
+            iw = 300;
+        a = os64_html_attr(node, "height");
+        if (a == NULL || !f_parse_nonnegative(a->value, &ih))
+            ih = 150;
+        known = true;
+    }
     int64_t kw = f_css_units(l->env, iw), kh = f_css_units(l->env, ih);
     // The page's ratio (Sizing 4 § 4.1) stands in for the picture's own,
     // unless it said `auto` beside it and the picture has one.

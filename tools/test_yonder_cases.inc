@@ -181,7 +181,29 @@ static void paint_cases(void)
                "fill 9 10 1 90 #080808\n"
                "fill 311 9 1 91 #878787\n"
                "fill 310 10 1 90 #878787\n"
-               "frame link 0 10 10 300 150 ink 0000ee paper f0f0f0\n");
+               "stand-in iframe link 0 10 10 300 150 ink 0000ee paper f0f0f0\n");
+    // Where scripting is on, a canvas is a replaced box of its width and
+    // height attributes (300 by 150 without them), its fallback not shown,
+    // and stands in for the drawing nothing here makes; where it is off,
+    // its fallback is laid out as any element's content.
+    s_paint_scripting = true;
+    paint_case("a canvas is drawn as a stand-in at its own size",
+               "<!doctype html><canvas>fallback</canvas>",
+               400, (os64_gui_rect_t){0, 0, 400, 200},
+               "fill 0 0 400 200 #fefefe\n"
+               "stand-in canvas link -1 8 8 300 150 ink 505050 paper f0f0f0\n");
+    paint_case("a canvas's width and height attributes are its size, a bad one its default",
+               "<!doctype html><canvas width=40 height=20></canvas><canvas width=-1 height=x></canvas>",
+               400, (os64_gui_rect_t){0, 0, 400, 200},
+               "fill 0 0 400 200 #fefefe\n"
+               "stand-in canvas link -1 8 138 40 20 ink 505050 paper f0f0f0\n"
+               "stand-in canvas link -1 48 8 300 150 ink 505050 paper f0f0f0\n");
+    s_paint_scripting = false;
+    paint_case("with scripting off a canvas is its fallback",
+               "<!doctype html><canvas>fallback</canvas>",
+               400, (os64_gui_rect_t){0, 0, 400, 100},
+               "fill 0 0 400 100 #fefefe\n"
+               "text \"fallback\" 8 22 #101010\n");
     paint_page_case("overflow: hidden cuts what is inside it",
                     "<!doctype html><style>body { margin: 0 } div { width: 50px; height: 10px;"
                     " overflow: hidden; background: #00ff00 } p { margin: 0; width: 100px;"

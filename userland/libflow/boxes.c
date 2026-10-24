@@ -114,8 +114,11 @@ uint32_t f_collapse_white(const char *in, uint32_t n, char *out, bool *space)
 }
 
 // Replaced elements: laid out at a size the face supplies, their insides
-// its widget or its picture.
-static bool replaced(const os64_html_node_t *n)
+// its widget or its picture. A canvas is one where scripting is on (HTML §
+// 15.4.1: it then represents embedded content, and its fallback is not
+// shown), and the face draws what stands in for its drawing; with
+// scripting off it is its fallback content, laid out as any element.
+static bool replaced(const B *b, const os64_html_node_t *n)
 {
     if (n->ns != OS64_HTML_NS_HTML)
         return false;
@@ -124,6 +127,8 @@ static bool replaced(const os64_html_node_t *n)
     case OS64_HTML_TAG_SELECT: case OS64_HTML_TAG_TEXTAREA: case OS64_HTML_TAG_IFRAME:
     case OS64_HTML_TAG_FRAME: case OS64_HTML_TAG_METER: case OS64_HTML_TAG_PROGRESS:
         return true;
+    case OS64_HTML_TAG_CANVAS:
+        return b->env->scripting;
     default:
         return false;
     }
@@ -758,7 +763,7 @@ static void scan(B *b, const os64_html_node_t *first, const os64_html_node_t *st
             m->block = true;
         } else {
             m->inline_content = true;
-            if (s->holds_block && !replaced(c))
+            if (s->holds_block && !replaced(b, c))
                 m->block = true;
         }
     }
@@ -806,7 +811,7 @@ static void build_container(B *b, FBox *box, const os64_html_node_t *first,
 static FBox *element_box(B *b, FBox *parent, const os64_html_node_t *el, const FStyled *s,
                          Scope *scope)
 {
-    if (replaced(el)) {
+    if (replaced(b, el)) {
         FBox *box = new_box(b, parent, FB_REPLACED, el, &s->style);
         // A control made a block is still a control: its widget goes where
         // this box is, as an inline one's goes where its atom is.
@@ -926,7 +931,7 @@ static void float_box(Flow *f, const os64_html_node_t *el, const FStyled *s, Sco
 static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s, Scope *scope)
 {
     B *b = f->b;
-    if (replaced(el) || f_display_atomic(s->style.display)) {
+    if (replaced(b, el) || f_display_atomic(s->style.display)) {
         FBox *ifc = target(f);
         FItem *item = ifc != NULL ? new_item(b, ifc, FI_ATOMIC, el, &s->style) : NULL;
         if (item == NULL)
@@ -941,7 +946,7 @@ static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s
         // the atom. Its content costs two descents: a level of it holds a
         // line's frame as well as a block's, twice a block level's stack
         // (LAYOUT.md § Bounds).
-        if (!replaced(el)) {
+        if (!replaced(b, el)) {
             FBox *content = new_box(b, NULL, FB_BLOCK, el, &s->style);
             position_box(b, content, el, false);
             if (content != NULL) {
