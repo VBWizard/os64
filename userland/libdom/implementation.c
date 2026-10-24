@@ -262,7 +262,8 @@ static JSValue create_document(os64_dom_t *dom, JSContext *ctx, int argc, JSValu
             result = JS_ThrowTypeError(ctx, "createDocument's third argument is a DocumentType or null");
     }
     os64_html_ns_t space = OS64_HTML_NS_HTML;
-    int type = has_ns && same(ns.data, ns.length, NS_HTML) ? D_DOCUMENT_XHTML : D_DOCUMENT_XML;
+    int type = has_ns && same(ns.data, ns.length, NS_HTML) ? D_DOCUMENT_XHTML
+             : has_ns && same(ns.data, ns.length, NS_SVG) ? D_DOCUMENT_SVG : D_DOCUMENT_XML;
     if (JS_IsUndefined(result) && name.length != 0) {
         const char *colon = os64_strchr(name.data, ':');
         size_t prefix = colon != NULL ? (size_t)(colon - name.data) : 0;

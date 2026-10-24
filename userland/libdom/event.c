@@ -3,7 +3,9 @@
 
 /* Events: the DOM Standard's EventTarget and Event, HTML's event handlers
  * (the on<type> properties and content attributes), and the dispatch a host
- * starts for a person's input. LIBDOM.md § Events is the design record. */
+ * starts for a person's input; and the Event interfaces whose state is
+ * Event's own record with a field or two more (ProgressEvent, CustomEvent)
+ * and createEvent's table. LIBDOM.md § Events is the design record. */
 
 static JSClassID event_slot;
 
@@ -11,7 +13,7 @@ static const char *const kinds[D_EVENT_COUNT] = {
     "click", "mousedown", "mouseup", "mouseover", "mouseout", "mousemove",
     "keydown", "keypress", "keyup", "input", "change", "submit", "reset",
     "focus", "blur", "load", "scroll", "resize", "popstate", "hashchange", "online", "offline",
-    "languagechange", "DOMContentLoaded"
+    "languagechange", "readystatechange", "visibilitychange", "prerenderingchange", "DOMContentLoaded"
 };
 
 enum { PHASE_NONE, PHASE_CAPTURING, PHASE_AT_TARGET, PHASE_BUBBLING };
@@ -28,6 +30,9 @@ typedef struct {
     /* A ProgressEvent's (XHR § 4): its three attributes. */
     bool progress, length_computable;
     double loaded, total;
+    /* A CustomEvent's (DOM § 2.4): its detail, null until set. */
+    bool custom;
+    JSValue detail;
 } DEvent;
 
 int d_event_kind(const char *type)
@@ -40,6 +45,15 @@ int d_event_kind(const char *type)
 static bool has_handler_name(int kind)
 {
     return kind >= 0 && kind != D_EVENT_DOM_CONTENT_LOADED;
+}
+
+/* Whether an element's on<type> content attribute is a handler for the
+ * type: not for the document's own types (internal.h), which HTML gives an
+ * IDL property on Document and no content attribute. */
+static bool content_attribute(int kind)
+{
+    return has_handler_name(kind) && kind != D_EVENT_READYSTATECHANGE && kind != D_EVENT_VISIBILITYCHANGE &&
+        kind != D_EVENT_PRERENDERINGCHANGE;
 }
 
 /* Whether on<type> is a handler on this page: the arc's types (SCROLL on)
@@ -69,6 +83,7 @@ static void event_finalizer(JSRuntime *rt, JSValue value)
     if (event == NULL) return;
     JS_FreeValueRT(rt, event->target);
     JS_FreeValueRT(rt, event->current);
+    JS_FreeValueRT(rt, event->detail);
     js_free_rt(rt, event->type);
     js_free_rt(rt, event);
 }
@@ -79,6 +94,7 @@ static void event_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
     if (event == NULL) return;
     JS_MarkValue(rt, event->target, mark);
     JS_MarkValue(rt, event->current, mark);
+    JS_MarkValue(rt, event->detail, mark);
 }
 
 static uint64_t now_ms(const os64_dom_t *dom)
@@ -107,7 +123,8 @@ JSValue d_event_new_proto(os64_dom_t *dom, JSContext *ctx, JSValueConst prototyp
     }
     *event = (DEvent){.target = JS_NULL, .current = JS_NULL, .type = copy,
                       .time = (double)now_ms(dom), .bubbles = bubbles,
-                      .cancelable = cancelable, .initialized = true, .trusted = trusted};
+                      .cancelable = cancelable, .initialized = true, .trusted = trusted,
+                      .detail = JS_NULL};
     JS_SetOpaque(object, event);
     return object;
 }
@@ -271,7 +288,7 @@ static bool body_like(const os64_html_node_t *node)
 /* The element whose content attribute feeds this target's slot. */
 static const os64_html_node_t *attribute_source(os64_dom_t *dom, DValue *entry, int kind)
 {
-    if (!handler_on(dom, kind)) return NULL;
+    if (!handler_on(dom, kind) || !content_attribute(kind)) return NULL;
     if (entry == dom->window) return window_reflecting(kind) ? body_element(dom) : NULL;
     const os64_html_node_t *node = entry->node;
     if (node == NULL || node->kind != OS64_HTML_ELEMENT) return NULL;
@@ -343,7 +360,7 @@ static int handler_kind(const char *name)
 {
     if ((name[0] | 0x20) != 'o' || (name[1] | 0x20) != 'n') return -1;
     for (int kind = 0; kind < D_EVENT_COUNT; kind++) {
-        if (!has_handler_name(kind)) continue;
+        if (!content_attribute(kind)) continue;
         const char *a = name + 2, *b = kinds[kind];
         while (*a != '\0' && *b != '\0' && (*a | 0x20) == (*b | 0x20)) { a++; b++; }
         if (*a == '\0' && *b == '\0') return kind;
@@ -639,7 +656,7 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
 
 static bool element_has_handler(const os64_dom_t *dom, const os64_html_node_t *node, int kind)
 {
-    return handler_on(dom, kind) && node->kind == OS64_HTML_ELEMENT &&
+    return handler_on(dom, kind) && content_attribute(kind) && node->kind == OS64_HTML_ELEMENT &&
         !(body_like(node) && window_reflecting(kind)) && handler_attribute(node, kind) != NULL;
 }
 
@@ -854,8 +871,21 @@ os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node
         outcome->status = OS64_JS_FAILED_RUNTIME;
         return outcome->status;
     }
-    if (!os64_dom_listens(dom, ev->type)) return OS64_JS_OK;
-    return d_host_dispatch(dom, node, NULL, ev->type, host_event, (void *)ev, prevented, outcome);
+    /* The readiness this dispatch makes comes first, and readystatechange
+     * just before the event itself (document.c). */
+    os64_js_outcome_t changed;
+    os64_memset(&changed, 0, sizeof(changed));
+    if (d_readiness_moved(dom, node, ev->type, &changed) && sticky(changed.status)) {
+        *outcome = changed;
+        return outcome->status;
+    }
+    if (os64_dom_listens(dom, ev->type))
+        d_host_dispatch(dom, node, NULL, ev->type, host_event, (void *)ev, prevented, outcome);
+    if (changed.status != OS64_JS_OK) {
+        d_outcome_fold(&changed, outcome);
+        *outcome = changed;
+    }
+    return outcome->status;
 }
 
 /* Attributes are counted once per tree version: a walk of the connected tree
@@ -894,7 +924,7 @@ static uint32_t attribute_mask(os64_dom_t *dom)
 uint32_t os64_dom_handler_bit(const char *type)
 {
     int kind = type != NULL ? d_event_kind(type) : -1;
-    return has_handler_name(kind) ? 1u << kind : 0;
+    return content_attribute(kind) ? 1u << kind : 0;
 }
 
 bool os64_dom_listens(os64_dom_t *dom, const char *type)
@@ -1094,8 +1124,42 @@ static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSV
 enum {
     E_TYPE, E_TARGET, E_CURRENT, E_PHASE, E_BUBBLES, E_CANCELABLE, E_PREVENTED,
     E_RETURN_VALUE, E_CANCEL_BUBBLE, E_TIME, E_TRUSTED,
-    E_PREVENT, E_STOP, E_STOP_NOW, E_INIT
+    E_PREVENT, E_STOP, E_STOP_NOW, E_INIT,
+    /* CustomEvent's own. */
+    E_DETAIL, E_INIT_CUSTOM
 };
+
+/* DOM's "initialize" an event, initEvent's and initCustomEvent's steps
+ * after the dispatch check: its type (converted first, as WebIDL converts
+ * the arguments in order), bubbles and cancelable, the stop-propagation,
+ * stop-immediate and canceled flags cleared, isTrusted false (a host
+ * event a page keeps and re-initializes is its own from then on), and no
+ * target. -1 with an exception pending. */
+static int event_init(JSContext *ctx, DEvent *event, int argc, JSValueConst *argv, const char *who)
+{
+    if (argc < 1) {
+        JS_ThrowTypeError(ctx, "%s needs a type", who);
+        return -1;
+    }
+    const char *type = JS_ToCString(ctx, argv[0]);
+    if (type == NULL) return -1;
+    char *copy = js_strdup(ctx, type);
+    JS_FreeCString(ctx, type);
+    if (copy == NULL) return -1;
+    int bubbles = argc > 1 ? JS_ToBool(ctx, argv[1]) : 0;
+    int cancelable = argc > 2 ? JS_ToBool(ctx, argv[2]) : 0;
+    if (bubbles < 0 || cancelable < 0) { js_free(ctx, copy); return -1; }
+    js_free(ctx, event->type);
+    event->type = copy;
+    event->bubbles = bubbles != 0;
+    event->cancelable = cancelable != 0;
+    event->initialized = true;
+    event->canceled = event->stop = event->stop_now = false;
+    event->trusted = false;
+    JS_FreeValue(ctx, event->target);
+    event->target = JS_NULL;
+    return 0;
+}
 
 static JSValue event_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                             int magic, JSValue *data)
@@ -1128,27 +1192,25 @@ static JSValue event_member(JSContext *ctx, JSValueConst self, int argc, JSValue
     case E_PREVENT: cancel(event); return JS_UNDEFINED;
     case E_STOP: event->stop = true; return JS_UNDEFINED;
     case E_STOP_NOW: event->stop = event->stop_now = true; return JS_UNDEFINED;
-    case E_INIT: {
+    case E_INIT:
         if (event->dispatching) return JS_UNDEFINED;
-        if (argc < 1) return JS_ThrowTypeError(ctx, "initEvent needs a type");
-        const char *type = JS_ToCString(ctx, argv[0]);
-        if (type == NULL) return JS_EXCEPTION;
-        char *copy = js_strdup(ctx, type);
-        JS_FreeCString(ctx, type);
-        if (copy == NULL) return JS_EXCEPTION;
-        int bubbles = argc > 1 ? JS_ToBool(ctx, argv[1]) : 0;
-        int cancelable = argc > 2 ? JS_ToBool(ctx, argv[2]) : 0;
-        if (bubbles < 0 || cancelable < 0) { js_free(ctx, copy); return JS_EXCEPTION; }
-        js_free(ctx, event->type);
-        event->type = copy;
-        event->bubbles = bubbles != 0;
-        event->cancelable = cancelable != 0;
-        event->initialized = true;
-        event->canceled = event->stop = event->stop_now = false;
-        JS_FreeValue(ctx, event->target);
-        event->target = JS_NULL;
+        return event_init(ctx, event, argc, argv, "initEvent") < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+    case E_DETAIL: case E_INIT_CUSTOM:
+        if (!event->custom) return JS_ThrowTypeError(ctx, "Expected a CustomEvent");
+        if (magic == E_DETAIL) return JS_DupValue(ctx, event->detail);
+        /* DOM § 2.4: during a dispatch it does nothing, its arguments
+         * converted all the same; detail's default is null. */
+        if (event->dispatching) {
+            if (argc < 1) return JS_ThrowTypeError(ctx, "initCustomEvent needs a type");
+            const char *type = JS_ToCString(ctx, argv[0]);
+            if (type == NULL) return JS_EXCEPTION;
+            JS_FreeCString(ctx, type);
+            return JS_UNDEFINED;
+        }
+        if (event_init(ctx, event, argc, argv, "initCustomEvent") < 0) return JS_EXCEPTION;
+        JS_FreeValue(ctx, event->detail);
+        event->detail = argc > 3 && !JS_IsUndefined(argv[3]) ? JS_DupValue(ctx, argv[3]) : JS_NULL;
         return JS_UNDEFINED;
-    }
     default: return JS_ThrowTypeError(ctx, "Unknown Event member");
     }
 }
@@ -1182,18 +1244,85 @@ JSValue d_event_construct(os64_dom_t *dom, JSContext *ctx, int argc, JSValueCons
     return object;
 }
 
+/* DOCUMENT.CREATEEVENT (DOM § 4.5): the interface its argument names,
+ * matched against DOM's table without regard to ASCII case, makes an event
+ * that initEvent (or its interface's own init) must set up first. A name
+ * not on the table is a NotSupportedError. A name on it is made as the
+ * interface it names where this binding has that interface: Event,
+ * CustomEvent, HashChangeEvent. Every other name on the table names an
+ * interface this browser has not built (MouseEvent, UIEvent, KeyboardEvent
+ * and the rest), and makes a plain Event, which is what every name made
+ * before the table was read: `createEvent('MouseEvents')` followed by
+ * initEvent is how pages have long dispatched a synthetic click, and
+ * refusing the name would break them where today they work (MODERN_WEB.md
+ * § P1-Da, as built, says how many). TouchEvent is the exception: DOM puts
+ * it on the table only where the legacy touch APIs are exposed, which a
+ * desktop browser does not do (WINDOW_DOCUMENT.md, `ontouchstart` (e)),
+ * and a page that makes one has asked "is this a phone?". With the Modern
+ * Web switch off the argument is not read and every call makes a plain
+ * Event, as before the arc. */
+enum { C_REFUSED, C_EVENT, C_CUSTOM, C_HASHCHANGE, C_UNBUILT };
+
+static int creatable(const char *name)
+{
+    static const struct { const char *name; int as; } kTable[] = {
+        {"beforeunloadevent", C_UNBUILT}, {"compositionevent", C_UNBUILT}, {"customevent", C_CUSTOM},
+        {"devicemotionevent", C_UNBUILT}, {"deviceorientationevent", C_UNBUILT}, {"dragevent", C_UNBUILT},
+        {"event", C_EVENT}, {"events", C_EVENT}, {"focusevent", C_UNBUILT}, {"hashchangeevent", C_HASHCHANGE},
+        {"htmlevents", C_EVENT}, {"keyboardevent", C_UNBUILT}, {"messageevent", C_UNBUILT},
+        {"mouseevent", C_UNBUILT}, {"mouseevents", C_UNBUILT}, {"storageevent", C_UNBUILT},
+        {"svgevents", C_EVENT}, {"textevent", C_UNBUILT}, {"touchevent", C_REFUSED},
+        {"uievent", C_UNBUILT}, {"uievents", C_UNBUILT},
+    };
+    for (size_t i = 0; i < sizeof(kTable) / sizeof(kTable[0]); i++) {
+        const char *a = name, *b = kTable[i].name;
+        while (*a != '\0' && *b != '\0' && (*a >= 'A' && *a <= 'Z' ? *a + ('a' - 'A') : *a) == *b) { a++; b++; }
+        if (*a == '\0' && *b == '\0') return kTable[i].as;
+    }
+    return C_REFUSED;
+}
+
+static JSValue create_event(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv)
+{
+    int as = C_EVENT;
+    if (dom->options.modern) {
+        if (argc < 1) return JS_ThrowTypeError(ctx, "createEvent needs an interface's name");
+        DString name = {0};
+        if (!d_string(dom, ctx, argv[0], &name)) return JS_EXCEPTION;
+        /* d_string makes a NUL U+FFFD, which no name on the table holds. */
+        as = creatable(name.data);
+        d_string_free(dom, &name);
+        if (as == C_REFUSED) return d_error(ctx, "NotSupportedError", "createEvent does not know that interface");
+    }
+    JSValueConst prototype = as == C_CUSTOM && dom->custom_prototype != NULL ? dom->custom_prototype->value
+                           : as == C_HASHCHANGE && dom->hashchange_prototype != NULL ? dom->hashchange_prototype->value
+                           : JS_UNDEFINED;
+    JSValue object = d_event_new_proto(dom, ctx, prototype, "", false, false, false);
+    if (JS_IsException(object)) return object;
+    DEvent *event = JS_GetOpaque(object, dom->event_class);
+    event->initialized = false;
+    event->custom = as == C_CUSTOM;
+    /* HashChangeEvent's members are its own data properties, as its
+     * constructor makes them (window.c), here their defaults. */
+    if (as == C_HASHCHANGE) {
+        static const char *const kURLs[] = {"newURL", "oldURL"};
+        for (int i = 0; i < 2; i++)
+            if (JS_DefinePropertyValueStr(ctx, object, kURLs[i], JS_NewString(ctx, ""),
+                                          JS_PROP_ENUMERABLE | JS_PROP_CONFIGURABLE) < 0) {
+                JS_FreeValue(ctx, object);
+                return JS_EXCEPTION;
+            }
+    }
+    return object;
+}
+
 static JSValue event_construct(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                                int magic, JSValue *data)
 {
     (void)self;
     os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
-    if (magic == 1) {
-        /* document.createEvent: an event initEvent must set up first. */
-        JSValue object = d_event_new(dom, ctx, "", false, false, false);
-        if (!JS_IsException(object)) ((DEvent *)JS_GetOpaque(object, dom->event_class))->initialized = false;
-        return object;
-    }
+    if (magic == 1) return create_event(dom, ctx, argc, argv);
     return d_event_construct(dom, ctx, argc, argv, JS_UNDEFINED);
 }
 
@@ -1273,6 +1402,50 @@ int d_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
             if (d_event_handler(dom, ctx, holders[i], kind) < 0) return -1;
     }
     return d_method(dom, ctx, dom->prototypes[D_PROTO_DOCUMENT]->value, "createEvent", event_construct, 1, 1);
+}
+
+/* CUSTOMEVENT (DOM § 2.4): an Event that carries a detail, null by
+ * default. Its state is the Event's own record, so dispatch needs nothing
+ * new. `new CustomEvent(type, {detail})` reads EventInit's members, then
+ * detail; the detail is whatever value the page gave, held by the event
+ * and traced with it. A Modern Web row. */
+static JSValue custom_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    os64_dom_t *dom = d_binding(ctx);
+    if (dom == NULL) return JS_EXCEPTION;
+    JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+    if (JS_IsException(prototype)) return prototype;
+    JSValue object = d_event_construct(dom, ctx, argc, argv,
+                                       JS_IsObject(prototype) ? (JSValueConst)prototype : dom->custom_prototype->value);
+    JS_FreeValue(ctx, prototype);
+    if (JS_IsException(object)) return object;
+    JSValue detail = argc > 1 && JS_IsObject(argv[1]) ? JS_GetPropertyStr(ctx, argv[1], "detail") : JS_UNDEFINED;
+    if (JS_IsException(detail)) {
+        JS_FreeValue(ctx, object);
+        return detail;
+    }
+    DEvent *event = JS_GetOpaque(object, dom->event_class);
+    event->custom = true;
+    event->detail = JS_IsUndefined(detail) ? JS_NULL : detail;
+    return object;
+}
+
+int d_custom_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    JSValue event_prototype = JS_GetClassProto(ctx, dom->event_class);
+    dom->custom_prototype = d_retain(dom, ctx, JS_NewObjectProto(ctx, event_prototype));
+    JS_FreeValue(ctx, event_prototype);
+    if (dom->custom_prototype == NULL) return -1;
+    JSValueConst prototype = dom->custom_prototype->value;
+    if (d_accessor(dom, ctx, prototype, "detail", event_member, E_DETAIL, false) < 0 ||
+        d_method_named(dom, ctx, prototype, "initCustomEvent", event_member, 1, E_INIT_CUSTOM) < 0)
+        return -1;
+    JSValue event_interface = JS_GetPropertyStr(ctx, global, "Event");
+    if (JS_IsException(event_interface)) return -1;
+    JSValue interface = d_interface_new(ctx, "CustomEvent", 1, custom_constructor, prototype, event_interface);
+    JS_FreeValue(ctx, event_interface);
+    if (JS_IsException(interface)) return -1;
+    return JS_DefinePropertyValueStr(ctx, global, "CustomEvent", interface, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }
 
 int d_event_target(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, JSClassID class_id,

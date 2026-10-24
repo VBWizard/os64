@@ -1,0 +1,298 @@
+# WPT's dom/events in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh dom/events --update
+# rewrites [passing].
+[required]
+# P1-Da: CustomEvent. Each fails with the switch off; the CustomEvent tests a
+# plain Event passes too (createEvent's answer with the switch off: the
+# dispatch of one, a missing initCustomEvent's TypeError, its constants)
+# are the baseline's, not here.
+CustomEvent.html	initCustomEvent's default parameter values.
+Event-init-while-dispatching.html	Calling initCustomEvent while dispatching.
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (CustomEvent).
+[excluded]
+Event-dispatch-on-disabled-elements.html	needs test_driver input, which the runner does not have
+Event-dispatch-redispatch.html	needs test_driver input, which the runner does not have
+Event-dispatch-throwing-multiple-globals.html	needs a frame (IFRAME.md, Tier 1)
+Event-timestamp-cross-realm-getter.html	needs a frame (IFRAME.md, Tier 1)
+EventListener-addEventListener.sub.window.html	needs a frame (IFRAME.md, Tier 1)
+EventListener-handleEvent-cross-realm.html	needs a frame (IFRAME.md, Tier 1)
+EventListener-incumbent-global-1.sub.html	needs a frame (IFRAME.md, Tier 1)
+EventListener-incumbent-global-2.sub.html	needs a frame (IFRAME.md, Tier 1)
+click-on-absolute-pseudo.html	needs test_driver input, which the runner does not have
+event-global-extra.window.html	needs a frame (IFRAME.md, Tier 1)
+event-global-is-still-set-when-coercing-beforeunload-result.html	needs a frame (IFRAME.md, Tier 1)
+event-global-is-still-set-when-reporting-exception-onerror.html	needs a frame (IFRAME.md, Tier 1)
+event-listener-not-fully-active-navigated.html	needs a frame (IFRAME.md, Tier 1)
+event-listener-not-fully-active-target.html	needs a frame (IFRAME.md, Tier 1)
+focus-event-document-move.html	needs test_driver input, which the runner does not have
+handler-count.html?document	needs test_driver input, which the runner does not have
+handler-count.html?element	needs test_driver input, which the runner does not have
+handler-count.html?window	needs test_driver input, which the runner does not have
+no-focus-events-at-clicking-editable-content-in-link.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-mousewheel-event-listener-on-body.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-mousewheel-event-listener-on-div.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-mousewheel-event-listener-on-document.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-mousewheel-event-listener-on-root.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-mousewheel-event-listener-on-window.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-touchmove-event-listener-on-body.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-touchmove-event-listener-on-div.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-touchmove-event-listener-on-document.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-touchmove-event-listener-on-root.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-touchmove-event-listener-on-window.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-touchstart-event-listener-on-body.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-touchstart-event-listener-on-div.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-touchstart-event-listener-on-document.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-touchstart-event-listener-on-root.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-touchstart-event-listener-on-window.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-wheel-event-listener-on-body.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-wheel-event-listener-on-div.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-wheel-event-listener-on-document.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-wheel-event-listener-on-root.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/non-passive-wheel-event-listener-on-window.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-mousewheel-event-listener-on-body.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-mousewheel-event-listener-on-div.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-mousewheel-event-listener-on-document.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-mousewheel-event-listener-on-root.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-mousewheel-event-listener-on-window.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-touchmove-event-listener-on-body.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-touchmove-event-listener-on-div.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-touchmove-event-listener-on-document.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-touchmove-event-listener-on-root.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-touchmove-event-listener-on-window.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-touchstart-event-listener-on-body.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-touchstart-event-listener-on-div.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-touchstart-event-listener-on-document.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-touchstart-event-listener-on-root.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-touchstart-event-listener-on-window.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-wheel-event-listener-on-body.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-wheel-event-listener-on-div.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-wheel-event-listener-on-document.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-wheel-event-listener-on-root.html	needs test_driver input, which the runner does not have
+non-cancelable-when-passive/passive-wheel-event-listener-on-window.html	needs test_driver input, which the runner does not have
+pointer-event-document-move.html	needs test_driver input, which the runner does not have
+scrolling/iframe-chains.html	needs test_driver input, which the runner does not have
+scrolling/input-text-scroll-event-when-using-arrow-keys.html	needs test_driver input, which the runner does not have
+scrolling/save-iframe-scroll-offset-when-display-none.html	needs a frame (IFRAME.md, Tier 1)
+scrolling/scroll-cross-origin-iframes.html	needs test_driver input, which the runner does not have
+scrolling/scroll-event-fired-to-iframe.html	needs a frame (IFRAME.md, Tier 1)
+scrolling/scrollIntoView-in-onscroll-to-sticky.html	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-after-sequence-of-scrolls.tentative.html	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-after-snap.html	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-mandatory-snap-point-after-load.html	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=root-scrollBy-auto	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=root-scrollBy-smooth	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=root-scrollTo-auto	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=root-scrollTo-smooth	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=subframe-scrollBy-auto	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=subframe-scrollBy-smooth	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=subframe-scrollTo-auto	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-programmatic-scroll.html?include=subframe-scrollTo-smooth	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=root-scrollLeft-auto	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=root-scrollLeft-smooth	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=root-scrollTop-auto	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=root-scrollTop-smooth	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=subframe-scrollLeft-auto	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=subframe-scrollLeft-smooth	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=subframe-scrollTop-auto	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-scroll-attr-change.html?include=subframe-scrollTop-smooth	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-scrollIntoView.html?include=nested-scrollIntoView	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-scrollIntoView.html?include=root-inline-end-block-end-behavior-auto	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-scrollIntoView.html?include=root-inline-start-block-start-behavior-smooth	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-scrollIntoView.html?include=subframe-inline-end-block-end-behavior-auto	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-for-scrollIntoView.html?include=subframe-inline-start-block-start-behavior-smooth	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-to-document.html	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-to-element-with-overscroll-behavior.html	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fired-to-window.html	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fires-for-repeat-key-ending-after-scroll-container-end-is-reached.html	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fires-on-visual-viewport.html	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-fires-to-iframe-window.html	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-for-user-scroll.html	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-handler-content-attributes.html	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-not-fired-after-removing-scroller.tentative.html	needs test_driver input, which the runner does not have
+scrolling/scrollend-event-not-fired-on-no-scroll.html	needs test_driver input, which the runner does not have
+scrolling/visibility-hidden-scrolls.html	needs test_driver input, which the runner does not have
+scrolling/wheel-event-composed.html	needs test_driver input, which the runner does not have
+scrolling/wheel-event-no-scroll-after-prevent-default.html	needs test_driver input, which the runner does not have
+scrolling/wheel-event-transactions-basic.html?include=scroll-over-scrollable-child	needs test_driver input, which the runner does not have
+scrolling/wheel-event-transactions-basic.html?include=target-basic	needs test_driver input, which the runner does not have
+scrolling/wheel-event-transactions-basic.html?include=transaction-not-bound-to-scroll-frame	needs test_driver input, which the runner does not have
+scrolling/wheel-event-transactions-multiple-action-chains.html	needs test_driver input, which the runner does not have
+scrolling/wheel-event-transactions-target-display-change.html?include=contents	needs test_driver input, which the runner does not have
+scrolling/wheel-event-transactions-target-display-change.html?include=none	needs test_driver input, which the runner does not have
+scrolling/wheel-event-transactions-target-elements.html	needs test_driver input, which the runner does not have
+scrolling/wheel-event-transactions-target-move.html	needs test_driver input, which the runner does not have
+scrolling/wheel-event-transactions-target-removal.html	needs test_driver input, which the runner does not have
+scrolling/wheel-event-transactions-target-resize.html?include=passive-false	needs test_driver input, which the runner does not have
+scrolling/wheel-event-transactions-target-resize.html?include=passive-true	needs test_driver input, which the runner does not have
+[passing]
+CustomEvent.html	CustomEvent dispatching.
+CustomEvent.html	First parameter to initCustomEvent should be mandatory.
+CustomEvent.html	initCustomEvent's default parameter values.
+Event-cancelBubble.html	Event.cancelBubble=false must have no effect during event propagation.
+Event-cancelBubble.html	Event.cancelBubble=false must have no effect.
+Event-cancelBubble.html	Event.cancelBubble=true must set the stop propagation flag.
+Event-cancelBubble.html	Initializing an event must set cancelBubble to false.
+Event-cancelBubble.html	cancelBubble must be false after an event has been dispatched.
+Event-cancelBubble.html	cancelBubble must be false when an event is initially created.
+Event-cancelBubble.html	stopImmediatePropagation() must set cancelBubble to true.
+Event-cancelBubble.html	stopPropagation() must set cancelBubble to true.
+Event-constants.html	Constants for eventPhase on CustomEvent object.
+Event-constants.html	Constants for eventPhase on Event interface object.
+Event-constants.html	Constants for eventPhase on Event object.
+Event-constants.html	Constants for eventPhase on Event prototype object.
+Event-constructors.any.html	Event constructors 1
+Event-constructors.any.html	Event constructors 10
+Event-constructors.any.html	Event constructors 11
+Event-constructors.any.html	Event constructors 12
+Event-constructors.any.html	Event constructors 13
+Event-constructors.any.html	Event constructors 2
+Event-constructors.any.html	Event constructors 3
+Event-constructors.any.html	Event constructors 4
+Event-constructors.any.html	Event constructors 6
+Event-constructors.any.html	Event constructors 7
+Event-constructors.any.html	Event constructors 8
+Event-constructors.any.html	Event constructors 9
+Event-defaultPrevented-after-dispatch.html	Default prevention via preventDefault
+Event-defaultPrevented-after-dispatch.html	Default prevention via returnValue
+Event-defaultPrevented.html	When an event is created, defaultPrevented should be initialized to false.
+Event-defaultPrevented.html	initEvent should unset defaultPrevented.
+Event-defaultPrevented.html	initEvent should work correctly (cancelable).
+Event-defaultPrevented.html	initEvent should work correctly (not cancelable).
+Event-defaultPrevented.html	preventDefault() should change defaultPrevented if cancelable is true.
+Event-defaultPrevented.html	preventDefault() should not change defaultPrevented if cancelable is false.
+Event-defaultPrevented.html	returnValue should change defaultPrevented if cancelable is true.
+Event-defaultPrevented.html	returnValue should not change defaultPrevented if cancelable is false.
+Event-dispatch-bubble-canceled.html	Setting cancelBubble=true prior to dispatchEvent()
+Event-dispatch-bubbles-false.html	In DOMImplementation.createHTMLDocument()
+Event-dispatch-bubbles-false.html	In window.document with click event
+Event-dispatch-bubbles-false.html	In window.document with load event
+Event-dispatch-bubbles-true.html	In DOMImplementation.createHTMLDocument()
+Event-dispatch-bubbles-true.html	In window.document with click event
+Event-dispatch-bubbles-true.html	In window.document with load event
+Event-dispatch-click.html	basic with click()
+Event-dispatch-click.html	basic with wrong event class
+Event-dispatch-click.html	disabling checkbox in onclick listener shouldn't suppress onchange
+Event-dispatch-click.html	disabling checkbox in onclick listener shouldn't suppress oninput
+Event-dispatch-click.html	disabling radio in onclick listener shouldn't suppress onchange
+Event-dispatch-click.html	disabling radio in onclick listener shouldn't suppress oninput
+Event-dispatch-click.html	disconnected checkbox should be checked
+Event-dispatch-click.html	disconnected radio should be checked
+Event-dispatch-click.tentative.html	disabled checkbox should not be checked from label click
+Event-dispatch-click.tentative.html	disabled radio should not be checked from label click
+Event-dispatch-detached-click.html	Click event can be dispatched to an element that is not in the document.
+Event-dispatch-detached-click.html	Click event on an element not in the document
+Event-dispatch-detached-input-and-change.html	attached checkbox should emit input and change events on click().
+Event-dispatch-detached-input-and-change.html	attached radio should emit input and change events on click().
+Event-dispatch-handlers-changed.html	 Dispatch additional events inside an event listener 
+Event-dispatch-multiple-cancelBubble.html	Multiple dispatchEvent() and cancelBubble
+Event-dispatch-multiple-stopPropagation.html	 Multiple dispatchEvent() and stopPropagation() 
+Event-dispatch-omitted-capture.html	EventTarget.addEventListener with the capture argument omitted
+Event-dispatch-order-at-target.html	Listeners are invoked in correct order (AT_TARGET phase)
+Event-dispatch-order.html	Event phases order
+Event-dispatch-other-document.html	Custom event on an element in another document
+Event-dispatch-propagation-stopped.html	 Calling stopPropagation() prior to dispatchEvent() 
+Event-dispatch-reenter.html	 Dispatch additional events inside an event listener 
+Event-dispatch-target-moved.html	Event propagation path when an element in it is moved within the DOM
+Event-dispatch-target-removed.html	Event propagation path when an element in it is removed from the DOM
+Event-init-while-dispatching.html	Calling initCustomEvent while dispatching.
+Event-init-while-dispatching.html	Calling initEvent while dispatching.
+Event-initEvent.html	Calling initEvent during propagation.
+Event-initEvent.html	Calling initEvent multiple times (getting type).
+Event-initEvent.html	Calling initEvent multiple times (not getting type).
+Event-initEvent.html	Calling initEvent must not have an effect during dispatching.
+Event-initEvent.html	Calling initEvent must unset the stop immediate propagation flag.
+Event-initEvent.html	Calling initEvent must unset the stop propagation flag.
+Event-initEvent.html	First parameter to initEvent should be mandatory.
+Event-initEvent.html	Properties of initEvent(type, false, false)
+Event-initEvent.html	Properties of initEvent(type, false, true)
+Event-initEvent.html	Properties of initEvent(type, true, false)
+Event-initEvent.html	Properties of initEvent(type, true, true)
+Event-initEvent.html	Tests initEvent's default parameter values.
+Event-propagation.html	After cancelBubble=true
+Event-propagation.html	After stopImmediatePropagation()
+Event-propagation.html	After stopPropagation()
+Event-propagation.html	Newly-created Event
+Event-propagation.html	Reinitialized after cancelBubble=true
+Event-propagation.html	Reinitialized after stopImmediatePropagation()
+Event-propagation.html	Reinitialized after stopPropagation()
+Event-returnValue.html	When an event is created, returnValue should be initialized to true.
+Event-returnValue.html	initEvent should unset returnValue.
+Event-returnValue.html	preventDefault() should change returnValue if cancelable is true.
+Event-returnValue.html	preventDefault() should not change returnValue if cancelable is false.
+Event-returnValue.html	returnValue should change returnValue if cancelable is true.
+Event-returnValue.html	returnValue=false should have no effect if cancelable is false.
+Event-returnValue.html	returnValue=true should have no effect once the canceled flag was set.
+Event-stopImmediatePropagation.html	Event's stopImmediatePropagation
+Event-subclasses-constructors.html	Event constructor (argument with default values)
+Event-subclasses-constructors.html	Event constructor (argument with non-default values)
+Event-subclasses-constructors.html	Event constructor (empty argument)
+Event-subclasses-constructors.html	Event constructor (no argument)
+Event-subclasses-constructors.html	Event constructor (null argument)
+Event-subclasses-constructors.html	Event constructor (undefined argument)
+Event-type-empty.html	Constructor
+Event-type-empty.html	initEvent
+Event-type.html	Event.type should be initialized by initEvent
+Event-type.html	Event.type should be initialized by the constructor
+Event-type.html	Event.type should initially be the empty string
+EventListener-handleEvent.html	calls `handleEvent` method of `EventListener`
+EventListener-handleEvent.html	doesn't call `handleEvent` method on callable `EventListener`
+EventListener-handleEvent.html	performs `Get` every time event is dispatched
+EventListenerOptions-capture.html	Capture boolean should be honored correctly
+EventListenerOptions-capture.html	Capture option should be honored correctly
+EventListenerOptions-capture.html	Equivalence of option values
+EventTarget-dispatchEvent-returnvalue.html	Return value of EventTarget.dispatchEvent() affected by preventDefault().
+EventTarget-dispatchEvent-returnvalue.html	Return value of EventTarget.dispatchEvent() affected by returnValue.
+EventTarget-dispatchEvent.html	Calling dispatchEvent(null).
+EventTarget-dispatchEvent.html	Capturing event listeners should be called before non-capturing ones
+EventTarget-dispatchEvent.html	Event listeners added during dispatch should be called
+EventTarget-dispatchEvent.html	Exceptions from event listeners must not be propagated.
+EventTarget-dispatchEvent.html	If the event's dispatch flag is set, an InvalidStateError must be thrown.
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (BeforeUnloadEvent).
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (CompositionEvent).
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (CustomEvent).
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (DeviceMotionEvent).
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (DeviceOrientationEvent).
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (DragEvent).
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (Event).
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (Events).
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (FocusEvent).
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (HTMLEvents).
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (HashChangeEvent).
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (KeyboardEvent).
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (MessageEvent).
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (MouseEvent).
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (MouseEvents).
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (SVGEvents).
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (StorageEvent).
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (TextEvent).
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (UIEvent).
+EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (UIEvents).
+EventTarget-removeEventListener.any.html	removing a null event listener should succeed
+EventTarget-window-constructor.html	Modifying window.constructor does not affect event dispatch
+KeyEvent-initKeyEvent.html	KeyboardEvent.initKeyEvent shouldn't be defined (created by createEvent("KeyboardEvent")
+element-click.html	dynamic querySelectorAll, toggle async
+element-click.html	dynamic querySelectorAll, toggle sync
+element-click.html	static querySelectorAll
+event-global-event-targets.html	An event target's _document property does not affect window.event
+event-global-event-targets.html	window.event is set when dispatching on AbortSignal
+event-global-event-targets.html	window.event is set when dispatching on Performance
+event-global.html	event exists on window, which is initially set to undefined
+event-global.html	window.event is only defined during dispatch
+event-global.html	window.event is set to the current event during dispatch
+event-global.html	window.event is set to the current event, which is the event passed to dispatch
+event-global.html	window.event is set to the current event, which is the event passed to dispatch (2)
+event-handler-attribute-replace-preserves-passive.html	Replacing a wheel event handler attribute on body via setAttribute preserves its passive flag
+event-handler-attribute-replace-preserves-passive.html	Replacing a wheel event handler attribute on document element via setAttribute preserves its passive flag
+event-src-element-nullable.html	Event srcElement should be nullable
+label-default-action.html	Label default action should not trigger when clicked button removes itself
+non-cancelable-when-passive/synthetic-events-cancelable.html	Synthetic mousewheel event with interface Event is not cancelable
+non-cancelable-when-passive/synthetic-events-cancelable.html	Synthetic touchcancel event with interface Event is not cancelable
+non-cancelable-when-passive/synthetic-events-cancelable.html	Synthetic touchend event with interface Event is not cancelable
+non-cancelable-when-passive/synthetic-events-cancelable.html	Synthetic touchmove event with interface Event is not cancelable
+non-cancelable-when-passive/synthetic-events-cancelable.html	Synthetic touchstart event with interface Event is not cancelable
+non-cancelable-when-passive/synthetic-events-cancelable.html	Synthetic wheel event with interface Event is not cancelable
+passive-by-default-non-node.html	wheel listeners on Performance are not passive by default
+preventDefault-during-activation-behavior.html	behavior of preventDefault during activation behavior
+remove-all-listeners.html	Nested usage of once listeners should work.
+remove-all-listeners.html	Removing all listeners and then adding a new one should work.

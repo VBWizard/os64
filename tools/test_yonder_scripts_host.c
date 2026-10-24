@@ -8850,6 +8850,7 @@ static void covered_link_cases(void) {
 
 #include "test_yonder_requests.inc"
 #include "test_yonder_window.inc"
+#include "test_yonder_document.inc"
 
 /* A unit that includes this file for the window and its fakes alone (the
  * WPT runner, the replay runner) defines YONDER_HOST_FAKES_ONLY and brings
@@ -8899,6 +8900,7 @@ int main(void)
     if(getenv("YONDER_NO_STREAM")==NULL) storage_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) request_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) window_cases();
+    if(getenv("YONDER_NO_STREAM")==NULL) document_cases();
     webfont_cases();
     paint_cost_cases();
     whole_view_cases();

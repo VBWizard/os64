@@ -95,6 +95,12 @@ struct yonder_scripts {
     // microseconds; -1 when the last task evaluated none
     // (yonder_scripts_task_us).
     int64_t task_us;
+    // The document's readiness, moved by the dispatches this host makes
+    // (os64_dom_readiness_after) whether or not a binding hears them yet:
+    // a binding made late, at the first script after the page's load, is
+    // made with it. And the options' referrer, the host's own copy.
+    os64_dom_readiness_t readiness;
+    char *referrer;
 };
 
 static void release_item(yonder_scripts_t *s, Item *it)
@@ -248,6 +254,14 @@ static uint32_t zoom(void *opaque)
     return s->options.zoom != NULL ? s->options.zoom(s->options.opaque) : 1000;
 }
 
+// document.activeElement's and hasFocus()'s: the window's answer for this
+// page's document.
+static bool focus(void *opaque, const os64_html_node_t **focused)
+{
+    yonder_scripts_t *s = opaque;
+    return s->options.focus(s->options.opaque, focused);
+}
+
 // crypto.getRandomValues' and randomUUID's bytes: the system's entropy, read
 // by the door every TLS handshake draws from (libtls's os64_tls_entropy).
 static bool entropy(void *opaque, uint8_t *out, size_t length)
@@ -361,6 +375,10 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     options.zoom = zoom;
     options.broken = broken;
     options.entropy = entropy;
+    options.readiness = s->readiness;
+    options.referrer = s->referrer;
+    options.last_modified = s->options.last_modified != 0 ? s->options.last_modified : OS64_DOM_NO_DATE;
+    options.focus = s->options.focus != NULL ? focus : NULL;
     options.host_opaque = s;
     s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
     os64_dom_set_geometry(s->dom, s->options.geometry, s->options.opaque);
@@ -402,6 +420,8 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
     return true;
 }
 
+static char *keep(const char *text);
+
 yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc, os64_page_state_t *state,
                                      const yonder_scripts_options_t *options)
 {
@@ -415,6 +435,10 @@ yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc, os64_page_state_
     s->options = *options;
     s->options.url = NULL;
     s->options.timing = NULL;
+    s->options.referrer = NULL;
+    // A referrer that cannot be kept is none: the page reads "" rather
+    // than a page that is not its own.
+    s->referrer = keep(options->referrer);
     s->url_cut = os64_strcopy(s->url, sizeof(s->url), options->url != NULL ? options->url : "about:blank") >=
                  sizeof(s->url);
     s->blocking = -1;
@@ -458,6 +482,7 @@ void yonder_scripts_free(yonder_scripts_t *s)
     os64_free(s->items);
     os64_free(s->ready);
     os64_free(s->entry_state);
+    os64_free(s->referrer);
     os64_free(s);
 }
 
@@ -660,12 +685,21 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
         // The engine's whole evaluation, compiling the source included: the
         // number a bytecode cache would make smaller (MODERN_WEB.md slice 7).
         int64_t began = os64_micros();
+        // document.currentScript, while it runs AND while the microtasks it
+        // queued drain: HTML's "run a classic script" ends in the microtask
+        // checkpoint, and only then does executing the script element put
+        // currentScript back (WPT's Document.currentScript "Script
+        // microtask" sees the element). os64_js_run drains them itself;
+        // a run that threw drains them below. A link's script has no
+        // element, and leaves it null.
+        os64_dom_set_current_script(s->dom, it->node);
         os64_js_run(s->runtime, source, length, name, out);
         int64_t ended = os64_micros();
         s->task_us = began >= 0 && ended >= began ? ended - began : -1;
         os64_free(source);
         if (out->status == OS64_JS_EXCEPTION && out->jobs_pending)
             drain_after_exception(s, out);
+        os64_dom_set_current_script(s->dom, NULL);
         os64_js_outcome_t nested;
         if (out->status == OS64_JS_OK && os64_dom_take_report(s->dom, &nested))
             *out = nested;
@@ -902,6 +936,13 @@ os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *s, const os64_html_no
     if (s == NULL || s->dead)
         return OS64_JS_OK;
     s->written = 0;
+    // The document's readiness moves with the dispatch, heard or not; a
+    // binding made by it below is made with the readiness it leaves. One
+    // that already hears it moves its own by the same rule, and fires
+    // readystatechange, so a move is dispatched even when nothing listens
+    // to the event itself.
+    os64_dom_readiness_t was = s->readiness;
+    s->readiness = os64_dom_readiness_after(was, s->doc, node, event->type);
     // A page that never ran a script still runs its handler attributes:
     // their runtime is made by the first event one of them names.
     if (s->dom == NULL) {
@@ -912,10 +953,15 @@ os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *s, const os64_html_no
             return out->status;
         }
     }
-    if (!os64_dom_listens(s->dom, event->type))
+    bool moved = s->readiness != was;
+    bool heard = os64_dom_listens(s->dom, event->type) ||
+                 (moved && s->options.modern && os64_dom_listens(s->dom, "readystatechange"));
+    if (!heard && !moved)
         return OS64_JS_OK;
     os64_dom_dispatch(s->dom, node, event, prevented, out);
-    judged(s, out);
+    // A move nothing heard ran no task, and is not counted as one.
+    if (heard)
+        judged(s, out);
     return out->status;
 }
 
@@ -1042,6 +1088,11 @@ const char *yonder_scripts_url(const yonder_scripts_t *s)
 const char *yonder_scripts_referrer(const yonder_scripts_t *s)
 {
     return s != NULL && !s->url_cut ? s->url : NULL;
+}
+
+const char *yonder_scripts_document_referrer(const yonder_scripts_t *s)
+{
+    return s != NULL && s->referrer != NULL ? s->referrer : "";
 }
 
 bool yonder_scripts_encrypted(const yonder_scripts_t *s)

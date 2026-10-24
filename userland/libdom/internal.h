@@ -34,19 +34,24 @@ enum {
  * after it; -1 for Node, which inherits Object's. */
 int d_proto_parent(int kind);
 /* The event types the binding names, which are the ones on<type> names and
- * os64_dom_listens count: the ones the host dispatches, and online,
- * offline and languagechange, whose window handlers exist though nothing
- * here ever fires them (browsing.c says why). A script may listen for any
- * other type. The handler properties of the ones from SCROLL on are the
- * Modern Web arc's, installed by its table's rows (d_event_handler), not
- * with the rest. */
+ * os64_dom_listens count: the ones the host dispatches; readystatechange,
+ * which the binding fires itself (document.c); and online, offline,
+ * languagechange, visibilitychange and prerenderingchange, whose handlers
+ * exist though nothing here ever fires them (browsing.c and document.c say
+ * why). A script may listen for any other type. The handler properties of
+ * the ones from SCROLL on are the Modern Web arc's, installed by its
+ * table's rows (d_event_handler), not with the rest. READYSTATECHANGE,
+ * VISIBILITYCHANGE and PRERENDERINGCHANGE are the document's alone: HTML
+ * gives them an IDL property on Document and no content attribute, so no
+ * element's on<type> attribute is a handler for them. */
 enum {
     D_EVENT_CLICK, D_EVENT_MOUSEDOWN, D_EVENT_MOUSEUP, D_EVENT_MOUSEOVER,
     D_EVENT_MOUSEOUT, D_EVENT_MOUSEMOVE, D_EVENT_KEYDOWN, D_EVENT_KEYPRESS,
     D_EVENT_KEYUP, D_EVENT_INPUT, D_EVENT_CHANGE, D_EVENT_SUBMIT, D_EVENT_RESET,
     D_EVENT_FOCUS, D_EVENT_BLUR, D_EVENT_LOAD, D_EVENT_SCROLL, D_EVENT_RESIZE,
     D_EVENT_POPSTATE, D_EVENT_HASHCHANGE, D_EVENT_ONLINE, D_EVENT_OFFLINE,
-    D_EVENT_LANGUAGECHANGE, D_EVENT_DOM_CONTENT_LOADED,
+    D_EVENT_LANGUAGECHANGE, D_EVENT_READYSTATECHANGE, D_EVENT_VISIBILITYCHANGE,
+    D_EVENT_PRERENDERINGCHANGE, D_EVENT_DOM_CONTENT_LOADED,
     D_EVENT_COUNT
 };
 /* A wrapper, or another engine value the binding holds strongly. A node's
@@ -87,8 +92,10 @@ struct DValue {
 /* DValue.document_type: the window's document and createHTMLDocument's are
  * HTML documents; createDocument makes an XML document, whose createElement
  * makes HTML elements when it was made for the HTML namespace
- * (application/xhtml+xml) and elements in no namespace otherwise. */
-enum { D_DOCUMENT_HTML = 0, D_DOCUMENT_XHTML, D_DOCUMENT_XML };
+ * (application/xhtml+xml) and elements in no namespace otherwise. An SVG
+ * one is an XML document made for the SVG namespace, which differs from
+ * the rest only in its content type (image/svg+xml). */
+enum { D_DOCUMENT_HTML = 0, D_DOCUMENT_XHTML, D_DOCUMENT_XML, D_DOCUMENT_SVG };
 struct DQuery {
     os64_dom_t *dom;
     const os64_html_node_t *root, *owner;
@@ -287,6 +294,15 @@ struct os64_dom {
     size_t requests_held;
     /* The last AbortSignal's number (abort.c's DSignal.serial). */
     uint64_t signal_serial;
+    /* P1-Da, the document's state (document.c): its readiness, moved by
+     * the host's DOMContentLoaded and load dispatches; the referrer the
+     * host gave, the binding's own copy (NULL for none); the script
+     * element the host says is running, held; and CustomEvent's
+     * prototype (event.c). */
+    os64_dom_readiness_t readiness;
+    char *referrer;
+    const os64_html_node_t *current_script;
+    DValue *custom_prototype;
 };
 typedef struct { char *data; size_t length; } DString;
 
@@ -765,6 +781,31 @@ JSValue d_utf8_decode_without_bom(JSContext *ctx, const uint8_t *bytes, size_t l
  * caller frees it), 0 for one that does not parse, -1 with an exception
  * pending. */
 int d_url_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst input, char **out);
+/* ── P1-Da: the document's state reads (document.c), CustomEvent
+ * (event.c). LIBDOM.md § P1-Da's rows is the record. ── */
+int d_document_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_custom_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The referrer copied out of the options at creation (core.c), and what
+ * os64_dom_free lets go: the copy and the held running script. */
+int d_document_setup(os64_dom_t *dom);
+void d_document_free(os64_dom_t *dom);
+/* document.body's setter (HTML § 3.1.4), every page's: `document` is the
+ * receiver. */
+JSValue d_body_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *document, JSValueConst value);
+/* The document's readiness moves for a dispatch the host makes (the rule
+ * is os64_dom_readiness_after's): moved, with readystatechange fired at
+ * the document as one task when the Modern Web switch is on and anything
+ * listens, its outcome in `outcome`. False when it did not move. */
+bool d_readiness_moved(os64_dom_t *dom, const os64_html_node_t *node, const char *type,
+                       os64_js_outcome_t *outcome);
+/* An element's dir attribute as its IDL attribute reads it (mixin.c): one
+ * of its keywords, lowercased, or "". */
+JSValue d_dir_value(JSContext *ctx, const os64_html_node_t *element);
+/* A document's element, its first element child; and its head (`body`
+ * false) or body, the first such child of that element when it is an HTML
+ * `html`, a frameset being a body (node.c, HTML § 3.1). NULL for none. */
+const os64_html_node_t *d_document_element(const os64_html_node_t *document);
+const os64_html_node_t *d_document_part(const os64_html_node_t *document, bool body);
 /* An object's own [Symbol.toStringTag] (classic.c), as an interface's. */
 int d_string_tag(JSContext *ctx, JSValueConst object, const char *name);
 /* ATTRIBUTES (attr.c). THE ONE DOOR: every attribute the binding sets or

@@ -65,7 +65,7 @@ Element's. The supported properties and methods are placed on those chains:
 
 | Kind | Surface beyond Node |
 | --- | --- |
-| Document | documentElement/head/body, doctype, implementation, child-element access, ID/tag/class/name/selector queries, creation |
+| Document | documentElement/head/body (body settable, HTML's setter), doctype, implementation, child-element access, ID/tag/class/name/selector queries, creation; with the Modern Web switch on, the state reads of § P1-Da's rows |
 | Element | tagName, id/className, innerHTML/outerHTML, the attribute methods and `attributes` (§ Attributes as nodes), tag/class/selector queries, child-element access and element siblings, § The classic methods |
 | Text and Comment (CharacterData) | data and element siblings |
 | DocumentType | name, publicId, systemId |
@@ -258,7 +258,9 @@ alone). A listener is a function or an object with `handleEvent`;
 the third argument is the old boolean `useCapture` or `{capture, once}`
 (`passive` is accepted and changes nothing). `new Event(type, {bubbles,
 cancelable})` and the old `document.createEvent(...)` with `initEvent` make
-events. An event reads `type`, `target`, `srcElement`, `currentTarget`,
+events; with the Modern Web switch on, `createEvent` reads DOM's table of
+interface names (§ P1-Da's rows), and with it off makes a plain Event
+whatever it is asked. An event reads `type`, `target`, `srcElement`, `currentTarget`,
 `eventPhase`, `bubbles`, `cancelable`, `defaultPrevented`, `timeStamp` (the
 host's clock), `isTrusted`, and the writable old spellings `returnValue` and
 `cancelBubble`. Host events also carry the mouse fields (`clientX/Y`,
@@ -329,7 +331,10 @@ handler. With the Modern Web switch on, so do `scroll` and `resize`; window
 alone has `onpopstate` and `onhashchange`, and a MediaQueryList `onchange`
 (§ The view, computed style and the session's history), and window alone
 has `ononline`, `onoffline` and `onlanguagechange`, whose events nothing
-here fires (§ P1-W's rows). With it off none of these is a property, and
+here fires (§ P1-W's rows); a document alone has `onreadystatechange`,
+`onvisibilitychange` and `onprerenderingchange`, which HTML gives no
+content attribute, so no element's attribute of that name is a handler
+(§ P1-Da's rows). With it off none of these is a property, and
 their content attributes are ordinary attributes that no event runs. A target's handler is one slot in its listener list, in the place
 it was first set; a slot for an attribute the parser or innerHTML wrote goes
 first (an element has its attributes before any script can reach it), and a
@@ -603,7 +608,8 @@ ASan-instrumented target-profile engine, with sanitized bindings/tree/state.
 their own, and runs jQuery 3.5.1 and 1.12.4 whole;
 `tools/test_dom_attributes.inc` a case per rule of § Attributes as nodes,
 and `tools/test_dom_mutants.py --only attr-` a mutant per rule;
-`tools/test_dom_window.inc` a case per rule of § P1-W's rows. `domtest` exercises
+`tools/test_dom_window.inc` a case per rule of § P1-W's rows, and
+`tools/test_dom_document.inc` of § P1-Da's rows. `domtest` exercises
 the shared-library boundary and heap in ring 3. These are library proofs; yonder's loop is proven with its own
 harness. Result counts are recorded in DOM.md after the final source freeze.
 
@@ -1021,3 +1027,56 @@ here runs page code.
 The classic fixes beside them are every page's, the switch on or off:
 `window` and `document` [LegacyUnforgeable] (§ Objects and collections),
 `history` a read-only accessor, `status` kept (§ Asks).
+
+### P1-Da's rows: the document's state reads
+
+Two rows (MODERN_WEB.md § P1-Da, as built; WINDOW_DOCUMENT.md § P1-Da is
+the plan). The document row puts its members on Document's prototype and
+nothing on window, so it lists no name; the DOM host's chain shape holds
+it instead (`tools/test_dom_modern.inc`). Each member answers for the
+document it is asked of: the window's, or a document of its own, which
+answers what HTML gives a document with no browsing context (document.c's
+header has every answer).
+
+**The document's state** (`document.c`). `readyState` is the readiness the
+host's own dispatches move, by one rule (`os64_dom_readiness_after`):
+DOMContentLoaded at the document makes it `interactive`, load at window
+`complete`, and `os64_dom_dispatch` moves it before anything else, heard
+or not, firing `readystatechange` at the document as a task of its own
+just before the event that moved it. A binding made late is told where the
+document stands (`options.readiness`). `visibilityState` "visible",
+`hidden`, `prerendering` and `wasDiscarded` false. `referrer` is
+`options.referrer`, the binding's own copy. `activeElement` and
+`hasFocus()` ask `options.focus`, the host's answer at every read; an
+element it names that is not in the window's document is no focus, and no
+focus is the body, else the document element, else null.
+`currentScript` is the element the host names with
+`os64_dom_set_current_script`, held while it is named. `URL` and
+`documentURI` are the address location reads; `domain` its origin's host,
+its setter HTML's checks (a SecurityError) and then nothing, the agent
+cluster being origin-keyed. `compatMode`, `characterSet` (and `charset`,
+`inputEncoding`) and `contentType` are libhtml's mode and encoding and
+`text/html`; a document of its own is `CSS1Compat`, `UTF-8` and the type
+its making gave it (`application/xhtml+xml`, `image/svg+xml`,
+`application/xml`). `lastModified` is `options.last_modified` in the local
+time zone, else the time it is asked. `title` is the first `title` element's
+text, ASCII whitespace collapsed, an SVG document's own; its setter
+converts the value, then replaces that element's text, making one in the
+head (or, for SVG, first in the root) when there is none. `dir` reflects
+the html element's, `rootElement` is an SVG root, `clear()` does nothing.
+`onreadystatechange`, `onvisibilitychange` and `onprerenderingchange` are
+the document's handler slots (§ Events).
+
+**`CustomEvent`** (`event.c`) and its `detail` and `initCustomEvent`, the
+detail held in the Event's own record and traced with it. With the switch
+on, `document.createEvent` reads DOM's table without regard to ASCII case:
+`Event` (and `Events`, `HTMLEvents`, `SVGEvents`), `CustomEvent` and
+`HashChangeEvent` are made as themselves, a name off the table is a
+NotSupportedError, `TouchEvent` too (a desktop does not expose the legacy
+touch APIs), and the table's names whose interfaces are not built (MouseEvent,
+UIEvent, KeyboardEvent and the rest) make a plain Event, as every name did
+before (MODERN_WEB.md § P1-Da, as built, says why).
+
+The classic fix beside them is every page's, the switch on or off:
+`document.body`'s setter (HTML § 3.1.4), which replaces the body or appends
+one to the root, through the verbs appendChild uses.
