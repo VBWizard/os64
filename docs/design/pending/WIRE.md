@@ -137,9 +137,11 @@ capture or a standard disagreed with § 1 above, the build follows them:
   resource-isolation policy refuses. `way_origin_site` says only what is
   certain (`same-origin`; `same-site` for one host on two ports;
   `cross-site` for another scheme, an IP literal, or hosts whose last two
-  labels differ) and a request whose site it cannot know sends none of
-  the four `Sec-Fetch-` lines, as a browser from before Fetch Metadata
-  would. In the kept corpus that is 11-21% of a pull's https scripts and
+  labels differ; the round's first ruling had another scheme on one host
+  as same-site, and was corrected, because HTML's "same site" is
+  schemeful and Fetch Metadata uses it) and a request whose site it
+  cannot know sends none of the four `Sec-Fetch-` lines, as a browser from
+  before Fetch Metadata would. In the kept corpus that is 11-21% of a pull's https scripts and
   sheets (271 of 2420, 470 of 3375, 490 of 2326). The omission ends when
   the public-suffix list lands (DEBTS).
 - **Fetch Metadata and the client hints go only to a potentially
