@@ -29,10 +29,11 @@ typedef struct {
     bool via_proxy;
     char host[HTTP_HOST_MAX];       // the peer dialled: the origin's host, or the proxy's
     uint16_t port;
-    // TLS: the caller's trust store, or NULL for the store the library loads
-    // itself. A kept TLS client holds its own reference to the store it was
-    // verified under (tls.h), so no other store can be made at the same
-    // address while the connection is kept, and the pointer is an identity.
+    // TLS: the store it was verified under — the caller's, or the system's
+    // that every fetch without one shares (fetch_pool_trust). A kept TLS
+    // client holds its own reference to it (tls.h), so no other store can be
+    // made at the same address while the connection is kept, and the
+    // pointer is an identity.
     const os64_tls_trust *trust;
 } fetch_pool_key_t;
 
@@ -79,6 +80,24 @@ bool fetch_pool_evict_one(void);
 
 // How many connections are kept now.
 size_t fetch_pool_idle(void);
+
+// ── The system's trust store, one per process ───────────────────────────
+//
+// What a fetch whose caller gives no store verifies against: the store
+// tls.conf names, read on the first call any fetch makes and shared by
+// every one after, so each connection verified without a store of its
+// caller's is verified under the same one, and keyed by it. The library
+// holds one reference and each TLS client its own (tls.h), so the store
+// lives while anything uses it. One lock, held across the first read, so
+// two threads asking at once read it once. A read that fails is not kept:
+// the next call reads again, and `report` says what failed. An edit to the
+// store reaches the programs started after it.
+os64_tls_store_status_t fetch_pool_trust(os64_tls_trust **out, os64_tls_store_report_t *report);
+
+// Let the library's reference go, so the next fetch reads the store again
+// (a connection verified under the old one keeps it, and its key: a fresh
+// read is another store). For the host harnesses, between cases.
+void fetch_pool_trust_drop(void);
 
 // ── Whether a connection may be kept (RFC 9112 § 9.3) ───────────────────
 

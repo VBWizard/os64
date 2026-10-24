@@ -14,7 +14,8 @@
 // the idle expiry runs against the takers; the whole pool's cap is reached;
 // and two of the threads also let everything kept go, or the least recent,
 // now and then. At the end every connection ever made has been closed
-// exactly once. Before the sweep, one case on its own: the stale clock.
+// exactly once. Before the sweep, two cases on their own: the stale clock,
+// and the system's trust store read once whatever number of threads ask.
 //
 // Run by tools/test_fetch_pool_host.sh twice: under ASan and UBSan, and
 // under TSan, which sees a write to a kept connection's fields that the
@@ -191,9 +192,51 @@ static void stale_clock_case(void)
     fetch_pool_drain();
 }
 
+// THE SYSTEM'S STORE IS READ ONCE, however many threads ask for it at once:
+// the read is slow on purpose, every thread asks, one read happens, and
+// every thread is handed the same store.
+static _Atomic int store_reads, store_frees;
+static char the_store;
+os64_tls_store_status_t os64_tls_trust_reload(os64_tls_trust **current, os64_tls_store_report_t *report)
+{
+    (void)report;
+    atomic_fetch_add(&store_reads, 1);
+    for (int i = 0; i < 2000; i++)
+        sched_yield();
+    *current = (os64_tls_trust *)&the_store;
+    return OS64_TLS_STORE_OK;
+}
+void os64_tls_trust_free(os64_tls_trust *store)
+{
+    CHECK(store == (os64_tls_trust *)&the_store);
+    atomic_fetch_add(&store_frees, 1);
+}
+static os64_tls_trust *handed[THREADS];
+static void *store_asker(void *arg)
+{
+    int me = (int)(intptr_t)arg;
+    os64_tls_store_report_t report;
+    CHECK(fetch_pool_trust(&handed[me], &report) == OS64_TLS_STORE_OK);
+    return NULL;
+}
+static void one_store_case(void)
+{
+    pthread_t t[THREADS];
+    for (int i = 0; i < THREADS; i++)
+        pthread_create(&t[i], NULL, store_asker, (void *)(intptr_t)i);
+    for (int i = 0; i < THREADS; i++)
+        pthread_join(t[i], NULL);
+    CHECK(atomic_load(&store_reads) == 1);
+    for (int i = 0; i < THREADS; i++)
+        CHECK(handed[i] == (os64_tls_trust *)&the_store);
+    fetch_pool_trust_drop();
+    CHECK(atomic_load(&store_frees) == 1);
+}
+
 int main(void)
 {
     stale_clock_case();
+    one_store_case();
     pthread_t t[THREADS];
     for (int i = 0; i < THREADS; i++)
         pthread_create(&t[i], NULL, fetcher, (void *)(intptr_t)(i + 1));

@@ -140,7 +140,7 @@ typedef struct {
     const char *user_agent;        // NULL = none sent
     const char *accept;            // NULL = none sent
     const char *extra_headers;     // "Name: value\r\n"..., refused by name if a byte is not a field byte
-    os64_tls_trust *trust;         // caller-owned; NULL = the library loads the store for this fetch
+    os64_tls_trust *trust;         // caller-owned; NULL = the system's, read once per process
     uint64_t max_body;             // decoded bytes; 0 = no cap
     uint32_t idle_ms;              // 0 = the default (30 s, os64get's URL_IDLE_MS)
     uint32_t max_hops;             // 0 = the default (5)
@@ -237,11 +237,15 @@ typedef struct {
   caller that wants Ctrl+C to end a fetch installs the handler that sets
   the flag the predicate reads — as os64get does today.
 - **Trust has one ownership rule: the library frees only what it
-  loaded.** A caller that loads the store once (the browser, per process)
-  passes it and keeps it. A caller that passes NULL (os64get, per
-  invocation) gets the store loaded on the first https hop and freed at
-  close, with the store's report kept in the status detail when loading
-  failed — the "trust once per invocation" rule of #89, now the library's.
+  loaded.** A caller that loads a store passes it and keeps it. A caller
+  that passes NULL gets the system's store, which the library reads once
+  per process, on the first https hop any fetch makes, and shares with
+  every fetch that passes NULL after it (`pool.c`'s `fetch_pool_trust`),
+  with the store's report kept in the status detail when reading failed —
+  the "trust once per invocation" rule of #89, per program. One store per
+  process is what lets a kept connection be keyed by the store it was
+  verified under (WIRE.md § 2 as built). An edit to the store reaches the
+  programs started after it.
 
 ### The status vocabulary, and os64get's exit codes
 

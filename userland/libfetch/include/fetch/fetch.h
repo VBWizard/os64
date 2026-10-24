@@ -257,8 +257,10 @@ typedef struct {
                                    // direct request. A credential is for whoever it was given
                                    // for, not for whoever a redirect or a no_proxy match names.
     // The trust store, for https. Caller-owned when given and never freed
-    // here. NULL = the library loads the store on the first https hop and
-    // frees it at close (the "trust once per invocation" rule of #89).
+    // here. NULL = the system's store, which the library reads once per
+    // process, on the first https hop any fetch makes, and shares with every
+    // fetch that gives none (the "trust once per invocation" rule of #89,
+    // per program): an edit to it reaches the programs started after it.
     os64_tls_trust *trust;
     uint64_t max_body;             // decoded bytes; 0 = no cap
     uint32_t idle_ms;              // 0 = 30 seconds
@@ -387,8 +389,8 @@ const os64_fetch_progress_t *os64_fetch_progress(const os64_fetch_t *f);
 // fetch's redirects made more than one request that went again.
 const char *os64_fetch_reason(os64_fetch_t *f);
 
-// Release the connection, the decoder, the store if this loaded it, and the
-// object. The connection is KEPT for a later fetch to the same peer when
+// Release the connection, the decoder, and the object. The connection is
+// KEPT for a later fetch to the same peer when
 // HTTP allows it (RFC 9112 § 9.3; pool.h's connection_reusable has every
 // clause): a 1.1 reply, no `Connection: close`, the whole request sent, and
 // a body framed by its length or by chunks and read to its end (or none at

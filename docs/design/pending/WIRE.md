@@ -305,12 +305,15 @@ says more than it did:
   for, and the connection goes (`leftover`); one that arrives later is the
   probe's to find. Either way only a connection to the same key could be
   confused by it, whose server answers its own requests anyway.
-- **The trust key.** A caller's store is keyed by its pointer, which a
-  kept TLS client's own reference makes an identity. A fetch with no store
-  of its own loads the system's per fetch, and all of those share one key:
-  a connection verified under the store as it was outlives an edit to it
-  until it idles out or its server closes it (DEBTS § libfetch). A kept
-  connection needs no store, so a fetch that takes one loads none.
+- **One trust store per connection, and per process.** A connection is
+  keyed by the store it was verified under, by pointer, which a kept TLS
+  client's own reference makes an identity. A fetch whose caller gives no
+  store used to read the system's for itself, every fetch; it now shares
+  the one libfetch reads on the first https hop and keeps for the process
+  (`fetch_pool_trust`, the cold read's tenth finding), so every such
+  connection is verified under the same store and keyed by it, and the
+  roots are parsed once a program rather than once a request. An edit to
+  the store reaches the programs started after it (DEBTS § libfetch).
 - **The retry rule is per request**: each request a fetch makes (a
   redirect's next hop is another) goes at most twice, and the reason
   string counts them: "(retried once on a fresh connection)", or "(2

@@ -328,6 +328,8 @@ struct os64_tls_transport { int32_t handle; os64_tls_status_t status; bool closi
                             uint64_t heard_ms; };
 static int tls_creates, tls_frees, trust_loads, trust_frees;
 static os64_tls_trust *fake_trust = (os64_tls_trust *)"trust";
+static const os64_tls_trust *last_trust;   // what the last TLS client was verified under
+static bool trust_fail_next;               // the next store read fails
 os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t h,
                                             const os64_tls_transport_limits_t *limits,
                                             os64_tls_transport **out)
@@ -336,6 +338,7 @@ os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t 
     assert(c && c->trust != NULL);
     assert(c->protocol==OS64_TLS_PROTOCOL_DEFAULT || c->protocol==OS64_TLS_PROTOCOL_TLS12_FALLBACK);
     tls_creates++;
+    last_trust = c->trust;
     struct os64_tls_transport *t = calloc(1, sizeof(*t));
     t->handle = h;
     t->status = c->protocol == OS64_TLS_PROTOCOL_TLS12_FALLBACK ? conns[h-100].peer->tls12_error : conns[h-100].peer->tls_default_error;
@@ -398,6 +401,10 @@ os64_tls_store_status_t os64_tls_trust_reload(os64_tls_trust **current, os64_tls
 {
     (void)report;
     trust_loads++;
+    if (trust_fail_next) {
+        trust_fail_next = false;
+        return OS64_TLS_STORE_OPEN;
+    }
     *current = fake_trust;
     return OS64_TLS_STORE_OK;
 }
@@ -464,12 +471,14 @@ static peer_t *peer_answers(const char *host, uint16_t port, const char *const *
 static void reset(void)
 {
     // What an earlier case left in the pool closes first, so its closes are
-    // not this case's.
+    // not this case's, and the system's store goes, so its read is.
     fetch_pool_drain();
+    fetch_pool_trust_drop();
     peer_reset(); clear_env(); nreplies = 0;
     memset(conns, 0, sizeof(conns));
     memset(history, 0, sizeof(history));
     dials = closes = tls_creates = tls_frees = trust_loads = trust_frees = 0;
+    last_trust = NULL; trust_fail_next = false;
     now_ms = 0; chunk_mode = 0; fail_next_malloc = false;
     write_limit = write_stop = 0; upload_cancel = false; open_limit = 0;
 }
@@ -740,7 +749,26 @@ static void case_https_and_downgrade(void)
     uint8_t out[4096];
     CHECK(slurp(f, out, sizeof(out), 0) == strlen(page) && os64_fetch_status(f) == OS64_FETCH_OK);
     os64_fetch_close(f);
-    CHECK(trust_frees == 1 && tls_frees == 1 && closes == 1);
+    // The system's store is the process's, kept for the next fetch.
+    CHECK(trust_frees == 0 && tls_frees == 1 && closes == 1);
+
+    // ONE SYSTEM STORE FOR EVERY FETCH THAT GIVES NONE: read once, every
+    // connection verified under it (the transport is handed it), and a read
+    // that failed is not kept — the next fetch reads again.
+    reset();
+    peer_add("secure.test", 443, reply_len("200 OK", "", page));
+    peer_add("other.test", 443, reply_len("200 OK", "", page));
+    trust_fail_next = true;
+    f = os64_fetch_open("https://secure.test/", NULL);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_TLS_FAILED && os64_fetch_detail(f)->store_failed && dials == 0);
+    os64_fetch_close(f);
+    f = os64_fetch_open("https://secure.test/", NULL);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && trust_loads == 2 && last_trust == fake_trust);
+    os64_fetch_close(f);
+    f = os64_fetch_open("https://other.test/", NULL);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && trust_loads == 2 && tls_creates == 2 && last_trust == fake_trust);
+    os64_fetch_close(f);
+    CHECK(trust_frees == 0);
 
     // A caller-owned store is never freed.
     reset();
@@ -781,7 +809,7 @@ static void case_https_and_downgrade(void)
     CHECK(os64_fetch_status(f) == OS64_FETCH_OK && !os64_fetch_head(f)->encrypted);
     CHECK(strcmp(os64_fetch_head(f)->url_text, "http://plain.test/") == 0 && os64_fetch_head(f)->hops == 1);
     os64_fetch_close(f);
-    CHECK(trust_frees == 1);   // loaded for the first hop, freed at close
+    CHECK(trust_loads == 1 && trust_frees == 0);   // read for the first hop, kept for the process
 }
 
 static void case_proxy(void)
@@ -1043,15 +1071,18 @@ static void case_round1(void)
     os64_fetch_close(f);
 
     // A cancellation that lands while the trust store is loading must not
-    // leak the store: the predicate's second call (after the load) says yes.
+    // lose the store: the predicate's second call (after the load) says
+    // yes, and the store read is kept for the next fetch, not read again.
     reset(); cancel_now = false; cancel_after_calls = 2;
     peer_add("secure.test", 443, reply_len("200 OK", "", page));
     os64_fetch_options_t cancel = { .cancelled = cancelled_cb };
     f = os64_fetch_open("https://secure.test/", &cancel);
     CHECK(os64_fetch_status(f) == OS64_FETCH_INTERRUPTED && trust_loads == 1);
     os64_fetch_close(f);
-    CHECK(trust_frees == 1);
     cancel_now = false; cancel_after_calls = 0;
+    f = os64_fetch_open("https://secure.test/", NULL);
+    CHECK(os64_fetch_status(f) == OS64_FETCH_OK && trust_loads == 1 && trust_frees == 0);
+    os64_fetch_close(f);
 
     // The hop names who carried the hop that ANSWERED, so a caller can warn
     // about a proxied first leg even when the final head went direct.
@@ -2701,6 +2732,7 @@ int main(int argc, char **argv)
     // Nothing is left kept at exit: the sanitizer's leak check is the proof
     // that what the pool holds it also lets go.
     fetch_pool_drain();
+    fetch_pool_trust_drop();
     CHECK(fetch_pool_idle() == 0);
     printf("test_fetch_host: %d checks passed\n", checks);
     return 0;

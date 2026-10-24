@@ -177,6 +177,34 @@ size_t fetch_pool_idle(void)
     return n;
 }
 
+static os64_lock_t s_trust_lock = OS64_LOCK_INIT;
+static os64_tls_trust *s_trust;     // the system's store, once read
+
+os64_tls_store_status_t fetch_pool_trust(os64_tls_trust **out, os64_tls_store_report_t *report)
+{
+    os64_tls_store_status_t status = OS64_TLS_STORE_OK;
+    os64_lock_acquire(&s_trust_lock);
+    if (s_trust == NULL) {
+        os64_tls_trust *read = NULL;
+        status = os64_tls_trust_reload(&read, report);
+        if (status == OS64_TLS_STORE_OK)
+            s_trust = read;
+    }
+    *out = s_trust;
+    os64_lock_release(&s_trust_lock);
+    return status;
+}
+
+void fetch_pool_trust_drop(void)
+{
+    os64_lock_acquire(&s_trust_lock);
+    os64_tls_trust *store = s_trust;
+    s_trust = NULL;
+    os64_lock_release(&s_trust_lock);
+    if (store != NULL)
+        os64_tls_trust_free(store);
+}
+
 bool connection_reusable(const fetch_reuse_facts_t *f)
 {
     if (!f->request_http11 || !f->response_http11)

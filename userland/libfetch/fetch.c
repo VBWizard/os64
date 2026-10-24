@@ -84,8 +84,10 @@ struct os64_fetch {
     bool over;                      // read has given its final answer
     int64_t final_answer;           // ...and this is it (0 or -1)
 
+    // The store an https hop is verified under: the caller's, or the
+    // system's the library shares (fetch_pool_trust). Never this fetch's to
+    // free.
     os64_tls_trust *trust;
-    bool trust_owned;
 
     // gzip: the decoder, its cap, and the wire staging run.
     bool gzip;
@@ -592,7 +594,7 @@ static void pool_key(const os64_fetch_t *f, bool encrypted, fetch_pool_key_t *k)
     k->via_proxy = f->proxy.inUse;
     os64_strcopy(k->host, sizeof(k->host), f->proxy.inUse ? f->proxy.host : f->current.host);
     k->port = f->proxy.inUse ? f->proxy.port : f->current.port;
-    k->trust = encrypted ? f->opt.trust : NULL;
+    k->trust = encrypted ? f->trust : NULL;
 }
 
 // The facts connection_reusable judges, read off the exchange this fetch
@@ -755,6 +757,20 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
             return OS64_FETCH_REQUEST_FAILED;
         }
 
+        // The store an https hop is verified under, settled before the pool
+        // is asked, since a kept connection is kept for its store: the
+        // caller's, or the system's every other fetch shares.
+        if (encrypted && f->trust == NULL) {
+            os64_tls_store_status_t loaded = fetch_pool_trust(&f->trust, &f->detail.store_report);
+            if (cancelled(f))
+                return OS64_FETCH_INTERRUPTED;
+            if (loaded != OS64_TLS_STORE_OK) {
+                f->detail.store_failed = true;
+                f->detail.store = loaded;
+                return OS64_FETCH_TLS_FAILED;
+            }
+        }
+
         // On a kept connection when there is one, and once more on a fresh
         // one when the kept one failed as a closed idle connection does
         // (retry_on_fresh).
@@ -910,28 +926,11 @@ static os64_fetch_status_t exchange(os64_fetch_t *f, const char *request, bool e
     return OS64_FETCH_OK;
 }
 
-// A connection dialled for this request: the trust store loaded first when
-// the hop is encrypted and the caller gave none, then the dial, then TLS.
+// A connection dialled for this request: the dial, then TLS under the store
+// ask settled on.
 static os64_fetch_status_t dial(os64_fetch_t *f, bool encrypted, const char *peerHost,
                                 uint16_t peerPort)
 {
-    if (encrypted && f->trust == NULL) {
-        os64_tls_store_status_t loaded =
-            os64_tls_trust_reload(&f->trust, &f->detail.store_report);
-        // Ownership is recorded the instant the load succeeds, BEFORE
-        // anything can return: a cancellation that lands during the
-        // load would otherwise leave a store nobody frees (Codex, #92).
-        if (loaded == OS64_TLS_STORE_OK)
-            f->trust_owned = true;
-        if (cancelled(f))
-            return OS64_FETCH_INTERRUPTED;
-        if (loaded != OS64_TLS_STORE_OK) {
-            f->detail.store_failed = true;
-            f->detail.store = loaded;
-            return OS64_FETCH_TLS_FAILED;
-        }
-    }
-
     char dialstring[FETCH_DIAL_MAX];
     int32_t dn = os64_snprintf(dialstring, sizeof(dialstring), "tcp!%s!%u",
                                peerHost, (unsigned)peerPort);
@@ -1261,7 +1260,7 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt)
         f->opt = *opt;
     if (f->opt.max_hops == 0)
         f->opt.max_hops = OS64_FETCH_HOPS_DEFAULT;
-    f->trust = f->opt.trust;              // caller-owned: trust_owned stays false
+    f->trust = f->opt.trust;              // caller-owned, or NULL until an https hop
     f->io.handle = -1;
     f->method = f->opt.method;
     bool named = f->opt.method_name != NULL;
@@ -1619,7 +1618,5 @@ void os64_fetch_close(os64_fetch_t *f)
         os64_gzip_destroy(f->gz);
     if (f->wire != NULL)
         os64_free(f->wire);
-    if (f->trust_owned && f->trust != NULL)
-        os64_tls_trust_free(f->trust);
     os64_free(f);
 }
