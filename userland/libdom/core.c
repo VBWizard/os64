@@ -436,6 +436,8 @@ void os64_dom_drain(os64_dom_t *dom)
     d_report_drain(dom);
     d_event_drain(dom);
     d_timer_drain(dom);
+    d_message_drain(dom);
+    d_idle_drain(dom);
     /* The requests out are cancelled with the host and forgotten. */
     d_fetch_drain(dom);
     for (DValue *entry = dom->values; entry != NULL; entry = entry->next) {
@@ -456,6 +458,7 @@ void os64_dom_free(os64_dom_t *dom)
         query = next;
     }
     d_timer_free(dom);
+    d_idle_free(dom);
     d_fetch_free(dom);
     d_window_free(dom);
     d_document_free(dom);
@@ -478,11 +481,12 @@ void os64_dom_free(os64_dom_t *dom)
 }
 
 size_t os64_dom_bytes(const os64_dom_t *dom) { return dom != NULL ? dom->bytes : 0; }
-/* The five registries: wrappers and other held values, listener callbacks,
- * timer callbacks with their arguments, what the requests out hold, and the
- * failures waiting for their events (report.c). */
+/* The seven registries: wrappers and other held values, listener callbacks,
+ * timer callbacks with their arguments, what the requests out hold, the
+ * failures waiting for their events (report.c), the windows that posted
+ * the messages waiting (message.c), and the idle callbacks (idle.c). */
 size_t os64_dom_registry_count(const os64_dom_t *dom)
 {
     return dom != NULL ? dom->retained + dom->listeners_held + dom->timers_held + dom->requests_held +
-        dom->pending_held : 0;
+        dom->pending_held + dom->messages_held + dom->idle_live : 0;
 }

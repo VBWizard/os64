@@ -136,9 +136,7 @@ static JSValue crypto_member(JSContext *ctx, JSValueConst self, int argc, JSValu
     return magic == C_GET_RANDOM_VALUES ? get_random_values(dom, ctx, argc, argv) : random_uuid(dom, ctx);
 }
 
-/* `object`'s own accessor `name`'s getter, held in *out; -1 with an
- * exception pending. */
-static int take_getter(os64_dom_t *dom, JSContext *ctx, JSValueConst object, const char *name, DValue **out)
+int d_take_getter(os64_dom_t *dom, JSContext *ctx, JSValueConst object, const char *name, DValue **out)
 {
     JSAtom atom = JS_NewAtom(ctx, name);
     if (atom == JS_ATOM_NULL) return -1;
@@ -171,14 +169,14 @@ static int take_buffer_getters(os64_dom_t *dom, JSContext *ctx, JSValueConst glo
     JSValue typed_prototype = JS_IsException(uint8_prototype) ? JS_EXCEPTION : JS_GetPrototype(ctx, uint8_prototype);
     JS_FreeValue(ctx, uint8_prototype);
     if (JS_IsException(typed_prototype)) return -1;
-    int result = take_getter(dom, ctx, typed_prototype, "buffer", &dom->crypto_getters[0]);
+    int result = d_take_getter(dom, ctx, typed_prototype, "buffer", &dom->crypto_getters[0]);
     JS_FreeValue(ctx, typed_prototype);
     if (result < 0) return -1;
     JSValue buffer = JS_GetPropertyStr(ctx, global, "ArrayBuffer");
     JSValue buffer_prototype = JS_IsException(buffer) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, buffer, "prototype");
     JS_FreeValue(ctx, buffer);
     if (JS_IsException(buffer_prototype)) return -1;
-    result = take_getter(dom, ctx, buffer_prototype, "resizable", &dom->crypto_getters[1]);
+    result = d_take_getter(dom, ctx, buffer_prototype, "resizable", &dom->crypto_getters[1]);
     JS_FreeValue(ctx, buffer_prototype);
     return result;
 }

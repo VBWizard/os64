@@ -10,12 +10,17 @@
 
 #define D_BUCKETS 256
 #define D_SET 0x1000
+/* The intrinsics the structured clone holds (clone.c's H_COUNT). */
+#define D_CLONE_HELD 32
 typedef struct DValue DValue;
 typedef struct DQuery DQuery;
 typedef struct DListener DListener;
 typedef struct DTimer DTimer;
 typedef struct DScript DScript;
 typedef struct DRequest DRequest;
+typedef struct DClone DClone;
+typedef struct DMessage DMessage;
+typedef struct DIdle DIdle;
 typedef struct DActiveEvent { struct DActiveEvent *previous; JSValue value; } DActiveEvent;
 /* The wrappers' prototypes, one per kind of node the binding tells apart
  * (node.c's d_node_install builds the chain). An HTML element is an
@@ -36,10 +41,12 @@ int d_proto_parent(int kind);
 /* The event types the binding names, which are the ones on<type> names and
  * os64_dom_listens count: the ones the host dispatches; the three the
  * binding fires at window for a script's failures (report.c);
- * readystatechange, which the binding fires itself (document.c); and
- * online, offline, languagechange, visibilitychange and prerenderingchange,
- * whose handlers exist though nothing here ever fires them (browsing.c and
- * document.c say why). A script may listen for any other type. The handler
+ * readystatechange, which the binding fires itself (document.c); message
+ * and messageerror, which a posted message's task fires at window
+ * (message.c); and online, offline, languagechange, visibilitychange and
+ * prerenderingchange, whose handlers exist though nothing here ever fires
+ * them (browsing.c and document.c say why). A script may listen for any
+ * other type. The handler
  * properties of the ones from SCROLL on are the Modern Web arc's, installed
  * by its table's rows (d_event_handler), not with the rest.
  * READYSTATECHANGE, VISIBILITYCHANGE and PRERENDERINGCHANGE are the
@@ -54,7 +61,7 @@ enum {
     D_EVENT_POPSTATE, D_EVENT_HASHCHANGE, D_EVENT_ONLINE, D_EVENT_OFFLINE,
     D_EVENT_LANGUAGECHANGE, D_EVENT_ERROR, D_EVENT_UNHANDLEDREJECTION,
     D_EVENT_REJECTIONHANDLED, D_EVENT_READYSTATECHANGE, D_EVENT_VISIBILITYCHANGE,
-    D_EVENT_PRERENDERINGCHANGE, D_EVENT_DOM_CONTENT_LOADED,
+    D_EVENT_PRERENDERINGCHANGE, D_EVENT_DOM_CONTENT_LOADED, D_EVENT_MESSAGE, D_EVENT_MESSAGEERROR,
     D_EVENT_COUNT
 };
 /* A wrapper, or another engine value the binding holds strongly. A node's
@@ -353,6 +360,28 @@ struct os64_dom {
     char *referrer;
     const os64_html_node_t *current_script;
     DValue *custom_prototype;
+    /* P2b, clone, message, idle. The intrinsics the structured clone calls,
+     * taken before any page ran (clone.c's d_clone_setup). The window's
+     * posted messages, oldest first, and how many values they hold (the
+     * registry's sixth list), and MessageEvent's prototype (message.c,
+     * event.c). The idle callbacks (idle.c): every entry in request order,
+     * holes included (`idle_count` of `idle_cap`), the next to run
+     * (`idle_head`), where the runnable ones end and the ones waiting for
+     * the next period begin (`idle_split`), how many hold a callback (the
+     * registry's seventh list) and how many of those are runnable; the last
+     * handle; the open period, when it began on both clocks, whether a
+     * request was made outside a period's callback since it began, and when
+     * the next may begin for one made inside; and whether a period's
+     * callback is running. */
+    DValue *clone_held[D_CLONE_HELD];
+    DMessage *messages, *messages_last;
+    size_t messages_held;
+    DValue *message_prototype;
+    DIdle *idle;
+    size_t idle_count, idle_cap, idle_head, idle_split, idle_live, idle_runnable;
+    uint32_t idle_handle;
+    bool idle_open, idle_fresh, idle_running;
+    uint64_t idle_start_ms, idle_start_us, idle_rested_ms;
 };
 #define D_NO_SCRIPT UINT32_MAX
 #define D_SCRIPT_PAGE 0u
@@ -934,6 +963,57 @@ JSValue d_body_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *docu
  * listens, its outcome in `outcome`. False when it did not move. */
 bool d_readiness_moved(os64_dom_t *dom, const os64_html_node_t *node, const char *type,
                        os64_js_outcome_t *outcome);
+/* ── P2b: clone, message, idle (clone.c, message.c, idle.c, and
+ * MessageEvent in event.c). LIBDOM.md § P2b's rows is the record. ── */
+/* HTML's StructuredSerializeWithTransfer, in the realm of `ctx` whose
+ * binding is `dom`: the record, or NULL with the exception pending (a
+ * DataCloneError, or what a getter or a conversion threw). `transfer` is
+ * the transfer list, each an object (d_clone_objects). */
+DClone *d_clone_write(os64_dom_t *dom, JSContext *ctx, JSValueConst value, const JSValue *transfer,
+                      size_t transfer_count);
+/* StructuredDeserializeWithTransfer into the realm of `ctx`, whose binding
+ * is `dom`: the copy, or JS_EXCEPTION with the exception pending. The
+ * record's bytes move into the buffers and blobs it makes, so a record is
+ * read once. */
+JSValue d_clone_read(os64_dom_t *dom, JSContext *ctx, DClone *clone);
+void d_clone_free(JSRuntime *rt, DClone *clone);
+/* The intrinsics the pair calls, taken from `global` before any page ran:
+ * once per binding, by each row that clones. */
+int d_clone_setup(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* StructuredSerializeOptions at argv[at]: its transfer list (empty when
+ * absent), each an object, as a sequence the caller frees with
+ * d_sequence_free. -1 with an exception pending. d_clone_objects is the
+ * object check alone, for a list converted otherwise. */
+int d_clone_transfer(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv, int at, JSValue **list,
+                     size_t *count);
+int d_clone_objects(JSContext *ctx, const JSValue *list, size_t count);
+int d_clone_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_message_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_idle_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* What os64_dom_drain releases (the messages' values and clones, the idle
+ * callbacks), and what os64_dom_free frees (the idle entries). */
+void d_message_drain(os64_dom_t *dom);
+void d_idle_drain(os64_dom_t *dom);
+void d_idle_free(os64_dom_t *dom);
+/* MessageEvent (event.c): the interface, and one made for a dispatch:
+ * trusted, not bubbling or cancelable, `data` taken, `origin` copied,
+ * `source` held, lastEventId "" and its ports an empty frozen array. */
+int d_message_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+JSValue d_message_event_new(os64_dom_t *dom, JSContext *ctx, const char *type, JSValue data, const char *origin,
+                            JSValueConst source);
+/* A File's name and lastModified (borrowed); false for a Blob that is no
+ * File, and for anything else. d_file_new is d_blob_new's File: `name`
+ * (engine memory) taken with the bytes. */
+bool d_blob_file(JSValueConst value, const char **name, int64_t *last_modified);
+JSValue d_file_new(os64_dom_t *dom, JSContext *ctx, DBytes *bytes, char *name, int64_t last_modified);
+/* The URL parser with no base, as postMessage's targetOrigin is parsed:
+ * `text` made ready for it as d_url_parse makes its input (the caller still
+ * frees it), then 1 with the address in `out` (OS64_DOM_URL_MAX bytes), 0
+ * for one that is no absolute URL, -1 with an exception pending. */
+int d_url_parse_absolute(os64_dom_t *dom, JSContext *ctx, DString *text, char *out);
+/* `object`'s own accessor `name`'s getter, held in *out; -1 with an
+ * exception pending (crypto.c). */
+int d_take_getter(os64_dom_t *dom, JSContext *ctx, JSValueConst object, const char *name, DValue **out);
 /* An element's dir attribute as its IDL attribute reads it (mixin.c): one
  * of its keywords, lowercased, or "". */
 JSValue d_dir_value(JSContext *ctx, const os64_html_node_t *element);

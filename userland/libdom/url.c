@@ -1475,3 +1475,9 @@ int d_url_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst input, char **out)
     }
     return parsed ? 1 : 0;
 }
+
+int d_url_parse_absolute(os64_dom_t *dom, JSContext *ctx, DString *text, char *out)
+{
+    if (!address_text(dom, ctx, text, true)) return -1;
+    return resolve(text->data != NULL ? text->data : "", NULL, out, OS64_DOM_URL_MAX) ? 1 : 0;
+}

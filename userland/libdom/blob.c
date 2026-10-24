@@ -307,6 +307,33 @@ JSValue d_blob_new(os64_dom_t *dom, JSContext *ctx, DBytes *bytes)
     return blob;
 }
 
+bool d_blob_file(JSValueConst value, const char **name, int64_t *last_modified)
+{
+    DBlob *b = blob_state(value);
+    if (b == NULL || !b->file) return false;
+    *name = b->name;
+    *last_modified = b->last_modified;
+    return true;
+}
+
+JSValue d_file_new(os64_dom_t *dom, JSContext *ctx, DBytes *bytes, char *name, int64_t last_modified)
+{
+    char *type = bytes->type != NULL ? bytes->type : engine_copy(ctx, "", 0);
+    if (type == NULL || name == NULL) {
+        js_free(ctx, type);
+        js_free(ctx, name);
+        bytes->type = NULL;
+        d_bytes_free(ctx, bytes);
+        return JS_EXCEPTION;
+    }
+    JSValue file = blob_make(ctx, dom->file_prototype->value, bytes->bytes, bytes->length, type, true, name,
+                             last_modified);
+    bytes->bytes = NULL;
+    bytes->type = NULL;
+    bytes->length = 0;
+    return file;
+}
+
 /* sequence<BlobPart>, converted ONCE, as WebIDL converts the argument
  * before the options are read: the items, and for each one that is
  * neither a BufferSource nor a Blob its USVString (engine memory; NULL for

@@ -20,6 +20,8 @@ LIBDOM_SRCS += libdom/frames.c
 LIBDOM_SRCS += libdom/report.c
 # P1-Da: the document's state reads and document.body's setter.
 LIBDOM_SRCS += libdom/document.c
+# P2b: the structured clone, same-window postMessage, idle callbacks.
+LIBDOM_SRCS += libdom/clone.c libdom/message.c libdom/idle.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))
 LIBDOM_SO := $(BIN)/libdom.so
 LIBDOM_BASE = $(patsubst libdom.so=%,%,$(filter libdom.so=%,$(LIB_BASE_PAIRS)))

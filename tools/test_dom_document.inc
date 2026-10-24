@@ -462,9 +462,10 @@ static void dom_document_create_event_cases(void)
     dom_script(&f, STORAGE_ASSERT
         "function proto(n){return Object.getPrototypeOf(document.createEvent(n))}"
         "for(const n of ['Event','events','HTMLEVENTS','SVGEvents','UIEvent','UIEvents','MouseEvent','MOUSEEVENTS',"
-        "'KeyboardEvent','FocusEvent','CompositionEvent','DragEvent','MessageEvent','StorageEvent','TextEvent',"
+        "'KeyboardEvent','FocusEvent','CompositionEvent','DragEvent','StorageEvent','TextEvent',"
         "'BeforeUnloadEvent','DeviceMotionEvent','DeviceOrientationEvent'])assert(proto(n)===Event.prototype,n);"
         "assert(proto('customevent')===CustomEvent.prototype&&proto('HashChangeEvent')===HashChangeEvent.prototype);"
+        "assert(proto('messageEVENT')===MessageEvent.prototype,'MessageEvent, P2b\\'s');"
         "const h=document.createEvent('hashchangeevent');assert(h.newURL===''&&h.oldURL===''&&h.type==='');"
         "for(const n of ['foo','TouchEvent','touchevent','PopStateEvent','ProgressEvent','MediaQueryListEvent',"
         "'CustomEvents','KeyboardEvents','U\\u0130Event','U\\u0131Event','Event\\u0000','','MouseEvent '])"
