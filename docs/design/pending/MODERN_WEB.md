@@ -3045,7 +3045,9 @@ of the table (LIBDOM.md § P2b's rows has every rule):
   target the caller's own window, `targetOrigin` parsed before the message
   is cloned, one task per message queued at the target window and run by
   the host (`os64_dom_message_fire`), the targetOrigin checked as it runs,
-  the clone read in the target's realm, `messageerror` when it cannot be.
+  the clone read in the target's realm, `messageerror` when it cannot be
+  (kept for frames: in one realm every refusal the reader can meet ends
+  the task, so no page reaches it today).
   `MessageEvent`'s constructor, `initMessageEvent` and
   `createEvent('MessageEvent')`; its `ports` is an empty frozen array,
   there being no MessagePort.

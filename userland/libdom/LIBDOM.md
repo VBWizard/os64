@@ -1272,8 +1272,10 @@ posted after a timer fell due waits for that timer, which may add its
 listener; else the clone is read in the target's
 realm and a MessageEvent `message` fired at window, with its data, the
 poster's origin, the poster's window as `source`, `lastEventId` "" and an
-empty frozen `ports`; a copy the realm cannot make fires `messageerror`
-instead. A message a message's task posts is a later task. The queue's
+empty frozen `ports`; a copy the reader refuses with a catchable
+exception fires `messageerror` instead, which no page reaches today (the
+reader's only refusals in the realm that wrote the record are memory and
+the deadline, which end the task; `message.c` says so). A message a message's task posts is a later task. The queue's
 nodes are the binding's memory; the poster's window each message holds is
 the registry's sixth list. **MessageEvent**'s constructor reads its init's
 members in name order (`data`, `lastEventId`, `origin`, `ports`, `source`);

@@ -26,8 +26,13 @@
  *     and a MessageEvent `message` is fired at the window, its data the
  *     copy, its origin the poster's document's origin serialized, its
  *     source the poster's window, its lastEventId "" and its ports empty;
- *     a copy the target's realm cannot make (no memory for it) fires
- *     `messageerror` instead, with the same origin and source and no data.
+ *     a copy the reader refuses with an exception a script could catch
+ *     fires `messageerror` instead, with the same origin and source and no
+ *     data. No page can reach that today: everything the reader can meet
+ *     in a realm that wrote the record is the allocator's refusal or the
+ *     deadline, both of which end the task (d_exception_catchable) rather
+ *     than fire an event. The step is kept for the second realm frames
+ *     bring, as HTML has it.
  *   - A message posted during a message's task is a task of its own, after
  *     the task that posted it: the setImmediate trick's whole premise.
  *
@@ -201,8 +206,8 @@ static bool target_matches(const os64_dom_t *dom, const DMessage *message)
 }
 
 /* The event a message's task fires, made in the task: its data the clone
- * read in the target's realm, or messageerror when that realm could not
- * make the copy. */
+ * read in the target's realm, or messageerror when the reader refused with
+ * a catchable exception (unreachable today; the header says why). */
 static JSValue message_make(os64_dom_t *dom, JSContext *ctx, void *arg)
 {
     DMessage *message = arg;

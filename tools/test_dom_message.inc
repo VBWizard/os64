@@ -662,7 +662,9 @@ static void dom_idle_failure_cases(void)
 /* Every binding allocation (the queue's node, the idle entries, the
  * timeout's timer) and every engine allocation (the record, the copy, the
  * event) of each operation, refused in turn: nothing crashes, nothing
- * leaks, and the teardown balances (fixture_free). */
+ * leaks, and the teardown balances (fixture_free). The value holds more
+ * than 16 objects (o), so a cut also lands on the writer's memory table
+ * growing past its first size with entries already in it. */
 static size_t p2b_sweep_run(const char *operation, int drive, bool engine, size_t cut)
 {
     os64_dom_options_t options = p2b_options(P2B_URL);
@@ -670,7 +672,7 @@ static size_t p2b_sweep_run(const char *operation, int drive, bool engine, size_
     if (!fixture_ready(&f)) return 0;
     dom_script(&f, "globalThis.v={a:[1,'x',2n],m:new Map([[{},new Set([1])]]),d:new Date(1),r:/q/g,"
                    "e:new TypeError('t',{cause:1}),b:new Blob(['b']),x:new DOMException('m','AbortError'),"
-                   "u:new Uint16Array([1,2]),w:new DataView(new ArrayBuffer(4))};v.self=v;"
+                   "u:new Uint16Array([1,2]),w:new DataView(new ArrayBuffer(4)),o:Array.from({length:20},()=>({}))};v.self=v;"
                    "addEventListener('message',e=>{globalThis.last=e.data});addEventListener('messageerror',()=>{});",
                "sweep: setup");
     size_t *counter = engine ? &attempts : &dom_attempts;
