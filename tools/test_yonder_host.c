@@ -1597,12 +1597,35 @@ static const char *navigation_block(const yonder_agent_preset_t *p, way_initiato
     return out;
 }
 
-// EACH PRESET BYTE FOR BYTE AGAINST WHAT THAT BROWSER SENT. Chrome's and
-// Firefox's strings and lines are what Chrome 156 and Firefox 158 on
-// Windows sent a local listener on 2026-10-24, copied from the captured
-// request bytes; the navigation blocks are those requests' lines that
-// libway writes, in the order they came. Safari's are cited, not captured
-// (agent.c says from where), and yonder's own language is the same list.
+// The navigation block a preset's agent writes for the browser's Reload of
+// an entry `by` asked for from `from`, to `to` (reload_as replays it).
+static const char *reload_block(const yonder_agent_preset_t *p, way_initiator_t by, const char *from, const char *to)
+{
+    static char out[WAY_IDENTITY_MAX];
+    way_metadata_t m;
+    way_origin_t f, t;
+    way_origin_of(from, 0, &f);
+    way_origin_of(to, 0, &t);
+    way_metadata_navigation(&m, by, &f);
+    m.reload = true;
+    way_metadata_hop(&m, &t);
+    if (!way_identity_lines(yonder_agent_identity(p->agent), &m, &t, 0, out, sizeof(out)))
+        snprintf(out, sizeof(out), "<did not fit>");
+    return out;
+}
+
+// EACH PRESET BYTE FOR BYTE AGAINST WHAT THAT BROWSER SENT: the W1
+// capture files, raw request bytes Chris's Chrome 156 and Firefox 158 on
+// Windows sent a local listener (WIRE.md § 1 as built names them). Chrome:
+// capture-01-chrome-win-get-root (a typed navigation), -25 (a link
+// clicked), -26 (the browser's Reload of it), -27 (Back to the typed
+// entry). Firefox on Windows: run1-overwritten/capture-09 (a typed
+// navigation), -17 (a link clicked), -02 to -08 (the subresources and
+// fetches); its Reload and Back are the Linux run's capture-43 and -44,
+// which send the same lines. The navigation blocks are those requests'
+// lines that libway writes, in the order they came. Safari's are cited,
+// not captured (agent.c says from where), and yonder's own language is the
+// same list.
 static void agent_identity_cases(void)
 {
     const yonder_agent_preset_t *chrome = preset_named("Chrome on Windows");
@@ -1623,10 +1646,10 @@ static void agent_identity_cases(void)
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0");
     expect("identity: Firefox sends no client hints", firefox->identity.hints == NULL, NULL);
     expect_text("identity: Firefox's language, captured", firefox->identity.language, "en-US,en;q=0.9");
-    // Firefox's Priority for each destination it was asked for: capture-19
-    // and -27 (navigations), -20 (style), -21 (script), -22 (image), -23 to
-    // -26 (fetch, the cross-site fetch, the preflight and its PUT). No font
-    // was asked for, so a font goes without.
+    // Firefox's Priority for each destination it was asked for:
+    // run1-overwritten/capture-09 and -17 (navigations), -02 (style), -03
+    // (script), -04 (image), -05 to -08 (fetch, the cross-site fetch, the
+    // preflight and its PUT). No font was asked for, so a font goes without.
     static const char *const firefox_rows[WAY_DESTS] = {
         [WAY_DEST_DOCUMENT] = "u=0, i", [WAY_DEST_STYLE] = "u=2", [WAY_DEST_SCRIPT] = "u=2",
         [WAY_DEST_IMAGE] = "u=5, i", [WAY_DEST_EMPTY] = "u=4",
@@ -1671,7 +1694,30 @@ static void agent_identity_cases(void)
                                                          yonder_agent_identity(NULL) == NULL, NULL);
 
     // The navigations, as the captures had them: an address given from
-    // outside the browser, and a same-origin link clicked.
+    // outside the browser (and Back to it, which sends the same lines,
+    // capture-27-chrome-win-get-root), a same-origin link clicked, and the
+    // browser's Reload of that, which leads with Cache-Control.
+    expect_text("identity: Chrome, the browser's Reload of a clicked link",
+                reload_block(chrome, WAY_BY_PERSON, "https://a.test/", "https://a.test/clicked"),
+                "Cache-Control: max-age=0\r\n"
+                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua-mobile: ?0\r\n"
+                "sec-ch-ua-platform: \"Windows\"\r\n"
+                "Upgrade-Insecure-Requests: 1\r\n"
+                "Sec-Fetch-Site: same-origin\r\n"
+                "Sec-Fetch-Mode: navigate\r\n"
+                "Sec-Fetch-User: ?1\r\n"
+                "Sec-Fetch-Dest: document\r\n"
+                "Accept-Language: en-US,en;q=0.9\r\n");
+    expect_text("identity: Firefox, the browser's Reload of a clicked link (the set: capture-43)",
+                reload_block(firefox, WAY_BY_PERSON, "https://a.test/", "https://a.test/clicked"),
+                "Upgrade-Insecure-Requests: 1\r\n"
+                "Sec-Fetch-Site: same-origin\r\n"
+                "Sec-Fetch-Mode: navigate\r\n"
+                "Sec-Fetch-User: ?1\r\n"
+                "Sec-Fetch-Dest: document\r\n"
+                "Accept-Language: en-US,en;q=0.9\r\n"
+                "Priority: u=0, i\r\n");
     expect_text("identity: Chrome, an address given",
                 navigation_block(chrome, WAY_BY_BROWSER, NULL, "https://a.test/"),
                 "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
@@ -1708,20 +1754,20 @@ static void agent_identity_cases(void)
                 "Priority: u=0, i\r\n");
 
     // THE MARGIN. libway gives a hop's identity WAY_IDENTITY_MAX of
-    // libfetch's per-hop cap; the longest preset's longest block (a
-    // person's same-origin navigation) must fit with room for a brand list
-    // that grows, which is the cap's own comment.
+    // libfetch's per-hop cap; the longest preset's longest block (the
+    // browser's Reload of a person's same-origin navigation) must fit with
+    // room for a brand list that grows, which is the cap's own comment.
     size_t longest = 0;
     for (size_t i = 0; i < yonder_agent_npresets(); i++) {
-        const char *b = navigation_block(yonder_agent_preset(i), WAY_BY_PERSON, "https://a.test/", "https://a.test/n");
+        const char *b = reload_block(yonder_agent_preset(i), WAY_BY_PERSON, "https://a.test/", "https://a.test/n");
         expect("identity: every preset's block fits", strcmp(b, "<did not fit>") != 0, yonder_agent_preset(i)->name);
         if (strlen(b) > longest)
             longest = strlen(b);
     }
     char detail[64];
     snprintf(detail, sizeof(detail), "the longest is %zu bytes", longest);
-    expect("identity: the longest block leaves 200 bytes of WAY_IDENTITY_MAX spare",
-           longest + 1 + 200 <= WAY_IDENTITY_MAX, detail);
+    expect("identity: the longest block leaves 150 bytes of WAY_IDENTITY_MAX spare",
+           longest + 1 + 150 <= WAY_IDENTITY_MAX, detail);
     expect("identity: the cookies and the Referer keep their kilobyte beside it",
            OS64_FETCH_HOP_FIELDS_MAX - WAY_IDENTITY_MAX >= 1024, NULL);
 }

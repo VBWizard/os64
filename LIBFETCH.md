@@ -400,10 +400,10 @@ For each request, including the first:
 lines that say who is asking, most of which change with where a hop goes
 (`Accept-Language`, `Sec-CH-UA`, `Sec-CH-UA-Mobile`, `Sec-CH-UA-Platform`,
 `Sec-Fetch-Dest`, `Sec-Fetch-Mode`, `Sec-Fetch-Site`, `Sec-Fetch-User`,
-`Upgrade-Insecure-Requests`, `Priority`). They go after the static fields,
-in the order written. No other names are accepted. None is a credential, which keeps the
-callback from bypassing the static Authorization/Proxy-Authorization rules
-or overriding framing.
+`Upgrade-Insecure-Requests`, `Priority`, and a Reload's `Cache-Control`).
+They go after the static fields, in the order written. No other names are
+accepted. None is a credential, which keeps the callback from bypassing
+the static Authorization/Proxy-Authorization rules or overriding framing.
 An empty output means no fields. Return false if composition fails or
 would truncate. False, invalid bytes, an unterminated block, or duplicate
 fields within the callback or against retained static fields yields

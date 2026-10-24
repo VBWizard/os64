@@ -115,6 +115,12 @@ typedef struct {
     uint64_t document;
     uint64_t entry;
     char *state;
+    // How the navigation that made the entry's document was asked
+    // (way_metadata_navigation's answer, before any hop): the browser's
+    // Reload and Back replay it, as browsers do. Its `dest` is
+    // WAY_DEST_DOCUMENT when it was kept; a zeroed one kept nothing, and a
+    // face replays the browser's own then.
+    way_metadata_t asked;
 } way_crumb_t;
 
 // A session is LARGE — its history is WAY_HISTORY_MAX addresses of up to

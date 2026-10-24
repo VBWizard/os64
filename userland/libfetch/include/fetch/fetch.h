@@ -279,9 +279,9 @@ typedef struct {
     // request, most of which change with where a hop goes
     // (Accept-Language, Sec-CH-UA, Sec-CH-UA-Mobile, Sec-CH-UA-Platform,
     // Sec-Fetch-Dest, Sec-Fetch-Mode, Sec-Fetch-Site, Sec-Fetch-User,
-    // Upgrade-Insecure-Requests and Priority). Duplicates within this block
-    // or with retained static fields refuse the hop. False or bad output is
-    // REQUEST_FAILED. encrypted describes the actual transport, not just URL.
+    // Upgrade-Insecure-Requests, Priority, and a Reload's Cache-Control).
+    // Duplicates within this block or with retained static fields refuse
+    // the hop. False or bad output is REQUEST_FAILED. encrypted describes the actual transport, not just URL.
     bool (*headers_for)(void *ctx, const os64_url_t *hop_url, bool encrypted,
                         char *out, size_t cap);
     // Each final-head Set-Cookie VALUE (no name/colon/CRLF), OWS trimmed,

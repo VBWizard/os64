@@ -7,10 +7,12 @@
 // more closely can be handed another in the field. Chrome and Firefox as on
 // Windows 10 and 11, which both report NT 10.0: their strings and their
 // lines are what Chrome 156 and Firefox 158 sent a local listener in
-// October 2026, byte for byte, header names in their own case. Chrome sends
-// no Priority over HTTP/1.1; Firefox sends one on every request, and its
-// rows are the ones it sent for each destination asked (no font was, so a
-// font goes without). Safari as on an iPhone, which many sites answer with
+// October 2026, byte for byte, header names in their own case (the W1
+// capture files: WIRE.md § 1 as built names each). Chrome sends no
+// Priority over HTTP/1.1, and asks every cache to revalidate on the
+// browser's Reload; Firefox sends a Priority on every request, and its rows
+// are the ones it sent for each destination asked (no font was, so a font
+// goes without), and adds nothing on a Reload. Safari as on an iPhone, which many sites answer with
 // a lighter page: not captured, its string as published in September 2026,
 // no client hints (Safari has none), no Priority, and the language list
 // MDN's Accept-Language page gives for Chrome and Safari alike. yonder's
@@ -26,7 +28,7 @@ static const yonder_agent_preset_t kPresets[] = {
      {.hints = "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
                "sec-ch-ua-mobile: ?0\r\n"
                "sec-ch-ua-platform: \"Windows\"\r\n",
-      .language = "en-US,en;q=0.9"}},
+      .language = "en-US,en;q=0.9", .reload_cache_control = "max-age=0"}},
     {"Firefox on Windows",
      "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0",
      {.language = "en-US,en;q=0.9",

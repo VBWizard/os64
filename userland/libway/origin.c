@@ -1249,6 +1249,7 @@ way_metadata_t way_metadata_preflight(const way_metadata_t *m)
     p.mode = WAY_MODE_CORS;
     p.activation = false;
     p.preflight = true;
+    p.reload = false;
     return p;
 }
 
@@ -1329,7 +1330,10 @@ bool way_identity_lines(const way_identity_t *id, const way_metadata_t *m, const
     // feature, so they follow the same rule.
     bool trustworthy = way_origin_trustworthy(to);
     bool ok = true;
-    if (trustworthy && !m->preflight && id != NULL && id->hints != NULL)
+    if (m->reload && id != NULL && id->reload_cache_control != NULL)
+        ok = lines_add(out, cap, &at, "Cache-Control: ", id->reload_cache_control) &&
+             lines_add(out, cap, &at, "\r\n", NULL);
+    if (ok && trustworthy && !m->preflight && id != NULL && id->hints != NULL)
         ok = lines_add(out, cap, &at, id->hints, NULL);
     // Upgrade Insecure Requests § 3.2: every navigation asks, wherever it
     // goes; a trustworthy one is the answer it prefers.

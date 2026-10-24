@@ -2767,6 +2767,15 @@ static void stream_keeps_the_form(void) {
     check(again!=NULL && again->kind==YONDER_JOB_TRIP && again->has_request && !again->metadata.activation &&
           again->metadata.site==WAY_SITE_SAME_ORIGIN && os64_streq(again->metadata.origin.host,"fixture.test"),
         "who: a page's reload of a form's reply resends as the page's");
+    /* The browser's Reload of it replays the entry's own asking (here an
+     * address given), as a reload. */
+    click_reload(NULL,NULL);
+    check(g.asker==ASK_REQUEST,"who: the browser's reload of a form's reply asks first");
+    bar_answered(true);
+    again=pool_work.job;
+    check(again!=NULL && again->kind==YONDER_JOB_TRIP && again->has_request && again->metadata.activation &&
+          again->metadata.site==WAY_SITE_NONE && again->metadata.reload,
+        "who: the browser's reload of a form's reply replays its entry, as a reload");
     stream_window_drop();
 }
 static void stream_mail_wiring(void) {
@@ -4126,6 +4135,55 @@ static void page_initiator_case(const char *markup, const char *how, const char 
           os64_streq(t->metadata.origin.host,"fixture.test"),line);
     loop_drop();
 }
+/* THE BROWSER'S RELOAD AND BACK REPLAY THE ENTRY'S OWN ASKING, as Chrome
+ * 156 and Firefox 158 do (capture-26-chrome-win-get-clicked and -27-...-root;
+ * the Firefox run's capture-43 and -44). */
+static const yonder_trip_t *trip_now(void) {
+    return g.stream.active && pool_work.job!=NULL && *(const uint32_t *)pool_work.job==YONDER_JOB_TRIP
+        ? pool_work.job : NULL;
+}
+static void loop_view_buttons_replay(void) {
+    loop_page("<a id=l href=/C>c</a><script>history.replaceState(null,'','/T')</script>");
+    check(loop_settle() && view_turns(),"replay: T, an address given");
+    input_click_at("l");
+    post_arriving("<p>C</p><script>history.replaceState(null,'','/C')</script>");
+    check(loop_settle() && view_turns() && session_is("/T","/C",""),"replay: C, a link a person clicked");
+    click_reload(NULL,NULL);
+    const yonder_trip_t *t=trip_now();
+    check(t!=NULL && t->metadata.site==WAY_SITE_SAME_ORIGIN && t->metadata.activation && t->metadata.reload &&
+          os64_streq(t->metadata.origin.host,"fixture.test"),
+        "replay: Reload of a clicked entry is the click again, as a reload");
+    post_arriving("<p>C</p><script>history.replaceState(null,'','/C')</script>");
+    check(loop_settle() && view_turns(),"replay: C again");
+    check(!g.page.asked.reload && g.page.asked.activation,"replay: the reloaded entry keeps the click, not the reload");
+    click_back(NULL,NULL);
+    t=trip_now();
+    check(t!=NULL && t->metadata.site==WAY_SITE_NONE && t->metadata.activation && !t->metadata.reload,
+        "replay: Back to a typed entry is the address given again");
+    post_arriving("<p>T</p><script>history.replaceState(null,'','/T')</script>");
+    check(loop_settle() && view_turns(),"replay: T again");
+    loop_drop();
+
+    // An entry a page's script navigated to: Back replays the page's
+    // asking, nobody's.
+    loop_page("<p>S</p><script>history.replaceState(null,'','/S');"
+              "onload=function(){setTimeout(function(){location.href='/P'},0)}</script>");
+    loop_settle();
+    view_turns();
+    for(int i=0;i<4 && !g.stream.active;i++) { now_ms+=20; loop_settle(); view_turns(); }
+    check(trip_now()!=NULL && !trip_now()->metadata.activation,"replay: the script's navigation to P");
+    post_arriving("<a id=l href=/Q>q</a><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns(),"replay: P, a script's");
+    input_click_at("l");
+    post_arriving("<p>Q</p><script>history.replaceState(null,'','/Q')</script>");
+    check(loop_settle() && view_turns() && session_is("/S,/P","/Q",""),"replay: Q, a click from P");
+    click_back(NULL,NULL);
+    t=trip_now();
+    check(t!=NULL && t->metadata.site==WAY_SITE_SAME_ORIGIN && !t->metadata.activation &&
+          os64_streq(t->metadata.origin.host,"fixture.test"),
+        "replay: Back to a script-navigated entry is the page's again, nobody's");
+    loop_drop();
+}
 static void loop_view_page_initiators(void) {
     page_initiator_case("","location.reload()","location.reload()","/R");
     page_initiator_case("","history.back()","history.back()","/S");
@@ -4239,6 +4297,7 @@ static void loop_view_cold2_cases(void) {
     loop_view_replacing_refused();
     loop_view_loading_redirect();
     loop_view_page_initiators();
+    loop_view_buttons_replay();
     loop_view_pushed_then_forward();
     loop_view_pushed_length();
     loop_view_new_way_back();

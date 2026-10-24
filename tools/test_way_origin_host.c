@@ -1264,9 +1264,10 @@ static void metadata(void)
     // Priority, the preset's per destination: a row's value or none, last
     // of the lines, on a plain-http hop too; a preflight takes the empty
     // destination's.
-    static const way_identity_t prioritised = {NULL, "en", {[WAY_DEST_EMPTY] = "u=4", [WAY_DEST_DOCUMENT] = "u=0, i",
-                                                           [WAY_DEST_SCRIPT] = "u=2", [WAY_DEST_STYLE] = "u=3",
-                                                           [WAY_DEST_IMAGE] = "u=5, i"}};
+    static const way_identity_t prioritised = {
+        .language = "en",
+        .priority = {[WAY_DEST_EMPTY] = "u=4", [WAY_DEST_DOCUMENT] = "u=0, i", [WAY_DEST_SCRIPT] = "u=2",
+                     [WAY_DEST_STYLE] = "u=3", [WAY_DEST_IMAGE] = "u=5, i"}};
     static const char *const rows[] = {"u=4", "u=0, i", "u=2", "u=3", "u=5, i", "<absent>"};
     for (size_t i = 0; i < sizeof(dests) / sizeof(dests[0]); i++) {
         m = dests[i].dest == WAY_DEST_DOCUMENT ? navigation_from(WAY_BY_PERSON, "https://a.test/p")
@@ -1350,6 +1351,26 @@ static void metadata(void)
     m = navigation_from(WAY_BY_BROWSER, "https://www.a.test/p");
     expect_text("unknown: the browser's own navigation is none, wherever it goes",
                 line_value(hop_lines(&m, NULL, "https://static.a.test/", false), "Sec-Fetch-Site"), "none");
+
+    // The browser's Reload: the preset's Cache-Control first, on any hop;
+    // never on a preflight, never for a preset without one.
+    static const way_identity_t reloads = {.language = "en", .reload_cache_control = "max-age=0"};
+    m = navigation_from(WAY_BY_PERSON, "https://a.test/p");
+    m.reload = true;
+    expect_text("reload: the preset's Cache-Control leads",
+                hop_lines(&m, &reloads, "http://a.test/clicked", false),
+                "Cache-Control: max-age=0\r\nUpgrade-Insecure-Requests: 1\r\nAccept-Language: en\r\n");
+    m.reload = false;
+    expect_text("reload: not on another navigation",
+                line_value(hop_lines(&m, &reloads, "http://a.test/clicked", false), "Cache-Control"), "<absent>");
+    m = request_from("https://a.test/p", WAY_DEST_EMPTY, WAY_MODE_CORS);
+    m.reload = true;
+    pre = way_metadata_preflight(&m);
+    expect("reload: a preflight is no reload", !pre.reload, NULL);
+    m = navigation_from(WAY_BY_PERSON, "https://a.test/p");
+    m.reload = true;
+    expect_text("reload: a preset without the line sends none",
+                line_value(hop_lines(&m, &hinted, "http://a.test/x", false), "Cache-Control"), "<absent>");
 
     // Too little room: nothing, not part of it.
     m = navigation_from(WAY_BY_BROWSER, "https://a.test/p");

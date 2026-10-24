@@ -95,6 +95,7 @@ static void push(way_crumb_t *stack, int32_t *depth, way_crumb_t *crumb)
     top->position = crumb->position;
     top->document = crumb->document;
     top->entry = crumb->entry;
+    top->asked = crumb->asked;
     top->state = crumb->state;
     crumb->state = NULL;
     (*depth)++;

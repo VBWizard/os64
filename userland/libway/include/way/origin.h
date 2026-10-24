@@ -338,6 +338,7 @@ typedef struct {
     way_mode_t mode;        // unread for a document, whose mode is navigate
     bool activation;        // a person started it: Sec-Fetch-User, on a navigation
     bool preflight;         // a CORS preflight: no client hints go with it
+    bool reload;            // the browser's Reload: the preset's reload line goes
 } way_metadata_t;
 
 // A navigation, started by `by` from the page whose origin is `from`
@@ -369,15 +370,21 @@ typedef struct {
     // Chrome sends none over HTTP/1.1. It says how urgent the request is,
     // not what the browser can do, so a preset may say it truthfully.
     const char *priority[WAY_DESTS];
+    // Cache-Control's value on the browser's Reload, NULL for none: Chrome
+    // asks every cache on the way to revalidate (max-age=0), Firefox adds
+    // nothing.
+    const char *reload_cache_control;
 } way_identity_t;
 
-// The most a hop's identity lines may take: Chrome's are about 300 bytes,
-// and the rest is room for a brand list that grows. libfetch's per-hop cap
+// The most a hop's identity lines may take: Chrome's longest (its Reload
+// of a clicked link) is about 320 bytes, and the rest is room for a brand
+// list that grows. libfetch's per-hop cap
 // (OS64_FETCH_HOP_FIELDS_MAX) holds this much on top of the cookies'
 // kilobyte.
 #define WAY_IDENTITY_MAX 512
 
-// A hop to `to`'s lines, in this order: the client hints,
+// A hop to `to`'s lines, in this order: on a Reload (`m->reload`) the
+// preset's Cache-Control, on every hop; the client hints,
 // Upgrade-Insecure-Requests (a document's, on every hop), Sec-Fetch-Site,
 // -Mode, -User and -Dest (a trustworthy `to` only, and none while the
 // site is WAY_SITE_UNKNOWN), Accept-Language, and
