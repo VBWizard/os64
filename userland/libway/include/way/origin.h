@@ -10,7 +10,8 @@
 // a request's bookkeeping and a response's headers in, a verdict out, so
 // tools/test_way_origin_host.sh drives every rule with no network. The fetch
 // job (yonder/fetch_job.c) asks these questions hop by hop and does the I/O;
-// libdom asks the header questions when a page builds a request. Each rule
+// libdom asks the header questions when a page builds a request; load.c
+// asks who-is-asking's for a navigation and a face's own fetches. Each rule
 // is ONE function, so a ruling changes one place.
 //
 // A HEADER BLOCK is "Name: value\r\n" lines, in order, NUL-free: the shape

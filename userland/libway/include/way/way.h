@@ -123,6 +123,8 @@ typedef struct {
 typedef struct {
     const char *name;                   // how a sentence names this browser: "wend"
     const char *agent;                  // the User-Agent it sends
+    // What its agent's preset sends beside it (way/origin.h), NULL for none.
+    const way_identity_t *identity;
     // The Accept list of the pages it renders. A leg that shows pictures
     // (way_leg_t.pictures) adds them on a GET (way_accept_compose).
     const char *accept;
@@ -158,6 +160,15 @@ typedef struct {
     // session's thread when it asks for the load and makes the leg with
     // way_leg_as, so nothing off that thread reads the session's.
     const char *agent;
+    // What that agent's preset sends beside it, NULL for none: read with
+    // the agent, from the same place.
+    const way_identity_t *identity;
+    // What the load is and who started it, which each hop's Fetch Metadata
+    // says (way_metadata_navigation). way_leg makes it the browser's own,
+    // an address given to it; a face whose load a person on the page or the
+    // page itself started sets it before the load. The load steps it hop by
+    // hop.
+    way_metadata_t metadata;
     way_face_t face;
     // Parser noscript policy for this load, captured by the requesting face.
     // The finished-document loader resumes script stops without executing.
@@ -183,12 +194,14 @@ typedef struct {
     uint32_t left_at;
 } way_leg_t;
 
-// A leg for `session`, with the session's own face and agent and an empty
-// sentence. way_leg reads the session's agent; way_leg_as is handed one
-// read earlier, on the session's thread, and reads only what never
-// changes while a load runs.
+// A leg for `session`, with the session's own face, an empty sentence, and
+// the browser's own navigation for its metadata. way_leg reads the
+// session's agent and identity; way_leg_as is handed both, read earlier on
+// the session's thread, and reads only what never changes while a load
+// runs.
 way_leg_t way_leg(const way_session_t *session);
-way_leg_t way_leg_as(const way_session_t *session, const char *agent);
+way_leg_t way_leg_as(const way_session_t *session, const char *agent,
+                     const way_identity_t *identity);
 
 // A PAGE'S SCRIPT's cookies (document.cookie), for the page at `page_url`,
 // which arrived `encrypted` or not (its head's, way_head_t.encrypted: an
@@ -306,14 +319,19 @@ bool way_load(way_leg_t *leg, const char *url, const os64_page_request_t *reques
               way_page_t *out, os64_fetch_status_t *why);
 
 // For a fetch a face makes itself — a picture a page names — the same
-// cookies and Referer a page's own fetch carries, and the browser's cache.
-// way_fetch_hooks takes over `opt`'s headers_for, on_set_cookie, cancelled
-// and ctx: the caller's own cancellation goes in the hooks instead, and the
-// hooks must live until the fetch is closed.
+// cookies and Referer a page's own fetch carries, the lines that say who is
+// asking, and the browser's cache. way_fetch_hooks takes over `opt`'s
+// headers_for, on_set_cookie, cancelled and ctx: the caller's own
+// cancellation goes in the hooks instead, and the hooks must live until the
+// fetch is closed.
 typedef struct {
     way_jar_t *jar;
     way_cache_t *cache;                     // NULL keeps nothing
     char referrer[OS64_FETCH_URL_MAX];      // "" for none
+    const way_identity_t *identity;         // the agent's preset lines, NULL for none
+    // What the fetch is for and the page that asked (way_metadata_request),
+    // stepped hop by hop.
+    way_metadata_t metadata;
     bool (*cancelled)(void *ctx);
     void *cancel_ctx;
     // way_fetch_whole's own: a redirect on the way that was not permanent

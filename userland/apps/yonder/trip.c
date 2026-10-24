@@ -53,7 +53,7 @@ int64_t yonder_trip_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void
     Run r = {trip, cancelled, ctx};
     // Not way_leg, which reads the session's agent: Settings may be writing
     // it on the window's thread while this runs.
-    way_leg_t leg = way_leg_as(trip->session, trip->agent);
+    way_leg_t leg = way_leg_as(trip->session, trip->agent, NULL);
     os64_strcopy(leg.referrer, sizeof(leg.referrer), trip->referrer);
     leg.face = (way_face_t){&r, run_confirm, run_cancelled, run_progress};
     leg.pictures = OS64_IMAGE_ACCEPT;

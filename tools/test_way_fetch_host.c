@@ -3,8 +3,9 @@
 // temporary directory, under the sanitizers. Where test_way_cache.inc proves
 // the rules and the store one at a time, this proves how load.c wires them
 // to the wire: a 304 through a redirect, a 304 that ends an entry, what a
-// redirect says about keeping it, a field too long to read, and the
-// caller's options left as they were.
+// redirect says about keeping it, a field too long to read, the caller's
+// options left as they were, and the lines that say who is asking, hop by
+// hop.
 //
 // The seam is libos64's calls, as in test_fetch_host.c: a dial reaches a
 // peer by host, and each dial of a host takes its next scripted reply; a
@@ -953,6 +954,98 @@ static void pieces_make_the_same_page(void)
            why_whole == OS64_FETCH_DIAL_FAILED && strcmp(leg.status, status) == 0, status);
 }
 
+// ── Who is asking, on the wire ──────────────────────────────────────────
+
+static const way_identity_t kWho = {"sec-ch-ua: \"Fixture\";v=\"1\"\r\n", "en-US,en;q=0.9"};
+
+// A whole body through hooks that describe a picture asked for by the page
+// at `page`.
+static bool whole_picture(const char *page, const char *url, way_whole_t *out)
+{
+    way_hooks_t hooks;
+    memset(&hooks, 0, sizeof(hooks));
+    hooks.jar = s_jar;
+    hooks.cache = s_cache;
+    hooks.identity = &kWho;
+    way_origin_t o;
+    way_origin_of(page, 0, &o);
+    way_metadata_request(&hooks.metadata, &o, WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+    os64_fetch_options_t opt;
+    memset(&opt, 0, sizeof(opt));
+    return way_fetch_whole(&hooks, url, &opt, 1 << 20, out);
+}
+
+static bool has(const char *request, const char *line)
+{
+    return strstr(request, line) != NULL;
+}
+
+static void who_is_asking(void)
+{
+    // An address given to the browser, http and then https by redirect:
+    // the plain-http hop hears only what goes anywhere, the trustworthy hop
+    // all of it, still the browser's own (none) and a person's.
+    fresh();
+    script("a.test", "HTTP/1.1 301 Moved Permanently\r\nLocation: http://127.0.0.1/\r\nContent-Length: 0\r\n\r\n");
+    script("127.0.0.1", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nhi");
+    way_session_t session = {.name = "fixture", .agent = "fixture", .identity = &kWho, .accept = "text/html"};
+    way_leg_t leg = way_leg(&session);
+    way_page_t page = {0};
+    os64_fetch_status_t why;
+    expect("who: the load", way_load(&leg, "http://a.test/", NULL, &page, &why), leg.status);
+    way_page_clear(&page);
+    const char *plain = s_last_request[0], *trusted = s_last_request[1];
+    expect("who: plain http hears the navigation's upgrade and the language",
+           has(plain, "Upgrade-Insecure-Requests: 1\r\n") && has(plain, "Accept-Language: en-US,en;q=0.9\r\n"), plain);
+    expect("who: plain http hears no Fetch Metadata and no hints",
+           !has(plain, "Sec-Fetch-") && !has(plain, "sec-ch-ua"), plain);
+    expect("who: the trustworthy hop hears all of it",
+           has(trusted, "sec-ch-ua: \"Fixture\";v=\"1\"\r\nUpgrade-Insecure-Requests: 1\r\nSec-Fetch-Site: none\r\n"
+                        "Sec-Fetch-Mode: navigate\r\nSec-Fetch-User: ?1\r\nSec-Fetch-Dest: document\r\n"
+                        "Accept-Language: en-US,en;q=0.9\r\n"), trusted);
+
+    // A page's own navigation: its site, and nobody's.
+    fresh();
+    script("127.0.0.1", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nhi");
+    leg = way_leg(&session);
+    way_origin_t from;
+    way_origin_of("http://127.0.0.1/page", 0, &from);
+    way_metadata_navigation(&leg.metadata, WAY_BY_PAGE, &from);
+    expect("who: a page's load", way_load(&leg, "http://127.0.0.1/next", NULL, &page, &why), leg.status);
+    way_page_clear(&page);
+    expect("who: a page's navigation is same-origin and nobody's",
+           has(s_last_request[0], "Sec-Fetch-Site: same-origin\r\n") && !has(s_last_request[0], "Sec-Fetch-User"),
+           s_last_request[0]);
+
+    // A face's own fetch: what the hooks describe, no upgrade.
+    fresh();
+    script("127.0.0.1", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nPNG");
+    way_whole_t w;
+    expect("who: a picture", whole_picture("http://127.0.0.1/page", "http://127.0.0.1/i.png", &w), NULL);
+    free(w.bytes);
+    expect("who: a picture's lines",
+           has(s_last_request[0], "sec-ch-ua: \"Fixture\";v=\"1\"\r\nSec-Fetch-Site: same-origin\r\n"
+                                  "Sec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: image\r\nAccept-Language: en-US,en;q=0.9\r\n") &&
+           !has(s_last_request[0], "Upgrade-Insecure-Requests"), s_last_request[0]);
+
+    // Asked again after another resource's 304: the URL list starts again,
+    // so the hop that went elsewhere does not make the new ask cross-site.
+    fresh();
+    script("127.0.0.1", kOld);
+    script("127.0.0.1", "HTTP/1.1 301 Moved Permanently\r\nLocation: http://127.0.0.2/y\r\nContent-Length: 0\r\n\r\n");
+    script("127.0.0.2", "HTTP/1.1 304 Not Modified\r\n\r\n");
+    script("127.0.0.1", "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nTHEM");
+    (void)whole_picture("http://127.0.0.1/page", "http://127.0.0.1/x", &w);
+    free(w.bytes);
+    expect("who: the other resource's 304 asked again",
+           whole_picture("http://127.0.0.1/page", "http://127.0.0.1/x", &w) && body_is(&w, "THEM"), NULL);
+    free(w.bytes);
+    expect("who: the redirect's hop was cross-site", has(s_last_request[1], "Sec-Fetch-Site: cross-site\r\n"),
+           s_last_request[1]);
+    expect("who: asked again, same-origin again", has(s_last_request[0], "Sec-Fetch-Site: same-origin\r\n"),
+           s_last_request[0]);
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -971,6 +1064,7 @@ int main(void)
     restrictive_304();
     redirect_restrictions();
     field_too_long();
+    who_is_asking();
     way_cache_close(s_cache);
     way_jar_free(s_jar);
     remove_tree(root, 0);
