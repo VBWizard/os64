@@ -57,6 +57,9 @@ WPT_DIRS=(
     html/webappapis/microtask-queuing
     secure-contexts
     WebCryptoAPI
+    page-visibility
+    html/interaction/focus
+    dom/events
 )
 
 top=$(git rev-parse --show-toplevel)

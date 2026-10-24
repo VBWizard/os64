@@ -5,253 +5,357 @@
 [required]
 # P1-W: window.origin. It fails with the switch off.
 self-origin.any.html	self.origin should be correct
+# P1-Da: the document's state reads. Each fails with the switch off; title's
+# tests that an expando passes with it off (document.title-05.html, and
+# -03's "one space") are the baseline's, not here. document.body's setter
+# is every page's, so its passes are the baseline's too.
+documents/dom-tree-accessors/document.title-01.html	document.title with head blown away
+documents/dom-tree-accessors/document.title-01.html	document.title with head blown away 1
+documents/dom-tree-accessors/document.title-01.html	document 2
+documents/dom-tree-accessors/document.title-01.html	PASS 3
+documents/dom-tree-accessors/document.title-03.html	document.title initial value
+documents/dom-tree-accessors/document.title-03.html	document.title after setting to "two  spaces"
+documents/dom-tree-accessors/document.title-03.html	document.title after setting to "one\\ttab"
+documents/dom-tree-accessors/document.title-03.html	document.title after setting to "two\\t\\ttabs"
+documents/dom-tree-accessors/document.title-03.html	document.title after setting to "one\\nnewline"
+documents/dom-tree-accessors/document.title-03.html	document.title after setting to "two\\n\\nnewlines"
+documents/dom-tree-accessors/document.title-03.html	document.title after setting to "one\\fform feed"
+documents/dom-tree-accessors/document.title-03.html	document.title after setting to "two\\f\\fform feeds"
+documents/dom-tree-accessors/document.title-03.html	document.title after setting to "one\\rcarriage return"
+documents/dom-tree-accessors/document.title-03.html	document.title after setting to "two\\r\\rcarriage returns"
+documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 0: "","",""
+documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 1: null,"null","null"
+documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 2: undefined,undefined,""
+documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 3: "foo  bar baz","foo  bar baz","foo bar baz"
+documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 4: "foo\\t\\tbar baz","foo\\t\\tbar baz","foo bar baz"
+documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 5: "foo\\n\\nbar baz","foo\\n\\nbar baz","foo bar baz"
+documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 6: "foo\\f\\fbar baz","foo\\f\\fbar baz","foo bar baz"
+documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 7: "foo\\r\\rbar baz","foo\\r\\rbar baz","foo bar baz"
+documents/dom-tree-accessors/document.title-07.html	Missing title argument
+documents/dom-tree-accessors/document.title-08.html	No title element
+documents/dom-tree-accessors/document.title-08.html	title element contains multiple child text nodes
+documents/resource-metadata-management/document-compatmode-01.html	document.compatMode: Standards
+documents/resource-metadata-management/document-compatmode-02.html	document.compatMode: Almost standards
+documents/resource-metadata-management/document-compatmode-03.html	document.compatMode: Quirks
+documents/resource-metadata-management/document-lastModified-01.html	Date returned by lastModified is in the form "MM/DD/YYYY hh:mm:ss".
+documents/resource-metadata-management/document-lastModified-01.html	Date returned by lastModified is current at page load
+documents/resource-metadata-management/document-lastModified-01.html	Date returned by lastModified is current after timeout.
+documents/resource-metadata-management/document-lastModified.html	lastModified should return the last modified date and time
+documents/resource-metadata-management/document-readyState.html	readyState equals 'complete' when the document has loaded
+documents/resource-metadata-management/document-readyState.html	readyState equals 'interactive' when the document is finished parsing
+documents/resource-metadata-management/document-readyState.html	readystatechange event is fired each time document.readyState changes
+documents/resource-metadata-management/document-readyState.html	readyState equals 'complete' for documents created via createHTMLDocument()
+documents/resource-metadata-management/document-readyState.html	readyState equals 'complete' for XHTML documents created via createDocument()
+documents/resource-metadata-management/document-readyState.html	readyState equals 'complete' for SVG documents created via createDocument()
+documents/resource-metadata-management/load-event-after-readystatechange-starts-load.html	The window load event is dispatched when a readystatechange handler starts a new load
 [excluded]
-access-key-label.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-aria-attribute-reflection-enumerated.tentative.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-aria-attribute-reflection.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-aria-attribute-reflection.tentative.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-aria-element-reflection-disconnected.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-aria-element-reflection-labelledby.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-aria-element-reflection.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/Document.body.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/Document.currentScript.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/Document.getElementsByClassName-null-undef.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/Element.getElementsByClassName-null-undef.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.embeds-document.plugins-01.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.forms.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.getElementsByClassName-same.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-case.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-id.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-interface.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-liveness.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-namespace.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-newelements.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-null-undef.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-param.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-same.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.head-01.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.head-02.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.images.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.links.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.scripts.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.title-01.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.title-03.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.title-05.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.title-06.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.title-07.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.title-08.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.title-09.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/document.title-not-in-html-svg.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/nameditem-01.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/nameditem-02.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/nameditem-03.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/nameditem-04.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/nameditem-05.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/nameditem-06.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/nameditem-07.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/nameditem-08.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/nameditem-adoption.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/nameditem-img-name-added-cached-list.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/nameditem-img-name-added.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/nameditem-img-name-dynamic.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/nameditem-img-name-removed.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/nameditem-names.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/nameditem-no-shadowing.tentative.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/nameditem-supported-property-names-order.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/nameditem-tree-order.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/dom-tree-accessors/nameditem-tree-transitions.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/resource-metadata-management/document-compatmode-01.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/resource-metadata-management/document-compatmode-02.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/resource-metadata-management/document-compatmode-03.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/resource-metadata-management/document-cookie.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/resource-metadata-management/document-lastModified-01.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/resource-metadata-management/document-lastModified.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/resource-metadata-management/document-readyState.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-documents/resource-metadata-management/load-event-after-readystatechange-starts-load.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/elements-in-the-dom/click-in-progress-flag.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/elements-in-the-dom/historical.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/cdata-dir_auto.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/classlist-nonstring.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/custom-attrs.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/data_unicode_attr.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/dataset-binding.window.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/dataset-delete.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/dataset-enumeration.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/dataset-get-invalid-names.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/dataset-get.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/dataset-prototype.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/dataset-set.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/dataset.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/dir-assorted.window.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/dir-auto-div-append-child.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/dir-auto-dynamic-changes.window.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/dir-auto-form-associated.window.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/dir-bdi-script.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/dir-not-changed-text-input-typing.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/dir-slots-directionality.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/document-dir.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/id-attribute.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/id-name-specialcase.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/id-name.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/lang-attribute-document-element-replacement.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/lang-attribute-shadow.window.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/lang-attribute.window.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/mapped-attribute-adopt-001.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/the-lang-attribute-001.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/the-lang-attribute-002.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/the-lang-attribute-003.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/the-lang-attribute-004.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/the-lang-attribute-005.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/the-lang-attribute-006.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/the-lang-attribute-007.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/the-lang-attribute-008.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/the-lang-attribute-009.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/the-lang-attribute-010.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/the-lang-attribute-011.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/the-translate-attribute-007.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/the-translate-attribute-008.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/the-translate-attribute-009.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/the-translate-attribute-010.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/the-translate-attribute-011.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/the-translate-attribute-012.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/translate-enumerated-ascii-case-insensitive.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/translate-inherit-no-parent-element.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/global-attributes/translate-non-html-translation-mode.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/images/bypass-cache-revalidation.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/name-content-attribute-and-property.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/the-innertext-and-outertext-properties/dynamic-getter.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/the-innertext-and-outertext-properties/getter-first-letter-marker-multicol.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/the-innertext-and-outertext-properties/getter.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/the-innertext-and-outertext-properties/innertext-setter.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/the-innertext-and-outertext-properties/innertext-whitespace-pre-line.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=normal	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=normal&contenteditable=plaintext-only	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=normal&contenteditable=true	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre&contenteditable=plaintext-only	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre&contenteditable=true	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre-line	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre-line&contenteditable=plaintext-only	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre-line&contenteditable=true	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre-wrap	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre-wrap&contenteditable=plaintext-only	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre-wrap&contenteditable=true	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/the-innertext-and-outertext-properties/multiple-text-nodes.window.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-elements/the-innertext-and-outertext-properties/outertext-setter.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-historical.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-idlharness.https.html?exclude=(Document|Window|HTML.+)	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-idlharness.https.html?include=(Document|Window)	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-idlharness.https.html?include=HTML.+	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/chained-streaming-templates-with-custom-element.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/buffer-immutability.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/buffer-in-place.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/buffer-mutation-observer.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/buffer-reflection.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/buffer-streaming-reflection.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/buffer-targeted.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/empty-for-streaming.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/sanitize-boolean.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/sanitize-default.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/sanitize-nested.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/sanitize-regular.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/sanitize-template-element.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/sanitize-unsafe.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/src-buffered.sub.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/src-cancel.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/src-csp-cors.sub.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/src-csp.sub.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/src-nonce.sub.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/src-parser-blocking.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/src-referrerpolicy.sub.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/src-sri.sub.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/src-streaming.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/fragment/streaming-target-marker-removed.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/stream-append-has-invalidation.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/stream-append-positional-pseudo-class-invalidation.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/stream-append-with-template-for.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/template-for-case-sensitive-dom-inserted.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/template-for-case-sensitive.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-partial-updates/tentative/template-for-empty.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-reflection-embedded.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-reflection-forms-weekmonth.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-reflection-forms.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-reflection-grouping.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-reflection-metadata.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-reflection-misc.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-reflection-obsolete.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-reflection-overridden-methods.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-reflection-sections.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-reflection-tabular.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-reflection-text.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/blocking-idl-attr.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-001.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-002.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-003.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-004.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-005.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-006.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-007.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-008.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-009.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-010.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-011.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-012.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-013.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-014.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-015.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-016.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-017.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-018.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-019.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-020.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-021.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-022.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-023.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-024.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-025.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-026.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-027.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-028.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-029.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-030.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-031.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-032.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-033.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-034.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-035.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-036.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-037.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-038.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-039.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-040.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-041.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-form-stack-removal.html?misnested	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-form-stack-removal.html?nested	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-insert-named-anchor.html?cached	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-insert-named-anchor.html?uncached	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-top-of-document.html?empty	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/element-render-blocking-top-of-document.html?top	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/non-render-blocking-scripts.optional.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/parser-blocking-script.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/parser-inserted-async-inline-module-with-import.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/parser-inserted-async-script.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/parser-inserted-defer-script.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/parser-inserted-inline-module-with-import.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/parser-inserted-module-script.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/parser-inserted-style-element.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/parser-inserted-stylesheet-link.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/remove-attr-script-keeps-blocking.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/remove-attr-style-keeps-blocking.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/remove-attr-stylesheet-link-keeps-blocking.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/remove-attr-unblocks-rendering.optional.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/remove-element-unblocks-rendering.optional.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/remove-pending-async-render-blocking-script.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/script-inserted-inline-module-with-import.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/script-inserted-module-script.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/script-inserted-script.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/script-inserted-style-element.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-render-blocking/script-inserted-stylesheet-link.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-self-origin.sub.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
-usvstring-reflection.https.html	not P1-W's oracle, which is self-origin.any.js alone here; the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+access-key-label.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+aria-attribute-reflection-enumerated.tentative.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+aria-attribute-reflection.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+aria-attribute-reflection.tentative.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+aria-element-reflection-disconnected.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+aria-element-reflection-labelledby.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+aria-element-reflection.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/Document.getElementsByClassName-null-undef.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/Element.getElementsByClassName-null-undef.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/document.embeds-document.plugins-01.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/document.forms.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/document.getElementsByClassName-same.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-case.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-id.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-interface.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-liveness.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-namespace.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-newelements.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-null-undef.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-param.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/document.getElementsByName/document.getElementsByName-same.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/document.head-01.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/document.head-02.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/document.images.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/document.links.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/document.scripts.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/nameditem-01.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/nameditem-02.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/nameditem-03.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/nameditem-04.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/nameditem-05.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/nameditem-06.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/nameditem-07.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/nameditem-08.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/nameditem-adoption.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/nameditem-img-name-added-cached-list.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/nameditem-img-name-added.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/nameditem-img-name-dynamic.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/nameditem-img-name-removed.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/nameditem-names.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/nameditem-no-shadowing.tentative.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/nameditem-supported-property-names-order.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/nameditem-tree-order.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/dom-tree-accessors/nameditem-tree-transitions.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+documents/resource-metadata-management/document-cookie.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/elements-in-the-dom/click-in-progress-flag.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/elements-in-the-dom/historical.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/cdata-dir_auto.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/classlist-nonstring.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/custom-attrs.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/data_unicode_attr.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/dataset-binding.window.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/dataset-delete.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/dataset-enumeration.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/dataset-get-invalid-names.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/dataset-get.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/dataset-prototype.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/dataset-set.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/dataset.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/dir-assorted.window.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/dir-auto-div-append-child.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/dir-auto-dynamic-changes.window.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/dir-auto-form-associated.window.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/dir-bdi-script.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/dir-not-changed-text-input-typing.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/dir-slots-directionality.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/document-dir.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/id-attribute.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/id-name-specialcase.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/id-name.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/lang-attribute-document-element-replacement.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/lang-attribute-shadow.window.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/lang-attribute.window.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/mapped-attribute-adopt-001.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/the-lang-attribute-001.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/the-lang-attribute-002.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/the-lang-attribute-003.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/the-lang-attribute-004.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/the-lang-attribute-005.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/the-lang-attribute-006.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/the-lang-attribute-007.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/the-lang-attribute-008.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/the-lang-attribute-009.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/the-lang-attribute-010.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/the-lang-attribute-011.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/the-translate-attribute-007.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/the-translate-attribute-008.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/the-translate-attribute-009.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/the-translate-attribute-010.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/the-translate-attribute-011.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/the-translate-attribute-012.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/translate-enumerated-ascii-case-insensitive.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/translate-inherit-no-parent-element.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/global-attributes/translate-non-html-translation-mode.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/images/bypass-cache-revalidation.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/name-content-attribute-and-property.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/the-innertext-and-outertext-properties/dynamic-getter.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/the-innertext-and-outertext-properties/getter-first-letter-marker-multicol.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/the-innertext-and-outertext-properties/getter.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/the-innertext-and-outertext-properties/innertext-setter.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/the-innertext-and-outertext-properties/innertext-whitespace-pre-line.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=normal	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=normal&contenteditable=plaintext-only	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=normal&contenteditable=true	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre&contenteditable=plaintext-only	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre&contenteditable=true	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre-line	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre-line&contenteditable=plaintext-only	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre-line&contenteditable=true	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre-wrap	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre-wrap&contenteditable=plaintext-only	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=pre-wrap&contenteditable=true	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/the-innertext-and-outertext-properties/multiple-text-nodes.window.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+elements/the-innertext-and-outertext-properties/outertext-setter.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+historical.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+idlharness.https.html?exclude=(Document|Window|HTML.+)	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+idlharness.https.html?include=(Document|Window)	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+idlharness.https.html?include=HTML.+	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/chained-streaming-templates-with-custom-element.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/buffer-immutability.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/buffer-in-place.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/buffer-mutation-observer.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/buffer-reflection.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/buffer-streaming-reflection.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/buffer-targeted.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/empty-for-streaming.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/sanitize-boolean.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/sanitize-default.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/sanitize-nested.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/sanitize-regular.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/sanitize-template-element.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/sanitize-unsafe.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/src-buffered.sub.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/src-cancel.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/src-csp-cors.sub.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/src-csp.sub.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/src-nonce.sub.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/src-parser-blocking.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/src-referrerpolicy.sub.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/src-sri.sub.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/src-streaming.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/fragment/streaming-target-marker-removed.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/stream-append-has-invalidation.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/stream-append-positional-pseudo-class-invalidation.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/stream-append-with-template-for.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/template-for-case-sensitive-dom-inserted.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/template-for-case-sensitive.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+partial-updates/tentative/template-for-empty.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+reflection-embedded.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+reflection-forms-weekmonth.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+reflection-forms.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+reflection-grouping.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+reflection-metadata.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+reflection-misc.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+reflection-obsolete.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+reflection-overridden-methods.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+reflection-sections.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+reflection-tabular.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+reflection-text.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/blocking-idl-attr.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-001.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-002.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-003.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-004.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-005.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-006.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-007.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-008.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-009.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-010.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-011.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-012.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-013.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-014.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-015.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-016.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-017.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-018.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-019.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-020.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-021.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-022.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-023.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-024.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-025.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-026.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-027.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-028.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-029.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-030.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-031.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-032.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-033.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-034.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-035.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-036.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-037.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-038.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-039.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-040.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-041.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-form-stack-removal.html?misnested	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-form-stack-removal.html?nested	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-insert-named-anchor.html?cached	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-insert-named-anchor.html?uncached	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-top-of-document.html?empty	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/element-render-blocking-top-of-document.html?top	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/non-render-blocking-scripts.optional.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/parser-blocking-script.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/parser-inserted-async-inline-module-with-import.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/parser-inserted-async-script.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/parser-inserted-defer-script.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/parser-inserted-inline-module-with-import.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/parser-inserted-module-script.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/parser-inserted-style-element.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/parser-inserted-stylesheet-link.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/remove-attr-script-keeps-blocking.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/remove-attr-style-keeps-blocking.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/remove-attr-stylesheet-link-keeps-blocking.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/remove-attr-unblocks-rendering.optional.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/remove-element-unblocks-rendering.optional.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/remove-pending-async-render-blocking-script.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/script-inserted-inline-module-with-import.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/script-inserted-module-script.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/script-inserted-script.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/script-inserted-style-element.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+render-blocking/script-inserted-stylesheet-link.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+self-origin.sub.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
+usvstring-reflection.https.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
 [passing]
+documents/dom-tree-accessors/Document.body.html	Body as the root node
+documents/dom-tree-accessors/Document.body.html	Body as the root node with a frameset child
+documents/dom-tree-accessors/Document.body.html	Body followed by frameset inside the html element
+documents/dom-tree-accessors/Document.body.html	Body inside an x element followed by a body
+documents/dom-tree-accessors/Document.body.html	Childless document
+documents/dom-tree-accessors/Document.body.html	Childless html element
+documents/dom-tree-accessors/Document.body.html	Frameset as the root node
+documents/dom-tree-accessors/Document.body.html	Frameset as the root node with a body child
+documents/dom-tree-accessors/Document.body.html	Frameset followed by body inside the html element
+documents/dom-tree-accessors/Document.body.html	Frameset inside an x element followed by a frameset
+documents/dom-tree-accessors/Document.body.html	Setting document.body to a body will replace an existing frameset if there is one.
+documents/dom-tree-accessors/Document.body.html	Setting document.body to a div element.
+documents/dom-tree-accessors/Document.body.html	Setting document.body to a frameset will replace an existing body if there is one.
+documents/dom-tree-accessors/Document.body.html	Setting document.body to a frameset will replace the first existing body/frameset.
+documents/dom-tree-accessors/Document.body.html	Setting document.body to a new body element when the root element is a test element.
+documents/dom-tree-accessors/Document.body.html	Setting document.body to a string.
+documents/dom-tree-accessors/Document.body.html	Setting document.body when there's no root element.
+documents/dom-tree-accessors/document.title-01.html	PASS 3
+documents/dom-tree-accessors/document.title-01.html	document 2
+documents/dom-tree-accessors/document.title-01.html	document.title with head blown away
+documents/dom-tree-accessors/document.title-01.html	document.title with head blown away 1
+documents/dom-tree-accessors/document.title-03.html	document.title after setting to "one space"
+documents/dom-tree-accessors/document.title-03.html	document.title after setting to "one\\fform feed"
+documents/dom-tree-accessors/document.title-03.html	document.title after setting to "one\\nnewline"
+documents/dom-tree-accessors/document.title-03.html	document.title after setting to "one\\rcarriage return"
+documents/dom-tree-accessors/document.title-03.html	document.title after setting to "one\\ttab"
+documents/dom-tree-accessors/document.title-03.html	document.title after setting to "two  spaces"
+documents/dom-tree-accessors/document.title-03.html	document.title after setting to "two\\f\\fform feeds"
+documents/dom-tree-accessors/document.title-03.html	document.title after setting to "two\\n\\nnewlines"
+documents/dom-tree-accessors/document.title-03.html	document.title after setting to "two\\r\\rcarriage returns"
+documents/dom-tree-accessors/document.title-03.html	document.title after setting to "two\\t\\ttabs"
+documents/dom-tree-accessors/document.title-03.html	document.title initial value
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+1680
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+180e
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+2000
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+2001
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+2002
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+2003
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+2004
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+2005
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+2006
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+2007
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+2008
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+2009
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+200a
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+2028
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+2029
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+202f
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+205f
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+3000
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+85
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+a0
+documents/dom-tree-accessors/document.title-05.html	Removing whitespace in document.title: U+b
+documents/dom-tree-accessors/document.title-07.html	Missing title argument
+documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 0: "","",""
+documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 1: null,"null","null"
+documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 2: undefined,undefined,""
+documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 3: "foo  bar baz","foo  bar baz","foo bar baz"
+documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 4: "foo\\t\\tbar baz","foo\\t\\tbar baz","foo bar baz"
+documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 5: "foo\\n\\nbar baz","foo\\n\\nbar baz","foo bar baz"
+documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 6: "foo\\f\\fbar baz","foo\\f\\fbar baz","foo bar baz"
+documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 7: "foo\\r\\rbar baz","foo\\r\\rbar baz","foo bar baz"
+documents/dom-tree-accessors/document.title-08.html	No title element
+documents/dom-tree-accessors/document.title-08.html	title element contains multiple child text nodes
+documents/resource-metadata-management/document-compatmode-01.html	document.compatMode: Standards
+documents/resource-metadata-management/document-compatmode-02.html	document.compatMode: Almost standards
+documents/resource-metadata-management/document-compatmode-03.html	document.compatMode: Quirks
+documents/resource-metadata-management/document-lastModified-01.html	Date returned by lastModified is current after timeout.
+documents/resource-metadata-management/document-lastModified-01.html	Date returned by lastModified is current at page load
+documents/resource-metadata-management/document-lastModified-01.html	Date returned by lastModified is in the form "MM/DD/YYYY hh:mm:ss".
+documents/resource-metadata-management/document-lastModified.html	lastModified should return the last modified date and time
+documents/resource-metadata-management/document-readyState.html	readyState equals 'complete' for SVG documents created via createDocument()
+documents/resource-metadata-management/document-readyState.html	readyState equals 'complete' for XHTML documents created via createDocument()
+documents/resource-metadata-management/document-readyState.html	readyState equals 'complete' for documents created via createHTMLDocument()
+documents/resource-metadata-management/document-readyState.html	readyState equals 'complete' when the document has loaded
+documents/resource-metadata-management/document-readyState.html	readyState equals 'interactive' when the document is finished parsing
+documents/resource-metadata-management/document-readyState.html	readystatechange event is fired each time document.readyState changes
+documents/resource-metadata-management/load-event-after-readystatechange-starts-load.html	The window load event is dispatched when a readystatechange handler starts a new load
 self-origin.any.html	self.origin should be correct
