@@ -269,10 +269,17 @@ static bool method_is(const char *name, const char *want)
     return name != NULL && os64_streq(name, want);
 }
 
+// CONNECT is refused, in any case: its 2xx turns the connection into a
+// tunnel whose bytes are no longer HTTP's, which no reply reader here
+// follows and no kept connection may be, and no caller asks for it (Fetch
+// forbids it to a page: way_method_forbidden).
 static bool method_name_ok(const char *name)
 {
     size_t len = os64_strlen(name);
     if (len == 0 || len >= HTTP_METHOD_NAME_MAX)
+        return false;
+    static const char *const tunnel[] = {"connect"};
+    if (name_in(name, len, tunnel, 1))
         return false;
     for (size_t i = 0; i < len; i++)
         if (!is_token_byte(name[i]))

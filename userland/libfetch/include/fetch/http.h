@@ -202,7 +202,8 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
 // Content-Language, Content-Location, Transfer-Encoding, Connection, Expect,
 // Trailer, TE, Upgrade, Accept-Encoding, User-Agent or Accept.
 // GET rejects body_len/body_present/content_type; POST permits an empty body. A
-// method_name that is not a token, a body with GET or HEAD, body_headers
+// method_name that is not a token or is CONNECT (in any case: its reply
+// makes the connection a tunnel), a body with GET or HEAD, body_headers
 // without a method_name or naming anything else, and content_type beside a
 // method_name are refused, and so is an `order` that holds anything but field
 // names, commas and blanks.

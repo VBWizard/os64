@@ -2627,6 +2627,19 @@ static void case_request_order(void)
     CHECK(!http_request_extras_ok(&x) && !http_request(out, sizeof(out), &url, false, &x));
     x.order = "Accept\r\nX: y";
     CHECK(!http_request_extras_ok(&x));
+    // CONNECT, in any case, is refused before a dial: its reply would make
+    // the connection a tunnel, and no kept connection may be one.
+    static const char *const tunnels[] = {"CONNECT", "connect", "Connect"};
+    for (size_t i = 0; i < 3; i++) {
+        reset();
+        peer_add("order.test", 80, reply_len("200 OK", "", page));
+        os64_fetch_options_t tunnel = { .method_name = tunnels[i] };
+        os64_fetch_t *t = os64_fetch_open("http://order.test/", &tunnel);
+        CHECK(os64_fetch_status(t) == OS64_FETCH_REQUEST_FAILED && dials == 0);
+        os64_fetch_close(t);
+    }
+    http_request_extras_t connect = { .method_name = "CONNECT" };
+    CHECK(!http_request_extras_ok(&connect));
     // A fetch's order reaches the per-hop lines too, on every hop.
     reset();
     peer_add("order.test", 80, reply_len("200 OK", "", page));

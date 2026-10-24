@@ -191,6 +191,8 @@ mutants = [
      'return f->reply.status == 408 && f->reused && idempotent(f);', 'return f->reply.status == 408 && idempotent(f);',
      FETCH),
     ('retry-count-flat', FETCH_C, '            f->retried++;', '            f->retried = 1;', FETCH),
+    ('connect-allowed', HTTP_C, '    if (name_in(name, len, tunnel, 1))\n        return false;',
+     '    (void)tunnel;', FETCH),
     ('writer-no-keep-alive', HTTP_C,
      'case 3: if (!x->keep_alive) continue;', 'case 3: if (true) continue;', FETCH),
     ('writer-order-ignored', HTTP_C,

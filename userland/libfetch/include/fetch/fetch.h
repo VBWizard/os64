@@ -307,7 +307,9 @@ typedef struct {
                           const char *value, size_t len);
     // A METHOD BY NAME, for a caller that owns its redirects (the Fetch
     // standard's job, yonder/fetch_job.c): any token below
-    // OS64_FETCH_METHOD_MAX, sent as spelled, with `method` left GET and no
+    // OS64_FETCH_METHOD_MAX but CONNECT (refused, REQUEST_FAILED: its reply
+    // makes the connection a tunnel, which is no connection to keep), sent as
+    // spelled, with `method` left GET and no
     // content_type. Its body goes with any method but GET and HEAD, a HEAD's
     // reply is read as bodiless whatever it says, and the library follows
     // NO redirect: on_hop still hears each one, and every redirect ends the
