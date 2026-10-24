@@ -2392,6 +2392,23 @@ static void case_keepalive_retry(void)
         CHECK(fetch_all(url, NULL, out, sizeof(out), why, sizeof(why)) != OS64_FETCH_OK);
         CHECK(dials == 1 && strstr(why, "retried") == NULL);
 
+        // TWO REQUESTS, EACH RETRIED: a redirect from one host to another,
+        // and a dead kept connection waiting at both. The reason counts them.
+        reset();
+        const char *to_b[] = { tls ? "HTTP/1.1 302 Found\r\nLocation: https://b.test/\r\nContent-Length: 0\r\n\r\n"
+                                   : "HTTP/1.1 302 Found\r\nLocation: http://b.test/\r\nContent-Length: 0\r\n\r\n",
+                               NULL };
+        peer_t *pa = peer_answers("a.test", port, to_b), *pb = peer_answers("b.test", port, answers);
+        pa->drop_request = pb->drop_request = 2;
+        pa->drop_unseen = pb->drop_unseen = 1;
+        os64_fetch_options_t stop = { .method_name = "GET" };       // a method by name stops at the 302
+        fetch_all(tls ? "https://b.test/" : "http://b.test/", NULL, out, sizeof(out), NULL, 0);
+        fetch_all(tls ? "https://a.test/" : "http://a.test/", &stop, out, sizeof(out), NULL, 0);
+        CHECK(fetch_pool_idle() == 2);
+        CHECK(fetch_all(tls ? "https://a.test/" : "http://a.test/", NULL, out, sizeof(out), why, sizeof(why)) ==
+              OS64_FETCH_OK && !strcmp(out, "first") && dials == 4);
+        CHECK(strstr(why, "(2 requests retried, each once on a fresh connection)") != NULL);
+
         // ONCE: the fresh connection failing too is the fetch's failure.
         reset();
         p = peer_answers("again.test", port, answers);

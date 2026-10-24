@@ -74,7 +74,7 @@ struct os64_fetch {
     bool have_head;                 // `head` is filled and the connection is positioned at the body
     bool connected;                 // io holds a live connection
     bool reused;                    // ...taken from the pool, not dialled for this request
-    bool retried;                   // a request failed on a reused connection and went again on a fresh one
+    uint32_t retried;               // requests that failed on a reused connection and went again on a fresh one
     bool body_open;                 // `body` frames the final head's body (body_prepare)
     bool sent_whole;                // every byte of the request went before its final head came
     // The framing was told the body is empty when the wire may hold some: a
@@ -747,7 +747,7 @@ static os64_fetch_status_t ask(os64_fetch_t *f)
         bool again = false;
         os64_fetch_status_t asked = exchange(f, request, encrypted, &key, false, &again);
         if (again) {
-            f->retried = true;
+            f->retried++;
             asked = exchange(f, request, encrypted, &key, true, &again);
         }
         if (asked != OS64_FETCH_OK)
@@ -1570,11 +1570,15 @@ const char *os64_fetch_reason(os64_fetch_t *f)
                           (unsigned)d->tls_policy, d->tls_engine);
     }
     // The retry rule's one trace (retry_on_fresh), on whatever the outcome
-    // was, so a record of the fetch can carry it.
-    if (f->retried) {
+    // was, so a record of the fetch can carry it: how many of its requests
+    // went again, each at most once.
+    if (f->retried != 0) {
         size_t have = os64_strlen(out);
-        if (have < cap)
+        if (have < cap && f->retried == 1)
             os64_snprintf(out + have, cap - have, " (retried once on a fresh connection)");
+        else if (have < cap)
+            os64_snprintf(out + have, cap - have, " (%u requests retried, each once on a fresh connection)",
+                          (unsigned)f->retried);
     }
     return f->reason;
 }

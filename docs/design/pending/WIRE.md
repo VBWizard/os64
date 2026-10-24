@@ -313,8 +313,9 @@ says more than it did:
   connection needs no store, so a fetch that takes one loads none.
 - **The retry rule is per request**: each request a fetch makes (a
   redirect's next hop is another) goes at most twice, and the reason
-  string says so once. A silence is not a closed connection, and a reply
-  that began is not retried.
+  string counts them: "(retried once on a fresh connection)", or "(2
+  requests retried, each once on a fresh connection)". A silence is not a
+  closed connection, and a reply that began is not retried.
 - **Through a proxy**: libfetch sends https through a plain proxy in
   absolute form, not by `CONNECT`, so every proxied connection is plain to
   the proxy and keyed by it alone; the brief's `CONNECT` clause has nothing

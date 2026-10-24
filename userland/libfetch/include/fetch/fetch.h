@@ -379,8 +379,9 @@ const os64_fetch_progress_t *os64_fetch_progress(const os64_fetch_t *f);
 // caller that has nothing more specific to say. Storage inside the object.
 // It ends "(retried once on a fresh connection)" when a request failed on a
 // kept connection before any byte of its reply and was sent again (WIRE.md
-// § 2's retry rule: only a GET, HEAD, OPTIONS, PUT or DELETE, and once),
-// whatever the outcome after that.
+// § 2's retry rule: only a GET, HEAD, OPTIONS, PUT or DELETE, each request
+// at most once), whatever the outcome after that, and says how many when a
+// fetch's redirects made more than one request that went again.
 const char *os64_fetch_reason(os64_fetch_t *f);
 
 // Release the connection, the decoder, the store if this loaded it, and the

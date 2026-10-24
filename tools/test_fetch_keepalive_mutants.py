@@ -183,6 +183,7 @@ mutants = [
     ('retry-unsaid', FETCH_C,
      '" (retried once on a fresh connection)");', '"%s", "");', FETCH),
     # The request writer
+    ('retry-count-flat', FETCH_C, '            f->retried++;', '            f->retried = 1;', FETCH),
     ('writer-no-keep-alive', HTTP_C,
      'case 3: if (!x->keep_alive) continue;', 'case 3: if (true) continue;', FETCH),
     ('writer-order-ignored', HTTP_C,
