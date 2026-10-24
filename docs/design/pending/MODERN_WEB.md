@@ -2401,6 +2401,8 @@ yonder's, not surface a page detects.
 |---|---|---|---|
 | `html/webappapis/scripting` (new) | 39 of 271 | 108 of 277 | 69 |
 | `html/webappapis/microtask-queuing` | 5 of 8 | 6 of 8 | 6 (+1) |
+| `xhr` | 345 of 1188 | 347 of 1188 | +2 |
+| `secure-contexts` | 0 | 1 of 34 | 0 |
 
 Every required test fails with the switch off. What still fails in the new
 directory: an inline script's line, counted from the script; a thrown
@@ -2410,11 +2412,11 @@ property; `data:` scripts; the rejection pages that queue a task with
 `promise-rejection-events.html` fails whole on them); readystatechange,
 requestAnimationFrame, createImageBitmap; frames and workers.
 
-**Four directories lose passes, and that is the ruling this PR needs.**
+**Four directories lost passes, and the runner's rule was ruled.**
 Before P2a no harness could hear a page's uncaught error; now
 testharness.js does, as in every browser, ends the page in ERROR, and the
-runner fails such a page whole. Five pages, 330 passes, 9 of them
-required, none of it a change in what yonder does:
+runner failed such a page whole. As first built, five pages lost 330
+passes, 9 of them required, none of it a change in what yonder does:
 
 | Directory | Page | The page's own failure | Lost (required) |
 |---|---|---|---|
@@ -2424,14 +2426,34 @@ required, none of it a change in what yonder does:
 | `css/cssom` | `getComputedStyle-detached-subtree.html` | no frame (`contentDocument`) | 1 (1) |
 | `fetch/api/response` | `response-stream-disturbed-1.any.html` | a released reader's `closed` rejects unhandled (DEBTS; the binding cannot mark it handled) | 8 (8) |
 
-The lean: the runner counts the tests a page completed when its harness
-ended in ERROR on the page's own uncaught error or rejection (the
-harness's `Uncaught ...` or `Unhandled rejection: ...` message, which only
-P2a can produce), still printing the HARNESS line, and still failing whole
-on a timeout or any other harness error; wpt.fyi counts them so. The
-other way is to shrink the four expectation files, the required tests
-with them. Neither is done here: the four directories fail at the head
-until it is ruled. The other 24 directories pass both ways.
+Opus ruled, 2026-10-24, matching wpt.fyi, for the builder's lean: a
+harness that ended in ERROR on the page's own uncaught error or unhandled
+rejection counts the tests the page completed; a timeout or any other
+harness error still fails the page whole. The report script tells the
+two apart by what testharness.js reports, not by the wording: the
+harness's status is ERROR and its message is the one testharness.js made
+of an `error` or `unhandledrejection` event the page raised at window,
+which capturing listeners of the report script's, running before
+testharness.js's own, wrote down; it writes such a harness PAGE_ERROR,
+and the runner says so on the page's HARNESS line and in its summary
+(§ Slice 0a, as built, has the dated rule; three selftest pages hold the
+page's own error, its own rejection, and a harness error that is neither).
+Under it all five pages recover, all 330 passes and all 9 required tests
+(response-stream-disturbed-1's eight too: its harness ends on the page's
+own unhandled rejection, the DEBTS row's); no pass is lost in any of the
+28 directories, each passing both ways; and three are new: xhr's
+`thrown-error-in-events.html` pair (an error in a request's load listener
+reaching `window.onerror`, P2a's, now required) and secure-contexts'
+`basic-dedicated-worker.https.html` "HTTP worker", completed before its
+page's own error.
+
+The ruling also found a muting bug: a page whose address has a query the
+address parser refuses (a space the WPT runner's variant addresses leave
+unescaped) read no origin, so every script on it, its own included, was
+taken for another site's, and xhr's timeout pages said `Script error.`.
+An origin is read now from the address before its query and fragment,
+and a name that is no address with a tuple origin is never another
+site's.
 
 **The corpus**, 2026-10-22b replayed at the base and the head
 (`2026-10-22b_p2a-before` and `-after`): 10 page records now carry an
@@ -2449,12 +2471,13 @@ answers. Replayed 239, clean 21, unfinished 13 and 19 unjudged on both
 sides.
 
 Host, at the head: libjs's runtime host 1,153 checks (the script host's
-cases among them) and its sanitized profile, 0 failed; the DOM host 14,043
-/ 89,047 checks, allocation sweeps 1,125 / 13,393, 0 failed,
+cases among them) and its sanitized profile, 0 failed; the DOM host 14,052
+/ 89,056 checks, allocation sweeps 1,125 / 13,393, 0 failed,
 `tools/test_dom_report.inc` holding a case per rule of § P2a's rows; the
 scripted-page host 7,601 at the base → 7,614, 0 failed; yonder's host
 1,914, 0 failed; the replay proof, 42 fixture pages (`failures.html` new)
-kept and replayed the same; `make -C userland` builds.
+kept and replayed the same; the WPT runner's self-test, its three new
+pages among it; `make -C userland` builds.
 
 **Review.** The builder's adversarial pass looked for page code a failure's
 description could run (getters, proxy traps, a page's `toString`, a page's
@@ -2489,6 +2512,10 @@ dom.h's dispatch and take-report comments, the handler lists in LIBDOM.md
 
 **Booked** (DEBTS.md): an error event's place; the events in the failing
 task; muted `crossorigin` scripts; a task's second exception; the body's
-IDL for the three new handlers. The released reader's `closed` row is
-re-stated: its cure is an engine verb that sets a promise's handled flag,
-which is a libjs patch and Fable's to rule.
+IDL for the three new handlers; and, for 0011b and Fable, an Error made by
+code compiled under memory pressure reading past a heap block in
+`build_backtrace`, which P2a's first engine sweep (compile and run both
+inside the cut) reached and the reshaped one (compiled first) does not.
+The released reader's `closed` row is re-stated: its cure is an engine
+verb that sets a promise's handled flag, which is a libjs patch and
+Fable's to rule.
