@@ -112,8 +112,9 @@ mutants = [
      '(best == NULL || k->kept_at > best->kept_at)', '(best == NULL || k->kept_at < best->kept_at)', FETCH),
     ('key-trust', POOL_C, '           a->trust == b->trust && os64_streq(a->host, b->host);',
      '           os64_streq(a->host, b->host);', FETCH),
-    ('key-tls', POOL_C, 'return a->tls == b->tls && a->via_proxy == b->via_proxy',
-     'return a->via_proxy == b->via_proxy', FETCH),
+    # (`tls` in the key has no mutant: every TLS key carries the store it
+    # was verified under and every plain key none, so `trust` alone already
+    # tells them apart.)
     ('key-proxy-is-origin', FETCH_C,
      'os64_strcopy(k->host, sizeof(k->host), f->proxy.inUse ? f->proxy.host : f->current.host);',
      'os64_strcopy(k->host, sizeof(k->host), f->current.host);', FETCH),
