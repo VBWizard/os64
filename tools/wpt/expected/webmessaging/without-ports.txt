@@ -1,0 +1,77 @@
+# WPT's webmessaging/without-ports in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh webmessaging/without-ports --update
+# rewrites [passing].
+[required]
+# P2b: the same-window postMessage, its MessageEvent and the clone it
+# carries. Each fails with the switch off. What still fails: 010.html's
+# date, array and object tests, which call helpers the page never defines
+# (sameDate, assert_array_equals_, assert_object_equals_), in every
+# browser.
+001.html	resolving broken url
+002.html	resolving url with stuff in host-specific
+003.html	resolving 'example.org'
+004.html	special value '/'
+005.html	resolving a same origin targetOrigin
+006.html	resolving a same origin targetOrigin with trailing slash
+007.html	targetOrigin '*'
+009.html	zero arguments
+010.html	Infinity
+010.html	NaN
+010.html	error
+010.html	false
+010.html	null
+010.html	1
+010.html	regex
+010.html	self
+010.html	string
+010.html	true
+010.html	undefined
+010.html	unreached
+012.html	loop in array in structured clone
+013.html	loop in object in structured clone
+014.html	structured clone vs reference
+015.html	different origin
+026.html	Cloning objects with getter properties
+027.html	Cloning objects, preserving sharing
+029.html	Check that getters don't linger after deletion wrt cloning
+[excluded]
+011.html	needs a canvas's ImageData, which this browser does not have
+028.html	needs a canvas's ImageData, which this browser does not have
+016.html	needs a frame (IFRAME.md, Tier 1)
+017.html	needs a frame (IFRAME.md, Tier 1)
+018.html	needs a frame (IFRAME.md, Tier 1)
+019.html	needs a frame (IFRAME.md, Tier 1)
+020.html	needs a frame (IFRAME.md, Tier 1)
+021.html	needs a frame (IFRAME.md, Tier 1)
+023.html	needs MessageChannel (ports, beyond P2b's without-ports postMessage)
+024.html	needs MessageChannel (ports, beyond P2b's without-ports postMessage)
+025.html	needs MessageChannel and Worker (ports and workers, which this browser does not have)
+[passing]
+001.html	resolving broken url
+002.html	resolving url with stuff in host-specific
+003.html	resolving 'example.org'
+004.html	special value '/'
+005.html	resolving a same origin targetOrigin
+006.html	resolving a same origin targetOrigin with trailing slash
+007.html	targetOrigin '*'
+009.html	zero arguments
+010.html	1
+010.html	Infinity
+010.html	NaN
+010.html	error
+010.html	false
+010.html	null
+010.html	regex
+010.html	self
+010.html	string
+010.html	true
+010.html	undefined
+010.html	unreached
+012.html	loop in array in structured clone
+013.html	loop in object in structured clone
+014.html	structured clone vs reference
+015.html	different origin
+026.html	Cloning objects with getter properties
+027.html	Cloning objects, preserving sharing
+029.html	Check that getters don't linger after deletion wrt cloning
