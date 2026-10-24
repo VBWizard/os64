@@ -31,7 +31,11 @@ static bool clock_now(os64_ticks_t *now)
     return os64_ticks(now) >= 0 && now->per_second != 0;
 }
 
-// Past its idle time, or kept at a time the clock now contradicts.
+// Past its idle time, or kept at a time the clock now contradicts. The
+// clock is read under the lock, by take and put alike, so every kept_at
+// was written by an earlier holder than the reading: a `now` before one is
+// a clock that went backwards, not a put that overtook the read, and a
+// connection whose age cannot be known is closed rather than trusted.
 static bool expired(const kept_t *k, const os64_ticks_t *now)
 {
     if (now->ticks < k->kept_at)
@@ -63,10 +67,10 @@ static void close_all(leaving_t *out)
 bool fetch_pool_take(const fetch_pool_key_t *key, fetch_transport_t *io)
 {
     os64_ticks_t now;
-    bool timed = clock_now(&now);
     leaving_t out = {0};
     kept_t *best = NULL;
     os64_lock_acquire(&s_lock);
+    bool timed = clock_now(&now);
     for (size_t i = 0; i < FETCH_POOL_TOTAL; i++) {
         kept_t *k = &s_kept[i];
         if (!k->used)
@@ -93,12 +97,13 @@ void fetch_pool_put(const fetch_pool_key_t *key, const fetch_transport_t *io)
 {
     os64_ticks_t now;
     leaving_t out = {0};
+    os64_lock_acquire(&s_lock);
     if (!clock_now(&now)) {
+        os64_lock_release(&s_lock);
         out.io[out.n++] = *io;
         close_all(&out);
         return;
     }
-    os64_lock_acquire(&s_lock);
     size_t mine = 0, all = 0;
     kept_t *oldest_mine = NULL, *oldest = NULL, *free_slot = NULL;
     for (size_t i = 0; i < FETCH_POOL_TOTAL; i++) {

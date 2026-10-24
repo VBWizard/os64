@@ -2256,6 +2256,19 @@ static void case_keepalive_caps(void)
     open_limit = 0;
     fetch_all("http://h0.test/", NULL, out, sizeof(out), NULL, 0);
     CHECK(dials == FETCH_POOL_TOTAL + 3);
+    // A CLOCK THAT WENT BACKWARDS: a connection kept "later" than now has
+    // an age nobody can know, and is closed rather than trusted.
+    reset();
+    peer_answers("clock.test", 80, many);
+    now_ms = 5000;
+    fetch_all("http://clock.test/", NULL, out, sizeof(out), NULL, 0);
+    CHECK(fetch_pool_idle() == 1);
+    now_ms = 4000;
+    fetch_all("http://clock.test/", NULL, out, sizeof(out), NULL, 0);
+    CHECK(dials == 2 && closes == 1 && requests_on(0) == 1);
+    reset();
+    for (int i = 0; i <= FETCH_POOL_TOTAL; i++)
+        peer_answers(names[i], 80, many);
     // ...and with nothing kept to let go, the refusal is the fetch's.
     fetch_pool_drain();
     open_limit = 1;

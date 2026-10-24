@@ -18,7 +18,9 @@
 // under TSan, which sees a write to a kept connection's fields that the
 // lock does not order.
 
+#define _POSIX_C_SOURCE 200809L      // sem_timedwait, clock_gettime under -std=c11
 #include <pthread.h>
+#include <semaphore.h>
 #include <sched.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -42,9 +44,23 @@ static _Atomic int failures;
     fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); atomic_fetch_add(&failures, 1); } } while (0)
 
 void os64_yield(void) { sched_yield(); }
+
+// The race case's hook: a thread marked `stalls` stops inside its clock
+// read, says so, and waits up to 300 ms for the other thread's put.
+static __thread bool stalls;
+static sem_t read_the_clock, put_done;
+
 int64_t os64_ticks(os64_ticks_t *t)
 {
     *t = (os64_ticks_t){ .ticks = atomic_load(&clock_ms), .per_second = 1000 };
+    if (stalls) {
+        sem_post(&read_the_clock);
+        struct timespec until;
+        clock_gettime(CLOCK_REALTIME, &until);
+        until.tv_nsec += 300 * 1000000L;
+        if (until.tv_nsec >= 1000000000L) { until.tv_sec++; until.tv_nsec -= 1000000000L; }
+        sem_timedwait(&put_done, &until);
+    }
     return 0;
 }
 // The pool's only way to let a connection go. One the pool closes is one
@@ -115,8 +131,53 @@ static void *fetcher(void *arg)
     return NULL;
 }
 
+// A TAKE'S CLOCK IS NEVER OLDER THAN A PUT IT SEES (the cold read's stale
+// clock). One thread takes for another key and stops inside its clock read;
+// meanwhile a connection is put, a tick later. Read under the lock, the
+// put waits for the take, and its connection is kept; read before the
+// lock, the take would carry its older `now` past the put and close the
+// new connection as one kept in the future.
+static fetch_pool_key_t race_a = { .host = "a.test", .port = 80 },
+                        race_b = { .host = "b.test", .port = 80 };
+static void *race_taker(void *x)
+{
+    (void)x;
+    stalls = true;
+    fetch_transport_t io;
+    CHECK(!fetch_pool_take(&race_b, &io));
+    return NULL;
+}
+static void *race_putter(void *x)
+{
+    (void)x;
+    fetch_transport_t io;
+    memset(&io, 0, sizeof(io));
+    io.handle = atomic_fetch_add(&next_handle, 1);
+    atomic_fetch_add(&clock_ms, 1);
+    fetch_pool_put(&race_a, &io);
+    return NULL;
+}
+static void stale_clock_case(void)
+{
+    sem_init(&read_the_clock, 0, 0);
+    sem_init(&put_done, 0, 0);
+    pthread_t taker, putter;
+    pthread_create(&taker, NULL, race_taker, NULL);
+    sem_wait(&read_the_clock);            // the take has its `now`
+    pthread_create(&putter, NULL, race_putter, NULL);
+    pthread_join(putter, NULL);
+    sem_post(&put_done);
+    pthread_join(taker, NULL);
+    int closed_now = 0;
+    for (int h = 1; h < atomic_load(&next_handle); h++)
+        closed_now += atomic_load(&closed[h]);
+    CHECK(closed_now == 0 && fetch_pool_idle() == 1);
+    fetch_pool_drain();
+}
+
 int main(void)
 {
+    stale_clock_case();
     pthread_t t[THREADS];
     for (int i = 0; i < THREADS; i++)
         pthread_create(&t[i], NULL, fetcher, (void *)(intptr_t)(i + 1));
