@@ -83,6 +83,14 @@ reporterror.any.html	self.reportError() doesn't invoke getters
 reporterror.any.html	self.reportError(1)
 reporterror.any.html	self.reportError(TypeError)
 reporterror.any.html	self.reportError(undefined)
+# P2b: MessageEvent's constructor and initMessageEvent. Each fails with the
+# switch off. What still fails wants a MessagePort (MessageChannel) or a
+# ServiceWorker.
+events/messageevent-constructor.https.html	Default event values
+events/messageevent-constructor.https.html	MessageEvent constructor called as normal function
+events/messageevent-constructor.https.html	Passing null for ports member
+events/messageevent-constructor.https.html	initMessageEvent operation default parameter values
+events/messageevent-constructor.https.html	ports attribute should be a FrozenArray
 [excluded]
 [passing]
 event-loops/microtask_after_script.html	Microtask immediately after script
@@ -134,7 +142,12 @@ events/inline-event-handler-ordering.html	Inline event handlers retain their ord
 events/invalid-uncompiled-raw-handler-compiled-late.window.html	Invalid uncompiled raw handlers should only be compiled when about to call them
 events/invalid-uncompiled-raw-handler-compiled-once.window.html	Invalid uncompiled raw handlers should only be compiled once
 events/invalid-uncompiled-raw-handler-keeps-position.window.html	Compiling invalid uncompiled raw handlers should keep the position in event listener list
+events/messageevent-constructor.https.html	Default event values
+events/messageevent-constructor.https.html	MessageEvent constructor called as normal function
+events/messageevent-constructor.https.html	Passing null for ports member
 events/messageevent-constructor.https.html	Passing null for ports parameter to initMessageEvent
+events/messageevent-constructor.https.html	initMessageEvent operation default parameter values
+events/messageevent-constructor.https.html	ports attribute should be a FrozenArray
 processing-model-2/addEventListener.html	window.onerror - addEventListener
 processing-model-2/body-onerror-compile-error-data-url.html	<body onerror> - compile error in <script src=data:...> (column)
 processing-model-2/body-onerror-compile-error.html	<body onerror> - compile error in <script>

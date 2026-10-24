@@ -289,6 +289,11 @@ Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for pluralized no
 Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for unrecognized arguments
 Document-createEvent.https.html	customevent should be an alias for CustomEvent.
 Document-createEvent.https.html	hashchangeevent should be an alias for HashChangeEvent.
+# P2b: createEvent's table makes MessageEvent as itself. Each fails with
+# the switch off.
+Document-createEvent.https.html	MESSAGEEVENT should be an alias for MessageEvent.
+Document-createEvent.https.html	MessageEvent should be an alias for MessageEvent.
+Document-createEvent.https.html	messageevent should be an alias for MessageEvent.
 [excluded]
 [passing]
 Attr-prefix.html	Attr.prefix absent (HTML)
@@ -843,6 +848,8 @@ Document-createEvent.https.html	HASHCHANGEEVENT should be an alias for HashChang
 Document-createEvent.https.html	HTMLEVENTS should be an alias for Event.
 Document-createEvent.https.html	HTMLEvents should be an alias for Event.
 Document-createEvent.https.html	HashChangeEvent should be an alias for HashChangeEvent.
+Document-createEvent.https.html	MESSAGEEVENT should be an alias for MessageEvent.
+Document-createEvent.https.html	MessageEvent should be an alias for MessageEvent.
 Document-createEvent.https.html	SVGEVENTS should be an alias for Event.
 Document-createEvent.https.html	SVGEvents should be an alias for Event.
 Document-createEvent.https.html	Should throw NOT_SUPPORTED_ERR for non-legacy event interface "AnimationEvent"
@@ -1063,6 +1070,7 @@ Document-createEvent.https.html	event should be an alias for Event.
 Document-createEvent.https.html	events should be an alias for Event.
 Document-createEvent.https.html	hashchangeevent should be an alias for HashChangeEvent.
 Document-createEvent.https.html	htmlevents should be an alias for Event.
+Document-createEvent.https.html	messageevent should be an alias for MessageEvent.
 Document-createEvent.https.html	svgevents should be an alias for Event.
 Document-createProcessingInstruction.html	Document.createProcessingInstruction in HTML documents
 Document-createTreeWalker.html	Required arguments to createTreeWalker should be required.
