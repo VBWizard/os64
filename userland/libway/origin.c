@@ -145,16 +145,25 @@ void way_origin_of(const char *url, uint64_t opaque_id, way_origin_t *out)
         return;
     }
     os64_url_t *parsed = os64_malloc(sizeof(*parsed));
-    if (parsed == NULL || os64_url_parse(url, parsed) != OS64_URL_OK || special_port(parsed->scheme) == 0) {
+    if (parsed == NULL || os64_url_parse(url, parsed) != OS64_URL_OK) {
         os64_free(parsed);
         opaque(out, opaque_id);
         return;
     }
-    os64_memset(out, 0, sizeof(*out));
-    os64_strcopy(out->scheme, sizeof(out->scheme), parsed->scheme);
-    os64_strcopy(out->host, sizeof(out->host), parsed->host);
-    out->port = parsed->port != 0 ? parsed->port : special_port(parsed->scheme);
+    way_origin_of_url(parsed, opaque_id, out);
     os64_free(parsed);
+}
+
+void way_origin_of_url(const os64_url_t *url, uint64_t opaque_id, way_origin_t *out)
+{
+    if (special_port(url->scheme) == 0) {
+        opaque(out, opaque_id);
+        return;
+    }
+    os64_memset(out, 0, sizeof(*out));
+    os64_strcopy(out->scheme, sizeof(out->scheme), url->scheme);
+    os64_strcopy(out->host, sizeof(out->host), url->host);
+    out->port = url->port != 0 ? url->port : special_port(url->scheme);
 }
 
 bool way_origin_same(const way_origin_t *a, const way_origin_t *b)
@@ -214,8 +223,9 @@ static bool loopback_literal(const char *host)
 }
 
 // Secure Contexts' "Is url potentially trustworthy?": about:blank and
-// about:srcdoc are, before anything else; then https, wss and data: are;
-// an http URL is when its host is loopback.
+// about:srcdoc are, before anything else; then https, wss and data: are,
+// by their scheme alone; then the URL's origin decides
+// (way_origin_trustworthy).
 bool way_url_trustworthy(const char *url)
 {
     char scheme[OS64_URL_SCHEME_MAX];
@@ -229,7 +239,16 @@ bool way_url_trustworthy(const char *url)
         return true;
     way_origin_t o;
     way_origin_of(url, 0, &o);
-    return !o.opaque && loopback_literal(o.host);
+    return way_origin_trustworthy(&o);
+}
+
+// "Is origin potentially trustworthy?": https and wss are; any other tuple
+// is when its host is loopback.
+bool way_origin_trustworthy(const way_origin_t *o)
+{
+    if (o->opaque)
+        return false;
+    return os64_streq(o->scheme, "https") || os64_streq(o->scheme, "wss") || loopback_literal(o->host);
 }
 
 bool way_mixed_blocked(const way_origin_t *page, const char *url)
@@ -1156,6 +1175,137 @@ bool way_referrer_for(const way_request_t *r, const char *referrer, const char *
     if (whole && os64_strlen(out) > 4096)
         return strip_referrer(referrer, true, out, cap);
     return true;
+}
+
+// ── Who is asking, and for what ─────────────────────────────────────────
+
+void way_metadata_navigation(way_metadata_t *m, way_initiator_t by, const way_origin_t *from)
+{
+    os64_memset(m, 0, sizeof(*m));
+    m->dest = WAY_DEST_DOCUMENT;
+    if (by == WAY_BY_BROWSER)
+        m->site = WAY_SITE_NONE;
+    else
+        m->origin = *from;
+    // Fetch Metadata § 2.4: a navigation request whose user-activation is
+    // true. HTML sets that once, before the fetch, and its redirects are
+    // the same request, so it holds on every hop.
+    m->activation = by != WAY_BY_PAGE;
+}
+
+void way_metadata_request(way_metadata_t *m, const way_origin_t *page, way_dest_t dest,
+                          way_mode_t mode)
+{
+    os64_memset(m, 0, sizeof(*m));
+    m->origin = *page;
+    m->dest = dest;
+    m->mode = mode;
+}
+
+way_metadata_t way_metadata_preflight(const way_metadata_t *m)
+{
+    way_metadata_t p = *m;
+    p.dest = WAY_DEST_EMPTY;
+    p.mode = WAY_MODE_CORS;
+    p.activation = false;
+    p.preflight = true;
+    return p;
+}
+
+// Fetch Metadata § 2.3 step 5, one URL at a time: same-origin continues,
+// same-site at most, anything else is cross-site for good.
+void way_metadata_hop(way_metadata_t *m, const way_origin_t *to)
+{
+    if (m->site == WAY_SITE_NONE || m->site == WAY_SITE_CROSS_SITE || way_origin_same(&m->origin, to))
+        return;
+    m->site = way_origin_same_site(&m->origin, to) ? WAY_SITE_SAME_SITE : WAY_SITE_CROSS_SITE;
+}
+
+static const char *site_token(way_site_t site)
+{
+    switch (site) {
+    case WAY_SITE_SAME_ORIGIN: return "same-origin";
+    case WAY_SITE_SAME_SITE: return "same-site";
+    case WAY_SITE_CROSS_SITE: return "cross-site";
+    case WAY_SITE_NONE: return "none";
+    }
+    return "cross-site";
+}
+
+static const char *mode_token(const way_metadata_t *m)
+{
+    if (m->dest == WAY_DEST_DOCUMENT)
+        return "navigate";
+    switch (m->mode) {
+    case WAY_MODE_CORS: return "cors";
+    case WAY_MODE_SAME_ORIGIN: return "same-origin";
+    case WAY_MODE_NO_CORS: return "no-cors";
+    }
+    return "cors";
+}
+
+static const char *dest_token(way_dest_t dest)
+{
+    switch (dest) {
+    case WAY_DEST_EMPTY: return "empty";
+    case WAY_DEST_DOCUMENT: return "document";
+    case WAY_DEST_SCRIPT: return "script";
+    case WAY_DEST_STYLE: return "style";
+    case WAY_DEST_IMAGE: return "image";
+    case WAY_DEST_FONT: return "font";
+    }
+    return "empty";
+}
+
+// `a`, then `b` (NULL for nothing), onto `out` at `*at`, within `cap` with
+// room for the NUL.
+static bool lines_add(char *out, size_t cap, size_t *at, const char *a, const char *b)
+{
+    size_t na = os64_strlen(a), nb = b != NULL ? os64_strlen(b) : 0;
+    if (*at + na + nb + 1 > cap)
+        return false;
+    os64_memcpy(out + *at, a, na);
+    if (nb > 0)
+        os64_memcpy(out + *at + na, b, nb);
+    *at += na + nb;
+    out[*at] = '\0';
+    return true;
+}
+
+bool way_identity_lines(const way_identity_t *id, const way_metadata_t *m, const way_origin_t *to,
+                        bool language_given, char *out, size_t cap)
+{
+    if (cap == 0)
+        return false;
+    out[0] = '\0';
+    size_t at = 0;
+    // Fetch Metadata § 3 step 1: none of it to a URL that is not
+    // potentially trustworthy. The client hints are a secure-context
+    // feature, and Chrome sends neither to a plain-http host.
+    bool trustworthy = way_origin_trustworthy(to);
+    bool ok = true;
+    if (trustworthy && !m->preflight && id != NULL && id->hints != NULL)
+        ok = lines_add(out, cap, &at, id->hints, NULL);
+    // Upgrade Insecure Requests § 3.2: every navigation asks, wherever it
+    // goes; a trustworthy one is the answer it prefers.
+    if (ok && m->dest == WAY_DEST_DOCUMENT)
+        ok = lines_add(out, cap, &at, "Upgrade-Insecure-Requests: 1", "\r\n");
+    if (ok && trustworthy) {
+        ok = lines_add(out, cap, &at, "Sec-Fetch-Site: ", site_token(m->site)) &&
+             lines_add(out, cap, &at, "\r\n", NULL) &&
+             lines_add(out, cap, &at, "Sec-Fetch-Mode: ", mode_token(m)) &&
+             lines_add(out, cap, &at, "\r\n", NULL) &&
+             (m->dest != WAY_DEST_DOCUMENT || !m->activation ||
+              lines_add(out, cap, &at, "Sec-Fetch-User: ?1", "\r\n")) &&
+             lines_add(out, cap, &at, "Sec-Fetch-Dest: ", dest_token(m->dest)) &&
+             lines_add(out, cap, &at, "\r\n", NULL);
+    }
+    if (ok && !language_given && id != NULL && id->language != NULL)
+        ok = lines_add(out, cap, &at, "Accept-Language: ", id->language) &&
+             lines_add(out, cap, &at, "\r\n", NULL);
+    if (!ok)
+        out[0] = '\0';
+    return ok;
 }
 
 // ── A response's headers ────────────────────────────────────────────────

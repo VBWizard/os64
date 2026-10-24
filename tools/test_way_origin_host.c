@@ -1,8 +1,10 @@
 // test_way_origin_host.c — libway's origins and CORS (way/origin.h) on the
 // host, under the sanitizers: one case per sentence of the Fetch Standard
 // that origin.c applies (MODERN_WEB.md § Slice 2's origins and CORS; the
-// numbers in the names are that design's host-case list), then every
-// allocation failed in turn. origin.c is pure, so nothing here dials.
+// numbers in the names are that design's host-case list), the lines a hop
+// says about who is asking (Fetch Metadata, Upgrade-Insecure-Requests, a
+// preset's identity), then every allocation failed in turn. origin.c is
+// pure, so nothing here dials.
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -1056,6 +1058,217 @@ static void origin_headers(void)
     // same call; proved on the wire by the scripted-page host.
 }
 
+// ── Who is asking: Fetch Metadata and the identity lines ────────────────
+
+// The lines a hop to `to` carries, after stepping `m` to it.
+static const char *hop_lines(way_metadata_t *m, const way_identity_t *id, const char *to, bool given)
+{
+    static char out[WAY_IDENTITY_MAX];
+    way_origin_t o;
+    way_origin_of(to, 0, &o);
+    way_metadata_hop(m, &o);
+    if (!way_identity_lines(id, m, &o, given, out, sizeof(out)))
+        snprintf(out, sizeof(out), "<did not fit>");
+    return out;
+}
+
+static way_metadata_t request_from(const char *page, way_dest_t dest, way_mode_t mode)
+{
+    way_metadata_t m;
+    way_origin_t o;
+    way_origin_of(page, 7, &o);
+    way_metadata_request(&m, &o, dest, mode);
+    return m;
+}
+
+static way_metadata_t navigation_from(way_initiator_t by, const char *page)
+{
+    way_metadata_t m;
+    way_origin_t o;
+    way_origin_of(page, 7, &o);
+    way_metadata_navigation(&m, by, &o);
+    return m;
+}
+
+// The value of `name` in a block of lines, or "<absent>".
+static const char *line_value(const char *block, const char *name)
+{
+    static char value[256];
+    size_t n = strlen(name);
+    for (const char *p = block; *p != '\0';) {
+        const char *end = strstr(p, "\r\n");
+        if (end == NULL)
+            break;
+        if ((size_t)(end - p) > n + 2 && strncmp(p, name, n) == 0 && p[n] == ':' && p[n + 1] == ' ') {
+            snprintf(value, sizeof(value), "%.*s", (int)(end - p - n - 2), p + n + 2);
+            return value;
+        }
+        p = end + 2;
+    }
+    return "<absent>";
+}
+
+static void metadata(void)
+{
+    static const way_identity_t hinted = {"sec-ch-ua: \"B\";v=\"1\"\r\nsec-ch-ua-mobile: ?0\r\n", "en-US,en;q=0.9"};
+    way_metadata_t m;
+
+    // Sec-Fetch-Site's four answers. Same site is the same scheme and host,
+    // ports aside, until the public-suffix list lands.
+    m = request_from("https://a.test/p", WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+    expect_text("site: same-origin", line_value(hop_lines(&m, NULL, "https://a.test/i.png", false), "Sec-Fetch-Site"),
+                "same-origin");
+    m = request_from("https://a.test/p", WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+    expect_text("site: same-site", line_value(hop_lines(&m, NULL, "https://a.test:8443/i.png", false), "Sec-Fetch-Site"),
+                "same-site");
+    m = request_from("https://a.test/p", WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+    expect_text("site: cross-site", line_value(hop_lines(&m, NULL, "https://b.test/i.png", false), "Sec-Fetch-Site"),
+                "cross-site");
+    m = navigation_from(WAY_BY_BROWSER, "https://a.test/p");
+    expect_text("site: none, typed", line_value(hop_lines(&m, NULL, "https://a.test/", false), "Sec-Fetch-Site"), "none");
+    m = request_from("file:///page.html", WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+    expect_text("site: an opaque page is cross-site to everything",
+                line_value(hop_lines(&m, NULL, "https://a.test/", false), "Sec-Fetch-Site"), "cross-site");
+
+    // The URL list: the furthest URL so far, whatever comes after it.
+    m = request_from("https://a.test/p", WAY_DEST_SCRIPT, WAY_MODE_NO_CORS);
+    hop_lines(&m, NULL, "https://a.test/1", false);
+    hop_lines(&m, NULL, "https://b.test/2", false);
+    expect_text("site: back on the origin after a cross-site hop stays cross-site",
+                line_value(hop_lines(&m, NULL, "https://a.test/3", false), "Sec-Fetch-Site"), "cross-site");
+    m = request_from("https://a.test/p", WAY_DEST_SCRIPT, WAY_MODE_NO_CORS);
+    hop_lines(&m, NULL, "https://a.test:8443/1", false);
+    expect_text("site: back on the origin after a same-site hop stays same-site",
+                line_value(hop_lines(&m, NULL, "https://a.test/2", false), "Sec-Fetch-Site"), "same-site");
+    m = request_from("https://a.test/p", WAY_DEST_SCRIPT, WAY_MODE_NO_CORS);
+    hop_lines(&m, NULL, "https://a.test:8443/1", false);
+    expect_text("site: same-site, then another site, is cross-site",
+                line_value(hop_lines(&m, NULL, "https://c.test/2", false), "Sec-Fetch-Site"), "cross-site");
+    m = navigation_from(WAY_BY_BROWSER, "https://a.test/p");
+    hop_lines(&m, NULL, "https://a.test/", false);
+    expect_text("site: none stays none through a cross-site redirect",
+                line_value(hop_lines(&m, NULL, "https://b.test/", false), "Sec-Fetch-Site"), "none");
+    m = request_from("https://a.test/p", WAY_DEST_SCRIPT, WAY_MODE_NO_CORS);
+    hop_lines(&m, NULL, "https://a.test/1", false);
+    hop_lines(&m, NULL, "https://a.test/1", false);
+    expect("site: a hop composed twice is described once", m.site == WAY_SITE_SAME_ORIGIN, NULL);
+
+    // Sec-Fetch-Mode's four.
+    m = navigation_from(WAY_BY_PERSON, "https://a.test/p");
+    expect_text("mode: navigate", line_value(hop_lines(&m, NULL, "https://a.test/n", false), "Sec-Fetch-Mode"), "navigate");
+    m = request_from("https://a.test/p", WAY_DEST_EMPTY, WAY_MODE_CORS);
+    expect_text("mode: cors", line_value(hop_lines(&m, NULL, "https://b.test/api", false), "Sec-Fetch-Mode"), "cors");
+    m = request_from("https://a.test/p", WAY_DEST_STYLE, WAY_MODE_NO_CORS);
+    expect_text("mode: no-cors", line_value(hop_lines(&m, NULL, "https://a.test/s.css", false), "Sec-Fetch-Mode"),
+                "no-cors");
+    m = request_from("https://a.test/p", WAY_DEST_EMPTY, WAY_MODE_SAME_ORIGIN);
+    expect_text("mode: same-origin", line_value(hop_lines(&m, NULL, "https://a.test/api", false), "Sec-Fetch-Mode"),
+                "same-origin");
+
+    // Sec-Fetch-Dest, for each destination a caller names.
+    static const struct { way_dest_t dest; const char *token; } dests[] = {
+        {WAY_DEST_EMPTY, "empty"}, {WAY_DEST_DOCUMENT, "document"}, {WAY_DEST_SCRIPT, "script"},
+        {WAY_DEST_STYLE, "style"}, {WAY_DEST_IMAGE, "image"}, {WAY_DEST_FONT, "font"},
+    };
+    for (size_t i = 0; i < sizeof(dests) / sizeof(dests[0]); i++) {
+        m = request_from("https://a.test/p", dests[i].dest, WAY_MODE_NO_CORS);
+        char name[64];
+        snprintf(name, sizeof(name), "dest: %s", dests[i].token);
+        expect_text(name, line_value(hop_lines(&m, NULL, "https://a.test/x", false), "Sec-Fetch-Dest"), dests[i].token);
+    }
+
+    // Sec-Fetch-User: a person's navigation, on every hop of it; never a
+    // page's, never a request's.
+    m = navigation_from(WAY_BY_BROWSER, "https://a.test/p");
+    expect_text("user: typed", line_value(hop_lines(&m, NULL, "https://a.test/", false), "Sec-Fetch-User"), "?1");
+    m = navigation_from(WAY_BY_PERSON, "https://a.test/p");
+    expect_text("user: clicked", line_value(hop_lines(&m, NULL, "https://a.test/n", false), "Sec-Fetch-User"), "?1");
+    expect_text("user: a clicked link's later hop keeps it (the same request, its user-activation unchanged)",
+                line_value(hop_lines(&m, NULL, "https://b.test/n", false), "Sec-Fetch-User"), "?1");
+    m = navigation_from(WAY_BY_PAGE, "https://a.test/p");
+    expect_text("user: a page's own navigation has none",
+                line_value(hop_lines(&m, NULL, "https://a.test/n", false), "Sec-Fetch-User"), "<absent>");
+    expect_text("user: nor on its later hops", line_value(hop_lines(&m, NULL, "https://b.test/n", false), "Sec-Fetch-User"),
+                "<absent>");
+    m = request_from("https://a.test/p", WAY_DEST_SCRIPT, WAY_MODE_NO_CORS);
+    m.activation = true;            // even a request told so: only a navigation says it
+    expect_text("user: a script's request has none",
+                line_value(hop_lines(&m, NULL, "https://a.test/s.js", false), "Sec-Fetch-User"), "<absent>");
+
+    // The preflight's pair, and no hints with it.
+    m = request_from("https://a.test/p", WAY_DEST_EMPTY, WAY_MODE_CORS);
+    way_origin_t b;
+    way_origin_of("https://b.test/api", 0, &b);
+    way_metadata_hop(&m, &b);
+    way_metadata_t pre = way_metadata_preflight(&m);
+    const char *pl = hop_lines(&pre, &hinted, "https://b.test/api", false);
+    expect_text("preflight: mode cors", line_value(pl, "Sec-Fetch-Mode"), "cors");
+    expect_text("preflight: dest empty", line_value(pl, "Sec-Fetch-Dest"), "empty");
+    expect_text("preflight: the request's site", line_value(pl, "Sec-Fetch-Site"), "cross-site");
+    expect_text("preflight: no client hints", line_value(pl, "sec-ch-ua"), "<absent>");
+    expect_text("preflight: Accept-Language goes", line_value(pl, "Accept-Language"), "en-US,en;q=0.9");
+    m = request_from("https://a.test/p", WAY_DEST_FONT, WAY_MODE_NO_CORS);
+    pre = way_metadata_preflight(&m);
+    expect("preflight: of any request, cors and empty", pre.mode == WAY_MODE_CORS && pre.dest == WAY_DEST_EMPTY, NULL);
+
+    // Upgrade-Insecure-Requests: a document's only, on a plain-http hop too.
+    m = navigation_from(WAY_BY_BROWSER, "https://a.test/p");
+    expect_text("uir: a navigation", line_value(hop_lines(&m, NULL, "https://a.test/", false), "Upgrade-Insecure-Requests"),
+                "1");
+    m = navigation_from(WAY_BY_PERSON, "https://a.test/p");
+    expect_text("uir: a navigation to plain http still asks",
+                hop_lines(&m, NULL, "http://b.test/", false), "Upgrade-Insecure-Requests: 1\r\n");
+    for (size_t i = 0; i < sizeof(dests) / sizeof(dests[0]); i++) {
+        if (dests[i].dest == WAY_DEST_DOCUMENT)
+            continue;
+        m = request_from("https://a.test/p", dests[i].dest, WAY_MODE_NO_CORS);
+        char name[64];
+        snprintf(name, sizeof(name), "uir: none for %s", dests[i].token);
+        expect_text(name, line_value(hop_lines(&m, NULL, "https://a.test/x", false), "Upgrade-Insecure-Requests"),
+                    "<absent>");
+    }
+
+    // Only a potentially trustworthy URL hears Fetch Metadata or the hints.
+    m = request_from("https://a.test/p", WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+    expect_text("trust: plain http hears only the language", hop_lines(&m, &hinted, "http://b.test/i.png", false),
+                "Accept-Language: en-US,en;q=0.9\r\n");
+    m = request_from("http://127.0.0.1/p", WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+    expect_text("trust: a loopback literal hears all of it", hop_lines(&m, &hinted, "http://127.0.0.1/i.png", false),
+                "sec-ch-ua: \"B\";v=\"1\"\r\nsec-ch-ua-mobile: ?0\r\nSec-Fetch-Site: same-origin\r\n"
+                "Sec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: image\r\nAccept-Language: en-US,en;q=0.9\r\n");
+    m = request_from("http://localhost/p", WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+    expect_text("trust: the name localhost does not (way_url_trustworthy's rule)",
+                hop_lines(&m, &hinted, "http://localhost/i.png", false), "Accept-Language: en-US,en;q=0.9\r\n");
+    m = navigation_from(WAY_BY_BROWSER, "https://a.test/p");
+    hop_lines(&m, &hinted, "http://a.test/", false);
+    expect_text("trust: an http hop that redirects to https hears all of it there",
+                hop_lines(&m, &hinted, "https://a.test/", false),
+                "sec-ch-ua: \"B\";v=\"1\"\r\nsec-ch-ua-mobile: ?0\r\nUpgrade-Insecure-Requests: 1\r\n"
+                "Sec-Fetch-Site: none\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-User: ?1\r\nSec-Fetch-Dest: document\r\n"
+                "Accept-Language: en-US,en;q=0.9\r\n");
+
+    // A page's own Accept-Language stands alone; no identity, no lines of it.
+    m = request_from("https://a.test/p", WAY_DEST_EMPTY, WAY_MODE_CORS);
+    expect_text("language: a page's own is not doubled",
+                line_value(hop_lines(&m, &hinted, "https://a.test/api", true), "Accept-Language"), "<absent>");
+    m = request_from("https://a.test/p", WAY_DEST_EMPTY, WAY_MODE_CORS);
+    expect_text("identity: none, only the request's lines", hop_lines(&m, NULL, "https://a.test/api", false),
+                "Sec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Dest: empty\r\n");
+
+    // Too little room: nothing, not part of it.
+    m = navigation_from(WAY_BY_BROWSER, "https://a.test/p");
+    way_origin_t a;
+    way_origin_of("https://a.test/", 0, &a);
+    char small[64];
+    expect("room: what does not fit is refused whole",
+           !way_identity_lines(&hinted, &m, &a, false, small, sizeof(small)) && small[0] == '\0', small);
+    char exact[WAY_IDENTITY_MAX];
+    way_identity_lines(&hinted, &m, &a, false, exact, sizeof(exact));
+    size_t need = strlen(exact) + 1;
+    expect("room: exactly enough is enough", way_identity_lines(&hinted, &m, &a, false, exact, need), NULL);
+    expect("room: a byte short is not", !way_identity_lines(&hinted, &m, &a, false, exact, need - 1), NULL);
+}
+
 static void referrers(void)
 {
     struct { way_policy_t p; const char *from, *to, *want; } cases[] = {
@@ -1344,6 +1557,7 @@ int main(void)
     cors_check();
     response_types();
     origin_headers();
+    metadata();
     referrers();
     mixed_content();
     bounds();
