@@ -1503,6 +1503,7 @@ static void public_frag(Build *bd, const FFrag *fr, flow_box_t *parent, flow_box
         b->begin = (fr->item != NULL ? fr->item->offset : 0) + fr->begin;
     } else {
         b->control = fr->item->control;
+        b->replaced = fr->item->replaced;
         if (b->control >= 0)
             push_list(bd, &bd->t->controls, &bd->t->ncontrols, &bd->t->cap_controls, b);
         if (fr->item->content != NULL && fr->item->content->placed) {
@@ -1527,6 +1528,7 @@ static flow_box_t *public_box(Build *bd, const FBox *src, flow_box_t *parent, fl
     // In the list at its place in the pre-order, which is tree order: the
     // paint order until z-index sorts it.
     b->control = src->control;
+    b->replaced = src->kind == FB_REPLACED;
     b->ellipsis = src->ellipsis;
     if (b->control >= 0 &&
         !push_list(bd, &bd->t->controls, &bd->t->ncontrols, &bd->t->cap_controls, b))

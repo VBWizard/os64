@@ -652,6 +652,7 @@ struct FItem {
     bool continuation;              // OPEN: an earlier piece exists; CLOSE: a block split it here
     FInline *inl;                   // OPEN, CLOSE
     FBox *content;                  // ATOMIC: an inline-block's own block; NULL when replaced
+    bool replaced;                  // ATOMIC: a replaced element's (flow_box_t.replaced)
     FBox *absolute;                 // PLACEHOLDER: the out-of-flow box it holds the place of
     FBox *floated;                  // FLOAT: the float written here
     int32_t link, control;          // ATOMIC: libpage's indexes, or -1

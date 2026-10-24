@@ -61,8 +61,9 @@ typedef struct {
     // `paper`, across `content`. A FRAME (an `iframe` or a `frame`): no
     // document is loaded inside a document, so the box says where its
     // document is, and a click there follows it (libpage makes the frame a
-    // link). A CANVAS: nothing draws what its script draws, so the box
-    // says so. NULL: the box is drawn empty.
+    // link). A CANVAS's replaced box (flow_box_t.replaced; a canvas laid
+    // out otherwise is its fallback, drawn as content): nothing draws what
+    // its script draws, so the box says so. NULL: the box is drawn empty.
     void (*stand_in)(void *ctx, const flow_box_t *box, os64_gui_rect_t content, os64_gui_rect_t clip,
                      uint32_t ink, uint32_t paper);
     // A group DRAWN THROUGH its matrix (flow_box_through; PILE3.md §

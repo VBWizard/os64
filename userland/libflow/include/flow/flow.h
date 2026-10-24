@@ -1013,6 +1013,10 @@ struct flow_box {
     uint32_t underline_color, line_through_color;
     int32_t link;                   // libpage's link this box is or sits in, or -1
     int32_t control;                // ATOMIC, REPLACED: libpage's control, or -1
+    // REPLACED always; an ATOMIC that is a replaced element's box, never an
+    // inline-block's (or inline-flex, -grid, -table): what the face draws
+    // inside, where the layout put no boxes of the element's content.
+    bool replaced;
     bool unfinished;                // layout stopped inside it (flow_incomplete)
     // A block-level box whose `position` is not static (a table's row,
     // group or column is laid out static: booked): it stays under its

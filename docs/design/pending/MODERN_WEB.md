@@ -2316,8 +2316,10 @@ Where scripting is on a canvas is a replaced box, as in a browser that runs
 scripts (HTML § 15.4.1), its own size its width and height attributes, 300
 by 150 where one is absent or no non-negative integer, a CSS width keeping
 their ratio as an img's own size does; its fallback is not laid out. With
-scripting off it is its fallback, laid out as any element. yonder draws the
-box as a frame's stand-in, a pale panel with "Canvas: not supported" in
+scripting off it is its fallback, laid out as any element, an
+inline-block's or an inline-flex's too: the painter draws a stand-in only
+for the replaced box libflow says it made (`flow_box_t.replaced`), never
+by the tag alone. yonder draws the box as a frame's stand-in, a pale panel with "Canvas: not supported" in
 grey along its top; the paint verb that draws both is now `stand_in`, and
 it makes no label for a box with nothing in view. The page's record gets
 one `FAILED unsupported: canvas (1)` line however many canvases it has, a

@@ -1977,12 +1977,14 @@ static bool is_frame(const flow_box_t *b)
            (b->node->tag == OS64_HTML_TAG_IFRAME || b->node->tag == OS64_HTML_TAG_FRAME);
 }
 
-// A canvas that is a replaced box (libflow makes it one where scripting is
-// on): nothing here draws what its script draws.
+// A canvas's box that is a replaced one (flow_box_t.replaced: libflow
+// makes it one where scripting is on), whose drawing nothing here makes. A
+// canvas laid out as an inline-block or a block is its fallback content,
+// and that is drawn instead.
 static bool is_canvas(const flow_box_t *b)
 {
-    return b->node != NULL && b->node->kind == OS64_HTML_ELEMENT && b->node->ns == OS64_HTML_NS_HTML &&
-           b->node->tag == OS64_HTML_TAG_CANVAS;
+    return b->replaced && b->node != NULL && b->node->kind == OS64_HTML_ELEMENT &&
+           b->node->ns == OS64_HTML_NS_HTML && b->node->tag == OS64_HTML_TAG_CANVAS;
 }
 
 // ── The ellipsis (CSS Overflow 4 § 4.1) ─────────────────────────────────

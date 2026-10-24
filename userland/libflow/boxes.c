@@ -940,6 +940,7 @@ static void inline_element(Flow *f, const os64_html_node_t *el, const FStyled *s
             item->link = os64_page_link_for(b->model, el);
             item->control = os64_page_control_for(b->model, el);
         }
+        item->replaced = replaced(b, el);
         ifc->collapse_space = false;
         // An inline-block that is not replaced (a marquee), or an inline
         // flex or grid container, is a block of its own, laid out inside

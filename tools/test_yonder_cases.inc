@@ -204,6 +204,18 @@ static void paint_cases(void)
                400, (os64_gui_rect_t){0, 0, 400, 100},
                "fill 0 0 400 100 #fefefe\n"
                "text \"fallback\" 8 22 #101010\n");
+    // An inline-block (or inline-flex) canvas with scripting off is an
+    // atom that is no replaced box: its fallback is drawn, and no stand-in.
+    paint_page_case("an inline-block canvas with scripting off is its fallback alone",
+                    "<!doctype html><style>canvas{display:inline-block}</style><canvas>fallback</canvas>",
+                    400, (os64_gui_rect_t){0, 0, 400, 100}, true,
+                    "fill 0 0 400 100 #fefefe\n"
+                    "text \"fallback\" 8 22 #101010\n");
+    paint_page_case("an inline-flex canvas with scripting off is its fallback alone",
+                    "<!doctype html><style>canvas{display:inline-flex}</style><canvas>fallback</canvas>",
+                    400, (os64_gui_rect_t){0, 0, 400, 100}, true,
+                    "fill 0 0 400 100 #fefefe\n"
+                    "text \"fallback\" 8 22 #101010\n");
     paint_page_case("overflow: hidden cuts what is inside it",
                     "<!doctype html><style>body { margin: 0 } div { width: 50px; height: 10px;"
                     " overflow: hidden; background: #00ff00 } p { margin: 0; width: 100px;"
