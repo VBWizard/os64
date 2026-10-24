@@ -10818,6 +10818,11 @@ static void pane_stand_in(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os6
                           uint32_t ink, uint32_t paper)
 {
     GlassPane *gp = ctx;
+    // A box with nothing in view (an empty canvas, one scrolled off) makes
+    // no label: a page can have as many of those as it likes.
+    os64_gui_rect_t room;
+    if (!os64_rect_intersect(c, clip, &room) || room.w <= 0 || room.h <= 0)
+        return;
     StandInLabel fl = stand_in_label(b);
     for (int32_t k = 0; k < gp->n; k++)
         glass_stand_in(gp->now[k], c, clip, ink, paper, &fl);
