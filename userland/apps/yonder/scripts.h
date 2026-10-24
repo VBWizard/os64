@@ -178,6 +178,17 @@ void yonder_scripts_set_note(yonder_scripts_t *scripts, const char *line);
 const char *yonder_scripts_note(const yonder_scripts_t *scripts);
 uint64_t yonder_scripts_timer_next(const yonder_scripts_t *scripts);
 bool yonder_scripts_timer_fire(yonder_scripts_t *scripts, uint64_t now, os64_js_outcome_t *outcome);
+// The page's posted messages (os64_dom_message_next/_fire): when the oldest
+// was posted, on yonder_now_ms' clock (UINT64_MAX for none), and the oldest
+// run as one task. False when nothing ran.
+uint64_t yonder_scripts_message_next(const yonder_scripts_t *scripts);
+bool yonder_scripts_message_fire(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
+// The page's idle callbacks (os64_dom_idle_next/_run): when one may run,
+// on yonder_now_ms' clock (0: now; UINT64_MAX: none), and one run as one
+// task, which the binding refuses while the page has a task of its own
+// due. False when nothing ran.
+uint64_t yonder_scripts_idle_next(const yonder_scripts_t *scripts);
+bool yonder_scripts_idle_run(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
 // The answer to the page's request `token` (os64_dom_fetched), as one
 // task. False when nothing ran: the runtime is gone, or never was.
 bool yonder_scripts_answered(yonder_scripts_t *scripts, uint32_t token, const os64_dom_response_t *response,

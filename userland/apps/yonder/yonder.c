@@ -6333,6 +6333,11 @@ static void pictures_schedule(void)
         // Its storage's next commit, which the loop meets (storage_turn).
         deadline_offer(&d, yonder_scripts_storage_due(hosts[i]), PAST_TIMERS);
     }
+    // The shown page's next idle period, when only an idle callback that
+    // asked for another waits for it (script_turn runs it).
+    uint64_t idle = yonder_scripts_idle_next(g.page.scripts);
+    if (idle != 0)
+        deadline_offer(&d, idle, PAST_TIMERS);
     // The pictures on screen, found in one pass when any could be next or
     // at the next moment.
     bool asks = false;
@@ -8276,6 +8281,24 @@ static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc
 // ran. `shown` decides whether its asks may reach the page on screen.
 static bool page_event_run(Page *p, bool shown);
 
+// A page's queued task (MODERN_WEB.md § P2b): its oldest posted message or
+// its next due timer, whichever was queued first — a message when it was
+// posted, a timer when it fell due — the timer first when both were queued
+// at once, so a page whose every message posts another still has its
+// timers run. `what` names the one tried. True when one ran.
+static bool queued_task(yonder_scripts_t *host, const char **what, os64_js_outcome_t *out)
+{
+    uint64_t now = yonder_now_ms(), timer = yonder_scripts_timer_next(host);
+    uint64_t message = yonder_scripts_message_next(host);
+    if (message <= now && (timer > now || message < timer)) {
+        *what = "message";
+        if (yonder_scripts_message_fire(host, out))
+            return true;
+    }
+    *what = "timer";
+    return yonder_scripts_timer_fire(host, now, out);
+}
+
 static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc, bool shown)
 {
     if (host == NULL || !yonder_scripts_alive(host))
@@ -8289,10 +8312,8 @@ static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc
     int64_t began = task_begin(host);
     const char *what = "script";
     bool ran = yonder_scripts_step(host, &out);
-    if (!ran) {
-        what = "timer";
-        ran = yonder_scripts_timer_fire(host, yonder_now_ms(), &out);
-    }
+    if (!ran)
+        ran = queued_task(host, &what, &out);
     if (!ran)
         return false;
     task_said(host, true, what, &out, began);
@@ -8301,12 +8322,15 @@ static bool scripts_task(yonder_scripts_t *host, const os64_html_document_t *doc
 }
 
 // Whether a host has a task to run now: a history event owed its page, a
-// script ready, or a timer due.
+// script ready, a message posted, or a timer due. An idle callback is no
+// task owed: the shown page's turn runs one only when nothing else is
+// (script_turn).
 static bool scripts_owed(const yonder_scripts_t *host)
 {
     const Page *p = page_of_host(host);
+    uint64_t now = yonder_now_ms();
     return (p != NULL && p->nevents > 0 && yonder_scripts_alive(host)) || yonder_scripts_pending(host) ||
-           yonder_scripts_timer_next(host) <= yonder_now_ms();
+           yonder_scripts_message_next(host) <= now || yonder_scripts_timer_next(host) <= now;
 }
 
 // The measured layout of the page whose document is `doc`, when that page
@@ -9137,10 +9161,8 @@ static bool script_turn(void)
     int64_t began = task_begin(g.page.scripts);
     const char *what = "script";
     bool ran = yonder_scripts_step(g.page.scripts, &out);
-    if (!ran) {
-        what = "timer";
-        ran = yonder_scripts_timer_fire(g.page.scripts, yonder_now_ms(), &out);
-    }
+    if (!ran)
+        ran = queued_task(g.page.scripts, &what, &out);
     // Then the rendering step's events (MODERN_WEB.md § Slice 1b): the
     // view's resize and scroll, and the media lists' changes, one a turn;
     // the loop comes back for the next while one ran (s_view_ran).
@@ -9148,6 +9170,14 @@ static bool script_turn(void)
     if (!ran) {
         what = "view";
         ran = s_view_ran = yonder_scripts_view_step(g.page.scripts, &out);
+    }
+    // And when the turn found nothing else, an idle callback (MODERN_WEB.md
+    // § P2b): the loop is idle. The loop comes back for the next while one
+    // is due (main's bell), and the ticker wakes it for one that waits
+    // (pictures_schedule).
+    if (!ran) {
+        what = "idle";
+        ran = yonder_scripts_idle_run(g.page.scripts, &out);
     }
     if (!ran)
         return false;
@@ -12430,7 +12460,8 @@ int main(int argc, char **argv)
             glass_paint();
         if (stream_more)
             (void)os64_gui_event_ring(g.win, BELL_STREAM);
-        if (coming_more || (scripts_ready && (scripts_owed(g.page.scripts) || s_view_ran)))
+        if (coming_more || (scripts_ready && (scripts_owed(g.page.scripts) || s_view_ran ||
+                                              yonder_scripts_idle_next(g.page.scripts) <= yonder_now_ms())))
             (void)os64_gui_event_ring(g.win, BELL_SCRIPTS);
         // A task may have set or cleared a timer, and a frame for an
         // animation has its whole cost now: the ticker hears of both.

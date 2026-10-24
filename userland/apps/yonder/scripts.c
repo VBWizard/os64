@@ -1045,6 +1045,44 @@ bool yonder_scripts_timer_fire(yonder_scripts_t *s, uint64_t now, os64_js_outcom
     return true;
 }
 
+uint64_t yonder_scripts_message_next(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead ? os64_dom_message_next(s->dom) : UINT64_MAX;
+}
+
+bool yonder_scripts_message_fire(yonder_scripts_t *s, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s == NULL || s->dead)
+        return false;
+    s->written = 0;
+    s->task_address = NULL;
+    s->task_us = -1;
+    if (!os64_dom_message_fire(s->dom, out))
+        return false;
+    judged(s, out);
+    return true;
+}
+
+uint64_t yonder_scripts_idle_next(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->dead ? os64_dom_idle_next(s->dom) : UINT64_MAX;
+}
+
+bool yonder_scripts_idle_run(yonder_scripts_t *s, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    if (s == NULL || s->dead)
+        return false;
+    s->written = 0;
+    s->task_address = NULL;
+    s->task_us = -1;
+    if (!os64_dom_idle_run(s->dom, out))
+        return false;
+    judged(s, out);
+    return true;
+}
+
 bool yonder_scripts_answered(yonder_scripts_t *s, uint32_t token, const os64_dom_response_t *response,
                              os64_js_outcome_t *out)
 {
