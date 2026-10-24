@@ -77,6 +77,27 @@ static void document_referrer_case(void) {
         check(loop_settle() && script_rebuild() && document_out_is(kTrips[i].want),kTrips[i].what);
         loop_drop();
     }
+    /* A Reload, by the button or by location.reload(), keeps the page's own
+     * referrer, though its request names nothing. */
+    for(int how=0;how<2;how++) {
+        loop_page("<script>location.href='next.html'</script>");
+        loop_settle();
+        document_answer("http://other.test/next",
+            "<p id=out>x</p><script>document.getElementById('out').textContent='['+document.referrer+']';"
+            "setTimeout(function(){location.reload()},10)</script>");
+        check(loop_settle() && script_rebuild() && document_out_is("[http://fixture.test/]"),
+            "document: the page to be reloaded has its referrer");
+        if(how==0) click_reload(NULL,NULL);
+        else { now_ms=200; script_turn(); }
+        yonder_trip_t *trip=pool_work.job;
+        check(g.stream.active && trip!=NULL && trip->referrer[0]=='\0',"document: a Reload's request names nothing");
+        document_answer("http://other.test/next",
+            "<p id=out>x</p><script>document.getElementById('out').textContent='['+document.referrer+']'</script>");
+        check(loop_settle() && script_rebuild() && document_out_is("[http://fixture.test/]"),
+            how==0 ? "document: the Reload button keeps the page's referrer"
+                   : "document: location.reload() keeps the page's referrer");
+        loop_drop();
+    }
 }
 
 static void document_current_script_case(void) {

@@ -1085,6 +1085,11 @@ const char *yonder_scripts_referrer(const yonder_scripts_t *s)
     return s != NULL && !s->url_cut ? s->url : NULL;
 }
 
+const char *yonder_scripts_document_referrer(const yonder_scripts_t *s)
+{
+    return s != NULL && s->referrer != NULL ? s->referrer : "";
+}
+
 bool yonder_scripts_encrypted(const yonder_scripts_t *s)
 {
     return s != NULL && s->options.encrypted;

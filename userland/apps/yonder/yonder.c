@@ -1378,6 +1378,10 @@ static struct {
         // navigation): what its Referer was made from, and so its
         // document.referrer (stream_request_facts).
         char referrer[OS64_FETCH_URL_MAX];
+        // A Reload's: the reloaded page's own document.referrer, which
+        // the page that replaces it keeps, as a browser's does, though
+        // the Reload's request names nothing ("" for none).
+        char kept_referrer[OS64_DOM_URL_MAX];
         // THE STREAM'S PAGE (DOM_D7.md § D7d): the parse so far as a page
         // with a sheet table, filled as the parse reveals sheets
         // (stream_sheets) and moved to the page that arrives. Its
@@ -3500,6 +3504,12 @@ static void trip_send(const char *url, os64_page_request_t *request, const char 
     os64_strcopy(trip->referrer, sizeof(trip->referrer), named);
     os64_memset(&g.stream, 0, sizeof(g.stream));
     os64_strcopy(g.stream.referrer, sizeof(g.stream.referrer), named);
+    // A Reload is of the page on screen (click_reload, a form sent again,
+    // and location.reload(), which only the page on screen's asks reach):
+    // its document.referrer goes with it, though its Referer did not.
+    if (kind == NAV_RELOAD)
+        os64_strcopy(g.stream.kept_referrer, sizeof(g.stream.kept_referrer),
+                     yonder_scripts_document_referrer(g.page.scripts));
     timing_start(&g.stream.timing, kind);
     if (request != NULL) {
         g.stream.has_fragment = request->has_fragment;
@@ -7461,14 +7471,17 @@ static bool script_focus(void *opaque, const os64_html_node_t **focused)
 
 // What the arriving page's document says of its own request: its referrer,
 // the Referer that request carried (way_referrer from the page it was asked
-// for from to the address it arrived from, "" for none), and its
-// Last-Modified (0 for none or a date that does not read).
+// for from to the address it arrived from, "" for none) or, for a Reload,
+// the reloaded page's own; and its Last-Modified (0 for none or a date
+// that does not read).
 static void stream_request_facts(char *referrer, size_t cap, int64_t *modified)
 {
     os64_url_t to;
     referrer[0] = '\0';
-    if (g.stream.referrer[0] == '\0' || os64_url_parse(g.stream.head.url, &to) != OS64_URL_OK ||
-        !way_referrer(g.stream.referrer, &to, referrer, cap))
+    if (g.stream.kept_referrer[0] != '\0')
+        os64_strcopy(referrer, cap, g.stream.kept_referrer);
+    else if (g.stream.referrer[0] == '\0' || os64_url_parse(g.stream.head.url, &to) != OS64_URL_OK ||
+             !way_referrer(g.stream.referrer, &to, referrer, cap))
         referrer[0] = '\0';
     if (!way_cookie_date(g.stream.head.last_modified, os64_strlen(g.stream.head.last_modified), modified))
         *modified = 0;

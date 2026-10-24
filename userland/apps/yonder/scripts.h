@@ -218,6 +218,9 @@ bool yonder_scripts_encrypted(const yonder_scripts_t *scripts);
 // holds only its start — a cut address would name a page that is not this
 // one, so such a request names none.
 const char *yonder_scripts_referrer(const yonder_scripts_t *scripts);
+// The page's own document.referrer (the options' referrer, kept): what a
+// Reload of the page keeps for the page that replaces it. "" for none.
+const char *yonder_scripts_document_referrer(const yonder_scripts_t *scripts);
 
 // THE SESSION'S HALF (MODERN_WEB.md § Slice 1b). The document's address
 // moved (a state update, a fragment navigation, a traversal): what a
