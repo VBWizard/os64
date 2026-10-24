@@ -363,8 +363,8 @@ Document to 42.1% C / 90.5% scan. Each line names the state the member reads.
 
 - `readyState` and `onreadystatechange`: 378 and 113 pages.
   `loading`/`interactive`/`complete`, moved by the host's own
-  `DOMContentLoaded` and `load` dispatches, which the binding already sees,
-  with `readystatechange` fired just before each.
+  `DOMContentLoaded` and `load` dispatches, heard or not, with
+  `readystatechange` fired just before each.
 - `visibilityState`, `hidden` and `onvisibilitychange`: 378, 233 and 7
   pages. They read `visible` and false.
   - A desktop minimize as `hidden`, and its event, is a later host hook.
@@ -377,7 +377,8 @@ Document to 42.1% C / 90.5% scan. Each line names the state the member reads.
 - `title`: 229 pages. It is the first `title` element, the rule yonder's
   `title_of` already walks.
   - The setter makes one in `head`.
-  - The window's own title follows from yonder's rebuild after the task.
+  - The window's own title does not follow: yonder names its window once,
+    and the GUI has no verb that renames one (DEBTS.md).
 - `prerendering` (false) and `onprerenderingchange`: Chrome 61.4%, 105
   pages.
 - `domain`: Chrome 0.8% (the setter), 158 pages. It reads the origin's
@@ -937,7 +938,7 @@ Columns as in Appendix A, without MISSING (the census hears only lookups on `win
 | `visibilityState` | ro attr | html | absent |  | 378 | a P1-Da | 'visible'/false; visibilitychange when the desktop minimizes the window is (b) and can wait |
 | `referrer` | ro attr | html | absent |  | 316 | a P1-Da | the trip's referrer (trip.c's leg.referrer, way_referrer), handed in options |
 | `getElementsByClassName` | method | dom | classic |  | 301 |  |  |
-| `activeElement` | ro attr | html | absent |  | 298 | a P1-Da | yonder's g.focus_node through a host hook (body when none); hasFocus the window's own focus |
+| `activeElement` | ro attr | html | absent |  | 298 | a P1-Da | yonder's g.focus_node through a host hook (body when none); hasFocus whether the page is the one on screen (yonder does not follow its window's own focus: DEBTS.md) |
 | `createEvent` | method | dom | classic |  | 295 |  |  |
 | `location` | ro attr | html | classic |  | 282 |  |  |
 | `currentScript` | ro attr | html | absent |  | 271 | a P1-Da | the script element the host is running, set around os64_js_run by yonder (scripts.c knows the node) |
@@ -953,7 +954,7 @@ Columns as in Appendix A, without MISSING (the census hears only lookups on `win
 | `createComment` | method | dom | classic |  | 87 |  |  |
 | `fullscreenElement` | ro attr | fullscreen | absent |  | 86 | d | Fullscreen (an honest refusal, fullscreenEnabled false, is possible earlier) |
 | `createTreeWalker` | method | dom | absent |  | 80 | b P4a | TreeWalker and NodeFilter: a pure walk over the tree |
-| `hasFocus` | method | html | absent |  | 78 | a P1-Da | yonder's g.focus_node through a host hook (body when none); hasFocus the window's own focus |
+| `hasFocus` | method | html | absent |  | 78 | a P1-Da | yonder's g.focus_node through a host hook (body when none); hasFocus whether the page is the one on screen (yonder does not follow its window's own focus: DEBTS.md) |
 | `wasDiscarded` | ro attr | page-lifecycle | absent |  | 78 | a P1-Da | false |
 | `implementation` | ro attr | dom | classic |  | 76 |  |  |
 | `exitFullscreen` | method | fullscreen | absent |  | 67 | d | Fullscreen (an honest refusal, fullscreenEnabled false, is possible earlier) |
