@@ -174,9 +174,19 @@ fetch_write_result_t fetch_transport_write(fetch_transport_t *io, const void *da
     }
 }
 
+static int64_t transport_read(fetch_transport_t *io, void *data, size_t capacity);
+
 int64_t fetch_transport_read(void *context, void *data, size_t capacity)
 {
     fetch_transport_t *io = context;
+    int64_t n = transport_read(io, data, capacity);
+    if (n > 0)
+        io->received += (uint64_t)n;
+    return n;
+}
+
+static int64_t transport_read(fetch_transport_t *io, void *data, size_t capacity)
+{
     if (cancelled(io)) return OS64_INTERRUPTED;
     if (!capacity) return 0;
     if (io->have_lookahead) {
@@ -254,4 +264,37 @@ void fetch_transport_close(fetch_transport_t *io, bool normal)
 bool fetch_transport_tls_failed(const fetch_transport_t *io)
 {
     return io->encrypted && !live(io->error.status) && io->error.status != OS64_TLS_CLEAN_EOF;
+}
+
+bool fetch_transport_reusable(fetch_transport_t *io)
+{
+    if (io->have_lookahead || io->silent || !live(io->error.status))
+        return false;
+    if (!io->tls)
+        return io->handle >= 0;
+    os64_tls_state_t state = os64_tls_transport_state(io->tls);
+    return live(state.status) && !(state.flags & (OS64_TLS_RECV_PLAIN | OS64_TLS_CLOSING));
+}
+
+bool fetch_transport_idle_ok(fetch_transport_t *io)
+{
+    if (!fetch_transport_reusable(io))
+        return false;
+    if (!io->tls) {
+        unsigned char probe;
+        // Interrupted is not an answer, and a connection whose state is not
+        // known is not used: another is dialled.
+        return os64_read_for(io->handle, &probe, 1, 0) == OS64_ERR_TIMEOUT;
+    }
+    os64_tls_status_t stepped = os64_tls_transport_step(io->tls, 0);
+    return live(stepped) && fetch_transport_reusable(io);
+}
+
+void fetch_transport_adopt(fetch_transport_t *io, uint32_t idle_ms,
+                           bool (*cancel_fn)(void *ctx), void *cancel_ctx)
+{
+    io->idle_ms = idle_ms ? idle_ms : FETCH_IDLE_MS_DEFAULT;
+    io->cancelled = cancel_fn;
+    io->cancel_ctx = cancel_ctx;
+    io->received = 0;
 }

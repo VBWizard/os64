@@ -7,8 +7,13 @@
 // THE SHAPE: `open` dials, follows redirects and reads the head, and it
 // BLOCKS — a fetch is a thread's work. `read` hands back body bytes with the
 // chunking and the gzip taken off. `close` releases everything. One object
-// per fetch, no static state anywhere in the library, so twenty fetches on
-// twenty threads share not one byte.
+// per fetch, so twenty fetches on twenty threads share not one byte of
+// their own. What they do share is the CONNECTIONS a finished fetch leaves
+// open (WIRE.md § 2): a fetch takes a kept connection to its peer before it
+// dials, and gives its own back at close when HTTP says it may be kept, one
+// fetch at a time on each, under one lock held only to take or put
+// (pool.h). It is invisible but for time, and for one sentence when a
+// request on a kept connection had to go again (os64_fetch_reason).
 //
 // POLICY ABOUT THE WIRE IS THE LIBRARY'S; POLICY ABOUT THIS MACHINE IS THE
 // CALLER'S. The library knows what an HTTP reply means, where a Location
@@ -220,6 +225,9 @@ typedef struct {
 #define OS64_FETCH_HOP_FIELDS_MAX (1024 + 512)
 #define OS64_FETCH_CONTENT_TYPE_MAX 256
 #define OS64_FETCH_METHOD_MAX   HTTP_METHOD_NAME_MAX
+// An order names each line a browser sends once: Chrome's longest, a
+// navigation's, is under 300 bytes.
+#define OS64_FETCH_ORDER_MAX    512
 
 typedef struct {
     // Request headers, each optional (NULL = not sent). They are COPIED at
@@ -320,6 +328,20 @@ typedef struct {
     // These callbacks run inside open on its thread, using ctx. Copy anything
     // needed afterward; do not re-enter this fetch. cancellation uses ctx
     // during reads/close as well, so that context must live through close.
+
+    // `Connection: keep-alive` on every request. The connection is kept
+    // whether or not it is said, since HTTP/1.1 keeps it by default; a
+    // browser says it anyway, and a caller that is one says it too.
+    // `Connection: close` is never sent.
+    bool keep_alive;
+    // The order of the request's lines after Host, as field names separated
+    // by commas ("Connection, User-Agent, Accept"), matched without case and
+    // copied at open: each named line goes where the list puts it, every
+    // line it does not name follows in libfetch's own order (http.h,
+    // http_request_extras_t.order). A browser preset's order for the kind of
+    // request this is (way/origin.h, way_identity_order). NULL: libfetch's
+    // own order throughout.
+    const char *order;
 } os64_fetch_options_t;
 
 // ── The calls ───────────────────────────────────────────────────────────
@@ -352,11 +374,19 @@ const os64_fetch_progress_t *os64_fetch_progress(const os64_fetch_t *f);
 
 // One sentence about the last outcome, in the library's words — for the
 // caller that has nothing more specific to say. Storage inside the object.
+// It ends "(retried once on a fresh connection)" when a request failed on a
+// kept connection before any byte of its reply and was sent again (WIRE.md
+// § 2's retry rule: only a GET, HEAD, OPTIONS, PUT or DELETE, and once),
+// whatever the outcome after that.
 const char *os64_fetch_reason(os64_fetch_t *f);
 
-// Release the connection (a bounded TLS closure if the body ended whole),
-// the decoder, the store if this loaded it, and the object. Idempotent on
-// the connection; the object is gone.
+// Release the connection, the decoder, the store if this loaded it, and the
+// object. The connection is KEPT for a later fetch to the same peer when
+// HTTP allows it: a 1.1 reply, no `Connection: close`, and a body framed by
+// its length or by chunks and read to its end (or none at all) — a body
+// left unread, a failure, or a cancellation closes it instead, with a
+// bounded TLS closure if the body ended whole. Idempotent on the
+// connection; the object is gone.
 void os64_fetch_close(os64_fetch_t *f);
 
 #endif // FETCH_FETCH_H

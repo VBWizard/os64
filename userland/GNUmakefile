@@ -191,10 +191,11 @@ LIBPNG_SO   := $(BIN)/libpng.so
 
 # libfetch is the fetch machinery every program that downloads shares
 # (LIBFETCH.md): the HTTP parser, the plain-or-TLS transport, the redirect
-# and proxy rules, gzip undone downstream of the framing. It records real
-# DT_NEEDED edges on libtls, libgzip and libos64; none of those knows a
-# URL exists.
-LIBFETCH_SRCS := libfetch/fetch.c libfetch/http.c libfetch/transport.c libfetch/proxy.c
+# and proxy rules, the connections kept between fetches, gzip undone
+# downstream of the framing. It records real DT_NEEDED edges on libtls,
+# libgzip and libos64; none of those knows a URL exists.
+LIBFETCH_SRCS := libfetch/fetch.c libfetch/http.c libfetch/transport.c libfetch/proxy.c \
+                 libfetch/pool.c
 LIBFETCH_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBFETCH_SRCS))
 LIBFETCH_SO   := $(BIN)/libfetch.so
 

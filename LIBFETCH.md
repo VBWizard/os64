@@ -91,10 +91,13 @@ void          os64_fetch_close(os64_fetch_t *f);
   says what happened, so the caller has the detail (which hop, which TLS
   reason, which dial code) to explain it. It blocks, on purpose: a fetch
   is a thread's work, and the browser that wants twenty images at once
-  runs twenty fetches on twenty threads — which is why the library has NO
-  STATIC STATE. os64get's transfer buffers were `static` ("transfer state,
-  not call state"); here every buffer belongs to the fetch object, and two
-  fetches on two threads never touch one byte in common.
+  runs twenty fetches on twenty threads — which is why every buffer
+  belongs to the fetch object. os64get's transfer buffers were `static`
+  ("transfer state, not call state"); here two fetches on two threads
+  never touch one byte of their own in common. The library's one piece of
+  shared state is the connections a finished fetch leaves open for the
+  next to the same peer (WIRE.md § 2, `pool.c`): a table under one lock
+  held only to take or put, each connection owned by one fetch at a time.
 - **A non-200 answer is still an answer.** os64get calls a 404 a refusal;
   a browser shows the 404 page, and it is the server's page to show. So
   `open` succeeds for ANY final status and the head carries it; the body
@@ -282,9 +285,12 @@ so a capped fetch never hands a consumer a prefix it then has to unlearn.
   the API: `read` COPIES into the caller's buffer. The head's strings
   (`reason`, `content_type`, the final URL text) are arrays inside the
   head struct, inside the object, valid until `close` and never after.
-- **A redirect closes its connection before the next dial**, unread
-  courtesy body and all; keep-alive is not spoken, so nothing is kept.
-  The transport object is re-initialized per hop, and its ERROR SNAPSHOT
+- **A redirect gives up its connection before the next hop asks**: kept
+  for a later request to the same peer when its courtesy body is empty
+  and HTTP allows it (`connection_reusable`, `pool.h`), closed otherwise,
+  unread courtesy body and all. The next hop takes a kept connection to
+  its own peer or dials one. The transport object is re-initialized per
+  hop, and its ERROR SNAPSHOT
   survives the close on purpose (url_io.c's rule: "error detail survives
   cleanup so the caller can explain a failed read after releasing I/O").
 - **A fetch that failed is still closed**, and close is idempotent. The
@@ -350,7 +356,7 @@ one resident libfetch serving two programs at once.
 | What | Why deferred | Trigger |
 |---|---|---|
 | `gopher://` as a libfetch scheme | the gopher client's own wire code works and its menu parser is the UI's; moving it buys nothing until a second program wants gopher bytes | the browser's first `gopher://` link |
-| Keep-alive / a connection pool | not spoken today; the object is a FETCH, not a connection, so a pool slides underneath without an API change | `/sys/net/tcp` showing a page's image fetches paying a handshake apiece |
+| ~~Keep-alive / a connection pool~~ **PAID** (WIRE.md § 2): connections kept between fetches, under the API as this row said they could be (`pool.c`) | — | a storefront page's 172 scripts and sheets paying a handshake apiece |
 | `Range:` and resume (BROWSER.md 3e) | `extra_headers` can carry the header; 206 semantics and the resume discipline want a consumer | a download worth resuming |
 | Cookie jar | per-hop request and response hooks exist; storage and domain/path/expiry policy belong to the navigator | the first site that will not show a page without one |
 | A `data:` scheme | inline images in HTML use it; it is a decoder, not a fetch | the graphical browser's first inline image |

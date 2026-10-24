@@ -74,7 +74,7 @@ for length in (0, 1, 17, 8192, 70000):
         ref = http.client.HTTPConnection("example.test")
         ref.sock = Capture()
         ref.request("POST", "/form", bytes(length),
-                    {"Content-Type": ctype, "Connection": "close", "Accept-Encoding": "gzip, identity"})
+                    {"Content-Type": ctype, "Accept-Encoding": "gzip, identity"})
         ours = subprocess.run([exe, "post", str(length), ctype], capture_output=True, check=True).stdout
         expected = bytes(ref.sock.wire).split(b"\r\n\r\n")[0] + b"\r\n\r\n"
         def parts(head):
@@ -166,11 +166,11 @@ for text in good_urls:
     first = head.split("\r\n")[0]
     if first != f"GET {wantPath} HTTP/1.1":
         fail(text, f"request line {first!r}")
-    # And says `Connection: close`, because keep-alive is not spoken: a 1.1
-    # server would otherwise hold the connection open after a close-delimited
-    # body, and the close is what ends one of those.
-    if "Connection: close" not in head.split("\r\n"):
-        fail(text, "request does not ask for the close")
+    # And says nothing about its connection: HTTP/1.1 keeps it by default
+    # (RFC 9112 § 9.3), `Connection: keep-alive` is a caller's to ask for,
+    # and `Connection: close` is never sent.
+    if any(l.lower().startswith("connection:") for l in head.split("\r\n")):
+        fail(text, "request names its connection unasked")
     hostLine = [l for l in head.split("\r\n") if l.lower().startswith("host:")][0]
     wantHost = want.hostname + (f":{want.port}" if want.port and want.port != wantDefault else "")
     if hostLine != f"Host: {wantHost}":

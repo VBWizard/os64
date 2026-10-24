@@ -280,10 +280,22 @@ static bool method_name_ok(const char *name)
     return true;
 }
 
+// An order is field names, commas and blanks: nothing it holds is written,
+// but a name it cannot hold is a list somebody got wrong.
+static bool order_clean(const char *order)
+{
+    for (const char *p = order; p != NULL && *p != '\0'; p++)
+        if (!is_token_byte(*p) && *p != ',' && !is_blank(*p))
+            return false;
+    return true;
+}
+
 bool http_request_extras_ok(const http_request_extras_t *extras)
 {
     if (extras == NULL)
         return true;
+    if (!order_clean(extras->order))
+        return false;
     if (extras->method != HTTP_METHOD_GET && extras->method != HTTP_METHOD_POST)
         return false;
     if (extras->method_name != NULL) {
@@ -303,6 +315,137 @@ bool http_request_extras_ok(const http_request_extras_t *extras)
            extras_clean(extras->user_agent, CLEAN_VALUE) && extras_clean(extras->accept, CLEAN_VALUE) &&
            extras_clean(extras->extra_headers, CLEAN_EXTRA_LINES) &&
            extras_clean(extras->body_headers, CLEAN_BODY_LINES);
+}
+
+// ── The request's lines, and their order ────────────────────────────────
+
+// Two field names, the same without case.
+static bool name_matches(const char *a, const char *b, size_t len)
+{
+    for (size_t i = 0; i < len; i++)
+        if (to_lower(a[i]) != to_lower(b[i]))
+            return false;
+    return true;
+}
+
+// Whether `order` names `name`: anywhere when `before` is NULL, else at a
+// place before `before` (a pointer into `order`), which is how a name the
+// list repeats is placed once.
+static bool name_listed(const char *order, const char *before, const char *name, size_t len)
+{
+    for (const char *p = order; *p != '\0' && (before == NULL || p < before);) {
+        while (*p == ',' || is_blank(*p))
+            p++;
+        const char *at = p;
+        while (*p != '\0' && *p != ',' && !is_blank(*p))
+            p++;
+        if (before != NULL && at >= before)
+            break;
+        if ((size_t)(p - at) == len && name_matches(at, name, len))
+            return true;
+    }
+    return false;
+}
+
+// One line of the head after Host: its field name, and either the whole
+// line as a caller's block holds it (`line`, CR LF and all) or a value this
+// writer puts after the name, so nothing the caller gave is copied twice.
+typedef struct {
+    const char *name;
+    size_t name_len;
+    const char *line;           // a block's whole line, or NULL
+    size_t line_len;
+    const char *value;          // ...else the value, written as "name: value\r\n"
+} head_line_t;
+
+// Where a walk over those lines is, in this writer's own order: the fixed
+// lines in turn (`slot`), then `body_headers`' lines and `extra_headers'`
+// as given (`at`, inside the block being walked). `length` is the
+// Content-Length's digits, "" for none.
+typedef struct {
+    const http_request_extras_t *x;
+    const char *length;
+    int slot;
+    const char *at;
+} head_lines_t;
+
+static void head_line_fixed(head_line_t *line, const char *name, const char *value)
+{
+    *line = (head_line_t){ .name = name, .name_len = os64_strlen(name), .value = value };
+}
+
+// The next line, true while there is one. The blocks were judged whole
+// lines by extras_clean before anything is written, so the walk may trust
+// that each line has a colon and ends in CR LF.
+static bool head_lines_next(head_lines_t *w, head_line_t *line)
+{
+    for (;;) {
+        const http_request_extras_t *x = w->x;
+        int slot = w->slot;
+        if (slot >= 6) {
+            const char *block = slot == 6 ? x->body_headers : slot == 7 ? x->extra_headers : NULL;
+            if (slot > 7)
+                return false;
+            if (w->at == NULL)
+                w->at = block != NULL ? block : "";
+            if (*w->at == '\0') {
+                w->slot++;
+                w->at = NULL;
+                continue;
+            }
+            const char *start = w->at, *colon = start, *end = start;
+            while (*colon != ':')
+                colon++;
+            while (!(end[0] == '\r' && end[1] == '\n'))
+                end++;
+            end += 2;
+            w->at = end;
+            *line = (head_line_t){ .name = start, .name_len = (size_t)(colon - start),
+                                   .line = start, .line_len = (size_t)(end - start) };
+            return true;
+        }
+        w->slot++;
+        // Name both codings this client can turn back into the
+        // representation, or identity alone when the caller asked for it
+        // (a byte Range). A missing Accept-Encoding means any coding may be
+        // acceptable; an explicit list lets a server choose gzip without
+        // licensing br, compress, or another envelope that would otherwise
+        // have to be refused afterward.
+        switch (slot) {
+        case 0: if (x->user_agent == NULL) continue;
+                head_line_fixed(line, "User-Agent", x->user_agent); return true;
+        case 1: if (x->accept == NULL) continue;
+                head_line_fixed(line, "Accept", x->accept); return true;
+        case 2: head_line_fixed(line, "Accept-Encoding", x->identity ? "identity" : "gzip, identity");
+                return true;
+        case 3: if (!x->keep_alive) continue;
+                head_line_fixed(line, "Connection", "keep-alive"); return true;
+        case 4: if (w->length[0] == '\0') continue;
+                head_line_fixed(line, "Content-Length", w->length); return true;
+        default: if (x->content_type == NULL) continue;
+                head_line_fixed(line, "Content-Type", x->content_type); return true;
+        }
+    }
+}
+
+// `n` bytes of `s` onto `out` at `*at`, keeping room for the NUL.
+static bool head_put(char *out, size_t cap, size_t *at, const char *s, size_t n)
+{
+    if (n >= cap - *at)
+        return false;
+    os64_memcpy(out + *at, s, n);
+    *at += n;
+    out[*at] = '\0';
+    return true;
+}
+
+static bool head_line_put(char *out, size_t cap, size_t *at, const head_line_t *line)
+{
+    if (line->line != NULL)
+        return head_put(out, cap, at, line->line, line->line_len);
+    return head_put(out, cap, at, line->name, line->name_len) && head_put(out, cap, at, ": ", 2) &&
+           head_put(out, cap, at, line->value, os64_strlen(line->value)) &&
+           head_put(out, cap, at, "\r\n", 2);
 }
 
 bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteForm,
@@ -345,42 +488,39 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
                        : extras->method == HTTP_METHOD_POST ? "POST" : "GET";
     char length[64] = {0};
     if (extras->body_len || extras->body_present || method_is(method, "POST") || method_is(method, "PUT"))
-        os64_snprintf(length, sizeof(length), "Content-Length: %lu\r\n",
-                      (uint64_t)extras->body_len);
+        os64_snprintf(length, sizeof(length), "%lu", (uint64_t)extras->body_len);
 
-    // Name both codings this client can turn back into the representation,
-    // or identity alone when the caller asked for it (a byte Range). A
-    // missing Accept-Encoding means any coding may be acceptable; an
-    // explicit list lets a server choose gzip without licensing br, compress,
-    // or another envelope that would otherwise have to be refused afterward.
-    // The caller's headers go between the fixed ones and the blank line, in
-    // the order given; the blank line is written LAST and only here.
-    int32_t n = os64_snprintf(out, cap,
-                              "%s %s HTTP/1.1\r\n"
-                              "Host: %s\r\n"
-                              "%s%s%s"
-                              "%s%s%s"
-                              "Accept-Encoding: %s\r\n"
-                              "Connection: close\r\n"
-                              "%s%s%s%s"
-                              "%s"
-                              "%s"
-                              "\r\n",
-                              method, requestTarget, host,
-                              extras->user_agent ? "User-Agent: " : "",
-                              extras->user_agent ? extras->user_agent : "",
-                              extras->user_agent ? "\r\n" : "",
-                              extras->accept ? "Accept: " : "",
-                              extras->accept ? extras->accept : "",
-                              extras->accept ? "\r\n" : "",
-                              extras->identity ? "identity" : "gzip, identity",
-                              length,
-                              extras->content_type ? "Content-Type: " : "",
-                              extras->content_type ? extras->content_type : "",
-                              extras->content_type ? "\r\n" : "",
-                              extras->body_headers ? extras->body_headers : "",
-                              extras->extra_headers ? extras->extra_headers : "");
-    return n > 0 && (size_t)n < cap;
+    int32_t n = os64_snprintf(out, cap, "%s %s HTTP/1.1\r\nHost: %s\r\n", method, requestTarget, host);
+    if (n <= 0 || (size_t)n >= cap)
+        return false;
+    size_t at = (size_t)n;
+
+    // Then every other line, the ones the caller's order names first, each
+    // where the order puts it, and the rest after them in this writer's own
+    // order (head_lines_next); the blank line is written LAST and only here.
+    const char *order = extras->order != NULL ? extras->order : "";
+    for (const char *p = order; *p != '\0';) {
+        while (*p == ',' || is_blank(*p))
+            p++;
+        const char *name = p;
+        while (*p != '\0' && *p != ',' && !is_blank(*p))
+            p++;
+        size_t len = (size_t)(p - name);
+        if (len == 0 || name_listed(order, name, name, len) || (len == 4 && name_matches(name, "host", 4)))
+            continue;
+        head_lines_t lines = { .x = extras, .length = length };
+        head_line_t line;
+        while (head_lines_next(&lines, &line))
+            if (line.name_len == len && name_matches(line.name, name, len) &&
+                !head_line_put(out, cap, &at, &line))
+                return false;
+    }
+    head_lines_t lines = { .x = extras, .length = length };
+    head_line_t line;
+    while (head_lines_next(&lines, &line))
+        if (!name_listed(order, NULL, line.name, line.name_len) && !head_line_put(out, cap, &at, &line))
+            return false;
+    return head_put(out, cap, &at, "\r\n", 2);
 }
 
 
@@ -475,16 +615,20 @@ static line_result_t line_read(http_stream_t *s, char *out, size_t cap,
 
 // ── The answer ──────────────────────────────────────────────────────────
 
-// "HTTP/1.1 404 Not Found" — the version is read and ignored (a 1.0 server
-// answers a 1.1 request with a 1.0 reply, and every framing either may use is
-// one http_body_read reads), the code must be exactly three digits, and the
-// reason phrase is the server's own words, kept so a refusal can be reported
-// in them rather than in ours.
+// "HTTP/1.1 404 Not Found" — the version is read for one fact only, whether
+// it is HTTP/1.1 (or a later 1.x), which is what lets the connection be kept
+// (RFC 9112 § 9.3); a 1.0 server answers a 1.1 request with a 1.0 reply, and
+// every framing either may use is one http_body_read reads. The code must be
+// exactly three digits, and the reason phrase is the server's own words,
+// kept so a refusal can be reported in them rather than in ours.
 static bool status_parse(const char *line, http_response_t *out)
 {
     if (line[0] != 'H' || line[1] != 'T' || line[2] != 'T' || line[3] != 'P' || line[4] != '/')
         return false;
 
+    // HTTP-version is "HTTP/" DIGIT "." DIGIT (RFC 9112 § 2.3), exactly.
+    out->http11 = line[5] == '1' && line[6] == '.' && line[7] >= '1' && line[7] <= '9' &&
+                  line[8] == ' ';
     const char *p = line + 5;
     if (!is_digit(*p))
         return false;
@@ -699,6 +843,20 @@ static http_head_result_t header_take(char *line, http_response_t *out,
             return os64_streq(out->location, seen) ? HTTP_HEAD_OK : HTTP_HEAD_CONFLICT;
         out->hasLocation = true;
         copy_span(out->location, sizeof(out->location), value, vlen);
+    } else if (os64_streq_nocase(line, "Connection")) {
+        // A list of options (RFC 9110 § 7.6.1); `close` among them, in any
+        // case and on any of the lines, ends the connection with this reply.
+        for (size_t i = 0; i < vlen;) {
+            while (i < vlen && (value[i] == ',' || is_blank(value[i])))
+                i++;
+            size_t from = i;
+            while (i < vlen && value[i] != ',' && !is_blank(value[i]))
+                i++;
+            if (i - from == 5 && to_lower(value[from]) == 'c' && to_lower(value[from + 1]) == 'l' &&
+                to_lower(value[from + 2]) == 'o' && to_lower(value[from + 3]) == 's' &&
+                to_lower(value[from + 4]) == 'e')
+                out->connectionClose = true;
+        }
     }
     return HTTP_HEAD_OK;
 }
@@ -724,8 +882,12 @@ static http_head_result_t header_take(char *line, http_response_t *out,
 // short, so the truncated prefix still carries it. A line so long that not
 // even a colon fits is refused too — an unidentifiable multi-kilobyte header
 // is not something to shrug at.
-static http_head_result_t overlong_verdict(const char *prefix, http_header_fn on_header,
-                                           void *ctx)
+//
+// A Connection line too long to read is dropped like the optional metadata
+// it otherwise is, but it might have said `close`, so the reply is marked
+// as one that did: the connection is not kept on a guess.
+static http_head_result_t overlong_verdict(const char *prefix, http_response_t *out,
+                                           http_header_fn on_header, void *ctx)
 {
     // The name, judged by is_token_byte — the SAME rule header_take applies,
     // so the two paths cannot disagree about what a header is called. Any
@@ -750,6 +912,8 @@ static http_head_result_t overlong_verdict(const char *prefix, http_header_fn on
         os64_streq_nocase(name, "Content-Encoding") ||
         os64_streq_nocase(name, "Location"))
         return HTTP_HEAD_FRAMING;
+    if (os64_streq_nocase(name, "Connection"))
+        out->connectionClose = true;
 
     // Optional metadata is omitted whole, and the observer told whose it
     // was: a cache must not read a `Cache-Control: no-store` it never saw as
@@ -823,7 +987,7 @@ http_head_result_t http_head_read_one_with_headers(http_stream_t *s, http_respon
             // Omit oversized metadata; framing and redirect fields must fit.
             // Interim heads are not offered, as header_take does not.
             http_head_result_t verdict =
-                overlong_verdict(line, out->status >= 200 ? on_header : NULL, ctx);
+                overlong_verdict(line, out, out->status >= 200 ? on_header : NULL, ctx);
             if (verdict != HTTP_HEAD_OK)
                 return verdict;
             continue;

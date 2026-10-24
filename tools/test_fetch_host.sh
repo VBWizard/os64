@@ -37,7 +37,7 @@ cc -std=c11 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
    -I userland/libos64/include -I abi/include \
    tools/test_fetch_host.c \
    userland/libfetch/fetch.c userland/libfetch/http.c \
-   userland/libfetch/transport.c userland/libfetch/proxy.c \
+   userland/libfetch/transport.c userland/libfetch/proxy.c userland/libfetch/pool.c \
    userland/libos64/url.c userland/libos64/str.c userland/libos64/fmt.c \
    userland/libos64/crc32.c \
    userland/libgzip/inflate.c userland/libgzip/deflate.c userland/libgzip/gzip.c \

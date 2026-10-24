@@ -25,6 +25,7 @@
 #include "fetch/fetch.h"
 #include "fetch/transport.h"
 #include "internal.h"
+#include "pool.h"
 #include "os64/date.h"
 #include "os64/io.h"
 #include "os64/os64.h"
@@ -106,6 +107,7 @@ static void script(const char *host, const char *reply)
 typedef struct {
     bool open;
     const char *reply;
+    size_t len;                 // the reply's length, read at the dial
     size_t served;
     char request[8192];
     size_t reqlen;
@@ -135,6 +137,7 @@ int64_t os64_dial(const char *dialstring)
                 memset(&s_conns[h], 0, sizeof(s_conns[h]));
                 s_conns[h].open = true;
                 s_conns[h].reply = p->replies[p->next++];
+                s_conns[h].len = strlen(s_conns[h].reply);
                 s_conn_peer[h] = i;
                 return 100 + h;
             }
@@ -146,12 +149,15 @@ const char *os64_dial_reason(int64_t err) { return err == -3 ? "connection refus
 
 int64_t os64_read_for(int32_t h, void *buf, size_t cap, uint64_t ms)
 {
-    // A look that does not wait finds nothing: the peer answers a request
-    // once it has been sent, as test_fetch_host.c's peers do.
-    if (ms == 0)
-        return OS64_ERR_TIMEOUT;
+    // A look that does not wait finds nothing while the peer has its reply
+    // to give: it answers a request once it has been sent, as
+    // test_fetch_host.c's peers do. Once the reply is given, a peer here
+    // has closed (one reply a dial), and the look finds the close: a
+    // connection libfetch kept is found closed when it is next taken.
     conn_t *c = &s_conns[h - 100];
-    size_t left = strlen(c->reply) - c->served;
+    if (ms == 0)
+        return c->served == c->len && c->len > 0 ? 0 : OS64_ERR_TIMEOUT;
+    size_t left = c->len - c->served;
     size_t n = cap < left ? cap : left;
     memcpy(buf, c->reply + c->served, n);
     c->served += n;
@@ -165,6 +171,9 @@ int64_t os64_write_for(int32_t h, const void *buf, size_t n, uint64_t ms)
     memcpy(c->request + c->reqlen, buf, n);
     c->reqlen += n;
     c->request[c->reqlen] = '\0';
+    // What the host was last asked, as it is asked: a connection libfetch
+    // keeps is not closed when its fetch is.
+    memcpy(s_last_request[s_conn_peer[h - 100]], c->request, sizeof(c->request));
     return (int64_t)n;
 }
 
@@ -212,9 +221,7 @@ int64_t os64_write(int32_t h, const void *buf, size_t len)
 int64_t os64_close(int32_t h)
 {
     if (h >= 100 && h < 108) {
-        conn_t *c = &s_conns[h - 100];
-        memcpy(s_last_request[s_conn_peer[h - 100]], c->request, sizeof(c->request));
-        c->open = false;
+        s_conns[h - 100].open = false;
         return 0;
     }
     if (h >= FILE_BASE + 4096) {
@@ -312,6 +319,8 @@ static void remove_tree(const char *path, int contents_only)
 
 static void fresh(void)
 {
+    // An earlier case's kept connections close before its peers are gone.
+    fetch_pool_drain();
     remove_tree(s_dir, 1);
     s_npeers = 0;
     s_dials = 0;
