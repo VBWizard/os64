@@ -55,6 +55,7 @@ WPT_DIRS=(
     html/browsers/the-window-object
     html/dom
     html/webappapis/microtask-queuing
+    html/webappapis/scripting
     secure-contexts
     WebCryptoAPI
 )
