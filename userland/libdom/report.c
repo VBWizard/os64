@@ -15,8 +15,13 @@
  * (a nested dispatch's listener, a handler that failed to compile,
  * reportError) has its error event at once, as HTML's "report an
  * exception" does. One the wrapper caught has it at the task's next turn
- * between calls: after the listener that threw and before its checkpoint,
- * or after the checkpoint whose job threw. A rejection is unhandled when a
+ * between calls: after the listener or timer callback that threw and
+ * before its checkpoint, or after the checkpoint whose job threw. A script
+ * the host ran itself is the exception to that order: the wrapper opens no
+ * task while jobs wait, so the jobs a script that threw had queued run
+ * before its error event, where HTML fires the event first (DEBTS.md, "A
+ * script that threw has its microtasks run before its error event"; a
+ * string timer the same). A rejection is unhandled when a
  * checkpoint ends with it unhandled, and its unhandledrejection is fired
  * after that checkpoint, in the same task, each followed by a checkpoint
  * of its own. A reported promise a handler reaches later has its

@@ -305,6 +305,12 @@ static void dom_report_task_cases(void)
     check(os64_dom_timer_fire(f.binding, UINT64_MAX - 1, &outcome) && outcome.status == OS64_JS_EXCEPTION,
           "report: a string timer throws");
     report_log_is(&f, "'error Uncaught SyntaxError: as a string'", "report: and the window heard that too");
+    dom_script(&f, "setTimeout(()=>{queueMicrotask(()=>log.push('job'));throw Error('callback')},0)",
+               "report: a timer callback queues a job and throws");
+    check(os64_dom_timer_fire(f.binding, UINT64_MAX - 1, &outcome) && outcome.status == OS64_JS_EXCEPTION,
+          "report: the callback's throw is the timer's failure");
+    report_log_is(&f, "'error Uncaught Error: callback|job'",
+                  "report: its error event comes before the checkpoint after it, as a listener's does");
     fixture_free(&f);
 }
 

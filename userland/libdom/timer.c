@@ -252,6 +252,9 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
             os64_js_call(dom->runtime, OS64_JS_ABI_ID, held, dom->window->value, argc, args, NULL, &call);
             dom->calling_script = D_NO_SCRIPT;
             fold(outcome, &call);
+            /* Its exception is reported before the checkpoint after it,
+             * as a listener's is (event.c's invoke_target). */
+            if (call.status == OS64_JS_EXCEPTION) d_errors_fire(dom, outcome);
             /* What the callback left owed (report.c) runs in its task. */
             d_task_finish(dom, outcome);
         }

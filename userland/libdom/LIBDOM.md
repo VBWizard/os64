@@ -1060,9 +1060,12 @@ fetch's answer) settles its own before it closes.
 **When each event fires.** An exception the binding caught while a script
 ran (a nested dispatch's listener, a handler's compile, `reportError`) is an
 `error` event at once, as HTML's "report an exception" is; one libjs caught
-is the event at the task's next turn between calls: after the listener that
-threw and before its checkpoint, or after the checkpoint whose job threw. A
-rejection is unhandled when a checkpoint ends with it unhandled; its
+is the event at the task's next turn between calls: after the listener or
+timer callback that threw and before its checkpoint, or after the
+checkpoint whose job threw. A script the host ran is the exception: libjs
+opens no task while jobs wait, so the jobs a script that threw had queued
+run before its `error` event, where HTML fires the event first (DEBTS.md;
+a string timer the same). A rejection is unhandled when a checkpoint ends with it unhandled; its
 `unhandledrejection` (cancelable) is fired after that checkpoint, oldest
 first, each followed by a checkpoint, until a checkpoint leaves nothing. A
 reported promise a handler reaches later has its `rejectionhandled` after
