@@ -175,6 +175,8 @@ static JSValue post_message(JSContext *ctx, JSValueConst self, int argc, JSValue
         message->clone = d_clone_write(poster, ctx, argv[0], transfer, count);
         converted = message->clone != NULL ? 0 : -1;
     }
+    /* Posted: the transfer list is the message's now. */
+    if (converted == 0) d_clone_detach(ctx, transfer, count);
     d_sequence_free(ctx, transfer, count);
     if (converted < 0) {
         if (message != NULL) message_free(target, message);

@@ -219,9 +219,32 @@ static void dom_clone_hostile_cases(void)
         "globalThis.order=[];addEventListener('message',m=>order.push(m.data.tag));"
         "postMessage({tag:'outer',get x(){postMessage({tag:'inner'},'*');return 1}},'*');"
         "const buf=new ArrayBuffer(4);throws('DataCloneError',()=>structuredClone({get x(){structuredClone(buf,{transfer:[buf]});return 1}},{transfer:[buf]}));"
-        "const rb=new ArrayBuffer(8,{maxByteLength:64});"
+        /* A view past the bytes its buffer had when the buffer was written
+         * is cloned as it was: out of bounds over the buffer as it was. */
+        "const rb=new ArrayBuffer(8,{maxByteLength:64});new Uint8Array(rb).set([1,2,3,4,5,6,7,8]);"
         "const grown={v:new Uint8Array(rb,0,4),get g(){rb.resize(64);return 0},get late(){return new Uint8Array(rb,32,8)}};"
-        "let r;try{structuredClone(grown)}catch(x){r=x}assert(r instanceof RangeError,'a view past the buffer it names is refused as it is made: '+r);",
+        "const gc=structuredClone(grown);"
+        "assert(gc.v.buffer===gc.late.buffer&&gc.v.buffer.byteLength===8&&gc.v.buffer.maxByteLength===64,'one buffer, as it was written');"
+        "assert(gc.v[3]===4&&gc.late.length===0&&gc.late.byteOffset===0,'the late view out of bounds');"
+        "gc.v.buffer.resize(40);assert(gc.late.length===8&&gc.late.byteOffset===32,'and in bounds when its buffer grows');"
+        /* The cold read's two: a view of a transferred buffer the getter
+         * shrank, and one of a buffer it grew. */
+        "const b1=new ArrayBuffer(8,{maxByteLength:16});"
+        "const c1=structuredClone({a:new Uint8Array(b1,4,4),get g(){b1.resize(2);return 1}},{transfer:[b1]});"
+        "assert(b1.detached&&c1.a.buffer.byteLength===2&&c1.a.length===0,'shrunk, then transferred');"
+        "c1.a.buffer.resize(8);assert(c1.a.length===4);"
+        "const b2=new ArrayBuffer(4,{maxByteLength:16});"
+        "const c2=structuredClone({a:new Uint8Array(b2,0,4),get g(){b2.resize(16);return 0},get c(){return new Uint8Array(b2,8,8)}});"
+        "assert(c2.a.length===4&&c2.c.length===0&&c2.a.buffer===c2.c.buffer&&c2.a.buffer.byteLength===4,'grown after it was written');"
+        "const b3=new ArrayBuffer(4,{maxByteLength:16});"
+        "const dv=structuredClone({a:new Uint8Array(b3,0,2),get g(){b3.resize(16);return 0},get d(){return new DataView(b3,12,4)}});"
+        "assert(dv.d instanceof DataView&&dv.a.buffer===dv.d.buffer&&dv.a.buffer.byteLength===4,'a DataView too');"
+        "throws('TypeError',()=>dv.d.getUint8(0));dv.a.buffer.resize(16);assert(dv.d.byteLength===4);"
+        /* Nothing is detached unless the whole clone succeeds. */
+        "const kept=new ArrayBuffer(4);throws('DataCloneError',()=>structuredClone([kept,()=>1],{transfer:[kept]}));"
+        "assert(kept.byteLength===4,'a refusal after the transferred buffer was written detaches nothing');"
+        "const kept2=new ArrayBuffer(4);throws('DataCloneError',()=>postMessage([kept2,Symbol()],'*',[kept2]));"
+        "assert(kept2.byteLength===4,'nor does a post that refuses');",
         "clone: getters that reach back in");
     os64_js_outcome_t outcome;
     check(os64_dom_message_fire(f.binding, &outcome) && os64_dom_message_fire(f.binding, &outcome),
@@ -643,8 +666,40 @@ static size_t p2b_sweep_run(const char *operation, int drive, bool engine, size_
     return count;
 }
 
+/* NOTHING IS DETACHED UNLESS THE WHOLE CLONE SUCCEEDS: every engine
+ * allocation of a structuredClone with a transfer list refused in turn, so
+ * the refusal lands in the writer and in the reader. After each, a page
+ * that finds its buffer detached by a clone that failed makes an 8 MiB
+ * buffer the test port counts (large_asks); none may. */
+static size_t p2b_detach_run(size_t cut)
+{
+    os64_dom_options_t options = p2b_options(P2B_URL);
+    DomFixture f = fixture_new(&options);
+    if (!fixture_ready(&f)) return 0;
+    dom_script(&f, "globalThis.go=function(){const b=new ArrayBuffer(8);"
+                   "const v={m:new Map([[1,{a:[1,2,3]}]]),s:new Set(['x']),d:new Date(1),r:/q/g,u:new Uint8Array(b,2,4)};"
+                   "let ok=false;try{structuredClone(v,{transfer:[b]});ok=true}catch(e){}"
+                   "if(b.byteLength===0&&!ok)globalThis.wrong=new ArrayBuffer(8<<20)}",
+               "detach sweep: setup");
+    size_t start = attempts, asks = large_asks;
+    if (cut != 0) fail_at = attempts + cut;
+    os64_js_outcome_t outcome;
+    os64_js_run(f.runtime, "go()", 4, "detach.js", &outcome);
+    fail_at = 0;
+    size_t count = attempts - start;
+    check(large_asks == asks, "clone: a clone refused anywhere leaves its transfer list attached");
+    fixture_free(&f);
+    return count;
+}
+
 static void dom_p2b_sweep_cases(void)
 {
+    size_t points = p2b_detach_run(0);
+    printf("p2b detach allocation points: %zu\n", points);
+    for (size_t cut = 1; cut <= points; cut++) {
+        p2b_detach_run(cut);
+        dom_sweeps++;
+    }
     static const struct { const char *operation; int drive; } kOperations[] = {
         {"const b=new ArrayBuffer(8,{maxByteLength:16});structuredClone([v,b],{transfer:[b]})", 0},
         {"const b=new ArrayBuffer(2);postMessage(v,'*',[b]);postMessage(1,{targetOrigin:'https://example.test/'})", 1},

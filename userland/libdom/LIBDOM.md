@@ -1243,8 +1243,11 @@ buffer, a view out of bounds, a Promise and the other objects with
 internal state, and every other platform object (`location`, `history` and
 `navigator`, ordinary objects in this binding, among them). The transfer
 list's ArrayBuffers (any other value, a duplicate or a detached one is a
-DataCloneError, a primitive a TypeError) are detached once the value is
-written, all of them checked first so a refusal detaches none. A
+DataCloneError, a primitive a TypeError) have their bytes copied as the
+value is written and are detached only once the clone has succeeded whole
+(structuredClone's copy made, postMessage's message queued), so a refusal
+anywhere detaches none. A view a getter's resize left past its buffer is
+cloned as it was, out of bounds over the buffer as it was. A
 length-tracking view's copy tracks no length (DEBTS.md). The record is
 engine memory, charged as the page's values are; both walks are
 iterative, with an address-keyed memory that holds what it has met, so a

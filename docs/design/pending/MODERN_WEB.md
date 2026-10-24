@@ -3038,8 +3038,8 @@ of the table (LIBDOM.md § P2b's rows has every rule):
   and its six kinds (with an own `cause` and `stack`), arrays, ordinary
   objects (getters run, in [[OwnPropertyKeys]] order), Blob, File and
   DOMException, a value met twice being one value in the copy; anything
-  else is a DataCloneError. The transfer list's ArrayBuffers are detached
-  into the record.
+  else is a DataCloneError. The transfer list's ArrayBuffers are copied
+  into the record and detached once the clone has succeeded whole.
 - **`postMessage`, `onmessage`, `onmessageerror`** and **`MessageEvent`**
   (`message.c`, `event.c`): HTML's window post message steps with the
   target the caller's own window, `targetOrigin` parsed before the message
@@ -3116,9 +3116,14 @@ same-window `postMessage` is that design with the target the caller:
    timers, and the setImmediate trick is exactly that shape.
 4. **A page's idle callbacks wait until it is shown**: only the shown
    page's turn is the loop being idle (DEBTS.md).
-5. **The transfer list is checked and copied whole before anything is
-   detached**, where HTML detaches as it goes; only a refusal halfway can
-   tell.
+5. **Nothing is detached unless the whole clone succeeds.** HTML detaches
+   the transfer list's buffers one by one as it serializes, so a refusal
+   after (the last one detached already, a deserialization that fails)
+   leaves some detached; here their bytes are copied as the value is
+   written and they are detached once the copy is made (structuredClone)
+   or the message queued (postMessage). Only a refusal can tell. (As first
+   built the list was detached at the end of the write, before the read;
+   the cold read's finding 1 moved it.)
 
 **The seams, as they ended.**
 

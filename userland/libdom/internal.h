@@ -11,7 +11,7 @@
 #define D_BUCKETS 256
 #define D_SET 0x1000
 /* The intrinsics the structured clone holds (clone.c's H_COUNT). */
-#define D_CLONE_HELD 33
+#define D_CLONE_HELD 34
 typedef struct DValue DValue;
 typedef struct DQuery DQuery;
 typedef struct DListener DListener;
@@ -986,9 +986,13 @@ bool d_readiness_moved(os64_dom_t *dom, const os64_html_node_t *node, const char
 /* HTML's StructuredSerializeWithTransfer, in the realm of `ctx` whose
  * binding is `dom`: the record, or NULL with the exception pending (a
  * DataCloneError, or what a getter or a conversion threw). `transfer` is
- * the transfer list, each an object (d_clone_objects). */
+ * the transfer list, each an object (d_clone_objects), whose bytes the
+ * record copies; the caller detaches them with d_clone_detach once the
+ * clone has succeeded whole (structuredClone: once the copy is made;
+ * postMessage: once the message is queued), so a refusal detaches none. */
 DClone *d_clone_write(os64_dom_t *dom, JSContext *ctx, JSValueConst value, const JSValue *transfer,
                       size_t transfer_count);
+void d_clone_detach(JSContext *ctx, const JSValue *transfer, size_t transfer_count);
 /* StructuredDeserializeWithTransfer into the realm of `ctx`, whose binding
  * is `dom`: the copy, or JS_EXCEPTION with the exception pending. The
  * record's bytes move into the buffers and blobs it makes, so a record is

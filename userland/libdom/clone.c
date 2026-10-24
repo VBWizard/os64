@@ -43,13 +43,20 @@
  * toString throws is thrown as it is.
  *
  * TRANSFER: the transfer list's ArrayBuffers (anything else, a duplicate, a
- * SharedArrayBuffer or a detached one is a DataCloneError) are detached
- * once the value is written, their bytes copied into the record first
- * (the engine can detach a buffer but not hand its bytes over; DEBTS.md),
- * and are new buffers in the copy wherever the value named them. HTML
- * checks and detaches them one by one; this checks and copies them all,
- * then detaches them all, which differs only in what a refusal halfway
- * leaves detached (here, nothing).
+ * SharedArrayBuffer or a detached one is a DataCloneError) have their
+ * bytes copied into the record once the value is written (the engine can
+ * detach a buffer but not hand its bytes over; DEBTS.md), and are new
+ * buffers in the copy wherever the value named them. They are detached
+ * only once the clone has succeeded whole (d_clone_detach, the caller's:
+ * structuredClone's copy made, postMessage's message queued), so a refusal
+ * anywhere, the writer's or the reader's, detaches none, where HTML
+ * detaches them one by one as it serializes and a refusal after can leave
+ * some detached.
+ *
+ * A RESIZED BUFFER: a getter may resize a resizable buffer after one of its
+ * views was written; each view is cloned as it was, over the buffer as it
+ * was, which can leave the view out of its buffer's bounds in the copy, as
+ * HTML clones it (view_make).
  *
  * WHAT A PAGE CAN SIZE. Both directions walk iteratively, on stacks of
  * their own in engine memory, so a graph a million objects deep is a
@@ -76,7 +83,7 @@ static JSClassID s_object, s_array, s_error, s_date, s_regexp, s_map, s_set, s_b
 enum {
     H_OBJECT, H_BOOLEAN_VALUE, H_NUMBER_VALUE, H_STRING_VALUE, H_BIGINT_VALUE, H_DATE_TIME,
     H_REGEXP, H_REGEXP_SOURCE, H_FLAG_FIRST, H_FLAG_LAST = H_FLAG_FIRST + 7,
-    H_BUFFER, H_BUFFER_RESIZABLE, H_BUFFER_MAX,
+    H_BUFFER, H_BUFFER_RESIZABLE, H_BUFFER_MAX, H_BUFFER_RESIZE,
     H_MAP, H_MAP_SET, H_MAP_FOR_EACH, H_SET, H_SET_ADD, H_SET_FOR_EACH,
     H_ERROR_FIRST, H_ERROR_LAST = H_ERROR_FIRST + 6, H_SHARED,
     H_COUNT
@@ -267,6 +274,7 @@ int d_clone_setup(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         take_from(dom, ctx, global, "RegExp", H_REGEXP, "source", H_REGEXP_SOURCE, true) < 0 ||
         take_from(dom, ctx, global, "ArrayBuffer", H_BUFFER, "resizable", H_BUFFER_RESIZABLE, true) < 0 ||
         take_from(dom, ctx, global, "ArrayBuffer", -1, "maxByteLength", H_BUFFER_MAX, true) < 0 ||
+        take_from(dom, ctx, global, "ArrayBuffer", -1, "resize", H_BUFFER_RESIZE, false) < 0 ||
         take_from(dom, ctx, global, "Map", H_MAP, "set", H_MAP_SET, false) < 0 ||
         take_from(dom, ctx, global, "Map", -1, "forEach", H_MAP_FOR_EACH, false) < 0 ||
         take_from(dom, ctx, global, "Set", H_SET, "add", H_SET_ADD, false) < 0 ||
@@ -886,7 +894,9 @@ DClone *d_clone_write(os64_dom_t *dom, JSContext *ctx, JSValueConst value, const
     }
     if (result == 0) result = write_value(&w, JS_ATOM_NULL, value);
     if (result == 0) result = walk(&w);
-    /* Then each is detached, its bytes the record's. */
+    /* Then each one's bytes are copied into the record, as they stand now;
+     * the caller detaches them once the clone has succeeded whole
+     * (d_clone_detach). */
     if (result == 0 && transfer_count != 0) {
         out->transfers = js_mallocz(ctx, transfer_count * sizeof(*out->transfers));
         result = out->transfers != NULL ? 0 : -1;
@@ -896,7 +906,6 @@ DClone *d_clone_write(os64_dom_t *dom, JSContext *ctx, JSValueConst value, const
             out->transfer_count = i + 1;
             result = buffer_copy(&w, transfer[i], &out->transfers[i]);
         }
-        for (size_t i = 0; result == 0 && i < transfer_count; i++) JS_DetachArrayBuffer(ctx, transfer[i]);
     }
     writer_end(&w);
     if (result < 0) {
@@ -1022,17 +1031,49 @@ static int deliver(DReader *r, JSAtom key, JSValue value)
     return result;
 }
 
+/* A typed array kind's element size, by JSTypedArrayEnum. */
+static const uint8_t kElementBytes[12] = {1, 1, 1, 2, 2, 4, 4, 8, 8, 2, 4, 8};
+
 /* A view made over the buffer its fill holds: the engine's typed array
- * kind, or the DataView constructor taken before any page ran. */
+ * kind, or the DataView constructor taken before any page ran.
+ *
+ * A VIEW MAY NAME BYTES ITS BUFFER'S COPY DOES NOT HAVE. The writer records
+ * a view's offset and length as it meets the view, and the buffer's bytes
+ * as it first meets the buffer (or, for one transferred, once the value is
+ * written), and a getter between may have resized a resizable buffer. HTML
+ * clones it so: each view as it was, over the buffer as it was, which may
+ * leave the view out of its buffer's bounds. The engine makes no view out
+ * of bounds, so the buffer is grown to fit through ArrayBuffer's own
+ * `resize`, the view made, and the buffer shrunk back; the view is then
+ * out of bounds, as the page's was or will be. */
 static JSValue view_make(DReader *r, const DItem *item, JSValueConst buffer)
 {
     JSContext *ctx = r->ctx;
+    uint64_t span = item->sub == D_VIEW_DATA_VIEW ? item->size : item->size * kElementBytes[item->sub % 12];
+    size_t had;
+    if (JS_GetArrayBuffer(ctx, &had, buffer) == NULL) return JS_EXCEPTION;
+    bool grown = item->count + span > had;
+    if (grown) {
+        JSValue length = JS_NewInt64(ctx, (int64_t)(item->count + span));
+        JSValue done = JS_Call(ctx, r->dom->clone_held[H_BUFFER_RESIZE]->value, buffer, 1, (JSValueConst *)&length);
+        if (JS_IsException(done)) return done;
+        JS_FreeValue(ctx, done);
+    }
     JSValue args[3] = {JS_DupValue(ctx, buffer), JS_NewInt64(ctx, (int64_t)item->count),
                        JS_NewInt64(ctx, (int64_t)item->size)};
     JSValue view = item->sub == D_VIEW_DATA_VIEW
         ? JS_CallConstructor(ctx, r->dom->data_view[0]->value, 3, (JSValueConst *)args)
         : JS_NewTypedArray(ctx, 3, (JSValueConst *)args, (JSTypedArrayEnum)item->sub);
     for (int i = 0; i < 3; i++) JS_FreeValue(ctx, args[i]);
+    if (grown && !JS_IsException(view)) {
+        JSValue length = JS_NewInt64(ctx, (int64_t)had);
+        JSValue done = JS_Call(ctx, r->dom->clone_held[H_BUFFER_RESIZE]->value, buffer, 1, (JSValueConst *)&length);
+        if (JS_IsException(done)) {
+            JS_FreeValue(ctx, view);
+            return done;
+        }
+        JS_FreeValue(ctx, done);
+    }
     return view;
 }
 
@@ -1235,11 +1276,17 @@ static JSValue clone_method(JSContext *ctx, JSValueConst self, int argc, JSValue
         return JS_EXCEPTION;
     }
     DClone *clone = d_clone_write(dom, ctx, argv[0], transfer, count);
+    JSValue copy = clone != NULL ? d_clone_read(dom, ctx, clone) : JS_EXCEPTION;
+    /* The transfer list is detached only when the copy was made whole. */
+    if (!JS_IsException(copy)) d_clone_detach(ctx, transfer, count);
     d_sequence_free(ctx, transfer, count);
-    if (clone == NULL) return JS_EXCEPTION;
-    JSValue copy = d_clone_read(dom, ctx, clone);
     d_clone_free(dom->engine, clone);
     return copy;
+}
+
+void d_clone_detach(JSContext *ctx, const JSValue *transfer, size_t transfer_count)
+{
+    for (size_t i = 0; i < transfer_count; i++) JS_DetachArrayBuffer(ctx, transfer[i]);
 }
 
 int d_clone_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
