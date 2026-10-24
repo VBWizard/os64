@@ -2431,6 +2431,9 @@ What the numbers say:
   (CONNECT)` while there was none); the expectation file names them by the
   titles they have now.
 
+- Elsewhere, css/cssom-view gains one (`compatMode` in quirks mode) and
+  encoding two (`characterSet` after a BOM and without sniffing).
+
 Every expectation directory (30) passes at the head both ways.
 
 The corpus, 2026-10-22b replayed at the base and the head
