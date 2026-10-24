@@ -366,6 +366,7 @@ static void style_case(const char *name, const char *html, const char *expected)
 #include "test_libflow_layout.inc"
 #include "test_libflow_tables.inc"
 #include "test_libflow_cascade.inc"
+#include "test_libflow_origin.inc"
 #include "test_libflow_batch_a.inc"
 
 // ── The corpus, and the allocation sweep ────────────────────────────────
@@ -1462,10 +1463,18 @@ int main(int argc, char **argv)
     bool floats = argc == 2 && strcmp(argv[1], "--floats") == 0;
     bool cliptext = argc == 2 && strcmp(argv[1], "--cliptext") == 0;
     bool motion = argc == 2 && strcmp(argv[1], "--motion") == 0;
-    // `--batch-a`: the Modern Web arc's slice 4 alone, in seconds.
-    if (argc == 2 && strcmp(argv[1], "--batch-a") == 0) {
+    // `--batch-a`: the Modern Web arc's slice 4 alone, in seconds; and
+    // `--origin`, test_libflow_origin.inc's cases alone, for
+    // test_libflow_origin_mutants.py.
+    bool origin = argc == 2 && strcmp(argv[1], "--origin") == 0;
+    if (origin || (argc == 2 && strcmp(argv[1], "--batch-a") == 0)) {
         text_setup();
-        batch_a_cases();
+        if (origin) {
+            origin_cases();
+            nowrap_atom_cases();
+        } else {
+            batch_a_cases();
+        }
         text_teardown();
         printf("libflow: %d checks, %d failed%s\n", checks, failures,
                live != 0 ? " (AND LEAKED)" : "");
@@ -1491,6 +1500,8 @@ int main(int argc, char **argv)
     attrs_cases();
     style_cases();
     cascade_cases();
+    origin_cases();
+    nowrap_atom_cases();
     batch_a_cases();
     boxes_cases();
     layout_cases();
