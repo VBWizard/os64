@@ -77,7 +77,10 @@ fact that a kernel write through the HHDM bypasses every protection in the
 task's own page table gets written down beside it). A read stops at the first
 page that is not present and returns what came before; a request whose first
 byte is unmapped is an **error**, not an empty read — an address space has no
-end-of-file to mistake it for. `SEEK_END` is refused for the same reason.
+end-of-file to mistake it for. `SEEK_END` is refused for the same reason. The
+offsets do stop at `USER_CANONICAL_MAX`, the top of the task's half: a seek
+past it is refused and a read stops at it, because the page walk would answer
+a non-canonical offset with the kernel's own memory.
 Pages a task owns but has never touched read as unmapped in this v1; `maps`
 says they exist, `mem` says they don't, and a hex editor paints `??`.
 Populating them on the reader's behalf is booked. **Security: none, and none

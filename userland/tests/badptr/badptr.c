@@ -20,13 +20,22 @@
 // the harness sees the boot die. A thread or program entry point that gets
 // through is reported here as a failure, because under QEMU's TCG the bad RIP
 // reaches ring 3 and only the program dies; hardware checks it in IRETQ,
-// still in ring 0, and that #GP is the kernel's.
+// still in ring 0, and that #GP is the kernel's. /proc/self/mem walks
+// without panicking, so a read past the ceiling there is reported as a
+// failure too.
+//
+// What it does not reach: a pointer passed as a syscall argument is refused
+// by the dispatcher's own bound before any copy helper sees it, so the
+// helpers' bound is exercised only through EMBEDDED pointers (spawn's argv
+// elements); and no case loads a program whose segment, rather than its
+// entry, lies past the ceiling, so elf_map_segment's bound is untested here.
 //
 // `badptr <group>` runs one group, so each door can be shown on its own:
 //   in      copy-in: open/stat/chdir paths, debug_log, a GUI title, a pipe
 //           write, a net_dial struct
 //   out     copy-out: read into a buffer, ticks, getcwd, stat's dirent
 //   string  spawn's path and argv elements (the page-at-a-time measurer)
+//   proc    /proc/self/mem: a seek past the ceiling, and a read at it
 //   thread  a thread whose entry or exit stub is not a user address
 //   entry   a program whose ELF entry point is not a user address: static,
 //           dynamic, and position-independent (where only the entry plus the
@@ -187,6 +196,41 @@ static void group_out(void)
         // A file that exists, so the copy-out is reached rather than a miss.
         beacon("stat dirent", b);
         expect_refused(0x23, "stat", b, os64_stat("/tests/badptr", (os64_dirent_t *)bp));
+    }
+
+    os64_close((int32_t)f);
+}
+
+// /proc/self/mem's offset is an address the READER chooses, and the kernel
+// copies from it through the same page walk: the stream ends at the ceiling.
+// A seek past it is refused, and a read at it returns nothing.
+static void group_proc(void)
+{
+    int64_t f = os64_open("/proc/self/mem", "r");
+    if (f < 0)
+        os64_exit((int32_t)(BADGE | 0x03));
+
+    static const bad_t past[] = {
+        { CEILING + 0x100000ull,  "1 MiB past the ceiling" },
+        { 0x0000ffff80000000ull,  "non-canonical, bit 47 set" },
+    };
+    for (unsigned i = 0; i < sizeof(past) / sizeof(past[0]); i++)
+    {
+        beacon("proc mem seek", &past[i]);
+        expect_refused(0x30, "seek /proc/self/mem", &past[i],
+                       os64_seek((int32_t)f, (int64_t)past[i].addr, OS64_SEEK_SET));
+    }
+
+    // AT the ceiling the seek is legal (the end of the stream) and the read
+    // finds nothing there.
+    gChecks++;
+    uint8_t buf[16];
+    if (os64_seek((int32_t)f, (int64_t)CEILING, OS64_SEEK_SET) < 0 ||
+        os64_read((int32_t)f, buf, sizeof(buf)) > 0)
+    {
+        os64_printf("badptr: /proc/self/mem gave bytes at the ceiling\n");
+        os64_serial_log("badptr: FAIL - /proc/self/mem read past the task's address space");
+        os64_exit((int32_t)(BADGE | 0x31));
     }
 
     os64_close((int32_t)f);
@@ -416,6 +460,7 @@ int main(int argc, char **argv)
     if (start(only, "in"))     { group_in();     ran = true; }
     if (start(only, "out"))    { group_out();    ran = true; }
     if (start(only, "string")) { group_string(); ran = true; }
+    if (start(only, "proc"))   { group_proc();   ran = true; }
     if (start(only, "entry"))  { group_entry();  ran = true; }
     // Last: on a kernel without the bound, the exit-stub half ends this
     // program rather than the machine.
@@ -423,7 +468,7 @@ int main(int argc, char **argv)
 
     if (!ran)
     {
-        os64_printf("usage: badptr [in|out|string|thread|entry]\n");
+        os64_printf("usage: badptr [in|out|string|proc|thread|entry]\n");
         return 2;
     }
 
