@@ -115,6 +115,14 @@ if [ "$1" = --selftest ]; then
         fail "--update did not write each pass once, in order"
     ! grep -q '^timeout.html' "$work/passing.txt" ||
         fail "a page whose harness timed out passed a test"
+    # Opus's ruling, 2026-10-24: a harness that ended in ERROR on the
+    # page's own uncaught error or rejection counts the tests it completed;
+    # any other harness error still fails the page whole.
+    grep -qx 'own-error.html	a pass before the page'"'"'s own error counts' "$work/passing.txt" &&
+        grep -qx 'own-rejection.html	a pass before the page'"'"'s own rejection counts' "$work/passing.txt" ||
+        fail "a page that ended on its own uncaught error or rejection did not count the tests it completed"
+    ! grep -q '^harness-error.html' "$work/passing.txt" ||
+        fail "a page whose harness ended in an error not its own passed a test"
 
     run --expect "$work/expect.txt"
     [ "$rc" -eq 0 ] && ! grep -q '^NEW\|^LOST\|^REQUIRED' "$work/out.txt" ||
@@ -303,6 +311,7 @@ if [ "$1" = --selftest ]; then
     done
 
     echo "wpt selftest: the runner's pages ran as tools/wpt/selftest.out says, found either way;" \
+        "a page's own error counts its completed tests where a timeout or other harness error fails it whole;" \
         "the expectations' three sections hold, unreadable ones and faulted runs are refused," \
         "and the switch's proof fails on a leak"
     exit 0

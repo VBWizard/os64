@@ -544,7 +544,12 @@ commit, in three sections: `[required]` (each must pass, or the run fails
 naming it), `[passing]` (the baseline: a lost pass fails the run, a new one
 is listed) and `[excluded]` (a page not run, with its reason). `--update`
 rewrites `[passing]` alone. A page whose harness did not end OK fails
-whole: a pass it reported prints as a FAIL that says so. Only a page run
+whole: a pass it reported prints as a FAIL that says so. (Since
+2026-10-24, by Opus's ruling on P2a, matching wpt.fyi: a harness that
+ended in ERROR on the page's own uncaught error or unhandled rejection,
+which the report script tells by testharness.js's own status and
+message, counts the tests the page completed; a timeout or any other
+harness error still fails the page whole.) Only a page run
 to a verdict may change the expectations, so `--update` writes last, and
 only for a run with no fault, at least one page, and no page left unrun (a
 source missing, too large or not read whole, or a file a page asked for

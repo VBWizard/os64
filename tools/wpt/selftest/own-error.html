@@ -1,0 +1,12 @@
+<!doctype html>
+<title>The runner's own: a page that throws</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>
+// The page's own uncaught error ends the harness in ERROR; the test it
+// completed before that counts (Opus's ruling, 2026-10-24).
+test(function() {}, "a pass before the page's own error counts");
+</script>
+<script>
+throw new Error("the page's own");
+</script>
