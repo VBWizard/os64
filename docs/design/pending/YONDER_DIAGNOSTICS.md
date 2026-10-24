@@ -38,14 +38,16 @@ them ranks what to build first.
 - `MISSING <kind> <name>`, once per name, with a count: a global reached
   for that is not there (bare `fetch`, `window.fetch`, `self.fetch`), a
   script yonder refuses to run (`type=module`, a worker, a service worker
-  registration), an element drawn as nothing (canvas, video, audio, svg,
-  a custom element), a CSS property, at-rule or function the cascade
+  registration), an element whose content is not drawn (canvas, video,
+  audio, svg, a custom element), a CSS property, at-rule or function the cascade
   skipped, a font family with neither a page face nor a system family
   (the resolver's: PILE3.md § Web fonts).
 - `FAILED <what>: <message>`: a script that died with its message and
   source name, one stopped at the execution limit, out of memory in
   layout or reading, a link refused and why, a font file that did not
-  fetch, unwrap or open. Everything the status line
+  fetch, unwrap or open, and `FAILED unsupported: canvas`, once a page
+  however many canvases it has, where scripting is on (DEBTS.md, "Loud
+  for canvas only", for the kinds only counted). Everything the status line
   says today and then loses.
 - Plain lines for the rest: final address after redirects, time to
   arrive, bytes, scripts by source name with outcome, layouts and their
@@ -686,7 +688,10 @@ each was a page dying on something that browsers have had since the 2000s.
   a pale panel naming where its document is, and a click there follows it
   (it always did; libpage makes a frame a link). The record counts
   `MISSING element iframe`, `frame` and `embed`; an object shows its
-  fallback and is not counted.
+  fallback and is not counted. A frame a script inserts is the same
+  stand-in, its `src` set as a property too since the frames row
+  (LIBDOM.md § The frames row); a frame is never unsupported. A canvas
+  stands in the same way ("Canvas: not supported") where scripting is on.
 - **A picture asked for by itself is shown** on a page of its own
   (YONDER.md § A picture asked for by itself), where it said "not a page".
 - **`document.cookie`** (LIBDOM.md § The classic methods): MediaWiki's first

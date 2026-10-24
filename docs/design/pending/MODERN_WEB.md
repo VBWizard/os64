@@ -2298,3 +2298,83 @@ pages excluded by name: a later phase un-excludes what it names.
 **Booked** (DEBTS.md § Classic browser scripting): the QuotaExceededError
 interface. Not booked, by ruling: `subtle` (ruling 1), and `close()`
 (DIVERGENCES.md).
+
+### Loud elements, as built
+
+Built on `opus/yonder-loud-elements`, from `userland` `c8d87b53` (it needs
+none of P2a's record lines: the FAILED line is diag.c's, as every one is).
+The builder's adversarial and truth passes are done; the cold read is
+next.
+
+**Why.** Two things a page asked for that a person could not tell had
+failed. A canvas laid its fallback out (usually nothing) and the record
+only counted it; and a frame a script inserted named no document, where a
+parsed one is a stand-in that takes a click to its document.
+
+**A canvas** (libflow `boxes.c`, `layout.c`; yonder `paint.c`, `yonder.c`).
+Where scripting is on a canvas is a replaced box, as in a browser that runs
+scripts (HTML § 15.4.1), its own size its width and height attributes, 300
+by 150 where one is absent or no non-negative integer, a CSS width keeping
+their ratio as an img's own size does; its fallback is not laid out. With
+scripting off it is its fallback, laid out as any element. yonder draws the
+box as a frame's stand-in, a pale panel with "Canvas: not supported" in
+grey along its top; the paint verb that draws both is now `stand_in`, and
+it makes no label for a box with nothing in view. The page's record gets
+one `FAILED unsupported: canvas (1)` line however many canvases it has, a
+script's among them, beside `MISSING element canvas (N)` as before. Opus
+ruled canvas alone loud (2026-10-24): video, audio, embed and svg stay
+counted and silent, booked as one DEBTS row with their corpus counts.
+
+**A frame a script inserts** (libdom `frames.c`, the frames row). The cause
+was libdom's: an iframe had no `src`, so `f.src = url`, the way scripts most
+often address a frame, made a property of the script's own, and libpage,
+which lists a frame's `src` attribute as its link, never saw it;
+`setAttribute` and `innerHTML` already worked. Opus ruled the shape: the
+iframe is a prototype kind of its own, `D_PROTO_IFRAME`, the
+HTMLIFrameElement IFRAME.md shapes (§ The cluster and the window proxy),
+and a modern row of its own puts the interface and `src` on it, so phase
+F1 extends this one shape and its frames switch can take it away whole.
+With the modern switch off an iframe stays as it was, `src` a script's
+own property, which the scripted-page host's cases hold both ways. A frame
+is never unsupported: its stand-in takes a click to its document (Chris
+verified the placeholder takes him to the source).
+
+**Numbers.** WPT, the 27 expectation directories of this branch, both
+ways, and the runner's self-test: one new pass, `dom/nodes`'
+`Node-cloneNode.html` "createElement(iframe)", which checks the copy is an
+HTMLIFrameElement; it fails with the switch off and is required. Nothing
+else moved.
+
+The corpus, 2026-10-22b replayed at `userland` (`2026-10-22b_p2a-before`,
+the same commit) and at this branch (`2026-10-22b_loud-after`): 7 page
+records of 5 sites gain the canvas line; FAILED lines 428 → 433, MISSING
+lines 9070 → 9064. The diff's 12 "regressions" are those 7 and 5 records
+whose scripts now get past `instanceof HTMLIFrameElement` (which threw "invalid
+'instanceof' right operand" in 5 records, and `MISSING global
+HTMLIFrameElement` was in 8) to their next wall: `createElementNS` in 2,
+`HTMLStyleElement` in 1, a custom element and `PerformanceObserver` in 2.
+Replayed 239, clean 21, unfinished 13 and 19 unjudged on both sides.
+
+Host, at the head, all 0 failed: the DOM host (iframe `src`, its
+interface, and both absent with the switch off); the scripted-page host
+(a frame inserted every way, both ways; the canvas line, once, with a
+script's canvas, and none with scripts off); yonder's host (the stand-in
+painted at a canvas's size, a bad attribute's default, the fallback with
+scripting off); libflow's (the sizes, the ratio, the fallback); the replay
+proof, a hand-made page of canvases and an inserted frame replayed to the
+same record; wend and libpage; `make -C userland` builds.
+
+**Review.** The builder's adversarial pass looked for work a page can
+size (the canvas tally is diag's existing walk of the tree; a label is laid
+out only for a stand-in with something in view, so a page of empty
+canvases costs none), page code the new member runs (`src`'s setter
+converts its value as `script.src`'s does, and loads nothing), a frame's
+address a script controls (a `javascript:` `src` was already a parsed
+frame's link, and goes through the same door a link does), and sizes a
+page gives (a huge width attribute is clamped as every integer attribute
+is, and is a box's size as a CSS width already could be). The truth pass
+corrected YONDER_DIAGNOSTICS.md's element and FAILED lists, diag_elements'
+comment (a canvas and a frame are stand-ins, not nothing), and paint.h's
+verb, renamed for what it now draws.
+
+**Booked** (DEBTS.md § Browser layout): loud for canvas only.
