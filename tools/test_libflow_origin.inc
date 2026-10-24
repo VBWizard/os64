@@ -67,6 +67,29 @@ static void origin_cases(void)
         "      block div 0 40 100 30\n"
         "        block div 0 40 100 30\n");
 
+    // A table is laid out from 0 too: its absolute box's top is 100 - 50
+    // = 50, its two 20px rows at 50 and 70, and the row group round them
+    // 50..90 — where, laid out, the rows were at -50 and -30.
+    cascade_layout_case("a table's row group above the table's origin holds its rows",
+        "<!doctype html><style>body{margin:0} table{border-spacing:0}"
+        " td{padding:0;height:20px;width:50px}"
+        " .p{position:absolute;top:100px;left:0;margin-top:-50px}</style>"
+        "<table class=p><tbody><tr><td>a</td></tr><tr><td>b</td></tr></tbody></table>", 800,
+        "page 800 90\n"
+        "block html 0 0 800 0\n"
+        "  block body 0 0 800 0\n"
+        "    line 0 0 800 0 base 14\n"
+        "    table table 0 50 50 40 positioned\n"
+        "      row-group tbody 0 50 50 40\n"
+        "        row tr 0 50 50 20\n"
+        "          cell td 0 50 50 20\n"
+        "            line 0 50 50 20 base 14\n"
+        "              text \"a\" 0 52 8 16 serif 16\n"
+        "        row tr 0 70 50 20\n"
+        "          cell td 0 70 50 20\n"
+        "            line 0 70 50 20 base 14\n"
+        "              text \"b\" 0 72 8 16 serif 16\n");
+
     // A box with nothing in it is still empty: its margins collapse
     // through it with the ones round it (§ 8.3.1), -10 and 5 to -5, so
     // the next box is at 20 - 5 = 15, and the empty one's border edge is

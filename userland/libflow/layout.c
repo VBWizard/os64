@@ -7209,19 +7209,23 @@ static void table_body(L *l, const FStyles *styles, FBox *t, int64_t cbx, int64_
     int64_t cursor_y = top + vsp;
     for (FBox *c = t->first; c != NULL; c = c->next) {
         if (c->kind == FB_ROW_GROUP) {
-            int64_t y0 = -1, y1 = -1;
+            // Its rows' extent. A row's y may be negative (a table laid
+            // out from 0 above its origin), so whether there is a row at
+            // all is its own question.
+            bool any = false;
+            int64_t y0 = 0, y1 = 0;
             for (FBox *row = c->first; row != NULL; row = row->next)
                 if (row->kind == FB_ROW && row->placed) {
-                    if (y0 < 0 || row->y < y0)
-                        y0 = row->y;
-                    y1 = max64(y1, row->y + row->h);
+                    y0 = any ? min64(y0, row->y) : row->y;
+                    y1 = any ? max64(y1, row->y + row->h) : row->y + row->h;
+                    any = true;
                 }
             c->placed = true;
             c->x = row_x;
             c->w = row_w;
-            c->y = y0 >= 0 ? y0 : cursor_y;
-            c->h = y0 >= 0 ? y1 - y0 : 0;
-            if (y0 >= 0)
+            c->y = any ? y0 : cursor_y;
+            c->h = any ? y1 - y0 : 0;
+            if (any)
                 cursor_y = y1 + vsp;
         }
     }
