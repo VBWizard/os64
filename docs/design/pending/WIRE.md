@@ -28,9 +28,10 @@ that is the score Google and Microsoft gave.
 every request from that browser carries. The headers come in two kinds:
 
 - **Static, the preset's own.** The `agent.c` table gains them beside the
-  string, verbatim as the browser sends them. Chrome on Windows:
-  `sec-ch-ua: "Chromium";v="154", "Google Chrome";v="154",
-  "Not-A.Brand";v="99"` (the UA-CH brand list, the GREASE brand included
+  string, verbatim as the browser sends them. Chrome on Windows (156, as
+  captured: "W1, as built" below):
+  `sec-ch-ua: "Not:A-Brand";v="8", "Chromium";v="156", "Google
+  Chrome";v="156"` (the UA-CH brand list, the GREASE brand included
   because Chrome always sends one), `sec-ch-ua-mobile: ?0`,
   `sec-ch-ua-platform: "Windows"`, `Accept-Language: en-US,en;q=0.9`.
   Firefox on Windows and Safari on iPhone send no client hints and the
@@ -60,25 +61,90 @@ every request from that browser carries. The headers come in two kinds:
   browser that is not pretending to be another engine. DIVERGENCES.md
   row, one line.
 
-**Where.** `agent.c` (the table and a function that writes a preset's
-static block), libway (`fields_of`, the navigation's fields; the
-Fetch-Metadata computation is pure and lives beside `way_origin_header`
-in `origin.c`, where its inputs already are), libfetch unchanged except
-that the extra-headers cap must fit the block (`OS64_FETCH_EXTRA_MAX`,
-8192 since slice 2; confirm the longest preset's block plus the
-per-request lines fits with the margin the cap's comment states).
+**Where.** `agent.c` (the table), libway (the Fetch-Metadata computation
+is pure and lives beside `way_origin_header` in `origin.c`, where its
+inputs already are; the fetch job's per-hop fields and the navigation's),
+and libfetch's per-hop callback, which takes the lines because they
+change from hop to hop (as built, below: the brief's first answer, the
+extra-headers block, is fixed for a whole fetch).
 
 **Proof.** Host cases: each preset's static block byte for byte against
 the capture; `Sec-Fetch-Site` for the four answers, `Mode` for the four
 modes, `Dest` for each destination the callers name, `User` present on a
-person's navigation and absent on a script's and on a redirect's later
-hops as the standard says; the preflight's pair; `Upgrade-Insecure-Requests`
+person's navigation and absent on a script's, and on a redirect's later
+hops as the standard says (it says present on a person's: as built,
+below); the preflight's pair; `Upgrade-Insecure-Requests`
 on documents only. A mutant per header. QEMU `make run-net`: a page load
 and a cross-origin script fetch, the wire read back (the slirp side's
 capture or the fetch test's listener) showing the full set. On the P5:
 a search on the engine that refused us answering with results, said in
 the PR body by outcome, not by name; if it still refuses, the PR says so
 and the gate has moved to the handshake, which is the divergence row.
+
+### W1, as built (2026-10-24, Opus)
+
+The values come from a capture, not from this brief: Chris's Chrome 156
+and Firefox 158 on Windows, each making a typed navigation, a clicked one,
+a script, a sheet, a picture, a same-origin fetch, a cross-site fetch and
+its preflight to a local listener (the W1 capture files 02-10 for Chrome,
+19-27 for Firefox, raw request bytes, cited in the PR). Where the capture
+or a standard disagreed with § 1 above, the build follows them:
+
+- **Chrome is 156, and its brand list puts the GREASE brand first:**
+  `"Not:A-Brand";v="8", "Chromium";v="156", "Google Chrome";v="156"`
+  (capture-02). The agent string is the reduced `Chrome/156.0.0.0`.
+  Firefox is `rv:158.0` / `Firefox/158.0` (capture-19). Safari is not
+  captured: no client hints, and the language list MDN gives.
+- **A preflight carries no client hints** (capture-08); it does carry
+  `Accept-Language`, and its Fetch Metadata is cors/empty with the
+  request's site.
+- **`Sec-Fetch-User` stays on every hop of a person's navigation.** HTML's
+  "create navigation params by fetching" sets the request's
+  user-activation once, and its redirects are the same request; Fetch
+  Metadata § 2.4 reads only that flag. A page's own navigation (a
+  refresh, a script's `location`, `click()` or `submit()`) never carries
+  it, on any hop.
+- **Fetch Metadata and the client hints go only to a potentially
+  trustworthy URL** (Fetch Metadata § 3 step 1; the hints are a
+  secure-context feature). A plain-http hop carries
+  `Upgrade-Insecure-Requests`, `Accept-Language` and `Priority` and
+  nothing else of this. The QEMU proof's typed `http://` address,
+  redirected to `https://`, shows both hops.
+- **`localhost` is not trustworthy in yonder** (the DIVERGENCES row from
+  slice 2: os64 cannot promise the name resolves to loopback), so
+  `http://localhost` hears no Fetch Metadata where the captured browsers
+  sent it. The capture's cross-site fetch from `localhost` to
+  `127.0.0.1` is `cross-site` in yonder too.
+- **`Accept` is not copied.** Chrome's navigation `Accept` names JPEG XL,
+  AVIF, APNG and signed exchanges, and its `Accept-Encoding` is `gzip,
+  deflate, br, zstd`; yonder keeps its own lists, which name only what it
+  decodes (DIVERGENCES, "The browser's identity").
+- **A font is asked for as `no-cors`.** Browsers fetch fonts in cors mode,
+  and yonder runs no CORS check on one, so it does not say it does.
+- **`Priority` (RFC 9218) is the preset's, per destination.** Firefox sends
+  one on every request: `u=0, i` for a document, `u=2` for a style or a
+  script, `u=5, i` for an image, `u=4` for a fetch and its preflight
+  (capture-19..27); no font was asked for, so a font goes without. Chrome
+  sends none over HTTP/1.1, and Safari's is not captured. It describes the
+  request's urgency, not a capability, so it is no header that lies.
+- **yonder's own preset sends `Accept-Language: en-US,en;q=0.9`**, a real
+  browser asking for English (a server that hears none guesses a locale);
+  Netscape 4 and Lynx keep their strings alone, and a typed agent claims
+  nothing beyond itself.
+- **libfetch's per-hop callback takes the lines, not the extra-headers
+  block.** The extra headers are fixed for a whole fetch, and these lines
+  are not: a typed `http://` address that redirects to `https://` must
+  send nothing of Fetch Metadata on the first hop and all of it on the
+  second, and `Sec-Fetch-Site` grows with every URL a redirect adds.
+  `headers_for` accepts the ten names (Accept-Language, the three
+  `sec-ch-ua` lines, the four `Sec-Fetch-` lines,
+  `Upgrade-Insecure-Requests`, `Priority`) beside Cookie and Referer, each
+  once; none is a credential. `OS64_FETCH_HOP_FIELDS_MAX` holds 512 bytes
+  for them beside the cookies' kilobyte (`WAY_IDENTITY_MAX`; Chrome's
+  longest block is 294 bytes); `OS64_FETCH_EXTRA_MAX` is not involved.
+- **Header order is libfetch's, not each browser's**, booked in
+  BROWSER_DEBTS beside § 2, whose change to the `Connection` line touches
+  the same request writer.
 
 ## 2. Keep-alive: one connection carries many requests
 
