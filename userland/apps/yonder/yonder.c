@@ -1373,6 +1373,15 @@ static struct {
         // started: its scripts' host is handed it when it is made, and
         // hears the milestones after that (stream_mark).
         os64_dom_timing_t timing;
+        // The address of the page it was asked for from, "" for none
+        // (trip_send's: a link followed, a form sent, a script's
+        // navigation): what its Referer was made from, and so its
+        // document.referrer (stream_request_facts).
+        char referrer[OS64_FETCH_URL_MAX];
+        // A Reload's: the reloaded page's own document.referrer, which
+        // the page that replaces it keeps, as a browser's does, though
+        // the Reload's request names nothing ("" for none).
+        char kept_referrer[OS64_DOM_URL_MAX];
         // THE STREAM'S PAGE (DOM_D7.md § D7d): the parse so far as a page
         // with a sheet table, filled as the parse reveals sheets
         // (stream_sheets) and moved to the page that arrives. Its
@@ -3494,6 +3503,13 @@ static void trip_send(const char *url, os64_page_request_t *request, const char 
     os64_strcopy(trip->url, sizeof(trip->url), url);
     os64_strcopy(trip->referrer, sizeof(trip->referrer), named);
     os64_memset(&g.stream, 0, sizeof(g.stream));
+    os64_strcopy(g.stream.referrer, sizeof(g.stream.referrer), named);
+    // A Reload is of the page on screen (click_reload, a form sent again,
+    // and location.reload(), which only the page on screen's asks reach):
+    // its document.referrer goes with it, though its Referer did not.
+    if (kind == NAV_RELOAD)
+        os64_strcopy(g.stream.kept_referrer, sizeof(g.stream.kept_referrer),
+                     yonder_scripts_document_referrer(g.page.scripts));
     timing_start(&g.stream.timing, kind);
     if (request != NULL) {
         g.stream.has_fragment = request->has_fragment;
@@ -7442,10 +7458,42 @@ static bool history_update(void *opaque, const char *url, const char *state, siz
 static bool history_fragment(void *opaque, const char *url, bool replace);
 static uint32_t history_length(void *opaque);
 
+// document.activeElement's and hasFocus()'s answer for the page whose
+// document is `opaque`: the element focused in it (the window keeps focus
+// in the page on screen's document alone), and whether it is the page on
+// screen. Whether the window itself has the person's focus is not
+// followed (DEBTS.md), so the page on screen always says it has.
+static bool script_focus(void *opaque, const os64_html_node_t **focused)
+{
+    *focused = g.focus_node != NULL && g.focus_doc == opaque ? g.focus_node : NULL;
+    return opaque == page_doc(&g.page);
+}
+
+// What the arriving page's document says of its own request: its referrer,
+// the Referer that request carried (way_referrer from the page it was asked
+// for from to the address it arrived from, "" for none) or, for a Reload,
+// the reloaded page's own; and its Last-Modified (0 for none or a date
+// that does not read).
+static void stream_request_facts(char *referrer, size_t cap, int64_t *modified)
+{
+    os64_url_t to;
+    referrer[0] = '\0';
+    if (g.stream.kept_referrer[0] != '\0')
+        os64_strcopy(referrer, cap, g.stream.kept_referrer);
+    else if (g.stream.referrer[0] == '\0' || os64_url_parse(g.stream.head.url, &to) != OS64_URL_OK ||
+             !way_referrer(g.stream.referrer, &to, referrer, cap))
+        referrer[0] = '\0';
+    if (!way_cookie_date(g.stream.head.last_modified, os64_strlen(g.stream.head.last_modified), modified))
+        *modified = 0;
+}
+
 static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state_t *state,
                                       const char *url, bool encrypted, uint64_t serial,
                                       yonder_diag_t *diag, bool modern)
 {
+    char referrer[OS64_URL_REF_MAX];
+    int64_t modified;
+    stream_request_facts(referrer, sizeof(referrer), &modified);
     yonder_scripts_options_t options = {
         .url = url, .execution_ms = g.script_ms, .serial = serial, .alert = script_alert,
         .fetch = script_fetch, .cancel = script_cancel, .activate = script_activate,
@@ -7454,7 +7502,8 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
         .history = {history_update, history_fragment, history_length, doc},
         .diag = diag, .encrypted = encrypted, .modern = modern,
         .storage = s_storage, .timing = &g.stream.timing, .screen = s_screen, .zoom = script_zoom,
-        .request = script_request, .run = script_run, .release = script_release};
+        .request = script_request, .run = script_run, .release = script_release,
+        .referrer = referrer, .last_modified = modified, .focus = script_focus};
     yonder_scripts_t *host = yonder_scripts_new(doc, state, &options);
     yonder_scripts_set_user_agent(host, script_user_agent, NULL);
     const os64_dom_cookies_t cookies = {script_cookies_get, script_cookies_set, host};

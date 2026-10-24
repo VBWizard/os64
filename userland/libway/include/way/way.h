@@ -251,6 +251,9 @@ typedef struct {
     // when every one stayed on the origin of the address asked for, and 0
     // when there were none or any left it. way_open's alone.
     uint32_t redirects;
+    // The response's Last-Modified as written, "" when it sent none
+    // (document.lastModified reads it).
+    char last_modified[OS64_FETCH_KEEP_FIELD];
 } way_head_t;
 
 // A fetch open with its head read and judged a page. The fetch is the

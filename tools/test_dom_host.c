@@ -229,6 +229,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_fetch.inc"
 #include "test_dom_window.inc"
 #include "test_dom_report.inc"
+#include "test_dom_document.inc"
 #define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
     "function throws(n,f){let ok=false;try{f()}catch(e){ok=e.name===n}assert(ok,n)}"
 
@@ -399,6 +400,7 @@ int main(int argc, char **argv)
     if(argc==2&&!strcmp(argv[1],"--window-reads")){dom_window_read_timing();return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--window")){dom_window_cases();printf("DOM window probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--report")){dom_report_cases();dom_report_sweep_cases();printf("DOM report probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
+    if(argc==2&&!strcmp(argv[1],"--document")){dom_document_cases();printf("DOM document probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--events")){dom_event_cases();printf("DOM events probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     if(argc==2&&!strcmp(argv[1],"--modern")){dom_modern_cases();dom_storage_cases();dom_base64_cases();dom_encoding_cases();dom_screen_cases();dom_performance_cases();dom_url_cases();dom_storage_engine_cases();dom_fetch_cases();printf("DOM modern probe: %u checks, %u failed\n",checks,failures);return failures?1:0;}
     bool mutation_mode=argc==2&&!strcmp(argv[1],"--mutants");
@@ -415,6 +417,7 @@ int main(int argc, char **argv)
     dom_fetch_cases();
     dom_window_cases();
     dom_report_cases();
+    dom_document_cases();
     dom_geometry_cases();
     dom_global_miss_cases();
     dom_surface_cases();

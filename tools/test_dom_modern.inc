@@ -60,7 +60,10 @@ static void modern_names_free(char **names, size_t n)
  * (each prototype's `constructor` and Node's constants, the interface
  * row's; onscroll, onresize and the document's scrollingElement, the
  * view's; its defaultView, getComputedStyle's; the document's onerror, the
- * error row's; Symbol.toStringTag is a symbol, which no list of names
+ * error row's; P1-Da's members of a document's prototype, which the
+ * document row puts there and window never sees, left out of a document's
+ * levels alone, since an element's hidden, dir and title are its own and
+ * every page's; Symbol.toStringTag is a symbol, which no list of names
  * holds).
  * malloc'd; NULL when the script did not run. */
 static char *modern_chain_shape(DomFixture *f)
@@ -73,9 +76,14 @@ static char *modern_chain_shape(DomFixture *f)
         "document.doctype,document.implementation,document.implementation.createHTMLDocument('')];"
         "var row=/(^constructor$|_NODE$|^DOCUMENT_POSITION_|^onscroll$|^onresize$|^scrollingElement$|^defaultView$"
         "|^onerror$)/;"
+        "var documentRow=/^(readyState|onreadystatechange|visibilityState|hidden|onvisibilitychange|referrer|"
+        "activeElement|hasFocus|currentScript|title|prerendering|onprerenderingchange|domain|URL|documentURI|"
+        "wasDiscarded|compatMode|dir|characterSet|charset|inputEncoding|contentType|lastModified|rootElement|"
+        "clear)$/;"
         "globalThis.chainShape=nodes.map(function(n){var levels=[];"
         "for(var p=Object.getPrototypeOf(n);p&&p!==Object.prototype;p=Object.getPrototypeOf(p))"
-        "levels.push(Object.getOwnPropertyNames(p).filter(function(k){return !row.test(k)}).sort().join(','));"
+        "levels.push(Object.getOwnPropertyNames(p).filter(function(k){"
+        "return !row.test(k)&&!(n.nodeType===9&&documentRow.test(k))}).sort().join(','));"
         "return levels.join(' / ')}).join('\\n');", "modern-chain-shape"))
         return NULL;
     os64_js_outcome_t outcome;

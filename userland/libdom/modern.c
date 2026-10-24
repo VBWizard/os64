@@ -69,6 +69,11 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"onerror", "onunhandledrejection", "onrejectionhandled", "reportError", "ErrorEvent",
                            "PromiseRejectionEvent", NULL},
      d_report_install},
+    /* P1-Da: the document's state reads, members of Document's prototype
+     * and none of window's, so the row lists no name; the DOM host's chain
+     * shape holds them instead (tools/test_dom_modern.inc). */
+    {(const char *const[]){NULL}, d_document_install},
+    {(const char *const[]){"CustomEvent", NULL}, d_custom_event_install},
 };
 
 int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)

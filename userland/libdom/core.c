@@ -375,8 +375,10 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
         if (dom->url == NULL) goto fail;
         os64_memcpy(dom->url, selected.url, size);
     }
-    /* The page's address is the binding's own copy from here on. */
+    /* The page's address is the binding's own copy from here on, and so is
+     * its referrer (document.c). */
     dom->options.url = NULL;
+    if (d_document_setup(dom) < 0) goto fail;
     JSValue global = JS_GetGlobalObject(ctx);
     if (JS_IsException(global)) goto fail;
     /* The document's wrapper is made now and held by `document`'s getter:
@@ -456,6 +458,7 @@ void os64_dom_free(os64_dom_t *dom)
     d_timer_free(dom);
     d_fetch_free(dom);
     d_window_free(dom);
+    d_document_free(dom);
     d_view_free(dom);
     d_storage_free(dom);
     d_attr_table_free(dom);

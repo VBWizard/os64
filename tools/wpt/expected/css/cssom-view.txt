@@ -27,6 +27,7 @@ scrollingElement.html	needs iframe: every case is a document in one
 GetBoundingRect.html	getBoundingClientRect
 HTMLBody-ScrollArea_quirksmode.html	Ensure that body element is loaded.
 HTMLBody-ScrollArea_quirksmode.html	Ensure that style.overflowY can be set properly.
+HTMLBody-ScrollArea_quirksmode.html	document.compatMode should be BackCompat in quirks.
 HTMLBody-ScrollArea_quirksmode.html	document.scrollingElement should be body element in quirks.
 HTMLBody-ScrollArea_quirksmode.html	scrollingElement in quirks should be body if any of document and body has a visible overflow.
 HTMLBody-ScrollArea_quirksmode.html	scrollingElement in quirks should be null when body is potentially scrollable.

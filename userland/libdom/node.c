@@ -202,7 +202,7 @@ static bool filename_input(const os64_html_node_t *node)
 /* A document's element: its element child, which is the window's
  * document's `html` once the parser has seated it. Read from the tree
  * either way, so a document of its own has one too. */
-static const os64_html_node_t *document_element(const os64_html_node_t *document)
+const os64_html_node_t *d_document_element(const os64_html_node_t *document)
 {
     const os64_html_node_t *at = document->first_child;
     while (at != NULL && at->kind != OS64_HTML_ELEMENT) at = at->next;
@@ -211,9 +211,9 @@ static const os64_html_node_t *document_element(const os64_html_node_t *document
 
 /* Its head or body (HTML § 3.1): the first such child of its element, when
  * that element is an HTML `html`; a frameset is a body. */
-static const os64_html_node_t *document_part(const os64_html_node_t *document, bool body)
+const os64_html_node_t *d_document_part(const os64_html_node_t *document, bool body)
 {
-    const os64_html_node_t *html = document_element(document);
+    const os64_html_node_t *html = d_document_element(document);
     if (html == NULL || html->ns != OS64_HTML_NS_HTML || html->tag != OS64_HTML_TAG_HTML)
         return NULL;
     for (const os64_html_node_t *at = html->first_child; at != NULL; at = at->next)
@@ -368,8 +368,9 @@ static JSValue property(JSContext *ctx, JSValueConst self, int argc,
         return node_name(dom, ctx, node);
     case D_DOCUMENT_ELEMENT: case D_HEAD: case D_BODY:
         if (node->kind != OS64_HTML_DOCUMENT) return JS_ThrowTypeError(ctx, "Document getter requires a document");
-        return d_wrap(dom, ctx, magic == D_DOCUMENT_ELEMENT ? document_element(node) :
-                               document_part(node, magic == D_BODY));
+        if (set) return d_body_set(dom, ctx, node, value);
+        return d_wrap(dom, ctx, magic == D_DOCUMENT_ELEMENT ? d_document_element(node) :
+                               d_document_part(node, magic == D_BODY));
     default: return JS_ThrowTypeError(ctx, "Unknown DOM property");
     }
 }
@@ -530,7 +531,7 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
             d_string_free(dom, &string);
             return d_error(ctx, "InvalidCharacterError", "Invalid element name");
         }
-        if (type == D_DOCUMENT_XML) {
+        if (type == D_DOCUMENT_XML || type == D_DOCUMENT_SVG) {
             d_string_free(dom, &string);
             return d_error(ctx, "NotSupportedError",
                            "This XML document's createElement would make an element in no namespace, "
@@ -624,7 +625,7 @@ int d_node_install(os64_dom_t *dom, JSContext *ctx)
         {"firstElementChild", D_FIRST_ELEMENT, false}, {"lastElementChild", D_LAST_ELEMENT, false},
         {"previousElementSibling", D_PREV_ELEMENT, false}, {"nextElementSibling", D_NEXT_ELEMENT, false},
         {"nodeType", D_TYPE, false}, {"nodeName", D_NAME, false}, {"tagName", D_TAG, false},
-        {"documentElement", D_DOCUMENT_ELEMENT, false}, {"head", D_HEAD, false}, {"body", D_BODY, false},
+        {"documentElement", D_DOCUMENT_ELEMENT, false}, {"head", D_HEAD, false}, {"body", D_BODY, true},
         {"textContent", D_TEXT_CONTENT, true}, {"nodeValue", D_NODE_VALUE, true}, {"data", D_DATA, true},
         {"innerHTML", D_INNER_HTML, true}, {"outerHTML", D_OUTER_HTML, false},
         {"id", D_ID, true}, {"className", D_CLASS, true}, {"value", D_VALUE, true},

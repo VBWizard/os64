@@ -47,7 +47,9 @@
  * any page, and a run without it cannot be judged), and everything else
  * fails as a fetch that did not arrive does. A script's request is
  * answered as WPT's server answers a static file, with the headers of its
- * `.headers` sidecar; one for a file that is not there is a 404. Pictures
+ * `.headers` sidecar; one for a file that is not there is a 404. The
+ * page's own head carries its sidecar's Last-Modified, the one header of
+ * its head a document reads (document.lastModified). Pictures
  * and fonts always fail. The bytes are served as they are on disk, which
  * WPT writes in UTF-8, but for a `.sub.` file, whose host and port
  * templates are filled in (wpt_substitute).
@@ -899,6 +901,22 @@ static void wpt_run(const wpt_page_t *page, wpt_outcome_t *out) {
     }
     way_head_t h=stream_head("text/html","",false);
     os64_strcopy(h.url,sizeof(h.url),url);
+    /* The page's own head says what its `.headers` sidecar says of the
+     * one header a document reads from its head, Last-Modified
+     * (document.lastModified). */
+    if(page->kind==WPT_HTML) {
+        size_t sn=0, scap=64;
+        char *side=wpt_fmt("%s.headers",page->source), *lines=wpt_must(malloc(scap));
+        lines[0]='\0';
+        wpt_sidecar(side,&lines,&sn,&scap);
+        for(char *at=lines;*at;at+=strcspn(at,"\r\n"),at+=strspn(at,"\r\n"))
+            if(strncasecmp(at,"Last-Modified:",14)==0) {
+                const char *v=at+14+strspn(at+14," \t");
+                size_t vn=strcspn(v,"\r\n");
+                if(vn<sizeof(h.last_modified)) { memcpy(h.last_modified,v,vn); h.last_modified[vn]='\0'; }
+            }
+        free(side); free(lines);
+    }
     yonder_mail_post_head(g.stream.mail,&h);
     stream_post_body((const uint8_t *)html,len,YONDER_STREAM_CHUNK);
     stream_post_verdict(true,OS64_FETCH_OK,"");

@@ -59,6 +59,17 @@ typedef struct {
     uint32_t redirects;
 } os64_dom_timing_t;
 
+/* A document's readiness (HTML § Current document readiness), what
+ * document.readyState reads. */
+typedef enum {
+    OS64_DOM_LOADING = 0,
+    OS64_DOM_INTERACTIVE,
+    OS64_DOM_COMPLETE
+} os64_dom_readiness_t;
+
+/* Last-Modified's absence (os64_dom_options_t.last_modified). */
+#define OS64_DOM_NO_DATE INT64_MIN
+
 /* What a script asked the host to do to a node, after its task. These reach
  * widgets and the model, which a script's task must not. */
 typedef enum {
@@ -147,6 +158,28 @@ typedef struct {
      * wrote then is never handed to the page. On the owner thread, inside
      * a script's task; it must not enter JS. NULL refuses every ask. */
     bool (*entropy)(void *opaque, uint8_t *out, size_t length);
+    /* P1-Da, the document's state (WINDOW_DOCUMENT.md § P1-Da). Each is
+     * the window's document's; a document of its own answers what HTML
+     * gives a document with no browsing context.
+     * readiness: what the document's readiness is as the binding is made;
+     * from then on the host's own DOMContentLoaded and load dispatches
+     * move it (os64_dom_readiness_after). A binding made during the parse
+     * is LOADING, the zero value; one made after the page's load, COMPLETE.
+     * referrer: document.referrer, the Referer the document's own request
+     * carried (NULL or "" for none), copied.
+     * last_modified: the response's Last-Modified, seconds since the Unix
+     * epoch, OS64_DOM_NO_DATE when it said none (document.lastModified
+     * then reads the time it is asked, as HTML says).
+     * focus: what has focus, asked at every read of document.activeElement
+     * and hasFocus(): the element focused in the window's document, or
+     * NULL, into *focused (borrowed for the call), answering whether the
+     * document has the system's focus. On the owner thread, inside a
+     * script's task; it must not enter JS. NULL: nothing has focus, and
+     * neither has the document. */
+    os64_dom_readiness_t readiness;
+    const char *referrer;
+    int64_t last_modified;
+    bool (*focus)(void *opaque, const os64_html_node_t **focused);
     void *host_opaque;
 } os64_dom_options_t;
 
@@ -154,7 +187,7 @@ static inline os64_dom_options_t os64_dom_default_options(void)
 {
     const os64_dom_options_t options = {
         .max_bytes = OS64_DOM_DEFAULT_MAX_BYTES, .scripting = true, .modern = true,
-        .screen = {1024, 768, 1024, 768, 24}
+        .screen = {1024, 768, 1024, 768, 24}, .last_modified = OS64_DOM_NO_DATE
     };
     return options;
 }
@@ -596,17 +629,40 @@ size_t os64_dom_registry_count(const os64_dom_t *dom);
  * unhandled rejection (the rejections after it told to options.failed), else a reported error
  * from a nested dispatch, else OK; a sticky status means the runtime is
  * finished with. *prevented answers whether the default action is cancelled.
- * Owner thread, between tasks. Costs no engine entry when listens() says no. */
+ * Owner thread, between tasks. Costs no engine entry when listens() says no.
+ * A dispatch that moves the document's readiness (os64_dom_readiness_after)
+ * moves it first, whether or not anything listens to the event itself, and
+ * with the Modern Web switch on fires readystatechange at the document as
+ * a task of its own just before it, the two outcomes folded into one (the
+ * first failure, a sticky one over one that is not); a sticky outcome of
+ * readystatechange's ends the dispatch there. */
 os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node,
                                    const os64_dom_event_t *event, bool *prevented,
                                    os64_js_outcome_t *outcome);
+/* HTML's readiness steps as the host's dispatches make them: DOMContentLoaded
+ * at `doc`'s document node moves LOADING to INTERACTIVE, and load at window
+ * (node NULL) moves either to COMPLETE; anything else leaves `now` as it is.
+ * Pure, and the one copy of the rule: os64_dom_dispatch moves the binding's
+ * readiness by it, and a host that makes its binding late (a page's first
+ * script after its load) keeps the readiness it hands over by it. */
+os64_dom_readiness_t os64_dom_readiness_after(os64_dom_readiness_t now, const os64_html_document_t *doc,
+                                              const os64_html_node_t *node, const char *type);
+/* document.currentScript (HTML § Document.currentScript): the classic script
+ * element the host is about to run, set before it runs and set back to
+ * NULL after it and the microtask checkpoint that ends its run (a host
+ * that runs a script inside another's run sets back the outer one). The binding holds the node while it is set. A node that
+ * is not of the binding's arena, or not an element, sets nothing. Owner
+ * thread, outside JS callbacks. */
+void os64_dom_set_current_script(os64_dom_t *dom, const os64_html_node_t *script);
 /* Whether anything on the page could hear `type`: a listener, a handler
  * property, or an on<type> content attribute in the document. O(1) unless the
  * tree moved since the last answer, when the attributes are counted again.
- * The types counted are the ones the host dispatches, the error,
- * unhandledrejection and rejectionhandled the binding fires at window, and
- * online, offline and languagechange, which window has handlers for and
- * nothing fires; any other type is not counted and answers true. */
+ * The types counted are the ones the host dispatches; the error,
+ * unhandledrejection and rejectionhandled the binding fires at window;
+ * readystatechange, which the binding fires at the document; and online,
+ * offline, languagechange, visibilitychange and prerenderingchange, which
+ * window or the document has handlers for and nothing fires. Any other type
+ * is not counted and answers true. */
 bool os64_dom_listens(os64_dom_t *dom, const char *type);
 /* Which event types the document's on<type> content attributes name, as a
  * mask os64_dom_handler_bit reads: the walk os64_dom_listens counts with.
@@ -615,7 +671,9 @@ bool os64_dom_listens(os64_dom_t *dom, const char *type);
  * says; os64_dom_listens counts them only with the switch on. */
 uint32_t os64_dom_handler_attributes(const os64_html_document_t *doc);
 /* The bit for `type` in that mask; 0 for a type no attribute can name
- * (DOMContentLoaded, or one outside the types os64_dom_listens counts). */
+ * (DOMContentLoaded; readystatechange, visibilitychange and
+ * prerenderingchange, whose handlers are the document's IDL properties
+ * alone; or one outside the types os64_dom_listens counts). */
 uint32_t os64_dom_handler_bit(const char *type);
 
 /* TIMERS, in the host's clock (options.now_ms). next answers the earliest due

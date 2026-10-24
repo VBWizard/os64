@@ -58,6 +58,9 @@ WPT_DIRS=(
     html/webappapis/scripting
     secure-contexts
     WebCryptoAPI
+    page-visibility
+    html/interaction/focus
+    dom/events
 )
 
 top=$(git rev-parse --show-toplevel)
