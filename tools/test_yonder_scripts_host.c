@@ -3722,6 +3722,11 @@ static void unshown_back_case(const char *when, const char *script) {
     loop_settle();
     view_turns();
     if(g.stream.active) {                   // `load`'s Back fetches P
+        const yonder_trip_t *t=pool_work.job;
+        char who[160];
+        os64_snprintf(who,sizeof(who),"unshown back: history.back() %s is the page's own, nobody's",when);
+        check(t!=NULL && t->kind==YONDER_JOB_TRIP && !t->metadata.activation &&
+              t->metadata.site==WAY_SITE_SAME_ORIGIN,who);
         post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
         loop_settle();
         view_turns();
