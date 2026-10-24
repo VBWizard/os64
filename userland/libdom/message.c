@@ -6,8 +6,9 @@
  * (WINDOW_DOCUMENT.md § P2b). It is IFRAME.md's postMessage (§ The cluster
  * and the window proxy) with the target the caller: no frame and no other
  * window exists for a page here to name, so every message a window posts
- * is to itself, and each step below takes the window it posts to and the
- * one that posted, which are the same binding today.
+ * is to itself. Each step below still takes the window it posts to and the
+ * window that posted as two things, which here are one binding, so frames
+ * add the second realm and change no step's shape.
  *
  *   - postMessage(message, targetOrigin, transfer) and postMessage(message,
  *     {transfer, targetOrigin}): targetOrigin "*" is any document, "/" the

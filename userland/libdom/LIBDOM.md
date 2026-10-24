@@ -340,8 +340,9 @@ here fires (§ P1-W's rows); window has `onerror`,
 `onunhandledrejection` and `onrejectionhandled` and the document `onerror`,
 whose events the binding fires for a script's failures (§ P2a's rows; an
 `onerror` content attribute on any element is a handler for an `error`
-event dispatched at it, though no element has the property); and a
-document alone has `onreadystatechange`, `onvisibilitychange` and
+event dispatched at it, though no element has the property); window has
+`onmessage` and `onmessageerror`, whose events a posted message's task
+fires (§ P2b's rows); and a document alone has `onreadystatechange`, `onvisibilitychange` and
 `onprerenderingchange`, which HTML gives no content attribute, so no
 element's attribute of that name is a handler (§ P1-Da's rows). With it
 off none of these is a property, and
@@ -366,8 +367,8 @@ handling); its attribute compiles as a function of `event`, `source`,
 `lineno`, `colno` and `error`.
 The body's window-reflecting handlers (`load`, `focus`, `blur`, and with the
 switch on `scroll`, `resize`, `popstate`, `hashchange`, `online`, `offline`,
-`languagechange`, `error`, `unhandledrejection` and `rejectionhandled`) are
-window's. For the ones every element has a
+`languagechange`, `error`, `unhandledrejection`, `rejectionhandled`,
+`message` and `messageerror`) are window's. For the ones every element has a
 property for (`load`, `focus`, `blur`, `scroll`, `resize`) that is so from
 `<body onload>` and `document.body.onload` alike; for the others it is so
 from the body's content attribute only, since the body has no such IDL
@@ -626,7 +627,10 @@ and `tools/test_dom_mutants.py --only attr-` a mutant per rule;
 `tools/test_dom_window.inc` a case per rule of § P1-W's rows;
 `tools/test_dom_document.inc` of § P1-Da's rows; and
 `tools/test_dom_report.inc` a case per rule of § P2a's rows, and every
-allocation a failure's events make refused in turn. `domtest` exercises
+allocation a failure's events make refused in turn; and
+`tools/test_dom_message.inc` a case per rule of § P2b's rows, the bounds
+a page can size, and every binding and engine allocation of a clone, a
+message and an idle callback refused in turn. `domtest` exercises
 the shared-library boundary and heap in ring 3. These are library proofs; yonder's loop is proven with its own
 harness. Result counts are recorded in DOM.md after the final source freeze.
 
@@ -876,8 +880,8 @@ for a removal.
 100 µs, on the host's microsecond clock (`options.now_us`) against the
 navigation's origin (`options.timing`, read as the binding is made); User
 Timing's `mark`, `measure` (the L3 dictionary too), the entry lists and
-`clearMarks`/`clearMeasures`, `detail` a structured clone of plain data
-(DataCloneError otherwise); the legacy `timing` and `navigation` objects
+`clearMarks`/`clearMeasures`, `detail` a structured clone (§ P2b's rows;
+DataCloneError for what one refuses); the legacy `timing` and `navigation` objects
 and a `navigation` entry, which read the host's milestones whenever asked.
 The entry buffer is an engine object with no prototype that no page is
 handed, counted in C. Nothing else is recorded; there is no
@@ -1195,8 +1199,9 @@ the document's handler slots (§ Events).
 **`CustomEvent`** (`event.c`) and its `detail` and `initCustomEvent`, the
 detail held in the Event's own record and traced with it. With the switch
 on, `document.createEvent` reads DOM's table without regard to ASCII case:
-`Event` (and `Events`, `HTMLEvents`, `SVGEvents`), `CustomEvent` and
-`HashChangeEvent` are made as themselves, a name off the table is a
+`Event` (and `Events`, `HTMLEvents`, `SVGEvents`), `CustomEvent`,
+`HashChangeEvent` and `MessageEvent` (§ P2b's rows) are made as
+themselves, a name off the table is a
 NotSupportedError, `TouchEvent` too (a desktop does not expose the legacy
 touch APIs), and the table's names whose interfaces are not built (MouseEvent,
 UIEvent, KeyboardEvent and the rest) make a plain Event, as every name did
@@ -1205,3 +1210,90 @@ before (MODERN_WEB.md § P1-Da, as built, says why).
 The classic fix beside them is every page's, the switch on or off:
 `document.body`'s setter (HTML § 3.1.4), which replaces the body or appends
 one to the root, through the verbs appendChild uses.
+
+### P2b's rows: clone, message, idle
+
+Three rows (MODERN_WEB.md § P2b, as built; WINDOW_DOCUMENT.md § P2b is the
+plan): `structuredClone` (`clone.c`); `postMessage`, `onmessage`,
+`onmessageerror` and `MessageEvent` (`message.c`, and the interface in
+`event.c`); `requestIdleCallback`, `cancelIdleCallback` and `IdleDeadline`
+(`idle.c`). Each file's header has its contract whole.
+
+**The structured clone** is HTML's StructuredSerializeWithTransfer and
+StructuredDeserializeWithTransfer, the binding's one copy of them:
+`structuredClone`, `postMessage` and a performance mark's `detail` all go
+through `d_clone_write` and `d_clone_read`. The record is no realm's: what
+it holds (primitives, property keys as atoms, bytes) is the runtime's,
+which every realm of a page shares, so the writer reads in the caller's
+realm and the reader builds in the target's, each through the intrinsics
+its own binding took before any page ran (`d_clone_setup`), as IFRAME.md's
+postMessage across realms needs. Cloned: the primitives (a lone surrogate
+kept), the Boolean, Number, BigInt and String objects, Date, RegExp (source
+and flags; `lastIndex` 0 again), ArrayBuffer (a resizable one keeps its
+maximum), every typed array and DataView (sharing their buffer as they
+shared it), Map and Set in order, Error and its six native kinds (name,
+message, and an own `cause` and `stack`), arrays (length, holes and
+non-index properties) and ordinary objects (each own enumerable
+string-keyed property read with [[Get]], so getters run, in
+[[OwnPropertyKeys]] order, a key a getter deleted first skipped), Blob,
+File and DOMException. A value met twice is one value in the copy. Anything
+else is a DataCloneError: a Symbol, a function, a Proxy, a
+SharedArrayBuffer (no page here is cross-origin isolated), a detached
+buffer, a view out of bounds, a Promise and the other objects with
+internal state, and every other platform object (`location`, `history` and
+`navigator`, ordinary objects in this binding, among them). The transfer
+list's ArrayBuffers (any other value, a duplicate or a detached one is a
+DataCloneError, a primitive a TypeError) are detached once the value is
+written, all of them checked first so a refusal detaches none. A
+length-tracking view's copy tracks no length (DEBTS.md). The record is
+engine memory, charged as the page's values are; both walks are
+iterative, with an address-keyed memory that holds what it has met, so a
+graph's depth costs no C stack and a page sizes linear work.
+
+**Posted messages.** `postMessage(message, targetOrigin, transfer)` and
+`postMessage(message, {transfer, targetOrigin})` post to the window whose
+member it is, which is the caller's own: no other window exists for a page
+here to name. `targetOrigin` is `*`, `/` (the default, the poster's
+origin) or a URL whose origin it is (anything else a SyntaxError, before
+the message is read); then the message is cloned in the poster's realm and
+queued at the target window, one task each, oldest first. The host runs
+them (`os64_dom_message_next` says when the oldest was posted, so a host
+can order them among its timers by time; `os64_dom_message_fire` runs
+one). A message whose targetOrigin the document's origin does not match
+as the task runs, or that nothing could hear, is dropped without a word
+and without entering the engine; else the clone is read in the target's
+realm and a MessageEvent `message` fired at window, with its data, the
+poster's origin, the poster's window as `source`, `lastEventId` "" and an
+empty frozen `ports`; a copy the realm cannot make fires `messageerror`
+instead. A message a message's task posts is a later task. The queue's
+nodes are the binding's memory; the poster's window each message holds is
+the registry's sixth list. **MessageEvent**'s constructor reads its init's
+members in name order (`data`, `lastEventId`, `origin`, `ports`, `source`);
+`ports` must be empty, there being no MessagePort, and `source` must be the
+window or null; `initMessageEvent` too, and `createEvent('MessageEvent')`
+makes one.
+
+**Idle callbacks.** `requestIdleCallback(callback, {timeout})` answers a
+handle and puts the callback on the window's list; `cancelIdleCallback`
+takes it off. The host says when its loop is idle (`os64_dom_idle_run`),
+and the binding runs one callback a call, as a task: when the page has no
+timer due and no message queued, it opens an idle period if none is open
+and one may start, every callback asked for until then becoming runnable,
+and runs the oldest while the period's deadline has not passed. The
+deadline is HTML's computeDeadline, read again at every
+`IdleDeadline.timeRemaining()`: 50 ms after the period began, or the
+window's next timer if that is sooner. A callback asked for during a
+period's callback waits for the next period, which starts no sooner than
+50 ms after the one it was asked in (Chromium's rule, so one that asks for
+itself again runs once a period, never once a turn of the host's loop);
+any other lets the next period start at once (`os64_dom_idle_next` says
+when one may run). A timeout is a timer of the window's (§ Timers), so it
+counts among the 4096 and wakes the host as a timer does: it calls the
+callback, `didTimeout` true and `timeRemaining()` 0, unless a period ran it
+first, which cancels the timer. A callback is called with `this` the
+window; what it throws is its script's failure (§ P2a's rows). The entries
+are one array in request order, so in handle order: a cancel or a timeout
+finds its entry by binary search, and the holes run and cancelled entries
+leave are closed up once they outnumber the entries. The entries are the
+binding's memory (a page's flood of requests ends in QuotaExceededError);
+their callbacks are the registry's seventh list.
