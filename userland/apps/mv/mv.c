@@ -5,7 +5,6 @@
 #include "os64/os64.h"
 
 #define MV_PATH_MAX     256
-#define MV_MAX_OPERANDS 512
 
 typedef struct {
     bool interactive;
@@ -88,7 +87,12 @@ int main(int argc, char **argv)
 {
     mv_options_t options = {0};
     os64_args_t args = {0};
-    const char *operands[MV_MAX_OPERANDS] = {0};
+    const char **operands = os64_malloc((size_t)argc * sizeof(*operands));
+    if (operands == NULL)
+    {
+        os64_hprintf(OS64_STDERR, "mv: out of memory\n");
+        return 2;
+    }
     const os64_optspec_t specs[] = {
         {'i', "interactive", false, "ask before overwriting a file",
          .flag = &options.interactive},
@@ -101,15 +105,21 @@ int main(int argc, char **argv)
     args.details = "Multiple SOURCE operands require DEST to be a directory.";
 
     int32_t operandCount = os64_args_parse(
-        &args, "mv [-iv] SOURCE... DEST", operands, MV_MAX_OPERANDS);
+        &args, "mv [-iv] SOURCE... DEST", operands, argc);
     if (operandCount == OS64_ARG_HELP)
+    {
+        os64_free(operands);
         return 0;
+    }
     if (operandCount < 0)
+    {
+        os64_free(operands);
         return 2;
+    }
     if (operandCount < 2)
     {
         os64_hprintf(OS64_STDERR, "mv: missing source or destination operand\n");
-        os64_args_help(&args, "mv [-iv] SOURCE... DEST");
+        os64_free(operands);
         return 2;
     }
 
@@ -122,6 +132,7 @@ int main(int argc, char **argv)
     if (sourceCount > 1 && !targetIsDirectory)
     {
         os64_hprintf(OS64_STDERR, "mv: target '%s' is not a directory\n", target);
+        os64_free(operands);
         return 1;
     }
 
@@ -149,5 +160,6 @@ int main(int argc, char **argv)
             returnCode = 1;
     }
 
+    os64_free(operands);
     return returnCode;
 }

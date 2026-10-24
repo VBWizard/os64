@@ -17,7 +17,6 @@
 
 #define GZIP_IO_SIZE      (64u * 1024u)
 #define GZIP_PATH_MAX     512u
-#define GZIP_MAX_OPERANDS 512
 
 typedef struct {
     bool to_stdout;
@@ -310,7 +309,12 @@ static int encode_path(const char *path, const gzip_options_t *options)
 int main(int argc, char **argv)
 {
     gzip_options_t options = {0};
-    const char *operands[GZIP_MAX_OPERANDS] = {0};
+    const char **operands = os64_malloc((size_t)argc * sizeof(*operands));
+    if (operands == NULL)
+    {
+        os64_hprintf(OS64_STDERR, "gzip: out of memory\n");
+        return 2;
+    }
     const os64_optspec_t specs[] = {
         {'c', "stdout", false, "write compressed data to standard output",
          .flag = &options.to_stdout},
@@ -327,14 +331,21 @@ int main(int argc, char **argv)
                    "original is removed only after safe publication.";
 
     int32_t operand_count = os64_args_parse(
-        &args, "gzip [-cfk] [FILE ...]", operands, GZIP_MAX_OPERANDS);
+        &args, "gzip [-cfk] [FILE ...]", operands, argc);
     if (operand_count == OS64_ARG_HELP)
+    {
+        os64_free(operands);
         return 0;
+    }
     if (operand_count < 0)
+    {
+        os64_free(operands);
         return 2;
+    }
 
     if (operand_count == 0) {
         uint64_t ignored = 0;
+        os64_free(operands);
         return encode_handle(OS64_STDIN, OS64_STDOUT, "standard input", 0,
                              &ignored) == 0 ? 0 : 1;
     }
@@ -347,5 +358,6 @@ int main(int argc, char **argv)
         if (result < 0)
             return_code = 1;
     }
+    os64_free(operands);
     return return_code;
 }

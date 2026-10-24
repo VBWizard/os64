@@ -1,13 +1,14 @@
 // args.c — libos64 argument parsing. The design case against getopt is in
 // os64/args.h; this file is just the small machine that honors it.
 //
-// Pure computation over caller-owned state: no syscalls (except in
-// os64_args_help, which prints), no allocation, argv never modified. Like
+// Computation over caller-owned state, with output for help and parse errors:
+// no allocation, argv never modified. Like
 // fmt.c, that makes it host-testable with plain gcc — tools/test_fmt_host.c
 // drives both.
 
 #include "os64/args.h"
 #include "os64/fmt.h"
+#include "os64/io.h"
 
 static int a_streq_n(const char *a, const char *b, size_t n)
 {
@@ -201,13 +202,14 @@ int32_t os64_args_next(os64_args_t *a)
 // The whole-loop convenience (contract and design case in args.h): drive
 // os64_args_next to END, landing each result where it belongs — flags through
 // spec->flag, values through spec->value_out, positionals into the caller's
-// array — and handling help/error by printing help and returning the sentinel.
-// Still pure computation plus os64_args_help's printing; still host-testable.
+// array. Help goes to stdout; errors identify the offending argument on stderr.
+// Both return a sentinel. No allocation; host-testable with output captured.
 int32_t os64_args_parse(os64_args_t *a, const char *usage,
                         const char **positionals, int32_t max_positionals)
 {
 	int32_t npos = 0;
 	int32_t r;
+	const char *program = a->argc > 0 ? a->argv[0] : "command";
 
 	while ((r = os64_args_next(a)) != OS64_ARG_END)
 	{
@@ -216,7 +218,9 @@ int32_t os64_args_parse(os64_args_t *a, const char *usage,
 		case OS64_ARG_POSITIONAL:
 			if (npos >= max_positionals)
 			{
-				os64_args_help(a, usage);
+				os64_hprintf(OS64_STDERR,
+				             "%s: too many operands (maximum %d); unexpected '%s'\n",
+				             program, max_positionals, a->value);
 				return OS64_ARG_ERROR;
 			}
 			positionals[npos++] = a->value;
@@ -227,7 +231,8 @@ int32_t os64_args_parse(os64_args_t *a, const char *usage,
 			return OS64_ARG_HELP;
 
 		case OS64_ARG_ERROR:
-			os64_args_help(a, usage);
+			os64_hprintf(OS64_STDERR, "%s: invalid or incomplete option: '%s'\n",
+			             program, a->value);
 			return OS64_ARG_ERROR;
 
 		default:
@@ -244,7 +249,14 @@ int32_t os64_args_parse(os64_args_t *a, const char *usage,
 				// A destination-less spec under parse is the PROGRAM's bug
 				// (the option would be silently swallowed) — fail loudly so
 				// it's found on the first run, not by a confused user.
-				os64_args_help(a, usage);
+				if (spec->name != NULL)
+					os64_hprintf(OS64_STDERR,
+					             "%s: internal error: option '--%s' has no destination\n",
+					             program, spec->name);
+				else
+					os64_hprintf(OS64_STDERR,
+					             "%s: internal error: option '-%c' has no destination\n",
+					             program, spec->letter);
 				return OS64_ARG_ERROR;
 			}
 			break;

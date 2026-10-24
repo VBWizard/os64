@@ -17,7 +17,6 @@
 
 #define GUNZIP_IO_SIZE      (64u * 1024u)
 #define GUNZIP_PATH_MAX     512u
-#define GUNZIP_MAX_OPERANDS 512
 
 typedef struct {
     bool to_stdout;
@@ -347,7 +346,12 @@ static int decode_path(const char *path, const gunzip_options_t *options)
 int main(int argc, char **argv)
 {
     gunzip_options_t options = {0};
-    const char *operands[GUNZIP_MAX_OPERANDS] = {0};
+    const char **operands = os64_malloc((size_t)argc * sizeof(*operands));
+    if (operands == NULL)
+    {
+        os64_hprintf(OS64_STDERR, "gunzip: out of memory\n");
+        return 2;
+    }
     const os64_optspec_t specs[] = {
         {'c', "stdout", false, "write decompressed data to standard output",
          .flag = &options.to_stdout},
@@ -365,14 +369,21 @@ int main(int argc, char **argv)
 
     int32_t operand_count = os64_args_parse(
         &args, "gunzip [-cfk] [FILE.gz ...]", operands,
-        GUNZIP_MAX_OPERANDS);
+        argc);
     if (operand_count == OS64_ARG_HELP)
+    {
+        os64_free(operands);
         return 0;
+    }
     if (operand_count < 0)
+    {
+        os64_free(operands);
         return 2;
+    }
 
     if (operand_count == 0) {
         uint64_t ignored_size = 0;
+        os64_free(operands);
         return decode_handle(OS64_STDIN, OS64_STDOUT, "standard input",
                              "standard output", &ignored_size) == 0 ? 0 : 1;
     }
@@ -385,5 +396,6 @@ int main(int argc, char **argv)
         if (result < 0)
             return_code = 1;
     }
+    os64_free(operands);
     return return_code;
 }

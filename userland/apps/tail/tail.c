@@ -2,7 +2,6 @@
 
 #define DEFAULT_TAIL_LINES 20
 #define STREAM_CHUNK_SIZE 32768
-#define TAIL_MAX_FILES 512
 
 static char buf[32768];
 
@@ -294,9 +293,17 @@ int main(int argc, char **argv)
     bool optFollow = false;
     uint64_t lineCount = DEFAULT_TAIL_LINES;
     const char *lineCountValue = NULL;
-    const char *files[TAIL_MAX_FILES] = {0};
-    uint64_t followPositions[TAIL_MAX_FILES] = {0};
-    bool followActive[TAIL_MAX_FILES] = {0};
+    const char **files = os64_malloc((size_t)argc * sizeof(*files));
+    uint64_t *followPositions = os64_calloc((size_t)argc, sizeof(*followPositions));
+    bool *followActive = os64_calloc((size_t)argc, sizeof(*followActive));
+    if (files == NULL || followPositions == NULL || followActive == NULL)
+    {
+        os64_hprintf(OS64_STDERR, "tail: out of memory\n");
+        os64_free(followActive);
+        os64_free(followPositions);
+        os64_free(files);
+        return 2;
+    }
     os64_args_t args = {0};
     const os64_optspec_t specs[] = {
         {'f', "follow", false, "stay attached and print data appended to FILE", .flag = &optFollow},
@@ -310,17 +317,30 @@ int main(int argc, char **argv)
                    "With --follow, wait for and print data appended to FILE.";
 
     int32_t parsed = os64_args_parse(&args, "tail [-f] [-n NUM] [FILE ...]",
-                                     files, TAIL_MAX_FILES);
+                                     files, argc);
     if (parsed == OS64_ARG_HELP)
-        os64_exit(0);
+    {
+        os64_free(followActive);
+        os64_free(followPositions);
+        os64_free(files);
+        return 0;
+    }
     if (parsed < 0)
-        os64_exit(2);
+    {
+        os64_free(followActive);
+        os64_free(followPositions);
+        os64_free(files);
+        return 2;
+    }
 
     if (lineCountValue != NULL &&
         !os64_parse_u64(lineCountValue, &lineCount))
     {
         os64_hprintf(OS64_STDERR, "tail: invalid line count: %s\n", lineCountValue);
-        os64_exit(2);
+        os64_free(followActive);
+        os64_free(followPositions);
+        os64_free(files);
+        return 2;
     }
 
     int32_t inputCount = parsed == 0 ? 1 : parsed;
@@ -410,5 +430,8 @@ int main(int argc, char **argv)
         returnCode = 1;
     }
 
-    os64_exit(returnCode);
+    os64_free(followActive);
+    os64_free(followPositions);
+    os64_free(files);
+    return returnCode;
 }

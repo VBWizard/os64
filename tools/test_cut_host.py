@@ -82,6 +82,8 @@ with tempfile.TemporaryDirectory() as folder:
     first.write_bytes(b"a b\n")
     second.write_bytes(b"c d")
     check(["-d", " ", "-f2", str(first), "-", str(second)], b"e f\n")
+    for count in [512, 513, 4096, 5000]:
+        check(["-b1", *([str(first)] * count)], expected=b"a\n" * count)
     check(["-b1", str(first), "--unknown"], expected=b"", status=2)
     check(["-b1", str(first), str(Path(folder) / "missing"), str(second)], expected=b"a\nc\n", status=1)
     check(["-b1", folder], expected=b"", status=1)
@@ -96,9 +98,9 @@ check(["-b1"], b"first\nsecond", b"f\n", 1, {"CUT_READ_CHUNK": 6, "CUT_READ_FAIL
 check(["-b1-"], b"abcdef\n", b"abc", 1, {"CUT_WRITE_FAIL": 3})
 check(["-b1-"], b"x" * 40000 + b"\n", b"xxx", 1, {"CUT_WRITE_FAIL": 3})
 check(["-b1"], data, b"", 1, {"CUT_WRITE_ZERO": 1})
-for fail_at in [1, 2, 3, 4, 5, 6]:
+for fail_at in [1, 2, 3, 4, 5, 6, 7]:
     check(["-b1"], b"x" * 150000, b"", 1, {"CUT_ALLOC_FAIL": fail_at})
-check(["-b1"], b"first\n" + b"x" * 150000, b"f\n", 1, {"CUT_ALLOC_FAIL": 4})
+check(["-b1"], b"first\n" + b"x" * 150000, b"f\n", 1, {"CUT_ALLOC_FAIL": 5})
 
 rng = random.Random(0x64C07)
 for _ in range(180):

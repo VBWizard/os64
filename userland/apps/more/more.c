@@ -2,11 +2,15 @@
 #include "../../common/file_pager.h"
 
 #define DEFAULT_PAGE_LINES 24
-#define MORE_MAX_FILES 512
 
 int main(int argc, char **argv)
 {
-    const char *paths[MORE_MAX_FILES] = {0};
+    const char **paths = os64_malloc((size_t)argc * sizeof(*paths));
+    if (paths == NULL)
+    {
+        os64_hprintf(OS64_STDERR, "more: out of memory\n");
+        return 2;
+    }
     const char *interval = NULL;
     os64_args_t args = {0};
     const os64_optspec_t specs[] = {
@@ -18,16 +22,23 @@ int main(int argc, char **argv)
     args.details = "Space or Page Down advances a page, Enter advances one line, h shows help, and q quits.";
 
     int32_t parsed = os64_args_parse(&args, "more [-i LINES] [FILE ...]",
-                                     paths, MORE_MAX_FILES);
+                                     paths, argc);
     if (parsed == OS64_ARG_HELP)
+    {
+        os64_free(paths);
         return 0;
+    }
     if (parsed < 0)
+    {
+        os64_free(paths);
         return 2;
+    }
 
     uint32_t lines = file_pager_default_lines(DEFAULT_PAGE_LINES);
     if (interval != NULL && !file_pager_parse_lines(interval, &lines))
     {
         os64_hprintf(OS64_STDERR, "more: invalid interval: %s\n", interval);
+        os64_free(paths);
         return 2;
     }
     int32_t returnCode = 0;
@@ -43,5 +54,6 @@ int main(int argc, char **argv)
         else if (result == FILE_PAGER_RESULT_QUIT)
             break;
     }
+    os64_free(paths);
     return returnCode;
 }

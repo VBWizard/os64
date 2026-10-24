@@ -3,7 +3,6 @@
 #include "os64/os64.h"
 
 #define WC_BUF_SIZE (1024 * 1024)
-#define WC_MAX_FILES 512
 
 typedef struct {
     uint64_t lines;
@@ -123,7 +122,12 @@ int main(int argc, char **argv)
     bool showWords = false;
     bool showBytes = false;
     bool showDiagnostics = false;
-    const char *files[WC_MAX_FILES];
+    const char **files = os64_malloc((size_t)argc * sizeof(*files));
+    if (files == NULL)
+    {
+        os64_hprintf(OS64_STDERR, "wc: out of memory\n");
+        return 2;
+    }
     int32_t fileCount = 0;
     int32_t returnCode = 0;
     os64_args_t args = {0};
@@ -140,11 +144,17 @@ int main(int argc, char **argv)
     args.details = "With no FILE, or when FILE is -, read standard input.";
 
     int32_t parsed = os64_args_parse(&args, "wc [-lwcD] [FILE ...]",
-                                     files, WC_MAX_FILES);
+                                     files, argc);
     if (parsed == OS64_ARG_HELP)
-        os64_exit(0);
+    {
+        os64_free(files);
+        return 0;
+    }
     if (parsed < 0)
-        os64_exit(2);
+    {
+        os64_free(files);
+        return 2;
+    }
     fileCount = parsed;
 
     if (!showLines && !showWords && !showBytes)
@@ -195,5 +205,6 @@ int main(int argc, char **argv)
     if (fileCount > 1)
         print_counts(&total, showLines, showWords, showBytes, "total");
 
-    os64_exit(returnCode);
+    os64_free(files);
+    return returnCode;
 }
