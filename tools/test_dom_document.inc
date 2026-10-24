@@ -319,7 +319,12 @@ static void dom_document_title_cases(void)
         "assert(s.title==='');s.title='  svg  t ';const k=s.documentElement.firstChild;"
         "assert(s.title==='svg t'&&k.nodeName==='title','an SVG title, first');"
         "const h=document.implementation.createHTMLDocument();assert(h.title==='');h.title='x';"
-        "assert(h.head.lastChild.tagName==='TITLE'&&h.title==='x');",
+        "assert(h.head.lastChild.tagName==='TITLE'&&h.title==='x');"
+        /* a root in neither namespace: an HTML title inside it is read, never written */
+        "const mm=document.implementation.createDocument('http://www.w3.org/1998/Math/MathML','math',null);"
+        "const mt=document.createElement('title');mt.textContent='kept';mm.documentElement.appendChild(mt);"
+        "assert(mm.title==='kept');mm.title='written';"
+        "assert(mt.textContent==='kept'&&mm.title==='kept','a MathML-rooted document takes no title');",
         "title: an SVG document's, and a document of its own's");
     fixture_free(&f);
 }

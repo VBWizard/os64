@@ -137,10 +137,13 @@ static JSValue title_text(os64_dom_t *dom, JSContext *ctx, const os64_html_node_
 
 /* document.title's setter (HTML § document.title): the value converted
  * first, then the title element's text replaced by it, whole, as
- * textContent replaces (no Text node for ""). An SVG document gets an SVG
- * title as its element's first child when it has none; an HTML document
- * a title appended to its head, unless it has no head either, when
- * nothing happens; any other document nothing. */
+ * textContent replaces (no Text node for ""). Only a document whose
+ * element is an SVG `svg` or in the HTML namespace has its title set: an
+ * SVG one gets an SVG title as its element's first child when it has
+ * none; an HTML-rooted one a title appended to its head, unless it has no
+ * head either, when nothing happens. Any other document (no element, or
+ * one in another namespace) changes nothing, even when an HTML title
+ * element is somewhere inside it. */
 static JSValue title_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *document, JSValueConst value)
 {
     JSValue text = JS_ToString(ctx, value);
@@ -148,8 +151,12 @@ static JSValue title_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t
     bool svg;
     const os64_html_node_t *element = title_element(document, &svg);
     const os64_html_node_t *root = d_document_element(document);
+    if (!svg && (root == NULL || root->ns != OS64_HTML_NS_HTML)) {
+        JS_FreeValue(ctx, text);
+        return JS_UNDEFINED;
+    }
     JSValue result = JS_UNDEFINED;
-    if (element == NULL && (svg || (root != NULL && root->ns == OS64_HTML_NS_HTML))) {
+    if (element == NULL) {
         const os64_html_node_t *parent = svg ? root : d_document_part(document, false);
         if (parent != NULL) {
             int64_t status;
