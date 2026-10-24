@@ -5,14 +5,16 @@
 //
 // pool.c runs UNMODIFIED with its own lock; what it holds are fake
 // connections whose handles this harness numbers. Each thread is a fetch
-// that, over and over, takes a connection for one of two keys (dialling a
+// that, over and over, takes a connection for one of eight keys (dialling a
 // new one when none is kept), claims it, works on it, and gives it back —
 // or closes it, as a fetch whose exchange did not allow keeping it would.
 // A claim is an atomic exchange on the connection's owner, so two holders
 // at once is caught where it happens; so is a close of a held connection, a
 // second close, and a take of a closed one. The clock jumps now and then, so
-// the idle expiry runs against the takers. At the end every connection ever
-// made has been closed exactly once.
+// the idle expiry runs against the takers; the whole pool's cap is reached;
+// and two of the threads also let everything kept go, or the least recent,
+// now and then. At the end every connection ever made has been closed
+// exactly once. Before the sweep, one case on its own: the stale clock.
 //
 // Run by tools/test_fetch_pool_host.sh twice: under ASan and UBSan, and
 // under TSan, which sees a write to a kept connection's fields that the
@@ -39,6 +41,7 @@ static _Atomic int closed[HANDLES];
 static _Atomic int next_handle = 1;
 static _Atomic uint64_t clock_ms;
 static _Atomic int failures;
+static _Atomic size_t most_kept;           // the most the pool was seen holding
 
 #define CHECK(cond) do { if (!(cond)) { \
     fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); atomic_fetch_add(&failures, 1); } } while (0)
@@ -91,11 +94,21 @@ static void *fetcher(void *arg)
 {
     int me = (int)(intptr_t)arg;
     unsigned rng = (unsigned)me * 2654435761u;
-    fetch_pool_key_t keys[2] = { { .host = "one.test", .port = 80 },
-                                 { .tls = true, .host = "one.test", .port = 443 } };
+    // Eight keys, more than the whole pool's cap holds at six apiece, so
+    // the least recent of all is evicted as well as the least recent of a
+    // key.
+    fetch_pool_key_t keys[8];
+    for (int k = 0; k < 8; k++)
+        keys[k] = (fetch_pool_key_t){ .tls = k & 1, .host = "one.test", .port = (uint16_t)(80 + k / 2) };
     for (int round = 0; round < ROUNDS; round++) {
         rng = rng * 1103515245u + 12345u;
-        const fetch_pool_key_t *key = &keys[(rng >> 9) & 1];
+        const fetch_pool_key_t *key = &keys[(rng >> 9) & 7];
+        // And everything kept is let go now and then, or the least recent
+        // alone, while the others take and put.
+        if (me == 1 && round % 997 == 0)
+            fetch_pool_drain();
+        if (me == 2 && round % 389 == 0)
+            fetch_pool_evict_one();
         fetch_transport_t io;
         if (fetch_pool_take(key, &io)) {
             // What was kept for this key comes back as it was given.
@@ -122,6 +135,9 @@ static void *fetcher(void *arg)
         }
         size_t idle = fetch_pool_idle();
         CHECK(idle <= FETCH_POOL_TOTAL);
+        size_t seen = atomic_load(&most_kept);
+        while (idle > seen && !atomic_compare_exchange_weak(&most_kept, &seen, idle))
+            ;
         // Now and then a minute passes, and what was kept expires.
         if ((rng >> 16) % 1024 == 0)
             atomic_fetch_add(&clock_ms, FETCH_POOL_IDLE_MS);
@@ -183,8 +199,8 @@ int main(void)
         pthread_create(&t[i], NULL, fetcher, (void *)(intptr_t)(i + 1));
     for (int i = 0; i < THREADS; i++)
         pthread_join(t[i], NULL);
-    // Two keys, so never more than twice the per-key cap kept.
-    CHECK(fetch_pool_idle() <= 2 * FETCH_POOL_PER_KEY);
+    // The whole pool's cap was reached, and never passed.
+    CHECK(atomic_load(&most_kept) == FETCH_POOL_TOTAL);
     fetch_pool_drain();
     CHECK(fetch_pool_idle() == 0);
     int made = atomic_load(&next_handle) - 1, shut = 0;

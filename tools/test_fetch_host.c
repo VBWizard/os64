@@ -87,6 +87,11 @@ typedef struct {
     size_t      hangup_after;  // closes once it has answered this many (0: keeps the connection)
     size_t      drop_request;  // closes when this request (1 = the first) arrives, unanswered
     size_t      fail_write_at; // a write of this request (1 = the first) breaks
+    // How a dropped request's close shows: 0 to anyone who looks, a poll
+    // included; 1 a close only a read finds (the request went, then the
+    // close), 2 a reset only a read finds.
+    int         drop_unseen;
+    uint64_t    idle_close_ms; // closes an idle connection after this long (0: never)
 } peer_t;
 
 // Room for the pool's whole capacity and one more, each its own peer.
@@ -117,6 +122,7 @@ typedef struct {
     char     request[131072];
     size_t   reqlen;
     int      dialled;          // which dial made it: its entry in history[]
+    uint64_t last_ms;          // when it last served a byte
 } conn_t;
 static conn_t conns[NCONNS];
 
@@ -153,17 +159,36 @@ static size_t released(const conn_t *c)
     for (size_t i = 0; i < k && i < p->nanswers; i++) n += p->answer_len[i];
     return n;
 }
+// The peer closed on the request it drops.
+static bool dropped(const conn_t *c)
+{
+    return c->peer->drop_request && requests_in(c) >= c->peer->drop_request;
+}
 // Everything said and the connection closed by the peer. The old world's
 // peer closes after its one reply; a keep-alive peer after `hangup_after`
-// answers, or on the request it drops.
+// answers, on the request it drops, or after `idle_close_ms` idle.
+// The idle close alone: the server gave up on a connection nobody used.
+static bool idle_closed(const conn_t *c)
+{
+    const peer_t *p = c->peer;
+    return p->nanswers && p->idle_close_ms && c->served > 0 && c->served == released(c) &&
+           now_ms - c->last_ms >= p->idle_close_ms;
+}
 static bool hung_up(const conn_t *c)
 {
     const peer_t *p = c->peer;
     if (c->served < released(c)) return false;
     if (p->nanswers == 0) return p->len > 0;
     size_t k = requests_in(c);
-    if (p->drop_request && k >= p->drop_request) return true;
+    if (dropped(c)) return true;
+    if (idle_closed(c)) return true;
     return p->hangup_after && k >= p->hangup_after;
+}
+// What a poll, or the TLS engine's state, can see of that close: all of
+// it, but a dropped request's close that only a read finds.
+static bool poll_sees_close(const conn_t *c)
+{
+    return hung_up(c) && !(c->peer->drop_unseen && dropped(c));
 }
 // Data the peer has released and not yet sent, on a keep-alive peer only:
 // the old world's reply is all there from the start, and the upload's
@@ -258,12 +283,14 @@ static int64_t conn_read(conn_t *c, void *buf, size_t cap, uint64_t wait_ms, boo
     if (left == 0 && c->peer->nanswers && !hung_up(c)) {
         now_ms += wait_ms; *timed_out = true; return 0;   // a kept connection, waiting for a request
     }
+    if (left == 0 && c->peer->drop_unseen == 2 && dropped(c)) return -1;   // the reset
     if (left == 0) return 0;
     size_t n = chunk_of(cap < left ? cap : left);
     if (c->peer->silent_after && c->served + n > c->peer->silent_after)
         n = c->peer->silent_after - c->served;
     memcpy(buf, c->peer->reply + c->served, n);
     c->served += n;
+    c->last_ms = now_ms;
     return (int64_t)n;
 }
 int64_t os64_read_for(int32_t h, void *buf, size_t cap, uint64_t ms)
@@ -272,7 +299,7 @@ int64_t os64_read_for(int32_t h, void *buf, size_t cap, uint64_t ms)
     assert(c->open);
     // A poll: a byte the peer has said, the close it has made, or nothing.
     if (!ms && !early_ready(c) && !pending(c))
-        return hung_up(c) ? 0 : OS64_ERR_TIMEOUT;
+        return poll_sees_close(c) ? 0 : OS64_ERR_TIMEOUT;
     bool timed_out;
     int64_t n = conn_read(c, buf, cap, ms, &timed_out);
     return timed_out ? OS64_ERR_TIMEOUT : n;
@@ -294,7 +321,11 @@ int64_t os64_write_for(int32_t h, const void *buf, size_t n, uint64_t ms)
 
 // ── TLS: the transport stubbed over the same connections ────────────────
 
-struct os64_tls_transport { int32_t handle; os64_tls_status_t status; bool closing; uint16_t version; };
+// `heard_ms`: when the engine last read the wire (a step or a read). A
+// close an idle server sends after that is ciphertext nobody has read yet,
+// and the engine's state does not know it, as a real engine does not.
+struct os64_tls_transport { int32_t handle; os64_tls_status_t status; bool closing; uint16_t version;
+                            uint64_t heard_ms; };
 static int tls_creates, tls_frees, trust_loads, trust_frees;
 static os64_tls_trust *fake_trust = (os64_tls_trust *)"trust";
 os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t h,
@@ -318,7 +349,8 @@ os64_tls_state_t os64_tls_transport_state(os64_tls_transport *t)
     // A peer that has said everything and closed: authenticated, unless it
     // truncates.
     os64_tls_status_t status = t->status;
-    if (status == OS64_TLS_OK && hung_up(c))
+    bool unheard = idle_closed(c) && t->heard_ms < c->last_ms + c->peer->idle_close_ms;
+    if (status == OS64_TLS_OK && poll_sees_close(c) && !unheard)
         status = c->peer->tls_truncate ? OS64_TLS_TRUNCATED : OS64_TLS_CLEAN_EOF;
     return (os64_tls_state_t){ .status = status, .flags = OS64_TLS_HANDSHAKE_DONE | OS64_TLS_SEND_PLAIN |
                                    (early_ready(c) || pending(c) ? OS64_TLS_RECV_PLAIN | OS64_TLS_SEND_CIPHER : 0),
@@ -327,6 +359,7 @@ os64_tls_state_t os64_tls_transport_state(os64_tls_transport *t)
 os64_tls_status_t os64_tls_transport_step(os64_tls_transport *t, uint64_t ms)
 {
     now_ms += write_limit ? 0 : ms;
+    t->heard_ms = now_ms;
     if (t->closing) return t->status = OS64_TLS_CLEAN_EOF;
     return t->status == OS64_TLS_OK ? OS64_TLS_NEED_PROGRESS : t->status;
 }
@@ -340,9 +373,11 @@ os64_tls_transfer_t os64_tls_transport_read(os64_tls_transport *t, void *p, size
 {
     if (t->status != OS64_TLS_OK) return (os64_tls_transfer_t){ t->status, 0 };
     conn_t *c = &conns[t->handle - 100];
+    t->heard_ms = now_ms;
     bool timed_out;
     int64_t got = conn_read(c, p, n, 1000, &timed_out);
     if (timed_out) return (os64_tls_transfer_t){ OS64_TLS_NEED_PROGRESS, 0 };
+    if (got < 0) return (os64_tls_transfer_t){ t->status = OS64_TLS_TRANSPORT, 0 };
     if (got == 0) {
         t->status = c->peer->tls_truncate ? OS64_TLS_TRUNCATED : OS64_TLS_CLEAN_EOF;
         return (os64_tls_transfer_t){ t->status, 0 };
@@ -1951,6 +1986,8 @@ static void case_keepalive_reuse(void)
         { "HTTP/1.1 304 Not Modified\r\nContent-Length: 999\r\nETag: \"v\"\r\n\r\n", NULL, "" },
         { "HTTP/1.1 205 Reset Content\r\nContent-Length: 0\r\n\r\n", NULL, "" },
         { "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n", NULL, "" },
+        // A HEAD's 205 sends nothing, whatever its length says.
+        { "HTTP/1.1 205 Reset Content\r\nContent-Length: 5\r\n\r\n", "HEAD", "" },
     };
     for (int tls = 0; tls < 2; tls++)
         for (int mode = 0; mode < 3; mode++)
@@ -1998,6 +2035,9 @@ static void case_keepalive_refused(void)
         { "HTTP/1.1 200 OK\r\nContent-Encoding: br\r\nContent-Length: 5\r\n\r\nfirst", 99, "a coding refused" },
         { "HTTP/1.1 205 Reset Content\r\nContent-Length: 5\r\n\r\nfirst", 99, "a 205 that sent bytes" },
         { "HTTP/1.1 200 OK\r\n\r\nfirst", 99, "a body read to the close" },
+        // Framed whole on the wire, and still a fetch that failed.
+        { "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 5\r\n\r\nfirst", 99,
+          "a gzip body that did not decode" },
     };
     for (int tls = 0; tls < 2; tls++)
         for (int mode = 0; mode < 3; mode++)
@@ -2287,10 +2327,15 @@ static void case_keepalive_retry(void)
 
         // A KEPT CONNECTION THE SERVER CLOSED, found by the request: a GET
         // goes once more on a fresh connection, and the reason says so.
-        for (int how = 0; how < 2; how++) {
+        // Four ways to find it: the close seen as the request is written
+        // (the upload's poll), a write that breaks, and — the request
+        // written whole first — a close or a reset that only the reply's
+        // read finds.
+        for (int how = 0; how < 4; how++) {
             reset();
             peer_t *p = peer_answers("again.test", port, answers);
-            if (how == 0) p->drop_request = 2; else p->fail_write_at = 2;
+            if (how == 1) p->fail_write_at = 2; else p->drop_request = 2;
+            p->drop_unseen = how >= 2 ? how - 1 : 0;
             CHECK(fetch_all(url, NULL, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_OK);
             CHECK(strstr(why, "retried") == NULL);
             CHECK(fetch_all(url, NULL, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_OK);
@@ -2316,6 +2361,19 @@ static void case_keepalive_retry(void)
             CHECK((strstr(why, "retried") != NULL) == methods[i].again);
             CHECK(requests_on(0) == 2);
         }
+        // A PUT's body goes again with it, whole: the server that closed may
+        // never have read the first.
+        reset();
+        peer_t *put_peer = peer_answers("again.test", port, answers);
+        put_peer->drop_request = 2;
+        put_peer->drop_unseen = 1;
+        fetch_all(url, NULL, out, sizeof(out), NULL, 0);
+        os64_fetch_options_t put = { .method_name = "PUT", .body = "a=1&b=2", .body_len = 7 };
+        CHECK(fetch_all(url, &put, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_OK);
+        CHECK(dials == 2 && strstr(why, "retried") != NULL);
+        const char *again_put = request_n(1);
+        CHECK(strncmp(again_put, "PUT / HTTP/1.1\r\n", 16) == 0 && strstr(again_put, "Content-Length: 7\r\n") &&
+              strcmp(again_put + strlen(again_put) - 11, "\r\n\r\na=1&b=2") == 0);
         // The POST of the options' own method, with a body, is not sent twice.
         reset();
         peer_t *p = peer_answers("again.test", port, answers);
@@ -2361,6 +2419,52 @@ static void case_keepalive_retry(void)
         CHECK(fetch_all(url, NULL, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_BAD_HEAD);
         CHECK(dials == 1 && strstr(why, "retried") == NULL);
     }
+}
+
+static void case_keepalive_paths(void)
+{
+    char out[64], why[256];
+    const char *answers[] = { kFirst, kSecond, NULL };
+    for (int tls = 0; tls < 2; tls++) {
+        const char *url = tls ? "https://idle.test/" : "http://idle.test/";
+        // THE PROBE AT THE TAKE: a server that closed its idle side after
+        // the connection was kept. The probe finds the close (a TLS one by
+        // stepping the engine, a plain one by a poll), the connection is
+        // closed, and a new one is dialled: no request is sent to find out,
+        // and none is retried.
+        reset();
+        peer_t *p = peer_answers("idle.test", tls ? 443 : 80, answers);
+        p->idle_close_ms = 1000;
+        CHECK(fetch_all(url, NULL, out, sizeof(out), NULL, 0) == OS64_FETCH_OK && fetch_pool_idle() == 1);
+        now_ms += 2000;
+        CHECK(fetch_all(url, NULL, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_OK && !strcmp(out, "first"));
+        CHECK(dials == 2 && closes == 1 && requests_on(0) == 1 && strstr(why, "retried") == NULL);
+    }
+
+    // A REDIRECT'S COURTESY BODY STILL ON ITS WAY: a 302 that promises
+    // thirteen bytes and has sent none. Nobody reads them, so the
+    // connection is not kept for its key, whatever arrives on it later.
+    reset();
+    const char *redirect[] = { "HTTP/1.1 302 Found\r\nLocation: http://next.test/\r\nContent-Length: 13\r\n\r\n", NULL };
+    peer_answers("from.test", 80, redirect);
+    peer_answers("next.test", 80, answers);
+    CHECK(fetch_all("http://from.test/", NULL, out, sizeof(out), NULL, 0) == OS64_FETCH_OK && !strcmp(out, "first"));
+    CHECK(fetch_pool_idle() == 1 && closes == 1);       // next.test's kept, from.test's closed
+
+    // AN ANSWER BEFORE THE REQUEST'S OWN HEAD WAS WHOLE: a server that
+    // replies after fifty bytes of a long head has read a request that
+    // never ended, body or no body.
+    reset(); write_limit = 17;
+    static char pad[400];
+    memset(pad, 0, sizeof(pad));
+    strcpy(pad, "X-Pad: ");
+    memset(pad + 7, 'p', 300);
+    strcat(pad, "\r\n");
+    peer_t *early = peer_add("early.test", 80, "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nfirst");
+    early->early_after = 50;
+    os64_fetch_options_t padded = { .extra_headers = pad };
+    CHECK(fetch_all("http://early.test/", &padded, out, sizeof(out), NULL, 0) == OS64_FETCH_OK);
+    CHECK(conns[0].reqlen < 300 && fetch_pool_idle() == 0 && closes == 1);
 }
 
 // The rule itself, clause by clause.
@@ -2529,6 +2633,7 @@ int main(int argc, char **argv)
     case_keepalive_owner();
     case_keepalive_caps();
     case_keepalive_retry();
+    case_keepalive_paths();
     // Nothing is left kept at exit: the sanitizer's leak check is the proof
     // that what the pool holds it also lets go.
     fetch_pool_drain();
