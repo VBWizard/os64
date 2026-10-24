@@ -2636,6 +2636,17 @@ static void say_laid_out(uint64_t ms)
     (void)motion_pause_said();
 }
 
+// The agent yonder starts with: yonder.conf's saved default, a preset's
+// string from an earlier yonder read as that preset's current one
+// (yonder_agent_current), else yonder's own.
+static const char *starting_agent(void)
+{
+    char saved[YONDER_AGENT_MAX];
+    const char *agent = yonder_settings_saved_agent(saved, sizeof(saved))
+                            ? yonder_agent_keep(yonder_agent_current(saved)) : NULL;
+    return agent != NULL ? agent : YONDER_AGENT;
+}
+
 // An agent applied from the Settings window: every fetch from now on sends
 // it and its preset's lines, and the page's standing line says so.
 static void agent_use(const char *agent)
@@ -12270,11 +12281,7 @@ int main(int argc, char **argv)
     s_env.replaced_size = replaced_size;
     g.zoom = g.zoom_default = yonder_settings_saved_zoom();
     g.way.name = "yonder";
-    // A default saved as an earlier yonder's preset is that preset now.
-    char saved[YONDER_AGENT_MAX];
-    const char *agent = yonder_settings_saved_agent(saved, sizeof(saved))
-                            ? yonder_agent_keep(yonder_agent_current(saved)) : NULL;
-    g.way.agent = agent != NULL ? agent : YONDER_AGENT;
+    g.way.agent = starting_agent();
     g.way.identity = yonder_agent_identity(g.way.agent);
     g.way.accept = YONDER_ACCEPT;
     g.way.delayed_hint = " - it is in the address field; press Enter to go";

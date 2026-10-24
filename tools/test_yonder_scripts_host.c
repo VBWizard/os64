@@ -595,6 +595,8 @@ bool os64_ui_theme_session(os64_ui_theme_t *theme, uint64_t *installed, uint64_t
 static char saved_scripts[8], saved_zoom[8], saved_seconds[8], saved_diagnostics[256], saved_appearance[8],
     saved_animations[8], saved_motion[16], saved_keep_pages[16], saved_modern[16], saved_profile[300],
     settings_report[256];
+/* yonder.conf's saved agent, "" for none. */
+static char saved_agent[300];
 /* What reading yonder.conf's profile answers instead, when not 0. */
 static int64_t profile_conf_failure;
 int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) {
@@ -604,7 +606,7 @@ int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) 
         os64_streq(key,"diagnostics") ? saved_diagnostics : os64_streq(key,"appearance") ? saved_appearance :
         os64_streq(key,"animations") ? saved_animations : os64_streq(key,"motion") ? saved_motion :
         os64_streq(key,"keep_pages") ? saved_keep_pages : os64_streq(key,"modern") ? saved_modern :
-        os64_streq(key,"profile") ? saved_profile : "";
+        os64_streq(key,"profile") ? saved_profile : os64_streq(key,"agent") ? saved_agent : "";
     if(os64_streq(key,"profile") && profile_conf_failure!=0) return profile_conf_failure;
     if(!value[0]) return OS64_CONF_NO_KEY;
     /* A value too long for `out` is TRUNCATED, as the real reader says. */
@@ -1107,6 +1109,21 @@ static void switch_cases(void) {
     strcpy(settings_fixture.zoom_buf,"125");
     saved_appearance[0]=0;
     check(!yonder_settings_saved_dark(),"pages are light unless yonder.conf says dark");
+    /* The agent yonder starts with: none saved is yonder's own; a preset's
+     * string from an earlier yonder is that preset now, lines and all; a
+     * typed one is kept as typed. */
+    saved_agent[0]=0;
+    check(os64_streq(starting_agent(),YONDER_AGENT),"agent: none saved starts as yonder's own");
+    strcpy(saved_agent,"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/154.0.0.0 Safari/537.36");
+    const char *started=starting_agent();
+    check(started!=NULL && strstr(started,"Chrome/156.0.0.0")!=NULL && yonder_agent_identity(started)!=NULL,
+          "agent: a saved Chrome 154 preset starts as today's Chrome preset, its lines with it");
+    strcpy(saved_agent,"Mozilla/3.0 (compatible)");
+    started=starting_agent();
+    check(started!=NULL && os64_streq(started,"Mozilla/3.0 (compatible)") && yonder_agent_identity(started)==NULL,
+          "agent: a typed one starts as typed");
+    saved_agent[0]=0;
     settings_fixture.scripts.checked=true;
     settings_fixture.limit.value=12;
     check(yonder_settings_saved_script_seconds()==5,"a missing script time limit is the 5 s lean");
