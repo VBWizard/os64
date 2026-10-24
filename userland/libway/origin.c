@@ -1228,8 +1228,11 @@ void way_metadata_navigation(way_metadata_t *m, way_initiator_t by, const way_or
     else
         m->origin = *from;
     // Fetch Metadata § 2.4: a navigation request whose user-activation is
-    // true. HTML sets that once, before the fetch, and its redirects are
-    // the same request, so it holds on every hop.
+    // true. HTML's "create navigation params by fetching" sets it once,
+    // from the source's transient activation, before the fetch, and its
+    // redirects are the same request, so it holds on every hop. yonder
+    // tracks no transient activation: a person's own act is one, a page's
+    // script never (way_initiator_t).
     m->activation = by != WAY_BY_PAGE;
 }
 

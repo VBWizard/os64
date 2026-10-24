@@ -324,7 +324,10 @@ typedef enum {
     // A person, on the page: a link followed, a form sent. The page's site,
     // and a person's.
     WAY_BY_PERSON,
-    // The page itself: a refresh, a script. The page's site, and nobody's.
+    // The page itself: a refresh, a script. The page's site, and nobody's
+    // in yonder: HTML gives a script's navigation the person's activation
+    // when it runs inside their gesture (transient activation), which
+    // yonder does not track, so it under-claims there (DIVERGENCES).
     WAY_BY_PAGE,
 } way_initiator_t;
 

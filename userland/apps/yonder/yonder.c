@@ -8100,6 +8100,10 @@ static void unshown_go(Page *p, int32_t delta)
         session_go((int32_t)target, WAY_BY_PAGE, from);
 }
 
+// A navigation a page's script asked for. Every one is the page's own
+// (WAY_BY_PAGE): no person's activation, even for a click() or submit() a
+// listener ran inside the person's own click, which HTML would give it
+// (transient activation, which yonder does not track: DIVERGENCES).
 static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navigation_t *ask,
                                bool shown)
 {

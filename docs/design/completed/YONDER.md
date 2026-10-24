@@ -527,7 +527,9 @@ past a limit the expired go first and then the cookie used longest ago —
 sending counts as use, so the login every page carries is the last to go.
 
 **Sent in the order the RFC gives** (the longest path first, then the
-oldest), whole cookies only. libfetch gives a hop 1024 bytes for its
+oldest), whole cookies only. libfetch gives a hop 1536 bytes for its
+per-hop lines, of which the lines that say who is asking take up to 512
+first (libway's `WAY_IDENTITY_MAX`), which leaves a kilobyte for its
 `Cookie` and `Referer` lines together; the cookies come first, because a
 login depends on them and not on a Referer, and what does not fit is left
 off whole (the limit is booked with libfetch, in BROWSER_DEBTS.md).

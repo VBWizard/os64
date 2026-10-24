@@ -448,8 +448,8 @@ false otherwise, and always false for a preflight.
   job: the job's strip (above) replaces it, and the job's `headers_for` sends
   `Cookie` only when the hop's includeCredentials is true, and besides it
   sends only `Referer` and the lines that say who is asking (Fetch
-  Metadata, the agent preset's client hints and Accept-Language). The job never puts `Cookie` in
-  `extra_headers` at all.
+  Metadata, the agent preset's client hints, Accept-Language and
+  Priority). The job never puts `Cookie` in `extra_headers` at all.
   **RULED (2):** the standard's rule replaces the library's, in the job.
   Driving the loop in the job is what lets the `Origin` header, the
   preflight and the tainting change per hop (none of which libfetch's
