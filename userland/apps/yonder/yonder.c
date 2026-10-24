@@ -696,8 +696,12 @@ typedef struct Page {
     // (arrive_now), and a navigation by address or a form its script asks
     // for before then replaces its entry (page_navigation_replaces). A
     // struct copy of a Page borrows what these point at; page_clear frees
-    // it.
+    // it. `asked` is how the navigation that made the document was asked
+    // (trip_send's metadata, before any hop), which every entry of the
+    // document keeps (way_crumb_t.asked) for Reload and Back to replay;
+    // zeroed for a file read from disk.
     uint64_t document, entry, arrives_at;
+    way_metadata_t asked;
     char *entry_state;
     way_crumb_t *back, *ahead;
     int32_t nback, nahead;
@@ -1260,6 +1264,11 @@ static struct {
     // gone or moved by the time the answer comes.
     os64_page_request_t pending;
     NavKind pending_kind;
+    way_initiator_t pending_by;     // who asked for it (way/origin.h)
+    // What the browser's Reload of a form's reply replays (g.replaying),
+    // when `pending_replays`.
+    way_metadata_t pending_replay;
+    bool pending_replays;
     const char *pending_refused;
     char pending_referrer[OS64_FETCH_URL_MAX];
 
@@ -1419,6 +1428,10 @@ static struct {
     // (navigation_perform), which takes its place in the session
     // (start_trip); NULL otherwise.
     Page *replacing;
+    // The metadata the browser's Reload or Back is replaying (the entry's
+    // own, way_crumb_t.asked), which the trip being started sends in place
+    // of a fresh answer (trip_send); NULL otherwise.
+    const way_metadata_t *replaying;
     // A page that arrived and is waiting for its linked sheets, with what
     // arriving needs; the page on screen stays until it is shown (GARB.md,
     // G4). `due` is when it is shown whatever is still coming.
@@ -2623,11 +2636,23 @@ static void say_laid_out(uint64_t ms)
     (void)motion_pause_said();
 }
 
+// The agent yonder starts with: yonder.conf's saved default, a preset's
+// string from an earlier yonder read as that preset's current one
+// (yonder_agent_current), else yonder's own.
+static const char *starting_agent(void)
+{
+    char saved[YONDER_AGENT_MAX];
+    const char *agent = yonder_settings_saved_agent(saved, sizeof(saved))
+                            ? yonder_agent_keep(yonder_agent_current(saved)) : NULL;
+    return agent != NULL ? agent : YONDER_AGENT;
+}
+
 // An agent applied from the Settings window: every fetch from now on sends
-// it, and the page's standing line says so.
+// it and its preset's lines, and the page's standing line says so.
 static void agent_use(const char *agent)
 {
     g.way.agent = agent;
+    g.way.identity = yonder_agent_identity(agent);
     if (g.page.tree != NULL)
         say_laid_out(g.laid_ms);
 }
@@ -2773,7 +2798,7 @@ static bool relayout(bool again)
 }
 
 static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask_t ask, const char *from,
-                             yonder_diag_t *record);
+                             way_initiator_t by, yonder_diag_t *record);
 static void buttons_follow(void);
 static void pictures_start(Page *p);
 static void pictures_leave(Page *p);
@@ -2794,7 +2819,8 @@ static void script_alert(void *opaque, const char *text, size_t length);
 static void click_back(os64_ui_widget_t *w, void *user);
 static void click_forward(os64_ui_widget_t *w, void *user);
 static void click_reload(os64_ui_widget_t *w, void *user);
-static void follow_link_asked(int32_t link, way_ask_t ask);
+static void reload_as(way_initiator_t by);
+static void follow_link_asked(int32_t link, way_ask_t ask, way_initiator_t by);
 static void follow_link(int32_t link);
 static bool script_rebuild(void);
 static void stream_drop(void);
@@ -2822,7 +2848,7 @@ static void refresh_if_declared(void)
         os64_page_request_free(&request);
         break;
     case WAY_REFRESH_GO:
-        request_navigate(&request, NAV_REFRESH, WAY_ASK_GO, g.page.way.url, g.page.diag);
+        request_navigate(&request, NAV_REFRESH, WAY_ASK_GO, g.page.way.url, WAY_BY_PAGE, g.page.diag);
         break;
     case WAY_REFRESH_NONE:
         break;
@@ -3279,7 +3305,7 @@ static void bar_ask(Asker asker, uint32_t number, const char *question)
 }
 
 static void start_trip(const char *url, os64_page_request_t *request, const char *referrer, NavKind kind,
-                       const way_position_t *crumb);
+                       way_initiator_t by, const way_position_t *crumb);
 
 static void bar_answered(bool yes)
 {
@@ -3292,7 +3318,9 @@ static void bar_answered(bool yes)
         yonder_mail_answer(g.stream.mail, number, yes);
     } else if (asker == ASK_REQUEST) {
         if (yes) {
-            start_trip(g.pending.url, &g.pending, g.pending_referrer, g.pending_kind, NULL);
+            g.replaying = g.pending_replays ? &g.pending_replay : NULL;
+            start_trip(g.pending.url, &g.pending, g.pending_referrer, g.pending_kind, g.pending_by, NULL);
+            g.replaying = NULL;
         } else {
             os64_page_request_free(&g.pending);
             status_rest(g.pending_refused);
@@ -3412,12 +3440,14 @@ static void place_take(Place *place)
 }
 
 static void trip_send(const char *url, os64_page_request_t *request, const char *referrer, NavKind kind,
-                      const way_position_t *crumb);
+                      way_initiator_t by, const way_position_t *crumb);
 
 // Sends `url` (with `request`'s body, if it is a form: MOVED into the job)
 // to a worker, `referrer` the address of the page that asked for it (NULL
-// for none: an address typed, a traversal, a reload). The navigation it
-// replaces is stopped first: one at a time.
+// for none: an address typed, a traversal, a reload). `by` is who started
+// it, and the page that did is `referrer` (its Fetch Metadata: a page
+// whose address is not kept reads as cross-site, the answer that claims
+// least). The navigation it replaces is stopped first: one at a time.
 // One started by a page not yet shown (g.replacing) takes that page's place
 // (Place) instead of coming from the page on screen, and a traversal the
 // page was coming by goes on as the new page's: the session moves to that
@@ -3425,14 +3455,14 @@ static void trip_send(const char *url, os64_page_request_t *request, const char 
 // changes meanwhile stay held (g.held). Its scroll is the top, as a new
 // document's.
 static void start_trip(const char *url, os64_page_request_t *request, const char *referrer, NavKind kind,
-                       const way_position_t *crumb)
+                       way_initiator_t by, const way_position_t *crumb)
 {
     Place place;
     place_take(&place);
     bool traversal = place.taken && g.traversing && (place.kind == NAV_BACK || place.kind == NAV_FORWARD);
     if (traversal)
         g.traversing = false;           // stop_trip must not end it
-    trip_send(url, request, referrer, place.taken ? place.kind : kind, crumb);
+    trip_send(url, request, referrer, place.taken ? place.kind : kind, by, crumb);
     if (!place.taken)
         return;
     if (!g.stream.active) {
@@ -3465,13 +3495,23 @@ static void start_trip(const char *url, os64_page_request_t *request, const char
 }
 
 static void trip_send(const char *url, os64_page_request_t *request, const char *referrer, NavKind kind,
-                      const way_position_t *crumb)
+                      way_initiator_t by, const way_position_t *crumb)
 {
     // What a page asked for names that page in its Referer; a Reload, even
     // one sending a form again, names nothing. Read now: `referrer` may be
-    // the asking page's own address, which the stop below can let go.
+    // the asking page's own address, which the stop below can let go. The
+    // origin it starts from too, for the same reason.
     char named[OS64_FETCH_URL_MAX];
     os64_strcopy(named, sizeof(named), request != NULL && kind != NAV_RELOAD && referrer != NULL ? referrer : "");
+    way_origin_t from;
+    way_origin_of(referrer, 0, &from);
+    // How it is asked: the entry's own, when the browser's Reload or Back
+    // replays it (g.replaying), else who asks now, from where.
+    way_metadata_t asked;
+    if (g.replaying != NULL)
+        asked = *g.replaying;
+    else
+        way_metadata_navigation(&asked, by, &from);
     // A QUESTION IS ABOUT THE PAGE ON SCREEN, and going anywhere leaves it:
     // whoever asked, it goes (a form's request with it) before this goes.
     bar_forget();
@@ -3506,14 +3546,16 @@ static void trip_send(const char *url, os64_page_request_t *request, const char 
     trip->mail = mail;
     trip->session = &g.way;
     trip->agent = g.way.agent;
+    trip->identity = g.way.identity;
+    trip->metadata = asked;
     trip->window = g.win;
     trip->mail_bell = BELL_MAIL;
     os64_strcopy(trip->url, sizeof(trip->url), url);
     os64_strcopy(trip->referrer, sizeof(trip->referrer), named);
     os64_memset(&g.stream, 0, sizeof(g.stream));
     os64_strcopy(g.stream.referrer, sizeof(g.stream.referrer), named);
-    // A Reload is of the page on screen (click_reload, a form sent again,
-    // and location.reload(), which only the page on screen's asks reach):
+    // A Reload is of the page on screen (reload_as: the button, a form sent
+    // again, and location.reload(), which only the page on screen's asks reach):
     // its document.referrer goes with it, though its Referer did not.
     if (kind == NAV_RELOAD)
         os64_strcopy(g.stream.kept_referrer, sizeof(g.stream.kept_referrer),
@@ -3555,6 +3597,10 @@ static void trip_send(const char *url, os64_page_request_t *request, const char 
     g.stream.serial = ++g.pages_made;
     g.stream.page.document = ++g.documents_made;
     g.stream.page.entry = ++g.entries_made;
+    // What its entries keep for a later Reload or Back to replay: the
+    // asking, not this one fetch's being a reload.
+    g.stream.page.asked = asked;
+    g.stream.page.asked.reload = false;
     g.stream.diag = diag;
     g.stream.mail = mail;
     g.stream.kind = kind;
@@ -3573,8 +3619,9 @@ static void trip_send(const char *url, os64_page_request_t *request, const char 
 // page that asked is the one the request names and tells: `from`, its
 // address, is its Referer, and `record` takes a refusal's line — that
 // page's own wherever it is in its arrival, whichever page is on screen.
+// `by` is whether a person on that page asked or the page itself did.
 static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask_t ask, const char *from,
-                             yonder_diag_t *record)
+                             way_initiator_t by, yonder_diag_t *record)
 {
     way_judgement_t j = way_judge(&g.way, request, ask);
     if (j.kind == WAY_REFUSE) {
@@ -3587,10 +3634,12 @@ static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask
         g.pending = *request;
         os64_memset(request, 0, sizeof(*request));
         g.pending_kind = kind;
+        g.pending_by = by;
+        g.pending_replays = false;
         g.pending_refused = j.refused;
         os64_strcopy(g.pending_referrer, sizeof(g.pending_referrer), from != NULL ? from : "");
     } else {
-        start_trip(request->url, request, from, kind, NULL);
+        start_trip(request->url, request, from, kind, by, NULL);
     }
 }
 
@@ -3630,8 +3679,10 @@ static bool request_copy(const os64_page_request_t *from, os64_page_request_t *t
 // Reload on the reply to a form: the form sent again, which is asked
 // first, since whatever it did — an order, a post — it does twice. When
 // the form goes out in the clear, libway's own question is the one put:
-// it says that, and a yes to it is a yes to sending.
-static void resend_form(void)
+// it says that, and a yes to it is a yes to sending. `by` is who asked for
+// the reload, and `replay` what the browser's own Reload replays, NULL for
+// a page's (reload_as).
+static void resend_form(way_initiator_t by, const way_metadata_t *replay)
 {
     os64_page_request_t again;
     if (!request_copy(&g.page.sent, &again)) {
@@ -3648,8 +3699,14 @@ static void resend_form(void)
             j.kind == WAY_QUESTION ? j.question
                                    : "This page is the reply to a form. Send the form again?");
     g.pending = again;
-    g.pending_referrer[0] = '\0';       // a Reload names nothing
+    // The page it is sent from: a Reload names nothing in its Referer
+    // (trip_send), and a page's own reload starts from this origin.
+    os64_strcopy(g.pending_referrer, sizeof(g.pending_referrer), g.page.way.url);
     g.pending_kind = NAV_RELOAD;
+    g.pending_by = by;
+    g.pending_replays = replay != NULL;
+    if (replay != NULL)
+        g.pending_replay = *replay;
     g.pending_refused = j.kind == WAY_QUESTION ? j.refused : "The form was not sent again.";
 }
 
@@ -3668,7 +3725,7 @@ static void open_address(const char *typed, NavKind kind, const way_position_t *
         status_rest("That address is longer than one may be.");
         return;
     }
-    start_trip(url, request, NULL, kind, crumb);
+    start_trip(url, request, NULL, kind, WAY_BY_BROWSER, crumb);
 }
 
 // ── Pictures ────────────────────────────────────────────────────────────
@@ -3688,6 +3745,18 @@ static bool picture_sized(const Page *p, const os64_html_node_t *node)
 {
     const flow_box_t *b = flow_box_for(p->tree, node);
     return b != NULL && flow_replaced_fixed(b);
+}
+
+// Who asks for a page's picture, sheet, script or font, and what for: the
+// agent's preset lines, read with the agent, and the request's metadata
+// from the page at `page_url`. Mode no-cors for every one: yonder runs no
+// CORS check on any of them, a font included, so none says it does.
+static void hooks_ask(way_hooks_t *hooks, const char *page_url, way_dest_t dest)
+{
+    hooks->identity = g.way.identity;
+    way_origin_t page;
+    way_origin_of(page_url, 0, &page);
+    way_metadata_request(&hooks->metadata, &page, dest, WAY_MODE_NO_CORS);
 }
 
 // Hands the pool the page's next pictures, in table order, while fewer than
@@ -3722,6 +3791,7 @@ static void pictures_feed(Page *p)
         job->hooks.jar = g.way.jar;
         job->hooks.cache = g.cache;
         os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), p->way.url);
+        hooks_ask(&job->hooks, p->way.url, WAY_DEST_IMAGE);
         os64_work_t work = {yonder_picture_run, yonder_picture_release, job, PICTURE_RESERVE};
         pic->id = os64_work_submit(g.pool, &work);
         if (pic->id == 0) {
@@ -3951,6 +4021,7 @@ static void sheet_fetch(Page *p, Sheet *sh, const char *url)
     job->hooks.jar = g.way.jar;
     job->hooks.cache = g.cache;
     os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), p->way.url);
+    hooks_ask(&job->hooks, p->way.url, WAY_DEST_STYLE);
     job->keep = s_diag.keep;
     os64_work_t work = {yonder_sheet_run, yonder_sheet_release, job, SHEET_RESERVE};
     sh->id = os64_work_submit(g.pool, &work);
@@ -5232,6 +5303,7 @@ static void webfonts_feed(bool laid)
             job->hooks.jar = g.way.jar;
             job->hooks.cache = g.cache;
             os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), g.page.way.url);
+            hooks_ask(&job->hooks, g.page.way.url, WAY_DEST_FONT);
             os64_work_t work = {yonder_webfont_run, yonder_webfont_release, job, WEBFONT_RESERVE};
             w->id = os64_work_submit(g.pool, &work);
             if (w->id == 0) {
@@ -6858,8 +6930,9 @@ static void forms_flush(void)
 // libpage decides what goes and where; libway judges it; an INVALID
 // refusal puts the focus on the control that failed. `kind` is how the
 // reply comes: a new way, or a refresh when a script sends the form before
-// its page has completely loaded (navigation_perform).
-static void form_send_as(int32_t control, os64_page_activation_t how, NavKind kind)
+// its page has completely loaded (navigation_perform). `by` is whether a
+// person sent it or the page's script did.
+static void form_send_as(int32_t control, os64_page_activation_t how, NavKind kind, way_initiator_t by)
 {
     forms_flush();
     os64_page_what_t what = {how, control, 0, 0};
@@ -6867,7 +6940,7 @@ static void form_send_as(int32_t control, os64_page_activation_t how, NavKind ki
     os64_page_verdict_t verdict = os64_page_activate(page_model(&g.page), what, &request);
     if (verdict == OS64_PAGE_NAVIGATE) {
         g.chain = 0;
-        request_navigate(&request, kind, WAY_ASK_SEND, g.page.way.url, g.page.diag);
+        request_navigate(&request, kind, WAY_ASK_SEND, g.page.way.url, by, g.page.diag);
         return;
     }
     if (verdict == OS64_PAGE_FRAGMENT) {
@@ -6885,9 +6958,10 @@ static void form_send_as(int32_t control, os64_page_activation_t how, NavKind ki
     os64_page_request_free(&request);
 }
 
+// A form a person sent: a button pressed, Enter in a field.
 static void form_send(int32_t control, os64_page_activation_t how)
 {
-    form_send_as(control, how, NAV_GO);
+    form_send_as(control, how, NAV_GO, WAY_BY_PERSON);
 }
 
 // The keys of a focused password field, taken before libui sees them: its
@@ -7389,6 +7463,7 @@ static uint64_t script_fetch(void *opaque, uint64_t serial, uint32_t token, cons
     job->hooks.cache = g.cache;
     const char *referrer = yonder_scripts_referrer(host);
     os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), referrer != NULL ? referrer : "");
+    hooks_ask(&job->hooks, yonder_scripts_url(host), WAY_DEST_SCRIPT);
     os64_work_t work = {yonder_script_run, yonder_script_release, job, SCRIPT_RESERVE};
     os64_work_id_t id = os64_work_submit(g.pool, &work);
     if (id == 0)
@@ -7674,6 +7749,7 @@ static yonder_fetch_job_t *request_job(uint64_t serial, uint32_t token, const os
     job->page = serial;
     job->token = token;
     job->agent = g.way.agent;
+    job->identity = g.way.identity;
     job->url = os64_malloc(url_len + 1);
     job->headers = os64_malloc(q->headers_length + 1);
     job->body = q->body != NULL ? os64_malloc(q->body_length + 1) : NULL;
@@ -7911,7 +7987,7 @@ static Page *page_of_host(const yonder_scripts_t *host);
 static bool page_fragment(Page *p, const char *url, bool replace, bool tell);
 static void fragment_scroll(const os64_html_node_t *target, const char *name);
 static bool page_traverse(Page *p, int32_t delta);
-static void session_go(int32_t delta);
+static void session_go(int32_t delta, way_initiator_t by, const char *from);
 
 // How many entries a history delta moves, in a type that holds every one:
 // a page's history.go() takes any WebIDL `long`, and INT32_MIN has no
@@ -8023,14 +8099,22 @@ static void unshown_go(Page *p, int32_t delta)
     }
     if (p == g.finishing.page)
         g.finishing.abandoned = true;
+    // The traversal is the page's own, from its address, read before the
+    // stop below can let the page go.
+    char from[OS64_FETCH_URL_MAX];
+    os64_strcopy(from, sizeof(from), p->way.url);
     // Stopping a traversal can add the page on screen's held change to the
     // session (traverse_end) after `target` was measured (DEBTS.md § Classic
     // browser scripting).
     stop_trip();
     if (target != 0)
-        session_go((int32_t)target);
+        session_go((int32_t)target, WAY_BY_PAGE, from);
 }
 
+// A navigation a page's script asked for. Every one is the page's own
+// (WAY_BY_PAGE): no person's activation, even for a click() or submit() a
+// listener ran inside the person's own click, which HTML would give it
+// (transient activation, which yonder does not track: DIVERGENCES).
 static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navigation_t *ask,
                                bool shown)
 {
@@ -8096,20 +8180,21 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
         request_navigate(&request,
                          ask->kind == OS64_DOM_NAVIGATE_REPLACE || (replaces && p == &g.page) ? NAV_REFRESH
                                                                                                 : NAV_GO,
-                         WAY_ASK_GO, from, record);
+                         WAY_ASK_GO, from, WAY_BY_PAGE, record);
         g.replacing = NULL;
         return;
     }
     case OS64_DOM_NAVIGATE_RELOAD:
         if (shown)
-            click_reload(NULL, NULL);
+            reload_as(WAY_BY_PAGE);
         return;
     case OS64_DOM_NAVIGATE_HISTORY: {
         // A page not yet shown goes through the entries its scripts made;
-        // Back or Forward past them is unshown_go's.
+        // Back or Forward past them is unshown_go's. Either is the page's
+        // own traversal.
         Page *p = shown ? NULL : page_of_host(host);
         if (p == NULL)
-            session_go(ask->delta);
+            session_go(ask->delta, WAY_BY_PAGE, g.page.way.url);
         else if (!page_traverse(p, ask->delta))
             unshown_go(p, ask->delta);
         return;
@@ -8118,7 +8203,7 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
         if (shown) {
             int32_t link = os64_page_link_for(page_model(&g.page), ask->node);
             if (link >= 0)
-                follow_link_asked(link, WAY_ASK_GO);
+                follow_link_asked(link, WAY_ASK_GO, WAY_BY_PAGE);
         }
         return;
     case OS64_DOM_NAVIGATE_SUBMIT:
@@ -8129,9 +8214,10 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
             int32_t control = ask->submitter != NULL
                 ? os64_page_control_for(page_model(&g.page), ask->submitter) : -1;
             if (control >= 0)
-                form_send_as(control, OS64_PAGE_ACTIVATE_CONTROL, kind);
+                form_send_as(control, OS64_PAGE_ACTIVATE_CONTROL, kind, WAY_BY_PAGE);
             else
-                form_send_as(os64_page_form_for(page_model(&g.page), ask->node), OS64_PAGE_ACTIVATE_FORM, kind);
+                form_send_as(os64_page_form_for(page_model(&g.page), ask->node), OS64_PAGE_ACTIVATE_FORM, kind,
+                             WAY_BY_PAGE);
         }
         return;
     case OS64_DOM_NAVIGATE_NONE:
@@ -8484,6 +8570,7 @@ static way_crumb_t page_entry_left(Page *p)
         left.position = position_now();
     left.document = p->document;
     left.entry = p->entry;
+    left.asked = p->asked;
     left.state = p->entry_state;
     p->entry_state = NULL;
     return left;
@@ -8503,6 +8590,7 @@ static bool page_hold(void)
     os64_strcopy(g.held.url, sizeof(g.held.url), g.page.way.url);
     g.held.document = g.page.document;
     g.held.entry = g.page.entry;
+    g.held.asked = g.page.asked;
     g.held.state = state;
     g.has_held = true;
     return true;
@@ -8754,8 +8842,9 @@ static void stream_scripts_entry(void)
 // within its document when every entry it crosses is its own; else the
 // entry `delta` away fetched, which the session moves to, by its name,
 // when it arrives (arrive_now; g.traversing until then). Nothing when
-// there is no such entry, which the status line says.
-static void session_go(int32_t delta)
+// there is no such entry, which the status line says. `by` is who asked:
+// the browser's Back and Forward, or the page at `from` (its history.go).
+static void session_go(int32_t delta, way_initiator_t by, const char *from)
 {
     // A traversal asked while another is fetched is measured from the
     // entry on screen: the one in flight is stopped first (the HTML queue
@@ -8781,7 +8870,16 @@ static void session_go(int32_t delta)
     char *state = crumb.state != NULL ? copy_text(crumb.state) : NULL;
     crumb.state = NULL;
     g.chain = 0;
-    start_trip(crumb.url, NULL, NULL, back ? NAV_BACK : NAV_FORWARD, &crumb.position);
+    // The browser's Back and Forward replay how the entry was first asked
+    // for, as Chrome 156 and Firefox 158 do (Back to a typed entry sends
+    // Sec-Fetch-Site none and ?1 again: capture-27-chrome-win-get-root and
+    // capture-44-firefox-linux-get-root); an entry that kept nothing goes
+    // as the browser's own. A page's history.go is the page's, from
+    // `from`. A traversal's Referer names nothing (trip_send), whatever
+    // `from` is.
+    g.replaying = by == WAY_BY_BROWSER && crumb.asked.dest == WAY_DEST_DOCUMENT ? &crumb.asked : NULL;
+    start_trip(crumb.url, NULL, from, back ? NAV_BACK : NAV_FORWARD, by, &crumb.position);
+    g.replaying = NULL;
     if (g.stream.active) {
         stream_entry(crumb.entry, state, true);
         g.traversing = true;
@@ -9742,6 +9840,7 @@ static void stream_finish(os64_fetch_status_t fetch, const char *reason)
     // owes, a scroll it asked for.
     fresh.document = found->document;
     fresh.entry = found->entry;
+    fresh.asked = found->asked;
     fresh.arrives_at = found->arrives_at;
     fresh.entry_state = found->entry_state;
     fresh.back = found->back;
@@ -11506,8 +11605,8 @@ static int32_t link_at(int32_t x, int32_t y)
 // move, a `javascript:` address is the page's own script, anywhere else is
 // judged by libway with `ask`. A person pressing it is never asked about
 // (WAY_ASK_NEVER); a script's click() is judged as the page's own choice
-// (WAY_ASK_GO).
-static void follow_link_asked(int32_t link, way_ask_t ask)
+// (WAY_ASK_GO), and `by` says which of the two it was.
+static void follow_link_asked(int32_t link, way_ask_t ask, way_initiator_t by)
 {
     os64_page_what_t what = {OS64_PAGE_ACTIVATE_LINK, link, 0, 0};
     os64_page_request_t request;
@@ -11547,7 +11646,7 @@ static void follow_link_asked(int32_t link, way_ask_t ask)
         os64_page_request_free(&request);
     } else if (verdict == OS64_PAGE_NAVIGATE) {
         g.chain = 0;
-        request_navigate(&request, NAV_GO, ask, g.page.way.url, g.page.diag);
+        request_navigate(&request, NAV_GO, ask, g.page.way.url, by, g.page.diag);
     } else {
         if (reason_refuses(request.reason))
             say_failed(g.page.diag, "link refused", os64_page_reason_name(request.reason));
@@ -11559,7 +11658,7 @@ static void follow_link_asked(int32_t link, way_ask_t ask)
 
 static void follow_link(int32_t link)
 {
-    follow_link_asked(link, WAY_ASK_NEVER);
+    follow_link_asked(link, WAY_ASK_NEVER, WAY_BY_PERSON);
 }
 
 // An `input type=image` is a picture that sends its form: libflow gave it
@@ -11744,32 +11843,52 @@ static void click_back(os64_ui_widget_t *w, void *user)
 {
     (void)w;
     (void)user;
-    session_go(-1);
+    session_go(-1, WAY_BY_BROWSER, NULL);
 }
 
 static void click_forward(os64_ui_widget_t *w, void *user)
 {
     (void)w;
     (void)user;
-    session_go(1);
+    session_go(1, WAY_BY_BROWSER, NULL);
+}
+
+// The page on screen again, asked for by `by`: the browser's own Reload,
+// which replays how the entry's navigation was asked and is a reload
+// (Chrome 156 and Firefox 158 both send the entry's own Sec-Fetch-Site
+// and -User again: capture-26-chrome-win-get-clicked and
+// capture-43-firefox-linux-get-clicked), or the page's location.reload(),
+// which starts from the page's own origin and is nobody's.
+static void reload_as(way_initiator_t by)
+{
+    if (g.page.tree == NULL)
+        return;
+    g.chain = 0;
+    way_metadata_t replay = g.page.asked;
+    if (replay.dest != WAY_DEST_DOCUMENT)
+        way_metadata_navigation(&replay, WAY_BY_BROWSER, NULL);    // kept nothing (a file)
+    replay.reload = true;
+    const way_metadata_t *replays = by == WAY_BY_BROWSER ? &replay : NULL;
+    if (g.page.sent.url != NULL) {
+        resend_form(by, replays);
+        return;
+    }
+    char url[OS64_FETCH_URL_MAX];
+    os64_strcopy(url, sizeof(url), g.page.way.url);
+    // The address goes as the page it starts from; a Reload's Referer
+    // names nothing all the same (trip_send).
+    g.replaying = replays;
+    start_trip(url, NULL, url, NAV_RELOAD, by, NULL);
+    g.replaying = NULL;
+    // A reload is the same entry again, its state with it.
+    stream_entry(g.page.entry, g.page.entry_state, false);
 }
 
 static void click_reload(os64_ui_widget_t *w, void *user)
 {
     (void)w;
     (void)user;
-    if (g.page.tree == NULL)
-        return;
-    g.chain = 0;
-    if (g.page.sent.url != NULL) {
-        resend_form();
-        return;
-    }
-    char url[OS64_FETCH_URL_MAX];
-    os64_strcopy(url, sizeof(url), g.page.way.url);
-    start_trip(url, NULL, NULL, NAV_RELOAD, NULL);
-    // A reload is the same entry again, its state with it.
-    stream_entry(g.page.entry, g.page.entry_state, false);
+    reload_as(WAY_BY_BROWSER);
 }
 
 // A mode change stops queued execution immediately. Reload re-parses noscript;
@@ -12162,10 +12281,8 @@ int main(int argc, char **argv)
     s_env.replaced_size = replaced_size;
     g.zoom = g.zoom_default = yonder_settings_saved_zoom();
     g.way.name = "yonder";
-    char saved[YONDER_AGENT_MAX];
-    const char *agent = yonder_settings_saved_agent(saved, sizeof(saved)) ? yonder_agent_keep(saved)
-                                                                           : NULL;
-    g.way.agent = agent != NULL ? agent : YONDER_AGENT;
+    g.way.agent = starting_agent();
+    g.way.identity = yonder_agent_identity(g.way.agent);
     g.way.accept = YONDER_ACCEPT;
     g.way.delayed_hint = " - it is in the address field; press Enter to go";
     g.way.jar = way_jar_new();          // NULL keeps no cookies: the pages still load

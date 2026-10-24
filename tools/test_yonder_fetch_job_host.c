@@ -128,6 +128,7 @@ typedef struct {
     way_policy_t policy;
     bool flag;
     uint64_t max_body;
+    const way_identity_t *identity;     // the agent's preset lines, NULL for none
 } Ask;
 
 static yonder_fetch_job_t *job_of(const Ask *a)
@@ -137,6 +138,7 @@ static yonder_fetch_job_t *job_of(const Ask *a)
         return NULL;
     j->kind = YONDER_JOB_FETCH;
     j->agent = "yonder-test";
+    j->identity = a->identity;
     j->url = os64_malloc(strlen(a->url) + 1);
     const char *h = a->headers != NULL ? a->headers : "";
     j->headers = os64_malloc(strlen(h) + 1);
@@ -733,8 +735,138 @@ static void sweep_once(void)
     expect("sweep once reached the end", n < 400, NULL);
 }
 
+// ── Who is asking ───────────────────────────────────────────────────────
+
+static const way_identity_t kWho = {.hints = "sec-ch-ua: \"Fixture\";v=\"1\"\r\n", .language = "en-US,en;q=0.9",
+                                    .priority = {[WAY_DEST_EMPTY] = "u=4"}};
+
+static void who_is_asking(void)
+{
+    // fetch() to its own origin: cors, empty, the preset's lines with it.
+    fresh();
+    fake_answer(NULL, "https://a.test/api", 200, "", "x");
+    yonder_fetched_t *g = run(&(Ask){"https://a.test/page", "https://a.test/api", .identity = &kWho});
+    expect("who: ok", g != NULL && g->ok, g ? g->why : NULL);
+    expect_text("who: same-origin site", field(0, "Sec-Fetch-Site"), "same-origin");
+    expect_text("who: cors mode", field(0, "Sec-Fetch-Mode"), "cors");
+    expect_text("who: empty dest", field(0, "Sec-Fetch-Dest"), "empty");
+    expect_text("who: no user on a script's request", field(0, "Sec-Fetch-User"), "");
+    expect_text("who: no upgrade on a script's request", field(0, "Upgrade-Insecure-Requests"), "");
+    expect_text("who: the preset's hints", field(0, "sec-ch-ua"), "\"Fixture\";v=\"1\"");
+    expect_text("who: the preset's language", field(0, "Accept-Language"), "en-US,en;q=0.9");
+    expect_text("who: the preset's priority for an empty destination", field(0, "Priority"), "u=4");
+    yonder_fetched_free(g);
+
+    // The modes a page may name.
+    fresh();
+    fake_answer(NULL, "https://a.test/api", 200, "", "x");
+    g = run(&(Ask){"https://a.test/page", "https://a.test/api", .mode = WAY_MODE_SAME_ORIGIN});
+    expect_text("who: same-origin mode", field(0, "Sec-Fetch-Mode"), "same-origin");
+    yonder_fetched_free(g);
+    fake_answer(NULL, "https://b.test/pixel", 200, "", "x");
+    g = run(&(Ask){"https://a.test/page", "https://b.test/pixel", .mode = WAY_MODE_NO_CORS});
+    expect_text("who: no-cors mode", field(1, "Sec-Fetch-Mode"), "no-cors");
+    expect_text("who: and cross-site", field(1, "Sec-Fetch-Site"), "cross-site");
+    yonder_fetched_free(g);
+
+    // A preflight carries cors and empty, the request's site, the
+    // language, and no client hints; the request after it carries them.
+    fresh();
+    fake_answer("OPTIONS", "https://b.test/api", 204,
+                "Access-Control-Allow-Origin: https://a.test\r\nAccess-Control-Allow-Methods: PUT\r\n"
+                "Access-Control-Allow-Headers: x-w1\r\n", NULL);
+    fake_answer("PUT", "https://b.test/api", 200, "Access-Control-Allow-Origin: https://a.test\r\n", "done");
+    g = run(&(Ask){"https://a.test/page", "https://b.test/api", "PUT", "X-W1: 1\r\n", .identity = &kWho});
+    expect("who: the preflighted PUT", g != NULL && g->ok && nfake_requests == 2 &&
+           !strcmp(fake_requests[0].method, "OPTIONS"), g ? g->why : NULL);
+    expect_text("who: preflight mode", field(0, "Sec-Fetch-Mode"), "cors");
+    expect_text("who: preflight dest", field(0, "Sec-Fetch-Dest"), "empty");
+    expect_text("who: preflight site", field(0, "Sec-Fetch-Site"), "cross-site");
+    expect_text("who: preflight language", field(0, "Accept-Language"), "en-US,en;q=0.9");
+    expect_text("who: no hints with a preflight", field(0, "sec-ch-ua"), "");
+    expect_text("who: a preflight's priority", field(0, "Priority"), "u=4");
+    expect_text("who: the request after it has them", field(1, "sec-ch-ua"), "\"Fixture\";v=\"1\"");
+    expect_text("who: and its site", field(1, "Sec-Fetch-Site"), "cross-site");
+    yonder_fetched_free(g);
+
+    // A redirect to another site: that hop, and the URL list after it.
+    fresh();
+    fake_answer(NULL, "https://a.test/r", 302, "Location: https://b.test/final\r\n", NULL);
+    fake_answer(NULL, "https://b.test/final", 302,
+                "Access-Control-Allow-Origin: *\r\nLocation: https://a.test/back\r\n", NULL);
+    fake_answer(NULL, "https://a.test/back", 200, "Access-Control-Allow-Origin: *\r\n", "end");
+    g = run(&(Ask){"https://a.test/page", "https://a.test/r"});
+    expect("who: the redirects followed", g != NULL && g->ok && nfake_requests == 3, g ? g->why : NULL);
+    expect_text("who: the first hop is same-origin", field(0, "Sec-Fetch-Site"), "same-origin");
+    expect_text("who: the hop that leaves is cross-site", field(1, "Sec-Fetch-Site"), "cross-site");
+    expect_text("who: and back on the origin it stays so", field(2, "Sec-Fetch-Site"), "cross-site");
+    yonder_fetched_free(g);
+
+    // Plain http hears none of the metadata or the hints.
+    fresh();
+    fake_answer(NULL, "http://a.test/api", 200, "", "x");
+    g = run(&(Ask){"http://a.test/page", "http://a.test/api", .identity = &kWho});
+    expect_text("who: plain http, no site", field(0, "Sec-Fetch-Site"), "");
+    expect_text("who: plain http, no hints", field(0, "sec-ch-ua"), "");
+    expect_text("who: plain http, the language", field(0, "Accept-Language"), "en-US,en;q=0.9");
+    yonder_fetched_free(g);
+
+    // A page's own Priority goes alone, as its Accept-Language does: the
+    // preset's beside it would be a duplicate, which libfetch refuses.
+    fresh();
+    fake_answer(NULL, "https://a.test/api", 200, "", "x");
+    g = run(&(Ask){"https://a.test/page", "https://a.test/api", "GET", "Priority: u=1\r\n", .identity = &kWho});
+    expect("who: a page's Priority", g != NULL && g->ok, g ? g->why : NULL);
+    expect_text("who: the page's Priority goes", field(0, "Priority"), "u=1");
+    expect("who: and the preset's does not", strstr(fake_requests[0].fields, "Priority") == NULL,
+           fake_requests[0].fields);
+    yonder_fetched_free(g);
+
+    // With a preflight: it carries none of the page's lines, so the
+    // preset's Accept-Language and Priority go with it; the request after
+    // it carries the page's alone.
+    fresh();
+    fake_answer("OPTIONS", "https://b.test/api", 204,
+                "Access-Control-Allow-Origin: https://a.test\r\nAccess-Control-Allow-Methods: PUT\r\n"
+                "Access-Control-Allow-Headers: priority\r\n", NULL);
+    fake_answer("PUT", "https://b.test/api", 200, "Access-Control-Allow-Origin: https://a.test\r\n", "done");
+    g = run(&(Ask){"https://a.test/page", "https://b.test/api", "PUT",
+                   "Accept-Language: fr\r\nPriority: u=1\r\n", .identity = &kWho});
+    expect("who: a preflighted request with the page's own lines", g != NULL && g->ok && nfake_requests == 2,
+           g ? g->why : NULL);
+    expect_text("who: the preflight's language is the preset's", field(0, "Accept-Language"), "en-US,en;q=0.9");
+    expect_text("who: the preflight's priority is the preset's", field(0, "Priority"), "u=4");
+    expect_text("who: the request's language is the page's", field(1, "Accept-Language"), "fr");
+    expect_text("who: the request's priority is the page's", field(1, "Priority"), "u=1");
+    expect("who: and the preset's lines are not beside them",
+           strstr(fake_requests[1].fields, "Accept-Language") == NULL &&
+           strstr(fake_requests[1].fields, "Priority") == NULL, fake_requests[1].fields);
+    yonder_fetched_free(g);
+
+    // A page's own Accept-Language goes alone; a page cannot write the
+    // browser's lines, nor a Sec- or Proxy- header of any name.
+    fresh();
+    fake_answer(NULL, "https://a.test/api", 200, "", "x");
+    g = run(&(Ask){"https://a.test/page", "https://a.test/api", "GET",
+                   "accept-language: fr\r\nSec-Fetch-User: ?1\r\nSec-Fetch-Site: none\r\nsec-ch-ua: forged\r\n"
+                   "Upgrade-Insecure-Requests: 1\r\nProxy-Thing: x\r\nSec-Anything: x\r\n",
+                   .identity = &kWho});
+    expect("who: a page's headers", g != NULL && g->ok, g ? g->why : NULL);
+    expect_text("who: the page's language", field(0, "accept-language"), "fr");
+    expect("who: and only the page's", strstr(fake_requests[0].fields, "Accept-Language") == NULL,
+           fake_requests[0].fields);
+    expect("who: no forged Sec- or Proxy- line goes",
+           strstr(fake_requests[0].extra, "Sec-") == NULL && strstr(fake_requests[0].extra, "sec-") == NULL &&
+           strstr(fake_requests[0].extra, "Proxy-") == NULL, fake_requests[0].extra);
+    expect_text("who: the browser's site stands", field(0, "Sec-Fetch-Site"), "same-origin");
+    expect_text("who: no user from a script", field(0, "Sec-Fetch-User"), "");
+    expect_text("who: the browser's hints stand", field(0, "sec-ch-ua"), "\"Fixture\";v=\"1\"");
+    yonder_fetched_free(g);
+}
+
 int main(void)
 {
+    who_is_asking();
     same_origin();
     cross_origin();
     preflights();

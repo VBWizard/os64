@@ -46,7 +46,7 @@ static bool (*fake_resolve)(const char *method, const char *url, fake_answer_t *
 typedef struct {
     char method[64];
     char url[512];
-    char fields[1100];          /* headers_for's lines: Cookie, Referer */
+    char fields[OS64_FETCH_HOP_FIELDS_MAX]; /* headers_for's lines, whole */
     char extra[9000];           /* extra_headers */
     char body_headers[1024];
     char accept[512];

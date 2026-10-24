@@ -3,25 +3,56 @@
 #include "agent.h"
 #include "os64/str.h"
 
-// Each spelled as that browser spells it, at about the versions current in
-// September 2026; a site that checks the number more closely can be handed
-// another in the field. Chrome and Firefox as on Windows 10 and 11, which
-// both report NT 10.0; Safari as on an iPhone, which many sites answer
-// with a lighter page; Netscape 4, which the vintage-web sites answer as
-// the old browser it is; and Lynx, which some sites answer with a
-// text-only version.
+// Each spelled as that browser spells it; a site that checks the number
+// more closely can be handed another in the field. Chrome and Firefox as on
+// Windows 10 and 11, which both report NT 10.0: their strings and their
+// lines are what Chrome 156 and Firefox 158 sent a local listener in
+// October 2026, byte for byte, header names in their own case (the W1
+// capture files: WIRE.md § 1 as built names each). Chrome sends no
+// Priority over HTTP/1.1, and asks every cache to revalidate on the
+// browser's Reload; Firefox sends a Priority on every request, and its rows
+// are the ones it sent for each destination asked (no font was, so a font
+// goes without), and adds nothing on a Reload. Safari as on an iPhone, which many sites answer with
+// a lighter page: not captured, its string as published in September 2026,
+// no client hints (Safari has none), no Priority, and the language list
+// MDN's Accept-Language page gives for Chrome and Safari alike. yonder's
+// own asks for English as a real browser does, since a server that hears
+// no language guesses one. Netscape 4, which the vintage-web sites answer
+// as the old browser it is, and Lynx, which some sites answer with a
+// text-only version, are costumes, and claim no lines beyond their strings.
 static const yonder_agent_preset_t kPresets[] = {
-    {"yonder", YONDER_AGENT},
+    {"yonder", YONDER_AGENT, {.language = "en-US,en;q=0.9"}},
     {"Chrome on Windows",
      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-     "Chrome/154.0.0.0 Safari/537.36"},
+     "Chrome/156.0.0.0 Safari/537.36",
+     {.hints = "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+               "sec-ch-ua-mobile: ?0\r\n"
+               "sec-ch-ua-platform: \"Windows\"\r\n",
+      .language = "en-US,en;q=0.9", .reload_cache_control = "max-age=0"}},
     {"Firefox on Windows",
-     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0"},
+     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0",
+     {.language = "en-US,en;q=0.9",
+      .priority = {[WAY_DEST_DOCUMENT] = "u=0, i", [WAY_DEST_STYLE] = "u=2", [WAY_DEST_SCRIPT] = "u=2",
+                   [WAY_DEST_IMAGE] = "u=5, i", [WAY_DEST_EMPTY] = "u=4"}}},
     {"Safari on iPhone",
      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 "
-     "(KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"},
-    {"Netscape 4 on Windows 98", "Mozilla/4.08 [en] (Win98; U)"},
-    {"Lynx", "Lynx/2.9.2 libwww-FM/2.14 SSL-MM/1.4.1 OpenSSL/3.0.13"},
+     "(KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1",
+     {.language = "en-US,en;q=0.9"}},
+    {"Netscape 4 on Windows 98", "Mozilla/4.08 [en] (Win98; U)", {0}},
+    {"Lynx", "Lynx/2.9.2 libwww-FM/2.14 SSL-MM/1.4.1 OpenSSL/3.0.13", {0}},
+};
+
+// A preset's string as an earlier yonder spelled it, and the preset it is
+// now: a person who saved "Chrome on Windows" saved its string, which
+// would otherwise read as one typed, with none of the preset's lines.
+static const struct {
+    const char *agent;
+    const char *now;                // the preset's name
+} kRetired[] = {
+    {"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+     "Chrome/154.0.0.0 Safari/537.36", "Chrome on Windows"},
+    {"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0",
+     "Firefox on Windows"},
 };
 
 size_t yonder_agent_npresets(void)
@@ -50,5 +81,23 @@ const char *yonder_agent_name(const char *agent)
     for (size_t i = 0; agent != NULL && i < yonder_agent_npresets(); i++)
         if (os64_streq(agent, kPresets[i].agent))
             return kPresets[i].name;
+    return NULL;
+}
+
+const char *yonder_agent_current(const char *agent)
+{
+    for (size_t i = 0; agent != NULL && i < sizeof(kRetired) / sizeof(kRetired[0]); i++)
+        if (os64_streq(agent, kRetired[i].agent))
+            for (size_t j = 0; j < yonder_agent_npresets(); j++)
+                if (os64_streq(kPresets[j].name, kRetired[i].now))
+                    return kPresets[j].agent;
+    return agent;
+}
+
+const way_identity_t *yonder_agent_identity(const char *agent)
+{
+    for (size_t i = 0; agent != NULL && i < yonder_agent_npresets(); i++)
+        if (os64_streq(agent, kPresets[i].agent))
+            return &kPresets[i].identity;
     return NULL;
 }

@@ -18,19 +18,21 @@ void way_say(way_session_t *s, const char *fmt, ...)
     va_end(args);
 }
 
-way_leg_t way_leg_as(const way_session_t *s, const char *agent)
+way_leg_t way_leg_as(const way_session_t *s, const char *agent, const way_identity_t *identity)
 {
     way_leg_t leg;
     os64_memset(&leg, 0, sizeof(leg));
     leg.session = s;
     leg.agent = agent;
+    leg.identity = identity;
+    way_metadata_navigation(&leg.metadata, WAY_BY_BROWSER, NULL);
     leg.face = s->face;
     return leg;
 }
 
 way_leg_t way_leg(const way_session_t *s)
 {
-    return way_leg_as(s, s->agent);
+    return way_leg_as(s, s->agent, s->identity);
 }
 
 // ── Pages ───────────────────────────────────────────────────────────────
@@ -93,6 +95,7 @@ static void push(way_crumb_t *stack, int32_t *depth, way_crumb_t *crumb)
     top->position = crumb->position;
     top->document = crumb->document;
     top->entry = crumb->entry;
+    top->asked = crumb->asked;
     top->state = crumb->state;
     crumb->state = NULL;
     (*depth)++;

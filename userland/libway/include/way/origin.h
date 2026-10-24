@@ -3,13 +3,15 @@
 
 // Origins and the CORS protocol (MODERN_WEB.md § Slice 2, the origins and
 // CORS part; the Fetch Standard, sections cited at each rule): what a page
-// may ask of another origin, and what of the answer it may see.
+// may ask of another origin, and what of the answer it may see; and what
+// every request says about who is asking (Fetch Metadata, below).
 //
 // PURE. Nothing here dials, reads a clock or knows libfetch's types: a URL,
 // a request's bookkeeping and a response's headers in, a verdict out, so
 // tools/test_way_origin_host.sh drives every rule with no network. The fetch
 // job (yonder/fetch_job.c) asks these questions hop by hop and does the I/O;
-// libdom asks the header questions when a page builds a request. Each rule
+// libdom asks the header questions when a page builds a request; load.c
+// asks who-is-asking's for a navigation and a face's own fetches. Each rule
 // is ONE function, so a ruling changes one place.
 //
 // A HEADER BLOCK is "Name: value\r\n" lines, in order, NUL-free: the shape
@@ -47,11 +49,15 @@ typedef struct {
 // identity `opaque_id` (0 for "equal to nothing"). Out of memory reads as
 // opaque, the answer that grants nothing.
 void way_origin_of(const char *url, uint64_t opaque_id, way_origin_t *out);
+// The same, for an address already parsed (libfetch hands a hop's so).
+void way_origin_of_url(const os64_url_t *url, uint64_t opaque_id, way_origin_t *out);
 bool way_origin_same(const way_origin_t *a, const way_origin_t *b);
 // "Same site" until the public-suffix list lands (DEBTS): the same scheme and
 // the same host, ports aside. FINER than the real partition, so every answer
-// it changes is the restrictive one; never "the last two labels", which would
-// make evil.co.uk and bank.co.uk one site.
+// it changes in the CORS redirect-taint it serves is the restrictive one;
+// never "the last two labels", which would make evil.co.uk and bank.co.uk
+// one site. Fetch Metadata, where calling a site's own subdomain
+// cross-site is NOT the restrictive answer, asks way_origin_site instead.
 bool way_origin_same_site(const way_origin_t *a, const way_origin_t *b);
 // "null" for an opaque origin; "scheme://host" with ":port" only when it is
 // not the scheme's default. False when it does not fit in `cap`.
@@ -70,6 +76,10 @@ bool way_origin_prohibits_mixed(const way_origin_t *page);
 // refuses it all the same, as it refuses every scheme but http(s) and
 // data:.)
 bool way_url_trustworthy(const char *url);
+// The same judgement of a tuple origin (Secure Contexts' "Is origin
+// potentially trustworthy?"): https, wss, or a loopback host written as
+// way_url_trustworthy reads one. An opaque origin is not.
+bool way_origin_trustworthy(const way_origin_t *o);
 // Whether a fetch of `url` from `page` is blocked as mixed content: the page
 // prohibits it and the URL is not potentially trustworthy.
 bool way_mixed_blocked(const way_origin_t *page, const char *url);
@@ -247,6 +257,152 @@ bool way_origin_header(const way_request_t *r, const char *url, char *out, size_
 // `referrer` under the request's policy. False for none.
 bool way_referrer_for(const way_request_t *r, const char *referrer, const char *url, char *out,
                       size_t cap);
+
+// ── Who is asking, and for what ─────────────────────────────────────────
+//
+// A browser's request says more than its User-Agent. Some lines describe
+// the REQUEST, and every browser computes them the same way: Fetch
+// Metadata (the W3C's Fetch Metadata Request Headers: Sec-Fetch-Site,
+// -Mode, -Dest and -User) and, on a navigation, Upgrade-Insecure-Requests.
+// Those are computed here from facts the request holds. Other lines
+// describe the BROWSER, the same on every request it makes: the client
+// hints and the Accept-Language a face's agent preset carries
+// (way_identity_t), and the Priority it gives each kind of request, which
+// is the browser's habit about the request. One call writes all of them,
+// per hop, because most depend on where the hop goes: Fetch Metadata goes
+// only to a potentially trustworthy URL, and so do the client hints, which
+// are a secure-context feature; Upgrade-Insecure-Requests,
+// Accept-Language and Priority go everywhere.
+
+// Sec-Fetch-Dest: what the response will be used as.
+typedef enum {
+    WAY_DEST_EMPTY = 0,     // fetch(), XMLHttpRequest, and every preflight
+    WAY_DEST_DOCUMENT,      // a navigation: its mode is navigate
+    WAY_DEST_SCRIPT,
+    WAY_DEST_STYLE,
+    WAY_DEST_IMAGE,
+    WAY_DEST_FONT,
+} way_dest_t;
+// How many destinations there are: what a table indexed by one holds.
+#define WAY_DESTS (WAY_DEST_FONT + 1)
+
+// Sec-Fetch-Site: the request's origin against every URL of its URL list
+// so far, the furthest of them; NONE for a navigation the browser's own
+// controls started, which stays NONE through its redirects. UNKNOWN is the
+// answer nobody can give without the public-suffix list (way_origin_site),
+// and a request whose site is UNKNOWN sends no Fetch Metadata at all, as a
+// browser from before Fetch Metadata would: nothing it says is false, and
+// a server's resource-isolation policy lets such a request through. The
+// order is the URL list's: a later URL moves the answer only rightward.
+typedef enum {
+    WAY_SITE_SAME_ORIGIN = 0,
+    WAY_SITE_SAME_SITE,
+    WAY_SITE_UNKNOWN,
+    WAY_SITE_CROSS_SITE,
+    WAY_SITE_NONE,
+} way_site_t;
+
+// What is KNOWN of how `b` stands to `a` (HTML § same site) without the
+// public-suffix list (DEBTS), beside way_origin_same_site. The same
+// origin; the same scheme and host, ports aside, is the same site; an
+// opaque origin, another scheme, two hosts either of which is an IP
+// literal, or two hosts whose last two labels differ are certainly
+// cross-site (a registrable domain is a public suffix and one label more,
+// so it holds at least a host's last two labels); two different hosts that
+// share their last two labels (www.a.test and static.a.test, but also two
+// sites under one public suffix like a.github.io and b.github.io) are
+// UNKNOWN until the list says which.
+way_site_t way_origin_site(const way_origin_t *a, const way_origin_t *b);
+
+// Who started a navigation, which decides its Sec-Fetch-Site and whether
+// it carries Sec-Fetch-User.
+typedef enum {
+    // The browser's own controls: an address typed or given to it. Site
+    // NONE (Fetch Metadata § 2.3: "explicitly caused by a user's
+    // interaction with the user agent"), and a person's. Back, Forward and
+    // Reload replay the entry's own asking instead (way_crumb_t.asked), and
+    // are this only for an entry that kept none.
+    WAY_BY_BROWSER = 0,
+    // A person, on the page: a link followed, a form sent. The page's site,
+    // and a person's.
+    WAY_BY_PERSON,
+    // The page itself: a refresh, a script. The page's site, and nobody's
+    // in yonder: HTML gives a script's navigation the person's activation
+    // when it runs inside their gesture (transient activation), which
+    // yonder does not track, so it under-claims there (DIVERGENCES).
+    WAY_BY_PAGE,
+} way_initiator_t;
+
+// One request's facts, carried across its hops. Made by one of the two
+// calls below, then stepped by way_metadata_hop at every hop before its
+// lines are written.
+typedef struct {
+    way_origin_t origin;    // the request's: the page it is made from
+    way_site_t site;
+    way_dest_t dest;
+    way_mode_t mode;        // unread for a document, whose mode is navigate
+    bool activation;        // a person started it: Sec-Fetch-User, on a navigation
+    bool preflight;         // a CORS preflight: no client hints go with it
+    bool reload;            // the browser's Reload: the preset's reload line goes
+} way_metadata_t;
+
+// A navigation, started by `by` from the page whose origin is `from`
+// (unread for WAY_BY_BROWSER).
+void way_metadata_navigation(way_metadata_t *m, way_initiator_t by, const way_origin_t *from);
+// A page's own request: a picture, a sheet, a script, a font, or a script's
+// fetch, made from a page of origin `page`.
+void way_metadata_request(way_metadata_t *m, const way_origin_t *page, way_dest_t dest,
+                          way_mode_t mode);
+// The preflight for the request `m` describes, as it stands: mode cors,
+// destination empty, its site the request's.
+way_metadata_t way_metadata_preflight(const way_metadata_t *m);
+// `to` joins the URL list: the site only moves away from same-origin.
+// Asking again for the same `to` changes nothing, so a hop that is
+// composed twice is described once.
+void way_metadata_hop(way_metadata_t *m, const way_origin_t *to);
+
+// What a face's agent preset says on every request beside its User-Agent,
+// verbatim as that browser sends it. Either may be NULL; a typed agent has
+// none of it.
+typedef struct {
+    // The client hints, as whole "Name: value\r\n" lines in the browser's
+    // order, sent only to a potentially trustworthy URL and never with a
+    // preflight, as Chrome sends them.
+    const char *hints;
+    const char *language;   // Accept-Language's value, on every request
+    // Priority's value (RFC 9218) for a request of each destination, NULL
+    // for none: Firefox sends one on every request, by what it is for;
+    // Chrome sends none over HTTP/1.1. It says how urgent the request is,
+    // not what the browser can do, so a preset may say it truthfully.
+    const char *priority[WAY_DESTS];
+    // Cache-Control's value on the browser's Reload, NULL for none: Chrome
+    // asks every cache on the way to revalidate (max-age=0), Firefox adds
+    // nothing.
+    const char *reload_cache_control;
+} way_identity_t;
+
+// The most a hop's identity lines may take: Chrome's longest (its Reload
+// of a clicked link) is about 320 bytes, and the rest is room for a brand
+// list that grows. libfetch's per-hop cap
+// (OS64_FETCH_HOP_FIELDS_MAX) holds this much on top of the cookies'
+// kilobyte.
+#define WAY_IDENTITY_MAX 512
+
+// A hop to `to`'s lines, in this order: on a Reload (`m->reload`) the
+// preset's Cache-Control, on every hop; the client hints,
+// Upgrade-Insecure-Requests (a document's, on every hop), Sec-Fetch-Site,
+// -Mode, -User and -Dest (a trustworthy `to` only, and none while the
+// site is WAY_SITE_UNKNOWN), Accept-Language, and
+// the preset's Priority for the request's destination, on every hop. A
+// line the request already holds, because a page set it (`given`, the
+// WAY_GIVEN_ bits), is not written again: Fetch appends the browser's
+// Accept-Language only when there is none, and a second Priority would be
+// a duplicate libfetch refuses. `id` may be NULL. False when they do not
+// fit in `cap`, with `out` empty.
+#define WAY_GIVEN_LANGUAGE 0x1u
+#define WAY_GIVEN_PRIORITY 0x2u
+bool way_identity_lines(const way_identity_t *id, const way_metadata_t *m, const way_origin_t *to,
+                        unsigned given, char *out, size_t cap);
 
 // ── A response's headers, for the judgements ────────────────────────────
 

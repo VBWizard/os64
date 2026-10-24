@@ -38,6 +38,11 @@ typedef struct {
     way_request_t *r;
     const char *url;                // this hop's address
     bool preflight;                 // a preflight: no cookies go, none are heard
+    // The request's Fetch Metadata, stepped at every hop of its URL list,
+    // and the lines the page set of its own (WAY_GIVEN_: Accept-Language,
+    // Priority), which the browser's then does not double.
+    way_metadata_t metadata;
+    unsigned page_given;
     bool (*cancelled)(void *ctx);
     void *cancel_ctx;
     // The head as libfetch read it: its lines as a header block, and the
@@ -88,13 +93,33 @@ static size_t hop_cookies(const Hop *h, const os64_url_t *to, bool encrypted, ch
     return used;
 }
 
-// libfetch's per-hop fields: the cookies above, then the Referer the
-// request's policy gives this hop, when it fits after them.
+// The lines that say who is asking, for a hop to `to`: the request's
+// metadata stepped there, or the preflight's for it; the agent's preset
+// lines beside them. The length written, within WAY_IDENTITY_MAX: 0 when
+// they do not fit, which sends the hop without them.
+static size_t hop_identity(Hop *h, const os64_url_t *to, char *out, size_t cap)
+{
+    way_origin_t where;
+    way_origin_of_url(to, 0, &where);
+    way_metadata_hop(&h->metadata, &where);
+    way_metadata_t m = h->preflight ? way_metadata_preflight(&h->metadata) : h->metadata;
+    // A preflight carries none of the page's headers, so the browser's
+    // Accept-Language and Priority go with it whatever the page set.
+    unsigned given = h->preflight ? 0 : h->page_given;
+    if (!way_identity_lines(h->job->identity, &m, &where, given, out,
+                            cap < WAY_IDENTITY_MAX ? cap : WAY_IDENTITY_MAX))
+        return 0;
+    return os64_strlen(out);
+}
+
+// libfetch's per-hop fields: who is asking, the cookies above, then the
+// Referer the request's policy gives this hop, when it fits after them.
 static bool hop_fields(void *ctx, const os64_url_t *to, bool encrypted, char *out, size_t cap)
 {
     Hop *h = ctx;
     out[0] = '\0';
-    size_t used = hop_cookies(h, to, encrypted, out, cap);
+    size_t used = hop_identity(h, to, out, cap);
+    used += hop_cookies(h, to, encrypted, out + used, cap - used);
     char referrer[OS64_FETCH_URL_MAX];
     if (way_referrer_for(h->r, h->job->referrer, h->url, referrer, sizeof(referrer))) {
         size_t n = os64_strlen(referrer);
@@ -207,18 +232,41 @@ static bool append_line(char *out, size_t cap, const char *name, size_t nlen, co
 }
 
 // A header's name keeps the case the page wrote it in (§ 2.2.2's header
-// list does), so Accept is found without regard to case.
-static bool is_accept(const char *name, size_t len)
+// list does), so one is found without regard to case. `lower` is the name
+// lowercased.
+static bool is_named(const char *name, size_t len, const char *lower)
 {
-    static const char kAccept[] = "accept";
-    if (len != 6)
+    if (len != os64_strlen(lower))
         return false;
     for (size_t i = 0; i < len; i++) {
         char c = name[i] >= 'A' && name[i] <= 'Z' ? (char)(name[i] - 'A' + 'a') : name[i];
-        if (c != kAccept[i])
+        if (c != lower[i])
             return false;
     }
     return true;
+}
+
+static bool is_accept(const char *name, size_t len)
+{
+    return is_named(name, len, "accept");
+}
+
+// The browser's lines the page's headers already hold (WAY_GIVEN_): an
+// Accept-Language, which Fetch appends the browser's only when there is
+// none, and a Priority, which a second one would make a duplicate libfetch
+// refuses.
+static unsigned page_sets(const way_request_t *r)
+{
+    unsigned given = 0;
+    size_t at = 0;
+    way_header_t h;
+    while (way_header_next(r->headers, r->headers_len, &at, &h)) {
+        if (is_named(h.name, h.name_len, "accept-language"))
+            given |= WAY_GIVEN_LANGUAGE;
+        if (is_named(h.name, h.name_len, "priority"))
+            given |= WAY_GIVEN_PRIORITY;
+    }
+    return given;
 }
 
 // The author headers sorted into libfetch's places: Accept (joined, as
@@ -601,6 +649,10 @@ int64_t yonder_fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
     if (current == NULL)
         return network_error(got, "out of memory");
     way_request_start(r, current);
+    // A script's request is fetch()'s or XMLHttpRequest's: destination
+    // empty, the page's mode.
+    way_metadata_request(&h.metadata, &r->origin, WAY_DEST_EMPTY, r->mode);
+    h.page_given = page_sets(r);
     int64_t verdict = 0;
     for (;;) {
         if (cancelled != NULL && cancelled(ctx)) {

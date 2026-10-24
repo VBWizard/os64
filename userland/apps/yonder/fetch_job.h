@@ -8,7 +8,8 @@
 // libway's origin.c every question the standard asks of a hop (MODERN_WEB.md
 // § Slice 2's origins and CORS): the tainting, the preflight, the Origin
 // header, whether cookies go and Set-Cookie is heard, the Authorization
-// strip, the CORS check. What it hands back is the FILTERED response: a
+// strip, the CORS check, and the Fetch Metadata the hop carries beside the
+// agent's preset lines. What it hands back is the FILTERED response: a
 // page never receives a header or a byte it may not see. A network error's
 // `why` is the page record's (yonder's request_record); the answer the
 // binding is handed carries none, and the page's TypeError says only
@@ -39,6 +40,7 @@ typedef struct {
     uint64_t page;                  // the page it belongs to (the script host's serial)
     uint32_t token;                 // which of that page's requests
     const char *agent;              // the browser's, read-only for the run
+    const way_identity_t *identity; // the agent's preset lines, NULL for none
     char *url;                      // os64_malloc'd: the request's address, fragment and all
     // The request's facts (way/origin.h): the page's origin, mode,
     // credentials, redirect mode, referrer policy, the use-CORS-preflight

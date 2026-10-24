@@ -92,6 +92,18 @@ remaining gates before recommending scripts for ordinary browsing.
   typed there is sent as typed, once it is printable ASCII a header can
   carry and the config file keeps: no `#`, no space at either end, under
   `OS64_FETCH_AGENT_MAX`.
+- **A preset is a whole identity**: beside its string, every request
+  carries the lines that browser sends on every request, byte for byte
+  as it sends them: Chrome's client hints (`sec-ch-ua`,
+  `sec-ch-ua-mobile`, `sec-ch-ua-platform`, to a potentially trustworthy
+  address only), Firefox's `Priority` for each kind of request, and
+  `Accept-Language` for Chrome, Firefox and Safari. yonder's own asks for
+  English too (`en-US,en;q=0.9`), as a real browser does. A typed agent,
+  Netscape and Lynx claim nothing beyond their strings. A default saved
+  as a preset's earlier string (Chrome 154, Firefox 156) is read as that
+  preset's current one (`yonder_agent_current`), lines and all. Every
+  request, whatever the agent, also says what it is for (libway's Fetch
+  Metadata, `way/origin.h`).
 - **Apply** changes it for this window, from the next fetch on; **Save as
   default** writes `agent =` to `yonder.conf` at the top of the
   configuration ladder, where every yonder reads it at start. An agent
@@ -515,7 +527,9 @@ past a limit the expired go first and then the cookie used longest ago —
 sending counts as use, so the login every page carries is the last to go.
 
 **Sent in the order the RFC gives** (the longest path first, then the
-oldest), whole cookies only. libfetch gives a hop 1024 bytes for its
+oldest), whole cookies only. libfetch gives a hop 1536 bytes for its
+per-hop lines, of which the lines that say who is asking take up to 512
+first (libway's `WAY_IDENTITY_MAX`), which leaves a kilobyte for its
 `Cookie` and `Referer` lines together; the cookies come first, because a
 login depends on them and not on a Referer, and what does not fit is left
 off whole (the limit is booked with libfetch, in BROWSER_DEBTS.md).

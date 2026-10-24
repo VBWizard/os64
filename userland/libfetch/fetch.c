@@ -385,10 +385,26 @@ static void extras_for_hop(const os64_fetch_t *f, char *out, size_t cap, bool en
     }
 }
 
+// The fields the per-hop callback may write, each at most once. A jar owns
+// Cookie selection, and the rest describe the browser and the request, not
+// anybody's credential; accepting arbitrary fields here would bypass the
+// Authorization and proxy-credential rules of the static block. The answer
+// is the field's bit, 0 for a name not on the list.
+static unsigned hop_field(const char *line, size_t nameLen)
+{
+    static const char *const kFields[] = {
+        "cookie", "referer", "accept-language", "sec-ch-ua", "sec-ch-ua-mobile",
+        "sec-ch-ua-platform", "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site",
+        "sec-fetch-user", "upgrade-insecure-requests", "priority", "cache-control",
+    };
+    for (size_t i = 0; i < sizeof(kFields) / sizeof(kFields[0]); i++)
+        if (name_is(line, nameLen, kFields[i]))
+            return 1u << i;
+    return 0;
+}
+
 // Add the navigator's per-URL fields after static credential filtering.
-// Validate the entire callback block before emitting any of it. A jar owns
-// Cookie selection; accepting arbitrary fields here would bypass the
-// Authorization and proxy-credential rules of the static block.
+// Validate the entire callback block before emitting any of it.
 static bool request_extras(os64_fetch_t *f, char *out, size_t cap, bool encrypted)
 {
     extras_for_hop(f, out, cap, encrypted);
@@ -414,8 +430,7 @@ static bool request_extras(os64_fetch_t *f, char *out, size_t cap, bool encrypte
     for (const char *p = out; *p;) {
         const char *colon = p;
         while (*colon != ':') colon++;
-        if (name_is(p, (size_t)(colon - p), "cookie")) seen |= 1;
-        if (name_is(p, (size_t)(colon - p), "referer")) seen |= 2;
+        seen |= hop_field(p, (size_t)(colon - p));
         while (!(p[0] == '\r' && p[1] == '\n')) p++;
         p += 2;
     }
@@ -423,8 +438,7 @@ static bool request_extras(os64_fetch_t *f, char *out, size_t cap, bool encrypte
     for (const char *p = dynamic; *p;) {
         const char *colon = p;
         while (*colon != ':') colon++;
-        unsigned field = name_is(p, (size_t)(colon - p), "cookie") ? 1 :
-                         name_is(p, (size_t)(colon - p), "referer") ? 2 : 0;
+        unsigned field = hop_field(p, (size_t)(colon - p));
         if (!field || (seen & field))
             return false;
         seen |= field;

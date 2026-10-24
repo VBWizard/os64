@@ -643,9 +643,11 @@ static void view_layout(view_t *v)
 // `why` is the fetch's own verdict when there was one, for the caller that
 // has to turn it into an exit code. NULL when nobody is asking. `request`
 // is the form being sent, NULL for a GET. `referrer` is the page a link,
-// form or refresh was on, which the Referer names; NULL for none.
+// form or refresh was on, which the Referer names; NULL for none. `by` is
+// who started it; for anyone but the browser, `referrer` is the page it
+// started on.
 static bool load(const char *url, view_t *out, os64_fetch_status_t *why,
-                 const os64_page_request_t *request, const char *referrer)
+                 const os64_page_request_t *request, const char *referrer, way_initiator_t by)
 {
     s_cancel = 0;
     // One leg per load, on this thread: wend waits for its pages, so the
@@ -653,6 +655,11 @@ static bool load(const char *url, view_t *out, os64_fetch_status_t *why,
     way_leg_t leg = way_leg(&s_way);
     if (referrer != NULL)
         os64_strcopy(leg.referrer, sizeof(leg.referrer), referrer);
+    if (by != WAY_BY_BROWSER) {
+        way_origin_t from;
+        way_origin_of(referrer, 0, &from);
+        way_metadata_navigation(&leg.metadata, by, &from);
+    }
     bool loaded = way_load(&leg, url, request, &out->way, why);
     os64_strcopy(s_way.status, sizeof(s_way.status), leg.status);
     if (!loaded)
@@ -874,12 +881,13 @@ static void history_push(const view_t *v)
 // Go somewhere. The new page is built beside the old one and only replaces
 // it once it exists, so a dead link costs a sentence and not the page you
 // were reading.
-static bool go(view_t *v, const char *url, bool remember, const os64_page_request_t *request)
+static bool go(view_t *v, const char *url, bool remember, const os64_page_request_t *request,
+               way_initiator_t by)
 {
     view_t next = { 0 };
     next.sel = -1;
     // A request is something the page asked for, so it names the page.
-    if (!load(url, &next, NULL, request, request != NULL ? v->way.url : NULL))
+    if (!load(url, &next, NULL, request, request != NULL ? v->way.url : NULL, by))
         return false;
     if (remember)
         history_push(v);
@@ -953,12 +961,13 @@ static void jump_to_fragment(view_t *v, const char *name)
 // `#name` on the page that arrives.
 
 // Perform a NAVIGATE. True when the view moved. The request's strings are
-// its own, so they outlive the view `go` replaces.
+// its own, so they outlive the view `go` replaces. A refresh (WAY_ASK_GO)
+// is the page's own doing; a link or a form is the reader's.
 static bool perform(view_t *v, const os64_page_request_t *request, bool remember, way_ask_t ask)
 {
     if (!way_may_go(&s_way, request, ask))
         return false;
-    if (!go(v, request->url, remember, request))
+    if (!go(v, request->url, remember, request, ask == WAY_ASK_GO ? WAY_BY_PAGE : WAY_BY_PERSON))
         return false;
     // The new page's own model finds the section: the `#name` was asked of
     // a document that has only now arrived.
@@ -1279,7 +1288,7 @@ static void back(view_t *v)
         return;
     view_t next = { 0 };
     next.sel = -1;
-    if (!load(crumb.url, &next, NULL, NULL, NULL))
+    if (!load(crumb.url, &next, NULL, NULL, NULL, WAY_BY_BROWSER))
         return;                          // the history is untouched; the row says why
     way_forget_last(&s_way);
     view_clear(v);
@@ -1385,7 +1394,7 @@ static int32_t session(const char *start)
     view_t view = { 0 };
     view.sel = -1;
     os64_fetch_status_t why = OS64_FETCH_OK;
-    if (!load(start, &view, &why, NULL, NULL)) {
+    if (!load(start, &view, &why, NULL, NULL, WAY_BY_BROWSER)) {
         // THE FIRST PAGE IS THE COMMAND, and a command that failed owes an
         // exit code that says which thing to go and fix. An address nobody
         // could parse is the typist's to mend; everything else is the
@@ -1489,7 +1498,7 @@ static int32_t session(const char *start)
                     case 'r':
                         // Again, and not into the history: you have not gone
                         // anywhere.
-                        go(&view, view.way.url, false, NULL);
+                        go(&view, view.way.url, false, NULL, WAY_BY_BROWSER);
                         break;
                     case 'g': {
                         // An address is typed fresh — unless the page asked
@@ -1511,7 +1520,7 @@ static int32_t session(const char *start)
                             status_set(" that address is longer than one may be");
                             break;
                         }
-                        go(&view, whole, true, NULL);
+                        go(&view, whole, true, NULL, WAY_BY_BROWSER);
                         break;
                     }
                     case '?':  help_show(); break;

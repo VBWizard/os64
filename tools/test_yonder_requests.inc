@@ -228,7 +228,7 @@ static void nav_from_b(const char *rest, bool done) {
     loop_page("<p>A</p>");
     loop_final=NULL;
     check(loop_settle() && view_turns() && os64_streq(g.page.way.url,"http://fixture.test/a"),"navigations: A on screen");
-    start_trip("https://fixture.test/b",NULL,NULL,NAV_GO,NULL);
+    start_trip("https://fixture.test/b",NULL,NULL,NAV_GO,WAY_BY_BROWSER,NULL);
     char *html=pad_page(rest);
     way_head_t h=stream_head("text/html","",false);
     os64_strcopy(h.url,sizeof(h.url),"https://fixture.test/b");
@@ -345,9 +345,9 @@ static void request_long_address_case(void) {
     loop_asked=loop_final=NULL; loop_encrypted=false;
     check(loop_settle() && view_turns() && os64_streq(g.page.way.url,"https://fixture.test/short"),
           "long address: the page pushes a short address");
-    session_go(-1);
+    session_go(-1,WAY_BY_BROWSER,NULL);
     check(loop_settle() && view_turns() && os64_streq(g.page.way.url,address),"long address: Back to the long one");
-    session_go(1);
+    session_go(1,WAY_BY_BROWSER,NULL);
     check(loop_settle() && view_turns() && os64_streq(g.page.way.url,"https://fixture.test/short"),
           "long address: Forward to the short one");
     bool cut=false, whole=false;

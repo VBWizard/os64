@@ -35,12 +35,32 @@ static int64_t now_utc(void)
     return os64_time(&t) == 0 ? t.epoch : 0;
 }
 
-// Each hop's Cookie and Referer, from the browser's jar and the page the
-// load was asked for from.
+_Static_assert(OS64_FETCH_HOP_FIELDS_MAX - WAY_IDENTITY_MAX >= 1024,
+               "a hop's cookies and Referer keep their kilobyte beside who is asking");
+
+// A hop's lines that say who is asking (way_identity_lines), with `m`
+// stepped to the hop first, within WAY_IDENTITY_MAX of `cap`: the rest is
+// the cookies' and the Referer's. The length written: 0 when they do not
+// fit, which sends the hop without them rather than refusing it.
+static size_t hop_identity(const way_identity_t *id, way_metadata_t *m, const os64_url_t *hop,
+                           char *out, size_t cap)
+{
+    way_origin_t to;
+    way_origin_of_url(hop, 0, &to);
+    way_metadata_hop(m, &to);
+    if (!way_identity_lines(id, m, &to, 0, out, cap < WAY_IDENTITY_MAX ? cap : WAY_IDENTITY_MAX))
+        return 0;
+    return os64_strlen(out);
+}
+
+// Each hop's lines: who is asking, then its Cookie and Referer, from the
+// browser's jar and the page the load was asked for from.
 static bool leg_headers(void *ctx, const os64_url_t *hop, bool encrypted, char *out, size_t cap)
 {
     way_leg_t *s = ctx;
-    (void)way_hop_headers(s->session->jar, s->referrer, hop, encrypted, now_utc(), out, cap);
+    size_t used = hop_identity(s->identity, &s->metadata, hop, out, cap);
+    (void)way_hop_headers(s->session->jar, s->referrer, hop, encrypted, now_utc(), out + used,
+                          cap - used);
     return true;
 }
 
@@ -62,7 +82,8 @@ static bool hooks_cancelled(void *ctx)
 static bool hooks_headers(void *ctx, const os64_url_t *hop, bool encrypted, char *out, size_t cap)
 {
     way_hooks_t *h = ctx;
-    (void)way_hop_headers(h->jar, h->referrer, hop, encrypted, now_utc(), out, cap);
+    size_t used = hop_identity(h->identity, &h->metadata, hop, out, cap);
+    (void)way_hop_headers(h->jar, h->referrer, hop, encrypted, now_utc(), out + used, cap - used);
     return true;
 }
 
@@ -160,6 +181,9 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
     opt->max_body = cap;
     hooks->passing_hop = false;
     way_chain_start(&hooks->chain);
+    // The request as the caller described it, before any hop: a request
+    // asked again starts its URL list again.
+    const way_metadata_t asked_for = hooks->metadata;
     // Only a plain GET is the same request every time: a caller's own
     // headers could change what comes back.
     way_cache_t *cache = hooks->cache;
@@ -198,6 +222,7 @@ bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *
         os64_fetch_close(f);
         hooks->passing_hop = false;
         way_chain_start(&hooks->chain);
+        hooks->metadata = asked_for;
         ask.extra_headers = opt->extra_headers;
         asked = false;
         f = os64_fetch_open(url, &ask);

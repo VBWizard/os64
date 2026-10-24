@@ -1564,6 +1564,216 @@ static void corpus(bool write)
 
 // ── Who yonder says it is ───────────────────────────────────────────────
 
+static void expect_text(const char *name, const char *got, const char *want)
+{
+    char detail[1024];
+    snprintf(detail, sizeof(detail), "got \"%s\"\nwant \"%s\"", got != NULL ? got : "(null)", want);
+    expect(name, got != NULL && strcmp(got, want) == 0, detail);
+}
+
+// A preset by the name a person picks it by.
+static const yonder_agent_preset_t *preset_named(const char *name)
+{
+    for (size_t i = 0; i < yonder_agent_npresets(); i++)
+        if (strcmp(yonder_agent_preset(i)->name, name) == 0)
+            return yonder_agent_preset(i);
+    return NULL;
+}
+
+// The navigation block a preset's agent writes for a hop to `to`, by `by`
+// from the page at `from`.
+static const char *navigation_block(const yonder_agent_preset_t *p, way_initiator_t by, const char *from,
+                                    const char *to)
+{
+    static char out[WAY_IDENTITY_MAX];
+    way_metadata_t m;
+    way_origin_t f, t;
+    way_origin_of(from, 0, &f);
+    way_origin_of(to, 0, &t);
+    way_metadata_navigation(&m, by, &f);
+    way_metadata_hop(&m, &t);
+    if (!way_identity_lines(yonder_agent_identity(p->agent), &m, &t, false, out, sizeof(out)))
+        snprintf(out, sizeof(out), "<did not fit>");
+    return out;
+}
+
+// The navigation block a preset's agent writes for the browser's Reload of
+// an entry `by` asked for from `from`, to `to` (reload_as replays it).
+static const char *reload_block(const yonder_agent_preset_t *p, way_initiator_t by, const char *from, const char *to)
+{
+    static char out[WAY_IDENTITY_MAX];
+    way_metadata_t m;
+    way_origin_t f, t;
+    way_origin_of(from, 0, &f);
+    way_origin_of(to, 0, &t);
+    way_metadata_navigation(&m, by, &f);
+    m.reload = true;
+    way_metadata_hop(&m, &t);
+    if (!way_identity_lines(yonder_agent_identity(p->agent), &m, &t, 0, out, sizeof(out)))
+        snprintf(out, sizeof(out), "<did not fit>");
+    return out;
+}
+
+// EACH PRESET BYTE FOR BYTE AGAINST WHAT THAT BROWSER SENT: the W1
+// capture files, raw request bytes Chris's Chrome 156 and Firefox 158 on
+// Windows sent a local listener (WIRE.md § 1 as built names them). Chrome:
+// capture-01-chrome-win-get-root (a typed navigation),
+// capture-25-chrome-win-get-clicked (a link clicked),
+// capture-26-chrome-win-get-clicked (the browser's Reload of it),
+// capture-27-chrome-win-get-root (Back to the typed entry). Firefox on
+// Windows: run1-overwritten/capture-09 (a typed navigation), -17 (a link
+// clicked), -02 to -08 (the subresources and fetches); its Reload and Back
+// are capture-43-firefox-linux-get-clicked and
+// capture-44-firefox-linux-get-root, which send the same lines. The navigation blocks are those requests'
+// lines that libway writes, in the order they came. Safari's are cited,
+// not captured (agent.c says from where), and yonder's own language is the
+// same list.
+static void agent_identity_cases(void)
+{
+    const yonder_agent_preset_t *chrome = preset_named("Chrome on Windows");
+    const yonder_agent_preset_t *firefox = preset_named("Firefox on Windows");
+    const yonder_agent_preset_t *safari = preset_named("Safari on iPhone");
+    expect("identity: the three browsers are presets", chrome && firefox && safari, NULL);
+    if (!chrome || !firefox || !safari)
+        return;
+    expect_text("identity: Chrome's agent, captured",
+                chrome->agent, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                               "Chrome/156.0.0.0 Safari/537.36");
+    expect_text("identity: Chrome's client hints, captured", chrome->identity.hints,
+                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua-mobile: ?0\r\n"
+                "sec-ch-ua-platform: \"Windows\"\r\n");
+    expect_text("identity: Chrome's language, captured", chrome->identity.language, "en-US,en;q=0.9");
+    expect_text("identity: Firefox's agent, captured", firefox->agent,
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0");
+    expect("identity: Firefox sends no client hints", firefox->identity.hints == NULL, NULL);
+    expect_text("identity: Firefox's language, captured", firefox->identity.language, "en-US,en;q=0.9");
+    // Firefox's Priority for each destination it was asked for:
+    // run1-overwritten/capture-09 and -17 (navigations), -02 (style), -03
+    // (script), -04 (image), -05 to -08 (fetch, the cross-site fetch, the
+    // preflight and its PUT). No font was asked for, so a font goes without.
+    static const char *const firefox_rows[WAY_DESTS] = {
+        [WAY_DEST_DOCUMENT] = "u=0, i", [WAY_DEST_STYLE] = "u=2", [WAY_DEST_SCRIPT] = "u=2",
+        [WAY_DEST_IMAGE] = "u=5, i", [WAY_DEST_EMPTY] = "u=4",
+    };
+    for (int d = 0; d < WAY_DESTS; d++) {
+        const char *got = firefox->identity.priority[d], *want = firefox_rows[d];
+        char name[96];
+        snprintf(name, sizeof(name), "identity: Firefox's Priority for destination %d, captured", d);
+        expect(name, (got == NULL && want == NULL) || (got != NULL && want != NULL && strcmp(got, want) == 0),
+               got != NULL ? got : "(none)");
+    }
+    expect("identity: Safari sends no client hints", safari->identity.hints == NULL, NULL);
+    expect_text("identity: Safari's language, cited", safari->identity.language, "en-US,en;q=0.9");
+    const yonder_agent_preset_t *own = yonder_agent_preset(0);
+    expect_text("identity: yonder's own asks for English", own->identity.language, "en-US,en;q=0.9");
+    bool no_priority = true, costumes = true;
+    for (size_t i = 0; i < yonder_agent_npresets(); i++) {
+        const yonder_agent_preset_t *p = yonder_agent_preset(i);
+        for (int d = 0; d < WAY_DESTS && p != firefox; d++)
+            no_priority &= p->identity.priority[d] == NULL;
+        if (p != chrome && p != firefox && p != safari && p != own)
+            costumes &= p->identity.hints == NULL && p->identity.language == NULL;
+        expect("identity: a preset's agent finds its own lines", yonder_agent_identity(p->agent) == &p->identity,
+               p->name);
+    }
+    expect("identity: only Firefox sends a Priority (Chrome sends none over HTTP/1.1)", no_priority, NULL);
+    expect("identity: yonder's own and Safari send no hints",
+           own->identity.hints == NULL && safari->identity.hints == NULL, NULL);
+    expect("identity: Netscape and Lynx claim nothing beyond their strings", costumes, NULL);
+    // A default saved as an earlier yonder's preset is that preset now.
+    expect("identity: a saved Chrome 154 preset is Chrome's preset now",
+           yonder_agent_current("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/154.0.0.0 Safari/537.36") == chrome->agent, NULL);
+    expect("identity: a saved Firefox 156 preset is Firefox's preset now",
+           yonder_agent_current("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0") ==
+               firefox->agent, NULL);
+    const char *typed = "Mozilla/3.0 (compatible)";
+    expect("identity: anything else comes back as it is",
+           yonder_agent_current(typed) == typed && yonder_agent_current(chrome->agent) == chrome->agent &&
+               yonder_agent_current(NULL) == NULL, NULL);
+    expect("identity: a typed agent claims nothing", yonder_agent_identity("Mozilla/3.0 (compatible)") == NULL &&
+                                                         yonder_agent_identity(NULL) == NULL, NULL);
+
+    // The navigations, as the captures had them: an address given from
+    // outside the browser (and Back to it, which sends the same lines,
+    // capture-27-chrome-win-get-root), a same-origin link clicked, and the
+    // browser's Reload of that, which leads with Cache-Control.
+    expect_text("identity: Chrome, the browser's Reload of a clicked link",
+                reload_block(chrome, WAY_BY_PERSON, "https://a.test/", "https://a.test/clicked"),
+                "Cache-Control: max-age=0\r\n"
+                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua-mobile: ?0\r\n"
+                "sec-ch-ua-platform: \"Windows\"\r\n"
+                "Upgrade-Insecure-Requests: 1\r\n"
+                "Sec-Fetch-Site: same-origin\r\n"
+                "Sec-Fetch-Mode: navigate\r\n"
+                "Sec-Fetch-User: ?1\r\n"
+                "Sec-Fetch-Dest: document\r\n"
+                "Accept-Language: en-US,en;q=0.9\r\n");
+    expect_text("identity: Firefox, the browser's Reload of a clicked link (the set)",
+                reload_block(firefox, WAY_BY_PERSON, "https://a.test/", "https://a.test/clicked"),
+                "Upgrade-Insecure-Requests: 1\r\n"
+                "Sec-Fetch-Site: same-origin\r\n"
+                "Sec-Fetch-Mode: navigate\r\n"
+                "Sec-Fetch-User: ?1\r\n"
+                "Sec-Fetch-Dest: document\r\n"
+                "Accept-Language: en-US,en;q=0.9\r\n"
+                "Priority: u=0, i\r\n");
+    expect_text("identity: Chrome, an address given",
+                navigation_block(chrome, WAY_BY_BROWSER, NULL, "https://a.test/"),
+                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua-mobile: ?0\r\n"
+                "sec-ch-ua-platform: \"Windows\"\r\n"
+                "Upgrade-Insecure-Requests: 1\r\n"
+                "Sec-Fetch-Site: none\r\n"
+                "Sec-Fetch-Mode: navigate\r\n"
+                "Sec-Fetch-User: ?1\r\n"
+                "Sec-Fetch-Dest: document\r\n"
+                "Accept-Language: en-US,en;q=0.9\r\n");
+    expect_text("identity: Chrome, a link clicked",
+                navigation_block(chrome, WAY_BY_PERSON, "https://a.test/", "https://a.test/clicked"),
+                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua-mobile: ?0\r\n"
+                "sec-ch-ua-platform: \"Windows\"\r\n"
+                "Upgrade-Insecure-Requests: 1\r\n"
+                "Sec-Fetch-Site: same-origin\r\n"
+                "Sec-Fetch-Mode: navigate\r\n"
+                "Sec-Fetch-User: ?1\r\n"
+                "Sec-Fetch-Dest: document\r\n"
+                "Accept-Language: en-US,en;q=0.9\r\n");
+    // Firefox writes the same set in another order (Accept-Language
+    // before the rest, Fetch Metadata Dest-Mode-Site-User, Priority last):
+    // the set is proved here, the order is libfetch's (BROWSER_DEBTS.md).
+    expect_text("identity: Firefox, an address given (the set)",
+                navigation_block(firefox, WAY_BY_BROWSER, NULL, "https://a.test/"),
+                "Upgrade-Insecure-Requests: 1\r\n"
+                "Sec-Fetch-Site: none\r\n"
+                "Sec-Fetch-Mode: navigate\r\n"
+                "Sec-Fetch-User: ?1\r\n"
+                "Sec-Fetch-Dest: document\r\n"
+                "Accept-Language: en-US,en;q=0.9\r\n"
+                "Priority: u=0, i\r\n");
+
+    // THE MARGIN. libway gives a hop's identity WAY_IDENTITY_MAX of
+    // libfetch's per-hop cap; the longest preset's longest block (the
+    // browser's Reload of a person's same-origin navigation) must fit with
+    // room for a brand list that grows, which is the cap's own comment.
+    size_t longest = 0;
+    for (size_t i = 0; i < yonder_agent_npresets(); i++) {
+        const char *b = reload_block(yonder_agent_preset(i), WAY_BY_PERSON, "https://a.test/", "https://a.test/n");
+        expect("identity: every preset's block fits", strcmp(b, "<did not fit>") != 0, yonder_agent_preset(i)->name);
+        if (strlen(b) > longest)
+            longest = strlen(b);
+    }
+    char detail[64];
+    snprintf(detail, sizeof(detail), "the longest is %zu bytes", longest);
+    expect("identity: the longest block leaves 150 bytes of WAY_IDENTITY_MAX spare",
+           longest + 1 + 150 <= WAY_IDENTITY_MAX, detail);
+    expect("identity: the cookies and the Referer keep their kilobyte beside it",
+           OS64_FETCH_HOP_FIELDS_MAX - WAY_IDENTITY_MAX >= 1024, NULL);
+}
+
 static void agent_cases(void)
 {
     bool presets_valid = yonder_agent_npresets() > 1 &&
@@ -1591,6 +1801,7 @@ static void agent_cases(void)
                !yonder_agent_valid(" leading") && !yonder_agent_valid("trailing ") &&
                !yonder_agent_valid("a # comment") && !yonder_agent_valid("two\nlines") &&
                !yonder_agent_valid("tab\there") && !yonder_agent_valid("caf\xc3\xa9"), NULL);
+    agent_identity_cases();
 }
 
 // What a cache did, painting `html` through `view` with it.

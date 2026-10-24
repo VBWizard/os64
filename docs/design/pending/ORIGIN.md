@@ -446,14 +446,15 @@ false otherwise, and always false for a preflight.
   EVERY redirect (`on_hop` → STOP) and opens each hop itself, libfetch's typed
   origin is always the hop's own URL, so that rule never fires inside a fetch
   job: the job's strip (above) replaces it, and the job's `headers_for` sends
-  `Cookie` only when the hop's includeCredentials is true and never sends
-  anything else but `Referer`. The job never puts `Cookie` in
-  `extra_headers` at all.
+  `Cookie` only when the hop's includeCredentials is true, and besides it
+  sends only `Referer` and the lines that say who is asking (Fetch
+  Metadata, the agent preset's client hints, Accept-Language and
+  Priority). The job never puts `Cookie` in `extra_headers` at all.
   **RULED (2):** the standard's rule replaces the library's, in the job.
   Driving the loop in the job is what lets the `Origin` header, the
   preflight and the tainting change per hop (none of which libfetch's
-  per-hop hooks can express: `headers_for` may supply only `Cookie` and
-  `Referer`). libfetch's typed-origin rule never fires inside a fetch job,
+  per-hop hooks can express: `headers_for` may supply only `Cookie`,
+  `Referer` and the lines that say who is asking, never `Origin`). libfetch's typed-origin rule never fires inside a fetch job,
   so nothing here may rely on it.
 - **Downgrade hops.** **DIVERGES:** a redirect from `https` to `http` is a
   network error for every script request, also on an `http` page where the

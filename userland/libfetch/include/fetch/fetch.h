@@ -215,8 +215,9 @@ typedef struct {
 // A script's request carries its page's own headers, and one bearer token
 // alone is often past a kilobyte.
 #define OS64_FETCH_EXTRA_MAX    8192
-// What headers_for may write: a hop's Cookie and Referer.
-#define OS64_FETCH_HOP_FIELDS_MAX 1024
+// What headers_for may write: a hop's Cookie and Referer (a kilobyte), and
+// beside them the lines that say who is asking (half a kilobyte).
+#define OS64_FETCH_HOP_FIELDS_MAX (1024 + 512)
 #define OS64_FETCH_CONTENT_TYPE_MAX 256
 #define OS64_FETCH_METHOD_MAX   HTTP_METHOD_NAME_MAX
 
@@ -271,11 +272,17 @@ typedef struct {
     const void *body;
     size_t body_len;
     const char *content_type;     // optional; < CONTENT_TYPE_MAX, copied at open
-    // Per-hop Cookie/Referer fields, as NUL-terminated "Name: value\r\n"
-    // lines within cap. Called before dialing, including the first request.
-    // Only these two field names are accepted; duplicates within this block
-    // or with retained static fields refuse the hop. False or bad output is
-    // REQUEST_FAILED. encrypted describes the actual transport, not just URL.
+    // Per-hop fields, as NUL-terminated "Name: value\r\n" lines within cap,
+    // written in the order given after the static ones. Called before
+    // dialing, including the first request. Only these names are accepted:
+    // Cookie and Referer, and the lines that describe the browser and the
+    // request, most of which change with where a hop goes
+    // (Accept-Language, Sec-CH-UA, Sec-CH-UA-Mobile, Sec-CH-UA-Platform,
+    // Sec-Fetch-Dest, Sec-Fetch-Mode, Sec-Fetch-Site, Sec-Fetch-User,
+    // Upgrade-Insecure-Requests, Priority, and a Reload's Cache-Control).
+    // Duplicates within this block or with retained static fields refuse
+    // the hop. False or bad output is REQUEST_FAILED. encrypted describes
+    // the actual transport, not just URL.
     bool (*headers_for)(void *ctx, const os64_url_t *hop_url, bool encrypted,
                         char *out, size_t cap);
     // Each final-head Set-Cookie VALUE (no name/colon/CRLF), OWS trimmed,

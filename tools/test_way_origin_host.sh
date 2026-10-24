@@ -1,7 +1,7 @@
 #!/bin/bash
 # libway's origins and CORS (way/origin.h) on the host, under the
 # sanitizers: a case per sentence of the Fetch Standard origin.c applies,
-# then every allocation failed in turn. tools/test_way_origin_host.c says
+# the Fetch Metadata lines, then every allocation failed in turn. tools/test_way_origin_host.c says
 # what is proved.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
