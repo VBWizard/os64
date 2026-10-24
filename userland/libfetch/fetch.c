@@ -493,10 +493,15 @@ static void keep_field(os64_fetch_keep_t *k, char *field, const char *value, siz
 // over-long path), so a 1xx's fields never reach on_header, the kept
 // caching fields or on_set_cookie. A CORS check made of what on_header
 // heard is made of the answer alone (tools/test_fetch_host.c pins it).
+static bool timed_out_while_kept(const os64_fetch_t *f);
+
 static void response_header(void *ctx, const char *name, size_t name_len,
                              const char *value, size_t value_len)
 {
     os64_fetch_t *f = ctx;
+    // A kept connection's 408 is going again; its fields are nobody's.
+    if (timed_out_while_kept(f))
+        return;
     if (f->opt.on_header != NULL)
         f->opt.on_header(f->opt.ctx, name, name_len, value, value_len);
     os64_fetch_keep_t *k = &f->head.keep;
@@ -691,6 +696,17 @@ static bool retry_on_fresh(os64_fetch_t *f)
     return f->reused && f->io.received == 0 && !f->io.silent && !cancelled(f) && idempotent(f);
 }
 
+// A 408 ON A KEPT CONNECTION is the same close in words: a server that
+// timed the idle connection out and answers the next request with 408
+// before it closes (Chrome treats it so). Such a request is retried on the
+// retry rule's terms, and its head is not the fetch's: none of its fields
+// reaches an observer (response_header), so a page's script, a cache and
+// the cookie jar hear the answer the retry brings back, alone.
+static bool timed_out_while_kept(const os64_fetch_t *f)
+{
+    return f->reply.status == 408 && f->reused && idempotent(f);
+}
+
 static os64_fetch_status_t exchange(os64_fetch_t *f, const char *request, bool encrypted,
                                     const fetch_pool_key_t *key, bool fresh, bool *again);
 static os64_fetch_status_t dial(os64_fetch_t *f, bool encrypted, const char *peerHost,
@@ -883,6 +899,12 @@ static os64_fetch_status_t exchange(os64_fetch_t *f, const char *request, bool e
     if (!fetch_transport_complete(&f->io, true)) {
         f->detail.head = HTTP_HEAD_SOURCE;
         tls_snapshot(f);
+        return drop_connection(f, OS64_FETCH_BAD_HEAD);
+    }
+    // Nothing of a kept connection's 408 is read past its head: the
+    // connection goes, and the request with it, once more.
+    if (timed_out_while_kept(f)) {
+        *again = !cancelled(f);
         return drop_connection(f, OS64_FETCH_BAD_HEAD);
     }
     return OS64_FETCH_OK;

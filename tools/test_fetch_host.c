@@ -1384,7 +1384,7 @@ static void case_early_post(void)
 }
 
 typedef struct {
-    unsigned asked, received, hops;
+    unsigned asked, received, hops, headers;
     const char *output;
     bool fail, unterminated, chain, encrypted, cancelled, cancel_header, cancel_cookie;
     char values[8][HTTP_LINE_MAX], hosts[8][OS64_URL_HOST_MAX];
@@ -2317,6 +2317,13 @@ static void case_keepalive_caps(void)
     conns[1].open = false;
 }
 
+// Every final-head field an observer hears, counted.
+static void count_header(void *ctx, const char *name, size_t name_len, const char *value, size_t value_len)
+{
+    (void)name; (void)name_len; (void)value; (void)value_len;
+    ((cookie_test_t *)ctx)->headers++;
+}
+
 static void case_keepalive_retry(void)
 {
     char out[64], why[256];
@@ -2408,6 +2415,33 @@ static void case_keepalive_retry(void)
         CHECK(fetch_all(tls ? "https://a.test/" : "http://a.test/", NULL, out, sizeof(out), why, sizeof(why)) ==
               OS64_FETCH_OK && !strcmp(out, "first") && dials == 4);
         CHECK(strstr(why, "(2 requests retried, each once on a fresh connection)") != NULL);
+
+        // A 408 ON THE KEPT CONNECTION: the server timed it out and says
+        // so. A GET goes again on a fresh one, and nothing of the 408 —
+        // not a header, not a cookie — reaches the caller; a POST hears
+        // the 408 as its answer; and a fresh connection's 408 is an answer.
+        for (int post = 0; post < 2; post++) {
+            reset();
+            const char *timed_out[] = { kFirst, "HTTP/1.1 408 Request Timeout\r\nSet-Cookie: stale=1\r\n"
+                                                "X-From: the-408\r\nContent-Length: 0\r\n\r\n", NULL };
+            peer_answers("again.test", port, timed_out);
+            fetch_all(url, NULL, out, sizeof(out), NULL, 0);
+            cookie_test_t t = { .output = "" };
+            os64_fetch_options_t opt = { .on_set_cookie = cookie_received, .on_header = count_header, .ctx = &t };
+            if (post) { opt.method = OS64_FETCH_METHOD_POST; opt.body = "x=1"; opt.body_len = 3; }
+            os64_fetch_t *f = os64_fetch_open(url, &opt);
+            CHECK(f != NULL && os64_fetch_head(f) != NULL);
+            CHECK(os64_fetch_head(f)->status == (post ? 408 : 200));
+            // The 408's three fields and its cookie, or kFirst's one field.
+            CHECK(dials == (post ? 1 : 2) && t.received == (post ? 1u : 0u) && t.headers == (post ? 3u : 1u));
+            CHECK((strstr(os64_fetch_reason(f), "retried") != NULL) == !post);
+            os64_fetch_close(f);
+        }
+        reset();
+        const char *fresh408[] = { "HTTP/1.1 408 Request Timeout\r\nContent-Length: 0\r\n\r\n", NULL };
+        peer_answers("again.test", port, fresh408);
+        CHECK(fetch_all(url, NULL, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_OK && dials == 1 &&
+              strstr(why, "retried") == NULL);
 
         // ONCE: the fresh connection failing too is the fetch's failure.
         reset();

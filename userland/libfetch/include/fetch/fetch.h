@@ -378,7 +378,8 @@ const os64_fetch_progress_t *os64_fetch_progress(const os64_fetch_t *f);
 // One sentence about the last outcome, in the library's words — for the
 // caller that has nothing more specific to say. Storage inside the object.
 // It ends "(retried once on a fresh connection)" when a request failed on a
-// kept connection before any byte of its reply and was sent again (WIRE.md
+// kept connection before any byte of its reply, or was answered 408 there
+// (the server's idle timeout, said), and was sent again (WIRE.md
 // § 2's retry rule: only a GET, HEAD, OPTIONS, PUT or DELETE, each request
 // at most once), whatever the outcome after that, and says how many when a
 // fetch's redirects made more than one request that went again.

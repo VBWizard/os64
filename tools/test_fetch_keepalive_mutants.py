@@ -183,6 +183,13 @@ mutants = [
     ('retry-unsaid', FETCH_C,
      '" (retried once on a fresh connection)");', '"%s", "");', FETCH),
     # The request writer
+    ('408-not-retried', FETCH_C, '        *again = !cancelled(f);\n', '        *again = false;\n', FETCH),
+    ('408-heard', FETCH_C,
+     '    if (timed_out_while_kept(f))\n        return;\n    if (f->opt.on_header != NULL)',
+     '    if (f->opt.on_header != NULL)', FETCH),
+    ('408-fresh-retried', FETCH_C,
+     'return f->reply.status == 408 && f->reused && idempotent(f);', 'return f->reply.status == 408 && idempotent(f);',
+     FETCH),
     ('retry-count-flat', FETCH_C, '            f->retried++;', '            f->retried = 1;', FETCH),
     ('writer-no-keep-alive', HTTP_C,
      'case 3: if (!x->keep_alive) continue;', 'case 3: if (true) continue;', FETCH),

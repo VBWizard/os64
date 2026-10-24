@@ -315,7 +315,11 @@ says more than it did:
   redirect's next hop is another) goes at most twice, and the reason
   string counts them: "(retried once on a fresh connection)", or "(2
   requests retried, each once on a fresh connection)". A silence is not a
-  closed connection, and a reply that began is not retried.
+  closed connection, and a reply that began is not retried — except a 408
+  on a kept connection, which is the server's idle timeout said in words:
+  an idempotent request goes again on a fresh connection as Chrome sends
+  it, and nothing of the 408's head reaches an observer (its fields, its
+  cookies), since the answer the caller gets is the retry's.
 - **Through a proxy**: libfetch sends https through a plain proxy in
   absolute form, not by `CONNECT`, so every proxied connection is plain to
   the proxy and keyed by it alone; the brief's `CONNECT` clause has nothing
