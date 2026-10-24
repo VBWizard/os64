@@ -427,7 +427,7 @@ static JSValue reflect(JSContext *ctx, JSValueConst this_value, int argc,
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
     const char *name = magic == R_HIDDEN ? "hidden" : magic == R_LANG ? "lang" : magic == R_DIR ? "dir" :
                        magic == R_TAB_INDEX ? "tabindex" : magic == R_CLASS_LIST ? "class" :
-                       is_html(self, OS64_HTML_TAG_SCRIPT) ? "src" : "href";
+                       is_html(self, OS64_HTML_TAG_SCRIPT) || is_html(self, OS64_HTML_TAG_IFRAME) ? "src" : "href";
     if (magic == R_CLASS_LIST) {
         if (!set) return d_class_list(dom, ctx, self);
         /* [PutForwards=value]: assigning the list sets the attribute. */
@@ -948,6 +948,11 @@ JSValue d_dataset(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 #define PARENTS ((1u << D_PROTO_DOCUMENT) | (1u << D_PROTO_ELEMENT) | (1u << D_PROTO_FRAGMENT))
 #define CHILDREN ((1u << D_PROTO_ELEMENT) | (1u << D_PROTO_CHARACTER_DATA) | (1u << D_PROTO_DOCTYPE))
 #define ELEMENTS (1u << D_PROTO_ELEMENT)
+
+int d_url_reflection(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, const char *name)
+{
+    return d_accessor(dom, ctx, prototype, name, reflect, R_URL, true);
+}
 
 int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
 {

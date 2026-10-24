@@ -387,6 +387,52 @@ static void layout_cases(void)
         "      atomic iframe 8 8 604 154\n"
         "      atomic iframe 612 108 304 54\n");
 
+    // Where scripting is on a canvas is replaced, its own size its width
+    // and height attributes (300 by 150 without them), and its fallback is
+    // not laid out; a CSS width (a sheet's: this harness's layout_case
+    // reads no sheet or style attribute) keeps their ratio, as an img's
+    // own size does. Where scripting is off it is its fallback.
+    kEnv.scripting = true;
+    cascade_layout_case("a canvas is replaced at its attributes' size where scripting is on",
+        "<!doctype html><style>.c{width:100px}</style><canvas width=200 height=100>fallback</canvas>"
+        "<canvas class=c width=200 height=100></canvas><canvas width=x height=-1></canvas>", 1000,
+        "page 1000 172\n"
+        "block html 0 0 1000 172\n"
+        "  block body 8 8 984 156\n"
+        "    line 8 8 984 156 base 150\n"
+        "      atomic canvas 8 58 200 100\n"
+        "      atomic canvas 208 108 100 50\n"
+        "      atomic canvas 308 8 300 150\n");
+    // CSS Display 3 Appendix B: `display: contents` on a replaced element
+    // computes to `none`, so neither a canvas's fallback nor a frame's
+    // text is laid out; a canvas with scripting off is no replaced element,
+    // and its fallback is its contents.
+    cascade_layout_case("display: contents on a canvas or a frame is none",
+        "<!doctype html><style>canvas,iframe{display:contents}</style>"
+        "<canvas>fallback</canvas><iframe>inside</iframe><p>after</p>", 1000,
+        "page 1000 52\n"
+        "block html 0 0 1000 52\n"
+        "  block body 8 16 984 20\n"
+        "    block p 8 16 984 20\n"
+        "      line 8 16 984 20 base 14\n"
+        "        text \"after\" 8 18 28 16 serif 16\n");
+    kEnv.scripting = false;
+    cascade_layout_case("display: contents on a canvas with scripting off is its fallback",
+        "<!doctype html><style>canvas{display:contents}</style><canvas>fallback</canvas>", 1000,
+        "page 1000 36\n"
+        "block html 0 0 1000 36\n"
+        "  block body 8 8 984 20\n"
+        "    line 8 8 984 20 base 14\n"
+        "      text \"fallback\" 8 10 52 16 serif 16\n");
+    layout_case("with scripting off a canvas is its fallback",
+        "<!doctype html><canvas width=200 height=100>fallback</canvas>", 1000,
+        "page 1000 36\n"
+        "block html 0 0 1000 36\n"
+        "  block body 8 8 984 20\n"
+        "    line 8 8 984 20 base 14\n"
+        "      span canvas 8 10 52 16\n"
+        "      text \"fallback\" 8 10 52 16 serif 16\n");
+
     // A missing picture's alt text collapses its spaces as text does:
     // "a b" is 8 + 4 + 8.
     layout_case("alt text collapses its white space",

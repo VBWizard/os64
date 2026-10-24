@@ -14,6 +14,8 @@ LIBDOM_SRCS += libdom/attr.c
 LIBDOM_SRCS += libdom/fetch.c libdom/abort.c libdom/blob.c libdom/xhr.c libdom/exception.c
 # P1-W: window as a browsing context, its BarProps and external; crypto.
 LIBDOM_SRCS += libdom/browsing.c libdom/crypto.c
+# The frames row (IFRAME.md): HTMLIFrameElement.
+LIBDOM_SRCS += libdom/frames.c
 # P2a: a script's failures, as the window's error and rejection events.
 LIBDOM_SRCS += libdom/report.c
 # P1-Da: the document's state reads and document.body's setter.

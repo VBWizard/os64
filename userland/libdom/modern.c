@@ -31,6 +31,8 @@ static const DModernRow kModern[] = {
                            "HTMLImageElement", "HTMLScriptElement", "HTMLAnchorElement",
                            "HTMLLinkElement", NULL},
      d_interfaces_install},
+    /* After the interfaces row, whose HTMLElement its interface inherits. */
+    {(const char *const[]){"HTMLIFrameElement", NULL}, d_frames_install},
     {(const char *const[]){"scrollX", "pageXOffset", "scrollY", "pageYOffset", "innerWidth",
                            "innerHeight", "outerWidth", "outerHeight", "scroll", "scrollTo",
                            "scrollBy", "onscroll", "onresize", "focus", "blur", NULL},

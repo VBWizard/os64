@@ -95,6 +95,9 @@ Node-cloneNode.html	createElement(u)
 Node-cloneNode.html	createElement(var)
 Node-cloneNode.html	createElement(wbr)
 attributes-namednodemap.html	setNamedItem and removeNamedItem on `attributes` should not interfere with existing method names
+# The frames row (frames.c): HTMLIFrameElement's interface. It fails with
+# the switch off.
+Node-cloneNode.html	createElement(iframe)
 # P1-Da: createEvent's table (CustomEvent and HashChangeEvent made as themselves, a name off it refused) and contentType. Each fails with the switch off.
 DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "",null,null
 DOMImplementation-createDocument.html	createDocument test: characterSet aliases for "/","",null
@@ -1511,6 +1514,7 @@ Node-cloneNode.html	createElement(form)
 Node-cloneNode.html	createElement(header)
 Node-cloneNode.html	createElement(hgroup)
 Node-cloneNode.html	createElement(i)
+Node-cloneNode.html	createElement(iframe)
 Node-cloneNode.html	createElement(img)
 Node-cloneNode.html	createElement(input)
 Node-cloneNode.html	createElement(isindex)

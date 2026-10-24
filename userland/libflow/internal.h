@@ -175,6 +175,9 @@ f_dim_kind_t f_parse_dimension(const char *s, bool nonzero, int32_t *out);
 #define F_INT_MAX 1000000
 bool f_parse_integer(const char *s, int32_t *out);
 bool f_parse_nonnegative(const char *s, int32_t *out);
+// Whether `n` is laid out as a replaced element (boxes.c): a canvas only
+// where `env` says scripting is on.
+bool f_replaced(const flow_env_t *env, const os64_html_node_t *n);
 // "Rules for parsing a legacy colour value", `chucknorris` and all: a
 // page's colour attribute means the colour every browser draws.
 bool f_parse_legacy_color(const char *s, uint32_t *out);
@@ -652,6 +655,7 @@ struct FItem {
     bool continuation;              // OPEN: an earlier piece exists; CLOSE: a block split it here
     FInline *inl;                   // OPEN, CLOSE
     FBox *content;                  // ATOMIC: an inline-block's own block; NULL when replaced
+    bool replaced;                  // ATOMIC: a replaced element's (flow_box_t.replaced)
     FBox *absolute;                 // PLACEHOLDER: the out-of-flow box it holds the place of
     FBox *floated;                  // FLOAT: the float written here
     int32_t link, control;          // ATOMIC: libpage's indexes, or -1

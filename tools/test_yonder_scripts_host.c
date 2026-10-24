@@ -718,10 +718,11 @@ static os64_font_status_t probe_fonts(void *ctx, const flow_family_list_t *famil
     info->ascent=12*64; info->descent=4*64; info->line_height=20*64;
     return OS64_FONT_OK;
 }
+static bool probe_modern_off;  /* the next probe_page's window: the modern switch off */
 static void probe_page(const char *html, bool scripts) {
     os64_memset(&g,0,sizeof(g));
     g.scripts_on=scripts; g.way.agent=YONDER_AGENT; g.settle_due=YONDER_NEVER;
-    g.modern=g.page.modern=true;
+    g.modern=g.page.modern=!probe_modern_off;
     g.zoom=g.zoom_default=1000;
     os64_ui_init(&g.ui,NULL);
     if(probe_borrow_font)
@@ -2812,12 +2813,13 @@ static char *pad_page(const char *rest) {
 }
 static bool loop_encrypted;     /* the next loop_page's head: arrived encrypted */
 static bool loop_modern_off;    /* the next loop_page's window: the modern switch off */
+static bool loop_scripts_off;   /* the next loop_page's window: scripts off */
 /* The next loop_page's address as asked for, and as its head says it ended
  * after redirects: NULL for the usual pair. */
 static const char *loop_asked, *loop_final;
 static void loop_page(const char *rest) {
     stream_window();
-    g.scripts_on=true; g.script_ms=5000; now_ms=100;
+    g.scripts_on=!loop_scripts_off; g.script_ms=5000; now_ms=100;
     g.modern=!loop_modern_off;
     start_trip(loop_asked!=NULL ? loop_asked : "http://fixture.test/p",NULL,NULL,NAV_GO,NULL);
     char *html=pad_page(rest);
@@ -4913,6 +4915,121 @@ static void join_cases(void) {
     join_lost_wrapper();
 }
 
+/* A frame a script inserts is the stand-in a parsed one is: it names its
+ * document, and a click there goes to it, however the script gave it its
+ * address. The `src` property, the way scripts most often do, is the
+ * frames row's (libdom frames.c), so with the modern switch off it makes a
+ * property of the script's own and the frame names nothing, as before;
+ * setAttribute and innerHTML name it either way. */
+static void inserted_frame_case(const char *how, const char *html, bool modern, bool named)
+{
+    unsigned before=failures;
+    probe_modern_off=!modern;
+    probe_page(html,true);
+    probe_modern_off=false;
+    while(yonder_scripts_pending(g.page.scripts)) script_turn();
+    const os64_html_node_t *f=probe_id("f");
+    int32_t link=f!=NULL ? os64_page_link_for(page_model(&g.page),f) : -1;
+    const os64_page_link_t *l=link>=0 ? os64_page_link(page_model(&g.page),link) : NULL;
+    if(named) {
+        check(l!=NULL && l->href.url!=NULL && os64_streq(l->href.url,"https://fixture.test/poll"),
+            "inserted frame: it names its document as a parsed one does");
+        check(link>=0 && link_at(20,20)==link,"inserted frame: a click on its stand-in goes to its document");
+    } else {
+        check(f!=NULL && link<0 && link_at(20,20)<0,
+            "inserted frame: with the switch off, src set as a property names nothing, as before");
+    }
+    probe_drop();
+    if(failures!=before) fprintf(stderr,"inserted frame: %s, the switch %s\n",how,modern ? "on" : "off");
+}
+/* The page in the window painted whole into an 800 by 600 screen, through
+ * the real verbs (view_paint's panes): its pixels, the caller's to free. */
+static uint32_t *stand_in_shot(void) {
+    os64_draw_ctx_t screen={0};
+    screen.surf.width=screen.surf.pitch_px=800; screen.surf.height=600;
+    screen.surf.pixels=os64_calloc(800u*600u,sizeof(uint32_t));
+    g.paint_cache=yonder_paint_cache_new(32u<<20); g.paint_scratch=yonder_scratch_new();
+    g.ui.dirty=g.view.bounds;
+    view_paint(&g.view,&screen,NULL);
+    yonder_paint_cache_free(g.paint_cache); g.paint_cache=NULL;
+    yonder_scratch_free(g.paint_scratch); g.paint_scratch=NULL;
+    return screen.surf.pixels;
+}
+/* THE STAND-INS' OWN PAINTING (yonder.c's pane_stand_in, stand_in_label,
+ * glass_stand_in), which the yonder host's recorder stands in for: what a
+ * label says, that a canvas has no paper, and what laying labels out costs. */
+static void stand_in_paint_cases(void)
+{
+    /* A full-viewport canvas over the page, as confetti and snow are: the
+     * page shows through, and only the outline and the corner label are
+     * the stand-in's. */
+    probe_page("<!doctype html><style>html,body{margin:0;background:#fff}p{margin:200px 0 0 300px}"
+        "canvas{position:fixed;left:0;top:0;width:800px;height:600px}</style>"
+        "<p>Readable text</p><canvas id=c></canvas>",true);
+    uint32_t *px=stand_in_shot();
+    int dark=0, grey=0;
+    for(int32_t y=195;y<240;y++) for(int32_t x=295;x<420;x++) {
+        uint32_t p=px[(size_t)y*800+(size_t)x]&0xffffffu;
+        dark+=(p&0xff)<0x80;
+        grey+=p==0xf0f0f0u;
+    }
+    check(dark>20 && grey==0,"stand-in: text under a full-viewport canvas is drawn, and no panel covers it");
+    check((px[(size_t)400*800+400]&0xffffffu)==0xffffffu,"stand-in: a canvas's middle is the page's own paper");
+    check((px[(size_t)300*800+0]&0xffffffu)!=0xffffffu,"stand-in: a canvas is outlined at its edge");
+    const flow_box_t *box=flow_box_for(g.page.tree,probe_id("c"));
+    char text[128]="";
+    if(box!=NULL) stand_in_text(box,text,sizeof(text));
+    check(os64_streq(text,"Canvas: not supported"),"stand-in: a canvas's label says it is not supported");
+    os64_free(px); probe_drop();
+
+    probe_page("<!doctype html><iframe id=f src=/poll></iframe>",true);
+    box=flow_box_for(g.page.tree,probe_id("f")); text[0]='\0';
+    if(box!=NULL) stand_in_text(box,text,sizeof(text));
+    check(os64_streq(text,"Frame: https://fixture.test/poll"),"stand-in: a frame's label names its document");
+    px=stand_in_shot();
+    check((px[(size_t)100*800+150]&0xffffffu)==0xf0f0f0u,"stand-in: a frame keeps its panel");
+    os64_free(px); probe_drop();
+
+    /* A canvas wholly out of view, and one whose top strip is above the
+     * view, lay no label out. */
+    probe_page("<!doctype html><style>body{margin:0}#off{position:absolute;top:3000px}"
+        "#up{position:absolute;top:-200px;height:400px}</style><canvas id=off></canvas><canvas id=up></canvas>",true);
+    uint64_t before=s_stand_in_labels;
+    px=stand_in_shot();
+    check(s_stand_in_labels==before,"stand-in: a canvas out of view, or with its top out of view, makes no label");
+    os64_free(px); probe_drop();
+
+    /* Two thousand tiny canvases in view lay their label out once a paint. */
+    static char many[2000*40+128];
+    size_t at=(size_t)snprintf(many,sizeof(many),"<!doctype html><style>body{margin:0}</style>");
+    for(int i=0;i<2000;i++) at+=(size_t)snprintf(many+at,sizeof(many)-at,"<canvas width=2 height=2></canvas>");
+    probe_page(many,true);
+    before=s_stand_in_labels;
+    px=stand_in_shot();
+    check(s_stand_in_labels-before==1,"stand-in: two thousand canvases in view cost one label a paint");
+    os64_free(px); probe_drop();
+}
+
+static void inserted_frame_cases(void)
+{
+    for(int modern=0;modern<2;modern++) {
+        inserted_frame_case("parsed","<iframe id=f src=/poll></iframe>",modern,true);
+        inserted_frame_case("parsed, a block","<iframe id=f src=/poll style=display:block></iframe>",modern,true);
+        inserted_frame_case("src set after insertion",
+            "<script>var f=document.createElement('iframe');f.id='f';document.body.appendChild(f);f.src='/poll';</script>",
+            modern,modern);
+        inserted_frame_case("src set before insertion",
+            "<script>var f=document.createElement('iframe');f.id='f';f.src='/poll';document.body.appendChild(f);</script>",
+            modern,modern);
+        inserted_frame_case("setAttribute",
+            "<script>var f=document.createElement('iframe');f.id='f';f.setAttribute('src','/poll');"
+            "document.body.appendChild(f);</script>",modern,true);
+        inserted_frame_case("innerHTML",
+            "<div id=d></div><script>document.getElementById('d').innerHTML='<iframe id=f src=/poll></iframe>';</script>",
+            modern,true);
+    }
+}
+
 static void classic_browser_cases(void)
 {
     probe_page("<!doctype html><style>body{margin:0}img{display:block;width:200px;height:100px;"
@@ -5920,6 +6037,39 @@ static void diag_page_cases(void) {
     check(has(text,"MISSING element iframe (2)\n") && has(text,"MISSING element embed (1)\n") &&
         !has(text,"MISSING element object"),
         "diag: frames and embeds are recorded as drawn as nothing, an object with its fallback is not");
+    check(!has(text,"unsupported"),"diag: a frame, whose stand-in takes a click to its document, is never unsupported");
+    loop_drop();
+
+    /* A canvas is the page's failure, one line for the kind however many
+     * there are, a script's own among them; with scripts off it is its
+     * fallback, and no failure. */
+    loop_page("<canvas></canvas><canvas width=10 height=10></canvas>"
+        "<script>document.body.appendChild(document.createElement('canvas'))</script>");
+    check(loop_settle() && g.page.tree!=NULL,"diag: a page with canvases arrives");
+    yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
+    check(has(text,"\nFAILED unsupported: canvas (1)\n") && has(text,"MISSING element canvas (3)\n") &&
+        !has(text,"FAILED unsupported: canvas (2)"),
+        "diag: three canvases, one a script made, are one FAILED line, and their MISSING count stays");
+    loop_drop();
+    text=diag_file("/tmp/diag",name);
+    check(has(text,"\nFAILED unsupported: canvas (1)\n"),"diag: looking again at departure keeps one line");
+    loop_page("<p>x</p><script>document.body.appendChild(document.createElement('canvas'))</script>");
+    check(loop_settle() && g.page.tree!=NULL,"diag: a page whose script makes its only canvas arrives");
+    yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
+    check(has(text,"\nFAILED unsupported: canvas (1)\n"),"diag: a canvas a script inserted is the page's failure");
+    loop_drop();
+    loop_scripts_off=true;
+    loop_page("<canvas>fallback</canvas>");
+    loop_scripts_off=false;
+    check(loop_settle() && g.page.tree!=NULL,"diag: a canvas page with scripts off arrives");
+    yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
+    check(!has(text,"unsupported") && has(text,"MISSING element canvas (1)\n"),
+        "diag: with scripts off a canvas shows its fallback and is no failure");
+    loop_drop();
+    loop_page("<p>x</p><svg><canvas></canvas></svg>");
+    check(loop_settle() && g.page.tree!=NULL,"diag: a page with a canvas inside an svg arrives");
+    yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
+    check(!has(text,"unsupported"),"diag: an svg's canvas is no HTML canvas, and no failure");
     loop_drop();
 
     /* An address that spells a token keeps it out of the plain lines. */
@@ -8914,6 +9064,8 @@ int main(void)
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
     classic_browser_cases();
+    inserted_frame_cases();
+    stand_in_paint_cases();
     covered_link_cases();
     classic_downloaded_cases();
     hover_batch_cases();

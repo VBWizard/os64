@@ -33,6 +33,7 @@ static int node_prototype_kind(const os64_html_node_t *node)
         if (node->tag == OS64_HTML_TAG_SCRIPT) return D_PROTO_SCRIPT;
         if (node->tag == OS64_HTML_TAG_A) return D_PROTO_ANCHOR;
         if (node->tag == OS64_HTML_TAG_LINK) return D_PROTO_LINK;
+        if (node->tag == OS64_HTML_TAG_IFRAME) return D_PROTO_IFRAME;
         return D_PROTO_HTML_ELEMENT;
     }
     return D_PROTO_ELEMENT;

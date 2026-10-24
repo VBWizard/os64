@@ -264,6 +264,9 @@ static void dom_classic_method_cases(void)
         "assert(one.tabIndex===-1&&document.getElementById('field').tabIndex===0,'tabIndex defaults');one.tabIndex=3;assert(one.tabIndex===3&&one.getAttribute('tabindex')==='3','tabIndex');"
         "const s=document.createElement('script');s.src='/js/app.js';assert(s.getAttribute('src')==='/js/app.js'&&s.src.indexOf('/js/app.js')>=0,'script.src');"
         "const a=document.createElement('a');assert(a.href==='');a.href='page.html';assert(/page\\.html$/.test(a.href)&&a.getAttribute('href')==='page.html','a.href');"
+        "const fr=document.createElement('iframe');assert(fr.src==='');fr.src='/frame.html';"
+        "assert(fr.getAttribute('src')==='/frame.html'&&/\\/frame\\.html$/.test(fr.src)&&!fr.hasOwnProperty('src'),'iframe.src');"
+        "assert(!('href' in fr)&&!('src' in document.createElement('frame')),'iframe.src alone');"
         "assert(!('src' in one)&&!('href' in one)&&!('href' in s),'reflections only where they belong');"
         /* classList */
         "const c=one.classList;assert(c===one.classList&&c.length===2&&c[0]==='a'&&c.item(1)==='b'&&c.item(5)===null,'classList reads');"

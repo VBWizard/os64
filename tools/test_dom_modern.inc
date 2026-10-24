@@ -156,7 +156,10 @@ static void dom_modern_cases(void)
         "b.style.setProperty('margin-inline-start','3px');assert(b.style.getPropertyValue('margin-inline-start')==='');"
         "b.style.setProperty('animation-name','spin');b.style.color='red';"
         "assert(b.style.getPropertyValue('animation-name')===''&&b.style.color==='red');"
-        "assert(typeof Image==='function'&&new Image().tagName==='IMG');",
+        "assert(typeof Image==='function'&&new Image().tagName==='IMG');"
+        /* the frames row's: an iframe has HTMLElement's members alone */
+        "var fr=document.createElement('iframe');fr.src='/frame.html';"
+        "assert(fr.getAttribute('src')===null&&fr.hasOwnProperty('src')&&!('HTMLIFrameElement' in window));",
         "modern-off-absent");
 
     bool exact = on != NULL && off != NULL;

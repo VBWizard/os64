@@ -2033,11 +2033,16 @@ static void diag_abandon(yonder_diag_t *d, const char *line)
     status_rest(line);
 }
 
-// The elements a page has that are drawn as nothing, and the custom
-// elements nothing defines, counted whole: the tally is taken again at
-// every write and holds the most any look saw.
+// The elements a page has whose content is not drawn (nothing, or a
+// stand-in in its place), and the custom elements nothing defines, counted
+// whole: the tally is taken again at every write and holds the most any
+// look saw. A canvas where scripting is on is also the page's failure, one
+// FAILED line however many it has (libflow lays out its fallback where
+// scripting is off); the other kinds are only counted (DEBTS.md, "Loud for
+// canvas only"). A frame is never a failure: its stand-in takes a click to
+// its document.
 #define DIAG_CUSTOM_MAX 64
-static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc)
+static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, bool scripting)
 {
     // A frame's document is not loaded into its box (it is offered as a
     // link instead), and an embed makes no box: both are asked for and not
@@ -2045,7 +2050,7 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc)
     // cannot play, and is not counted.
     static const char *const kNothing[] = {"canvas", "video", "audio", "svg", "iframe", "frame", "embed"};
     enum { NOTHING = sizeof(kNothing) / sizeof(kNothing[0]) };
-    uint32_t nothing[NOTHING] = {0};
+    uint32_t nothing[NOTHING] = {0}, canvases = 0;
     struct { const char *name; uint32_t n; } custom[DIAG_CUSTOM_MAX];
     int32_t ncustom = 0;
     const os64_html_node_t *n = doc != NULL ? doc->document : NULL;
@@ -2053,6 +2058,7 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc)
         if (n->kind == OS64_HTML_ELEMENT && n->name != NULL) {
             for (int k = 0; k < NOTHING; k++)
                 nothing[k] += os64_streq(n->name, kNothing[k]);
+            canvases += n->ns == OS64_HTML_NS_HTML && n->tag == OS64_HTML_TAG_CANVAS;
             if (n->ns == OS64_HTML_NS_HTML && os64_strchr(n->name, '-') != NULL) {
                 int32_t c = 0;
                 while (c < ncustom && !os64_streq(custom[c].name, n->name))
@@ -2077,6 +2083,8 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc)
     for (int k = 0; k < NOTHING; k++)
         if (nothing[k] != 0)
             yonder_diag_missing_seen(d, "element", kNothing[k], nothing[k]);
+    if (scripting && canvases != 0)
+        yonder_diag_failed_seen(d, "unsupported", "canvas");
     for (int32_t c = 0; c < ncustom; c++)
         yonder_diag_missing_seen(d, "element", custom[c].name, custom[c].n);
 }
@@ -2291,7 +2299,7 @@ static void diag_paint(Page *p);
 static void diag_observe(Page *p, const char *when)
 {
     yonder_diag_t *d = p->diag;
-    diag_elements(d, page_doc(p));
+    diag_elements(d, page_doc(p), p->scripting);
     if (p->cascade != NULL)
         diag_cascade(d, p->cascade);
     char v[128];
@@ -10561,32 +10569,50 @@ static void glass_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os6
     glass_fill(&cut, (os64_gui_rect_t){c.x + c.w - 1, c.y, 1, c.h}, 0xd4d4d4);
 }
 
-// A frame's stand-in: a pale panel, and along its top where the frame's
-// document is ("Frame: https://..."), cut to the panel. The label's run is
-// made for this paint and let go after it, so no tree's replacement can
-// leave one behind; a page has few frames. It is made once for every
-// target (pane_frame), so all draw it or none does; NULL, the panel alone.
-#define FRAME_LABEL_PX 13
-#define FRAME_LABEL_MAX 512
+// A stand-in (paint.h's stand_in), and along its top what the box would
+// hold, cut to the box: a frame's document ("Frame: https://...") on a
+// pale panel, or that a canvas cannot be drawn ("Canvas: not supported")
+// inside a 1px outline with NO panel, since a canvas is transparent until
+// drawn and full-viewport ones (confetti, snow, a cursor's trail) lie over
+// the page, which must show through. The label's run is made within one
+// paint and let go at its end, so no tree's replacement can leave one
+// behind: a frame's for each frame drawn, the canvas one, being the same
+// text, once a paint (GlassPane.canvas_label), and none for a box whose top
+// strip is out of view. It is made once for every target, so all draw it
+// or none does; NULL, the panel or the outline alone.
+#define STAND_IN_LABEL_PX 13
+#define STAND_IN_LABEL_MAX 512
 typedef struct {
     os64_text_run_t *run;
     int32_t pad, ascent;        // pixels
-} FrameLabel;
+} StandInLabel;
 
-static FrameLabel frame_label(const flow_box_t *b)
+// The labels stand_in_label has laid out, for the bound cases.
+static uint64_t s_stand_in_labels;
+
+// What a stand-in's label says, into `text`.
+static void stand_in_text(const flow_box_t *b, char *text, size_t cap)
 {
-    FrameLabel fl = {NULL, 0, 0};
     const os64_page_link_t *l = os64_page_link(flow_model(g.page.tree), b->link);
-    char text[FRAME_LABEL_MAX];
-    if (l != NULL && l->href.url != NULL)
-        os64_snprintf(text, sizeof(text), "Frame: %s", l->href.url);
+    if (b->node != NULL && b->node->tag == OS64_HTML_TAG_CANVAS)
+        os64_strcopy(text, cap, "Canvas: not supported");
+    else if (l != NULL && l->href.url != NULL)
+        os64_snprintf(text, cap, "Frame: %s", l->href.url);
     else
-        os64_strcopy(text, sizeof(text), "Frame (it names no document)");
+        os64_strcopy(text, cap, "Frame (it names no document)");
+}
+
+static StandInLabel stand_in_label(const flow_box_t *b)
+{
+    s_stand_in_labels++;
+    StandInLabel fl = {NULL, 0, 0};
+    char text[STAND_IN_LABEL_MAX];
+    stand_in_text(b, text, sizeof(text));
     const flow_family_list_t sans = {.generic = FLOW_GENERIC_SANS};
     os64_text_font_t *const *fonts;
     size_t nfonts;
     os64_font_face_info_t face;
-    uint32_t px = (uint32_t)((int64_t)FRAME_LABEL_PX * (g.zoom != 0 ? g.zoom : 1000) / 1000);
+    uint32_t px = (uint32_t)((int64_t)STAND_IN_LABEL_PX * (g.zoom != 0 ? g.zoom : 1000) / 1000);
     if (s_env.text == NULL || page_fonts(NULL, &sans, false, false, px, &fonts, &nfonts, &face) != OS64_FONT_OK)
         return fl;
     os64_text_layout_t opt = {.encoding = OS64_TEXT_UTF8_WESTERN_V1, .fonts = fonts,
@@ -10599,8 +10625,8 @@ static FrameLabel frame_label(const flow_box_t *b)
     return fl;
 }
 
-static void glass_frame(const Glass *gl, os64_gui_rect_t c, os64_gui_rect_t clip, uint32_t ink,
-                        uint32_t paper, const FrameLabel *fl)
+static void glass_stand_in(const Glass *gl, os64_gui_rect_t c, os64_gui_rect_t clip, uint32_t ink,
+                           uint32_t paper, bool panel, const StandInLabel *fl)
 {
     Glass cut = *gl;
     os64_gui_rect_t room;
@@ -10609,7 +10635,14 @@ static void glass_frame(const Glass *gl, os64_gui_rect_t c, os64_gui_rect_t clip
     cut.clip = on_glass(&cut, room);
     if (cut.clip.w <= 0 || cut.clip.h <= 0)
         return;
-    glass_fill(&cut, c, paper);
+    if (panel) {
+        glass_fill(&cut, c, paper);
+    } else {
+        glass_fill(&cut, (os64_gui_rect_t){c.x, c.y, c.w, 1}, ink);
+        glass_fill(&cut, (os64_gui_rect_t){c.x, c.y + c.h - 1, c.w, 1}, ink);
+        glass_fill(&cut, (os64_gui_rect_t){c.x, c.y, 1, c.h}, ink);
+        glass_fill(&cut, (os64_gui_rect_t){c.x + c.w - 1, c.y, 1, c.h}, ink);
+    }
     if (fl->run == NULL)
         return;
     int32_t baseline = c.y + fl->pad + fl->ascent;
@@ -10758,6 +10791,10 @@ typedef struct {
     GlassThrough *open[GLASS_THROUGHS];
     int32_t depth;
     GlassClip *clip;
+    // The canvas stand-in's label, the same text for every canvas, laid
+    // out at the first this paint draws and let go when the paint ends.
+    StandInLabel canvas_label;
+    bool canvas_label_made;
 } GlassPane;
 
 static void pane_fill(void *ctx, os64_gui_rect_t r, uint32_t colour)
@@ -10851,15 +10888,37 @@ static void pane_pixels(void *ctx, os64_gui_rect_t r, const uint32_t *argb)
         glass_pixels(gp->now[k], r, argb);
 }
 
-static void pane_frame(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip,
-                       uint32_t ink, uint32_t paper)
+static void pane_stand_in(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip,
+                          uint32_t ink, uint32_t paper)
 {
     GlassPane *gp = ctx;
-    FrameLabel fl = frame_label(b);
+    // A box with nothing in view (an empty canvas, one scrolled off) is not
+    // drawn: a page can have as many of those as it likes.
+    os64_gui_rect_t room;
+    if (!os64_rect_intersect(c, clip, &room) || room.w <= 0 || room.h <= 0)
+        return;
+    bool canvas = b->node != NULL && b->node->tag == OS64_HTML_TAG_CANVAS;
+    // The label is drawn in the box's top strip, two of its pixel sizes
+    // tall: a box whose strip is out of view needs none laid out.
+    int32_t strip = 2 * (int32_t)((int64_t)STAND_IN_LABEL_PX * (g.zoom != 0 ? g.zoom : 1000) / 1000);
+    os64_gui_rect_t top = {c.x, c.y, c.w, strip < c.h ? strip : c.h}, seen;
+    StandInLabel own = {NULL, 0, 0};
+    const StandInLabel *fl = &own;
+    if (os64_rect_intersect(top, clip, &seen) && seen.w > 0 && seen.h > 0) {
+        if (!canvas) {
+            own = stand_in_label(b);
+        } else {
+            if (!gp->canvas_label_made) {
+                gp->canvas_label = stand_in_label(b);
+                gp->canvas_label_made = true;
+            }
+            fl = &gp->canvas_label;
+        }
+    }
     for (int32_t k = 0; k < gp->n; k++)
-        glass_frame(gp->now[k], c, clip, ink, paper, &fl);
-    if (fl.run != NULL)
-        os64_text_run_release(fl.run);
+        glass_stand_in(gp->now[k], c, clip, ink, paper, !canvas, fl);
+    if (own.run != NULL)
+        os64_text_run_release(own.run);
 }
 
 static void through_free(GlassThrough *t)
@@ -11109,10 +11168,10 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         os64_draw_fill_rect(&ctx->surf, part, 0xff000000u | (s_dark ? kDark.paper : PAGE_PAPER));
         return;
     }
-    GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0, NULL};
+    GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0, NULL, {NULL, 0, 0}, false};
     yonder_verbs_t v = {&pane,        pane_fill,     timed_text,       timed_image,
                         pane_control, timed_backdrop, timed_group_open, timed_group_close,
-                        timed_mask,   timed_pixels,  pane_frame,      timed_through_open,
+                        timed_mask,   timed_pixels,  pane_stand_in,   timed_through_open,
                         timed_through_close, pane_clip_open, pane_clip_fill, pane_clip_close};
     os64_gui_rect_t view = {part.x - gl.dx, part.y - gl.dy, part.w, part.h};
     cost_begin(PS_VIEW);
@@ -11130,6 +11189,8 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         g.paint_scratch = yonder_scratch_new();
     yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL, g.paint_cache,
                  g.paint_scratch, &v);
+    if (pane.canvas_label.run != NULL)
+        os64_text_run_release(pane.canvas_label.run);
     yonder_paint_stage = NULL;
     box_bars(&gl, view);
     yonder_scratch_paint_end(g.paint_scratch);

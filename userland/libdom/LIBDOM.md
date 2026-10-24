@@ -1045,6 +1045,21 @@ The classic fixes beside them are every page's, the switch on or off:
 `window` and `document` [LegacyUnforgeable] (§ Objects and collections),
 `history` a read-only accessor, `status` kept (§ Asks).
 
+### The frames row
+
+`frames.c`: the `HTMLIFrameElement` interface over the binding's iframe
+prototype, `D_PROTO_IFRAME`, and `src`, reflected as `script.src` is (read
+resolved against the document's base, set as written). It is the start of
+the HTMLIFrameElement IFRAME.md shapes (§ The cluster and the window
+proxy), a modern row of its own, so the modern switch takes it away whole,
+and phase F1 adds the rest of its members to it. Setting
+`src` sets the attribute, which libpage lists as the frame's link, and
+loads nothing: a frame a script inserts and addresses this way, as scripts
+most often do, is the stand-in a parsed one is. With the modern switch off
+the prototype is there, as every kind's is, with HTMLElement's members
+alone, so `src` set as a property is the script's own and the frame names
+nothing, as before; `setAttribute` and `innerHTML` name it either way.
+
 ### P2a's rows: a script's failures
 
 One row (MODERN_WEB.md § P2a, as built; WINDOW_DOCUMENT.md § P2a is the

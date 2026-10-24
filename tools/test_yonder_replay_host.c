@@ -2111,9 +2111,19 @@ static bool rp_copy_kept(const char *host) {
     return ok;
 }
 
+/* Whether a line of `record` begins with `start`. */
+static bool rp_has_line_start(const char *record, const char *start) {
+    size_t n=strlen(start);
+    for(const char *at=record; at!=NULL && *at!='\0'; at=strchr(at,'\n'), at=at!=NULL ? at+1 : NULL)
+        if(strncmp(at,start,n)==0) return true;
+    return false;
+}
+
 /* A hand-made page: what it proves, where it is from, its bytes and head,
  * the words of its own checks, which its record must not hold, words its
- * record must hold, which say it was read as it is meant to be, the width
+ * record must hold, which say it was read as it is meant to be (a list
+ * that begins with a newline is of LINES, one a line, each the start of a
+ * record line it must or must not have), the width
  * of the view it is read in (0 for the harness's own), whether it is read
  * with scripts off or the modern switch off, and whether it is read with
  * every other input unlike the harness's (rp_other_inputs). */
@@ -2122,7 +2132,7 @@ typedef struct {
     const char *address;
     const char *page;
     way_head_t head;
-    const char *forbid, *require;   /* space-separated; NULL for none */
+    const char *forbid, *require;   /* space-separated, or lines; NULL for none */
     int32_t width;
     bool scripts_off;
     bool modern_off;                /* read with the modern switch off */
@@ -3301,6 +3311,16 @@ static int rp_self_test(const char *work) {
          "<!doctype html><p>percent</p><script src=s.js></script>",
          rp_head(200,"OK","text/html","","http://fixture.test/M%49SSING/MISSING/p.html",false,WAY_BODY_HTML),
          NULL,"M%2549SSING/M%49SSING/s.js: ran",0,false,false,false},
+        /* Canvases, one a script makes, are one FAILED line, and a frame a
+         * script inserts with its src property is no failure: a replay
+         * writes the same lines. */
+        {"canvases and an inserted frame","http://fixture.test/loud",
+         "<!doctype html><canvas></canvas><canvas width=10 height=10></canvas><script>"
+         "var f=document.createElement('iframe');f.src='/poll';document.body.appendChild(f);"
+         "document.body.appendChild(document.createElement('canvas'))</script>",
+         rp_head(200,"OK","text/html","","http://fixture.test/loud",false,WAY_BODY_HTML),
+         "\nFAILED unsupported: iframe\nFAILED unsupported: frame",
+         "\nFAILED unsupported: canvas (1)\nMISSING element canvas (3)",0,false,false,false},
         /* Read with every input unlike the harness's, its script writing
          * each into its record as the name of a global it looks for, so a
          * replay that takes the harness's value for any of them writes
@@ -3391,9 +3411,11 @@ static int rp_self_test(const char *work) {
                  * that matches it is matching a page that read right. */
                 for(int must=0;must<2 && set==3;must++) {
                     const char *list=must ? hand[i].require : hand[i].forbid;
+                    bool lines=list!=NULL && list[0]=='\n';
                     char *words=list!=NULL ? strdup(list) : NULL;
-                    for(char *w=words!=NULL ? strtok(words," ") : NULL; w!=NULL; w=strtok(NULL," "))
-                        if(record==NULL || (strstr(record,w)!=NULL)!=(must==1)) {
+                    for(char *w=words!=NULL ? strtok(words,lines ? "\n" : " ") : NULL; w!=NULL;
+                        w=strtok(NULL,lines ? "\n" : " "))
+                        if(record==NULL || (lines ? rp_has_line_start(record,w) : strstr(record,w)!=NULL)!=(must==1)) {
                             printf("  %s (%s): where it was kept, its record %s %s\n",address,hand[i].what,
                                 must ? "lacks" : "holds",w);
                             bad++;

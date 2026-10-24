@@ -68,6 +68,7 @@ static void dom_classic_cases(void)
         "assert(Object.getPrototypeOf(Node)===Function.prototype&&Object.getPrototypeOf(Element)===Node);"
         "assert(Object.getPrototypeOf(HTMLElement)===Element&&Object.getPrototypeOf(HTMLInputElement)===HTMLElement);"
         "assert(Object.getPrototypeOf(HTMLLinkElement)===HTMLElement&&Object.getPrototypeOf(Document)===Node);"
+        "assert(Object.getPrototypeOf(HTMLIFrameElement)===HTMLElement&&document.createElement('iframe') instanceof HTMLIFrameElement);"
         "assert(Object.getPrototypeOf(CharacterData)===Node&&Object.getPrototypeOf(DocumentFragment)===Node);"
         "assert(HTMLElement.ELEMENT_NODE===1);"
         "d=Object.getOwnPropertyDescriptor(HTMLElement,'length');"
