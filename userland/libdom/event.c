@@ -651,8 +651,7 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
             }
             /* What the listener throws is its script's (report.c's MUTED
              * ERRORS), whichever call it is reported from. */
-            uint32_t calling = dom->calling_script;
-            d_script_calling(dom, listener->script);
+            DScripts before = d_script_enter(dom, listener->script);
             if (d->host != NULL) {
                 JSValue args[2] = {d->object, callback};
                 os64_js_outcome_t call, point;
@@ -662,7 +661,7 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
                              NULL, &call);
                 dom->invoking = NULL;
                 dom->invoking_entry = NULL;
-                dom->calling_script = calling;
+                d_script_leave(dom, &before, true);
                 JS_FreeValueRT(dom->engine, callback);
                 d_outcome_fold(d->host, &call);
                 /* A listener that threw is reported before the checkpoint
@@ -676,7 +675,7 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
             } else {
                 uint32_t script = listener->script;
                 JSValue value = run_record(dom, d->ctx, entry, listener, callback, d->object);
-                dom->calling_script = calling;
+                d_script_leave(dom, &before, false);
                 JS_FreeValue(d->ctx, callback);
                 if (JS_IsException(value)) {
                     JSValue error = JS_GetException(d->ctx);

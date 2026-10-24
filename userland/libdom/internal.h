@@ -638,11 +638,19 @@ void d_report_as(os64_dom_t *dom, JSContext *ctx, JSValueConst error, uint32_t s
  * handed over: the name it was compiled under when that is one of the
  * binding's (read through Function.prototype's own fileName getter), else
  * the running script's, the one handing it over (a bound function, one
- * made by eval). And the script whose callback the binding is about to
- * call (D_NO_SCRIPT once the call is over): what an exception the call
- * ends in is muted by. */
+ * made by eval). */
 uint32_t d_callback_script(os64_dom_t *dom, JSContext *ctx, JSValueConst function);
-void d_script_calling(os64_dom_t *dom, uint32_t script);
+/* Around every call the binding makes into a callback of the page's: the
+ * muting state (report.c's current_script reads it) as it stood, kept by
+ * the caller, and the callback's script made the one being called, which
+ * an exception the call ends in is muted by. Leaving puts all of it back,
+ * so a script that dispatched and goes on is again the one whose failures
+ * they are, at any depth; `top`, a task's own call with no script under
+ * it, keeps the task's last-called script, which the checkpoint after the
+ * call reads for a rejection no frame names. */
+typedef struct { uint32_t running, calling, task, thrown; } DScripts;
+DScripts d_script_enter(os64_dom_t *dom, uint32_t script);
+void d_script_leave(os64_dom_t *dom, const DScripts *before, bool top);
 /* Inside an open task, between its calls: the error events the exceptions
  * the wrapper caught are owed, fired at window, each named for its script. */
 void d_errors_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);

@@ -247,6 +247,29 @@ static void dom_report_muting_cases(void)
     report_log_is(&f, MUTED_ERROR "+'|error Uncaught Error: ours F https://example.test/own.js 1 ours F"
                   "|handled ours F2'", "muting: its listener's error and its rejectionhandled are told whole");
     fixture_free(&f);
+
+    /* A dispatch inside a script calls the listeners' scripts and comes back
+     * to the one that dispatched: what that script throws next is its own,
+     * at any depth (Codex #339 rd2). */
+    f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, MUTED_SETUP "addEventListener('custom',function(){});"
+        "addEventListener('outer',function(){dispatchEvent(new Event('inner'));throw new Error('page')});",
+        "muting: the page's listeners");
+    report_script(&f, "addEventListener('foreign',function(){});addEventListener('inner',function(){})",
+                  "theirs.js", "https://other.test/theirs.js", &outcome);
+    report_script(&f, "dispatchEvent(new Event('custom'));throw new Error('foreign secret')", "nested.js",
+                  "https://other.test/nested.js", &outcome);
+    report_log_is(&f, MUTED_ERROR, "muting: another site's script that dispatched to the page's listener is muted");
+    report_script(&f, "dispatchEvent(new Event('foreign'));\nthrow new Error('ours after')", "page.html#inline-1", NULL,
+                  &outcome);
+    report_log_is(&f, "'error Uncaught Error: ours after " REPORT_URL " 2 ours after'",
+                  "muting: the page's script that dispatched to another site's listener is told whole");
+    report_script(&f, "dispatchEvent(new Event('outer'));throw new Error('foreign two')", "two.js",
+                  "https://other.test/two.js", &outcome);
+    report_log_is(&f, "'error Uncaught Error: page " REPORT_URL " 1 page|'+" MUTED_ERROR,
+                  "muting: two levels down and back, the page's listener is told whole and their script is muted");
+    fixture_free(&f);
 }
 
 static void dom_report_nested_cases(void)

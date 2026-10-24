@@ -260,10 +260,20 @@ uint32_t d_callback_script(os64_dom_t *dom, JSContext *ctx, JSValueConst functio
     return script != D_NO_SCRIPT ? script : running_script(dom, ctx);
 }
 
-void d_script_calling(os64_dom_t *dom, uint32_t script)
+DScripts d_script_enter(os64_dom_t *dom, uint32_t script)
 {
+    DScripts before = {dom->running_script, dom->calling_script, dom->task_script, dom->thrown_script};
     dom->calling_script = script;
     if (script != D_NO_SCRIPT) dom->task_script = script;
+    return before;
+}
+
+void d_script_leave(os64_dom_t *dom, const DScripts *before, bool top)
+{
+    dom->running_script = before->running;
+    dom->calling_script = before->calling;
+    dom->thrown_script = before->thrown;
+    if (!top) dom->task_script = before->task;
 }
 
 bool os64_dom_script_name(os64_dom_t *dom, const char *address, char *out, size_t cap)
