@@ -2674,6 +2674,17 @@ static void stream_picture_page(void) {
     if(trip!=NULL && pool_work.job!=trip) yonder_trip_release(trip,NULL);
     stream_window_drop();
 }
+/* An address typed into the window is the browser's own navigation: site
+ * none, and a person's (Fetch Metadata § 2.3, § 2.4). */
+static void stream_typed_is_the_browsers(void) {
+    stream_window();
+    open_address("fixture.test/typed",NAV_GO,NULL,NULL);
+    const yonder_trip_t *t=pool_work.job;
+    check(t!=NULL && os64_streq(t->url,"http://fixture.test/typed") && t->metadata.site==WAY_SITE_NONE &&
+          t->metadata.activation && t->metadata.dest==WAY_DEST_DOCUMENT,
+        "who: an address typed is the browser's own and a person's");
+    stream_window_drop();
+}
 static void stream_refused(void) {
     /* Deeper than twice the parser's stack: the parser refuses, the fetch
      * is cancelled, and the page arrives as far as it got, saying so. */
@@ -4312,6 +4323,7 @@ static void stream_cases(void) {
     stream_motion();
     stream_captures_mode();
     stream_slices();
+    stream_typed_is_the_browsers();
     stream_reaped_first();
     stream_text();
     stream_no_page();
