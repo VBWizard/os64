@@ -11,15 +11,15 @@
  * shows, or a document of its own (implementation.c), which HTML gives no
  * browsing context. For the window's document:
  *
- *   - readyState is its readiness, "loading" while the parse runs, moved by
- *     the host's own dispatches (os64_dom_readiness_after): DOMContentLoaded
- *     at the document makes it "interactive" and load at window
- *     "complete", readystatechange fired at the document just before each
- *     (d_readiness_moved). The host says where it stood when the binding
- *     was made (options.readiness);
+ *   - readyState is its readiness, moved by the host's own dispatches and
+ *     nothing else (os64_dom_readiness_after): "loading" until
+ *     DOMContentLoaded at the document makes it "interactive", and load at
+ *     window "complete", readystatechange fired at the document just before
+ *     each (d_readiness_moved). The host says where it stood when the
+ *     binding was made (options.readiness);
  *   - visibilityState is "visible" and hidden false: the window shows the
  *     page, and nothing here learns of a desktop minimizing it, so
- *     visibilitychange never fires (WINDOW_DOCUMENT.md books that hook);
+ *     visibilitychange never fires (DEBTS.md);
  *   - prerendering is false and wasDiscarded false: yonder neither
  *     prerenders a page nor discards one to bring back later, so
  *     prerenderingchange never fires;
@@ -54,10 +54,9 @@
  * visibilityState "hidden" and hidden true, referrer "", currentScript
  * null, hasFocus() false, URL and documentURI "about:blank", its maker's
  * origin's domain, which it refuses to set (SecurityError), "CSS1Compat"
- * (no-quirks), "UTF-8", the
- * content type its making gave it, and the time it is asked for
- * lastModified. Its activeElement is its body, document element or null,
- * since nothing in it can have focus.
+ * (no-quirks), "UTF-8", the content type its making gave it, and the time
+ * it is asked for lastModified. Its activeElement is its body, document
+ * element or null, since nothing in it can have focus.
  *
  * The handlers onreadystatechange, onvisibilitychange and
  * onprerenderingchange are the document's IDL properties alone, with no
@@ -291,12 +290,17 @@ static JSValue document_member(JSContext *ctx, JSValueConst self, int argc, JSVa
         return JS_NewString(ctx, window && dom->document->quirks == OS64_HTML_QUIRKS ? "BackCompat" : "CSS1Compat");
     case P_DIR: {
         /* The html element's dir, limited to its known values; "" and
-         * nothing set when the document element is not an HTML html. */
-        const os64_html_node_t *root = d_document_element(document);
-        if (!html_element(root, OS64_HTML_TAG_HTML)) return set ? JS_UNDEFINED : JS_NewString(ctx, "");
-        if (!set) return d_dir_value(ctx, root);
+         * nothing set when the document element is not an HTML html. A
+         * value is converted before the element is looked for, since its
+         * conversion is page code that may move it. */
         DString text = {0};
-        if (!d_string(dom, ctx, value, &text)) return JS_EXCEPTION;
+        if (set && !d_string(dom, ctx, value, &text)) return JS_EXCEPTION;
+        const os64_html_node_t *root = d_document_element(document);
+        if (!html_element(root, OS64_HTML_TAG_HTML)) {
+            d_string_free(dom, &text);
+            return set ? JS_UNDEFINED : JS_NewString(ctx, "");
+        }
+        if (!set) return d_dir_value(ctx, root);
         int64_t status = d_set_attr(dom, root, "dir", text.data, text.length, false);
         d_string_free(dom, &text);
         return status < 0 ? d_html_error(ctx, status) : JS_UNDEFINED;

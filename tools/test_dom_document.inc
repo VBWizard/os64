@@ -303,6 +303,10 @@ static void dom_document_title_cases(void)
         "document.title='  set  me ';assert(document.title==='set me'&&t.textContent==='  set  me '&&t.childNodes.length===1);"
         "document.title='';assert(document.title===''&&t.firstChild===null,'no Text node for empty');"
         "document.title={toString(){return 'obj'}};assert(document.title==='obj');"
+        "const second=document.getElementsByTagName('title')[1];"
+        "document.title={toString(){t.remove();return 'converted first'}};"
+        "assert(t.textContent==='obj'&&second.textContent==='converted first','the title its conversion took away is not set');"
+        "second.textContent='second';document.head.insertBefore(t,document.head.firstChild);"
         "t.remove();assert(document.title==='second','the next in tree order');"
         "document.querySelector('title').remove();assert(document.title==='');"
         "document.title='made';const n=document.head.lastChild;"
@@ -331,7 +335,11 @@ static void dom_document_reflection_cases(void)
         "assert(document.documentElement.getAttribute('dir')==='LTR'&&document.dir==='ltr');"
         "document.dir='sideways';assert(document.dir===''&&document.documentElement.getAttribute('dir')==='sideways');"
         "const s=document.implementation.createDocument('http://www.w3.org/2000/svg','svg',null);"
-        "assert(s.dir==='');s.dir='rtl';assert(!s.documentElement.hasAttribute('dir'),'no html element: nothing set');",
+        "assert(s.dir==='');s.dir='rtl';assert(!s.documentElement.hasAttribute('dir'),'no html element: nothing set');"
+        /* the value is converted before the element is looked for */
+        "const own=document.implementation.createHTMLDocument(''),root=own.documentElement;"
+        "own.dir={toString(){root.remove();return 'rtl'}};"
+        "assert(own.documentElement===null&&!root.hasAttribute('dir'),'the root its conversion took away is not set');",
         "dir, compatMode and characterSet");
     fixture_free(&f);
 }

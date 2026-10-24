@@ -1374,8 +1374,9 @@ static struct {
         // hears the milestones after that (stream_mark).
         os64_dom_timing_t timing;
         // The address of the page it was asked for from, "" for none
-        // (trip_send's: a link followed, a form sent): what its Referer
-        // was made from, and its document.referrer is (stream_referrer).
+        // (trip_send's: a link followed, a form sent, a script's
+        // navigation): what its Referer was made from, and so its
+        // document.referrer (stream_request_facts).
         char referrer[OS64_FETCH_URL_MAX];
         // THE STREAM'S PAGE (DOM_D7.md § D7d): the parse so far as a page
         // with a sheet table, filled as the parse reveals sheets
@@ -7450,7 +7451,8 @@ static uint32_t history_length(void *opaque);
 // document.activeElement's and hasFocus()'s answer for the page whose
 // document is `opaque`: the element focused in it (the window keeps focus
 // in the page on screen's document alone), and whether it is the page on
-// screen, which is the one the window's focus is in.
+// screen. Whether the window itself has the person's focus is not
+// followed (DEBTS.md), so the page on screen always says it has.
 static bool script_focus(void *opaque, const os64_html_node_t **focused)
 {
     *focused = g.focus_node != NULL && g.focus_doc == opaque ? g.focus_node : NULL;

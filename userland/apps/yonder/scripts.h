@@ -90,7 +90,8 @@ typedef struct {
     int64_t last_modified;
     // What has focus, given `opaque` (os64_dom_options_t.focus): the
     // element focused in this page's document, or NULL, and whether the
-    // page has the window's focus. NULL: nothing has, and neither has it.
+    // page has the focus (yonder's: whether it is the page on screen).
+    // NULL: nothing has, and neither has it.
     bool (*focus)(void *opaque, const os64_html_node_t **focused);
 } yonder_scripts_options_t;
 

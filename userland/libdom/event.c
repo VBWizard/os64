@@ -3,7 +3,9 @@
 
 /* Events: the DOM Standard's EventTarget and Event, HTML's event handlers
  * (the on<type> properties and content attributes), and the dispatch a host
- * starts for a person's input. LIBDOM.md § Events is the design record. */
+ * starts for a person's input; and the Event interfaces whose state is
+ * Event's own record with a field or two more (ProgressEvent, CustomEvent)
+ * and createEvent's table. LIBDOM.md § Events is the design record. */
 
 static JSClassID event_slot;
 
