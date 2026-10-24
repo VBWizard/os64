@@ -1305,7 +1305,8 @@ static struct {
     // The page stream_finish holds while its DOMContentLoaded runs: no
     // longer the stream's, not yet coming or shown. A fragment its scripts
     // ask for lands in `fragment`, which arrive scrolls to; a measurement
-    // they make is of `page` (measured_layout). `kind` is how it came;
+    // they make is of `page` (measured_layout); a request they make is
+    // `page`'s, found by its serial (scripts_for). `kind` is how it came;
     // `abandoned` says its scripts went back or forward past it
     // (unshown_go), so it is never shown.
     struct {
@@ -7303,21 +7304,37 @@ static bool fetchable(const char *url)
            (os64_strlen(url) > 7 && os64_memcmp(url, "file://", 7) == 0);
 }
 
-// The address of the page a host belongs to, for a fetch's Referer.
-static const char *scripts_page_url(uint64_t serial)
+// The host a serial names, in whichever role its page is: arriving, held
+// by stream_finish for its DOMContentLoaded, waiting for its sheets, or on
+// screen. NULL: its page is gone. A script's request is its own page's
+// wherever that page is: what the window gives it of a page — its origin,
+// a `src` script's Referer, the record it is written in — comes from this
+// host, and a serial that finds none is refused, which the page sees as a
+// network error, never taken as the page on screen's.
+static yonder_scripts_t *scripts_for(uint64_t serial)
 {
     if (g.stream.scripts != NULL && yonder_scripts_serial(g.stream.scripts) == serial)
-        return g.stream.head.url;
-    if (g.coming.active && yonder_scripts_serial(g.coming.page.scripts) == serial)
-        return g.coming.page.way.url;
-    return g.page.way.url;
+        return g.stream.scripts;
+    if (g.finishing.page != NULL && g.finishing.page->scripts != NULL &&
+        yonder_scripts_serial(g.finishing.page->scripts) == serial)
+        return g.finishing.page->scripts;
+    if (g.coming.active && g.coming.page.scripts != NULL &&
+        yonder_scripts_serial(g.coming.page.scripts) == serial)
+        return g.coming.page.scripts;
+    if (g.page.scripts != NULL && yonder_scripts_serial(g.page.scripts) == serial)
+        return g.page.scripts;
+    return NULL;
 }
 
+// A `src` script's fetch, its Referer the address its page's scripts run
+// at; 0, not begun, for a page that is gone.
 static uint64_t script_fetch(void *opaque, uint64_t serial, uint32_t token, const char *url,
                              const char *fallback)
 {
     (void)opaque;
-    yonder_script_job_t *job = fetchable(url) && g.pool != NULL ? os64_calloc(1, sizeof(*job)) : NULL;
+    yonder_scripts_t *host = scripts_for(serial);
+    yonder_script_job_t *job =
+        host != NULL && fetchable(url) && g.pool != NULL ? os64_calloc(1, sizeof(*job)) : NULL;
     if (job == NULL)
         return 0;
     job->kind = YONDER_JOB_SCRIPT;
@@ -7328,7 +7345,7 @@ static uint64_t script_fetch(void *opaque, uint64_t serial, uint32_t token, cons
     os64_strcopy(job->fallback, sizeof(job->fallback), fallback);
     job->hooks.jar = g.way.jar;
     job->hooks.cache = g.cache;
-    os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), scripts_page_url(serial));
+    os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), yonder_scripts_url(host));
     os64_work_t work = {yonder_script_run, yonder_script_release, job, SCRIPT_RESERVE};
     os64_work_id_t id = os64_work_submit(g.pool, &work);
     if (id == 0)
@@ -7424,20 +7441,6 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
     const os64_dom_cookies_t cookies = {script_cookies_get, script_cookies_set, host};
     yonder_scripts_set_cookies(host, &cookies);
     return host;
-}
-
-// The host a fetch job's serial names: the page arriving, the page waiting
-// for its sheets, or the page on screen. NULL: its page is gone.
-static yonder_scripts_t *scripts_for(uint64_t serial)
-{
-    if (g.stream.scripts != NULL && yonder_scripts_serial(g.stream.scripts) == serial)
-        return g.stream.scripts;
-    if (g.coming.active && g.coming.page.scripts != NULL &&
-        yonder_scripts_serial(g.coming.page.scripts) == serial)
-        return g.coming.page.scripts;
-    if (g.page.scripts != NULL && yonder_scripts_serial(g.page.scripts) == serial)
-        return g.page.scripts;
-    return NULL;
 }
 
 static void script_arrived(const yonder_script_job_t *job, const yonder_script_t *got)
@@ -7575,21 +7578,25 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
 static way_preflight_t *s_preflight;
 
 // The page's origin for a job, from the address its scripts run at; an
-// opaque one is this page's own, named by its serial.
-static void request_origin(uint64_t serial, way_origin_t *out)
+// opaque one is this page's own, named by its serial. False when no page
+// has that serial (scripts_for).
+static bool request_origin(uint64_t serial, way_origin_t *out)
 {
     yonder_scripts_t *host = scripts_for(serial);
-    const char *url = host != NULL ? yonder_scripts_url(host) : scripts_page_url(serial);
-    way_origin_of(url, serial != 0 ? serial : 1, out);
+    if (host == NULL)
+        return false;
+    way_origin_of(yonder_scripts_url(host), serial != 0 ? serial : 1, out);
+    return true;
 }
 
-// A job for a page's request, its bytes its own. NULL on no memory, and
-// for an address longer than a data: URL may be (fetch_job.h), which the
-// page sees as a network error.
+// A job for a page's request, its bytes its own. NULL on no memory, for
+// an address longer than a data: URL may be (fetch_job.h), and for a
+// serial no page has, each of which the page sees as a network error.
 static yonder_fetch_job_t *request_job(uint64_t serial, uint32_t token, const os64_dom_request_t *q)
 {
     size_t url_len = os64_strlen(q->url);
-    if (url_len > YONDER_FETCH_DATA_URL_MAX)
+    way_origin_t origin;
+    if (url_len > YONDER_FETCH_DATA_URL_MAX || !request_origin(serial, &origin))
         return NULL;
     yonder_fetch_job_t *job = os64_calloc(1, sizeof(*job));
     if (job == NULL)
@@ -7613,7 +7620,7 @@ static yonder_fetch_job_t *request_job(uint64_t serial, uint32_t token, const os
     if (q->body != NULL && q->body_length != 0)
         os64_memcpy(job->body, q->body, q->body_length);
     job->body_len = q->body != NULL ? q->body_length : 0;
-    request_origin(serial, &job->request.origin);
+    job->request.origin = origin;
     job->request.mode = q->mode;
     job->request.credentials = q->credentials;
     job->request.redirect = q->redirect;
@@ -7691,6 +7698,8 @@ static const os64_html_document_t *scripts_doc(const yonder_scripts_t *host)
         return page_doc(&g.page);
     if (g.coming.active && host == g.coming.page.scripts)
         return page_doc(&g.coming.page);
+    if (g.finishing.page != NULL && host == g.finishing.page->scripts)
+        return page_doc(g.finishing.page);
     if (host == g.stream.scripts && g.stream.parser != NULL)
         return os64_html_parser_document(g.stream.parser);
     return NULL;

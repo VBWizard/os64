@@ -203,6 +203,16 @@ static void request_redirected_page_case(void) {
           strstr(record,"request GET https://fixture.test/sync.json: 200 basic, 0 hops, synchronous")!=NULL &&
           strstr(record,"FAILED request")==NULL,
           "requests: the page's record has them as basic, the synchronous one included");
+    /* A serial no page has is a page gone: what it asks for is refused,
+     * never sent as the page on screen's. */
+    uint64_t gone=g.page.serial+1000;
+    os64_dom_request_t q={.url="https://fixture.test/gone.json",.method="GET",.headers=""};
+    os64_dom_response_t answer;
+    int jobs=nrequest_jobs, scripts=nscript_jobs, sent=nfake_requests;
+    check(script_request(NULL,gone,1,&q)==0 && !script_run(NULL,gone,&q,NULL,NULL,&answer) &&
+          script_fetch(NULL,gone,1,"https://fixture.test/gone.js","")==0 &&
+          nrequest_jobs==jobs && nscript_jobs==scripts && nfake_requests==sent,
+          "requests: a page that is gone has its requests refused");
     request_drop();
 }
 
