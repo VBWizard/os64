@@ -2500,7 +2500,7 @@ kept page's record moved for the stack's new names.
 
 Host, at the head: libjs's runtime host 1,154 checks (the script host's
 cases among them, the `rejected` tag's) and its sanitized profile, 0
-failed; the DOM host 13,263 / 90,039 checks, allocation sweeps 1,143 /
+failed; the DOM host 13,294 / 90,070 checks, allocation sweeps 1,143 /
 13,513, 0 failed, `tools/test_dom_report.inc` holding a case per rule of
 § P2a's rows and one per cold-read probe and Codex finding; the
 scripted-page host 7,601 at the base → 7,678, 0 failed; yonder's host 1,914, 0 failed; the replay
@@ -2606,6 +2606,24 @@ now the script's. What else turns a page value into record text: libjs's
 exception diagnostic, which converts the thrown value as it always has,
 inside the wrapper's guard and under the task's deadline (runtime.c's
 `diagnostic`); every reader of the binding's own is non-executing.
+
+**Codex, round 2** (on 09433ee1): a P1 and a P2 fixed, a third declined
+with evidence. The P1: a script that dispatched to another script's
+listener came back with the task's last-called script naming the
+listener's, so another site's script that dispatched to a page listener
+and then threw was told whole. Every call into a page callback now goes
+through one pair, `d_script_enter` and `d_script_leave`, which keeps all
+the muting state and puts it back (a nested dispatch's listener, and the
+error events fired at once, all of it; a host dispatch's listener and a
+timer's callback, a task's own calls, keep the task's last-called script
+for the checkpoint after them). The P2: two rejectionhandled events in
+one pass fired back to back; an event that leaves a job runnable now
+sends the rest to the pass after the next checkpoint, as an
+unhandledrejection already waited. The third, the runner's classifier
+reading a rejection reason's message twice, matters only for a reason
+whose message changes between reads, and no page of the pinned WPT
+makes one (the one `get message()` there is reportError's argument in
+`reporterror.any.js`, which no rejection carries).
 
 **Booked** (DEBTS.md): an error event's place; the events in the failing
 task; a script's microtasks before its error event; the stack naming
