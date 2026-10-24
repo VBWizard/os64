@@ -361,8 +361,23 @@ way_metadata_t way_metadata_preflight(const way_metadata_t *m);
 // composed twice is described once.
 void way_metadata_hop(way_metadata_t *m, const way_origin_t *to);
 
+// The kinds of request a browser writes its lines in a different order for
+// (WIRE.md § 2, as built): Chrome orders a navigation's one way and every
+// request a page makes another, its preflight a third; Firefox orders a
+// navigation, a no-cors request, a cors one and a preflight each its own.
+typedef enum {
+    WAY_ORDER_NAVIGATE = 0,     // a document
+    WAY_ORDER_NO_CORS,          // a picture, a sheet, a script, a font, a no-cors fetch
+    WAY_ORDER_CORS,             // a cors or same-origin fetch
+    WAY_ORDER_PREFLIGHT,        // a CORS preflight
+    WAY_ORDERS
+} way_order_t;
+
+// Which kind `m` is.
+way_order_t way_order_of(const way_metadata_t *m);
+
 // What a face's agent preset says on every request beside its User-Agent,
-// verbatim as that browser sends it. Either may be NULL; a typed agent has
+// verbatim as that browser sends it. Any may be NULL; a typed agent has
 // none of it.
 typedef struct {
     // The client hints, as whole "Name: value\r\n" lines in the browser's
@@ -379,7 +394,27 @@ typedef struct {
     // asks every cache on the way to revalidate (max-age=0), Firefox adds
     // nothing.
     const char *reload_cache_control;
+    // Accept for a request of each destination, NULL for the caller's own
+    // list: the browser's, LESS every type yonder cannot decode, since a
+    // type in an Accept invites a body in it. A page's own Accept on a
+    // fetch stands instead.
+    const char *accept[WAY_DESTS];
+    // The order of the request's lines after Host for each kind of request
+    // (way_order_of), as libfetch takes one (os64_fetch_options_t.order):
+    // the browser's, as captured. NULL: libfetch's own order.
+    const char *order[WAY_ORDERS];
+    // `Connection: keep-alive` on every request, as the browser says it.
+    bool keep_alive;
 } way_identity_t;
+
+// The preset's order for a request `m` describes, NULL for none (`id` may
+// be NULL).
+const char *way_identity_order(const way_identity_t *id, const way_metadata_t *m);
+// The preset's Accept for a request of `dest`, NULL for none (`id` may be
+// NULL).
+const char *way_identity_accept(const way_identity_t *id, way_dest_t dest);
+// Whether the preset says `Connection: keep-alive` (false for a NULL `id`).
+bool way_identity_keep_alive(const way_identity_t *id);
 
 // The most a hop's identity lines may take: Chrome's longest (its Reload
 // of a clicked link) is about 320 bytes, and the rest is room for a brand

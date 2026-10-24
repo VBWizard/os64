@@ -1099,6 +1099,82 @@ static void who_is_asking(void)
            s_last_request[0]);
 }
 
+// ── How it asks: the preset's Accept, order and Connection line ─────────
+
+static const way_identity_t kAsks = {
+    .language = "en", .keep_alive = true,
+    .accept = {[WAY_DEST_DOCUMENT] = "text/html,*/*;q=0.8", [WAY_DEST_IMAGE] = "image/png,*/*;q=0.5"},
+    .order = {[WAY_ORDER_NAVIGATE] = "Connection, Accept, User-Agent",
+              [WAY_ORDER_NO_CORS] = "Accept-Language, Accept, Connection"},
+};
+
+static void how_it_asks(void)
+{
+    // A navigation: the preset's list in place of the face's, its pictures
+    // included, on a GET and on a form's POST; its order; its Connection.
+    for (int post = 0; post < 2; post++) {
+        fresh();
+        script("a.test", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nhi");
+        way_session_t session = {.name = "fixture", .agent = "fixture", .identity = &kAsks, .accept = "text/html"};
+        way_leg_t leg = way_leg(&session);
+        leg.pictures = "image/png, image/gif";
+        os64_page_request_t form = {.method = OS64_PAGE_METHOD_POST, .body = "a=1",
+                                    .body_len = 3, .content_type = "application/x-www-form-urlencoded"};
+        way_page_t page = {0};
+        os64_fetch_status_t why;
+        expect("asks: the load", way_load(&leg, "http://a.test/", post ? &form : NULL, &page, &why), leg.status);
+        way_page_clear(&page);
+        const char *r = s_last_request[0];
+        expect(post ? "asks: a form's POST, in the preset's order and with its list"
+                    : "asks: a navigation, in the preset's order and with its list",
+               strstr(r, post ? "POST / HTTP/1.1\r\nHost: a.test\r\n" : "GET / HTTP/1.1\r\nHost: a.test\r\n") == r &&
+                   has(r, "\r\nHost: a.test\r\nConnection: keep-alive\r\nAccept: text/html,*/*;q=0.8\r\n"
+                          "User-Agent: fixture\r\nAccept-Encoding: gzip, identity\r\n") &&
+                   !has(r, "image/png"), r);
+    }
+    // A face's own fetch: the preset's list for its destination, over the
+    // caller's, and the order for a no-cors request.
+    fresh();
+    script("127.0.0.1", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nPNG");
+    way_hooks_t hooks;
+    memset(&hooks, 0, sizeof(hooks));
+    hooks.identity = &kAsks;
+    way_origin_t o;
+    way_origin_of("http://127.0.0.1/page", 0, &o);
+    way_metadata_request(&hooks.metadata, &o, WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+    os64_fetch_options_t opt;
+    memset(&opt, 0, sizeof(opt));
+    opt.accept = "image/gif";
+    way_whole_t w;
+    expect("asks: a picture", way_fetch_whole(&hooks, "http://127.0.0.1/i.png", &opt, 1 << 20, &w), NULL);
+    free(w.bytes);
+    expect("asks: a picture, in the preset's order and with its list",
+           has(s_last_request[0], "\r\nHost: 127.0.0.1\r\nAccept-Language: en\r\nAccept: image/png,*/*;q=0.5\r\n"
+                                  "Connection: keep-alive\r\nAccept-Encoding: gzip, identity\r\n"), s_last_request[0]);
+    // ...and one the preset names no list for keeps the caller's.
+    fresh();
+    script("127.0.0.1", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nCSS");
+    way_metadata_request(&hooks.metadata, &o, WAY_DEST_STYLE, WAY_MODE_NO_CORS);
+    memset(&opt, 0, sizeof(opt));
+    opt.accept = "text/css";
+    expect("asks: a sheet", way_fetch_whole(&hooks, "http://127.0.0.1/s.css", &opt, 1 << 20, &w), NULL);
+    free(w.bytes);
+    expect("asks: a sheet with no preset list keeps the caller's", has(s_last_request[0], "Accept: text/css\r\n"),
+           s_last_request[0]);
+    // No preset: the face's list, libfetch's order, no Connection line.
+    fresh();
+    script("a.test", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nhi");
+    way_session_t plain = {.name = "fixture", .agent = "fixture", .accept = "text/html"};
+    way_leg_t leg = way_leg(&plain);
+    way_page_t page = {0};
+    os64_fetch_status_t why;
+    expect("asks: a costume's load", way_load(&leg, "http://a.test/", NULL, &page, &why), leg.status);
+    way_page_clear(&page);
+    expect("asks: a costume says what libfetch says, in its order",
+           has(s_last_request[0], "\r\nHost: a.test\r\nUser-Agent: fixture\r\nAccept: text/html\r\n") &&
+               !has(s_last_request[0], "Connection"), s_last_request[0]);
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -1118,6 +1194,8 @@ int main(void)
     redirect_restrictions();
     field_too_long();
     who_is_asking();
+    how_it_asks();
+    fetch_pool_drain();
     way_cache_close(s_cache);
     way_jar_free(s_jar);
     remove_tree(root, 0);

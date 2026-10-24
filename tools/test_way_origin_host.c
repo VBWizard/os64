@@ -1386,6 +1386,47 @@ static void metadata(void)
     expect("room: a byte short is not", !way_identity_lines(&hinted, &m, &a, false, exact, need - 1), NULL);
 }
 
+// The kind of request a preset orders its lines for, and the preset's
+// answers for one with none of them.
+static void orders(void)
+{
+    way_metadata_t m = navigation_from(WAY_BY_PAGE, "https://a.test/p");
+    expect("order: a navigation, whoever asked", way_order_of(&m) == WAY_ORDER_NAVIGATE, NULL);
+    m = request_from("https://a.test/p", WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+    expect("order: a picture is no-cors", way_order_of(&m) == WAY_ORDER_NO_CORS, NULL);
+    m = request_from("https://a.test/p", WAY_DEST_FONT, WAY_MODE_NO_CORS);
+    expect("order: a font, asked no-cors, is no-cors", way_order_of(&m) == WAY_ORDER_NO_CORS, NULL);
+    m = request_from("https://a.test/p", WAY_DEST_EMPTY, WAY_MODE_NO_CORS);
+    expect("order: a no-cors fetch is no-cors", way_order_of(&m) == WAY_ORDER_NO_CORS, NULL);
+    m = request_from("https://a.test/p", WAY_DEST_EMPTY, WAY_MODE_CORS);
+    expect("order: a cors fetch is cors", way_order_of(&m) == WAY_ORDER_CORS, NULL);
+    m = request_from("https://a.test/p", WAY_DEST_EMPTY, WAY_MODE_SAME_ORIGIN);
+    expect("order: a same-origin fetch orders as a cors one", way_order_of(&m) == WAY_ORDER_CORS, NULL);
+    way_metadata_t p = way_metadata_preflight(&m);
+    expect("order: its preflight is a preflight", way_order_of(&p) == WAY_ORDER_PREFLIGHT, NULL);
+    m = request_from("https://a.test/p", WAY_DEST_EMPTY, WAY_MODE_NO_CORS);
+    p = way_metadata_preflight(&m);
+    expect("order: any request's preflight is one", way_order_of(&p) == WAY_ORDER_PREFLIGHT, NULL);
+
+    static const way_identity_t some = {
+        .accept = {[WAY_DEST_IMAGE] = "image/png"}, .keep_alive = true,
+        .order = {[WAY_ORDER_CORS] = "Origin, Accept", [WAY_ORDER_PREFLIGHT] = "Accept"},
+    };
+    m = request_from("https://a.test/p", WAY_DEST_EMPTY, WAY_MODE_CORS);
+    p = way_metadata_preflight(&m);
+    expect_text("order: the preset's for the kind", way_identity_order(&some, &m), "Origin, Accept");
+    expect_text("order: ...and its preflight's", way_identity_order(&some, &p), "Accept");
+    m = request_from("https://a.test/p", WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+    expect("order: none named, none given", way_identity_order(&some, &m) == NULL, NULL);
+    expect("order: no preset, no order", way_identity_order(NULL, &m) == NULL, NULL);
+    expect_text("accept: the preset's for the destination", way_identity_accept(&some, WAY_DEST_IMAGE), "image/png");
+    expect("accept: none named, none given", way_identity_accept(&some, WAY_DEST_STYLE) == NULL, NULL);
+    expect("accept: no preset, none", way_identity_accept(NULL, WAY_DEST_IMAGE) == NULL, NULL);
+    expect("accept: past the destinations, none", way_identity_accept(&some, WAY_DESTS) == NULL, NULL);
+    expect("keep-alive: the preset's", way_identity_keep_alive(&some), NULL);
+    expect("keep-alive: no preset, none", !way_identity_keep_alive(NULL), NULL);
+}
+
 static void referrers(void)
 {
     struct { way_policy_t p; const char *from, *to, *want; } cases[] = {
@@ -1675,6 +1716,7 @@ int main(void)
     response_types();
     origin_headers();
     metadata();
+    orders();
     referrers();
     mixed_content();
     bounds();

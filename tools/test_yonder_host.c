@@ -21,6 +21,7 @@
 #include "flow/flow.h"
 #include "os64/text.h"
 #include "agent.h"
+#include "fetch/http.h"
 #include "bar.h"
 #include "mail.h"
 #include "paint.h"
@@ -1744,7 +1745,8 @@ static void agent_identity_cases(void)
                 "Accept-Language: en-US,en;q=0.9\r\n");
     // Firefox writes the same set in another order (Accept-Language
     // before the rest, Fetch Metadata Dest-Mode-Site-User, Priority last):
-    // the set is proved here, the order is libfetch's (BROWSER_DEBTS.md).
+    // the set is proved here, the order in whole requests
+    // (wire_request_cases).
     expect_text("identity: Firefox, an address given (the set)",
                 navigation_block(firefox, WAY_BY_BROWSER, NULL, "https://a.test/"),
                 "Upgrade-Insecure-Requests: 1\r\n"
@@ -1772,6 +1774,305 @@ static void agent_identity_cases(void)
            longest + 1 + 150 <= WAY_IDENTITY_MAX, detail);
     expect("identity: the cookies and the Referer keep their kilobyte beside it",
            OS64_FETCH_HOP_FIELDS_MAX - WAY_IDENTITY_MAX >= 1024, NULL);
+}
+
+// One request as yonder writes it under preset `p`: the preset's lines for
+// metadata `m` hopping to `url` (way_identity_lines), the caller's own lines
+// `extra` after them as libfetch is handed them, the preset's Accept for
+// the destination (or `accept` when the caller sets its own), its order for
+// the kind of request, its Connection line, all through libfetch's writer
+// (http_request).
+static const char *wire_request(const yonder_agent_preset_t *p, const way_metadata_t *m, const char *method,
+                                const char *url, const char *accept, const char *extra)
+{
+    static char out[4096];
+    const way_identity_t *id = yonder_agent_identity(p->agent);
+    way_origin_t to;
+    way_origin_of(url, 0, &to);
+    char lines[2048];
+    if (!way_identity_lines(id, m, &to, 0, lines, sizeof(lines)))
+        return "<lines did not fit>";
+    strncat(lines, extra, sizeof(lines) - strlen(lines) - 1);
+    http_url_t u;
+    if (http_url_parse(url, &u) != HTTP_URL_OK)
+        return "<bad url>";
+    const char *preset = way_identity_accept(id, m->preflight ? WAY_DEST_EMPTY : m->dest);
+    http_request_extras_t x = {
+        .user_agent = p->agent,
+        .accept = accept != NULL ? accept : preset,
+        .extra_headers = lines,
+        .method_name = method,
+        .body_present = strcmp(method, "PUT") == 0,
+        .keep_alive = way_identity_keep_alive(id),
+        .order = way_identity_order(id, m),
+    };
+    if (!http_request(out, sizeof(out), &u, false, &x))
+        return "<did not write>";
+    return out;
+}
+
+// EACH BROWSER'S WHOLE REQUEST, BYTE FOR BYTE, as its capture had it
+// (WIRE.md § 2 as built): every line in the order the browser wrote it.
+// What yonder sends differently is changed in the expectation, and only
+// this: Accept-Encoding is `gzip, identity` (no brotli, DIVERGENCES), and
+// Accept is the browser's LESS the types yonder cannot decode (agent.c).
+// The captures were made against http://localhost:8765, which yonder does
+// not count trustworthy (DIVERGENCES); the requests here go to
+// https://localhost:8765, whose Host and request line are the same, so the
+// Fetch Metadata the browsers sent is written. A page's own line (the
+// captures' `X-W1`) goes after every line the browser's order names, where
+// Chrome and Firefox each put it among them: those two requests are matched
+// without it, and its place checked apart.
+static void wire_request_cases(void)
+{
+    const yonder_agent_preset_t *chrome = preset_named("Chrome on Windows");
+    const yonder_agent_preset_t *firefox = preset_named("Firefox on Windows");
+    if (chrome == NULL || firefox == NULL)
+        return;
+    const char *page = "https://localhost:8765/", *other = "https://127.0.0.1:8765";
+    way_origin_t from;
+    way_origin_of(page, 0, &from);
+    way_metadata_t typed, clicked, reload, style, script, image, same, cross, put;
+    way_metadata_navigation(&typed, WAY_BY_BROWSER, NULL);
+    way_metadata_hop(&typed, &from);
+    way_metadata_navigation(&clicked, WAY_BY_PERSON, &from);
+    way_metadata_hop(&clicked, &from);
+    reload = clicked;
+    reload.reload = true;
+    way_metadata_request(&style, &from, WAY_DEST_STYLE, WAY_MODE_NO_CORS);
+    way_metadata_request(&script, &from, WAY_DEST_SCRIPT, WAY_MODE_NO_CORS);
+    way_metadata_request(&image, &from, WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+    way_metadata_request(&same, &from, WAY_DEST_EMPTY, WAY_MODE_CORS);
+    way_metadata_request(&cross, &from, WAY_DEST_EMPTY, WAY_MODE_CORS);
+    way_origin_t there;
+    way_origin_of(other, 0, &there);
+    way_metadata_hop(&same, &from);
+    way_metadata_hop(&cross, &there);
+    put = cross;
+    way_metadata_t preflight = way_metadata_preflight(&cross);
+    const char *ref = "Referer: http://localhost:8765/\r\n";
+    const char *origin = "Origin: http://localhost:8765\r\n";
+    char extra[512];
+
+#define CHROME_HINTS_NAV                                                                       \
+    "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n" \
+    "sec-ch-ua-mobile: ?0\r\nsec-ch-ua-platform: \"Windows\"\r\n"
+#define CHROME_UA "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " \
+                  "(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36\r\n"
+#define CHROME_NAV_ACCEPT "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n"
+#define CHROME_SUB_HEAD(path, host) "GET " path " HTTP/1.1\r\nHost: " host "\r\nConnection: keep-alive\r\n" \
+    "sec-ch-ua-platform: \"Windows\"\r\n" CHROME_UA \
+    "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n" \
+    "sec-ch-ua-mobile: ?0\r\n"
+#define CHROME_TAIL "Referer: http://localhost:8765/\r\nAccept-Encoding: gzip, identity\r\n" \
+                    "Accept-Language: en-US,en;q=0.9\r\n\r\n"
+
+    // capture-01-chrome-win-get-root (and -27, Back to it: the same bytes).
+    expect_text("wire: Chrome, an address typed", wire_request(chrome, &typed, "GET", page, NULL, ""),
+                "GET / HTTP/1.1\r\nHost: localhost:8765\r\nConnection: keep-alive\r\n" CHROME_HINTS_NAV
+                "Upgrade-Insecure-Requests: 1\r\n" CHROME_UA CHROME_NAV_ACCEPT
+                "Sec-Fetch-Site: none\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-User: ?1\r\n"
+                "Sec-Fetch-Dest: document\r\nAccept-Encoding: gzip, identity\r\n"
+                "Accept-Language: en-US,en;q=0.9\r\n\r\n");
+    // capture-25-chrome-win-get-clicked.
+    expect_text("wire: Chrome, a link clicked",
+                wire_request(chrome, &clicked, "GET", "https://localhost:8765/clicked", NULL, ref),
+                "GET /clicked HTTP/1.1\r\nHost: localhost:8765\r\nConnection: keep-alive\r\n" CHROME_HINTS_NAV
+                "Upgrade-Insecure-Requests: 1\r\n" CHROME_UA CHROME_NAV_ACCEPT
+                "Sec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-User: ?1\r\n"
+                "Sec-Fetch-Dest: document\r\n" CHROME_TAIL);
+    // capture-26-chrome-win-get-clicked: the browser's Reload of it.
+    expect_text("wire: Chrome, the browser's Reload",
+                wire_request(chrome, &reload, "GET", "https://localhost:8765/clicked", NULL, ref),
+                "GET /clicked HTTP/1.1\r\nHost: localhost:8765\r\nConnection: keep-alive\r\n"
+                "Cache-Control: max-age=0\r\n" CHROME_HINTS_NAV
+                "Upgrade-Insecure-Requests: 1\r\n" CHROME_UA CHROME_NAV_ACCEPT
+                "Sec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-User: ?1\r\n"
+                "Sec-Fetch-Dest: document\r\n" CHROME_TAIL);
+    // capture-02, -03, -04: the sheet, the script, the picture.
+    expect_text("wire: Chrome, a sheet",
+                wire_request(chrome, &style, "GET", "https://localhost:8765/style.css", NULL, ref),
+                CHROME_SUB_HEAD("/style.css", "localhost:8765") "Accept: text/css,*/*;q=0.1\r\n"
+                "Sec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: style\r\n" CHROME_TAIL);
+    expect_text("wire: Chrome, a script",
+                wire_request(chrome, &script, "GET", "https://localhost:8765/script.js", NULL, ref),
+                CHROME_SUB_HEAD("/script.js", "localhost:8765") "Accept: */*\r\n"
+                "Sec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: script\r\n" CHROME_TAIL);
+    expect_text("wire: Chrome, a picture",
+                wire_request(chrome, &image, "GET", "https://localhost:8765/image.png", NULL, ref),
+                CHROME_SUB_HEAD("/image.png", "localhost:8765") "Accept: image/*,*/*;q=0.8\r\n"
+                "Sec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: image\r\n" CHROME_TAIL);
+    // capture-05 and -06: a fetch to its own origin, and a cross-site one,
+    // whose Origin the fetch job adds.
+    expect_text("wire: Chrome, a same-origin fetch",
+                wire_request(chrome, &same, "GET", "https://localhost:8765/fetch-same", NULL, ref),
+                CHROME_SUB_HEAD("/fetch-same", "localhost:8765") "Accept: */*\r\n"
+                "Sec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Dest: empty\r\n" CHROME_TAIL);
+    snprintf(extra, sizeof(extra), "%s%s", ref, origin);
+    expect_text("wire: Chrome, a cross-site fetch",
+                wire_request(chrome, &cross, "GET", "https://127.0.0.1:8765/fetch-cross", NULL, extra),
+                CHROME_SUB_HEAD("/fetch-cross", "127.0.0.1:8765") "Accept: */*\r\n"
+                "Origin: http://localhost:8765\r\n"
+                "Sec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Dest: empty\r\n" CHROME_TAIL);
+    // capture-07: its preflight.
+    snprintf(extra, sizeof(extra), "Access-Control-Request-Method: PUT\r\nAccess-Control-Request-Headers: x-w1\r\n%s%s",
+             origin, ref);
+    expect_text("wire: Chrome, a preflight",
+                wire_request(chrome, &preflight, "OPTIONS", "https://127.0.0.1:8765/fetch-cross-preflight", "*/*",
+                             extra),
+                "OPTIONS /fetch-cross-preflight HTTP/1.1\r\nHost: 127.0.0.1:8765\r\nConnection: keep-alive\r\n"
+                "Accept: */*\r\nAccess-Control-Request-Method: PUT\r\nAccess-Control-Request-Headers: x-w1\r\n"
+                "Origin: http://localhost:8765\r\n" CHROME_UA
+                "Sec-Fetch-Mode: cors\r\nSec-Fetch-Site: cross-site\r\nSec-Fetch-Dest: empty\r\n" CHROME_TAIL);
+    // capture-08: the PUT, matched without the page's X-W1, which goes last.
+    snprintf(extra, sizeof(extra), "%s%s", ref, origin);
+    expect_text("wire: Chrome, the PUT the preflight allowed",
+                wire_request(chrome, &put, "PUT", "https://127.0.0.1:8765/fetch-cross-preflight", NULL, extra),
+                "PUT /fetch-cross-preflight HTTP/1.1\r\nHost: 127.0.0.1:8765\r\nConnection: keep-alive\r\n"
+                "Content-Length: 0\r\nsec-ch-ua-platform: \"Windows\"\r\n" CHROME_UA
+                "sec-ch-ua: \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"156\", \"Google Chrome\";v=\"156\"\r\n"
+                "sec-ch-ua-mobile: ?0\r\nAccept: */*\r\nOrigin: http://localhost:8765\r\n"
+                "Sec-Fetch-Site: cross-site\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Dest: empty\r\n" CHROME_TAIL);
+    snprintf(extra, sizeof(extra), "X-W1: 1\r\n%s%s", ref, origin);
+    const char *with_page = wire_request(chrome, &put, "PUT", "https://127.0.0.1:8765/fetch-cross-preflight",
+                                         NULL, extra);
+    expect("wire: a line the order does not name goes after those it does",
+           strstr(with_page, "Accept-Language: en-US,en;q=0.9\r\nX-W1: 1\r\n\r\n") != NULL, with_page);
+
+#define FIREFOX_UA "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0\r\n"
+#define FIREFOX_LANG_ENC "Accept-Language: en-US,en;q=0.9\r\nAccept-Encoding: gzip, identity\r\n"
+#define FIREFOX_NAV_ACCEPT "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n"
+
+    // run1-overwritten/capture-09: an address typed.
+    expect_text("wire: Firefox, an address typed", wire_request(firefox, &typed, "GET", page, NULL, ""),
+                "GET / HTTP/1.1\r\nHost: localhost:8765\r\n" FIREFOX_UA FIREFOX_NAV_ACCEPT FIREFOX_LANG_ENC
+                "Connection: keep-alive\r\nUpgrade-Insecure-Requests: 1\r\nSec-Fetch-Dest: document\r\n"
+                "Sec-Fetch-Mode: navigate\r\nSec-Fetch-Site: none\r\nSec-Fetch-User: ?1\r\n"
+                "Priority: u=0, i\r\n\r\n");
+    // run1-overwritten/capture-17: a link clicked.
+    expect_text("wire: Firefox, a link clicked",
+                wire_request(firefox, &clicked, "GET", "https://localhost:8765/clicked", NULL, ref),
+                "GET /clicked HTTP/1.1\r\nHost: localhost:8765\r\n" FIREFOX_UA FIREFOX_NAV_ACCEPT FIREFOX_LANG_ENC
+                "Connection: keep-alive\r\nReferer: http://localhost:8765/\r\nUpgrade-Insecure-Requests: 1\r\n"
+                "Sec-Fetch-Dest: document\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Site: same-origin\r\n"
+                "Sec-Fetch-User: ?1\r\nPriority: u=0, i\r\n\r\n");
+    // run1-overwritten/capture-10, -11, -12: the sheet, the script, the
+    // picture (the clean run; -02 to -04 are the same with the cache's
+    // Pragma and Cache-Control, which yonder does not send).
+    expect_text("wire: Firefox, a sheet",
+                wire_request(firefox, &style, "GET", "https://localhost:8765/style.css", NULL, ref),
+                "GET /style.css HTTP/1.1\r\nHost: localhost:8765\r\n" FIREFOX_UA "Accept: text/css,*/*;q=0.1\r\n"
+                FIREFOX_LANG_ENC "Connection: keep-alive\r\nReferer: http://localhost:8765/\r\n"
+                "Sec-Fetch-Dest: style\r\nSec-Fetch-Mode: no-cors\r\nSec-Fetch-Site: same-origin\r\n"
+                "Priority: u=2\r\n\r\n");
+    expect_text("wire: Firefox, a script",
+                wire_request(firefox, &script, "GET", "https://localhost:8765/script.js", NULL, ref),
+                "GET /script.js HTTP/1.1\r\nHost: localhost:8765\r\n" FIREFOX_UA "Accept: */*\r\n"
+                FIREFOX_LANG_ENC "Connection: keep-alive\r\nReferer: http://localhost:8765/\r\n"
+                "Sec-Fetch-Dest: script\r\nSec-Fetch-Mode: no-cors\r\nSec-Fetch-Site: same-origin\r\n"
+                "Priority: u=2\r\n\r\n");
+    expect_text("wire: Firefox, a picture",
+                wire_request(firefox, &image, "GET", "https://localhost:8765/image.png", NULL, ref),
+                "GET /image.png HTTP/1.1\r\nHost: localhost:8765\r\n" FIREFOX_UA
+                "Accept: image/png,image/*;q=0.8,*/*;q=0.5\r\n"
+                FIREFOX_LANG_ENC "Connection: keep-alive\r\nReferer: http://localhost:8765/\r\n"
+                "Sec-Fetch-Dest: image\r\nSec-Fetch-Mode: no-cors\r\nSec-Fetch-Site: same-origin\r\n"
+                "Priority: u=5, i\r\n\r\n");
+    // -13 and -14: the fetches, whose Referer comes before Connection.
+    expect_text("wire: Firefox, a same-origin fetch",
+                wire_request(firefox, &same, "GET", "https://localhost:8765/fetch-same", NULL, ref),
+                "GET /fetch-same HTTP/1.1\r\nHost: localhost:8765\r\n" FIREFOX_UA "Accept: */*\r\n"
+                FIREFOX_LANG_ENC "Referer: http://localhost:8765/\r\nConnection: keep-alive\r\n"
+                "Sec-Fetch-Dest: empty\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Site: same-origin\r\n"
+                "Priority: u=4\r\n\r\n");
+    snprintf(extra, sizeof(extra), "%s%s", ref, origin);
+    expect_text("wire: Firefox, a cross-site fetch",
+                wire_request(firefox, &cross, "GET", "https://127.0.0.1:8765/fetch-cross", NULL, extra),
+                "GET /fetch-cross HTTP/1.1\r\nHost: 127.0.0.1:8765\r\n" FIREFOX_UA "Accept: */*\r\n"
+                FIREFOX_LANG_ENC "Referer: http://localhost:8765/\r\nOrigin: http://localhost:8765\r\n"
+                "Connection: keep-alive\r\nSec-Fetch-Dest: empty\r\nSec-Fetch-Mode: cors\r\n"
+                "Sec-Fetch-Site: cross-site\r\nPriority: u=4\r\n\r\n");
+    // -15: the preflight.
+    snprintf(extra, sizeof(extra), "Access-Control-Request-Method: PUT\r\nAccess-Control-Request-Headers: x-w1\r\n%s%s",
+             origin, ref);
+    expect_text("wire: Firefox, a preflight",
+                wire_request(firefox, &preflight, "OPTIONS", "https://127.0.0.1:8765/fetch-cross-preflight", "*/*",
+                             extra),
+                "OPTIONS /fetch-cross-preflight HTTP/1.1\r\nHost: 127.0.0.1:8765\r\n" FIREFOX_UA "Accept: */*\r\n"
+                FIREFOX_LANG_ENC "Access-Control-Request-Method: PUT\r\nAccess-Control-Request-Headers: x-w1\r\n"
+                "Referer: http://localhost:8765/\r\nOrigin: http://localhost:8765\r\nConnection: keep-alive\r\n"
+                "Sec-Fetch-Dest: empty\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Site: cross-site\r\n"
+                "Priority: u=4\r\n\r\n");
+    // -16: the PUT, matched without the page's X-W1, with its length last.
+    snprintf(extra, sizeof(extra), "%s%s", ref, origin);
+    expect_text("wire: Firefox, the PUT the preflight allowed",
+                wire_request(firefox, &put, "PUT", "https://127.0.0.1:8765/fetch-cross-preflight", NULL, extra),
+                "PUT /fetch-cross-preflight HTTP/1.1\r\nHost: 127.0.0.1:8765\r\n" FIREFOX_UA "Accept: */*\r\n"
+                FIREFOX_LANG_ENC "Referer: http://localhost:8765/\r\nOrigin: http://localhost:8765\r\n"
+                "Connection: keep-alive\r\nSec-Fetch-Dest: empty\r\nSec-Fetch-Mode: cors\r\n"
+                "Sec-Fetch-Site: cross-site\r\nPriority: u=4\r\nContent-Length: 0\r\n\r\n");
+#undef CHROME_HINTS_NAV
+#undef CHROME_UA
+#undef CHROME_NAV_ACCEPT
+#undef CHROME_SUB_HEAD
+#undef CHROME_TAIL
+#undef FIREFOX_UA
+#undef FIREFOX_LANG_ENC
+#undef FIREFOX_NAV_ACCEPT
+}
+
+// THE TABLE ITSELF: each browser's Accept per destination is the one it
+// sent less what yonder cannot decode; every preset that is a browser says
+// keep-alive, and no costume does; the orders are the captures'.
+static void wire_table_cases(void)
+{
+    const yonder_agent_preset_t *chrome = preset_named("Chrome on Windows");
+    const yonder_agent_preset_t *firefox = preset_named("Firefox on Windows");
+    const yonder_agent_preset_t *safari = preset_named("Safari on iPhone");
+    const yonder_agent_preset_t *own = yonder_agent_preset(0);
+    if (chrome == NULL || firefox == NULL || safari == NULL)
+        return;
+    // What no Accept of a preset names: the types yonder does not decode.
+    static const char *const kNever[] = {"image/avif", "image/jxl", "image/webp", "image/apng",
+                                         "image/svg+xml", "application/signed-exchange", "video/"};
+    bool honest = true;
+    for (size_t i = 0; i < yonder_agent_npresets(); i++)
+        for (int d = 0; d < WAY_DESTS; d++)
+            for (size_t k = 0; k < sizeof(kNever) / sizeof(kNever[0]); k++) {
+                const char *a = yonder_agent_preset(i)->identity.accept[d];
+                honest &= a == NULL || strstr(a, kNever[k]) == NULL;
+            }
+    expect("wire: no preset's Accept names a type yonder cannot decode", honest, NULL);
+    expect("wire: the browsers and yonder's own say keep-alive; the costumes say nothing",
+           chrome->identity.keep_alive && firefox->identity.keep_alive && safari->identity.keep_alive &&
+               own->identity.keep_alive && !preset_named("Netscape 4 on Windows 98")->identity.keep_alive &&
+               !preset_named("Lynx")->identity.keep_alive, NULL);
+    expect_text("wire: yonder's own asks for a page, and anything else less",
+                own->identity.accept[WAY_DEST_DOCUMENT], "text/html,application/xhtml+xml,text/*;q=0.9,*/*;q=0.8");
+    expect_text("wire: Safari's navigation, cited", safari->identity.accept[WAY_DEST_DOCUMENT],
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+    expect("wire: no font Accept was captured, so none is claimed",
+           chrome->identity.accept[WAY_DEST_FONT] == NULL && firefox->identity.accept[WAY_DEST_FONT] == NULL, NULL);
+    // The kind a request is: way_order_of picks the order.
+    way_origin_t from;
+    way_origin_of("https://a.test/", 0, &from);
+    way_metadata_t m;
+    way_metadata_navigation(&m, WAY_BY_BROWSER, NULL);
+    const char *nav = way_identity_order(&chrome->identity, &m);
+    way_metadata_request(&m, &from, WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+    const char *nocors = way_identity_order(&firefox->identity, &m);
+    way_metadata_request(&m, &from, WAY_DEST_EMPTY, WAY_MODE_SAME_ORIGIN);
+    const char *cors = way_identity_order(&firefox->identity, &m);
+    way_metadata_t pre = way_metadata_preflight(&m);
+    const char *preflight = way_identity_order(&firefox->identity, &pre);
+    expect("wire: each kind of request takes its own order",
+           nav == chrome->identity.order[WAY_ORDER_NAVIGATE] && nocors == firefox->identity.order[WAY_ORDER_NO_CORS] &&
+               cors == firefox->identity.order[WAY_ORDER_CORS] &&
+               preflight == firefox->identity.order[WAY_ORDER_PREFLIGHT] && nav && nocors && cors && preflight &&
+               nocors != cors && cors != preflight, NULL);
+    expect("wire: yonder's own, Safari and the costumes keep libfetch's order",
+           way_identity_order(&own->identity, &m) == NULL && way_identity_order(&safari->identity, &m) == NULL &&
+               way_identity_order(NULL, &m) == NULL, NULL);
 }
 
 static void agent_cases(void)
@@ -1802,6 +2103,8 @@ static void agent_cases(void)
                !yonder_agent_valid("a # comment") && !yonder_agent_valid("two\nlines") &&
                !yonder_agent_valid("tab\there") && !yonder_agent_valid("caf\xc3\xa9"), NULL);
     agent_identity_cases();
+    wire_request_cases();
+    wire_table_cases();
 }
 
 // What a cache did, painting `html` through `view` with it.

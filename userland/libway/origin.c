@@ -1268,6 +1268,30 @@ void way_metadata_hop(way_metadata_t *m, const way_origin_t *to)
         m->site = here;
 }
 
+way_order_t way_order_of(const way_metadata_t *m)
+{
+    if (m->dest == WAY_DEST_DOCUMENT)
+        return WAY_ORDER_NAVIGATE;
+    if (m->preflight)
+        return WAY_ORDER_PREFLIGHT;
+    return m->mode == WAY_MODE_NO_CORS ? WAY_ORDER_NO_CORS : WAY_ORDER_CORS;
+}
+
+const char *way_identity_order(const way_identity_t *id, const way_metadata_t *m)
+{
+    return id != NULL ? id->order[way_order_of(m)] : NULL;
+}
+
+const char *way_identity_accept(const way_identity_t *id, way_dest_t dest)
+{
+    return id != NULL && dest < WAY_DESTS ? id->accept[dest] : NULL;
+}
+
+bool way_identity_keep_alive(const way_identity_t *id)
+{
+    return id != NULL && id->keep_alive;
+}
+
 // UNKNOWN has no token: a request whose site is unknown says none of it.
 static const char *site_token(way_site_t site)
 {

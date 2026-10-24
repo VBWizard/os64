@@ -87,9 +87,10 @@ static yonder_storage_t *s_storage;
 static char s_storage_said[OS64_PATH_MAX + 96];
 static os64_dom_screen_t s_screen;
 
-// The pages a navigation asks for. libway adds, on a GET, the pictures
-// yonder shows by themselves (YONDER.md § A picture asked for by itself),
-// libimage's list, at half the weight.
+// The pages a navigation asks for when the agent's preset names no list of
+// its own (agent.c: a costume, or an agent typed). libway adds, on a GET,
+// the pictures yonder shows by themselves (YONDER.md § A picture asked for
+// by itself), libimage's list, at half the weight.
 #define YONDER_ACCEPT "text/html, application/xhtml+xml, text/*;q=0.8"
 
 // The work pool. A navigation's job is a FETCH (trip.h; the parse is this

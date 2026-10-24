@@ -4,7 +4,8 @@
  * runner. libfetch's own behaviour is proved against a scripted peer by
  * tools/test_fetch_host.c; this fake keeps the parts of the contract the job
  * relies on, and RECORDS every request, so a case can say which requests a
- * page made: the method, the fields, the Origin and the cookies.
+ * page made: the method, the fields, the Origin and the cookies, and the
+ * order and Connection line the request was handed.
  *
  *   - headers_for is asked before the "dial", with the hop's address and
  *     whether its transport is encrypted (an https address is, here);
@@ -54,6 +55,8 @@ typedef struct {
     bool identity;
     char body[256];
     size_t body_len;
+    char order[OS64_FETCH_ORDER_MAX];   /* opt.order, "" for none */
+    bool keep_alive;
 } fake_request_t;
 
 #define FAKE_REQUESTS 64
@@ -126,6 +129,8 @@ os64_fetch_t *os64_fetch_open(const char *url, const os64_fetch_options_t *opt) 
         snprintf(q->accept,sizeof(q->accept),"%s",opt->accept?opt->accept:"");
         q->accept_given=opt->accept!=NULL;
         q->identity=opt->identity;
+        snprintf(q->order,sizeof(q->order),"%s",opt->order?opt->order:"");
+        q->keep_alive=opt->keep_alive;
         q->body_len=opt->body_len;
         if(opt->body) memcpy(q->body,opt->body,opt->body_len<sizeof(q->body)?opt->body_len:sizeof(q->body)-1);
     }

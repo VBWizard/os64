@@ -577,6 +577,11 @@ static void branches_clear(Branches *b, yonder_fetch_job_t *job, const way_reque
 static void opt_base(os64_fetch_options_t *opt, Hop *h, yonder_fetch_job_t *job, uint64_t max_body)
 {
     os64_memset(opt, 0, sizeof(*opt));
+    // The preset's order for the request, or for its preflight (hop_reset
+    // has said which this is).
+    way_metadata_t m = h->preflight ? way_metadata_preflight(&h->metadata) : h->metadata;
+    opt->order = way_identity_order(job->identity, &m);
+    opt->keep_alive = way_identity_keep_alive(job->identity);
     opt->user_agent = job->agent;
     opt->max_body = max_body;
     opt->cancelled = hop_cancelled;
@@ -737,6 +742,11 @@ int64_t yonder_fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
         opt_base(&opt, &h, job, max_body);
         opt.method_name = r->method;
         opt.accept = fields->accept;
+        // Fetch's own `*/*`, when the page set none, is the preset's list
+        // for a fetch when it has one (the captured browsers send `*/*`).
+        const char *preset = way_identity_accept(job->identity, WAY_DEST_EMPTY);
+        if (fields->accepts == 0 && preset != NULL)
+            opt.accept = preset;
         opt.extra_headers = fields->extra[0] ? fields->extra : NULL;
         opt.body_headers = fields->body[0] ? fields->body : NULL;
         opt.identity = fields->identity;
