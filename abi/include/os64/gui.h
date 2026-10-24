@@ -411,6 +411,20 @@ static inline int64_t os64_gui_window_create_content(const char *title,
         flags | OS64_GUI_CREATE_CONTENT_SIZE | OS64_GUI_WINDOW_TITLE_UTF8);
 }
 
+// Rename an owned window; its titlebar repaints with the new name. The title
+// crosses as create's does: OS64_GUI_TITLE_MAX bytes with its NUL, an
+// over-long or unreadable one REFUSED (BAD_ARGS) rather than cut, and the
+// old title left in place. `flags` is OS64_GUI_WINDOW_TITLE_UTF8 to draw the
+// text as UTF-8, or 0 for legacy Latin-1; it replaces the encoding the window
+// was created with, and get_state reports the one in force. Any other bit is
+// BAD_ARGS. Returns 0, BAD_ARGS, or the per-window INVALID_HANDLE / NOT_OWNER.
+static inline int64_t os64_gui_window_set_title(int64_t handle, const char *title,
+                                                uint64_t flags)
+{
+    return (int64_t)os64_syscall3(SYSCALL_GUI_WINDOW_SET_TITLE,
+                                  (uint64_t)handle, (uint64_t)title, flags);
+}
+
 // BUSY leaves the window intact while it has owned popup children.
 static inline int64_t os64_gui_window_destroy(int64_t handle)
 {

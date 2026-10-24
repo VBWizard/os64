@@ -188,6 +188,8 @@ static uint64_t syscall_gui_window_create(uint64_t arg0, uint64_t arg1, uint64_t
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_window_destroy(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_gui_window_set_title(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_window_get_surface(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_window_get_state(uint64_t arg0, uint64_t arg1, uint64_t arg2,
@@ -300,6 +302,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	// handlers validate the copy instead.
 	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_CREATE,      "gui_window_create",      syscall_gui_window_create,      false, 0x01),  // arg0 = title string
 	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_DESTROY,     "gui_window_destroy",     syscall_gui_window_destroy,     false, 0x00),  // arg0 = handle (a number, not a pointer)
+	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_SET_TITLE,   "gui_window_set_title",   syscall_gui_window_set_title,   false, 0x00),  // arg1 = title string, validated by the handler's copy (see there for why not the mask)
 	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_GET_SURFACE, "gui_window_get_surface", syscall_gui_window_get_surface, false, 0x02),  // arg1 = surface_t out
 	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_PUBLISH,     "gui_window_publish",     syscall_gui_window_publish,     false, 0x00),  // arg1 = rect_t in OR NULL (nullable — handler validates)
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_POLL,         "gui_event_poll",         syscall_gui_event_poll,         false, 0x02),  // arg1 = input_event_t out
@@ -5415,6 +5418,27 @@ static uint64_t syscall_gui_window_destroy(uint64_t arg0, uint64_t arg1, uint64_
 {
 	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
 	return (uint64_t)gui_window_destroy((int64_t)arg0);
+}
+
+// arg0 = handle, arg1 = title, arg2 = flags. The title is copied exactly as
+// create copies its own — the same helper into the same capacity, so a title
+// create would refuse is refused here — and the copy happens BEFORE
+// gui_window_set_title takes kGuiLock, which is never held across a read of
+// user memory.
+//
+// arg1 is OUT of the dispatcher's pointer mask, unlike create's: the mask's
+// refusal is SYSCALL_RESULT_BAD_USER_DATA, which is -2, and -2 in this
+// call's vocabulary is NO_RESOURCES. copy_user_string refuses a kernel-half
+// address itself (validate_and_copy_user_data), so leaving the mask off
+// refuses the same pointers and answers every one of them BAD_ARGS.
+static uint64_t syscall_gui_window_set_title(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg3; (void)arg4; (void)arg5;
+	char title[GUI_WINDOW_TITLE_MAX];
+	if (!copy_user_string((const char *)arg1, title, sizeof(title)))
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	return (uint64_t)gui_window_set_title((int64_t)arg0, title, arg2);
 }
 
 static uint64_t syscall_gui_window_get_surface(uint64_t arg0, uint64_t arg1, uint64_t arg2,

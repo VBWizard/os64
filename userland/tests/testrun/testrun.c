@@ -94,6 +94,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/worktest",        NULL, 0x600C0000,  0x600C0002, "Worker pool: ownership, admission, cancellation, shutdown" },
     { "/tests/doorbelltest",    NULL, 0x600B0000,  0x600B0002, "GUI doorbell: owner, coalescing, overflow, worker wake, libui" },
     { "/tests/guiwake",         NULL, 0x60E00000,  0x60E00002, "GUI event wait: a ring landing mid-park wakes the waiter, not its backstop" },
+    { "/tests/titletest",       NULL, 0x711E0000,  0x711E0002, "GUI rename: the owner retitles and sets the encoding; create's title refusals, another task's NOT_OWNER" },
     { "/tests/pintest",         NULL, 0x91A70000,  0,          "a handle closed by a sibling thread under a parked read: pipe, pty master, thread handle" },
     { "/tests/pincputest",      NULL, 0xC02E0000,  0,          "PINCPU=<n> pins a program and its threads to CPU n; PINCORE still works; bad values leave it unpinned" },
     { "/tests/streamseat",      NULL, 0x57EA0000,  0,          "STREAM EOF refuses another seat; failed load and GRID reuse" },
