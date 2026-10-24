@@ -38,7 +38,7 @@ yonder_host_build() {
     for source in "$unit" ${YONDER_HOST_UNITS:-} tools/test_js_port_calendar.c tools/test_libflow_fonts.c \
         userland/libjs/runtime/runtime.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin,modern,view}.c \
         userland/libdom/{storage,performance,url,encoding,screen,base64,implementation,attr}.c \
-        userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto}.c \
+        userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,document}.c \
         userland/apps/yonder/{scripts,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag}.c \
         userland/apps/yonder/storage.c \
         userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize}.c \

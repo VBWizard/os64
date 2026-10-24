@@ -398,6 +398,21 @@ static bool parse_integer(const char *text, int32_t *out)
 JSValue d_class_list(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
 JSValue d_dataset(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
 
+/* dir is an enumerated attribute: one of its keywords, lowercased, or "".
+ * An element's and the document's (document.c) read it so. */
+JSValue d_dir_value(JSContext *ctx, const os64_html_node_t *element)
+{
+    static const char *const keywords[] = {"ltr", "rtl", "auto"};
+    const os64_html_attr_t *attr = os64_html_attr(element, "dir");
+    for (unsigned i = 0; attr != NULL && i < 3; i++) {
+        const char *k = keywords[i], *v = attr->value;
+        size_t n = 0;
+        while (k[n] != '\0' && (v[n] == k[n] || v[n] == k[n] - ('a' - 'A'))) n++;
+        if (k[n] == '\0' && v[n] == '\0') return JS_NewString(ctx, k);
+    }
+    return JS_NewString(ctx, "");
+}
+
 static JSValue reflect(JSContext *ctx, JSValueConst this_value, int argc,
                        JSValueConst *argv, int magic, JSValue *data)
 {
@@ -427,17 +442,7 @@ static JSValue reflect(JSContext *ctx, JSValueConst this_value, int argc,
     if (!set) {
         switch (magic) {
         case R_HIDDEN: return JS_NewBool(ctx, attr != NULL);
-        case R_DIR: {
-            /* An enumerated attribute: one of its keywords, lowercased, or "". */
-            static const char *const keywords[] = {"ltr", "rtl", "auto"};
-            for (unsigned i = 0; attr != NULL && i < 3; i++) {
-                const char *k = keywords[i], *v = attr->value;
-                size_t n = 0;
-                while (k[n] != '\0' && (v[n] == k[n] || v[n] == k[n] - ('a' - 'A'))) n++;
-                if (k[n] == '\0' && v[n] == '\0') return JS_NewString(ctx, k);
-            }
-            return JS_NewString(ctx, "");
-        }
+        case R_DIR: return d_dir_value(ctx, self);
         case R_TAB_INDEX: {
             int32_t index;
             if (attr != NULL && parse_integer(attr->value, &index)) return JS_NewInt32(ctx, index);
