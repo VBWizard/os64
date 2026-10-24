@@ -691,8 +691,11 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
  * none. fire runs AT MOST ONE as one task, a `message` (or `messageerror`)
  * at window, and answers whether it ran one (outcome filled). A message
  * whose targetOrigin the document does not have, or that nothing could
- * hear, is dropped without a task, and the next is tried. A message a
- * message's task posts is queued behind it. Owner thread, between tasks. */
+ * hear, is dropped without a task, and the next is tried, unless it was
+ * posted after the page's next timer fell due (a timer queued first, whose
+ * task may add a listener for it): then fire answers false and leaves it.
+ * A message a message's task posts is queued behind it. Owner thread,
+ * between tasks. */
 uint64_t os64_dom_message_next(const os64_dom_t *dom);
 bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
 

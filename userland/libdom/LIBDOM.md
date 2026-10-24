@@ -1264,7 +1264,9 @@ them (`os64_dom_message_next` says when the oldest was posted, so a host
 can order them among its timers by time; `os64_dom_message_fire` runs
 one). A message whose targetOrigin the document's origin does not match
 as the task runs, or that nothing could hear, is dropped without a word
-and without entering the engine; else the clone is read in the target's
+and without entering the engine, at its own turn: a message behind it
+posted after a timer fell due waits for that timer, which may add its
+listener; else the clone is read in the target's
 realm and a MessageEvent `message` fired at window, with its data, the
 poster's origin, the poster's window as `source`, `lastEventId` "" and an
 empty frozen `ports`; a copy the realm cannot make fires `messageerror`

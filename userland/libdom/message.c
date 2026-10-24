@@ -223,8 +223,12 @@ bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome)
 {
     if (outcome != NULL) os64_memset(outcome, 0, sizeof(*outcome));
     if (outcome == NULL || dom == NULL) return false;
-    while (!dom->closed && dom->messages != NULL) {
+    for (bool dropped = false; !dom->closed && dom->messages != NULL; dropped = true) {
         DMessage *message = dom->messages;
+        /* Past one dropped, a message posted after the page's next timer
+         * fell due waits for that timer's task, which may add a listener
+         * for it. */
+        if (dropped && os64_dom_timer_next(dom) <= message->posted) return false;
         dom->messages = message->next;
         if (dom->messages == NULL) dom->messages_last = NULL;
         bool heard = target_matches(dom, message) &&

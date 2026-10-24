@@ -423,6 +423,18 @@ static void dom_message_cases(void)
     check(!p2b_message(&f, &outcome) && os64_dom_message_next(f.binding) == UINT64_MAX &&
           os64_dom_registry_count(f.binding) == registry,
           "message: one nothing could hear is dropped without a task");
+    /* Two nobody hears yet, a timer between them that adds a listener: the
+     * first is dropped, and the second waits for the timer. */
+    p2b_ms = 100;
+    dom_script(&f, "globalThis.logged=[];postMessage(1,'*');"
+                   "setTimeout(()=>addEventListener('message',e=>logged.push(e.data)),5);", "message: a timer between");
+    p2b_ms = 110;
+    dom_script(&f, "postMessage(2,'*');", "message: posted after the timer fell due");
+    check(!p2b_message(&f, &outcome) && os64_dom_message_next(f.binding) == 110,
+          "message: the first dropped, the second left for the timer queued before it");
+    check(os64_dom_timer_fire(f.binding, p2b_ms, &outcome) && p2b_message(&f, &outcome),
+          "message: the timer, then the message, heard");
+    p2b_script(&f, "assert(logged.join()==='2',logged.join());", "message: the listener the timer added heard it");
     dom_script(&f, "postMessage(1,'*');postMessage(2,'*');addEventListener('messageerror',()=>{});",
                "message: left queued");
     /* fixture_free drains the queue: the registry is checked empty there. */
