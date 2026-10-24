@@ -626,16 +626,21 @@ static int write_view(DWriter *w, JSAtom key, JSValueConst value, int kind)
     JSValue buffer;
     size_t offset, length;
     if (kind == D_VIEW_DATA_VIEW) {
-        JSValue got[3];
-        for (int i = 0; i < 3; i++) got[i] = JS_Call(ctx, w->dom->data_view[1 + i]->value, value, 0, NULL);
+        JSValue got[3] = {JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED};
+        bool failed = false;
+        for (int i = 0; i < 3 && !failed; i++) {
+            got[i] = JS_Call(ctx, w->dom->data_view[1 + i]->value, value, 0, NULL);
+            failed = JS_IsException(got[i]);
+        }
         int64_t numbers[2] = {0, 0};
-        bool failed = JS_IsException(got[0]) || JS_IsException(got[1]) || JS_IsException(got[2]) ||
-            JS_ToInt64(ctx, &numbers[0], got[1]) < 0 || JS_ToInt64(ctx, &numbers[1], got[2]) < 0;
+        failed = failed || JS_ToInt64(ctx, &numbers[0], got[1]) < 0 || JS_ToInt64(ctx, &numbers[1], got[2]) < 0;
         JS_FreeValue(ctx, got[1]);
         JS_FreeValue(ctx, got[2]);
         if (failed) {
             JS_FreeValue(ctx, got[0]);
-            /* The getters refuse only a view out of its buffer's bounds. */
+            /* The getters refuse a view out of its buffer's bounds, which is
+             * a DataCloneError; a runtime that must stop is let stop. */
+            if (!d_exception_catchable(ctx)) return -1;
             JS_FreeValue(ctx, JS_GetException(ctx));
             data_clone_error(w, "A DataView out of its buffer's bounds cannot be cloned");
             return -1;

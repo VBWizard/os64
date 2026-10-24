@@ -51,6 +51,9 @@ void d_sequence_free(JSContext *ctx, JSValue *items, size_t count)
  * made it leave (ECMAScript's IteratorClose on an abrupt completion). */
 static void iterator_close(JSContext *ctx, JSValueConst iterator)
 {
+    /* A runtime that must stop runs no `return` and keeps its exception,
+     * uncatchable. */
+    if (!d_exception_catchable(ctx)) return;
     JSValue pending = JS_GetException(ctx);
     JSValue method = JS_GetPropertyStr(ctx, iterator, "return");
     if (!JS_IsException(method) && JS_IsFunction(ctx, method)) {
@@ -524,6 +527,9 @@ static JSValue file_constructor(JSContext *ctx, JSValueConst new_target, int arg
 static JSValue settled(JSContext *ctx, JSValue value)
 {
     bool rejected = JS_IsException(value);
+    /* A runtime that must stop keeps its exception, uncatchable, rather
+     * than a promise rejected with it. */
+    if (rejected && !d_exception_catchable(ctx)) return JS_EXCEPTION;
     JSValue argument = rejected ? JS_GetException(ctx) : value;
     JSValue resolving[2];
     JSValue promise = JS_NewPromiseCapability(ctx, resolving);

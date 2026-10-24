@@ -150,7 +150,7 @@ if args.events:
       ('return-value-false','event','if (magic == E_RETURN_VALUE && !flag) cancel(event);','if (magic == E_RETURN_VALUE && flag) cancel(event);'),
       ('checkpoint-per-listener','event','os64_js_checkpoint(dom->runtime, OS64_JS_ABI_ID, &point);','os64_memset(&point, 0, sizeof(point));'),
       ('throwing-listener-next','event','if (!sticky(call.status)) {','if (call.status == OS64_JS_OK) {'),
-      ('nested-error-reported','event','if (runtime_failed(dom)) {\n                        JS_Throw(d->ctx, error);','if (true) {\n                        JS_Throw(d->ctx, error);'),
+      ('nested-error-reported','event','if (!d_exception_catchable(d->ctx)) {\n                        result = -1;','if (true) {\n                        result = -1;'),
       ('listener-dedupe','event','os64_strcmp(listener->type, type.data) == 0) found = listener;','os64_strcmp(listener->type, type.data) == 0 && magic == M_REMOVE) found = listener;'),
       ('document-scope','event','d_wrap(dom, ctx, document_node(dom)),\n        form != NULL','JS_NewObject(ctx),\n        form != NULL'),
       ('form-scope','event','form != NULL ? d_wrap(dom, ctx, form) : JS_NewObject(ctx),','form != NULL && false ? d_wrap(dom, ctx, form) : JS_NewObject(ctx),'),

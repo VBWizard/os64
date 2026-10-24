@@ -99,6 +99,22 @@ bool d_context(os64_dom_t *dom, JSContext *ctx, const char *abi)
     return true;
 }
 
+bool d_exception_catchable(JSContext *ctx)
+{
+    JSClassID id = os64_js_class_id(&anchor_slot);
+    JSValue anchor = JS_GetClassProto(ctx, id);
+    os64_dom_t *dom = JS_GetOpaque(anchor, id);
+    JS_FreeValue(ctx, anchor);
+    if (dom == NULL) return true;
+    /* Inside a page's call the budget is asked, which also sees a memory
+     * limit the engine has not yet raised to the runtime; anywhere else,
+     * whether the runtime has failed. */
+    os64_js_outcome_t probe;
+    os64_js_status_t status = os64_js_check_budget(dom->runtime, OS64_JS_ABI_ID, &probe);
+    if (status == OS64_JS_BAD_ARGUMENT) return os64_js_context(dom->runtime, OS64_JS_ABI_ID, &probe) != NULL;
+    return status == OS64_JS_OK;
+}
+
 os64_dom_t *d_binding(JSContext *ctx)
 {
     JSClassID id = os64_js_class_id(&anchor_slot);

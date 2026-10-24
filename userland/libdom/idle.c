@@ -200,9 +200,8 @@ static JSValue idle_timeout(JSContext *ctx, JSValueConst self, int argc, JSValue
         JS_FreeValue(ctx, result);
         return JS_UNDEFINED;
     }
+    if (!d_exception_catchable(ctx)) return JS_EXCEPTION;
     JSValue error = JS_GetException(ctx);
-    os64_js_outcome_t probe;
-    if (os64_js_context(dom->runtime, OS64_JS_ABI_ID, &probe) == NULL) return JS_Throw(ctx, error);
     d_report_as(dom, ctx, error, script);
     JS_FreeValue(ctx, error);
     return JS_UNDEFINED;
@@ -243,7 +242,8 @@ static JSValue idle_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
         if (converted < 0) return JS_EXCEPTION;
     }
     if (dom->idle_handle == UINT32_MAX) return d_error(ctx, "QuotaExceededError", "Too many idle callbacks");
-    if (!entry_room(dom, ctx)) return JS_EXCEPTION;
+    uint32_t script = d_callback_script(dom, ctx, argv[0]);
+    if (script == D_SCRIPT_FAILED || !entry_room(dom, ctx)) return JS_EXCEPTION;
     uint32_t handle = dom->idle_handle + 1, timer = 0;
     if (timeout > 0) {
         JSValue held[2] = {dom->anchor->value, JS_NewUint32(ctx, handle)};
@@ -254,7 +254,7 @@ static JSValue idle_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
     }
     dom->idle_handle = handle;
     dom->idle[dom->idle_count++] =
-        (DIdle){JS_DupValue(ctx, argv[0]), handle, timer, d_callback_script(dom, ctx, argv[0])};
+        (DIdle){JS_DupValue(ctx, argv[0]), handle, timer, script};
     dom->idle_live++;
     /* One a period's callback asks for waits for the next period, 50 ms
      * after this one began; any other lets the next begin at once. */

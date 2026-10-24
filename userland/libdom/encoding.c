@@ -200,8 +200,9 @@ static int buffer_bytes(os64_dom_t *dom, JSContext *ctx, JSValueConst value, con
             got[i] = JS_Call(ctx, dom->data_view[1 + i]->value, value, 0, NULL);
             if (JS_IsException(got[i])) {
                 /* A view whose buffer was detached throws from its getters:
-                 * it holds nothing. */
+                 * it holds nothing. A runtime that must stop is let stop. */
                 for (int k = 0; k < i; k++) JS_FreeValue(ctx, got[k]);
+                if (!d_exception_catchable(ctx)) return -1;
                 JS_FreeValue(ctx, JS_GetException(ctx));
                 return 0;
             }

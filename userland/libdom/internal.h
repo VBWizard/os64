@@ -387,6 +387,9 @@ struct os64_dom {
     uint64_t idle_start_ms, idle_start_us, idle_rested_ms;
 };
 #define D_NO_SCRIPT UINT32_MAX
+/* d_callback_script's answer when the runtime must stop: the exception is
+ * pending, uncatchable, and the caller fails before it records anything. */
+#define D_SCRIPT_FAILED (UINT32_MAX - 1)
 #define D_SCRIPT_PAGE 0u
 struct DScriptName {
     char *address;
@@ -623,6 +626,16 @@ bool d_classic_match(const os64_html_node_t *root, const os64_html_node_t *node,
 JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root, unsigned kind, const char *named);
 JSValue d_classic_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, unsigned kind);
 int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* NEVER SWALLOW A RUNTIME'S FAILURE. Whether the exception pending may be
+ * taken (JS_GetException) and replaced, discarded or handed to a page: false
+ * once the runtime has failed or its budget says stop (an interrupt at its
+ * deadline, a cancel, a memory limit). The engine made that exception
+ * uncatchable, and taking it makes it an ordinary value a page can catch,
+ * so a page that loops on a binding call that converts it would never be
+ * stopped; leave it pending and fail the call instead. Asked BEFORE taking
+ * the exception, whenever what threw could have entered the engine's
+ * interpreter (any JS_Call, a conversion that may run a page's code). */
+bool d_exception_catchable(JSContext *ctx);
 /* The binding of the context a function made without data runs in (its
  * anchor is the anchor class's prototype there); NULL, with the error
  * d_context throws, when it is closed or unavailable. */
@@ -694,7 +707,9 @@ void d_report_as(os64_dom_t *dom, JSContext *ctx, JSValueConst error, uint32_t s
  * handed over: the name it was compiled under when that is one of the
  * binding's (read through Function.prototype's own fileName getter), else
  * the running script's, the one handing it over (a bound function, one
- * made by eval). */
+ * made by eval). D_SCRIPT_FAILED, with the exception pending, when the
+ * getter's call found the runtime must stop: asked before the callback is
+ * recorded, so the caller can fail with nothing done. */
 uint32_t d_callback_script(os64_dom_t *dom, JSContext *ctx, JSValueConst function);
 /* Around every call the binding makes into a callback of the page's: the
  * muting state (report.c's current_script reads it) as it stood, kept by

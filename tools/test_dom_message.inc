@@ -241,6 +241,42 @@ static DomFixture p2b_large_fixture(const os64_dom_options_t *options)
     return f;
 }
 
+/* NEVER SWALLOW A RUNTIME'S FAILURE (internal.h): a page that loops on a
+ * binding call until its task's deadline is stopped there, however the
+ * interrupt reaches the binding. Nearly every engine call such a loop
+ * makes is the binding's (a DataView's getters, three a view), so the
+ * interrupt lands in one of them; it must leave the binding uncatchable,
+ * so the page's catch never runs. A catch that runs makes an 8 MiB buffer,
+ * which the test port counts (large_asks): a failed runtime refuses every
+ * binding member and all output, but not the engine's own allocation. */
+static void dom_clone_interrupt_cases(void)
+{
+    static const struct { const char *loop, *what; } kLoops[] = {
+        {"for(;;){try{structuredClone(views)}catch(e){globalThis.heard=new ArrayBuffer(8<<20);break}}",
+         "clone: an interrupt in a DataView's getter ends the task, no catch running"},
+        {"const dec=new TextDecoder();for(;;){try{for(const v of views)dec.decode(v)}"
+         "catch(e){globalThis.heard=new ArrayBuffer(8<<20);break}}",
+         "clone: an interrupt in a decoded DataView's getter ends the task, no catch running"},
+    };
+    for (size_t i = 0; i < sizeof(kLoops) / sizeof(kLoops[0]); i++) {
+        os64_dom_options_t options = p2b_options(P2B_URL);
+        DomFixture f = p2b_large_fixture(&options);
+        if (!fixture_ready(&f)) return;
+        dom_script(&f, "const b=new ArrayBuffer(1);globalThis.views=Array.from({length:20000},()=>new DataView(b));",
+                   "clone: twenty thousand views of one buffer");
+        /* The host's clock steps a tenth of a second at every read, so the
+         * one-second deadline falls a few interrupt checks in. */
+        size_t before = large_asks;
+        dom_clock_step = 100000;
+        os64_js_outcome_t outcome;
+        os64_js_run(f.runtime, kLoops[i].loop, strlen(kLoops[i].loop), "interrupt.js", &outcome);
+        dom_clock_step = 0;
+        check(outcome.status == OS64_JS_LIMIT && outcome.limit == OS64_JS_LIMIT_EXECUTION && large_asks == before,
+              kLoops[i].what);
+        fixture_free(&f);
+    }
+}
+
 /* What a page can size: a graph thirty thousand objects deep both ways
  * (never the C stack's: a recursive walk's frames would be megabytes), a
  * Map of thirty thousand entries and as wide an array, each a linear walk:
@@ -632,6 +668,7 @@ static void dom_p2b_cases(void)
     dom_clone_value_cases();
     dom_clone_hostile_cases();
     dom_clone_bound_cases();
+    dom_clone_interrupt_cases();
     dom_message_cases();
     dom_message_event_cases();
     dom_idle_cases();

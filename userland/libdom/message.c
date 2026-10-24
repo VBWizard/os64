@@ -207,8 +207,7 @@ static JSValue message_make(os64_dom_t *dom, JSContext *ctx, void *arg)
     JSValue data = d_clone_read(dom, ctx, message->clone);
     if (!JS_IsException(data))
         return d_message_event_new(dom, ctx, "message", data, message->origin, message->source);
-    os64_js_outcome_t probe;
-    if (os64_js_context(dom->runtime, OS64_JS_ABI_ID, &probe) == NULL) return JS_EXCEPTION;
+    if (!d_exception_catchable(ctx)) return JS_EXCEPTION;
     JS_FreeValue(ctx, JS_GetException(ctx));
     return d_message_event_new(dom, ctx, "messageerror", JS_NULL, message->origin, message->source);
 }

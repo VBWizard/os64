@@ -97,6 +97,8 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
         return JS_EXCEPTION;
     }
     if (delay < 0) delay = 0;
+    uint32_t script = function ? d_callback_script(dom, ctx, handler) : D_SCRIPT_PAGE;
+    if (script == D_SCRIPT_FAILED) return JS_EXCEPTION;
     if (dom->timer_count >= OS64_DOM_TIMERS_MAX || dom->timer_id == INT32_MAX) {
         d_free(dom, source.data);
         return d_error(ctx, "QuotaExceededError", "Too many timers");
@@ -119,7 +121,7 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
             timer->argc = extra;
         }
         timer->callback = JS_DupValue(ctx, handler);
-        timer->script = d_callback_script(dom, ctx, handler);
+        timer->script = script;
         dom->timers_held += held_values(timer);
     } else {
         timer->source = source.data;

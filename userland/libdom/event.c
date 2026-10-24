@@ -613,12 +613,6 @@ static void report_pending(os64_dom_t *dom, JSContext *ctx)
     JS_FreeValue(ctx, error);
 }
 
-static bool runtime_failed(os64_dom_t *dom)
-{
-    os64_js_outcome_t probe;
-    return os64_js_context(dom->runtime, OS64_JS_ABI_ID, &probe) == NULL;
-}
-
 static bool sticky(os64_js_status_t status)
 {
     return status == OS64_JS_LIMIT || status == OS64_JS_CANCELLED ||
@@ -707,12 +701,13 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
                 d_script_leave(dom, &before, false);
                 JS_FreeValue(d->ctx, callback);
                 if (JS_IsException(value)) {
-                    JSValue error = JS_GetException(d->ctx);
-                    if (runtime_failed(dom)) {
-                        JS_Throw(d->ctx, error);
+                    /* A runtime that must stop keeps its exception as the
+                     * engine made it, uncatchable. */
+                    if (!d_exception_catchable(d->ctx)) {
                         result = -1;
                         break;
                     }
+                    JSValue error = JS_GetException(d->ctx);
                     d_report_as(dom, d->ctx, error, script);
                     JS_FreeValue(d->ctx, error);
                 } else JS_FreeValue(d->ctx, value);
@@ -903,8 +898,10 @@ os64_js_status_t d_host_dispatch(os64_dom_t *dom, const os64_html_node_t *node, 
     /* Engine refusals between the wrapper's calls are latched by libjs and
      * reported by task_end; the binding's own refusal is reported here. */
     if (dispatch(&d, node) < 0 && JS_HasException(ctx)) {
+        /* A runtime that must stop is the task's failure, which task_end
+         * reports; nothing is told to the page. */
         JSValue error = JS_GetException(ctx);
-        d_report(dom, ctx, error);
+        if (d_exception_catchable(ctx)) d_report(dom, ctx, error);
         JS_FreeValue(ctx, error);
     }
     if (prevented != NULL) *prevented = d.event->canceled;
@@ -1121,13 +1118,14 @@ static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst se
                 d_string_free(dom, &type);
                 return JS_EXCEPTION;
             }
-        DListener *listener = listener_new(dom, ctx, entry, type.data, false);
+        uint32_t script = d_callback_script(dom, ctx, argv[1]);
+        DListener *listener = script == D_SCRIPT_FAILED ? NULL : listener_new(dom, ctx, entry, type.data, false);
         if (listener == NULL) result = JS_EXCEPTION;
         else {
             listener->capture = capture;
             listener->once = once;
             set_callback(dom, listener, JS_DupValue(ctx, argv[1]));
-            listener->script = d_callback_script(dom, ctx, argv[1]);
+            listener->script = script;
             count(dom, listener, 1);
         }
     }
@@ -1173,9 +1171,10 @@ static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSV
         }
         JSValue value = slot_value(dom, ctx, entry, slot);
         if (JS_IsException(value)) {
-            /* HTML reports a handler that fails to compile and answers null. */
+            /* HTML reports a handler that fails to compile and answers null;
+             * a runtime that must stop keeps its exception uncatchable. */
+            if (!d_exception_catchable(ctx)) return JS_EXCEPTION;
             JSValue error = JS_GetException(ctx);
-            if (runtime_failed(dom)) return JS_Throw(ctx, error);
             d_report(dom, ctx, error);
             JS_FreeValue(ctx, error);
             return JS_NULL;
@@ -1186,9 +1185,11 @@ static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSV
     if (slot == NULL || slot_refresh(dom, ctx, entry, slot) < 0) return JS_EXCEPTION;
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
     if (JS_IsObject(value)) {
+        uint32_t script = d_callback_script(dom, ctx, value);
+        if (script == D_SCRIPT_FAILED) return JS_EXCEPTION;
         slot_state(dom, slot, D_SLOT_FUNCTION);
         set_callback(dom, slot, JS_DupValue(ctx, value));
-        slot->script = d_callback_script(dom, ctx, value);
+        slot->script = script;
     } else slot_state(dom, slot, D_SLOT_EMPTY);
     listeners_changed(dom, entry);
     return JS_UNDEFINED;
@@ -1630,11 +1631,12 @@ static JSValue named_handler_property(JSContext *ctx, JSValueConst self, int arg
             if (slot != NULL) slot->handler = D_SLOT_EMPTY;
         }
         JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
-        if (slot == NULL) result = JS_EXCEPTION;
+        uint32_t script = slot != NULL && JS_IsObject(value) ? d_callback_script(dom, ctx, value) : D_NO_SCRIPT;
+        if (slot == NULL || script == D_SCRIPT_FAILED) result = JS_EXCEPTION;
         else if (JS_IsObject(value)) {
             slot_state(dom, slot, D_SLOT_FUNCTION);
             set_callback(dom, slot, JS_DupValue(ctx, value));
-            slot->script = d_callback_script(dom, ctx, value);
+            slot->script = script;
         } else slot_state(dom, slot, D_SLOT_EMPTY);
         listeners_changed(dom, entry);
     }

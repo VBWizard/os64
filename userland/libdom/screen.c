@@ -43,6 +43,8 @@ enum {
  * would throw) or, when none is, with a NotSupportedError. */
 static JSValue refused(JSContext *ctx)
 {
+    /* A runtime that must stop keeps its exception, uncatchable. */
+    if (JS_HasException(ctx) && !d_exception_catchable(ctx)) return JS_EXCEPTION;
     JSValue error = JS_GetException(ctx);
     bool thrown = !JS_IsNull(error) && !JS_IsUninitialized(error);
     if (!thrown) {
