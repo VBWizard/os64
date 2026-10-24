@@ -91,6 +91,92 @@ static void origin_cases(void)
         "            line 0 70 50 20 base 14\n"
         "              text \"b\" 0 72 8 16 serif 16\n");
 
+    // A relative box is laid out at its offset (§ 9.4.3), here 50 up from
+    // 30, so its content is placed at -20; the flow goes on as if it had
+    // not moved: its parent is where it was, 30, and as tall as the box,
+    // 20, and the next block follows at 50.
+    cascade_layout_case("a relative box moved above the canvas leaves its parent where it was",
+        "<!doctype html><style>body{margin:0} .h{height:10px}</style>"
+        "<div style='height:30px'></div><div><div style='position:relative;top:-50px;"
+        "height:20px'></div></div><div class=h></div>", 800,
+        "page 800 60\n"
+        "block html 0 0 800 60\n"
+        "  block body 0 0 800 60\n"
+        "    block div 0 0 800 30\n"
+        "    block div 0 30 800 20\n"
+        "      block div 0 -20 800 20 positioned\n"
+        "    block div 0 50 800 10\n");
+
+    // And one whose parent already holds content above the canvas: the
+    // first child's -10 carries the parent and body to -10 (-10..-5); the
+    // relative box's place is -5..5, drawn 20 lower at 15. The parent is
+    // -10..5, the next block 5..15, body -10..15; the page reaches the
+    // moved box's 25.
+    cascade_layout_case("a relative box after content above the canvas",
+        "<!doctype html><style>body{margin:0}</style><div>"
+        "<div style='margin-top:-10px;height:5px'></div>"
+        "<div style='position:relative;top:20px;height:10px'></div></div>"
+        "<div style='height:10px'></div>", 800,
+        "page 800 25\n"
+        "block html 0 0 800 15\n"
+        "  block body 0 -10 800 25\n"
+        "    block div 0 -10 800 15\n"
+        "      block div 0 -10 800 5\n"
+        "      block div 0 15 800 10 positioned\n"
+        "    block div 0 5 800 10\n");
+
+    // A list item inside an inline-block pulled up 30 from a line at 40:
+    // its content starts at 10 (laid out from 0, at -30), so the item has
+    // content and its marker stands on that, the item 10 tall, not on a
+    // line of its own. The marker's "• " is 12 wide, outside the item's
+    // 20px of padding: at 8. The inline-block's margin box reaches -30 +
+    // 10 below the line's top, so the line is the strut's 20.
+    cascade_layout_case("a list item above its origin keeps its marker on its content",
+        "<!doctype html><style>body{margin:0}"
+        " .i{display:inline-block;vertical-align:top;width:100px;margin-top:-30px}"
+        " .h{height:10px}</style><div style='height:40px'></div><div class=i>"
+        "<ul style='margin:0;padding:0 0 0 20px'><li><div class=h></div></li></ul></div>", 800,
+        "page 800 60\n"
+        "block html 0 0 800 60\n"
+        "  block body 0 0 800 60\n"
+        "    block div 0 0 800 40\n"
+        "    block anon 0 40 800 20\n"
+        "      line 0 40 800 20 base 14\n"
+        "        atomic div 0 10 100 10\n"
+        "          block div 0 10 100 10\n"
+        "            block ul 0 10 100 10\n"
+        "              block li 20 10 80 10\n"
+        "                block div 20 10 80 10\n"
+        "                marker \"• \" 8 12 12 16\n");
+
+    // A table after a block in the same pulled-up inline-block: the block
+    // is 10..20, so the table is placed at 20 (laid out from 0, at -20),
+    // its one line of "x" 20 tall, and its row group with it. The
+    // inline-block is 30 from 10; its margin box ends at 10 + 30 - 30
+    // below the line's top, so the line is the strut's.
+    cascade_layout_case("a table above its origin follows the block before it",
+        "<!doctype html><style>body{margin:0}"
+        " .i{display:inline-block;vertical-align:top;width:100px;margin-top:-30px}"
+        " .h{height:10px}</style><div style='height:40px'></div><div class=i><div>"
+        "<div class=h></div><table style='border-spacing:0'><tr><td style='padding:0'>x</td>"
+        "</tr></table></div></div>", 800,
+        "page 800 60\n"
+        "block html 0 0 800 60\n"
+        "  block body 0 0 800 60\n"
+        "    block div 0 0 800 40\n"
+        "    block anon 0 40 800 20\n"
+        "      line 0 40 800 20 base 14\n"
+        "        atomic div 0 10 100 30\n"
+        "          block div 0 10 100 30\n"
+        "            block div 0 10 100 30\n"
+        "              block div 0 10 100 10\n"
+        "              table table 0 20 8 20\n"
+        "                row-group tbody 0 20 8 20\n"
+        "                  row tr 0 20 8 20\n"
+        "                    cell td 0 20 8 20\n"
+        "                      line 0 20 8 20 base 14\n"
+        "                        text \"x\" 0 22 8 16 serif 16\n");
+
     // A box with nothing in it is still empty: its margins collapse
     // through it with the ones round it (§ 8.3.1), -10 and 5 to -5, so
     // the next box is at 20 - 5 = 15, and the empty one's border edge is

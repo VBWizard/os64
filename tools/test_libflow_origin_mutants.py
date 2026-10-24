@@ -38,6 +38,24 @@ mutants = [
      '                    y0 = any && y0 >= 0 ? min64(y0, row->y) : row->y;\n'
      '                    y1 = any ? max64(y1, row->y + row->h) : row->y + row->h;\n'
      '                    any = row->y >= 0;'),
+    # The cursor's mark: a y below 0 taken for "nothing placed yet".
+    ('a-relative-box-moves-a-placed-first-only-at-or-below-0', LAYOUT,
+     '    if (cursor_placed(&moved))\n        moved.first += dy;',
+     '    if (moved.first >= 0)\n        moved.first += dy;'),
+    ('a-relative-box-moves-a-placed-first-back-only-at-or-below-0', LAYOUT,
+     '    if (cursor_placed(cur))\n        cur->first -= dy;',
+     '    if (cur->first >= 0)\n        cur->first -= dy;'),
+    ('a-marker-takes-content-above-0-for-none', LAYOUT,
+     'if (b->marker != NULL && (top_open ? !cursor_placed(&in)',
+     'if (b->marker != NULL && (top_open ? in.first < 0'),
+    ('a-table-above-0-is-the-first-thing-placed', LAYOUT,
+     '    int64_t y = cur->y + margins_sum(margins_join(cur->pm, margin_of(mt)));\n'
+     '    if (!cursor_placed(cur))',
+     '    int64_t y = cur->y + margins_sum(margins_join(cur->pm, margin_of(mt)));\n'
+     '    if (cur->first < 0)'),
+    ('a-block-above-0-is-empty', LAYOUT,
+     '    if (top_open && !cursor_placed(&in) && height_auto && bottom_open) {',
+     '    if (top_open && in.first < 0 && height_auto && bottom_open) {'),
     # The break beside an inline-block: who decides it.
     ('the-atom-decides-the-break-before-it', LAYOUT,
      '            bool wrap = f_ws_wraps(holder_style(s, ifc, h.held)->white_space) && !g->keep_round;',
