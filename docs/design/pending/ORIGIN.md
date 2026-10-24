@@ -446,8 +446,9 @@ false otherwise, and always false for a preflight.
   EVERY redirect (`on_hop` → STOP) and opens each hop itself, libfetch's typed
   origin is always the hop's own URL, so that rule never fires inside a fetch
   job: the job's strip (above) replaces it, and the job's `headers_for` sends
-  `Cookie` only when the hop's includeCredentials is true and never sends
-  anything else but `Referer`. The job never puts `Cookie` in
+  `Cookie` only when the hop's includeCredentials is true, and besides it
+  sends only `Referer` and the lines that say who is asking (Fetch
+  Metadata, the agent preset's client hints and Accept-Language). The job never puts `Cookie` in
   `extra_headers` at all.
   **RULED (2):** the standard's rule replaces the library's, in the job.
   Driving the loop in the job is what lets the `Origin` header, the

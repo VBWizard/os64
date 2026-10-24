@@ -132,6 +132,12 @@ purpose; ORIGIN.md carries each argument.
 | An `http` page's script follows an `https` to `http` redirect | Every `https` to `http` redirect of a script request is a network error | A 307 replays a body in the clear to an address the page never named; a page may still name an `http` address itself | ORIGIN.md § 8 (ruling 3), `fetch.h`'s house policy |
 | A header name repeated in a list takes its first spelling (§ 2.2.2 "append") | The request's header names go on the wire as written | No script-visible reader shows a spelling and HTTP folds case, while the rule costs a scan per append, quadratic over a list a page or a server hands over whole | LIBDOM.md § Slice 2's rows, `fetch.c` `list_take` |
 
+## The browser's identity (yonder, 2026-10-24)
+
+| The standard / browsers | yonder | Why | Recorded |
+|---|---|---|---|
+| A browser's request carries its engine: Chrome and Firefox send `Accept-Encoding: gzip, deflate, br, zstd`, Chrome's navigation `Accept` names JPEG XL, AVIF and signed exchanges, both speak HTTP/2, and each greets a server with its own TLS handshake | An agent preset sends that browser's string, client hints and `Accept-Language` byte for byte, and libway its Fetch Metadata; it claims nothing yonder cannot do: its own `Accept` (the types it decodes), `Accept-Encoding: gzip, identity`, HTTP/1.1, os64's own handshake | A header that claims a decoder yonder lacks is a header that lies, and invites a body it must refuse. A gate that scores the handshake will keep flagging yonder, which is the honest outcome for a browser that is not pretending to be another engine | `agent.c`; WIRE.md § 1 |
+
 ---
 
 ## The tree & filesystems

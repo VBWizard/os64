@@ -30,7 +30,7 @@ typedef struct {
     // element's charset attribute, else the document's (HTML's "fetch a
     // classic script").
     char fallback[32];
-    way_hooks_t hooks;              // the page's cookies, its Referer, the cache
+    way_hooks_t hooks;              // the page's cookies, its Referer, who asks, the cache
 } yonder_script_job_t;
 
 typedef struct {

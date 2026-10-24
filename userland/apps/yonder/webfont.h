@@ -26,7 +26,7 @@ typedef struct {
     uint64_t generation;            // the page it belongs to
     const char *agent;              // the browser's, read-only for the run
     char url[OS64_FETCH_URL_MAX];
-    way_hooks_t hooks;              // cookies, the Referer, the cache: as a picture's
+    way_hooks_t hooks;              // cookies, the Referer, who asks, the cache: as a picture's
 } yonder_webfont_job_t;
 
 // The file as a plain SFNT, or why there is none. `container` is what the

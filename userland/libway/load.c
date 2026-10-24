@@ -35,6 +35,9 @@ static int64_t now_utc(void)
     return os64_time(&t) == 0 ? t.epoch : 0;
 }
 
+_Static_assert(OS64_FETCH_HOP_FIELDS_MAX - WAY_IDENTITY_MAX >= 1024,
+               "a hop's cookies and Referer keep their kilobyte beside who is asking");
+
 // A hop's lines that say who is asking (way_identity_lines), with `m`
 // stepped to the hop first, within WAY_IDENTITY_MAX of `cap`: the rest is
 // the cookies' and the Referer's. The length written: 0 when they do not

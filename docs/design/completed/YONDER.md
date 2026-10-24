@@ -92,6 +92,15 @@ remaining gates before recommending scripts for ordinary browsing.
   typed there is sent as typed, once it is printable ASCII a header can
   carry and the config file keeps: no `#`, no space at either end, under
   `OS64_FETCH_AGENT_MAX`.
+- **A preset is a whole identity**: beside its string, every request
+  carries the lines that browser sends on every request, byte for byte
+  as it sends them: Chrome's client hints (`sec-ch-ua`,
+  `sec-ch-ua-mobile`, `sec-ch-ua-platform`, to a potentially trustworthy
+  address only) and `Accept-Language` for Chrome, Firefox and Safari.
+  A typed agent, yonder's own, Netscape and Lynx claim nothing beyond
+  their strings, and an agent saved before its preset's version moved
+  is a typed one now. Every request, whatever the agent, also says what
+  it is for (libway's Fetch Metadata, `way/origin.h`).
 - **Apply** changes it for this window, from the next fetch on; **Save as
   default** writes `agent =` to `yonder.conf` at the top of the
   configuration ladder, where every yonder reads it at start. An agent
