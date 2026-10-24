@@ -84,8 +84,9 @@ typedef struct {
     bool consumed;              // ...and every byte that framing promised was read off the wire
     bool leftover;              // bytes past the message have arrived: nobody asked for them
     // The connection itself: no transport or TLS failure, no closure begun
-    // or heard, not cancelled, and the fetch was not refused its framing or
-    // its coding.
+    // or heard, not cancelled, and the fetch did not end in a failure (one
+    // whose framing or coding is refused closes its connection before it
+    // is ever judged).
     bool transport_ok;
 } fetch_reuse_facts_t;
 

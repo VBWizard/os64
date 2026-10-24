@@ -23,7 +23,7 @@
 //
 // THE REST OF THE ASKING, from the same captures (WIRE.md § 2 as built).
 // Each browser says `Connection: keep-alive`, and so do yonder's own and
-// Safari's, since every connection is kept now and the line says so
+// Safari's, since connections are kept now and the line says so
 // (a costume says nothing it did not). Each browser's Accept per
 // destination is what it sent, LESS every type yonder cannot decode: JPEG
 // XL, AVIF, SVG as a picture and signed exchanges, which it does not read

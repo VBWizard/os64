@@ -382,10 +382,12 @@ const char *os64_fetch_reason(os64_fetch_t *f);
 
 // Release the connection, the decoder, the store if this loaded it, and the
 // object. The connection is KEPT for a later fetch to the same peer when
-// HTTP allows it: a 1.1 reply, no `Connection: close`, and a body framed by
-// its length or by chunks and read to its end (or none at all) — a body
-// left unread, a failure, or a cancellation closes it instead, with a
-// bounded TLS closure if the body ended whole. Idempotent on the
+// HTTP allows it (RFC 9112 § 9.3; pool.h's connection_reusable has every
+// clause): a 1.1 reply, no `Connection: close`, the whole request sent, and
+// a body framed by its length or by chunks and read to its end (or none at
+// all) with nothing past it — a body left unread, a failure, or a
+// cancellation closes it instead, with a bounded TLS closure if the body
+// ended whole. Idempotent on the
 // connection; the object is gone.
 void os64_fetch_close(os64_fetch_t *f);
 

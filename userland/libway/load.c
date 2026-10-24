@@ -413,8 +413,8 @@ bool way_open(way_leg_t *s, const char *url, const os64_page_request_t *request,
         with_pictures = pages = s->session->accept;
     opt.accept = posting ? pages : with_pictures;
     opt.accept_get = with_pictures;
-    // A preset that is a browser asks with that browser's list, on a form's
-    // POST as on any navigation, as the browser does.
+    // A preset that names a navigation list of its own asks with it, on a
+    // form's POST as on any navigation, as a browser does.
     const char *preset = way_identity_accept(s->identity, WAY_DEST_DOCUMENT);
     if (preset != NULL) {
         opt.accept = preset;

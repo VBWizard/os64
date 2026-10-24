@@ -2022,7 +2022,7 @@ static void wire_request_cases(void)
 }
 
 // THE TABLE ITSELF: each browser's Accept per destination is the one it
-// sent less what yonder cannot decode; every preset that is a browser says
+// sent less what yonder cannot decode; the browsers and yonder's own say
 // keep-alive, and no costume does; the orders are the captures'.
 static void wire_table_cases(void)
 {

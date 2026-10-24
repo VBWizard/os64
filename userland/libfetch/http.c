@@ -359,8 +359,8 @@ typedef struct {
 } head_line_t;
 
 // Where a walk over those lines is, in this writer's own order: the fixed
-// lines in turn (`slot`), then `body_headers`' lines and `extra_headers'`
-// as given (`at`, inside the block being walked). `length` is the
+// lines in turn (`slot`), then the lines of `body_headers` and of
+// `extra_headers` as given (`at`, inside the block being walked). `length` is the
 // Content-Length's digits, "" for none.
 typedef struct {
     const http_request_extras_t *x;
