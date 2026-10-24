@@ -149,6 +149,10 @@ struct DTimer {
     /* The callback's script (d_callback_script); a string's is the page's. */
     uint32_t script;
     bool interval;
+    /* One the binding set for itself (d_timer_add), which clearTimeout and
+     * clearInterval cannot reach: its id is drawn from the page's count,
+     * so a page could name it. */
+    bool binding;
     JSValue callback;
     char *source;
     size_t source_length;
@@ -447,10 +451,12 @@ void d_event_free(os64_dom_t *dom, DValue *entry);
 void d_timer_drain(os64_dom_t *dom);
 void d_timer_free(os64_dom_t *dom);
 /* A timer the binding sets for itself (AbortSignal.timeout, an
- * XMLHttpRequest's timeout): `callback` (taken) is called with no
- * arguments once, `delay` ms from now on the host's clock, as one of the
- * page's timers. Its id, or 0 with an exception pending. Cancelling an id
- * that has fired, or 0, does nothing. */
+ * XMLHttpRequest's timeout, an idle callback's timeout): `callback` (taken)
+ * is called with no arguments once, `delay` ms from now on the host's
+ * clock, as one of the page's timers, though clearTimeout and
+ * clearInterval cannot cancel it; only d_timer_cancel can. Its id, or 0
+ * with an exception pending. Cancelling an id that has fired, or 0, does
+ * nothing. */
 uint32_t d_timer_add(os64_dom_t *dom, JSContext *ctx, JSValue callback, uint64_t delay);
 void d_timer_cancel(os64_dom_t *dom, uint32_t id);
 void d_window_free(os64_dom_t *dom);

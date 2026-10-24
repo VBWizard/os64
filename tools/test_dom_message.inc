@@ -604,6 +604,17 @@ static void dom_idle_cases(void)
     p2b_script(&f, "assert(timed[0]===true&&timed[1]===0,String(timed));", "idle: didTimeout, 0 left");
     check(p2b_idle(&f, &outcome) && os64_dom_timer_next(f.binding) == UINT64_MAX,
           "idle: a timeout of 0 is no timeout");
+    /* A page cannot cancel a timer the binding set for itself by guessing
+     * its id, which is drawn from the page's count (the cold read's
+     * idle2.html, and AbortSignal.timeout's the same way). */
+    dom_script(&f, "globalThis.timed=null;requestIdleCallback(d=>{timed=d.didTimeout},{timeout:10});"
+                   "globalThis.signal=AbortSignal.timeout(10);"
+                   "const t=setTimeout(()=>{},1000);clearTimeout(t-1);clearTimeout(t-2);clearInterval(t-1);clearTimeout(t);",
+               "idle: clearTimeout of the ids before a setTimeout's");
+    p2b_advance(10);
+    while (os64_dom_timer_fire(f.binding, p2b_ms, &outcome)) {}
+    p2b_script(&f, "assert(timed===true,'the idle timeout fired: '+timed);assert(signal.aborted,'and the signal\\'s');",
+               "idle: neither binding timer was cancelled");
     fixture_free(&f);
 }
 

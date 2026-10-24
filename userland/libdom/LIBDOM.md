@@ -391,7 +391,10 @@ evaluated in global scope (the old web's `setTimeout("tick()", 1000)`); a
 function is called with `this` as window and the extra arguments. A delay
 wraps as a 32-bit integer and below zero is zero; a timer nested more than
 five deep is clamped to 4 ms, as HTML clamps it. The table holds callbacks
-and arguments, so it is the registry's third list.
+and arguments, so it is the registry's third list. The binding's own
+timers (AbortSignal.timeout, an XMLHttpRequest's timeout, an idle
+callback's timeout) are in the same table and draw from the same ids, and
+`clearTimeout` and `clearInterval` pass over them.
 
 The host drives it in its own clock (`options.now_ms`):
 `os64_dom_timer_next` answers the earliest due time, and
@@ -1293,7 +1296,9 @@ period's callback waits for the next period, which starts no sooner than
 itself again runs once a period, never once a turn of the host's loop);
 any other lets the next period start at once (`os64_dom_idle_next` says
 when one may run). A timeout is a timer of the window's (§ Timers), so it
-counts among the 4096 and wakes the host as a timer does: it calls the
+counts among the 4096 and wakes the host as a timer does, though no
+`clearTimeout` reaches it (a timer the binding sets for itself is the
+binding's to cancel); it calls the
 callback, `didTimeout` true and `timeRemaining()` 0, unless a period ran it
 first, which cancels the timer. A callback is called with `this` the
 window; what it throws is its script's failure (§ P2a's rows). The entries
