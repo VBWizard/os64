@@ -248,8 +248,8 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
         if (os64_js_task_begin(dom->runtime, OS64_JS_ABI_ID, name, outcome) == OS64_JS_OK) {
             os64_js_call(dom->runtime, OS64_JS_ABI_ID, held, dom->window->value, argc, args, NULL, &call);
             fold(outcome, &call);
-            os64_js_task_end(dom->runtime, OS64_JS_ABI_ID, &call);
-            fold(outcome, &call);
+            /* What the callback left owed (report.c) runs in its task. */
+            d_task_finish(dom, outcome);
         }
     } else if (source != NULL) {
         os64_js_run(dom->runtime, source, source_length, name, outcome);
@@ -267,6 +267,8 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
                 r != OS64_JS_UNHANDLED_REJECTION)
                 break;
         }
+        /* What the string left owed (report.c), in a task of its own. */
+        d_script_settle(dom, name, NULL, outcome);
     }
     dom->timer_nesting = 0;
     if (!JS_IsUndefined(held)) JS_FreeValueRT(dom->engine, held);

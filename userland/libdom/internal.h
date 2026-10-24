@@ -34,7 +34,8 @@ enum {
  * after it; -1 for Node, which inherits Object's. */
 int d_proto_parent(int kind);
 /* The event types the binding names, which are the ones on<type> names and
- * os64_dom_listens count: the ones the host dispatches, and online,
+ * os64_dom_listens count: the ones the host dispatches, the three the
+ * binding fires at window for a script's failures (report.c), and online,
  * offline and languagechange, whose window handlers exist though nothing
  * here ever fires them (browsing.c says why). A script may listen for any
  * other type. The handler properties of the ones from SCROLL on are the
@@ -46,7 +47,8 @@ enum {
     D_EVENT_KEYUP, D_EVENT_INPUT, D_EVENT_CHANGE, D_EVENT_SUBMIT, D_EVENT_RESET,
     D_EVENT_FOCUS, D_EVENT_BLUR, D_EVENT_LOAD, D_EVENT_SCROLL, D_EVENT_RESIZE,
     D_EVENT_POPSTATE, D_EVENT_HASHCHANGE, D_EVENT_ONLINE, D_EVENT_OFFLINE,
-    D_EVENT_LANGUAGECHANGE, D_EVENT_DOM_CONTENT_LOADED,
+    D_EVENT_LANGUAGECHANGE, D_EVENT_ERROR, D_EVENT_UNHANDLEDREJECTION,
+    D_EVENT_REJECTIONHANDLED, D_EVENT_DOM_CONTENT_LOADED,
     D_EVENT_COUNT
 };
 /* A wrapper, or another engine value the binding holds strongly. A node's
@@ -287,6 +289,22 @@ struct os64_dom {
     size_t requests_held;
     /* The last AbortSignal's number (abort.c's DSignal.serial). */
     uint64_t signal_serial;
+    /* A SCRIPT'S FAILURES (report.c, MODERN_WEB.md § P2a): ErrorEvent's
+     * and PromiseRejectionEvent's prototypes; the function a failure's
+     * event is fired through; the intrinsic Error constructor, taken before
+     * any page ran, which says where a running script is (an Error it makes
+     * has the caller's place in its stack); the exceptions the wrapper caught, waiting
+     * for their error event, and the reported promises a handler reached,
+     * waiting for their rejectionhandled, each oldest first, with how many
+     * values the two hold (the registry's fifth list); the promise whose
+     * unhandledrejection is being fired and whether a handler reached it
+     * meanwhile; and whether an error event is being fired, when a second
+     * error is reported to no page (HTML's error reporting mode). */
+    DValue *error_event_prototype, *rejection_event_prototype, *report_fire, *error_constructor;
+    struct DPending *errors, *errors_last, *handled, *handled_last;
+    size_t pending_held;
+    const void *rejection_firing;
+    bool rejection_handled, reporting_error;
 };
 typedef struct { char *data; size_t length; } DString;
 
@@ -556,6 +574,50 @@ bool d_secure_context(const os64_dom_t *context);
 int d_bars_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_external_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_crypto_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* P2a, a script's failures (report.c; WINDOW_DOCUMENT.md § P2a). The row:
+ * window's onerror, onunhandledrejection, onrejectionhandled and
+ * reportError, document's onerror, ErrorEvent and PromiseRejectionEvent.
+ * The row is the switch's; being the runtime's script host is every
+ * page's (d_report_host, from os64_dom_create), so the record can say a
+ * rejection went unhandled with the switch off too, though no event is
+ * fired then. d_report_drain lets go of the host and the values waiting. */
+int d_report_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+bool d_report_host(os64_dom_t *dom);
+void d_report_drain(os64_dom_t *dom);
+/* An exception the binding caught itself (d_report's): its error event is
+ * fired now when a script is running, which is HTML's timing, or else left
+ * for the task's next turn between calls. Nothing with the switch off,
+ * while an error event is being fired, or after a sticky failure. */
+void d_report_error(os64_dom_t *dom, JSContext *ctx, JSValueConst error);
+/* Inside an open task, between its calls: the error events the exceptions
+ * the wrapper caught are owed, fired at window; `filename` is the address
+ * they are said to come from, NULL for the page's. */
+void d_errors_fire(os64_dom_t *dom, const char *filename, os64_js_outcome_t *outcome);
+/* Inside an open task, before it ends: checkpoints and what each leaves
+ * owed, the error events, an unhandledrejection for each rejection the
+ * runtime hands over and a rejectionhandled for each reported promise a
+ * handler reached, until a checkpoint leaves nothing. A rejection no
+ * handler cancelled is the task's failure. */
+void d_task_settle(os64_dom_t *dom, const char *filename, os64_js_outcome_t *outcome);
+/* After a script the host ran with os64_js_run (and a string timer the
+ * binding did): what it left owed, settled in a task of its own named
+ * `name`, folded into `outcome`. No engine entry when nothing is owed. */
+void d_script_settle(os64_dom_t *dom, const char *name, const char *filename, os64_js_outcome_t *outcome);
+/* ErrorEvent and PromiseRejectionEvent (event.c): the interfaces, and one
+ * of each made for a dispatch, trusted. */
+int d_error_events_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+JSValue d_error_event_new(os64_dom_t *dom, JSContext *ctx, const char *message, const char *filename,
+                          uint32_t lineno, uint32_t colno, JSValueConst error);
+JSValue d_rejection_event_new(os64_dom_t *dom, JSContext *ctx, const char *type, JSValueConst promise,
+                              JSValueConst reason, bool cancelable);
+/* A thrown value as a line of text, read without running any of the page's
+ * code (no toString, no getter): an Error's or a DOMException's name and
+ * message, a primitive's own spelling, and for any other object a fixed
+ * phrase. */
+void d_error_text(os64_dom_t *dom, JSContext *ctx, JSValueConst value, char *out, size_t cap);
+/* The DOMException's own name and message (exception.c), borrowed; false
+ * for a value that is not one. */
+bool d_dom_exception_fields(JSValueConst value, const char **name, const char **message);
 /* An interface whose objects the binding makes (WebIDL § 3.7): its class
  * registered in this runtime, its prototype made and held for the page's
  * life, and its interface object, an Illegal constructor, named on

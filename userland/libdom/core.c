@@ -402,7 +402,9 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
     if (installed >= 0) installed = d_window_install(dom, ctx, global);
     if (installed >= 0) installed = d_modern_install(dom, ctx, global);
     JS_FreeValue(ctx, global);
-    if (installed < 0) goto fail;
+    /* Last: from here the runtime hands the binding its script's failures
+     * (report.c), which a binding that failed to be made never sees. */
+    if (installed < 0 || !d_report_host(dom)) goto fail;
     outcome->status = OS64_JS_OK;
     return dom;
 fail:
@@ -429,6 +431,7 @@ void os64_dom_drain(os64_dom_t *dom)
     /* What the page changed in its storage and has not committed goes to
      * the store before the binding is gone: the last of its commits. */
     d_storage_drain(dom);
+    d_report_drain(dom);
     d_event_drain(dom);
     d_timer_drain(dom);
     /* The requests out are cancelled with the host and forgotten. */
@@ -471,9 +474,11 @@ void os64_dom_free(os64_dom_t *dom)
 }
 
 size_t os64_dom_bytes(const os64_dom_t *dom) { return dom != NULL ? dom->bytes : 0; }
-/* The four registries: wrappers and other held values, listener callbacks,
- * timer callbacks with their arguments, and what the requests out hold. */
+/* The five registries: wrappers and other held values, listener callbacks,
+ * timer callbacks with their arguments, what the requests out hold, and the
+ * failures waiting for their events (report.c). */
 size_t os64_dom_registry_count(const os64_dom_t *dom)
 {
-    return dom != NULL ? dom->retained + dom->listeners_held + dom->timers_held + dom->requests_held : 0;
+    return dom != NULL ? dom->retained + dom->listeners_held + dom->timers_held + dom->requests_held +
+        dom->pending_held : 0;
 }

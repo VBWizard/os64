@@ -128,6 +128,14 @@ typedef struct {
      * script's task; the host records it and must not enter JS. NULL: no
      * one is told, and the binding carries on as the sentence says. */
     void (*broken)(void *opaque, const char *sentence);
+    /* A failure of the task being run past the one its outcome carries: an
+     * unhandled rejection (`message` begins "unhandled rejection: ") of a
+     * task whose outcome already holds a failure, which the host records
+     * as it records the outcome's, under `task`, the task's source name.
+     * Every one is told, so no rejection a page left goes unrecorded. On
+     * the owner thread, between a task's calls; it must not enter JS.
+     * NULL: only the outcome's failure is known. */
+    void (*failed)(void *opaque, const char *task, const char *message);
     /* crypto.getRandomValues' and randomUUID's randomness: `length` bytes
      * (never more than 65,536) written into `out` from the host's
      * cryptographically strong source, true when every one was. False is
@@ -221,6 +229,10 @@ typedef struct { uint64_t layouts, elapsed_us; } os64_dom_geometry_stats_t;
  * three handles are borrowed; state must belong to document. NULL options
  * select the defaults; outcome is required. No runtime/context opaque slot
  * is used. Console output is granted separately by os64_js_install_output.
+ * The binding becomes the runtime's script host (libjs CONTRACT.md § A
+ * script host) until os64_dom_drain: from then on no os64_js_run judges an
+ * unhandled rejection, and a host that runs a script itself follows it
+ * with os64_dom_script_ended, which does.
  *
  * NULL reports failure in outcome. Registration may have published engine
  * objects: destroy that runtime without further evaluation before retrying
@@ -572,9 +584,11 @@ size_t os64_dom_registry_count(const os64_dom_t *dom);
 /* EVENTS. The host dispatches at a node, or at window when node is NULL
  * (`load`, whose target reads as the document). One TASK: libdom opens it,
  * builds the Event, runs each listener as one os64_js_call followed by a
- * microtask checkpoint, and closes it. A listener that throws is reported and
- * the next one runs; a sticky failure ends the dispatch. The outcome is the
- * task's: its first exception or unhandled rejection, else a reported error
+ * microtask checkpoint, settles what they left owed (window's error and
+ * rejection events, as os64_dom_script_ended says), and closes it. A
+ * listener that throws is reported and the next one runs; a sticky failure
+ * ends the dispatch. The outcome is the task's: its first exception or
+ * unhandled rejection (each rejection after it told to options.failed), else a reported error
  * from a nested dispatch, else OK; a sticky status means the runtime is
  * finished with. *prevented answers whether the default action is cancelled.
  * Owner thread, between tasks. Costs no engine entry when listens() says no. */
@@ -584,9 +598,10 @@ os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node
 /* Whether anything on the page could hear `type`: a listener, a handler
  * property, or an on<type> content attribute in the document. O(1) unless the
  * tree moved since the last answer, when the attributes are counted again.
- * The types counted are the ones the host dispatches, and online, offline
- * and languagechange, which window has handlers for and nothing fires; any
- * other type is not counted and answers true. */
+ * The types counted are the ones the host dispatches, the error,
+ * unhandledrejection and rejectionhandled the binding fires at window, and
+ * online, offline and languagechange, which window has handlers for and
+ * nothing fires; any other type is not counted and answers true. */
 bool os64_dom_listens(os64_dom_t *dom, const char *type);
 /* Which event types the document's on<type> content attributes name, as a
  * mask os64_dom_handler_bit reads: the walk os64_dom_listens counts with.
@@ -613,8 +628,25 @@ bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outco
 bool os64_dom_take_navigation(os64_dom_t *dom, os64_dom_navigation_t *ask);
 /* An error a nested dispatch or a handler compile reported inside a task the
  * host did not open through libdom (a script run with os64_js_run). The
- * first one is kept until taken. False when there is none. */
+ * first one is kept until taken, here or by os64_dom_script_ended when it
+ * settles anything (it folds the error into its outcome). False when there
+ * is none. */
 bool os64_dom_take_report(os64_dom_t *dom, os64_js_outcome_t *outcome);
+/* After a script the host ran with os64_js_run (and drained): what it left
+ * owed, settled as one task named `name` (MODERN_WEB.md § P2a). The window's
+ * error event for each exception it threw, said to come from `address`
+ * (the script's own, NULL for an inline one, which is the page's); an
+ * unhandledrejection for each rejection it left unhandled; and what those
+ * events' listeners leave in turn. A script from another origin than the
+ * page's (and an Error made in such a script's code, wherever it is
+ * caught) is told to the page as "Script error." and its rejections fire
+ * no event: HTML's muted errors. The failures are folded into `outcome`
+ * after the script's own: a rejection no listener cancelled is an
+ * UNHANDLED_REJECTION whose message begins "unhandled rejection: ", and
+ * each one past the outcome's first failure is told to options.failed. No
+ * engine entry when nothing is owed. False for a missing argument or a
+ * drained binding. */
+bool os64_dom_script_ended(os64_dom_t *dom, const char *name, const char *address, os64_js_outcome_t *outcome);
 
 /* SCRIPT ELEMENTS. kind follows HTML's "prepare the script element" type
  * rules (type, else language, the sixteen JavaScript MIME essences, module);
