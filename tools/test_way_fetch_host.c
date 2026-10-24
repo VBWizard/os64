@@ -956,7 +956,7 @@ static void pieces_make_the_same_page(void)
 
 // ── Who is asking, on the wire ──────────────────────────────────────────
 
-static const way_identity_t kWho = {"sec-ch-ua: \"Fixture\";v=\"1\"\r\n", "en-US,en;q=0.9"};
+static const way_identity_t kWho = {.hints = "sec-ch-ua: \"Fixture\";v=\"1\"\r\n", .language = "en-US,en;q=0.9"};
 
 // A whole body through hooks that describe a picture asked for by the page
 // at `page`.

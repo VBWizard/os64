@@ -395,7 +395,7 @@ static unsigned hop_field(const char *line, size_t nameLen)
     static const char *const kFields[] = {
         "cookie", "referer", "accept-language", "sec-ch-ua", "sec-ch-ua-mobile",
         "sec-ch-ua-platform", "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site",
-        "sec-fetch-user", "upgrade-insecure-requests",
+        "sec-fetch-user", "upgrade-insecure-requests", "priority",
     };
     for (size_t i = 0; i < sizeof(kFields) / sizeof(kFields[0]); i++)
         if (name_is(line, nameLen, kFields[i]))

@@ -737,7 +737,8 @@ static void sweep_once(void)
 
 // ── Who is asking ───────────────────────────────────────────────────────
 
-static const way_identity_t kWho = {"sec-ch-ua: \"Fixture\";v=\"1\"\r\n", "en-US,en;q=0.9"};
+static const way_identity_t kWho = {.hints = "sec-ch-ua: \"Fixture\";v=\"1\"\r\n", .language = "en-US,en;q=0.9",
+                                    .priority = {[WAY_DEST_EMPTY] = "u=4"}};
 
 static void who_is_asking(void)
 {
@@ -753,6 +754,7 @@ static void who_is_asking(void)
     expect_text("who: no upgrade on a script's request", field(0, "Upgrade-Insecure-Requests"), "");
     expect_text("who: the preset's hints", field(0, "sec-ch-ua"), "\"Fixture\";v=\"1\"");
     expect_text("who: the preset's language", field(0, "Accept-Language"), "en-US,en;q=0.9");
+    expect_text("who: the preset's priority for an empty destination", field(0, "Priority"), "u=4");
     yonder_fetched_free(g);
 
     // The modes a page may name.
@@ -782,6 +784,7 @@ static void who_is_asking(void)
     expect_text("who: preflight site", field(0, "Sec-Fetch-Site"), "cross-site");
     expect_text("who: preflight language", field(0, "Accept-Language"), "en-US,en;q=0.9");
     expect_text("who: no hints with a preflight", field(0, "sec-ch-ua"), "");
+    expect_text("who: a preflight's priority", field(0, "Priority"), "u=4");
     expect_text("who: the request after it has them", field(1, "sec-ch-ua"), "\"Fixture\";v=\"1\"");
     expect_text("who: and its site", field(1, "Sec-Fetch-Site"), "cross-site");
     yonder_fetched_free(g);

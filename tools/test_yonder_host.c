@@ -1602,7 +1602,7 @@ static const char *navigation_block(const yonder_agent_preset_t *p, way_initiato
 // Windows sent a local listener on 2026-10-24, copied from the captured
 // request bytes; the navigation blocks are those requests' lines that
 // libway writes, in the order they came. Safari's are cited, not captured
-// (agent.c says from where).
+// (agent.c says from where), and yonder's own language is the same list.
 static void agent_identity_cases(void)
 {
     const yonder_agent_preset_t *chrome = preset_named("Chrome on Windows");
@@ -1623,17 +1623,39 @@ static void agent_identity_cases(void)
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0");
     expect("identity: Firefox sends no client hints", firefox->identity.hints == NULL, NULL);
     expect_text("identity: Firefox's language, captured", firefox->identity.language, "en-US,en;q=0.9");
+    // Firefox's Priority for each destination it was asked for: capture-19
+    // and -27 (navigations), -20 (style), -21 (script), -22 (image), -23 to
+    // -26 (fetch, the cross-site fetch, the preflight and its PUT). No font
+    // was asked for, so a font goes without.
+    static const char *const firefox_rows[WAY_DESTS] = {
+        [WAY_DEST_DOCUMENT] = "u=0, i", [WAY_DEST_STYLE] = "u=2", [WAY_DEST_SCRIPT] = "u=2",
+        [WAY_DEST_IMAGE] = "u=5, i", [WAY_DEST_EMPTY] = "u=4",
+    };
+    for (int d = 0; d < WAY_DESTS; d++) {
+        const char *got = firefox->identity.priority[d], *want = firefox_rows[d];
+        char name[96];
+        snprintf(name, sizeof(name), "identity: Firefox's Priority for destination %d, captured", d);
+        expect(name, (got == NULL && want == NULL) || (got != NULL && want != NULL && strcmp(got, want) == 0),
+               got != NULL ? got : "(none)");
+    }
     expect("identity: Safari sends no client hints", safari->identity.hints == NULL, NULL);
     expect_text("identity: Safari's language, cited", safari->identity.language, "en-US,en;q=0.9");
-    bool plain = true;
+    const yonder_agent_preset_t *own = yonder_agent_preset(0);
+    expect_text("identity: yonder's own asks for English", own->identity.language, "en-US,en;q=0.9");
+    bool no_priority = true, costumes = true;
     for (size_t i = 0; i < yonder_agent_npresets(); i++) {
         const yonder_agent_preset_t *p = yonder_agent_preset(i);
-        if (p != chrome && p != firefox && p != safari)
-            plain &= p->identity.hints == NULL && p->identity.language == NULL;
+        for (int d = 0; d < WAY_DESTS && p != firefox; d++)
+            no_priority &= p->identity.priority[d] == NULL;
+        if (p != chrome && p != firefox && p != safari && p != own)
+            costumes &= p->identity.hints == NULL && p->identity.language == NULL;
         expect("identity: a preset's agent finds its own lines", yonder_agent_identity(p->agent) == &p->identity,
                p->name);
     }
-    expect("identity: yonder's own, Netscape and Lynx claim nothing beyond their strings", plain, NULL);
+    expect("identity: only Firefox sends a Priority (Chrome sends none over HTTP/1.1)", no_priority, NULL);
+    expect("identity: yonder's own and Safari send no hints",
+           own->identity.hints == NULL && safari->identity.hints == NULL, NULL);
+    expect("identity: Netscape and Lynx claim nothing beyond their strings", costumes, NULL);
     expect("identity: a typed agent claims nothing", yonder_agent_identity("Mozilla/3.0 (compatible)") == NULL &&
                                                          yonder_agent_identity(NULL) == NULL, NULL);
 
@@ -1662,8 +1684,8 @@ static void agent_identity_cases(void)
                 "Sec-Fetch-Dest: document\r\n"
                 "Accept-Language: en-US,en;q=0.9\r\n");
     // Firefox writes the same set in another order (Accept-Language
-    // before the rest, Fetch Metadata Dest-Mode-Site-User): the set is
-    // proved here, the order is libfetch's (BROWSER_DEBTS.md).
+    // before the rest, Fetch Metadata Dest-Mode-Site-User, Priority last):
+    // the set is proved here, the order is libfetch's (BROWSER_DEBTS.md).
     expect_text("identity: Firefox, an address given (the set)",
                 navigation_block(firefox, WAY_BY_BROWSER, NULL, "https://a.test/"),
                 "Upgrade-Insecure-Requests: 1\r\n"
@@ -1671,7 +1693,8 @@ static void agent_identity_cases(void)
                 "Sec-Fetch-Mode: navigate\r\n"
                 "Sec-Fetch-User: ?1\r\n"
                 "Sec-Fetch-Dest: document\r\n"
-                "Accept-Language: en-US,en;q=0.9\r\n");
+                "Accept-Language: en-US,en;q=0.9\r\n"
+                "Priority: u=0, i\r\n");
 
     // THE MARGIN. libway gives a hop's identity WAY_IDENTITY_MAX of
     // libfetch's per-hop cap; the longest preset's longest block (a

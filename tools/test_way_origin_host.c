@@ -1110,7 +1110,8 @@ static const char *line_value(const char *block, const char *name)
 
 static void metadata(void)
 {
-    static const way_identity_t hinted = {"sec-ch-ua: \"B\";v=\"1\"\r\nsec-ch-ua-mobile: ?0\r\n", "en-US,en;q=0.9"};
+    static const way_identity_t hinted = {.hints = "sec-ch-ua: \"B\";v=\"1\"\r\nsec-ch-ua-mobile: ?0\r\n",
+                                          .language = "en-US,en;q=0.9"};
     way_metadata_t m;
 
     // Sec-Fetch-Site's four answers. Same site is the same scheme and host,
@@ -1258,6 +1259,32 @@ static void metadata(void)
     m = request_from("https://a.test/p", WAY_DEST_EMPTY, WAY_MODE_CORS);
     expect_text("identity: none, only the request's lines", hop_lines(&m, NULL, "https://a.test/api", false),
                 "Sec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Dest: empty\r\n");
+
+    // Priority, the preset's per destination: a row's value or none, last
+    // of the lines, on a plain-http hop too; a preflight takes the empty
+    // destination's.
+    static const way_identity_t prioritised = {NULL, "en", {[WAY_DEST_EMPTY] = "u=4", [WAY_DEST_DOCUMENT] = "u=0, i",
+                                                           [WAY_DEST_SCRIPT] = "u=2", [WAY_DEST_STYLE] = "u=3",
+                                                           [WAY_DEST_IMAGE] = "u=5, i"}};
+    static const char *const rows[] = {"u=4", "u=0, i", "u=2", "u=3", "u=5, i", "<absent>"};
+    for (size_t i = 0; i < sizeof(dests) / sizeof(dests[0]); i++) {
+        m = dests[i].dest == WAY_DEST_DOCUMENT ? navigation_from(WAY_BY_PERSON, "https://a.test/p")
+                                               : request_from("https://a.test/p", dests[i].dest, WAY_MODE_NO_CORS);
+        char name[64];
+        snprintf(name, sizeof(name), "priority: %s's row", dests[i].token);
+        expect_text(name, line_value(hop_lines(&m, &prioritised, "https://a.test/x", false), "Priority"),
+                    rows[dests[i].dest]);
+    }
+    m = request_from("https://a.test/p", WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+    expect_text("priority: last, on plain http too", hop_lines(&m, &prioritised, "http://b.test/i.png", false),
+                "Accept-Language: en\r\nPriority: u=5, i\r\n");
+    m = request_from("https://a.test/p", WAY_DEST_SCRIPT, WAY_MODE_NO_CORS);
+    pre = way_metadata_preflight(&m);
+    expect_text("priority: a preflight's is the empty destination's",
+                line_value(hop_lines(&pre, &prioritised, "https://b.test/s.js", false), "Priority"), "u=4");
+    m = request_from("https://a.test/p", WAY_DEST_IMAGE, WAY_MODE_NO_CORS);
+    expect_text("priority: a preset without a table sends none",
+                line_value(hop_lines(&m, &hinted, "https://a.test/i.png", false), "Priority"), "<absent>");
 
     // Too little room: nothing, not part of it.
     m = navigation_from(WAY_BY_BROWSER, "https://a.test/p");

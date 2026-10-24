@@ -136,7 +136,7 @@ purpose; ORIGIN.md carries each argument.
 
 | The standard / browsers | yonder | Why | Recorded |
 |---|---|---|---|
-| A browser's request carries its engine: Chrome and Firefox send `Accept-Encoding: gzip, deflate, br, zstd`, Chrome's navigation `Accept` names JPEG XL, AVIF and signed exchanges, both speak HTTP/2, and each greets a server with its own TLS handshake | An agent preset sends that browser's string, client hints and `Accept-Language` byte for byte, and libway its Fetch Metadata; it claims nothing yonder cannot do: its own `Accept` (the types it decodes), `Accept-Encoding: gzip, identity`, HTTP/1.1, os64's own handshake | A header that claims a decoder yonder lacks is a header that lies, and invites a body it must refuse. A gate that scores the handshake will keep flagging yonder, which is the honest outcome for a browser that is not pretending to be another engine | `agent.c`; WIRE.md § 1 |
+| A browser's request carries its engine: Chrome and Firefox send `Accept-Encoding: gzip, deflate, br, zstd`, Chrome's navigation `Accept` names JPEG XL, AVIF and signed exchanges, both speak HTTP/2, and each greets a server with its own TLS handshake | An agent preset sends that browser's string, client hints, `Accept-Language` and `Priority` byte for byte, and libway its Fetch Metadata; it claims nothing yonder cannot do: its own `Accept` (the types it decodes), `Accept-Encoding: gzip, identity`, HTTP/1.1, os64's own handshake | A header that claims a decoder yonder lacks is a header that lies, and invites a body it must refuse. A gate that scores the handshake will keep flagging yonder, which is the honest outcome for a browser that is not pretending to be another engine | `agent.c`; WIRE.md § 1 and § 1's as built |
 
 ---
 

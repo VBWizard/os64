@@ -721,7 +721,7 @@ static os64_font_status_t probe_fonts(void *ctx, const flow_family_list_t *famil
 static bool probe_modern_off;  /* the next probe_page's window: the modern switch off */
 /* The window's agent's preset lines: not NULL, so a job handed none is told
  * from one handed the window's. */
-static const way_identity_t s_window_identity={"sec-ch-ua: \"Window\";v=\"1\"\r\n","en"};
+static const way_identity_t s_window_identity={.hints="sec-ch-ua: \"Window\";v=\"1\"\r\n",.language="en"};
 static void probe_page(const char *html, bool scripts) {
     os64_memset(&g,0,sizeof(g));
     g.scripts_on=scripts; g.way.agent=YONDER_AGENT; g.way.identity=&s_window_identity; g.settle_due=YONDER_NEVER;

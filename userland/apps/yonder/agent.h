@@ -9,9 +9,9 @@
 //
 // A PRESET IS A WHOLE IDENTITY: the string, and the lines that browser
 // sends beside it on every request (its client hints, its
-// Accept-Language), because a site that is told "Chrome" and hears none of
-// Chrome's other headers is right not to believe it. A typed agent claims
-// nothing beyond itself. What describes the request rather than the
+// Accept-Language, its Priority for each kind of request), because a site
+// that is told "Chrome" and hears none of Chrome's other headers is right
+// not to believe it. A typed agent claims nothing beyond itself. What describes the request rather than the
 // browser (Fetch Metadata) is libway's, and goes with every agent.
 
 #include <stdbool.h>

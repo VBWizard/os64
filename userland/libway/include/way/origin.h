@@ -265,11 +265,12 @@ bool way_referrer_for(const way_request_t *r, const char *referrer, const char *
 // Those are computed here from facts the request holds. Other lines
 // describe the BROWSER, the same on every request it makes: the client
 // hints and the Accept-Language a face's agent preset carries
-// (way_identity_t). One call writes both kinds, per hop, because most of
-// them depend on where the hop goes: Fetch Metadata goes only to a
-// potentially trustworthy URL, and so do the client hints, which are a
-// secure-context feature; Upgrade-Insecure-Requests and Accept-Language go
-// everywhere.
+// (way_identity_t), and the Priority it gives each kind of request, which
+// is the browser's habit about the request. One call writes all of them,
+// per hop, because most depend on where the hop goes: Fetch Metadata goes
+// only to a potentially trustworthy URL, and so do the client hints, which
+// are a secure-context feature; Upgrade-Insecure-Requests,
+// Accept-Language and Priority go everywhere.
 
 // Sec-Fetch-Dest: what the response will be used as.
 typedef enum {
@@ -280,6 +281,8 @@ typedef enum {
     WAY_DEST_IMAGE,
     WAY_DEST_FONT,
 } way_dest_t;
+// How many destinations there are: what a table indexed by one holds.
+#define WAY_DESTS (WAY_DEST_FONT + 1)
 
 // Sec-Fetch-Site: the request's origin against every URL of its URL list
 // so far, the furthest of them; NONE for a navigation the browser's own
@@ -341,6 +344,11 @@ typedef struct {
     // preflight, as Chrome sends them.
     const char *hints;
     const char *language;   // Accept-Language's value, on every request
+    // Priority's value (RFC 9218) for a request of each destination, NULL
+    // for none: Firefox sends one on every request, by what it is for;
+    // Chrome sends none over HTTP/1.1. It says how urgent the request is,
+    // not what the browser can do, so a preset may say it truthfully.
+    const char *priority[WAY_DESTS];
 } way_identity_t;
 
 // The most a hop's identity lines may take: Chrome's are about 300 bytes,
@@ -351,9 +359,10 @@ typedef struct {
 
 // A hop to `to`'s lines, in this order: the client hints,
 // Upgrade-Insecure-Requests (a document's, on every hop), Sec-Fetch-Site,
-// -Mode, -User and -Dest (a trustworthy `to` only), and Accept-Language
+// -Mode, -User and -Dest (a trustworthy `to` only), Accept-Language
 // unless `language_given` (the request already holds one a page set:
-// Fetch appends the browser's only when there is none). `id` may be NULL.
+// Fetch appends the browser's only when there is none), and the preset's
+// Priority for the request's destination, on every hop. `id` may be NULL.
 // False when they do not fit in `cap`, with `out` empty.
 bool way_identity_lines(const way_identity_t *id, const way_metadata_t *m, const way_origin_t *to,
                         bool language_given, char *out, size_t cap);

@@ -96,10 +96,11 @@ remaining gates before recommending scripts for ordinary browsing.
   carries the lines that browser sends on every request, byte for byte
   as it sends them: Chrome's client hints (`sec-ch-ua`,
   `sec-ch-ua-mobile`, `sec-ch-ua-platform`, to a potentially trustworthy
-  address only) and `Accept-Language` for Chrome, Firefox and Safari.
-  A typed agent, yonder's own, Netscape and Lynx claim nothing beyond
-  their strings, and an agent saved before its preset's version moved
-  is a typed one now. Every request, whatever the agent, also says what
+  address only), Firefox's `Priority` for each kind of request, and
+  `Accept-Language` for Chrome, Firefox and Safari. yonder's own asks for
+  English too (`en-US,en;q=0.9`), as a real browser does. A typed agent,
+  Netscape and Lynx claim nothing beyond their strings, and an agent saved
+  before its preset's version moved is a typed one now. Every request, whatever the agent, also says what
   it is for (libway's Fetch Metadata, `way/origin.h`).
 - **Apply** changes it for this window, from the next fetch on; **Save as
   default** writes `agent =` to `yonder.conf` at the top of the

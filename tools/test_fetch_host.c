@@ -1329,7 +1329,7 @@ static void case_cookies(void)
             "sec-ch-ua: \"B\";v=\"1\"\r\nsec-ch-ua-mobile: ?0\r\nsec-ch-ua-platform: \"Windows\"\r\n"
             "Upgrade-Insecure-Requests: 1\r\nSec-Fetch-Site: none\r\nSec-Fetch-Mode: navigate\r\n"
             "Sec-Fetch-User: ?1\r\nSec-Fetch-Dest: document\r\nAccept-Language: en-US,en;q=0.9\r\n"
-            "Cookie: c=1\r\nReferer: http://a.test/\r\n";
+            "Priority: u=0, i\r\nCookie: c=1\r\nReferer: http://a.test/\r\n";
         reset();
         peer_add("a.test", 80, reply_len("200 OK", "", page));
         cookie_test_t t = { .output = who };

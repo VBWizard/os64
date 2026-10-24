@@ -1303,6 +1303,11 @@ bool way_identity_lines(const way_identity_t *id, const way_metadata_t *m, const
     if (ok && !language_given && id != NULL && id->language != NULL)
         ok = lines_add(out, cap, &at, "Accept-Language: ", id->language) &&
              lines_add(out, cap, &at, "\r\n", NULL);
+    // A preflight's destination is empty (way_metadata_preflight), and so
+    // is its Priority's row, as Firefox sends it.
+    if (ok && id != NULL && m->dest < WAY_DESTS && id->priority[m->dest] != NULL)
+        ok = lines_add(out, cap, &at, "Priority: ", id->priority[m->dest]) &&
+             lines_add(out, cap, &at, "\r\n", NULL);
     if (!ok)
         out[0] = '\0';
     return ok;

@@ -397,11 +397,11 @@ For each request, including the first:
 `headers_for` writes at most one line of each name it may write, as
 `Name: value\r\n`, with a NUL within the supplied capacity
 (`OS64_FETCH_HOP_FIELDS_MAX`, 1536 bytes): `Cookie` and `Referer`, and the
-lines that say who is asking, which change with where a hop goes
+lines that say who is asking, most of which change with where a hop goes
 (`Accept-Language`, `Sec-CH-UA`, `Sec-CH-UA-Mobile`, `Sec-CH-UA-Platform`,
 `Sec-Fetch-Dest`, `Sec-Fetch-Mode`, `Sec-Fetch-Site`, `Sec-Fetch-User`,
-`Upgrade-Insecure-Requests`). They go after the static fields, in the order
-written. No other names are accepted. None is a credential, which keeps the
+`Upgrade-Insecure-Requests`, `Priority`). They go after the static fields,
+in the order written. No other names are accepted. None is a credential, which keeps the
 callback from bypassing the static Authorization/Proxy-Authorization rules
 or overriding framing.
 An empty output means no fields. Return false if composition fails or
