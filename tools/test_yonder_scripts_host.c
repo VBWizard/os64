@@ -4951,9 +4951,9 @@ static uint32_t *stand_in_shot(void) {
     yonder_scratch_free(g.paint_scratch); g.paint_scratch=NULL;
     return screen.surf.pixels;
 }
-/* THE STAND-INS' OWN PAINTING (yonder.c's pane_stand_in and
- * glass_stand_in), which the yonder host's recorder stands in for: a
- * canvas has no paper, and a frame keeps its panel. */
+/* THE STAND-INS' OWN PAINTING (yonder.c's pane_stand_in, stand_in_label,
+ * glass_stand_in), which the yonder host's recorder stands in for: that a
+ * canvas has no paper, and what laying labels out costs. */
 static void stand_in_paint_cases(void)
 {
     /* A full-viewport canvas over the page, as confetti and snow are: the
@@ -4977,6 +4977,25 @@ static void stand_in_paint_cases(void)
     probe_page("<!doctype html><iframe id=f src=/poll></iframe>",true);
     px=stand_in_shot();
     check((px[(size_t)100*800+150]&0xffffffu)==0xf0f0f0u,"stand-in: a frame keeps its panel");
+    os64_free(px); probe_drop();
+
+    /* A canvas wholly out of view, and one whose top strip is above the
+     * view, lay no label out. */
+    probe_page("<!doctype html><style>body{margin:0}#off{position:absolute;top:3000px}"
+        "#up{position:absolute;top:-200px;height:400px}</style><canvas id=off></canvas><canvas id=up></canvas>",true);
+    uint64_t before=s_stand_in_labels;
+    px=stand_in_shot();
+    check(s_stand_in_labels==before,"stand-in: a canvas out of view, or with its top out of view, makes no label");
+    os64_free(px); probe_drop();
+
+    /* Two thousand tiny canvases in view lay their label out once a paint. */
+    static char many[2000*40+128];
+    size_t at=(size_t)snprintf(many,sizeof(many),"<!doctype html><style>body{margin:0}</style>");
+    for(int i=0;i<2000;i++) at+=(size_t)snprintf(many+at,sizeof(many)-at,"<canvas width=2 height=2></canvas>");
+    probe_page(many,true);
+    before=s_stand_in_labels;
+    px=stand_in_shot();
+    check(s_stand_in_labels-before==1,"stand-in: two thousand canvases in view cost one label a paint");
     os64_free(px); probe_drop();
 }
 

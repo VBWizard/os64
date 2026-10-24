@@ -10525,10 +10525,12 @@ static void glass_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os6
 // pale panel, or that a canvas cannot be drawn ("Canvas: not supported")
 // inside a 1px outline with NO panel, since a canvas is transparent until
 // drawn and full-viewport ones (confetti, snow, a cursor's trail) lie over
-// the page, which must show through. The label's run is made for each box
-// this paint draws and let go after it, so no tree's replacement can leave
-// one behind. It is made once for every target (pane_stand_in), so all draw
-// it or none does; NULL, the panel or the outline alone.
+// the page, which must show through. The label's run is made within one
+// paint and let go at its end, so no tree's replacement can leave one
+// behind: a frame's for each frame drawn, the canvas one, being the same
+// text, once a paint (GlassPane.canvas_label), and none for a box whose top
+// strip is out of view. It is made once for every target, so all draw it
+// or none does; NULL, the panel or the outline alone.
 #define STAND_IN_LABEL_PX 13
 #define STAND_IN_LABEL_MAX 512
 typedef struct {
@@ -10536,8 +10538,12 @@ typedef struct {
     int32_t pad, ascent;        // pixels
 } StandInLabel;
 
+// The labels stand_in_label has laid out, for the bound cases.
+static uint64_t s_stand_in_labels;
+
 static StandInLabel stand_in_label(const flow_box_t *b)
 {
+    s_stand_in_labels++;
     StandInLabel fl = {NULL, 0, 0};
     const os64_page_link_t *l = os64_page_link(flow_model(g.page.tree), b->link);
     char text[STAND_IN_LABEL_MAX];
@@ -10730,6 +10736,10 @@ typedef struct {
     GlassThrough *open[GLASS_THROUGHS];
     int32_t depth;
     GlassClip *clip;
+    // The canvas stand-in's label, the same text for every canvas, laid
+    // out at the first this paint draws and let go when the paint ends.
+    StandInLabel canvas_label;
+    bool canvas_label_made;
 } GlassPane;
 
 static void pane_fill(void *ctx, os64_gui_rect_t r, uint32_t colour)
@@ -10833,11 +10843,27 @@ static void pane_stand_in(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os6
     if (!os64_rect_intersect(c, clip, &room) || room.w <= 0 || room.h <= 0)
         return;
     bool canvas = b->node != NULL && b->node->tag == OS64_HTML_TAG_CANVAS;
-    StandInLabel fl = stand_in_label(b);
+    // The label is drawn in the box's top strip, two of its pixel sizes
+    // tall: a box whose strip is out of view needs none laid out.
+    int32_t strip = 2 * (int32_t)((int64_t)STAND_IN_LABEL_PX * (g.zoom != 0 ? g.zoom : 1000) / 1000);
+    os64_gui_rect_t top = {c.x, c.y, c.w, strip < c.h ? strip : c.h}, seen;
+    StandInLabel own = {NULL, 0, 0};
+    const StandInLabel *fl = &own;
+    if (os64_rect_intersect(top, clip, &seen) && seen.w > 0 && seen.h > 0) {
+        if (!canvas) {
+            own = stand_in_label(b);
+        } else {
+            if (!gp->canvas_label_made) {
+                gp->canvas_label = stand_in_label(b);
+                gp->canvas_label_made = true;
+            }
+            fl = &gp->canvas_label;
+        }
+    }
     for (int32_t k = 0; k < gp->n; k++)
-        glass_stand_in(gp->now[k], c, clip, ink, paper, !canvas, &fl);
-    if (fl.run != NULL)
-        os64_text_run_release(fl.run);
+        glass_stand_in(gp->now[k], c, clip, ink, paper, !canvas, fl);
+    if (own.run != NULL)
+        os64_text_run_release(own.run);
 }
 
 static void through_free(GlassThrough *t)
@@ -11087,7 +11113,7 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         os64_draw_fill_rect(&ctx->surf, part, 0xff000000u | (s_dark ? kDark.paper : PAGE_PAPER));
         return;
     }
-    GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0, NULL};
+    GlassPane pane = {{&gl, NULL}, 1, {NULL}, 0, NULL, {NULL, 0, 0}, false};
     yonder_verbs_t v = {&pane,        pane_fill,     timed_text,       timed_image,
                         pane_control, timed_backdrop, timed_group_open, timed_group_close,
                         timed_mask,   timed_pixels,  pane_stand_in,   timed_through_open,
@@ -11108,6 +11134,8 @@ static void view_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx, const os64_ui_
         g.paint_scratch = yonder_scratch_new();
     yonder_paint(g.page.tree, view, scroll_now(), PAGE_PAPER, s_dark ? &kDark : NULL, g.paint_cache,
                  g.paint_scratch, &v);
+    if (pane.canvas_label.run != NULL)
+        os64_text_run_release(pane.canvas_label.run);
     yonder_paint_stage = NULL;
     box_bars(&gl, view);
     yonder_scratch_paint_end(g.paint_scratch);
