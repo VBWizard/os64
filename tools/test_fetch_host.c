@@ -183,12 +183,19 @@ static size_t chunk_of(size_t asked)
     return asked;
 }
 
+// A task's handle table, shrunk: with this many connections open a dial is
+// refused as the kernel refuses one with no handle to give (0: no ceiling).
+static int open_limit;
+
 int64_t os64_dial(const char *dialstring)
 {
     dials++;
     snprintf(last_dial, sizeof(last_dial), "%s", dialstring);
     char host[256]; unsigned port;
     if (sscanf(dialstring, "tcp!%255[^!]!%u", host, &port) != 2) return -1;
+    int open = 0;
+    for (int h = 0; h < NCONNS; h++) open += conns[h].open;
+    if (open_limit && open >= open_limit) return OS64_NET_ERR_NO_RESOURCES;
     for (size_t i = 0; i < npeers; i++) {
         if (strcmp(peers[i].host, host) == 0 && peers[i].port == port) {
             if (peers[i].refuse) return -3;
@@ -429,7 +436,7 @@ static void reset(void)
     memset(history, 0, sizeof(history));
     dials = closes = tls_creates = tls_frees = trust_loads = trust_frees = 0;
     now_ms = 0; chunk_mode = 0; fail_next_malloc = false;
-    write_limit = write_stop = 0; upload_cancel = false;
+    write_limit = write_stop = 0; upload_cancel = false; open_limit = 0;
 }
 
 // Read the whole body into `out`, returning the byte count; the fetch's
@@ -2208,8 +2215,8 @@ static void case_keepalive_caps(void)
     fetch_all("http://cap.test/", NULL, out, sizeof(out), NULL, 0);
     CHECK(requests_on(FETCH_POOL_PER_KEY) == 2 && requests_on(1) == 1);
 
-    // THIRTY-TWO IN ALL: one connection to each of thirty-three hosts, and
-    // the first kept is the one let go.
+    // THE WHOLE POOL'S CAP: one connection to each of one host more than it
+    // holds, and the first kept is the one let go.
     reset();
     static char names[FETCH_POOL_TOTAL + 1][32];
     for (int i = 0; i <= FETCH_POOL_TOTAL; i++) {
@@ -2226,6 +2233,35 @@ static void case_keepalive_caps(void)
     fetch_all("http://h1.test/", NULL, out, sizeof(out), NULL, 0);
     fetch_all("http://h0.test/", NULL, out, sizeof(out), NULL, 0);
     CHECK(dials == FETCH_POOL_TOTAL + 2 && requests_on(1) == 2);
+
+    // OUT OF HANDLES: the pool at its cap and a task with no handle left
+    // for another connection. The dial is refused, a kept connection is let
+    // go — the least recent — and the dial tried once more, which succeeds.
+    reset();
+    for (int i = 0; i <= FETCH_POOL_TOTAL; i++)
+        peer_answers(names[i], 80, many);
+    for (int i = 0; i < FETCH_POOL_TOTAL; i++) {
+        char url[64];
+        snprintf(url, sizeof(url), "http://%s/", names[i]);
+        now_ms++;
+        fetch_all(url, NULL, out, sizeof(out), NULL, 0);
+    }
+    CHECK(fetch_pool_idle() == FETCH_POOL_TOTAL && closes == 0);
+    open_limit = FETCH_POOL_TOTAL;
+    char url[64], why[256];
+    snprintf(url, sizeof(url), "http://%s/", names[FETCH_POOL_TOTAL]);
+    CHECK(fetch_all(url, NULL, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_OK && !strcmp(out, "first"));
+    // The least recent (the first host's) went: asking it again dials.
+    CHECK(dials == FETCH_POOL_TOTAL + 2 && closes == 1 && fetch_pool_idle() == FETCH_POOL_TOTAL);
+    open_limit = 0;
+    fetch_all("http://h0.test/", NULL, out, sizeof(out), NULL, 0);
+    CHECK(dials == FETCH_POOL_TOTAL + 3);
+    // ...and with nothing kept to let go, the refusal is the fetch's.
+    fetch_pool_drain();
+    open_limit = 1;
+    conns[1].open = true;              // a handle the program holds itself
+    CHECK(fetch_all(url, NULL, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_DIAL_FAILED);
+    conns[1].open = false;
 }
 
 static void case_keepalive_retry(void)

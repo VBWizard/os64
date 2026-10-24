@@ -12,8 +12,11 @@
 // open (WIRE.md § 2): a fetch takes a kept connection to its peer before it
 // dials, and gives its own back at close when HTTP says it may be kept, one
 // fetch at a time on each, under one lock held only to take or put
-// (pool.h). It is invisible but for time, and for one sentence when a
-// request on a kept connection had to go again (os64_fetch_reason).
+// (pool.h). A caller sees it in time, in one sentence when a request on a
+// kept connection had to go again (os64_fetch_reason), and in its handle
+// table: up to a quarter of it stays open after its fetches close, for as
+// long as their connections are kept, and a dial refused for want of
+// handles lets one of them go and tries again.
 //
 // POLICY ABOUT THE WIRE IS THE LIBRARY'S; POLICY ABOUT THIS MACHINE IS THE
 // CALLER'S. The library knows what an HTTP reply means, where a Location

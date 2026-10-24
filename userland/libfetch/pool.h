@@ -5,13 +5,15 @@
 // only fetches, and a fetch takes a connection here before it dials and
 // gives it back at close when connection_reusable says it may.
 //
-// ONE LOCK, HELD ONLY TO TAKE OR PUT. A connection belongs to exactly one
-// fetch between its take and its put; the pool never reads or writes one it
-// does not hold, and closes what it evicts after the lock is let go.
+// ONE LOCK, HELD ONLY TO TAKE, PUT OR LET GO. A connection belongs to
+// exactly one fetch between its take and its put; the pool never reads or
+// writes one it does not hold, and closes what it evicts after the lock is
+// let go.
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
+#include "os64/file.h"
 #include "fetch/http.h"
 #include "fetch/transport.h"
 #include "tls/tls.h"
@@ -36,15 +38,23 @@ typedef struct {
 
 // THE NUMBERS. Six idle connections for one key is Chrome's per-host
 // figure, and more than that to one server is a burst a server reads as
-// abuse; thirty-two in all bounds the handles and the TLS state a browser
-// holds idle (each TLS client keeps its record buffers). The least recently
-// used goes first when either is full. Sixty seconds idle and a connection
+// abuse. Sixteen in all is a quarter of a task's handle table
+// (OS64_TASK_HANDLES): every kept connection holds a handle, and the
+// program holds the rest — its standard three, the connections its fetches
+// are using (a browser runs a dozen at once), its files, its windows — so
+// the pool may never be what runs a task out of handles. When a dial is
+// refused for want of resources all the same, a kept connection is closed
+// and the dial tried once more (fetch.c's dial). The least recently used
+// goes first when either cap is full. Sixty seconds idle and a connection
 // is closed when next seen: most servers close theirs sooner, which the
 // probe at take and the retry rule (fetch.c) absorb, and one that keeps it
 // longer is not kept waiting on.
 #define FETCH_POOL_PER_KEY 6
-#define FETCH_POOL_TOTAL   32
+#define FETCH_POOL_TOTAL   16
 #define FETCH_POOL_IDLE_MS 60000u
+_Static_assert(FETCH_POOL_TOTAL <= OS64_TASK_HANDLES / 4,
+               "kept connections may hold at most a quarter of a task's handles");
+_Static_assert(FETCH_POOL_PER_KEY <= FETCH_POOL_TOTAL, "a key's cap is within the whole's");
 
 // A kept connection for `key`, the most recently kept first: true with `*io`
 // the caller's to own. Connections past their idle time are closed on the
@@ -61,6 +71,11 @@ void fetch_pool_put(const fetch_pool_key_t *key, const fetch_transport_t *io);
 // Close every kept connection. For a program that wants none left behind,
 // and for the host harness, which checks for leaks at exit.
 void fetch_pool_drain(void);
+
+// Close the least recently used kept connection, whatever its key: true
+// when there was one. For a dial refused for want of resources (a handle,
+// a port, memory), which a kept connection may be holding.
+bool fetch_pool_evict_one(void);
 
 // How many connections are kept now.
 size_t fetch_pool_idle(void);

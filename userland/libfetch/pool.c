@@ -147,6 +147,21 @@ void fetch_pool_drain(void)
     close_all(&out);
 }
 
+bool fetch_pool_evict_one(void)
+{
+    leaving_t out = {0};
+    kept_t *oldest = NULL;
+    os64_lock_acquire(&s_lock);
+    for (size_t i = 0; i < FETCH_POOL_TOTAL; i++)
+        if (s_kept[i].used && (oldest == NULL || s_kept[i].kept_at < oldest->kept_at))
+            oldest = &s_kept[i];
+    if (oldest != NULL)
+        leave(&out, oldest);
+    os64_lock_release(&s_lock);
+    close_all(&out);
+    return oldest != NULL;
+}
+
 size_t fetch_pool_idle(void)
 {
     size_t n = 0;

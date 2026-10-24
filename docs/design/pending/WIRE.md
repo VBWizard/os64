@@ -280,6 +280,12 @@ there too; fetch.c takes before it dials and puts back at close (and at a
 redirect it follows itself). Where the build departs from the brief, or
 says more than it did:
 
+- **Sixteen kept in all, not thirty-two.** Every kept connection holds one
+  of a task's 64 handles (`OS64_TASK_HANDLES`), and thirty-two kept beside
+  a dozen in use was most of a browser's table before it opened a file
+  (the cold read's finding). The pool keeps at most a quarter of the table,
+  asserted at build; and a dial the kernel refuses for want of resources
+  lets the least recently kept connection go and dials once more.
 - **One clause more: the request went whole.** A server that answers
   before an upload is complete (a 401 or a 413 to a POST) has stopped
   reading a body that never ends, and its connection is not kept

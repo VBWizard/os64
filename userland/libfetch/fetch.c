@@ -928,6 +928,11 @@ static os64_fetch_status_t dial(os64_fetch_t *f, bool encrypted, const char *pee
     f->detail.tls_fallback = false;
     for (;;) {
         int64_t conn = os64_dial(dialstring);
+        // A dial refused for want of resources (a handle above all) may be
+        // refused for the pool's sake: a kept connection holds one. The
+        // least recently used is let go and the dial tried once more.
+        if (conn == OS64_NET_ERR_NO_RESOURCES && !cancelled(f) && fetch_pool_evict_one())
+            conn = os64_dial(dialstring);
         if (cancelled(f)) {
             if (conn >= 0) os64_close((int32_t)conn);
             return OS64_FETCH_INTERRUPTED;
