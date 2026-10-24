@@ -1,9 +1,15 @@
-// Boxes placed above their origin, each dump worked from the standard by
-// hand (the font facts are test_libflow_layout.inc's). A box laid out from
-// 0 and moved into place after — an inline-block's content, an absolute
-// box — puts a negative top margin above its origin, and the page's first
-// box can stand above the canvas. A negative y is a place like any other
-// (CSS 2.1 § 10.6.3, § 8.3.1): the blocks round it keep their heights.
+// Two rules a search page's carousel broke at once, each dump worked from
+// the standard by hand (the font facts are test_libflow_layout.inc's).
+//
+// ORIGIN: a box laid out from 0 and moved into place after — an
+// inline-block's content, an absolute box — puts a negative top margin
+// above its origin, and the page's first box can stand above the canvas.
+// A negative y is a place like any other (CSS 2.1 § 10.6.3, § 8.3.1): the
+// blocks round it keep their heights.
+//
+// NOWRAP: the break opportunities either side of an inline-block are its
+// parent's `white-space` to give (CSS Text 3 § 5.1, CSS 2.1 § 16.6), not
+// the inline-block's own, which governs only its content.
 
 static void origin_cases(void)
 {
@@ -75,4 +81,135 @@ static void origin_cases(void)
         "    block div 0 0 800 20\n"
         "    block div 0 10 800 0\n"
         "    block div 0 15 800 20\n");
+}
+
+static void nowrap_atom_cases(void)
+{
+    // Three 100px inline-blocks in a nowrap box 250 wide: one line, the
+    // third past its end, whatever white-space each sets inside.
+    cascade_layout_case("inline-blocks in a nowrap box stay on one line",
+        "<!doctype html><style>body{margin:0} .s{white-space:nowrap}"
+        " .s .i{display:inline-block;vertical-align:top;white-space:normal;width:100px;"
+        "height:50px}</style><div style='width:250px'><div class=s><div class=i></div>"
+        "<div class=i></div><div class=i></div></div></div><div style='height:10px'></div>",
+        800,
+        "page 800 60\n"
+        "block html 0 0 800 60\n"
+        "  block body 0 0 800 60\n"
+        "    block div 0 0 250 50\n"
+        "      block div 0 0 250 50\n"
+        "        line 0 0 250 50 base 14\n"
+        "          atomic div 0 0 100 50\n"
+        "            block div 0 0 100 50\n"
+        "          atomic div 100 0 100 50\n"
+        "            block div 100 0 100 50\n"
+        "          atomic div 200 0 100 50\n"
+        "            block div 200 0 100 50\n"
+        "    block div 0 50 800 10\n");
+
+    // The run is unbreakable, so its min-content width is all of it,
+    // 3 x 40 = 120, and a float shrinking to fit in 100 is 120 (§ 10.3.5).
+    // An empty inline-block's baseline is its bottom margin edge: 20 above
+    // the baseline, nothing below, and the strut 14 and 6, so the line is
+    // 26, its baseline 20 down.
+    cascade_layout_case("a nowrap run of inline-blocks is a float's min-content width",
+        "<!doctype html><style>body{margin:0} .f{float:left} .s{white-space:nowrap}"
+        " .i{display:inline-block;white-space:normal;width:40px;height:20px}</style>"
+        "<div style='width:100px'><div class=f><div class=s><span class=i></span>"
+        "<span class=i></span><span class=i></span></div></div></div>", 800,
+        "page 800 26\n"
+        "block html 0 0 800 26\n"
+        "  block body 0 0 800 0\n"
+        "    block div 0 0 100 0\n"
+        "      line 0 0 100 0 base 14\n"
+        "      block div 0 0 120 26 float-left\n"
+        "        block div 0 0 120 26\n"
+        "          line 0 0 120 26 base 20\n"
+        "            atomic span 0 0 40 20\n"
+        "              block span 0 0 40 20\n"
+        "            atomic span 40 0 40 20\n"
+        "              block span 40 0 40 20\n"
+        "            atomic span 80 0 40 20\n"
+        "              block span 80 0 40 20\n");
+
+    // The same in a table 50 wide: the first cell's min-content is its
+    // unbroken 80, the second's one inline-block, 40 (it may break between
+    // them), so the table is 120 (§ 17.5.2.2). The second cell's two lines
+    // are 52, the row's height; the first's one line of 26 is in its
+    // middle, at 13.
+    cascade_layout_case("a nowrap run of inline-blocks is a table cell's min-content width",
+        "<!doctype html><style>body{margin:0} table{border-spacing:0} td{padding:0}"
+        " .s{white-space:nowrap} .i{display:inline-block;white-space:normal;width:40px;"
+        "height:20px}</style><table style='width:50px'><tr><td><div class=s>"
+        "<span class=i></span><span class=i></span></div></td><td><span class=i></span>"
+        "<span class=i></span></td></tr></table>", 800,
+        "page 800 52\n"
+        "block html 0 0 800 52\n"
+        "  block body 0 0 800 52\n"
+        "    table table 0 0 120 52\n"
+        "      row-group tbody 0 0 120 52\n"
+        "        row tr 0 0 120 52\n"
+        "          cell td 0 0 80 52\n"
+        "            block div 0 13 80 26\n"
+        "              line 0 13 80 26 base 20\n"
+        "                atomic span 0 13 40 20\n"
+        "                  block span 0 13 40 20\n"
+        "                atomic span 40 13 40 20\n"
+        "                  block span 40 13 40 20\n"
+        "          cell td 80 0 40 52\n"
+        "            line 80 0 40 26 base 20\n"
+        "              atomic span 80 0 40 20\n"
+        "                block span 80 0 40 20\n"
+        "            line 80 26 40 26 base 20\n"
+        "              atomic span 80 26 40 20\n"
+        "                block span 80 26 40 20\n");
+
+    // Both rules at once, in a search page's shape: a strip of five 100px
+    // slides, nowrap, in a scrolling viewport inside a grid area two
+    // 40px rows tall, all inside a 300px inline-block pulled up 32px.
+    // The inline-block is top-aligned on the line at 50, so its border
+    // edge is at 18. The grid area is 18..98; the viewport's -4 and -8
+    // stay inside the grid item, so it is 14..86 (4 + 60 + 8), its strip
+    // 18..78 on one line, 200px of it scrolled out of view. The block
+    // after the grid starts at 98, not on top of it; the inline-block is
+    // 80 + 30 = 110, its margin box 78 below the line's top, the line's
+    // height.
+    cascade_layout_case("a strip of slides in a grid area, in a pulled-up inline-block",
+        "<!doctype html><style>body{margin:0}"
+        " .w{display:inline-block;vertical-align:top;width:300px;margin-top:-32px}"
+        " .g{display:grid;grid-template-columns:minmax(0,1fr);grid-auto-rows:40px}"
+        " .card{grid-row:span 2;position:relative}"
+        " .vp{overflow:hidden;margin-top:-4px;margin-bottom:-8px;padding-top:4px;"
+        "padding-bottom:8px} .bar{white-space:nowrap}"
+        " .sl{display:inline-block;vertical-align:top;white-space:normal;width:100px;"
+        "height:60px} .res{height:30px}</style>"
+        "<div style='height:50px'></div><div class=w><div><div class=g><div class=card>"
+        "<div class=vp><div class=bar><div class=sl></div><div class=sl></div>"
+        "<div class=sl></div><div class=sl></div><div class=sl></div></div></div></div>"
+        "</div></div><div class=res></div></div>", 800,
+        "page 800 128\n"
+        "block html 0 0 800 128\n"
+        "  block body 0 0 800 128\n"
+        "    block div 0 0 800 50\n"
+        "    block anon 0 50 800 78\n"
+        "      line 0 50 800 78 base 14\n"
+        "        atomic div 0 18 300 110\n"
+        "          block div 0 18 300 110\n"
+        "            block div 0 18 300 80\n"
+        "              block div 0 18 300 80\n"
+        "                block div 0 18 300 80 positioned\n"
+        "                  block div 0 14 300 72 scroller 0 range 200 0\n"
+        "                    block div 0 18 300 60 clip 0 14 300 72\n"
+        "                      line 0 18 300 60 base 14 clip 0 14 300 72\n"
+        "                        atomic div 0 18 100 60 clip 0 14 300 72\n"
+        "                          block div 0 18 100 60 clip 0 14 300 72\n"
+        "                        atomic div 100 18 100 60 clip 0 14 300 72\n"
+        "                          block div 100 18 100 60 clip 0 14 300 72\n"
+        "                        atomic div 200 18 100 60 clip 0 14 300 72\n"
+        "                          block div 200 18 100 60 clip 0 14 300 72\n"
+        "                        atomic div 300 18 100 60 clip 0 14 300 72\n"
+        "                          block div 300 18 100 60 clip 0 14 300 72\n"
+        "                        atomic div 400 18 100 60 clip 0 14 300 72\n"
+        "                          block div 400 18 100 60 clip 0 14 300 72\n"
+        "            block div 0 98 300 30\n");
 }

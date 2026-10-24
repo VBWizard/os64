@@ -1493,6 +1493,7 @@ int main(int argc, char **argv)
     style_cases();
     cascade_cases();
     origin_cases();
+    nowrap_atom_cases();
     batch_a_cases();
     boxes_cases();
     layout_cases();

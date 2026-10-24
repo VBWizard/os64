@@ -656,6 +656,11 @@ struct FItem {
     FInline *inl;                   // OPEN, CLOSE
     FBox *content;                  // ATOMIC: an inline-block's own block; NULL when replaced
     bool replaced;                  // ATOMIC: a replaced element's (flow_box_t.replaced)
+    // ATOMIC: its parent element's style, or NULL where it has none. Its
+    // `white-space` decides the break opportunities either side of the
+    // atom, not the atom's own, which governs only what is inside it
+    // (CSS Text 3 § 5.1).
+    const flow_style_t *around;
     FBox *absolute;                 // PLACEHOLDER: the out-of-flow box it holds the place of
     FBox *floated;                  // FLOAT: the float written here
     int32_t link, control;          // ATOMIC: libpage's indexes, or -1

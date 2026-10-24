@@ -1287,7 +1287,16 @@ static void segments(L *l, FBox *ifc, int64_t cw, Segs *s)
             g->atom = r;
             g->w = g->ml + fw + r.w + g->mr;
             g->keep_round = quirk_no_wrap_round(l, ifc, it);
-            bool wrap = f_ws_wraps(st->white_space) && !g->keep_round;
+            // Whether a line may break either side of it is its parent's
+            // `white-space` to say, not its own (FItem.around): a strip of
+            // inline-blocks in a nowrap box stays one line however each
+            // sets its own content. The rule names the nearest ancestor the
+            // atom shares with its neighbour. The parent is that, except
+            // where the parent is an inline the neighbour is outside of —
+            // the atom first or last in a span — and the shared ancestor is
+            // further out (DEBTS.md, "Breaks beside an inline-block").
+            const flow_style_t *around = it->around != NULL ? it->around : ifc->style;
+            bool wrap = f_ws_wraps(around->white_space) && !g->keep_round;
             g->wrap_after = wrap;
             if (wrap && s->n >= 2 && s->v[s->n - 2].kind != SG_BREAK)
                 s->v[s->n - 2].wrap_after = true;
