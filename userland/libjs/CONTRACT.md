@@ -1,11 +1,12 @@
 # JavaScript runtime API contract
 
 Status: R0/R2 contract with D7a's host tasks, D8's opt-in teardown and D10's
-callback budget extensions, 2026-10-06.
+callback budget extensions, 2026-10-06, and P2a's script host, 2026-10-23.
 `libjs.so` exports the embedding operations `js.h` and `js_engine.h` declare:
 create (fatal or reporting teardown), context access, class-ID allocation, eval,
 run, file execution, job draining, output/argument setup, cancellation, callback
-budget checking, destruction, and the host-task entries (§ Host tasks). Their review/merge state
+budget checking, destruction, the host-task entries (§ Host tasks) and the
+script host's (§ A script host). Their review/merge state
 and Opus's C1 integration are tracked in JAVASCRIPT_TASKS.md. The default image
 installs the runner, library, dependencies and QuickJS licence;
 `js-runtime-test` builds an optional guest consumer.
@@ -191,9 +192,12 @@ are not reported again on the next turn. Engine notification of a later handler
 for an already-reported rejection is harmless. If an exception is the primary
 outcome at the same queue exhaustion, EXCEPTION takes precedence and checkpoint
 bookkeeping is still released. The standalone outcome carries one diagnostic;
-per-rejection browser events are later checkpoint work. A browser's tasks and
-checkpoints use § Host tasks; the standalone profile does not implement the
-HTML event loop.
+a browser that fires an event per rejection sets a script host instead
+(§ A script host), and then none of this paragraph's judging happens. A
+browser's tasks and checkpoints use § Host tasks; the standalone profile does
+not implement the HTML event loop. The tracker finds a rejection by its
+promise in a table, so neither the thousandth rejection of a turn nor a
+handler added to it costs more than the first.
 
 ## Results, limits, and reuse
 
@@ -346,7 +350,8 @@ The rules:
 - **Rejections are judged at checkpoints.** A call that leaves a rejected
   promise unhandled reports nothing; the next checkpoint (or `task_end`'s)
   reports UNHANDLED_REJECTION, with eval's diagnostic rules, and releases
-  the bookkeeping once.
+  the bookkeeping once. With a script host, the host takes them instead
+  (§ A script host).
 - **A checkpoint never stops early for an exception.** A Promise reaction
   that throws is a rejection, not a job exception; what a job can throw is
   a host job's own error. The first such exception is the outcome and the
@@ -377,12 +382,59 @@ the job cap spanning checkpoints, a nested raw call overrunning, every later
 entry answering FAILED_RUNTIME, and a changed limit arming the next task
 only.
 
+## A script host
+
+A browser reports a script's failures to the page itself: an uncaught
+exception is an `error` event at the window, and a rejection nothing handled
+by the end of a microtask checkpoint is an `unhandledrejection` event, a
+handler added to it later a `rejectionhandled` (HTML § Runtime script errors,
+§ Unhandled promise rejections). The outcome's one diagnostic cannot carry
+that: the event needs the thrown value and the promise, and needs one per
+failure. `os64_js_set_script_host(runtime, abi, host, outcome)`
+(`js_engine.h`) gives them to the host:
+
+- **`exception(opaque, context, error)`** is called with every exception
+  eval, run, run_file, a call, a job drain or a checkpoint catches, before
+  the outcome's diagnostic is written, every job exception of a checkpoint
+  and not only the first. One a sticky failure threw (the interrupt that
+  ends an overrun) is not handed over: the runtime is finished with.
+- **Rejections are the host's to take.** With a host set, no checkpoint and
+  no turn's end judges a rejection or releases one: each waits, oldest
+  first, until `os64_js_take_rejection(runtime, abi, &promise, &reason)`
+  hands its promise and reason over as new references. A rejection a later
+  handler reaches before it is taken leaves as it always did. Taking is
+  refused (false, both values undefined) inside a call, on a failed
+  runtime, without a host, and while jobs are runnable, since a rejection
+  is unhandled only once the checkpoint that could have handled it has run.
+- **`handled(opaque, context, promise)`** is called when a handler is added
+  to a rejected promise the runtime no longer holds, which is one the host
+  took: what `rejectionhandled` is fired from. The engine asks once per
+  promise.
+- Both hooks run inside the wrapper's guard, so they must run no script and
+  make no wrapper call; they keep what they need (`JS_DupValue`) and act on
+  it after the call returns. The outcome is unchanged by a host: a call that
+  threw is still EXCEPTION with its diagnostic.
+- `NULL` clears the host, and is accepted from a failed runtime too, so a
+  host can clear itself before its opaque goes away; setting or clearing is
+  BUSY during a call. A cleared host leaves the rejections it did not take
+  to the next checkpoint's judging. Destruction releases whatever is left.
+
+`tools/test_js_runtime_host.c`'s script host cases hold each rule:
+exceptions from eval, a call and a checkpoint's job reaching the host beside
+their outcome; rejections taken oldest first, never inside a call or with
+jobs runnable; one handled before it was taken gone, and five thousand
+handled newest first leaving nothing; a handler added to a taken one
+reaching `handled`; a cleared host handing rejections back to the
+checkpoint; an overrun's exception kept from the host; and a host cleared
+from a failed runtime.
+
 ## Reserved for later work
 
 Nothing. The three extensions DOM.md reserved are built: the host tasks
 above (D7a), the callback budget check (D10, § Native callback budget
 checking) and the creation-selected reporting destruction (D8, § Opt-in
-reporting destruction). Each was reviewed as its own slice.
+reporting destruction). Each was reviewed as its own slice. The script host
+(§ A script host) came later, with the Modern Web arc's P2a.
 
 ## Review and implementation gates
 
