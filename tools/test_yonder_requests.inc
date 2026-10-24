@@ -126,7 +126,88 @@ static void request_cancel_case(void) {
     request_drop();
 }
 
+/* The fake's request for the address ending with `tail`, -1 for none. */
+static int request_sent(const char *tail) {
+    for(int i=0;i<nfake_requests;i++) {
+        size_t n=strlen(fake_requests[i].url), t=strlen(tail);
+        if(n>=t && !strcmp(fake_requests[i].url+n-t,tail)) return i;
+    }
+    return -1;
+}
+
+/* A REQUEST'S ORIGIN IS ITS OWN PAGE'S, at every moment of the page's
+ * life, and never the page on screen's (here, none). A page asked for as
+ * http:// that a redirect sent to https:// asks for its own files by
+ * relative address: at parse, at DOMContentLoaded (while stream_finish
+ * holds the page, as g.finishing, between the stream and the screen), at
+ * load, and from a timer. Each is same-origin, so basic, with no Origin
+ * and the page's own address as its Referer; a <script src> its
+ * DOMContentLoaded adds names the same page, and so does a synchronous
+ * XMLHttpRequest. */
+static void request_redirected_page_case(void) {
+    fake_fetch_reset();
+    static const char *const kMoments[]={"parse","ready","load","timer","sync"};
+    for(size_t i=0;i<sizeof(kMoments)/sizeof(kMoments[0]);i++) {
+        static char urls[5][64];
+        snprintf(urls[i],sizeof(urls[i]),"https://fixture.test/%s.json",kMoments[i]);
+        fake_answer("GET",urls[i],200,"Content-Type: application/json\r\n","{}");
+    }
+    loop_asked="http://fixture.test"; loop_final="https://fixture.test/"; loop_encrypted=true;
+    loop_page("<p id=out>x</p><script>var seen=[];"
+        "function say(){seen.sort();document.getElementById('out').textContent=seen.join(' ')}"
+        "function get(n){fetch('/'+n+'.json',{cache:'no-store'}).then(r=>{seen.push(n+'='+r.type);say()},"
+        "e=>{seen.push(n+'='+e.name);say()})}"
+        "get('parse');"
+        "document.addEventListener('DOMContentLoaded',()=>{get('ready');"
+        "var s=document.createElement('script');s.src='/late.js';document.head.appendChild(s);"
+        "var x=new XMLHttpRequest();x.open('GET','/sync.json',false);"
+        "try{x.send();seen.push('sync='+x.status)}catch(e){seen.push('sync='+e.name)}});"
+        "window.addEventListener('load',()=>get('load'));"
+        "setTimeout(()=>get('timer'),10);</script>");
+    loop_asked=loop_final=NULL; loop_encrypted=false;
+    check(loop_settle() && g.page.tree!=NULL && os64_streq(g.page.way.url,"https://fixture.test/") &&
+          nrequest_jobs==3,"requests: a redirected page's fetches at parse, DOMContentLoaded and load are out");
+    bool late=false;
+    for(int i=0;i<nscript_jobs;i++) {
+        const yonder_script_job_t *job=script_jobs[i].job;
+        if(os64_streq(job->url,"https://fixture.test/late.js"))
+            late=os64_streq(job->hooks.referrer,"https://fixture.test/");
+    }
+    check(late,"requests: a script its DOMContentLoaded adds is fetched with the page's own address as Referer");
+    now_ms+=20;
+    check(script_turn() && nrequest_jobs==4,"requests: and its timer's");
+    for(int i=0;i<nrequest_jobs;i++) {
+        char origin[WAY_ORIGIN_TEXT_MAX];
+        way_origin_serialize(&request_jobs[i].job->request.origin,origin,sizeof(origin));
+        char what[160];
+        snprintf(what,sizeof(what),"requests: %s's origin is the page's own, after its redirect",
+                 request_jobs[i].job->url);
+        check(os64_streq(origin,"https://fixture.test"),what);
+    }
+    check(request_land("/parse.json") && request_land("/ready.json") && request_land("/load.json") &&
+          request_land("/timer.json") && loop_settle() && script_rebuild(),"requests: each is answered");
+    check(probe_text_is("out","load=basic parse=basic ready=basic sync=200 timer=basic"),
+          "requests: every one is same-origin, read as basic");
+    for(size_t m=0;m<sizeof(kMoments)/sizeof(kMoments[0]);m++) {
+        char tail[32], origin[64], referer[96], what[160];
+        snprintf(tail,sizeof(tail),"/%s.json",kMoments[m]);
+        int i=request_sent(tail);
+        fake_field(i,"Origin",origin,sizeof(origin));
+        fake_field(i,"Referer",referer,sizeof(referer));
+        snprintf(what,sizeof(what),"requests: the %s fetch carries no Origin and the page's address as Referer",
+                 kMoments[m]);
+        check(i>=0 && origin[0]=='\0' && os64_streq(referer,"https://fixture.test/"),what);
+    }
+    const char *record=request_record_text();
+    check(strstr(record,"request GET https://fixture.test/ready.json: 200 basic, 0 hops")!=NULL &&
+          strstr(record,"request GET https://fixture.test/sync.json: 200 basic, 0 hops, synchronous")!=NULL &&
+          strstr(record,"FAILED request")==NULL,
+          "requests: the page's record has them as basic, the synchronous one included");
+    request_drop();
+}
+
 static void request_cases(void) {
+    request_redirected_page_case();
     request_same_origin_case();
     request_cors_case();
     request_xhr_case();

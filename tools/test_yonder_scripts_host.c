@@ -2791,13 +2791,17 @@ static char *pad_page(const char *rest) {
 }
 static bool loop_encrypted;     /* the next loop_page's head: arrived encrypted */
 static bool loop_modern_off;    /* the next loop_page's window: the modern switch off */
+/* The next loop_page's address as asked for, and as its head says it ended
+ * after redirects: NULL for the usual pair. */
+static const char *loop_asked, *loop_final;
 static void loop_page(const char *rest) {
     stream_window();
     g.scripts_on=true; g.script_ms=5000; now_ms=100;
     g.modern=!loop_modern_off;
-    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    start_trip(loop_asked!=NULL ? loop_asked : "http://fixture.test/p",NULL,NAV_GO,NULL);
     char *html=pad_page(rest);
     way_head_t h=stream_head("text/html","",false);
+    if(loop_final!=NULL) os64_strcopy(h.url,sizeof(h.url),loop_final);
     h.encrypted=loop_encrypted;
     yonder_mail_post_head(g.stream.mail,&h);
     stream_post_body((const uint8_t *)html,strlen(html),YONDER_STREAM_CHUNK);
