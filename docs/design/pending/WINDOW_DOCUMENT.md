@@ -377,8 +377,10 @@ Document to 42.1% C / 90.5% scan. Each line names the state the member reads.
 - `title`: 229 pages. It is the first `title` element, the rule yonder's
   `title_of` already walks.
   - The setter makes one in `head`.
-  - The window's own title does not follow: yonder names its window once,
-    and the GUI has no verb that renames one (DEBTS.md).
+  - The window's own title follows it (Chris's ruling), through a GUI
+    verb that renames a window and yonder's call to it, which are their
+    own branch and PR (`opus/gui-window-title`), not P1-Da's: until it
+    lands yonder names its window once (DEBTS.md).
 - `prerendering` (false) and `onprerenderingchange`: Chrome 61.4%, 105
   pages.
 - `domain`: Chrome 0.8% (the setter), 158 pages. It reads the origin's
@@ -926,7 +928,7 @@ Columns as in Appendix A, without MISSING (the census hears only lookups on `win
 | `createElement` | method | dom | classic |  | 662 |  |  |
 | `getElementById` | method | dom | classic |  | 652 |  |  |
 | `addEventListener` | method | dom | classic |  | 599 |  |  |
-| `body` | attr | html | classic, partial |  | 585 |  | no setter: assigning document.body does nothing (a TypeError in strict code); HTML replaces the body element; P1-Da |
+| `body` | attr | html | classic |  | 585 |  | its setter arrived with P1-Da, a classic fix: HTML's, which replaces the body element or appends one to the root |
 | `querySelector` | method | dom | classic |  | 566 |  |  |
 | `documentElement` | ro attr | dom | classic |  | 537 |  |  |
 | `getElementsByTagName` | method | dom | classic |  | 523 |  |  |

@@ -2339,8 +2339,10 @@ and Last-Modified come from the stream that is fetching that page
 reads for the timing), `currentScript` is set by that page's own `run_item`,
 and the focus answer compares the asking document with the window's
 focused one (`script_focus`), so a page not yet shown has no focus and no
-`hasFocus()`. No new file-level static; the stream gained one field (the
-address its navigation was asked from).
+`hasFocus()`. No new file-level static; the stream gained two fields (the
+address its navigation was asked from, and for a Reload the reloaded
+page's own referrer, which the page replacing it keeps though the Reload's
+request names nothing; a Reload is always of the page on screen).
 
 **How readyState tracks the host's dispatches.** One rule, one copy:
 `os64_dom_readiness_after` (dom.h) says DOMContentLoaded at the document
@@ -2477,7 +2479,9 @@ worked around:
   (`SYSCALL_GUI_WINDOW_CREATE` takes the only title). That is a kernel GUI
   change. `document.title` and its setter are built, and the end-to-end
   case proves the title yonder reads of the page (`title_of`) is the one
-  the script set; the title bar does not move (DEBTS.md).
+  the script set; the title bar does not move here. Chris ruled that it
+  follows: the GUI verb and yonder's call to it are their own branch and
+  PR (`opus/gui-window-title`), which pays the DEBTS.md row.
 - **`focus()` inside its task.** `activeElement` reads yonder's focus
   through the hook, but a script's `focus()` is an ask the window carries
   out after the task, so `el.focus(); document.activeElement === el` is
@@ -2507,6 +2511,17 @@ corrected WINDOW_DOCUMENT.md's two contract sentences (the title bar, and
 DEBTS.md's row that listed `document.title` and `document.referrer` as
 absent.
 
+A fresh cold read of `8db3cf0c` found no P1 or P2, and four P3s, each
+fixed with a case where it is code: title's setter wrote an HTML title
+inside a document whose root is in neither the SVG nor the HTML namespace
+(it now changes nothing there); `initEvent` and `initCustomEvent` left a
+host event's `isTrusted` true (DOM's "initialize" clears it); a Reload
+lost the page's `document.referrer` (now kept, for the button, a form
+sent again and `location.reload()`); and WINDOW_DOCUMENT.md's appendix
+still said `body` had no setter. The arc lead's design read then ruled on
+the two questions below: createEvent as built, and the title bar to its
+own PR.
+
 **Rulings taken by the builder, for the cold read.**
 
 - **createEvent's unbuilt interfaces make a plain Event, not
@@ -2520,7 +2535,7 @@ absent.
   refused; `TouchEvent` is refused because a desktop does not expose it
   (its success tells touch detection the machine is a phone: 15 kept
   pages ask). Flipping the ruling is one table column (`creatable` in
-  event.c). Chris's to take.
+  event.c). The arc lead's design read agreed with it.
 - **`hasFocus()` is "the page on screen".** yonder does not follow its GUI
   window's focus events; following them is a small yonder change no
   contract line names (DEBTS.md).
