@@ -45,9 +45,16 @@ classification belongs to the guarded libjs operation.
 The D5 surface follows `docs/design/pending/DOM_BRIEFS.md`: document landmarks,
 queries, creation, tree mutation/navigation, attributes, text and markup,
 and control properties. `window` names the global object, and so do `self`, `frames`, `parent` and
-`top`, as they do for a window with no frames: the first three are
-[Replaceable] (a page may assign over them), `top` is read-only and
-unconfigurable, and the window's `length`, its frame count, is 0. Document landmarks
+`top`, as they do for a window with no frames: `self`, `frames`, `parent`
+and `length` are [Replaceable] (a page may assign over them), `top` is
+read-only and unconfigurable, and the window's `length`, its frame count,
+is 0.
+`top`, `parent` and `length` are accessors that ask the window's browsing
+context (browsing.c, § P1-W's rows), which answers so for a root.
+`window` and `document` are [LegacyUnforgeable] (core.c): own accessors of
+the global with no setter, neither configurable, so an assignment is
+ignored outside strict mode and a TypeError in it, and a page can neither
+delete nor redefine them. `history` is a read-only accessor. Document landmarks
 are read from the attached tree rather than trusted parser-time pointers.
 
 Kind prototypes inherit Node. An HTML element's prototype is HTMLElement's,
@@ -320,9 +327,10 @@ the first click.
 window have an on<type> property, and an on<type> content attribute is a
 handler. With the Modern Web switch on, so do `scroll` and `resize`; window
 alone has `onpopstate` and `onhashchange`, and a MediaQueryList `onchange`
-(§ The view, computed style and the session's history). With it off none
-of the four is a property, and their content attributes are ordinary
-attributes that no event runs. A target's handler is one slot in its listener list, in the place
+(§ The view, computed style and the session's history), and window alone
+has `ononline`, `onoffline` and `onlanguagechange`, whose events nothing
+here fires (§ P1-W's rows). With it off none of these is a property, and
+their content attributes are ordinary attributes that no event runs. A target's handler is one slot in its listener list, in the place
 it was first set; a slot for an attribute the parser or innerHTML wrote goes
 first (an element has its attributes before any script can reach it), and a
 script's `setAttribute` makes its slot then. Window's slots come from the
@@ -337,8 +345,13 @@ with(form owner) with(element)`, HTML's three scopes. A body that does not
 compile is reported once and stays absent until the attribute changes;
 reading the property answers null. A handler that returns `false` cancels.
 The body's window-reflecting handlers (`load`, `focus`, `blur`, and with the
-switch on `scroll`, `resize`, `popstate` and `hashchange`) are window's,
-from `<body onload>` or `document.body.onload` alike.
+switch on `scroll`, `resize`, `popstate`, `hashchange`, `online`, `offline`
+and `languagechange`) are window's. For the ones every element has a
+property for (`load`, `focus`, `blur`, `scroll`, `resize`) that is so from
+`<body onload>` and `document.body.onload` alike; for `popstate`,
+`hashchange`, `online`, `offline` and `languagechange` it is so from the
+body's content attribute only, since the body has no such IDL property
+(`document.body.onpopstate` is an ordinary expando; DEBTS.md).
 
 The body is first checked by the intrinsic Function constructor, taken
 before any page script could replace it. QuickJS builds that function by
@@ -385,9 +398,10 @@ installed, an address that moves only the fragment is no ask: the host makes
 it at once (§ The view, computed style and the session's history), and one
 it refuses is asked for instead. A taken ask's nodes come held. `location`
 reads the page's address and its parts; `history.length` reads the host's
-count of entries, and 1 with no host or the switch off. `window.status` and
-`defaultStatus` accept an assignment and read empty: the status line is the
-browser's.
+count of entries, and 1 with no host or the switch off. `window.status`
+reads back the last string a script set, as HTML keeps it, and
+`defaultStatus`, which no standard has, accepts an assignment and reads
+empty; the status line itself is the browser's and shows neither.
 
 **Element actions.** `click()` is a synthetic click: the event, then the
 element's activation unless a listener cancelled it. A checkbox or radio
@@ -588,7 +602,8 @@ ASan-instrumented target-profile engine, with sanitized bindings/tree/state.
 `tools/test_dom_implementation.inc` holds a case per rule of § Documents of
 their own, and runs jQuery 3.5.1 and 1.12.4 whole;
 `tools/test_dom_attributes.inc` a case per rule of § Attributes as nodes,
-and `tools/test_dom_mutants.py --only attr-` a mutant per rule. `domtest` exercises
+and `tools/test_dom_mutants.py --only attr-` a mutant per rule;
+`tools/test_dom_window.inc` a case per rule of § P1-W's rows. `domtest` exercises
 the shared-library boundary and heap in ring 3. These are library proofs; yonder's loop is proven with its own
 harness. Result counts are recorded in DOM.md after the final source freeze.
 
@@ -946,3 +961,63 @@ with no page code between them, which is what makes a duplicate link one
 comparison and a dependent source one walk (abort.c, `d_signal_follow`).
 `d_signal_dependents` is the weak-set cases' count of what a collection
 left linked.
+
+### P1-W's rows: window's low-hanging fruit
+
+Four rows (MODERN_WEB.md § P1-W, as built; WINDOW_DOCUMENT.md § P1-W is the
+plan). Every yonder page is the one document of a top-level window the
+person opened, never a frame and never a window a script opened, and each
+member answers what HTML gives such a window (browsing.c's header has the
+reason for each).
+
+**The window as a browsing context** (`browsing.c`). `frameElement`,
+`length`, `top`, `parent`, `origin`, `isSecureContext` and
+`originAgentCluster` are each asked of one function of the window's
+browsing context (`context_answer`) and none is installed as a constant,
+as IFRAME.md § What the open slices do now rules, so a frame's context is
+taught there; today every context is a root, and the answers are these.
+`[SecureContext]` members ask the same context (`d_secure_context`).
+`opener` null (an
+assignment of anything but null makes it window's own data property),
+`closed` false and `close()` a no-op (no page closes the person's window),
+`moveTo`, `moveBy`, `resizeTo` and `resizeBy` no-ops that still convert
+their arguments, `captureEvents` and `releaseEvents` no-ops,
+`clientInformation` the navigator, `frameElement` null,
+`crossOriginIsolated` false, `originAgentCluster` true, `origin` the page's
+origin serialized (`d_origin`), and `isSecureContext` whether the page's
+address is potentially trustworthy as libway judges it
+(`way_url_trustworthy`, the browser's one copy of that judgement: about:blank
+and about:srcdoc are, as Secure Contexts says, so a binding with no address
+is; the name `localhost` is not). `ononline`,
+`onoffline` and `onlanguagechange` are window's handler slots, whose events
+nothing fires. `queueMicrotask(callback)` queues a job on the engine's one
+job queue, in order with promise reactions; the checkpoint that drains the
+queue calls it with `this` undefined, and a throw is that job's failure,
+reported as the task's (the first one a task meets is its outcome) while
+the jobs after it run, never thrown into the script that queued it.
+**The BarProps** (`locationbar`, `menubar`, `personalbar`, `scrollbars`,
+`statusbar`, `toolbar`, and `BarProp`): six objects, `visible` true.
+**`external`** and `External`: `AddSearchProvider()` and
+`IsSearchProviderInstalled()` do nothing.
+
+**`crypto`** (`crypto.c`; Web Cryptography's Crypto interface) and `Crypto`:
+`getRandomValues` fills an integer typed array of at most 65,536 bytes and
+answers it (anything that is no view, or a view of a resizable buffer, is a
+TypeError, as WebIDL makes one without `[AllowResizable]`; then a float
+array or a DataView is TypeMismatchError, and more bytes
+QuotaExceededError), and
+`randomUUID`, [SecureContext], answers a version 4 UUID. `subtle` is absent
+(WINDOW_DOCUMENT.md, ruling 1). The bytes are the host's
+(`options.entropy`; yonder's is libtls's door, `os64_tls_entropy`, over
+`/dev/random`), written into the binding's scratch and copied into the
+array only when the host says every one is there: a host that refuses, or
+has no hook, is an OperationError, and the page never gets zeros or a
+short fill as randomness. A view is told by its class, and its buffer and
+the buffer's resizability are read through the engine's own getters, taken
+before any page ran (a resizable buffer's view keeps the length it was made
+with in the engine's books, so it could not be filled whole), so nothing
+here runs page code.
+
+The classic fixes beside them are every page's, the switch on or off:
+`window` and `document` [LegacyUnforgeable] (§ Objects and collections),
+`history` a read-only accessor, `status` kept (§ Asks).

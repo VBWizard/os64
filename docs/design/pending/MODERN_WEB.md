@@ -2116,3 +2116,185 @@ QuickJS's four further parser paths (§ libjs) become libjs patch 0011, a
 small PR of its own right after this slice merges (Fable's ruling); the
 row stays until it lands. The deliberate departures from the standard are
 DIVERGENCES.md § The browser's script requests.
+
+### P1-W, as built
+
+Built by Opus on `opus/tmw-p1w-window`, stacked on slice 2, from the P1-W
+brief and WINDOW_DOCUMENT.md § P1-W (the plan, slice 0e's inventory, read by
+Fable; its three fixes are this branch's first commit). The builder's
+adversarial and truth passes are done; the cold read is next.
+
+**What was built.** The 27 members of § P1-W, and the three classic fixes
+(LIBDOM.md § P1-W's rows).
+
+- **The window as a browsing context** (libdom `browsing.c`): `opener`,
+  `closed`, `close()`, `clientInformation`, `moveTo`, `moveBy`,
+  `resizeTo`, `resizeBy`, `captureEvents`, `releaseEvents`,
+  `frameElement`, `crossOriginIsolated`, `originAgentCluster`, `origin`,
+  `isSecureContext`, `queueMicrotask`, and the `ononline`, `onoffline` and
+  `onlanguagechange` handler slots. Each answers what HTML gives the one
+  document of a top-level window the person opened. `isSecureContext` is
+  libway's judgement of the page's address, made public for it as
+  `way_url_trustworthy` rather than copied (ORIGIN.md § 12; the name
+  `localhost` is not trustworthy, as slice 2 ruled). `close()` never
+  closes the window, where HTML would let a page close one whose history
+  holds a single entry (DIVERGENCES.md). `queueMicrotask` is a job on the
+  engine's one queue, so it runs in order with promise reactions, and a
+  callback that throws is the failure of the task that drained it, never
+  the script's that queued it, the jobs after it still running.
+- **The six BarProps** and `BarProp`, `visible` true; **`external`** and
+  `External`, whose two methods do nothing.
+- **`crypto`** (`crypto.c`) and `Crypto`: `getRandomValues` and
+  `randomUUID`, without `subtle` (ruling 1). The bytes come through a host
+  hook, `options.entropy`; yonder's is libtls's `/dev/random` reader, made
+  public as `os64_tls_entropy` so there is one reader, not two. The hook
+  writes into the binding's scratch and the page gets the bytes only when
+  the hook says all are there: a refusal (an unseeded pool refuses rather
+  than waits) is an OperationError, never zeros.
+- **The classic fixes**: `window` and `document` [LegacyUnforgeable], own
+  accessors of the global with no setter, defined in one place (core.c);
+  `history` a read-only accessor; `status` keeps the last string set.
+- **The WPT runner** loads a page whose name says `.https.` over https, as
+  WPT's own runner does, so a `[SecureContext]` member is there to test.
+
+**The frame rule.** P1-W follows IFRAME.md § What the open slices do now
+(Fable's frame design): `frameElement`, `length`, `top`, `parent`,
+`origin`, `isSecureContext` and `originAgentCluster` are each asked of one
+function of the window's browsing context (`browsing.c`'s
+`context_answer`), none installed as a constant, so the frame slice
+teaches that function what a frame's context answers. Today every context
+is a root: null, 0, the window, the window, the page's origin, the page's
+address judged by `way_url_trustworthy`, and true. `top`, `parent` and
+`length` were core.c's data properties (the window itself and 0); they
+are now accessors there too, every page's whatever the switch says, `top`
+unforgeable and the other two [Replaceable]. `randomUUID`'s
+`[SecureContext]` asks the same context (`d_secure_context`). P1-W's one
+yonder change, the entropy hook, holds no page and adds no file-level
+static (that document's rule for every yonder change).
+
+**Classic or modern.** The 27 members are Modern Web rows, four of them:
+they are globals the arc adds to window, which rule 4 says the switch takes
+away. The three classic fixes are corrections to members every page has
+had, and hold with the switch off, as 0c's and 0d's surfaces do. The
+interface objects `Crypto`, `BarProp` and `External` are modern, each in
+its members' row, as 1a's `Storage` is with `localStorage`, rather than in
+the first row with the node interfaces: a row whose instances need the
+prototype makes it.
+
+**The seams, as they ended.**
+
+| Seam | What it is now |
+|---|---|
+| `os64_dom_options_t.entropy` | `length` bytes (at most 65,536) of the host's randomness into the binding's scratch, true when all are there; NULL refuses every ask |
+| `os64_tls_entropy` (libtls, `tls.h`) | `/dev/random` read until every byte is in, false for a source that cannot be opened or runs short; the TLS engine's entropy callback and yonder's hook both call it |
+| `way_url_trustworthy` (libway, `origin.h`) | Secure Contexts' potentially trustworthy URL, the one copy: mixed content, the referrer's downgrade and `isSecureContext` ask it |
+| `d_interface_class` (classic.c) | an interface whose objects the binding makes: its class, its held prototype and its Illegal-constructor interface object |
+| `d_view_kind` (encoding.c) | WebIDL's ArrayBufferView told by class: a typed array's kind, a DataView, or neither |
+| `D_EVENT_ONLINE`, `_OFFLINE`, `_LANGUAGECHANGE` | event kinds the binding names and nothing fires, so window has handlers for them and the body reflects them |
+
+**Numbers.** WPT, the base (`a4dda013`) → the head (passes of tests run;
+every `[required]` test fails with the switch off):
+
+| Directory | Before | After | `[required]` | `[excluded]` pages |
+|---|---|---|---|---|
+| `html/webappapis/microtask-queuing` | 0 | 5 of 8 | 5 | 0 |
+| `WebCryptoAPI` (`getRandomValues`, `randomUUID`) | 0 | 33 of 42 | 33 | 166 |
+| `html/dom` (`self-origin.any.js`) | 0 | 1 of 1 | 1 | 247 |
+| `html/browsers/the-window-object` | 74 | 75 of 659 | 1 | 0 |
+| `secure-contexts` | 0 | 0 of 35 | 0 | 0 |
+| `hr-time` | 8 | 9 of 19 | 9 | 0 |
+
+What still fails: getRandomValues' nine "Large length" tests, which want
+the QuotaExceededError interface WebIDL gave its own `quota` and
+`requested` (DEBTS); `queue-microtask-exceptions`, which reports through
+`window.onerror` (P2a); every page that opens a second window or a frame,
+which is all of the-window-object's P1-W pages (`BarProp`, `closed`,
+`close`, `self-et-al`) and all of secure-contexts; and
+`window-properties.https.html`'s window members, which read
+`Window.prototype` (P3c). WebCryptoAPI's other pages are SubtleCrypto's and
+html/dom's other pages are later phases', each excluded by name. Every one
+of the 27 expectation directories passes at the head, both ways.
+
+The corpus, 2026-10-22b replayed at the base and the head
+(`2026-10-22b_p1w-before` and `-after`): P1-W's names were MISSING in 89
+of 202 page files (45 of 87 sites, 342 asks: `origin` 56 files, `crypto`
+34, `opener` 20, `queueMicrotask` 18, `frameElement` 13,
+`crossOriginIsolated` 1, `external` 1) and are in none; the FAILED lines
+that named one (`'crypto' is not defined` 6, `'queueMicrotask' is not
+defined` 3) are gone, and all FAILED lines 437 → 428. Replayed 239, clean
+21, incomplete 24, unfinished 13 and 19 unjudged on both sides. The replay
+diff: 89 pages of progress, and 13 "regressions". Five are noise: jQuery's
+expando, a name made from `Math.random`, differs between any two runs, and
+those pages are on the progress list too. Eight are next walls: scripts
+that died at `crypto`, `queueMicrotask` or `origin`, or before them, now
+run on to a later failure (a bundle that stopped at `require` stops at
+`initCustomEvent`; a site builder that stopped at `crypto` and
+`queueMicrotask` stops at its loader's initialization event; an identity
+library stops at a read of `nonce` where it stopped at `_DumpException`,
+having found `crypto`; an obfuscated
+challenge script gets past its `crypto` check to a read of undefined).
+
+Host, the base → the head: the DOM host 11,667 / 82,990 checks → 12,285 /
+85,476 (allocation sweeps 1,029 / 12,734 → 1,093 / 13,109),
+`tools/test_dom_window.inc` holding a case per rule; the scripted-page
+host 7,547 checks with patch 0011a merged in; libway's origin, way
+and way-fetch hosts, libfetch's host and its transport's, yonder's host,
+its stream and fetch-job hosts, the webfont, os64get and html-dom hosts,
+the replay proof, the WPT runner's self-test, the TLS input and engine
+suites and both TLS audits, all 0 failed; `make -C userland` builds.
+
+**What a read of `document` costs.** Making `document` and `history`
+accessors put a getter on reads a page makes on nearly every line, and the
+first getters went through the binding's whole callback check and, for
+`document`, a wrapper lookup. Each now answers a value its function holds
+(`d_held_getter`) after one check that the binding is open. A million bare
+reads in the DOM host (`tools/test_dom_host.sh --window-reads`, the
+target-core profile, the bindings sanitized as the host builds them):
+
+| read | as first built | now |
+|---|---|---|
+| a plain global | 17.6 ms | 16.3 ms |
+| `window` | 58.0 ms | 31.0 ms |
+| `document` | 556.9 ms | 60.3 ms |
+| `history` | 353.7 ms | 60.9 ms |
+
+**The scope guard stopped the build once, and libjs patch 0011a is why it
+could go on.** As first built, the scripted-page host failed in one case,
+`loop_view_refetch_short`, which fails every allocation of a page's
+arrival in turn, its scripts' compiles included: at one cut the engine's
+`add_closure_var` failed inside `resolve_scope_var`, the bytecode was
+emitted anyway, and `resolve_variables` read garbage (an ASan SEGV).
+That was one of the unchecked parser paths DEBTS booked for libjs patch
+0011; P1-W's new atoms and objects had moved the engine's arena
+boundaries so that a cut landed on it, and the base passed. An engine
+change is outside P1-W's scope guard, so the builder stopped and reported
+it with nothing worked around. The path became patch 0011a (its own PR),
+merged into this branch: the scripted-page host is green at the head,
+`loop_view_refetch_short` and the end-to-end cases
+(`tools/test_yonder_window.inc`) among it. The DOM host's engine sweep
+still leaves out a handler compile, for `resolve_labels`, which patch
+0011b owes (DEBTS).
+
+**Review.** The builder's adversarial pass looked for page code reaching
+the binding's state (a view's kind is its class, never its getters; the
+entropy hook is copied out only whole), work a page can size (the fill is
+capped before the host is asked; a microtask flood is the job cap's and
+the deadline's, as a promise flood is), a page breaking the unforgeable
+pair (delete, redefine, `let`, strict assignment, all pinned by cases), and
+yonder blocking on entropy (an unseeded pool refuses). It found nothing to
+change; the cases pin each answer. The truth pass corrected `close()`'s claim in
+WINDOW_DOCUMENT.md (HTML does let a page close a one-entry window),
+`isSecureContext`'s row there (it listed `localhost` and `file`), and
+`os64_dom_listens`' comment in dom.h (the types it counts are no longer
+only the ones a host dispatches).
+
+**Rulings taken by the builder, for the cold read.** `print()` is class
+(a) in WINDOW_DOCUMENT.md but in no phase: it was (d) when the phases were
+counted, and P1-W was approved at 27; it is a one-line no-op for whichever
+PR next touches window. `defaultStatus`, which no standard has, keeps
+reading empty. html/dom is checked out whole for one test, its other 247
+pages excluded by name: a later phase un-excludes what it names.
+
+**Booked** (DEBTS.md § Classic browser scripting): the QuotaExceededError
+interface. Not booked, by ruling: `subtle` (ruling 1), and `close()`
+(DIVERGENCES.md).

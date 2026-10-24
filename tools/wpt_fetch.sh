@@ -52,6 +52,11 @@ WPT_DIRS=(
     css/css-ui
     css/css-overflow
     css/support
+    html/browsers/the-window-object
+    html/dom
+    html/webappapis/microtask-queuing
+    secure-contexts
+    WebCryptoAPI
 )
 
 top=$(git rev-parse --show-toplevel)

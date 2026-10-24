@@ -12,6 +12,8 @@ LIBDOM_SRCS += libdom/implementation.c
 LIBDOM_SRCS += libdom/attr.c
 # The Modern Web's slice 2: fetch and its objects, XMLHttpRequest, DOMException.
 LIBDOM_SRCS += libdom/fetch.c libdom/abort.c libdom/blob.c libdom/xhr.c libdom/exception.c
+# P1-W: window as a browsing context, its BarProps and external; crypto.
+LIBDOM_SRCS += libdom/browsing.c libdom/crypto.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))
 LIBDOM_SO := $(BIN)/libdom.so
 LIBDOM_BASE = $(patsubst libdom.so=%,%,$(filter libdom.so=%,$(LIB_BASE_PAIRS)))

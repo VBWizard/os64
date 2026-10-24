@@ -53,6 +53,9 @@ before returning success. Its context is not retained. Failure prevents a
 connection from being returned; cancellation and timeout remain distinguishable.
 The production `/dev/random` adapter must map an unseeded `-1` refusal to
 `TLS_ENTROPY_UNAVAILABLE`; construction must not wait for the pool to seed.
+That adapter's reader is public as `os64_tls_entropy` (`tls.h`), so the
+browser's `crypto.getRandomValues` draws from the same door rather than a
+second reader of its own.
 The seed is wiped on success and failure. Destroy releases the owned validator
 and wipes the connection allocation. Each connection has one serialized owner;
 different connections share no mutable engine state. Abort stops I/O; callers

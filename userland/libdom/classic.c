@@ -472,6 +472,22 @@ JSValue d_interface_new(JSContext *ctx, const char *name, int length, JSCFunctio
     return JS_EXCEPTION;
 }
 
+int d_interface_class(os64_dom_t *dom, JSContext *ctx, JSValueConst global, JSClassID id,
+                      const JSClassDef *definition, JSValue *out)
+{
+    if (!JS_IsRegisteredClass(dom->engine, id) && JS_NewClass(dom->engine, id, definition) < 0) return -1;
+    JSValue prototype = JS_NewObject(ctx);
+    DValue *held = d_retain(dom, ctx, prototype);
+    if (held == NULL) return -1;
+    JS_SetClassProto(ctx, id, JS_DupValue(ctx, prototype));
+    JSValue f = d_interface_new(ctx, definition->class_name, 0, NULL, prototype, JS_UNDEFINED);
+    if (JS_IsException(f) ||
+        JS_DefinePropertyValueStr(ctx, global, definition->class_name, f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+        return -1;
+    *out = held->value;
+    return 0;
+}
+
 int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     if (d_style_install(dom, ctx) < 0) return -1;

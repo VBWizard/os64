@@ -1,0 +1,10 @@
+# WPT's secure-contexts in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh secure-contexts --update
+# rewrites [passing].
+[required]
+# P1-W's isSecureContext passes none of it: every page judges it in a
+# worker, a frame or a popup, which this browser does not have, and fails
+# whole before its own window's test.
+[excluded]
+[passing]

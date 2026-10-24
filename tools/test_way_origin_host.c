@@ -1120,6 +1120,16 @@ static void mixed_content(void)
            mixed("https://a.test/", "http://0127.0.0.1/") && mixed("https://a.test/", "http://127.0.0.1.5/") &&
            mixed("https://a.test/", "http://127.0.0.256/") && mixed("https://a.test/", "http://128.0.0.1/"), NULL);
     expect("149 data:", !mixed("https://a.test/", "data:,x"), NULL);
+    expect("149 about:blank and about:srcdoc are trustworthy, nothing else of about:",
+           way_url_trustworthy("about:blank") && way_url_trustworthy("about:srcdoc") &&
+           way_url_trustworthy("ABOUT:blank") && !way_url_trustworthy("about:blank?x") &&
+           !way_url_trustworthy("about:config") &&
+           !way_url_trustworthy("about:") && !mixed("https://a.test/", "about:blank"), NULL);
+    Req blank;
+    way_refusal_t blank_why;
+    req(&blank, "https://a.test/", WAY_MODE_CORS, WAY_CREDENTIALS_SAME_ORIGIN, "GET", "", "about:blank");
+    expect("149 an https page's fetch of about:blank is refused for its scheme, not as mixed",
+           hop(&blank, "about:blank", &blank_why) == WAY_HOP_REFUSED && blank_why == WAY_REFUSE_SCHEME, NULL);
     expect("150 http page", !mixed("http://a.test/", "http://b.test/"), NULL);
     expect("150 file page", !mixed("file:///x", "http://b.test/"), NULL);
     Req q;

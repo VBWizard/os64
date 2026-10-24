@@ -1,0 +1,88 @@
+# WPT's html/browsers/the-window-object in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/browsers/the-window-object --update
+# rewrites [passing].
+[required]
+# P1-W: the BarProps. It fails with the switch off. The pages WINDOW_DOCUMENT.md
+# names for P1-W (BarProp, closed-attribute, close-method, self-et-al,
+# window-properties.https) all open a second window or a frame, or read
+# Window.prototype (P3c), and fail whole; open-close and named-access-*
+# wait for P3.
+noopener-noreferrer-BarProp.window.html	All bars visible
+[excluded]
+[passing]
+Document-defaultView.html	Document created with createDocument
+Document-defaultView.html	Document created with createHTMLDocument
+Document-defaultView.html	Document in a browsing context
+accessing-other-browsing-contexts/indexed-browsing-contexts-03.html	Indexed child browsing contexts
+accessing-other-browsing-contexts/iterator.html	window[@@iterator]
+accessing-other-browsing-contexts/window_length.html	No child browsing contexts
+accessing-other-browsing-contexts/window_length.html	iframe not inserted into the document
+named-access-on-the-window-object/basics.html	A named property must not be enumerable
+named-access-on-the-window-object/basics.html	A named property must not be set if the element is not reachable from the Document
+named-access-on-the-window-object/doc-no-window.html	A document without a Window must not cause errors
+named-access-on-the-window-object/existing-prop.html	A named property must not be set if a property already exists
+named-access-on-the-window-object/existing-prop.html	A named property must not be set if a property already exists, even if undefined
+named-access-on-the-window-object/existing-prop.html	A named property must not be set if the property already exists in the proxy
+named-access-on-the-window-object/existing-prop.html	If a property is occupied by a named property but then the user sets it, the user's value shadows it
+named-access-on-the-window-object/name-attribute-elements.html	Only elements with specific local names may be returned if their name attribute matches (negative test)
+named-access-on-the-window-object/nested-context.html	A named property that matches any element that contains a nested browsing context, must return the WindowProxy of that context
+named-access-on-the-window-object/scoped-to-associated-document.html	Elements of a document created by createHTMLDocument() are not exposed
+named-access-on-the-window-object/scoped-to-associated-document.html	Ids set after insertion into another document are not exposed
+named-access-on-the-window-object/strict-mode-redefine-readonly-property.html	Adding/removing form with a name referring to a non-configurable property
+named-access-on-the-window-object/window-null-names.html	Named access with null characters
+noopener-noreferrer-BarProp.window.html	All bars visible
+proxy-getOwnPropertyDescriptor.html	Document proxy target, custom trap, non-existent value attribute
+proxy-getOwnPropertyDescriptor.html	Location proxy target, forwarding trap, [LegacyUnforgeable] "reload" method
+proxy-getOwnPropertyDescriptor.html	Window proxy target, custom trap, "onclick" event handler attribute
+proxy-getOwnPropertyDescriptor.html	Window target, forwarding trap, [LegacyUnforgeable] "document" attribute
+window-aliases.html	frames should be the global object
+window-aliases.html	self should be the global object
+window-aliases.html	window should be the global object
+window-indexed-access-vs-named-access.html	Window prototype: document-tree child navigable with target name 1 (named access)
+window-indexed-access-vs-named-access.html	Window prototype: document-tree child navigable with target name 2 (named access)
+window-indexed-access-vs-named-access.html	Window prototype: document-tree child navigable with target name 3 (named access)
+window-indexed-access-vs-named-access.html	WindowProxy: document-tree child navigable with index 0 (indexed access)
+window-indexed-access-vs-named-access.html	WindowProxy: document-tree child navigable with index 1 (indexed access)
+window-indexed-access-vs-named-access.html	WindowProxy: document-tree child navigable with index 2 (indexed access)
+window-indexed-access-vs-named-access.html	WindowProxy: document-tree child navigable with target name 3 (named access)
+window-indexed-properties-strict.html	Borderline numeric key: 2 ** 32 - 1 is not an index (strict mode)
+window-indexed-properties-strict.html	Indexed properties of the window object (strict mode)
+window-indexed-properties.html	Borderline numeric key: 2 ** 32 - 1 is not an index
+window-indexed-properties.html	Indexed properties of the window object (non-strict mode)
+window-properties.https.html	Constructor Properties of the Global Object
+window-properties.https.html	Constructor Property: Array
+window-properties.https.html	Constructor Property: Boolean
+window-properties.https.html	Constructor Property: Date
+window-properties.https.html	Constructor Property: Error
+window-properties.https.html	Constructor Property: EvalError
+window-properties.https.html	Constructor Property: Function
+window-properties.https.html	Constructor Property: Number
+window-properties.https.html	Constructor Property: Object
+window-properties.https.html	Constructor Property: RangeError
+window-properties.https.html	Constructor Property: ReferenceError
+window-properties.https.html	Constructor Property: RegExp
+window-properties.https.html	Constructor Property: String
+window-properties.https.html	Constructor Property: SyntaxError
+window-properties.https.html	Constructor Property: TypeError
+window-properties.https.html	Constructor Property: URIError
+window-properties.https.html	EventTarget interface
+window-properties.https.html	Function Properties of the Global Object
+window-properties.https.html	Function Property: eval
+window-properties.https.html	Function Property: isFinite
+window-properties.https.html	Function Property: isNaN
+window-properties.https.html	Function Property: parseFloat
+window-properties.https.html	Function Property: parseInt
+window-properties.https.html	Other Properties of the Global Object
+window-properties.https.html	Other Property: JSON
+window-properties.https.html	Other Property: Math
+window-properties.https.html	URI Handling Function Properties
+window-properties.https.html	URI Handling Function Property: decodeURI
+window-properties.https.html	URI Handling Function Property: decodeURIComponent
+window-properties.https.html	URI Handling Function Property: encodeURI
+window-properties.https.html	URI Handling Function Property: encodeURIComponent
+window-properties.https.html	Value Properties of the Global Object
+window-properties.https.html	Value Property: Infinity
+window-properties.https.html	Value Property: NaN
+window-properties.https.html	Value Property: undefined
+window-properties.https.html	Window interface

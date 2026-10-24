@@ -13,6 +13,8 @@ monotonic-clock.any.html	self.performance.now() difference is not negative
 monotonic-clock.any.html	self.performance.now() returns a positive number
 performance-tojson.html	Test performance.toJSON()
 timeOrigin.html	Window timeOrigin is close to Date.now() when there is no system clock adjustment.
+# P1-W: the coarsened clock read beside crossOriginIsolated, which is false.
+timing-attack.html	The recommended minimum resolution of the Performance interface has been set to 100 microseconds for cross-origin isolated contexts.
 [excluded]
 [passing]
 basic.any.html	Performance interface extends EventTarget.
@@ -23,3 +25,4 @@ monotonic-clock.any.html	self.performance.now() difference is not negative
 monotonic-clock.any.html	self.performance.now() returns a positive number
 performance-tojson.html	Test performance.toJSON()
 timeOrigin.html	Window timeOrigin is close to Date.now() when there is no system clock adjustment.
+timing-attack.html	The recommended minimum resolution of the Performance interface has been set to 100 microseconds for cross-origin isolated contexts.

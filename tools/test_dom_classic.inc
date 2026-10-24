@@ -10,9 +10,13 @@ static void dom_classic_cases(void)
         "assert(self.document===document&&top.location===location&&frames.length===0&&window.length===0);"
         "assert(top===self&&parent===self&&self===window.self);"
         "self.addEventListener('ping',function(){});"
-        "var d=Object.getOwnPropertyDescriptor(window,'top');assert(!d.writable&&!d.configurable&&d.enumerable);"
+        "var d=Object.getOwnPropertyDescriptor(window,'top');"
+        "assert(typeof d.get==='function'&&d.set===undefined&&!d.configurable&&d.enumerable,'top: an unforgeable accessor');"
+        "for(const n of ['parent','length']){const p=Object.getOwnPropertyDescriptor(window,n);"
+        "assert(typeof p.get==='function'&&typeof p.set==='function'&&p.configurable&&p.enumerable,n+': a [Replaceable] accessor')}"
         "top=1;assert(top===window);"
         "self=7;assert(self===7&&window.self===7);parent='p';assert(parent==='p');"
+        "length=3;assert(length===3&&Object.getOwnPropertyDescriptor(window,'length').value===3);"
         "frames=undefined;assert(frames===undefined&&window.window===window);",
         "classic-window-self-aliases");
     dom_script(&f,CLASSIC_ASSERT
