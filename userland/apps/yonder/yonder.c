@@ -11929,7 +11929,10 @@ static void title_of(const os64_html_document_t *doc, char *out, size_t cap)
 // "<page> - yonder" in the title's capacity, which the boundary refuses to
 // exceed rather than cutting (gui.h): a long page title is shortened with
 // "..." first. A character past ASCII becomes one '?', because the title
-// bar is drawn in the kernel's face, not the page's.
+// bar is drawn in the kernel's face, not the page's. So does a control
+// character: a page can spell one (`&#27;`), and the kernel logs the title
+// it is given, so an ESC kept here would be an escape sequence written by
+// the page into whatever terminal shows that log.
 static void fit_title(const char *page, char out[OS64_GUI_TITLE_MAX])
 {
     static const char kTail[] = " - yonder";
@@ -11941,7 +11944,7 @@ static void fit_title(const char *page, char out[OS64_GUI_TITLE_MAX])
         unsigned char ch = (unsigned char)page[i];
         if (ch >= 0x80 && (ch & 0xC0) == 0x80)
             continue;           // the rest of a character already marked
-        out[at++] = ch < 0x80 ? (char)ch : '?';
+        out[at++] = ch >= 0x20 && ch < 0x7F ? (char)ch : '?';
     }
     if (cut)
         for (int i = 0; i < 3; i++)

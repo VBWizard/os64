@@ -8851,6 +8851,34 @@ static void covered_link_cases(void) {
 #include "test_yonder_requests.inc"
 #include "test_yonder_window.inc"
 
+/* The window's name: the page's title through fit_title. A control
+ * character the page spells is a '?', never a byte the kernel would log
+ * raw; past ASCII is one '?' a character; a long title is cut with "...". */
+static void title_fit_cases(void)
+{
+    char out[OS64_GUI_TITLE_MAX];
+    fit_title("A\x1b[2J\x7f" "B", out);
+    check(os64_streq(out, "A?[2J?B - yonder"), "title: an ESC and a DEL become '?'");
+    fit_title("Caf\xc3\xa9", out);
+    check(os64_streq(out, "Caf? - yonder"), "title: a character past ASCII is one '?'");
+    fit_title("An extremely long page title that cannot fit", out);
+    check(os64_strlen(out) == OS64_GUI_TITLE_MAX - 1 &&
+          os64_streq(out, "An extremely long p... - yonder"), "title: cut with an ellipsis to the capacity");
+    const char *page = "<!doctype html><title>\x1b]0;x\x07 Name\t</title><body></body>";
+    os64_html_options_t opt = os64_html_options_default();
+    os64_html_parser_t *p = os64_html_parser_new(&opt);
+    check(p != NULL, "title: a parser");
+    if (p == NULL)
+        return;
+    os64_html_parser_feed(p, page, os64_strlen(page));
+    os64_html_document_t *doc = os64_html_parser_finish(p);
+    char named[120];
+    title_of(doc, named, sizeof(named));
+    fit_title(named, out);
+    check(os64_streq(out, "?]0;x? Name - yonder"), "title: a page's controls never reach the window");
+    os64_html_document_free(doc);
+}
+
 /* A unit that includes this file for the window and its fakes alone (the
  * WPT runner, the replay runner) defines YONDER_HOST_FAKES_ONLY and brings
  * its own main. */
@@ -8902,6 +8930,7 @@ int main(void)
     webfont_cases();
     paint_cost_cases();
     whole_view_cases();
+    title_fit_cases();
     os64_text_font_release(probe_font);
     check(os64_text_destroy(probe_text)==OS64_FONT_OK,"all layout text released");
     check(live==0,"native and engine heap is empty");
