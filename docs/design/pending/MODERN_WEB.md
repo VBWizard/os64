@@ -2298,3 +2298,242 @@ pages excluded by name: a later phase un-excludes what it names.
 **Booked** (DEBTS.md § Classic browser scripting): the QuotaExceededError
 interface. Not booked, by ruling: `subtle` (ruling 1), and `close()`
 (DIVERGENCES.md).
+
+### P1-Da, as built
+
+Built by Opus on `opus/tmw-p1da-document`, from `userland` at `c8d87b53`
+(#337 merged), from WINDOW_DOCUMENT.md § P1-Da (the contract) and Chris's
+addition of CustomEvent. The builder's adversarial and truth passes are
+done; the cold read is next.
+
+**What was built.** The 25 members of § P1-Da, the classic fix
+(`document.body`'s setter), and CustomEvent with createEvent's table
+(LIBDOM.md § P1-Da's rows):
+
+- **The document's state** (libdom `document.c`, a row of the Modern Web
+  table that puts nothing on window): `readyState` and
+  `onreadystatechange`, `visibilityState`, `hidden` and
+  `onvisibilitychange`, `prerendering` and `onprerenderingchange`,
+  `wasDiscarded`, `referrer`, `activeElement` and `hasFocus()`,
+  `currentScript`, `title` and its setter, `domain` and its setter, `URL`,
+  `documentURI`, `compatMode`, `dir`, `characterSet`, `charset`,
+  `inputEncoding`, `contentType`, `lastModified`, `rootElement` and
+  `clear()`. Each answers for the document it is asked of; a document of
+  its own answers what HTML gives one with no browsing context
+  (`complete`, `hidden`, no referrer, no focus, `about:blank`, its making's
+  content type).
+- **`document.body`'s setter**, HTML's: a body or frameset replaces the
+  body where it is, or is appended to the root; anything else is a
+  HierarchyRequestError (a non-HTML-element a TypeError), through the verbs
+  appendChild uses.
+- **CustomEvent** (`event.c`, a row of its own): the constructor, `detail`
+  (held in the Event's own record and traced with it, never a property a
+  page can reach) and `initCustomEvent`. **createEvent** reads DOM's table
+  (below).
+
+**The page in hand** (IFRAME.md § What the open slices do now). Every
+per-document answer comes from the host of the page the asking document
+is: the readiness is the page's script host's (`scripts.c`), the referrer
+and Last-Modified come from the stream that is fetching that page
+(`stream_request_facts`, from `g.stream`, which `scripts_host` already
+reads for the timing), `currentScript` is set by that page's own `run_item`,
+and the focus answer compares the asking document with the window's
+focused one (`script_focus`), so a page not yet shown has no focus and no
+`hasFocus()`. No new file-level static; the stream gained one field (the
+address its navigation was asked from).
+
+**How readyState tracks the host's dispatches.** One rule, one copy:
+`os64_dom_readiness_after` (dom.h) says DOMContentLoaded at the document
+moves `loading` to `interactive` and load at window moves either to
+`complete`. `os64_dom_dispatch` moves the binding's readiness by it before
+anything else, heard or not, and with the switch on fires
+`readystatechange` at the document as a task of its own just before the
+event, folding the two outcomes into one. yonder's host would not call the
+binding for an event nothing listens to, so it moves its own readiness by
+the same rule at every dispatch it is asked for, calls the binding when
+the readiness moved even if nothing hears the event, and hands the
+readiness to a binding it makes late (a page whose first script is a click
+after its load is born `complete`). The divergence, booked: yonder runs a
+page's deferred scripts before its DOMContentLoaded, so they read
+`loading` where HTML's are `interactive`.
+
+**createEvent's table, as built** (DOM § 4.5, matched without regard to
+ASCII case, with the switch on):
+
+| Asked | Made |
+|---|---|
+| `event`, `events`, `htmlevents`, `svgevents` | Event |
+| `customevent` | CustomEvent |
+| `hashchangeevent` | HashChangeEvent (its `oldURL` and `newURL` "") |
+| `touchevent` | NotSupportedError: on the table only where the legacy touch APIs are exposed, which a desktop does not do |
+| `beforeunloadevent`, `compositionevent`, `devicemotionevent`, `deviceorientationevent`, `dragevent`, `focusevent`, `keyboardevent`, `messageevent`, `mouseevent`, `mouseevents`, `storageevent`, `textevent`, `uievent`, `uievents` | a plain Event (the builder's ruling, below) |
+| anything else (`popstateevent`, `progressevent`, `foo`, `UİEvent`) | NotSupportedError |
+
+With the switch off `createEvent` makes a plain Event whatever it is
+asked, as before the arc, so the refusal goes with the switch.
+
+**Classic or modern.** The 25 members and CustomEvent are Modern Web rows:
+with the switch off none exists and no `readystatechange` fires. The body
+setter is a classic fix, every page's.
+
+**The seams, as they ended.**
+
+| Seam | What it is now |
+|---|---|
+| `os64_dom_options_t.readiness` | where the document stands as the binding is made; `LOADING`, the zero value, during the parse |
+| `os64_dom_readiness_after` (dom.h) | the readiness rule, pure; the binding's dispatch and yonder's host both move by it |
+| `os64_dom_options_t.referrer` | `document.referrer`, copied as the binding is made (`d_document_setup`) |
+| `os64_dom_options_t.last_modified` | the response's Last-Modified in epoch seconds, `OS64_DOM_NO_DATE` for none |
+| `os64_dom_options_t.focus` | the host's focused element in the window's document and whether the document has focus, asked at every read |
+| `os64_dom_set_current_script` | the script the host is running, held while named |
+| `way_head_t.last_modified` (libway) | the response's Last-Modified as written, copied from libfetch's head |
+| `yonder_scripts_options_t.referrer`, `.last_modified`, `.focus` | the same, from yonder's page in hand |
+| `D_EVENT_READYSTATECHANGE`, `_VISIBILITYCHANGE`, `_PRERENDERINGCHANGE` | the document's handler types, with no content attribute (`content_attribute` in event.c) |
+
+**Numbers.** WPT, the base (`c8d87b53`) → the head, passes of tests run
+with the same exclusions on both sides (every `[required]` test fails with
+the switch off):
+
+| Directory | Before | After | `[required]` | `[excluded]` pages |
+|---|---|---|---|---|
+| `html/dom` (its `documents/` pages now run) | 33 of 115 | 79 of 115 | 39 (+ P1-W's 1) | 230 |
+| `page-visibility` | 0 of 8 | 8 of 8 | 8 | 8 |
+| `html/interaction/focus` | 10 of 120 | 13 of 120 | 2 | 168 |
+| `dom/events` | 167 of 461 | 170 of 461 | 2 | 114 |
+| `dom/nodes` | 1,537 of 4,969 | 1,718 of 4,969 | 190 (+ 0a's) | 0 |
+| `xhr` | 346 of 1,188 | 346 of 1,188 | 37 renamed | as before |
+
+What the numbers say:
+
+- html/dom's base passes include 21 of `document.title-05`'s and one of
+  `-03`'s, which an expando passes with no title at all, and ten of
+  `Document.body`'s classic getter; [required] leaves those out. What still
+  fails there wants something else: `createElementNS` (P1-Db), the
+  HTML element interfaces (`HTMLBodyElement`, `HTMLTitleElement`),
+  `DOMParser`, an XML document in no namespace, and `Document.currentScript`'s
+  page, whose harness times out on its `data:` and cross-origin scripts and
+  its frame, and whose DOM-inserted inline script runs after the
+  `appendChild` that connected it rather than inside it.
+- html/interaction/focus's one P1-Da page (`document-level-apis`) runs 2 of
+  3; the third is `focus()` taking effect inside its task (the scope guard,
+  below). Its frame test never starts, and `document-has-system-focus`
+  opens a window.
+- dom/nodes' `Document-URL`, `Document-characterSet-normalization-*` and
+  `Document-contentType/` pages, which the contract named, load frames,
+  and run no test here; dom/nodes' gain is createEvent's table (Document-
+  createEvent's aliases and refusals) and the documents of their own's
+  content types. It also LOST nine: `Node-baseURI`'s tests passed while
+  both `node.baseURI` and `document.URL` read undefined, and fail now the
+  URL is there (DEBTS.md books `baseURI`).
+- xhr's required tests are named by their page's title (`undefined
+  (CONNECT)` while there was none); the expectation file names them by the
+  titles they have now.
+
+Every expectation directory (30) passes at the head both ways.
+
+The corpus, 2026-10-22b replayed at the base and the head
+(`2026-10-22b_p1da-before` and `-after`). The records census window
+globals only, so of P1-Da's names only CustomEvent can be MISSING: it was
+in 46 page files (73 asks) and is in none. The FAILED lines that named a
+P1-Da member are gone: `'initCustomEvent' is not a function` 11 → 0 (in 11
+records; the banking SDK's common.js is in 3 of them and now runs) and
+`'CustomEvent' is not defined` 16 → 0. Over the 232 pages judged on both
+sides, FAILED lines 383 → 233. Replayed 239 → 232, clean 21 → 21,
+incomplete 24 → 37, unfinished 13 → 13, unjudged 19 → 26. The diff: 57
+pages of progress and 34 "regressions", all next walls (pages that died
+at `currentScript`, `referrer`, `readyState` or `CustomEvent` now run on
+into `ResizeObserver`, `IntersectionObserver`, `getClientRects`,
+`ReadableStream`, `createElementNS`, `requestAnimationFrame` and the like;
+two pages of one site now run their DOMContentLoaded handler on past the
+replay's 5 s, where it died at once before). The seven newly unjudged
+pages are one site's: its scripts now get far enough to run a timer about
+every 100 ms for the whole 60 s replay, and each of its 617 timer tasks is
+a fact line, past the record's 512 (`YONDER_DIAG_FACTS_MAX`), so the
+record says it lost lines. 17 pages are newly incomplete (and 4 that were
+are not): they ask for scripts their kept copies never fetched, because
+they now get far enough to, and the corpus must be recorded again to judge
+them.
+
+Host, the base → the head: the DOM host 12,285 / 85,476 checks → 13,032 /
+87,637 (allocation sweeps 1,093 / 13,109 → 1,161 / 13,400),
+`tools/test_dom_document.inc` holding a case per sentence of document.c's
+contract; the scripted-page host 7,601 → 7,629 checks,
+`tools/test_yonder_document.inc` holding the end-to-end cases; yonder's
+host 1,914 checks; the replay proof and the WPT runner's self-test pass;
+`make -C userland` builds.
+
+**The acceptance.** A banking SDK's common.js died at load on `TypeError:
+'initCustomEvent' is not a function`. Its idiom (`createEvent('CustomEvent')`,
+`initCustomEvent('x', true, true, {a:1})`, `dispatchEvent`) works in the
+DOM host and end to end through yonder's loop, and the corpus's kept copy
+of that file runs without the failure in all three records that had it.
+
+**What the scope guard stopped.** Two things, each reported with nothing
+worked around:
+
+- **The window's title.** The contract said yonder's window title follows
+  `document.title` after the task. It cannot: yonder names its window once,
+  before any page arrives, and the GUI has no verb that renames a window
+  (`SYSCALL_GUI_WINDOW_CREATE` takes the only title). That is a kernel GUI
+  change. `document.title` and its setter are built, and the end-to-end
+  case proves the title yonder reads of the page (`title_of`) is the one
+  the script set; the title bar does not move (DEBTS.md).
+- **`focus()` inside its task.** `activeElement` reads yonder's focus
+  through the hook, but a script's `focus()` is an ask the window carries
+  out after the task, so `el.focus(); document.activeElement === el` is
+  false in that task. Making it synchronous means a script's task reaching
+  the widgets, which the asks design keeps it from; that is more than a
+  hook (DEBTS.md). `activeElement` also follows only the form controls the
+  widgets focus.
+
+`readyState` needed no more than a hook: the readiness move above is the
+host's own dispatch function and its host struct.
+
+**Review.** The builder's adversarial pass looked for page code reaching
+the binding's state (detail lives in the Event's record; createEvent's
+`HashChangeEvent` defaults are defined on the new object, as its
+constructor does), a value's conversion running page code after the tree
+was read (title's setter converted first; `dir`'s did not, and a
+conversion that took the html element away left the setter writing to the
+element it had found: fixed, with a case), work a page can size (title's
+walk and text are linear, the table is fixed), the readiness skipping a
+move nothing heard (yonder's host now calls the binding for a move), a
+`readystatechange` that throws or runs out of time (its failure is the
+dispatch's outcome; a sticky one ends the dispatch), the focus hook
+answering for another page's document (it compares documents), and a held
+`currentScript` outliving its binding (released at free). The truth pass
+corrected WINDOW_DOCUMENT.md's two contract sentences (the title bar, and
+"which the binding already sees"), the appendix's `hasFocus` rows, and
+DEBTS.md's row that listed `document.title` and `document.referrer` as
+absent.
+
+**Rulings taken by the builder, for the cold read.**
+
+- **createEvent's unbuilt interfaces make a plain Event, not
+  NotSupportedError.** DOM refuses a name on its table whose interface is
+  not exposed, and Chris asked for the refusal. The corpus says
+  `createEvent('MouseEvents')` is in 66 kept pages' scripts and is followed
+  by `initEvent` 56 times (by `initMouseEvent` 23), which is how pages
+  dispatch a synthetic click: today that works, and the refusal would turn
+  every one into an exception. So the table's names whose interfaces are
+  not built answer as every name did before, and a name off the table is
+  refused; `TouchEvent` is refused because a desktop does not expose it
+  (its success tells touch detection the machine is a phone: 15 kept
+  pages ask). Flipping the ruling is one table column (`creatable` in
+  event.c). Chris's to take.
+- **`hasFocus()` is "the page on screen".** yonder does not follow its GUI
+  window's focus events; following them is a small yonder change no
+  contract line names (DEBTS.md).
+- **`lastModified` of a kept or replayed page is "now"**: replay records do
+  not keep the Last-Modified header. A Last-Modified of exactly the epoch
+  reads as none (yonder's options use 0 for none).
+- **html/interaction/focus and dom/events are run whole but for their frame,
+  test_driver and second-window pages**, excluded by name with that
+  reason, so their baselines hold the event and focus machinery P1-Da
+  sits on.
+
+**Booked** (DEBTS.md § Classic browser scripting): the title bar,
+`focus()` after its task, `hasFocus` and visibility without the window's
+state, deferred scripts' `loading`, the referrer after a traversal,
+`domain` without the public-suffix list, createEvent's plain Event for
+unbuilt interfaces, and `Node.baseURI`.
