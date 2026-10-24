@@ -124,6 +124,30 @@ static void dom_report_error_cases(void)
                         &outcome) == OS64_JS_EXCEPTION, "report: its own script throws");
     report_log_is(&f, "'Uncaught Error: ours'", "report: and is not taken for another site's");
     fixture_free(&f);
+    /* Writing a task's first report down runs none of the page's code: a
+     * fresh binding, so the getters' error is the first it keeps, reported
+     * by reportError and thrown by a nested dispatch's listener. */
+    options.url = REPORT_URL;
+    for (int nested = 0; nested < 2; nested++) {
+        f = fixture_new(&options);
+        if (!fixture_ready(&f)) return;
+        dom_script(&f, STORAGE_ASSERT
+            "globalThis.calls=0;const e=new Error('x');"
+            "Object.defineProperty(e,'name',{get(){calls++;return 'Named'}});"
+            "Object.defineProperty(e,'message',{get(){calls++;return 'said'}});"
+            "e.toString=()=>{calls++;return 'converted'};",
+            "report: an error whose reading would run the page's code");
+        dom_script(&f, nested
+            ? "const d=document.createElement('div');d.addEventListener('click',()=>{throw e});"
+              "d.dispatchEvent(new Event('click'))"
+            : "reportError(e)", "report: it is reported");
+        check(os64_dom_take_report(f.binding, &outcome) && strstr(outcome.message, "converted") == NULL,
+              "report: the first report is kept as the binding reads it");
+        dom_script(&f, STORAGE_ASSERT "assert(calls===0,'calls '+calls)",
+                   nested ? "report: a nested listener's first error is written down running no getter"
+                          : "report: reportError's first value is written down running no getter");
+        fixture_free(&f);
+    }
 }
 
 /* HTML'S MUTED ERRORS (report.c): whatever another site's script throws,

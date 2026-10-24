@@ -142,14 +142,11 @@ static void first_report(os64_dom_t *dom, JSContext *ctx, JSValueConst error)
     out->status = OS64_JS_EXCEPTION;
     os64_strcopy(out->message, sizeof(out->message), "JavaScript exception; diagnostic unavailable");
     os64_strcopy(out->source_name, sizeof(out->source_name), "event handler");
-    const char *text = JS_ToCString(ctx, error);
-    if (text != NULL) {
-        out->diagnostic_truncated = os64_strcopy(out->message, sizeof(out->message), text) >= sizeof(out->message);
-        JS_FreeCString(ctx, text);
-    } else {
-        JSValue secondary = JS_GetException(ctx);
-        JS_FreeValue(ctx, secondary);
-    }
+    /* Read as an event's message is (report.c's d_error_text), so writing
+     * it down runs none of the page's code: no getter, no toString. */
+    char text[OS64_JS_MESSAGE_CAP + 1];
+    d_error_text(dom, ctx, error, text, sizeof(text));
+    out->diagnostic_truncated = os64_strcopy(out->message, sizeof(out->message), text) >= sizeof(out->message);
 }
 
 /* An exception the binding caught itself: the first is kept for the task's
