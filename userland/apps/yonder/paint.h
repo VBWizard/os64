@@ -57,13 +57,15 @@ typedef struct {
     // coordinates, already cut to the viewport) of 0xAARRGGBB, straight
     // alpha, `rect.w` a row, each laid over what is there.
     void (*pixels)(void *ctx, os64_gui_rect_t rect, const uint32_t *argb);
-    // A STAND-IN for what the face cannot draw in a box, in `ink` on
-    // `paper`, across `content`. A FRAME (an `iframe` or a `frame`): no
+    // A STAND-IN for what the face cannot draw in a box, in `ink`, across
+    // `content`. A FRAME (an `iframe` or a `frame`), on `paper`: no
     // document is loaded inside a document, so the box says where its
     // document is, and a click there follows it (libpage makes the frame a
     // link). A CANVAS's replaced box (flow_box_t.replaced; a canvas laid
     // out otherwise is its fallback, drawn as content): nothing draws what
-    // its script draws, so the box says so. NULL: the box is drawn empty.
+    // its script draws, so the box says so, with no paper, since a canvas
+    // is transparent until drawn and what is under it must show. NULL: the
+    // box is drawn empty.
     void (*stand_in)(void *ctx, const flow_box_t *box, os64_gui_rect_t content, os64_gui_rect_t clip,
                      uint32_t ink, uint32_t paper);
     // A group DRAWN THROUGH its matrix (flow_box_through; PILE3.md §

@@ -2319,9 +2319,14 @@ their ratio as an img's own size does; its fallback is not laid out. With
 scripting off it is its fallback, laid out as any element, an
 inline-block's or an inline-flex's too: the painter draws a stand-in only
 for the replaced box libflow says it made (`flow_box_t.replaced`), never
-by the tag alone. yonder draws the box as a frame's stand-in, a pale panel with "Canvas: not supported" in
-grey along its top; the paint verb that draws both is now `stand_in`, and
-it makes no label for a box with nothing in view. The page's record gets
+by the tag alone. yonder draws the box with a 1px grey outline and
+"Canvas: not supported" in grey in its top-left corner, and NO panel (Opus
+ruled, on the cold read): a canvas is transparent until drawn, and the
+full-viewport fixed canvases of confetti, snow and cursor effects lie over
+the page, which must show through; a frame keeps its pale panel. Over such
+an overlay the label in its corner can still cover a few words of the page
+there, which is accepted. The paint verb that draws both is now
+`stand_in`, and it makes no label for a box with nothing in view. The page's record gets
 one `FAILED unsupported: canvas (1)` line however many canvases it has, a
 script's among them, beside `MISSING element canvas (N)` as before. Opus
 ruled canvas alone loud (2026-10-24): video, audio, embed and svg stay

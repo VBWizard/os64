@@ -10520,13 +10520,15 @@ static void glass_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os6
     glass_fill(&cut, (os64_gui_rect_t){c.x + c.w - 1, c.y, 1, c.h}, 0xd4d4d4);
 }
 
-// A stand-in (paint.h's stand_in): a pale panel, and along its top what
-// the box would hold, cut to the panel: a frame's document ("Frame:
-// https://..."), or that a canvas cannot be drawn ("Canvas: not
-// supported"). The label's run is made for each box this paint draws and
-// let go after it, so no tree's replacement can leave one behind. It is
-// made once for every target (pane_stand_in), so all draw it or none
-// does; NULL, the panel alone.
+// A stand-in (paint.h's stand_in), and along its top what the box would
+// hold, cut to the box: a frame's document ("Frame: https://...") on a
+// pale panel, or that a canvas cannot be drawn ("Canvas: not supported")
+// inside a 1px outline with NO panel, since a canvas is transparent until
+// drawn and full-viewport ones (confetti, snow, a cursor's trail) lie over
+// the page, which must show through. The label's run is made for each box
+// this paint draws and let go after it, so no tree's replacement can leave
+// one behind. It is made once for every target (pane_stand_in), so all draw
+// it or none does; NULL, the panel or the outline alone.
 #define STAND_IN_LABEL_PX 13
 #define STAND_IN_LABEL_MAX 512
 typedef struct {
@@ -10563,7 +10565,7 @@ static StandInLabel stand_in_label(const flow_box_t *b)
 }
 
 static void glass_stand_in(const Glass *gl, os64_gui_rect_t c, os64_gui_rect_t clip, uint32_t ink,
-                           uint32_t paper, const StandInLabel *fl)
+                           uint32_t paper, bool panel, const StandInLabel *fl)
 {
     Glass cut = *gl;
     os64_gui_rect_t room;
@@ -10572,7 +10574,14 @@ static void glass_stand_in(const Glass *gl, os64_gui_rect_t c, os64_gui_rect_t c
     cut.clip = on_glass(&cut, room);
     if (cut.clip.w <= 0 || cut.clip.h <= 0)
         return;
-    glass_fill(&cut, c, paper);
+    if (panel) {
+        glass_fill(&cut, c, paper);
+    } else {
+        glass_fill(&cut, (os64_gui_rect_t){c.x, c.y, c.w, 1}, ink);
+        glass_fill(&cut, (os64_gui_rect_t){c.x, c.y + c.h - 1, c.w, 1}, ink);
+        glass_fill(&cut, (os64_gui_rect_t){c.x, c.y, 1, c.h}, ink);
+        glass_fill(&cut, (os64_gui_rect_t){c.x + c.w - 1, c.y, 1, c.h}, ink);
+    }
     if (fl->run == NULL)
         return;
     int32_t baseline = c.y + fl->pad + fl->ascent;
@@ -10818,14 +10827,15 @@ static void pane_stand_in(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os6
                           uint32_t ink, uint32_t paper)
 {
     GlassPane *gp = ctx;
-    // A box with nothing in view (an empty canvas, one scrolled off) makes
-    // no label: a page can have as many of those as it likes.
+    // A box with nothing in view (an empty canvas, one scrolled off) is not
+    // drawn: a page can have as many of those as it likes.
     os64_gui_rect_t room;
     if (!os64_rect_intersect(c, clip, &room) || room.w <= 0 || room.h <= 0)
         return;
+    bool canvas = b->node != NULL && b->node->tag == OS64_HTML_TAG_CANVAS;
     StandInLabel fl = stand_in_label(b);
     for (int32_t k = 0; k < gp->n; k++)
-        glass_stand_in(gp->now[k], c, clip, ink, paper, &fl);
+        glass_stand_in(gp->now[k], c, clip, ink, paper, !canvas, &fl);
     if (fl.run != NULL)
         os64_text_run_release(fl.run);
 }

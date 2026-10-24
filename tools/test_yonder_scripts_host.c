@@ -4938,6 +4938,48 @@ static void inserted_frame_case(const char *how, const char *html, bool modern, 
     probe_drop();
     if(failures!=before) fprintf(stderr,"inserted frame: %s, the switch %s\n",how,modern ? "on" : "off");
 }
+/* The page in the window painted whole into an 800 by 600 screen, through
+ * the real verbs (view_paint's panes): its pixels, the caller's to free. */
+static uint32_t *stand_in_shot(void) {
+    os64_draw_ctx_t screen={0};
+    screen.surf.width=screen.surf.pitch_px=800; screen.surf.height=600;
+    screen.surf.pixels=os64_calloc(800u*600u,sizeof(uint32_t));
+    g.paint_cache=yonder_paint_cache_new(32u<<20); g.paint_scratch=yonder_scratch_new();
+    g.ui.dirty=g.view.bounds;
+    view_paint(&g.view,&screen,NULL);
+    yonder_paint_cache_free(g.paint_cache); g.paint_cache=NULL;
+    yonder_scratch_free(g.paint_scratch); g.paint_scratch=NULL;
+    return screen.surf.pixels;
+}
+/* THE STAND-INS' OWN PAINTING (yonder.c's pane_stand_in and
+ * glass_stand_in), which the yonder host's recorder stands in for: a
+ * canvas has no paper, and a frame keeps its panel. */
+static void stand_in_paint_cases(void)
+{
+    /* A full-viewport canvas over the page, as confetti and snow are: the
+     * page shows through, and only the outline and the corner label are
+     * the stand-in's. */
+    probe_page("<!doctype html><style>html,body{margin:0;background:#fff}p{margin:200px 0 0 300px}"
+        "canvas{position:fixed;left:0;top:0;width:800px;height:600px}</style>"
+        "<p>Readable text</p><canvas id=c></canvas>",true);
+    uint32_t *px=stand_in_shot();
+    int dark=0, grey=0;
+    for(int32_t y=195;y<240;y++) for(int32_t x=295;x<420;x++) {
+        uint32_t p=px[(size_t)y*800+(size_t)x]&0xffffffu;
+        dark+=(p&0xff)<0x80;
+        grey+=p==0xf0f0f0u;
+    }
+    check(dark>20 && grey==0,"stand-in: text under a full-viewport canvas is drawn, and no panel covers it");
+    check((px[(size_t)400*800+400]&0xffffffu)==0xffffffu,"stand-in: a canvas's middle is the page's own paper");
+    check((px[(size_t)300*800+0]&0xffffffu)!=0xffffffu,"stand-in: a canvas is outlined at its edge");
+    os64_free(px); probe_drop();
+
+    probe_page("<!doctype html><iframe id=f src=/poll></iframe>",true);
+    px=stand_in_shot();
+    check((px[(size_t)100*800+150]&0xffffffu)==0xf0f0f0u,"stand-in: a frame keeps its panel");
+    os64_free(px); probe_drop();
+}
+
 static void inserted_frame_cases(void)
 {
     for(int modern=0;modern<2;modern++) {
@@ -8940,6 +8982,7 @@ int main(void)
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
     classic_browser_cases();
     inserted_frame_cases();
+    stand_in_paint_cases();
     covered_link_cases();
     classic_downloaded_cases();
     hover_batch_cases();

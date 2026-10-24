@@ -691,7 +691,8 @@ each was a page dying on something that browsers have had since the 2000s.
   fallback and is not counted. A frame a script inserts is the same
   stand-in, its `src` set as a property too since the frames row
   (LIBDOM.md § The frames row); a frame is never unsupported. A canvas
-  stands in the same way ("Canvas: not supported") where scripting is on.
+  stands in where scripting is on, "Canvas: not supported" in its corner
+  inside a thin outline, with no panel: what is under a canvas shows.
 - **A picture asked for by itself is shown** on a page of its own
   (YONDER.md § A picture asked for by itself), where it said "not a page".
 - **`document.cookie`** (LIBDOM.md § The classic methods): MediaWiki's first
