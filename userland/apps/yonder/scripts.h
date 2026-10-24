@@ -197,10 +197,16 @@ void yonder_scripts_set_user_agent(yonder_scripts_t *scripts, const char *(*prov
 // binding made now or later. NULL: the document is cookie-averse.
 void yonder_scripts_set_cookies(yonder_scripts_t *scripts, const os64_dom_cookies_t *cookies);
 // The address the page's scripts run at (the options' url, until the
-// session moves the document), and whether the page arrived encrypted (the
-// options' encrypted).
+// session moves the document; only its start when it is longer than
+// OS64_DOM_URL_MAX), and whether the page arrived encrypted (the options'
+// encrypted).
 const char *yonder_scripts_url(const yonder_scripts_t *scripts);
 bool yonder_scripts_encrypted(const yonder_scripts_t *scripts);
+// What a request the page makes names as its Referer: that address, or
+// NULL when it was longer than the host keeps (OS64_DOM_URL_MAX) and so
+// holds only its start — a cut address would name a page that is not this
+// one, so such a request names none.
+const char *yonder_scripts_referrer(const yonder_scripts_t *scripts);
 
 // THE SESSION'S HALF (MODERN_WEB.md § Slice 1b). The document's address
 // moved (a state update, a fragment navigation, a traversal): what a

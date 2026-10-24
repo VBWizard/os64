@@ -1254,10 +1254,14 @@ static struct {
     Asker asker;
     char qtext[WAY_SENTENCE_MAX];
     uint32_t asked;                 // numbers for questions asked on this thread
-    // The request a person is being asked about before it is sent.
+    // The request a person is being asked about before it is sent, and
+    // the address of the page that asked for it, its Referer when it goes
+    // ("" for none): kept as it was when the page asked, which may be
+    // gone or moved by the time the answer comes.
     os64_page_request_t pending;
     NavKind pending_kind;
     const char *pending_refused;
+    char pending_referrer[OS64_FETCH_URL_MAX];
 
     char field_buf[1024];
     char status_text[512];
@@ -1305,7 +1309,8 @@ static struct {
     // The page stream_finish holds while its DOMContentLoaded runs: no
     // longer the stream's, not yet coming or shown. A fragment its scripts
     // ask for lands in `fragment`, which arrive scrolls to; a measurement
-    // they make is of `page` (measured_layout). `kind` is how it came;
+    // they make is of `page` (measured_layout); a request they make is
+    // `page`'s, found by its serial (scripts_for). `kind` is how it came;
     // `abandoned` says its scripts went back or forward past it
     // (unshown_go), so it is never shown.
     struct {
@@ -2750,7 +2755,8 @@ static bool relayout(bool again)
     return lay_out_shown(again, LAID_FOR_PAGE);
 }
 
-static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask_t ask);
+static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask_t ask, const char *from,
+                             yonder_diag_t *record);
 static void buttons_follow(void);
 static void pictures_start(Page *p);
 static void pictures_leave(Page *p);
@@ -2799,7 +2805,7 @@ static void refresh_if_declared(void)
         os64_page_request_free(&request);
         break;
     case WAY_REFRESH_GO:
-        request_navigate(&request, NAV_REFRESH, WAY_ASK_GO);
+        request_navigate(&request, NAV_REFRESH, WAY_ASK_GO, g.page.way.url, g.page.diag);
         break;
     case WAY_REFRESH_NONE:
         break;
@@ -3255,7 +3261,7 @@ static void bar_ask(Asker asker, uint32_t number, const char *question)
     bar_show(true);
 }
 
-static void start_trip(const char *url, os64_page_request_t *request, NavKind kind,
+static void start_trip(const char *url, os64_page_request_t *request, const char *referrer, NavKind kind,
                        const way_position_t *crumb);
 
 static void bar_answered(bool yes)
@@ -3269,7 +3275,7 @@ static void bar_answered(bool yes)
         yonder_mail_answer(g.stream.mail, number, yes);
     } else if (asker == ASK_REQUEST) {
         if (yes) {
-            start_trip(g.pending.url, &g.pending, g.pending_kind, NULL);
+            start_trip(g.pending.url, &g.pending, g.pending_referrer, g.pending_kind, NULL);
         } else {
             os64_page_request_free(&g.pending);
             status_rest(g.pending_refused);
@@ -3388,18 +3394,20 @@ static void place_take(Place *place)
     p->nback = p->nahead = 0;
 }
 
-static void trip_send(const char *url, os64_page_request_t *request, NavKind kind,
+static void trip_send(const char *url, os64_page_request_t *request, const char *referrer, NavKind kind,
                       const way_position_t *crumb);
 
 // Sends `url` (with `request`'s body, if it is a form: MOVED into the job)
-// to a worker. The navigation it replaces is stopped first: one at a time.
+// to a worker, `referrer` the address of the page that asked for it (NULL
+// for none: an address typed, a traversal, a reload). The navigation it
+// replaces is stopped first: one at a time.
 // One started by a page not yet shown (g.replacing) takes that page's place
 // (Place) instead of coming from the page on screen, and a traversal the
 // page was coming by goes on as the new page's: the session moves to that
 // entry when the new page arrives (arrive_now), and the page on screen's
 // changes meanwhile stay held (g.held). Its scroll is the top, as a new
 // document's.
-static void start_trip(const char *url, os64_page_request_t *request, NavKind kind,
+static void start_trip(const char *url, os64_page_request_t *request, const char *referrer, NavKind kind,
                        const way_position_t *crumb)
 {
     Place place;
@@ -3407,7 +3415,7 @@ static void start_trip(const char *url, os64_page_request_t *request, NavKind ki
     bool traversal = place.taken && g.traversing && (place.kind == NAV_BACK || place.kind == NAV_FORWARD);
     if (traversal)
         g.traversing = false;           // stop_trip must not end it
-    trip_send(url, request, place.taken ? place.kind : kind, crumb);
+    trip_send(url, request, referrer, place.taken ? place.kind : kind, crumb);
     if (!place.taken)
         return;
     if (!g.stream.active) {
@@ -3439,9 +3447,14 @@ static void start_trip(const char *url, os64_page_request_t *request, NavKind ki
     g.traversing = traversal;
 }
 
-static void trip_send(const char *url, os64_page_request_t *request, NavKind kind,
+static void trip_send(const char *url, os64_page_request_t *request, const char *referrer, NavKind kind,
                       const way_position_t *crumb)
 {
+    // What a page asked for names that page in its Referer; a Reload, even
+    // one sending a form again, names nothing. Read now: `referrer` may be
+    // the asking page's own address, which the stop below can let go.
+    char named[OS64_FETCH_URL_MAX];
+    os64_strcopy(named, sizeof(named), request != NULL && kind != NAV_RELOAD && referrer != NULL ? referrer : "");
     // A QUESTION IS ABOUT THE PAGE ON SCREEN, and going anywhere leaves it:
     // whoever asked, it goes (a form's request with it) before this goes.
     bar_forget();
@@ -3479,10 +3492,7 @@ static void trip_send(const char *url, os64_page_request_t *request, NavKind kin
     trip->window = g.win;
     trip->mail_bell = BELL_MAIL;
     os64_strcopy(trip->url, sizeof(trip->url), url);
-    // What the page asked for names the page in its Referer; a Reload,
-    // even one sending a form again, names nothing.
-    if (request != NULL && kind != NAV_RELOAD && g.page.tree != NULL)
-        os64_strcopy(trip->referrer, sizeof(trip->referrer), g.page.way.url);
+    os64_strcopy(trip->referrer, sizeof(trip->referrer), named);
     os64_memset(&g.stream, 0, sizeof(g.stream));
     timing_start(&g.stream.timing, kind);
     if (request != NULL) {
@@ -3535,13 +3545,17 @@ static void trip_send(const char *url, os64_page_request_t *request, NavKind kin
 }
 
 // A request a page makes, judged by libway: refused with its sentence,
-// asked about in the bar, or sent. `request` is consumed either way.
-static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask_t ask)
+// asked about in the bar, or sent. `request` is consumed either way. The
+// page that asked is the one the request names and tells: `from`, its
+// address, is its Referer, and `record` takes a refusal's line — that
+// page's own wherever it is in its arrival, whichever page is on screen.
+static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask_t ask, const char *from,
+                             yonder_diag_t *record)
 {
     way_judgement_t j = way_judge(&g.way, request, ask);
     if (j.kind == WAY_REFUSE) {
         os64_page_request_free(request);
-        yonder_diag_failed(g.page.diag, "link refused", g.way.status);
+        yonder_diag_failed(record, "link refused", g.way.status);
         badge_follow();
         say_way();
     } else if (j.kind == WAY_QUESTION) {
@@ -3550,8 +3564,9 @@ static void request_navigate(os64_page_request_t *request, NavKind kind, way_ask
         os64_memset(request, 0, sizeof(*request));
         g.pending_kind = kind;
         g.pending_refused = j.refused;
+        os64_strcopy(g.pending_referrer, sizeof(g.pending_referrer), from != NULL ? from : "");
     } else {
-        start_trip(request->url, request, kind, NULL);
+        start_trip(request->url, request, from, kind, NULL);
     }
 }
 
@@ -3609,6 +3624,7 @@ static void resend_form(void)
             j.kind == WAY_QUESTION ? j.question
                                    : "This page is the reply to a form. Send the form again?");
     g.pending = again;
+    g.pending_referrer[0] = '\0';       // a Reload names nothing
     g.pending_kind = NAV_RELOAD;
     g.pending_refused = j.kind == WAY_QUESTION ? j.refused : "The form was not sent again.";
 }
@@ -3628,7 +3644,7 @@ static void open_address(const char *typed, NavKind kind, const way_position_t *
         status_rest("That address is longer than one may be.");
         return;
     }
-    start_trip(url, request, kind, crumb);
+    start_trip(url, request, NULL, kind, crumb);
 }
 
 // ── Pictures ────────────────────────────────────────────────────────────
@@ -6827,7 +6843,7 @@ static void form_send_as(int32_t control, os64_page_activation_t how, NavKind ki
     os64_page_verdict_t verdict = os64_page_activate(page_model(&g.page), what, &request);
     if (verdict == OS64_PAGE_NAVIGATE) {
         g.chain = 0;
-        request_navigate(&request, kind, WAY_ASK_SEND);
+        request_navigate(&request, kind, WAY_ASK_SEND, g.page.way.url, g.page.diag);
         return;
     }
     if (verdict == OS64_PAGE_FRAGMENT) {
@@ -7303,21 +7319,40 @@ static bool fetchable(const char *url)
            (os64_strlen(url) > 7 && os64_memcmp(url, "file://", 7) == 0);
 }
 
-// The address of the page a host belongs to, for a fetch's Referer.
-static const char *scripts_page_url(uint64_t serial)
+// The host a serial names, in whichever role its page is: arriving, held
+// by stream_finish for its DOMContentLoaded, waiting for its sheets, or on
+// screen. NULL: its page is gone. A script's request is its own page's
+// wherever that page is: what the window gives it of a page — its origin,
+// a `src` script's Referer, the record it is written in — comes from this
+// host, and a serial that finds none is refused, which the page sees as a
+// network error, never taken as the page on screen's.
+static yonder_scripts_t *scripts_for(uint64_t serial)
 {
     if (g.stream.scripts != NULL && yonder_scripts_serial(g.stream.scripts) == serial)
-        return g.stream.head.url;
-    if (g.coming.active && yonder_scripts_serial(g.coming.page.scripts) == serial)
-        return g.coming.page.way.url;
-    return g.page.way.url;
+        return g.stream.scripts;
+    if (g.finishing.page != NULL && g.finishing.page->scripts != NULL &&
+        yonder_scripts_serial(g.finishing.page->scripts) == serial)
+        return g.finishing.page->scripts;
+    if (g.coming.active && g.coming.page.scripts != NULL &&
+        yonder_scripts_serial(g.coming.page.scripts) == serial)
+        return g.coming.page.scripts;
+    if (g.page.scripts != NULL && yonder_scripts_serial(g.page.scripts) == serial)
+        return g.page.scripts;
+    return NULL;
 }
 
+// A `src` script's fetch, its Referer the address its page's scripts run
+// at (none when that address was too long to keep whole:
+// yonder_scripts_referrer). 0, not begun, for a page that is gone, an
+// address that is not http, https or file, no pool, no memory for the job,
+// or a pool that will not take it.
 static uint64_t script_fetch(void *opaque, uint64_t serial, uint32_t token, const char *url,
                              const char *fallback)
 {
     (void)opaque;
-    yonder_script_job_t *job = fetchable(url) && g.pool != NULL ? os64_calloc(1, sizeof(*job)) : NULL;
+    yonder_scripts_t *host = scripts_for(serial);
+    yonder_script_job_t *job =
+        host != NULL && fetchable(url) && g.pool != NULL ? os64_calloc(1, sizeof(*job)) : NULL;
     if (job == NULL)
         return 0;
     job->kind = YONDER_JOB_SCRIPT;
@@ -7328,7 +7363,8 @@ static uint64_t script_fetch(void *opaque, uint64_t serial, uint32_t token, cons
     os64_strcopy(job->fallback, sizeof(job->fallback), fallback);
     job->hooks.jar = g.way.jar;
     job->hooks.cache = g.cache;
-    os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), scripts_page_url(serial));
+    const char *referrer = yonder_scripts_referrer(host);
+    os64_strcopy(job->hooks.referrer, sizeof(job->hooks.referrer), referrer != NULL ? referrer : "");
     os64_work_t work = {yonder_script_run, yonder_script_release, job, SCRIPT_RESERVE};
     os64_work_id_t id = os64_work_submit(g.pool, &work);
     if (id == 0)
@@ -7424,20 +7460,6 @@ static yonder_scripts_t *scripts_host(os64_html_document_t *doc, os64_page_state
     const os64_dom_cookies_t cookies = {script_cookies_get, script_cookies_set, host};
     yonder_scripts_set_cookies(host, &cookies);
     return host;
-}
-
-// The host a fetch job's serial names: the page arriving, the page waiting
-// for its sheets, or the page on screen. NULL: its page is gone.
-static yonder_scripts_t *scripts_for(uint64_t serial)
-{
-    if (g.stream.scripts != NULL && yonder_scripts_serial(g.stream.scripts) == serial)
-        return g.stream.scripts;
-    if (g.coming.active && g.coming.page.scripts != NULL &&
-        yonder_scripts_serial(g.coming.page.scripts) == serial)
-        return g.coming.page.scripts;
-    if (g.page.scripts != NULL && yonder_scripts_serial(g.page.scripts) == serial)
-        return g.page.scripts;
-    return NULL;
 }
 
 static void script_arrived(const yonder_script_job_t *job, const yonder_script_t *got)
@@ -7574,23 +7596,20 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
 // sends a preflight every time one is needed.
 static way_preflight_t *s_preflight;
 
-// The page's origin for a job, from the address its scripts run at; an
-// opaque one is this page's own, named by its serial.
-static void request_origin(uint64_t serial, way_origin_t *out)
-{
-    yonder_scripts_t *host = scripts_for(serial);
-    const char *url = host != NULL ? yonder_scripts_url(host) : scripts_page_url(serial);
-    way_origin_of(url, serial != 0 ? serial : 1, out);
-}
-
-// A job for a page's request, its bytes its own. NULL on no memory, and
-// for an address longer than a data: URL may be (fetch_job.h), which the
-// page sees as a network error.
+// A job for a page's request, its bytes its own, from the page its serial
+// names (scripts_for). NULL on no memory, for an address longer than a
+// data: URL may be (fetch_job.h), and for a serial no page has, each of
+// which the page sees as a network error.
 static yonder_fetch_job_t *request_job(uint64_t serial, uint32_t token, const os64_dom_request_t *q)
 {
     size_t url_len = os64_strlen(q->url);
-    if (url_len > YONDER_FETCH_DATA_URL_MAX)
+    yonder_scripts_t *host = scripts_for(serial);
+    if (url_len > YONDER_FETCH_DATA_URL_MAX || host == NULL)
         return NULL;
+    // The page's origin, from the address its scripts run at; an opaque
+    // one is this page's own, named by its serial.
+    way_origin_t origin;
+    way_origin_of(yonder_scripts_url(host), serial != 0 ? serial : 1, &origin);
     yonder_fetch_job_t *job = os64_calloc(1, sizeof(*job));
     if (job == NULL)
         return NULL;
@@ -7613,7 +7632,7 @@ static yonder_fetch_job_t *request_job(uint64_t serial, uint32_t token, const os
     if (q->body != NULL && q->body_length != 0)
         os64_memcpy(job->body, q->body, q->body_length);
     job->body_len = q->body != NULL ? q->body_length : 0;
-    request_origin(serial, &job->request.origin);
+    job->request.origin = origin;
     job->request.mode = q->mode;
     job->request.credentials = q->credentials;
     job->request.redirect = q->redirect;
@@ -7621,8 +7640,12 @@ static yonder_fetch_job_t *request_job(uint64_t serial, uint32_t token, const os
     job->request.preflight_flag = q->preflight;
     os64_strcopy(job->request.method, sizeof(job->request.method), q->method);
     // A referrer too long to keep whole goes as none: a cut address would
-    // name a page that is not this one.
+    // name a page that is not this one. The page's own address is one when
+    // the host kept only its start (yonder_scripts_referrer), which is the
+    // address the binding names for "about:client".
     const char *referrer = q->referrer != NULL ? q->referrer : "";
+    if (yonder_scripts_referrer(host) == NULL && os64_streq(referrer, yonder_scripts_url(host)))
+        referrer = "";
     os64_strcopy(job->referrer, sizeof(job->referrer),
                  os64_strlen(referrer) < sizeof(job->referrer) ? referrer : "");
     job->jar = g.way.jar;
@@ -7691,6 +7714,8 @@ static const os64_html_document_t *scripts_doc(const yonder_scripts_t *host)
         return page_doc(&g.page);
     if (g.coming.active && host == g.coming.page.scripts)
         return page_doc(&g.coming.page);
+    if (g.finishing.page != NULL && host == g.finishing.page->scripts)
+        return page_doc(g.finishing.page);
     if (host == g.stream.scripts && g.stream.parser != NULL)
         return os64_html_parser_document(g.stream.parser);
     return NULL;
@@ -7757,8 +7782,10 @@ static void script_release(void *opaque, os64_dom_response_t *response)
 }
 
 // A request for an address a script named, owning its own storage as
-// libpage's do. False when memory ran out.
-static bool request_for(const char *url, os64_page_request_t *out)
+// libpage's do, from the page at `from`: leaving an https:// page for an
+// http:// address is a downgrade, which libway asks about (way_judge).
+// False when memory ran out.
+static bool request_for(const char *url, const char *from, os64_page_request_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
     out->control = -1;
@@ -7771,7 +7798,7 @@ static bool request_for(const char *url, os64_page_request_t *out)
     out->url = copy;
     out->leaves_machine = !os64_streq(out->scheme, "mailto") && !os64_streq(out->scheme, "data") &&
                           !os64_streq(out->scheme, "javascript");
-    out->downgrade = os64_strlen(g.page.way.url) > 8 && os64_memcmp(g.page.way.url, "https://", 8) == 0 &&
+    out->downgrade = os64_strlen(from) > 8 && os64_memcmp(from, "https://", 8) == 0 &&
                      os64_streq(out->scheme, "http");
     return true;
 }
@@ -7985,9 +8012,15 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
             }
             return;
         }
+        // The navigation is the asking page's, wherever that page is: its
+        // address is what a downgrade is judged from and the request's
+        // Referer (none when it was too long to keep whole:
+        // yonder_scripts_referrer), and its record takes a refusal's line.
+        const char *from = yonder_scripts_referrer(host);
+        yonder_diag_t *record = yonder_scripts_diag(host);
         os64_page_request_t request;
-        if (!request_for(ask->url, &request)) {
-            say_failed(g.page.diag, "navigation", "A script asked for an address this browser cannot go to.");
+        if (!request_for(ask->url, yonder_scripts_url(host), &request)) {
+            say_failed(record, "navigation", "A script asked for an address this browser cannot go to.");
             return;
         }
         // A page's navigation is from its own entry, which replace()
@@ -7996,15 +8029,17 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
         // screen, whose `load` is running, that entry is the one on screen.
         // A page not yet shown is the session's entry already (unshown_go
         // says why), not the page on screen's: the new page takes its place
-        // (start_trip). One that waits on the question bar is asked as the
-        // page on screen's, and a page not yet shown's place is not taken.
+        // (start_trip). One that waits on the question bar is still judged
+        // and named as the asking page's (its downgrade, and its Referer on
+        // a yes), but its place in the session is the page on screen's: a
+        // page not yet shown's place is not taken (DEBTS.md).
         Page *p = shown ? &g.page : page_of_host(host);
         bool replaces = page_navigation_replaces(p);
         g.replacing = replaces && p != &g.page ? p : NULL;
         request_navigate(&request,
                          ask->kind == OS64_DOM_NAVIGATE_REPLACE || (replaces && p == &g.page) ? NAV_REFRESH
                                                                                                 : NAV_GO,
-                         WAY_ASK_GO);
+                         WAY_ASK_GO, from, record);
         g.replacing = NULL;
         return;
     }
@@ -8689,7 +8724,7 @@ static void session_go(int32_t delta)
     char *state = crumb.state != NULL ? copy_text(crumb.state) : NULL;
     crumb.state = NULL;
     g.chain = 0;
-    start_trip(crumb.url, NULL, back ? NAV_BACK : NAV_FORWARD, &crumb.position);
+    start_trip(crumb.url, NULL, NULL, back ? NAV_BACK : NAV_FORWARD, &crumb.position);
     if (g.stream.active) {
         stream_entry(crumb.entry, state, true);
         g.traversing = true;
@@ -11402,7 +11437,7 @@ static void follow_link_asked(int32_t link, way_ask_t ask)
         os64_page_request_free(&request);
     } else if (verdict == OS64_PAGE_NAVIGATE) {
         g.chain = 0;
-        request_navigate(&request, NAV_GO, ask);
+        request_navigate(&request, NAV_GO, ask, g.page.way.url, g.page.diag);
     } else {
         if (reason_refuses(request.reason))
             say_failed(g.page.diag, "link refused", os64_page_reason_name(request.reason));
@@ -11622,7 +11657,7 @@ static void click_reload(os64_ui_widget_t *w, void *user)
     }
     char url[OS64_FETCH_URL_MAX];
     os64_strcopy(url, sizeof(url), g.page.way.url);
-    start_trip(url, NULL, NAV_RELOAD, NULL);
+    start_trip(url, NULL, NULL, NAV_RELOAD, NULL);
     // A reload is the same entry again, its state with it.
     stream_entry(g.page.entry, g.page.entry_state, false);
 }

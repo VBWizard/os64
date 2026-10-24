@@ -2486,7 +2486,7 @@ static void stream_slices(void) {
     g.paint_scratch=yonder_scratch_new();
     yonder_scratch_give(g.paint_scratch,yonder_scratch_take(g.paint_scratch,YONDER_SCRATCH_FLOOR));
     check(yonder_scratch_counts(g.paint_scratch).idle==1,"stream: the last page's paint left a buffer idle");
-    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/p",NULL,NULL,NAV_GO,NULL);
     check(g.stream.active && g.nav.id==1 && pool_work.job!=NULL && g.stop.disabled==false,
         "stream: a navigation starts a stream and lights Stop");
     size_t len=5*YONDER_STREAM_CHUNK;
@@ -2522,7 +2522,7 @@ static void stream_slices(void) {
      * once per post and a stalled socket rings nothing more, so the slice
      * that left a chunk in the ring asks for the turn that reads it. */
     stream_window();
-    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/p",NULL,NULL,NAV_GO,NULL);
     yonder_mail_post_head(g.stream.mail,&h);
     stream_post_body(body,len,YONDER_STREAM_CHUNK);
     check(stream_turn()==true && g.stream.active && yonder_mail_streaming(g.stream.mail),
@@ -2540,7 +2540,7 @@ static void stream_reaped_first(void) {
      * the reap before it has parsed a byte. The parse goes on from the
      * mailbox the stream holds. */
     stream_window();
-    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/p",NULL,NULL,NAV_GO,NULL);
     way_head_t h=stream_head("text/html","utf-8",false);
     yonder_mail_post_head(g.stream.mail,&h);
     const char *html="<p id=t>caf\xC3\xA9</p>";
@@ -2557,7 +2557,7 @@ static void stream_text(void) {
     /* text/plain through the same parser, after <plaintext>, in the
      * encoding the first bytes decide. */
     stream_window();
-    start_trip("http://fixture.test/t",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/t",NULL,NULL,NAV_GO,NULL);
     way_head_t h=stream_head("text/plain","",false);
     yonder_mail_post_head(g.stream.mail,&h);
     /* Posted a byte at a time: the mark arrives in three reads, and the
@@ -2579,7 +2579,7 @@ static void stream_text(void) {
     stream_window_drop();
     /* A body shorter than a mark: judged at the end, on what there is. */
     stream_window();
-    start_trip("http://fixture.test/t",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/t",NULL,NULL,NAV_GO,NULL);
     h=stream_head("text/plain","",false);
     yonder_mail_post_head(g.stream.mail,&h);
     stream_post_body((const uint8_t *)"hi",2,1);
@@ -2592,7 +2592,7 @@ static void stream_text(void) {
     stream_window_drop();
     /* No label, no mark, not JSON: windows-1252. */
     stream_window();
-    start_trip("http://fixture.test/t",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/t",NULL,NULL,NAV_GO,NULL);
     h=stream_head("text/plain","",false);
     yonder_mail_post_head(g.stream.mail,&h);
     stream_post_body((const uint8_t *)"\x93quoted\x94",8,YONDER_STREAM_CHUNK);
@@ -2606,7 +2606,7 @@ static void stream_text(void) {
 }
 static void stream_no_page(void) {
     stream_window();
-    start_trip("http://fixture.test/x",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/x",NULL,NULL,NAV_GO,NULL);
     stream_post_verdict(false,OS64_FETCH_OK," that is image/png, not a page - save it with:  os64get 'x'");
     check(stream_turn()==false && !g.stream.active && g.page.tree==NULL &&
         os64_streq(g.status_rest,"that is image/png, not a page - save it with:  os64get 'x'") &&
@@ -2618,7 +2618,7 @@ static void stream_no_page(void) {
  * reply's body is read. */
 static void stream_picture_page(void) {
     stream_window();
-    start_trip("http://fixture.test/shots/dwm&co.png?v=1",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/shots/dwm&co.png?v=1",NULL,NULL,NAV_GO,NULL);
     way_head_t h=stream_head("image/png","",false);
     os64_strcopy(h.url,sizeof(h.url),"http://fixture.test/shots/dwm&co.png?v=1");
     h.body=WAY_BODY_IMAGE;
@@ -2660,7 +2660,7 @@ static void stream_refused(void) {
     /* Deeper than twice the parser's stack: the parser refuses, the fetch
      * is cancelled, and the page arrives as far as it got, saying so. */
     stream_window();
-    start_trip("http://fixture.test/deep",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/deep",NULL,NULL,NAV_GO,NULL);
     way_head_t h=stream_head("text/html","",false);
     yonder_mail_post_head(g.stream.mail,&h);
     size_t depth=1200, len=depth*5+64;
@@ -2683,7 +2683,7 @@ static void stream_refused(void) {
 }
 static void stream_stopped(void) {
     stream_window();
-    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/p",NULL,NULL,NAV_GO,NULL);
     way_head_t h=stream_head("text/html","",false);
     yonder_mail_post_head(g.stream.mail,&h);
     stream_post_body((const uint8_t *)"<p>half",7,YONDER_STREAM_CHUNK);
@@ -2695,7 +2695,7 @@ static void stream_stopped(void) {
 }
 static void stream_pool_breaks(void) {
     stream_window();
-    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/p",NULL,NULL,NAV_GO,NULL);
     way_head_t h=stream_head("text/html","",false);
     yonder_mail_post_head(g.stream.mail,&h);
     stream_turn();
@@ -2716,7 +2716,7 @@ static void stream_keeps_the_form(void) {
     char *url=os64_malloc(32); strcpy(url,"http://fixture.test/send"); request.url=url;
     char *type=os64_malloc(40); strcpy(type,"application/x-www-form-urlencoded"); request.content_type=type;
     char *body=os64_malloc(4); memcpy(body,"q=1",4); request.body=body; request.body_len=3;
-    start_trip(request.url,&request,NAV_GO,NULL);
+    start_trip(request.url,&request,NULL,NAV_GO,NULL);
     yonder_trip_t *trip=pool_work.job;
     check(g.stream.has_sent && os64_streq(g.stream.sent.url,"http://fixture.test/send") &&
         trip->has_request && os64_streq(trip->request.url,"http://fixture.test/send") &&
@@ -2734,7 +2734,7 @@ static void stream_mail_wiring(void) {
     /* Progress and a worker's question still reach the status line and the
      * bar through the stream's mailbox; a new navigation answers No. */
     stream_window();
-    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/p",NULL,NULL,NAV_GO,NULL);
     yonder_mail_progress(g.stream.mail," reading 64 KB of http://fixture.test/p");
     os64_gui_event_t bell={.type=OS64_GUI_EVENT_DOORBELL,.doorbell={.mask=BELL_MAIL}};
     on_doorbell(&g.ui,&bell);
@@ -2756,7 +2756,7 @@ static void stream_mail_wiring(void) {
     on_doorbell(&g.ui,&bell);
     check(old->answers==1 && old->answered==number && !old->answered_yes && g.bar.number==second,
         "stream: a newer question answers the older one No");
-    start_trip("http://fixture.test/q",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/q",NULL,NULL,NAV_GO,NULL);
     check(old->answers==1 && g.asker==ASK_NONE && !g.bar.up && pool_cancelled==1 && g.nav.id==2 &&
         g.stream.mail!=old,"stream: the next navigation cancels the job, lowers the bar and starts afresh");
     yonder_mail_drop(old);
@@ -2779,7 +2779,7 @@ static void stream_captures_mode(void) {
     for(int on=0;on<2;on++) {
         stream_window();
         g.scripts_on=on!=0;
-        start_trip("http://fixture.test/mode",NULL,NAV_GO,NULL);
+        start_trip("http://fixture.test/mode",NULL,NULL,NAV_GO,NULL);
         g.scripts_on=!g.scripts_on;     /* changed after the start: the stream keeps what it captured */
         way_head_t h=stream_head("text/html","",false);
         yonder_mail_post_head(g.stream.mail,&h);
@@ -2808,13 +2808,17 @@ static char *pad_page(const char *rest) {
 }
 static bool loop_encrypted;     /* the next loop_page's head: arrived encrypted */
 static bool loop_modern_off;    /* the next loop_page's window: the modern switch off */
+/* The next loop_page's address as asked for, and as its head says it ended
+ * after redirects: NULL for the usual pair. */
+static const char *loop_asked, *loop_final;
 static void loop_page(const char *rest) {
     stream_window();
     g.scripts_on=true; g.script_ms=5000; now_ms=100;
     g.modern=!loop_modern_off;
-    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    start_trip(loop_asked!=NULL ? loop_asked : "http://fixture.test/p",NULL,NULL,NAV_GO,NULL);
     char *html=pad_page(rest);
     way_head_t h=stream_head("text/html","",false);
+    if(loop_final!=NULL) os64_strcopy(h.url,sizeof(h.url),loop_final);
     h.encrypted=loop_encrypted;
     yonder_mail_post_head(g.stream.mail,&h);
     stream_post_body((const uint8_t *)html,strlen(html),YONDER_STREAM_CHUNK);
@@ -3581,7 +3585,7 @@ static void loop_view_refetched(void) {
     loop_page("<p id=out>-</p><script>onload=function(){history.pushState({k:1},'','/kept')}</script>");
     check(loop_settle() && view_turns() && os64_streq(g.page.way.url,"http://fixture.test/kept"),
         "refetched: the page pushes its state");
-    start_trip("http://fixture.test/other",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/other",NULL,NULL,NAV_GO,NULL);
     post_arriving("<p>other</p>");
     check(loop_settle() && view_turns() && g.way.depth==2,"refetched: another page");
     click_back(NULL,NULL);
@@ -3604,7 +3608,7 @@ static void loop_view_identity(void) {
     // finalizes it only while its document is still the active one).
     loop_page("<p>P</p><script>history.replaceState(null,'','/P')</script>");
     check(loop_settle() && view_turns(),"identity: P");
-    start_trip("http://fixture.test/A",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/A",NULL,NULL,NAV_GO,NULL);
     post_arriving("<style>body{margin:0}</style><a id=l href=#sec>go</a><div style=height:2000px></div>"
         "<h2 id=sec>s</h2><script>history.replaceState(null,'','/A')</script>");
     check(loop_settle() && view_turns() && session_is("/P","/A",""),"identity: on A, P behind");
@@ -3630,7 +3634,7 @@ static void unshown_back_case(const char *when, const char *script) {
     char body[512];
     loop_page("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
     check(loop_settle() && view_turns(),"unshown back: P");
-    start_trip("http://fixture.test/A",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/A",NULL,NULL,NAV_GO,NULL);
     os64_snprintf(body,sizeof(body),"<p id=out>A</p><script>history.replaceState(null,'','/A');%s</script><p>tail</p>",
                   script);
     post_arriving(body);
@@ -3684,7 +3688,7 @@ static void loop_view_refetch_short(void) {
     for(size_t cut=0;cut==0 || cut<=clicked+arrived;cut++) {
         loop_page("<script>onload=function(){history.pushState({k:1},'','/kept')}</script>");
         if(!loop_settle() || !view_turns()) { check(false,"refetch short: the page arrives"); loop_drop(); return; }
-        start_trip("http://fixture.test/other",NULL,NAV_GO,NULL);
+        start_trip("http://fixture.test/other",NULL,NULL,NAV_GO,NULL);
         post_arriving("<p>other</p>");
         loop_settle();
         view_turns();
@@ -3777,7 +3781,7 @@ static void loop_view_extremes(void) {
     // The same delta from a page not yet shown: nothing, and it arrives.
     loop_page("<p id=out>P</p>");
     check(loop_settle() && view_turns(),"extremes: P");
-    start_trip("http://fixture.test/A",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/A",NULL,NULL,NAV_GO,NULL);
     // Two scripts, two tasks: in one task the two would add up to -1.
     post_arriving("<p id=out>A</p><script>history.go(-2147483648)</script><script>history.go(2147483647)</script>"
                   "<p>tail</p>");
@@ -3795,7 +3799,7 @@ static void unshown_forward_case(const char *when, const char *script) {
     char body[512];
     loop_page("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
     check(loop_settle() && view_turns(),"unshown forward: T");
-    start_trip("http://fixture.test/P",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/P",NULL,NULL,NAV_GO,NULL);
     post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
     check(loop_settle() && view_turns() && session_is("/T","/P",""),"unshown forward: on P, T behind");
     click_back(NULL,NULL);
@@ -3823,7 +3827,7 @@ static void loop_view_unshown_forward(void) {
     // and it arrives.
     loop_page("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
     check(loop_settle() && view_turns(),"unshown forward: P");
-    start_trip("http://fixture.test/A",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/A",NULL,NULL,NAV_GO,NULL);
     post_arriving("<p id=out>A</p><script>history.replaceState(null,'','/A');history.forward()</script><p>tail</p>");
     check(loop_settle() && view_turns() && probe_text_is("out","A") && session_is("/P","/A",""),
         "unshown forward: from a new way's page, nothing is ahead, and it arrives");
@@ -3835,7 +3839,7 @@ static void loop_view_unshown_forward(void) {
 static void loop_view_pushed_while_arriving(void) {
     loop_page("<p id=out>T</p><script>history.replaceState({t:1},'','/T')</script>");
     check(loop_settle() && view_turns(),"pushed while arriving: T");
-    start_trip("http://fixture.test/P",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/P",NULL,NULL,NAV_GO,NULL);
     post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
     check(loop_settle() && view_turns() && session_is("/T","/P",""),"pushed while arriving: on P");
     click_back(NULL,NULL);
@@ -3851,7 +3855,7 @@ static void loop_view_pushed_while_arriving(void) {
     // push ahead, and P, which the push let go of, is not.
     loop_page("<p id=out>T</p><script>history.replaceState({t:1},'','/T')</script>");
     check(loop_settle() && view_turns(),"pushed and back: T");
-    start_trip("http://fixture.test/P",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/P",NULL,NULL,NAV_GO,NULL);
     post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
     check(loop_settle() && view_turns() && session_is("/T","/P",""),"pushed and back: on P");
     click_back(NULL,NULL);
@@ -3868,7 +3872,7 @@ static void loop_view_pushed_while_arriving(void) {
 static void loop_view_pushed_then_forward(void) {
     loop_page("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
     check(loop_settle() && view_turns(),"pushed then forward: T");
-    start_trip("http://fixture.test/P",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/P",NULL,NULL,NAV_GO,NULL);
     post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
     check(loop_settle() && view_turns() && session_is("/T","/P",""),"pushed then forward: on P, T behind");
     click_back(NULL,NULL);
@@ -3881,7 +3885,7 @@ static void loop_view_pushed_then_forward(void) {
     // The same from a reload of T with P ahead.
     loop_page("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
     check(loop_settle() && view_turns(),"pushed then forward: T again");
-    start_trip("http://fixture.test/P",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/P",NULL,NULL,NAV_GO,NULL);
     post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
     check(loop_settle() && view_turns() && session_is("/T","/P",""),"pushed then forward: on P again");
     click_back(NULL,NULL);
@@ -3904,7 +3908,7 @@ static void loop_view_pushed_length(void) {
         "onload=function(){log.push(history.length);document.getElementById('out').textContent=log.join()}</script>";
     loop_page("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
     check(loop_settle() && view_turns(),"pushed length: T");
-    start_trip("http://fixture.test/P",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/P",NULL,NULL,NAV_GO,NULL);
     post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
     check(loop_settle() && view_turns() && session_is("/T","/P",""),"pushed length: on P, T behind");
     click_back(NULL,NULL);
@@ -3915,7 +3919,7 @@ static void loop_view_pushed_length(void) {
     // A reload of T with P ahead: the entry on screen again, then its push.
     loop_page("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
     check(loop_settle() && view_turns(),"pushed length: T again");
-    start_trip("http://fixture.test/P",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/P",NULL,NULL,NAV_GO,NULL);
     post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
     check(loop_settle() && view_turns(),"pushed length: on P again");
     click_back(NULL,NULL);
@@ -3933,13 +3937,13 @@ static void loop_view_pushed_length(void) {
 static void loop_view_new_way_back(void) {
     loop_page("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
     check(loop_settle() && view_turns(),"new way back: S");
-    start_trip("http://fixture.test/F",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/F",NULL,NULL,NAV_GO,NULL);
     post_arriving("<p id=out>F</p><script>history.replaceState(null,'','/F')</script>");
     check(loop_settle() && view_turns(),"new way back: F");
     click_back(NULL,NULL);
     post_arriving("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
     check(loop_settle() && view_turns() && session_is("","/S","/F"),"new way back: on S, F ahead");
-    start_trip("http://fixture.test/A",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/A",NULL,NULL,NAV_GO,NULL);
     post_arriving("<p id=out>A</p><script>history.replaceState(null,'','/A');history.pushState(null,'','/A2');"
         "history.go(-2)</script><p>tail</p>");
     check(loop_settle() && view_turns() && !g.stream.active && probe_text_is("out","S") &&
@@ -3957,7 +3961,7 @@ static void unshown_redirect_case(const char *how) {
     char body[256], what[160];
     loop_page("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
     check(loop_settle() && view_turns(),"unshown redirect: S");
-    start_trip("http://fixture.test/R",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/R",NULL,NULL,NAV_GO,NULL);
     os64_snprintf(body,sizeof(body),"<p id=out>R</p><script>history.replaceState(null,'','/R');%s</script><p>tail</p>",how);
     post_arriving(body);
     loop_settle();
@@ -3973,10 +3977,10 @@ static void unshown_redirect_back_case(const char *how) {
     char body[256], what[160];
     loop_page("<p id=out>U</p><script>history.replaceState(null,'','/U')</script>");
     check(loop_settle() && view_turns(),"unshown redirect back: U");
-    start_trip("http://fixture.test/T",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/T",NULL,NULL,NAV_GO,NULL);
     post_arriving("<p id=out>T</p><script>history.replaceState(null,'','/T')</script>");
     check(loop_settle() && view_turns(),"unshown redirect back: T");
-    start_trip("http://fixture.test/S",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/S",NULL,NULL,NAV_GO,NULL);
     post_arriving("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
     check(loop_settle() && view_turns() && session_is("/U,/T","/S",""),"unshown redirect back: on S");
     click_back(NULL,NULL);
@@ -4003,7 +4007,7 @@ static void loop_view_unshown_redirect(void) {
     // and the entry it pushed from stays behind it.
     loop_page("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
     check(loop_settle() && view_turns(),"unshown redirect pushed: S");
-    start_trip("http://fixture.test/R",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/R",NULL,NULL,NAV_GO,NULL);
     post_arriving("<p id=out>R</p><script>history.replaceState(null,'','/R');history.pushState(null,'','/R2');"
         "location.replace('/X')</script><p>tail</p>");
     loop_settle();
@@ -4022,7 +4026,7 @@ static void loading_redirect_case(const char *how, const char *what, bool replac
     char body[512], line[200];
     loop_page("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
     check(loop_settle() && view_turns(),"loading redirect: S");
-    start_trip("http://fixture.test/R",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/R",NULL,NULL,NAV_GO,NULL);
     os64_snprintf(body,sizeof(body),"<p id=out>R</p><script>history.replaceState(null,'','/R')</script>%s",how);
     post_arriving(body);
     loop_settle();
@@ -4066,7 +4070,7 @@ static os64_work_id_t refuse_trips(const os64_work_t *work) {
 static void loop_view_replacing_refused(void) {
     loop_page("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
     check(loop_settle() && view_turns(),"replacing refused: S");
-    start_trip("http://fixture.test/R",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/R",NULL,NULL,NAV_GO,NULL);
     pool_submit_hook=refuse_trips;
     post_arriving("<p id=out>R</p><script>history.replaceState(null,'','/R');history.pushState(null,'','/R2');"
         "document.addEventListener('DOMContentLoaded',function(){location.href='/X'})</script>");
@@ -4236,7 +4240,7 @@ static void loop_modern(void) {
     check(!garb_cascade_env(g.page.cascade).modern_off,"modern on: the page's cascade knows the arc's properties");
     modern_use(false);
     check(g.page.modern && !g.modern,"modern: Settings' switch leaves the page on screen as it was made");
-    start_trip("http://fixture.test/next",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/next",NULL,NULL,NAV_GO,NULL);
     check(g.stream.active && !g.stream.modern,"modern: the next navigation takes the switch as it now stands");
     loop_drop();
     loop_modern_off=true;
@@ -4257,7 +4261,7 @@ static void stream_motion(void) {
     stream_window();
     now_ms=5000;
     g.motion_laid=true; g.motion_us=UINT64_MAX;
-    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/p",NULL,NULL,NAV_GO,NULL);
     static const char page[]="<!doctype html><style>@keyframes slide{to{margin-left:100px}}"
         "#a{animation:slide 1s infinite}</style><div id=a>x</div>";
     way_head_t h=stream_head("text/html","",false);
@@ -5898,7 +5902,7 @@ static void diag_page_cases(void) {
 
     /* An address that spells a token keeps it out of the plain lines. */
     stream_window(); g.scripts_on=true;
-    start_trip("http://fixture.test/FAILED/MISSING",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/FAILED/MISSING",NULL,NULL,NAV_GO,NULL);
     seq=yonder_diag_seq(g.stream.diag);
     {
         way_head_t h=stream_head("text/html","",false);
@@ -5917,7 +5921,7 @@ static void diag_page_cases(void) {
 
     /* A fetch that is not a page: its own file, FAILED. */
     stream_window(); g.scripts_on=true;
-    start_trip("http://fixture.test/gone",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/gone",NULL,NULL,NAV_GO,NULL);
     seq=yonder_diag_seq(g.stream.diag);
     stream_post_verdict(false,OS64_FETCH_OK,"No such page: 404 Not Found");
     loop_settle();
@@ -5930,7 +5934,7 @@ static void diag_page_cases(void) {
 static void diag_bytes_case(void) {
     loop_page("<p>first page, padded</p>");
     check(loop_settle() && g.page.tree!=NULL,"diag bytes: the first page arrives");
-    start_trip("http://fixture.test/second",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/second",NULL,NULL,NAV_GO,NULL);
     way_head_t h=stream_head("text/html","",false);
     yonder_mail_post_head(g.stream.mail,&h);
     const char *body="<!doctype html><p>second</p>";
@@ -5943,7 +5947,7 @@ static void diag_bytes_case(void) {
     check(has(text,want),"diag bytes: the second page's file counts its own body, not the first's");
     check(has(text,"\nstatus: 200 OK\n") && strstr(text,"FAILED")==NULL,
         "diag status: a page's status is a plain line, and a 200 is no failure");
-    start_trip("http://fixture.test/busy",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/busy",NULL,NULL,NAV_GO,NULL);
     h=stream_head("text/html","",false);
     h.status=429; os64_strcopy(h.reason,sizeof(h.reason),"Too Many Requests");
     yonder_mail_post_head(g.stream.mail,&h);
@@ -6077,7 +6081,7 @@ static void keep_end(void) {
 static void diag_keep_cases(void) {
     keep_begin(true);
     stream_window(); g.scripts_on=true; g.script_ms=5000; now_ms=100;
-    start_trip("http://fixture.test/kept",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/kept",NULL,NULL,NAV_GO,NULL);
     uint32_t seq=yonder_diag_seq(g.stream.diag);
     way_head_t h=stream_head("text/html","windows-1252",false);
     h.encrypted=true; os64_strcopy(h.url,sizeof(h.url),"https://fixture.test/final");
@@ -6134,7 +6138,7 @@ static void diag_keep_cases(void) {
     /* A page let go unshown: its sheet never comes, and another address is
      * asked for while it waits. It was kept when its parse ended. */
     stream_window(); g.scripts_on=true; g.script_ms=5000; now_ms=100;
-    start_trip("http://fixture.test/unshown",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/unshown",NULL,NULL,NAV_GO,NULL);
     seq=yonder_diag_seq(g.stream.diag);
     h=stream_head("text/html","",false);
     yonder_mail_post_head(g.stream.mail,&h);
@@ -6142,7 +6146,7 @@ static void diag_keep_cases(void) {
     stream_post_body((const uint8_t *)waits,strlen(waits),YONDER_STREAM_CHUNK);
     stream_post_verdict(true,OS64_FETCH_OK,"");
     check(loop_settle() && g.coming.active && g.page.tree==NULL,"keep: the page waits for its sheet");
-    start_trip("http://fixture.test/elsewhere",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/elsewhere",NULL,NULL,NAV_GO,NULL);
     snprintf(base,sizeof(base),"/tmp/kept/fixture.test-%04u",(unsigned)seq);
     snprintf(path,sizeof(path),"%s.html",base);
     kept=fake_bytes(path,&n);
@@ -6167,7 +6171,7 @@ static void diag_keep_cases(void) {
      * the status line say so once a run. */
     stream_window(); g.scripts_on=true; g.script_ms=5000; now_ms=100;
     while(nfake_dirs<16) { snprintf(fake_dirs[nfake_dirs],256,"/full/%d",nfake_dirs); nfake_dirs++; }
-    start_trip("http://fixture.test/nofolder",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/nofolder",NULL,NULL,NAV_GO,NULL);
     check(s_diag.keep_said && has(last_debug,"could not be kept in /tmp/kept"),
         "keep failed: a page whose kept files cannot be claimed is said as it starts");
     h=stream_head("text/html","",false);
@@ -6449,7 +6453,7 @@ static void diag_keep_cases(void) {
         fake_cookie_heard=false; fake_cookie_set[0]='\0';
         fake_cookie_answer=how==0 ? cookie_jar_secure : how==1 ? cookie_jar_heard : cookie_jar_scripted;
         stream_window(); g.scripts_on=true; g.script_ms=5000; now_ms=100;
-        start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+        start_trip("http://fixture.test/p",NULL,NULL,NAV_GO,NULL);
         if(how==1) fake_cookie_heard=true;
         way_head_t h=stream_head("text/html","",false);
         if(how==0) { os64_strcopy(h.url,sizeof(h.url),"https://fixture.test/final"); h.encrypted=true; }
@@ -7115,7 +7119,7 @@ static void webfont_cases(void) {
     pictures_settle();
     {
         char first[64]; yonder_diag_file_name(g.page.diag,first,sizeof(first));
-        start_trip("http://fixture.test/second",NULL,NAV_GO,NULL);
+        start_trip("http://fixture.test/second",NULL,NULL,NAV_GO,NULL);
         way_head_t h=stream_head("text/html","",false);
         yonder_mail_post_head(g.stream.mail,&h);
         const char *body="<!doctype html><p>second</p>";
@@ -8158,7 +8162,7 @@ static void webfont_cases(void) {
 /* The page's next navigation in this window, as loop_page's but keeping
  * the window, to `address`, which the head says the page came from. */
 static void storage_page_as(const char *address, const char *rest, NavKind kind) {
-    start_trip(address,NULL,kind,NULL);
+    start_trip(address,NULL,NULL,kind,NULL);
     char *html=pad_page(rest);
     way_head_t h=stream_head("text/html","",false);
     os64_strcopy(h.url,sizeof(h.url),address);
@@ -8336,7 +8340,7 @@ static void storage_departure_cases(void) {
     /* A navigation that never becomes a page leaves the page where it is:
      * nothing departs, and the write commits when it falls due. */
     storage_departure_page();
-    start_trip("http://fixture.test/gone",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/gone",NULL,NULL,NAV_GO,NULL);
     stream_post_verdict(false,OS64_FETCH_DIAL_FAILED,"No road to fixture.test");
     loop_settle();
     check(store_holds("tok",NULL),"departure: a failed navigation is no departure");
@@ -8659,7 +8663,7 @@ static void timing_redirect_case(void) {
     fake_reset();
     stream_window();
     g.scripts_on=true; g.script_ms=5000; now_ms=100;
-    start_trip("http://fixture.test/p",NULL,NAV_GO,NULL);
+    start_trip("http://fixture.test/p",NULL,NULL,NAV_GO,NULL);
     char *html=pad_page("<p id=out>start</p><script>document.getElementById('out').textContent="
         "performance.navigation.redirectCount+' '+performance.getEntriesByType('navigation')[0].redirectCount;</script>");
     way_head_t h=stream_head("text/html","",false);

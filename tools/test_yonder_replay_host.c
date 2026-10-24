@@ -1199,10 +1199,10 @@ static RpRan rp_run(const RpLoad *load, rp_lookup_t lookup, void *ctx, RpIndex *
     if(load->local) {
         slurp_path=load->address+strlen("file://"); slurp_bytes=(const char *)load->bytes; slurp_length=load->len;
         if(load->len==0) slurp_bytes="";
-        start_trip(load->address,NULL,NAV_GO,NULL);
+        start_trip(load->address,NULL,NULL,NAV_GO,NULL);
         slurp_path=NULL; slurp_bytes=NULL; slurp_length=0;
     } else {
-        start_trip(load->address,NULL,NAV_GO,NULL);
+        start_trip(load->address,NULL,NULL,NAV_GO,NULL);
         if(g.stream.active && g.stream.mail!=NULL) {
             yonder_mail_post_head(g.stream.mail,&load->head);
             for(size_t at=0;at<load->len;at+=YONDER_STREAM_CHUNK)

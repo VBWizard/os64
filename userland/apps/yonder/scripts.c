@@ -47,6 +47,9 @@ struct yonder_scripts {
     os64_page_state_t *state;
     yonder_scripts_options_t options;
     char url[OS64_DOM_URL_MAX];
+    // The address did not fit `url`, which holds its start: set wherever
+    // `url` is copied, read by yonder_scripts_referrer.
+    bool url_cut;
     // The entry state the session moved the document to before its
     // binding was made (yonder_scripts_history_moved), handed to the
     // binding when ensure_runtime makes it. JSON, owned; NULL for none.
@@ -412,7 +415,8 @@ yonder_scripts_t *yonder_scripts_new(os64_html_document_t *doc, os64_page_state_
     s->options = *options;
     s->options.url = NULL;
     s->options.timing = NULL;
-    os64_strcopy(s->url, sizeof(s->url), options->url != NULL ? options->url : "about:blank");
+    s->url_cut = os64_strcopy(s->url, sizeof(s->url), options->url != NULL ? options->url : "about:blank") >=
+                 sizeof(s->url);
     s->blocking = -1;
     s->task_us = -1;
     if (options->timing != NULL) {
@@ -1035,6 +1039,11 @@ const char *yonder_scripts_url(const yonder_scripts_t *s)
     return s != NULL ? s->url : NULL;
 }
 
+const char *yonder_scripts_referrer(const yonder_scripts_t *s)
+{
+    return s != NULL && !s->url_cut ? s->url : NULL;
+}
+
 bool yonder_scripts_encrypted(const yonder_scripts_t *s)
 {
     return s != NULL && s->options.encrypted;
@@ -1043,7 +1052,7 @@ bool yonder_scripts_encrypted(const yonder_scripts_t *s)
 void yonder_scripts_set_url(yonder_scripts_t *s, const char *url)
 {
     if (s != NULL && url != NULL)
-        os64_strcopy(s->url, sizeof(s->url), url);
+        s->url_cut = os64_strcopy(s->url, sizeof(s->url), url) >= sizeof(s->url);
 }
 
 bool yonder_scripts_history_moved(yonder_scripts_t *s, const char *url, const char *state, size_t length)
@@ -1067,7 +1076,7 @@ bool yonder_scripts_history_moved(yonder_scripts_t *s, const char *url, const ch
         os64_free(s->entry_state);
         s->entry_state = kept;
     }
-    os64_strcopy(s->url, sizeof(s->url), url);
+    s->url_cut = os64_strcopy(s->url, sizeof(s->url), url) >= sizeof(s->url);
     return true;
 }
 
