@@ -2500,10 +2500,10 @@ kept page's record moved for the stack's new names.
 
 Host, at the head: libjs's runtime host 1,154 checks (the script host's
 cases among them, the `rejected` tag's) and its sanitized profile, 0
-failed; the DOM host 13,221 / 89,918 checks, allocation sweeps 1,142 /
-13,505, 0 failed, `tools/test_dom_report.inc` holding a case per rule of
-§ P2a's rows and one per cold-read probe; the scripted-page host 7,601 at
-the base → 7,666, 0 failed; yonder's host 1,914, 0 failed; the replay
+failed; the DOM host 13,263 / 90,039 checks, allocation sweeps 1,143 /
+13,513, 0 failed, `tools/test_dom_report.inc` holding a case per rule of
+§ P2a's rows and one per cold-read probe and Codex finding; the
+scripted-page host 7,601 at the base → 7,678, 0 failed; yonder's host 1,914, 0 failed; the replay
 proof, 42 fixture pages (`failures.html` new) kept and replayed the same;
 the WPT runner's self-test, its three new pages among it; `make -C
 userland` builds.
@@ -2593,6 +2593,19 @@ P2s on muting, a P3 and a sixth, each answered in a commit of its own.
   failed otherwise, to be taken by the next task under that one's name.
   `d_task_close` now settles it whatever the outcome: the outcome when
   that is OK, else a line through `options.failed`.
+
+**Codex, round 1** (on 3dbf313a): three P2s, each fixed with its case.
+A rejectionhandled fired in the same pass as the listener that earned it,
+before the handler's reaction ran; the settle now fires those reached
+before each checkpoint and leaves the rest for the pass after the next.
+A task's first report was written down with JS_ToCString, which runs a
+value's getters and toString; it is read as an event's message is. And a
+same-origin `src` that redirected to another site was muted (and named)
+by the address asked for; the response's address after its redirects is
+now the script's. What else turns a page value into record text: libjs's
+exception diagnostic, which converts the thrown value as it always has,
+inside the wrapper's guard and under the task's deadline (runtime.c's
+`diagnostic`); every reader of the binding's own is non-executing.
 
 **Booked** (DEBTS.md): an error event's place; the events in the failing
 task; a script's microtasks before its error event; the stack naming
