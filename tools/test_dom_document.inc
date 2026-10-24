@@ -440,6 +440,18 @@ static void dom_document_custom_event_cases(void)
         "el.dispatchEvent(d);assert(got.slice(-2).join()==='during,kept');"
         "d.initCustomEvent('again');assert(d.type==='again'&&d.detail===null&&!d.bubbles,'defaults');",
         "CustomEvent: createEvent('CustomEvent') and initCustomEvent, the banking SDK's idiom");
+    /* A host's event a page keeps is trusted until the page initializes
+     * it again, which makes it the page's own (DOM's "initialize"). */
+    dom_script(&f, "document.getElementById('box').addEventListener('click',e=>{globalThis.kept=e})",
+               "initialize: a click kept");
+    os64_dom_event_t click = {.type = "click", .bubbles = true};
+    os64_js_outcome_t outcome;
+    check(os64_dom_dispatch(f.binding, native_id(f.document->document, "box"), &click, NULL, &outcome) == OS64_JS_OK,
+          "initialize: the host's click dispatched");
+    dom_script(&f, STORAGE_ASSERT
+        "assert(kept.isTrusted===true,'the host\\'s click is trusted');"
+        "kept.initEvent('mine',true,true);assert(kept.isTrusted===false&&kept.type==='mine','initEvent untrusts it');",
+        "initialize: initEvent clears isTrusted");
     fixture_free(&f);
 }
 

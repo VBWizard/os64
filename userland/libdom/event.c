@@ -1131,8 +1131,10 @@ enum {
 
 /* DOM's "initialize" an event, initEvent's and initCustomEvent's steps
  * after the dispatch check: its type (converted first, as WebIDL converts
- * the arguments in order), bubbles and cancelable, every flag cleared and
- * no target. -1 with an exception pending. */
+ * the arguments in order), bubbles and cancelable, the stop-propagation,
+ * stop-immediate and canceled flags cleared, isTrusted false (a host
+ * event a page keeps and re-initializes is its own from then on), and no
+ * target. -1 with an exception pending. */
 static int event_init(JSContext *ctx, DEvent *event, int argc, JSValueConst *argv, const char *who)
 {
     if (argc < 1) {
@@ -1153,6 +1155,7 @@ static int event_init(JSContext *ctx, DEvent *event, int argc, JSValueConst *arg
     event->cancelable = cancelable != 0;
     event->initialized = true;
     event->canceled = event->stop = event->stop_now = false;
+    event->trusted = false;
     JS_FreeValue(ctx, event->target);
     event->target = JS_NULL;
     return 0;
