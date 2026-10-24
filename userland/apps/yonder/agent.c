@@ -40,6 +40,19 @@ static const yonder_agent_preset_t kPresets[] = {
     {"Lynx", "Lynx/2.9.2 libwww-FM/2.14 SSL-MM/1.4.1 OpenSSL/3.0.13", {0}},
 };
 
+// A preset's string as an earlier yonder spelled it, and the preset it is
+// now: a person who saved "Chrome on Windows" saved its string, which
+// would otherwise read as one typed, with none of the preset's lines.
+static const struct {
+    const char *agent;
+    const char *now;                // the preset's name
+} kRetired[] = {
+    {"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+     "Chrome/154.0.0.0 Safari/537.36", "Chrome on Windows"},
+    {"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0",
+     "Firefox on Windows"},
+};
+
 size_t yonder_agent_npresets(void)
 {
     return sizeof(kPresets) / sizeof(kPresets[0]);
@@ -67,6 +80,16 @@ const char *yonder_agent_name(const char *agent)
         if (os64_streq(agent, kPresets[i].agent))
             return kPresets[i].name;
     return NULL;
+}
+
+const char *yonder_agent_current(const char *agent)
+{
+    for (size_t i = 0; agent != NULL && i < sizeof(kRetired) / sizeof(kRetired[0]); i++)
+        if (os64_streq(agent, kRetired[i].agent))
+            for (size_t j = 0; j < yonder_agent_npresets(); j++)
+                if (os64_streq(kPresets[j].name, kRetired[i].now))
+                    return kPresets[j].agent;
+    return agent;
 }
 
 const way_identity_t *yonder_agent_identity(const char *agent)

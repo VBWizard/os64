@@ -42,6 +42,11 @@ bool yonder_agent_valid(const char *agent);
 // The preset `agent` is, or NULL for one that was typed.
 const char *yonder_agent_name(const char *agent);
 
+// `agent` as yonder spells it today: a preset's string from an earlier
+// yonder (a saved default) becomes that preset's current one, its lines
+// with it; anything else comes back as it is.
+const char *yonder_agent_current(const char *agent);
+
 // The lines `agent`'s preset sends beside it, or NULL for one that was
 // typed. A preset's own, so it lives as long as yonder does.
 const way_identity_t *yonder_agent_identity(const char *agent);

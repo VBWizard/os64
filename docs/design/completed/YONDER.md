@@ -99,9 +99,11 @@ remaining gates before recommending scripts for ordinary browsing.
   address only), Firefox's `Priority` for each kind of request, and
   `Accept-Language` for Chrome, Firefox and Safari. yonder's own asks for
   English too (`en-US,en;q=0.9`), as a real browser does. A typed agent,
-  Netscape and Lynx claim nothing beyond their strings, and an agent saved
-  before its preset's version moved is a typed one now. Every request, whatever the agent, also says what
-  it is for (libway's Fetch Metadata, `way/origin.h`).
+  Netscape and Lynx claim nothing beyond their strings. A default saved
+  as a preset's earlier string (Chrome 154, Firefox 156) is read as that
+  preset's current one (`yonder_agent_current`), lines and all. Every
+  request, whatever the agent, also says what it is for (libway's Fetch
+  Metadata, `way/origin.h`).
 - **Apply** changes it for this window, from the next fetch on; **Save as
   default** writes `agent =` to `yonder.conf` at the top of the
   configuration ladder, where every yonder reads it at start. An agent

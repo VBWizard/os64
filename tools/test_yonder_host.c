@@ -1656,6 +1656,17 @@ static void agent_identity_cases(void)
     expect("identity: yonder's own and Safari send no hints",
            own->identity.hints == NULL && safari->identity.hints == NULL, NULL);
     expect("identity: Netscape and Lynx claim nothing beyond their strings", costumes, NULL);
+    // A default saved as an earlier yonder's preset is that preset now.
+    expect("identity: a saved Chrome 154 preset is Chrome's preset now",
+           yonder_agent_current("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/154.0.0.0 Safari/537.36") == chrome->agent, NULL);
+    expect("identity: a saved Firefox 156 preset is Firefox's preset now",
+           yonder_agent_current("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0") ==
+               firefox->agent, NULL);
+    const char *typed = "Mozilla/3.0 (compatible)";
+    expect("identity: anything else comes back as it is",
+           yonder_agent_current(typed) == typed && yonder_agent_current(chrome->agent) == chrome->agent &&
+               yonder_agent_current(NULL) == NULL, NULL);
     expect("identity: a typed agent claims nothing", yonder_agent_identity("Mozilla/3.0 (compatible)") == NULL &&
                                                          yonder_agent_identity(NULL) == NULL, NULL);
 

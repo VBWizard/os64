@@ -12217,9 +12217,10 @@ int main(int argc, char **argv)
     s_env.replaced_size = replaced_size;
     g.zoom = g.zoom_default = yonder_settings_saved_zoom();
     g.way.name = "yonder";
+    // A default saved as an earlier yonder's preset is that preset now.
     char saved[YONDER_AGENT_MAX];
-    const char *agent = yonder_settings_saved_agent(saved, sizeof(saved)) ? yonder_agent_keep(saved)
-                                                                           : NULL;
+    const char *agent = yonder_settings_saved_agent(saved, sizeof(saved))
+                            ? yonder_agent_keep(yonder_agent_current(saved)) : NULL;
     g.way.agent = agent != NULL ? agent : YONDER_AGENT;
     g.way.identity = yonder_agent_identity(g.way.agent);
     g.way.accept = YONDER_ACCEPT;
