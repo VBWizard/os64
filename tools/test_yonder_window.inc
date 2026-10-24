@@ -118,7 +118,32 @@ static void window_rejection_flood_case(void) {
     loop_drop();
 }
 
+/* A script is muted, and named, by where it came from: a same-origin
+ * address that redirects to another site is that site's script; one that
+ * redirects within the site is the page's, told whole. */
+static void window_redirect_case(const char *final, bool muted) {
+    loop_page("<p id=log>-</p><script>var log=[];"
+        "onerror=function(m,f){log.push(m+' '+f);document.getElementById('log').textContent=log.join('|')};"
+        "onunhandledrejection=function(e){log.push('unhandled '+e.reason.message);"
+        "document.getElementById('log').textContent=log.join('|')}</script>"
+        "<script src=/lib.js></script>");
+    char record[160], told[200];
+    check(loop_settle() && nscript_jobs==1,"window: the parse waits for the script's fetch");
+    check(script_land_from("/lib.js","Promise.reject(new Error('rejected'));throw new Error('thrown')",final),
+        "window: the redirected script's fetch comes back");
+    check(loop_settle() && script_rebuild(),"window: the page with a redirected script settles");
+    snprintf(record,sizeof(record),"FAILED script %s: Error: thrown (1)",final);
+    snprintf(told,sizeof(told),"Uncaught Error: thrown %s|unhandled rejected",final);
+    check(window_record_has(record),"window: the record names the script by the address it came from");
+    check(probe_text_is("log",muted ? "Script error. " : told),
+        muted ? "window: a same-origin address redirected to another site is muted"
+              : "window: one redirected within the site is told whole, by where it came from");
+    loop_drop();
+}
+
 static void window_cases(void) {
+    window_redirect_case("http://other.test/lib.js",true);
+    window_redirect_case("http://fixture.test/moved/lib.js",false);
     window_rejection_case();
     window_rejection_flood_case();
     window_crypto_case();

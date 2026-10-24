@@ -2386,7 +2386,10 @@ every rule).
   task's first failure as it always has.
 - **yonder** runs each script under `os64_dom_script_name`'s name for it
   and follows it with `os64_dom_script_ended` (scripts.c's `run_item`),
-  and gives libdom `options.failed`.
+  and gives libdom `options.failed`. A `src` script is named, muted and
+  recorded by the address its response came from after any redirects
+  (`yonder_scripts_fetched`), not the one asked for: a same-origin address
+  that redirects to another site is that site's script.
 
 The record line, for the brief's case (an async click handler that
 throws):

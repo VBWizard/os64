@@ -38,7 +38,9 @@ typedef struct {
     char name[OS64_JS_SOURCE_NAME_CAP];
     // A `src` script's whole address, which `name` (the engine's source
     // name) may be too short to hold; NULL for an inline script. Freed with
-    // the host.
+    // the host. The address asked for until the fetch answers, then the
+    // response's, after its redirects (yonder_scripts_fetched): where the
+    // script came from is what HTML mutes it by and names it by.
     char *address;
 } Item;
 
@@ -874,7 +876,8 @@ bool yonder_scripts_address(yonder_scripts_t *s, const char *url, const char *fr
     return true;
 }
 
-void yonder_scripts_fetched(yonder_scripts_t *s, uint32_t token, const char *source, size_t length)
+void yonder_scripts_fetched(yonder_scripts_t *s, uint32_t token, const char *source, size_t length,
+                            const char *final_url)
 {
     if (s == NULL || s->dead || token == 0 || token > s->count)
         return;
@@ -885,6 +888,21 @@ void yonder_scripts_fetched(yonder_scripts_t *s, uint32_t token, const char *sou
     if (source == NULL) {
         fail_item(s, it, "could not fetch the script");
         return;
+    }
+    // A script that came through redirects is the last address's: a
+    // same-origin address that sends it on to another site is that site's
+    // script, muted. One whose address cannot be kept is not run under the
+    // address it was asked for.
+    if (final_url != NULL && final_url[0] != '\0' &&
+        (it->address == NULL || !os64_streq(it->address, final_url))) {
+        char *moved = keep(final_url);
+        if (moved == NULL) {
+            fail_item(s, it, "no memory for the script's address");
+            return;
+        }
+        os64_free(it->address);
+        it->address = moved;
+        os64_strcopy(it->name, sizeof(it->name), final_url);
     }
     it->source = os64_malloc(length + 1);
     if (it->source == NULL) {

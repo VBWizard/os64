@@ -639,8 +639,9 @@ bool os64_dom_take_navigation(os64_dom_t *dom, os64_dom_navigation_t *ask);
 bool os64_dom_take_report(os64_dom_t *dom, os64_js_outcome_t *outcome);
 /* A script the host is about to run with os64_js_run is compiled under the
  * name this writes to `out` (`os64-script:<n>`, the binding's), never its
- * address: `address` is the script's own, NULL for an inline one, which is
- * the page's. The name is how the binding knows a script's code wherever
+ * address: `address` is the script's own, where its response came from
+ * after any redirects (HTML mutes a script by its response), NULL for an
+ * inline one, which is the page's. The name is how the binding knows a script's code wherever
  * it runs later (a listener it added, a promise it rejected), so it is
  * how HTML's muted errors are decided: a script from another origin than
  * the page's tells the page "Script error." for anything it throws or

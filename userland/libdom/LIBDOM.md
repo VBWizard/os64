@@ -1052,7 +1052,8 @@ checkpoint left unhandled. With the switch on it fires the window's events
 for them; on or off, a rejection nothing handled is a failure the host
 records (below). A host that runs a script with `os64_js_run` compiles it
 under the name `os64_dom_script_name` gives it (`os64-script:<n>`, the
-binding's own, standing for the script's address) and follows it with
+binding's own, standing for the script's address: where its response came
+from, after any redirects, as HTML mutes by the response) and follows it with
 `os64_dom_script_ended`, which settles what the script left in a task of
 the host's name for it; a task the binding opens (a dispatch, a timer, a
 fetch's answer) settles its own before it closes.

@@ -523,7 +523,11 @@ void yonder_script_release(void *job, void *product) {
 /* The worker's answer to the script job whose address ends with `tail`:
  * its source, or NULL for a fetch that failed. False when no such job is
  * out. */
-static bool script_land(const char *tail, const char *source) {
+static bool script_land_from(const char *tail, const char *source, const char *final);
+static bool script_land(const char *tail, const char *source) { return script_land_from(tail,source,NULL); }
+/* The same, the response having come from `final` after its redirects
+ * (NULL: from the address asked for). */
+static bool script_land_from(const char *tail, const char *source, const char *final) {
     for(int i=0;i<nscript_jobs;i++) {
         const char *url=script_jobs[i].job->url;
         size_t n=strlen(url), t=strlen(tail);
@@ -535,7 +539,7 @@ static bool script_land(const char *tail, const char *source) {
             got->ok=true; got->length=strlen(source);
             got->source=os64_malloc(got->length+1); memcpy(got->source,source,got->length+1);
         }
-        os64_strcopy(got->url,sizeof(got->url),url);
+        os64_strcopy(got->url,sizeof(got->url),final!=NULL ? final : url);
         reaped(id,job,got);
         return true;
     }
