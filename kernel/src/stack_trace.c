@@ -77,7 +77,7 @@ static bool read_task_u64(task_t *task, uint64_t va, uint64_t *out)
 	// A frame pointer must be 8-byte aligned and in the lower half. Rejecting
 	// this early costs nothing and refuses obviously-corrupt values before
 	// they reach the page walker.
-	if ((va & 7) != 0 || va >= 0x0000800000000000ULL) {
+	if ((va & 7) != 0 || va >= USER_CANONICAL_MAX) {
 		return false;
 	}
 
