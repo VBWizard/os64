@@ -101,7 +101,18 @@ static void many_files(int count)
     argv[argc - 1] = "-n"; // Options after operands must still take effect.
     memcpy(snapshot, argv, ((size_t)argc + 1) * sizeof(*snapshot));
     reset(count);
-    assert(grep_main(argc, argv) == 0);
+    int status = grep_main(argc, argv);
+    if (count + 1 > OS64_SPAWN_MAX_ARGS) {
+        assert(status == 2 && allocations == 0 && files_seen == 0);
+        assert(output[0][0] == 0 && strstr(output[1], "too many operands"));
+        assert(strstr(output[1], "usage:") == NULL);
+        assert(memcmp(snapshot, argv, ((size_t)argc + 1) * sizeof(*snapshot)) == 0);
+        free(snapshot);
+        free(names);
+        free(argv);
+        return;
+    }
+    assert(status == 0);
     assert(allocations == 0 && files_seen == count && files_closed == count);
     char expected[64];
     snprintf(expected, sizeof(expected), "file%05d:1:requestIdle\n", count - 1);
@@ -119,7 +130,8 @@ static void many_files(int count)
 
 int main(void)
 {
-    const int counts[] = {512, 513, 1305, 4093, 5000};
+    const int counts[] = {512, 513, 1305, OS64_SPAWN_MAX_ARGS - 3,
+                          OS64_SPAWN_MAX_ARGS - 1, OS64_SPAWN_MAX_ARGS};
     for (size_t i = 0; i < sizeof(counts) / sizeof(counts[0]); i++)
         many_files(counts[i]);
     char *help[] = {"grep", "--help", NULL};

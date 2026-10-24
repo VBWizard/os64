@@ -243,7 +243,7 @@ static void grep_path(const char *path, grep_options_t *options, uint32_t depth)
 int main(int argc, char **argv)
 {
     grep_options_t options = {0};
-    const char **positionals = os64_malloc((size_t)argc * sizeof(*positionals));
+    const char **positionals = os64_malloc(OS64_SPAWN_MAX_ARGS * sizeof(*positionals));
     if (positionals == NULL)
     {
         os64_hprintf(OS64_STDERR, "grep: out of memory\n");
@@ -268,7 +268,7 @@ int main(int argc, char **argv)
     args.details = "-E currently supports literal alternatives separated by |.";
     int32_t positionalCount = os64_args_parse(
         &args, "grep [-Eivnr] PATTERN [FILE ...]", positionals,
-        argc);
+        OS64_SPAWN_MAX_ARGS);
     if (positionalCount == OS64_ARG_HELP)
     {
         os64_free(positionals);

@@ -309,7 +309,7 @@ static int encode_path(const char *path, const gzip_options_t *options)
 int main(int argc, char **argv)
 {
     gzip_options_t options = {0};
-    const char **operands = os64_malloc((size_t)argc * sizeof(*operands));
+    const char **operands = os64_malloc(OS64_SPAWN_MAX_ARGS * sizeof(*operands));
     if (operands == NULL)
     {
         os64_hprintf(OS64_STDERR, "gzip: out of memory\n");
@@ -331,7 +331,7 @@ int main(int argc, char **argv)
                    "original is removed only after safe publication.";
 
     int32_t operand_count = os64_args_parse(
-        &args, "gzip [-cfk] [FILE ...]", operands, argc);
+        &args, "gzip [-cfk] [FILE ...]", operands, OS64_SPAWN_MAX_ARGS);
     if (operand_count == OS64_ARG_HELP)
     {
         os64_free(operands);

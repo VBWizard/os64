@@ -60,7 +60,7 @@ int main(int argc, char **argv)
 {
     uint64_t lineCount = DEFAULT_HEAD_LINES;
     const char *lineCountValue = NULL;
-    const char **files = os64_malloc((size_t)argc * sizeof(*files));
+    const char **files = os64_malloc(OS64_SPAWN_MAX_ARGS * sizeof(*files));
     if (files == NULL)
     {
         os64_hprintf(OS64_STDERR, "head: out of memory\n");
@@ -78,7 +78,7 @@ int main(int argc, char **argv)
     args.details = "With no FILE, or when FILE is -, read standard input. Multiple inputs are labeled.";
 
     int32_t parsed = os64_args_parse(&args, "head [-n NUM] [FILE ...]",
-                                     files, argc);
+                                     files, OS64_SPAWN_MAX_ARGS);
     if (parsed == OS64_ARG_HELP)
     {
         os64_free(files);

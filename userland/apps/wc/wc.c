@@ -122,7 +122,7 @@ int main(int argc, char **argv)
     bool showWords = false;
     bool showBytes = false;
     bool showDiagnostics = false;
-    const char **files = os64_malloc((size_t)argc * sizeof(*files));
+    const char **files = os64_malloc(OS64_SPAWN_MAX_ARGS * sizeof(*files));
     if (files == NULL)
     {
         os64_hprintf(OS64_STDERR, "wc: out of memory\n");
@@ -144,7 +144,7 @@ int main(int argc, char **argv)
     args.details = "With no FILE, or when FILE is -, read standard input.";
 
     int32_t parsed = os64_args_parse(&args, "wc [-lwcD] [FILE ...]",
-                                     files, argc);
+                                     files, OS64_SPAWN_MAX_ARGS);
     if (parsed == OS64_ARG_HELP)
     {
         os64_free(files);

@@ -5,7 +5,7 @@
 
 int main(int argc, char **argv)
 {
-    const char **paths = os64_malloc((size_t)argc * sizeof(*paths));
+    const char **paths = os64_malloc(OS64_SPAWN_MAX_ARGS * sizeof(*paths));
     if (paths == NULL)
     {
         os64_hprintf(OS64_STDERR, "less: out of memory\n");
@@ -22,7 +22,7 @@ int main(int argc, char **argv)
     args.details = "Use :n and :p to change files. Press h for the complete key list.";
 
     int32_t parsed = os64_args_parse(&args, "less [-i LINES] [FILE ...]",
-                                     paths, argc);
+                                     paths, OS64_SPAWN_MAX_ARGS);
     if (parsed == OS64_ARG_HELP)
     {
         os64_free(paths);

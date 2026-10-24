@@ -115,6 +115,13 @@ static int32_t parse_arguments(os64_args_t *args, const char *usage,
         }
         if (option == OS64_ARG_POSITIONAL)
         {
+            if (count == OS64_SPAWN_MAX_ARGS)
+            {
+                os64_hprintf(OS64_STDERR,
+                             "cut: too many input files (maximum %u); unexpected '%s'\n",
+                             OS64_SPAWN_MAX_ARGS, args->value);
+                return OS64_ARG_ERROR;
+            }
             files[count++] = args->value;
             continue;
         }
@@ -439,7 +446,7 @@ int main(int argc, char **argv)
 {
     const char *bytes = NULL, *characters = NULL, *fields = NULL;
     const char *delimiter = NULL, *output_delimiter = NULL;
-    const char **files = os64_malloc((size_t)argc * sizeof(*files));
+    const char **files = os64_malloc(OS64_SPAWN_MAX_ARGS * sizeof(*files));
     if (files == NULL)
     {
         os64_hprintf(OS64_STDERR, "cut: out of memory\n");

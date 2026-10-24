@@ -346,7 +346,7 @@ static int decode_path(const char *path, const gunzip_options_t *options)
 int main(int argc, char **argv)
 {
     gunzip_options_t options = {0};
-    const char **operands = os64_malloc((size_t)argc * sizeof(*operands));
+    const char **operands = os64_malloc(OS64_SPAWN_MAX_ARGS * sizeof(*operands));
     if (operands == NULL)
     {
         os64_hprintf(OS64_STDERR, "gunzip: out of memory\n");
@@ -369,7 +369,7 @@ int main(int argc, char **argv)
 
     int32_t operand_count = os64_args_parse(
         &args, "gunzip [-cfk] [FILE.gz ...]", operands,
-        argc);
+        OS64_SPAWN_MAX_ARGS);
     if (operand_count == OS64_ARG_HELP)
     {
         os64_free(operands);

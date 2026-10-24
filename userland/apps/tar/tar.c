@@ -786,7 +786,7 @@ static int read_archive(const tar_options_t *options)
 int main(int argc, char **argv)
 {
     tar_options_t options = {.archive = "-"};
-    const char **operands = os64_malloc((size_t)argc * sizeof(*operands));
+    const char **operands = os64_malloc(OS64_SPAWN_MAX_ARGS * sizeof(*operands));
     if (operands == NULL)
     {
         os64_hprintf(OS64_STDERR, "tar: out of memory\n");
@@ -812,7 +812,7 @@ int main(int argc, char **argv)
                    "ownership, modes, and restored timestamps are not.";
     int32_t operand_count = os64_args_parse(
         &args, "tar (-c|-t|-x) [-v] [-f ARCHIVE] [--one-file-system] [PATH ...]",
-        operands, argc);
+        operands, OS64_SPAWN_MAX_ARGS);
     if (operand_count == OS64_ARG_HELP)
     {
         os64_free(operands);

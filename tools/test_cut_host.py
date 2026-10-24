@@ -8,6 +8,7 @@ import sys
 import tempfile
 
 candidate = sys.argv[1]
+max_args = int(sys.argv[2])
 checks = 0
 
 
@@ -82,8 +83,9 @@ with tempfile.TemporaryDirectory() as folder:
     first.write_bytes(b"a b\n")
     second.write_bytes(b"c d")
     check(["-d", " ", "-f2", str(first), "-", str(second)], b"e f\n")
-    for count in [512, 513, 4096, 5000]:
+    for count in [512, 513, max_args - 2, max_args]:
         check(["-b1", *([str(first)] * count)], expected=b"a\n" * count)
+    check(["-b1", *([str(first)] * (max_args + 1))], expected=b"", status=2)
     check(["-b1", str(first), "--unknown"], expected=b"", status=2)
     check(["-b1", str(first), str(Path(folder) / "missing"), str(second)], expected=b"a\nc\n", status=1)
     check(["-b1", folder], expected=b"", status=1)

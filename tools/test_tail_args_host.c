@@ -87,7 +87,8 @@ int64_t os64_sleep(uint64_t ms) { (void)ms; abort(); }
 
 int main(void)
 {
-    const int counts[] = {513, 4094, 5000};
+    const int counts[] = {513, OS64_SPAWN_MAX_ARGS - 2, OS64_SPAWN_MAX_ARGS,
+                          OS64_SPAWN_MAX_ARGS + 1};
     for (size_t c = 0; c < sizeof(counts) / sizeof(counts[0]); c++) {
         int count = counts[c];
         char **argv = calloc((size_t)count + 3, sizeof(*argv));
@@ -101,7 +102,15 @@ int main(void)
         }
         reset(count);
         following = true;
-        assert(tail_main(count + 2, argv) == 1);
+        int status = tail_main(count + 2, argv);
+        if (count > OS64_SPAWN_MAX_ARGS) {
+            assert(status == 2 && stats == 0 && opens == 0 && closes == 0);
+            assert(live_allocations == 0 && stderr_bytes > 0 && stdout_bytes == 0);
+            free(names);
+            free(argv);
+            continue;
+        }
+        assert(status == 1);
         assert(stats == 2 * count && opens == count && closes == count);
         assert(live_allocations == 0 && stderr_bytes > 0);
         argv[1] = "--";

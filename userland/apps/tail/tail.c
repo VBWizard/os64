@@ -293,9 +293,9 @@ int main(int argc, char **argv)
     bool optFollow = false;
     uint64_t lineCount = DEFAULT_TAIL_LINES;
     const char *lineCountValue = NULL;
-    const char **files = os64_malloc((size_t)argc * sizeof(*files));
-    uint64_t *followPositions = os64_calloc((size_t)argc, sizeof(*followPositions));
-    bool *followActive = os64_calloc((size_t)argc, sizeof(*followActive));
+    const char **files = os64_malloc(OS64_SPAWN_MAX_ARGS * sizeof(*files));
+    uint64_t *followPositions = os64_calloc(OS64_SPAWN_MAX_ARGS, sizeof(*followPositions));
+    bool *followActive = os64_calloc(OS64_SPAWN_MAX_ARGS, sizeof(*followActive));
     if (files == NULL || followPositions == NULL || followActive == NULL)
     {
         os64_hprintf(OS64_STDERR, "tail: out of memory\n");
@@ -317,7 +317,7 @@ int main(int argc, char **argv)
                    "With --follow, wait for and print data appended to FILE.";
 
     int32_t parsed = os64_args_parse(&args, "tail [-f] [-n NUM] [FILE ...]",
-                                     files, argc);
+                                     files, OS64_SPAWN_MAX_ARGS);
     if (parsed == OS64_ARG_HELP)
     {
         os64_free(followActive);

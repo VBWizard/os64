@@ -87,7 +87,7 @@ int main(int argc, char **argv)
 {
     mv_options_t options = {0};
     os64_args_t args = {0};
-    const char **operands = os64_malloc((size_t)argc * sizeof(*operands));
+    const char **operands = os64_malloc(OS64_SPAWN_MAX_ARGS * sizeof(*operands));
     if (operands == NULL)
     {
         os64_hprintf(OS64_STDERR, "mv: out of memory\n");
@@ -105,7 +105,7 @@ int main(int argc, char **argv)
     args.details = "Multiple SOURCE operands require DEST to be a directory.";
 
     int32_t operandCount = os64_args_parse(
-        &args, "mv [-iv] SOURCE... DEST", operands, argc);
+        &args, "mv [-iv] SOURCE... DEST", operands, OS64_SPAWN_MAX_ARGS);
     if (operandCount == OS64_ARG_HELP)
     {
         os64_free(operands);
