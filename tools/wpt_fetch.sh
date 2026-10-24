@@ -61,6 +61,9 @@ WPT_DIRS=(
     page-visibility
     html/interaction/focus
     dom/events
+    html/webappapis/structured-clone
+    requestidlecallback
+    webmessaging/without-ports
 )
 
 top=$(git rev-parse --show-toplevel)
