@@ -1281,7 +1281,7 @@ bool way_identity_lines(const way_identity_t *id, const way_metadata_t *m, const
     size_t at = 0;
     // Fetch Metadata § 3 step 1: none of it to a URL that is not
     // potentially trustworthy. The client hints are a secure-context
-    // feature, and Chrome sends neither to a plain-http host.
+    // feature, so they follow the same rule.
     bool trustworthy = way_origin_trustworthy(to);
     bool ok = true;
     if (trustworthy && !m->preflight && id != NULL && id->hints != NULL)

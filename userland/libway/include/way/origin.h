@@ -265,9 +265,11 @@ bool way_referrer_for(const way_request_t *r, const char *referrer, const char *
 // Those are computed here from facts the request holds. Other lines
 // describe the BROWSER, the same on every request it makes: the client
 // hints and the Accept-Language a face's agent preset carries
-// (way_identity_t). One call writes both, per hop, because both depend on
-// where the hop goes: Fetch Metadata goes only to a potentially trustworthy
-// URL, and so do the client hints, which are a secure-context feature.
+// (way_identity_t). One call writes both kinds, per hop, because most of
+// them depend on where the hop goes: Fetch Metadata goes only to a
+// potentially trustworthy URL, and so do the client hints, which are a
+// secure-context feature; Upgrade-Insecure-Requests and Accept-Language go
+// everywhere.
 
 // Sec-Fetch-Dest: what the response will be used as.
 typedef enum {
