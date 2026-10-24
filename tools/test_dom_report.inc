@@ -122,6 +122,16 @@ static void dom_report_error_cases(void)
     dom_script(&f, STORAGE_ASSERT "assert(ran===1,'ran '+ran);log.length=0;",
                "report: an error inside the error handler is reported to no page");
     fixture_free(&f);
+    /* An origin is the address's scheme, host and port: a query the address
+     * parser would refuse (a space a host left unescaped) changes nothing. */
+    options.url = "https://example.test/page.html?a variant";
+    f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, "globalThis.log=[];onerror=function(message){log.push(message)}", "report: a page with a query");
+    check(report_script(&f, "throw new Error('ours')", "https://example.test/lib.js", "https://example.test/lib.js",
+                        &outcome) == OS64_JS_EXCEPTION, "report: its own script throws");
+    report_log_is(&f, "'Uncaught Error: ours'", "report: and is not taken for another site's");
+    fixture_free(&f);
 }
 
 static void dom_report_nested_cases(void)

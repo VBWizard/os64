@@ -475,14 +475,30 @@ void d_task_settle(os64_dom_t *dom, const char *filename, os64_js_outcome_t *out
 
 /* Whether a script came from another origin than the page's, which HTML's
  * muted errors are for: a classic script fetched without CORS, as the host
- * fetches every script. An address with an opaque origin (a data: one) is
- * not another site's; one whose origin cannot be read is taken to be. */
+ * fetches every script. Only a name that is an address with a tuple origin
+ * can be another site's script: an opaque one (data:), and a name that is
+ * no address at all (a handler attribute's, one the address parser
+ * refuses), is not. Against a page whose own origin cannot be read, such
+ * an address is taken to be another site's. */
+static bool origin_of(const char *address, char *out, size_t cap)
+{
+    /* The query and the fragment name no part of an origin, and the
+     * address parser may refuse one (a space the host left unescaped). */
+    char head[OS64_DOM_URL_MAX];
+    size_t n = 0;
+    while (address[n] != '\0' && address[n] != '?' && address[n] != '#' && n + 1 < sizeof(head)) {
+        head[n] = address[n];
+        n++;
+    }
+    head[n] = '\0';
+    return d_origin(head, out, cap);
+}
+
 static bool foreign(const os64_dom_t *dom, const char *address)
 {
     char script[OS64_DOM_URL_MAX], page[OS64_DOM_URL_MAX];
-    if (!d_origin(address, script, sizeof(script))) return true;
-    if (os64_streq(script, "null")) return false;
-    return !d_origin(dom->url != NULL ? dom->url : "about:blank", page, sizeof(page)) || !os64_streq(page, script);
+    if (!origin_of(address, script, sizeof(script)) || os64_streq(script, "null")) return false;
+    return !origin_of(dom->url != NULL ? dom->url : "about:blank", page, sizeof(page)) || !os64_streq(page, script);
 }
 
 void d_script_settle(os64_dom_t *dom, const char *name, const char *filename, os64_js_outcome_t *outcome)
