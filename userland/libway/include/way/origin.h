@@ -317,9 +317,11 @@ way_site_t way_origin_site(const way_origin_t *a, const way_origin_t *b);
 // Who started a navigation, which decides its Sec-Fetch-Site and whether
 // it carries Sec-Fetch-User.
 typedef enum {
-    // The browser's own controls: an address typed or given to it, Back,
-    // Forward, Reload. Site NONE (Fetch Metadata § 2.3: "explicitly caused
-    // by a user's interaction with the user agent"), and a person's.
+    // The browser's own controls: an address typed or given to it. Site
+    // NONE (Fetch Metadata § 2.3: "explicitly caused by a user's
+    // interaction with the user agent"), and a person's. Back, Forward and
+    // Reload replay the entry's own asking instead (way_crumb_t.asked), and
+    // are this only for an entry that kept none.
     WAY_BY_BROWSER = 0,
     // A person, on the page: a link followed, a form sent. The page's site,
     // and a person's.

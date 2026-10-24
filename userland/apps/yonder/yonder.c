@@ -8861,10 +8861,11 @@ static void session_go(int32_t delta, way_initiator_t by, const char *from)
     g.chain = 0;
     // The browser's Back and Forward replay how the entry was first asked
     // for, as Chrome 156 and Firefox 158 do (Back to a typed entry sends
-    // Sec-Fetch-Site none and ?1 again: capture-27-chrome-win-get-root, and
-    // the Firefox run's capture-44); an entry that kept nothing goes as the
-    // browser's own. A page's history.go is the page's, from `from`. A
-    // traversal's Referer names nothing (trip_send), whatever `from` is.
+    // Sec-Fetch-Site none and ?1 again: capture-27-chrome-win-get-root and
+    // capture-44-firefox-linux-get-root); an entry that kept nothing goes
+    // as the browser's own. A page's history.go is the page's, from
+    // `from`. A traversal's Referer names nothing (trip_send), whatever
+    // `from` is.
     g.replaying = by == WAY_BY_BROWSER && crumb.asked.dest == WAY_DEST_DOCUMENT ? &crumb.asked : NULL;
     start_trip(crumb.url, NULL, from, back ? NAV_BACK : NAV_FORWARD, by, &crumb.position);
     g.replaying = NULL;
@@ -11844,9 +11845,9 @@ static void click_forward(os64_ui_widget_t *w, void *user)
 // The page on screen again, asked for by `by`: the browser's own Reload,
 // which replays how the entry's navigation was asked and is a reload
 // (Chrome 156 and Firefox 158 both send the entry's own Sec-Fetch-Site
-// and -User again: capture-26-chrome-win-get-clicked, and the Firefox
-// run's capture-43), or the page's location.reload(), which starts from
-// the page's own origin and is nobody's.
+// and -User again: capture-26-chrome-win-get-clicked and
+// capture-43-firefox-linux-get-clicked), or the page's location.reload(),
+// which starts from the page's own origin and is nobody's.
 static void reload_as(way_initiator_t by)
 {
     if (g.page.tree == NULL)

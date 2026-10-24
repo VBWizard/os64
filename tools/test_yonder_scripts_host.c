@@ -4136,8 +4136,9 @@ static void page_initiator_case(const char *markup, const char *how, const char 
     loop_drop();
 }
 /* THE BROWSER'S RELOAD AND BACK REPLAY THE ENTRY'S OWN ASKING, as Chrome
- * 156 and Firefox 158 do (capture-26-chrome-win-get-clicked and -27-...-root;
- * the Firefox run's capture-43 and -44). */
+ * 156 and Firefox 158 do (capture-26-chrome-win-get-clicked,
+ * capture-27-chrome-win-get-root, capture-43-firefox-linux-get-clicked,
+ * capture-44-firefox-linux-get-root). */
 static const yonder_trip_t *trip_now(void) {
     return g.stream.active && pool_work.job!=NULL && *(const uint32_t *)pool_work.job==YONDER_JOB_TRIP
         ? pool_work.job : NULL;

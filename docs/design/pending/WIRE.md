@@ -81,29 +81,67 @@ a search on the engine that refused us answering with results, said in
 the PR body by outcome, not by name; if it still refuses, the PR says so
 and the gate has moved to the handshake, which is the divergence row.
 
-### W1, as built (2026-10-24, Opus)
+### W1, as built (2026-10-24 and -25, Opus)
 
 The values come from a capture, not from this brief: Chris's Chrome 156
-and Firefox 158 on Windows, each making a typed navigation, a clicked one,
-a script, a sheet, a picture, a same-origin fetch, a cross-site fetch and
-its preflight to a local listener (the W1 capture files 02-10 for Chrome,
-19-27 for Firefox, raw request bytes, cited in the PR). Where the capture
-or a standard disagreed with § 1 above, the build follows them:
+and Firefox 158, each making a typed navigation, a clicked one, a script,
+a sheet, a picture, a same-origin fetch, a cross-site fetch and its
+preflight to a local listener, then the browser's Reload and Back (raw
+request bytes, one file a request, cited in the PR). Chrome on Windows is
+`capture-01..08-chrome-win-*` (the sequence) with
+`capture-25-chrome-win-get-clicked` (the click),
+`capture-26-chrome-win-get-clicked` (Reload) and
+`capture-27-chrome-win-get-root` (Back); Firefox on Windows is the first
+run's `run1-overwritten/capture-09` (the typed navigation), `-02..08` and
+`-17` (the click); Firefox's Reload and Back are
+`capture-43-firefox-linux-get-clicked` and
+`capture-44-firefox-linux-get-root`, which behave as on Windows. Where a
+capture or a standard disagreed with § 1 above, the build follows them:
 
 - **Chrome is 156, and its brand list puts the GREASE brand first:**
   `"Not:A-Brand";v="8", "Chromium";v="156", "Google Chrome";v="156"`
-  (capture-02). The agent string is the reduced `Chrome/156.0.0.0`.
-  Firefox is `rv:158.0` / `Firefox/158.0` (capture-19). Safari is not
-  captured: no client hints, and the language list MDN gives.
-- **A preflight carries no client hints** (capture-08); it does carry
+  (capture-01-chrome-win-get-root). The agent string is the reduced
+  `Chrome/156.0.0.0`. Firefox is `rv:158.0` / `Firefox/158.0`
+  (run1-overwritten/capture-09). Safari is not captured: no client hints,
+  and the language list MDN gives.
+- **A preflight carries no client hints**
+  (capture-07-chrome-win-options-fetch-cross-preflight); it does carry
   `Accept-Language`, and its Fetch Metadata is cors/empty with the
   request's site.
 - **`Sec-Fetch-User` stays on every hop of a person's navigation.** HTML's
   "create navigation params by fetching" sets the request's
-  user-activation once, and its redirects are the same request; Fetch
-  Metadata § 2.4 reads only that flag. A page's own navigation (a
-  refresh, a script's `location`, `click()` or `submit()`) never carries
-  it, on any hop.
+  user-activation once, from the source's transient activation, and its
+  redirects are the same request; Fetch Metadata § 2.4 reads only that
+  flag. So a script's `click()`, `submit()` or `location=` run inside a
+  person's gesture carries `?1` in HTML and the browsers; yonder tracks
+  no transient activation, and every navigation a page's script asks for
+  (a refresh, `location`, `location.reload()`, `history.go()`, `click()`,
+  `submit()`) is nobody's, on every hop: it under-claims (DIVERGENCES;
+  transient activation is booked in BROWSER_DEBTS).
+- **The browser's Reload and Back replay the entry's own asking.** Both
+  browsers' Reload of the clicked link sends its `same-origin` and `?1`
+  again (capture-26-chrome-win-get-clicked,
+  capture-43-firefox-linux-get-clicked), and Back to the typed entry its
+  `none` and `?1` (capture-27-chrome-win-get-root,
+  capture-44-firefox-linux-get-root). Each history entry keeps how its
+  document's navigation was asked (`way_crumb_t.asked`), and the toolbar's
+  Reload, Back and Forward replay it; a page's own reload or traversal is
+  the page's. Chrome leads its Reload with `Cache-Control: max-age=0`
+  (capture-26), and its preset does; Firefox adds nothing. Both send the
+  entry's Referer again on Reload, which yonder does not yet
+  (BROWSER_DEBTS).
+- **A site nobody can name says nothing.** Without the public-suffix list
+  two hosts that share their last two labels (a site's sibling
+  subdomains, or two sites under one public suffix) may be one site or
+  two, and calling a site's own CDN `cross-site` is what a
+  resource-isolation policy refuses. `way_origin_site` says only what is
+  certain (`same-origin`; `same-site` for one host on two ports;
+  `cross-site` for another scheme, an IP literal, or hosts whose last two
+  labels differ) and a request whose site it cannot know sends none of
+  the four `Sec-Fetch-` lines, as a browser from before Fetch Metadata
+  would. In the kept corpus that is 11-21% of a pull's https scripts and
+  sheets (271 of 2420, 470 of 3375, 490 of 2326). The omission ends when
+  the public-suffix list lands (DEBTS).
 - **Fetch Metadata and the client hints go only to a potentially
   trustworthy URL** (Fetch Metadata § 3 step 1; the hints are a
   secure-context feature). A plain-http hop carries
@@ -124,24 +162,29 @@ or a standard disagreed with § 1 above, the build follows them:
 - **`Priority` (RFC 9218) is the preset's, per destination.** Firefox sends
   one on every request: `u=0, i` for a document, `u=2` for a style or a
   script, `u=5, i` for an image, `u=4` for a fetch and its preflight
-  (capture-19..27); no font was asked for, so a font goes without. Chrome
-  sends none over HTTP/1.1, and Safari's is not captured. It describes the
-  request's urgency, not a capability, so it is no header that lies.
+  (run1-overwritten/capture-09, -17, -02..08); no font was asked for, so a
+  font goes without. Chrome sends none over HTTP/1.1, and Safari's is not
+  captured. It describes the request's urgency, not a capability, so it is
+  no header that lies. A page's own `Priority` (or `Accept-Language`) on a
+  fetch stands alone: the preset's beside it would be a duplicate.
 - **yonder's own preset sends `Accept-Language: en-US,en;q=0.9`**, a real
   browser asking for English (a server that hears none guesses a locale);
   Netscape 4 and Lynx keep their strings alone, and a typed agent claims
-  nothing beyond itself.
+  nothing beyond itself. A default saved as an earlier yonder's preset
+  string (Chrome 154, Firefox 156) is read as that preset's current one.
 - **libfetch's per-hop callback takes the lines, not the extra-headers
   block.** The extra headers are fixed for a whole fetch, and these lines
   are not: a typed `http://` address that redirects to `https://` must
   send nothing of Fetch Metadata on the first hop and all of it on the
   second, and `Sec-Fetch-Site` grows with every URL a redirect adds.
-  `headers_for` accepts the ten names (Accept-Language, the three
+  `headers_for` accepts eleven names (Accept-Language, the three
   `sec-ch-ua` lines, the four `Sec-Fetch-` lines,
-  `Upgrade-Insecure-Requests`, `Priority`) beside Cookie and Referer, each
-  once; none is a credential. `OS64_FETCH_HOP_FIELDS_MAX` holds 512 bytes
-  for them beside the cookies' kilobyte (`WAY_IDENTITY_MAX`; Chrome's
-  longest block is 294 bytes); `OS64_FETCH_EXTRA_MAX` is not involved.
+  `Upgrade-Insecure-Requests`, `Priority`, a Reload's `Cache-Control`)
+  beside Cookie and Referer, each once; none is a credential.
+  `OS64_FETCH_HOP_FIELDS_MAX` holds 512 bytes for them beside the cookies'
+  kilobyte (`WAY_IDENTITY_MAX`; Chrome's longest block, its Reload of a
+  clicked link, is about 320 bytes); `OS64_FETCH_EXTRA_MAX` is not
+  involved.
 - **Header order is libfetch's, not each browser's**, booked in
   BROWSER_DEBTS beside § 2, whose change to the `Connection` line touches
   the same request writer.

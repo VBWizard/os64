@@ -1617,12 +1617,14 @@ static const char *reload_block(const yonder_agent_preset_t *p, way_initiator_t 
 // EACH PRESET BYTE FOR BYTE AGAINST WHAT THAT BROWSER SENT: the W1
 // capture files, raw request bytes Chris's Chrome 156 and Firefox 158 on
 // Windows sent a local listener (WIRE.md § 1 as built names them). Chrome:
-// capture-01-chrome-win-get-root (a typed navigation), -25 (a link
-// clicked), -26 (the browser's Reload of it), -27 (Back to the typed
-// entry). Firefox on Windows: run1-overwritten/capture-09 (a typed
-// navigation), -17 (a link clicked), -02 to -08 (the subresources and
-// fetches); its Reload and Back are the Linux run's capture-43 and -44,
-// which send the same lines. The navigation blocks are those requests'
+// capture-01-chrome-win-get-root (a typed navigation),
+// capture-25-chrome-win-get-clicked (a link clicked),
+// capture-26-chrome-win-get-clicked (the browser's Reload of it),
+// capture-27-chrome-win-get-root (Back to the typed entry). Firefox on
+// Windows: run1-overwritten/capture-09 (a typed navigation), -17 (a link
+// clicked), -02 to -08 (the subresources and fetches); its Reload and Back
+// are capture-43-firefox-linux-get-clicked and
+// capture-44-firefox-linux-get-root, which send the same lines. The navigation blocks are those requests'
 // lines that libway writes, in the order they came. Safari's are cited,
 // not captured (agent.c says from where), and yonder's own language is the
 // same list.
@@ -1709,7 +1711,7 @@ static void agent_identity_cases(void)
                 "Sec-Fetch-User: ?1\r\n"
                 "Sec-Fetch-Dest: document\r\n"
                 "Accept-Language: en-US,en;q=0.9\r\n");
-    expect_text("identity: Firefox, the browser's Reload of a clicked link (the set: capture-43)",
+    expect_text("identity: Firefox, the browser's Reload of a clicked link (the set)",
                 reload_block(firefox, WAY_BY_PERSON, "https://a.test/", "https://a.test/clicked"),
                 "Upgrade-Insecure-Requests: 1\r\n"
                 "Sec-Fetch-Site: same-origin\r\n"
