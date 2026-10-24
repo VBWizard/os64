@@ -1,7 +1,6 @@
 #include "os64/os64.h"
 
 #define CUT_BUFFER_SIZE 32768
-#define CUT_MAX_FILES 512
 
 typedef struct {
     uint64_t first;
@@ -116,10 +115,11 @@ static int32_t parse_arguments(os64_args_t *args, const char *usage,
         }
         if (option == OS64_ARG_POSITIONAL)
         {
-            if (count == CUT_MAX_FILES)
+            if (count == OS64_SPAWN_MAX_ARGS)
             {
-                os64_hprintf(OS64_STDERR, "cut: too many input files (maximum %u)\n",
-                             CUT_MAX_FILES);
+                os64_hprintf(OS64_STDERR,
+                             "cut: too many input files (maximum %u); unexpected '%s'\n",
+                             OS64_SPAWN_MAX_ARGS, args->value);
                 return OS64_ARG_ERROR;
             }
             files[count++] = args->value;
@@ -446,7 +446,12 @@ int main(int argc, char **argv)
 {
     const char *bytes = NULL, *characters = NULL, *fields = NULL;
     const char *delimiter = NULL, *output_delimiter = NULL;
-    const char *files[CUT_MAX_FILES];
+    const char **files = os64_malloc(OS64_SPAWN_MAX_ARGS * sizeof(*files));
+    if (files == NULL)
+    {
+        os64_hprintf(OS64_STDERR, "cut: out of memory\n");
+        return 1;
+    }
     cut_options_t options = {0};
     os64_args_t args = {0};
     const os64_optspec_t specs[] = {
@@ -465,6 +470,7 @@ int main(int argc, char **argv)
     if (!normalized)
     {
         os64_hprintf(OS64_STDERR, "cut: out of memory parsing arguments\n");
+        os64_free(files);
         return 1;
     }
     os64_args_init(&args, argc, normalized, specs, spec_count);
@@ -476,20 +482,26 @@ int main(int argc, char **argv)
     int32_t count = parse_arguments(&args, usage, files);
     os64_free(normalized);
     if (count < 0)
+    {
+        os64_free(files);
         return count == OS64_ARG_HELP ? 0 : 2;
+    }
     if ((bytes != NULL) + (characters != NULL) + (fields != NULL) != 1)
     {
         os64_hprintf(OS64_STDERR, "cut: choose one of -b, -c, or -f\n");
+        os64_free(files);
         return 2;
     }
     if ((!fields && (delimiter || options.suppress)) || (options.no_partial && !bytes))
     {
         os64_hprintf(OS64_STDERR, "cut: -d and -s require -f; -n requires -b\n");
+        os64_free(files);
         return 2;
     }
     if (delimiter && delimiter[0] && delimiter[1])
     {
         os64_hprintf(OS64_STDERR, "cut: delimiter must be a single byte\n");
+        os64_free(files);
         return 2;
     }
     options.mode = fields ? 'f' : characters ? 'c' : 'b';
@@ -506,6 +518,7 @@ int main(int argc, char **argv)
         os64_hprintf(OS64_STDERR, parsed < 0 ? "cut: out of memory parsing LIST\n" :
                      "cut: invalid LIST: %s\n", list);
         os64_free(options.ranges);
+        os64_free(files);
         return parsed < 0 ? 1 : 2;
     }
 
@@ -560,5 +573,6 @@ int main(int argc, char **argv)
         status = 1;
     }
     os64_free(options.ranges);
+    os64_free(files);
     return status;
 }

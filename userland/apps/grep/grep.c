@@ -5,7 +5,6 @@
 
 #define GREP_LINE_MAX 4096
 #define GREP_PATH_MAX 512
-#define GREP_MAX_FILES 512
 // One open directory per level, and the file being searched at the deepest:
 // the walk's depth (os64/walk.h) leaves room for it.
 #define GREP_MAX_DEPTH OS64_WALK_MAX_DEPTH
@@ -244,7 +243,12 @@ static void grep_path(const char *path, grep_options_t *options, uint32_t depth)
 int main(int argc, char **argv)
 {
     grep_options_t options = {0};
-    const char *positionals[GREP_MAX_FILES + 1];
+    const char **positionals = os64_malloc(OS64_SPAWN_MAX_ARGS * sizeof(*positionals));
+    if (positionals == NULL)
+    {
+        os64_hprintf(OS64_STDERR, "grep: out of memory\n");
+        return 2;
+    }
     os64_args_t args = {0};
     const os64_optspec_t specs[] = {
         {'i', "ignore-case", false, "ignore ASCII case distinctions",
@@ -264,16 +268,19 @@ int main(int argc, char **argv)
     args.details = "-E currently supports literal alternatives separated by |.";
     int32_t positionalCount = os64_args_parse(
         &args, "grep [-Eivnr] PATTERN [FILE ...]", positionals,
-        GREP_MAX_FILES + 1);
+        OS64_SPAWN_MAX_ARGS);
     if (positionalCount == OS64_ARG_HELP)
+    {
+        os64_free(positionals);
         return 0;
+    }
     if (positionalCount < 1)
     {
         if (positionalCount != OS64_ARG_ERROR)
         {
             os64_hprintf(OS64_STDERR, "grep: missing pattern\n");
-            os64_args_help(&args, "grep [-Eivnr] PATTERN [FILE ...]");
         }
+        os64_free(positionals);
         return 2;
     }
 
@@ -297,6 +304,7 @@ int main(int argc, char **argv)
         }
     }
 
+    os64_free(positionals);
     if (options.error)
         return 2;
     return options.found ? 0 : 1;

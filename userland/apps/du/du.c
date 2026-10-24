@@ -4,7 +4,6 @@
 #include "os64/walk.h"
 
 #define DU_PATH_MAX       256
-#define DU_MAX_OPERANDS   512
 // One open directory ancestor per level: the walk's depth (os64/walk.h),
 // which leaves room in the handle table.
 #define DU_MAX_TREE_DEPTH OS64_WALK_MAX_DEPTH
@@ -152,7 +151,12 @@ int main(int argc, char **argv)
 {
     du_options_t options = {.maxDepth = UINT64_MAX};
     os64_args_t args = {0};
-    const char *operands[DU_MAX_OPERANDS] = {0};
+    const char **operands = os64_malloc(OS64_SPAWN_MAX_ARGS * sizeof(*operands));
+    if (operands == NULL)
+    {
+        os64_hprintf(OS64_STDERR, "du: out of memory\n");
+        return 2;
+    }
     const char *depthText = NULL;
     const os64_optspec_t specs[] = {
         {'h', "human-readable", false, "print sizes in powers of 1024",
@@ -172,15 +176,22 @@ int main(int argc, char **argv)
     args.details = "Allocated-block counts are not exposed yet; default sizes carry a K suffix.";
 
     int32_t operandCount = os64_args_parse(
-        &args, "du [-ahsc] [-d N] [PATH ...]", operands, DU_MAX_OPERANDS);
+        &args, "du [-ahsc] [-d N] [PATH ...]", operands, OS64_SPAWN_MAX_ARGS);
     if (operandCount == OS64_ARG_HELP)
+    {
+        os64_free(operands);
         return 0;
+    }
     if (operandCount < 0)
+    {
+        os64_free(operands);
         return 2;
+    }
 
     if (depthText != NULL && !os64_parse_u64(depthText, &options.maxDepth))
     {
         os64_hprintf(OS64_STDERR, "du: invalid maximum depth: %s\n", depthText);
+        os64_free(operands);
         return 2;
     }
     if (options.summarize)
@@ -188,6 +199,7 @@ int main(int argc, char **argv)
     if (options.summarize && options.allFiles)
     {
         os64_hprintf(OS64_STDERR, "du: -a and -s cannot be combined\n");
+        os64_free(operands);
         return 2;
     }
 
@@ -210,5 +222,6 @@ int main(int argc, char **argv)
 
     if (options.grandTotal && complete)
         print_usage(grandTotal, "total", &options);
+    os64_free(operands);
     return complete ? 0 : 1;
 }

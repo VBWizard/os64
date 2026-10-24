@@ -5,7 +5,6 @@
 
 #define CP_BUFFER_SIZE  (1024 * 1024)
 #define CP_PATH_MAX     256
-#define CP_MAX_OPERANDS 512
 // One open source directory per level, and a source and destination file at
 // the deepest: the walk's depth (os64/walk.h) leaves room for both.
 #define CP_MAX_DEPTH    OS64_WALK_MAX_DEPTH
@@ -414,7 +413,12 @@ int main(int argc, char **argv)
 {
     cp_options_t options = {0};
     os64_args_t args = {0};
-    const char *operands[CP_MAX_OPERANDS] = {0};
+    const char **operands = os64_malloc(OS64_SPAWN_MAX_ARGS * sizeof(*operands));
+    if (operands == NULL)
+    {
+        os64_hprintf(OS64_STDERR, "cp: out of memory\n");
+        return 2;
+    }
     const os64_optspec_t specs[] = {
         {'R', "recursive", false, "copy directories recursively",
          .flag = &options.recursive},
@@ -433,15 +437,21 @@ int main(int argc, char **argv)
 
     int32_t operandCount = os64_args_parse(
         &args, "cp [-Riv] [--progress] SOURCE... DEST",
-        operands, CP_MAX_OPERANDS);
+        operands, OS64_SPAWN_MAX_ARGS);
     if (operandCount == OS64_ARG_HELP)
+    {
+        os64_free(operands);
         return 0;
+    }
     if (operandCount < 0)
+    {
+        os64_free(operands);
         return 2;
+    }
     if (operandCount < 2)
     {
         os64_hprintf(OS64_STDERR, "cp: missing source or destination operand\n");
-        os64_args_help(&args, "cp [-Riv] [--progress] SOURCE... DEST");
+        os64_free(operands);
         return 2;
     }
 
@@ -455,6 +465,7 @@ int main(int argc, char **argv)
     {
         os64_hprintf(OS64_STDERR,
                      "cp: target '%s' is not a directory\n", target);
+        os64_free(operands);
         return 1;
     }
 
@@ -485,5 +496,6 @@ int main(int argc, char **argv)
             returnCode = 1;
     }
 
+    os64_free(operands);
     return returnCode;
 }

@@ -12,4 +12,6 @@ for source in userland/libos64/args.c userland/libos64/fmt.c userland/libos64/st
     cc "${flags[@]}" -c "$source" -o "$work/$(basename "$source" .c).o"
 done
 cc -no-pie -fsanitize=address,undefined "$work"/*.o -o "$work/cut"
-python3 tools/test_cut_host.py "$work/cut"
+max_args=$(printf '#include "os64/syscall_numbers.h"\nOS64_SPAWN_MAX_ARGS\n' |
+    cc -E -P -I abi/include -x c - | tail -n 1)
+python3 tools/test_cut_host.py "$work/cut" "$max_args"

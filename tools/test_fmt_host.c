@@ -27,10 +27,25 @@
 #include "os64/runtime.h" // publish the hand-built environment blocks
 #include "os64/str.h"
 
-// fmt.c's printf veneers call os64_write; on the host, swallow it.
+// Capture the printf veneers so parser errors and requested help can be
+// checked independently, including which stream receives them.
+static char captured[3][8192];
+static size_t captured_length[3];
+
+static void reset_output(void)
+{
+    memset(captured, 0, sizeof(captured));
+    memset(captured_length, 0, sizeof(captured_length));
+}
 long os64_write(int handle, const void *buf, size_t len)
 {
-    (void)handle; (void)buf;
+    if (handle >= 1 && handle <= 2) {
+        size_t available = sizeof(captured[handle]) - captured_length[handle] - 1;
+        size_t copied = len < available ? len : available;
+        memcpy(captured[handle] + captured_length[handle], buf, copied);
+        captured_length[handle] += copied;
+        captured[handle][captured_length[handle]] = '\0';
+    }
     return (long)len;
 }
 
@@ -270,24 +285,52 @@ int main(void)
         EXPECT(outName != NULL && strcmp(outName, "f.txt") == 0);
         EXPECT(pos[0] != NULL && strcmp(pos[0], "/bin") == 0);
 
+        reset_output();
         // More positionals than the app declared → ERROR.
         char *argv2[] = { "ls", "p1", "p2", NULL };
         os64_args_init(&a, 3, argv2, pspecs, 3);
         EXPECT(os64_args_parse(&a, "ls", pos, 1) == OS64_ARG_ERROR);
+        EXPECT(captured[1][0] == '\0');
+        EXPECT(strstr(captured[2], "usage:") == NULL);
 
+        EXPECT(strstr(captured[2], "too many operands (maximum 1)") != NULL);
+        EXPECT(strstr(captured[2], "p2") != NULL);
+        reset_output();
         // Help and unknown option come back as their sentinels.
         char *argv3[] = { "ls", "-h", NULL };
         os64_args_init(&a, 2, argv3, pspecs, 3);
         EXPECT(os64_args_parse(&a, "ls", pos, 1) == OS64_ARG_HELP);
+        EXPECT(strstr(captured[1], "usage: ls") != NULL);
+        EXPECT(captured[2][0] == '\0');
+        reset_output();
         char *argv4[] = { "ls", "-z", NULL };
         os64_args_init(&a, 2, argv4, pspecs, 3);
         EXPECT(os64_args_parse(&a, "ls", pos, 1) == OS64_ARG_ERROR);
 
+        EXPECT(captured[1][0] == '\0');
+        EXPECT(strstr(captured[2], "invalid or incomplete option: '-z'") != NULL);
+        EXPECT(strstr(captured[2], "usage:") == NULL);
+
+        char *bad_values[][3] = {
+            {"ls", "-o", NULL}, {"ls", "--out", NULL},
+            {"ls", "-ol", NULL}, {"ls", "--long=yes", NULL}
+        };
+        for (size_t i = 0; i < sizeof(bad_values) / sizeof(bad_values[0]); i++) {
+            reset_output();
+            os64_args_init(&a, 2, bad_values[i], pspecs, 3);
+            EXPECT(os64_args_parse(&a, "ls", pos, 1) == OS64_ARG_ERROR);
+            EXPECT(captured[1][0] == '\0');
+            EXPECT(strstr(captured[2], bad_values[i][1]) != NULL);
+            EXPECT(strstr(captured[2], "invalid or incomplete option") != NULL);
+        }
+        reset_output();
         // A destination-less spec reached by parse is a programmer error.
         const os64_optspec_t bare[] = { { 'x', NULL, 0, "no home" } };
         char *argv5[] = { "prog", "-x", NULL };
         os64_args_init(&a, 2, argv5, bare, 1);
         EXPECT(os64_args_parse(&a, "prog", pos, 1) == OS64_ARG_ERROR);
+        EXPECT(captured[1][0] == '\0');
+        EXPECT(strstr(captured[2], "internal error") != NULL);
 
         // pwd-shaped: zero positionals allowed (NULL, 0); flags still land.
         char *argv6[] = { "prog", "-l", NULL };

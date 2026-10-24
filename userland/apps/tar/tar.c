@@ -3,7 +3,6 @@
 #include "os64/os64.h"
 #include "tar_format.h"
 
-#define TAR_OPERAND_MAX 512
 #define TAR_IO_SIZE     (64 * 1024)
 
 typedef struct {
@@ -787,7 +786,12 @@ static int read_archive(const tar_options_t *options)
 int main(int argc, char **argv)
 {
     tar_options_t options = {.archive = "-"};
-    const char *operands[TAR_OPERAND_MAX] = {0};
+    const char **operands = os64_malloc(OS64_SPAWN_MAX_ARGS * sizeof(*operands));
+    if (operands == NULL)
+    {
+        os64_hprintf(OS64_STDERR, "tar: out of memory\n");
+        return 2;
+    }
     os64_args_t args = {0};
     const os64_optspec_t specs[] = {
         {'c', "create", false, "create an archive", .flag = &options.create},
@@ -808,35 +812,47 @@ int main(int argc, char **argv)
                    "ownership, modes, and restored timestamps are not.";
     int32_t operand_count = os64_args_parse(
         &args, "tar (-c|-t|-x) [-v] [-f ARCHIVE] [--one-file-system] [PATH ...]",
-        operands, TAR_OPERAND_MAX);
+        operands, OS64_SPAWN_MAX_ARGS);
     if (operand_count == OS64_ARG_HELP)
+    {
+        os64_free(operands);
         return 0;
+    }
     if (operand_count < 0)
+    {
+        os64_free(operands);
         return 2;
+    }
 
     int operations = (options.create ? 1 : 0) + (options.list ? 1 : 0) +
                      (options.extract ? 1 : 0);
     if (operations != 1) {
         os64_hprintf(OS64_STDERR,
                      "tar: choose exactly one of -c, -t, or -x\n");
+        os64_free(operands);
         return 2;
     }
     if (options.create && operand_count == 0) {
         os64_hprintf(OS64_STDERR, "tar: refusing to create an empty archive\n");
+        os64_free(operands);
         return 2;
     }
     if (!options.create && operand_count != 0) {
         os64_hprintf(OS64_STDERR,
                      "tar: member selection is not supported; remove trailing operands\n");
+        os64_free(operands);
         return 2;
     }
     if (options.one_file_system && !options.create) {
         os64_hprintf(OS64_STDERR,
                      "tar: --one-file-system applies only while creating\n");
+        os64_free(operands);
         return 2;
     }
 
-    return options.create
+    int result = options.create
         ? create_archive(&options, operands, operand_count)
         : read_archive(&options);
+    os64_free(operands);
+    return result;
 }
