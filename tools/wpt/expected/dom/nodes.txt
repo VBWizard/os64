@@ -95,6 +95,9 @@ Node-cloneNode.html	createElement(u)
 Node-cloneNode.html	createElement(var)
 Node-cloneNode.html	createElement(wbr)
 attributes-namednodemap.html	setNamedItem and removeNamedItem on `attributes` should not interfere with existing method names
+# The frames row (frames.c): HTMLIFrameElement's interface. It fails with
+# the switch off.
+Node-cloneNode.html	createElement(iframe)
 [excluded]
 [passing]
 Attr-prefix.html	Attr.prefix absent (HTML)
@@ -1139,6 +1142,7 @@ Node-cloneNode.html	createElement(form)
 Node-cloneNode.html	createElement(header)
 Node-cloneNode.html	createElement(hgroup)
 Node-cloneNode.html	createElement(i)
+Node-cloneNode.html	createElement(iframe)
 Node-cloneNode.html	createElement(img)
 Node-cloneNode.html	createElement(input)
 Node-cloneNode.html	createElement(isindex)
