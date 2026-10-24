@@ -452,8 +452,8 @@ false otherwise, and always false for a preflight.
   **RULED (2):** the standard's rule replaces the library's, in the job.
   Driving the loop in the job is what lets the `Origin` header, the
   preflight and the tainting change per hop (none of which libfetch's
-  per-hop hooks can express: `headers_for` may supply only `Cookie` and
-  `Referer`). libfetch's typed-origin rule never fires inside a fetch job,
+  per-hop hooks can express: `headers_for` may supply only `Cookie`,
+  `Referer` and the lines that say who is asking, never `Origin`). libfetch's typed-origin rule never fires inside a fetch job,
   so nothing here may rely on it.
 - **Downgrade hops.** **DIVERGES:** a redirect from `https` to `http` is a
   network error for every script request, also on an `http` page where the

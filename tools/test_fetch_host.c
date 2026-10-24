@@ -1321,6 +1321,39 @@ static void case_cookies(void)
         CHECK(os64_fetch_status(f) == OS64_FETCH_REQUEST_FAILED && dials == 0 && t.asked == 1);
         os64_fetch_close(f);
     }
+    // The lines that say who is asking go per hop too, each name once, in
+    // the order written, after the static fields; a name off the list (a
+    // Sec- header the list does not name) refuses the hop as any other does.
+    {
+        static const char who[] =
+            "sec-ch-ua: \"B\";v=\"1\"\r\nsec-ch-ua-mobile: ?0\r\nsec-ch-ua-platform: \"Windows\"\r\n"
+            "Upgrade-Insecure-Requests: 1\r\nSec-Fetch-Site: none\r\nSec-Fetch-Mode: navigate\r\n"
+            "Sec-Fetch-User: ?1\r\nSec-Fetch-Dest: document\r\nAccept-Language: en-US,en;q=0.9\r\n"
+            "Cookie: c=1\r\nReferer: http://a.test/\r\n";
+        reset();
+        peer_add("a.test", 80, reply_len("200 OK", "", page));
+        cookie_test_t t = { .output = who };
+        os64_fetch_options_t opt = { .headers_for = cookie_headers, .ctx = &t, .extra_headers = "X-Static: 1\r\n" };
+        os64_fetch_t *f = os64_fetch_open("http://a.test/", &opt);
+        CHECK(os64_fetch_status(f) == OS64_FETCH_OK && t.asked == 1);
+        const char *at = strstr(request_n(0), "X-Static: 1\r\n");
+        CHECK(at != NULL && strncmp(at + strlen("X-Static: 1\r\n"), who, strlen(who)) == 0);
+        os64_fetch_close(f);
+        const char *refused[] = {
+            "Sec-Fetch-Site: none\r\nsec-fetch-site: none\r\n",     // twice in the block
+            "Sec-Purpose: prefetch\r\n",                            // a Sec- name off the list
+            "Accept-Language: en\r\n",                              // beside a static one, below
+        };
+        for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
+            reset();
+            cookie_test_t r = { .output = refused[i] };
+            os64_fetch_options_t ro = { .headers_for = cookie_headers, .ctx = &r };
+            if (i == 2) ro.extra_headers = "Accept-Language: fr\r\n";
+            f = os64_fetch_open("http://a.test/", &ro);
+            CHECK(os64_fetch_status(f) == OS64_FETCH_REQUEST_FAILED && dials == 0 && r.asked == 1);
+            os64_fetch_close(f);
+        }
+    }
     // Both sources, secure/direct vs unencrypted HTTP and HTTPS-via-proxy.
     for (int dynamic = 0; dynamic < 2; dynamic++) {
         for (int transport = 0; transport < 3; transport++) {
