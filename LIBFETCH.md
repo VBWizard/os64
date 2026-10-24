@@ -166,7 +166,11 @@ typedef struct {
   is optional, copied with a 256-byte storage bound (including NUL), and
   checked for field bytes. Invalid method/body/header options fail before
   dialing. A send failure closes the connection without retrying a request
-  the server may already have acted on. Cancellation applies during upload.
+  the server may already have acted on, which a POST may be; a PUT, DELETE
+  or OPTIONS that failed on a kept connection before any byte of a reply
+  goes once more on a fresh one, body and all (WIRE.md § 2's retry rule:
+  each is idempotent, so twice does what once would). Cancellation applies
+  during upload.
   Upload `idle_ms` restarts after accepted bytes or TLS transport progress,
   including ciphertext drain. Empty/interrupted waits do not restart it;
   a steadily progressing upload may exceed 30 seconds overall. Read calls

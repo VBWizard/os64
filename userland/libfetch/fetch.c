@@ -692,7 +692,9 @@ static bool idempotent(const os64_fetch_t *f)
 // more, on a connection dialled for it, when sending it twice cannot do
 // twice what once would. A failure on a connection dialled for the request
 // (the second try's among them, so a request goes at most twice), one after
-// a reply began, a silence, or a POST's, is the caller's as it always was.
+// a reply began, a silence, or a non-idempotent method's (POST, PATCH, any
+// name the list does not hold, or one in lower case), is the caller's as it
+// always was.
 static bool retry_on_fresh(os64_fetch_t *f)
 {
     return f->reused && f->io.received == 0 && !f->io.silent && !cancelled(f) && idempotent(f);

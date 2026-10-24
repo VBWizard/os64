@@ -303,8 +303,13 @@ says more than it did:
 - **Nothing past the message.** Bytes already read past a reply's end, a
   plain lookahead byte, or TLS plaintext waiting are a reply nobody asked
   for, and the connection goes (`leftover`); one that arrives later is the
-  probe's to find. Either way only a connection to the same key could be
-  confused by it, whose server answers its own requests anyway.
+  probe's to find. Either way only a later request on the same key could
+  be confused by it. Direct, that is the same server, which answers its own
+  requests anyway; through a proxy the key is the proxy's, and a request to
+  ANOTHER origin may follow on the connection, so bytes past a reply there
+  would be the proxy's error (it frames every reply it relays), which the
+  leftover check and the probe exist to catch, not a trust any origin is
+  given.
 - **One trust store per connection, and per process.** A connection is
   keyed by the store it was verified under, by pointer, which a kept TLS
   client's own reference makes an identity. A fetch whose caller gives no

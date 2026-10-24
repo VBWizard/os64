@@ -129,8 +129,9 @@ const char *http_url_reason(http_url_result_t rc);
 // HTTP/1.1's default (RFC 9112 § 9.3), so nothing is said for it unless the
 // caller asks for `Connection: keep-alive` (`keep_alive`, below: a browser
 // says it anyway), and `Connection: close` is never sent — a reply framed by
-// neither length nor chunks still ends at the server's close, which is the
-// one reply the connection is not kept after. `Host:` because name-based
+// neither length nor chunks still ends at the server's close. Whether a
+// connection is kept after a reply is fetch.c's judgement, with every
+// clause of RFC 9112 § 9.3 (pool.h's connection_reusable). `Host:` because name-based
 // virtual hosting means a request without it reaches whatever the address
 // answers with by default — usually not the page asked for. Host is always
 // the first line after the request line.

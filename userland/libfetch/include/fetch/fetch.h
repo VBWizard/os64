@@ -278,8 +278,11 @@ typedef struct {
     // body_len is zero, and means NO body; a non-NULL body of length zero is
     // an EMPTY one, sent with Content-Length: 0 by any method but GET and HEAD, so the
     // server can tell the two apart. GET requires NULL body/content_type and zero
-    // body_len. A failed upload is
-    // not retried: the server may already have acted. 301/302/303 turn POST
+    // body_len. A POST's failed upload is not retried: the server may
+    // already have acted. A PUT's, a DELETE's or an OPTIONS' is, once, body
+    // and all, when it failed on a kept connection before any byte of a
+    // reply (the retry rule, os64_fetch_reason), since sending one of those
+    // twice does what once would. 301/302/303 turn POST
     // into GET without body metadata; 307/308 preserve it. on_hop can refuse.
     os64_fetch_method_t method;
     const void *body;
