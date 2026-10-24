@@ -3736,7 +3736,26 @@ static void unshown_back_case(const char *when, const char *script) {
     check(probe_text_is("out","P") && session_is("","/P","/A"),what);
     loop_drop();
 }
+/* A page not yet shown going back past the page on screen fetches that
+ * entry (unshown_go's session_go): the page's own traversal, nobody's. */
+static void unshown_back_past(void) {
+    loop_page("<p id=out>S</p><script>history.replaceState(null,'','/S')</script>");
+    check(loop_settle() && view_turns(),"unshown back past: S");
+    start_trip("http://fixture.test/P",NULL,NULL,NAV_GO,WAY_BY_BROWSER,NULL);
+    post_arriving("<p id=out>P</p><script>history.replaceState(null,'','/P')</script>");
+    check(loop_settle() && view_turns() && session_is("/S","/P",""),"unshown back past: P");
+    start_trip("http://fixture.test/A",NULL,NULL,NAV_GO,WAY_BY_BROWSER,NULL);
+    post_arriving("<p id=out>A</p><script>history.replaceState(null,'','/A');history.go(-2)</script><p>tail</p>");
+    loop_settle();
+    view_turns();
+    const yonder_trip_t *t=g.stream.active ? pool_work.job : NULL;
+    check(t!=NULL && t->kind==YONDER_JOB_TRIP && strstr(t->url,"/S")!=NULL && !t->metadata.activation &&
+          t->metadata.site==WAY_SITE_SAME_ORIGIN,
+        "unshown back past: history.go(-2) from A fetches S as the page's own, nobody's");
+    loop_drop();
+}
 static void loop_view_unshown_back(void) {
+    unshown_back_past();
     // One rule wherever the page is in its arrival: its navigation
     // committed when its response came, so Back from it is P.
     unshown_back_case("during the parse","history.back()");
