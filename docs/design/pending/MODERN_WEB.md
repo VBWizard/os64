@@ -2234,9 +2234,10 @@ library stops at a read of `nonce` where it stopped at `_DumpException`,
 having found `crypto`; an obfuscated
 challenge script gets past its `crypto` check to a read of undefined).
 
-Host, the base → the head: the DOM host 11,667 / 82,990 checks → 12,170 /
-85,281 (allocation sweeps 1,029 / 12,734 → 1,080 / 13,081),
-`tools/test_dom_window.inc` holding a case per rule; libway's origin, way
+Host, the base → the head: the DOM host 11,667 / 82,990 checks → 12,285 /
+85,476 (allocation sweeps 1,029 / 12,734 → 1,093 / 13,109),
+`tools/test_dom_window.inc` holding a case per rule; the scripted-page
+host 7,547 checks with patch 0011a merged in; libway's origin, way
 and way-fetch hosts, libfetch's host and its transport's, yonder's host,
 its stream and fetch-job hosts, the webfont, os64get and html-dom hosts,
 the replay proof, the WPT runner's self-test, the TLS input and engine
