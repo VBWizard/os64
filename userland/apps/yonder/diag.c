@@ -20,13 +20,28 @@ typedef struct {
 // one, a line cannot be told from one counted already, so the count
 // stands and the file says there are more (`more`).
 #define GONE_MAX 4096u
+// Each list is found by its key through an index of its own: open
+// addressing over the key's hash, each slot a position in the list plus
+// one (0 is empty), at most half full, a removal shifting the slots after
+// it back. A page decides how many lines a table holds (a FAILED line per
+// failure it makes), so finding one must not cost what it holds.
+typedef struct {
+    uint32_t *slots;
+    uint32_t cap;           // a power of two, or 0
+} Index;
 typedef struct {
     Line *lines;
     uint32_t n, cap;
     Line *gone;
     uint32_t ngone, cap_gone;
     bool more;
+    // Lines are keyed by `a` and `b` (MISSING, FAILED) or by `a` alone
+    // (facts), the same for a table every time it is asked.
+    Index by_line, by_gone;
 } Table;
+
+// The index's probes so far, for the host's bound (yonder_diag_steps).
+static uint64_t s_steps;
 
 // THE CLAIM (diag.h): the directory this record's name was claimed in, and
 // the record it is the proof for. Only yonder_diag_claim sets `dir`.
@@ -92,6 +107,8 @@ static void table_free(Table *t)
         os64_free(t->gone[i].b);
     }
     os64_free(t->gone);
+    os64_free(t->by_line.slots);
+    os64_free(t->by_gone.slots);
 }
 
 static bool same_key(const Line *l, const char *a, const char *b, bool both)
@@ -99,13 +116,103 @@ static bool same_key(const Line *l, const char *a, const char *b, bool both)
     return os64_streq(l->a, a) && (!both || os64_streq(l->b, b));
 }
 
+static uint32_t key_hash(const char *a, const char *b, bool both)
+{
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (const char *p = a; *p != '\0'; p++)
+        h = (h ^ (uint8_t)*p) * 0x100000001b3ull;
+    if (both) {
+        h = (h ^ 0x1f) * 0x100000001b3ull;
+        for (const char *p = b; *p != '\0'; p++)
+            h = (h ^ (uint8_t)*p) * 0x100000001b3ull;
+    }
+    return (uint32_t)(h ^ (h >> 32));
+}
+
+// The slot holding the line keyed `a` (and `b`), or the empty one where it
+// would go; NULL when the list has no index (its memory was refused).
+static uint32_t *index_slot(const Index *x, const Line *list, const char *a, const char *b, bool both)
+{
+    if (x->cap == 0)
+        return NULL;
+    uint32_t mask = x->cap - 1;
+    for (uint32_t i = key_hash(a, b, both) & mask;; i = (i + 1) & mask) {
+        s_steps++;
+        uint32_t s = x->slots[i];
+        if (s == 0 || same_key(&list[s - 1], a, b, both))
+            return &x->slots[i];
+    }
+}
+
+// The index made again for the list's first `n` lines, with room for one
+// more at most half full. False, the old one kept, when memory ran out.
+static bool index_build(Index *x, const Line *list, uint32_t n, bool both)
+{
+    uint32_t cap = 16;
+    while (cap < (n + 1) * 4)
+        cap *= 2;
+    uint32_t *slots = os64_calloc(cap, sizeof(*slots));
+    if (slots == NULL)
+        return false;
+    os64_free(x->slots);
+    x->slots = slots;
+    x->cap = cap;
+    for (uint32_t i = 0; i < n; i++)
+        *index_slot(x, list, list[i].a, list[i].b, both) = i + 1;
+    return true;
+}
+
+// Room to index one more line beside the `n` the list holds.
+static bool index_room(Index *x, const Line *list, uint32_t n, bool both)
+{
+    return (n + 1) * 2 <= x->cap || index_build(x, list, n, both);
+}
+
+// The line at *slot leaves the index: the slots after it in its run shift
+// back as far as their own keys allow, so no lookup stops short.
+static void index_remove(Index *x, const Line *list, uint32_t *slot, bool both)
+{
+    uint32_t mask = x->cap - 1, i = (uint32_t)(slot - x->slots);
+    x->slots[i] = 0;
+    for (uint32_t j = (i + 1) & mask; x->slots[j] != 0; j = (j + 1) & mask) {
+        s_steps++;
+        const Line *l = &list[x->slots[j] - 1];
+        uint32_t home = key_hash(l->a, l->b, both) & mask;
+        bool stays = i <= j ? (home > i && home <= j) : (home > i || home <= j);
+        if (!stays) {
+            x->slots[i] = x->slots[j];
+            x->slots[j] = 0;
+            i = j;
+        }
+    }
+}
+
+// The position of the line keyed `a` (and `b`) in `list`, or -1: through
+// the index, or by walking the list when the index's memory was refused.
+static int64_t list_find(const Index *x, const Line *list, uint32_t n, const char *a, const char *b, bool both)
+{
+    uint32_t *slot = index_slot(x, list, a, b, both);
+    if (slot != NULL)
+        return *slot != 0 ? (int64_t)*slot - 1 : -1;
+    for (uint32_t i = 0; i < n; i++) {
+        s_steps++;
+        if (same_key(&list[i], a, b, both))
+            return i;
+    }
+    return -1;
+}
+
+uint64_t yonder_diag_steps(void)
+{
+    return s_steps;
+}
+
 // The line keyed `a` (and `b`) met no room: counted once, however often it
 // is asked for.
 static void table_lose(Table *t, const char *a, const char *b, bool both)
 {
-    for (uint32_t i = 0; i < t->ngone; i++)
-        if (same_key(&t->gone[i], a, b, both))
-            return;
+    if (list_find(&t->by_gone, t->gone, t->ngone, a, b, both) >= 0)
+        return;
     if (t->ngone == t->cap_gone && t->ngone < GONE_MAX) {
         uint32_t bigger = t->cap_gone != 0 ? t->cap_gone * 2 : 16;
         Line *next = os64_malloc((size_t)bigger * sizeof(Line));
@@ -117,26 +224,38 @@ static void table_lose(Table *t, const char *a, const char *b, bool both)
             t->cap_gone = bigger;
         }
     }
-    Line one = {t->ngone < t->cap_gone ? copy(a) : NULL, t->ngone < t->cap_gone ? copy(b) : NULL, 0, false};
+    bool room = t->ngone < t->cap_gone && index_room(&t->by_gone, t->gone, t->ngone, both);
+    Line one = {room ? copy(a) : NULL, room ? copy(b) : NULL, 0, false};
     if (one.a == NULL || one.b == NULL) {
         os64_free(one.a);
         os64_free(one.b);
         t->more = true;
         return;
     }
-    t->gone[t->ngone++] = one;
+    t->gone[t->ngone] = one;
+    *index_slot(&t->by_gone, t->gone, a, b, both) = ++t->ngone;
 }
 
-// A key given room after all is no longer lost.
+// A key given room after all is no longer lost. The last lost line takes
+// its place in the list, and its slot in the index says so.
 static void table_found(Table *t, const char *a, const char *b, bool both)
 {
-    for (uint32_t i = 0; i < t->ngone; i++)
-        if (same_key(&t->gone[i], a, b, both)) {
-            os64_free(t->gone[i].a);
-            os64_free(t->gone[i].b);
-            t->gone[i] = t->gone[--t->ngone];
-            return;
-        }
+    int64_t at = list_find(&t->by_gone, t->gone, t->ngone, a, b, both);
+    if (at < 0)
+        return;
+    uint32_t i = (uint32_t)at, last = t->ngone - 1;
+    if (t->by_gone.cap != 0)
+        index_remove(&t->by_gone, t->gone, index_slot(&t->by_gone, t->gone, a, b, both), both);
+    os64_free(t->gone[i].a);
+    os64_free(t->gone[i].b);
+    if (i != last) {
+        t->gone[i] = t->gone[last];
+        uint32_t *slot = t->by_gone.cap != 0
+            ? index_slot(&t->by_gone, t->gone, t->gone[i].a, t->gone[i].b, both) : NULL;
+        if (slot != NULL)
+            *slot = i + 1;
+    }
+    t->ngone = last;
 }
 
 // The line keyed `a` (and `b`, when `both`), found or added. NULL when the
@@ -145,10 +264,10 @@ static void table_found(Table *t, const char *a, const char *b, bool both)
 // counted as lost, once.
 static Line *table_line(Table *t, const char *a, const char *b, bool both, uint32_t max)
 {
-    for (uint32_t i = 0; i < t->n; i++)
-        if (same_key(&t->lines[i], a, b, both))
-            return &t->lines[i];
-    if (t->n >= max) {
+    int64_t at = list_find(&t->by_line, t->lines, t->n, a, b, both);
+    if (at >= 0)
+        return &t->lines[at];
+    if (t->n >= max || !index_room(&t->by_line, t->lines, t->n, both)) {
         table_lose(t, a, b, both);
         return NULL;
     }
@@ -174,6 +293,7 @@ static Line *table_line(Table *t, const char *a, const char *b, bool both, uint3
     }
     table_found(t, a, b, both);
     t->lines[t->n] = one;
+    *index_slot(&t->by_line, t->lines, a, b, both) = t->n + 1;
     return &t->lines[t->n++];
 }
 
@@ -257,10 +377,8 @@ static void fact_set(yonder_diag_t *d, const char *key, const char *value, bool 
     if (d == NULL)
         return;
     Table *t = &d->facts;
-    Line *l = NULL;
-    for (uint32_t i = 0; i < t->n && l == NULL; i++)
-        if (os64_streq(t->lines[i].a, key))
-            l = &t->lines[i];
+    int64_t at = list_find(&t->by_line, t->lines, t->n, key, "", false);
+    Line *l = at >= 0 ? &t->lines[at] : NULL;
     if (l == NULL) {
         bool room = head ? d->head_facts < YONDER_DIAG_HEAD_FACTS : t->n - d->head_facts < YONDER_DIAG_FACTS_MAX;
         l = table_line(t, key, "", false, room ? UINT32_MAX : 0);
@@ -315,6 +433,15 @@ void yonder_diag_forget(yonder_diag_t *d, const char *prefix)
         }
         *counts[k] = kept;
     }
+    // The lists closed up, so their indexes are made again; one that
+    // cannot be is dropped, and its list walked until it can.
+    Index *indexes[2] = {&d->facts.by_line, &d->facts.by_gone};
+    for (int k = 0; k < 2; k++)
+        if (!index_build(indexes[k], lists[k], *counts[k], false)) {
+            os64_free(indexes[k]->slots);
+            indexes[k]->slots = NULL;
+            indexes[k]->cap = 0;
+        }
 }
 
 void yonder_diag_short(yonder_diag_t *d)
@@ -331,10 +458,8 @@ void yonder_diag_unjudged(yonder_diag_t *d, const char *why)
 
 const char *yonder_diag_fact_value(const yonder_diag_t *d, const char *key)
 {
-    for (uint32_t i = 0; d != NULL && i < d->facts.n; i++)
-        if (os64_streq(d->facts.lines[i].a, key))
-            return d->facts.lines[i].count == 0 ? d->facts.lines[i].b : NULL;
-    return NULL;
+    int64_t at = d != NULL ? list_find(&d->facts.by_line, d->facts.lines, d->facts.n, key, "", false) : -1;
+    return at >= 0 && d->facts.lines[at].count == 0 ? d->facts.lines[at].b : NULL;
 }
 
 void yonder_diag_failed_seen(yonder_diag_t *d, const char *what, const char *message)

@@ -13,8 +13,12 @@ static const char *const kinds[D_EVENT_COUNT] = {
     "click", "mousedown", "mouseup", "mouseover", "mouseout", "mousemove",
     "keydown", "keypress", "keyup", "input", "change", "submit", "reset",
     "focus", "blur", "load", "scroll", "resize", "popstate", "hashchange", "online", "offline",
-    "languagechange", "readystatechange", "visibilitychange", "prerenderingchange", "DOMContentLoaded"
+    "languagechange", "error", "unhandledrejection", "rejectionhandled", "readystatechange",
+    "visibilitychange", "prerenderingchange", "DOMContentLoaded"
 };
+/* A page's handler attributes are a bit per kind in a uint32_t
+ * (os64_dom_handler_attributes, attribute_mask). */
+_Static_assert(D_EVENT_COUNT <= 32, "the handler-attribute mask holds a bit per event kind");
 
 enum { PHASE_NONE, PHASE_CAPTURING, PHASE_AT_TARGET, PHASE_BUBBLING };
 
@@ -30,9 +34,17 @@ typedef struct {
     /* A ProgressEvent's (XHR § 4): its three attributes. */
     bool progress, length_computable;
     double loaded, total;
-    /* A CustomEvent's (DOM § 2.4): its detail, null until set. */
+    /* An ErrorEvent's (HTML § 8.1.4.6): its error, message and filename as
+     * detail[0], [1] and [2] (the two strings, strings), and its lineno and
+     * colno; a PromiseRejectionEvent's: its promise and reason as detail[0]
+     * and [1]. Traced with the event. */
+    bool error_event, rejection_event;
+    uint32_t lineno, colno;
+    JSValue detail[3];
+    /* A CustomEvent's (DOM § 2.4): its detail, null until set. Traced with
+     * the event. */
     bool custom;
-    JSValue detail;
+    JSValue custom_detail;
 } DEvent;
 
 int d_event_kind(const char *type)
@@ -67,14 +79,16 @@ static bool handler_on(const os64_dom_t *dom, int kind)
 /* HTML's "window-reflecting body element event handler set" and the body's
  * WindowEventHandlers, as far as the types named here reach: the body's
  * onload, onfocus and onblur are window's, and so are its onscroll,
- * onresize, onpopstate, onhashchange, ononline, onoffline and
- * onlanguagechange (handlers only with the switch on, handler_on). */
+ * onresize, onpopstate, onhashchange, ononline, onoffline,
+ * onlanguagechange, onerror, onunhandledrejection and onrejectionhandled
+ * (handlers only with the switch on, handler_on). */
 static bool window_reflecting(int kind)
 {
     return kind == D_EVENT_LOAD || kind == D_EVENT_FOCUS || kind == D_EVENT_BLUR ||
         kind == D_EVENT_SCROLL || kind == D_EVENT_RESIZE || kind == D_EVENT_POPSTATE ||
         kind == D_EVENT_HASHCHANGE || kind == D_EVENT_ONLINE || kind == D_EVENT_OFFLINE ||
-        kind == D_EVENT_LANGUAGECHANGE;
+        kind == D_EVENT_LANGUAGECHANGE || kind == D_EVENT_ERROR || kind == D_EVENT_UNHANDLEDREJECTION ||
+        kind == D_EVENT_REJECTIONHANDLED;
 }
 
 static void event_finalizer(JSRuntime *rt, JSValue value)
@@ -83,7 +97,8 @@ static void event_finalizer(JSRuntime *rt, JSValue value)
     if (event == NULL) return;
     JS_FreeValueRT(rt, event->target);
     JS_FreeValueRT(rt, event->current);
-    JS_FreeValueRT(rt, event->detail);
+    for (int i = 0; i < 3; i++) JS_FreeValueRT(rt, event->detail[i]);
+    JS_FreeValueRT(rt, event->custom_detail);
     js_free_rt(rt, event->type);
     js_free_rt(rt, event);
 }
@@ -94,7 +109,8 @@ static void event_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
     if (event == NULL) return;
     JS_MarkValue(rt, event->target, mark);
     JS_MarkValue(rt, event->current, mark);
-    JS_MarkValue(rt, event->detail, mark);
+    for (int i = 0; i < 3; i++) JS_MarkValue(rt, event->detail[i], mark);
+    JS_MarkValue(rt, event->custom_detail, mark);
 }
 
 static uint64_t now_ms(const os64_dom_t *dom)
@@ -124,7 +140,8 @@ JSValue d_event_new_proto(os64_dom_t *dom, JSContext *ctx, JSValueConst prototyp
     *event = (DEvent){.target = JS_NULL, .current = JS_NULL, .type = copy,
                       .time = (double)now_ms(dom), .bubbles = bubbles,
                       .cancelable = cancelable, .initialized = true, .trusted = trusted,
-                      .detail = JS_NULL};
+                      .detail = {JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED},
+                      .custom_detail = JS_NULL};
     JS_SetOpaque(object, event);
     return object;
 }
@@ -141,21 +158,31 @@ static void cancel(DEvent *event)
     if (event->cancelable) event->canceled = true;
 }
 
-void d_report(os64_dom_t *dom, JSContext *ctx, JSValueConst error)
+static void first_report(os64_dom_t *dom, JSContext *ctx, JSValueConst error)
 {
-    if (dom->report.status != OS64_JS_OK) return;
     os64_js_outcome_t *out = &dom->report;
     out->status = OS64_JS_EXCEPTION;
     os64_strcopy(out->message, sizeof(out->message), "JavaScript exception; diagnostic unavailable");
     os64_strcopy(out->source_name, sizeof(out->source_name), "event handler");
-    const char *text = JS_ToCString(ctx, error);
-    if (text != NULL) {
-        out->diagnostic_truncated = os64_strcopy(out->message, sizeof(out->message), text) >= sizeof(out->message);
-        JS_FreeCString(ctx, text);
-    } else {
-        JSValue secondary = JS_GetException(ctx);
-        JS_FreeValue(ctx, secondary);
-    }
+    /* Read as an event's message is (report.c's d_error_text), so writing
+     * it down runs none of the page's code: no getter, no toString. */
+    char text[OS64_JS_MESSAGE_CAP + 1];
+    d_error_text(dom, ctx, error, text, sizeof(text));
+    out->diagnostic_truncated = os64_strcopy(out->message, sizeof(out->message), text) >= sizeof(out->message);
+}
+
+/* An exception the binding caught itself: the first is kept for the task's
+ * outcome (os64_dom_take_report), and each is the window's error event
+ * (d_report_error), the page's (d_report) or `script`'s (d_report_as). */
+void d_report(os64_dom_t *dom, JSContext *ctx, JSValueConst error)
+{
+    d_report_as(dom, ctx, error, D_SCRIPT_PAGE);
+}
+
+void d_report_as(os64_dom_t *dom, JSContext *ctx, JSValueConst error, uint32_t script)
+{
+    if (dom->report.status == OS64_JS_OK) first_report(dom, ctx, error);
+    d_report_error(dom, ctx, error, script);
 }
 
 /* LISTENER RECORDS. A callback held by a record is one of the registry's
@@ -185,7 +212,10 @@ static void slot_state(os64_dom_t *dom, DListener *slot, uint8_t state)
     if (slot->handler == D_SLOT_FUNCTION && state != D_SLOT_FUNCTION) count(dom, slot, -1);
     if (slot->handler != D_SLOT_FUNCTION && state == D_SLOT_FUNCTION) count(dom, slot, 1);
     slot->handler = state;
-    if (state != D_SLOT_FUNCTION) set_callback(dom, slot, JS_UNDEFINED);
+    if (state != D_SLOT_FUNCTION) {
+        set_callback(dom, slot, JS_UNDEFINED);
+        slot->script = D_SCRIPT_PAGE;
+    }
 }
 
 static void unlink_removed(os64_dom_t *dom, DValue *entry)
@@ -404,11 +434,16 @@ static const os64_html_node_t *document_node(const os64_dom_t *dom)
  * body written to close the function early in both shapes still compiles.
  * That is the page's own code in its own realm: it can change when that
  * code runs, not what it may do (LIBDOM.md § Events). Anything but a
- * function out of the wrapper is a compile failure. */
+ * function out of the wrapper is a compile failure. Window's onerror (the
+ * body's, reflected) is a function of five: event, source, lineno, colno
+ * and error, which is how an error event's handler is called (run_record). */
 static int slot_compile(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListener *slot)
 {
     const os64_html_node_t *element = attribute_source(dom, entry, slot->kind);
-    JSValue parts[2] = {JS_NewString(ctx, "event"), JS_NewString(ctx, slot->seen)};
+    const char *params = entry == dom->window && slot->kind == D_EVENT_ERROR ? "event,source,lineno,colno,error"
+                                                                             : "event";
+    size_t params_length = os64_strlen(params);
+    JSValue parts[2] = {JS_NewString(ctx, params), JS_NewString(ctx, slot->seen)};
     if (JS_IsException(parts[0]) || JS_IsException(parts[1])) {
         JS_FreeValue(ctx, parts[0]);
         JS_FreeValue(ctx, parts[1]);
@@ -425,7 +460,7 @@ static int slot_compile(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListene
     static const char head[] = "(function(){with(arguments[0])with(arguments[1])with(arguments[2])"
                                "return function on";
     size_t name_length = os64_strlen(slot->type), body_length = os64_strlen(slot->seen);
-    size_t length = sizeof(head) - 1 + name_length + 10 + body_length + 5;
+    size_t length = sizeof(head) - 1 + name_length + params_length + 4 + body_length + 4;
     char *source = d_alloc(dom, length + 1);
     if (source == NULL) {
         d_error(ctx, "QuotaExceededError", "DOM handler quota exceeded");
@@ -434,7 +469,9 @@ static int slot_compile(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListene
     size_t at = 0;
     os64_memcpy(source + at, head, sizeof(head) - 1); at += sizeof(head) - 1;
     os64_memcpy(source + at, slot->type, name_length); at += name_length;
-    os64_memcpy(source + at, "(event){\n", 9); at += 9;
+    source[at++] = '(';
+    os64_memcpy(source + at, params, params_length); at += params_length;
+    os64_memcpy(source + at, "){\n", 3); at += 3;
     os64_memcpy(source + at, slot->seen, body_length); at += body_length;
     os64_memcpy(source + at, "\n}})", 4); at += 4;
     source[at] = '\0';
@@ -468,6 +505,7 @@ static int slot_compile(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListene
     }
     slot_state(dom, slot, D_SLOT_FUNCTION);
     set_callback(dom, slot, function);
+    slot->script = D_SCRIPT_PAGE;
     return 0;
 }
 
@@ -502,9 +540,23 @@ static JSValue call_callback(JSContext *ctx, JSValueConst callback, JSValueConst
     return result;
 }
 
+/* HTML's special error event handling: window's onerror, given an ErrorEvent
+ * named error, is called with the event's message, filename, lineno, colno
+ * and error rather than with the event. */
+static JSValue call_error_handler(JSContext *ctx, JSValueConst callback, JSValueConst self, const DEvent *state)
+{
+    JSValueConst args[5] = {
+        state->detail[1], state->detail[2], JS_NewInt64(ctx, state->lineno), JS_NewInt64(ctx, state->colno),
+        state->detail[0]
+    };
+    return JS_Call(ctx, callback, self, 5, args);
+}
+
 /* Run one record against an event. The callback is taken before a `once`
  * listener is removed, so the record's own reference may go first. HTML's
- * event handler processing: a handler that returns false cancels. */
+ * event handler processing: a handler that returns false cancels, except
+ * window's onerror called for an error event, which cancels by returning
+ * true. */
 static JSValue run_record(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListener *listener,
                           JSValueConst callback, JSValueConst event)
 {
@@ -514,12 +566,14 @@ static JSValue run_record(os64_dom_t *dom, JSContext *ctx, DValue *entry, DListe
         if (JS_IsException(held) || JS_IsNull(held)) return held;
         callback = held;
     }
-    JSValue result = call_callback(ctx, callback, entry->value, event);
-    if (listener->handler != D_LISTENER && JS_VALUE_GET_TAG(result) == JS_TAG_BOOL &&
-        !JS_VALUE_GET_BOOL(result)) {
-        DEvent *state = JS_GetOpaque(event, dom->event_class);
-        if (state != NULL) cancel(state);
-    }
+    DEvent *state = JS_GetOpaque(event, dom->event_class);
+    bool special = listener->handler != D_LISTENER && entry == dom->window && state != NULL &&
+        state->error_event && os64_strcmp(state->type, "error") == 0 && JS_IsFunction(ctx, callback);
+    JSValue result = special ? call_error_handler(ctx, callback, entry->value, state)
+                             : call_callback(ctx, callback, entry->value, event);
+    if (listener->handler != D_LISTENER && state != NULL && JS_VALUE_GET_TAG(result) == JS_TAG_BOOL &&
+        JS_VALUE_GET_BOOL(result) == special)
+        cancel(state);
     JS_FreeValue(ctx, held);
     return result;
 }
@@ -617,6 +671,9 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
                 remove_listener(dom, entry, listener);
                 listeners_changed(dom, entry);
             }
+            /* What the listener throws is its script's (report.c's MUTED
+             * ERRORS), whichever call it is reported from. */
+            DScripts before = d_script_enter(dom, listener->script);
             if (d->host != NULL) {
                 JSValue args[2] = {d->object, callback};
                 os64_js_outcome_t call, point;
@@ -626,15 +683,21 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
                              NULL, &call);
                 dom->invoking = NULL;
                 dom->invoking_entry = NULL;
+                d_script_leave(dom, &before, true);
                 JS_FreeValueRT(dom->engine, callback);
                 d_outcome_fold(d->host, &call);
+                /* A listener that threw is reported before the checkpoint
+                 * that cleans up after it, as HTML's callback steps do. */
+                if (call.status == OS64_JS_EXCEPTION) d_errors_fire(dom, d->host);
                 if (!sticky(call.status)) {
                     os64_js_checkpoint(dom->runtime, OS64_JS_ABI_ID, &point);
                     d_outcome_fold(d->host, &point);
                     if (sticky(point.status)) { result = -1; break; }
                 } else { result = -1; break; }
             } else {
+                uint32_t script = listener->script;
                 JSValue value = run_record(dom, d->ctx, entry, listener, callback, d->object);
+                d_script_leave(dom, &before, false);
                 JS_FreeValue(d->ctx, callback);
                 if (JS_IsException(value)) {
                     JSValue error = JS_GetException(d->ctx);
@@ -643,7 +706,7 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
                         result = -1;
                         break;
                     }
-                    d_report(dom, d->ctx, error);
+                    d_report_as(dom, d->ctx, error, script);
                     JS_FreeValue(d->ctx, error);
                 } else JS_FreeValue(d->ctx, value);
             }
@@ -799,15 +862,16 @@ static void discard(JSContext *ctx)
     JS_FreeValue(ctx, error);
 }
 
+/* What the task left owed is settled inside it (d_task_settle), so its
+ * events run under its deadline; as it closes, the binding's own report
+ * and the rejections it only counted are told (d_task_close). */
 os64_js_status_t d_task_finish(os64_dom_t *dom, os64_js_outcome_t *outcome)
 {
+    d_task_settle(dom, outcome);
     os64_js_outcome_t end;
     os64_js_task_end(dom->runtime, OS64_JS_ABI_ID, &end);
     d_outcome_fold(outcome, &end);
-    if (outcome->status == OS64_JS_OK && dom->report.status != OS64_JS_OK) {
-        *outcome = dom->report;
-        os64_memset(&dom->report, 0, sizeof(dom->report));
-    }
+    d_task_close(dom, end.source_name, outcome);
     return outcome->status;
 }
 
@@ -1056,6 +1120,7 @@ static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst se
             listener->capture = capture;
             listener->once = once;
             set_callback(dom, listener, JS_DupValue(ctx, argv[1]));
+            listener->script = d_callback_script(dom, ctx, argv[1]);
             count(dom, listener, 1);
         }
     }
@@ -1116,6 +1181,7 @@ static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSV
     if (JS_IsObject(value)) {
         slot_state(dom, slot, D_SLOT_FUNCTION);
         set_callback(dom, slot, JS_DupValue(ctx, value));
+        slot->script = d_callback_script(dom, ctx, value);
     } else slot_state(dom, slot, D_SLOT_EMPTY);
     listeners_changed(dom, entry);
     return JS_UNDEFINED;
@@ -1197,7 +1263,7 @@ static JSValue event_member(JSContext *ctx, JSValueConst self, int argc, JSValue
         return event_init(ctx, event, argc, argv, "initEvent") < 0 ? JS_EXCEPTION : JS_UNDEFINED;
     case E_DETAIL: case E_INIT_CUSTOM:
         if (!event->custom) return JS_ThrowTypeError(ctx, "Expected a CustomEvent");
-        if (magic == E_DETAIL) return JS_DupValue(ctx, event->detail);
+        if (magic == E_DETAIL) return JS_DupValue(ctx, event->custom_detail);
         /* DOM § 2.4: during a dispatch it does nothing, its arguments
          * converted all the same; detail's default is null. */
         if (event->dispatching) {
@@ -1208,8 +1274,8 @@ static JSValue event_member(JSContext *ctx, JSValueConst self, int argc, JSValue
             return JS_UNDEFINED;
         }
         if (event_init(ctx, event, argc, argv, "initCustomEvent") < 0) return JS_EXCEPTION;
-        JS_FreeValue(ctx, event->detail);
-        event->detail = argc > 3 && !JS_IsUndefined(argv[3]) ? JS_DupValue(ctx, argv[3]) : JS_NULL;
+        JS_FreeValue(ctx, event->custom_detail);
+        event->custom_detail = argc > 3 && !JS_IsUndefined(argv[3]) ? JS_DupValue(ctx, argv[3]) : JS_NULL;
         return JS_UNDEFINED;
     default: return JS_ThrowTypeError(ctx, "Unknown Event member");
     }
@@ -1426,7 +1492,7 @@ static JSValue custom_constructor(JSContext *ctx, JSValueConst new_target, int a
     }
     DEvent *event = JS_GetOpaque(object, dom->event_class);
     event->custom = true;
-    event->detail = JS_IsUndefined(detail) ? JS_NULL : detail;
+    event->custom_detail = JS_IsUndefined(detail) ? JS_NULL : detail;
     return object;
 }
 
@@ -1554,6 +1620,7 @@ static JSValue named_handler_property(JSContext *ctx, JSValueConst self, int arg
         else if (JS_IsObject(value)) {
             slot_state(dom, slot, D_SLOT_FUNCTION);
             set_callback(dom, slot, JS_DupValue(ctx, value));
+            slot->script = d_callback_script(dom, ctx, value);
         } else slot_state(dom, slot, D_SLOT_EMPTY);
         listeners_changed(dom, entry);
     }
@@ -1718,4 +1785,194 @@ int d_progress_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
     JS_FreeValue(ctx, event_interface);
     if (JS_IsException(interface)) return -1;
     return JS_DefinePropertyValueStr(ctx, global, "ProgressEvent", interface, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+}
+
+/* ERROR EVENTS (HTML § 8.1.4.6 and § 8.1.4.7.2): ErrorEvent, which the
+ * window's error event is, and PromiseRejectionEvent, which its
+ * unhandledrejection and rejectionhandled are. Their attributes are the
+ * Event's own record, as a ProgressEvent's are (report.c fires them). */
+
+enum { X_MESSAGE, X_FILENAME, X_LINENO, X_COLNO, X_ERROR, X_PROMISE, X_REASON };
+
+static JSValue error_event_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                                  JSValue *data)
+{
+    (void)argc; (void)argv;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    DEvent *event = JS_GetOpaque(self, dom->event_class);
+    bool rejection = magic >= X_PROMISE;
+    if (event == NULL || !(rejection ? event->rejection_event : event->error_event))
+        return JS_ThrowTypeError(ctx, rejection ? "Expected a PromiseRejectionEvent" : "Expected an ErrorEvent");
+    switch (magic) {
+    case X_MESSAGE: return JS_DupValue(ctx, event->detail[1]);
+    case X_FILENAME: return JS_DupValue(ctx, event->detail[2]);
+    case X_LINENO: return JS_NewInt64(ctx, event->lineno);
+    case X_COLNO: return JS_NewInt64(ctx, event->colno);
+    case X_REASON: return JS_DupValue(ctx, event->detail[1]);
+    default: return JS_DupValue(ctx, event->detail[0]);
+    }
+}
+
+JSValue d_error_event_new(os64_dom_t *dom, JSContext *ctx, const char *message, const char *filename,
+                          uint32_t lineno, uint32_t colno, JSValueConst error)
+{
+    JSValue object = d_event_new_proto(dom, ctx, dom->error_event_prototype->value, "error", false, true, true);
+    if (JS_IsException(object)) return object;
+    JSValue text[2] = {JS_NewString(ctx, message), JS_NewString(ctx, filename)};
+    if (JS_IsException(text[0]) || JS_IsException(text[1])) {
+        JS_FreeValue(ctx, text[0]);
+        JS_FreeValue(ctx, text[1]);
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
+    DEvent *event = JS_GetOpaque(object, dom->event_class);
+    event->error_event = true;
+    event->detail[0] = JS_DupValue(ctx, error);
+    event->detail[1] = text[0];
+    event->detail[2] = text[1];
+    event->lineno = lineno;
+    event->colno = colno;
+    return object;
+}
+
+JSValue d_rejection_event_new(os64_dom_t *dom, JSContext *ctx, const char *type, JSValueConst promise,
+                              JSValueConst reason, bool cancelable)
+{
+    JSValue object = d_event_new_proto(dom, ctx, dom->rejection_event_prototype->value, type, false, cancelable,
+                                       true);
+    if (JS_IsException(object)) return object;
+    DEvent *event = JS_GetOpaque(object, dom->event_class);
+    event->rejection_event = true;
+    event->detail[0] = JS_DupValue(ctx, promise);
+    event->detail[1] = JS_DupValue(ctx, reason);
+    return object;
+}
+
+/* An Event interface's own constructor: the Event made (EventInit's
+ * members read), with new.target's prototype or `own`. */
+static JSValue constructed_event(os64_dom_t *dom, JSContext *ctx, JSValueConst new_target, int argc,
+                                 JSValueConst *argv, JSValueConst own)
+{
+    JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+    if (JS_IsException(prototype)) return prototype;
+    JSValue object = d_event_construct(dom, ctx, argc, argv, JS_IsObject(prototype) ? (JSValueConst)prototype : own);
+    JS_FreeValue(ctx, prototype);
+    return object;
+}
+
+/* new ErrorEvent(type, init): ErrorEventInit's members after EventInit's,
+ * in name order as WebIDL reads them: colno and lineno unsigned longs,
+ * error any value, filename a USVString, message a DOMString. */
+static JSValue error_event_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    os64_dom_t *dom = d_binding(ctx);
+    if (dom == NULL) return JS_EXCEPTION;
+    JSValue object = constructed_event(dom, ctx, new_target, argc, argv, dom->error_event_prototype->value);
+    if (JS_IsException(object)) return object;
+    DEvent *event = JS_GetOpaque(object, dom->event_class);
+    event->error_event = true;
+    event->detail[1] = JS_NewString(ctx, "");
+    event->detail[2] = JS_NewString(ctx, "");
+    bool failed = JS_IsException(event->detail[1]) || JS_IsException(event->detail[2]);
+    static const char *const names[] = {"colno", "error", "filename", "lineno", "message"};
+    for (int i = 0; !failed && argc > 1 && JS_IsObject(argv[1]) && i < 5; i++) {
+        JSValue value = JS_GetPropertyStr(ctx, argv[1], names[i]);
+        if (JS_IsException(value)) { failed = true; break; }
+        if (JS_IsUndefined(value)) continue;
+        if (i == 0 || i == 3) {
+            int32_t n = 0;
+            failed = JS_ToInt32(ctx, &n, value) < 0;
+            JS_FreeValue(ctx, value);
+            if (i == 0) event->colno = (uint32_t)n;
+            else event->lineno = (uint32_t)n;
+        } else if (i == 1) {
+            JS_FreeValue(ctx, event->detail[0]);
+            event->detail[0] = value;
+        } else if (i == 2) {
+            DString text;
+            failed = !d_string_text(dom, ctx, value, &text, true);
+            JS_FreeValue(ctx, value);
+            JSValue string = failed ? JS_EXCEPTION : JS_NewStringLen(ctx, text.data, text.length);
+            if (!failed) d_string_free(dom, &text);
+            failed = JS_IsException(string);
+            if (!failed) {
+                JS_FreeValue(ctx, event->detail[2]);
+                event->detail[2] = string;
+            }
+        } else {
+            JSValue string = JS_ToString(ctx, value);
+            JS_FreeValue(ctx, value);
+            failed = JS_IsException(string);
+            if (!failed) {
+                JS_FreeValue(ctx, event->detail[1]);
+                event->detail[1] = string;
+            }
+        }
+    }
+    if (failed) {
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
+    return object;
+}
+
+/* new PromiseRejectionEvent(type, init): the init is required, and so is
+ * its promise, an object; its reason is any value. */
+static JSValue rejection_event_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    os64_dom_t *dom = d_binding(ctx);
+    if (dom == NULL) return JS_EXCEPTION;
+    if (argc < 2) return JS_ThrowTypeError(ctx, "PromiseRejectionEvent needs a type and a dictionary");
+    JSValue object = constructed_event(dom, ctx, new_target, argc, argv, dom->rejection_event_prototype->value);
+    if (JS_IsException(object)) return object;
+    JSValue promise = JS_IsObject(argv[1]) ? JS_GetPropertyStr(ctx, argv[1], "promise") : JS_UNDEFINED;
+    if (!JS_IsException(promise) && !JS_IsObject(promise)) {
+        JS_FreeValue(ctx, promise);
+        promise = JS_ThrowTypeError(ctx, "PromiseRejectionEventInit's promise is a required object");
+    }
+    JSValue reason = JS_IsException(promise) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, argv[1], "reason");
+    if (JS_IsException(reason)) {
+        JS_FreeValue(ctx, promise);
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
+    DEvent *event = JS_GetOpaque(object, dom->event_class);
+    event->rejection_event = true;
+    event->detail[0] = promise;
+    event->detail[1] = reason;
+    return object;
+}
+
+int d_error_events_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    JSValue event_prototype = JS_GetClassProto(ctx, dom->event_class);
+    dom->error_event_prototype = d_retain(dom, ctx, JS_NewObjectProto(ctx, event_prototype));
+    dom->rejection_event_prototype = dom->error_event_prototype != NULL
+        ? d_retain(dom, ctx, JS_NewObjectProto(ctx, event_prototype)) : NULL;
+    JS_FreeValue(ctx, event_prototype);
+    if (dom->rejection_event_prototype == NULL) return -1;
+    static const struct { const char *name; int magic; } members[] = {
+        {"message", X_MESSAGE}, {"filename", X_FILENAME}, {"lineno", X_LINENO}, {"colno", X_COLNO},
+        {"error", X_ERROR}, {"promise", X_PROMISE}, {"reason", X_REASON}
+    };
+    for (size_t i = 0; i < sizeof(members) / sizeof(members[0]); i++) {
+        DValue *holder = members[i].magic >= X_PROMISE ? dom->rejection_event_prototype : dom->error_event_prototype;
+        if (d_accessor(dom, ctx, holder->value, members[i].name, error_event_member, members[i].magic, false) < 0)
+            return -1;
+    }
+    JSValue event_interface = JS_GetPropertyStr(ctx, global, "Event");
+    if (JS_IsException(event_interface)) return -1;
+    static const char *const names[] = {"ErrorEvent", "PromiseRejectionEvent"};
+    JSCFunction *const constructors[] = {error_event_constructor, rejection_event_constructor};
+    int result = 0;
+    for (int i = 0; result == 0 && i < 2; i++) {
+        JSValueConst own = i == 0 ? dom->error_event_prototype->value : dom->rejection_event_prototype->value;
+        JSValue f = d_interface_new(ctx, names[i], i + 1, constructors[i], own, event_interface);
+        if (JS_IsException(f) ||
+            JS_DefinePropertyValueStr(ctx, global, names[i], f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+            result = -1;
+    }
+    JS_FreeValue(ctx, event_interface);
+    return result;
 }

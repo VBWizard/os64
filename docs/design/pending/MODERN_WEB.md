@@ -544,7 +544,12 @@ commit, in three sections: `[required]` (each must pass, or the run fails
 naming it), `[passing]` (the baseline: a lost pass fails the run, a new one
 is listed) and `[excluded]` (a page not run, with its reason). `--update`
 rewrites `[passing]` alone. A page whose harness did not end OK fails
-whole: a pass it reported prints as a FAIL that says so. Only a page run
+whole: a pass it reported prints as a FAIL that says so. (Since
+2026-10-24, by Opus's ruling on P2a, matching wpt.fyi: a harness that
+ended in ERROR on the page's own uncaught error or unhandled rejection,
+which the report script tells by testharness.js's own status and
+message, counts the tests the page completed; a timeout or any other
+harness error still fails the page whole.) Only a page run
 to a verdict may change the expectations, so `--update` writes last, and
 only for a run with no fault, at least one page, and no page left unrun (a
 source missing, too large or not read whole, or a file a page asked for
@@ -2555,3 +2560,335 @@ own PR.
 state, deferred scripts' `loading`, the referrer after a traversal,
 `domain` without the public-suffix list, createEvent's plain Event for
 unbuilt interfaces, and `Node.baseURI`.
+
+### P2a, as built
+
+Built on `opus/tmw-p2a-errors`, from `userland` `c8d87b53`, from the P2a
+brief and WINDOW_DOCUMENT.md § P2a. The builder's adversarial and truth
+passes, the cold read, and the answers to its six findings are done
+(**Cold read**, below).
+
+**Why.** Pages on which "nothing happens": a Run button that does
+nothing, and a record whose every script "ran". The brief's premise, that
+a rejection was dropped, was half right. libjs already judged the first
+unhandled rejection of a turn or a task, and yonder wrote it as a FAILED
+line with the bare reason (`FAILED script X: lost`, indistinguishable from
+an exception's). What was silent: every rejection after the first in a
+task, and every one in a task that also threw; no page could hear any of
+its own failures. Both are answered here.
+
+**What was built.** The five members and two interfaces of § P2a, one row
+of the table: window's `onerror`, `onunhandledrejection`,
+`onrejectionhandled` and `reportError`, the document's `onerror`, and
+`ErrorEvent` and `PromiseRejectionEvent` (libdom `report.c`; the
+interfaces and the handler rules in `event.c`; LIBDOM.md § P2a's rows has
+every rule).
+
+- **libjs's script host** (CONTRACT.md § A script host, the one change to
+  the wrapper; QuickJS itself is untouched). `os64_js_set_script_host`
+  gives a host every exception the wrapper catches, a hook for a handler
+  added to a rejection it took, and one asked as a promise is rejected,
+  whose answer the rejection carries to the host (the binding answers
+  with the rejecting script); with a host set, no checkpoint
+  judges a rejection, and `os64_js_take_rejection` hands them over, oldest
+  first, only between calls with no job runnable. The tracker's list,
+  walked for every rejection and every handler (n squared in a turn's
+  rejections, bounded only by the deadline), is a table keyed by promise.
+- **The binding is the host** on every page. An exception libjs caught is
+  the window's `error` event at the task's next turn between calls; one the
+  binding caught while a script ran (a nested dispatch, a handler compile,
+  `reportError`) is the event at once; a rejection a checkpoint left
+  unhandled is an `unhandledrejection` after it, each followed by a
+  checkpoint; a reported promise a later handler reaches is a
+  `rejectionhandled`, and one reached during its own event is not. All of
+  it runs in the task the failure happened in, under its deadline (a
+  listener that rejects for ever ends as any loop does). Window's `onerror`
+  keeps HTML's special handling: called with five arguments, cancelled by
+  `true`, compiled from the body's attribute as a function of five.
+- **What an event says is read without page code**: an Error's or a
+  DOMException's name and message through data properties of ordinary
+  objects and errors only (no getter, no proxy trap), the place from the
+  first placed frame of an Error's own stack (where the running script is
+  when the binding reports and the value has none), the filename the
+  address of the script whose failure it is, else the page's.
+- **Muted errors.** What a script from another origin than the page's (the
+  host fetches every script without CORS) throws or reports is told to the
+  page as `Script error.` and nothing more, and its rejections fire no
+  event, nor a `rejectionhandled` when a handler reaches one later. ONE
+  rule, never parsed from stack text (Opus's ruling on the cold read):
+  every script is compiled under a synthetic name the binding owns,
+  `os64-script:<n>`, which it maps to the script's address and whether it
+  is muted, and a failure is muted by the script that was RUNNING when the
+  value was thrown, rejected or reported. A rejection and `reportError`
+  ask QuickJS's public `JS_GetScriptOrModuleName` as they happen (libjs's
+  new `rejected` hook asks it while the rejecting code is still on the
+  stack); an exception, whose frames are gone when it is caught, is the
+  script the host was running or the one whose callback the binding
+  called, each callback's script read through `Function.prototype`'s own
+  `fileName` getter as it was handed over, else the script handing it over
+  (a bound function, one `eval` made). Muted promises the binding took are
+  kept in a WeakSet of its own, so a later handler's `rejectionhandled` is
+  swallowed. A handler attribute and a string timer are the page's, as
+  HTML makes them; a function of another site's that the page's own code
+  calls and that throws through it is the page's failure, as HTML's "run a
+  classic script" reports it. The record keeps them all whole: it is the
+  person's. Its cost: `error.stack` names `os64-script:<n>`, not the
+  address (DEBTS).
+- **The record.** A rejection no listener cancelled is the task's failure,
+  `unhandled rejection: <reason>`; the first a task meets is its outcome
+  (unless it already failed), and each after it reaches the host through
+  `options.failed`, which yonder records under the same key. With the
+  switch off no event is fired and every unhandled rejection is a line.
+  The console the brief names is yonder's status line, which says a
+  task's first failure as it always has.
+- **yonder** runs each script under `os64_dom_script_name`'s name for it
+  and follows it with `os64_dom_script_ended` (scripts.c's `run_item`),
+  and gives libdom `options.failed`. A `src` script is named, muted and
+  recorded by the address its response came from after any redirects
+  (`yonder_scripts_fetched`), not the one asked for: a same-origin address
+  that redirects to another site is that site's script.
+
+The record line, for the brief's case (an async click handler that
+throws):
+
+    FAILED script click event: unhandled rejection: TypeError: in a click (1)
+
+and for a script's: `FAILED script http://fixture.test/final#inline-1:
+unhandled rejection: Error: from the script (1)`.
+
+**The frame rule** (IFRAME.md § What the open slices do now, last
+bullet). yonder's one change is in `yonder_scripts_t`, the page's own
+script host: no `g.page`, no new file-level static. The events go to the
+window of the binding whose runtime failed, which is the page whose script
+it was.
+
+**The seams, as they ended.**
+
+| Seam | What it is now |
+|---|---|
+| `os64_js_set_script_host` (libjs `js_engine.h`) | a host's `exception`, `handled` and `rejected` hooks (`rejected` asked as a rejection is tracked, its answer the rejection's tag); with one set, rejections wait to be taken; NULL clears it, even on a failed runtime |
+| `os64_js_take_rejection` | the oldest rejection still unhandled, as new references, with its tag; false inside a call, on a failed runtime, without a host, or with jobs runnable |
+| `os64_dom_script_name` (libdom `dom.h`) | the name the host compiles a script under, `os64-script:<n>`, standing for its address |
+| `os64_dom_script_ended` | what a script the host ran left owed, settled in a task of its name, folded into its outcome |
+| `os64_dom_options_t.failed` | a rejection past a task's first failure, told to the host for its record |
+| `D_EVENT_ERROR`, `_UNHANDLEDREJECTION`, `_REJECTIONHANDLED` | event kinds window has handlers for, which the body reflects and the binding fires |
+
+**Classic or modern.** The seven names are one row. Being the script
+host, and the record's rejection lines, are every page's: the record is
+yonder's, not surface a page detects.
+
+**Numbers.** WPT, the base (`c8d87b53`) → the head:
+
+| Directory | Before | After | `[required]` |
+|---|---|---|---|
+| `html/webappapis/scripting` (new) | 39 of 271 | 111 of 277 | 72 |
+| `html/webappapis/microtask-queuing` | 5 of 8 | 6 of 8 | 6 (+1) |
+| `xhr` | 345 of 1188 | 347 of 1188 | +2 |
+| `secure-contexts` | 0 | 1 of 34 | 0 |
+
+Every required test fails with the switch off. What still fails in the new
+directory: an inline script's line, counted from the script; a thrown
+non-Error's line; `body.onerror` as a
+property; `data:` scripts; the rejection pages that queue a task with
+`<details>` toggle or a microtask with MutationObserver (the main
+`promise-rejection-events.html` fails whole on them); readystatechange,
+requestAnimationFrame, createImageBitmap; frames and workers.
+
+**Four directories lost passes, and the runner's rule was ruled.**
+Before P2a no harness could hear a page's uncaught error; now
+testharness.js does, as in every browser, ends the page in ERROR, and the
+runner failed such a page whole. As first built, five pages lost 330
+passes, 9 of them required, none of it a change in what yonder does:
+
+| Directory | Page | The page's own failure | Lost (required) |
+|---|---|---|---|
+| `dom/nodes` | `Element-classlist.html` | `createElementNS` absent (P1-Db) | 283 (0) |
+| `dom/nodes` | `insertion-removing-steps/later-script-removed-by-earlier-script.html` | an inserted script runs after its insertion, not during it, so its own assertion fails | 2 (0) |
+| `html/browsers/the-window-object` | `window-properties.https.html` | no frame (`contentWindow`) | 36 (0) |
+| `css/cssom` | `getComputedStyle-detached-subtree.html` | no frame (`contentDocument`) | 1 (1) |
+| `fetch/api/response` | `response-stream-disturbed-1.any.html` | a released reader's `closed` rejects unhandled (DEBTS; the binding cannot mark it handled) | 8 (8) |
+
+Opus ruled, 2026-10-24, matching wpt.fyi, for the builder's lean: a
+harness that ended in ERROR on the page's own uncaught error or unhandled
+rejection counts the tests the page completed; a timeout or any other
+harness error still fails the page whole. The report script tells the
+two apart by what testharness.js reports, not by the wording: the
+harness's status is ERROR and its message is the one testharness.js made
+of an `error` or `unhandledrejection` event the page raised at window,
+which capturing listeners of the report script's, running before
+testharness.js's own, wrote down; it writes such a harness PAGE_ERROR,
+and the runner says so on the page's HARNESS line and in its summary
+(§ Slice 0a, as built, has the dated rule; three selftest pages hold the
+page's own error, its own rejection, and a harness error that is neither).
+Under it all five pages recover, all 330 passes and all 9 required tests
+(response-stream-disturbed-1's eight too: its harness ends on the page's
+own unhandled rejection, the DEBTS row's); no pass is lost in any of the
+28 directories, each passing both ways; and three are new: xhr's
+`thrown-error-in-events.html` pair (an error in a request's load listener
+reaching `window.onerror`, P2a's, now required) and secure-contexts'
+`basic-dedicated-worker.https.html` "HTTP worker", completed before its
+page's own error.
+
+The ruling also found a muting bug: a page whose address has a query the
+address parser refuses (a space the WPT runner's variant addresses leave
+unescaped) read no origin, so every script on it, its own included, was
+taken for another site's, and xhr's timeout pages said `Script error.`.
+An origin is read now from the address before its query and fragment,
+and a name that is no address with a tuple origin is never another
+site's.
+
+**The corpus**, 2026-10-22b replayed at the base and the head
+(`2026-10-22b_p2a-before` and `-after`): 10 page records now carry an
+`unhandled rejection:` FAILED line (16 lines), every one a failure the
+base already recorded under the bare message; none newly visible in this
+corpus. FAILED lines 428 → 428 in 142 pages both sides; MISSING 9070 →
+9052 (the row's names: `PromiseRejectionEvent`, `onerror`,
+`onunhandledrejection`, `reportError`). The diff's 16 "regressions" are
+those 6 relabelled records and 10 records of one site whose own
+error-reporting code now runs, finds `onerror`, and reads three or four
+globals of its own that are not there (no FAILED line). 9 records are newly
+incomplete: they now ask for a navigation (a challenge script that gets
+further) or a script the corpus did not keep, which a re-recorded corpus
+answers. Replayed 239, clean 21, unfinished 13 and 19 unjudged on both
+sides. Replayed again at the head after the cold read's answers
+(`2026-10-22b_p2a-final`), the corpus differs from the first head's in no
+line of any page: muting decides events, which no record holds, and no
+kept page's record moved for the stack's new names.
+
+Host, at the head: libjs's runtime host 1,154 checks (the script host's
+cases among them, the `rejected` tag's) and its sanitized profile, 0
+failed; the DOM host 13,294 / 90,070 checks, allocation sweeps 1,143 /
+13,513, 0 failed, `tools/test_dom_report.inc` holding a case per rule of
+§ P2a's rows and one per cold-read probe and Codex finding; the
+scripted-page host 7,601 at the base → 7,678, 0 failed; yonder's host 1,914, 0 failed; the replay
+proof, 42 fixture pages (`failures.html` new) kept and replayed the same;
+the WPT runner's self-test, its three new pages among it; `make -C
+userland` builds.
+
+**Review.** The builder's adversarial pass looked for page code a failure's
+description could run (getters, proxy traps, a page's `toString`, a page's
+`Error`: each read is a data property of an ordinary object or error, and
+the place-finding Error is the intrinsic constructor, taken before any page
+ran), work a page can size (a thousand rejections or ninety throwing
+microtasks in one task, each an event, linear; the wrapper's table), a page
+that never stops failing (a rejection made in its own `unhandledrejection`
+ends at the task's deadline), recursion (an error inside an error listener
+reaches no page), a cross-origin script's failures (muted by its address
+and by the frames of what it threw), and what the binding keeps (two lists
+in the budget, released at drain, counted in the registry). It moved
+muting from the script's address alone to the thrown Error's frames as
+well, made a non-Error object's message readable, and stopped one proxy
+trap that reading an error's place could reach. The truth pass corrected
+dom.h's dispatch and take-report comments, the handler lists in LIBDOM.md
+§ Events, and CONTRACT.md's rejection paragraph. (The muting this pass
+built, by address and by an Error's frames, is the one the cold read
+walked past; what replaced it is above, under **Muted errors**.)
+
+**Rulings taken by the builder, for the cold read.**
+
+1. An exception's FAILED line is written whatever an error listener did:
+   a page that cancels its errors (`onerror` returning true) keeps them
+   on the record. A rejection follows the brief: cancelled, no line. The
+   lean is that the record is the person's, so neither should be
+   hideable; the brief's rule for rejections is kept as given.
+2. No element has an `onerror` property (`document.body.onerror` is an
+   expando), though any element's `onerror` attribute is a handler for an
+   `error` event dispatched at it: nothing fires `error` at an element yet.
+3. A failure's events fire in its own task, where HTML queues one (DEBTS).
+4. `onerror`'s location is the engine's (DEBTS): an inline script's line
+   from the script, a non-Error's line 0.
+
+**Cold read** (a fresh Opus, after the runner's ruling): one P1, three
+P2s on muting, a P3 and a sixth, each answered in a commit of its own.
+
+- **P1, a freeze a page sizes.** Every rejection past a task's first
+  failure went to `options.failed`, and yonder's record found each line
+  by walking every kept and lost line, all in C that the take loop runs
+  with no script running, so no deadline ended it: a `setInterval`
+  rejecting 200,000 promises froze the window about 22 s a task, for
+  ever. libdom now tells a task's first sixteen one by one
+  (`D_REJECTIONS_TOLD`, named once) and counts the rest into one line as
+  the task closes, `and <n> more unhandled rejections`, computing no
+  text for them; yonder's record finds every line by its key through an
+  index of its own and counts its probes. The bound cases: 200,000
+  rejections in one script call the host 17 times, the last line `and
+  199983 more unhandled rejections`; 100,000 failures over 6,000 lines
+  cost the record under eight probes each; a page's thousand rejections
+  are 18 lines found in under 2,000 probes.
+- **P2s, muting walked past** (one probe each, now a case each in
+  `tools/test_dom_report.inc`'s muting cases): an address with `?(` in it
+  left the stack's place unreadable, so the listener's Error was told
+  whole; a value that is no Error (a thrown or rejected string) carries
+  no stack, so it was told whole; and a muted rejection a handler
+  reached later fired `rejectionhandled` with its reason. Opus ruled the
+  rule above, **Muted errors**, recorded here and in LIBDOM.md: one
+  rule, never parsed from stack text, by the binding's own names for
+  scripts. No QuickJS change was needed: `JS_GetScriptOrModuleName` and
+  `Function.prototype.fileName` are public, and the `rejected` hook is
+  the wrapper's. CONTRACT.md's `handled()` text is made true for a
+  rejection the runtime could not hold (an allocation refused in the
+  tracker fails the runtime, and a failed runtime calls no hook). The
+  cases: the `?(` address, the later-handled rejection (by its own
+  script's listener and by the page), a non-Error thrown and rejected by
+  a listener and thrown at a script's top level, `reportError` from the
+  script and from its listener, a bound listener, a function `eval`
+  made, a bound microtask and a bound timer, and a function of theirs
+  the page calls rejecting: each "Script error." or no event. A
+  same-origin script's listener error and rejectionhandled are told
+  whole. A report sweep runs another site's script, so muting's own
+  allocations are refused in turn. With each script known by name, an
+  error event names the address of the script whose failure it is, a
+  listener's and `reportError`'s included, so `reporterror.any.js`'s
+  three value tests now pass and are required (scripting 108 → 111);
+  the other 27 directories are unchanged, both ways.
+- **P3, an error event after its microtasks.** A timer callback's
+  exception is now fired between the call and the checkpoint after it,
+  as a listener's was. A script the host ran is not local (libjs opens no
+  task while jobs wait), so it is booked beside "A failure's events fire
+  in its own task", and the WHEN paragraphs say so.
+- **The binding's own report stood past its task** when the task had
+  failed otherwise, to be taken by the next task under that one's name.
+  `d_task_close` now settles it whatever the outcome: the outcome when
+  that is OK, else a line through `options.failed`.
+
+**Codex, round 1** (on 3dbf313a): three P2s, each fixed with its case.
+A rejectionhandled fired in the same pass as the listener that earned it,
+before the handler's reaction ran; the settle now fires those reached
+before each checkpoint and leaves the rest for the pass after the next.
+A task's first report was written down with JS_ToCString, which runs a
+value's getters and toString; it is read as an event's message is. And a
+same-origin `src` that redirected to another site was muted (and named)
+by the address asked for; the response's address after its redirects is
+now the script's. What else turns a page value into record text: libjs's
+exception diagnostic, which converts the thrown value as it always has,
+inside the wrapper's guard and under the task's deadline (runtime.c's
+`diagnostic`); every reader of the binding's own is non-executing.
+
+**Codex, round 2** (on 09433ee1): a P1 and a P2 fixed, a third declined
+with evidence. The P1: a script that dispatched to another script's
+listener came back with the task's last-called script naming the
+listener's, so another site's script that dispatched to a page listener
+and then threw was told whole. Every call into a page callback now goes
+through one pair, `d_script_enter` and `d_script_leave`, which keeps all
+the muting state and puts it back (a nested dispatch's listener, and the
+error events fired at once, all of it; a host dispatch's listener and a
+timer's callback, a task's own calls, keep the task's last-called script
+for the checkpoint after them). The P2: two rejectionhandled events in
+one pass fired back to back; an event that leaves a job runnable now
+sends the rest to the pass after the next checkpoint, as an
+unhandledrejection already waited. The third, the runner's classifier
+reading a rejection reason's message twice, matters only for a reason
+whose message changes between reads, and no page of the pinned WPT
+makes one (the one `get message()` there is reportError's argument in
+`reporterror.any.js`, which no rejection carries).
+
+**Booked** (DEBTS.md): an error event's place; the events in the failing
+task; a script's microtasks before its error event; the stack naming
+`os64-script:<n>`; muted `crossorigin` scripts; a task's second exception; the body's
+IDL for the three new handlers; and, for 0011b and Fable, an Error made by
+code compiled under memory pressure reading past a heap block in
+`build_backtrace`, which P2a's first engine sweep (compile and run both
+inside the cut) reached and the reshaped one (compiled first) does not.
+The released reader's `closed` row is re-stated: its cure is an engine
+verb that sets a promise's handled flag, which is a libjs patch and
+Fable's to rule.

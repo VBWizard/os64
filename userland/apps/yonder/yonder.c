@@ -7521,8 +7521,8 @@ static void script_arrived(const yonder_script_job_t *job, const yonder_script_t
         diag_keep(yonder_scripts_diag(host), YONDER_DIAG_KEPT_SCRIPT, job->token, job->url,
                   came ? got->url : job->url, "", came ? got->source : NULL, came ? got->length : 0);
     if (host != NULL)
-        yonder_scripts_fetched(host, job->token, got != NULL && got->ok ? got->source : NULL,
-                               got != NULL ? got->length : 0);
+        yonder_scripts_fetched(host, job->token, came ? got->source : NULL, got != NULL ? got->length : 0,
+                               came ? got->url : NULL);
 }
 
 // When the task running began (task_begin), for its cost (task_cost). A

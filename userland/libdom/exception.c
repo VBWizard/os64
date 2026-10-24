@@ -83,6 +83,15 @@ JSValue d_dom_exception_new(os64_dom_t *dom, JSContext *ctx, const char *name, c
     return exception_make(ctx, prototype, message, os64_strlen(message), name, os64_strlen(name));
 }
 
+bool d_dom_exception_fields(JSValueConst value, const char **name, const char **message)
+{
+    DException *e = JS_GetOpaque(value, os64_js_class_id(&exception_slot));
+    if (e == NULL) return false;
+    *name = e->name;
+    *message = e->message;
+    return true;
+}
+
 JSValue d_dom_exception(os64_dom_t *dom, JSContext *ctx, const char *name, const char *message)
 {
     JSValue error = d_dom_exception_new(dom, ctx, name, message);

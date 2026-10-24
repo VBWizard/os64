@@ -3,9 +3,10 @@
 # [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/webappapis/microtask-queuing --update
 # rewrites [passing].
 [required]
-# P1-W: queueMicrotask. Each fails with the switch off. What still fails
-# wants window.onerror (P2a: queue-microtask-exceptions reports through it),
-# a second realm, or MutationObserver.
+# P1-W: queueMicrotask; and P2a: a callback's exception reported through
+# window's error event. Each fails with the switch off. What still fails
+# wants a second realm, or MutationObserver.
+queue-microtask-exceptions.any.html	It rethrows exceptions
 queue-microtask.any.html	It calls the callback asynchronously
 queue-microtask.any.html	It does not pass any arguments
 queue-microtask.any.html	It exists and is a function
@@ -13,6 +14,7 @@ queue-microtask.any.html	It interleaves with promises as expected
 queue-microtask.any.html	It throws when given non-functions
 [excluded]
 [passing]
+queue-microtask-exceptions.any.html	It rethrows exceptions
 queue-microtask.any.html	It calls the callback asynchronously
 queue-microtask.any.html	It does not pass any arguments
 queue-microtask.any.html	It exists and is a function

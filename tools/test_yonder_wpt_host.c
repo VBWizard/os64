@@ -67,7 +67,12 @@
  * is one TIMEOUT line naming why; a harness that ended in anything but OK
  * is a HARNESS line with its message, and that page FAILS WHOLE: none of
  * its tests is a pass, and one the harness said passed is a FAIL line that
- * says so. A page never run to a verdict (its source missing, past
+ * says so. The one exception (Opus's ruling, 2026-10-24, matching
+ * wpt.fyi): a harness that ended in ERROR on the page's own uncaught error
+ * or unhandled rejection, which the report script writes PAGE_ERROR (it
+ * says how it tells), is a HARNESS line saying so, and the tests the page
+ * completed count as they ended; a timeout or any other harness error
+ * still fails the page whole. A page never run to a verdict (its source missing, past
  * WPT_FILE_MAX, or not read whole; a file it asked for in the checkout not
  * read whole; its navigation never started) is an UNJUDGED line, and the
  * run cannot be judged (exit 2). Then the summary.
@@ -1191,7 +1196,7 @@ int main(int argc, char **argv) {
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
     static const char *const kStatus[]={"PASS","FAIL","TIMEOUT","NOTRUN","PRECONDITION_FAILED"};
-    unsigned counts[5]={0}, silent=0, harness_bad=0, ran=0, excluded=0, discounted=0, unjudged=0;
+    unsigned counts[5]={0}, silent=0, harness_bad=0, page_errors=0, ran=0, excluded=0, discounted=0, unjudged=0;
     wpt_list_t passes={0};
     for(size_t i=0;i<wpt_npages;i++) {
         const wpt_page_t *page=&wpt_pages[i];
@@ -1213,10 +1218,13 @@ int main(int argc, char **argv) {
             printf("TIMEOUT\t%s\t(no results: %s)\n",page->name,o.why);
         }
         /* The harness's verdict first: a page whose harness is not OK
-         * passes nothing. */
+         * passes nothing, unless it ended on the page's own uncaught error
+         * or rejection (PAGE_ERROR, the report script's), when the tests
+         * it completed count. */
         bool whole=true;
         for(size_t k=0;k<o.lines.n;k++)
-            if(!strncmp(o.lines.v[k],"HARNESS\t",8) && strncmp(o.lines.v[k]+8,"OK\t",3)!=0) whole=false;
+            if(!strncmp(o.lines.v[k],"HARNESS\t",8) && strncmp(o.lines.v[k]+8,"OK\t",3)!=0 &&
+               strncmp(o.lines.v[k]+8,"PAGE_ERROR\t",11)!=0) whole=false;
         for(size_t k=0;k<o.lines.n;k++) {
             char *line=o.lines.v[k], *rest=strchr(line,'\t');
             if(rest==NULL) continue;
@@ -1224,7 +1232,11 @@ int main(int argc, char **argv) {
             char *message=strchr(rest,'\t');
             if(message!=NULL) *message++='\0';
             if(!strcmp(line,"HARNESS")) {
-                if(strcmp(rest,"OK")!=0) {
+                if(!strcmp(rest,"PAGE_ERROR")) {
+                    page_errors++;
+                    printf("HARNESS\t%s\tERROR%s%s (the page's own uncaught error: the tests it completed count)\n",
+                        page->name,message && *message ? ": " : "",message && *message ? message : "");
+                } else if(strcmp(rest,"OK")!=0) {
                     harness_bad++;
                     printf("HARNESS\t%s\t%s%s%s (the page fails whole)\n",page->name,rest,
                         message && *message ? ": " : "",message && *message ? message : "");
@@ -1248,8 +1260,9 @@ int main(int argc, char **argv) {
     wpt_list_settle(&passes);
     unsigned total=counts[0]+counts[1]+counts[2]+counts[3]+counts[4];
     printf("%s: %u pass, %u fail, %u timeout, %u notrun, %u precondition failed of %u, in %u pages"
-        " (%u never reported; %u harness errors, failing whole, %u of the fails passes on those pages)\n",
-        wpt_dir,counts[0],counts[1],counts[2],counts[3],counts[4],total,ran,silent,harness_bad,discounted);
+        " (%u never reported; %u harness errors, failing whole, %u of the fails passes on those pages;"
+        " %u ended on the page's own error, counted)\n",
+        wpt_dir,counts[0],counts[1],counts[2],counts[3],counts[4],total,ran,silent,harness_bad,discounted,page_errors);
     if(excluded>0) printf("%s: not run: %u pages the expectations exclude\n",wpt_dir,excluded);
     if(skipped.n>0) qsort(skipped.v,skipped.n,sizeof(*skipped.v),wpt_cmp);
     for(size_t i=0,j;i<skipped.n;i=j) {

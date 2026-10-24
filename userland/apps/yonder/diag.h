@@ -124,6 +124,9 @@ const char *yonder_diag_fact_value(const yonder_diag_t *d, const char *key);
 // Distinct record lines of each token: the verdict's numbers, the badge's.
 uint32_t yonder_diag_missing_lines(const yonder_diag_t *d);
 uint32_t yonder_diag_failed_lines(const yonder_diag_t *d);
+// How many index probes finding lines has cost so far, every record's: the
+// host suites' bound that a line is found by its key, not by walking.
+uint64_t yonder_diag_steps(void);
 
 // The file's text, as snprintf: the length it needs, writing what fits.
 size_t yonder_diag_render(const yonder_diag_t *d, char *out, size_t cap);

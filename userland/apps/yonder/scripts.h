@@ -153,9 +153,12 @@ void yonder_scripts_connected(yonder_scripts_t *scripts, const os64_html_node_t 
 // nothing queued, when the host is retired, the code is longer than a
 // script may be, the page has run out of scripts, or memory ran out.
 bool yonder_scripts_address(yonder_scripts_t *scripts, const char *url, const char *fragment);
-// A fetch came back: `source` is UTF-8 and borrowed, NULL when it failed.
+// A fetch came back: `source` is UTF-8 and borrowed, NULL when it failed;
+// `final_url` the response's address after its redirects (NULL or empty:
+// the address asked for), which the script is named and muted by from
+// then on.
 void yonder_scripts_fetched(yonder_scripts_t *scripts, uint32_t token, const char *source,
-                            size_t length);
+                            size_t length, const char *final_url);
 
 // One event at `node`, or at window (NULL), as os64_dom_dispatch. A page
 // whose script never ran makes its runtime here if an element carries an

@@ -1050,6 +1050,152 @@ static void task_cases(void)
     fixture_runtime = NULL;
     task_context = NULL;
 }
+/* A script host (CONTRACT.md § A script host): every exception the wrapper
+ * catches is handed to it, rejections wait for it to take them, and a
+ * handler added to one it took is reported to it. */
+static char host_heard[512];
+static unsigned host_exceptions, host_handled;
+static JSValue host_handled_promise;
+static void host_note(JSContext *context, const char *what, JSValue value)
+{
+    const char *text = JS_ToCString(context, value);
+    size_t at = strlen(host_heard);
+    snprintf(host_heard + at, sizeof(host_heard) - at, "%s%s:%s", at ? "," : "", what, text ? text : "?");
+    if (text) JS_FreeCString(context, text);
+    else JS_FreeValue(context, JS_GetException(context));
+}
+static void host_exception(void *opaque, JSContext *context, JSValue error)
+{
+    check(opaque == &host_heard, "a script host hears its own opaque");
+    host_exceptions++;
+    host_note(context, "exception", error);
+}
+static void host_handled_hook(void *opaque, JSContext *context, JSValue promise)
+{
+    (void)opaque; (void)context;
+    host_handled++;
+    host_handled_promise = promise;
+}
+/* The script on the stack as a promise is rejected: 7 for the fixture's
+ * own evaluation, which defines `reject`, else 1. */
+static uint32_t host_rejected_hook(void *opaque, JSContext *context, JSValue promise)
+{
+    (void)opaque; (void)promise;
+    uint32_t answer = 1;
+    for (int n = 0; n < 8 && answer == 1; n++) {
+        JSAtom name = JS_GetScriptOrModuleName(context, n);
+        if (name == JS_ATOM_NULL) continue;
+        const char *text = JS_AtomToCString(context, name);
+        if (text != NULL && !strcmp(text, "runtime-fixture.js")) answer = 7;
+        if (text != NULL) JS_FreeCString(context, text);
+        JS_FreeAtom(context, name);
+    }
+    return answer;
+}
+static bool host_value_is(JSValue value, const char *want)
+{
+    const char *text = JS_ToCString(task_context, value);
+    bool same = text != NULL && !strcmp(text, want);
+    if (text) JS_FreeCString(task_context, text);
+    return same;
+}
+static JSValue native_take(JSContext *context, JSValueConst self, int argc, JSValueConst *argv)
+{
+    (void)self; (void)argc; (void)argv;
+    JSValue promise, reason;
+    bool taken = os64_js_take_rejection(fixture_runtime, OS64_JS_ABI_ID, &promise, &reason, NULL);
+    return JS_NewBool(context, taken);
+}
+static void script_host_cases(void)
+{
+    os64_js_config_t config = fixture_config();
+    config.limits.jobs_per_turn = 100000;   /* a catch is a job */
+    os64_js_outcome_t outcome;
+    os64_js_runtime_t *runtime = task_fixture(&config,
+          "globalThis.rejected=[];globalThis.reject=n=>{for(let i=0;i<n;i++)rejected.push(Promise.reject('r'+i))};"
+          "globalThis.handleAll=()=>{for(let i=rejected.length;i-->0;)rejected[i].catch(()=>{});rejected=[]};"
+          "globalThis.fails=()=>{throw Error('called')};"
+          "globalThis.jobThrows=()=>{queueJob()};"
+          "globalThis.taken=null;globalThis.keep=()=>{taken=Promise.reject('kept')};"
+          "globalThis.handleKept=()=>{taken.catch(()=>{})};");
+    if (!runtime) return;
+    check(install_native(runtime, "takeInside", native_take) >= 0 &&
+          install_native(runtime, "queueJob", native_enqueue_throw) >= 0, "script host natives installed");
+    JSValue promise, reason;
+    check(!os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason, NULL) &&
+          JS_IsUndefined(promise) && JS_IsUndefined(reason), "nothing is taken without a script host");
+    const os64_js_script_host_t host = {&host_heard, host_exception, host_handled_hook, host_rejected_hook};
+    check(os64_js_set_script_host(runtime, "other-abi", &host, &outcome) == OS64_JS_ABI_MISMATCH &&
+          os64_js_set_script_host(runtime, OS64_JS_ABI_ID, &host, &outcome) == OS64_JS_OK, "a script host is set");
+    check(execute_fixture(runtime, "throw Error('evaluated')", &outcome) == OS64_JS_EXCEPTION &&
+          strstr(outcome.message, "evaluated") && !strcmp(host_heard, "exception:Error: evaluated"),
+          "an evaluation's exception reaches the host and its outcome both");
+    check(execute_fixture(runtime, "reject(3)", &outcome) == OS64_JS_OK,
+          "with a script host a turn's rejections are not its outcome");
+    uint32_t tag = 0;
+    check(os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason, &tag) &&
+          JS_IsObject(promise) && host_value_is(reason, "r0"), "the oldest rejection is taken first");
+    check(tag == 7, "with the host's answer, asked while the script that rejected was on the stack");
+    task_free(runtime, promise);
+    task_free(runtime, reason);
+    check(execute_fixture(runtime, "handleAll()", &outcome) == OS64_JS_OK &&
+          host_handled == 1 && !os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason, NULL),
+          "rejections handled before they were taken are gone; a taken one's handler reaches the host");
+    check(execute_fixture(runtime, "reject(5000);handleAll()", &outcome) == OS64_JS_OK &&
+          !os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason, NULL),
+          "five thousand rejections handled newest first leave nothing to take");
+    check(execute_fixture(runtime, "reject(2);if(takeInside())throw Error('taken inside')", &outcome) == OS64_JS_OK,
+          "nothing is taken from inside a call");
+    check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "hosted", &outcome) == OS64_JS_OK &&
+          task_call(runtime, "jobThrows", NULL, &outcome) == OS64_JS_OK && outcome.jobs_pending &&
+          !os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason, NULL),
+          "nothing is taken while jobs are runnable");
+    host_heard[0] = '\0';
+    check(os64_js_checkpoint(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_EXCEPTION &&
+          !strcmp(host_heard, "exception:TypeError: native job"), "a checkpoint's job exception reaches the host");
+    check(task_call(runtime, "fails", NULL, &outcome) == OS64_JS_EXCEPTION &&
+          !strcmp(host_heard, "exception:TypeError: native job,exception:Error: called"),
+          "a call's exception reaches the host");
+    check(os64_js_set_script_host(runtime, OS64_JS_ABI_ID, &host, &outcome) == OS64_JS_OK,
+          "a script host may be set between a task's calls");
+    for (int i = 0; i < 2; i++) {
+        check(os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason, NULL) &&
+              host_value_is(reason, i == 0 ? "r0" : "r1"), "the rest are taken in order after the checkpoint");
+        task_free(runtime, promise);
+        task_free(runtime, reason);
+    }
+    host_handled = 0;
+    check(task_call(runtime, "keep", NULL, &outcome) == OS64_JS_OK &&
+          os64_js_checkpoint(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_OK &&
+          os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason, NULL),
+          "a rejection is taken inside a task");
+    check(task_call(runtime, "handleKept", NULL, &outcome) == OS64_JS_OK && host_handled == 1 &&
+          JS_VALUE_GET_PTR(host_handled_promise) == JS_VALUE_GET_PTR(promise),
+          "a handler added to it later names it to the host");
+    task_free(runtime, promise);
+    task_free(runtime, reason);
+    check(os64_js_task_end(runtime, OS64_JS_ABI_ID, &outcome) == OS64_JS_OK, "the hosted task closes clean");
+    check(os64_js_set_script_host(runtime, OS64_JS_ABI_ID, NULL, &outcome) == OS64_JS_OK &&
+          execute_fixture(runtime, "reject(1)", &outcome) == OS64_JS_UNHANDLED_REJECTION,
+          "a cleared host gives the checkpoint its rejections back");
+    check(os64_js_set_script_host(runtime, OS64_JS_ABI_ID, &host, &outcome) == OS64_JS_OK &&
+          execute_fixture(runtime, "reject(1)", &outcome) == OS64_JS_OK, "left for a host at destruction");
+    os64_js_destroy(runtime);
+    runtime = task_fixture(&config, "globalThis.spin=()=>{for(;;){}};");
+    if (!runtime) return;
+    check(os64_js_set_script_host(runtime, OS64_JS_ABI_ID, &host, &outcome) == OS64_JS_OK, "second host set");
+    host_heard[0] = '\0';
+    host_exceptions = 0;
+    clock_step = 1000000;
+    check(execute_fixture(runtime, "spin()", &outcome) == OS64_JS_LIMIT && host_exceptions == 0,
+          "an exception a sticky failure threw is not the host's");
+    clock_step = 0;
+    check(os64_js_set_script_host(runtime, OS64_JS_ABI_ID, NULL, &outcome) == OS64_JS_OK,
+          "a host is cleared from a failed runtime");
+    os64_js_destroy(runtime);
+    fixture_runtime = NULL;
+    task_context = NULL;
+}
 int main(int argc, char **argv)
 {
     if ((argc == 2 && !strcmp(argv[1], "--compile-failure")) ||
@@ -1101,6 +1247,7 @@ int main(int argc, char **argv)
     tracked_allocator_cases(); tracked_construction_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); allocation_cases(); thread_cases();
     file_cases(); file_boundary_cases(); output_cases(); console_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
     task_cases();
+    script_host_cases();
     check(live == 0, "runtime suite releases every fixture allocation");
     printf("libjs runtime: %u checks, %u failures, %zu live allocations, %u native calls\n",
            checks, failures, live, native_calls);

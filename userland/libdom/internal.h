@@ -34,23 +34,26 @@ enum {
  * after it; -1 for Node, which inherits Object's. */
 int d_proto_parent(int kind);
 /* The event types the binding names, which are the ones on<type> names and
- * os64_dom_listens count: the ones the host dispatches; readystatechange,
- * which the binding fires itself (document.c); and online, offline,
- * languagechange, visibilitychange and prerenderingchange, whose handlers
- * exist though nothing here ever fires them (browsing.c and document.c say
- * why). A script may listen for any other type. The handler properties of
- * the ones from SCROLL on are the Modern Web arc's, installed by its
- * table's rows (d_event_handler), not with the rest. READYSTATECHANGE,
- * VISIBILITYCHANGE and PRERENDERINGCHANGE are the document's alone: HTML
- * gives them an IDL property on Document and no content attribute, so no
- * element's on<type> attribute is a handler for them. */
+ * os64_dom_listens count: the ones the host dispatches; the three the
+ * binding fires at window for a script's failures (report.c);
+ * readystatechange, which the binding fires itself (document.c); and
+ * online, offline, languagechange, visibilitychange and prerenderingchange,
+ * whose handlers exist though nothing here ever fires them (browsing.c and
+ * document.c say why). A script may listen for any other type. The handler
+ * properties of the ones from SCROLL on are the Modern Web arc's, installed
+ * by its table's rows (d_event_handler), not with the rest.
+ * READYSTATECHANGE, VISIBILITYCHANGE and PRERENDERINGCHANGE are the
+ * document's alone: HTML gives them an IDL property on Document and no
+ * content attribute, so no element's on<type> attribute is a handler for
+ * them. */
 enum {
     D_EVENT_CLICK, D_EVENT_MOUSEDOWN, D_EVENT_MOUSEUP, D_EVENT_MOUSEOVER,
     D_EVENT_MOUSEOUT, D_EVENT_MOUSEMOVE, D_EVENT_KEYDOWN, D_EVENT_KEYPRESS,
     D_EVENT_KEYUP, D_EVENT_INPUT, D_EVENT_CHANGE, D_EVENT_SUBMIT, D_EVENT_RESET,
     D_EVENT_FOCUS, D_EVENT_BLUR, D_EVENT_LOAD, D_EVENT_SCROLL, D_EVENT_RESIZE,
     D_EVENT_POPSTATE, D_EVENT_HASHCHANGE, D_EVENT_ONLINE, D_EVENT_OFFLINE,
-    D_EVENT_LANGUAGECHANGE, D_EVENT_READYSTATECHANGE, D_EVENT_VISIBILITYCHANGE,
+    D_EVENT_LANGUAGECHANGE, D_EVENT_ERROR, D_EVENT_UNHANDLEDREJECTION,
+    D_EVENT_REJECTIONHANDLED, D_EVENT_READYSTATECHANGE, D_EVENT_VISIBILITYCHANGE,
     D_EVENT_PRERENDERINGCHANGE, D_EVENT_DOM_CONTENT_LOADED,
     D_EVENT_COUNT
 };
@@ -124,6 +127,9 @@ struct DListener {
     /* On a collectable plain target: its callback is the target's to trace
      * and free, not one of the registry's values. */
     bool engine;
+    /* The script the callback is (d_callback_script); a handler compiled
+     * from its attribute is the page's. */
+    uint32_t script;
 };
 /* DListener.handler: zero for a listener, else the state of a handler slot.
  * An ERROR slot failed to compile its attribute and stays absent until the
@@ -133,6 +139,8 @@ struct DTimer {
     DTimer *next;
     uint64_t due, delay;
     uint32_t id, nesting;
+    /* The callback's script (d_callback_script); a string's is the page's. */
+    uint32_t script;
     bool interval;
     JSValue callback;
     char *source;
@@ -294,6 +302,48 @@ struct os64_dom {
     size_t requests_held;
     /* The last AbortSignal's number (abort.c's DSignal.serial). */
     uint64_t signal_serial;
+    /* A SCRIPT'S FAILURES (report.c, MODERN_WEB.md § P2a): ErrorEvent's
+     * and PromiseRejectionEvent's prototypes; the function a failure's
+     * event is fired through; the intrinsic Error constructor, taken before
+     * any page ran, which says where a running script is (an Error it makes
+     * has the caller's place in its stack); the exceptions the wrapper caught, waiting
+     * for their error event, and the reported promises a handler reached,
+     * waiting for their rejectionhandled, each oldest first, with how many
+     * values the two hold (the registry's fifth list); the promise whose
+     * unhandledrejection is being fired and whether a handler reached it
+     * meanwhile; and whether an error event is being fired, when a second
+     * error is reported to no page (HTML's error reporting mode). */
+    DValue *error_event_prototype, *rejection_event_prototype, *report_fire, *error_constructor;
+    struct DPending *errors, *errors_last, *handled, *handled_last;
+    size_t pending_held;
+    const void *rejection_firing;
+    bool rejection_handled, reporting_error;
+    /* The rejections past the task's first failure told to the host one by
+     * one so far, and those only counted (report.c's D_REJECTIONS_TOLD). */
+    uint32_t rejections_told;
+    uint64_t rejections_untold;
+    /* THE SCRIPTS' NAMES (report.c, MUTED ERRORS): every script the host
+     * runs is compiled under a name the binding gives it, `os64-script:<n>`,
+     * and `n` is its place here: its address (NULL: the page's own) and
+     * whether it is another site's. 0 is the page's, 1 another site's
+     * whose record could not be made. The script being run
+     * (os64_dom_script_name to os64_dom_script_ended); the one whose
+     * callback the binding is calling (a listener's, a timer's); the last
+     * such of the task; and the one whose queueMicrotask callback threw,
+     * until the exception is heard: D_NO_SCRIPT for none (report.c's
+     * current_script). Function.prototype's own fileName getter, and
+     * WeakSet with WeakSet.prototype's add and delete, taken before any
+     * page ran; the switch's row installs them, and with it off they are
+     * NULL and nothing is muted, as no event fires. The set made with them
+     * at the first muted rejection, which holds the muted promises taken
+     * so a handler added to one later is no event, and whether one could
+     * not be kept, after which no rejectionhandled fires (report.c's
+     * remember_muted). */
+    struct DScriptName *script_names;
+    uint32_t script_name_count, script_name_cap;
+    uint32_t running_script, calling_script, task_script, thrown_script;
+    DValue *filename_getter, *weak_set[3], *muted_promises;
+    bool muted_forgotten;
     /* P1-Da, the document's state (document.c): its readiness, moved by
      * the host's DOMContentLoaded and load dispatches; the referrer the
      * host gave, the binding's own copy (NULL for none); the script
@@ -303,6 +353,12 @@ struct os64_dom {
     char *referrer;
     const os64_html_node_t *current_script;
     DValue *custom_prototype;
+};
+#define D_NO_SCRIPT UINT32_MAX
+#define D_SCRIPT_PAGE 0u
+struct DScriptName {
+    char *address;
+    bool muted;
 };
 typedef struct { char *data; size_t length; } DString;
 
@@ -572,6 +628,79 @@ bool d_secure_context(const os64_dom_t *context);
 int d_bars_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_external_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_crypto_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* P2a, a script's failures (report.c; WINDOW_DOCUMENT.md § P2a). The row:
+ * window's onerror, onunhandledrejection, onrejectionhandled and
+ * reportError, document's onerror, ErrorEvent and PromiseRejectionEvent.
+ * The row is the switch's; being the runtime's script host is every
+ * page's (d_report_host, from os64_dom_create), so the record can say a
+ * rejection went unhandled with the switch off too, though no event is
+ * fired then. d_report_drain lets go of the host and the values waiting;
+ * d_report_free, after the engine, the scripts' names. */
+int d_report_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+bool d_report_host(os64_dom_t *dom);
+void d_report_drain(os64_dom_t *dom);
+void d_report_free(os64_dom_t *dom);
+/* An exception the binding caught itself (d_report's): its error event is
+ * fired now when a script is running, which is HTML's timing, or else left
+ * for the task's next turn between calls. `script` is the script whose
+ * failure it is, which decides whether it is muted. Nothing with the switch off, while an
+ * error event is being fired, or after a sticky failure. */
+void d_report_error(os64_dom_t *dom, JSContext *ctx, JSValueConst error, uint32_t script);
+/* d_report for `script`'s failure (event.c): a nested dispatch's listener's,
+ * or reportError's, whose script is the one that called it. d_report
+ * itself is for failures that are the page's: a handler attribute that did
+ * not compile, the binding's own refusal. */
+void d_report_as(os64_dom_t *dom, JSContext *ctx, JSValueConst error, uint32_t script);
+/* The script a callback handed to the binding belongs to, asked as it is
+ * handed over: the name it was compiled under when that is one of the
+ * binding's (read through Function.prototype's own fileName getter), else
+ * the running script's, the one handing it over (a bound function, one
+ * made by eval). */
+uint32_t d_callback_script(os64_dom_t *dom, JSContext *ctx, JSValueConst function);
+/* Around every call the binding makes into a callback of the page's: the
+ * muting state (report.c's current_script reads it) as it stood, kept by
+ * the caller, and the callback's script made the one being called, which
+ * an exception the call ends in is muted by. Leaving puts all of it back,
+ * so a script that dispatched and goes on is again the one whose failures
+ * they are, at any depth; `top`, a task's own call with no script under
+ * it, keeps the task's last-called script, which the checkpoint after the
+ * call reads for a rejection no frame names. */
+typedef struct { uint32_t running, calling, task, thrown; } DScripts;
+DScripts d_script_enter(os64_dom_t *dom, uint32_t script);
+void d_script_leave(os64_dom_t *dom, const DScripts *before, bool top);
+/* Inside an open task, between its calls: the error events the exceptions
+ * the wrapper caught are owed, fired at window, each named for its script. */
+void d_errors_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
+/* Inside an open task, before it ends: checkpoints and what each leaves
+ * owed, the error events, an unhandledrejection for each rejection the
+ * runtime hands over and a rejectionhandled for each reported promise a
+ * handler reached, until a checkpoint leaves nothing. A rejection no
+ * handler cancelled is the task's failure. */
+void d_task_settle(os64_dom_t *dom, os64_js_outcome_t *outcome);
+/* As a task named `task` closes: the binding's own report (d_report's first
+ * error) is the outcome when that is OK, else a line told to the host, and
+ * is cleared either way; and the rejections it only counted, past the ones
+ * told one by one, are told as one line. */
+void d_task_close(os64_dom_t *dom, const char *task, os64_js_outcome_t *outcome);
+/* After a script the host ran with os64_js_run (and a string timer the
+ * binding did): what it left owed, settled in a task of its own named
+ * `name`, folded into `outcome`. No engine entry when nothing is owed. */
+void d_script_settle(os64_dom_t *dom, const char *name, os64_js_outcome_t *outcome);
+/* ErrorEvent and PromiseRejectionEvent (event.c): the interfaces, and one
+ * of each made for a dispatch, trusted. */
+int d_error_events_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+JSValue d_error_event_new(os64_dom_t *dom, JSContext *ctx, const char *message, const char *filename,
+                          uint32_t lineno, uint32_t colno, JSValueConst error);
+JSValue d_rejection_event_new(os64_dom_t *dom, JSContext *ctx, const char *type, JSValueConst promise,
+                              JSValueConst reason, bool cancelable);
+/* A thrown value as a line of text, read without running any of the page's
+ * code (no toString, no getter): an Error's or a DOMException's name and
+ * message, a primitive's own spelling, and for any other object a fixed
+ * phrase. */
+void d_error_text(os64_dom_t *dom, JSContext *ctx, JSValueConst value, char *out, size_t cap);
+/* The DOMException's own name and message (exception.c), borrowed; false
+ * for a value that is not one. */
+bool d_dom_exception_fields(JSValueConst value, const char **name, const char **message);
 /* An interface whose objects the binding makes (WebIDL § 3.7): its class
  * registered in this runtime, its prototype made and held for the page's
  * life, and its interface object, an Illegal constructor, named on

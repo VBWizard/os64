@@ -297,18 +297,23 @@ when the event bubbles. A list is cut where it ended when its target was
 reached, so a listener added during the dispatch waits for the next one; a
 listener removed during it does not run (its record is swept when the last
 dispatch leaves). `once` listeners are removed before they run. A listener
-that throws is reported and the next one runs.
+that throws is reported (with the switch on, as the window's error event,
+§ P2a's rows) and the next one runs.
 
 Two callers, two shapes. **The host** (`os64_dom_dispatch`) opens a libjs
 task, runs each listener as one `os64_js_call` followed by a checkpoint, and
-closes the task; its outcome is the task's first exception or rejection, a
-sticky status when the runtime died under it, or a nested error (below).
+closes the task once what it left owed is settled (§ P2a's rows); its
+outcome is the task's first exception or unhandled rejection, a sticky
+status when the runtime died under it, or a nested error (below).
 **A script** (`dispatchEvent`) runs the listeners as nested engine calls with
 no checkpoint between them, which is what DOM.md asks: a checkpoint follows a
 callback that returns with no script on the stack. A nested listener's error
 is kept in the binding (`os64_dom_take_report`) rather than thrown into the
-script that dispatched, as the standard reports it; the host folds it into
-the task's outcome when it opened the task through libdom. Every engine
+script that dispatched, as the standard reports it, and is the window's
+error event at once; as the task closes (a task libdom opened, or a script
+`os64_dom_script_ended` settles) it is the task's outcome under the task's
+name when that is OK, else a line told to `options.failed`, and it is
+cleared either way. Every engine
 entry the binding makes is inside a task or a turn: the host's own calls are
 `os64_js_call` on one invoking function, and everything else runs under a
 call or an evaluation that is already armed.
@@ -329,12 +334,17 @@ the first click.
 window have an on<type> property, and an on<type> content attribute is a
 handler. With the Modern Web switch on, so do `scroll` and `resize`; window
 alone has `onpopstate` and `onhashchange`, and a MediaQueryList `onchange`
-(§ The view, computed style and the session's history), and window alone
+(§ The view, computed style and the session's history), window alone
 has `ononline`, `onoffline` and `onlanguagechange`, whose events nothing
-here fires (§ P1-W's rows); a document alone has `onreadystatechange`,
-`onvisibilitychange` and `onprerenderingchange`, which HTML gives no
-content attribute, so no element's attribute of that name is a handler
-(§ P1-Da's rows). With it off none of these is a property, and
+here fires (§ P1-W's rows); window has `onerror`,
+`onunhandledrejection` and `onrejectionhandled` and the document `onerror`,
+whose events the binding fires for a script's failures (§ P2a's rows; an
+`onerror` content attribute on any element is a handler for an `error`
+event dispatched at it, though no element has the property); and a
+document alone has `onreadystatechange`, `onvisibilitychange` and
+`onprerenderingchange`, which HTML gives no content attribute, so no
+element's attribute of that name is a handler (§ P1-Da's rows). With it
+off none of these is a property, and
 their content attributes are ordinary attributes that no event runs. A target's handler is one slot in its listener list, in the place
 it was first set; a slot for an attribute the parser or innerHTML wrote goes
 first (an element has its attributes before any script can reach it), and a
@@ -348,15 +358,20 @@ whichever route it changed. It compiles at the first dispatch or read that
 needs it: `function on<type>(event){BODY}` inside `with(document)
 with(form owner) with(element)`, HTML's three scopes. A body that does not
 compile is reported once and stays absent until the attribute changes;
-reading the property answers null. A handler that returns `false` cancels.
+reading the property answers null. A handler that returns `false` cancels,
+except window's `onerror` called for an ErrorEvent named `error`, which is
+called with the event's message, filename, line, column and error rather
+than the event, and cancels by returning `true` (HTML's special error event
+handling); its attribute compiles as a function of `event`, `source`,
+`lineno`, `colno` and `error`.
 The body's window-reflecting handlers (`load`, `focus`, `blur`, and with the
-switch on `scroll`, `resize`, `popstate`, `hashchange`, `online`, `offline`
-and `languagechange`) are window's. For the ones every element has a
+switch on `scroll`, `resize`, `popstate`, `hashchange`, `online`, `offline`,
+`languagechange`, `error`, `unhandledrejection` and `rejectionhandled`) are
+window's. For the ones every element has a
 property for (`load`, `focus`, `blur`, `scroll`, `resize`) that is so from
-`<body onload>` and `document.body.onload` alike; for `popstate`,
-`hashchange`, `online`, `offline` and `languagechange` it is so from the
-body's content attribute only, since the body has no such IDL property
-(`document.body.onpopstate` is an ordinary expando; DEBTS.md).
+`<body onload>` and `document.body.onload` alike; for the others it is so
+from the body's content attribute only, since the body has no such IDL
+property (`document.body.onpopstate` is an ordinary expando; DEBTS.md).
 
 The body is first checked by the intrinsic Function constructor, taken
 before any page script could replace it. QuickJS builds that function by
@@ -608,8 +623,10 @@ ASan-instrumented target-profile engine, with sanitized bindings/tree/state.
 their own, and runs jQuery 3.5.1 and 1.12.4 whole;
 `tools/test_dom_attributes.inc` a case per rule of § Attributes as nodes,
 and `tools/test_dom_mutants.py --only attr-` a mutant per rule;
-`tools/test_dom_window.inc` a case per rule of § P1-W's rows, and
-`tools/test_dom_document.inc` of § P1-Da's rows. `domtest` exercises
+`tools/test_dom_window.inc` a case per rule of § P1-W's rows;
+`tools/test_dom_document.inc` of § P1-Da's rows; and
+`tools/test_dom_report.inc` a case per rule of § P2a's rows, and every
+allocation a failure's events make refused in turn. `domtest` exercises
 the shared-library boundary and heap in ring 3. These are library proofs; yonder's loop is proven with its own
 harness. Result counts are recorded in DOM.md after the final source freeze.
 
@@ -1027,6 +1044,99 @@ here runs page code.
 The classic fixes beside them are every page's, the switch on or off:
 `window` and `document` [LegacyUnforgeable] (§ Objects and collections),
 `history` a read-only accessor, `status` kept (§ Asks).
+
+### P2a's rows: a script's failures
+
+One row (MODERN_WEB.md § P2a, as built; WINDOW_DOCUMENT.md § P2a is the
+plan): window's `onerror`, `onunhandledrejection`, `onrejectionhandled` and
+`reportError`, the document's `onerror`, and `ErrorEvent` and
+`PromiseRejectionEvent` (`report.c`, and the two interfaces in `event.c`).
+
+**The binding is the runtime's script host** (libjs CONTRACT.md § A script
+host), on every page and from the end of `os64_dom_create` to drain: libjs
+hands it every exception it catches and leaves it the rejections a
+checkpoint left unhandled. With the switch on it fires the window's events
+for them; on or off, a rejection nothing handled is a failure the host
+records (below). A host that runs a script with `os64_js_run` compiles it
+under the name `os64_dom_script_name` gives it (`os64-script:<n>`, the
+binding's own, standing for the script's address: where its response came
+from, after any redirects, as HTML mutes by the response) and follows it with
+`os64_dom_script_ended`, which settles what the script left in a task of
+the host's name for it; a task the binding opens (a dispatch, a timer, a
+fetch's answer) settles its own before it closes.
+
+**When each event fires.** An exception the binding caught while a script
+ran (a nested dispatch's listener, a handler's compile, `reportError`) is an
+`error` event at once, as HTML's "report an exception" is; one libjs caught
+is the event at the task's next turn between calls: after the listener or
+timer callback that threw and before its checkpoint, or after the
+checkpoint whose job threw. A script the host ran is the exception: libjs
+opens no task while jobs wait, so the jobs a script that threw had queued
+run before its `error` event, where HTML fires the event first (DEBTS.md;
+a string timer the same). A rejection is unhandled when a checkpoint ends with it unhandled; its
+`unhandledrejection` (cancelable) is fired after that checkpoint, oldest
+first, each followed by a checkpoint, until a checkpoint leaves nothing. A
+reported promise a handler reaches later has its `rejectionhandled` after
+the checkpoint after the handler; one a handler reached during its own
+`unhandledrejection` has none. All of it runs in the task the failure
+happened in, under its deadline, so a listener that rejects for ever ends
+as any loop does. While an `error` event is being fired, a second error is
+reported to no page (HTML's error reporting mode).
+
+**What an event says.** An ErrorEvent's message is `Uncaught ` and the
+value as the binding reads it without running the page's code: a
+DOMException's or an Error's name and message (read only through data
+properties of ordinary objects and errors, so no getter and no proxy trap
+runs), another object's message read the same way, a primitive as it is,
+else a fixed phrase.
+Its filename is the address of the script whose failure it is (the one
+the host gave `os64_dom_script_name`), else the page's; its line and
+column are the first placed frame of an Error's own stack, counted from
+the start of the script the engine compiled (an inline script's from the
+script, not the document), else where the running script is when the
+binding is the one reporting, else 0. The place is read from the stack's
+text; whose failure it is never is.
+
+**Muted errors.** What a script from another origin than the page's
+(HTML's muted errors; the host fetches every script without CORS) throws
+or reports is told as `Script error.` with no filename, place or error,
+and its rejections fire no event, not even a `rejectionhandled` when a
+handler reaches one later, whoever's handler it is. One rule decides
+whose failure it is: the script that was running when the value was
+thrown, rejected or reported, as the binding knows each script, by the
+name it compiled it under. A rejection and `reportError` are asked of the
+engine's stack as they happen (QuickJS's `JS_GetScriptOrModuleName`, the
+nearest frame of a script the binding named). An exception has left its
+frames when it is caught, so it is the script the host was running, or
+the one whose callback the binding called (a listener, a handler
+property, a timer, a `queueMicrotask` job), each callback's script asked
+as it was handed over: the name it was compiled under when that is one of
+the binding's, else the script handing it over (a bound function, one
+`eval` made). A handler compiled from an attribute, and a string timer,
+are the page's, as HTML makes them. So a function of another site's that
+the page's own code calls, and that throws through it, is the page's
+failure, as HTML's "run a classic script" reports it, while a rejection
+it makes is the other site's. The record keeps them all whole. The cost
+of the names: a page's `error.stack` and a function's `fileName` say
+`os64-script:<n>` where a browser names the address (DEBTS.md). A
+PromiseRejectionEvent carries the promise and its reason.
+
+**The record.** A rejection no `unhandledrejection` listener cancelled is
+the task's failure: UNHANDLED_REJECTION, `unhandled rejection: <reason>`,
+the reason read as an event's message is. The first a task meets is its
+outcome, unless the task already failed; those after it are told to the
+host through `options.failed`, the first sixteen one by one and the rest
+as one counted line as the task closes (`and <n> more unhandled
+rejections`), so what a page's flood costs the host is not the page's to
+size, and none goes unrecorded. An
+exception's outcome is libjs's diagnostic as before, whatever an error
+listener did with its event.
+
+**The interfaces.** `new ErrorEvent(type, {message, filename, lineno, colno,
+error})` and `new PromiseRejectionEvent(type, {promise, reason})` read
+EventInit's members, then their own in name order (a PromiseRejectionEvent's
+`promise` a required object); their attributes are the event's own record,
+traced by the collector. `reportError(e)` reports `e` as above and returns.
 
 ### P1-Da's rows: the document's state reads
 

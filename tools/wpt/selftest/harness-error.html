@@ -1,0 +1,12 @@
+<!doctype html>
+<title>The runner's own: a harness error that is not the page's own</title>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script>
+// A cleanup that throws is caught by the harness, which ends in ERROR for
+// it: no uncaught error of the page's, so the page fails whole and its
+// test's pass is not one.
+test(function(t) {
+  t.add_cleanup(function() { throw new Error("a cleanup that fails"); });
+}, "a pass on a page whose cleanup failed");
+</script>

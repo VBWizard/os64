@@ -66,6 +66,9 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"external", "External", NULL}, d_external_install},
     /* After the encoding row, whose DataView it tells a view by. */
     {(const char *const[]){"crypto", "Crypto", NULL}, d_crypto_install},
+    {(const char *const[]){"onerror", "onunhandledrejection", "onrejectionhandled", "reportError", "ErrorEvent",
+                           "PromiseRejectionEvent", NULL},
+     d_report_install},
     /* P1-Da: the document's state reads, members of Document's prototype
      * and none of window's, so the row lists no name; the DOM host's chain
      * shape holds them instead (tools/test_dom_modern.inc). */

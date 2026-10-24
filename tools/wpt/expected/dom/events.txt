@@ -195,6 +195,8 @@ Event-dispatch-propagation-stopped.html	 Calling stopPropagation() prior to disp
 Event-dispatch-reenter.html	 Dispatch additional events inside an event listener 
 Event-dispatch-target-moved.html	Event propagation path when an element in it is moved within the DOM
 Event-dispatch-target-removed.html	Event propagation path when an element in it is removed from the DOM
+Event-dispatch-throwing.html	Throwing in event listener with a single listeners
+Event-dispatch-throwing.html	Throwing in event listener with multiple listeners
 Event-init-while-dispatching.html	Calling initCustomEvent while dispatching.
 Event-init-while-dispatching.html	Calling initEvent while dispatching.
 Event-initEvent.html	Calling initEvent during propagation.
@@ -238,6 +240,9 @@ Event-type.html	Event.type should initially be the empty string
 EventListener-handleEvent.html	calls `handleEvent` method of `EventListener`
 EventListener-handleEvent.html	doesn't call `handleEvent` method on callable `EventListener`
 EventListener-handleEvent.html	performs `Get` every time event is dispatched
+EventListener-handleEvent.html	rethrows errors when getting `handleEvent`
+EventListener-handleEvent.html	throws if `handleEvent` is falsy and not callable
+EventListener-handleEvent.html	throws if `handleEvent` is thruthy and not callable
 EventListenerOptions-capture.html	Capture boolean should be honored correctly
 EventListenerOptions-capture.html	Capture option should be honored correctly
 EventListenerOptions-capture.html	Equivalence of option values
@@ -296,3 +301,4 @@ passive-by-default-non-node.html	wheel listeners on Performance are not passive 
 preventDefault-during-activation-behavior.html	behavior of preventDefault during activation behavior
 remove-all-listeners.html	Nested usage of once listeners should work.
 remove-all-listeners.html	Removing all listeners and then adding a new one should work.
+window-event-restored-after-throwing-onerror.html	window.event is restored after a throwing window.onerror handler

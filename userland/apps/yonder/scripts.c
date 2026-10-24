@@ -38,7 +38,9 @@ typedef struct {
     char name[OS64_JS_SOURCE_NAME_CAP];
     // A `src` script's whole address, which `name` (the engine's source
     // name) may be too short to hold; NULL for an inline script. Freed with
-    // the host.
+    // the host. The address asked for until the fetch answers, then the
+    // response's, after its redirects (yonder_scripts_fetched): where the
+    // script came from is what HTML mutes it by and names it by.
     char *address;
 } Item;
 
@@ -227,6 +229,18 @@ static void broken(void *opaque, const char *sentence)
     yonder_diag_failed(s->options.diag, "page", sentence);
 }
 
+// A rejection the task left beyond the failure its outcome carries
+// (libdom's options.failed): a FAILED line under the key the outcome's
+// gets (yonder.c's task_said), the script's whole address when the task
+// is a `src` script's.
+static void failed(void *opaque, const char *task, const char *message)
+{
+    yonder_scripts_t *s = opaque;
+    char key[OS64_DOM_URL_MAX + 16];
+    os64_snprintf(key, sizeof(key), "script %s", s->task_address != NULL ? s->task_address : task);
+    yonder_diag_failed(s->options.diag, key, message);
+}
+
 static uint64_t now_ms(void *opaque)
 {
     yonder_scripts_t *s = opaque;
@@ -374,6 +388,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
         options.screen = s->options.screen;
     options.zoom = zoom;
     options.broken = broken;
+    options.failed = failed;
     options.entropy = entropy;
     options.readiness = s->readiness;
     options.referrer = s->referrer;
@@ -684,25 +699,36 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
         it->source = NULL;
         // The engine's whole evaluation, compiling the source included: the
         // number a bytecode cache would make smaller (MODERN_WEB.md slice 7).
+        // The engine knows the script by the binding's name for it, which is
+        // how the binding tells another site's script's failures from the
+        // page's (libdom's report.c); the outcome keeps the item's name.
+        char engine_name[32];
+        if (!os64_dom_script_name(s->dom, s->task_address, engine_name, sizeof(engine_name)))
+            os64_strcopy(engine_name, sizeof(engine_name), name);
         int64_t began = os64_micros();
-        // document.currentScript, while it runs AND while the microtasks it
-        // queued drain: HTML's "run a classic script" ends in the microtask
-        // checkpoint, and only then does executing the script element put
-        // currentScript back (WPT's Document.currentScript "Script
-        // microtask" sees the element). os64_js_run drains them itself;
-        // a run that threw drains them below. A link's script has no
-        // element, and leaves it null.
+        // document.currentScript, while it runs, while the microtasks it
+        // queued drain, and while its failures' events fire: HTML's "run a
+        // classic script" reports its exception and ends in the microtask
+        // checkpoint (which notifies about rejected promises), and only
+        // then does executing the script element put currentScript back
+        // (WPT's Document.currentScript "Script microtask" sees the
+        // element, and so does an error listener). os64_js_run drains them
+        // itself; a run that threw drains them below. A link's script has
+        // no element, and leaves it null.
         os64_dom_set_current_script(s->dom, it->node);
-        os64_js_run(s->runtime, source, length, name, out);
+        os64_js_run(s->runtime, source, length, engine_name, out);
         int64_t ended = os64_micros();
         s->task_us = began >= 0 && ended >= began ? ended - began : -1;
         os64_free(source);
         if (out->status == OS64_JS_EXCEPTION && out->jobs_pending)
             drain_after_exception(s, out);
+        os64_strcopy(out->source_name, sizeof(out->source_name), name);
+        // What the script left owed: the window's error event for what it
+        // threw, an unhandledrejection for each rejection nothing handled,
+        // which is a failure of this script's when no listener cancels it,
+        // and an error a nested dispatch reported (libdom's report.c).
+        os64_dom_script_ended(s->dom, name, out);
         os64_dom_set_current_script(s->dom, NULL);
-        os64_js_outcome_t nested;
-        if (out->status == OS64_JS_OK && os64_dom_take_report(s->dom, &nested))
-            *out = nested;
         judged(s, out);
     } else if (runs) {
         os64_strcopy(out->source_name, sizeof(out->source_name), name);
@@ -886,7 +912,8 @@ bool yonder_scripts_address(yonder_scripts_t *s, const char *url, const char *fr
     return true;
 }
 
-void yonder_scripts_fetched(yonder_scripts_t *s, uint32_t token, const char *source, size_t length)
+void yonder_scripts_fetched(yonder_scripts_t *s, uint32_t token, const char *source, size_t length,
+                            const char *final_url)
 {
     if (s == NULL || s->dead || token == 0 || token > s->count)
         return;
@@ -897,6 +924,21 @@ void yonder_scripts_fetched(yonder_scripts_t *s, uint32_t token, const char *sou
     if (source == NULL) {
         fail_item(s, it, "could not fetch the script");
         return;
+    }
+    // A script that came through redirects is the last address's: a
+    // same-origin address that sends it on to another site is that site's
+    // script, muted. One whose address cannot be kept is not run under the
+    // address it was asked for.
+    if (final_url != NULL && final_url[0] != '\0' &&
+        (it->address == NULL || !os64_streq(it->address, final_url))) {
+        char *moved = keep(final_url);
+        if (moved == NULL) {
+            fail_item(s, it, "no memory for the script's address");
+            return;
+        }
+        os64_free(it->address);
+        it->address = moved;
+        os64_strcopy(it->name, sizeof(it->name), final_url);
     }
     it->source = os64_malloc(length + 1);
     if (it->source == NULL) {

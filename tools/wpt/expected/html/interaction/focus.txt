@@ -178,10 +178,6 @@ the-autofocus-attribute/update-the-rendering.html	opens a second window (P3a)
 [passing]
 document-level-focus-apis/document-level-apis.html	The body element must be the active element if no element is focused
 document-level-focus-apis/document-level-apis.html	The hasFocus() method must return false if the Document has no browsing context
-focusgroup/tentative/ax-role-inference-item-elementinternals-nested.html	accessibilityController not available (noop)
-focusgroup/tentative/ax-role-inference-item-elementinternals-owner-implied.html	accessibilityController not available (noop)
-focusgroup/tentative/ax-role-inference-item-elementinternals.html	accessibilityController not available (noop)
-focusgroup/tentative/ax-role-inference-owner-elementinternals.html	accessibilityController not available (noop)
 focusgroup/tentative/ax-role-inference-owner.html	accessibilityController not available (noop)
 focusgroup/tentative/idl-reflection.html	focusGroup satisfies [SameObject]
 focusreset/focusreset-basic.tentative.html	onfocusreset is only defined on Document

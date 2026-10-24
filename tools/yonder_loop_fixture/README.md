@@ -19,5 +19,6 @@ In a QEMU guest with user networking the address is `http://10.0.2.2:8000/`.
 | `write.html` | `document.write` (DOM_D9.md): a counter, a date line, a written `<script src>` loading `blocking.js`, whose own write follows it, and a written inline script whose write lands before its writer's next one; the page's own last paragraph comes after them all |
 | `menu.html` | a DHTML menu opening on `mouseover` and closing on `mouseout` |
 | `form.html` | an `onsubmit` validator: an empty name is refused, a filled one reaches the server's log as `/signed?name=...` |
+| `failures.html` | MODERN_WEB.md § P2a: window's `onerror`, `onunhandledrejection` and `onrejectionhandled` each list what they heard; the page's record has a FAILED line for the script's error and for each rejection nothing handled (the script's, a timer's, and the async click handler's once the button is pressed), and none for the one caught at once |
 
 `yonder --script-audit URL` logs each task's name and cost to the kernel log.

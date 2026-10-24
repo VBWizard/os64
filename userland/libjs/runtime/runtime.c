@@ -10,9 +10,13 @@
 
 #define JS_PUBLIC __attribute__((visibility("default")))
 
+/* A rejected promise nothing handles yet: oldest first on a list, and found
+ * by its promise in a table, so a page's thousandth rejection or handler
+ * costs what its first did. */
 typedef struct Rejection {
-    struct Rejection *next;
+    struct Rejection *next, *prev;
     JSValue promise, reason;
+    uint32_t tag;           // the script host's answer when it was rejected
 } Rejection;
 
 struct os64_js_runtime {
@@ -21,7 +25,16 @@ struct os64_js_runtime {
     JSPortAllocator allocator;
     os64_js_limits_t limits;
     os64_js_outcome_t *active_outcome;
-    Rejection *rejections;
+    Rejection *rejections, *rejections_last;
+    /* Open addressing over the promises' addresses, a power of two in
+     * size; `used` counts the removed slots too, which a growth clears. */
+    Rejection **rejection_table;
+    size_t rejection_capacity, rejection_count, rejection_used;
+    /* A host that reports script failures itself (os64_js_set_script_host):
+     * with one, rejections wait for os64_js_take_rejection rather than
+     * being judged at a checkpoint. */
+    os64_js_script_host_t host;
+    bool hosted;
     int64_t deadline, host_error;
     uint64_t jobs;
     os64_js_status_t failure;
@@ -96,6 +109,60 @@ static int interrupt(JSRuntime *engine, void *opaque)
     return observe(opaque);
 }
 
+/* The table's removed slot: no Rejection lives at this address. */
+static Rejection rejection_removed;
+
+static size_t rejection_slot(const os64_js_runtime_t *runtime, const void *promise)
+{
+    uint64_t key = (uint64_t)(uintptr_t)promise * 0x9E3779B97F4A7C15ull;
+    return (size_t)(key >> 32) & (runtime->rejection_capacity - 1);
+}
+
+static Rejection **rejection_place(os64_js_runtime_t *runtime, const void *promise)
+{
+    if (runtime->rejection_capacity == 0) return NULL;
+    for (size_t at = rejection_slot(runtime, promise);; at = (at + 1) & (runtime->rejection_capacity - 1)) {
+        Rejection *item = runtime->rejection_table[at];
+        if (item == NULL) return NULL;
+        if (item != &rejection_removed && JS_VALUE_GET_PTR(item->promise) == promise)
+            return &runtime->rejection_table[at];
+    }
+}
+
+/* Room for one more, keeping the table at most half full of live and
+ * removed slots; a growth rebuilds it from the list. False when the engine
+ * would not give the memory (the rejection then goes untracked). */
+static bool rejection_room(os64_js_runtime_t *runtime)
+{
+    if ((runtime->rejection_used + 1) * 2 <= runtime->rejection_capacity) return true;
+    size_t capacity = 16;
+    while (capacity < (runtime->rejection_count + 1) * 4) capacity *= 2;
+    Rejection **table = js_mallocz_rt(runtime->engine, capacity * sizeof(*table));
+    if (table == NULL) return false;
+    js_free_rt(runtime->engine, runtime->rejection_table);
+    runtime->rejection_table = table;
+    runtime->rejection_capacity = capacity;
+    runtime->rejection_used = runtime->rejection_count;
+    for (Rejection *item = runtime->rejections; item != NULL; item = item->next) {
+        size_t at = rejection_slot(runtime, JS_VALUE_GET_PTR(item->promise));
+        while (table[at] != NULL) at = (at + 1) & (capacity - 1);
+        table[at] = item;
+    }
+    return true;
+}
+
+/* Off the list and out of the table; its references are the caller's. */
+static void rejection_unlink(os64_js_runtime_t *runtime, Rejection **place)
+{
+    Rejection *item = *place;
+    *place = &rejection_removed;
+    runtime->rejection_count--;
+    if (item->prev != NULL) item->prev->next = item->next;
+    else runtime->rejections = item->next;
+    if (item->next != NULL) item->next->prev = item->prev;
+    else runtime->rejections_last = item->prev;
+}
+
 static void clear_rejections(os64_js_runtime_t *runtime)
 {
     while (runtime->rejections != NULL) {
@@ -105,33 +172,63 @@ static void clear_rejections(os64_js_runtime_t *runtime)
         JS_FreeValueRT(runtime->engine, item->reason);
         js_free_rt(runtime->engine, item);
     }
+    runtime->rejections_last = NULL;
+    js_free_rt(runtime->engine, runtime->rejection_table);
+    runtime->rejection_table = NULL;
+    runtime->rejection_capacity = runtime->rejection_count = runtime->rejection_used = 0;
 }
 
+/* The engine's tracker: a promise rejected with no handler, or a handler
+ * added to one. A handler for a promise this table no longer holds, which a
+ * host took (os64_js_take_rejection), is the host's to hear of. */
 static void rejection(JSContext *context, JSValueConst promise,
                       JSValueConst reason, JS_BOOL handled, void *opaque)
 {
     os64_js_runtime_t *runtime = opaque;
-    Rejection **place = &runtime->rejections;
-    while (*place != NULL) {
-        if (observe(runtime)) return;
-        if (JS_VALUE_GET_PTR((*place)->promise) == JS_VALUE_GET_PTR(promise)) {
-            if (handled) {
-                Rejection *item = *place;
-                *place = item->next;
-                JS_FreeValueRT(runtime->engine, item->promise);
-                JS_FreeValueRT(runtime->engine, item->reason);
-                js_free_rt(runtime->engine, item);
-            }
-            return;
+    if (observe(runtime)) return;
+    Rejection **place = rejection_place(runtime, JS_VALUE_GET_PTR(promise));
+    if (place != NULL) {
+        if (handled) {
+            Rejection *item = *place;
+            rejection_unlink(runtime, place);
+            JS_FreeValueRT(runtime->engine, item->promise);
+            JS_FreeValueRT(runtime->engine, item->reason);
+            js_free_rt(runtime->engine, item);
         }
-        place = &(*place)->next;
+        return;
     }
-    if (handled || observe(runtime)) return;
+    if (handled) {
+        if (runtime->hosted && runtime->host.handled != NULL)
+            runtime->host.handled(runtime->host.opaque, context, promise);
+        return;
+    }
+    if (!rejection_room(runtime)) return;
     Rejection *item = js_malloc_rt(runtime->engine, sizeof(*item));
     if (item == NULL) return;
     *item = (Rejection){.promise = JS_DupValue(context, promise),
-                        .reason = JS_DupValue(context, reason)};
-    *place = item;
+                        .reason = JS_DupValue(context, reason),
+                        .prev = runtime->rejections_last};
+    if (runtime->rejections_last != NULL) runtime->rejections_last->next = item;
+    else runtime->rejections = item;
+    runtime->rejections_last = item;
+    size_t at = rejection_slot(runtime, JS_VALUE_GET_PTR(promise));
+    while (runtime->rejection_table[at] != NULL && runtime->rejection_table[at] != &rejection_removed)
+        at = (at + 1) & (runtime->rejection_capacity - 1);
+    if (runtime->rejection_table[at] == NULL) runtime->rejection_used++;
+    runtime->rejection_table[at] = item;
+    runtime->rejection_count++;
+    /* Asked now, while the script that rejected may still be on the stack;
+     * kept with the rejection for the host that takes it. */
+    if (runtime->hosted && runtime->host.rejected != NULL)
+        item->tag = runtime->host.rejected(runtime->host.opaque, context, promise);
+}
+
+/* An exception the wrapper caught, for a host that reports script failures
+ * itself; never one a sticky failure threw. */
+static void caught(os64_js_runtime_t *runtime, JSContext *context, JSValueConst error)
+{
+    if (runtime->hosted && runtime->host.exception != NULL && !observe(runtime))
+        runtime->host.exception(runtime->host.opaque, context, error);
 }
 
 static void discard_exception(JSContext *context)
@@ -246,13 +343,15 @@ static void sticky(os64_js_runtime_t *runtime, os64_js_outcome_t *out)
 }
 
 /* A turn ends at queue exhaustion, except that an open task keeps its turn
- * (and so its deadline and job count) until os64_js_task_end closes it. */
+ * (and so its deadline and job count) until os64_js_task_end closes it.
+ * Without a script host, that is where rejections are judged; with one,
+ * they wait for the host to take them. */
 static os64_js_status_t leave(os64_js_runtime_t *runtime, os64_js_outcome_t *out)
 {
     bool pending = JS_IsJobPending(runtime->engine);
     if (pending && runtime->jobs == runtime->limits.jobs_per_turn)
         latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_JOBS, 0);
-    if (!observe(runtime) && !pending && runtime->turn &&
+    if (!runtime->hosted && !observe(runtime) && !pending && runtime->turn &&
         (!runtime->task || runtime->checkpointing)) {
         if (out->status == OS64_JS_OK && runtime->rejections != NULL) {
             out->status = OS64_JS_UNHANDLED_REJECTION;
@@ -432,6 +531,7 @@ static os64_js_status_t evaluate(os64_js_runtime_t *runtime, const char *source,
         JSValue value = JS_Eval(runtime->context, source, length, source_name, JS_EVAL_TYPE_GLOBAL);
         if (JS_IsException(value)) {
             JSValue error = JS_GetException(runtime->context);
+            caught(runtime, runtime->context, error);
             outcome->status = OS64_JS_EXCEPTION;
             diagnostic(runtime, error, outcome);
             JS_FreeValue(runtime->context, error);
@@ -497,6 +597,7 @@ JS_PUBLIC os64_js_status_t os64_js_drain_jobs(os64_js_runtime_t *runtime,
         if (JS_ExecutePendingJob(runtime->engine, &context) < 0) {
             if (context == NULL) context = runtime->context;
             JSValue error = JS_GetException(context);
+            caught(runtime, context, error);
             outcome->status = OS64_JS_EXCEPTION;
             diagnostic(runtime, error, outcome);
             JS_FreeValue(context, error);
@@ -665,6 +766,7 @@ JS_PUBLIC os64_js_status_t os64_js_call(os64_js_runtime_t *runtime, const char *
     JSValue value = JS_Call(runtime->context, function, this_value, argc, argv);
     if (JS_IsException(value)) {
         JSValue error = JS_GetException(runtime->context);
+        caught(runtime, runtime->context, error);
         outcome->status = OS64_JS_EXCEPTION;
         diagnostic(runtime, error, outcome);
         JS_FreeValue(runtime->context, error);
@@ -688,6 +790,7 @@ static void checkpoint(os64_js_runtime_t *runtime, os64_js_outcome_t *outcome)
         if (JS_ExecutePendingJob(runtime->engine, &context) < 0) {
             if (context == NULL) context = runtime->context;
             JSValue error = JS_GetException(context);
+            caught(runtime, context, error);
             if (outcome->status == OS64_JS_OK) {
                 outcome->status = OS64_JS_EXCEPTION;
                 diagnostic(runtime, error, outcome);
@@ -743,6 +846,45 @@ JS_PUBLIC os64_js_status_t os64_js_set_execution_ms(os64_js_runtime_t *runtime, 
         return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "limits must be positive and representable");
     runtime->limits.execution_ms = ms;
     return refuse(runtime, outcome, OS64_JS_OK, NULL);
+}
+
+/* Not through enter(): a host clears itself from a runtime that has failed
+ * as readily as from one that has not, before its opaque goes away. */
+JS_PUBLIC os64_js_status_t os64_js_set_script_host(os64_js_runtime_t *runtime, const char *caller_abi,
+                                                 const os64_js_script_host_t *host,
+                                                 os64_js_outcome_t *outcome)
+{
+    if (outcome == NULL) return OS64_JS_BAD_ARGUMENT;
+    if (runtime != NULL && runtime->active_outcome == outcome) return OS64_JS_BUSY;
+    os64_memset(outcome, 0, sizeof(*outcome));
+    if (runtime == NULL || caller_abi == NULL)
+        return status(outcome, OS64_JS_BAD_ARGUMENT, "runtime and ABI are required");
+    if (os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0)
+        return status(outcome, OS64_JS_ABI_MISMATCH, "binding header ABI mismatch");
+    if (runtime->active) return status(outcome, OS64_JS_BUSY, "runtime is executing");
+    runtime->hosted = host != NULL;
+    if (host != NULL) runtime->host = *host;
+    else os64_memset(&runtime->host, 0, sizeof(runtime->host));
+    return OS64_JS_OK;
+}
+
+JS_PUBLIC bool os64_js_take_rejection(os64_js_runtime_t *runtime, const char *caller_abi,
+                                     JSValue *promise, JSValue *reason, uint32_t *tag)
+{
+    if (promise != NULL) *promise = JS_UNDEFINED;
+    if (reason != NULL) *reason = JS_UNDEFINED;
+    if (tag != NULL) *tag = 0;
+    if (runtime == NULL || caller_abi == NULL || promise == NULL || reason == NULL ||
+        os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0 || !runtime->hosted || runtime->active ||
+        runtime->failure != OS64_JS_OK || runtime->rejections == NULL || JS_IsJobPending(runtime->engine))
+        return false;
+    Rejection *item = runtime->rejections;
+    rejection_unlink(runtime, rejection_place(runtime, JS_VALUE_GET_PTR(item->promise)));
+    *promise = item->promise;
+    *reason = item->reason;
+    if (tag != NULL) *tag = item->tag;
+    js_free_rt(runtime->engine, item);
+    return true;
 }
 
 static bool write_output(os64_js_runtime_t *runtime, const char *bytes, size_t size)
@@ -1196,6 +1338,7 @@ JS_PUBLIC void os64_js_destroy_report(os64_js_runtime_t *runtime,
     if (runtime->active) jsport_fatal("destroy during an active runtime call", __FILE__, __LINE__);
     runtime->active = true;
     runtime->failure = OS64_JS_FAILED_RUNTIME;
+    runtime->hosted = false;
     JS_SetHostPromiseRejectionTracker(runtime->engine, NULL, NULL);
     clear_rejections(runtime);
     JS_FreeContext(runtime->context);
