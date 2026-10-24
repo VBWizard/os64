@@ -408,6 +408,12 @@ SYNs the dump shows to the page's host. Base is this PR's parent:
 | a blog page from the corpus, 13 sheets and 13 pictures | 2814, 2781, 2784, 2765 ms; 79-80 connections | 3646, 2838, 2854, 3036 ms; 21-22 |
 | a course page from the corpus, 38 same-host scripts | 23637, 20866 ms; 64-65 connections | 23834, 23115 ms; 12-13 |
 
+Run again once the cold read's fixes were in (sixteen kept, the shared
+store): the local page in 964 ms on 5 connections under the Chrome
+preset, and in 456 ms on ONE under yonder's own with scripts off (25
+requests, one SYN in the dump); the blog page in 2893 ms on 21, several
+of them carrying a dozen requests or more.
+
 Connections, and with them TLS handshakes, fall to a fifth or a quarter
 of what they were on the corpus pages and a sixth on the local one. Only
 the local page's arrival follows them down. The blog page's
