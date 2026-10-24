@@ -390,6 +390,22 @@ static void dom_report_rejection_cases(void)
           "report: a dispatch's first rejection is its outcome and the rest the host's");
     report_log_is(&f, "'a|TypeError: in a click|x|y'", "report: each was fired");
     report_failed[0] = '\0';
+    /* HTML queues rejectionhandled as a task: a handler an unhandledrejection
+     * listener adds to an earlier promise has its reaction run first. */
+    fixture_free(&f);
+    f = fixture_new(&options);
+    if (!fixture_ready(&f)) return;
+    dom_script(&f, "globalThis.log=[];"
+        "onunhandledrejection=e=>{log.push('unhandled '+e.reason);"
+        "if(e.reason===2)first.catch(()=>log.push('catch'))};"
+        "onrejectionhandled=e=>log.push('handled '+e.reason);", "report: a listener that handles an earlier one");
+    report_script(&f, "globalThis.first=Promise.reject(1)", "page.html#inline-10", NULL, &outcome);
+    dom_script(&f, "setTimeout(()=>{Promise.reject(2)},0)", "report: a timer that rejects");
+    check(os64_dom_timer_fire(f.binding, UINT64_MAX - 1, &outcome) && outcome.status == OS64_JS_UNHANDLED_REJECTION,
+          "report: the timer's rejection is its failure");
+    report_log_is(&f, "'unhandled 1|unhandled 2|catch|handled 1'",
+                  "report: the catch reaction runs before the rejectionhandled it earned");
+    report_failed[0] = '\0';
     fixture_free(&f);
 }
 

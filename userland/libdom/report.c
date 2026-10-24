@@ -630,15 +630,18 @@ static void unhandled(os64_dom_t *dom, JSValue promise, JSValue reason, const ch
     JS_FreeValueRT(dom->engine, reason);
 }
 
-/* The rejectionhandled each promise a handler reached is owed: true when
- * there was one. */
-static bool handled_fire(os64_dom_t *dom, os64_js_outcome_t *outcome)
+/* The rejectionhandled each promise on `due` is owed (a list taken whole
+ * from the binding's, whose entries this frees). */
+static void handled_fire(os64_dom_t *dom, struct DPending *due, os64_js_outcome_t *outcome)
 {
-    bool any = dom->handled != NULL;
     os64_js_outcome_t access;
     JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
-    while (dom->handled != NULL) {
-        JSValue promise = pending_pop(dom, false, NULL);
+    while (due != NULL) {
+        struct DPending *item = due;
+        due = item->next;
+        JSValue promise = item->value;
+        d_free(dom, item);
+        dom->pending_held--;
         /* A muted promise leaves the set as its handler is heard; one the
          * set could not be asked about is taken for muted. */
         bool muted = dom->muted_forgotten;
@@ -661,7 +664,6 @@ static bool handled_fire(os64_dom_t *dom, os64_js_outcome_t *outcome)
         }
         JS_FreeValueRT(dom->engine, promise);
     }
-    return any;
 }
 
 void d_task_settle(os64_dom_t *dom, os64_js_outcome_t *outcome)
@@ -672,8 +674,15 @@ void d_task_settle(os64_dom_t *dom, os64_js_outcome_t *outcome)
         os64_js_status_t checked = os64_js_checkpoint(dom->runtime, OS64_JS_ABI_ID, &point);
         fold(outcome, &point);
         if (checked != OS64_JS_OK && checked != OS64_JS_EXCEPTION) return;
-        bool owed = dom->errors != NULL;
+        /* The rejectionhandled owed now are those a handler reached before
+         * this checkpoint: HTML queues each as a task, so a handler added by
+         * a listener fired below has its reaction run (the next checkpoint)
+         * before its event, which waits for the pass after it. */
+        struct DPending *due = dom->handled;
+        dom->handled = dom->handled_last = NULL;
+        bool owed = dom->errors != NULL || due != NULL;
         d_errors_fire(dom, outcome);
+        handled_fire(dom, due, outcome);
         JSValue promise, reason;
         uint32_t script;
         while (!sticky(outcome->status) &&
@@ -681,8 +690,7 @@ void d_task_settle(os64_dom_t *dom, os64_js_outcome_t *outcome)
             owed = true;
             unhandled(dom, promise, reason, point.source_name, script, outcome);
         }
-        if (handled_fire(dom, outcome)) owed = true;
-        if (!owed) return;
+        if (!owed && dom->handled == NULL && dom->errors == NULL) return;
     }
 }
 
