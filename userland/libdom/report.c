@@ -641,12 +641,22 @@ static void unhandled(os64_dom_t *dom, JSValue promise, JSValue reason, const ch
 }
 
 /* The rejectionhandled each promise on `due` is owed (a list taken whole
- * from the binding's, whose entries this frees). */
-static void handled_fire(os64_dom_t *dom, struct DPending *due, os64_js_outcome_t *outcome)
+ * from the binding's, `last` its end, whose entries this frees). HTML fires
+ * each in a task of its own, so the microtasks one event's listeners queue
+ * run before the next: once an event leaves a job runnable, the entries
+ * after it go back to the head of the binding's list, for the pass after
+ * the next checkpoint, as os64_js_take_rejection waits for one. */
+static void handled_fire(os64_dom_t *dom, struct DPending *due, struct DPending *last, os64_js_outcome_t *outcome)
 {
     os64_js_outcome_t access;
     JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
     while (due != NULL) {
+        if (JS_IsJobPending(dom->engine)) {
+            last->next = dom->handled;
+            if (dom->handled == NULL) dom->handled_last = last;
+            dom->handled = due;
+            return;
+        }
         struct DPending *item = due;
         due = item->next;
         JSValue promise = item->value;
@@ -688,11 +698,11 @@ void d_task_settle(os64_dom_t *dom, os64_js_outcome_t *outcome)
          * this checkpoint: HTML queues each as a task, so a handler added by
          * a listener fired below has its reaction run (the next checkpoint)
          * before its event, which waits for the pass after it. */
-        struct DPending *due = dom->handled;
+        struct DPending *due = dom->handled, *last = dom->handled_last;
         dom->handled = dom->handled_last = NULL;
         bool owed = dom->errors != NULL || due != NULL;
         d_errors_fire(dom, outcome);
-        handled_fire(dom, due, outcome);
+        handled_fire(dom, due, last, outcome);
         JSValue promise, reason;
         uint32_t script;
         while (!sticky(outcome->status) &&

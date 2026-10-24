@@ -452,6 +452,18 @@ static void dom_report_rejection_cases(void)
           "report: the timer's rejection is its failure");
     report_log_is(&f, "'unhandled 1|unhandled 2|catch|handled 1'",
                   "report: the catch reaction runs before the rejectionhandled it earned");
+    /* Each rejectionhandled is a task of its own in HTML, so the microtasks
+     * one listener queues run before the next is fired (Codex #339 rd2);
+     * an unhandledrejection's the same. */
+    dom_script(&f, "log.length=0;onunhandledrejection=e=>{log.push('unhandled '+e.reason);"
+        "queueMicrotask(()=>log.push('micro u'+e.reason))};"
+        "onrejectionhandled=e=>{log.push('handled '+e.reason);queueMicrotask(()=>log.push('micro h'+e.reason))};",
+        "report: listeners that queue microtasks");
+    report_script(&f, "globalThis.one=Promise.reject(1);globalThis.two=Promise.reject(2)", "page.html#inline-11",
+                  NULL, &outcome);
+    report_script(&f, "one.catch(()=>{});two.catch(()=>{})", "page.html#inline-12", NULL, &outcome);
+    report_log_is(&f, "'unhandled 1|micro u1|unhandled 2|micro u2|handled 1|micro h1|handled 2|micro h2'",
+                  "report: each event's microtasks run before the next event");
     report_failed[0] = '\0';
     fixture_free(&f);
 }
