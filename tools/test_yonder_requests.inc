@@ -216,7 +216,88 @@ static void request_redirected_page_case(void) {
     request_drop();
 }
 
+/* A PAGE'S NAVIGATION IS ITS OWN too: the page that asks is named in its
+ * Referer, judged for a downgrade, and given the line a refusal writes,
+ * wherever that page is in its arrival — never the page on screen, which
+ * here is an http:// page A while the asking page B is https://. */
+
+/* Page A on screen, then B arriving with `rest`, its body whole when
+ * `done`. */
+static void nav_from_b(const char *rest, bool done) {
+    loop_final="http://fixture.test/a";
+    loop_page("<p>A</p>");
+    loop_final=NULL;
+    check(loop_settle() && view_turns() && os64_streq(g.page.way.url,"http://fixture.test/a"),"navigations: A on screen");
+    start_trip("https://fixture.test/b",NULL,NAV_GO,NULL);
+    char *html=pad_page(rest);
+    way_head_t h=stream_head("text/html","",false);
+    os64_strcopy(h.url,sizeof(h.url),"https://fixture.test/b");
+    h.encrypted=true;
+    yonder_mail_post_head(g.stream.mail,&h);
+    stream_post_body((const uint8_t *)html,strlen(html),YONDER_STREAM_CHUNK);
+    if(done) stream_post_verdict(true,OS64_FETCH_OK,"");
+    free(html);
+}
+
+/* The navigation the window sent last: its address and its Referer. */
+static bool nav_sent(const char *url, const char *referrer) {
+    const yonder_trip_t *trip=pool_work.job;
+    return trip!=NULL && trip->kind==YONDER_JOB_TRIP && os64_streq(trip->url,url) &&
+           os64_streq(trip->referrer,referrer);
+}
+
+static void nav_referrer_case(const char *when, const char *rest, bool waits) {
+    char what[160];
+    nav_from_b(rest,true);
+    loop_settle();
+    if(waits) {
+        check(g.coming.active,"navigations: B waits for its sheet");
+        now_ms+=50;
+        loop_settle();
+    }
+    snprintf(what,sizeof(what),"navigations: location.href %s names B as its Referer, not the page on screen",when);
+    check(nav_sent("https://fixture.test/next","https://fixture.test/b"),what);
+    loop_drop();
+}
+
+static void nav_refused_case(const char *when, const char *rest) {
+    char what[160];
+    nav_from_b(rest,true);
+    snprintf(what,sizeof(what),"navigations: a refused location.href %s is a line in B's record",when);
+    check(loop_settle() && view_turns() && os64_streq(g.page.way.url,"https://fixture.test/b") &&
+          strstr(request_record_text(),"FAILED link refused: ")!=NULL,what);
+    loop_drop();
+}
+
+static void navigation_cases(void) {
+    nav_referrer_case("from the parse","<script>location.href='/next'</script><p>tail</p>",false);
+    nav_referrer_case("at DOMContentLoaded",
+        "<script>document.addEventListener('DOMContentLoaded',()=>{location.href='/next'})</script>",false);
+    nav_referrer_case("while B waits for its sheets",
+        "<script>setTimeout(()=>{location.href='/next'},10)</script><link rel=stylesheet href=wait.css>",true);
+    nav_refused_case("from the parse","<script>location.href='ftp://fixture.test/f'</script><p>tail</p>");
+    nav_refused_case("at DOMContentLoaded",
+        "<script>document.addEventListener('DOMContentLoaded',()=>{location.href='ftp://fixture.test/f'})</script>");
+    /* B, encrypted, sends the person to an address in the clear while it
+     * is still arriving: that is a downgrade from B, whatever A is, so it
+     * is asked first, and a yes sends it with B's Referer. */
+    nav_from_b("<script>location.href='http://fixture.test/plain'</script><p>tail</p>",false);
+    check(loop_settle() && g.stream.active && g.asker==ASK_REQUEST && g.pending.downgrade,
+          "navigations: B's location.href to http:// is a downgrade from B, and asked about");
+    bar_answered(true);
+    check(nav_sent("http://fixture.test/plain","https://fixture.test/b"),
+          "navigations: the yes sends it with B's Referer");
+    loop_drop();
+    /* A person's click on B once it is shown names B, as it always has. */
+    nav_from_b("<a id=l href=/next>go</a>",true);
+    check(loop_settle() && view_turns() && os64_streq(g.page.way.url,"https://fixture.test/b"),"navigations: B shown");
+    input_click_at("l");
+    check(nav_sent("https://fixture.test/next","https://fixture.test/b"),"navigations: a click on B names B");
+    loop_drop();
+}
+
 static void request_cases(void) {
+    navigation_cases();
     request_redirected_page_case();
     request_same_origin_case();
     request_cors_case();
