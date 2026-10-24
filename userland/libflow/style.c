@@ -4284,6 +4284,13 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
         // author display declarations must not reveal its raw fallback text.
         if (is(n, OS64_HTML_TAG_NOSCRIPT) && c->env->scripting)
             sp.s.display = FLOW_DISPLAY_NONE;
+        // CSS Display 3 Appendix B: `contents` on a replaced element (a
+        // picture, a frame, a canvas, a form control) computes to `none`,
+        // so a canvas's fallback is not shown that way either. A button's
+        // `contents` works as any element's there, so it is left alone.
+        if (sp.s.display == FLOW_DISPLAY_CONTENTS && f_replaced(c->env, n) &&
+            !is(n, OS64_HTML_TAG_BUTTON))
+            sp.s.display = FLOW_DISPLAY_NONE;
         // `display: none` ends its animations (Animations 1 § 2): the
         // timeline drops what no layout styles.
         if (sp.s.display != FLOW_DISPLAY_NONE &&

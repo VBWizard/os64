@@ -118,7 +118,7 @@ uint32_t f_collapse_white(const char *in, uint32_t n, char *out, bool *space)
 // 15.4.1: it then represents embedded content, and its fallback is not
 // shown), and the face draws what stands in for its drawing; with
 // scripting off it is its fallback content, laid out as any element.
-static bool replaced(const B *b, const os64_html_node_t *n)
+bool f_replaced(const flow_env_t *env, const os64_html_node_t *n)
 {
     if (n->ns != OS64_HTML_NS_HTML)
         return false;
@@ -128,10 +128,15 @@ static bool replaced(const B *b, const os64_html_node_t *n)
     case OS64_HTML_TAG_FRAME: case OS64_HTML_TAG_METER: case OS64_HTML_TAG_PROGRESS:
         return true;
     case OS64_HTML_TAG_CANVAS:
-        return b->env->scripting;
+        return env->scripting;
     default:
         return false;
     }
+}
+
+static bool replaced(const B *b, const os64_html_node_t *n)
+{
+    return f_replaced(b->env, n);
 }
 
 // Elements that make no box in this browser. An `embed` and an `audio`

@@ -403,7 +403,27 @@ static void layout_cases(void)
         "      atomic canvas 8 58 200 100\n"
         "      atomic canvas 208 108 100 50\n"
         "      atomic canvas 308 8 300 150\n");
+    // CSS Display 3 Appendix B: `display: contents` on a replaced element
+    // computes to `none`, so neither a canvas's fallback nor a frame's
+    // text is laid out; a canvas with scripting off is no replaced element,
+    // and its fallback is its contents.
+    cascade_layout_case("display: contents on a canvas or a frame is none",
+        "<!doctype html><style>canvas,iframe{display:contents}</style>"
+        "<canvas>fallback</canvas><iframe>inside</iframe><p>after</p>", 1000,
+        "page 1000 52\n"
+        "block html 0 0 1000 52\n"
+        "  block body 8 16 984 20\n"
+        "    block p 8 16 984 20\n"
+        "      line 8 16 984 20 base 14\n"
+        "        text \"after\" 8 18 28 16 serif 16\n");
     kEnv.scripting = false;
+    cascade_layout_case("display: contents on a canvas with scripting off is its fallback",
+        "<!doctype html><style>canvas{display:contents}</style><canvas>fallback</canvas>", 1000,
+        "page 1000 36\n"
+        "block html 0 0 1000 36\n"
+        "  block body 8 8 984 20\n"
+        "    line 8 8 984 20 base 14\n"
+        "      text \"fallback\" 8 10 52 16 serif 16\n");
     layout_case("with scripting off a canvas is its fallback",
         "<!doctype html><canvas width=200 height=100>fallback</canvas>", 1000,
         "page 1000 36\n"
