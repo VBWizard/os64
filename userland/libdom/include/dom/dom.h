@@ -128,6 +128,13 @@ typedef struct {
      * script's task; the host records it and must not enter JS. NULL: no
      * one is told, and the binding carries on as the sentence says. */
     void (*broken)(void *opaque, const char *sentence);
+    /* crypto.getRandomValues' and randomUUID's randomness: `length` bytes
+     * (never more than 65,536) written into `out` from the host's
+     * cryptographically strong source, true when every one was. False is
+     * a refusal the page is thrown as an OperationError; what the hook
+     * wrote then is never handed to the page. On the owner thread, inside
+     * a script's task; it must not enter JS. NULL refuses every ask. */
+    bool (*entropy)(void *opaque, uint8_t *out, size_t length);
     void *host_opaque;
 } os64_dom_options_t;
 
@@ -576,8 +583,10 @@ os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node
                                    os64_js_outcome_t *outcome);
 /* Whether anything on the page could hear `type`: a listener, a handler
  * property, or an on<type> content attribute in the document. O(1) unless the
- * tree moved since the last answer, when the attributes are counted again. A
- * type outside the ones the host dispatches is not counted and answers true. */
+ * tree moved since the last answer, when the attributes are counted again.
+ * The types counted are the ones the host dispatches, and online, offline
+ * and languagechange, which window has handlers for and nothing fires; any
+ * other type is not counted and answers true. */
 bool os64_dom_listens(os64_dom_t *dom, const char *type);
 /* Which event types the document's on<type> content attributes name, as a
  * mask os64_dom_handler_bit reads: the walk os64_dom_listens counts with.
@@ -586,7 +595,7 @@ bool os64_dom_listens(os64_dom_t *dom, const char *type);
  * says; os64_dom_listens counts them only with the switch on. */
 uint32_t os64_dom_handler_attributes(const os64_html_document_t *doc);
 /* The bit for `type` in that mask; 0 for a type no attribute can name
- * (DOMContentLoaded, or one outside the types the host dispatches). */
+ * (DOMContentLoaded, or one outside the types os64_dom_listens counts). */
 uint32_t os64_dom_handler_bit(const char *type);
 
 /* TIMERS, in the host's clock (options.now_ms). next answers the earliest due

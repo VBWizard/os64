@@ -204,6 +204,23 @@ int32_t os64_proc_read(uint64_t pid, os64_proc_info_t *out) {
 static int64_t clock_us=10000000, clock_step, geometry_layout_delay;
 static bool geometry_refuse_layout;
 int64_t os64_micros(void) { return clock_us+=clock_step; }
+/* THE SYSTEM'S ENTROPY, faked (libtls's door, which crypto.getRandomValues
+ * reads through scripts.c): a fixed sequence from a fixed seed, so a page
+ * that makes ids from it replays the same every run (REPLAY.md § 3), and
+ * fake_entropy_fail refuses every ask, as a /dev/random that cannot be
+ * read does. */
+static uint64_t fake_entropy_state=0x9E3779B97F4A7C15ull;
+static bool fake_entropy_fail;
+bool os64_tls_entropy(void *out, size_t length) {
+    if(fake_entropy_fail) return false;
+    uint8_t *b=out;
+    for(size_t i=0;i<length;i++) {
+        fake_entropy_state^=fake_entropy_state<<13; fake_entropy_state^=fake_entropy_state>>7;
+        fake_entropy_state^=fake_entropy_state<<17;
+        b[i]=(uint8_t)(fake_entropy_state>>24);
+    }
+    return true;
+}
 uint64_t os64_heap_verify(void) { return 0; }
 static char last_debug[256];
 static size_t teardown_log_count;
@@ -8832,6 +8849,7 @@ static void covered_link_cases(void) {
 }
 
 #include "test_yonder_requests.inc"
+#include "test_yonder_window.inc"
 
 /* A unit that includes this file for the window and its fakes alone (the
  * WPT runner, the replay runner) defines YONDER_HOST_FAKES_ONLY and brings
@@ -8880,6 +8898,7 @@ int main(void)
     if(getenv("YONDER_NO_STREAM")==NULL) diag_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) storage_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) request_cases();
+    if(getenv("YONDER_NO_STREAM")==NULL) window_cases();
     webfont_cases();
     paint_cost_cases();
     whole_view_cases();

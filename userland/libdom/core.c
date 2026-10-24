@@ -205,6 +205,66 @@ static JSValue dialog(JSContext *ctx, JSValueConst self, int argc,
     return magic == 1 ? JS_FALSE : magic == 2 ? JS_NULL : JS_UNDEFINED;
 }
 
+/* window.window and window.document are [LegacyUnforgeable] (HTML
+ * § Window): own accessors of the global with a getter and no setter,
+ * neither configurable, so no page can delete or redefine them, a `let
+ * document` at a script's top level is the SyntaxError a browser throws,
+ * and an assignment is ignored outside strict mode (a TypeError in it), as
+ * browsers ignore one. This is the binding's one definition of each.
+ *
+ * They are read on nearly every line of a page's script, so each getter is
+ * as short as a getter can be: window's answers the global, and
+ * document's answers the document's wrapper it holds (d_held_getter). */
+static JSValue window_get(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv)
+{
+    (void)self;
+    (void)argc;
+    (void)argv;
+    return JS_GetGlobalObject(ctx);
+}
+
+static int unforgeable_window(JSContext *ctx, JSValueConst global)
+{
+    JSAtom atom = JS_NewAtom(ctx, "window");
+    if (atom == JS_ATOM_NULL) return -1;
+    JSValue get = JS_NewCFunction2(ctx, window_get, "get window", 0, JS_CFUNC_generic, 0);
+    int result = JS_IsException(get)
+        ? -1 : JS_DefinePropertyGetSet(ctx, global, atom, get, JS_UNDEFINED, JS_PROP_ENUMERABLE);
+    JS_FreeAtom(ctx, atom);
+    return result;
+}
+
+/* A getter that answers the value it holds (its data[1]) once the binding
+ * is open, the one check every binding member makes first. It reads no
+ * native state and enters nothing, so d_context's ABI identity, which
+ * guards an entry into the engine, is not asked. The value is held by
+ * the function, so it lives as long as the property does; after drain the
+ * closed binding refuses it, as d_context refuses every member. */
+static JSValue held_get(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                        JSValue *data)
+{
+    (void)self;
+    (void)argc;
+    (void)argv;
+    (void)magic;
+    JSClassID id;
+    os64_dom_t *dom = JS_GetAnyOpaque(data[0], &id);
+    if (dom == NULL || dom->closed) return d_error(ctx, "InvalidStateError", "DOM binding is closed");
+    return JS_DupValue(ctx, data[1]);
+}
+
+int d_held_getter(os64_dom_t *dom, JSContext *ctx, JSValueConst target, const char *name, JSValueConst held,
+                  int flags)
+{
+    JSAtom atom = JS_NewAtom(ctx, name);
+    if (atom == JS_ATOM_NULL) return -1;
+    JSValueConst data[2] = {dom->anchor->value, held};
+    JSValue get = JS_NewCFunctionData(ctx, held_get, 0, 0, 2, data);
+    int result = JS_IsException(get) ? -1 : JS_DefinePropertyGetSet(ctx, target, atom, get, JS_UNDEFINED, flags);
+    JS_FreeAtom(ctx, atom);
+    return result;
+}
+
 static void construction_error(JSContext *ctx, os64_js_outcome_t *outcome)
 {
     JSValue error = JS_GetException(ctx);
@@ -319,18 +379,21 @@ os64_dom_t *os64_dom_create(os64_js_runtime_t *runtime, os64_html_document_t *do
     dom->options.url = NULL;
     JSValue global = JS_GetGlobalObject(ctx);
     if (JS_IsException(global)) goto fail;
+    /* The document's wrapper is made now and held by `document`'s getter:
+     * the wrapper table keeps one wrapper per node for the page's life, so
+     * the one made here is the one every read answers. */
     JSValue doc = d_wrap(dom, ctx, document->document);
-    int installed = JS_IsException(doc) ? -1 : JS_SetPropertyStr(ctx, global, "document", doc);
-    if (installed >= 0) installed = JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
-    /* A window with no frames is its own self, frames, parent and top
-     * (HTML § Window): the first three are [Replaceable], so a page may
-     * assign over them, and `top` is [LegacyUnforgeable] and read-only.
-     * `frames` is the window, so its `length` is the window's: no frames. */
+    int installed = JS_IsException(doc) ? -1 : unforgeable_window(ctx, global);
+    if (installed >= 0) installed = d_held_getter(dom, ctx, global, "document", doc, JS_PROP_ENUMERABLE);
+    JS_FreeValue(ctx, doc);
+    /* The window is its own self and frames (HTML § Window), both
+     * [Replaceable], so a page may assign over them. Its top, parent and
+     * length are its browsing context's answers, asked as P1-W's members
+     * are (browsing.c, d_browsing_classic): for a window with no frames,
+     * itself, itself and 0. */
     if (installed >= 0) installed = JS_DefinePropertyValueStr(ctx, global, "self", JS_DupValue(ctx, global), JS_PROP_C_W_E);
     if (installed >= 0) installed = JS_DefinePropertyValueStr(ctx, global, "frames", JS_DupValue(ctx, global), JS_PROP_C_W_E);
-    if (installed >= 0) installed = JS_DefinePropertyValueStr(ctx, global, "parent", JS_DupValue(ctx, global), JS_PROP_C_W_E);
-    if (installed >= 0) installed = JS_DefinePropertyValueStr(ctx, global, "top", JS_DupValue(ctx, global), JS_PROP_ENUMERABLE);
-    if (installed >= 0) installed = JS_DefinePropertyValueStr(ctx, global, "length", JS_NewInt32(ctx, 0), JS_PROP_C_W_E);
+    if (installed >= 0) installed = d_browsing_classic(dom, ctx, global);
     if (installed >= 0) installed = d_method(dom, ctx, global, "alert", dialog, 1, 0);
     if (installed >= 0) installed = d_method(dom, ctx, global, "confirm", dialog, 1, 1);
     if (installed >= 0) installed = d_method(dom, ctx, global, "prompt", dialog, 2, 2);

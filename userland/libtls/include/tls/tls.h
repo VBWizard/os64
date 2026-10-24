@@ -132,5 +132,12 @@ OS64_TLS_API os64_tls_store_status_t os64_tls_trust_reload(os64_tls_trust **curr
 OS64_TLS_API os64_tls_store_status_t os64_tls_trust_reload_path(os64_tls_trust **current, const char *path,
                                                              os64_tls_store_report_t *report);
 OS64_TLS_API const char *os64_tls_store_status_name(os64_tls_store_status_t status);
+
+// `length` bytes from the system's entropy (/dev/random), the source every
+// TLS handshake's randomness is drawn from: true when every byte was
+// written, false when the source could not be opened or ran short (what
+// was written then is not to be used). Any length; the source serves at
+// most a page per read, and this reads until it has them all.
+OS64_TLS_API bool os64_tls_entropy(void *out, size_t length);
 #undef OS64_TLS_API
 #endif

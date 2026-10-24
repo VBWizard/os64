@@ -6,6 +6,7 @@
 #include "os64/proc.h"
 #include "os64/str.h"
 #include "os64/io.h"
+#include "tls/tls.h"
 
 /* Read on the window owner thread, including after a page owner is freed. */
 static size_t teardown_leaks;
@@ -247,6 +248,14 @@ static uint32_t zoom(void *opaque)
     return s->options.zoom != NULL ? s->options.zoom(s->options.opaque) : 1000;
 }
 
+// crypto.getRandomValues' and randomUUID's bytes: the system's entropy, read
+// by the door every TLS handshake draws from (libtls's os64_tls_entropy).
+static bool entropy(void *opaque, uint8_t *out, size_t length)
+{
+    (void)opaque;
+    return os64_tls_entropy(out, length);
+}
+
 // The page's storage providers: the window's store (storage.h), with the
 // page's record for a commit the store was too full to keep.
 static uint64_t local_identity(void *opaque, const char *origin)
@@ -351,6 +360,7 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
         options.screen = s->options.screen;
     options.zoom = zoom;
     options.broken = broken;
+    options.entropy = entropy;
     options.host_opaque = s;
     s->dom = os64_dom_create(s->runtime, s->doc, s->state, &options, out);
     os64_dom_set_geometry(s->dom, s->options.geometry, s->options.opaque);

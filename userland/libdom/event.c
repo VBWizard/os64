@@ -10,7 +10,8 @@ static JSClassID event_slot;
 static const char *const kinds[D_EVENT_COUNT] = {
     "click", "mousedown", "mouseup", "mouseover", "mouseout", "mousemove",
     "keydown", "keypress", "keyup", "input", "change", "submit", "reset",
-    "focus", "blur", "load", "scroll", "resize", "popstate", "hashchange", "DOMContentLoaded"
+    "focus", "blur", "load", "scroll", "resize", "popstate", "hashchange", "online", "offline",
+    "languagechange", "DOMContentLoaded"
 };
 
 enum { PHASE_NONE, PHASE_CAPTURING, PHASE_AT_TARGET, PHASE_BUBBLING };
@@ -50,15 +51,16 @@ static bool handler_on(const os64_dom_t *dom, int kind)
 }
 
 /* HTML's "window-reflecting body element event handler set" and the body's
- * WindowEventHandlers, as far as the types dispatched here reach: the body's
+ * WindowEventHandlers, as far as the types named here reach: the body's
  * onload, onfocus and onblur are window's, and so are its onscroll,
- * onresize, onpopstate and onhashchange (handlers only with the switch on,
- * handler_on). */
+ * onresize, onpopstate, onhashchange, ononline, onoffline and
+ * onlanguagechange (handlers only with the switch on, handler_on). */
 static bool window_reflecting(int kind)
 {
     return kind == D_EVENT_LOAD || kind == D_EVENT_FOCUS || kind == D_EVENT_BLUR ||
         kind == D_EVENT_SCROLL || kind == D_EVENT_RESIZE || kind == D_EVENT_POPSTATE ||
-        kind == D_EVENT_HASHCHANGE;
+        kind == D_EVENT_HASHCHANGE || kind == D_EVENT_ONLINE || kind == D_EVENT_OFFLINE ||
+        kind == D_EVENT_LANGUAGECHANGE;
 }
 
 static void event_finalizer(JSRuntime *rt, JSValue value)

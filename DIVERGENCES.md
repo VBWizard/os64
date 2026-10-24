@@ -273,3 +273,11 @@ page's script can see them.
   answered by `Attr.prototype`, which shadows each of Node's members with
   the standard's answer (LIBDOM.md § Attributes as nodes); the shared
   member takes a tree node, which an Attr is not.
+- **`window.close()` never closes the window.** HTML lets a script close a
+  top-level window whose session history holds a single entry (a page
+  opened in a new window, or the first page of one). In yonder the window
+  is the person's: no page closes it, and `closed` stays false
+  (`browsing.c`; LIBDOM.md § P1-W's rows).
+- **`crypto` has no `subtle`** on an `https:` page, where browsers have
+  SubtleCrypto: `getRandomValues` and `randomUUID` are whole, and pages
+  detect `crypto.subtle` apart from them (WINDOW_DOCUMENT.md, ruling 1).

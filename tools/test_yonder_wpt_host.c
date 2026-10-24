@@ -33,7 +33,9 @@
  * manifest-listed page's is. A page the expectation file excludes is not
  * run.
  *
- * WHAT IS SERVED: the page is http://wpt.test/<dir>/<name>; every script and
+ * WHAT IS SERVED: the page is http://wpt.test/<dir>/<name>, or
+ * https://wpt.test/<dir>/<name> for a page whose name says `.https.`, as
+ * WPT's own runner loads one; every script and
  * sheet the page asks for, and every request a script makes (fetch,
  * XMLHttpRequest: the real fetch job, against libfetch faked by
  * test_fetch_fake.inc), whose address names one of the hosts of
@@ -110,6 +112,7 @@
 #include <unistd.h>
 
 #define WPT_ORIGIN "http://wpt.test/"
+#define WPT_ORIGIN_HTTPS "https://wpt.test/"
 #define WPT_REPORT_PATH "resources/testharnessreport.js"
 #define WPT_RESULTS_ID "os64-wpt-results"
 #define WPT_TICK_MS 10
@@ -871,7 +874,10 @@ static void wpt_run(const wpt_page_t *page, wpt_outcome_t *out) {
     }
     if(page->kind==WPT_HTML) long_timeout=wpt_html_meta(html,len,"timeout","long",NULL);
     if(page->long_timeout>=0) long_timeout=page->long_timeout;
-    char *url=wpt_fmt("%s%s/%s",WPT_ORIGIN,wpt_dir,page->name);
+    /* A test WPT names `.https.` is one its runner loads over https, which
+     * a secure context's members ([SecureContext]) need. */
+    char *url=wpt_fmt("%s%s/%s",strstr(page->name,".https.")!=NULL ? WPT_ORIGIN_HTTPS : WPT_ORIGIN,
+                      wpt_dir,page->name);
     wpt_serve_broken=false;
     fake_fetch_reset();
     fake_resolve=wpt_fetch_resolve;

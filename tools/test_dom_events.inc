@@ -377,7 +377,8 @@ static void dom_navigation_cases(void)
         "assert(location.protocol==='http:'&&location.host==='example.test:8080'&&location.hostname==='example.test');"
         "assert(location.port==='8080'&&location.pathname==='/dir/page.html'&&location.search==='?q=1');"
         "assert(location.hash==='#top'&&location.origin==='http://example.test:8080'&&document.location===location);"
-        "window.status='ignored';assert(window.status==='');"
+        "assert(window.status==='');window.status='kept';assert(window.status==='kept');"
+        "window.status=5;assert(window.status==='5');window.defaultStatus='ignored';assert(defaultStatus==='');"
         "throws('InvalidStateError',()=>document.write('x'));"
         "try{document.writeln('x')}catch(e){assert(e.message==='document.write after the parse has ended would replace the document, which this browser does not do',e.message)}"
         "location.href='first.html';location.assign('../second.html');",

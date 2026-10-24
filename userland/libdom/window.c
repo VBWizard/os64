@@ -75,7 +75,7 @@ static bool resolve(os64_dom_t *dom, const char *reference, char *out, size_t ca
 enum {
     L_HREF, L_PROTOCOL, L_HOST, L_HOSTNAME, L_PORT, L_PATHNAME, L_SEARCH, L_HASH, L_ORIGIN,
     L_ASSIGN, L_REPLACE, L_RELOAD, L_TO_STRING,
-    H_BACK, H_FORWARD, H_GO, H_LENGTH, W_STATUS, W_WRITE, W_WRITELN, W_OPEN, W_CLOSE
+    H_BACK, H_FORWARD, H_GO, H_LENGTH, W_STATUS, W_DEFAULT_STATUS, W_WRITE, W_WRITELN, W_OPEN, W_CLOSE
 };
 
 /* document.write is the host's parser taking the text (LIBDOM.md
@@ -302,9 +302,19 @@ static JSValue window_member(JSContext *ctx, JSValueConst self, int argc, JSValu
             ? dom->history_host.length(dom->history_host.opaque) : 1;
         return JS_NewUint32(ctx, entries > 0 ? entries : 1);
     }
-    case W_STATUS:
-        /* The status line is the browser's; the old web assigns window.status
-         * on every mouseover and expects no complaint. */
+    case W_STATUS: {
+        /* HTML keeps the string last set, and reads it back; the status
+         * line itself stays the browser's, which shows none of it. */
+        if (!set) return JS_DupValue(ctx, dom->status->value);
+        JSValue text = JS_ToString(ctx, value);
+        if (JS_IsException(text)) return text;
+        JS_FreeValue(ctx, dom->status->value);
+        dom->status->value = text;
+        return JS_UNDEFINED;
+    }
+    case W_DEFAULT_STATUS:
+        /* No standard has defaultStatus: the old web assigns it and expects
+         * no complaint, and it reads empty. */
         return set ? JS_UNDEFINED : JS_NewString(ctx, "");
     case W_WRITE: case W_WRITELN:
         if (windowless(dom, self)) return d_error(ctx, "InvalidStateError", WRITE_UNOPENED);
@@ -589,14 +599,20 @@ int d_window_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         JS_IsException(object_with(dom, ctx, &dom->history, history,
                                    sizeof(history) / sizeof(history[0]))))
         return -1;
+    dom->status = d_retain(dom, ctx, JS_NewString(ctx, ""));
+    if (dom->status == NULL) return -1;
     JSValueConst document_prototype = dom->prototypes[D_PROTO_DOCUMENT]->value;
     JSValueConst element_prototype = dom->prototypes[D_PROTO_ELEMENT]->value;
     JSValueConst form_prototype = dom->prototypes[D_PROTO_FORM]->value;
+    /* history is a read-only accessor (HTML § Window): an assignment to it
+     * is ignored outside strict mode, a TypeError in it. Its getter answers
+     * the one history object, held, as cheaply as a getter can. */
     if (d_accessor(dom, ctx, global, "location", location_property, 0, true) < 0 ||
         d_accessor(dom, ctx, document_prototype, "location", location_property, 0, true) < 0 ||
-        JS_SetPropertyStr(ctx, global, "history", JS_DupValue(ctx, dom->history->value)) < 0 ||
+        d_held_getter(dom, ctx, global, "history", dom->history->value,
+                      JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE) < 0 ||
         d_accessor(dom, ctx, global, "status", window_member, W_STATUS, true) < 0 ||
-        d_accessor(dom, ctx, global, "defaultStatus", window_member, W_STATUS, true) < 0 ||
+        d_accessor(dom, ctx, global, "defaultStatus", window_member, W_DEFAULT_STATUS, true) < 0 ||
         d_method(dom, ctx, document_prototype, "write", window_member, 1, W_WRITE) < 0 ||
         d_method(dom, ctx, document_prototype, "writeln", window_member, 1, W_WRITELN) < 0 ||
         d_method(dom, ctx, document_prototype, "open", window_member, 0, W_OPEN) < 0 ||

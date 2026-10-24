@@ -55,6 +55,17 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"XMLHttpRequest", "XMLHttpRequestEventTarget", "XMLHttpRequestUpload", "ProgressEvent",
                            NULL},
      d_xhr_install},
+    {(const char *const[]){"opener", "closed", "clientInformation", "isSecureContext", "frameElement", "origin",
+                           "crossOriginIsolated", "originAgentCluster", "close", "moveTo", "moveBy", "resizeTo",
+                           "resizeBy", "captureEvents", "releaseEvents", "queueMicrotask", "ononline",
+                           "onoffline", "onlanguagechange", NULL},
+     d_browsing_install},
+    {(const char *const[]){"locationbar", "menubar", "personalbar", "scrollbars", "statusbar", "toolbar", "BarProp",
+                           NULL},
+     d_bars_install},
+    {(const char *const[]){"external", "External", NULL}, d_external_install},
+    /* After the encoding row, whose DataView it tells a view by. */
+    {(const char *const[]){"crypto", "Crypto", NULL}, d_crypto_install},
 };
 
 int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)

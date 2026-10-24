@@ -230,6 +230,7 @@ the rows that say so are the whole of what a replay fakes.
 | pictures and fonts | not fetched | — | stated: their fetch-decided outcomes are not reproduced (§ 5) |
 | the screen | the harness | — | stated: `screen`, and the device-width, device-height and device-aspect-ratio media features, answer libdom's default, 1024 × 768, not the display the page was kept on |
 | page storage | the harness | — | stated: `localStorage` and `sessionStorage` start empty and live in memory for the replay alone; no profile folder is read or written |
+| the system's randomness | the harness | — | stated: `crypto.getRandomValues` and `crypto.randomUUID` read a fixed sequence from a fixed seed, begun afresh for each page (each replays in a process of its own), not the bytes the page was given where it was kept |
 | how the page was reached | the harness | — | stated: by its address, always (`performance.navigation.type` 0, the navigation entry's `navigate`), whether it was kept on a reload, Back or a link |
 | the redirects followed | the harness | — | stated: `redirectCount` is 0; the record keeps no count |
 | the session history | the harness | — | stated: every page arrives as a new way in a window with no history: `history.length` 1, `history.state` null, no scroll restored, whether it was kept on a reload, Back, Forward or a link, and whatever entries were around it |
