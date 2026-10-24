@@ -289,6 +289,17 @@ void gui_damage_add_locked(rect_t screen_rect)
 		s_composite_counts.collapses++;
 }
 
+uint32_t gui_damage_take_locked(rect_t *out, uint32_t cap)
+{
+	uint32_t n = kPendingDamageCount < cap ? kPendingDamageCount : cap;
+	for (uint32_t i = 0; i < n; i++)
+		out[i] = kPendingDamage[i];
+	for (uint32_t i = n; i < kPendingDamageCount; i++)
+		kPendingDamage[i - n] = kPendingDamage[i];
+	kPendingDamageCount -= n;
+	return n;
+}
+
 void gui_damage_add(rect_t screen_rect)
 {
 	uint64_t flags = gui_lock(GUI_LOCK_DAMAGE);

@@ -1,8 +1,10 @@
-// titletest — os64_gui_window_set_title (syscall 65): an owner renames its
-// window, the encoding flag it passes is the one get_state reports after, the
-// geometry stays put, and every refusal create makes of a title is made here
-// too, leaving the encoding (the half ring 3 can read back) as it was.
-// Another task's window is NOT_OWNER. Skips on a boot without the GUI.
+// titletest — os64_gui_window_set_title (syscall 65) as ring 3 can see it:
+// the owner's calls are answered 0, the encoding bit passed is the one
+// get_state reports after, a rename moves no geometry and sends no resize,
+// every refusal create makes of a title is made here too and leaves the
+// encoding bit as it was, and another task's window is NOT_OWNER. The title
+// text and the repaint are not visible from here; the kernel's
+// test_window_title checks those. Skips on a boot without the GUI.
 //
 // `titletest --hold` is the eyes-on half: it opens a window named
 // "titletest: before", renames it to "titletest: AFTER" three seconds later,
