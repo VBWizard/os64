@@ -62,6 +62,27 @@ int64_t yonder_storage_clear(yonder_storage_t *storage);
 // wrong. For the status line.
 const char *yonder_storage_problem(const yonder_storage_t *storage);
 
+// ── The profile's other files (the cookie file, cookies.c) ──────────────
+//
+// The same three rules page storage keeps for its own, for a file of the
+// profile's: its folders made when it is first written, a write published
+// by a temp beside it and a rename, and the temps a crash left removed.
+
+// The room a temp's name takes past its file's path: a full path shorter
+// than OS64_PATH_MAX by this much has a temp.
+#define YONDER_PROFILE_TEMP_SUFFIX_MAX (1 + 20 + 1 + 10 + 4)
+// Every folder of `path` that is missing, made, parents first. False when
+// one cannot be, or a name on the way is a file.
+bool yonder_profile_make_dirs(const char *path);
+// `bytes` written whole and synced to a temp beside `path`, named into
+// `temp` with the next of `*count`'s numbers, for a rename to publish.
+// False with no temp left behind.
+bool yonder_profile_temp_write(uint32_t *count, const char *path, const void *bytes, size_t length, char *temp,
+                               size_t cap);
+// `path`'s temps whose writer is gone (another yonder's that died, or this
+// one's), removed. A live yonder's temp stays.
+void yonder_profile_sweep(const char *path);
+
 // An origin as a file name: every byte outside [A-Za-z0-9.-] as %XX, so
 // `https://example.com:8443` is `https%3A%2F%2Fexample.com%3A8443`. False
 // when it does not fit `cap`.

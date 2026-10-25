@@ -7,9 +7,11 @@
 // whether pictures and sheets stay on disk (CACHE.md), with usage and an
 // Empty button; the default zoom; dark pages (`appearance = dark`); and
 // whether animations run (`animations = off`) and whether pages are told
-// to reduce motion (`motion = reduce`); and whether pages get the Modern
-// Web arc's surface (`modern = off`), with Clear page storage beside it.
-// Apply changes this window; Save as default writes to yonder.conf.
+// to reduce motion (`motion = reduce`); whether pages get the Modern
+// Web arc's surface (`modern = off`), with Clear page storage beside it;
+// and whether cookies are taken and kept (`cookies = on | session | off`),
+// with Clear cookies beside them. Apply changes this window; Save as
+// default writes to yonder.conf.
 //
 // The dialog is a window of its own, and yonder's loop waits on its own
 // window alone, so a thread waits on the dialog's and rings `bell` on
@@ -20,6 +22,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "cookies.h"
 #include "way/cache.h"
 
 // A script task's time limit, in whole seconds (DOM_D7.md § Policy). The
@@ -31,21 +34,25 @@
 // Opens with the current choices, or focuses the existing dialog.
 // Callbacks receive a validated agent/script policy (the switch and the
 // time limit in seconds), zoom (thousandths, whole percentages from 25
-// to 500), dark pages, the animations' switches and the modern switch on
-// the window thread.
+// to 500), dark pages, the animations' switches, the modern switch and the
+// cookies' mode on the window thread.
 void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
                           void (*use)(const char *agent, bool scripts, uint32_t script_seconds),
                           way_cache_t *cache, bool scripts, uint32_t script_seconds, uint32_t zoom,
                           void (*zoom_use)(uint32_t thousandths), bool dark,
                           void (*dark_use)(bool dark), bool run, bool reduce,
                           void (*motion_use)(bool run, bool reduce), bool modern,
-                          void (*modern_use)(bool modern));
+                          void (*modern_use)(bool modern), yonder_cookies_mode_t cookies,
+                          void (*cookies_use)(yonder_cookies_mode_t mode));
 // The bell rang: what arrived at the dialog is handled and painted.
 void yonder_settings_rung(void);
 // What the dialog's "Clear page storage" does, on the window thread: it
 // writes the sentence the dialog's status line then says. Set once, before
 // the dialog opens; with none, the button says there is nothing to clear.
 void yonder_settings_on_clear_storage(void (*clear)(char *line, size_t cap));
+// The same for "Clear cookies"; with none, the button says this window
+// keeps no cookies to clear.
+void yonder_settings_on_clear_cookies(void (*clear)(char *line, size_t cap));
 // Closes the dialog if it is open.
 void yonder_settings_close(void);
 
@@ -67,6 +74,11 @@ bool yonder_settings_saved_scripts(void);
 // as on, and `*refused` (may be NULL) says so for the status line;
 // otherwise it is NULL.
 bool yonder_settings_saved_modern(const char **refused);
+// THE COOKIES' SWITCH (cookies.h): `cookies = on | session | off`, without
+// case. Absent it is on; a value that is none of the three is read as on,
+// and `*refused` (may be NULL) says so for the status line; otherwise it
+// is NULL.
+yonder_cookies_mode_t yonder_settings_saved_cookies(const char **refused);
 // The saved script time limit (`script_seconds = 10`), whole seconds from
 // YONDER_SCRIPT_SECONDS_MIN to _MAX; the default when absent or not one.
 uint32_t yonder_settings_saved_script_seconds(void);
@@ -83,7 +95,7 @@ bool yonder_settings_saved_keep_pages(void);
 
 // THE PROFILE FOLDER (YONDER_HONEY_DO.md § Where yonder's files live):
 // `profile = <dir>`, where the person's own files are kept, page storage
-// first among them. Into `out` without a trailing slash; absent, it is
+// and cookies among them. Into `out` without a trailing slash; absent, it is
 // YONDER_PROFILE_DEFAULT. A value that is not a full path, or too long for
 // `out`, or a yonder.conf that cannot be read, is refused for the default,
 // and the answer is then the sentence for the status line (NULL

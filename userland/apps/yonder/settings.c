@@ -30,16 +30,18 @@
 #define CONF_MOTION "motion"
 #define CONF_MODERN "modern"
 #define CONF_PROFILE "profile"
+#define CONF_COOKIES "cookies"
 
 // The list's height, in rows; the dialog's rows are a line of words, the
 // list, field, cache row, zoom row, the page-script switch with the
-// script time limit beside it, the animations' two switches, and the
-// modern switch with Clear page storage beside it. Cache usage appears on
+// script time limit beside it, the animations' two switches, the
+// modern switch with Clear page storage beside it, and the cookies' two
+// switches with Clear cookies beside them. Cache usage appears on
 // the dialog's status line; a body
 // must fit the helper's window, which is sized for this many rows and no
 // more.
 #define LIST_ROWS 6
-#define BODY_ROWS (LIST_ROWS + 7)
+#define BODY_ROWS (LIST_ROWS + 8)
 
 // Whole-percent zoom limits; yonder's keyboard steps lie between them.
 #define ZOOM_MIN 25
@@ -81,6 +83,14 @@ static struct {
     // (yonder_settings_on_clear_storage), as Empty the cache does.
     os64_ui_widget_t clear;
     void (*clear_storage)(char *line, size_t cap);
+    // Cookies, on a row of their own: whether any are taken, and whether
+    // they outlive the window (`cookies = on | session | off`, the second
+    // switch meaning nothing while the first is off); "Clear cookies" at
+    // its right end acts at once.
+    os64_ui_checkbox_t accept, outlive;
+    void (*cookies_use)(yonder_cookies_mode_t mode);
+    os64_ui_widget_t clear_cookies;
+    void (*clear_jar)(char *line, size_t cap);
     // The relay: `thread` waits for events at the dialog's window and
     // rings `bell` on `window`, then waits on `pumped` until the loop has
     // handled them — one ring outstanding at a time, so it never spins on
@@ -260,6 +270,25 @@ const char *yonder_settings_saved_profile(char *out, size_t cap)
         return kRefused;
     }
     return NULL;
+}
+
+yonder_cookies_mode_t yonder_settings_saved_cookies(const char **refused)
+{
+    char value[16];
+    yonder_cookies_mode_t mode = YONDER_COOKIES_ON;
+    if (refused != NULL)
+        *refused = NULL;
+    int64_t rc = os64_conf_get(CONF_NAME, CONF_COOKIES, value, sizeof(value));
+    if (rc == OS64_CONF_NO_FILE || rc == OS64_CONF_NO_KEY)
+        return mode;
+    if (rc != 0 || !yonder_cookies_mode_of(value, &mode)) {
+        static const char kRefused[] = "yonder.conf's cookies is not on, session or off; cookies are kept.";
+        os64_debug_log("yonder: yonder.conf's cookies is not on, session or off; using on");
+        if (refused != NULL)
+            *refused = kRefused;
+        return YONDER_COOKIES_ON;
+    }
+    return mode;
 }
 
 bool yonder_settings_saved_keep_pages(void)
@@ -485,7 +514,40 @@ static bool arrange(os64_ui_settings_t *d, os64_gui_rect_t b, int32_t row, bool 
     clear_w += 2 * row;
     place(&s.modern.w, (os64_gui_rect_t){b.x, last + 4 * row, modern_w + 2 * row, row}, staged);
     place(&s.clear, (os64_gui_rect_t){b.x + b.w - clear_w, last + 4 * row, clear_w, row}, staged);
+    // The cookies' switches side by side, Clear cookies at the right.
+    int32_t accept_w = 0, outlive_w = 0, forget_w = 0;
+    if (os64_ui_text_measure(&d->ui, OS64_FONT_ROLE_UI, s.accept.w.text, os64_strlen(s.accept.w.text),
+                             &accept_w) ||
+        os64_ui_text_measure(&d->ui, OS64_FONT_ROLE_UI, s.outlive.w.text, os64_strlen(s.outlive.w.text),
+                             &outlive_w) ||
+        os64_ui_text_measure(&d->ui, OS64_FONT_ROLE_UI, s.clear_cookies.text, os64_strlen(s.clear_cookies.text),
+                             &forget_w))
+        return false;
+    accept_w += 2 * row;
+    outlive_w += 2 * row;
+    forget_w += 2 * row;
+    if (accept_w + row + outlive_w + row + forget_w > b.w)
+        return false;
+    int32_t cookies_y = last + 5 * row;
+    place(&s.accept.w, (os64_gui_rect_t){b.x, cookies_y, accept_w, row}, staged);
+    place(&s.outlive.w, (os64_gui_rect_t){b.x + accept_w + row, cookies_y, outlive_w, row}, staged);
+    place(&s.clear_cookies, (os64_gui_rect_t){b.x + b.w - forget_w, cookies_y, forget_w, row}, staged);
     return true;
+}
+
+void yonder_settings_on_clear_cookies(void (*clear)(char *line, size_t cap))
+{
+    s.clear_jar = clear;
+}
+
+static void cookies_cleared(os64_ui_widget_t *w, void *user)
+{
+    (void)w;
+    (void)user;
+    char line[160] = "This window keeps no cookies to clear.";
+    if (s.clear_jar != NULL)
+        s.clear_jar(line, sizeof(line));
+    os64_ui_settings_report(&s.d, line);
 }
 
 void yonder_settings_on_clear_storage(void (*clear)(char *line, size_t cap))
@@ -546,6 +608,10 @@ static void apply(os64_ui_settings_t *d, bool save)
     s.dark_use(s.dark.checked);
     s.motion_use(s.run.checked, s.reduce.checked);
     s.modern_use(s.modern.checked);
+    yonder_cookies_mode_t cookies = !s.accept.checked ? YONDER_COOKIES_OFF
+                                    : s.outlive.checked ? YONDER_COOKIES_ON : YONDER_COOKIES_SESSION;
+    if (s.cookies_use != NULL)
+        s.cookies_use(cookies);
     const char *name = yonder_agent_name(agent);
     // A cache that cannot keep anything has no box to tick, and saves no
     // `cache = off` that would outlive whatever stopped it.
@@ -554,7 +620,7 @@ static void apply(os64_ui_settings_t *d, bool save)
         way_cache_enable(s.cache, keeping);
         way_cache_set_cap(s.cache, mb * 1024 * 1024);
     }
-    char line[200], kept[40];
+    char line[256], kept[40];
     os64_snprintf(kept, sizeof(kept), "keeping up to %lu MB", (unsigned long)mb);
     bool saved = !save || (os64_conf_set(CONF_NAME, CONF_AGENT, agent) == 0 &&
                            os64_conf_set(CONF_NAME, CONF_SCRIPTS,
@@ -568,6 +634,7 @@ static void apply(os64_ui_settings_t *d, bool save)
                            os64_conf_set(CONF_NAME, CONF_MOTION,
                                           s.reduce.checked ? "reduce" : "no-preference") == 0 &&
                            os64_conf_set(CONF_NAME, CONF_MODERN, s.modern.checked ? "on" : "off") == 0 &&
+                           os64_conf_set(CONF_NAME, CONF_COOKIES, yonder_cookies_mode_word(cookies)) == 0 &&
                            (!s.usable || (os64_conf_set(CONF_NAME, CONF_CACHE,
                                                         keeping ? "on" : "off") == 0 &&
                                           os64_conf_set(CONF_NAME, CONF_CACHE_MB,
@@ -575,11 +642,14 @@ static void apply(os64_ui_settings_t *d, bool save)
     if (!saved)
         os64_strcopy(line, sizeof(line), "Applied here, but yonder.conf could not be written.");
     else
-        os64_snprintf(line, sizeof(line), "%s: zoom %d%%%s, asking as %s, %s, scripts %s (%u s)%s%s",
+        os64_snprintf(line, sizeof(line), "%s: zoom %d%%%s, asking as %s, %s, scripts %s (%u s)%s%s%s",
                       save ? "Saved" : "Applied", (int)(zoom / 10), s.dark.checked ? ", dark" : "",
                       name != NULL ? name : "the agent typed", keeping ? kept : "keeping nothing",
                       s.scripts.checked ? "on" : "off", (unsigned)seconds,
                       s.modern.checked ? "" : ", modern web off",
+                      cookies == YONDER_COOKIES_OFF       ? ", no cookies"
+                      : cookies == YONDER_COOKIES_SESSION ? ", cookies until yonder closes"
+                                                          : "",
                       save ? ", here and in new windows." : ", here.");
     os64_ui_settings_report(d, line);
 }
@@ -590,7 +660,8 @@ void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
                           void (*zoom_use)(uint32_t thousandths), bool dark,
                           void (*dark_use)(bool dark), bool run, bool reduce,
                           void (*motion_use)(bool run, bool reduce), bool modern,
-                          void (*modern_use)(bool modern))
+                          void (*modern_use)(bool modern), yonder_cookies_mode_t cookies,
+                          void (*cookies_use)(yonder_cookies_mode_t mode))
 {
     // Open already: the helper brings it forward and keeps what was typed.
     if (!os64_ui_settings_open(&s.d, parent, "yonder Settings", BODY_ROWS, arrange, apply, NULL))
@@ -600,6 +671,7 @@ void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
     s.dark_use = dark_use;
     s.motion_use = motion_use;
     s.modern_use = modern_use;
+    s.cookies_use = cookies_use;
     s.cache = cache;
     s.usable = false;
     s.window = parent;
@@ -634,10 +706,14 @@ void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
     // with its runtime, and its sheets are read with the same answer.
     os64_ui_checkbox(&s.modern, "Modern web surface (from the next page)", modern, NULL, NULL);
     os64_ui_button(&s.clear, "Clear page storage", cleared, NULL);
+    os64_ui_checkbox(&s.accept, "Accept cookies", cookies != YONDER_COOKIES_OFF, NULL, NULL);
+    os64_ui_checkbox(&s.outlive, "Keep them when yonder closes", cookies == YONDER_COOKIES_ON, NULL, NULL);
+    os64_ui_button(&s.clear_cookies, "Clear cookies", cookies_cleared, NULL);
     os64_ui_widget_t *kids[] = {&s.heading, &s.list.w,     &s.field.w, &s.keep.w,  &s.size.w,
                                 &s.mb,      &s.empty,      &s.zoom_words, &s.zoom.w, &s.percent,
                                 &s.scripts.w, &s.limit_words, &s.limit.w, &s.limit_value,
-                                &s.dark.w, &s.run.w, &s.reduce.w, &s.modern.w, &s.clear};
+                                &s.dark.w, &s.run.w, &s.reduce.w, &s.modern.w, &s.clear,
+                                &s.accept.w, &s.outlive.w, &s.clear_cookies};
     for (size_t i = 0; i < sizeof(kids) / sizeof(kids[0]); i++)
         os64_ui_add_child(&s.d.body, kids[i]);
     os64_ui_listbox_set(&s.d.ui, &s.list, yonder_agent_npresets(), selected);
