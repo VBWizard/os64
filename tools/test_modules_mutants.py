@@ -79,6 +79,7 @@ mutants = [
      '    (void)rethrower;', (SCRIPTS,)),
     ('dynamic-import-not-fetched', MODULES_C, '    if (m->net.run == NULL || !m->net.run(m->net.opaque, name, &response)) {',
      '    if (true) {', (SCRIPTS,)),
+    ('takeover-unwalked', MODULES_C, '        m->taken = true;\n', '', (SCRIPTS,)),
     # 3. the script host's order and wiring
     ('parser-module-not-deferred', SCRIPTS_C,
      'parser && os64_html_attr(script, "async") == NULL ? MODE_DEFER : MODE_ASYNC',

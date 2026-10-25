@@ -3385,13 +3385,13 @@ kept records said `MISSING script module`.
   expectations pass with no pass lost.
 - **Hosts**, 0 failed: libjs runtime 1,267 target-core and 6,096
   instrumented checks, the module sweep 5 and 243 allocations; scripted
-  page 8,060 (`tools/test_yonder_modules.inc` among them); yonder 2,028;
+  page 8,063 (`tools/test_yonder_modules.inc` among them); yonder 2,028;
   fetch job 374; DOM 15,215 and 100,986 (the first one's installer sweep
   is one allocation shorter with the new members, 319 cuts for 320, and
   each cut carries its checks); replay self-test 43 pages, 0 problems; the
   libjs prepare, engine and target-audit suites (190 engine exports, 27
   runtime).
-- **Mutants** (`tools/test_modules_mutants.py`): 36, each caught (two first
+- **Mutants** (`tools/test_modules_mutants.py`): 37, each caught (two first
   missed, which is how libdom's unreflected `type` and unreported connected
   modules were found; one of the preloads' first did not build, the
   `-Werror` of an unused `dom`, and was reworded).

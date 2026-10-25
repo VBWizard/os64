@@ -1076,7 +1076,9 @@ bool yonder_scripts_pending(const yonder_scripts_t *s)
 {
     if (s == NULL || s->dead)
         return false;
-    // A module compile a running script left owed is the next step's.
+    // What a running script left owed to the module map (a compile, or a
+    // walk of the graphs after an import() took a fetch over) is the next
+    // step's.
     if (s->ready_count != 0 || yonder_modules_owed(s->modules))
         return true;
     Item *d = s->parse_ended ? next_defer((yonder_scripts_t *)s) : NULL;
@@ -1088,8 +1090,9 @@ bool yonder_scripts_step(yonder_scripts_t *s, os64_js_outcome_t *out)
     os64_memset(out, 0, sizeof(*out));
     if (!yonder_scripts_pending(s))
         return false;
-    // Between tasks, the owed compiles are made, and what they ready runs
-    // in its turn; a step that readied nothing ran nothing.
+    // Between tasks, the owed compiles are made and the graphs walked
+    // again, and what that readies runs in its turn; a step that readied
+    // nothing ran nothing.
     if (yonder_modules_settle(s->modules)) {
         modules_progress(s);
         if (!yonder_scripts_pending(s))

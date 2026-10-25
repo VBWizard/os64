@@ -94,8 +94,11 @@ void yonder_modules_answered(yonder_modules_t *m, uint32_t token, const os64_dom
 
 // A module whose source arrived while a script ran (an inline module a
 // script connected, or document.write wrote) cannot be compiled until the
-// runtime is between tasks: owed says one waits, settle compiles them
-// (outside every task), true when it tried any.
+// runtime is between tasks; and a fetch a dynamic import() took over from
+// a graph's has no answer to come, so the graphs waiting on it must be
+// walked again. owed says either waits; settle compiles the modules
+// (outside every task) and clears the walk owed, true when it did either,
+// which is the caller's cue to walk its graphs.
 bool yonder_modules_owed(const yonder_modules_t *m);
 bool yonder_modules_settle(yonder_modules_t *m);
 
