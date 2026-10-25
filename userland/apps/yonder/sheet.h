@@ -17,7 +17,7 @@
 // § The cost, measured): outside the parse's arena, the body, the
 // tokenizer's code points (4 bytes a byte) and the decoded text (up to 3),
 // eight bytes a byte of GARB_SHEET_MAX in all; inside it, at most
-// GARB_ARENA_MAX, which ordinary CSS reaches at about 5 MiB. 160 MiB, so
+// GARB_ARENA_MAX, which Bootstrap-shaped CSS reaches at about 6 MiB. 160 MiB, so
 // four sheets and a page's fetch fit the pool's budget at once.
 #define SHEET_RESERVE ((size_t)GARB_ARENA_MAX + 8 * (size_t)GARB_SHEET_MAX)
 

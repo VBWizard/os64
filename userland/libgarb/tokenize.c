@@ -49,10 +49,11 @@ static uint32_t utf8_next(const unsigned char *s, size_t n, size_t *i)
     return cp;
 }
 
-bool tz_open(Tokenizer *tz, const char *text, size_t len, os64_arena_t *arena)
+bool tz_open(Tokenizer *tz, const char *text, size_t len, os64_arena_t *arena, size_t max)
 {
     os64_memset(tz, 0, sizeof(*tz));
     tz->arena = arena;
+    tz->max = max;
     tz->cp = os64_malloc((len + 1) * sizeof(uint32_t));
     if (tz->cp == NULL)
         return false;
@@ -205,7 +206,7 @@ static const char *buf_keep(Tokenizer *tz, uint32_t *len)
     if (tz->buflen == 1 && (unsigned char)tz->buf[0] < 128)
         return kOneByte[(unsigned char)tz->buf[0]];
     size_t hold = (tz->open != NULL ? *tz->open : 0) + GARB_CLOSE_SLACK;
-    char *out = garb_room(tz->arena, tz->buflen + 1, hold)
+    char *out = garb_room(tz->arena, tz->max, tz->buflen + 1, hold)
                     ? os64_arena_alloc_aligned(tz->arena, tz->buflen + 1, 1)
                     : NULL;
     if (out == NULL) {

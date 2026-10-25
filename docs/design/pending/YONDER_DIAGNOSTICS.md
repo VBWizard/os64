@@ -434,7 +434,14 @@ was shown, or since its record was last written on asking:
 - **The FAILED vocabulary**: `page` (reading or fetching it, or a rule
   the script binding keeps found broken: `FAILED page: an attribute left
   its element outside libdom`, libdom's `options.broken`), `layout`
-  (out of memory, or the layout stopped partway), `controls`, `scripts`
+  (out of memory, or the layout stopped partway), `style` (a cascade of
+  the page's sheets and `style` attributes came up short, out of room or
+  nested too deep, so part of its styles were not applied: a condition,
+  one line however many of the page's cascades meet it, a staged
+  rebuild's and a measurement's among them — but for a measurement of
+  the stream's parse so far, which has no record of its own yet, so the
+  page's own cascade at arrival says it if it is still short),
+  `controls`, `scripts`
   (no memory for the host), `script <source name>`, `link refused`,
   `form refused` and `navigation`. A person's own form left invalid, a
   control the page disabled and a reset are libpage answers rather than

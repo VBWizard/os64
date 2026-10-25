@@ -68,14 +68,14 @@ typedef struct {
 int32_t garb_sheet_imports(const garb_parsed_t *sheet, garb_import_t *out, int32_t cap);
 
 // One sheet, in cascade order: a parse the caller owns (it must outlive
-// the cascade), and the `media` its element gave, or NULL. An imported
-// sheet comes BEFORE the sheet importing it — its rules are the importer's
-// first — and says so: `via` is its @import, `parent` the importer's index
-// in the same array. It applies when its @import's conditions hold and the
-// importer applies. `via` is NULL for a sheet the page names itself, and
-// is read only during garb_cascade.
+// the cascade, which never writes to it), and the `media` its element
+// gave, or NULL. An imported sheet comes BEFORE the sheet importing it —
+// its rules are the importer's first — and says so: `via` is its @import,
+// `parent` the importer's index in the same array. It applies when its
+// @import's conditions hold and the importer applies. `via` is NULL for a
+// sheet the page names itself, and is read only during garb_cascade.
 typedef struct {
-    garb_parsed_t *sheet;
+    const garb_parsed_t *sheet;
     const char *media;
     const garb_import_t *via;
     int32_t parent;
@@ -108,9 +108,23 @@ typedef struct {
 
 // Cascades `sheets` over `doc`, pinning document strings until free. NULL
 // on no memory or pin exhaustion; a partial cascade says so in
-// garb_cascade_incomplete. The input sheets outlive the cascade.
+// garb_cascade_incomplete. The input sheets outlive the cascade, which
+// only reads them: what it makes of their rules' blocks, selectors and
+// values is its own, in arenas freed with it (GARB.md § The cost), so a
+// sheet is the same after any number of cascades as before the first.
 garb_cascade_t *garb_cascade(const garb_sheet_in_t *sheets, int32_t n,
                              const os64_html_document_t *doc, garb_env_t env);
+// What one cascade may read of all its sheets together: their rules'
+// blocks, selectors and values go into one arena held to this, beside the
+// cascade's own state (held to GARB_ARENA_MAX), and a cascade that reaches
+// it comes up short as any short read does (garb_cascade_incomplete).
+// Twice a parse's arena, because reading a sheet costs up to about twice
+// its parse (GARB.md § The cost): so one cascade reads whole any one sheet
+// a parse holds, but the very densest, and beside a big one the rest of an
+// ordinary page — a news page's 1 MB sheet reads into 14.3 MiB, a
+// Bootstrap-shaped sheet about 21.5 bytes a byte — while a page naming
+// many big sheets holds no more than this of reads in any one cascade.
+#define GARB_CASCADE_READ_MAX ((size_t)2 * GARB_ARENA_MAX)
 bool garb_cascade_incomplete(const garb_cascade_t *c);
 // The viewport the cascade was judged against: what a `vw` or `vh` in its
 // winners is a hundredth of.

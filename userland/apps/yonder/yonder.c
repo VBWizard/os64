@@ -840,11 +840,6 @@ static void page_clear(Page *p)
     }
 }
 
-// An entry of the cascade's input for sheet `e` and, before it, for the
-// ready sheets its @imports brought, each naming it as `parent`
-// (garb/cascade.h). Its index, or -1 when it is not ready.
-// The cascade writes into each sheet's arena as it reads a rule's block
-// (garb_rules_of), so the page is not const here.
 // The table's entry for the sheet `node` names, -1 when it has none.
 static int32_t sheet_of(const Page *p, const os64_html_node_t *node)
 {
@@ -854,9 +849,13 @@ static int32_t sheet_of(const Page *p, const os64_html_node_t *node)
     return -1;
 }
 
-static int32_t sheet_emit(Page *p, int32_t e, garb_sheet_in_t *in, int32_t *entry, int32_t *n)
+// An entry of the cascade's input for sheet `e` and, before it, for the
+// ready sheets its @imports brought, each naming it as `parent`
+// (garb/cascade.h). Its index, or -1 when it is not ready. The cascade
+// only reads the sheets, so the page is const here.
+static int32_t sheet_emit(const Page *p, int32_t e, garb_sheet_in_t *in, int32_t *entry, int32_t *n)
 {
-    Sheet *sh = &p->sheets[e];
+    const Sheet *sh = &p->sheets[e];
     if (!sh->ready)
         return -1;
     int32_t kids[SHEET_IMPORTS_MAX], nkids = 0;
@@ -1058,6 +1057,15 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
         cascade = garb_cascade(in, n, page_doc(p), view);
         if (cascade == NULL)
             return false;
+        // A condition of the page, said once however many of its cascades
+        // meet it; a copy of the page laid out beside it (a rebuild staged,
+        // a measurement) borrows its record, so it is said there too. The
+        // stream's parse so far has no record of its own yet (it is the
+        // stream's until the page arrives), so a measurement of it says
+        // nothing: the page's own cascade at arrival says it if it is short.
+        if (garb_cascade_incomplete(cascade))
+            yonder_diag_failed_seen(p->diag, "style", "the cascade came up short (out of room, or nested too deep): "
+                                    "part of the page's styles were not applied");
     }
     // Context is valid for this layout only and may name a stack Page;
     // libflow consults replaced_size inside flow_layout, which uses it here.
