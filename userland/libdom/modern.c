@@ -83,6 +83,9 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"structuredClone", NULL}, d_clone_install},
     {(const char *const[]){"postMessage", "onmessage", "onmessageerror", "MessageEvent", NULL}, d_message_install},
     {(const char *const[]){"requestIdleCallback", "cancelIdleCallback", "IdleDeadline", NULL}, d_idle_install},
+    /* 0f's P1a: members of Node's, Attr's and Text's prototypes, none of
+     * window's (as P1-Da's row). */
+    {(const char *const[]){NULL}, d_nodes_install},
 };
 
 int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)

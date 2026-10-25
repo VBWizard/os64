@@ -75,7 +75,7 @@ static char *modern_chain_shape(DomFixture *f)
         "document.createTextNode('t'),document.createComment('c'),document.createDocumentFragment(),"
         "document.doctype,document.implementation,document.implementation.createHTMLDocument('')];"
         "var row=/(^constructor$|_NODE$|^DOCUMENT_POSITION_|^onscroll$|^onresize$|^scrollingElement$|^defaultView$"
-        "|^onerror$)/;"
+        "|^onerror$|^getRootNode$|^wholeText$|^splitText$)/;"
         "var documentRow=/^(readyState|onreadystatechange|visibilityState|hidden|onvisibilitychange|referrer|"
         "activeElement|hasFocus|currentScript|title|prerendering|onprerenderingchange|domain|URL|documentURI|"
         "wasDiscarded|compatMode|dir|characterSet|charset|inputEncoding|contentType|lastModified|rootElement|"
@@ -131,6 +131,28 @@ static void dom_modern_cases(void)
         "assert(d.value==='HTMLElement'&&d.configurable&&!d.writable&&!d.enumerable);"
         "assert(!Object.prototype.hasOwnProperty.call(HTMLElement,Symbol.toStringTag));",
         "modern-on-string-tag");
+    /* 0f's P1a node row: getRootNode (Vue's v-model), Text's wholeText and
+     * splitText. */
+    dom_script(&f, MODERN_ASSERT
+        "var p=document.createElement('p'),t=document.createTextNode('abc');p.appendChild(t);"
+        "assert(t.getRootNode()===p&&p.getRootNode()===p&&document.body.getRootNode()===document);"
+        "document.body.appendChild(p);assert(t.getRootNode({composed:true})===document);"
+        "var asked=0;t.getRootNode({get composed(){asked++;return false}});assert(asked===1,'the options are converted');"
+        "var bad=false;try{t.getRootNode(5)}catch(e){bad=e instanceof TypeError}assert(bad,'options must be an object');"
+        "var at=document.createAttribute('x');assert(at.getRootNode()===at,'an Attr is its own root');"
+        "assert(Object.prototype.hasOwnProperty.call(Attr.prototype,'getRootNode'));"
+        "var f=new DocumentFragment(),ft=new Text('z');f.appendChild(ft);assert(ft.getRootNode()===f);"
+        "p.appendChild(new Text('def'));p.appendChild(document.createElement('b'));p.appendChild(new Text('g'));"
+        "assert(t.wholeText==='abcdef'&&p.childNodes[1].wholeText==='abcdef'&&p.lastChild.wholeText==='g');"
+        "var tail=t.splitText(1);"
+        "assert(t.data==='a'&&tail.data==='bc'&&t.nextSibling===tail&&tail.parentNode===p&&tail instanceof Text);"
+        "assert(tail.ownerDocument===document&&p.textContent==='abcdefg');"
+        "var lone=new Text('xy'),rest=lone.splitText(2);assert(lone.data==='xy'&&rest.data===''&&rest.parentNode===null);"
+        "bad=false;try{lone.splitText(3)}catch(e){bad=e.name==='IndexSizeError'}assert(bad,'past the end');"
+        "var wide=new Text('a\\u{1F600}b');assert(wide.splitText(3).data==='b'&&wide.data==='a\\u{1F600}','offsets count code units');"
+        "bad=false;try{Text.prototype.splitText.call(document.createComment('c'),0)}catch(e){bad=e instanceof TypeError}"
+        "assert(bad,'a Text member on a comment');",
+        "modern-on-node-row");
     check(on != NULL, "modern: window's names with the switch on");
     char *chain_on = modern_chain_shape(&f);
     fixture_free(&f);
@@ -188,7 +210,8 @@ static void dom_modern_cases(void)
     check(exact, "modern: the switch adds exactly the table's names to window, and nothing else");
     /* The switch takes away the table's names, not the binding's own
      * structure: the prototype chains have the same levels, holding the
-     * same members, either way. */
+     * same members either way but the ones the rows put on them (the
+     * shape's `row` and `documentRow` patterns, which name each). */
     char *chain_off = modern_chain_shape(&f);
     check(chain_on != NULL && chain_off != NULL && strcmp(chain_on, chain_off) == 0 &&
           strstr(chain_on, " / ") != NULL,

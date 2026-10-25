@@ -630,7 +630,9 @@ enum {
     D_APPEND_NODES, D_PREPEND, D_REPLACE_CHILDREN, D_BEFORE, D_AFTER, D_REPLACE_WITH, D_REMOVE_SELF,
     D_CONTAINS, D_MATCHES, D_CLOSEST, D_BY_CLASS, D_BY_NAME,
     D_ADJACENT_HTML, D_ADJACENT_ELEMENT, D_ADJACENT_TEXT,
-    D_ATTRIBUTE_NAMES, D_TOGGLE_ATTR, D_HAS_ATTRS
+    D_ATTRIBUTE_NAMES, D_TOGGLE_ATTR, D_HAS_ATTRS,
+    /* The node row's (mixin.c d_nodes_install, behind the modern switch). */
+    D_ROOT_NODE
 };
 enum { D_QUERY_GENERIC, D_QUERY_IMAGES, D_QUERY_FORMS, D_QUERY_CONTROLS, D_QUERY_DOCUMENT_NAMES,
        D_QUERY_CLASSES, D_QUERY_NAME };
@@ -981,6 +983,16 @@ int d_url_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst input, char **out)
  * (event.c). LIBDOM.md § P1-Da's rows is the record. ── */
 int d_document_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_custom_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* ── 0f's P1a (INTERFACES_FORMS.md): Node's getRootNode and Text's own
+ * members (mixin.c), and Attr's getRootNode beside them (attr.c), whose
+ * shadow covers Node.prototype whole. ── */
+int d_nodes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_attr_root_install(os64_dom_t *dom, JSContext *ctx);
+/* getRootNode's GetRootNodeOptions converted as WebIDL converts a
+ * dictionary (a page's `composed` getter runs; anything but an object,
+ * undefined or null is a TypeError), for both of its receivers. With no
+ * shadow trees, `composed` changes no answer. -1 with an exception. */
+int d_root_options(JSContext *ctx, int argc, JSValueConst *argv);
 /* The referrer copied out of the options at creation (core.c), and what
  * os64_dom_free lets go: the copy and the held running script. */
 int d_document_setup(os64_dom_t *dom);

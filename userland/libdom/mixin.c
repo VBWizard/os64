@@ -332,6 +332,20 @@ static JSValue element_method(os64_dom_t *dom, JSContext *ctx, const os64_html_n
     return JS_IsException(result) ? result : JS_NewBool(ctx, present);
 }
 
+int d_root_options(JSContext *ctx, int argc, JSValueConst *argv)
+{
+    if (argc < 1 || JS_IsUndefined(argv[0]) || JS_IsNull(argv[0])) return 0;
+    if (!JS_IsObject(argv[0])) {
+        JS_ThrowTypeError(ctx, "GetRootNodeOptions must be an object");
+        return -1;
+    }
+    JSValue composed = JS_GetPropertyStr(ctx, argv[0], "composed");
+    if (JS_IsException(composed)) return -1;
+    int truth = JS_ToBool(ctx, composed);
+    JS_FreeValue(ctx, composed);
+    return truth < 0 ? -1 : 0;
+}
+
 static JSValue mixin_method(JSContext *ctx, JSValueConst this_value, int argc,
                             JSValueConst *argv, int magic, JSValue *data)
 {
@@ -354,6 +368,15 @@ static JSValue mixin_method(JSContext *ctx, JSValueConst this_value, int argc,
     case D_BY_CLASS: case D_BY_NAME:
         if (argc < 1) return JS_ThrowTypeError(ctx, "Missing query argument");
         return d_attribute_collection(dom, ctx, self, argv[0], magic == D_BY_NAME);
+    case D_ROOT_NODE: {
+        /* getRootNode(options) (DOM § 4.4): the root of the tree the node
+         * is in, read after the options are converted. */
+        if (d_root_options(ctx, argc, argv) < 0) return JS_EXCEPTION;
+        const os64_html_node_t *root = d_node(dom, ctx, this_value);
+        if (root == NULL) return JS_EXCEPTION;
+        while (root->parent != NULL) root = root->parent;
+        return d_wrap(dom, ctx, root);
+    }
     default:
         if (!is_element(self)) return JS_ThrowTypeError(ctx, "Element method requires an element");
         return element_method(dom, ctx, self, magic, argc, argv);
@@ -1060,4 +1083,100 @@ int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
                 : d_method(dom, ctx, tokens, members[i].name, token_method, members[i].argc, members[i].magic)) < 0)
             return -1;
     return d_iterable(ctx, tokens, true);
+}
+
+/* ── Text's own members (DOM § 4.11) ─────────────────────────────────── */
+
+/* The byte at which `offset` UTF-16 code units of `text` end, a CharacterData
+ * offset being in code units and the tree's text UTF-8. False when `offset`
+ * is past the end. An offset inside a pair (a character above U+FFFF) ends
+ * after the pair, since the tree cannot hold half of one (DEBTS.md § Classic
+ * browser scripting). */
+static bool text_offset(const char *text, size_t length, uint32_t offset, size_t *byte)
+{
+    size_t at = 0;
+    uint32_t units = 0;
+    while (units < offset && at < length) {
+        unsigned char lead = (unsigned char)text[at];
+        size_t width = lead < 0x80 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4;
+        if (at + width > length) width = length - at;
+        units += width == 4 ? 2 : 1;
+        at += width;
+    }
+    *byte = at;
+    return units >= offset;
+}
+
+enum { T_WHOLE_TEXT, T_SPLIT_TEXT };
+
+static JSValue text_member(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv,
+                           int magic, JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    uint32_t offset = 0;
+    if (magic == T_SPLIT_TEXT) {
+        if (argc < 1) return JS_ThrowTypeError(ctx, "Missing offset");
+        if (JS_ToUint32(ctx, &offset, argv[0]) < 0) return JS_EXCEPTION;
+    }
+    const os64_html_node_t *self = d_node(dom, ctx, this_value);
+    if (self == NULL) return JS_EXCEPTION;
+    if (self->kind != OS64_HTML_TEXT) return JS_ThrowTypeError(ctx, "Text member requires a text node");
+    if (magic == T_WHOLE_TEXT) {
+        /* The data of the run of text siblings it is in, in order. */
+        const os64_html_node_t *first = self;
+        while (first->prev != NULL && first->prev->kind == OS64_HTML_TEXT) first = first->prev;
+        size_t total = 0;
+        for (const os64_html_node_t *n = first; n != NULL && n->kind == OS64_HTML_TEXT; n = n->next)
+            total += n->text_len;
+        char *whole = d_alloc(dom, total + 1);
+        if (whole == NULL) return d_error(ctx, "QuotaExceededError", "DOM text quota exceeded");
+        size_t used = 0;
+        for (const os64_html_node_t *n = first; n != NULL && n->kind == OS64_HTML_TEXT; n = n->next) {
+            os64_memcpy(whole + used, n->text, n->text_len);
+            used += n->text_len;
+        }
+        JSValue result = JS_NewStringLen(ctx, whole, used);
+        d_free(dom, whole);
+        return result;
+    }
+    /* splitText(offset): the data after `offset` becomes a new text node,
+     * the next sibling when there is a parent, and the node keeps the data
+     * before it. The node is shortened first and given its data back if
+     * the insertion fails, so a failure changes nothing. */
+    size_t byte;
+    if (!text_offset(self->text, self->text_len, offset, &byte))
+        return d_error(ctx, "IndexSizeError", "The offset is past the text's end");
+    int64_t status;
+    os64_html_node_t *tail = os64_html_create_text(dom->document, self->text + byte, self->text_len - byte, &status);
+    if (tail == NULL) return d_html_error(ctx, status);
+    d_made_in(dom, tail, d_node_document(dom, self));
+    char *kept = d_alloc(dom, self->text_len + 1);
+    if (kept == NULL) return d_error(ctx, "QuotaExceededError", "DOM text quota exceeded");
+    size_t kept_length = self->text_len;
+    os64_memcpy(kept, self->text, kept_length);
+    status = os64_page_node_set_text(dom->state, (os64_html_node_t *)self, kept, byte);
+    if (status >= 0 && self->parent != NULL) {
+        status = d_insert(dom, (os64_html_node_t *)self->parent, tail, (os64_html_node_t *)self->next);
+        if (status < 0) (void)os64_page_node_set_text(dom->state, (os64_html_node_t *)self, kept, kept_length);
+    }
+    d_free(dom, kept);
+    return status < 0 ? d_html_error(ctx, status) : d_wrap(dom, ctx, tail);
+}
+
+/* 0f's P1a, the Modern Web table's node row (INTERFACES_FORMS.md):
+ * getRootNode on Node's prototype, which Vue's v-model asks, and on Attr's,
+ * whose shadow answers every Node member for an Attr; and Text's own
+ * `wholeText` and `splitText`. Members of prototypes, so the row names
+ * nothing on window; the DOM host's chain shape holds them
+ * (tools/test_dom_modern.inc). */
+int d_nodes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    (void)global;
+    JSValueConst text = dom->prototypes[D_PROTO_TEXT]->value;
+    if (d_method(dom, ctx, dom->prototypes[D_PROTO_NODE]->value, "getRootNode", mixin_method, 0, D_ROOT_NODE) < 0 ||
+        d_accessor(dom, ctx, text, "wholeText", text_member, T_WHOLE_TEXT, false) < 0 ||
+        d_method(dom, ctx, text, "splitText", text_member, 1, T_SPLIT_TEXT) < 0)
+        return -1;
+    return d_attr_root_install(dom, ctx);
 }
