@@ -608,6 +608,22 @@ int64_t os64_page_node_checked(os64_page_state_t *state, const os64_html_node_t 
                                bool *on);
 int64_t os64_page_node_selected_index(os64_page_state_t *state,
                                       const os64_html_node_t *node, int32_t *index);
+// An option's selectedness (HTML § 4.10.10), by node. Read: in a select
+// without `multiple`, whether it is the option selectedIndex names (a
+// one-line select's first enabled option when nothing is selected); else
+// its own. Set (the `selected` setter): its selectedness and dirtiness,
+// then its select asks for a reset; in a select without `multiple` that is
+// selectedIndex set to it when on, and when off, the option deselected and
+// the select's fallback to its first enabled option restored. WRONG_KIND
+// for a node that is not an option of this state's document.
+int64_t os64_page_node_option_selected(os64_page_state_t *state, const os64_html_node_t *option, bool *on);
+int64_t os64_page_node_set_option_selected(os64_page_state_t *state, const os64_html_node_t *option, bool on);
+// A select's list of options (HTML § 4.10.7) in tree order, skipping the
+// subtrees the list-of-options algorithm skips: NULL starts the walk and
+// ends it, and a node that is not a select has none. The select whose list
+// holds `option`, NULL when none does.
+const os64_html_node_t *os64_page_option_next(const os64_html_node_t *select, const os64_html_node_t *previous);
+const os64_html_node_t *os64_page_option_select(const os64_html_node_t *option);
 
 // ── The door ────────────────────────────────────────────────────────────
 

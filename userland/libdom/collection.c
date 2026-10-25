@@ -65,11 +65,28 @@ static bool matches(const DQuery *query, const os64_html_node_t *node)
             ? os64_html_attr(node, "name") : NULL;
         return name != NULL && os64_streq(name->value, query->named);
     }
+    /* The option kinds walk the select's list (query_step), so every node
+     * they meet is one of its options. */
+    if (query->kind == D_QUERY_OPTIONS) return true;
+    if (query->kind == D_QUERY_SELECTED_OPTIONS) {
+        bool on = false;
+        return os64_page_node_option_selected(query->dom->state, node, &on) == 0 && on;
+    }
     if (query->kind != D_QUERY_GENERIC && !d_classic_match(query->owner != NULL ? query->owner : query->root, node, query->kind)) return false;
     if (query->named != NULL && !d_named_match(node, query->named)) return false;
     if (query->name == NULL || os64_strcmp(query->name, "*") == 0) return true;
     return node->kind == OS64_HTML_ELEMENT && node->name != NULL &&
         os64_strcmp(node->name, node->ns == OS64_HTML_NS_HTML ? query->folded : query->name) == 0;
+}
+
+/* The next node a query looks at after `at` (NULL: the first): the select's
+ * list of options for the option kinds, the root's children or descendants
+ * for the rest. */
+static const os64_html_node_t *query_step(const DQuery *query, const os64_html_node_t *at)
+{
+    if (query->kind == D_QUERY_OPTIONS || query->kind == D_QUERY_SELECTED_OPTIONS)
+        return os64_page_option_next(query->root, at);
+    return at == NULL ? query->root->first_child : query_next(query, at);
 }
 
 /* Build and hold the full successor before releasing the previous answer:
@@ -89,15 +106,16 @@ static bool refresh(DQuery *query, JSContext *ctx)
         }
     }
     uint64_t version = os64_html_version(query->dom->document);
-    if (query->version == version) return true;
+    uint64_t state_version = query->kind == D_QUERY_SELECTED_OPTIONS ? os64_page_state_version(query->dom->state) : 0;
+    if (query->version == version && query->state_version == state_version) return true;
     size_t count = 0;
-    for (const os64_html_node_t *at = query->root->first_child; at != NULL; at = query_next(query, at))
+    for (const os64_html_node_t *at = query_step(query, NULL); at != NULL; at = query_step(query, at))
         if (matches(query, at)) count++;
     if (count > SIZE_MAX / sizeof(*query->nodes)) goto quota;
     const os64_html_node_t **nodes = count != 0 ? d_alloc(query->dom, count * sizeof(*nodes)) : NULL;
     if (count != 0 && nodes == NULL) goto quota;
     size_t index = 0;
-    for (const os64_html_node_t *at = query->root->first_child; at != NULL; at = query_next(query, at))
+    for (const os64_html_node_t *at = query_step(query, NULL); at != NULL; at = query_step(query, at))
         if (matches(query, at)) {
             os64_html_hold(query->dom->document, at);
             nodes[index++] = at;
@@ -107,6 +125,7 @@ static bool refresh(DQuery *query, JSContext *ctx)
     query->nodes = nodes;
     query->count = count;
     query->version = version;
+    query->state_version = state_version;
     for (size_t i = 0; i < old_count; i++)
         os64_html_release(query->dom->document, old[i]);
     d_free(query->dom, old);
@@ -269,7 +288,10 @@ static int own_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst
     if (desc != NULL) {
         JSValue value = d_wrap(query->dom, ctx, query->nodes[index]);
         if (JS_IsException(value)) return -1;
-        desc->flags = JS_PROP_CONFIGURABLE | (numeric ? JS_PROP_ENUMERABLE : 0);
+        /* An options collection's indices are writable: it has an indexed
+         * setter (define_property). */
+        desc->flags = JS_PROP_CONFIGURABLE | (numeric ? JS_PROP_ENUMERABLE : 0) |
+                      (numeric && query->kind == D_QUERY_OPTIONS ? JS_PROP_WRITABLE : 0);
         desc->value = value;
         desc->getter = JS_UNDEFINED;
         desc->setter = JS_UNDEFINED;
@@ -285,6 +307,13 @@ static int define_property(JSContext *ctx, JSValueConst object, JSAtom atom,
     uint32_t index;
     int numeric = d_index_key(ctx, atom, &index);
     if (numeric < 0) return -1;
+    if (numeric != 0 && query->kind == D_QUERY_OPTIONS && (flags & JS_PROP_HAS_VALUE) != 0 &&
+        (flags & (JS_PROP_HAS_GET | JS_PROP_HAS_SET)) == 0) {
+        /* An options collection's indexed setter, for a data definition
+         * (WebIDL § 3.9.3: an accessor is refused as below). */
+        if (!refresh(query, ctx)) return -1;
+        return d_options_set_index(query->dom, ctx, query->root, index, value) < 0 ? -1 : 1;
+    }
     if (numeric != 0) {
         /* Let the engine interpret THROW/THROW_STRICT against an ordinary
          * nonextensible object, without creating a shadow of a live index. */

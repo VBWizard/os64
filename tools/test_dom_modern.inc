@@ -149,10 +149,68 @@ static void dom_modern_cases(void)
         "assert(tail.ownerDocument===document&&p.textContent==='abcdefg');"
         "var lone=new Text('xy'),rest=lone.splitText(2);assert(lone.data==='xy'&&rest.data===''&&rest.parentNode===null);"
         "bad=false;try{lone.splitText(3)}catch(e){bad=e.name==='IndexSizeError'}assert(bad,'past the end');"
-        "var wide=new Text('a\\u{1F600}b');assert(wide.splitText(3).data==='b'&&wide.data==='a\\u{1F600}','offsets count code units');"
+        "var wide=new Text('a\\u{1F600}bc');assert(wide.splitText(4).data==='c'&&wide.data==='a\\u{1F600}b','a pair is two code units');"
+        "var acute=new Text('\\u00e9xb');assert(acute.splitText(2).data==='b'&&acute.data==='\\u00e9x','two bytes are one code unit');"
         "bad=false;try{Text.prototype.splitText.call(document.createComment('c'),0)}catch(e){bad=e instanceof TypeError}"
         "assert(bad,'a Text member on a comment');",
         "modern-on-node-row");
+    /* 0f's P1a select row: React's option updater first, as it runs. */
+    dom_script(&f, MODERN_ASSERT
+        "var h=document.createElement('div');document.body.appendChild(h);"
+        "h.innerHTML='<form id=fm><select id=sort><option value=az>Name (A to Z)<option value=za>Name (Z to A)'+"
+        "'<optgroup label=price><option value=lohi>Price (low to high)<option value=hilo disabled>Price (high to low)'+"
+        "'</optgroup></select></form>';"
+        "var s=document.getElementById('sort'),o=s.options;"
+        "assert(o===s.options&&o.length===4&&s.length===4&&o[0].value==='az'&&o[2].value==='lohi','the list, optgroup included');"
+        "assert(Object.prototype.toString.call(o)==='[object HTMLOptionsCollection]'&&o.item(1)===o[1]);"
+        /* react-dom's updateOptions, single select: set the matching one, else the first enabled */
+        "function update(node,value){var e=node.options,d=null;for(var n=0;n<e.length;n++){if(e[n].value===value){"
+        "e[n].selected=true;return}d!==null||e[n].disabled||(d=e[n])}d!==null&&(d.selected=true)}"
+        "update(s,'lohi');assert(s.selectedIndex===2&&o[2].selected&&!o[0].selected&&s.value==='lohi','React selects by value');"
+        "update(s,'nothing');assert(s.selectedIndex===0&&o[0].selected,'and falls back to the first enabled');"
+        "o[0].selected=false;assert(s.selectedIndex===0,'deselected, a one-line select resets to its first enabled');"
+        "s.selectedIndex=-1;assert(s.selectedIndex===-1&&!o[0].selected&&o.selectedIndex===-1);"
+        "o.selectedIndex=1;assert(s.value==='za');"
+        "assert(o[3].disabled&&o[3].index===3&&o[1].index===1&&o[1].form===document.getElementById('fm'));"
+        "var g=s.querySelector('optgroup');assert(g.label==='price'&&!g.disabled);g.disabled=true;assert(g.hasAttribute('disabled'));"
+        /* text, value and label */
+        "var t=document.createElement('option');t.innerHTML='  two \\n words <script>skip()<\\/script>here ';"
+        "assert(t.text==='two words here'&&t.value==='two words here'&&t.label==='two words here'&&t.index===0&&t.form===null);"
+        "t.label='L';t.value='V';assert(t.label==='L'&&t.value==='V'&&t.getAttribute('value')==='V');"
+        "t.text='new';assert(t.textContent==='new'&&t.childNodes.length===1);"
+        "t.defaultSelected=true;assert(t.hasAttribute('selected'));"
+        /* the Option factory */
+        "var n=new Option('Pink','pk',false,true);"
+        "assert(n instanceof HTMLOptionElement&&n.text==='Pink'&&n.value==='pk'&&n.selected&&!n.defaultSelected);"
+        "assert(Option.prototype===HTMLOptionElement.prototype&&HTMLOptionElement.prototype.constructor===HTMLOptionElement);"
+        "assert(new Option().text===''&&new Option().childNodes.length===0&&Option.name==='Option'&&Option.length===0);"
+        "var bad=false;try{Option('x')}catch(e){bad=e instanceof TypeError}assert(bad,'a constructor only');"
+        /* add, remove, length: the old idioms */
+        "var c=document.createElement('select');c.add(new Option('a'));c.add(new Option('c'));c.add(new Option('b'),1);"
+        "assert([...c.options].map(x=>x.text).join()==='a,b,c','add before an index');"
+        "c.add(new Option('z'),c.options[0]);assert(c.options[0].text==='z','add before an element');"
+        "c.options.add(new Option('end'),null);assert(c.options[4].text==='end');"
+        "bad=false;try{c.add(document.createElement('div'))}catch(e){bad=e instanceof TypeError}assert(bad,'only options and optgroups');"
+        "bad=false;try{c.add(new Option('q'),document.body)}catch(e){bad=e.name==='NotFoundError'}assert(bad,'before must be in it');"
+        "c.remove(0);assert(c.options[0].text==='a'&&c.length===4,'remove(index)');c.options.remove(9);assert(c.length===4);"
+        "c.options.length=2;assert(c.length===2&&c.options[1].text==='b','length shortens');"
+        "c.length=4;assert(c.options[3].text===''&&c.options[3].parentNode===c,'and lengthens with empty options');"
+        "document.body.appendChild(c);c.remove();assert(c.parentNode===null&&c.length===4,'remove() is ChildNode remove');"
+        /* the indexed setter: options[options.length] = new Option(...), the 2000s idiom */
+        "var q=document.createElement('select');q.options[q.options.length]=new Option('one','1');"
+        "q.options[2]=new Option('three');assert(q.length===3&&q.options[1].text===''&&q.options[2].text==='three','appends past the end');"
+        "q.options[0]=new Option('uno');assert(q.options[0].text==='uno'&&q.length===3,'replaces');"
+        "q.options[1]=null;assert(q.length===2&&q.options[1].text==='three','null removes');"
+        "bad=false;try{q.options[0]=document.createElement('div')}catch(e){bad=e instanceof TypeError}assert(bad,'only an option');"
+        "var dsc=Object.getOwnPropertyDescriptor(q.options,0);assert(dsc.writable&&dsc.enumerable&&dsc.value===q.options[0]);"
+        "assert(Object.defineProperty(q.options,'5',{value:new Option('six')})&&q.length===6,'a data definition sets');"
+        /* selectedOptions, live with control state */
+        "var m=document.createElement('select');m.multiple=true;m.innerHTML='<option>1<option>2<option>3';"
+        "var so=m.selectedOptions;assert(so===m.selectedOptions&&so.length===0);"
+        "m.options[0].selected=true;m.options[2].selected=true;assert(so.length===2&&so[1]===m.options[2]);"
+        "m.options[0].selected=false;assert(so.length===1&&so[0].text==='3');"
+        "assert(m.size===0);m.size=3;assert(m.getAttribute('size')==='3'&&m.size===3);",
+        "modern-on-select-row");
     check(on != NULL, "modern: window's names with the switch on");
     char *chain_on = modern_chain_shape(&f);
     fixture_free(&f);

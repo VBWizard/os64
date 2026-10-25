@@ -70,12 +70,13 @@ methods are placed on those chains:
 | --- | --- |
 | Document | documentElement/head/body (body settable, HTML's setter), doctype, implementation, child-element access, ID/tag/class/name/selector queries, creation; with the Modern Web switch on, the state reads of § P1-Da's rows |
 | Element | tagName, id/className, innerHTML/outerHTML, the attribute methods and `attributes` (§ Attributes as nodes), tag/class/selector queries, child-element access and element siblings, § The classic methods |
-| Text and Comment (CharacterData) | data and element siblings |
+| Text and Comment (CharacterData) | data and element siblings; a Text's wholeText and splitText with the Modern Web switch on (§ 0f P1a's rows) |
 | DocumentType | name, publicId, systemId |
 | DocumentFragment | child-element access, ID and selector queries |
 | HTML input/textarea/select/button | value, type (an input's state keyword, else "text"; a button's "submit", "reset" or "button"; "select-one" or "select-multiple"; "textarea") |
 | HTML input | checked (every input's checkedness, which only a checkbox and a radio show and send) |
-| HTML select | selectedIndex |
+| HTML select | selectedIndex; with the Modern Web switch on, options and the rest of § 0f P1a's rows |
+| HTML option and optgroup | with the Modern Web switch on, § 0f P1a's rows |
 
 Node supplies tree navigation, ownerDocument, childNodes, nodeType/nodeName,
 nodeValue/textContent and tree methods. A property absent from a node's chain
@@ -1331,3 +1332,50 @@ finds its entry by binary search, and the holes run and cancelled entries
 leave are closed up once they outnumber the entries. The entries are the
 binding's memory (a page's flood of requests ends in QuotaExceededError);
 their callbacks are the registry's seventh list.
+
+### 0f P1a's rows: the node row and the select row
+
+INTERFACES_FORMS.md is the plan (its § P1a); MODERN_WEB.md § Slice 0f, as
+built, the record. The interface objects it added (`Text`, `Comment`,
+`SVGElement`, `HTMLOptionElement`, `HTMLOptGroupElement`) are the
+interfaces row's, above; two rows of their own carry the members.
+
+**The node row** (`mixin.c` `d_nodes_install`, naming nothing on window):
+`getRootNode(options)` on Node's prototype, the root of the node's tree
+(no shadow trees, so `composed` changes nothing, though the options are
+converted as WebIDL converts a dictionary), and on Attr's, whose shadow
+answers it with the Attr itself; Text's `wholeText` (the data of the run
+of text siblings it is in) and `splitText(offset)` (the offset in UTF-16
+code units; the tail a new text node, the next sibling when there is a
+parent; the node shortened first and given its data back if the insertion
+fails).
+
+**The select row** (`options.c`, which names `Option` on window): an
+option's `value` (its attribute, else its text), `text` (its descendant
+text with scripts left out, ASCII whitespace stripped and collapsed;
+setting it is textContent's), `label`, `selected`, `defaultSelected` (the
+`selected` attribute), `disabled`, `index` and `form`; an optgroup's
+`disabled` and `label`; a select's `options`, `length` (settable),
+`selectedOptions`, `multiple`, `size`, `item`, `namedItem`, `add` and
+`remove(index)`, whose no-argument form is ChildNode's `remove()`. An
+option's selectedness is libpage's control state
+(`os64_page_node_option_selected`): in a select without `multiple` it is
+whether the option is the one selectedIndex names (a one-line select's
+first enabled option when none is selected), and setting it is HTML's
+setter, selectedIndex set to it when on, and when off the option
+deselected and the select left to fall back. A select's list of options
+is libpage's walk (`os64_page_option_next`), which skips what HTML's list
+of options skips. `options` and `selectedOptions` are live collections
+(the collection kinds OPTIONS and SELECTED_OPTIONS, made once per select),
+the second refreshed when control state changes as well as the tree;
+`options` has HTMLOptionsCollection's prototype, over a collection's, with
+`length` (settable: options taken off the end, or empty options appended,
+at most 100,000 at once), `selectedIndex`, `add` and `remove`, and an
+indexed setter (`options[i] = option`: null removes the option at `i`, an
+index past the end appends after empty options fill the gap, one within
+replaces), so its indices read as writable. Its interface object waits
+for HTMLCollection's, which it inherits (INTERFACES_FORMS.md § P1b).
+`new Option(text, value, defaultSelected, selected)` is the legacy
+factory function: its `prototype` is HTMLOptionElement's, and every
+argument is converted before the option is made. A select's own indices
+(`select[0]`) are a DEBTS.md row (§ Classic browser scripting).

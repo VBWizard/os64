@@ -86,6 +86,7 @@ static const DModernRow kModern[] = {
     /* 0f's P1a: members of Node's, Attr's and Text's prototypes, none of
      * window's (as P1-Da's row). */
     {(const char *const[]){NULL}, d_nodes_install},
+    {(const char *const[]){"Option", NULL}, d_options_install},
 };
 
 int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)

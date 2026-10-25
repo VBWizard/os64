@@ -309,8 +309,53 @@ static void tree_template_host_history(void)
     rebuild_clear(&f);
 }
 
+// An option's selectedness by node (libdom's `selected`, which React's
+// option updater sets): a single select's is its selectedIndex's, set on
+// is selectedIndex set to it, set off asks for a reset; a multiple
+// select's and a loose option's are their own.
+static void tree_option_selectedness(void)
+{
+    RebuildFixture f=rebuild_fixture("<select id=s><option id=a disabled>A<option id=b>B<optgroup><option id=c>C"
+        "</optgroup></select><div><option id=d>D</div><select id=m multiple><option id=x>X<option id=y>Y</select>",0);
+    os64_html_node_t *s=rebuild_id(f.doc,"s"),*a=rebuild_id(f.doc,"a"),*b=rebuild_id(f.doc,"b"),*c=rebuild_id(f.doc,"c");
+    os64_html_node_t *d=rebuild_id(f.doc,"d"),*m=rebuild_id(f.doc,"m"),*x=rebuild_id(f.doc,"x"),*y=rebuild_id(f.doc,"y");
+    rebuild_expect("option: list walk",os64_page_option_next(s,NULL)==a&&os64_page_option_next(s,a)==b&&
+        os64_page_option_next(s,b)==c&&os64_page_option_next(s,c)==NULL&&os64_page_option_next(a,NULL)==NULL);
+    rebuild_expect("option: its select",os64_page_option_select(c)==s&&os64_page_option_select(d)==NULL&&
+        os64_page_option_select(x)==m&&os64_page_option_select(s)==NULL);
+    // An option inside an option is under the select but not in its list.
+    os64_html_node_t *inner=followup_option(f.doc,b,"inner");
+    rebuild_expect("option: one the list skips has no select",inner!=NULL&&os64_page_option_select(inner)==NULL);
+    bool on=true;
+    rebuild_expect("option: the fallback shows as selected",os64_page_node_option_selected(f.state,b,&on)==0&&on&&
+        os64_page_node_option_selected(f.state,a,&on)==0&&!on);
+    uint64_t revision=os64_page_state_version(f.state);
+    int32_t index=-1;
+    rebuild_expect("option: on is selectedIndex",os64_page_node_set_option_selected(f.state,c,true)==0&&
+        os64_page_node_selected_index(f.state,s,&index)==0&&index==2&&
+        os64_page_node_option_selected(f.state,b,&on)==0&&!on&&revision!=os64_page_state_version(f.state));
+    rebuild_expect("option: off asks for a reset",os64_page_node_set_option_selected(f.state,c,false)==0&&
+        os64_page_node_selected_index(f.state,s,&index)==0&&index==1);
+    rebuild_expect("option: selectedIndex -1 stays empty",os64_page_node_set_selected_index(f.state,s,-1)==0&&
+        os64_page_node_selected_index(f.state,s,&index)==0&&index==-1);
+    rebuild_expect("option: off an unselected option still resets",os64_page_node_set_option_selected(f.state,c,false)==0&&
+        os64_page_node_selected_index(f.state,s,&index)==0&&index==1);
+    rebuild_expect("option: off another leaves the selected one",os64_page_node_set_option_selected(f.state,c,true)==0&&
+        os64_page_node_set_option_selected(f.state,b,false)==0&&os64_page_node_selected_index(f.state,s,&index)==0&&index==2);
+    rebuild_expect("option: multiple, each its own",os64_page_node_set_option_selected(f.state,x,true)==0&&
+        os64_page_node_set_option_selected(f.state,y,true)==0&&os64_page_node_option_selected(f.state,x,&on)==0&&on&&
+        os64_page_node_option_selected(f.state,y,&on)==0&&on&&
+        os64_page_node_set_option_selected(f.state,x,false)==0&&os64_page_node_option_selected(f.state,x,&on)==0&&!on);
+    rebuild_expect("option: a loose option's own",os64_page_node_set_option_selected(f.state,d,true)==0&&
+        os64_page_node_option_selected(f.state,d,&on)==0&&on);
+    rebuild_expect("option: not an option",os64_page_node_set_option_selected(f.state,s,true)==-OS64_PAGE_REASON_WRONG_KIND&&
+        os64_page_node_option_selected(f.state,s,&on)==-OS64_PAGE_REASON_WRONG_KIND);
+    rebuild_clear(&f);
+}
+
 static void test_libpage_tree(void)
 {
+    tree_option_selectedness();
     tree_depth_and_state_cap();
     tree_unmodeled_select();
     tree_state_histories();

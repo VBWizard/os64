@@ -1,0 +1,126 @@
+# WPT's html/semantics/forms/the-select-element in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/semantics/forms/the-select-element --update
+# rewrites [passing].
+[required]
+[excluded]
+[passing]
+common-HTMLOptionsCollection-add.html	if before and node are the same element nothing should be done
+common-HTMLOptionsCollection-namedItem.html	if multiple items have a *name* or *id* value matching the parameter, return the first object and stop
+common-HTMLOptionsCollection-namedItem.html	if multiple items have a *name* or id value matching the parameter, return the first object and stop
+common-HTMLOptionsCollection-namedItem.html	if multiple items have a name or *id* value matching the parameter, return the first object and stop
+common-HTMLOptionsCollection-namedItem.html	if no item has a name or id value matching the parameter, return null and stop
+common-HTMLOptionsCollection-namedItem.html	if only one item has a *name* or id value matching the parameter, return that object and stop
+common-HTMLOptionsCollection-namedItem.html	if only one item has a name or *id* value matching the parameter, return that object and stop
+common-HTMLOptionsCollection.html	On getting, the length attribute must return the number of nodes represented by the collection.
+common-HTMLOptionsCollection.html	Setting a length equal to existing length changes nothing
+common-HTMLOptionsCollection.html	Setting a length lower than the old length trims nodes from the end
+common-HTMLOptionsCollection.html	Setting element to null by index removed the element
+customizable-select-listbox/customizable-select-listbox-keyboard-behavior.optional.html	Base appearance listbox selects should not be focusable.
+customizable-select/option-color-inheritance.html	option elements should inherit color from their parent select element.
+customizable-select/option-disabled-optgroup-wrapper.html	selectedness setting algorithm skips wrapped options in disabled optgroup
+customizable-select/option-disabled-optgroup.html	nested optgroup
+customizable-select/option-disabled-optgroup.html	nested options
+customizable-select/option-disabled-optgroup.html	options should check ancestor optgroup for disabled state.
+customizable-select/option-disabled-optgroup.html	select in optgroup
+customizable-select/option-form-ancestor-select.html	option.form should be null when options are nested in invalid elements.
+customizable-select/option-form-ancestor-select.html	option.form should look up the ancestor chain for a select element to get its form from.
+customizable-select/option-list-wrapped-optgroup.html	nested optgroups inside wrapper still excluded from option list
+customizable-select/option-list-wrapped-optgroup.html	option inside optgroup inside wrapper div is in the option list
+customizable-select/option-list.html	select's option list should not include descendants of options, hrs, or nested optgroups.
+customizable-select/select-input-parsing.tentative.html	Input tags should close select when directly inside an <option>
+customizable-select/select-input-parsing.tentative.html	Input tags should close select when placed after an <option>
+customizable-select/select-multiple-removed.html	Removing the multiple attribute should not crash.
+customizable-select/select-parsing.html	JS added nested <select> should be ignored
+customizable-select/select-parsing.html	JS added nested <select>s should be ignored
+customizable-select/select-parsing.html	Nested selects should be retained 1
+customizable-select/select-parsing.html	Nested selects should be retained 2
+customizable-select/select-parsing.html	The last test should not leave any tags open after parsing
+customizable-select/select-parsing.html	hr should generate implied end tags inside select
+customizable-select/select-parsing.html	optgroup should generate implied end tags inside select
+customizable-select/select-parsing.html	option inside optgroup should close previous option
+customizable-select/select-size-change.html	Changing the size attribute should not crash.
+customizable-select/select-value-selectedOption.html	Test that HTMLOption.value updates select.value
+customizable-select/select-value-selectedOption.html	Test that HTMLselect with no options has empty string for value and null for selectedOption
+customizable-select/select-value-selectedOption.html	Test that value and selectedOption are updated when options are removed
+customizable-select/select-value-selectedOption.html	Test value and selectedOption when value is null
+customizable-select/select-value-selectedOption.html	Test value and selectedOption when value is undefined
+customizable-select/select-value-selectedOption.html	Test value and selectedOption with HTMLOptionElement element option parts
+customizable-select/select-value-selectedOption.html	Test value with non-HTMLOptionElement elements labeled as parts
+filterable-select/filterable-select-filtered-pseudo.tentative.html	nested dropdown: Case folding
+filterable-select/filterable-select-filtered-pseudo.tentative.html	nested listbox: Case folding
+inserted-or-removed.html	If an OPTION says it is selected, it should be selected after it is inserted.
+inserted-or-removed.html	The last selected OPTION should win; Inserted by DOM API
+inserted-or-removed.html	The last selected OPTION should win; Inserted by innerHTML
+inserted-or-removed.html	The last selected OPTION should win; Inserted by jQuery append()
+inserted-or-removed.html	The last selected OPTION should win; Inserted by parser
+option-selectedness-script-mutation.html	multi-select responds to option.selected without selected attribute reflection
+option-selectedness-script-mutation.html	single-select responds to setting option.selected from script
+select-add.html	test that HTMLSelectElement.add method can add option element
+select-add.html	test that HierarchyRequestError exception must be thrown when element is an ancestor of the element into which it is to be inserted
+select-ancestor-subtree-removal.html	Removing an ancestor of a select keeps its options associated with it.
+select-ancestor-subtree-removal.html	Removing an option from a select whose ancestor was removed runs the selectedness setting algorithm.
+select-ancestor-subtree-removal.html	Selecting an option in a select whose ancestor was removed deselects the others.
+select-ask-for-reset.html	ask for reset on node insert, non multiple.
+select-ask-for-reset.html	ask for reset on node remove, non multiple.
+select-ask-for-reset.html	change selectedness of option in optgroup, non multiple.
+select-ask-for-reset.html	change selectedness of option, non multiple.
+select-attribute-change-reset.html	Adding an option's selected attribute deselects the other options.
+select-attribute-change-reset.html	Reducing a select's size to 1 selects the first enabled option.
+select-attribute-change-reset.html	Removing a select's multiple attribute selects the first enabled option.
+select-attribute-change-reset.html	Removing an optgroup's disabled attribute selects the option inside it.
+select-attribute-change-reset.html	Removing an option's disabled attribute selects it.
+select-attribute-change-reset.html	Removing an option's selected attribute falls back to the first enabled option.
+select-attribute-change-reset.html	Removing the selected attribute from a dirty option does not change selectedness.
+select-clear-reappend.tentative.html	select.value should stay the same after clearing and re-appending options.
+select-defineProperty.html	Defining properties on a HTMLSelectElement
+select-multiple.html	Removing multiple attribute reduces the number of selected OPTIONs to 1
+select-multiple.html	multiple selected options exist, both set from markup
+select-multiple.html	multiple selected options exist, one set from script
+select-named-getter.html	Empty string name
+select-named-getter.html	Option with id
+select-named-getter.html	Option with name
+select-named-getter.html	Option with name and id
+select-option-display-inherit.tentative.html	option in closed single select has zero bounding client rect
+select-remove.html	Element#remove() should work on select elements.
+select-remove.html	remove() should work on select elements.
+select-remove.html	select.options.remove(n) should work
+select-remove.html	select.remove(n) should work
+select-selectedOptions-and-selected.html	HTMLSelectElement's selectedOptions and HTMLOptionElement's selected
+select-selectedOptions-and-value.html	`HTMLSelectElement.selectedOptions` is correctly updated when `HTMLSelectElement.value` changes
+select-selectedOptions-nesting.window.html	<select> containing <hr><option selected>
+select-selectedOptions-nesting.window.html	<select> containing <option><option selected>
+select-selectedOptions-nesting.window.html	<select> containing <select><option selected>
+select-selectedOptions-nesting.window.html	<select><optgroup> containing <hr><option selected>
+select-selectedOptions-nesting.window.html	<select><optgroup> containing <optgroup><option selected>
+select-selectedOptions-nesting.window.html	<select><optgroup> containing <option><option selected>
+select-selectedOptions-nesting.window.html	<select><optgroup> containing <select><option selected>
+select-selectedOptions.html	.selectedOptions should always return the same value - [SameObject]
+select-selectedOptions.html	.selectedOptions should not go stale when the selectedness setting algorithm runs on a script-created select
+select-selectedOptions.html	.selectedOptions should return the same object after selection changes - [SameObject]
+select-selectedOptions.html	.selectedOptions using the 'multiple' attribute with no selected options
+select-selectedOptions.html	.selectedOptions using the 'multiple' attribute with two selected options
+select-selectedOptions.html	.selectedOptions with no selected option
+select-selectedOptions.html	.selectedOptions with one selected option
+select-selectedOptions.html	.selectedOptions without the 'multiple' attribute but more than one selected option should return the last one
+select-setter-dirtiness.html	The selected setter of an option in a select sets its dirtiness
+select-setter-dirtiness.html	The selected setter of an option in a select sets its dirtiness when the option is already selected
+select-setter-dirtiness.html	The selectedIndex setter of HTMLOptionsCollection sets the dirtiness of the option it selects
+select-setter-dirtiness.html	The selectedIndex setter of a select sets the dirtiness of the option it selects
+select-setter-dirtiness.html	The value setter of a select sets the dirtiness of the option it selects
+select-value.html	no options
+select-value.html	optgroups
+select-value.html	option is child of div
+select-value.html	options
+selected-index.html	get default
+selected-index.html	get disabled
+selected-index.html	get display:none
+selected-index.html	get empty
+selected-index.html	get unselected
+selected-index.html	removing a non-selected option with nothing selected asks for a reset
+selected-index.html	reset to display:none
+selected-index.html	set (HTMLOptionsCollection)
+selected-index.html	set (HTMLSelectElement)
+selected-index.html	set empty (HTMLOptionsCollection)
+selected-index.html	set empty (HTMLSelectElement)
+selected-index.html	set selectedIndex=-1

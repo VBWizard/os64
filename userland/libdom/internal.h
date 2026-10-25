@@ -84,6 +84,8 @@ struct DValue {
     /* An Attr's own entry: its record (attr.c). */
     struct DAttr *attr;
     DQuery *child_nodes, *children, *images, *forms, *elements;
+    /* A select's options and selectedOptions, each made once ([SameObject]). */
+    DQuery *options, *selected_options;
     DListener *listeners, *last_listener;
     /* The document the node was made in, copied from or last taken out of,
      * when that is not the window's (implementation.c); NULL is the
@@ -123,6 +125,7 @@ struct DQuery {
     const os64_html_node_t **nodes;
     size_t count;
     uint64_t version;
+    uint64_t state_version;     /* SELECTED_OPTIONS: the control state it was read at */
     bool descendants, elements;
 };
 /* One addEventListener registration, or a target's on<type> handler slot.
@@ -194,6 +197,9 @@ struct os64_dom {
      * its attributes, good only while its list is as it was. */
     JSClassID attr_class, named_map_class;
     DValue *named_map_prototype;
+    /* HTMLOptionsCollection's prototype (options.c), over a collection's;
+     * NULL with the modern switch off. */
+    DValue *options_prototype;
     struct DAttr **attr_table;
     size_t attr_capacity, attr_attached;
     struct DAttrCursor {
@@ -634,8 +640,11 @@ enum {
     /* The node row's (mixin.c d_nodes_install, behind the modern switch). */
     D_ROOT_NODE
 };
+/* OPTIONS and SELECTED_OPTIONS are a select's list of options (libpage's
+ * walk, os64_page_option_next) and the ones of it that are selected; the
+ * second also changes with control state, not only with the tree. */
 enum { D_QUERY_GENERIC, D_QUERY_IMAGES, D_QUERY_FORMS, D_QUERY_CONTROLS, D_QUERY_DOCUMENT_NAMES,
-       D_QUERY_CLASSES, D_QUERY_NAME };
+       D_QUERY_CLASSES, D_QUERY_NAME, D_QUERY_OPTIONS, D_QUERY_SELECTED_OPTIONS };
 bool d_named_match(const os64_html_node_t *node, const char *name);
 bool d_classic_match(const os64_html_node_t *root, const os64_html_node_t *node, unsigned kind);
 JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root, unsigned kind, const char *named);
@@ -988,6 +997,15 @@ int d_custom_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
  * shadow covers Node.prototype whole. ── */
 int d_nodes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_attr_root_install(os64_dom_t *dom, JSContext *ctx);
+/* The select's, option's and optgroup's members, HTMLOptionsCollection's
+ * prototype and the Option factory (options.c). */
+int d_options_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* HTMLOptionsCollection's indexed setter (HTML § 2.6.2.2), for the
+ * collection's exotic: null or undefined removes the option at `index`, an
+ * option past the end is appended after empty options fill the gap, and
+ * one within it replaces the option there. 0, or -1 with an exception. */
+int d_options_set_index(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *select, uint32_t index,
+                        JSValueConst value);
 /* getRootNode's GetRootNodeOptions converted as WebIDL converts a
  * dictionary (a page's `composed` getter runs; anything but an object,
  * undefined or null is a TypeError), for both of its receivers. With no
