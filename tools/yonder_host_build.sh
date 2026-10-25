@@ -39,7 +39,7 @@ yonder_host_build() {
         userland/libjs/runtime/runtime.c userland/libdom/{core,node,collection,content,event,timer,window,geometry,classic,style,mixin,modern,view}.c \
         userland/libdom/{storage,performance,url,encoding,screen,base64,implementation,attr}.c \
         userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,report,document,frames,clone,message,idle}.c \
-        userland/apps/yonder/{scripts,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag}.c \
+        userland/apps/yonder/{scripts,modules,script_decode,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag}.c \
         userland/apps/yonder/storage.c \
         userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize}.c \
         userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \

@@ -10038,12 +10038,16 @@ static bool stream_streaming(void)
 // model will adopt when the parse is over.
 static yonder_stop_t stream_stop(os64_html_node_t *script)
 {
-    // A module is recognised and never run: what a scripted page asked for
-    // and did not get. With scripts off nothing runs, and that is a setting.
-    if (g.stream.scripting && os64_dom_script_kind(script) == OS64_DOM_SCRIPT_MODULE)
+    // A module runs with the Modern Web surface (its host's modules.c);
+    // without it, it is what a scripted page asked for and did not get.
+    // With scripts off nothing runs, and that is a setting.
+    os64_dom_script_kind_t kind = os64_dom_script_kind(script);
+    if (g.stream.scripting && kind == OS64_DOM_SCRIPT_MODULE && !g.stream.modern)
         yonder_diag_missing(g.stream.diag, "script", "module", 1);
+    if (g.stream.scripting && kind == OS64_DOM_SCRIPT_NONE && yonder_scripts_importmap(script))
+        yonder_diag_missing(g.stream.diag, "script", "importmap", 1);
     if (!g.stream.scripting || g.stream.scriptless ||
-        os64_dom_script_kind(script) != OS64_DOM_SCRIPT_CLASSIC)
+        (kind != OS64_DOM_SCRIPT_CLASSIC && (kind != OS64_DOM_SCRIPT_MODULE || !g.stream.modern)))
         return YONDER_STOP_RESUME;
     if (g.stream.scripts == NULL) {
         os64_html_document_t *doc = os64_html_parser_document(g.stream.parser);
