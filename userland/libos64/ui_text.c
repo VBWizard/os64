@@ -603,7 +603,7 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 			!(ev->key.modifiers & OS64_GUI_MOD_ALT)) {
 			unsigned key = (unsigned char)ev->key.ascii;
 			bool cut = false;
-			if (key == 1) { tf->anchor = 0; tf->cursor = tf->len; tf->selected = tf->len != 0; }
+			if (key == 1) { os64_ui_textfield_select_all(ui, tf); return true; }
 			else if (key == 3) { (void)os64_ui_textfield_copy(tf); return true; }
 			else if (key == 22) {
 				if (os64_ui_textfield_paste(ui, tf) > 0 && tf->on_change)
@@ -612,7 +612,7 @@ static bool field_event(os64_ui_widget_t *w, os64_ui_t *ui,
 			}
 			else if (key == 24) { if (os64_ui_textfield_copy(tf) > 0) cut = field_delete_selection(tf); }
 			else if (ev->key.ascii != 0x1b) return true;
-			if (key == 1 || key == 24) {
+			if (key == 24) {
 				tf->cursor = os64_ui_text_snap(tf->buf, tf->len, tf->cursor, true);
 				field_keep_caret_visible(tf, ui); os64_ui_mark_dirty(ui, w);
 				if (cut && tf->on_change)
@@ -756,6 +756,15 @@ void os64_ui_textfield_set(os64_ui_t *ui, os64_ui_textfield_t *tf,
 	tf->selected = false;
 	tf->left_px = 0;
 	field_keep_caret_visible(tf, ui);   // the caret is at the END of a long path
+	os64_ui_mark_dirty(ui, &tf->w);
+}
+
+void os64_ui_textfield_select_all(os64_ui_t *ui, os64_ui_textfield_t *tf)
+{
+	tf->anchor = 0;
+	tf->cursor = tf->len;
+	tf->selected = tf->len != 0;
+	field_keep_caret_visible(tf, ui);
 	os64_ui_mark_dirty(ui, &tf->w);
 }
 

@@ -11694,6 +11694,20 @@ static void modern_use(bool modern)
     g.modern = modern;
 }
 
+// Ctrl+L takes the keys to the address field with all of it selected, so
+// what is typed next replaces it — every browser's way to a new address,
+// wherever focus is in the window. A Ctrl'd letter arrives as its control
+// code ('L' & 0x1F). True when the event was one.
+static bool address_event(const os64_gui_event_t *ev)
+{
+    if (ev->type != OS64_GUI_EVENT_KEY_DOWN || !(ev->key.modifiers & OS64_GUI_MOD_CTRL) ||
+        (ev->key.modifiers & OS64_GUI_MOD_ALT) || ev->key.ascii != ('L' & 0x1F))
+        return false;
+    os64_ui_set_focus(&g.ui, &g.field.w);
+    os64_ui_textfield_select_all(&g.ui, &g.field);
+    return true;
+}
+
 // Ctrl with = or + zooms in, with - out, with 0 back to the settings'
 // default; Ctrl and the wheel steps too, up to zoom in. Wherever focus is
 // in the window, as a browser does. True when the event was one.
@@ -12545,7 +12559,8 @@ int main(int argc, char **argv)
                                      zoom_use, s_dark, dark_use, s_animations, s_reduce_motion,
                                      motion_use, g.modern, modern_use,
                                      s_cookies != NULL ? yonder_cookies_mode(s_cookies) : cookies, cookies_use);
-            else if (!bar_event(&ev) && !zoom_event(&ev) && !key_event(&ev) && !password_key(&ev))
+            else if (!bar_event(&ev) && !zoom_event(&ev) && !address_event(&ev) && !key_event(&ev) &&
+                     !password_key(&ev))
                 os64_ui_dispatch(&g.ui, &ev);
             // What the event became, as DOM events, now libui is done with it.
             inputs_run();

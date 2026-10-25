@@ -1000,6 +1000,10 @@ void os64_ui_textfield(os64_ui_textfield_t *tf, char *buf, size_t cap,
 // bytes is cut at the last cluster boundary that fits, never inside a letter.
 void os64_ui_textfield_set(os64_ui_t *ui, os64_ui_textfield_t *tf,
                            const char *text);
+// Select the whole content, the caret at its end: what Ctrl+A in the field
+// does, for an app's own way into it (a browser's Ctrl+L to its address).
+// It does not move focus.
+void os64_ui_textfield_select_all(os64_ui_t *ui, os64_ui_textfield_t *tf);
 // Copy the selection; return bytes copied, zero for none, negative on failure.
 int64_t os64_ui_textfield_copy(const os64_ui_textfield_t *tf);
 // Insert the clipboard at the caret, replacing a selection on success.
