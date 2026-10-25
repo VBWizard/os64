@@ -25,6 +25,10 @@ MODERN_WEB.md and its brief here is struck.
 | 5a–5d relayout, the observer, the frame | Opus | Fable (5b's rule, 5c's graft), Chris | [RELAYOUT.md](RELAYOUT.md) is the brief; 5a after 0a, 5b/5c in sequence, 5d after 5c |
 | 6a–6e SVG | Quinn | Fable (geometry and browser contracts), Chris | [SVG.md](SVG.md) and [XML.md](XML.md) are the briefs; 6a–6c scheduled, 6d/6e follow-on coverage; inline SVG does not wait for the XML parser |
 
+The standalone XML foundation increment of 6a is built; its evidence and
+remaining shared-tree/geometry work are in XML.md's as-built section. Slice 6a
+as a whole remains active.
+
 Slice 5 follows Fable's 2026-10-21 design. Slice 6 follows Quinn's
 2026-10-25 revision of Fable's SVG design. Their documents are their
 briefs: each names its cuts, the interfaces, the oracle and what is left

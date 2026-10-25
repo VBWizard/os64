@@ -3275,3 +3275,19 @@ copied, not moved; a cloned DOMException's name and message end at a NUL;
 an idle period can start between any two of a busy page's tasks; a page's
 idle callbacks wait until it is shown; a clone of plain data is not
 stopped by its task's deadline.
+
+
+### Slice 6a, XML foundation as built — 2026-10-25
+
+The standalone `libxml` event parser is implemented in Quinn's SVG worktree.
+It has no browser tree or runtime dependency, and no script-visible consumer.
+[XML.md](XML.md#standalone-foundation-as-built--2026-10-25) records the API,
+limits, explicit DTD/encoding profile, host sanitizer and leak evidence, and
+xmlconf's supported/unsupported/excluded results. The root/userland makefiles
+include its build, image installation membership and debugger symbols because
+those shared inventories are required to deliver the library.
+
+This completes the standalone foundation increment, not all of slice 6a.
+The shared-tree builder, SVG ownership/cascade proofs and FreeType geometry
+contract remain to be built. XML profile limitations and the absent browser
+adapter are recorded in DEBTS.md; the slice's overall brief remains active.

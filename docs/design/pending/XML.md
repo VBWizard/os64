@@ -2,8 +2,8 @@
 
 Status: slice 6a design, 2026-10-25. Quinn, following Chris's standalone
 in-house parser ruling and Fable's events-only boundary in
-[SVG_REVIEW.md](SVG_REVIEW.md). Implementation and conformance results are
-pending. [SVG.md](SVG.md) defines the first consuming feature.
+[SVG_REVIEW.md](SVG_REVIEW.md). The standalone foundation is implemented; the as-built section below records
+its profile and verification. Shared-tree integration remains pending. [SVG.md](SVG.md) defines the first consuming feature.
 
 ## Purpose and boundary
 
@@ -173,3 +173,77 @@ Sweep parser and builder allocations, interleave independent parser instances,
 and run ASan/UBSan with leak detection. Fuzz bytes and chunk boundaries under
 work limits. The first shipping gate is the declared profile's conformance,
 streaming invariance and leak verdict, not a successful logo alone.
+
+## Standalone foundation, as built — 2026-10-25
+
+`userland/libxml/include/xml/xml.h` exposes the opaque push parser, borrowed
+UTF-8 event slices, allocator/context hooks, limits, statistics and terminal
+statuses. `userland/libxml/xml.c` implements it without libc calls or a document
+tree. `make -C userland xml-library` builds the prelinked `libxml.so`; the
+cross-built object has no undefined symbols or `DT_NEEDED` dependencies.
+Root/userland build membership and the GDB symbol list include the library.
+There is no browser consumer or new script-visible API in this change.
+
+Start/end element events carry expanded names; namespace declarations are
+separate from attributes. The element stack retains scope, not child nodes.
+Comments and PIs in the internal subset carry `in_doctype`, so a consumer can
+distinguish them from document children. Locations identify the start of the
+containing lexical token in original bytes, plus normalized line/column;
+internal-subset events identify their DOCTYPE token. Finish emits the end
+location. All events are provisional until `XML_DONE`.
+
+Tokens are accumulated geometrically and interpreted on closure. This makes
+one-byte feeds linear in unfinished-token length. Large uninterrupted text,
+comments, CDATA and DOCTYPE subsets share the explicit token cap: they are not
+silently streamed past it. Default limits are 16 MiB encoded, 32 MiB decoded,
+32 MiB reference-normalized text/attribute output, 8 MiB live parser storage,
+128 Mi work units, depth 256, token 1 MiB, name 4096 bytes, 256 attributes per
+element, 1024 simultaneously live namespace bindings and 256 entity
+declarations (including repeats). Capacity and allocation headers are charged;
+replacement output is charged before appending. Work units are deterministic
+parser operations, not a wall-clock deadline. Cancellation is polled during
+input, scans, allocation and expansion.
+
+Supported encodings are UTF-8 and both UTF-16 byte orders. BOM/signature,
+declaration agreement, split sequences, surrogate pairs and line endings are
+checked. A BOM-less UTF-16 signature requires an explicit endian encoding
+declaration. Unknown declared encodings retain a label for a host's deliberate
+transcode/restart. Internal entities support literal replacement text and
+predefined/numeric references; first declaration wins, with predefined-entity
+constraints enforced. A reference requiring an unread external subset returns
+`UNSUPPORTED`; an undeclared reference in a standalone document is malformed.
+DTD element/attribute/notation declarations, parameter/external entities,
+nested general references, markup replacements and validation are omitted
+with a distinct refusal. This is not a complete nonvalidating XML processor.
+
+**Verification.** `tools/test_xml_host.sh` uses ASan/UBSan with leak detection.
+The local suite checks event values, normalization, namespaces, UTF encodings,
+feed consumption, terminal states, callback abort/reentry, independent
+interleaved parsers, budget edges and allocation failures across legal and
+malformed fixtures. It includes 10,000 deterministic byte/chunk fuzz cases.
+A separate 2,505-case structural differential campaign against host Expat
+reports 392 acceptances and 2,113 rejections, agreeing in whole, one-byte and
+varied feeds. Expat accepts some malformed version labels, so declaration
+grammar is verified by explicit specification fixtures instead.
+
+The pinned official xmlconf archive has 2,585 catalog cases. The independent
+Expat catalog reader selects version/edition/namespace/entity requirements
+before invoking this library. Results: 73 accepted well-formed but DTD-invalid
+cases, 416 rejected not-well-formed cases, 1,229 unsupported cases and 867
+catalog exclusions; no unexpected verdicts. `tools/xmlconf/required.json`
+requires the 489 supported cases to retain their catalog verdicts: changing
+one to unsupported is a regression. Upstream's DTD-valid positives all reach
+omitted DTD features; local legal positives verify this parser's intended
+profile. Unsupported and excluded tests remain visible with IDs and reasons.
+`--require-complete` deliberately fails on the remaining unsupported cases.
+This result does not mean the whole xmlconf suite is green.
+
+The sandbox denied LeakSanitizer attachment with `EPERM` and `TracerPid: 0`.
+The host suites passed outside it with `ASAN_OPTIONS=detect_leaks=1`, retaining
+ASan/UBSan. A single independent Codex cold read found missing BOM-less UTF-16
+declaration enforcement and comment terminators overlapping their opener;
+both are fixed, with regressions including the DOCTYPE-comment sibling.
+Opus/Fable implementation review and target execution remain outstanding;
+no QEMU, broad browser suite or mutant campaign was run for this unconsumed
+library. The shared-tree adapter and geometry proof remain slice 6a work,
+not an implicit completion of the SVG stage.
