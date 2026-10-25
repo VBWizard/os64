@@ -14,13 +14,17 @@ static const char *const kinds[D_EVENT_COUNT] = {
     "keydown", "keypress", "keyup", "input", "change", "submit", "reset",
     "focus", "blur", "load", "scroll", "resize", "popstate", "hashchange", "online", "offline",
     "languagechange", "error", "unhandledrejection", "rejectionhandled", "readystatechange",
-    "visibilitychange", "prerenderingchange", "DOMContentLoaded"
+    "visibilitychange", "prerenderingchange", "DOMContentLoaded", "message", "messageerror"
 };
 /* A page's handler attributes are a bit per kind in a uint32_t
  * (os64_dom_handler_attributes, attribute_mask). */
 _Static_assert(D_EVENT_COUNT <= 32, "the handler-attribute mask holds a bit per event kind");
 
 enum { PHASE_NONE, PHASE_CAPTURING, PHASE_AT_TARGET, PHASE_BUBBLING };
+
+/* The most values an Event interface keeps in its record (a MessageEvent's
+ * five). */
+#define D_EVENT_DETAILS 5
 
 /* An Event's state lives in engine memory and its references are traced by
  * the collector, because a script may keep an event long after its dispatch:
@@ -37,10 +41,12 @@ typedef struct {
     /* An ErrorEvent's (HTML § 8.1.4.6): its error, message and filename as
      * detail[0], [1] and [2] (the two strings, strings), and its lineno and
      * colno; a PromiseRejectionEvent's: its promise and reason as detail[0]
-     * and [1]. Traced with the event. */
-    bool error_event, rejection_event;
+     * and [1]; a MessageEvent's (HTML § 9.3.2): its data, origin,
+     * lastEventId, source and ports as detail[0] to [4] (origin and
+     * lastEventId strings, ports a frozen array). Traced with the event. */
+    bool error_event, rejection_event, message_event;
     uint32_t lineno, colno;
-    JSValue detail[3];
+    JSValue detail[D_EVENT_DETAILS];
     /* A CustomEvent's (DOM § 2.4): its detail, null until set. Traced with
      * the event. */
     bool custom;
@@ -80,15 +86,16 @@ static bool handler_on(const os64_dom_t *dom, int kind)
  * WindowEventHandlers, as far as the types named here reach: the body's
  * onload, onfocus and onblur are window's, and so are its onscroll,
  * onresize, onpopstate, onhashchange, ononline, onoffline,
- * onlanguagechange, onerror, onunhandledrejection and onrejectionhandled
- * (handlers only with the switch on, handler_on). */
+ * onlanguagechange, onerror, onunhandledrejection, onrejectionhandled,
+ * onmessage and onmessageerror (handlers only with the switch on,
+ * handler_on). */
 static bool window_reflecting(int kind)
 {
     return kind == D_EVENT_LOAD || kind == D_EVENT_FOCUS || kind == D_EVENT_BLUR ||
         kind == D_EVENT_SCROLL || kind == D_EVENT_RESIZE || kind == D_EVENT_POPSTATE ||
         kind == D_EVENT_HASHCHANGE || kind == D_EVENT_ONLINE || kind == D_EVENT_OFFLINE ||
         kind == D_EVENT_LANGUAGECHANGE || kind == D_EVENT_ERROR || kind == D_EVENT_UNHANDLEDREJECTION ||
-        kind == D_EVENT_REJECTIONHANDLED;
+        kind == D_EVENT_REJECTIONHANDLED || kind == D_EVENT_MESSAGE || kind == D_EVENT_MESSAGEERROR;
 }
 
 static void event_finalizer(JSRuntime *rt, JSValue value)
@@ -97,7 +104,7 @@ static void event_finalizer(JSRuntime *rt, JSValue value)
     if (event == NULL) return;
     JS_FreeValueRT(rt, event->target);
     JS_FreeValueRT(rt, event->current);
-    for (int i = 0; i < 3; i++) JS_FreeValueRT(rt, event->detail[i]);
+    for (int i = 0; i < D_EVENT_DETAILS; i++) JS_FreeValueRT(rt, event->detail[i]);
     JS_FreeValueRT(rt, event->custom_detail);
     js_free_rt(rt, event->type);
     js_free_rt(rt, event);
@@ -109,7 +116,7 @@ static void event_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
     if (event == NULL) return;
     JS_MarkValue(rt, event->target, mark);
     JS_MarkValue(rt, event->current, mark);
-    for (int i = 0; i < 3; i++) JS_MarkValue(rt, event->detail[i], mark);
+    for (int i = 0; i < D_EVENT_DETAILS; i++) JS_MarkValue(rt, event->detail[i], mark);
     JS_MarkValue(rt, event->custom_detail, mark);
 }
 
@@ -140,7 +147,7 @@ JSValue d_event_new_proto(os64_dom_t *dom, JSContext *ctx, JSValueConst prototyp
     *event = (DEvent){.target = JS_NULL, .current = JS_NULL, .type = copy,
                       .time = (double)now_ms(dom), .bubbles = bubbles,
                       .cancelable = cancelable, .initialized = true, .trusted = trusted,
-                      .detail = {JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED},
+                      .detail = {JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED},
                       .custom_detail = JS_NULL};
     JS_SetOpaque(object, event);
     return object;
@@ -606,12 +613,6 @@ static void report_pending(os64_dom_t *dom, JSContext *ctx)
     JS_FreeValue(ctx, error);
 }
 
-static bool runtime_failed(os64_dom_t *dom)
-{
-    os64_js_outcome_t probe;
-    return os64_js_context(dom->runtime, OS64_JS_ABI_ID, &probe) == NULL;
-}
-
 static bool sticky(os64_js_status_t status)
 {
     return status == OS64_JS_LIMIT || status == OS64_JS_CANCELLED ||
@@ -700,12 +701,13 @@ static int invoke_target(Dispatch *d, DValue *entry, uint8_t phase, bool capture
                 d_script_leave(dom, &before, false);
                 JS_FreeValue(d->ctx, callback);
                 if (JS_IsException(value)) {
-                    JSValue error = JS_GetException(d->ctx);
-                    if (runtime_failed(dom)) {
-                        JS_Throw(d->ctx, error);
+                    /* A runtime that must stop keeps its exception as the
+                     * engine made it, uncatchable. */
+                    if (!d_exception_catchable(d->ctx)) {
                         result = -1;
                         break;
                     }
+                    JSValue error = JS_GetException(d->ctx);
                     d_report_as(dom, d->ctx, error, script);
                     JS_FreeValue(d->ctx, error);
                 } else JS_FreeValue(d->ctx, value);
@@ -896,8 +898,10 @@ os64_js_status_t d_host_dispatch(os64_dom_t *dom, const os64_html_node_t *node, 
     /* Engine refusals between the wrapper's calls are latched by libjs and
      * reported by task_end; the binding's own refusal is reported here. */
     if (dispatch(&d, node) < 0 && JS_HasException(ctx)) {
+        /* A runtime that must stop is the task's failure, which task_end
+         * reports; nothing is told to the page. */
         JSValue error = JS_GetException(ctx);
-        d_report(dom, ctx, error);
+        if (d_exception_catchable(ctx)) d_report(dom, ctx, error);
         JS_FreeValue(ctx, error);
     }
     if (prevented != NULL) *prevented = d.event->canceled;
@@ -1114,13 +1118,14 @@ static JSValue target_method_on(os64_dom_t *dom, JSContext *ctx, JSValueConst se
                 d_string_free(dom, &type);
                 return JS_EXCEPTION;
             }
-        DListener *listener = listener_new(dom, ctx, entry, type.data, false);
+        uint32_t script = d_callback_script(dom, ctx, argv[1]);
+        DListener *listener = script == D_SCRIPT_FAILED ? NULL : listener_new(dom, ctx, entry, type.data, false);
         if (listener == NULL) result = JS_EXCEPTION;
         else {
             listener->capture = capture;
             listener->once = once;
             set_callback(dom, listener, JS_DupValue(ctx, argv[1]));
-            listener->script = d_callback_script(dom, ctx, argv[1]);
+            listener->script = script;
             count(dom, listener, 1);
         }
     }
@@ -1166,9 +1171,10 @@ static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSV
         }
         JSValue value = slot_value(dom, ctx, entry, slot);
         if (JS_IsException(value)) {
-            /* HTML reports a handler that fails to compile and answers null. */
+            /* HTML reports a handler that fails to compile and answers null;
+             * a runtime that must stop keeps its exception uncatchable. */
+            if (!d_exception_catchable(ctx)) return JS_EXCEPTION;
             JSValue error = JS_GetException(ctx);
-            if (runtime_failed(dom)) return JS_Throw(ctx, error);
             d_report(dom, ctx, error);
             JS_FreeValue(ctx, error);
             return JS_NULL;
@@ -1179,9 +1185,11 @@ static JSValue handler_property(JSContext *ctx, JSValueConst self, int argc, JSV
     if (slot == NULL || slot_refresh(dom, ctx, entry, slot) < 0) return JS_EXCEPTION;
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
     if (JS_IsObject(value)) {
+        uint32_t script = d_callback_script(dom, ctx, value);
+        if (script == D_SCRIPT_FAILED) return JS_EXCEPTION;
         slot_state(dom, slot, D_SLOT_FUNCTION);
         set_callback(dom, slot, JS_DupValue(ctx, value));
-        slot->script = d_callback_script(dom, ctx, value);
+        slot->script = script;
     } else slot_state(dom, slot, D_SLOT_EMPTY);
     listeners_changed(dom, entry);
     return JS_UNDEFINED;
@@ -1200,9 +1208,16 @@ enum {
  * the arguments in order), bubbles and cancelable, the stop-propagation,
  * stop-immediate and canceled flags cleared, isTrusted false (a host
  * event a page keeps and re-initializes is its own from then on), and no
- * target. -1 with an exception pending. */
-static int event_init(JSContext *ctx, DEvent *event, int argc, JSValueConst *argv, const char *who)
+ * target. -1 with an exception pending. Its two halves, the arguments
+ * converted (event_init_read: the type, engine memory, the caller's to
+ * free or hand to event_init_set) and the event changed, are for an init
+ * with arguments of its own to convert between them, so a conversion that
+ * throws leaves the event untouched. */
+typedef struct { char *type; bool bubbles, cancelable; } DInit;
+
+static int event_init_read(JSContext *ctx, int argc, JSValueConst *argv, const char *who, DInit *out)
 {
+    out->type = NULL;
     if (argc < 1) {
         JS_ThrowTypeError(ctx, "%s needs a type", who);
         return -1;
@@ -1215,15 +1230,29 @@ static int event_init(JSContext *ctx, DEvent *event, int argc, JSValueConst *arg
     int bubbles = argc > 1 ? JS_ToBool(ctx, argv[1]) : 0;
     int cancelable = argc > 2 ? JS_ToBool(ctx, argv[2]) : 0;
     if (bubbles < 0 || cancelable < 0) { js_free(ctx, copy); return -1; }
+    *out = (DInit){copy, bubbles != 0, cancelable != 0};
+    return 0;
+}
+
+static void event_init_set(JSContext *ctx, DEvent *event, DInit *init)
+{
     js_free(ctx, event->type);
-    event->type = copy;
-    event->bubbles = bubbles != 0;
-    event->cancelable = cancelable != 0;
+    event->type = init->type;
+    init->type = NULL;
+    event->bubbles = init->bubbles;
+    event->cancelable = init->cancelable;
     event->initialized = true;
     event->canceled = event->stop = event->stop_now = false;
     event->trusted = false;
     JS_FreeValue(ctx, event->target);
     event->target = JS_NULL;
+}
+
+static int event_init(JSContext *ctx, DEvent *event, int argc, JSValueConst *argv, const char *who)
+{
+    DInit init;
+    if (event_init_read(ctx, argc, argv, who, &init) < 0) return -1;
+    event_init_set(ctx, event, &init);
     return 0;
 }
 
@@ -1315,9 +1344,9 @@ JSValue d_event_construct(os64_dom_t *dom, JSContext *ctx, int argc, JSValueCons
  * that initEvent (or its interface's own init) must set up first. A name
  * not on the table is a NotSupportedError. A name on it is made as the
  * interface it names where this binding has that interface: Event,
- * CustomEvent, HashChangeEvent. Every other name on the table names an
- * interface this browser has not built (MouseEvent, UIEvent, KeyboardEvent
- * and the rest), and makes a plain Event, which is what every name made
+ * CustomEvent, HashChangeEvent, MessageEvent. Every other name on the table
+ * names an interface this browser has not built (MouseEvent, UIEvent,
+ * KeyboardEvent and the rest), and makes a plain Event, which is what every name made
  * before the table was read: `createEvent('MouseEvents')` followed by
  * initEvent is how pages have long dispatched a synthetic click, and
  * refusing the name would break them where today they work (MODERN_WEB.md
@@ -1327,7 +1356,9 @@ JSValue d_event_construct(os64_dom_t *dom, JSContext *ctx, int argc, JSValueCons
  * and a page that makes one has asked "is this a phone?". With the Modern
  * Web switch off the argument is not read and every call makes a plain
  * Event, as before the arc. */
-enum { C_REFUSED, C_EVENT, C_CUSTOM, C_HASHCHANGE, C_UNBUILT };
+enum { C_REFUSED, C_EVENT, C_CUSTOM, C_HASHCHANGE, C_MESSAGE, C_UNBUILT };
+
+static int message_defaults(os64_dom_t *dom, JSContext *ctx, DEvent *event);
 
 static int creatable(const char *name)
 {
@@ -1335,7 +1366,7 @@ static int creatable(const char *name)
         {"beforeunloadevent", C_UNBUILT}, {"compositionevent", C_UNBUILT}, {"customevent", C_CUSTOM},
         {"devicemotionevent", C_UNBUILT}, {"deviceorientationevent", C_UNBUILT}, {"dragevent", C_UNBUILT},
         {"event", C_EVENT}, {"events", C_EVENT}, {"focusevent", C_UNBUILT}, {"hashchangeevent", C_HASHCHANGE},
-        {"htmlevents", C_EVENT}, {"keyboardevent", C_UNBUILT}, {"messageevent", C_UNBUILT},
+        {"htmlevents", C_EVENT}, {"keyboardevent", C_UNBUILT}, {"messageevent", C_MESSAGE},
         {"mouseevent", C_UNBUILT}, {"mouseevents", C_UNBUILT}, {"storageevent", C_UNBUILT},
         {"svgevents", C_EVENT}, {"textevent", C_UNBUILT}, {"touchevent", C_REFUSED},
         {"uievent", C_UNBUILT}, {"uievents", C_UNBUILT},
@@ -1362,12 +1393,17 @@ static JSValue create_event(os64_dom_t *dom, JSContext *ctx, int argc, JSValueCo
     }
     JSValueConst prototype = as == C_CUSTOM && dom->custom_prototype != NULL ? dom->custom_prototype->value
                            : as == C_HASHCHANGE && dom->hashchange_prototype != NULL ? dom->hashchange_prototype->value
+                           : as == C_MESSAGE && dom->message_prototype != NULL ? dom->message_prototype->value
                            : JS_UNDEFINED;
     JSValue object = d_event_new_proto(dom, ctx, prototype, "", false, false, false);
     if (JS_IsException(object)) return object;
     DEvent *event = JS_GetOpaque(object, dom->event_class);
     event->initialized = false;
     event->custom = as == C_CUSTOM;
+    if (as == C_MESSAGE && dom->message_prototype != NULL && message_defaults(dom, ctx, event) < 0) {
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
     /* HashChangeEvent's members are its own data properties, as its
      * constructor makes them (window.c), here their defaults. */
     if (as == C_HASHCHANGE) {
@@ -1616,11 +1652,12 @@ static JSValue named_handler_property(JSContext *ctx, JSValueConst self, int arg
             if (slot != NULL) slot->handler = D_SLOT_EMPTY;
         }
         JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
-        if (slot == NULL) result = JS_EXCEPTION;
+        uint32_t script = slot != NULL && JS_IsObject(value) ? d_callback_script(dom, ctx, value) : D_NO_SCRIPT;
+        if (slot == NULL || script == D_SCRIPT_FAILED) result = JS_EXCEPTION;
         else if (JS_IsObject(value)) {
             slot_state(dom, slot, D_SLOT_FUNCTION);
             set_callback(dom, slot, JS_DupValue(ctx, value));
-            slot->script = d_callback_script(dom, ctx, value);
+            slot->script = script;
         } else slot_state(dom, slot, D_SLOT_EMPTY);
         listeners_changed(dom, entry);
     }
@@ -1975,4 +2012,205 @@ int d_error_events_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     }
     JS_FreeValue(ctx, event_interface);
     return result;
+}
+
+/* MESSAGE EVENTS (HTML § 9.3.2): MessageEvent, which a posted message's
+ * message and messageerror are (message.c fires them). Its attributes are
+ * the Event's own record. A MessageEvent's ports are a frozen array of
+ * MessagePorts, which this browser does not have, so every one is empty and
+ * a non-empty list is a TypeError; its source is a window or null. */
+
+enum { G_DATA, G_ORIGIN, G_LAST_EVENT_ID, G_SOURCE, G_PORTS, G_INIT };
+
+/* An empty array, frozen: what Object.freeze leaves of one (its length not
+ * writable, and the array not extensible). */
+static JSValue frozen_empty(JSContext *ctx)
+{
+    JSValue array = JS_NewArray(ctx);
+    if (JS_IsException(array)) return array;
+    if (JS_DefinePropertyValueStr(ctx, array, "length", JS_NewInt32(ctx, 0), 0) < 0 ||
+        JS_PreventExtensions(ctx, array) < 0) {
+        JS_FreeValue(ctx, array);
+        return JS_EXCEPTION;
+    }
+    return array;
+}
+
+/* A MessageEvent's record set: the values taken. */
+static void message_fields(JSContext *ctx, DEvent *event, JSValue data, JSValue origin, JSValue last_event_id,
+                           JSValue source, JSValue ports)
+{
+    JSValue fields[D_EVENT_DETAILS] = {data, origin, last_event_id, source, ports};
+    event->message_event = true;
+    for (int i = 0; i < D_EVENT_DETAILS; i++) {
+        JS_FreeValue(ctx, event->detail[i]);
+        event->detail[i] = fields[i];
+    }
+}
+
+/* A MessageEvent's members as WebIDL converts them, JS_UNDEFINED being
+ * each one's default; JS_EXCEPTION with an exception pending. origin is a
+ * USVString and lastEventId a DOMString, "" by default. */
+static JSValue message_text(os64_dom_t *dom, JSContext *ctx, JSValueConst value, bool scalar)
+{
+    if (JS_IsUndefined(value)) return JS_NewString(ctx, "");
+    if (!scalar) return JS_ToString(ctx, value);
+    DString text = {0};
+    if (!d_string_text(dom, ctx, value, &text, true)) return JS_EXCEPTION;
+    JSValue string = JS_NewStringLen(ctx, text.data, text.length);
+    d_string_free(dom, &text);
+    return string;
+}
+
+/* source: a MessageEventSource (a window, and this one is the only window
+ * a page here can name; a MessagePort or a ServiceWorker, which this
+ * browser does not have) or null, its default. */
+static JSValue message_source(JSContext *ctx, JSValueConst value)
+{
+    if (JS_IsUndefined(value) || JS_IsNull(value)) return JS_NULL;
+    JSValue global = JS_GetGlobalObject(ctx);
+    bool window = JS_IsObject(value) && JS_VALUE_GET_PTR(global) == JS_VALUE_GET_PTR(value);
+    JS_FreeValue(ctx, global);
+    if (!window) return JS_ThrowTypeError(ctx, "A MessageEvent's source is a window, a MessagePort or null");
+    return JS_DupValue(ctx, value);
+}
+
+/* ports: a sequence of MessagePorts, which must therefore be empty, as a
+ * new frozen array. */
+static JSValue message_ports(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
+{
+    if (!JS_IsUndefined(value)) {
+        JSValue *items;
+        size_t count;
+        if (d_sequence(dom, ctx, value, D_SEQUENCE_MAX, &items, &count) < 0) return JS_EXCEPTION;
+        d_sequence_free(ctx, items, count);
+        if (count != 0) return JS_ThrowTypeError(ctx, "A MessageEvent's ports are MessagePorts");
+    }
+    return frozen_empty(ctx);
+}
+
+/* initMessageEvent's members past data, converted in its arguments' order:
+ * origin, lastEventId, source, ports, into out[] as the record orders them
+ * from detail[1]. -1 with an exception pending and nothing to free. */
+static int message_members(os64_dom_t *dom, JSContext *ctx, JSValueConst origin, JSValueConst last_event_id,
+                           JSValueConst source, JSValueConst ports, JSValue out[4])
+{
+    out[0] = message_text(dom, ctx, origin, true);
+    out[1] = JS_IsException(out[0]) ? JS_EXCEPTION : message_text(dom, ctx, last_event_id, false);
+    out[2] = JS_IsException(out[1]) ? JS_EXCEPTION : message_source(ctx, source);
+    out[3] = JS_IsException(out[2]) ? JS_EXCEPTION : message_ports(dom, ctx, ports);
+    if (!JS_IsException(out[3])) return 0;
+    for (int i = 0; i < 4; i++) JS_FreeValue(ctx, out[i]);
+    return -1;
+}
+
+static JSValue message_event_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                                    JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    DEvent *event = JS_GetOpaque(self, dom->event_class);
+    if (event == NULL || !event->message_event) return JS_ThrowTypeError(ctx, "Expected a MessageEvent");
+    if (magic != G_INIT) return JS_DupValue(ctx, event->detail[magic]);
+    /* initMessageEvent(type, bubbles, cancelable, data, origin,
+     * lastEventId, source, ports): every argument converted, in order,
+     * before the event changes, so one that throws leaves it as it was;
+     * during a dispatch it then does nothing. */
+    JSValueConst at[8];
+    for (int i = 0; i < 8; i++) at[i] = i < argc ? argv[i] : JS_UNDEFINED;
+    DInit init;
+    if (event_init_read(ctx, argc, argv, "initMessageEvent", &init) < 0) return JS_EXCEPTION;
+    JSValue members[4];
+    if (message_members(dom, ctx, at[4], at[5], at[6], at[7], members) < 0) {
+        js_free(ctx, init.type);
+        return JS_EXCEPTION;
+    }
+    if (event->dispatching) {
+        js_free(ctx, init.type);
+        for (int i = 0; i < 4; i++) JS_FreeValue(ctx, members[i]);
+        return JS_UNDEFINED;
+    }
+    event_init_set(ctx, event, &init);
+    message_fields(ctx, event, JS_IsUndefined(at[3]) ? JS_NULL : JS_DupValue(ctx, at[3]), members[0], members[1],
+                   members[2], members[3]);
+    return JS_UNDEFINED;
+}
+
+JSValue d_message_event_new(os64_dom_t *dom, JSContext *ctx, const char *type, JSValue data, const char *origin,
+                            JSValueConst source)
+{
+    JSValue object = d_event_new_proto(dom, ctx, dom->message_prototype->value, type, false, false, true);
+    JSValue text = JS_IsException(object) ? JS_EXCEPTION : JS_NewString(ctx, origin);
+    JSValue empty = JS_IsException(text) ? JS_EXCEPTION : JS_NewString(ctx, "");
+    JSValue ports = JS_IsException(empty) ? JS_EXCEPTION : frozen_empty(ctx);
+    if (JS_IsException(ports)) {
+        JS_FreeValue(ctx, data);
+        JS_FreeValue(ctx, text);
+        JS_FreeValue(ctx, empty);
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
+    message_fields(ctx, JS_GetOpaque(object, dom->event_class), data, text, empty, JS_DupValue(ctx, source), ports);
+    return object;
+}
+
+/* An event createEvent('MessageEvent') makes: the record's defaults. */
+static int message_defaults(os64_dom_t *dom, JSContext *ctx, DEvent *event)
+{
+    JSValue members[4];
+    if (message_members(dom, ctx, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, members) < 0) return -1;
+    message_fields(ctx, event, JS_NULL, members[0], members[1], members[2], members[3]);
+    return 0;
+}
+
+/* new MessageEvent(type, init): MessageEventInit's members after
+ * EventInit's, in name order as WebIDL reads them: data, lastEventId,
+ * origin, ports, source. */
+static JSValue message_event_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    os64_dom_t *dom = d_binding(ctx);
+    if (dom == NULL) return JS_EXCEPTION;
+    JSValue object = constructed_event(dom, ctx, new_target, argc, argv, dom->message_prototype->value);
+    if (JS_IsException(object)) return object;
+    /* Each member is read and converted before the next is read. */
+    static const char *const names[] = {"data", "lastEventId", "origin", "ports", "source"};
+    JSValue got[5] = {JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED};
+    bool failed = false;
+    for (int i = 0; !failed && i < 5; i++) {
+        JSValue value = argc > 1 && JS_IsObject(argv[1]) ? JS_GetPropertyStr(ctx, argv[1], names[i]) : JS_UNDEFINED;
+        if (JS_IsException(value)) { failed = true; break; }
+        got[i] = i == 0 ? (JS_IsUndefined(value) ? JS_NULL : JS_DupValue(ctx, value))
+               : i == 1 ? message_text(dom, ctx, value, false)
+               : i == 2 ? message_text(dom, ctx, value, true)
+               : i == 3 ? message_ports(dom, ctx, value) : message_source(ctx, value);
+        JS_FreeValue(ctx, value);
+        failed = JS_IsException(got[i]);
+    }
+    if (failed) {
+        for (int i = 0; i < 5; i++) JS_FreeValue(ctx, got[i]);
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
+    message_fields(ctx, JS_GetOpaque(object, dom->event_class), got[0], got[2], got[1], got[4], got[3]);
+    return object;
+}
+
+int d_message_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    JSValue event_prototype = JS_GetClassProto(ctx, dom->event_class);
+    dom->message_prototype = d_retain(dom, ctx, JS_NewObjectProto(ctx, event_prototype));
+    JS_FreeValue(ctx, event_prototype);
+    if (dom->message_prototype == NULL) return -1;
+    JSValueConst prototype = dom->message_prototype->value;
+    static const char *const names[] = {"data", "origin", "lastEventId", "source", "ports"};
+    for (int i = 0; i < 5; i++)
+        if (d_accessor(dom, ctx, prototype, names[i], message_event_member, i, false) < 0) return -1;
+    if (d_method_named(dom, ctx, prototype, "initMessageEvent", message_event_member, 1, G_INIT) < 0) return -1;
+    JSValue event_interface = JS_GetPropertyStr(ctx, global, "Event");
+    if (JS_IsException(event_interface)) return -1;
+    JSValue interface = d_interface_new(ctx, "MessageEvent", 1, message_event_constructor, prototype,
+                                        event_interface);
+    JS_FreeValue(ctx, event_interface);
+    if (JS_IsException(interface)) return -1;
+    return JS_DefinePropertyValueStr(ctx, global, "MessageEvent", interface, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }

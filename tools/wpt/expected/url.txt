@@ -4222,6 +4222,10 @@ urlencoded-parser.any.html	response.formData() with input: †&†=x
 urlencoded-parser.any.html	response.formData() with input: ﻿test=﻿
 urlsearchparams-constructor.any.html	URLSearchParams constructor, DOMException as argument
 urlsearchparams-constructor.any.html	URLSearchParams constructor, FormData.
+# P2b: structuredClone refuses a URL and a URLSearchParams, which HTML does
+# not serialize. Each fails with the switch off.
+historical.any.html	URL: no structured serialize/deserialize support
+historical.any.html	URLSearchParams: no structured serialize/deserialize support
 [excluded]
 [passing]
 IdnaTestV2-removed.any.html	Loading data…
@@ -7033,6 +7037,8 @@ historical.any.html	Constructor only takes strings
 historical.any.html	Setting URL's href attribute and base URLs
 historical.any.html	URL.domainToASCII should be undefined
 historical.any.html	URL.domainToUnicode should be undefined
+historical.any.html	URL: no structured serialize/deserialize support
+historical.any.html	URLSearchParams: no structured serialize/deserialize support
 historical.any.html	searchParams on location object
 toascii.window.html	lookout.net (using URL)
 toascii.window.html	lookout.net (using URL.host)

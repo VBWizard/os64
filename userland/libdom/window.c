@@ -960,8 +960,7 @@ static int fragment_navigation(os64_dom_t *dom, JSContext *ctx, const char *url,
     int dispatched = JS_IsException(event) ? -1 : d_dispatch(dom, ctx, event, NULL);
     JS_FreeValue(ctx, event);
     if (dispatched >= 0) return 1;
-    os64_js_outcome_t probe;
-    if (os64_js_context(dom->runtime, OS64_JS_ABI_ID, &probe) == NULL) return -1;
+    if (!d_exception_catchable(ctx)) return -1;
     JSValue error = JS_GetException(ctx);
     d_report(dom, ctx, error);
     JS_FreeValue(ctx, error);

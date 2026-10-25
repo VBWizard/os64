@@ -1,0 +1,56 @@
+# WPT's requestidlecallback in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh requestidlecallback --update
+# rewrites [passing].
+[required]
+# P2b: requestIdleCallback, cancelIdleCallback and IdleDeadline. Each fails
+# with the switch off. What still fails: callback-timeout-when-busy, whose
+# idle callback runs in the 4 ms gaps between a busy page's clamped timers
+# (HTML lets an idle period start there; Chromium's come after frames, which
+# yonder does not draw on a schedule), and callback-timeout, whose busy loop
+# reads Date.now(), which the runner's clock never moves.
+basic.html	cancelIdleCallback cancels callbacks
+basic.html	requestIdleCallback schedules callbacks
+basic.html	window.cancelIdleCallback is defined
+basic.html	window.cancelIdleCallback() returns undefined
+basic.html	window.requestIdleCallback is defined
+basic.html	window.requestIdleCallback() returns a number
+callback-exception.html	requestIdleCallback callback exceptions are reported to error handler
+callback-invoked.html	requestIdleCallback callback is invoked at least once before the timeout
+callback-multiple-calls.html	requestIdleCallback callbacks should be invoked in order (called iteratively)
+callback-multiple-calls.html	requestIdleCallback callbacks should be invoked in order (called recursively)
+callback-xhr-sync.html	re-schedule idle callbacks after sync xhr
+cancel-invoked.html	A cancelled callback is never invoked
+cancel-invoked.html	Cancelling the currently executing idle callback should be allowed
+cancel-invoked.html	cancelIdleCallback does nothing if there is no callback with the given handle
+deadline-after-expired-timer.html	The deadline after an expired timer must not be negative
+deadline-max-timeout-dynamic.html	Check that the deadline is changed if there is a new timeout from within requestIdleCallback.
+deadline-max.html	Check that the deadline is less than 50ms.
+[excluded]
+callback-iframe.html	needs a frame (IFRAME.md, Tier 1)
+callback-iframe-different-origin.html	needs a frame (IFRAME.md, Tier 1)
+callback-removed-frame.html	needs a frame (IFRAME.md, Tier 1)
+callback-timeRemaining-cross-realm-method.html	needs a frame (IFRAME.md, Tier 1)
+callback-suspended.html	opens a second window, which this browser does not have
+callback-idle-periods.html	needs requestAnimationFrame (slice 5d)
+deadline-max-rAF.html	needs requestAnimationFrame (slice 5d)
+deadline-max-rAF-dynamic.html	needs requestAnimationFrame (slice 5d)
+idlharness.window.html	needs WPT's interfaces/ WebIDL files, which the runner does not fetch
+[passing]
+basic.html	cancelIdleCallback cancels callbacks
+basic.html	requestIdleCallback schedules callbacks
+basic.html	window.cancelIdleCallback is defined
+basic.html	window.cancelIdleCallback() returns undefined
+basic.html	window.requestIdleCallback is defined
+basic.html	window.requestIdleCallback() returns a number
+callback-exception.html	requestIdleCallback callback exceptions are reported to error handler
+callback-invoked.html	requestIdleCallback callback is invoked at least once before the timeout
+callback-multiple-calls.html	requestIdleCallback callbacks should be invoked in order (called iteratively)
+callback-multiple-calls.html	requestIdleCallback callbacks should be invoked in order (called recursively)
+callback-xhr-sync.html	re-schedule idle callbacks after sync xhr
+cancel-invoked.html	A cancelled callback is never invoked
+cancel-invoked.html	Cancelling the currently executing idle callback should be allowed
+cancel-invoked.html	cancelIdleCallback does nothing if there is no callback with the given handle
+deadline-after-expired-timer.html	The deadline after an expired timer must not be negative
+deadline-max-timeout-dynamic.html	Check that the deadline is changed if there is a new timeout from within requestIdleCallback.
+deadline-max.html	Check that the deadline is less than 50ms.

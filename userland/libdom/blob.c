@@ -51,6 +51,9 @@ void d_sequence_free(JSContext *ctx, JSValue *items, size_t count)
  * made it leave (ECMAScript's IteratorClose on an abrupt completion). */
 static void iterator_close(JSContext *ctx, JSValueConst iterator)
 {
+    /* A runtime that must stop runs no `return` and keeps its exception,
+     * uncatchable. */
+    if (!d_exception_catchable(ctx)) return;
     JSValue pending = JS_GetException(ctx);
     JSValue method = JS_GetPropertyStr(ctx, iterator, "return");
     if (!JS_IsException(method) && JS_IsFunction(ctx, method)) {
@@ -307,6 +310,33 @@ JSValue d_blob_new(os64_dom_t *dom, JSContext *ctx, DBytes *bytes)
     return blob;
 }
 
+bool d_blob_file(JSValueConst value, const char **name, int64_t *last_modified)
+{
+    DBlob *b = blob_state(value);
+    if (b == NULL || !b->file) return false;
+    *name = b->name;
+    *last_modified = b->last_modified;
+    return true;
+}
+
+JSValue d_file_new(os64_dom_t *dom, JSContext *ctx, DBytes *bytes, char *name, int64_t last_modified)
+{
+    char *type = bytes->type != NULL ? bytes->type : engine_copy(ctx, "", 0);
+    if (type == NULL || name == NULL) {
+        js_free(ctx, type);
+        js_free(ctx, name);
+        bytes->type = NULL;
+        d_bytes_free(ctx, bytes);
+        return JS_EXCEPTION;
+    }
+    JSValue file = blob_make(ctx, dom->file_prototype->value, bytes->bytes, bytes->length, type, true, name,
+                             last_modified);
+    bytes->bytes = NULL;
+    bytes->type = NULL;
+    bytes->length = 0;
+    return file;
+}
+
 /* sequence<BlobPart>, converted ONCE, as WebIDL converts the argument
  * before the options are read: the items, and for each one that is
  * neither a BufferSource nor a Blob its USVString (engine memory; NULL for
@@ -497,6 +527,9 @@ static JSValue file_constructor(JSContext *ctx, JSValueConst new_target, int arg
 static JSValue settled(JSContext *ctx, JSValue value)
 {
     bool rejected = JS_IsException(value);
+    /* A runtime that must stop keeps its exception, uncatchable, rather
+     * than a promise rejected with it. */
+    if (rejected && !d_exception_catchable(ctx)) return JS_EXCEPTION;
     JSValue argument = rejected ? JS_GetException(ctx) : value;
     JSValue resolving[2];
     JSValue promise = JS_NewPromiseCapability(ctx, resolving);

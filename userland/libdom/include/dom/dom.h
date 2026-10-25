@@ -684,6 +684,36 @@ uint32_t os64_dom_handler_bit(const char *type);
 uint64_t os64_dom_timer_next(const os64_dom_t *dom);
 bool os64_dom_timer_fire(os64_dom_t *dom, uint64_t now, os64_js_outcome_t *outcome);
 
+/* POSTED MESSAGES (HTML § 9.3.3; MODERN_WEB.md § P2b): what the page's
+ * window.postMessage queued, one task each, oldest first. next answers
+ * when the oldest was posted on the host's clock (options.now_ms), so a
+ * host can run it in its turn among the timers by time, or UINT64_MAX with
+ * none. fire runs AT MOST ONE as one task, a `message` (or `messageerror`)
+ * at window, and answers whether it ran one (outcome filled). A message
+ * whose targetOrigin the document does not have, or that nothing could
+ * hear, is dropped without a task, and the next is tried, unless it was
+ * posted after the page's next timer fell due (a timer queued first, whose
+ * task may add a listener for it): then fire answers false and leaves it.
+ * A message a message's task posts is queued behind it. Owner thread,
+ * between tasks. */
+uint64_t os64_dom_message_next(const os64_dom_t *dom);
+bool os64_dom_message_fire(os64_dom_t *dom, os64_js_outcome_t *outcome);
+
+/* IDLE CALLBACKS (W3C requestIdleCallback; MODERN_WEB.md § P2b): the host
+ * says when its loop is idle, and the binding runs the page's idle
+ * callbacks then. next answers when one may run on the host's clock: 0
+ * when one may run now, a later time when the only ones waiting were asked
+ * for by an idle callback (the next idle period starts no sooner, so a
+ * callback that asks for itself again runs once in each period, not once
+ * a turn), UINT64_MAX with none. run is the host saying it has nothing of
+ * its own to do: when the page has no timer due and no message queued, it
+ * starts an idle period if none is open and one may start, and runs AT MOST
+ * ONE idle callback as one task, answering whether it ran one (outcome
+ * filled). A callback's {timeout} is a timer of the page's, run by
+ * os64_dom_timer_fire. Owner thread, between tasks. */
+uint64_t os64_dom_idle_next(const os64_dom_t *dom);
+bool os64_dom_idle_run(os64_dom_t *dom, os64_js_outcome_t *outcome);
+
 /* The navigation a script asked for since the last take, if any: the last
  * ask wins, but with the Modern Web switch on history.go()s in a row add
  * up to one delta (OS64_DOM_NAVIGATE_HISTORY), as HTML runs each after the

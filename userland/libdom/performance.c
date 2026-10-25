@@ -177,23 +177,17 @@ static DEntry *entry_of(JSContext *ctx, JSValueConst value)
 }
 
 /* StructuredSerialize then StructuredDeserialize, which `detail` is given
- * as: the engine's own object writer and reader, which take what a
- * structured clone takes of plain data (objects, arrays, primitives, Date,
- * ArrayBuffer and typed arrays, shared references and cycles); anything
- * else, a Symbol or a function among them, is a DataCloneError.
- * Undefined and null are null. */
-static JSValue detail_clone(JSContext *ctx, JSValueConst value)
+ * as: the binding's structured clone (clone.c), so what it refuses is a
+ * DataCloneError and what a getter throws is thrown. Undefined and null
+ * are null. */
+static JSValue detail_clone(os64_dom_t *dom, JSContext *ctx, JSValueConst value)
 {
     if (JS_IsUndefined(value) || JS_IsNull(value)) return JS_NULL;
-    size_t size;
-    uint8_t *bytes = JS_WriteObject(ctx, &size, value, JS_WRITE_OBJ_REFERENCE);
-    if (bytes == NULL) {
-        JS_FreeValue(ctx, JS_GetException(ctx));
-        return d_error(ctx, "DataCloneError", "The detail cannot be cloned");
-    }
-    JSValue clone = JS_ReadObject(ctx, bytes, size, JS_READ_OBJ_REFERENCE);
-    js_free(ctx, bytes);
-    return clone;
+    DClone *clone = d_clone_write(dom, ctx, value, NULL, 0);
+    if (clone == NULL) return JS_EXCEPTION;
+    JSValue copy = d_clone_read(dom, ctx, clone);
+    d_clone_free(dom->engine, clone);
+    return copy;
 }
 
 /* A DOMHighResTimeStamp, which is a restricted double: NaN and the
@@ -410,7 +404,7 @@ static JSValue mark_make(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype
         JS_ThrowTypeError(ctx, "A mark's startTime may not be negative");
         goto done;
     }
-    JSValue cloned = detail_clone(ctx, detail);
+    JSValue cloned = detail_clone(dom, ctx, detail);
     if (!JS_IsException(cloned)) result = entry_new(ctx, prototype, K_MARK, name, time, 0, cloned);
 done:
     JS_FreeValue(ctx, detail);
@@ -502,7 +496,7 @@ static JSValue measure(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *
         else begin = 0;
     }
     if (ok < 0) goto done;
-    JSValue detail = detail_clone(ctx, member[0]);
+    JSValue detail = detail_clone(dom, ctx, member[0]);
     if (JS_IsException(detail)) goto done;
     result = entry_new(ctx, dom->entry_prototypes[P_MEASURE]->value, K_MEASURE, name, begin, end - begin, detail);
     if (!JS_IsException(result) && buffer_add(dom, ctx, result) < 0) {
@@ -802,6 +796,8 @@ int d_performance_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (class_of(dom, performance_id, &performance_class) < 0 || class_of(dom, entry_id, &entry_class) < 0 ||
         class_of(dom, timing_id, &timing_class) < 0 || class_of(dom, navigation_id, &navigation_class) < 0)
         return -1;
+    /* A mark's and a measure's detail are structured clones. */
+    if (d_clone_setup(dom, ctx, global) < 0) return -1;
     /* The time origin, read once. */
     os64_dom_timing_t t;
     timing_read(dom, &t);

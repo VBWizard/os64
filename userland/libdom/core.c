@@ -99,6 +99,22 @@ bool d_context(os64_dom_t *dom, JSContext *ctx, const char *abi)
     return true;
 }
 
+bool d_exception_catchable(JSContext *ctx)
+{
+    JSClassID id = os64_js_class_id(&anchor_slot);
+    JSValue anchor = JS_GetClassProto(ctx, id);
+    os64_dom_t *dom = JS_GetOpaque(anchor, id);
+    JS_FreeValue(ctx, anchor);
+    if (dom == NULL) return true;
+    /* Inside a page's call the budget is asked, which also sees a memory
+     * limit the engine has not yet raised to the runtime; anywhere else,
+     * whether the runtime has failed. */
+    os64_js_outcome_t probe;
+    os64_js_status_t status = os64_js_check_budget(dom->runtime, OS64_JS_ABI_ID, &probe);
+    if (status == OS64_JS_BAD_ARGUMENT) return os64_js_context(dom->runtime, OS64_JS_ABI_ID, &probe) != NULL;
+    return status == OS64_JS_OK;
+}
+
 os64_dom_t *d_binding(JSContext *ctx)
 {
     JSClassID id = os64_js_class_id(&anchor_slot);
@@ -436,6 +452,8 @@ void os64_dom_drain(os64_dom_t *dom)
     d_report_drain(dom);
     d_event_drain(dom);
     d_timer_drain(dom);
+    d_message_drain(dom);
+    d_idle_drain(dom);
     /* The requests out are cancelled with the host and forgotten. */
     d_fetch_drain(dom);
     for (DValue *entry = dom->values; entry != NULL; entry = entry->next) {
@@ -456,6 +474,7 @@ void os64_dom_free(os64_dom_t *dom)
         query = next;
     }
     d_timer_free(dom);
+    d_idle_free(dom);
     d_fetch_free(dom);
     d_window_free(dom);
     d_document_free(dom);
@@ -478,11 +497,12 @@ void os64_dom_free(os64_dom_t *dom)
 }
 
 size_t os64_dom_bytes(const os64_dom_t *dom) { return dom != NULL ? dom->bytes : 0; }
-/* The five registries: wrappers and other held values, listener callbacks,
- * timer callbacks with their arguments, what the requests out hold, and the
- * failures waiting for their events (report.c). */
+/* The seven registries: wrappers and other held values, listener callbacks,
+ * timer callbacks with their arguments, what the requests out hold, the
+ * failures waiting for their events (report.c), the windows that posted
+ * the messages waiting (message.c), and the idle callbacks (idle.c). */
 size_t os64_dom_registry_count(const os64_dom_t *dom)
 {
     return dom != NULL ? dom->retained + dom->listeners_held + dom->timers_held + dom->requests_held +
-        dom->pending_held : 0;
+        dom->pending_held + dom->messages_held + dom->idle_live : 0;
 }

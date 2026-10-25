@@ -1337,7 +1337,9 @@ static void reader_closed(JSContext *ctx, DReader *r, JSValueConst error)
     if (!JS_IsUndefined(fn)) {
         JSValue done = JS_Call(ctx, fn, JS_UNDEFINED, 1, &error);
         JS_FreeValue(ctx, done);
-        if (JS_IsException(done)) JS_FreeValue(ctx, JS_GetException(ctx));
+        /* A settle that failed is no failure of the caller's; one the
+         * runtime must stop at is left pending, uncatchable. */
+        if (JS_IsException(done) && d_exception_catchable(ctx)) JS_FreeValue(ctx, JS_GetException(ctx));
     }
     JS_FreeValue(ctx, r->closed_resolve);
     JS_FreeValue(ctx, r->closed_reject);
@@ -2457,7 +2459,7 @@ void d_fetch_abort(os64_dom_t *dom, JSContext *ctx, uint32_t token, void *answer
          * stops. */
         JSValue done = JS_Call(ctx, request->held[FETCH_REJECT], JS_UNDEFINED, 1, &reason);
         JS_FreeValue(ctx, done);
-        if (JS_IsException(done)) JS_FreeValue(ctx, JS_GetException(ctx));
+        if (JS_IsException(done) && d_exception_catchable(ctx)) JS_FreeValue(ctx, JS_GetException(ctx));
         d_request_end(dom, request, true);
         return;
     }
@@ -2601,8 +2603,10 @@ os64_js_status_t os64_dom_fetched(os64_dom_t *dom, uint32_t token, const os64_do
         request = d_request_find(dom, token);
         if (request != NULL) d_request_end(dom, request, false);
         if (JS_HasException(ctx)) {
+            /* A runtime that must stop is the task's failure, which
+             * task_end reports; nothing is told to the page. */
             JSValue error = JS_GetException(ctx);
-            d_report(dom, ctx, error);
+            if (d_exception_catchable(ctx)) d_report(dom, ctx, error);
             JS_FreeValue(ctx, error);
         }
     }

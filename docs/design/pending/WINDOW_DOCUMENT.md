@@ -458,9 +458,12 @@ Window to 66.8% C / 82.4% scan.
   `onmessageerror`: same-window only, a `MessageEvent` task carrying a
   structured clone. Its common use is the `setImmediate` trick. Messages to
   another window are (d).
-- `structuredClone` (21.9%, 149 pages, 14 files). It uses the engine's
-  object writer and reader, as `performance.c` already does for plain data,
-  with `DataCloneError` for the rest and transfer of ArrayBuffers.
+- `structuredClone` (21.9%, 149 pages, 14 files), with `DataCloneError`
+  for what HTML does not serialize and transfer of ArrayBuffers. The plan
+  named the engine's object writer and reader, which `performance.c` used
+  for plain data; as built it is the binding's own StructuredSerialize
+  pair, which performance's `detail` now uses too (MODERN_WEB.md § P2b,
+  as built, says why).
 
 Oracle: add `html/webappapis/structured-clone`, `requestidlecallback` and
 `webmessaging/without-ports`.
@@ -757,7 +760,7 @@ scan pages.
 | `indexedDB` | ro attr | IndexedDB | absent | 24.69 | 113 | 2/3 | d | IndexedDB: a database engine; proxy: any IndexedDB read |
 | `scrollX` | ro attr | cssom-view | modern | 24.46 | 201 |  |  | counter `WindowScrollX` |
 | `visualViewport` | ro attr | cssom-view | absent | 22.66 | 65 |  | b P3b | VisualViewport over the view provider (no pinch zoom: the layout viewport), resize/scroll/scrollend events from the view step; proxy: visualViewport.height; lower bound |
-| `structuredClone` | method | html | absent | 21.93 | 149 | 14/24 | b P2b | the engine's object writer/reader (performance.c already clones plain data), DataCloneError for the rest, transfer of ArrayBuffers; counter `StructuredCloneMethod` |
+| `structuredClone` | method | html | absent | 21.93 | 149 | 14/24 | b P2b | the binding's StructuredSerialize pair (planned as the engine's object writer/reader; § P2b), DataCloneError for the rest, transfer of ArrayBuffers; counter `StructuredCloneMethod` |
 | `customElements` | ro attr | html | absent | 19.60 | 52 | 4/4 | c Tier 1 | custom elements: named in MODERN_WEB.md (Tier 1 or end of Tier 0), not yet a numbered slice; proxy: customElements.define |
 | `screenY` | ro attr | cssom-view | absent | 17.69 | 64 |  | b P3b | the window's position, which the view provider does not carry today (os64_gui_window_get_state has it); counter `WindowScreenY` |
 | `screenX` | ro attr | cssom-view | absent | 17.15 | 62 |  | b P3b | the window's position, which the view provider does not carry today (os64_gui_window_get_state has it); counter `WindowScreenX` |

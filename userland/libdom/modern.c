@@ -76,6 +76,12 @@ static const DModernRow kModern[] = {
      * shape holds them instead (tools/test_dom_modern.inc). */
     {(const char *const[]){NULL}, d_document_install},
     {(const char *const[]){"CustomEvent", NULL}, d_custom_event_install},
+    /* P2b. The clone is read and written through the encoding row's
+     * DataView, the blob row's File and the exception row's DOMException,
+     * all installed above. */
+    {(const char *const[]){"structuredClone", NULL}, d_clone_install},
+    {(const char *const[]){"postMessage", "onmessage", "onmessageerror", "MessageEvent", NULL}, d_message_install},
+    {(const char *const[]){"requestIdleCallback", "cancelIdleCallback", "IdleDeadline", NULL}, d_idle_install},
 };
 
 int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)

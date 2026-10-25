@@ -160,7 +160,9 @@ static JSValue browsing_member(JSContext *ctx, JSValueConst self, int argc, JSVa
     case B_QUEUE_MICROTASK: {
         if (argc < 1 || !JS_IsFunction(ctx, argv[0]))
             return JS_ThrowTypeError(ctx, "queueMicrotask needs a function");
-        JSValueConst job[2] = {argv[0], JS_NewUint32(ctx, d_callback_script(dom, ctx, argv[0]))};
+        uint32_t script = d_callback_script(dom, ctx, argv[0]);
+        if (script == D_SCRIPT_FAILED) return JS_EXCEPTION;
+        JSValueConst job[2] = {argv[0], JS_NewUint32(ctx, script)};
         return JS_EnqueueJob(ctx, microtask, 2, job) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
     }
     case B_ISOLATED: return JS_FALSE;

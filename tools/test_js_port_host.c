@@ -15,6 +15,10 @@ static size_t live, live_bytes, attempts, fail_at;
  * path that asks again and again (a resolver's lookups through a layout)
  * fails each time, where fail_at fails once and the next ask heals. */
 static size_t fail_size;
+/* How many allocations of 8 MiB or more were asked for: what a page that
+ * should already have been stopped would make, where nothing else in a
+ * fixture is that large. */
+static size_t large_asks;
 os64_time_t js_test_clock = {.epoch = 1700000000, .tz_offset_minutes = 330,
                             .ticks_into_second = 37, .ticks_per_second = 100};
 int js_test_clock_failed;
@@ -25,6 +29,7 @@ static int write_failed;
 typedef union { max_align_t alignment; struct { size_t size; } meta; } Block;
 void *os64_malloc(size_t n)
 {
+    if (n >= ((size_t)8 << 20)) large_asks++;
     if (++attempts == fail_at || (fail_size != 0 && n == fail_size) || n > SIZE_MAX - 15 - sizeof(Block)) return NULL;
     n = (n + 15) & ~(size_t)15;
     Block *block = malloc(sizeof(*block) + n);

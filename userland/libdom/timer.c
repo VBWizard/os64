@@ -46,10 +46,12 @@ static void insert(os64_dom_t *dom, DTimer *timer)
     *link = timer;
 }
 
-static DTimer *unlink_id(os64_dom_t *dom, uint32_t id)
+/* The timer `id`, unlinked: one the page set (clearTimeout's), or with
+ * `binding` one the binding set for itself (d_timer_cancel's). */
+static DTimer *unlink_id(os64_dom_t *dom, uint32_t id, bool binding)
 {
     for (DTimer **link = &dom->timers; *link != NULL; link = &(*link)->next)
-        if ((*link)->id == id) {
+        if ((*link)->id == id && (*link)->binding == binding) {
             DTimer *timer = *link;
             *link = timer->next;
             dom->timer_count--;
@@ -76,7 +78,7 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
     if (magic == T_CLEAR) {
         uint32_t id = 0;
         if (argc > 0 && JS_ToUint32(ctx, &id, argv[0]) < 0) return JS_EXCEPTION;
-        DTimer *timer = id != 0 ? unlink_id(dom, id) : NULL;
+        DTimer *timer = id != 0 ? unlink_id(dom, id, false) : NULL;
         if (timer != NULL) timer_free(dom, timer);
         return JS_UNDEFINED;
     }
@@ -97,6 +99,8 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
         return JS_EXCEPTION;
     }
     if (delay < 0) delay = 0;
+    uint32_t script = function ? d_callback_script(dom, ctx, handler) : D_SCRIPT_PAGE;
+    if (script == D_SCRIPT_FAILED) return JS_EXCEPTION;
     if (dom->timer_count >= OS64_DOM_TIMERS_MAX || dom->timer_id == INT32_MAX) {
         d_free(dom, source.data);
         return d_error(ctx, "QuotaExceededError", "Too many timers");
@@ -119,7 +123,7 @@ static JSValue timer_method(JSContext *ctx, JSValueConst self, int argc, JSValue
             timer->argc = extra;
         }
         timer->callback = JS_DupValue(ctx, handler);
-        timer->script = d_callback_script(dom, ctx, handler);
+        timer->script = script;
         dom->timers_held += held_values(timer);
     } else {
         timer->source = source.data;
@@ -149,6 +153,7 @@ uint32_t d_timer_add(os64_dom_t *dom, JSContext *ctx, JSValue callback, uint64_t
         return 0;
     }
     timer->callback = callback;
+    timer->binding = true;
     dom->timers_held += held_values(timer);
     timer->id = ++dom->timer_id;
     timer->nesting = dom->timer_nesting + 1;
@@ -161,7 +166,7 @@ uint32_t d_timer_add(os64_dom_t *dom, JSContext *ctx, JSValue callback, uint64_t
 
 void d_timer_cancel(os64_dom_t *dom, uint32_t id)
 {
-    DTimer *timer = id != 0 ? unlink_id(dom, id) : NULL;
+    DTimer *timer = id != 0 ? unlink_id(dom, id, true) : NULL;
     if (timer != NULL) timer_free(dom, timer);
 }
 

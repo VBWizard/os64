@@ -251,6 +251,7 @@ uint32_t d_callback_script(os64_dom_t *dom, JSContext *ctx, JSValueConst functio
      * answers undefined for any function that is not a script's. */
     if (dom->filename_getter != NULL && JS_IsFunction(ctx, function)) {
         JSValue name = JS_Call(ctx, dom->filename_getter->value, function, 0, NULL);
+        if (JS_IsException(name) && !d_exception_catchable(ctx)) return D_SCRIPT_FAILED;
         const char *text = JS_IsException(name) ? NULL : JS_IsString(name) ? JS_ToCString(ctx, name) : NULL;
         if (JS_IsException(name)) discard(ctx);
         JS_FreeValue(ctx, name);

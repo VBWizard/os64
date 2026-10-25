@@ -3014,3 +3014,260 @@ findings, each answered in a commit of its own:
 
 **Booked** (DEBTS.md § Browser layout): loud for canvas only; a canvas's
 size a script sets.
+
+### P2b, as built
+
+Built by Opus on `opus/tmw-p2b-message`, from `userland` `bd7e1b75`, from
+the P2b brief and WINDOW_DOCUMENT.md § P2b. The builder's adversarial and
+truth passes and a cold read are done, the cold read's eight findings
+fixed (§ Review).
+
+**Why.** Three of the most-used members window lacked: `requestIdleCallback`
+(Chrome 54.2%, 343 kept pages), `postMessage` (52.1%, 194; its common use
+is the setImmediate trick, a page posting itself a message to run a
+callback after the current task) and `structuredClone` (21.9%, 149).
+
+**What was built.** The six members of § P2b and two interfaces, three rows
+of the table (LIBDOM.md § P2b's rows has every rule):
+
+- **`structuredClone`** (libdom `clone.c`): HTML's
+  StructuredSerializeWithTransfer and StructuredDeserializeWithTransfer,
+  the binding's one copy, which `postMessage` and a performance mark's
+  `detail` use too. It clones what HTML serializes and this browser has:
+  the primitives and their wrapper objects, Date, RegExp, ArrayBuffer
+  (resizable ones keep their maximum) and every view, Map and Set, Error
+  and its six kinds (with an own `cause` and `stack`), arrays, ordinary
+  objects (getters run, in [[OwnPropertyKeys]] order), Blob, File and
+  DOMException, a value met twice being one value in the copy; anything
+  else is a DataCloneError. The transfer list's ArrayBuffers are copied
+  into the record and detached once the clone has succeeded whole.
+- **`postMessage`, `onmessage`, `onmessageerror`** and **`MessageEvent`**
+  (`message.c`, `event.c`): HTML's window post message steps with the
+  target the caller's own window, `targetOrigin` parsed before the message
+  is cloned, one task per message queued at the target window and run by
+  the host (`os64_dom_message_fire`), the targetOrigin checked as it runs,
+  the clone read in the target's realm, `messageerror` when it cannot be
+  (kept for frames: in one realm every refusal the reader can meet ends
+  the task, so no page reaches it today).
+  `MessageEvent`'s constructor, `initMessageEvent` and
+  `createEvent('MessageEvent')`; its `ports` is an empty frozen array,
+  there being no MessagePort.
+- **`requestIdleCallback`, `cancelIdleCallback`** and **`IdleDeadline`**
+  (`idle.c`): idle periods that start when the host says its loop is idle
+  and the page has no task due (`os64_dom_idle_run`), every callback asked
+  for until then runnable and run one a task, oldest first, while
+  HTML's computeDeadline (50 ms, or the next timer) has not passed, read
+  again at every `timeRemaining()`; a `timeout` is a timer of the
+  window's, which calls the callback timed out if no period ran it first.
+- **yonder** runs a page's posted messages and due timers by when each was
+  queued, a timer first on a tie, in every page's turn (`queued_task`),
+  the view's events first in a turn once a rendering opportunity while
+  those keep coming (`yonder_scripts_view_due`), and the shown page's idle
+  callbacks when its turn finds nothing else to run;
+  the bell brings the loop back while one is due and the ticker is offered
+  the time the next idle period may start.
+
+**The frame rule** (IFRAME.md § What the open slices do now, "0e P2b";
+§ The cluster and the window proxy, its `postMessage` paragraph). P2b's
+same-window `postMessage` is that design with the target the caller:
+
+- The clone writes in one realm and reads in another even when both are
+  the primary. `d_clone_write(dom, ctx, ...)` reads in the poster's realm
+  and `d_clone_read(dom, ctx, ...)` builds in the target's, each through
+  the intrinsics its own binding took before any page ran
+  (`d_clone_setup`, one per binding, so one per realm when bindings are
+  per document); the record between them holds only what the runtime
+  shares, primitives, atoms and bytes, never a realm's object.
+- `MessageEvent` and the message task take the target window as a
+  parameter. `post_message` names the target (the binding whose window's
+  member was called) and the poster (the same binding here) as two things;
+  the message is queued on the target's binding and its task opened there
+  (`d_host_dispatch` on the target), the event made in the target's realm
+  (`d_message_event_new(target, ...)`); what the poster gives the message
+  is captured as it posts: its window as `source`, its document's origin
+  serialized as `origin`, and `targetOrigin` resolved against it. The
+  targetOrigin is checked against the target's document at delivery, as
+  IFRAME.md says; `lastEventId` is "" and `ports` empty.
+- `transfer` accepts ArrayBuffers and refuses anything else, ports
+  included, as IFRAME.md's `postMessage` does.
+- yonder's changes hold no page of their own: `queued_task` takes the host
+  in hand, and `script_turn` and `pictures_schedule`, which are the shown
+  page's by design, name it as they already did. No new file-level static.
+
+**Decided against the plan, with why** (each for the cold read):
+
+1. **The clone is the binding's own, not the engine's object writer and
+   reader.** The plan named `JS_WriteObject`/`JS_ReadObject`, as
+   `performance.c` used for plain data. The writer reads property slots
+   directly, so a getter is "only value properties are supported" where
+   HTML calls it (WPT's "Object with a getter that throws" and
+   webmessaging's 026); it drops an array's non-index properties; and it
+   cannot write a Map, a Set, a RegExp, an Error, a DataView, a Blob, a
+   File or a DOMException. A `structuredClone` that refuses a Map is half
+   an API (rule 1): a page that detects it and clones its state takes the
+   broken path where its own deep copy worked. So the pair is written
+   against HTML's algorithm, in C, over the engine's public API and
+   intrinsics the binding holds; `performance.c`'s `detail` moved onto it
+   (its own commit), so there is one copy.
+2. **A callback asked for during an idle period waits 50 ms for the next.**
+   HTML lets the next period start at once; Chromium starts its next long
+   idle period at the end of the current one. Without the rest, a callback
+   that asks for itself again runs once a turn of yonder's loop and holds
+   it busy for as long as the page wants. Any other request lets the next
+   period start at once.
+3. **Messages and timers are run by when each was queued.** HTML leaves
+   task sources' order to the browser; a fixed order (messages first)
+   would let a page whose every message posts another starve its own
+   timers, and the setImmediate trick is exactly that shape. Such a page
+   still has its view's events (a resize, a scroll): they are asked for
+   first in the turn once a rendering opportunity (16 ms) however many
+   tasks are waiting, as HTML updates the rendering between tasks. Its
+   idle callbacks may wait for as long as it posts, which HTML allows.
+   (The view step's cadence is the cold read's finding 7.)
+4. **A page's idle callbacks wait until it is shown**: only the shown
+   page's turn is the loop being idle (DEBTS.md).
+5. **Nothing is detached unless the whole clone succeeds.** HTML detaches
+   the transfer list's buffers one by one as it serializes, so a refusal
+   after (the last one detached already, a deserialization that fails)
+   leaves some detached; here their bytes are copied as the value is
+   written and they are detached once the copy is made (structuredClone)
+   or the message queued (postMessage). Only a refusal can tell. (As first
+   built the list was detached at the end of the write, before the read;
+   the cold read's finding 1 moved it.)
+
+**The seams, as they ended.**
+
+| Seam | What it is now |
+|---|---|
+| `os64_dom_message_next` / `_fire` (libdom `dom.h`) | when the oldest posted message was posted (`options.now_ms`), and the oldest run as one task, a `message` or `messageerror` at window; one its targetOrigin or nobody hears is dropped without a task |
+| `os64_dom_idle_next` / `_run` | when an idle callback may run (0 now, later only for ones an idle callback asked for, UINT64_MAX none), and the host's "my loop is idle": at most one idle callback as one task, refused while a timer is due or a message queued |
+| `d_clone_write` / `d_clone_read` / `d_clone_free` (internal.h) | the structured clone's pair, each given its realm's binding and context; the record no realm's, read once |
+| `d_clone_setup` | the intrinsics the pair calls, taken from a binding's global before any page ran, by each row that clones |
+| `D_EVENT_MESSAGE`, `_MESSAGEERROR` | event kinds window has handlers for, which the body reflects and a message's task fires |
+| `yonder_scripts_message_next` / `_fire`, `_idle_next` / `_run` (yonder `scripts.h`) | the binding's four, judged as a task's outcome |
+| `yonder_scripts_view_due`, `YONDER_SCRIPTS_VIEW_CADENCE_MS` | whether the view's events have gone unasked for a rendering opportunity (16 ms), which puts the view step first in `script_turn` |
+
+**Classic or modern.** All of it is the switch's: three rows, eight names.
+With it off nothing is queued and no idle callback exists, and a body's
+`onmessage` attribute is an ordinary attribute.
+
+**Numbers.** WPT, the base (`bd7e1b75`) → the head (passes of tests run;
+every `[required]` test fails with the switch off):
+
+| Directory | Before | After | `[required]` | `[excluded]` pages |
+|---|---|---|---|---|
+| `html/webappapis/structured-clone` (new) | 0 of 152 | 128 of 152 | 128 | 1 |
+| `requestidlecallback` (new) | 0 of 30 | 17 of 20 | 17 | 9 |
+| `webmessaging/without-ports` (new) | 0 of 26 | 27 of 30 | 27 | 11 |
+| `html/webappapis/scripting` | 111 | 116 | +5 | 0 |
+| `dom/nodes` | 1719 | 1722 | +3 | — |
+| `url` | 4224 | 4226 | +2 | — |
+
+What still fails: in structured-clone, what this browser does not have to
+clone (FileList, ImageData, ImageBitmap, MessagePort, OffscreenCanvas, a
+transferable ReadableStream, WebAssembly's growable SharedArrayBuffer) and
+the two transferred length-tracking views (DEBTS.md); in
+requestidlecallback, `callback-timeout-when-busy`'s two tests, whose idle
+callback runs in the 4 ms between a busy page's clamped timers (HTML
+allows it; DEBTS.md), and `callback-timeout`, whose busy loop reads
+`Date.now()`, which the runner's clock never moves; in webmessaging,
+010.html's three tests that call helpers the page never defines; in
+scripting's MessageEvent page, the tests that need MessageChannel or a
+ServiceWorker. Excluded by name: frames (IFRAME.md), a second window,
+requestAnimationFrame (slice 5d), MessageChannel and workers, a canvas,
+and the WebIDL files the runner does not fetch. Every one of the 34
+expectation directories passes at the head, both ways, with no pass lost.
+
+**The corpus**, 2026-10-22b replayed at the base and the head (each in the
+builder's scratch; the runner as in § Slice 0b): P2b's names were 89
+MISSING lines at the base (`postMessage` in 28 files, 45 asks;
+`structuredClone` 25, 38; `requestIdleCallback` 23, 25;
+`cancelIdleCallback` 13, 13) and are in none; MISSING lines 9164 → 9100;
+FAILED lines 238 → 238 in 128 pages both sides, none gained. The diff: 25
+pages of progress (about 15 sites), and 10 "regressions" in 5 sites, each
+the same one line, `MISSING global importScripts`: the setImmediate
+polyfills (and libraries that pick a scheduler) find `postMessage` now and
+then ask whether they are in a worker, which is the probe working, not a
+failure. Replayed 232, clean 21, incomplete 46, unfinished 13 and 26
+unjudged on both sides.
+
+**Host**, the base → the head: the DOM host 14,052 / 92,372 checks →
+15,153 / 100,629 (allocation sweeps 1,211 / 13,827 → 1,356 / 15,120), 0
+failed, `tools/test_dom_message.inc` holding a case per rule, the hostile
+cases (every intrinsic the clone calls replaced by the page first, getters
+that reach back in) and the sweeps of a clone, a message and an idle
+callback, binding and engine; the scripted-page host 7,864 → 7,925, 0
+failed, its new cases the setImmediate trick, an idle callback, and a
+page that posts itself messages for ever still hearing its resize, each
+through yonder's loop; yonder's host, its stream and fetch-job hosts, the html-dom
+host, the replay proof (43 fixture pages kept and replayed the same) and
+the WPT runner's self-test, all 0 failed; `make -C userland` builds.
+
+**Review.** The builder's adversarial pass looked for what a page can
+reach and size: every intrinsic the clone calls is one the binding took
+before any page ran (a case replaces each, and the copy is still made
+without one trap firing); every copy is filled by definition, never by a
+setter a page can shadow; no index or pointer into a growable array is
+held across a page's code (the writer's frames are indexed, a getter that
+clones, posts or transfers mid-clone is a case each); a graph's depth is
+the writer's and reader's own stacks, never C's (thirty thousand deep
+both ways, timed against fifteen thousand); a Map's entries come from its
+own forEach; the memory holds what it has met, so a getter that frees an
+object cannot let another take its address. Two proofs found two bugs,
+each fixed in its own commit: the replay proof saw kept fixture pages
+timed a millisecond from their replays (classes learned once a process,
+so a page's engine calls, and the interrupt checks that read the clock,
+depended on the page before it), and the DOM host's installer sweep saw a
+refused allocation at setup fail the runtime (the first engine call
+outside a task asks whether to stop); the classes are learned at a
+binding's first clone now. The truth pass corrected WINDOW_DOCUMENT.md's
+§ P2b and its appendix row (the plan's engine writer), LIBDOM.md's
+handler lists, createEvent table, performance `detail` and proof
+boundary, DEBTS.md's body-handler row, and retired its "no DOMException,
+no structuredClone" row, both halves now paid.
+
+The cold read found eight, each fixed in its own commit with a case and a hand mutant
+that fails it, except where the fix is text:
+
+1. A getter that resized a resizable buffer mid-clone made the reader's
+   view refuse, after the transfer had detached the buffer. The view is
+   made in a copy grown through ArrayBuffer's own `resize` and shrunk
+   back, so it is out of bounds as the page's was; and nothing is
+   detached unless the whole clone succeeds (decision 5).
+2. A binding that took an exception could swallow the engine's
+   uncatchable interrupt: the clone's DataView getters turned a deadline
+   into a DataCloneError a page's catch heard. `d_exception_catchable` is
+   asked before every such take; every `JS_GetException` in libdom was
+   read and each fixed or left with its reason (the commit lists them).
+3. An unheard message dropped those behind it past a timer whose task
+   adds the listener; the queue now stops at one posted after the next
+   timer.
+4. `clearTimeout` of a guessed id cancelled an idle callback's timeout
+   (or `AbortSignal.timeout`'s); a timer the binding sets for itself is
+   flagged and only the binding cancels it.
+5. `initMessageEvent` changed the event before converting its later
+   arguments; it converts all eight first.
+6. clone.c claimed every walk runs under the task's deadline; it is
+   checked only where the walk calls into the engine (text, and a
+   DEBTS.md row).
+7. A page whose every message posts another starved the view's events;
+   they are asked first in the turn once a rendering opportunity
+   (decision 3).
+8. Three hand mutants survived: `messageerror` no page can reach (said
+   so in message.c, LIBDOM.md and here, the path kept for frames); a
+   refusal as the writer's memory table grows, which the allocation
+   sweep never met (its value holds more than 16 objects now); and
+   finding 2's, covered by its case.
+
+Codex's first round found one: an empty Map or Set with an own
+enumerable property was walked as an ordinary object, because the writer
+told a frame's kind by whether its entry list was NULL (a Map's expando
+broke the record, a Set's became an entry). Each writer frame now carries
+its kind, and only an object's or array's walks its own properties.
+
+**Booked** (DEBTS.md § Classic browser scripting): a cloned
+length-tracking view tracks no length; a transferred ArrayBuffer is
+copied, not moved; a cloned DOMException's name and message end at a NUL;
+an idle period can start between any two of a busy page's tasks; a page's
+idle callbacks wait until it is shown; a clone of plain data is not
+stopped by its task's deadline.
