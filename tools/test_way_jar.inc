@@ -356,6 +356,24 @@ static void cookie_budget(void)
     expect("budget: the chosen go in the RFC's order",
            session != NULL && strstr(session, "pre") == NULL && strncmp(lines, "Cookie: pre", 11) == 0, NULL);
 
+    // A LOGIN, THEN A SCRIPT'S PILE: the session set HttpOnly at sign-in,
+    // and after it forty cookies no less large that a page set, none
+    // HttpOnly. The session is kept first however much newer they are;
+    // of them, the newest that fit.
+    way_jar_free(jar);
+    jar = way_jar_new();
+    hear(jar, "https://login.test/session", true,
+         "user_session=SESSION; Path=/; Secure; HttpOnly; Max-Age=100000", 5);
+    for (int i = 0; i < 40; i++) {
+        snprintf(line, sizeof(line), "pile%02d=%s; Path=/; Max-Age=100000", i, value);
+        hear(jar, "https://login.test/", true, line, 10 + i);
+    }
+    off = way_hop_headers(jar, NULL, &u, true, 600, lines, hop_room);
+    expect("budget: an HttpOnly session outlasts a newer pile of a script's cookies",
+           off > 0 && strstr(lines, "user_session=SESSION") != NULL && strstr(lines, "pile39=") != NULL &&
+               strstr(lines, "pile00=") == NULL,
+           NULL);
+
     // A smaller older cookie still fits where a large newer one did not.
     way_jar_free(jar);
     jar = way_jar_new();
@@ -536,6 +554,17 @@ static void cookie_file_round_trip(void)
     expect("file: an expired line is not read", read_into(back, text, 1150).read == 0, NULL);
     way_jar_free(back);
     way_jar_free(jar);
+
+    // A Max-Age past any calendar is written as the most a line holds, and
+    // read back.
+    jar = way_jar_new();
+    hear(jar, "https://h.test/", true, "forever=1; Path=/; Max-Age=99999999999999999999999", 100);
+    text = file_of(jar, 200);
+    back = way_jar_new();
+    expect("file: a cookie past any calendar is written as a line can hold it, and read back",
+           strstr(text, "\t999999999999999999\tforever\t1\n") != NULL && read_into(back, text, 300).read == 1, text);
+    way_jar_free(back);
+    way_jar_free(jar);
 }
 
 static void cookie_file_hostile(void)
@@ -560,6 +589,8 @@ static void cookie_file_hostile(void)
         "ok.test\tFALSE\t/sub\tTRUE\t5000\t__Host-y\t1\n"         // ...or a path other than /
         "ok.test\tFALSE\t/\tFALSE\t5000\t__Secure-z\t1\n"        // a __Secure- one not Secure
         "ok.test\tFALSE\t/\tFALSE\t5000\tctl\ta\x01z\n"
+        "ok.test\tFALSE\t/\tFALSE\t5000\ta=b\tc\n"                // a name no Set-Cookie makes
+        "ok.test\tFALSE\t/\tFALSE\t5000\tsemi\tx;y\n"              // ...nor a value
         "ok.test\tFALSE\t/\tFALSE\t5000\t\t\n"                   // no name, no value
         "ok.test\tFALSE\t/\tFALSE\t0\tsession\t1\n"              // curl's session line: not refused, not read
         "ok.test\tFALSE\t/\tFALSE\t10\told\t1\n"                 // expired: the same
@@ -577,7 +608,7 @@ static void cookie_file_hostile(void)
     way_jar_read_t r;
     way_jar_read(jar, text, n, 100, &r);
     expect("hostile: every malformed or refused line is skipped and counted, the rest read",
-           r.read == 4 && r.refused == 18 && !r.short_of_memory, NULL);
+           r.read == 4 && r.refused == 20 && !r.short_of_memory, NULL);
     jar_expect("hostile: what was read", jar, "https://ok.test/", true, 100, "good=1; hidden=1; last=1");
     jar_expect("hostile: a domain cookie with two labels", jar, "https://a.sub.ok.test/", true, 100, "wide=1");
     // A NUL inside a line is no line at all; the reader is handed bytes.

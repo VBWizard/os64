@@ -531,12 +531,15 @@ oldest), whole cookies only. A hop's `Cookie` line may take 8 KiB
 (libway's `WAY_COOKIE_LINE_MAX`, beside its argument: Apache and nginx
 refuse a longer field by default), with room of its own beside it for the
 lines that say who is asking and a 4 KiB Referer, all inside libfetch's
-`OS64_FETCH_HOP_FIELDS_MAX`. When a site's cookies pass 8 KiB, the NEWEST
-that fit are sent and the oldest are left out, whole: the RFC orders the
-header but says nothing of which to cut, and its order would cut the
-cookies a site set last, which after a sign-in are the sign-in itself
-(Chris's first login looked logged out for exactly that, at the kilobyte
-this budget had before). A page whose requests left cookies out says so
+`OS64_FETCH_HOP_FIELDS_MAX`. When a site's cookies pass 8 KiB, the
+HttpOnly ones are kept first and then the rest, the NEWEST first within
+each, and what does not fit is left out whole: the RFC orders the header
+but says nothing of which to cut, and its order would cut the cookies a
+site set last, which after a sign-in are the sign-in itself (Chris's
+first login looked logged out for exactly that, at the kilobyte this
+budget had before); and a session is the server's own memory, which it
+sets HttpOnly, where whatever a page's scripts set (analytics, consent)
+can never be, so those go first however new. A page whose requests left cookies out says so
 on its record: `FAILED cookies: left out of a request to <host> (N)`,
 N the most one request left out (YONDER_DIAGNOSTICS.md).
 

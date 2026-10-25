@@ -124,8 +124,9 @@ kept:
 
 yonder sends a site at most 8 KB of its cookies in one request, which is
 as much as most servers read. A site that has set more than that is sent
-its newest, and the page's diagnostics file says `FAILED cookies` with how
-many were left out.
+first the cookies its pages' scripts cannot read (where a login lives),
+then its newest, and the page's diagnostics file says `FAILED cookies`
+with how many were left out.
 
 ## Settings
 

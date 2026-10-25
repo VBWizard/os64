@@ -46,9 +46,16 @@ SCRIPTS = 'tools/test_yonder_scripts_host.sh'
 mutants = [
     # 1. The budget, and which cookies go
     ('budget-line-1k', JAR_H, '#define WAY_COOKIE_LINE_MAX    8192', '#define WAY_COOKIE_LINE_MAX    1024', (WAY,)),
-    ('pick-oldest-kept', JAR_C, '(newest == NULL || older(newest, c)))', '(newest == NULL || older(c, newest)))', (WAY,)),
-    ('pick-stops-at-misfit', JAR_C, '            newest->pick = PICK_NO;\n            left++;',
-     '            newest->pick = PICK_NO;\n            left++;\n            room = 0;', (WAY,)),
+    ('pick-oldest-kept', JAR_C, 'a->http_only != b->http_only ? a->http_only : older(b, a);',
+     'a->http_only != b->http_only ? a->http_only : older(a, b);', (WAY,)),
+    ('pick-httponly-ignored', JAR_C, 'a->http_only != b->http_only ? a->http_only : older(b, a);', 'older(b, a);',
+     (WAY,)),
+    ('pick-stops-at-misfit', JAR_C, '            first->pick = PICK_NO;\n            left++;',
+     '            first->pick = PICK_NO;\n            left++;\n            room = 0;', (WAY,)),
+    ('read-name-equals', JAR_C, "    if (os64_strchr(field[5], '=') != NULL || os64_strchr(field[5], ';') != NULL ||\n"
+     "        os64_strchr(field[6], ';') != NULL)\n        return LINE_REFUSED;\n", '', (WAY,)),
+    ('write-expiry-unclamped', JAR_C, '(long)(c->expiry < FILE_EXPIRY_MAX ? c->expiry : FILE_EXPIRY_MAX)',
+     '(long)c->expiry', (WAY,)),
     ('hop-line-uncapped', JAR_C, 'size_t line_cap = cap < WAY_COOKIE_LINE_MAX ? cap : WAY_COOKIE_LINE_MAX;',
      'size_t line_cap = cap;', (WAY,)),
     ('short-note-any', JAR_C, 'if (s == NULL || to == NULL || left <= s->left)',

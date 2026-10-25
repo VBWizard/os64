@@ -51,8 +51,9 @@ void way_jar_hear(way_jar_t *jar, const os64_url_t *from, bool encrypted, const 
 
 // The cookies a request to `to` carries, as a Cookie header's value
 // ("a=1; b=2"), longest path first and then oldest, whole cookies only, at
-// most `cap` bytes with the NUL. When they do not all fit, the newest that
-// fit are the ones written (jar.c's pick_newest says why), still in that
+// most `cap` bytes with the NUL. When they do not all fit, the HttpOnly
+// ones are kept first and then the rest, the newest first within each, as
+// many as fit (jar.c's pick_to_send says why), still written in that
 // order. Answers the length written; `*left_out` (may be NULL) is how many
 // would have gone and did not fit.
 size_t way_jar_cookies(way_jar_t *jar, const os64_url_t *to, bool encrypted, int64_t now,

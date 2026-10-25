@@ -738,34 +738,45 @@ static size_t spelled(const Cookie *c)
 
 enum { PICK_NO = 0, PICK_MATCHES, PICK_SENT };
 
-// WHICH COOKIES GO WHEN NOT ALL FIT: the newest, as many as fit, newest
-// first, each taken whole (a smaller older one may still fit after a large
-// one did not). RFC 6265 § 5.4 orders the header and says nothing of which
-// to leave out, and its order — the oldest first — would cut exactly the
-// cookies a site set last, which after a login are the login: a session
-// cookie is created when the person signs in, after everything the site
-// set on the visits before. The ones chosen are still written in the RFC's
-// order (cookies()). Answers how many matching cookies were left out.
-static int32_t pick_newest(way_jar_t *jar, size_t room)
+// Which of two cookies is kept first when not all fit (pick_to_send): an
+// HttpOnly one before one that is not, and then the newer.
+static bool kept_before(const Cookie *a, const Cookie *b)
+{
+    return a->http_only != b->http_only ? a->http_only : older(b, a);
+}
+
+// WHICH COOKIES GO WHEN NOT ALL FIT: the HttpOnly ones first and then the
+// rest, the newest first within each, as many as fit, each taken whole (a
+// smaller one may still fit after a larger one did not). RFC 6265 § 5.4
+// orders the header and says nothing of which to leave out, and its order
+// — the oldest first — would cut exactly the cookies a site set last,
+// which after a login are the login: a session cookie is created when the
+// person signs in, after everything the site set on the visits before. And
+// a session is the server's own memory, which it sets HttpOnly so no
+// script reads it, where the cookies a page's scripts set (analytics,
+// consent, a test's bucket) can never be HttpOnly: so those are what is cut
+// first, however new. The ones chosen are still written in the RFC's order
+// (cookies()). Answers how many matching cookies were left out.
+static int32_t pick_to_send(way_jar_t *jar, size_t room)
 {
     size_t used = 0;
     int32_t taken = 0, left = 0;
     for (;;) {
-        Cookie *newest = NULL;
+        Cookie *first = NULL;
         for (int32_t i = 0; i < jar->n; i++) {
             Cookie *c = &jar->cookies[i];
-            if (c->pick == PICK_MATCHES && (newest == NULL || older(newest, c)))
-                newest = c;
+            if (c->pick == PICK_MATCHES && (first == NULL || kept_before(c, first)))
+                first = c;
         }
-        if (newest == NULL)
+        if (first == NULL)
             return left;
-        size_t need = (taken > 0 ? 2 : 0) + spelled(newest);
+        size_t need = (taken > 0 ? 2 : 0) + spelled(first);
         if (used + need <= room) {
-            newest->pick = PICK_SENT;
+            first->pick = PICK_SENT;
             used += need;
             taken++;
         } else {
-            newest->pick = PICK_NO;
+            first->pick = PICK_NO;
             left++;
         }
     }
@@ -793,7 +804,7 @@ static size_t cookies(way_jar_t *jar, const os64_url_t *to, bool encrypted, int6
     }
     purge_expired(jar, now);
     // Which match, and the room they take together: all of them go when
-    // they fit, and the newest that fit when they do not (pick_newest).
+    // they fit, and those pick_to_send keeps first when they do not.
     size_t all = 0;
     int32_t matching = 0;
     for (int32_t i = 0; i < jar->n; i++) {
@@ -810,7 +821,7 @@ static size_t cookies(way_jar_t *jar, const os64_url_t *to, bool encrypted, int6
         for (int32_t i = 0; i < jar->n; i++)
             if (jar->cookies[i].pick == PICK_SENT)
                 jar->cookies[i].pick = PICK_MATCHES;
-        int32_t left = pick_newest(jar, room);
+        int32_t left = pick_to_send(jar, room);
         if (left_out != NULL)
             *left_out = left;
     }
@@ -901,6 +912,11 @@ static const char kFileHead[] =
     "# yonder's cookies: the sites you are signed in to. Whoever can read this file\n"
     "# can sign in as you. Clear cookies, in yonder's Settings, empties it.\n";
 
+// The latest expiry a line holds: eighteen digits, all the reader takes
+// (line_expiry). A cookie set to last longer — a Max-Age past any calendar
+// — is written as lasting this long, some thirty billion years.
+#define FILE_EXPIRY_MAX 999999999999999999LL
+
 // Whether a field may go into a line: nothing that would end a field or
 // the line, nor any other control byte.
 static bool field_ok(const char *s)
@@ -975,7 +991,8 @@ char *way_jar_text(way_jar_t *jar, int64_t now, size_t *len)
         int w = os64_snprintf(text + at, need - at, "%s%s%s\t%s\t%s\t%s\t%ld\t%s\t%s\n",
                               c->http_only ? "#HttpOnly_" : "", c->host_only ? "" : ".", c->domain,
                               c->host_only ? "FALSE" : "TRUE", c->path, c->secure ? "TRUE" : "FALSE",
-                              (long)c->expiry, c->name, c->value);
+                              (long)(c->expiry < FILE_EXPIRY_MAX ? c->expiry : FILE_EXPIRY_MAX), c->name,
+                              c->value);
         if (w > 0 && (size_t)w < need - at)
             at += (size_t)w;
     }
@@ -1000,8 +1017,8 @@ static int64_t line_expiry(const char *s)
 {
     int64_t v = 0;
     size_t n = 0;
-    // Eighteen digits at most, which no sum below can carry past INT64_MAX
-    // (and which reach thirty billion years).
+    // Eighteen digits at most (FILE_EXPIRY_MAX), which no sum below can
+    // carry past INT64_MAX.
     for (; s[n] != '\0'; n++) {
         if (!digit(s[n]) || n == 18)
             return -1;
@@ -1069,6 +1086,11 @@ static int line_read(char *line, int64_t now, Line *out)
     h->nlen = os64_strlen(field[5]);
     h->value = field[6];
     h->vlen = os64_strlen(field[6]);
+    // What no Set-Cookie could have made: a name holding '=' or ';', a value
+    // holding ';', each a byte where the header's parse splits (heard()).
+    if (os64_strchr(field[5], '=') != NULL || os64_strchr(field[5], ';') != NULL ||
+        os64_strchr(field[6], ';') != NULL)
+        return LINE_REFUSED;
     h->secure = secure;
     h->http_only = http_only;
     if (!judged(h, h->domain, h->path, secure))
