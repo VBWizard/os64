@@ -41,7 +41,8 @@ works in the address field too.
 
 - **The address field** takes an address (`https://...`, `http://...`, or
   a bare `host/path`, which means http) or a path that begins with `/`.
-  Press Enter to go.
+  Press Enter to go. **Ctrl+L** takes you there from anywhere in the
+  window with the whole address selected, so what you type replaces it.
 - **Back and Forward** walk the pages you have been to, and the places
   within a page you went to by its `#` links or, with the modern web
   surface on (Settings, below), that its scripts added (a single-page
