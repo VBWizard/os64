@@ -3341,6 +3341,20 @@ kept records said `MISSING script module`.
   `s.type = 'module'` was an expando, and its script ran as a classic one
   (the first draft's own test passed that way; the mutant harness caught
   it). `text` and `async` are DEBTS rows.
+- **Module preloads**, added after the P5's first run. The P5's first
+  module page (a Vite build) died on its first statement: Vite's
+  modulepreload polyfill asks `link.relList.supports('modulepreload')`,
+  found no `relList`, and reached for `MutationObserver`, which is slice
+  5a's. `supports` answers true only for what yonder does, so the
+  preload is real: a link's `rel` and `relList` are reflected (libdom,
+  `relList` being classList's DOMTokenList over `rel`, with `supports`). At each of the stream's looks
+  for its sheets, `yonder_scripts_preload` walks the tree for `<link
+  rel=modulepreload>` whose `as` is a script's and begins each one's module
+  in the page's map, which fetches its imports as it lands and runs
+  nothing; a module script or import of it finds it fetched once.
+  `supports` answers `stylesheet`, and `modulepreload` with the switch on.
+  A link a script inserts after the parse, and the link's own `load` and
+  `error`, are DEBTS rows.
 
 **Decisions.**
 
@@ -3360,17 +3374,27 @@ kept records said `MISSING script module`.
   of 269 (99 `[required]`, each failing with the switch off; the two left
   out pass either way). The rest is DEBTS.md § ES modules (a script
   element's load and error events, `async = false` ordering, import maps,
-  modulepreload, import.meta.resolve, JSON and CSS modules), workers and
-  frames, and pages that need a `.py` handler or a server's delay. All 34
-  directories with expectations pass with no pass lost.
+  import.meta.resolve, JSON and CSS modules), workers and
+  frames, and pages that need a `.py` handler or a server's delay. The
+  preloads add two directories to `tools/wpt_fetch.sh` and to the
+  expectations: `html/semantics/document-metadata/the-link-element` 1 → 2
+  of 147 (`link-rellist.html`) and `preload` 20 → 22 of 811 (the two
+  modulepreload pages that ask only that a preload not hold the window's
+  `load`); the rest of `preload/modulepreload*` inserts its links by
+  script and waits on their `load` (DEBTS). All 37 directories with
+  expectations pass with no pass lost.
 - **Hosts**, 0 failed: libjs runtime 1,267 target-core and 6,096
   instrumented checks, the module sweep 5 and 243 allocations; scripted
-  page 8,053 (`tools/test_yonder_modules.inc` among them); yonder 2,028;
-  fetch job 374; DOM 15,252 and 100,817; replay self-test 43 pages, 0 problems; the libjs
-  prepare, engine and target-audit suites (190 engine exports, 27 runtime).
-- **Mutants** (`tools/test_modules_mutants.py`): 28, each caught (two first
+  page 8,060 (`tools/test_yonder_modules.inc` among them); yonder 2,028;
+  fetch job 374; DOM 15,215 and 100,986 (the first one's installer sweep
+  is one allocation shorter with the new members, 319 cuts for 320, and
+  each cut carries its checks); replay self-test 43 pages, 0 problems; the
+  libjs prepare, engine and target-audit suites (190 engine exports, 27
+  runtime).
+- **Mutants** (`tools/test_modules_mutants.py`): 36, each caught (two first
   missed, which is how libdom's unreflected `type` and unreported connected
-  modules were found).
+  modules were found; one of the preloads' first did not build, the
+  `-Werror` of an unused `dom`, and was reworded).
 - **Corpus** 2026-10-22b: `MISSING script module` was in 102 kept records
   and is in none of the head's replay; 15 say `MISSING script importmap`.
   The replay can measure no more: it answers none of a page's script
@@ -3379,5 +3403,12 @@ kept records said `MISSING script module`.
   kept after this slice, its requests kept, is the measure.
 - **QEMU**: a served module site (a graph of three, an async module, an
   inline one, dynamic imports from a module and from a classic script, a
-  `nomodule` fallback) runs in HTML's order, each file fetched once.
+  `nomodule` fallback) runs in HTML's order, each file fetched once. With
+  the preloads, three Vite builds over the wire: the shop demo's React app
+  renders its login page whole (it had died on the polyfill's first
+  statement on the P5), and TodoMVC's Svelte and Vue builds get past the
+  polyfill to the next surface each needs: the `Text` interface object
+  and `SVGElement` (Vue's mount asks `instanceof SVGElement`). Typing into
+  the shop's login field reaches `window.getSelection`, which React asks
+  around a focused input; its absence unmounts the app.
 - **P5**: GitHub's page, Chris's to run.

@@ -128,6 +128,38 @@ static void module_failure_case(void) {
     request_drop();
 }
 
+/* How often `needle` is in `text`. */
+static int count_in(const char *text, const char *needle) {
+    int n=0;
+    for(const char *at=strstr(text,needle);at!=NULL;at=strstr(at+1,needle)) n++;
+    return n;
+}
+
+/* A Vite page: its entry first, then the preloads of what it imports. A
+ * preload begins its module's fetch before the entry lands, and the entry's
+ * import finds it fetched, once; a preload nothing imports is fetched and
+ * never run, and one whose `as` is a style's is not a module's. The entry's
+ * first question is Vite's: whether the browser preloads modules itself. */
+static void module_preload_case(void) {
+    fake_fetch_reset();
+    fake_answer("GET","http://fixture.test/m/main.js",200,MODULE_JS,
+        "import {v} from './vendor.js';const r=document.createElement('link').relList;"
+        "note(r.supports('modulepreload')?'native':'polyfill');note(v);");
+    fake_answer("GET","http://fixture.test/m/vendor.js",200,MODULE_JS,"export const v='V';note('vendor');");
+    fake_answer("GET","http://fixture.test/m/extra.js",200,MODULE_JS,"note('extra');");
+    module_page("<script type=module src=/m/main.js></script><link rel=modulepreload href=/m/vendor.js>"
+        "<link rel='MODULEPRELOAD other' href=/m/extra.js><link rel=modulepreload as=style href=/m/look.js>");
+    check(loop_settle() && nrequest_jobs==3,"modules: the entry and two preloads are fetched beside the parse");
+    check(request_land("/m/main.js") && nrequest_jobs==2,"modules: the entry's import is the preload already out");
+    check(request_land("/m/vendor.js") && request_land("/m/extra.js") && loop_settle() && g.page.tree!=NULL &&
+          script_rebuild() && probe_text_is("out","vendor|native|V"),
+          "modules: the graph runs with the preloaded module, and the unimported preload runs nothing");
+    const char *record=request_record_text();
+    check(count_in(record,"request GET http://fixture.test/m/vendor.js")==1 && strstr(record,"/m/look.js")==NULL,
+          "modules: the preloaded module was fetched once, and the style one never");
+    request_drop();
+}
+
 /* With the Modern Web surface off, a module is what the page asked for and
  * did not get, and nothing of it runs. */
 static void module_modern_off_case(void) {
@@ -147,5 +179,6 @@ static void module_cases(void) {
     module_dynamic_case();
     module_classic_import_case();
     module_failure_case();
+    module_preload_case();
     module_modern_off_case();
 }

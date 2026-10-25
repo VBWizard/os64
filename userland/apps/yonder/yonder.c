@@ -10237,7 +10237,8 @@ static Page *stream_page(void)
 // entry for, by libpage's own rule and order (os64_page_sheets_in, a walk
 // of the tree, which costs a fraction of a model). A `style` element is
 // parsed now; a `link` is fetched under the stream's serial. A walk that
-// had no memory leaves them to the next look.
+// had no memory leaves them to the next look. The same looks find the
+// module preloads, once the page has a script host to hold their modules.
 static void stream_sheets(void)
 {
     if (g.stream.parser == NULL || g.stream.head.body != WAY_BODY_HTML)
@@ -10246,9 +10247,11 @@ static void stream_sheets(void)
     int64_t began = s_script_audit ? os64_micros() : 0;
     int32_t had = p->nsheets;
     int32_t listed = os64_page_sheets_in(page_doc(p), g.stream.head.url, stream_sheet_add, p);
+    yonder_scripts_preload(g.stream.scripts);
     if (s_script_audit) {
         char line[128];
-        os64_snprintf(line, sizeof(line), "yonder: stream sheets: %d listed, %d new, %d out, in %ld us",
+        os64_snprintf(line, sizeof(line),
+                      "yonder: stream sheets and preloads: %d sheets listed, %d new, %d out, in %ld us",
                       (int)listed, (int)(p->nsheets - had), (int)p->sheets_waiting,
                       (long)(os64_micros() - began));
         os64_debug_log(line);

@@ -154,6 +154,14 @@ void yonder_scripts_connected(yonder_scripts_t *scripts, const os64_html_node_t 
 // names as asked for and not got: an import map would let its modules
 // import bare names, and yonder reads none.
 bool yonder_scripts_importmap(const os64_html_node_t *script);
+// The page's `<link rel=modulepreload>` elements (HTML § Link type
+// "modulepreload"): each one's module, with its imports, begun in the page's
+// module map, where a module script or an import finds it fetched once; it
+// runs nothing. It walks the whole tree, so it may be asked again as the
+// parse goes on: a link it saw already names a module the map holds, and
+// begins nothing again. With the Modern Web surface only, which runs
+// modules.
+void yonder_scripts_preload(yonder_scripts_t *scripts);
 // A `javascript:` link followed (HTML § 7.4.2.3.3): the address after its
 // scheme, percent-decoded, then `#` and the fragment when it has one, which
 // arrives decoded (libpage's os64_page_request_t), all read as UTF-8, is

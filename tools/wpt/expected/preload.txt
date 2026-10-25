@@ -1,0 +1,29 @@
+# WPT's preload in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh preload --update
+# rewrites [passing].
+[required]
+[excluded]
+[passing]
+avoid-delaying-onload-link-modulepreload-exec.html	Executing modulepreload should not block the window's load event
+avoid-delaying-onload-link-modulepreload.html	Fetching modulepreload should not block the window's load event
+prefetch-events.html	Prefetch should do nothing with an empty href
+prefetch-events.html	Prefetch should do nothing with an invalid href
+prefetch-load-event.html	Prefetch should not block the load event
+preload-connect-to-doc.html	preload links only work for documents within browsing contexts
+preload-connect-to-doc.html	preload links only work when attached to the document
+reflected-as-value.html	Link preload "as" value for "" should be "".
+reflected-as-value.html	Link preload "as" value for "audio" should be "audio".
+reflected-as-value.html	Link preload "as" value for "fetch" should be "fetch".
+reflected-as-value.html	Link preload "as" value for "json" should be "json".
+reflected-as-value.html	Link preload "as" value for "style" should be "style".
+reflected-as-value.html	Link preload "as" value for "text" should be "text".
+reflected-as-value.html	Link preload "as" value for "track" should be "track".
+reflected-as-value.html	Link preload "as" value for "video" should be "video".
+supported-as-values.html?as=audio&expected=0	Test the supported value for <link rel=preload as="...">
+supported-as-values.html?as=garbagefoobar&expected=0	Test the supported value for <link rel=preload as="...">
+supported-as-values.html?as=iframe&expected=0	Test the supported value for <link rel=preload as="...">
+supported-as-values.html?as=json&expected=0	Test the supported value for <link rel=preload as="...">
+supported-as-values.html?as=object&expected=0	Test the supported value for <link rel=preload as="...">
+supported-as-values.html?as=video&expected=0	Test the supported value for <link rel=preload as="...">
+supported-as-values.html?as=worklet&expected=0	Test the supported value for <link rel=preload as="...">

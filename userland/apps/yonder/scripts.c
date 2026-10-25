@@ -802,6 +802,67 @@ static void module_prepare(yonder_scripts_t *s, const os64_html_node_t *script, 
     modules_progress(s);
 }
 
+// Whether `list` holds `token` (lowercase), as `rel`'s keywords are
+// compared: split on ASCII whitespace, without ASCII case.
+static bool rel_has(const char *list, const char *token)
+{
+    size_t n = os64_strlen(token);
+    for (const char *p = list; *p != '\0';) {
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\f' || *p == '\r')
+            p++;
+        const char *start = p;
+        while (*p != '\0' && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\f' && *p != '\r')
+            p++;
+        bool same = (size_t)(p - start) == n;
+        for (size_t i = 0; same && i < n; i++)
+            same = (start[i] >= 'A' && start[i] <= 'Z' ? start[i] - 'A' + 'a' : start[i]) == token[i];
+        if (same)
+            return true;
+    }
+    return false;
+}
+
+// A preload's link: an HTML `link` whose rel names modulepreload, whose
+// `href` is not empty, and whose `as` is a script's (absent, empty or
+// "script"; a worker's destination needs a worker, and JSON and CSS
+// modules are not read).
+static bool preload_link(const os64_html_node_t *n)
+{
+    if (n->kind != OS64_HTML_ELEMENT || n->ns != OS64_HTML_NS_HTML || n->tag != OS64_HTML_TAG_LINK)
+        return false;
+    const os64_html_attr_t *rel = os64_html_attr(n, "rel"), *href = os64_html_attr(n, "href");
+    const os64_html_attr_t *as = os64_html_attr(n, "as");
+    return rel != NULL && rel_has(rel->value, "modulepreload") && href != NULL && href->value[0] != '\0' &&
+           (as == NULL || as->value[0] == '\0' || os64_streq_nocase(as->value, "script"));
+}
+
+void yonder_scripts_preload(yonder_scripts_t *s)
+{
+    if (s == NULL || s->dead || !s->options.modern || s->doc == NULL || s->doc->document == NULL)
+        return;
+    const os64_html_node_t *root = s->doc->document;
+    for (const os64_html_node_t *n = root; n != NULL;) {
+        if (preload_link(n)) {
+            char url[OS64_DOM_URL_MAX];
+            if (os64_dom_resolve(s->doc, s->url, os64_html_attr(n, "href")->value, url, sizeof(url))) {
+                // The map is made for the first preload, as for the first
+                // module script; its runtime may retire the host.
+                if (!ensure_modules(s))
+                    return;
+                (void)yonder_modules_entry_src(s->modules, url);
+            }
+        }
+        // The next node in tree order.
+        if (n->first_child != NULL) {
+            n = n->first_child;
+            continue;
+        }
+        while (n != root && n->next == NULL)
+            n = n->parent;
+        n = n != root ? n->next : NULL;
+    }
+}
+
 bool yonder_scripts_importmap(const os64_html_node_t *script)
 {
     const os64_html_attr_t *type = os64_html_attr(script, "type");

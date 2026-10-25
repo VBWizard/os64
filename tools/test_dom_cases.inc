@@ -278,6 +278,16 @@ static void dom_classic_method_cases(void)
         "one.classList='p q';assert(one.className==='p q','PutForwards');"
         "const twice=document.createElement('p');twice.className='a a b';assert(twice.classList.length===2&&twice.classList[1]==='b','a token counts once');"
         "const bare=document.createElement('p');bare.classList.remove('x');bare.classList.add();assert(!bare.hasAttribute('class'),'no attribute for an empty set');"
+        "throws('TypeError',()=>c.supports('a'));"
+        /* a link's rel and relList: the same list over `rel`, which says
+         * what yonder acts on (Vite asks it before it preloads) */
+        "const ln=document.createElement('link');assert(ln.rel===''&&ln.relList.length===0&&ln.relList===ln.relList,'relList reads');"
+        "ln.rel='Preload  stylesheet';assert(ln.relList.length===2&&ln.relList[1]==='stylesheet'&&ln.relList.contains('Preload'),'rel reflects');"
+        "ln.relList.add('modulepreload');assert(ln.getAttribute('rel')==='Preload stylesheet modulepreload'&&one.className==='p q','add writes rel alone');"
+        "ln.relList='icon';assert(ln.rel==='icon','PutForwards');"
+        "assert(ln.relList.supports('modulepreload')&&ln.relList.supports('StyleSheet')&&!ln.relList.supports('icon')&&!ln.relList.supports(''),'supports');"
+        "throws('TypeError',()=>ln.relList.supports());"
+        "assert(!('relList' in one)&&!('rel' in one)&&!('relList' in a),'relList on a link alone');"
         /* dataset */
         "one.setAttribute('data-foo-bar','1');const d=one.dataset;assert(d===one.dataset&&d.fooBar==='1','dataset reads');"
         "d.someName='v';assert(one.getAttribute('data-some-name')==='v','dataset sets');"
@@ -426,6 +436,11 @@ static void dom_exception_ownership_cases(void)
         "try{one.appendChild(box)}catch(e){r=e}"
         "assert(r instanceof Error&&r.name==='HierarchyRequestError'&&Object.hasOwn(r,'name')&&typeof DOMException==='undefined');",
         "native-error-switch-off.js");
+    /* Modules run only with the switch on, so only then is a module
+     * preload a link type yonder acts on. */
+    dom_script(&f,DOM_ASSERT
+        "var rl=document.createElement('link').relList;assert(rl.supports('stylesheet')&&!rl.supports('modulepreload'));",
+        "rel-supports-switch-off.js");
     fixture_free(&f);
 }
 static void dom_fragment_mode_cases(void)

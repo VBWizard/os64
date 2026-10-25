@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """One deliberate break at a time to slice 3's ES modules — libjs's module
 entry, yonder's module map, the script host's ordering and its error
-reporting — against the harnesses that hold each rule: a mutant is CAUGHT
+reporting, the module preloads and the relList a loader asks before it
+preloads — against the harnesses that hold each rule: a mutant is CAUGHT
 when one of its harnesses fails, MISSED when they all pass, which means a
 test is missing and gets written. A build failure is neither.
 
@@ -29,8 +30,10 @@ SCRIPTS_C = 'userland/apps/yonder/scripts.c'
 YONDER_C = 'userland/apps/yonder/yonder.c'
 WINDOW_C = 'userland/libdom/window.c'
 REPORT_C = 'userland/libdom/report.c'
+MIXIN_C = 'userland/libdom/mixin.c'
 JS = 'tools/test_js_runtime_host.sh'
 SCRIPTS = 'tools/test_yonder_scripts_host.sh'
+DOM = 'tools/test_dom_host.sh'
 
 # (name, file, old, new, harnesses). Each breaks one rule the slice
 # states; none supplies a replacement expectation.
@@ -101,10 +104,31 @@ mutants = [
     ('connected-skips-modules', WINDOW_C,
      '        if (kind != OS64_DOM_SCRIPT_CLASSIC && kind != OS64_DOM_SCRIPT_MODULE) continue;',
      '        if (kind != OS64_DOM_SCRIPT_CLASSIC) continue;', (SCRIPTS,)),
-    ('type-unreflected', 'userland/libdom/mixin.c', '        {"type", R_TYPE, true, 1u << D_PROTO_SCRIPT}, ',
+    ('type-unreflected', MIXIN_C, '        {"type", R_TYPE, true, 1u << D_PROTO_SCRIPT}, ',
      '        ', (SCRIPTS,)),
     ('script-address-none', REPORT_C, '    return script != D_NO_SCRIPT ? dom->script_names[script].address : NULL;',
      '    return script != D_NO_SCRIPT && name == NULL ? dom->script_names[script].address : NULL;', (SCRIPTS,)),
+    # 5. module preloads, and the relList a loader asks before it preloads
+    ('preload-unwalked', YONDER_C, '    yonder_scripts_preload(g.stream.scripts);\n', '', (SCRIPTS,)),
+    ('preload-any-as', SCRIPTS_C,
+     '           (as == NULL || as->value[0] == \'\\0\' || os64_streq_nocase(as->value, "script"));',
+     '           (as == NULL || as != NULL);', (SCRIPTS,)),
+    ('preload-rel-case-kept', SCRIPTS_C,
+     "            same = (start[i] >= 'A' && start[i] <= 'Z' ? start[i] - 'A' + 'a' : start[i]) == token[i];",
+     '            same = start[i] == token[i];', (SCRIPTS,)),
+    ('rel-list-is-class', MIXIN_C, '    return entry->rel_tokens ? "rel" : "class";', '    return entry->rel_tokens ? "class" : "class";',
+     (DOM,)),
+    ('rel-supports-ungated', MIXIN_C, '        if (k == 1 && !dom->options.modern) continue;',
+     '        if (k == 1 && dom == NULL) continue;', (DOM,)),
+    ('rel-supports-case-kept', MIXIN_C,
+     "               (token[n] >= 'A' && token[n] <= 'Z' ? token[n] - 'A' + 'a' : token[n]) == kinds[k][n])",
+     '               token[n] == kinds[k][n])', (DOM,)),
+    ('class-supports-answers', MIXIN_C,
+     '                                       : JS_ThrowTypeError(ctx, "DOMTokenList has no supported tokens");',
+     '                                       : JS_NewBool(ctx, false);', (DOM,)),
+    ('supports-judges-token', MIXIN_C,
+     '        ok = magic == T_CONTAINS || magic == T_SUPPORTS ? d_string(dom, ctx, argv[converted], &given[converted])',
+     '        ok = magic == T_CONTAINS ? d_string(dom, ctx, argv[converted], &given[converted])', (DOM,)),
 ]
 
 caught, missed, unbuilt = [], [], []

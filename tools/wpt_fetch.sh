@@ -64,6 +64,8 @@ WPT_DIRS=(
     html/webappapis/structured-clone
     requestidlecallback
     webmessaging/without-ports
+    html/semantics/document-metadata/the-link-element
+    preload
 )
 
 top=$(git rev-parse --show-toplevel)

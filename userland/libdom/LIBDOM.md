@@ -145,8 +145,9 @@ connect runs and a moved control keeps its form:
 - Reflected attributes: `hidden`, `lang`, `dir` (its keyword, or ""),
   `tabIndex` (0 for an element that takes focus without one, else -1), a
   script's `src` and a link's and an anchor's `href` (resolved against the
-  document's base, and as written when it does not resolve). Script, anchor
-  and link elements have prototypes of their own for these.
+  document's base, and as written when it does not resolve), a script's
+  `type`, `defer` and `noModule`, and a link's `rel`. Script, anchor and
+  link elements have prototypes of their own for these.
 - `document.cookie`, through a provider the host installs
   (`os64_dom_set_cookies`): a read is the whole cookie-string it writes,
   asked again with more room while more did not fit, an assignment is handed to it whole as a Set-Cookie value. Which cookies a
@@ -155,10 +156,15 @@ connect runs and a moved control keeps its form:
   cookie-averse: it reads "" and an assignment does nothing.
 - `classList`, a live DOMTokenList over the class attribute (`add`,
   `remove`, `toggle`, `replace`, `contains`, `item`, indices, iteration;
-  assigning the list sets the attribute), and `dataset`, a DOMStringMap over
-  the `data-*` attributes (`data-foo-bar` is `fooBar`; setting and deleting
-  a name sets and removes its attribute). Each element has one of each,
-  made when first asked for and held, like its style, until the page goes.
+  assigning the list sets the attribute), a link's `relList`, the same list
+  over `rel`, and `dataset`, a DOMStringMap over the `data-*` attributes
+  (`data-foo-bar` is `fooBar`; setting and deleting a name sets and removes
+  its attribute). Each element has one of each, made when first asked for
+  and held, like its style, until the page goes. `supports(token)` is a
+  TypeError on a classList, which has no supported tokens; a relList's are
+  the link types yonder acts on, without ASCII case: `stylesheet`, and
+  `modulepreload` with the Modern Web surface, which runs modules (a module
+  loader asks before it preloads: Vite's first statement does).
 
 ## Mutation and control state
 
