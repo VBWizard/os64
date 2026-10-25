@@ -4,6 +4,7 @@
 #define main ui_action_unused_text_suite
 #include "test_ui_text_host.c"
 #undef main
+#include "os64/ui_toolbar.h"
 #define UI_ACTION_HOST
 #include "../userland/tests/actiongallery/actiongallery.c"
 
@@ -472,6 +473,89 @@ static void lost_input(void)
     CHECK(!os64_ui_shortcut_route(&router,NULL,&e,NULL));
     for(size_t i=0;i<sizeof(router.held);++i)CHECK(router.held[i]==0);
 }
+static void toolbar_command(os64_ui_widget_t *button, uint32_t id, void *user)
+{
+    (void)button;
+    CHECK(os64_ui_action_invoke(user,id).status==OS64_UI_OK);
+}
+static void toolbar_component(void)
+{
+    current="toolbar component";
+    const os64_ui_action_spec_t specs[]={
+        {11,OS64_UI_ACTION_COMMAND,0,"One","First help","document-open",0,{0,0}},
+        {12,OS64_UI_ACTION_COMMAND,0,"Two","Second help",NULL,0,{0,0}},
+        {13,OS64_UI_ACTION_COMMAND,0,"Three","Third help",NULL,0,{0,0}}
+    };
+    os64_ui_actions_t *actions=NULL,*other=NULL;
+    CHECK(os64_ui_actions_create(specs,3,&at_cb,NULL,&actions)==OS64_UI_OK);
+    CHECK(os64_ui_actions_create(at_specs,4,&at_cb,NULL,&other)==OS64_UI_OK);
+    at_live_actions=actions;
+    action_test_target target={.gen=1,.enabled=true};
+    os64_ui_action_context_t context={&target,1,at_retain,at_release,at_valid};
+    os64_ui_action_view_t *view=NULL,*wrong=NULL;
+    CHECK(os64_ui_action_view_create(actions,&context,&view)==OS64_UI_OK);at_live_view=view;
+    CHECK(os64_ui_action_view_create(other,&context,&wrong)==OS64_UI_OK);
+    os64_ui_t ui; os64_ui_widget_t root;
+    os64_ui_init(&ui,NULL);os64_ui_panel(&root);root.bounds=(os64_gui_rect_t){0,0,640,440};
+    os64_ui_toolbar_t bar;os64_ui_toolbar_init(&bar);
+    os64_ui_add_child(&root,&bar.w);os64_ui_set_root(&ui,&root);
+    char label[]="Go";
+    os64_ui_toolbar_entry_t entries[]={{11,label,false},{12,NULL,false},{13,NULL,true}};
+    CHECK(os64_ui_toolbar_bind(&bar,actions,entries,OS64_UI_TOOLBAR_MAX+1,toolbar_command,view)==OS64_UI_LIMIT);
+    entries[1].action=11;
+    CHECK(os64_ui_toolbar_bind(&bar,actions,entries,3,toolbar_command,view)==OS64_UI_DUPLICATE);
+    entries[1].action=99;
+    CHECK(os64_ui_toolbar_bind(&bar,actions,entries,3,toolbar_command,view)==OS64_UI_INVALID);
+    entries[1].action=12;entries[0].label="bad\xff";
+    CHECK(os64_ui_toolbar_bind(&bar,actions,entries,3,toolbar_command,view)==OS64_UI_INVALID);
+    os64_ui_toolbar_entry_t toggle={2,NULL,false};
+    CHECK(os64_ui_toolbar_bind(&bar,other,&toggle,1,toolbar_command,view)==OS64_UI_INVALID);
+    CHECK(!bar.actions && !bar.count && !bar.w.first_child);
+    entries[0].label=label;
+    ui_test_deny_all=true;
+    CHECK(os64_ui_toolbar_bind(&bar,actions,entries,3,toolbar_command,view)==OS64_UI_OK);
+    ui_test_deny_all=false;label[0]='X';
+    CHECK(!strcmp(bar.buttons[0].w.text,"Go"));
+    CHECK(os64_ui_toolbar_bind(&bar,actions,entries,3,toolbar_command,view)==OS64_UI_DUPLICATE);
+    CHECK(os64_ui_actions_destroy(actions)==OS64_UI_BUSY);
+    os64_ui_toolbar_plan_t wide,narrow;
+    CHECK(os64_ui_toolbar_measure(&bar,&ui,8,12,400,&wide)==OS64_FONT_OK);
+    CHECK(wide.buttons[2].x-wide.buttons[1].x-wide.buttons[1].w==2*ui.theme.gap);
+    os64_ui_toolbar_apply(&bar,&wide,false);
+    CHECK(os64_ui_toolbar_measure(&bar,&ui,8,12,110,&narrow)==OS64_FONT_OK);
+    CHECK(narrow.buttons[2].y>narrow.buttons[0].y && narrow.buttons[2].x==8);
+    CHECK(bar.w.bounds.h==wide.bounds.h);
+    os64_ui_toolbar_plan_t kept=narrow;
+    CHECK(os64_ui_toolbar_measure(&bar,&ui,8,12,1,&narrow)==OS64_FONT_LIMIT);
+    CHECK(!memcmp(&kept,&narrow,sizeof(kept)));
+    CHECK(os64_ui_toolbar_measure(&bar,&ui,INT32_MAX,12,100,&narrow)==OS64_FONT_LIMIT);
+    CHECK(os64_ui_toolbar_measure(&bar,&ui,8,INT32_MAX,100,&narrow)==OS64_FONT_LIMIT);
+    CHECK(os64_ui_toolbar_icons(&bar,NULL)==OS64_UI_ICON_MISSING);
+    CHECK(os64_ui_toolbar_refresh(&bar,wrong)==OS64_UI_INVALID && bar.buttons[0].w.disabled);
+    CHECK(os64_ui_toolbar_refresh(&bar,view)==OS64_UI_OK && !bar.buttons[0].w.disabled);
+    os64_ui_set_focus(&ui,&bar.buttons[1].w);
+    const char *help=NULL;CHECK(os64_ui_toolbar_help(&bar,&help)==12 && !strcmp(help,"Second help"));
+    os64_gui_event_t e={.type=OS64_GUI_EVENT_MOUSE_MOVE};
+    e.mouse.x=wide.buttons[0].x+4;e.mouse.y=wide.buttons[0].y+4;
+    (void)os64_ui_dispatch(&ui,&e);
+    CHECK(os64_ui_toolbar_help(&bar,&help)==11 && !strcmp(help,"First help"));
+    e.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN;e.mouse.button=OS64_GUI_MOUSE_LEFT;
+    CHECK(os64_ui_dispatch(&ui,&e));e.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
+    CHECK(os64_ui_dispatch(&ui,&e));CHECK(target.calls==1);
+    target.enabled=false;CHECK(os64_ui_toolbar_refresh(&bar,view)==OS64_UI_OK);
+    CHECK(bar.buttons[0].w.disabled && os64_ui_toolbar_help(&bar,&help)==0 && !help);
+    target.enabled=true;CHECK(os64_ui_toolbar_refresh(&bar,view)==OS64_UI_OK);
+    os64_ui_set_focus(&ui,&bar.buttons[0].w);os64_ui_set_hidden(&ui,&bar.w,true);
+    CHECK(os64_ui_toolbar_help(&bar,&help)==0 && !help && !ui.focus);
+    CHECK(os64_ui_action_view_destroy(wrong)==OS64_UI_OK);
+    CHECK(os64_ui_actions_destroy(other)==OS64_UI_OK);
+    CHECK(os64_ui_action_view_destroy(view)==OS64_UI_OK);
+    CHECK(os64_ui_actions_destroy(actions)==OS64_UI_BUSY);
+    os64_ui_toolbar_destroy(&bar);os64_ui_toolbar_destroy(&bar);
+    CHECK(os64_ui_actions_destroy(actions)==OS64_UI_OK);
+    CHECK(os64_ui_font_release(&ui)==OS64_FONT_OK);
+    CHECK(!target.refs);
+}
 #ifdef UI_MENU_TEST
 static int action_suite(int argc,char **argv)
 #else
@@ -480,6 +564,7 @@ int main(int argc,char **argv)
 {
     const char *dir=argc>1?argv[1]:"userland/libfreetype/fixtures";
     registration();views_and_bindings();shortcuts();ctrl_punctuation();lost_input();
+    toolbar_component();
     status_tests(dir);status_fit_tests(dir);gallery_tests(dir);gallery_font_visibility_tests(dir);
     printf("action/status: %lu checks, %d failures\n",checks,failures);
     return failures?1:0;

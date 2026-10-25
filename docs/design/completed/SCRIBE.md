@@ -121,7 +121,7 @@ honest failure mode is the same as quill's.
 ## Chrome
 
 The shared File/Edit/View/Help menu bar, toolbar and keyboard shortcuts invoke
-one action registry. The toolbar provides labeled Open, Save, Save As, Cut,
+one action registry. The shared [toolbar widget](../../TOOLBARS.md) provides labeled Open, Save, Save As, Cut,
 Copy, Paste, Find and Help buttons. It wraps to another row when the window
 narrows; font changes stage its geometry with the rest of the editor. Open, Save As and unnamed Save use the shared file
 picker; a named Save writes directly. The picker starts beside the current
@@ -159,7 +159,7 @@ help/field/document behavior. The Interface and Document font roles remain
 independent. [E5](../pending/explorer/E05_SCRIBE.md) records dialog integration
 and its validation.
 
-The toolbar's icon button is in libos64. Build from the repository root with
+The toolbar and its icon buttons are in libos64. Build from the repository root with
 `make -C userland "$PWD/userland/bin/scribe"` and deploy both
 `userland/bin/scribe` and `userland/bin/libos64.so` through the normal program
 and library routes. Restart Scribe to use the new code and current icon set.

@@ -59,7 +59,7 @@ typedef struct os64_ui_action_view os64_ui_action_view_t;
 os64_ui_status_code_t os64_ui_actions_create(const os64_ui_action_spec_t *,
     size_t count, const os64_ui_action_callbacks_t *, void *app, os64_ui_actions_t **out);
 os64_ui_status_code_t os64_ui_actions_destroy(os64_ui_actions_t *);
-/* Registry references for immutable menu models; owner still calls destroy. */
+/* Registry references for menu models and toolbars; owner still calls destroy. */
 os64_ui_status_code_t os64_ui_actions_retain(os64_ui_actions_t *);
 void os64_ui_actions_release(os64_ui_actions_t *);
 /* Copied-out descriptor strings are borrowed until registry destruction. */
