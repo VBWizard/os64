@@ -137,8 +137,8 @@
     },
     {
       "path": "patches/0012-module-compile-unresolved.patch",
-      "sha256": "ce13678aa2ba26ad3ee6a9d80d0af5d8e62911d2347669969ab222e9dde0a85c",
-      "reason": "Compile a module without resolving its imports (JS_EVAL_FLAG_NO_RESOLVE) and name what it imports (JS_GetModuleRequestCount/JS_GetModuleRequest), so a browser host can fetch a module graph before linking it; the pinned engine otherwise resolves through a synchronous loader at compile time. And make handled, telling the tracker, the rejected promise of a module body the engine takes as the module's error, which a host otherwise hears a second time as an unhandled rejection."
+      "sha256": "6d6741233d285274a18e750b278bbe1c5ae90c1299e513cd3caa9dc5d0e54c2f",
+      "reason": "Compile a module without resolving its imports (JS_EVAL_FLAG_NO_RESOLVE) and name what it imports (JS_GetModuleRequestCount/JS_GetModuleRequest), so a browser host can fetch a module graph before linking it; the pinned engine otherwise resolves through a synchronous loader at compile time. And make handled, telling the tracker, the rejected promise of a module body the engine takes as the module's error, which a host otherwise hears a second time as an unhandled rejection. And mark unresolved again a module whose resolve failed partway, which a host whose modules outlive the failure (a page's module map) otherwise links through the NULL of the import never found."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

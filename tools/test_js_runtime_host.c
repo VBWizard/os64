@@ -1207,9 +1207,15 @@ static const char *const module_store[][2] = {
     {"https://m.test/lazy.js", "export default 'lazy';"},
     {"https://m.test/dyn.js", "export default 'dyn';"},
     {"https://m.test/bad.js", "export const x = ;"},
+    /* The loader answers for every module it knows, as a host's map does:
+     * a failed run unlists the modules no run resolved (CONTRACT.md). */
+    {"https://m.test/shared.js", "import './b.js'; import {late} from './late.js'; globalThis.shared = late;"},
+    {"https://m.test/first.js", "import './shared.js';"},
+    {"https://m.test/second.js", "import './shared.js';"},
 };
 static unsigned module_loads;
 static char module_requests[256];
+static const char *module_late;     /* late.js's source, once it is there */
 static char *module_resolve(void *opaque, const char *base, const char *specifier)
 {
     check(opaque == module_store, "the loader hears its own opaque");
@@ -1224,6 +1230,7 @@ static char *module_resolve(void *opaque, const char *base, const char *specifie
 }
 static const char *module_text(const char *name)
 {
+    if (!strcmp(name, "https://m.test/late.js")) return module_late;
     for (size_t i = 0; i < sizeof(module_store) / sizeof(module_store[0]); i++)
         if (!strcmp(name, module_store[i][0])) return module_store[i][1];
     return NULL;
@@ -1337,7 +1344,8 @@ static void module_cases(void)
     check(os64_js_set_script_host(runtime, OS64_JS_ABI_ID, &host, &outcome) == OS64_JS_OK, "module script host set");
     host_heard[0] = '\0';
     check(module_compile(runtime, "https://m.test/bad.js", NULL, &outcome) == NULL && outcome.status == OS64_JS_EXCEPTION &&
-          strstr(host_heard, "SyntaxError") != NULL, "a syntax error is a compile's exception, and the host hears it");
+          strstr(outcome.message, "SyntaxError") != NULL && host_heard[0] == '\0',
+          "a syntax error is the compile's exception alone, never the script host's");
     check(module_task(runtime, asks, &outcome) == OS64_JS_EXCEPTION && strstr(outcome.message, "q.js") != NULL &&
           os64_js_module_state(runtime, asks, NULL) == OS64_JS_MODULE_REJECTED, "an import nobody can load fails the run");
     os64_js_module_t *nope = module_compile(runtime, "https://m.test/nope.js", "import {nope} from './b.js';", &outcome);
@@ -1376,6 +1384,25 @@ static void module_cases(void)
     check(!strcmp(host_heard, "exception:Error: later") &&
           !os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason, NULL),
           "heard as an exception, and not left as an unhandled rejection");
+
+    // A module two graphs share, whose resolve fails partway in the first
+    // (one import found, one not): marked unresolved again, so the second
+    // graph resolves it afresh once the missing one is there, rather than
+    // linking through the import it never found (patch 0012, found by WPT).
+    module_late = NULL;
+    os64_js_module_t *shared = module_compile(runtime, "https://m.test/shared.js", NULL, &outcome);
+    os64_js_module_t *first = module_compile(runtime, "https://m.test/first.js", NULL, &outcome);
+    os64_js_module_t *second = module_compile(runtime, "https://m.test/second.js", NULL, &outcome);
+    check(module_task(runtime, first, &outcome) == OS64_JS_EXCEPTION && strstr(outcome.message, "late.js") != NULL,
+          "a shared module's missing import fails the first graph's run");
+    module_late = "export const late = 'late';";
+    check(module_task(runtime, second, &outcome) == OS64_JS_OK &&
+          os64_js_module_state(runtime, second, NULL) == OS64_JS_MODULE_FULFILLED,
+          "the second graph resolves the shared module afresh and runs");
+    JSValue late = task_global(runtime, "shared");
+    check(host_value_is(late, "late"), "with the import that arrived");
+    task_free(runtime, late);
+    (void)shared;
 
     os64_js_module_release(runtime, b);
     os64_js_module_release(runtime, NULL);

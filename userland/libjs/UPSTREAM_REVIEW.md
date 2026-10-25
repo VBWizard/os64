@@ -51,7 +51,13 @@ comment at the spot reads "Could add a flag to avoid resolution if
 necessary". It also makes handled, telling the tracker, the promise of a
 module body that `js_execute_sync_module` takes as the module's error:
 upstream left it rejected with no handler, so a host heard one module
-error twice. CONTRACT.md § Modules is the wrapper built on it.
+error twice. And `js_resolve_module`, which marks a module resolved before
+it resolves its imports, marks it unresolved again when one of them fails:
+upstream discards a failed module whole, but a browser's module map keeps
+its modules across a failed run, and a later graph sharing one linked it
+through the NULL of the import never found (a SEGV in
+`js_create_module_function`, which WPT's module directory reached).
+CONTRACT.md § Modules is the wrapper built on it.
 
 Selected upstream test sources are retained separately in
 `tools/js_acceptance/upstream`, with archive/file hashes and the original

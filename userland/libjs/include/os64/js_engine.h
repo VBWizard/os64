@@ -121,8 +121,8 @@ os64_js_status_t os64_js_set_module_loader(os64_js_runtime_t *runtime, const cha
  * needs a name of its own, since the engine finds modules by name; compile
  * each name once (a second module of one name is never found). Outside a
  * call, task open or not: it runs no script. EXCEPTION for a syntax error,
- * its diagnostic in the outcome and *module NULL; LIMIT for a source past
- * the limit. */
+ * its diagnostic in the outcome alone (not the script host's: no task is
+ * running) and *module NULL; LIMIT for a source past the limit. */
 os64_js_status_t os64_js_module_compile(os64_js_runtime_t *runtime, const char *caller_abi,
                                         const void *source, size_t length, const char *name,
                                         const char *url, os64_js_module_t **module,

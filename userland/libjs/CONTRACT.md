@@ -456,7 +456,9 @@ wrapper's module entry (`js_engine.h`) is built on that:
   name, url, &module, outcome)` compiles it UNRESOLVED and hands back the
   host's handle; it runs no script, so it is accepted outside a call
   whether a task is open or not. A syntax error is EXCEPTION, its
-  diagnostic in the outcome and reported to a script host's `exception`.
+  diagnostic in the outcome and nowhere else: no task is running to report
+  it to, so a script host's `exception` does not hear it (a browser reports
+  a module's syntax error when the script that imports it runs).
   `url` is for an inline module script, which HTML gives the document's
   URL while each still needs a name of its own: the engine finds modules
   by name, and a second module of one name is never found. Compile each
@@ -511,9 +513,10 @@ compiled before it is resolved and run once found by name, with no load
 asked; its request named first; an inline module's `import.meta.url` and
 its import not evaluated again; a cycle; a module nobody compiled loaded,
 and a dynamic `import()` answered inside the task; requests in source
-order; a syntax error, an import nobody can load, a missing export and an
-evaluation that throws, each the module's own and the last heard once as
-an exception and never as a rejection; a top-level await pending after its
+order; a syntax error (the compile's alone, the host hearing nothing), an
+import nobody can load, a missing export and an evaluation that throws,
+each the module's own and the last heard once as an exception and never as
+a rejection; a top-level await pending after its
 task and fulfilled, or rejected, in a later one. The module sweep fails
 every allocation of a graph's run in turn, on the target core and the
 instrumented engine, under RECLAIM; it compiles uncut, because a compile
@@ -651,7 +654,9 @@ and names its imports, where upstream resolved them through the loader as
 it compiled (its own comment marked the spot, "Could add a flag to avoid
 resolution if necessary"). The flag is refused (a TypeError) with any
 other eval type and without `JS_EVAL_FLAG_COMPILE_ONLY`, since an
-unresolved module is never run. And `js_execute_sync_module`, which takes
-a module body's rejected promise as the module's error, now makes that
-promise handled and tells the tracker, as `perform_promise_then` does. §
-Modules is the wrapper built on it.
+unresolved module is never run. `js_execute_sync_module`, which takes a
+module body's rejected promise as the module's error, now makes that
+promise handled and tells the tracker, as `perform_promise_then` does.
+And a module whose resolve failed partway is marked unresolved again, so
+a later run that shares it resolves it afresh instead of linking through
+the import it never found. § Modules is the wrapper built on it.

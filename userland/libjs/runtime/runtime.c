@@ -1500,8 +1500,10 @@ JS_PUBLIC os64_js_status_t os64_js_module_compile(os64_js_runtime_t *runtime, co
     if (JS_IsException(value)) {
         js_free_rt(runtime->engine, handle);
         if (!observe(runtime)) {
+            // The compile's own, not the script host's: no task is running
+            // to report it, and a browser reports a module's syntax error
+            // when the script that imports it runs.
             JSValue error = JS_GetException(runtime->context);
-            caught(runtime, runtime->context, error);
             outcome->status = OS64_JS_EXCEPTION;
             diagnostic(runtime, error, outcome);
             JS_FreeValue(runtime->context, error);
