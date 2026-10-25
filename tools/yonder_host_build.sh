@@ -40,7 +40,7 @@ yonder_host_build() {
         userland/libdom/{storage,performance,url,encoding,screen,base64,implementation,attr}.c \
         userland/libdom/{exception,abort,blob,fetch,xhr,browsing,crypto,report,document,frames,clone,message,idle}.c \
         userland/apps/yonder/{scripts,modules,script_decode,geometry,paint,paint_cache,scratch,scale,warp,agent,bar,diag}.c \
-        userland/apps/yonder/storage.c \
+        userland/apps/yonder/storage.c userland/apps/yonder/cookies.c \
         userland/libhtml/{core,encoding,tokenizer,tree,dom,fragment,serialize}.c \
         userland/libpage/{core,state,resolve,value,submit,encode,refresh,activate,number,range}.c \
         userland/libpage/upstream/ryu/ryu/d2s.c \

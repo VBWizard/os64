@@ -53,15 +53,30 @@ typedef struct {
 #define FETCH_POOL_PER_KEY 6
 #define FETCH_POOL_TOTAL   16
 #define FETCH_POOL_IDLE_MS 60000u
+// A REQUEST THAT MAY NOT BE SENT TWICE (a POST, fetch.c's idempotent says
+// which) takes a kept connection only when it was given back less than
+// this long ago, and dials one of its own otherwise. The retry rule cannot
+// save it from a server that closed the connection while it sat idle, so
+// it does not ride one that may have been closed: the shortest idle time
+// a common server keeps (Apache's KeepAliveTimeout and Node's
+// keepAliveTimeout, 5 s each) is more than twice this, while a page's own
+// burst of requests, a script's POST right behind the requests that loaded
+// the page, still shares the connection. The connections it passes over stay kept
+// for requests that can be sent again.
+#define FETCH_POOL_ONCE_MS 2000u
+_Static_assert(FETCH_POOL_ONCE_MS < FETCH_POOL_IDLE_MS, "a request sent once asks less of a connection's age");
 _Static_assert(FETCH_POOL_TOTAL <= OS64_TASK_HANDLES / 4,
                "kept connections may hold at most a quarter of a task's handles");
 _Static_assert(FETCH_POOL_PER_KEY <= FETCH_POOL_TOTAL, "a key's cap is within the whole's");
 
-// A kept connection for `key`, the most recently kept first: true with `*io`
-// the caller's to own. Connections past their idle time are closed on the
-// way, whatever their key. The caller probes what it takes
-// (fetch_transport_idle_ok) and closes it if the probe says no.
-bool fetch_pool_take(const fetch_pool_key_t *key, fetch_transport_t *io);
+// A kept connection for `key` given back less than `idle_most_ms` ago
+// (FETCH_POOL_IDLE_MS, or FETCH_POOL_ONCE_MS for a request sent once), the
+// most recently kept first: true with `*io` the caller's to own. One idle
+// longer than `idle_most_ms` but not past FETCH_POOL_IDLE_MS stays kept.
+// Connections past their idle time are closed on the way, whatever their
+// key. The caller probes what it takes (fetch_transport_idle_ok) and closes
+// it if the probe says no.
+bool fetch_pool_take(const fetch_pool_key_t *key, uint32_t idle_most_ms, fetch_transport_t *io);
 
 // Give a connection to the pool, which owns it from here: kept, or closed at
 // once when the clock cannot be read. Evicts the least recently used of its

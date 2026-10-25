@@ -98,7 +98,7 @@ bool yonder_storage_file_name(const char *origin, char *out, size_t cap)
 // TEMP_FORMAT is the one spelling of a temp's name: temp_write makes names
 // with it, and temp_task knows one only by making it again.
 #define TEMP_FORMAT "%s+%lu.%u.new"
-#define TEMP_SUFFIX_MAX (1 + 20 + 1 + 10 + 4)
+#define TEMP_SUFFIX_MAX YONDER_PROFILE_TEMP_SUFFIX_MAX
 
 // <profile>/storage, and the store file for `origin` in it.
 static bool store_dir(const yonder_storage_t *st, char *out, size_t cap)
@@ -322,13 +322,13 @@ static bool write_all(int32_t h, const uint8_t *p, size_t n)
     return true;
 }
 
-// The image written whole to a temp beside `path` (named into `temp`), for
-// a rename to publish, so a reader never meets half of one. False with no
-// temp left behind.
-static bool temp_write(yonder_storage_t *st, const char *path, const void *image, size_t length, char *temp,
+// The image written whole to a temp beside `path` (named into `temp`, the
+// next of `*count`'s numbers), for a rename to publish, so a reader never
+// meets half of one. False with no temp left behind.
+static bool temp_write(uint32_t *count, const char *path, const void *image, size_t length, char *temp,
                        size_t cap)
 {
-    int n = os64_snprintf(temp, cap, TEMP_FORMAT, path, (unsigned long)os64_taskid(), (unsigned)++st->temps);
+    int n = os64_snprintf(temp, cap, TEMP_FORMAT, path, (unsigned long)os64_taskid(), (unsigned)++*count);
     if (n <= 0 || (size_t)n >= cap)
         return false;
     int64_t h = os64_open(temp, "w");
@@ -539,7 +539,7 @@ static os64_dom_storage_status_t commit_store(yonder_storage_t *st, const char *
             return status;
         char temp[OS64_PATH_MAX];
         bool publishing = merged != NULL;
-        bool ok = !publishing || temp_write(st, path, merged, merged_length, temp, sizeof(temp));
+        bool ok = !publishing || temp_write(&st->temps, path, merged, merged_length, temp, sizeof(temp));
         os64_free(merged);
         if (ok && tries < MERGE_TRIES && path_identity(path) != before) {
             if (publishing)
@@ -620,4 +620,48 @@ int64_t yonder_storage_clear(yonder_storage_t *st)
     os64_free(names);
     st->problem[0] = '\0';
     return all ? removed : -1;
+}
+
+// ── The profile's other files ───────────────────────────────────────────
+
+bool yonder_profile_make_dirs(const char *path)
+{
+    return make_dirs(path);
+}
+
+bool yonder_profile_temp_write(uint32_t *count, const char *path, const void *bytes, size_t length, char *temp,
+                               size_t cap)
+{
+    return temp_write(count, path, bytes, length, temp, cap);
+}
+
+void yonder_profile_sweep(const char *path)
+{
+    const char *slash = os64_strrchr(path, '/');
+    if (slash == NULL || slash == path || slash[1] == '\0')
+        return;
+    char dir[OS64_PATH_MAX];
+    size_t dlen = (size_t)(slash - path), blen = os64_strlen(slash + 1);
+    if (dlen >= sizeof(dir))
+        return;
+    os64_memcpy(dir, path, dlen);
+    dir[dlen] = '\0';
+    os64_dirent_t entry;
+    if (os64_stat(dir, &entry) < 0)
+        return;
+    size_t count;
+    bool whole;
+    char (*names)[OS64_DIRENT_NAME_MAX + 1] = listing(dir, &count, &whole);
+    for (size_t i = 0; i < count; i++) {
+        // `path`'s own temps: its name, then the '+' that begins a temp's
+        // suffix (orphan reads the rest).
+        if (os64_strlen(names[i]) <= blen || os64_memcmp(names[i], slash + 1, blen) != 0 || names[i][blen] != '+' ||
+            !orphan(names[i]))
+            continue;
+        char temp[OS64_PATH_MAX];
+        int n = os64_snprintf(temp, sizeof(temp), "%s/%s", dir, names[i]);
+        if (n > 0 && (size_t)n < sizeof(temp))
+            (void)os64_unlink(temp);
+    }
+    os64_free(names);
 }

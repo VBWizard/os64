@@ -593,7 +593,7 @@ bool os64_ui_theme_session(os64_ui_theme_t *theme, uint64_t *installed, uint64_t
     (void)theme; (void)installed; (void)hint; return false;
 }
 static char saved_scripts[8], saved_zoom[8], saved_seconds[8], saved_diagnostics[256], saved_appearance[8],
-    saved_animations[8], saved_motion[16], saved_keep_pages[16], saved_modern[16], saved_profile[300],
+    saved_animations[8], saved_motion[16], saved_keep_pages[16], saved_modern[16], saved_profile[300], saved_cookies[16],
     settings_report[256];
 /* yonder.conf's saved agent, "" for none. */
 static char saved_agent[300];
@@ -606,7 +606,8 @@ int64_t os64_conf_get(const char *file, const char *key, char *out, size_t cap) 
         os64_streq(key,"diagnostics") ? saved_diagnostics : os64_streq(key,"appearance") ? saved_appearance :
         os64_streq(key,"animations") ? saved_animations : os64_streq(key,"motion") ? saved_motion :
         os64_streq(key,"keep_pages") ? saved_keep_pages : os64_streq(key,"modern") ? saved_modern :
-        os64_streq(key,"profile") ? saved_profile : os64_streq(key,"agent") ? saved_agent : "";
+        os64_streq(key,"profile") ? saved_profile : os64_streq(key,"agent") ? saved_agent :
+        os64_streq(key,"cookies") ? saved_cookies : "";
     if(os64_streq(key,"profile") && profile_conf_failure!=0) return profile_conf_failure;
     if(!value[0]) return OS64_CONF_NO_KEY;
     /* A value too long for `out` is TRUNCATED, as the real reader says. */
@@ -621,6 +622,7 @@ int64_t os64_conf_set(const char *file, const char *key, const char *value) {
     if(os64_streq(key,"animations")) os64_strcopy(saved_animations,sizeof(saved_animations),value);
     if(os64_streq(key,"motion")) os64_strcopy(saved_motion,sizeof(saved_motion),value);
     if(os64_streq(key,"modern")) os64_strcopy(saved_modern,sizeof(saved_modern),value);
+    if(os64_streq(key,"cookies")) os64_strcopy(saved_cookies,sizeof(saved_cookies),value);
     return 0;
 }
 void os64_ui_settings_report(os64_ui_settings_t *dialog, const char *text) {
@@ -648,6 +650,8 @@ void way_script_cookie(way_jar_t *jar, const char *page_url, bool encrypted, con
 }
 void way_cache_enable(way_cache_t *cache, bool enabled) { (void)enabled; check(cache==NULL,"no test cache"); }
 void way_cache_set_cap(way_cache_t *cache, uint64_t cap) { (void)cap; check(cache==NULL,"no test cache"); }
+void way_cache_stats(way_cache_t *cache, way_cache_stats_t *out) { (void)out; check(cache==NULL,"no test cache"); }
+const char *way_cache_dir(way_cache_t *cache) { check(cache==NULL,"no test cache"); return ""; }
 
 static os64_text_context_t *probe_text;
 static os64_text_font_t *probe_font;
@@ -1088,6 +1092,10 @@ static void settings_dark_capture(bool dark) { settings_dark=dark; }
 static int settings_run=-1, settings_reduce=-1, settings_modern=-1;
 static void settings_motion_capture(bool run, bool reduce) { settings_run=run; settings_reduce=reduce; }
 static void settings_modern_capture(bool modern) { settings_modern=modern; }
+static int settings_cookies=-1;
+static void settings_cookies_capture(yonder_cookies_mode_t mode) { settings_cookies=(int)mode; }
+static const char *settings_cookies_problem_fake(void) { return "Cookies are not kept: /p/cookies is a folder, and yonder keeps them in a file of that name."; }
+static const char *settings_cookies_problem_none(void) { return NULL; }
 static void settings_capture(const char *agent, bool enabled, uint32_t seconds) {
     check(os64_streq(agent,YONDER_AGENT),"settings preserves agent while applying scripts");
     settings_applied=enabled;
@@ -1195,6 +1203,42 @@ static void switch_cases(void) {
     apply(&settings_fixture.d,true);
     check(settings_modern==1 && os64_streq(saved_modern,"on") && strstr(settings_report,"modern")==NULL,
         "modern: and on");
+    /* THE COOKIES' TWO BOXES: Accept and Keep are on, session and off;
+     * Apply hands the mode over, Save writes its word; Clear cookies acts
+     * at once. */
+    settings_fixture.cookies_use=settings_cookies_capture;
+    settings_fixture.accept.checked=true; settings_fixture.outlive.checked=false;
+    saved_cookies[0]=0;
+    apply(&settings_fixture.d,false);
+    check(settings_cookies==YONDER_COOKIES_SESSION && saved_cookies[0]==0 &&
+          strstr(settings_report,"cookies until yonder closes")!=NULL,
+        "cookies: Accept without Keep is session, applied here, said, not saved");
+    settings_fixture.accept.checked=false; settings_fixture.outlive.checked=true;
+    apply(&settings_fixture.d,true);
+    check(settings_cookies==YONDER_COOKIES_OFF && os64_streq(saved_cookies,"off") &&
+          strstr(settings_report,"no cookies")!=NULL,"cookies: no Accept is off, whatever Keep says, and Save writes it");
+    settings_fixture.accept.checked=true;
+    apply(&settings_fixture.d,true);
+    check(settings_cookies==YONDER_COOKIES_ON && os64_streq(saved_cookies,"on") && strstr(settings_report,"cookies")==NULL,
+        "cookies: both is on, the default, and the line says nothing of it");
+    saved_cookies[0]=0;
+    /* A cookie file not kept is what the dialog says as it opens, in place
+     * of the cache's holdings; with none, the cache's line stands. */
+    settings_fixture.cache=NULL;
+    yonder_settings_on_cookies_problem(settings_cookies_problem_fake);
+    opening_say();
+    check(strstr(settings_report,"is a folder")!=NULL,"Settings opens saying why the cookie file is not kept");
+    yonder_settings_on_cookies_problem(settings_cookies_problem_none);
+    opening_say();
+    check(strstr(settings_report,"no memory for a cache")!=NULL,"and with the file kept, what the cache holds");
+    yonder_settings_on_cookies_problem(cookies_problem);
+    yonder_settings_on_clear_cookies(NULL);
+    cookies_cleared(NULL,NULL);
+    check(strstr(settings_report,"keeps no cookies to clear")!=NULL,"Clear cookies with no jar says so");
+    yonder_settings_on_clear_cookies(cookies_clear);
+    cookies_cleared(NULL,NULL);
+    check(strstr(settings_report,"Cleared this window's cookies: 0 gone.")!=NULL,
+        "Clear cookies with no file clears the window's jar and says so");
     /* THE PROFILE FOLDER: absent is /home/yogi/.yonder; a full path is
      * obeyed without its trailing slashes; anything else is the default,
      * said. */
@@ -5619,6 +5663,59 @@ static void diag_picture_case(void) {
     probe_drop();
 }
 
+/* COOKIES LEFT OUT FOR WANT OF ROOM (way/jar.h): one FAILED line a host,
+ * its count the most one request left out, from the page's own fetch (the
+ * trip's verdict) and from a fetch the page made (a picture's hooks). */
+static void diag_cookies_case(void) {
+    yonder_diag_t *d=yonder_diag_new("http://x.test/",1,0);
+    way_cookies_short_t s={3,"a.test"};
+    diag_cookies_short(d,&s);
+    s.left=2; diag_cookies_short(d,&s);
+    way_cookies_short_t none={0,""};
+    diag_cookies_short(d,&none);
+    char text[4096]; yonder_diag_render(d,text,sizeof(text));
+    check(has(text,"\nverdict: 1 FAILED\nFAILED cookies: left out of a request to a.test (3)\n"),
+        "cookies: one line a host, the most one request left out; a load that left none out says nothing");
+    s.left=7; diag_cookies_short(d,&s);
+    yonder_diag_render(d,text,sizeof(text));
+    check(has(text,"FAILED cookies: left out of a request to a.test (7)\n"),"cookies: a worse request raises the count");
+    yonder_diag_free(d);
+
+    /* The page's own fetch: the verdict carries the leg's note. */
+    stream_window();
+    start_trip("http://fixture.test/p",NULL,NULL,NAV_GO,WAY_BY_BROWSER,NULL);
+    way_head_t h=stream_head("text/html","",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    const char *body="<!doctype html><p>in";
+    stream_post_body((const uint8_t *)body,strlen(body),YONDER_STREAM_CHUNK);
+    yonder_verdict_t v; memset(&v,0,sizeof(v));
+    v.page=true; v.fetch=OS64_FETCH_OK;
+    v.cookies_short=(way_cookies_short_t){4,"fixture.test"};
+    yonder_mail_post_verdict(g.stream.mail,&v);
+    for(int i=0;i<8 && stream_turn();i++) {}
+    check(!g.stream.active && g.page.diag!=NULL,"cookies: the page arrived");
+    yonder_diag_render(g.page.diag,text,sizeof(text));
+    check(has(text,"FAILED cookies: left out of a request to fixture.test (4)\n"),
+        "cookies: the page's own request that left cookies out is on its record");
+    stream_window_drop();
+
+    /* A picture the page asked for: its hooks' note, on the page shown. */
+    probe_page("<img src=http://x.test/a.png>",true);
+    pictures_start(&g.page);
+    g.page.diag=diag_new_claimed("http://x.test/",2);
+    g.page.pics[0].state=PIC_WAITING;
+    g.page.waiting=g.page.in_flight=1;
+    yonder_picture_job_t job={.kind=YONDER_JOB_PICTURE,.index=0,.generation=g.page_serial};
+    job.hooks.cookies_short=(way_cookies_short_t){2,"x.test"};
+    yonder_picture_t missing={.status=OS64_IMAGE_NO_FILE,.why="HTTP 404"};
+    picture_arrived(&job,&missing);
+    yonder_diag_render(g.page.diag,text,sizeof(text));
+    check(has(text,"FAILED cookies: left out of a request to x.test (2)\n"),
+        "cookies: a picture's request that left cookies out is on the page's record");
+    yonder_diag_free(g.page.diag); g.page.diag=NULL;
+    probe_drop();
+}
+
 /* The pictures never handed to a worker, and the one past what a page's
  * pictures may cost, are named too: every picture not shown is. */
 static void diag_picture_unshown_case(void) {
@@ -9110,6 +9207,268 @@ static void storage_clear_cases(void) {
 /* What a crash leaves: temps whose task is gone (or is this one, or a
  * zombie). The first touch of the profile's stores removes them, and Clear
  * page storage does, counting only stores; a live window's temp stays. */
+/* THE COOKIE FILE (cookies.h), on the fake disk with the real jar: read at
+ * start, written after changes at most once a second, the three switches,
+ * Clear cookies, two windows sharing one file, a file that cannot be read
+ * never written over, a write that fails said and tried again later. */
+#define COOKIE_FILE "/tmp/profile/cookies"
+static void cookie_hear(way_jar_t *jar, const char *line) {
+    os64_url_t u; os64_url_parse("https://k.test/",&u);
+    way_jar_hear(jar,&u,true,line,strlen(line),js_test_clock.epoch);
+}
+static const char *cookie_sent(way_jar_t *jar) {
+    static char out[1024];
+    os64_url_t u; os64_url_parse("https://k.test/",&u);
+    way_jar_cookies(jar,&u,true,js_test_clock.epoch,out,sizeof(out),NULL);
+    return out;
+}
+static void cookie_file_seed(const char *text) {
+    int f=fake_file(COOKIE_FILE);
+    if(f<0) { for(f=0;fake_files[f].used;f++) {} fake_files[f].used=true; snprintf(fake_files[f].path,256,"%s",COOKIE_FILE); }
+    free(fake_files[f].data);
+    fake_files[f].data=strdup(text); fake_files[f].len=strlen(text); fake_files[f].mtime=++fake_second;
+}
+/* Another window's write, landing between this one's read and rename. */
+static void cookie_racer(void) {
+    char text[4096];
+    snprintf(text,sizeof(text),"%sk.test\tFALSE\t/\tFALSE\t1800000000\tracer\t1\n",fake_text(COOKIE_FILE));
+    cookie_file_seed(text);
+}
+static void cookie_file_cases(void) {
+    yonder_cookies_mode_t mode;
+    check(yonder_cookies_mode_of("ON",&mode) && mode==YONDER_COOKIES_ON && yonder_cookies_mode_of("Session",&mode) &&
+          mode==YONDER_COOKIES_SESSION && yonder_cookies_mode_of("off",&mode) && mode==YONDER_COOKIES_OFF &&
+          !yonder_cookies_mode_of("maybe",&mode),"cookie file: the three words, without case, and nothing else");
+    /* Read at start: a file another run left. */
+    fake_reset();
+    snprintf(fake_dirs[nfake_dirs++],256,"/tmp/profile");
+    cookie_file_seed("# Netscape HTTP Cookie File\n#HttpOnly_k.test\tFALSE\t/\tTRUE\t1800000000\tsid\tkept\n"
+                     "k.test\tFALSE\t/\tFALSE\t1600000000\told\t1\n");
+    way_jar_t *jar=way_jar_new();
+    yonder_cookies_t *k=yonder_cookies_new(jar,"/tmp/profile",YONDER_COOKIES_ON);
+    check(k!=NULL && os64_streq(cookie_sent(jar),"sid=kept") && yonder_cookies_due(k)==YONDER_NEVER,
+        "cookie file: on, the file is read at start, its expired line not, and nothing is owed");
+    /* A change is written at the loop's next turn, then at most once a
+     * second however many come. */
+    int writes=fake_writes;
+    cookie_hear(jar,"a=1; Max-Age=100000");
+    check(yonder_cookies_due(k)==0,"cookie file: a change is due at once");
+    yonder_cookies_turn(k,5000);
+    const char *text=fake_text(COOKIE_FILE);
+    check(fake_writes==writes+1 && text!=NULL && strstr(text,"\ta\t1\n")!=NULL && strstr(text,"\tsid\tkept\n")!=NULL &&
+          strstr(text,"sign in as you")!=NULL && strstr(text,"\told\t")==NULL,
+        "cookie file: the write merges the change onto the file, its header saying what it is");
+    for(int i=0;i<1000;i++) { char line[48]; snprintf(line,sizeof(line),"loop=%d; Max-Age=100000",i); cookie_hear(jar,line); }
+    check(yonder_cookies_due(k)==5000+YONDER_COOKIES_WRITE_MS,"cookie file: the next is due a second after the last");
+    yonder_cookies_turn(k,5500);
+    check(fake_writes==writes+1,"cookie file: a thousand changes within the second write nothing yet");
+    yonder_cookies_turn(k,6000);
+    check(fake_writes==writes+2 && strstr(fake_text(COOKIE_FILE),"\tloop\t999\n")!=NULL &&
+          yonder_cookies_due(k)==YONDER_NEVER,"cookie file: and one write at the second carries the last of them");
+    /* The window's wiring: the loop's schedule hands the ticker the next
+     * write's moment, and the loop's turn makes it. */
+    s_cookies=k;
+    cookie_hear(jar,"wired=1; Max-Age=100000");
+    now_ms=6100;
+    pictures_schedule();
+    check(ticker_due==6000+YONDER_COOKIES_WRITE_MS,"cookie file: the ticker is handed the write's moment");
+    now_ms=6000+YONDER_COOKIES_WRITE_MS;
+    cookies_turn();
+    check(strstr(fake_text(COOKIE_FILE),"\twired\t1\n")!=NULL,"cookie file: and the loop's turn writes it");
+    s_cookies=NULL;
+    /* A session cookie is no change the file must hear. */
+    cookie_hear(jar,"s=session");
+    check(yonder_cookies_due(k)==YONDER_NEVER,"cookie file: a session cookie owes the file nothing");
+    /* Another window writes the file: this one follows it at its next look. */
+    cookie_file_seed("k.test\tFALSE\t/\tFALSE\t1800000000\tother\t2\n");
+    yonder_cookies_look(k);
+    check(os64_streq(cookie_sent(jar),"s=session; other=2"),
+        "cookie file: a look follows another window's file, what it let go and what it set");
+    /* Two windows on one file, each with its own jar. */
+    way_jar_t *jar2=way_jar_new();
+    yonder_cookies_t *k2=yonder_cookies_new(jar2,"/tmp/profile",YONDER_COOKIES_ON);
+    cookie_hear(jar2,"second=2; Max-Age=100000");
+    cookie_hear(jar,"first=1; Max-Age=100000");
+    yonder_cookies_turn(k2,7000);
+    fake_second++;
+    yonder_cookies_turn(k,9000);
+    text=fake_text(COOKIE_FILE);
+    check(strstr(text,"\tfirst\t1\n")!=NULL && strstr(text,"\tsecond\t2\n")!=NULL && strstr(text,"\tother\t2\n")!=NULL,
+        "cookie file: two windows' writes merge, neither losing the other's");
+    check(strstr(cookie_sent(jar),"second=2")!=NULL,"cookie file: a window follows the file it wrote, the other's in it");
+    yonder_cookies_look(k2);
+    check(strstr(cookie_sent(jar2),"first=1")!=NULL,"cookie file: and the first window's is the second's at its look");
+    /* A write racing another window's, which publishes between this one's
+     * read and its rename: the file is read again, and both are kept. And
+     * flush writes what is owed, due or not. */
+    cookie_hear(jar,"race=1; Max-Age=100000");
+    fake_sync_hook=cookie_racer;
+    yonder_cookies_flush(k);
+    text=fake_text(COOKIE_FILE);
+    check(fake_sync_hook==NULL && strstr(text,"\trace\t1\n")!=NULL && strstr(text,"\tracer\t1\n")!=NULL,
+        "cookie file: a write another window's overtook is merged again, and flush writes what is owed");
+    /* Clear cookies: the jar and the file. */
+    int64_t gone=yonder_cookies_clear(k);
+    text=fake_text(COOKIE_FILE);
+    check(gone>0 && way_jar_count(jar)==0 && text!=NULL && strchr(text,'\t')==NULL &&
+          strncmp(text,"# Netscape HTTP Cookie File\n",28)==0,"cookie file: Clear cookies empties the jar and the file");
+    yonder_cookies_look(k2);
+    check(strstr(cookie_sent(jar2),"first=")==NULL && strstr(cookie_sent(jar2),"second=")==NULL,
+        "cookie file: and the other window follows the cleared file");
+    /* Session: memory only, never written, and the file kept as it was
+     * until yonder leaves. */
+    cookie_file_seed("k.test\tFALSE\t/\tFALSE\t1800000000\tleft\t1\n");
+    yonder_cookies_set_mode(k,YONDER_COOKIES_SESSION);
+    cookie_hear(jar,"b=2; Max-Age=100000");
+    writes=fake_writes;
+    yonder_cookies_turn(k,20000);
+    check(fake_writes==writes && yonder_cookies_due(k)==YONDER_NEVER && strstr(fake_text(COOKIE_FILE),"\tleft\t1\n")!=NULL &&
+          strstr(cookie_sent(jar),"b=2")!=NULL,"cookie file: session keeps cookies in memory and never writes them");
+    /* Back on before yonder leaves: nothing was lost, the file is followed,
+     * and what was set meanwhile is owed. */
+    yonder_cookies_set_mode(k,YONDER_COOKIES_ON);
+    check(strstr(cookie_sent(jar),"left=1")!=NULL && yonder_cookies_due(k)!=YONDER_NEVER,
+        "cookie file: on again follows the file and owes it the session's changes");
+    yonder_cookies_turn(k,30000);
+    check(strstr(fake_text(COOKIE_FILE),"\tb\t2\n")!=NULL,"cookie file: and writes them");
+    /* Off: none sent, none kept, the file emptied. */
+    yonder_cookies_set_mode(k,YONDER_COOKIES_OFF);
+    cookie_hear(jar,"c=3; Max-Age=100000");
+    check(cookie_sent(jar)[0]=='\0' && way_jar_count(jar)==0 && strchr(fake_text(COOKIE_FILE),'\t')==NULL &&
+          yonder_cookies_due(k)==YONDER_NEVER,"cookie file: off sends none, keeps none, and empties the file");
+    yonder_cookies_free(k); way_jar_free(jar);
+    yonder_cookies_free(k2); way_jar_free(jar2);
+    /* Off at start empties a file a run before left. */
+    cookie_file_seed("k.test\tFALSE\t/\tFALSE\t1800000000\tsid\tx\n");
+    jar=way_jar_new();
+    k=yonder_cookies_new(jar,"/tmp/profile",YONDER_COOKIES_OFF);
+    check(strchr(fake_text(COOKIE_FILE),'\t')==NULL && cookie_sent(jar)[0]=='\0',"cookie file: off at start empties the file");
+    yonder_cookies_free(k); way_jar_free(jar);
+    /* Session as yonder leaves: the file emptied, the window's cookies its
+     * own until then. */
+    cookie_file_seed("k.test\tFALSE\t/\tFALSE\t1800000000\tsid\tx\n");
+    jar=way_jar_new();
+    k=yonder_cookies_new(jar,"/tmp/profile",YONDER_COOKIES_ON);
+    yonder_cookies_set_mode(k,YONDER_COOKIES_SESSION);
+    check(strstr(fake_text(COOKIE_FILE),"\tsid\tx\n")!=NULL,"cookie file: switching to session leaves the file until yonder leaves");
+    yonder_cookies_flush(k);
+    check(strchr(fake_text(COOKIE_FILE),'\t')==NULL && os64_streq(cookie_sent(jar),"sid=x"),
+        "cookie file: and session empties it as yonder leaves");
+    yonder_cookies_free(k); way_jar_free(jar);
+    /* Session at start empties a file a session that crashed left. */
+    cookie_file_seed("k.test\tFALSE\t/\tFALSE\t1800000000\tsid\tx\n");
+    jar=way_jar_new();
+    k=yonder_cookies_new(jar,"/tmp/profile",YONDER_COOKIES_SESSION);
+    check(strchr(fake_text(COOKIE_FILE),'\t')==NULL && cookie_sent(jar)[0]=='\0',"cookie file: session at start empties the file");
+    yonder_cookies_free(k); way_jar_free(jar);
+    /* A file that cannot be read is never written over, and says so. */
+    cookie_file_seed("k.test\tFALSE\t/\tFALSE\t1800000000\tsid\tx\n");
+    jar=way_jar_new();
+    fake_slurp_fail=true;
+    k=yonder_cookies_new(jar,"/tmp/profile",YONDER_COOKIES_ON);
+    cookie_hear(jar,"a=1; Max-Age=100000");
+    yonder_cookies_turn(k,1000);
+    fake_slurp_fail=false;
+    check(strstr(fake_text(COOKIE_FILE),"\tsid\tx\n")!=NULL && yonder_cookies_problem(k)!=NULL &&
+          strstr(yonder_cookies_problem(k),"cannot be read")!=NULL,"cookie file: unreadable, it is not written over");
+    /* A write the disk refuses is said, and tried again ten seconds on. */
+    check(yonder_cookies_due(k)==1000+YONDER_COOKIES_RETRY_MS,"cookie file: a write that failed waits ten seconds");
+    fake_fail_rename=true;
+    yonder_cookies_turn(k,1000+YONDER_COOKIES_RETRY_MS);
+    check(strstr(yonder_cookies_problem(k),"cannot be written")!=NULL &&
+          yonder_cookies_due(k)==1000+2*YONDER_COOKIES_RETRY_MS,"cookie file: a refused write is said and waits to try again");
+    fake_fail_rename=false;
+    yonder_cookies_turn(k,1000+2*YONDER_COOKIES_RETRY_MS);
+    check(yonder_cookies_problem(k)==NULL && strstr(fake_text(COOKIE_FILE),"\ta\t1\n")!=NULL,
+        "cookie file: and the next write, which takes, clears it");
+    yonder_cookies_free(k); way_jar_free(jar);
+    /* A folder by the file's name (a person made it, expecting one): said
+     * for what it is, and neither removed nor written over. */
+    fake_reset();
+    snprintf(fake_dirs[nfake_dirs++],256,"/tmp/profile");
+    snprintf(fake_dirs[nfake_dirs++],256,COOKIE_FILE);
+    jar=way_jar_new();
+    k=yonder_cookies_new(jar,"/tmp/profile",YONDER_COOKIES_ON);
+    cookie_hear(jar,"a=1; Max-Age=100000");
+    yonder_cookies_turn(k,1000);
+    check(fake_is_dir(COOKIE_FILE) && yonder_cookies_problem(k)!=NULL &&
+          strstr(yonder_cookies_problem(k),"is a folder")!=NULL,"cookie file: a folder in its place is said as one, and left alone");
+    yonder_cookies_free(k); way_jar_free(jar);
+    /* A look whose follow runs short of memory is not the file followed:
+     * the next look reads it again. */
+    fake_reset();
+    snprintf(fake_dirs[nfake_dirs++],256,"/tmp/profile");
+    cookie_file_seed("k.test\tFALSE\t/\tFALSE\t1800000000\tsid\tkept\n");
+    jar=way_jar_new();
+    k=yonder_cookies_new(jar,"/tmp/profile",YONDER_COOKIES_ON);
+    cookie_file_seed("k.test\tFALSE\t/\tFALSE\t1800000000\tsid\tkept\nk.test\tFALSE\t/\tFALSE\t1800000000\tother\t2\n");
+    fail_at=attempts+2;                 /* the file's bytes, then the follow's line */
+    yonder_cookies_look(k);
+    fail_at=0;
+    check(strstr(cookie_sent(jar),"other=2")==NULL,"cookie file: a follow short of memory takes nothing");
+    yonder_cookies_look(k);
+    check(strstr(cookie_sent(jar),"other=2")!=NULL,"cookie file: and the next look reads the file again");
+    yonder_cookies_free(k); way_jar_free(jar);
+    /* A dead window's temp with no file beside it (a crash before the
+     * first rename) is taken by Clear cookies all the same. */
+    fake_reset();
+    snprintf(fake_dirs[nfake_dirs++],256,"/tmp/profile");
+    fake_live[0]=99;
+    {
+        int f; for(f=0;fake_files[f].used;f++) {}
+        fake_files[f].used=true; snprintf(fake_files[f].path,256,COOKIE_FILE "+42.3.new"); fake_files[f].data=strdup("x");
+    }
+    jar=way_jar_new();
+    k=yonder_cookies_new(jar,"/tmp/profile",YONDER_COOKIES_ON);
+    check(yonder_cookies_clear(k)==0 && fake_file(COOKIE_FILE "+42.3.new")<0,
+        "cookie file: Clear takes a dead window's temp when there is no file");
+    yonder_cookies_free(k); way_jar_free(jar);
+    /* The profile folder is made by the first write, as page storage's. */
+    fake_reset();
+    jar=way_jar_new();
+    k=yonder_cookies_new(jar,"/tmp/profile",YONDER_COOKIES_ON);
+    cookie_hear(jar,"a=1; Max-Age=100000");
+    yonder_cookies_turn(k,1000);
+    check(fake_is_dir("/tmp/profile") && fake_text(COOKIE_FILE)!=NULL,"cookie file: the first write makes the folder");
+    yonder_cookies_free(k); way_jar_free(jar);
+    /* A temp a dead window left is removed at the first write. */
+    fake_live[0]=99;
+    cookie_file_seed("");
+    {
+        int f; for(f=0;fake_files[f].used;f++) {}
+        fake_files[f].used=true; snprintf(fake_files[f].path,256,COOKIE_FILE "+42.1.new"); fake_files[f].data=strdup("x");
+        for(f=0;fake_files[f].used;f++) {}
+        fake_files[f].used=true; snprintf(fake_files[f].path,256,COOKIE_FILE "+99.1.new"); fake_files[f].data=strdup("x");
+    }
+    jar=way_jar_new();
+    k=yonder_cookies_new(jar,"/tmp/profile",YONDER_COOKIES_ON);
+    cookie_hear(jar,"a=1; Max-Age=100000");
+    yonder_cookies_turn(k,1000);
+    check(fake_file(COOKIE_FILE "+42.1.new")<0 && fake_file(COOKIE_FILE "+99.1.new")>=0,
+        "cookie file: a dead window's temp goes at the first write, a live one's stays");
+    /* Clear cookies takes a dead window's temp too, whenever it was left:
+     * it holds cookies. */
+    {
+        int f; for(f=0;fake_files[f].used;f++) {}
+        fake_files[f].used=true; snprintf(fake_files[f].path,256,COOKIE_FILE "+42.2.new"); fake_files[f].data=strdup("x");
+    }
+    (void)yonder_cookies_clear(k);
+    check(fake_file(COOKIE_FILE "+42.2.new")<0 && fake_file(COOKIE_FILE "+99.1.new")>=0,
+        "cookie file: Clear cookies takes a dead window's temp, and leaves a live one's");
+    yonder_cookies_free(k); way_jar_free(jar);
+    /* yonder.conf's switch, and Settings' two boxes for it. */
+    const char *refused="unset";
+    saved_cookies[0]=0;
+    check(yonder_settings_saved_cookies(&refused)==YONDER_COOKIES_ON && refused==NULL,"cookies: absent is on");
+    strcpy(saved_cookies,"Session");
+    check(yonder_settings_saved_cookies(&refused)==YONDER_COOKIES_SESSION && refused==NULL,"cookies: session, any case");
+    strcpy(saved_cookies,"off");
+    check(yonder_settings_saved_cookies(&refused)==YONDER_COOKIES_OFF,"cookies: off");
+    strcpy(saved_cookies,"never");
+    check(yonder_settings_saved_cookies(&refused)==YONDER_COOKIES_ON && refused!=NULL &&
+          strstr(refused,"not on, session or off")!=NULL,"cookies: anything else is on, said");
+    saved_cookies[0]=0;
+}
 static void storage_orphan_cases(void) {
     fake_reset();
     snprintf(fake_dirs[nfake_dirs++],256,"/tmp/profile");
@@ -9231,6 +9590,7 @@ static void storage_cases(void) {
     storage_departed_tasks_case();
     storage_clear_cases();
     storage_orphan_cases();
+    cookie_file_cases();
     timing_window_cases();
     timing_redirect_case();
     timing_file_case();
@@ -9243,6 +9603,7 @@ static void diag_cases(void) {
     diag_page_cases();
     diag_bytes_case();
     diag_picture_case();
+    diag_cookies_case();
     diag_picture_unshown_case();
     diag_picture_workerless_case();
     diag_picture_unasked_case();

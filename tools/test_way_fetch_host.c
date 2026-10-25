@@ -109,11 +109,11 @@ typedef struct {
     const char *reply;
     size_t len;                 // the reply's length, read at the dial
     size_t served;
-    char request[8192];
+    char request[32768];        // a request with an 8 KB Cookie line fits
     size_t reqlen;
 } conn_t;
 static conn_t s_conns[8];
-static char s_last_request[8][8192];   // per host index: what it was last asked
+static char s_last_request[8][32768];  // per host index: what it was last asked
 static int s_conn_peer[8];
 
 int64_t os64_dial(const char *dialstring)
@@ -1037,7 +1037,7 @@ static void who_is_asking(void)
                                   "Sec-Fetch-Mode: no-cors\r\nSec-Fetch-Dest: image\r\nAccept-Language: en-US,en;q=0.9\r\n") &&
            !has(s_last_request[0], "Upgrade-Insecure-Requests"), s_last_request[0]);
 
-    // THE COOKIES KEEP THEIR KILOBYTE. A cookie of most of a kilobyte goes
+    // THE COOKIES KEEP THEIR ROOM. A cookie of most of a kilobyte goes
     // whole beside the identity lines, and an identity past
     // WAY_IDENTITY_MAX goes without its lines rather than crowd the
     // cookies out or refuse the hop.
@@ -1175,6 +1175,56 @@ static void how_it_asks(void)
                !has(s_last_request[0], "Connection"), s_last_request[0]);
 }
 
+// THE COOKIES A LOAD LEFT OUT, noted where a face reads them: a page's
+// leg (way_open) and a fetch's hooks (way_fetch_whole). A jar of a site's
+// 3 KB sends it whole and notes nothing; one of 10 KB sends the newest
+// that fit WAY_COOKIE_LINE_MAX, the login among them, and notes how many
+// went without, and to which host.
+static void cookies_left_out(void)
+{
+    char value[241], cookie[300];
+    memset(value, 'v', sizeof(value) - 1);
+    value[sizeof(value) - 1] = '\0';
+    os64_url_t site;
+    os64_url_parse("http://crumbs.test/", &site);
+    for (int many = 0; many < 2; many++) {
+        way_jar_t *jar = way_jar_new();
+        for (int i = 0; i < (many ? 40 : 12); i++) {
+            snprintf(cookie, sizeof(cookie), "pre%02d=%s; Path=/", i, value);
+            way_jar_hear(jar, &site, false, cookie, strlen(cookie), s_clock);
+        }
+        way_jar_hear(jar, &site, false, "user_session=S; Path=/", 22, s_clock);
+        fresh();
+        script("crumbs.test", "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 4\r\n\r\n<p>x");
+        way_session_t session = {.name = "fixture", .agent = "fixture", .accept = "text/html", .jar = jar};
+        way_leg_t leg = way_leg(&session);
+        way_opening_t o;
+        os64_fetch_status_t why;
+        bool opened = way_open(&leg, "http://crumbs.test/", NULL, &o, &why);
+        if (opened)
+            os64_fetch_close(o.fetch);
+        expect(many ? "left out: a page's leg notes what its hop left out, and for whom"
+                    : "left out: a page's 3 KB go whole, and its leg notes nothing",
+               opened && has(s_last_request[0], "user_session=S") &&
+                   leg.cookies_short.left == (many ? 8 : 0) &&
+                   strcmp(leg.cookies_short.host, many ? "crumbs.test" : "") == 0,
+               leg.cookies_short.host);
+        fresh();
+        script("crumbs.test", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nPNG");
+        way_hooks_t hooks;
+        memset(&hooks, 0, sizeof(hooks));
+        hooks.jar = jar;
+        os64_fetch_options_t opt;
+        memset(&opt, 0, sizeof(opt));
+        way_whole_t got;
+        bool ok = way_fetch_whole(&hooks, "http://crumbs.test/i.png", &opt, 1 << 20, &got);
+        free(got.bytes);
+        expect(many ? "left out: a fetch's hooks note it the same" : "left out: and its hooks nothing",
+               ok && hooks.cookies_short.left == (many ? 8 : 0), NULL);
+        way_jar_free(jar);
+    }
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -1195,6 +1245,7 @@ int main(void)
     field_too_long();
     who_is_asking();
     how_it_asks();
+    cookies_left_out();
     fetch_pool_drain();
     way_cache_close(s_cache);
     way_jar_free(s_jar);

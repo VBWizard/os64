@@ -519,20 +519,31 @@ expects):
   fact libfetch reports, not the scheme in an address — and an unencrypted
   reply cannot overwrite a secure cookie of the same name; the `__Secure-`
   and `__Host-` prefixes are held to their promises;
-- `HttpOnly` and `SameSite` are kept and change nothing: no script can
-  read a cookie here, and `SameSite` is booked below with what it needs.
+- `HttpOnly` keeps a cookie from a page's script (`document.cookie`
+  neither reads nor sets one) and decides which cookies go first when a
+  request's do not all fit (below); `SameSite` is kept and changes
+  nothing, booked below with what it needs.
 
 Limits are the browsers': 4096 bytes a cookie, 180 a domain, 3000 in all;
 past a limit the expired go first and then the cookie used longest ago —
 sending counts as use, so the login every page carries is the last to go.
 
 **Sent in the order the RFC gives** (the longest path first, then the
-oldest), whole cookies only. libfetch gives a hop 1536 bytes for its
-per-hop lines, of which the lines that say who is asking take up to 512
-first (libway's `WAY_IDENTITY_MAX`), which leaves a kilobyte for its
-`Cookie` and `Referer` lines together; the cookies come first, because a
-login depends on them and not on a Referer, and what does not fit is left
-off whole (the limit is booked with libfetch, in BROWSER_DEBTS.md).
+oldest), whole cookies only. A hop's `Cookie` line may take 8 KiB
+(libway's `WAY_COOKIE_LINE_MAX`, beside its argument: Apache and nginx
+refuse a longer field by default), with room of its own beside it for the
+lines that say who is asking and a 4 KiB Referer, all inside libfetch's
+`OS64_FETCH_HOP_FIELDS_MAX`. When a site's cookies pass 8 KiB, the
+HttpOnly ones are kept first and then the rest, the NEWEST first within
+each, and what does not fit is left out whole: the RFC orders the header
+but says nothing of which to cut, and its order would cut the cookies a
+site set last, which after a sign-in are the sign-in itself (Chris's
+first login looked logged out for exactly that, at the kilobyte this
+budget had before); and a session is the server's own memory, which it
+sets HttpOnly, where whatever a page's scripts set (analytics, consent)
+can never be, so those go first however new. A page whose requests left cookies out says so
+on its record: `FAILED cookies: left out of a request to <host> (N)`,
+N the most one request left out (YONDER_DIAGNOSTICS.md).
 
 **The `Referer` is the browsers' default policy,
 strict-origin-when-cross-origin**: the whole address of the page a request
@@ -543,10 +554,12 @@ a refresh the page declared, and every picture the page names; not with
 an address typed, Back or Forward, or a Reload. A page's own
 `Referrer-Policy` is not read yet (booked).
 
-**No questions, and nothing kept past the browser.** A cookie is a server
-remembering a person the way that person asked it to by logging in, so
-nothing is asked. And nothing is written to disk in this slice: the jar
-lives as long as the browser, so logging in lasts until yonder is closed.
+**No questions.** A cookie is a server remembering a person the way that
+person asked it to by logging in, so nothing is asked. Nothing was written
+to disk in this slice: the jar lived as long as the browser. The login
+slice (2026-10-25) keeps it across restarts, in the profile's `cookies`
+file (YONDER_HONEY_DO.md § 4); a cookie with no expiry still lives as long
+as the browser that heard it.
 
 **Evidence, as run.** libway's host harness, 73 new checks under ASan and
 UBSan: §5.1.1's dates in HTTP's three spellings and on nonsense, a leap day
@@ -886,9 +899,9 @@ page failed with "out of handles or ports"; the table is 64 now
 
 | Debt | Why it waits | Trigger |
 |---|---|---|
-| Cookies kept across restarts | the jar is the browser's memory of a login and lives as long as it; a file of them is a file of credentials, and wants a decision about where it lives and who may read it | Chris asks to stay logged in |
+| ~~Cookies kept across restarts~~ PAID by the login slice (2026-10-25): `<profile>/cookies`, Netscape's cookies.txt, `cookies = on \| session \| off`, Clear cookies in Settings (YONDER_HONEY_DO.md § 4 has the as-built). Who may read the file waits on the filesystem having modes; it is written closed the day it does | the jar is the browser's memory of a login and lives as long as it; a file of them is a file of credentials, and wants a decision about where it lives and who may read it | Chris asks to stay logged in (reached) |
 | `SameSite`, and the public-suffix list | `SameSite` is judged by SITE, the registrable domain, which needs the list of suffixes under which anyone may register (co.uk, github.io); without it a `Domain=` on a host under such a suffix is taken as the host's own, and a form on another site sends the cookies of the site it posts to | before yonder is the browser a person logs in to their bank with |
-| A way to see and clear cookies | nothing in the window lists them yet | the first time a site needs its cookies cleared |
+| A way to see cookies (clearing them all is built: Clear cookies in Settings) | nothing in the window lists them yet, nor clears one site's alone | the first time a site needs its own cookies cleared |
 | A page's `Referrer-Policy` | the default is the browsers' own and sends no more than they do | a page that asks for less |
 | A hand pointer over links | the compositor draws one fixed arrow; a pointer shape is a kernel and ABI change | somebody misses it more than the status line answers it |
 | Unequal border widths, tested | the diagonal corner rule is exercised only where sides differ, and no producer sets one side alone until the cascade (a mutation to the corner arithmetic survives today for that reason) | the cascade |
