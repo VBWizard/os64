@@ -384,6 +384,42 @@ p: padding-top: 3px
 (end)
 END
 
+# A sheet whose own parse came up short (its brackets nest past
+# GARB_DEPTH_MAX) makes short only the cascades that apply it: imported
+# for print, under a supports() that does not hold, or by a print sheet,
+# it takes nothing from the screen's cascade, which is whole.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@import url(b.css) print;
+@import "d.css" supports(foo: bar);
+p { color: blue }
+</style><style media="print">@import "e.css";</style><p>x
+@@SHEET b.css
+p { color: red } ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((
+@@SHEET d.css
+p { color: red } ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((
+@@SHEET e.css
+p { color: red } ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((
+WANT
+p: color: rgb(0, 0, 255)
+(end)
+END
+
+# The same sheet imported for the screen applies, and the cascade is short.
+VIEWPORT 800x600
+PAGE
+<!doctype html><style>
+@import url(b.css) screen;
+p { margin-top: 1px }
+</style><p>x
+@@SHEET b.css
+p { color: red } ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((
+WANT
+p: color: rgb(255, 0, 0); margin-top: 1px
+(incomplete)
+END
+
 # A custom property's empty value is a value, and its initial one is not:
 # the "space toggle" (`--on: ;` substitutes nothing, `--off: initial` takes
 # the fallback). And `unset` on a custom property inherits, as custom

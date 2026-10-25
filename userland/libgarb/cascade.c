@@ -2167,6 +2167,11 @@ garb_cascade_t *garb_cascade(const garb_sheet_in_t *sheets, int32_t n,
         const garb_parsed_t *sheet = sheets[s].sheet;
         if (!sheet_applies(c, sheets, n, s, 0))
             continue;
+        // A sheet whose own parse came up short is short in every cascade
+        // that applies it — and only in those: one its @import's conditions
+        // or its importer leave out takes nothing from the page.
+        if (sheet->incomplete)
+            c->incomplete = true;
         add_rules(c, into, sheet->items, sheet->nitems, &order, 0, s);
     }
     keyframes_settle(c);
@@ -2211,14 +2216,12 @@ garb_cascade_t *garb_cascade(const garb_sheet_in_t *sheets, int32_t n,
         x = x != NULL ? x->next : NULL;
     }
     // What the cascade read ran short wherever it was read: a sheet's own
-    // parse marks the sheet, the rule blocks, selectors and values read from
-    // it mark this cascade's reading of its sheets, and what is read per
-    // element marks the cascade's own. Any of them short for a sheet the
-    // cascade used, or in a style attribute, and the cascade is short.
+    // parse (taken in above, for the sheets the cascade applied), the rule
+    // blocks, selectors and values read from them, which mark this
+    // cascade's reading of them, and what is read per element, which marks
+    // the cascade's own. Any of them short, or a style attribute's parse,
+    // and the cascade is short.
     bool short_read = c->self.incomplete || c->reads.incomplete;
-    for (int32_t s = 0; s < n; s++)
-        short_read |= sheets[s].sheet != NULL && sheets[s].sheet->incomplete &&
-                      garb_media_text_matches(sheets[s].media, env);
     for (int32_t i = 0; i < c->nattrs; i++)
         short_read |= c->attrs[i].incomplete;
     if (short_read)
