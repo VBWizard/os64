@@ -35,8 +35,8 @@ static int64_t now_utc(void)
     return os64_time(&t) == 0 ? t.epoch : 0;
 }
 
-_Static_assert(OS64_FETCH_HOP_FIELDS_MAX - WAY_IDENTITY_MAX >= 1024,
-               "a hop's cookies and Referer keep their kilobyte beside who is asking");
+_Static_assert(OS64_FETCH_HOP_FIELDS_MAX >= WAY_IDENTITY_MAX + WAY_COOKIE_LINE_MAX + WAY_REFERER_LINE_MAX,
+               "a hop's Cookie line and Referer keep their room beside who is asking");
 
 // A hop's lines that say who is asking (way_identity_lines), with `m`
 // stepped to the hop first, within WAY_IDENTITY_MAX of `cap`: the rest is
@@ -59,8 +59,9 @@ static bool leg_headers(void *ctx, const os64_url_t *hop, bool encrypted, char *
 {
     way_leg_t *s = ctx;
     size_t used = hop_identity(s->identity, &s->metadata, hop, out, cap);
-    (void)way_hop_headers(s->session->jar, s->referrer, hop, encrypted, now_utc(), out + used,
-                          cap - used);
+    int32_t left = way_hop_headers(s->session->jar, s->referrer, hop, encrypted, now_utc(), out + used,
+                                   cap - used);
+    way_cookies_short_note(&s->cookies_short, hop, left);
     return true;
 }
 
@@ -83,7 +84,8 @@ static bool hooks_headers(void *ctx, const os64_url_t *hop, bool encrypted, char
 {
     way_hooks_t *h = ctx;
     size_t used = hop_identity(h->identity, &h->metadata, hop, out, cap);
-    (void)way_hop_headers(h->jar, h->referrer, hop, encrypted, now_utc(), out + used, cap - used);
+    int32_t left = way_hop_headers(h->jar, h->referrer, hop, encrypted, now_utc(), out + used, cap - used);
+    way_cookies_short_note(&h->cookies_short, hop, left);
     return true;
 }
 

@@ -50,6 +50,10 @@ struct os64_fetch {
                  2 * OS64_FETCH_EXTRA_MAX + OS64_FETCH_HOP_FIELDS_MAX + OS64_FETCH_CONTENT_TYPE_MAX +
                  HTTP_METHOD_NAME_MAX + 256];
     char hop_extra[OS64_FETCH_EXTRA_MAX + OS64_FETCH_HOP_FIELDS_MAX];
+    // What headers_for wrote for the hop, judged before it joins hop_extra
+    // (request_extras): here and not on the stack for the reason `request`
+    // is, at about 13 KB.
+    char hop_fields[OS64_FETCH_HOP_FIELDS_MAX];
 
     // One conversation with the world: the connection, the stream reading
     // it, and the head that came back. A redirect gives the connection back
@@ -425,16 +429,17 @@ static bool request_extras(os64_fetch_t *f, char *out, size_t cap, bool encrypte
     extras_for_hop(f, out, cap, encrypted);
     if (!f->opt.headers_for)
         return true;
-    char dynamic[OS64_FETCH_HOP_FIELDS_MAX];
-    os64_memset(dynamic, 0xff, sizeof(dynamic));
+    char *dynamic = f->hop_fields;
+    const size_t room = sizeof(f->hop_fields);
+    os64_memset(dynamic, 0xff, room);
     dynamic[0] = '\0';
     os64_url_t url;
     url_filled(&f->current, &url);
-    if (!f->opt.headers_for(f->opt.ctx, &url, encrypted, dynamic, sizeof(dynamic)))
+    if (!f->opt.headers_for(f->opt.ctx, &url, encrypted, dynamic, room))
         return false;
     size_t len = 0;
-    while (len < sizeof(dynamic) && dynamic[len]) len++;
-    if (len == sizeof(dynamic))
+    while (len < room && dynamic[len]) len++;
+    if (len == room)
         return false;
     http_request_extras_t check = { .extra_headers = dynamic };
     if (!http_request_extras_ok(&check))
@@ -654,13 +659,18 @@ static void release_connection(os64_fetch_t *f, bool normal)
     fetch_transport_close(&f->io, normal);
 }
 
+static bool idempotent(const os64_fetch_t *f);
+
 // A kept connection for this hop that still answers its probe, adopted:
 // true with it in `io`. One the probe refuses is closed, and the next is
-// tried.
+// tried. A request the retry rule would not send again takes only one used
+// moments ago (FETCH_POOL_ONCE_MS), since nothing could save it from one
+// its server closed while it sat idle.
 static bool take_kept(os64_fetch_t *f, const fetch_pool_key_t *key)
 {
     fetch_transport_t io;
-    while (fetch_pool_take(key, &io)) {
+    uint32_t idle_most = idempotent(f) ? FETCH_POOL_IDLE_MS : FETCH_POOL_ONCE_MS;
+    while (fetch_pool_take(key, idle_most, &io)) {
         if (fetch_transport_idle_ok(&io)) {
             f->io = io;
             fetch_transport_adopt(&f->io, f->opt.idle_ms, cancel_predicate, f);
@@ -694,7 +704,9 @@ static bool idempotent(const os64_fetch_t *f)
 // (the second try's among them, so a request goes at most twice), one after
 // a reply began, a silence, or a non-idempotent method's (POST, PATCH, any
 // name the list does not hold, or one in lower case), is the caller's as it
-// always was.
+// always was. That last is why such a request rides only a connection used
+// moments ago (take_kept): the close it cannot recover from is the one a
+// connection meets while it sits idle.
 static bool retry_on_fresh(os64_fetch_t *f)
 {
     return f->reused && f->io.received == 0 && !f->io.silent && !cancelled(f) && idempotent(f);

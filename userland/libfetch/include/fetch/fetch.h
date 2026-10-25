@@ -223,9 +223,12 @@ typedef struct {
 // A script's request carries its page's own headers, and one bearer token
 // alone is often past a kilobyte.
 #define OS64_FETCH_EXTRA_MAX    8192
-// What headers_for may write: a hop's Cookie and Referer (a kilobyte), and
-// beside them the lines that say who is asking (half a kilobyte).
-#define OS64_FETCH_HOP_FIELDS_MAX (1024 + 512)
+// What headers_for may write, NUL and all: the lines that say who is asking
+// (half a kilobyte), a hop's Cookie line (8 KiB, the most a common server
+// reads in one field: libway's WAY_COOKIE_LINE_MAX says which servers), and
+// its Referer (4 KiB and a line's name, the most Chrome and Firefox send).
+// libway asserts that its three parts fit here.
+#define OS64_FETCH_HOP_FIELDS_MAX (512 + 8192 + 4096 + 16)
 #define OS64_FETCH_CONTENT_TYPE_MAX 256
 #define OS64_FETCH_METHOD_MAX   HTTP_METHOD_NAME_MAX
 // An order names each line a browser sends once: Chrome's longest, a

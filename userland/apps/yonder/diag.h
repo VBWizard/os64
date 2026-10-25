@@ -94,6 +94,10 @@ void yonder_diag_failed(yonder_diag_t *d, const char *what, const char *message)
 // The same line for a condition that holds rather than an event that
 // happened: once, however often it is looked at.
 void yonder_diag_failed_seen(yonder_diag_t *d, const char *what, const char *message);
+// The same line for a shortfall measured each time it happens (the
+// cookies one request left out): its count is the most any one has been,
+// so the line says how bad it got, not how often.
+void yonder_diag_failed_most(yonder_diag_t *d, const char *what, const char *message, uint32_t count);
 // A plain line, `key: value`, kept where its key was first set and
 // replaced by a later setting of the same key.
 void yonder_diag_fact(yonder_diag_t *d, const char *key, const char *value);

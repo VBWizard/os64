@@ -98,8 +98,46 @@ answered by a key you pressed for something else.
 
 ## Cookies
 
-yonder keeps cookies as other browsers do, so logging in to a site works.
-They last while yonder runs: closing it forgets them.
+yonder keeps cookies as other browsers do, so logging in to a site works,
+and it keeps them after it closes, so you stay logged in: the next yonder,
+and every other yonder window open now, sends them too. A cookie a site
+sets only "for this session" (one with no expiry date) is never kept past
+the window that heard it, as in every browser.
+
+They are kept in ONE file for every site, **`/home/yogi/.yonder/cookies`**
+(`cookies` in your profile folder, which `profile` in `yonder.conf` can
+move; nothing goes under `storage/`, which is page storage's). It is the same `cookies.txt` that curl and wget read and
+write, a line a cookie. **It is a file of your logins: anyone who can read
+it can sign in to your sites as you**, and it says so in its first lines.
+To log out of everything at once, press **Clear cookies** in Settings,
+which empties the file and this window's cookies. Another yonder window
+open now lets its cookies go at its next page; until then the page it
+shows still sends them, and a cookie a site set in it during the last
+second (or ten, after a write that failed) is written back into the file.
+Close the other windows first to be sure. The diagnostics files (`diagnostics`,
+below) are not emptied: a page's record lists the cookies its scripts
+can read, and if you keep records, they hold those too.
+
+yonder makes the file itself the first time it has a cookie to keep. When
+it cannot keep them (a folder where the file goes, a disk that refuses the
+write), the status line says so once, and Settings says why every time it
+opens.
+
+`cookies` in `yonder.conf` (or the two boxes in Settings) says how much is
+kept:
+
+- `cookies = on`, the default: kept in the file, as above.
+- `cookies = session`: kept while the window is open and never written
+  down, and the file is emptied when yonder closes (and when a yonder
+  starts this way). Ticking the box again before then loses nothing.
+- `cookies = off`: no cookie is sent or kept, and the file is emptied.
+  Most sign-ins stop working.
+
+yonder sends a site at most 8 KB of its cookies in one request, which is
+as much as most servers read. A site that has set more than that is sent
+first the cookies its pages' scripts cannot read (where a login lives),
+then its newest, and the page's diagnostics file says `FAILED cookies`
+with how many were left out.
 
 ## Settings
 
@@ -136,6 +174,10 @@ Click the Settings icon in the title bar.
   forget theirs. A page in another yonder window that writes at that
   moment keeps what it writes then, and may bring back what its site had
   kept.
+- **Accept cookies** and **Keep them when yonder closes**: both is
+  `cookies = on`, Accept alone is `session`, neither is `off` (Cookies,
+  above). **Clear cookies**, at that row's right, empties the cookie file
+  and this window's cookies at once.
 - **Apply** changes this window from the next page on. **Save as default**
   also writes the settings to `yonder.conf`, where every new yonder reads
   them.
@@ -203,11 +245,12 @@ cache_dir = /var/cache/yonder
 | `motion` | `reduce` or `no-preference`: what pages are told about movement | `no-preference` |
 | `diagnostics` | a directory to write a file about each page into, an absolute path | none |
 | `modern` | `on` or `off`: the Modern Web surface | `on` |
-| `profile` | the folder for your own files, page storage first among them, an absolute path; made when first needed | `/home/yogi/.yonder` |
+| `profile` | the folder for your own files (page storage, the cookie file), an absolute path; made when first needed | `/home/yogi/.yonder` |
+| `cookies` | `on`, `session` or `off`: whether cookies are kept in the profile's `cookies` file, only while the window is open, or not at all | `on` |
 
 A value yonder cannot use is ignored and the default used; a bad `agent`,
 `cache_mb`, `zoom`, `script_seconds` or `diagnostics` also says so in the
-log, and a bad `modern` or `profile` on the status line.
+log, and a bad `modern`, `profile` or `cookies` on the status line.
 
 ## Fonts
 
@@ -224,7 +267,8 @@ explains them.
 - **Downloads.** An address that is not a page (a zip, a program) is not
   shown; the status line names the `os64get` command that saves it.
 - **Several tabs or windows sharing one session.** Each yonder is its own
-  browser, with its own history and cookies (the cache is shared).
+  browser, with its own history; the cache is shared, and so are the
+  cookies, through their file (unless `cookies` is `session` or `off`).
 
 What the browsers still owe, as people find it, is kept in
 `BROWSER_DEBTS.md` at the top of the source tree.

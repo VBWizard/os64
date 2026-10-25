@@ -469,6 +469,13 @@ void yonder_diag_failed_seen(yonder_diag_t *d, const char *what, const char *mes
         l->count = 1;
 }
 
+void yonder_diag_failed_most(yonder_diag_t *d, const char *what, const char *message, uint32_t count)
+{
+    Line *l = d != NULL ? table_line(&d->failed, what, message, true, YONDER_DIAG_RECORDS_MAX) : NULL;
+    if (l != NULL && count > l->count)
+        l->count = count;
+}
+
 uint32_t yonder_diag_missing_lines(const yonder_diag_t *d)
 {
     return d != NULL ? d->missing.n : 0;

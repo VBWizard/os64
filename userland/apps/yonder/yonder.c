@@ -87,6 +87,12 @@ static yonder_storage_t *s_storage;
 static char s_storage_said[OS64_PATH_MAX + 96];
 static os64_dom_screen_t s_screen;
 
+// THE COOKIE FILE (cookies.h): the jar kept in the profile folder, by
+// yonder.conf's `cookies`; NULL keeps the jar for the window's life alone.
+// The problem last said on the status line, so one is said once.
+static yonder_cookies_t *s_cookies;
+static char s_cookies_said[OS64_PATH_MAX + 96];
+
 // The pages a navigation asks for when the agent's preset names no list of
 // its own (agent.c: a costume, or an agent typed). libway adds, on a GET,
 // the pictures yonder shows by themselves (YONDER.md § A picture asked for
@@ -1900,6 +1906,19 @@ static void diag_cookies(yonder_diag_t *d, const char *url, bool encrypted)
     os64_free(cookies);
 }
 
+// A load that left cookies out for want of room (way/jar.h): one FAILED
+// line a host on the page's record, its count the most one request to that
+// host left out. A site that is sent fewer cookies than it set may see a
+// stranger, which is why it is a FAILED line and not a plain one.
+static void diag_cookies_short(yonder_diag_t *d, const way_cookies_short_t *s)
+{
+    if (d == NULL || s->left <= 0)
+        return;
+    char message[OS64_URL_HOST_MAX + 32];
+    os64_snprintf(message, sizeof(message), "left out of a request to %s", s->host);
+    yonder_diag_failed_most(d, "cookies", message, (uint32_t)s->left);
+}
+
 static yonder_diag_t *diag_begin(const char *url)
 {
     yonder_diag_t *d = yonder_diag_new(url, s_diag.next, os64_micros());
@@ -3506,6 +3525,9 @@ static void start_trip(const char *url, os64_page_request_t *request, const char
 static void trip_send(const char *url, os64_page_request_t *request, const char *referrer, NavKind kind,
                       way_initiator_t by, const way_position_t *crumb)
 {
+    // A navigation carries the cookies another window kept since this one
+    // last looked: a sign-in there is this window's at its next page.
+    yonder_cookies_look(s_cookies);
     // What a page asked for names that page in its Referer; a Reload, even
     // one sending a form again, names nothing. Read now: `referrer` may be
     // the asking page's own address, which the stop below can let go. The
@@ -4173,6 +4195,7 @@ static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
             : g.stream.active && g.stream.serial == job->page ? &g.stream.page : NULL;
     if (p == NULL || job->index < 0 || job->index >= p->nsheets)
         return;
+    diag_cookies_short(p == &g.stream.page ? g.stream.diag : p->diag, &job->hooks.cookies_short);
     Sheet *sh = &p->sheets[job->index];
     if (!sh->waiting)
         return;
@@ -4501,6 +4524,7 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
 {
     if (job->generation != g.page_serial || job->index < 0 || job->index >= g.page.npics)
         return;                     // a page no longer on screen
+    diag_cookies_short(g.page.diag, &job->hooks.cookies_short);
     Picture *pic = &g.page.pics[job->index];
     if (pic->state != PIC_WAITING)
         return;
@@ -5358,6 +5382,7 @@ static void webfont_arrived(const yonder_webfont_job_t *job, yonder_webfont_t *p
 {
     if (job->generation != g.page_serial || job->index < 0 || job->index >= s_web.nfiles)
         return;                     // a page no longer on screen
+    diag_cookies_short(g.page.diag, &job->hooks.cookies_short);
     WebFontFile *w = &s_web.files[job->index];
     if (w->state != WF_WAITING)
         return;
@@ -6291,8 +6316,9 @@ static uint64_t tick_next(void)
 // its next tick (tick_next) — none of them for a covered window — the
 // moment a page waiting for its
 // sheets is shown whatever is still coming, the moment a script the stream
-// is stopped at stops waiting for its sheets, and the next timer and the
-// next storage commit of each page's scripts, covered or not.
+// is stopped at stops waiting for its sheets, the next timer and the
+// next storage commit of each page's scripts, covered or not, and the
+// cookie file's next write.
 // The earliest deadline offered so far (deadline_offer): when, where the
 // first offered at that moment came from (for the counts), and whether any
 // offered at that moment is the bell's to meet.
@@ -6304,7 +6330,8 @@ typedef struct {
 
 // A deadline offered to `d`. The loop meets a script's timer (script_turn,
 // and the stream's and the arriving page's turns), a storage commit
-// (storage_turn), the settle (pictures_settle) and the stream's wait for its
+// (storage_turn), a cookie file's write (cookies_turn, offered as a timer
+// is), the settle (pictures_settle) and the stream's wait for its
 // sheets (stream_turn) itself, after the events; the bell meets the rest (pictures_tick,
 // motion_tick, coming_show). Two at one moment are common — the clock
 // steps by the tick — and the moment is the bell's if either is.
@@ -6341,6 +6368,8 @@ static void pictures_schedule(void)
         // Its storage's next commit, which the loop meets (storage_turn).
         deadline_offer(&d, yonder_scripts_storage_due(hosts[i]), PAST_TIMERS);
     }
+    // The cookie file's next write, which the loop makes (cookies_turn).
+    deadline_offer(&d, yonder_cookies_due(s_cookies), PAST_TIMERS);
     // The shown page's next idle period, when only an idle callback that
     // asked for another waits for it (script_turn runs it).
     uint64_t idle = yonder_scripts_idle_next(g.page.scripts);
@@ -7615,6 +7644,8 @@ static void script_arrived(const yonder_script_job_t *job, const yonder_script_t
     // failure: a replay hands it over the same.
     bool came = got != NULL && got->ok;
     if (host != NULL)
+        diag_cookies_short(yonder_scripts_diag(host), &job->hooks.cookies_short);
+    if (host != NULL)
         diag_keep(yonder_scripts_diag(host), YONDER_DIAG_KEPT_SCRIPT, job->token, job->url,
                   came ? got->url : job->url, "", came ? got->source : NULL, came ? got->length : 0);
     if (host != NULL)
@@ -7839,6 +7870,8 @@ static void request_record(yonder_scripts_t *host, const yonder_fetch_job_t *job
     yonder_diag_t *diag = yonder_scripts_diag(host);
     if (diag == NULL)
         return;
+    if (got != NULL)
+        diag_cookies_short(diag, &got->cookies_short);
     if (got == NULL || !got->ok) {
         char line[OS64_FETCH_URL_MAX + 320];
         os64_snprintf(line, sizeof(line), "%s %s: %s%s", job->request.method, job->url,
@@ -9225,6 +9258,56 @@ static void storage_turn(void)
     }
 }
 
+// THE COOKIE FILE'S TURN: the write the jar's changes owe it, when it is
+// due (cookies.h), and a file that could not be kept said on the status
+// line, once.
+static void cookies_turn(void)
+{
+    yonder_cookies_turn(s_cookies, yonder_now_ms());
+    const char *problem = yonder_cookies_problem(s_cookies);
+    if (problem != NULL && !os64_streq(problem, s_cookies_said)) {
+        os64_strcopy(s_cookies_said, sizeof(s_cookies_said), problem);
+        status_rest(problem);
+    }
+}
+
+// Settings' cookie switches. With no file (no memory for it), `off` still
+// refuses cookies, and the jar lasts as long as the window either way.
+static void cookies_use(yonder_cookies_mode_t mode)
+{
+    if (s_cookies != NULL)
+        yonder_cookies_set_mode(s_cookies, mode);
+    else
+        way_jar_refuse(g.way.jar, mode == YONDER_COOKIES_OFF);
+    s_cookies_said[0] = '\0';
+}
+
+// Why the cookie file is not kept, for Settings as it opens: NULL while it is.
+static const char *cookies_problem(void)
+{
+    return yonder_cookies_problem(s_cookies);
+}
+
+// Settings' "Clear cookies": the jar emptied, and the file.
+static void cookies_clear(char *line, size_t cap)
+{
+    if (s_cookies == NULL) {
+        int32_t had = way_jar_count(g.way.jar);
+        way_jar_clear(g.way.jar);
+        os64_snprintf(line, cap, "Cleared this window's cookies: %d gone.", (int)had);
+        return;
+    }
+    int64_t gone = yonder_cookies_clear(s_cookies);
+    s_cookies_said[0] = '\0';
+    if (gone < 0)
+        os64_snprintf(line, cap, "Cleared this window's cookies; %s could not be emptied.",
+                      yonder_cookies_path(s_cookies));
+    else if (yonder_cookies_path(s_cookies)[0] == '\0')
+        os64_snprintf(line, cap, "Cleared this window's cookies: %ld gone (none are kept in a file).", (long)gone);
+    else
+        os64_snprintf(line, cap, "Cleared cookies: %ld gone, and the file is empty.", (long)gone);
+}
+
 // Settings' "Clear page storage": the store emptied, and every page open
 // now forgets what it had, so its next touch reads the empty store.
 static void storage_clear(char *line, size_t cap)
@@ -10240,6 +10323,7 @@ static bool stream_turn(void)
     }
     if (mail != NULL && !g.stream.has_verdict && yonder_mail_take_verdict(mail, &g.stream.verdict)) {
         g.stream.has_verdict = true;
+        diag_cookies_short(g.stream.diag, &g.stream.verdict.cookies_short);
         stream_mark(OS64_DOM_TIMING_RESPONSE_END);
     }
     yonder_scripts_t *host = g.stream.scripts;
@@ -12335,6 +12419,13 @@ int main(int argc, char **argv)
     g.way.accept = YONDER_ACCEPT;
     g.way.delayed_hint = " - it is in the address field; press Enter to go";
     g.way.jar = way_jar_new();          // NULL keeps no cookies: the pages still load
+    const char *cookies_refused;
+    yonder_cookies_mode_t cookies = yonder_settings_saved_cookies(&cookies_refused);
+    s_cookies = yonder_cookies_new(g.way.jar, profile, cookies);
+    if (s_cookies == NULL)
+        way_jar_refuse(g.way.jar, cookies == YONDER_COOKIES_OFF);
+    yonder_settings_on_clear_cookies(cookies_clear);
+    yonder_settings_on_cookies_problem(cookies_problem);
     g.cache = yonder_settings_cache_open(); // NULL keeps nothing: pictures come from the network
 
     os64_ui_init(&g.ui, &g.ctx);
@@ -12391,11 +12482,12 @@ int main(int argc, char **argv)
         (void)os64_gui_event_ring(g.win, BELL_STREAM);
     else
         status_rest("Type an address, or a path to an HTML file, and press Enter.");
-    // What yonder.conf asked for and could not have: said last, so it is
-    // still there to read when the window first shows, and in one line, so
-    // no refusal hides another.
+    // What yonder.conf asked for and could not have, and a cookie file that
+    // could not be read: said last, so it is still there to read when the
+    // window first shows, and in one line, so no refusal hides another.
     {
-        const char *refused[] = {diag_refused, modern_refused, profile_refused};
+        const char *refused[] = {diag_refused, modern_refused, profile_refused, cookies_refused,
+                                 yonder_cookies_problem(s_cookies)};
         char said[512] = "";
         for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); i++)
             if (refused[i] != NULL) {
@@ -12404,6 +12496,9 @@ int main(int argc, char **argv)
             }
         if (said[0] != '\0')
             status_rest(said);
+        // Said here once already: the loop's turn says only a new one.
+        if (yonder_cookies_problem(s_cookies) != NULL)
+            os64_strcopy(s_cookies_said, sizeof(s_cookies_said), yonder_cookies_problem(s_cookies));
     }
     os64_ui_set_focus(&g.ui, first != NULL ? &g.view : &g.field.w);
     sync_bars();
@@ -12448,7 +12543,8 @@ int main(int argc, char **argv)
                 yonder_settings_open(g.win, BELL_SETTINGS, g.way.agent, settings_use, g.cache,
                                      g.scripts_on, (uint32_t)(g.script_ms / 1000), g.zoom_default,
                                      zoom_use, s_dark, dark_use, s_animations, s_reduce_motion,
-                                     motion_use, g.modern, modern_use);
+                                     motion_use, g.modern, modern_use,
+                                     s_cookies != NULL ? yonder_cookies_mode(s_cookies) : cookies, cookies_use);
             else if (!bar_event(&ev) && !zoom_event(&ev) && !key_event(&ev) && !password_key(&ev))
                 os64_ui_dispatch(&g.ui, &ev);
             // What the event became, as DOM events, now libui is done with it.
@@ -12469,6 +12565,7 @@ int main(int argc, char **argv)
         bool coming_more = coming_turn();
         bool scripts_ready = script_turn();
         storage_turn();
+        cookies_turn();
         pictures_settle();
         title_follow();
         before_paint();
@@ -12525,6 +12622,12 @@ int main(int argc, char **argv)
     g.paint_cache = NULL;
     yonder_scratch_free(g.paint_scratch);
     g.paint_scratch = NULL;
+    // What the jar owes its file, written as yonder leaves (in SESSION, the
+    // file emptied): the workers that changed it are gone, and so are the
+    // pages' scripts.
+    yonder_cookies_flush(s_cookies);
+    yonder_cookies_free(s_cookies);
+    s_cookies = NULL;
     way_jar_free(g.way.jar);
     way_preflight_free(s_preflight);    // the workers that asked it are gone
     s_preflight = NULL;

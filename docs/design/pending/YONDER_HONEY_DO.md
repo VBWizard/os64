@@ -65,7 +65,7 @@ Chris moves rows.
 | 1 | Links underlined | Opus | open |
 | 2 | jQuery dies at load | Opus | open |
 | 3 | A menu bar, with Favorites and History on it | Opus | open |
-| 4 | Persistent cookies, with a switch | Opus | open |
+| 4 | ~~Persistent cookies, with a switch~~ | Opus | done (the login slice; § 4 has the as-built) |
 | 5 | The right-click menu | Opus; Quinn (the save dialog) | open |
 | 6 | Download | Opus | open |
 | 7 | Selecting and copying text, and the I-beam | Fable design; Opus builds | open |
@@ -145,6 +145,83 @@ after each change, read-merge-write under the temp-and-rename rule, and
 the merge keeps the newest cookie of a name per domain and path.
 Promoted from Chris's "less necessary" because a second window must
 share the jar, and a shared jar is a file.
+
+**Status: DONE, 2026-10-25 (the login slice, `opus/yonder-login`).** Its
+trigger was reached the day Chris first signed in through yonder and
+asked to stay signed in. As built:
+
+- **The format is libway's** (`way/jar.h` § Kept across restarts): the
+  jar does no I/O and is handed a file's text and asked for its own.
+  Seven tab-separated fields as curl writes them, a leading dot and `TRUE`
+  for a domain cookie, `#HttpOnly_` before an HttpOnly one's domain, and
+  three comment lines on top, the first Netscape's own and the other two
+  saying the file is one of logins and that Clear cookies empties it.
+  SameSite has no field, so a cookie read from the file has none; the jar
+  does not judge by it yet (YONDER.md's booked row). A cookie whose line
+  the reader would not take back as the same cookie (a name, value,
+  domain or path holding a byte that would break its line; a domain
+  cookie on a single label, as an intranet host can set) is not written,
+  and lasts as long as the window: the writer and a window following the
+  file ask the same question (jar.c's `round_trips`), so following never
+  lets go of a cookie for want of a line it could not have.
+- **Session cookies are never written; expired ones are never written nor
+  read**, and curl's session lines (expiry 0) are read as what they say, a
+  session that has ended.
+- **Reading is hostile-input reading**: a line past `WAY_JAR_LINE_MAX`,
+  one with a NUL, one without exactly seven fields, flags that are not
+  `TRUE`/`FALSE`, an expiry that is not a run of at most eighteen digits,
+  a path that does not begin with `/`, an empty or doubled-dot domain, and
+  every rule a Set-Cookie is held to (`judged()`, shared with the
+  Set-Cookie door: sizes, control bytes, the `__Host-` and `__Secure-`
+  prefixes, the domain rules) refuse the line, which is skipped and
+  counted. A domain cookie on a single label is refused too: online only
+  that host could have set it, and a file cannot say which host did. The
+  jar's caps hold (`WAY_COOKIES_PER_DOMAIN`, `WAY_COOKIES_MAX`). A file
+  Chris edits by hand is the nutty scenario; the reader is memory-safe
+  under ASan with every fragment of a line and every allocation failed in
+  turn, and asks nothing more of him.
+- **The switch** is `cookies = on | session | off`, read by
+  `yonder_settings_saved_cookies` (anything else is `on`, said on the
+  status line), and Settings shows it as two boxes, Accept cookies and
+  Keep them when yonder closes, with **Clear cookies** at the row's right.
+  `off` is the jar refusing (`way_jar_refuse`: nothing heard, nothing
+  sent), emptied, and the file emptied; `session` is the jar never
+  written, and the file emptied as yonder leaves and as a `session`
+  yonder starts — Firefox's "delete cookies when closed", so the box ticked
+  again before then loses nothing, and a crash cannot leave the logins
+  behind; Clear cookies empties the jar and the file in every mode, and
+  the temps a dead window left beside it. The file lives in the profile
+  folder and nowhere else (`yonder_cookies_new` takes the profile's path).
+- **Two windows, one file**, as the row asked: every change to a cookie a
+  file keeps (one with an expiry set, one set in such a cookie's place,
+  one let go) is numbered in the jar, and a write reads the file into a
+  jar of its own, lays this window's changes over it (`way_jar_overlay`),
+  and publishes by a per-writer temp and a rename, the temp named and swept
+  as page storage's are (the three helpers are storage.c's, shared). A
+  write that another window's overtook between the read and the rename is
+  read and merged again, up to three reads. After a write, and before
+  every navigation when the file's size or time says another window
+  changed it, the window FOLLOWS the file (`way_jar_follow`): it takes what
+  the file holds and lets go the kept cookies the file no longer names, so
+  a sign-in or a sign-out in one window is the other's at its next page. A
+  change this window has not yet written outranks what the file says of
+  the same cookie (name, domain, path and host-only flag), which is "the
+  newest of a name per domain and path" told by order of change rather
+  than by a clock the file has no field for. What cannot be told: two
+  windows that change one cookie and write in the same instant, where the
+  later rename wins; and two writes of one size within one second of the
+  file clock, which the next change shows.
+- **Writes are coalesced at the loop's turn**: a change makes a write due
+  at once if none has been made in the last second, else a second after
+  the last one (`YONDER_COOKIES_WRITE_MS`), and the ticker is handed that
+  moment with the page's timers; a write the disk refused is tried again
+  ten seconds on, and said once on the status line. A page setting
+  cookies in a loop costs a write a second, not one a cookie (the host case
+  sets a thousand inside a second and counts one write). What is owed when
+  yonder closes is written as it leaves. A crash loses at most the last
+  second's changes, or the last ten seconds' after a write that failed.
+- docs/yonder.md tells Chris where the file is, that it is one file for
+  every site, what it is a file of, and how to empty it.
 
 ### 5. The right-click menu
 
