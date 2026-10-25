@@ -4,6 +4,8 @@ Status: implementation design, 2026-10-25. Quinn, building on Fable's
 2026-10-21 SVG proposal. Source baseline: `userland` at `d922229c`.
 This is the revised slice 6 design for [MODERN_WEB.md](MODERN_WEB.md).
 The stages below are proposed implementation cuts, not completed features.
+Quinn owns slice 6. The disposition of Fable's review is in
+[SVG_REVIEW.md](SVG_REVIEW.md#quinns-disposition).
 
 ## Decision and scope
 
@@ -28,6 +30,7 @@ design does not establish performance or compatibility percentages.
 | Component | Responsibility |
 |---|---|
 | `libhtml` and its document adapters | Inline SVG nodes, namespaced attributes, document identity, mutation and lifetime |
+| `libxml` | Standalone XML byte-to-event parser; `libhtml` consumes its events to build the shared tree |
 | `libgarb` | Selectors, presentation attributes, cascade and SVG computed styles |
 | `libflow` | The outer SVG's participation in CSS layout and sizing negotiation |
 | `libsvg` | SVG scene construction, paths, viewports, instances, paint servers, clipping and compositing |
@@ -45,7 +48,7 @@ The initial public SVG header uses opaque scene/document handles, explicit
 size and budget types, and provider callbacks. Keep `flow_family_list_t`,
 FreeType structs and the browser's window types out of that header. The
 Yonder adapter translates its font/style types. Tree and style providers
-must support inline nodes and an XML-owned document without serializing
+must support inline nodes and an XML-parsed document without serializing
 inline SVG into a second text document on each render.
 
 Proposed data flow:
@@ -66,8 +69,10 @@ transforms, bounds, drawing order and resource dependencies. It is owned by
 the SVG context. It may borrow pinned document data while its owner keeps
 the document alive; pins protect lifetime, not concurrent mutation. Preparing
 and consuming a scene requires a stable document/style snapshot or owner-thread
-serialization. The first implementation can rebuild a whole SVG scene on
-invalidation. Keep parsed paths separately reusable when their inputs match.
+serialization. The first implementation prepares resolved scene values for
+each paint-cache lookup. Keep parsed paths separately reusable when their inputs
+match; memoizing prepared scenes requires the dependency validity described
+under Caching.
 
 ## Current integration points
 
@@ -78,10 +83,12 @@ paint properties and presentation-attribute handling. These are integration
 changes, not behavior obtained by linking a rasterizer.
 
 `flow_env_t.replaced_size` currently returns a pair of integer dimensions.
-SVG requires independent optional width, height and aspect ratio. Extend the
-intrinsic-size contract, including its raster-image callers and host fakes,
-instead of inventing dimensions to fit the old callback. Resolve used sizes
-in layout, then pass the resulting viewport to SVG.
+SVG requires independent optional width, height and aspect ratio. Replace the
+pair with one intrinsic-size result carrying `has_width`, `has_height`,
+`has_ratio` and their values. Raster callers supply all three with ratio derived
+from dimensions. Update the shared oracle and host fakes instead of adding a
+second SVG-specific oracle. Resolve used sizes in layout, then pass the resulting
+viewport to SVG.
 
 The outer SVG forms an atomic graphics box in HTML layout; SVG descendants
 belong to the SVG renderer. Detect an SVG viewport root by namespace and
@@ -133,16 +140,18 @@ allocation hooks, live-byte accounting and per-engine serialization.
 
 Add a separately versioned geometry backend table exported by `libfreetype`,
 with an Os64 header and opaque geometry context. Preserve the font backend
-v1 table and getter. Share the port's allocation/accounting implementation;
-use a dedicated geometry engine so SVG work does not silently exhaust a
-font engine's cache budget. This separates font consumers from graphics ABI
+v1 table and getter. A dedicated geometry context allocates through caller
+hooks and has no independent admission cap. The SVG owner's ledger charges
+those allocations; geometry live/peak-byte counters are reporting subdivisions,
+not a second cap or a second charge. Font engines retain their existing budgets.
+This separates font consumers from graphics ABI
 growth without importing another copy of FreeType.
 
 The proposed operations are:
 
 | Operation | Contract |
 |---|---|
-| Create/destroy context | Caller allocator and cap; no font face required; caller serializes one context |
+| Create/destroy context | Caller allocator; SVG owner enforces the shared cap; no font face required; caller serializes one context |
 | Expand stroke | Validated path, width/caps/joins/miter and precision request to an owned filled outline |
 | Rasterize fill | Validated outline, fill rule, affine transform and device clip to caller-owned 8-bit coverage |
 | Release outline | Frees through its originating context; context cannot be destroyed with live outlines |
@@ -157,8 +166,15 @@ single outline-wide `opened` flag.
 Feed the stroker by subpath with `FT_Stroker_BeginSubPath`, segment calls
 and `FT_Stroker_EndSubPath`; the adapter selects open/closed behavior per
 subpath. `FT_Stroker_Set` takes radius, so pass half the SVG stroke width.
-Select the join that matches SVG's miter-limit behavior and test it, rather
-than treating the two FreeType miter modes as interchangeable.
+Map `miter` to `FT_STROKER_LINEJOIN_MITER_FIXED`, `miter-clip` to
+`FT_STROKER_LINEJOIN_MITER_VARIABLE`, and round/bevel to their named modes.
+Expose SVG join names at the geometry interface; record a miter fallback for
+unsupported `arcs` joins. Pass the miter limit unchanged as a dimensionless
+ratio: SVG's miter-length/width and FreeType's spike-length/radius are both
+`1 / sin(interior_angle / 2)`. The width is halved for radius; the ratio is not.
+Test immediately below, at and above the bevel threshold in 6a, including the
+fixed-point rounding boundary. Values below FreeType's minimum ratio require
+explicit SVG behavior rather than silently accepting its clamp.
 [FreeType stroker](https://freetype.org/freetype2/docs/reference/ft2-glyph_stroker.html)
 
 Ordinary stroke order is: cut dashes in the appropriate user space, expand
@@ -170,6 +186,14 @@ space; keep that transform distinct from the final viewport-to-device map.
 Exercise dashes, page zoom and device scaling in browser comparisons rather
 than assuming that a device-pixel width implements this property.
 [SVG stroke and vector effects](https://www.w3.org/TR/SVG2/painting.html#VectorEffects)
+
+Dash measurement uses adaptive curve subdivision with a device-space error
+budget. For a nonsingular user-to-device linear map, set geometric flatness
+tolerance to device tolerance divided by its largest singular value. Also
+bound accumulated arc-length error and dash endpoint error: proximity to a
+chord alone does not bound the length of a retracing curve. Handle singular
+maps explicitly without dividing by zero. Charge subdivisions and generated
+dash segments before work and test large zoom, shear and near-cusp paths.
 
 FreeType's fixed-point coordinates are a backend representation, not the
 SVG path storage format. Before conversion, choose a translated/scaled
@@ -213,8 +237,12 @@ ancestor and viewport transforms. [CSS transforms](https://www.w3.org/TR/css-tra
 Keep `display` and `visibility` separate. A hidden container can have a visible
 descendant; display suppression has different subtree behavior. Definitions
 must remain available to references even though their source location does
-not paint. `switch` selects according to conditional-processing attributes,
-not unconditionally its first child.
+not paint. `switch` reads `systemLanguage` against the host's preferred language
+list (the browser profile), and evaluates `requiredExtensions` against supported
+extensions; with none supported a non-empty requirement fails. Empty and absent
+attributes follow their specified rules. SVG 2 removed `requiredFeatures` as
+a conditional-processing attribute: test and document legacy compatibility
+against the pinned WPT/browser behavior rather than inventing a feature table.
 
 `use` produces an instance with its own inherited style and identity. A style
 provider keyed only by the referenced source node is insufficient: the same
@@ -234,6 +262,15 @@ Intrinsic dimensions are independent optionals; percentage/auto dimensions
 do not invent a natural size. Ratio precedence includes definite width/height,
 not just `viewBox`. Apply the CSS default sizing algorithm rather than using
 300 by 150 for every missing-size combination. [SVG coordinates and sizing](https://www.w3.org/TR/SVG2/coords.html#IntrinsicSizing)
+
+In a definite-width normal HTML container, the common inline
+`<svg viewBox="0 0 200 100">` with auto dimensions should take the available
+width and derive height from its ratio. Cover that case explicitly. Do not
+generalize it to no-viewBox SVG, shrink-to-fit, flex/grid, constrained heights,
+or `<img>`: used dimensions still come from the applicable CSS sizing context.
+An `<img>` also has a containing block; its external SVG supplies intrinsic
+information, not an instruction to fill that block. Pin contextual expectations
+with sizing reftests. [SVG integration sizing](https://svgwg.org/specs/integration/#svg-css-sizing)
 
 Store geometric bounds separately from stroke/paint bounds. Object-bounding-box
 paint resources use the required geometric bounds, not the clipped pixel
@@ -255,30 +292,36 @@ rules. Content type plus successful root recognition selects the decoder;
 error recovery. An external XML stylesheet scope must not depend on inventing
 HTML `html`, `head` and `body` elements.
 
-Expat is the preferred C parser candidate for the bounded XML adapter. Its
-namespace mode and custom allocation suite cover important requirements,
-but the allocation callbacks have no context argument. The first port study
-must resolve per-parser accounting, concurrent parses, entropy for hash
-salting and runtime dependencies. Prefer a small documented port adaptation
-over a process-global active allocator. Pin the selected source and retain
-its license; do not describe this as an already completed port.
-[Expat API](https://libexpat.github.io/doc/api/latest/)
+Build an in-house `libxml` as a bounded push parser. Its output is namespace-
+resolved start/end-element events, attributes, text, CDATA, comments, processing
+instructions and encoding information. It has no public node type, no document
+tree and no I/O. Allocator callbacks carry the caller's context. `libhtml`
+consumes the events to build its existing node type; other consumers may build
+their own products. [XML.md](XML.md) defines this reusable boundary and profile.
 
-Parse in bounded chunks. Cap input, nodes, depth, attributes and text storage,
-and support cancellation. Accept predefined/numeric XML references. Reject
-internal DTD subsets in the initial profile; permit an ordinary external
-DOCTYPE declaration without fetching its subset. Do not expand external
-entities. Test these policies explicitly and report unsupported constructs.
-This is a documented XML profile, not a full validating XML processor.
+Decode UTF-8 and UTF-16 in the parser. Report other declared encodings explicitly
+so a host can transcode and restart coherently; do not parse transcoded UTF-8
+under a stale UTF-16 declaration. Bound input, token storage, attributes,
+nesting, namespace bindings, expansion and work. Accept predefined/numeric
+references and bounded internal general entities with literal text values,
+including Illustrator-style namespace declarations. External entities,
+parameter entities and validation remain unsupported. The entity profile must
+distinguish malformed input from unsupported legal XML.
 
-Prefer extending the common document core with an explicit XML document mode,
-an SVG document element and preserved namespace URI/local-name identity.
-Keep HTML document invariants for HTML mode. The existing three-value namespace
-enum and HTML-root invariants are not sufficient by themselves. The 6a prototype
-must prove that the cascade can consume this document without HTML wrappers
-and that HTML behavior is preserved. If that extension spreads beyond a
-bounded change, compare a cascade document adapter before freezing the bridge.
-Do not drop prefixes and accidentally turn foreign elements into SVG elements.
+Reuse the existing SVG-root capability: `libdom/implementation.c` creates a
+document whose direct child is SVG and marks its wrapper `D_DOCUMENT_SVG`.
+No HTML wrappers are needed. 6a must prove byte-to-tree building, independently
+owned document lifetime and cascade traversal for a non-HTML root, `:root`,
+inheritance and SVG `<style>`. A secondary document in a page-owned arena is
+evidence of structural support, not a completed independent image loader.
+
+Keep the namespace enum concern narrow: the known SVG root is representable,
+but generic XML elements in no namespace or arbitrary namespace URIs are not.
+`createDocument` explicitly refuses those. RSS, Atom and foreign SVG metadata
+provide concrete consumers; attribute namespace URI storage does not solve
+element namespace identity. Preserve URI/local-name identity in parser events
+and extend the shared tree representation where the XML builder needs it.
+Never reinterpret an unknown namespace as SVG. This does not block inline SVG.
 
 Processing mode is an explicit scene input. Inline content follows the page's
 permissions. Images embedded through `<img>` or CSS use an isolated image mode:
@@ -291,8 +334,8 @@ their own document integration and are outside the initial picture path.
 
 The renderer performs no I/O. Later `<image>`, external references and fonts
 use the host's asynchronous resolver subject to processing mode and the
-browser's origin/resource policies. A pending resource changes the scene's
-dependency generation when it completes. Decode embedded raster content
+browser's origin/resource policies. A completed resource changes the resolved
+scene values and invalidates any preparation memo. Decode embedded raster content
 through the existing image codecs rather than importing duplicate decoders.
 
 ## Budgets and scheduling
@@ -339,18 +382,28 @@ geometry engines. Do not send live DOM/cascade pointers to workers.
 
 ## Caching and animation
 
-Cache keys include document lifetime identity, root/instance identity,
-document version, style generation, font/resource generation, used viewport,
-device scale/zoom, processing mode and relevant rendering environment.
-Include the animation sample generation when motion is added. A pointer and
-document version alone cannot account for a loaded font or changing stylesheet.
+Cache raster results by resolved scene value, following the painter's existing
+gradient/shadow cache. Canonical keys include drawing order, geometry, resolved
+paint/effect values, viewport, scale, fractional device origin, relevant
+dark-pages state and processing mode. Resource content and, later, positioned
+glyph outlines are value inputs too. Source node and document identities are
+not pixel-cache keys, so identical icons can share one result.
 
-A reference dependency can be outside the root subtree. Start with conservative
-whole-SVG invalidation for document/style/resource changes; refine it after
-correctness and measurement. A cache entry pins or owns its dependencies and
-is evicted before document destruction. Do not keep a failed transient render
-as a permanent cache result. Repeated unchanged paints should avoid scene
-rebuild and rasterization.
+A digest finds candidates; compare canonical values before reusing pixels.
+Force a digest collision in tests. Serialize explicit fields with finite-number
+validation and defined zero handling, not struct padding or pointer values.
+Cache storage owns its value key and pixels, independently of DOM lifetime.
+Prepared scenes may still hold document pins; pixel deduplication does not
+deduplicate event targets or instance identities.
+
+Initially prepare the resolved scene before lookup. That naturally incorporates
+fresh stylesheet/font/resource values without invented generation APIs. Measure
+the walk separately from raster time; it is not assumed cheap. Future preparation
+memos must be invalidated by changes to document, external definitions, cascade,
+font selection, resources, language, viewport and animation sampling. Document
+version alone is not sufficient. Do not cache a transient failure as permanent,
+or serve old pixels under a new value key. Repeated unchanged paints should
+avoid rasterization; avoiding preparation is a later measured optimization.
 
 Animation is a subsequent consumer of this model. CSS timelines and script
 mutations produce sampled styles/geometry; those invalidate the relevant
@@ -364,15 +417,18 @@ it does not claim they have been implemented.
 
 | Stage | Deliverable | Exit evidence |
 |---|---|---|
-| 6a foundations | Reftest comparison; FreeType geometry proof; XML/document adapter port study; budget accounting design | Reference/mismatch runner self-tests; mixed open/closed paths; unequal transforms; precision/overflow limits; per-parser allocation-failure isolation |
+| 6a foundations | Reftest comparison; FreeType geometry proof; standalone event-based `libxml` with xmlconf harness; shared tree/cascade proof; budget accounting | Reference/mismatch runner self-tests; mixed open/closed paths; miter thresholds; unequal transforms; precision/overflow limits; xmlconf profile results and per-parser allocation-failure isolation |
 | 6b static inline core | Scene/provider contracts; SVG styles and sizing; shapes and complete path grammar; transforms; solid fills/strokes/dashes; `use`/`symbol`; nested viewports; clipping; opacity groups | Focused WPT tests and browser reference fixtures; mutation/recolor and repeated-symbol tests; failure sweeps |
 | 6c static image route and gradients | XML adapter; isolated external-image cascade; tagged picture jobs; intrinsic sizing; gradient servers; caches and resource-mode enforcement | Same artwork inline and in `<img>`; CSS-scope separation; XML/namespace cases; resource-policy tests; P5 latency/memory/corpus results |
 | 6d broader static graphics | Shared text shaping and glyph-outline export; text positioning and transforms; markers, embedded images, patterns, masks and selected filters in separate subcuts | Feature-specific WPT/reference suites, font fallback/complex-text cases, color-space and filter bounds tests |
 | 6e interaction and motion | Hit testing, SVG DOM geometry, CSS animation/transition sampling, frame-loop integration; separately scoped SMIL support | Deterministic timestamp frames, mutation/reference propagation, event targeting, image-mode restrictions and frame-time measurements |
 
-6a can start without relayout or animation. 6b needs the cascade/property and
-layout interfaces above, including a compatible shared XML-tree decision.
-6c follows 6b; 6d can grow in small static-feature slices. 6e needs the browser's
+Schedule 6a–6c. 6a can start without relayout or animation. The geometry proof
+and comparison harness precede 6b; XML work can proceed independently and is
+needed for 6c. 6b also needs the cascade properties and intrinsic-size oracle,
+but does not wait for XML parsing. 6d and 6e remain planned follow-on coverage,
+with their start and priorities chosen from real needs; listing them does not
+claim they are part of the initial delivery. 6e needs the browser's
 frame/mutation infrastructure. Do not declare broad modern-web SVG support
 after 6b merely because a set of icons renders.
 
@@ -404,10 +460,11 @@ gradient/reference cycles, hidden parents with visible children, a CSS transform
 overriding an attribute, and a font/resource arriving after first paint.
 
 Sweep allocations in the SVG layer, parser bridge and geometry adapter. Run
-ASan/UBSan with leak detection enabled. If sandbox thread attachment prevents
-LeakSanitizer, rerun the same binaries outside the sandbox through the approval
-mechanism; record missing leak evidence only if a supported leak-enabled run
-cannot be obtained. Fuzz parsers and geometry with bounded work and cancellation.
+ASan/UBSan with leak detection; sanitizer verification includes an explicit
+leak verdict. The slice brief carries environment-specific execution guidance.
+Fuzz parsers and geometry with bounded work and cancellation. The XML conformance
+report distinguishes supported passes/failures from unsupported-profile cases;
+rejecting a valid out-of-profile file is not a conformance pass.
 
 Keep `UNSUPPORTED`, malformed input, `LIMIT`, allocation failure, pending resource
 and cancellation separate. Optional-feature omission reports a diagnostic and

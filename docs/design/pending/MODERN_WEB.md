@@ -8,7 +8,7 @@ Read with [BROWSER.md](../../../BROWSER.md) (the campaign constitution,
 loop), [JAVASCRIPT.md](JAVASCRIPT.md) (the engine port), and
 [YONDER_HONEY_DO.md](YONDER_HONEY_DO.md) (the 1.0 batch that runs between the
 arcs). Fable holds this document and the hard designs it names; Opus builds
-the slices; Chris rules.*
+the assigned slices, Quinn owns SVG slice 6; Chris rules.*
 
 ## What this arc is for
 
@@ -337,11 +337,13 @@ Google's and GitHub's icons, suckless's logo, and the declared feature
 coverage. [SVG.md](SVG.md), revised by Quinn on 2026-10-25 from Fable's
 design, defines a separate `libsvg`, a FreeType geometry interface with
 stroke expansion before transformation, and XML parsing for external SVG.
-Opus builds, with Fable reviewing the integration contracts and Chris
-testing. The proposed cuts are 6a (reftests, geometry proof and XML/document
-port study), 6b (static inline core), 6c (external images, gradients and
+Quinn builds, with Fable reviewing the integration contracts and Chris
+testing. [XML.md](XML.md) defines the in-house event parser consumed by
+libhtml's tree builder. The cuts are 6a (reftests, geometry proof, XML parser
+and tree/cascade integration proof), 6b (static inline core), 6c (external images, gradients and
 caches), 6d (text and broader static graphics), and 6e (interaction and
-motion). Static rendering comes first; retained geometry and explicit
+motion). Schedule 6a–6c; 6d/6e remain follow-on coverage whose start is driven
+by real needs. Static rendering comes first; retained geometry and explicit
 invalidation support later animation. Rendering a set of icons does not
 establish complete SVG compatibility.
 
