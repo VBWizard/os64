@@ -52,11 +52,16 @@ necessary". It also makes handled, telling the tracker, the promise of a
 module body that `js_execute_sync_module` takes as the module's error:
 upstream left it rejected with no handler, so a host heard one module
 error twice. And `js_resolve_module`, which marks a module resolved before
-it resolves its imports, marks it unresolved again when one of them fails:
-upstream discards a failed module whole, but a browser's module map keeps
-its modules across a failed run, and a later graph sharing one linked it
+it resolves its imports, leaves none of them marked when one fails: the
+outermost attempt (a loader's compile nests one inside it) stamps each
+module it marks and unmarks every stamped one on failure. Upstream
+discards a failed module whole, but a browser's module map keeps its
+modules across a failed run, and a later graph sharing one linked it
 through the NULL of the import never found (a SEGV in
-`js_create_module_function`, which WPT's module directory reached).
+`js_create_module_function`, which WPT's module directory reached), or,
+in a cycle whose members resolved back to the failing module, through
+that module after the failure freed it (a use-after-free; both are
+runtime-suite cases).
 CONTRACT.md § Modules is the wrapper built on it.
 
 Selected upstream test sources are retained separately in

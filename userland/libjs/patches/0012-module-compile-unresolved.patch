@@ -9,9 +9,10 @@
 # throws is run as an async function whose rejected promise the engine
 # takes as the module's error: it is now made handled and the tracker told,
 # or a host hears one module error twice (once as an unhandled rejection).
-# And a module whose resolve failed partway is marked unresolved again, so
-# a host whose modules outlive the failure never links it through the NULL
-# of the import it never found.
+# And a failed resolve leaves no module it marked resolved, the members of
+# a cycle included (each points back at the module that failed), so a host
+# whose modules outlive the failure never links one through the NULL of an
+# import never found, or through a module the failure freed.
 --- a/quickjs.h
 +++ b/quickjs.h
 @@ -349,6 +349,12 @@
@@ -41,32 +42,93 @@
  /* JS Job support */
 --- a/quickjs.c
 +++ b/quickjs.c
-@@ -30672,14 +30672,22 @@
-                                                   rme->module_name,
-                                                   rme->attributes);
-         if (!m1)
--            return -1;
-+            goto fail;
+@@ -547,6 +547,10 @@
+     int interrupt_counter;
+ 
+     struct list_head loaded_modules; /* list of JSModuleDef.link */
++    /* os64: the resolve in progress (js_resolve_module): how deeply the
++       loader has nested it, and the number its marked modules carry */
++    int resolve_depth;
++    uint32_t resolve_attempt;
+ 
+     /* if NULL, RegExp compilation is not supported */
+     JSValue (*compile_regexp)(JSContext *ctx, JSValueConst pattern,
+@@ -927,6 +931,7 @@
+     BOOL resolved : 8;
+     BOOL func_created : 8;
+     JSModuleStatus status : 8;
++    uint32_t resolve_attempt; /* os64: the resolve that marked it resolved */
+     /* temp use during js_module_link() & js_module_evaluate() */
+     int dfs_index, dfs_ancestor_index;
+     JSModuleDef *stack_prev;
+@@ -30651,7 +30656,7 @@
+ }
+ 
+ /* Load all the required modules for module 'm' */
+-static int js_resolve_module(JSContext *ctx, JSModuleDef *m)
++static int js_resolve_module_marking(JSContext *ctx, JSModuleDef *m)
+ {
+     int i;
+     JSModuleDef *m1;
+@@ -30665,6 +30670,7 @@
+     }
+ #endif
+     m->resolved = TRUE;
++    m->resolve_attempt = ctx->resolve_attempt;
+     /* resolve each requested module */
+     for(i = 0; i < m->req_module_entries_count; i++) {
+         JSReqModuleEntry *rme = &m->req_module_entries[i];
+@@ -30676,12 +30682,48 @@
          rme->module = m1;
          /* already done in js_host_resolve_imported_module() except if
             the module was loaded with JS_EvalBinary() */
-         if (js_resolve_module(ctx, m1) < 0)
--            return -1;
-+            goto fail;
+-        if (js_resolve_module(ctx, m1) < 0)
++        if (js_resolve_module_marking(ctx, m1) < 0)
+             return -1;
      }
      return 0;
-+ fail:
-+    /* os64: a module some of whose imports were found and one was not is
-+       not resolved: marked so, it would be linked later through the NULL
-+       of the one it never found. Upstream discards a failed module whole;
-+       a host whose modules outlive a failed run (a browser's module map,
-+       shared by its page's graphs) resolves it again instead. */
-+    m->resolved = FALSE;
-+    return -1;
  }
  
++/* os64: a failed resolve leaves nothing it marked resolved. Upstream
++   discards what a failure touched, but a host whose modules outlive a
++   failed run (a browser's module map, shared by its page's graphs)
++   reaches them again, and a module left marked is linked through
++   rme->module, which neither counts nor marks what it names: the NULL of
++   an import never found, or a module this failure freed — in a cycle,
++   the one whose import failed is the ancestor every member points back
++   at. So every module marked during the attempt is reset, wherever the
++   failure was. A loader that compiles one of the imports resolves it in
++   an attempt nested inside this one, whose modules may point into this
++   one's half-resolved set, and whose failure always fails this one, so
++   only the outermost attempt resets, and it resets what the nested ones
++   marked. The walk is over the loaded list because a module freed by
++   the failure has left it; the root is reset directly because a host's
++   handle may hold it after an earlier failure took it off the list. */
++static int js_resolve_module(JSContext *ctx, JSModuleDef *m)
++{
++    struct list_head *el;
++    int ret;
++
++    if (m->resolved)
++        return 0;
++    if (ctx->resolve_depth++ == 0 && ++ctx->resolve_attempt == 0)
++        ctx->resolve_attempt = 1;
++    ret = js_resolve_module_marking(ctx, m);
++    if (--ctx->resolve_depth == 0 && ret < 0) {
++        list_for_each(el, &ctx->loaded_modules) {
++            JSModuleDef *m1 = list_entry(el, JSModuleDef, link);
++            if (m1->resolved && m1->resolve_attempt == ctx->resolve_attempt)
++                m1->resolved = FALSE;
++        }
++        m->resolved = FALSE;
++    }
++    return ret;
++}
++
  /* Create the <eval> function associated with the module */
-@@ -31020,6 +31028,19 @@
+ static int js_create_module_bytecode_function(JSContext *ctx, JSModuleDef *m)
+ {
+@@ -31020,6 +31062,19 @@
      return JS_DupAtom(ctx, m->module_name);
  }
  
@@ -86,7 +148,7 @@
  JSValue JS_GetImportMeta(JSContext *ctx, JSModuleDef *m)
  {
      JSValue obj;
-@@ -31511,6 +31532,8 @@
+@@ -31511,6 +31566,8 @@
  }
  
  /* return < 0 in case of exception. *pvalue contains the exception. */
@@ -95,7 +157,7 @@
  static int js_execute_sync_module(JSContext *ctx, JSModuleDef *m,
                                    JSValue *pvalue)
  {
-@@ -31532,6 +31555,10 @@
+@@ -31532,6 +31589,10 @@
          if (state == JS_PROMISE_FULFILLED) {
              JS_FreeValue(ctx, promise);
          } else if (state == JS_PROMISE_REJECTED) {
@@ -106,7 +168,7 @@
              *pvalue = JS_PromiseResult(ctx, promise);
              JS_FreeValue(ctx, promise);
              return -1;
-@@ -37398,6 +37425,11 @@
+@@ -37398,6 +37459,11 @@
      JSFunctionDef *fd;
      JSModuleDef *m;
  
@@ -118,7 +180,7 @@
      js_parse_init(ctx, s, input, input_len, filename);
      skip_shebang(&s->buf_ptr, s->buf_end);
  
-@@ -37483,7 +37515,8 @@
+@@ -37483,7 +37549,8 @@
      /* Could add a flag to avoid resolution if necessary */
      if (m) {
          m->func_obj = fun_obj;
@@ -128,7 +190,7 @@
              goto fail1;
          fun_obj = JS_NewModuleValue(ctx, m);
      }
-@@ -53433,6 +53466,20 @@
+@@ -53433,6 +53500,20 @@
      JSValue promise_result;
  } JSPromiseData;
  

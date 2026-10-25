@@ -1212,6 +1212,12 @@ static const char *const module_store[][2] = {
     {"https://m.test/shared.js", "import './b.js'; import {late} from './late.js'; globalThis.shared = late;"},
     {"https://m.test/first.js", "import './shared.js';"},
     {"https://m.test/second.js", "import './shared.js';"},
+    /* Cycles whose entry's own import fails: every member points back at it. */
+    {"https://m.test/cyc-e.js", "import './cyc-a.js'; import 'bare';"},
+    {"https://m.test/cyc-a.js", "import './cyc-e.js';"},
+    {"https://m.test/cyc-g.js", "import './cyc-a.js';"},
+    {"https://m.test/dyn-x.js", "import './dyn-y.js'; import 'bare';"},
+    {"https://m.test/dyn-y.js", "import './dyn-x.js';"},
 };
 static unsigned module_loads;
 static char module_requests[256];
@@ -1389,6 +1395,8 @@ static void module_cases(void)
     // (one import found, one not): marked unresolved again, so the second
     // graph resolves it afresh once the missing one is there, rather than
     // linking through the import it never found (patch 0012, found by WPT).
+    // The shared module is acyclic; the cycles below are the cases where a
+    // module whose own resolve SUCCEEDED points at the one that failed.
     module_late = NULL;
     os64_js_module_t *shared = module_compile(runtime, "https://m.test/shared.js", NULL, &outcome);
     os64_js_module_t *first = module_compile(runtime, "https://m.test/first.js", NULL, &outcome);
@@ -1403,6 +1411,29 @@ static void module_cases(void)
     check(host_value_is(late, "late"), "with the import that arrived");
     task_free(runtime, late);
     (void)shared;
+
+    // A cycle whose entry fails after its member resolved back to it: the
+    // member is not left resolved through a module the failure unlisted
+    // (or freed), so a later graph reaching the member resolves it again
+    // and fails cleanly, rather than linking through the dead entry. Each
+    // module's handle held, as a page's map holds them.
+    os64_js_module_t *cyc_e = module_compile(runtime, "https://m.test/cyc-e.js", NULL, &outcome);
+    os64_js_module_t *cyc_a = module_compile(runtime, "https://m.test/cyc-a.js", NULL, &outcome);
+    os64_js_module_t *cyc_g = module_compile(runtime, "https://m.test/cyc-g.js", NULL, &outcome);
+    check(module_task(runtime, cyc_e, &outcome) == OS64_JS_EXCEPTION && strstr(outcome.message, "bare") != NULL,
+          "a cycle's entry fails on its own import");
+    check(module_task(runtime, cyc_g, &outcome) == OS64_JS_EXCEPTION && strstr(outcome.message, "bare") != NULL,
+          "a later graph through the cycle's member fails the same way, linking nothing");
+    (void)cyc_a;
+    // The same cycle reached by import(), where the loader compiles both
+    // and the failure frees the entry outright.
+    os64_js_module_t *dyn = module_compile(runtime, "https://m.test/dyn-entry.js",
+        "import('./dyn-x.js').catch(e => { globalThis.xerr = String(e); return import('./dyn-y.js'); })"
+        ".catch(e => globalThis.yerr = String(e));", &outcome);
+    check(module_task(runtime, dyn, &outcome) == OS64_JS_OK, "an entry importing a failing cycle runs");
+    JSValue xerr = task_global(runtime, "xerr"), yerr = task_global(runtime, "yerr");
+    check(JS_IsString(xerr) && JS_IsString(yerr), "both imports reject, the second through the freed entry's member");
+    task_free(runtime, xerr); task_free(runtime, yerr);
 
     os64_js_module_release(runtime, b);
     os64_js_module_release(runtime, NULL);

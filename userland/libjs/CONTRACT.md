@@ -517,7 +517,10 @@ order; a syntax error (the compile's alone, the host hearing nothing), an
 import nobody can load, a missing export and an evaluation that throws,
 each the module's own and the last heard once as an exception and never as
 a rejection; a top-level await pending after its
-task and fulfilled, or rejected, in a later one. The module sweep fails
+task and fulfilled, or rejected, in a later one; and a failed resolve
+reached again, by a graph sharing a module whose import failed and, for a
+cycle whose entry failed, by a later graph and by `import()`. The module
+sweep fails
 every allocation of a graph's run in turn, on the target core and the
 instrumented engine, under RECLAIM; it compiles uncut, because a compile
 under memory pressure is DEBTS.md's 0011b row.
@@ -657,6 +660,10 @@ other eval type and without `JS_EVAL_FLAG_COMPILE_ONLY`, since an
 unresolved module is never run. `js_execute_sync_module`, which takes a
 module body's rejected promise as the module's error, now makes that
 promise handled and tells the tracker, as `perform_promise_then` does.
-And a module whose resolve failed partway is marked unresolved again, so
-a later run that shares it resolves it afresh instead of linking through
-the import it never found. § Modules is the wrapper built on it.
+And a failed resolve leaves no module it marked resolved: every module
+the attempt marked, including those a loader's nested compile resolved
+inside it, is unresolved again. A later run that reaches one resolves it
+afresh instead of linking through the NULL of an import never found or,
+in a cycle (whose members point back at the module that failed), through
+a module the failure unlisted or freed. § Modules is the wrapper built
+on it.

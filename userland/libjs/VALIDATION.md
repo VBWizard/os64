@@ -775,17 +775,19 @@ unchanged.
 Slice 3 of the Modern Web arc adds patch 0012 (after 0011a): modules
 compiled unresolved, their requests named, a module body's rejected
 promise made handled where the engine takes it as the module's error, and
-a module whose resolve failed partway marked unresolved again (WPT's
-module directory reached the SEGV a later graph sharing it made; the
-runtime suite's shared-module case makes it again with the reset taken
-out). `tools/test_js_prepare.py` passes with the series. The target audit
+no module a failed resolve marked left resolved, a cycle's members
+included. WPT's module directory reached the SEGV a later graph sharing
+a failed module made, and the runtime suite's shared-module case makes it
+again with the reset taken out; its failing-cycle case makes the SEGV
+again under the first reset, which unmarked only the failing chain.
+`tools/test_js_prepare.py` passes with the series. The target audit
 reports 190 engine exports (the two request getters) and 27 runtime
 exports: the six module entries, and `set_script_host` and
 `take_rejection`, which the audit had not listed since P2a, beside an
 `os64_snprintf` import the console's counters added
 (`tools/test_js_port_target.py` brought current). The runtime suite's
 module cases (CONTRACT.md § Modules) pass on both probes with zero
-failures and zero live allocations: 1,242 target-core and 6,071
+failures and zero live allocations: 1,267 target-core and 6,096
 instrumented checks. The module sweep fails each allocation of a graph's
 run in turn under RECLAIM, 5 at the target core's arena grain and 243 at
 the instrumented engine's, each destroy leaving nothing live; it compiles

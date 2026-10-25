@@ -3292,9 +3292,11 @@ kept records said `MISSING script module`.
   synchronous loader, so a browser could not compile an entry before
   fetching its imports. Patch 0012 adds `JS_EVAL_FLAG_NO_RESOLVE` and the
   request getters; makes handled the module body's promise the engine
-  takes as the module's error (the host heard one error twice); and marks
-  unresolved again a module whose resolve failed partway, which a page's
-  map keeps across a failed run (WPT found the SEGV). libjs's module entry:
+  takes as the module's error (the host heard one error twice); and leaves
+  no module a failed resolve marked resolved, a cycle's members included,
+  since a page's map keeps them across a failed run (WPT found the SEGV a
+  shared module made, the cold read the use-after-free a cycle made).
+  libjs's module entry:
   compile unresolved under a name with an optional `import.meta.url`, read
   the requests, run once inside a task, ask the state after each drain (a
   top-level `await` settles when what it awaits arrives), release. A
@@ -3361,10 +3363,10 @@ kept records said `MISSING script module`.
   modulepreload, import.meta.resolve, JSON and CSS modules), workers and
   frames, and pages that need a `.py` handler or a server's delay. All 34
   directories with expectations pass with no pass lost.
-- **Hosts**, 0 failed: libjs runtime 1,242 target-core and 6,071
+- **Hosts**, 0 failed: libjs runtime 1,267 target-core and 6,096
   instrumented checks, the module sweep 5 and 243 allocations; scripted
-  page 7,964 (`tools/test_yonder_modules.inc`); yonder 2,028; fetch job
-  374; DOM 100,629; replay self-test 43 pages, 0 problems; the libjs
+  page 8,053 (`tools/test_yonder_modules.inc` among them); yonder 2,028;
+  fetch job 374; DOM 15,252 and 100,817; replay self-test 43 pages, 0 problems; the libjs
   prepare, engine and target-audit suites (190 engine exports, 27 runtime).
 - **Mutants** (`tools/test_modules_mutants.py`): 28, each caught (two first
   missed, which is how libdom's unreflected `type` and unreported connected
