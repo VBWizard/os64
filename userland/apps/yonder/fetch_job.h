@@ -76,6 +76,7 @@ typedef struct {
     bool has_body;                  // false: the body is null
     uint8_t *body;                  // os64_malloc'd
     size_t body_len;
+    way_cookies_short_t cookies_short;  // what its hops left out for want of room (way/jar.h)
 } yonder_fetched_t;
 
 int64_t yonder_fetch_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void **out);

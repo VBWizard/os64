@@ -910,8 +910,40 @@ static void how_it_asks(void)
     yonder_fetched_free(g);
 }
 
+// A script's request gets the Cookie line a page's own hop gets
+// (WAY_COOKIE_LINE_MAX), the newest cookies when they do not all fit, and
+// the product says how many were left out, and for which host.
+static void cookie_room(void)
+{
+    static char line[16384];
+    char cookie[300], value[241];
+    memset(value, 'v', sizeof(value) - 1);
+    value[sizeof(value) - 1] = '\0';
+    for (int many = 0; many < 2; many++) {
+        fresh();
+        int n = many ? 40 : 12;                 // 10 KB, or 3 KB
+        for (int i = 0; i < n; i++) {
+            snprintf(cookie, sizeof(cookie), "pre%02d=%s; Path=/", i, value);
+            seed_cookie("https://a.test/", cookie);
+        }
+        seed_cookie("https://a.test/", "user_session=SESSION; Path=/; Secure; HttpOnly");
+        fake_answer(NULL, "https://a.test/api", 200, "", "x");
+        yonder_fetched_t *g = run(&(Ask){"https://a.test/page", "https://a.test/api"});
+        const char *sent = fake_field(0, "Cookie", line, sizeof(line));
+        expect(many ? "cookie room: past it, the login goes and the rest is counted"
+                    : "cookie room: 3 KB and the login go whole",
+               g != NULL && g->ok && strstr(sent, "user_session=SESSION") != NULL &&
+                   (strstr(sent, "pre00=") != NULL) == !many && strlen(sent) + 11 <= WAY_COOKIE_LINE_MAX &&
+                   g->cookies_short.left == (many ? 8 : 0) &&
+                   strcmp(g->cookies_short.host, many ? "a.test" : "") == 0,
+               g != NULL ? g->cookies_short.host : NULL);
+        yonder_fetched_free(g);
+    }
+}
+
 int main(void)
 {
+    cookie_room();
     who_is_asking();
     how_it_asks();
     same_origin();
