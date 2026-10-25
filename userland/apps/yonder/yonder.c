@@ -1057,6 +1057,12 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
         cascade = garb_cascade(in, n, page_doc(p), view);
         if (cascade == NULL)
             return false;
+        // A condition of the page, said once however many of its cascades
+        // meet it; a copy of the page laid out beside it (a rebuild staged,
+        // a measurement) borrows its record, so it is said there too.
+        if (garb_cascade_incomplete(cascade))
+            yonder_diag_failed_seen(p->diag, "style", "the cascade came up short (out of room, or nested too deep): "
+                                    "part of the page's styles were not applied");
     }
     // Context is valid for this layout only and may name a stack Page;
     // libflow consults replaced_size inside flow_layout, which uses it here.
