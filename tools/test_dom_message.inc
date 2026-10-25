@@ -114,6 +114,29 @@ static void dom_clone_value_cases(void)
         "const n=Object.create(null);n.q=1;assert(Object.getPrototypeOf(structuredClone(n))===Object.prototype);"
         "const op=structuredClone(Object.prototype);Object.setPrototypeOf(op,{});assert(op!==Object.prototype);",
         "clone: arrays and objects");
+    /* A Map or Set is its entries alone, whether or not it has any; an
+     * Array is its every own property (HTML's serialization of each), so
+     * an empty one keeps its expandos (Codex #347 round 1). */
+    p2b_script(&f,
+        "const em=structuredClone({m:Object.assign(new Map(),{extra:42}),after:1});"
+        "assert(em.m instanceof Map&&em.m.size===0&&!('extra' in em.m)&&em.after===1,'an empty Map');"
+        "const es=structuredClone({s:Object.assign(new Set(),{extra:42}),after:1});"
+        "assert(es.s instanceof Set&&es.s.size===0&&!es.s.has(42)&&!('extra' in es.s)&&es.after===1,'an empty Set');",
+        "clone: an empty Map or Set with an expando is empty");
+    p2b_script(&f,
+        "const fm=structuredClone(Object.assign(new Map([[1,2]]),{extra:42}));"
+        "assert(fm.size===1&&fm.get(1)===2&&!('extra' in fm),'a Map');"
+        "const fs=structuredClone(Object.assign(new Set([7]),{extra:42}));"
+        "assert(fs.size===1&&fs.has(7)&&!('extra' in fs),'a Set');",
+        "clone: a Map or Set with entries and an expando is its entries");
+    p2b_script(&f,
+        "const ea=structuredClone(Object.assign([],{extra:42}));"
+        "assert(Array.isArray(ea)&&ea.length===0&&ea.extra===42,'an empty Array');",
+        "clone: an empty Array keeps its expando");
+    p2b_script(&f,
+        "const ee=structuredClone(Object.assign(new Error('m',{cause:1}),{extra:42}));"
+        "assert(ee.message==='m'&&ee.cause===1&&!('extra' in ee),'an Error');",
+        "clone: an Error with an expando is its name, message, stack and cause");
     p2b_script(&f,
         "const order=[];const o={get a(){order.push('a');delete this.c;return 1},b:2,c:3,get d(){order.push('d');return 4}};"
         "const c=structuredClone(o);"

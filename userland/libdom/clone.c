@@ -24,7 +24,8 @@
  * source and flags; lastIndex is 0 again); ArrayBuffer (a resizable one
  * keeps its maximum) and every typed array and DataView, which share their
  * buffer with whatever else shares it; Map and Set, their entries in
- * order; Error and its six native kinds (name, message, and the `cause`
+ * order and nothing else (an own property of one is not cloned, entries
+ * or none); Error and its six native kinds (name, message, and the `cause`
  * and `stack` an own data property holds, HTML's "interesting accompanying
  * data"); arrays (their length, holes and non-index properties) and
  * ordinary objects, each own enumerable string-keyed property read with
@@ -299,10 +300,29 @@ int d_clone_setup(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 
 /* ── Writing ──────────────────────────────────────────────────────────── */
 
-/* An object being walked: its keys (an object's or array's, as the walk
- * began it) or its list (a map's keys and values, a set's values, an
- * error's cause), the next one, and the item whose count it ends with. */
+/* What a frame walks, which its kind says and nothing else does: an
+ * object's or array's own enumerable keys (HTML serializes an Array's
+ * every own property, not only its indices), or a list the writer took
+ * (a map's keys and values, a set's values, an error's cause). A map or
+ * set is its entries alone, so one with none still walks its empty list
+ * and never its properties. */
+typedef enum {
+    D_FRAME_OBJECT,
+    D_FRAME_ARRAY,
+    D_FRAME_MAP,
+    D_FRAME_SET,
+    D_FRAME_ERROR,
+} DFrameKind;
+
+static bool frame_walks_keys(DFrameKind kind)
+{
+    return kind == D_FRAME_OBJECT || kind == D_FRAME_ARRAY;
+}
+
+/* An object being walked: its kind, its keys (as the walk began it) or
+ * its list, the next one, and the item whose count it ends with. */
 typedef struct {
+    DFrameKind kind;
     JSValue object;            /* the memory table's reference */
     JSPropertyEnum *keys;
     uint32_t key_count;
@@ -436,9 +456,10 @@ static char *copy_text(JSContext *ctx, const char *text)
     return js_strdup(ctx, text != NULL ? text : "");
 }
 
-/* A frame for the object whose item is `header`: its keys, or `list`
- * (taken). */
-static int frame_push(DWriter *w, JSValueConst object, size_t header, JSValue *list, size_t list_count)
+/* A frame of `kind` for the object whose item is `header`: its keys, or
+ * `list` (taken; NULL is an empty list). */
+static int frame_push(DWriter *w, DFrameKind kind, JSValueConst object, size_t header, JSValue *list,
+                      size_t list_count)
 {
     if (!grow(w->ctx, (void **)&w->frames, &w->frame_cap, w->frame_count + 1, sizeof(*w->frames))) {
         for (size_t i = 0; i < list_count; i++) JS_FreeValue(w->ctx, list[i]);
@@ -446,8 +467,9 @@ static int frame_push(DWriter *w, JSValueConst object, size_t header, JSValue *l
         return -1;
     }
     DFrame *frame = &w->frames[w->frame_count];
-    *frame = (DFrame){.object = (JSValue)object, .header = header, .list = list, .list_count = list_count};
-    if (list == NULL &&
+    *frame = (DFrame){.kind = kind, .object = (JSValue)object, .header = header, .list = list,
+                      .list_count = list_count};
+    if (frame_walks_keys(kind) &&
         JS_GetOwnPropertyNames(w->ctx, &frame->keys, &frame->key_count, object,
                                JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) < 0)
         return -1;
@@ -626,7 +648,7 @@ static int write_error(DWriter *w, JSAtom key, JSValueConst value)
     JSValue *list = js_malloc(ctx, sizeof(*list));
     if (list == NULL) { JS_FreeValue(ctx, own[2]); return -1; }
     list[0] = own[2];
-    return frame_push(w, value, index, list, 1);
+    return frame_push(w, D_FRAME_ERROR, value, index, list, 1);
 }
 
 /* A typed array or a DataView: the view's item, then its buffer's (or a
@@ -790,7 +812,7 @@ static int write_value(DWriter *w, JSAtom key, JSValueConst value)
             return -1;
         }
         w->out->items[index].count = id == s_map ? count / 2 : count;
-        return frame_push(w, value, index, list, count);
+        return frame_push(w, id == s_map ? D_FRAME_MAP : D_FRAME_SET, value, index, list, count);
     }
     if (id == s_error) return write_error(w, key, value);
     const uint8_t *bytes;
@@ -817,11 +839,11 @@ static int write_value(DWriter *w, JSAtom key, JSValueConst value)
         if (item == NULL) return -1;
         item->size = array_length;
         if (number(w, value, index) < 0) return -1;
-        return frame_push(w, value, index, NULL, 0);
+        return frame_push(w, D_FRAME_ARRAY, value, index, NULL, 0);
     }
     if (id == s_object && !JS_IsFunction(ctx, value) && !binding_object(dom, value)) {
         if (item_new(w, key, K_OBJECT) == NULL || number(w, value, index) < 0) return -1;
-        return frame_push(w, value, index, NULL, 0);
+        return frame_push(w, D_FRAME_OBJECT, value, index, NULL, 0);
     }
     data_clone_error(w, JS_IsFunction(ctx, value) ? "A function cannot be cloned" : "That object cannot be cloned");
     return -1;
@@ -835,7 +857,7 @@ static int walk(DWriter *w)
     while (w->frame_count > 0) {
         size_t top = w->frame_count - 1;
         DFrame *frame = &w->frames[top];
-        if (frame->list != NULL) {
+        if (!frame_walks_keys(frame->kind)) {
             if (frame->at == frame->list_count) { frame_pop(w); continue; }
             JSValue value = frame->list[frame->at];
             frame->list[frame->at++] = JS_UNDEFINED;

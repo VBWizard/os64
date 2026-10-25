@@ -1234,7 +1234,8 @@ postMessage across realms needs. Cloned: the primitives (a lone surrogate
 kept), the Boolean, Number, BigInt and String objects, Date, RegExp (source
 and flags; `lastIndex` 0 again), ArrayBuffer (a resizable one keeps its
 maximum), every typed array and DataView (sharing their buffer as they
-shared it), Map and Set in order, Error and its six native kinds (name,
+shared it), Map and Set (their entries in order, never their own
+properties, empty or not), Error and its six native kinds (name,
 message, and an own `cause` and `stack`), arrays (length, holes and
 non-index properties) and ordinary objects (each own enumerable
 string-keyed property read with [[Get]], so getters run, in

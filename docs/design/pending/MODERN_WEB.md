@@ -3192,7 +3192,7 @@ failure. Replayed 232, clean 21, incomplete 46, unfinished 13 and 26
 unjudged on both sides.
 
 **Host**, the base → the head: the DOM host 14,052 / 92,372 checks →
-15,149 / 100,625 (allocation sweeps 1,211 / 13,827 → 1,356 / 15,120), 0
+15,153 / 100,629 (allocation sweeps 1,211 / 13,827 → 1,356 / 15,120), 0
 failed, `tools/test_dom_message.inc` holding a case per rule, the hostile
 cases (every intrinsic the clone calls replaced by the page first, getters
 that reach back in) and the sweeps of a clone, a message and an idle
@@ -3258,6 +3258,12 @@ that fails it, except where the fix is text:
    refusal as the writer's memory table grows, which the allocation
    sweep never met (its value holds more than 16 objects now); and
    finding 2's, covered by its case.
+
+Codex's first round found one: an empty Map or Set with an own
+enumerable property was walked as an ordinary object, because the writer
+told a frame's kind by whether its entry list was NULL (a Map's expando
+broke the record, a Set's became an entry). Each writer frame now carries
+its kind, and only an object's or array's walks its own properties.
 
 **Booked** (DEBTS.md § Classic browser scripting): a cloned
 length-tracking view tracks no length; a transferred ArrayBuffer is
