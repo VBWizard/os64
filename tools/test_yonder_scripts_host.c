@@ -5887,6 +5887,17 @@ static void diag_style_case(void) {
         "diag: a cascade that came up short is one FAILED style line, however many layouts met it");
     yonder_diag_free(g.page.diag); g.page.diag=NULL;
     probe_drop();
+    /* A rebuild a script's change stages is laid out on a copy of the page,
+     * which borrows its record: that cascade says it too. */
+    snprintf(deep+at,sizeof(deep)-(size_t)at,"</style><p id=x>x</p>");
+    probe_page(deep,false);
+    g.page.diag=diag_new_claimed("http://staged.test/",1);
+    check(os64_html_set_attr(g.page.way.doc,probe_id("x"),"title","y",1)==OS64_HTML_OK && script_rebuild(),
+        "diag: a script's change is laid out on a staged copy of the page");
+    yonder_diag_render(g.page.diag,text,sizeof(text));
+    check(has(text,line),"diag: the staged copy's short cascade is on the page's record");
+    yonder_diag_free(g.page.diag); g.page.diag=NULL;
+    probe_drop();
 
     static const char kRule[]=".b%d:not(:disabled).on,.b%d:active,.show>.b%d.t{color:#fff;"
         "background-color:#07f;border-color:#07f;box-shadow:0 0 0 .2rem rgba(0,123,255,.5)}\n"
@@ -7302,6 +7313,61 @@ static void paint_cost_cases(void) {
     check(!script_turn() && s_cost.scripts+s_cost.timers==3,"paint counts: a turn with no task counts none");
     probe_drop();
 }
+/* EVERY HOLDER OF A CASCADE, ACROSS CASCADES (GARB.md § The cost): what a
+ * cascade reads lives as long as that cascade, so whatever a tree, the
+ * timeline, the web fonts and the record keep of one must be gone or copied
+ * before the next takes its place. Animations with calc() in their
+ * keyframes run and tick, a face with two sources is fetched (the first
+ * fails, the second lands), and the page is cascaded again at each step: a
+ * resize, a staged rebuild, a layout refused outright (its new cascade
+ * freed, the old tree kept), and one that comes up short (shown partial).
+ * ASan is the judge; the checks say each step left a page to show. */
+static void cascade_swap_case(void) {
+    bool was_run=s_animations, was_reduce=s_reduce_motion;
+    s_animations=true; s_reduce_motion=false;
+    clock_step=0; geometry_layout_delay=0; now_ms=100;
+    static const char kPage[]="<!doctype html><style>body{margin:0}"
+        "@font-face{font-family:\"Web Face\";src:url(w.ttf) format(\"truetype\"),url(w2.ttf)}"
+        "@keyframes go{from{transform:translateX(calc(10px + 1%))}to{transform:translateX(calc(100px + 5%))}}"
+        "@keyframes slide{from{margin-left:calc(1px + 1vw)}to{margin-left:calc(50px + 10vw)}}"
+        "@keyframes tint{to{color:rgb(255 0 0);background-color:hsl(120 50% 50%)}}"
+        "p{font-family:\"Web Face\", Times New Roman, serif;animation:slide 1s linear infinite,tint 2s infinite}"
+        "#t{width:calc(40px + 2vw);height:20px;animation:go 1s linear infinite}"
+        "@media (max-width:700px){#t{animation:go 2s linear infinite}p{font-family:Web Face, sans-serif}}"
+        "</style><div id=t>x</div><p id=a>hello world</p>";
+    web_page_scripted(kPage,false);
+    relayout(true);
+    check(g.page.timeline!=NULL && g.page.cascade!=NULL,"cascade swaps: the page's animations run");
+    int steps=0, swapped=0;
+    bool partial=false;
+    for(int i=0;i<7;i++) {
+        now_ms+=150;
+        motion_tick(); motion_painted();
+        const garb_cascade_t *was=g.page.cascade;
+        g.view.bounds.w=800-i*40;
+        if(i==4) geometry_refuse_layout=true;           /* refused: the new cascade goes, the old tree stays */
+        if(i==5) s_env.max_arena_bytes=4096;            /* short: a partial tree is shown */
+        relayout(true);
+        if(i==5) partial=g.page.tree!=NULL && flow_incomplete(g.page.tree);
+        geometry_refuse_layout=false; s_env.max_arena_bytes=0;
+        now_ms+=50; motion_tick(); motion_painted();
+        if(i==1) { (void)os64_html_set_attr(g.page.way.doc,probe_id("t"),"title","y",1); (void)script_rebuild(); }
+        if(i==2) { (void)font_land("w.ttf",NULL,"HTTP 404"); pictures_settle(); }
+        if(i==3) { (void)font_land("w2.ttf","A",NULL); pictures_settle(); }
+        swapped+=g.page.cascade!=was;
+        steps+=g.page.tree!=NULL && g.page.cascade!=NULL && g.page.timeline!=NULL;
+    }
+    relayout(true);
+    motion_tick(); motion_painted();
+    diag_fonts(&g.page);
+    char record[8192]; yonder_diag_render(g.page.diag,record,sizeof(record));
+    check(steps==7 && swapped>=5 && partial && g.page.tree!=NULL && !flow_incomplete(g.page.tree) &&
+          strstr(record,"verdict")!=NULL,
+          "cascade swaps: resizes, a staged rebuild, fonts landing, a refused and a partial layout each leave a page to show");
+    web_drop();
+    s_animations=was_run; s_reduce_motion=was_reduce;
+}
+
 static void webfont_cases(void) {
     /* Serif and mono are Test Serif; sans is Test Sans, a system family a
      * page can name apart from the generic. */
@@ -8576,6 +8642,7 @@ static void webfont_cases(void) {
     webfonts_leave();
     check(font_cancels==cancels+1 && s_web.nfiles==0 && s_web.waiting==0,"web fonts: leaving cancels and clears");
     web_drop();
+    cascade_swap_case();
     os64_font_family_cache_destroy(s_faces.families);
     s_faces.families=NULL; s_faces.text=NULL;
 }
