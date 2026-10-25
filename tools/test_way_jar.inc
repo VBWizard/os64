@@ -202,8 +202,10 @@ static void cookie_order_and_room(void)
     int32_t left = -1;
     os64_url_t u = url_of("http://o.test/x/y/z");
     size_t n = way_jar_cookies(jar, &u, false, 5, out, sizeof(out), &left);
-    expect("room: whole cookies only, and a count of the rest",
-           n == 13 && strcmp(out, "d=4; b=2; a=1") == 0 && left == 1, out);
+    // Not all fit: the newest that do (d, c, b), whole, in the RFC's order;
+    // the oldest, a, is the one left out.
+    expect("room: whole cookies only, the newest, and a count of the rest",
+           n == 13 && strcmp(out, "d=4; b=2; c=3") == 0 && left == 1, out);
 
     char lines[256];
     int32_t off = way_hop_headers(jar, "http://o.test/page", &u, false, 5, lines, sizeof(lines));
@@ -213,8 +215,8 @@ static void cookie_order_and_room(void)
     expect("hop: the cookies first, the Referer left off when it will not fit",
            off == 0 && strcmp(lines, "Cookie: d=4; b=2; a=1; c=3\r\n") == 0, lines);
     off = way_hop_headers(jar, NULL, &u, false, 5, lines, 20);
-    expect("hop: cookies that will not fit are left off whole",
-           off == 2 && strcmp(lines, "Cookie: d=4; b=2\r\n") == 0, lines);
+    expect("hop: cookies that will not fit are left off whole, the oldest first",
+           off == 2 && strcmp(lines, "Cookie: d=4; c=3\r\n") == 0, lines);
     u = url_of("http://nothing.test/");
     off = way_hop_headers(jar, "", &u, false, 5, lines, sizeof(lines));
     expect("hop: nothing to send is nothing", off == 0 && lines[0] == '\0', lines);
@@ -297,6 +299,88 @@ static void cookie_order_and_room(void)
         way_jar_free(j);
         expect("sweep: a failed allocation leaks nothing", live == before, NULL);
     }
+}
+
+// THE BUDGET a hop's Cookie line gets (WAY_COOKIE_LINE_MAX), through
+// way_hop_headers at the room a page's own hop has (libfetch's per-hop
+// room less who is asking), and which cookies go when they do not all fit.
+static void cookie_budget(void)
+{
+    const size_t hop_room = OS64_FETCH_HOP_FIELDS_MAX - WAY_IDENTITY_MAX;
+    static char lines[OS64_FETCH_HOP_FIELDS_MAX];
+    char line[400];
+    os64_url_t u = url_of("https://login.test/home");
+
+    // A SITE'S 3 KB AND A LOGIN AFTER THEM: twelve cookies of about 250
+    // bytes from the visits before, then the session the sign-in made,
+    // newest of all. Every one goes, the session among them.
+    way_jar_t *jar = way_jar_new();
+    char value[241];
+    memset(value, 'v', sizeof(value) - 1);
+    value[sizeof(value) - 1] = '\0';
+    for (int i = 0; i < 12; i++) {
+        snprintf(line, sizeof(line), "pre%02d=%s; Path=/; Max-Age=100000", i, value);
+        hear(jar, "https://login.test/", true, line, 10 + i);
+    }
+    hear(jar, "https://login.test/session", true,
+         "user_session=SESSION; Path=/; Secure; HttpOnly; Max-Age=100000", 500);
+    int32_t off = way_hop_headers(jar, "https://login.test/away", &u, true, 600, lines, hop_room);
+    expect("budget: 3 KB of a site's cookies go whole, the login with them",
+           off == 0 && strstr(lines, "user_session=SESSION") != NULL && strstr(lines, "pre00=") != NULL &&
+               strstr(lines, "pre11=") != NULL && strstr(lines, "\r\nReferer: https://login.test/away\r\n") != NULL,
+           NULL);
+    way_jar_free(jar);
+
+    // PAST THE BUDGET: forty of them (10 KB) and the login. The line stays
+    // within WAY_COOKIE_LINE_MAX, the login goes, the oldest are the ones
+    // left out, and the Referer still has its room after the cookies.
+    jar = way_jar_new();
+    for (int i = 0; i < 40; i++) {
+        snprintf(line, sizeof(line), "pre%02d=%s; Path=/; Max-Age=100000", i, value);
+        hear(jar, "https://login.test/", true, line, 10 + i);
+    }
+    hear(jar, "https://login.test/session", true,
+         "user_session=SESSION; Path=/; Secure; HttpOnly; Max-Age=100000", 500);
+    off = way_hop_headers(jar, "https://login.test/away", &u, true, 600, lines, hop_room);
+    const char *end = strstr(lines, "\r\n");
+    size_t cookie_line = end != NULL ? (size_t)(end - lines) + 2 : 0;
+    expect("budget: past it, the newest go and the oldest are counted out",
+           off > 0 && off < 40 && strstr(lines, "user_session=SESSION") != NULL &&
+               strstr(lines, "pre39=") != NULL && strstr(lines, "pre00=") == NULL &&
+               cookie_line + 1 <= WAY_COOKIE_LINE_MAX && cookie_line + 1 > WAY_COOKIE_LINE_MAX - 260 &&
+               strstr(lines, "\r\nReferer: https://login.test/away\r\n") != NULL,
+           lines + (cookie_line > 40 ? cookie_line - 40 : 0));
+    // ...and the order on the line is still the RFC's: the login, newest
+    // of all and at the same path as the rest, is written last.
+    const char *session = strstr(lines, "user_session=");
+    expect("budget: the chosen go in the RFC's order",
+           session != NULL && strstr(session, "pre") == NULL && strncmp(lines, "Cookie: pre", 11) == 0, NULL);
+
+    // A smaller older cookie still fits where a large newer one did not.
+    way_jar_free(jar);
+    jar = way_jar_new();
+    hear(jar, "http://fit.test/", false, "a=1", 1);
+    hear(jar, "http://fit.test/", false, "big=0123456789", 2);
+    hear(jar, "http://fit.test/", false, "c=3", 3);
+    char out[12];
+    int32_t left = -1;
+    os64_url_t f = url_of("http://fit.test/");
+    way_jar_cookies(jar, &f, false, 4, out, sizeof(out), &left);
+    expect("budget: a cookie that does not fit is passed over, not the end of the choosing",
+           strcmp(out, "a=1; c=3") == 0 && left == 1, out);
+    way_jar_free(jar);
+
+    // What a load notes of its hops: the most one left out, and its host.
+    way_cookies_short_t s;
+    memset(&s, 0, sizeof(s));
+    os64_url_t a = url_of("https://a.test/"), b = url_of("https://b.test/");
+    way_cookies_short_note(&s, &a, 0);
+    expect("short: a hop that left nothing out is not noted", s.left == 0 && s.host[0] == '\0', NULL);
+    way_cookies_short_note(&s, &a, 3);
+    way_cookies_short_note(&s, &b, 2);
+    expect("short: the most, and the host it went to", s.left == 3 && strcmp(s.host, "a.test") == 0, s.host);
+    way_cookies_short_note(&s, &b, 5);
+    expect("short: a worse one replaces it", s.left == 5 && strcmp(s.host, "b.test") == 0, s.host);
 }
 
 static void referrers(void)
@@ -395,5 +479,6 @@ static void jar_cases(void)
     cookie_lifetimes();
     cookie_text();
     cookie_order_and_room();
+    cookie_budget();
     referrers();
 }

@@ -527,12 +527,18 @@ past a limit the expired go first and then the cookie used longest ago —
 sending counts as use, so the login every page carries is the last to go.
 
 **Sent in the order the RFC gives** (the longest path first, then the
-oldest), whole cookies only. libfetch gives a hop 1536 bytes for its
-per-hop lines, of which the lines that say who is asking take up to 512
-first (libway's `WAY_IDENTITY_MAX`), which leaves a kilobyte for its
-`Cookie` and `Referer` lines together; the cookies come first, because a
-login depends on them and not on a Referer, and what does not fit is left
-off whole (the limit is booked with libfetch, in BROWSER_DEBTS.md).
+oldest), whole cookies only. A hop's `Cookie` line may take 8 KiB
+(libway's `WAY_COOKIE_LINE_MAX`, beside its argument: Apache and nginx
+refuse a longer field by default), with room of its own beside it for the
+lines that say who is asking and a 4 KiB Referer, all inside libfetch's
+`OS64_FETCH_HOP_FIELDS_MAX`. When a site's cookies pass 8 KiB, the NEWEST
+that fit are sent and the oldest are left out, whole: the RFC orders the
+header but says nothing of which to cut, and its order would cut the
+cookies a site set last, which after a sign-in are the sign-in itself
+(Chris's first login looked logged out for exactly that, at the kilobyte
+this budget had before). A page whose requests left cookies out says so
+on its record: `FAILED cookies: left out of a request to <host> (N)`,
+N the most one request left out (YONDER_DIAGNOSTICS.md).
 
 **The `Referer` is the browsers' default policy,
 strict-origin-when-cross-origin**: the whole address of the page a request

@@ -410,7 +410,8 @@ For each request, including the first:
 
 `headers_for` writes at most one line of each name it may write, as
 `Name: value\r\n`, with a NUL within the supplied capacity
-(`OS64_FETCH_HOP_FIELDS_MAX`, 1536 bytes): `Cookie` and `Referer`, and the
+(`OS64_FETCH_HOP_FIELDS_MAX`, 12816 bytes: 8 KiB of it a Cookie line's,
+4 KiB a Referer's, half a kilobyte the rest's): `Cookie` and `Referer`, and the
 lines that say who is asking, most of which change with where a hop goes
 (`Accept-Language`, `Sec-CH-UA`, `Sec-CH-UA-Mobile`, `Sec-CH-UA-Platform`,
 `Sec-Fetch-Dest`, `Sec-Fetch-Mode`, `Sec-Fetch-Site`, `Sec-Fetch-User`,

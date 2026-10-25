@@ -1892,6 +1892,19 @@ static void diag_cookies(yonder_diag_t *d, const char *url, bool encrypted)
     os64_free(cookies);
 }
 
+// A load that left cookies out for want of room (way/jar.h): one FAILED
+// line a host on the page's record, its count the most one request to that
+// host left out. A site that is sent fewer cookies than it set may see a
+// stranger, which is why it is a FAILED line and not a plain one.
+static void diag_cookies_short(yonder_diag_t *d, const way_cookies_short_t *s)
+{
+    if (d == NULL || s->left <= 0)
+        return;
+    char message[OS64_URL_HOST_MAX + 32];
+    os64_snprintf(message, sizeof(message), "left out of a request to %s", s->host);
+    yonder_diag_failed_most(d, "cookies", message, (uint32_t)s->left);
+}
+
 static yonder_diag_t *diag_begin(const char *url)
 {
     yonder_diag_t *d = yonder_diag_new(url, s_diag.next, os64_micros());
@@ -4165,6 +4178,7 @@ static void sheet_arrived(const yonder_sheet_job_t *job, yonder_sheet_t *got)
             : g.stream.active && g.stream.serial == job->page ? &g.stream.page : NULL;
     if (p == NULL || job->index < 0 || job->index >= p->nsheets)
         return;
+    diag_cookies_short(p == &g.stream.page ? g.stream.diag : p->diag, &job->hooks.cookies_short);
     Sheet *sh = &p->sheets[job->index];
     if (!sh->waiting)
         return;
@@ -4493,6 +4507,7 @@ static void picture_arrived(yonder_picture_job_t *job, yonder_picture_t *product
 {
     if (job->generation != g.page_serial || job->index < 0 || job->index >= g.page.npics)
         return;                     // a page no longer on screen
+    diag_cookies_short(g.page.diag, &job->hooks.cookies_short);
     Picture *pic = &g.page.pics[job->index];
     if (pic->state != PIC_WAITING)
         return;
@@ -5350,6 +5365,7 @@ static void webfont_arrived(const yonder_webfont_job_t *job, yonder_webfont_t *p
 {
     if (job->generation != g.page_serial || job->index < 0 || job->index >= s_web.nfiles)
         return;                     // a page no longer on screen
+    diag_cookies_short(g.page.diag, &job->hooks.cookies_short);
     WebFontFile *w = &s_web.files[job->index];
     if (w->state != WF_WAITING)
         return;
@@ -7607,6 +7623,8 @@ static void script_arrived(const yonder_script_job_t *job, const yonder_script_t
     // failure: a replay hands it over the same.
     bool came = got != NULL && got->ok;
     if (host != NULL)
+        diag_cookies_short(yonder_scripts_diag(host), &job->hooks.cookies_short);
+    if (host != NULL)
         diag_keep(yonder_scripts_diag(host), YONDER_DIAG_KEPT_SCRIPT, job->token, job->url,
                   came ? got->url : job->url, "", came ? got->source : NULL, came ? got->length : 0);
     if (host != NULL)
@@ -7831,6 +7849,8 @@ static void request_record(yonder_scripts_t *host, const yonder_fetch_job_t *job
     yonder_diag_t *diag = yonder_scripts_diag(host);
     if (diag == NULL)
         return;
+    if (got != NULL)
+        diag_cookies_short(diag, &got->cookies_short);
     if (got == NULL || !got->ok) {
         char line[OS64_FETCH_URL_MAX + 320];
         os64_snprintf(line, sizeof(line), "%s %s: %s%s", job->request.method, job->url,
@@ -10232,6 +10252,7 @@ static bool stream_turn(void)
     }
     if (mail != NULL && !g.stream.has_verdict && yonder_mail_take_verdict(mail, &g.stream.verdict)) {
         g.stream.has_verdict = true;
+        diag_cookies_short(g.stream.diag, &g.stream.verdict.cookies_short);
         stream_mark(OS64_DOM_TIMING_RESPONSE_END);
     }
     yonder_scripts_t *host = g.stream.scripts;

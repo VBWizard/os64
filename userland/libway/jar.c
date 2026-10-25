@@ -21,6 +21,9 @@ typedef struct {
     uint64_t used;
     bool host_only, secure, http_only;
     SameSite same_site;
+    // Scratch for one sending (cookies()), under the jar's lock: whether
+    // this cookie matches the request, and whether it is to be sent.
+    uint8_t pick;
 } Cookie;
 
 struct way_jar {
@@ -584,6 +587,48 @@ static bool before(const Cookie *a, const Cookie *b)
     return la != lb ? la > lb : older(a, b);
 }
 
+// A cookie's bytes in a Cookie header, without the "; " before it.
+static size_t spelled(const Cookie *c)
+{
+    size_t nlen = os64_strlen(c->name);
+    return nlen + (nlen > 0 ? 1 : 0) + os64_strlen(c->value);
+}
+
+enum { PICK_NO = 0, PICK_MATCHES, PICK_SENT };
+
+// WHICH COOKIES GO WHEN NOT ALL FIT: the newest, as many as fit, newest
+// first, each taken whole (a smaller older one may still fit after a large
+// one did not). RFC 6265 § 5.4 orders the header and says nothing of which
+// to leave out, and its order — the oldest first — would cut exactly the
+// cookies a site set last, which after a login are the login: a session
+// cookie is created when the person signs in, after everything the site
+// set on the visits before. The ones chosen are still written in the RFC's
+// order (cookies()). Answers how many matching cookies were left out.
+static int32_t pick_newest(way_jar_t *jar, size_t room)
+{
+    size_t used = 0;
+    int32_t taken = 0, left = 0;
+    for (;;) {
+        Cookie *newest = NULL;
+        for (int32_t i = 0; i < jar->n; i++) {
+            Cookie *c = &jar->cookies[i];
+            if (c->pick == PICK_MATCHES && (newest == NULL || older(newest, c)))
+                newest = c;
+        }
+        if (newest == NULL)
+            return left;
+        size_t need = (taken > 0 ? 2 : 0) + spelled(newest);
+        if (used + need <= room) {
+            newest->pick = PICK_SENT;
+            used += need;
+            taken++;
+        } else {
+            newest->pick = PICK_NO;
+            left++;
+        }
+    }
+}
+
 // `script`: the cookies a page's script reads (document.cookie), which
 // leaves out the HttpOnly ones (RFC 6265 § 5.4 step 1).
 static size_t cookies(way_jar_t *jar, const os64_url_t *to, bool encrypted, int64_t now,
@@ -601,18 +646,37 @@ static size_t cookies(way_jar_t *jar, const os64_url_t *to, bool encrypted, int6
     size_t used = 0;
     os64_lock_acquire(&jar->lock);
     purge_expired(jar, now);
+    // Which match, and the room they take together: all of them go when
+    // they fit, and the newest that fit when they do not (pick_newest).
+    size_t all = 0;
+    int32_t matching = 0;
+    for (int32_t i = 0; i < jar->n; i++) {
+        Cookie *c = &jar->cookies[i];
+        bool host = c->host_only ? os64_streq(to->host, c->domain) : domain_match(to->host, c->domain);
+        bool match = host && path_match(to->path, rn, c->path) && !(c->secure && !encrypted) &&
+                     !(script && c->http_only);
+        c->pick = match ? PICK_SENT : PICK_NO;
+        if (match)
+            all += (matching++ > 0 ? 2 : 0) + spelled(c);
+    }
+    size_t room = cap > 0 ? cap - 1 : 0;        // the NUL's byte
+    if (all > room) {
+        for (int32_t i = 0; i < jar->n; i++)
+            if (jar->cookies[i].pick == PICK_SENT)
+                jar->cookies[i].pick = PICK_MATCHES;
+        int32_t left = pick_newest(jar, room);
+        if (left_out != NULL)
+            *left_out = left;
+    }
     // Sent in order without sorting the jar: each pass takes the first
-    // matching cookie after the last one taken. The jar is small, and a
+    // chosen cookie after the last one taken. The jar is small, and a
     // request asks once.
     const Cookie *last = NULL;
     for (;;) {
         Cookie *next = NULL;
         for (int32_t i = 0; i < jar->n; i++) {
             Cookie *c = &jar->cookies[i];
-            bool host = c->host_only ? os64_streq(to->host, c->domain)
-                                     : domain_match(to->host, c->domain);
-            if (!host || !path_match(to->path, rn, c->path) || (c->secure && !encrypted) ||
-                (script && c->http_only))
+            if (c->pick != PICK_SENT)
                 continue;
             if (last != NULL && !before(last, c))
                 continue;
@@ -623,12 +687,11 @@ static size_t cookies(way_jar_t *jar, const os64_url_t *to, bool encrypted, int6
             break;
         last = next;
         size_t nlen = os64_strlen(next->name), vlen = os64_strlen(next->value);
-        size_t need = (used > 0 ? 2 : 0) + nlen + (nlen > 0 ? 1 : 0) + vlen;
-        if (used + need + 1 > cap) {
-            if (left_out != NULL)
-                (*left_out)++;
-            continue;
-        }
+        // The room was counted with spelled() above, so this does not
+        // stop a cookie that was chosen; it guards `out` should the two
+        // counts ever disagree.
+        if (used + (used > 0 ? 2 : 0) + spelled(next) >= cap)
+            break;
         if (used > 0) {
             out[used++] = ';';
             out[used++] = ' ';
@@ -685,9 +748,11 @@ int32_t way_hop_headers(way_jar_t *jar, const char *referrer, const os64_url_t *
     if (cap == 0)
         return 0;
     out[0] = '\0';
-    // "Cookie: " + the value + "\r\n" + the NUL.
-    if (cap > sizeof(kCookie) + 2) {
-        size_t room = cap - (sizeof(kCookie) - 1) - 2;
+    // "Cookie: " + the value + "\r\n" + the NUL, within WAY_COOKIE_LINE_MAX
+    // whatever room the caller has: the rest is the Referer's.
+    size_t line_cap = cap < WAY_COOKIE_LINE_MAX ? cap : WAY_COOKIE_LINE_MAX;
+    if (line_cap > sizeof(kCookie) + 2) {
+        size_t room = line_cap - (sizeof(kCookie) - 1) - 2;
         size_t n = way_jar_cookies(jar, to, encrypted, now, out + sizeof(kCookie) - 1, room, &left);
         if (n > 0) {
             os64_memcpy(out, kCookie, sizeof(kCookie) - 1);
@@ -711,6 +776,14 @@ int32_t way_hop_headers(way_jar_t *jar, const char *referrer, const os64_url_t *
         }
     }
     return left;
+}
+
+void way_cookies_short_note(way_cookies_short_t *s, const os64_url_t *to, int32_t left)
+{
+    if (s == NULL || to == NULL || left <= s->left)
+        return;
+    s->left = left;
+    os64_strcopy(s->host, sizeof(s->host), to->host);
 }
 
 // ── Referer ─────────────────────────────────────────────────────────────

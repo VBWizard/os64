@@ -45,6 +45,9 @@ typedef struct {
     unsigned page_given;
     bool (*cancelled)(void *ctx);
     void *cancel_ctx;
+    // Where the cookies a hop left out for want of room are noted: the
+    // product's (yonder_fetched_t.cookies_short).
+    way_cookies_short_t *cookies_short;
     // The head as libfetch read it: its lines as a header block, and the
     // names of the lines it could not read for their length.
     char *block;
@@ -76,11 +79,16 @@ static bool hop_cancelled(void *ctx)
 static size_t hop_cookies(const Hop *h, const os64_url_t *to, bool encrypted, char *out, size_t cap)
 {
     static const char kCookie[] = "Cookie: ";
+    // The line within WAY_COOKIE_LINE_MAX, as a page's own hops (jar.h).
+    if (cap > WAY_COOKIE_LINE_MAX)
+        cap = WAY_COOKIE_LINE_MAX;
     if (h->preflight || h->job->jar == NULL || !way_credentials_included(h->r) ||
         cap <= sizeof(kCookie) + 2)
         return 0;
     size_t room = cap - (sizeof(kCookie) - 1) - 2;
-    size_t n = way_jar_cookies(h->job->jar, to, encrypted, now_utc(), out + sizeof(kCookie) - 1, room, NULL);
+    int32_t left = 0;
+    size_t n = way_jar_cookies(h->job->jar, to, encrypted, now_utc(), out + sizeof(kCookie) - 1, room, &left);
+    way_cookies_short_note(h->cookies_short, to, left);
     if (n == 0) {
         out[0] = '\0';
         return 0;
@@ -647,7 +655,7 @@ int64_t yonder_fetch_run(void *job_ptr, bool (*cancelled)(void *ctx), void *ctx,
     r->headers = job->headers;
     r->headers_len = job->headers_len;
     r->body = job->body != NULL || job->body_len > 0;
-    Hop h = {.job = job, .r = r, .cancelled = cancelled, .cancel_ctx = ctx};
+    Hop h = {.job = job, .r = r, .cancelled = cancelled, .cancel_ctx = ctx, .cookies_short = &got->cookies_short};
     Branches branches = {0};
     // A fragment never leaves the browser, and no response's URL keeps one.
     char *current = without_fragment(job->url);

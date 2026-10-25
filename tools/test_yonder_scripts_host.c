@@ -5618,6 +5618,59 @@ static void diag_picture_case(void) {
     probe_drop();
 }
 
+/* COOKIES LEFT OUT FOR WANT OF ROOM (way/jar.h): one FAILED line a host,
+ * its count the most one request left out, from the page's own fetch (the
+ * trip's verdict) and from a fetch the page made (a picture's hooks). */
+static void diag_cookies_case(void) {
+    yonder_diag_t *d=yonder_diag_new("http://x.test/",1,0);
+    way_cookies_short_t s={3,"a.test"};
+    diag_cookies_short(d,&s);
+    s.left=2; diag_cookies_short(d,&s);
+    way_cookies_short_t none={0,""};
+    diag_cookies_short(d,&none);
+    char text[4096]; yonder_diag_render(d,text,sizeof(text));
+    check(has(text,"\nverdict: 1 FAILED\nFAILED cookies: left out of a request to a.test (3)\n"),
+        "cookies: one line a host, the most one request left out; a load that left none out says nothing");
+    s.left=7; diag_cookies_short(d,&s);
+    yonder_diag_render(d,text,sizeof(text));
+    check(has(text,"FAILED cookies: left out of a request to a.test (7)\n"),"cookies: a worse request raises the count");
+    yonder_diag_free(d);
+
+    /* The page's own fetch: the verdict carries the leg's note. */
+    stream_window();
+    start_trip("http://fixture.test/p",NULL,NULL,NAV_GO,WAY_BY_BROWSER,NULL);
+    way_head_t h=stream_head("text/html","",false);
+    yonder_mail_post_head(g.stream.mail,&h);
+    const char *body="<!doctype html><p>in";
+    stream_post_body((const uint8_t *)body,strlen(body),YONDER_STREAM_CHUNK);
+    yonder_verdict_t v; memset(&v,0,sizeof(v));
+    v.page=true; v.fetch=OS64_FETCH_OK;
+    v.cookies_short=(way_cookies_short_t){4,"fixture.test"};
+    yonder_mail_post_verdict(g.stream.mail,&v);
+    for(int i=0;i<8 && stream_turn();i++) {}
+    check(!g.stream.active && g.page.diag!=NULL,"cookies: the page arrived");
+    yonder_diag_render(g.page.diag,text,sizeof(text));
+    check(has(text,"FAILED cookies: left out of a request to fixture.test (4)\n"),
+        "cookies: the page's own request that left cookies out is on its record");
+    stream_window_drop();
+
+    /* A picture the page asked for: its hooks' note, on the page shown. */
+    probe_page("<img src=http://x.test/a.png>",true);
+    pictures_start(&g.page);
+    g.page.diag=diag_new_claimed("http://x.test/",2);
+    g.page.pics[0].state=PIC_WAITING;
+    g.page.waiting=g.page.in_flight=1;
+    yonder_picture_job_t job={.kind=YONDER_JOB_PICTURE,.index=0,.generation=g.page_serial};
+    job.hooks.cookies_short=(way_cookies_short_t){2,"x.test"};
+    yonder_picture_t missing={.status=OS64_IMAGE_NO_FILE,.why="HTTP 404"};
+    picture_arrived(&job,&missing);
+    yonder_diag_render(g.page.diag,text,sizeof(text));
+    check(has(text,"FAILED cookies: left out of a request to x.test (2)\n"),
+        "cookies: a picture's request that left cookies out is on the page's record");
+    yonder_diag_free(g.page.diag); g.page.diag=NULL;
+    probe_drop();
+}
+
 /* The pictures never handed to a worker, and the one past what a page's
  * pictures may cost, are named too: every picture not shown is. */
 static void diag_picture_unshown_case(void) {
@@ -9112,6 +9165,7 @@ static void diag_cases(void) {
     diag_page_cases();
     diag_bytes_case();
     diag_picture_case();
+    diag_cookies_case();
     diag_picture_unshown_case();
     diag_picture_workerless_case();
     diag_picture_unasked_case();

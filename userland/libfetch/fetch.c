@@ -50,6 +50,10 @@ struct os64_fetch {
                  2 * OS64_FETCH_EXTRA_MAX + OS64_FETCH_HOP_FIELDS_MAX + OS64_FETCH_CONTENT_TYPE_MAX +
                  HTTP_METHOD_NAME_MAX + 256];
     char hop_extra[OS64_FETCH_EXTRA_MAX + OS64_FETCH_HOP_FIELDS_MAX];
+    // What headers_for wrote for the hop, judged before it joins hop_extra
+    // (request_extras): here and not on the stack for the reason `request`
+    // is, at about 13 KB.
+    char hop_fields[OS64_FETCH_HOP_FIELDS_MAX];
 
     // One conversation with the world: the connection, the stream reading
     // it, and the head that came back. A redirect gives the connection back
@@ -425,16 +429,17 @@ static bool request_extras(os64_fetch_t *f, char *out, size_t cap, bool encrypte
     extras_for_hop(f, out, cap, encrypted);
     if (!f->opt.headers_for)
         return true;
-    char dynamic[OS64_FETCH_HOP_FIELDS_MAX];
-    os64_memset(dynamic, 0xff, sizeof(dynamic));
+    char *dynamic = f->hop_fields;
+    const size_t room = sizeof(f->hop_fields);
+    os64_memset(dynamic, 0xff, room);
     dynamic[0] = '\0';
     os64_url_t url;
     url_filled(&f->current, &url);
-    if (!f->opt.headers_for(f->opt.ctx, &url, encrypted, dynamic, sizeof(dynamic)))
+    if (!f->opt.headers_for(f->opt.ctx, &url, encrypted, dynamic, room))
         return false;
     size_t len = 0;
-    while (len < sizeof(dynamic) && dynamic[len]) len++;
-    if (len == sizeof(dynamic))
+    while (len < room && dynamic[len]) len++;
+    if (len == room)
         return false;
     http_request_extras_t check = { .extra_headers = dynamic };
     if (!http_request_extras_ok(&check))

@@ -436,7 +436,12 @@ was shown, or since its record was last written on asking:
   its element outside libdom`, libdom's `options.broken`), `layout`
   (out of memory, or the layout stopped partway), `controls`, `scripts`
   (no memory for the host), `script <source name>`, `link refused`,
-  `form refused` and `navigation`. A person's own form left invalid, a
+  `form refused`, `navigation`, and `cookies` (`FAILED cookies: left out
+  of a request to <host> (N)`: a request of the page, its own or one it
+  made, carried fewer of the jar's cookies than matched it, for want of
+  room in the Cookie line; one line a host, and N is the most one request
+  left out, not how many requests did, as a whole tally's MISSING count
+  is the most it has seen). A person's own form left invalid, a
   control the page disabled and a reset are libpage answers rather than
   failures, and stay off the record. An event or a timer task has no
   source name, so it gets a script line only when it fails.

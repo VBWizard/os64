@@ -156,8 +156,9 @@ typedef struct {
 
 // ONE LOAD'S WORTH OF THE SESSION. A load reads the browser's name and
 // accept list (set before the first load and never changed while one
-// runs), sends the agent its leg carries, writes only its own sentence,
-// and reaches the person only through its own face. So a face may run
+// runs), sends the agent its leg carries, writes only to its own leg (its
+// sentence, and what it notes of its hops) and to the browser's jar, and
+// reaches the person only through its own face. So a face may run
 // way_load on a thread other than the session's: the leg is the whole of
 // what the two share.
 typedef struct {
@@ -201,6 +202,9 @@ typedef struct {
     // (0 for none).
     way_origin_t asked_origin;
     uint32_t left_at;
+    // The cookies this load's hops left out for want of room (jar.h), for
+    // the face's record of the page.
+    way_cookies_short_t cookies_short;
 } way_leg_t;
 
 // A leg for `session`, with the session's own face, an empty sentence, and
@@ -351,6 +355,9 @@ typedef struct {
     // asked for; and what the permanent ones said about keeping them.
     bool passing_hop;
     way_chain_t chain;
+    // The cookies the fetch's hops left out for want of room (jar.h), for
+    // the face's record of the page that asked.
+    way_cookies_short_t cookies_short;
 } way_hooks_t;
 
 void way_fetch_hooks(way_hooks_t *hooks, os64_fetch_options_t *opt);

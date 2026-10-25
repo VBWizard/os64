@@ -184,10 +184,10 @@ capture or a standard disagreed with § 1 above, the build follows them:
   `sec-ch-ua` lines, the four `Sec-Fetch-` lines,
   `Upgrade-Insecure-Requests`, `Priority`, a Reload's `Cache-Control`)
   beside Cookie and Referer, each once; none is a credential.
-  `OS64_FETCH_HOP_FIELDS_MAX` holds 512 bytes for them beside the cookies'
-  kilobyte (`WAY_IDENTITY_MAX`; Chrome's longest block, its Reload of a
-  clicked link, is about 320 bytes); `OS64_FETCH_EXTRA_MAX` is not
-  involved.
+  `OS64_FETCH_HOP_FIELDS_MAX` holds 512 bytes for them beside the Cookie
+  line and the Referer (`WAY_IDENTITY_MAX`; Chrome's longest block, its
+  Reload of a clicked link, is about 320 bytes); `OS64_FETCH_EXTRA_MAX` is
+  not involved.
 - **Header order is libfetch's, not each browser's**, booked in
   BROWSER_DEBTS beside § 2, whose change to the `Connection` line touches
   the same request writer. (Paid by W2: each preset's order per kind of

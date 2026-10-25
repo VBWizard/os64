@@ -35,6 +35,7 @@ typedef struct {
     bool page;
     os64_fetch_status_t fetch;
     char reason[WAY_SENTENCE_MAX];
+    way_cookies_short_t cookies_short;      // the leg's (way.h), for the page's record
 } yonder_verdict_t;
 
 // A mailbox for navigation `generation`, held once by the caller. NULL on

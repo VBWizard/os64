@@ -65,6 +65,7 @@ int64_t yonder_trip_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void
     if (!way_open(&leg, trip->url, trip->has_request ? &trip->request : NULL, &o, &verdict.fetch)) {
         // No page: libway's sentence says what there was instead.
         os64_strcopy(verdict.reason, sizeof(verdict.reason), leg.status);
+        verdict.cookies_short = leg.cookies_short;
         yonder_mail_post_verdict(trip->mail, &verdict);
         ring(trip);
         return 0;
@@ -77,6 +78,7 @@ int64_t yonder_trip_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void
     if (o.head.body == WAY_BODY_IMAGE) {
         verdict.page = true;
         verdict.fetch = OS64_FETCH_OK;
+        verdict.cookies_short = leg.cookies_short;
         os64_fetch_close(o.fetch);
         yonder_mail_post_verdict(trip->mail, &verdict);
         ring(trip);
@@ -99,6 +101,7 @@ int64_t yonder_trip_run(void *job, bool (*cancelled)(void *ctx), void *ctx, void
     verdict.page = true;
     verdict.fetch = os64_fetch_status(o.fetch);
     os64_strcopy(verdict.reason, sizeof(verdict.reason), os64_fetch_reason(o.fetch));
+    verdict.cookies_short = leg.cookies_short;
     os64_fetch_close(o.fetch);
     yonder_mail_post_verdict(trip->mail, &verdict);
     ring(trip);

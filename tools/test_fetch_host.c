@@ -1544,6 +1544,38 @@ static void case_cookies(void)
             os64_fetch_close(f);
         }
     }
+    // THE WHOLE PER-HOP ROOM, used: who is asking, an 8 KB Cookie line and
+    // a 4 KB Referer, one byte short of OS64_FETCH_HOP_FIELDS_MAX with its
+    // NUL. It reaches the wire intact, beside a caller's block at its own
+    // limit; a cap any smaller would have cut a line short, and a line cut
+    // short is a refused hop.
+    {
+        static char block[OS64_FETCH_HOP_FIELDS_MAX];
+        static char extra[OS64_FETCH_EXTRA_MAX];
+        size_t n = (size_t)snprintf(block, sizeof(block), "Accept-Language: en\r\nCookie: ");
+        size_t cookie_at = n;
+        size_t referer_line = 9 + 14 + 4000 + 2;                // "Referer: " + "http://a.test/" + path + CR LF
+        size_t fill = sizeof(block) - 1 - n - 2 - referer_line;
+        memset(block + n, 'c', fill);
+        n += fill;
+        n += (size_t)snprintf(block + n, sizeof(block) - n, "\r\nReferer: http://a.test/");
+        memset(block + n, 'r', 4000);
+        n += 4000;
+        n += (size_t)snprintf(block + n, sizeof(block) - n, "\r\n");
+        CHECK(n == sizeof(block) - 1 && fill > 8000);
+        size_t e = (size_t)snprintf(extra, sizeof(extra), "X-Big: ");
+        memset(extra + e, 'x', sizeof(extra) - e - 3);
+        memcpy(extra + sizeof(extra) - 3, "\r\n", 3);
+        reset();
+        peer_add("a.test", 80, reply_len("200 OK", "", page));
+        cookie_test_t t = { .output = block };
+        os64_fetch_options_t opt = { .headers_for = cookie_headers, .ctx = &t, .extra_headers = extra };
+        os64_fetch_t *f = os64_fetch_open("http://a.test/", &opt);
+        CHECK(os64_fetch_status(f) == OS64_FETCH_OK && t.asked == 1);
+        CHECK(strstr(request_n(0), block) != NULL && strstr(request_n(0), extra) != NULL);
+        CHECK(strncmp(block + cookie_at - 8, "Cookie: c", 9) == 0);
+        os64_fetch_close(f);
+    }
     // Both sources, secure/direct vs unencrypted HTTP and HTTPS-via-proxy.
     for (int dynamic = 0; dynamic < 2; dynamic++) {
         for (int transport = 0; transport < 3; transport++) {
