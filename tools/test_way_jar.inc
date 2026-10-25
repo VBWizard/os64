@@ -357,13 +357,16 @@ static void cookie_budget(void)
            session != NULL && strstr(session, "pre") == NULL && strncmp(lines, "Cookie: pre", 11) == 0, NULL);
 
     // A LOGIN, THEN A SCRIPT'S PILE: the session set HttpOnly at sign-in,
-    // and after it forty cookies no less large that a page set, none
-    // HttpOnly. The session is kept first however much newer they are;
-    // of them, the newest that fit.
+    // larger than any of what follows (so it is not merely the small one
+    // that fits after the rest), and after it forty cookies a page set,
+    // none HttpOnly. The session is kept first however much newer they
+    // are; of them, the newest that fit.
     way_jar_free(jar);
     jar = way_jar_new();
-    hear(jar, "https://login.test/session", true,
-         "user_session=SESSION; Path=/; Secure; HttpOnly; Max-Age=100000", 5);
+    char login_cookie[400];
+    snprintf(login_cookie, sizeof(login_cookie), "user_session=SESSION%0300d; Path=/; Secure; HttpOnly; Max-Age=100000",
+             0);
+    hear(jar, "https://login.test/session", true, login_cookie, 5);
     for (int i = 0; i < 40; i++) {
         snprintf(line, sizeof(line), "pile%02d=%s; Path=/; Max-Age=100000", i, value);
         hear(jar, "https://login.test/", true, line, 10 + i);
@@ -553,6 +556,19 @@ static void cookie_file_round_trip(void)
            strcmp(strchr(file_of(back, 300), '\n'), strchr(file_of(jar, 300), '\n')) == 0, NULL);
     expect("file: an expired line is not read", read_into(back, text, 1150).read == 0, NULL);
     way_jar_free(back);
+    way_jar_free(jar);
+
+    // Oldest first by AGE, not by where the jar keeps them: a cookie set
+    // again keeps its age (§5.3 step 11) and moves in the jar.
+    jar = way_jar_new();
+    hear(jar, "http://age.test/", false, "a=1; Max-Age=1000", 10);
+    hear(jar, "http://age.test/", false, "b=2; Max-Age=1000", 11);
+    hear(jar, "http://age.test/", false, "c=3; Max-Age=1000", 12);
+    hear(jar, "http://age.test/", false, "a=9; Max-Age=1000", 13);
+    text = file_of(jar, 20);
+    expect("file: oldest first, a cookie set again keeping its place", strstr(text, "\ta\t9\n") != NULL &&
+           strstr(text, "\ta\t9\n") < strstr(text, "\tb\t2\n") && strstr(text, "\tb\t2\n") < strstr(text, "\tc\t3\n"),
+           text);
     way_jar_free(jar);
 
     // A Max-Age past any calendar is written as the most a line holds, and
