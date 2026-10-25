@@ -160,6 +160,23 @@ static void module_preload_case(void) {
     request_drop();
 }
 
+/* A classic script's import() of a module a deferred graph is still
+ * fetching takes the fetch over, inline, and its answer never comes: the
+ * graph is walked again between tasks, so the deferred module runs and the
+ * page arrives, rather than waiting for an answer nobody will give. */
+static void module_takeover_case(void) {
+    fake_fetch_reset();
+    fake_answer("GET","http://fixture.test/m/main.js",200,MODULE_JS,"import {u} from './util.js';note('main '+u);");
+    fake_answer("GET","http://fixture.test/m/util.js",200,MODULE_JS,"export const u='U';note('util');");
+    module_page("<script type=module src=/m/main.js></script><script src=/s/late.js></script>");
+    check(loop_settle() && request_land("/m/main.js") && nrequest_jobs==1,
+          "modules: the deferred entry lands, its import is out, the classic script waits");
+    check(script_land("/s/late.js","import('/m/util.js').then(m=>note('dyn '+m.u))") && loop_settle() &&
+          g.page.tree!=NULL && script_rebuild() && probe_text_is("out","util|dyn U|main U"),
+          "modules: the import() took the fetch over, and the deferred graph still ran");
+    request_drop();
+}
+
 /* With the Modern Web surface off, a module is what the page asked for and
  * did not get, and nothing of it runs. */
 static void module_modern_off_case(void) {
@@ -180,5 +197,6 @@ static void module_cases(void) {
     module_classic_import_case();
     module_failure_case();
     module_preload_case();
+    module_takeover_case();
     module_modern_off_case();
 }

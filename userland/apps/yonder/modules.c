@@ -58,6 +58,7 @@ struct yonder_modules {
     uint32_t walk;
     bool dropped;
     int32_t reading;        // the module whose requests are being read
+    bool taken;             // a fetch the loader took over: graphs to walk again
 };
 
 static char *copy(const char *text)
@@ -357,8 +358,13 @@ static bool engine_source(void *opaque, const char *name, const char **bytes, si
     if (i < 0 && (i = slot_new(m, name)) < 0)
         return false;
     // Not here yet: fetched now, its async fetch (if one is out) let go.
-    if (m->mods[i].job != 0 && m->net.cancel != NULL)
-        m->net.cancel(m->net.opaque, m->mods[i].job);
+    // That fetch's answer never comes, and a graph waiting on it hears of
+    // the module only by a walk: owed until the next settle.
+    if (m->mods[i].job != 0) {
+        if (m->net.cancel != NULL)
+            m->net.cancel(m->net.opaque, m->mods[i].job);
+        m->taken = true;
+    }
     m->mods[i].job = 0;
     os64_dom_response_t response;
     if (m->net.run == NULL || !m->net.run(m->net.opaque, name, &response)) {
@@ -545,7 +551,8 @@ bool yonder_modules_settle(yonder_modules_t *m)
 {
     if (m == NULL || m->dropped)
         return false;
-    bool any = false;
+    bool any = m->taken;
+    m->taken = false;
     for (uint32_t i = 0; i < m->count; i++)
         if (m->mods[i].state == MOD_PENDING) {
             try_compile(m, (int32_t)i, m->mods[i].meta);
@@ -558,6 +565,8 @@ bool yonder_modules_owed(const yonder_modules_t *m)
 {
     if (m == NULL || m->dropped)
         return false;
+    if (m->taken)
+        return true;
     for (uint32_t i = 0; i < m->count; i++)
         if (m->mods[i].state == MOD_PENDING)
             return true;
