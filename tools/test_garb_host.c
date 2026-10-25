@@ -10,14 +10,17 @@
 // is not. And probes: `--deep` parses a million nested `(` on a thread
 // with a small stack (past the depth bound the parser must find the end
 // without recursing), `--numbers` dumps numbers past int64_t's reach and
-// past a double's, and `--cost BYTES` and `--full` hold a parse to what
-// GARB.md says it costs, and to keeping what it finished when the arena
-// fills; `--keyframes-scale` holds @keyframes to a sort's cost, and
+// past a double's, and `--cost BYTES` and `--full` hold a parse and its
+// cascade to what GARB.md says they cost, and a parse to keeping what it
+// finished when the arena fills; `--cascades N` cascades one sheet N
+// times, each whole and leaving the sheet as it was; `--keyframes-scale`
+// holds @keyframes to a sort's cost, and
 // `--faces-cap` the @font-face rules to GARB_FONT_FACES_MAX.
 
 // open_memstream, for the sweep's answer.
 #define _POSIX_C_SOURCE 200809L
 
+#include <malloc.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
@@ -37,7 +40,10 @@
 
 // ── Allocation, and failing it on purpose ───────────────────────────────
 
-static size_t allocations, fail_at, live;
+// How many allocations were asked for, which one fails, and how many are
+// held now and in how many bytes — what a cascade holds while it lives is
+// those bytes then less those before it (`--cost`, `--cascades`).
+static size_t allocations, fail_at, live, live_bytes;
 // Fail only allocation fail_at, the rest succeeding: the failure that a
 // later success would otherwise paper over.
 static bool fail_single;
@@ -60,8 +66,10 @@ void *os64_malloc(size_t size)
     if (fail_now())
         return NULL;
     void *at = malloc(size != 0 ? size : 1);
-    if (at != NULL)
+    if (at != NULL) {
         live++;
+        live_bytes += malloc_usable_size(at);
+    }
     return at;
 }
 
@@ -78,16 +86,21 @@ void *os64_realloc(void *ptr, size_t size)
     allocations++;
     if (fail_now())
         return NULL;
+    size_t was = ptr != NULL ? malloc_usable_size(ptr) : 0;
     void *at = realloc(ptr, size != 0 ? size : 1);
     if (at != NULL && ptr == NULL)
         live++;
+    if (at != NULL)
+        live_bytes += malloc_usable_size(at) - was;
     return at;
 }
 
 void os64_free(void *ptr)
 {
-    if (ptr != NULL)
+    if (ptr != NULL) {
         live--;
+        live_bytes -= malloc_usable_size(ptr);
+    }
     free(ptr);
 }
 
@@ -1268,15 +1281,19 @@ static int numbers(void)
     return ok && css_failed == 0 ? 0 : 1;
 }
 
-// What a parse COSTS, GARB.md § The cost: a sheet shaped like the web's
-// biggest (Bootstrap's long selector lists, many short declarations),
-// parsed, then every rule's block read as its items — what the cascade
-// does. `--cost BYTES`: it must come back whole, at under GARB_COST_MAX
-// arena bytes a byte of text, the ratio GARB.md gives. `--full`: a sheet at
-// the input's own cap fills the arena, and must come back incomplete with
-// the rules it finished kept — never with nothing because the list that
-// held them could not be kept.
-#define GARB_COST_MAX 22
+// What a parse and a cascade COST, GARB.md § The cost: a sheet shaped like
+// the web's biggest (Bootstrap's long selector lists, many short
+// declarations), parsed, then cascaded over a page its rules reach.
+// `--cost BYTES`: the parse must come back whole, at under GARB_COST_MAX
+// arena bytes a byte of text, the ratio GARB.md gives, and so must the
+// cascade, holding under GARB_CASCADE_COST_MAX bytes a byte of the sheet
+// while it lives — its reading of the sheet and its own rules and winners
+// — and leaving the sheet's arena as it found it. `--full`: a sheet at the
+// input's own cap fills the arena, and must come back incomplete with the
+// rules it finished kept — never with nothing because the list that held
+// them could not be kept.
+#define GARB_COST_MAX 17
+#define GARB_CASCADE_COST_MAX 30
 static const char kShaped[] =
     ".btn-outline-%d:not(:disabled):not(.disabled).active,"
     ".btn-outline-%d:not(:disabled):not(.disabled):active,"
@@ -1284,36 +1301,143 @@ static const char kShaped[] =
     "border-color:#007bff;box-shadow:0 0 0 .2rem rgba(0,123,255,.5)}\n"
     "@media (min-width:%dpx){.col-md-%d{flex:0 0 8.333333%%;max-width:8.333333%%}}\n";
 
-static int cost(size_t bytes, bool full)
+// The shaped sheet, as near `bytes` long as its rules come, malloc'd; its
+// length in *len, and how many times kShaped was written in *copies.
+static char *shaped_sheet(size_t bytes, size_t *len, int *copies)
 {
     char *text = malloc(bytes + 512);
-    size_t len = 0;
-    for (int i = 0; len + 512 < bytes; i++)
-        len += (size_t)snprintf(text + len, 512, kShaped, i, i, i, 540 + i % 900, i % 12 + 1);
+    *len = 0;
+    int i = 0;
+    for (; *len + 512 < bytes; i++)
+        *len += (size_t)snprintf(text + *len, 512, kShaped, i, i, i, 540 + i % 900, i % 12 + 1);
+    *copies = i;
+    return text;
+}
+
+// A document from `html`, finished.
+static os64_html_document_t *page_of(const char *html, size_t len)
+{
+    os64_html_options_t opt = os64_html_options_default();
+    os64_html_parser_t *hp = os64_html_parser_new(&opt);
+    os64_html_parser_feed(hp, html, len);
+    return os64_html_parser_finish(hp);
+}
+
+static size_t arena_used(const garb_parsed_t *r)
+{
+    return os64_arena_stats(r->arena).used_bytes;
+}
+
+static int cost(size_t bytes, bool full)
+{
+    size_t len;
+    int copies;
+    char *text = shaped_sheet(bytes, &len, &copies);
     garb_parsed_t r;
     garb_status_t st = garb_parse_sheet_text(text, len, &r);
-    int32_t rules = 0, decls = 0;
-    bool whole = st == GARB_OK && !r.incomplete;
-    for (int32_t i = 0; i < r.nitems; i++) {
-        const garb_rule_t *rule = r.items[i].rule;
-        if (r.items[i].kind != GARB_ITEM_RULE || !rule->has_block)
-            continue;
-        rules++;
-        garb_item_t *items;
-        int32_t n;
-        whole &= garb_items_of(&r, rule->block, rule->nblock, &items, &n);
-        for (int32_t k = 0; k < n; k++)
-            decls += items[k].kind == GARB_ITEM_DECL;
-    }
-    double ratio = (double)os64_arena_stats(r.arena).used_bytes / (double)len;
+    int32_t rules = 0;
+    for (int32_t i = 0; i < r.nitems; i++)
+        rules += r.items[i].kind == GARB_ITEM_RULE && r.items[i].rule->has_block;
+    size_t parsed = arena_used(&r);
+    double ratio = (double)parsed / (double)len;
     int ok = full ? st == GARB_OK && r.incomplete && rules > 1000
-                  : whole && !r.incomplete && ratio < GARB_COST_MAX;
-    printf("libgarb %s: a %zu KiB sheet, %d rules, %d declarations read: %.1f arena bytes a "
-           "byte%s%s\n", full ? "full" : "cost", len >> 10, rules, decls, ratio,
-           r.incomplete ? ", incomplete" : "", ok ? "" : " - FAILED");
+                  : st == GARB_OK && !r.incomplete && ratio < GARB_COST_MAX;
+    printf("libgarb %s: a %zu KiB sheet, %d rules: %.1f arena bytes a byte%s%s\n",
+           full ? "full" : "cost", len >> 10, rules, ratio, r.incomplete ? ", incomplete" : "",
+           ok ? "" : " - FAILED");
+    if (!full) {
+        static const char kPage[] = "<!doctype html><a class=\"btn-outline-5 active\">x</a>"
+                                    "<div class=col-md-3>y</div>";
+        os64_html_document_t *doc = page_of(kPage, sizeof(kPage) - 1);
+        garb_sheet_in_t in = {.sheet = &r};
+        size_t before = live_bytes;
+        garb_cascade_t *c = garb_cascade(&in, 1, doc, (garb_env_t){.width = 1200, .height = 900});
+        double held = (double)(live_bytes - before) / (double)len;
+        bool whole = c != NULL && !garb_cascade_incomplete(c) && !r.incomplete &&
+                     arena_used(&r) == parsed && held < GARB_CASCADE_COST_MAX;
+        printf("libgarb cost: its cascade holds %.1f bytes a byte, %s%s\n", held,
+               c != NULL && !garb_cascade_incomplete(c) ? "whole" : "incomplete",
+               whole ? ", the sheet as it was" : " - FAILED");
+        ok &= whole;
+        garb_cascade_free(c);
+        os64_html_document_free(doc);
+    }
     garb_free(&r);
     free(text);
     return ok ? 0 : 1;
+}
+
+// A PAGE CASCADED AGAIN AND AGAIN (GARB.md § The cost): a script that
+// measures, a window resized, cascade the page's sheets once a layout.
+// Every cascade reads the sheet into arenas of its own, freed with it, so
+// across `--cascades N` of a 1 MiB sheet — 16 would read some 340 MiB, three
+// and a half times GARB_ARENA_MAX, were the reads still the sheet's — the
+// sheet is never marked incomplete and its arena never grows, every cascade
+// is whole and answers exactly what the first did, every element its rules
+// reach styled, and the heap holds after each what it held before.
+static int cascades(int times)
+{
+    size_t len;
+    int copies;
+    char *text = shaped_sheet((size_t)1 << 20, &len, &copies);
+    garb_parsed_t r;
+    garb_status_t st = garb_parse_sheet_text(text, len, &r);
+    // Elements across the whole sheet, its first rules and its last: the
+    // buttons' rules hold everywhere, and every column's at some width.
+    char page[16384];
+    size_t at = (size_t)snprintf(page, sizeof(page), "<!doctype html><body>");
+    int elements = 0;
+    for (int i = 0; i < copies; i += copies / 64 + 1, elements++)
+        at += (size_t)snprintf(page + at, sizeof(page) - at, "<a class=\"btn-outline-%d active\">%d</a>", i, i);
+    for (int k = 1; k <= 12; k++, elements++)
+        at += (size_t)snprintf(page + at, sizeof(page) - at, "<div class=col-md-%d>%d</div>", k, k);
+    os64_html_document_t *doc = page_of(page, at);
+    garb_sheet_in_t in = {.sheet = &r};
+    garb_env_t env = {.width = 1200, .height = 900};
+    size_t parsed = arena_used(&r), base_live = live, base_bytes = live_bytes;
+    char *first = NULL;
+    int failures = st != GARB_OK || r.incomplete;
+    for (int t = 1; t <= times && st == GARB_OK; t++) {
+        garb_cascade_t *c = garb_cascade(&in, 1, doc, env);
+        if (c == NULL) {
+            fprintf(stderr, "FAIL cascades: cascade %d came back with nothing\n", t);
+            failures++;
+            break;
+        }
+        size_t need = garb_cascade_dump(c, doc, NULL, 0) + 1;
+        char *dump = malloc(need);
+        garb_cascade_dump(c, doc, dump, need);
+        int styled = 0;
+        for (const os64_html_node_t *x = doc->body != NULL ? doc->body->first_child : NULL; x != NULL; x = x->next)
+            styled += x->kind == OS64_HTML_ELEMENT && garb_style_for(c, x).n > 0;
+        if (garb_cascade_incomplete(c) || styled != elements ||
+            (first != NULL && strcmp(dump, first) != 0)) {
+            fprintf(stderr, "FAIL cascades: cascade %d is %s, %d of %d elements styled%s\n", t,
+                    !garb_cascade_incomplete(c) ? "whole" : "incomplete", styled,
+                    elements, first != NULL && strcmp(dump, first) != 0 ? ", not the first's answer" : "");
+            failures++;
+        }
+        garb_cascade_free(c);
+        if (first == NULL)
+            first = dump;
+        else
+            free(dump);
+        if (r.incomplete || arena_used(&r) != parsed || live != base_live || live_bytes != base_bytes) {
+            fprintf(stderr, "FAIL cascades: after cascade %d the sheet is %s at %zu bytes (parsed at %zu), "
+                    "the heap %zu blocks and %zu bytes (from %zu and %zu)\n", t,
+                    r.incomplete ? "incomplete" : "whole", arena_used(&r), parsed, live, live_bytes,
+                    base_live, base_bytes);
+            failures++;
+        }
+    }
+    printf("libgarb cascades: a %zu KiB sheet cascaded %d times over %d elements: %s\n", len >> 10,
+           times, elements, failures == 0 ? "each whole and the first's answer, the sheet and the heap as they were"
+                                          : "FAILED");
+    free(first);
+    os64_html_document_free(doc);
+    garb_free(&r);
+    free(text);
+    return failures != 0;
 }
 
 static const os64_html_node_t *by_id(const os64_html_node_t *n, const char *id)
@@ -1467,7 +1591,8 @@ static int faces_sweep(void)
     // allocation is failed alone, and then it and every one after it —
     // the arena retries a chunk it could not get at a smaller size, so
     // only the second way fails the arena's own allocations. The sheet is
-    // parsed afresh each time: a failure marks the parse it lands in.
+    // parsed once: a failure marks the cascade it lands in, never the
+    // sheet the cascade reads (garb/cascade.h), which every step checks.
     static const char kFaces[] =
         "@font-face{font-family:\"One Face\";src:url(a.woff2) format(woff2),url(a.ttf),local(A)}"
         "@font-face{font-family:Two;src:url(b1),url(b2) format(truetype);unicode-range:U+0-7F,U+100-17F}"
@@ -1496,11 +1621,8 @@ static int faces_sweep(void)
     if (failures)
         fprintf(stderr, "FAIL faces sweep: the cascade with no failure is not every face\n");
     garb_cascade_free(whole);
-    garb_free(&r);
     for (size_t step = 0; step < 2 * count; step++) {
         size_t at = step % count + 1;
-        fail_at = 0;
-        (void)garb_parse_sheet_text(sheet, len, &r);
         fail_single = step < count;
         allocations = 0;
         fail_at = at;
@@ -1522,9 +1644,15 @@ static int faces_sweep(void)
                     fail_single ? "" : " on", n, lost, 3 * COPIES);
             failures++;
         }
+        if (r.incomplete) {
+            fprintf(stderr, "FAIL faces sweep: failure at %zu%s marked the sheet incomplete\n", at,
+                    fail_single ? "" : " on");
+            failures++;
+            r.incomplete = false;
+        }
         garb_cascade_free(c);
-        garb_free(&r);
     }
+    garb_free(&r);
     fail_single = false;
     os64_html_document_free(doc);
     printf("libgarb faces sweep: each of %zu allocations failed alone and on, %s\n", count,
@@ -1822,6 +1950,8 @@ int main(int argc, char **argv)
         return cost((size_t)strtoul(argv[2], NULL, 10), false);
     if (argc == 2 && strcmp(argv[1], "--full") == 0)
         return cost(GARB_SHEET_MAX, true);
+    if (argc == 3 && strcmp(argv[1], "--cascades") == 0)
+        return cascades(atoi(argv[2]));
     if (argc == 2 && strcmp(argv[1], "--deep") == 0)
         return deep();
     if (argc == 2 && strcmp(argv[1], "--numbers") == 0)

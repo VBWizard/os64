@@ -134,15 +134,42 @@ constant.
 **What a parse costs, measured** (`tools/test_garb_host.sh`, `--cost` and
 `--full`). Ordinary CSS — a Bootstrap-shaped sheet, long selector lists and
 short declarations — costs about 16 bytes of arena for each byte of text to
-parse, and about 19 once every rule's block has been read as its items,
-which is what the cascade does. So the 96 MiB arena (`GARB_ARENA_MAX`)
-holds about 6 MiB of such a sheet parsed, about 5 MiB with every block
-read; the harness holds a 4 MiB sheet to coming back whole at under 22.
+parse, so the 96 MiB arena (`GARB_ARENA_MAX`) holds about 6 MiB of such a
+sheet; the harness holds a 4 MiB sheet to coming back whole at under 17.
 Denser CSS costs more — a sheet of nothing but `a{b:c}` about 59 bytes a
-byte, 77 with its blocks read — so it fills the arena at under 1.5 MiB. A
-sheet the arena cannot hold comes back INCOMPLETE WITH WHAT IT FINISHED:
-the arena always keeps room to publish the lists still open, so filling it
-refuses the next token, never the sheet's rules so far.
+byte — so it fills the arena at about 1.6 MiB. A sheet the arena cannot
+hold comes back INCOMPLETE WITH WHAT IT FINISHED: the arena always keeps
+room to publish the lists still open, so filling it refuses the next
+token, never the sheet's rules so far.
+
+**What a cascade costs, measured** (the same harness, `--cost` and
+`--cascades`). A sheet keeps each rule's block as component values, and a
+cascade READS them — the block as declarations, the selectors, each
+declaration's values — into arenas OF ITS OWN: one for each sheet it
+applies, held to `GARB_ARENA_MAX` as that sheet's parse is, and one for
+everything else it keeps (its rules, the rule hash, every element's
+winners), all freed with it. A cascade never writes to a sheet, because a
+page is cascaded again on every resize and every layout a script measures
+by: what a cascade kept in a sheet would grow it each time until its arena
+filled, and every cascade after that would style a fraction of the page.
+So a sheet is the same after any number of cascades as before the first,
+and every cascade starts from the whole budget. The reading of ordinary
+CSS costs about a third more than its parse, 21.5 bytes a byte, so every
+cascade reads such a sheet whole up to about 4.4 MiB; the densest about
+twice its parse, whole to about 750 KiB. The cascade's own arena takes
+about 6 bytes a byte of ordinary CSS, and more as the elements grow: a
+news page's 1 MB inline sheet, parsed into 12 MiB, is read into 14.3 MiB
+by each cascade, with 15.6 MiB of its own for 8,776 elements. A page
+therefore costs its sheets' parses once and about that again for each
+cascade LIVE at once — the one its tree on screen was laid out with, and
+another while a new layout, a measured one or a staged rebuild holds its
+own — and nothing more however often it is cascaded. The harness holds the
+4 MiB sheet's cascade to whole at under 30 bytes a byte held, the sheet's
+arena as it was, and cascades a 1 MiB sheet 16 times, each whole and the
+first's answer, the sheet and the heap as they were after each. Nothing
+read is kept from one cascade to the next, so each reads its sheets again:
+0.1 s a cascade for that news page on the host, 0.04 s of it reading
+(booked below: what a cascade reads, kept from one cascade to the next).
 
 The costs are where they are because of three choices: a list is built on
 a scratch stack and kept at its exact size (doubling in the arena left
@@ -350,6 +377,7 @@ center`, a 400px line cut at its 120px `overflow: hidden` box, and a
 | `:hover`, `:focus`, `:active`; `:target`, `:indeterminate`; `:checked` after a click | a restyle on every pointer move is a relayout, and the face does not relayout on hover; a tick a person makes lives in libpage's model, which `:checked` does not read, so `input:checked + label` does not follow a click | pile 1 proven, and a page whose menus only exist on hover |
 | `@layer` (Cascade 5) | Level 4 first; a layer is an order within an origin | the first page whose sheets use it |
 | `:has()` by brute force | each candidate scans its subtree or its following siblings, a whole page for `:root:has(…)` | a page whose cascade is slow, measured |
+| What a cascade reads, kept from one cascade to the next | every cascade reads its sheets' blocks, selectors and values again (§ The cost): a news page's 1 MB sheet is cascaded 11 times while it loads, 0.04 s of each 0.1 s cascade on the host. Read once, at parse time on the worker, they would be paid once a sheet, and the sheet still never written by a cascade; what a reading depends on — the document's quirks, the Modern Web switch — goes with them | a page whose loading is measured slow for it on the P5 |
 | `@namespace` | a prefix other than `*` or none makes a selector invalid, so its rule drops | a page whose sheets declare one |
 | wend honouring `display: none` | libgarb proven in one face before a second leans on it | pile 1 proven |
 | User stylesheets | a person's own sheet is the user origin; nobody has asked | a person who asks |

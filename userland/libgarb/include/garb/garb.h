@@ -107,7 +107,9 @@ typedef struct {
 // of it, as §5 produces them: what a block holds is its rule's business —
 // a style rule's declarations and the rules nested among them are read
 // with garb_items_of, a `@media` block's rules with garb_rules_of — so the
-// reading is done once, by whoever knows the rule.
+// reading is done by whoever knows the rule, into whichever arena that
+// reader keeps it in: every cascade reads a sheet's blocks again, into
+// arenas of its own (garb/cascade.h).
 struct garb_rule {
     bool at;
     const char *name;       // AT: the name without its '@'
@@ -136,11 +138,15 @@ typedef enum {
 // A sheet is refused whole past this: the web's largest sheets are a
 // fraction of it, and a sheet is held whole while it is parsed.
 #define GARB_SHEET_MAX ((size_t)8 << 20)
-// What one parse may take, past the input itself: about 5 MiB of ordinary
-// CSS with every block read, far less of the densest (GARB.md § The cost,
-// measured). A result past this is cut short and marked incomplete rather
-// than allowed to eat the machine. A face reserving memory for a parse
-// counts this, and what the parse holds outside it (GARB.md § The cost).
+// What one parse may take, past the input itself: about 6 MiB of ordinary
+// CSS, far less of the densest (GARB.md § The cost, measured). A result
+// past this is cut short and marked incomplete rather than allowed to eat
+// the machine. A face reserving memory for a parse counts this, and what
+// the parse holds outside it (GARB.md § The cost). A cascade's reading of
+// one sheet is held to the same, from a budget of its own every time
+// (garb/cascade.h): what it reads of ordinary CSS costs about a third more
+// than the parse did, so every cascade reads such a sheet whole up to
+// about 4.4 MiB.
 #define GARB_ARENA_MAX ((size_t)96 << 20)
 // Blocks and functions nest this deep and no deeper: past it their
 // contents are read and thrown away, so the end is still found, and the
@@ -191,9 +197,11 @@ garb_status_t garb_parse_one_rule(const char *text, size_t len, garb_parsed_t *o
 garb_status_t garb_parse_one_declaration(const char *text, size_t len, garb_parsed_t *out);
 garb_status_t garb_parse_one_value(const char *text, size_t len, garb_parsed_t *out);
 
-// A rule's block, read as rules or as a block's contents, into the arena of
-// the parse it came from, so the answer lives and dies with it — and so a
-// parse and its reads belong to one thread at a time: the arena has no
+// A rule's block, read as rules or as a block's contents, into `owner`'s
+// arena, so the answer lives and dies with it: the parse the block came
+// from, or a result of the reader's own that it frees before that parse
+// (the strings and nested values it points to are the block's parse's).
+// An owner and its reads belong to one thread at a time: the arena has no
 // lock. False when the answer came out short (the owner is marked
 // incomplete too): what is in `items` is then a prefix, and a reader that
 // shows it says so.

@@ -8,6 +8,14 @@
 // last of each name kept and its keyframes read once; and every
 // @font-face, read whole.
 //
+// WHAT A CASCADE READS IS ITS OWN. A sheet keeps each rule's block as the
+// component values its parse made, and a cascade reads them — the blocks,
+// the selectors, the values — into an arena of its own for each sheet
+// (`reads`), held to GARB_ARENA_MAX as the sheet's parse is, and freed
+// with the cascade. Nothing is written into a sheet, so a sheet is the
+// same after any number of cascades as before the first, and every
+// cascade starts from the whole budget (GARB.md § The cost).
+//
 // Then, per element in document order: the rules that match, weighed by
 // §6's order — importance, then specificity (a rule matching through
 // several selectors takes the most specific), then order of appearance —
@@ -136,6 +144,12 @@ struct garb_cascade {
     const os64_html_document_t *doc;
     os64_html_pin_t pin;
     garb_parsed_t self;         // the cascade's own arena, in a parse's shape
+    // What it read of each input sheet, by the sheet's index: an arena per
+    // sheet it applied, in a parse's shape, so a read that ran short says
+    // so in `incomplete` as a parse's does (none where there was no memory
+    // for one: that sheet's reads went into `self`). Freed with the cascade.
+    garb_parsed_t *reads;
+    int32_t nreads;
     garb_env_t env;
     os64_html_quirks_t quirks;
     bool incomplete;
@@ -1073,6 +1087,9 @@ static void add_keyframes(garb_cascade_t *c, garb_parsed_t *owner, const garb_ru
     c->keyframes[c->nkeyframes++] = (Keyframes){name, len, blocks, nblocks, sheet, pending, NULL, 0};
 }
 
+// A sheet's rules, `items`, joined to the cascade. `owner` keeps what is
+// read of them, through every helper below it: the cascade's reading of
+// that sheet (`reads`), never the sheet's own parse.
 static void add_rules(garb_cascade_t *c, garb_parsed_t *owner, const garb_item_t *items,
                       int32_t n, uint32_t *order, int depth, int32_t sheet)
 {
@@ -1280,13 +1297,14 @@ static bool sheet_applies(garb_cascade_t *c, const garb_sheet_in_t *sheets, int3
         return false;
     if (im->has_supports) {
         // supports()'s argument is a condition or a declaration: read as
-        // the inside of a parenthesis, which is where both may stand.
+        // the inside of a parenthesis, which is where both may stand, into
+        // the cascade's own arena: a cascade never writes to a sheet.
         garb_value_t paren = {0};
         paren.kind = GARB_BLOCK;
         paren.open = '(';
         paren.children = (garb_value_t *)im->supports;
         paren.nchildren = im->nsupports;
-        if (!supports(c, sheets[in->parent].sheet, &paren, 1))
+        if (!supports(c, &c->self, &paren, 1))
             return false;
     }
     return sheet_applies(c, sheets, n, in->parent, depth + 1);
@@ -2133,12 +2151,28 @@ garb_cascade_t *garb_cascade(const garb_sheet_in_t *sheets, int32_t n,
     c->env = env;
     c->quirks = doc->quirks;
     c->universal = -1;
+    if (n > 0) {
+        c->reads = os64_calloc((size_t)n, sizeof(garb_parsed_t));
+        if (c->reads == NULL) {
+            garb_cascade_free(c);
+            return NULL;
+        }
+        c->nreads = n;
+    }
     uint32_t order = 0;
     for (int32_t s = 0; s < n; s++) {
-        garb_parsed_t *sheet = sheets[s].sheet;
+        const garb_parsed_t *sheet = sheets[s].sheet;
         if (!sheet_applies(c, sheets, n, s, 0))
             continue;
-        add_rules(c, sheet, sheet->items, sheet->nitems, &order, 0, s);
+        // The sheet is only read: its rules' blocks, selectors and values
+        // go into this cascade's reading of it, whole budget each time —
+        // or, with no memory for that arena, into the cascade's own, which
+        // is the cascade's all the same, and says so when it runs short.
+        garb_parsed_t *into = &c->reads[s];
+        into->arena = os64_arena_create(0, GARB_ARENA_MAX);
+        if (into->arena == NULL)
+            into = &c->self;
+        add_rules(c, into, sheet->items, sheet->nitems, &order, 0, s);
     }
     keyframes_settle(c);
     // Each @keyframes read for no element: what an element shares.
@@ -2182,13 +2216,15 @@ garb_cascade_t *garb_cascade(const garb_sheet_in_t *sheets, int32_t n,
         x = x != NULL ? x->next : NULL;
     }
     // What the cascade read ran short wherever it was read: a sheet's own
-    // parse, and the rule blocks, selectors and values read from it since,
-    // each mark the parse they belong to. Any of them short in a sheet the
-    // cascade used, or in a style attribute, and the cascade is short.
+    // parse marks the sheet, the rule blocks, selectors and values read from
+    // it mark this cascade's reading of it, and what is read per element
+    // marks the cascade's own. Any of them short for a sheet the cascade
+    // used, or in a style attribute, and the cascade is short.
     bool short_read = c->self.incomplete;
     for (int32_t s = 0; s < n; s++)
-        short_read |= sheets[s].sheet != NULL && sheets[s].sheet->incomplete &&
-                      garb_media_text_matches(sheets[s].media, env);
+        short_read |= (sheets[s].sheet != NULL && sheets[s].sheet->incomplete &&
+                       garb_media_text_matches(sheets[s].media, env)) ||
+                      c->reads[s].incomplete;
     for (int32_t i = 0; i < c->nattrs; i++)
         short_read |= c->attrs[i].incomplete;
     if (short_read)
@@ -2293,6 +2329,9 @@ void garb_cascade_free(garb_cascade_t *c)
         return;
     for (int32_t i = 0; i < c->nattrs; i++)
         garb_free(&c->attrs[i]);
+    for (int32_t i = 0; i < c->nreads; i++)
+        garb_free(&c->reads[i]);
+    os64_free(c->reads);
     os64_free(c->slots);
     os64_arena_destroy(c->self.arena);
     if (c->pin != 0)

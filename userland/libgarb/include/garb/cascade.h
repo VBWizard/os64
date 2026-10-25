@@ -68,14 +68,14 @@ typedef struct {
 int32_t garb_sheet_imports(const garb_parsed_t *sheet, garb_import_t *out, int32_t cap);
 
 // One sheet, in cascade order: a parse the caller owns (it must outlive
-// the cascade), and the `media` its element gave, or NULL. An imported
-// sheet comes BEFORE the sheet importing it — its rules are the importer's
-// first — and says so: `via` is its @import, `parent` the importer's index
-// in the same array. It applies when its @import's conditions hold and the
-// importer applies. `via` is NULL for a sheet the page names itself, and
-// is read only during garb_cascade.
+// the cascade, which never writes to it), and the `media` its element
+// gave, or NULL. An imported sheet comes BEFORE the sheet importing it —
+// its rules are the importer's first — and says so: `via` is its @import,
+// `parent` the importer's index in the same array. It applies when its
+// @import's conditions hold and the importer applies. `via` is NULL for a
+// sheet the page names itself, and is read only during garb_cascade.
 typedef struct {
-    garb_parsed_t *sheet;
+    const garb_parsed_t *sheet;
     const char *media;
     const garb_import_t *via;
     int32_t parent;
@@ -108,7 +108,10 @@ typedef struct {
 
 // Cascades `sheets` over `doc`, pinning document strings until free. NULL
 // on no memory or pin exhaustion; a partial cascade says so in
-// garb_cascade_incomplete. The input sheets outlive the cascade.
+// garb_cascade_incomplete. The input sheets outlive the cascade, which
+// only reads them: what it makes of their rules' blocks, selectors and
+// values is its own, in arenas freed with it (GARB.md § The cost), so a
+// sheet is the same after any number of cascades as before the first.
 garb_cascade_t *garb_cascade(const garb_sheet_in_t *sheets, int32_t n,
                              const os64_html_document_t *doc, garb_env_t env);
 bool garb_cascade_incomplete(const garb_cascade_t *c);

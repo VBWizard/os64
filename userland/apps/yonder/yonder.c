@@ -840,11 +840,6 @@ static void page_clear(Page *p)
     }
 }
 
-// An entry of the cascade's input for sheet `e` and, before it, for the
-// ready sheets its @imports brought, each naming it as `parent`
-// (garb/cascade.h). Its index, or -1 when it is not ready.
-// The cascade writes into each sheet's arena as it reads a rule's block
-// (garb_rules_of), so the page is not const here.
 // The table's entry for the sheet `node` names, -1 when it has none.
 static int32_t sheet_of(const Page *p, const os64_html_node_t *node)
 {
@@ -854,9 +849,13 @@ static int32_t sheet_of(const Page *p, const os64_html_node_t *node)
     return -1;
 }
 
-static int32_t sheet_emit(Page *p, int32_t e, garb_sheet_in_t *in, int32_t *entry, int32_t *n)
+// An entry of the cascade's input for sheet `e` and, before it, for the
+// ready sheets its @imports brought, each naming it as `parent`
+// (garb/cascade.h). Its index, or -1 when it is not ready. The cascade
+// only reads the sheets, so the page is const here.
+static int32_t sheet_emit(const Page *p, int32_t e, garb_sheet_in_t *in, int32_t *entry, int32_t *n)
 {
-    Sheet *sh = &p->sheets[e];
+    const Sheet *sh = &p->sheets[e];
     if (!sh->ready)
         return -1;
     int32_t kids[SHEET_IMPORTS_MAX], nkids = 0;
