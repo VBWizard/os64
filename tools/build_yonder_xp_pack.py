@@ -15,13 +15,18 @@ ICONS = ROOT / 'assets/icons/yonder-xp'
 
 INSTRUCTIONS = '''Yonder XP appearance pack
 
-Copy yonder-xp.tar.gz to /home on Os64, then run:
+Start in /var/themes on Os64, where the @themepacks os64get lot puts
+archives and instructions. This example uses yonder-xp-v2.tar.gz; substitute
+the downloaded filename for another release or an unversioned build.
 
     cd /home
-    gunzip -c /home/yonder-xp.tar.gz | tar -x -f -
+    gunzip -c /var/themes/yonder-xp-v2.tar.gz | tar -x -f -
+    cd /var/themes
 
-This installs themes/Yonder-XP.theme, frames/Yonder-XP.frame and
-icons/yonder-xp/. Extracting the pack does not apply its settings.
+Extraction runs in /home so the relative paths install as
+/home/themes/Yonder-XP.theme, /home/frames/Yonder-XP.frame and
+/home/icons/yonder-xp/. The archive stays in /var/themes. Extracting the
+pack does not apply its settings.
 Re-extraction replaces those named files, so save personal edits under
 a different name first. If your configuration target is not /home, put
 the themes and frames directories in that target instead.

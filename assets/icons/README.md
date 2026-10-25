@@ -135,8 +135,10 @@ Or build the combined Appearance, frame and icon pack:
 python3 tools/build_yonder_xp_pack.py
 ```
 
-The combined archive is `output/yonder-xp/yonder-xp.tar.gz`. Copy it to
-`/home` on Os64 and follow `output/yonder-xp/INSTALL.txt`. Extraction creates
-the named files but does not select them. After extraction, the icon setting
+The combined archive is `output/yonder-xp/yonder-xp.tar.gz`. Keep a versioned
+host copy and serve it with the `themepacks` lot, which routes archives to
+`/var/themes` on Os64. Follow `output/yonder-xp/INSTALL.txt` from that folder;
+extraction runs in `/home` to create the personal collections without selecting
+them. After extraction, the icon setting
 is `set = /home/icons/yonder-xp`; open new application instances to read it.
 The contact sheet is `output/yonder-xp/icons-contact-sheet.png`.

@@ -73,15 +73,16 @@ does not require a kernel build, a running P5, or access to image generation.
 
 Commit the source and prepared-asset changes before recording a release.
 Use a new version name for an updated pack; keep older releases available for
-restoring a previous look. For the first version, from the checkout root:
+restoring a previous look. For a new release (v2 in this example), from the
+checkout root:
 
 ```sh
 mkdir -p ~/os64_theme_packs
-test ! -e ~/os64_theme_packs/yonder-xp-v1.tar.gz && {
-    cp output/yonder-xp/yonder-xp.tar.gz ~/os64_theme_packs/yonder-xp-v1.tar.gz &&
-    cp output/yonder-xp/INSTALL.txt ~/os64_theme_packs/yonder-xp-v1-INSTALL.txt &&
-    git rev-parse HEAD > ~/os64_theme_packs/yonder-xp-v1.commit &&
-    (cd ~/os64_theme_packs && sha256sum yonder-xp-v1.tar.gz > yonder-xp-v1.tar.gz.sha256)
+test ! -e ~/os64_theme_packs/yonder-xp-v2.tar.gz && {
+    cp output/yonder-xp/yonder-xp.tar.gz ~/os64_theme_packs/yonder-xp-v2.tar.gz &&
+    cp output/yonder-xp/INSTALL.txt ~/os64_theme_packs/yonder-xp-v2-INSTALL.txt &&
+    git rev-parse HEAD > ~/os64_theme_packs/yonder-xp-v2.commit &&
+    (cd ~/os64_theme_packs && sha256sum yonder-xp-v2.tar.gz > yonder-xp-v2.tar.gz.sha256)
 }
 ```
 
@@ -89,7 +90,7 @@ Choose an unused version before running the release commands. The checksum can
 be checked later from the archive directory with:
 
 ```sh
-sha256sum -c yonder-xp-v1.tar.gz.sha256
+sha256sum -c yonder-xp-v2.tar.gz.sha256
 ```
 
 In Windows File Explorer, the folder is reachable through the WSL share:
@@ -101,38 +102,44 @@ Add the host archive directory to the existing `os64serve.py` invocation.
 For a dedicated server launched in WSL from the checkout root:
 
 ```sh
-python3 tools/os64serve.py "$HOME/os64_theme_packs"
+python3 tools/os64serve.py "$HOME/os64_theme_packs=themepacks"
 ```
 
 Use the existing Windows/WSL network arrangement described in
-[OS64GET.md](design/completed/OS64GET.md). When running the server from Windows, supply the
-archive directory's WSL share path instead. Only one server can bind a given
-address and port; add the directory to an existing server rather than launching
-a second instance on its port.
+[OS64GET.md](design/completed/OS64GET.md). When running the server from Windows,
+supply the archive directory's WSL share path followed by `=themepacks` instead.
+Only one server can bind a given address and port; add the directory to an
+existing server rather than launching a second instance on its port.
 
 On the P5, replace `HOST_PC` with the same server address used for other updates:
 
 ```sh
-os64get HOST_PC yonder-xp-v1.tar.gz /home/yonder-xp.tar.gz
+mkdir -p /var/themes
+cd /var/themes
+os64get HOST_PC yonder-xp-v2.tar.gz
 ```
 
-The explicit destination overrides download routing. If this directory is also
-offered during bulk updates, add `@theme-packs/* = /home` to the effective
-`os64get.conf` and serve the directory with the label `=theme-packs` so its
-archives and companion files have a destination. The examples above fetch one
-archive explicitly and do not need that rule.
+The shipped `etc/os64get.conf` routes `@themepacks = /var/themes`. If a
+customized `/home/os64get.conf` is in use, add that rule there too; the first
+configuration file found wins. The server's `themepacks` label lets both single
+file downloads and bulk updates route archives and installation instructions
+to `/var/themes`. The existing `*.png` rule still routes the PNG contact sheet
+to the image directory because suffix rules take precedence over ordinary lots.
+An explicit destination of `/var/themes/yonder-xp-v2.tar.gz` can also be supplied
+to `os64get` to override routing.
 
 ## Transfer through SSH
 
 Os64's SSH exec channel carries binary input. It does not provide SFTP or scp.
 From WSL Bash, set `OS64_HOST` to the P5 address and `SSH_KEY` to the enrolled
-local identity, then copy the archive with:
+local identity. Create `/var/themes` on the P5 first (`mkdir -p /var/themes`),
+then copy the archive with:
 
 ```sh
 ssh -T -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
     -i "$SSH_KEY" "os64@$OS64_HOST" \
-    'cat > /home/yonder-xp.tar.gz' \
-    < "$HOME/os64_theme_packs/yonder-xp-v1.tar.gz"
+    'cat > /var/themes/yonder-xp-v2.tar.gz' \
+    < "$HOME/os64_theme_packs/yonder-xp-v2.tar.gz"
 ```
 
 The command transfers the file without extracting or applying it. It replaces
@@ -142,18 +149,24 @@ To verify the stored bytes, read them back and compare with the local archive:
 ```sh
 ssh -T -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
     -i "$SSH_KEY" "os64@$OS64_HOST" \
-    'cat /home/yonder-xp.tar.gz' > /tmp/yonder-xp-readback.tar.gz &&
-    cmp "$HOME/os64_theme_packs/yonder-xp-v1.tar.gz" /tmp/yonder-xp-readback.tar.gz
+    'cat /var/themes/yonder-xp-v2.tar.gz' > /tmp/yonder-xp-readback.tar.gz &&
+    cmp "$HOME/os64_theme_packs/yonder-xp-v2.tar.gz" /tmp/yonder-xp-readback.tar.gz
 ```
 
 ## Install and select the look
 
-On the P5:
+Start in `/var/themes` on the P5, where os64get placed the archive. Change to
+`/home` for extraction so the archive's relative paths become personal theme,
+frame and icon directories, then return to `/var/themes`:
 
 ```sh
 cd /home
-gunzip -c /home/yonder-xp.tar.gz | tar -x -f -
+gunzip -c /var/themes/yonder-xp-v2.tar.gz | tar -x -f -
+cd /var/themes
 ```
+
+Use the filename of the downloaded version if different. Os64's `tar` extracts
+into its current directory and has no `-C` option.
 
 Extraction installs `themes/Yonder-XP.theme`, `frames/Yonder-XP.frame`,
 `icons/yonder-xp/` and `yonder-xp-README.txt`. Re-extraction replaces those named
