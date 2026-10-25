@@ -331,17 +331,19 @@ and 5d (`requestAnimationFrame`).
 **Slice 6: SVG.** Inline `<svg>` in the tree, and SVG as a picture
 (`<img src="x.svg">`, the census's `MISSING image svg`): a renderer for
 paths, the basic shapes, fills and strokes, transforms, `use`/`symbol`,
-`viewBox`, text as the Web face draws it, and the SVG paint properties
-libgarb already parses. Oracle: WPT `svg/` (structure and painting; the
-reftests when the runner can compare pictures). Acceptance: Google's and
-GitHub's icons, suckless's logo. **Fable design** for the renderer's seam
-(what libflow hands it, what it hands back, and where it runs), Opus
-builds: [SVG.md](SVG.md) (2026-10-21), which makes an `<svg>` a replaced
-box to the layout, puts the renderer in a library of its own that fills
-and strokes through FreeType's rasterizer and stroker behind one new verb
-on the font backend table, and cuts it into 6a (the reftest runner, which
-slices 4 and 8 need too), 6b (the renderer's core) and 6c (gradients, text,
-the picture path).
+`viewBox`, gradients and the SVG properties added to libgarb. Oracle: WPT
+`svg/` and CSS reftests, plus browser-reference fixtures. Acceptance:
+Google's and GitHub's icons, suckless's logo, and the declared feature
+coverage. [SVG.md](SVG.md), revised by Quinn on 2026-10-25 from Fable's
+design, defines a separate `libsvg`, a FreeType geometry interface with
+stroke expansion before transformation, and XML parsing for external SVG.
+Opus builds, with Fable reviewing the integration contracts and Chris
+testing. The proposed cuts are 6a (reftests, geometry proof and XML/document
+port study), 6b (static inline core), 6c (external images, gradients and
+caches), 6d (text and broader static graphics), and 6e (interaction and
+motion). Static rendering comes first; retained geometry and explicit
+invalidation support later animation. Rendering a set of icons does not
+establish complete SVG compatibility.
 
 **Slice 7: the bytecode cache.** Per bundle, keyed by the cache's own entry
 identity (the response's validators), capped in bytes, compressed with

@@ -23,10 +23,11 @@ MODERN_WEB.md and its brief here is struck.
 | 7 the bytecode cache | Opus | Chris | 0a |
 
 | 5a–5d relayout, the observer, the frame | Opus | Fable (5b's rule, 5c's graft), Chris | [RELAYOUT.md](RELAYOUT.md) is the brief; 5a after 0a, 5b/5c in sequence, 5d after 5c |
-| 6a–6c SVG | Opus | Fable (6b's door and backend verb), Chris | [SVG.md](SVG.md) is the brief; 6a after 0a, 6b after 0a's mark in libgarb, 6c after 6b |
+| 6a–6e SVG | Opus | Fable (geometry and browser contracts), Chris | [SVG.md](SVG.md) is the brief; foundations, static inline, external images/gradients, broader static graphics, then interaction/motion; dependencies and proof gates are in that design |
 
-Slices 5 and 6 are Fable designs (2026-10-21) and their documents are
-their briefs: each names its cuts, the seams, the oracle and what is left
+Slice 5 follows Fable's 2026-10-21 design. Slice 6 follows Quinn's
+2026-10-25 revision of Fable's SVG design. Their documents are their
+briefs: each names its cuts, the interfaces, the oracle and what is left
 to the builder, so no second brief is written here. Slice 8 (generated
 content) shares libgarb with 4 and follows it; its brief is written when 4
 lands.
