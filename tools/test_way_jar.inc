@@ -606,6 +606,23 @@ static void cookie_file_hostile(void)
     expect("caps: a domain keeps WAY_COOKIES_PER_DOMAIN", r.read == 200 && way_jar_count(jar) == WAY_COOKIES_PER_DOMAIN,
            NULL);
     way_jar_free(jar);
+    // A domain full of cookies in use, and a file naming one more: the one
+    // read is the least used and is the one let go (under ASan: its
+    // domain's string is not read after it goes).
+    jar = way_jar_new();
+    for (int i = 0; i < WAY_COOKIES_PER_DOMAIN; i++) {
+        char line[32];
+        snprintf(line, sizeof(line), "u%d=1; Max-Age=5000", i);
+        hear(jar, "http://one.test/", false, line, 100);
+    }
+    (void)sent(jar, "http://one.test/", false, 100);
+    static const char kLate[] = "one.test\tFALSE\t/\tFALSE\t5000\tlate\t1\n";
+    way_jar_read(jar, kLate, sizeof(kLate) - 1, 100, &r);
+    expect("caps: a cookie read into a full domain of cookies in use is the one let go",
+           r.read == 1 && way_jar_count(jar) == WAY_COOKIES_PER_DOMAIN &&
+               strstr(sent(jar, "http://one.test/", false, 100), "late=") == NULL,
+           NULL);
+    way_jar_free(jar);
     m = 0;
     for (int i = 0; i < WAY_COOKIES_MAX + 10; i++)
         m += (size_t)snprintf(many + m, sizeof(many) - m, "d%d.test\tFALSE\t/\tFALSE\t5000\tc\t1\n", i);
@@ -726,6 +743,33 @@ static void cookie_switch(void)
     way_jar_overlay(merged, jar, way_jar_changes(jar), 16);
     expect("clear: and no change left to lay over a file", way_jar_count(merged) == 1, NULL);
     way_jar_free(merged);
+    way_jar_free(jar);
+
+    // A change made after the number a save took stays owed after it.
+    jar = way_jar_new();
+    hear(jar, "http://o.test/", false, "a=1; Max-Age=100", 20);
+    uint64_t through = way_jar_changes(jar);
+    hear(jar, "http://o.test/", false, "b=2; Max-Age=100", 21);
+    way_jar_saved(jar, through);
+    merged = way_jar_new();
+    way_jar_overlay(merged, jar, way_jar_changes(jar), 22);
+    expect("saved: a change after the save's number stays owed", way_jar_count(merged) == 1 &&
+           strcmp(sent(merged, "http://o.test/", false, 22), "b=2") == 0, NULL);
+    way_jar_free(merged);
+    way_jar_free(jar);
+
+    // A follow that ran short of memory loses nothing: the cookie it could
+    // not replace stays as it was, and the one it did not reach stays.
+    static const char kTwo[] = "f.test\tFALSE\t/\tFALSE\t500\ta\t1\nf.test\tFALSE\t/\tFALSE\t500\tb\t2\n";
+    jar = way_jar_new();
+    way_jar_follow(jar, kTwo, sizeof(kTwo) - 1, 10, NULL);
+    allocations = 0;
+    fail_at = 2;                        // the line's buffer, then the first cookie's block
+    way_jar_read_t short_read;
+    way_jar_follow(jar, kTwo, sizeof(kTwo) - 1, 10, &short_read);
+    fail_at = 0;
+    expect("follow: short of memory, nothing is lost", short_read.short_of_memory &&
+           strcmp(sent(jar, "http://f.test/", false, 11), "a=1; b=2") == 0, sent(jar, "http://f.test/", false, 11));
     way_jar_free(jar);
 
     // Every allocation of following a file, changing, laying over and

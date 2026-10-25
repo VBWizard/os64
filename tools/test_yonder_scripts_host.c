@@ -9120,6 +9120,17 @@ static void cookie_file_cases(void) {
     yonder_cookies_turn(k,6000);
     check(fake_writes==writes+2 && strstr(fake_text(COOKIE_FILE),"\tloop\t999\n")!=NULL &&
           yonder_cookies_due(k)==YONDER_NEVER,"cookie file: and one write at the second carries the last of them");
+    /* The window's wiring: the loop's schedule hands the ticker the next
+     * write's moment, and the loop's turn makes it. */
+    s_cookies=k;
+    cookie_hear(jar,"wired=1; Max-Age=100000");
+    now_ms=6100;
+    pictures_schedule();
+    check(ticker_due==6000+YONDER_COOKIES_WRITE_MS,"cookie file: the ticker is handed the write's moment");
+    now_ms=6000+YONDER_COOKIES_WRITE_MS;
+    cookies_turn();
+    check(strstr(fake_text(COOKIE_FILE),"\twired\t1\n")!=NULL,"cookie file: and the loop's turn writes it");
+    s_cookies=NULL;
     /* A session cookie is no change the file must hear. */
     cookie_hear(jar,"s=session");
     check(yonder_cookies_due(k)==YONDER_NEVER,"cookie file: a session cookie owes the file nothing");
@@ -9135,10 +9146,11 @@ static void cookie_file_cases(void) {
     cookie_hear(jar,"first=1; Max-Age=100000");
     yonder_cookies_turn(k2,7000);
     fake_second++;
-    yonder_cookies_turn(k,7000);
+    yonder_cookies_turn(k,9000);
     text=fake_text(COOKIE_FILE);
     check(strstr(text,"\tfirst\t1\n")!=NULL && strstr(text,"\tsecond\t2\n")!=NULL && strstr(text,"\tother\t2\n")!=NULL,
         "cookie file: two windows' writes merge, neither losing the other's");
+    check(strstr(cookie_sent(jar),"second=2")!=NULL,"cookie file: a window follows the file it wrote, the other's in it");
     yonder_cookies_look(k2);
     check(strstr(cookie_sent(jar2),"first=1")!=NULL,"cookie file: and the first window's is the second's at its look");
     /* A write racing another window's, which publishes between this one's

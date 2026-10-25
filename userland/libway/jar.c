@@ -1094,24 +1094,30 @@ static bool changed_here(const way_jar_t *jar, const Cookie *probe)
 
 // `c` (from another jar, or a line) into this one in place of its
 // namesake, which keeps its age and its last use; a new one is the least
-// used. Under the lock. False on no memory.
+// used. Under the lock. False on no memory, the namesake left as it was.
 static bool put_in(way_jar_t *jar, const Cookie *c)
 {
     int64_t created = c->created;
     uint64_t order = jar->next_order++, used = 0;
-    for (int32_t i = 0; i < jar->n; i++) {
+    int32_t same = -1;
+    for (int32_t i = 0; i < jar->n && same < 0; i++) {
         const Cookie *o = &jar->cookies[i];
         if (same_cookie(o->name, o->domain, o->path, o->host_only, c->name, c->domain, c->path, c->host_only)) {
             created = o->created;
             order = o->order;
             used = o->used;
-            drop(jar, i);
-            break;
+            same = i;
         }
     }
-    Cookie *n = insert(jar, c->name, os64_strlen(c->name), c->value, os64_strlen(c->value), c->domain, c->path);
-    if (n == NULL)
+    if (insert(jar, c->name, os64_strlen(c->name), c->value, os64_strlen(c->value), c->domain, c->path) == NULL)
         return false;
+    // The namesake goes now the new cookie is in; drop() moves the last
+    // record, the new one, into its place.
+    Cookie *n = &jar->cookies[jar->n - 1];
+    if (same >= 0) {
+        drop(jar, same);
+        n = &jar->cookies[same];
+    }
     n->expiry = c->expiry;
     n->created = created;
     n->order = order;
@@ -1120,7 +1126,12 @@ static bool put_in(way_jar_t *jar, const Cookie *c)
     n->secure = c->secure;
     n->http_only = c->http_only;
     n->same_site = c->same_site;
-    enforce_limits(jar, n->domain);
+    // A cookie put in is not the most recently used, as a heard one is, so
+    // the limits may let it go: they are handed a copy of its domain, not
+    // the string that would go with it.
+    char domain[OS64_URL_HOST_MAX];
+    os64_strcopy(domain, sizeof(domain), n->domain);
+    enforce_limits(jar, domain);
     return true;
 }
 
