@@ -9,9 +9,11 @@ root = Path(__file__).resolve().parents[1]
 core = root / 'userland/obj/js/core.o'
 math = set('acos acosh asin asinh atan atan2 atanh cbrt ceil cos cosh exp expm1 fabs floor fmax fmin fmod hypot log log10 log1p log2 lrint pow round sin sinh sqrt tan tanh trunc'.split())
 services = set('os64_exit os64_free os64_hprintf os64_localtime os64_malloc os64_malloc_size os64_memchr os64_memcmp os64_memcpy os64_memmove os64_memset os64_realloc os64_strchr os64_strcmp os64_strlen os64_strrchr os64_time os64_write'.split())
-runtime_services = services | {'os64_micros', 'os64_open', 'os64_read', 'os64_close'}
+runtime_services = services | {'os64_micros', 'os64_open', 'os64_read', 'os64_close', 'os64_snprintf'}
 runtime_exports = {'os64_js_' + name for name in
-                   'create context class_id eval run run_file install_output install_args drain_jobs cancel destroy task_begin call checkpoint task_end set_execution_ms check_budget create_with_teardown destroy_report'.split()}
+                   'create context class_id eval run run_file install_output install_args drain_jobs cancel destroy task_begin call checkpoint task_end set_execution_ms check_budget create_with_teardown destroy_report '
+                   'set_script_host take_rejection '
+                   'set_module_loader module_compile module_requests module_run module_state module_release'.split()}
 
 def run(*args):
     return subprocess.check_output(args, cwd=root, text=True)

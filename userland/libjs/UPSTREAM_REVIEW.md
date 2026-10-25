@@ -42,6 +42,17 @@ the function's own up as a global), and `get_lvalue` reading a failed bytecode b
 SyntaxError. Upstream still lacks checks on the parser's other allocation
 failures (DEBTS.md lists them).
 
+Patch 0012 lets a module compile without resolving its imports
+(`JS_EVAL_FLAG_NO_RESOLVE`, with `JS_EVAL_FLAG_COMPILE_ONLY` only) and
+names what it imports (`JS_GetModuleRequestCount`, `JS_GetModuleRequest`),
+because upstream resolves through a loader that must answer at once, as it
+compiles, and a browser has not fetched the imports yet; upstream's own
+comment at the spot reads "Could add a flag to avoid resolution if
+necessary". It also makes handled, telling the tracker, the promise of a
+module body that `js_execute_sync_module` takes as the module's error:
+upstream left it rejected with no handler, so a host heard one module
+error twice. CONTRACT.md § Modules is the wrapper built on it.
+
 Selected upstream test sources are retained separately in
 `tools/js_acceptance/upstream`, with archive/file hashes and the original
 licence. Their assertions remain unchanged; separate drivers report individual

@@ -440,6 +440,85 @@ reaching `handled`; a cleared host handing rejections back to the
 checkpoint; an overrun's exception kept from the host; and a host cleared
 from a failed runtime.
 
+## Modules
+
+An ES module cannot be run the way a classic script is, in one call from
+its source: its imports are other files, which a browser fetches, and the
+module cannot be linked until every one of them is compiled. The pinned
+engine resolves a module's imports as it compiles it, through a loader that
+must answer at once, so an entry compiled before its imports are fetched
+fails. Patch 0012 (`JS_EVAL_FLAG_NO_RESOLVE`) lets it wait, and the
+wrapper's module entry (`js_engine.h`) is built on that:
+
+- **A module is compiled under its name**, which is its URL: what its
+  imports are resolved against and, unless the host gives another,
+  `import.meta.url`. `os64_js_module_compile(runtime, abi, source, length,
+  name, url, &module, outcome)` compiles it UNRESOLVED and hands back the
+  host's handle; it runs no script, so it is accepted outside a call
+  whether a task is open or not. A syntax error is EXCEPTION, its
+  diagnostic in the outcome and reported to a script host's `exception`.
+  `url` is for an inline module script, which HTML gives the document's
+  URL while each still needs a name of its own: the engine finds modules
+  by name, and a second module of one name is never found. Compile each
+  name once.
+- **Its requests are read before it is resolved**:
+  `os64_js_module_requests(runtime, abi, module, each, opaque, outcome)`
+  hands each static import and export-from specifier, as written, in
+  source order. A host fetches what they name and compiles each as it
+  arrives, and asks each of those for its own.
+- **The loader** (`os64_js_set_module_loader`) is the host's two answers:
+  `resolve(base, specifier)`, the name a specifier means in the module
+  named `base` (os64_malloc'd; NULL names nothing and the import throws),
+  and `source(name)`, a module's source (borrowed for the call; false for
+  none). Resolving always asks `resolve`; `source` is asked only for a name
+  no compiled module has: a dynamic `import()`, a static import nobody
+  compiled, and a module the engine let go of. That last is the engine's
+  rule, not the host's: a failed resolve unlists every module no run has
+  resolved, other graphs' included (the handles keep theirs alive, but
+  they are no longer found by name), so a host answers `source` for any
+  name of its map, not only for names it has not fetched. Both run inside
+  a call and must run no script; `source` may block (a browser fetches a
+  dynamic import there).
+- **A module runs once, inside an open task**: `os64_js_module_run(runtime,
+  abi, module, outcome)` resolves its imports by name among the modules
+  compiled so far (asking `source` for any it cannot find), links and
+  evaluates, under the task's deadline and job cap. OK means the
+  evaluation began; EXCEPTION means resolving or linking threw (an import
+  nobody could load, an export that is not there) or the evaluation failed
+  at once.
+- **Its evaluation settles when it settles.** A module with a top-level
+  `await` can leave the task with nothing runnable and its evaluation still
+  pending, because what it awaits (a timer, a fetch) has not come:
+  "drained" is not "finished". `os64_js_module_state(runtime, module,
+  &failure)` answers UNRUN, PENDING, FULFILLED or REJECTED (with the
+  failure's outcome), and a host asks it after every turn's drain, not only
+  the first.
+- **A module's failure is an exception, never an unhandled rejection.**
+  HTML reports a module script's error as it reports a classic script's
+  (an `error` event). The engine rejects the evaluation's promise instead,
+  so the wrapper's tracker knows each handle's promise and takes its
+  rejection as the module's failure: kept for `module_state`, and handed
+  to a script host's `exception`, not its `rejected`. Patch 0012 also makes
+  handled the inner promise of a module body the engine takes as the
+  module's error, which the tracker otherwise heard as a second, unhandled
+  rejection.
+- **A handle is the host's until it lets go**: `os64_js_module_release`, or
+  destroy for the ones still held (TEARDOWN.md). The module stays the
+  engine's while anything imports it.
+
+`tools/test_js_runtime_host.c`'s module cases hold each rule: a graph
+compiled before it is resolved and run once found by name, with no load
+asked; its request named first; an inline module's `import.meta.url` and
+its import not evaluated again; a cycle; a module nobody compiled loaded,
+and a dynamic `import()` answered inside the task; requests in source
+order; a syntax error, an import nobody can load, a missing export and an
+evaluation that throws, each the module's own and the last heard once as
+an exception and never as a rejection; a top-level await pending after its
+task and fulfilled, or rejected, in a later one. The module sweep fails
+every allocation of a graph's run in turn, on the target core and the
+instrumented engine, under RECLAIM; it compiles uncut, because a compile
+under memory pressure is DEBTS.md's 0011b row.
+
 ## Reserved for later work
 
 Nothing. The three extensions DOM.md reserved are built: the host tasks
@@ -562,3 +641,17 @@ failed output buffer can still crash, a failed atom in the tokenizer's
 lookahead still reads as a SyntaxError, a failed pseudo-variable add can
 still compile to a wrong value, and `add_eval_variables` still ignores a
 failed closure-variable add. DEBTS.md books them.
+
+### A module compiled unresolved
+
+Patch 0012 adds `JS_EVAL_FLAG_NO_RESOLVE` and two exports,
+`JS_GetModuleRequestCount` and `JS_GetModuleRequest` (a new atom, or
+`JS_ATOM_NULL` past the end): a compiled-only module is kept unresolved
+and names its imports, where upstream resolved them through the loader as
+it compiled (its own comment marked the spot, "Could add a flag to avoid
+resolution if necessary"). The flag is refused (a TypeError) with any
+other eval type and without `JS_EVAL_FLAG_COMPILE_ONLY`, since an
+unresolved module is never run. And `js_execute_sync_module`, which takes
+a module body's rejected promise as the module's error, now makes that
+promise handled and tells the tracker, as `perform_promise_then` does. §
+Modules is the wrapper built on it.

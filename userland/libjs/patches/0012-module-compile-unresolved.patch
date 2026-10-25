@@ -1,0 +1,123 @@
+# A browser fetches a module's imports before it can link them, and the
+# pinned engine resolves every import as it compiles a module, through a
+# loader that must answer at once, so an entry whose imports are not
+# fetched yet fails to compile (upstream's own comment, "Could add a flag
+# to avoid resolution if necessary", marks the spot). JS_EVAL_FLAG_NO_RESOLVE
+# keeps a compiled-only module unresolved, and JS_GetModuleRequestCount /
+# JS_GetModuleRequest name what it imports, so a host can fetch those and
+# call JS_ResolveModule when every source is in hand. And a module body
+# that throws is run as an async function whose rejected promise the engine
+# takes as the module's error: it is now made handled and the tracker told,
+# or a host hears one module error twice (once as an unhandled rejection).
+--- a/quickjs.h
++++ b/quickjs.h
+@@ -349,6 +349,12 @@
+ /* allow top-level await in normal script. JS_Eval() returns a
+    promise. Only allowed with JS_EVAL_TYPE_GLOBAL */
+ #define JS_EVAL_FLAG_ASYNC (1 << 7)
++/* os64: with JS_EVAL_TYPE_MODULE and JS_EVAL_FLAG_COMPILE_ONLY, keep the
++   compiled module UNRESOLVED: its imports are not loaded, so a host whose
++   loader cannot answer yet (it has still to fetch them) can read them
++   (JS_GetModuleRequest) and call JS_ResolveModule once it can. Refused
++   with any other eval type, and without COMPILE_ONLY. */
++#define JS_EVAL_FLAG_NO_RESOLVE (1 << 8)
+ 
+ typedef JSValue JSCFunction(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
+ typedef JSValue JSCFunctionMagic(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
+@@ -976,6 +982,11 @@
+ /* return the import.meta object of a module */
+ JSValue JS_GetImportMeta(JSContext *ctx, JSModuleDef *m);
+ JSAtom JS_GetModuleName(JSContext *ctx, JSModuleDef *m);
++/* os64: a module's static import requests (import and export-from
++   specifiers as written), in source order: their count, and the one at
++   `index` as a new atom (JS_ATOM_NULL past the end). */
++int JS_GetModuleRequestCount(JSContext *ctx, JSModuleDef *m);
++JSAtom JS_GetModuleRequest(JSContext *ctx, JSModuleDef *m, int index);
+ JSValue JS_GetModuleNamespace(JSContext *ctx, JSModuleDef *m);
+ 
+ /* JS Job support */
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -31020,6 +31020,19 @@
+     return JS_DupAtom(ctx, m->module_name);
+ }
+ 
++/* os64: what a module compiled with JS_EVAL_FLAG_NO_RESOLVE asks for. */
++int JS_GetModuleRequestCount(JSContext *ctx, JSModuleDef *m)
++{
++    return m->req_module_entries_count;
++}
++
++JSAtom JS_GetModuleRequest(JSContext *ctx, JSModuleDef *m, int index)
++{
++    if (index < 0 || index >= m->req_module_entries_count)
++        return JS_ATOM_NULL;
++    return JS_DupAtom(ctx, m->req_module_entries[index].module_name);
++}
++
+ JSValue JS_GetImportMeta(JSContext *ctx, JSModuleDef *m)
+ {
+     JSValue obj;
+@@ -31511,6 +31524,8 @@
+ }
+ 
+ /* return < 0 in case of exception. *pvalue contains the exception. */
++static void js_promise_mark_handled(JSContext *ctx, JSValueConst promise);
++
+ static int js_execute_sync_module(JSContext *ctx, JSModuleDef *m,
+                                   JSValue *pvalue)
+ {
+@@ -31532,6 +31547,10 @@
+         if (state == JS_PROMISE_FULFILLED) {
+             JS_FreeValue(ctx, promise);
+         } else if (state == JS_PROMISE_REJECTED) {
++            /* os64: the rejection is taken here as the module's error, so
++               it is handled: tell the tracker, which heard it rejected with
++               no handler, or a host reports one module error twice. */
++            js_promise_mark_handled(ctx, promise);
+             *pvalue = JS_PromiseResult(ctx, promise);
+             JS_FreeValue(ctx, promise);
+             return -1;
+@@ -37398,6 +37417,11 @@
+     JSFunctionDef *fd;
+     JSModuleDef *m;
+ 
++    /* os64: an unresolved module is only ever handed back, never run. */
++    if ((flags & JS_EVAL_FLAG_NO_RESOLVE) &&
++        ((flags & JS_EVAL_TYPE_MASK) != JS_EVAL_TYPE_MODULE || !(flags & JS_EVAL_FLAG_COMPILE_ONLY)))
++        return JS_ThrowTypeError(ctx, "NO_RESOLVE needs a module compiled only");
++
+     js_parse_init(ctx, s, input, input_len, filename);
+     skip_shebang(&s->buf_ptr, s->buf_end);
+ 
+@@ -37483,7 +37507,8 @@
+     /* Could add a flag to avoid resolution if necessary */
+     if (m) {
+         m->func_obj = fun_obj;
+-        if (js_resolve_module(ctx, m) < 0)
++        /* os64: JS_EVAL_FLAG_NO_RESOLVE is that flag. */
++        if (!(flags & JS_EVAL_FLAG_NO_RESOLVE) && js_resolve_module(ctx, m) < 0)
+             goto fail1;
+         fun_obj = JS_NewModuleValue(ctx, m);
+     }
+@@ -53433,6 +53458,20 @@
+     JSValue promise_result;
+ } JSPromiseData;
+ 
++/* os64: a rejected promise whose result the engine itself took, made
++   handled as perform_promise_then makes one, and the tracker told so. */
++static void js_promise_mark_handled(JSContext *ctx, JSValueConst promise)
++{
++    JSPromiseData *s = JS_GetOpaque(promise, JS_CLASS_PROMISE);
++    if (s == NULL || s->is_handled)
++        return;
++    s->is_handled = TRUE;
++    if (s->promise_state == JS_PROMISE_REJECTED && ctx->rt->host_promise_rejection_tracker) {
++        ctx->rt->host_promise_rejection_tracker(ctx, promise, s->promise_result, TRUE,
++                                                ctx->rt->host_promise_rejection_tracker_opaque);
++    }
++}
++
+ typedef struct JSPromiseFunctionDataResolved {
+     int ref_count;
+     BOOL already_resolved;

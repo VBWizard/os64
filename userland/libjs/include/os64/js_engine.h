@@ -88,6 +88,77 @@ os64_js_status_t os64_js_set_script_host(os64_js_runtime_t *runtime, const char 
  * once the microtask checkpoint that could have handled it has run). */
 bool os64_js_take_rejection(os64_js_runtime_t *runtime, const char *caller_abi,
                             JSValue *promise, JSValue *reason, uint32_t *tag);
+/* ── ES MODULES (CONTRACT.md § Modules) ──────────────────────────────────
+ * A module is compiled from its source under its NAME, its URL: what its
+ * imports are resolved against and what import.meta.url says. It is
+ * compiled UNRESOLVED, so a host that must fetch its imports first reads
+ * them (os64_js_module_requests), compiles each as it arrives, and runs the
+ * entry once every module of the graph is compiled: run finds each import
+ * by name among the modules compiled so far, asks the loader for any it
+ * cannot find, links, and evaluates. */
+typedef struct os64_js_module os64_js_module_t;
+
+/* The host's two answers, both on the owner thread, inside a call (they
+ * must run no script):
+ *   resolve: the name `specifier` means in the module named `base`,
+ *     os64_malloc'd, or NULL when it names nothing (the import throws).
+ *   source: the source of the module named `name`, borrowed until the call
+ *     returns; false when there is none (the import throws). Asked for a
+ *     dynamic import(), and for a module of a graph the engine let go of
+ *     (a failed run unlists the modules no run has resolved); it may fetch.
+ * A NULL loader, or a NULL member, throws for every import it would answer. */
+typedef struct {
+    void *opaque;
+    char *(*resolve)(void *opaque, const char *base, const char *specifier);
+    bool (*source)(void *opaque, const char *name, const char **bytes, size_t *length);
+} os64_js_module_loader_t;
+os64_js_status_t os64_js_set_module_loader(os64_js_runtime_t *runtime, const char *caller_abi,
+                                           const os64_js_module_loader_t *loader,
+                                           os64_js_outcome_t *outcome);
+/* Compiles `source` (borrowed) as the module named `name`, unresolved, and
+ * hands back the host's handle. `url` is its import.meta.url, NULL for its
+ * name: an inline module script is the document's URL there, while each
+ * needs a name of its own, since the engine finds modules by name; compile
+ * each name once (a second module of one name is never found). Outside a
+ * call, task open or not: it runs no script. EXCEPTION for a syntax error,
+ * its diagnostic in the outcome and *module NULL; LIMIT for a source past
+ * the limit. */
+os64_js_status_t os64_js_module_compile(os64_js_runtime_t *runtime, const char *caller_abi,
+                                        const void *source, size_t length, const char *name,
+                                        const char *url, os64_js_module_t **module,
+                                        os64_js_outcome_t *outcome);
+/* Each static import specifier of `module` as written, in source order, to
+ * `each` (the string borrowed for the call; `each` may not enter the
+ * runtime). Outside a call. */
+os64_js_status_t os64_js_module_requests(os64_js_runtime_t *runtime, const char *caller_abi,
+                                         os64_js_module_t *module,
+                                         void (*each)(void *opaque, const char *specifier),
+                                         void *opaque, os64_js_outcome_t *outcome);
+/* Inside an open task, once: resolves, links and evaluates `module`. OK
+ * with the evaluation begun (os64_js_module_state says how it went);
+ * EXCEPTION when resolving or linking threw (an import nobody could load,
+ * an export that is not there), or when the evaluation failed at once.
+ * Either failure goes to the script host's `exception`, never to
+ * `rejected`. */
+os64_js_status_t os64_js_module_run(os64_js_runtime_t *runtime, const char *caller_abi,
+                                    os64_js_module_t *module, os64_js_outcome_t *outcome);
+typedef enum {
+    OS64_JS_MODULE_UNRUN = 0,
+    OS64_JS_MODULE_PENDING,         /* a top-level await has not finished */
+    OS64_JS_MODULE_FULFILLED,
+    OS64_JS_MODULE_REJECTED
+} os64_js_module_state_t;
+/* How `module`'s evaluation stands, asked after each turn's drain: an
+ * evaluation that awaits settles whenever what it awaits arrives. With
+ * REJECTED and a non-NULL `failure`, the failure's outcome is copied
+ * there. Runs no script; owner thread, outside a call. */
+os64_js_module_state_t os64_js_module_state(os64_js_runtime_t *runtime, os64_js_module_t *module,
+                                            os64_js_outcome_t *failure);
+/* The handle let go (the module stays the engine's while anything imports
+ * it). Outside a call; NULL is a no-op. Handles still held are let go by
+ * destroy. */
+void os64_js_module_release(os64_js_runtime_t *runtime, os64_js_module_t *module);
+
 /* Native-callback budget boundary: uses a separate caller-owned outcome.
  * Requires an active budgeted call; does not enter JS, drain jobs, reset a
  * deadline or release the outer call's guard. Observed failures remain sticky.
