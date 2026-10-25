@@ -229,8 +229,9 @@ object, invisible to callers:
   connection that fails BEFORE any byte of the response arrived (the
   server closed its idle side) is retried once on a fresh connection,
   and only when the method is idempotent (GET, HEAD, OPTIONS, PUT,
-  DELETE); a POST is not retried, and the failure is the caller's as
-  today. A request on a fresh connection is never retried. The retry is
+  DELETE); a POST is not retried, and so it does not ride a connection
+  that sat idle (as built, below). A request on a fresh connection is
+  never retried. The retry is
   invisible to the caller except as time, and the fetch's reason string
   says "retried once on a fresh connection" when it happened, so a
   record can carry it.
@@ -328,6 +329,22 @@ says more than it did:
   an idempotent request goes again on a fresh connection as Chrome sends
   it, and nothing of the 408's head reaches an observer (its fields, its
   cookies), since the answer the caller gets is the retry's.
+- **A request the retry rule will not send again rides only a connection
+  used moments ago** (the login slice, 2026-10-25). Chris's first sign-in
+  through yonder failed twice with `could not send the request`, once for
+  the password and once for the authenticator code, each a POST about 46
+  seconds after the page with its form arrived, and each went through when
+  sent again by hand: the form's POST took the connection the page had
+  come on, the server had dropped it while he typed, the probe at the take
+  saw nothing (the drop showed only when the request was written), and a
+  POST is never retried. The ruling (Opus) was the safer way, never the
+  re-send: a request that is not idempotent takes a kept connection only
+  when it was given back less than `FETCH_POOL_ONCE_MS` (2 s) ago, and
+  dials its own otherwise. Two seconds is under half the shortest idle
+  time a common server keeps (Apache's and Node's, 5 s), and long enough
+  for a page's own burst — a script's POST right behind the requests that
+  loaded the page — to share its connection. A connection passed over stays kept for
+  a request that can be sent again (`fetch_pool_take`'s `idle_most_ms`).
 - **Through a proxy**: libfetch sends https through a plain proxy in
   absolute form, not by `CONNECT`, so every proxied connection is plain to
   the proxy and keyed by it alone; the brief's `CONNECT` clause has nothing

@@ -2535,6 +2535,69 @@ static void case_keepalive_retry(void)
     }
 }
 
+// A REQUEST SENT ONCE NEVER RIDES A LONG-IDLE CONNECTION (pool.h's
+// FETCH_POOL_ONCE_MS). The close the probe cannot see — a server that drops
+// an idle connection silently, found only when the next request is
+// written or its reply read — is the one the retry rule saves a GET from
+// and cannot save a POST from, so a POST after a pause dials its own, and
+// is sent once, and answered. A GET after the same pause still takes the
+// kept one; a POST right behind the GET that kept it takes it too.
+static void case_keepalive_once(void)
+{
+    char out[64], why[256];
+    const char *answers[] = { kFirst, kSecond, NULL };
+    for (int tls = 0; tls < 2; tls++) {
+        const char *url = tls ? "https://once.test/form" : "http://once.test/form";
+        uint16_t port = tls ? 443 : 80;
+        // Each way the dead connection can show, and each method the retry
+        // rule will not send again.
+        static const char *const kOnce[] = {"POST", "PATCH", NULL};
+        for (int how = 0; how < 3; how++) {
+            for (int m = 0; m < 3; m++) {
+                reset();
+                peer_t *p = peer_answers("once.test", port, answers);
+                if (how == 0) p->fail_write_at = 2; else p->drop_request = 2;
+                p->drop_unseen = how;           // 1 a close, 2 a reset, that only a read finds
+                CHECK(fetch_all(url, NULL, out, sizeof(out), NULL, 0) == OS64_FETCH_OK && fetch_pool_idle() == 1);
+                now_ms += 30000;                // a person filling in the form
+                os64_fetch_options_t post = { .body = "user=me", .body_len = 7 };
+                if (m == 2) post.method = OS64_FETCH_METHOD_POST;
+                else post.method_name = kOnce[m];
+                CHECK(fetch_all(url, &post, out, sizeof(out), why, sizeof(why)) == OS64_FETCH_OK && !strcmp(out, "first"));
+                CHECK(dials == 2 && requests_on(0) == 1 && requests_on(1) == 1 && strstr(why, "retried") == NULL);
+                const char *sent = request_n(1);
+                CHECK(strstr(sent, "user=me") != NULL && strstr(request_n(0), "user=me") == NULL);
+                // The connection it passed over was kept for a request that
+                // may be sent again, and the probe or that request finds it
+                // dead: a GET is retried, never the POST.
+                CHECK(fetch_pool_idle() >= 1);
+            }
+        }
+        // A GET after the same pause takes the kept connection.
+        reset();
+        peer_answers("once.test", port, answers);
+        CHECK(fetch_all(url, NULL, out, sizeof(out), NULL, 0) == OS64_FETCH_OK);
+        now_ms += 30000;
+        CHECK(fetch_all(url, NULL, out, sizeof(out), NULL, 0) == OS64_FETCH_OK && !strcmp(out, "second"));
+        CHECK(dials == 1 && requests_on(0) == 2);
+        // A POST moments after the GET that kept the connection takes it.
+        reset();
+        peer_answers("once.test", port, answers);
+        CHECK(fetch_all(url, NULL, out, sizeof(out), NULL, 0) == OS64_FETCH_OK);
+        now_ms += FETCH_POOL_ONCE_MS / 2;
+        os64_fetch_options_t post = { .method = OS64_FETCH_METHOD_POST, .body = "x=1", .body_len = 3 };
+        CHECK(fetch_all(url, &post, out, sizeof(out), NULL, 0) == OS64_FETCH_OK && !strcmp(out, "second"));
+        CHECK(dials == 1 && requests_on(0) == 2);
+        // ...and one at FETCH_POOL_ONCE_MS does not.
+        reset();
+        peer_answers("once.test", port, answers);
+        CHECK(fetch_all(url, NULL, out, sizeof(out), NULL, 0) == OS64_FETCH_OK);
+        now_ms += FETCH_POOL_ONCE_MS;
+        CHECK(fetch_all(url, &post, out, sizeof(out), NULL, 0) == OS64_FETCH_OK && !strcmp(out, "first"));
+        CHECK(dials == 2 && requests_on(0) == 1 && fetch_pool_idle() == 2);
+    }
+}
+
 static void case_keepalive_paths(void)
 {
     char out[64], why[256];
@@ -2760,6 +2823,7 @@ int main(int argc, char **argv)
     case_keepalive_owner();
     case_keepalive_caps();
     case_keepalive_retry();
+    case_keepalive_once();
     case_keepalive_paths();
     // Nothing is left kept at exit: the sanitizer's leak check is the proof
     // that what the pool holds it also lets go.

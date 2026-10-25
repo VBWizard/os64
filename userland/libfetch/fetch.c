@@ -659,13 +659,18 @@ static void release_connection(os64_fetch_t *f, bool normal)
     fetch_transport_close(&f->io, normal);
 }
 
+static bool idempotent(const os64_fetch_t *f);
+
 // A kept connection for this hop that still answers its probe, adopted:
 // true with it in `io`. One the probe refuses is closed, and the next is
-// tried.
+// tried. A request the retry rule would not send again takes only one used
+// moments ago (FETCH_POOL_ONCE_MS), since nothing could save it from one
+// its server closed while it sat idle.
 static bool take_kept(os64_fetch_t *f, const fetch_pool_key_t *key)
 {
     fetch_transport_t io;
-    while (fetch_pool_take(key, &io)) {
+    uint32_t idle_most = idempotent(f) ? FETCH_POOL_IDLE_MS : FETCH_POOL_ONCE_MS;
+    while (fetch_pool_take(key, idle_most, &io)) {
         if (fetch_transport_idle_ok(&io)) {
             f->io = io;
             fetch_transport_adopt(&f->io, f->opt.idle_ms, cancel_predicate, f);
@@ -699,7 +704,9 @@ static bool idempotent(const os64_fetch_t *f)
 // (the second try's among them, so a request goes at most twice), one after
 // a reply began, a silence, or a non-idempotent method's (POST, PATCH, any
 // name the list does not hold, or one in lower case), is the caller's as it
-// always was.
+// always was. That last is why such a request rides only a connection used
+// moments ago (take_kept): the close it cannot recover from is the one a
+// connection meets while it sits idle.
 static bool retry_on_fresh(os64_fetch_t *f)
 {
     return f->reused && f->io.received == 0 && !f->io.silent && !cancelled(f) && idempotent(f);

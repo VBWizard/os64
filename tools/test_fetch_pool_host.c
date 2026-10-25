@@ -111,7 +111,9 @@ static void *fetcher(void *arg)
         if (me == 2 && round % 389 == 0)
             fetch_pool_evict_one();
         fetch_transport_t io;
-        if (fetch_pool_take(key, &io)) {
+        // A request sent once asks for a younger connection now and then.
+        uint32_t idle_most = (rng >> 20) % 4 == 0 ? FETCH_POOL_ONCE_MS : FETCH_POOL_IDLE_MS;
+        if (fetch_pool_take(key, idle_most, &io)) {
             // What was kept for this key comes back as it was given.
             CHECK(io.encrypted == key->tls && io.cancelled == NULL && io.cancel_ctx == NULL);
             claim(io.handle, me);
@@ -161,7 +163,7 @@ static void *race_taker(void *x)
     (void)x;
     stalls = true;
     fetch_transport_t io;
-    CHECK(!fetch_pool_take(&race_b, &io));
+    CHECK(!fetch_pool_take(&race_b, FETCH_POOL_IDLE_MS, &io));
     return NULL;
 }
 static void *race_putter(void *x)
@@ -233,9 +235,32 @@ static void one_store_case(void)
     CHECK(atomic_load(&store_frees) == 1);
 }
 
+// A REQUEST SENT ONCE TAKES ONLY A CONNECTION USED MOMENTS AGO: one kept
+// for FETCH_POOL_ONCE_MS is passed over, stays kept, and a request that
+// may be sent again takes it; one younger than that is taken.
+static void once_case(void)
+{
+    static const fetch_pool_key_t key = { .host = "once.test", .port = 443, .tls = true };
+    fetch_transport_t io;
+    memset(&io, 0, sizeof(io));
+    io.handle = atomic_fetch_add(&next_handle, 1);
+    io.encrypted = true;
+    fetch_pool_put(&key, &io);
+    atomic_fetch_add(&clock_ms, FETCH_POOL_ONCE_MS - 1);
+    fetch_transport_t got;
+    CHECK(fetch_pool_take(&key, FETCH_POOL_ONCE_MS, &got) && got.handle == io.handle);
+    fetch_pool_put(&key, &got);
+    atomic_fetch_add(&clock_ms, FETCH_POOL_ONCE_MS);
+    CHECK(!fetch_pool_take(&key, FETCH_POOL_ONCE_MS, &got) && fetch_pool_idle() == 1);
+    CHECK(fetch_pool_take(&key, FETCH_POOL_IDLE_MS, &got) && got.handle == io.handle);
+    fetch_pool_put(&key, &got);
+    fetch_pool_drain();
+}
+
 int main(void)
 {
-    stale_clock_case();
+    stale_clock_case();                 // first: it counts every handle closed so far
+    once_case();
     one_store_case();
     pthread_t t[THREADS];
     for (int i = 0; i < THREADS; i++)

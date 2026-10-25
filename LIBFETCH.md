@@ -169,8 +169,11 @@ typedef struct {
   the server may already have acted on, which a POST may be; a PUT, DELETE
   or OPTIONS that failed on a kept connection before any byte of a reply
   goes once more on a fresh one, body and all (WIRE.md § 2's retry rule:
-  each is idempotent, so twice does what once would). Cancellation applies
-  during upload.
+  each is idempotent, so twice does what once would). Since a POST cannot
+  go again, it takes a kept connection only if one was given back within
+  `FETCH_POOL_ONCE_MS` (pool.h) and dials its own otherwise, so the close a
+  server makes while a connection sits idle is not one it meets.
+  Cancellation applies during upload.
   Upload `idle_ms` restarts after accepted bytes or TLS transport progress,
   including ciphertext drain. Empty/interrupted waits do not restart it;
   a steadily progressing upload may exceed 30 seconds overall. Read calls

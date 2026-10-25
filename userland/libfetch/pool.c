@@ -31,17 +31,24 @@ static bool clock_now(os64_ticks_t *now)
     return os64_ticks(now) >= 0 && now->per_second != 0;
 }
 
-// Past its idle time, or kept at a time the clock now contradicts. The
+// Idle `ms` or longer, or kept at a time the clock now contradicts. The
 // clock is read under the lock, by take and put alike, so every kept_at
 // was written by an earlier holder than the reading: a `now` before one is
 // a clock that went backwards, not a put that overtook the read, and a
-// connection whose age cannot be known is closed rather than trusted.
-static bool expired(const kept_t *k, const os64_ticks_t *now)
+// connection whose age cannot be known is closed rather than trusted
+// (expired) and taken by nobody.
+static bool idle_past(const kept_t *k, const os64_ticks_t *now, uint32_t ms)
 {
     if (now->ticks < k->kept_at)
         return true;
     uint64_t idle = now->ticks - k->kept_at;
-    return idle >= (uint64_t)FETCH_POOL_IDLE_MS * now->per_second / 1000u;
+    return idle >= (uint64_t)ms * now->per_second / 1000u;
+}
+
+// Past its idle time: closed when next seen.
+static bool expired(const kept_t *k, const os64_ticks_t *now)
+{
+    return idle_past(k, now, FETCH_POOL_IDLE_MS);
 }
 
 // The connections leaving the pool, closed once the lock is let go: closing
@@ -64,7 +71,7 @@ static void close_all(leaving_t *out)
         fetch_transport_close(&out->io[i], false);
 }
 
-bool fetch_pool_take(const fetch_pool_key_t *key, fetch_transport_t *io)
+bool fetch_pool_take(const fetch_pool_key_t *key, uint32_t idle_most_ms, fetch_transport_t *io)
 {
     os64_ticks_t now;
     leaving_t out = {0};
@@ -80,8 +87,10 @@ bool fetch_pool_take(const fetch_pool_key_t *key, fetch_transport_t *io)
             continue;
         }
         // The most recently kept: the one its server is least likely to
-        // have closed already.
-        if (same_key(&k->key, key) && (best == NULL || k->kept_at > best->kept_at))
+        // have closed already. One idle too long for this request is left
+        // for another.
+        if (same_key(&k->key, key) && !idle_past(k, &now, idle_most_ms) &&
+            (best == NULL || k->kept_at > best->kept_at))
             best = k;
     }
     if (best != NULL) {
