@@ -9,8 +9,10 @@
 //
 // `cookies = on | session | off` in yonder.conf. ON, the default, reads
 // the file at start and writes it after changes; SESSION keeps the jar in
-// memory only and leaves the file alone; OFF sends no cookie, keeps none,
-// and empties the file.
+// memory only, and empties the file as yonder leaves and as a SESSION
+// yonder starts (Firefox's "delete cookies when closed": switching back to
+// ON before then loses nothing); OFF sends no cookie, keeps none, and
+// empties the file at once.
 //
 // THE WRITE IS COALESCED: a change asks for a write, and the loop makes
 // it at its turn (yonder_cookies_turn), at most one in
@@ -24,10 +26,14 @@
 // between the read and the rename; this window then follows what it wrote
 // (way_jar_follow). A window also follows the file whenever another has
 // changed it, looked at before each navigation (yonder_cookies_look), so a
-// sign-in in one window is the other's at its next page. The file's change
-// is told by its size and modification time, as page storage's is: two
-// writes of one size within one second of the clock read alike, and the
-// next change is seen.
+// sign-in in one window is the other's at its next page. So is Clear
+// cookies, except that a change the other has not yet written (one made in
+// the last YONDER_COOKIES_WRITE_MS, or YONDER_COOKIES_RETRY_MS after a
+// failed write) is written back into the emptied file (BROWSER_DEBTS.md),
+// and its open page sends the cleared cookies until it leaves. The file's
+// change is told by its size and modification time, as page storage's is:
+// two writes of one size within one second of the clock read alike, and
+// the next change is seen.
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -55,8 +61,8 @@ const char *yonder_cookies_mode_word(yonder_cookies_mode_t mode);
 typedef struct yonder_cookies yonder_cookies_t;
 
 // The file for `jar` under the profile folder `profile` (a full path,
-// copied), in `mode`: ON follows the file now, OFF refuses cookies and
-// empties the file. NULL on no memory, and with a NULL jar.
+// copied), in `mode`: ON follows the file now, SESSION empties it, OFF
+// refuses cookies and empties it. NULL on no memory, and with a NULL jar.
 yonder_cookies_t *yonder_cookies_new(way_jar_t *jar, const char *profile, yonder_cookies_mode_t mode);
 // Lets it go; the jar is the caller's. Writes nothing (yonder_cookies_flush).
 void yonder_cookies_free(yonder_cookies_t *k);
@@ -72,7 +78,8 @@ void yonder_cookies_set_mode(yonder_cookies_t *k, yonder_cookies_mode_t mode);
 uint64_t yonder_cookies_due(const yonder_cookies_t *k);
 // The loop's turn: the write, when one is owed and due at `now_ms`.
 void yonder_cookies_turn(yonder_cookies_t *k, uint64_t now_ms);
-// Whatever is owed, written now, due or not: as yonder leaves.
+// As yonder leaves: whatever is owed, written now, due or not; in SESSION,
+// the file emptied.
 void yonder_cookies_flush(yonder_cookies_t *k);
 // The file followed when another window has changed it since this one
 // last read or wrote it (ON only).

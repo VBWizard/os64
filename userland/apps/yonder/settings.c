@@ -91,6 +91,8 @@ static struct {
     void (*cookies_use)(yonder_cookies_mode_t mode);
     os64_ui_widget_t clear_cookies;
     void (*clear_jar)(char *line, size_t cap);
+    // Why the cookie file is not kept, NULL while it is (opening_say).
+    const char *(*cookies_problem)(void);
     // The relay: `thread` waits for events at the dialog's window and
     // rings `bell` on `window`, then waits on `pumped` until the loop has
     // handled them — one ring outstanding at a time, so it never spins on
@@ -354,6 +356,18 @@ static void holds_say(void)
     os64_ui_settings_report(&s.d, line);
 }
 
+// The dialog's status line as it opens: what the cache holds, or, when the
+// cookie file is not kept, why. A login lost at the next restart is the
+// worse news, and yonder's own status line says it only once, where the
+// next page writes over it.
+static void opening_say(void)
+{
+    holds_say();
+    const char *problem = s.cookies_problem != NULL ? s.cookies_problem() : NULL;
+    if (problem != NULL)
+        os64_ui_settings_report(&s.d, problem);
+}
+
 static void emptied(os64_ui_widget_t *w, void *user)
 {
     (void)w;
@@ -540,6 +554,11 @@ void yonder_settings_on_clear_cookies(void (*clear)(char *line, size_t cap))
     s.clear_jar = clear;
 }
 
+void yonder_settings_on_cookies_problem(const char *(*problem)(void))
+{
+    s.cookies_problem = problem;
+}
+
 static void cookies_cleared(os64_ui_widget_t *w, void *user)
 {
     (void)w;
@@ -722,7 +741,7 @@ void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
     os64_snprintf(pct, sizeof(pct), "%d", (int)((zoom + 5) / 10));
     os64_ui_textfield_set(&s.d.ui, &s.zoom, pct);
     os64_ui_settings_ready(&s.d);
-    holds_say();
+    opening_say();
     os64_ui_set_enabled(&s.d.ui, &s.empty, s.usable);
     os64_ui_set_enabled(&s.d.ui, &s.keep.w, s.usable);
     os64_ui_set_enabled(&s.d.ui, &s.size.w, s.usable);

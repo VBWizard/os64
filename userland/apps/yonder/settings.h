@@ -53,6 +53,10 @@ void yonder_settings_on_clear_storage(void (*clear)(char *line, size_t cap));
 // The same for "Clear cookies"; with none, the button says this window
 // keeps no cookies to clear.
 void yonder_settings_on_clear_cookies(void (*clear)(char *line, size_t cap));
+// Why the cookie file is not kept (NULL while it is), asked on the window
+// thread as the dialog opens: the status line says it in place of what the
+// cache holds. Set once, before the dialog opens.
+void yonder_settings_on_cookies_problem(const char *(*problem)(void));
 // Closes the dialog if it is open.
 void yonder_settings_close(void);
 

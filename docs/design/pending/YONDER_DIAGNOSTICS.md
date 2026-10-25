@@ -441,7 +441,9 @@ was shown, or since its record was last written on asking:
   made, carried fewer of the jar's cookies than matched it, for want of
   room in the Cookie line; one line a host, and N is the most one request
   left out, not how many requests did, as a whole tally's MISSING count
-  is the most it has seen). A person's own form left invalid, a
+  is the most it has seen. A load or a fetch names only the host of its
+  hop that left out the most, so another host its redirects passed
+  through that also left some out gets no line from it). A person's own form left invalid, a
   control the page disabled and a reset are libpage answers rather than
   failures, and stay off the record. An event or a timer task has no
   source name, so it gets a script line only when it fails.

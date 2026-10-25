@@ -157,9 +157,13 @@ asked to stay signed in. As built:
   three comment lines on top, the first Netscape's own and the other two
   saying the file is one of logins and that Clear cookies empties it.
   SameSite has no field, so a cookie read from the file has none; the jar
-  does not judge by it yet (YONDER.md's booked row). A cookie whose name,
-  value, domain or path holds a byte that would break its line is not
-  written (it lasts as long as the window).
+  does not judge by it yet (YONDER.md's booked row). A cookie whose line
+  the reader would not take back as the same cookie (a name, value,
+  domain or path holding a byte that would break its line; a domain
+  cookie on a single label, as an intranet host can set) is not written,
+  and lasts as long as the window: the writer and a window following the
+  file ask the same question (jar.c's `round_trips`), so following never
+  lets go of a cookie for want of a line it could not have.
 - **Session cookies are never written; expired ones are never written nor
   read**, and curl's session lines (expiry 0) are read as what they say, a
   session that has ended.
@@ -181,9 +185,13 @@ asked to stay signed in. As built:
   status line), and Settings shows it as two boxes, Accept cookies and
   Keep them when yonder closes, with **Clear cookies** at the row's right.
   `off` is the jar refusing (`way_jar_refuse`: nothing heard, nothing
-  sent), emptied, and the file emptied; Clear cookies empties the jar and
-  the file in every mode. The file lives in the profile folder and nowhere
-  else (`yonder_cookies_new` takes the profile's path).
+  sent), emptied, and the file emptied; `session` is the jar never
+  written, and the file emptied as yonder leaves and as a `session`
+  yonder starts — Firefox's "delete cookies when closed", so the box ticked
+  again before then loses nothing, and a crash cannot leave the logins
+  behind; Clear cookies empties the jar and the file in every mode, and
+  the temps a dead window left beside it. The file lives in the profile
+  folder and nowhere else (`yonder_cookies_new` takes the profile's path).
 - **Two windows, one file**, as the row asked: every change to a cookie a
   file keeps (one with an expiry set, one set in such a cookie's place,
   one let go) is numbered in the jar, and a write reads the file into a
@@ -211,7 +219,7 @@ asked to stay signed in. As built:
   cookies in a loop costs a write a second, not one a cookie (the host case
   sets a thousand inside a second and counts one write). What is owed when
   yonder closes is written as it leaves. A crash loses at most the last
-  second's changes.
+  second's changes, or the last ten seconds' after a write that failed.
 - docs/yonder.md tells Chris where the file is, that it is one file for
   every site, what it is a file of, and how to empty it.
 

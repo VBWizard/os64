@@ -9274,6 +9274,12 @@ static void cookies_use(yonder_cookies_mode_t mode)
     s_cookies_said[0] = '\0';
 }
 
+// Why the cookie file is not kept, for Settings as it opens: NULL while it is.
+static const char *cookies_problem(void)
+{
+    return yonder_cookies_problem(s_cookies);
+}
+
 // Settings' "Clear cookies": the jar emptied, and the file.
 static void cookies_clear(char *line, size_t cap)
 {
@@ -9288,6 +9294,8 @@ static void cookies_clear(char *line, size_t cap)
     if (gone < 0)
         os64_snprintf(line, cap, "Cleared this window's cookies; %s could not be emptied.",
                       yonder_cookies_path(s_cookies));
+    else if (yonder_cookies_path(s_cookies)[0] == '\0')
+        os64_snprintf(line, cap, "Cleared this window's cookies: %ld gone (none are kept in a file).", (long)gone);
     else
         os64_snprintf(line, cap, "Cleared cookies: %ld gone, and the file is empty.", (long)gone);
 }
@@ -12409,6 +12417,7 @@ int main(int argc, char **argv)
     if (s_cookies == NULL)
         way_jar_refuse(g.way.jar, cookies == YONDER_COOKIES_OFF);
     yonder_settings_on_clear_cookies(cookies_clear);
+    yonder_settings_on_cookies_problem(cookies_problem);
     g.cache = yonder_settings_cache_open(); // NULL keeps nothing: pictures come from the network
 
     os64_ui_init(&g.ui, &g.ctx);
@@ -12605,8 +12614,9 @@ int main(int argc, char **argv)
     g.paint_cache = NULL;
     yonder_scratch_free(g.paint_scratch);
     g.paint_scratch = NULL;
-    // What the jar owes its file, written as yonder leaves: the workers
-    // that changed it are gone, and so are the pages' scripts.
+    // What the jar owes its file, written as yonder leaves (in SESSION, the
+    // file emptied): the workers that changed it are gone, and so are the
+    // pages' scripts.
     yonder_cookies_flush(s_cookies);
     yonder_cookies_free(s_cookies);
     s_cookies = NULL;

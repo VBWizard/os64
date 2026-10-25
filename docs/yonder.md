@@ -110,15 +110,26 @@ move; nothing goes under `storage/`, which is page storage's). It is the same `c
 write, a line a cookie. **It is a file of your logins: anyone who can read
 it can sign in to your sites as you**, and it says so in its first lines.
 To log out of everything at once, press **Clear cookies** in Settings,
-which empties the file and this window's cookies; other yonder windows let
-theirs go at their next page.
+which empties the file and this window's cookies. Another yonder window
+open now lets its cookies go at its next page; until then the page it
+shows still sends them, and a cookie a site set in it during the last
+second (or ten, after a write that failed) is written back into the file.
+Close the other windows first to be sure. The diagnostics files (`diagnostics`,
+below) are not emptied: a page's record lists the cookies its scripts
+can read, and if you keep records, they hold those too.
+
+yonder makes the file itself the first time it has a cookie to keep. When
+it cannot keep them (a folder where the file goes, a disk that refuses the
+write), the status line says so once, and Settings says why every time it
+opens.
 
 `cookies` in `yonder.conf` (or the two boxes in Settings) says how much is
 kept:
 
 - `cookies = on`, the default: kept in the file, as above.
 - `cookies = session`: kept while the window is open and never written
-  down; the file is left as it is.
+  down, and the file is emptied when yonder closes (and when a yonder
+  starts this way). Ticking the box again before then loses nothing.
 - `cookies = off`: no cookie is sent or kept, and the file is emptied.
   Most sign-ins stop working.
 

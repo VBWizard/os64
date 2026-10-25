@@ -11,9 +11,10 @@
 #include "storage.h"
 #include "ticker.h"
 
-// The largest file read: WAY_COOKIES_MAX lines of a cookie each at its
-// longest is past any file a jar writes, and a bigger one is not yonder's.
-#define FILE_MAX ((size_t)16 * 1024 * 1024)
+// The largest file read: the longest a jar writes, so no site can set
+// cookies enough to make the file unreadable; a bigger one is not
+// yonder's. A read takes what the file holds, not this.
+#define FILE_MAX WAY_JAR_TEXT_MAX
 // A write reads the file again when another window published between its
 // read and its rename, up to this many reads in all.
 #define WRITE_TRIES 3
@@ -74,8 +75,16 @@ static bool read_file(yonder_cookies_t *k, uint8_t **text, size_t *len)
     os64_dirent_t entry;
     if (os64_stat(k->path, &entry) < 0)
         return true;
-    os64_slurp_status_t status = entry.flags & OS64_DE_DIR ? OS64_SLURP_IO_ERROR
-                                                           : os64_slurp(k->path, FILE_MAX, text, len);
+    // A folder by the file's name is somebody's, so it is never removed
+    // here: said, with what to do, since "cannot be read" sends a person
+    // looking for a damaged file.
+    if (entry.flags & OS64_DE_DIR) {
+        os64_snprintf(k->problem, sizeof(k->problem),
+                      "Cookies are not kept: %s is a folder, and yonder keeps them in a file of that name.",
+                      k->path);
+        return false;
+    }
+    os64_slurp_status_t status = os64_slurp(k->path, FILE_MAX, text, len);
     if (status == OS64_SLURP_OK || (status == OS64_SLURP_NO_FILE && os64_stat(k->path, &entry) < 0))
         return true;
     os64_snprintf(k->problem, sizeof(k->problem),
@@ -156,14 +165,15 @@ static bool write_now(yonder_cookies_t *k)
         if (!read_file(k, &text, &len))
             return false;
         way_jar_t *merged = way_jar_new();
-        way_jar_read_t report = {0};
+        bool whole = false;         // the file read and the changes laid over it, all of both
         if (merged != NULL) {
+            way_jar_read_t report;
             way_jar_read(merged, (const char *)text, len, now, &report);
-            way_jar_overlay(merged, k->jar, through, now);
+            whole = !report.short_of_memory && way_jar_overlay(merged, k->jar, through, now);
         }
         os64_free(text);
         size_t out_len = 0;
-        char *out = merged != NULL && !report.short_of_memory ? way_jar_text(merged, now, &out_len) : NULL;
+        char *out = whole ? way_jar_text(merged, now, &out_len) : NULL;
         way_jar_free(merged);
         if (out == NULL) {
             os64_snprintf(k->problem, sizeof(k->problem), "Cookies are not kept: no memory to write %s.", k->path);
@@ -189,11 +199,13 @@ static bool write_now(yonder_cookies_t *k)
 }
 
 // The file emptied: written with no cookie in it, its comment lines
-// alone. False with the problem said.
+// alone, and the temps a window that died left beside it, which hold
+// cookies too, gone. False with the problem said.
 static bool empty_file(yonder_cookies_t *k)
 {
     if (k->path[0] == '\0')
         return false;
+    yonder_profile_sweep(k->path);
     way_jar_t *none = way_jar_new();
     size_t len = 0;
     char *text = none != NULL ? way_jar_text(none, 0, &len) : NULL;
@@ -224,6 +236,10 @@ yonder_cookies_t *yonder_cookies_new(way_jar_t *jar, const char *profile, yonder
         os64_snprintf(k->problem, sizeof(k->problem), "Cookies are not kept: the profile folder's path is not one.");
     }
     yonder_cookies_set_mode(k, mode);
+    // A SESSION yonder that never reached yonder_cookies_flush (a crash)
+    // left the file as it was: emptied now, as that flush would have.
+    if (mode == YONDER_COOKIES_SESSION && k->path[0] != '\0' && identity_of(k->path) != 0)
+        (void)empty_file(k);                // a failure is said as the problem
     return k;
 }
 
@@ -281,7 +297,17 @@ void yonder_cookies_turn(yonder_cookies_t *k, uint64_t now_ms)
 
 void yonder_cookies_flush(yonder_cookies_t *k)
 {
-    if (k == NULL || yonder_cookies_due(k) == YONDER_NEVER)
+    if (k == NULL)
+        return;
+    // SESSION: nothing this window heard outlives it, and neither does
+    // what the file held when it left ON — it was kept until now so that
+    // ticking the box again lost nothing.
+    if (k->mode == YONDER_COOKIES_SESSION) {
+        if (k->path[0] != '\0' && identity_of(k->path) != 0)
+            (void)empty_file(k);
+        return;
+    }
+    if (yonder_cookies_due(k) == YONDER_NEVER)
         return;
     uint64_t through = way_jar_changes(k->jar);
     if (write_now(k))
