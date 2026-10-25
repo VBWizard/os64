@@ -20,7 +20,7 @@ bool p_push(Parse *p, void **list, int32_t *n, int32_t *cap, size_t size, const 
         return false;
     if (*n == *cap) {
         int32_t grown = *cap > 0 ? *cap * 2 : 4;
-        void *bigger = garb_room(p->arena, (size_t)grown * size, p->top + GARB_CLOSE_SLACK)
+        void *bigger = garb_room(p->arena, p->max, (size_t)grown * size, p->top + GARB_CLOSE_SLACK)
                            ? os64_arena_alloc(p->arena, (size_t)grown * size)
                            : NULL;
         if (bigger == NULL) {
@@ -75,7 +75,7 @@ static bool list_push(Parse *p, List *l, size_t size, const void *item)
         return false;
     size_t end = l->start + (size_t)l->n * size;
     // A list grows only while the arena could still keep every open list.
-    if (!garb_room(p->arena, 0, end + size + GARB_CLOSE_SLACK)) {
+    if (!garb_room(p->arena, p->max, 0, end + size + GARB_CLOSE_SLACK)) {
         p->incomplete = true;
         p->spent = true;
         return false;
@@ -444,7 +444,7 @@ static bool consume_declaration(Parse *p, Input *in, bool nested, bool whole, ga
 
 static garb_rule_t *new_rule(Parse *p)
 {
-    garb_rule_t *r = garb_room(p->arena, sizeof(*r), p->top + GARB_CLOSE_SLACK)
+    garb_rule_t *r = garb_room(p->arena, p->max, sizeof(*r), p->top + GARB_CLOSE_SLACK)
                          ? os64_arena_calloc(p->arena, 1, sizeof(*r))
                          : NULL;
     if (r == NULL) {
@@ -643,6 +643,7 @@ static bool start(garb_parsed_t *out, Parse *p)
     os64_memset(out, 0, sizeof(*out));
     os64_memset(p, 0, sizeof(*p));
     p->arena = os64_arena_create(0, GARB_ARENA_MAX);
+    p->max = GARB_ARENA_MAX;
     out->arena = p->arena;
     return p->arena != NULL;
 }
@@ -759,7 +760,7 @@ static garb_status_t parse_text(Mode mode, const char *text, size_t len, garb_pa
     if (len > GARB_SHEET_MAX)
         return finish(out, &p, NULL, GARB_TOO_BIG);
     Tokenizer tz;
-    if (!tz_open(&tz, text, len, p.arena)) {
+    if (!tz_open(&tz, text, len, p.arena, p.max)) {
         tz_close(&tz);
         return finish(out, &p, NULL, GARB_NO_MEMORY);
     }
@@ -816,7 +817,7 @@ garb_status_t garb_parse_one_value(const char *text, size_t len, garb_parsed_t *
 static bool reparse(Mode mode, garb_parsed_t *owner, const garb_value_t *values, int32_t n,
                     garb_item_t **items, int32_t *nitems)
 {
-    Parse p = {.arena = owner->arena};
+    Parse p = {.arena = owner->arena, .max = garb_arena_max(owner)};
     Input in = {0};
     in.values = values;
     in.n = n;

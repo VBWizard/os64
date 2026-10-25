@@ -17,8 +17,9 @@
 // Every allocation but a close — a token's text, a rule, a push onto an
 // open list — asks garb_room first: what the arena has reserved, the
 // request, and `hold` (the open lists' bytes, plus GARB_CLOSE_SLACK) must
-// fit. Filling the arena then refuses a token or a rule, never the lists
-// that hold what was finished.
+// fit in `max`, what the arena was made to hold (garb_parsed_t.arena_max).
+// Filling the arena then refuses a token or a rule, never the lists that
+// hold what was finished.
 //
 // The slack is for how an arena reserves: in chunks (os64/arena.h — they
 // grow to 256 KiB), so one small request can reserve a whole chunk, and a
@@ -27,11 +28,16 @@
 // header and alignment for every list that could be open.
 #define GARB_CLOSE_SLACK ((size_t)2 * ((256u << 10) + 64) + (size_t)(GARB_DEPTH_MAX * 4 + 8) * 128)
 
-static inline bool garb_room(const os64_arena_t *arena, size_t size, size_t hold)
+static inline bool garb_room(const os64_arena_t *arena, size_t max, size_t size, size_t hold)
 {
     size_t reserved = os64_arena_stats(arena).reserved_bytes;
-    return reserved <= GARB_ARENA_MAX && size <= GARB_ARENA_MAX - reserved &&
-           hold <= GARB_ARENA_MAX - reserved - size;
+    return reserved <= max && size <= max - reserved && hold <= max - reserved - size;
+}
+
+// What `owner`'s arena was made to hold.
+static inline size_t garb_arena_max(const garb_parsed_t *owner)
+{
+    return owner->arena_max != 0 ? owner->arena_max : GARB_ARENA_MAX;
 }
 
 // ── The tokenizer (§4) ──────────────────────────────────────────────────
@@ -56,6 +62,7 @@ typedef struct {
     uint32_t *cp;           // the input, preprocessed (§3.3), as code points
     size_t n, pos;
     os64_arena_t *arena;    // where token text goes
+    size_t max;             // what that arena was made to hold
     const size_t *open;     // the parse's open lists, which text must leave room for
     bool short_of_memory;
     bool escaped;           // the token being read resolved an escape
@@ -65,7 +72,7 @@ typedef struct {
 } Tokenizer;
 
 // Preprocesses UTF-8 text into code points. False on no memory.
-bool tz_open(Tokenizer *tz, const char *text, size_t len, os64_arena_t *arena);
+bool tz_open(Tokenizer *tz, const char *text, size_t len, os64_arena_t *arena, size_t max);
 void tz_close(Tokenizer *tz);
 Tok tz_next(Tokenizer *tz);
 
@@ -83,6 +90,7 @@ Tok tz_next(Tokenizer *tz);
 
 typedef struct {
     os64_arena_t *arena;
+    size_t max;             // what the arena was made to hold (garb_room)
     bool incomplete;
     bool spent;             // an allocation failed: nothing more is read or kept
     Tokenizer *tz;          // the text's tokenizer, whose buffer can fail too

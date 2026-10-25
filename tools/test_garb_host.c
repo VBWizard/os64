@@ -13,7 +13,9 @@
 // past a double's, and `--cost BYTES` and `--full` hold a parse and its
 // cascade to what GARB.md says they cost, and a parse to keeping what it
 // finished when the arena fills; `--cascades N` cascades one sheet N
-// times, each whole and leaving the sheet as it was; `--keyframes-scale`
+// times, each whole and leaving the sheet as it was; `--read-budget` holds
+// what a cascade reads of all its sheets to GARB_CASCADE_READ_MAX;
+// `--keyframes-scale`
 // holds @keyframes to a sort's cost, and
 // `--faces-cap` the @font-face rules to GARB_FONT_FACES_MAX.
 
@@ -1367,6 +1369,54 @@ static int cost(size_t bytes, bool full)
     return ok ? 0 : 1;
 }
 
+// ONE READ BUDGET A CASCADE (GARB.md § The cost): what a cascade reads of
+// all its sheets together is held to GARB_CASCADE_READ_MAX. A 1.5 MiB sheet
+// given four times is read into more than one parse's arena and still
+// whole, every element styled; given eight times, past the budget, the
+// cascade comes up short and never holds more than the budget and its own
+// arena's cap, while the sheet stays as it was parsed.
+static int read_budget(void)
+{
+    size_t len;
+    int copies;
+    char *text = shaped_sheet((size_t)3 << 19, &len, &copies);
+    garb_parsed_t r;
+    garb_status_t st = garb_parse_sheet_text(text, len, &r);
+    char page[8192];
+    size_t at = (size_t)snprintf(page, sizeof(page), "<!doctype html><body>");
+    int elements = 0;
+    for (int i = 0; i < copies; i += copies / 32 + 1, elements++)
+        at += (size_t)snprintf(page + at, sizeof(page) - at, "<a class=\"btn-outline-%d active\">%d</a>", i, i);
+    os64_html_document_t *doc = page_of(page, at);
+    garb_sheet_in_t in[8];
+    for (int k = 0; k < 8; k++)
+        in[k] = (garb_sheet_in_t){.sheet = &r, .parent = -1};
+    size_t parsed = arena_used(&r);
+    int failures = st != GARB_OK || r.incomplete;
+    static const int kGiven[] = {4, 8};
+    for (int g = 0; g < 2 && failures == 0; g++) {
+        size_t before = live_bytes;
+        garb_cascade_t *c = garb_cascade(in, kGiven[g], doc, (garb_env_t){.width = 1200, .height = 900});
+        size_t held = live_bytes - before;
+        int styled = 0;
+        for (const os64_html_node_t *x = doc->body != NULL ? doc->body->first_child : NULL; x != NULL; x = x->next)
+            styled += x->kind == OS64_HTML_ELEMENT && garb_style_for(c, x).n > 0;
+        bool past = kGiven[g] == 8;
+        bool ok = c != NULL && garb_cascade_incomplete(c) == past && (past || styled == elements) &&
+                  held <= GARB_CASCADE_READ_MAX + GARB_ARENA_MAX + ((size_t)4 << 20) &&
+                  (past || held > GARB_ARENA_MAX) && !r.incomplete && arena_used(&r) == parsed;
+        printf("libgarb read budget: a %zu KiB sheet given %d times: %s, %d of %d elements styled, %.1f MiB held%s\n",
+               len >> 10, kGiven[g], c != NULL && !garb_cascade_incomplete(c) ? "whole" : "short", styled,
+               elements, held / 1048576.0, ok ? "" : " - FAILED");
+        failures += !ok;
+        garb_cascade_free(c);
+    }
+    os64_html_document_free(doc);
+    garb_free(&r);
+    free(text);
+    return failures != 0;
+}
+
 // A PAGE CASCADED AGAIN AND AGAIN (GARB.md § The cost): a script that
 // measures, a window resized, cascade the page's sheets once a layout.
 // Every cascade reads the sheet into arenas of its own, freed with it, so
@@ -1952,6 +2002,8 @@ int main(int argc, char **argv)
         return cost(GARB_SHEET_MAX, true);
     if (argc == 3 && strcmp(argv[1], "--cascades") == 0)
         return cascades(atoi(argv[2]));
+    if (argc == 2 && strcmp(argv[1], "--read-budget") == 0)
+        return read_budget();
     if (argc == 2 && strcmp(argv[1], "--deep") == 0)
         return deep();
     if (argc == 2 && strcmp(argv[1], "--numbers") == 0)

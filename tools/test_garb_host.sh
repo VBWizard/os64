@@ -5,7 +5,8 @@
 # nested ( on a small stack, numbers past int64_t's reach, and what a parse
 # and a cascade cost (GARB.md § The cost): a 4 MiB sheet whole and cascaded
 # whole, one at the cap kept, a 1 MiB sheet cascaded 16 times and left as
-# it was, and @keyframes at scale held to a sort's cost; then the Modern Web arc's mark,
+# it was, a cascade's sheets held to one read budget, and @keyframes at
+# scale held to a sort's cost; then the Modern Web arc's mark,
 # on the names GARB_MODERN_PROBE marks for the purpose.
 set -eu
 cd "$(git rev-parse --show-toplevel)"
@@ -49,6 +50,7 @@ python3 tools/test_garb_suite.py "$work/garb_driver"
 "$work/garb_driver" --cost 4194304
 "$work/garb_driver" --full
 "$work/garb_driver" --cascades 16
+"$work/garb_driver" --read-budget
 "$work/garb_driver" --keyframes-scale
 "$work/garb_driver" --faces-cap
 "$work/garb_driver" --modern

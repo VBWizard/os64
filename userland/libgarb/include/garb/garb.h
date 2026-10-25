@@ -138,15 +138,15 @@ typedef enum {
 // A sheet is refused whole past this: the web's largest sheets are a
 // fraction of it, and a sheet is held whole while it is parsed.
 #define GARB_SHEET_MAX ((size_t)8 << 20)
-// What one parse may take, past the input itself: about 6 MiB of ordinary
-// CSS, far less of the densest (GARB.md § The cost, measured). A result
+// What one parse may take, past the input itself: about 6 MiB of
+// Bootstrap-shaped CSS, far less of the densest (GARB.md § The cost,
+// measured). A result
 // past this is cut short and marked incomplete rather than allowed to eat
 // the machine. A face reserving memory for a parse counts this, and what
-// the parse holds outside it (GARB.md § The cost). A cascade's reading of
-// one sheet is held to the same, from a budget of its own every time
-// (garb/cascade.h): what it reads of ordinary CSS costs about a third more
-// than the parse did, so every cascade reads such a sheet whole up to
-// about 4.4 MiB.
+// the parse holds outside it (GARB.md § The cost). What a cascade reads of
+// its sheets is held apart from them, to GARB_CASCADE_READ_MAX
+// (garb/cascade.h): it costs from about as much as the parse to about
+// twice it — a Bootstrap-shaped sheet's about a third more.
 #define GARB_ARENA_MAX ((size_t)96 << 20)
 // Blocks and functions nest this deep and no deeper: past it their
 // contents are read and thrown away, so the end is still found, and the
@@ -161,6 +161,10 @@ typedef enum {
 // cascade does, learns from `incomplete` alone that it is short.
 typedef struct {
     struct os64_arena *arena;
+    // What `arena` was made to hold; 0 is GARB_ARENA_MAX, which every parse
+    // is. A reader that keeps reads (garb_items_of) in an arena of its own
+    // of another size says so here, and the reads keep to it.
+    size_t arena_max;
     bool incomplete;
     garb_item_t *items;     // a list of rules or of a block's contents
     int32_t nitems;

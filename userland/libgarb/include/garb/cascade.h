@@ -114,6 +114,17 @@ typedef struct {
 // sheet is the same after any number of cascades as before the first.
 garb_cascade_t *garb_cascade(const garb_sheet_in_t *sheets, int32_t n,
                              const os64_html_document_t *doc, garb_env_t env);
+// What one cascade may read of all its sheets together: their rules'
+// blocks, selectors and values go into one arena held to this, beside the
+// cascade's own state (held to GARB_ARENA_MAX), and a cascade that reaches
+// it comes up short as any short read does (garb_cascade_incomplete).
+// Twice a parse's arena, because reading a sheet costs up to about twice
+// its parse (GARB.md § The cost): so one cascade reads whole any one sheet
+// a parse holds, but the very densest, and beside a big one the rest of an
+// ordinary page — a news page's 1 MB sheet reads into 14.3 MiB, a
+// Bootstrap-shaped sheet about 21.5 bytes a byte — while a page naming
+// many big sheets holds no more than this of reads in any one cascade.
+#define GARB_CASCADE_READ_MAX ((size_t)2 * GARB_ARENA_MAX)
 bool garb_cascade_incomplete(const garb_cascade_t *c);
 // The viewport the cascade was judged against: what a `vw` or `vh` in its
 // winners is a hundredth of.
