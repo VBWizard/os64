@@ -240,7 +240,7 @@ typedef struct {
 typedef enum {
     OS64_DOM_SCRIPT_NONE = 0,   /* not a script element, or a type nothing runs */
     OS64_DOM_SCRIPT_CLASSIC,
-    OS64_DOM_SCRIPT_MODULE      /* recognised, never run */
+    OS64_DOM_SCRIPT_MODULE      /* the host runs it as a module (yonder's modules.c) */
 } os64_dom_script_kind_t;
 
 /* Numeric snapshot in CSS pixels. Offset/client members are integer pixels;
@@ -737,6 +737,12 @@ bool os64_dom_take_report(os64_dom_t *dom, os64_js_outcome_t *outcome);
  * when a handler reaches one later. The record keeps them whole. False
  * for a missing argument, a drained binding, or `cap` too small. */
 bool os64_dom_script_name(os64_dom_t *dom, const char *address, char *out, size_t cap);
+/* The inverse: the address a name os64_dom_script_name gave was given for,
+ * borrowed while the binding lives; NULL for an inline script's name (the
+ * page's) and for any name not the binding's. A dynamic import() in a
+ * classic script resolves against it (HTML's referencing script's base
+ * URL). */
+const char *os64_dom_script_address(const os64_dom_t *dom, const char *name);
 /* After that script ran (and drained): what it left owed, settled as one
  * task named `name`, the host's own name for it (MODERN_WEB.md § P2a). The
  * window's error event for each exception it threw, said to come from its
@@ -757,6 +763,11 @@ bool os64_dom_script_ended(os64_dom_t *dom, const char *name, os64_js_outcome_t 
  * one, is born started; a started script never runs again wherever it moves. */
 os64_dom_script_kind_t os64_dom_script_kind(const os64_html_node_t *node);
 int os64_dom_script_start(os64_dom_t *dom, const os64_html_node_t *node);
+/* Whether a Content-Type value (`length` bytes) names JavaScript: its
+ * essence, before any `;` and without the white space around it, in any
+ * case, is one of the same sixteen essences a script's type is judged by.
+ * HTML fetches a module script only with such a type. */
+bool os64_dom_javascript_mime(const char *value, size_t length);
 
 /* A reference a script names, resolved exactly as a link in the document
  * would be: os64_page_resolve_in, so the input cleaning, the `<base href>`

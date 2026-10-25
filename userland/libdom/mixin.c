@@ -361,7 +361,8 @@ static JSValue mixin_method(JSContext *ctx, JSValueConst this_value, int argc,
 
 /* ── Reflected attributes ─────────────────────────────────────────────── */
 
-enum { R_HIDDEN, R_LANG, R_DIR, R_TAB_INDEX, R_URL, R_CLASS_LIST, R_DATASET, R_CONNECTED };
+enum { R_HIDDEN, R_LANG, R_DIR, R_TAB_INDEX, R_URL, R_CLASS_LIST, R_DATASET, R_CONNECTED,
+       R_TYPE, R_DEFER, R_NO_MODULE };
 
 /* An element that can take focus without a tabindex: its tabIndex reads 0
  * where any other reads -1 (HTML § The tabindex attribute). */
@@ -427,6 +428,7 @@ static JSValue reflect(JSContext *ctx, JSValueConst this_value, int argc,
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
     const char *name = magic == R_HIDDEN ? "hidden" : magic == R_LANG ? "lang" : magic == R_DIR ? "dir" :
                        magic == R_TAB_INDEX ? "tabindex" : magic == R_CLASS_LIST ? "class" :
+                       magic == R_TYPE ? "type" : magic == R_DEFER ? "defer" : magic == R_NO_MODULE ? "nomodule" :
                        is_html(self, OS64_HTML_TAG_SCRIPT) || is_html(self, OS64_HTML_TAG_IFRAME) ? "src" : "href";
     if (magic == R_CLASS_LIST) {
         if (!set) return d_class_list(dom, ctx, self);
@@ -441,7 +443,7 @@ static JSValue reflect(JSContext *ctx, JSValueConst this_value, int argc,
     const os64_html_attr_t *attr = os64_html_attr(self, name);
     if (!set) {
         switch (magic) {
-        case R_HIDDEN: return JS_NewBool(ctx, attr != NULL);
+        case R_HIDDEN: case R_DEFER: case R_NO_MODULE: return JS_NewBool(ctx, attr != NULL);
         case R_DIR: return d_dir_value(ctx, self);
         case R_TAB_INDEX: {
             int32_t index;
@@ -462,7 +464,7 @@ static JSValue reflect(JSContext *ctx, JSValueConst this_value, int argc,
         default: return JS_NewString(ctx, attr != NULL ? attr->value : "");
         }
     }
-    if (magic == R_HIDDEN) {
+    if (magic == R_HIDDEN || magic == R_DEFER || magic == R_NO_MODULE) {
         int on = JS_ToBool(ctx, value);
         if (on < 0) return JS_EXCEPTION;
         return set_attribute(dom, ctx, self, name, "", 0, !on);
@@ -977,6 +979,11 @@ int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
         {"dir", R_DIR, true, ELEMENTS}, {"tabIndex", R_TAB_INDEX, true, ELEMENTS},
         {"classList", R_CLASS_LIST, true, ELEMENTS}, {"dataset", R_DATASET, false, ELEMENTS},
         {"src", R_URL, true, 1u << D_PROTO_SCRIPT},
+        // What a loader sets before it connects a script (`type = 'module'`
+        // makes it a module, MODERN_WEB.md § Slice 3); `async`, with HTML's
+        // force-async flag, is DEBTS.md § ES modules'.
+        {"type", R_TYPE, true, 1u << D_PROTO_SCRIPT}, {"defer", R_DEFER, true, 1u << D_PROTO_SCRIPT},
+        {"noModule", R_NO_MODULE, true, 1u << D_PROTO_SCRIPT},
         {"href", R_URL, true, (1u << D_PROTO_ANCHOR) | (1u << D_PROTO_LINK)},
     };
     for (int kind = 0; kind < D_PROTO_COUNT; kind++) {

@@ -445,12 +445,21 @@ reset not cancelled, `focus()` and `blur()` reach the host through
 JavaScript MIME essences, `module`), and every caller asks it. ALREADY
 STARTED is a held node in the binding's table: `os64_dom_script_start` marks
 a script the host runs, a script innerHTML parses is born started, and a
-clone of a started script is started. When a verb connects a classic script
-that has not started (an `appendChild` of a `createElement('script')`), the
-binding marks it and tells the host through `options.script_connected`;
+clone of a started script is started. When a verb connects a classic or
+module script that has not started (an `appendChild` of a
+`createElement('script')`), the binding marks it and tells the host through
+`options.script_connected`;
 moving a started script tells nobody, and one connected to a document of
 its own (§ Documents of their own) is marked and tells nobody. A host that
 sets no callback gets no notices and no marks.
+
+A host that runs modules asks two more things of the binding (MODERN_WEB.md
+§ Slice 3, as built): whether a response's `Content-Type` names JavaScript
+(`os64_dom_javascript_mime`, the same sixteen essences, as a module's
+response must be), and the address of the classic script a name of the
+binding's stands for (`os64_dom_script_address`, the inverse of
+`os64_dom_script_name`), which a dynamic `import()` in that script
+resolves against.
 
 ## `document.write`
 

@@ -333,8 +333,10 @@ parsed whole, as `innerHTML` receives it.
 Which scripts run, and when, is not the parser's business. The standard's
 "prepare the script element" steps (type, `nomodule`, `defer`, `async`, a
 script inserted by `innerHTML` never running, one inserted by
-`appendChild` running) live in the binding library. Modules are not run;
-a `nomodule` script is, since it was written for a browser like this one.
+`appendChild` running) live in the binding library. Modules run with the
+Modern Web surface on (MODERN_WEB.md § Slice 3), and a `nomodule` script
+then does not; with it off, modules are not run and a `nomodule` script
+is, since it was written for a browser like that one.
 
 ## Snapshots when the tree moves
 
