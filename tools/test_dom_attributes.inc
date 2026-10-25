@@ -61,7 +61,7 @@ static void attributes_shape_cases(void)
         "var c=document.createAttribute('t');c.value='v';b.setAttributeNode(c);assert(b.getAttribute('t')==='v');"
         /* the shadow, reached through the chain with no interface to name it */
         "var A=Object.getPrototypeOf(a),N=Object.getPrototypeOf(A);"
-        "assert(N===Object.getPrototypeOf(Object.getPrototypeOf(document.createTextNode(''))));"
+        "assert(N===Object.getPrototypeOf(Object.getPrototypeOf(Object.getPrototypeOf(document.createTextNode('')))));"
         "for(const k of Object.getOwnPropertyNames(N))"
         "if(k!=='constructor'&&!/^[A-Z_]+$/.test(k))assert(Object.prototype.hasOwnProperty.call(A,k),'shadows '+k);",
         "attributes: with the switch off, the classic surface and no interface objects");

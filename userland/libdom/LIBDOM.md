@@ -59,9 +59,12 @@ are read from the attached tree rather than trusted parser-time pointers.
 
 Kind prototypes inherit Node. An HTML element's prototype is HTMLElement's,
 which inherits Element's, or, for the elements with members of their own
-(the form controls, form, image, script, anchor and link), a prototype that
-inherits HTMLElement's; an element of another namespace (SVG, MathML) has
-Element's. The supported properties and methods are placed on those chains:
+(the form controls, option, optgroup, form, image, script, anchor, link and
+iframe), a prototype that inherits HTMLElement's; an SVG element's is
+SVGElement's, which inherits Element's; an element of any other namespace
+(MathML) has Element's. A text node's prototype is Text's and a comment's
+Comment's, each inheriting CharacterData's. The supported properties and
+methods are placed on those chains:
 
 | Kind | Surface beyond Node |
 | --- | --- |
@@ -80,8 +83,9 @@ reads undefined and is absent from `in`; assignment may create an ordinary
 expando. Borrowed methods and accessors still validate native receivers.
 With the Modern Web switch on, the prototypes are named on window by
 interface objects (§ The Modern Web's surface): DocumentFragment's
-constructs an empty fragment, and the rest are Illegal constructors. The
-surface is the one this file lists.
+constructs an empty fragment, Text's and Comment's a node holding their
+argument, and the rest are Illegal constructors. The surface is the one
+this file lists.
 
 Child collections and tag queries are native live objects with `length`,
 `item(index)` and indexed access. A query refreshes against the HTML version;
@@ -819,9 +823,10 @@ was written, not in CSSOM's canonical form, and a shorthand's longhands do
 not read back (DEBTS.md § Classic browser scripting).
 
 The first row is the interface objects (`classic.c`'s
-`d_interfaces_install`): `Node`, `CharacterData`, `DocumentFragment`,
-`Document`, `DocumentType`, `Element`, `HTMLElement` and the HTML element interfaces that
-have a prototype of their own, each named for exactly one of the binding's
+`d_interfaces_install`): `Node`, `CharacterData`, `Text`, `Comment`,
+`DocumentFragment`, `Document`, `DocumentType`, `Element`, `SVGElement`,
+`HTMLElement` and the HTML element interfaces that have a prototype of
+their own, each named for exactly one of the binding's
 prototypes (WebIDL § 3.7), so `instanceof` answers truly and a page may
 patch `Element.prototype`. Each interface object inherits its parent's
 (`Object.getPrototypeOf(HTMLElement) === Element`), as each prototype
@@ -830,19 +835,20 @@ carries the node-type and document-position constants, on itself and its
 prototype, as WebIDL puts a constant. Each prototype's own
 `Symbol.toStringTag` is its interface's name, so
 `Object.prototype.toString.call(document.body)` is `[object HTMLElement]`
-(WebIDL § 3.7.3; a Text says `CharacterData`, whose prototype it shares).
+(WebIDL § 3.7.3).
 `new DocumentFragment()` makes an
-empty fragment of the window's document, whose prototype is new.target's
-`prototype` (so a subclass makes its own kind; DocumentFragment's when that
-is not an object), and any call of it without `new`
-is refused by the engine itself, the function being made as a constructor
-only (it finds its binding through the anchor, which is its own class's
+empty fragment of the window's document, and `new Text(data)` and
+`new Comment(data)` a node of it holding `data` ("" when it is undefined),
+each with new.target's `prototype` (so a subclass makes its own kind; the
+interface's own when that is not an object); any call of them without `new`
+is refused by the engine itself, the functions being made as constructors
+only (they find their binding through the anchor, which is its own class's
 prototype in the binding's context); every other interface is an "Illegal
 constructor", `Document` among them, since `new Document()` makes an XML
 document. An interface
-whose nodes share a broader prototype (Text, Comment, `HTMLDivElement`) is
-not installed: naming the broader prototype for it would make `instanceof`
-lie. Each prototype's `constructor` is its interface object; with the
+whose nodes share a broader prototype (`HTMLDivElement`, `SVGSVGElement`)
+is not installed: naming the broader prototype for it would make
+`instanceof` lie. Each prototype's `constructor` is its interface object; with the
 switch off it is what it was before the arc (`Image` for the image
 prototype, inherited from `Object.prototype` for the rest).
 

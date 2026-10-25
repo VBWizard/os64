@@ -19,8 +19,8 @@ static int node_prototype_kind(const os64_html_node_t *node)
 {
     if (node->kind == OS64_HTML_DOCUMENT) return D_PROTO_DOCUMENT;
     if (node->kind == OS64_HTML_FRAGMENT) return D_PROTO_FRAGMENT;
-    if (node->kind == OS64_HTML_TEXT || node->kind == OS64_HTML_COMMENT)
-        return D_PROTO_CHARACTER_DATA;
+    if (node->kind == OS64_HTML_TEXT) return D_PROTO_TEXT;
+    if (node->kind == OS64_HTML_COMMENT) return D_PROTO_COMMENT;
     if (node->kind == OS64_HTML_DOCTYPE) return D_PROTO_DOCTYPE;
     if (node->kind != OS64_HTML_ELEMENT) return D_PROTO_NODE;
     if (node->ns == OS64_HTML_NS_HTML) {
@@ -34,8 +34,11 @@ static int node_prototype_kind(const os64_html_node_t *node)
         if (node->tag == OS64_HTML_TAG_A) return D_PROTO_ANCHOR;
         if (node->tag == OS64_HTML_TAG_LINK) return D_PROTO_LINK;
         if (node->tag == OS64_HTML_TAG_IFRAME) return D_PROTO_IFRAME;
+        if (node->tag == OS64_HTML_TAG_OPTION) return D_PROTO_OPTION;
+        if (node->tag == OS64_HTML_TAG_OPTGROUP) return D_PROTO_OPTGROUP;
         return D_PROTO_HTML_ELEMENT;
     }
+    if (node->ns == OS64_HTML_NS_SVG) return D_PROTO_SVG;
     return D_PROTO_ELEMENT;
 }
 
@@ -598,9 +601,15 @@ static unsigned method_prototypes(int magic)
 
 int d_proto_parent(int kind)
 {
-    if (kind == D_PROTO_NODE) return -1;
-    if (kind == D_PROTO_HTML_ELEMENT) return D_PROTO_ELEMENT;
-    return kind > D_PROTO_HTML_ELEMENT ? D_PROTO_HTML_ELEMENT : D_PROTO_NODE;
+    switch (kind) {
+    case D_PROTO_NODE: return -1;
+    case D_PROTO_DOCUMENT: case D_PROTO_ELEMENT: case D_PROTO_CHARACTER_DATA:
+    case D_PROTO_FRAGMENT: case D_PROTO_DOCTYPE: case D_PROTO_ATTR:
+        return D_PROTO_NODE;
+    case D_PROTO_TEXT: case D_PROTO_COMMENT: return D_PROTO_CHARACTER_DATA;
+    case D_PROTO_HTML_ELEMENT: case D_PROTO_SVG: return D_PROTO_ELEMENT;
+    default: return D_PROTO_HTML_ELEMENT;
+    }
 }
 
 int d_node_install(os64_dom_t *dom, JSContext *ctx)

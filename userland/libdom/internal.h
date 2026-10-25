@@ -24,19 +24,24 @@ typedef struct DIdle DIdle;
 typedef struct DActiveEvent { struct DActiveEvent *previous; JSValue value; } DActiveEvent;
 /* The wrappers' prototypes, one per kind of node the binding tells apart
  * (node.c's d_node_install builds the chain). An HTML element is an
- * HTML_ELEMENT, or one of the kinds after it when it has one of its own;
- * an element of another namespace is an ELEMENT. ATTR is Attr's, which is
- * a Node and no tree node: no Node member is installed on it, and it
- * shadows every one with its own answer (attr.c). */
+ * HTML_ELEMENT, or one of the HTML kinds when it has one of its own; an
+ * element in the SVG namespace is an SVG; an element of another namespace
+ * is an ELEMENT. A text node is a TEXT and a comment a COMMENT, each under
+ * CHARACTER_DATA, which no node is itself. ATTR is Attr's, which is a Node
+ * and no tree node: no Node member is installed on it, and it shadows
+ * every one with its own answer (attr.c). A kind comes after the kind it
+ * inherits, which is the order the prototypes are made in. */
 enum {
     D_PROTO_NODE, D_PROTO_DOCUMENT, D_PROTO_ELEMENT, D_PROTO_CHARACTER_DATA,
     D_PROTO_FRAGMENT, D_PROTO_DOCTYPE, D_PROTO_ATTR, D_PROTO_HTML_ELEMENT, D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT,
     D_PROTO_BUTTON, D_PROTO_FORM, D_PROTO_IMAGE, D_PROTO_SCRIPT, D_PROTO_ANCHOR,
-    D_PROTO_LINK, D_PROTO_IFRAME, D_PROTO_COUNT
+    D_PROTO_LINK, D_PROTO_IFRAME, D_PROTO_OPTION, D_PROTO_OPTGROUP,
+    D_PROTO_TEXT, D_PROTO_COMMENT, D_PROTO_SVG, D_PROTO_COUNT
 };
 /* The kind a kind's prototype inherits, as its interface inherits: Node's
- * for the node kinds, Element's for HTMLElement, HTMLElement's for the kinds
- * after it; -1 for Node, which inherits Object's. */
+ * for the node kinds, CharacterData's for TEXT and COMMENT, Element's for
+ * HTMLElement and SVG, HTMLElement's for the HTML kinds; -1 for Node, which
+ * inherits Object's. */
 int d_proto_parent(int kind);
 /* The event types the binding names, which are the ones on<type> names and
  * os64_dom_listens count: the ones the host dispatches; the three the
