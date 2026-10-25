@@ -470,8 +470,296 @@ static void cookie_scripts(void)
     way_jar_free(jar);
 }
 
+// ── Kept across restarts (cookies.txt) ──────────────────────────────────
+
+// The jar's file text, in a buffer that stays valid until the next call.
+static const char *file_of(way_jar_t *jar, int64_t now)
+{
+    static char text[1 << 16];
+    size_t len = 0;
+    char *t = way_jar_text(jar, now, &len);
+    snprintf(text, sizeof(text), "%s", t != NULL ? t : "(no memory)");
+    expect("file: the length is the text's", t == NULL || len == strlen(t), NULL);
+    os64_free(t);
+    return text;
+}
+
+static way_jar_read_t read_into(way_jar_t *jar, const char *text, int64_t now)
+{
+    way_jar_read_t r;
+    way_jar_read(jar, text, strlen(text), now, &r);
+    return r;
+}
+
+static void cookie_file_round_trip(void)
+{
+    way_jar_t *jar = way_jar_new();
+    hear(jar, "https://h.test/a/page", true, "host=1; Max-Age=1000", 100);
+    hear(jar, "https://www.d.test/", true, "dom=2; Domain=d.test; Path=/; Max-Age=1000", 101);
+    hear(jar, "https://h.test/", true, "sid=3; Path=/; Secure; HttpOnly; Max-Age=1000", 102);
+    hear(jar, "https://h.test/", true, "__Host-tok=4; Path=/; Secure; Max-Age=1000", 103);
+    hear(jar, "https://h.test/", true, "__Secure-s=5; Path=/x; Secure; Max-Age=1000", 104);
+    hear(jar, "https://h.test/", true, "session=6; Path=/", 105);
+    hear(jar, "https://h.test/", true, "brief=7; Path=/; Max-Age=50", 106);
+    hear(jar, "https://h.test/", true, "empty=; Path=/; Max-Age=1000", 107);
+    const char *text = file_of(jar, 200);
+    expect("file: Netscape's first line, then what the file is", strncmp(text, "# Netscape HTTP Cookie File\n", 28) == 0 &&
+           strstr(text, "sign in as you") != NULL, text);
+    expect("file: a host-only cookie, its directory's path",
+           strstr(text, "\nh.test\tFALSE\t/a\tFALSE\t1100\thost\t1\n") != NULL, text);
+    expect("file: a domain cookie, spelled with its dot",
+           strstr(text, "\n.d.test\tTRUE\t/\tFALSE\t1101\tdom\t2\n") != NULL, text);
+    expect("file: HttpOnly as curl writes it",
+           strstr(text, "\n#HttpOnly_h.test\tFALSE\t/\tTRUE\t1102\tsid\t3\n") != NULL, text);
+    expect("file: the prefixed cookies", strstr(text, "\th.test\tFALSE\t/\tTRUE\t1103\t__Host-tok\t4\n") == NULL &&
+           strstr(text, "\nh.test\tFALSE\t/\tTRUE\t1103\t__Host-tok\t4\n") != NULL &&
+           strstr(text, "\nh.test\tFALSE\t/x\tTRUE\t1104\t__Secure-s\t5\n") != NULL, text);
+    expect("file: an empty value is an empty field",
+           strstr(text, "\nh.test\tFALSE\t/\tFALSE\t1107\tempty\t\n") != NULL, text);
+    expect("file: a session cookie is never written, an expired one neither",
+           strstr(text, "session") == NULL && strstr(text, "brief") == NULL, text);
+    expect("file: oldest first", strstr(text, "\thost\t") < strstr(text, "\tdom\t") &&
+           strstr(text, "\tdom\t") < strstr(text, "\tsid\t") && strstr(text, "\tsid\t") < strstr(text, "\tempty\t"), text);
+
+    way_jar_t *back = way_jar_new();
+    way_jar_read_t r = read_into(back, text, 300);
+    expect("file: read back whole", r.read == 6 && r.refused == 0 && !r.short_of_memory && way_jar_count(back) == 6, NULL);
+    jar_expect("file: what the host is sent is what it was", back, "https://h.test/a/b", true, 300,
+               sent(jar, "https://h.test/a/b", true, 300));
+    jar_expect("file: the domain cookie reaches a name under it", back, "https://x.d.test/", true, 300, "dom=2");
+    jar_expect("file: a secure cookie stays secure", back, "http://h.test/x/y", false, 300, "empty=");
+    expect("file: an HttpOnly cookie stays out of a script's reach",
+           strstr(script_read(back, "https://h.test/", true, 300), "sid=") == NULL, NULL);
+    expect("file: what was read is no change a file has still to hear", way_jar_changes(back) == 0, NULL);
+    expect("file: and writes back the same", strcmp(file_of(back, 300), file_of(jar, 300)) == 0 ||
+           strcmp(strchr(file_of(back, 300), '\n'), strchr(file_of(jar, 300), '\n')) == 0, NULL);
+    expect("file: an expired line is not read", read_into(back, text, 1150).read == 0, NULL);
+    way_jar_free(back);
+    way_jar_free(jar);
+}
+
+static void cookie_file_hostile(void)
+{
+    static char text[WAY_JAR_LINE_MAX * 2 + 4096];
+    size_t n = (size_t)snprintf(text, sizeof(text),
+        "# a comment\n"
+        "\n"
+        "ok.test\tFALSE\t/\tFALSE\t5000\tgood\t1\r\n"           // CR LF is a line end
+        "ok.test\tFALSE\t/\tFALSE\t5000\tsix\n"                  // six fields
+        "ok.test\tFALSE\t/\tFALSE\t5000\ta\tb\tc\n"              // eight
+        "ok.test\tMAYBE\t/\tFALSE\t5000\tflag\t1\n"
+        "ok.test\tFALSE\t/\tYES\t5000\tflag2\t1\n"
+        "ok.test\tFALSE\t/\tFALSE\tsoon\tnum\t1\n"
+        "ok.test\tFALSE\t/\tFALSE\t-5\tneg\t1\n"
+        "ok.test\tFALSE\t/\tFALSE\t1234567890123456789\thuge\t1\n"
+        "ok.test\tFALSE\trel\tFALSE\t5000\tpath\t1\n"
+        ".com\tTRUE\t/\tFALSE\t5000\tsuffix\t1\n"                // a single label's every name
+        "\tFALSE\t/\tFALSE\t5000\tnohost\t1\n"
+        "ok..test\tFALSE\t/\tFALSE\t5000\tdots\t1\n"
+        ".ok.test\tTRUE\t/\tTRUE\t5000\t__Host-x\t1\n"            // a __Host- cookie with a Domain
+        "ok.test\tFALSE\t/sub\tTRUE\t5000\t__Host-y\t1\n"         // ...or a path other than /
+        "ok.test\tFALSE\t/\tFALSE\t5000\t__Secure-z\t1\n"        // a __Secure- one not Secure
+        "ok.test\tFALSE\t/\tFALSE\t5000\tctl\ta\x01z\n"
+        "ok.test\tFALSE\t/\tFALSE\t5000\t\t\n"                   // no name, no value
+        "ok.test\tFALSE\t/\tFALSE\t0\tsession\t1\n"              // curl's session line: not refused, not read
+        "ok.test\tFALSE\t/\tFALSE\t10\told\t1\n"                 // expired: the same
+        "#HttpOnly_ok.test\tFALSE\t/\tTRUE\t5000\thidden\t1\n"
+        ".sub.ok.test\tTRUE\t/\tFALSE\t5000\twide\t1\n");
+    // A line past WAY_JAR_LINE_MAX, and a value past WAY_COOKIE_BYTES_MAX.
+    n += (size_t)snprintf(text + n, sizeof(text) - n, "ok.test\tFALSE\t/\tFALSE\t5000\tlong\t");
+    memset(text + n, 'v', WAY_JAR_LINE_MAX);
+    n += WAY_JAR_LINE_MAX;
+    n += (size_t)snprintf(text + n, sizeof(text) - n, "\nok.test\tFALSE\t/\tFALSE\t5000\tbig\t");
+    memset(text + n, 'v', WAY_COOKIE_BYTES_MAX);
+    n += WAY_COOKIE_BYTES_MAX;
+    n += (size_t)snprintf(text + n, sizeof(text) - n, "\nok.test\tFALSE\t/\tFALSE\t5000\tlast\t1");   // no newline at the end
+    way_jar_t *jar = way_jar_new();
+    way_jar_read_t r;
+    way_jar_read(jar, text, n, 100, &r);
+    expect("hostile: every malformed or refused line is skipped and counted, the rest read",
+           r.read == 4 && r.refused == 18 && !r.short_of_memory, NULL);
+    jar_expect("hostile: what was read", jar, "https://ok.test/", true, 100, "good=1; hidden=1; last=1");
+    jar_expect("hostile: a domain cookie with two labels", jar, "https://a.sub.ok.test/", true, 100, "wide=1");
+    // A NUL inside a line is no line at all; the reader is handed bytes.
+    static const char nul[] = "ok.test\tFALSE\t/\tFALSE\t5000\tz\t1\0tail\nok.test\tFALSE\t/\tFALSE\t5000\tafter\t1\n";
+    way_jar_read(jar, nul, sizeof(nul) - 1, 100, &r);
+    expect("hostile: a NUL in a line refuses it and reading goes on", r.read == 1 && r.refused == 1, NULL);
+    // Every lone fragment of a line, and nothing at all, is safe.
+    const char *good = "ok.test\tFALSE\t/\tTRUE\t5000\tsecure\tv\n";
+    for (size_t k = 0; k <= strlen(good); k++) {
+        char *piece = malloc(k > 0 ? k : 1);
+        memcpy(piece, good, k);
+        way_jar_read(jar, piece, k, 100, &r);
+        free(piece);
+    }
+    way_jar_read(jar, NULL, 0, 100, &r);
+    expect("hostile: fragments and nothing are read safely", r.read == 0 && r.refused == 0, NULL);
+    way_jar_free(jar);
+
+    // The caps: 200 lines for one domain keep 180; past 3000 in all, 3000.
+    static char many[(WAY_COOKIES_MAX + 10) * 48];
+    size_t m = 0;
+    for (int i = 0; i < 200; i++)
+        m += (size_t)snprintf(many + m, sizeof(many) - m, "one.test\tFALSE\t/\tFALSE\t5000\tc%d\t1\n", i);
+    jar = way_jar_new();
+    way_jar_read(jar, many, m, 100, &r);
+    expect("caps: a domain keeps WAY_COOKIES_PER_DOMAIN", r.read == 200 && way_jar_count(jar) == WAY_COOKIES_PER_DOMAIN,
+           NULL);
+    way_jar_free(jar);
+    m = 0;
+    for (int i = 0; i < WAY_COOKIES_MAX + 10; i++)
+        m += (size_t)snprintf(many + m, sizeof(many) - m, "d%d.test\tFALSE\t/\tFALSE\t5000\tc\t1\n", i);
+    jar = way_jar_new();
+    way_jar_read(jar, many, m, 100, &r);
+    expect("caps: the jar keeps WAY_COOKIES_MAX", way_jar_count(jar) == WAY_COOKIES_MAX, NULL);
+    way_jar_free(jar);
+}
+
+// One window's save, as a face does it: the file read into a jar of its
+// own, this jar's changes over it, the text written, the changes marked
+// heard, and the file followed so this window learns what the other set
+// and let go.
+static void save_window(way_jar_t *jar, char *file, size_t cap, int64_t now)
+{
+    uint64_t through = way_jar_changes(jar);
+    way_jar_t *merged = way_jar_new();
+    way_jar_read(merged, file, strlen(file), now, NULL);
+    way_jar_overlay(merged, jar, through, now);
+    size_t len;
+    char *text = way_jar_text(merged, now, &len);
+    snprintf(file, cap, "%s", text);
+    os64_free(text);
+    way_jar_free(merged);
+    way_jar_saved(jar, through);
+    way_jar_follow(jar, file, strlen(file), now, NULL);
+}
+
+static void cookie_file_two_windows(void)
+{
+    static char file[1 << 14];
+    snprintf(file, sizeof(file), "w.test\tFALSE\t/\tFALSE\t9000\tx\t0\nw.test\tFALSE\t/\tFALSE\t9000\tz\t0\n");
+    way_jar_t *a = way_jar_new(), *b = way_jar_new();
+    way_jar_read(a, file, strlen(file), 100, NULL);
+    way_jar_read(b, file, strlen(file), 100, NULL);
+    hear(a, "http://w.test/", false, "x=A; Max-Age=5000", 110);
+    expect("windows: a kept cookie set is a change", way_jar_changes(a) != 0, NULL);
+    hear(b, "http://w.test/", false, "y=B; Max-Age=5000", 111);
+    hear(b, "http://w.test/", false, "z=gone; Max-Age=0", 112);
+    hear(b, "http://w.test/", false, "s=session", 113);
+    save_window(a, file, sizeof(file), 120);
+    save_window(b, file, sizeof(file), 121);
+    expect("windows: each one's change kept, the other's not undone, the one let go gone",
+           strstr(file, "\tx\tA\n") != NULL && strstr(file, "\ty\tB\n") != NULL && strstr(file, "\tz\t") == NULL &&
+               strstr(file, "\ts\t") == NULL, file);
+    jar_expect("windows: the second learned the first's at its save", b, "http://w.test/", false, 122, "x=A; y=B; s=session");
+    way_jar_t *probe = way_jar_new();
+    way_jar_overlay(probe, b, way_jar_changes(b), 122);
+    expect("windows: a save leaves nothing to hear", way_jar_count(probe) == 0, NULL);
+    way_jar_free(probe);
+    // The first saves again for a change of its own: what the second wrote
+    // stands, and the first, reading the file back, learns it.
+    hear(a, "http://w.test/", false, "w=1; Max-Age=5000", 130);
+    save_window(a, file, sizeof(file), 131);
+    expect("windows: a later save of the first keeps the second's", strstr(file, "\ty\tB\n") != NULL &&
+           strstr(file, "\tw\t1\n") != NULL && strstr(file, "\tx\tA\n") != NULL, file);
+    // (y is new to the first when it follows the file at 131, so it is the
+    // youngest there; z, which the second let go, the first lets go too.)
+    jar_expect("windows: and the first sends what the second set, not what it let go", a, "http://w.test/", false,
+               132, "x=A; w=1; y=B");
+    // The same cookie changed in both: the later save is the newer change.
+    hear(a, "http://w.test/", false, "x=A2; Max-Age=5000", 140);
+    hear(b, "http://w.test/", false, "x=B2; Max-Age=5000", 141);
+    save_window(a, file, sizeof(file), 142);
+    save_window(b, file, sizeof(file), 143);
+    expect("windows: one cookie, the later change", strstr(file, "\tx\tB2\n") != NULL && strstr(file, "\tx\tA2\n") == NULL,
+           file);
+    // A change not yet saved outranks the file: reading it in leaves the
+    // window's own.
+    hear(a, "http://w.test/", false, "x=mine; Max-Age=5000", 150);
+    way_jar_read(a, file, strlen(file), 151, NULL);
+    jar_expect("windows: a change of this window's stands against the file", a, "http://w.test/", false, 151,
+               "x=mine; w=1; y=B");
+    way_jar_follow(a, file, strlen(file), 151, NULL);
+    jar_expect("windows: following the file too", a, "http://w.test/", false, 151, "x=mine; w=1; y=B");
+    // A session cookie in a kept one's place takes it out of the file.
+    hear(a, "http://w.test/", false, "w=now-a-session", 160);
+    save_window(a, file, sizeof(file), 161);
+    expect("windows: a kept cookie made a session cookie leaves the file", strstr(file, "\tw\t") == NULL &&
+           strstr(file, "\tx\tmine\n") != NULL, file);
+    // A page's script setting a kept cookie is a change like any.
+    uint64_t before = way_jar_changes(a);
+    script_hear(a, "http://w.test/", false, "js=1; Max-Age=5000", 170);
+    expect("windows: a script's kept cookie is a change", way_jar_changes(a) > before, NULL);
+    hear(a, "http://w.test/", false, "plain=session", 171);
+    expect("windows: a session cookie beside nothing kept is not", way_jar_changes(a) == before + 1, NULL);
+    // Clear cookies in the second empties the file; the first, following
+    // it, lets go every kept cookie but the one it has not saved yet, and
+    // keeps its session cookies.
+    way_jar_clear(b);
+    size_t len;
+    char *empty = way_jar_text(b, 180, &len);
+    snprintf(file, sizeof(file), "%s", empty);
+    os64_free(empty);
+    way_jar_follow(a, file, strlen(file), 181, NULL);
+    jar_expect("windows: a file cleared elsewhere is followed", a, "http://w.test/", false, 182,
+               "w=now-a-session; js=1; plain=session");
+    way_jar_free(a);
+    way_jar_free(b);
+}
+
+static void cookie_switch(void)
+{
+    way_jar_t *jar = way_jar_new();
+    hear(jar, "http://o.test/", false, "a=1; Max-Age=100", 10);
+    way_jar_refuse(jar, true);
+    hear(jar, "http://o.test/", false, "b=2; Max-Age=100", 11);
+    jar_expect("off: nothing sent", jar, "http://o.test/", false, 12, "");
+    way_jar_read(jar, "o.test\tFALSE\t/\tFALSE\t500\tc\t3\n", 29, 12, NULL);
+    way_jar_refuse(jar, false);
+    jar_expect("off: nothing heard nor read while it was", jar, "http://o.test/", false, 13, "a=1");
+    hear(jar, "http://o.test/", false, "b=2; Max-Age=100", 14);
+    hear(jar, "http://o.test/", false, "a=gone; Max-Age=0", 15);
+    way_jar_clear(jar);
+    expect("clear: every cookie gone", way_jar_count(jar) == 0 && strstr(file_of(jar, 16), "\t") == NULL, NULL);
+    way_jar_t *merged = way_jar_new();
+    way_jar_read(merged, "o.test\tFALSE\t/\tFALSE\t500\tb\t2\n", 29, 16, NULL);
+    way_jar_overlay(merged, jar, way_jar_changes(jar), 16);
+    expect("clear: and no change left to lay over a file", way_jar_count(merged) == 1, NULL);
+    way_jar_free(merged);
+    way_jar_free(jar);
+
+    // Every allocation of following a file, changing, laying over and
+    // writing failed in turn, and from there on: nothing leaks or crashes,
+    // and a follow short of memory lets nothing go.
+    static const char kFile[] = "f.test\tFALSE\t/\tFALSE\t500\ta\t1\nf.test\tFALSE\t/\tFALSE\t500\tb\t2\n";
+    for (size_t k = 1; k < 32; k++) {
+        size_t before = live;
+        allocations = 0;
+        fail_at = k;
+        way_jar_t *j = way_jar_new(), *m = way_jar_new();
+        if (j != NULL && m != NULL) {
+            way_jar_follow(j, kFile, sizeof(kFile) - 1, 10, NULL);
+            hear(j, "http://f.test/", false, "c=3; Max-Age=100", 11);
+            hear(j, "http://f.test/", false, "a=gone; Max-Age=0", 12);
+            way_jar_follow(j, "", 0, 12, NULL);
+            way_jar_overlay(m, j, way_jar_changes(j), 13);
+            size_t len;
+            char *t = way_jar_text(m, 13, &len);
+            os64_free(t);
+        }
+        fail_at = 0;
+        way_jar_free(j);
+        way_jar_free(m);
+        expect("sweep: a failed allocation in the file's work leaks nothing", live == before, NULL);
+    }
+}
+
 static void jar_cases(void)
 {
+    cookie_file_round_trip();
+    cookie_file_hostile();
+    cookie_file_two_windows();
+    cookie_switch();
     cookie_scripts();
     cookie_dates();
     cookie_scope();

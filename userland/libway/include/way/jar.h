@@ -72,6 +72,79 @@ size_t way_jar_script_cookies(way_jar_t *jar, const os64_url_t *to, bool encrypt
 // next asked or told.
 int32_t way_jar_count(way_jar_t *jar);
 
+// ── Kept across restarts (YONDER_HONEY_DO.md § 4) ───────────────────────
+//
+// A FILE OF THE JAR is Netscape's cookies.txt, as curl and wget write it
+// (jar.c § Kept across restarts has the format). The jar does no I/O: a
+// face reads the file and hands the text in, and asks for the text to
+// write. Two windows share one file by READ-MERGE-WRITE: each change to a
+// cookie a file keeps (one with an expiry, or one set in such a cookie's
+// place, or one let go) is numbered, and a face writing the file reads it
+// into a jar of its own, lays this jar's changes over it
+// (way_jar_overlay), writes that, tells this jar which changes the file has
+// now heard (way_jar_saved), and has this jar follow the file
+// (way_jar_follow). What another window wrote stands except where this one
+// changed the same cookie (its name, domain, path and host-only flag)
+// since, because its change is the newer; what another window let go,
+// this one lets go when it next follows the file.
+
+// The longest line a file's reader takes: a cookie's name and value, its
+// path and domain at their longest, and the rest of the line.
+#define WAY_JAR_LINE_MAX (WAY_COOKIE_BYTES_MAX + OS64_URL_PATH_MAX + OS64_URL_HOST_MAX + 64)
+
+// The jar's cookies a file keeps — every one with an expiry not yet passed
+// at `now`, but one with a byte in a field that would break its line — as
+// the file's text, oldest first, under three comment lines that say what
+// the file is. os64_malloc'd, `*len` its length; NULL on no memory.
+char *way_jar_text(way_jar_t *jar, int64_t now, size_t *len);
+
+// What way_jar_read made of a file: lines read as cookies, lines refused
+// (malformed, longer than WAY_JAR_LINE_MAX, or refused by the rules a
+// Set-Cookie is held to), and whether memory ran out on the way. A
+// comment, a blank line, a session line and an expired one are none of
+// these.
+typedef struct {
+    int32_t read, refused;
+    bool short_of_memory;
+} way_jar_read_t;
+
+// A file's text into the jar, each line held to the rules a Set-Cookie
+// is (prefixes, domains, sizes) and the jar's limits, a malformed line
+// skipped. A cookie the jar has a change to of its own that no file has
+// heard is left as the jar has it. A cookie read replaces its namesake
+// and keeps its age; one new to the jar is the least recently used. What
+// is read is no change a file has still to hear. `report` may be NULL.
+void way_jar_read(way_jar_t *jar, const char *text, size_t len, int64_t now, way_jar_read_t *report);
+
+// The same, with the text as the whole of what a file keeps: after it, a
+// cookie with an expiry that the jar has no change to of its own and no
+// line named is let go (another window let it go, or cleared the file).
+// Nothing is let go when memory ran out on the way, nor while the jar
+// refuses cookies. Session cookies are the jar's alone and stay.
+void way_jar_follow(way_jar_t *jar, const char *text, size_t len, int64_t now, way_jar_read_t *report);
+
+// The number of the jar's latest change a file has to hear, 0 for none
+// since it was made. A face compares it with the number it last saved.
+uint64_t way_jar_changes(way_jar_t *jar);
+
+// `from`'s changes numbered `through` and below, laid over `to` (a face's
+// own jar, read from the file): each cookie set in `from` replaces its
+// namesake in `to`, or removes it when it is a session cookie now (or is
+// expired at `now`), and each one `from` let go is removed. `to` must not
+// be `from`.
+void way_jar_overlay(way_jar_t *to, way_jar_t *from, uint64_t through, int64_t now);
+
+// A file has heard the jar's changes numbered `through` and below.
+void way_jar_saved(way_jar_t *jar, uint64_t through);
+
+// Every cookie, and every change a file had still to hear, let go. A
+// face empties the file itself.
+void way_jar_clear(way_jar_t *jar);
+
+// `cookies = off`: while `refuse` is true the jar hears no cookie and
+// sends none. What it holds stays until it is cleared.
+void way_jar_refuse(way_jar_t *jar, bool refuse);
+
 // RFC 6265 §5.1.1: a cookie date, read the forgiving way. False when it is
 // not one.
 bool way_cookie_date(const char *text, size_t len, int64_t *epoch);
