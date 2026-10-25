@@ -823,7 +823,7 @@ static void cookie_switch(void)
     // writing failed in turn, and from there on: nothing leaks or crashes,
     // and a follow short of memory lets nothing go.
     static const char kFile[] = "f.test\tFALSE\t/\tFALSE\t500\ta\t1\nf.test\tFALSE\t/\tFALSE\t500\tb\t2\n";
-    for (size_t k = 1; k < 32; k++) {
+    for (size_t k = 1; k < 48; k++) {
         size_t before = live;
         allocations = 0;
         fail_at = k;
@@ -915,7 +915,7 @@ static void cookie_file_edges(void)
     way_jar_t *m = way_jar_new();
     hear(a, "http://o.test/", false, "c=3; Max-Age=100", 10);
     allocations = 0;
-    fail_at = 1;                        // the new cookie's block in `m`
+    fail_at = 2;                        // after the age order's index: the new cookie's block in `m`
     bool whole = way_jar_overlay(m, a, way_jar_changes(a), 11);
     fail_at = 0;
     expect("edges: an overlay short of memory answers false", !whole && way_jar_count(m) == 0, NULL);
@@ -923,6 +923,82 @@ static void cookie_file_edges(void)
            way_jar_count(m) == 1, NULL);
     expect("edges: a jar laid over itself is refused", !way_jar_overlay(a, a, way_jar_changes(a), 11), NULL);
     way_jar_free(m);
+    way_jar_free(a);
+
+    // A kept cookie replaced by a brief one that expires before the save:
+    // the file is told the old line is gone, so it does not come back.
+    a = way_jar_new();
+    snprintf(file, sizeof(file), "%s", kOld);
+    way_jar_read(a, file, strlen(file), 100, NULL);
+    hear(a, "http://s.test/", false, "sid=brief; Max-Age=1", 110);
+    jar_expect("edges: the brief one is sent while it lasts", a, "http://s.test/", false, 110, "sid=brief");
+    jar_expect("edges: and not once it has expired", a, "http://s.test/", false, 112, "");
+    save_window(a, file, sizeof(file), 113);
+    expect("edges: an expired replacement takes the old line out of the file", strstr(file, "\tsid\t") == NULL, file);
+    jar_expect("edges: and the old value does not come back", a, "http://s.test/", false, 114, "");
+    way_jar_free(a);
+
+    // A save lays new cookies in by age, not by where the jar holds them:
+    // a deletion moves the newest into an older one's slot.
+    a = way_jar_new();
+    hear(a, "http://o.test/", false, "filler=1; Max-Age=5000", 100);
+    hear(a, "http://o.test/", false, "older=1; Max-Age=5000", 101);
+    hear(a, "http://o.test/", false, "login=1; Max-Age=5000", 102);
+    hear(a, "http://o.test/", false, "filler=; Max-Age=0", 103);
+    file[0] = '\0';
+    save_window(a, file, sizeof(file), 104);
+    way_jar_free(a);
+    expect("edges: the file keeps them oldest first after a deletion", strstr(file, "\tolder\t") != NULL &&
+           strstr(file, "\tolder\t") < strstr(file, "\tlogin\t"), file);
+    a = way_jar_new();
+    way_jar_read(a, file, strlen(file), 200, NULL);
+    way_jar_cookies(a, &to, false, 200, out, sizeof(out), &left);
+    expect("edges: and a restart's cut keeps the login", strcmp(out, "login=1") == 0 && left == 1, out);
+    way_jar_free(a);
+
+    // A domain at its limit in use, and the file replacing one of its
+    // cookies with a login another window set: following keeps the login.
+    static char full[WAY_COOKIES_PER_DOMAIN * 64];
+    size_t fn = 0;
+    for (int i = 0; i < WAY_COOKIES_PER_DOMAIN; i++)
+        fn += (size_t)snprintf(full + fn, sizeof(full) - fn, "f.test\tFALSE\t/\tFALSE\t9000\tc%d\t1\n", i);
+    a = way_jar_new();
+    way_jar_read(a, full, fn, 100, NULL);
+    (void)sent(a, "http://f.test/", false, 100);
+    (void)sent(a, "http://f.test/", false, 100);    // each used since: none ties a new one's 0
+    char *swap = strstr(full, "\tc0\t1\n");
+    memcpy(swap, "\tzz\t", 4);                  // c0's line now names zz, another window's login
+    way_jar_follow(a, full, fn, 101, NULL);
+    expect("edges: a following at a domain's limit keeps the login another window set",
+           way_jar_count(a) == WAY_COOKIES_PER_DOMAIN && strstr(sent(a, "http://f.test/", false, 101), "zz=1") != NULL &&
+               strstr(sent(a, "http://f.test/", false, 101), "c0=") == NULL, NULL);
+    way_jar_free(a);
+
+    // A kept cookie the jar lets go at its limit leaves the file too: a
+    // following does not bring it back to push out another.
+    a = way_jar_new();
+    for (int i = 0; i < WAY_COOKIES_PER_DOMAIN; i++) {
+        char line[32];
+        snprintf(line, sizeof(line), "c%d=1; Max-Age=8000", i);
+        hear(a, "http://f.test/", false, line, 100);
+    }
+    // Set again, c0..c89 are used since; c90 is the one used longest ago,
+    // and not the file's first line, which a merge's own limit would take.
+    for (int i = 0; i < 90; i++) {
+        char line[32];
+        snprintf(line, sizeof(line), "c%d=2; Max-Age=8000", i);
+        hear(a, "http://f.test/", false, line, 100);
+    }
+    static char big[WAY_COOKIES_PER_DOMAIN * 64 + 4096];
+    big[0] = '\0';
+    save_window(a, big, sizeof(big), 101);
+    hear(a, "http://f.test/", false, "late=1; Max-Age=8000", 102);     // c90 goes
+    save_window(a, big, sizeof(big), 103);
+    expect("edges: a cookie let go at the limit leaves the file", strstr(big, "\tc90\t") == NULL &&
+           strstr(big, "\tc0\t2\n") != NULL && strstr(big, "\tlate\t") != NULL, NULL);
+    const char *after = sent(a, "http://f.test/", false, 104);
+    expect("edges: and the window neither takes it back nor loses another for it",
+           strstr(after, "c90=") == NULL && strstr(after, "c0=2") != NULL && strstr(after, "late=1") != NULL, after);
     way_jar_free(a);
 
     // A name or value with white space at an end is no Set-Cookie's.

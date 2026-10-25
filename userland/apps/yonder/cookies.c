@@ -105,7 +105,10 @@ static void follow(yonder_cookies_t *k)
     way_jar_read_t report;
     way_jar_follow(k->jar, (const char *)text, len, now_utc(), &report);
     os64_free(text);
-    k->identity = identity;
+    // A follow short of memory is not this file followed: the identity
+    // stays as it was, so the next look reads it again.
+    if (!report.short_of_memory)
+        k->identity = identity;
     if (report.refused > 0)
         os64_debug_log("yonder: lines of the cookie file were not read (malformed, or refused by the jar's rules)");
 }
@@ -219,6 +222,20 @@ static bool empty_file(yonder_cookies_t *k)
     return ok;
 }
 
+// The file forgotten: emptied when it is there, and the temps a dead window
+// left swept either way, since a crash between a first save's temp and its
+// rename leaves every login in a temp with no file beside it. False with
+// the problem said; true with no profile path, nothing being kept.
+static bool forget_file(yonder_cookies_t *k)
+{
+    if (k->path[0] == '\0')
+        return true;
+    if (identity_of(k->path) != 0)
+        return empty_file(k);
+    yonder_profile_sweep(k->path);
+    return true;
+}
+
 yonder_cookies_t *yonder_cookies_new(way_jar_t *jar, const char *profile, yonder_cookies_mode_t mode)
 {
     if (jar == NULL)
@@ -238,8 +255,8 @@ yonder_cookies_t *yonder_cookies_new(way_jar_t *jar, const char *profile, yonder
     yonder_cookies_set_mode(k, mode);
     // A SESSION yonder that never reached yonder_cookies_flush (a crash)
     // left the file as it was: emptied now, as that flush would have.
-    if (mode == YONDER_COOKIES_SESSION && k->path[0] != '\0' && identity_of(k->path) != 0)
-        (void)empty_file(k);                // a failure is said as the problem
+    if (mode == YONDER_COOKIES_SESSION)
+        (void)forget_file(k);               // a failure is said as the problem
     return k;
 }
 
@@ -263,8 +280,7 @@ void yonder_cookies_set_mode(yonder_cookies_t *k, yonder_cookies_mode_t mode)
         way_jar_refuse(k->jar, true);
         way_jar_clear(k->jar);
         k->saved = way_jar_changes(k->jar);
-        if (k->path[0] != '\0' && identity_of(k->path) != 0)
-            (void)empty_file(k);            // a failure is said as the problem
+        (void)forget_file(k);               // a failure is said as the problem
         return;
     }
     way_jar_refuse(k->jar, false);
@@ -303,8 +319,7 @@ void yonder_cookies_flush(yonder_cookies_t *k)
     // what the file held when it left ON — it was kept until now so that
     // ticking the box again lost nothing.
     if (k->mode == YONDER_COOKIES_SESSION) {
-        if (k->path[0] != '\0' && identity_of(k->path) != 0)
-            (void)empty_file(k);
+        (void)forget_file(k);
         return;
     }
     if (yonder_cookies_due(k) == YONDER_NEVER)
@@ -328,9 +343,7 @@ int64_t yonder_cookies_clear(yonder_cookies_t *k)
     int64_t had = way_jar_count(k->jar);
     way_jar_clear(k->jar);
     k->saved = way_jar_changes(k->jar);
-    if (k->path[0] == '\0' || identity_of(k->path) == 0)
-        return had;
-    return empty_file(k) ? had : -1;
+    return forget_file(k) ? had : -1;
 }
 
 const char *yonder_cookies_problem(const yonder_cookies_t *k)

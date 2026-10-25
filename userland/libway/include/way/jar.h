@@ -119,20 +119,24 @@ typedef struct {
 } way_jar_read_t;
 
 // A file's text into the jar, each line held to the rules a Set-Cookie
-// is (prefixes, domains, sizes) and the jar's limits, a malformed line
-// skipped. A cookie the jar has a change to of its own that no file has
-// heard is left as the jar has it. A cookie read replaces its namesake
-// and keeps its age; one new to the jar is its newest, and its least
-// recently used. What is read is no change a file has still to hear.
-// `report` may be NULL.
+// is (prefixes, domains, sizes), a malformed line skipped, and the jar
+// held to its limits once every line is in. A cookie the jar has a change
+// to of its own that no file has heard is left as the jar has it. A cookie
+// read replaces its namesake and keeps its age; one new to the jar is its
+// newest, and its least recently used. What is read is no change a file
+// has still to hear; a kept cookie the limits let go is one (the file is
+// told it is gone). `report` may be NULL.
 void way_jar_read(way_jar_t *jar, const char *text, size_t len, int64_t now, way_jar_read_t *report);
 
 // The same, with the text as the whole of what a file keeps: after it, a
 // cookie a file keeps (way_jar_text's) that the jar has no change to of
 // its own and no line named is let go (another window let it go, or
-// cleared the file). Nothing is let go when memory ran out on the way, nor
-// while the jar refuses cookies. Session cookies, and those no line can
-// hold, are the jar's alone and stay.
+// cleared the file), and only then are the limits held, so a line that
+// takes a stale cookie's place is not let go for it. Nothing is let go for
+// want of a line when memory ran out on the way, nor while the jar refuses
+// cookies.
+// Session cookies, and those no line can hold, are the jar's alone and
+// stay.
 void way_jar_follow(way_jar_t *jar, const char *text, size_t len, int64_t now, way_jar_read_t *report);
 
 // The number of the jar's latest change a file has to hear, 0 for none
@@ -140,12 +144,13 @@ void way_jar_follow(way_jar_t *jar, const char *text, size_t len, int64_t now, w
 uint64_t way_jar_changes(way_jar_t *jar);
 
 // `from`'s changes numbered `through` and below, laid over `to` (a face's
-// own jar, read from the file): each cookie set in `from` replaces its
-// namesake in `to`, keeping the namesake's age (one new to `to` is its
-// newest), or removes it when it is a session cookie now (or is expired at
-// `now`), and each one `from` let go is removed. False when memory ran out
-// with `to` laid over only in part, which is no text to write, and when
-// `to` is `from` or either is NULL.
+// own jar, read from the file), oldest first: each cookie set in `from`
+// replaces its namesake in `to`, keeping the namesake's age (one new to
+// `to` is its newest, so the new ones keep their order of age), or removes
+// it when it is a session cookie now (or is expired at `now`), and each
+// one `from` let go is removed; then `to` is held to the limits. False
+// when memory ran out with `to` laid over only in part, which is no text
+// to write, and when `to` is `from` or either is NULL.
 bool way_jar_overlay(way_jar_t *to, way_jar_t *from, uint64_t through, int64_t now);
 
 // A file has heard the jar's changes numbered `through` and below.

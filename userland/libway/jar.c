@@ -341,22 +341,40 @@ static bool staler(const Cookie *a, const Cookie *b)
     return a->used < b->used;
 }
 
+static void gone_note(way_jar_t *jar, const Cookie *c);
+
+// Cookie `i` let go by the jar's own rules (past its expiry, or past a
+// limit), not by a site. A file may still hold a line in its place: the
+// cookie itself when it is kept, or, for a change the file has not heard,
+// the value that change replaced. Either way the file is told it is gone
+// (gone_note), or the next save keeps that line and a following brings it
+// back. An unchanged kept cookie past its expiry needs no telling: its line
+// expires with it.
+static void let_go(way_jar_t *jar, int32_t i, bool expired)
+{
+    const Cookie *c = &jar->cookies[i];
+    if (c->changed != 0 || (!expired && c->expiry != INT64_MAX))
+        gone_note(jar, c);
+    drop(jar, i);
+}
+
 static void purge_expired(way_jar_t *jar, int64_t now)
 {
     for (int32_t i = 0; i < jar->n;)
         if (jar->cookies[i].expiry <= now)
-            drop(jar, i);
+            let_go(jar, i, true);
         else
             i++;
 }
 
 // Past a limit, the cookie used longest ago goes: in the domain for the
-// domain's limit, in the jar for the jar's. `domain` is the string of the
-// cookie just stored, which is the one used MOST recently, so it is never
-// the one dropped and the string outlives every drop here (a drop moves
-// Cookie records, not the blocks their strings live in).
-static void enforce_limits(way_jar_t *jar, const char *domain)
+// domain's limit, in the jar for the jar's. `domain` must outlive every
+// drop here: the string of the cookie just heard (the one used MOST
+// recently, so never the one dropped; a drop moves Cookie records, not the
+// blocks their strings live in), or a copy. True when one went.
+static bool enforce_limits(way_jar_t *jar, const char *domain)
 {
+    bool dropped = false;
     for (;;) {
         int32_t count = 0, stalest = -1;
         for (int32_t i = 0; i < jar->n; i++) {
@@ -368,14 +386,41 @@ static void enforce_limits(way_jar_t *jar, const char *domain)
         }
         if (count <= WAY_COOKIES_PER_DOMAIN)
             break;
-        drop(jar, stalest);
+        let_go(jar, stalest, false);
+        dropped = true;
     }
     while (jar->n > WAY_COOKIES_MAX) {
         int32_t stalest = 0;
         for (int32_t i = 1; i < jar->n; i++)
             if (staler(&jar->cookies[i], &jar->cookies[stalest]))
                 stalest = i;
-        drop(jar, stalest);
+        let_go(jar, stalest, false);
+        dropped = true;
+    }
+    return dropped;
+}
+
+// Every domain held to its limit, and the jar to its own, after a batch of
+// put_in: a cookie a file names must not be let go for a stale one the
+// batch is about to drop (a following lets go what no line named only
+// after every line is in).
+static void enforce_every(way_jar_t *jar)
+{
+    for (bool dropped = true; dropped;) {
+        dropped = false;
+        for (int32_t i = 0; i < jar->n; i++) {
+            bool first = true;
+            for (int32_t j = 0; j < i && first; j++)
+                first = !os64_streq(jar->cookies[j].domain, jar->cookies[i].domain);
+            if (!first)
+                continue;
+            char domain[OS64_URL_HOST_MAX];
+            os64_strcopy(domain, sizeof(domain), jar->cookies[i].domain);
+            if (enforce_limits(jar, domain)) {
+                dropped = true;
+                break;
+            }
+        }
     }
 }
 
@@ -1160,8 +1205,10 @@ static bool changed_here(const way_jar_t *jar, const Cookie *probe)
 // newest, made at `now`, and its least used. Newest, not `c`'s own age: a
 // file holds no age, so the cookies a jar read from one were made when it
 // was read, and an older `c` would sort before every one of them — a new
-// login the oldest cookie in the file, the first the budget cuts. Under
-// the lock. False on no memory, the namesake left as it was.
+// login the oldest cookie in the file, the first the budget cuts. The
+// limits are the caller's to hold once its whole batch is in
+// (enforce_every). Under the lock. False on no memory, the namesake left
+// as it was.
 static bool put_in(way_jar_t *jar, const Cookie *c, int64_t now)
 {
     int64_t created = now;
@@ -1193,12 +1240,6 @@ static bool put_in(way_jar_t *jar, const Cookie *c, int64_t now)
     n->secure = c->secure;
     n->http_only = c->http_only;
     n->same_site = c->same_site;
-    // A cookie put in is not the most recently used, as a heard one is, so
-    // the limits may let it go: they are handed a copy of its domain, not
-    // the string that would go with it.
-    char domain[OS64_URL_HOST_MAX];
-    os64_strcopy(domain, sizeof(domain), n->domain);
-    enforce_limits(jar, domain);
     return true;
 }
 
@@ -1206,7 +1247,7 @@ static bool put_in(way_jar_t *jar, const Cookie *c, int64_t now)
 // cookie a file keeps that the jar has no change to of its own and the
 // text does not hold let go after (way_jar_follow) — but only when the
 // whole text was read: a cookie a read short of memory did not reach is
-// not one the file let go.
+// not one the file let go. The limits are held last (enforce_every).
 static void read_text(way_jar_t *jar, const char *text, size_t len, int64_t now, way_jar_read_t *report,
                       bool follow)
 {
@@ -1269,6 +1310,7 @@ static void read_text(way_jar_t *jar, const char *text, size_t len, int64_t now,
                 i++;
         }
     }
+    enforce_every(jar);
     os64_lock_release(&jar->lock);
     os64_free(line);
 }
@@ -1302,10 +1344,20 @@ bool way_jar_overlay(way_jar_t *to, way_jar_t *from, uint64_t through, int64_t n
             }
         }
     }
-    for (int32_t i = 0; i < from->n && whole; i++) {
-        const Cookie *c = &from->cookies[i];
-        if (c->changed == 0 || c->changed > through)
-            continue;
+    // The changes oldest first (by_age): a cookie new to `to` is its newest
+    // as it goes in (put_in), so the order they go in is the order the file
+    // keeps their ages in, and where `from` happens to hold them (a drop
+    // moves its last record) must not decide which a restart calls newest.
+    int32_t *idx = os64_malloc((size_t)(from->n > 0 ? from->n : 1) * 2 * sizeof(int32_t));
+    int32_t n = 0;
+    whole = idx != NULL;
+    for (int32_t i = 0; i < from->n && whole; i++)
+        if (from->cookies[i].changed != 0 && from->cookies[i].changed <= through)
+            idx[n++] = i;
+    if (whole)
+        by_age(from->cookies, idx, idx + n, n);
+    for (int32_t i = 0; i < n && whole; i++) {
+        const Cookie *c = &from->cookies[idx[i]];
         if (c->expiry != INT64_MAX && c->expiry > now) {
             whole = put_in(to, c, now);
             continue;
@@ -1319,8 +1371,10 @@ bool way_jar_overlay(way_jar_t *to, way_jar_t *from, uint64_t through, int64_t n
             }
         }
     }
+    enforce_every(to);
     os64_lock_release(&to->lock);
     os64_lock_release(&from->lock);
+    os64_free(idx);
     return whole;
 }
 

@@ -9263,6 +9263,35 @@ static void cookie_file_cases(void) {
     check(fake_is_dir(COOKIE_FILE) && yonder_cookies_problem(k)!=NULL &&
           strstr(yonder_cookies_problem(k),"is a folder")!=NULL,"cookie file: a folder in its place is said as one, and left alone");
     yonder_cookies_free(k); way_jar_free(jar);
+    /* A look whose follow runs short of memory is not the file followed:
+     * the next look reads it again. */
+    fake_reset();
+    snprintf(fake_dirs[nfake_dirs++],256,"/tmp/profile");
+    cookie_file_seed("k.test\tFALSE\t/\tFALSE\t1800000000\tsid\tkept\n");
+    jar=way_jar_new();
+    k=yonder_cookies_new(jar,"/tmp/profile",YONDER_COOKIES_ON);
+    cookie_file_seed("k.test\tFALSE\t/\tFALSE\t1800000000\tsid\tkept\nk.test\tFALSE\t/\tFALSE\t1800000000\tother\t2\n");
+    fail_at=attempts+2;                 /* the file's bytes, then the follow's line */
+    yonder_cookies_look(k);
+    fail_at=0;
+    check(strstr(cookie_sent(jar),"other=2")==NULL,"cookie file: a follow short of memory takes nothing");
+    yonder_cookies_look(k);
+    check(strstr(cookie_sent(jar),"other=2")!=NULL,"cookie file: and the next look reads the file again");
+    yonder_cookies_free(k); way_jar_free(jar);
+    /* A dead window's temp with no file beside it (a crash before the
+     * first rename) is taken by Clear cookies all the same. */
+    fake_reset();
+    snprintf(fake_dirs[nfake_dirs++],256,"/tmp/profile");
+    fake_live[0]=99;
+    {
+        int f; for(f=0;fake_files[f].used;f++) {}
+        fake_files[f].used=true; snprintf(fake_files[f].path,256,COOKIE_FILE "+42.3.new"); fake_files[f].data=strdup("x");
+    }
+    jar=way_jar_new();
+    k=yonder_cookies_new(jar,"/tmp/profile",YONDER_COOKIES_ON);
+    check(yonder_cookies_clear(k)==0 && fake_file(COOKIE_FILE "+42.3.new")<0,
+        "cookie file: Clear takes a dead window's temp when there is no file");
+    yonder_cookies_free(k); way_jar_free(jar);
     /* The profile folder is made by the first write, as page storage's. */
     fake_reset();
     jar=way_jar_new();
