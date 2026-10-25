@@ -419,8 +419,9 @@ bool way_identity_keep_alive(const way_identity_t *id);
 // The most a hop's identity lines may take: Chrome's longest (its Reload
 // of a clicked link) is about 320 bytes, and the rest is room for a brand
 // list that grows. libfetch's per-hop cap
-// (OS64_FETCH_HOP_FIELDS_MAX) holds this much on top of the cookies'
-// kilobyte.
+// (OS64_FETCH_HOP_FIELDS_MAX) holds this much on top of a hop's Cookie
+// and Referer lines (way/jar.h's WAY_COOKIE_LINE_MAX and
+// WAY_REFERER_LINE_MAX).
 #define WAY_IDENTITY_MAX 512
 
 // A hop to `to`'s lines, in this order: on a Reload (`m->reload`) the

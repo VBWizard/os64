@@ -23,8 +23,9 @@ typedef struct {
     bool host_only, secure, http_only;
     SameSite same_site;
     // Scratch under the jar's lock, for one sending (cookies(): whether
-    // this cookie matches the request, and whether it is to be sent) or one
-    // following of a file (read_text: whether a line has named it yet).
+    // this cookie matches the request, and whether it is to be sent), one
+    // following of a file (read_text: whether a line has named it yet) or
+    // one writing of it (way_jar_text: whether it is written).
     uint8_t pick;
     // The number of the change that made this cookie what it is, while a
     // file of the jar has still to hear it (§ Kept across restarts); 0 once
@@ -115,6 +116,12 @@ static void trim(const char **from, const char **to)
         (*from)++;
     while (*to > *from && wsp((*to)[-1]))
         (*to)--;
+}
+
+// White space at either end of [s, s + n), which trim() would take off.
+static bool padded(const char *s, size_t n)
+{
+    return n > 0 && (wsp(s[0]) || wsp(s[n - 1]));
 }
 
 // 6265bis: a name or value holding a control byte other than a tab is
@@ -678,11 +685,14 @@ static void hear(way_jar_t *jar, const os64_url_t *from, bool encrypted, const c
     // already expired deletes it and is not kept.
     int64_t created = now;
     uint64_t order = jar->next_order++;
-    bool was_kept = false;          // the namesake was one a file keeps
+    // The namesake was one a file keeps, or a session cookie set in such a
+    // one's place that the file has still to hear of: either way the file
+    // holds a line in this place, and this cookie is what it says now.
+    bool was_kept = false;
     if (same >= 0) {
         created = jar->cookies[same].created;
         order = jar->cookies[same].order;
-        was_kept = jar->cookies[same].expiry != INT64_MAX;
+        was_kept = jar->cookies[same].expiry != INT64_MAX || jar->cookies[same].changed != 0;
         if (was_kept && expiry <= now)
             gone_note(jar, &jar->cookies[same]);
         drop(jar, same);
@@ -947,23 +957,37 @@ static void by_age(const Cookie *cookies, int32_t *idx, int32_t *tmp, int32_t n)
     }
 }
 
-static bool kept_in_file(const Cookie *c, int64_t now)
+_Static_assert(sizeof(kFileHead) <= WAY_JAR_TEXT_MAX - (size_t)WAY_COOKIES_MAX * WAY_JAR_LINE_MAX,
+               "WAY_JAR_TEXT_MAX leaves the file's head too little room");
+
+// `c`'s line, its newline included, into `out`: the length, or 0 when it
+// does not fit in `cap` with a NUL.
+static size_t spell_line(const Cookie *c, char *out, size_t cap)
 {
-    return c->expiry != INT64_MAX && c->expiry > now && field_ok(c->name) && field_ok(c->value) &&
-           field_ok(c->domain) && field_ok(c->path);
+    int w = os64_snprintf(out, cap, "%s%s%s\t%s\t%s\t%s\t%ld\t%s\t%s\n", c->http_only ? "#HttpOnly_" : "",
+                          c->host_only ? "" : ".", c->domain, c->host_only ? "FALSE" : "TRUE", c->path,
+                          c->secure ? "TRUE" : "FALSE",
+                          (long)(c->expiry < FILE_EXPIRY_MAX ? c->expiry : FILE_EXPIRY_MAX), c->name, c->value);
+    return w > 0 && (size_t)w < cap ? (size_t)w : 0;
 }
+
+static bool round_trips(const Cookie *c, int64_t now, char *scratch);
 
 char *way_jar_text(way_jar_t *jar, int64_t now, size_t *len)
 {
     *len = 0;
     if (jar == NULL)
         return NULL;
+    char *scratch = os64_malloc(WAY_JAR_LINE_MAX);
+    if (scratch == NULL)
+        return NULL;
     os64_lock_acquire(&jar->lock);
     int32_t n = 0;
     size_t need = sizeof(kFileHead);
     for (int32_t i = 0; i < jar->n; i++) {
-        const Cookie *c = &jar->cookies[i];
-        if (!kept_in_file(c, now))
+        Cookie *c = &jar->cookies[i];
+        c->pick = round_trips(c, now, scratch) ? PICK_MATCHES : PICK_NO;
+        if (c->pick == PICK_NO)
             continue;
         n++;
         // "#HttpOnly_" "." domain, two flags, the path, an expiry of at
@@ -975,28 +999,22 @@ char *way_jar_text(way_jar_t *jar, int64_t now, size_t *len)
     char *text = os64_malloc(need);
     if (idx == NULL || text == NULL) {
         os64_lock_release(&jar->lock);
+        os64_free(scratch);
         os64_free(idx);
         os64_free(text);
         return NULL;
     }
     int32_t k = 0;
     for (int32_t i = 0; i < jar->n; i++)
-        if (kept_in_file(&jar->cookies[i], now))
+        if (jar->cookies[i].pick == PICK_MATCHES)
             idx[k++] = i;
     by_age(jar->cookies, idx, idx + n, n);
     size_t at = sizeof(kFileHead) - 1;
     os64_memcpy(text, kFileHead, at);
-    for (int32_t i = 0; i < n; i++) {
-        const Cookie *c = &jar->cookies[idx[i]];
-        int w = os64_snprintf(text + at, need - at, "%s%s%s\t%s\t%s\t%s\t%ld\t%s\t%s\n",
-                              c->http_only ? "#HttpOnly_" : "", c->host_only ? "" : ".", c->domain,
-                              c->host_only ? "FALSE" : "TRUE", c->path, c->secure ? "TRUE" : "FALSE",
-                              (long)(c->expiry < FILE_EXPIRY_MAX ? c->expiry : FILE_EXPIRY_MAX), c->name,
-                              c->value);
-        if (w > 0 && (size_t)w < need - at)
-            at += (size_t)w;
-    }
+    for (int32_t i = 0; i < n; i++)
+        at += spell_line(&jar->cookies[idx[i]], text + at, need - at);
     os64_lock_release(&jar->lock);
+    os64_free(scratch);
     os64_free(idx);
     text[at] = '\0';
     *len = at;
@@ -1087,9 +1105,10 @@ static int line_read(char *line, int64_t now, Line *out)
     h->value = field[6];
     h->vlen = os64_strlen(field[6]);
     // What no Set-Cookie could have made: a name holding '=' or ';', a value
-    // holding ';', each a byte where the header's parse splits (heard()).
+    // holding ';', each a byte where the header's parse splits, and white
+    // space at either end of either, which heard() takes off.
     if (os64_strchr(field[5], '=') != NULL || os64_strchr(field[5], ';') != NULL ||
-        os64_strchr(field[6], ';') != NULL)
+        os64_strchr(field[6], ';') != NULL || padded(h->name, h->nlen) || padded(h->value, h->vlen))
         return LINE_REFUSED;
     h->secure = secure;
     h->http_only = http_only;
@@ -1098,6 +1117,28 @@ static int line_read(char *line, int64_t now, Line *out)
     out->expiry = expiry;
     out->host_only = !sub;
     return LINE_COOKIE;
+}
+
+// WHETHER A FILE KEEPS `c`: one with an expiry not yet passed at `now`
+// whose line the reader takes back as the same cookie. The writer and a
+// following ask this one question, so a cookie no line can hold (a byte
+// that would break its line, a domain cookie on a single label) is never
+// written, and is the jar's alone, as a session cookie is: no following
+// lets it go for want of a line. An expired one is no line the reader
+// takes either. `scratch` is WAY_JAR_LINE_MAX bytes.
+static bool round_trips(const Cookie *c, int64_t now, char *scratch)
+{
+    if (c->expiry == INT64_MAX)
+        return false;
+    size_t n = spell_line(c, scratch, WAY_JAR_LINE_MAX);
+    if (n == 0)
+        return false;
+    scratch[n - 1] = '\0';                  // the newline
+    Line l;
+    return line_read(scratch, now, &l) == LINE_COOKIE && l.host_only == c->host_only &&
+           l.h.secure == c->secure && l.h.http_only == c->http_only && os64_streq(l.h.name, c->name) &&
+           os64_streq(l.h.value, c->value) && os64_streq(l.h.domain, c->domain) &&
+           os64_streq(l.h.path, c->path);
 }
 
 // A cookie this jar has a change to of its own that a file has not heard
@@ -1115,11 +1156,15 @@ static bool changed_here(const way_jar_t *jar, const Cookie *probe)
 }
 
 // `c` (from another jar, or a line) into this one in place of its
-// namesake, which keeps its age and its last use; a new one is the least
-// used. Under the lock. False on no memory, the namesake left as it was.
-static bool put_in(way_jar_t *jar, const Cookie *c)
+// namesake, which keeps its age and its last use; a new one is the jar's
+// newest, made at `now`, and its least used. Newest, not `c`'s own age: a
+// file holds no age, so the cookies a jar read from one were made when it
+// was read, and an older `c` would sort before every one of them — a new
+// login the oldest cookie in the file, the first the budget cuts. Under
+// the lock. False on no memory, the namesake left as it was.
+static bool put_in(way_jar_t *jar, const Cookie *c, int64_t now)
 {
-    int64_t created = c->created;
+    int64_t created = now;
     uint64_t order = jar->next_order++, used = 0;
     int32_t same = -1;
     for (int32_t i = 0; i < jar->n && same < 0; i++) {
@@ -1177,11 +1222,13 @@ static void read_text(way_jar_t *jar, const char *text, size_t len, int64_t now,
         return;
     }
     os64_lock_acquire(&jar->lock);
-    // Marked: the kept cookies a line must name for them to stay. A
-    // replaced one goes with its mark, and its replacement has none.
+    // Marked: the cookies a file keeps (round_trips) with no change of the
+    // jar's own, which a line must name for them to stay. A replaced one
+    // goes with its mark, and its replacement has none. `line` is free
+    // until the first line is read.
     for (int32_t i = 0; i < jar->n; i++) {
         Cookie *c = &jar->cookies[i];
-        c->pick = follow && c->expiry != INT64_MAX && c->changed == 0 ? PICK_MATCHES : PICK_NO;
+        c->pick = follow && c->changed == 0 && round_trips(c, now, line) ? PICK_MATCHES : PICK_NO;
     }
     for (size_t at = 0; at < len && !jar->refusing && !report->short_of_memory;) {
         size_t end = at;
@@ -1208,9 +1255,9 @@ static void read_text(way_jar_t *jar, const char *text, size_t len, int64_t now,
         // each ended by the NUL line_read put in its tab's place, until
         // put_in copies them.
         Cookie c = {.name = (char *)l.h.name, .value = (char *)l.h.value, .domain = l.h.domain,
-                    .path = l.h.path, .expiry = l.expiry, .created = now, .host_only = l.host_only,
+                    .path = l.h.path, .expiry = l.expiry, .host_only = l.host_only,
                     .secure = l.h.secure, .http_only = l.h.http_only};
-        bool read = changed_here(jar, &c) || put_in(jar, &c);
+        bool read = changed_here(jar, &c) || put_in(jar, &c, now);
         report->read += read;
         report->short_of_memory |= !read;
     }
@@ -1236,10 +1283,11 @@ void way_jar_follow(way_jar_t *jar, const char *text, size_t len, int64_t now, w
     read_text(jar, text, len, now, report, true);
 }
 
-void way_jar_overlay(way_jar_t *to, way_jar_t *from, uint64_t through, int64_t now)
+bool way_jar_overlay(way_jar_t *to, way_jar_t *from, uint64_t through, int64_t now)
 {
     if (to == NULL || from == NULL || to == from)
-        return;
+        return false;
+    bool whole = true;
     os64_lock_acquire(&from->lock);
     os64_lock_acquire(&to->lock);
     for (int32_t i = 0; i < from->ngone; i++) {
@@ -1254,12 +1302,12 @@ void way_jar_overlay(way_jar_t *to, way_jar_t *from, uint64_t through, int64_t n
             }
         }
     }
-    for (int32_t i = 0; i < from->n; i++) {
+    for (int32_t i = 0; i < from->n && whole; i++) {
         const Cookie *c = &from->cookies[i];
         if (c->changed == 0 || c->changed > through)
             continue;
         if (c->expiry != INT64_MAX && c->expiry > now) {
-            (void)put_in(to, c);
+            whole = put_in(to, c, now);
             continue;
         }
         // A session cookie in a kept one's place: the kept one goes.
@@ -1273,6 +1321,7 @@ void way_jar_overlay(way_jar_t *to, way_jar_t *from, uint64_t through, int64_t n
     }
     os64_lock_release(&to->lock);
     os64_lock_release(&from->lock);
+    return whole;
 }
 
 uint64_t way_jar_changes(way_jar_t *jar)

@@ -1772,8 +1772,8 @@ static void agent_identity_cases(void)
     snprintf(detail, sizeof(detail), "the longest is %zu bytes", longest);
     expect("identity: the longest block leaves 150 bytes of WAY_IDENTITY_MAX spare",
            longest + 1 + 150 <= WAY_IDENTITY_MAX, detail);
-    expect("identity: the cookies and the Referer keep their kilobyte beside it",
-           OS64_FETCH_HOP_FIELDS_MAX - WAY_IDENTITY_MAX >= 1024, NULL);
+    expect("identity: the Cookie and Referer lines keep their room beside it",
+           OS64_FETCH_HOP_FIELDS_MAX - WAY_IDENTITY_MAX >= WAY_COOKIE_LINE_MAX + WAY_REFERER_LINE_MAX, NULL);
 }
 
 // One request as yonder writes it under preset `p`: the preset's lines for

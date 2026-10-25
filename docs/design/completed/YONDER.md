@@ -519,8 +519,10 @@ expects):
   fact libfetch reports, not the scheme in an address — and an unencrypted
   reply cannot overwrite a secure cookie of the same name; the `__Secure-`
   and `__Host-` prefixes are held to their promises;
-- `HttpOnly` and `SameSite` are kept and change nothing: no script can
-  read a cookie here, and `SameSite` is booked below with what it needs.
+- `HttpOnly` keeps a cookie from a page's script (`document.cookie`
+  neither reads nor sets one) and decides which cookies go first when a
+  request's do not all fit (below); `SameSite` is kept and changes
+  nothing, booked below with what it needs.
 
 Limits are the browsers': 4096 bytes a cookie, 180 a domain, 3000 in all;
 past a limit the expired go first and then the cookie used longest ago —

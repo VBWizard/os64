@@ -845,11 +845,104 @@ static void cookie_switch(void)
     }
 }
 
+// The file's edges a cold read found, each with the input that broke it.
+static void cookie_file_edges(void)
+{
+    static char file[1 << 14];
+    static const char kOld[] = "s.test\tFALSE\t/\tFALSE\t9000\tsid\told\n";
+
+    // A session cookie set twice in a kept one's place before a save: the
+    // second is a change too, so the file's old line does not come back.
+    way_jar_t *a = way_jar_new();
+    snprintf(file, sizeof(file), "%s", kOld);
+    way_jar_read(a, file, strlen(file), 100, NULL);
+    hear(a, "http://s.test/", false, "sid=new", 110);
+    hear(a, "http://s.test/", false, "sid=newer", 111);
+    save_window(a, file, sizeof(file), 112);
+    expect("edges: a session cookie set again over a kept one keeps the file's line out",
+           strstr(file, "\tsid\t") == NULL, file);
+    jar_expect("edges: and the window sends the newest", a, "http://s.test/", false, 113, "sid=newer");
+    way_jar_free(a);
+    // ...and a log out after it is one too.
+    a = way_jar_new();
+    snprintf(file, sizeof(file), "%s", kOld);
+    way_jar_read(a, file, strlen(file), 100, NULL);
+    hear(a, "http://s.test/", false, "sid=new", 110);
+    hear(a, "http://s.test/", false, "sid=; Max-Age=0", 111);
+    save_window(a, file, sizeof(file), 112);
+    expect("edges: a log out after a session cookie leaves the file", strstr(file, "\tsid\t") == NULL, file);
+    jar_expect("edges: and is not undone", a, "http://s.test/", false, 113, "");
+    way_jar_free(a);
+
+    // A kept cookie no line can hold is not written, and a save does not
+    // let it go: a tab in its value, a domain cookie on a single label.
+    a = way_jar_new();
+    hear(a, "http://t.test/", false, "t=x\ty; Max-Age=3600", 100);
+    hear(a, "http://intranet/", false, "s=1; Domain=intranet; Max-Age=3600", 100);
+    file[0] = '\0';
+    save_window(a, file, sizeof(file), 101);
+    expect("edges: neither is written", strstr(file, "x\ty") == NULL && strstr(file, "intranet") == NULL, file);
+    jar_expect("edges: the tab's lasts as long as the window", a, "http://t.test/", false, 102, "t=x\ty");
+    jar_expect("edges: the single label's too", a, "http://intranet/", false, 102, "s=1");
+    way_jar_free(a);
+
+    // A cookie a save adds to the file is the file's newest: after two
+    // restarts, the budget's newest-first cut still keeps the login.
+    a = way_jar_new();
+    hear(a, "http://o.test/", false, "old1=1; Max-Age=5000", 100);
+    hear(a, "http://o.test/", false, "old2=1; Max-Age=5000", 101);
+    file[0] = '\0';
+    save_window(a, file, sizeof(file), 102);
+    way_jar_free(a);
+    a = way_jar_new();
+    way_jar_read(a, file, strlen(file), 200, NULL);
+    hear(a, "http://o.test/", false, "login=1; Max-Age=5000", 210);
+    save_window(a, file, sizeof(file), 211);
+    way_jar_free(a);
+    expect("edges: a cookie a save adds is the file's last line", strstr(file, "\told2\t") != NULL &&
+           strstr(file, "\told2\t") < strstr(file, "\tlogin\t"), file);
+    a = way_jar_new();
+    way_jar_read(a, file, strlen(file), 300, NULL);
+    os64_url_t to = url_of("http://o.test/");
+    char out[8];                        // room for "login=1" alone
+    int32_t left = 0;
+    way_jar_cookies(a, &to, false, 300, out, sizeof(out), &left);
+    expect("edges: after a restart the cut still keeps the newest", strcmp(out, "login=1") == 0 && left == 2, out);
+    way_jar_free(a);
+
+    // An overlay that runs out of memory says so, and is no text to write.
+    a = way_jar_new();
+    way_jar_t *m = way_jar_new();
+    hear(a, "http://o.test/", false, "c=3; Max-Age=100", 10);
+    allocations = 0;
+    fail_at = 1;                        // the new cookie's block in `m`
+    bool whole = way_jar_overlay(m, a, way_jar_changes(a), 11);
+    fail_at = 0;
+    expect("edges: an overlay short of memory answers false", !whole && way_jar_count(m) == 0, NULL);
+    expect("edges: and one that is not, true", way_jar_overlay(m, a, way_jar_changes(a), 11) &&
+           way_jar_count(m) == 1, NULL);
+    expect("edges: a jar laid over itself is refused", !way_jar_overlay(a, a, way_jar_changes(a), 11), NULL);
+    way_jar_free(m);
+    way_jar_free(a);
+
+    // A name or value with white space at an end is no Set-Cookie's.
+    static const char kPadded[] = "p.test\tFALSE\t/\tFALSE\t5000\t sid \tv\n"
+                                  "p.test\tFALSE\t/\tFALSE\t5000\tsid\t v2\n"
+                                  "p.test\tFALSE\t/\tFALSE\t5000\tin side\tv 3\n";
+    a = way_jar_new();
+    way_jar_read_t r;
+    way_jar_read(a, kPadded, sizeof(kPadded) - 1, 100, &r);
+    expect("edges: padding at an end is refused, inside it is not", r.read == 1 && r.refused == 2, NULL);
+    jar_expect("edges: what was read", a, "http://p.test/", false, 100, "in side=v 3");
+    way_jar_free(a);
+}
+
 static void jar_cases(void)
 {
     cookie_file_round_trip();
     cookie_file_hostile();
     cookie_file_two_windows();
+    cookie_file_edges();
     cookie_switch();
     cookie_scripts();
     cookie_dates();

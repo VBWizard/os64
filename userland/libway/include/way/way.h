@@ -159,8 +159,8 @@ typedef struct {
 // runs), sends the agent its leg carries, writes only to its own leg (its
 // sentence, and what it notes of its hops) and to the browser's jar, and
 // reaches the person only through its own face. So a face may run
-// way_load on a thread other than the session's: the leg is the whole of
-// what the two share.
+// way_load on a thread other than the session's: the leg, and the jar
+// behind its own lock, are the whole of what the two share.
 typedef struct {
     const way_session_t *session;
     // The User-Agent this load sends: the session's when way_leg made the
