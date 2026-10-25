@@ -10,6 +10,8 @@ import gzip
 import hashlib
 import io
 import json
+import re
+from datetime import date
 from pathlib import Path
 import shutil
 import subprocess
@@ -20,6 +22,9 @@ ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / 'assets/icons'
 SOURCES = ASSETS / 'sources/default'
 DEST = ASSETS / 'default'
+SET_NAME = 'Roam Classic'
+ARCHIVE_ROOT = 'roam-classic'
+CONTACT_SHEET = ASSETS / 'contact-sheet.png'
 SIZES = [16, 24, 32, 48, 64]
 
 def digest(path):
@@ -32,8 +37,8 @@ def import_records(path):
     manifest_path = SOURCES / 'generation.json'
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {
         'origin': 'OpenAI built-in image generation',
-        'date': '2026-10-13',
-        'reference': 'Approved Roam icon study 01; generated for this project without third-party reference images',
+        'date': date.today().isoformat(),
+        'reference': 'Generated for this project without third-party reference images',
         'master_transform': 'ImageMagick Lanczos export to 256x256 RGBA; metadata stripped. Generated original SHA-256 retained per icon.',
         'icons': []}
     known = {x['key']: x for x in manifest['icons']}
@@ -51,8 +56,8 @@ def import_records(path):
 
 def export():
     source = json.loads((SOURCES / 'generation.json').read_text())
-    manifest = {'format': 1, 'name': 'Roam Classic',
-        'origin': source['origin'], 'source_manifest': 'assets/icons/sources/default/generation.json',
+    manifest = {'format': 1, 'name': SET_NAME,
+        'origin': source['origin'], 'source_manifest': str((SOURCES / 'generation.json').relative_to(ROOT)),
         'license': 'Distributed under the repository MIT license to the extent rights exist; generated provenance is not a claim of exclusive copyright.',
         'sizes': SIZES, 'transform': 'Alpha trim, Lanczos fit within size minus 2 pixels, center on transparent square; RGBA8 PNG without ancillary metadata.',
         'icons': []}
@@ -84,7 +89,7 @@ def contact_sheet(keys):
     face = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
     font = ImageFont.truetype(face, 13)
     title = ImageFont.truetype(face, 23)
-    draw.text((18, 12), 'Roam Classic — shipped pixels at native size', font=title, fill='#172735')
+    draw.text((18, 12), SET_NAME+' — shipped pixels at native size', font=title, fill='#172735')
     colors = ['#f5f1e8', '#202a36', '#386cab']
     for c, label in enumerate(['Light', 'Dark', 'Selected']):
         draw.text((210+c*280, 47), label+'   16 / 24 / 32 / 48 / 64', font=font, fill='#172735')
@@ -99,19 +104,19 @@ def contact_sheet(keys):
                 im = Image.open(DEST/f'{key}-{size}.png')
                 sheet.paste(im, (x, top+(row-size)//2), im)
                 x += size+12
-    sheet.save(ASSETS/'contact-sheet.png')
+    sheet.save(CONTACT_SHEET)
 
 def archive(path):
     # Deterministic archive: one relative root, regular files, no user paths.
     payload = io.BytesIO()
     with tarfile.open(fileobj=payload, mode='w', format=tarfile.USTAR_FORMAT) as tar:
-        directory = tarfile.TarInfo('roam-classic/')
+        directory = tarfile.TarInfo(ARCHIVE_ROOT+'/')
         directory.type = tarfile.DIRTYPE
         directory.mode = 0o755
         tar.addfile(directory)
         for source in sorted(DEST.iterdir()):
             if not source.is_file(): continue
-            info = tarfile.TarInfo('roam-classic/'+source.name)
+            info = tarfile.TarInfo(ARCHIVE_ROOT+'/'+source.name)
             info.size=source.stat().st_size
             info.mode=0o644
             tar.addfile(info, io.BytesIO(source.read_bytes()))
@@ -122,9 +127,18 @@ def archive(path):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--set', default='default', help='Directory name under assets/icons')
+    parser.add_argument('--name', help='Display name (default: Roam Classic for the default set)')
     parser.add_argument('--import-records', type=Path)
     parser.add_argument('--archive', type=Path)
     args = parser.parse_args()
+    if not re.fullmatch(r'[a-z0-9]+(?:-[a-z0-9]+)*', args.set):
+        parser.error('--set must be a lowercase directory name with optional hyphens')
+    SOURCES = ASSETS / 'sources' / args.set
+    DEST = ASSETS / args.set
+    SET_NAME = args.name or ('Roam Classic' if args.set == 'default' else args.set)
+    ARCHIVE_ROOT = 'roam-classic' if args.set == 'default' else args.set
+    CONTACT_SHEET = ASSETS / ('contact-sheet.png' if args.set == 'default' else args.set+'-contact-sheet.png')
     SOURCES.mkdir(parents=True, exist_ok=True); DEST.mkdir(parents=True, exist_ok=True)
     if args.import_records: import_records(args.import_records)
     export()

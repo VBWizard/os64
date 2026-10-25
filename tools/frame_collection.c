@@ -13,8 +13,8 @@ void os64_free(void *p) { free(p); }
 static void *allocate(void *u,size_t n) { (void)u;return malloc(n); }
 static void release(void *u,void *p,size_t n) { (void)u;(void)n;free(p); }
 
-static const char *names[]={"Blue-Hour","Orchard","Porcelain","Copperline","Moss-and-Linen","Signal"};
-static const char *titles[]={"Blue Hour","Orchard","Porcelain","Copperline","Moss and Linen","Signal"};
+static const char *names[]={"Blue-Hour","Orchard","Porcelain","Copperline","Moss-and-Linen","Signal","Yonder-XP"};
+static const char *titles[]={"Blue Hour","Orchard","Porcelain","Copperline","Moss and Linen","Signal","Yonder XP"};
 
 static void palette(os64_decor_header_t *h,uint32_t face,uint32_t face2,
     uint32_t inactive,uint32_t inactive2,uint32_t text,uint32_t dim,uint32_t edge,uint32_t dim_edge)
@@ -68,8 +68,25 @@ static frame_draft_t composition(unsigned i)
         for(unsigned k=0;k<3;++k)h->buttons[k].shape=OS64_DECOR_SQUARE;
         h->buttons[2].face=0xff55c8d1;h->symbols[0]=(os64_decor_symbol_t){0xff102735,0xff233b47};
         break;
+    case 6:
+        palette(h,0x4993ff,0x0054e3,0x9db9eb,0x7a96df,0xffffff,0xeaf0fc,0x0054e3,0x7a96df);
+        d.font.size=20;h->padding_x=6;h->padding_y=4;
+        h->finish=OS64_DECOR_GRADIENT;h->border=3;h->relief=1;
+        h->button_size=24;h->button_gap=3;
+        for(unsigned k=0;k<3;++k){
+            h->buttons[k].shape=OS64_DECOR_SQUARE;
+            h->buttons[k].face=k==2?0xffe65b43:0xff2878e8;
+            h->symbols[k]=(os64_decor_symbol_t){0xffffffff,0xffeaf0fc};
+        }
+        break;
     }
-    h->buttons[h->button_count++]=(os64_decor_button_t){OS64_DECOR_SETTINGS,1,OS64_DECOR_BARE,0};
+    if(i==6){
+        /* Keep the close button at the trailing edge of the XP composition. */
+        memmove(h->buttons+1,h->buttons,h->button_count*sizeof(h->buttons[0]));
+        h->buttons[0]=(os64_decor_button_t){OS64_DECOR_SETTINGS,1,OS64_DECOR_BARE,0};
+        ++h->button_count;
+    }else
+        h->buttons[h->button_count++]=(os64_decor_button_t){OS64_DECOR_SETTINGS,1,OS64_DECOR_BARE,0};
     return d;
 }
 static void write_file(const char *path,const void *data,size_t size)
@@ -85,7 +102,7 @@ static void preview(os64_decor_surface_t *surface,const os64_decor_view_t *view,
         os64_decor_insets_t in=os64_decor_insets(view->header,true);
         for(int yy=r.y+in.top;yy<r.y+r.h-in.bottom;++yy)
             for(int xx=r.x+in.left;xx<r.x+r.w-in.right;++xx)
-                surface->pixels[(size_t)yy*surface->pitch+xx]=state?0xffd9dcddu:0xffeceeeeu;
+                surface->pixels[(size_t)yy*surface->pitch+xx]=i==6?0xffece9d8u:(state?0xffd9dcddu:0xffeceeeeu);
         char title[96];snprintf(title,sizeof(title),"%s / %s",titles[i],state?"Inactive":"Caf\xc3\xa9 & R\xc3\xa9sum\xc3\xa9");
         os64_decor_state_t controls={0};
         assert(os64_decor_paint(view,surface,r,(os64_decor_rect_t){0,0,(int)surface->width,(int)surface->height},
@@ -101,7 +118,8 @@ int main(int argc,char **argv)
     assert(fread(source,1,(size_t)length,font)==(size_t)length);assert(!fclose(font));
     os64_text_context_t *text=NULL;os64_text_options_t options={.memory={NULL,allocate,release}};
     assert(os64_font_context_create(&options,&text)==OS64_FONT_OK);
-    os64_decor_surface_t surface={.width=1400,.height=1000,.pitch=1400};
+    const unsigned count=sizeof(names)/sizeof(names[0]);
+    os64_decor_surface_t surface={.width=1400,.height=((count+1)/2)*330+10,.pitch=1400};
     surface.pixels=malloc((size_t)surface.width*surface.height*4);assert(surface.pixels);
     for(size_t p=0;p<(size_t)surface.width*surface.height;++p)surface.pixels[p]=0xff18212a;
     for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);++i){

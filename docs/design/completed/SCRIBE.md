@@ -120,8 +120,10 @@ honest failure mode is the same as quill's.
 
 ## Chrome
 
-The shared File/Edit/View/Help menu bar and keyboard shortcuts invoke
-one action registry. Open, Save As and unnamed Save use the shared file
+The shared File/Edit/View/Help menu bar, toolbar and keyboard shortcuts invoke
+one action registry. The shared [toolbar widget](../../TOOLBARS.md) provides labeled Open, Save, Save As, Cut,
+Copy, Paste, Find and Help buttons. It wraps to another row when the window
+narrows; font changes stage its geometry with the rest of the editor. Open, Save As and unnamed Save use the shared file
 picker; a named Save writes directly. The picker starts beside the current
 file, or in HOME for an unnamed document. Save As proposes the current leaf
 name. The editor waits while choosing; Escape preserves its document and
@@ -129,11 +131,21 @@ path. Open asks before replacing unsaved edits and requires a readable,
 existing file. Save As creates exclusively unless replacement was explicitly
 approved in the picker. Edit commands retain the editing target that opened
 the menu, so search/confirmation-field clipboard commands cannot drift into
-the document when a native popup takes focus.
+the document when a native popup takes focus. Toolbar buttons preserve the
+last editing target too, and return focus there unless the command opens
+a field or dialog. Tab reaches the buttons; Space or Enter activates them.
 
-The bottom status widget holds file/dirty/line information, menu help, and
-operation notices. View independently hides the menu and status bars and
-reclaims their space and immediately resynchronizes scrollbar ranges. Alt/F10 temporarily reveal a hidden menu; right-click
+Menus and toolbar use the icon set selected in `icons.conf` when Scribe
+starts. For example, `set = /home/icons/yonder-xp` selects the installed
+Yonder-XP pack. Reopen Scribe after changing sets. Toolbar images are acquired
+before painting and released before the icon theme; a missing image leaves
+a working text button. Hovering or focusing a button displays its action
+help in the status bar.
+
+The bottom status widget holds file/dirty/line information, menu/toolbar help,
+and operation notices. View independently hides the menu, toolbar and status
+bars, reclaims their space and immediately resynchronizes scrollbar ranges.
+Alt/F10 temporarily reveal a hidden menu; right-click
 or Shift+F10 opens editing commands and Show Menu Bar without moving the
 caret or replacing the selection. A new operation notice re-shows hidden
 status so an error or save/discard prompt remains visible.
@@ -146,6 +158,17 @@ editor running. Escape is offered to the menu controller before
 help/field/document behavior. The Interface and Document font roles remain
 independent. [E5](../pending/explorer/E05_SCRIBE.md) records dialog integration
 and its validation.
+
+The toolbar and its icon buttons are in libos64. Build from the repository root with
+`make -C userland "$PWD/userland/bin/scribe"` and deploy both
+`userland/bin/scribe` and `userland/bin/libos64.so` through the normal program
+and library routes. Restart Scribe to use the new code and current icon set.
+
+Host checks: `python3 tools/test_scribe_host.py` covers toolbar input, editing
+targets, wrapping, font adoption, missing-image fallback and lease cleanup;
+`python3 tools/test_scribe_host.py --menus` covers menu integration;
+`python3 tools/test_ui_action_host.py` covers shared button/action behavior.
+These runners retain ASan, UBSan and LeakSanitizer.
 
 ## Input it needs (all already delivered)
 

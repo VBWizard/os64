@@ -112,3 +112,33 @@ python3 tools/build_icon_assets.py --archive output/icons/roam-classic.tar.gz
 ```
 
 The runtime reads the extracted folder; it does not read compressed archives.
+
+## Yonder XP
+
+The [appearance-pack guide](../../docs/APPEARANCE_PACKS.md) covers the complete
+rebuild, host archive, transfer and installation workflow.
+
+The `yonder-xp/` family pairs glossy, colorful Luna-inspired artwork with
+`appearances/Yonder-XP.theme` and `frames/Yonder-XP.frame`. Its original
+generated masters and prompts are in `sources/yonder-xp/`; the installed
+exports use the same 26 semantic keys and five sizes as the default family.
+
+Rebuild the icons and their standalone archive with:
+
+```sh
+python3 tools/build_icon_assets.py --set yonder-xp --name 'Yonder XP' --archive output/icons/yonder-xp.tar.gz
+```
+
+Or build the combined Appearance, frame and icon pack:
+
+```sh
+python3 tools/build_yonder_xp_pack.py
+```
+
+The combined archive is `output/yonder-xp/yonder-xp.tar.gz`. Keep a versioned
+host copy and serve it with the `themepacks` lot, which routes archives to
+`/var/themes` on Os64. Follow `output/yonder-xp/INSTALL.txt` from that folder;
+extraction runs in `/home` to create the personal collections without selecting
+them. After extraction, the icon setting
+is `set = /home/icons/yonder-xp`; open new application instances to read it.
+The contact sheet is `output/yonder-xp/icons-contact-sheet.png`.
