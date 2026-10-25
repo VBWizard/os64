@@ -3408,7 +3408,9 @@ kept records said `MISSING script module`.
   renders its login page whole (it had died on the polyfill's first
   statement on the P5), and TodoMVC's Svelte and Vue builds get past the
   polyfill to the next surface each needs: the `Text` interface object
-  and `SVGElement` (Vue's mount asks `instanceof SVGElement`). Typing into
-  the shop's login field reaches `window.getSelection`, which React asks
-  around a focused input; its absence unmounts the app.
+  and `SVGElement` (Vue's mount asks `instanceof SVGElement`). On the P5
+  the shop logs in and reaches its inventory page; QEMU's keyboard route,
+  which left focus on the page rather than in a field, reached react-dom's
+  select-event code, which calls `window.getSelection` unguarded when the
+  focused element is not a text field, and its absence unmounted the app.
 - **P5**: GitHub's page, Chris's to run.
