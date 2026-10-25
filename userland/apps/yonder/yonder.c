@@ -1059,7 +1059,10 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
             return false;
         // A condition of the page, said once however many of its cascades
         // meet it; a copy of the page laid out beside it (a rebuild staged,
-        // a measurement) borrows its record, so it is said there too.
+        // a measurement) borrows its record, so it is said there too. The
+        // stream's parse so far has no record of its own yet (it is the
+        // stream's until the page arrives), so a measurement of it says
+        // nothing: the page's own cascade at arrival says it if it is short.
         if (garb_cascade_incomplete(cascade))
             yonder_diag_failed_seen(p->diag, "style", "the cascade came up short (out of room, or nested too deep): "
                                     "part of the page's styles were not applied");

@@ -5864,9 +5864,9 @@ static void diag_css_unasked_case(void) {
  * § The cost). A cascade that comes up short — here @media nested past the
  * cascade's bound — is the page's failure, ONE line however many of its
  * layouts meet it. And a big sheet is the same after every layout as
- * before the first, every layout styling the whole page: nine cascades of
- * this 1 MiB sheet would overfill GARB_ARENA_MAX, were what a cascade
- * reads still kept in the sheet. */
+ * before the first, every layout styling the whole page: three cascades of
+ * this 1 MiB sheet would fill GARB_ARENA_MAX, were what a cascade reads
+ * still kept in the sheet, and the case makes nine. */
 static void diag_style_case(void) {
     static const char kShort[]="the cascade came up short (out of room, or nested too deep): "
         "part of the page's styles were not applied";
