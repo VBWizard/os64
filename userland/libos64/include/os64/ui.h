@@ -820,6 +820,8 @@ void os64_ui_button(os64_ui_widget_t *w, const char *text,
 extern const os64_ui_class_t os64_ui_panel_class;
 extern const os64_ui_class_t os64_ui_label_class;
 extern const os64_ui_class_t os64_ui_button_class;
+// Shared button furniture for controls with a different content painter.
+void os64_ui_button_face(os64_ui_widget_t *, os64_draw_ctx_t *, const os64_ui_theme_t *);
 
 // Move key focus. Maintains each widget's `focused` mirror and dirties both
 // ends so carets appear and disappear honestly. NULL blurs. A non-NULL target

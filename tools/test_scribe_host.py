@@ -23,7 +23,7 @@ for n,source in enumerate(upstream+port):
 sources=['shared/damage.c','tools/test_menu_apps_host.c' if a.menus else 'tools/test_scribe_host.c','userland/apps/scribe/scribe_buf.c']
 if a.menus: sources.append('userland/libos64/menu.c')
 sources+=['userland/libos64/'+name+'.c' for name in
-          ['directory','ui_menu','ui_menu_widget','ui_dispatcher','ui_icon','ui_action','ui_status','ui_font','ui','ui_controls','ui_list','ui_text','font_provider','font_adopt','text',
+          ['directory','ui_menu','ui_menu_widget','ui_dispatcher','ui_icon','ui_icon_button','ui_action','ui_status','ui_font','ui','ui_controls','ui_list','ui_text','font_provider','font_adopt','text',
            'text_cache','text_decode','text_bitmap','text_draw','draw','str']]
 binary=out/('test_menu_apps' if a.menus else 'test_scribe')
 subprocess.run(['cc',*flags,'-DUI_TEXT_REAL',*[str(ROOT/s) for s in sources],*objects,'-o',str(binary)],check=True)

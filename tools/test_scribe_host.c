@@ -1329,6 +1329,118 @@ static void scribe_file_dialogs(void)
     current="";
 }
 
+/* Toolbar ownership, input and layout use the production widgets/actions. */
+static unsigned sh_icon_acquires, sh_icon_releases;
+static bool sh_icon_missing;
+static uint32_t sh_icon_pixels[24*24];
+static os64_ui_icon_status_t sh_icon_acquire(void *user, const char *key,
+    uint32_t size, os64_ui_icon_lease_t *out)
+{
+    (void)user;
+    CHECK(os64_ui_icon_key_valid(key) && size==24);
+    ++sh_icon_acquires;
+    if (sh_icon_missing) return OS64_UI_ICON_MISSING;
+    *out=(os64_ui_icon_lease_t){sh_icon_pixels,24,24,24,1,NULL};
+    return OS64_UI_ICON_OK;
+}
+static void sh_icon_release(void *user, os64_ui_icon_lease_t *image)
+{ (void)user; CHECK(image->pixels==sh_icon_pixels); ++sh_icon_releases; }
+static const os64_ui_icon_provider_t sh_icons={NULL,sh_icon_acquire,sh_icon_release};
+static void sh_tool_mouse(unsigned i, bool release_inside)
+{
+    os64_gui_rect_t r=g.tools[i].w.bounds;
+    os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+    ev.mouse.x=r.x+r.w/2; ev.mouse.y=r.y+r.h/2; ev.mouse.button=OS64_GUI_MOUSE_LEFT;
+    commands(NULL,&ev);
+    if (!release_inside) {
+        ev.type=OS64_GUI_EVENT_MOUSE_MOVE; ev.mouse.x=g.view.w.bounds.x+10;
+        ev.mouse.y=g.view.w.bounds.y+10; commands(NULL,&ev);
+    }
+    ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP; commands(NULL,&ev);
+    tool_refresh();
+}
+static void scribe_toolbar(void)
+{
+    current="Scribe toolbar";
+    sh_scribe(16,"document text\n",14); g.running=true;
+    sh_icon_acquires=sh_icon_releases=0; sh_icon_missing=false;
+    for (unsigned i=0;i<24*24;++i) sh_icon_pixels[i]=0xff167ac6;
+    tool_icons(&sh_icons);
+    CHECK(sh_icon_acquires==8 && sh_icon_releases==0);
+    os64_ui_widget_app_face(&g.ui,&g.tools[0].w,true);
+    CHECK(g.tools[0].image.pixels==sh_icon_pixels && sh_icon_releases==0);
+    os64_ui_widget_app_face(&g.ui,&g.tools[0].w,false);
+    os64_ui_render(&g.ui,NULL);
+    size_t before=allocations;
+    os64_ui_mark_dirty(&g.ui,&g.root);
+    os64_ui_render(&g.ui,NULL);
+    CHECK(allocations==before && sh_icon_acquires==8);
+    sh_icon_missing=true;
+    CHECK(os64_ui_icon_button_image(&g.tools[0],&sh_icons,"document-open")==OS64_UI_ICON_MISSING);
+    CHECK(g.tools[0].image.pixels==sh_icon_pixels && sh_icon_releases==0);
+    sh_icon_missing=false;
+    CHECK(ui_test_adopt(&g.ui,sh_dir,20)==OS64_FONT_OK);
+    CHECK(g.tools[0].image.pixels==sh_icon_pixels && sh_icon_releases==0);
+    CHECK(g.tools[7].w.bounds.x+g.tools[7].w.bounds.w<=g.root.bounds.w);
+    CHECK(g.view.w.bounds.y>=g.toolbar.bounds.y+g.toolbar.bounds.h);
+
+    enter_mode(MODE_FIND,"find:","field words");
+    g.field.anchor=0; g.field.cursor=5; g.field.selected=true;
+    sh_tool_mouse(3,false);
+    CHECK(!strcmp(g.field_buf,"field words") && SH_DOC_IS("document text\n"));
+    os64_ui_set_focus(&g.ui,&g.field.w);
+    sh_tool_mouse(3,true);
+    CHECK(!strcmp(g.field_buf," words") && SH_DOC_IS("document text\n"));
+    CHECK(g.ui.focus==&g.field.w);
+    sh_file_t *clip=sh_find(OS64_CLIPBOARD_PATH,false);
+    CHECK(clip && clip->len==5 && !memcmp(clip->bytes,"field",5));
+    sh_tool_mouse(5,true);
+    CHECK(!strcmp(g.field_buf,"field words") && g.ui.focus==&g.field.w);
+    leave_mode();
+    os64_ui_textview_select(&g.ui,&g.view,0,0,0,8);
+    sh_tool_mouse(4,true);
+    clip=sh_find(OS64_CLIPBOARD_PATH,false);
+    CHECK(clip && clip->len==8 && !memcmp(clip->bytes,"document",8));
+    CHECK(g.ui.focus==&g.view.w);
+    sh_tool_mouse(7,true); tool_refresh();
+    CHECK(g.help_active && g.tools[3].w.disabled && g.tools[5].w.disabled);
+    CHECK(!g.tools[4].w.disabled);
+    sh_tool_mouse(7,true); CHECK(!g.help_active);
+    sh_tool_mouse(6,true); CHECK(g.mode==MODE_FIND && g.ui.focus==&g.field.w);
+    leave_mode();
+
+    os64_ui_set_focus(&g.ui,&g.tools[6].w); tool_refresh();
+    CHECK(g.tool_help_action==ACT_FIND && g.status.help.text && strstr(g.status.help.text,"Find"));
+    os64_gui_event_t key={.type=OS64_GUI_EVENT_KEY_DOWN};
+    key.key.ascii=' '; key.key.scancode=0x39; commands(NULL,&key);
+    CHECK(g.tools[6].w.pressed);
+    key.type=OS64_GUI_EVENT_KEY_UP; commands(NULL,&key);
+    CHECK(g.mode==MODE_FIND && g.ui.focus==&g.field.w);
+    leave_mode(); os64_ui_clear_hover(&g.ui);
+    tool_refresh(); CHECK(g.tool_help_action==0);
+    int32_t top=g.view.w.bounds.y;
+    os64_ui_set_focus(&g.ui,&g.tools[0].w);
+    CHECK(os64_ui_action_invoke(g.action_views[0],ACT_TOOLBAR).status==OS64_UI_OK);
+    CHECK(g.toolbar.hidden && g.view.w.bounds.y<top && g.ui.focus==&g.view.w);
+    CHECK(os64_ui_action_invoke(g.action_views[0],ACT_TOOLBAR).status==OS64_UI_OK);
+    CHECK(!g.toolbar.hidden && g.view.w.bounds.y==top);
+    g.root.bounds.w=320; layout(&g.ui);
+    CHECK(g.tools[7].w.bounds.y>g.tools[0].w.bounds.y);
+    CHECK(g.view.w.bounds.y>=g.toolbar.bounds.y+g.toolbar.bounds.h);
+    for (unsigned i=0;i<8;++i)
+        CHECK(g.tools[i].w.bounds.x+g.tools[i].w.bounds.w<=320);
+    g.root.bounds.w=SH_W; layout(&g.ui);
+    sh_tool_mouse(0,true); tool_refresh();
+    CHECK(g.file_operation==FILE_OPEN && g.tools[0].w.disabled);
+    file_step(); sh_dialog_finish(NULL,false); tool_refresh();
+    CHECK(!g.tools[0].w.disabled);
+    os64_ui_icon_button_clear(&g.tools[0]);
+    CHECK(!g.tools[0].image.pixels && sh_icon_releases==1);
+    os64_ui_render(&g.ui,NULL);
+    sh_close(); CHECK(sh_icon_releases==8);
+    sh_rm(OS64_CLIPBOARD_PATH); sh_rm("/doc"); current="";
+}
+
 int scribe_host_tests(int argc, char **argv)
 {
     sh_dir = argc > 1 ? argv[1] : "userland/libfreetype/fixtures";
@@ -1346,6 +1458,7 @@ int scribe_host_tests(int argc, char **argv)
     scribe_limit_window_font_change();
     scribe_help_keeps_the_window();
     scribe_file_dialogs();
+    scribe_toolbar();
 
     for (size_t i = 0; i < 8; ++i)
         free(sh_fs[i].bytes);
