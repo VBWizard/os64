@@ -1,0 +1,921 @@
+{
+  "environment": {
+    "browser": "Chromium",
+    "version": "140.0.7339.16",
+    "playwright": "1.55.0",
+    "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "viewport": [
+      192,
+      128
+    ],
+    "deviceScaleFactor": 1,
+    "locale": "en-US",
+    "timezone": "UTC",
+    "colorScheme": "light",
+    "fonts": "recorded per capture; fixtures contain no text"
+  },
+  "selftests": 18,
+  "browser_cases": [
+    {
+      "url": "/cap-light.html",
+      "kind": "fixture",
+      "comparisons": [
+        {
+          "pass": true,
+          "maxDifference": 0,
+          "totalPixels": 0,
+          "sumMaxChannelDifference": 0,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              24
+            ],
+            "pixels": [
+              0,
+              400
+            ]
+          },
+          "reference": "/cap-ref-light.html",
+          "diff": "43eab50442d166f9e67e-diff.png"
+        }
+      ],
+      "status": "PASS",
+      "expected": "PASS",
+      "accepted": true
+    },
+    {
+      "url": "/non-scaling-light.html",
+      "kind": "fixture",
+      "comparisons": [
+        {
+          "pass": true,
+          "maxDifference": 0,
+          "totalPixels": 0,
+          "sumMaxChannelDifference": 0,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              24
+            ],
+            "pixels": [
+              0,
+              400
+            ]
+          },
+          "reference": "/non-scaling-ref-light.html",
+          "diff": "809e4fa9b6d74d18c5c4-diff.png"
+        }
+      ],
+      "status": "PASS",
+      "expected": "PASS",
+      "accepted": true
+    },
+    {
+      "url": "/group-light.html",
+      "kind": "fixture",
+      "comparisons": [
+        {
+          "pass": true,
+          "maxDifference": 1,
+          "totalPixels": 4000,
+          "sumMaxChannelDifference": 4000,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              1
+            ],
+            "pixels": [
+              0,
+              4000
+            ]
+          },
+          "reference": "/group-ref-light.html",
+          "diff": "d05045f9c7418208b36a-diff.png"
+        }
+      ],
+      "status": "PASS",
+      "expected": "PASS",
+      "accepted": true
+    },
+    {
+      "url": "/evenodd-light.html",
+      "kind": "fixture",
+      "comparisons": [
+        {
+          "pass": true,
+          "maxDifference": 0,
+          "totalPixels": 0,
+          "sumMaxChannelDifference": 0,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              0
+            ],
+            "pixels": [
+              0,
+              0
+            ]
+          },
+          "reference": "/evenodd-ref-light.html",
+          "diff": "71c4aab9af80cdeba620-diff.png"
+        }
+      ],
+      "status": "PASS",
+      "expected": "PASS",
+      "accepted": true
+    },
+    {
+      "url": "/wrong-transform-light.html",
+      "kind": "negative-control",
+      "comparisons": [
+        {
+          "pass": false,
+          "maxDifference": 210,
+          "totalPixels": 698,
+          "sumMaxChannelDifference": 127615,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              24
+            ],
+            "pixels": [
+              0,
+              400
+            ]
+          },
+          "reference": "/cap-ref-light.html",
+          "diff": "54a0d6bce13a50b90207-diff.png"
+        }
+      ],
+      "status": "FAIL",
+      "expected": "FAIL",
+      "accepted": true
+    },
+    {
+      "url": "/missing-stroke-light.html",
+      "kind": "negative-control",
+      "comparisons": [
+        {
+          "pass": false,
+          "maxDifference": 210,
+          "totalPixels": 2398,
+          "sumMaxChannelDifference": 492062,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              24
+            ],
+            "pixels": [
+              0,
+              400
+            ]
+          },
+          "reference": "/cap-ref-light.html",
+          "diff": "c58848a09c3e46b6ebf1-diff.png"
+        }
+      ],
+      "status": "FAIL",
+      "expected": "FAIL",
+      "accepted": true
+    },
+    {
+      "url": "/wrong-opacity-light.html",
+      "kind": "negative-control",
+      "comparisons": [
+        {
+          "pass": false,
+          "maxDifference": 53,
+          "totalPixels": 800,
+          "sumMaxChannelDifference": 42400,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              1
+            ],
+            "pixels": [
+              0,
+              4000
+            ]
+          },
+          "reference": "/group-ref-light.html",
+          "diff": "f6f43682a4a24c75b49a-diff.png"
+        }
+      ],
+      "status": "FAIL",
+      "expected": "FAIL",
+      "accepted": true
+    },
+    {
+      "url": "/wrong-winding-light.html",
+      "kind": "negative-control",
+      "comparisons": [
+        {
+          "pass": false,
+          "maxDifference": 210,
+          "totalPixels": 1600,
+          "sumMaxChannelDifference": 336000,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              0
+            ],
+            "pixels": [
+              0,
+              0
+            ]
+          },
+          "reference": "/nonzero-ref-light.html",
+          "diff": "120943c71e0832e4ecb9-diff.png"
+        }
+      ],
+      "status": "FAIL",
+      "expected": "FAIL",
+      "accepted": true
+    },
+    {
+      "url": "/cap-dark.html",
+      "kind": "fixture",
+      "comparisons": [
+        {
+          "pass": true,
+          "maxDifference": 0,
+          "totalPixels": 0,
+          "sumMaxChannelDifference": 0,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              24
+            ],
+            "pixels": [
+              0,
+              400
+            ]
+          },
+          "reference": "/cap-ref-dark.html",
+          "diff": "8865d6f6cb0eaf7fa294-diff.png"
+        }
+      ],
+      "status": "PASS",
+      "expected": "PASS",
+      "accepted": true
+    },
+    {
+      "url": "/non-scaling-dark.html",
+      "kind": "fixture",
+      "comparisons": [
+        {
+          "pass": true,
+          "maxDifference": 0,
+          "totalPixels": 0,
+          "sumMaxChannelDifference": 0,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              24
+            ],
+            "pixels": [
+              0,
+              400
+            ]
+          },
+          "reference": "/non-scaling-ref-dark.html",
+          "diff": "d525e7dfaf276560e43d-diff.png"
+        }
+      ],
+      "status": "PASS",
+      "expected": "PASS",
+      "accepted": true
+    },
+    {
+      "url": "/group-dark.html",
+      "kind": "fixture",
+      "comparisons": [
+        {
+          "pass": true,
+          "maxDifference": 1,
+          "totalPixels": 4000,
+          "sumMaxChannelDifference": 4000,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              1
+            ],
+            "pixels": [
+              0,
+              4000
+            ]
+          },
+          "reference": "/group-ref-dark.html",
+          "diff": "2457dc113e52a25fb4f7-diff.png"
+        }
+      ],
+      "status": "PASS",
+      "expected": "PASS",
+      "accepted": true
+    },
+    {
+      "url": "/evenodd-dark.html",
+      "kind": "fixture",
+      "comparisons": [
+        {
+          "pass": true,
+          "maxDifference": 0,
+          "totalPixels": 0,
+          "sumMaxChannelDifference": 0,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              0
+            ],
+            "pixels": [
+              0,
+              0
+            ]
+          },
+          "reference": "/evenodd-ref-dark.html",
+          "diff": "636cc046e5fc742d05f1-diff.png"
+        }
+      ],
+      "status": "PASS",
+      "expected": "PASS",
+      "accepted": true
+    },
+    {
+      "url": "/wrong-transform-dark.html",
+      "kind": "negative-control",
+      "comparisons": [
+        {
+          "pass": false,
+          "maxDifference": 184,
+          "totalPixels": 698,
+          "sumMaxChannelDifference": 111775,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              24
+            ],
+            "pixels": [
+              0,
+              400
+            ]
+          },
+          "reference": "/cap-ref-dark.html",
+          "diff": "f4cd530fa3642b8d6ddb-diff.png"
+        }
+      ],
+      "status": "FAIL",
+      "expected": "FAIL",
+      "accepted": true
+    },
+    {
+      "url": "/missing-stroke-dark.html",
+      "kind": "negative-control",
+      "comparisons": [
+        {
+          "pass": false,
+          "maxDifference": 184,
+          "totalPixels": 2398,
+          "sumMaxChannelDifference": 431048,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              24
+            ],
+            "pixels": [
+              0,
+              400
+            ]
+          },
+          "reference": "/cap-ref-dark.html",
+          "diff": "382e65253b54915144f4-diff.png"
+        }
+      ],
+      "status": "FAIL",
+      "expected": "FAIL",
+      "accepted": true
+    },
+    {
+      "url": "/wrong-opacity-dark.html",
+      "kind": "negative-control",
+      "comparisons": [
+        {
+          "pass": false,
+          "maxDifference": 46,
+          "totalPixels": 800,
+          "sumMaxChannelDifference": 36800,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              1
+            ],
+            "pixels": [
+              0,
+              4000
+            ]
+          },
+          "reference": "/group-ref-dark.html",
+          "diff": "e1bab05d11a6612c6f90-diff.png"
+        }
+      ],
+      "status": "FAIL",
+      "expected": "FAIL",
+      "accepted": true
+    },
+    {
+      "url": "/wrong-winding-dark.html",
+      "kind": "negative-control",
+      "comparisons": [
+        {
+          "pass": false,
+          "maxDifference": 184,
+          "totalPixels": 1600,
+          "sumMaxChannelDifference": 294400,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              0
+            ],
+            "pixels": [
+              0,
+              0
+            ]
+          },
+          "reference": "/nonzero-ref-dark.html",
+          "diff": "da9cbac6c027ec87e00e-diff.png"
+        }
+      ],
+      "status": "FAIL",
+      "expected": "FAIL",
+      "accepted": true
+    },
+    {
+      "url": "/mismatch.html",
+      "kind": "fixture",
+      "comparisons": [
+        {
+          "pass": true,
+          "maxDifference": 210,
+          "totalPixels": 3998,
+          "sumMaxChannelDifference": 828062,
+          "relation": "mismatch",
+          "fuzzy": {
+            "difference": [
+              0,
+              0
+            ],
+            "pixels": [
+              0,
+              0
+            ]
+          },
+          "reference": "/cap-ref-light.html",
+          "diff": "ae1cc2dddbb5bd903db4-diff.png"
+        }
+      ],
+      "status": "PASS",
+      "expected": "PASS",
+      "accepted": true
+    },
+    {
+      "url": "/wait.html",
+      "kind": "fixture",
+      "comparisons": [
+        {
+          "pass": true,
+          "maxDifference": 0,
+          "totalPixels": 0,
+          "sumMaxChannelDifference": 0,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              0
+            ],
+            "pixels": [
+              0,
+              0
+            ]
+          },
+          "reference": "/wait-ref.html",
+          "diff": "616aeaf8af6a8d9e38ec-diff.png"
+        }
+      ],
+      "status": "PASS",
+      "expected": "PASS",
+      "accepted": true
+    }
+  ],
+  "native_comparisons": [
+    {
+      "pass": true,
+      "maxDifference": 38,
+      "totalPixels": 150,
+      "sumMaxChannelDifference": 2490,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          40
+        ],
+        "pixels": [
+          0,
+          200
+        ]
+      },
+      "shape": "cap",
+      "label": "cap",
+      "background": "light",
+      "kind": "fixture",
+      "maxPixelEquivalents": 12,
+      "mask_sha256": "5b2ee22aa68e3bb7b34345dfb705aacd139213293832b8e639c208af7b847dae",
+      "browser_sha256": "4829db8b3aa21d701e00d56d854cfa1f7ef940bc87a8525932e710ad8bc131fb",
+      "accepted": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 210,
+      "totalPixels": 2398,
+      "sumMaxChannelDifference": 492062,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          40
+        ],
+        "pixels": [
+          0,
+          200
+        ]
+      },
+      "shape": "cap",
+      "label": "missing-stroke",
+      "background": "light",
+      "kind": "negative-control",
+      "maxPixelEquivalents": 12,
+      "mask_sha256": null,
+      "browser_sha256": "4829db8b3aa21d701e00d56d854cfa1f7ef940bc87a8525932e710ad8bc131fb",
+      "accepted": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 210,
+      "totalPixels": 698,
+      "sumMaxChannelDifference": 127904,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          40
+        ],
+        "pixels": [
+          0,
+          200
+        ]
+      },
+      "shape": "cap",
+      "label": "wrong-transform",
+      "background": "light",
+      "kind": "negative-control",
+      "maxPixelEquivalents": 12,
+      "mask_sha256": "7e4b014caf2a892ab2d00ba8a9ee28e96a897d5c3e0dda5473015b39e681935d",
+      "browser_sha256": "4829db8b3aa21d701e00d56d854cfa1f7ef940bc87a8525932e710ad8bc131fb",
+      "accepted": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 33,
+      "totalPixels": 150,
+      "sumMaxChannelDifference": 2150,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          40
+        ],
+        "pixels": [
+          0,
+          200
+        ]
+      },
+      "shape": "cap",
+      "label": "cap",
+      "background": "dark",
+      "kind": "fixture",
+      "maxPixelEquivalents": 12,
+      "mask_sha256": "5b2ee22aa68e3bb7b34345dfb705aacd139213293832b8e639c208af7b847dae",
+      "browser_sha256": "fb30f0d7e81203caf68c5995d08e48b137571cbd625f30df970c08a6a15d3dd3",
+      "accepted": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 184,
+      "totalPixels": 2398,
+      "sumMaxChannelDifference": 431048,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          40
+        ],
+        "pixels": [
+          0,
+          200
+        ]
+      },
+      "shape": "cap",
+      "label": "missing-stroke",
+      "background": "dark",
+      "kind": "negative-control",
+      "maxPixelEquivalents": 12,
+      "mask_sha256": null,
+      "browser_sha256": "fb30f0d7e81203caf68c5995d08e48b137571cbd625f30df970c08a6a15d3dd3",
+      "accepted": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 184,
+      "totalPixels": 698,
+      "sumMaxChannelDifference": 111969,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          40
+        ],
+        "pixels": [
+          0,
+          200
+        ]
+      },
+      "shape": "cap",
+      "label": "wrong-transform",
+      "background": "dark",
+      "kind": "negative-control",
+      "maxPixelEquivalents": 12,
+      "mask_sha256": "7e4b014caf2a892ab2d00ba8a9ee28e96a897d5c3e0dda5473015b39e681935d",
+      "browser_sha256": "fb30f0d7e81203caf68c5995d08e48b137571cbd625f30df970c08a6a15d3dd3",
+      "accepted": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 38,
+      "totalPixels": 59,
+      "sumMaxChannelDifference": 688,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          40
+        ],
+        "pixels": [
+          0,
+          100
+        ]
+      },
+      "shape": "non-scaling",
+      "label": "non-scaling",
+      "background": "light",
+      "kind": "fixture",
+      "maxPixelEquivalents": 4,
+      "mask_sha256": "7e4b014caf2a892ab2d00ba8a9ee28e96a897d5c3e0dda5473015b39e681935d",
+      "browser_sha256": "831dd3239bb5a95e426340a128cba6eb94de7b541d543c520ee8e50422e7020f",
+      "accepted": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 32,
+      "totalPixels": 59,
+      "sumMaxChannelDifference": 582,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          40
+        ],
+        "pixels": [
+          0,
+          100
+        ]
+      },
+      "shape": "non-scaling",
+      "label": "non-scaling",
+      "background": "dark",
+      "kind": "fixture",
+      "maxPixelEquivalents": 4,
+      "mask_sha256": "7e4b014caf2a892ab2d00ba8a9ee28e96a897d5c3e0dda5473015b39e681935d",
+      "browser_sha256": "0f0b7d77547dd66e8b00a54465a0a5b84dab52e2484b09719c4bb426515f6d72",
+      "accepted": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "shape": "evenodd",
+      "label": "evenodd",
+      "background": "light",
+      "kind": "fixture",
+      "maxPixelEquivalents": 0,
+      "mask_sha256": "2e08948b4869301e745fcce0b69d2b964c9df2c4c0ab68e27091e1ff6c6d7ff4",
+      "browser_sha256": "9876eb1d490721f4d75a7801a4830cd6b50dff7c40343cda1ee720559b8c80da",
+      "accepted": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 210,
+      "totalPixels": 1600,
+      "sumMaxChannelDifference": 336000,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "shape": "evenodd",
+      "label": "wrong-fill-rule",
+      "background": "light",
+      "kind": "negative-control",
+      "maxPixelEquivalents": 0,
+      "mask_sha256": "fea513dc4eb7151322f429a1e3e33298c9fa37f429c7e4770fb49440481d7437",
+      "browser_sha256": "9876eb1d490721f4d75a7801a4830cd6b50dff7c40343cda1ee720559b8c80da",
+      "accepted": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "shape": "evenodd",
+      "label": "evenodd",
+      "background": "dark",
+      "kind": "fixture",
+      "maxPixelEquivalents": 0,
+      "mask_sha256": "2e08948b4869301e745fcce0b69d2b964c9df2c4c0ab68e27091e1ff6c6d7ff4",
+      "browser_sha256": "c0f0997b4e201ca18a503cd71e0ec0c93879849fbd984aeb6a41206bb3a0b404",
+      "accepted": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 184,
+      "totalPixels": 1600,
+      "sumMaxChannelDifference": 294400,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "shape": "evenodd",
+      "label": "wrong-fill-rule",
+      "background": "dark",
+      "kind": "negative-control",
+      "maxPixelEquivalents": 0,
+      "mask_sha256": "fea513dc4eb7151322f429a1e3e33298c9fa37f429c7e4770fb49440481d7437",
+      "browser_sha256": "c0f0997b4e201ca18a503cd71e0ec0c93879849fbd984aeb6a41206bb3a0b404",
+      "accepted": true
+    }
+  ],
+  "wpt_cases": [
+    {
+      "url": "/svg/painting/reftests/non-scaling-stroke-non-uniform-scale.html",
+      "kind": "fixture",
+      "comparisons": [
+        {
+          "pass": false,
+          "maxDifference": 98,
+          "totalPixels": 792,
+          "sumMaxChannelDifference": 48366,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              0
+            ],
+            "pixels": [
+              0,
+              0
+            ]
+          },
+          "reference": "/svg/painting/reftests/non-scaling-stroke-non-uniform-scale-ref.html",
+          "diff": "3f1bfacdbd9232e23c54-diff.png"
+        }
+      ],
+      "status": "FAIL",
+      "expected": "PASS",
+      "accepted": false
+    },
+    {
+      "url": "/svg/painting/reftests/non-scaling-stroke-with-none-preserve-aspect-ratio.html",
+      "kind": "fixture",
+      "comparisons": [
+        {
+          "pass": false,
+          "maxDifference": 128,
+          "totalPixels": 9900,
+          "sumMaxChannelDifference": 1267200,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              0
+            ],
+            "pixels": [
+              0,
+              0
+            ]
+          },
+          "reference": "/svg/painting/reftests/non-scaling-stroke-with-none-preserve-aspect-ratio-ref.html",
+          "diff": "6de0ef12f6d0201c2eb7-diff.png"
+        }
+      ],
+      "status": "FAIL",
+      "expected": "PASS",
+      "accepted": false
+    },
+    {
+      "url": "/svg/painting/reftests/small-nested-viewbox.html",
+      "kind": "fixture",
+      "comparisons": [
+        {
+          "pass": true,
+          "maxDifference": 0,
+          "totalPixels": 0,
+          "sumMaxChannelDifference": 0,
+          "relation": "match",
+          "fuzzy": {
+            "difference": [
+              0,
+              0
+            ],
+            "pixels": [
+              0,
+              0
+            ]
+          },
+          "reference": "/svg/painting/reftests/small-nested-viewbox-ref.html",
+          "diff": "2baf4f8914003e8cf972-diff.png"
+        }
+      ],
+      "status": "PASS",
+      "expected": "PASS",
+      "accepted": true
+    }
+  ],
+  "wpt_source_digests": {
+    "svg/painting/reftests/non-scaling-stroke-non-uniform-scale-ref.html": "86aa5bab1cc11da8119ea7ba48efb676be07d980f27ab22661deba36b72f95eb",
+    "svg/painting/reftests/non-scaling-stroke-non-uniform-scale.html": "17eb7f13c7e2b9ca2c81c9d42a3526250e3e45603441998262db30a5a76444a7",
+    "svg/painting/reftests/non-scaling-stroke-with-none-preserve-aspect-ratio-ref.html": "6fef956f57fe87b706b3da75c3a6c6549a05f7831fc8cfdcb2a62531550280b9",
+    "svg/painting/reftests/non-scaling-stroke-with-none-preserve-aspect-ratio.html": "979051c22b768c30baaf5b6be2212be614d888b7989bcc1be6731c773ceea7ed",
+    "svg/painting/reftests/small-nested-viewbox-ref.html": "871bcf0b8b9fdb35030863a18b456ca6047bd022dc1c5a51672285605b1eb972",
+    "svg/painting/reftests/small-nested-viewbox.html": "f93f7a088ef8f221499bdae7cfef57c671c6e30f98dbbe1759acc5a36e282d66"
+  },
+  "native_binary_sha256": "9270f235612a384b88e5eeaf95807df4a46032c329246d419388697ce07424a5"
+}

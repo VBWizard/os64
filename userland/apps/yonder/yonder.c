@@ -12106,7 +12106,18 @@ static int32_t button_width(const char *caption)
     return tw + 4 * g.ui.theme.pad;
 }
 
-static void layout(void)
+// Font adoption measures candidate metrics before replacing the live face.
+// Stage the same geometry used for ordinary resizes so a refused adoption
+// leaves the current window intact.
+static void layout_place(os64_ui_widget_t *w, os64_gui_rect_t r, bool staged)
+{
+    if (staged)
+        os64_ui_widget_stage_bounds(w, r);
+    else
+        w->bounds = r;
+}
+
+static os64_font_status_t layout_window(bool staged)
 {
     const os64_ui_theme_t *t = &g.ui.theme;
     os64_gui_rect_t area = os64_ui_widget_planned_bounds(&g.root);
@@ -12115,35 +12126,72 @@ static void layout(void)
     os64_ui_widget_t *tools[] = {&g.back, &g.forward, &g.reload, &g.stop};
     for (size_t i = 0; i < sizeof(tools) / sizeof(tools[0]); i++) {
         int32_t bw = button_width(tools[i]->text);
-        tools[i]->bounds = (os64_gui_rect_t){x, pad, bw, bh};
+        layout_place(tools[i], (os64_gui_rect_t){x, pad, bw, bh}, staged);
         x += bw + gap;
     }
-    g.field.w.bounds = (os64_gui_rect_t){x, pad, area.w - pad - x, bh};
+    layout_place(&g.field.w, (os64_gui_rect_t){x, pad, area.w - pad - x, bh}, staged);
     int32_t top = pad + bh + pad;
     int32_t bottom = area.h - pad - bh;
     int32_t bar_h = g.bar.up ? bh + gap : 0;
     int32_t vh = bottom - pad - sw - top - bar_h, vw = area.w - 2 * pad - sw;
+    // A font that leaves no usable address field or page area cannot fit.
+    if (staged && (area.w - pad - x < bh || vh < 1 || vw < 1))
+        return OS64_FONT_LIMIT;
     if (vh < 1)
         vh = 1;
     if (vw < 1)
         vw = 1;
-    g.view.bounds = (os64_gui_rect_t){pad, top, vw, vh};
-    g.vbar.w.bounds = (os64_gui_rect_t){pad + vw, top, sw, vh};
-    g.hbar.w.bounds = (os64_gui_rect_t){pad, top + vh, vw, sw};
+    layout_place(&g.view, (os64_gui_rect_t){pad, top, vw, vh}, staged);
+    layout_place(&g.vbar.w, (os64_gui_rect_t){pad + vw, top, sw, vh}, staged);
+    layout_place(&g.hbar.w, (os64_gui_rect_t){pad, top + vh, vw, sw}, staged);
     int32_t qy = top + vh + sw + gap;
     int32_t yes = button_width(g.qyes.text), no = button_width(g.qno.text);
-    g.qpanel.bounds = (os64_gui_rect_t){pad, qy, area.w - 2 * pad, bh};
-    g.qno.bounds = (os64_gui_rect_t){area.w - pad - no, qy, no, bh};
-    g.qyes.bounds = (os64_gui_rect_t){area.w - pad - no - gap - yes, qy, yes, bh};
-    g.qlabel.bounds = (os64_gui_rect_t){2 * pad, qy, g.qyes.bounds.x - 3 * pad, bh};
+    layout_place(&g.qpanel, (os64_gui_rect_t){pad, qy, area.w - 2 * pad, bh}, staged);
+    layout_place(&g.qno, (os64_gui_rect_t){area.w - pad - no, qy, no, bh}, staged);
+    layout_place(&g.qyes, (os64_gui_rect_t){area.w - pad - no - gap - yes, qy, yes, bh}, staged);
+    layout_place(&g.qlabel, (os64_gui_rect_t){2 * pad, qy, area.w - pad - no - gap - yes - 3 * pad, bh}, staged);
     // The badge takes the bar's right end when it has anything to say, so
     // a long hover address never pushes it out of sight.
     int32_t badge_w = g.badge_text[0] != '\0' ? button_width(g.badge_text) : 0;
     if (badge_w > (area.w - 2 * pad) / 2)
         badge_w = (area.w - 2 * pad) / 2;
-    g.badge.bounds = (os64_gui_rect_t){area.w - pad - badge_w, bottom, badge_w, bh};
-    os64_ui_set_hidden(&g.ui, &g.badge, badge_w == 0);
-    g.status.bounds = (os64_gui_rect_t){pad, bottom, area.w - 2 * pad - (badge_w != 0 ? badge_w + gap : 0), bh};
+    layout_place(&g.badge, (os64_gui_rect_t){area.w - pad - badge_w, bottom, badge_w, bh}, staged);
+    if (!staged)
+        os64_ui_set_hidden(&g.ui, &g.badge, badge_w == 0);
+    layout_place(&g.status, (os64_gui_rect_t){pad, bottom, area.w - 2 * pad - (badge_w != 0 ? badge_w + gap : 0), bh}, staged);
+    return OS64_FONT_OK;
+}
+
+static void layout(void)
+{
+    (void)layout_window(false);
+}
+
+static bool s_interface_resize_due;
+
+static os64_font_status_t interface_font_plan(os64_ui_t *ui, void *user, void **out)
+{
+    (void)ui;
+    (void)user;
+    *out = NULL;
+    return layout_window(true);
+}
+
+static void interface_font_commit(os64_ui_t *ui, void *user, void *plan)
+{
+    (void)ui;
+    (void)user;
+    (void)plan;
+    // Commit cannot allocate. Run the viewport resize work after adoption,
+    // before dispatching another event against its changed coordinates.
+    s_interface_resize_due = true;
+}
+
+static void interface_font_discard(os64_ui_t *ui, void *user, void *plan)
+{
+    (void)ui;
+    (void)user;
+    (void)plan;
 }
 
 static void on_resize(os64_ui_t *ui)
@@ -12157,6 +12205,14 @@ static void on_resize(os64_ui_t *ui)
     forms_place();
     pictures_schedule();
     mark_whole(WHOLE_WINDOW, true);
+}
+
+static void interface_font_finish(void)
+{
+    if (!s_interface_resize_due)
+        return;
+    s_interface_resize_due = false;
+    on_resize(&g.ui);
 }
 
 // Why the window loop ended, said in the log as yonder leaves (left_said):
@@ -12484,6 +12540,8 @@ int main(int argc, char **argv)
         os64_ui_add_child(&g.root, kids[i]);
     layout();
     os64_ui_set_root(&g.ui, &g.root);
+    (void)os64_ui_font_planner(&g.ui, interface_font_plan, interface_font_commit,
+                               interface_font_discard, NULL);
     (void)os64_ui_font_follow(&g.ui);
     {
         os64_font_set_t *was = NULL;
@@ -12493,6 +12551,7 @@ int main(int argc, char **argv)
     }
     bar_show(false);
     layout();
+    interface_font_finish();
 
     g.pool = os64_work_pool_create(POOL_WORKERS, POOL_BUDGET, g.win, BELL_WORK);
     g.settle_due = YONDER_NEVER;
@@ -12575,6 +12634,7 @@ int main(int argc, char **argv)
             else if (!bar_event(&ev) && !zoom_event(&ev) && !address_event(&ev) && !key_event(&ev) &&
                      !password_key(&ev))
                 os64_ui_dispatch(&g.ui, &ev);
+            interface_font_finish();
             // What the event became, as DOM events, now libui is done with it.
             inputs_run();
         }

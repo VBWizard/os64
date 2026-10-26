@@ -23,8 +23,9 @@ against standards and reference tests; use real pages as acceptance cases.
 
 The implementation must prove the geometry adapter before freezing its ABI.
 The [private geometry proof](SVG_GEOMETRY.md) records the first fixture,
-precision and allocation results. The production adapter and remaining gates
-are listed under Implementation stages. This design does not establish
+precision and allocation results. The [production adapter](SVG_GEOMETRY_BACKEND.md)
+and [comparison harness](SVG_REFTESTS.md) record their implemented contracts,
+measured limits and remaining gates. This design does not establish
 performance or compatibility percentages.
 
 ## Library boundaries
@@ -136,20 +137,18 @@ The SVG rendering model defines this distinction. [Rendering model](https://www.
 ## FreeType geometry contract
 
 The imported FreeType version is 2.14.3 (`tools/import_freetype.py`). Its
-smooth rasterizer is in `userland/libfreetype/sources.mk`; `ftstroke.c` is
-present upstream but is not in that build list. The port already has
-allocation hooks, live-byte accounting and per-engine serialization.
-
-Add a separately versioned geometry backend table exported by `libfreetype`,
-with an Os64 header and opaque geometry context. Preserve the font backend
-v1 table and getter. A dedicated geometry context allocates through caller
+smooth rasterizer and stroker are in `userland/libfreetype/sources.mk`.
+The [production geometry backend](SVG_GEOMETRY_BACKEND.md) implements a
+separately versioned table exported by `libfreetype`, with an Os64 header and
+opaque context/outline handles. The font backend v1 table and getter are
+unchanged. A dedicated geometry context allocates through caller
 hooks and has no independent admission cap. The SVG owner's ledger charges
 those allocations; geometry live/peak-byte counters are reporting subdivisions,
 not a second cap or a second charge. Font engines retain their existing budgets.
 This separates font consumers from graphics ABI
 growth without importing another copy of FreeType.
 
-The proposed operations are:
+The geometry operations are:
 
 | Operation | Contract |
 |---|---|

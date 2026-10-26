@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Build the private SVG geometry proof against Os64's pinned FreeType port."""
+"""Test Os64's geometry backend or generate the private geometry proof gallery."""
 import argparse
 import concurrent.futures
+import hashlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -13,6 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--backend', action='store_true', help='test the exported geometry table')
     parser.add_argument('--output', type=Path, required=True, help='keep images, log and build here')
     args = parser.parse_args()
     output = args.output.resolve()
@@ -27,12 +30,11 @@ def main():
               '-I'+str(ft.LIB/'port'), '-I'+str(ft.LIB/'upstream/include'),
               '-I'+str(ROOT/'userland/libos64/include')]
     upstream, port = ft.sources()
-    # ftstroke's glyph conveniences require ftglyph, which requires ftbitmap.
-    extra = [ft.LIB/'upstream/src/base'/f for f in ('ftstroke.c', 'ftglyph.c', 'ftbitmap.c')]
     entries = [(p, ['-DFT2_BUILD_LIBRARY', '-Wno-unused-variable', '-Wno-unused-but-set-variable'])
-               for p in upstream + extra]
+               for p in upstream]
     entries += [(p, []) for p in port]
-    entries += [(ROOT/'tools/svg_geometry/proof.c', [])]
+    harness = 'backend_test.c' if args.backend else 'proof.c'
+    entries += [(ROOT/'tools/svg_geometry'/harness, [])]
     def compile_one(entry):
         source, flags = entry
         obj = build/(source.name+'.o')
@@ -40,15 +42,28 @@ def main():
         return obj
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as workers:
         objects = list(workers.map(compile_one, entries))
-    binary = build/'geometry-proof'
+    binary = build/('geometry-backend' if args.backend else 'geometry-proof')
     subprocess.run([cc, *common, *map(str, objects), '-lm', '-o', str(binary)], check=True)
+    inputs = set(p for p, _ in entries)
+    inputs.update((ft.LIB/'port').glob('*.h'))
+    inputs.update((ft.LIB/'upstream').rglob('*.h'))
+    inputs.update((ft.LIB/'upstream').rglob('*.c'))
+    inputs.add(ft.LIB/'manifest.json')
+    inputs.add(ft.LIB/'sources.mk')
+    inputs.update((ROOT/'userland/libos64/include').rglob('*.h'))
+    inputs.add(Path(__file__).resolve())
+    provenance = {'compiler': subprocess.check_output([cc, '--version'], text=True).splitlines()[0],
+        'flags': common, 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+        'inputs': {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
+                   for p in sorted(inputs)}}
+    (output/'provenance.json').write_text(json.dumps(provenance, indent=2)+'\n')
     env = dict(os.environ)
     env.setdefault('ASAN_OPTIONS', 'detect_leaks=1')
     env.setdefault('UBSAN_OPTIONS', 'halt_on_error=1:print_stacktrace=1')
     result = subprocess.run([str(binary), str(output)], env=env, capture_output=True, text=True, timeout=120)
     (output/'results.txt').write_text(result.stdout+result.stderr)
     print(result.stdout+result.stderr, end='')
-    if result.returncode == 0:
+    if result.returncode == 0 and not args.backend:
         report(output)
     print('Artifacts:', output)
     return result.returncode

@@ -171,6 +171,8 @@ mutants = [
     ('parser-root-a-fragment', FRAGMENT_C,
      '    return h_parse_fragment(doc, context, utf8, len, scripting, true, budget, NULL, status);',
      '    return h_parse_fragment(doc, context, utf8, len, scripting, false, budget, NULL, status);', (DOM, HTML)),
+    ('parser-root-quirks-inherited', FRAGMENT_C, '    if (keep_root)\n        temp->pub.quirks = OS64_HTML_NO_QUIRKS;',
+     '    if (keep_root && false)\n        temp->pub.quirks = OS64_HTML_NO_QUIRKS;', (HTML,)),
     ('parser-root-attributes-dropped', FRAGMENT_C, '    pairs[0] = (FPair){root, pack_node(p, root, !keep_root)};',
      '    pairs[0] = (FPair){root, pack_node(p, root, !keep_root || root != NULL)};', (DOM, HTML)),
     ('ns-svg-as-html', IMPLEMENTATION_C,

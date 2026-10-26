@@ -78,12 +78,13 @@ are what the configuration actually steers.
 | `src/truetype/` | TrueType outlines |
 | `LICENSE.TXT`, `docs/FTL.TXT`, `README`, `docs/CHANGES`, `docs/CUSTOMIZE`, `docs/INSTALL.ANY`, `modules.cfg` | the licence os64 exercises and the documents this review cites |
 
-Eleven translation units are compiled (`sources.mk`), plus four of os64's own.
+The compiled source inventory is in `sources.mk`: the font engine plus
+`ftstroke.c`, `ftglyph.c` and `ftbitmap.c` for the geometry adapter.
 `src/base/ftsystem.c` is imported but NOT compiled: `port/ftsystem.c` replaces
 it, which is upstream's documented arrangement (`docs/CUSTOMIZE` §III).
-`base/ftbbox.c`, `ftglyph.c`, `ftbitmap.c` and `ftmm.c` are not compiled
-either — they are entry points the backend does not call, and an unused
-parser is still a parser.
+`base/ftbbox.c` and `ftmm.c` are not compiled: the adapters do not call those
+entry points. `ftglyph.c` and `ftbitmap.c` satisfy the stroker's glyph-helper
+link dependencies; the operation tables do not expose bitmap manipulation.
 
 ## Upstream fixes since the tag
 
@@ -100,7 +101,7 @@ would be new attack surface accepted to get fixes for old surface.
 ### Backported patches in `patches/`
 
 The patches address memory safety and integer arithmetic in the font port
-and geometry experiment. Each patch file is upstream's own `.patch` with its
+and geometry backend. Each patch file is upstream's own `.patch` with its
 commit SHA in the header; the import manifest records the resulting bytes.
 
 | Patch | Upstream | What it fixes |
@@ -130,7 +131,7 @@ directly reachable of the set.
 | `ee38c68` `(gray_raster_render): Fix a coding typo` | **Not present in the pin.** The `min_ey`/`min_ex` typo is in the dynamic-pool rasterizer added post-tag (`a39ef76`); 2.14.3 uses a fixed stack pool and has no such expression. |
 | `09b51e9` `Bump rendering limits` | RELAXES a bound (10 → 16 × ppem) to accommodate decorative glyphs. Not a fix; the tighter limit is the conservative choice and nothing here needs the looser one. |
 | `cbe1276` `Protect FT_LOAD_COLOR` | Unreachable: colour layers are compiled out and the backend never sets `FT_LOAD_COLOR`. |
-| `b6bcd21`, `9a4751a`, `2c041d3` (`FT_Bitmap_Blend`) | `ftbitmap.c` is absent from the shipped font library. The private geometry experiment links it to satisfy glyph-helper dependencies but never calls bitmap blending. Reassess before exposing bitmap operations. |
+| `b6bcd21`, `9a4751a`, `2c041d3` (`FT_Bitmap_Blend`) | `ftbitmap.c` is linked for the stroker's glyph-helper dependencies. Neither the font nor geometry operation table calls bitmap blending. Reassess before exposing bitmap operations. |
 | `12f5eb3` (TrueType GS leak), `287206a` (`Ins_WCVTF` CVT copy-on-write), `1803559`/`7d600a0`/`6d0ae3a` (`Ins_SHZ`), `7974be7` (`Ins_IUP`) | All in `ttinterp.c`, the bytecode interpreter, which is compiled out entirely. |
 | `0d45c7f`, `6d9fc45`, `5178bda` (GX variations, HVAR/VVAR) | Variation support is compiled out. |
 | `867c296` (`sbix`), `b6c6934` (`ttbdf` OOB read) | Embedded bitmaps and the SFNT BDF table are compiled out. |
@@ -287,7 +288,7 @@ instead of an undefined symbol that reads as a missing libc.
 The port's helpers are its own rather than libos64's on purpose: os64's
 spellings differ in contract where it matters (`os64_streq` is a boolean, not
 `strcmp`'s three-way answer), and borrowing by name would have been a silent
-behaviour change. They are hidden and the version script exports one symbol,
+behaviour change. They are hidden and the version script exports the font and geometry table getters,
 so they cannot interpose on libos64's copies or be interposed by them.
 
 **`ft_qsort` is heapsort, not quicksort:** no recursion, no stack growth

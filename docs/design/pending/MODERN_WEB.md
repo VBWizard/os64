@@ -3590,6 +3590,15 @@ QuotaExceededError). Cases in the DOM host, libhtml's fragment host and
 libpage's tree suite (the last fails on the old code); three mutants for
 the new rules, each caught.
 
+**Codex, round 2**: three findings. Fixed: DOMParser's parse took the
+hosting page's quirks mode, so a quirks page nested a table in a
+paragraph; the kept root is parsed in no-quirks mode now, the mode the
+document says it is in (a libhtml fragment-host case and its mutant).
+Booked in DEBTS.md by the triage rule (hand-made, or a long and unlikely
+chain): a prefixed name in `createElementNS` names the element whole, and
+a kept selection is clamped when read rather than when a clean control's
+default shrinks.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.
@@ -3605,7 +3614,10 @@ owned XML documents, arbitrary/absent namespaces, processing instructions,
 CDATA-to-text projection, clone/mutation ownership, and SVG-rooted selector
 and custom-property cascade proofs. Its API and sanitizer/regression evidence
 are in [XML.md](XML.md#native-shared-tree-as-built--2026-10-25). The first
-[FreeType geometry experiment](SVG_GEOMETRY.md) is built; its production
-adapter and browser/reference gates remain before 6a completes. XML profile
+[FreeType geometry experiment](SVG_GEOMETRY.md) and
+[production adapter](SVG_GEOMETRY_BACKEND.md) are built. The
+[comparison increment](SVG_REFTESTS.md) adds browser captures, native pixel
+comparisons and selected WPT references; the two Chromium baseline failures
+and unsupported runner profiles are retained explicitly. XML profile
 limitations and browser consumers still to be built are recorded in DEBTS.md; the slice's
 overall brief stays active.
