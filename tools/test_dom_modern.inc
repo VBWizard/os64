@@ -279,6 +279,11 @@ static void dom_modern_cases(void)
         "o.selectedIndex=1;assert(s.value==='za');"
         "assert(o[3].disabled&&o[3].index===3&&o[1].index===1&&o[1].form===document.getElementById('fm'));"
         "var g=s.querySelector('optgroup');assert(g.label==='price'&&!g.disabled);g.disabled=true;assert(g.hasAttribute('disabled'));"
+        /* react-dom sets selected, then defaultSelected: the options the
+         * first deselected stay clean, so the second's attribute is followed */
+        "var r=document.createElement('select');r.innerHTML='<option>a<option>b<option selected>c';var ro=r.options;"
+        "ro[0].selected=true;assert(r.selectedIndex===0&&!ro[2].selected,'a parsed selected sibling is deselected');"
+        "ro[1].defaultSelected=true;assert(r.selectedIndex===1&&ro[1].selected&&!ro[0].selected,'a clean sibling follows its attribute');"
         /* text, value and label */
         "var t=document.createElement('option');t.innerHTML='  two \\n words <script>skip()<\\/script>here ';"
         "assert(t.text==='two words here'&&t.value==='two words here'&&t.label==='two words here'&&t.index===0&&t.form===null);"
@@ -291,6 +296,9 @@ static void dom_modern_cases(void)
         "assert(Option.prototype===HTMLOptionElement.prototype&&HTMLOptionElement.prototype.constructor===HTMLOptionElement);"
         "assert(new Option().text===''&&new Option().childNodes.length===0&&Option.name==='Option'&&Option.length===0);"
         "var bad=false;try{Option('x')}catch(e){bad=e instanceof TypeError}assert(bad,'a constructor only');"
+        "var fo=new Option('f');fo.defaultSelected=true;assert(fo.selected,'a factory option is clean: its attribute is followed');"
+        "var fw=document.createElement('select');fw.innerHTML='<option>x';fw.add(fo);fw.options[0].selected=true;"
+        "assert(fw.selectedIndex===0&&!fo.selected,'and deselected by a sibling once its select holds it');"
         /* add, remove, length: the old idioms */
         "var c=document.createElement('select');c.add(new Option('a'));c.add(new Option('c'));c.add(new Option('b'),1);"
         "assert([...c.options].map(x=>x.text).join()==='a,b,c','add before an index');"

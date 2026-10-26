@@ -177,6 +177,18 @@ static void module_takeover_case(void) {
     request_drop();
 }
 
+/* A module answered 204 (no body) is an empty module: its importer runs. */
+static void module_no_content_case(void) {
+    fake_fetch_reset();
+    fake_answer("GET","http://fixture.test/m/main.js",200,MODULE_JS,"import './empty.js';note('after empty');");
+    fake_answer("GET","http://fixture.test/m/empty.js",204,MODULE_JS,"");
+    module_page("<script type=module src=/m/main.js></script>");
+    check(loop_settle() && request_land("/m/main.js") && request_land("/m/empty.js") && loop_settle() &&
+          g.page.tree!=NULL && script_rebuild() && probe_text_is("out","after empty"),
+          "modules: a 204 module is an empty one, and its importer runs");
+    request_drop();
+}
+
 /* With the Modern Web surface off, a module is what the page asked for and
  * did not get, and nothing of it runs. */
 static void module_modern_off_case(void) {
@@ -198,5 +210,6 @@ static void module_cases(void) {
     module_failure_case();
     module_preload_case();
     module_takeover_case();
+    module_no_content_case();
     module_modern_off_case();
 }

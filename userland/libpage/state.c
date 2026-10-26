@@ -481,11 +481,20 @@ static int64_t select_assign(os64_page_state_t *state, const os64_html_node_t *n
         changed |= option_selected(state, at) != (i == index);
     p_reserve_commit(&reserve);
     p_state_find(state, node)->selection_set = true;
+    // HTML's selectedIndex setter and selectedness setting algorithm: every
+    // option deselected, the chosen one selected and made dirty. The others
+    // keep their dirtiness, and their deselection holds against the
+    // attribute as it stands, so a `selected` attribute added to a clean one
+    // later still selects it (react-dom sets `selected`, then
+    // `defaultSelected`).
     i = 0;
     for (const os64_html_node_t *at = p_option_next(node, NULL); at != NULL; at = p_option_next(node, at), i++)
     {
-        p_state_find(state, at)->selected = i == index ? 1 : 0;
-        p_state_find(state, at)->selected_dirty = true;
+        PNodeState *edit = p_state_find(state, at);
+        edit->selected = i == index ? 1 : 0;
+        edit->selected_attr = p_has_attr(at, "selected");
+        if (i == index)
+            edit->selected_dirty = true;
     }
     p_state_publish(state);
     int32_t after = -1;
@@ -654,6 +663,26 @@ int64_t os64_page_node_set_option_selected(os64_page_state_t *state, const os64_
 no_memory:
     p_reserve_abort(&reserve);
     return -OS64_PAGE_REASON_NO_MEMORY;
+}
+
+int64_t os64_page_node_init_option_selected(os64_page_state_t *state, const os64_html_node_t *option, bool on)
+{
+    if (!option_node(state, option) || os64_page_option_select(option) != NULL)
+        return -OS64_PAGE_REASON_WRONG_KIND;
+    PReserve reserve = {.state = state};
+    if (!p_reserve_node(&reserve, option)) {
+        p_reserve_abort(&reserve);
+        return -OS64_PAGE_REASON_NO_MEMORY;
+    }
+    p_reserve_commit(&reserve);
+    // The selectedness holds against the attribute as it stands, clean, so
+    // a later change to the attribute is followed.
+    PNodeState *edit = p_state_find(state, option);
+    edit->selected = on ? 1 : 0;
+    edit->selected_attr = p_has_attr(option, "selected");
+    edit->selected_dirty = false;
+    p_state_publish(state);
+    return 0;
 }
 
 static char *state_copy(os64_page_state_t *state, const char *s, size_t len)

@@ -8,7 +8,7 @@ Read with [BROWSER.md](../../../BROWSER.md) (the campaign constitution,
 loop), [JAVASCRIPT.md](JAVASCRIPT.md) (the engine port), and
 [YONDER_HONEY_DO.md](YONDER_HONEY_DO.md) (the 1.0 batch that runs between the
 arcs). Fable holds this document and the hard designs it names; Opus builds
-the slices; Chris rules.*
+the assigned slices, Quinn owns SVG slice 6; Chris rules.*
 
 ## What this arc is for
 
@@ -331,17 +331,21 @@ and 5d (`requestAnimationFrame`).
 **Slice 6: SVG.** Inline `<svg>` in the tree, and SVG as a picture
 (`<img src="x.svg">`, the census's `MISSING image svg`): a renderer for
 paths, the basic shapes, fills and strokes, transforms, `use`/`symbol`,
-`viewBox`, text as the Web face draws it, and the SVG paint properties
-libgarb already parses. Oracle: WPT `svg/` (structure and painting; the
-reftests when the runner can compare pictures). Acceptance: Google's and
-GitHub's icons, suckless's logo. **Fable design** for the renderer's seam
-(what libflow hands it, what it hands back, and where it runs), Opus
-builds: [SVG.md](SVG.md) (2026-10-21), which makes an `<svg>` a replaced
-box to the layout, puts the renderer in a library of its own that fills
-and strokes through FreeType's rasterizer and stroker behind one new verb
-on the font backend table, and cuts it into 6a (the reftest runner, which
-slices 4 and 8 need too), 6b (the renderer's core) and 6c (gradients, text,
-the picture path).
+`viewBox`, gradients and the SVG properties added to libgarb. Oracle: WPT
+`svg/` and CSS reftests, plus browser-reference fixtures. Acceptance:
+Google's and GitHub's icons, suckless's logo, and the declared feature
+coverage. [SVG.md](SVG.md), revised by Quinn on 2026-10-25 from Fable's
+design, defines a separate `libsvg`, a FreeType geometry interface with
+stroke expansion before transformation, and XML parsing for external SVG.
+Quinn builds, with Fable reviewing the integration contracts and Chris
+testing. [XML.md](XML.md) defines the in-house event parser consumed by
+libhtml's tree builder. The cuts are 6a (reftests, geometry proof, XML parser
+and tree/cascade integration proof), 6b (static inline core), 6c (external images, gradients and
+caches), 6d (text and broader static graphics), and 6e (interaction and
+motion). Schedule 6a–6c; 6d/6e remain follow-on coverage whose start is driven
+by real needs. Static rendering comes first; retained geometry and explicit
+invalidation support later animation. Rendering a set of icons does not
+establish complete SVG compatibility.
 
 **Slice 7: the bytecode cache.** Per bundle, keyed by the cache's own entry
 identity (the response's validators), capped in bytes, compressed with
@@ -3481,6 +3485,16 @@ object waits for HTMLCollection's in P1b).
   `document.importNode` beside it. The shop's inventory page needs a
   login, which is Chris's to do on the P5.
 
+**Codex, round 1**: two findings, both an option's dirtiness, both fixed.
+Selecting one option of a single select made every option dirty, where
+HTML dirties the chosen one only, so react-dom's `selected` then
+`defaultSelected` left the first choice standing; and `new Option()`
+went through the `selected` setter, dirtying an option HTML's factory
+leaves clean (libpage `os64_page_node_init_option_selected`). The select
+directory went 119 → 124 with them, `select-setter-dirtiness.html` and
+`option-selectedness-script-mutation.html` among the five; three mutants
+were added for the new rules, each caught.
+
 ### 0f's page fixes, as built
 
 Opened by Opus on 2026-10-25, stacked on P1a's branch, after Chris ran
@@ -3541,14 +3555,14 @@ scripted-page host and reading the tree it left:
   and the template pages), `dom/events` +91 (a page built on
   `template.content`), `html/webappapis/scripting` +5 (DOMParser and
   template documents), `the-window-object` +9, `html/dom` +3, the option
-  directory 94 → 98, the select directory 119 → 120. `css/cssom`'s +216 are
+  directory 94 → 98, the select directory 124 → 125 (P1a's Codex round took it to 124). `css/cssom`'s +216 are
   one module page's, which slice 3 made runnable and did not record; they
   are recorded here.
 - **Hosts**, 0 failed: DOM 104,452 (its new cases a NodeList's and an
   HTMLCollection's prototypes, DOMParser's documents, the selections,
   createElementNS's rules, template content, and Svelte's setter walk
   over HTMLElement's members, which fails with them on Element's); libpage
-  254,157; scripted page 8,095 (a formless button's click and its
+  254,162; scripted page 8,102 (a formless button's click and its
   handler's failure, and its reason without scripts); yonder 2,028.
 - **Mutants** (`tools/test_interfaces_mutants.py`, its fifth group): 25,
   each caught. Five were first missed, and their cases were written: a
@@ -3563,3 +3577,18 @@ scripted-page host and reading the tree it left:
   On the P5, Chris: the ES5 build now works as Vue's does, and the PDF
   button's failure is on the status line. The shop's sort `<select>` is a one-row listbox with no
   dropdown, which is yonder's next fix, not the binding's.
+
+### Slice 6a, XML foundation as built — 2026-10-25
+
+The standalone `libxml` event parser is implemented in Quinn's SVG worktree.
+It has no browser tree or runtime dependency, and no script-visible consumer.
+[XML.md](XML.md#standalone-foundation-as-built--2026-10-25) records the API,
+limits, explicit DTD/encoding profile, host sanitizer and leak evidence, and
+xmlconf's supported/unsupported/excluded results. The root/userland makefiles
+include its build, image installation membership and debugger symbols because
+those shared inventories are required to deliver the library.
+
+This completes the standalone foundation increment, not all of slice 6a.
+The shared-tree builder, SVG ownership/cascade proofs and FreeType geometry
+contract remain to be built. XML profile limitations and the absent browser
+adapter are recorded in DEBTS.md; the slice's overall brief remains active.

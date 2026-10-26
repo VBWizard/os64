@@ -433,7 +433,7 @@ static JSValue option_factory(JSContext *ctx, JSValueConst new_target, int argc,
                 status = d_set_attr(dom, option, "value", value.data != NULL ? value.data : "", value.length, false);
             if (status >= 0 && default_selected) status = d_set_attr(dom, option, "selected", "", 0, false);
             if (status >= 0) {
-                int64_t page = os64_page_node_set_option_selected(dom->state, option, selected != 0);
+                int64_t page = os64_page_node_init_option_selected(dom->state, option, selected != 0);
                 result = page < 0 ? page_error(ctx, page) : d_wrap_constructed(dom, ctx, option, prototype);
             } else
                 result = d_html_error(ctx, status);

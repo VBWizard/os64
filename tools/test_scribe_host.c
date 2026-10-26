@@ -548,7 +548,8 @@ static os64_font_status_t sh_adopt(uint32_t size,
 typedef struct {
     int32_t row_h;
     int64_t extent, bar_total, saved_extent;
-    os64_gui_rect_t view, menubar;
+    os64_gui_rect_t view, menubar, toolbar, tools[OS64_UI_TOOLBAR_MAX];
+    size_t tool_count;
     size_t line, col, sel_line, sel_col, top;
     bool sel;
     unsigned char bytes[256];
@@ -565,6 +566,8 @@ static sh_state_t sh_state(void)
     s.saved_extent = g.saved_max_width;
     s.view = g.view.w.bounds;
     s.menubar = g.bar.w.bounds;
+    s.toolbar = g.toolbar.w.bounds; s.tool_count = g.toolbar.count;
+    for (size_t i=0; i<s.tool_count; ++i) s.tools[i]=g.toolbar.buttons[i].w.bounds;
     s.line = g.view.cur_line; s.col = g.view.cur_col;
     s.sel = g.view.sel; s.sel_line = g.view.sel_line; s.sel_col = g.view.sel_col;
     s.top = g.view.top;
@@ -579,6 +582,9 @@ static bool sh_rect_eq(os64_gui_rect_t a, os64_gui_rect_t b)
 }
 static bool sh_same_state(const sh_state_t *a, const sh_state_t *b)
 {
+    if (a->tool_count != b->tool_count || !sh_rect_eq(a->toolbar,b->toolbar)) return false;
+    for (size_t i=0; i<a->tool_count; ++i)
+        if (!sh_rect_eq(a->tools[i],b->tools[i])) return false;
     return a->row_h == b->row_h && a->extent == b->extent &&
            a->bar_total == b->bar_total && a->saved_extent == b->saved_extent &&
            sh_rect_eq(a->view, b->view) && sh_rect_eq(a->menubar, b->menubar) &&
@@ -1329,6 +1335,118 @@ static void scribe_file_dialogs(void)
     current="";
 }
 
+/* Toolbar ownership, input and layout use the production widgets/actions. */
+static unsigned sh_icon_acquires, sh_icon_releases;
+static bool sh_icon_missing;
+static uint32_t sh_icon_pixels[24*24];
+static os64_ui_icon_status_t sh_icon_acquire(void *user, const char *key,
+    uint32_t size, os64_ui_icon_lease_t *out)
+{
+    (void)user;
+    CHECK(os64_ui_icon_key_valid(key) && size==24);
+    ++sh_icon_acquires;
+    if (sh_icon_missing) return OS64_UI_ICON_MISSING;
+    *out=(os64_ui_icon_lease_t){sh_icon_pixels,24,24,24,1,NULL};
+    return OS64_UI_ICON_OK;
+}
+static void sh_icon_release(void *user, os64_ui_icon_lease_t *image)
+{ (void)user; CHECK(image->pixels==sh_icon_pixels); ++sh_icon_releases; }
+static const os64_ui_icon_provider_t sh_icons={NULL,sh_icon_acquire,sh_icon_release};
+static void sh_tool_mouse(unsigned i, bool release_inside)
+{
+    os64_gui_rect_t r=g.toolbar.buttons[i].w.bounds;
+    os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+    ev.mouse.x=r.x+r.w/2; ev.mouse.y=r.y+r.h/2; ev.mouse.button=OS64_GUI_MOUSE_LEFT;
+    commands(NULL,&ev);
+    if (!release_inside) {
+        ev.type=OS64_GUI_EVENT_MOUSE_MOVE; ev.mouse.x=g.view.w.bounds.x+10;
+        ev.mouse.y=g.view.w.bounds.y+10; commands(NULL,&ev);
+    }
+    ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP; commands(NULL,&ev);
+    tool_refresh();
+}
+static void scribe_toolbar(void)
+{
+    current="Scribe toolbar";
+    sh_scribe(16,"document text\n",14); g.running=true;
+    sh_icon_acquires=sh_icon_releases=0; sh_icon_missing=false;
+    for (unsigned i=0;i<24*24;++i) sh_icon_pixels[i]=0xff167ac6;
+    CHECK(os64_ui_toolbar_icons(&g.toolbar,&sh_icons)==OS64_UI_ICON_OK);
+    CHECK(sh_icon_acquires==8 && sh_icon_releases==0);
+    os64_ui_widget_app_face(&g.ui,&g.toolbar.buttons[0].w,true);
+    CHECK(g.toolbar.buttons[0].image.pixels==sh_icon_pixels && sh_icon_releases==0);
+    os64_ui_widget_app_face(&g.ui,&g.toolbar.buttons[0].w,false);
+    os64_ui_render(&g.ui,NULL);
+    size_t before=allocations;
+    os64_ui_mark_dirty(&g.ui,&g.root);
+    os64_ui_render(&g.ui,NULL);
+    CHECK(allocations==before && sh_icon_acquires==8);
+    sh_icon_missing=true;
+    CHECK(os64_ui_icon_button_image(&g.toolbar.buttons[0],&sh_icons,"document-open")==OS64_UI_ICON_MISSING);
+    CHECK(g.toolbar.buttons[0].image.pixels==sh_icon_pixels && sh_icon_releases==0);
+    sh_icon_missing=false;
+    CHECK(ui_test_adopt(&g.ui,sh_dir,20)==OS64_FONT_OK);
+    CHECK(g.toolbar.buttons[0].image.pixels==sh_icon_pixels && sh_icon_releases==0);
+    CHECK(g.toolbar.buttons[7].w.bounds.x+g.toolbar.buttons[7].w.bounds.w<=g.root.bounds.w);
+    CHECK(g.view.w.bounds.y>=g.toolbar.w.bounds.y+g.toolbar.w.bounds.h);
+
+    enter_mode(MODE_FIND,"find:","field words");
+    g.field.anchor=0; g.field.cursor=5; g.field.selected=true;
+    sh_tool_mouse(3,false);
+    CHECK(!strcmp(g.field_buf,"field words") && SH_DOC_IS("document text\n"));
+    os64_ui_set_focus(&g.ui,&g.field.w);
+    sh_tool_mouse(3,true);
+    CHECK(!strcmp(g.field_buf," words") && SH_DOC_IS("document text\n"));
+    CHECK(g.ui.focus==&g.field.w);
+    sh_file_t *clip=sh_find(OS64_CLIPBOARD_PATH,false);
+    CHECK(clip && clip->len==5 && !memcmp(clip->bytes,"field",5));
+    sh_tool_mouse(5,true);
+    CHECK(!strcmp(g.field_buf,"field words") && g.ui.focus==&g.field.w);
+    leave_mode();
+    os64_ui_textview_select(&g.ui,&g.view,0,0,0,8);
+    sh_tool_mouse(4,true);
+    clip=sh_find(OS64_CLIPBOARD_PATH,false);
+    CHECK(clip && clip->len==8 && !memcmp(clip->bytes,"document",8));
+    CHECK(g.ui.focus==&g.view.w);
+    sh_tool_mouse(7,true); tool_refresh();
+    CHECK(g.help_active && g.toolbar.buttons[3].w.disabled && g.toolbar.buttons[5].w.disabled);
+    CHECK(!g.toolbar.buttons[4].w.disabled);
+    sh_tool_mouse(7,true); CHECK(!g.help_active);
+    sh_tool_mouse(6,true); CHECK(g.mode==MODE_FIND && g.ui.focus==&g.field.w);
+    leave_mode();
+
+    os64_ui_set_focus(&g.ui,&g.toolbar.buttons[6].w); tool_refresh();
+    CHECK(g.tool_help_action==ACT_FIND && g.status.help.text && strstr(g.status.help.text,"Find"));
+    os64_gui_event_t key={.type=OS64_GUI_EVENT_KEY_DOWN};
+    key.key.ascii=' '; key.key.scancode=0x39; commands(NULL,&key);
+    CHECK(g.toolbar.buttons[6].w.pressed);
+    key.type=OS64_GUI_EVENT_KEY_UP; commands(NULL,&key);
+    CHECK(g.mode==MODE_FIND && g.ui.focus==&g.field.w);
+    leave_mode(); os64_ui_clear_hover(&g.ui);
+    tool_refresh(); CHECK(g.tool_help_action==0);
+    int32_t top=g.view.w.bounds.y;
+    os64_ui_set_focus(&g.ui,&g.toolbar.buttons[0].w);
+    CHECK(os64_ui_action_invoke(g.action_views[0],ACT_TOOLBAR).status==OS64_UI_OK);
+    CHECK(g.toolbar.w.hidden && g.view.w.bounds.y<top && g.ui.focus==&g.view.w);
+    CHECK(os64_ui_action_invoke(g.action_views[0],ACT_TOOLBAR).status==OS64_UI_OK);
+    CHECK(!g.toolbar.w.hidden && g.view.w.bounds.y==top);
+    g.root.bounds.w=320; layout(&g.ui);
+    CHECK(g.toolbar.buttons[7].w.bounds.y>g.toolbar.buttons[0].w.bounds.y);
+    CHECK(g.view.w.bounds.y>=g.toolbar.w.bounds.y+g.toolbar.w.bounds.h);
+    for (unsigned i=0;i<8;++i)
+        CHECK(g.toolbar.buttons[i].w.bounds.x+g.toolbar.buttons[i].w.bounds.w<=320);
+    g.root.bounds.w=SH_W; layout(&g.ui);
+    sh_tool_mouse(0,true); tool_refresh();
+    CHECK(g.file_operation==FILE_OPEN && g.toolbar.buttons[0].w.disabled);
+    file_step(); sh_dialog_finish(NULL,false); tool_refresh();
+    CHECK(!g.toolbar.buttons[0].w.disabled);
+    os64_ui_icon_button_clear(&g.toolbar.buttons[0]);
+    CHECK(!g.toolbar.buttons[0].image.pixels && sh_icon_releases==1);
+    os64_ui_render(&g.ui,NULL);
+    sh_close(); CHECK(sh_icon_releases==8);
+    sh_rm(OS64_CLIPBOARD_PATH); sh_rm("/doc"); current="";
+}
+
 int scribe_host_tests(int argc, char **argv)
 {
     sh_dir = argc > 1 ? argv[1] : "userland/libfreetype/fixtures";
@@ -1346,6 +1464,7 @@ int scribe_host_tests(int argc, char **argv)
     scribe_limit_window_font_change();
     scribe_help_keeps_the_window();
     scribe_file_dialogs();
+    scribe_toolbar();
 
     for (size_t i = 0; i < 8; ++i)
         free(sh_fs[i].bytes);

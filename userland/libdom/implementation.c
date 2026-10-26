@@ -470,7 +470,8 @@ static JSValue parser_construct(JSContext *ctx, JSValueConst new_target, int arg
  * markup). The string is parsed in an `html` element's context, which puts
  * the head's and the body's content where a whole document's parse would;
  * a doctype in it is not kept, so the document is in no-quirks mode. The
- * XML types are a NotSupportedError: there is no XML parser (DEBTS.md). */
+ * XML types are a NotSupportedError: no XML parse builds a tree yet
+ * (DEBTS.md). */
 static JSValue parse_from_string(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
                                  JSValue *data)
 {

@@ -15,6 +15,8 @@ Where to read next:
 *   [docs/design/completed/OS64GET.md](docs/design/completed/OS64GET.md):
     installing builds onto a running os64 machine over the network
     (`os64get` and `tools/os64serve.py`).
+*   [docs/APPEARANCE_PACKS.md](docs/APPEARANCE_PACKS.md): rebuilding appearance
+    packs, keeping versioned host archives, and transferring and selecting them.
 *   [DEBTS.md](DEBTS.md), [DECLINED.md](DECLINED.md),
     [DIVERGENCES.md](DIVERGENCES.md): what is deferred, what was declined,
     and where os64 departs from Unix on purpose.

@@ -634,6 +634,11 @@ int64_t os64_page_node_set_selection(os64_page_state_t *state, const os64_html_n
 // for a node that is not an option of this state's document.
 int64_t os64_page_node_option_selected(os64_page_state_t *state, const os64_html_node_t *option, bool *on);
 int64_t os64_page_node_set_option_selected(os64_page_state_t *state, const os64_html_node_t *option, bool on);
+// The Option factory's selectedness (HTML § 4.10.10, `new Option(...)`):
+// set, and the option left clean, so a `selected` attribute added or
+// removed later is followed as for a parsed option. WRONG_KIND for a node
+// that is not an option of this state's document, or one a select holds.
+int64_t os64_page_node_init_option_selected(os64_page_state_t *state, const os64_html_node_t *option, bool on);
 // A select's list of options (HTML § 4.10.7) in tree order, skipping the
 // subtrees the list-of-options algorithm skips: NULL starts the walk and
 // ends it, and a node that is not a select has none. The select whose list

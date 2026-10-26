@@ -2576,6 +2576,30 @@ static bool stream_same_tree(const uint8_t *bytes, size_t len) {
     os64_html_document_free(want);
     return same;
 }
+/* Ctrl+L: the keys go to the address field with all of it selected, from
+ * wherever focus was, and what is typed next replaces the address. Ctrl+Alt+L
+ * and a plain l are not it; Ctrl+A in the field selects all by the same door. */
+static void address_key_cases(void) {
+    stream_window();
+    os64_ui_textfield_set(&g.ui,&g.field,"http://fixture.test/somewhere");
+    os64_ui_set_focus(&g.ui,&g.view);
+    os64_gui_event_t ev={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='L'&0x1F,.modifiers=OS64_GUI_MOD_CTRL|OS64_GUI_MOD_ALT}};
+    check(!address_event(&ev) && g.ui.focus==&g.view,"Ctrl+Alt+L is not Ctrl+L");
+    ev.key.modifiers=0; ev.key.ascii='l';
+    check(!address_event(&ev) && g.ui.focus==&g.view,"a plain l is not Ctrl+L");
+    ev.key.modifiers=OS64_GUI_MOD_CTRL; ev.key.ascii='L'&0x1F;
+    check(address_event(&ev) && g.ui.focus==&g.field.w && g.field.selected && g.field.anchor==0 &&
+          g.field.cursor==g.field.len && g.field.len==strlen("http://fixture.test/somewhere"),
+        "Ctrl+L: the address field has the keys, all of it selected");
+    os64_gui_event_t typed={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='x'}};
+    os64_ui_dispatch(&g.ui,&typed);
+    check(os64_streq(g.field_buf,"x"),"Ctrl+L: what is typed next replaces the address");
+    os64_ui_textfield_set(&g.ui,&g.field,"http://fixture.test/again");
+    os64_gui_event_t all={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='A'&0x1F,.modifiers=OS64_GUI_MOD_CTRL}};
+    os64_ui_dispatch(&g.ui,&all);
+    check(g.field.selected && g.field.anchor==0 && g.field.cursor==g.field.len,"Ctrl+A in the field selects all of it");
+    stream_window_drop();
+}
 static void stream_slices(void) {
     /* Five slot-sized chunks: one turn feeds four (the 64 KiB slice) and
      * asks to be rung again; the next finishes, with the verdict already
@@ -9785,6 +9809,7 @@ int main(void)
     check(os64_text_create(&options,&probe_text)==OS64_FONT_OK,"text context");
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
     classic_browser_cases();
+    address_key_cases();
     inserted_frame_cases();
     stand_in_paint_cases();
     covered_link_cases();

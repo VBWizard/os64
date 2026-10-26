@@ -105,9 +105,16 @@ mutants = [
     ('length-never-appends', OPTIONS_C, '    if (wanted - count > OPTIONS_APPEND_MAX) return JS_UNDEFINED;',
      '    if (wanted - count > 0) return JS_UNDEFINED;', (DOM,)),
     ('factory-ignores-selected', OPTIONS_C,
-     '                int64_t page = os64_page_node_set_option_selected(dom->state, option, selected != 0);',
-     '                int64_t page = os64_page_node_set_option_selected(dom->state, option, selected != 0 && false);',
+     '                int64_t page = os64_page_node_init_option_selected(dom->state, option, selected != 0);',
+     '                int64_t page = os64_page_node_init_option_selected(dom->state, option, selected != 0 && false);',
      (DOM,)),
+    ('factory-option-dirty', STATE_C, '    edit->selected_dirty = false;\n    p_state_publish(state);\n    return 0;',
+     '    edit->selected_dirty = true;\n    p_state_publish(state);\n    return 0;', (PAGE, DOM)),
+    ('assign-dirties-siblings', STATE_C, '        if (i == index)\n            edit->selected_dirty = true;',
+     '        edit->selected_dirty = true;', (PAGE, DOM)),
+    ('assign-sibling-snapshot-stale', STATE_C,
+     '        edit->selected = i == index ? 1 : 0;\n        edit->selected_attr = p_has_attr(at, "selected");',
+     '        edit->selected = i == index ? 1 : 0;', (PAGE, DOM)),
     # 5. the page fixes: the lists' interfaces, DOMParser, the selections,
     # createElementNS, template content, HTMLElement's members, and the
     # formless button
