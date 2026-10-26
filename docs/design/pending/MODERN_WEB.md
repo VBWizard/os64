@@ -3578,6 +3578,18 @@ scripted-page host and reading the tree it left:
   button's failure is on the status line. The shop's sort `<select>` is a one-row listbox with no
   dropdown, which is yonder's next fix, not the binding's.
 
+**Codex, round 1**: two findings, both fixed. DOMParser dropped a whole
+document's `<html>` attributes (`lang`, a theme's class): the fragment
+parse keeps only its root's children, so libhtml gains
+`os64_html_parse_fragment_root`, the same parse returning that root as the
+`html` element it is, which becomes the document's element. And a text
+control's selection was set when its value could not be read (out of
+memory), clamped to nothing and reported done: the value is read first
+now, and its failure is the verb's, nothing changed (the binding's
+QuotaExceededError). Cases in the DOM host, libhtml's fragment host and
+libpage's tree suite (the last fails on the old code); three mutants for
+the new rules, each caught.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.

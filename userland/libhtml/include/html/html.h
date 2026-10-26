@@ -415,6 +415,15 @@ os64_html_node_t *os64_html_parse_fragment(os64_html_document_t *doc,
                                            const os64_html_node_t *context,
                                            const char *utf8, size_t len,
                                            bool scripting, int64_t *status);
+/* As os64_html_parse_fragment, but the parse's root comes back as the `html`
+ * element it is (HTML namespace), detached, holding what the fragment would
+ * and the attributes the markup's `<html>` start tags gave it, rather than as
+ * a FRAGMENT. With an `html` context it is a whole document's markup as its
+ * root element: DOMParser's document. Same limits, statuses and accounting. */
+os64_html_node_t *os64_html_parse_fragment_root(os64_html_document_t *doc,
+                                                const os64_html_node_t *context,
+                                                const char *utf8, size_t len,
+                                                bool scripting, int64_t *status);
 /* innerHTML when children_only, outerHTML otherwise; document and fragment
  * nodes have no wrapper. HTML template contents are traversed and HTML void
  * elements have no children/end tag in output. Text escapes &, NBSP, <, >

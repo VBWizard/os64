@@ -468,8 +468,10 @@ static JSValue parser_construct(JSContext *ctx, JSValueConst new_target, int arg
  * the string, parsed with scripting off (HTML's "parse HTML from a
  * string": a script in it is born started and never runs, and noscript is
  * markup). The string is parsed in an `html` element's context, which puts
- * the head's and the body's content where a whole document's parse would;
- * a doctype in it is not kept, so the document is in no-quirks mode. The
+ * the head's and the body's content where a whole document's parse would,
+ * and the parse's own root becomes the document's element, with what its
+ * `<html>` tags gave it (`lang`, a theme's class); a doctype in it is not
+ * kept, so the document is in no-quirks mode. The
  * XML types are a NotSupportedError: no XML parse builds a tree yet
  * (DEBTS.md). */
 static JSValue parse_from_string(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
@@ -495,14 +497,13 @@ static JSValue parse_from_string(JSContext *ctx, JSValueConst self, int argc, JS
     else {
         int64_t status = OS64_HTML_OK;
         os64_html_document_t *doc = dom->document;
-        os64_html_node_t *document = document_made(dom, ctx), *html = NULL, *fragment = NULL;
+        os64_html_node_t *document = document_made(dom, ctx), *context = NULL, *html = NULL;
         bool built = document != NULL &&
-            (html = made(ctx, os64_html_create_element(doc, OS64_HTML_NS_HTML, "html", &status), &status)) != NULL &&
-            (status = os64_html_insert(doc, document, html, NULL)) == OS64_HTML_OK &&
-            (fragment = made(ctx, os64_html_parse_fragment(doc, html, text.data != NULL ? text.data : "", text.length,
-                                                           false, &status), &status)) != NULL;
-        if (built && d_script_mark_tree(dom, fragment) < 0) { status = OS64_HTML_NO_MEMORY; built = false; }
-        if (built) status = os64_html_insert(doc, html, fragment, NULL);
+            (context = made(ctx, os64_html_create_element(doc, OS64_HTML_NS_HTML, "html", &status), &status)) != NULL &&
+            (html = made(ctx, os64_html_parse_fragment_root(doc, context, text.data != NULL ? text.data : "",
+                                                            text.length, false, &status), &status)) != NULL;
+        if (built && d_script_mark_tree(dom, html) < 0) { status = OS64_HTML_NO_MEMORY; built = false; }
+        if (built) status = os64_html_insert(doc, document, html, NULL);
         if (built && status == OS64_HTML_OK) result = document_new(dom, ctx, document, D_DOCUMENT_HTML);
         else result = document == NULL || JS_HasException(ctx) ? JS_EXCEPTION : d_html_error(ctx, status);
     }

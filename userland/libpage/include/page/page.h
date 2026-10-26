@@ -616,7 +616,8 @@ int64_t os64_page_node_selected_index(os64_page_state_t *state,
 // start past the end made the end. It is the scripts' record and moves no
 // field's caret, and it changes no control-state revision. WRONG_KIND for
 // a node that is not a textarea or an input of type text, search, tel, url
-// or password.
+// or password; NO_MEMORY when the value cannot be read (or, setting, the
+// record kept), and then nothing changes.
 typedef enum {
     OS64_PAGE_DIRECTION_NONE = 0, OS64_PAGE_DIRECTION_FORWARD, OS64_PAGE_DIRECTION_BACKWARD
 } os64_page_direction_t;

@@ -532,20 +532,22 @@ static bool selection_control(os64_page_state_t *state, const os64_html_node_t *
 }
 
 // The length of a control's value in UTF-16 code units, which the selection
-// counts in; 0 when the value cannot be read.
-static uint32_t value_units(os64_page_state_t *state, const os64_html_node_t *node)
+// counts in, into *units; the value read's failure (NO_MEMORY: reading may
+// sanitize and cache) is returned, and nothing is set.
+static int64_t value_units(os64_page_state_t *state, const os64_html_node_t *node, uint32_t *units)
 {
     const char *value = NULL;
     size_t len = 0;
-    if (os64_page_node_value(state, node, &value, &len) < 0 || value == NULL)
-        return 0;
-    uint32_t units = 0;
-    for (size_t i = 0; i < len; i++) {
+    int64_t read = os64_page_node_value(state, node, &value, &len);
+    if (read < 0)
+        return read;
+    *units = 0;
+    for (size_t i = 0; value != NULL && i < len; i++) {
         unsigned char c = (unsigned char)value[i];
         if ((c & 0xC0) != 0x80)
-            units += c >= 0xF0 ? 2 : 1;
+            *units += c >= 0xF0 ? 2 : 1;
     }
-    return units;
+    return 0;
 }
 
 int64_t os64_page_node_selection(os64_page_state_t *state, const os64_html_node_t *node, uint32_t *start,
@@ -553,7 +555,10 @@ int64_t os64_page_node_selection(os64_page_state_t *state, const os64_html_node_
 {
     if (start == NULL || end == NULL || direction == NULL || !selection_control(state, node))
         return -OS64_PAGE_REASON_WRONG_KIND;
-    uint32_t units = value_units(state, node);
+    uint32_t units = 0;
+    int64_t read = value_units(state, node, &units);
+    if (read < 0)
+        return read;
     const PNodeState *edit = p_state_find(state, node);
     if (edit == NULL || !edit->range_kept) {
         *start = *end = units;
@@ -571,6 +576,12 @@ int64_t os64_page_node_set_selection(os64_page_state_t *state, const os64_html_n
 {
     if (!selection_control(state, node) || direction > OS64_PAGE_DIRECTION_BACKWARD)
         return -OS64_PAGE_REASON_WRONG_KIND;
+    // The value is read before anything is reserved, so a read that fails
+    // leaves the selection as it was.
+    uint32_t units = 0;
+    int64_t read = value_units(state, node, &units);
+    if (read < 0)
+        return read;
     PReserve reserve = {.state = state};
     if (!p_reserve_node(&reserve, node)) {
         p_reserve_abort(&reserve);
@@ -579,7 +590,6 @@ int64_t os64_page_node_set_selection(os64_page_state_t *state, const os64_html_n
     p_reserve_commit(&reserve);
     // HTML's "set the selection range": the end clamped to the value, and a
     // start past the end made the end.
-    uint32_t units = value_units(state, node);
     if (end > units)
         end = units;
     if (start > end)

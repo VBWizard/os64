@@ -39,9 +39,11 @@ CORE_C = 'userland/libpage/core.c'
 SELECTION_C = 'userland/libdom/selection.c'
 IMPLEMENTATION_C = 'userland/libdom/implementation.c'
 YONDER_C = 'userland/apps/yonder/yonder.c'
+FRAGMENT_C = 'userland/libhtml/fragment.c'
 DOM = 'tools/test_dom_host.sh'
 PAGE = 'tools/test_libpage_host.sh'
 SCRIPTS = 'tools/test_yonder_scripts_host.sh'
+HTML = 'tools/test_html_fragment_host.sh'
 
 # (name, file, old, new, harnesses). Each breaks one rule the phase
 # states; none supplies a replacement expectation.
@@ -144,7 +146,9 @@ mutants = [
      '    return d_wrap(dom, ctx, (os64_html_node_t *)self);', (DOM,)),
     ('value-keeps-selection', STATE_C, '    if (changed)\n        edit->range_kept = false;',
      '    if (changed && false)\n        edit->range_kept = false;', (PAGE, DOM)),
-    ('selection-counts-bytes', STATE_C, '            units += c >= 0xF0 ? 2 : 1;', '            units += 1;', (PAGE, DOM)),
+    ('selection-counts-bytes', STATE_C, '            *units += c >= 0xF0 ? 2 : 1;', '            *units += 1;', (PAGE, DOM)),
+    ('selection-read-failure-ignored', STATE_C, '    if (read < 0)\n        return read;\n    *units = 0;',
+     '    if (read < 0)\n        value = NULL;\n    *units = 0;', (PAGE, DOM)),
     ('password-has-no-selection', STATE_C,
      '                                           input == OS64_PAGE_INPUT_PASSWORD));',
      '                                           input == OS64_PAGE_INPUT_TEXT));', (PAGE, DOM)),
@@ -160,8 +164,13 @@ mutants = [
      '        return JS_NULL;', (DOM,)),
     ('parser-takes-xml', IMPLEMENTATION_C, '    else if (kind > 0) result = d_error(ctx, "NotSupportedError"',
      '    else if (kind > 9) result = d_error(ctx, "NotSupportedError"', (DOM,)),
-    ('parser-scripts-unmarked', IMPLEMENTATION_C, '        if (built && d_script_mark_tree(dom, fragment) < 0)',
-     '        if (built && false && d_script_mark_tree(dom, fragment) < 0)', (DOM,)),
+    ('parser-scripts-unmarked', IMPLEMENTATION_C, '        if (built && d_script_mark_tree(dom, html) < 0)',
+     '        if (built && false && d_script_mark_tree(dom, html) < 0)', (DOM,)),
+    ('parser-root-a-fragment', FRAGMENT_C,
+     '    return h_parse_fragment(doc, context, utf8, len, scripting, true, budget, NULL, status);',
+     '    return h_parse_fragment(doc, context, utf8, len, scripting, false, budget, NULL, status);', (DOM, HTML)),
+    ('parser-root-attributes-dropped', FRAGMENT_C, '    pairs[0] = (FPair){root, pack_node(p, root, !keep_root)};',
+     '    pairs[0] = (FPair){root, pack_node(p, root, !keep_root || root != NULL)};', (DOM, HTML)),
     ('ns-svg-as-html', IMPLEMENTATION_C,
      '    else if (has_ns && same(ns->data, ns->length, NS_SVG)) *space = OS64_HTML_NS_SVG;',
      '    else if (has_ns && same(ns->data, ns->length, NS_SVG)) *space = OS64_HTML_NS_HTML;', (DOM,)),
