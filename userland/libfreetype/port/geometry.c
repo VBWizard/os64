@@ -419,7 +419,8 @@ static Status stroke(Context *c, const Command *commands, size_t n, const Map *m
             ++finish;
         }
         FT_Vector start = vector(f, commands[i].p[0]);
-        bool distinct = false, segments = false;
+        FT_Vector current = start;
+        bool drawable = false, segments = false;
         for (size_t j = i + 1; j < finish; ++j) {
             if (!spend(c, 1)) {
                 s = c->why;
@@ -427,12 +428,20 @@ static Status stroke(Context *c, const Command *commands, size_t n, const Map *m
             }
             if (commands[j].verb != OS64_GEOMETRY_CLOSE)
                 segments = true;
+            /* The pinned stroker ignores zero-length lines, and curves whose
+             * successive control-polygon edges are below two working units
+             * on both axes (FT_IS_SMALL). Even a discarded curve advances its
+             * center. Test those edges, not distance from the initial MOVE,
+             * so an empty non-butt stroke requests cap fallback. */
+            FT_Pos minimum = commands[j].verb == OS64_GEOMETRY_LINE ? 1 : 2;
             for (unsigned k = 0; k < point_count(commands[j].verb); ++k) {
                 FT_Vector p = vector(f, commands[j].p[k]);
-                distinct |= p.x != start.x || p.y != start.y;
+                FT_Pos dx = p.x - current.x, dy = p.y - current.y;
+                drawable |= dx <= -minimum || dx >= minimum || dy <= -minimum || dy >= minimum;
+                current = p;
             }
         }
-        if (!distinct && segments && style->cap != OS64_GEOMETRY_BUTT) {
+        if (!drawable && segments && style->cap != OS64_GEOMETRY_BUTT) {
             s = UNSUPPORTED;
             goto fail;
         }

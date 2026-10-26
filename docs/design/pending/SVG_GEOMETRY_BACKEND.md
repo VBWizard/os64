@@ -84,7 +84,11 @@ Whole-shape range refusal still applies when the requested clip is small.
 
 Width zero returns an empty outline. ARCS joins return UNSUPPORTED. Move-only
 subpaths paint nothing. Non-butt degenerate subpaths containing segments also
-return UNSUPPORTED, including those that collapse during grid conversion.
+return UNSUPPORTED, including those that collapse during grid conversion or
+are discarded by the pinned stroker's curve epsilon. Curve control-polygon
+edges below two working units on both axes are ignored; line segments are
+ignored only at zero length. The guard follows successive edges and the
+updated center, including discarded curves, separately for each subpath.
 This prevents the safe empty output from FreeType from masquerading as SVG's
 round/square zero-length cap. SVG must construct those caps, and resolve its
 join fallback policy, above this boundary. Dashing and non-scaling-stroke
@@ -120,7 +124,10 @@ for reflection and shear (acceptance ≤8 and ≤24/255).
 The suite covers mixed closure, fill rules, input lifetime, exact crop/padding,
 16,384× zoom, billion-unit translation, fixed-point miter transitions, working
 range, oversized expanded output, precision refusal, wrong-owner operations,
-live-outline destruction refusal and context recovery. A large raster exhausts
+live-outline destruction refusal and context recovery. Short quadratic/cubic
+subpaths exercise both round/square caps, open/closed forms and placement
+before/after a visible subpath; threshold cases retain drawable curves and
+one-unit lines. A large raster exhausts
 work and a subsequent smaller raster succeeds. Cleanup works with cancellation
 still requested. A representative curve stroke/render sweeps 32 allocation
 failures and 1,045 cancellation checkpoints, with callback re-entry probes and

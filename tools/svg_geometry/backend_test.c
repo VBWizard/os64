@@ -329,6 +329,86 @@ static void contracts(void)
     assert(api->stats(ca, &stats) == OK && stats.live_bytes == a.live);
     close_context(&a, ca);
 }
+static void collapsed_curves(void)
+{
+    Ledger ledger = {.cap = SIZE_MAX};
+    Context *c;
+    assert(start(&ledger, OS64_GEOMETRY_WORK_DEFAULT, &c) == OK);
+    os64_geometry_stats_t before, after;
+    assert(api->stats(c, &before) == OK);
+    const double step = 1.0 / 256;
+    for (unsigned cubic = 0; cubic < 2; ++cubic) {
+        Cmd tiny[] = {{OS64_GEOMETRY_MOVE, {{20, 20}}},
+                      {cubic ? OS64_GEOMETRY_CUBIC : OS64_GEOMETRY_QUADRATIC,
+                       {{20 + step, 20}, {20 + step, 20}, {20 + step, 20}}},
+                      {OS64_GEOMETRY_CLOSE}};
+        for (unsigned square = 0; square < 2; ++square) {
+            os64_geometry_stroke_t style = round_stroke;
+            style.cap = square ? OS64_GEOMETRY_SQUARE : OS64_GEOMETRY_ROUND_CAP;
+            for (unsigned closed = 0; closed < 2; ++closed) {
+                size_t count = 2 + closed;
+                for (unsigned placement = 0; placement < 3; ++placement) {
+                    Cmd path[5];
+                    size_t n = 0;
+                    if (placement == 1) {
+                        path[n++] = (Cmd){OS64_GEOMETRY_MOVE, {{100, 100}}};
+                        path[n++] = (Cmd){OS64_GEOMETRY_LINE, {{120, 100}}};
+                    }
+                    for (size_t j = 0; j < count; ++j)
+                        path[n++] = tiny[j];
+                    if (placement == 2) {
+                        path[n++] = (Cmd){OS64_GEOMETRY_MOVE, {{100, 100}}};
+                        path[n++] = (Cmd){OS64_GEOMETRY_LINE, {{120, 100}}};
+                    }
+                    Outline *out = (void *)1;
+                    Status result = api->stroke(c, path, n, &identity, 1.0 / 64, &style, &out);
+                    if (result != UNSUPPORTED)
+                        printf("collapsed curve: cubic=%u square=%u closed=%u placement=%u "
+                               "status=%u\n",
+                               cubic, square, closed, placement, (unsigned)result);
+                    assert(result == UNSUPPORTED && !out);
+                    assert(api->stats(c, &after) == OK && after.live_bytes == before.live_bytes &&
+                           !after.live_outlines);
+                }
+            }
+        }
+        os64_geometry_stroke_t style = round_stroke;
+        style.cap = OS64_GEOMETRY_BUTT;
+        Outline *out;
+        os64_geometry_outline_info_t info;
+        assert(api->stroke(c, tiny, 2, &identity, 1.0 / 64, &style, &out) == OK);
+        assert(api->outline_info(c, out, &info) == OK && !info.points);
+        assert(api->release(c, out) == OK);
+        /* Exactly two working units is retained by both curve operations. */
+        tiny[1].p[0].x = tiny[1].p[1].x = tiny[1].p[2].x = 20 + 2 * step;
+        for (unsigned square = 0; square < 2; ++square) {
+            style.cap = square ? OS64_GEOMETRY_SQUARE : OS64_GEOMETRY_ROUND_CAP;
+            assert(api->stroke(c, tiny, 2, &identity, 1.0 / 64, &style, &out) == OK);
+            assert(api->outline_info(c, out, &info) == OK && info.points);
+            assert(api->release(c, out) == OK);
+        }
+    }
+    /* Successive tiny curves update the stroker's center even when discarded.
+     * The accumulated distance from the initial MOVE does not make them draw. */
+    Cmd drift[] = {
+        {OS64_GEOMETRY_MOVE, {{20, 20}}},
+        {OS64_GEOMETRY_QUADRATIC, {{20 + step, 20}, {20 + 2 * step, 20}}},
+        {OS64_GEOMETRY_CUBIC, {{20 + 3 * step, 20}, {20 + 4 * step, 20}, {20 + 5 * step, 20}}},
+        {OS64_GEOMETRY_LINE, {{20 + 5 * step, 20}}}};
+    Outline *out;
+    assert(api->stroke(c, drift, COUNT(drift), &identity, 1.0 / 64, &round_stroke, &out) ==
+               UNSUPPORTED &&
+           !out);
+    drift[3].p[0].x += step; /* A one-unit line is drawable, unlike a one-unit curve edge. */
+    assert(api->stroke(c, drift, COUNT(drift), &identity, 1.0 / 64, &round_stroke, &out) == OK);
+    uint8_t pixels[W * H];
+    assert(draw(c, out, identity, pixels, false) == OK && pixels[20 * W + 20] == 255);
+    assert(api->release(c, out) == OK);
+    assert(operation(c) == OK); /* Fallback refusal leaves the context usable. */
+    close_context(&ledger, c);
+    puts("collapsed curves: quadratic/cubic, round/square, closure, mixed subpaths and threshold "
+         "checks pass");
+}
 static void boundaries(void)
 {
     Ledger l = {.cap = SIZE_MAX};
@@ -413,6 +493,7 @@ int main(int argc, char **argv)
     api = os64_freetype_geometry_v1();
     assert(api && api->revision == OS64_GEOMETRY_BACKEND_REVISION &&
            api->struct_size == sizeof(*api));
+    collapsed_curves();
     boundaries();
     pictures();
     contracts();
