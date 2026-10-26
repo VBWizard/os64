@@ -21,6 +21,7 @@
 #include "os64/ui.h"
 #include "os64/ui_window.h"
 #include "os64/ui_menu.h"
+#include "os64/ui_toolbar.h"
 #include "os64/ui_file_dialog.h"
 #include "os64/proc.h"
 #include "os64/str.h"
@@ -51,6 +52,9 @@ typedef struct
     os64_ui_status_t status;
     uint64_t notice;
     os64_ui_menubar_t bar;
+    os64_ui_toolbar_t toolbar;
+    uint64_t tool_help;
+    uint32_t tool_help_action;
     os64_ui_menu_model_t *models[6];
     os64_ui_actions_t *actions;
     os64_ui_action_view_t *action_views[2]; // document and entry field
@@ -138,6 +142,11 @@ static const char *kHelpLines[] = {
     "  Ctrl+G                          this page (Esc or ^G returns)",
     "  Ctrl+Q, Alt+F4                  quit (asks first if there are",
     "                                  unsaved changes)",
+    "",
+    "TOOLBAR",
+    "  View > Show Toolbar hides or restores the command buttons.",
+    "  Hover a button for help in the status bar; Tab reaches it too.",
+    "  Menus and toolbar use the icon set selected when Scribe starts.",
     "",
     "QUITTING WITH CHANGES PENDING",
     "  The * beside the filename means the buffer differs from the disk.",
@@ -244,7 +253,7 @@ static void status_refresh(void)
 
 // ── layout ──────────────────────────────────────────────────────────────────
 // Manual bounds, recomputed on resize — layout is a call the app makes.
-// Menu bar, optional entry field, document and bottom status bar.
+// Menu bar, wrapping toolbar, optional entry field, document and status bar.
 // The entry row (only in a field mode):
 // mode label | entry field.  Body: textview + scrollbar.
 
@@ -256,6 +265,7 @@ static void status_refresh(void)
 typedef struct
 {
     os64_gui_rect_t bar, status;
+    os64_ui_toolbar_plan_t toolbar;
     os64_gui_rect_t mode_label, field, view, scroll, hscroll;
     bool bar2;
 } scribe_layout_t;
@@ -278,6 +288,12 @@ static os64_font_status_t compute_layout(os64_ui_t *ui, scribe_layout_t *out)
     int32_t mh = os64_ui_font_row_height(ui, OS64_FONT_ROLE_UI) + 6;
     out->bar = (os64_gui_rect_t){pad,pad,W-2*pad,mh};
     int32_t y = pad + (g.bar.w.hidden ? 0 : mh + gap);
+    if (!g.toolbar.w.hidden) {
+        os64_font_status_t rc = os64_ui_toolbar_measure(&g.toolbar, ui,
+            pad, y, W-2*pad, &out->toolbar);
+        if (rc != OS64_FONT_OK) return rc;
+        y += out->toolbar.bounds.h + gap;
+    }
     out->status = (os64_gui_rect_t){pad,H-pad-bh,W-2*pad,bh};
     out->bar2 = (g.mode != MODE_NONE);
     if (out->bar2) {
@@ -331,6 +347,8 @@ static void place(os64_ui_widget_t *w, os64_gui_rect_t r, bool staged)
 static void apply_layout(const scribe_layout_t *l, bool staged)
 {
     place(&g.bar.w, l->bar, staged);
+    if (!g.toolbar.w.hidden)
+        os64_ui_toolbar_apply(&g.toolbar, &l->toolbar, staged);
     place(&g.status.w, l->status, staged);
     if (l->bar2) {
         place(&g.mode_label, l->mode_label, staged);
@@ -876,7 +894,7 @@ static void command_saveas(void)
 // Actions retain the editing target that opened a menu. Native popup focus
 // must not redirect a field's clipboard command to the file.
 enum { ACT_OPEN=1, ACT_SAVE, ACT_SAVEAS, ACT_QUIT, ACT_CUT, ACT_COPY,
-       ACT_PASTE, ACT_FIND, ACT_BAR, ACT_STATUS, ACT_HELP };
+       ACT_PASTE, ACT_FIND, ACT_BAR, ACT_STATUS, ACT_HELP, ACT_TOOLBAR };
 static bool action_valid(void *cookie, uint64_t generation)
 {
     return generation == 1 && (cookie == &g.view.w || cookie == &g.field.w);
@@ -896,6 +914,7 @@ static void action_query(void *app, const os64_ui_action_context_t *context,
     }
     if (id == ACT_BAR) state->checked = !g.bar.w.hidden && !g.bar.temporary;
     if (id == ACT_STATUS) state->checked = !g.status.w.hidden;
+    if (id == ACT_TOOLBAR) state->checked = !g.toolbar.w.hidden;
 }
 static void clipboard(unsigned id, bool field)
 {
@@ -935,6 +954,11 @@ static os64_ui_action_result_t action_invoke(void *app,
         if (g.bar.temporary) { g.bar.temporary=false; g.bar.w.hidden=true; }
         os64_ui_set_hidden(&g.ui,&g.bar.w,!g.bar.w.hidden);
         relayout_all(); break;
+    case ACT_TOOLBAR:
+        os64_ui_set_hidden(&g.ui,&g.toolbar.w,!g.toolbar.w.hidden);
+        if (!g.ui.focus) os64_ui_set_focus(&g.ui,
+            g.editing_target && g.mode != MODE_NONE ? &g.field.w : &g.view.w);
+        relayout_all(); break;
     case ACT_STATUS:
         os64_ui_set_hidden(&g.ui,&g.status.w,!g.status.w.hidden);
         relayout_all(); break;
@@ -948,6 +972,28 @@ static void action_target(void)
     if (g.ui.focus == &g.field.w) g.editing_target = 1;
     else if (g.ui.focus == &g.view.w || g.mode == MODE_NONE) g.editing_target = 0;
     if (g.menus) (void)os64_ui_menu_bar_view(g.menus,g.action_views[g.editing_target]);
+}
+/* A toolbar press temporarily owns focus, but its command still belongs to
+ * the last editor/field target. Invoke through the same action view as menus. */
+static void tool_click(os64_ui_widget_t *w, uint32_t id, void *user)
+{
+    (void)user;
+    (void)os64_ui_action_invoke(g.action_views[g.editing_target], id);
+    if (g.ui.focus == w)
+        os64_ui_set_focus(&g.ui,
+            g.editing_target && g.mode != MODE_NONE ? &g.field.w : &g.view.w);
+}
+static void tool_refresh(void)
+{
+    (void)os64_ui_toolbar_refresh(&g.toolbar, g.action_views[g.editing_target]);
+    const char *text = NULL;
+    uint32_t help = os64_ui_menu_active(g.menus) ? 0 :
+        os64_ui_toolbar_help(&g.toolbar, &text);
+    if (help == g.tool_help_action) return;
+    (void)os64_ui_status_clear_help(&g.status, g.tool_help);
+    g.tool_help = 0; g.tool_help_action = 0;
+    if (help && os64_ui_status_help(&g.status, text, &g.tool_help) == OS64_UI_OK)
+        g.tool_help_action = help;
 }
 static bool app_shortcut(const os64_gui_event_t *ev)
 {
@@ -989,6 +1035,7 @@ static bool build_actions(void)
         {ACT_PASTE,OS64_UI_ACTION_COMMAND,0,"Paste","Paste into the selected editing target","edit-paste",'p',{'v',OS64_GUI_MOD_CTRL}},
         {ACT_FIND,OS64_UI_ACTION_COMMAND,0,"Find","Find text in the document","search",'f',{'f',OS64_GUI_MOD_CTRL}},
         {ACT_BAR,OS64_UI_ACTION_TOGGLE,0,"Show Menu Bar","Recover with Alt, F10 or right-click",NULL,'m',{0,0}},
+        {ACT_TOOLBAR,OS64_UI_ACTION_TOGGLE,0,"Show Toolbar","Show command buttons",NULL,'t',{0,0}},
         {ACT_STATUS,OS64_UI_ACTION_TOGGLE,0,"Show Status Bar","Show file information and notices",NULL,'s',{0,0}},
         {ACT_HELP,OS64_UI_ACTION_COMMAND,0,"Scribe Guide","Read the editor's guide","help",'g',{'g',OS64_GUI_MOD_CTRL}}
     };
@@ -998,13 +1045,20 @@ static bool build_actions(void)
         os64_ui_action_context_t c = {i ? &g.field.w : &g.view.w,1,action_valid,action_release,action_valid};
         if (os64_ui_action_view_create(g.actions,&c,&g.action_views[i])) return false;
     }
+    const os64_ui_toolbar_entry_t tools[] = {
+        {ACT_OPEN,NULL,false}, {ACT_SAVE,NULL,false}, {ACT_SAVEAS,NULL,false},
+        {ACT_CUT,NULL,true}, {ACT_COPY,NULL,false}, {ACT_PASTE,NULL,false},
+        {ACT_FIND,NULL,true}, {ACT_HELP,"Help",false}
+    };
+    if (os64_ui_toolbar_bind(&g.toolbar,g.actions,tools,sizeof(tools)/sizeof(*tools),
+                            tool_click,NULL) != OS64_UI_OK) return false;
     const os64_ui_menu_entry_t file[] = {{.action=ACT_OPEN},{.action=ACT_SAVE},{.action=ACT_SAVEAS},{.kind=OS64_UI_MENU_SEPARATOR},{.action=ACT_QUIT}};
     const os64_ui_menu_entry_t edit[] = {{.action=ACT_CUT},{.action=ACT_COPY},{.action=ACT_PASTE},{.kind=OS64_UI_MENU_SEPARATOR},{.action=ACT_FIND}};
-    const os64_ui_menu_entry_t view[] = {{.action=ACT_BAR},{.action=ACT_STATUS}};
+    const os64_ui_menu_entry_t view[] = {{.action=ACT_BAR},{.action=ACT_TOOLBAR},{.action=ACT_STATUS}};
     const os64_ui_menu_entry_t help[] = {{.action=ACT_HELP}};
     if (os64_ui_menu_model_create(g.actions,file,5,&g.models[0]) ||
         os64_ui_menu_model_create(g.actions,edit,5,&g.models[1]) ||
-        os64_ui_menu_model_create(g.actions,view,2,&g.models[2]) ||
+        os64_ui_menu_model_create(g.actions,view,3,&g.models[2]) ||
         os64_ui_menu_model_create(g.actions,help,1,&g.models[3])) return false;
     const os64_ui_menu_entry_t bar[] = {
         {.kind=OS64_UI_MENU_SUBMENU,.label="File",.mnemonic='f',.child=g.models[0]},
@@ -1023,6 +1077,7 @@ static bool scribe_dispose(void)
     g.menus = NULL;
     os64_ui_cancel_interaction(&g.ui);
     os64_ui_menubar_destroy(&g.bar);
+    os64_ui_toolbar_destroy(&g.toolbar);
     for (unsigned i=0;i<6;++i) { os64_ui_menu_model_release(g.models[i]); g.models[i]=NULL; }
     for (unsigned i=0;i<2;++i) if (g.action_views[i]) {
         (void)os64_ui_action_view_destroy(g.action_views[i]); g.action_views[i]=NULL;
@@ -1070,7 +1125,7 @@ static void paint(void *user)
     (void)user;
     if (!g.running || g.ui.quit) return;
     for (unsigned i=0;i<2;++i) (void)os64_ui_actions_refresh(g.action_views[i]);
-    action_target(); os64_ui_paint(&g.ui);
+    action_target(); tool_refresh(); os64_ui_paint(&g.ui);
 }
 static bool attach_menus(const os64_ui_window_backend_t *backend)
 {
@@ -1164,6 +1219,8 @@ int scribe_main(int argc, char **argv, const scribe_hooks_t *hooks)
 
     g.hooks = hooks;
     (void)os64_icon_theme_create(&g.icon_theme);
+    (void)os64_ui_toolbar_icons(&g.toolbar,
+        g.icon_theme ? os64_icon_theme_provider(g.icon_theme) : NULL);
     if (!attach_menus(NULL)) {
         os64_hprintf(OS64_STDERR,"scribe: menu initialization refused\n");
         (void)scribe_dispose();
@@ -1207,6 +1264,7 @@ static const char *scribe_build(void)
                                        (int32_t)g.ctx.surf.height };
     os64_ui_status_init(&g.status);
     os64_ui_menubar_init(&g.bar);
+    os64_ui_toolbar_init(&g.toolbar);
     os64_ui_label(&g.mode_label, "");
     os64_ui_textfield(&g.field, g.field_buf, sizeof(g.field_buf),
                       field_submit, field_cancel, NULL);
@@ -1216,6 +1274,7 @@ static const char *scribe_build(void)
     g.hscroll.horizontal = true;
 
     os64_ui_add_child(&g.root, &g.bar.w);
+    os64_ui_add_child(&g.root, &g.toolbar.w);
     os64_ui_add_child(&g.root, &g.status.w);
     os64_ui_add_child(&g.root, &g.mode_label);
     os64_ui_add_child(&g.root, &g.field.w);

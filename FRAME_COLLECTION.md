@@ -31,6 +31,16 @@ The first collection:
 - **Moss-and-Linen:** muted olive and linen with a fine-grained finish.
 - **Signal:** crisp navy and cyan, square controls and a stronger border.
 
+**Yonder-XP** adds a blue Luna-inspired composition with white title text,
+a red Close button at the trailing edge and a pale-blue inactive frame.
+It uses the rectangular production painter; curved frame geometry is not
+part of the composition. Its matching Appearance and icon family can be
+packaged with `python3 tools/build_yonder_xp_pack.py`. The resulting
+`output/yonder-xp/yonder-xp.tar.gz` installs the three named components
+under `/home`; `output/yonder-xp/INSTALL.txt` explains selection and startup.
+See [Appearance packs](docs/APPEARANCE_PACKS.md) for rebuilding, keeping
+versioned host copies and transferring packs through os64get or SSH.
+
 Filenames use hyphens because the os64serve catalogue separates fields with
 spaces. Each composition embeds its font metrics, glyphs and finish tiles.
 The editable font reference uses the shipped DejaVu face under `/etc/fonts`.

@@ -688,8 +688,8 @@ static void label_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 	                  t->label_fg, t->panel_bg);
 }
 
-static void button_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
-                         const os64_ui_theme_t *t)
+void os64_ui_button_face(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
+                          const os64_ui_theme_t *t)
 {
 	uint32_t face = w->pressed ? t->button_face_pressed :
 	                w->hovered ? t->button_face_hover : t->button_face;
@@ -715,6 +715,19 @@ static void button_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 		                        w->bounds.w - 2 * i, w->bounds.h - 2 * i};
 		os64_draw_round_rect(&ctx->surf, edge, radius > i ? radius - i : 0, light, dark);
 	}
+}
+
+static void button_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
+                         const os64_ui_theme_t *t)
+{
+	os64_ui_button_face(w, ctx, t);
+	uint32_t face = w->pressed ? t->button_face_pressed :
+	                w->hovered ? t->button_face_hover : t->button_face;
+	int32_t radius = t->control_radius;
+	if (radius < 0) radius = 0;
+	if (radius > 8) radius = 8;
+	if (radius > w->bounds.w / 2) radius = w->bounds.w / 2;
+	if (radius > w->bounds.h / 2) radius = w->bounds.h / 2;
 	os64_ui_t *ui = os64_ui_of(w);
 	os64_font_role_t role = ui_role(w, OS64_FONT_ROLE_UI);
 	size_t len = ui_strlen(w->text);
