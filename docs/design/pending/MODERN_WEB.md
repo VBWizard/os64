@@ -8,7 +8,7 @@ Read with [BROWSER.md](../../../BROWSER.md) (the campaign constitution,
 loop), [JAVASCRIPT.md](JAVASCRIPT.md) (the engine port), and
 [YONDER_HONEY_DO.md](YONDER_HONEY_DO.md) (the 1.0 batch that runs between the
 arcs). Fable holds this document and the hard designs it names; Opus builds
-the slices; Chris rules.*
+the assigned slices, Quinn owns SVG slice 6; Chris rules.*
 
 ## What this arc is for
 
@@ -331,17 +331,21 @@ and 5d (`requestAnimationFrame`).
 **Slice 6: SVG.** Inline `<svg>` in the tree, and SVG as a picture
 (`<img src="x.svg">`, the census's `MISSING image svg`): a renderer for
 paths, the basic shapes, fills and strokes, transforms, `use`/`symbol`,
-`viewBox`, text as the Web face draws it, and the SVG paint properties
-libgarb already parses. Oracle: WPT `svg/` (structure and painting; the
-reftests when the runner can compare pictures). Acceptance: Google's and
-GitHub's icons, suckless's logo. **Fable design** for the renderer's seam
-(what libflow hands it, what it hands back, and where it runs), Opus
-builds: [SVG.md](SVG.md) (2026-10-21), which makes an `<svg>` a replaced
-box to the layout, puts the renderer in a library of its own that fills
-and strokes through FreeType's rasterizer and stroker behind one new verb
-on the font backend table, and cuts it into 6a (the reftest runner, which
-slices 4 and 8 need too), 6b (the renderer's core) and 6c (gradients, text,
-the picture path).
+`viewBox`, gradients and the SVG properties added to libgarb. Oracle: WPT
+`svg/` and CSS reftests, plus browser-reference fixtures. Acceptance:
+Google's and GitHub's icons, suckless's logo, and the declared feature
+coverage. [SVG.md](SVG.md), revised by Quinn on 2026-10-25 from Fable's
+design, defines a separate `libsvg`, a FreeType geometry interface with
+stroke expansion before transformation, and XML parsing for external SVG.
+Quinn builds, with Fable reviewing the integration contracts and Chris
+testing. [XML.md](XML.md) defines the in-house event parser consumed by
+libhtml's tree builder. The cuts are 6a (reftests, geometry proof, XML parser
+and tree/cascade integration proof), 6b (static inline core), 6c (external images, gradients and
+caches), 6d (text and broader static graphics), and 6e (interaction and
+motion). Schedule 6a–6c; 6d/6e remain follow-on coverage whose start is driven
+by real needs. Static rendering comes first; retained geometry and explicit
+invalidation support later animation. Rendering a set of icons does not
+establish complete SVG compatibility.
 
 **Slice 7: the bytecode cache.** Per bundle, keyed by the cache's own entry
 identity (the response's validators), capped in bytes, compressed with
@@ -3271,3 +3275,19 @@ copied, not moved; a cloned DOMException's name and message end at a NUL;
 an idle period can start between any two of a busy page's tasks; a page's
 idle callbacks wait until it is shown; a clone of plain data is not
 stopped by its task's deadline.
+
+
+### Slice 6a, XML foundation as built — 2026-10-25
+
+The standalone `libxml` event parser is implemented in Quinn's SVG worktree.
+It has no browser tree or runtime dependency, and no script-visible consumer.
+[XML.md](XML.md#standalone-foundation-as-built--2026-10-25) records the API,
+limits, explicit DTD/encoding profile, host sanitizer and leak evidence, and
+xmlconf's supported/unsupported/excluded results. The root/userland makefiles
+include its build, image installation membership and debugger symbols because
+those shared inventories are required to deliver the library.
+
+This completes the standalone foundation increment, not all of slice 6a.
+The shared-tree builder, SVG ownership/cascade proofs and FreeType geometry
+contract remain to be built. XML profile limitations and the absent browser
+adapter are recorded in DEBTS.md; the slice's overall brief remains active.
