@@ -226,21 +226,47 @@ static bool same(const char *text, size_t length, const char *word)
     return length == n && os64_memcmp(text, word, n) == 0;
 }
 
+/* The namespace an element named `name` in namespace `ns` (`has_ns` false:
+ * none) is made in, for createDocument and createElementNS: JS_UNDEFINED
+ * with *space set, or the refusal thrown. The name is DOM's "validate and
+ * extract" as the standard has had it since 2025, which WPT's
+ * createElementNS table at the pin holds, and not XML's QName: the name
+ * splits at its FIRST colon, the part before it must be a valid namespace
+ * prefix (d_prefix_valid) and everything after it, colons included, a valid
+ * element local name (d_element_name_valid), else InvalidCharacterError; so
+ * `0:a`, `f:o:o` and `prefix::local` are names and `a:0`, `:a` and `a:` are
+ * not. Then the namespace rules, in the standard's order (a prefix with no
+ * namespace, `xml` outside the XML namespace, `xmlns` outside the XMLNS one
+ * and the XMLNS one without it), each a NamespaceError. Then its namespace
+ * must be one the page's tree holds, HTML, SVG or MathML: an element in no
+ * namespace or another is a NotSupportedError, since libhtml has nowhere to
+ * put it. */
+static JSValue element_namespace(JSContext *ctx, bool has_ns, const DString *ns, const DString *name,
+                                 os64_html_ns_t *space)
+{
+    const char *colon = os64_strchr(name->data, ':');
+    size_t prefix = colon != NULL ? (size_t)(colon - name->data) : 0;
+    const char *local = colon != NULL ? colon + 1 : name->data;
+    bool xmlns = same(name->data, name->length, "xmlns") || (colon != NULL && same(name->data, prefix, "xmlns"));
+    bool is_xmlns_ns = has_ns && same(ns->data, ns->length, NS_XMLNS);
+    if ((colon != NULL && !d_prefix_valid(name->data, prefix)) || !d_element_name_valid(local))
+        return d_error(ctx, "InvalidCharacterError", "That is not an element's qualified name");
+    if ((colon != NULL && !has_ns) ||
+        (colon != NULL && same(name->data, prefix, "xml") && !(has_ns && same(ns->data, ns->length, NS_XML))) ||
+        (xmlns != is_xmlns_ns))
+        return d_error(ctx, "NamespaceError", "That name and namespace do not go together");
+    if (has_ns && same(ns->data, ns->length, NS_HTML)) *space = OS64_HTML_NS_HTML;
+    else if (has_ns && same(ns->data, ns->length, NS_SVG)) *space = OS64_HTML_NS_SVG;
+    else if (has_ns && same(ns->data, ns->length, NS_MATHML)) *space = OS64_HTML_NS_MATHML;
+    else return d_error(ctx, "NotSupportedError",
+                        "An element in no namespace, or in one other than HTML, SVG and MathML, "
+                        "is one this browser's documents cannot hold");
+    return JS_UNDEFINED;
+}
+
 /* createDocument(namespace, qualifiedName, doctype) (DOM § 4.5.1): an XML
  * document, holding the doctype and then the element createElementNS would
- * make, either one absent when not asked for. The element's name is
- * DOM's "validate and extract" as the standard has had it since 2025, which
- * WPT's createElementNS table at the pin holds, and not XML's QName: the
- * name splits at its FIRST colon, the part before it must be a valid
- * namespace prefix (d_prefix_valid) and everything after it, colons
- * included, a valid element local name (d_element_name_valid), else
- * InvalidCharacterError; so `0:a`, `f:o:o` and `prefix::local` are names
- * and `a:0`, `:a` and `a:` are not. Then the namespace rules, in the
- * standard's order (a prefix with no namespace, `xml` outside the XML
- * namespace, `xmlns` outside the XMLNS one and the XMLNS one without it),
- * each a NamespaceError. Then its namespace must be one the page's tree
- * holds, HTML, SVG or MathML: an element in no namespace or another is a
- * NotSupportedError, since libhtml has nowhere to put it. */
+ * make (element_namespace), either one absent when not asked for. */
 static JSValue create_document(os64_dom_t *dom, JSContext *ctx, int argc, JSValueConst *argv)
 {
     if (argc < 2) return JS_ThrowTypeError(ctx, "createDocument needs a namespace and a qualified name");
@@ -264,25 +290,8 @@ static JSValue create_document(os64_dom_t *dom, JSContext *ctx, int argc, JSValu
     os64_html_ns_t space = OS64_HTML_NS_HTML;
     int type = has_ns && same(ns.data, ns.length, NS_HTML) ? D_DOCUMENT_XHTML
              : has_ns && same(ns.data, ns.length, NS_SVG) ? D_DOCUMENT_SVG : D_DOCUMENT_XML;
-    if (JS_IsUndefined(result) && name.length != 0) {
-        const char *colon = os64_strchr(name.data, ':');
-        size_t prefix = colon != NULL ? (size_t)(colon - name.data) : 0;
-        const char *local = colon != NULL ? colon + 1 : name.data;
-        bool xmlns = same(name.data, name.length, "xmlns") || (colon != NULL && same(name.data, prefix, "xmlns"));
-        bool is_xmlns_ns = has_ns && same(ns.data, ns.length, NS_XMLNS);
-        if ((colon != NULL && !d_prefix_valid(name.data, prefix)) || !d_element_name_valid(local))
-            result = d_error(ctx, "InvalidCharacterError", "That is not an element's qualified name");
-        else if ((colon != NULL && !has_ns) ||
-                 (colon != NULL && same(name.data, prefix, "xml") && !(has_ns && same(ns.data, ns.length, NS_XML))) ||
-                 (xmlns != is_xmlns_ns))
-            result = d_error(ctx, "NamespaceError", "That name and namespace do not go together");
-        else if (has_ns && same(ns.data, ns.length, NS_HTML)) space = OS64_HTML_NS_HTML;
-        else if (has_ns && same(ns.data, ns.length, NS_SVG)) space = OS64_HTML_NS_SVG;
-        else if (has_ns && same(ns.data, ns.length, NS_MATHML)) space = OS64_HTML_NS_MATHML;
-        else result = d_error(ctx, "NotSupportedError",
-                              "An element in no namespace, or in one other than HTML, SVG and MathML, "
-                              "is one this browser's documents cannot hold");
-    }
+    if (JS_IsUndefined(result) && name.length != 0)
+        result = element_namespace(ctx, has_ns, &ns, &name, &space);
     os64_html_node_t *element = NULL, *document = NULL;
     int64_t status = OS64_HTML_OK;
     if (JS_IsUndefined(result) && name.length != 0)
@@ -388,6 +397,54 @@ int d_implementation_classic(os64_dom_t *dom, JSContext *ctx)
 
 /* The Modern Web table's row (modern.c): the interface object that names
  * DOMImplementation's prototype, which the classic surface made. */
+/* createElementNS(namespace, qualifiedName, options) (DOM § 4.5): the element
+ * element_namespace allows, in the document it is called on. React makes
+ * every SVG element so, and Svelte every element. `options` (a customized
+ * built-in's `is`) is converted, as WebIDL converts it, and changes nothing:
+ * there are no custom elements. */
+static JSValue create_element_ns(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                                 JSValue *data)
+{
+    (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    if (argc < 2) return JS_ThrowTypeError(ctx, "createElementNS needs a namespace and a qualified name");
+    DString ns = {0}, name = {0};
+    bool has_ns = !JS_IsNull(argv[0]) && !JS_IsUndefined(argv[0]);
+    if (has_ns && !d_string(dom, ctx, argv[0], &ns)) return JS_EXCEPTION;
+    if (!d_string(dom, ctx, argv[1], &name)) {
+        d_string_free(dom, &ns);
+        return JS_EXCEPTION;
+    }
+    if (has_ns && ns.length == 0) has_ns = false;
+    JSValue result = JS_UNDEFINED;
+    if (argc > 2 && JS_IsObject(argv[2])) {
+        JSValue is = JS_GetPropertyStr(ctx, argv[2], "is");
+        if (JS_IsException(is)) result = JS_EXCEPTION;
+        else if (!JS_IsUndefined(is)) {
+            DString ignored = {0};
+            if (!d_string(dom, ctx, is, &ignored)) result = JS_EXCEPTION;
+            d_string_free(dom, &ignored);
+        }
+        JS_FreeValue(ctx, is);
+    }
+    const os64_html_node_t *document = JS_IsUndefined(result) ? d_node(dom, ctx, self) : NULL;
+    if (JS_IsUndefined(result) && document == NULL) result = JS_EXCEPTION;
+    else if (JS_IsUndefined(result) && document->kind != OS64_HTML_DOCUMENT)
+        result = JS_ThrowTypeError(ctx, "createElementNS requires a document");
+    os64_html_ns_t space = OS64_HTML_NS_HTML;
+    if (JS_IsUndefined(result)) result = element_namespace(ctx, has_ns, &ns, &name, &space);
+    if (JS_IsUndefined(result)) {
+        int64_t status = OS64_HTML_OK;
+        os64_html_node_t *element = os64_html_create_element(dom->document, space, name.data, &status);
+        result = element != NULL ? d_wrap(dom, ctx, element) : d_html_error(ctx, status);
+        if (!JS_IsException(result)) d_made_in(dom, element, document);
+    }
+    d_string_free(dom, &ns);
+    d_string_free(dom, &name);
+    return result;
+}
+
 /* ── DOMParser (HTML § 8.5.1), HTML only ──────────────────────────────── */
 
 static JSClassID parser_slot;
@@ -457,7 +514,8 @@ int d_implementation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst globa
     JSValue f = d_interface_new(ctx, "DOMImplementation", 0, NULL, dom->implementation_prototype->value,
                                 JS_UNDEFINED);
     if (JS_IsException(f) ||
-        JS_DefinePropertyValueStr(ctx, global, "DOMImplementation", f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+        JS_DefinePropertyValueStr(ctx, global, "DOMImplementation", f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0 ||
+        d_method(dom, ctx, dom->prototypes[D_PROTO_DOCUMENT]->value, "createElementNS", create_element_ns, 2, 0) < 0)
         return -1;
     static const JSClassDef parser_definition = {.class_name = "DOMParser"};
     JSClassID id = os64_js_class_id(&parser_slot);

@@ -80,7 +80,7 @@ static char *modern_chain_shape(DomFixture *f)
         "var documentRow=/^(readyState|onreadystatechange|visibilityState|hidden|onvisibilitychange|referrer|"
         "activeElement|hasFocus|currentScript|title|prerendering|onprerenderingchange|domain|URL|documentURI|"
         "wasDiscarded|compatMode|dir|characterSet|charset|inputEncoding|contentType|lastModified|rootElement|"
-        "clear|getSelection)$/;"
+        "clear|getSelection|createElementNS)$/;"
         "globalThis.chainShape=nodes.map(function(n){var levels=[];"
         "for(var p=Object.getPrototypeOf(n);p&&p!==Object.prototype;p=Object.getPrototypeOf(p))"
         "levels.push(Object.getOwnPropertyNames(p).filter(function(k){"
@@ -215,6 +215,22 @@ static void dom_modern_cases(void)
         "bad=false;try{DOMParser()}catch(e){bad=e instanceof TypeError}assert(bad,'a constructor only');"
         "bad=false;try{DOMParser.prototype.parseFromString.call({},'x','text/html')}catch(e){bad=e instanceof TypeError}assert(bad,'its own');",
         "modern-on-dom-parser");
+    /* createElementNS: React's SVG and Svelte's every element */
+    dom_script(&f, MODERN_ASSERT
+        "var SVG='http://www.w3.org/2000/svg',X='http://www.w3.org/1999/xhtml';"
+        "var c=document.createElementNS(SVG,'circle');"
+        "assert(c instanceof SVGElement&&c.tagName==='circle'&&c.ownerDocument===document&&c.parentNode===null,'an SVG element');"
+        "var g=document.createElementNS(SVG,'linearGradient');assert(g.tagName==='linearGradient','its case kept');"
+        "var d=document.createElementNS(X,'div',undefined);assert(d instanceof HTMLElement&&d.tagName==='DIV','Svelte: an HTML one');"
+        "var asked=0;document.createElementNS(X,'p',{get is(){asked++;return 'x-p'}});assert(asked===1,'options converted');"
+        "var svg=document.createElementNS(SVG,'svg');svg.appendChild(c);document.body.appendChild(svg);"
+        "assert(document.body.lastChild===svg&&svg.firstChild===c);"
+        "function name(f){try{f();return 'none'}catch(e){return e.name}}"
+        "assert(name(()=>document.createElementNS(SVG,'a:'))==='InvalidCharacterError','a bad name');"
+        "assert(name(()=>document.createElementNS(null,'p:a'))==='NamespaceError','a prefix with no namespace');"
+        "assert(name(()=>document.createElementNS(null,'a'))==='NotSupportedError','no namespace the tree holds');"
+        "assert(name(()=>document.createElementNS(SVG))==='TypeError','two arguments');",
+        "modern-on-create-element-ns");
     /* 0f's P1a select row: React's option updater first, as it runs. */
     dom_script(&f, MODERN_ASSERT
         "var h=document.createElement('div');document.body.appendChild(h);"
