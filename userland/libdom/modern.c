@@ -92,6 +92,9 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"Option", "HTMLOptionsCollection", NULL}, d_options_install},
     /* 0f's P2 core: the text controls' members, and the Selection. */
     {(const char *const[]){"getSelection", "Selection", NULL}, d_selection_install},
+    /* 0f's P1b: last, since every interface whose prototype inherits
+     * EventTarget.prototype is made to inherit EventTarget. */
+    {(const char *const[]){"EventTarget", "Window", NULL}, d_targets_install},
 };
 
 int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)

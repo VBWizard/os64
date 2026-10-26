@@ -141,6 +141,65 @@ static void tracked_construction_cases(void)
     os64_js_destroy(runtime);
 }
 
+/* Patch 0013: a prototype set whose shape copy is refused gives back the
+ * reference it took on the new prototype. Two fresh objects share their
+ * shape, so setting one's prototype must copy it. The set's allocations
+ * are counted on a first run and each refused in turn (as the compile
+ * sweep does: the target core's arenas may make none to count, the
+ * instrumented engine makes the copy's own), and after every one the
+ * runtime's teardown finds nothing left. */
+static void set_prototype_refused_cases(void)
+{
+    os64_js_config_t config = fixture_config();
+    size_t count = 0;
+    {
+        os64_js_runtime_t *runtime = NULL;
+        os64_js_outcome_t outcome;
+        if (os64_js_create_with_teardown(&config, OS64_JS_TEARDOWN_RECLAIM, OS64_JS_ABI_ID,
+                                         &runtime, &outcome) != OS64_JS_OK || runtime == NULL) {
+            check(false, "prototype set fixture constructed");
+            return;
+        }
+        JSContext *context = os64_js_context(runtime, OS64_JS_ABI_ID, &outcome);
+        JSValue proto = JS_NewObject(context), object = JS_NewObject(context), sibling = JS_NewObject(context);
+        size_t start = attempts;
+        check(JS_SetPrototype(context, object, proto) == 1, "an unrefused prototype set succeeds");
+        count = attempts - start;
+        JS_FreeValue(context, sibling);
+        JS_FreeValue(context, object);
+        JS_FreeValue(context, proto);
+        os64_js_teardown_report_t report;
+        os64_js_destroy_report(runtime, &report);
+        check(!report.leaked, "an unrefused prototype set leaves nothing for teardown");
+    }
+    unsigned refused = 0;
+    for (size_t cut = 1; cut <= count; cut++) {
+        os64_js_runtime_t *runtime = NULL;
+        os64_js_outcome_t outcome;
+        if (os64_js_create_with_teardown(&config, OS64_JS_TEARDOWN_RECLAIM, OS64_JS_ABI_ID,
+                                         &runtime, &outcome) != OS64_JS_OK || runtime == NULL) {
+            check(false, "prototype set fixture constructed");
+            return;
+        }
+        JSContext *context = os64_js_context(runtime, OS64_JS_ABI_ID, &outcome);
+        JSValue proto = JS_NewObject(context), object = JS_NewObject(context), sibling = JS_NewObject(context);
+        fail_at = attempts + cut;
+        int set = JS_SetPrototype(context, object, proto);
+        fail_at = 0;
+        if (set < 0) {
+            refused++;
+            JS_FreeValue(context, JS_GetException(context));
+        }
+        JS_FreeValue(context, sibling);
+        JS_FreeValue(context, object);
+        JS_FreeValue(context, proto);
+        os64_js_teardown_report_t report;
+        os64_js_destroy_report(runtime, &report);
+        check(!report.leaked, "a prototype set, refused or not, leaves nothing for teardown to find");
+    }
+    check(refused == count, "each of the set's allocations, refused, refuses the set");
+}
+
 static void clock_cases(void)
 {
     os64_js_config_t config = fixture_config();
@@ -1555,7 +1614,7 @@ int main(int argc, char **argv)
         }
         return 1;
     }
-    tracked_allocator_cases(); tracked_construction_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); allocation_cases(); thread_cases();
+    tracked_allocator_cases(); tracked_construction_cases(); set_prototype_refused_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); allocation_cases(); thread_cases();
     file_cases(); file_boundary_cases(); output_cases(); console_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
     task_cases();
     script_host_cases();

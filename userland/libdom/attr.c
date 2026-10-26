@@ -1057,8 +1057,9 @@ int d_attr_classic(os64_dom_t *dom, JSContext *ctx)
         return -1;
     /* Attr.prototype: Attr's own members, then every Node member as an Attr
      * answers it (tools/test_dom_attributes.inc holds the shadow to cover
-     * Node.prototype whole), then EventTarget's, an Attr being a plain
-     * event target whose path is itself. */
+     * Node.prototype whole). EventTarget's methods it inherits through
+     * Node.prototype, an Attr being registered as a plain event target
+     * whose path is itself. */
     JSValueConst attr = dom->prototypes[D_PROTO_ATTR]->value;
     JS_SetClassProto(ctx, dom->attr_class, JS_DupValue(ctx, attr));
     static const struct { const char *name; int magic; bool writable; } kAccessors[] = {

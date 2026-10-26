@@ -458,6 +458,14 @@ excluded by name: DOMStringList is not built); `html/browsers/the-window-object`
 (fetched) `window-prototype-chain.html`, whose WindowProperties tests wait for
 P3c. Acceptance: the records' EventTarget and NodeList FAILED lines go.
 
+**As built** (MODERN_WEB.md § 0f's P1b, as built, is the record), as
+listed, with the chain's levels present whatever the switch says and only
+the names behind it. The interface objects follow their prototypes, so
+`Node`, `AbortSignal` and every other interface whose prototype inherits
+EventTarget.prototype inherit `EventTarget`. The oracle's two fetched
+directories were enough; `dom/collections`, `dom/lists` and the
+collections directory were not added.
+
 ### P2 — the text controls' selection (12 members)
 
 (b) to 32.3% distinctive.
