@@ -566,7 +566,7 @@ int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_accessor(dom,ctx,doc,"forms",classic,C_FORMS,false) < 0 ||
         d_accessor(dom,ctx,form,"elements",classic,C_ELEMENTS,false) < 0 ||
         d_accessor(dom,ctx,el,"style",classic,C_STYLE,false) < 0 ||
-        d_accessor(dom,ctx,el,"title",classic,C_TITLE,true) < 0 ||
+        d_accessor(dom,ctx,dom->prototypes[D_PROTO_HTML_ELEMENT]->value,"title",classic,C_TITLE,true) < 0 ||
         d_accessor(dom,ctx,doc,"cookie",classic,C_COOKIE,true) < 0 ||
         d_accessor(dom,ctx,image,"src",classic,C_SRC,true) < 0 ||
         d_accessor(dom,ctx,image,"width",classic,C_WIDTH,true) < 0 ||

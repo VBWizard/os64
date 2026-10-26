@@ -1015,6 +1015,8 @@ JSValue d_dataset(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 #define PARENTS ((1u << D_PROTO_DOCUMENT) | (1u << D_PROTO_ELEMENT) | (1u << D_PROTO_FRAGMENT))
 #define CHILDREN ((1u << D_PROTO_ELEMENT) | (1u << D_PROTO_CHARACTER_DATA) | (1u << D_PROTO_DOCTYPE))
 #define ELEMENTS (1u << D_PROTO_ELEMENT)
+#define HTML_ELEMENTS (1u << D_PROTO_HTML_ELEMENT)
+#define HTML_OR_SVG ((1u << D_PROTO_HTML_ELEMENT) | (1u << D_PROTO_SVG))
 
 int d_url_reflection(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, const char *name)
 {
@@ -1040,9 +1042,14 @@ int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
     };
     static const struct { const char *name; int magic; bool writable; unsigned on; } reflections[] = {
         {"isConnected", R_CONNECTED, false, 1u << D_PROTO_NODE},
-        {"hidden", R_HIDDEN, true, ELEMENTS}, {"lang", R_LANG, true, ELEMENTS},
-        {"dir", R_DIR, true, ELEMENTS}, {"tabIndex", R_TAB_INDEX, true, ELEMENTS},
-        {"classList", R_CLASS_LIST, true, ELEMENTS}, {"dataset", R_DATASET, false, ELEMENTS},
+        // HTMLElement's own, and HTMLOrSVGElement's (HTMLElement's and
+        // SVGElement's), where HTML puts them: Svelte sets a member as a
+        // property only when it finds its setter below Element.prototype,
+        // and as an attribute otherwise, so `hidden = false` on Element's
+        // became the attribute hidden="false", which hides.
+        {"hidden", R_HIDDEN, true, HTML_ELEMENTS}, {"lang", R_LANG, true, HTML_ELEMENTS},
+        {"dir", R_DIR, true, HTML_ELEMENTS}, {"tabIndex", R_TAB_INDEX, true, HTML_OR_SVG},
+        {"classList", R_CLASS_LIST, true, ELEMENTS}, {"dataset", R_DATASET, false, HTML_OR_SVG},
         {"src", R_URL, true, 1u << D_PROTO_SCRIPT},
         // What a loader sets before it connects a script (`type = 'module'`
         // makes it a module, MODERN_WEB.md § Slice 3); `async`, with HTML's

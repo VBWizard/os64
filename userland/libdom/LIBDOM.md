@@ -152,7 +152,11 @@ connect runs and a moved control keeps its form:
   script's `src` and a link's and an anchor's `href` (resolved against the
   document's base, and as written when it does not resolve), a script's
   `type`, `defer` and `noModule`, and a link's `rel`. Script, anchor and
-  link elements have prototypes of their own for these.
+  link elements have prototypes of their own for these. `hidden`, `lang`,
+  `dir` and `title` are HTMLElement's, and `tabIndex` and `dataset`
+  HTMLElement's and SVGElement's, as HTML places them, not Element's: a
+  framework that sets a member as a property only when it finds the setter
+  below Element.prototype (Svelte 5) otherwise writes an attribute.
 - `document.cookie`, through a provider the host installs
   (`os64_dom_set_cookies`): a read is the whole cookie-string it writes,
   asked again with more room while more did not fit, an assignment is handed to it whole as a Set-Cookie value. Which cookies a

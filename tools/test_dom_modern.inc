@@ -215,6 +215,20 @@ static void dom_modern_cases(void)
         "bad=false;try{DOMParser()}catch(e){bad=e instanceof TypeError}assert(bad,'a constructor only');"
         "bad=false;try{DOMParser.prototype.parseFromString.call({},'x','text/html')}catch(e){bad=e instanceof TypeError}assert(bad,'its own');",
         "modern-on-dom-parser");
+    /* HTMLElement's members are HTMLElement's: Svelte 5 looks for a member's
+     * setter below Element.prototype and sets an attribute when it finds
+     * none, so `hidden = false` on Element's became hidden="false" and hid
+     * TodoMVC's list. Its walk, as it runs. */
+    dom_script(&f, MODERN_ASSERT
+        "function setters(el){var s=[],p=el;while(p!==Element.prototype){var d=Object.getOwnPropertyDescriptors(p);"
+        "for(var k in d)if(d[k].set)s.push(k);p=Object.getPrototypeOf(p)}return s}"
+        "var s=setters(document.createElement('main'));"
+        "assert(['hidden','lang','dir','title','tabIndex'].every(k=>s.includes(k)),'Svelte finds them: '+s.join());"
+        "var g=setters(document.createElementNS('http://www.w3.org/2000/svg','g'));"
+        "assert(g.includes('tabIndex')&&!g.includes('hidden'),'an SVG element has tabIndex and not hidden');"
+        "assert(!Object.getOwnPropertyDescriptor(Element.prototype,'hidden')&&'dataset' in document.createElementNS('http://www.w3.org/2000/svg','g'));"
+        "var m=document.createElement('main');m.hidden=true;m.hidden=false;assert(!m.hasAttribute('hidden'),'false removes it');",
+        "modern-on-html-element-members");
     /* A template's content, as Svelte builds its markup */
     dom_script(&f, MODERN_ASSERT
         "var t=document.createElement('template');assert(t instanceof HTMLTemplateElement&&t instanceof HTMLElement);"
