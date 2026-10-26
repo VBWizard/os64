@@ -2,6 +2,8 @@
 """Build native SVG, production FreeType and pinned libmath under sanitizers."""
 import argparse
 import concurrent.futures
+import hashlib
+import json
 import os
 from pathlib import Path
 import shlex
@@ -16,6 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--paint', action='store_true', help='run solid painting tests and write fixtures')
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -50,7 +53,7 @@ def main():
         entries.append((ROOT/'userland'/name, extra))
     for name in math['MATH_PORT_SRCS'].split():
         entries.append((ROOT/'userland'/name, shlex.split(math['MATH_SQRT_FLAGS'])))
-    entries.append((ROOT/'tools/test_svg_core.c', includes))
+    entries.append((ROOT/'tools'/('test_svg_paint.c' if args.paint else 'test_svg_core.c'), includes))
 
     def compile_one(entry):
         source, extra = entry
@@ -61,12 +64,23 @@ def main():
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as workers:
         objects = list(workers.map(compile_one, entries))
-    binary = build/'svg-core'
+    binary = build/('svg-paint' if args.paint else 'svg-core')
     subprocess.run([cc, *common, *map(str, objects), '-o', str(binary)], check=True)
+    inputs = {p for p, _ in entries}
+    for directory in ('userland/libsvg', 'userland/libfreetype', 'userland/libmath', 'userland/libos64/include'):
+        inputs.update((ROOT/directory).rglob('*.h'))
+    inputs.update((ft.LIB/'upstream').rglob('*.c'))
+    inputs.update([ROOT/'userland/libsvg/library.mk', ft.LIB/'sources.mk',
+                   ROOT/'userland/libmath/sources.mk', Path(__file__).resolve()])
+    provenance = {'compiler': subprocess.check_output([cc, '--version'], text=True).splitlines()[0],
+                  'flags': common, 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+                  'inputs': {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
+                             for p in sorted(inputs)}}
+    (output/'provenance.json').write_text(json.dumps(provenance, indent=2)+'\n')
     env = dict(os.environ)
     env.setdefault('ASAN_OPTIONS', 'detect_leaks=1')
     env.setdefault('UBSAN_OPTIONS', 'halt_on_error=1:print_stacktrace=1')
-    run = subprocess.run([str(binary)], capture_output=True, text=True, env=env, timeout=120)
+    run = subprocess.run([str(binary), str(output)], capture_output=True, text=True, env=env, timeout=120)
     (output/'results.txt').write_text(run.stdout+run.stderr)
     print(run.stdout+run.stderr, end='')
     print('Binary:', binary)

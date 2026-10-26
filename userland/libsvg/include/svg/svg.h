@@ -18,7 +18,8 @@ typedef enum {
     SVG_PENDING,
     SVG_BAD_ARGUMENT,
     SVG_BUSY,
-    SVG_PROVIDER_ERROR
+    SVG_PROVIDER_ERROR,
+    SVG_ENGINE_ERROR
 } svg_status_t;
 typedef struct {
     const char *data;
@@ -93,7 +94,8 @@ typedef struct {
      * The inherited input is the parent's complete style, not a directive to
      * inherit non-inherited properties such as opacity or transform. Return
      * UNSUPPORTED for active features this profile cannot express (dashes,
-     * vector effects, clipping, paint order, resources), rather than dropping
+     * vector effects, clipping, paint order, resources, non-sRGB interpolation
+     * or non-normal blending), rather than dropping
      * them. Providers must honor mode; IMAGE callbacks must not fetch. */
     svg_status_t (*style)(void *, void *snapshot, const svg_style_request_t *, svg_style_t *,
                           svg_string_t *d);
@@ -107,6 +109,25 @@ typedef struct {
     const svg_path_t *path; /* Borrowed from scene, never release separately. */
     svg_parse_result_t path_result;
 } svg_scene_item_t;
+
+typedef struct {
+    double origin_x, origin_y; /* Device coordinate of output pixel (0,0). */
+    uint32_t width, height;
+    size_t stride, capacity; /* Bytes; stride is a multiple of sizeof(uint32_t). */
+    uint32_t *pixels;        /* Caller-owned, aligned straight-alpha 0xAARRGGBB words. */
+} svg_render_target_t;
+typedef struct {
+    const os64_geometry_backend_t *geometry; /* Requires the optional bounds tail. */
+    os64_geometry_map_t viewport_to_device;
+    double arc_error, quantization_error;
+    size_t max_pixels;
+    uint32_t max_dimension;
+    uint64_t max_work, max_raster_work, max_geometry_work;
+} svg_render_options_t;
+typedef struct {
+    uint64_t raster_work, geometry_work;
+    size_t painted_paths, peak_layers;
+} svg_render_stats_t;
 
 #pragma GCC visibility push(default)
 svg_limits_t svg_default_limits(void);
@@ -131,8 +152,8 @@ svg_status_t svg_path_lower(svg_context_t *, const svg_path_t *, const os64_geom
 const os64_geometry_command_t *svg_geometry_commands(const svg_geometry_t *, size_t *count);
 svg_status_t svg_geometry_release(svg_context_t *, svg_geometry_t *);
 /* Prepares groups and paths. The caller supplies the resolved root viewport
- * map; viewport/layout negotiation, use expansion, resources and painting are
- * separate features. Unsupported visible nodes fail explicitly. display:none
+ * map; viewport/layout negotiation, use expansion and resources are separate
+ * features. Painting uses svg_scene_render. Unsupported visible nodes fail explicitly. display:none
  * suppresses a subtree; visibility:hidden retains it for visible descendants.
  * No resolver or I/O callback exists. IMAGE does not authorize resource loads.
  * A successful scene retains the snapshot for source identity lifetime. */
@@ -140,5 +161,23 @@ svg_status_t svg_scene_prepare(svg_context_t *, const svg_provider_t *, svg_mode
                                const os64_geometry_map_t *viewport, svg_scene_t **);
 const svg_scene_item_t *svg_scene_items(const svg_scene_t *, size_t *count);
 svg_status_t svg_scene_release(svg_context_t *, svg_scene_t *);
+svg_render_options_t svg_render_options_default(const os64_geometry_backend_t *);
+/* Paints solid fills followed by ordinary user-space strokes, using source-over
+ * in sRGB and isolated element/group opacity. Replaces the target, including
+ * transparent pixels; preserves row padding. RGB is zero when exported alpha
+ * is zero. The scene stays reusable and the renderer never frees the target.
+ * On failure discard the target; a caller must not publish partial pixels.
+ * Options are literal, including zero budgets. Rendering uses max_work instead
+ * of the context's preparation work limit, plus separate raster/backend limits.
+ * Geometry allocations use the same owner callbacks as SVG, directly (SVG
+ * allocation counters exclude that backend subdivision). A conforming injected
+ * backend table and its code must remain alive for this call. No callbacks into
+ * the document/style provider occur during painting.
+ * Dashes, vector effects, clipping, non-default paint order, resources and
+ * non-sRGB interpolation/non-normal blending require the provider to report
+ * UNSUPPORTED. Unsupported stroke joins/degenerate caps from
+ * the backend propagate explicitly. stats is optional, including on failure. */
+svg_status_t svg_scene_render(svg_context_t *, const svg_scene_t *, const svg_render_options_t *,
+                              const svg_render_target_t *, svg_render_stats_t *stats);
 #pragma GCC visibility pop
 #endif

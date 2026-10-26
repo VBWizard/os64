@@ -486,6 +486,32 @@ static void boundaries(void)
     close_context(&l, c);
     puts("backend boundaries: zoom, translation, miter, counts, precision and work limits pass");
 }
+static void allocation_bounds(void)
+{
+    Ledger l = {.cap = 1024 * 1024};
+    Context *c = NULL;
+    assert(start(&l, OS64_GEOMETRY_WORK_DEFAULT, &c) == OK);
+    Outline *o = NULL;
+    Map map = {4, 0, 0, 1, 0, 0};
+    assert(api->stroke(c, line, COUNT(line), &map, 1.0 / 64, &round_stroke, &o) == OK);
+    size_t allocations = l.calls;
+    os64_geometry_bounds_t b;
+    assert(api->bounds(c, o, &map, 8, 5, &b) == OK && !b.empty && allocations == l.calls);
+    assert(b.x_min <= 8 && b.x_max >= 168 && b.y_min <= 35 && b.y_max >= 51);
+    os64_geometry_bounds_t shifted;
+    assert(api->bounds(c, o, &map, 0, 0, &shifted) == OK);
+    assert(b.x_min + 8 == shifted.x_min && b.x_max + 8 == shifted.x_max);
+    assert(b.y_min + 5 == shifted.y_min && b.y_max + 5 == shifted.y_max);
+    l.cancel_at = l.polls + 1;
+    assert(api->bounds(c, o, &map, 0, 0, &b) == CANCEL && b.empty);
+    l.cancel_at = 0;
+    map.tx = 1e15;
+    assert(api->bounds(c, o, &map, 0, 0, &b) == LIMIT && b.empty);
+    assert(api->release(c, o) == OK);
+    close_context(&l, c);
+    puts(
+        "backend bounds: expanded stroke, relative origin, allocation-free and failure reset pass");
+}
 int main(int argc, char **argv)
 {
     artifact_dir = argc > 1 ? argv[1] : NULL;
@@ -494,6 +520,7 @@ int main(int argc, char **argv)
     assert(api && api->revision == OS64_GEOMETRY_BACKEND_REVISION &&
            api->struct_size == sizeof(*api));
     collapsed_curves();
+    allocation_bounds();
     boundaries();
     pictures();
     contracts();

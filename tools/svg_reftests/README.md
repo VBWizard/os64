@@ -1,6 +1,6 @@
 # SVG picture comparisons
 
-This is a selected-fixture runner for SVG slice 6a. It compares full opaque RGB
+These are selected-fixture runners for SVG geometry and prepared-scene painting. It compares full opaque RGB
 images and records evidence. It does not measure Yonder's SVG support or replace
 WPT's server, discovery, dependency graph and scheduling machinery.
 
@@ -108,3 +108,21 @@ the two non-scaling-stroke-through-image tests. The command therefore exits 1;
 these remain ordinary FAIL results, not relabeled successes.
 
 [Measured results and remaining work](../../docs/design/pending/SVG_REFTESTS.md).
+
+
+## Native solid painting
+
+```sh
+ASAN_OPTIONS=detect_leaks=1 python3 tools/test_svg_core.py --paint --output /tmp/svg-paint
+PLAYWRIGHT_BROWSERS_PATH=/tmp/svg-reference-env/browsers /tmp/svg-reference-env/bin/python tools/svg_reftests/paint.py --native /tmp/svg-paint --output /tmp/svg-paint-browser
+```
+
+The native harness parses paths, prepares provider-backed scenes and renders
+through production libsvg/FreeType. It writes twelve scenes on two backgrounds,
+equivalent browser SVG inputs and three independently sampled analytic RGBA
+oracles. `paint.py` requires a successful native log and build provenance,
+captures Chromium and saves a self-contained gallery plus source/image hashes
+and comparison metrics. Fourteen deliberately wrong browser variants must fail.
+The per-fixture maximum/count/sum limits and their analytic evidence are in
+[SVG_PAINT.md](../../docs/design/pending/SVG_PAINT.md). These compare the native
+prepared-scene API, not Yonder's document/style adapter.

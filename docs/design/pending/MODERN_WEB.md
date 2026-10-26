@@ -3688,3 +3688,29 @@ is delivered here. Shapes, strokes/dashes, instances, nested viewports,
 clipping and opacity painting remain in 6b; external images remain in 6c.
 DEBTS.md records those gates. There is no new browser/WPT, P5/QEMU or
 performance result, and no static-SVG capability is advertised to pages.
+
+
+### Slice 6b, solid painter as built — 2026-10-26
+
+`svg_scene_render` paints prepared paths/groups into caller-owned straight-alpha
+ARGB. It applies solid fills and ordinary user-space strokes, sRGB source-over,
+and isolated element/group opacity using 16-bit premultiplied scratch surfaces.
+An optional geometry-table bounds tail measures actual expanded outlines for
+clipped allocations. The new crop test exposed a half-grid rounding defect;
+device ties now use one direction across zero, and the crop matches full output.
+
+[SVG_PAINT.md](SVG_PAINT.md) records ownership, literal limits, conservative
+per-call backend quotas, coverage envelopes and reproduction commands. The
+ASan/UBSan/LeakSanitizer painting run passes 490,392 assertions, including
+50 allocation cuts in both refusal modes and 1,240 cancellation cuts. The
+original core/backend suites pass and the four earlier masks are unchanged.
+Twenty-four native/Chromium comparisons pass; fourteen wrong controls are
+rejected. Independent polygon, rectangle/ring and circle oracles distinguish
+edge-coverage differences from compositing errors. The provisional comparison
+threshold failures and measured replacement envelopes are retained explicitly.
+
+This increment changes no Yonder files. The tree/style adapter, computed SVG
+properties, sizing and browser paint connection remain, along with the remaining
+6b features recorded in DEBTS.md. The connection gets its own PR and dependent
+follow-ons stack while it is unmerged. There is no new P5/QEMU, performance or
+broad WPT/conformance claim.

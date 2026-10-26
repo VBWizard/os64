@@ -171,9 +171,15 @@ Status svg_path_lower(Context *c, const svg_path_t *p, const Map *map, double to
     Status status = svg_enter(c);
     if (status != SVG_OK)
         return status;
+    return svg_leave(c, svg_lower(c, p, map, tolerance, out));
+}
+Status svg_lower(Context *c, const svg_path_t *p, const Map *map, double tolerance,
+                 svg_geometry_t **out)
+{
+    *out = NULL;
     svg_geometry_t *g = svg_alloc(c, sizeof(*g));
     if (!g)
-        return svg_leave(c, c->why);
+        return c->why;
     *g = (svg_geometry_t){.owner = c};
     Point current = {0, 0}, start = {0, 0};
     bool closed = false;
@@ -234,7 +240,7 @@ Status svg_path_lower(Context *c, const svg_path_t *p, const Map *map, double to
         svg_free(c, g->commands);
         svg_free(c, g);
     }
-    return svg_leave(c, c->why);
+    return c->why;
 }
 const os64_geometry_command_t *svg_geometry_commands(const svg_geometry_t *g, size_t *count)
 {
@@ -249,8 +255,15 @@ Status svg_geometry_release(Context *c, svg_geometry_t *g)
     if (c->busy)
         return SVG_BUSY;
     c->busy = true;
+    svg_free_geometry(c, g);
+    return svg_leave(c, SVG_OK);
+}
+
+void svg_free_geometry(Context *c, svg_geometry_t *g)
+{
+    if (!g)
+        return;
     svg_free(c, g->commands);
     svg_free(c, g);
     --c->stats.geometries;
-    return svg_leave(c, SVG_OK);
 }
