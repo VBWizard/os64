@@ -13,16 +13,16 @@
 // with Clear cookies beside them. Apply changes this window; Save as
 // default writes to yonder.conf.
 //
-// The dialog is a window of its own, and yonder's loop waits on its own
-// window alone, so a thread waits on the dialog's and rings `bell` on
-// yonder's when something arrives there; the loop answers with
-// yonder_settings_rung.
+// The dialog is a window of its own, registered with yonder's dispatcher:
+// the loop's turns deliver its events and paint it, and it closes itself
+// when asked.
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #include "cookies.h"
+#include "os64/ui_dispatcher.h"
 #include "way/cache.h"
 
 // A script task's time limit, in whole seconds (DOM_D7.md § Policy). The
@@ -36,7 +36,7 @@
 // time limit in seconds), zoom (thousandths, whole percentages from 25
 // to 500), dark pages, the animations' switches, the modern switch and the
 // cookies' mode on the window thread.
-void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
+void yonder_settings_open(int64_t parent, os64_ui_dispatcher_t *dispatcher, const char *agent,
                           void (*use)(const char *agent, bool scripts, uint32_t script_seconds),
                           way_cache_t *cache, bool scripts, uint32_t script_seconds, uint32_t zoom,
                           void (*zoom_use)(uint32_t thousandths), bool dark,
@@ -44,8 +44,6 @@ void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
                           void (*motion_use)(bool run, bool reduce), bool modern,
                           void (*modern_use)(bool modern), yonder_cookies_mode_t cookies,
                           void (*cookies_use)(yonder_cookies_mode_t mode));
-// The bell rang: what arrived at the dialog is handled and painted.
-void yonder_settings_rung(void);
 // What the dialog's "Clear page storage" does, on the window thread: it
 // writes the sentence the dialog's status line then says. Set once, before
 // the dialog opens; with none, the button says there is nothing to clear.

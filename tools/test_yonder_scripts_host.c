@@ -545,9 +545,6 @@ static bool script_land_from(const char *tail, const char *source, const char *f
     }
     return false;
 }
-/* Reached from the doorbell's other bits, which no case rings. */
-int64_t os64_thread_join(int32_t handle, int64_t *retval) { (void)handle; (void)retval; return -1; }
-void os64_ui_settings_pump(os64_ui_settings_t *dialog) { (void)dialog; check(false,"no settings relay"); }
 /* A moving picture a case plays (picture_tick_cases): its frame, and how
  * many times it was advanced. No other case has one. */
 struct os64_image_sequence { os64_image_frame_t frame; uint32_t nexts; };

@@ -34,6 +34,7 @@
 #include "os64/text_draw.h"
 #include "os64/url.h"
 #include "os64/ui.h"
+#include "os64/ui_dispatcher.h"
 #include "os64/work.h"
 #include "agent.h"
 #include "bar.h"
@@ -92,6 +93,9 @@ static os64_dom_screen_t s_screen;
 // The problem last said on the status line, so one is said once.
 static yonder_cookies_t *s_cookies;
 static char s_cookies_said[OS64_PATH_MAX + 96];
+// yonder.conf's `cookies` as the window opened, which Settings shows when
+// there is no file's jar to ask.
+static yonder_cookies_mode_t s_cookies_asked;
 
 // The pages a navigation asks for when the agent's preset names no list of
 // its own (agent.c: a costume, or an agent typed). libway adds, on a GET,
@@ -152,7 +156,6 @@ static char s_cookies_said[OS64_PATH_MAX + 96];
 #define BELL_WORK (1u << 0)
 #define BELL_MAIL (1u << 1)
 #define BELL_TICK (1u << 2)       // a moving picture's next frame is due
-#define BELL_SETTINGS (1u << 3)   // something arrived at the Settings window
 #define BELL_SCRIPTS (1u << 4)    // a page has another script or timer to run
 #define BELL_STREAM (1u << 5)     // an arriving page has more to parse than one slice
 
@@ -1259,6 +1262,11 @@ static struct {
     int64_t win;
     os64_draw_ctx_t ctx;
     os64_ui_t ui;
+    // Its turns deliver the events of every window yonder owns: its own,
+    // read a batch at a time (window_poll), and the Settings dialog's.
+    os64_ui_dispatcher_t dispatcher;
+    os64_ui_window_backend_t native;
+    YonderEventBatch batch;
     os64_ui_widget_t root, status, view, back, forward, reload, stop;
     // The badge at the right of the status bar: the shown page's MISSING
     // and FAILED counts, the file's own tokens, present only when nonzero.
@@ -10516,8 +10524,6 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
         // The head, the body and the verdict are the stream's: the loop
         // feeds a slice after the events (stream_turn, in main).
     }
-    if (mask & BELL_SETTINGS)
-        yonder_settings_rung();
     if (mask & BELL_TICK) {
         s_cost.bells++;
         if (g.coming.active && yonder_now_ms() >= g.coming.due)
@@ -12192,7 +12198,7 @@ static void left_said(int64_t woke)
 {
     char said[192];
     if (woke != 1)
-        os64_snprintf(said, sizeof(said), "yonder: leaving: the window's event wait answered %ld (%s)",
+        os64_snprintf(said, sizeof(said), "yonder: leaving: waiting for or reading events answered %ld (%s)",
                       (long)woke, gui_err_name(woke));
     else if (s_leaving != NULL)
         os64_snprintf(said, sizeof(said), "yonder: leaving: %s", s_leaving);
@@ -12380,6 +12386,58 @@ static int64_t event_poll(void *opaque, os64_gui_event_t *event)
     return os64_gui_event_poll(g.win,event);
 }
 
+// The dispatcher's poll: yonder's own window a batch at a time
+// (yonder_event_batch_next, which bounds a turn's input and merges idle
+// motion), every other window as it comes. The batch's end reads as an
+// empty queue for the rest of the turn; a lookahead it holds is the next
+// turn's first event.
+static int64_t window_poll(void *user, int64_t handle, os64_gui_event_t *event)
+{
+    (void)user;
+    if (handle != g.win)
+        return g.native.poll(g.native.user, handle, event);
+    return yonder_event_batch_next(&g.batch, event, event_poll, NULL) ? 1 : 0;
+}
+
+// One of yonder's window's events. The pointer is read before libui
+// because a widget is handed moves only while a button is held and the
+// status line follows its current position; the question bar answers by
+// its own rules.
+static void window_event(void *user, const os64_gui_event_t *event)
+{
+    (void)user;
+    if (!g.running || g.ui.quit)
+        return;
+    const os64_gui_event_t ev = *event;
+    if (ev.type == OS64_GUI_EVENT_INPUT_LOST)
+        input_lost();
+    if (ev.type == OS64_GUI_EVENT_MOUSE_MOVE)
+        hover(ev.mouse.x, ev.mouse.y);
+    else if (ev.type == OS64_GUI_EVENT_POINTER_STATE)
+        hover(ev.pointer.inside ? ev.pointer.x : -1, ev.pointer.inside ? ev.pointer.y : -1);
+    else if (ev.type == OS64_GUI_EVENT_WINDOW_COVERED ||
+             ev.type == OS64_GUI_EVENT_WINDOW_UNCOVERED)
+        window_seen();
+    if (ev.type == OS64_GUI_EVENT_SETTINGS)
+        yonder_settings_open(g.win, &g.dispatcher, g.way.agent, settings_use, g.cache,
+                             g.scripts_on, (uint32_t)(g.script_ms / 1000), g.zoom_default,
+                             zoom_use, s_dark, dark_use, s_animations, s_reduce_motion,
+                             motion_use, g.modern, modern_use,
+                             s_cookies != NULL ? yonder_cookies_mode(s_cookies) : s_cookies_asked,
+                             cookies_use);
+    else if (!bar_event(&ev) && !zoom_event(&ev) && !address_event(&ev) && !key_event(&ev) &&
+             !password_key(&ev))
+        os64_ui_dispatch(&g.ui, &ev);
+    // What the event became, as DOM events, now libui is done with it.
+    inputs_run();
+}
+
+// yonder paints its window after the turn, with the page's work.
+static void window_paint(void *user)
+{
+    (void)user;
+}
+
 int main(int argc, char **argv)
 {
     const char *why = faces_open();
@@ -12448,6 +12506,7 @@ int main(int argc, char **argv)
     g.way.jar = way_jar_new();          // NULL keeps no cookies: the pages still load
     const char *cookies_refused;
     yonder_cookies_mode_t cookies = yonder_settings_saved_cookies(&cookies_refused);
+    s_cookies_asked = cookies;
     s_cookies = yonder_cookies_new(g.way.jar, profile, cookies);
     if (s_cookies == NULL)
         way_jar_refuse(g.way.jar, cookies == YONDER_COOKIES_OFF);
@@ -12531,56 +12590,56 @@ int main(int argc, char **argv)
     sync_bars();
 
     // P5 testing: Million Dollar Homepage's popup stalled while motion kept
-    // the queue busy. Bound input and coalesce idle moves before their scripts
-    // run, so each batch reaches painting without waiting for an empty queue.
-    // The pointer is read before libui because a widget is handed moves only
-    // while a button is held and the status
-    // line follows its current position; the question bar answers by its
-    // own rules. After painting, a bar not yet armed is armed only if the
-    // queue is EMPTY: anything waiting may have been done before the bar
-    // could be seen, so it is dispatched to a disarmed bar first.
+    // the queue busy. Each turn reads a bounded batch of yonder's window's
+    // events, idle moves merged (window_poll), so it reaches painting
+    // without waiting for an empty queue. The turn is the dispatcher's
+    // (DROPDOWN.md § Step 1), which reads every window yonder owns; the
+    // wait is yonder's, so its sleep is measured as it always was. After
+    // painting, a bar not yet armed is armed only if the queues are EMPTY:
+    // anything waiting may have been done before the bar could be seen, so
+    // the next turn does not sleep, dispatches it to the disarmed bar, and
+    // only a turn that finds nothing arms it.
     g.running = true;
     frame_follow();
     glass_paint();
-    os64_gui_event_t ev;
-    bool held = false;              // an event taken while looking for an empty queue
-    int64_t woke = 1;               // the event wait's last answer, said as yonder leaves
+    g.native = os64_ui_dispatcher_native();
+    os64_ui_window_backend_t backend = g.native;
+    backend.poll = window_poll;
+    os64_ui_dispatcher_init(&g.dispatcher, &backend);
+    if (os64_ui_dispatcher_add(&g.dispatcher, g.win, &g.ui, window_event, window_paint, NULL) != OS64_UI_OK) {
+        s_leaving = "the dispatcher refused yonder's window";
+        g.running = false;
+    }
+    int64_t woke = 1;               // the wait's or the turn's last answer, said as yonder leaves
+    bool looking = false;           // a disarmed bar: is anything waiting?
     while (g.running && !g.ui.quit) {
-        uint64_t asleep = cycles();
-        woke = held ? 1 : os64_gui_event_wait(g.win, &ev);
-        uint64_t slept = cycles_since(asleep);
-        s_cost.waited += slept;
-        if (slept > s_cost.slept_most)
-            s_cost.slept_most = slept;
-        if (woke != 1)
-            break;
-        held = false;
-        YonderEventBatch batch = {.held=true,.pending=ev};
-        while (g.running && !g.ui.quit && yonder_event_batch_next(&batch,&ev,event_poll,NULL)) {
-            if (ev.type == OS64_GUI_EVENT_INPUT_LOST)
-                input_lost();
-            if (ev.type == OS64_GUI_EVENT_MOUSE_MOVE)
-                hover(ev.mouse.x, ev.mouse.y);
-            else if (ev.type == OS64_GUI_EVENT_POINTER_STATE)
-                hover(ev.pointer.inside ? ev.pointer.x : -1, ev.pointer.inside ? ev.pointer.y : -1);
-            else if (ev.type == OS64_GUI_EVENT_WINDOW_COVERED ||
-                     ev.type == OS64_GUI_EVENT_WINDOW_UNCOVERED)
-                window_seen();
-            if (ev.type == OS64_GUI_EVENT_SETTINGS)
-                yonder_settings_open(g.win, BELL_SETTINGS, g.way.agent, settings_use, g.cache,
-                                     g.scripts_on, (uint32_t)(g.script_ms / 1000), g.zoom_default,
-                                     zoom_use, s_dark, dark_use, s_animations, s_reduce_motion,
-                                     motion_use, g.modern, modern_use,
-                                     s_cookies != NULL ? yonder_cookies_mode(s_cookies) : cookies, cookies_use);
-            else if (!bar_event(&ev) && !zoom_event(&ev) && !address_event(&ev) && !key_event(&ev) &&
-                     !password_key(&ev))
-                os64_ui_dispatch(&g.ui, &ev);
-            // What the event became, as DOM events, now libui is done with it.
-            inputs_run();
+        // No sleep when a lookahead the last batch holds is waiting already,
+        // or (the dispatcher's own rule, can_create false) while the queues
+        // drain after a window of yonder's was destroyed.
+        if (!looking && !g.batch.held && os64_ui_dispatcher_can_create(&g.dispatcher)) {
+            int64_t ready = 0;
+            uint64_t asleep = cycles();
+            woke = os64_gui_event_wait_any(&ready);
+            uint64_t slept = cycles_since(asleep);
+            s_cost.waited += slept;
+            if (slept > s_cost.slept_most)
+                s_cost.slept_most = slept;
+            if (woke != 1)
+                break;
         }
-        if (batch.held) {
-            ev = batch.pending;
-            held = true;
+        g.batch.consumed = 0;
+        g.batch.drained = false;
+        int64_t events = os64_ui_dispatcher_turn(&g.dispatcher, false);
+        if (events < 0) {
+            woke = events;
+            break;
+        }
+        if (looking && events == 0 && !g.batch.held) {
+            looking = false;
+            yonder_bar_settled(&g.bar);
+            bar_show(true);
+            glass_paint();
+            continue;
         }
         if (g.relayout_due) {
             g.relayout_due = false;
@@ -12609,21 +12668,11 @@ int main(int argc, char **argv)
         // A task may have set or cleared a timer, and a frame for an
         // animation has its whole cost now: the ticker hears of both.
         pictures_schedule();
-        if (g.bar.up && !g.bar.armed) {
-            // P5 batching may hold a lookahead event. Preserve it and leave
-            // the bar disarmed until that older input has been dispatched.
-            if (held || os64_gui_event_poll(g.win, &ev) == 1) {
-                held = true;
-            } else {
-                yonder_bar_settled(&g.bar);
-                bar_show(true);
-                glass_paint();
-            }
-        }
+        looking = g.bar.up && !g.bar.armed;
     }
 
     left_said(woke);
-    // The clock and the Settings window's relay first: they only ring, and
+    // The Settings dialog and the clock first; the clock only rings, and
     // nothing after this should.
     yonder_settings_close();
     yonder_ticker_stop(g.ticker);
