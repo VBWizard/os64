@@ -269,6 +269,23 @@ static void import_map_merge_case(void) {
     request_drop();
 }
 
+/* An import map that is the page's first script is marked started as it
+ * registers, as every script is: a script that takes it out, rewrites it
+ * and puts it back registers nothing more. */
+static void import_map_started_case(void) {
+    fake_fetch_reset();
+    fake_answer("GET","http://fixture.test/m/a.js",200,MODULE_JS,"export default 'a';");
+    loop_page("<script type=importmap id=map>{\"imports\":{\"a\":\"/m/a.js\"}}</script><p id=out></p>"
+        "<script>var order=[];function note(n){order.push(n);document.getElementById('out').textContent=order.join('|')}"
+        "var m=document.getElementById('map');m.remove();m.textContent='{\"imports\":{\"b\":\"/m/b.js\"}}';"
+        "document.head.appendChild(m)</script>"
+        "<script type=module>import a from 'a';note(a);import('b').then(()=>note('b mapped'),e=>note(e.name))</script>");
+    check(loop_settle() && request_land("/m/a.js") && loop_settle() && g.page.tree!=NULL && script_rebuild() &&
+          probe_text_is("out","a|TypeError"),
+          "importmap: the first script's map is started, and moved and rewritten it registers nothing");
+    request_drop();
+}
+
 /* An import map's addresses resolve against the document's base URL when
  * it was prepared, as an inline module's imports do; and that base URL is
  * the inline module's import.meta.url, whatever <base> becomes after. */
@@ -297,5 +314,6 @@ static void module_cases(void) {
     import_map_case();
     import_map_failure_case();
     import_map_merge_case();
+    import_map_started_case();
     import_map_base_case();
 }

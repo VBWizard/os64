@@ -5,6 +5,8 @@
 //   test_importmap_host <cases>     the cases tools/wpt/importmap_cases.py
 //                                   wrote; one PASS or FAIL line each
 //   test_importmap_host --merge     the merge's rules, HTML's own examples
+//   test_importmap_host --scale     a merge and resolutions a page sizes,
+//                                   held to a CPU bound
 //   test_importmap_host --sweep     each allocation of a parse, two merges
 //                                   and their resolutions failed in turn
 //
@@ -18,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "importmap.h"
 
@@ -324,6 +327,48 @@ static int merge_cases(void)
     return failures != 0;
 }
 
+// ── At scale ────────────────────────────────────────────────────────────
+
+// A merge runs where no task budget stops it, and a page sizes both sides
+// of it: 4,096 resolutions made, then a map of 4,096 prefix rules, all
+// under one 1,800-byte path, then 4,096 resolutions through them. Compared
+// pair by pair that is tens of billions of byte comparisons; looked up it
+// is a moment. The bound is CPU seconds under the sanitizers, which a scan
+// over the pairs passes by minutes.
+static int scale_cases(void)
+{
+    static char deep[1900], specifier[2048], out[4096];
+    memset(deep, 'd', 1800);
+    deep[1800] = '\0';
+    clock_t began = clock();
+    yonder_import_map_t *window = yonder_import_map_new();
+    for (int i = 0; i < 4096; i++) {
+        snprintf(specifier, sizeof(specifier), "/%s/m%d.js", deep, i);
+        check(yonder_import_map_resolve(window, kPage, specifier, out, sizeof(out)) == YONDER_SPECIFIER_OK,
+              "scale: a resolution is made");
+    }
+    yonder_import_map_t *incoming = yonder_import_map_new();
+    for (int i = 0; i < 4096; i++) {
+        char key[2048];
+        snprintf(key, sizeof(key), "/%s/k%d/", deep, i);
+        check(yonder_import_map_add(incoming, kPage, NULL, key, "/lib/"), "scale: a rule is added");
+    }
+    check(yonder_import_map_merge(window, incoming), "scale: the merge registers");
+    for (int i = 0; i < 4096; i++) {
+        snprintf(specifier, sizeof(specifier), "/%s/k%d/x.js", deep, i);
+        check(yonder_import_map_resolve(window, kPage, specifier, out, sizeof(out)) == YONDER_SPECIFIER_OK &&
+                  !strcmp(out, "https://example.com/lib/x.js"),
+              "scale: a prefix rule resolves");
+    }
+    yonder_import_map_free(window);
+    double seconds = (double)(clock() - began) / CLOCKS_PER_SEC;
+    printf("importmap scale: 4096 resolutions, a 4096-rule merge and 4096 more resolutions in %.2f CPU s\n",
+           seconds);
+    check(seconds < 10.0, "scale: the merge and the resolutions look up, and do not scan");
+    check(live == 0, "scale: nothing is left live");
+    return failures != 0;
+}
+
 // ── Every allocation failing in turn ────────────────────────────────────
 
 // A parse, two merges, and resolutions between and after them; true when
@@ -381,6 +426,8 @@ int main(int argc, char **argv)
 {
     if (argc == 2 && strcmp(argv[1], "--merge") == 0)
         return merge_cases();
+    if (argc == 2 && strcmp(argv[1], "--scale") == 0)
+        return scale_cases();
     if (argc == 2 && strcmp(argv[1], "--sweep") == 0)
         return sweep();
     if (argc == 2)

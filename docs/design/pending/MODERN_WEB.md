@@ -3490,6 +3490,16 @@ Integrity at all (DEBTS.md).
   out-of-memory would). The resolved module set records at most 65,536
   resolutions, each once; past that a later map's merge could change one
   already made.
+- **The merge and the resolution look up; neither scans.** A merge runs
+  after the parse's task has closed, where no budget stops it, and HTML's
+  merge compares every resolution made with every rule a map brings. Every
+  rule that could decide a resolution has a key that is the specifier or a
+  prefix of it ending in a slash, every scope that could apply has a
+  prefix that is the base URL or such a prefix of it, and every key that
+  begins with a specifier sorts just before it: each is a lookup in a
+  sorted list, and a dropped rule is marked and the lists compacted once.
+  Resolution reads the longest such key that is there, which is the first
+  HTML's descending scan would meet.
 
 **Decisions** (web semantics, mine to make):
 
@@ -3526,8 +3536,11 @@ Integrity at all (DEBTS.md).
   `tools/test_importmap_host.sh`): 252 checks pass, the 11 that fail are
   the URL grammar's (`tools/wpt/import-maps-data.txt`), and 21 maps whose
   JSON libdom refuses are the DOM host's to hold. The same host holds the
-  merge to HTML's own examples and fails each of a parse's, two merges' and
-  their resolutions' 316 allocations in turn.
+  merge to HTML's own examples, holds 4,096 resolutions, a 4,096-rule merge
+  under one 1,800-byte path and 4,096 resolutions through it to a CPU bound
+  (2.4 s under the sanitizers; the first build's scan had not finished
+  after 120), and fails each of a parse's, two merges' and their
+  resolutions' 316 allocations in turn.
 - **Hosts**, 0 failed: DOM 15,977 and 105,102 (the parse's walk order,
   every error it throws and the window's events for them, a page's
   `Object.prototype.imports`, a NUL, a refused entry, `supports`, the type
@@ -3545,7 +3558,10 @@ Integrity at all (DEBTS.md).
   equivalent: a prefix rule matches only a bare specifier or a special
   URL, so one kept over a non-special record changes no resolution; the
   harness says so where the mutant would be. Five first did not build (a
-  name `-Werror` found unused) and were reworded.
+  name `-Werror` found unused) and were reworded. Codex's round added five
+  (the lookups' runs, deciders and compaction, a prefix that never
+  matches, the started mark) and retired one: the scopes' order is
+  equivalent once a scope is only looked up. 36, each caught.
 - **QEMU**, over the wire: a served site with two maps (the second's rule
   for `react` losing to the first's, its `extra` joining), a prefix rule,
   a scope that gives one widget an older React, an inline module and a
@@ -3554,7 +3570,22 @@ Integrity at all (DEBTS.md).
   the prefix rule the hard way: the page imported `react/jsx-runtime` and
   the file was `jsx-runtime.js`, which the map sent to a 404, as Chrome's
   would.
-- **P5**: GitHub's pages, Chris's to run.
+- **P5**, Chris, on GitHub's pages: a repository's page fetches 118
+  modules through its maps, each once; what stops its code next is
+  `customElements`, then `MutationObserver` (slice 5a),
+  `IntersectionObserver` and `ReadableStream`, and its placeholders stay
+  gray where that code would have filled them.
+
+**Codex, round 1**: three findings. Fixed: an import map that was the
+page's first script was never marked started (the binding did not exist
+yet when it was prepared), so a script could take it out, rewrite it and
+register it again; it now makes the runtime as a module script does, and
+the scripted host holds it. Fixed as a class: the merge compared every
+resolution with every incoming rule, outside any task's budget, and every
+resolution scanned the whole map; both look up now (§ the bullet above,
+and the scale case). Booked in DEBTS.md by the triage rule (a hand-made
+map): two scope keys that normalize to one URL are combined, where HTML's
+later one replaces the earlier.
 
 ### Slice 0f, as built
 

@@ -825,8 +825,19 @@ static Item *import_map_prepare(yonder_scripts_t *s, const os64_html_node_t *scr
     if (it == NULL)
         return NULL;
     it->importmap = true;
-    if (s->dom != NULL)
-        (void)os64_dom_script_start(s->dom, script);
+    // The item is named by its index from here, as a module's is. The
+    // runtime and its binding are made now, as a module script makes them,
+    // so the element is marked started even when it is the page's first
+    // script: a mark skipped would let a script move it and register it
+    // again, or retype it and run its JSON.
+    uint32_t index = (uint32_t)(it - s->items);
+    if (!ensure_modules(s)) {
+        if (!s->dead)
+            fail_item(s, &s->items[index], "no memory for the page's modules");
+        return s->dead ? NULL : &s->items[index];
+    }
+    (void)os64_dom_script_start(s->dom, script);
+    it = &s->items[index];
     char base[OS64_DOM_URL_MAX];
     if (!inline_source(s, it))
         fail_item(s, it, "the import map is longer than a script may be");

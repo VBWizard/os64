@@ -38,6 +38,7 @@ cc -std=gnu11 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-san
    -o "$work/importmap"
 
 "$work/importmap" --merge
+"$work/importmap" --scale
 "$work/importmap" --sweep
 python3 tools/wpt/importmap_cases.py "$checkout" > "$work/cases.txt"
 "$work/importmap" "$work/cases.txt" > "$work/verdicts.txt"

@@ -11,10 +11,12 @@
 // A rule: a normalized key and the address it maps to, NULL for a null
 // rule. Every list of them is kept in DESCENDING code-unit order of key,
 // which is the order HTML's resolution reads them: "a/b/" before "a/", so
-// the longest prefix that matches is the one found first.
+// the longest prefix that matches comes first. `dropped` marks a rule a
+// merge is taking out (compact).
 typedef struct {
     char *key;
     char *url;
+    bool dropped;
 } Rule;
 
 typedef struct {
@@ -106,14 +108,25 @@ static bool url_like(const char *specifier, const char *base, char *out, size_t 
 
 // ── Rules ──────────────────────────────────────────────────────────────
 
-// Where `key` is, or would go, in `list`'s descending order; *found when it
-// is there.
-static uint32_t rule_place(const Rules *list, const char *key, bool *found)
+// `key` against the first `n` bytes of `text`, in os64_strcmp's order (by
+// unsigned byte, a shorter string first), so a prefix of a string can be
+// looked up without copying it.
+static int order_n(const char *key, const char *text, size_t n)
+{
+    for (size_t i = 0; i < n; i++)
+        if (key[i] != text[i])
+            return (int)(unsigned char)key[i] - (int)(unsigned char)text[i];
+    return key[n] != '\0' ? 1 : 0;
+}
+
+// Where the first `n` bytes of `key` are, or would go, in `list`'s
+// descending order; *found when they are there.
+static uint32_t rule_place(const Rules *list, const char *key, size_t n, bool *found)
 {
     uint32_t low = 0, high = list->count;
     while (low < high) {
         uint32_t mid = low + (high - low) / 2;
-        int order = os64_strcmp(list->rules[mid].key, key);
+        int order = order_n(list->rules[mid].key, key, n);
         if (order == 0) {
             *found = true;
             return mid;
@@ -147,7 +160,7 @@ static void rules_free(Rules *list)
 static bool rule_put(yonder_import_map_t *map, Rules *list, const char *key, const char *url, bool replace)
 {
     bool found;
-    uint32_t at = rule_place(list, key, &found);
+    uint32_t at = rule_place(list, key, os64_strlen(key), &found);
     if (found && !replace)
         return true;
     char *kept = url != NULL ? copy(url) : NULL;
@@ -175,29 +188,20 @@ static bool rule_put(yonder_import_map_t *map, Rules *list, const char *key, con
         list->cap = cap;
     }
     os64_memmove(&list->rules[at + 1], &list->rules[at], (list->count - at) * sizeof(Rule));
-    list->rules[at] = (Rule){name, kept};
+    list->rules[at] = (Rule){name, kept, false};
     list->count++;
     map->rules++;
     return true;
 }
 
-// The rule at `at` taken out of `list`.
-static void rule_remove(yonder_import_map_t *map, Rules *list, uint32_t at)
-{
-    rule_free(&list->rules[at]);
-    os64_memmove(&list->rules[at], &list->rules[at + 1], (list->count - at - 1) * sizeof(Rule));
-    list->count--;
-    map->rules--;
-}
-
-// The scope `prefix` names, made empty when `make` and absent; NULL when
-// absent and not made, or on no memory.
-static Scope *scope_of(yonder_import_map_t *map, const char *prefix, bool make)
+// The scope the first `n` bytes of `prefix` name, made empty when `make`
+// and absent; NULL when absent and not made, or on no memory.
+static Scope *scope_of(yonder_import_map_t *map, const char *prefix, size_t n, bool make)
 {
     uint32_t low = 0, high = map->nscopes;
     while (low < high) {
         uint32_t mid = low + (high - low) / 2;
-        int order = os64_strcmp(map->scopes[mid].prefix, prefix);
+        int order = order_n(map->scopes[mid].prefix, prefix, n);
         if (order == 0)
             return &map->scopes[mid];
         if (order > 0)
@@ -207,7 +211,11 @@ static Scope *scope_of(yonder_import_map_t *map, const char *prefix, bool make)
     }
     if (!make)
         return NULL;
-    char *name = copy(prefix);
+    char *name = os64_malloc(n + 1);
+    if (name != NULL) {
+        os64_memcpy(name, prefix, n);
+        name[n] = '\0';
+    }
     if (name == NULL)
         return NULL;
     if (map->nscopes == map->scopecap) {
@@ -278,7 +286,7 @@ bool yonder_import_map_add(yonder_import_map_t *map, const char *base, const cha
         char prefix[OS64_URL_REF_MAX];
         if (!url_parse(scope, base, prefix, sizeof(prefix)))
             return true;
-        Scope *s = scope_of(map, prefix, true);
+        Scope *s = scope_of(map, prefix, os64_strlen(prefix), true);
         if (s == NULL)
             return false;
         list = &s->rules;
@@ -288,19 +296,67 @@ bool yonder_import_map_add(yonder_import_map_t *map, const char *base, const cha
 
 // ── Merging ────────────────────────────────────────────────────────────
 
-// Whether `rule_key` would decide `record`'s resolution in a scope that
-// applies to it (HTML's merge, the scope half): the record's own specifier,
-// or a prefix of it that a prefix rule could match.
-static bool decides(const char *rule_key, const Record *record)
+// THE MERGE AND THE RESOLUTION LOOK UP; NEITHER SCANS. A merge runs after
+// the parse's task has closed, where no budget can stop it, and HTML's
+// merge compares every resolution the window made with every rule a map
+// brings: as pairs, a page's maps and imports would make that billions of
+// comparisons. Every rule that could decide a resolution has a key that is
+// the specifier or a prefix of it ending in a slash, and every scope that
+// could apply has a prefix that is the base URL or such a prefix of it, so
+// each is found by a lookup in a sorted list; and every key that begins
+// with a specifier sorts just before it. A rule a merge drops is marked
+// and the lists compacted once, after.
+
+// The rule for the first `n` bytes of `text` in `list`, marked dropped.
+static void drop_rule(Rules *list, const char *text, size_t n)
 {
-    return os64_streq(rule_key, record->specifier) ||
-           (ends_with_slash(rule_key) && starts_with(record->specifier, rule_key) && record->prefixable);
+    bool found;
+    uint32_t at = rule_place(list, text, n, &found);
+    if (found)
+        list->rules[at].dropped = true;
 }
 
-// Whether a scope `prefix` applies to a script whose base URL is `base`.
-static bool scope_applies(const char *prefix, const char *base)
+// HTML's merge, the scope half, for one resolution in a scope that applies
+// to it: the rule for its own specifier is dropped, and, when a prefix rule
+// could have matched it, each rule whose key is a prefix of it ending in a
+// slash.
+static void drop_deciders(Rules *list, const Record *record)
 {
-    return os64_streq(prefix, base) || (ends_with_slash(prefix) && starts_with(base, prefix));
+    const char *s = record->specifier;
+    size_t len = os64_strlen(s);
+    drop_rule(list, s, len);
+    for (size_t n = len - 1; record->prefixable && n > 0; n--)
+        if (s[n - 1] == '/')
+            drop_rule(list, s, n);
+}
+
+// HTML's merge, the imports half: each rule whose key begins with
+// `specifier` is dropped. In the descending order those keys are the run
+// that ends where `specifier` is, or would be (a key that begins with it
+// sorts above it, and below every key above it that does not).
+static void drop_extensions(Rules *list, const char *specifier)
+{
+    bool found;
+    uint32_t at = rule_place(list, specifier, os64_strlen(specifier), &found);
+    if (found)
+        list->rules[at].dropped = true;
+    while (at > 0 && starts_with(list->rules[at - 1].key, specifier))
+        list->rules[--at].dropped = true;
+}
+
+// `list` without its dropped rules, in its order.
+static void compact(yonder_import_map_t *map, Rules *list)
+{
+    uint32_t kept = 0;
+    for (uint32_t i = 0; i < list->count; i++) {
+        if (list->rules[i].dropped) {
+            rule_free(&list->rules[i]);
+            map->rules--;
+        } else {
+            list->rules[kept++] = list->rules[i];
+        }
+    }
+    list->count = kept;
 }
 
 // HTML's "merge module specifier maps": `incoming`'s rules added to `into`,
@@ -319,29 +375,33 @@ bool yonder_import_map_merge(yonder_import_map_t *window, yonder_import_map_t *i
         yonder_import_map_free(incoming);
         return false;
     }
-    bool ok = true;
-    for (uint32_t s = 0; ok && s < incoming->nscopes; s++) {
-        Scope *scope = &incoming->scopes[s];
-        // A scoped rule that would decide a resolution the window already
-        // made, for a script the scope applies to, is dropped.
-        for (uint32_t r = 0; r < window->nrecords; r++) {
-            const Record *record = &window->records[r];
-            if (!scope_applies(scope->prefix, record->base))
+    // A scoped rule that would decide a resolution the window already made,
+    // in a scope that applies to the script that made it (its base URL, or
+    // a prefix of it ending in a slash), is dropped.
+    for (uint32_t r = 0; incoming->nscopes != 0 && r < window->nrecords; r++) {
+        const Record *record = &window->records[r];
+        size_t len = os64_strlen(record->base);
+        for (size_t n = len; n > 0; n--) {
+            if (n != len && record->base[n - 1] != '/')
                 continue;
-            for (uint32_t i = scope->rules.count; i-- > 0;)
-                if (decides(scope->rules.rules[i].key, record))
-                    rule_remove(incoming, &scope->rules, i);
+            Scope *scope = scope_of(incoming, record->base, n, false);
+            if (scope != NULL)
+                drop_deciders(&scope->rules, record);
         }
-        Scope *into = scope_of(window, scope->prefix, true);
-        ok = into != NULL && merge_rules(window, &into->rules, &scope->rules);
     }
     // A top-level rule whose key begins with a specifier the window already
     // resolved is dropped, whatever base resolved it (HTML's merge, the
     // imports half, which asks only that).
-    for (uint32_t r = 0; ok && r < window->nrecords; r++)
-        for (uint32_t i = incoming->imports.count; i-- > 0;)
-            if (starts_with(incoming->imports.rules[i].key, window->records[r].specifier))
-                rule_remove(incoming, &incoming->imports, i);
+    for (uint32_t r = 0; r < window->nrecords; r++)
+        drop_extensions(&incoming->imports, window->records[r].specifier);
+    bool ok = true;
+    for (uint32_t s = 0; ok && s < incoming->nscopes; s++) {
+        Scope *scope = &incoming->scopes[s];
+        compact(incoming, &scope->rules);
+        Scope *into = scope_of(window, scope->prefix, os64_strlen(scope->prefix), true);
+        ok = into != NULL && merge_rules(window, &into->rules, &scope->rules);
+    }
+    compact(incoming, &incoming->imports);
     ok = ok && merge_rules(window, &window->imports, &incoming->imports);
     yonder_import_map_free(incoming);
     return ok;
@@ -417,28 +477,33 @@ static void record_add(yonder_import_map_t *map, const char *base, const char *s
 typedef enum { MATCH_NONE, MATCH_FOUND, MATCH_BLOCKED, MATCH_FAILED } Match;
 
 // HTML's "resolve an imports match": the first of `list`'s rules, in its
-// descending order, whose key is `normalized` or a prefix of it a prefix
-// rule may extend (`as_url` NULL for a bare specifier).
+// descending order, whose key is `normalized` or a prefix of it ending in a
+// slash that a prefix rule may extend (`as_url` NULL for a bare
+// specifier). Every such key is a prefix of `normalized`, and of two
+// prefixes of one string the longer sorts first, so the first is the
+// longest that is there: looked up, longest first.
 static Match imports_match(const Rules *list, const char *normalized, const char *as_url, char *out, size_t cap)
 {
-    for (uint32_t i = 0; i < list->count; i++) {
-        const Rule *rule = &list->rules[i];
-        if (os64_streq(rule->key, normalized)) {
-            if (rule->url == NULL)
-                return MATCH_BLOCKED;
+    size_t len = os64_strlen(normalized);
+    bool prefixes = as_url == NULL || special(as_url);
+    for (size_t n = len; n > 0; n--) {
+        if (n != len && (!prefixes || normalized[n - 1] != '/'))
+            continue;
+        bool found;
+        uint32_t at = rule_place(list, normalized, n, &found);
+        if (!found)
+            continue;
+        const Rule *rule = &list->rules[at];
+        if (rule->url == NULL)
+            return MATCH_BLOCKED;
+        if (n == len)
             return os64_strcopy(out, cap, rule->url) < cap ? MATCH_FOUND : MATCH_FAILED;
-        }
-        if (ends_with_slash(rule->key) && starts_with(normalized, rule->key) &&
-            (as_url == NULL || special(as_url))) {
-            if (rule->url == NULL)
-                return MATCH_BLOCKED;
-            // What follows the prefix, parsed against the rule's address,
-            // which must stay beneath it.
-            const char *after = normalized + os64_strlen(rule->key);
-            if (!url_parse(after, rule->url, out, cap))
-                return os64_strlen(after) + os64_strlen(rule->url) >= cap ? MATCH_FAILED : MATCH_BLOCKED;
-            return starts_with(out, rule->url) ? MATCH_FOUND : MATCH_BLOCKED;
-        }
+        // What follows the prefix, parsed against the rule's address, which
+        // must stay beneath it.
+        const char *after = normalized + n;
+        if (!url_parse(after, rule->url, out, cap))
+            return os64_strlen(after) + os64_strlen(rule->url) >= cap ? MATCH_FAILED : MATCH_BLOCKED;
+        return starts_with(out, rule->url) ? MATCH_FOUND : MATCH_BLOCKED;
     }
     return MATCH_NONE;
 }
@@ -457,9 +522,17 @@ yonder_specifier_t yonder_import_map_resolve(yonder_import_map_t *window, const 
     const char *normalized = url ? as_url : specifier;
     Match match = MATCH_NONE;
     if (window != NULL) {
-        for (uint32_t s = 0; match == MATCH_NONE && s < window->nscopes; s++)
-            if (scope_applies(window->scopes[s].prefix, serialized))
-                match = imports_match(&window->scopes[s].rules, normalized, url ? as_url : NULL, out, cap);
+        // The scopes that apply, most specific first: the base URL itself,
+        // then each prefix of it ending in a slash, longest first, which is
+        // their descending order.
+        size_t len = os64_strlen(serialized);
+        for (size_t n = len; match == MATCH_NONE && n > 0; n--) {
+            if (n != len && serialized[n - 1] != '/')
+                continue;
+            const Scope *scope = scope_of(window, serialized, n, false);
+            if (scope != NULL)
+                match = imports_match(&scope->rules, normalized, url ? as_url : NULL, out, cap);
+        }
         if (match == MATCH_NONE)
             match = imports_match(&window->imports, normalized, url ? as_url : NULL, out, cap);
     }
