@@ -2018,7 +2018,7 @@ static int32_t svg_attributes(garb_cascade_t *c, const os64_html_node_t *el, Dec
                                         "display",
                                         "visibility",
                                         "width",
-                                        "height"};
+                                        "height", "x", "y", "cx", "cy", "r", "rx", "ry"};
     Decl *d = NULL;
     int32_t n = 0;
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {

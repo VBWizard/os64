@@ -56,7 +56,28 @@ typedef struct {
 } svg_parse_result_t;
 
 typedef enum { SVG_MODE_INLINE, SVG_MODE_IMAGE } svg_mode_t;
-typedef enum { SVG_NODE_GROUP, SVG_NODE_PATH, SVG_NODE_UNSUPPORTED } svg_node_kind_t;
+typedef enum {
+    SVG_NODE_GROUP,
+    SVG_NODE_PATH,
+    SVG_NODE_UNSUPPORTED,
+    SVG_NODE_SHAPE
+} svg_node_kind_t;
+typedef enum {
+    SVG_SHAPE_RECT,
+    SVG_SHAPE_ELLIPSE,
+    SVG_SHAPE_LINE,
+    SVG_SHAPE_POLYLINE,
+    SVG_SHAPE_POLYGON
+} svg_shape_kind_t;
+typedef struct {
+    svg_shape_kind_t kind;
+    /* Resolved user units: x/y is rect origin, ellipse center or line start.
+     * Width/height and radii are nonnegative. Auto radii are resolved by the
+     * provider; rectangle radii are clamped during path construction.
+     * Initialize unused fields to zero. */
+    double x, y, width, height, rx, ry, x2, y2;
+    svg_string_t points; /* Borrowed coordinate pairs for polyline/polygon. */
+} svg_shape_t;
 typedef enum { SVG_PAINT_NONE, SVG_PAINT_COLOR, SVG_PAINT_UNSUPPORTED } svg_paint_kind_t;
 typedef struct {
     svg_paint_kind_t kind;
@@ -99,6 +120,10 @@ typedef struct {
      * them. Providers must honor mode; IMAGE callbacks must not fetch. */
     svg_status_t (*style)(void *, void *snapshot, const svg_style_request_t *, svg_style_t *,
                           svg_string_t *d);
+    /* Required for SHAPE nodes. Called after a displayed element's style;
+     * returned point bytes survive until the next provider callback. The
+     * library copies geometry into its owned path without text serialization. */
+    svg_status_t (*shape)(void *, void *snapshot, const svg_style_request_t *, svg_shape_t *);
 } svg_provider_t;
 typedef struct {
     uint64_t source, instance;
@@ -141,6 +166,10 @@ svg_status_t svg_stats(svg_context_t *, svg_stats_t *);
  * LIMIT/NOMEM/CANCELLED never publish a prefix. Release does no allocation or
  * cancellation polling. Input strings need not outlive the call. */
 svg_status_t svg_path_parse(svg_context_t *, svg_string_t, svg_path_t **, svg_parse_result_t *);
+/* Construct the equivalent path of resolved shape geometry. Malformed point
+ * lists retain complete coordinate pairs with the same prefix ownership as d. */
+svg_status_t svg_path_from_shape(svg_context_t *, const svg_shape_t *, svg_path_t **,
+                                 svg_parse_result_t *);
 const svg_command_t *svg_path_commands(const svg_path_t *, size_t *count);
 svg_status_t svg_path_release(svg_context_t *, svg_path_t *);
 /* Lower arcs to cubic Hermite pieces using a per-axis device-space positional
@@ -151,7 +180,7 @@ svg_status_t svg_path_lower(svg_context_t *, const svg_path_t *, const os64_geom
                             double arc_error, svg_geometry_t **);
 const os64_geometry_command_t *svg_geometry_commands(const svg_geometry_t *, size_t *count);
 svg_status_t svg_geometry_release(svg_context_t *, svg_geometry_t *);
-/* Prepares groups and paths. The caller supplies the resolved root viewport
+/* Prepares groups, paths and basic shapes. The caller supplies the resolved root viewport
  * map; viewport/layout negotiation, use expansion and resources are separate
  * features. Painting uses svg_scene_render. Unsupported visible nodes fail explicitly. display:none
  * suppresses a subtree; visibility:hidden retains it for visible descendants.

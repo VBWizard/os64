@@ -176,7 +176,7 @@ static void svg_cases(const char *dir)
         "<path id=override fill=red d='M44 4H60V20H44Z'/>"
         "<g fill=currentColor><path id=child style='color:#00ff00' d='M4 44H20V60H4Z'/></g>"
         "<path id=css-transform transform='translate(40 0)' class=ink d='M20 44H28V60H20Z'/>"
-        "<defs><rect width=100 height=100/></defs><g display=none><rect/></g></svg></div>";
+        "<defs><rect width=100 height='100'/></defs><g display=none><rect/></g></svg></div>";
     Fixture f = fixture_make(html);
     SvgLedger l = {.cap = 64 << 20};
     yonder_svg_pixels_t p;
@@ -284,7 +284,9 @@ static void svg_cases(const char *dir)
                      "<path style='opacity:inherit' fill=red d='M0 0H32V32H0Z'/></svg>");
     assert(draw_fixture(&f, &l, &p, f.box->rect) == SVG_UNSUPPORTED && !p.pixels && !l.live);
     fixture_free(&f);
-    const char *bad[] = {"<rect width=20 height=20/>",
+    const char *bad[] = {"<use href='#unknown'/>",
+                         "<rect width=20 height=20 style='x:calc(2px)'/>",
+                         "<rect width=20 height=20 stroke=red stroke-dasharray='2 2'/>",
                          "<path style='transform:translateX(20px)' d='M0 0H20V20Z'/>",
                          "<path fill='url(#gradient)' d='M0 0H20V20Z'/>",
                          "<path fill=none stroke=red stroke-dasharray='2 2' d='M0 0L20 20'/>"};
@@ -297,6 +299,119 @@ static void svg_cases(const char *dir)
         fixture_free(&f);
     }
 }
+static void shape_cases(const char *dir)
+{
+    static const struct {
+        const char *shape, *path;
+    } cases[] = {
+        {"<rect x=10 y=10 width=40 height='30'/>", "<path d='M10 10H50V40H10Z'/>"},
+        {"<rect x=10 y=10 width=40 height=30 rx='8'/>",
+         "<path d='M18 10H42A8 8 0 0 1 50 18V32A8 8 0 0 1 42 40H18A8 8 0 0 1 10 32V18A8 8 0 0 1 18 "
+         "10Z'/>"},
+        {"<rect x='5%' y='10%' width='20%' height='30%' rx='10%' ry='10%'/>",
+         "<path d='M30 10H30A20 10 0 0 1 50 20V30A20 10 0 0 1 30 40H30A20 10 0 0 1 10 30V20A20 10 "
+         "0 0 1 30 10Z'/>"},
+        {"<rect width=40 height=30 rx=8 ry='0'/>", "<path d='M0 0H40V30H0Z'/>"},
+        {"<circle cx=30 cy=30 r='20'/>", "<path d='M50 30A20 20 0 0 1 30 50A20 20 0 0 1 10 30A20 "
+                                         "20 0 0 1 30 10A20 20 0 0 1 50 30Z'/>"},
+        {"<ellipse cx='25%' cy='50%' rx='10%' ry='20%'/>",
+         "<path d='M70 50A20 20 0 0 1 50 70A20 20 0 0 1 30 50A20 20 0 0 1 50 30A20 20 0 0 1 70 "
+         "50Z'/>"},
+        {"<ellipse cx=50 cy=50 rx='20'/>", "<path d='M70 50A20 20 0 0 1 50 70A20 20 0 0 1 30 50A20 "
+                                           "20 0 0 1 50 30A20 20 0 0 1 70 50Z'/>"},
+        {"<line x1='5%' y1='10%' x2='25%' y2='40%' fill='url(#unused)' stroke=red "
+         "stroke-width='4'/>",
+         "<path d='M10 10L50 40' fill=none stroke=red stroke-width='4'/>"},
+        {"<polyline points='10,10 50,10 50,40' stroke=red stroke-width='4'/>",
+         "<path d='M10 10L50 10L50 40' stroke=red stroke-width='4'/>"},
+        {"<polygon points='10,10 50,10 50,40' stroke=red stroke-width='4'/>",
+         "<path d='M10 10L50 10L50 40Z' stroke=red stroke-width='4'/>"},
+        {"<polygon points='10,10 50,10 50,40 60' stroke=red stroke-width='4'/>",
+         "<path d='M10 10L50 10L50 40Z' stroke=red stroke-width='4'/>"},
+        {"<polyline points='10-10 50,10 50,40 bad' stroke=red stroke-width='4'/>",
+         "<path d='M10-10L50 10L50 40' stroke=red stroke-width='4'/>"},
+        {"<style>rect{--left:10px;x:var(--left);y:10px;width:40px;height:30px;rx:0}</style>"
+         "<rect x=90 y=70 width=5 height=5 rx='9'/>",
+         "<path d='M10 10H50V40H10Z'/>"},
+        {"<g style='x:10px;y:10px;width:40px;height:30px'><rect x=90 width=5 height=5 "
+         "style='x:inherit;y:inherit;width:inherit;height:inherit'/></g>",
+         "<path d='M10 10H50V40H10Z'/>"},
+        {"<g style='x:80px;y:60px;rx:20px'><rect width=40 height='30'/></g>",
+         "<path d='M0 0H40V30H0Z'/>"},
+        {"<rect width=0 height='30'/><circle r='0'/><ellipse rx=4 ry='0'/>", ""},
+        {"<rect width=-4 height='30'/><circle r='-4'/>", ""},
+        {"<rect width=40 height=30 transform='scale(2 1)' fill=none stroke=red stroke-width='4'/>",
+         "<path d='M0 0H40V30H0Z' transform='scale(2 1)' fill=none stroke=red stroke-width='4'/>"},
+        {"<g opacity='.5'><rect x=10 y=10 width=40 height='30'/><circle cx=50 cy=30 r='20'/></g>",
+         "<g opacity='.5'><path d='M10 10H50V40H10Z'/><path d='M70 30A20 20 0 0 1 50 50A20 20 0 0 "
+         "1 30 30A20 20 0 0 1 50 10A20 20 0 0 1 70 30Z'/></g>"},
+    };
+    SvgLedger l = {.cap = 64 << 20};
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        yonder_svg_pixels_t images[2];
+        Fixture fixtures[2];
+        for (int j = 0; j < 2; ++j) {
+            char html[2048];
+            snprintf(html, sizeof(html),
+                     "<!doctype html><body style='margin:0'>"
+                     "<svg id=art width=200 height=100 viewBox='0 0 200 100'>%s</svg>",
+                     j ? cases[i].path : cases[i].shape);
+            char filename[1024];
+            snprintf(filename, sizeof(filename), "%s/shape-%02zu-%s.html", dir, i,
+                     j ? "path" : "shape");
+            FILE *reference = fopen(filename, "wb");
+            assert(reference && fputs(html, reference) >= 0 && fclose(reference) == 0);
+            fixtures[j] = fixture_make(html);
+            svg_status_t status = draw_fixture(&fixtures[j], &l, &images[j], fixtures[j].box->rect);
+            if (status != SVG_OK)
+                fprintf(stderr, "shape %zu side %d status %d\n", i, j, status);
+            assert(status == SVG_OK);
+        }
+        assert(images[0].bytes == images[1].bytes);
+        if (memcmp(images[0].pixels, images[1].pixels, images[0].bytes))
+            fprintf(stderr, "shape %zu differs from equivalent path\n", i);
+        assert(!memcmp(images[0].pixels, images[1].pixels, images[0].bytes));
+        char name[64];
+        snprintf(name, sizeof(name), "shape-%02zu", i);
+        save_ppm(dir, name, &images[0]);
+        // Two independent output buffers share this ledger.
+        os64_geometry_memory_t m = {&l, svg_alloc_test, svg_free_test};
+        for (int j = 0; j < 2; ++j) {
+            yonder_svg_pixels_free(&m, &images[j]);
+            fixture_free(&fixtures[j]);
+        }
+        assert(!l.live);
+    }
+    Fixture f = fixture_make(
+        "<!doctype html><svg id=art width=200 height=100>"
+        "<rect id=shape x=10 y=10 width=40 height=30 rx='4'/>"
+        "<ellipse cx=100 cy=40 rx=30 ry='10'/><polygon points='110,60 180,60 150,90'/></svg>");
+    yonder_svg_pixels_t p;
+    size_t start = l.calls;
+    assert(draw_fixture(&f, &l, &p, f.box->rect) == SVG_OK);
+    size_t count = l.calls - start;
+    pixels_free(&l, &p);
+    for (size_t i = 1; i <= count; ++i)
+        for (int admission = 0; admission < 2; ++admission) {
+            l.fail = l.calls + i;
+            l.admission = admission;
+            assert(draw_fixture(&f, &l, &p, f.box->rect) ==
+                   (admission ? SVG_LIMIT : SVG_NO_MEMORY));
+            assert(!p.pixels && !l.live);
+            l.fail = 0;
+        }
+    os64_html_node_t *n = named(f.doc->document, "shape");
+    assert(os64_html_set_attr(f.doc, n, "width", "80", 2) == 0);
+    layout_fixture(&f, 256, 1000, true);
+    assert(draw_fixture(&f, &l, &p, f.box->rect) == SVG_OK);
+    assert(pixel(&p, 70, 20) == 0xff000000);
+    pixels_free(&l, &p);
+    fixture_free(&f);
+    printf("SVG shapes: %zu exact shape/path pairs, %zu allocation cuts in both modes, mutation "
+           "pass\n",
+           sizeof(cases) / sizeof(cases[0]), count);
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
@@ -306,6 +421,7 @@ int main(int argc, char **argv)
     assert(os64_text_create(&o, &s_text) == OS64_FONT_OK);
     kEnv.text = s_text;
     size_t base = live;
+    shape_cases(argv[1]);
     svg_dimension_cases();
     svg_cases(argv[1]);
     for (int i = 0; i < s_nfonts; ++i)

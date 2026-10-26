@@ -701,6 +701,123 @@ static const os64_html_node_t *element(Adapter *a, const os64_html_node_t *n)
     }
     return n;
 }
+static bool basic_shape(const os64_html_node_t *n)
+{
+    return n->ns == OS64_HTML_NS_SVG &&
+           (eq(n->name, "rect") || eq(n->name, "circle") || eq(n->name, "ellipse") ||
+            eq(n->name, "line") || eq(n->name, "polyline") || eq(n->name, "polygon"));
+}
+// Geometry is non-inherited. Follow ancestry only for an explicit inherit,
+// keeping percentages symbolic until the consuming shape's viewport is known.
+static svg_status_t geometry_value(Adapter *a, const os64_html_node_t *n, garb_prop_t prop,
+                                   double percent, double initial_value, double *out)
+{
+    *out = initial_value;
+    size_t depth = 0;
+    while (n && n->kind == OS64_HTML_ELEMENT) {
+        if (++depth > SVG_DEPTH_MAX || ++a->work > SVG_ADAPTER_WORK)
+            return SVG_LIMIT;
+        const garb_val_t *v = winner(a->cascade, n, prop);
+        if (!v || keyword(v, "auto"))
+            return SVG_OK;
+        if (v->kind == GARB_V_WIDE) {
+            if (!eq(v->keyword, "inherit"))
+                return SVG_OK;
+            n = n->parent;
+            continue;
+        }
+        return value(v, percent, out) ? SVG_OK : SVG_UNSUPPORTED;
+    }
+    return SVG_OK;
+}
+static svg_status_t line_coordinate(Adapter *a, const os64_html_node_t *n, const char *name,
+                                    double percent, double *out)
+{
+    Scanner s;
+    *out = 0;
+    if (!scanner(attr(n, name), &s))
+        return SVG_LIMIT;
+    a->work += s.left;
+    if (a->work > SVG_ADAPTER_WORK)
+        return SVG_LIMIT;
+    double parsed;
+    if (!number(&s, &parsed))
+        return SVG_OK; // Invalid coordinates use the attribute's initial zero.
+    if (s.left && *s.p == '%') {
+        parsed *= percent / 100;
+        ++s.p;
+        --s.left;
+    } else if (s.left >= 2 && s.p[0] == 'p' && s.p[1] == 'x') {
+        s.p += 2;
+        s.left -= 2;
+    }
+    ws(&s);
+    if (s.left)
+        return SVG_UNSUPPORTED;
+    if (!isfinite(parsed))
+        return SVG_LIMIT;
+    *out = parsed;
+    return SVG_OK;
+}
+static svg_status_t shape(void *ctx, void *snapshot, const svg_style_request_t *r, svg_shape_t *out)
+{
+    Adapter *a = ctx;
+    (void)snapshot;
+    const os64_html_node_t *n = (const void *)(uintptr_t)r->source;
+    *out = (svg_shape_t){0};
+    if (eq(n->name, "polyline") || eq(n->name, "polygon")) {
+        out->kind = eq(n->name, "polygon") ? SVG_SHAPE_POLYGON : SVG_SHAPE_POLYLINE;
+        const char *points = attr(n, "points");
+        size_t len = 0;
+        while (len <= 1048576 && points[len])
+            ++len;
+        if (len > 1048576)
+            return SVG_LIMIT;
+        out->points = (svg_string_t){points, len};
+        return SVG_OK;
+    }
+    if (eq(n->name, "line")) {
+        out->kind = SVG_SHAPE_LINE;
+        const char *names[] = {"x1", "y1", "x2", "y2"};
+        double *coords[] = {&out->x, &out->y, &out->x2, &out->y2};
+        for (size_t i = 0; i < 4; ++i) {
+            svg_status_t status =
+                line_coordinate(a, n, names[i], i % 2 ? a->height : a->width, coords[i]);
+            if (status != SVG_OK)
+                return status;
+        }
+        return SVG_OK;
+    }
+    bool rect = eq(n->name, "rect"), circle = eq(n->name, "circle");
+    out->kind = rect ? SVG_SHAPE_RECT : SVG_SHAPE_ELLIPSE;
+    const garb_prop_t props[] = {rect ? GARB_X : GARB_CX,
+                                 rect ? GARB_Y : GARB_CY,
+                                 GARB_WIDTH,
+                                 GARB_HEIGHT,
+                                 GARB_RX,
+                                 GARB_RY,
+                                 GARB_R};
+    double *coords[] = {&out->x, &out->y, &out->width, &out->height, &out->rx, &out->ry, &out->rx};
+    for (size_t i = 0; i < 7; ++i) {
+        if ((!rect && (i == 2 || i == 3)) || (circle && (i == 4 || i == 5)) || (!circle && i == 6))
+            continue;
+        double percent = i == 6  ? hypot(a->width, a->height) / sqrt(2)
+                         : i % 2 ? a->height
+                                 : a->width;
+        svg_status_t status =
+            geometry_value(a, n, props[i], percent, i == 4 || i == 5 ? -1 : 0, coords[i]);
+        if (status != SVG_OK)
+            return status;
+    }
+    if (circle)
+        out->ry = out->rx;
+    // SVG2 auto copies the other used radius. Both auto gives zero.
+    if (out->rx < 0)
+        out->rx = fmax(0, out->ry);
+    if (out->ry < 0)
+        out->ry = out->rx;
+    return SVG_OK;
+}
 static svg_status_t node(void *ctx, void *snapshot, uint64_t source, svg_node_t *out)
 {
     Adapter *a = ctx;
@@ -709,6 +826,7 @@ static svg_status_t node(void *ctx, void *snapshot, uint64_t source, svg_node_t 
     bool group = n == a->root || (n->ns == OS64_HTML_NS_SVG && eq(n->name, "g"));
     out->kind = group                                              ? SVG_NODE_GROUP
                 : n->ns == OS64_HTML_NS_SVG && eq(n->name, "path") ? SVG_NODE_PATH
+                : basic_shape(n)                                   ? SVG_NODE_SHAPE
                                                                    : SVG_NODE_UNSUPPORTED;
     out->first_child = group ? (uintptr_t)element(a, n->first_child) : 0;
     out->next_sibling = (uintptr_t)element(a, n->next);
@@ -751,7 +869,8 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
             return status;
     }
     bool path = n->ns == OS64_HTML_NS_SVG && eq(n->name, "path");
-    if (path && out->visible && ((c.dashes || c.vector) && out->stroke.kind != SVG_PAINT_NONE))
+    bool geometry = path || basic_shape(n);
+    if (geometry && out->visible && ((c.dashes || c.vector) && out->stroke.kind != SVG_PAINT_NONE))
         return SVG_UNSUPPORTED;
     if (c.linear)
         return SVG_UNSUPPORTED;
@@ -772,11 +891,13 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
             if (winner(a->cascade, n, unsupported_props[i]))
                 return SVG_UNSUPPORTED;
     }
-    if (!path) {
+    if (!geometry) {
         out->fill.kind = SVG_PAINT_NONE;
         out->stroke.kind = SVG_PAINT_NONE;
     }
-    const char *data = attr(n, "d");
+    if (basic_shape(n) && eq(n->name, "line"))
+        out->fill.kind = SVG_PAINT_NONE;
+    const char *data = path ? attr(n, "d") : "";
     size_t len = 0;
     while (len <= 1048576 && data[len])
         ++len;
@@ -845,7 +966,7 @@ svg_status_t yonder_svg_render(const os64_html_document_t *doc, const garb_casca
     status = svg_create(&options, &c);
     if (status != SVG_OK)
         return status;
-    svg_provider_t provider = {&a, acquire, release, node, style};
+    svg_provider_t provider = {&a, acquire, release, node, style, shape};
     status = svg_scene_prepare(c, &provider, SVG_MODE_INLINE, &map, &scene);
     if (status == SVG_OK) {
         out->bytes = (size_t)(width * height * 4);

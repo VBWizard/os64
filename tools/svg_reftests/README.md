@@ -1,8 +1,9 @@
 # SVG picture comparisons
 
-These are selected-fixture runners for SVG geometry and prepared-scene painting. It compares full opaque RGB
-images and records evidence. It does not measure Yonder's SVG support or replace
-WPT's server, discovery, dependency graph and scheduling machinery.
+These selected-fixture runners compare SVG geometry, prepared-scene painting
+and Yonder basic-shape adapter output. They compare full opaque RGB images
+and record evidence; they do not replace WPT's server, discovery, dependency
+graph or scheduling machinery.
 
 ## Run
 
@@ -126,3 +127,13 @@ and comparison metrics. Fourteen deliberately wrong browser variants must fail.
 The per-fixture maximum/count/sum limits and their analytic evidence are in
 [SVG_PAINT.md](../../docs/design/pending/SVG_PAINT.md). These compare the native
 prepared-scene API, not Yonder's document/style adapter.
+
+## Yonder basic shapes
+
+`shapes.py` consumes the HTML and PPM pairs emitted by
+`tools/test_svg_core.py --yonder --output /tmp/svg-shapes-yonder`. Run it in the
+same browser environment with `--native /tmp/svg-shapes-yonder --output
+/tmp/svg-shapes-browser`. It checks both SVG shapes and equivalent paths, plus
+shifted negative controls; blank fixtures are explicitly expected to stay blank.
+See [SVG_SHAPES.md](../../docs/design/pending/SVG_SHAPES.md) for the precise
+profile, measured tolerances and verification scope.

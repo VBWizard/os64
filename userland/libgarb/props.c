@@ -21,6 +21,13 @@ typedef struct {
 
 static const Prop kProps[GARB_NPROPS] = {
     [GARB_DISPLAY] = {"display", false, false},
+    [GARB_X] = {"x", false, true},
+    [GARB_Y] = {"y", false, true},
+    [GARB_CX] = {"cx", false, true},
+    [GARB_CY] = {"cy", false, true},
+    [GARB_R] = {"r", false, true},
+    [GARB_RX] = {"rx", false, true},
+    [GARB_RY] = {"ry", false, true},
     [GARB_FILL] = {"fill", true, true},
     [GARB_STROKE] = {"stroke", true, true},
     [GARB_FILL_OPACITY] = {"fill-opacity", true, true},
@@ -1959,7 +1966,7 @@ static bool list_style(Sets *s, VCur *c)
 
 typedef enum {
     G_KEYWORDS,             // one keyword from `words`
-    G_SVG_PAINT, G_SVG_LENGTH, G_SVG_MITER, G_SVG_DASHES,
+    G_SVG_POSITION, G_SVG_RADIUS, G_SVG_PAINT, G_SVG_LENGTH, G_SVG_MITER, G_SVG_DASHES,
     G_COLOR,
     G_MARGIN, G_PADDING, G_BWIDTH, G_BSTYLE, G_BCOLOR,
     G_SIZE,                 // width, height, min-*: auto | lp >= 0 | the content words
@@ -2022,6 +2029,13 @@ static const char *const kSvgVector[] = {"none",         "non-scaling-stroke", "
 static const char *const kSvgColor[] = {"auto", "srgb", "linearrgb", NULL};
 static const char *const kSvgPaint[] = {"none", "context-fill", "context-stroke", NULL};
 static const Longhand kLonghands[] = {
+    {GARB_X, G_SVG_POSITION, NULL},
+    {GARB_Y, G_SVG_POSITION, NULL},
+    {GARB_CX, G_SVG_POSITION, NULL},
+    {GARB_CY, G_SVG_POSITION, NULL},
+    {GARB_R, G_SVG_LENGTH, NULL},
+    {GARB_RX, G_SVG_RADIUS, NULL},
+    {GARB_RY, G_SVG_RADIUS, NULL},
     {GARB_FILL, G_SVG_PAINT, NULL},
     {GARB_STROKE, G_SVG_PAINT, NULL},
     {GARB_FILL_OPACITY, G_ALPHA, NULL},
@@ -2989,6 +3003,14 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
             return true;
         }
         return vc_color(c, out);
+    case G_SVG_POSITION:
+        return vc_dim(c, ACCEPT_NUMBER | ACCEPT_LENGTH | ACCEPT_PERCENT, true, false, &s->a, out);
+    case G_SVG_RADIUS:
+        if (vc_keyword(c, kAuto) != NULL) {
+            *out = kw("auto");
+            return true;
+        }
+        /* fall through */
     case G_SVG_LENGTH:
         return vc_dim(c, ACCEPT_NUMBER | ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, out);
     case G_SVG_MITER:

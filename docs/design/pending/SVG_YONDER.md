@@ -15,8 +15,8 @@ ratio, with the 300 by 150 default object size. The adapter maps viewBox using
 `none`, the nine alignments, `meet` or `slice`; the viewport clips the output.
 Page zoom scales user units, including an outer SVG transform's translation.
 
-The SVG tree/style provider reads the existing libhtml document. Groups and
-paths support solid fill and stroke, currentColor, fill rules, fill/stroke
+The SVG tree/style provider reads the existing libhtml document. Groups, paths
+and [basic shapes](SVG_SHAPES.md) support solid fill and stroke, currentColor, fill rules, fill/stroke
 opacity, isolated group/element opacity, cap/join/miter settings, visibility
 and SVG transform attributes. Supported CSS 2D transforms replace the transform
 attribute. The outer box's transform and opacity are painted once by Yonder;
@@ -58,7 +58,7 @@ HTML tree, cascade, layout and raster-image budgets into a whole-page ledger.
 Those libraries retain their separate bounds; unification remains a debt.
 
 Adapter bounds are 4,096 scene nodes, 128 ancestry levels, 4,000,000 adapter work
-units, 4,096 bytes per viewport/transform attribute and 1 MiB per path string.
+units, 4,096 bytes per viewport/transform attribute and 1 MiB per path or point-list string.
 Output is limited to 16,384 pixels on either axis and 8,388,608 pixels total,
 then admitted against the shared byte cap. It allocates the visible crop using
 the full viewport's map. Native SVG and geometry limits apply in addition.
@@ -68,9 +68,10 @@ work; they are not a demonstrated frame-time guarantee for arbitrary pages.
 
 ## Explicit limits
 
-This connection handles paths and groups, with definitions, metadata, titles,
-descriptions and style elements omitted from drawing. Other active element
-kinds refuse the SVG job. Shapes, use/symbol, nested viewports, text, gradients,
+The inline profile handles paths, groups and [basic shapes](SVG_SHAPES.md),
+with definitions, metadata, titles, descriptions and style elements omitted
+from drawing. Other active element kinds refuse the SVG job. Use/symbol,
+nested viewports, text, gradients,
 patterns, images, markers, clip paths, masks, filters, dashes, non-scaling
 strokes and animation remain follow-on work. External SVG image decoding is
 not connected to libimage. SVG-specific hit testing and DOM interfaces are
