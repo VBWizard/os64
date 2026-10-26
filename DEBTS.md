@@ -770,3 +770,11 @@ how a worklist fills with things nobody intends to do.
 |---|---|---|---|---|
 | **Bounded XML profile, not full XML conformance.** DTD element/attribute/notation declarations, parameter/external entities, recursive general references, markup replacements, validation and encodings beyond UTF-8/UTF-16 are refused. The pinned corpus reports 1,229 unsupported cases separately; 489 supported cases are regression-gated. A token, including an entire internal subset or uninterrupted text, is capped at 1 MiB by default. | Feature | M/L by feature | an SVG/feed corpus requires the omitted construct; add independent fixtures before widening | `userland/libxml`, `tools/xmlconf`, `docs/design/pending/XML.md` |
 | **Native XML trees have no browser consumer.** The libhtml builder owns arbitrary/no-namespace nodes independently; standalone image SVG, DOMParser and XHR document responses still need their integration. CDATA coalesces to text, the serializer is HTML-only, and HTML fragment parsing refuses XML documents. Lossless XML DOM/serialization and namespace-aware creation remain separate work. | Feature | M | SVG image jobs or a page requiring a script-visible XML document | `userland/libhtml`, `userland/libdom`, `docs/design/pending/XML.md` |
+
+
+## SVG geometry proof and production adapter
+
+| Debt | Kind | Size | Pay when | Where |
+|---|---|---|---|---|
+| **Geometry is a hosted experiment, not an exported backend.** Capsule references, mixed closure, fill rules, miter boundaries, range/count guards and allocation sweeps pass. The versioned operation table, shared admission ledger, outline/context lifetime checks, work/cancellation bounds and target adapter remain to be built. | Feature-gate | M | before SVG renderer integration; slice 6a | `tools/svg_geometry`, `docs/design/pending/SVG_GEOMETRY.md` |
+| **FreeType's safe empty stroke is not SVG's zero-length cap.** Patch 0012 fixes the upstream empty-subpath UB; a zero-length line then exports no outline. SVG round/square caps need explicit geometry, and miter threshold decisions must account for fixed-point rounding. The analytic fixtures do not establish browser SVG conformance. | Fidelity | S/M | SVG stroke construction and browser-reference gates | `docs/design/pending/SVG_GEOMETRY.md`, `userland/libfreetype/patches/0012-base-ftstroke-empty-subpath.patch` |

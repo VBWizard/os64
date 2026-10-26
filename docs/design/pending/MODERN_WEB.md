@@ -3433,7 +3433,8 @@ The native shared-tree increment is also built in libhtml: independently
 owned XML documents, arbitrary/absent namespaces, processing instructions,
 CDATA-to-text projection, clone/mutation ownership, and SVG-rooted selector
 and custom-property cascade proofs. Its API and sanitizer/regression evidence
-are in [XML.md](XML.md#native-shared-tree-as-built--2026-10-25). The FreeType
-geometry proof remains before 6a completes. XML profile limitations and
-browser consumers still to be built are recorded in DEBTS.md; the slice's
+are in [XML.md](XML.md#native-shared-tree-as-built--2026-10-25). The first
+[FreeType geometry experiment](SVG_GEOMETRY.md) is built; its production
+adapter and browser/reference gates remain before 6a completes. XML profile
+limitations and browser consumers still to be built are recorded in DEBTS.md; the slice's
 overall brief stays active.
