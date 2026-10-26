@@ -508,6 +508,81 @@ int64_t os64_page_node_set_selected_index(os64_page_state_t *state,
     return select_assign(state, node, index);
 }
 
+// Whether `node` is a control with a text selection (HTML § 4.10.6): a
+// textarea, or an input of a type the selection APIs apply to.
+static bool selection_control(os64_page_state_t *state, const os64_html_node_t *node)
+{
+    os64_page_element_t element;
+    os64_page_input_t input;
+    if (!node_kind(state, node, &element, &input))
+        return false;
+    return element == OS64_PAGE_EL_TEXTAREA ||
+        (element == OS64_PAGE_EL_INPUT && (input == OS64_PAGE_INPUT_TEXT || input == OS64_PAGE_INPUT_SEARCH ||
+                                           input == OS64_PAGE_INPUT_TEL || input == OS64_PAGE_INPUT_URL ||
+                                           input == OS64_PAGE_INPUT_PASSWORD));
+}
+
+// The length of a control's value in UTF-16 code units, which the selection
+// counts in; 0 when the value cannot be read.
+static uint32_t value_units(os64_page_state_t *state, const os64_html_node_t *node)
+{
+    const char *value = NULL;
+    size_t len = 0;
+    if (os64_page_node_value(state, node, &value, &len) < 0 || value == NULL)
+        return 0;
+    uint32_t units = 0;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)value[i];
+        if ((c & 0xC0) != 0x80)
+            units += c >= 0xF0 ? 2 : 1;
+    }
+    return units;
+}
+
+int64_t os64_page_node_selection(os64_page_state_t *state, const os64_html_node_t *node, uint32_t *start,
+                                 uint32_t *end, os64_page_direction_t *direction)
+{
+    if (start == NULL || end == NULL || direction == NULL || !selection_control(state, node))
+        return -OS64_PAGE_REASON_WRONG_KIND;
+    uint32_t units = value_units(state, node);
+    const PNodeState *edit = p_state_find(state, node);
+    if (edit == NULL || !edit->range_kept) {
+        *start = *end = units;
+        *direction = OS64_PAGE_DIRECTION_NONE;
+        return 0;
+    }
+    *end = edit->range_end < units ? edit->range_end : units;
+    *start = edit->range_start < *end ? edit->range_start : *end;
+    *direction = (os64_page_direction_t)edit->range_direction;
+    return 0;
+}
+
+int64_t os64_page_node_set_selection(os64_page_state_t *state, const os64_html_node_t *node, uint32_t start,
+                                     uint32_t end, os64_page_direction_t direction)
+{
+    if (!selection_control(state, node) || direction > OS64_PAGE_DIRECTION_BACKWARD)
+        return -OS64_PAGE_REASON_WRONG_KIND;
+    PReserve reserve = {.state = state};
+    if (!p_reserve_node(&reserve, node)) {
+        p_reserve_abort(&reserve);
+        return -OS64_PAGE_REASON_NO_MEMORY;
+    }
+    p_reserve_commit(&reserve);
+    // HTML's "set the selection range": the end clamped to the value, and a
+    // start past the end made the end.
+    uint32_t units = value_units(state, node);
+    if (end > units)
+        end = units;
+    if (start > end)
+        start = end;
+    PNodeState *edit = p_state_find(state, node);
+    edit->range_start = start;
+    edit->range_end = end;
+    edit->range_direction = (uint8_t)direction;
+    edit->range_kept = true;
+    return 0;
+}
+
 // Where `option` is in its select's list, -1 when it is not there.
 static int32_t option_index(const os64_html_node_t *select, const os64_html_node_t *option)
 {
@@ -894,6 +969,10 @@ int64_t p_state_set_value(os64_page_state_t *state, const os64_html_node_t *node
         changed |= edit->text_user != user;
     edit->text_user = user;
     edit->text_clean = false;
+    // A changed value puts the selection at its end (HTML's value setter
+    // moves the text entry cursor there): the kept one goes.
+    if (changed)
+        edit->range_kept = false;
     char *previous = attribute ? edit->cache : edit->text;
     if (!attribute && edit->text == NULL && edit->cache != NULL &&
         edit->cache_version == os64_html_version(state->doc) &&

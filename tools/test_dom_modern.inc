@@ -75,11 +75,12 @@ static char *modern_chain_shape(DomFixture *f)
         "document.createTextNode('t'),document.createComment('c'),document.createDocumentFragment(),"
         "document.doctype,document.implementation,document.implementation.createHTMLDocument('')];"
         "var row=/(^constructor$|_NODE$|^DOCUMENT_POSITION_|^onscroll$|^onresize$|^scrollingElement$|^defaultView$"
-        "|^onerror$|^getRootNode$|^wholeText$|^splitText$)/;"
+        "|^onerror$|^getRootNode$|^wholeText$|^splitText$|^selectionStart$|^selectionEnd$|^selectionDirection$"
+        "|^setSelectionRange$|^select$)/;"
         "var documentRow=/^(readyState|onreadystatechange|visibilityState|hidden|onvisibilitychange|referrer|"
         "activeElement|hasFocus|currentScript|title|prerendering|onprerenderingchange|domain|URL|documentURI|"
         "wasDiscarded|compatMode|dir|characterSet|charset|inputEncoding|contentType|lastModified|rootElement|"
-        "clear)$/;"
+        "clear|getSelection)$/;"
         "globalThis.chainShape=nodes.map(function(n){var levels=[];"
         "for(var p=Object.getPrototypeOf(n);p&&p!==Object.prototype;p=Object.getPrototypeOf(p))"
         "levels.push(Object.getOwnPropertyNames(p).filter(function(k){"
@@ -176,6 +177,30 @@ static void dom_modern_cases(void)
         "assert(sel.options instanceof HTMLOptionsCollection&&sel.options instanceof HTMLCollection&&"
         "Object.getPrototypeOf(HTMLOptionsCollection)===HTMLCollection);",
         "modern-on-lists");
+    /* 0f's P2 core: a text control's selection, and the window's Selection
+     * (react-dom's two paths: the field's, and getSelection's) */
+    dom_script(&f, MODERN_ASSERT
+        "var t=document.createElement('input');t.value='hello';"
+        "assert('selectionStart' in t&&t.selectionStart===5&&t.selectionEnd===5&&t.selectionDirection==='none','at the value end');"
+        "t.setSelectionRange(1,3);assert(t.selectionStart===1&&t.selectionEnd===3&&t.selectionDirection==='none');"
+        "t.setSelectionRange(1,3,'backward');assert(t.selectionDirection==='backward');"
+        "t.selectionStart=4;assert(t.selectionStart===4&&t.selectionEnd===4,'a start past the end moves the end');"
+        "t.selectionEnd=2;assert(t.selectionStart===2&&t.selectionEnd===2,'an end before the start moves the start');"
+        "t.select();assert(t.selectionStart===0&&t.selectionEnd===5,'select() is all of it');"
+        "t.setSelectionRange(0,99);assert(t.selectionEnd===5,'the end is clamped to the value');"
+        "t.setSelectionRange(1,2);t.value='hi';assert(t.selectionStart===2&&t.selectionEnd===2,'a new value puts it at the end');"
+        "var w=new Text('x');var u=document.createElement('input');u.value='a\\u{1F600}';assert(u.selectionEnd===3,'code units');"
+        "var e=document.createElement('input');e.type='email';e.value='a@b';"
+        "assert('selectionStart' in e&&e.selectionStart===null&&e.selectionDirection===null,'an email input has none');"
+        "var bad=false;try{e.selectionStart=1}catch(x){bad=x.name==='InvalidStateError'}assert(bad,'and refuses one');"
+        "bad=false;try{e.setSelectionRange(0,1)}catch(x){bad=x.name==='InvalidStateError'}assert(bad);e.select();"
+        "var a=document.createElement('textarea');a.value='two\\nlines';a.setSelectionRange(4,9);"
+        "assert(a.selectionStart===4&&a.selectionEnd===9,'a textarea has one');"
+        "var s=window.getSelection();"
+        "assert(s===document.getSelection()&&s instanceof Selection&&s.anchorNode===null&&s.focusNode===null&&"
+        "s.anchorOffset===0&&s.rangeCount===0&&s.isCollapsed&&s.type==='None'&&String(s)==='','no page selection');"
+        "bad=false;try{s.getRangeAt(0)}catch(x){bad=x.name==='IndexSizeError'}assert(bad);s.removeAllRanges();",
+        "modern-on-selection");
     /* DOMParser, HTML only, as ES5 TodoMVC renders its list */
     dom_script(&f, MODERN_ASSERT
         "var p=new DOMParser();assert(p instanceof DOMParser&&Object.prototype.toString.call(p)==='[object DOMParser]');"

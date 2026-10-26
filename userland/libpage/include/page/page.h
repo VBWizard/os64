@@ -608,6 +608,22 @@ int64_t os64_page_node_checked(os64_page_state_t *state, const os64_html_node_t 
                                bool *on);
 int64_t os64_page_node_selected_index(os64_page_state_t *state,
                                       const os64_html_node_t *node, int32_t *index);
+// A text control's selection (HTML § 4.10.6), by node, in UTF-16 code
+// units of its value: the one a script set, clamped to the value as it
+// stands, or the value's end before any was set (where a person's typing
+// leaves the caret; the field's own caret is not read, DEBTS.md). Setting
+// it is HTML's "set the selection range": the end clamped to the value, a
+// start past the end made the end. It is the scripts' record and moves no
+// field's caret, and it changes no control-state revision. WRONG_KIND for
+// a node that is not a textarea or an input of type text, search, tel, url
+// or password.
+typedef enum {
+    OS64_PAGE_DIRECTION_NONE = 0, OS64_PAGE_DIRECTION_FORWARD, OS64_PAGE_DIRECTION_BACKWARD
+} os64_page_direction_t;
+int64_t os64_page_node_selection(os64_page_state_t *state, const os64_html_node_t *node, uint32_t *start,
+                                 uint32_t *end, os64_page_direction_t *direction);
+int64_t os64_page_node_set_selection(os64_page_state_t *state, const os64_html_node_t *node, uint32_t start,
+                                     uint32_t end, os64_page_direction_t direction);
 // An option's selectedness (HTML § 4.10.10), by node. Read: in a select
 // without `multiple`, whether it is the option selectedIndex names (a
 // one-line select's first enabled option when nothing is selected); else

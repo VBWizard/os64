@@ -90,6 +90,8 @@ static const DModernRow kModern[] = {
     /* After the interfaces row, whose HTMLCollection its
      * HTMLOptionsCollection inherits. */
     {(const char *const[]){"Option", "HTMLOptionsCollection", NULL}, d_options_install},
+    /* 0f's P2 core: the text controls' members, and the Selection. */
+    {(const char *const[]){"getSelection", "Selection", NULL}, d_selection_install},
 };
 
 int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
