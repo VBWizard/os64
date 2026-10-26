@@ -793,3 +793,17 @@ run in turn under RECLAIM, 5 at the target core's arena grain and 243 at
 the instrumented engine's, each destroy leaving nothing live; it compiles
 uncut, a compile under memory pressure being DEBTS.md's 0011b row, which
 the first draft of the sweep reached (a SEGV in `resolve_labels`).
+
+## Refused prototype set validation
+
+Patch 0013 (after 0012) gives back the reference a prototype set takes on
+the new prototype when the object's shape copy is refused. The runtime
+suite's prototype case sets the prototype of one of two fresh objects
+sharing a shape, counts the set's allocations, refuses each in turn, and
+asks the runtime's teardown for anything left: the instrumented engine
+makes the copy's own allocation and, without the patch, its teardown
+finds the prototype (one failure); the target core's arenas make none to
+count, and it holds only the unrefused half. Both probes pass with the
+series: 1,270 target-core and 6,100 instrumented checks, zero failures,
+zero live allocations. `tools/test_js_prepare.py` passes. The export
+count is unchanged.

@@ -87,7 +87,7 @@ static void dom_classic_cases(void)
         "function H(){}H.prototype=7;var hh=Reflect.construct(DocumentFragment,[],H);"
         "assert(Object.getPrototypeOf(hh)===DocumentFragment.prototype&&hh.nodeType===11);"
         "assert(DocumentFragment.prototype.constructor===DocumentFragment&&made.constructor===DocumentFragment);"
-        "assert(Object.getPrototypeOf(Node)===Function.prototype&&Object.getPrototypeOf(Element)===Node);"
+        "assert(Object.getPrototypeOf(Node)===EventTarget&&Object.getPrototypeOf(Element)===Node);"
         "assert(Object.getPrototypeOf(HTMLElement)===Element&&Object.getPrototypeOf(HTMLInputElement)===HTMLElement);"
         "assert(Object.getPrototypeOf(HTMLLinkElement)===HTMLElement&&Object.getPrototypeOf(Document)===Node);"
         "assert(Object.getPrototypeOf(HTMLIFrameElement)===HTMLElement&&document.createElement('iframe') instanceof HTMLIFrameElement);"

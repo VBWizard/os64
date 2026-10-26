@@ -95,6 +95,9 @@ static const DModernRow kModern[] = {
     /* Import maps: HTMLScriptElement.supports, a member of the interfaces
      * row's HTMLScriptElement and none of window's (as P1-Da's row). */
     {(const char *const[]){NULL}, d_import_map_install},
+    /* 0f's P1b: last, since every interface whose prototype inherits
+     * EventTarget.prototype is made to inherit EventTarget. */
+    {(const char *const[]){"EventTarget", "Window", NULL}, d_targets_install},
 };
 
 int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)

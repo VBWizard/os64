@@ -3,8 +3,9 @@
 Implemented 2026-10-26 as an increment of SVG slice 6a, above the
 [geometry experiment](SVG_GEOMETRY.md). The versioned production interface
 is in `userland/libos64/include/os64/geometry_backend.h`; the adapter is
-`userland/libfreetype/port/geometry.c`. SVG scene construction, browser
-integration and reference gates remain separate work.
+`userland/libfreetype/port/geometry.c`. The [scene foundation](SVG_CORE.md)
+and [solid painter](SVG_PAINT.md) consume it; browser integration and broader
+reference gates remain separate work.
 
 ## Interface and ownership
 
@@ -20,7 +21,7 @@ optional cancellation callback. Allocations include adapter headers and
 FreeType storage. The callback returns LIMIT for admission refusal and
 NO_MEMORY for physical exhaustion; free receives the original pointer and
 size. Returned storage must be aligned for `max_align_t`. The SVG owner's
-future shared ledger can charge these allocations directly. The backend's
+shared ledger charges these allocations directly. The backend's
 live/peak counters report those charges; they do not impose another cap.
 Callbacks and their state must outlive the context.
 
@@ -50,6 +51,14 @@ path into pieces that would acquire new caps. Any non-OK result invalidates
 the destination; cancellation or backend failure can leave partial coverage.
 Singular maps require no inverse and can produce empty coverage normally.
 
+The optional v1 table tail `bounds` encloses transformed, 26.6-quantized
+control points relative to a supplied origin. It allocates nothing, charges
+point visits, supports cancellation and leaves `empty` true on failure. It
+uses the same precision/range checks as rasterization. Check `struct_size`
+before accessing the tail; the existing table prefix and revision remain
+unchanged. The solid painter uses actual expanded-stroke bounds for scratch
+allocation. These are conservative raster bounds, not SVG object bounds.
+
 ## Precision and refusal
 
 The planned map determines a translated, power-of-two working frame. Scale
@@ -64,6 +73,10 @@ The requested coordinate-conversion error is per device axis, greater than
 includes working-grid rounding, final 26.6 rounding, and a conservative double
 arithmetic allowance that accounts for a large world origin and stroke
 excursions. Rasterization checks this estimate again against the actual map.
+Device half-grid ties round toward positive infinity. Half-away-from-zero
+rounding was wrong for translated clips: crossing zero changed the selected
+side of a tie. The solid-painting crop regression now matches full-image
+pixels exactly; see SVG_PAINT.md for its evidence.
 An outline prepared for one scale cannot silently lose precision when reused
 at a larger scale. Large finite values can therefore return LIMIT even when
 translation would place the picture near the viewport.
@@ -98,7 +111,7 @@ coordinate selection also belong above it.
 
 Work charges command/point visits, allocation and copied bytes, output bytes
 and spans. `max_work` is literal, including zero, and resets for creation and
-each path/stroke/raster operation. The suggested default is four million
+each path/stroke/bounds/raster operation. The suggested default is four million
 (4 × 1024 × 1024) units. Statistics retain the last entered operation's cost.
 Admission limits, work refusal and coordinate/count refusal return LIMIT;
 physical allocation failure returns NO_MEMORY; cancellation returns CANCELLED.
@@ -152,3 +165,9 @@ performance, WPT or browser-conformance result is claimed. The private proof
 still generates its own gallery; its images are not expected-output files for
 the production test. Independent cold review and Fable's architecture read
 remain review steps, not claimed checks.
+
+The solid-painting increment adds allocation-free bounds, translated-origin,
+cancellation and failure-reset tests to this suite. The suite passes with
+leak checks enabled, and its four saved masks are byte-identical to the prior
+comparison run. The font/import verification counts above describe the original
+backend delivery; they are not claims of a new font/import run for this tail.

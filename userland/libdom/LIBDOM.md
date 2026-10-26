@@ -266,10 +266,21 @@ memory (§ Events).
 
 ## Events
 
-`addEventListener`, `removeEventListener` and `dispatchEvent` are on every
-node, on window, and on each plain event target a Modern Web row makes
+`addEventListener`, `removeEventListener` and `dispatchEvent` are
+EventTarget.prototype's, made once by `d_event_install`, and every target
+inherits them: every node through Node.prototype, window through
+Window.prototype (the global's own prototype, between it and
+EventTarget.prototype), and each plain event target a Modern Web row makes
 (`d_event_target`: an object that is neither, whose dispatch path is itself
-alone). A listener is a function or an object with `handleEvent`;
+alone, and whose prototype `d_event_target` makes inherit
+EventTarget.prototype). The methods tell the target by `this`, and a bare
+call is window's. Those levels are there with the Modern Web switch on or
+off; the switch's last row names them `EventTarget` and `Window`, makes
+`new EventTarget()` (and a subclass's `super()`) a plain target of its own
+class with its entry in the object, and makes each interface whose
+prototype inherits EventTarget.prototype inherit EventTarget, as WebIDL's
+interface objects follow their prototypes. `new Window()` is a TypeError.
+A listener is a function or an object with `handleEvent`;
 the third argument is the old boolean `useCapture` or `{capture, once}`
 (`passive` is accepted and changes nothing). `new Event(type, {bubbles,
 cancelable})` and the old `document.createEvent(...)` with `initEvent` make
@@ -291,7 +302,7 @@ or a null handler makes none). That entry holds the list, and is let go,
 unlinked and freed, at the next matchMedia or view step once no listener
 or handler is left on it, so a list the page then drops is collected. A
 class a page makes one of per request (an AbortSignal, an XMLHttpRequest
-and its upload) keeps the entry IN the object, the first member of its
+and its upload, a `new EventTarget()`) keeps the entry IN the object, the first member of its
 state: it is on no registry, its listeners' callbacks are the object's to
 trace (`gc_mark`) and free (finalizer), and the object goes with the
 garbage whatever listens on it. Registration, the listener records, the

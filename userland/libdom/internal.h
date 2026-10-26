@@ -234,9 +234,14 @@ struct os64_dom {
     DActiveEvent *current_event;
     /* The classes of plain event targets (d_event_target), and each one's
      * resolver, NULL for a class whose opaque is its entry. */
-    JSClassID target_classes[8];
-    int (*target_resolvers[8])(os64_dom_t *, JSContext *, JSValueConst, bool, DValue **);
+    JSClassID target_classes[12];
+    int (*target_resolvers[12])(os64_dom_t *, JSContext *, JSValueConst, bool, DValue **);
     unsigned target_class_count;
+    /* EventTarget.prototype, which holds the listener methods every target
+     * inherits, and Window.prototype, between the global and it (event.c,
+     * d_event_install): levels of the chain with the Modern Web surface on
+     * or off; its row names them. */
+    DValue *event_target_prototype, *window_prototype;
     bool sweep_pending;
     DListener *invoking;
     /* The import map os64_dom_import_map is parsing, while it does
@@ -491,13 +496,15 @@ int d_handler_attribute_set(os64_dom_t *dom, JSContext *ctx, const os64_html_nod
 int d_dispatch(os64_dom_t *dom, JSContext *ctx, JSValueConst event, const os64_html_node_t *node);
 /* A PLAIN EVENT TARGET: an object that is neither a node nor window and
  * is an EventTarget all the same (performance, screen.orientation, a
- * MediaQueryList, an AbortSignal, an XMLHttpRequest and its upload), whose
- * entry holds its listeners. A row registers the object's class and gives
- * its prototype the three EventTarget methods with d_event_target, and an
- * on<type> property with d_event_handler (one of the binding's event
- * types) or d_event_handler_named (any type). Where the entry lives is the
- * class's choice, and everything else (the methods, the listener records,
- * the dispatch) is the same for all three:
+ * MediaQueryList, an AbortSignal, an XMLHttpRequest and its upload, a
+ * `new EventTarget()`), whose entry holds its listeners. A row registers
+ * the object's class with d_event_target, which makes its prototype
+ * inherit EventTarget.prototype, and so the three methods, when it does not
+ * already. The row gives the prototype its on<type> properties with
+ * d_event_handler (one of the binding's event types) or
+ * d_event_handler_named (any type). Where the entry lives is the class's
+ * choice, and everything else (the methods, the listener records, the
+ * dispatch) is the same for all three:
  *   - the object's opaque, `resolve` NULL, a registry entry the object
  *     keeps for the page's life (performance, screen.orientation);
  *   - made on demand by a resolver, for a class whose objects come and go
@@ -507,8 +514,9 @@ int d_dispatch(os64_dom_t *dom, JSContext *ctx, JSValueConst event, const os64_h
  *     as nothing; the class releases an entry once nothing listens on it
  *     (view.c's media_sweep);
  *   - IN THE OBJECT, `resolve` NULL, for a class a page makes one of per
- *     request (an AbortSignal, an XMLHttpRequest), which would otherwise
- *     keep every one alive on the registry: the object's state BEGINS with
+ *     request (an AbortSignal, an XMLHttpRequest, a `new EventTarget()`),
+ *     which would otherwise keep every one alive on the registry: the
+ *     object's state BEGINS with
  *     its entry (so the opaque finds it), made with d_event_target_init;
  *     the entry is on no registry, its listeners' callbacks are the
  *     object's to trace (d_event_target_mark from its gc_mark) and free
@@ -554,6 +562,8 @@ void d_event_target_finalize(JSRuntime *rt, DValue *entry);
 int d_event_handler_named(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, const char *type);
 int d_dispatch_plain_task(os64_dom_t *dom, JSContext *ctx, JSValueConst event, DValue *target,
                           os64_js_outcome_t *outcome);
+/* 0f's P1b row (event.c): EventTarget, its constructor, and Window. */
+int d_targets_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* A host task's bookkeeping (event.c): an entry's outcome folded into the
  * task's (the first failure kept, a sticky one over one that is not), and
  * the task ended with the binding's own report folded in. */

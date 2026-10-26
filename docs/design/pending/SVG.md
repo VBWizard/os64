@@ -26,8 +26,9 @@ The [private geometry proof](SVG_GEOMETRY.md) records the first fixture,
 precision and allocation results. The [production adapter](SVG_GEOMETRY_BACKEND.md)
 and [comparison harness](SVG_REFTESTS.md) record their implemented contracts,
 measured limits and remaining gates. The first [6b core increment](SVG_CORE.md)
-adds reusable paths and group/path scene preparation; Yonder painting remains
-integration work. This design does not establish
+adds reusable paths and group/path scene preparation. The
+[solid painter](SVG_PAINT.md) adds fills, ordinary strokes and isolated opacity;
+Yonder painting remains integration work. This design does not establish
 performance or compatibility percentages.
 
 ## Library boundaries

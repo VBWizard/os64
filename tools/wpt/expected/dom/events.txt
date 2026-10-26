@@ -126,6 +126,15 @@ scrolling/wheel-event-transactions-target-removal.html	needs test_driver input, 
 scrolling/wheel-event-transactions-target-resize.html?include=passive-false	needs test_driver input, which the runner does not have
 scrolling/wheel-event-transactions-target-resize.html?include=passive-true	needs test_driver input, which the runner does not have
 [passing]
+AddEventListenerOptions-once.any.html	Multiple once listeners should be invoked even if the stopImmediatePropagation is set
+AddEventListenerOptions-once.any.html	Once listener should be added / removed like normal listeners
+AddEventListenerOptions-once.any.html	Once listener should be invoked only once
+AddEventListenerOptions-once.any.html	Once listener should be invoked only once even if the event is nested
+AddEventListenerOptions-passive.any.html	Equivalence of option values
+AddEventListenerOptions-signal.any.html	Aborting from a nested listener should remove it
+AddEventListenerOptions-signal.any.html	Adding then aborting a listener in another listener does not call it
+AddEventListenerOptions-signal.any.html	Passing an AbortSignal to addEventListener does not prevent removeEventListener
+AddEventListenerOptions-signal.any.html	Removing a once listener works with a passed signal
 CustomEvent.html	CustomEvent dispatching.
 CustomEvent.html	First parameter to initCustomEvent should be mandatory.
 CustomEvent.html	initCustomEvent's default parameter values.
@@ -337,6 +346,10 @@ EventListener-handleEvent.html	throws if `handleEvent` is thruthy and not callab
 EventListenerOptions-capture.html	Capture boolean should be honored correctly
 EventListenerOptions-capture.html	Capture option should be honored correctly
 EventListenerOptions-capture.html	Equivalence of option values
+EventTarget-add-remove-listener.any.html	Removing an event listener without explicit capture arg should succeed
+EventTarget-addEventListener.any.html	Adding a null event listener should succeed
+EventTarget-constructible.any.html	A constructed EventTarget can be used as expected
+EventTarget-constructible.any.html	EventTarget can be subclassed
 EventTarget-dispatchEvent-returnvalue.html	Return value of EventTarget.dispatchEvent() affected by preventDefault().
 EventTarget-dispatchEvent-returnvalue.html	Return value of EventTarget.dispatchEvent() affected by returnValue.
 EventTarget-dispatchEvent.html	Calling dispatchEvent(null).
@@ -372,7 +385,9 @@ element-click.html	dynamic querySelectorAll, toggle sync
 element-click.html	static querySelectorAll
 event-global-event-targets.html	An event target's _document property does not affect window.event
 event-global-event-targets.html	window.event is set when dispatching on AbortSignal
+event-global-event-targets.html	window.event is set when dispatching on EventTarget
 event-global-event-targets.html	window.event is set when dispatching on Performance
+event-global-set-before-handleEvent-lookup.window.html	window.event is set before 'handleEvent' lookup
 event-global.html	event exists on window, which is initially set to undefined
 event-global.html	window.event is only defined during dispatch
 event-global.html	window.event is set to the current event during dispatch
@@ -382,12 +397,14 @@ event-handler-attribute-replace-preserves-passive.html	Replacing a wheel event h
 event-handler-attribute-replace-preserves-passive.html	Replacing a wheel event handler attribute on document element via setAttribute preserves its passive flag
 event-src-element-nullable.html	Event srcElement should be nullable
 label-default-action.html	Label default action should not trigger when clicked button removes itself
+non-cancelable-when-passive/generic-events-stay-cancelable.html	A generic event with only passive listeners remains cancelable
 non-cancelable-when-passive/synthetic-events-cancelable.html	Synthetic mousewheel event with interface Event is not cancelable
 non-cancelable-when-passive/synthetic-events-cancelable.html	Synthetic touchcancel event with interface Event is not cancelable
 non-cancelable-when-passive/synthetic-events-cancelable.html	Synthetic touchend event with interface Event is not cancelable
 non-cancelable-when-passive/synthetic-events-cancelable.html	Synthetic touchmove event with interface Event is not cancelable
 non-cancelable-when-passive/synthetic-events-cancelable.html	Synthetic touchstart event with interface Event is not cancelable
 non-cancelable-when-passive/synthetic-events-cancelable.html	Synthetic wheel event with interface Event is not cancelable
+passive-by-default-non-node.html	wheel listeners on EventTarget are not passive by default
 passive-by-default-non-node.html	wheel listeners on Performance are not passive by default
 preventDefault-during-activation-behavior.html	behavior of preventDefault during activation behavior
 remove-all-listeners.html	Nested usage of once listeners should work.

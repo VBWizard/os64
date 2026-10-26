@@ -551,6 +551,82 @@ static void spans(int y, int n, const FT_Span *runs, void *arg)
             p[j] = runs[i].coverage;
     }
 }
+static Status placement(const Outline *o, const Map *map, double origin_x, double origin_y,
+                        double *bx, double *by)
+{
+    double norm = stretch(map);
+    *bx = map->a * o->frame.x + map->c * o->frame.y + map->tx - origin_x;
+    *by = map->b * o->frame.x + map->d * o->frame.y + map->ty - origin_y;
+    /* Conservative allowance for double subtraction, multiplication and sums,
+     * including cancellation of a large world origin. Reject rather than
+     * promising subpixel conversion after that precision has been spent. */
+    double magnitude = norm * o->frame.magnitude + absolute(map->tx) + absolute(map->ty) +
+                       absolute(origin_x) + absolute(origin_y);
+    double error = .5 * norm / o->frame.scale + 1.0 / 128 + 16 * DBL_EPSILON * magnitude;
+    if (!finite(error) || error > o->frame.tolerance || !finite(*bx) || !finite(*by))
+        return LIMIT;
+    return OK;
+}
+static Status device_point(const Outline *o, const Map *map, double bx, double by, unsigned i,
+                           FT_Vector *out)
+{
+    double x = o->ft.points[i].x / o->frame.scale, y = o->ft.points[i].y / o->frame.scale;
+    double dx = (map->a * x + map->c * y + bx) * 64;
+    double dy = (map->b * x + map->d * y + by) * 64;
+    if (!finite(dx) || !finite(dy) || absolute(dx) > RASTER_LIMIT || absolute(dy) > RASTER_LIMIT)
+        return LIMIT;
+    /* Half-grid ties round toward positive infinity so moving an integer clip
+     * origin cannot change which side of a tie the same device point chooses. */
+    dx += .5;
+    dy += .5;
+    FT_Pos ix = (FT_Pos)dx, iy = (FT_Pos)dy;
+    if (dx < ix)
+        --ix;
+    if (dy < iy)
+        --iy;
+    *out = (FT_Vector){ix, iy};
+    return OK;
+}
+static Status bounds(Context *c, const Outline *o, const Map *map, double origin_x, double origin_y,
+                     os64_geometry_bounds_t *out)
+{
+    if (out)
+        *out = (os64_geometry_bounds_t){.empty = true};
+    if (!c || !o || o->owner != c || !out || !map_valid(map) || !finite(origin_x) ||
+        !finite(origin_y))
+        return BAD;
+    Status s = enter(c);
+    if (s)
+        return s;
+    double bx, by;
+    s = placement(o, map, origin_x, origin_y, &bx, &by);
+    if (s)
+        return leave(c, s);
+    os64_geometry_bounds_t result = {.empty = true};
+    for (unsigned i = 0; i < o->ft.n_points; ++i) {
+        if (!spend(c, 1))
+            return leave(c, c->why);
+        FT_Vector point;
+        s = device_point(o, map, bx, by, i, &point);
+        if (s)
+            return leave(c, s);
+        double x = point.x / 64.0, y = point.y / 64.0;
+        if (result.empty) {
+            result = (os64_geometry_bounds_t){false, x, y, x, y};
+        } else {
+            if (x < result.x_min)
+                result.x_min = x;
+            if (y < result.y_min)
+                result.y_min = y;
+            if (x > result.x_max)
+                result.x_max = x;
+            if (y > result.y_max)
+                result.y_max = y;
+        }
+    }
+    *out = result;
+    return leave(c, OK);
+}
 static Status raster(Context *c, const Outline *o, const Map *map, const os64_geometry_target_t *t)
 {
     if (!c || !o || o->owner != c || !map_valid(map) || !t || !t->pixels || !finite(t->origin_x) ||
@@ -562,17 +638,10 @@ static Status raster(Context *c, const Outline *o, const Map *map, const os64_ge
     Status s = enter(c);
     if (s)
         return s;
-    double norm = stretch(map);
-    double bx = map->a * o->frame.x + map->c * o->frame.y + map->tx - t->origin_x;
-    double by = map->b * o->frame.x + map->d * o->frame.y + map->ty - t->origin_y;
-    /* Conservative allowance for double subtraction, multiplication and sums,
-     * including cancellation of a large world origin. Reject rather than
-     * promising subpixel conversion after that precision has been spent. */
-    double magnitude = norm * o->frame.magnitude + absolute(map->tx) + absolute(map->ty) +
-                       absolute(t->origin_x) + absolute(t->origin_y);
-    double error = .5 * norm / o->frame.scale + 1.0 / 128 + 16 * DBL_EPSILON * magnitude;
-    if (!finite(error) || error > o->frame.tolerance || !finite(bx) || !finite(by))
-        return leave(c, LIMIT);
+    double bx, by;
+    s = placement(o, map, t->origin_x, t->origin_y, &bx, &by);
+    if (s)
+        return leave(c, s);
     FT_Outline temp = {0};
     s = new_ft_outline(c, o->ft.n_points, o->ft.n_contours, &temp);
     if (s)
@@ -582,14 +651,9 @@ static Status raster(Context *c, const Outline *o, const Map *map, const os64_ge
             s = c->why;
             goto done;
         }
-        double x = o->ft.points[i].x / o->frame.scale, y = o->ft.points[i].y / o->frame.scale;
-        double dx = (map->a * x + map->c * y + bx) * 64, dy = (map->b * x + map->d * y + by) * 64;
-        if (!finite(dx) || !finite(dy) || absolute(dx) > RASTER_LIMIT ||
-            absolute(dy) > RASTER_LIMIT) {
-            s = LIMIT;
+        s = device_point(o, map, bx, by, i, &temp.points[i]);
+        if (s)
             goto done;
-        }
-        temp.points[i] = (FT_Vector){rounded(dx), rounded(dy)};
         temp.tags[i] = o->ft.tags[i];
     }
     for (unsigned i = 0; i < temp.n_contours; ++i)
@@ -625,7 +689,8 @@ static const os64_geometry_backend_t operations = {OS64_GEOMETRY_BACKEND_REVISIO
                                                    stroke,
                                                    info,
                                                    release,
-                                                   raster};
+                                                   raster,
+                                                   bounds};
 const os64_geometry_backend_t *os64_freetype_geometry_v1(void)
 {
     return &operations;

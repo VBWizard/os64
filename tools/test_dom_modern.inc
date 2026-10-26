@@ -203,6 +203,32 @@ static void dom_modern_cases(void)
         "s.anchorOffset===0&&s.rangeCount===0&&s.isCollapsed&&s.type==='None'&&String(s)==='','no page selection');"
         "bad=false;try{s.getRangeAt(0)}catch(x){bad=x.name==='IndexSizeError'}assert(bad);s.removeAllRanges();",
         "modern-on-selection");
+    /* 0f's P1b: EventTarget, its constructor, and Window. The listener
+     * methods are EventTarget.prototype's alone, which Node's, the plain
+     * targets' and the global's chains reach; a bare call is the window's. */
+    dom_script(&f, MODERN_ASSERT
+        "assert(typeof EventTarget==='function'&&typeof Window==='function','both interfaces');"
+        "var t=new EventTarget(),hits=0;t.addEventListener('ping',function(e){hits++;assert(e.target===t,'the target is the target')});"
+        "assert(t.dispatchEvent(new Event('ping'))===true&&hits===1,'a plain target dispatches');"
+        "class Bus extends EventTarget{fire(){return this.dispatchEvent(new Event('go'))}}"
+        "var bus=new Bus(),got=0;bus.addEventListener('go',function(){got++});bus.fire();"
+        "assert(got===1&&bus instanceof EventTarget&&bus instanceof Bus,'a subclass is a target');"
+        "assert(Object.getPrototypeOf(Node.prototype)===EventTarget.prototype&&Object.getPrototypeOf(Node)===EventTarget,'Node inherits EventTarget');"
+        "assert(!Object.prototype.hasOwnProperty.call(Node.prototype,'addEventListener')&&"
+        "typeof Node.prototype.addEventListener==='function','Node inherits the methods');"
+        "assert(Object.getPrototypeOf(window)===Window.prototype&&Object.getPrototypeOf(Window.prototype)===EventTarget.prototype,'the window chain');"
+        "assert(window instanceof Window&&window instanceof EventTarget&&Object.getPrototypeOf(Window)===EventTarget,'Window inherits EventTarget');"
+        "assert(!Object.prototype.hasOwnProperty.call(window,'addEventListener')&&"
+        "window.addEventListener===EventTarget.prototype.addEventListener,'the window inherits them');"
+        "var w=0;addEventListener('bare',function(){w++});dispatchEvent(new Event('bare'));assert(w===1,'a bare call is the window\\'s');"
+        "var bad=false;try{new Window()}catch(e){bad=e instanceof TypeError}assert(bad,'Window is not constructed');"
+        "assert(Object.getPrototypeOf(AbortSignal)===EventTarget&&Object.getPrototypeOf(AbortSignal.prototype)===EventTarget.prototype&&"
+        "Object.getPrototypeOf(XMLHttpRequestEventTarget)===EventTarget,"
+        "'a plain target\\'s interface inherits EventTarget');"
+        "assert(document.createElement('p') instanceof EventTarget&&new AbortController().signal instanceof EventTarget,'nodes and signals are targets');"
+        "assert(Object.prototype.toString.call(window)==='[object Window]'&&Object.prototype.toString.call(t)==='[object EventTarget]'&&"
+        "Object.getOwnPropertySymbols(window).indexOf(Symbol.toStringTag)<0,'the string tags');",
+        "modern-on-event-target");
     /* DOMParser, HTML only, as ES5 TodoMVC renders its list */
     dom_script(&f, MODERN_ASSERT
         "var p=new DOMParser();assert(p instanceof DOMParser&&Object.prototype.toString.call(p)==='[object DOMParser]');"

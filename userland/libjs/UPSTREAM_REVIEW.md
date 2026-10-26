@@ -64,6 +64,14 @@ that module after the failure freed it (a use-after-free; both are
 runtime-suite cases).
 CONTRACT.md § Modules is the wrapper built on it.
 
+Patch 0013 gives back, in `JS_SetPrototypeInternal`, the reference it
+takes on the new prototype before making the object's shape its own:
+when `js_shape_prepare_update` is refused for memory, upstream returned
+-1 still holding it, so the prototype was never freed and the runtime's
+teardown found it on its object list. libdom's installer allocation
+sweep reached it the first time libdom reparented a prototype it had
+made (0f's P1b, EventTarget.prototype beneath Node.prototype).
+
 Selected upstream test sources are retained separately in
 `tools/js_acceptance/upstream`, with archive/file hashes and the original
 licence. Their assertions remain unchanged; separate drivers report individual
