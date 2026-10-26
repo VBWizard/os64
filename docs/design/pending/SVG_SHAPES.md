@@ -107,8 +107,13 @@ back to narrow blue. The [gallery](../../svg-evidence/yonder-shapes-gallery-qemu
 [expanded state](../../svg-evidence/yonder-shapes-expanded-qemu.png) and
 [returned state](../../svg-evidence/yonder-shapes-returned-qemu.png) are guest
 screenshots. The guest shuts down cleanly and both private filesystems pass
-`e2fsck -fn`. No P5 verification is
-claimed for this increment; the gallery is ready for that checkpoint.
+`e2fsck -fn`.
+
+Chris verified the `0a5f559f` delivery on the P5: the gallery holds up at
+400% page zoom, and he reported the checkpoint passed. Two green shapes
+appeared blue through TigerVNC while appearing green on the P5's own screen.
+That observation records a difference between the local and remote views;
+its cause has not been diagnosed. No SVG color adjustment was made.
 
 ## Reproduction and next boundary
 
