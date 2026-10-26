@@ -97,6 +97,15 @@ saturating owner-thread session count exposed by
 `yonder_scripts_teardown_leaks()`. Ordinary fixtures require zero; the deliberate
 leak case expects one and proves that a subsequent page still executes.
 
+Module handles (CONTRACT.md § Modules) join it too: destroy lets go of
+every handle still held, its module and its evaluation's promise, before
+the context, so a page torn down mid-graph (modules compiled and never
+run, unresolved in the engine's list, or an evaluation still awaiting) is
+an ordinary destroy; the engine frees its own list of modules with the
+context. The module sweep in `tools/test_js_runtime_host.c` fails every
+allocation of a graph's run in turn under RECLAIM and checks the destroy
+leaves nothing live.
+
 D7's registries join that order (DOM.md § D7c, as built): `os64_dom_drain`
 frees the C-held listener callbacks, timer callbacks and arguments and event
 values before destroy, and `os64_dom_free` frees their native records

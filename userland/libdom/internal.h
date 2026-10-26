@@ -67,15 +67,15 @@ enum {
 /* A wrapper, or another engine value the binding holds strongly. A node's
  * wrapper also carries the node's listener list, in the order listeners and
  * handler slots were first added, and the element's views (its style, its
- * classList, its dataset, its attributes), each made once. A view's own
- * entry holds the element it stands for as `target`; so does an Attr's
- * while it is attached (attr.c). */
+ * classList, a link's relList, its dataset, its attributes), each made
+ * once. A view's own entry holds the element it stands for as `target`; so
+ * does an Attr's while it is attached (attr.c). */
 struct DValue {
     JSValue value;
     DValue *next, *hash_next;
     const os64_html_node_t *node, *target;
     os64_dom_t *dom;
-    DValue *style, *class_list, *dataset, *attributes;
+    DValue *style, *class_list, *rel_list, *dataset, *attributes;
     /* An Attr's own entry: its record (attr.c). */
     struct DAttr *attr;
     DQuery *child_nodes, *children, *images, *forms, *elements;
@@ -89,6 +89,8 @@ struct DValue {
      * kind of document it is. */
     DValue *implementation;
     uint8_t document_type;
+    /* A DOMTokenList's own entry: over `rel` (a relList), not `class`. */
+    bool rel_tokens;
     /* A plain target's entry IN THE OBJECT (d_event_target_init): this
      * record is the first member of the object's own state, outside the
      * registry; `value` is the object itself, not a reference; its

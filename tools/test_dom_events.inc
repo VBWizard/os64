@@ -480,10 +480,15 @@ static void dom_script_flag_cases(void)
         "host.appendChild(made);document.body.appendChild(document.getElementById('inline'));"
         "globalThis.copy=made.cloneNode(true);host.appendChild(copy);",
         "script-flags.js");
-    check(connected_count == 2 && os64_html_attr(connected_scripts[0], "id") == NULL &&
-          connected_scripts[1] == native_id((os64_html_node_t *)root, "made"),
-          "connected scripts are reported once each: innerHTML, module and started scripts are not");
-    check(os64_dom_script_start(f.binding, connected_scripts[1]) == 0, "a reported script was marked started");
+    /* The fragment's module and its plain script, in tree order, then
+     * `made`: a module is reported too, for the host to run or record
+     * (MODERN_WEB.md § Slice 3). */
+    check(connected_count == 3 && os64_dom_script_kind(connected_scripts[0]) == OS64_DOM_SCRIPT_MODULE &&
+          os64_html_attr(connected_scripts[1], "id") == NULL &&
+          os64_dom_script_kind(connected_scripts[1]) == OS64_DOM_SCRIPT_CLASSIC &&
+          connected_scripts[2] == native_id((os64_html_node_t *)root, "made"),
+          "connected scripts are reported once each, a module among them: innerHTML and started scripts are not");
+    check(os64_dom_script_start(f.binding, connected_scripts[2]) == 0, "a reported script was marked started");
     /* The classic methods connect scripts as appendChild does, but
      * insertAdjacentHTML's are born started; and the dynamic loader's
      * idiom (src set by property, then appended) connects a src script. */
@@ -492,9 +497,17 @@ static void dom_script_flag_cases(void)
         "const loader=document.createElement('script');loader.id='loader';loader.src='/cdn/orchestrate.js';"
         "document.head.append(loader);const after=document.createElement('script');after.id='after';host.after(after);",
         "script-mixins.js");
-    check(connected_count == 4 && connected_scripts[2] == native_id((os64_html_node_t *)root, "loader") &&
-          os64_html_attr(connected_scripts[2], "src") != NULL &&
-          connected_scripts[3] == native_id((os64_html_node_t *)root, "after"),
+    /* type, defer and noModule reflect their attributes: a loader's
+     * `type = 'module'` makes a module script. */
+    dom_script(&f, DOM_ASSERT
+        "const r=document.createElement('script');assert(r.type===''&&!r.defer&&!r.noModule,'unset');"
+        "r.type='module';r.defer=true;r.noModule=true;"
+        "assert(r.getAttribute('type')==='module'&&r.hasAttribute('defer')&&r.hasAttribute('nomodule'),'set');"
+        "r.defer=false;r.noModule=false;assert(!r.hasAttribute('defer')&&!r.hasAttribute('nomodule'),'cleared');",
+        "script-reflect.js");
+    check(connected_count == 5 && connected_scripts[3] == native_id((os64_html_node_t *)root, "loader") &&
+          os64_html_attr(connected_scripts[3], "src") != NULL &&
+          connected_scripts[4] == native_id((os64_html_node_t *)root, "after"),
           "append and after connect scripts, a src set by property makes a src script, insertAdjacentHTML's never run");
     fixture_free(&f);
 }

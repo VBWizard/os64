@@ -1,0 +1,214 @@
+# WPT's html/semantics/scripting-1/the-script-element/module in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/semantics/scripting-1/the-script-element/module --update
+# rewrites [passing].
+[required]
+# Slice 3: ES modules (modules.c over libjs's module entry). Each fails
+# with the switch off; the two passes not listed here pass either way,
+# each a test that an import fails. What still fails: a script
+# element's load and error events, async=false ordering, import maps,
+# modulepreload, import.meta.resolve, JSON and CSS modules, workers
+# and frames (DEBTS.md § ES modules), and pages that need a .py handler
+# or a server's delay, which this runner has not.
+charset-02.html	UTF-16 module script with UTF-16BE BOM
+charset-02.html	UTF-16 module script with UTF-16LE BOM
+currentScript-null.html	currentScript on script type=module should be all null
+duplicated-imports-1.html	Duplicated imports with the same specifier
+duplicated-imports-2.html	Duplicated imports with the different specifier
+dynamic-import/code-cache-base-url.html	alpha - eval
+dynamic-import/code-cache-base-url.html	beta - eval
+dynamic-import/code-cache-base-url.html	gamma - eval
+dynamic-import/dynamic-imports-script-error.html	import() must reject when there is a bad module specifier
+dynamic-import/dynamic-imports-script-error.html	import() must reject when there is a bad module specifier in a dependency
+dynamic-import/dynamic-imports-script-error.html	import() must reject when there is a evaluation error
+dynamic-import/dynamic-imports-script-error.html	import() must reject when there is a instantiation error
+dynamic-import/dynamic-imports-script-error.html	import() must reject when there is a parse error
+dynamic-import/dynamic-imports-script-error.html	import() must reject with different error objects for each import when there is a bad module specifier
+dynamic-import/dynamic-imports-script-error.html	import() must reject with different error objects for each import when there is a instantiation error
+dynamic-import/dynamic-imports-script-error.html	import() must reject with the same error object for each import when there is a evaluation error
+dynamic-import/dynamic-imports-script-error.html	import()ing a module with an evaluation error must stop evaluation
+dynamic-import/dynamic-imports.html	Dynamic imports should resolve module.
+dynamic-import/microtasks/basic.any.html	import() should not drain the microtask queue if it fails during specifier resolution
+dynamic-import/microtasks/basic.any.html	import() should not drain the microtask queue when loading an already loaded module
+dynamic-import/propagate-nonce-external-classic.html	Dynamically imported module should eval when imported from script w/ a valid nonce.
+dynamic-import/propagate-nonce-external-module.html	Dynamically imported module should eval when imported from script w/ a valid nonce.
+dynamic-import/propagate-nonce-inline-classic.html	Dynamically imported module should eval when imported from script w/ a valid nonce.
+dynamic-import/propagate-nonce-inline-module.html	Dynamically imported module should eval when imported from script w/ a valid nonce.
+dynamic-import/string-compilation-base-url-external-classic.html	eval should successfully import
+dynamic-import/string-compilation-base-url-external-classic.html	inline-event-handlers-UA-code should successfully import
+dynamic-import/string-compilation-base-url-external-classic.html	reflected-inline-event-handlers should successfully import
+dynamic-import/string-compilation-base-url-external-module.html	eval should successfully import
+dynamic-import/string-compilation-base-url-external-module.html	inline-event-handlers-UA-code should successfully import
+dynamic-import/string-compilation-base-url-external-module.html	reflected-inline-event-handlers should successfully import
+dynamic-import/string-compilation-base-url-inline-classic.html	inline event handlers triggered via UA code should successfully import
+dynamic-import/string-compilation-base-url-inline-classic.html	reflected inline event handlers should successfully import
+dynamic-import/string-compilation-base-url-inline-module.html	inline event handlers triggered via UA code should successfully import
+dynamic-import/string-compilation-base-url-inline-module.html	reflected inline event handlers should successfully import
+dynamic-import/string-compilation-classic.html	inline event handlers triggered via UA code should successfully import
+dynamic-import/string-compilation-classic.html	reflected inline event handlers should successfully import
+dynamic-import/string-compilation-classic.html	setTimeout should successfully import
+dynamic-import/string-compilation-classic.html	the Function constructor should successfully import
+dynamic-import/string-compilation-module.html	inline event handlers triggered via UA code should successfully import
+dynamic-import/string-compilation-module.html	reflected inline event handlers should successfully import
+dynamic-import/string-compilation-module.html	setTimeout should successfully import
+dynamic-import/string-compilation-module.html	the Function constructor should successfully import
+dynamic-import/string-compilation-nonce-classic.html	direct eval must inherit the nonce from the triggering script, thus execute
+dynamic-import/string-compilation-nonce-classic.html	setTimeout must inherit the nonce from the triggering script, thus execute
+dynamic-import/string-compilation-nonce-classic.html	the Function constructor must inherit the nonce from the triggering script, thus execute
+dynamic-import/string-compilation-nonce-module.html	direct eval must inherit the nonce from the triggering script, thus execute
+dynamic-import/string-compilation-nonce-module.html	setTimeout must inherit the nonce from the triggering script, thus execute
+dynamic-import/string-compilation-nonce-module.html	the Function constructor must inherit the nonce from the triggering script, thus execute
+error-and-slow-dependency.html	module graph with a syntax error should not evaulate but should not crash UA.
+execorder.html	Interlaced module/non-module script execution (parsed, async-ordered)
+execorder.html	Unordered module script execution (dynamic, unordered #1)
+execorder.html	Unordered module script execution (dynamic, unordered #2)
+execorder.html	Unordered module script execution (parsed, unordered #1)
+execorder.html	Unordered module script execution (parsed, unordered #2)
+import-meta/import-meta-url.html	import.meta.url in a dependent external script
+import-meta/import-meta-url.html	import.meta.url in a root external script
+import-meta/import-meta-url.html	import.meta.url in a root inline script
+import-subgraph-404.html	Import a module graph w/ sub-graph 404.
+imports.html	Import a module that validly imports itself
+imports.html	Import a module with a valid cyclical module dependency
+imports.html	Import a simple module
+imports.html	Import a simple module, renamed
+imports.html	Import the same module multiple times
+inline-async-inserted-execorder.html	Inline async="" module scripts execute or throw parse errors asynchronously
+inline-async-onload.html	Inline async module script vs. onload
+inline-defer-onload.html	Inline defer module script vs. onload
+inline-no-async-onload.html	Inline module script vs. onload
+integrity.html	The integrity attribute must have no affect on inline module scripts
+late-namespace-request.html	Test the situation where a module is instantiated without the need for a namespace object, but later on a different module requests the namespace.
+late-star-export-request.html	Test the situation where a module is instantiated without a use of its star-exports, but later on a different module requests them.
+module-vs-script-1.html	Test that evaluating something as classic script does not prevent it from being evaluated as module script.
+module-vs-script-2.html	Test that evaluating something as classic script does not prevent it from being evaluated as module script.
+nomodule-attribute.html	Test that 'nomodule' has the desired effect on classic scripts, but no effect on module scripts.
+script-for-event.html	Module scripts with for and event attributes
+script-for-event.html	Script 0
+script-for-event.html	Script 1
+script-for-event.html	Script 10
+script-for-event.html	Script 11
+script-for-event.html	Script 12
+script-for-event.html	Script 13
+script-for-event.html	Script 14
+script-for-event.html	Script 15
+script-for-event.html	Script 16
+script-for-event.html	Script 2
+script-for-event.html	Script 3
+script-for-event.html	Script 4
+script-for-event.html	Script 5
+script-for-event.html	Script 6
+script-for-event.html	Script 7
+script-for-event.html	Script 8
+script-for-event.html	Script 9
+single-evaluation-1.html	Test that a module is evaluated only once, and that 'this' is undefined (because of strict mode).
+single-evaluation-2.html	Test that a module is evaluated only once, and that 'this' is undefined (because of strict mode).
+specifier-error.html	Test that invalid module specifier leads to TypeError on window.
+top-level-await/sibling-imports-not-blocked.any.html	Async modules only scheduling microtasks don't block execution of sibling modules
+top-level-await/sibling-imports-not-blocked.any.html	Async modules scheduling tasks don't block execution of sibling modules
+type.html	type="MODULE"
+type.html	type="Module"
+type.html	type="module"
+[excluded]
+[passing]
+charset-02.html	UTF-16 module script with UTF-16BE BOM
+charset-02.html	UTF-16 module script with UTF-16LE BOM
+currentScript-null.html	currentScript on script type=module should be all null
+duplicated-imports-1.html	Duplicated imports with the same specifier
+duplicated-imports-2.html	Duplicated imports with the different specifier
+dynamic-import/code-cache-base-url.html	alpha - eval
+dynamic-import/code-cache-base-url.html	beta - eval
+dynamic-import/code-cache-base-url.html	gamma - eval
+dynamic-import/dynamic-imports-script-error.html	import() must reject when there is a bad module specifier
+dynamic-import/dynamic-imports-script-error.html	import() must reject when there is a bad module specifier in a dependency
+dynamic-import/dynamic-imports-script-error.html	import() must reject when there is a evaluation error
+dynamic-import/dynamic-imports-script-error.html	import() must reject when there is a instantiation error
+dynamic-import/dynamic-imports-script-error.html	import() must reject when there is a parse error
+dynamic-import/dynamic-imports-script-error.html	import() must reject with different error objects for each import when there is a bad module specifier
+dynamic-import/dynamic-imports-script-error.html	import() must reject with different error objects for each import when there is a instantiation error
+dynamic-import/dynamic-imports-script-error.html	import() must reject with the same error object for each import when there is a evaluation error
+dynamic-import/dynamic-imports-script-error.html	import()ing a module with an evaluation error must stop evaluation
+dynamic-import/dynamic-imports.html	Dynamic imports should resolve module.
+dynamic-import/microtasks/basic.any.html	import() should not drain the microtask queue if it fails during specifier resolution
+dynamic-import/microtasks/basic.any.html	import() should not drain the microtask queue when loading an already loaded module
+dynamic-import/propagate-nonce-external-classic.html	Dynamically imported module should eval when imported from script w/ a valid nonce.
+dynamic-import/propagate-nonce-external-module.html	Dynamically imported module should eval when imported from script w/ a valid nonce.
+dynamic-import/propagate-nonce-inline-classic.html	Dynamically imported module should eval when imported from script w/ a valid nonce.
+dynamic-import/propagate-nonce-inline-module.html	Dynamically imported module should eval when imported from script w/ a valid nonce.
+dynamic-import/string-compilation-base-url-external-classic.html	eval should successfully import
+dynamic-import/string-compilation-base-url-external-classic.html	inline-event-handlers-UA-code should successfully import
+dynamic-import/string-compilation-base-url-external-classic.html	reflected-inline-event-handlers should successfully import
+dynamic-import/string-compilation-base-url-external-module.html	eval should successfully import
+dynamic-import/string-compilation-base-url-external-module.html	inline-event-handlers-UA-code should successfully import
+dynamic-import/string-compilation-base-url-external-module.html	reflected-inline-event-handlers should successfully import
+dynamic-import/string-compilation-base-url-inline-classic.html	inline event handlers triggered via UA code should successfully import
+dynamic-import/string-compilation-base-url-inline-classic.html	reflected inline event handlers should successfully import
+dynamic-import/string-compilation-base-url-inline-module.html	inline event handlers triggered via UA code should successfully import
+dynamic-import/string-compilation-base-url-inline-module.html	reflected inline event handlers should successfully import
+dynamic-import/string-compilation-classic.html	inline event handlers triggered via UA code should successfully import
+dynamic-import/string-compilation-classic.html	reflected inline event handlers should successfully import
+dynamic-import/string-compilation-classic.html	setTimeout should successfully import
+dynamic-import/string-compilation-classic.html	the Function constructor should successfully import
+dynamic-import/string-compilation-module.html	inline event handlers triggered via UA code should successfully import
+dynamic-import/string-compilation-module.html	reflected inline event handlers should successfully import
+dynamic-import/string-compilation-module.html	setTimeout should successfully import
+dynamic-import/string-compilation-module.html	the Function constructor should successfully import
+dynamic-import/string-compilation-nonce-classic.html	direct eval must inherit the nonce from the triggering script, thus execute
+dynamic-import/string-compilation-nonce-classic.html	setTimeout must inherit the nonce from the triggering script, thus execute
+dynamic-import/string-compilation-nonce-classic.html	the Function constructor must inherit the nonce from the triggering script, thus execute
+dynamic-import/string-compilation-nonce-module.html	direct eval must inherit the nonce from the triggering script, thus execute
+dynamic-import/string-compilation-nonce-module.html	setTimeout must inherit the nonce from the triggering script, thus execute
+dynamic-import/string-compilation-nonce-module.html	the Function constructor must inherit the nonce from the triggering script, thus execute
+dynamic-import/string-compilation-of-promise-result.html	Evaled the script via Function, failed import
+dynamic-import/string-compilation-of-promise-result.html	Evaled the script via eval, failed import
+error-and-slow-dependency.html	module graph with a syntax error should not evaulate but should not crash UA.
+execorder.html	Interlaced module/non-module script execution (parsed, async-ordered)
+execorder.html	Unordered module script execution (dynamic, unordered #1)
+execorder.html	Unordered module script execution (dynamic, unordered #2)
+execorder.html	Unordered module script execution (parsed, unordered #1)
+execorder.html	Unordered module script execution (parsed, unordered #2)
+import-meta/import-meta-url.html	import.meta.url in a dependent external script
+import-meta/import-meta-url.html	import.meta.url in a root external script
+import-meta/import-meta-url.html	import.meta.url in a root inline script
+import-subgraph-404.html	Import a module graph w/ sub-graph 404.
+imports.html	Import a module that validly imports itself
+imports.html	Import a module with a valid cyclical module dependency
+imports.html	Import a simple module
+imports.html	Import a simple module, renamed
+imports.html	Import the same module multiple times
+inline-async-inserted-execorder.html	Inline async="" module scripts execute or throw parse errors asynchronously
+inline-async-onload.html	Inline async module script vs. onload
+inline-defer-onload.html	Inline defer module script vs. onload
+inline-no-async-onload.html	Inline module script vs. onload
+integrity.html	The integrity attribute must have no affect on inline module scripts
+late-namespace-request.html	Test the situation where a module is instantiated without the need for a namespace object, but later on a different module requests the namespace.
+late-star-export-request.html	Test the situation where a module is instantiated without a use of its star-exports, but later on a different module requests them.
+module-vs-script-1.html	Test that evaluating something as classic script does not prevent it from being evaluated as module script.
+module-vs-script-2.html	Test that evaluating something as classic script does not prevent it from being evaluated as module script.
+nomodule-attribute.html	Test that 'nomodule' has the desired effect on classic scripts, but no effect on module scripts.
+script-for-event.html	Module scripts with for and event attributes
+script-for-event.html	Script 0
+script-for-event.html	Script 1
+script-for-event.html	Script 10
+script-for-event.html	Script 11
+script-for-event.html	Script 12
+script-for-event.html	Script 13
+script-for-event.html	Script 14
+script-for-event.html	Script 15
+script-for-event.html	Script 16
+script-for-event.html	Script 2
+script-for-event.html	Script 3
+script-for-event.html	Script 4
+script-for-event.html	Script 5
+script-for-event.html	Script 6
+script-for-event.html	Script 7
+script-for-event.html	Script 8
+script-for-event.html	Script 9
+single-evaluation-1.html	Test that a module is evaluated only once, and that 'this' is undefined (because of strict mode).
+single-evaluation-2.html	Test that a module is evaluated only once, and that 'this' is undefined (because of strict mode).
+specifier-error.html	Test that invalid module specifier leads to TypeError on window.
+top-level-await/sibling-imports-not-blocked.any.html	Async modules only scheduling microtasks don't block execution of sibling modules
+top-level-await/sibling-imports-not-blocked.any.html	Async modules scheduling tasks don't block execution of sibling modules
+type.html	type="MODULE"
+type.html	type="Module"
+type.html	type="module"

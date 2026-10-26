@@ -1196,6 +1196,317 @@ static void script_host_cases(void)
     fixture_runtime = NULL;
     task_context = NULL;
 }
+/* ES modules (CONTRACT.md § Modules): a graph compiled unresolved and run
+ * once every module is compiled, the loader for what was not compiled, and
+ * a module's failure as its own outcome, never an unhandled rejection. */
+static const char *const module_store[][2] = {
+    {"https://m.test/a.js", "import {b} from './b.js'; export const a = 'a' + b; globalThis.order += 'a';"},
+    {"https://m.test/b.js", "export const b = 'b'; globalThis.order += 'b';"},
+    {"https://m.test/c1.js", "import {c2} from './c2.js'; export const c1 = 'c1'; globalThis.order += 'c1' + c2;"},
+    {"https://m.test/c2.js", "import {c1} from './c1.js'; export const c2 = 'c2'; globalThis.order += 'c2';"},
+    {"https://m.test/lazy.js", "export default 'lazy';"},
+    {"https://m.test/dyn.js", "export default 'dyn';"},
+    {"https://m.test/bad.js", "export const x = ;"},
+    /* The loader answers for every module it knows, as a host's map does:
+     * a failed run unlists the modules no run resolved (CONTRACT.md). */
+    {"https://m.test/shared.js", "import './b.js'; import {late} from './late.js'; globalThis.shared = late;"},
+    {"https://m.test/first.js", "import './shared.js';"},
+    {"https://m.test/second.js", "import './shared.js';"},
+    /* Cycles whose entry's own import fails: every member points back at it. */
+    {"https://m.test/cyc-e.js", "import './cyc-a.js'; import 'bare';"},
+    {"https://m.test/cyc-a.js", "import './cyc-e.js';"},
+    {"https://m.test/cyc-g.js", "import './cyc-a.js';"},
+    {"https://m.test/dyn-x.js", "import './dyn-y.js'; import 'bare';"},
+    {"https://m.test/dyn-y.js", "import './dyn-x.js';"},
+};
+static unsigned module_loads;
+static char module_requests[256];
+static const char *module_late;     /* late.js's source, once it is there */
+static char *module_resolve(void *opaque, const char *base, const char *specifier)
+{
+    check(opaque == module_store, "the loader hears its own opaque");
+    if (strncmp(specifier, "./", 2) != 0) return NULL;      /* a bare name names nothing here */
+    const char *slash = strrchr(base, '/');
+    size_t keep = slash != NULL ? (size_t)(slash - base + 1) : 0;
+    char *name = os64_malloc(keep + strlen(specifier + 2) + 1);
+    if (name == NULL) return NULL;
+    memcpy(name, base, keep);
+    strcpy(name + keep, specifier + 2);
+    return name;
+}
+static const char *module_text(const char *name)
+{
+    if (!strcmp(name, "https://m.test/late.js")) return module_late;
+    for (size_t i = 0; i < sizeof(module_store) / sizeof(module_store[0]); i++)
+        if (!strcmp(name, module_store[i][0])) return module_store[i][1];
+    return NULL;
+}
+static bool module_source(void *opaque, const char *name, const char **bytes, size_t *length)
+{
+    (void)opaque;
+    module_loads++;
+    *bytes = module_text(name);
+    *length = *bytes != NULL ? strlen(*bytes) : 0;
+    return *bytes != NULL;
+}
+static void module_request(void *opaque, const char *specifier)
+{
+    (void)opaque;
+    size_t at = strlen(module_requests);
+    snprintf(module_requests + at, sizeof(module_requests) - at, "%s%s", at ? "," : "", specifier);
+}
+static os64_js_module_t *module_compile(os64_js_runtime_t *runtime, const char *name, const char *source,
+                                        os64_js_outcome_t *outcome)
+{
+    if (source == NULL) source = module_text(name);
+    os64_js_module_t *module = NULL;
+    os64_js_status_t result = os64_js_module_compile(runtime, OS64_JS_ABI_ID, source, strlen(source), name,
+                                                     NULL, &module, outcome);
+    check(result == outcome->status, "module compile status matches outcome");
+    return module;
+}
+/* One task around a module's run, as a browser's script task is. */
+static os64_js_status_t module_task(os64_js_runtime_t *runtime, os64_js_module_t *module, os64_js_outcome_t *outcome)
+{
+    os64_js_outcome_t closing;
+    if (os64_js_task_begin(runtime, OS64_JS_ABI_ID, "module", outcome) != OS64_JS_OK) return outcome->status;
+    os64_js_status_t result = os64_js_module_run(runtime, OS64_JS_ABI_ID, module, outcome);
+    os64_js_task_end(runtime, OS64_JS_ABI_ID, &closing);
+    return result;
+}
+static void module_cases(void)
+{
+    os64_js_config_t config = fixture_config();
+    os64_js_outcome_t outcome;
+    os64_js_runtime_t *runtime = task_fixture(&config, "globalThis.order = '';");
+    if (!runtime) return;
+    const os64_js_module_loader_t loader = {(void *)module_store, module_resolve, module_source};
+    check(os64_js_set_module_loader(runtime, "other-abi", &loader, &outcome) == OS64_JS_ABI_MISMATCH &&
+          os64_js_set_module_loader(runtime, OS64_JS_ABI_ID, &loader, &outcome) == OS64_JS_OK, "a module loader is set");
+    JSValue raw = JS_Eval(task_context, "1", 1, "raw", JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_NO_RESOLVE);
+    check(JS_IsException(raw), "the engine refuses NO_RESOLVE outside a compiled-only module");
+    JS_FreeValue(task_context, JS_GetException(task_context));
+
+    // A graph: each module compiled as its source arrives, then run.
+    os64_js_module_t *a = module_compile(runtime, "https://m.test/a.js", NULL, &outcome);
+    check(a != NULL && outcome.status == OS64_JS_OK, "an entry compiles unresolved, its import not there yet");
+    module_requests[0] = '\0';
+    check(os64_js_module_requests(runtime, OS64_JS_ABI_ID, a, module_request, NULL, &outcome) == OS64_JS_OK &&
+          !strcmp(module_requests, "./b.js"), "its request is named before it is resolved");
+    os64_js_module_t *b = module_compile(runtime, "https://m.test/b.js", NULL, &outcome);
+    check(os64_js_module_state(runtime, a, NULL) == OS64_JS_MODULE_UNRUN, "a compiled module is unrun");
+    check(os64_js_module_run(runtime, OS64_JS_ABI_ID, a, &outcome) == OS64_JS_BAD_ARGUMENT,
+          "a module runs only inside a task");
+    module_loads = 0;
+    check(module_task(runtime, a, &outcome) == OS64_JS_OK && os64_js_module_state(runtime, a, NULL) == OS64_JS_MODULE_FULFILLED,
+          "the graph runs once every module is compiled");
+    JSValue order = task_global(runtime, "order");
+    check(host_value_is(order, "ba") && module_loads == 0, "its import first, found by name, no load asked");
+    task_free(runtime, order);
+    check(module_task(runtime, a, &outcome) == OS64_JS_BAD_ARGUMENT, "a module is run once");
+
+    // An inline module: a name of its own, the document's URL for import.meta.
+    const char *inline_source = "import {b} from './b.js'; globalThis.meta = import.meta.url; globalThis.inlineB = b;";
+    os64_js_module_t *inline_module = NULL;
+    check(os64_js_module_compile(runtime, OS64_JS_ABI_ID, inline_source, strlen(inline_source),
+                                 "https://m.test/page#inline-1", "https://m.test/page", &inline_module, &outcome) == OS64_JS_OK &&
+          module_task(runtime, inline_module, &outcome) == OS64_JS_OK, "an inline module runs");
+    JSValue meta = task_global(runtime, "meta"), inline_b = task_global(runtime, "inlineB");
+    order = task_global(runtime, "order");
+    check(host_value_is(meta, "https://m.test/page") && host_value_is(inline_b, "b") && host_value_is(order, "ba"),
+          "import.meta.url is the URL it was given, and b is not evaluated again");
+    task_free(runtime, meta); task_free(runtime, inline_b); task_free(runtime, order);
+
+    // A cycle links, each module once, the one first imported finishing first.
+    os64_js_module_t *c1 = module_compile(runtime, "https://m.test/c1.js", NULL, &outcome);
+    os64_js_module_t *c2 = module_compile(runtime, "https://m.test/c2.js", NULL, &outcome);
+    check(module_task(runtime, c1, &outcome) == OS64_JS_OK && os64_js_module_state(runtime, c1, NULL) == OS64_JS_MODULE_FULFILLED,
+          "a cycle links and runs");
+    order = task_global(runtime, "order");
+    check(host_value_is(order, "bac2c1c2"), "its modules once each, the imported one first");
+    task_free(runtime, order);
+
+    // What was not compiled is the loader's, and a dynamic import() too.
+    os64_js_module_t *lazy = module_compile(runtime, "https://m.test/entry.js",
+        "import lazy from './lazy.js'; globalThis.lazy = lazy; import('./dyn.js').then(m => globalThis.dyn = m.default);",
+        &outcome);
+    module_loads = 0;
+    check(module_task(runtime, lazy, &outcome) == OS64_JS_OK && module_loads == 2 &&
+          os64_js_module_state(runtime, lazy, NULL) == OS64_JS_MODULE_FULFILLED,
+          "a module nobody compiled is loaded, and import() is answered inside the task");
+    JSValue lazy_value = task_global(runtime, "lazy"), dyn_value = task_global(runtime, "dyn");
+    check(host_value_is(lazy_value, "lazy") && host_value_is(dyn_value, "dyn"), "both are what the loader answered");
+    task_free(runtime, lazy_value); task_free(runtime, dyn_value);
+
+    // The request list, in source order, export-from included.
+    os64_js_module_t *asks = module_compile(runtime, "https://m.test/asks.js",
+        "import './b.js'; export * from './c2.js'; import {q} from './q.js';", &outcome);
+    module_requests[0] = '\0';
+    check(os64_js_module_requests(runtime, OS64_JS_ABI_ID, asks, module_request, NULL, &outcome) == OS64_JS_OK &&
+          !strcmp(module_requests, "./b.js,./c2.js,./q.js"), "requests in source order, export-from among them");
+
+    // Failures, each the module's own.
+    const os64_js_script_host_t host = {&host_heard, host_exception, host_handled_hook, host_rejected_hook};
+    check(os64_js_set_script_host(runtime, OS64_JS_ABI_ID, &host, &outcome) == OS64_JS_OK, "module script host set");
+    host_heard[0] = '\0';
+    check(module_compile(runtime, "https://m.test/bad.js", NULL, &outcome) == NULL && outcome.status == OS64_JS_EXCEPTION &&
+          strstr(outcome.message, "SyntaxError") != NULL && host_heard[0] == '\0',
+          "a syntax error is the compile's exception alone, never the script host's");
+    check(module_task(runtime, asks, &outcome) == OS64_JS_EXCEPTION && strstr(outcome.message, "q.js") != NULL &&
+          os64_js_module_state(runtime, asks, NULL) == OS64_JS_MODULE_REJECTED, "an import nobody can load fails the run");
+    os64_js_module_t *nope = module_compile(runtime, "https://m.test/nope.js", "import {nope} from './b.js';", &outcome);
+    check(module_task(runtime, nope, &outcome) == OS64_JS_EXCEPTION && strstr(outcome.message, "nope") != NULL,
+          "an export that is not there fails the link");
+    host_heard[0] = '\0';
+    os64_js_module_t *boom = module_compile(runtime, "https://m.test/boom.js", "throw Error('boom');", &outcome);
+    os64_js_outcome_t failure;
+    JSValue promise, reason;
+    check(module_task(runtime, boom, &outcome) == OS64_JS_EXCEPTION && strstr(outcome.message, "boom") != NULL &&
+          os64_js_module_state(runtime, boom, &failure) == OS64_JS_MODULE_REJECTED && strstr(failure.message, "boom") != NULL,
+          "an evaluation that throws is the run's exception and the module's failure");
+    check(!strcmp(host_heard, "exception:Error: boom") &&
+          !os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason, NULL),
+          "reported to the host once as an exception, never as an unhandled rejection");
+
+    // A top-level await: pending across turns, settled when what it awaits is.
+    os64_js_module_t *waits = module_compile(runtime, "https://m.test/waits.js",
+        "await new Promise(r => globalThis.release = r); globalThis.after = 'after';", &outcome);
+    check(module_task(runtime, waits, &outcome) == OS64_JS_OK && os64_js_module_state(runtime, waits, NULL) == OS64_JS_MODULE_PENDING,
+          "an awaiting module is pending after its task, its jobs drained");
+    os64_js_outcome_t closing;
+    check(os64_js_task_begin(runtime, OS64_JS_ABI_ID, "release", &outcome) == OS64_JS_OK &&
+          task_call(runtime, "release", NULL, &outcome) == OS64_JS_OK &&
+          os64_js_task_end(runtime, OS64_JS_ABI_ID, &closing) == OS64_JS_OK &&
+          os64_js_module_state(runtime, waits, NULL) == OS64_JS_MODULE_FULFILLED, "and fulfilled in a later task");
+    os64_js_module_t *later = module_compile(runtime, "https://m.test/later.js",
+        "await new Promise((_, j) => globalThis.failLater = () => j(Error('later')));", &outcome);
+    host_heard[0] = '\0';
+    check(module_task(runtime, later, &outcome) == OS64_JS_OK &&
+          os64_js_task_begin(runtime, OS64_JS_ABI_ID, "fail", &outcome) == OS64_JS_OK &&
+          task_call(runtime, "failLater", NULL, &outcome) == OS64_JS_OK &&
+          os64_js_task_end(runtime, OS64_JS_ABI_ID, &closing) == OS64_JS_OK &&
+          os64_js_module_state(runtime, later, &failure) == OS64_JS_MODULE_REJECTED && strstr(failure.message, "later") != NULL,
+          "a rejection after a turn is the module's failure");
+    check(!strcmp(host_heard, "exception:Error: later") &&
+          !os64_js_take_rejection(runtime, OS64_JS_ABI_ID, &promise, &reason, NULL),
+          "heard as an exception, and not left as an unhandled rejection");
+
+    // A module two graphs share, whose resolve fails partway in the first
+    // (one import found, one not): marked unresolved again, so the second
+    // graph resolves it afresh once the missing one is there, rather than
+    // linking through the import it never found (patch 0012, found by WPT).
+    // The shared module is acyclic; the cycles below are the cases where a
+    // module whose own resolve SUCCEEDED points at the one that failed.
+    module_late = NULL;
+    os64_js_module_t *shared = module_compile(runtime, "https://m.test/shared.js", NULL, &outcome);
+    os64_js_module_t *first = module_compile(runtime, "https://m.test/first.js", NULL, &outcome);
+    os64_js_module_t *second = module_compile(runtime, "https://m.test/second.js", NULL, &outcome);
+    check(module_task(runtime, first, &outcome) == OS64_JS_EXCEPTION && strstr(outcome.message, "late.js") != NULL,
+          "a shared module's missing import fails the first graph's run");
+    module_late = "export const late = 'late';";
+    check(module_task(runtime, second, &outcome) == OS64_JS_OK &&
+          os64_js_module_state(runtime, second, NULL) == OS64_JS_MODULE_FULFILLED,
+          "the second graph resolves the shared module afresh and runs");
+    JSValue late = task_global(runtime, "shared");
+    check(host_value_is(late, "late"), "with the import that arrived");
+    task_free(runtime, late);
+    (void)shared;
+
+    // A cycle whose entry fails after its member resolved back to it: the
+    // member is not left resolved through a module the failure unlisted
+    // (or freed), so a later graph reaching the member resolves it again
+    // and fails cleanly, rather than linking through the dead entry. Each
+    // module's handle held, as a page's map holds them.
+    os64_js_module_t *cyc_e = module_compile(runtime, "https://m.test/cyc-e.js", NULL, &outcome);
+    os64_js_module_t *cyc_a = module_compile(runtime, "https://m.test/cyc-a.js", NULL, &outcome);
+    os64_js_module_t *cyc_g = module_compile(runtime, "https://m.test/cyc-g.js", NULL, &outcome);
+    check(module_task(runtime, cyc_e, &outcome) == OS64_JS_EXCEPTION && strstr(outcome.message, "bare") != NULL,
+          "a cycle's entry fails on its own import");
+    check(module_task(runtime, cyc_g, &outcome) == OS64_JS_EXCEPTION && strstr(outcome.message, "bare") != NULL,
+          "a later graph through the cycle's member fails the same way, linking nothing");
+    (void)cyc_a;
+    // The same cycle reached by import(), where the loader compiles both
+    // and the failure frees the entry outright.
+    os64_js_module_t *dyn = module_compile(runtime, "https://m.test/dyn-entry.js",
+        "import('./dyn-x.js').catch(e => { globalThis.xerr = String(e); return import('./dyn-y.js'); })"
+        ".catch(e => globalThis.yerr = String(e));", &outcome);
+    check(module_task(runtime, dyn, &outcome) == OS64_JS_OK, "an entry importing a failing cycle runs");
+    JSValue xerr = task_global(runtime, "xerr"), yerr = task_global(runtime, "yerr");
+    check(JS_IsString(xerr) && JS_IsString(yerr), "both imports reject, the second through the freed entry's member");
+    task_free(runtime, xerr); task_free(runtime, yerr);
+
+    os64_js_module_release(runtime, b);
+    os64_js_module_release(runtime, NULL);
+    check(os64_js_set_script_host(runtime, OS64_JS_ABI_ID, NULL, &outcome) == OS64_JS_OK, "module script host cleared");
+    (void)c2;
+    os64_js_destroy(runtime);       /* the handles still held go with it */
+    fixture_runtime = NULL;
+    task_context = NULL;
+}
+/* A graph's every module compiled, uncut: a compile under memory pressure
+ * is DEBTS' 0011b row (resolve_labels), which this sweep is not about, so
+ * the dynamic import's target is compiled too and the run's loader never
+ * compiles. */
+static void module_scenario_compile(os64_js_runtime_t *runtime, os64_js_module_t **graph)
+{
+    os64_js_outcome_t outcome;
+    const os64_js_module_loader_t loader = {(void *)module_store, module_resolve, module_source};
+    os64_js_set_module_loader(runtime, OS64_JS_ABI_ID, &loader, &outcome);
+    static const char *const names[] = {"https://m.test/a.js", "https://m.test/b.js", "https://m.test/lazy.js",
+                                        "https://m.test/dyn.js", "https://m.test/entry.js"};
+    const char *entry = "import lazy from './lazy.js'; import('./dyn.js').then(m => globalThis.dyn = m.default);";
+    for (int i = 0; i < 5; i++) {
+        const char *text = i == 4 ? entry : module_text(names[i]);
+        os64_js_module_compile(runtime, OS64_JS_ABI_ID, text, strlen(text), names[i], NULL, &graph[i], &outcome);
+    }
+}
+/* The rest of a graph's life, with whatever the runtime will still do after
+ * a failure: its requests read, its entries run, its state asked, a handle
+ * let go. */
+static void module_scenario_run(os64_js_runtime_t *runtime, os64_js_module_t **graph)
+{
+    os64_js_outcome_t outcome, closing;
+    os64_js_module_requests(runtime, OS64_JS_ABI_ID, graph[0], module_request, NULL, &outcome);
+    if (os64_js_task_begin(runtime, OS64_JS_ABI_ID, "sweep", &outcome) == OS64_JS_OK) {
+        os64_js_module_run(runtime, OS64_JS_ABI_ID, graph[0], &outcome);
+        os64_js_module_run(runtime, OS64_JS_ABI_ID, graph[4], &outcome);
+        os64_js_task_end(runtime, OS64_JS_ABI_ID, &closing);
+    }
+    os64_js_module_state(runtime, graph[4], NULL);
+    os64_js_module_release(runtime, graph[1]);
+}
+/* Every allocation of a graph's run failed in turn, under the reclaim
+ * policy a browser runs with: nothing crashes, and destroy reclaims all. */
+static void module_sweep_cases(void)
+{
+    os64_js_config_t config = fixture_config();
+    os64_js_outcome_t outcome;
+    os64_js_runtime_t *runtime = NULL;
+    os64_js_module_t *graph[5];
+    os64_js_create_with_teardown(&config, OS64_JS_TEARDOWN_RECLAIM, OS64_JS_ABI_ID, &runtime, &outcome);
+    if (!runtime) { check(false, "sweep runtime"); return; }
+    module_scenario_compile(runtime, graph);
+    size_t start = attempts;
+    module_scenario_run(runtime, graph);
+    size_t inventory = attempts - start;
+    os64_js_destroy(runtime);
+    check(live == 0 && inventory > 0, "the module scenario's allocations are counted");
+    size_t failed = 0;
+    for (size_t cut = 1; cut <= inventory; cut++) {
+        runtime = NULL;
+        os64_js_create_with_teardown(&config, OS64_JS_TEARDOWN_RECLAIM, OS64_JS_ABI_ID, &runtime, &outcome);
+        if (!runtime) { check(false, "sweep runtime"); return; }
+        module_scenario_compile(runtime, graph);
+        fail_at = attempts + cut;
+        module_scenario_run(runtime, graph);
+        fail_at = 0;
+        os64_js_teardown_report_t report;
+        os64_js_destroy_report(runtime, &report);
+        failed += live != 0;
+    }
+    check(failed == 0, "every failed allocation of a module graph is reclaimed");
+    printf("libjs modules: %zu allocations swept\n", inventory);
+}
 int main(int argc, char **argv)
 {
     if ((argc == 2 && !strcmp(argv[1], "--compile-failure")) ||
@@ -1248,6 +1559,8 @@ int main(int argc, char **argv)
     file_cases(); file_boundary_cases(); output_cases(); console_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
     task_cases();
     script_host_cases();
+    module_cases();
+    module_sweep_cases();
     check(live == 0, "runtime suite releases every fixture allocation");
     printf("libjs runtime: %u checks, %u failures, %zu live allocations, %u native calls\n",
            checks, failures, live, native_calls);

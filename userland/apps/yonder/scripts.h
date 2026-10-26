@@ -4,9 +4,11 @@
 // A page's SCRIPT HOST (DOM_D7.md § The script host of a page): its runtime
 // and binding, made at the first script that runs, and the lists HTML's
 // script order needs: the parser-blocking script the parse is stopped at,
-// the `defer` scripts in document order, and the scripts READY to run —
-// an `async` one whose source has landed, one a script connected. Every
-// list holds NODES, each with a hold; the engine values are libdom's.
+// the `defer` scripts in document order (a parser-inserted module among
+// them), and the scripts READY to run — an `async` one whose source has
+// landed, one a script connected, a module whose whole graph is compiled
+// (the page's module map, modules.h). Every list holds NODES, each with a
+// hold; the engine values are libdom's.
 //
 // One task per call: a script, a timer or one event. The host reports each
 // task's outcome; a sticky one (a script that ran out its time, or memory)
@@ -50,8 +52,9 @@ typedef struct {
     os64_dom_computed_provider_t computed;
     os64_dom_history_t history;
     // The page's record (diag.h), borrowed for the host's life: a global
-    // the page reached for and did not find, and a module script, are
-    // written there as they happen. NULL keeps no record.
+    // the page reached for and did not find, a module that failed (or, with
+    // `modern` off, a module script at all) and an import map are written
+    // there as they happen. NULL keeps no record.
     yonder_diag_t *diag;
     // The page arrived encrypted (way_head_t.encrypted): what its scripts
     // may do with Secure cookies.
@@ -111,8 +114,9 @@ size_t yonder_scripts_teardown_leaks(void);
 void yonder_scripts_free(yonder_scripts_t *scripts);
 
 // The parser stopped at `script`. What the stream does next: RESUME at
-// once (a script that does not run, or a `defer`/`async` one whose fetch
-// has been started), or BLOCK: the parse waits for this script, which runs
+// once (a script that does not run, a `defer`/`async` one whose fetch has
+// been started, or a module, whose graph is begun), or BLOCK: the parse
+// waits for this script, which runs
 // once yonder_scripts_blocking_ready says its source is in hand (an inline
 // script's is already; a `src` script's comes with its fetch).
 typedef enum { YONDER_STOP_RESUME, YONDER_STOP_BLOCK } yonder_stop_t;
@@ -142,8 +146,22 @@ bool yonder_scripts_pending(const yonder_scripts_t *scripts);
 bool yonder_scripts_step_connected(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
 bool yonder_scripts_connected_pending(const yonder_scripts_t *scripts);
 // A connected script, as libdom reports one (and the finished-document
-// fixtures queue them): inline is ready at once, `src` is fetched.
+// fixtures queue them): a classic inline one is ready at once, a `src` one
+// is fetched, and a module is prepared as a parser's would be, but runs
+// when its graph is ready (never inside the verb).
 void yonder_scripts_connected(yonder_scripts_t *scripts, const os64_html_node_t *script);
+// Whether `script` is a `<script type=importmap>`, which the page's record
+// names as asked for and not got: an import map would let its modules
+// import bare names, and yonder reads none.
+bool yonder_scripts_importmap(const os64_html_node_t *script);
+// The page's `<link rel=modulepreload>` elements (HTML § Link type
+// "modulepreload"): each one's module, with its imports, begun in the page's
+// module map, where a module script or an import finds it fetched once; it
+// runs nothing. It walks the whole tree, so it may be asked again as the
+// parse goes on: a link it saw already names a module the map holds, and
+// begins nothing again. With the Modern Web surface only, which runs
+// modules.
+void yonder_scripts_preload(yonder_scripts_t *scripts);
 // A `javascript:` link followed (HTML § 7.4.2.3.3): the address after its
 // scheme, percent-decoded, then `#` and the fragment when it has one, which
 // arrives decoded (libpage's os64_page_request_t), all read as UTF-8, is
@@ -190,7 +208,9 @@ bool yonder_scripts_message_fire(yonder_scripts_t *scripts, os64_js_outcome_t *o
 uint64_t yonder_scripts_idle_next(const yonder_scripts_t *scripts);
 bool yonder_scripts_idle_run(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
 // The answer to the page's request `token` (os64_dom_fetched), as one
-// task. False when nothing ran: the runtime is gone, or never was.
+// task. False when nothing ran: the runtime is gone, or never was, or the
+// answer was a module's (YONDER_MODULE_TOKEN), which the page's module map
+// compiles without a task.
 bool yonder_scripts_answered(yonder_scripts_t *scripts, uint32_t token, const os64_dom_response_t *response,
                              os64_js_outcome_t *outcome);
 // The navigation the last task asked for; nodes arrive held.

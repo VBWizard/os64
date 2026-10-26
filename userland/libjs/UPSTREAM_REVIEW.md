@@ -42,6 +42,28 @@ the function's own up as a global), and `get_lvalue` reading a failed bytecode b
 SyntaxError. Upstream still lacks checks on the parser's other allocation
 failures (DEBTS.md lists them).
 
+Patch 0012 lets a module compile without resolving its imports
+(`JS_EVAL_FLAG_NO_RESOLVE`, with `JS_EVAL_FLAG_COMPILE_ONLY` only) and
+names what it imports (`JS_GetModuleRequestCount`, `JS_GetModuleRequest`),
+because upstream resolves through a loader that must answer at once, as it
+compiles, and a browser has not fetched the imports yet; upstream's own
+comment at the spot reads "Could add a flag to avoid resolution if
+necessary". It also makes handled, telling the tracker, the promise of a
+module body that `js_execute_sync_module` takes as the module's error:
+upstream left it rejected with no handler, so a host heard one module
+error twice. And `js_resolve_module`, which marks a module resolved before
+it resolves its imports, leaves none of them marked when one fails: the
+outermost attempt (a loader's compile nests one inside it) stamps each
+module it marks and unmarks every stamped one on failure. Upstream
+discards a failed module whole, but a browser's module map keeps its
+modules across a failed run, and a later graph sharing one linked it
+through the NULL of the import never found (a SEGV in
+`js_create_module_function`, which WPT's module directory reached), or,
+in a cycle whose members resolved back to the failing module, through
+that module after the failure freed it (a use-after-free; both are
+runtime-suite cases).
+CONTRACT.md § Modules is the wrapper built on it.
+
 Selected upstream test sources are retained separately in
 `tools/js_acceptance/upstream`, with archive/file hashes and the original
 licence. Their assertions remain unchanged; separate drivers report individual

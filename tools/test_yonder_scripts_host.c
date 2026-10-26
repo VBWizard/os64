@@ -2995,13 +2995,14 @@ static void loop_order(void) {
     check(loop_settle() && !g.stream.active && g.page.tree!=NULL,"loop: the page arrives after its deferred script");
     /* The async script landed while the parse had its next script in hand,
      * so it runs when the parse next waits: after the parse, before the
-     * deferred script. */
-    check(probe_text_is("out","head inline|blocking|body inline|connected|body inline 2|async|deferred|"
+     * deferred script. The inline module is deferred too (HTML defers a
+     * parser-inserted module), after the defer script before it. */
+    check(probe_text_is("out","head inline|blocking|body inline|connected|body inline 2|async|deferred|module|"
         "DOMContentLoaded|load listener|body onload"),
         "loop: scripts, DOMContentLoaded and load run in the standard's order");
     now_ms=200;
     check(script_turn() && probe_text_is("out","head inline|blocking|body inline|connected|"
-        "body inline 2|async|deferred|DOMContentLoaded|load listener|body onload|timer"),
+        "body inline 2|async|deferred|module|DOMContentLoaded|load listener|body onload|timer"),
         "loop: a timer a head script set fires on the shown page, and the page redraws");
     loop_drop();
 }
@@ -6396,18 +6397,20 @@ static void diag_page_cases(void) {
     check(has(text,"\nverdict: 1 MISSING, 2 FAILED\n") && has(text,"FAILED script http://fixture.test/final#timer-1: TypeError"),
         "diag: the timer's death is in the departure write");
 
-    /* A module script and a canvas, each by its kind; a skipped property. */
+    /* An import map and a canvas, each by its kind; a skipped property. A
+     * module script runs now (modules.c), and is not missing. */
     loop_page("<style>p{contain:paint;background-image:conic-gradient(red,blue);background-clip:text}"
         "h1{display:inline frob}</style><p id=out>x</p><canvas></canvas><canvas></canvas>"
-        "<my-widget></my-widget><script type=module>1</script>");
+        "<my-widget></my-widget><script type=importmap>{}</script><script type=module>1</script>");
     check(loop_settle() && g.page.tree!=NULL,"diag: a page with a module, canvases and a custom element arrives");
     yonder_diag_file_name(g.page.diag,name,sizeof(name)); text=diag_file("/tmp/diag",name);
-    check(has(text,"MISSING script module (1)\n") && has(text,"MISSING element canvas (2)\n") &&
+    check(has(text,"MISSING script importmap (1)\n") && !has(text,"MISSING script module") &&
+        has(text,"MISSING element canvas (2)\n") &&
         has(text,"MISSING element my-widget (1)\n") && has(text,"MISSING css-property contain (1)\n") &&
         has(text,"MISSING css-value background-image: conic-gradient (1)\n") &&
         has(text,"MISSING css-value display: inline frob (1)\n") && !has(text,"background-clip"),
-        "diag: a module script, an element drawn as nothing, a property the cascade skipped and a value it "
-        "dropped or approximated are each recorded; a clip to the text, drawn, is not");
+        "diag: an import map, an element drawn as nothing, a property the cascade skipped and a value it "
+        "dropped or approximated are each recorded; a module, run, and a clip to the text, drawn, are not");
     loop_drop();
     text=diag_file("/tmp/diag",name);
     check(has(text,"MISSING element canvas (2)\n"),"diag: looking again at departure does not count twice");
@@ -9730,6 +9733,7 @@ static void covered_link_cases(void) {
 }
 
 #include "test_yonder_requests.inc"
+#include "test_yonder_modules.inc"
 #include "test_yonder_window.inc"
 #include "test_yonder_document.inc"
 
@@ -9811,6 +9815,7 @@ int main(void)
     if(getenv("YONDER_NO_STREAM")==NULL) diag_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) storage_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) request_cases();
+    if(getenv("YONDER_NO_STREAM")==NULL) module_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) window_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) document_cases();
     webfont_cases();

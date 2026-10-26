@@ -1,4 +1,5 @@
 #include "scripts.h"
+#include "modules.h"
 #include "os64/js_engine.h"
 #include "os64/date.h"
 #include "os64/fmt.h"
@@ -42,6 +43,12 @@ typedef struct {
     // response's, after its redirects (yonder_scripts_fetched): where the
     // script came from is what HTML mutes it by and names it by.
     char *address;
+    // A module script (modules.h): its graph's entry in the page's map,
+    // FETCHING until the whole graph is compiled. A module is never
+    // MODE_BLOCKING nor MODE_INLINE: HTML defers a parser-inserted one and
+    // runs every other when its graph is ready.
+    bool module;
+    int32_t entry;
 } Item;
 
 struct yonder_scripts {
@@ -106,6 +113,9 @@ struct yonder_scripts {
     // made with it. And the options' referrer, the host's own copy.
     os64_dom_readiness_t readiness;
     char *referrer;
+    // The page's module map, made with its runtime when the Modern Web
+    // surface is on: one per document, which is one per realm (IFRAME.md).
+    yonder_modules_t *modules;
 };
 
 static void release_item(yonder_scripts_t *s, Item *it)
@@ -133,6 +143,8 @@ static void retire(yonder_scripts_t *s)
             release_item(s, &s->items[i]);
     if (s->dom != NULL)
         s->last_geometry_stats = os64_dom_geometry_stats(s->dom, false);
+    // The modules' fetches and handles go before the engine they belong to.
+    yonder_modules_drop(s->modules);
     os64_dom_drain(s->dom);
     os64_js_teardown_report_t report;
     os64_js_destroy_report(s->runtime, &report);
@@ -359,6 +371,8 @@ static void net_release(void *opaque, os64_dom_response_t *response)
         s->options.release(s->options.opaque, response);
 }
 
+static yonder_modules_t *module_map_new(yonder_scripts_t *s);
+
 // The runtime and its binding, made at the first script that runs. Heap
 // and source keep the profile measured for libdom (DOM.md § D5b); the stack
 // is the 128 KiB DOM_D10.md measured, because geometry shares it with native
@@ -435,6 +449,11 @@ static bool ensure_runtime(yonder_scripts_t *s, os64_js_outcome_t *out)
         out->status = OS64_JS_HOST_FAILURE;
         return false;
     }
+    // The module map comes with the runtime, so a classic script's
+    // dynamic import() has its loader; a map that cannot be made leaves
+    // the page's modules failing, not its classic scripts.
+    if (s->options.modern)
+        s->modules = module_map_new(s);
     return true;
 }
 
@@ -499,6 +518,7 @@ void yonder_scripts_free(yonder_scripts_t *s)
     }
     os64_free(s->items);
     os64_free(s->ready);
+    yonder_modules_free(s->modules);
     os64_free(s->entry_state);
     os64_free(s->referrer);
     os64_free(s);
@@ -631,9 +651,256 @@ static bool src_fetch(yonder_scripts_t *s, Item *it)
     return true;
 }
 
+// A module's request as HTML's "fetch a single module script" makes it: a
+// CORS GET with same-origin credentials, its Referer the page's, through
+// the page's own request path (slice 2's fetch job), so the page's origin
+// rules decide it as they decide a fetch().
+static void module_request(yonder_scripts_t *s, const char *url, os64_dom_request_t *q)
+{
+    const char *referrer = yonder_scripts_referrer(s);
+    *q = (os64_dom_request_t){.url = url, .method = "GET", .headers = "", .mode = WAY_MODE_CORS,
+                              .credentials = WAY_CREDENTIALS_SAME_ORIGIN, .redirect = WAY_REDIRECT_FOLLOW,
+                              .policy = WAY_POLICY_STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+                              .referrer = referrer != NULL ? referrer : ""};
+}
+
+static uint64_t module_start(void *opaque, const char *url, uint32_t token)
+{
+    yonder_scripts_t *s = opaque;
+    os64_dom_request_t q;
+    module_request(s, url, &q);
+    return s->options.request != NULL ? s->options.request(s->options.opaque, s->options.serial, token, &q) : 0;
+}
+
+// A dynamic import's fetch stops when the task that asked runs out of its
+// budget, as a synchronous XMLHttpRequest's does.
+static bool module_stop(void *opaque)
+{
+    yonder_scripts_t *s = opaque;
+    os64_js_outcome_t out;
+    return s->runtime == NULL || os64_js_check_budget(s->runtime, OS64_JS_ABI_ID, &out) != OS64_JS_OK;
+}
+
+static bool module_run_now(void *opaque, const char *url, os64_dom_response_t *response)
+{
+    yonder_scripts_t *s = opaque;
+    os64_dom_request_t q;
+    module_request(s, url, &q);
+    return s->options.run != NULL &&
+           s->options.run(s->options.opaque, s->options.serial, &q, module_stop, s, response);
+}
+
+static bool module_in_document(void *opaque, const char *reference, char *out, size_t cap)
+{
+    yonder_scripts_t *s = opaque;
+    return os64_dom_resolve(s->doc, s->url, reference, out, cap);
+}
+
+static const char *module_script_base(void *opaque, const char *name)
+{
+    yonder_scripts_t *s = opaque;
+    return os64_dom_script_address(s->dom, name);
+}
+
+static void module_release(void *opaque, os64_dom_response_t *response)
+{
+    yonder_scripts_t *s = opaque;
+    if (s->options.release != NULL)
+        s->options.release(s->options.opaque, response);
+}
+
+// The page's module map, with its network: what ensure_runtime makes with
+// the runtime.
+static yonder_modules_t *module_map_new(yonder_scripts_t *s)
+{
+    const yonder_modules_net_t net = {s, module_start, net_cancel, module_run_now, module_release,
+                                      module_in_document, module_script_base};
+    return yonder_modules_new(s->runtime, &net, s->options.diag);
+}
+
+// The page's runtime and its module map, for a module script. False when
+// there is none to be had: the runtime could not be made (and is retired,
+// as a run's failure retires it) or memory ran out.
+static bool ensure_modules(yonder_scripts_t *s)
+{
+    os64_js_outcome_t out;
+    if (!ensure_runtime(s, &out)) {
+        retire(s);
+        return false;
+    }
+    if (s->modules == NULL)
+        s->modules = module_map_new(s);
+    return s->modules != NULL;
+}
+
+// Each module item whose graph has settled: ready to run, or failed in its
+// place in the order.
+static void modules_progress(yonder_scripts_t *s)
+{
+    for (uint32_t i = 0; i < s->count; i++) {
+        Item *it = &s->items[i];
+        if (!it->module || it->state != STATE_FETCHING)
+            continue;
+        const char *why;
+        yonder_graph_t graph = yonder_modules_graph(s->modules, it->entry, &why);
+        if (graph == YONDER_GRAPH_READY)
+            make_ready(s, it);
+        else if (graph == YONDER_GRAPH_FAILED)
+            fail_item(s, it, why);
+    }
+}
+
+// A module script prepared (HTML's "prepare the script element", module
+// branch): its graph begun in the page's map, `src`'s fetched from its
+// address, an inline one's compiled from its text. It runs as `mode` says
+// once the graph is ready.
+static void module_prepare(yonder_scripts_t *s, const os64_html_node_t *script, Mode mode)
+{
+    Item *it = item_new(s, script, mode);
+    if (it == NULL)
+        return;
+    it->module = true;
+    it->entry = -1;
+    // The item is named by its index from here: the map may run a script
+    // host's callback, and a new item may move the table.
+    uint32_t index = (uint32_t)(it - s->items);
+    if (!ensure_modules(s)) {
+        if (!s->dead)
+            fail_item(s, &s->items[index], "no memory for the page's modules");
+        return;
+    }
+    (void)os64_dom_script_start(s->dom, script);
+    it = &s->items[index];
+    int32_t entry;
+    const os64_html_attr_t *src = os64_html_attr(script, "src");
+    if (src != NULL) {
+        char url[OS64_DOM_URL_MAX];
+        os64_strcopy(it->name, sizeof(it->name), src->value);
+        if (src->value[0] == '\0' || !os64_dom_resolve(s->doc, s->url, src->value, url, sizeof(url))) {
+            fail_item(s, it, "the script's address cannot be fetched");
+            return;
+        }
+        os64_strcopy(it->name, sizeof(it->name), url);
+        it->address = keep(url);
+        entry = yonder_modules_entry_src(s->modules, url);
+    } else {
+        if (!inline_source(s, it)) {
+            fail_item(s, it, "the inline script is longer than a script may be");
+            return;
+        }
+        entry = yonder_modules_entry_inline(s->modules, it->source, it->length, it->name, s->url);
+        it = &s->items[index];
+        os64_free(it->source);
+        it->source = NULL;
+    }
+    if (entry < 0) {
+        fail_item(s, it, "the page has more modules than yonder keeps");
+        return;
+    }
+    it->entry = entry;
+    it->state = STATE_FETCHING;
+    modules_progress(s);
+}
+
+// Whether `list` holds `token` (lowercase), as `rel`'s keywords are
+// compared: split on ASCII whitespace, without ASCII case.
+static bool rel_has(const char *list, const char *token)
+{
+    size_t n = os64_strlen(token);
+    for (const char *p = list; *p != '\0';) {
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\f' || *p == '\r')
+            p++;
+        const char *start = p;
+        while (*p != '\0' && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\f' && *p != '\r')
+            p++;
+        bool same = (size_t)(p - start) == n;
+        for (size_t i = 0; same && i < n; i++)
+            same = (start[i] >= 'A' && start[i] <= 'Z' ? start[i] - 'A' + 'a' : start[i]) == token[i];
+        if (same)
+            return true;
+    }
+    return false;
+}
+
+// A preload's link: an HTML `link` whose rel names modulepreload, whose
+// `href` is not empty, and whose `as` is a script's (absent, empty or
+// "script"; a worker's destination needs a worker, and JSON and CSS
+// modules are not read).
+static bool preload_link(const os64_html_node_t *n)
+{
+    if (n->kind != OS64_HTML_ELEMENT || n->ns != OS64_HTML_NS_HTML || n->tag != OS64_HTML_TAG_LINK)
+        return false;
+    const os64_html_attr_t *rel = os64_html_attr(n, "rel"), *href = os64_html_attr(n, "href");
+    const os64_html_attr_t *as = os64_html_attr(n, "as");
+    return rel != NULL && rel_has(rel->value, "modulepreload") && href != NULL && href->value[0] != '\0' &&
+           (as == NULL || as->value[0] == '\0' || os64_streq_nocase(as->value, "script"));
+}
+
+void yonder_scripts_preload(yonder_scripts_t *s)
+{
+    if (s == NULL || s->dead || !s->options.modern || s->doc == NULL || s->doc->document == NULL)
+        return;
+    const os64_html_node_t *root = s->doc->document;
+    for (const os64_html_node_t *n = root; n != NULL;) {
+        if (preload_link(n)) {
+            char url[OS64_DOM_URL_MAX];
+            if (os64_dom_resolve(s->doc, s->url, os64_html_attr(n, "href")->value, url, sizeof(url))) {
+                // The map is made for the first preload, as for the first
+                // module script; its runtime may retire the host.
+                if (!ensure_modules(s))
+                    return;
+                (void)yonder_modules_entry_src(s->modules, url);
+            }
+        }
+        // The next node in tree order.
+        if (n->first_child != NULL) {
+            n = n->first_child;
+            continue;
+        }
+        while (n != root && n->next == NULL)
+            n = n->parent;
+        n = n != root ? n->next : NULL;
+    }
+}
+
+bool yonder_scripts_importmap(const os64_html_node_t *script)
+{
+    const os64_html_attr_t *type = os64_html_attr(script, "type");
+    return type != NULL && os64_streq_nocase(type->value, "importmap");
+}
+
+// What a script that is not a classic one asks of the host: a module is
+// prepared when the Modern Web surface runs modules, else recorded as asked
+// for and not got, as an import map always is. True when it was one of
+// those (the caller does nothing more with it).
+static bool not_classic(yonder_scripts_t *s, const os64_html_node_t *script, bool parser)
+{
+    os64_dom_script_kind_t kind = os64_dom_script_kind(script);
+    if (kind == OS64_DOM_SCRIPT_MODULE && s->options.modern)
+        module_prepare(s, script, parser && os64_html_attr(script, "async") == NULL ? MODE_DEFER : MODE_ASYNC);
+    else if (kind == OS64_DOM_SCRIPT_MODULE)
+        yonder_diag_missing(s->options.diag, "script", "module", 1);
+    else if (kind == OS64_DOM_SCRIPT_NONE && yonder_scripts_importmap(script))
+        yonder_diag_missing(s->options.diag, "script", "importmap", 1);
+    return kind != OS64_DOM_SCRIPT_CLASSIC;
+}
+
+// A classic script marked `nomodule` is the page's fallback for a browser
+// without modules, and a browser with them skips it (HTML's "prepare the
+// script element"), marked started so it never runs wherever it moves.
+static bool nomodule(yonder_scripts_t *s, const os64_html_node_t *script)
+{
+    if (!s->options.modern || os64_html_attr(script, "nomodule") == NULL)
+        return false;
+    if (s->dom != NULL)
+        (void)os64_dom_script_start(s->dom, script);
+    return true;
+}
+
 yonder_stop_t yonder_scripts_parser_stop(yonder_scripts_t *s, os64_html_node_t *script)
 {
-    if (s == NULL || s->dead || os64_dom_script_kind(script) != OS64_DOM_SCRIPT_CLASSIC)
+    // A module never stops the parse: a parser-inserted one waits for it.
+    if (s == NULL || s->dead || not_classic(s, script, true) || nomodule(s, script))
         return YONDER_STOP_RESUME;
     bool src = os64_html_attr(script, "src") != NULL;
     Mode mode = !src ? MODE_BLOCKING
@@ -665,6 +932,34 @@ bool yonder_scripts_blocking_ready(const yonder_scripts_t *s)
     return s != NULL && s->blocking >= 0 && s->items[s->blocking].state != STATE_FETCHING;
 }
 
+// A module script's graph, run as one task (HTML's "run a module script"):
+// named as the page's code, since a module is fetched under CORS and so is
+// never muted, with no document.currentScript (HTML gives a module none);
+// the task's checkpoint drains what its evaluation queued, and what it
+// left owed (its exception's error event) is settled after, as a classic
+// script's is. An evaluation that awaits goes on in later tasks.
+static void run_module(yonder_scripts_t *s, int32_t entry, const char *name, os64_js_outcome_t *out)
+{
+    char engine_name[32];
+    if (!os64_dom_script_name(s->dom, NULL, engine_name, sizeof(engine_name)))
+        os64_strcopy(engine_name, sizeof(engine_name), "module");
+    int64_t began = os64_micros();
+    if (os64_js_task_begin(s->runtime, OS64_JS_ABI_ID, engine_name, out) == OS64_JS_OK) {
+        os64_js_outcome_t closing;
+        yonder_modules_run(s->modules, entry, out);
+        os64_js_task_end(s->runtime, OS64_JS_ABI_ID, &closing);
+        // The task's close drains its jobs: a failure there is the task's
+        // when the run had none, and a sticky one always.
+        if (sticky(closing.status) || (out->status == OS64_JS_OK && closing.status != OS64_JS_OK))
+            *out = closing;
+    }
+    int64_t ended = os64_micros();
+    s->task_us = began >= 0 && ended >= began ? ended - began : -1;
+    os64_strcopy(out->source_name, OS64_JS_SOURCE_NAME_CAP, name);
+    os64_dom_script_ended(s->dom, name, out);
+    judged(s, out);
+}
+
 // One script, as one task. A script a mutation took out of the document
 // before its turn is skipped: HTML runs a script only while it is connected
 // to the document that prepared it. Its kind is asked again for the same
@@ -682,7 +977,8 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
         root = root->parent;
     bool runs = it->state == STATE_READY &&
                 (it->mode == MODE_ADDRESS ||
-                 (root == s->doc->document && os64_dom_script_kind(it->node) == OS64_DOM_SCRIPT_CLASSIC));
+                 (root == s->doc->document &&
+                  os64_dom_script_kind(it->node) == (it->module ? OS64_DOM_SCRIPT_MODULE : OS64_DOM_SCRIPT_CLASSIC)));
     char name[OS64_JS_SOURCE_NAME_CAP];
     os64_strcopy(name, sizeof(name), it->name);
     s->task_address = it->address;
@@ -692,7 +988,9 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
         os64_strcopy(out->message, sizeof(out->message), it->why);
         os64_strcopy(out->source_name, sizeof(out->source_name), name);
     }
-    if (runs && ensure_runtime(s, out)) {
+    if (runs && it->module && ensure_runtime(s, out)) {
+        run_module(s, it->entry, name, out);
+    } else if (runs && !it->module && ensure_runtime(s, out)) {
         if (it->node != NULL)
             (void)os64_dom_script_start(s->dom, it->node);
         // The source moves out of the table before the run, for the same
@@ -778,7 +1076,10 @@ bool yonder_scripts_pending(const yonder_scripts_t *s)
 {
     if (s == NULL || s->dead)
         return false;
-    if (s->ready_count != 0)
+    // What a running script left owed to the module map (a compile, or a
+    // walk of the graphs after an import() took a fetch over) is the next
+    // step's.
+    if (s->ready_count != 0 || yonder_modules_owed(s->modules))
         return true;
     Item *d = s->parse_ended ? next_defer((yonder_scripts_t *)s) : NULL;
     return d != NULL && d->state != STATE_FETCHING;
@@ -789,6 +1090,14 @@ bool yonder_scripts_step(yonder_scripts_t *s, os64_js_outcome_t *out)
     os64_memset(out, 0, sizeof(*out));
     if (!yonder_scripts_pending(s))
         return false;
+    // Between tasks, the owed compiles are made and the graphs walked
+    // again, and what that readies runs in its turn; a step that readied
+    // nothing ran nothing.
+    if (yonder_modules_settle(s->modules)) {
+        modules_progress(s);
+        if (!yonder_scripts_pending(s))
+            return false;
+    }
     if (s->ready_count != 0) {
         uint32_t index = s->ready[s->ready_head];
         s->ready_head = (s->ready_head + 1) % s->cap;
@@ -830,10 +1139,10 @@ void yonder_scripts_connected(yonder_scripts_t *s, const os64_html_node_t *scrip
 {
     if (s == NULL || s->dead)
         return;
-    // A module is recognised and never run: what the page asked for and
-    // did not get.
-    if (os64_dom_script_kind(script) == OS64_DOM_SCRIPT_MODULE)
-        yonder_diag_missing(s->options.diag, "script", "module", 1);
+    // A module a script connected runs when its graph is ready, inline or
+    // not: unlike a classic inline script, never inside the verb.
+    if (not_classic(s, script, false) || nomodule(s, script))
+        return;
     bool src = os64_html_attr(script, "src") != NULL;
     Item *it = item_new(s, script, src ? MODE_ASYNC : MODE_INLINE);
     if (it == NULL)
@@ -1090,6 +1399,12 @@ bool yonder_scripts_answered(yonder_scripts_t *s, uint32_t token, const os64_dom
                              os64_js_outcome_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
+    // A module's answer is the map's: compiled, no task run (modules.h).
+    if (s != NULL && !s->dead && (token & YONDER_MODULE_TOKEN) != 0) {
+        yonder_modules_answered(s->modules, token, response);
+        modules_progress(s);
+        return false;
+    }
     if (s == NULL || s->dead || !os64_dom_fetch_waiting(s->dom, token))
         return false;
     s->written = 0;

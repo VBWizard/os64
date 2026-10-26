@@ -10121,12 +10121,16 @@ static bool stream_streaming(void)
 // model will adopt when the parse is over.
 static yonder_stop_t stream_stop(os64_html_node_t *script)
 {
-    // A module is recognised and never run: what a scripted page asked for
-    // and did not get. With scripts off nothing runs, and that is a setting.
-    if (g.stream.scripting && os64_dom_script_kind(script) == OS64_DOM_SCRIPT_MODULE)
+    // A module runs with the Modern Web surface (its host's modules.c);
+    // without it, it is what a scripted page asked for and did not get.
+    // With scripts off nothing runs, and that is a setting.
+    os64_dom_script_kind_t kind = os64_dom_script_kind(script);
+    if (g.stream.scripting && kind == OS64_DOM_SCRIPT_MODULE && !g.stream.modern)
         yonder_diag_missing(g.stream.diag, "script", "module", 1);
+    if (g.stream.scripting && kind == OS64_DOM_SCRIPT_NONE && yonder_scripts_importmap(script))
+        yonder_diag_missing(g.stream.diag, "script", "importmap", 1);
     if (!g.stream.scripting || g.stream.scriptless ||
-        os64_dom_script_kind(script) != OS64_DOM_SCRIPT_CLASSIC)
+        (kind != OS64_DOM_SCRIPT_CLASSIC && (kind != OS64_DOM_SCRIPT_MODULE || !g.stream.modern)))
         return YONDER_STOP_RESUME;
     if (g.stream.scripts == NULL) {
         os64_html_document_t *doc = os64_html_parser_document(g.stream.parser);
@@ -10233,7 +10237,8 @@ static Page *stream_page(void)
 // entry for, by libpage's own rule and order (os64_page_sheets_in, a walk
 // of the tree, which costs a fraction of a model). A `style` element is
 // parsed now; a `link` is fetched under the stream's serial. A walk that
-// had no memory leaves them to the next look.
+// had no memory leaves them to the next look. The same looks find the
+// module preloads, once the page has a script host to hold their modules.
 static void stream_sheets(void)
 {
     if (g.stream.parser == NULL || g.stream.head.body != WAY_BODY_HTML)
@@ -10242,9 +10247,11 @@ static void stream_sheets(void)
     int64_t began = s_script_audit ? os64_micros() : 0;
     int32_t had = p->nsheets;
     int32_t listed = os64_page_sheets_in(page_doc(p), g.stream.head.url, stream_sheet_add, p);
+    yonder_scripts_preload(g.stream.scripts);
     if (s_script_audit) {
         char line[128];
-        os64_snprintf(line, sizeof(line), "yonder: stream sheets: %d listed, %d new, %d out, in %ld us",
+        os64_snprintf(line, sizeof(line),
+                      "yonder: stream sheets and preloads: %d sheets listed, %d new, %d out, in %ld us",
                       (int)listed, (int)(p->nsheets - had), (int)p->sheets_waiting,
                       (long)(os64_micros() - began));
         os64_debug_log(line);

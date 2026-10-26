@@ -206,6 +206,13 @@ static bool script_muted(const os64_dom_t *dom, uint32_t script)
     return script < dom->script_name_count && dom->script_names[script].muted;
 }
 
+const char *os64_dom_script_address(const os64_dom_t *dom, const char *name)
+{
+    if (dom == NULL) return NULL;
+    uint32_t script = script_named(dom, name);
+    return script != D_NO_SCRIPT ? dom->script_names[script].address : NULL;
+}
+
 /* The address an error event names for a script: its own, else the page's. */
 static const char *script_address(const os64_dom_t *dom, uint32_t script)
 {

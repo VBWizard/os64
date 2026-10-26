@@ -6,7 +6,8 @@
  * remove, contains and isConnected, matches and closest, the class and name
  * queries, insertAdjacent*, the attribute conveniences, the reflected
  * attributes (hidden, lang, dir, tabIndex, a script's src, a link's and an
- * anchor's href), classList and dataset. Each is the standard's steps over
+ * anchor's href, a link's rel), classList, a link's relList and dataset.
+ * Each is the standard's steps over
  * the verbs node.c already uses, so a tree change here is the change
  * appendChild would make, scripts and controls included. */
 
@@ -361,7 +362,8 @@ static JSValue mixin_method(JSContext *ctx, JSValueConst this_value, int argc,
 
 /* ── Reflected attributes ─────────────────────────────────────────────── */
 
-enum { R_HIDDEN, R_LANG, R_DIR, R_TAB_INDEX, R_URL, R_CLASS_LIST, R_DATASET, R_CONNECTED };
+enum { R_HIDDEN, R_LANG, R_DIR, R_TAB_INDEX, R_URL, R_CLASS_LIST, R_DATASET, R_CONNECTED,
+       R_TYPE, R_DEFER, R_NO_MODULE, R_REL, R_REL_LIST };
 
 /* An element that can take focus without a tabindex: its tabIndex reads 0
  * where any other reads -1 (HTML § The tabindex attribute). */
@@ -396,6 +398,7 @@ static bool parse_integer(const char *text, int32_t *out)
 }
 
 JSValue d_class_list(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
+JSValue d_rel_list(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
 JSValue d_dataset(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
 
 /* dir is an enumerated attribute: one of its keywords, lowercased, or "".
@@ -427,13 +430,15 @@ static JSValue reflect(JSContext *ctx, JSValueConst this_value, int argc,
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
     const char *name = magic == R_HIDDEN ? "hidden" : magic == R_LANG ? "lang" : magic == R_DIR ? "dir" :
                        magic == R_TAB_INDEX ? "tabindex" : magic == R_CLASS_LIST ? "class" :
+                       magic == R_TYPE ? "type" : magic == R_DEFER ? "defer" : magic == R_NO_MODULE ? "nomodule" :
+                       magic == R_REL || magic == R_REL_LIST ? "rel" :
                        is_html(self, OS64_HTML_TAG_SCRIPT) || is_html(self, OS64_HTML_TAG_IFRAME) ? "src" : "href";
-    if (magic == R_CLASS_LIST) {
-        if (!set) return d_class_list(dom, ctx, self);
+    if (magic == R_CLASS_LIST || magic == R_REL_LIST) {
+        if (!set) return magic == R_CLASS_LIST ? d_class_list(dom, ctx, self) : d_rel_list(dom, ctx, self);
         /* [PutForwards=value]: assigning the list sets the attribute. */
         DString text = {0};
         if (!d_string(dom, ctx, value, &text)) return JS_EXCEPTION;
-        JSValue result = set_attribute(dom, ctx, self, "class", text.data, text.length, false);
+        JSValue result = set_attribute(dom, ctx, self, name, text.data, text.length, false);
         d_string_free(dom, &text);
         return result;
     }
@@ -441,7 +446,7 @@ static JSValue reflect(JSContext *ctx, JSValueConst this_value, int argc,
     const os64_html_attr_t *attr = os64_html_attr(self, name);
     if (!set) {
         switch (magic) {
-        case R_HIDDEN: return JS_NewBool(ctx, attr != NULL);
+        case R_HIDDEN: case R_DEFER: case R_NO_MODULE: return JS_NewBool(ctx, attr != NULL);
         case R_DIR: return d_dir_value(ctx, self);
         case R_TAB_INDEX: {
             int32_t index;
@@ -462,7 +467,7 @@ static JSValue reflect(JSContext *ctx, JSValueConst this_value, int argc,
         default: return JS_NewString(ctx, attr != NULL ? attr->value : "");
         }
     }
-    if (magic == R_HIDDEN) {
+    if (magic == R_HIDDEN || magic == R_DEFER || magic == R_NO_MODULE) {
         int on = JS_ToBool(ctx, value);
         if (on < 0) return JS_EXCEPTION;
         return set_attribute(dom, ctx, self, name, "", 0, !on);
@@ -481,9 +486,15 @@ static JSValue reflect(JSContext *ctx, JSValueConst this_value, int argc,
     return result;
 }
 
-/* ── classList: a DOMTokenList over the class attribute ─────────────── */
+/* ── classList and relList: DOMTokenLists over `class` and `rel` ────── */
 
 typedef struct { const char *at; size_t length; } Token;
+
+/* The attribute a list's entry stands for. */
+static const char *token_attribute(const DValue *entry)
+{
+    return entry->rel_tokens ? "rel" : "class";
+}
 
 static bool space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r'; }
 
@@ -521,7 +532,7 @@ static size_t find_token(const Token *tokens, size_t count, const char *token, s
 }
 
 /* The ordered set written back, one space between tokens. */
-static JSValue write_tokens(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
+static JSValue write_tokens(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, const char *name,
                             const Token *tokens, size_t count)
 {
     size_t length = 0;
@@ -535,7 +546,7 @@ static JSValue write_tokens(os64_dom_t *dom, JSContext *ctx, const os64_html_nod
         used += tokens[i].length;
     }
     text[used] = '\0';
-    JSValue result = set_attribute(dom, ctx, node, "class", text, used, false);
+    JSValue result = set_attribute(dom, ctx, node, name, text, used, false);
     d_free(dom, text);
     return result;
 }
@@ -554,7 +565,25 @@ static bool token_argument(os64_dom_t *dom, JSContext *ctx, JSValueConst value, 
     return false;
 }
 
-enum { T_LENGTH, T_VALUE, T_ITEM, T_CONTAINS, T_ADD, T_REMOVE, T_TOGGLE, T_REPLACE, T_STRING };
+enum { T_LENGTH, T_VALUE, T_ITEM, T_CONTAINS, T_ADD, T_REMOVE, T_TOGGLE, T_REPLACE, T_STRING, T_SUPPORTS };
+
+/* A link's supported tokens (DOM § DOMTokenList's validation steps): the
+ * link types yonder acts on, compared without ASCII case. A stylesheet is
+ * libpage's; a module preload is the Modern Web surface's, which runs
+ * modules (MODERN_WEB.md § Slice 3), so it is supported only with it. */
+static bool rel_supported(const os64_dom_t *dom, const char *token, size_t length)
+{
+    static const char *const kinds[] = {"stylesheet", "modulepreload"};
+    for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
+        if (k == 1 && !dom->options.modern) continue;
+        size_t n = 0;
+        while (n < length && kinds[k][n] != '\0' &&
+               (token[n] >= 'A' && token[n] <= 'Z' ? token[n] - 'A' + 'a' : token[n]) == kinds[k][n])
+            n++;
+        if (n == length && kinds[k][n] == '\0') return true;
+    }
+    return false;
+}
 
 static JSValue token_method(JSContext *ctx, JSValueConst this_value, int argc,
                             JSValueConst *argv, int magic, JSValue *data)
@@ -566,12 +595,13 @@ static JSValue token_method(JSContext *ctx, JSValueConst this_value, int argc,
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     const os64_html_node_t *node = entry->target;
-    const os64_html_attr_t *attr = os64_html_attr(node, "class");
+    const char *name = token_attribute(entry);
+    const os64_html_attr_t *attr = os64_html_attr(node, name);
     if (magic == T_VALUE || magic == T_STRING) {
         if (!set) return JS_NewString(ctx, attr != NULL ? attr->value : "");
         DString text = {0};
         if (!d_string(dom, ctx, argc > 0 ? argv[0] : JS_UNDEFINED, &text)) return JS_EXCEPTION;
-        JSValue result = set_attribute(dom, ctx, node, "class", text.data, text.length, false);
+        JSValue result = set_attribute(dom, ctx, node, name, text.data, text.length, false);
         d_string_free(dom, &text);
         return result;
     }
@@ -589,12 +619,12 @@ static JSValue token_method(JSContext *ctx, JSValueConst this_value, int argc,
     int converted = 0;
     bool ok = true;
     for (; ok && converted < wanted; converted++) {
-        ok = magic == T_CONTAINS ? d_string(dom, ctx, argv[converted], &given[converted])
-                                 : token_argument(dom, ctx, argv[converted], &given[converted]);
+        ok = magic == T_CONTAINS || magic == T_SUPPORTS ? d_string(dom, ctx, argv[converted], &given[converted])
+                                                        : token_argument(dom, ctx, argv[converted], &given[converted]);
         if (!ok) break;
     }
     int force = magic == T_TOGGLE && argc > 1 && !JS_IsUndefined(argv[1]) ? JS_ToBool(ctx, argv[1]) : -1;
-    attr = os64_html_attr(node, "class");
+    attr = os64_html_attr(node, name);
     Token *tokens = NULL;
     size_t count = 0;
     JSValue result = JS_EXCEPTION;
@@ -606,6 +636,11 @@ static JSValue token_method(JSContext *ctx, JSValueConst this_value, int argc,
             break;
         case T_CONTAINS:
             result = JS_NewBool(ctx, find_token(tokens, count, given[0].data, given[0].length) < count);
+            break;
+        case T_SUPPORTS:
+            /* A classList has no supported tokens, which is a TypeError. */
+            result = entry->rel_tokens ? JS_NewBool(ctx, rel_supported(dom, given[0].data, given[0].length))
+                                       : JS_ThrowTypeError(ctx, "DOMTokenList has no supported tokens");
             break;
         case T_ADD: case T_REMOVE: case T_TOGGLE: case T_REPLACE: {
             /* Room for every token added; removing writes the list again
@@ -648,7 +683,7 @@ static JSValue token_method(JSContext *ctx, JSValueConst this_value, int argc,
                 }
             }
             /* An element with no class attribute gets none for an empty set. */
-            result = changed && !(attr == NULL && n == 0) ? write_tokens(dom, ctx, node, next, n) : JS_UNDEFINED;
+            result = changed && !(attr == NULL && n == 0) ? write_tokens(dom, ctx, node, name, next, n) : JS_UNDEFINED;
             if (!JS_IsException(result) && (magic == T_TOGGLE || magic == T_REPLACE))
                 result = JS_NewBool(ctx, present);
             d_free(dom, next);
@@ -679,7 +714,7 @@ static int token_own_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValu
     uint32_t index;
     int numeric = d_index_key(ctx, atom, &index);
     if (numeric <= 0) return numeric;
-    const os64_html_attr_t *attr = os64_html_attr(entry->target, "class");
+    const os64_html_attr_t *attr = os64_html_attr(entry->target, token_attribute(entry));
     Token *tokens;
     size_t count;
     if (!tokens_of(entry->dom, ctx, attr != NULL ? attr->value : "", &tokens, &count)) return -1;
@@ -702,7 +737,7 @@ static int token_own_names(JSContext *ctx, JSPropertyEnum **table, uint32_t *len
 {
     DValue *entry = token_receiver(ctx, object);
     if (entry == NULL) return -1;
-    const os64_html_attr_t *attr = os64_html_attr(entry->target, "class");
+    const os64_html_attr_t *attr = os64_html_attr(entry->target, token_attribute(entry));
     Token *tokens;
     size_t count;
     if (!tokens_of(entry->dom, ctx, attr != NULL ? attr->value : "", &tokens, &count)) return -1;
@@ -738,19 +773,23 @@ JSClassExoticMethods d_token_exotic = {
     .define_own_property = token_define, .delete_property = token_delete,
 };
 
+enum { VIEW_CLASS_LIST, VIEW_REL_LIST, VIEW_DATASET };
+
 /* One view object per element, made the first time it is asked for. */
 static JSValue element_view(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
-                            JSClassID class_id, bool tokens)
+                            JSClassID class_id, int view)
 {
     DValue *owner = d_find(dom, node);
     if (owner == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
-    DValue **slot = tokens ? &owner->class_list : &owner->dataset;
+    DValue **slot = view == VIEW_CLASS_LIST ? &owner->class_list : view == VIEW_REL_LIST ? &owner->rel_list
+                                                                                         : &owner->dataset;
     if (*slot != NULL) return JS_DupValue(ctx, (*slot)->value);
     JSValue object = JS_NewObjectClass(ctx, class_id);
     DValue *entry = d_retain(dom, ctx, object);
     if (entry == NULL) return JS_EXCEPTION;
     entry->dom = dom;
     entry->target = node;
+    entry->rel_tokens = view == VIEW_REL_LIST;
     os64_html_hold(dom->document, node);
     JS_SetOpaque(object, entry);
     *slot = entry;
@@ -759,7 +798,12 @@ static JSValue element_view(os64_dom_t *dom, JSContext *ctx, const os64_html_nod
 
 JSValue d_class_list(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 {
-    return element_view(dom, ctx, node, dom->token_class, true);
+    return element_view(dom, ctx, node, dom->token_class, VIEW_CLASS_LIST);
+}
+
+JSValue d_rel_list(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
+{
+    return element_view(dom, ctx, node, dom->token_class, VIEW_REL_LIST);
 }
 
 /* ── dataset: a DOMStringMap over the data-* attributes ─────────────── */
@@ -940,7 +984,7 @@ JSClassExoticMethods d_map_exotic = {
 
 JSValue d_dataset(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 {
-    return element_view(dom, ctx, node, dom->map_class, false);
+    return element_view(dom, ctx, node, dom->map_class, VIEW_DATASET);
 }
 
 /* ── Installation ─────────────────────────────────────────────────────── */
@@ -977,7 +1021,15 @@ int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
         {"dir", R_DIR, true, ELEMENTS}, {"tabIndex", R_TAB_INDEX, true, ELEMENTS},
         {"classList", R_CLASS_LIST, true, ELEMENTS}, {"dataset", R_DATASET, false, ELEMENTS},
         {"src", R_URL, true, 1u << D_PROTO_SCRIPT},
+        // What a loader sets before it connects a script (`type = 'module'`
+        // makes it a module, MODERN_WEB.md § Slice 3); `async`, with HTML's
+        // force-async flag, is DEBTS.md § ES modules'.
+        {"type", R_TYPE, true, 1u << D_PROTO_SCRIPT}, {"defer", R_DEFER, true, 1u << D_PROTO_SCRIPT},
+        {"noModule", R_NO_MODULE, true, 1u << D_PROTO_SCRIPT},
         {"href", R_URL, true, (1u << D_PROTO_ANCHOR) | (1u << D_PROTO_LINK)},
+        // What a module loader asks before it preloads (`relList.supports
+        // ('modulepreload')`, Vite's first statement), and what it sets.
+        {"rel", R_REL, true, 1u << D_PROTO_LINK}, {"relList", R_REL_LIST, true, 1u << D_PROTO_LINK},
     };
     for (int kind = 0; kind < D_PROTO_COUNT; kind++) {
         JSValueConst prototype = dom->prototypes[kind]->value;
@@ -996,7 +1048,7 @@ int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
         {"item", T_ITEM, 1, false, false}, {"contains", T_CONTAINS, 1, false, false},
         {"add", T_ADD, 0, false, false}, {"remove", T_REMOVE, 0, false, false},
         {"toggle", T_TOGGLE, 1, false, false}, {"replace", T_REPLACE, 2, false, false},
-        {"toString", T_STRING, 0, false, false},
+        {"supports", T_SUPPORTS, 1, false, false}, {"toString", T_STRING, 0, false, false},
     };
     JSValue tokens = JS_NewObject(ctx);
     DValue *token_prototype = d_retain(dom, ctx, tokens);

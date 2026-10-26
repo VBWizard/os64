@@ -48,6 +48,21 @@ struct os64_js_runtime {
     /* console.group's nesting: each console line is indented by it. */
     uint32_t console_depth;
     char source_name[OS64_JS_SOURCE_NAME_CAP];
+    /* The host's module handles (§ Modules), and the loader the engine asks
+     * for a module it cannot find among the ones compiled. */
+    struct os64_js_module *modules;
+    os64_js_module_loader_t loader;
+};
+
+/* A module the host compiled: a reference of its own to the engine's
+ * module, and once run, its evaluation's promise; a rejection of that
+ * promise is the module's failure, kept here as its outcome rather than
+ * judged as an unhandled rejection (HTML reports it as an error). */
+struct os64_js_module {
+    struct os64_js_module *next, *prev;
+    JSValue module, promise;
+    bool run, rejected;
+    os64_js_outcome_t failure;
 };
 
 static unsigned class_lock;
@@ -178,14 +193,54 @@ static void clear_rejections(os64_js_runtime_t *runtime)
     runtime->rejection_capacity = runtime->rejection_count = runtime->rejection_used = 0;
 }
 
+static char *module_normalize(JSContext *context, const char *base, const char *specifier, void *opaque);
+static JSModuleDef *module_load(JSContext *context, const char *name, void *opaque);
+static void module_free(os64_js_runtime_t *runtime, struct os64_js_module *module);
+static void caught(os64_js_runtime_t *runtime, JSContext *context, JSValueConst error);
+static void rejection_diagnostic(os64_js_runtime_t *runtime, JSValueConst value,
+                                 os64_js_outcome_t *out);
+
+/* The handle whose evaluation `promise` is, or NULL. */
+static struct os64_js_module *module_of(os64_js_runtime_t *runtime, JSValueConst promise)
+{
+    for (struct os64_js_module *m = runtime->modules; m != NULL; m = m->next)
+        if (m->run && JS_VALUE_GET_TAG(m->promise) == JS_TAG_OBJECT &&
+            JS_VALUE_GET_PTR(m->promise) == JS_VALUE_GET_PTR(promise))
+            return m;
+    return NULL;
+}
+
+/* A module's evaluation rejected: its failure, kept for os64_js_module_state
+ * and reported as an exception (the script host's `exception`), which is
+ * what HTML does with a module script's error. Runs no script. */
+static void module_failed(os64_js_runtime_t *runtime, JSContext *context,
+                          struct os64_js_module *module, JSValueConst reason)
+{
+    if (module->rejected) return;
+    module->rejected = true;
+    os64_memset(&module->failure, 0, sizeof(module->failure));
+    module->failure.status = OS64_JS_EXCEPTION;
+    rejection_diagnostic(runtime, reason, &module->failure);
+    // Its fallback names an unhandled rejection, which this is not.
+    if (os64_strcmp(module->failure.message, "unhandled Promise rejection") == 0)
+        copy_text(module->failure.message, sizeof(module->failure.message), "module evaluation failed");
+    caught(runtime, context, reason);
+}
+
 /* The engine's tracker: a promise rejected with no handler, or a handler
  * added to one. A handler for a promise this table no longer holds, which a
- * host took (os64_js_take_rejection), is the host's to hear of. */
+ * host took (os64_js_take_rejection), is the host's to hear of. A module's
+ * evaluation is its handle's (module_failed), never an unhandled rejection. */
 static void rejection(JSContext *context, JSValueConst promise,
                       JSValueConst reason, JS_BOOL handled, void *opaque)
 {
     os64_js_runtime_t *runtime = opaque;
     if (observe(runtime)) return;
+    struct os64_js_module *module = handled ? NULL : module_of(runtime, promise);
+    if (module != NULL) {
+        module_failed(runtime, context, module, reason);
+        return;
+    }
     Rejection **place = rejection_place(runtime, JS_VALUE_GET_PTR(promise));
     if (place != NULL) {
         if (handled) {
@@ -451,6 +506,7 @@ JS_PUBLIC os64_js_status_t os64_js_create_with_teardown(const os64_js_config_t *
     JS_SetContextOpaque(runtime->context, runtime);
     JS_SetInterruptHandler(runtime->engine, interrupt, runtime);
     JS_SetHostPromiseRejectionTracker(runtime->engine, rejection, runtime);
+    JS_SetModuleLoaderFunc(runtime->engine, module_normalize, module_load, runtime);
     *out = runtime;
     return OS64_JS_OK;
 }
@@ -1330,6 +1386,250 @@ JS_PUBLIC void os64_js_cancel(os64_js_runtime_t *runtime)
     if (runtime != NULL) __atomic_store_n(&runtime->cancelled, 1, __ATOMIC_RELEASE);
 }
 
+/* ── Modules (CONTRACT.md § Modules) ─────────────────────────────────── */
+
+/* import.meta.url: the module's name, which is its URL. */
+static int module_meta(JSContext *context, JSModuleDef *m, const char *name)
+{
+    JSValue meta = JS_GetImportMeta(context, m);
+    if (JS_IsException(meta)) return -1;
+    int defined = JS_DefinePropertyValueStr(context, meta, "url", JS_NewString(context, name), JS_PROP_C_W_E);
+    JS_FreeValue(context, meta);
+    return defined < 0 ? -1 : 0;
+}
+
+/* The engine's normaliser: the host's resolve, its answer moved into the
+ * engine's allocator, which frees it. */
+static char *module_normalize(JSContext *context, const char *base, const char *specifier, void *opaque)
+{
+    os64_js_runtime_t *runtime = opaque;
+    char *name = runtime->loader.resolve != NULL
+        ? runtime->loader.resolve(runtime->loader.opaque, base, specifier) : NULL;
+    if (name == NULL) {
+        JS_ThrowTypeError(context, "cannot resolve module specifier '%s'", specifier);
+        return NULL;
+    }
+    size_t length = os64_strlen(name);
+    char *copy = js_malloc(context, length + 1);
+    if (copy != NULL) os64_memcpy(copy, name, length + 1);
+    os64_free(name);
+    return copy;
+}
+
+/* The engine's loader, for a name no compiled module has: the host's source,
+ * compiled (resolving through this same loader), the module left to the
+ * engine's list, which keeps it, as quickjs-libc's loader does. */
+static JSModuleDef *module_load(JSContext *context, const char *name, void *opaque)
+{
+    os64_js_runtime_t *runtime = opaque;
+    const char *bytes = NULL;
+    size_t length = 0;
+    if (runtime->loader.source == NULL ||
+        !runtime->loader.source(runtime->loader.opaque, name, &bytes, &length) ||
+        (bytes == NULL && length != 0)) {
+        JS_ThrowReferenceError(context, "could not load module '%s'", name);
+        return NULL;
+    }
+    if (length > runtime->limits.source_bytes) {
+        latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_SOURCE, 0);
+        JS_ThrowRangeError(context, "module '%s' exceeds the source limit", name);
+        return NULL;
+    }
+    char *copy = js_malloc(context, length + 1);
+    if (copy == NULL) return NULL;
+    if (length != 0) os64_memcpy(copy, bytes, length);
+    copy[length] = 0;
+    JSValue value = JS_Eval(context, copy, length, name, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    js_free(context, copy);
+    if (JS_IsException(value)) return NULL;
+    JSModuleDef *m = JS_VALUE_GET_PTR(value);
+    int meta = module_meta(context, m, name);
+    JS_FreeValue(context, value);
+    return meta < 0 ? NULL : m;
+}
+
+JS_PUBLIC os64_js_status_t os64_js_set_module_loader(os64_js_runtime_t *runtime, const char *caller_abi,
+                                                   const os64_js_module_loader_t *loader,
+                                                   os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = enter(runtime, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (caller_abi == NULL || os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0)
+        return refuse(runtime, outcome, caller_abi == NULL ? OS64_JS_BAD_ARGUMENT : OS64_JS_ABI_MISMATCH,
+                      "binding header ABI mismatch");
+    if (loader != NULL) runtime->loader = *loader;
+    else os64_memset(&runtime->loader, 0, sizeof(runtime->loader));
+    return refuse(runtime, outcome, OS64_JS_OK, NULL);
+}
+
+JS_PUBLIC os64_js_status_t os64_js_module_compile(os64_js_runtime_t *runtime, const char *caller_abi,
+                                                const void *source, size_t length, const char *name,
+                                                const char *url, os64_js_module_t **module,
+                                                os64_js_outcome_t *outcome)
+{
+    if (module != NULL) *module = NULL;
+    os64_js_status_t result = enter(runtime, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (caller_abi == NULL || os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0)
+        return refuse(runtime, outcome, caller_abi == NULL ? OS64_JS_BAD_ARGUMENT : OS64_JS_ABI_MISMATCH,
+                      "binding header ABI mismatch");
+    if ((source == NULL && length != 0) || name == NULL || module == NULL)
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "source bytes, name and handle are required");
+    runtime->source_truncated = copy_text(runtime->source_name, sizeof(runtime->source_name), name);
+    if (length > runtime->limits.source_bytes) {
+        latch(runtime, OS64_JS_LIMIT, OS64_JS_LIMIT_SOURCE, 0);
+        return leave(runtime, outcome);
+    }
+    if (observe(runtime)) return leave(runtime, outcome);
+    struct os64_js_module *handle = js_mallocz_rt(runtime->engine, sizeof(*handle));
+    char *copy = handle != NULL ? js_malloc_rt(runtime->engine, length + 1) : NULL;
+    if (copy == NULL) {
+        js_free_rt(runtime->engine, handle);
+        return leave(runtime, outcome);
+    }
+    if (length != 0) os64_memcpy(copy, source, length);
+    copy[length] = 0;
+    JSValue value = JS_Eval(runtime->context, copy, length, name,
+                            JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY | JS_EVAL_FLAG_NO_RESOLVE);
+    js_free_rt(runtime->engine, copy);
+    if (!JS_IsException(value) &&
+        module_meta(runtime->context, JS_VALUE_GET_PTR(value), url != NULL ? url : name) < 0) {
+        JS_FreeValue(runtime->context, value);
+        value = JS_EXCEPTION;
+    }
+    if (JS_IsException(value)) {
+        js_free_rt(runtime->engine, handle);
+        if (!observe(runtime)) {
+            // The compile's own, not the script host's: no task is running
+            // to report it, and a browser reports a module's syntax error
+            // when the script that imports it runs.
+            JSValue error = JS_GetException(runtime->context);
+            outcome->status = OS64_JS_EXCEPTION;
+            diagnostic(runtime, error, outcome);
+            JS_FreeValue(runtime->context, error);
+        }
+        return leave(runtime, outcome);
+    }
+    handle->module = value;
+    handle->promise = JS_UNDEFINED;
+    handle->next = runtime->modules;
+    if (runtime->modules != NULL) runtime->modules->prev = handle;
+    runtime->modules = handle;
+    *module = handle;
+    return leave(runtime, outcome);
+}
+
+JS_PUBLIC os64_js_status_t os64_js_module_requests(os64_js_runtime_t *runtime, const char *caller_abi,
+                                                 os64_js_module_t *module,
+                                                 void (*each)(void *opaque, const char *specifier),
+                                                 void *opaque, os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = enter(runtime, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (caller_abi == NULL || os64_strcmp(caller_abi, OS64_JS_ABI_ID) != 0)
+        return refuse(runtime, outcome, caller_abi == NULL ? OS64_JS_BAD_ARGUMENT : OS64_JS_ABI_MISMATCH,
+                      "binding header ABI mismatch");
+    if (module == NULL || each == NULL)
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "module and callback are required");
+    JSModuleDef *m = JS_VALUE_GET_PTR(module->module);
+    int count = JS_GetModuleRequestCount(runtime->context, m);
+    for (int i = 0; i < count && !observe(runtime); i++) {
+        JSAtom request = JS_GetModuleRequest(runtime->context, m, i);
+        const char *text = JS_AtomToCString(runtime->context, request);
+        JS_FreeAtom(runtime->context, request);
+        if (text == NULL) {
+            discard_exception(runtime->context);
+            break;
+        }
+        each(opaque, text);
+        JS_FreeCString(runtime->context, text);
+    }
+    return leave(runtime, outcome);
+}
+
+JS_PUBLIC os64_js_status_t os64_js_module_run(os64_js_runtime_t *runtime, const char *caller_abi,
+                                            os64_js_module_t *module, os64_js_outcome_t *outcome)
+{
+    os64_js_status_t result = enter_task(runtime, caller_abi, true, outcome);
+    if (result != OS64_JS_OK) return result;
+    if (module == NULL || module->run)
+        return refuse(runtime, outcome, OS64_JS_BAD_ARGUMENT, "a module is run once");
+    if (observe(runtime)) return leave(runtime, outcome);
+    module->run = true;
+    JSValue promise = JS_EXCEPTION;
+    if (JS_ResolveModule(runtime->context, module->module) == 0)
+        promise = JS_EvalFunction(runtime->context, JS_DupValue(runtime->context, module->module));
+    if (JS_IsException(promise)) {
+        // Resolving or linking threw: no evaluation, so no promise.
+        JSValue error = JS_GetException(runtime->context);
+        caught(runtime, runtime->context, error);
+        outcome->status = OS64_JS_EXCEPTION;
+        diagnostic(runtime, error, outcome);
+        module->rejected = true;
+        module->failure = *outcome;
+        JS_FreeValue(runtime->context, error);
+        return leave(runtime, outcome);
+    }
+    module->promise = promise;
+    if (JS_PromiseState(runtime->context, promise) == JS_PROMISE_REJECTED) {
+        /* It failed before the handle held its promise, so the tracker took
+         * it for an unhandled rejection: it is this module's failure. */
+        Rejection **place = rejection_place(runtime, JS_VALUE_GET_PTR(promise));
+        if (place != NULL && *place != NULL && *place != &rejection_removed) {
+            Rejection *item = *place;
+            rejection_unlink(runtime, place);
+            JS_FreeValueRT(runtime->engine, item->promise);
+            JS_FreeValueRT(runtime->engine, item->reason);
+            js_free_rt(runtime->engine, item);
+        }
+        JSValue reason = JS_PromiseResult(runtime->context, promise);
+        module_failed(runtime, runtime->context, module, reason);
+        JS_FreeValue(runtime->context, reason);
+        *outcome = module->failure;
+        outcome->status = OS64_JS_EXCEPTION;
+    }
+    return leave(runtime, outcome);
+}
+
+JS_PUBLIC os64_js_module_state_t os64_js_module_state(os64_js_runtime_t *runtime, os64_js_module_t *module,
+                                                    os64_js_outcome_t *failure)
+{
+    if (failure != NULL) os64_memset(failure, 0, sizeof(*failure));
+    if (runtime == NULL || module == NULL || !module->run) return OS64_JS_MODULE_UNRUN;
+    if (module->rejected) {
+        if (failure != NULL) *failure = module->failure;
+        return OS64_JS_MODULE_REJECTED;
+    }
+    switch (JS_PromiseState(runtime->context, module->promise)) {
+    case JS_PROMISE_FULFILLED: return OS64_JS_MODULE_FULFILLED;
+    case JS_PROMISE_REJECTED:
+        // Rejected with a handler already on it, which no tracker reports.
+        if (failure != NULL) {
+            failure->status = OS64_JS_EXCEPTION;
+            copy_text(failure->message, sizeof(failure->message), "module evaluation failed");
+        }
+        return OS64_JS_MODULE_REJECTED;
+    default: return OS64_JS_MODULE_PENDING;
+    }
+}
+
+static void module_free(os64_js_runtime_t *runtime, struct os64_js_module *module)
+{
+    if (module->prev != NULL) module->prev->next = module->next;
+    else runtime->modules = module->next;
+    if (module->next != NULL) module->next->prev = module->prev;
+    JS_FreeValueRT(runtime->engine, module->module);
+    JS_FreeValueRT(runtime->engine, module->promise);
+    js_free_rt(runtime->engine, module);
+}
+
+JS_PUBLIC void os64_js_module_release(os64_js_runtime_t *runtime, os64_js_module_t *module)
+{
+    if (runtime == NULL || module == NULL) return;
+    if (runtime->active) jsport_fatal("module release during an active runtime call", __FILE__, __LINE__);
+    module_free(runtime, module);
+}
+
 JS_PUBLIC void os64_js_destroy_report(os64_js_runtime_t *runtime,
                                       os64_js_teardown_report_t *report)
 {
@@ -1341,6 +1641,9 @@ JS_PUBLIC void os64_js_destroy_report(os64_js_runtime_t *runtime,
     runtime->hosted = false;
     JS_SetHostPromiseRejectionTracker(runtime->engine, NULL, NULL);
     clear_rejections(runtime);
+    // The host's module handles go before the context they belong to.
+    while (runtime->modules != NULL)
+        module_free(runtime, runtime->modules);
     JS_FreeContext(runtime->context);
     if (runtime->allocator.tracked) {
         bool leaked = jsport_free_runtime_report(runtime->engine) != 0;

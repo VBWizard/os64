@@ -3276,6 +3276,148 @@ an idle period can start between any two of a busy page's tasks; a page's
 idle callbacks wait until it is shown; a clone of plain data is not
 stopped by its task's deadline.
 
+### Slice 3, as built
+
+Built by Opus in the main session (no builder agent: Chris's rule for the
+week of 2026-10-25), on `opus/tmw-3-modules` from `userland` `e372af4c`,
+from MODERN_WEB_BRIEFS.md § Slice 3 and IFRAME.md's binding line for it
+(the module map is per realm, the loader is handed the realm, and
+`import.meta.url` is the document's).
+
+**Why.** GitHub is all modules, so none of its scripts ran (its account
+menu drew as a bare "Button" on the P5 on 2026-10-25, likely one of
+them, unconfirmed until it runs there). 102 of the 2026-10-22b corpus's
+kept records said `MISSING script module`.
+
+**What was built.**
+
+- **The engine half** (libjs CONTRACT.md § Modules; patch 0012). The pinned
+  QuickJS resolves a module's imports as it compiles it, through a
+  synchronous loader, so a browser could not compile an entry before
+  fetching its imports. Patch 0012 adds `JS_EVAL_FLAG_NO_RESOLVE` and the
+  request getters; makes handled the module body's promise the engine
+  takes as the module's error (the host heard one error twice); and leaves
+  no module a failed resolve marked resolved, a cycle's members included,
+  since a page's map keeps them across a failed run (WPT found the SEGV a
+  shared module made, the cold read the use-after-free a cycle made).
+  libjs's module entry:
+  compile unresolved under a name with an optional `import.meta.url`, read
+  the requests, run once inside a task, ask the state after each drain (a
+  top-level `await` settles when what it awaits arrives), release. A
+  module's failure is its handle's and goes to the script host's
+  `exception`, never to an unhandled rejection; a compile's syntax error
+  is its outcome's alone, since no task is running to report it.
+- **The page's module map** (`yonder/modules.c`, one per script host, so
+  one per realm). A module is fetched as HTML fetches one: a CORS GET with
+  same-origin credentials through the page's own request path (slice 2's
+  fetch job, the answer told from a fetch()'s by `YONDER_MODULE_TOKEN`),
+  ok, a 2xx, typed as JavaScript (`os64_dom_javascript_mime`), read as
+  UTF-8 (`script_decode.c`, split out of the script job so both share
+  it). Each is compiled as it lands and its imports fetched, each URL
+  once; a graph is READY when everything it reaches is in. An inline
+  module a running script connects (or `document.write` writes) cannot
+  be compiled mid-call: it waits PENDING and the next step compiles it.
+  The map keeps every source, because the engine asks the loader again
+  for a module a failed run unlisted, and a dynamic `import()` of a module
+  no graph reached is fetched inline under its task's budget (DEBTS).
+- **Errors as HTML reports them.** A module not fetched or not JavaScript
+  fails its graph and runs nothing. A syntax error is BROKEN, not failed:
+  the run reaches it, the engine compiles it again from its source and
+  throws, and the window hears the SyntaxError; an entry that is itself
+  broken runs a one-line `import '<entry>'` in its place. A bare
+  specifier throws its TypeError at the run. Each is on the record by its
+  module's address.
+- **The script host's order** (`scripts.c`). A parser-inserted module,
+  inline or not, is deferred, among the defer scripts in document order; an
+  `async` one and a script-inserted one run when their graph is ready; a
+  module never blocks the parse; `nomodule` classic scripts are skipped
+  (and marked started) where modules run; a module runs as one task named
+  as the page's code (CORS-fetched, so never muted), with no
+  `currentScript`, its owed error events settled after. `type=importmap`
+  is on the record as missing (the stream's parse and the host both say
+  it). A classic script's `import()` resolves against the script's own
+  address (`os64_dom_script_address`), which is how a bundler's lazy
+  chunk loads. With the switch off nothing of this exists and a module is
+  missing, as before.
+- **libdom** tells the host of a module a verb connects, as of a classic
+  script (it skipped them, so a loader's module never reached yonder), and
+  reflects a script's `type`, `defer` and `noModule`: a loader's
+  `s.type = 'module'` was an expando, and its script ran as a classic one
+  (the first draft's own test passed that way; the mutant harness caught
+  it). `text` and `async` are DEBTS rows.
+- **Module preloads**, added after the P5's first run. The P5's first
+  module page (a Vite build) died on its first statement: Vite's
+  modulepreload polyfill asks `link.relList.supports('modulepreload')`,
+  found no `relList`, and reached for `MutationObserver`, which is slice
+  5a's. `supports` answers true only for what yonder does, so the
+  preload is real: a link's `rel` and `relList` are reflected (libdom,
+  `relList` being classList's DOMTokenList over `rel`, with `supports`). At each of the stream's looks
+  for its sheets, `yonder_scripts_preload` walks the tree for `<link
+  rel=modulepreload>` whose `as` is a script's and begins each one's module
+  in the page's map, which fetches its imports as it lands and runs
+  nothing; a module script or import of it finds it fetched once.
+  `supports` answers `stylesheet`, and `modulepreload` with the switch on.
+  A link a script inserts after the parse, and the link's own `load` and
+  `error`, are DEBTS rows.
+
+**Decisions.**
+
+1. **Modules from a `file:` page are refused**, as Chrome refuses them: the
+   request path has no `file:` door, and a file page's origin is null.
+   Pages under test are served over http.
+2. **The map is the engine's backstop, not only its feed.** A failed
+   resolve unlists every module no run has resolved, other graphs'
+   included, so the loader answers for any name the map holds.
+3. **A syntax error is reported, not swallowed** (decision of the build,
+   against the first draft's FAILED): WPT's error pages and real sites'
+   error reporting both expect `window.onerror` to hear it.
+
+**Numbers.**
+
+- **WPT** `html/semantics/scripting-1/the-script-element/module`: 0 → 101
+  of 269 (99 `[required]`, each failing with the switch off; the two left
+  out pass either way). The rest is DEBTS.md § ES modules (a script
+  element's load and error events, `async = false` ordering, import maps,
+  import.meta.resolve, JSON and CSS modules), workers and
+  frames, and pages that need a `.py` handler or a server's delay. The
+  preloads add two directories to `tools/wpt_fetch.sh` and to the
+  expectations: `html/semantics/document-metadata/the-link-element` 1 → 2
+  of 147 (`link-rellist.html`) and `preload` 20 → 22 of 811 (the two
+  modulepreload pages that ask only that a preload not hold the window's
+  `load`); the rest of `preload/modulepreload*` inserts its links by
+  script and waits on their `load` (DEBTS). All 37 directories with
+  expectations pass with no pass lost.
+- **Hosts**, 0 failed: libjs runtime 1,267 target-core and 6,096
+  instrumented checks, the module sweep 5 and 243 allocations; scripted
+  page 8,063 (`tools/test_yonder_modules.inc` among them); yonder 2,028;
+  fetch job 374; DOM 15,215 and 100,986 (the first one's installer sweep
+  is one allocation shorter with the new members, 319 cuts for 320, and
+  each cut carries its checks); replay self-test 43 pages, 0 problems; the
+  libjs prepare, engine and target-audit suites (190 engine exports, 27
+  runtime).
+- **Mutants** (`tools/test_modules_mutants.py`): 37, each caught (two first
+  missed, which is how libdom's unreflected `type` and unreported connected
+  modules were found; one of the preloads' first did not build, the
+  `-Werror` of an unused `dom`, and was reworded).
+- **Corpus** 2026-10-22b: `MISSING script module` was in 102 kept records
+  and is in none of the head's replay; 15 say `MISSING script importmap`.
+  The replay can measure no more: it answers none of a page's script
+  requests, a module's among them, so 85 of those 102 pages wait on their
+  graphs and replay unfinished (DEBTS.md § The replay corpus). A corpus
+  kept after this slice, its requests kept, is the measure.
+- **QEMU**: a served module site (a graph of three, an async module, an
+  inline one, dynamic imports from a module and from a classic script, a
+  `nomodule` fallback) runs in HTML's order, each file fetched once. With
+  the preloads, three Vite builds over the wire: the shop demo's React app
+  renders its login page whole (it had died on the polyfill's first
+  statement on the P5), and TodoMVC's Svelte and Vue builds get past the
+  polyfill to the next surface each needs: the `Text` interface object
+  and `SVGElement` (Vue's mount asks `instanceof SVGElement`). On the P5
+  the shop logs in and reaches its inventory page; QEMU's keyboard route,
+  which left focus on the page rather than in a field, reached react-dom's
+  select-event code, which calls `window.getSelection` unguarded when the
+  focused element is not a text field, and its absence unmounted the app.
+- **P5**: GitHub's page, Chris's to run.
 
 ### Slice 6a, XML foundation as built — 2026-10-25
 
