@@ -1,0 +1,8 @@
+# WPT's html/semantics/forms/the-optgroup-element in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/semantics/forms/the-optgroup-element --update
+# rewrites [passing].
+[required]
+[excluded]
+[passing]
+optgroup-removal.window.html	<select> needs to be updated when <optgroup> is removed

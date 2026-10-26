@@ -1,0 +1,101 @@
+# WPT's html/semantics/forms/the-option-element in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/semantics/forms/the-option-element --update
+# rewrites [passing].
+[required]
+[excluded]
+[passing]
+option-element-constructor.html	Option constructor creates HTMLOptionElement with specified text and value
+option-element-constructor.html	Option constructor handles selectedness correctly when specified with defaultSelected only
+option-element-constructor.html	Option constructor handles selectedness correctly, even when incongruous with defaultSelected
+option-element-constructor.html	Option constructor treats empty text and value correctly
+option-element-constructor.html	Option constructor treats falsy selected and defaultSelected correctly
+option-element-constructor.html	Option constructor treats truthy selected and defaultSelected correctly
+option-element-constructor.html	Option constructor treats undefined text and value correctly
+option-element-constructor.html	Option constructor with falsy arguments
+option-element-constructor.html	Option constructor with no arguments
+option-element-constructor.html	Prototype of object created with named constructor
+option-index.html	option index should always be 0 for options in datalists
+option-index.html	option index should always be 0 for options not even in the document
+option-index.html	option index should always be 0 for options with no container
+option-index.html	option index should work inside the document
+option-label.html	No children, empty label
+option-label.html	No children, label
+option-label.html	No children, no label
+option-label.html	Single child, empty label
+option-label.html	Single child, label
+option-label.html	Single child, no label
+option-label.html	Two children, empty label
+option-label.html	Two children, label
+option-label.html	Two children, no label
+option-selected.html	dirty, not selected
+option-selected.html	dirty, selected
+option-selected.html	not dirty
+option-text-backslash.html	Test for the backslash sign in option.text
+option-text-label.html	Option with empty label.
+option-text-label.html	Option with non-empty label.
+option-text-recurse.html	option.text should ignore comment children
+option-text-recurse.html	option.text should not recurse into HTML script elements
+option-text-recurse.html	option.text should recurse
+option-text-recurse.html	option.text should work if a child of the option ends with a script
+option-text-recurse.html	option.text should work if the option is in an HTML script element
+option-text-setter.html	Verify that using HTMLOptionElement.text setter does not update the existing text child node.
+option-text-spaces.html	HTMLOptionElement.text
+option-text-spaces.html	option.text should leave a single internal NBSP alone.
+option-text-spaces.html	option.text should leave leading NBSP alone.
+option-text-spaces.html	option.text should leave trailing NBSP alone.
+option-text-spaces.html	option.text should leave two internal NBSPs alone.
+option-text-spaces.html	option.text should replace multiple internal space characters (" ", " ")
+option-text-spaces.html	option.text should replace multiple internal space characters (" ", "\\f")
+option-text-spaces.html	option.text should replace multiple internal space characters (" ", "\\n")
+option-text-spaces.html	option.text should replace multiple internal space characters (" ", "\\r")
+option-text-spaces.html	option.text should replace multiple internal space characters (" ", "\\t")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\f", " ")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\f", "\\f")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\f", "\\n")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\f", "\\r")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\f", "\\t")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\n", " ")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\n", "\\f")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\n", "\\n")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\n", "\\r")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\n", "\\t")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\r", " ")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\r", "\\f")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\r", "\\n")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\r", "\\r")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\r", "\\t")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\t", " ")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\t", "\\f")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\t", "\\n")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\t", "\\r")
+option-text-spaces.html	option.text should replace multiple internal space characters ("\\t", "\\t")
+option-text-spaces.html	option.text should replace single internal space characters (" ")
+option-text-spaces.html	option.text should replace single internal space characters ("\\f")
+option-text-spaces.html	option.text should replace single internal space characters ("\\n")
+option-text-spaces.html	option.text should replace single internal space characters ("\\r")
+option-text-spaces.html	option.text should replace single internal space characters ("\\t")
+option-text-spaces.html	option.text should strip leading and trailing space characters (" ")
+option-text-spaces.html	option.text should strip leading and trailing space characters ("\\f")
+option-text-spaces.html	option.text should strip leading and trailing space characters ("\\n")
+option-text-spaces.html	option.text should strip leading and trailing space characters ("\\r")
+option-text-spaces.html	option.text should strip leading and trailing space characters ("\\t")
+option-text-spaces.html	option.text should strip leading space characters (" ")
+option-text-spaces.html	option.text should strip leading space characters ("\\f")
+option-text-spaces.html	option.text should strip leading space characters ("\\n")
+option-text-spaces.html	option.text should strip leading space characters ("\\r")
+option-text-spaces.html	option.text should strip leading space characters ("\\t")
+option-text-spaces.html	option.text should strip trailing space characters (" ")
+option-text-spaces.html	option.text should strip trailing space characters ("\\f")
+option-text-spaces.html	option.text should strip trailing space characters ("\\n")
+option-text-spaces.html	option.text should strip trailing space characters ("\\r")
+option-text-spaces.html	option.text should strip trailing space characters ("\\t")
+option-value.html	No children, empty value
+option-value.html	No children, no value
+option-value.html	No children, value
+option-value.html	Single child, empty value
+option-value.html	Single child, no value
+option-value.html	Single child, value
+option-value.html	Two children, empty value
+option-value.html	Two children, no value
+option-value.html	Two children, value

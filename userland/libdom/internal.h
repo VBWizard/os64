@@ -24,19 +24,24 @@ typedef struct DIdle DIdle;
 typedef struct DActiveEvent { struct DActiveEvent *previous; JSValue value; } DActiveEvent;
 /* The wrappers' prototypes, one per kind of node the binding tells apart
  * (node.c's d_node_install builds the chain). An HTML element is an
- * HTML_ELEMENT, or one of the kinds after it when it has one of its own;
- * an element of another namespace is an ELEMENT. ATTR is Attr's, which is
- * a Node and no tree node: no Node member is installed on it, and it
- * shadows every one with its own answer (attr.c). */
+ * HTML_ELEMENT, or one of the HTML kinds when it has one of its own; an
+ * element in the SVG namespace is an SVG; an element of another namespace
+ * is an ELEMENT. A text node is a TEXT and a comment a COMMENT, each under
+ * CHARACTER_DATA, which no node is itself. ATTR is Attr's, which is a Node
+ * and no tree node: no Node member is installed on it, and it shadows
+ * every one with its own answer (attr.c). A kind comes after the kind it
+ * inherits, which is the order the prototypes are made in. */
 enum {
     D_PROTO_NODE, D_PROTO_DOCUMENT, D_PROTO_ELEMENT, D_PROTO_CHARACTER_DATA,
     D_PROTO_FRAGMENT, D_PROTO_DOCTYPE, D_PROTO_ATTR, D_PROTO_HTML_ELEMENT, D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT,
     D_PROTO_BUTTON, D_PROTO_FORM, D_PROTO_IMAGE, D_PROTO_SCRIPT, D_PROTO_ANCHOR,
-    D_PROTO_LINK, D_PROTO_IFRAME, D_PROTO_COUNT
+    D_PROTO_LINK, D_PROTO_IFRAME, D_PROTO_OPTION, D_PROTO_OPTGROUP,
+    D_PROTO_TEXT, D_PROTO_COMMENT, D_PROTO_SVG, D_PROTO_COUNT
 };
 /* The kind a kind's prototype inherits, as its interface inherits: Node's
- * for the node kinds, Element's for HTMLElement, HTMLElement's for the kinds
- * after it; -1 for Node, which inherits Object's. */
+ * for the node kinds, CharacterData's for TEXT and COMMENT, Element's for
+ * HTMLElement and SVG, HTMLElement's for the HTML kinds; -1 for Node, which
+ * inherits Object's. */
 int d_proto_parent(int kind);
 /* The event types the binding names, which are the ones on<type> names and
  * os64_dom_listens count: the ones the host dispatches; the three the
@@ -79,6 +84,8 @@ struct DValue {
     /* An Attr's own entry: its record (attr.c). */
     struct DAttr *attr;
     DQuery *child_nodes, *children, *images, *forms, *elements;
+    /* A select's options and selectedOptions, each made once ([SameObject]). */
+    DQuery *options, *selected_options;
     DListener *listeners, *last_listener;
     /* The document the node was made in, copied from or last taken out of,
      * when that is not the window's (implementation.c); NULL is the
@@ -118,6 +125,7 @@ struct DQuery {
     const os64_html_node_t **nodes;
     size_t count;
     uint64_t version;
+    uint64_t state_version;     /* SELECTED_OPTIONS: the control state it was read at */
     bool descendants, elements;
 };
 /* One addEventListener registration, or a target's on<type> handler slot.
@@ -189,6 +197,9 @@ struct os64_dom {
      * its attributes, good only while its list is as it was. */
     JSClassID attr_class, named_map_class;
     DValue *named_map_prototype;
+    /* HTMLOptionsCollection's prototype (options.c), over a collection's;
+     * NULL with the modern switch off. */
+    DValue *options_prototype;
     struct DAttr **attr_table;
     size_t attr_capacity, attr_attached;
     struct DAttrCursor {
@@ -625,10 +636,15 @@ enum {
     D_APPEND_NODES, D_PREPEND, D_REPLACE_CHILDREN, D_BEFORE, D_AFTER, D_REPLACE_WITH, D_REMOVE_SELF,
     D_CONTAINS, D_MATCHES, D_CLOSEST, D_BY_CLASS, D_BY_NAME,
     D_ADJACENT_HTML, D_ADJACENT_ELEMENT, D_ADJACENT_TEXT,
-    D_ATTRIBUTE_NAMES, D_TOGGLE_ATTR, D_HAS_ATTRS
+    D_ATTRIBUTE_NAMES, D_TOGGLE_ATTR, D_HAS_ATTRS,
+    /* The node row's (mixin.c d_nodes_install, behind the modern switch). */
+    D_ROOT_NODE
 };
+/* OPTIONS and SELECTED_OPTIONS are a select's list of options (libpage's
+ * walk, os64_page_option_next) and the ones of it that are selected; the
+ * second also changes with control state, not only with the tree. */
 enum { D_QUERY_GENERIC, D_QUERY_IMAGES, D_QUERY_FORMS, D_QUERY_CONTROLS, D_QUERY_DOCUMENT_NAMES,
-       D_QUERY_CLASSES, D_QUERY_NAME };
+       D_QUERY_CLASSES, D_QUERY_NAME, D_QUERY_OPTIONS, D_QUERY_SELECTED_OPTIONS };
 bool d_named_match(const os64_html_node_t *node, const char *name);
 bool d_classic_match(const os64_html_node_t *root, const os64_html_node_t *node, unsigned kind);
 JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root, unsigned kind, const char *named);
@@ -976,6 +992,25 @@ int d_url_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst input, char **out)
  * (event.c). LIBDOM.md § P1-Da's rows is the record. ── */
 int d_document_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_custom_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* ── 0f's P1a (INTERFACES_FORMS.md): Node's getRootNode and Text's own
+ * members (mixin.c), and Attr's getRootNode beside them (attr.c), whose
+ * shadow covers Node.prototype whole. ── */
+int d_nodes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+int d_attr_root_install(os64_dom_t *dom, JSContext *ctx);
+/* The select's, option's and optgroup's members, HTMLOptionsCollection's
+ * prototype and the Option factory (options.c). */
+int d_options_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* HTMLOptionsCollection's indexed setter (HTML § 2.6.2.2), for the
+ * collection's exotic: null or undefined removes the option at `index`, an
+ * option past the end is appended after empty options fill the gap, and
+ * one within it replaces the option there. 0, or -1 with an exception. */
+int d_options_set_index(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *select, uint32_t index,
+                        JSValueConst value);
+/* getRootNode's GetRootNodeOptions converted as WebIDL converts a
+ * dictionary (a page's `composed` getter runs; anything but an object,
+ * undefined or null is a TypeError), for both of its receivers. With no
+ * shadow trees, `composed` changes no answer. -1 with an exception. */
+int d_root_options(JSContext *ctx, int argc, JSValueConst *argv);
 /* The referrer copied out of the options at creation (core.c), and what
  * os64_dom_free lets go: the copy and the held running script. */
 int d_document_setup(os64_dom_t *dom);

@@ -59,20 +59,24 @@ are read from the attached tree rather than trusted parser-time pointers.
 
 Kind prototypes inherit Node. An HTML element's prototype is HTMLElement's,
 which inherits Element's, or, for the elements with members of their own
-(the form controls, form, image, script, anchor and link), a prototype that
-inherits HTMLElement's; an element of another namespace (SVG, MathML) has
-Element's. The supported properties and methods are placed on those chains:
+(the form controls, option, optgroup, form, image, script, anchor, link and
+iframe), a prototype that inherits HTMLElement's; an SVG element's is
+SVGElement's, which inherits Element's; an element of any other namespace
+(MathML) has Element's. A text node's prototype is Text's and a comment's
+Comment's, each inheriting CharacterData's. The supported properties and
+methods are placed on those chains:
 
 | Kind | Surface beyond Node |
 | --- | --- |
 | Document | documentElement/head/body (body settable, HTML's setter), doctype, implementation, child-element access, ID/tag/class/name/selector queries, creation; with the Modern Web switch on, the state reads of § P1-Da's rows |
 | Element | tagName, id/className, innerHTML/outerHTML, the attribute methods and `attributes` (§ Attributes as nodes), tag/class/selector queries, child-element access and element siblings, § The classic methods |
-| Text and Comment (CharacterData) | data and element siblings |
+| Text and Comment (CharacterData) | data and element siblings; a Text's wholeText and splitText with the Modern Web switch on (§ 0f P1a's rows) |
 | DocumentType | name, publicId, systemId |
 | DocumentFragment | child-element access, ID and selector queries |
 | HTML input/textarea/select/button | value, type (an input's state keyword, else "text"; a button's "submit", "reset" or "button"; "select-one" or "select-multiple"; "textarea") |
 | HTML input | checked (every input's checkedness, which only a checkbox and a radio show and send) |
-| HTML select | selectedIndex |
+| HTML select | selectedIndex; with the Modern Web switch on, options and the rest of § 0f P1a's rows |
+| HTML option and optgroup | with the Modern Web switch on, § 0f P1a's rows |
 
 Node supplies tree navigation, ownerDocument, childNodes, nodeType/nodeName,
 nodeValue/textContent and tree methods. A property absent from a node's chain
@@ -80,8 +84,9 @@ reads undefined and is absent from `in`; assignment may create an ordinary
 expando. Borrowed methods and accessors still validate native receivers.
 With the Modern Web switch on, the prototypes are named on window by
 interface objects (§ The Modern Web's surface): DocumentFragment's
-constructs an empty fragment, and the rest are Illegal constructors. The
-surface is the one this file lists.
+constructs an empty fragment, Text's and Comment's a node holding their
+argument, and the rest are Illegal constructors. The surface is the one
+this file lists.
 
 Child collections and tag queries are native live objects with `length`,
 `item(index)` and indexed access. A query refreshes against the HTML version;
@@ -819,9 +824,10 @@ was written, not in CSSOM's canonical form, and a shorthand's longhands do
 not read back (DEBTS.md § Classic browser scripting).
 
 The first row is the interface objects (`classic.c`'s
-`d_interfaces_install`): `Node`, `CharacterData`, `DocumentFragment`,
-`Document`, `DocumentType`, `Element`, `HTMLElement` and the HTML element interfaces that
-have a prototype of their own, each named for exactly one of the binding's
+`d_interfaces_install`): `Node`, `CharacterData`, `Text`, `Comment`,
+`DocumentFragment`, `Document`, `DocumentType`, `Element`, `SVGElement`,
+`HTMLElement` and the HTML element interfaces that have a prototype of
+their own, each named for exactly one of the binding's
 prototypes (WebIDL § 3.7), so `instanceof` answers truly and a page may
 patch `Element.prototype`. Each interface object inherits its parent's
 (`Object.getPrototypeOf(HTMLElement) === Element`), as each prototype
@@ -830,19 +836,20 @@ carries the node-type and document-position constants, on itself and its
 prototype, as WebIDL puts a constant. Each prototype's own
 `Symbol.toStringTag` is its interface's name, so
 `Object.prototype.toString.call(document.body)` is `[object HTMLElement]`
-(WebIDL § 3.7.3; a Text says `CharacterData`, whose prototype it shares).
+(WebIDL § 3.7.3).
 `new DocumentFragment()` makes an
-empty fragment of the window's document, whose prototype is new.target's
-`prototype` (so a subclass makes its own kind; DocumentFragment's when that
-is not an object), and any call of it without `new`
-is refused by the engine itself, the function being made as a constructor
-only (it finds its binding through the anchor, which is its own class's
+empty fragment of the window's document, and `new Text(data)` and
+`new Comment(data)` a node of it holding `data` ("" when it is undefined),
+each with new.target's `prototype` (so a subclass makes its own kind; the
+interface's own when that is not an object); any call of them without `new`
+is refused by the engine itself, the functions being made as constructors
+only (they find their binding through the anchor, which is its own class's
 prototype in the binding's context); every other interface is an "Illegal
 constructor", `Document` among them, since `new Document()` makes an XML
 document. An interface
-whose nodes share a broader prototype (Text, Comment, `HTMLDivElement`) is
-not installed: naming the broader prototype for it would make `instanceof`
-lie. Each prototype's `constructor` is its interface object; with the
+whose nodes share a broader prototype (`HTMLDivElement`, `SVGSVGElement`)
+is not installed: naming the broader prototype for it would make
+`instanceof` lie. Each prototype's `constructor` is its interface object; with the
 switch off it is what it was before the arc (`Image` for the image
 prototype, inherited from `Object.prototype` for the rest).
 
@@ -1325,3 +1332,50 @@ finds its entry by binary search, and the holes run and cancelled entries
 leave are closed up once they outnumber the entries. The entries are the
 binding's memory (a page's flood of requests ends in QuotaExceededError);
 their callbacks are the registry's seventh list.
+
+### 0f P1a's rows: the node row and the select row
+
+INTERFACES_FORMS.md is the plan (its § P1a); MODERN_WEB.md § Slice 0f, as
+built, the record. The interface objects it added (`Text`, `Comment`,
+`SVGElement`, `HTMLOptionElement`, `HTMLOptGroupElement`) are the
+interfaces row's, above; two rows of their own carry the members.
+
+**The node row** (`mixin.c` `d_nodes_install`, naming nothing on window):
+`getRootNode(options)` on Node's prototype, the root of the node's tree
+(no shadow trees, so `composed` changes nothing, though the options are
+converted as WebIDL converts a dictionary), and on Attr's, whose shadow
+answers it with the Attr itself; Text's `wholeText` (the data of the run
+of text siblings it is in) and `splitText(offset)` (the offset in UTF-16
+code units; the tail a new text node, the next sibling when there is a
+parent; the node shortened first and given its data back if the insertion
+fails).
+
+**The select row** (`options.c`, which names `Option` on window): an
+option's `value` (its attribute, else its text), `text` (its descendant
+text with scripts left out, ASCII whitespace stripped and collapsed;
+setting it is textContent's), `label`, `selected`, `defaultSelected` (the
+`selected` attribute), `disabled`, `index` and `form`; an optgroup's
+`disabled` and `label`; a select's `options`, `length` (settable),
+`selectedOptions`, `multiple`, `size`, `item`, `namedItem`, `add` and
+`remove(index)`, whose no-argument form is ChildNode's `remove()`. An
+option's selectedness is libpage's control state
+(`os64_page_node_option_selected`): in a select without `multiple` it is
+whether the option is the one selectedIndex names (a one-line select's
+first enabled option when none is selected), and setting it is HTML's
+setter, selectedIndex set to it when on, and when off the option
+deselected and the select left to fall back. A select's list of options
+is libpage's walk (`os64_page_option_next`), which skips what HTML's list
+of options skips. `options` and `selectedOptions` are live collections
+(the collection kinds OPTIONS and SELECTED_OPTIONS, made once per select),
+the second refreshed when control state changes as well as the tree;
+`options` has HTMLOptionsCollection's prototype, over a collection's, with
+`length` (settable: options taken off the end, or empty options appended,
+at most 100,000 at once), `selectedIndex`, `add` and `remove`, and an
+indexed setter (`options[i] = option`: null removes the option at `i`, an
+index past the end appends after empty options fill the gap, one within
+replaces), so its indices read as writable. Its interface object waits
+for HTMLCollection's, which it inherits (INTERFACES_FORMS.md § P1b).
+`new Option(text, value, defaultSelected, selected)` is the legacy
+factory function: its `prototype` is HTMLOptionElement's, and every
+argument is converted before the option is made. A select's own indices
+(`select[0]`) are a DEBTS.md row (§ Classic browser scripting).

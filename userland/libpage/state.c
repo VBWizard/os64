@@ -481,11 +481,20 @@ static int64_t select_assign(os64_page_state_t *state, const os64_html_node_t *n
         changed |= option_selected(state, at) != (i == index);
     p_reserve_commit(&reserve);
     p_state_find(state, node)->selection_set = true;
+    // HTML's selectedIndex setter and selectedness setting algorithm: every
+    // option deselected, the chosen one selected and made dirty. The others
+    // keep their dirtiness, and their deselection holds against the
+    // attribute as it stands, so a `selected` attribute added to a clean one
+    // later still selects it (react-dom sets `selected`, then
+    // `defaultSelected`).
     i = 0;
     for (const os64_html_node_t *at = p_option_next(node, NULL); at != NULL; at = p_option_next(node, at), i++)
     {
-        p_state_find(state, at)->selected = i == index ? 1 : 0;
-        p_state_find(state, at)->selected_dirty = true;
+        PNodeState *edit = p_state_find(state, at);
+        edit->selected = i == index ? 1 : 0;
+        edit->selected_attr = p_has_attr(at, "selected");
+        if (i == index)
+            edit->selected_dirty = true;
     }
     p_state_publish(state);
     int32_t after = -1;
@@ -506,6 +515,99 @@ int64_t os64_page_node_set_selected_index(os64_page_state_t *state,
     if (!node_kind(state, node, &element, &input) || element != OS64_PAGE_EL_SELECT)
         return -OS64_PAGE_REASON_WRONG_KIND;
     return select_assign(state, node, index);
+}
+
+// Where `option` is in its select's list, -1 when it is not there.
+static int32_t option_index(const os64_html_node_t *select, const os64_html_node_t *option)
+{
+    int32_t i = 0;
+    for (const os64_html_node_t *at = p_option_next(select, NULL); at != NULL; at = p_option_next(select, at), i++)
+        if (at == option)
+            return i;
+    return -1;
+}
+
+static bool option_node(os64_page_state_t *state, const os64_html_node_t *option)
+{
+    return state != NULL && option != NULL && os64_html_owns_node(state->doc, option) &&
+        p_is(option, OS64_HTML_TAG_OPTION);
+}
+
+int64_t os64_page_node_option_selected(os64_page_state_t *state, const os64_html_node_t *option, bool *on)
+{
+    if (on == NULL || !option_node(state, option))
+        return -OS64_PAGE_REASON_WRONG_KIND;
+    const os64_html_node_t *select = os64_page_option_select(option);
+    if (select == NULL || p_has_attr(select, "multiple")) {
+        *on = option_selected(state, option);
+        return 0;
+    }
+    // A single select shows one option, its selectedIndex's, the default
+    // a one-line select falls back to included.
+    int32_t chosen = -1;
+    (void)os64_page_node_selected_index(state, select, &chosen);
+    *on = chosen >= 0 && chosen == option_index(select, option);
+    return 0;
+}
+
+int64_t os64_page_node_set_option_selected(os64_page_state_t *state, const os64_html_node_t *option, bool on)
+{
+    if (!option_node(state, option))
+        return -OS64_PAGE_REASON_WRONG_KIND;
+    const os64_html_node_t *select = os64_page_option_select(option);
+    bool single = select != NULL && !p_has_attr(select, "multiple");
+    // A single select's option selected is its select's selectedIndex set.
+    if (single && on)
+        return select_assign(state, select, option_index(select, option));
+    PReserve reserve = {.state = state};
+    if (!p_reserve_node(&reserve, option) || (single && !p_reserve_node(&reserve, select)))
+        goto no_memory;
+    bool before = false;
+    int32_t index_before = -1;
+    (void)os64_page_node_option_selected(state, option, &before);
+    if (single)
+        (void)os64_page_node_selected_index(state, select, &index_before);
+    p_reserve_commit(&reserve);
+    PNodeState *edit = p_state_find(state, option);
+    edit->selected = on ? 1 : 0;
+    edit->selected_dirty = true;
+    // Deselected, a single select's option leaves the select to ask for a
+    // reset (HTML's selectedness setting algorithm): a one-line select
+    // with nothing selected shows its first enabled option again.
+    if (single)
+        p_state_find(state, select)->selection_set = false;
+    p_state_publish(state);
+    bool after = false;
+    int32_t index_after = -1;
+    (void)os64_page_node_option_selected(state, option, &after);
+    if (single)
+        (void)os64_page_node_selected_index(state, select, &index_after);
+    if (before != after || index_before != index_after)
+        p_state_changed(state);
+    return 0;
+no_memory:
+    p_reserve_abort(&reserve);
+    return -OS64_PAGE_REASON_NO_MEMORY;
+}
+
+int64_t os64_page_node_init_option_selected(os64_page_state_t *state, const os64_html_node_t *option, bool on)
+{
+    if (!option_node(state, option) || os64_page_option_select(option) != NULL)
+        return -OS64_PAGE_REASON_WRONG_KIND;
+    PReserve reserve = {.state = state};
+    if (!p_reserve_node(&reserve, option)) {
+        p_reserve_abort(&reserve);
+        return -OS64_PAGE_REASON_NO_MEMORY;
+    }
+    p_reserve_commit(&reserve);
+    // The selectedness holds against the attribute as it stands, clean, so
+    // a later change to the attribute is followed.
+    PNodeState *edit = p_state_find(state, option);
+    edit->selected = on ? 1 : 0;
+    edit->selected_attr = p_has_attr(option, "selected");
+    edit->selected_dirty = false;
+    p_state_publish(state);
+    return 0;
 }
 
 static char *state_copy(os64_page_state_t *state, const char *s, size_t len)

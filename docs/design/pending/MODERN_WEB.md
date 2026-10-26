@@ -3419,6 +3419,82 @@ kept records said `MISSING script module`.
   focused element is not a text field, and its absence unmounted the app.
 - **P5**: GitHub's page, Chris's to run.
 
+### Slice 0f, as built
+
+Opened by Opus on 2026-10-25, stacked on slice 3's branch, after the P5's
+first module pages each died on a name the binding lacked: the React shop
+demo's inventory page on `select.options` (react-dom's option updater),
+TodoMVC's Svelte build on `Text`, its Vue build on `SVGElement`. Chris
+asked whether those were three names or the signs of families, and asked
+for them inventoried and ranked as Window and Document were.
+
+**The inventory**, [INTERFACES_FORMS.md](INTERFACES_FORMS.md), was one
+worker agent's (the brief: owner-held, in the Opus kit), by 0e's method:
+webref's IDL, BCD, Chrome's counters, webstatus.dev, a static scan of the
+four corpus pulls (the P5's whole record directory pulled on 2026-10-25 as
+one gzipped tar, 879 records), and a probe of the binding at slice 3's
+head. Two families: the DOM's interface objects, which a page uses for
+`instanceof` and prototype patches (934 shipping, 61 here), and the form
+controls' members (215 shipping, 21 here). It plans P1a to P8 and asks
+eight rulings, taken as its leans on 2026-10-25 (ruling 4, SVGElement's
+`className`, passed to Quinn with slice 6).
+
+**P1a, the three asks**, built by Opus in four parts:
+
+- **Five prototype kinds** (libdom `node.c`): TEXT and COMMENT under
+  CharacterData, SVG under Element, OPTION and OPTGROUP under HTMLElement,
+  `d_proto_parent` an explicit table now. Their interface objects joined
+  the interfaces row, and `new Text(data)` and `new Comment(data)`
+  construct, subclasses included.
+- **The node row** (`mixin.c`): `getRootNode` (and Attr's, which the
+  shadow must answer), Text's `wholeText` and `splitText`.
+- **libpage's option verbs**: an option's selectedness read and set by
+  node (the `selected` setter, a single select's reset included), and the
+  list-of-options walk and an option's select made public.
+- **The select row** (`options.c`): the option's, optgroup's and select's
+  members, `options` and `selectedOptions` as live collections (the second
+  refreshed by control state too), HTMLOptionsCollection's prototype with
+  `length`, `selectedIndex`, `add`, `remove` and the indexed setter
+  (`options[options.length] = new Option(...)`, the old idiom), and the
+  `Option` factory.
+
+What it left is DEBTS.md § Classic browser scripting's (SVGElement's own
+members, a select's own indices, `splitText` inside a pair) and
+INTERFACES_FORMS.md's later phases (HTMLOptionsCollection's interface
+object waits for HTMLCollection's in P1b).
+
+**Numbers.**
+
+- **WPT**: three directories added to `tools/wpt_fetch.sh` (same pin),
+  each measured at slice 3's head and at this one:
+  `html/semantics/forms/the-select-element` 26 → 119 of 436,
+  `the-option-element` 3 → 94 of 108, `the-optgroup-element` 1 of 1 either
+  way; `dom/nodes` 1,722 → 1,733 (the Text and Comment constructors,
+  `rootNode`). All 40 directories with expectations pass with no pass lost.
+- **Hosts**, 0 failed: DOM 15,610 and 102,668 (four assertions that named
+  the old chain say the new one); libpage 254,153, its new option cases
+  among them; scripted page 8,076; yonder 2,028.
+- **Mutants** (`tools/test_interfaces_mutants.py`): 24, each caught. Two
+  were first missed, and their cases were written: a `splitText` offset
+  past a two-byte character (the emoji case split where either rule
+  splits), and an option under a select that its list skips.
+- **QEMU**, over the wire: TodoMVC's Vue build mounts (its header and
+  new-todo field rendered, no failure); its Svelte build passes `Text` and
+  stops at `document.createElementNS`, which every Svelte 5 element is
+  made with: WINDOW_DOCUMENT.md's P1-Db, with `template.content` and
+  `document.importNode` beside it. The shop's inventory page needs a
+  login, which is Chris's to do on the P5.
+
+**Codex, round 1**: two findings, both an option's dirtiness, both fixed.
+Selecting one option of a single select made every option dirty, where
+HTML dirties the chosen one only, so react-dom's `selected` then
+`defaultSelected` left the first choice standing; and `new Option()`
+went through the `selected` setter, dirtying an option HTML's factory
+leaves clean (libpage `os64_page_node_init_option_selected`). The select
+directory went 119 → 124 with them, `select-setter-dirtiness.html` and
+`option-selectedness-script-mutation.html` among the five; three mutants
+were added for the new rules, each caught.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.

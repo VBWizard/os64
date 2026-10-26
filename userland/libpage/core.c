@@ -599,6 +599,28 @@ const os64_html_node_t *p_option_next(const os64_html_node_t *select,
     return at;
 }
 
+const os64_html_node_t *os64_page_option_next(const os64_html_node_t *select, const os64_html_node_t *previous)
+{
+    return select != NULL && p_is(select, OS64_HTML_TAG_SELECT) ? p_option_next(select, previous) : NULL;
+}
+
+const os64_html_node_t *os64_page_option_select(const os64_html_node_t *option)
+{
+    if (option == NULL || !p_is(option, OS64_HTML_TAG_OPTION))
+        return NULL;
+    // The nearest select holds it, or none does: a datalist, an hr or an
+    // optgroup in an optgroup between them takes it out of that select's
+    // list, and a select further out skips the nearer one whole.
+    for (const os64_html_node_t *at = option->parent; at != NULL; at = at->parent)
+        if (p_is(at, OS64_HTML_TAG_SELECT)) {
+            for (const os64_html_node_t *o = p_option_next(at, NULL); o != NULL; o = p_option_next(at, o))
+                if (o == option)
+                    return at;
+            return NULL;
+        }
+    return NULL;
+}
+
 bool p_option_disabled(const os64_html_node_t *select, const os64_html_node_t *option)
 {
     for (const os64_html_node_t *at = option; at != select; at = at->parent)

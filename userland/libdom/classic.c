@@ -318,6 +318,34 @@ static JSValue fragment_constructor(JSContext *ctx, JSValueConst new_target, int
     return made;
 }
 
+/* `new Text(data)` and `new Comment(data)` (DOM § 4.11, § 4.14): a node of
+ * the window's document holding `data`, "" when it is undefined. As the
+ * fragment's constructor, a construct call only, its prototype read from
+ * new.target first, and the argument converted after (WebIDL converts in
+ * that order, and either may run a page's script). `magic` is the kind. */
+static JSValue character_constructor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv,
+                                     int magic)
+{
+    os64_dom_t *dom = d_binding(ctx);
+    if (dom == NULL) return JS_EXCEPTION;
+    JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+    if (JS_IsException(prototype)) return JS_EXCEPTION;
+    DString data = {0};
+    if (argc > 0 && !JS_IsUndefined(argv[0]) && !d_string(dom, ctx, argv[0], &data)) {
+        JS_FreeValue(ctx, prototype);
+        return JS_EXCEPTION;
+    }
+    int64_t status;
+    const char *text = data.data != NULL ? data.data : "";
+    os64_html_node_t *node = magic == D_PROTO_TEXT
+        ? os64_html_create_text(dom->document, text, data.length, &status)
+        : os64_html_create_comment(dom->document, text, data.length, &status);
+    d_string_free(dom, &data);
+    JSValue made = node != NULL ? d_wrap_constructed(dom, ctx, node, prototype) : d_html_error(ctx, status);
+    JS_FreeValue(ctx, prototype);
+    return made;
+}
+
 /* An interface object's [[Prototype]] set to its parent interface's. The
  * engine's JS_SetPrototype takes its reference to the new prototype before
  * it copies a shape the object shares, and keeps it when that copy runs out
@@ -385,15 +413,16 @@ static int string_tag(JSContext *ctx, JSValueConst prototype, JSAtom key, const 
  * `Element.prototype` is what every element inherits, so `el instanceof
  * Element` holds and a page may patch the prototype, as the Wayback
  * Machine's player does. One interface per prototype: an interface with no
- * prototype of its own here (Text and Comment share CharacterData's; most
- * HTML elements have only HTMLElement's) is not installed, since aliasing
+ * prototype of its own here (most HTML elements have only HTMLElement's,
+ * and SVG's subclasses only SVGElement's) is not installed, since aliasing
  * it to a broader one would make `instanceof` lie, and the census says what
- * is missing. Each prototype's `constructor` is its interface, and each
- * interface object inherits its parent's (`Object.getPrototypeOf(
- * HTMLElement) === Element`), as its prototype inherits its parent
- * prototype (d_proto_parent); Node's is Function.prototype. An interface
- * whose standard gives it a constructor the binding can honour constructs
- * (DocumentFragment); the rest are Illegal constructors, as WebIDL makes
+ * is missing (INTERFACES_FORMS.md). Each prototype's `constructor` is its
+ * interface, and each interface object inherits its parent's
+ * (`Object.getPrototypeOf(HTMLElement) === Element`), as its prototype
+ * inherits its parent prototype (d_proto_parent); Node's is
+ * Function.prototype. An interface whose standard gives it a constructor
+ * the binding can honour constructs (DocumentFragment, Text, Comment); the
+ * rest are Illegal constructors, as WebIDL makes
  * an interface without one (`new Document()`, which makes an XML document,
  * is one of these here). Node's constants come with Node, and each
  * prototype's Symbol.toStringTag with its interface. NamedNodeMap, whose
@@ -404,11 +433,13 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     static const struct { const char *name; unsigned proto; } kInterfaces[] = {
         {"Node", D_PROTO_NODE}, {"CharacterData", D_PROTO_CHARACTER_DATA},
+        {"Text", D_PROTO_TEXT}, {"Comment", D_PROTO_COMMENT},
         {"DocumentFragment", D_PROTO_FRAGMENT}, {"Document", D_PROTO_DOCUMENT},
         {"DocumentType", D_PROTO_DOCTYPE}, {"Attr", D_PROTO_ATTR},
-        {"Element", D_PROTO_ELEMENT}, {"HTMLElement", D_PROTO_HTML_ELEMENT},
+        {"Element", D_PROTO_ELEMENT}, {"SVGElement", D_PROTO_SVG}, {"HTMLElement", D_PROTO_HTML_ELEMENT},
         {"HTMLFormElement", D_PROTO_FORM}, {"HTMLInputElement", D_PROTO_INPUT},
         {"HTMLTextAreaElement", D_PROTO_TEXTAREA}, {"HTMLSelectElement", D_PROTO_SELECT},
+        {"HTMLOptionElement", D_PROTO_OPTION}, {"HTMLOptGroupElement", D_PROTO_OPTGROUP},
         {"HTMLButtonElement", D_PROTO_BUTTON}, {"HTMLImageElement", D_PROTO_IMAGE},
         {"HTMLScriptElement", D_PROTO_SCRIPT}, {"HTMLAnchorElement", D_PROTO_ANCHOR},
         {"HTMLLinkElement", D_PROTO_LINK},
@@ -433,6 +464,9 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         if (parent >= 0 && JS_IsUndefined(made[parent])) break;
         JSValue f = proto == D_PROTO_FRAGMENT
             ? JS_NewCFunction2(ctx, fragment_constructor, kInterfaces[i].name, 0, JS_CFUNC_constructor, 0)
+            : proto == D_PROTO_TEXT || proto == D_PROTO_COMMENT
+            ? JS_NewCFunctionMagic(ctx, character_constructor, kInterfaces[i].name, 0, JS_CFUNC_constructor_magic,
+                                   (int)proto)
             : JS_NewCFunction2(ctx, illegal_constructor, kInterfaces[i].name, 0, JS_CFUNC_constructor_or_func, 0);
         if (JS_IsException(f)) break;
         if (JS_SetConstructor(ctx, f, prototype) < 0 ||

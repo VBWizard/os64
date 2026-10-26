@@ -370,7 +370,8 @@ static int node_argument(os64_dom_t *dom, JSContext *ctx, JSValueConst value, bo
 enum {
     A_NAME, A_LOCAL_NAME, A_PREFIX, A_NAMESPACE, A_VALUE, A_OWNER_ELEMENT, A_SPECIFIED,
     A_NODE_TYPE, A_NODE_VALUE, A_TEXT_CONTENT, A_NO_NODE, A_OWNER_DOCUMENT, A_CHILD_NODES,
-    A_CONNECTED, A_APPEND, A_INSERT, A_REPLACE, A_REMOVE_CHILD, A_CLONE, A_HAS_CHILDREN, A_CONTAINS
+    A_CONNECTED, A_APPEND, A_INSERT, A_REPLACE, A_REMOVE_CHILD, A_CLONE, A_HAS_CHILDREN, A_CONTAINS,
+    A_ROOT
 };
 
 static JSValue empty_child_nodes(os64_dom_t *dom, JSContext *ctx, DAttr *rec)
@@ -427,6 +428,13 @@ static JSValue attr_member(JSContext *ctx, JSValueConst self, int argc, JSValueC
         JSValue result = rec == NULL ? JS_EXCEPTION : attr_value_set(dom, ctx, rec, &text);
         d_string_free(dom, &text);
         return result;
+    }
+    /* An Attr is in no tree, so it is its own root (DOM § 4.4); the
+     * options are converted first, as the arguments always are. */
+    if (magic == A_ROOT) {
+        if (JS_GetOpaque(self, dom->attr_class) == NULL) return JS_ThrowTypeError(ctx, "Expected an Attr");
+        if (d_root_options(ctx, argc, argv) < 0) return JS_EXCEPTION;
+        return attr_receiver(ctx, self) != NULL ? JS_DupValue(ctx, self) : JS_EXCEPTION;
     }
     DAttr *rec = attr_receiver(ctx, self);
     if (rec == NULL) return JS_EXCEPTION;
@@ -1104,6 +1112,11 @@ int d_attr_classic(os64_dom_t *dom, JSContext *ctx)
         if (d_method(dom, ctx, kVerbs[i].on_document ? document : element, kVerbs[i].name, node_verb,
                      kVerbs[i].argc, kVerbs[i].magic) < 0) return -1;
     return d_accessor(dom, ctx, element, "attributes", node_verb, M_ATTRIBUTES, false);
+}
+
+int d_attr_root_install(os64_dom_t *dom, JSContext *ctx)
+{
+    return d_method(dom, ctx, dom->prototypes[D_PROTO_ATTR]->value, "getRootNode", attr_member, 0, A_ROOT);
 }
 
 JSValue d_attr_map_interface(os64_dom_t *dom, JSContext *ctx)
