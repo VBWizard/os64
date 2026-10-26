@@ -675,7 +675,7 @@ static Replaced replaced_size(L *l, const os64_html_node_t *node, const flow_sty
     }
     bool frame = node->ns == OS64_HTML_NS_HTML &&
                  (node->tag == OS64_HTML_TAG_IFRAME || node->tag == OS64_HTML_TAG_FRAME);
-    if (frame) {
+    if (frame || (l->env->svg && flow_svg_root(node))) {
         r.w = f_css_units(l->env, 300);
         r.h = f_css_units(l->env, 150);
     } else {

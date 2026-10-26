@@ -5400,6 +5400,40 @@ static uint32_t *stand_in_shot(void) {
 /* THE STAND-INS' OWN PAINTING (yonder.c's pane_stand_in, stand_in_label,
  * glass_stand_in), which the yonder host's recorder stands in for: what a
  * label says, that a canvas has no paper, and what laying labels out costs. */
+static void svg_window_cases(void)
+{
+    probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
+        "<svg width=64 height=64 viewBox='0 0 64 64' opacity='.5'>"
+        "<path fill=red d='M0 0H48V48H0Z'/><path fill=red d='M16 16H64V64H16Z'/></svg>",false);
+    uint32_t *px=stand_in_shot();
+    uint32_t edge=px[8*800+8]&0xffffffu,overlap=px[24*800+24]&0xffffffu;
+    check(edge==overlap && (edge>>16)==255 && (edge&255)>=126 && (edge&255)<=129,
+        "SVG window: root opacity applies once after children overlap");
+    check(g.page.svg_bytes==0 && g.page.svg_peak>0,"SVG window: render/destination ledger returns to zero");
+    os64_free(px);probe_drop();
+
+    probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block;visibility:hidden}</style>"
+        "<svg width=64 height=64><path style='visibility:visible' fill='#2091de' d='M8 8H40V40H8Z'/></svg>",false);
+    px=stand_in_shot();check((px[16*800+16]&0xffffffu)==0x2091de,
+        "SVG window: visible descendant paints through hidden root visibility");
+    os64_free(px);probe_drop();
+
+    probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block;transform:translate(20px,0px)}</style>"
+        "<svg width=64 height=64 transform='translate(80 0)'><path fill='#2091de' d='M0 0H16V16H0Z'/></svg>",false);
+    px=stand_in_shot();check((px[8*800+28]&0xffffffu)==0x2091de &&
+        (px[8*800+8]&0xffffffu)==0xffffff && (px[8*800+108]&0xffffffu)==0xffffff,
+        "SVG window: CSS root transform replaces attribute and paints once");
+    os64_free(px);probe_drop();
+
+    probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block;color:#2091de}</style>"
+        "<svg id=art width=64 height=64><path fill=currentColor d='M0 0H32V32H0Z'/></svg>"
+        "<script>document.getElementById('art').style.color='#e87925'</script>",true);
+    px=stand_in_shot();check((px[8*800+8]&0xffffffu)==0x2091de,"SVG window: initial currentColor paints blue");
+    os64_free(px);while(yonder_scripts_pending(g.page.scripts))script_turn();
+    px=stand_in_shot();check((px[8*800+8]&0xffffffu)==0xe87925,"SVG window: script mutation rebuilds and paints orange");
+    os64_free(px);probe_drop();
+}
+
 static void stand_in_paint_cases(void)
 {
     /* A full-viewport canvas over the page, as confetti and snow are: the
@@ -9992,6 +10026,7 @@ int main(void)
     interface_font_cases();
     inserted_frame_cases();
     stand_in_paint_cases();
+    svg_window_cases();
     covered_link_cases();
     classic_downloaded_cases();
     hover_batch_cases();

@@ -21,6 +21,18 @@ typedef struct {
 
 static const Prop kProps[GARB_NPROPS] = {
     [GARB_DISPLAY] = {"display", false, false},
+    [GARB_FILL] = {"fill", true, true},
+    [GARB_STROKE] = {"stroke", true, true},
+    [GARB_FILL_OPACITY] = {"fill-opacity", true, true},
+    [GARB_STROKE_OPACITY] = {"stroke-opacity", true, true},
+    [GARB_FILL_RULE] = {"fill-rule", true, true},
+    [GARB_STROKE_WIDTH] = {"stroke-width", true, true},
+    [GARB_STROKE_LINECAP] = {"stroke-linecap", true, true},
+    [GARB_STROKE_LINEJOIN] = {"stroke-linejoin", true, true},
+    [GARB_STROKE_MITERLIMIT] = {"stroke-miterlimit", true, true},
+    [GARB_STROKE_DASHARRAY] = {"stroke-dasharray", true, true},
+    [GARB_VECTOR_EFFECT] = {"vector-effect", false, true},
+    [GARB_COLOR_INTERPOLATION] = {"color-interpolation", true, true},
     [GARB_COLOR] = {"color", true, false},
     [GARB_BACKGROUND_COLOR] = {"background-color", false, false},
     [GARB_BACKGROUND_IMAGE] = {"background-image", false, false},
@@ -1947,6 +1959,7 @@ static bool list_style(Sets *s, VCur *c)
 
 typedef enum {
     G_KEYWORDS,             // one keyword from `words`
+    G_SVG_PAINT, G_SVG_LENGTH, G_SVG_MITER, G_SVG_DASHES,
     G_COLOR,
     G_MARGIN, G_PADDING, G_BWIDTH, G_BSTYLE, G_BCOLOR,
     G_SIZE,                 // width, height, min-*: auto | lp >= 0 | the content words
@@ -2001,7 +2014,26 @@ typedef struct {
     const char *const *words;
 } Longhand;
 
+static const char *const kSvgRule[] = {"nonzero", "evenodd", NULL};
+static const char *const kSvgCap[] = {"butt", "round", "square", NULL};
+static const char *const kSvgJoin[] = {"miter", "miter-clip", "round", "bevel", "arcs", NULL};
+static const char *const kSvgVector[] = {"none",         "non-scaling-stroke", "non-scaling-size",
+                                         "non-rotation", "fixed-position",     NULL};
+static const char *const kSvgColor[] = {"auto", "srgb", "linearrgb", NULL};
+static const char *const kSvgPaint[] = {"none", "context-fill", "context-stroke", NULL};
 static const Longhand kLonghands[] = {
+    {GARB_FILL, G_SVG_PAINT, NULL},
+    {GARB_STROKE, G_SVG_PAINT, NULL},
+    {GARB_FILL_OPACITY, G_ALPHA, NULL},
+    {GARB_STROKE_OPACITY, G_ALPHA, NULL},
+    {GARB_FILL_RULE, G_KEYWORDS, kSvgRule},
+    {GARB_STROKE_WIDTH, G_SVG_LENGTH, NULL},
+    {GARB_STROKE_LINECAP, G_KEYWORDS, kSvgCap},
+    {GARB_STROKE_LINEJOIN, G_KEYWORDS, kSvgJoin},
+    {GARB_STROKE_MITERLIMIT, G_SVG_MITER, NULL},
+    {GARB_STROKE_DASHARRAY, G_SVG_DASHES, NULL},
+    {GARB_VECTOR_EFFECT, G_KEYWORDS, kSvgVector},
+    {GARB_COLOR_INTERPOLATION, G_KEYWORDS, kSvgColor},
     {GARB_DISPLAY, G_KEYWORDS, kDisplay}, {GARB_COLOR, G_COLOR, NULL},
     {GARB_TEXT_FILL_COLOR, G_COLOR, NULL},
     {GARB_BACKGROUND_COLOR, G_COLOR, NULL}, {GARB_BACKGROUND_IMAGE, G_BG_IMAGE, NULL},
@@ -2937,6 +2969,54 @@ static bool longhand_one(Sets *s, VCur *c, const Longhand *l, garb_val_t *out)
             return false;
         *out = kw(k);
         return true;
+    case G_SVG_PAINT:
+        if (vc_url(c, out)) {
+            // A URL's optional fallback is retained as an item. Fetch policy
+            // belongs to the consumer, not to the cascade.
+            if (!vc_done(c)) {
+                garb_val_t fallback;
+                if ((k = vc_keyword(c, kNone)) != NULL)
+                    fallback = kw(k);
+                else if (!vc_color(c, &fallback))
+                    return false;
+                out->items = keep(s, &fallback, 1);
+                out->nitems = out->items != NULL ? 1 : 0;
+            }
+            return true;
+        }
+        if ((k = vc_keyword(c, kSvgPaint)) != NULL) {
+            *out = kw(k);
+            return true;
+        }
+        return vc_color(c, out);
+    case G_SVG_LENGTH:
+        return vc_dim(c, ACCEPT_NUMBER | ACCEPT_LENGTH | ACCEPT_PERCENT, false, false, &s->a, out);
+    case G_SVG_MITER:
+        return vc_dim(c, ACCEPT_NUMBER, false, false, &s->a, out) &&
+               (out->kind == GARB_V_CALC || out->number >= 1);
+    case G_SVG_DASHES: {
+        if (vc_keyword(c, kNone) != NULL) {
+            *out = kw("none");
+            return true;
+        }
+        garb_val_t values[256];
+        int32_t n = 0;
+        while (!vc_done(c)) {
+            if (n == 256 || !vc_dim(c, ACCEPT_NUMBER | ACCEPT_LENGTH | ACCEPT_PERCENT, false, false,
+                                    &s->a, &values[n++]))
+                return false;
+            const garb_value_t *v = vc_peek(c);
+            if (v && v->kind == GARB_COMMA) {
+                c->i++;
+                if (vc_done(c))
+                    return false;
+            }
+        }
+        if (!n)
+            return false;
+        *out = (garb_val_t){.kind = GARB_V_LENGTH, .items = keep(s, values, n), .nitems = n};
+        return out->items != NULL;
+    }
     case G_COLOR:
     case G_BCOLOR: return vc_color(c, out);
     case G_MARGIN: return margin_one(s, c, out);

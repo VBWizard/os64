@@ -113,6 +113,12 @@ uint32_t f_collapse_white(const char *in, uint32_t n, char *out, bool *space)
     return len;
 }
 
+bool flow_svg_root(const os64_html_node_t *n)
+{
+    return n && n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_SVG &&
+           os64_streq(n->name, "svg") && (!n->parent || n->parent->ns != OS64_HTML_NS_SVG);
+}
+
 // Replaced elements: laid out at a size the face supplies, their insides
 // its widget or its picture. A canvas is one where scripting is on (HTML §
 // 15.4.1: it then represents embedded content, and its fallback is not
@@ -120,6 +126,8 @@ uint32_t f_collapse_white(const char *in, uint32_t n, char *out, bool *space)
 // scripting off it is its fallback content, laid out as any element.
 bool f_replaced(const flow_env_t *env, const os64_html_node_t *n)
 {
+    if (env->svg && flow_svg_root(n))
+        return true;
     if (n->ns != OS64_HTML_NS_HTML)
         return false;
     switch (n->tag) {

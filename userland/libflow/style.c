@@ -4248,12 +4248,16 @@ static FStyled *style_element(Ctx *c, const os64_html_node_t *n)
     sp.s = inherit(c, parent);
     bool item = up != NULL && up->lays_out_items, root = n == c->doc->html;
     FMotion *motion = NULL;
-    if (n->ns != OS64_HTML_NS_HTML) {
-        // An SVG or MathML element draws nothing here, and the HTML inside
-        // it is laid out as its parent's (LAYOUT.md § Pass 2).
+    bool svg_root = c->env->svg && flow_svg_root(n);
+    if (n->ns != OS64_HTML_NS_HTML && !svg_root) {
+        // Foreign descendants have no HTML box of their own. An enabled
+        // outer SVG viewport owns its subtree as replaced content.
         sp.s.display = FLOW_DISPLAY_CONTENTS;
     } else {
-        sheet(c, n, &sp);
+        if (svg_root)
+            sp.s.display = FLOW_DISPLAY_INLINE;
+        else
+            sheet(c, n, &sp);
         if (is(n->parent, OS64_HTML_TAG_DETAILS) && sp.s.display != FLOW_DISPLAY_NONE) {
             // §15.5.5: the first summary is the disclosure the person
             // presses; the rest of a closed details is not drawn.

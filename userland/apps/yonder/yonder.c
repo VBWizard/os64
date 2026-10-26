@@ -42,6 +42,7 @@
 #include "mail.h"
 #include "paint.h"
 #include "picture.h"
+#include "svg.h"
 #include "webfont.h"
 #include "sheet.h"
 #include "scale.h"
@@ -677,6 +678,10 @@ typedef struct Page {
     // pictures_settle).
     bool record_owed;
     size_t kept_bytes, picture_url_bytes;
+    // Synchronous SVG jobs and their destinations share this subdivision.
+    // They release it after each paint; retained document/cascade memory is
+    // accounted by those libraries separately.
+    size_t svg_bytes, svg_peak;
     // The form whose reply this is, when the reply was to a POST: what
     // Reload sends again. Its url is NULL otherwise.
     os64_page_request_t sent;
@@ -1080,6 +1085,7 @@ static bool page_lay_out_run(Page *p, int32_t width, int32_t height, uint32_t zo
     // Context is valid for this layout only and may name a stack Page;
     // libflow consults replaced_size inside flow_layout, which uses it here.
     s_env.ctx = p;
+    s_env.svg = p->modern;
     s_env.cascade = cascade;
     s_laying.cascade = cascade;
     s_laying.entry = cascade == p->cascade ? p->cascade_entry : entry;
@@ -1759,6 +1765,8 @@ static void select_size(const os64_page_control_t *c, const os64_html_node_t *no
 static bool replaced_size(void *ctx, const os64_html_node_t *node, int32_t *w, int32_t *h)
 {
     const Page *p = ctx;
+    if (p->modern && yonder_svg_size(node, w, h))
+        return true;
     const os64_page_t *model = page_model(p);
     int32_t control = model != NULL ? os64_page_control_for(model, node) : -1;
     const os64_page_control_t *c = control >= 0 ? os64_page_control(model, control) : NULL;
@@ -2109,11 +2117,13 @@ static void diag_abandon(yonder_diag_t *d, const char *line)
 // whole: the tally is taken again at every write and holds the most any
 // look saw. A canvas where scripting is on is also the page's failure, one
 // FAILED line however many it has (libflow lays out its fallback where
-// scripting is off); the other kinds are only counted (DEBTS.md, "Loud for
-// canvas only"). A frame is never a failure: its stand-in takes a click to
+// scripting is off). Enabled inline SVG reports individual render refusals
+// at the paint boundary instead of declaring every SVG missing. A frame
+// is not a failure here: its stand-in takes a click to
 // its document.
 #define DIAG_CUSTOM_MAX 64
-static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, bool scripting)
+static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, bool scripting,
+                          bool svg)
 {
     // A frame's document is not loaded into its box (it is offered as a
     // link instead), and an embed makes no box: both are asked for and not
@@ -2128,7 +2138,8 @@ static void diag_elements(yonder_diag_t *d, const os64_html_document_t *doc, boo
     while (n != NULL) {
         if (n->kind == OS64_HTML_ELEMENT && n->name != NULL) {
             for (int k = 0; k < NOTHING; k++)
-                nothing[k] += os64_streq(n->name, kNothing[k]);
+                nothing[k] +=
+                    os64_streq(n->name, kNothing[k]) && (!svg || !os64_streq(kNothing[k], "svg"));
             canvases += n->ns == OS64_HTML_NS_HTML && n->tag == OS64_HTML_TAG_CANVAS;
             if (n->ns == OS64_HTML_NS_HTML && os64_strchr(n->name, '-') != NULL) {
                 int32_t c = 0;
@@ -2370,7 +2381,7 @@ static void diag_paint(Page *p);
 static void diag_observe(Page *p, const char *when)
 {
     yonder_diag_t *d = p->diag;
-    diag_elements(d, page_doc(p), p->scripting);
+    diag_elements(d, page_doc(p), p->scripting, p->modern);
     if (p->cascade != NULL)
         diag_cascade(d, p->cascade);
     char v[128];
@@ -11138,9 +11149,51 @@ static void pane_text(void *ctx, const flow_box_t *b, int32_t x, int32_t baselin
         glass_text(gp->now[k], b, x, baseline, clip, colour);
 }
 
+#define YONDER_SVG_MEMORY_MAX ((size_t)64 * 1024 * 1024)
+static os64_geometry_status_t svg_allocate(void *ctx, size_t bytes, void **out)
+{
+    Page *p = ctx;
+    *out = NULL;
+    if (bytes > YONDER_SVG_MEMORY_MAX - p->svg_bytes)
+        return OS64_GEOMETRY_LIMIT;
+    *out = os64_malloc(bytes);
+    if (!*out)
+        return OS64_GEOMETRY_NO_MEMORY;
+    p->svg_bytes += bytes;
+    if (p->svg_bytes > p->svg_peak)
+        p->svg_peak = p->svg_bytes;
+    return OS64_GEOMETRY_OK;
+}
+static void svg_free(void *ctx, void *bytes, size_t size)
+{
+    Page *p = ctx;
+    os64_free(bytes);
+    p->svg_bytes -= size;
+}
+
 static void pane_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
     GlassPane *gp = ctx;
+    if (flow_svg_root(b->node)) {
+        os64_geometry_memory_t memory = {&g.page, svg_allocate, svg_free};
+        yonder_svg_pixels_t pixels;
+        svg_status_t status =
+            yonder_svg_render(page_doc(&g.page), g.page.cascade, b, c, clip, g.page.laid_zoom,
+                              s_env.ink ^ 0xff000000u, &memory, os64_freetype_geometry_v1(), &pixels);
+        if (status == SVG_OK) {
+            if (pixels.pixels)
+                for (int32_t k = 0; k < gp->n; ++k)
+                    glass_pixels(gp->now[k], pixels.rect, pixels.pixels);
+            yonder_svg_pixels_free(&memory, &pixels);
+        } else {
+            yonder_diag_failed_seen(
+                g.page.diag, "svg",
+                status == SVG_UNSUPPORTED ? "inline SVG uses an unsupported feature"
+                : status == SVG_MALFORMED ? "inline SVG has malformed viewport or transform data"
+                                          : "inline SVG rendering failed or exceeded its limits");
+        }
+        return;
+    }
     for (int32_t k = 0; k < gp->n; k++)
         glass_image(gp->now[k], b, c, clip);
 }
