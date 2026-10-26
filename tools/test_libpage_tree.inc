@@ -353,9 +353,36 @@ static void tree_option_selectedness(void)
     rebuild_clear(&f);
 }
 
+// Dirtiness (HTML § 4.10.10): selecting one option of a single select
+// dirties that option only, so a clean sibling's `selected` attribute is
+// still followed (react-dom sets `selected`, then `defaultSelected`); and
+// the Option factory's selectedness leaves its option clean.
+static void tree_option_dirtiness(void)
+{
+    RebuildFixture f=rebuild_fixture("<select id=s><option id=a>A<option id=b>B<option id=c selected>C</select>"
+        "<div><option id=d>D</div>",0);
+    os64_html_node_t *s=rebuild_id(f.doc,"s"),*a=rebuild_id(f.doc,"a"),*b=rebuild_id(f.doc,"b"),*c=rebuild_id(f.doc,"c");
+    os64_html_node_t *d=rebuild_id(f.doc,"d");
+    bool on=true;
+    int32_t index=-1;
+    rebuild_expect("dirtiness: a parsed selected sibling is deselected",os64_page_node_set_option_selected(f.state,a,true)==0&&
+        os64_page_node_selected_index(f.state,s,&index)==0&&index==0&&os64_page_node_option_selected(f.state,c,&on)==0&&!on);
+    rebuild_expect("dirtiness: a clean sibling follows its attribute",
+        os64_page_node_set_attr(f.state,b,"selected","",0,false)==OS64_HTML_OK&&
+        os64_page_node_selected_index(f.state,s,&index)==0&&index==1);
+    rebuild_expect("dirtiness: the factory's verb is for an option no select holds",
+        os64_page_node_init_option_selected(f.state,a,true)==-OS64_PAGE_REASON_WRONG_KIND);
+    rebuild_expect("dirtiness: the factory's option is clean",os64_page_node_init_option_selected(f.state,d,false)==0&&
+        os64_page_node_option_selected(f.state,d,&on)==0&&!on&&
+        os64_page_node_set_attr(f.state,d,"selected","",0,false)==OS64_HTML_OK&&
+        os64_page_node_option_selected(f.state,d,&on)==0&&on);
+    rebuild_clear(&f);
+}
+
 static void test_libpage_tree(void)
 {
     tree_option_selectedness();
+    tree_option_dirtiness();
     tree_depth_and_state_cap();
     tree_unmodeled_select();
     tree_state_histories();

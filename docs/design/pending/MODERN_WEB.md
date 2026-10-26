@@ -3484,6 +3484,17 @@ object waits for HTMLCollection's in P1b).
   made with: WINDOW_DOCUMENT.md's P1-Db, with `template.content` and
   `document.importNode` beside it. The shop's inventory page needs a
   login, which is Chris's to do on the P5.
+
+**Codex, round 1**: two findings, both an option's dirtiness, both fixed.
+Selecting one option of a single select made every option dirty, where
+HTML dirties the chosen one only, so react-dom's `selected` then
+`defaultSelected` left the first choice standing; and `new Option()`
+went through the `selected` setter, dirtying an option HTML's factory
+leaves clean (libpage `os64_page_node_init_option_selected`). The select
+directory went 119 → 124 with them, `select-setter-dirtiness.html` and
+`option-selectedness-script-mutation.html` among the five; three mutants
+were added for the new rules, each caught.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.

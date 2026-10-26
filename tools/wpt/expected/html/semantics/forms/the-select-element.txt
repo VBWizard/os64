@@ -54,8 +54,11 @@ inserted-or-removed.html	The last selected OPTION should win; Inserted by DOM AP
 inserted-or-removed.html	The last selected OPTION should win; Inserted by innerHTML
 inserted-or-removed.html	The last selected OPTION should win; Inserted by jQuery append()
 inserted-or-removed.html	The last selected OPTION should win; Inserted by parser
+option-selectedness-script-mutation.html	multi-select keeps multiple selected options when selected attribute changes from script
 option-selectedness-script-mutation.html	multi-select responds to option.selected without selected attribute reflection
+option-selectedness-script-mutation.html	single-select responds to removing selected attribute from script
 option-selectedness-script-mutation.html	single-select responds to setting option.selected from script
+option-selectedness-script-mutation.html	single-select responds to setting selected attribute from script
 select-add.html	test that HTMLSelectElement.add method can add option element
 select-add.html	test that HierarchyRequestError exception must be thrown when element is an ancestor of the element into which it is to be inserted
 select-ancestor-subtree-removal.html	Removing an ancestor of a select keeps its options associated with it.
@@ -107,7 +110,9 @@ select-setter-dirtiness.html	The selected setter of an option in a select sets i
 select-setter-dirtiness.html	The selected setter of an option in a select sets its dirtiness when the option is already selected
 select-setter-dirtiness.html	The selectedIndex setter of HTMLOptionsCollection sets the dirtiness of the option it selects
 select-setter-dirtiness.html	The selectedIndex setter of a select sets the dirtiness of the option it selects
+select-setter-dirtiness.html	The selectedIndex setter of a select sets the dirtiness of the option it selects when that option is already selected
 select-setter-dirtiness.html	The value setter of a select sets the dirtiness of the option it selects
+select-setter-dirtiness.html	The value setter of a select sets the dirtiness of the option it selects when that option is already selected
 select-value.html	no options
 select-value.html	optgroups
 select-value.html	option is child of div
