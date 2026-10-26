@@ -122,8 +122,14 @@ The [first viewport](../../svg-evidence/yonder-inline-qemu.png) and
 screenshots.
 The initial test-disk installation failed before Yonder opened: its older
 libos64 lacked five UI symbols. Installing the matching library cohort resolved
-that setup failure without a kernel or renderer change. No P5 execution or
-broad browser/WPT equivalence is claimed by this checkpoint.
+that setup failure without a kernel or renderer change.
+
+On the P5, Chris confirmed that switching dark pages changes the surrounding
+backgrounds while the painted amber SVG path retains its color. With scripts
+enabled, clicking the fixture button changes the check mark from blue to
+orange. The button sets orange on each click; it is not a toggle. These
+hardware observations do not establish broader browser/WPT equivalence or
+page-scale performance.
 
 ## P5 checkpoint and next work
 
