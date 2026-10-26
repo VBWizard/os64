@@ -1551,6 +1551,14 @@ static void dropdown_widget(void)
     current="dropdown: destroyed while open, its list closes and no pick follows";
     queue(1,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,610,610,OS64_GUI_MOUSE_LEFT));drain();h=popup_handle();CHECK(h);
     d.w.cls->destroy(&d.w);CHECK(!os64_ui_menu_active(g.menus));drain();CHECK(!popup_handle()&&drop_changes==3);
+    current="dropdown: destroyed while open, focus never goes back to it, refused close or not";
+    for(int refuse=0;refuse<2;refuse++) {
+        queue(1,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,610,610,OS64_GUI_MOUSE_LEFT));drain();h=popup_handle();CHECK(h);
+        os64_ui_set_focus(&g.ui,NULL);              /* as yonder's widget_destroy moves it off first */
+        transport.fail_destroy=refuse?h:0;
+        d.w.cls->destroy(&d.w);CHECK(g.ui.focus!=&d.w&&!g.menus->saved_focus);
+        transport.fail_destroy=0;drain();CHECK(!popup_handle()&&g.ui.focus!=&d.w&&drop_changes==3);
+    }
     d.w.hidden=true;os64_ui_dropdown_set(&g.ui,&d,0,-1);
     audit_enabled=false;
 }

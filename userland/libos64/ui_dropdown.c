@@ -227,3 +227,9 @@ void os64_ui_dropdown_set(os64_ui_t *ui, os64_ui_dropdown_t *d, size_t count, in
     d->selected = value;
     if (ui) os64_ui_mark_dirty(ui, &d->w);
 }
+
+void os64_ui_dropdown_rows_changed(os64_ui_t *ui, os64_ui_dropdown_t *d)
+{
+    if (ui && ui->menu) os64_ui_menu_list_detach(ui->menu, d);
+    if (ui) os64_ui_mark_dirty(ui, &d->w);
+}

@@ -181,14 +181,17 @@ static void viewport(os64_ui_popup_t *p)
     int32_t end=p->w.bounds.h-(p->scroll?p->row_h:MENU_PAD);
     p->bottom=p->top;
     while(p->bottom<menu_count(p)&&y+height(p,p->bottom)<=end) y+=height(p,p->bottom++);
-    if(p->list) stage_list(p);
 }
+/* A list's rows are staged once the viewport is where it will be painted,
+ * not at each step on the way there (os64_ui_popup_select walks `top` a
+ * row at a time). */
 void os64_ui_popup_scroll(os64_ui_popup_t *p,int32_t rows)
 {
     if(!p||!p->scroll) return;
     size_t top=menu_popup_scroll_top(p,rows);
     if(top==p->top) return;
     p->top=top; viewport(p);
+    if(p->list) stage_list(p);
     if(p->selected<p->top||p->selected>=p->bottom) p->selected=MENU_NONE;
 }
 void os64_ui_popup_select(os64_ui_popup_t *p,size_t i)
@@ -199,6 +202,7 @@ void os64_ui_popup_select(os64_ui_popup_t *p,size_t i)
     if(i<p->top) p->top=i;
     viewport(p);
     while(i>=p->bottom&&p->top<i) { ++p->top; viewport(p); }
+    if(p->list) stage_list(p);
 }
 size_t os64_ui_popup_selected(const os64_ui_popup_t *p) { return p?p->selected:MENU_NONE; }
 os64_gui_rect_t os64_ui_popup_row(const os64_ui_popup_t *p,size_t i)
@@ -402,7 +406,7 @@ os64_ui_status_code_t menu_popup_create_list(os64_ui_t *ui,const menu_list *l,in
     if(!p->stage) { rc=OS64_UI_NO_MEMORY; goto fail; }
     os64_memset(p->stage,0,p->stage_cap*sizeof(*p->stage));
     p->stage_top=MENU_NONE;
-    viewport(p); *out=p; return OS64_UI_OK;
+    viewport(p); stage_list(p); *out=p; return OS64_UI_OK;
 fail: os64_ui_popup_destroy(p); return rc;
 }
 

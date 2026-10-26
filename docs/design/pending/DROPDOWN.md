@@ -312,3 +312,23 @@ a record of the list asked for and plays the person's pick into it.
   the page's: react-burger-menu's effect blurs `document.activeElement`
   whenever the page re-renders with its menu closed, as it would in
   Chrome.
+
+**Codex, round 1** (#361): four findings, all fixed.
+- A dropdown destroyed while its list was open: yonder moves focus off it
+  first, and the close gave focus back to the widget being freed (or, its
+  close refused, read it on the retry). The detach clears the session's
+  saved focus when it is the list's widget.
+- Options reordered or relabelled beneath an open list, count and value
+  unchanged: the list showed the old copy, and a pick's index chose the
+  new option at that place. yonder hashes each dropdown's options (their
+  nodes and labels, `options_signature`) as it syncs, and a change calls
+  `os64_ui_dropdown_rows_changed`, which closes the list.
+- A batch that had found yonder's queue empty earlier in a turn kept
+  answering empty after a popup's destroy, later in the same turn, began
+  a quarantine and queued the owner's focus back: the quarantine lifted
+  with it still queued. During a quarantine the queue is asked again,
+  whatever the batch found before.
+- Opening a long list near its end staged the visible rows' runs at each
+  step of `os64_ui_popup_select`'s walk (5,376 layouts for 32 rows); a
+  list stages once, after the viewport is final.
+Each of the first three has a case that fails without its fix.

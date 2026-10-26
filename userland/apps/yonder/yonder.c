@@ -1241,6 +1241,10 @@ typedef struct {
     char text[512];                 // a field's buffer, a button's caption
     char secret[512];               // a password's value: the field shows bullets
     size_t secret_len;
+    // A dropdown's options as last synced, their nodes and labels hashed
+    // (options_signature): a change closes its open list, whose rows are a
+    // copy of what they were.
+    uint64_t options_sig;
 } FormWidget;
 
 // A person's input waiting to be dispatched as a DOM event (inputs_run).
@@ -6790,6 +6794,22 @@ static const char *option_label(size_t i, void *user)
                ? c->options[i].label : "";
 }
 
+// What a dropdown's options are, for telling when they changed beneath an
+// open list: each option's node and label (FNV-1a), never 0.
+static uint64_t options_signature(const os64_page_control_t *c)
+{
+    uint64_t h = 1469598103934665603ULL;
+    for (int32_t k = 0; k < c->noptions; k++) {
+        uintptr_t node = (uintptr_t)c->options[k].node;
+        for (size_t b = 0; b < sizeof(node); b++)
+            h = (h ^ (uint8_t)(node >> (8 * b))) * 1099511628211ULL;
+        for (const char *s = c->options[k].label != NULL ? c->options[k].label : ""; *s; s++)
+            h = (h ^ (uint8_t)*s) * 1099511628211ULL;
+        h = (h ^ 0xFF) * 1099511628211ULL;
+    }
+    return h != 0 ? h : 1;
+}
+
 // Whether a dropdown's list may choose option i: not when it, or its
 // optgroup, is disabled.
 static bool option_enabled(size_t i, void *user)
@@ -6976,9 +6996,13 @@ static void forms_sync_from_model(bool text)
             for (int32_t k = 0; k < c->noptions && selected < 0; k++)
                 if (c->options[k].selected)
                     selected = k;
-            if (fw->kind == FW_DROPDOWN)
+            if (fw->kind == FW_DROPDOWN) {
+                uint64_t sig = options_signature(c);
+                if (sig != fw->options_sig)
+                    os64_ui_dropdown_rows_changed(&g.ui, &fw->u.drop);
+                fw->options_sig = sig;
                 os64_ui_dropdown_set(&g.ui, &fw->u.drop, (size_t)c->noptions, selected);
-            else
+            } else
                 os64_ui_listbox_set(&g.ui, &fw->u.list, (size_t)c->noptions, selected);
             os64_ui_mark_dirty(&g.ui, fw->w);
             break;

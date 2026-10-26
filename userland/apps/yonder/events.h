@@ -53,15 +53,20 @@ static inline bool yonder_event_batch_next(YonderEventBatch *batch,
  * destroyed window's handle (os64_ui_dispatcher_can_create false), it lifts
  * the quarantine once every queue has answered empty, and a cap read as
  * empty would lift it with events still queued, a stale one naming the dead
- * handle among them. So during one, the cap starts a new batch instead:
- * the quarantine is rare and must finish first, and the paint latency the
- * cap is for is not owed by a turn that cannot make a window. */
+ * handle among them. So during one, the cap starts a new batch instead,
+ * and an empty answer the batch had before cannot stand in for one now:
+ * the queue is asked again, because the destroy that began the quarantine
+ * may have queued an event (the owner's focus back) after the batch last
+ * found it empty. The quarantine is rare and must finish first, and the
+ * paint latency the cap is for is not owed by a turn that cannot make a
+ * window. */
 static inline bool yonder_event_batch_draining(YonderEventBatch *batch, os64_gui_event_t *event,
                                                YonderEventPoll poll, void *opaque, bool quarantine)
 {
     if (yonder_event_batch_next(batch, event, poll, opaque)) return true;
-    if (!quarantine || batch->drained) return false;
+    if (!quarantine) return false;
     batch->consumed = 0;
+    batch->drained = false;
     return yonder_event_batch_next(batch, event, poll, opaque);
 }
 #endif

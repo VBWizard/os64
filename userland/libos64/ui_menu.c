@@ -274,6 +274,9 @@ os64_ui_status_code_t os64_ui_menu_open_list(os64_ui_menu_session_t *s,const os6
 void os64_ui_menu_list_detach(os64_ui_menu_session_t *s,void *user)
 {
     if(!s||!s->list||s->list->user!=user) return;
+    /* The detaching caller may be freeing the list's widget: the close
+     * must not give focus back to it, now or on a retry. */
+    if(s->list->widget&&s->saved_focus==s->list->widget) s->saved_focus=NULL;
     s->list->pick=NULL; s->list->user=NULL; s->list->widget=NULL;
     /* With no native window yet (pending) the close cannot be refused. */
     if(os64_ui_menu_close(s,OS64_UI_MENU_GEOMETRY)!=OS64_UI_OK) s->close_retry=true;

@@ -2520,6 +2520,24 @@ static void input_select_dropdown(void) {
           "select: a pick of the option it has fires nothing");
     g.ui.menu=menus;
     probe_drop();
+    /* The options reordered while the list is open, count and value the
+     * same: the list, a copy of the old order, closes. */
+    probe_page("<select id=sort><option>A<option>B<option>C</select>"
+        "<script>setTimeout(function(){var s=document.getElementById('sort');"
+        "s.insertBefore(s.options[2],s.options[1])},0)</script>",true);
+    script_turn();
+    sort=probe_field("sort");
+    g.ui.menu=&yonder_host_list;
+    yonder_host_list=(yonder_host_list_t){0};
+    sort->w->cls->event(sort->w,&g.ui,&down);
+    check(yonder_host_list.open,"select: its list is open before the page reorders it");
+    for(int i=0;i<5&&yonder_host_list.open;i++) { script_turn(); script_rebuild(); }
+    const os64_page_control_t *c=os64_page_control(page_model(&g.page),widget_control(sort));
+    check(c!=NULL && c->noptions==3 && !strcmp(c->options[1].label,"C") &&
+          !yonder_host_list.open && yonder_host_list.detaches==1,
+          "select: options reordered beneath an open list close it");
+    g.ui.menu=menus;
+    probe_drop();
 }
 static void input_cases(void) {
     g.seq=2;g.key_seq=2;g.pressed_link=9;
@@ -5610,6 +5628,21 @@ static void hover_batch_cases(void)
         check(quarantine ? read==40 && batch.drained : read==YONDER_EVENT_BATCH_MAX && !batch.drained,
               quarantine ? "dispatcher batch: during a quarantine only an empty queue answers none"
                          : "dispatcher batch: otherwise the cap ends the reading with the queue not drained");
+    }
+    /* A batch that found the queue empty, then a destroy that queues an
+     * event and begins a quarantine: the old empty answer does not stand,
+     * and the event is read in the same turn. Outside a quarantine it waits
+     * for the next turn's batch. */
+    for(int quarantine=0;quarantine<2;quarantine++) {
+        queue=(HoverQueue){keys,0,0};
+        batch=(YonderEventBatch){0};
+        check(!yonder_event_batch_draining(&batch,&event,hover_poll,&queue,false) && batch.drained,
+              "dispatcher batch: an empty queue is found empty");
+        queue.count=1;
+        bool read=yonder_event_batch_draining(&batch,&event,hover_poll,&queue,quarantine!=0);
+        check(quarantine ? read && queue.at==1 : !read && queue.at==0,
+              quarantine ? "dispatcher batch: a quarantine asks an emptied queue again"
+                         : "dispatcher batch: otherwise an emptied batch waits for the next turn");
     }
 }
 
