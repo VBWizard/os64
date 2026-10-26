@@ -162,11 +162,12 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
         status = style_status(&item.style);
         if (status != SVG_OK)
             break;
-        if (node.kind != SVG_NODE_GROUP && node.kind != SVG_NODE_PATH) {
+        if (node.kind != SVG_NODE_GROUP && node.kind != SVG_NODE_PATH &&
+            node.kind != SVG_NODE_SHAPE) {
             status = node.kind == SVG_NODE_UNSUPPORTED ? SVG_UNSUPPORTED : SVG_PROVIDER_ERROR;
             break;
         }
-        if (node.kind == SVG_NODE_PATH && node.first_child) {
+        if (node.kind != SVG_NODE_GROUP && node.first_child) {
             status = SVG_UNSUPPORTED;
             break;
         }
@@ -183,9 +184,28 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
             status = c->why;
             break;
         }
-        if (node.kind == SVG_NODE_PATH) {
+        if (node.kind == SVG_NODE_PATH || node.kind == SVG_NODE_SHAPE) {
             svg_path_t *path = NULL;
-            status = svg_parse(c, d, &path, &item.path_result);
+            if (node.kind == SVG_NODE_SHAPE) {
+                svg_shape_t shape = {0};
+                // Growing scene items may have moved the parent style.
+                request.parent_style = parent == SIZE_MAX ? NULL : &scene->items[parent].style;
+                if (!provider->shape) {
+                    status = SVG_PROVIDER_ERROR;
+                    break;
+                }
+                if (!svg_spend(c, 1)) {
+                    status = c->why;
+                    break;
+                }
+                status = provider_status(
+                    provider->shape(provider->context, scene->snapshot, &request, &shape));
+                if (status != SVG_OK)
+                    break;
+                status = svg_make_shape(c, &shape, &path, &item.path_result);
+            } else {
+                status = svg_parse(c, d, &path, &item.path_result);
+            }
             if (status != SVG_OK && status != SVG_MALFORMED)
                 break;
             path->in_scene = true;

@@ -4005,3 +4005,13 @@ and 81 allocation cuts in both refusal modes; full-window tests exercise the
 compositor. SVG/backend/output memory shares a 64 MiB Page subdivision, but
 whole-page budget unification and caching remain debts. This is not completion
 of 6b, external-image support, or a broad conformance/performance claim.
+
+### Slice 6b, basic shapes — 2026-10-26
+
+[SVG_SHAPES.md](SVG_SHAPES.md) extends the connection with rectangles, circles,
+ellipses, lines and open/closed point lists. Typed geometry becomes native
+paths; CSS geometry and presentation attributes use the existing cascade.
+Nineteen shape/path pixel comparisons, allocator-failure sweeps, window mutation
+checks and selected Chromium comparisons cover the increment. The new gallery
+is `/tests/pages/svg-shapes.html`; its button toggles geometry and color.
+This remains part of the static inline milestone, with its broader debts open.

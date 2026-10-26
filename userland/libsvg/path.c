@@ -368,3 +368,122 @@ Status svg_path_release(Context *c, svg_path_t *p)
     svg_free_path(c, p);
     return svg_leave(c, SVG_OK);
 }
+
+static bool shape_command(Context *c, svg_path_t *path, svg_verb_t verb, double x, double y,
+                          double rx, double ry)
+{
+    return svg_spend(c, 1) &&
+           append(c, path,
+                  (svg_command_t){
+                      .verb = verb, .p = {{x, y}}, .rx = rx, .ry = ry, .sweep = verb == SVG_ARC});
+}
+
+static Status shape_points(Context *c, const svg_shape_t *shape, svg_path_t *path,
+                           svg_parse_result_t *result)
+{
+    svg_string_t text = shape->points;
+    if ((!text.data && text.size) || text.size > c->options.limits.input_bytes ||
+        text.size > INT32_MAX)
+        return !text.data && text.size ? SVG_BAD_ARGUMENT : SVG_LIMIT;
+    Parser p = {c, text, 0};
+    bool malformed = false;
+    while (whitespace(&p) && p.at < text.size) {
+        double x, y;
+        if (!number(&p, &x) || !separator(&p, false) || !number(&p, &y)) {
+            malformed = true;
+            break;
+        }
+        if (!shape_command(c, path, path->count ? SVG_LINE : SVG_MOVE, x, y, 0, 0))
+            break;
+        if (!separator(&p, false))
+            break;
+    }
+    if (c->why == SVG_OK && path->count && shape->kind == SVG_SHAPE_POLYGON)
+        shape_command(c, path, SVG_CLOSE, 0, 0, 0, 0);
+    result->offset = p.at;
+    return c->why != SVG_OK ? c->why : malformed ? SVG_MALFORMED : SVG_OK;
+}
+
+Status svg_make_shape(Context *c, const svg_shape_t *shape, svg_path_t **out,
+                      svg_parse_result_t *result)
+{
+    *out = NULL;
+    *result = (svg_parse_result_t){SVG_BAD_ARGUMENT, 0};
+    if (!shape || shape->kind < SVG_SHAPE_RECT || shape->kind > SVG_SHAPE_POLYGON)
+        return SVG_BAD_ARGUMENT;
+    if (shape->kind <= SVG_SHAPE_LINE) {
+        const double values[] = {shape->x,  shape->y,  shape->width, shape->height,
+                                 shape->rx, shape->ry, shape->x2,    shape->y2};
+        for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i)
+            if (!isfinite(values[i])) {
+                result->status = SVG_LIMIT;
+                return SVG_LIMIT;
+            }
+        if (shape->width < 0 || shape->height < 0 || shape->rx < 0 || shape->ry < 0)
+            return SVG_BAD_ARGUMENT;
+    }
+    svg_path_t *path = NULL;
+    Status status = svg_parse(c, (svg_string_t){0}, &path, result);
+    if (status != SVG_OK)
+        return status;
+    double x = shape->x, y = shape->y;
+    double w = shape->width, h = shape->height, rx = shape->rx, ry = shape->ry;
+    if (shape->kind == SVG_SHAPE_RECT && w && h) {
+        rx = fmin(rx, w / 2);
+        ry = fmin(ry, h / 2);
+        if (!rx || !ry) {
+            shape_command(c, path, SVG_MOVE, x, y, 0, 0);
+            shape_command(c, path, SVG_LINE, x + w, y, 0, 0);
+            shape_command(c, path, SVG_LINE, x + w, y + h, 0, 0);
+            shape_command(c, path, SVG_LINE, x, y + h, 0, 0);
+            shape_command(c, path, SVG_CLOSE, 0, 0, 0, 0);
+        } else {
+            shape_command(c, path, SVG_MOVE, x + rx, y, 0, 0);
+            shape_command(c, path, SVG_LINE, x + w - rx, y, 0, 0);
+            shape_command(c, path, SVG_ARC, x + w, y + ry, rx, ry);
+            shape_command(c, path, SVG_LINE, x + w, y + h - ry, 0, 0);
+            shape_command(c, path, SVG_ARC, x + w - rx, y + h, rx, ry);
+            shape_command(c, path, SVG_LINE, x + rx, y + h, 0, 0);
+            shape_command(c, path, SVG_ARC, x, y + h - ry, rx, ry);
+            shape_command(c, path, SVG_LINE, x, y + ry, 0, 0);
+            shape_command(c, path, SVG_ARC, x + rx, y, rx, ry);
+            shape_command(c, path, SVG_CLOSE, 0, 0, 0, 0);
+        }
+    } else if (shape->kind == SVG_SHAPE_ELLIPSE && rx && ry) {
+        shape_command(c, path, SVG_MOVE, x + rx, y, 0, 0);
+        shape_command(c, path, SVG_ARC, x, y + ry, rx, ry);
+        shape_command(c, path, SVG_ARC, x - rx, y, rx, ry);
+        shape_command(c, path, SVG_ARC, x, y - ry, rx, ry);
+        shape_command(c, path, SVG_ARC, x + rx, y, rx, ry);
+        shape_command(c, path, SVG_CLOSE, 0, 0, 0, 0);
+    } else if (shape->kind == SVG_SHAPE_LINE) {
+        shape_command(c, path, SVG_MOVE, x, y, 0, 0);
+        shape_command(c, path, SVG_LINE, shape->x2, shape->y2, 0, 0);
+    } else if (shape->kind == SVG_SHAPE_POLYLINE || shape->kind == SVG_SHAPE_POLYGON) {
+        status = shape_points(c, shape, path, result);
+    }
+    if (c->why != SVG_OK)
+        status = c->why;
+    result->status = status;
+    if (status == SVG_OK || status == SVG_MALFORMED)
+        *out = path;
+    else
+        svg_free_path(c, path);
+    return status;
+}
+
+Status svg_path_from_shape(Context *c, const svg_shape_t *shape, svg_path_t **out,
+                           svg_parse_result_t *result)
+{
+    if (out)
+        *out = NULL;
+    if (result)
+        *result = (svg_parse_result_t){SVG_BAD_ARGUMENT, 0};
+    if (!out || !result)
+        return SVG_BAD_ARGUMENT;
+    Status status = svg_enter(c);
+    if (status == SVG_OK)
+        status = svg_leave(c, svg_make_shape(c, shape, out, result));
+    result->status = status;
+    return status;
+}

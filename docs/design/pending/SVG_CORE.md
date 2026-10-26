@@ -11,7 +11,8 @@ validation numbers below describe this foundation increment.
 `svg/svg.h`; it imports arithmetic from `libmath.so`, with no allocator,
 I/O, tree, CSS or FreeType-private imports. The caller supplies allocation
 and cancellation callbacks. The library exports path parsing, conversion to
-the public geometry command stream, and group/path scene preparation.
+the public geometry command stream, and group/path/shape scene preparation. [SVG_SHAPES.md](SVG_SHAPES.md) records
+the subsequent typed-shape conversion and provider callback.
 
 The root image inventory, userland build, prelink population and debugger
 dependencies include the library. The [Yonder connection](SVG_YONDER.md)

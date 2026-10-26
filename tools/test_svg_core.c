@@ -301,7 +301,7 @@ typedef struct {
     svg_node_t nodes[5];
     size_t acquired, released;
     size_t chain;
-    bool suppress, hidden, unsupported, cyclic, pending, malformed;
+    bool suppress, hidden, unsupported, cyclic, pending, malformed, shaped;
     uint32_t color;
 } Provider;
 static svg_status_t acquire(void *user, svg_mode_t mode, void **snapshot, uint64_t *root)
@@ -327,7 +327,7 @@ static svg_status_t node(void *user, void *snapshot, uint64_t source, svg_node_t
     CHECK(snapshot == p && source > 0);
     if (p->chain) {
         CHECK(source <= p->chain);
-        *out = (svg_node_t){source == p->chain ? SVG_NODE_PATH : SVG_NODE_GROUP,
+        *out = (svg_node_t){source == p->chain ? (p->shaped ? SVG_NODE_SHAPE : SVG_NODE_PATH) : SVG_NODE_GROUP,
                             source == p->chain ? 0 : source + 1, 0};
         return SVG_OK;
     }
@@ -344,7 +344,7 @@ static svg_status_t style(void *user, void *snapshot, const svg_style_request_t 
 {
     Provider *p = user;
     CHECK(snapshot == p);
-    if (p->pending && r->source == 3)
+    if (p->pending && !p->shaped && r->source == 3)
         return SVG_PENDING;
     *s = svg_initial_style();
     if (r->parent_style)
@@ -379,9 +379,19 @@ static Provider provider(Ledger *l)
                                 {SVG_NODE_PATH, 0, 0},
                                 {SVG_NODE_GROUP, 3, 0}}};
 }
+static svg_status_t provide_shape(void *user, void *snapshot, const svg_style_request_t *r,
+                                   svg_shape_t *out)
+{
+    Provider *p = user;
+    CHECK(snapshot == p && r->parent_style && r->parent_instance);
+    CHECK(r->parent_style->fill.argb == 0xff0000ff);
+    if (p->pending) return SVG_PENDING;
+    *out = (svg_shape_t){.kind=SVG_SHAPE_RECT,.width=20,.height=10};
+    return SVG_OK;
+}
 static svg_provider_t callbacks(Provider *p)
 {
-    return (svg_provider_t){p, acquire, unpin, node, style};
+    return (svg_provider_t){p, acquire, unpin, node, style, NULL};
 }
 static void scenes(void)
 {
@@ -429,6 +439,17 @@ static void scenes(void)
     p.pending = false;
     CHECK(svg_scene_prepare(c, &cb, SVG_MODE_INLINE, &identity, &scene) == SVG_OK);
     CHECK(svg_scene_release(c, scene) == SVG_OK);
+    // Exercise a shape callback after growing the scene array, with a live
+    // borrowed parent style. The provider also gets the image processing mode.
+    p.chain = 33; p.shaped = true;
+    CHECK(svg_scene_prepare(c,&cb,SVG_MODE_IMAGE,&identity,&scene)==SVG_PROVIDER_ERROR && !scene);
+    cb.shape = provide_shape;
+    CHECK(svg_scene_prepare(c,&cb,SVG_MODE_IMAGE,&identity,&scene)==SVG_OK);
+    items=svg_scene_items(scene,&count);
+    CHECK(count==33 && items[32].kind==SVG_NODE_SHAPE && items[32].path);
+    CHECK(svg_scene_release(c,scene)==SVG_OK);
+    p.pending = true;
+    CHECK(svg_scene_prepare(c,&cb,SVG_MODE_IMAGE,&identity,&scene)==SVG_PENDING && !scene);
     CHECK(p.acquired == p.released);
     CHECK(svg_destroy(c) == SVG_OK && !l.live);
 }
@@ -705,9 +726,98 @@ static void byte_fuzz(void)
     }
     CHECK(svg_destroy(c) == SVG_OK && !l.live);
 }
+static void shapes(void)
+{
+    static const struct {
+        svg_shape_t shape;
+        const char *path;
+    } cases[] = {
+        {{.kind = SVG_SHAPE_RECT, .x = 2, .y = 3, .width = 20, .height = 10},
+         "M2 3L22 3L22 13L2 13Z"},
+        {{.kind = SVG_SHAPE_RECT, .x = 2, .y = 3, .width = 20, .height = 10, .rx = 30, .ry = 2},
+         "M12 3L12 3A10 2 0 0 1 22 5L22 11A10 2 0 0 1 12 13L12 13A10 2 0 0 1 2 11L2 5A10 2 0 0 1 "
+         "12 3Z"},
+        {{.kind = SVG_SHAPE_ELLIPSE, .x = 30, .y = 20, .rx = 12, .ry = 6},
+         "M42 20A12 6 0 0 1 30 26A12 6 0 0 1 18 20A12 6 0 0 1 30 14A12 6 0 0 1 42 20Z"},
+        {{.kind = SVG_SHAPE_LINE, .x = -2, .y = 3, .x2 = 22, .y2 = 13}, "M-2 3L22 13"},
+        {{.kind = SVG_SHAPE_POLYLINE, .points = {"2,3 22-3 2,13", 13}}, "M2 3L22-3L2 13"},
+        {{.kind = SVG_SHAPE_POLYGON, .points = {"2,3 22-3 2,13", 13}}, "M2 3L22-3L2 13Z"},
+        {{.kind = SVG_SHAPE_RECT, .width = 0, .height = 12}, ""},
+        {{.kind = SVG_SHAPE_ELLIPSE, .rx = 0, .ry = 12}, ""},
+    };
+    Ledger l = {0};
+    svg_context_t *c = context(&l);
+    size_t calls = 0, polls = 0;
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        svg_path_t *p = NULL;
+        svg_parse_result_t result;
+        size_t before = l.allocations, polling = l.polls;
+        CHECK(svg_path_from_shape(c, &cases[i].shape, &p, &result) == SVG_OK && p);
+        if (i == 1) {
+            calls = l.allocations - before;
+            polls = l.polls - polling;
+        }
+        svg_path_t *expected = parse(c, cases[i].path, SVG_OK);
+        size_t n, m;
+        const svg_command_t *a = svg_path_commands(p, &n), *b = svg_path_commands(expected, &m);
+        CHECK(n == m);
+        for (size_t j = 0; j < n; ++j) {
+            CHECK(a[j].verb == b[j].verb);
+            near(a[j].p[0].x, b[j].p[0].x);
+            near(a[j].p[0].y, b[j].p[0].y);
+            near(a[j].rx, b[j].rx);
+            near(a[j].ry, b[j].ry);
+            CHECK(a[j].sweep == b[j].sweep && a[j].large == b[j].large);
+        }
+        CHECK(svg_path_release(c, p) == SVG_OK);
+        CHECK(svg_path_release(c, expected) == SVG_OK);
+    }
+    for (size_t i = 1; i <= calls; ++i) {
+        for (int admission = 0; admission < 2; ++admission) {
+            l.fail = l.allocations + i;
+            l.admission = admission;
+            svg_path_t *p = NULL;
+            svg_parse_result_t result;
+            CHECK(svg_path_from_shape(c, &cases[1].shape, &p, &result) ==
+                  (admission ? SVG_LIMIT : SVG_NO_MEMORY));
+            CHECK(!p);
+            l.fail = 0;
+        }
+    }
+    for (size_t i = 1; i <= polls; ++i) {
+        l.cancel = l.polls + i;
+        svg_path_t *p = NULL;
+        svg_parse_result_t result;
+        CHECK(svg_path_from_shape(c, &cases[1].shape, &p, &result) == SVG_CANCELLED && !p);
+        l.cancel = 0;
+    }
+    const char *bad[] = {"2,3 22,3 5", "2,3 22,3 nope", "2,3 22,3,,5,6"};
+    for (size_t i = 0; i < 3; ++i) {
+        svg_shape_t shape = {.kind = SVG_SHAPE_POLYGON, .points = {bad[i], strlen(bad[i])}};
+        svg_path_t *p = NULL;
+        svg_parse_result_t result;
+        CHECK(svg_path_from_shape(c, &shape, &p, &result) == SVG_MALFORMED && p);
+        size_t count;
+        const svg_command_t *cmd = svg_path_commands(p, &count);
+        CHECK(count == 3 && cmd[2].verb == SVG_CLOSE);
+        CHECK(svg_path_release(c, p) == SVG_OK);
+    }
+    svg_shape_t invalid[] = {{.kind = SVG_SHAPE_RECT, .width = -1},
+                             {.kind = SVG_SHAPE_RECT, .x = INFINITY},
+                             {.kind = SVG_SHAPE_RECT, .x = 1e308, .width = 1e308, .height = 1}};
+    for (size_t i = 0; i < 3; ++i) {
+        svg_path_t *p = NULL;
+        svg_parse_result_t result;
+        CHECK(svg_path_from_shape(c, &invalid[i], &p, &result) ==
+              (i ? SVG_LIMIT : SVG_BAD_ARGUMENT));
+        CHECK(!p);
+    }
+    CHECK(svg_destroy(c) == SVG_OK && !l.live);
+}
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
+    shapes();
     grammar();
     arc_accuracy();
     scenes();

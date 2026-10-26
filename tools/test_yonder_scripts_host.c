@@ -5573,6 +5573,22 @@ static void svg_window_cases(void)
     os64_free(px);while(yonder_scripts_pending(g.page.scripts))script_turn();
     px=stand_in_shot();check((px[8*800+8]&0xffffffu)==0xe87925,"SVG window: script mutation rebuilds and paints orange");
     os64_free(px);probe_drop();
+
+    probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}"
+        "rect{fill:#2091de;width:20px;height:20px}</style><svg width=120 height=64>"
+        "<rect id=shape x=8 y=8 width=80 height=40/></svg>"
+        "<script>var s=document.getElementById('shape');s.style.width='60px';"
+        "s.setAttribute('x','16');s.style.fill='#e87925';</script>",true);
+    px=stand_in_shot();
+    check((px[16*800+16]&0xffffffu)==0x2091de && (px[16*800+48]&0xffffffu)==0xffffff,
+        "SVG shapes: CSS geometry overrides presentation dimensions in the window");
+    os64_free(px);while(yonder_scripts_pending(g.page.scripts))script_turn();
+    px=stand_in_shot();
+    check((px[16*800+48]&0xffffffu)==0xe87925 && (px[16*800+10]&0xffffffu)==0xffffff,
+        "SVG shapes: script changes geometry and paint through the live cascade");
+    check(g.page.svg_bytes==0,"SVG shapes: mutation leaves no SVG allocation live");
+    os64_free(px);probe_drop();
+
 }
 
 /* THE STAND-INS' OWN PAINTING (yonder.c's pane_stand_in, stand_in_label,

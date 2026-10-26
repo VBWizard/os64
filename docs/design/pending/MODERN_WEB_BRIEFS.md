@@ -39,7 +39,9 @@ arc conversion and group/path scene preparation with provider-owned snapshots.
 The [solid painter](SVG_PAINT.md) adds native fills, ordinary strokes and
 isolated element/group opacity, with analytic coverage and Chromium comparisons.
 The [Yonder connection](SVG_YONDER.md) paints inline paths/groups using the real
-DOM, cascade, layout and compositor. The static inline renderer stage remains
+DOM, cascade, layout and compositor. The [basic-shape increment](SVG_SHAPES.md)
+adds native geometry and CSS geometry properties with a second live gallery.
+The static inline renderer stage remains
 active; the first P5 fixture does not complete its broader feature profile.
 
 Slice 5 follows Fable's 2026-10-21 design. Slice 6 follows Quinn's
