@@ -2,6 +2,8 @@
 """Test Os64's geometry backend or generate the private geometry proof gallery."""
 import argparse
 import concurrent.futures
+import hashlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -42,6 +44,19 @@ def main():
         objects = list(workers.map(compile_one, entries))
     binary = build/('geometry-backend' if args.backend else 'geometry-proof')
     subprocess.run([cc, *common, *map(str, objects), '-lm', '-o', str(binary)], check=True)
+    inputs = set(p for p, _ in entries)
+    inputs.update((ft.LIB/'port').glob('*.h'))
+    inputs.update((ft.LIB/'upstream').rglob('*.h'))
+    inputs.update((ft.LIB/'upstream').rglob('*.c'))
+    inputs.add(ft.LIB/'manifest.json')
+    inputs.add(ft.LIB/'sources.mk')
+    inputs.update((ROOT/'userland/libos64/include').rglob('*.h'))
+    inputs.add(Path(__file__).resolve())
+    provenance = {'compiler': subprocess.check_output([cc, '--version'], text=True).splitlines()[0],
+        'flags': common, 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+        'inputs': {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
+                   for p in sorted(inputs)}}
+    (output/'provenance.json').write_text(json.dumps(provenance, indent=2)+'\n')
     env = dict(os.environ)
     env.setdefault('ASAN_OPTIONS', 'detect_leaks=1')
     env.setdefault('UBSAN_OPTIONS', 'halt_on_error=1:print_stacktrace=1')
