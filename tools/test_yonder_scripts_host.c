@@ -2480,6 +2480,13 @@ static void input_script_buttons(void) {
     check(status_says("handler boom") && !status_says("belongs to no form"),
           "input: a formless button's failing handler is the status line's last word");
     probe_drop();
+    /* With scripts off nothing else will act on it, so the reason is why
+     * nothing happened. */
+    probe_page("<button id=loose>pdf</button>",false);
+    FormWidget *off=probe_field("loose");
+    button_clicked(off->w,off); inputs_run();
+    check(status_says("belongs to no form"),"input: without scripts, a formless button says why it did nothing");
+    probe_drop();
 }
 static void input_cases(void) {
     g.seq=2;g.key_seq=2;g.pressed_link=9;

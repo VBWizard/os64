@@ -344,6 +344,9 @@ documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 6: "
 documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 7: "foo\\r\\rbar baz","foo\\r\\rbar baz","foo bar baz"
 documents/dom-tree-accessors/document.title-08.html	No title element
 documents/dom-tree-accessors/document.title-08.html	title element contains multiple child text nodes
+documents/dom-tree-accessors/document.title-09.html	Root element not named "svg"
+documents/dom-tree-accessors/document.title-09.html	Title element in SVG document
+documents/dom-tree-accessors/document.title-09.html	Title element not in SVG namespace
 documents/resource-metadata-management/document-compatmode-01.html	document.compatMode: Standards
 documents/resource-metadata-management/document-compatmode-02.html	document.compatMode: Almost standards
 documents/resource-metadata-management/document-compatmode-03.html	document.compatMode: Quirks

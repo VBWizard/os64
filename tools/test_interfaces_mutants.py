@@ -4,7 +4,10 @@ prototype kinds and their interface objects, the Text and Comment
 constructors, the node row (getRootNode, wholeText, splitText), libpage's
 option selectedness and list walk, and the select row (the option's
 members, the select's, the options collection and its indexed setter, the
-Option factory) - against the harnesses that hold each rule: a mutant is
+Option factory); and to the page fixes after it: the lists' interfaces,
+HTMLElement's members, template content, the selections, DOMParser,
+createElementNS and the formless button's status line - against the
+harnesses that hold each rule: a mutant is
 CAUGHT when one of its harnesses fails, MISSED when they all pass, which
 means a test is missing and gets written. A build failure is neither.
 
@@ -33,8 +36,12 @@ OPTIONS_C = 'userland/libdom/options.c'
 COLLECTION_C = 'userland/libdom/collection.c'
 STATE_C = 'userland/libpage/state.c'
 CORE_C = 'userland/libpage/core.c'
+SELECTION_C = 'userland/libdom/selection.c'
+IMPLEMENTATION_C = 'userland/libdom/implementation.c'
+YONDER_C = 'userland/apps/yonder/yonder.c'
 DOM = 'tools/test_dom_host.sh'
 PAGE = 'tools/test_libpage_host.sh'
+SCRIPTS = 'tools/test_yonder_scripts_host.sh'
 
 # (name, file, old, new, harnesses). Each breaks one rule the phase
 # states; none supplies a replacement expectation.
@@ -101,6 +108,66 @@ mutants = [
      '                int64_t page = os64_page_node_set_option_selected(dom->state, option, selected != 0);',
      '                int64_t page = os64_page_node_set_option_selected(dom->state, option, selected != 0 && false);',
      (DOM,)),
+    # 5. the page fixes: the lists' interfaces, DOMParser, the selections,
+    # createElementNS, template content, HTMLElement's members, and the
+    # formless button
+    ('live-node-list-item-static', COLLECTION_C,
+     '        return collection_method(ctx, self, argc, argv, 1, data);\n    return static_item',
+     '        return JS_NULL;\n    return static_item', (DOM,)),
+    ('child-nodes-a-collection', COLLECTION_C, '    if (!elements) value = as_node_list(dom, ctx, value);',
+     '    (void)elements;', (DOM,)),
+    ('by-name-a-collection', COLLECTION_C, '    return by_name ? as_node_list(dom, ctx, result) : result;',
+     '    (void)by_name;\n    return result;', (DOM,)),
+    ('live-node-list-no-length', COLLECTION_C,
+     '    if (d_accessor(dom, ctx, prototype, "length", collection_method, 0, false) < 0 ||\n        d_method',
+     '    if (d_accessor(dom, ctx, prototype, "length_", collection_method, 0, false) < 0 ||\n        d_method',
+     (DOM,)),
+    ('lists-swapped', CLASSIC_C, '        {"NodeList", dom->static_list->value}, {"HTMLCollection", collection},',
+     '        {"NodeList", collection}, {"HTMLCollection", dom->static_list->value},', (DOM,)),
+    ('hidden-on-element', MIXIN_C, '{"hidden", R_HIDDEN, true, HTML_ELEMENTS}', '{"hidden", R_HIDDEN, true, ELEMENTS}',
+     (DOM,)),
+    ('tab-index-html-only', MIXIN_C, '{"tabIndex", R_TAB_INDEX, true, HTML_OR_SVG}',
+     '{"tabIndex", R_TAB_INDEX, true, HTML_ELEMENTS}', (DOM,)),
+    ('title-on-element', CLASSIC_C,
+     'd_accessor(dom,ctx,dom->prototypes[D_PROTO_HTML_ELEMENT]->value,"title",classic,C_TITLE,true)',
+     'd_accessor(dom,ctx,el,"title",classic,C_TITLE,true)', (DOM,)),
+    ('template-shares-htmlelement', NODE_C, '        if (node->tag == OS64_HTML_TAG_TEMPLATE) return D_PROTO_TEMPLATE;',
+     '        if (node->tag == OS64_HTML_TAG_TEMPLATE) return D_PROTO_HTML_ELEMENT;', (DOM,)),
+    ('content-is-template', MIXIN_C, '    return d_wrap(dom, ctx, self->template_contents);',
+     '    return d_wrap(dom, ctx, (os64_html_node_t *)self);', (DOM,)),
+    ('value-keeps-selection', STATE_C, '    if (changed)\n        edit->range_kept = false;',
+     '    if (changed && false)\n        edit->range_kept = false;', (PAGE, DOM)),
+    ('selection-counts-bytes', STATE_C, '            units += c >= 0xF0 ? 2 : 1;', '            units += 1;', (PAGE, DOM)),
+    ('password-has-no-selection', STATE_C,
+     '                                           input == OS64_PAGE_INPUT_PASSWORD));',
+     '                                           input == OS64_PAGE_INPUT_TEXT));', (PAGE, DOM)),
+    ('start-leaves-end', SELECTION_C, '    case X_START: start = a; if (end < start) end = start; break;',
+     '    case X_START: start = a; break;', (DOM,)),
+    ('select-selects-nothing', SELECTION_C, '    default: start = 0; end = UINT32_MAX;',
+     '    default: start = 0; end = 0;', (DOM,)),
+    ('no-selection-reads-zero', SELECTION_C, '        if (!has) return JS_NULL;',
+     '        if (!has) return JS_NewUint32(ctx, 0);', (DOM,)),
+    ('no-selection-set-quiet', SELECTION_C, '        return magic == X_SELECT ? JS_UNDEFINED : no_selection(ctx);',
+     '        return JS_UNDEFINED;', (DOM,)),
+    ('range-at-null', SELECTION_C, '        return d_error(ctx, "IndexSizeError", "The selection holds no range");',
+     '        return JS_NULL;', (DOM,)),
+    ('parser-takes-xml', IMPLEMENTATION_C, '    else if (kind > 0) result = d_error(ctx, "NotSupportedError"',
+     '    else if (kind > 9) result = d_error(ctx, "NotSupportedError"', (DOM,)),
+    ('parser-scripts-unmarked', IMPLEMENTATION_C, '        if (built && d_script_mark_tree(dom, fragment) < 0)',
+     '        if (built && false && d_script_mark_tree(dom, fragment) < 0)', (DOM,)),
+    ('ns-svg-as-html', IMPLEMENTATION_C,
+     '    else if (has_ns && same(ns->data, ns->length, NS_SVG)) *space = OS64_HTML_NS_SVG;',
+     '    else if (has_ns && same(ns->data, ns->length, NS_SVG)) *space = OS64_HTML_NS_HTML;', (DOM,)),
+    ('ns-empty-is-a-namespace', IMPLEMENTATION_C,
+     '    if (has_ns && ns.length == 0) has_ns = false;\n    JSValue result = JS_UNDEFINED;\n    if (argc > 2',
+     '    JSValue result = JS_UNDEFINED;\n    if (argc > 2', (DOM,)),
+    ('ns-element-owner-lost', IMPLEMENTATION_C,
+     '        if (!JS_IsException(result)) d_made_in(dom, element, document);\n    }\n    d_string_free(dom, &ns);',
+     '    }\n    d_string_free(dom, &ns);', (DOM,)),
+    ('formless-button-quiet-without-scripts', YONDER_C,
+     '        bool scripts_own_it = scripts_live() && (', '        bool scripts_own_it = true && (', (SCRIPTS,)),
+    ('formless-button-refused-with-scripts', YONDER_C,
+     '        bool scripts_own_it = scripts_live() && (', '        bool scripts_own_it = false && (', (SCRIPTS,)),
 ]
 
 caught, missed, unbuilt = [], [], []

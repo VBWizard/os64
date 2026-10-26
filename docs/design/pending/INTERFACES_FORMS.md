@@ -412,8 +412,9 @@ its new-todo field.
 departures from the list above. SVGElement is the name and its prototype
 only: `className` as an SVGAnimatedString, `ownerSVGElement` and
 `viewportElement` wait for slice 6, which Quinn holds, so § Rulings, 4 is
-hers to take up. HTMLOptionsCollection is a prototype without an interface
-object, which waits for HTMLCollection's in P1b. A select's own indices
+hers to take up. HTMLOptionsCollection was a prototype without an interface
+object, waiting for HTMLCollection's, until the page fixes after P1a named
+both (MODERN_WEB.md § 0f's page fixes, as built). A select's own indices
 (`select[0]`) are a DEBTS.md row. The oracle added the three
 `html/semantics/forms` element directories to `tools/wpt_fetch.sh`; `svg/types`
 and `html/infrastructure/common-dom-interfaces/collections` were not added.
@@ -444,6 +445,12 @@ and `html/infrastructure/common-dom-interfaces/collections` were not added.
   which is the point of naming them.
 - Size: M.
 
+**Built ahead, in the page fixes** (MODERN_WEB.md § 0f's page fixes, as
+built): `NodeList`, `HTMLCollection`, `DOMTokenList` and `DOMStringMap`
+named on the prototypes they have, `childNodes` and `getElementsByName`
+NodeLists over NodeList's prototype, the rest HTMLCollections. `EventTarget`
+and `Window` are what P1b has left.
+
 Oracle: `dom/events` (fetched) `EventTarget-constructible.any.js` and
 `EventTarget-window-constructor.html`; add `dom/collections` and `dom/lists`;
 `html/infrastructure/common-dom-interfaces/collections` (`domstringlist.html`
@@ -466,6 +473,14 @@ P3c. Acceptance: the records' EventTarget and NodeList FAILED lines go.
 - React's select event plugin takes its field branch, so typing in the
   shop's login field no longer reaches `window.getSelection` (acceptance).
 - Size: M.
+
+**Its core built ahead, in the page fixes** (MODERN_WEB.md § 0f's page
+fixes, as built), because the shop's login fields typed nothing without it:
+`selectionStart`, `selectionEnd`, `selectionDirection`,
+`setSelectionRange` and `select()` over a selection kept in libpage's
+control state, and `getSelection()`'s Selection, which holds no range. Not
+built: `setRangeText`, the host hook (yonder's field caret neither moves
+with the record nor is read into it, a DEBTS.md row), and the oracle below.
 
 Oracle: add `html/semantics/forms/textfieldselection`, and
 `html/semantics/forms/the-input-element` `selection.html` (the directory is

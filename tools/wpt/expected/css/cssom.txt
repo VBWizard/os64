@@ -166,6 +166,222 @@ getComputedStyle-getter-v-properties.tentative.html	max-width
 getComputedStyle-getter-v-properties.tentative.html	width
 getComputedStyle-important.html	getComputedStyle should return !important stylesheet value over inline style
 getComputedStyle-important.html	getComputedStyle should return !important stylesheet value rather than the subsequent stylesheet value
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside horizontal-tb ltr - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside horizontal-tb ltr - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside horizontal-tb ltr - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside horizontal-tb ltr - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside horizontal-tb ltr - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside horizontal-tb ltr - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside horizontal-tb rtl - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside horizontal-tb rtl - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside horizontal-tb rtl - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside horizontal-tb rtl - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside horizontal-tb rtl - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside horizontal-tb rtl - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-lr ltr - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-lr ltr - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-lr ltr - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-lr ltr - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-lr ltr - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-lr ltr - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-lr rtl - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-lr rtl - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-lr rtl - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-lr rtl - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-lr rtl - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-lr rtl - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-rl ltr - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-rl ltr - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-rl ltr - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-rl ltr - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-rl ltr - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-rl ltr - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-rl rtl - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-rl rtl - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-rl rtl - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-rl rtl - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-rl rtl - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb ltr inside vertical-rl rtl - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside horizontal-tb ltr - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside horizontal-tb ltr - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside horizontal-tb ltr - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside horizontal-tb ltr - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside horizontal-tb ltr - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside horizontal-tb ltr - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside horizontal-tb rtl - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside horizontal-tb rtl - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside horizontal-tb rtl - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside horizontal-tb rtl - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside horizontal-tb rtl - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside horizontal-tb rtl - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-lr ltr - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-lr ltr - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-lr ltr - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-lr ltr - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-lr ltr - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-lr ltr - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-lr rtl - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-lr rtl - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-lr rtl - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-lr rtl - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-lr rtl - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-lr rtl - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-rl ltr - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-rl ltr - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-rl ltr - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-rl ltr - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-rl ltr - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-rl ltr - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-rl rtl - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-rl rtl - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-rl rtl - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-rl rtl - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-rl rtl - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	horizontal-tb rtl inside vertical-rl rtl - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside horizontal-tb ltr - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside horizontal-tb ltr - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside horizontal-tb ltr - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside horizontal-tb ltr - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside horizontal-tb ltr - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside horizontal-tb ltr - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside horizontal-tb rtl - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside horizontal-tb rtl - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside horizontal-tb rtl - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside horizontal-tb rtl - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside horizontal-tb rtl - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside horizontal-tb rtl - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-lr ltr - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-lr ltr - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-lr ltr - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-lr ltr - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-lr ltr - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-lr ltr - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-lr rtl - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-lr rtl - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-lr rtl - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-lr rtl - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-lr rtl - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-lr rtl - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-rl ltr - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-rl ltr - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-rl ltr - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-rl ltr - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-rl ltr - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-rl ltr - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-rl rtl - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-rl rtl - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-rl rtl - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-rl rtl - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-rl rtl - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr ltr inside vertical-rl rtl - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside horizontal-tb ltr - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside horizontal-tb ltr - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside horizontal-tb ltr - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside horizontal-tb ltr - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside horizontal-tb ltr - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside horizontal-tb ltr - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside horizontal-tb rtl - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside horizontal-tb rtl - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside horizontal-tb rtl - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside horizontal-tb rtl - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside horizontal-tb rtl - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside horizontal-tb rtl - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-lr ltr - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-lr ltr - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-lr ltr - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-lr ltr - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-lr ltr - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-lr ltr - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-lr rtl - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-lr rtl - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-lr rtl - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-lr rtl - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-lr rtl - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-lr rtl - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-rl ltr - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-rl ltr - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-rl ltr - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-rl ltr - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-rl ltr - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-rl ltr - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-rl rtl - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-rl rtl - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-rl rtl - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-rl rtl - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-rl rtl - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-lr rtl inside vertical-rl rtl - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside horizontal-tb ltr - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside horizontal-tb ltr - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside horizontal-tb ltr - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside horizontal-tb ltr - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside horizontal-tb ltr - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside horizontal-tb ltr - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside horizontal-tb rtl - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside horizontal-tb rtl - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside horizontal-tb rtl - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside horizontal-tb rtl - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside horizontal-tb rtl - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside horizontal-tb rtl - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-lr ltr - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-lr ltr - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-lr ltr - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-lr ltr - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-lr ltr - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-lr ltr - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-lr rtl - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-lr rtl - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-lr rtl - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-lr rtl - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-lr rtl - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-lr rtl - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-rl ltr - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-rl ltr - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-rl ltr - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-rl ltr - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-rl ltr - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-rl ltr - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-rl rtl - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-rl rtl - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-rl rtl - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-rl rtl - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-rl rtl - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl ltr inside vertical-rl rtl - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside horizontal-tb ltr - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside horizontal-tb ltr - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside horizontal-tb ltr - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside horizontal-tb ltr - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside horizontal-tb ltr - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside horizontal-tb ltr - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside horizontal-tb rtl - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside horizontal-tb rtl - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside horizontal-tb rtl - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside horizontal-tb rtl - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside horizontal-tb rtl - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside horizontal-tb rtl - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-lr ltr - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-lr ltr - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-lr ltr - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-lr ltr - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-lr ltr - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-lr ltr - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-lr rtl - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-lr rtl - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-lr rtl - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-lr rtl - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-lr rtl - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-lr rtl - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-rl ltr - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-rl ltr - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-rl ltr - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-rl ltr - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-rl ltr - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-rl ltr - Relative lengths are absolutized into pixels
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-rl rtl - If end side is 'auto' and start side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-rl rtl - If opposite sides are 'auto', they resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-rl rtl - If start side is 'auto' and end side is not, 'auto' resolves as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-rl rtl - Percentages resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-rl rtl - Pixels resolve as-is
+getComputedStyle-insets-nobox.html	vertical-rl rtl inside vertical-rl rtl - Relative lengths are absolutized into pixels
 getComputedStyle-layout-dependent-removed-ib-sibling.html	getComputedStyle() should return the correct used value for nodes that have had an IB-split sibling removed
 getComputedStyle-layout-dependent-replaced-into-ib-split.html	getComputedStyle() should return used value correctly for nodes just inserted into the document, even if they're in an IB-split
 getComputedStyle-line-height.html	line-height: 1

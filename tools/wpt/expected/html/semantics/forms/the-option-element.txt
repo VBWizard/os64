@@ -36,9 +36,13 @@ option-text-label.html	Option with empty label.
 option-text-label.html	Option with non-empty label.
 option-text-recurse.html	option.text should ignore comment children
 option-text-recurse.html	option.text should not recurse into HTML script elements
+option-text-recurse.html	option.text should not recurse into SVG script elements
 option-text-recurse.html	option.text should recurse
+option-text-recurse.html	option.text should recurse into MathML script elements
 option-text-recurse.html	option.text should work if a child of the option ends with a script
+option-text-recurse.html	option.text should work if the option is in a MathML script element
 option-text-recurse.html	option.text should work if the option is in an HTML script element
+option-text-recurse.html	option.text should work if the option is in an SVG script element
 option-text-setter.html	Verify that using HTMLOptionElement.text setter does not update the existing text child node.
 option-text-spaces.html	HTMLOptionElement.text
 option-text-spaces.html	option.text should leave a single internal NBSP alone.
