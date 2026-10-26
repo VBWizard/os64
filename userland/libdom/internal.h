@@ -36,7 +36,7 @@ enum {
     D_PROTO_FRAGMENT, D_PROTO_DOCTYPE, D_PROTO_ATTR, D_PROTO_HTML_ELEMENT, D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT,
     D_PROTO_BUTTON, D_PROTO_FORM, D_PROTO_IMAGE, D_PROTO_SCRIPT, D_PROTO_ANCHOR,
     D_PROTO_LINK, D_PROTO_IFRAME, D_PROTO_OPTION, D_PROTO_OPTGROUP,
-    D_PROTO_TEXT, D_PROTO_COMMENT, D_PROTO_SVG, D_PROTO_COUNT
+    D_PROTO_TEXT, D_PROTO_COMMENT, D_PROTO_SVG, D_PROTO_TEMPLATE, D_PROTO_COUNT
 };
 /* The kind a kind's prototype inherits, as its interface inherits: Node's
  * for the node kinds, CharacterData's for TEXT and COMMENT, Element's for
@@ -200,6 +200,9 @@ struct os64_dom {
     /* HTMLOptionsCollection's prototype (options.c), over a collection's;
      * NULL with the modern switch off. */
     DValue *options_prototype;
+    /* The window's Selection (selection.c), the one getSelection answers;
+     * NULL with the modern switch off. */
+    DValue *selection;
     struct DAttr **attr_table;
     size_t attr_capacity, attr_attached;
     struct DAttrCursor {
@@ -1000,6 +1003,9 @@ int d_attr_root_install(os64_dom_t *dom, JSContext *ctx);
 /* The select's, option's and optgroup's members, HTMLOptionsCollection's
  * prototype and the Option factory (options.c). */
 int d_options_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The text controls' selection members and the window's Selection
+ * (selection.c, 0f's P2 core). */
+int d_selection_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* HTMLOptionsCollection's indexed setter (HTML § 2.6.2.2), for the
  * collection's exotic: null or undefined removes the option at `index`, an
  * option past the end is appended after empty options fill the gap, and

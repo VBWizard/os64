@@ -52,6 +52,11 @@ struct PNodeState {
     // Its cache holds the child-text baseline until a child mutation resets it.
     bool text_clean;
     bool on_dirty, on_attr, selected_dirty, selected_attr;
+    // A text control's selection a script set (os64_page_node_set_selection),
+    // in UTF-16 code units of its value; `range_kept` says one was.
+    uint32_t range_start, range_end;
+    uint8_t range_direction;
+    bool range_kept;
     // An owner-thread mutation plan borrows this link and clears it on
     // publication or refusal; no property state is stored in the link.
     PAttrStage *stage;

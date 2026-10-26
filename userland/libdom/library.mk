@@ -24,6 +24,8 @@ LIBDOM_SRCS += libdom/document.c
 LIBDOM_SRCS += libdom/clone.c libdom/message.c libdom/idle.c
 # 0f P1a: the select's options and the Option factory.
 LIBDOM_SRCS += libdom/options.c
+# 0f P2's core: the text controls' selection and the window's Selection.
+LIBDOM_SRCS += libdom/selection.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))
 LIBDOM_SO := $(BIN)/libdom.so
 LIBDOM_BASE = $(patsubst libdom.so=%,%,$(filter libdom.so=%,$(LIB_BASE_PAIRS)))

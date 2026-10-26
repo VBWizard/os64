@@ -315,7 +315,7 @@ size_t d_owned_bytes(const HNode *node);
 size_t d_pending_bytes(const HDoc *d);
 bool d_form_input(const HNode *node);
 HNode *h_parse_fragment(os64_html_document_t *doc, const HNode *context,
-                       const char *utf8, size_t len, bool scripting,
+                       const char *utf8, size_t len, bool scripting, bool keep_root,
                        uint64_t max_work, uint64_t *work, int64_t *status);
 void h_fragment_start(os64_html_parser_t *p);
 /* Give up a ledger block something may have borrowed: freed at once when no

@@ -11,6 +11,7 @@
 noopener-noreferrer-BarProp.window.html	All bars visible
 [excluded]
 [passing]
+Document-defaultView.html	Document created with HTML DOMParser
 Document-defaultView.html	Document created with createDocument
 Document-defaultView.html	Document created with createHTMLDocument
 Document-defaultView.html	Document in a browsing context
@@ -25,6 +26,14 @@ named-access-on-the-window-object/existing-prop.html	A named property must not b
 named-access-on-the-window-object/existing-prop.html	A named property must not be set if a property already exists, even if undefined
 named-access-on-the-window-object/existing-prop.html	A named property must not be set if the property already exists in the proxy
 named-access-on-the-window-object/existing-prop.html	If a property is occupied by a named property but then the user sets it, the user's value shadows it
+named-access-on-the-window-object/id-non-html-elements.html	An element in the MathML namespace whose local name is embed is not exposed by its name attribute
+named-access-on-the-window-object/id-non-html-elements.html	An element in the MathML namespace whose local name is form is not exposed by its name attribute
+named-access-on-the-window-object/id-non-html-elements.html	An element in the MathML namespace whose local name is img is not exposed by its name attribute
+named-access-on-the-window-object/id-non-html-elements.html	An element in the MathML namespace whose local name is object is not exposed by its name attribute
+named-access-on-the-window-object/id-non-html-elements.html	An element in the SVG namespace whose local name is embed is not exposed by its name attribute
+named-access-on-the-window-object/id-non-html-elements.html	An element in the SVG namespace whose local name is form is not exposed by its name attribute
+named-access-on-the-window-object/id-non-html-elements.html	An element in the SVG namespace whose local name is img is not exposed by its name attribute
+named-access-on-the-window-object/id-non-html-elements.html	An element in the SVG namespace whose local name is object is not exposed by its name attribute
 named-access-on-the-window-object/name-attribute-elements.html	Only elements with specific local names may be returned if their name attribute matches (negative test)
 named-access-on-the-window-object/nested-context.html	A named property that matches any element that contains a nested browsing context, must return the WindowProxy of that context
 named-access-on-the-window-object/scoped-to-associated-document.html	Elements of a document created by createHTMLDocument() are not exposed

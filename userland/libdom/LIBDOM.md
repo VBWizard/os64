@@ -59,8 +59,8 @@ are read from the attached tree rather than trusted parser-time pointers.
 
 Kind prototypes inherit Node. An HTML element's prototype is HTMLElement's,
 which inherits Element's, or, for the elements with members of their own
-(the form controls, option, optgroup, form, image, script, anchor, link and
-iframe), a prototype that inherits HTMLElement's; an SVG element's is
+(the form controls, option, optgroup, form, image, script, anchor, link,
+iframe and template), a prototype that inherits HTMLElement's; an SVG element's is
 SVGElement's, which inherits Element's; an element of any other namespace
 (MathML) has Element's. A text node's prototype is Text's and a comment's
 Comment's, each inheriting CharacterData's. The supported properties and
@@ -152,7 +152,11 @@ connect runs and a moved control keeps its form:
   script's `src` and a link's and an anchor's `href` (resolved against the
   document's base, and as written when it does not resolve), a script's
   `type`, `defer` and `noModule`, and a link's `rel`. Script, anchor and
-  link elements have prototypes of their own for these.
+  link elements have prototypes of their own for these. `hidden`, `lang`,
+  `dir` and `title` are HTMLElement's, and `tabIndex` and `dataset`
+  HTMLElement's and SVGElement's, as HTML places them, not Element's: a
+  framework that sets a member as a property only when it finds the setter
+  below Element.prototype (Svelte 5) otherwise writes an attribute.
 - `document.cookie`, through a provider the host installs
   (`os64_dom_set_cookies`): a read is the whole cookie-string it writes,
   asked again with more room while more did not fit, an assignment is handed to it whole as a Set-Cookie value. Which cookies a

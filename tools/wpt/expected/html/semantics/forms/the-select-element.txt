@@ -100,6 +100,7 @@ select-selectedOptions-nesting.window.html	<select><optgroup> containing <option
 select-selectedOptions-nesting.window.html	<select><optgroup> containing <select><option selected>
 select-selectedOptions.html	.selectedOptions should always return the same value - [SameObject]
 select-selectedOptions.html	.selectedOptions should not go stale when the selectedness setting algorithm runs on a script-created select
+select-selectedOptions.html	.selectedOptions should return `HTMLCollection` instance
 select-selectedOptions.html	.selectedOptions should return the same object after selection changes - [SameObject]
 select-selectedOptions.html	.selectedOptions using the 'multiple' attribute with no selected options
 select-selectedOptions.html	.selectedOptions using the 'multiple' attribute with two selected options

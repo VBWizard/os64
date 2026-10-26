@@ -1015,6 +1015,8 @@ JSValue d_dataset(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 #define PARENTS ((1u << D_PROTO_DOCUMENT) | (1u << D_PROTO_ELEMENT) | (1u << D_PROTO_FRAGMENT))
 #define CHILDREN ((1u << D_PROTO_ELEMENT) | (1u << D_PROTO_CHARACTER_DATA) | (1u << D_PROTO_DOCTYPE))
 #define ELEMENTS (1u << D_PROTO_ELEMENT)
+#define HTML_ELEMENTS (1u << D_PROTO_HTML_ELEMENT)
+#define HTML_OR_SVG ((1u << D_PROTO_HTML_ELEMENT) | (1u << D_PROTO_SVG))
 
 int d_url_reflection(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, const char *name)
 {
@@ -1040,9 +1042,14 @@ int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
     };
     static const struct { const char *name; int magic; bool writable; unsigned on; } reflections[] = {
         {"isConnected", R_CONNECTED, false, 1u << D_PROTO_NODE},
-        {"hidden", R_HIDDEN, true, ELEMENTS}, {"lang", R_LANG, true, ELEMENTS},
-        {"dir", R_DIR, true, ELEMENTS}, {"tabIndex", R_TAB_INDEX, true, ELEMENTS},
-        {"classList", R_CLASS_LIST, true, ELEMENTS}, {"dataset", R_DATASET, false, ELEMENTS},
+        // HTMLElement's own, and HTMLOrSVGElement's (HTMLElement's and
+        // SVGElement's), where HTML puts them: Svelte sets a member as a
+        // property only when it finds its setter below Element.prototype,
+        // and as an attribute otherwise, so `hidden = false` on Element's
+        // became the attribute hidden="false", which hides.
+        {"hidden", R_HIDDEN, true, HTML_ELEMENTS}, {"lang", R_LANG, true, HTML_ELEMENTS},
+        {"dir", R_DIR, true, HTML_ELEMENTS}, {"tabIndex", R_TAB_INDEX, true, HTML_OR_SVG},
+        {"classList", R_CLASS_LIST, true, ELEMENTS}, {"dataset", R_DATASET, false, HTML_OR_SVG},
         {"src", R_URL, true, 1u << D_PROTO_SCRIPT},
         // What a loader sets before it connects a script (`type = 'module'`
         // makes it a module, MODERN_WEB.md § Slice 3); `async`, with HTML's
@@ -1077,6 +1084,12 @@ int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
     DValue *token_prototype = d_retain(dom, ctx, tokens);
     if (token_prototype == NULL) return -1;
     JS_SetClassProto(ctx, dom->token_class, JS_DupValue(ctx, tokens));
+    /* DOMStringMap's prototype, which a dataset inherits as WebIDL makes an
+     * interface's prototype inherit Object.prototype (its named properties
+     * are the dataset's exotic's); the interfaces row names it. */
+    JSValue strings = JS_NewObject(ctx);
+    if (d_retain(dom, ctx, strings) == NULL) return -1;
+    JS_SetClassProto(ctx, dom->map_class, JS_DupValue(ctx, strings));
     for (size_t i = 0; i < sizeof(members) / sizeof(members[0]); i++)
         if ((members[i].accessor
                 ? d_accessor(dom, ctx, tokens, members[i].name, token_method, members[i].magic, members[i].writable)
@@ -1164,19 +1177,37 @@ static JSValue text_member(JSContext *ctx, JSValueConst this_value, int argc, JS
     return status < 0 ? d_html_error(ctx, status) : d_wrap(dom, ctx, tail);
 }
 
+/* A template's `content` (HTML § 4.12.3): the fragment libhtml keeps its
+ * contents in, which every HTML template has from its making, parsed or
+ * created; the same fragment, so the same wrapper, each time. Svelte builds
+ * its markup by setting a template's innerHTML and cloning this. */
+static JSValue template_content(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv,
+                                int magic, JSValue *data)
+{
+    (void)argc; (void)argv; (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    const os64_html_node_t *self = d_node(dom, ctx, this_value);
+    if (self == NULL) return JS_EXCEPTION;
+    if (!is_html(self, OS64_HTML_TAG_TEMPLATE) || self->template_contents == NULL)
+        return JS_ThrowTypeError(ctx, "content requires a template");
+    return d_wrap(dom, ctx, self->template_contents);
+}
+
 /* 0f's P1a, the Modern Web table's node row (INTERFACES_FORMS.md):
  * getRootNode on Node's prototype, which Vue's v-model asks, and on Attr's,
- * whose shadow answers every Node member for an Attr; and Text's own
- * `wholeText` and `splitText`. Members of prototypes, so the row names
- * nothing on window; the DOM host's chain shape holds them
- * (tools/test_dom_modern.inc). */
+ * whose shadow answers every Node member for an Attr; Text's own
+ * `wholeText` and `splitText`; and a template's `content`. Members of
+ * prototypes, so the row names nothing on window; the DOM host's chain
+ * shape holds them (tools/test_dom_modern.inc). */
 int d_nodes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     (void)global;
     JSValueConst text = dom->prototypes[D_PROTO_TEXT]->value;
     if (d_method(dom, ctx, dom->prototypes[D_PROTO_NODE]->value, "getRootNode", mixin_method, 0, D_ROOT_NODE) < 0 ||
         d_accessor(dom, ctx, text, "wholeText", text_member, T_WHOLE_TEXT, false) < 0 ||
-        d_method(dom, ctx, text, "splitText", text_member, 1, T_SPLIT_TEXT) < 0)
+        d_method(dom, ctx, text, "splitText", text_member, 1, T_SPLIT_TEXT) < 0 ||
+        d_accessor(dom, ctx, dom->prototypes[D_PROTO_TEMPLATE]->value, "content", template_content, 0, false) < 0)
         return -1;
     return d_attr_root_install(dom, ctx);
 }

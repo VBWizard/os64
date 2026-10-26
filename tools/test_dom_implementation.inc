@@ -296,6 +296,12 @@ static void implementation_windowless_cases(void)
         "var fresh=d.createElement('script');fresh.textContent='window.freshRan=1';document.body.appendChild(fresh);",
         "windowless: scripts set into it, connected to it, then moved into the page");
     check(connected_count == 1, "windowless: only the script first connected to the page is handed to the host");
+    connected_count = 0;
+    dom_script(&f, IMPL_ASSERT
+        "var pd=new DOMParser().parseFromString('<script>window.parsedDocRan=1</'+'script>','text/html');"
+        "document.body.appendChild(pd.querySelector('script'));",
+        "DOMParser: its document's script moved into the page");
+    check(connected_count == 0, "DOMParser: a parsed document's script is born started, never handed to the host");
     fixture_free(&f);
 }
 

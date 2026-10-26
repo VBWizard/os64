@@ -3495,6 +3495,110 @@ directory went 119 → 124 with them, `select-setter-dirtiness.html` and
 `option-selectedness-script-mutation.html` among the five; three mutants
 were added for the new rules, each caught.
 
+### 0f's page fixes, as built
+
+Opened by Opus on 2026-10-25, stacked on P1a's branch, after Chris ran
+P1a's head on the P5 against the React shop demo and four TodoMVC builds
+(Vue, Svelte, plain ES5, jQuery). Vue and jQuery worked and the shop took
+an order; the ES5 and Svelte builds did nothing, and the shop's PDF button
+said its control belonged to no form. In QEMU the shop's login fields
+typed nothing. Each fix below is a
+name or a rule one of those pages stopped on, found by its FAILED line, by
+yonder's console, or by running the page's own bundle through the
+scripted-page host and reading the tree it left:
+
+- **A formless button is the script's** (yonder `form_send_as`). A button
+  with no form, or of a type that submits nothing, does nothing by HTML's
+  rule, and yonder said "that control belongs to no form" on every press,
+  which is wrong on a page whose scripts act on it (the shop's PDF button,
+  whose handler fails on WebAssembly, which QuickJS does not have: the
+  failure is now the status line's last word). Without scripts the
+  sentence stays, since it is then the reason nothing happened.
+- **NodeList apart from HTMLCollection** (`collection.c`, `classic.c`):
+  `childNodes` and `getElementsByName` are NodeLists over NodeList's
+  prototype, and `NodeList`, `HTMLCollection`, `DOMTokenList`,
+  `DOMStringMap` and HTMLOptionsCollection's interface objects are named,
+  P1b's four list names built ahead (INTERFACES_FORMS.md § P1b). The ES5
+  build's helpers stopped on `NodeList`.
+- **DOMParser, for HTML** (`implementation.c`): `parseFromString` with
+  `text/html` parses into a new document with scripting off; the XML types
+  are a NotSupportedError (DEBTS.md). The ES5 build's next stop.
+- **A text control's selection and the window's Selection**
+  (`selection.c`, libpage `state.c`; P2's core, built ahead,
+  INTERFACES_FORMS.md § P2). React's input tracking asks the focused field
+  for `selectionStart`, and without it fell through to `getSelection`,
+  which did not exist, so a keystroke in the shop's login field threw in
+  React's handler and the field stayed empty (in QEMU). The selection is the scripts' record, kept in
+  libpage's control state; yonder's field caret is not tied to it
+  (DEBTS.md).
+- **`document.createElementNS`**: every element Svelte 5 makes, and the
+  shop's next stop once the field typed. The name is validated as DOM's
+  2025 "validate and extract" has it; the namespace must be one the tree
+  holds (HTML, SVG, MathML).
+- **HTMLTemplateElement and a template's `content`**: Svelte builds its
+  markup by setting a template's `innerHTML` and cloning its content.
+- **HTMLElement's members where HTML puts them** (`mixin.c`, `classic.c`):
+  `hidden`, `lang`, `dir` and `title` on HTMLElement's prototype,
+  `tabIndex` and `dataset` on HTMLElement's and SVGElement's, not
+  Element's. Svelte 5 sets a member as a property only when it finds its
+  setter below Element.prototype, so `main.hidden = false` became the
+  attribute `hidden="false"`, and the todo list it had just filled stayed
+  hidden: Svelte's silent add.
+
+**Numbers.**
+
+- **WPT**, all 40 directories with expectations against P1a's head: one
+  pass lost, `dom/nodes`' `Element-tagName.html` "tagName should be updated
+  when changing ownerDocument", which asserts only `if ("DOMParser" in
+  window)` and so passed while there was none; it parses `text/xml`, the
+  DEBTS row. Gains: `dom/nodes` 1,733 → 2,440 (`createElementNS`'s tables
+  and the template pages), `dom/events` +91 (a page built on
+  `template.content`), `html/webappapis/scripting` +5 (DOMParser and
+  template documents), `the-window-object` +9, `html/dom` +3, the option
+  directory 94 → 98, the select directory 124 → 125 (P1a's Codex round took it to 124). `css/cssom`'s +216 are
+  one module page's, which slice 3 made runnable and did not record; they
+  are recorded here.
+- **Hosts**, 0 failed: DOM 104,452 (its new cases a NodeList's and an
+  HTMLCollection's prototypes, DOMParser's documents, the selections,
+  createElementNS's rules, template content, and Svelte's setter walk
+  over HTMLElement's members, which fails with them on Element's); libpage
+  254,162; scripted page 8,102 (a formless button's click and its
+  handler's failure, and its reason without scripts); yonder 2,028.
+- **Mutants** (`tools/test_interfaces_mutants.py`, its fifth group): 25,
+  each caught. Five were first missed, and their cases were written: a
+  formless button's reason without scripts, a password input's selection,
+  `createElementNS` asked of a document of its own and with an empty
+  namespace, and a DOMParser document's script connected to the page
+  (which the DOM host reports to its host rather than runs, so the check
+  is the report's). A sixth, a start past the end kept by the selection's
+  setter, was dropped as equivalent: the reader clamps it.
+- **QEMU**, over the wire: TodoMVC's Svelte build adds, ticks off and
+  filters (its checkboxes are unpainted, as Vue's are: the polish list).
+  On the P5, Chris: the ES5 build now works as Vue's does, and the PDF
+  button's failure is on the status line. The shop's sort `<select>` is a one-row listbox with no
+  dropdown, which is yonder's next fix, not the binding's.
+
+**Codex, round 1**: two findings, both fixed. DOMParser dropped a whole
+document's `<html>` attributes (`lang`, a theme's class): the fragment
+parse keeps only its root's children, so libhtml gains
+`os64_html_parse_fragment_root`, the same parse returning that root as the
+`html` element it is, which becomes the document's element. And a text
+control's selection was set when its value could not be read (out of
+memory), clamped to nothing and reported done: the value is read first
+now, and its failure is the verb's, nothing changed (the binding's
+QuotaExceededError). Cases in the DOM host, libhtml's fragment host and
+libpage's tree suite (the last fails on the old code); three mutants for
+the new rules, each caught.
+
+**Codex, round 2**: three findings. Fixed: DOMParser's parse took the
+hosting page's quirks mode, so a quirks page nested a table in a
+paragraph; the kept root is parsed in no-quirks mode now, the mode the
+document says it is in (a libhtml fragment-host case and its mutant).
+Booked in DEBTS.md by the triage rule (hand-made, or a long and unlikely
+chain): a prefixed name in `createElementNS` names the element whole, and
+a kept selection is clamped when read rather than when a clean control's
+default shrinks.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.

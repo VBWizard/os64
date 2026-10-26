@@ -440,6 +440,7 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         {"HTMLFormElement", D_PROTO_FORM}, {"HTMLInputElement", D_PROTO_INPUT},
         {"HTMLTextAreaElement", D_PROTO_TEXTAREA}, {"HTMLSelectElement", D_PROTO_SELECT},
         {"HTMLOptionElement", D_PROTO_OPTION}, {"HTMLOptGroupElement", D_PROTO_OPTGROUP},
+        {"HTMLTemplateElement", D_PROTO_TEMPLATE},
         {"HTMLButtonElement", D_PROTO_BUTTON}, {"HTMLImageElement", D_PROTO_IMAGE},
         {"HTMLScriptElement", D_PROTO_SCRIPT}, {"HTMLAnchorElement", D_PROTO_ANCHOR},
         {"HTMLLinkElement", D_PROTO_LINK},
@@ -487,8 +488,30 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     /* NamedNodeMap's objects are no nodes, so its prototype is attr.c's. */
     JSValue map = d_attr_map_interface(dom, ctx);
     if (JS_IsException(map)) return -1;
-    return JS_DefinePropertyValueStr(ctx, global, "NamedNodeMap", map, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0
-        ? -1 : 0;
+    if (JS_DefinePropertyValueStr(ctx, global, "NamedNodeMap", map, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+        return -1;
+    /* The lists the nodes hand out, each over the prototype its objects
+     * already have (0f's P1b): a NodeList's (collection.c's static list
+     * prototype, which childNodes and getElementsByName have too), an
+     * HTMLCollection's (every other live collection), classList's and
+     * relList's DOMTokenList, dataset's DOMStringMap. None constructs. */
+    JSValue collection = JS_GetClassProto(ctx, dom->collection_class);
+    JSValue tokens = JS_GetClassProto(ctx, dom->token_class);
+    JSValue strings = JS_GetClassProto(ctx, dom->map_class);
+    const struct { const char *name; JSValueConst prototype; } kLists[] = {
+        {"NodeList", dom->static_list->value}, {"HTMLCollection", collection},
+        {"DOMTokenList", tokens}, {"DOMStringMap", strings},
+    };
+    for (size_t i = 0; result == 0 && i < sizeof(kLists) / sizeof(kLists[0]); i++) {
+        JSValue f = d_interface_new(ctx, kLists[i].name, 0, NULL, kLists[i].prototype, JS_UNDEFINED);
+        if (JS_IsException(f) ||
+            JS_DefinePropertyValueStr(ctx, global, kLists[i].name, f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+            result = -1;
+    }
+    JS_FreeValue(ctx, collection);
+    JS_FreeValue(ctx, tokens);
+    JS_FreeValue(ctx, strings);
+    return result;
 }
 
 JSValue d_interface_new(JSContext *ctx, const char *name, int length, JSCFunction *constructor,
@@ -543,7 +566,7 @@ int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_accessor(dom,ctx,doc,"forms",classic,C_FORMS,false) < 0 ||
         d_accessor(dom,ctx,form,"elements",classic,C_ELEMENTS,false) < 0 ||
         d_accessor(dom,ctx,el,"style",classic,C_STYLE,false) < 0 ||
-        d_accessor(dom,ctx,el,"title",classic,C_TITLE,true) < 0 ||
+        d_accessor(dom,ctx,dom->prototypes[D_PROTO_HTML_ELEMENT]->value,"title",classic,C_TITLE,true) < 0 ||
         d_accessor(dom,ctx,doc,"cookie",classic,C_COOKIE,true) < 0 ||
         d_accessor(dom,ctx,image,"src",classic,C_SRC,true) < 0 ||
         d_accessor(dom,ctx,image,"width",classic,C_WIDTH,true) < 0 ||

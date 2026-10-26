@@ -75,11 +75,12 @@ static char *modern_chain_shape(DomFixture *f)
         "document.createTextNode('t'),document.createComment('c'),document.createDocumentFragment(),"
         "document.doctype,document.implementation,document.implementation.createHTMLDocument('')];"
         "var row=/(^constructor$|_NODE$|^DOCUMENT_POSITION_|^onscroll$|^onresize$|^scrollingElement$|^defaultView$"
-        "|^onerror$|^getRootNode$|^wholeText$|^splitText$)/;"
+        "|^onerror$|^getRootNode$|^wholeText$|^splitText$|^selectionStart$|^selectionEnd$|^selectionDirection$"
+        "|^setSelectionRange$|^select$|^content$)/;"
         "var documentRow=/^(readyState|onreadystatechange|visibilityState|hidden|onvisibilitychange|referrer|"
         "activeElement|hasFocus|currentScript|title|prerendering|onprerenderingchange|domain|URL|documentURI|"
         "wasDiscarded|compatMode|dir|characterSet|charset|inputEncoding|contentType|lastModified|rootElement|"
-        "clear)$/;"
+        "clear|getSelection|createElementNS)$/;"
         "globalThis.chainShape=nodes.map(function(n){var levels=[];"
         "for(var p=Object.getPrototypeOf(n);p&&p!==Object.prototype;p=Object.getPrototypeOf(p))"
         "levels.push(Object.getOwnPropertyNames(p).filter(function(k){"
@@ -154,6 +155,115 @@ static void dom_modern_cases(void)
         "bad=false;try{Text.prototype.splitText.call(document.createComment('c'),0)}catch(e){bad=e instanceof TypeError}"
         "assert(bad,'a Text member on a comment');",
         "modern-on-node-row");
+    /* 0f's P1b lists: NodeList apart from HTMLCollection, and the names of
+     * the token and string lists (ES5 TodoMVC patches NodeList.prototype). */
+    dom_script(&f, MODERN_ASSERT
+        "var b=document.body,box=document.createElement('div');b.appendChild(box);"
+        "box.innerHTML='<p class=k name=n>1</p><p class=k name=n>2</p>';"
+        "var cn=box.childNodes,qs=box.querySelectorAll('p'),byName=document.getElementsByName('n');"
+        "assert(cn instanceof NodeList&&!(cn instanceof HTMLCollection)&&qs instanceof NodeList&&byName instanceof NodeList,'NodeLists');"
+        "assert(box.children instanceof HTMLCollection&&box.getElementsByClassName('k') instanceof HTMLCollection&&"
+        "document.forms instanceof HTMLCollection&&!(box.children instanceof NodeList),'HTMLCollections');"
+        "assert(!('namedItem' in cn)&&'namedItem' in box.children&&cn.length===2&&cn.item(1)===box.lastChild&&qs.item(0)===box.firstChild);"
+        "assert(Object.getPrototypeOf(cn)===NodeList.prototype&&Object.getPrototypeOf(qs)===NodeList.prototype);"
+        "var seen=[];NodeList.prototype.forEach=function(f){for(var i=0;i<this.length;i++)f(this[i],i);seen.push('patched')};"
+        "qs.forEach(function(){});cn.forEach(function(){});assert(seen.join()==='patched,patched','a patch reaches both kinds');"
+        "NodeList.prototype.forEach=Array.prototype.forEach;"
+        "assert(Object.prototype.toString.call(qs)==='[object NodeList]'&&Object.prototype.toString.call(box.children)==='[object HTMLCollection]');"
+        "var bad=false;try{new NodeList()}catch(e){bad=e instanceof TypeError}assert(bad,'no constructor');"
+        "assert(b.classList instanceof DOMTokenList&&b.dataset instanceof DOMStringMap&&Object.getPrototypeOf(b.dataset)===DOMStringMap.prototype);"
+        "assert(typeof b.dataset.hasOwnProperty==='function','a dataset inherits Object.prototype');"
+        "var sel=document.createElement('select');"
+        "assert(sel.options instanceof HTMLOptionsCollection&&sel.options instanceof HTMLCollection&&"
+        "Object.getPrototypeOf(HTMLOptionsCollection)===HTMLCollection);",
+        "modern-on-lists");
+    /* 0f's P2 core: a text control's selection, and the window's Selection
+     * (react-dom's two paths: the field's, and getSelection's) */
+    dom_script(&f, MODERN_ASSERT
+        "var t=document.createElement('input');t.value='hello';"
+        "assert('selectionStart' in t&&t.selectionStart===5&&t.selectionEnd===5&&t.selectionDirection==='none','at the value end');"
+        "t.setSelectionRange(1,3);assert(t.selectionStart===1&&t.selectionEnd===3&&t.selectionDirection==='none');"
+        "t.setSelectionRange(1,3,'backward');assert(t.selectionDirection==='backward');"
+        "t.selectionStart=4;assert(t.selectionStart===4&&t.selectionEnd===4,'a start past the end moves the end');"
+        "t.selectionEnd=2;assert(t.selectionStart===2&&t.selectionEnd===2,'an end before the start moves the start');"
+        "t.select();assert(t.selectionStart===0&&t.selectionEnd===5,'select() is all of it');"
+        "t.setSelectionRange(0,99);assert(t.selectionEnd===5,'the end is clamped to the value');"
+        "t.setSelectionRange(1,2);t.value='hi';assert(t.selectionStart===2&&t.selectionEnd===2,'a new value puts it at the end');"
+        "var w=new Text('x');var u=document.createElement('input');u.value='a\\u{1F600}';assert(u.selectionEnd===3,'code units');"
+        "var e=document.createElement('input');e.type='email';e.value='a@b';"
+        "assert('selectionStart' in e&&e.selectionStart===null&&e.selectionDirection===null,'an email input has none');"
+        "var bad=false;try{e.selectionStart=1}catch(x){bad=x.name==='InvalidStateError'}assert(bad,'and refuses one');"
+        "bad=false;try{e.setSelectionRange(0,1)}catch(x){bad=x.name==='InvalidStateError'}assert(bad);e.select();"
+        "var a=document.createElement('textarea');a.value='two\\nlines';a.setSelectionRange(4,9);"
+        "assert(a.selectionStart===4&&a.selectionEnd===9,'a textarea has one');"
+        "var pw=document.createElement('input');pw.type='password';pw.value='abc';"
+        "assert(pw.selectionStart===3,'a password input has one');"
+        "var s=window.getSelection();"
+        "assert(s===document.getSelection()&&s instanceof Selection&&s.anchorNode===null&&s.focusNode===null&&"
+        "s.anchorOffset===0&&s.rangeCount===0&&s.isCollapsed&&s.type==='None'&&String(s)==='','no page selection');"
+        "bad=false;try{s.getRangeAt(0)}catch(x){bad=x.name==='IndexSizeError'}assert(bad);s.removeAllRanges();",
+        "modern-on-selection");
+    /* DOMParser, HTML only, as ES5 TodoMVC renders its list */
+    dom_script(&f, MODERN_ASSERT
+        "var p=new DOMParser();assert(p instanceof DOMParser&&Object.prototype.toString.call(p)==='[object DOMParser]');"
+        "var d=p.parseFromString('<title>T</title><li data-id=1>one</li><li data-id=2>two</li><script>globalThis.ran=1<\\/script>','text/html');"
+        "assert(d.nodeType===9&&d!==document&&d.head.firstChild.textContent==='T'&&d.body.children.length===3,'head and body as a document parse puts them');"
+        "assert(typeof globalThis.ran==='undefined','its script never runs');"
+        "var whole=p.parseFromString('<!doctype html><html lang=en class=theme><head><title>W</title><body><p>x','text/html');"
+        "assert(whole.documentElement.getAttribute('lang')==='en'&&whole.documentElement.className==='theme'&&"
+        "whole.documentElement.parentNode===whole&&whole.title==='W'&&whole.body.firstChild.tagName==='P',"
+        "'a whole document keeps its root element\\'s attributes');"        "var ul=document.createElement('ul');document.body.appendChild(ul);ul.appendChild(document.createElement('i'));"
+        "ul.replaceChildren(...p.parseFromString('<li>a</li><li>b</li>','text/html').body.childNodes);"
+        "assert(ul.children.length===2&&ul.lastChild.textContent==='b'&&ul.lastChild.ownerDocument===document,'ES5 TodoMVC renders so');"
+        "var bad=false;try{p.parseFromString('<a/>','text/xml')}catch(e){bad=e.name==='NotSupportedError'}assert(bad,'XML is not parsed');"
+        "bad=false;try{p.parseFromString('x','text/plain')}catch(e){bad=e instanceof TypeError}assert(bad,'not a parser type');"
+        "bad=false;try{DOMParser()}catch(e){bad=e instanceof TypeError}assert(bad,'a constructor only');"
+        "bad=false;try{DOMParser.prototype.parseFromString.call({},'x','text/html')}catch(e){bad=e instanceof TypeError}assert(bad,'its own');",
+        "modern-on-dom-parser");
+    /* HTMLElement's members are HTMLElement's: Svelte 5 looks for a member's
+     * setter below Element.prototype and sets an attribute when it finds
+     * none, so `hidden = false` on Element's became hidden="false" and hid
+     * TodoMVC's list. Its walk, as it runs. */
+    dom_script(&f, MODERN_ASSERT
+        "function setters(el){var s=[],p=el;while(p!==Element.prototype){var d=Object.getOwnPropertyDescriptors(p);"
+        "for(var k in d)if(d[k].set)s.push(k);p=Object.getPrototypeOf(p)}return s}"
+        "var s=setters(document.createElement('main'));"
+        "assert(['hidden','lang','dir','title','tabIndex'].every(k=>s.includes(k)),'Svelte finds them: '+s.join());"
+        "var g=setters(document.createElementNS('http://www.w3.org/2000/svg','g'));"
+        "assert(g.includes('tabIndex')&&!g.includes('hidden'),'an SVG element has tabIndex and not hidden');"
+        "assert(!Object.getOwnPropertyDescriptor(Element.prototype,'hidden')&&'dataset' in document.createElementNS('http://www.w3.org/2000/svg','g'));"
+        "var m=document.createElement('main');m.hidden=true;m.hidden=false;assert(!m.hasAttribute('hidden'),'false removes it');",
+        "modern-on-html-element-members");
+    /* A template's content, as Svelte builds its markup */
+    dom_script(&f, MODERN_ASSERT
+        "var t=document.createElement('template');assert(t instanceof HTMLTemplateElement&&t instanceof HTMLElement);"
+        "t.innerHTML='<p>x</p><!---->';var c=t.content;"
+        "assert(c instanceof DocumentFragment&&c===t.content&&c.firstChild.tagName==='P'&&t.childNodes.length===0,'its own fragment');"
+        "var copy=c.cloneNode(true);assert(copy.childNodes.length===2&&copy.firstChild!==c.firstChild,'cloned whole');"
+        "var h=document.createElement('div');h.innerHTML='<template id=tp><b>y</b></template>';"
+        "assert(h.firstChild.content.firstChild.tagName==='B','a parsed one too');"
+        "var bad=false;try{Object.getOwnPropertyDescriptor(HTMLTemplateElement.prototype,'content').get.call(h)}"
+        "catch(e){bad=e instanceof TypeError}assert(bad,'a template only');",
+        "modern-on-template-content");
+    /* createElementNS: React's SVG and Svelte's every element */
+    dom_script(&f, MODERN_ASSERT
+        "var SVG='http://www.w3.org/2000/svg',X='http://www.w3.org/1999/xhtml';"
+        "var c=document.createElementNS(SVG,'circle');"
+        "assert(c instanceof SVGElement&&c.tagName==='circle'&&c.ownerDocument===document&&c.parentNode===null,'an SVG element');"
+        "var g=document.createElementNS(SVG,'linearGradient');assert(g.tagName==='linearGradient','its case kept');"
+        "var d=document.createElementNS(X,'div',undefined);assert(d instanceof HTMLElement&&d.tagName==='DIV','Svelte: an HTML one');"
+        "var asked=0;document.createElementNS(X,'p',{get is(){asked++;return 'x-p'}});assert(asked===1,'options converted');"
+        "var svg=document.createElementNS(SVG,'svg');svg.appendChild(c);document.body.appendChild(svg);"
+        "assert(document.body.lastChild===svg&&svg.firstChild===c);"
+        "var other=document.implementation.createHTMLDocument('');"
+        "assert(other.createElementNS(SVG,'g').ownerDocument===other,'made by the document it was asked of');"
+        "function name(f){try{f();return 'none'}catch(e){return e.name}}"
+        "assert(name(()=>document.createElementNS(SVG,'a:'))==='InvalidCharacterError','a bad name');"
+        "assert(name(()=>document.createElementNS(null,'p:a'))==='NamespaceError','a prefix with no namespace');"
+        "assert(name(()=>document.createElementNS('','p:a'))==='NamespaceError','the empty string is no namespace');"
+        "assert(name(()=>document.createElementNS(null,'a'))==='NotSupportedError','no namespace the tree holds');"
+        "assert(name(()=>document.createElementNS(SVG))==='TypeError','two arguments');",
+        "modern-on-create-element-ns");
     /* 0f's P1a select row: React's option updater first, as it runs. */
     dom_script(&f, MODERN_ASSERT
         "var h=document.createElement('div');document.body.appendChild(h);"

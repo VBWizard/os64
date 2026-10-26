@@ -379,9 +379,36 @@ static void tree_option_dirtiness(void)
     rebuild_clear(&f);
 }
 
+// A text control's selection when its value cannot be read (the read
+// sanitizes and caches, and here its allocation fails): a set is refused,
+// and the selection is what it was. The attribute changes under libpage,
+// whose own verb would re-read the value as it changed it, so the cache is
+// stale and the next read must allocate.
+static void tree_selection_value_failure(void)
+{
+    RebuildFixture f=rebuild_fixture("<input id=i value=hello>",0);
+    os64_html_node_t *i=rebuild_id(f.doc,"i");
+    uint32_t start=0,end=0;
+    os64_page_direction_t direction=OS64_PAGE_DIRECTION_NONE;
+    rebuild_expect("selection: set",os64_page_node_set_selection(f.state,i,1,3,OS64_PAGE_DIRECTION_FORWARD)==0);
+    rebuild_expect("selection: the default changes under libpage",
+        os64_html_set_attr(f.doc,i,"value","goodbye",7)==OS64_HTML_OK);
+    fail_at=allocations+1;
+    int64_t set=os64_page_node_set_selection(f.state,i,2,4,OS64_PAGE_DIRECTION_NONE);
+    int64_t read=os64_page_node_selection(f.state,i,&start,&end,&direction);
+    fail_at=0;
+    rebuild_expect("selection: a value that cannot be read refuses the set and the read",
+        set==-OS64_PAGE_REASON_NO_MEMORY&&read==-OS64_PAGE_REASON_NO_MEMORY);
+    rebuild_expect("selection: and the selection is what it was",
+        os64_page_node_selection(f.state,i,&start,&end,&direction)==0&&start==1&&end==3&&
+        direction==OS64_PAGE_DIRECTION_FORWARD);
+    rebuild_clear(&f);
+}
+
 static void test_libpage_tree(void)
 {
     tree_option_selectedness();
+    tree_selection_value_failure();
     tree_option_dirtiness();
     tree_depth_and_state_cap();
     tree_unmodeled_select();
