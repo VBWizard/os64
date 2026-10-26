@@ -262,6 +262,7 @@ static void fatal(const char *sentence)
 void d_node_register(HDoc *d, HNode *n, uint32_t flags)
 {
     HMeta *m = h_meta(n);
+    n->xml_document = d->pub.is_xml;
     m->flags = flags;
     m->live_next = d->live_nodes;
     if (d->live_nodes)
@@ -309,7 +310,8 @@ void os64_html_release(const os64_html_document_t *doc, const HNode *node)
 size_t d_owned_bytes(const HNode *n)
 {
     size_t size = (h_meta(n)->flags & H_NODE_PACKED) ? ((HBlock *)n - 1)->size : 0;
-    if ((n->kind == OS64_HTML_TEXT || n->kind == OS64_HTML_COMMENT) && *h_word(n))
+    if ((n->kind == OS64_HTML_TEXT || n->kind == OS64_HTML_COMMENT || n->kind == OS64_HTML_PI) &&
+        *h_word(n))
         size += ((HBlock *)n->text - 1)->size;
     if (n->kind == OS64_HTML_ELEMENT && (*h_word(n) & H_ATTRS_PRIVATE))
         for (const HAttr *a = n->attrs; a; a = a->next)
@@ -720,6 +722,60 @@ static uint32_t document_mark(void)
     } while (!__atomic_compare_exchange_n(&h_document_serial, &seen, seen + 1, true, __ATOMIC_RELAXED,
                                           __ATOMIC_RELAXED));
     return seen + 1;
+}
+HDoc *d_xml_document_new(size_t budget, size_t depth, int64_t *why)
+{
+    if (budget < sizeof(HDoc)) {
+        *why = OS64_HTML_ARENA_EXHAUSTED;
+        return NULL;
+    }
+    HDoc *d = os64_calloc(1, sizeof(*d));
+    if (!d) {
+        *why = OS64_HTML_NO_MEMORY;
+        return NULL;
+    }
+    d->budget = budget;
+    d->version = 1;
+    d->max_depth = depth;
+    d->pub.is_xml = true;
+    d->pub.arena_bytes = d->pub.peak_arena_bytes = sizeof(*d);
+    d->id = document_mark();
+    if (!d->id) {
+        *why = OS64_HTML_NO_MEMORY;
+        os64_html_document_free(&d->pub);
+        return NULL;
+    }
+    d->root.kind = OS64_HTML_DOCUMENT;
+    d->root.document_id = d->id;
+    d->pub.document = &d->root;
+    d->pub.node_count = 1;
+    d_node_register(d, &d->root, H_NODE_EMBEDDED);
+    return d;
+}
+const os64_html_node_t *os64_html_document_element(const os64_html_document_t *doc)
+{
+    for (const HNode *n = doc && doc->document ? doc->document->first_child : NULL; n; n = n->next)
+        if (n->kind == OS64_HTML_ELEMENT)
+            return n;
+    return NULL;
+}
+const char *os64_html_namespace_uri(const os64_html_node_t *node)
+{
+    if (!node || node->kind != OS64_HTML_ELEMENT)
+        return NULL;
+    switch (node->ns) {
+    case OS64_HTML_NS_HTML:
+        return "http://www.w3.org/1999/xhtml";
+    case OS64_HTML_NS_SVG:
+        return "http://www.w3.org/2000/svg";
+    case OS64_HTML_NS_MATHML:
+        return "http://www.w3.org/1998/Math/MathML";
+    case OS64_HTML_NS_OTHER:
+        return node->namespace_uri;
+    case OS64_HTML_NS_NONE:
+        return NULL;
+    }
+    return NULL;
 }
 os64_html_parser_t *os64_html_parser_new(const os64_html_options_t *options)
 {

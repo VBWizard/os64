@@ -2,8 +2,8 @@
 
 Status: slice 6a design, 2026-10-25. Quinn, following Chris's standalone
 in-house parser ruling and Fable's events-only boundary in
-[SVG_REVIEW.md](SVG_REVIEW.md). The standalone foundation is implemented; the as-built section below records
-its profile and verification. Shared-tree integration remains pending. [SVG.md](SVG.md) defines the first consuming feature.
+[SVG_REVIEW.md](SVG_REVIEW.md). The standalone foundation and native shared-tree adapter are implemented; the
+as-built sections below record their contracts and verification. [SVG.md](SVG.md) defines the first consuming feature.
 
 ## Purpose and boundary
 
@@ -134,9 +134,10 @@ directly under a document node. Build on that instead of constructing a
 second DOM in libxml. Prove independent document ownership without creating
 a JavaScript context; libdom's page-arena `createDocument` is not that API.
 
-The builder still needs a representation for arbitrary/no-namespace elements,
-processing instructions and CDATA behavior appropriate to XML documents.
-Those are shared-tree changes, not a reason to add nodes to the parser.
+The builder represents arbitrary/no-namespace elements and processing
+instructions in shared nodes. Its rendering projection coalesces CDATA into
+text, as specified below. These are shared-tree features; libxml remains
+an event parser.
 Preserve HTML parsing and existing known-namespace behavior. Keep namespace
 prefix and local name distinct where selector/DOM APIs require them.
 
@@ -245,5 +246,101 @@ declaration enforcement and comment terminators overlapping their opener;
 both are fixed, with regressions including the DOCTYPE-comment sibling.
 Opus/Fable implementation review and target execution remain outstanding;
 no QEMU, broad browser suite or mutant campaign was run for this unconsumed
-library. The shared-tree adapter and geometry proof remain slice 6a work,
-not an implicit completion of the SVG stage.
+library. The next section records the shared-tree increment; the geometry
+proof remains slice 6a work, not an implicit completion of the SVG stage.
+
+## Shared-tree increment contract
+
+The native XML builder lives in libhtml and consumes libxml events into an
+independently owned shared document. Its opaque handle exposes feed, finish
+and destroy; the document is unavailable before successful finish. Finish
+consumes the handle and either transfers one complete document or frees the
+partial tree. No JavaScript context, HTML parser recovery, resource fetching
+or script execution participates. Parser allocations, builder scratch and
+tree allocations use the same document storage ledger. Parser work and tree
+copy work have separately reported, explicit caps.
+
+An XML document has `is_xml` set and null `html`, `head` and `body` landmarks.
+A generic document-element accessor reads its element child. The shared nodes
+retain local name, original prefix and namespace URI, distinguishing no
+namespace from an arbitrary URI and from the known HTML/SVG/MathML enums.
+Processing instructions retain their target/data as a distinct node kind;
+DOCTYPE-internal comments/PIs are excluded from document children. This
+rendering-oriented projection coalesces adjacent text and CDATA into text.
+It does not expose DOMParser, XMLSerializer or a lossless XML source model.
+
+Existing mutation/hold/pin/clone contracts also apply to these documents.
+XML roots may be replaced or removed under document child constraints;
+HTML's required-root rule stays in force for HTML documents. Namespace and
+prefix strings copied from another document must outlive their source.
+The existing serializer remains an HTML serialization API, not an XML
+round-trip API.
+
+The cascade proof uses an SVG document root, SVG style text (including CDATA),
+`:root`, custom-property inheritance, case-sensitive type/attribute names,
+namespace-aware sibling types and selectors for no namespace. It supplies
+only the document's own sheets and makes no resource requests. Rendering,
+SVG property computation and the image-job route remain later increments.
+
+
+## Native shared tree, as built — 2026-10-25
+
+`userland/libhtml/include/html/xml.h` exposes the native builder. NULL options
+select a 64 MiB combined storage cap, 64 Mi tree-copy work units and libxml's
+default parser limits. Supplied tree limits are literal, including zero;
+zero parser-limit fields select libxml defaults. Tree allocation refusal is
+reported as `XML_LIMIT` with an HTML arena/work status; physical allocation
+failure is `XML_NO_MEMORY`. Parser errors, unsupported input and cancellation
+retain their XML status. Result storage statistics describe the verdict
+before finish frees parser/scratch; the returned document reports its own
+remaining arena. The document's work counter sums parser and tree work.
+
+All retained names, prefixes, namespace URIs, attribute values and PI data
+belong to the document. Input buffers may be reused after feed. Text/CDATA
+are coalesced in a bounded geometric buffer; node mutation and reclamation
+own the transferred buffer. Cross-document clones copy arbitrary namespace
+strings, including attribute records changed under snapshot pins. The former
+attribute-copy implementation borrowed namespace pointers, which was valid
+for its static known URIs but would dangle for an XML source document.
+
+`is_xml` marks the document and each node records its owning document mode.
+HTML landmarks stay NULL; `os64_html_document_element` supplies the generic
+root. `os64_html_namespace_uri` covers known, arbitrary and absent namespaces.
+The selector engine uses that identity for sibling types, local attribute
+names for wildcard namespace selectors, and the document mode for HTML-name
+case folding. A clone takes its destination document's mode.
+
+The existing HTML serializer retains qualified element spelling and emits
+PI nodes according to its HTML contract. It does not perform XML namespace
+fixup or XML serialization. HTML fragment parsing refuses XML documents and
+unknown/no-namespace contexts; there is no XML fragment parser or general
+namespace-aware creation API. DOMParser, responseXML, script bindings and
+SVG image jobs do not consume this native builder. These boundaries are
+recorded in DEBTS.md rather than treated as completed browser features.
+
+**Verification.** `tools/test_xml_tree_host.sh` checks whole-buffer, one-byte
+and varied feeds with poisoned input buffers; independent interleaved
+builders; cleanup after malformed input, abandonment, cancellation and each
+physical allocation failure; storage/work/depth limits; namespace and PI
+ownership after source teardown; held/pinned root replacement and attribute
+mutation; CDATA coalescing; and HTML serializer output. The SVG-root cascade
+proof checks `:root`, case, namespace sibling identity, and the actual red
+color inherited through a root custom property. A maximum-depth tree keeps
+its final text level when cloned and inserted into an equally limited XML
+document.
+
+The new suite and the existing HTML, DOM, libgarb, libpage, libflow, libway,
+libwend, Yonder painter and scripted-page suites pass with ASan/UBSan and
+LeakSanitizer enabled outside the sandbox. Cross-built `libhtml.so` links
+`libxml.so` and `libos64.so`. No P5 or QEMU feature test applies yet: no browser
+consumer calls the builder. WPT/browser conformance and mutant campaigns
+were not run; this is native tree evidence, not a script API claim.
+
+
+A single independent Codex cold reader (Opus was unavailable) found XHTML
+attribute values incorrectly receiving HTML's implicit ASCII case folding.
+The rule now requires an HTML document, with regressions for default and
+explicit `i`/`s` matching and cloning into an HTML document. The sibling
+namespace-attribute name path also keeps namespaced spelling case-sensitive.
+This follows the [HTML selector rules](https://html.spec.whatwg.org/multipage/semantics-other.html#case-sensitivity-of-selectors).
+Fable's implementation read and SVG geometry proof remain outstanding.

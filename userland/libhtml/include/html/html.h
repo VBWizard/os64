@@ -35,10 +35,14 @@ typedef enum {
     OS64_HTML_DOCTYPE,
     OS64_HTML_ELEMENT,
     OS64_HTML_TEXT,
-    OS64_HTML_COMMENT
+    OS64_HTML_COMMENT,
+    OS64_HTML_PI
 } os64_html_node_kind_t;
 
-typedef enum { OS64_HTML_NS_HTML, OS64_HTML_NS_SVG, OS64_HTML_NS_MATHML } os64_html_ns_t;
+typedef enum {
+    OS64_HTML_NS_HTML, OS64_HTML_NS_SVG, OS64_HTML_NS_MATHML,
+    OS64_HTML_NS_NONE, OS64_HTML_NS_OTHER
+} os64_html_ns_t;
 
 typedef enum { OS64_HTML_NO_QUIRKS, OS64_HTML_LIMITED_QUIRKS, OS64_HTML_QUIRKS } os64_html_quirks_t;
 
@@ -67,7 +71,9 @@ typedef struct os64_html_node {
     /* The library's mark of which document the node belongs to. It means
      * nothing to a reader. */
     uint32_t document_id;
-    const char *name;
+    const char *name; /* Local element name; PI target; doctype name. */
+    const char *prefix, *namespace_uri; /* Owned XML spellings; NULL when absent. */
+    bool xml_document; /* Owning arena is an XML document, including detached nodes. */
     const char *public_id, *system_id;
     const char *text;
     size_t text_len;
@@ -86,6 +92,7 @@ typedef struct {
 
 typedef struct os64_html_document {
     os64_html_node_t *document, *html, *head, *body;
+    bool is_xml; /* XML documents do not have HTML landmarks. */
     os64_html_quirks_t quirks;
     int64_t refusal;
     bool truncated;
@@ -114,6 +121,10 @@ int64_t os64_html_parser_feed(os64_html_parser_t *p, const void *bytes, size_t l
 os64_html_document_t *os64_html_parser_finish(os64_html_parser_t *p);
 void os64_html_parser_destroy(os64_html_parser_t *p);
 void os64_html_document_free(os64_html_document_t *doc);
+/* Generic element child, or NULL; valid for HTML and independently owned XML. */
+const os64_html_node_t *os64_html_document_element(const os64_html_document_t *doc);
+/* URI of an element, including canonical known namespaces; NULL for none. */
+const char *os64_html_namespace_uri(const os64_html_node_t *node);
 
 /* ── THE PARSE THAT STOPS (docs/design/pending/DOM.md) ────────────────────
  *
@@ -244,7 +255,7 @@ uint32_t os64_html_decode_windows_1252(uint8_t byte);
  * The structs above stay read-only views. A change goes through a verb, so
  * that every one keeps what every reader relies on: no cycle, the DOM
  * Standard's rules for what may be whose child, strings that are UTF-8 with
- * no NUL, a document that still has its `html` element, and a tree no deeper
+ * no NUL, an HTML document that still has its `html` element, and a tree no deeper
  * than a parse under the same `max_depth` could have built, which is twice
  * that number of levels (OS64_HTML_TOO_DEEP). A verb either happens or changes nothing a
  * reader can see, and answers OS64_HTML_OK or the name of why not; a verb's
@@ -313,7 +324,9 @@ size_t os64_html_retired_bytes(const os64_html_document_t *doc);
 
 /* New nodes, detached and owned by `doc`. NULL with `*status` (which may be
  * NULL) saying why. An element's `name` is taken as written: the caller
- * lowercases an HTML one. `os64_html_clone` copies one node, or with `deep`
+ * lowercases an HTML one. create_element accepts the known HTML/SVG/MathML
+ * enums; arbitrary/no-namespace creation is supplied by the XML builder.
+ * `os64_html_clone` copies one node, or with `deep`
  * its whole subtree and a template's contents; a copy has no form owner.
  * Its `node` may belong to another document, which is how a node is brought
  * from one to another: the copy then shares no memory with that document
@@ -374,7 +387,7 @@ int64_t os64_html_remove(os64_html_document_t *doc, os64_html_node_t *node);
 
 /* An attribute by its qualified name, as os64_html_attr finds it. Setting
  * one that exists keeps its place in the list; a new one goes last.
- * `set_text` replaces a TEXT or COMMENT node's data whole. */
+ * `set_text` replaces a TEXT, COMMENT or PI node's data whole. */
 /* Changes are applied in order to one element's qualified attributes. A set
  * retains an existing record's namespace and position; a new name goes last.
  * A remove ignores value/value_len. All entries are validated before any
@@ -396,7 +409,9 @@ int64_t os64_html_remove_attr(os64_html_document_t *doc, os64_html_node_t *eleme
 int64_t os64_html_set_text(os64_html_document_t *doc, os64_html_node_t *node, const char *utf8,
                            size_t len);
 
-/* Parse a complete UTF-8 string in an owned ELEMENT context. The returned
+/* Parse a complete UTF-8 string in an owned ELEMENT context.
+ * This HTML fragment entry point refuses XML documents and unknown/no-namespace
+ * contexts with BAD_ARGUMENT; it does not provide XML fragment parsing. The returned
  * FRAGMENT is detached and owned by doc; script elements never stop or run.
  * scripting selects noscript's policy. There is no sniffing, BOM stripping,
  * or meta charset interpretation. Invalid UTF-8 becomes U+FFFD. NUL follows

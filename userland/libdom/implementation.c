@@ -472,8 +472,8 @@ static JSValue parser_construct(JSContext *ctx, JSValueConst new_target, int arg
  * and the parse's own root becomes the document's element, with what its
  * `<html>` tags gave it (`lang`, a theme's class); a doctype in it is not
  * kept, so the document is in no-quirks mode. The
- * XML types are a NotSupportedError: no XML parse builds a tree yet
- * (DEBTS.md). */
+ * XML types are a NotSupportedError: libhtml's XML builder is not
+ * connected here (DEBTS.md). */
 static JSValue parse_from_string(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
                                  JSValue *data)
 {
