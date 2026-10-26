@@ -1,6 +1,6 @@
 # HTML is an optional userland parser. Only its consumers acquire this edge;
 # libos64 remains independent of parser code and generated entity tables.
-LIBHTML_SRCS := libhtml/core.c libhtml/encoding.c libhtml/tokenizer.c libhtml/tree.c libhtml/dom.c libhtml/fragment.c libhtml/serialize.c
+LIBHTML_SRCS := libhtml/core.c libhtml/encoding.c libhtml/tokenizer.c libhtml/tree.c libhtml/dom.c libhtml/fragment.c libhtml/serialize.c libhtml/xml.c
 LIBHTML_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBHTML_SRCS))
 LIBHTML_SO := $(BIN)/libhtml.so
 # Optimize the character and stack walks; host sanitizer runners use the
@@ -11,12 +11,12 @@ LIBHTML_LDFLAGS = $(SHARED_LIB_LDFLAGS) -soname libhtml.so
 
 # library.mk holds the object list and the link flags: removing a source
 # creates no newer object, so without it the old library would look current.
-$(LIBHTML_SO): $(LIBHTML_OBJS) $(LIBOS64_SO) $(CURDIR)/link/lib.ld $(CURDIR)/tools/app_bases.py \
+$(LIBHTML_SO): $(LIBHTML_OBJS) $(LIBOS64_SO) $(LIBXML_SO) $(CURDIR)/link/lib.ld $(CURDIR)/tools/app_bases.py \
                libhtml/library.mk
 	@mkdir -p "$(BIN)"
 	$(LD) --defsym LIB_BASE=$(LIBHTML_BASE) \
 	      --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) $(LIBHTML_LDFLAGS) --no-as-needed \
-	      -o $@ $(LIBHTML_OBJS) $(LIBOS64_SO)
+	      -o $@ $(LIBHTML_OBJS) $(LIBOS64_SO) $(LIBXML_SO)
 	@printf '  %-10s prelinked at %s\n' "libhtml.so" "$(LIBHTML_BASE)"
 
 $(OBJ)/pic/libhtml/%.c.o: libhtml/%.c libhtml/library.mk GNUmakefile

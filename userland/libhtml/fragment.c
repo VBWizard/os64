@@ -214,7 +214,8 @@ HNode *h_parse_fragment(os64_html_document_t *doc, const HNode *context,
     if (work)
         *work = 0;
     HDoc *owner = (HDoc *)doc;
-    if (!owner || !context || context->kind != OS64_HTML_ELEMENT ||
+    if (!owner || owner->pub.is_xml || !context || context->kind != OS64_HTML_ELEMENT ||
+        context->ns == OS64_HTML_NS_NONE || context->ns == OS64_HTML_NS_OTHER ||
         !os64_html_owns_node(doc, context) || (!utf8 && len)) {
         answer(status, OS64_HTML_BAD_ARGUMENT);
         return NULL;

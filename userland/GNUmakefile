@@ -391,8 +391,8 @@ include libwebp/shared.mk
 include libfreetype/shared.mk
 include libmath/shared.mk
 include libimage/shared.mk
-include libhtml/library.mk
 include libxml/library.mk
+include libhtml/library.mk
 include libpage/library.mk
 include libgarb/library.mk
 include libflow/library.mk

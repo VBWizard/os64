@@ -3287,7 +3287,11 @@ xmlconf's supported/unsupported/excluded results. The root/userland makefiles
 include its build, image installation membership and debugger symbols because
 those shared inventories are required to deliver the library.
 
-This completes the standalone foundation increment, not all of slice 6a.
-The shared-tree builder, SVG ownership/cascade proofs and FreeType geometry
-contract remain to be built. XML profile limitations and the absent browser
-adapter are recorded in DEBTS.md; the slice's overall brief remains active.
+The native shared-tree increment is also built in libhtml: independently
+owned XML documents, arbitrary/absent namespaces, processing instructions,
+CDATA-to-text projection, clone/mutation ownership, and SVG-rooted selector
+and custom-property cascade proofs. Its API and sanitizer/regression evidence
+are in [XML.md](XML.md#native-shared-tree-as-built--2026-10-25). The FreeType
+geometry proof remains before 6a completes. XML profile limitations and
+browser consumers still to be built are recorded in DEBTS.md; the slice's
+overall brief stays active.

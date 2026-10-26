@@ -1,6 +1,6 @@
 # libhtml
 
-Optional streaming HTML-to-tree library for os64 userland. The settled scope,
+Optional streaming HTML/XML-to-shared-tree library for os64 userland. The settled scope,
 reference revisions, deliberate deviations, and evidence are in
 [LIBHTML.md](../../LIBHTML.md). Public declarations live in
 [html.h](include/html/html.h); only consumers link against `libhtml.so`.
@@ -200,3 +200,15 @@ and regenerated expectations together. `tools/test_html_dom_host.sh` proves the
 verbs: cases by hand, every allocation failed in turn, pins and retirement, and
 random walks checked step by step against a second tree kept by the test. Corpus snapshots can be regenerated
 with `tools/test_html_corpus.py --driver <host-driver> --refresh-snapshots`.
+
+
+Native XML input uses [html/xml.h](include/html/xml.h) and the libxml event
+parser. Create/feed/finish returns an independently owned document only after
+successful XML completion; failure frees the provisional tree. XML documents
+have `is_xml` set and no HTML landmarks: use `os64_html_document_element`.
+Names retain local spelling, prefix and namespace URI; text and CDATA
+coalesce, while processing instructions stay distinct. The same holds, pins,
+clones and mutation lifetime rules apply. HTML fragment parsing refuses XML
+documents, and the serializer remains HTML serialization. The supported XML
+profile, resource limits and evidence are in
+[XML.md](../../docs/design/pending/XML.md#native-shared-tree-as-built--2026-10-25).

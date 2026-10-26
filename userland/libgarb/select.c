@@ -345,6 +345,7 @@ static bool parse_attr(Cur *outer, const garb_value_t *v, int32_t n, Simple *s)
     Cur c = {v, n, 0, outer->p, outer->nested, outer->in_has};
     s->kind = S_ATTR;
     s->ci = -1;
+    s->no_ns = true;
     skip_ws(&c);
     const garb_value_t *t = peek(&c, 0);
     // A namespace prefix: `*|a` is any namespace, `|a` none; a named prefix
@@ -354,6 +355,7 @@ static bool parse_attr(Cur *outer, const garb_value_t *v, int32_t n, Simple *s)
         c.i++;
         t = peek(&c, 0);
     } else if (is_delim(t, '*') && is_delim(peek(&c, 1), '|')) {
+        s->no_ns = false;
         c.i += 2;
         t = peek(&c, 0);
     } else if (t != NULL && t->kind == GARB_IDENT && is_delim(peek(&c, 1), '|') &&
@@ -817,11 +819,13 @@ static const char *attr(const os64_html_node_t *n, const char *name)
 
 static bool same_type(const os64_html_node_t *a, const os64_html_node_t *b)
 {
-    return a->ns == b->ns && a->name != NULL && b->name != NULL && os64_streq(a->name, b->name);
+    const char *au = os64_html_namespace_uri(a), *bu = os64_html_namespace_uri(b);
+    bool namespace_equal = au && bu ? os64_streq(au, bu) : au == bu;
+    return namespace_equal && a->name != NULL && b->name != NULL && os64_streq(a->name, b->name);
 }
 
 // HTML's list of attributes whose values a selector compares without
-// regard to ASCII case on an HTML element.
+// regard to ASCII case on an HTML element in an HTML document.
 static bool ci_valued(const char *name, size_t len)
 {
     static const char *const kCi[] = {
@@ -863,7 +867,8 @@ static bool value_matches(const Simple *s, const os64_html_node_t *el, const cha
 {
     if (s->op == A_EXISTS)
         return true;
-    bool ci = s->ci == 1 || (s->ci == -1 && html(el) && ci_valued(s->name, s->len));
+    bool ci =
+        s->ci == 1 || (s->ci == -1 && html(el) && !el->xml_document && ci_valued(s->name, s->len));
     size_t n = os64_strlen(v), m = s->vlen;
     const char *w = s->value;
     #define SAME(p, q, len) same_bytes((p), (q), (len), ci)
@@ -908,9 +913,17 @@ static bool attr_matches(const Simple *s, const os64_html_node_t *el)
     for (const os64_html_attr_t *a = el->attrs; a != NULL; a = a->next) {
         if (s->no_ns && a->ns != NULL)
             continue;
-        size_t alen = os64_strlen(a->name);
-        bool same = html(el) ? ieq2(a->name, alen, s->name, s->len)
-                             : (alen == s->len && os64_memcmp(a->name, s->name, alen) == 0);
+        const char *local = a->name;
+        if (a->ns)
+            for (const char *p = a->name; *p; ++p)
+                if (*p == ':') {
+                    local = p + 1;
+                    break;
+                }
+        size_t alen = os64_strlen(local);
+        bool same = html(el) && !el->xml_document && !a->ns
+                        ? ieq2(local, alen, s->name, s->len)
+                        : (alen == s->len && os64_memcmp(local, s->name, alen) == 0);
         if (same && value_matches(s, el, a->value != NULL ? a->value : ""))
             return true;
     }
@@ -1138,15 +1151,16 @@ static bool compound_matches(const garb_selectors_t *sel, const Compound *cp,
         const Simple *s = &cp->s[j];
         switch (s->kind) {
         case S_UNIVERSAL:
-            if (s->no_ns)
-                return false;           // nothing in HTML is in no namespace
+            if (s->no_ns && el->ns != OS64_HTML_NS_NONE)
+                return false;
             break;
         case S_TYPE: {
-            if (s->no_ns || el->name == NULL)
+            if ((s->no_ns && el->ns != OS64_HTML_NS_NONE) || el->name == NULL)
                 return false;
             size_t n = os64_strlen(el->name);
-            bool same = html(el) ? ieq2(el->name, n, s->name, s->len)
-                                 : (n == s->len && os64_memcmp(el->name, s->name, n) == 0);
+            bool same = html(el) && !el->xml_document
+                            ? ieq2(el->name, n, s->name, s->len)
+                            : (n == s->len && os64_memcmp(el->name, s->name, n) == 0);
             if (!same)
                 return false;
             break;
