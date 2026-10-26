@@ -433,8 +433,9 @@ os64_html_node_t *os64_html_parse_fragment(os64_html_document_t *doc,
 /* As os64_html_parse_fragment, but the parse's root comes back as the `html`
  * element it is (HTML namespace), detached, holding what the fragment would
  * and the attributes the markup's `<html>` start tags gave it, rather than as
- * a FRAGMENT. With an `html` context it is a whole document's markup as its
- * root element: DOMParser's document. Same limits, statuses and accounting. */
+ * a FRAGMENT, and it is parsed in no-quirks mode whatever doc's mode is.
+ * With an `html` context it is a whole document's markup as its root
+ * element: DOMParser's document. Same limits, statuses and accounting. */
 os64_html_node_t *os64_html_parse_fragment_root(os64_html_document_t *doc,
                                                 const os64_html_node_t *context,
                                                 const char *utf8, size_t len,

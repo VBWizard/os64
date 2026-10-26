@@ -3590,6 +3590,15 @@ QuotaExceededError). Cases in the DOM host, libhtml's fragment host and
 libpage's tree suite (the last fails on the old code); three mutants for
 the new rules, each caught.
 
+**Codex, round 2**: three findings. Fixed: DOMParser's parse took the
+hosting page's quirks mode, so a quirks page nested a table in a
+paragraph; the kept root is parsed in no-quirks mode now, the mode the
+document says it is in (a libhtml fragment-host case and its mutant).
+Booked in DEBTS.md by the triage rule (hand-made, or a long and unlikely
+chain): a prefixed name in `createElementNS` names the element whole, and
+a kept selection is clamped when read rather than when a clean control's
+default shrinks.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.

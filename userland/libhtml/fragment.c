@@ -228,6 +228,10 @@ HNode *h_parse_fragment(os64_html_document_t *doc, const HNode *context,
     HNode *out = NULL;
     if (!temp)
         goto done;
+    /* A kept root is a document's of its own, parsed in no-quirks mode
+     * whatever the owner's (a quirks page nests a table in a paragraph). */
+    if (keep_root)
+        temp->pub.quirks = OS64_HTML_NO_QUIRKS;
     os64_html_parser_t bootstrap = {0};
     bootstrap.d = temp;
     os64_html_parser_t *p = h_alloc(&bootstrap, sizeof(*p));

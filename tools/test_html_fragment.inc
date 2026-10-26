@@ -332,6 +332,26 @@ static void fragment_root_checks(void)
           "the fragment form is unchanged");
     os64_html_document_free(doc);
     check(!live, "fragment root leak");
+    /* An owner in quirks mode (no doctype): the kept root is parsed in
+     * no-quirks mode, where a table closes the paragraph before it, and the
+     * fragment form keeps the owner's, where the table nests in it. */
+    os64_html_options_t opt = os64_html_options_default();
+    opt.charset = "utf-8";
+    os64_html_document_t *quirky = parse_raw((const unsigned char *)"<p>q", 4, 0, &opt);
+    check(quirky && !quirky->refusal && quirky->quirks == OS64_HTML_QUIRKS, "quirks owner fixture");
+    if (quirky && !quirky->refusal) {
+        HNode *at = fragment_context(quirky, "html");
+        const char *table = "<p>x<table><tr><td>y</table>";
+        HNode *kept = os64_html_parse_fragment_root(quirky, at, table, strlen(table), false, &why);
+        HNode *p = kept ? find_named(kept->first_child, "p") : NULL;
+        check(kept && !why && p && !find_named(p->first_child, "table") && find_named(kept->first_child, "table"),
+              "a kept root is parsed in no-quirks mode whatever the owner's");
+        HNode *nested = os64_html_parse_fragment(quirky, at, table, strlen(table), false, &why);
+        p = nested ? find_named(nested->first_child, "p") : NULL;
+        check(nested && !why && p && find_named(p->first_child, "table"), "the fragment form keeps the owner's mode");
+        os64_html_document_free(quirky);
+    }
+    check(!live, "quirks owner leak");
 }
 static void fragment_checks(void)
 {
