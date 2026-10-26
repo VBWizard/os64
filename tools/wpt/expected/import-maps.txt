@@ -1,0 +1,81 @@
+# WPT's import-maps in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh import-maps --update
+# rewrites [passing].
+[required]
+# Import maps (MODERN_WEB.md § Import maps, as built). Each fails with the
+# switch off; the four not-as-classic-script passes not listed here pass
+# either way, each a test that a map never runs as a script. What still
+# fails: the data-driven pages, which need an iframe and
+# import.meta.resolve (tools/test_importmap_host.sh runs their cases
+# instead), import.meta.resolve itself, a script element's error event,
+# workers, CSP (which yonder does not enforce, so its refusals pass
+# nothing), and the .sub.html pages, which build their documents in
+# iframes.
+acquiring/dynamic-import.html	A dynamic import succeeds
+acquiring/dynamic-import.html	After a dynamic import(), import maps work fine
+acquiring/modulepreload-link-header.html	With modulepreload link header, import maps work fine
+acquiring/modulepreload.html	After <link rel=modulepreload> import maps should work fine
+acquiring/script-tag-inline.html	After inline <script type="module"> import maps work fine
+acquiring/script-tag.html	After <script type="module"> import maps work fine
+csp/hash.html	Importmap should be accepted due to hash
+csp/nonce.html	Importmap should be accepted according to its correct nonce
+csp/unsafe-inline.html	Importmap should be accepted due to unsafe-inline
+module-map-key.html	Module map's key is the URL after import map resolution
+multiple-import-maps/basic.html	Second import map should be used for resolution
+multiple-import-maps/conflict-first-persists.html	First defined rule persists in case of conflict
+multiple-import-maps/conflict-first-persists.html	First defined rule persists in case of conflict - non-prefix bare specifier
+multiple-import-maps/conflict-first-persists.html	First defined rule persists in case of conflict - prefixed bare specifiers
+multiple-import-maps/scope-ordering-reverse.html	Scope ordering should be correct regardless of import map insertion order
+multiple-import-maps/scope-ordering.html	More specific scope from second import map should be checked first
+multiple-import-maps/url-resolution-conflict.html	Second import map should not override same resolved URL
+multiple-import-maps/with-errors.html	Second import map should be used for resolution even after an import map with errors
+not-overridden/dynamic.html	Initial import before import map
+not-overridden/failed-resolution.html	Rules for failed resolution are not dropped
+not-overridden/integrity.html	Static script loaded as its integrity check passed
+not-overridden/prefix.html	Initial import before import map
+not-overridden/url-resolution-conflict.html	import map should not override already resolved URL, even if spelled differently
+script-supports-importmap.html	HTMLScriptElement.supports returns false for unsupported types
+script-supports-importmap.html	HTMLScriptElement.supports returns true for 'importmap'
+static-after-innerText.html	Module map's key is the URL after import map resolution
+static-integrity.html	Static script loaded as its integrity check passed
+static-integrity.html	Static script loaded as its integrity check passed without an import defined
+type-whitespace.html	type="importmap"
+[excluded]
+[passing]
+acquiring/dynamic-import.html	A dynamic import succeeds
+acquiring/dynamic-import.html	After a dynamic import(), import maps work fine
+acquiring/modulepreload-link-header.html	With modulepreload link header, import maps work fine
+acquiring/modulepreload.html	After <link rel=modulepreload> import maps should work fine
+acquiring/script-tag-inline.html	After inline <script type="module"> import maps work fine
+acquiring/script-tag.html	After <script type="module"> import maps work fine
+csp/hash.html	Importmap should be accepted due to hash
+csp/nonce.html	Importmap should be accepted according to its correct nonce
+csp/unsafe-inline.html	Importmap should be accepted due to unsafe-inline
+module-map-key.html	Module map's key is the URL after import map resolution
+multiple-import-maps/basic.html	Second import map should be used for resolution
+multiple-import-maps/conflict-first-persists.html	First defined rule persists in case of conflict
+multiple-import-maps/conflict-first-persists.html	First defined rule persists in case of conflict - non-prefix bare specifier
+multiple-import-maps/conflict-first-persists.html	First defined rule persists in case of conflict - prefixed bare specifiers
+multiple-import-maps/scope-ordering-reverse.html	Scope ordering should be correct regardless of import map insertion order
+multiple-import-maps/scope-ordering.html	More specific scope from second import map should be checked first
+multiple-import-maps/url-resolution-conflict.html	Second import map should not override same resolved URL
+multiple-import-maps/with-errors.html	Second import map should be used for resolution even after an import map with errors
+not-as-classic-script.html	External import maps shouldn't be executed as scripts
+not-as-classic-script.html	Import maps shouldn't be executed as scripts
+not-as-classic-script.html	Import maps shouldn't be executed as scripts after changing type
+not-as-classic-script.html	Import maps shouldn't be parsed as scripts
+not-overridden/dynamic.html	Initial import before import map
+not-overridden/failed-resolution.html	Rules for failed resolution are not dropped
+not-overridden/integrity.html	Static script loaded as its integrity check passed
+not-overridden/prefix.html	Initial import before import map
+not-overridden/url-resolution-conflict.html	import map should not override already resolved URL, even if spelled differently
+script-supports-importmap.html	HTMLScriptElement.supports returns false for unsupported types
+script-supports-importmap.html	HTMLScriptElement.supports returns true for 'importmap'
+static-after-innerText.html	Module map's key is the URL after import map resolution
+static-integrity.html	Static script loaded as its integrity check passed
+static-integrity.html	Static script loaded as its integrity check passed without an import defined
+type-whitespace.html	type=" importmap "
+type-whitespace.html	type=" importmap"
+type-whitespace.html	type="importmap "
+type-whitespace.html	type="importmap"

@@ -190,15 +190,114 @@ static void module_no_content_case(void) {
 }
 
 /* With the Modern Web surface off, a module is what the page asked for and
- * did not get, and nothing of it runs. */
+ * did not get, and nothing of it runs; an import map is too. */
 static void module_modern_off_case(void) {
     fake_fetch_reset();
     loop_modern_off=true;
-    module_page("<script type=module>note('module')</script>");
+    module_page("<script type=importmap>{\"imports\":{\"a\":\"/a.js\"}}</script><script type=module>note('module')</script>");
     check(loop_settle() && g.page.tree!=NULL && script_rebuild() && element_text("out")[0]=='\0',
           "modules: with modern off a module does not run");
-    check(strstr(request_record_text(),"MISSING script module (1)")!=NULL,"modules: and is on the record as missing");
+    check(strstr(request_record_text(),"MISSING script module (1)")!=NULL &&
+          strstr(request_record_text(),"MISSING script importmap (1)")!=NULL,
+          "modules: and it and the import map are on the record as missing");
     loop_modern_off=false;
+    request_drop();
+}
+
+/* IMPORT MAPS (MODERN_WEB.md § Import maps, as built): a parser-inserted map
+ * registers before the parse goes on, so the modules after it import bare
+ * names through it: an exact rule, a prefix rule, and a scope over the
+ * modules beneath a path, each fetched once at the address it maps to. */
+static void import_map_case(void) {
+    fake_fetch_reset();
+    fake_answer("GET","http://fixture.test/lib/react.js",200,MODULE_JS,"export default 'react 19';");
+    fake_answer("GET","http://fixture.test/lib/react-17.js",200,MODULE_JS,"export default 'react 17';");
+    fake_answer("GET","http://fixture.test/lib/util/fmt.js",200,MODULE_JS,"export const fmt=s=>'<'+s+'>';");
+    fake_answer("GET","http://fixture.test/m/legacy/old.js",200,MODULE_JS,"import r from 'react';note('old '+r);");
+    module_page("<script type=importmap>{\"imports\":{\"react\":\"/lib/react.js\",\"util/\":\"/lib/util/\"},"
+        "\"scopes\":{\"/m/legacy/\":{\"react\":\"/lib/react-17.js\"}}}</script>"
+        "<script type=module>import r from 'react';import {fmt} from 'util/fmt.js';note(fmt(r));"
+        "note(HTMLScriptElement.supports('importmap'))</script>"
+        "<script type=module src=/m/legacy/old.js></script>");
+    check(loop_settle() && request_land("/lib/react.js") && request_land("/lib/util/fmt.js") &&
+          request_land("/m/legacy/old.js") && request_land("/lib/react-17.js") && loop_settle() &&
+          g.page.tree!=NULL && script_rebuild() && probe_text_is("out","<react 19>|true|old react 17"),
+          "importmap: a bare name, a prefix and a scope each import what the map says");
+    const char *record=request_record_text();
+    check(count_in(record,"request GET http://fixture.test/lib/react.js")==1 && strstr(record,"names no module")==NULL &&
+          strstr(record,"bare name")==NULL && strstr(record,"MISSING script importmap")==NULL,
+          "importmap: each module was fetched once, and nothing is missing or failed");
+    request_drop();
+}
+
+/* A map that does not parse fires the window's error and registers
+ * nothing, so a bare import after it throws; one with `src` is never
+ * fetched; a bare name no map maps is on the record as such. */
+static void import_map_failure_case(void) {
+    fake_fetch_reset();
+    module_page("<script>addEventListener('error',e=>note(e.error&&e.error.name))</script>"
+        "<script type=importmap>{imports:{}}</script><script type=importmap src=/map.json></script>"
+        "<script type=importmap>[]</script><script type=importmap>{\"imports\":{\"a\":\"/a.js\"}}</script>"
+        "<script type=module>import 'lodash';note('never')</script>");
+    check(loop_settle() && g.page.tree!=NULL && script_rebuild() &&
+          probe_text_is("out","SyntaxError|TypeError|TypeError"),
+          "importmap: a syntax error and a top-level array each fire the window's error, and the bare import throws");
+    const char *record=request_record_text();
+    check(strstr(record,"an import map is never fetched")!=NULL && strstr(record,"/map.json")==NULL &&
+          strstr(record,"is a bare name no import map maps")!=NULL,
+          "importmap: src is not fetched, and the bare name is on the record as one no map maps");
+    request_drop();
+}
+
+/* Two maps merge, the first's rule winning where both name a key; a map a
+ * script connects registers before the next task; and a rule for a name
+ * already resolved is dropped, so a name means one thing for the page's
+ * life. */
+static void import_map_merge_case(void) {
+    fake_fetch_reset();
+    fake_answer("GET","http://fixture.test/m/a1.js",200,MODULE_JS,"export default 'a1';");
+    fake_answer("GET","http://fixture.test/m/b.js",200,MODULE_JS,"export default 'b';");
+    fake_answer("GET","http://fixture.test/m/c.js",200,MODULE_JS,"export default 'c';");
+    module_page("<script type=importmap>{\"imports\":{\"a\":\"/m/a1.js\"}}</script>"
+        "<script type=importmap>{\"imports\":{\"a\":\"/m/a2.js\",\"b\":\"/m/b.js\"}}</script>"
+        "<script>var s=document.createElement('script');s.type='importmap';"
+        "s.textContent='{\"imports\":{\"c\":\"/m/c.js\",\"b\":\"/m/b2.js\"}}';document.head.appendChild(s)</script>"
+        "<script type=module>import a from 'a';import b from 'b';import c from 'c';note(a+b+c)</script>");
+    check(loop_settle() && request_land("/m/a1.js") && request_land("/m/b.js") && request_land("/m/c.js") &&
+          loop_settle() && g.page.tree!=NULL && script_rebuild() && probe_text_is("out","a1bc"),
+          "importmap: the first map's a and b stand, the connected map's c joins them");
+    request_drop();
+}
+
+/* An import map that is the page's first script is marked started as it
+ * registers, as every script is: a script that takes it out, rewrites it
+ * and puts it back registers nothing more. */
+static void import_map_started_case(void) {
+    fake_fetch_reset();
+    fake_answer("GET","http://fixture.test/m/a.js",200,MODULE_JS,"export default 'a';");
+    loop_page("<script type=importmap id=map>{\"imports\":{\"a\":\"/m/a.js\"}}</script><p id=out></p>"
+        "<script>var order=[];function note(n){order.push(n);document.getElementById('out').textContent=order.join('|')}"
+        "var m=document.getElementById('map');m.remove();m.textContent='{\"imports\":{\"b\":\"/m/b.js\"}}';"
+        "document.head.appendChild(m)</script>"
+        "<script type=module>import a from 'a';note(a);import('b').then(()=>note('b mapped'),e=>note(e.name))</script>");
+    check(loop_settle() && request_land("/m/a.js") && loop_settle() && g.page.tree!=NULL && script_rebuild() &&
+          probe_text_is("out","a|TypeError"),
+          "importmap: the first script's map is started, and moved and rewritten it registers nothing");
+    request_drop();
+}
+
+/* An import map's addresses resolve against the document's base URL when
+ * it was prepared, as an inline module's imports do; and that base URL is
+ * the inline module's import.meta.url, whatever <base> becomes after. */
+static void import_map_base_case(void) {
+    fake_fetch_reset();
+    fake_answer("GET","http://fixture.test/base/lib.js",200,MODULE_JS,"export default 'based';");
+    module_page("<base href=/base/><script type=importmap>{\"imports\":{\"lib\":\"./lib.js\"}}</script>"
+        "<script type=module>import l from 'lib';note(l+' '+import.meta.url)</script>"
+        "<script>document.querySelector('base').href='/elsewhere/'</script>");
+    check(loop_settle() && request_land("/base/lib.js") && loop_settle() && g.page.tree!=NULL && script_rebuild() &&
+          probe_text_is("out","based http://fixture.test/base/"),
+          "importmap: its addresses resolve against the page's <base>, which is the inline module's meta URL");
     request_drop();
 }
 
@@ -212,4 +311,9 @@ static void module_cases(void) {
     module_takeover_case();
     module_no_content_case();
     module_modern_off_case();
+    import_map_case();
+    import_map_failure_case();
+    import_map_merge_case();
+    import_map_started_case();
+    import_map_base_case();
 }

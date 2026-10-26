@@ -51,8 +51,9 @@
  * page's own head carries its sidecar's Last-Modified, the one header of
  * its head a document reads (document.lastModified). Pictures
  * and fonts always fail. The bytes are served as they are on disk, which
- * WPT writes in UTF-8, but for a `.sub.` file, whose host and port
- * templates are filled in (wpt_substitute).
+ * WPT writes in UTF-8, but for a `.sub.` file and one asked for with
+ * `pipe=sub`, whose host, port and query templates are filled in
+ * (wpt_substitute).
  *
  * THE CLOCK: the loop is turned until nothing is owed, then the window's
  * clock moves one 10 ms tick and it is turned again, up to a budget of 60 s
@@ -550,11 +551,56 @@ static const char *wpt_path_of(const char *url) {
     return *p=='/' ? p+1 : NULL;
 }
 
-/* wptserve's templates, in a file named `.sub.`: the host and port
- * substitutions get-host-info.sub.js and its kind are written in, made to
- * name the hosts above. Anything else between {{ and }} is left as it is,
- * which a test reads as the template it is. malloc'd, with its length. */
-static char *wpt_substitute(const char *bytes, size_t len, size_t *out_len) {
+/* The value of the query parameter `name` (`length` bytes) in `query` (the
+ * address after its `?`, NULL for none), decoded as wptserve's request.GET
+ * decodes it: `+` a space, `%XX` its byte. malloc'd; NULL when the query
+ * has no such parameter. */
+static char *wpt_query_value(const char *query, const char *name, size_t length) {
+    for(const char *p=query;p!=NULL && *p!='\0' && *p!='#';) {
+        size_t field=strcspn(p,"&#");
+        if(field>length && p[length]=='=' && !strncmp(p,name,length)) {
+            char *value=wpt_must(malloc(field-length));
+            size_t n=0;
+            for(const char *v=p+length+1;v<p+field;v++) {
+                if(*v=='+') value[n++]=' ';
+                else if(*v=='%' && v+2<p+field && isxdigit((unsigned char)v[1]) && isxdigit((unsigned char)v[2])) {
+                    char hex[3]={v[1],v[2],0};
+                    value[n++]=(char)strtol(hex,NULL,16); v+=2;
+                } else value[n++]=*v;
+            }
+            value[n]='\0';
+            return value;
+        }
+        p+=field;
+        if(*p=='&') p++;
+    }
+    return NULL;
+}
+
+/* Whether an address's query asks for wptserve's `sub` pipe, which fills a
+ * file's templates as a `.sub.` name does: `pipe=sub`, alone or among the
+ * pipes `|` joins. */
+static bool wpt_pipe_sub(const char *query) {
+    char *pipes=wpt_query_value(query,"pipe",4);
+    bool sub=false;
+    for(char *p=pipes;p!=NULL && *p!='\0' && !sub;) {
+        size_t one=strcspn(p,"|");
+        sub=(one==3 && !strncmp(p,"sub",3)) || (one>3 && !strncmp(p,"sub(",4));
+        p+=one;
+        if(*p=='|') p++;
+    }
+    free(pipes);
+    return sub;
+}
+
+/* wptserve's templates, in a file named `.sub.` or asked for with the `sub`
+ * pipe: the host and port substitutions get-host-info.sub.js and its kind
+ * are written in, made to name the hosts above, and {{GET[name]}}, the
+ * request's own query parameter (`query`, the address after its `?`; NULL
+ * for none, when one reads as empty, as wptserve's does). Anything else
+ * between {{ and }} is left as it is, which a test reads as the template
+ * it is. malloc'd, with its length. */
+static char *wpt_substitute(const char *bytes, size_t len, const char *query, size_t *out_len) {
     static const struct { const char *from, *to; } kSubs[]={
         {"{{host}}","wpt.test"},{"{{domains[]}}","wpt.test"},
         {"{{domains[www]}}","www.wpt.test"},{"{{domains[www1]}}","www1.wpt.test"},
@@ -564,18 +610,32 @@ static char *wpt_substitute(const char *bytes, size_t len, size_t *out_len) {
         {"{{ports[http][0]}}","80"},{"{{ports[http][1]}}","8001"},
         {"{{ports[https][0]}}","443"},{"{{ports[https][1]}}","8443"},
     };
-    char *out=wpt_must(malloc(len*2+1));    /* no substitution doubles a name */
-    size_t n=0;
+    size_t cap=len*2+1, n=0;
+    char *out=wpt_must(malloc(cap));
     for(size_t i=0;i<len;) {
-        bool done=false;
-        for(size_t k=0;k<sizeof(kSubs)/sizeof(kSubs[0]) && !done && bytes[i]=='{';k++) {
-            size_t f=strlen(kSubs[k].from);
-            if(i+f<=len && !memcmp(bytes+i,kSubs[k].from,f)) {
-                size_t t=strlen(kSubs[k].to);
-                memcpy(out+n,kSubs[k].to,t); n+=t; i+=f; done=true;
+        const char *to=NULL;
+        char *made=NULL;
+        size_t f=0;
+        for(size_t k=0;k<sizeof(kSubs)/sizeof(kSubs[0]) && to==NULL && bytes[i]=='{';k++) {
+            f=strlen(kSubs[k].from);
+            if(i+f<=len && !memcmp(bytes+i,kSubs[k].from,f)) to=kSubs[k].to;
+        }
+        if(to==NULL && i+6<len && !memcmp(bytes+i,"{{GET[",6)) {
+            const char *close=memchr(bytes+i+6,']',len-i-6);
+            if(close!=NULL && close+2<bytes+len && close[1]=='}' && close[2]=='}') {
+                f=(size_t)(close+3-(bytes+i));
+                made=wpt_query_value(query,bytes+i+6,(size_t)(close-(bytes+i+6)));
+                to=made!=NULL ? made : "";
             }
         }
-        if(!done) out[n++]=bytes[i++];
+        if(to==NULL) {
+            out[n++]=bytes[i++];
+        } else {
+            size_t t=strlen(to);
+            if(n+t+(len-i)+1>cap) { cap=(n+t+(len-i)+1)*2; out=wpt_must(realloc(out,cap)); }
+            memcpy(out+n,to,t); n+=t; i+=f;
+        }
+        free(made);
     }
     out[n]='\0';
     *out_len=n;
@@ -617,9 +677,11 @@ static char *wpt_serve(const char *url, size_t *len) {
         if(stat(file,&st)==0 ? S_ISREG(st.st_mode)
                              : !(errno==ENOENT || errno==ENOTDIR || errno==ENAMETOOLONG)) {
             bytes=wpt_slurp(file,len);
+            const char *query=strchr(from,'?');
+            if(query!=NULL) query++;
             if(bytes==NULL) wpt_serve_broken=true;
-            else if(strstr(path,".sub.")!=NULL) {
-                char *made=wpt_substitute(bytes,*len,len);
+            else if(strstr(path,".sub.")!=NULL || wpt_pipe_sub(query)) {
+                char *made=wpt_substitute(bytes,*len,query,len);
                 free(bytes);
                 bytes=made;
             }
@@ -875,7 +937,7 @@ static void wpt_run(const wpt_page_t *page, wpt_outcome_t *out) {
     if(page->kind!=WPT_HTML) len=strlen(html);
     /* A `.sub.` page is filled in as wptserve fills one it serves. */
     if(page->kind==WPT_HTML && strstr(page->source,".sub.")!=NULL) {
-        char *made=wpt_substitute(html,len,&len);
+        char *made=wpt_substitute(html,len,NULL,&len);
         free(html);
         html=made;
     }

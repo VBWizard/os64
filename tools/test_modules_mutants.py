@@ -2,7 +2,8 @@
 """One deliberate break at a time to slice 3's ES modules — libjs's module
 entry, yonder's module map, the script host's ordering and its error
 reporting, the module preloads and the relList a loader asks before it
-preloads — against the harnesses that hold each rule: a mutant is CAUGHT
+preloads — and to the import maps after them, against the harnesses that
+hold each rule: a mutant is CAUGHT
 when one of its harnesses fails, MISSED when they all pass, which means a
 test is missing and gets written. A build failure is neither.
 
@@ -31,9 +32,12 @@ YONDER_C = 'userland/apps/yonder/yonder.c'
 WINDOW_C = 'userland/libdom/window.c'
 REPORT_C = 'userland/libdom/report.c'
 MIXIN_C = 'userland/libdom/mixin.c'
+IMPORTMAP_C = 'userland/apps/yonder/importmap.c'
+LIBDOM_MAP_C = 'userland/libdom/importmap.c'
 JS = 'tools/test_js_runtime_host.sh'
 SCRIPTS = 'tools/test_yonder_scripts_host.sh'
 DOM = 'tools/test_dom_host.sh'
+IMPORTMAP = 'tools/test_importmap_host.sh'
 
 # (name, file, old, new, harnesses). Each breaks one rule the slice
 # states; none supplies a replacement expectation.
@@ -93,18 +97,22 @@ mutants = [
     ('modules-missing-with-modern', SCRIPTS_C, '    else if (kind == OS64_DOM_SCRIPT_MODULE)\n        yonder_diag_missing',
      '    if (kind == OS64_DOM_SCRIPT_MODULE)\n        yonder_diag_missing', (SCRIPTS,)),
     ('importmap-unrecorded', YONDER_C,
-     '    if (g.stream.scripting && kind == OS64_DOM_SCRIPT_NONE && yonder_scripts_importmap(script))',
+     '    if (g.stream.scripting && kind == OS64_DOM_SCRIPT_IMPORTMAP && !g.stream.modern)',
      '    if (false)', (SCRIPTS,)),
     ('stream-skips-modules', YONDER_C,
-     '        (kind != OS64_DOM_SCRIPT_CLASSIC && (kind != OS64_DOM_SCRIPT_MODULE || !g.stream.modern)))',
+     '        (kind != OS64_DOM_SCRIPT_CLASSIC && !g.stream.modern))',
      '        kind != OS64_DOM_SCRIPT_CLASSIC)', (SCRIPTS,)),
     # 4. libdom's two exports
     ('mime-any', WINDOW_C, '    return javascript_type(value + start, essence - start, false);',
      '    return javascript_type(value + start, essence - start, false) || length != (size_t)-1;',
      (SCRIPTS,)),
     ('connected-skips-modules', WINDOW_C,
-     '        if (kind != OS64_DOM_SCRIPT_CLASSIC && kind != OS64_DOM_SCRIPT_MODULE) continue;',
-     '        if (kind != OS64_DOM_SCRIPT_CLASSIC) continue;', (SCRIPTS,)),
+     '        if (os64_dom_script_kind(script) == OS64_DOM_SCRIPT_NONE) continue;',
+     '        if (os64_dom_script_kind(script) != OS64_DOM_SCRIPT_CLASSIC) continue;', (SCRIPTS,)),
+    ('connected-skips-import-maps', WINDOW_C,
+     '        if (os64_dom_script_kind(script) == OS64_DOM_SCRIPT_NONE) continue;',
+     '        if (os64_dom_script_kind(script) == OS64_DOM_SCRIPT_NONE ||\n'
+     '            os64_dom_script_kind(script) == OS64_DOM_SCRIPT_IMPORTMAP) continue;', (SCRIPTS,)),
     ('type-unreflected', MIXIN_C, '        {"type", R_TYPE, true, 1u << D_PROTO_SCRIPT}, ',
      '        ', (SCRIPTS,)),
     ('script-address-none', REPORT_C, '    return script != D_NO_SCRIPT ? dom->script_names[script].address : NULL;',
@@ -130,6 +138,108 @@ mutants = [
     ('supports-judges-token', MIXIN_C,
      '        ok = magic == T_CONTAINS || magic == T_SUPPORTS ? d_string(dom, ctx, argv[converted], &given[converted])',
      '        ok = magic == T_CONTAINS ? d_string(dom, ctx, argv[converted], &given[converted])', (DOM,)),
+    # 6. import maps (MODERN_WEB.md § Import maps, as built): the map's
+    # rules, the parse's JSON and errors, and the host's registration. The import map
+    # host needs the WPT checkout: run with WPT_DIR set where it is not
+    # .vendor/wpt.
+    ('rules-ascending', IMPORTMAP_C, '        int order = order_n(list->rules[mid].key, key, n);',
+     '        int order = -order_n(list->rules[mid].key, key, n);', (IMPORTMAP,)),
+    # The scopes' order has no mutant: a scope is only ever looked up, so
+    # any one order the lookup shares is the same map.
+    ('first-duplicate-kept', IMPORTMAP_C, '    return rule_put(map, list, normalized, valid ? address : NULL, true);',
+     '    return rule_put(map, list, normalized, valid ? address : NULL, false);', (IMPORTMAP,)),
+    ('key-as-written', IMPORTMAP_C, '    if (!url_like(key, base, normalized, sizeof(normalized))) {',
+     '    if (true) {', (IMPORTMAP,)),
+    ('slash-key-any-address', IMPORTMAP_C,
+     '                 (!ends_with_slash(key) || ends_with_slash(address));',
+     '                 (!ends_with_slash(key) || ends_with_slash(address) || true);', (IMPORTMAP,)),
+    ('scope-prefix-as-written', IMPORTMAP_C, '        if (!url_parse(scope, base, prefix, sizeof(prefix)))\n            return true;',
+     '        if (os64_strcopy(prefix, sizeof(prefix), scope) >= sizeof(prefix))\n            return true;', (IMPORTMAP,)),
+    ('merge-new-wins', IMPORTMAP_C,
+     '        if (!rule_put(map, into, incoming->rules[i].key, incoming->rules[i].url, false))',
+     '        if (!rule_put(map, into, incoming->rules[i].key, incoming->rules[i].url, true))', (IMPORTMAP,)),
+    ('merge-scopes-ignore-records', IMPORTMAP_C,
+     '            if (scope != NULL)\n                drop_deciders(&scope->rules, record);',
+     '            if (scope != NULL && false)\n                drop_deciders(&scope->rules, record);', (IMPORTMAP,)),
+    ('merge-imports-ignore-records', IMPORTMAP_C,
+     '        drop_extensions(&incoming->imports, window->records[r].specifier);', '        (void)drop_extensions;',
+     (IMPORTMAP,)),
+    ('merge-extensions-only-exact', IMPORTMAP_C,
+     '    while (at > 0 && starts_with(list->rules[at - 1].key, specifier))',
+     '    while (false && at > 0 && starts_with(list->rules[at - 1].key, specifier))', (IMPORTMAP,)),
+    ('merge-deciders-exact-only', IMPORTMAP_C,
+     '    for (size_t n = len - 1; record->prefixable && n > 0; n--)',
+     '    for (size_t n = len - 1; record->prefixable && n > 0 && false; n--)', (IMPORTMAP,)),
+    ('merge-keeps-dropped', IMPORTMAP_C, '        if (list->rules[i].dropped) {', '        if (false) {', (IMPORTMAP,)),
+    # The merge's "specifier as a URL is null or special" has no mutant: a
+    # prefix rule matches only a bare specifier or a special URL, so one
+    # kept over a non-special record can change no resolution.
+    ('prefix-on-any-url', IMPORTMAP_C, '    bool prefixes = as_url == NULL || special(as_url);',
+     '    bool prefixes = as_url == NULL || special(as_url) || true;', (IMPORTMAP,)),
+    ('prefixes-never-match', IMPORTMAP_C, '        if (n != len && (!prefixes || normalized[n - 1] != \'/\'))',
+     '        if (n != len && (!prefixes || normalized[n - 1] != \'/\' || true))', (IMPORTMAP,)),
+    ('backtrack-allowed', IMPORTMAP_C, '        return starts_with(out, rule->url) ? MATCH_FOUND : MATCH_BLOCKED;',
+     '        return MATCH_FOUND;', (IMPORTMAP,)),
+    ('null-rule-falls-back', IMPORTMAP_C,
+     '        if (rule->url == NULL)\n            return MATCH_BLOCKED;\n        if (n == len)',
+     '        if (rule->url == NULL)\n            continue;\n        if (n == len)', (IMPORTMAP,)),
+    ('scope-exact-only', IMPORTMAP_C,
+     '            if (n != len && serialized[n - 1] != \'/\')\n                continue;\n            const Scope *scope',
+     '            if (n != len)\n                continue;\n            const Scope *scope', (IMPORTMAP,)),
+    ('resolution-unrecorded', IMPORTMAP_C,
+     '        record_add(window, serialized, normalized, !url || special(as_url));', '        (void)record_add;',
+     (IMPORTMAP,)),
+    ('scopes-unread', IMPORTMAP_C,
+     '            if (scope != NULL)\n                match = imports_match(&scope->rules',
+     '            if (scope != NULL && false)\n                match = imports_match(&scope->rules', (IMPORTMAP,)),
+    ('map-never-marked-started', SCRIPTS_C,
+     '    (void)os64_dom_script_start(s->dom, script);\n    it = &s->items[index];\n    char base[OS64_DOM_URL_MAX];',
+     '    it = &s->items[index];\n    char base[OS64_DOM_URL_MAX];', (SCRIPTS,)),
+    ('parse-reads-inherited', LIBDOM_MAP_C, '    int found = JS_GetOwnProperty(ctx, &desc, object, atom);',
+     '    JSValue inherited = JS_GetProperty(ctx, object, atom);\n'
+     '    int found = JS_IsUndefined(inherited) ? 0 : 1;\n'
+     '    desc = (JSPropertyDescriptor){0, inherited, JS_UNDEFINED, JS_UNDEFINED};', (DOM,)),
+    ('parse-array-is-a-map', LIBDOM_MAP_C, '    return JS_IsObject(value) && JS_IsArray(ctx, value) == 0;',
+     '    return JS_IsObject(value) && (ctx != NULL || ctx == NULL);', (DOM,)),
+    ('parse-scopes-unchecked', LIBDOM_MAP_C,
+     '    if (result == 0 && has_scopes) result = each_entry(ctx, scopes, scope_is_map, NULL);',
+     '    if (result == 0 && has_scopes && false) result = each_entry(ctx, scopes, scope_is_map, NULL);', (DOM,)),
+    ('parse-integrity-unchecked', LIBDOM_MAP_C,
+     '    if (result == 0 && has_integrity && !is_map(ctx, integrity)) {',
+     '    if (result == 0 && has_integrity && false) {', (DOM,)),
+    ('parse-any-value-a-string', LIBDOM_MAP_C, '    if (JS_IsString(value)) {', '    if (!JS_IsUndefined(value)) {', (DOM,)),
+    ('parse-refusal-kept', LIBDOM_MAP_C, '    if (kept) return 0;\n    JS_ThrowRangeError',
+     '    if (kept || !kept) return 0;\n    JS_ThrowRangeError', (DOM,)),
+    ('supports-no-importmap', LIBDOM_MAP_C,
+     '(os64_streq(type, "classic") || os64_streq(type, "module") || os64_streq(type, "importmap"));',
+     '(os64_streq(type, "classic") || os64_streq(type, "module"));', (DOM,)),
+    ('importmap-kind-none', WINDOW_C,
+     '        if (type_named(value, length, "importmap")) return OS64_DOM_SCRIPT_IMPORTMAP;\n', '', (SCRIPTS,)),
+    ('script-type-trimmed-first', WINDOW_C,
+     '        if (type_named(value, length, "module")) return OS64_DOM_SCRIPT_MODULE;\n'
+     '        if (type_named(value, length, "importmap")) return OS64_DOM_SCRIPT_IMPORTMAP;\n'
+     '        while (length != 0 && ascii_space((unsigned char)*value)) { value++; length--; }\n'
+     '        while (length != 0 && ascii_space((unsigned char)value[length - 1])) length--;\n',
+     '        while (length != 0 && ascii_space((unsigned char)*value)) { value++; length--; }\n'
+     '        while (length != 0 && ascii_space((unsigned char)value[length - 1])) length--;\n'
+     '        if (type_named(value, length, "module")) return OS64_DOM_SCRIPT_MODULE;\n'
+     '        if (type_named(value, length, "importmap")) return OS64_DOM_SCRIPT_IMPORTMAP;\n', (DOM,)),
+    ('parser-map-never-stops', SCRIPTS_C,
+     '        s->blocking = (int32_t)(map - s->items);\n        return YONDER_STOP_BLOCK;',
+     '        return YONDER_STOP_RESUME;', (SCRIPTS,)),
+    ('map-never-merged', SCRIPTS_C, '    if (!yonder_modules_import_map(s->modules, walk.parsed)) {',
+     '    yonder_import_map_free(walk.parsed);\n    if (false) {', (SCRIPTS,)),
+    ('map-base-the-documents-url', SCRIPTS_C,
+     '    else if (!os64_page_base_in(s->doc, s->url, base, sizeof(base)) || (it->base = keep(base)) == NULL)',
+     '    else if ((void)base, (it->base = keep(s->url)) == NULL)', (SCRIPTS,)),
+    ('connected-after-the-parse', YONDER_C,
+     '            if (yonder_scripts_connected_pending(host))\n                return true;', '', (SCRIPTS,)),
+    ('resolution-past-the-map', MODULES_C, '    return yonder_import_map_resolve(m->imports, base, specifier, out, cap);',
+     '    return yonder_import_map_resolve(NULL, base, specifier, out, cap);', (SCRIPTS,)),
+    ('inline-meta-the-documents', MODULES_C, '    compile(m, i, text, length, m->mods[i].base);',
+     '    compile(m, i, text, length, m->mods[i].name);', (SCRIPTS,)),
+    ('unmapped-says-no-map', MODULES_C, '                      : m->mapped ? "the import', '                      : false ? "the import',
+     (SCRIPTS,)),
 ]
 
 caught, missed, unbuilt = [], [], []

@@ -53,7 +53,7 @@ typedef struct {
     os64_dom_history_t history;
     // The page's record (diag.h), borrowed for the host's life: a global
     // the page reached for and did not find, a module that failed (or, with
-    // `modern` off, a module script at all) and an import map are written
+    // `modern` off, a module script or an import map at all) are written
     // there as they happen. NULL keeps no record.
     yonder_diag_t *diag;
     // The page arrived encrypted (way_head_t.encrypted): what its scripts
@@ -118,7 +118,8 @@ void yonder_scripts_free(yonder_scripts_t *scripts);
 // been started, or a module, whose graph is begun), or BLOCK: the parse
 // waits for this script, which runs
 // once yonder_scripts_blocking_ready says its source is in hand (an inline
-// script's is already; a `src` script's comes with its fetch).
+// script's is already, an import map's too; a `src` script's comes with
+// its fetch).
 typedef enum { YONDER_STOP_RESUME, YONDER_STOP_BLOCK } yonder_stop_t;
 yonder_stop_t yonder_scripts_parser_stop(yonder_scripts_t *scripts, os64_html_node_t *script);
 // Whether the script the parse is stopped at can run now: its source is in
@@ -146,14 +147,11 @@ bool yonder_scripts_pending(const yonder_scripts_t *scripts);
 bool yonder_scripts_step_connected(yonder_scripts_t *scripts, os64_js_outcome_t *outcome);
 bool yonder_scripts_connected_pending(const yonder_scripts_t *scripts);
 // A connected script, as libdom reports one (and the finished-document
-// fixtures queue them): a classic inline one is ready at once, a `src` one
-// is fetched, and a module is prepared as a parser's would be, but runs
-// when its graph is ready (never inside the verb).
+// fixtures queue them): a classic inline one is ready at once, and so is
+// an import map, a `src` one is fetched, and a module is prepared as a
+// parser's would be, but runs when its graph is ready (never inside the
+// verb).
 void yonder_scripts_connected(yonder_scripts_t *scripts, const os64_html_node_t *script);
-// Whether `script` is a `<script type=importmap>`, which the page's record
-// names as asked for and not got: an import map would let its modules
-// import bare names, and yonder reads none.
-bool yonder_scripts_importmap(const os64_html_node_t *script);
 // The page's `<link rel=modulepreload>` elements (HTML § Link type
 // "modulepreload"): each one's module, with its imports, begun in the page's
 // module map, where a module script or an import finds it fetched once; it
