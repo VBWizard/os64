@@ -122,9 +122,12 @@ grow to 200 rows, which nothing wants.
   refuses no view) and `os64_ui_menu_close` (which releases it). It is cut
   as a per-panel seam, count, selectable(i), label(i) and activate(i),
   rather than an `if (list)` at a dozen sites, which the next content kind
-  would pay again. The mnemonic scan then gives a list first-letter
-  type-ahead for nothing, a row's mnemonic being its label's first letter,
-  and its cycling is HTML's select behaviour.
+  would pay again. The mnemonic scan's matching and cycling give a list
+  first-letter type-ahead, a row's mnemonic being its label's first
+  letter, but for a list a match only HIGHLIGHTS, a unique one included:
+  the menu's scan activates on a unique match, which in a list would
+  commit and close on one keystroke (Quinn's review, 2). A menu's
+  activation is unchanged.
 - **Rows staged by viewport.** The popup widget lays every row of its
   model out at open (`fit_text`, a `menu_row` of about 250 bytes each, in
   `rows[64]`). The list kind keeps a window of rows the panel can show,
@@ -140,10 +143,16 @@ grow to 200 rows, which nothing wants.
    with no resize: `forms_build` destroys the widget of a node a script
    replaced, `forms_place` hides one scrolled out of view, `relayout` moves
    them all. The dropdown's destroy, its hide, and a change of its bounds
-   while open each close the list (GEOMETRY), and its destroy refuses when
-   the close is refused, the session's own BUSY-destroy rule, as
-   `os64_ui_menubar_destroy` does. Otherwise a replaced select leaves a
-   popup whose pick calls into freed memory.
+   while open each close the list (GEOMETRY). A destroy cannot refuse, as
+   the menubar's does, because yonder's `widget_destroy` cannot hear a
+   refusal: it frees the `FormWidget` whatever its class says (Quinn's
+   review, 1). So the list borrows nothing of the caller's: the session
+   COPIES the rows at open, and the destroy first DETACHES the caller
+   (`os64_ui_menu_list_detach`, which cannot fail: no pick is called after
+   it), then asks for the close. A close the native destroy refuses leaves
+   a popup that holds its own copy and calls no one, and the session
+   retries the close at its next boundary. A pending list (below) is
+   cancelled by the same detach.
 2. **The highlight is not the pick.** In an open list Up and Down move the
    highlight; the value changes on Enter, Space or a click, and `change`
    fires once, at the commit, as Chrome and Firefox do. The session already
@@ -153,61 +162,92 @@ grow to 200 rows, which nothing wants.
    index. So yonder's `list_changed`, `os64_page_set_chosen` and `IN_LIST`
    run once a commit, never once an arrow (the listbox yonder uses today
    fires `on_change` on every arrow, which the natural first cut would
-   reuse).
+   reuse). And a commit is not a change: the session reports every pick,
+   and the dropdown tells yonder only when the picked row is not already
+   the value, so Enter on the current value, or moving away and back and
+   committing, closes with no `input` or `change`, as the listbox's
+   `choose` already suppresses an unchanged index (Quinn's review, 4).
 3. **The closed box's keys.** Focused and closed: Up and Down change the
    value directly, `change` each time; Space, Enter and Alt+Down open the
    list. A letter's jump waits for a consumer. These are the widget's,
    not the session's, and they decide whether a keyboard can work the
    shop's sort control at all.
 
-### The cut, for Quinn to read before it is built
+### The cut (read by Quinn, DROPDOWN_REVIEW_QUINN.md; her four findings are folded in)
 
 **Public** (`ui_menu.h`), one call beside `os64_ui_menu_open`:
 
 ```c
-/* A list the session carries in place of a menu: one level of rows the
- * caller supplies by index, no actions, no cascades, no help line. */
+/* A list the session carries in place of a menu: one level of rows, no
+ * actions, no cascades, no help line. The rows are COPIED at open. */
 typedef struct {
+    const char *const *labels;         /* `count` labels, read only during the call */
+    const bool *enabled;               /* `count` flags, read only during the call */
     size_t count, selected;            /* the row highlighted at open; count or more: the first enabled */
     int32_t min_width;                 /* the anchor's: a list is at least as wide as its box */
-    const char *(*label)(void *user, size_t row);
-    bool (*enabled)(void *user, size_t row);
     void (*pick)(void *user, size_t row);   /* after the list has closed, once per commit */
     void *user;
 } os64_ui_menu_list_t;
 os64_ui_status_code_t os64_ui_menu_open_list(os64_ui_menu_session_t *, const os64_ui_menu_list_t *,
                                              os64_gui_rect_t anchor);
+/* No pick reaches `user` after this, and a list still pending is cancelled;
+ * then the caller asks for the close. Cannot fail. */
+void os64_ui_menu_list_detach(os64_ui_menu_session_t *, void *user);
 ```
 
-The callbacks are asked while the list is open (paint, scrolling, keys),
-so what they read is the caller's to keep still until it closes; a caller
-whose rows change closes the list (contract 1). A failed open reports as
+The session keeps its own copy of the labels and flags for the list's
+life, so a caller may change or free its rows once the call returns; a
+caller whose rows change while the list is open closes it (contract 1),
+because the list shows what they were. A failed open reports as
 `os64_ui_menu_open` does, through the error hook.
+
+**A pending list** (Quinn's review, 3). An open that meets the
+dispatcher's quarantine is deferred: `request_panel` holds the menu
+model in `s->pending` and the boundary hook opens it after the drain.
+A list has no model, so the pending request carries either kind: the
+model, or the session's copy of the list (made at the call, so nothing
+is borrowed while it waits). Replacing a menu with a list is the
+ordinary way to meet the quarantine (the menu's popup was just destroyed),
+so this is the common path, not a corner. A detach, or the anchor's
+going, cancels a pending list as it closes an open one.
 
 **Inside**, the seam is the popup's content, not the session's state.
 `os64_ui_popup_t` gains a content kind and four questions every site that
 reads the model asks instead: `count`, `selectable(i)`, `label(i)` and,
 in the session, `activate(level, i)`. For a menu they answer from the
 model and the action view exactly as today; for a list, from the
-callbacks. Each site that reads the model is one of those:
+session's copy of its rows. Each site that reads the model is one of
+those, and so is the pending request:
 
 | Site | Menu (unchanged) | List |
 |---|---|---|
-| `menu_selectable` | separator, child, action state | `enabled(i)` |
+| `menu_selectable` | separator, child, action state | the copied `enabled[i]` |
 | `height`, `final_top`, `viewport`, `select_step`, `select_page` | model count, separators | `count`, no separators |
 | `popup_paint` | check or radio, icon, label, legend, arrow | the label; the row that is the value marked as a radio is |
-| `key_event`'s mnemonic scan | declared mnemonics | the label's first letter, so typing jumps |
+| `key_event`'s mnemonic scan | declared mnemonics; a unique match activates | the label's first letter; any match only highlights |
 | `help` | the spec's help | none |
-| `activate` | `child` or `invoke` | close the family, then `pick(i)`, as `invoke` closes before it runs |
-| `os64_ui_menu_open` / `_close` | retain and release the view | no view |
+| `activate` | `child` or `invoke` | close the family, then `pick(i)` unless detached, as `invoke` closes before it runs |
+| `os64_ui_menu_open` / `_close` | retain and release the view | no view; the close frees the copy |
+| `s->pending`, `request_panel`, `boundary` | the retained model | the copied list, cancelled by a detach |
 
 The list's rows are staged by viewport: the popup keeps runs only for
 the rows it can show, laid out as they scroll in and released as they
 leave; the menu kind keeps its whole-model `rows[64]`. Its width is the
 widest label measured once at open (measured, not kept), at least
 `min_width`, at most the screen's. Nothing else in the session changes:
-the owner hooks, focus family, dismissal, suppression, quarantine,
-placement and the boundary hook are the same code for both kinds.
+the owner hooks, focus family, dismissal, suppression, quarantine and
+placement are the same code for both kinds, and the boundary hook gains
+only the pending list and the retried close of a detached one.
+
+**Acceptance** (Quinn's checks, to be the cases): a native destroy
+refused during a select's replacement and during navigation leaves no
+callback reaching freed storage, and the close is retried; a menu
+replaced by a list during the quarantine opens after the drain, and a
+dropdown removed before the drain leaves no popup and no callback; a
+unique or repeated initial moves only the highlight, and Escape then
+keeps the value; Enter, Space and a click commit; Enter or a click on
+the current value, or away and back, fires no `input` or `change`, and a
+different value fires each once.
 
 ### Accepted for v1
 
