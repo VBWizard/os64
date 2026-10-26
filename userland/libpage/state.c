@@ -614,7 +614,14 @@ int64_t os64_page_node_set_selection(os64_page_state_t *state, const os64_html_n
     edit->range_end = end;
     edit->range_direction = (uint8_t)direction;
     edit->range_kept = true;
+    edit->range_writes++;
     return 0;
+}
+
+uint32_t os64_page_node_selection_writes(os64_page_state_t *state, const os64_html_node_t *node)
+{
+    const PNodeState *edit = selection_control(state, node) ? p_state_find(state, node) : NULL;
+    return edit != NULL ? edit->range_writes : 0;
 }
 
 // Where `option` is in its select's list, -1 when it is not there.
@@ -1026,6 +1033,7 @@ int64_t p_state_set_value(os64_page_state_t *state, const os64_html_node_t *node
         edit->range_start = edit->range_end = utf16_units(text, value_len);
         edit->range_direction = OS64_PAGE_DIRECTION_NONE;
         edit->range_kept = true;
+        edit->range_writes++;
     }
     if (!attribute)
         changed |= edit->text_user != user;

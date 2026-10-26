@@ -1221,10 +1221,13 @@ typedef enum { ASK_NONE = 0, ASK_WORKER, ASK_REQUEST } Asker;
 typedef enum { FW_TEXT, FW_PASSWORD, FW_CHECK, FW_BUTTON, FW_LIST, FW_DROPDOWN, FW_FILE } FormKind;
 
 // A text control's selection in UTF-16 code units of its value, as
-// libpage's record keeps it.
+// libpage's record keeps it, and for the record how many times it has been
+// written (os64_page_node_selection_writes): a set of the numbers it held
+// is still a set.
 typedef struct {
     uint32_t start, end;
     os64_page_direction_t direction;
+    uint32_t writes;
 } FieldSelection;
 
 typedef struct {
@@ -7113,7 +7116,8 @@ static FieldSelection field_selection(const FormWidget *fw)
     uint32_t anchor = tf->selected ? field_units_at(fw, tf->anchor) : caret;
     return (FieldSelection){anchor < caret ? anchor : caret, anchor < caret ? caret : anchor,
                             anchor == caret ? OS64_PAGE_DIRECTION_NONE
-                            : anchor < caret ? OS64_PAGE_DIRECTION_FORWARD : OS64_PAGE_DIRECTION_BACKWARD};
+                            : anchor < caret ? OS64_PAGE_DIRECTION_FORWARD : OS64_PAGE_DIRECTION_BACKWARD,
+                            0};
 }
 
 // The record as it stands; false for a control that has none (a number
@@ -7121,12 +7125,13 @@ static FieldSelection field_selection(const FormWidget *fw)
 static bool record_selection(const FormWidget *fw, FieldSelection *out)
 {
     os64_page_state_t *state = os64_page_shared_state(page_model(&g.page));
+    out->writes = os64_page_node_selection_writes(state, fw->node);
     return os64_page_node_selection(state, fw->node, &out->start, &out->end, &out->direction) == 0;
 }
 
 static bool same_selection(FieldSelection a, FieldSelection b)
 {
-    return a.start == b.start && a.end == b.end && a.direction == b.direction;
+    return a.start == b.start && a.end == b.end && a.direction == b.direction && a.writes == b.writes;
 }
 
 // Both sides noted as they now stand: they are in step.
@@ -7261,8 +7266,23 @@ static void form_send(int32_t control, os64_page_activation_t how)
     form_send_as(control, how, NAV_GO, WAY_BY_PERSON);
 }
 
+// The byte offset in a password's value of its `chars`th character, the
+// offset its bullets count in.
+static size_t password_byte(const FormWidget *fw, size_t chars)
+{
+    size_t at = 0;
+    for (size_t seen = 0; at < fw->secret_len; at++) {
+        if (((unsigned char)fw->secret[at] & 0xc0) == 0x80)
+            continue;
+        if (seen++ == chars)
+            break;
+    }
+    return at;
+}
+
 // The keys of a focused password field, taken before libui sees them: its
-// field holds bullets, so yonder edits the value itself. True when taken.
+// field holds bullets, so yonder edits the value itself, at the bullets'
+// caret and selection. True when taken.
 static bool password_key(const os64_gui_event_t *ev)
 {
     if (ev->type != OS64_GUI_EVENT_KEY_DOWN || g.ui.focus == NULL)
@@ -7274,25 +7294,43 @@ static bool password_key(const os64_gui_event_t *ev)
     if (fw == NULL)
         return false;
     unsigned char a = (unsigned char)ev->key.ascii;
-    if (a == '\t' || a == 0x1b)
-        return false;                           // traversal and leaving are libui's
+    // Traversal and leaving are libui's, and so is a key that is no
+    // character (an arrow, Home, End), which moves the bullets' caret and
+    // changes no text.
+    if (a == '\t' || a == 0x1b || a == 0)
+        return false;
     if (a == '\r' || a == '\n') {
         field_submitted(&fw->u.field, fw);
-    } else if (a == '\b' || a == 0x7f) {
-        bool edited = fw->secret_len > 0;
-        while (fw->secret_len > 0 &&
-               ((unsigned char)fw->secret[--fw->secret_len] & 0xc0) == 0x80)
-            ;
-        password_show(fw);
-        if (edited)
-            field_changed(&fw->u.field, fw);
-    } else if (a >= 0x20 && fw->secret_len + 4 < sizeof(fw->secret)) {
-        // A key's byte is Latin-1; the value is UTF-8.
-        fw->secret_len += os64_utf8_encode(a, fw->secret + fw->secret_len);
-        password_show(fw);
-        field_changed(&fw->u.field, fw);
+        return true;
     }
-    return true;                                // arrows, selection, the rest: swallowed
+    bool erase = a == '\b' || a == 0x7f;
+    if (!erase && a < 0x20)
+        return true;                            // a chord: cut or paste would edit bullets, not the value
+    // The edit is the value's, at the caret: a bullet is a character, so
+    // the field's offsets count characters.
+    const os64_ui_textfield_t *tf = &fw->u.field;
+    size_t lo = tf->cursor, hi = tf->cursor;
+    if (tf->selected) {
+        lo = tf->anchor < tf->cursor ? tf->anchor : tf->cursor;
+        hi = tf->anchor < tf->cursor ? tf->cursor : tf->anchor;
+    }
+    if (erase && lo == hi && lo > 0)
+        lo--;                                   // Backspace without a selection: the character before
+    if (erase && lo == hi)
+        return true;
+    char put[4];
+    size_t n = erase ? 0 : os64_utf8_encode(a, put);   // a key's byte is Latin-1; the value is UTF-8
+    size_t from = password_byte(fw, lo), to = password_byte(fw, hi);
+    if (fw->secret_len - (to - from) + n + 1 > sizeof(fw->secret))
+        return true;
+    os64_memmove(fw->secret + from + n, fw->secret + to, fw->secret_len - to);
+    os64_memcpy(fw->secret + from, put, n);
+    fw->secret_len = fw->secret_len - (to - from) + n;
+    fw->secret[fw->secret_len] = '\0';
+    password_show(fw);
+    os64_ui_textfield_select_range(&g.ui, &fw->u.field, lo + (n != 0), lo + (n != 0));
+    field_changed(&fw->u.field, fw);
+    return true;
 }
 
 static FormKind control_kind(const os64_page_control_t *c)

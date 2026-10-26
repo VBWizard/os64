@@ -627,6 +627,11 @@ int64_t os64_page_node_selection(os64_page_state_t *state, const os64_html_node_
                                  uint32_t *end, os64_page_direction_t *direction);
 int64_t os64_page_node_set_selection(os64_page_state_t *state, const os64_html_node_t *node, uint32_t start,
                                      uint32_t end, os64_page_direction_t direction);
+// How many times the selection has been set or moved by a value: a host
+// that keeps a caret in step with it tells a set that wrote the numbers the
+// record already held (setSelectionRange(0, 0) on a control at 0) from no
+// set at all. 0 for a control never set or moved, or a node without one.
+uint32_t os64_page_node_selection_writes(os64_page_state_t *state, const os64_html_node_t *node);
 // An option's selectedness (HTML § 4.10.10), by node. Read: in a select
 // without `multiple`, whether it is the option selectedIndex names (a
 // one-line select's first enabled option when nothing is selected); else

@@ -415,6 +415,12 @@ static void tree_selection_moves(void)
     os64_html_node_t *i=rebuild_id(f.doc,"i"), *t=rebuild_id(f.doc,"t");
     uint32_t start=9,end=9;
     os64_page_direction_t direction=OS64_PAGE_DIRECTION_FORWARD;
+    rebuild_expect("selection: written to count, a set of the same numbers included",
+        os64_page_node_selection_writes(f.state,i)==0&&
+        os64_page_node_set_selection(f.state,i,0,0,OS64_PAGE_DIRECTION_NONE)==0&&
+        os64_page_node_selection_writes(f.state,i)==1&&
+        os64_page_node_set_selection(f.state,i,0,0,OS64_PAGE_DIRECTION_NONE)==0&&
+        os64_page_node_selection_writes(f.state,i)==2&&os64_page_node_selection_writes(f.state,t)==0);
     rebuild_expect("selection: a parsed control's is at 0",
         os64_page_node_selection(f.state,i,&start,&end,&direction)==0&&start==0&&end==0&&
         direction==OS64_PAGE_DIRECTION_NONE&&os64_page_node_selection(f.state,t,&start,&end,&direction)==0&&

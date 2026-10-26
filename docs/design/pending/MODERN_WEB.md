@@ -3894,6 +3894,19 @@ and on the way the rules for where a selection begins and how it moves.
   the sync replaces now takes the record's selection again, and the
   scripted host holds it.
 
+**Codex, round 1**: three findings, all fixed. A password field edited at
+the end of its value whatever its caret said, which the hook made visible
+(a script's selection in one, then a key typed, appended): yonder now
+edits the value at the bullets' caret and selection, Backspace takes the
+character before it, and the keys that are no character (arrows, Home,
+End) move the caret instead of being swallowed. A script's
+`setSelectionRange(0, 0)` on an untouched field moved no caret, because
+the record held those numbers already: libpage now counts the record's
+writes (`os64_page_node_selection_writes`) and the pull compares the count
+too. And `setRangeText` converted its offsets before its replacement,
+where WebIDL converts left to right. Three mutants for the new rules, each
+caught: the group is 29.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.

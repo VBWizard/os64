@@ -195,18 +195,29 @@ static JSValue range_text(JSContext *ctx, JSValueConst this_value, int argc, JSV
     bool ranged = argc >= 3;
     uint32_t start = 0, end = 0;
     int mode = M_PRESERVE;
-    if (ranged && (JS_ToUint32(ctx, &start, argv[1]) < 0 || JS_ToUint32(ctx, &end, argv[2]) < 0)) return JS_EXCEPTION;
-    if (argc >= 4 && !JS_IsUndefined(argv[3])) {
-        const char *name = JS_ToCString(ctx, argv[3]);
-        if (name == NULL) return JS_EXCEPTION;
-        mode = os64_streq(name, "select") ? M_SELECT : os64_streq(name, "start") ? M_START
-             : os64_streq(name, "end") ? M_END : os64_streq(name, "preserve") ? M_PRESERVE : -1;
-        JS_FreeCString(ctx, name);
-        if (mode < 0) return JS_ThrowTypeError(ctx, "The selection mode is not select, start, end or preserve");
-    }
+    /* Left to right, as WebIDL converts them: a conversion may run a page's
+     * script, which may change what the next one answers. */
     size_t added_len = 0;
     const char *added = JS_ToCStringLen(ctx, &added_len, argv[0]);
     if (added == NULL) return JS_EXCEPTION;
+    if (ranged && (JS_ToUint32(ctx, &start, argv[1]) < 0 || JS_ToUint32(ctx, &end, argv[2]) < 0)) {
+        JS_FreeCString(ctx, added);
+        return JS_EXCEPTION;
+    }
+    if (argc >= 4 && !JS_IsUndefined(argv[3])) {
+        const char *name = JS_ToCString(ctx, argv[3]);
+        if (name == NULL) {
+            JS_FreeCString(ctx, added);
+            return JS_EXCEPTION;
+        }
+        mode = os64_streq(name, "select") ? M_SELECT : os64_streq(name, "start") ? M_START
+             : os64_streq(name, "end") ? M_END : os64_streq(name, "preserve") ? M_PRESERVE : -1;
+        JS_FreeCString(ctx, name);
+        if (mode < 0) {
+            JS_FreeCString(ctx, added);
+            return JS_ThrowTypeError(ctx, "The selection mode is not select, start, end or preserve");
+        }
+    }
     /* Every conversion is done, so the control is read as it stands. */
     uint32_t sel_start, sel_end;
     os64_page_direction_t direction;

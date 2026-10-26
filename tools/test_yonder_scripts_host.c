@@ -1897,9 +1897,11 @@ static void motion_cases(void) {
  * count characters, which its bullets stand for. */
 static void field_selection_hook(void) {
     probe_page("<p id=out></p><input id=field value=hello><input id=pw type=password value='a\xC3\xA9z'>"
+        "<input id=zero value=hello>"
         "<script>var f=document.getElementById('field'),p=document.getElementById('pw');"
         "document.getElementById('out').textContent=f.selectionStart+','+f.selectionEnd;</script>"
-        "<script>f.setSelectionRange(1,4,'backward');p.setSelectionRange(2,3)</script>"
+        "<script>f.setSelectionRange(1,4,'backward');p.setSelectionRange(2,3);"
+        "document.getElementById('zero').setSelectionRange(0,0)</script>"
         "<script>document.getElementById('out').textContent=f.selectionStart+','+f.selectionEnd+','+f.selectionDirection</script>"
         "<script>document.getElementById('out').textContent=f.selectionStart+','+f.selectionEnd+','+f.selectionDirection</script>"
         "<script>document.getElementById('out').textContent=f.value+','+f.selectionStart+','+f.selectionEnd</script>"
@@ -1915,6 +1917,21 @@ static void field_selection_hook(void) {
           "selection hook: a script's backward selection moves the caret, to its start");
     check(pw->u.field.selected && pw->u.field.anchor==2 && pw->u.field.cursor==3,
           "selection hook: a password's offsets are characters, its bullets'");
+    /* A password is edited at its caret: the script's selection of its last
+     * character is replaced by the key typed, and Backspace takes the
+     * character before the caret. */
+    os64_ui_set_focus(&g.ui,pw->w);
+    os64_gui_event_t typed={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='Q'}};
+    check(password_key(&typed) && pw->secret_len==4 && !memcmp(pw->secret,"a\xC3\xA9Q",4) &&
+          !pw->u.field.selected && pw->u.field.cursor==3,
+          "selection hook: a key typed in a password replaces its selection");
+    os64_gui_event_t back={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='\b'}};
+    pw->u.field.anchor=pw->u.field.cursor=2;
+    check(password_key(&back) && pw->secret_len==2 && !memcmp(pw->secret,"aQ",2) && pw->u.field.cursor==1,
+          "selection hook: Backspace takes the character before a password's caret");
+    FormWidget *zero=probe_field("zero");
+    check(!zero->u.field.selected && zero->u.field.cursor==0,
+          "selection hook: a set of the numbers the record held, (0,0) on an untouched field, moves the caret");
     /* The person selects two letters, forward, and the next script reads it. */
     field->u.field.anchor=2; field->u.field.cursor=4; field->u.field.selected=true;
     script_turn();
@@ -1938,14 +1955,15 @@ static void field_selection_hook(void) {
     script_rebuild();
     check(os64_streq(field->text,"HEXLLO") && !field->u.field.selected && field->u.field.cursor==2,
           "selection hook: a rewritten value with its selection restored keeps the caret there");
-    /* The password field becomes a text one, a new widget: the selection a
-     * script set before it was made is on its caret, in the value's bytes. */
+    /* The password field becomes a text one, a new widget: the record's
+     * selection, where the person's editing left it before the widget was
+     * made, is on its caret, not the end its text would put it at. */
     script_turn();
     script_rebuild();
     FormWidget *text=probe_field("pw");
-    check(text!=pw && text->kind==FW_TEXT && text->u.field.selected && text->u.field.anchor==3 &&
-          text->u.field.cursor==4,
-          "selection hook: a new widget's caret is the selection a script set before it");
+    check(text!=pw && text->kind==FW_TEXT && os64_streq(text->text,"aQ") && !text->u.field.selected &&
+          text->u.field.cursor==1,
+          "selection hook: a new widget's caret is the record's selection, not its text's end");
     probe_drop();
 }
 

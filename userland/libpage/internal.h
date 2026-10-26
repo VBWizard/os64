@@ -56,9 +56,13 @@ struct PNodeState {
     // script or the host set (os64_page_node_set_selection), or the value's
     // end where a changed value put it. `range_kept` says there is one;
     // without it the selection is at 0, where every control's begins.
+    // `range_writes` counts the sets and the moves, so a set that wrote the
+    // numbers the record already held is still a set
+    // (os64_page_node_selection_writes).
     uint32_t range_start, range_end;
     uint8_t range_direction;
     bool range_kept;
+    uint32_t range_writes;
     // An owner-thread mutation plan borrows this link and clears it on
     // publication or refusal; no property state is stored in the link.
     PAttrStage *stage;
