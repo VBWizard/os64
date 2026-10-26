@@ -1241,8 +1241,8 @@ typedef struct {
     char text[512];                 // a field's buffer, a button's caption
     char secret[512];               // a password's value: the field shows bullets
     size_t secret_len;
-    // A dropdown's options as last synced, their nodes and labels hashed
-    // (options_signature): a change closes its open list, whose rows are a
+    // A dropdown's options as last synced, their nodes, labels and disabled
+    // states hashed (options_signature): a change closes its open list, whose rows are a
     // copy of what they were.
     uint64_t options_sig;
 } FormWidget;
@@ -6795,7 +6795,8 @@ static const char *option_label(size_t i, void *user)
 }
 
 // What a dropdown's options are, for telling when they changed beneath an
-// open list: each option's node and label (FNV-1a), never 0.
+// open list: each option's node, label and whether it may be chosen
+// (FNV-1a), never 0.
 static uint64_t options_signature(const os64_page_control_t *c)
 {
     uint64_t h = 1469598103934665603ULL;
@@ -6805,7 +6806,7 @@ static uint64_t options_signature(const os64_page_control_t *c)
             h = (h ^ (uint8_t)(node >> (8 * b))) * 1099511628211ULL;
         for (const char *s = c->options[k].label != NULL ? c->options[k].label : ""; *s; s++)
             h = (h ^ (uint8_t)*s) * 1099511628211ULL;
-        h = (h ^ 0xFF) * 1099511628211ULL;
+        h = (h ^ (c->options[k].disabled ? 0xFE : 0xFF)) * 1099511628211ULL;
     }
     return h != 0 ? h : 1;
 }
@@ -6868,13 +6869,15 @@ static void check_changed(os64_ui_checkbox_t *cb, void *user)
 
 // A listbox's row chosen, or a dropdown's value changed: the model's choice,
 // then the page's `input` and `change` (IN_LIST). A dropdown calls it only
-// for a new value, never for a commit of the value it had.
+// for a new value, never for a commit of the value it had. A choice the
+// model refuses (an option disabled since the list was drawn) changes
+// nothing, and the widget is synced back to what the model holds.
 static void option_chosen(const FormWidget *fw, int selected)
 {
-    if (selected >= 0)
-        (void)os64_page_set_chosen(page_model(&g.page), widget_control(fw), (int32_t)selected, true);
+    bool chosen = selected >= 0 &&
+        os64_page_set_chosen(page_model(&g.page), widget_control(fw), (int32_t)selected, true) >= 0;
     forms_sync_from_model(false);
-    if (scripts_live())
+    if (chosen && scripts_live())
         input_queue(IN_LIST, fw->node, NULL, 0, 0, false);
 }
 

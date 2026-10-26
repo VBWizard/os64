@@ -332,3 +332,10 @@ a record of the list asked for and plays the person's pick into it.
   step of `os64_ui_popup_select`'s walk (5,376 layouts for 32 rows); a
   list stages once, after the viewport is final.
 Each of the first three has a case that fails without its fix.
+
+**Codex, round 2**: one finding, fixed. An option disabled (or enabled)
+beneath an open list kept its old flag in the list's copy, and a pick of
+it fired `input` and `change` though libpage refused the choice. The
+options' signature now carries each option's disabled state, and
+`option_chosen` fires nothing for a choice the model refuses, syncing the
+widget back. Scripted-host cases for both; each fails without its fix.

@@ -2538,6 +2538,28 @@ static void input_select_dropdown(void) {
           "select: options reordered beneath an open list close it");
     g.ui.menu=menus;
     probe_drop();
+    /* An option disabled beneath an open list closes it too; and a pick the
+     * model refuses (the disabled option, picked from a list drawn before)
+     * fires nothing. */
+    probe_page("<select id=sort><option>A<option>B<option>C</select><p id=log>-</p>"
+        "<script>var s=document.getElementById('sort');"
+        "s.addEventListener('change',function(){document.getElementById('log').textContent='changed'});"
+        "setTimeout(function(){s.options[2].disabled=true},0)</script>",true);
+    script_turn();
+    sort=probe_field("sort");
+    g.ui.menu=&yonder_host_list;
+    yonder_host_list=(yonder_host_list_t){0};
+    sort->w->cls->event(sort->w,&g.ui,&down);
+    void (*pick)(void *,size_t)=yonder_host_list.pick;
+    void *user=yonder_host_list.user;
+    for(int i=0;i<5&&yonder_host_list.open;i++) { script_turn(); script_rebuild(); }
+    check(!yonder_host_list.open && yonder_host_list.detaches==1,
+          "select: an option disabled beneath an open list closes it");
+    pick(user,2);inputs_run();
+    check(probe_text_is("log","-") && sort->u.drop.selected==0,
+          "select: a pick of an option the model refuses fires nothing and keeps the value");
+    g.ui.menu=menus;
+    probe_drop();
 }
 static void input_cases(void) {
     g.seq=2;g.key_seq=2;g.pressed_link=9;
