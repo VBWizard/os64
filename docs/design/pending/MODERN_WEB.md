@@ -3621,3 +3621,29 @@ comparisons and selected WPT references; the two Chromium baseline failures
 and unsupported runner profiles are retained explicitly. XML profile
 limitations and browser consumers still to be built are recorded in DEBTS.md; the slice's
 overall brief stays active.
+
+
+### Slice 6b, path and scene foundation as built — 2026-10-26
+
+`libsvg.so` now supplies owned SVG path parsing, transform-specific arc
+conversion to the public geometry stream, and group/path scene preparation.
+The provider contract preserves source and instance identities, inheritance
+inputs, group opacity and snapshot lifetime. It has explicit processing modes,
+shared owner admission callbacks and work/cancellation limits. The scene
+interface is a source contract for integration, not a frozen browser ABI.
+
+[SVG_CORE.md](SVG_CORE.md) records the contracts, measured precision and
+coverage, limits and reproduction commands. The leak-enabled ASan/UBSan
+harness uses production SVG, FreeType and pinned math sources; its combined
+pipeline passes 23 allocation cuts in both refusal modes and 526 cancellation
+cuts, with a fixture peak of 17,912 bytes. Sixty sampled ellipse/transform cases
+stay below the requested 1/64-pixel positional error. Circle coverage exposes
+a separate cubic-raster approximation envelope, documented with independent
+polygon evidence and rejected wrong-geometry controls. The freestanding build
+imports only math and depends on `libmath.so`.
+
+No Yonder adapter, computed SVG properties, layout integration or compositor
+is delivered here. Shapes, strokes/dashes, instances, nested viewports,
+clipping and opacity painting remain in 6b; external images remain in 6c.
+DEBTS.md records those gates. There is no new browser/WPT, P5/QEMU or
+performance result, and no static-SVG capability is advertised to pages.
