@@ -66,12 +66,20 @@ static const HNode *children(const HNode *n)
     return html(n) && h_eq(n->name, "template") && n->template_contents
                ? n->template_contents : n->first_child;
 }
+static void qualified(SWriter *w, const HNode *n)
+{
+    if (n->prefix) {
+        literal(w, n->prefix);
+        literal(w, ":");
+    }
+    literal(w, n->name);
+}
 static bool open_node(SWriter *w, const HNode *n)
 {
     switch (n->kind) {
     case OS64_HTML_ELEMENT:
         literal(w, "<");
-        literal(w, n->name);
+        qualified(w, n);
         for (const HAttr *a = n->attrs; a; a = a->next) {
             literal(w, " ");
             /* Records already retain namespace-adjusted qualified spelling. */
@@ -88,6 +96,13 @@ static bool open_node(SWriter *w, const HNode *n)
         else
             escaped(w, n->text, n->text_len, false);
         return false;
+    case OS64_HTML_PI:
+        literal(w, "<?");
+        literal(w, n->name);
+        literal(w, " ");
+        bytes(w, n->text, n->text_len);
+        literal(w, ">");
+        return false;
     case OS64_HTML_COMMENT:
         literal(w, "<!--");
         bytes(w, n->text, n->text_len);
@@ -95,7 +110,7 @@ static bool open_node(SWriter *w, const HNode *n)
         return false;
     case OS64_HTML_DOCTYPE:
         literal(w, "<!DOCTYPE ");
-        literal(w, n->name);
+        qualified(w, n);
         literal(w, ">");
         return false;
     case OS64_HTML_DOCUMENT:
@@ -108,7 +123,7 @@ static void close_node(SWriter *w, const HNode *n)
 {
     if (n->kind == OS64_HTML_ELEMENT && !is_void(n)) {
         literal(w, "</");
-        literal(w, n->name);
+        qualified(w, n);
         literal(w, ">");
     }
 }

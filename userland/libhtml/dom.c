@@ -7,6 +7,7 @@
 #define ELEMENT OS64_HTML_ELEMENT
 #define TEXT OS64_HTML_TEXT
 #define COMMENT OS64_HTML_COMMENT
+#define PI OS64_HTML_PI
 #define FRAGMENT OS64_HTML_FRAGMENT
 #define DOCUMENT OS64_HTML_DOCUMENT
 #define DOCTYPE OS64_HTML_DOCTYPE
@@ -346,7 +347,7 @@ static void node_free(HDoc *d, HNode *n)
             next = a->next;
             h_free(d, a);
         }
-    if ((n->kind == TEXT || n->kind == COMMENT) && *h_word(n))
+    if ((n->kind == TEXT || n->kind == COMMENT || n->kind == PI) && *h_word(n))
         h_free(d, (char *)n->text);
     if (m->live_prev)
         h_meta(m->live_prev)->live_next = m->live_next;
@@ -482,7 +483,7 @@ static bool kind_precedes(const HNode *child, os64_html_node_kind_t kind, uint64
 
 /* The DOM Standard's "ensure pre-insertion validity", and with `replacing`
  * its twin inside "replace", where `child` is the node being replaced. Then
- * the two rules that are this library's own: the document's element is its
+ * the rules that are this library's own: an HTML document keeps its
  * `html` element, and the tree stays as shallow as a parse would keep it. */
 static int64_t may_insert(HDoc *d, HNode *parent, HNode *node, HNode *child, bool replacing,
                           uint64_t *steps)
@@ -526,13 +527,13 @@ static int64_t may_insert(HDoc *d, HNode *parent, HNode *node, HNode *child, boo
         }
     }
 
-    if (parent == &d->root) {
+    if (!d->pub.is_xml && parent == &d->root) {
         if (element && !is_html(element, OS64_HTML_TAG_HTML))
             return OS64_HTML_ROOT_REQUIRED;
         /* Replacing the html element with anything that brings no element. */
         if (replacing && child->kind == ELEMENT && !element)
             return OS64_HTML_ROOT_REQUIRED;
-    } else if (node->parent == &d->root && node->kind == ELEMENT)
+    } else if (!d->pub.is_xml && node->parent == &d->root && node->kind == ELEMENT)
         return OS64_HTML_ROOT_REQUIRED;     /* moving the html element out of the document */
 
     size_t under = depth_of(parent, steps) + 1, limit = h_depth_limit(d);
@@ -549,6 +550,10 @@ static int64_t may_insert(HDoc *d, HNode *parent, HNode *node, HNode *child, boo
  * element, and its first `head` and `body` children. */
 static void landmarks(HDoc *d, uint64_t *steps)
 {
+    if (d->pub.is_xml) {
+        d->pub.html = d->pub.head = d->pub.body = NULL;
+        return;
+    }
     HNode *html = child_of_kind(&d->root, ELEMENT, NULL, steps);
     if (html)
         d->pub.html = html;
@@ -706,7 +711,7 @@ int64_t os64_html_remove(os64_html_document_t *doc, HNode *node)
         return OS64_HTML_BAD_ARGUMENT;
     if (!node->parent)
         return OS64_HTML_OK;
-    if (node->parent == &d->root && node->kind == ELEMENT)
+    if (!d->pub.is_xml && node->parent == &d->root && node->kind == ELEMENT)
         return OS64_HTML_ROOT_REQUIRED;
     bool touched = is_landmark_parent(d, node->parent);
     moved(d);
@@ -956,26 +961,32 @@ os64_html_node_t *os64_html_create_doctype(os64_html_document_t *doc, const char
  * from then on a record of that element can be replaced and retired
  * without touching any other element. */
 
-/* A record that owns its strings: the value, then the name, in its block. */
+/* Record strings, including a nonstandard namespace URI, share its lifetime. */
 static HAttr *attr_new(HDoc *d, const char *name, const char *value, size_t value_len,
                        const char *ns, int64_t *why)
 {
-    size_t name_len = h_len(name);
-    if (value_len > SIZE_MAX - name_len - sizeof(HAttr) - 64) {
-        *why = OS64_HTML_ARENA_EXHAUSTED;
-        return NULL;
+    size_t name_len = h_len(name), ns_len = h_len(ns), size = sizeof(HAttr);
+    size_t lengths[] = {value_len, name_len, ns_len};
+    for (size_t i = 0; i < 3; ++i) {
+        if (lengths[i] >= SIZE_MAX - size) {
+            *why = OS64_HTML_ARENA_EXHAUSTED;
+            return NULL;
+        }
+        size += lengths[i] + 1;
     }
-    HAttr *a = d_alloc(d, sizeof(*a) + value_len + 1 + name_len + 1, why);
+    HAttr *a = d_alloc(d, size, why);
     if (!a)
         return NULL;
-    char *v = (char *)(a + 1), *n = v + value_len + 1;
-    for (size_t i = 0; i < value_len; i++)
+    char *v = (char *)(a + 1), *n = v + value_len + 1, *uri = n + name_len + 1;
+    for (size_t i = 0; i < value_len; ++i)
         v[i] = value[i];
-    for (size_t i = 0; i < name_len; i++)
+    for (size_t i = 0; i < name_len; ++i)
         n[i] = name[i];
+    for (size_t i = 0; i < ns_len; ++i)
+        uri[i] = ns[i];
     a->value = v;
     a->name = n;
-    a->ns = ns;
+    a->ns = ns ? uri : NULL;
     return a;
 }
 /* Frees a list of blocks nothing has seen yet. */
@@ -1211,7 +1222,8 @@ int64_t os64_html_remove_attr(os64_html_document_t *doc, HNode *e, const char *n
 int64_t os64_html_set_text(os64_html_document_t *doc, HNode *n, const char *utf8, size_t len)
 {
     HDoc *d = (HDoc *)doc;
-    if (!d || !n || !ours(d, n) || (n->kind != TEXT && n->kind != COMMENT) || (!utf8 && len))
+    if (!d || !n || !ours(d, n) || (n->kind != TEXT && n->kind != COMMENT && n->kind != PI) ||
+        (!utf8 && len))
         return OS64_HTML_BAD_ARGUMENT;
     if (!d_text_ok(utf8, len))
         return OS64_HTML_BAD_TEXT;
@@ -1253,10 +1265,14 @@ static bool string_for(HDoc *d, bool foreign, const char *from, const char **out
 }
 static HNode *clone_one(HDoc *d, const HNode *from, bool foreign, int64_t *why)
 {
-    if (from->kind == TEXT || from->kind == COMMENT) {
+    if (from->kind == TEXT || from->kind == COMMENT || from->kind == PI) {
         char *bytes = bytes_new(d, from->text, from->text_len, why);
         HNode *n = bytes ? node_new(d, from->kind, why) : NULL;
         if (!n) {
+            h_free(d, bytes);
+            return NULL;
+        }
+        if (from->kind == PI && !string_for(d, foreign, from->name, &n->name, why)) {
             h_free(d, bytes);
             return NULL;
         }
@@ -1272,6 +1288,8 @@ static HNode *clone_one(HDoc *d, const HNode *from, bool foreign, int64_t *why)
     n->tag = from->tag;
     bool copy_strings = foreign || (from->kind == ELEMENT && (*h_word(from) & H_ATTRS_INLINE));
     if (!string_for(d, copy_strings, from->name, &n->name, why) ||
+        !string_for(d, copy_strings, from->prefix, &n->prefix, why) ||
+        !string_for(d, copy_strings, from->namespace_uri, &n->namespace_uri, why) ||
         !string_for(d, copy_strings, from->public_id, &n->public_id, why) ||
         !string_for(d, copy_strings, from->system_id, &n->system_id, why))
         return NULL;
