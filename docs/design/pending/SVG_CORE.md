@@ -14,7 +14,8 @@ and cancellation callbacks. The library exports path parsing, conversion to
 the public geometry command stream, and group/path scene preparation.
 
 The root image inventory, userland build, prelink population and debugger
-dependencies include the library. No application links it yet. The host
+dependencies include the library. The [Yonder connection](SVG_YONDER.md)
+links it for inline SVG painting. The host
 harness consumes the public SVG and geometry interfaces together, including
 the production FreeType adapter and pinned math sources. Yonder's layout,
 computed styles and painter are unchanged.
@@ -204,13 +205,14 @@ while it is unmerged. Before editing shared Yonder files, inspect the active
 browser changes and keep the adapter changes localized; refresh the stack as
 its base merges so review diffs show each increment's work.
 
-Continue 6b with the native tree/style adapter, SVG computed properties and
-sizing, shapes, dashes, use/symbol, viewports and clipping. The subsequent
+The [Yonder connection](SVG_YONDER.md) supplies the native tree/style adapter,
+paint properties, outer sizing and viewBox mapping. Continue 6b with shapes,
+dashes, use/symbol, nested viewports and clipping. The subsequent
 [solid painter](SVG_PAINT.md) consumes prepared paths/groups and isolates opacity;
-these do not yet paint in Yonder. Parsed-path interning, cache lookup,
+the connection paints them in real inline SVG boxes. Parsed-path interning, cache lookup,
 geometric bounds, length/marker APIs and stroke-error control need their own evidence.
 
-The first useful P5 checkpoint remains a real inline fixture page reaching
-Yonder's paint path. Full 6b completion is not a prerequisite for that checkpoint,
+The first useful P5 checkpoint is the connection's real inline fixture page
+reaching Yonder's paint path. Full 6b completion is not a prerequisite for that checkpoint,
 but this library increment alone does not reach it. Remaining work is recorded
 under SVG in `DEBTS.md`.

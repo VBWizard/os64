@@ -1960,6 +1960,111 @@ static int32_t inline_decls(garb_cascade_t *c, const os64_html_node_t *el, Decl 
     return n;
 }
 
+// Presentation values live in the cascade's bounded arena. A temporary CSS
+// value parse is released after copying, instead of retaining a 4 KiB arena
+// for each small fill/opacity attribute in an icon collection.
+static garb_value_t *attribute_values(garb_cascade_t *c, const garb_value_t *v, int32_t n)
+{
+    if (n <= 0)
+        return NULL;
+    garb_value_t *out = alloc(c, (size_t)n * sizeof(*out));
+    if (!out)
+        return NULL;
+    for (int32_t i = 0; i < n; ++i) {
+        out[i] = v[i];
+        if (v[i].text) {
+            char *text = alloc(c, (size_t)v[i].len + 1);
+            if (!text)
+                return NULL;
+            os64_memcpy(text, v[i].text, v[i].len);
+            text[v[i].len] = 0;
+            out[i].text = text;
+        }
+        if (v[i].unit) {
+            char *unit = alloc(c, (size_t)v[i].unit_len + 1);
+            if (!unit)
+                return NULL;
+            os64_memcpy(unit, v[i].unit, v[i].unit_len);
+            unit[v[i].unit_len] = 0;
+            out[i].unit = unit;
+        }
+        if (v[i].nchildren) {
+            out[i].children = attribute_values(c, v[i].children, v[i].nchildren);
+            if (!out[i].children)
+                return NULL;
+        }
+    }
+    return out;
+}
+
+static int32_t svg_attributes(garb_cascade_t *c, const os64_html_node_t *el, Decl **out)
+{
+    if (el->ns != OS64_HTML_NS_SVG || c->env.modern_off)
+        return 0;
+    static const char *const names[] = {"fill",
+                                        "stroke",
+                                        "fill-opacity",
+                                        "stroke-opacity",
+                                        "fill-rule",
+                                        "stroke-width",
+                                        "stroke-linecap",
+                                        "stroke-linejoin",
+                                        "stroke-miterlimit",
+                                        "stroke-dasharray",
+                                        "vector-effect",
+                                        "color-interpolation",
+                                        "color",
+                                        "opacity",
+                                        "display",
+                                        "visibility",
+                                        "width",
+                                        "height"};
+    Decl *d = NULL;
+    int32_t n = 0;
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
+        const os64_html_attr_t *a = os64_html_attr(el, names[i]);
+        if (!a || !a->value || !*a->value)
+            continue;
+        if (!d) {
+            d = alloc(c, sizeof(names) / sizeof(names[0]) * sizeof(*d));
+            if (!d)
+                return 0;
+        }
+        garb_parsed_t temporary = {0};
+        if (garb_parse_values(a->value, os64_strlen(a->value), &temporary) != GARB_OK ||
+            temporary.incomplete) {
+            garb_free(&temporary);
+            c->incomplete = true;
+            break;
+        }
+        int32_t count = temporary.nvalues;
+        garb_value_t *values = attribute_values(c, temporary.values, count);
+        garb_free(&temporary);
+        if (count && !values)
+            break;
+        // SVG width/height accept unitless user coordinates. This conversion
+        // is specific to presentation attributes, not CSS declarations.
+        if (os64_streq(names[i], "width") || os64_streq(names[i], "height")) {
+            int32_t first = 0, last = count;
+            while (first < last && values[first].kind == GARB_WHITESPACE)
+                ++first;
+            while (last > first && values[last - 1].kind == GARB_WHITESPACE)
+                --last;
+            if (last == first + 1 && values[first].kind == GARB_NUMBER) {
+                values[first].kind = GARB_DIMENSION;
+                values[first].unit = "px";
+                values[first].unit_len = 2;
+            }
+        }
+        garb_decl_t attr = {
+            .name = names[i], .len = os64_strlen(names[i]), .value = values, .nvalue = count};
+        if (read_decl(c, &c->self, &attr, &d[n]))
+            ++n;
+    }
+    *out = d;
+    return n;
+}
+
 static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
                             const CustomMap *inherited, Match **m, int32_t *mcap)
 {
@@ -1970,7 +2075,9 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
     int32_t nm = matching(c, el, m, mcap);
     Decl *inl = NULL;
     int32_t ninl = inline_decls(c, el, &inl);
-    int32_t total = ninl;
+    Decl *attrs = NULL;
+    int32_t nattrs = svg_attributes(c, el, &attrs);
+    int32_t total = ninl + nattrs;
     for (int32_t k = 0; k < nm; k++)
         total += (*m)[k].rule->ndecls;
     if (total == 0)
@@ -1981,6 +2088,8 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
         return;
     }
     int32_t na = 0;
+    for (int32_t j = 0; j < nattrs; ++j)
+        ap[na++] = (Applied){&attrs[j], false, false, 0, 0, -1};
     for (int32_t k = 0; k < nm; k++)
         for (int32_t j = 0; j < (*m)[k].rule->ndecls; j++) {
             const Decl *d = &(*m)[k].rule->decls[j];

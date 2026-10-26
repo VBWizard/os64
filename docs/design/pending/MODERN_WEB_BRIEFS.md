@@ -38,7 +38,9 @@ The first [6b core increment](SVG_CORE.md) adds native path parsing, bounded
 arc conversion and group/path scene preparation with provider-owned snapshots.
 The [solid painter](SVG_PAINT.md) adds native fills, ordinary strokes and
 isolated element/group opacity, with analytic coverage and Chromium comparisons.
-The static inline renderer stage remains active; Yonder painting is not built.
+The [Yonder connection](SVG_YONDER.md) paints inline paths/groups using the real
+DOM, cascade, layout and compositor. The static inline renderer stage remains
+active; the first P5 fixture does not complete its broader feature profile.
 
 Slice 5 follows Fable's 2026-10-21 design. Slice 6 follows Quinn's
 2026-10-25 revision of Fable's SVG design. Their documents are their

@@ -3882,3 +3882,19 @@ properties, sizing and browser paint connection remain, along with the remaining
 6b features recorded in DEBTS.md. The connection gets its own PR and dependent
 follow-ons stack while it is unmerged. There is no new P5/QEMU, performance or
 broad WPT/conformance claim.
+
+### Slice 6b, first Yonder connection — 2026-10-26
+
+[SVG_YONDER.md](SVG_YONDER.md) connects real inline paths/groups to the HTML
+DOM, garb cascade, replaced layout and window compositor. Presentation
+attributes precede author stylesheets; viewBox mapping, currentColor, ordinary
+strokes and isolated opacity reach the screen. SVG style elements participate
+in stylesheet discovery, and ordinary document mutation rebuilds the artwork.
+
+The first P5 fixture is `/tests/pages/svg-inline.html`. A private windowed QEMU
+boot displays its landscape and opacity overlap, including zoomed repaint.
+Host integration tests cover pixels, mutation, clipping, unsupported features
+and 81 allocation cuts in both refusal modes; full-window tests exercise the
+compositor. SVG/backend/output memory shares a 64 MiB Page subdivision, but
+whole-page budget unification and caching remain debts. This is not completion
+of 6b, external-image support, or a broad conformance/performance claim.

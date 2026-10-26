@@ -119,7 +119,7 @@ typedef enum {
     FLOW_DISPLAY_GRID,
     FLOW_DISPLAY_INLINE_GRID,
     // The element makes no box and its children are its parent's: `slot`,
-    // and an SVG or MathML element, whose HTML descendants still render.
+    // and foreign content without a face-provided replaced SVG viewport.
     FLOW_DISPLAY_CONTENTS,
     FLOW_DISPLAY_NONE,
 } flow_display_t;
@@ -912,7 +912,12 @@ typedef struct {
     // only what is painted moves between layouts, and its values are due
     // for ticks, not layouts. Without it every animation moves by layouts.
     bool ticks;
+    // The face renders outer inline SVG viewports as replaced content.
+    // False retains foreign-content fallback for text-only consumers.
+    bool svg;
 } flow_env_t;
+
+bool flow_svg_root(const os64_html_node_t *node);
 
 #define FLOW_ARENA_DEFAULT ((size_t)64 << 20)
 

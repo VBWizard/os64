@@ -1,8 +1,8 @@
 # SVG solid painting
 
 Status: second 6b increment, 2026-10-26, based on merged PR #363 at
-`ac734c6c`. Builds on [SVG_CORE.md](SVG_CORE.md). Yonder integration remains
-a separate increment; this implements the prepared-scene painter.
+`ac734c6c`. Builds on [SVG_CORE.md](SVG_CORE.md). The separate
+[Yonder connection](SVG_YONDER.md) consumes this prepared-scene painter.
 
 ## Delivered contract
 
@@ -178,14 +178,15 @@ recorded in SVG_CORE.md; tightening positional tolerance alone does not solve it
 
 ## Following work
 
-Continue 6b with the real tree/style adapter, computed SVG properties, sizing
-and the connection to Yonder, followed by the remaining shapes, dashes,
+The [Yonder connection](SVG_YONDER.md) adds the real tree/style adapter, computed
+paint properties, outer sizing and inline painting. Continue 6b with shapes, dashes,
 degenerate-cap/join handling, use/symbol, nested viewports and SVG clipping.
 Keep the Yonder connection in its own PR, inspect concurrent browser changes
 before touching shared files, and stack dependent follow-ons while it is
 unmerged, as recorded in SVG_CORE.md.
 
 The first useful P5 checkpoint is a real inline fixture reaching Yonder's
-paint path. This library increment does not reach it. External-image policy,
+paint path. SVG_YONDER.md records that checkpoint; this library increment
+alone does not reach it. External-image policy,
 gradients, caches, text, animation and broader conformance/performance gates
 retain their places in [SVG.md](SVG.md) and DEBTS.md.
