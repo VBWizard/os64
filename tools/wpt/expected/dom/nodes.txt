@@ -1493,6 +1493,7 @@ Node-cloneNode-svg.html	cloned <svg>'s xmlns:xlink attribute should have the rig
 Node-cloneNode-svg.html	cloned <use>'s xlink:href attribute should have the right properties
 Node-cloneNode.html	createAttribute
 Node-cloneNode.html	createAttributeNS
+Node-cloneNode.html	createComment
 Node-cloneNode.html	createDocumentFragment
 Node-cloneNode.html	createElement with attributes
 Node-cloneNode.html	createElement(a)
@@ -1535,6 +1536,8 @@ Node-cloneNode.html	createElement(nav)
 Node-cloneNode.html	createElement(nobr)
 Node-cloneNode.html	createElement(noframes)
 Node-cloneNode.html	createElement(noscript)
+Node-cloneNode.html	createElement(optgroup)
+Node-cloneNode.html	createElement(option)
 Node-cloneNode.html	createElement(rp)
 Node-cloneNode.html	createElement(rt)
 Node-cloneNode.html	createElement(ruby)
@@ -1554,6 +1557,7 @@ Node-cloneNode.html	createElement(tt)
 Node-cloneNode.html	createElement(u)
 Node-cloneNode.html	createElement(var)
 Node-cloneNode.html	createElement(wbr)
+Node-cloneNode.html	createTextNode
 Node-cloneNode.html	implementation.createDocumentType
 Node-constants.html	Constants for createDocumentPosition on Element object.
 Node-constants.html	Constants for createDocumentPosition on Node interface object.
@@ -1900,6 +1904,13 @@ ParentNode-replaceChildren.html	If node is a Text node and parent is a document,
 ParentNode-replaceChildren.html	If node is a doctype and parent is not a document, then throw a HierarchyRequestError DOMException.
 ParentNode-replaceChildren.html	If node is a host-including inclusive ancestor of parent, then throw a HierarchyRequestError DOMException.
 ParentNode-replaceChildren.html	If node is not a DocumentFragment, DocumentType, Element, Text, ProcessingInstruction, or Comment node, then throw a HierarchyRequestError DOMException.
+Text-splitText.html	Split child
+Text-splitText.html	Split empty text
+Text-splitText.html	Split root
+Text-splitText.html	Split text after end of data
+Text-splitText.html	Split text at beginning
+Text-splitText.html	Split text at end
+Text-wholeText.html	wholeText returns text of all Text nodes logically adjacent to the node, in document order.
 attributes-namednodemap.html	an attribute set by setAttribute should be accessible as a field on the `attributes` field of an Element
 attributes-namednodemap.html	setNamedItem and removeNamedItem on `attributes` should add and remove fields from `attributes`
 attributes-namednodemap.html	setNamedItem and removeNamedItem on `attributes` should not interfere with existing method names

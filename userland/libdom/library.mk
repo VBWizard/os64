@@ -22,6 +22,8 @@ LIBDOM_SRCS += libdom/report.c
 LIBDOM_SRCS += libdom/document.c
 # P2b: the structured clone, same-window postMessage, idle callbacks.
 LIBDOM_SRCS += libdom/clone.c libdom/message.c libdom/idle.c
+# 0f P1a: the select's options and the Option factory.
+LIBDOM_SRCS += libdom/options.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))
 LIBDOM_SO := $(BIN)/libdom.so
 LIBDOM_BASE = $(patsubst libdom.so=%,%,$(filter libdom.so=%,$(LIB_BASE_PAIRS)))
