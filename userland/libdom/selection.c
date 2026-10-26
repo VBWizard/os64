@@ -40,6 +40,12 @@ static JSValue no_selection(JSContext *ctx)
     return d_error(ctx, "InvalidStateError", "This control has no text selection");
 }
 
+/* Reading or keeping the selection ran out of the page's state budget. */
+static JSValue no_room(JSContext *ctx)
+{
+    return d_error(ctx, "QuotaExceededError", "DOM state quota exceeded");
+}
+
 static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv,
                               int magic, JSValue *data)
 {
@@ -51,7 +57,9 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
     if (self == NULL) return JS_EXCEPTION;
     uint32_t start, end;
     os64_page_direction_t direction;
-    bool has = os64_page_node_selection(dom->state, self, &start, &end, &direction) == 0;
+    int64_t read = os64_page_node_selection(dom->state, self, &start, &end, &direction);
+    if (read == -OS64_PAGE_REASON_NO_MEMORY) return no_room(ctx);
+    bool has = read == 0;
     if (!set && magic != X_SET_RANGE && magic != X_SELECT) {
         if (!has) return JS_NULL;
         return magic == X_START ? JS_NewUint32(ctx, start) : magic == X_END ? JS_NewUint32(ctx, end)
@@ -76,7 +84,12 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
             named = true;
         }
     }
-    has = os64_page_node_selection(dom->state, self, &start, &end, &direction) == 0;
+    read = os64_page_node_selection(dom->state, self, &start, &end, &direction);
+    if (read == -OS64_PAGE_REASON_NO_MEMORY) {
+        d_string_free(dom, &name);
+        return no_room(ctx);
+    }
+    has = read == 0;
     if (!has) {
         d_string_free(dom, &name);
         /* select() on a control without a selection does nothing, as HTML
@@ -92,7 +105,7 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
     }
     d_string_free(dom, &name);
     int64_t status = os64_page_node_set_selection(dom->state, self, start, end, direction);
-    if (status == -OS64_PAGE_REASON_NO_MEMORY) return d_error(ctx, "QuotaExceededError", "DOM state quota exceeded");
+    if (status == -OS64_PAGE_REASON_NO_MEMORY) return no_room(ctx);
     return status < 0 ? no_selection(ctx) : JS_UNDEFINED;
 }
 

@@ -139,6 +139,9 @@ static void spell(FILE *out, const HNode *n)
     case OS64_HTML_TEXT:
         fprintf(out, "\"%s\"", n->text);
         return;
+    case OS64_HTML_PI:
+        fprintf(out, "<?%s %s?>", n->name, n->text);
+        return;
     case OS64_HTML_COMMENT:
         fprintf(out, "<!--%s-->", n->text);
         return;
@@ -554,7 +557,8 @@ static void t_attributes(void)
     HNode *s = id_in(doc, "s");
     const char *ns = os64_html_attr(s, "xlink:href")->ns;
     os64_html_set_attr(doc, s, "xlink:href", "b", 1);
-    check(ns && os64_html_attr(s, "xlink:href")->ns == ns && strcmp(os64_html_attr(s, "xlink:href")->value, "b") == 0,
+    check(ns && os64_html_attr(s, "xlink:href")->ns &&
+              strcmp(os64_html_attr(s, "xlink:href")->ns, ns) == 0 && strcmp(os64_html_attr(s, "xlink:href")->value, "b") == 0,
           "a namespaced attribute keeps its namespace when set");
     os64_html_document_free(doc);
     check(live == 0, "attribute cases freed");

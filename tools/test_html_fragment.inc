@@ -311,10 +311,53 @@ static void serializer_outer_checks(void)
     os64_html_document_free(doc);
     check(!live, "outer serializer leak");
 }
+// The parse's root kept (os64_html_parse_fragment_root): the `html` element
+// a whole document's markup builds in an `html` context, with what its
+// `<html>` tags gave it, where the fragment form keeps only the children.
+static void fragment_root_checks(void)
+{
+    os64_html_document_t *doc = fragment_document();
+    HNode *context = fragment_context(doc, "html");
+    int64_t why = 0;
+    const char *input = "<html lang=en class=theme><head><title>t</title></head><body><p>x</p></body></html>";
+    HNode *root = os64_html_parse_fragment_root(doc, context, input, strlen(input), false, &why);
+    const HAttr *lang = root ? os64_html_attr(root, "lang") : NULL;
+    check(root && !why && root->kind == OS64_HTML_ELEMENT && root->tag == OS64_HTML_TAG_HTML &&
+              root->ns == OS64_HTML_NS_HTML && !root->parent && lang && !strcmp(lang->value, "en") &&
+              os64_html_attr(root, "class") && find_named(root->first_child, "head") &&
+              find_named(root->first_child, "p"),
+          "fragment root kept: the html element, its attributes and its children");
+    HNode *plain = os64_html_parse_fragment(doc, context, input, strlen(input), false, &why);
+    check(plain && !why && plain->kind == OS64_HTML_FRAGMENT && find_named(plain->first_child, "p"),
+          "the fragment form is unchanged");
+    os64_html_document_free(doc);
+    check(!live, "fragment root leak");
+    /* An owner in quirks mode (no doctype): the kept root is parsed in
+     * no-quirks mode, where a table closes the paragraph before it, and the
+     * fragment form keeps the owner's, where the table nests in it. */
+    os64_html_options_t opt = os64_html_options_default();
+    opt.charset = "utf-8";
+    os64_html_document_t *quirky = parse_raw((const unsigned char *)"<p>q", 4, 0, &opt);
+    check(quirky && !quirky->refusal && quirky->quirks == OS64_HTML_QUIRKS, "quirks owner fixture");
+    if (quirky && !quirky->refusal) {
+        HNode *at = fragment_context(quirky, "html");
+        const char *table = "<p>x<table><tr><td>y</table>";
+        HNode *kept = os64_html_parse_fragment_root(quirky, at, table, strlen(table), false, &why);
+        HNode *p = kept ? find_named(kept->first_child, "p") : NULL;
+        check(kept && !why && p && !find_named(p->first_child, "table") && find_named(kept->first_child, "table"),
+              "a kept root is parsed in no-quirks mode whatever the owner's");
+        HNode *nested = os64_html_parse_fragment(quirky, at, table, strlen(table), false, &why);
+        p = nested ? find_named(nested->first_child, "p") : NULL;
+        check(nested && !why && p && find_named(p->first_child, "table"), "the fragment form keeps the owner's mode");
+        os64_html_document_free(quirky);
+    }
+    check(!live, "quirks owner leak");
+}
 static void fragment_checks(void)
 {
     serializer_outer_checks();
     fragment_namespace_checks();
+    fragment_root_checks();
     fragment_utf8_checks();
     fragment_lifetime_checks();
     fragment_budget_checks();
@@ -415,7 +458,7 @@ static void fragment_safety(const unsigned char *data, size_t len, const char *n
     uint64_t work = 0;
     int64_t why = 0;
     allocations = 0;
-    HNode *fragment = h_parse_fragment(doc, context, (const char *)data, len, scripting,
+    HNode *fragment = h_parse_fragment(doc, context, (const char *)data, len, scripting, false,
                                       budget, &work, &why);
     size_t count = allocations;
     if (fragment) {
@@ -452,7 +495,7 @@ static void fragment_safety(const unsigned char *data, size_t len, const char *n
         pin = os64_html_pin(doc);
         allocations = 0;
         fail_at = n;
-        fragment = h_parse_fragment(doc, context, (const char *)data, len, scripting,
+        fragment = h_parse_fragment(doc, context, (const char *)data, len, scripting, false,
                                     budget, NULL, &why);
         fail_at = 0;
         if (fragment || why != OS64_HTML_NO_MEMORY || doc->arena_bytes != arena ||
@@ -476,7 +519,7 @@ static void fragment_safety(const unsigned char *data, size_t len, const char *n
         base_live = live;
         pin = os64_html_pin(doc);
         uint64_t consumed = UINT64_MAX;
-        fragment = h_parse_fragment(doc, context, (const char *)data, len, scripting,
+        fragment = h_parse_fragment(doc, context, (const char *)data, len, scripting, false,
                                     cut, &consumed, &why);
         if (fragment || why != OS64_HTML_WORK_EXHAUSTED || consumed > cut ||
             doc->arena_bytes != arena || doc->node_count != nodes || doc->peak_arena_bytes != peak || live != base_live ||

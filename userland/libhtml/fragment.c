@@ -132,7 +132,9 @@ static HNode *pack_node(os64_html_parser_t *p, const HNode *from, bool root)
     }
     return n;
 }
-static HNode *copy_result(os64_html_parser_t *p, const HNode *root, size_t maximum)
+/* The parse's root comes back as a DocumentFragment, or (keep_root) as the
+ * element it is, with the attributes the markup's start tags gave it. */
+static HNode *copy_result(os64_html_parser_t *p, const HNode *root, size_t maximum, bool keep_root)
 {
     if (!maximum || maximum > SIZE_MAX / sizeof(FPair)) {
         h_refuse(p, OS64_HTML_ARENA_EXHAUSTED);
@@ -145,7 +147,7 @@ static HNode *copy_result(os64_html_parser_t *p, const HNode *root, size_t maxim
     size_t *depth = h_alloc(p, maximum * sizeof(*depth));
     if (!map || !depth)
         return NULL;
-    pairs[0] = (FPair){root, pack_node(p, root, true)};
+    pairs[0] = (FPair){root, pack_node(p, root, !keep_root)};
     if (!pairs[0].to)
         return NULL;
     size_t count = 1;
@@ -208,13 +210,14 @@ static HNode *copy_result(os64_html_parser_t *p, const HNode *root, size_t maxim
     return out;
 }
 HNode *h_parse_fragment(os64_html_document_t *doc, const HNode *context,
-                       const char *utf8, size_t len, bool scripting,
+                       const char *utf8, size_t len, bool scripting, bool keep_root,
                        uint64_t max_work, uint64_t *work, int64_t *status)
 {
     if (work)
         *work = 0;
     HDoc *owner = (HDoc *)doc;
-    if (!owner || !context || context->kind != OS64_HTML_ELEMENT ||
+    if (!owner || owner->pub.is_xml || !context || context->kind != OS64_HTML_ELEMENT ||
+        context->ns == OS64_HTML_NS_NONE || context->ns == OS64_HTML_NS_OTHER ||
         !os64_html_owns_node(doc, context) || (!utf8 && len)) {
         answer(status, OS64_HTML_BAD_ARGUMENT);
         return NULL;
@@ -225,6 +228,10 @@ HNode *h_parse_fragment(os64_html_document_t *doc, const HNode *context,
     HNode *out = NULL;
     if (!temp)
         goto done;
+    /* A kept root is a document's of its own, parsed in no-quirks mode
+     * whatever the owner's (a quirks page nests a table in a paragraph). */
+    if (keep_root)
+        temp->pub.quirks = OS64_HTML_NO_QUIRKS;
     os64_html_parser_t bootstrap = {0};
     bootstrap.d = temp;
     os64_html_parser_t *p = h_alloc(&bootstrap, sizeof(*p));
@@ -305,7 +312,7 @@ parsed:
     copier.d = stage;
     copier.opt.max_work = max_work;
     stage->pub.work = temp->pub.work;
-    out = copy_result(&copier, &temp->html, temp->pub.node_count);
+    out = copy_result(&copier, &temp->html, temp->pub.node_count, keep_root);
     if (work)
         *work = stage->pub.work;
     why = stage->pub.refusal;
@@ -332,5 +339,13 @@ os64_html_node_t *os64_html_parse_fragment(os64_html_document_t *doc,
                                            bool scripting, int64_t *status)
 {
     uint64_t budget = len > (UINT64_MAX - 4096) / 256 ? UINT64_MAX : 4096 + 256 * (uint64_t)len;
-    return h_parse_fragment(doc, context, utf8, len, scripting, budget, NULL, status);
+    return h_parse_fragment(doc, context, utf8, len, scripting, false, budget, NULL, status);
+}
+os64_html_node_t *os64_html_parse_fragment_root(os64_html_document_t *doc,
+                                                const os64_html_node_t *context,
+                                                const char *utf8, size_t len,
+                                                bool scripting, int64_t *status)
+{
+    uint64_t budget = len > (UINT64_MAX - 4096) / 256 ? UINT64_MAX : 4096 + 256 * (uint64_t)len;
+    return h_parse_fragment(doc, context, utf8, len, scripting, true, budget, NULL, status);
 }

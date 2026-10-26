@@ -84,7 +84,7 @@ _Static_assert(offsetof(HDoc, root_meta) == offsetof(HDoc, root) + sizeof(HNode)
                offsetof(HDoc, html_meta) == offsetof(HDoc, html) + sizeof(HNode),
                "an embedded node's private word must sit where h_word looks for it");
 
-/* The private word after a node: a TEXT or COMMENT's buffer capacity (zero
+/* The private word after a node: a TEXT, COMMENT or PI buffer capacity (zero
  * when its bytes are a literal or lie in a permanent chunk, so are never
  * freed alone); an ELEMENT's flags; a template-contents FRAGMENT's host. */
 static inline size_t *h_word(const HNode *n)
@@ -94,8 +94,9 @@ static inline size_t *h_word(const HNode *n)
 #define H_ATTRS_INLINE ((size_t)2) /* ELEMENT: attributes lie in its reclaimable node block */
 #define H_ATTRS_PRIVATE ((size_t)1)   /* ELEMENT: its attribute records are its own blocks */
 
-/* How deep a node may be, the document at 0 and a template's contents
- * counted as its children. `max_depth` bounds the parser's stack of OPEN
+/* XML admits one data-node level below its element-depth limit. For HTML,
+ * the document is at 0 and a template's contents count as its children.
+ * `max_depth` bounds the HTML parser's stack of OPEN
  * elements, and a tree can be deeper than its stack ever was: `</form>`
  * takes the form off the stack while what it contains stays open, so
  * `<form><div></form>` over and over nests two levels for each entry the
@@ -104,6 +105,8 @@ static inline size_t *h_word(const HNode *n)
  * the same number, so no walker meets a tree a parse could not have made. */
 static inline size_t h_depth_limit(const HDoc *d)
 {
+    if (d->pub.is_xml)
+        return d->max_depth == SIZE_MAX ? SIZE_MAX : d->max_depth + 1;
     return d->max_depth > (SIZE_MAX - 2) / 2 ? SIZE_MAX : 2 * d->max_depth + 2;
 }
 typedef enum { H_CHAR, H_START, H_END, H_COMMENT, H_DOCTYPE, H_END_INPUT } HType;
@@ -293,6 +296,7 @@ void *d_permanent(HDoc *d, size_t size, int64_t *why);
 void *d_alloc(HDoc *d, size_t size, int64_t *why);
 void *d_node_alloc(HDoc *d, size_t size, int64_t *why);
 void d_transfer_blocks(HDoc *to, HDoc *from);
+HDoc *d_xml_document_new(size_t budget, size_t depth, int64_t *why);
 void d_node_register(HDoc *d, HNode *node, uint32_t flags);
 HNode *d_node_new(HDoc *d, os64_html_node_kind_t kind, int64_t *why);
 /* Queue after the mutation's version change, then collect after all of the
@@ -311,7 +315,7 @@ size_t d_owned_bytes(const HNode *node);
 size_t d_pending_bytes(const HDoc *d);
 bool d_form_input(const HNode *node);
 HNode *h_parse_fragment(os64_html_document_t *doc, const HNode *context,
-                       const char *utf8, size_t len, bool scripting,
+                       const char *utf8, size_t len, bool scripting, bool keep_root,
                        uint64_t max_work, uint64_t *work, int64_t *status);
 void h_fragment_start(os64_html_parser_t *p);
 /* Give up a ledger block something may have borrowed: freed at once when no

@@ -1,0 +1,43 @@
+From 5c79d6cd1ac73d70a55f3d963fb568aa32f6d794 Mon Sep 17 00:00:00 2001
+From: Alexei Podtelezhnikov <apodtele@gmail.com>
+Date: Mon, 7 Sep 2026 22:47:41 -0400
+Subject: [PATCH] * src/base/ftstroke.c (FT_Stroker_EndSubPath): Handle an
+ empty subpath. (FT_Stroker_ParseOutline): Updated.
+
+The relocates the check for an empty subpath. Fixes #1459.
+---
+ src/base/ftstroke.c | 14 +++++++-------
+ 1 file changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/src/base/ftstroke.c b/src/base/ftstroke.c
+index 79c48999e..064c94f2f 100644
+--- a/src/base/ftstroke.c
++++ b/src/base/ftstroke.c
+@@ -1874,6 +1874,10 @@
+       goto Exit;
+     }
+ 
++    /* don't try to end the path if no segments have been generated */
++    if ( stroker->first_point )
++      goto Exit;
++
+     if ( stroker->subpath_open )
+     {
+       FT_StrokeBorder  right = stroker->borders;
+@@ -2225,13 +2229,9 @@
+       if ( error )
+         goto Exit;
+ 
+-      /* don't try to end the path if no segments have been generated */
+-      if ( !stroker->first_point )
+-      {
+-        error = FT_Stroker_EndSubPath( stroker );
+-        if ( error )
+-          goto Exit;
+-      }
++      error = FT_Stroker_EndSubPath( stroker );
++      if ( error )
++        goto Exit;
+     }
+ 
+     return FT_Err_Ok;

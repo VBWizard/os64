@@ -3578,6 +3578,27 @@ scripted-page host and reading the tree it left:
   button's failure is on the status line. The shop's sort `<select>` is a one-row listbox with no
   dropdown, which is yonder's next fix, not the binding's.
 
+**Codex, round 1**: two findings, both fixed. DOMParser dropped a whole
+document's `<html>` attributes (`lang`, a theme's class): the fragment
+parse keeps only its root's children, so libhtml gains
+`os64_html_parse_fragment_root`, the same parse returning that root as the
+`html` element it is, which becomes the document's element. And a text
+control's selection was set when its value could not be read (out of
+memory), clamped to nothing and reported done: the value is read first
+now, and its failure is the verb's, nothing changed (the binding's
+QuotaExceededError). Cases in the DOM host, libhtml's fragment host and
+libpage's tree suite (the last fails on the old code); three mutants for
+the new rules, each caught.
+
+**Codex, round 2**: three findings. Fixed: DOMParser's parse took the
+hosting page's quirks mode, so a quirks page nested a table in a
+paragraph; the kept root is parsed in no-quirks mode now, the mode the
+document says it is in (a libhtml fragment-host case and its mutant).
+Booked in DEBTS.md by the triage rule (hand-made, or a long and unlikely
+chain): a prefixed name in `createElementNS` names the element whole, and
+a kept selection is clamped when read rather than when a clean control's
+default shrinks.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.
@@ -3588,7 +3609,12 @@ xmlconf's supported/unsupported/excluded results. The root/userland makefiles
 include its build, image installation membership and debugger symbols because
 those shared inventories are required to deliver the library.
 
-This completes the standalone foundation increment, not all of slice 6a.
-The shared-tree builder, SVG ownership/cascade proofs and FreeType geometry
-contract remain to be built. XML profile limitations and the absent browser
-adapter are recorded in DEBTS.md; the slice's overall brief remains active.
+The native shared-tree increment is also built in libhtml: independently
+owned XML documents, arbitrary/absent namespaces, processing instructions,
+CDATA-to-text projection, clone/mutation ownership, and SVG-rooted selector
+and custom-property cascade proofs. Its API and sanitizer/regression evidence
+are in [XML.md](XML.md#native-shared-tree-as-built--2026-10-25). The first
+[FreeType geometry experiment](SVG_GEOMETRY.md) is built; its production
+adapter and browser/reference gates remain before 6a completes. XML profile
+limitations and browser consumers still to be built are recorded in DEBTS.md; the slice's
+overall brief stays active.

@@ -97,11 +97,11 @@ Pinning `master` was rejected: it is unreleased, and it carries two whole new
 parsers (`VARC` variable composites, `HVF` hierarchical variable fonts) that
 would be new attack surface accepted to get fixes for old surface.
 
-### Backported — 11 patches, in `patches/`
+### Backported patches in `patches/`
 
-All are memory-safety or integer-overflow fixes in modules this build
-compiles. Each applies cleanly to the pin, in upstream order, and each patch
-file is upstream's own `.patch` with its commit SHA in the header.
+The patches address memory safety and integer arithmetic in the font port
+and geometry experiment. Each patch file is upstream's own `.patch` with its
+commit SHA in the header; the import manifest records the resulting bytes.
 
 | Patch | Upstream | What it fixes |
 |---|---|---|
@@ -116,6 +116,7 @@ file is upstream's own `.patch` with its commit SHA in the header.
 | 0009 | `27229dc` | `autofit/afgsub.c` `af_validate_coverage`: reject overlapping ranges |
 | 0010 | `b08a2eb` | `autofit/afgsub.c` `af_validate_coverage`: unsigned counters |
 | 0011 | `0db9eca` | `truetype/ttgload.c` `TT_Load_Simple_Glyph`: unsigned point counts |
+| 0012 | `5c79d6c` | `base/ftstroke.c` `FT_Stroker_EndSubPath`: empty subpath guard; the geometry proof reproduced null-pointer arithmetic under UBSan before this backport |
 
 The first four are the Adobe CFF charstring interpreter, which runs a stack
 machine out of every `.otf` file this backend opens; they are the most
@@ -129,24 +130,23 @@ directly reachable of the set.
 | `ee38c68` `(gray_raster_render): Fix a coding typo` | **Not present in the pin.** The `min_ey`/`min_ex` typo is in the dynamic-pool rasterizer added post-tag (`a39ef76`); 2.14.3 uses a fixed stack pool and has no such expression. |
 | `09b51e9` `Bump rendering limits` | RELAXES a bound (10 → 16 × ppem) to accommodate decorative glyphs. Not a fix; the tighter limit is the conservative choice and nothing here needs the looser one. |
 | `cbe1276` `Protect FT_LOAD_COLOR` | Unreachable: colour layers are compiled out and the backend never sets `FT_LOAD_COLOR`. |
-| `b6bcd21`, `9a4751a`, `2c041d3` (`FT_Bitmap_Blend`) | `ftbitmap.c` is not compiled. |
+| `b6bcd21`, `9a4751a`, `2c041d3` (`FT_Bitmap_Blend`) | `ftbitmap.c` is absent from the shipped font library. The private geometry experiment links it to satisfy glyph-helper dependencies but never calls bitmap blending. Reassess before exposing bitmap operations. |
 | `12f5eb3` (TrueType GS leak), `287206a` (`Ins_WCVTF` CVT copy-on-write), `1803559`/`7d600a0`/`6d0ae3a` (`Ins_SHZ`), `7974be7` (`Ins_IUP`) | All in `ttinterp.c`, the bytecode interpreter, which is compiled out entirely. |
 | `0d45c7f`, `6d9fc45`, `5178bda` (GX variations, HVAR/VVAR) | Variation support is compiled out. |
 | `867c296` (`sbix`), `b6c6934` (`ttbdf` OOB read) | Embedded bitmaps and the SFNT BDF table are compiled out. |
 | `3221895` (LCD clip box) | Subpixel rendering is not enabled. |
 | `50ef529` (autofit pointer wrap-around) | 32-bit only; os64 is 64-bit. |
-| `e86492e` (pfr), `a3cb585` (winfonts), `f3ca71c` (cid), `ca53609` (pcf), `0d6de69` (sdf), `e8c8c6477` (otvalid), `656cb77` (WOFF), `5c79d6c` (ftstroke) | Modules this build does not compile. |
+| `e86492e` (pfr), `a3cb585` (winfonts), `f3ca71c` (cid), `ca53609` (pcf), `0d6de69` (sdf), `e8c8c6477` (otvalid), `656cb77` (WOFF) | Modules the shipped font build does not compile. |
 | the `ttvarc`/`hvf` series, `d939d15`, `0c9b8e9` and their follow-ups | New features added after the tag; not present in the pin. |
 
-**Six of the twelve skipped safety fixes are skipped because the bytecode
-interpreter is off.** That is the single largest reduction this configuration
-buys, and the argument for it is below.
+The disabled bytecode interpreter excludes the instruction-handler fixes
+listed above. The configuration rationale follows below.
 
 ### Residual risk, stated plainly
 
 - Fixes upstream has not found are not covered by anything here.
 - Backporting selectively means this tree is not any upstream revision. The
-  eleven patches are recorded with their SHAs so a future bump can drop them
+  patches are recorded with their SHAs so a future bump can drop them
   and take the release that contains them.
 - The 107-commit review was a read of subjects and diffs against the enabled
   module list. A fix whose subject does not say what it touches could have
@@ -253,7 +253,7 @@ identically here. F5 should know that before picking default faces.
 
 **What would reverse it:** a side-by-side comparison at 12–16px on real
 hardware where the autofitter's rendering is judged worse. The change is one
-`#undef` removed in `port/os64_ftoption.h`; the eleven-patch list then grows
+`#undef` removed in `port/os64_ftoption.h`; the patch list then grows
 by the `ttinterp.c` fixes listed above, which must be backported in the same
 change.
 
