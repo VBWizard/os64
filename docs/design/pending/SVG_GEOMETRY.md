@@ -1,6 +1,9 @@
 # FreeType geometry proof
 
-Status: private geometry experiment, 2026-10-26. Quinn. Part of
+Status: private geometry experiment at commit `de20cd81`, 2026-10-26. Quinn.
+The [production backend](SVG_GEOMETRY_BACKEND.md) builds on these findings;
+the source-list and API statements below describe that experiment's commit.
+Part of
 [SVG slice 6a](SVG.md#implementation-stages); this does not complete that slice
 or freeze the public geometry ABI.
 
