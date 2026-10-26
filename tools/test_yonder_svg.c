@@ -140,6 +140,32 @@ static void save_ppm(const char *dir, const char *name, yonder_svg_pixels_t *p)
     }
     assert(!fclose(f));
 }
+static void svg_dimension_cases(void)
+{
+    static const struct {
+        const char *attrs;
+        int w, h;
+    } cases[] = {
+        {"width='100%' viewBox='0 0 400 100'", 300, 75},
+        {"height='100%' viewBox='0 0 100 200'", 75, 150},
+        {"width='12bogus' viewBox='0 0 400 100'", 300, 75},
+        {"height='99bogus' viewBox='0 0 100 200'", 75, 150},
+        {"width='-5' height='-9'", 300, 150},
+        {"width='320px' viewBox='0 0 400 100'", 320, 80},
+        {"width='100%' height='40' viewBox='0 0 400 100'", 160, 40},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        char html[512];
+        snprintf(html, sizeof(html), "<!doctype html><body style='margin:0'><svg id=art %s></svg>",
+                 cases[i].attrs);
+        Fixture f = fixture_make(html);
+        int32_t w = 0, h = 0;
+        assert(yonder_svg_size(f.root, &w, &h) && w == cases[i].w && h == cases[i].h);
+        if (i == 0)
+            assert(f.box->rect.w == 256 && f.box->rect.h == 64);
+        fixture_free(&f);
+    }
+}
 static void svg_cases(const char *dir)
 {
     const char *html =
@@ -255,6 +281,7 @@ static void svg_cases(const char *dir)
     pixels_free(&l, &p);
     fixture_free(&f);
     const char *bad[] = {"<rect width=20 height=20/>",
+                         "<path style='transform:translateX(20px)' d='M0 0H20V20Z'/>",
                          "<path fill='url(#gradient)' d='M0 0H20V20Z'/>",
                          "<path fill=none stroke=red stroke-dasharray='2 2' d='M0 0L20 20'/>"};
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
@@ -275,6 +302,7 @@ int main(int argc, char **argv)
     assert(os64_text_create(&o, &s_text) == OS64_FONT_OK);
     kEnv.text = s_text;
     size_t base = live;
+    svg_dimension_cases();
     svg_cases(argv[1]);
     for (int i = 0; i < s_nfonts; ++i)
         os64_text_font_release(s_fonts[i].font);

@@ -20,7 +20,10 @@ paths support solid fill and stroke, currentColor, fill rules, fill/stroke
 opacity, isolated group/element opacity, cap/join/miter settings, visibility
 and SVG transform attributes. Supported CSS 2D transforms replace the transform
 attribute. The outer box's transform and opacity are painted once by Yonder;
-their computed values remain available to explicit inheritance inside SVG.
+their values remain available to explicit inheritance inside SVG. Root CSS
+transforms use libflow's supported profile. The adapter retains the cascade
+value and applies its narrower transform parser when an SVG descendant paints
+that value, including through explicit inheritance.
 Ordinary strokes expand in user space before transformation.
 
 `libgarb` parses SVG paint properties and supported presentation attributes.
@@ -108,7 +111,8 @@ with recovery and zero live ledger bytes after each call. Its fixture peak is
 and binary provenance accompanies the run.
 
 The existing Yonder suite passes **2,028 checks** and the full window/script
-suite passes **8,188 checks** after merging import maps (#366). The garb
+suite passes **8,200 checks** after the first review fixes (including the
+import-map integration from #366). The garb
 parser/cascade regression suite passes.
 The full window harness checks root opacity, explicit visible descendants of a
 hidden SVG, CSS replacing the root transform attribute, and script recoloring
@@ -148,3 +152,22 @@ Keep this connection in its own PR. Stack dependent SVG follow-ons while it
 is unmerged, and inspect concurrent Yonder changes before extending shared
 files. Remaining 6b work and page-accounting/performance gates are in DEBTS.md;
 small fixture success does not close those gates.
+
+## Review regressions
+
+The first review identified two adapter boundary errors. Rejected dimension
+attributes wrote their numeric prefix into the fallback size before refusing
+the suffix. Dimension parsing now publishes a value only after accepting the
+whole attribute. Tests cover percentages on either axis, invalid suffixes,
+negative dimensions and valid absolute-size controls. The responsive
+`width="100%" viewBox="0 0 400 100"` case now lays out at 256 by 64 in the
+256-pixel fixture, rather than 256 by 192.
+
+Root CSS transforms also went through the restricted descendant parser, even
+though libflow paints that transform. The adapter now defers CSS transform
+conversion to the SVG element that paints it. Window tests reproduce the
+three former refusals (`translateX`, `scaleX`, and percentage translation),
+verify their actual pixel placement, and retain explicit descendant inheritance.
+The new sizing assertion and three window checks failed before the fixes; the
+focused SVG integration, 8,200-check window/script suite and freestanding build
+pass afterward. ASan, UBSan and leak detection remain enabled.

@@ -5397,9 +5397,6 @@ static uint32_t *stand_in_shot(void) {
     yonder_scratch_free(g.paint_scratch); g.paint_scratch=NULL;
     return screen.surf.pixels;
 }
-/* THE STAND-INS' OWN PAINTING (yonder.c's pane_stand_in, stand_in_label,
- * glass_stand_in), which the yonder host's recorder stands in for: what a
- * label says, that a canvas has no paper, and what laying labels out costs. */
 static void svg_window_cases(void)
 {
     probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
@@ -5425,6 +5422,29 @@ static void svg_window_cases(void)
         "SVG window: CSS root transform replaces attribute and paints once");
     os64_free(px);probe_drop();
 
+    const char *root_transforms[]={"translateX(20px)","scaleX(2)","translate(50%,0px)"};
+    const int inside[]={28,24,40},outside[]={8,40,8};
+    for (size_t i=0;i<sizeof(root_transforms)/sizeof(root_transforms[0]);++i) {
+        char html[512];
+        snprintf(html,sizeof(html),"<!doctype html><style>body{margin:0;background:white}"
+            "svg{display:block;transform-origin:0px 0px;transform:%s}</style>"
+            "<svg width=64 height=64 transform='translate(80 0)'>"
+            "<path fill='#2091de' d='M0 0H16V16H0Z'/></svg>",root_transforms[i]);
+        probe_page(html,false);px=stand_in_shot();
+        check((px[8*800+inside[i]]&0xffffffu)==0x2091de &&
+            (px[8*800+outside[i]]&0xffffffu)==0xffffff,
+            "SVG window: flow's root CSS transform needs no descendant-parser support");
+        os64_free(px);probe_drop();
+    }
+    probe_page("<!doctype html><style>body{margin:0;background:white}"
+        "svg{display:block;transform:translate(20px,0px)}</style>"
+        "<svg width=64 height=64><g style='transform:inherit'>"
+        "<path fill='#2091de' d='M0 0H16V16H0Z'/></g></svg>",false);
+    px=stand_in_shot();check((px[8*800+48]&0xffffffu)==0x2091de &&
+        (px[8*800+28]&0xffffffu)==0xffffff,
+        "SVG window: a descendant explicitly inherits the root CSS transform");
+    os64_free(px);probe_drop();
+
     probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block;color:#2091de}</style>"
         "<svg id=art width=64 height=64><path fill=currentColor d='M0 0H32V32H0Z'/></svg>"
         "<script>document.getElementById('art').style.color='#e87925'</script>",true);
@@ -5434,6 +5454,9 @@ static void svg_window_cases(void)
     os64_free(px);probe_drop();
 }
 
+/* THE STAND-INS' OWN PAINTING (yonder.c's pane_stand_in, stand_in_label,
+ * glass_stand_in), which the yonder host's recorder stands in for: what a
+ * label says, that a canvas has no paper, and what laying labels out costs. */
 static void stand_in_paint_cases(void)
 {
     /* A full-viewport canvas over the page, as confetti and snow are: the

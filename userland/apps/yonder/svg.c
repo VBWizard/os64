@@ -12,6 +12,8 @@
 typedef os64_geometry_map_t Map;
 typedef struct {
     svg_style_t s;
+    // Borrowed from the live cascade; lower only when SVG paints this transform.
+    const garb_val_t *transform_css;
     uint32_t color;
     bool current_fill, current_stroke, dashes, vector, linear;
 } Computed;
@@ -276,14 +278,18 @@ static bool viewbox(const os64_html_node_t *root, double v[4])
 static bool dimension(const char *text, double *out)
 {
     Scanner s;
-    if (!scanner(text, &s) || !number(&s, out) || *out < 0)
+    double parsed;
+    if (!scanner(text, &s) || !number(&s, &parsed) || parsed < 0)
         return false;
     if (s.left >= 2 && s.p[0] == 'p' && s.p[1] == 'x') {
         s.p += 2;
         s.left -= 2;
     }
     ws(&s);
-    return !s.left;
+    if (s.left)
+        return false;
+    *out = parsed;
+    return true;
 }
 bool yonder_svg_size(const os64_html_node_t *n, int32_t *w, int32_t *h)
 {
@@ -469,6 +475,7 @@ static void copy_property(Computed *d, const Computed *s, garb_prop_t p)
         break;
     case GARB_TRANSFORM:
         d->s.transform = s->s.transform;
+        d->transform_css = s->transform_css;
         break;
     default:
         break;
@@ -587,7 +594,8 @@ static svg_status_t apply(Adapter *a, Computed *c, const Computed *parent, garb_
         c->linear = keyword(v, "linearrgb");
         break;
     case GARB_TRANSFORM:
-        return css_transform(v, &c->s.transform);
+        c->transform_css = v;
+        break;
     default:
         break;
     }
@@ -616,6 +624,7 @@ static svg_status_t compute(Adapter *a, const os64_html_node_t *n, Computed *c)
         Computed parent = *c;
         c->s.opacity = 1;
         c->s.transform = identity;
+        c->transform_css = NULL;
         c->s.display = true;
         c->vector = false;
         garb_style_t style = garb_style_for(a->cascade, p);
@@ -719,14 +728,20 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
     if (status != SVG_OK)
         return status;
     *out = c.s;
-    // The CSS box owns root opacity and its CSS transform. Keep their computed
-    // values available to an explicit inherit on descendants, but paint once.
+    // The CSS box owns root opacity and its CSS transform. Keep the CSS value
+    // for explicit inheritance, but do not lower the root through SVG's smaller
+    // transform profile. A descendant that inherits it is lowered below.
     if (n == a->root) {
         out->opacity = 1;
         out->transform = identity;
     }
     if (!out->display)
         return SVG_OK;
+    if (n != a->root && c.transform_css) {
+        status = css_transform(c.transform_css, &out->transform);
+        if (status != SVG_OK)
+            return status;
+    }
     bool path = n->ns == OS64_HTML_NS_SVG && eq(n->name, "path");
     if (path && out->visible && ((c.dashes || c.vector) && out->stroke.kind != SVG_PAINT_NONE))
         return SVG_UNSUPPORTED;
