@@ -196,6 +196,12 @@ Yonder paint, performance or new browser/WPT result is claimed by this increment
 
 ## Following work
 
+Yonder integration must account for concurrent work on the browser. Keep the
+connection slice in its own PR and stack dependent follow-on PRs on that branch
+while it is unmerged. Before editing shared Yonder files, inspect the active
+browser changes and keep the adapter changes localized; refresh the stack as
+its base merges so review diffs show each increment's work.
+
 Continue 6b with the native tree/style adapter, SVG computed properties and
 sizing, shapes, solid painting, strokes/dashes, use/symbol, viewports, clipping
 and group compositing. Paths and groups exist here as prepared data; there is
