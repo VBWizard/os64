@@ -102,6 +102,32 @@ os64_ui_status_code_t os64_ui_menu_open_list(os64_ui_menu_session_t *,const os64
  * and if its native destroy is refused the session retries at its next
  * boundary, the popup holding only its own copy meanwhile. Cannot fail. */
 void os64_ui_menu_list_detach(os64_ui_menu_session_t *,void *user);
+
+/* ── dropdown — a one-line choice whose list drops from it ─────────────────
+ * A closed box showing the chosen label and an arrow. A click, Space, Enter
+ * or Alt+Down opens the list in the window's menu session (ui->menu; with
+ * none it does not open); Up and Down change the value without opening it.
+ * on_change runs when the value changes, by keys or a pick, never for a
+ * pick of the value it already has; programmatic updates do not call it.
+ * Labels and the enabled flags are the application's, asked whenever the
+ * box paints or the list opens; destroy (the class's) detaches the list
+ * first, so no pick outlives the widget, and cannot fail. */
+typedef struct os64_ui_dropdown os64_ui_dropdown_t;
+struct os64_ui_dropdown {
+    os64_ui_widget_t w;
+    size_t count;
+    int selected;                       /* -1: none */
+    uint8_t seq;
+    const char *(*label)(size_t index, void *user);
+    bool (*enabled)(size_t index, void *user);   /* NULL: every row */
+    void (*on_change)(os64_ui_dropdown_t *, void *user);
+    void *list_user;
+    void *run,*run_staged;              /* the chosen label's, staged with the face */
+};
+void os64_ui_dropdown(os64_ui_dropdown_t *d,size_t count,const char *(*label)(size_t,void *),
+    void (*on_change)(os64_ui_dropdown_t *,void *),void *user);
+/* Sets the rows and the value; an open list closes, its rows being stale. */
+void os64_ui_dropdown_set(os64_ui_t *ui,os64_ui_dropdown_t *d,size_t count,int selected);
 /* Fallback widget storage must outlive the session. Close before removing or
  * freeing widgets; hidden/detached restoration targets use this fallback. */
 void os64_ui_menu_focus_fallback(os64_ui_menu_session_t *,os64_ui_widget_t *);

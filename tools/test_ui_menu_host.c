@@ -1505,6 +1505,52 @@ static void list_mode(void)
     audit_enabled=false;
 }
 
+/* The dropdown widget over the session: a click, Space and Alt+Down open
+ * its list; a pick of the value it has changes nothing (Quinn's review, 4);
+ * Up and Down on the closed box change the value; destroying it while the
+ * list is open closes the list and leaves no pick to come. */
+static unsigned drop_changes;
+static void drop_changed(os64_ui_dropdown_t *d,void *u) { (void)d;(void)u;++drop_changes; }
+static const char *drop_label(size_t i,void *u)
+{
+    (void)u;
+    static const char *names[]={"Name (A to Z)","Name (Z to A)","Price (low to high)","Price (high to low)"};
+    return i<4?names[i]:"";
+}
+static void dropdown_widget(void)
+{
+    audit_enabled=true;
+    static os64_ui_dropdown_t d;
+    os64_ui_dropdown(&d,4,drop_label,drop_changed,NULL);
+    d.w.bounds=(os64_gui_rect_t){600,600,160,24};
+    os64_ui_add_child(g.ui.root,&d.w);
+    os64_ui_dropdown_set(&g.ui,&d,4,0);drop_changes=0;
+    current="dropdown: a click opens its list on the value";
+    queue(1,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,610,610,OS64_GUI_MOUSE_LEFT));
+    queue(1,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_UP,610,610,OS64_GUI_MOUSE_LEFT));drain();
+    int64_t h=popup_handle();
+    CHECK(h&&g.menus->list&&g.menus->list->user==&d&&g.menus->panels[0].widget->selected==0);
+    current="dropdown: committing the value it has is not a change";
+    key(h,'\n',0x1c,0);CHECK(!popup_handle()&&d.selected==0&&!drop_changes);
+    current="dropdown: committing another is one change";
+    queue(1,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,610,610,OS64_GUI_MOUSE_LEFT));drain();h=popup_handle();CHECK(h);
+    key(h,0,0x50,0);key(h,0,0x50,0);CHECK(!drop_changes);
+    key(h,'\n',0x1c,0);CHECK(!popup_handle()&&d.selected==2&&drop_changes==1);
+    current="dropdown: Up and Down on the closed box change the value";
+    CHECK(g.ui.focus==&d.w);
+    key(1,0,0x50,0);CHECK(d.selected==3&&drop_changes==2&&!popup_handle());
+    key(1,0,0x50,0);CHECK(d.selected==3&&drop_changes==2);
+    key(1,0,0x48,0);CHECK(d.selected==2&&drop_changes==3);
+    current="dropdown: Space and Alt+Down open it";
+    key(1,' ',0x39,0);h=popup_handle();CHECK(h);key(h,27,0x01,0);CHECK(!popup_handle()&&drop_changes==3);
+    key(1,0,0x50,OS64_GUI_MOD_ALT);h=popup_handle();CHECK(h);key(h,27,0x01,0);drain();
+    current="dropdown: destroyed while open, its list closes and no pick follows";
+    queue(1,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,610,610,OS64_GUI_MOUSE_LEFT));drain();h=popup_handle();CHECK(h);
+    d.w.cls->destroy(&d.w);CHECK(!os64_ui_menu_active(g.menus));drain();CHECK(!popup_handle()&&drop_changes==3);
+    d.w.hidden=true;os64_ui_dropdown_set(&g.ui,&d,0,-1);
+    audit_enabled=false;
+}
+
 int main(int argc,char **argv)
 {
     setvbuf(stdout,NULL,_IONBF,0);
@@ -1526,6 +1572,6 @@ int main(int argc,char **argv)
         build(dir,true);review_round_six();dispose();
         printf("r6: %lu checks, %d failures\n",checks,failures);return failures?1:0;
     }
-    build(dir,true);models();disabled_bar_and_overflow_failure();dismissal_orders();activation_and_loss();quarantine();pending_context_keys();review_navigation();destruction_failure(dir);review_round_two();review_round_three();review_round_four();review_round_five();review_round_six();navigation();burst_and_pointer_navigation();standalone();callback_and_icon_contract();placement_and_fonts(dir);collapse_pending_child();list_mode();dispose();
+    build(dir,true);models();disabled_bar_and_overflow_failure();dismissal_orders();activation_and_loss();quarantine();pending_context_keys();review_navigation();destruction_failure(dir);review_round_two();review_round_three();review_round_four();review_round_five();review_round_six();navigation();burst_and_pointer_navigation();standalone();callback_and_icon_contract();placement_and_fonts(dir);collapse_pending_child();list_mode();dropdown_widget();dispose();
     printf("menu/action/status: %lu checks, %d failures\n",checks,failures);return failures?1:0;
 }
