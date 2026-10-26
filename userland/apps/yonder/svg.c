@@ -12,8 +12,8 @@
 typedef os64_geometry_map_t Map;
 typedef struct {
     svg_style_t s;
-    // Borrowed from the live cascade; lower only when SVG paints this transform.
-    const garb_val_t *transform_css;
+    // Borrowed from the live cascade; evaluate when SVG paints these values.
+    const garb_val_t *transform_css, *opacity_css;
     uint32_t color;
     bool current_fill, current_stroke, dashes, vector, linear;
 } Computed;
@@ -442,6 +442,7 @@ static void copy_property(Computed *d, const Computed *s, garb_prop_t p)
         break;
     case GARB_OPACITY:
         d->s.opacity = s->s.opacity;
+        d->opacity_css = s->opacity_css;
         break;
     case GARB_VISIBILITY:
         d->s.visible = s->s.visible;
@@ -540,15 +541,15 @@ static svg_status_t apply(Adapter *a, Computed *c, const Computed *parent, garb_
                                        : (svg_paint_t){SVG_PAINT_UNSUPPORTED, 0};
         break;
     }
+    case GARB_OPACITY:
+        c->opacity_css = v;
+        break;
     case GARB_FILL_OPACITY:
     case GARB_STROKE_OPACITY:
-    case GARB_OPACITY:
         if (!value(v, 1, &n))
             return SVG_UNSUPPORTED;
         n = fmax(0, fmin(1, n));
-        if (prop == GARB_OPACITY)
-            c->s.opacity = n;
-        else if (prop == GARB_FILL_OPACITY)
+        if (prop == GARB_FILL_OPACITY)
             c->s.fill_opacity = n;
         else
             c->s.stroke_opacity = n;
@@ -623,6 +624,7 @@ static svg_status_t compute(Adapter *a, const os64_html_node_t *n, Computed *c)
         const os64_html_node_t *p = chain[--depth];
         Computed parent = *c;
         c->s.opacity = 1;
+        c->opacity_css = NULL;
         c->s.transform = identity;
         c->transform_css = NULL;
         c->s.display = true;
@@ -728,15 +730,21 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
     if (status != SVG_OK)
         return status;
     *out = c.s;
-    // The CSS box owns root opacity and its CSS transform. Keep the CSS value
-    // for explicit inheritance, but do not lower the root through SVG's smaller
-    // transform profile. A descendant that inherits it is lowered below.
+    // Flow owns HTML ancestor and root opacity, and the root CSS transform.
+    // Retain the cascade values for explicit inheritance, but evaluate them
+    // through SVG's narrower profile only for descendants that paint them.
     if (n == a->root) {
         out->opacity = 1;
         out->transform = identity;
     }
     if (!out->display)
         return SVG_OK;
+    if (n != a->root && c.opacity_css) {
+        double opacity;
+        if (!value(c.opacity_css, 1, &opacity))
+            return SVG_UNSUPPORTED;
+        out->opacity = fmax(0, fmin(1, opacity));
+    }
     if (n != a->root && c.transform_css) {
         status = css_transform(c.transform_css, &out->transform);
         if (status != SVG_OK)

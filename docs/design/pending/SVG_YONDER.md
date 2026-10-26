@@ -20,10 +20,10 @@ paths support solid fill and stroke, currentColor, fill rules, fill/stroke
 opacity, isolated group/element opacity, cap/join/miter settings, visibility
 and SVG transform attributes. Supported CSS 2D transforms replace the transform
 attribute. The outer box's transform and opacity are painted once by Yonder;
-their values remain available to explicit inheritance inside SVG. Root CSS
-transforms use libflow's supported profile. The adapter retains the cascade
-value and applies its narrower transform parser when an SVG descendant paints
-that value, including through explicit inheritance.
+their values remain available to explicit inheritance inside SVG. HTML ancestor
+opacity and the root's CSS opacity/transform use libflow's supported profile.
+The adapter retains cascade values and evaluates them through its narrower
+profile when an SVG descendant paints them, including explicit inheritance.
 Ordinary strokes expand in user space before transformation.
 
 `libgarb` parses SVG paint properties and supported presentation attributes.
@@ -78,7 +78,9 @@ also outside this slice.
 
 Numeric and px stroke widths and percentage widths are supported; the latter
 use the normalized viewBox diagonal. Relative lengths and calc expressions
-are refused by the adapter. Descendant CSS transform-origin and individual
+that require evaluation inside the SVG adapter are refused. Flow-owned
+ancestor/root opacity and root transforms retain libflow's support; a
+descendant explicitly inheriting a calc opacity is outside the adapter profile. Descendant CSS transform-origin and individual
 translate/rotate/scale properties are refused. Color interpolation is sRGB.
 The native painter's degenerate-stroke and arc-coverage limits still apply.
 
@@ -111,7 +113,7 @@ with recovery and zero live ledger bytes after each call. Its fixture peak is
 and binary provenance accompanies the run.
 
 The existing Yonder suite passes **2,028 checks** and the full window/script
-suite passes **8,200 checks** after the first review fixes (including the
+suite passes **8,221 checks** after the second review fix (including the
 import-map integration from #366). The garb
 parser/cascade regression suite passes.
 The full window harness checks root opacity, explicit visible descendants of a
@@ -171,3 +173,17 @@ verify their actual pixel placement, and retain explicit descendant inheritance.
 The new sizing assertion and three window checks failed before the fixes; the
 focused SVG integration, 8,200-check window/script suite and freestanding build
 pass afterward. ASan, UBSan and leak detection remain enabled.
+
+The second review found the same boundary error for opacity: a calculated
+opacity on an HTML wrapper or the outer SVG caused an adapter refusal before
+flow could composite it. Opacity values are now retained for explicit
+inheritance and evaluated by the adapter for SVG descendants that paint them.
+Window regressions cover calculated wrapper and root opacity, the root
+explicitly inheriting its wrapper's calculated opacity, numeric descendant
+inheritance, initial/unset resets and percentage opacity. The first three
+checks failed before the fix. Explicitly inheriting calc opacity into a
+descendant still returns unsupported without output or leaked allocations,
+matching the documented descendant profile.
+The focused SVG integration, 8,221-check window/script suite and freestanding
+Yonder/flowdump build pass after this fix, with ASan, UBSan and LeakSanitizer
+enabled for the host suites.

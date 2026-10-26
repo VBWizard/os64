@@ -280,6 +280,10 @@ static void svg_cases(const char *dir)
     assert(pixel(&p, 24, 4) == 0xffff0000 && pixel(&p, 12, 4) == 0);
     pixels_free(&l, &p);
     fixture_free(&f);
+    f = fixture_make("<!doctype html><svg id=art width=64 height=64 style='opacity:calc(.5)'>"
+                     "<path style='opacity:inherit' fill=red d='M0 0H32V32H0Z'/></svg>");
+    assert(draw_fixture(&f, &l, &p, f.box->rect) == SVG_UNSUPPORTED && !p.pixels && !l.live);
+    fixture_free(&f);
     const char *bad[] = {"<rect width=20 height=20/>",
                          "<path style='transform:translateX(20px)' d='M0 0H20V20Z'/>",
                          "<path fill='url(#gradient)' d='M0 0H20V20Z'/>",

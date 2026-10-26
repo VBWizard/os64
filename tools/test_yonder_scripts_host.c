@@ -5409,6 +5409,29 @@ static void svg_window_cases(void)
     check(g.page.svg_bytes==0 && g.page.svg_peak>0,"SVG window: render/destination ledger returns to zero");
     os64_free(px);probe_drop();
 
+    const struct { const char *wrapper, *root, *child; unsigned channel; } opacity_cases[]={
+        {"opacity:calc(.5)","","",128},
+        {"","opacity:calc(.5)","",128},
+        {"opacity:calc(.5)","opacity:inherit","",191},
+        {"","opacity:.5","opacity:inherit",191},
+        {"","opacity:.5","opacity:unset",128},
+        {"","opacity:.5","opacity:initial",128},
+        {"","opacity:.5","opacity:50%",191},
+    };
+    for(size_t i=0;i<sizeof(opacity_cases)/sizeof(opacity_cases[0]);++i) {
+        char html[640];
+        snprintf(html,sizeof(html),"<!doctype html><style>body{margin:0;background:white}"
+            "svg{display:block}</style><div style='%s'><svg width=64 height=64 style='%s'>"
+            "<g style='%s'><path fill=red d='M0 0H32V32H0Z'/></g></svg></div>",
+            opacity_cases[i].wrapper,opacity_cases[i].root,opacity_cases[i].child);
+        probe_page(html,false);px=stand_in_shot();
+        uint32_t actual=px[8*800+8]&0xffffffu;unsigned channel=opacity_cases[i].channel;
+        check((actual>>16)==255 && (actual&255)>=channel-1 && (actual&255)<=channel+1 &&
+            ((actual>>8)&255)==(actual&255),
+            "SVG window: flow owns wrapper/root opacity; descendants inherit only explicitly");
+        os64_free(px);probe_drop();
+    }
+
     probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block;visibility:hidden}</style>"
         "<svg width=64 height=64><path style='visibility:visible' fill='#2091de' d='M8 8H40V40H8Z'/></svg>",false);
     px=stand_in_shot();check((px[16*800+16]&0xffffffu)==0x2091de,
