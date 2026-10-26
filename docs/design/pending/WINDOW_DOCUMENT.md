@@ -517,8 +517,10 @@ Document to 64.6% C / 94.0% scan.
   through the global-miss hook's engine patch.
 - Named access on Document, through storage.c's legacy-platform-object
   pattern.
-- The global's prototype chain, with the `Window` and `EventTarget`
-  interface objects, belongs here too.
+- `WindowProperties`, the level of the global's prototype chain that
+  serves named access. The chain's `Window` and `EventTarget` levels and
+  interface objects moved to 0f's P1b and are built
+  (INTERFACES_FORMS.md § Rulings, 3).
 
 Oracle: `html/browsers/the-window-object/named-access-on-the-window-object`,
 `html/dom/documents/dom-tree-accessors/nameditem-*`, and

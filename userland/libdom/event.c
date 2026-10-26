@@ -1489,14 +1489,25 @@ int d_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     JSValue invoker = JS_NewCFunctionData(ctx, invoke, 2, 0, 1, &dom->anchor->value);
     dom->invoke = d_retain(dom, ctx, invoker);
     if (dom->invoke == NULL) return -1;
+    /* EVENTTARGET.PROTOTYPE (DOM § 2.7) holds the listener methods once,
+     * and every target inherits them: Node.prototype, each plain target's
+     * prototype (d_event_target), and the global through Window.prototype
+     * (HTML § 7.2), which sits between them. The methods tell the target by
+     * `this`, the global's included when a bare call gives none. */
+    dom->event_target_prototype = d_retain(dom, ctx, JS_NewObject(ctx));
+    if (dom->event_target_prototype == NULL) return -1;
+    JSValueConst target = dom->event_target_prototype->value;
     static const struct { const char *name; int magic, argc; } targets[] = {
         {"addEventListener", M_ADD, 2}, {"removeEventListener", M_REMOVE, 2}, {"dispatchEvent", M_DISPATCH, 1}
     };
     for (size_t i = 0; i < sizeof(targets) / sizeof(targets[0]); i++)
-        if (d_method(dom, ctx, dom->prototypes[D_PROTO_NODE]->value, targets[i].name, target_method,
-                     targets[i].argc, targets[i].magic) < 0 ||
-            d_method(dom, ctx, global, targets[i].name, target_method, targets[i].argc, targets[i].magic) < 0)
+        if (d_method(dom, ctx, target, targets[i].name, target_method, targets[i].argc, targets[i].magic) < 0)
             return -1;
+    dom->window_prototype = d_retain(dom, ctx, JS_NewObjectProto(ctx, target));
+    if (dom->window_prototype == NULL ||
+        JS_SetPrototype(ctx, dom->prototypes[D_PROTO_NODE]->value, target) < 0 ||
+        JS_SetPrototype(ctx, global, dom->window_prototype->value) < 0)
+        return -1;
     JSValueConst holders[] = {dom->prototypes[D_PROTO_ELEMENT]->value, dom->prototypes[D_PROTO_DOCUMENT]->value, global};
     for (int kind = 0; kind < D_EVENT_SCROLL; kind++) {
         if (!has_handler_name(kind)) continue;
@@ -1564,13 +1575,41 @@ int d_event_target(os64_dom_t *dom, JSContext *ctx, JSValueConst prototype, JSCl
         dom->target_resolvers[dom->target_class_count] = resolve;
         dom->target_classes[dom->target_class_count++] = class_id;
     }
-    static const struct { const char *name; int magic, argc; } targets[] = {
-        {"addEventListener", M_ADD, 2}, {"removeEventListener", M_REMOVE, 2}, {"dispatchEvent", M_DISPATCH, 1}
-    };
-    for (size_t i = 0; i < sizeof(targets) / sizeof(targets[0]); i++)
-        if (d_method(dom, ctx, prototype, targets[i].name, target_method, targets[i].argc, targets[i].magic) < 0)
+    /* The methods are EventTarget.prototype's: a prototype whose chain
+     * reaches it already (Attr's, through Node's) is left as it is, and one
+     * that inherits Object.prototype directly inherits EventTarget.prototype
+     * instead, as every plain target's interface does. */
+    if (dom->event_target_prototype == NULL) {
+        JS_ThrowInternalError(ctx, "A plain event target installed before EventTarget.prototype");
+        return -1;
+    }
+    JSValueConst target = dom->event_target_prototype->value;
+    /* `new EventTarget()`'s own class: its prototype is EventTarget's. */
+    if (JS_VALUE_GET_PTR(prototype) == JS_VALUE_GET_PTR(target)) return 0;
+    JSValue object = JS_GetPrototype(ctx, target);      /* Object.prototype */
+    if (JS_IsException(object)) return -1;
+    JSValue at = JS_DupValue(ctx, prototype);
+    bool reached = false, plain = false;
+    for (int depth = 0; !reached && JS_IsObject(at) && depth < 32; depth++) {
+        JSValue next = JS_GetPrototype(ctx, at);
+        if (JS_IsException(next)) {
+            JS_FreeValue(ctx, at);
+            JS_FreeValue(ctx, object);
             return -1;
-    return 0;
+        }
+        reached = JS_IsObject(next) && JS_VALUE_GET_PTR(next) == JS_VALUE_GET_PTR(target);
+        if (depth == 0) plain = JS_IsObject(next) && JS_VALUE_GET_PTR(next) == JS_VALUE_GET_PTR(object);
+        JS_FreeValue(ctx, at);
+        at = next;
+    }
+    JS_FreeValue(ctx, at);
+    JS_FreeValue(ctx, object);
+    if (reached) return 0;
+    if (!plain) {
+        JS_ThrowInternalError(ctx, "A plain event target's prototype inherits neither Object nor EventTarget");
+        return -1;
+    }
+    return JS_SetPrototype(ctx, prototype, target) < 0 ? -1 : 0;
 }
 
 JSValue d_listener_change(os64_dom_t *dom, JSContext *ctx, JSValueConst self, JSValueConst callback,
@@ -2213,4 +2252,143 @@ int d_message_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global
     JS_FreeValue(ctx, event_interface);
     if (JS_IsException(interface)) return -1;
     return JS_DefinePropertyValueStr(ctx, global, "MessageEvent", interface, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+}
+
+/* ── EventTarget and Window, their names (0f's P1b) ─────────────────────
+ * The levels are d_event_install's, there with the Modern Web surface on
+ * or off; this row names them. `new EventTarget()` (and a subclass's
+ * `super()`) makes a plain target whose entry is in the object, as an
+ * AbortSignal's is; Window is an interface a page cannot construct. And an
+ * interface object follows its prototype (WebIDL § 3.7.1): every global
+ * interface whose prototype inherits EventTarget.prototype directly comes
+ * to inherit EventTarget, Node's and the plain targets' alike, so the row
+ * runs last, when they are all there. */
+
+static JSClassID target_slot;
+
+typedef struct {
+    DValue target;              /* first: the plain target's entry, in the object */
+} DTarget;
+
+static void target_finalizer(JSRuntime *rt, JSValue value)
+{
+    DTarget *t = JS_GetOpaque(value, os64_js_class_id(&target_slot));
+    if (t == NULL) return;
+    d_event_target_finalize(rt, &t->target);
+    js_free_rt(rt, t);
+}
+
+static void target_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark)
+{
+    DTarget *t = JS_GetOpaque(value, os64_js_class_id(&target_slot));
+    if (t != NULL) d_event_target_mark(rt, &t->target, mark);
+}
+
+static JSValue target_construct(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    (void)argc; (void)argv;
+    os64_dom_t *dom = d_binding(ctx);
+    if (dom == NULL) return JS_EXCEPTION;
+    JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+    if (JS_IsException(prototype)) return prototype;
+    JSValue object = JS_NewObjectProtoClass(ctx, JS_IsObject(prototype) ? (JSValueConst)prototype
+                                                                       : dom->event_target_prototype->value,
+                                            os64_js_class_id(&target_slot));
+    JS_FreeValue(ctx, prototype);
+    if (JS_IsException(object)) return object;
+    DTarget *t = js_mallocz(ctx, sizeof(*t));
+    if (t == NULL) {
+        JS_FreeValue(ctx, object);
+        return JS_EXCEPTION;
+    }
+    d_event_target_init(dom, &t->target, object);
+    JS_SetOpaque(object, t);
+    return object;
+}
+
+/* Each global interface whose `prototype` inherits EventTarget.prototype
+ * directly, and which itself still inherits Function.prototype, comes to
+ * inherit `parent` (EventTarget). Only data properties are read: a getter
+ * on the global is a page's to run, not the binding's. */
+static int adopt_interfaces(os64_dom_t *dom, JSContext *ctx, JSValueConst global, JSValueConst parent)
+{
+    JSValue function = JS_GetPrototype(ctx, parent);   /* Function.prototype */
+    if (JS_IsException(function)) return -1;
+    JSPropertyEnum *names = NULL;
+    uint32_t count = 0;
+    int result = JS_GetOwnPropertyNames(ctx, &names, &count, global, JS_GPN_STRING_MASK) < 0 ? -1 : 0;
+    for (uint32_t i = 0; result == 0 && i < count; i++) {
+        JSPropertyDescriptor desc;
+        int found = JS_GetOwnProperty(ctx, &desc, global, names[i].atom);
+        if (found < 0) { result = -1; break; }
+        if (found == 0) continue;
+        JSValue value = desc.value;
+        JS_FreeValue(ctx, desc.getter);
+        JS_FreeValue(ctx, desc.setter);
+        if ((desc.flags & JS_PROP_GETSET) == 0 && JS_IsFunction(ctx, value) &&
+            JS_VALUE_GET_PTR(value) != JS_VALUE_GET_PTR(parent)) {
+            JSValue own = JS_GetPrototype(ctx, value);
+            JSValue prototype = JS_IsException(own) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, value, "prototype");
+            JSValue above = JS_IsObject(prototype) ? JS_GetPrototype(ctx, prototype) : JS_UNDEFINED;
+            if (JS_IsException(own) || JS_IsException(prototype) || JS_IsException(above))
+                result = -1;
+            else if (JS_IsObject(above) && JS_VALUE_GET_PTR(above) == JS_VALUE_GET_PTR(dom->event_target_prototype->value) &&
+                     JS_VALUE_GET_PTR(own) == JS_VALUE_GET_PTR(function) && JS_SetPrototype(ctx, value, parent) < 0)
+                result = -1;
+            JS_FreeValue(ctx, own);
+            JS_FreeValue(ctx, prototype);
+            JS_FreeValue(ctx, above);
+        }
+        JS_FreeValue(ctx, value);
+    }
+    if (names != NULL) JS_FreePropertyEnum(ctx, names, count);
+    JS_FreeValue(ctx, function);
+    return result;
+}
+
+/* The engine gives its global object an own `[Symbol.toStringTag]` of
+ * "global", which would hide Window.prototype's; a window has none of its
+ * own, so `String(window)` is "[object Window]". */
+static int untag_global(JSContext *ctx, JSValueConst global)
+{
+    JSValue symbol = JS_GetPropertyStr(ctx, global, "Symbol");
+    JSValue tag = JS_IsException(symbol) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, symbol, "toStringTag");
+    JS_FreeValue(ctx, symbol);
+    if (!JS_IsSymbol(tag)) {
+        JS_FreeValue(ctx, tag);
+        return -1;
+    }
+    JSAtom key = JS_ValueToAtom(ctx, tag);
+    JS_FreeValue(ctx, tag);
+    if (key == JS_ATOM_NULL) return -1;
+    int deleted = JS_DeleteProperty(ctx, global, key, 0);
+    JS_FreeAtom(ctx, key);
+    return deleted < 0 ? -1 : 0;
+}
+
+int d_targets_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    static const JSClassDef definition = {.class_name = "EventTarget", .finalizer = target_finalizer,
+                                          .gc_mark = target_mark};
+    JSClassID id = os64_js_class_id(&target_slot);
+    if (!JS_IsRegisteredClass(dom->engine, id) && JS_NewClass(dom->engine, id, &definition) < 0) return -1;
+    JSValueConst target = dom->event_target_prototype->value;
+    JS_SetClassProto(ctx, id, JS_DupValue(ctx, target));
+    if (d_event_target(dom, ctx, target, id, NULL) < 0) return -1;
+    JSValue event_target = d_interface_new(ctx, "EventTarget", 0, target_construct, target, JS_UNDEFINED);
+    if (JS_IsException(event_target)) return -1;
+    JSValue window = d_interface_new(ctx, "Window", 0, NULL, dom->window_prototype->value, event_target);
+    if (JS_IsException(window) ||
+        JS_DefinePropertyValueStr(ctx, global, "Window", window, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0) {
+        JS_FreeValue(ctx, event_target);
+        return -1;
+    }
+    if (JS_DefinePropertyValueStr(ctx, global, "EventTarget", JS_DupValue(ctx, event_target),
+                                  JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0) {
+        JS_FreeValue(ctx, event_target);
+        return -1;
+    }
+    int adopted = adopt_interfaces(dom, ctx, global, event_target);
+    JS_FreeValue(ctx, event_target);
+    return adopted < 0 ? -1 : untag_global(ctx, global);
 }

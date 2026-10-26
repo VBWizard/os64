@@ -1024,7 +1024,7 @@ rows in `modern.c`, a file each in libdom, and yonder's store.
 | the image format | `os64 storage 1\n`, then `+<key bytes> <value bytes>\n` key value `\n` for a set, `-<key bytes>\n` key `\n` for a removal (an image holds sets only; no store is no image, and a file without the magic line, an empty one included, is not one); `os64_dom_storage_merge` and `os64_dom_storage_walk` are libdom's, and yonder only moves bytes |
 | `options.now_us`, `options.timing` | the host's microsecond clock, and the navigation's origin and milestones (`os64_dom_timing_t`), read as the binding is made and whenever a script asks |
 | `options.screen`, `options.zoom` | the display in device pixels, and the zoom in thousandths when asked |
-| the plain EventTarget | `d_event_target(prototype, class)` gives a class's objects the three EventTarget methods, `d_event_handler` an `on<type>`, `d_dispatch_plain` a dispatch whose path is the target alone; performance and `screen.orientation` use it |
+| the plain EventTarget | `d_event_target(prototype, class)` registers a class and makes its prototype inherit EventTarget.prototype, which holds the three methods, `d_event_handler` an `on<type>`, `d_dispatch_plain` a dispatch whose path is the target alone; performance and `screen.orientation` use it |
 
 **The WTF-8 ruling.** The brief said to replace NUL and lone surrogates
 with U+FFFD at storage's boundary, as the binding does elsewhere. Storage

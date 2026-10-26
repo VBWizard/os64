@@ -6,7 +6,8 @@ option selectedness and list walk, and the select row (the option's
 members, the select's, the options collection and its indexed setter, the
 Option factory); and to the page fixes after it: the lists' interfaces,
 HTMLElement's members, template content, the selections, DOMParser,
-createElementNS and the formless button's status line - against the
+createElementNS and the formless button's status line; and to P1b's
+EventTarget, its constructor and Window - against the
 harnesses that hold each rule: a mutant is
 CAUGHT when one of its harnesses fails, MISSED when they all pass, which
 means a test is missing and gets written. A build failure is neither.
@@ -40,6 +41,7 @@ SELECTION_C = 'userland/libdom/selection.c'
 IMPLEMENTATION_C = 'userland/libdom/implementation.c'
 YONDER_C = 'userland/apps/yonder/yonder.c'
 FRAGMENT_C = 'userland/libhtml/fragment.c'
+EVENT_C = 'userland/libdom/event.c'
 DOM = 'tools/test_dom_host.sh'
 PAGE = 'tools/test_libpage_host.sh'
 SCRIPTS = 'tools/test_yonder_scripts_host.sh'
@@ -184,6 +186,45 @@ mutants = [
      '        bool scripts_own_it = scripts_live() && (', '        bool scripts_own_it = true && (', (SCRIPTS,)),
     ('formless-button-refused-with-scripts', YONDER_C,
      '        bool scripts_own_it = scripts_live() && (', '        bool scripts_own_it = false && (', (SCRIPTS,)),
+    # P1b: EventTarget.prototype holds the methods, and every target reaches it
+    ('target-methods-on-node', EVENT_C,
+     '        if (d_method(dom, ctx, target, targets[i].name, target_method, targets[i].argc, targets[i].magic) < 0)',
+     '        if (d_method(dom, ctx, dom->prototypes[D_PROTO_NODE]->value, targets[i].name, target_method,\n'
+     '                     targets[i].argc, targets[i].magic) < 0)', (DOM,)),
+    ('node-off-event-target', EVENT_C,
+     '        JS_SetPrototype(ctx, dom->prototypes[D_PROTO_NODE]->value, target) < 0 ||', '', (DOM,)),
+    ('global-off-window', EVENT_C,
+     '        JS_SetPrototype(ctx, global, dom->window_prototype->value) < 0)', '        false)', (DOM,)),
+    ('window-past-window-prototype', EVENT_C,
+     '        JS_SetPrototype(ctx, global, dom->window_prototype->value) < 0)',
+     '        JS_SetPrototype(ctx, global, target) < 0)', (DOM,)),
+    ('window-prototype-plain', EVENT_C,
+     '    dom->window_prototype = d_retain(dom, ctx, JS_NewObjectProto(ctx, target));',
+     '    dom->window_prototype = d_retain(dom, ctx, JS_NewObject(ctx));', (DOM,)),
+    ('plain-target-left-on-object', EVENT_C,
+     '    return JS_SetPrototype(ctx, prototype, target) < 0 ? -1 : 0;\n}', '    return 0;\n}', (DOM,)),
+    ('plain-target-reached-ignored', EVENT_C, '    if (reached) return 0;', '', (DOM,)),
+    ('event-target-own-class-walked', EVENT_C,
+     '    if (JS_VALUE_GET_PTR(prototype) == JS_VALUE_GET_PTR(target)) return 0;', '', (DOM,)),
+    ('construct-ignores-new-target', EVENT_C,
+     '    JSValue object = JS_NewObjectProtoClass(ctx, JS_IsObject(prototype) ? (JSValueConst)prototype',
+     '    JSValue object = JS_NewObjectProtoClass(ctx, false ? (JSValueConst)prototype', (DOM,)),
+    ('construct-without-entry', EVENT_C,
+     '    d_event_target_init(dom, &t->target, object);\n    JS_SetOpaque(object, t);',
+     '    JS_SetOpaque(object, t);', (DOM,)),
+    ('event-target-unconstructible', EVENT_C,
+     '    JSValue event_target = d_interface_new(ctx, "EventTarget", 0, target_construct, target, JS_UNDEFINED);',
+     '    JSValue event_target = d_interface_new(ctx, "EventTarget", 0, false ? target_construct : NULL, target,\n'
+     '                                           JS_UNDEFINED);', (DOM,)),
+    ('window-constructible', EVENT_C,
+     '    JSValue window = d_interface_new(ctx, "Window", 0, NULL, dom->window_prototype->value, event_target);',
+     '    JSValue window = d_interface_new(ctx, "Window", 0, target_construct, dom->window_prototype->value,\n'
+     '                                     event_target);', (DOM,)),
+    ('interfaces-not-adopted', EVENT_C,
+     '                     JS_VALUE_GET_PTR(own) == JS_VALUE_GET_PTR(function) && JS_SetPrototype(ctx, value, parent) < 0)',
+     '                     JS_VALUE_GET_PTR(own) == JS_VALUE_GET_PTR(function) && false)', (DOM,)),
+    ('global-keeps-its-tag', EVENT_C,
+     '    return adopted < 0 ? -1 : untag_global(ctx, global);', '    return adopted < 0 || (false && untag_global(ctx, global) < 0) ? -1 : 0;', (DOM,)),
 ]
 
 caught, missed, unbuilt = [], [], []
