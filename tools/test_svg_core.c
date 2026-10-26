@@ -1,0 +1,720 @@
+#include <assert.h>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <svg/svg.h>
+
+#define PI 3.14159265358979323846
+#define CHECK(x)                                                                                   \
+    do {                                                                                           \
+        if (!(x)) {                                                                                \
+            fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #x);                                \
+            abort();                                                                               \
+        }                                                                                          \
+        ++checks;                                                                                  \
+    } while (0)
+static size_t checks;
+static const os64_geometry_map_t identity = {1, 0, 0, 1, 0, 0};
+typedef struct {
+    size_t live, peak, allocations, fail, polls, cancel;
+    bool admission, probe;
+    svg_context_t *context;
+} Ledger;
+typedef union {
+    max_align_t align;
+    struct {
+        size_t bytes;
+        Ledger *owner;
+    } info;
+} Header;
+static os64_geometry_status_t allocate(void *user, size_t bytes, void **out)
+{
+    Ledger *l = user;
+    *out = NULL;
+    ++l->allocations;
+    if (l->fail == l->allocations)
+        return l->admission ? OS64_GEOMETRY_LIMIT : OS64_GEOMETRY_NO_MEMORY;
+    Header *h = malloc(sizeof(*h) + bytes);
+    CHECK(h);
+    h->info.bytes = bytes;
+    h->info.owner = l;
+    l->live += bytes;
+    if (l->peak < l->live)
+        l->peak = l->live;
+    *out = h + 1;
+    return OS64_GEOMETRY_OK;
+}
+static void release(void *user, void *data, size_t bytes)
+{
+    Ledger *l = user;
+    Header *h = (Header *)data - 1;
+    CHECK(h->info.owner == l && h->info.bytes == bytes && l->live >= bytes);
+    l->live -= bytes;
+    free(h);
+}
+static bool cancelled(void *user)
+{
+    Ledger *l = user;
+    if (l->probe && l->context) {
+        svg_stats_t stats;
+        CHECK(svg_stats(l->context, &stats) == SVG_BUSY);
+        CHECK(svg_destroy(l->context) == SVG_BUSY);
+    }
+    return ++l->polls == l->cancel;
+}
+static svg_options_t options(Ledger *l)
+{
+    return (svg_options_t){.memory = {l, allocate, release},
+                           .cancel_context = l,
+                           .cancelled = cancelled,
+                           .limits = svg_default_limits()};
+}
+static svg_context_t *context(Ledger *l)
+{
+    svg_context_t *c = NULL;
+    svg_options_t o = options(l);
+    CHECK(svg_create(&o, &c) == SVG_OK && c);
+    l->context = c;
+    return c;
+}
+static svg_path_t *parse(svg_context_t *c, const char *text, svg_status_t expected)
+{
+    svg_path_t *p = NULL;
+    svg_parse_result_t r;
+    CHECK(svg_path_parse(c, (svg_string_t){text, strlen(text)}, &p, &r) == expected);
+    CHECK(r.status == expected);
+    CHECK((p != NULL) == (expected == SVG_OK || expected == SVG_MALFORMED));
+    if (expected == SVG_OK)
+        CHECK(r.offset == strlen(text));
+    return p;
+}
+static void near(double actual, double expected)
+{
+    CHECK(fabs(actual - expected) <= 1e-12 * fmax(1, fabs(expected)));
+}
+static void grammar(void)
+{
+    Ledger l = {0};
+    svg_context_t *c = context(&l);
+    const char *cases[] = {"",
+                           " \r\n\t\f ",
+                           "M0 0",
+                           "m1 2 3 4",
+                           "M.6.5L1-2",
+                           "M1e1-2E+1l.5.25",
+                           "M0,0H3 5h2V9v-1ZzL2 3",
+                           "M0 0C1 2 3 4 5 6S7 8 9 10",
+                           "M0 0q1 2 3 4t5 6",
+                           "M0 0A10 20 30 0110 20a-10-20-30 10-10-20",
+                           "M1. 2.L3. 4.",
+                           "M-0e999999999 0"};
+    for (size_t i = 0; i < sizeof(cases) / sizeof(*cases); ++i) {
+        svg_path_t *p = parse(c, cases[i], SVG_OK);
+        CHECK(svg_path_release(c, p) == SVG_OK);
+    }
+    svg_path_t *p = parse(c, "m1 2 3 4h2v3q1 2 3 4t5 6c1 2 3 4 5 6s7 8 9 10z l2 3", SVG_OK);
+    size_t count;
+    const svg_command_t *cmd = svg_path_commands(p, &count);
+    CHECK(count == 10);
+    near(cmd[1].p[0].x, 4);
+    near(cmd[1].p[0].y, 6);
+    near(cmd[3].p[0].x, 6);
+    near(cmd[3].p[0].y, 9);
+    near(cmd[4].p[0].x, 7);
+    near(cmd[4].p[1].y, 13);
+    near(cmd[5].p[0].x, 11);
+    near(cmd[5].p[0].y, 15);
+    near(cmd[5].p[1].x, 14);
+    near(cmd[5].p[1].y, 19);
+    near(cmd[7].p[0].x, 21);
+    near(cmd[7].p[0].y, 27);
+    near(cmd[9].p[0].x, 3);
+    near(cmd[9].p[0].y, 5);
+    svg_geometry_t *g = NULL;
+    CHECK(svg_path_lower(c, p, &identity, 1.0 / 64, &g) == SVG_OK);
+    const os64_geometry_command_t *gc = svg_geometry_commands(g, &count);
+    CHECK(count == 11 && gc[9].verb == OS64_GEOMETRY_MOVE);
+    near(gc[9].p[0].x, 1);
+    near(gc[9].p[0].y, 2);
+    CHECK(svg_destroy(c) == SVG_BUSY);
+    CHECK(svg_geometry_release(c, g) == SVG_OK);
+    CHECK(svg_path_release(c, p) == SVG_OK);
+    p = parse(c, "M0 0C1 1 2 2 3 3L4 4S5 5 6 6Q7 7 8 8A1 1 0 0 1 8 8T9 9", SVG_OK);
+    cmd = svg_path_commands(p, &count);
+    near(cmd[3].p[0].x, 4);
+    near(cmd[6].p[0].x, 8);
+    CHECK(svg_path_release(c, p) == SVG_OK);
+    const struct {
+        const char *text;
+        size_t prefix;
+    } bad[] = {{"L1 2", 0},
+               {"M", 0},
+               {"M,0 0", 0},
+               {"M0 0,", 1},
+               {"M0 0,,1 2", 1},
+               {"M0 0L1 2 3", 2},
+               {"M0 0C1 2 3 4 5", 1},
+               {"M0 0A1 1 0 2 0 2 2", 1},
+               {"M0 0A1 1 0 0 +1 2 2", 1},
+               {"M0 0L1e 2", 1},
+               {"M0 0X1 2", 1},
+               {"M0 0z1 2", 2},
+               {"M0 0LNaN 3", 1},
+               {"M0 0Linf 3", 1},
+               {"M0 0A1 1 0.0110 20", 1},
+               {"M0 0\vL1 2", 1}};
+    for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); ++i) {
+        p = parse(c, bad[i].text, SVG_MALFORMED);
+        svg_path_commands(p, &count);
+        CHECK(count == bad[i].prefix);
+        CHECK(svg_path_release(c, p) == SVG_OK);
+    }
+    svg_parse_result_t result;
+    const char embedded[] = {'M', '0', ' ', '0', 0, 'L', '1', ' ', '1'};
+    CHECK(svg_path_parse(c, (svg_string_t){embedded, sizeof(embedded)}, &p, &result) ==
+          SVG_MALFORMED);
+    CHECK(result.offset == 4);
+    CHECK(svg_path_release(c, p) == SVG_OK);
+    parse(c, "M1e99999 0", SVG_LIMIT);
+    parse(c, "M1e-99999 0", SVG_LIMIT);
+    parse(c, "M1e308 0l1e308 0", SVG_LIMIT);
+    char *long_number = malloc(1000040);
+    CHECK(long_number);
+    memcpy(long_number, "M1", 2);
+    memset(long_number + 2, '0', 1000000);
+    strcpy(long_number + 1000002, "e-100000000000 0");
+    parse(c, long_number, SVG_LIMIT);
+    memcpy(long_number, "M0.", 3);
+    memset(long_number + 3, '0', 1000000);
+    strcpy(long_number + 1000003, "1e100000000000 0");
+    parse(c, long_number, SVG_LIMIT);
+    free(long_number);
+    p = parse(c, "M1e-320 1.234567890123456789e12", SVG_OK);
+    cmd = svg_path_commands(p, &count);
+    CHECK(cmd[0].p[0].x > 0);
+    near(cmd[0].p[0].y, 1234567890123.456789);
+    CHECK(svg_path_release(c, p) == SVG_OK);
+    l.probe = true;
+    p = parse(c, "M1 2L3 4", SVG_OK);
+    CHECK(svg_path_release(c, p) == SVG_OK);
+    CHECK(svg_destroy(c) == SVG_OK && l.live == 0);
+}
+static os64_geometry_point_t ellipse(double cx, double cy, double rx, double ry, double rotation,
+                                     double angle)
+{
+    double cp = cos(rotation), sp = sin(rotation), ct = cos(angle), st = sin(angle);
+    return (os64_geometry_point_t){cx + rx * ct * cp - ry * st * sp,
+                                   cy + rx * ct * sp + ry * st * cp};
+}
+static os64_geometry_point_t cubic(os64_geometry_point_t start, const os64_geometry_command_t *c,
+                                   double t)
+{
+    double u = 1 - t;
+    return (os64_geometry_point_t){start.x * u * u * u + 3 * c->p[0].x * u * u * t +
+                                       3 * c->p[1].x * u * t * t + c->p[2].x * t * t * t,
+                                   start.y * u * u * u + 3 * c->p[0].y * u * u * t +
+                                       3 * c->p[1].y * u * t * t + c->p[2].y * t * t * t};
+}
+static void arc_accuracy(void)
+{
+    Ledger l = {0};
+    svg_context_t *c = context(&l);
+    const os64_geometry_map_t maps[] = {identity,
+                                        {4, 0, 0, 1, 0, 0},
+                                        {-2, .6, 1.3, 3, 4, 5},
+                                        {16384, 0, 0, 16384, 0, 0},
+                                        {0, 0, 0, 0, 0, 0}};
+    double worst = 0;
+    for (size_t m = 0; m < sizeof(maps) / sizeof(*maps); ++m) {
+        for (int k = 0; k < 12; ++k) {
+            double angle = .31, sweep = (k % 2 ? -1 : 1) * (.2 + (k / 2) * 1.1);
+            double cx = 100, cy = 90, rx = 35, ry = k % 3 == 0 ? .3 : 19, rotation = .74;
+            os64_geometry_point_t from = ellipse(cx, cy, rx, ry, rotation, angle);
+            os64_geometry_point_t to = ellipse(cx, cy, rx, ry, rotation, angle + sweep);
+            char text[256];
+            snprintf(text, sizeof(text), "M%.17g %.17gA%.17g %.17g %.17g %d %d %.17g %.17g", from.x,
+                     from.y, rx, ry, rotation * 180 / PI, fabs(sweep) > PI, sweep > 0, to.x, to.y);
+            svg_path_t *p = parse(c, text, SVG_OK);
+            svg_geometry_t *g = NULL;
+            double error = 1.0 / 64;
+            CHECK(svg_path_lower(c, p, &maps[m], error, &g) == SVG_OK);
+            size_t count;
+            const os64_geometry_command_t *cmd = svg_geometry_commands(g, &count);
+            CHECK(count > 1 && cmd[0].verb == OS64_GEOMETRY_MOVE);
+            os64_geometry_point_t start = from;
+            for (size_t j = 1; j < count; ++j) {
+                CHECK(cmd[j].verb == OS64_GEOMETRY_CUBIC);
+                for (int sample = 0; sample <= 32; ++sample) {
+                    double t = sample / 32.0;
+                    os64_geometry_point_t a = cubic(start, &cmd[j], t);
+                    os64_geometry_point_t b = ellipse(cx, cy, rx, ry, rotation,
+                                                      angle + sweep * ((j - 1) + t) / (count - 1));
+                    double dx = a.x - b.x, dy = a.y - b.y;
+                    double observed = fmax(fabs(maps[m].a * dx + maps[m].c * dy),
+                                           fabs(maps[m].b * dx + maps[m].d * dy));
+                    if (observed > worst)
+                        worst = observed;
+                    CHECK(observed <= error);
+                }
+                start = cmd[j].p[2];
+            }
+            near(start.x, to.x);
+            near(start.y, to.y);
+            CHECK(svg_geometry_release(c, g) == SVG_OK);
+            CHECK(svg_path_release(c, p) == SVG_OK);
+        }
+    }
+    svg_path_t *p = parse(c, "M0 0A0 1 0 0 1 3 4A1 1 0 0 1 3 4zL5 6", SVG_OK);
+    svg_geometry_t *g = NULL;
+    CHECK(svg_path_lower(c, p, &identity, .01, &g) == SVG_OK);
+    size_t count;
+    const os64_geometry_command_t *cmd = svg_geometry_commands(g, &count);
+    CHECK(count == 5 && cmd[1].verb == OS64_GEOMETRY_LINE && cmd[3].verb == OS64_GEOMETRY_MOVE);
+    CHECK(svg_geometry_release(c, g) == SVG_OK);
+    CHECK(svg_path_release(c, p) == SVG_OK);
+    p = parse(c, "M0 0A1 1 0 0 1 10 0", SVG_OK);
+    CHECK(svg_path_lower(c, p, &identity, .01, &g) == SVG_OK);
+    cmd = svg_geometry_commands(g, &count);
+    /* Corrected radii form a radius-five lower semicircle. */
+    near(cmd[(count - 1) / 2].p[2].x, 5);
+    near(cmd[(count - 1) / 2].p[2].y, -5);
+    CHECK(svg_geometry_release(c, g) == SVG_OK);
+    CHECK(svg_path_release(c, p) == SVG_OK);
+    p = parse(c, "M1e20 0A1e20 1e20 0 0 1 0 1e20", SVG_OK);
+    CHECK(svg_path_lower(c, p, &identity, .01, &g) == SVG_LIMIT && !g);
+    CHECK(svg_path_release(c, p) == SVG_OK);
+    p = parse(c, "M20 0A20 20 0 0 1 -20 0", SVG_OK);
+    os64_geometry_map_t extreme = {16384, 0, 0, 16384, 0, 0};
+    /* The near-tangent center conversion cannot certify this tight budget at
+     * this zoom. Refusal is explicit; it does not publish coarse geometry. */
+    CHECK(svg_path_lower(c, p, &extreme, .01, &g) == SVG_LIMIT && !g);
+    CHECK(svg_path_lower(c, p, &identity, .01, &g) == SVG_OK);
+    CHECK(svg_geometry_release(c, g) == SVG_OK);
+    CHECK(svg_path_release(c, p) == SVG_OK);
+    CHECK(svg_destroy(c) == SVG_OK && !l.live);
+    printf("Arc positional samples: maximum device-axis error %.9g (limit 1/64)\n", worst);
+}
+
+typedef struct {
+    Ledger *ledger;
+    svg_node_t nodes[5];
+    size_t acquired, released;
+    size_t chain;
+    bool suppress, hidden, unsupported, cyclic, pending, malformed;
+    uint32_t color;
+} Provider;
+static svg_status_t acquire(void *user, svg_mode_t mode, void **snapshot, uint64_t *root)
+{
+    Provider *p = user;
+    CHECK(mode == SVG_MODE_INLINE || mode == SVG_MODE_IMAGE);
+    ++p->acquired;
+    *snapshot = p;
+    *root = 1;
+    return SVG_OK;
+}
+static void unpin(void *user, void *snapshot)
+{
+    Provider *p = user;
+    CHECK(snapshot == p);
+    ++p->released;
+    if (p->ledger->context)
+        CHECK(svg_destroy(p->ledger->context) == SVG_BUSY);
+}
+static svg_status_t node(void *user, void *snapshot, uint64_t source, svg_node_t *out)
+{
+    Provider *p = user;
+    CHECK(snapshot == p && source > 0);
+    if (p->chain) {
+        CHECK(source <= p->chain);
+        *out = (svg_node_t){source == p->chain ? SVG_NODE_PATH : SVG_NODE_GROUP,
+                            source == p->chain ? 0 : source + 1, 0};
+        return SVG_OK;
+    }
+    CHECK(source < 5);
+    *out = p->nodes[source];
+    if (source == 2 && p->unsupported)
+        out->kind = SVG_NODE_UNSUPPORTED;
+    if (source == 2 && p->cyclic)
+        out->first_child = 1;
+    return SVG_OK;
+}
+static svg_status_t style(void *user, void *snapshot, const svg_style_request_t *r, svg_style_t *s,
+                          svg_string_t *d)
+{
+    Provider *p = user;
+    CHECK(snapshot == p);
+    if (p->pending && r->source == 3)
+        return SVG_PENDING;
+    *s = svg_initial_style();
+    if (r->parent_style)
+        s->fill = r->parent_style->fill;
+    if (r->source == 1) {
+        CHECK(r->parent_instance == 0 && !r->parent_style);
+        s->opacity = .5;
+        s->visible = !p->hidden;
+        s->transform = (os64_geometry_map_t){2, 0, 0, 3, 5, 6};
+    }
+    if (r->source == 2) {
+        s->fill.argb = p->color;
+        s->display = !p->suppress;
+        s->transform.tx = 7;
+    }
+    if (r->source == 4)
+        s->fill.argb = 0xff0000ff;
+    if (r->source == 3 || (p->chain && r->source == p->chain)) {
+        CHECK(r->parent_instance != 0);
+        const char *text = p->malformed ? "M0 0L10 0 3" : "M0 0L10 0L10 10Z";
+        *d = (svg_string_t){text, strlen(text)};
+    }
+    return SVG_OK;
+}
+static Provider provider(Ledger *l)
+{
+    return (Provider){.ledger = l,
+                      .color = 0xffff0000,
+                      .nodes = {{0},
+                                {SVG_NODE_GROUP, 2, 999},
+                                {SVG_NODE_GROUP, 3, 4},
+                                {SVG_NODE_PATH, 0, 0},
+                                {SVG_NODE_GROUP, 3, 0}}};
+}
+static svg_provider_t callbacks(Provider *p)
+{
+    return (svg_provider_t){p, acquire, unpin, node, style};
+}
+static void scenes(void)
+{
+    Ledger l = {0};
+    svg_context_t *c = context(&l);
+    Provider p = provider(&l);
+    svg_provider_t cb = callbacks(&p);
+    svg_scene_t *scene = NULL;
+    CHECK(svg_scene_prepare(c, &cb, SVG_MODE_INLINE, &identity, &scene) == SVG_OK);
+    CHECK(p.acquired == 1 && p.released == 0);
+    size_t count;
+    const svg_scene_item_t *items = svg_scene_items(scene, &count);
+    CHECK(count == 5 && items[0].parent == SIZE_MAX);
+    CHECK(items[2].source == 3 && items[4].source == 3 && items[2].instance != items[4].instance);
+    CHECK(items[2].style.fill.argb == 0xffff0000 && items[4].style.fill.argb == 0xff0000ff);
+    CHECK(items[0].style.opacity == .5 && items[2].style.opacity == 1);
+    near(items[2].user_to_viewport.tx, 19);
+    near(items[2].user_to_viewport.d, 3);
+    CHECK(svg_path_release(c, (svg_path_t *)items[2].path) == SVG_BUSY);
+    p.color = 0xff00ff00;
+    p.hidden = p.malformed = true;
+    svg_scene_t *fresh = NULL;
+    CHECK(svg_scene_prepare(c, &cb, SVG_MODE_IMAGE, &identity, &fresh) == SVG_OK);
+    CHECK(items[2].style.fill.argb == 0xffff0000);
+    items = svg_scene_items(fresh, &count);
+    CHECK(!items[0].style.visible && items[2].style.visible);
+    CHECK(items[2].style.fill.argb == 0xff00ff00 && items[2].path_result.status == SVG_MALFORMED);
+    CHECK(svg_scene_release(c, fresh) == SVG_OK);
+    CHECK(svg_scene_release(c, scene) == SVG_OK);
+    p.suppress = p.unsupported = true;
+    CHECK(svg_scene_prepare(c, &cb, SVG_MODE_INLINE, &identity, &scene) == SVG_OK);
+    svg_scene_items(scene, &count);
+    CHECK(count == 3);
+    CHECK(svg_scene_release(c, scene) == SVG_OK);
+    p.suppress = false;
+    CHECK(svg_scene_prepare(c, &cb, SVG_MODE_INLINE, &identity, &scene) == SVG_UNSUPPORTED &&
+          !scene);
+    p.unsupported = false;
+    p.cyclic = true;
+    CHECK(svg_scene_prepare(c, &cb, SVG_MODE_INLINE, &identity, &scene) == SVG_PROVIDER_ERROR &&
+          !scene);
+    p.cyclic = false;
+    p.pending = true;
+    CHECK(svg_scene_prepare(c, &cb, SVG_MODE_INLINE, &identity, &scene) == SVG_PENDING && !scene);
+    p.pending = false;
+    CHECK(svg_scene_prepare(c, &cb, SVG_MODE_INLINE, &identity, &scene) == SVG_OK);
+    CHECK(svg_scene_release(c, scene) == SVG_OK);
+    CHECK(p.acquired == p.released);
+    CHECK(svg_destroy(c) == SVG_OK && !l.live);
+}
+static void boundaries(void)
+{
+    Ledger l = {0};
+    svg_options_t o = options(&l);
+    o.limits.input_bytes = 3;
+    svg_context_t *c = NULL;
+    CHECK(svg_create(&o, &c) == SVG_OK);
+    parse(c, "M0 0", SVG_LIMIT);
+    CHECK(svg_destroy(c) == SVG_OK && !l.live);
+    o = options(&l);
+    o.limits.work = 1024;
+    CHECK(svg_create(&o, &c) == SVG_OK);
+    char spaces[1101];
+    memset(spaces, ' ', sizeof(spaces) - 1);
+    spaces[1100] = 0;
+    parse(c, spaces, SVG_LIMIT);
+    svg_stats_t stats;
+    CHECK(svg_stats(c, &stats) == SVG_OK && stats.last_work <= 1024 && !stats.paths);
+    svg_path_t *p = parse(c, "M0 0", SVG_OK);
+    CHECK(svg_path_release(c, p) == SVG_OK);
+    CHECK(svg_destroy(c) == SVG_OK && !l.live);
+    o = options(&l);
+    o.limits.work = UINT64_MAX;
+    CHECK(svg_create(&o, &c) == SVG_OK);
+    char *text = malloc(4 * 4097 + 1);
+    CHECK(text);
+    memcpy(text, "M0 0", 4);
+    for (size_t i = 1; i < 4097; ++i)
+        memcpy(text + 4 * i, "L1 1", 4);
+    text[4 * 4097] = 0;
+    p = parse(c, text, SVG_OK);
+    free(text);
+    size_t count;
+    svg_path_commands(p, &count);
+    CHECK(count == 4097);
+    svg_geometry_t *g = NULL;
+    CHECK(svg_path_lower(c, p, &identity, .01, &g) == SVG_LIMIT && !g);
+    CHECK(svg_path_release(c, p) == SVG_OK);
+    CHECK(svg_destroy(c) == SVG_OK && !l.live);
+    o = options(&l);
+    o.limits.scene_nodes = 8;
+    CHECK(svg_create(&o, &c) == SVG_OK);
+    l.context = c;
+    Provider fake = provider(&l);
+    fake.nodes[2].next_sibling = 2;
+    fake.suppress = true;
+    svg_provider_t cb = callbacks(&fake);
+    svg_scene_t *scene = NULL;
+    /* Suppressed siblings still consume source work/node admission. */
+    CHECK(svg_scene_prepare(c, &cb, SVG_MODE_INLINE, &identity, &scene) == SVG_LIMIT && !scene);
+    CHECK(fake.acquired == fake.released);
+    CHECK(svg_destroy(c) == SVG_OK && !l.live);
+    c = context(&l);
+    Ledger other = {0};
+    svg_context_t *foreign = context(&other);
+    p = parse(c, "M1 2", SVG_OK);
+    CHECK(svg_path_release(foreign, p) == SVG_BAD_ARGUMENT);
+    CHECK(svg_path_lower(foreign, p, &identity, .01, &g) == SVG_BAD_ARGUMENT && !g);
+    CHECK(svg_path_release(c, p) == SVG_OK);
+    CHECK(svg_destroy(foreign) == SVG_OK && !other.live);
+    CHECK(svg_destroy(c) == SVG_OK && !l.live);
+}
+
+static svg_status_t pipeline(Ledger *l)
+{
+    svg_options_t o = options(l);
+    svg_context_t *c = NULL;
+    svg_status_t s = svg_create(&o, &c);
+    if (s != SVG_OK)
+        return s;
+    l->context = c;
+    svg_path_t *p = NULL;
+    svg_geometry_t *g = NULL;
+    svg_scene_t *scene = NULL;
+    svg_parse_result_t r;
+    const char *d = "M0 0A40 10 30 1 1 20 30zL10 10q4 5 6 7t8 9";
+    s = svg_path_parse(c, (svg_string_t){d, strlen(d)}, &p, &r);
+    if (s == SVG_OK)
+        s = svg_path_lower(c, p, &identity, .01, &g);
+    Provider fake = provider(l);
+    svg_provider_t cb = callbacks(&fake);
+    if (s == SVG_OK)
+        s = svg_scene_prepare(c, &cb, SVG_MODE_INLINE, &identity, &scene);
+    svg_scene_t *deep = NULL;
+    fake.chain = 24;
+    if (s == SVG_OK)
+        s = svg_scene_prepare(c, &cb, SVG_MODE_INLINE, &identity, &deep);
+    if (deep)
+        CHECK(svg_scene_release(c, deep) == SVG_OK);
+    if (scene)
+        CHECK(svg_scene_release(c, scene) == SVG_OK);
+    if (g)
+        CHECK(svg_geometry_release(c, g) == SVG_OK);
+    if (p)
+        CHECK(svg_path_release(c, p) == SVG_OK);
+    CHECK(fake.acquired == fake.released);
+    svg_stats_t stats;
+    CHECK(svg_stats(c, &stats) == SVG_OK);
+    CHECK(!stats.paths && !stats.geometries && !stats.scenes);
+    CHECK(stats.live_bytes == l->live);
+    CHECK(svg_destroy(c) == SVG_OK && !l->live);
+    l->context = NULL;
+    return s;
+}
+static void failures(void)
+{
+    Ledger success = {0};
+    CHECK(pipeline(&success) == SVG_OK);
+    for (size_t n = 1; n <= success.allocations; ++n) {
+        Ledger l = {.fail = n};
+        CHECK(pipeline(&l) == SVG_NO_MEMORY && !l.live);
+        l = (Ledger){.fail = n, .admission = true};
+        CHECK(pipeline(&l) == SVG_LIMIT && !l.live);
+    }
+    for (size_t n = 1; n <= success.polls; ++n) {
+        Ledger l = {.cancel = n};
+        CHECK(pipeline(&l) == SVG_CANCELLED && !l.live);
+    }
+    printf("Failure sweeps: %zu allocation cuts in both refusal modes, %zu cancellation cuts; peak "
+           "%zu bytes\n",
+           success.allocations, success.polls, success.peak);
+    Ledger l = {0};
+    svg_options_t o = options(&l);
+    o.limits.work = 0;
+    svg_context_t *c = NULL;
+    CHECK(svg_create(&o, &c) == SVG_LIMIT && !c && !l.live);
+    o = options(&l);
+    o.limits.path_commands = 1;
+    CHECK(svg_create(&o, &c) == SVG_OK);
+    parse(c, "M0 0L1 1", SVG_LIMIT);
+    CHECK(svg_destroy(c) == SVG_OK && !l.live);
+    o = options(&l);
+    o.limits.geometry_commands = 2;
+    CHECK(svg_create(&o, &c) == SVG_OK);
+    svg_path_t *p = parse(c, "M20 0A20 20 0 1 1 0 20", SVG_OK);
+    svg_geometry_t *g = NULL;
+    CHECK(svg_path_lower(c, p, &identity, .01, &g) == SVG_LIMIT && !g);
+    CHECK(svg_path_release(c, p) == SVG_OK);
+    CHECK(svg_destroy(c) == SVG_OK && !l.live);
+    o = options(&l);
+    o.limits.depth = 2;
+    CHECK(svg_create(&o, &c) == SVG_OK);
+    l.context = c;
+    Provider fake = provider(&l);
+    svg_provider_t cb = callbacks(&fake);
+    svg_scene_t *scene = NULL;
+    CHECK(svg_scene_prepare(c, &cb, SVG_MODE_INLINE, &identity, &scene) == SVG_LIMIT && !scene);
+    CHECK(fake.acquired == fake.released);
+    CHECK(svg_destroy(c) == SVG_OK && !l.live);
+}
+typedef struct {
+    unsigned maximum;
+    double total;
+} Difference;
+static Difference difference(const uint8_t *pixels, const uint8_t *oracle)
+{
+    Difference d = {0};
+    for (size_t i = 0; i < 64 * 64; ++i) {
+        unsigned delta = (unsigned)abs((int)pixels[i] - oracle[i]);
+        if (delta > d.maximum)
+            d.maximum = delta;
+        d.total += delta / 255.0;
+    }
+    return d;
+}
+static void backend(void)
+{
+    Ledger l = {0};
+    svg_context_t *c = context(&l);
+    svg_path_t *p = parse(c, "M52 32A20 20 0 1 1 12 32a20 20 0 1 1 40 0Z", SVG_OK);
+    const os64_geometry_backend_t *b = os64_freetype_geometry_v1();
+    os64_geometry_context_t *engine = NULL;
+    os64_geometry_options_t o = {.memory = {&l, allocate, release}, .max_work = 4000000};
+    CHECK(b->create(&o, &engine) == OS64_GEOMETRY_OK);
+    uint8_t oracle[64 * 64], pixels[64 * 64];
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x) {
+            int inside = 0;
+            for (int sy = 0; sy < 64; ++sy)
+                for (int sx = 0; sx < 64; ++sx) {
+                    double dx = x + (sx + .5) / 64 - 32, dy = y + (sy + .5) / 64 - 32;
+                    inside += dx * dx + dy * dy < 400;
+                }
+            oracle[y * 64 + x] = (uint8_t)((inside * 255 + 2048) / 4096);
+        }
+    os64_geometry_target_t target = {
+        .width = 64, .height = 64, .stride = 64, .capacity = sizeof(pixels), .pixels = pixels};
+    const double tolerances[] = {1.0 / 64, 1.0 / 1024, 1.0 / 4096};
+    size_t first_count = 0;
+    for (size_t precision = 0; precision < 3; ++precision) {
+        svg_geometry_t *g = NULL;
+        CHECK(svg_path_lower(c, p, &identity, tolerances[precision], &g) == SVG_OK);
+        size_t count;
+        const os64_geometry_command_t *commands = svg_geometry_commands(g, &count);
+        os64_geometry_outline_t *outline = NULL;
+        CHECK(b->path(engine, commands, count, &identity, 1.0 / 64, &outline) == OS64_GEOMETRY_OK);
+        memset(pixels, 0xcc, sizeof(pixels));
+        CHECK(b->raster(engine, outline, &identity, &target) == OS64_GEOMETRY_OK);
+        Difference d = difference(pixels, oracle);
+        printf("Parsed circle, arc tolerance %.9g, %zu commands: analytic coverage max %u/255, L1 "
+               "%.6f\n",
+               tolerances[precision], count, d.maximum, d.total);
+        CHECK(d.maximum <= 40 && d.total <= 10);
+        CHECK(pixels[32 * 64 + 32] == 255 && pixels[0] == 0);
+        if (!precision)
+            first_count = count;
+        if (precision == 2)
+            CHECK(count > first_count);
+        const os64_geometry_map_t wrong[] = {{1, 0, 0, 1, 1, 0}, {1.1, 0, 0, 1.1, -3.2, -3.2}};
+        for (size_t i = 0; i < 2; ++i) {
+            CHECK(b->raster(engine, outline, &wrong[i], &target) == OS64_GEOMETRY_OK);
+            Difference bad = difference(pixels, oracle);
+            CHECK(bad.maximum > 40 && bad.total > 10);
+        }
+        CHECK(b->release(engine, outline) == OS64_GEOMETRY_OK);
+        os64_geometry_map_t map = {4, 0, .25, 1, 0, 0};
+        os64_geometry_stroke_t stroke = {2, 4, OS64_GEOMETRY_ROUND_CAP, OS64_GEOMETRY_ROUND_JOIN};
+        CHECK(b->stroke(engine, commands, count, &map, 1.0 / 64, &stroke, &outline) ==
+              OS64_GEOMETRY_OK);
+        CHECK(b->release(engine, outline) == OS64_GEOMETRY_OK);
+        CHECK(svg_geometry_release(c, g) == SVG_OK);
+    }
+    /* An independent dense line polygon checks the coverage oracle and
+     * separates cubic raster approximation from arc parameter conversion. */
+    os64_geometry_command_t polygon[514] = {0};
+    for (size_t i = 0; i <= 512; ++i) {
+        polygon[i].verb = i ? OS64_GEOMETRY_LINE : OS64_GEOMETRY_MOVE;
+        polygon[i].p[0] = ellipse(32, 32, 20, 20, 0, 2 * PI * i / 512);
+    }
+    polygon[513].verb = OS64_GEOMETRY_CLOSE;
+    os64_geometry_outline_t *reference = NULL;
+    CHECK(b->path(engine, polygon, 514, &identity, 1.0 / 64, &reference) == OS64_GEOMETRY_OK);
+    CHECK(b->raster(engine, reference, &identity, &target) == OS64_GEOMETRY_OK);
+    Difference dense = difference(pixels, oracle);
+    printf("Independent 512-edge circle: analytic coverage max %u/255, L1 %.6f\n", dense.maximum,
+           dense.total);
+    CHECK(dense.maximum <= 8 && dense.total <= 2);
+    CHECK(b->release(engine, reference) == OS64_GEOMETRY_OK);
+    CHECK(b->destroy(engine) == OS64_GEOMETRY_OK);
+    CHECK(svg_path_release(c, p) == SVG_OK);
+    CHECK(svg_destroy(c) == SVG_OK && !l.live);
+}
+static void byte_fuzz(void)
+{
+    Ledger l = {0};
+    svg_context_t *c = context(&l);
+    unsigned state = 0x12345678;
+    const char alphabet[] = "MmLlHhVvCcSsQqTtAaZz0123456789+-.eE ,\n\t\0x";
+    for (size_t n = 0; n < 4000; ++n) {
+        char input[192];
+        size_t len = n % sizeof(input);
+        for (size_t i = 0; i < len; ++i) {
+            state = state * 1664525u + 1013904223u;
+            input[i] = alphabet[state % (sizeof(alphabet) - 1)];
+        }
+        if (len > 4)
+            memcpy(input, "M0 0", 4);
+        svg_path_t *p = NULL;
+        svg_parse_result_t result;
+        svg_status_t s = svg_path_parse(c, (svg_string_t){input, len}, &p, &result);
+        CHECK(s == SVG_OK || s == SVG_MALFORMED || s == SVG_LIMIT);
+        CHECK(result.offset <= len);
+        if (p) {
+            svg_geometry_t *g = NULL;
+            s = svg_path_lower(c, p, &identity, .01, &g);
+            CHECK(s == SVG_OK || s == SVG_LIMIT);
+            if (g)
+                CHECK(svg_geometry_release(c, g) == SVG_OK);
+            CHECK(svg_path_release(c, p) == SVG_OK);
+        }
+    }
+    CHECK(svg_destroy(c) == SVG_OK && !l.live);
+}
+int main(void)
+{
+    setvbuf(stdout, NULL, _IONBF, 0);
+    grammar();
+    arc_accuracy();
+    scenes();
+    failures();
+    boundaries();
+    backend();
+    byte_fuzz();
+    printf("SVG core: %zu checks passed\n", checks);
+    return 0;
+}

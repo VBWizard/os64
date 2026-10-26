@@ -25,7 +25,9 @@ The implementation must prove the geometry adapter before freezing its ABI.
 The [private geometry proof](SVG_GEOMETRY.md) records the first fixture,
 precision and allocation results. The [production adapter](SVG_GEOMETRY_BACKEND.md)
 and [comparison harness](SVG_REFTESTS.md) record their implemented contracts,
-measured limits and remaining gates. This design does not establish
+measured limits and remaining gates. The first [6b core increment](SVG_CORE.md)
+adds reusable paths and group/path scene preparation; Yonder painting remains
+integration work. This design does not establish
 performance or compatibility percentages.
 
 ## Library boundaries

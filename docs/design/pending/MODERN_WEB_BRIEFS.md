@@ -33,7 +33,10 @@ analytic capsule comparisons and an upstream empty-subpath fix. The
 caller-owned allocation, lifetime enforcement and work/cancellation limits.
 The [comparison harness](SVG_REFTESTS.md) adds selected browser/WPT captures,
 native comparisons and negative controls. Its supported profile and the two
-Chromium baseline failures remain explicit; slice 6a stays active.
+Chromium baseline failures remain explicit; the broad 6a reference gates stay active.
+The first [6b core increment](SVG_CORE.md) adds native path parsing, bounded
+arc conversion and group/path scene preparation with provider-owned snapshots.
+The static inline renderer stage remains active; Yonder painting is not built.
 
 Slice 5 follows Fable's 2026-10-21 design. Slice 6 follows Quinn's
 2026-10-25 revision of Fable's SVG design. Their documents are their
