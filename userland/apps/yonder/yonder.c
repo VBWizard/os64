@@ -1254,9 +1254,10 @@ typedef struct {
     // A text field's selection and libpage's record of it as each stood
     // when they were last in step, in UTF-16 code units of the value
     // (field_selection_push and _pull): whichever moved since then is the
-    // one that moved. Until one does they are left as they are, the field's
-    // caret where the widget put it and the record at 0, where HTML begins
-    // it: `record_seen` starts zeroed, which is that beginning, and
+    // one that moved. Until one does, or the person presses on the field or
+    // focuses it (field_selection_chosen), they are left as they are, the
+    // field's caret where the widget put it and the record at 0, where HTML
+    // begins it: `record_seen` starts zeroed, which is that beginning, and
     // `field_seen` is noted when the field is first seen (`seen`).
     FieldSelection field_seen, record_seen;
     bool seen;
@@ -7159,6 +7160,23 @@ static void field_selection_push(FormWidget *fw, bool written)
     field_selection_note(fw);
 }
 
+// The person chose this field's caret where it stands, whether or not it
+// moved (a press on it, or the focus brought to it): the next flush
+// publishes it. A field nobody has touched shows its caret at the value's
+// end while the record is at 0, and a click at that end moves nothing.
+static void field_selection_chosen(os64_ui_widget_t *w)
+{
+    for (int32_t i = 0; i < g.nfw; i++) {
+        FormWidget *fw = g.fw[i];
+        if (fw->w != w || (fw->kind != FW_TEXT && fw->kind != FW_PASSWORD))
+            continue;
+        if (!fw->seen)
+            field_selection_note(fw);
+        fw->field_seen.start = UINT32_MAX;
+        return;
+    }
+}
+
 // The record into the field: when it moved since the two were last in step
 // (a script set it, or a value set put it at the end), the caret moves with
 // it. A field not yet seen compares the record with where every record
@@ -12755,6 +12773,18 @@ static int64_t window_poll(void *user, int64_t handle, os64_gui_event_t *event)
     return yonder_event_batch_draining(&g.batch, event, event_poll, NULL, quarantine) ? 1 : 0;
 }
 
+// A person's event to libui: a press, or a focus it moves, chooses the
+// focused field's caret (field_selection_chosen). A script's focus() is
+// performed after its task (asks_perform), never inside this, and chooses
+// nothing.
+static void ui_dispatch(const os64_gui_event_t *ev)
+{
+    os64_ui_widget_t *had = g.ui.focus;
+    os64_ui_dispatch(&g.ui, ev);
+    if (ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN || g.ui.focus != had)
+        field_selection_chosen(g.ui.focus);
+}
+
 // One of yonder's window's events. The pointer is read before libui
 // because a widget is handed moves only while a button is held and the
 // status line follows its current position; the question bar answers by
@@ -12783,7 +12813,7 @@ static void window_event(void *user, const os64_gui_event_t *event)
                              cookies_use);
     else if (!bar_event(&ev) && !zoom_event(&ev) && !address_event(&ev) && !key_event(&ev) &&
              !password_key(&ev))
-        os64_ui_dispatch(&g.ui, &ev);
+        ui_dispatch(&ev);
     interface_font_finish();
     // What the event became, as DOM events, now libui is done with it.
     inputs_run();

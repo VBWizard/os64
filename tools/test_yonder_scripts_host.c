@@ -1967,6 +1967,28 @@ static void field_selection_hook(void) {
     probe_drop();
 }
 
+/* A press at the end of a field nobody has touched moves no caret (the
+ * widget shows it at the value's end, the record at 0), and is still the
+ * person's choice of it, which the focus listener reads. */
+static void field_selection_click(void) {
+    probe_page("<p id=out></p><input id=field value=hello>"
+        "<script>var f=document.getElementById('field');f.addEventListener('focus',function(){"
+        "document.getElementById('out').textContent=f.selectionStart+','+f.selectionEnd})</script>",true);
+    script_turn();
+    FormWidget *field=probe_field("field");
+    check(field->u.field.cursor==5,"selection click: an untouched field's caret is at its value's end");
+    g.root.bounds=g.view.bounds;
+    os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+    ev.mouse.x=field->w->bounds.x+field->w->bounds.w-2; ev.mouse.y=field->w->bounds.y+2;
+    ev.mouse.button=OS64_GUI_MOUSE_LEFT;
+    ui_dispatch(&ev); inputs_run();
+    ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
+    ui_dispatch(&ev); inputs_run();
+    check(g.ui.focus==field->w && field->u.field.cursor==5 && probe_text_is("out","5,5"),
+          "selection click: a press that moves no caret still publishes it");
+    probe_drop();
+}
+
 static void edit_and_kind_changes(void) {
     probe_page("<input id=field type=number><script>document.body.setAttribute('class','first');</script>"
         "<script>document.body.setAttribute('class','second');</script>",true);
@@ -10093,6 +10115,7 @@ int main(void)
     tick_cases();
     edit_and_kind_changes();
     field_selection_hook();
+    field_selection_click();
     password_edits();
     reset_editors();
     noscript_author_styles();

@@ -287,6 +287,11 @@ mutants = [
      '    size_t from = password_byte(fw, lo), to = password_byte(fw, hi);',
      '    size_t from = fw->secret_len + 0 * password_byte(fw, lo), to = fw->secret_len + 0 * password_byte(fw, hi);',
      (SCRIPTS,)),
+    ('hook-press-chooses-nothing', YONDER_C,
+     '    if (ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN || g.ui.focus != had)\n        field_selection_chosen(g.ui.focus);',
+     '    if (g.ui.focus != had && false)\n        field_selection_chosen(g.ui.focus);', (SCRIPTS,)),
+    ('hook-chosen-not-forced', YONDER_C, '        fw->field_seen.start = UINT32_MAX;\n        return;',
+     '        return;', (SCRIPTS,)),
     ('select-range-never-selects', UI_TEXT_C, '\ttf->selected = tf->anchor != tf->cursor;', '\ttf->selected = false;',
      (SCRIPTS,)),
 ]

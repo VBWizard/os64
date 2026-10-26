@@ -3907,6 +3907,14 @@ too. And `setRangeText` converted its offsets before its replacement,
 where WebIDL converts left to right. Three mutants for the new rules, each
 caught: the group is 29.
 
+**Codex, round 2**: one finding, fixed. A click at the end of a field
+nobody had touched moved no caret (the widget shows it at the value's end
+while the record is at 0), so nothing was published and the focus listener
+read 0. A press on a field, or a focus a person's event moves to it, is now
+the person's choice of its caret whether or not the caret moved, and the
+next flush publishes it; a script's `focus()` chooses nothing. Two mutants,
+each caught: the group is 31.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.
