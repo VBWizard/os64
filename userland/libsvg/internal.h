@@ -13,6 +13,7 @@ struct svg_context {
     svg_stats_t stats;
     Status why;
     bool busy;
+    uint64_t work_limit;
 };
 struct svg_path {
     Context *owner;
@@ -45,4 +46,6 @@ bool svg_map_valid(const Map *);
 bool svg_point_valid(Point);
 Status svg_parse(Context *, svg_string_t, svg_path_t **, svg_parse_result_t *);
 void svg_free_path(Context *, svg_path_t *);
+Status svg_lower(Context *, const svg_path_t *, const Map *, double, svg_geometry_t **);
+void svg_free_geometry(Context *, svg_geometry_t *);
 #endif

@@ -36,6 +36,8 @@ native comparisons and negative controls. Its supported profile and the two
 Chromium baseline failures remain explicit; the broad 6a reference gates stay active.
 The first [6b core increment](SVG_CORE.md) adds native path parsing, bounded
 arc conversion and group/path scene preparation with provider-owned snapshots.
+The [solid painter](SVG_PAINT.md) adds native fills, ordinary strokes and
+isolated element/group opacity, with analytic coverage and Chromium comparisons.
 The static inline renderer stage remains active; Yonder painting is not built.
 
 Slice 5 follows Fable's 2026-10-21 design. Slice 6 follows Quinn's

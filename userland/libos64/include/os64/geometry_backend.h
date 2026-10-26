@@ -83,6 +83,10 @@ typedef struct {
     uint32_t points, contours;
 } os64_geometry_outline_info_t;
 typedef struct {
+    bool empty;
+    double x_min, y_min, x_max, y_max;
+} os64_geometry_bounds_t;
+typedef struct {
     double origin_x, origin_y; /* Device coordinate of coverage pixel (0,0). */
     uint32_t width, height;
     size_t stride, capacity;
@@ -127,6 +131,14 @@ typedef struct {
      * required, including for singular maps. */
     os64_geometry_status_t (*raster)(os64_geometry_context_t *, const os64_geometry_outline_t *,
                                      const os64_geometry_map_t *, const os64_geometry_target_t *);
+    /* Optional v1 table tail: check struct_size before reading this member.
+     * Bounds enclose the transformed, quantized outline's control points,
+     * relative to the supplied device origin. These are conservative raster
+     * allocation bounds, not SVG geometric/object bounds. No allocation.
+     * Uses raster's precision/range checks and charges point visits. */
+    os64_geometry_status_t (*bounds)(os64_geometry_context_t *, const os64_geometry_outline_t *,
+                                     const os64_geometry_map_t *, double origin_x, double origin_y,
+                                     os64_geometry_bounds_t *);
 } os64_geometry_backend_t;
 
 /* Width zero produces an empty outline. ARCS joins and non-butt degenerate

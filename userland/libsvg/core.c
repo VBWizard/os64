@@ -26,7 +26,7 @@ bool svg_spend(Context *c, uint64_t amount)
         c->why = SVG_CANCELLED;
         return false;
     }
-    if (amount > c->options.limits.work - c->stats.last_work) {
+    if (amount > c->work_limit - c->stats.last_work) {
         c->why = SVG_LIMIT;
         return false;
     }
@@ -42,6 +42,7 @@ Status svg_enter(Context *c)
     c->busy = true;
     c->why = SVG_OK;
     c->stats.last_work = 0;
+    c->work_limit = c->options.limits.work;
     return SVG_OK;
 }
 Status svg_leave(Context *c, Status s)
@@ -120,7 +121,7 @@ Status svg_create(const svg_options_t *o, Context **out)
     *out = NULL;
     if (!o || !o->memory.alloc || !o->memory.free)
         return SVG_BAD_ARGUMENT;
-    Context temporary = {.options = *o, .busy = true};
+    Context temporary = {.options = *o, .busy = true, .work_limit = o->limits.work};
     Context *c = svg_alloc(&temporary, sizeof(*c));
     if (!c)
         return temporary.why;

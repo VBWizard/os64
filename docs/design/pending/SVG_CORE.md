@@ -2,6 +2,8 @@
 
 Status: first 6b increment, 2026-10-26, based on merged PR #360 at `d4846e3d`.
 This implements part of [SVG.md](SVG.md), not the complete static renderer.
+The subsequent [solid painter](SVG_PAINT.md) builds on these contracts;
+validation numbers below describe this foundation increment.
 
 ## Delivered boundary
 
@@ -100,8 +102,8 @@ attribute value into it.
 
 The caller supplies the resolved root viewport map. Shapes, nested viewport
 resolution, intrinsic sizes and CSS layout negotiation are outside this API's
-implemented profile. Solid fill/stroke values are retained, but there is no
-compositor or paint entry point. Unrepresentable active features must return
+implemented profile. Solid fill/stroke values are retained for the separate
+[paint entry point](SVG_PAINT.md). Unrepresentable active features must return
 `UNSUPPORTED`, not silently become solid colors or ordinary strokes.
 
 Mode is explicit at acquisition and styling. No fetch or resolver callback is
@@ -203,10 +205,10 @@ browser changes and keep the adapter changes localized; refresh the stack as
 its base merges so review diffs show each increment's work.
 
 Continue 6b with the native tree/style adapter, SVG computed properties and
-sizing, shapes, solid painting, strokes/dashes, use/symbol, viewports, clipping
-and group compositing. Paths and groups exist here as prepared data; there is
-no claim that they already paint in Yonder. Parsed-path interning, cache lookup,
-bounds, length/marker APIs and stroke-error control need their own evidence.
+sizing, shapes, dashes, use/symbol, viewports and clipping. The subsequent
+[solid painter](SVG_PAINT.md) consumes prepared paths/groups and isolates opacity;
+these do not yet paint in Yonder. Parsed-path interning, cache lookup,
+geometric bounds, length/marker APIs and stroke-error control need their own evidence.
 
 The first useful P5 checkpoint remains a real inline fixture page reaching
 Yonder's paint path. Full 6b completion is not a prerequisite for that checkpoint,
