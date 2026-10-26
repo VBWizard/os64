@@ -1,7 +1,7 @@
 # MODERN_WEB_BRIEFS.md — handing out the Modern Web slices
 
-Status: briefs for the slices of [MODERN_WEB.md](MODERN_WEB.md) that Opus
-builds, written 2026-10-21 by Fable the morning Chris opened the arc with
+Status: briefs for the slices of [MODERN_WEB.md](MODERN_WEB.md), with builders
+assigned below. Written 2026-10-21 by Fable the morning Chris opened the arc with
 a week's usage to spend and asked for the slices built side by side.
 MODERN_WEB.md stays the design and the acceptance; this file says what a
 builder who did not write that design needs in order to build one slice
@@ -23,13 +23,26 @@ MODERN_WEB.md and its brief here is struck.
 | 7 the bytecode cache | Opus | Chris | 0a |
 
 | 5a–5d relayout, the observer, the frame | Opus | Fable (5b's rule, 5c's graft), Chris | [RELAYOUT.md](RELAYOUT.md) is the brief; 5a after 0a, 5b/5c in sequence, 5d after 5c |
-| 6a–6c SVG | Opus | Fable (6b's door and backend verb), Chris | [SVG.md](SVG.md) is the brief; 6a after 0a, 6b after 0a's mark in libgarb, 6c after 6b |
+| 6a–6e SVG | Quinn | Fable (geometry and browser contracts), Chris | [SVG.md](SVG.md) and [XML.md](XML.md) are the briefs; 6a–6c scheduled, 6d/6e follow-on coverage; inline SVG does not wait for the XML parser |
 
-Slices 5 and 6 are Fable designs (2026-10-21) and their documents are
-their briefs: each names its cuts, the seams, the oracle and what is left
+The standalone XML foundation increment of 6a is built; its evidence and
+remaining shared-tree/geometry work are in XML.md's as-built section. Slice 6a
+as a whole remains active.
+
+Slice 5 follows Fable's 2026-10-21 design. Slice 6 follows Quinn's
+2026-10-25 revision of Fable's SVG design. Their documents are their
+briefs: each names its cuts, the interfaces, the oracle and what is left
 to the builder, so no second brief is written here. Slice 8 (generated
 content) shares libgarb with 4 and follows it; its brief is written when 4
 lands.
+
+**SVG sanitizer execution.** Keep LeakSanitizer enabled. If a sandbox run
+cannot attach to threads, diagnose with `LSAN_OPTIONS=verbosity=1:log_threads=1`
+and inspect the actual attachment error and `TracerPid`; the generic ptrace
+hint alone is not a diagnosis. Rerun the same binaries outside the sandbox
+through the approval mechanism with `ASAN_OPTIONS=detect_leaks=1`, retaining
+ASan/UBSan. Disable leak detection only if a supported leak-enabled run cannot
+be obtained, and record the missing leak evidence. Investigate actual leaks.
 
 ## What every slice does the same way
 

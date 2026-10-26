@@ -219,11 +219,13 @@ static bool accept(const os64_dom_response_t *response, char **source, size_t *l
         *why = "the module is not typed as JavaScript";
         return false;
     }
-    if (!response->has_body || response->body_length > SCRIPT_SOURCE_MAX) {
-        *why = response->has_body ? "the module is longer than a script may be" : "the module has no body";
+    if (response->has_body && response->body_length > SCRIPT_SOURCE_MAX) {
+        *why = "the module is longer than a script may be";
         return false;
     }
-    *source = yonder_script_decode(response->body, response->body_length, "utf-8", NULL, length);
+    // A successful answer with no body (204, 205) is an empty module.
+    *source = response->has_body ? yonder_script_decode(response->body, response->body_length, "utf-8", NULL, length)
+                                 : yonder_script_decode((const uint8_t *)"", 0, "utf-8", NULL, length);
     if (*source == NULL) {
         *why = "no memory for the module's source";
         return false;
