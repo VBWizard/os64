@@ -139,6 +139,11 @@
       "path": "patches/0012-module-compile-unresolved.patch",
       "sha256": "7e34763fd1e8455a55efe791f40819b9b6396d94700a0e9a1acceb5b522527a8",
       "reason": "Compile a module without resolving its imports (JS_EVAL_FLAG_NO_RESOLVE) and name what it imports (JS_GetModuleRequestCount/JS_GetModuleRequest), so a browser host can fetch a module graph before linking it; the pinned engine otherwise resolves through a synchronous loader at compile time. And make handled, telling the tracker, the rejected promise of a module body the engine takes as the module's error, which a host otherwise hears a second time as an unhandled rejection. And leave no module a failed resolve marked resolved, a cycle's members included, which a host whose modules outlive the failure (a page's module map) otherwise links through the NULL of the import never found or through the module the failure freed."
+    },
+    {
+      "path": "patches/0013-set-prototype-refused-shape.patch",
+      "sha256": "7a92f028e9e4c43e0ab3c39e49c6f681fe608b8da0c3ec600aa58ddc98768727",
+      "reason": "Give back the reference JS_SetPrototypeInternal takes on the new prototype when the object's shape copy is refused for memory; upstream returned -1 holding it, so the prototype was never freed and the runtime's teardown found it on its object list."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"
