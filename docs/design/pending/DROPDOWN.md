@@ -23,8 +23,7 @@ control is that: four options, one row, no way to see the others.
    the menu session runs on, so yonder must turn through it before it can
    own a popup.
 2. **`os64_ui_dropdown`** in libos64: a closed box (the chosen label and an
-   arrow) whose list opens as an owned popup. Waiting on a ruling
-   (§ Step 2's question).
+   arrow) whose list opens in a list mode of the menu session (§ Step 2).
 3. **yonder's one-line selects** (`multiple` absent, `size` 1 or absent)
    become dropdowns; a listbox stays a listbox.
 
@@ -42,7 +41,7 @@ claims its owner window's hook, and refuses an owner whose hook is taken.
 | Before | Through the dispatcher |
 |---|---|
 | `os64_gui_event_wait(g.win)` | `os64_gui_event_wait_any` over yonder's window, the Settings dialog and (step 2) popups, then `os64_ui_dispatcher_turn(false)` |
-| `yonder_event_batch_next`: at most `YONDER_EVENT_BATCH_MAX` events a batch, idle moves merged | the same function, unchanged, as yonder's window's poll in the dispatcher's backend (`os64_ui_dispatcher_native`, new, with `poll` replaced): the batch's end reads as an empty queue for the rest of the turn, and a lookahead it holds is the next turn's first event, so no sleep while one is held |
+| `yonder_event_batch_next`: at most `YONDER_EVENT_BATCH_MAX` events a batch, idle moves merged | the same function, unchanged, as yonder's window's poll in the dispatcher's backend (`os64_ui_dispatcher_native`, new, with `poll` replaced): the batch's end reads as an empty queue for the rest of the turn, and a lookahead it holds is the next turn's first event, so no sleep while one is held. Except during the dispatcher's quarantine (below) |
 | per event: hover, coverage, Settings, bar, zoom, address, keys, `os64_ui_dispatch`, `inputs_run` | the same chain, in yonder's event callback |
 | after the batch: relayout, the stream, coming, scripts, storage, cookies, pictures, title, paint, bells re-rung | after the turn, unchanged; the dispatcher's paint for yonder's window does nothing |
 | the bar armed only when the queue is empty, a lookahead event held | while the bar is disarmed the next turn does not sleep: the events it finds go to the disarmed bar, and a turn that finds none (and holds none) arms it |
@@ -51,6 +50,18 @@ claims its owner window's hook, and refuses an owner whose hook is taken.
 
 The relay thread has to go, not just become redundant: `event_wait_any`
 answers BUSY while another thread of the task waits on any of its windows.
+
+**The cap must not lift the quarantine** (Fable's review, DROPDOWN_REVIEW.md,
+found it in step 1 as built). After a window is destroyed the dispatcher
+quarantines its handle (`can_create` false) until every live entry's poll
+has answered empty since (Roam's D015, explorer/DECISIONS.md: drain
+surviving queues after destruction before new creation). A batch that ends at its cap answers empty with
+events still queued, so the quarantine lifted early, and the next popup
+could be made with the dead one's handle while a stale `WINDOW_FOCUS`
+naming it was still queued; the session would read that as focus
+returning from the family and dismiss the new list at birth. While the
+quarantine holds, the cap starts a new batch instead
+(`yonder_event_batch_draining`, events.h, a scripted-page host case).
 
 Unchanged: the bells (`os64_gui_event_ring` delivers an event to
 `g.win`, which wakes `wait_any` as it woke `wait`), the work pool, the
@@ -65,7 +76,19 @@ with Escape; httpbin's order form scrolled, submitted, its reply reloaded,
 the question bar asked and answered No; and the window closed, the log
 saying `leaving: the window was asked to close`.
 
-## Step 2's question: what carries a list longer than a menu
+## Step 2: a list mode in the menu session
+
+**Ruled D** (Chris, with Fable's review, 2026-10-26): the list is a second
+content kind in the menu session, cut as a seam in `ui_menu.c`, and the
+session's popup controller stays where it is. Quinn sees the cut before it
+is built: the file is Roam's. **The menu session is the owner window's
+popup controller, and a menu is one thing it carries; a dropdown's list is
+the second.** The name stays. DEBTS.md books the extraction of the
+controller for the day a third content kind arrives: today's second
+consumer earns the seam, a third would earn the split, and the seam makes
+that split cheap.
+
+### Why not the others
 
 The menu session cannot carry a select's list as it stands. Its sizes are
 a menu's: a model holds `OS64_UI_MENU_ENTRIES` (64) entries in fixed
@@ -81,9 +104,71 @@ scrolling (`ui_menu.c`'s `focus_event`, `owner_event`, `panel_event`).
 |---|---|---|
 | A. Through the session as it is | none | any select over 64 options (a fallback for longer lists means two controls) |
 | B. Raise the session's caps | allocation in place of the fixed arrays, through the model, popup and registry | nothing, but a menu system sized for menus is resized for data, and it is Roam's (Quinn's) |
-| C. The dropdown's own popup: a libui listbox in an owned popup window | small; the listbox has no cap | the session's dismissal rules, written a second time |
-| D. **A list mode in the session** (lean): `os64_ui_menu_open_list` with rows from a callback (label, enabled), a selected row, and a pick callback; no registry, no model, no cap | a second content kind in the session's popup, which draws rows it is handed | nothing; the dismissal rules stay in one place |
+| C. The dropdown's own popup: a libui listbox in an owned popup window | small; the listbox has no cap | more than the rules written twice: an owner window has ONE predispatch slot (`ui->menu_event`) and ONE boundary hook, and a menu session takes both and refuses an owner whose are taken. So a window could have a menu or a dropdown, never both; yonder has no menubar and would not notice, and the first dialog in Roam or Scribe with a dropdown would |
+| **D. A list mode in the session** (ruled): rows from a callback, a selected row, a pick callback; no registry, no model, no cap | about a day (below) | nothing; the dismissal rules stay in one place |
 
-The lean is D: one popup system, one set of dismissal rules, and the
-data-sized part (the rows) is the dropdown's. It changes `ui_menu.c`,
-which is Roam's, so it is Chris's to rule and Quinn's to see first.
+The kernel's contract already names this consumer: GUI_POPUPS.md
+§ Ownership and focus, "Cascades name the parent level; a dropdown names
+the document." B is the wrong vocabulary as well as the wrong size: the
+registry is actions, options are data, and raised caps would let a menu
+grow to 200 rows, which nothing wants.
+
+### What D costs
+
+- **A content seam, not a flag.** The session reads the model and the
+  action view where a list has neither: `menu_selectable` (selection,
+  activation, stepping, paging, reconciling, painting), the mnemonic scan
+  in `key_event`, `help`, `child` and `invoke`, `os64_ui_menu_open` (which
+  refuses no view) and `os64_ui_menu_close` (which releases it). It is cut
+  as a per-panel seam, count, selectable(i), label(i) and activate(i),
+  rather than an `if (list)` at a dozen sites, which the next content kind
+  would pay again. The mnemonic scan then gives a list first-letter
+  type-ahead for nothing, a row's mnemonic being its label's first letter,
+  and its cycling is HTML's select behaviour.
+- **Rows staged by viewport.** The popup widget lays every row of its
+  model out at open (`fit_text`, a `menu_row` of about 250 bytes each, in
+  `rows[64]`). The list kind keeps a window of rows the panel can show,
+  laid out as they scroll in, the listbox's rule (`ui_list.c`); the menu
+  kind keeps its whole-model array. The geometry (`row_h`, the viewport,
+  `os64_ui_popup_row`, `_hit`, `_select`, `_scroll`) is shared as it is.
+
+### Three contracts
+
+1. **The list closes when its anchor goes.** The session closes on the
+   owner's resize and close, lost input and focus; it cannot know when the
+   WIDGET under the list moves, hides or dies, and in yonder that happens
+   with no resize: `forms_build` destroys the widget of a node a script
+   replaced, `forms_place` hides one scrolled out of view, `relayout` moves
+   them all. The dropdown's destroy, its hide, and a change of its bounds
+   while open each close the list (GEOMETRY), and its destroy refuses when
+   the close is refused, the session's own BUSY-destroy rule, as
+   `os64_ui_menubar_destroy` does. Otherwise a replaced select leaves a
+   popup whose pick calls into freed memory.
+2. **The highlight is not the pick.** In an open list Up and Down move the
+   highlight; the value changes on Enter, Space or a click, and `change`
+   fires once, at the commit, as Chrome and Firefox do. The session already
+   separates them (`panel_select` the highlight, `activate` the commit,
+   `invoke` closing the family BEFORE the command runs), and the list's
+   pick callback fires where `invoke` does, after the close, with the
+   index. So yonder's `list_changed`, `os64_page_set_chosen` and `IN_LIST`
+   run once a commit, never once an arrow (the listbox yonder uses today
+   fires `on_change` on every arrow, which the natural first cut would
+   reuse).
+3. **The closed box's keys.** Focused and closed: Up and Down change the
+   value directly, `change` each time; Space, Enter and Alt+Down open the
+   list. A letter's jump waits for a consumer. These are the widget's,
+   not the session's, and they decide whether a keyboard can work the
+   shop's sort control at all.
+
+### Accepted for v1
+
+- The closed box wears the page's face at the page's zoom, as yonder's
+  form widgets do; the list draws in the interface face, unzoomed, as the
+  session's popups do. At 150% the box is larger than its list; Chrome
+  scales its popup and Firefox's does not.
+- A long list scrolls by the popup's arrow strips and the wheel, a classic
+  menu's way; a browser's select list has a scrollbar. A DEBTS row when
+  step 3 lands.
+- libpage's option list has no row for an optgroup's heading, so the list
+  is flat; an option a disabled optgroup holds is disabled (the row's
+  enabled flag carries it).

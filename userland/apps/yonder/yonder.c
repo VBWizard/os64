@@ -12389,14 +12389,17 @@ static int64_t event_poll(void *opaque, os64_gui_event_t *event)
 // The dispatcher's poll: yonder's own window a batch at a time
 // (yonder_event_batch_next, which bounds a turn's input and merges idle
 // motion), every other window as it comes. The batch's end reads as an
-// empty queue for the rest of the turn; a lookahead it holds is the next
-// turn's first event.
+// empty queue for the rest of the turn, except while the dispatcher
+// quarantines a destroyed window's handle, when the cap starts a new batch
+// and only a queue that is empty says so (yonder_event_batch_draining); a
+// lookahead the batch holds is the next turn's first event.
 static int64_t window_poll(void *user, int64_t handle, os64_gui_event_t *event)
 {
     (void)user;
     if (handle != g.win)
         return g.native.poll(g.native.user, handle, event);
-    return yonder_event_batch_next(&g.batch, event, event_poll, NULL) ? 1 : 0;
+    bool quarantine = !os64_ui_dispatcher_can_create(&g.dispatcher);
+    return yonder_event_batch_draining(&g.batch, event, event_poll, NULL, quarantine) ? 1 : 0;
 }
 
 // One of yonder's window's events. The pointer is read before libui

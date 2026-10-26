@@ -5559,6 +5559,21 @@ static void hover_batch_cases(void)
         index++;
     }
     check(index==queue.count,"hover burst: lookahead delivers every nonmerged event");
+    /* Read by a dispatcher (yonder_event_batch_draining): the cap answers
+     * "none" with events still queued, except while the dispatcher waits
+     * for every queue to drain after a destroy, when only an empty queue
+     * says so. Forty keys, none of which merge. */
+    os64_gui_event_t keys[40];
+    for(unsigned i=0;i<40;i++) keys[i]=(os64_gui_event_t){.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii=(uint8_t)('a'+i%26)}};
+    for(int quarantine=0;quarantine<2;quarantine++) {
+        queue=(HoverQueue){keys,40,0};
+        batch=(YonderEventBatch){0};
+        unsigned read=0;
+        while(yonder_event_batch_draining(&batch,&event,hover_poll,&queue,quarantine!=0)) read++;
+        check(quarantine ? read==40 && batch.drained : read==YONDER_EVENT_BATCH_MAX && !batch.drained,
+              quarantine ? "dispatcher batch: during a quarantine only an empty queue answers none"
+                         : "dispatcher batch: otherwise the cap ends the reading with the queue not drained");
+    }
 }
 
 #include <time.h>

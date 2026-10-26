@@ -46,4 +46,22 @@ static inline bool yonder_event_batch_next(YonderEventBatch *batch,
     }
     return true;
 }
+
+/* The batch read by a dispatcher (DROPDOWN.md § Step 1), whose poll takes
+ * a false answer for an EMPTY queue. Mostly the cap may end the reading
+ * early: the next turn reads on. But while the dispatcher QUARANTINES a
+ * destroyed window's handle (os64_ui_dispatcher_can_create false), it lifts
+ * the quarantine once every queue has answered empty, and a cap read as
+ * empty would lift it with events still queued, a stale one naming the dead
+ * handle among them. So during one, the cap starts a new batch instead:
+ * the quarantine is rare and must finish first, and the paint latency the
+ * cap is for is not owed by a turn that cannot make a window. */
+static inline bool yonder_event_batch_draining(YonderEventBatch *batch, os64_gui_event_t *event,
+                                               YonderEventPoll poll, void *opaque, bool quarantine)
+{
+    if (yonder_event_batch_next(batch, event, poll, opaque)) return true;
+    if (!quarantine || batch->drained) return false;
+    batch->consumed = 0;
+    return yonder_event_batch_next(batch, event, poll, opaque);
+}
 #endif
