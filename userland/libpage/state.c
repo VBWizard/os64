@@ -344,15 +344,15 @@ static const os64_html_node_t *tree_next(const os64_html_node_t *root,
 static const os64_html_node_t *node_owner(const os64_html_node_t *node)
 {
     const char *form = p_attr(node, "form");
-    if (form != NULL) {
-        const os64_html_node_t *root = tree_root(node);
-        // Explicit association is an ID lookup in the document tree.
-        if (root->kind == OS64_HTML_DOCUMENT)
-            for (const os64_html_node_t *at = root; at != NULL; at = tree_next(root, at)) {
-                const char *id = p_attr(at, "id");
-                if (id != NULL && os64_streq(id, form))
-                    return p_is(at, OS64_HTML_TAG_FORM) ? at : NULL;
-            }
+    const os64_html_node_t *root = tree_root(node);
+    // Explicit association is an ID lookup in the document tree, and an ID
+    // is never empty; a control in no document has its ancestor form.
+    if (form != NULL && root->kind == OS64_HTML_DOCUMENT) {
+        for (const os64_html_node_t *at = root; at != NULL && form[0] != '\0'; at = tree_next(root, at)) {
+            const char *id = p_attr(at, "id");
+            if (id != NULL && os64_streq(id, form))
+                return p_is(at, OS64_HTML_TAG_FORM) ? at : NULL;
+        }
         return NULL;
     }
     return node->form_owner != NULL ? node->form_owner : p_ancestor(node, OS64_HTML_TAG_FORM);
@@ -432,6 +432,36 @@ int64_t os64_page_node_set_checked(os64_page_state_t *state, const os64_html_nod
 no_memory:
     p_reserve_abort(&reserve);
     return -OS64_PAGE_REASON_NO_MEMORY;
+}
+
+int64_t os64_page_node_indeterminate(os64_page_state_t *state, const os64_html_node_t *node, bool *on)
+{
+    os64_page_element_t element;
+    os64_page_input_t input;
+    if (on == NULL || !node_kind(state, node, &element, &input) || element != OS64_PAGE_EL_INPUT)
+        return -OS64_PAGE_REASON_WRONG_KIND;
+    const PNodeState *edit = p_state_find(state, node);
+    *on = edit != NULL && edit->indeterminate;
+    return 0;
+}
+
+int64_t os64_page_node_set_indeterminate(os64_page_state_t *state, const os64_html_node_t *node, bool on)
+{
+    bool before;
+    if (os64_page_node_indeterminate(state, node, &before) < 0)
+        return -OS64_PAGE_REASON_WRONG_KIND;
+    if (before == on)
+        return 0;
+    PReserve reserve = {.state = state};
+    if (!p_reserve_node(&reserve, node)) {
+        p_reserve_abort(&reserve);
+        return -OS64_PAGE_REASON_NO_MEMORY;
+    }
+    p_reserve_commit(&reserve);
+    p_state_find(state, node)->indeterminate = on;
+    p_state_publish(state);
+    p_state_changed(state);
+    return 0;
 }
 
 static bool option_selected(os64_page_state_t *state, const os64_html_node_t *option)
@@ -2180,6 +2210,7 @@ os64_html_node_t *os64_page_node_clone(os64_page_state_t *state,
                 fresh->on = checked ? 1 : 0;
                 fresh->on_dirty = old != NULL && old->on_dirty;
                 fresh->on_attr = p_has_attr(target, "checked");
+                fresh->indeterminate = old != NULL && old->indeterminate;
             }
             bool dirty = old != NULL && old->text != NULL && !old->text_clean;
             if (input && (p_value_is_attribute(element, type) || type == OS64_PAGE_INPUT_FILE))

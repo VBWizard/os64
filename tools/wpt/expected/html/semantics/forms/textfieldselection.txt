@@ -7,9 +7,8 @@
 # selection, setRangeText and the select event. Each fails with the
 # switch off; the passes not listed here pass either way. What still
 # fails: onselect (the handler mask, DEBTS.md), requestAnimationFrame
-# (slice 5d), a clamp with no read between a shrink and a regrowth, a
-# textarea's defaultValue (P3), form.reset() run by the host after the
-# task, and testdriver's actions.
+# (slice 5d), a clamp with no read between a shrink and a regrowth,
+# form.reset() run by the host after the task, and testdriver's actions.
 defaultSelection.html	Default selectionStart and selectionEnd for [object HTMLInputElement]
 defaultSelection.html	Default selectionStart and selectionEnd for [object HTMLTextAreaElement]
 defaultSelection.html	selectionStart and selectionEnd change when value changed to upper case for [object HTMLInputElement]
@@ -398,6 +397,21 @@ textfieldselection-setSelectionRange.html	textarea setSelectionRange(true,1)
 textfieldselection-setSelectionRange.html	textarea setSelectionRange(undefined,1)
 textfieldselection-setSelectionRange.html	textarea setSelectionRange({},1)
 textfieldselection-setSelectionRange.html	textarea typeof(input.setSelectionRange)'
+# 0f's P3a (MODERN_WEB.md § 0f's P3a, as built): the controls' reflections
+# and state, form and labels. Each fails with the switch off; the passes
+# not listed here pass either way.
+selection-start-end-extra.html	Setting defaultValue in a textarea should NOT move the cursor to the end
+selection-start-end-extra.html	Setting value to a shorter string than defaultValue should correct the cursor position
+selection-value-interactions.html	value dirty flag behavior after setRangeText on focused input
+selection-value-interactions.html	value dirty flag behavior after setRangeText on focused textarea
+selection-value-interactions.html	value dirty flag behavior after setRangeText on focused then blurred input
+selection-value-interactions.html	value dirty flag behavior after setRangeText on focused then blurred textarea
+selection-value-interactions.html	value dirty flag behavior after setRangeText on input in body
+selection-value-interactions.html	value dirty flag behavior after setRangeText on input in body with parsed default value
+selection-value-interactions.html	value dirty flag behavior after setRangeText on input not in body
+selection-value-interactions.html	value dirty flag behavior after setRangeText on textarea in body
+selection-value-interactions.html	value dirty flag behavior after setRangeText on textarea in body with parsed default value
+selection-value-interactions.html	value dirty flag behavior after setRangeText on textarea not in body
 [excluded]
 [passing]
 defaultSelection.html	Default selectionStart and selectionEnd for [object HTMLInputElement]
@@ -689,14 +703,26 @@ selection-not-application.html?week,month	setSelectionRange on an input[type=url
 selection-not-application.html?week,month	setSelectionRange on an input[type=week] throws InvalidStateError
 selection-start-end-extra.html	Adding children to a textarea should NOT move selection{Start,End} to the end
 selection-start-end-extra.html	Removing children from a textarea should NOT update selection{Start,End}
+selection-start-end-extra.html	Setting defaultValue in a textarea should NOT move the cursor to the end
 selection-start-end-extra.html	Setting defaultValue in a textarea with a value should NOT make any difference
 selection-start-end-extra.html	Setting textContent in a textarea should NOT move selection{Start,End} to the end
 selection-start-end-extra.html	Setting the same value (with different newlines) in a textarea should NOT update selection{Start,End}
+selection-start-end-extra.html	Setting value to a shorter string than defaultValue should correct the cursor position
 selection-start-end-extra.html	Shortening value by turning the input type into 'url' should correct selection{Start,End}
 selection-value-interactions.html	selection is collapsed to the end after changing values on input
 selection-value-interactions.html	selection is collapsed to the end after changing values on textarea
 selection-value-interactions.html	selection is not collapsed to the end when value is set to its existing value on input
 selection-value-interactions.html	selection is not collapsed to the end when value is set to its existing value on textarea
+selection-value-interactions.html	value dirty flag behavior after setRangeText on focused input
+selection-value-interactions.html	value dirty flag behavior after setRangeText on focused textarea
+selection-value-interactions.html	value dirty flag behavior after setRangeText on focused then blurred input
+selection-value-interactions.html	value dirty flag behavior after setRangeText on focused then blurred textarea
+selection-value-interactions.html	value dirty flag behavior after setRangeText on input in body
+selection-value-interactions.html	value dirty flag behavior after setRangeText on input in body with parsed default value
+selection-value-interactions.html	value dirty flag behavior after setRangeText on input not in body
+selection-value-interactions.html	value dirty flag behavior after setRangeText on textarea in body
+selection-value-interactions.html	value dirty flag behavior after setRangeText on textarea in body with parsed default value
+selection-value-interactions.html	value dirty flag behavior after setRangeText on textarea not in body
 selection.html	test SelectionDirection for input
 selection.html	test SelectionDirection for textarea
 selection.html	test SelectionEnd offset for input that is  not appended

@@ -3915,6 +3915,95 @@ the person's choice of its caret whether or not the caret moved, and the
 next flush publishes it; a script's `focus()` chooses nothing. Two mutants,
 each caught: the group is 31.
 
+**Codex, round 3**: clean.
+
+### 0f's P3a, as built
+
+P3's first PR (INTERFACES_FORMS.md § P3): the members of input, textarea,
+select and button. The form, fieldset, label, legend and output, and the
+form's collections, are P3b's.
+
+- **The reflections are one table** (libdom `controls.c`). Most of what the
+  four controls add is a content attribute an IDL attribute reflects by
+  one of HTML's rules (§ 2.6.1): a string; a URL, read resolved, and as
+  written when it does not resolve; a boolean; an enumerated attribute,
+  read as its canonical keyword, ASCII case-blind, with a missing and an
+  invalid default of its own; and the integers, each with its default and
+  its answer to a value out of range (a negative `maxLength` set throws, a
+  zero `size` set throws, a zero `cols` set takes the default). A row is a
+  member, its attribute, its rule and the interfaces it is on, and one
+  accessor reads them all, so a member called on another interface is a
+  TypeError, as WebIDL's brand check is. `formAction` reads the document's
+  URL when its attribute is missing or empty. `name`, `type`, `value` and
+  select's `multiple` and `size` were every page's or P1a's already.
+- **The members that are no plain reflection**: textarea's `defaultValue`
+  (its child text, set as textContent is) and `textLength` (code units of
+  its value); `autocomplete`, read through HTML's autofill grammar
+  (`section-*`, shipping or billing, a contact kind for a contact field, the
+  field, `webauthn`; `on` and `off` alone, but not on a hidden input), its
+  tokens lowercased; an image button's `width` and `height`, which are its
+  attributes here and 0 on any other input (DEBTS.md); each control's
+  `form`, its form owner; and `labels`, a live NodeList made once, of the
+  labels in the control's tree whose labeled control it is, that tree's
+  root included, so a label holding a control in no document labels it.
+  `d_label_control` is HTML's labeled control, which P3b's
+  `label.control` will answer from.
+- **`indeterminate`** is libpage's (`os64_page_node_set_indeterminate`): a
+  flag with no attribute, which a clone copies (WPT's `cloning-steps.html`
+  says so where memory said otherwise). A click clears a checkbox's, a
+  person's in yonder and a script's `click()` alike, and a cancelled click
+  puts it back with the box. yonder draws it as a bar across the box, on a
+  checkbox and on no radio, through libui's checkbox's new third look.
+- **The form owner's rules**, which WPT's `form_attribute.html` caught: no
+  ID is empty, so `form=""` names no form, even beside a form whose id is
+  empty; and a control in no document belongs to its ancestor form
+  whatever its form attribute says. libdom's `d_form_owner` and libpage's
+  radio groups follow both; libpage's model already did, since its map of
+  IDs holds no empty one.
+
+**Numbers.**
+
+- **WPT**: `html/dom/reflection-forms.html`, excluded until this phase,
+  5,776 of 8,817, 2,095 of them `[required]`; four directories added to
+  `tools/wpt_fetch.sh`, each with its `[required]` the passes that fail
+  with the switch off: `form-control-infrastructure` 0 → 66 of 121,
+  `the-textarea-element` 8 → 30 of 42, `the-button-element` 19 → 20 of 111,
+  `the-label-element` 47 → 52 of 169; and P2's two, `the-input-element`
+  842 → 916 of 2,000 and `textfieldselection` 449 → 461. Every page runs:
+  the plan's exclusions by name (pickers, `commandfor`, testdriver's
+  clicks) are not needed, since each reaches a verdict. The other 40
+  directories with expectations lose nothing. What still fails
+  in P3a's scope: the reflection pages' `"\0"` cases (a string the binding
+  is handed loses its U+0000) and two `formAction` defaults that WPT's
+  harness judges by `localName`, which Element lacks (both DEBTS.md); the
+  rest is P3b's (`htmlFor`, `label.control`, fieldset, output, the form's
+  members), P4's validity, or no interface's (meter, progress, object).
+- **Hosts**, 0 failed: libpage 254,183 (indeterminate: default, published,
+  the revision, a clone, a person's tick of a checkbox and not a radio, a
+  script's checked set; and the empty form attribute in the model and a
+  radio group); DOM 15,771 and 108,157 (every rule of the table, the
+  brand check, defaultValue, textLength, indeterminate through a click and
+  a cancelled one, autocomplete's grammar, width and height, form by
+  ancestor and attribute, labels live and in tree order, and with the
+  switch off none of them); scripted page 8,201 (the bar drawn on a
+  checkbox and no radio, a person's click clearing it, a cancelled one
+  putting it back); yonder 2,028; libui's text 152 and 1,645 (the
+  checkbox's third look, set without its callback and cleared by a click);
+  appearance passes.
+- **Mutants** (`tools/test_interfaces_mutants.py`, its P3a group): 32,
+  each caught. One was first missed: libui's checkbox clearing its own
+  third look on a click, which yonder's sync from the model clears again
+  after it, so no yonder case could see it; libui's text host holds it
+  now, and the harness runs a Python suite with its flags. A 33rd was
+  dropped as no mutant at all: a guard in the model's form owner against
+  an empty ID, which its map of IDs never holds; the guard went with it.
+- **QEMU**: a served page with two checkboxes and a radio made
+  indeterminate by script, a field and its label: the bar drawn on both
+  checkboxes and not the radio; the page reading `maxLength`, `labels`,
+  `form` and `size` as written; Tab and Space on the first box tick it,
+  clear the bar, and its change listener reads `checked=true
+  indeterminate=false`.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.

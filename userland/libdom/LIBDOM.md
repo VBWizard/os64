@@ -1406,3 +1406,17 @@ for HTMLCollection's, which it inherits (INTERFACES_FORMS.md § P1b).
 factory function: its `prototype` is HTMLOptionElement's, and every
 argument is converted before the option is made. A select's own indices
 (`select[0]`) are a DEBTS.md row (§ Classic browser scripting).
+
+**The controls row** (`controls.c`, naming nothing on window): input's,
+textarea's, select's and button's reflections, as one table of rows, each
+a member, its content attribute, which of HTML's reflection rules reads
+it (string, URL, boolean, enumerated with its missing and invalid
+defaults, and the integer kinds with their defaults and range errors) and
+the interfaces it is on; one accessor reads every row, and a row's member
+called on another interface is a TypeError. Beside them textarea's
+`defaultValue` and `textLength`, `autocomplete` through HTML's autofill
+grammar, input's `width`, `height` and `indeterminate` (libpage's
+`os64_page_node_set_indeterminate`), and every control's `form`
+(`d_form_owner`) and `labels`: a live NodeList made once (the collection
+kind LABELS), of the labels whose labeled control (`d_label_control`) the
+control is, walked from its tree's root.

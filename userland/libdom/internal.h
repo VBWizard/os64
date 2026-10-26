@@ -86,6 +86,8 @@ struct DValue {
     DQuery *child_nodes, *children, *images, *forms, *elements;
     /* A select's options and selectedOptions, each made once ([SameObject]). */
     DQuery *options, *selected_options;
+    /* A labelable element's labels, made once ([SameObject]). */
+    DQuery *labels;
     DListener *listeners, *last_listener;
     /* The document the node was made in, copied from or last taken out of,
      * when that is not the window's (implementation.c); NULL is the
@@ -658,9 +660,11 @@ enum {
 };
 /* OPTIONS and SELECTED_OPTIONS are a select's list of options (libpage's
  * walk, os64_page_option_next) and the ones of it that are selected; the
- * second also changes with control state, not only with the tree. */
+ * second also changes with control state, not only with the tree. LABELS
+ * are the labels whose labeled control is the query's owner, walked from
+ * the root of the owner's tree, that root included (d_labels). */
 enum { D_QUERY_GENERIC, D_QUERY_IMAGES, D_QUERY_FORMS, D_QUERY_CONTROLS, D_QUERY_DOCUMENT_NAMES,
-       D_QUERY_CLASSES, D_QUERY_NAME, D_QUERY_OPTIONS, D_QUERY_SELECTED_OPTIONS };
+       D_QUERY_CLASSES, D_QUERY_NAME, D_QUERY_OPTIONS, D_QUERY_SELECTED_OPTIONS, D_QUERY_LABELS };
 bool d_named_match(const os64_html_node_t *node, const char *name);
 bool d_classic_match(const os64_html_node_t *root, const os64_html_node_t *node, unsigned kind);
 JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root, unsigned kind, const char *named);
@@ -1019,6 +1023,21 @@ int d_options_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* The text controls' selection members and the window's Selection
  * (selection.c, 0f's P2 core). */
 int d_selection_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* `len` bytes of UTF-8 in UTF-16 code units, the unit a script counts a
+ * string's length in (selection.c). */
+uint32_t d_utf16_length(const char *text, size_t len);
+/* The controls' reflections and state: input's, textarea's, select's and
+ * button's (controls.c, 0f's P3a). */
+int d_controls_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* A label's labeled control (HTML § 4.10.4): the labelable element its
+ * `for` names, when the first element of its tree with that ID is one;
+ * without `for`, its first labelable descendant. NULL for none, or for a
+ * node that is not an HTML label. */
+const os64_html_node_t *d_label_control(const os64_html_node_t *label);
+/* A labelable element's labels (controls.c's `labels`): a live NodeList,
+ * made once, of the labels in its tree whose labeled control it is
+ * (collection.c). */
+JSValue d_labels(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *control);
 /* HTMLScriptElement.supports (importmap.c). */
 int d_import_map_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* HTMLOptionsCollection's indexed setter (HTML § 2.6.2.2), for the

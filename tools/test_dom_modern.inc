@@ -56,14 +56,11 @@ static void modern_names_free(char **names, size_t n)
 
 /* The shape of the binding's prototype chains, for nodes of every kind it
  * tells apart: for each, each level down to Object.prototype, as the names
- * the binding put there, leaving out what the table's rows add to them
- * (each prototype's `constructor` and Node's constants, the interface
- * row's; onscroll, onresize and the document's scrollingElement, the
- * view's; its defaultView, getComputedStyle's; the document's onerror, the
- * error row's; P1-Da's members of a document's prototype, which the
- * document row puts there and window never sees, left out of a document's
+ * the binding put there, leaving out what the table's rows add to them:
+ * the `row` pattern names those, and `documentRow` the members the
+ * document row puts on a document's prototype, left out of a document's
  * levels alone, since an element's hidden, dir and title are its own and
- * every page's; Symbol.toStringTag is a symbol, which no list of names
+ * every page's (Symbol.toStringTag is a symbol, which no list of names
  * holds).
  * malloc'd; NULL when the script did not run. */
 static char *modern_chain_shape(DomFixture *f)
@@ -76,7 +73,10 @@ static char *modern_chain_shape(DomFixture *f)
         "document.doctype,document.implementation,document.implementation.createHTMLDocument('')];"
         "var row=/(^constructor$|_NODE$|^DOCUMENT_POSITION_|^onscroll$|^onresize$|^scrollingElement$|^defaultView$"
         "|^onerror$|^getRootNode$|^wholeText$|^splitText$|^selectionStart$|^selectionEnd$|^selectionDirection$"
-        "|^setSelectionRange$|^select$|^setRangeText$|^content$)/;"
+        "|^setSelectionRange$|^select$|^setRangeText$|^content$"
+        "|^(accept|alt|autocomplete|defaultChecked|defaultValue|dirName|disabled|formAction|formEnctype|formMethod"
+        "|formNoValidate|formTarget|height|indeterminate|max|maxLength|min|minLength|multiple|pattern|placeholder"
+        "|readOnly|required|size|src|step|width|align|useMap|form|labels)$)/;"
         "var documentRow=/^(readyState|onreadystatechange|visibilityState|hidden|onvisibilitychange|referrer|"
         "activeElement|hasFocus|currentScript|title|prerendering|onprerenderingchange|domain|URL|documentURI|"
         "wasDiscarded|compatMode|dir|characterSet|charset|inputEncoding|contentType|lastModified|rootElement|"
@@ -233,6 +233,100 @@ static void dom_modern_cases(void)
         "assert(a.value==='Zbc'&&a.textContent==='abc','a textarea, its children untouched');"
         "a.textContent='new';assert(a.value==='Zbc','and its value dirty: a new default does not reach it');",
         "modern-on-range-text");
+    /* 0f's P3a: the controls' reflections, by each of HTML's rules, and the
+     * members that are no plain reflection. */
+    dom_script(&f, MODERN_ASSERT
+        "var i=document.createElement('input'),b=document.createElement('button'),"
+        "t=document.createElement('textarea'),s=document.createElement('select'),bad;"
+        /* a string, a boolean, and a boolean whose attribute is another name */
+        "assert(i.placeholder===''&&!i.required&&!i.readOnly,'defaults');"
+        "i.placeholder=null;assert(i.getAttribute('placeholder')==='null','a string converts null');"
+        "i.readOnly=1;assert(i.getAttribute('readonly')===''&&i.readOnly,'on');i.readOnly=0;"
+        "assert(!i.hasAttribute('readonly'),'off');"
+        "i.setAttribute('checked','');assert(i.defaultChecked&&i.checked,'defaultChecked reads checked');"
+        "i.defaultValue='dv';assert(i.getAttribute('value')==='dv'&&i.value==='dv','defaultValue is the value attribute');"
+        "assert(s.disabled===false&&(s.disabled=true,s.hasAttribute('disabled'))&&b.disabled===false,'every control');"
+        /* enumerated */
+        "assert(i.formMethod===''&&i.formEnctype==='','missing is empty');"
+        "i.setAttribute('formmethod','POST');assert(i.formMethod==='post','canonical');"
+        "i.setAttribute('formmethod','dialog');assert(i.formMethod==='get','an input has no dialog');"
+        "b.setAttribute('formmethod','DiAlOg');assert(b.formMethod==='dialog','a button has');"
+        "i.formEnctype='nonsense';assert(i.getAttribute('formenctype')==='nonsense'&&"
+        "i.formEnctype==='application/x-www-form-urlencoded','invalid');"
+        "i.setAttribute('formenctype','text/PLAIN');assert(i.formEnctype==='text/plain');"
+        /* URLs, and formAction's document URL */
+        "assert(i.formAction===document.URL&&i.src==='','missing');"
+        "i.setAttribute('formaction','');assert(i.formAction===document.URL,'empty');"
+        "i.formAction='http://h.test/a/../go?x';assert(i.formAction==='http://h.test/go?x','parsed');"
+        "i.src='/go';assert(i.src==='/go','as written where it does not resolve (about:blank)');"
+        /* limited long */
+        "assert(i.maxLength===-1&&t.minLength===-1,'default -1');"
+        "i.setAttribute('maxlength',' 7x');assert(i.maxLength===7,'leading space, trailing junk');"
+        "i.setAttribute('maxlength','-1');assert(i.maxLength===-1,'negative');"
+        "i.setAttribute('maxlength','-0');assert(i.maxLength===0,'minus zero');"
+        "i.setAttribute('maxlength','2147483648');assert(i.maxLength===-1,'past the range');"
+        "i.setAttribute('maxlength','\\u000B7');assert(i.maxLength===-1,'a vertical tab is no space');"
+        "bad=false;try{i.maxLength=-2}catch(x){bad=x.name==='IndexSizeError'}assert(bad,'a negative set throws');"
+        "i.maxLength=12;assert(i.getAttribute('maxlength')==='12');"
+        /* limited unsigned long, and the one with fallback */
+        "assert(i.size===20,'size 20');i.setAttribute('size','0');assert(i.size===20,'zero is out of range');"
+        "bad=false;try{i.size=0}catch(x){bad=x.name==='IndexSizeError'}assert(bad,'zero throws');"
+        "i.size=2147483648;assert(i.getAttribute('size')==='20','past the range sets the default');"
+        "assert(t.cols===20&&t.rows===2,'cols and rows');t.cols=0;assert(t.getAttribute('cols')==='20','fallback, no throw');"
+        "t.rows=5;assert(t.rows===5);"
+        /* a member of one interface is not another's */
+        "assert(!('formAction' in t)&&!('cols' in i)&&!('maxLength' in s)&&'required' in s&&!('required' in b));"
+        "bad=false;try{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'accept').get.call(t)}"
+        "catch(x){bad=x instanceof TypeError}assert(bad,'the brand is checked');"
+        /* textarea's defaultValue and textLength */
+        "t.appendChild(document.createTextNode('ab'));t.appendChild(document.createElement('b')).textContent='zz';"
+        "t.appendChild(document.createTextNode('c'));"
+        "assert(t.defaultValue==='abc','child text, not descendants');"
+        "t.defaultValue='\\u{1F600}x';assert(t.childNodes.length===1&&t.value==='\\u{1F600}x'&&t.textLength===3,"
+        "'replaced; textLength counts code units');"
+        "t.defaultValue=null;assert(t.textContent==='null','DOMString, not nullable');"
+        /* indeterminate: no attribute, and a click clears it */
+        "var c=document.createElement('input');c.type='checkbox';assert(c.indeterminate===false);"
+        "c.indeterminate=true;assert(c.indeterminate&&!c.hasAttribute('indeterminate'),'no attribute');"
+        "c.click();assert(!c.indeterminate&&c.checked,'a click clears it');"
+        "c.indeterminate=true;c.addEventListener('click',e=>e.preventDefault());c.click();"
+        "assert(c.indeterminate&&c.checked,'a cancelled click puts it back');"
+        "assert(c.cloneNode().indeterminate===true,'a clone copies it');"
+        /* autocomplete: the grammar's tokens, lowercased */
+        "assert(i.autocomplete==='','missing');i.autocomplete='OFF';assert(i.autocomplete==='off');"
+        "i.setAttribute('autocomplete',' section-a  Shipping work EMAIL ');"
+        "assert(i.autocomplete==='section-a shipping work email','the grammar');"
+        "i.setAttribute('autocomplete','work name');assert(i.autocomplete==='','a contact kind for a field that is none');"
+        "i.setAttribute('autocomplete','nonsense');assert(i.autocomplete==='');"
+        "var h=document.createElement('input');h.type='hidden';h.autocomplete='on';assert(h.autocomplete==='','no on for a hidden one');"
+        /* width and height: an image button's, else 0 */
+        "i.setAttribute('width','40');assert(i.width===0,'a text input has no image');"
+        "i.type='image';assert(i.width===40&&i.height===0);i.height=7;assert(i.getAttribute('height')==='7');"
+        /* form, and labels */
+        "var f=document.createElement('form');f.id='theform';document.body.appendChild(f);"
+        "var x=document.createElement('input');f.appendChild(x);assert(x.form===f,'its ancestor form');"
+        "var y=document.createElement('textarea');y.setAttribute('form','theform');document.body.appendChild(y);"
+        "assert(y.form===f&&s.form===null,'by its form attribute; none');"
+        "x.id='xid';var l1=document.createElement('label');l1.setAttribute('for','xid');"
+        "var l2=document.createElement('label');l2.appendChild(document.createElement('span')).appendChild(x);"
+        "f.appendChild(l2);f.appendChild(l1);var ls=x.labels;"
+        "assert(ls===x.labels&&ls instanceof NodeList&&ls.length===2&&ls[0]===l2&&ls[1]===l1,'both, in tree order');"
+        "l1.setAttribute('for','other');assert(ls.length===1,'live');"
+        "var z=document.createElement('input');l2.insertBefore(z,l2.firstChild);assert(ls.length===0&&z.labels.length===1,"
+        "'a label labels its first labelable descendant');"
+        "z.type='hidden';assert(z.labels===null,'a hidden input has none');"
+        "var lone=document.createElement('label'),inner=document.createElement('select');lone.appendChild(inner);"
+        "assert(inner.labels.length===1&&inner.labels[0]===lone,'a tree no document holds, its root a label');"
+        "var d=document.createElement('div');d.id='twice';var w=document.createElement('input');w.id='twice';"
+        "var lf=document.createElement('label');lf.setAttribute('for','twice');document.body.append(lf,d,w);"
+        "assert(w.labels.length===0,'for names the first element with the ID, which is no control');"
+        /* the form owner's rules: no ID is empty, and a form attribute is read only in a document */
+        "var ef=document.createElement('form');ef.id='';document.body.appendChild(ef);"
+        "var eb=document.createElement('button');eb.setAttribute('form','');ef.appendChild(eb);"
+        "assert(eb.form===null,'an empty form attribute names nothing');"
+        "var df=document.createElement('form'),di=document.createElement('input');di.setAttribute('form','theform');"
+        "df.appendChild(di);assert(di.form===df,'out of a document, its ancestor whatever the attribute says');",
+        "modern-on-controls");
     /* The select event a set queues: a task of its own, which the host runs
      * (a binding timer due at once); trusted, bubbling, not cancelable; and
      * none for a set that moves nothing. The cases before this one queued
@@ -435,7 +529,11 @@ static void dom_modern_cases(void)
         "assert(typeof Image==='function'&&new Image().tagName==='IMG');"
         /* the frames row's: an iframe has HTMLElement's members alone */
         "var fr=document.createElement('iframe');fr.src='/frame.html';"
-        "assert(fr.getAttribute('src')===null&&fr.hasOwnProperty('src')&&!('HTMLIFrameElement' in window));",
+        "assert(fr.getAttribute('src')===null&&fr.hasOwnProperty('src')&&!('HTMLIFrameElement' in window));"
+        /* 0f's P3a's controls' members; their name and value are every page's */
+        "var ci=document.createElement('input');"
+        "assert(!('formAction' in ci)&&!('labels' in ci)&&!('indeterminate' in ci)&&!('form' in ci)&&"
+        "'name' in ci&&'value' in ci);",
         "modern-off-absent");
 
     bool exact = on != NULL && off != NULL;

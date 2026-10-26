@@ -391,17 +391,20 @@ static bool form_associated(const os64_html_node_t *node)
     }
 }
 
-/* HTML's form owner: the parser's record, else the form a `form` attribute
- * names in the control's own document's tree (any document's, as libpage's
- * node_owner reads it), else the nearest form ancestor. libhtml clears a
- * record the moment it stops being true, so a record found is believed. */
+/* HTML's form owner (§ 4.10.17.3, "reset the form owner"): the parser's
+ * record; else, for a control in a document (any document's, as libpage's
+ * node_owner reads it), the form its `form` attribute names by ID, and
+ * none for an empty one, since no ID is empty; else the nearest form
+ * ancestor, which is a control's in no document whatever the attribute
+ * says. libhtml clears a record the moment it stops being true, so a
+ * record found is believed. */
 const os64_html_node_t *d_form_owner(const os64_html_node_t *node)
 {
     if (!form_associated(node)) return NULL;
     if (node->form_owner != NULL) return node->form_owner;
     const os64_html_attr_t *named = os64_html_attr(node, "form");
-    if (named != NULL) {
-        if (!d_connected(node)) return NULL;
+    if (named != NULL && d_connected(node)) {
+        if (named->value[0] == '\0') return NULL;
         const os64_html_node_t *root = tree_root(node);
         for (const os64_html_node_t *at = root; at != NULL;) {
             const os64_html_attr_t *id = at->kind == OS64_HTML_ELEMENT ? os64_html_attr(at, "id") : NULL;
@@ -472,16 +475,19 @@ static int reset(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form)
 /* element.click() is a synthetic click: the event, then the element's
  * activation behaviour unless a listener cancelled it. A checkbox or radio
  * changes before its click is dispatched and is put back when the click is
- * cancelled (HTML's legacy-pre-activation behaviour). */
+ * cancelled (HTML's legacy-pre-activation behaviour); a checkbox's
+ * indeterminate flag is cleared with it, and put back with it. */
 static int click_activate(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 {
-    bool checkable = html_element(node, OS64_HTML_TAG_INPUT) &&
-        (type_is(node, "checkbox", false) || type_is(node, "radio", false));
-    bool was = false;
+    bool radio = html_element(node, OS64_HTML_TAG_INPUT) && type_is(node, "radio", false);
+    bool checkbox = html_element(node, OS64_HTML_TAG_INPUT) && type_is(node, "checkbox", false);
+    bool checkable = radio || checkbox;
+    bool was = false, was_indeterminate = false;
     if (checkable) {
         int64_t status = os64_page_node_checked(dom->state, node, &was);
-        bool radio = type_is(node, "radio", false);
+        if (status >= 0) status = os64_page_node_indeterminate(dom->state, node, &was_indeterminate);
         if (status >= 0) status = os64_page_node_set_checked(dom->state, node, radio ? true : !was);
+        if (status >= 0 && checkbox) status = os64_page_node_set_indeterminate(dom->state, node, false);
         if (status < 0) { d_page_error(ctx, status); return -1; }
     }
     int result = fire(dom, ctx, node, "click", true, true);
@@ -490,6 +496,8 @@ static int click_activate(os64_dom_t *dom, JSContext *ctx, const os64_html_node_
         bool now = false;
         if (result == 0) {
             int64_t status = os64_page_node_set_checked(dom->state, node, was);
+            if (status >= 0 && checkbox)
+                status = os64_page_node_set_indeterminate(dom->state, node, was_indeterminate);
             if (status < 0) { d_page_error(ctx, status); return -1; }
         } else if (os64_page_node_checked(dom->state, node, &now) >= 0 && now != was) {
             result = fire(dom, ctx, node, "input", true, false);

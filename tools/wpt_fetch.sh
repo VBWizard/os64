@@ -72,6 +72,10 @@ WPT_DIRS=(
     import-maps
     html/semantics/forms/textfieldselection
     html/semantics/forms/the-input-element
+    html/semantics/forms/form-control-infrastructure
+    html/semantics/forms/the-textarea-element
+    html/semantics/forms/the-button-element
+    html/semantics/forms/the-label-element
 )
 
 top=$(git rev-parse --show-toplevel)

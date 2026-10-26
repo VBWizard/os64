@@ -844,6 +844,9 @@ void os64_ui_cancel_interaction(os64_ui_t *ui);
 typedef struct os64_ui_checkbox {
     os64_ui_widget_t w;
     bool checked;
+    // A third look, neither ticked nor clear, drawn whatever `checked` says;
+    // a click clears it as it toggles `checked`.
+    bool indeterminate;
     void (*on_change)(struct os64_ui_checkbox *, void *);
     void *check_user;
 } os64_ui_checkbox_t;
@@ -851,6 +854,7 @@ void os64_ui_checkbox(os64_ui_checkbox_t *cb, const char *text, bool checked,
                      void (*on_change)(os64_ui_checkbox_t *, void *), void *user);
 // Programmatic setters update/repaint without firing interaction callbacks.
 void os64_ui_checkbox_set(os64_ui_t *ui, os64_ui_checkbox_t *cb, bool checked);
+void os64_ui_checkbox_set_indeterminate(os64_ui_t *ui, os64_ui_checkbox_t *cb, bool indeterminate);
 
 typedef struct os64_ui_slider {
     os64_ui_widget_t w;
