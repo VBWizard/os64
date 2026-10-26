@@ -13,6 +13,9 @@
 // fail the graph: its run throws the SyntaxError or TypeError, which the
 // window hears as a script's error (HTML's error to rethrow).
 //
+// A specifier means what the window's import map says (importmap.h), which
+// the map holds: every import, static or dynamic, resolves through it.
+//
 // A module is fetched as HTML fetches one: a CORS GET through the page's
 // own request path (scripts.h's options.request, slice 2's fetch job), so
 // its origin rules, cookies and redirects are a script's request's. Its
@@ -26,6 +29,7 @@
 #include "os64/js_engine.h"
 
 #include "diag.h"
+#include "importmap.h"
 
 typedef struct yonder_modules yonder_modules_t;
 
@@ -50,14 +54,15 @@ typedef struct {
     // host's until `release`; false for a network error.
     bool (*run)(void *opaque, const char *url, os64_dom_response_t *response);
     void (*release)(void *opaque, os64_dom_response_t *response);
-    // A specifier of an inline module resolved as a link of the document
-    // would be (its <base>, as the tree stands): os64_dom_resolve. False
-    // when it does not resolve.
-    bool (*resolve)(void *opaque, const char *reference, char *out, size_t cap);
+    // The document's base URL as the tree stands (its first <base href>,
+    // else its address): an inline module's base URL, taken when it is
+    // prepared, and a classic inline script's when it imports. False when
+    // it cannot be read or will not fit in `cap`.
+    bool (*base)(void *opaque, char *out, size_t cap);
     // The address of the classic script the engine knows by `name`
     // (os64_dom_script_address), which a dynamic import() in it resolves
-    // against; NULL for an inline one, which resolves as the document's
-    // links do.
+    // against; NULL for an inline one, which resolves against the
+    // document's base URL (`base`).
     const char *(*script_base)(void *opaque, const char *name);
 } yonder_modules_net_t;
 
@@ -75,13 +80,18 @@ void yonder_modules_free(yonder_modules_t *m);
 // An entry: a module script with `src`, its graph fetched from `url` (one
 // already in the map is shared, as HTML's map shares it), or an inline
 // one, compiled from `source` (copied) under `name` (one of its own, since
-// the engine finds modules by name) with import.meta.url `url` and its
-// imports resolved as the document's links are: now, or at the next settle
-// when a script is running. The entry's id, or -1 when the map is full or
-// out of memory.
+// the engine finds modules by name), the document's base URL now its base
+// URL and its import.meta.url, as HTML fixes an inline module script's when
+// it is prepared: now, or at the next settle when a script is running. The
+// entry's id, or -1 when the map is full or out of memory.
 int32_t yonder_modules_entry_src(yonder_modules_t *m, const char *url);
-int32_t yonder_modules_entry_inline(yonder_modules_t *m, const char *source, size_t length, const char *name,
-                                    const char *url);
+int32_t yonder_modules_entry_inline(yonder_modules_t *m, const char *source, size_t length, const char *name);
+
+// HTML's "register an import map", for a map that parsed: `parsed` (a
+// parse result, importmap.h; consumed) merged into the window's map, which
+// every resolution from now on reads. False when the map is dropped or
+// memory ran out (what merged before it did stays).
+bool yonder_modules_import_map(yonder_modules_t *m, yonder_import_map_t *parsed);
 
 typedef enum { YONDER_GRAPH_FETCHING, YONDER_GRAPH_READY, YONDER_GRAPH_FAILED } yonder_graph_t;
 // How `entry`'s graph stands; FAILED with what failed in `*why` (the map's,

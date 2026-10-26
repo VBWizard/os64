@@ -457,11 +457,13 @@ reset not cancelled, `focus()` and `blur()` reach the host through
 ## Script elements
 
 `os64_dom_script_kind` is HTML's type rule (type, else language, the sixteen
-JavaScript MIME essences, `module`), and every caller asks it. ALREADY
+JavaScript MIME essences, `module`, `importmap`; a type is trimmed only to
+be asked whether it is JavaScript's, so `type=" module "` is none of
+them), and every caller asks it. ALREADY
 STARTED is a held node in the binding's table: `os64_dom_script_start` marks
 a script the host runs, a script innerHTML parses is born started, and a
-clone of a started script is started. When a verb connects a classic or
-module script that has not started (an `appendChild` of a
+clone of a started script is started. When a verb connects a classic,
+module or import map script that has not started (an `appendChild` of a
 `createElement('script')`), the binding marks it and tells the host through
 `options.script_connected`;
 moving a started script tells nobody, and one connected to a document of
@@ -474,7 +476,17 @@ A host that runs modules asks two more things of the binding (MODERN_WEB.md
 response must be), and the address of the classic script a name of the
 binding's stands for (`os64_dom_script_address`, the inverse of
 `os64_dom_script_name`), which a dynamic `import()` in that script
-resolves against.
+resolves against. And it parses an import map's JSON
+(`os64_dom_import_map`, MODERN_WEB.md § Import maps, as built): as one
+task named as the script, throwing what HTML's "parse an import map string" throws
+(the JSON's SyntaxError; a TypeError for a top-level value, an `imports`,
+`scopes` or `integrity`, or a scope that is no object), which the window
+hears as a task's exception, and otherwise handing the host each entry
+of `imports` and of every scope in JSON.parse's order, a value that is
+no string as none. The normalizing, the merge and the resolution are the
+host's. With the switch on, `HTMLScriptElement.supports(type)` answers
+true for `classic`, `module` and `importmap`, the types this window runs,
+and false for anything else.
 
 ## `document.write`
 

@@ -69,6 +69,7 @@ WPT_DIRS=(
     html/semantics/forms/the-select-element
     html/semantics/forms/the-option-element
     html/semantics/forms/the-optgroup-element
+    import-maps
 )
 
 top=$(git rev-parse --show-toplevel)

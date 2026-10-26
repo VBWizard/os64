@@ -92,6 +92,9 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"Option", "HTMLOptionsCollection", NULL}, d_options_install},
     /* 0f's P2 core: the text controls' members, and the Selection. */
     {(const char *const[]){"getSelection", "Selection", NULL}, d_selection_install},
+    /* Import maps: HTMLScriptElement.supports, a member of the interfaces
+     * row's HTMLScriptElement and none of window's (as P1-Da's row). */
+    {(const char *const[]){NULL}, d_import_map_install},
 };
 
 int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)

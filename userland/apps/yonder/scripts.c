@@ -1,5 +1,7 @@
 #include "scripts.h"
 #include "modules.h"
+#include "importmap.h"
+#include "page/page.h"
 #include "os64/js_engine.h"
 #include "os64/date.h"
 #include "os64/fmt.h"
@@ -49,6 +51,13 @@ typedef struct {
     // runs every other when its graph is ready.
     bool module;
     int32_t entry;
+    // An import map script (importmap.h): MODE_BLOCKING when the parser
+    // met it, so it registers before the parse goes on, as HTML executes
+    // one at once; MODE_INLINE when a script connected it. `base` is the
+    // document's base URL when it was prepared, which its addresses are
+    // normalized against; freed with the host.
+    bool importmap;
+    char *base;
 } Item;
 
 struct yonder_scripts {
@@ -515,6 +524,7 @@ void yonder_scripts_free(yonder_scripts_t *s)
     for (uint32_t i = 0; i < s->count; i++) {
         release_item(s, &s->items[i]);
         os64_free(s->items[i].address);
+        os64_free(s->items[i].base);
     }
     os64_free(s->items);
     os64_free(s->ready);
@@ -690,10 +700,10 @@ static bool module_run_now(void *opaque, const char *url, os64_dom_response_t *r
            s->options.run(s->options.opaque, s->options.serial, &q, module_stop, s, response);
 }
 
-static bool module_in_document(void *opaque, const char *reference, char *out, size_t cap)
+static bool module_document_base(void *opaque, char *out, size_t cap)
 {
     yonder_scripts_t *s = opaque;
-    return os64_dom_resolve(s->doc, s->url, reference, out, cap);
+    return os64_page_base_in(s->doc, s->url, out, cap);
 }
 
 static const char *module_script_base(void *opaque, const char *name)
@@ -714,11 +724,12 @@ static void module_release(void *opaque, os64_dom_response_t *response)
 static yonder_modules_t *module_map_new(yonder_scripts_t *s)
 {
     const yonder_modules_net_t net = {s, module_start, net_cancel, module_run_now, module_release,
-                                      module_in_document, module_script_base};
+                                      module_document_base, module_script_base};
     return yonder_modules_new(s->runtime, &net, s->options.diag);
 }
 
-// The page's runtime and its module map, for a module script. False when
+// The page's runtime and its module map, for a module script or an import
+// map. False when
 // there is none to be had: the runtime could not be made (and is retired,
 // as a run's failure retires it) or memory ran out.
 static bool ensure_modules(yonder_scripts_t *s)
@@ -788,7 +799,7 @@ static void module_prepare(yonder_scripts_t *s, const os64_html_node_t *script, 
             fail_item(s, it, "the inline script is longer than a script may be");
             return;
         }
-        entry = yonder_modules_entry_inline(s->modules, it->source, it->length, it->name, s->url);
+        entry = yonder_modules_entry_inline(s->modules, it->source, it->length, it->name);
         it = &s->items[index];
         os64_free(it->source);
         it->source = NULL;
@@ -800,6 +811,75 @@ static void module_prepare(yonder_scripts_t *s, const os64_html_node_t *script, 
     it->entry = entry;
     it->state = STATE_FETCHING;
     modules_progress(s);
+}
+
+// An import map script prepared (HTML's "prepare the script element",
+// importmap branch): its text and the document's base URL taken now, to be
+// registered when it runs (import_map_run). HTML fetches no import map: one
+// with `src` is a failure of its own, reported in its place (HTML's error
+// event at the element is a script element's, which yonder fires for none:
+// DEBTS.md).
+static Item *import_map_prepare(yonder_scripts_t *s, const os64_html_node_t *script, bool parser)
+{
+    Item *it = item_new(s, script, parser ? MODE_BLOCKING : MODE_INLINE);
+    if (it == NULL)
+        return NULL;
+    it->importmap = true;
+    if (s->dom != NULL)
+        (void)os64_dom_script_start(s->dom, script);
+    char base[OS64_DOM_URL_MAX];
+    if (!inline_source(s, it))
+        fail_item(s, it, "the import map is longer than a script may be");
+    else if (os64_html_attr(script, "src") != NULL)
+        fail_item(s, it, "an import map is never fetched: its src is not read");
+    else if (!os64_page_base_in(s->doc, s->url, base, sizeof(base)) || (it->base = keep(base)) == NULL)
+        fail_item(s, it, "the page's base URL could not be read");
+    else
+        make_ready(s, it);
+    return it;
+}
+
+typedef struct {
+    yonder_import_map_t *parsed;
+    const char *base;
+} MapWalk;
+
+static bool import_map_entry(void *opaque, const char *scope, const char *key, const char *value)
+{
+    MapWalk *walk = opaque;
+    return yonder_import_map_add(walk->parsed, walk->base, scope, key, value);
+}
+
+// An import map script run (HTML's "execute the script element" for an
+// import map, "register an import map"): its text parsed by the binding as
+// one task, each entry normalized here against the base URL it was
+// prepared with, and the result merged into the window's map. A map that
+// threw was reported at the window by the parse, and registers nothing.
+static void import_map_run(yonder_scripts_t *s, Item *it, const char *name, os64_js_outcome_t *out)
+{
+    MapWalk walk = {yonder_import_map_new(), it->base};
+    if (walk.parsed == NULL) {
+        out->status = OS64_JS_EXCEPTION;
+        os64_strcopy(out->message, sizeof(out->message), "no memory for the import map");
+        os64_strcopy(out->source_name, sizeof(out->source_name), name);
+        return;
+    }
+    const os64_dom_import_map_walk_t walker = {&walk, import_map_entry};
+    int64_t began = os64_micros();
+    os64_dom_import_map(s->dom, name, it->source, it->length, &walker, out);
+    int64_t ended = os64_micros();
+    s->task_us = began >= 0 && ended >= began ? ended - began : -1;
+    os64_strcopy(out->source_name, sizeof(out->source_name), name);
+    if (out->status != OS64_JS_OK) {
+        yonder_import_map_free(walk.parsed);
+        judged(s, out);
+        return;
+    }
+    if (!yonder_modules_import_map(s->modules, walk.parsed)) {
+        out->status = OS64_JS_EXCEPTION;
+        os64_strcopy(out->message, sizeof(out->message), "no memory to register the import map");
+    }
+    judged(s, out);
 }
 
 // Whether `list` holds `token` (lowercase), as `rel`'s keywords are
@@ -863,24 +943,22 @@ void yonder_scripts_preload(yonder_scripts_t *s)
     }
 }
 
-bool yonder_scripts_importmap(const os64_html_node_t *script)
+// What a script that is not a classic one asks of the host: a module or an
+// import map is prepared when the Modern Web surface is on, else recorded
+// as asked for and not got. True when it was one of those (the caller does
+// nothing more with it, except stop the parser at the import map `*map`
+// names when it is one).
+static bool not_classic(yonder_scripts_t *s, const os64_html_node_t *script, bool parser, Item **map)
 {
-    const os64_html_attr_t *type = os64_html_attr(script, "type");
-    return type != NULL && os64_streq_nocase(type->value, "importmap");
-}
-
-// What a script that is not a classic one asks of the host: a module is
-// prepared when the Modern Web surface runs modules, else recorded as asked
-// for and not got, as an import map always is. True when it was one of
-// those (the caller does nothing more with it).
-static bool not_classic(yonder_scripts_t *s, const os64_html_node_t *script, bool parser)
-{
+    *map = NULL;
     os64_dom_script_kind_t kind = os64_dom_script_kind(script);
     if (kind == OS64_DOM_SCRIPT_MODULE && s->options.modern)
         module_prepare(s, script, parser && os64_html_attr(script, "async") == NULL ? MODE_DEFER : MODE_ASYNC);
     else if (kind == OS64_DOM_SCRIPT_MODULE)
         yonder_diag_missing(s->options.diag, "script", "module", 1);
-    else if (kind == OS64_DOM_SCRIPT_NONE && yonder_scripts_importmap(script))
+    else if (kind == OS64_DOM_SCRIPT_IMPORTMAP && s->options.modern)
+        *map = import_map_prepare(s, script, parser);
+    else if (kind == OS64_DOM_SCRIPT_IMPORTMAP)
         yonder_diag_missing(s->options.diag, "script", "importmap", 1);
     return kind != OS64_DOM_SCRIPT_CLASSIC;
 }
@@ -900,8 +978,17 @@ static bool nomodule(yonder_scripts_t *s, const os64_html_node_t *script)
 yonder_stop_t yonder_scripts_parser_stop(yonder_scripts_t *s, os64_html_node_t *script)
 {
     // A module never stops the parse: a parser-inserted one waits for it.
-    if (s == NULL || s->dead || not_classic(s, script, true) || nomodule(s, script))
+    // An import map does, until it is registered, as HTML executes one at
+    // once, so the modules after it resolve through it.
+    Item *map;
+    if (s == NULL || s->dead)
         return YONDER_STOP_RESUME;
+    if (not_classic(s, script, true, &map) || nomodule(s, script)) {
+        if (map == NULL || s->dead)
+            return YONDER_STOP_RESUME;
+        s->blocking = (int32_t)(map - s->items);
+        return YONDER_STOP_BLOCK;
+    }
     bool src = os64_html_attr(script, "src") != NULL;
     Mode mode = !src ? MODE_BLOCKING
               : os64_html_attr(script, "async") != NULL ? MODE_ASYNC
@@ -975,10 +1062,10 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
     const os64_html_node_t *root = it->node;
     while (root != NULL && root->parent != NULL)
         root = root->parent;
+    os64_dom_script_kind_t kind = it->importmap ? OS64_DOM_SCRIPT_IMPORTMAP
+                                : it->module ? OS64_DOM_SCRIPT_MODULE : OS64_DOM_SCRIPT_CLASSIC;
     bool runs = it->state == STATE_READY &&
-                (it->mode == MODE_ADDRESS ||
-                 (root == s->doc->document &&
-                  os64_dom_script_kind(it->node) == (it->module ? OS64_DOM_SCRIPT_MODULE : OS64_DOM_SCRIPT_CLASSIC)));
+                (it->mode == MODE_ADDRESS || (root == s->doc->document && os64_dom_script_kind(it->node) == kind));
     char name[OS64_JS_SOURCE_NAME_CAP];
     os64_strcopy(name, sizeof(name), it->name);
     s->task_address = it->address;
@@ -990,6 +1077,16 @@ static bool run_item(yonder_scripts_t *s, uint32_t index, os64_js_outcome_t *out
     }
     if (runs && it->module && ensure_runtime(s, out)) {
         run_module(s, it->entry, name, out);
+    } else if (runs && it->importmap) {
+        // The map is the window's, kept with its module map, which is
+        // made with the runtime that parses it.
+        if (ensure_modules(s)) {
+            import_map_run(s, &s->items[index], name, out);
+        } else if (!s->dead) {
+            out->status = OS64_JS_EXCEPTION;
+            os64_strcopy(out->message, sizeof(out->message), "no memory for the page's modules");
+            os64_strcopy(out->source_name, sizeof(out->source_name), name);
+        }
     } else if (runs && !it->module && ensure_runtime(s, out)) {
         if (it->node != NULL)
             (void)os64_dom_script_start(s->dom, it->node);
@@ -1140,8 +1237,10 @@ void yonder_scripts_connected(yonder_scripts_t *s, const os64_html_node_t *scrip
     if (s == NULL || s->dead)
         return;
     // A module a script connected runs when its graph is ready, inline or
-    // not: unlike a classic inline script, never inside the verb.
-    if (not_classic(s, script, false) || nomodule(s, script))
+    // not: unlike a classic inline script, never inside the verb. An import
+    // map is ready at once, as a classic inline script is.
+    Item *map;
+    if (not_classic(s, script, false, &map) || nomodule(s, script))
         return;
     bool src = os64_html_attr(script, "src") != NULL;
     Item *it = item_new(s, script, src ? MODE_ASYNC : MODE_INLINE);

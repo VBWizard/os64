@@ -209,6 +209,9 @@ single-evaluation-2.html	Test that a module is evaluated only once, and that 'th
 specifier-error.html	Test that invalid module specifier leads to TypeError on window.
 top-level-await/sibling-imports-not-blocked.any.html	Async modules only scheduling microtasks don't block execution of sibling modules
 top-level-await/sibling-imports-not-blocked.any.html	Async modules scheduling tasks don't block execution of sibling modules
+type.html	type=" module "
+type.html	type=" module"
 type.html	type="MODULE"
 type.html	type="Module"
+type.html	type="module "
 type.html	type="module"
