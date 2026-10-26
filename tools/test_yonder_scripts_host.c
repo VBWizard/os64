@@ -1891,6 +1891,104 @@ static void motion_cases(void) {
     s_animations=was_run; s_reduce_motion=was_reduce;
 }
 
+/* A text field's selection and its caret are one (0f's P2): a script's
+ * setSelectionRange moves the caret the person sees, and where the person
+ * leaves it is what the next script reads; a password field's offsets
+ * count characters, which its bullets stand for. */
+static void field_selection_hook(void) {
+    probe_page("<p id=out></p><input id=field value=hello><input id=pw type=password value='a\xC3\xA9z'>"
+        "<input id=zero value=hello>"
+        "<script>var f=document.getElementById('field'),p=document.getElementById('pw');"
+        "document.getElementById('out').textContent=f.selectionStart+','+f.selectionEnd;</script>"
+        "<script>f.setSelectionRange(1,4,'backward');p.setSelectionRange(2,3);"
+        "document.getElementById('zero').setSelectionRange(0,0)</script>"
+        "<script>document.getElementById('out').textContent=f.selectionStart+','+f.selectionEnd+','+f.selectionDirection</script>"
+        "<script>document.getElementById('out').textContent=f.selectionStart+','+f.selectionEnd+','+f.selectionDirection</script>"
+        "<script>document.getElementById('out').textContent=f.value+','+f.selectionStart+','+f.selectionEnd</script>"
+        "<script>var at=f.selectionStart;f.value=f.value.toUpperCase();f.setSelectionRange(at,at)</script>"
+        "<script>p.type='text'</script>",
+        true);
+    script_turn();
+    check(probe_text_is("out","0,0"),"selection hook: a parsed field's selection begins at 0");
+    FormWidget *field=probe_field("field"), *pw=probe_field("pw");
+    script_turn();
+    script_rebuild();
+    check(field->u.field.selected && field->u.field.anchor==4 && field->u.field.cursor==1,
+          "selection hook: a script's backward selection moves the caret, to its start");
+    check(pw->u.field.selected && pw->u.field.anchor==2 && pw->u.field.cursor==3,
+          "selection hook: a password's offsets are characters, its bullets'");
+    /* A password is edited at its caret: the script's selection of its last
+     * character is replaced by the key typed, and Backspace takes the
+     * character before the caret. */
+    os64_ui_set_focus(&g.ui,pw->w);
+    os64_gui_event_t typed={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='Q'}};
+    check(password_key(&typed) && pw->secret_len==4 && !memcmp(pw->secret,"a\xC3\xA9Q",4) &&
+          !pw->u.field.selected && pw->u.field.cursor==3,
+          "selection hook: a key typed in a password replaces its selection");
+    os64_gui_event_t back={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='\b'}};
+    pw->u.field.anchor=pw->u.field.cursor=2;
+    check(password_key(&back) && pw->secret_len==2 && !memcmp(pw->secret,"aQ",2) && pw->u.field.cursor==1,
+          "selection hook: Backspace takes the character before a password's caret");
+    FormWidget *zero=probe_field("zero");
+    check(!zero->u.field.selected && zero->u.field.cursor==0,
+          "selection hook: a set of the numbers the record held, (0,0) on an untouched field, moves the caret");
+    /* The person selects two letters, forward, and the next script reads it. */
+    field->u.field.anchor=2; field->u.field.cursor=4; field->u.field.selected=true;
+    script_turn();
+    check(probe_text_is("out","2,4,forward"),"selection hook: where the person left the selection is what a script reads");
+    /* The person puts the caret at 2, types there and moves back: the
+     * caret is where it was last in step, and the text they wrote (which
+     * puts the record at the value's end) still carries it across. */
+    field->u.field.anchor=field->u.field.cursor=2; field->u.field.selected=false;
+    script_turn();
+    check(probe_text_is("out","2,2,none"),"selection hook: a collapsed caret, read");
+    os64_ui_set_focus(&g.ui,field->w);
+    os64_gui_event_t key={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='X'}};
+    os64_ui_dispatch(&g.ui,&key);
+    field->u.field.anchor=field->u.field.cursor=2;
+    script_turn();
+    check(probe_text_is("out","heXllo,2,2"),"selection hook: typing then moving back leaves the caret, not the value's end");
+    /* React's way: the value rewritten and the selection it read restored,
+     * which leaves the record where it was while the new text put the
+     * caret at its end. */
+    script_turn();
+    script_rebuild();
+    check(os64_streq(field->text,"HEXLLO") && !field->u.field.selected && field->u.field.cursor==2,
+          "selection hook: a rewritten value with its selection restored keeps the caret there");
+    /* The password field becomes a text one, a new widget: the record's
+     * selection, where the person's editing left it before the widget was
+     * made, is on its caret, not the end its text would put it at. */
+    script_turn();
+    script_rebuild();
+    FormWidget *text=probe_field("pw");
+    check(text!=pw && text->kind==FW_TEXT && os64_streq(text->text,"aQ") && !text->u.field.selected &&
+          text->u.field.cursor==1,
+          "selection hook: a new widget's caret is the record's selection, not its text's end");
+    probe_drop();
+}
+
+/* A press at the end of a field nobody has touched moves no caret (the
+ * widget shows it at the value's end, the record at 0), and is still the
+ * person's choice of it, which the focus listener reads. */
+static void field_selection_click(void) {
+    probe_page("<p id=out></p><input id=field value=hello>"
+        "<script>var f=document.getElementById('field');f.addEventListener('focus',function(){"
+        "document.getElementById('out').textContent=f.selectionStart+','+f.selectionEnd})</script>",true);
+    script_turn();
+    FormWidget *field=probe_field("field");
+    check(field->u.field.cursor==5,"selection click: an untouched field's caret is at its value's end");
+    g.root.bounds=g.view.bounds;
+    os64_gui_event_t ev={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+    ev.mouse.x=field->w->bounds.x+field->w->bounds.w-2; ev.mouse.y=field->w->bounds.y+2;
+    ev.mouse.button=OS64_GUI_MOUSE_LEFT;
+    ui_dispatch(&ev); inputs_run();
+    ev.type=OS64_GUI_EVENT_MOUSE_BUTTON_UP;
+    ui_dispatch(&ev); inputs_run();
+    check(g.ui.focus==field->w && field->u.field.cursor==5 && probe_text_is("out","5,5"),
+          "selection click: a press that moves no caret still publishes it");
+    probe_drop();
+}
+
 static void edit_and_kind_changes(void) {
     probe_page("<input id=field type=number><script>document.body.setAttribute('class','first');</script>"
         "<script>document.body.setAttribute('class','second');</script>",true);
@@ -10097,6 +10195,8 @@ int main(void)
     motion_part_cases();
     tick_cases();
     edit_and_kind_changes();
+    field_selection_hook();
+    field_selection_click();
     password_edits();
     reset_editors();
     noscript_author_styles();

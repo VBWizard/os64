@@ -405,10 +405,51 @@ static void tree_selection_value_failure(void)
     rebuild_clear(&f);
 }
 
+// A text control's selection as HTML moves it: collapsed at 0 until
+// something moves it; at the end of a value set that differs, and left
+// where it is by the same value set again; clamped by a read when the value
+// shrinks under it, and the clamp kept when the value grows again.
+static void tree_selection_moves(void)
+{
+    RebuildFixture f=rebuild_fixture("<input id=i value=hello><textarea id=t>abcdef</textarea>",0);
+    os64_html_node_t *i=rebuild_id(f.doc,"i"), *t=rebuild_id(f.doc,"t");
+    uint32_t start=9,end=9;
+    os64_page_direction_t direction=OS64_PAGE_DIRECTION_FORWARD;
+    rebuild_expect("selection: written to count, a set of the same numbers included",
+        os64_page_node_selection_writes(f.state,i)==0&&
+        os64_page_node_set_selection(f.state,i,0,0,OS64_PAGE_DIRECTION_NONE)==0&&
+        os64_page_node_selection_writes(f.state,i)==1&&
+        os64_page_node_set_selection(f.state,i,0,0,OS64_PAGE_DIRECTION_NONE)==0&&
+        os64_page_node_selection_writes(f.state,i)==2&&os64_page_node_selection_writes(f.state,t)==0);
+    rebuild_expect("selection: a parsed control's is at 0",
+        os64_page_node_selection(f.state,i,&start,&end,&direction)==0&&start==0&&end==0&&
+        direction==OS64_PAGE_DIRECTION_NONE&&os64_page_node_selection(f.state,t,&start,&end,&direction)==0&&
+        start==0&&end==0);
+    rebuild_expect("selection: the same value set again leaves it",
+        os64_page_node_set_value(f.state,i,"hello",5)==0&&
+        os64_page_node_selection(f.state,i,&start,&end,&direction)==0&&start==0&&end==0);
+    rebuild_expect("selection: a value that differs puts it at the end, in code units",
+        os64_page_node_set_selection(f.state,i,1,2,OS64_PAGE_DIRECTION_BACKWARD)==0&&
+        os64_page_node_set_value(f.state,i,"h\xF0\x9F\x98\x80y",6)==0&&
+        os64_page_node_selection(f.state,i,&start,&end,&direction)==0&&start==4&&end==4&&
+        direction==OS64_PAGE_DIRECTION_NONE);
+    rebuild_expect("selection: a clean textarea's default changing does not move it",
+        os64_page_node_set_selection(f.state,t,3,5,OS64_PAGE_DIRECTION_FORWARD)==0&&
+        os64_html_set_text(f.doc,t->first_child,"abcdefgh",8)==OS64_HTML_OK&&
+        os64_page_node_selection(f.state,t,&start,&end,&direction)==0&&start==3&&end==5);
+    rebuild_expect("selection: a shrink a read sees clamps it, and the clamp is kept",
+        os64_html_set_text(f.doc,t->first_child,"ab",2)==OS64_HTML_OK&&
+        os64_page_node_selection(f.state,t,&start,&end,&direction)==0&&start==2&&end==2&&
+        os64_html_set_text(f.doc,t->first_child,"abcdefgh",8)==OS64_HTML_OK&&
+        os64_page_node_selection(f.state,t,&start,&end,&direction)==0&&start==2&&end==2);
+    rebuild_clear(&f);
+}
+
 static void test_libpage_tree(void)
 {
     tree_option_selectedness();
     tree_selection_value_failure();
+    tree_selection_moves();
     tree_option_dirtiness();
     tree_depth_and_state_cap();
     tree_unmodeled_select();

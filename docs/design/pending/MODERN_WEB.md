@@ -366,7 +366,11 @@ on it for a week: `iframe` and `postMessage` (**Fable design**, its own
 document), CSP, referrer and cookie rules across redirects, `SameSite` and
 the public-suffix list. Custom elements (`customElements.define`, GitHub's
 `react-partial` and friends) join here or the end of Tier 0 as the census
-says once modules run.
+says once modules run. With modules and import maps in, the census said it
+(2026-10-26, Chris's P5 records of GitHub): its bundles die on
+`customElements`, then `MutationObserver` (5a), `IntersectionObserver` and
+`ReadableStream`, and its loading placeholders stay where that code would
+have filled them. Chris bookmarked custom elements to follow 0f.
 
 ## How the slices run side by side (2026-10-21)
 
@@ -3807,6 +3811,109 @@ its P1b group): 14, each caught. QuickJS needed patch 0013 first:
 `JS_SetPrototypeInternal` leaked its reference to the new prototype when the
 shape update failed, which the allocation sweep found the first time libdom
 reparented a prototype it had made (`userland/libjs/UPSTREAM_REVIEW.md`).
+
+### 0f's P2, as built
+
+What P2 had left after its core was built ahead in the page fixes
+(INTERFACES_FORMS.md § P2): `setRangeText`, the host hook, and the oracle,
+and on the way the rules for where a selection begins and how it moves.
+
+- **Where a selection is** (libpage `state.c`). A control's selection
+  begins collapsed at 0, as HTML's does, where it used to read the value's
+  end; a value set that differs puts it at the new end and keeps it there;
+  the same value set again leaves it; a clean control's default that
+  changes leaves it where it was, and a read clamps it to the value as it
+  stands and keeps the clamp.
+- **`setRangeText`** (libdom `selection.c`), both of WebIDL's overloads:
+  the replacement spliced into the value in UTF-16 code units (an end
+  between the halves of a pair, which UTF-8 cannot split, is taken past
+  the character), the value made dirty as a script's set makes it, and the
+  selection placed by `select`, `start`, `end` or `preserve`. An
+  IndexSizeError for a start past the end; a TypeError for two arguments
+  or an unknown mode; no input event, as a script did it.
+- **The select event.** A set that moves the selection, in extent or
+  direction, queues `select` at the element: a binding timer due at once,
+  which the host runs as the task HTML's "queue an element task" makes,
+  trusted, bubbling and not cancelable. Three WPT pages wait on it, and
+  each timed out whole without it. There is no `onselect` (the handler
+  mask is full) and a burst is not coalesced: DEBTS.md.
+- **The field's caret and the record are one** (yonder's forms, the host
+  hook). A person moves a field's caret in bytes of its text; a script
+  reads and sets the record in code units of the value. Before a script
+  runs, a field whose caret moved since the two were last in step writes
+  it into the record (`forms_flush`, which already wrote a person's text
+  there); after a script's task, a record that moved moves the caret
+  (`script_rebuild`), through libos64's new
+  `os64_ui_textfield_select_range`. A password field shows a bullet a
+  character, so its offsets count characters. Neither side moves the other
+  until it moves itself: a field nobody has touched keeps the caret the
+  widget gave it, at the end of its value, and a script reads 0 there, as
+  HTML's record says; a widget made after a script moved the record (a
+  password field become a text one) takes the record's selection. Making
+  the caret follow the record from the first look put every untouched
+  field's caret at its start, and a person who tabbed into a search box
+  typed before its text; the scripted host's key-edit case caught it.
+
+**Numbers.**
+
+- **WPT**, two directories added to `tools/wpt_fetch.sh`:
+  `html/semantics/forms/textfieldselection` 272 → 449 of 792, 388 of them
+  `[required]` (each fails with the switch off); and
+  `html/semantics/forms/the-input-element` 810 → 842 of 2,000, its 492
+  `[required]` P1a's and the page fixes' as well as P2's, a list P3 grows.
+  The other 41 directories with expectations lose nothing. What still
+  fails in the first is named in its file: `onselect`,
+  `requestAnimationFrame`, a clamp with no read between a shrink and a
+  regrowth, a textarea's `defaultValue` (P3), a `form.reset()` the host
+  carries out after the task, and testdriver's actions.
+- **Hosts**, 0 failed: libpage 254,173 (where a selection begins, a value
+  that differs and the same value again, a clean textarea's default, a
+  clamp kept); DOM 15,771 and 105,296 (every `setRangeText` mode, its
+  errors, code units, a textarea made dirty; the select event as a task,
+  trusted, bubbling, not cancelable, and none for a set that moves
+  nothing); scripted page 8,179 (a script's backward selection on the
+  caret, a password's characters, a person's selection read, typing and
+  moving back, a new widget taking a selection set before it, a rewritten
+  value whose selection is restored); libui's
+  text 152 and 1,642 (`select_range`, its clamp and its snap to a letter);
+  yonder 2,028.
+- **Mutants** (`tools/test_interfaces_mutants.py`, its P2 group): 26, each
+  caught, three of them the core's re-anchored. Two were first missed: a
+  selection end inside the replaced text was in no case, and is now; and
+  the pull's first look at a field, written to note it and move nothing,
+  was beaten by its mutant, which compared the record with where every
+  record begins and so moved a new widget's caret to a selection a script
+  had set before it was made. The mutant's rule became the code. A 26th
+  holds what QEMU found (below).
+- **QEMU**: a served page whose field rewrites its value on every input
+  and restores the caret it read, as React's controlled inputs do: `abc`,
+  Left twice and `x` give `AXBC` with the caret after the X. The first run
+  read caret 2 and drew the caret at the end: the value's new text put the
+  caret there, and the selection the script restored left the record
+  where it was, so nothing told the field to move back. A field whose text
+  the sync replaces now takes the record's selection again, and the
+  scripted host holds it.
+
+**Codex, round 1**: three findings, all fixed. A password field edited at
+the end of its value whatever its caret said, which the hook made visible
+(a script's selection in one, then a key typed, appended): yonder now
+edits the value at the bullets' caret and selection, Backspace takes the
+character before it, and the keys that are no character (arrows, Home,
+End) move the caret instead of being swallowed. A script's
+`setSelectionRange(0, 0)` on an untouched field moved no caret, because
+the record held those numbers already: libpage now counts the record's
+writes (`os64_page_node_selection_writes`) and the pull compares the count
+too. And `setRangeText` converted its offsets before its replacement,
+where WebIDL converts left to right. Three mutants for the new rules, each
+caught: the group is 29.
+
+**Codex, round 2**: one finding, fixed. A click at the end of a field
+nobody had touched moved no caret (the widget shows it at the value's end
+while the record is at 0), so nothing was published and the focus listener
+read 0. A press on a field, or a focus a person's event moves to it, is now
+the person's choice of its caret whether or not the caret moved, and the
+next flush publishes it; a script's `focus()` chooses nothing. Two mutants,
+each caught: the group is 31.
 
 ### Slice 6a, XML foundation as built — 2026-10-25
 

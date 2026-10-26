@@ -531,9 +531,22 @@ static bool selection_control(os64_page_state_t *state, const os64_html_node_t *
                                            input == OS64_PAGE_INPUT_PASSWORD));
 }
 
-// The length of a control's value in UTF-16 code units, which the selection
-// counts in, into *units; the value read's failure (NO_MEMORY: reading may
-// sanitize and cache) is returned, and nothing is set.
+// The length of `len` bytes of UTF-8 in UTF-16 code units, which the
+// selection counts in: a four-byte character is two.
+static uint32_t utf16_units(const char *text, size_t len)
+{
+    uint32_t units = 0;
+    for (size_t i = 0; text != NULL && i < len; i++) {
+        unsigned char c = (unsigned char)text[i];
+        if ((c & 0xC0) != 0x80)
+            units += c >= 0xF0 ? 2 : 1;
+    }
+    return units;
+}
+
+// The length of a control's value in UTF-16 code units into *units; the
+// value read's failure (NO_MEMORY: reading may sanitize and cache) is
+// returned, and nothing is set.
 static int64_t value_units(os64_page_state_t *state, const os64_html_node_t *node, uint32_t *units)
 {
     const char *value = NULL;
@@ -541,12 +554,7 @@ static int64_t value_units(os64_page_state_t *state, const os64_html_node_t *nod
     int64_t read = os64_page_node_value(state, node, &value, &len);
     if (read < 0)
         return read;
-    *units = 0;
-    for (size_t i = 0; value != NULL && i < len; i++) {
-        unsigned char c = (unsigned char)value[i];
-        if ((c & 0xC0) != 0x80)
-            *units += c >= 0xF0 ? 2 : 1;
-    }
+    *units = utf16_units(value, len);
     return 0;
 }
 
@@ -559,15 +567,22 @@ int64_t os64_page_node_selection(os64_page_state_t *state, const os64_html_node_
     int64_t read = value_units(state, node, &units);
     if (read < 0)
         return read;
-    const PNodeState *edit = p_state_find(state, node);
+    PNodeState *edit = p_state_find(state, node);
     if (edit == NULL || !edit->range_kept) {
-        *start = *end = units;
+        *start = *end = 0;
         *direction = OS64_PAGE_DIRECTION_NONE;
         return 0;
     }
     *end = edit->range_end < units ? edit->range_end : units;
     *start = edit->range_start < *end ? edit->range_start : *end;
     *direction = (os64_page_direction_t)edit->range_direction;
+    // HTML clamps a selection when the value changes under it; libpage
+    // sees the tree only when it is asked, so the clamp a read finds is
+    // kept: a value that shrinks, is read, and grows again leaves the
+    // selection where the shrink put it. One that shrinks and grows with no
+    // read between them is not seen (DEBTS.md).
+    edit->range_start = *start;
+    edit->range_end = *end;
     return 0;
 }
 
@@ -599,7 +614,14 @@ int64_t os64_page_node_set_selection(os64_page_state_t *state, const os64_html_n
     edit->range_end = end;
     edit->range_direction = (uint8_t)direction;
     edit->range_kept = true;
+    edit->range_writes++;
     return 0;
+}
+
+uint32_t os64_page_node_selection_writes(os64_page_state_t *state, const os64_html_node_t *node)
+{
+    const PNodeState *edit = selection_control(state, node) ? p_state_find(state, node) : NULL;
+    return edit != NULL ? edit->range_writes : 0;
 }
 
 // Where `option` is in its select's list, -1 when it is not there.
@@ -1004,14 +1026,19 @@ int64_t p_state_set_value(os64_page_state_t *state, const os64_html_node_t *node
     }
     p_reserve_commit(&reserve);
     edit = p_state_find(state, node);
+    // A value that differs puts the selection at its end (HTML's value
+    // setter moves the text entry cursor there); the same value, from
+    // whichever origin, leaves it where it was.
+    if (changed) {
+        edit->range_start = edit->range_end = utf16_units(text, value_len);
+        edit->range_direction = OS64_PAGE_DIRECTION_NONE;
+        edit->range_kept = true;
+        edit->range_writes++;
+    }
     if (!attribute)
         changed |= edit->text_user != user;
     edit->text_user = user;
     edit->text_clean = false;
-    // A changed value puts the selection at its end (HTML's value setter
-    // moves the text entry cursor there): the kept one goes.
-    if (changed)
-        edit->range_kept = false;
     char *previous = attribute ? edit->cache : edit->text;
     if (!attribute && edit->text == NULL && edit->cache != NULL &&
         edit->cache_version == os64_html_version(state->doc) &&

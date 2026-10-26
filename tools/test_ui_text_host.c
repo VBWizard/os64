@@ -1903,6 +1903,16 @@ static void ui_test_field_selection(void)
         CHECK(tf.selected && tf.anchor==1 && tf.cursor==4);
         CHECK(ui_test_clip_len==4 && !memcmp(ui_test_clip,"keep",4));
     }
+    /* An app's own selection, by range: the caret at the second offset,
+     * nothing selected when the two are one, each clamped and taken back
+     * to the start of its letter. */
+    os64_ui_textfield_set(&ui,&tf,"caf\xc3\xa9");
+    os64_ui_textfield_select_range(&ui,&tf,1,3);
+    CHECK(tf.selected && tf.anchor==1 && tf.cursor==3);
+    os64_ui_textfield_select_range(&ui,&tf,2,2);
+    CHECK(!tf.selected && tf.anchor==2 && tf.cursor==2);
+    os64_ui_textfield_select_range(&ui,&tf,99,4);
+    CHECK(tf.selected && tf.anchor==5 && tf.cursor==3);
     CHECK(os64_ui_font_release(&ui)==OS64_FONT_OK);
 }
 

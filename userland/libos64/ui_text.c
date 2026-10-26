@@ -768,6 +768,16 @@ void os64_ui_textfield_select_all(os64_ui_t *ui, os64_ui_textfield_t *tf)
 	os64_ui_mark_dirty(ui, &tf->w);
 }
 
+void os64_ui_textfield_select_range(os64_ui_t *ui, os64_ui_textfield_t *tf, size_t anchor, size_t cursor)
+{
+	// Each end where a letter ends, as every edit leaves them.
+	tf->anchor = os64_ui_text_snap(tf->buf, tf->len, anchor < tf->len ? anchor : tf->len, false);
+	tf->cursor = os64_ui_text_snap(tf->buf, tf->len, cursor < tf->len ? cursor : tf->len, false);
+	tf->selected = tf->anchor != tf->cursor;
+	field_keep_caret_visible(tf, ui);
+	os64_ui_mark_dirty(ui, &tf->w);
+}
+
 // ── the system clipboard, at the widget's edge ──────────────────────────────
 // Everything below talks to /sys/clipboard the same way husk does: it is a
 // FILE, opened for "w" to copy and "r" to paste (CLIPBOARD.md). No syscall,

@@ -1006,6 +1006,12 @@ void os64_ui_textfield_set(os64_ui_t *ui, os64_ui_textfield_t *tf,
 // does, for an app's own way into it (a browser's Ctrl+L to its address).
 // It does not move focus.
 void os64_ui_textfield_select_all(os64_ui_t *ui, os64_ui_textfield_t *tf);
+// The selection from `anchor` to `cursor`, byte offsets of the content: the
+// caret at `cursor`, and nothing selected when the two are one. Each is
+// clamped to the content and taken back to the start of the letter it falls
+// in. For an app whose own record of the selection moved (a page's script,
+// in a browser). It does not move focus.
+void os64_ui_textfield_select_range(os64_ui_t *ui, os64_ui_textfield_t *tf, size_t anchor, size_t cursor);
 // Copy the selection; return bytes copied, zero for none, negative on failure.
 int64_t os64_ui_textfield_copy(const os64_ui_textfield_t *tf);
 // Insert the clipboard at the caret, replacing a selection on success.

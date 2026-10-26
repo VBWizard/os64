@@ -494,6 +494,12 @@ Oracle: add `html/semantics/forms/textfieldselection`, and
 `html/semantics/forms/the-input-element` `selection.html` (the directory is
 added in full by P3; its other pages wait there).
 
+**As built** (MODERN_WEB.md § 0f's P2, as built, is the record), as listed,
+and with it HTML's select event, which three of the oracle's pages wait on,
+and the rules for where a selection begins (0) and how a value moves it.
+`the-input-element` was added whole now, its expectations P3's to grow, and
+`onselect` waits on the handler mask (DEBTS.md).
+
 ### P3 — the controls' reflections, form owner and labels (86 members, 6 interfaces)
 
 (b) to 87.6% distinctive, 95.5% all names. Likely two PRs: the controls'

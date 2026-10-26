@@ -6,8 +6,10 @@ option selectedness and list walk, and the select row (the option's
 members, the select's, the options collection and its indexed setter, the
 Option factory); and to the page fixes after it: the lists' interfaces,
 HTMLElement's members, template content, the selections, DOMParser,
-createElementNS and the formless button's status line; and to P1b's
-EventTarget, its constructor and Window - against the
+createElementNS and the formless button's status line; to P1b's
+EventTarget, its constructor and Window; and to P2's selections (where one
+begins, setRangeText, the select event, and the field's caret and the
+record kept as one) - against the
 harnesses that hold each rule: a mutant is
 CAUGHT when one of its harnesses fails, MISSED when they all pass, which
 means a test is missing and gets written. A build failure is neither.
@@ -42,6 +44,7 @@ IMPLEMENTATION_C = 'userland/libdom/implementation.c'
 YONDER_C = 'userland/apps/yonder/yonder.c'
 FRAGMENT_C = 'userland/libhtml/fragment.c'
 EVENT_C = 'userland/libdom/event.c'
+UI_TEXT_C = 'userland/libos64/ui_text.c'
 DOM = 'tools/test_dom_host.sh'
 PAGE = 'tools/test_libpage_host.sh'
 SCRIPTS = 'tools/test_yonder_scripts_host.sh'
@@ -146,11 +149,12 @@ mutants = [
      '        if (node->tag == OS64_HTML_TAG_TEMPLATE) return D_PROTO_HTML_ELEMENT;', (DOM,)),
     ('content-is-template', MIXIN_C, '    return d_wrap(dom, ctx, self->template_contents);',
      '    return d_wrap(dom, ctx, (os64_html_node_t *)self);', (DOM,)),
-    ('value-keeps-selection', STATE_C, '    if (changed)\n        edit->range_kept = false;',
-     '    if (changed && false)\n        edit->range_kept = false;', (PAGE, DOM)),
-    ('selection-counts-bytes', STATE_C, '            *units += c >= 0xF0 ? 2 : 1;', '            *units += 1;', (PAGE, DOM)),
-    ('selection-read-failure-ignored', STATE_C, '    if (read < 0)\n        return read;\n    *units = 0;',
-     '    if (read < 0)\n        value = NULL;\n    *units = 0;', (PAGE, DOM)),
+    ('value-keeps-selection', STATE_C, '    if (changed) {\n        edit->range_start = edit->range_end = utf16_units(text, value_len);',
+     '    if (changed && false) {\n        edit->range_start = edit->range_end = utf16_units(text, value_len);', (PAGE, DOM)),
+    ('selection-counts-bytes', STATE_C, '            units += c >= 0xF0 ? 2 : 1;\n    }\n    return units;',
+     '            units += 1;\n    }\n    return units;', (PAGE, DOM)),
+    ('selection-read-failure-ignored', STATE_C, '    if (read < 0)\n        return read;\n    *units = utf16_units(value, len);',
+     '    if (read < 0)\n        value = NULL;\n    *units = utf16_units(value, len);', (PAGE, DOM)),
     ('password-has-no-selection', STATE_C,
      '                                           input == OS64_PAGE_INPUT_PASSWORD));',
      '                                           input == OS64_PAGE_INPUT_TEXT));', (PAGE, DOM)),
@@ -227,6 +231,69 @@ mutants = [
      '                     JS_VALUE_GET_PTR(own) == JS_VALUE_GET_PTR(function) && false)', (DOM,)),
     ('global-keeps-its-tag', EVENT_C,
      '    return adopted < 0 ? -1 : untag_global(ctx, global);', '    return adopted < 0 || (false && untag_global(ctx, global) < 0) ? -1 : 0;', (DOM,)),
+    # P2: where a selection begins and how a value moves it
+    ('selection-begins-at-end', STATE_C, '        *start = *end = 0;\n        *direction = OS64_PAGE_DIRECTION_NONE;',
+     '        *start = *end = units;\n        *direction = OS64_PAGE_DIRECTION_NONE;', (PAGE, DOM)),
+    ('same-value-moves-selection', STATE_C, '    if (changed) {\n        edit->range_start',
+     '    if (true) {\n        edit->range_start', (PAGE,)),
+    ('clamp-not-kept', STATE_C, '    edit->range_start = *start;\n    edit->range_end = *end;\n    return 0;', '    return 0;',
+     (PAGE,)),
+    # P2: setRangeText
+    ('range-text-two-arguments', SELECTION_C, '    if (argc < 1 || argc == 2) return', '    if (argc < 1) return', (DOM,)),
+    ('range-text-start-past-end', SELECTION_C, '    } else if (start > end) {', '    } else if (false && start > end) {',
+     (DOM,)),
+    ('range-text-select-collapses', SELECTION_C, '    case M_SELECT: sel_start = start; sel_end = new_end; break;',
+     '    case M_SELECT: sel_start = sel_end = new_end; break;', (DOM,)),
+    ('range-text-start-is-end', SELECTION_C, '    case M_START: sel_start = sel_end = start; break;',
+     '    case M_START: sel_start = sel_end = new_end; break;', (DOM,)),
+    ('range-text-preserve-stays', SELECTION_C,
+     '        if (sel_start > end) sel_start = (uint32_t)((int64_t)sel_start + delta);',
+     '        if (false) sel_start = (uint32_t)((int64_t)sel_start + delta);', (DOM,)),
+    ('range-text-preserve-no-snap', SELECTION_C, '        else if (sel_end > start) sel_end = new_end;',
+     '        else if (false) sel_end = new_end;', (DOM,)),
+    ('range-text-bytes', SELECTION_C, '        seen += width == 4 ? 2 : 1;', '        seen += 1;', (DOM,)),
+    ('range-text-mode-unchecked', SELECTION_C, '        if (mode < 0) {\n            JS_FreeCString(ctx, added);',
+     '        if (mode < -1) {\n            JS_FreeCString(ctx, added);', (DOM,)),
+    # P2: the select event
+    ('select-never-queued', SELECTION_C, '    return d_timer_add(dom, ctx, fired, 0) == 0 ? -1 : 0;\n}',
+     '    JS_FreeValue(ctx, fired);\n    return 0;\n}', (DOM,)),
+    ('select-on-every-set', SELECTION_C,
+     '        (now_start == start && now_end == end && now_direction == direction))\n        return 0;',
+     '        (false && now_start == start && now_end == end && now_direction == direction))\n        return 0;', (DOM,)),
+    ('select-cancelable', SELECTION_C, 'd_event_new(dom, ctx, "select", true, false, true)',
+     'd_event_new(dom, ctx, "select", true, true, true)', (DOM,)),
+    # P2: the field's caret and the record are one (yonder's forms)
+    ('hook-never-pulls', YONDER_C, '    forms_pull_selections();\n    return true;',
+     '    (void)forms_pull_selections;\n    return true;', (SCRIPTS,)),
+    ('hook-never-pushes', YONDER_C, '        field_selection_push(fw, written);',
+     '        if (false) field_selection_push(fw, written);', (SCRIPTS,)),
+    ('hook-write-not-forced', YONDER_C, '    if (!written && same_selection(now, fw->field_seen))',
+     '    if (same_selection(now, fw->field_seen))', (SCRIPTS,)),
+    ('hook-backward-forward', YONDER_C, '    if (record.direction == OS64_PAGE_DIRECTION_BACKWARD)', '    if (false)',
+     (SCRIPTS,)),
+    ('hook-password-bytes', YONDER_C, '    return fw->kind == FW_PASSWORD ? chars : i;',
+     '    return fw->kind == FW_PASSWORD ? i + (chars & 0) : i;', (SCRIPTS,)),
+    ('hook-first-sight-ignores-record', YONDER_C, '    if (!record_selection(fw, &record)) {\n        field_selection_note(fw);',
+     '    if (!fw->seen || !record_selection(fw, &record)) {\n        field_selection_note(fw);', (SCRIPTS,)),
+    ('hook-untouched-moves', YONDER_C, '    if (same_selection(record, fw->record_seen))\n        return;',
+     '    if (fw->seen && same_selection(record, fw->record_seen))\n        return;', (SCRIPTS,)),
+    ('hook-rewrite-forgets-caret', YONDER_C, '                if (fw->presented)\n                    fw->record_seen.start = UINT32_MAX;',
+     '                if (false)\n                    fw->record_seen.start = UINT32_MAX;', (SCRIPTS,)),
+    ('writes-not-counted', STATE_C, '    edit->range_kept = true;\n    edit->range_writes++;\n    return 0;',
+     '    edit->range_kept = true;\n    return 0;', (PAGE, SCRIPTS)),
+    ('hook-writes-ignored', YONDER_C, ' && a.direction == b.direction && a.writes == b.writes;',
+     ' && a.direction == b.direction;', (SCRIPTS,)),
+    ('password-edits-the-end', YONDER_C,
+     '    size_t from = password_byte(fw, lo), to = password_byte(fw, hi);',
+     '    size_t from = fw->secret_len + 0 * password_byte(fw, lo), to = fw->secret_len + 0 * password_byte(fw, hi);',
+     (SCRIPTS,)),
+    ('hook-press-chooses-nothing', YONDER_C,
+     '    if (ev->type == OS64_GUI_EVENT_MOUSE_BUTTON_DOWN || g.ui.focus != had)\n        field_selection_chosen(g.ui.focus);',
+     '    if (g.ui.focus != had && false)\n        field_selection_chosen(g.ui.focus);', (SCRIPTS,)),
+    ('hook-chosen-not-forced', YONDER_C, '        fw->field_seen.start = UINT32_MAX;\n        return;',
+     '        return;', (SCRIPTS,)),
+    ('select-range-never-selects', UI_TEXT_C, '\ttf->selected = tf->anchor != tf->cursor;', '\ttf->selected = false;',
+     (SCRIPTS,)),
 ]
 
 caught, missed, unbuilt = [], [], []
