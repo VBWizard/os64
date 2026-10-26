@@ -52,8 +52,10 @@ struct PNodeState {
     // Its cache holds the child-text baseline until a child mutation resets it.
     bool text_clean;
     bool on_dirty, on_attr, selected_dirty, selected_attr;
-    // A text control's selection a script set (os64_page_node_set_selection),
-    // in UTF-16 code units of its value; `range_kept` says one was.
+    // A text control's selection, in UTF-16 code units of its value: one a
+    // script or the host set (os64_page_node_set_selection), or the value's
+    // end where a changed value put it. `range_kept` says there is one;
+    // without it the selection is at 0, where every control's begins.
     uint32_t range_start, range_end;
     uint8_t range_direction;
     bool range_kept;

@@ -609,12 +609,14 @@ int64_t os64_page_node_checked(os64_page_state_t *state, const os64_html_node_t 
 int64_t os64_page_node_selected_index(os64_page_state_t *state,
                                       const os64_html_node_t *node, int32_t *index);
 // A text control's selection (HTML § 4.10.6), by node, in UTF-16 code
-// units of its value: the one a script set, clamped to the value as it
-// stands, or the value's end before any was set (where a person's typing
-// leaves the caret; the field's own caret is not read, DEBTS.md). Setting
-// it is HTML's "set the selection range": the end clamped to the value, a
-// start past the end made the end. It is the scripts' record and moves no
-// field's caret, and it changes no control-state revision. WRONG_KIND for
+// units of its value: collapsed at 0 until something moves it; at the
+// value's end once a value that differs is set; else where a script, or
+// the host for the field a person moved its caret in, last set it. A read
+// clamps it to the value as it stands, and keeps the clamp. Setting it is
+// HTML's "set the selection range": the end clamped to the value, a start
+// past the end made the end. It is the record a field's caret is synced
+// with, by the host (yonder's forms), and moves no widget itself; it
+// changes no control-state revision. WRONG_KIND for
 // a node that is not a textarea or an input of type text, search, tel, url
 // or password; NO_MEMORY when the value cannot be read (or, setting, the
 // record kept), and then nothing changes.

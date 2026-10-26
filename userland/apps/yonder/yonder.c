@@ -1220,6 +1220,13 @@ typedef enum { ASK_NONE = 0, ASK_WORKER, ASK_REQUEST } Asker;
 // address and editor state survive a rebuilt model.
 typedef enum { FW_TEXT, FW_PASSWORD, FW_CHECK, FW_BUTTON, FW_LIST, FW_DROPDOWN, FW_FILE } FormKind;
 
+// A text control's selection in UTF-16 code units of its value, as
+// libpage's record keeps it.
+typedef struct {
+    uint32_t start, end;
+    os64_page_direction_t direction;
+} FieldSelection;
+
 typedef struct {
     FormKind kind;
     const os64_html_node_t *node;   // stable across model indices
@@ -1241,6 +1248,15 @@ typedef struct {
     char text[512];                 // a field's buffer, a button's caption
     char secret[512];               // a password's value: the field shows bullets
     size_t secret_len;
+    // A text field's selection and libpage's record of it as each stood
+    // when they were last in step, in UTF-16 code units of the value
+    // (field_selection_push and _pull): whichever moved since then is the
+    // one that moved. Until one does they are left as they are, the field's
+    // caret where the widget put it and the record at 0, where HTML begins
+    // it: `record_seen` starts zeroed, which is that beginning, and
+    // `field_seen` is noted when the field is first seen (`seen`).
+    FieldSelection field_seen, record_seen;
+    bool seen;
     // A dropdown's options as last synced, their nodes, labels and disabled
     // states hashed (options_signature): a change closes its open list, whose rows are a
     // copy of what they were.
@@ -6987,6 +7003,12 @@ static void forms_sync_from_model(bool text)
                 }
                 os64_memcpy(fw->synced, value, n + 1);
                 fw->synced_len = n;
+                // New text put the caret at its end, wherever the record is:
+                // the next pull puts it back (a script that rewrites a value
+                // and restores the selection it read leaves the record where
+                // it was). A field shown for the first time keeps its caret.
+                if (fw->presented)
+                    fw->record_seen.start = UINT32_MAX;
             }
             os64_memcpy(fw->model_text, value, n + 1);
             fw->model_text_len = n;
@@ -7022,31 +7044,176 @@ static void forms_sync_from_model(bool text)
     }
 }
 
-// Flush before script and activation so the binding observes a person's edit.
-// A stale/refused edit keeps its buffer and reports the native refusal.
+// ── A text field's selection ────────────────────────────────────────────
+//
+// A page's scripts read and set a text control's selection through
+// libpage's record of it (os64_page_node_selection), in UTF-16 code units of
+// its value; a person moves the field's caret, in bytes of the field's
+// text. The two are kept in step at the points where scripts can see them:
+// before a script runs, a field whose caret a person moved since they were
+// last in step is written into the record (forms_flush); after a script's
+// task, a record that moved since then moves the caret (script_rebuild).
+// Neither is moved until one of them moves: a field nobody has touched
+// keeps the caret the widget gave it, and its record reads 0.
+
+// The field's text, and how many of its bytes are one unit of offset: a
+// text field holds the value's bytes; a password field shows one bullet a
+// character of the value it hides, so an offset in it counts characters.
+static const char *field_value(const FormWidget *fw, size_t *len)
+{
+    *len = fw->kind == FW_PASSWORD ? fw->secret_len : os64_strlen(fw->text);
+    return fw->kind == FW_PASSWORD ? fw->secret : fw->text;
+}
+
+// The UTF-16 code units of the value before `offset` in the field.
+static uint32_t field_units_at(const FormWidget *fw, size_t offset)
+{
+    size_t len;
+    const char *value = field_value(fw, &len);
+    uint32_t units = 0;
+    size_t chars = 0;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)value[i];
+        if ((c & 0xC0) == 0x80)
+            continue;
+        if (fw->kind == FW_PASSWORD ? chars == offset : i >= offset)
+            break;
+        units += c >= 0xF0 ? 2 : 1;
+        chars++;
+    }
+    return units;
+}
+
+// The field's offset at `units` UTF-16 code units of the value; past the
+// value, its end.
+static size_t field_offset_of(const FormWidget *fw, uint32_t units)
+{
+    size_t len;
+    const char *value = field_value(fw, &len);
+    uint32_t seen = 0;
+    size_t chars = 0, i = 0;
+    for (; i < len; i++) {
+        unsigned char c = (unsigned char)value[i];
+        if ((c & 0xC0) == 0x80)
+            continue;
+        if (seen >= units)
+            break;
+        seen += c >= 0xF0 ? 2 : 1;
+        chars++;
+    }
+    return fw->kind == FW_PASSWORD ? chars : i;
+}
+
+// The field's own selection, in the record's terms: its ends in code
+// units, and its direction (the caret after the anchor is forward).
+static FieldSelection field_selection(const FormWidget *fw)
+{
+    const os64_ui_textfield_t *tf = &fw->u.field;
+    uint32_t caret = field_units_at(fw, tf->cursor);
+    uint32_t anchor = tf->selected ? field_units_at(fw, tf->anchor) : caret;
+    return (FieldSelection){anchor < caret ? anchor : caret, anchor < caret ? caret : anchor,
+                            anchor == caret ? OS64_PAGE_DIRECTION_NONE
+                            : anchor < caret ? OS64_PAGE_DIRECTION_FORWARD : OS64_PAGE_DIRECTION_BACKWARD};
+}
+
+// The record as it stands; false for a control that has none (a number
+// input) or one that cannot be read now.
+static bool record_selection(const FormWidget *fw, FieldSelection *out)
+{
+    os64_page_state_t *state = os64_page_shared_state(page_model(&g.page));
+    return os64_page_node_selection(state, fw->node, &out->start, &out->end, &out->direction) == 0;
+}
+
+static bool same_selection(FieldSelection a, FieldSelection b)
+{
+    return a.start == b.start && a.end == b.end && a.direction == b.direction;
+}
+
+// Both sides noted as they now stand: they are in step.
+static void field_selection_note(FormWidget *fw)
+{
+    fw->field_seen = field_selection(fw);
+    fw->seen = record_selection(fw, &fw->record_seen);
+}
+
+// A person's selection into the record: when the field's selection moved
+// since the two were last in step, or when `written` (the person's text was
+// just written, and a value that differs puts the record at its end).
+static void field_selection_push(FormWidget *fw, bool written)
+{
+    if (!fw->seen) {
+        field_selection_note(fw);
+        if (!written)
+            return;
+    }
+    FieldSelection now = field_selection(fw);
+    if (!written && same_selection(now, fw->field_seen))
+        return;
+    os64_page_state_t *state = os64_page_shared_state(page_model(&g.page));
+    (void)os64_page_node_set_selection(state, fw->node, now.start, now.end, now.direction);
+    field_selection_note(fw);
+}
+
+// The record into the field: when it moved since the two were last in step
+// (a script set it, or a value set put it at the end), the caret moves with
+// it. A field not yet seen compares the record with where every record
+// begins, so a record a script moved before this widget was made (a
+// password field become a text one is a new widget) still moves its caret.
+static void field_selection_pull(FormWidget *fw)
+{
+    FieldSelection record;
+    if (!record_selection(fw, &record)) {
+        field_selection_note(fw);
+        return;
+    }
+    if (same_selection(record, fw->record_seen))
+        return;
+    size_t from = field_offset_of(fw, record.start), to = field_offset_of(fw, record.end);
+    if (record.direction == OS64_PAGE_DIRECTION_BACKWARD)
+        os64_ui_textfield_select_range(&g.ui, &fw->u.field, to, from);
+    else
+        os64_ui_textfield_select_range(&g.ui, &fw->u.field, from, to);
+    field_selection_note(fw);
+}
+
+// Every text field's record into its caret, after a script's task.
+static void forms_pull_selections(void)
+{
+    for (int32_t i = 0; i < g.nfw; i++)
+        if (g.fw[i]->kind == FW_TEXT || g.fw[i]->kind == FW_PASSWORD)
+            field_selection_pull(g.fw[i]);
+}
+
+// Flush before script and activation so the binding observes a person's edit
+// and where the person left the caret. A stale/refused edit keeps its buffer
+// and reports the native refusal.
 static void forms_flush(void)
 {
     os64_page_t *model = page_model(&g.page);
     for (int32_t i = 0; i < g.nfw; i++) {
         FormWidget *fw = g.fw[i];
         const os64_page_control_t *c = os64_page_control(model, widget_control(fw));
-        if (c == NULL || c->readonly || c->disabled ||
-            (fw->kind != FW_TEXT && fw->kind != FW_PASSWORD))
+        if (c == NULL || (fw->kind != FW_TEXT && fw->kind != FW_PASSWORD))
             continue;
         const char *v = fw->kind == FW_PASSWORD ? fw->secret : fw->text;
         size_t n = fw->kind == FW_PASSWORD ? fw->secret_len : os64_strlen(fw->text);
-        if (n == fw->synced_len && os64_memcmp(v, fw->synced, n) == 0)
-            continue;
-        int64_t result = os64_page_set_text(model, widget_control(fw), v, n);
-        if (result < 0) {
-            status_rest(os64_page_reason_name((os64_page_reason_t)-result));
-            continue;
+        // A read-only or disabled field's text is not the person's to
+        // change, but its selection still is.
+        bool written = false;
+        if (!c->readonly && !c->disabled && (n != fw->synced_len || os64_memcmp(v, fw->synced, n) != 0)) {
+            int64_t result = os64_page_set_text(model, widget_control(fw), v, n);
+            if (result < 0) {
+                status_rest(os64_page_reason_name((os64_page_reason_t)-result));
+                continue;
+            }
+            os64_memcpy(fw->synced, v, n);
+            fw->synced[n] = '\0';
+            fw->synced_len = n;
+            c = os64_page_control(model, widget_control(fw));
+            fw->model_text_len = editor_value(fw, c, fw->model_text);
+            written = true;
         }
-        os64_memcpy(fw->synced, v, n);
-        fw->synced[n] = '\0';
-        fw->synced_len = n;
-        c = os64_page_control(model, widget_control(fw));
-        fw->model_text_len = editor_value(fw, c, fw->model_text);
+        field_selection_push(fw, written);
     }
 }
 
@@ -7535,6 +7702,9 @@ static bool script_rebuild(void)
         forms_sync_from_model(true);
         p->state_version = revision;
     }
+    // A selection a script set changes no revision: it is asked of every
+    // text field, after its text.
+    forms_pull_selections();
     return true;
 }
 

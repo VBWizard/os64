@@ -1,11 +1,13 @@
 #include "internal.h"
 
-/* SELECTIONS (0f's P2, its core; INTERFACES_FORMS.md). Two kinds:
+/* SELECTIONS (0f's P2; INTERFACES_FORMS.md). Two kinds:
  *
- * A text control's (HTML § 4.10.6): selectionStart, selectionEnd,
- * selectionDirection, setSelectionRange() and select() on input and
- * textarea, over libpage's record of it (os64_page_node_selection), in
- * UTF-16 code units. An input of a type without one (checkbox, email,
+ * A text control's (HTML § 4.10.20): selectionStart, selectionEnd,
+ * selectionDirection, setSelectionRange(), select() and setRangeText() on
+ * input and textarea, over libpage's record of it
+ * (os64_page_node_selection), which the host keeps in step with the
+ * field's caret, in UTF-16 code units; a set that moves it queues the
+ * select event. An input of a type without one (checkbox, email,
  * number...) answers null and throws InvalidStateError on a set, as HTML
  * says. React's selection tracking asks the focused field for these, and
  * without them fell through to window.getSelection().
@@ -44,6 +46,42 @@ static JSValue no_selection(JSContext *ctx)
 static JSValue no_room(JSContext *ctx)
 {
     return d_error(ctx, "QuotaExceededError", "DOM state quota exceeded");
+}
+
+/* The select event a set queued: fired at the element as a task of its own,
+ * trusted, bubbling and not cancelable. */
+static JSValue select_fired(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                            JSValue *data)
+{
+    (void)self; (void)argc; (void)argv; (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    const os64_html_node_t *node = d_node(dom, ctx, data[1]);
+    if (node == NULL) return JS_EXCEPTION;
+    JSValue event = d_event_new(dom, ctx, "select", true, false, true);
+    if (JS_IsException(event)) return event;
+    int result = d_dispatch(dom, ctx, event, node);
+    JS_FreeValue(ctx, event);
+    return result < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+}
+
+/* HTML's "set the selection range" ends by queuing an element task to fire
+ * select when the set moved the selection, in extent or direction: a
+ * binding timer due at once, which the host runs as the task it is.
+ * `before` and the record as it now stands are compared. -1 with an
+ * exception pending when it could not be queued. */
+static int select_queue(os64_dom_t *dom, JSContext *ctx, JSValueConst element, const os64_html_node_t *node,
+                        uint32_t start, uint32_t end, os64_page_direction_t direction)
+{
+    uint32_t now_start, now_end;
+    os64_page_direction_t now_direction;
+    if (os64_page_node_selection(dom->state, node, &now_start, &now_end, &now_direction) != 0 ||
+        (now_start == start && now_end == end && now_direction == direction))
+        return 0;
+    JSValue fn_data[2] = {dom->anchor->value, (JSValue)element};
+    JSValue fired = JS_NewCFunctionData(ctx, select_fired, 0, 0, 2, fn_data);
+    if (JS_IsException(fired)) return -1;
+    return d_timer_add(dom, ctx, fired, 0) == 0 ? -1 : 0;
 }
 
 static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv,
@@ -96,6 +134,8 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
          * says; every other change throws. */
         return magic == X_SELECT ? JS_UNDEFINED : no_selection(ctx);
     }
+    uint32_t was_start = start, was_end = end;
+    os64_page_direction_t was_direction = direction;
     switch (magic) {
     case X_START: start = a; if (end < start) end = start; break;
     case X_END: end = b; break;
@@ -106,7 +146,129 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
     d_string_free(dom, &name);
     int64_t status = os64_page_node_set_selection(dom->state, self, start, end, direction);
     if (status == -OS64_PAGE_REASON_NO_MEMORY) return no_room(ctx);
-    return status < 0 ? no_selection(ctx) : JS_UNDEFINED;
+    if (status < 0) return no_selection(ctx);
+    return select_queue(dom, ctx, this_value, self, was_start, was_end, was_direction) < 0 ? JS_EXCEPTION
+                                                                                           : JS_UNDEFINED;
+}
+
+/* The byte offset in `len` bytes of UTF-8 of the `units`th UTF-16 code
+ * unit. An offset between the two halves of a pair, which UTF-8 cannot
+ * split, is taken past the character. */
+static size_t byte_of_unit(const char *text, size_t len, uint32_t units)
+{
+    size_t at = 0;
+    for (uint32_t seen = 0; at < len && seen < units;) {
+        unsigned char c = (unsigned char)text[at];
+        size_t width = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+        seen += width == 4 ? 2 : 1;
+        at += width;
+    }
+    return at < len ? at : len;
+}
+
+/* `len` bytes of UTF-8 in UTF-16 code units. */
+static uint32_t units_of(const char *text, size_t len)
+{
+    uint32_t units = 0;
+    for (size_t i = 0; i < len; i++)
+        if (((unsigned char)text[i] & 0xC0) != 0x80) units += (unsigned char)text[i] >= 0xF0 ? 2 : 1;
+    return units;
+}
+
+enum { M_SELECT, M_START, M_END, M_PRESERVE };
+
+/* setRangeText(replacement[, start, end[, selectionMode]]) (HTML § 4.10.20):
+ * the replacement spliced into the value at [start, end), or at the
+ * selection with one argument; the value made dirty, as a script's value
+ * set makes it; the selection put where the mode says. No input event
+ * fires: a script did this. */
+static JSValue range_text(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv, int magic,
+                          JSValue *data)
+{
+    (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    const os64_html_node_t *self = d_node(dom, ctx, this_value);
+    if (self == NULL) return JS_EXCEPTION;
+    /* WebIDL's two overloads: one argument, or three or four. */
+    if (argc < 1 || argc == 2) return JS_ThrowTypeError(ctx, "setRangeText takes a replacement, or one, a start and an end");
+    bool ranged = argc >= 3;
+    uint32_t start = 0, end = 0;
+    int mode = M_PRESERVE;
+    if (ranged && (JS_ToUint32(ctx, &start, argv[1]) < 0 || JS_ToUint32(ctx, &end, argv[2]) < 0)) return JS_EXCEPTION;
+    if (argc >= 4 && !JS_IsUndefined(argv[3])) {
+        const char *name = JS_ToCString(ctx, argv[3]);
+        if (name == NULL) return JS_EXCEPTION;
+        mode = os64_streq(name, "select") ? M_SELECT : os64_streq(name, "start") ? M_START
+             : os64_streq(name, "end") ? M_END : os64_streq(name, "preserve") ? M_PRESERVE : -1;
+        JS_FreeCString(ctx, name);
+        if (mode < 0) return JS_ThrowTypeError(ctx, "The selection mode is not select, start, end or preserve");
+    }
+    size_t added_len = 0;
+    const char *added = JS_ToCStringLen(ctx, &added_len, argv[0]);
+    if (added == NULL) return JS_EXCEPTION;
+    /* Every conversion is done, so the control is read as it stands. */
+    uint32_t sel_start, sel_end;
+    os64_page_direction_t direction;
+    int64_t read = os64_page_node_selection(dom->state, self, &sel_start, &sel_end, &direction);
+    const char *value = NULL;
+    size_t value_len = 0;
+    if (read == 0) read = os64_page_node_value(dom->state, self, &value, &value_len);
+    if (read < 0) {
+        JS_FreeCString(ctx, added);
+        return read == -OS64_PAGE_REASON_NO_MEMORY ? no_room(ctx) : no_selection(ctx);
+    }
+    if (!ranged) {
+        start = sel_start;
+        end = sel_end;
+    } else if (start > end) {
+        JS_FreeCString(ctx, added);
+        return d_error(ctx, "IndexSizeError", "The start is past the end");
+    }
+    uint32_t length = units_of(value, value_len);
+    if (start > length) start = length;
+    if (end > length) end = length;
+    size_t from = byte_of_unit(value, value_len, start), to = byte_of_unit(value, value_len, end);
+    size_t made_len = from + added_len + (value_len - to);
+    char *made = js_malloc(ctx, made_len + 1);
+    if (made == NULL) {
+        JS_FreeCString(ctx, added);
+        return JS_EXCEPTION;
+    }
+    os64_memcpy(made, value, from);
+    os64_memcpy(made + from, added, added_len);
+    os64_memcpy(made + from + added_len, value + to, value_len - to);
+    made[made_len] = '\0';
+    uint32_t new_end = start + units_of(added, added_len);
+    JS_FreeCString(ctx, added);
+    int64_t set = os64_page_node_set_value(dom->state, self, made, made_len);
+    js_free(ctx, made);
+    if (set < 0) return set == -OS64_PAGE_REASON_NO_MEMORY ? no_room(ctx) : no_selection(ctx);
+    /* What the closing "set the selection range" compares with: the
+     * selection as the new value left it. */
+    uint32_t was_start = 0, was_end = 0;
+    os64_page_direction_t was_direction = OS64_PAGE_DIRECTION_NONE;
+    (void)os64_page_node_selection(dom->state, self, &was_start, &was_end, &was_direction);
+    switch (mode) {
+    case M_SELECT: sel_start = start; sel_end = new_end; break;
+    case M_START: sel_start = sel_end = start; break;
+    case M_END: sel_start = sel_end = new_end; break;
+    default: {
+        /* "preserve": a selection past the replaced text moves with it, and
+         * one inside it snaps to the new text's ends. */
+        int64_t delta = (int64_t)(new_end - start) - (int64_t)(end - start);
+        if (sel_start > end) sel_start = (uint32_t)((int64_t)sel_start + delta);
+        else if (sel_start > start) sel_start = start;
+        if (sel_end > end) sel_end = (uint32_t)((int64_t)sel_end + delta);
+        else if (sel_end > start) sel_end = new_end;
+        break;
+    }
+    }
+    int64_t status = os64_page_node_set_selection(dom->state, self, sel_start, sel_end, OS64_PAGE_DIRECTION_NONE);
+    if (status == -OS64_PAGE_REASON_NO_MEMORY) return no_room(ctx);
+    if (status < 0) return no_selection(ctx);
+    return select_queue(dom, ctx, this_value, self, was_start, was_end, was_direction) < 0 ? JS_EXCEPTION
+                                                                                           : JS_UNDEFINED;
 }
 
 /* ── The page's Selection ─────────────────────────────────────────────── */
@@ -152,7 +314,8 @@ int d_selection_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
                            kControl[i].writable) < 0)
                 return -1;
         if (d_method(dom, ctx, prototype, "setSelectionRange", control_member, 2, X_SET_RANGE) < 0 ||
-            d_method(dom, ctx, prototype, "select", control_member, 0, X_SELECT) < 0)
+            d_method(dom, ctx, prototype, "select", control_member, 0, X_SELECT) < 0 ||
+            d_method(dom, ctx, prototype, "setRangeText", range_text, 1, 0) < 0)
             return -1;
     }
     static const JSClassDef definition = {.class_name = "Selection"};

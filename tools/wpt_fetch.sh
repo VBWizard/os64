@@ -70,6 +70,8 @@ WPT_DIRS=(
     html/semantics/forms/the-option-element
     html/semantics/forms/the-optgroup-element
     import-maps
+    html/semantics/forms/textfieldselection
+    html/semantics/forms/the-input-element
 )
 
 top=$(git rev-parse --show-toplevel)

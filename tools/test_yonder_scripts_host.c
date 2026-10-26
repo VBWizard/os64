@@ -1891,6 +1891,64 @@ static void motion_cases(void) {
     s_animations=was_run; s_reduce_motion=was_reduce;
 }
 
+/* A text field's selection and its caret are one (0f's P2): a script's
+ * setSelectionRange moves the caret the person sees, and where the person
+ * leaves it is what the next script reads; a password field's offsets
+ * count characters, which its bullets stand for. */
+static void field_selection_hook(void) {
+    probe_page("<p id=out></p><input id=field value=hello><input id=pw type=password value='a\xC3\xA9z'>"
+        "<script>var f=document.getElementById('field'),p=document.getElementById('pw');"
+        "document.getElementById('out').textContent=f.selectionStart+','+f.selectionEnd;</script>"
+        "<script>f.setSelectionRange(1,4,'backward');p.setSelectionRange(2,3)</script>"
+        "<script>document.getElementById('out').textContent=f.selectionStart+','+f.selectionEnd+','+f.selectionDirection</script>"
+        "<script>document.getElementById('out').textContent=f.selectionStart+','+f.selectionEnd+','+f.selectionDirection</script>"
+        "<script>document.getElementById('out').textContent=f.value+','+f.selectionStart+','+f.selectionEnd</script>"
+        "<script>var at=f.selectionStart;f.value=f.value.toUpperCase();f.setSelectionRange(at,at)</script>"
+        "<script>p.type='text'</script>",
+        true);
+    script_turn();
+    check(probe_text_is("out","0,0"),"selection hook: a parsed field's selection begins at 0");
+    FormWidget *field=probe_field("field"), *pw=probe_field("pw");
+    script_turn();
+    script_rebuild();
+    check(field->u.field.selected && field->u.field.anchor==4 && field->u.field.cursor==1,
+          "selection hook: a script's backward selection moves the caret, to its start");
+    check(pw->u.field.selected && pw->u.field.anchor==2 && pw->u.field.cursor==3,
+          "selection hook: a password's offsets are characters, its bullets'");
+    /* The person selects two letters, forward, and the next script reads it. */
+    field->u.field.anchor=2; field->u.field.cursor=4; field->u.field.selected=true;
+    script_turn();
+    check(probe_text_is("out","2,4,forward"),"selection hook: where the person left the selection is what a script reads");
+    /* The person puts the caret at 2, types there and moves back: the
+     * caret is where it was last in step, and the text they wrote (which
+     * puts the record at the value's end) still carries it across. */
+    field->u.field.anchor=field->u.field.cursor=2; field->u.field.selected=false;
+    script_turn();
+    check(probe_text_is("out","2,2,none"),"selection hook: a collapsed caret, read");
+    os64_ui_set_focus(&g.ui,field->w);
+    os64_gui_event_t key={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii='X'}};
+    os64_ui_dispatch(&g.ui,&key);
+    field->u.field.anchor=field->u.field.cursor=2;
+    script_turn();
+    check(probe_text_is("out","heXllo,2,2"),"selection hook: typing then moving back leaves the caret, not the value's end");
+    /* React's way: the value rewritten and the selection it read restored,
+     * which leaves the record where it was while the new text put the
+     * caret at its end. */
+    script_turn();
+    script_rebuild();
+    check(os64_streq(field->text,"HEXLLO") && !field->u.field.selected && field->u.field.cursor==2,
+          "selection hook: a rewritten value with its selection restored keeps the caret there");
+    /* The password field becomes a text one, a new widget: the selection a
+     * script set before it was made is on its caret, in the value's bytes. */
+    script_turn();
+    script_rebuild();
+    FormWidget *text=probe_field("pw");
+    check(text!=pw && text->kind==FW_TEXT && text->u.field.selected && text->u.field.anchor==3 &&
+          text->u.field.cursor==4,
+          "selection hook: a new widget's caret is the selection a script set before it");
+    probe_drop();
+}
+
 static void edit_and_kind_changes(void) {
     probe_page("<input id=field type=number><script>document.body.setAttribute('class','first');</script>"
         "<script>document.body.setAttribute('class','second');</script>",true);
@@ -10016,6 +10074,7 @@ int main(void)
     motion_part_cases();
     tick_cases();
     edit_and_kind_changes();
+    field_selection_hook();
     password_edits();
     reset_editors();
     noscript_author_styles();

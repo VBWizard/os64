@@ -1,0 +1,851 @@
+# WPT's html/semantics/forms/textfieldselection in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/semantics/forms/textfieldselection --update
+# rewrites [passing].
+[required]
+# 0f's P2 (MODERN_WEB.md § 0f's P2, as built): the text controls'
+# selection, setRangeText and the select event. Each fails with the
+# switch off; the passes not listed here pass either way. What still
+# fails: onselect (the handler mask, DEBTS.md), requestAnimationFrame
+# (slice 5d), a clamp with no read between a shrink and a regrowth, a
+# textarea's defaultValue (P3), form.reset() run by the host after the
+# task, and testdriver's actions.
+defaultSelection.html	Default selectionStart and selectionEnd for [object HTMLInputElement]
+defaultSelection.html	Default selectionStart and selectionEnd for [object HTMLTextAreaElement]
+defaultSelection.html	selectionStart and selectionEnd change when value changed to upper case for [object HTMLInputElement]
+defaultSelection.html	selectionStart and selectionEnd change when value changed to upper case for [object HTMLTextAreaElement]
+defaultSelection.html	selectionStart and selectionEnd do not change when same value set again for [object HTMLInputElement]
+defaultSelection.html	selectionStart and selectionEnd do not change when same value set again for [object HTMLTextAreaElement]
+selection-after-content-change.html	input in document, with focus: selection must change when setting a different value
+selection-after-content-change.html	input in document, with focus: selection must not change when setting a value that becomes the same after the value sanitization algorithm
+selection-after-content-change.html	input in document, with focus: selection must not change when setting the same value
+selection-after-content-change.html	input in document: selection must change when setting a different value
+selection-after-content-change.html	input in document: selection must not change when setting a value that becomes the same after the value sanitization algorithm
+selection-after-content-change.html	input in document: selection must not change when setting the same value
+selection-after-content-change.html	input out of document: selection must change when setting a different value
+selection-after-content-change.html	input out of document: selection must not change when setting a value that becomes the same after the value sanitization algorithm
+selection-after-content-change.html	input out of document: selection must not change when setting the same value
+selection-after-content-change.html	textarea in document, with focus: selection must change when setting a different value
+selection-after-content-change.html	textarea in document, with focus: selection must not change when setting the same normalized value
+selection-after-content-change.html	textarea in document, with focus: selection must not change when setting the same value
+selection-after-content-change.html	textarea in document: selection must change when setting a different value
+selection-after-content-change.html	textarea in document: selection must not change when setting the same normalized value
+selection-after-content-change.html	textarea in document: selection must not change when setting the same value
+selection-after-content-change.html	textarea out of document: selection must change when setting a different value
+selection-after-content-change.html	textarea out of document: selection must not change when setting the same normalized value
+selection-after-content-change.html	textarea out of document: selection must not change when setting the same value
+selection-not-application-textarea.html	text field selection for the input textarea
+selection-not-application.html?default	assigning selectionDirection "none" on an input[type=aninvalidtype] should give the initial direction
+selection-not-application.html?default	assigning selectionDirection "none" on an input[type=null] should give the initial direction
+selection-not-application.html?default	assigning selectionDirection "none" on an input[type=password] should give the initial direction
+selection-not-application.html?default	assigning selectionDirection "none" on an input[type=search] should give the initial direction
+selection-not-application.html?default	assigning selectionDirection "none" on an input[type=tel] should give the initial direction
+selection-not-application.html?default	assigning selectionDirection "none" on an input[type=text] should give the initial direction
+selection-not-application.html?default	assigning selectionDirection "none" on an input[type=url] should give the initial direction
+selection-not-application.html?default	assigning selectionDirection on an input[type=button] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=checkbox] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=color] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=date] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=datetime-local] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=email] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=file] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=hidden] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=image] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=number] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=radio] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=range] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=reset] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=submit] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=time] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=button] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=checkbox] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=color] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=date] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=datetime-local] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=email] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=file] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=hidden] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=image] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=number] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=radio] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=range] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=reset] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=submit] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=time] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=button] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=checkbox] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=color] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=date] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=datetime-local] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=email] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=file] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=hidden] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=image] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=number] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=radio] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=range] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=reset] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=submit] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=time] throws InvalidStateError
+selection-not-application.html?default	selectionDirection on an input[type=aninvalidtype] returns a value
+selection-not-application.html?default	selectionDirection on an input[type=button] returns null
+selection-not-application.html?default	selectionDirection on an input[type=checkbox] returns null
+selection-not-application.html?default	selectionDirection on an input[type=color] returns null
+selection-not-application.html?default	selectionDirection on an input[type=date] returns null
+selection-not-application.html?default	selectionDirection on an input[type=datetime-local] returns null
+selection-not-application.html?default	selectionDirection on an input[type=email] returns null
+selection-not-application.html?default	selectionDirection on an input[type=file] returns null
+selection-not-application.html?default	selectionDirection on an input[type=hidden] returns null
+selection-not-application.html?default	selectionDirection on an input[type=image] returns null
+selection-not-application.html?default	selectionDirection on an input[type=null] returns a value
+selection-not-application.html?default	selectionDirection on an input[type=number] returns null
+selection-not-application.html?default	selectionDirection on an input[type=password] returns a value
+selection-not-application.html?default	selectionDirection on an input[type=radio] returns null
+selection-not-application.html?default	selectionDirection on an input[type=range] returns null
+selection-not-application.html?default	selectionDirection on an input[type=reset] returns null
+selection-not-application.html?default	selectionDirection on an input[type=search] returns a value
+selection-not-application.html?default	selectionDirection on an input[type=submit] returns null
+selection-not-application.html?default	selectionDirection on an input[type=tel] returns a value
+selection-not-application.html?default	selectionDirection on an input[type=text] returns a value
+selection-not-application.html?default	selectionDirection on an input[type=time] returns null
+selection-not-application.html?default	selectionDirection on an input[type=url] returns a value
+selection-not-application.html?default	selectionEnd on an input[type=aninvalidtype] returns a value
+selection-not-application.html?default	selectionEnd on an input[type=button] returns null
+selection-not-application.html?default	selectionEnd on an input[type=checkbox] returns null
+selection-not-application.html?default	selectionEnd on an input[type=color] returns null
+selection-not-application.html?default	selectionEnd on an input[type=date] returns null
+selection-not-application.html?default	selectionEnd on an input[type=datetime-local] returns null
+selection-not-application.html?default	selectionEnd on an input[type=email] returns null
+selection-not-application.html?default	selectionEnd on an input[type=file] returns null
+selection-not-application.html?default	selectionEnd on an input[type=hidden] returns null
+selection-not-application.html?default	selectionEnd on an input[type=image] returns null
+selection-not-application.html?default	selectionEnd on an input[type=null] returns a value
+selection-not-application.html?default	selectionEnd on an input[type=number] returns null
+selection-not-application.html?default	selectionEnd on an input[type=password] returns a value
+selection-not-application.html?default	selectionEnd on an input[type=radio] returns null
+selection-not-application.html?default	selectionEnd on an input[type=range] returns null
+selection-not-application.html?default	selectionEnd on an input[type=reset] returns null
+selection-not-application.html?default	selectionEnd on an input[type=search] returns a value
+selection-not-application.html?default	selectionEnd on an input[type=submit] returns null
+selection-not-application.html?default	selectionEnd on an input[type=tel] returns a value
+selection-not-application.html?default	selectionEnd on an input[type=text] returns a value
+selection-not-application.html?default	selectionEnd on an input[type=time] returns null
+selection-not-application.html?default	selectionEnd on an input[type=url] returns a value
+selection-not-application.html?default	selectionStart on an input[type=aninvalidtype] returns a value
+selection-not-application.html?default	selectionStart on an input[type=button] returns null
+selection-not-application.html?default	selectionStart on an input[type=checkbox] returns null
+selection-not-application.html?default	selectionStart on an input[type=color] returns null
+selection-not-application.html?default	selectionStart on an input[type=date] returns null
+selection-not-application.html?default	selectionStart on an input[type=datetime-local] returns null
+selection-not-application.html?default	selectionStart on an input[type=email] returns null
+selection-not-application.html?default	selectionStart on an input[type=file] returns null
+selection-not-application.html?default	selectionStart on an input[type=hidden] returns null
+selection-not-application.html?default	selectionStart on an input[type=image] returns null
+selection-not-application.html?default	selectionStart on an input[type=null] returns a value
+selection-not-application.html?default	selectionStart on an input[type=number] returns null
+selection-not-application.html?default	selectionStart on an input[type=password] returns a value
+selection-not-application.html?default	selectionStart on an input[type=radio] returns null
+selection-not-application.html?default	selectionStart on an input[type=range] returns null
+selection-not-application.html?default	selectionStart on an input[type=reset] returns null
+selection-not-application.html?default	selectionStart on an input[type=search] returns a value
+selection-not-application.html?default	selectionStart on an input[type=submit] returns null
+selection-not-application.html?default	selectionStart on an input[type=tel] returns a value
+selection-not-application.html?default	selectionStart on an input[type=text] returns a value
+selection-not-application.html?default	selectionStart on an input[type=time] returns null
+selection-not-application.html?default	selectionStart on an input[type=url] returns a value
+selection-not-application.html?default	setRangeText on an input[type=aninvalidtype] doesn't throw an exception
+selection-not-application.html?default	setRangeText on an input[type=button] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=checkbox] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=color] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=date] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=datetime-local] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=email] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=file] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=hidden] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=image] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=null] doesn't throw an exception
+selection-not-application.html?default	setRangeText on an input[type=number] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=password] doesn't throw an exception
+selection-not-application.html?default	setRangeText on an input[type=radio] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=range] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=reset] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=search] doesn't throw an exception
+selection-not-application.html?default	setRangeText on an input[type=submit] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=tel] doesn't throw an exception
+selection-not-application.html?default	setRangeText on an input[type=text] doesn't throw an exception
+selection-not-application.html?default	setRangeText on an input[type=time] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=url] doesn't throw an exception
+selection-not-application.html?default	setSelectionRange on an input[type=aninvalidtype] doesn't throw an exception
+selection-not-application.html?default	setSelectionRange on an input[type=button] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=checkbox] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=color] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=date] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=datetime-local] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=email] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=file] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=hidden] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=image] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=null] doesn't throw an exception
+selection-not-application.html?default	setSelectionRange on an input[type=number] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=password] doesn't throw an exception
+selection-not-application.html?default	setSelectionRange on an input[type=radio] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=range] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=reset] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=search] doesn't throw an exception
+selection-not-application.html?default	setSelectionRange on an input[type=submit] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=tel] doesn't throw an exception
+selection-not-application.html?default	setSelectionRange on an input[type=text] doesn't throw an exception
+selection-not-application.html?default	setSelectionRange on an input[type=time] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=url] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionDirection "none" on an input[type=aninvalidtype] should give the initial direction
+selection-not-application.html?week,month	assigning selectionDirection "none" on an input[type=null] should give the initial direction
+selection-not-application.html?week,month	assigning selectionDirection "none" on an input[type=password] should give the initial direction
+selection-not-application.html?week,month	assigning selectionDirection "none" on an input[type=search] should give the initial direction
+selection-not-application.html?week,month	assigning selectionDirection "none" on an input[type=tel] should give the initial direction
+selection-not-application.html?week,month	assigning selectionDirection "none" on an input[type=text] should give the initial direction
+selection-not-application.html?week,month	assigning selectionDirection "none" on an input[type=url] should give the initial direction
+selection-not-application.html?week,month	assigning selectionDirection on an input[type=month] throws InvalidStateError
+selection-not-application.html?week,month	assigning selectionDirection on an input[type=week] throws InvalidStateError
+selection-not-application.html?week,month	assigning selectionEnd on an input[type=month] throws InvalidStateError
+selection-not-application.html?week,month	assigning selectionEnd on an input[type=week] throws InvalidStateError
+selection-not-application.html?week,month	assigning selectionStart on an input[type=month] throws InvalidStateError
+selection-not-application.html?week,month	assigning selectionStart on an input[type=week] throws InvalidStateError
+selection-not-application.html?week,month	selectionDirection on an input[type=aninvalidtype] returns a value
+selection-not-application.html?week,month	selectionDirection on an input[type=month] returns null
+selection-not-application.html?week,month	selectionDirection on an input[type=null] returns a value
+selection-not-application.html?week,month	selectionDirection on an input[type=password] returns a value
+selection-not-application.html?week,month	selectionDirection on an input[type=search] returns a value
+selection-not-application.html?week,month	selectionDirection on an input[type=tel] returns a value
+selection-not-application.html?week,month	selectionDirection on an input[type=text] returns a value
+selection-not-application.html?week,month	selectionDirection on an input[type=url] returns a value
+selection-not-application.html?week,month	selectionDirection on an input[type=week] returns null
+selection-not-application.html?week,month	selectionEnd on an input[type=aninvalidtype] returns a value
+selection-not-application.html?week,month	selectionEnd on an input[type=month] returns null
+selection-not-application.html?week,month	selectionEnd on an input[type=null] returns a value
+selection-not-application.html?week,month	selectionEnd on an input[type=password] returns a value
+selection-not-application.html?week,month	selectionEnd on an input[type=search] returns a value
+selection-not-application.html?week,month	selectionEnd on an input[type=tel] returns a value
+selection-not-application.html?week,month	selectionEnd on an input[type=text] returns a value
+selection-not-application.html?week,month	selectionEnd on an input[type=url] returns a value
+selection-not-application.html?week,month	selectionEnd on an input[type=week] returns null
+selection-not-application.html?week,month	selectionStart on an input[type=aninvalidtype] returns a value
+selection-not-application.html?week,month	selectionStart on an input[type=month] returns null
+selection-not-application.html?week,month	selectionStart on an input[type=null] returns a value
+selection-not-application.html?week,month	selectionStart on an input[type=password] returns a value
+selection-not-application.html?week,month	selectionStart on an input[type=search] returns a value
+selection-not-application.html?week,month	selectionStart on an input[type=tel] returns a value
+selection-not-application.html?week,month	selectionStart on an input[type=text] returns a value
+selection-not-application.html?week,month	selectionStart on an input[type=url] returns a value
+selection-not-application.html?week,month	selectionStart on an input[type=week] returns null
+selection-not-application.html?week,month	setRangeText on an input[type=aninvalidtype] doesn't throw an exception
+selection-not-application.html?week,month	setRangeText on an input[type=month] throws InvalidStateError
+selection-not-application.html?week,month	setRangeText on an input[type=null] doesn't throw an exception
+selection-not-application.html?week,month	setRangeText on an input[type=password] doesn't throw an exception
+selection-not-application.html?week,month	setRangeText on an input[type=search] doesn't throw an exception
+selection-not-application.html?week,month	setRangeText on an input[type=tel] doesn't throw an exception
+selection-not-application.html?week,month	setRangeText on an input[type=text] doesn't throw an exception
+selection-not-application.html?week,month	setRangeText on an input[type=url] doesn't throw an exception
+selection-not-application.html?week,month	setRangeText on an input[type=week] throws InvalidStateError
+selection-not-application.html?week,month	setSelectionRange on an input[type=aninvalidtype] doesn't throw an exception
+selection-not-application.html?week,month	setSelectionRange on an input[type=month] throws InvalidStateError
+selection-not-application.html?week,month	setSelectionRange on an input[type=null] doesn't throw an exception
+selection-not-application.html?week,month	setSelectionRange on an input[type=password] doesn't throw an exception
+selection-not-application.html?week,month	setSelectionRange on an input[type=search] doesn't throw an exception
+selection-not-application.html?week,month	setSelectionRange on an input[type=tel] doesn't throw an exception
+selection-not-application.html?week,month	setSelectionRange on an input[type=text] doesn't throw an exception
+selection-not-application.html?week,month	setSelectionRange on an input[type=url] doesn't throw an exception
+selection-not-application.html?week,month	setSelectionRange on an input[type=week] throws InvalidStateError
+selection-start-end-extra.html	Adding children to a textarea should NOT move selection{Start,End} to the end
+selection-start-end-extra.html	Removing children from a textarea should NOT update selection{Start,End}
+selection-start-end-extra.html	Setting defaultValue in a textarea with a value should NOT make any difference
+selection-start-end-extra.html	Setting textContent in a textarea should NOT move selection{Start,End} to the end
+selection-start-end-extra.html	Shortening value by turning the input type into 'url' should correct selection{Start,End}
+selection-value-interactions.html	selection is collapsed to the end after changing values on input
+selection-value-interactions.html	selection is collapsed to the end after changing values on textarea
+selection.html	test SelectionDirection for input
+selection.html	test SelectionDirection for textarea
+selection.html	test SelectionEnd offset for input that is  not appended
+selection.html	test SelectionEnd offset for input that is appended
+selection.html	test SelectionEnd offset for textarea that is  not appended
+selection.html	test SelectionEnd offset for textarea that is appended
+selection.html	test SelectionStart offset for input that is  not appended
+selection.html	test SelectionStart offset for input that is appended
+selection.html	test SelectionStart offset for textarea that is  not appended
+selection.html	test SelectionStart offset for textarea that is appended
+selection.html	test if non-ascii selection text is correct for input
+selection.html	test if non-ascii selection text is correct for textarea
+selection.html	test if selection text is correct for input
+selection.html	test if selection text is correct for textarea
+setSelectionRange.html	setSelectionRange on line boundaries
+textfieldselection-setRangeText.html	display_none selectionMode 'end'
+textfieldselection-setRangeText.html	display_none selectionMode 'preserve'
+textfieldselection-setRangeText.html	display_none selectionMode 'select'
+textfieldselection-setRangeText.html	display_none selectionMode 'start'
+textfieldselection-setRangeText.html	display_none selectionMode missing
+textfieldselection-setRangeText.html	display_none setRangeText fires a select event after select()
+textfieldselection-setRangeText.html	display_none setRangeText fires a select event when fully selected
+textfieldselection-setRangeText.html	display_none setRangeText with 3rd argument greater than 2nd argument throws an IndexSizeError exception
+textfieldselection-setRangeText.html	display_none setRangeText with only one argument replaces the value between selectionStart and selectionEnd, otherwise replaces the value between 2nd and 3rd arguments
+textfieldselection-setRangeText.html	input_not_in_doc selectionMode 'end'
+textfieldselection-setRangeText.html	input_not_in_doc selectionMode 'preserve'
+textfieldselection-setRangeText.html	input_not_in_doc selectionMode 'select'
+textfieldselection-setRangeText.html	input_not_in_doc selectionMode 'start'
+textfieldselection-setRangeText.html	input_not_in_doc selectionMode missing
+textfieldselection-setRangeText.html	input_not_in_doc setRangeText fires a select event after select()
+textfieldselection-setRangeText.html	input_not_in_doc setRangeText fires a select event when fully selected
+textfieldselection-setRangeText.html	input_not_in_doc setRangeText with 3rd argument greater than 2nd argument throws an IndexSizeError exception
+textfieldselection-setRangeText.html	input_not_in_doc setRangeText with only one argument replaces the value between selectionStart and selectionEnd, otherwise replaces the value between 2nd and 3rd arguments
+textfieldselection-setRangeText.html	password selectionMode 'end'
+textfieldselection-setRangeText.html	password selectionMode 'preserve'
+textfieldselection-setRangeText.html	password selectionMode 'select'
+textfieldselection-setRangeText.html	password selectionMode 'start'
+textfieldselection-setRangeText.html	password selectionMode missing
+textfieldselection-setRangeText.html	password setRangeText fires a select event after select()
+textfieldselection-setRangeText.html	password setRangeText fires a select event when fully selected
+textfieldselection-setRangeText.html	password setRangeText with 3rd argument greater than 2nd argument throws an IndexSizeError exception
+textfieldselection-setRangeText.html	password setRangeText with only one argument replaces the value between selectionStart and selectionEnd, otherwise replaces the value between 2nd and 3rd arguments
+textfieldselection-setRangeText.html	search selectionMode 'end'
+textfieldselection-setRangeText.html	search selectionMode 'preserve'
+textfieldselection-setRangeText.html	search selectionMode 'select'
+textfieldselection-setRangeText.html	search selectionMode 'start'
+textfieldselection-setRangeText.html	search selectionMode missing
+textfieldselection-setRangeText.html	search setRangeText fires a select event after select()
+textfieldselection-setRangeText.html	search setRangeText fires a select event when fully selected
+textfieldselection-setRangeText.html	search setRangeText with 3rd argument greater than 2nd argument throws an IndexSizeError exception
+textfieldselection-setRangeText.html	search setRangeText with only one argument replaces the value between selectionStart and selectionEnd, otherwise replaces the value between 2nd and 3rd arguments
+textfieldselection-setRangeText.html	tel selectionMode 'end'
+textfieldselection-setRangeText.html	tel selectionMode 'preserve'
+textfieldselection-setRangeText.html	tel selectionMode 'select'
+textfieldselection-setRangeText.html	tel selectionMode 'start'
+textfieldselection-setRangeText.html	tel selectionMode missing
+textfieldselection-setRangeText.html	tel setRangeText fires a select event after select()
+textfieldselection-setRangeText.html	tel setRangeText fires a select event when fully selected
+textfieldselection-setRangeText.html	tel setRangeText with 3rd argument greater than 2nd argument throws an IndexSizeError exception
+textfieldselection-setRangeText.html	tel setRangeText with only one argument replaces the value between selectionStart and selectionEnd, otherwise replaces the value between 2nd and 3rd arguments
+textfieldselection-setRangeText.html	text selectionMode 'end'
+textfieldselection-setRangeText.html	text selectionMode 'preserve'
+textfieldselection-setRangeText.html	text selectionMode 'select'
+textfieldselection-setRangeText.html	text selectionMode 'start'
+textfieldselection-setRangeText.html	text selectionMode missing
+textfieldselection-setRangeText.html	text setRangeText fires a select event after select()
+textfieldselection-setRangeText.html	text setRangeText fires a select event when fully selected
+textfieldselection-setRangeText.html	text setRangeText with 3rd argument greater than 2nd argument throws an IndexSizeError exception
+textfieldselection-setRangeText.html	text setRangeText with only one argument replaces the value between selectionStart and selectionEnd, otherwise replaces the value between 2nd and 3rd arguments
+textfieldselection-setRangeText.html	textarea selectionMode 'end'
+textfieldselection-setRangeText.html	textarea selectionMode 'preserve'
+textfieldselection-setRangeText.html	textarea selectionMode 'select'
+textfieldselection-setRangeText.html	textarea selectionMode 'start'
+textfieldselection-setRangeText.html	textarea selectionMode missing
+textfieldselection-setRangeText.html	textarea setRangeText fires a select event after select()
+textfieldselection-setRangeText.html	textarea setRangeText fires a select event when fully selected
+textfieldselection-setRangeText.html	textarea setRangeText with 3rd argument greater than 2nd argument throws an IndexSizeError exception
+textfieldselection-setRangeText.html	textarea setRangeText with only one argument replaces the value between selectionStart and selectionEnd, otherwise replaces the value between 2nd and 3rd arguments
+textfieldselection-setRangeText.html	url selectionMode 'end'
+textfieldselection-setRangeText.html	url selectionMode 'preserve'
+textfieldselection-setRangeText.html	url selectionMode 'select'
+textfieldselection-setRangeText.html	url selectionMode 'start'
+textfieldselection-setRangeText.html	url selectionMode missing
+textfieldselection-setRangeText.html	url setRangeText fires a select event after select()
+textfieldselection-setRangeText.html	url setRangeText fires a select event when fully selected
+textfieldselection-setRangeText.html	url setRangeText with 3rd argument greater than 2nd argument throws an IndexSizeError exception
+textfieldselection-setRangeText.html	url setRangeText with only one argument replaces the value between selectionStart and selectionEnd, otherwise replaces the value between 2nd and 3rd arguments
+textfieldselection-setSelectionRange.html	input direction of setSelectionRange(0,1)
+textfieldselection-setSelectionRange.html	input direction of setSelectionRange(0,1,"BACKWARD")
+textfieldselection-setSelectionRange.html	input direction of setSelectionRange(0,1,"backward")
+textfieldselection-setSelectionRange.html	input direction of setSelectionRange(0,1,"forward")
+textfieldselection-setSelectionRange.html	input direction of setSelectionRange(0,1,"hoge")
+textfieldselection-setSelectionRange.html	input direction of setSelectionRange(0,1,"none")
+textfieldselection-setSelectionRange.html	input setSelectionRange fires a select event
+textfieldselection-setSelectionRange.html	input setSelectionRange return void
+textfieldselection-setSelectionRange.html	input setSelectionRange("string",1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(-1,1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(0,1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(0,input.value.length+1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(1,-1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(2,1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(2,2)
+textfieldselection-setSelectionRange.html	input setSelectionRange(Math.pow(2,31), Math.pow(2,32) - 1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(Math.pow(2,32) - 2, Math.pow(2,32) - 1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(NaN,1)
+textfieldselection-setSelectionRange.html	input setSelectionRange([],1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(input.value.length+1,1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(input.value.length+1,input.value.length+1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(null,1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(true,1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(undefined,1)
+textfieldselection-setSelectionRange.html	input setSelectionRange({},1)
+textfieldselection-setSelectionRange.html	input typeof(input.setSelectionRange)'
+textfieldselection-setSelectionRange.html	test of input.setSelectionRange
+textfieldselection-setSelectionRange.html	test of textarea.setSelectionRange
+textfieldselection-setSelectionRange.html	textarea direction of setSelectionRange(0,1)
+textfieldselection-setSelectionRange.html	textarea direction of setSelectionRange(0,1,"BACKWARD")
+textfieldselection-setSelectionRange.html	textarea direction of setSelectionRange(0,1,"backward")
+textfieldselection-setSelectionRange.html	textarea direction of setSelectionRange(0,1,"forward")
+textfieldselection-setSelectionRange.html	textarea direction of setSelectionRange(0,1,"hoge")
+textfieldselection-setSelectionRange.html	textarea direction of setSelectionRange(0,1,"none")
+textfieldselection-setSelectionRange.html	textarea setSelectionRange return void
+textfieldselection-setSelectionRange.html	textarea setSelectionRange("string",1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(0,1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(0,textarea.value.length+1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(2,1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(2,2)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(Math.pow(2,31), Math.pow(2,32) - 1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(Math.pow(2,32) - 2, Math.pow(2,32) - 1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(NaN,1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange([],1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(null,1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(true,1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(undefined,1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange({},1)
+textfieldselection-setSelectionRange.html	textarea typeof(input.setSelectionRange)'
+[excluded]
+[passing]
+defaultSelection.html	Default selectionStart and selectionEnd for [object HTMLInputElement]
+defaultSelection.html	Default selectionStart and selectionEnd for [object HTMLTextAreaElement]
+defaultSelection.html	selectionStart and selectionEnd change when value changed to upper case for [object HTMLInputElement]
+defaultSelection.html	selectionStart and selectionEnd change when value changed to upper case for [object HTMLTextAreaElement]
+defaultSelection.html	selectionStart and selectionEnd do not change when same value set again for [object HTMLInputElement]
+defaultSelection.html	selectionStart and selectionEnd do not change when same value set again for [object HTMLTextAreaElement]
+selection-after-content-change.html	input in document, with focus: selection must change when setting a different value
+selection-after-content-change.html	input in document, with focus: selection must not change when setting a value that becomes the same after the value sanitization algorithm
+selection-after-content-change.html	input in document, with focus: selection must not change when setting the same value
+selection-after-content-change.html	input in document: selection must change when setting a different value
+selection-after-content-change.html	input in document: selection must not change when setting a value that becomes the same after the value sanitization algorithm
+selection-after-content-change.html	input in document: selection must not change when setting the same value
+selection-after-content-change.html	input out of document: selection must change when setting a different value
+selection-after-content-change.html	input out of document: selection must not change when setting a value that becomes the same after the value sanitization algorithm
+selection-after-content-change.html	input out of document: selection must not change when setting the same value
+selection-after-content-change.html	textarea in document, with focus: selection must change when setting a different value
+selection-after-content-change.html	textarea in document, with focus: selection must not change when setting the same normalized value
+selection-after-content-change.html	textarea in document, with focus: selection must not change when setting the same value
+selection-after-content-change.html	textarea in document: selection must change when setting a different value
+selection-after-content-change.html	textarea in document: selection must not change when setting the same normalized value
+selection-after-content-change.html	textarea in document: selection must not change when setting the same value
+selection-after-content-change.html	textarea out of document: selection must change when setting a different value
+selection-after-content-change.html	textarea out of document: selection must not change when setting the same normalized value
+selection-after-content-change.html	textarea out of document: selection must not change when setting the same value
+selection-not-application-textarea.html	text field selection for the input textarea
+selection-not-application.html?default	assigning selectionDirection "none" on an input[type=aninvalidtype] should give the initial direction
+selection-not-application.html?default	assigning selectionDirection "none" on an input[type=null] should give the initial direction
+selection-not-application.html?default	assigning selectionDirection "none" on an input[type=password] should give the initial direction
+selection-not-application.html?default	assigning selectionDirection "none" on an input[type=search] should give the initial direction
+selection-not-application.html?default	assigning selectionDirection "none" on an input[type=tel] should give the initial direction
+selection-not-application.html?default	assigning selectionDirection "none" on an input[type=text] should give the initial direction
+selection-not-application.html?default	assigning selectionDirection "none" on an input[type=url] should give the initial direction
+selection-not-application.html?default	assigning selectionDirection on an input[type=aninvalidtype] doesn't throw an exception
+selection-not-application.html?default	assigning selectionDirection on an input[type=button] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=checkbox] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=color] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=date] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=datetime-local] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=email] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=file] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=hidden] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=image] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=null] doesn't throw an exception
+selection-not-application.html?default	assigning selectionDirection on an input[type=number] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=password] doesn't throw an exception
+selection-not-application.html?default	assigning selectionDirection on an input[type=radio] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=range] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=reset] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=search] doesn't throw an exception
+selection-not-application.html?default	assigning selectionDirection on an input[type=submit] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=tel] doesn't throw an exception
+selection-not-application.html?default	assigning selectionDirection on an input[type=text] doesn't throw an exception
+selection-not-application.html?default	assigning selectionDirection on an input[type=time] throws InvalidStateError
+selection-not-application.html?default	assigning selectionDirection on an input[type=url] doesn't throw an exception
+selection-not-application.html?default	assigning selectionEnd on an input[type=aninvalidtype] doesn't throw an exception
+selection-not-application.html?default	assigning selectionEnd on an input[type=button] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=checkbox] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=color] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=date] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=datetime-local] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=email] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=file] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=hidden] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=image] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=null] doesn't throw an exception
+selection-not-application.html?default	assigning selectionEnd on an input[type=number] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=password] doesn't throw an exception
+selection-not-application.html?default	assigning selectionEnd on an input[type=radio] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=range] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=reset] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=search] doesn't throw an exception
+selection-not-application.html?default	assigning selectionEnd on an input[type=submit] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=tel] doesn't throw an exception
+selection-not-application.html?default	assigning selectionEnd on an input[type=text] doesn't throw an exception
+selection-not-application.html?default	assigning selectionEnd on an input[type=time] throws InvalidStateError
+selection-not-application.html?default	assigning selectionEnd on an input[type=url] doesn't throw an exception
+selection-not-application.html?default	assigning selectionStart on an input[type=aninvalidtype] doesn't throw an exception
+selection-not-application.html?default	assigning selectionStart on an input[type=button] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=checkbox] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=color] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=date] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=datetime-local] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=email] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=file] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=hidden] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=image] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=null] doesn't throw an exception
+selection-not-application.html?default	assigning selectionStart on an input[type=number] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=password] doesn't throw an exception
+selection-not-application.html?default	assigning selectionStart on an input[type=radio] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=range] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=reset] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=search] doesn't throw an exception
+selection-not-application.html?default	assigning selectionStart on an input[type=submit] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=tel] doesn't throw an exception
+selection-not-application.html?default	assigning selectionStart on an input[type=text] doesn't throw an exception
+selection-not-application.html?default	assigning selectionStart on an input[type=time] throws InvalidStateError
+selection-not-application.html?default	assigning selectionStart on an input[type=url] doesn't throw an exception
+selection-not-application.html?default	selectionDirection on an input[type=aninvalidtype] returns a value
+selection-not-application.html?default	selectionDirection on an input[type=button] returns null
+selection-not-application.html?default	selectionDirection on an input[type=checkbox] returns null
+selection-not-application.html?default	selectionDirection on an input[type=color] returns null
+selection-not-application.html?default	selectionDirection on an input[type=date] returns null
+selection-not-application.html?default	selectionDirection on an input[type=datetime-local] returns null
+selection-not-application.html?default	selectionDirection on an input[type=email] returns null
+selection-not-application.html?default	selectionDirection on an input[type=file] returns null
+selection-not-application.html?default	selectionDirection on an input[type=hidden] returns null
+selection-not-application.html?default	selectionDirection on an input[type=image] returns null
+selection-not-application.html?default	selectionDirection on an input[type=null] returns a value
+selection-not-application.html?default	selectionDirection on an input[type=number] returns null
+selection-not-application.html?default	selectionDirection on an input[type=password] returns a value
+selection-not-application.html?default	selectionDirection on an input[type=radio] returns null
+selection-not-application.html?default	selectionDirection on an input[type=range] returns null
+selection-not-application.html?default	selectionDirection on an input[type=reset] returns null
+selection-not-application.html?default	selectionDirection on an input[type=search] returns a value
+selection-not-application.html?default	selectionDirection on an input[type=submit] returns null
+selection-not-application.html?default	selectionDirection on an input[type=tel] returns a value
+selection-not-application.html?default	selectionDirection on an input[type=text] returns a value
+selection-not-application.html?default	selectionDirection on an input[type=time] returns null
+selection-not-application.html?default	selectionDirection on an input[type=url] returns a value
+selection-not-application.html?default	selectionEnd on an input[type=aninvalidtype] returns a value
+selection-not-application.html?default	selectionEnd on an input[type=button] returns null
+selection-not-application.html?default	selectionEnd on an input[type=checkbox] returns null
+selection-not-application.html?default	selectionEnd on an input[type=color] returns null
+selection-not-application.html?default	selectionEnd on an input[type=date] returns null
+selection-not-application.html?default	selectionEnd on an input[type=datetime-local] returns null
+selection-not-application.html?default	selectionEnd on an input[type=email] returns null
+selection-not-application.html?default	selectionEnd on an input[type=file] returns null
+selection-not-application.html?default	selectionEnd on an input[type=hidden] returns null
+selection-not-application.html?default	selectionEnd on an input[type=image] returns null
+selection-not-application.html?default	selectionEnd on an input[type=null] returns a value
+selection-not-application.html?default	selectionEnd on an input[type=number] returns null
+selection-not-application.html?default	selectionEnd on an input[type=password] returns a value
+selection-not-application.html?default	selectionEnd on an input[type=radio] returns null
+selection-not-application.html?default	selectionEnd on an input[type=range] returns null
+selection-not-application.html?default	selectionEnd on an input[type=reset] returns null
+selection-not-application.html?default	selectionEnd on an input[type=search] returns a value
+selection-not-application.html?default	selectionEnd on an input[type=submit] returns null
+selection-not-application.html?default	selectionEnd on an input[type=tel] returns a value
+selection-not-application.html?default	selectionEnd on an input[type=text] returns a value
+selection-not-application.html?default	selectionEnd on an input[type=time] returns null
+selection-not-application.html?default	selectionEnd on an input[type=url] returns a value
+selection-not-application.html?default	selectionStart on an input[type=aninvalidtype] returns a value
+selection-not-application.html?default	selectionStart on an input[type=button] returns null
+selection-not-application.html?default	selectionStart on an input[type=checkbox] returns null
+selection-not-application.html?default	selectionStart on an input[type=color] returns null
+selection-not-application.html?default	selectionStart on an input[type=date] returns null
+selection-not-application.html?default	selectionStart on an input[type=datetime-local] returns null
+selection-not-application.html?default	selectionStart on an input[type=email] returns null
+selection-not-application.html?default	selectionStart on an input[type=file] returns null
+selection-not-application.html?default	selectionStart on an input[type=hidden] returns null
+selection-not-application.html?default	selectionStart on an input[type=image] returns null
+selection-not-application.html?default	selectionStart on an input[type=null] returns a value
+selection-not-application.html?default	selectionStart on an input[type=number] returns null
+selection-not-application.html?default	selectionStart on an input[type=password] returns a value
+selection-not-application.html?default	selectionStart on an input[type=radio] returns null
+selection-not-application.html?default	selectionStart on an input[type=range] returns null
+selection-not-application.html?default	selectionStart on an input[type=reset] returns null
+selection-not-application.html?default	selectionStart on an input[type=search] returns a value
+selection-not-application.html?default	selectionStart on an input[type=submit] returns null
+selection-not-application.html?default	selectionStart on an input[type=tel] returns a value
+selection-not-application.html?default	selectionStart on an input[type=text] returns a value
+selection-not-application.html?default	selectionStart on an input[type=time] returns null
+selection-not-application.html?default	selectionStart on an input[type=url] returns a value
+selection-not-application.html?default	setRangeText on an input[type=aninvalidtype] doesn't throw an exception
+selection-not-application.html?default	setRangeText on an input[type=button] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=checkbox] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=color] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=date] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=datetime-local] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=email] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=file] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=hidden] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=image] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=null] doesn't throw an exception
+selection-not-application.html?default	setRangeText on an input[type=number] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=password] doesn't throw an exception
+selection-not-application.html?default	setRangeText on an input[type=radio] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=range] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=reset] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=search] doesn't throw an exception
+selection-not-application.html?default	setRangeText on an input[type=submit] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=tel] doesn't throw an exception
+selection-not-application.html?default	setRangeText on an input[type=text] doesn't throw an exception
+selection-not-application.html?default	setRangeText on an input[type=time] throws InvalidStateError
+selection-not-application.html?default	setRangeText on an input[type=url] doesn't throw an exception
+selection-not-application.html?default	setSelectionRange on an input[type=aninvalidtype] doesn't throw an exception
+selection-not-application.html?default	setSelectionRange on an input[type=button] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=checkbox] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=color] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=date] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=datetime-local] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=email] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=file] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=hidden] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=image] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=null] doesn't throw an exception
+selection-not-application.html?default	setSelectionRange on an input[type=number] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=password] doesn't throw an exception
+selection-not-application.html?default	setSelectionRange on an input[type=radio] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=range] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=reset] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=search] doesn't throw an exception
+selection-not-application.html?default	setSelectionRange on an input[type=submit] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=tel] doesn't throw an exception
+selection-not-application.html?default	setSelectionRange on an input[type=text] doesn't throw an exception
+selection-not-application.html?default	setSelectionRange on an input[type=time] throws InvalidStateError
+selection-not-application.html?default	setSelectionRange on an input[type=url] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionDirection "none" on an input[type=aninvalidtype] should give the initial direction
+selection-not-application.html?week,month	assigning selectionDirection "none" on an input[type=null] should give the initial direction
+selection-not-application.html?week,month	assigning selectionDirection "none" on an input[type=password] should give the initial direction
+selection-not-application.html?week,month	assigning selectionDirection "none" on an input[type=search] should give the initial direction
+selection-not-application.html?week,month	assigning selectionDirection "none" on an input[type=tel] should give the initial direction
+selection-not-application.html?week,month	assigning selectionDirection "none" on an input[type=text] should give the initial direction
+selection-not-application.html?week,month	assigning selectionDirection "none" on an input[type=url] should give the initial direction
+selection-not-application.html?week,month	assigning selectionDirection on an input[type=aninvalidtype] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionDirection on an input[type=month] throws InvalidStateError
+selection-not-application.html?week,month	assigning selectionDirection on an input[type=null] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionDirection on an input[type=password] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionDirection on an input[type=search] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionDirection on an input[type=tel] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionDirection on an input[type=text] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionDirection on an input[type=url] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionDirection on an input[type=week] throws InvalidStateError
+selection-not-application.html?week,month	assigning selectionEnd on an input[type=aninvalidtype] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionEnd on an input[type=month] throws InvalidStateError
+selection-not-application.html?week,month	assigning selectionEnd on an input[type=null] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionEnd on an input[type=password] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionEnd on an input[type=search] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionEnd on an input[type=tel] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionEnd on an input[type=text] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionEnd on an input[type=url] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionEnd on an input[type=week] throws InvalidStateError
+selection-not-application.html?week,month	assigning selectionStart on an input[type=aninvalidtype] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionStart on an input[type=month] throws InvalidStateError
+selection-not-application.html?week,month	assigning selectionStart on an input[type=null] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionStart on an input[type=password] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionStart on an input[type=search] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionStart on an input[type=tel] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionStart on an input[type=text] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionStart on an input[type=url] doesn't throw an exception
+selection-not-application.html?week,month	assigning selectionStart on an input[type=week] throws InvalidStateError
+selection-not-application.html?week,month	selectionDirection on an input[type=aninvalidtype] returns a value
+selection-not-application.html?week,month	selectionDirection on an input[type=month] returns null
+selection-not-application.html?week,month	selectionDirection on an input[type=null] returns a value
+selection-not-application.html?week,month	selectionDirection on an input[type=password] returns a value
+selection-not-application.html?week,month	selectionDirection on an input[type=search] returns a value
+selection-not-application.html?week,month	selectionDirection on an input[type=tel] returns a value
+selection-not-application.html?week,month	selectionDirection on an input[type=text] returns a value
+selection-not-application.html?week,month	selectionDirection on an input[type=url] returns a value
+selection-not-application.html?week,month	selectionDirection on an input[type=week] returns null
+selection-not-application.html?week,month	selectionEnd on an input[type=aninvalidtype] returns a value
+selection-not-application.html?week,month	selectionEnd on an input[type=month] returns null
+selection-not-application.html?week,month	selectionEnd on an input[type=null] returns a value
+selection-not-application.html?week,month	selectionEnd on an input[type=password] returns a value
+selection-not-application.html?week,month	selectionEnd on an input[type=search] returns a value
+selection-not-application.html?week,month	selectionEnd on an input[type=tel] returns a value
+selection-not-application.html?week,month	selectionEnd on an input[type=text] returns a value
+selection-not-application.html?week,month	selectionEnd on an input[type=url] returns a value
+selection-not-application.html?week,month	selectionEnd on an input[type=week] returns null
+selection-not-application.html?week,month	selectionStart on an input[type=aninvalidtype] returns a value
+selection-not-application.html?week,month	selectionStart on an input[type=month] returns null
+selection-not-application.html?week,month	selectionStart on an input[type=null] returns a value
+selection-not-application.html?week,month	selectionStart on an input[type=password] returns a value
+selection-not-application.html?week,month	selectionStart on an input[type=search] returns a value
+selection-not-application.html?week,month	selectionStart on an input[type=tel] returns a value
+selection-not-application.html?week,month	selectionStart on an input[type=text] returns a value
+selection-not-application.html?week,month	selectionStart on an input[type=url] returns a value
+selection-not-application.html?week,month	selectionStart on an input[type=week] returns null
+selection-not-application.html?week,month	setRangeText on an input[type=aninvalidtype] doesn't throw an exception
+selection-not-application.html?week,month	setRangeText on an input[type=month] throws InvalidStateError
+selection-not-application.html?week,month	setRangeText on an input[type=null] doesn't throw an exception
+selection-not-application.html?week,month	setRangeText on an input[type=password] doesn't throw an exception
+selection-not-application.html?week,month	setRangeText on an input[type=search] doesn't throw an exception
+selection-not-application.html?week,month	setRangeText on an input[type=tel] doesn't throw an exception
+selection-not-application.html?week,month	setRangeText on an input[type=text] doesn't throw an exception
+selection-not-application.html?week,month	setRangeText on an input[type=url] doesn't throw an exception
+selection-not-application.html?week,month	setRangeText on an input[type=week] throws InvalidStateError
+selection-not-application.html?week,month	setSelectionRange on an input[type=aninvalidtype] doesn't throw an exception
+selection-not-application.html?week,month	setSelectionRange on an input[type=month] throws InvalidStateError
+selection-not-application.html?week,month	setSelectionRange on an input[type=null] doesn't throw an exception
+selection-not-application.html?week,month	setSelectionRange on an input[type=password] doesn't throw an exception
+selection-not-application.html?week,month	setSelectionRange on an input[type=search] doesn't throw an exception
+selection-not-application.html?week,month	setSelectionRange on an input[type=tel] doesn't throw an exception
+selection-not-application.html?week,month	setSelectionRange on an input[type=text] doesn't throw an exception
+selection-not-application.html?week,month	setSelectionRange on an input[type=url] doesn't throw an exception
+selection-not-application.html?week,month	setSelectionRange on an input[type=week] throws InvalidStateError
+selection-start-end-extra.html	Adding children to a textarea should NOT move selection{Start,End} to the end
+selection-start-end-extra.html	Removing children from a textarea should NOT update selection{Start,End}
+selection-start-end-extra.html	Setting defaultValue in a textarea with a value should NOT make any difference
+selection-start-end-extra.html	Setting textContent in a textarea should NOT move selection{Start,End} to the end
+selection-start-end-extra.html	Setting the same value (with different newlines) in a textarea should NOT update selection{Start,End}
+selection-start-end-extra.html	Shortening value by turning the input type into 'url' should correct selection{Start,End}
+selection-value-interactions.html	selection is collapsed to the end after changing values on input
+selection-value-interactions.html	selection is collapsed to the end after changing values on textarea
+selection-value-interactions.html	selection is not collapsed to the end when value is set to its existing value on input
+selection-value-interactions.html	selection is not collapsed to the end when value is set to its existing value on textarea
+selection.html	test SelectionDirection for input
+selection.html	test SelectionDirection for textarea
+selection.html	test SelectionEnd offset for input that is  not appended
+selection.html	test SelectionEnd offset for input that is appended
+selection.html	test SelectionEnd offset for textarea that is  not appended
+selection.html	test SelectionEnd offset for textarea that is appended
+selection.html	test SelectionStart offset for input that is  not appended
+selection.html	test SelectionStart offset for input that is appended
+selection.html	test SelectionStart offset for textarea that is  not appended
+selection.html	test SelectionStart offset for textarea that is appended
+selection.html	test if non-ascii selection text is correct for input
+selection.html	test if non-ascii selection text is correct for textarea
+selection.html	test if selection text is correct for input
+selection.html	test if selection text is correct for textarea
+setSelectionRange.html	setSelectionRange on line boundaries
+textfieldselection-setRangeText.html	display_none selectionMode 'end'
+textfieldselection-setRangeText.html	display_none selectionMode 'preserve'
+textfieldselection-setRangeText.html	display_none selectionMode 'select'
+textfieldselection-setRangeText.html	display_none selectionMode 'start'
+textfieldselection-setRangeText.html	display_none selectionMode missing
+textfieldselection-setRangeText.html	display_none setRangeText fires a select event
+textfieldselection-setRangeText.html	display_none setRangeText fires a select event after select()
+textfieldselection-setRangeText.html	display_none setRangeText fires a select event when fully selected
+textfieldselection-setRangeText.html	display_none setRangeText with 3rd argument greater than 2nd argument throws an IndexSizeError exception
+textfieldselection-setRangeText.html	display_none setRangeText with only one argument replaces the value between selectionStart and selectionEnd, otherwise replaces the value between 2nd and 3rd arguments
+textfieldselection-setRangeText.html	display_none setRangeText without argument throws a type error
+textfieldselection-setRangeText.html	input_not_in_doc selectionMode 'end'
+textfieldselection-setRangeText.html	input_not_in_doc selectionMode 'preserve'
+textfieldselection-setRangeText.html	input_not_in_doc selectionMode 'select'
+textfieldselection-setRangeText.html	input_not_in_doc selectionMode 'start'
+textfieldselection-setRangeText.html	input_not_in_doc selectionMode missing
+textfieldselection-setRangeText.html	input_not_in_doc setRangeText fires a select event
+textfieldselection-setRangeText.html	input_not_in_doc setRangeText fires a select event after select()
+textfieldselection-setRangeText.html	input_not_in_doc setRangeText fires a select event when fully selected
+textfieldselection-setRangeText.html	input_not_in_doc setRangeText with 3rd argument greater than 2nd argument throws an IndexSizeError exception
+textfieldselection-setRangeText.html	input_not_in_doc setRangeText with only one argument replaces the value between selectionStart and selectionEnd, otherwise replaces the value between 2nd and 3rd arguments
+textfieldselection-setRangeText.html	input_not_in_doc setRangeText without argument throws a type error
+textfieldselection-setRangeText.html	password selectionMode 'end'
+textfieldselection-setRangeText.html	password selectionMode 'preserve'
+textfieldselection-setRangeText.html	password selectionMode 'select'
+textfieldselection-setRangeText.html	password selectionMode 'start'
+textfieldselection-setRangeText.html	password selectionMode missing
+textfieldselection-setRangeText.html	password setRangeText fires a select event
+textfieldselection-setRangeText.html	password setRangeText fires a select event after select()
+textfieldselection-setRangeText.html	password setRangeText fires a select event when fully selected
+textfieldselection-setRangeText.html	password setRangeText with 3rd argument greater than 2nd argument throws an IndexSizeError exception
+textfieldselection-setRangeText.html	password setRangeText with only one argument replaces the value between selectionStart and selectionEnd, otherwise replaces the value between 2nd and 3rd arguments
+textfieldselection-setRangeText.html	password setRangeText without argument throws a type error
+textfieldselection-setRangeText.html	search selectionMode 'end'
+textfieldselection-setRangeText.html	search selectionMode 'preserve'
+textfieldselection-setRangeText.html	search selectionMode 'select'
+textfieldselection-setRangeText.html	search selectionMode 'start'
+textfieldselection-setRangeText.html	search selectionMode missing
+textfieldselection-setRangeText.html	search setRangeText fires a select event
+textfieldselection-setRangeText.html	search setRangeText fires a select event after select()
+textfieldselection-setRangeText.html	search setRangeText fires a select event when fully selected
+textfieldselection-setRangeText.html	search setRangeText with 3rd argument greater than 2nd argument throws an IndexSizeError exception
+textfieldselection-setRangeText.html	search setRangeText with only one argument replaces the value between selectionStart and selectionEnd, otherwise replaces the value between 2nd and 3rd arguments
+textfieldselection-setRangeText.html	search setRangeText without argument throws a type error
+textfieldselection-setRangeText.html	tel selectionMode 'end'
+textfieldselection-setRangeText.html	tel selectionMode 'preserve'
+textfieldselection-setRangeText.html	tel selectionMode 'select'
+textfieldselection-setRangeText.html	tel selectionMode 'start'
+textfieldselection-setRangeText.html	tel selectionMode missing
+textfieldselection-setRangeText.html	tel setRangeText fires a select event
+textfieldselection-setRangeText.html	tel setRangeText fires a select event after select()
+textfieldselection-setRangeText.html	tel setRangeText fires a select event when fully selected
+textfieldselection-setRangeText.html	tel setRangeText with 3rd argument greater than 2nd argument throws an IndexSizeError exception
+textfieldselection-setRangeText.html	tel setRangeText with only one argument replaces the value between selectionStart and selectionEnd, otherwise replaces the value between 2nd and 3rd arguments
+textfieldselection-setRangeText.html	tel setRangeText without argument throws a type error
+textfieldselection-setRangeText.html	text selectionMode 'end'
+textfieldselection-setRangeText.html	text selectionMode 'preserve'
+textfieldselection-setRangeText.html	text selectionMode 'select'
+textfieldselection-setRangeText.html	text selectionMode 'start'
+textfieldselection-setRangeText.html	text selectionMode missing
+textfieldselection-setRangeText.html	text setRangeText fires a select event
+textfieldselection-setRangeText.html	text setRangeText fires a select event after select()
+textfieldselection-setRangeText.html	text setRangeText fires a select event when fully selected
+textfieldselection-setRangeText.html	text setRangeText with 3rd argument greater than 2nd argument throws an IndexSizeError exception
+textfieldselection-setRangeText.html	text setRangeText with only one argument replaces the value between selectionStart and selectionEnd, otherwise replaces the value between 2nd and 3rd arguments
+textfieldselection-setRangeText.html	text setRangeText without argument throws a type error
+textfieldselection-setRangeText.html	textarea selectionMode 'end'
+textfieldselection-setRangeText.html	textarea selectionMode 'preserve'
+textfieldselection-setRangeText.html	textarea selectionMode 'select'
+textfieldselection-setRangeText.html	textarea selectionMode 'start'
+textfieldselection-setRangeText.html	textarea selectionMode missing
+textfieldselection-setRangeText.html	textarea setRangeText fires a select event
+textfieldselection-setRangeText.html	textarea setRangeText fires a select event after select()
+textfieldselection-setRangeText.html	textarea setRangeText fires a select event when fully selected
+textfieldselection-setRangeText.html	textarea setRangeText with 3rd argument greater than 2nd argument throws an IndexSizeError exception
+textfieldselection-setRangeText.html	textarea setRangeText with only one argument replaces the value between selectionStart and selectionEnd, otherwise replaces the value between 2nd and 3rd arguments
+textfieldselection-setRangeText.html	textarea setRangeText without argument throws a type error
+textfieldselection-setRangeText.html	url selectionMode 'end'
+textfieldselection-setRangeText.html	url selectionMode 'preserve'
+textfieldselection-setRangeText.html	url selectionMode 'select'
+textfieldselection-setRangeText.html	url selectionMode 'start'
+textfieldselection-setRangeText.html	url selectionMode missing
+textfieldselection-setRangeText.html	url setRangeText fires a select event
+textfieldselection-setRangeText.html	url setRangeText fires a select event after select()
+textfieldselection-setRangeText.html	url setRangeText fires a select event when fully selected
+textfieldselection-setRangeText.html	url setRangeText with 3rd argument greater than 2nd argument throws an IndexSizeError exception
+textfieldselection-setRangeText.html	url setRangeText with only one argument replaces the value between selectionStart and selectionEnd, otherwise replaces the value between 2nd and 3rd arguments
+textfieldselection-setRangeText.html	url setRangeText without argument throws a type error
+textfieldselection-setSelectionRange.html	input direction of setSelectionRange(0,1)
+textfieldselection-setSelectionRange.html	input direction of setSelectionRange(0,1,"BACKWARD")
+textfieldselection-setSelectionRange.html	input direction of setSelectionRange(0,1,"backward")
+textfieldselection-setSelectionRange.html	input direction of setSelectionRange(0,1,"forward")
+textfieldselection-setSelectionRange.html	input direction of setSelectionRange(0,1,"hoge")
+textfieldselection-setSelectionRange.html	input direction of setSelectionRange(0,1,"none")
+textfieldselection-setSelectionRange.html	input setSelectionRange fires a select event
+textfieldselection-setSelectionRange.html	input setSelectionRange return void
+textfieldselection-setSelectionRange.html	input setSelectionRange("string",1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(-1,1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(0,1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(0,input.value.length+1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(1,-1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(2,1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(2,2)
+textfieldselection-setSelectionRange.html	input setSelectionRange(Math.pow(2,31), Math.pow(2,32) - 1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(Math.pow(2,32) - 2, Math.pow(2,32) - 1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(NaN,1)
+textfieldselection-setSelectionRange.html	input setSelectionRange([],1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(input.value.length+1,1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(input.value.length+1,input.value.length+1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(null,1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(true,1)
+textfieldselection-setSelectionRange.html	input setSelectionRange(undefined,1)
+textfieldselection-setSelectionRange.html	input setSelectionRange({},1)
+textfieldselection-setSelectionRange.html	input typeof(input.setSelectionRange)'
+textfieldselection-setSelectionRange.html	test of input.setSelectionRange
+textfieldselection-setSelectionRange.html	test of textarea.setSelectionRange
+textfieldselection-setSelectionRange.html	textarea direction of setSelectionRange(0,1)
+textfieldselection-setSelectionRange.html	textarea direction of setSelectionRange(0,1,"BACKWARD")
+textfieldselection-setSelectionRange.html	textarea direction of setSelectionRange(0,1,"backward")
+textfieldselection-setSelectionRange.html	textarea direction of setSelectionRange(0,1,"forward")
+textfieldselection-setSelectionRange.html	textarea direction of setSelectionRange(0,1,"hoge")
+textfieldselection-setSelectionRange.html	textarea direction of setSelectionRange(0,1,"none")
+textfieldselection-setSelectionRange.html	textarea setSelectionRange return void
+textfieldselection-setSelectionRange.html	textarea setSelectionRange("string",1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(0,1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(0,textarea.value.length+1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(2,1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(2,2)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(Math.pow(2,31), Math.pow(2,32) - 1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(Math.pow(2,32) - 2, Math.pow(2,32) - 1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(NaN,1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange([],1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(null,1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(true,1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange(undefined,1)
+textfieldselection-setSelectionRange.html	textarea setSelectionRange({},1)
+textfieldselection-setSelectionRange.html	textarea typeof(input.setSelectionRange)'

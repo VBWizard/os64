@@ -76,7 +76,7 @@ static char *modern_chain_shape(DomFixture *f)
         "document.doctype,document.implementation,document.implementation.createHTMLDocument('')];"
         "var row=/(^constructor$|_NODE$|^DOCUMENT_POSITION_|^onscroll$|^onresize$|^scrollingElement$|^defaultView$"
         "|^onerror$|^getRootNode$|^wholeText$|^splitText$|^selectionStart$|^selectionEnd$|^selectionDirection$"
-        "|^setSelectionRange$|^select$|^content$)/;"
+        "|^setSelectionRange$|^select$|^setRangeText$|^content$)/;"
         "var documentRow=/^(readyState|onreadystatechange|visibilityState|hidden|onvisibilitychange|referrer|"
         "activeElement|hasFocus|currentScript|title|prerendering|onprerenderingchange|domain|URL|documentURI|"
         "wasDiscarded|compatMode|dir|characterSet|charset|inputEncoding|contentType|lastModified|rootElement|"
@@ -203,6 +203,52 @@ static void dom_modern_cases(void)
         "s.anchorOffset===0&&s.rangeCount===0&&s.isCollapsed&&s.type==='None'&&String(s)==='','no page selection');"
         "bad=false;try{s.getRangeAt(0)}catch(x){bad=x.name==='IndexSizeError'}assert(bad);s.removeAllRanges();",
         "modern-on-selection");
+    /* 0f's P2: setRangeText, each mode, and where a selection begins. */
+    dom_script(&f, MODERN_ASSERT
+        "var fresh=document.createElement('input');assert(fresh.selectionStart===0&&fresh.selectionEnd===0,'a new control is at 0');"
+        "var t=document.createElement('input');t.value='hello world';"
+        "t.setSelectionRange(6,11);t.setRangeText('there');"
+        "assert(t.value==='hello there'&&t.selectionStart===6&&t.selectionEnd===11,'one argument replaces the selection, preserved');"
+        "t.setRangeText('X',0,5,'select');assert(t.value==='X there'&&t.selectionStart===0&&t.selectionEnd===1,'select');"
+        "t.setRangeText('Y',1,1,'start');assert(t.value==='XY there'&&t.selectionStart===1&&t.selectionEnd===1,'start');"
+        "t.setRangeText('ZZ',0,0,'end');assert(t.value==='ZZXY there'&&t.selectionStart===2&&t.selectionEnd===2,'end');"
+        "t.setSelectionRange(5,8);t.setRangeText('--',0,2);"
+        "assert(t.value==='--XY there'&&t.selectionStart===5&&t.selectionEnd===8,'a selection past the text moves with it');"
+        "t.setSelectionRange(1,9);t.setRangeText('abc',0,4,'preserve');"
+        "assert(t.value==='abc there'&&t.selectionStart===0&&t.selectionEnd===8,'one around it snaps and moves');"
+        "t.setSelectionRange(2,3);t.setRangeText('xyz',1,4);"
+        "assert(t.value==='axyzthere'&&t.selectionStart===1&&t.selectionEnd===4,'one inside it snaps to the new text');"
+        "t.setRangeText('!',99,99);assert(t.value==='axyzthere!','a start past the end is the end');"
+        "var bad=false;try{t.setRangeText('a',3,1)}catch(x){bad=x.name==='IndexSizeError'}assert(bad,'start past end');"
+        "bad=false;try{t.setRangeText('a',1)}catch(x){bad=x instanceof TypeError}assert(bad,'two arguments');"
+        "bad=false;try{t.setRangeText('a',1,2,'sideways')}catch(x){bad=x instanceof TypeError}assert(bad,'a mode');"
+        "var u=document.createElement('input');u.value='a\\u{1F600}b';u.setRangeText('c',1,3);"
+        "assert(u.value==='acb','code units');"
+        "var e=document.createElement('input');e.type='email';"
+        "bad=false;try{e.setRangeText('a')}catch(x){bad=x.name==='InvalidStateError'}assert(bad,'an email input has none');"
+        "var a=document.createElement('textarea');a.textContent='abc';a.setRangeText('Z',0,1);"
+        "assert(a.value==='Zbc'&&a.textContent==='abc','a textarea, its children untouched');"
+        "a.textContent='new';assert(a.value==='Zbc','and its value dirty: a new default does not reach it');",
+        "modern-on-range-text");
+    /* The select event a set queues: a task of its own, which the host runs
+     * (a binding timer due at once); trusted, bubbling, not cancelable; and
+     * none for a set that moves nothing. The cases before this one queued
+     * theirs, which run first. */
+    os64_js_outcome_t select_out;
+    while (os64_dom_timer_fire(f.binding, UINT64_MAX - 1, &select_out)) {}
+    dom_script(&f, MODERN_ASSERT
+        "globalThis.selects=[];var sel=document.createElement('input');sel.value='abcdef';document.body.appendChild(sel);"
+        "document.body.addEventListener('select',e=>selects.push(e.target===sel&&e.isTrusted&&e.bubbles&&!e.cancelable));"
+        "sel.setSelectionRange(1,3);assert(selects.length===0,'queued, not fired inside the set');",
+        "modern-on-select-event");
+    check(os64_dom_timer_next(f.binding) != UINT64_MAX && os64_dom_timer_fire(f.binding, UINT64_MAX - 1, &select_out) &&
+          select_out.status == OS64_JS_OK && os64_dom_timer_next(f.binding) == UINT64_MAX,
+          "modern: the select event is one task the host runs");
+    dom_script(&f, MODERN_ASSERT
+        "assert(selects.length===1&&selects[0]===true,'trusted, bubbling, not cancelable: '+selects);"
+        "sel.setSelectionRange(1,3);",
+        "modern-on-select-event-heard");
+    check(os64_dom_timer_next(f.binding) == UINT64_MAX, "modern: a set that moves nothing queues no select event");
     /* 0f's P1b: EventTarget, its constructor, and Window. The listener
      * methods are EventTarget.prototype's alone, which Node's, the plain
      * targets' and the global's chains reach; a bare call is the window's. */
