@@ -31,7 +31,9 @@ The first [FreeType geometry experiment](SVG_GEOMETRY.md) is built, with
 analytic capsule comparisons and an upstream empty-subpath fix. The
 [production geometry adapter](SVG_GEOMETRY_BACKEND.md) adds a versioned table,
 caller-owned allocation, lifetime enforcement and work/cancellation limits.
-Browser/reference gates remain; slice 6a stays active.
+The [comparison harness](SVG_REFTESTS.md) adds selected browser/WPT captures,
+native comparisons and negative controls. Its supported profile and the two
+Chromium baseline failures remain explicit; slice 6a stays active.
 
 Slice 5 follows Fable's 2026-10-21 design. Slice 6 follows Quinn's
 2026-10-25 revision of Fable's SVG design. Their documents are their

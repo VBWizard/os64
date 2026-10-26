@@ -127,6 +127,19 @@ static void compare(const uint8_t *actual, const uint8_t *expected)
     printf("backend capsule: L1 %.6f, maximum %u/255\n", total, max);
     assert(total <= 8 && max <= 24);
 }
+static const char *artifact_dir;
+static void save_mask(const char *name, const uint8_t *pixels)
+{
+    if (!artifact_dir)
+        return;
+    char path[4096];
+    int n = snprintf(path, sizeof(path), "%s/%s.pgm", artifact_dir, name);
+    assert(n > 0 && (size_t)n < sizeof(path));
+    FILE *file = fopen(path, "wb");
+    assert(file && fprintf(file, "P5\n%d %d\n255\n", W, H) > 0);
+    assert(fwrite(pixels, 1, W * H, file) == W * H);
+    assert(fclose(file) == 0);
+}
 static void pictures(void)
 {
     Ledger l = {.cap = SIZE_MAX};
@@ -140,6 +153,8 @@ static void pictures(void)
         assert(api->stroke(c, line, COUNT(line), &maps[i], 1.0 / 64, &round_stroke, &o) == OK);
         assert(api->destroy(c) == BUSY);
         assert(draw(c, o, maps[i], actual, false) == OK);
+        if (i == 0)
+            save_mask("cap", actual);
         reference(expected, maps[i]);
         compare(actual, expected);
         uint8_t crop[24 * 40];
@@ -153,6 +168,14 @@ static void pictures(void)
         }
         assert(api->release(c, o) == OK);
     }
+    /* Non-scaling stroke: caller supplies a device-space centerline and width. */
+    Cmd device_line[] = {{OS64_GEOMETRY_MOVE, {{48, 48}}}, {OS64_GEOMETRY_LINE, {{144, 48}}}};
+    Outline *device_outline;
+    assert(api->stroke(c, device_line, COUNT(device_line), &identity, 1.0 / 64, &round_stroke,
+                       &device_outline) == OK);
+    assert(draw(c, device_outline, identity, actual, false) == OK);
+    save_mask("non-scaling", actual);
+    assert(api->release(c, device_outline) == OK);
     Cmd shape[] = {{OS64_GEOMETRY_MOVE, {{20, 20}}},
                    {OS64_GEOMETRY_LINE, {{100, 20}}},
                    {OS64_GEOMETRY_LINE, {{100, 100}}},
@@ -166,8 +189,10 @@ static void pictures(void)
     assert(api->path(c, shape, COUNT(shape), &identity, 1.0 / 64, &o) == OK);
     memset(shape, 0, sizeof(shape)); /* The caller's input is no longer borrowed. */
     assert(draw(c, o, identity, actual, false) == OK && actual[60 * W + 60] == 255);
+    save_mask("nonzero", actual);
     assert(draw(c, o, identity, expected, true) == OK && !expected[60 * W + 60]);
     assert(expected[30 * W + 30] == 255);
+    save_mask("evenodd", expected);
     assert(api->release(c, o) == OK);
     Cmd mixed[] = {{OS64_GEOMETRY_MOVE, {{20, 20}}},
                    {OS64_GEOMETRY_LINE, {{70, 20}}},
@@ -381,8 +406,9 @@ static void boundaries(void)
     close_context(&l, c);
     puts("backend boundaries: zoom, translation, miter, counts, precision and work limits pass");
 }
-int main(void)
+int main(int argc, char **argv)
 {
+    artifact_dir = argc > 1 ? argv[1] : NULL;
     setvbuf(stdout, NULL, _IONBF, 0);
     api = os64_freetype_geometry_v1();
     assert(api && api->revision == OS64_GEOMETRY_BACKEND_REVISION &&

@@ -23,8 +23,9 @@ against standards and reference tests; use real pages as acceptance cases.
 
 The implementation must prove the geometry adapter before freezing its ABI.
 The [private geometry proof](SVG_GEOMETRY.md) records the first fixture,
-precision and allocation results. The production adapter and remaining gates
-are listed under Implementation stages. This design does not establish
+precision and allocation results. The [production adapter](SVG_GEOMETRY_BACKEND.md)
+and [comparison harness](SVG_REFTESTS.md) record their implemented contracts,
+measured limits and remaining gates. This design does not establish
 performance or compatibility percentages.
 
 ## Library boundaries
