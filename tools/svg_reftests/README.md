@@ -28,11 +28,27 @@ resources are errors, except the browser's optional missing favicon.
 
 Capture waits for load, fonts, image decoding and two animation frames. If the
 root has `reftest-wait`, it dispatches `TestRendered`, waits for removal of the
-class, then waits for two more frames. A retained wait class times out. This
+class, then rechecks images/fonts and waits for two more frames. SVG `<image>`
+resources, including legacy `xlink:href`, are checked using their resolved URLs
+through an image decoder; actual SVG image errors are also tracked from before
+navigation. An HTTP-200 corrupt resource is an ERROR, even if both pictures
+would otherwise look identically blank. A retained wait class times out. This
 is the static profile's paint synchronization; arbitrary animations and WPT
 server-generated responses are outside its coverage.
 
-The comparator has 18 self-tests. The local suite has ten expected matching/mismatching cases and eight
+The comparator has 18 self-tests. Seven real-browser resource regressions run
+separately with the same Playwright environment:
+
+```sh
+PLAYWRIGHT_BROWSERS_PATH=/tmp/svg-reference-env/browsers /tmp/svg-reference-env/bin/python tools/svg_reftests/browser_checks.py -v
+```
+
+They cover corrupt bitmap/SVG resources, a broken reference, href/xlink:href,
+post-TestRendered replacement, standalone SVG, data-URL SVG and the existing
+HTML-image decode check. These are capture-contract checks; they do not assert
+recursive resource correctness inside an independently loaded SVG document.
+
+The local suite has ten expected matching/mismatching cases and eight
 negative controls. Missing stroke, incorrect transform order, wrong winding
 and per-child opacity must fail their reference comparisons on both light and
 dark backgrounds. ERROR or UNSUPPORTED never counts as an expected negative

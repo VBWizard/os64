@@ -101,6 +101,14 @@ cannot substitute for an independent geometry oracle.
 
 ## Verification and remaining boundaries
 
+Seven real-browser resource regressions cover decode readiness, including two
+matching pages with the same corrupt HTTP-200 image. That case reported PASS
+before the SVG image fix and now reports ERROR. SVG image error events are
+tracked before navigation; direct href/xlink:href resources are also decoded,
+and readiness is rechecked after TestRendered mutations. Valid bitmap,
+standalone SVG and data-URL SVG fixtures remain supported. This checks direct
+resource decoding, not recursive correctness of a referenced SVG's contents.
+
 The modified public-backend harness passes ASan, UBSan and LeakSanitizer,
 including its 32 allocation and 1045 cancellation cuts. This increment changes
 host tools and fixture output; production geometry/font code is unchanged.

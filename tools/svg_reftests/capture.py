@@ -10,6 +10,38 @@ from urllib.parse import urlsplit
 from compare import Unsupported, file_for
 
 
+SVG_IMAGE_ERRORS = """(() => {
+    window.__os64SvgImageErrors = [];
+    document.addEventListener('error', event => {
+        const image = event.target;
+        if (image.namespaceURI === 'http://www.w3.org/2000/svg' && image.localName === 'image')
+            window.__os64SvgImageErrors.push('SVG image load failed: ' + image.href.baseVal);
+    }, true);
+})();"""
+
+IMAGE_READINESS = """async () => {
+    await Promise.race([(async () => {
+        await document.fonts.ready;
+        const htmlImages = Array.from(document.images || [], image => image.decode());
+        // SVGImageElement has no decode(). Probe its resolved resource through
+        // an HTML Image while retaining failures from the actual SVG element.
+        const svgImages = Array.from(document.getElementsByTagNameNS(
+            'http://www.w3.org/2000/svg', 'image'), async element => {
+                const href = element.href.baseVal;
+                if (!href) return;
+                const probe = new Image();
+                probe.src = new URL(href, element.baseURI).href;
+                try { await probe.decode(); }
+                catch (_) { throw Error('SVG image decode failed: ' + probe.src); }
+            });
+        await Promise.all([...htmlImages, ...svgImages]);
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        if (window.__os64SvgImageErrors.length)
+            throw Error(window.__os64SvgImageErrors.join('; '));
+    })(), new Promise((_, reject) => setTimeout(() => reject(Error('readiness timeout')), 10000))]);
+}"""
+
+
 class QuietHandler(SimpleHTTPRequestHandler):
     def log_message(self, *_):
         pass
@@ -79,6 +111,7 @@ class Capture:
                 return
             request.continue_()
         context.route('**/*', route)
+        context.add_init_script(SVG_IMAGE_ERRORS)
         page = context.new_page()
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.on('response', lambda response: errors.append(f'HTTP {response.status}: {response.url}')
@@ -86,17 +119,15 @@ class Capture:
         page.set_default_timeout(10000)
         try:
             page.goto(self.origin + url, wait_until='load', timeout=10000)
-            page.evaluate('''async () => {
-                await Promise.race([(async () => {
-                await document.fonts.ready;
-                await Promise.all(Array.from(document.images, i => i.decode()));
-                await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+            page.evaluate(IMAGE_READINESS)
+            page.evaluate("""() => {
                 if (document.documentElement.classList.contains('reftest-wait'))
                     document.documentElement.dispatchEvent(new Event('TestRendered', {bubbles:true}));
-                })(), new Promise((_, reject) => setTimeout(() => reject(Error('readiness timeout')), 10000))]);
-            }''')
+            }""")
             page.wait_for_function("!document.documentElement.classList.contains('reftest-wait')")
-            page.evaluate('() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))')
+            # TestRendered may replace or introduce resources; validate the final
+            # document as well as the initial one before accepting its pixels.
+            page.evaluate(IMAGE_READINESS)
             if errors:
                 raise ValueError('; '.join(errors))
             if page.evaluate("""() => (document.body?.innerText || '').trim() ||
@@ -104,6 +135,7 @@ class Capture:
                 raise Unsupported('text fixtures require a pinned font setup')
             fonts = page.evaluate('() => Array.from(document.fonts, f => ({family:f.family, status:f.status}))')
             page.screenshot(path=str(output), full_page=False, omit_background=False, timeout=10000)
+            errors.extend(page.evaluate('() => window.__os64SvgImageErrors'))
             if errors:
                 raise ValueError('; '.join(errors))
             return {'url': url, 'fonts': fonts}
