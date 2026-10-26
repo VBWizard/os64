@@ -23,8 +23,8 @@ control is that: four options, one row, no way to see the others.
    the menu session runs on, so yonder must turn through it before it can
    own a popup.
 2. **`os64_ui_dropdown`** in libos64: a closed box (the chosen label and an
-   arrow) whose list opens as an owned popup through the menu session.
-   Designed when step 1 is in.
+   arrow) whose list opens as an owned popup. Waiting on a ruling
+   (§ Step 2's question).
 3. **yonder's one-line selects** (`multiple` absent, `size` 1 or absent)
    become dropdowns; a listbox stays a listbox.
 
@@ -64,3 +64,26 @@ typed into; the Settings dialog opened, Dark pages ticked and applied
 with Escape; httpbin's order form scrolled, submitted, its reply reloaded,
 the question bar asked and answered No; and the window closed, the log
 saying `leaving: the window was asked to close`.
+
+## Step 2's question: what carries a list longer than a menu
+
+The menu session cannot carry a select's list as it stands. Its sizes are
+a menu's: a model holds `OS64_UI_MENU_ENTRIES` (64) entries in fixed
+arrays (`entries[64]`, `labels[64][128]`), a popup `rows[64]`, and a
+registry `OS64_UI_ACTIONS_MAX` (256) actions, sized by arrays on the
+stack (`ui_action.c`). A select of countries or birth years has 200 or
+more options, and they are data, not commands. What the session does
+that a dropdown needs is the hard part: the popup family's focus rules,
+swallowing the click that dismisses, lost input, geometry, keyboard and
+scrolling (`ui_menu.c`'s `focus_event`, `owner_event`, `panel_event`).
+
+| Option | Cost | What it gives up |
+|---|---|---|
+| A. Through the session as it is | none | any select over 64 options (a fallback for longer lists means two controls) |
+| B. Raise the session's caps | allocation in place of the fixed arrays, through the model, popup and registry | nothing, but a menu system sized for menus is resized for data, and it is Roam's (Quinn's) |
+| C. The dropdown's own popup: a libui listbox in an owned popup window | small; the listbox has no cap | the session's dismissal rules, written a second time |
+| D. **A list mode in the session** (lean): `os64_ui_menu_open_list` with rows from a callback (label, enabled), a selected row, and a pick callback; no registry, no model, no cap | a second content kind in the session's popup, which draws rows it is handed | nothing; the dismissal rules stay in one place |
+
+The lean is D: one popup system, one set of dismissal rules, and the
+data-sized part (the rows) is the dropdown's. It changes `ui_menu.c`,
+which is Roam's, so it is Chris's to rule and Quinn's to see first.
