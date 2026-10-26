@@ -160,6 +160,55 @@ grow to 200 rows, which nothing wants.
    not the session's, and they decide whether a keyboard can work the
    shop's sort control at all.
 
+### The cut, for Quinn to read before it is built
+
+**Public** (`ui_menu.h`), one call beside `os64_ui_menu_open`:
+
+```c
+/* A list the session carries in place of a menu: one level of rows the
+ * caller supplies by index, no actions, no cascades, no help line. */
+typedef struct {
+    size_t count, selected;            /* the row highlighted at open; count or more: the first enabled */
+    int32_t min_width;                 /* the anchor's: a list is at least as wide as its box */
+    const char *(*label)(void *user, size_t row);
+    bool (*enabled)(void *user, size_t row);
+    void (*pick)(void *user, size_t row);   /* after the list has closed, once per commit */
+    void *user;
+} os64_ui_menu_list_t;
+os64_ui_status_code_t os64_ui_menu_open_list(os64_ui_menu_session_t *, const os64_ui_menu_list_t *,
+                                             os64_gui_rect_t anchor);
+```
+
+The callbacks are asked while the list is open (paint, scrolling, keys),
+so what they read is the caller's to keep still until it closes; a caller
+whose rows change closes the list (contract 1). A failed open reports as
+`os64_ui_menu_open` does, through the error hook.
+
+**Inside**, the seam is the popup's content, not the session's state.
+`os64_ui_popup_t` gains a content kind and four questions every site that
+reads the model asks instead: `count`, `selectable(i)`, `label(i)` and,
+in the session, `activate(level, i)`. For a menu they answer from the
+model and the action view exactly as today; for a list, from the
+callbacks. Each site that reads the model is one of those:
+
+| Site | Menu (unchanged) | List |
+|---|---|---|
+| `menu_selectable` | separator, child, action state | `enabled(i)` |
+| `height`, `final_top`, `viewport`, `select_step`, `select_page` | model count, separators | `count`, no separators |
+| `popup_paint` | check or radio, icon, label, legend, arrow | the label; the row that is the value marked as a radio is |
+| `key_event`'s mnemonic scan | declared mnemonics | the label's first letter, so typing jumps |
+| `help` | the spec's help | none |
+| `activate` | `child` or `invoke` | close the family, then `pick(i)`, as `invoke` closes before it runs |
+| `os64_ui_menu_open` / `_close` | retain and release the view | no view |
+
+The list's rows are staged by viewport: the popup keeps runs only for
+the rows it can show, laid out as they scroll in and released as they
+leave; the menu kind keeps its whole-model `rows[64]`. Its width is the
+widest label measured once at open (measured, not kept), at least
+`min_width`, at most the screen's. Nothing else in the session changes:
+the owner hooks, focus family, dismissal, suppression, quarantine,
+placement and the boundary hook are the same code for both kinds.
+
 ### Accepted for v1
 
 - The closed box wears the page's face at the page's zoom, as yonder's
