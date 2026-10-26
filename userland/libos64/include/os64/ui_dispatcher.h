@@ -39,6 +39,10 @@ typedef struct os64_ui_dispatcher {
     void *observe_user;
 } os64_ui_dispatcher_t;
 void os64_ui_dispatcher_init(os64_ui_dispatcher_t *, const os64_ui_window_backend_t *);
+/* The native backend init uses for NULL, for a client that overrides one
+ * entry (an app that reads its own window's events in batches of its own)
+ * and keeps the rest. */
+os64_ui_window_backend_t os64_ui_dispatcher_native(void);
 os64_ui_status_code_t os64_ui_dispatcher_add(os64_ui_dispatcher_t *, int64_t,
     os64_ui_t *, void (*commands)(void *, const os64_gui_event_t *),
     void (*paint)(void *), void *);

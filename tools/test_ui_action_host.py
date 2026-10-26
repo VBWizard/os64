@@ -22,7 +22,7 @@ if a.real:
 sources=['shared/damage.c','tools/test_ui_menu_host.c' if a.menu else 'tools/test_ui_action_host.c']
 if not a.real: sources.append('tools/fonts/fake_backend.c')
 sources+=['userland/libos64/'+name+'.c' for name in
-          ['ui_menu','ui_menu_widget','ui_dispatcher','ui_icon','ui_icon_button','ui_toolbar','ui_action','ui_status','ui_font','ui','ui_controls','ui_list','ui_text','font_provider','font_adopt','text',
+          ['ui_menu','ui_menu_widget','ui_dropdown','ui_dispatcher','ui_icon','ui_icon_button','ui_toolbar','ui_action','ui_status','ui_font','ui','ui_controls','ui_list','ui_text','font_provider','font_adopt','text',
            'fmt','ui_theme','text_cache','text_decode','text_bitmap','text_draw','draw','str']]
 subprocess.run(['cc',*flags,*[str(ROOT/s) for s in sources],*objects,'-o',str(out/'test_ui_action')],check=True)
 result=subprocess.run([str(out/'test_ui_action'),str(ROOT/'userland/libfreetype/fixtures')],env=os.environ)

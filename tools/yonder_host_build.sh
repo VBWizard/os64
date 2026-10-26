@@ -47,8 +47,8 @@ yonder_host_build() {
         userland/libflow/{store,attrs,style,motion,dump,boxes,layout,flow,computed}.c \
         userland/libgarb/{tokenize,parse,decode,dump,select,values,props,media,cascade}.c \
         userland/libway/session.c userland/libway/origin.c userland/libway/jar.c \
-        userland/apps/yonder/fetch_job.c \
-        userland/libos64/{str,fmt,bidi,url,arena,ui,ui_controls,ui_list,ui_text,ui_font,ui_theme,font_config,font_family,font_provider,font_adopt,text,text_cache,text_decode,text_bitmap,text_draw,draw}.c \
+        userland/apps/yonder/fetch_job.c tools/yonder_host_menus.c \
+        userland/libos64/{str,fmt,bidi,url,arena,ui,ui_controls,ui_list,ui_dropdown,ui_text,ui_font,ui_theme,font_config,font_family,font_provider,font_adopt,text,text_cache,text_decode,text_bitmap,text_draw,draw}.c \
         shared/damage.c; do
         object="$work/${source//\//_}.o"
         private=()

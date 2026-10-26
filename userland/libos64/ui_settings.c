@@ -117,24 +117,51 @@ void os64_ui_settings_report(os64_ui_settings_t *d,const char *message)
     os64_strcopy(d->message,sizeof(d->message),message);
     os64_ui_mark_dirty(&d->ui,&d->status);
 }
+// Attached, the window goes through the dispatcher, and a destroy it
+// refuses keeps the dialog whole (its registration stays, and paints it).
 void os64_ui_settings_close(os64_ui_settings_t *d)
 {
-    if(d->window>0){
+    if(d->window>0 && d->dispatcher!=NULL){
+        if(os64_ui_dispatcher_destroy(d->dispatcher,d->window)<0)return;
+        (void)os64_ui_font_release(&d->ui);
+    }else if(d->window>0){
         (void)os64_ui_font_release(&d->ui);
         (void)os64_gui_window_destroy(d->window);
     }
     d->window=0;
+    d->dispatcher=NULL;
+}
+void os64_ui_settings_event(os64_ui_settings_t *d,const os64_gui_event_t *ev)
+{
+    if(ev->type==OS64_GUI_EVENT_KEY_DOWN && ev->key.ascii==27 &&
+        (ev->key.scancode==0x01 || ev->key.scancode==0x29))d->ui.quit=true;
+    else os64_ui_dispatch(&d->ui,ev);
 }
 void os64_ui_settings_pump(os64_ui_settings_t *d)
 {
     if(d->window<=0)return;
     os64_gui_event_t ev;int64_t rc;
     while((rc=os64_gui_event_poll(d->window,&ev))==1){
-        if(ev.type==OS64_GUI_EVENT_KEY_DOWN && ev.key.ascii==27 &&
-            (ev.key.scancode==0x01 || ev.key.scancode==0x29))d->ui.quit=true;
-        else os64_ui_dispatch(&d->ui,&ev);
+        os64_ui_settings_event(d,&ev);
         if(d->ui.quit)break;
     }
     if(rc<0 || d->ui.quit){os64_ui_settings_close(d);return;}
     os64_ui_paint(&d->ui);
+}
+// Attached, a turn delivers each event and paints the dialog after; a
+// close it asked for happens in the turn, which lets go of the window's
+// entry and paints nothing of it.
+static void attached_event(void *user,const os64_gui_event_t *ev)
+{
+    os64_ui_settings_t *d=user;
+    os64_ui_settings_event(d,ev);
+    if(d->ui.quit)os64_ui_settings_close(d);
+}
+bool os64_ui_settings_attach(os64_ui_settings_t *d,os64_ui_dispatcher_t *dispatcher)
+{
+    if(d->window<=0 || d->dispatcher!=NULL || dispatcher==NULL ||
+        os64_ui_dispatcher_add(dispatcher,d->window,&d->ui,attached_event,NULL,d)!=OS64_UI_OK)
+        return false;
+    d->dispatcher=dispatcher;
+    return true;
 }

@@ -114,21 +114,40 @@ bool menu_model_enabled(os64_ui_menu_model_t *m,os64_ui_action_view_t *v)
     }
     return false;
 }
+/* The content questions: what a menu's model and action view answer, or a
+ * list's copy. */
+size_t menu_count(const os64_ui_popup_t *p) { return p->list?p->list->count:p->model->count; }
+bool menu_separator(const os64_ui_popup_t *p,size_t i)
+{ return !p->list&&p->model->entries[i].kind==OS64_UI_MENU_SEPARATOR; }
 bool menu_selectable(os64_ui_popup_t *p,size_t i)
 {
-    if(i>=p->model->count) return false;
+    if(i>=menu_count(p)) return false;
+    if(p->list) return p->list->enabled[i];
     os64_ui_menu_entry_t *e=&p->model->entries[i];
     if(e->kind==OS64_UI_MENU_SEPARATOR) return false;
     if(e->child) return menu_model_enabled(e->child,p->view);
     os64_ui_action_state_t s={0};
     return os64_ui_action_snapshot(p->view,e->action,&s)==OS64_UI_OK&&s.enabled;
 }
+const char *menu_label(const os64_ui_popup_t *p,size_t i)
+{
+    if(p->list) return p->list->labels[i];
+    return p->model->entries[i].child?p->model->entries[i].label:p->rows[i].spec.label;
+}
+/* A menu's declared mnemonic; a list's row answers to its label's first
+ * letter (an ASCII one), which is a select's type-ahead. */
+char menu_mnemonic(const os64_ui_popup_t *p,size_t i)
+{
+    if(!p->list) return p->model->entries[i].child?p->model->entries[i].mnemonic:p->rows[i].spec.mnemonic;
+    unsigned char c=(unsigned char)p->list->labels[i][0];
+    return c>32&&c<127?(char)c:0;
+}
 static int32_t height(const os64_ui_popup_t *p,size_t i)
-{ return p->model->entries[i].kind==OS64_UI_MENU_SEPARATOR?MENU_SEP:p->row_h; }
+{ return menu_separator(p,i)?MENU_SEP:p->row_h; }
 static size_t final_top(const os64_ui_popup_t *p)
 {
     int32_t room=p->w.bounds.h-2*p->row_h,used=0;
-    size_t top=p->model->count;
+    size_t top=menu_count(p);
     /* Pack the tail using actual row heights; separators are shorter than
      * commands. The preceding row cannot fit in this final viewport. */
     while(top&&used+height(p,top-1)<=room) used+=height(p,--top);
@@ -140,20 +159,39 @@ size_t menu_popup_scroll_top(const os64_ui_popup_t *p,int32_t rows)
     size_t top=ui_scroll_rows(p->top,rows),last=final_top(p);
     return top>last?last:top;
 }
+/* A list's runs for the rows the viewport shows, laid out when it moves: the
+ * rows that left are released and the window laid out again. A row whose
+ * layout is refused keeps no run and draws nothing, which the next move
+ * tries again; this runs on event paths, where nothing may be reported. */
+static void stage_list(os64_ui_popup_t *p)
+{
+    size_t shown=p->bottom-p->top;
+    if(p->stage_top==p->top&&p->stage_count==shown) return;
+    for(size_t k=0;k<p->stage_count;++k) { os64_ui_run_release(p->stage[k].run); p->stage[k].run=NULL; }
+    p->stage_top=p->top; p->stage_count=shown>p->stage_cap?p->stage_cap:shown;
+    for(size_t k=0;k<p->stage_count;++k)
+        if(fit_text(p->w.ui,menu_label(p,p->top+k),p->label_w,p->stage[k].label,&p->stage[k].run)) {
+            os64_ui_run_release(p->stage[k].run); p->stage[k].run=NULL; p->stage[k].label[0]=0;
+        }
+}
 static void viewport(os64_ui_popup_t *p)
 {
     if(p->scroll) { size_t last=final_top(p); if(p->top>last) p->top=last; }
     int32_t y=p->scroll?p->row_h:MENU_PAD;
     int32_t end=p->w.bounds.h-(p->scroll?p->row_h:MENU_PAD);
     p->bottom=p->top;
-    while(p->bottom<p->model->count&&y+height(p,p->bottom)<=end) y+=height(p,p->bottom++);
+    while(p->bottom<menu_count(p)&&y+height(p,p->bottom)<=end) y+=height(p,p->bottom++);
 }
+/* A list's rows are staged once the viewport is where it will be painted,
+ * not at each step on the way there (os64_ui_popup_select walks `top` a
+ * row at a time). */
 void os64_ui_popup_scroll(os64_ui_popup_t *p,int32_t rows)
 {
     if(!p||!p->scroll) return;
     size_t top=menu_popup_scroll_top(p,rows);
     if(top==p->top) return;
     p->top=top; viewport(p);
+    if(p->list) stage_list(p);
     if(p->selected<p->top||p->selected>=p->bottom) p->selected=MENU_NONE;
 }
 void os64_ui_popup_select(os64_ui_popup_t *p,size_t i)
@@ -164,6 +202,7 @@ void os64_ui_popup_select(os64_ui_popup_t *p,size_t i)
     if(i<p->top) p->top=i;
     viewport(p);
     while(i>=p->bottom&&p->top<i) { ++p->top; viewport(p); }
+    if(p->list) stage_list(p);
 }
 size_t os64_ui_popup_selected(const os64_ui_popup_t *p) { return p?p->selected:MENU_NONE; }
 os64_gui_rect_t os64_ui_popup_row(const os64_ui_popup_t *p,size_t i)
@@ -202,8 +241,7 @@ static void popup_paint(os64_ui_widget_t *w,os64_draw_ctx_t *ctx,const os64_ui_t
     for(size_t i=p->top;i<p->bottom;++i) {
         os64_gui_rect_t r=os64_ui_popup_row(p,i);
         r.x+=w->bounds.x; r.y+=w->bounds.y;
-        os64_ui_menu_entry_t *e=&p->model->entries[i];
-        if(e->kind==OS64_UI_MENU_SEPARATOR) {
+        if(menu_separator(p,i)) {
             os64_draw_hline(&ctx->surf,r.x,r.y+r.h/2,r.w,t->menu_sep); continue;
         }
         bool enabled=menu_selectable(p,i),selected=i==p->selected&&enabled;
@@ -211,6 +249,20 @@ static void popup_paint(os64_ui_widget_t *w,os64_draw_ctx_t *ctx,const os64_ui_t
         uint32_t fg=enabled?(selected?t->menu_hi_fg:t->menu_fg):t->disabled_fg;
         os64_draw_fill_rect(&ctx->surf,r,bg);
         int32_t ty=r.y+(r.h-os64_ui_font_row_height(w->ui,OS64_FONT_ROLE_UI))/2;
+        if(p->list) {
+            /* A list's row: the value marked as a radio item is, its label
+             * from the staged window. */
+            if(i==p->list->value) {
+                int32_t x=w->bounds.x+MENU_PAD+3,y=r.y+r.h/2;
+                os64_draw_fill_round_rect(&ctx->surf,(os64_gui_rect_t){x,y-3,7,7},3,fg);
+            }
+            const menu_row *row=i-p->stage_top<p->stage_count?&p->stage[i-p->stage_top]:NULL;
+            if(row) os64_ui_draw_run(w->ui,row->run,OS64_FONT_ROLE_UI,&ctx->surf,
+                (os64_gui_rect_t){w->bounds.x+p->label_x,r.y,p->label_w,r.h},w->bounds.x+p->label_x,ty,
+                row->label,os64_strlen(row->label),fg,bg);
+            continue;
+        }
+        os64_ui_menu_entry_t *e=&p->model->entries[i];
         os64_ui_action_state_t state={0};
         if(e->action) (void)os64_ui_action_snapshot(p->view,e->action,&state);
         if(state.checked) {
@@ -233,9 +285,14 @@ static void popup_paint(os64_ui_widget_t *w,os64_draw_ctx_t *ctx,const os64_ui_t
 }
 static const os64_ui_class_t popup_class={.name="menu-popup",.paint=popup_paint};
 os64_ui_widget_t *os64_ui_popup_widget(os64_ui_popup_t *p) { return p?&p->w:NULL; }
+/* A list's popup releases its staged runs; the list itself is the session's. */
 void os64_ui_popup_destroy(os64_ui_popup_t *p)
 {
     if(!p) return;
+    if(p->list) {
+        for(size_t k=0;k<p->stage_count;++k) os64_ui_run_release(p->stage[k].run);
+        os64_free(p->stage); os64_free(p); return;
+    }
     for(size_t i=0;i<p->model->count;++i) {
         os64_ui_run_release(p->rows[i].run); os64_ui_run_release(p->rows[i].legend);
         os64_ui_icon_release(p->provider,&p->rows[i].icon);
@@ -305,6 +362,51 @@ os64_ui_status_code_t os64_ui_popup_create(os64_ui_t *ui,os64_ui_menu_model_t *m
         if(rc) goto fail;
     }
     viewport(p); *out=p; return OS64_UI_OK;
+fail: os64_ui_popup_destroy(p); return rc;
+}
+/* A list's popup: one row height, no icons, legends or arrows, a radio mark
+ * on the value. Its width is the widest label, measured once here and not
+ * kept, at least the box's and at most the room; its runs are staged by
+ * viewport (stage_list), so a list of hundreds lays out only what shows. */
+os64_ui_status_code_t menu_popup_create_list(os64_ui_t *ui,const menu_list *l,int32_t mw,int32_t mh,
+    os64_ui_popup_t **out)
+{
+    *out=NULL;
+    if(!l->count) return OS64_UI_EMPTY;
+    os64_ui_popup_t *p=os64_malloc(sizeof(*p));
+    if(!p) return OS64_UI_NO_MEMORY;
+    *p=(os64_ui_popup_t){.w={.cls=&popup_class,.ui=ui},.selected=MENU_NONE,.list=l};
+    os64_ui_status_code_t rc=OS64_UI_OK;
+    int32_t line=os64_ui_font_row_height(ui,OS64_FONT_ROLE_UI),widest=0,minimum_label=0;
+    p->check_w=12; p->row_h=line+2*MENU_PAD;
+    for(size_t i=0;i<l->count;++i) {
+        int32_t width=0;
+        rc=ui_message_font_result(os64_ui_text_measure(ui,OS64_FONT_ROLE_UI,l->labels[i],os64_strlen(l->labels[i]),&width));
+        if(rc) goto fail;
+        if(width>widest) widest=width;
+    }
+    uint64_t rows=(uint64_t)l->count*(uint64_t)p->row_h+2*MENU_PAD;
+    int32_t total=rows>INT32_MAX?INT32_MAX:(int32_t)rows;
+    p->scroll=total>mh;
+    if(mh<(p->scroll?3*p->row_h:p->row_h+2*MENU_PAD)) { rc=OS64_UI_LIMIT; goto fail; }
+    p->label_x=MENU_PAD+p->check_w+MENU_GAP;
+    int32_t furniture=p->label_x+MENU_GAP+MENU_PAD;
+    rc=ui_message_font_result(os64_ui_text_measure(ui,OS64_FONT_ROLE_UI,"\xe2\x80\xa6",3,&minimum_label));
+    if(rc) goto fail;
+    if(minimum_label<16) minimum_label=16;
+    if(mw<furniture+minimum_label) { rc=OS64_UI_LIMIT; goto fail; }
+    int32_t width=furniture+widest;
+    if(width<l->min_width) width=l->min_width;
+    if(width<furniture+minimum_label) width=furniture+minimum_label;
+    if(width>mw) width=mw;
+    p->label_w=width-furniture;
+    p->w.bounds=(os64_gui_rect_t){0,0,width,p->scroll?mh:total};
+    p->stage_cap=(size_t)(p->w.bounds.h/p->row_h)+1;
+    p->stage=os64_malloc(p->stage_cap*sizeof(*p->stage));
+    if(!p->stage) { rc=OS64_UI_NO_MEMORY; goto fail; }
+    os64_memset(p->stage,0,p->stage_cap*sizeof(*p->stage));
+    p->stage_top=MENU_NONE;
+    viewport(p); stage_list(p); *out=p; return OS64_UI_OK;
 fail: os64_ui_popup_destroy(p); return rc;
 }
 

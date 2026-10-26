@@ -11,7 +11,6 @@
 #include "os64/mem.h"
 #include "os64/proc.h"
 #include "os64/str.h"
-#include "os64/thread.h"
 #include "os64/ui_settings.h"
 
 #define CONF_NAME "yonder.conf"
@@ -93,14 +92,6 @@ static struct {
     void (*clear_jar)(char *line, size_t cap);
     // Why the cookie file is not kept, NULL while it is (opening_say).
     const char *(*cookies_problem)(void);
-    // The relay: `thread` waits for events at the dialog's window and
-    // rings `bell` on `window`, then waits on `pumped` until the loop has
-    // handled them — one ring outstanding at a time, so it never spins on
-    // events the loop has not taken yet.
-    int64_t window, thread;
-    uint32_t bell;
-    bool piped;
-    int32_t pumped[2];
 } s;
 
 // Every typed agent ever applied, newest first (yonder_agent_keep).
@@ -380,42 +371,6 @@ static void emptied(os64_ui_widget_t *w, void *user)
     os64_ui_settings_report(&s.d, line);
 }
 
-// ── The relay ───────────────────────────────────────────────────────────
-
-// `arg` is the dialog's window, handed over rather than read from `s`,
-// which the loop clears when it closes the dialog.
-static int64_t relay(void *arg)
-{
-    int64_t dialog = (int64_t)(intptr_t)arg;
-    for (;;) {
-        // Waits without taking: the events stay queued for the pump.
-        if (os64_gui_event_wait(dialog, NULL) != 1)
-            return 0;
-        (void)os64_gui_event_ring(s.window, s.bell);
-        char byte;
-        if (os64_read_for(s.pumped[0], &byte, 1, OS64_WAIT_FOREVER) != 1)
-            return 0;
-    }
-}
-
-// The relay's end: the dialog's window is gone, so its wait answers at
-// once, and a byte ends a wait for the loop.
-static void relay_stop(void)
-{
-    if (s.thread > 0) {
-        const char byte = 1;
-        (void)os64_write(s.pumped[1], &byte, 1);
-        (void)os64_thread_join((int32_t)s.thread, NULL);
-        os64_close((int32_t)s.thread);
-    }
-    if (s.piped) {
-        os64_close(s.pumped[0]);
-        os64_close(s.pumped[1]);
-    }
-    s.thread = 0;
-    s.piped = false;
-}
-
 // ── The dialog ──────────────────────────────────────────────────────────
 
 static const char *preset_label(size_t i, void *user)
@@ -673,7 +628,7 @@ static void apply(os64_ui_settings_t *d, bool save)
     os64_ui_settings_report(d, line);
 }
 
-void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
+void yonder_settings_open(int64_t parent, os64_ui_dispatcher_t *dispatcher, const char *agent,
                           void (*use)(const char *agent, bool scripts, uint32_t script_seconds),
                           way_cache_t *cache, bool scripts, uint32_t script_seconds, uint32_t zoom,
                           void (*zoom_use)(uint32_t thousandths), bool dark,
@@ -693,8 +648,6 @@ void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
     s.cookies_use = cookies_use;
     s.cache = cache;
     s.usable = false;
-    s.window = parent;
-    s.bell = bell;
     os64_ui_label(&s.heading, "Identify as - pick what every site is told, or type another:");
     int selected = -1;
     for (size_t i = 0; i < yonder_agent_npresets(); i++)
@@ -754,37 +707,14 @@ void yonder_settings_open(int64_t parent, uint32_t bell, const char *agent,
     }
     os64_ui_set_focus(&s.d.ui, &s.list.w);
     os64_ui_paint(&s.d.ui);
-    // Without the relay the dialog would answer only when yonder's own
-    // window had an event: it is closed rather than left half alive.
-    if (os64_pipe(s.pumped) < 0) {
+    // Unregistered, the dialog would never hear an event: it is closed
+    // rather than left half alive.
+    if (!os64_ui_settings_attach(&s.d, dispatcher))
         os64_ui_settings_close(&s.d);
-        return;
-    }
-    s.piped = true;
-    s.thread = os64_thread(relay, (void *)(intptr_t)s.d.window);
-    if (s.thread < 0) {
-        s.thread = 0;
-        os64_ui_settings_close(&s.d);
-        relay_stop();
-    }
-}
-
-void yonder_settings_rung(void)
-{
-    if (s.d.window <= 0)
-        return;
-    os64_ui_settings_pump(&s.d);
-    if (s.d.window <= 0) {
-        relay_stop();
-        return;
-    }
-    const char byte = 1;
-    (void)os64_write(s.pumped[1], &byte, 1);
 }
 
 void yonder_settings_close(void)
 {
     if (s.d.window > 0)
         os64_ui_settings_close(&s.d);
-    relay_stop();
 }

@@ -816,7 +816,9 @@ static void path_invariants(void)
     ++audit_boundaries;
     os64_ui_menu_session_t *s=g.menus;
     CHECK(s->depth<=OS64_UI_MENU_DEPTH);
-    CHECK(s->active? s->view!=NULL : (!s->view&&!s->depth&&!s->pending));
+    /* Active, a session carries a menu (its view) or a list, never both. */
+    CHECK(s->active? (s->view!=NULL)!=(s->list!=NULL) : (!s->view&&!s->list&&!s->depth&&!s->pending&&!s->list_pending));
+    CHECK(!s->list_pending||(s->list&&!s->depth));
     CHECK(g.bar.view==s->bar_view);
     if(g.bar.model&&g.bar.view) CHECK(os64_ui_action_view_registry(g.bar.view,g.bar.model->actions));
     if(s->active&&s->kind==OS64_UI_MENU_BAR&&!s->depth&&!s->pending)
@@ -828,6 +830,14 @@ static void path_invariants(void)
         CHECK(transport.windows[p->handle].live);
         CHECK(transport.windows[p->handle].owner==(i?s->panels[i-1].handle:s->owner));
         CHECK(p->widget->view==s->view);
+        if(p->widget->list) {
+            /* A list is one level, its popup reading the session's copy. */
+            CHECK(i==0&&s->depth==1&&p->widget->list==s->list&&!p->widget->model);
+            CHECK(p->widget->stage_count<=p->widget->stage_cap);
+            CHECK(p->widget->selected==MENU_NONE||(p->widget->selected<s->list->count&&
+                  os64_ui_popup_row(p->widget,p->widget->selected).h>0));
+            continue;
+        }
         CHECK(os64_ui_action_view_registry(p->widget->view,p->widget->model->actions));
         CHECK(p->widget->selected==MENU_NONE||p->widget->selected<p->widget->model->count);
         CHECK(p->widget->selected==MENU_NONE||os64_ui_popup_row(p->widget,p->widget->selected).h>0);
@@ -1416,6 +1426,143 @@ static void review_round_six(void)
     os64_ui_menu_hooks(g.menus,gallery_menu_layout,gallery_menu_error,&g);
 }
 
+/* A dropdown's list (DROPDOWN.md § Step 2; Quinn's acceptance checks):
+ * rows copied at the call, the highlight not the pick, type-ahead that
+ * only highlights, commits once and after the close, a detach that no
+ * pick outlives (a refused close retried at the boundary), a list waiting
+ * out the quarantine, and the anchor widget watched. */
+static unsigned list_picks;
+static size_t list_picked;
+static int list_user;
+static void list_pick(void *u,size_t row) { CHECK(u==&list_user);++list_picks;list_picked=row; }
+static void list_mode(void)
+{
+    audit_enabled=true;
+    static char text[200][16];
+    const char *labels[200];bool enabled[200];
+    const char *names[]={"Alpha","Beta","Canada","Chile","Delta"};
+    for(size_t i=0;i<200;++i) {
+        if(i<5) snprintf(text[i],sizeof(text[i]),"%s",names[i]); else snprintf(text[i],sizeof(text[i]),"Row %03zu",i);
+        labels[i]=text[i];enabled[i]=i!=4;
+    }
+    os64_ui_menu_list_t l={labels,enabled,200,1,120,NULL,list_pick,&list_user};
+    os64_gui_rect_t anchor={100,100,120,20};
+    list_picks=0;
+    current="list: opens on its value, rows copied and staged by viewport";
+    CHECK(os64_ui_menu_open_list(g.menus,&l,anchor)==OS64_UI_OK);drain();
+    int64_t h=popup_handle();CHECK(h);
+    os64_ui_popup_t *p=g.menus->panels[0].widget;
+    CHECK(p->list&&p->selected==1&&p->stage_count==p->bottom-p->top&&p->stage_count<200);
+    snprintf(text[0],sizeof(text[0]),"Zulu");CHECK(!strcmp(g.menus->list->labels[0],"Alpha"));
+    snprintf(text[0],sizeof(text[0]),"Alpha");
+    current="list: arrows and letters move the highlight and pick nothing";
+    key(h,0,0x50,0);CHECK(p->selected==2&&!list_picks&&popup_handle()==h);
+    key(h,'b',0x30,0);CHECK(p->selected==1&&!list_picks&&popup_handle()==h);
+    key(h,'c',0x2e,0);CHECK(p->selected==2&&!list_picks);
+    key(h,'c',0x2e,0);CHECK(p->selected==3&&!list_picks);
+    key(h,'d',0x20,0);CHECK(p->selected==3&&!list_picks&&popup_handle()==h);
+    current="list: End reaches the last row, the staged window following";
+    key(h,0,0x4f,0);CHECK(p->selected==199&&p->bottom==200&&p->stage_top==p->top&&p->stage_count==p->bottom-p->top);
+    current="list: Escape closes and picks nothing";
+    key(h,27,0x01,0);CHECK(!popup_handle()&&!os64_ui_menu_active(g.menus)&&!list_picks);drain();
+    current="list: Enter commits once, after the close";
+    CHECK(os64_ui_menu_open_list(g.menus,&l,anchor)==OS64_UI_OK);drain();h=popup_handle();
+    key(h,0,0x50,0);key(h,'\n',0x1c,0);CHECK(list_picks==1&&list_picked==2&&!popup_handle());drain();
+    current="list: a click commits the row clicked";
+    CHECK(os64_ui_menu_open_list(g.menus,&l,anchor)==OS64_UI_OK);drain();h=popup_handle();p=g.menus->panels[0].widget;
+    size_t row=p->top+2;os64_gui_rect_t r=os64_ui_popup_row(p,row);
+    queue(h,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,r.x+2,r.y+2,OS64_GUI_MOUSE_LEFT));
+    queue(h,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_UP,r.x+2,r.y+2,OS64_GUI_MOUSE_LEFT));drain();
+    CHECK(list_picks==2&&list_picked==row&&!popup_handle());drain();
+    current="list: a detach closes it and no pick follows";
+    CHECK(os64_ui_menu_open_list(g.menus,&l,anchor)==OS64_UI_OK);drain();h=popup_handle();
+    os64_ui_menu_list_detach(g.menus,&list_user);CHECK(!os64_ui_menu_active(g.menus));drain();CHECK(!popup_handle()&&list_picks==2);
+    current="list: a detach whose close is refused calls no one, and the boundary retries";
+    CHECK(os64_ui_menu_open_list(g.menus,&l,anchor)==OS64_UI_OK);drain();h=popup_handle();
+    transport.fail_destroy=h;os64_ui_menu_list_detach(g.menus,&list_user);
+    CHECK(g.menus->close_retry&&popup_handle()==h&&!g.menus->list->pick);
+    queue(h,edge(OS64_GUI_EVENT_KEY_DOWN,'\n',0x1c,0));queue(h,edge(OS64_GUI_EVENT_KEY_UP,'\n',0x1c,0));drain();
+    CHECK(list_picks==2&&popup_handle()==h);
+    transport.fail_destroy=0;drain();CHECK(!popup_handle()&&!os64_ui_menu_active(g.menus)&&list_picks==2);
+    current="list: replacing a menu waits out the quarantine, then opens";
+    open_context(g.models[4],g.views[0]);
+    CHECK(os64_ui_menu_open_list(g.menus,&l,anchor)==OS64_UI_BUSY);
+    CHECK(g.menus->list_pending&&!popup_handle());drain();
+    h=popup_handle();CHECK(h&&g.menus->depth==1&&g.menus->panels[0].widget->list);
+    key(h,27,0x01,0);drain();
+    current="list: a list detached while it waits never opens";
+    open_context(g.models[4],g.views[0]);
+    CHECK(os64_ui_menu_open_list(g.menus,&l,anchor)==OS64_UI_BUSY);
+    os64_ui_menu_list_detach(g.menus,&list_user);CHECK(!os64_ui_menu_active(g.menus));drain();
+    CHECK(!popup_handle()&&list_picks==2);
+    current="list: its box hidden or moved closes it";
+    os64_ui_widget_t box={.bounds={100,100,120,20}};l.widget=&box;
+    CHECK(os64_ui_menu_open_list(g.menus,&l,anchor)==OS64_UI_OK);drain();CHECK(popup_handle());
+    box.hidden=true;queue(1,mouse(OS64_GUI_EVENT_MOUSE_MOVE,5,5,0));drain();CHECK(!popup_handle()&&!os64_ui_menu_active(g.menus));
+    box.hidden=false;CHECK(os64_ui_menu_open_list(g.menus,&l,anchor)==OS64_UI_OK);drain();CHECK(popup_handle());
+    box.bounds.y+=1;queue(1,mouse(OS64_GUI_EVENT_MOUSE_MOVE,5,5,0));drain();CHECK(!popup_handle()&&!os64_ui_menu_active(g.menus));
+    CHECK(list_picks==2);
+    audit_enabled=false;
+}
+
+/* The dropdown widget over the session: a click, Space and Alt+Down open
+ * its list; a pick of the value it has changes nothing (Quinn's review, 4);
+ * Up and Down on the closed box change the value; destroying it while the
+ * list is open closes the list and leaves no pick to come. */
+static unsigned drop_changes;
+static void drop_changed(os64_ui_dropdown_t *d,void *u) { (void)d;(void)u;++drop_changes; }
+static const char *drop_label(size_t i,void *u)
+{
+    (void)u;
+    static const char *names[]={"Name (A to Z)","Name (Z to A)","Price (low to high)","Price (high to low)"};
+    return i<4?names[i]:"";
+}
+static void dropdown_widget(void)
+{
+    audit_enabled=true;
+    static os64_ui_dropdown_t d;
+    os64_ui_dropdown(&d,4,drop_label,drop_changed,NULL);
+    d.w.bounds=(os64_gui_rect_t){600,600,160,24};
+    os64_ui_add_child(g.ui.root,&d.w);
+    os64_ui_dropdown_set(&g.ui,&d,4,0);drop_changes=0;
+    current="dropdown: a click opens its list on the value";
+    queue(1,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,610,610,OS64_GUI_MOUSE_LEFT));
+    queue(1,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_UP,610,610,OS64_GUI_MOUSE_LEFT));drain();
+    int64_t h=popup_handle();
+    CHECK(h&&g.menus->list&&g.menus->list->user==&d&&g.menus->panels[0].widget->selected==0);
+    current="dropdown: committing the value it has is not a change";
+    key(h,'\n',0x1c,0);CHECK(!popup_handle()&&d.selected==0&&!drop_changes);
+    current="dropdown: committing another is one change";
+    queue(1,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,610,610,OS64_GUI_MOUSE_LEFT));drain();h=popup_handle();CHECK(h);
+    key(h,0,0x50,0);key(h,0,0x50,0);CHECK(!drop_changes);
+    key(h,'\n',0x1c,0);CHECK(!popup_handle()&&d.selected==2&&drop_changes==1);
+    current="dropdown: Up and Down on the closed box change the value";
+    CHECK(g.ui.focus==&d.w);
+    key(1,0,0x50,0);CHECK(d.selected==3&&drop_changes==2&&!popup_handle());
+    key(1,0,0x50,0);CHECK(d.selected==3&&drop_changes==2);
+    key(1,0,0x48,0);CHECK(d.selected==2&&drop_changes==3);
+    current="dropdown: Space and Alt+Down open it";
+    key(1,' ',0x39,0);h=popup_handle();CHECK(h);key(h,27,0x01,0);CHECK(!popup_handle()&&drop_changes==3);
+    key(1,0,0x50,OS64_GUI_MOD_ALT);h=popup_handle();CHECK(h);key(h,27,0x01,0);drain();
+    current="dropdown: a set that changes nothing leaves the list open, one that does closes it";
+    queue(1,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,610,610,OS64_GUI_MOUSE_LEFT));drain();h=popup_handle();CHECK(h);
+    os64_ui_dropdown_set(&g.ui,&d,4,d.selected);drain();CHECK(popup_handle()==h&&os64_ui_menu_active(g.menus));
+    os64_ui_dropdown_set(&g.ui,&d,4,1);drain();CHECK(!popup_handle()&&!os64_ui_menu_active(g.menus)&&drop_changes==3);
+    current="dropdown: destroyed while open, its list closes and no pick follows";
+    queue(1,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,610,610,OS64_GUI_MOUSE_LEFT));drain();h=popup_handle();CHECK(h);
+    d.w.cls->destroy(&d.w);CHECK(!os64_ui_menu_active(g.menus));drain();CHECK(!popup_handle()&&drop_changes==3);
+    current="dropdown: destroyed while open, focus never goes back to it, refused close or not";
+    for(int refuse=0;refuse<2;refuse++) {
+        queue(1,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,610,610,OS64_GUI_MOUSE_LEFT));drain();h=popup_handle();CHECK(h);
+        os64_ui_set_focus(&g.ui,NULL);              /* as yonder's widget_destroy moves it off first */
+        transport.fail_destroy=refuse?h:0;
+        d.w.cls->destroy(&d.w);CHECK(g.ui.focus!=&d.w&&!g.menus->saved_focus);
+        transport.fail_destroy=0;drain();CHECK(!popup_handle()&&g.ui.focus!=&d.w&&drop_changes==3);
+    }
+    d.w.hidden=true;os64_ui_dropdown_set(&g.ui,&d,0,-1);
+    audit_enabled=false;
+}
+
 int main(int argc,char **argv)
 {
     setvbuf(stdout,NULL,_IONBF,0);
@@ -1437,6 +1584,6 @@ int main(int argc,char **argv)
         build(dir,true);review_round_six();dispose();
         printf("r6: %lu checks, %d failures\n",checks,failures);return failures?1:0;
     }
-    build(dir,true);models();disabled_bar_and_overflow_failure();dismissal_orders();activation_and_loss();quarantine();pending_context_keys();review_navigation();destruction_failure(dir);review_round_two();review_round_three();review_round_four();review_round_five();review_round_six();navigation();burst_and_pointer_navigation();standalone();callback_and_icon_contract();placement_and_fonts(dir);collapse_pending_child();dispose();
+    build(dir,true);models();disabled_bar_and_overflow_failure();dismissal_orders();activation_and_loss();quarantine();pending_context_keys();review_navigation();destruction_failure(dir);review_round_two();review_round_three();review_round_four();review_round_five();review_round_six();navigation();burst_and_pointer_navigation();standalone();callback_and_icon_contract();placement_and_fonts(dir);collapse_pending_child();list_mode();dropdown_widget();dispose();
     printf("menu/action/status: %lu checks, %d failures\n",checks,failures);return failures?1:0;
 }

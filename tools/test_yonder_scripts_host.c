@@ -19,6 +19,7 @@ os64_js_status_t __real_os64_js_create_with_teardown(const os64_js_config_t *,
 #define s settings_fixture
 #include "../userland/apps/yonder/settings.c"
 #undef s
+#include "yonder_host_menus.h"
 
 static yonder_diag_t *diag_new_claimed(const char *url, uint32_t seq);
 
@@ -545,9 +546,6 @@ static bool script_land_from(const char *tail, const char *source, const char *f
     }
     return false;
 }
-/* Reached from the doorbell's other bits, which no case rings. */
-int64_t os64_thread_join(int32_t handle, int64_t *retval) { (void)handle; (void)retval; return -1; }
-void os64_ui_settings_pump(os64_ui_settings_t *dialog) { (void)dialog; check(false,"no settings relay"); }
 /* A moving picture a case plays (picture_tick_cases): its frame, and how
  * many times it was advanced. No other case has one. */
 struct os64_image_sequence { os64_image_frame_t frame; uint32_t nexts; };
@@ -2488,6 +2486,81 @@ static void input_script_buttons(void) {
     check(status_says("belongs to no form"),"input: without scripts, a formless button says why it did nothing");
     probe_drop();
 }
+/* A one-line select is a dropdown (DROPDOWN.md); a select with a size is a
+ * listbox. A click opens the list with the options' labels and the
+ * disabled one refused; a pick of another option sets the model and fires
+ * input and change once; a pick of the option it has fires nothing. */
+static void input_select_dropdown(void) {
+    probe_page("<select id=sort><option value=az>Name (A to Z)<option value=za>Name (Z to A)"
+        "<option disabled>Retired<option value=lohi>Price (low to high)</select>"
+        "<select id=many size=3><option>1<option>2<option>3</select><p id=log>-</p>"
+        "<script>var log=[];var s=document.getElementById('sort');"
+        "s.addEventListener('input',function(){log.push('input '+s.value)});"
+        "s.addEventListener('change',function(){log.push('change '+s.value);"
+        "document.getElementById('log').textContent=log.join('|')});</script>",true);
+    script_turn();
+    FormWidget *sort=probe_field("sort"),*many=probe_field("many");
+    check(sort!=NULL && sort->kind==FW_DROPDOWN && many!=NULL && many->kind==FW_LIST,
+          "select: a one-line select is a dropdown, one with a size a listbox");
+    void *menus=g.ui.menu;
+    g.ui.menu=&yonder_host_list;            /* the hosts' session (yonder_host_menus.c) */
+    yonder_host_list=(yonder_host_list_t){0};
+    os64_gui_event_t down={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+    down.mouse.button=OS64_GUI_MOUSE_LEFT;
+    sort->w->cls->event(sort->w,&g.ui,&down);
+    check(yonder_host_list.opens==1 && yonder_host_list.count==4 && yonder_host_list.selected==0 &&
+          !strcmp(yonder_host_list.labels[3],"Price (low to high)") && !yonder_host_list.enabled[2] &&
+          yonder_host_list.enabled[3],
+          "select: a click opens the list, on its value, the disabled option refused");
+    check(yonder_host_list_pick(3) && (inputs_run(),1) && probe_text_is("log","input lohi|change lohi") &&
+          sort->u.drop.selected==3,
+          "select: a pick of another option is the model's choice, and input and change once");
+    sort->w->cls->event(sort->w,&g.ui,&down);
+    check(yonder_host_list_pick(3) && (inputs_run(),1) && probe_text_is("log","input lohi|change lohi"),
+          "select: a pick of the option it has fires nothing");
+    g.ui.menu=menus;
+    probe_drop();
+    /* The options reordered while the list is open, count and value the
+     * same: the list, a copy of the old order, closes. */
+    probe_page("<select id=sort><option>A<option>B<option>C</select>"
+        "<script>setTimeout(function(){var s=document.getElementById('sort');"
+        "s.insertBefore(s.options[2],s.options[1])},0)</script>",true);
+    script_turn();
+    sort=probe_field("sort");
+    g.ui.menu=&yonder_host_list;
+    yonder_host_list=(yonder_host_list_t){0};
+    sort->w->cls->event(sort->w,&g.ui,&down);
+    check(yonder_host_list.open,"select: its list is open before the page reorders it");
+    for(int i=0;i<5&&yonder_host_list.open;i++) { script_turn(); script_rebuild(); }
+    const os64_page_control_t *c=os64_page_control(page_model(&g.page),widget_control(sort));
+    check(c!=NULL && c->noptions==3 && !strcmp(c->options[1].label,"C") &&
+          !yonder_host_list.open && yonder_host_list.detaches==1,
+          "select: options reordered beneath an open list close it");
+    g.ui.menu=menus;
+    probe_drop();
+    /* An option disabled beneath an open list closes it too; and a pick the
+     * model refuses (the disabled option, picked from a list drawn before)
+     * fires nothing. */
+    probe_page("<select id=sort><option>A<option>B<option>C</select><p id=log>-</p>"
+        "<script>var s=document.getElementById('sort');"
+        "s.addEventListener('change',function(){document.getElementById('log').textContent='changed'});"
+        "setTimeout(function(){s.options[2].disabled=true},0)</script>",true);
+    script_turn();
+    sort=probe_field("sort");
+    g.ui.menu=&yonder_host_list;
+    yonder_host_list=(yonder_host_list_t){0};
+    sort->w->cls->event(sort->w,&g.ui,&down);
+    void (*pick)(void *,size_t)=yonder_host_list.pick;
+    void *user=yonder_host_list.user;
+    for(int i=0;i<5&&yonder_host_list.open;i++) { script_turn(); script_rebuild(); }
+    check(!yonder_host_list.open && yonder_host_list.detaches==1,
+          "select: an option disabled beneath an open list closes it");
+    pick(user,2);inputs_run();
+    check(probe_text_is("log","-") && sort->u.drop.selected==0,
+          "select: a pick of an option the model refuses fires nothing and keeps the value");
+    g.ui.menu=menus;
+    probe_drop();
+}
 static void input_cases(void) {
     g.seq=2;g.key_seq=2;g.pressed_link=9;
     yonder_bar_raise(&g.bar,1);yonder_bar_settled(&g.bar);
@@ -2505,6 +2578,7 @@ static void input_cases(void) {
     input_hover();
     input_forms();
     input_script_buttons();
+    input_select_dropdown();
 }
 
 /* ── THE STREAM (docs/design/pending/DOM_D4.md) ─────────────────────────
@@ -5637,6 +5711,36 @@ static void hover_batch_cases(void)
         index++;
     }
     check(index==queue.count,"hover burst: lookahead delivers every nonmerged event");
+    /* Read by a dispatcher (yonder_event_batch_draining): the cap answers
+     * "none" with events still queued, except while the dispatcher waits
+     * for every queue to drain after a destroy, when only an empty queue
+     * says so. Forty keys, none of which merge. */
+    os64_gui_event_t keys[40];
+    for(unsigned i=0;i<40;i++) keys[i]=(os64_gui_event_t){.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii=(uint8_t)('a'+i%26)}};
+    for(int quarantine=0;quarantine<2;quarantine++) {
+        queue=(HoverQueue){keys,40,0};
+        batch=(YonderEventBatch){0};
+        unsigned read=0;
+        while(yonder_event_batch_draining(&batch,&event,hover_poll,&queue,quarantine!=0)) read++;
+        check(quarantine ? read==40 && batch.drained : read==YONDER_EVENT_BATCH_MAX && !batch.drained,
+              quarantine ? "dispatcher batch: during a quarantine only an empty queue answers none"
+                         : "dispatcher batch: otherwise the cap ends the reading with the queue not drained");
+    }
+    /* A batch that found the queue empty, then a destroy that queues an
+     * event and begins a quarantine: the old empty answer does not stand,
+     * and the event is read in the same turn. Outside a quarantine it waits
+     * for the next turn's batch. */
+    for(int quarantine=0;quarantine<2;quarantine++) {
+        queue=(HoverQueue){keys,0,0};
+        batch=(YonderEventBatch){0};
+        check(!yonder_event_batch_draining(&batch,&event,hover_poll,&queue,false) && batch.drained,
+              "dispatcher batch: an empty queue is found empty");
+        queue.count=1;
+        bool read=yonder_event_batch_draining(&batch,&event,hover_poll,&queue,quarantine!=0);
+        check(quarantine ? read && queue.at==1 : !read && queue.at==0,
+              quarantine ? "dispatcher batch: a quarantine asks an emptied queue again"
+                         : "dispatcher batch: otherwise an emptied batch waits for the next turn");
+    }
 }
 
 #include <time.h>

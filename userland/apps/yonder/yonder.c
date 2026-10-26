@@ -34,6 +34,8 @@
 #include "os64/text_draw.h"
 #include "os64/url.h"
 #include "os64/ui.h"
+#include "os64/ui_dispatcher.h"
+#include "os64/ui_menu.h"
 #include "os64/work.h"
 #include "agent.h"
 #include "bar.h"
@@ -92,6 +94,9 @@ static os64_dom_screen_t s_screen;
 // The problem last said on the status line, so one is said once.
 static yonder_cookies_t *s_cookies;
 static char s_cookies_said[OS64_PATH_MAX + 96];
+// yonder.conf's `cookies` as the window opened, which Settings shows when
+// there is no file's jar to ask.
+static yonder_cookies_mode_t s_cookies_asked;
 
 // The pages a navigation asks for when the agent's preset names no list of
 // its own (agent.c: a costume, or an agent typed). libway adds, on a GET,
@@ -152,7 +157,6 @@ static char s_cookies_said[OS64_PATH_MAX + 96];
 #define BELL_WORK (1u << 0)
 #define BELL_MAIL (1u << 1)
 #define BELL_TICK (1u << 2)       // a moving picture's next frame is due
-#define BELL_SETTINGS (1u << 3)   // something arrived at the Settings window
 #define BELL_SCRIPTS (1u << 4)    // a page has another script or timer to run
 #define BELL_STREAM (1u << 5)     // an arriving page has more to parse than one slice
 
@@ -1214,7 +1218,7 @@ typedef enum { ASK_NONE = 0, ASK_WORKER, ASK_REQUEST } Asker;
 
 // A control's widget (YONDER.md § Y4), allocated individually so its
 // address and editor state survive a rebuilt model.
-typedef enum { FW_TEXT, FW_PASSWORD, FW_CHECK, FW_BUTTON, FW_LIST, FW_FILE } FormKind;
+typedef enum { FW_TEXT, FW_PASSWORD, FW_CHECK, FW_BUTTON, FW_LIST, FW_DROPDOWN, FW_FILE } FormKind;
 
 typedef struct {
     FormKind kind;
@@ -1228,6 +1232,7 @@ typedef struct {
         os64_ui_checkbox_t check;
         os64_ui_widget_t button;
         os64_ui_listbox_t list;
+        os64_ui_dropdown_t drop;
     } u;
     os64_ui_widget_t *w;
     // The widget's own class, kept while a gadget's draws nothing
@@ -1236,6 +1241,10 @@ typedef struct {
     char text[512];                 // a field's buffer, a button's caption
     char secret[512];               // a password's value: the field shows bullets
     size_t secret_len;
+    // A dropdown's options as last synced, their nodes, labels and disabled
+    // states hashed (options_signature): a change closes its open list, whose rows are a
+    // copy of what they were.
+    uint64_t options_sig;
 } FormWidget;
 
 // A person's input waiting to be dispatched as a DOM event (inputs_run).
@@ -1259,6 +1268,14 @@ static struct {
     int64_t win;
     os64_draw_ctx_t ctx;
     os64_ui_t ui;
+    // Its turns deliver the events of every window yonder owns: its own,
+    // read a batch at a time (window_poll), and the Settings dialog's.
+    os64_ui_dispatcher_t dispatcher;
+    os64_ui_window_backend_t native;
+    YonderEventBatch batch;
+    // The window's popup controller, which a dropdown's list opens in
+    // (DROPDOWN.md); NULL if it could not be made, and then no list opens.
+    os64_ui_menu_session_t *menus;
     os64_ui_widget_t root, status, view, back, forward, reload, stop;
     // The badge at the right of the status bar: the shown page's MISSING
     // and FAILED counts, the file's own tokens, present only when nonzero.
@@ -1684,7 +1701,16 @@ static int64_t size_rows(const char *v)
     return n;
 }
 
-// A select's box: the rows its list shows, as wide as its longest option.
+// A one-line select (HTML § 4.10.7): no `multiple`, and a `size` of 1 or
+// none. It is a dropdown (DROPDOWN.md); any other select is a listbox.
+static bool select_one_line(const os64_page_control_t *c, const os64_html_node_t *node)
+{
+    const os64_html_attr_t *size = os64_html_attr(node, "size");
+    return !c->multiple && (size == NULL || size->value == NULL || size_rows(size->value) <= 1);
+}
+
+// A select's box: as wide as its longest option, and for a listbox the
+// rows its list shows, for a dropdown one row and room for its arrow.
 // Measured in the controls' face (controls_face_at), the one its widget
 // paints in. The page chooses `size` (at most INT32_MAX rows, by
 // size_rows), so the arithmetic is 64-bit and the answer clamped.
@@ -1692,8 +1718,11 @@ static void select_size(const os64_page_control_t *c, const os64_html_node_t *no
                         int32_t *w, int32_t *h)
 {
     const os64_html_attr_t *size = os64_html_attr(node, "size");
+    bool one_line = select_one_line(c, node);
     int64_t rows = size != NULL && size->value != NULL ? size_rows(size->value) : 0;
-    if (rows <= 1)
+    if (one_line)
+        rows = 1;
+    else if (rows <= 1)
         rows = c->noptions < SELECT_ROWS ? c->noptions : SELECT_ROWS;
     if (rows < 1)
         rows = 1;
@@ -1706,13 +1735,14 @@ static void select_size(const os64_page_control_t *c, const os64_html_node_t *no
             widest = px;
     }
     // The listbox's own arithmetic: a two-pixel frame, rows eight pixels
-    // taller than the face's, labels six pixels in. The face is already at
+    // taller than the face's, labels six pixels in; a dropdown's box is one
+    // such row, twenty pixels wider for its arrow. The face is already at
     // the zoom and libflow scales a replaced box's own size by it, so the
     // answer goes back in CSS pixels, rounded up so no row is cut. At most
     // INT32_MAX rows of a face under a thousand pixels, so 64 bits hold it.
     int64_t zoom = s_env.zoom > 0 ? s_env.zoom : 1000;
     int64_t dh = rows * ((int64_t)os64_ui_font_row_height(&g.ui, OS64_UI_FONT_APP) + 8) + 4;
-    int64_t dw = (int64_t)widest + 2 * 6 + 4;
+    int64_t dw = (int64_t)widest + 2 * 6 + 4 + (one_line ? 20 : 0);
     *h = clamp32((dh * 1000 + zoom - 1) / zoom);
     *w = clamp32((dw * 1000 + zoom - 1) / zoom);
     if (*w < 48)
@@ -6764,6 +6794,32 @@ static const char *option_label(size_t i, void *user)
                ? c->options[i].label : "";
 }
 
+// What a dropdown's options are, for telling when they changed beneath an
+// open list: each option's node, label and whether it may be chosen
+// (FNV-1a), never 0.
+static uint64_t options_signature(const os64_page_control_t *c)
+{
+    uint64_t h = 1469598103934665603ULL;
+    for (int32_t k = 0; k < c->noptions; k++) {
+        uintptr_t node = (uintptr_t)c->options[k].node;
+        for (size_t b = 0; b < sizeof(node); b++)
+            h = (h ^ (uint8_t)(node >> (8 * b))) * 1099511628211ULL;
+        for (const char *s = c->options[k].label != NULL ? c->options[k].label : ""; *s; s++)
+            h = (h ^ (uint8_t)*s) * 1099511628211ULL;
+        h = (h ^ (c->options[k].disabled ? 0xFE : 0xFF)) * 1099511628211ULL;
+    }
+    return h != 0 ? h : 1;
+}
+
+// Whether a dropdown's list may choose option i: not when it, or its
+// optgroup, is disabled.
+static bool option_enabled(size_t i, void *user)
+{
+    const FormWidget *fw = user;
+    const os64_page_control_t *c = os64_page_control(page_model(&g.page), widget_control(fw));
+    return c != NULL && (int32_t)i < c->noptions && !c->options[i].disabled;
+}
+
 static void form_send(int32_t control, os64_page_activation_t how);
 
 static void field_submitted(os64_ui_textfield_t *tf, void *user)
@@ -6811,14 +6867,28 @@ static void check_changed(os64_ui_checkbox_t *cb, void *user)
         input_queue(IN_CHECK, fw->node, NULL, g.pointer_x, g.pointer_y, was);
 }
 
+// A listbox's row chosen, or a dropdown's value changed: the model's choice,
+// then the page's `input` and `change` (IN_LIST). A dropdown calls it only
+// for a new value, never for a commit of the value it had. A choice the
+// model refuses (an option disabled since the list was drawn) changes
+// nothing, and the widget is synced back to what the model holds.
+static void option_chosen(const FormWidget *fw, int selected)
+{
+    bool chosen = selected >= 0 &&
+        os64_page_set_chosen(page_model(&g.page), widget_control(fw), (int32_t)selected, true) >= 0;
+    forms_sync_from_model(false);
+    if (chosen && scripts_live())
+        input_queue(IN_LIST, fw->node, NULL, 0, 0, false);
+}
+
 static void list_changed(os64_ui_listbox_t *list, void *user)
 {
-    const FormWidget *fw = user;
-    if (list->selected >= 0)
-        (void)os64_page_set_chosen(page_model(&g.page), widget_control(fw), (int32_t)list->selected, true);
-    forms_sync_from_model(false);
-    if (scripts_live())
-        input_queue(IN_LIST, fw->node, NULL, 0, 0, false);
+    option_chosen(user, list->selected);
+}
+
+static void drop_changed(os64_ui_dropdown_t *drop, void *user)
+{
+    option_chosen(user, drop->selected);
 }
 
 // A form reset, by a reset button or a script's reset(): libpage puts the
@@ -6923,12 +6993,20 @@ static void forms_sync_from_model(bool text)
         case FW_CHECK:
             os64_ui_checkbox_set(&g.ui, &fw->u.check, c->checked);
             break;
-        case FW_LIST: {
+        case FW_LIST:
+        case FW_DROPDOWN: {
             int selected = -1;
             for (int32_t k = 0; k < c->noptions && selected < 0; k++)
                 if (c->options[k].selected)
                     selected = k;
-            os64_ui_listbox_set(&g.ui, &fw->u.list, (size_t)c->noptions, selected);
+            if (fw->kind == FW_DROPDOWN) {
+                uint64_t sig = options_signature(c);
+                if (sig != fw->options_sig)
+                    os64_ui_dropdown_rows_changed(&g.ui, &fw->u.drop);
+                fw->options_sig = sig;
+                os64_ui_dropdown_set(&g.ui, &fw->u.drop, (size_t)c->noptions, selected);
+            } else
+                os64_ui_listbox_set(&g.ui, &fw->u.list, (size_t)c->noptions, selected);
             os64_ui_mark_dirty(&g.ui, fw->w);
             break;
         }
@@ -7050,7 +7128,7 @@ static bool password_key(const os64_gui_event_t *ev)
 static FormKind control_kind(const os64_page_control_t *c)
 {
     if (c->element == OS64_PAGE_EL_SELECT)
-        return FW_LIST;
+        return select_one_line(c, c->node) ? FW_DROPDOWN : FW_LIST;
     if (c->element == OS64_PAGE_EL_BUTTON || c->submits || c->resets ||
         c->input == OS64_PAGE_INPUT_BUTTON || c->input == OS64_PAGE_INPUT_FILE)
         return c->input == OS64_PAGE_INPUT_FILE ? FW_FILE : FW_BUTTON;
@@ -7122,6 +7200,11 @@ static void forms_build(void)
         case FW_LIST:
             os64_ui_listbox(&fw->u.list, (size_t)c->noptions, option_label, list_changed, fw);
             fw->w = &fw->u.list.w;
+            break;
+        case FW_DROPDOWN:
+            os64_ui_dropdown(&fw->u.drop, (size_t)c->noptions, option_label, drop_changed, fw);
+            fw->u.drop.enabled = option_enabled;
+            fw->w = &fw->u.drop.w;
             break;
         case FW_BUTTON:
         case FW_FILE:
@@ -10516,8 +10599,6 @@ static void on_doorbell(os64_ui_t *ui, const os64_gui_event_t *ev)
         // The head, the body and the verdict are the stream's: the loop
         // feeds a slice after the events (stream_turn, in main).
     }
-    if (mask & BELL_SETTINGS)
-        yonder_settings_rung();
     if (mask & BELL_TICK) {
         s_cost.bells++;
         if (g.coming.active && yonder_now_ms() >= g.coming.due)
@@ -12248,7 +12329,7 @@ static void left_said(int64_t woke)
 {
     char said[192];
     if (woke != 1)
-        os64_snprintf(said, sizeof(said), "yonder: leaving: the window's event wait answered %ld (%s)",
+        os64_snprintf(said, sizeof(said), "yonder: leaving: waiting for or reading events answered %ld (%s)",
                       (long)woke, gui_err_name(woke));
     else if (s_leaving != NULL)
         os64_snprintf(said, sizeof(said), "yonder: leaving: %s", s_leaving);
@@ -12436,6 +12517,62 @@ static int64_t event_poll(void *opaque, os64_gui_event_t *event)
     return os64_gui_event_poll(g.win,event);
 }
 
+// The dispatcher's poll: yonder's own window a batch at a time
+// (yonder_event_batch_next, which bounds a turn's input and merges idle
+// motion), every other window as it comes. The batch's end reads as an
+// empty queue for the rest of the turn, except while the dispatcher
+// quarantines a destroyed window's handle, when the cap starts a new batch
+// and only a queue that is empty says so (yonder_event_batch_draining); a
+// lookahead the batch holds is the next turn's first event.
+static int64_t window_poll(void *user, int64_t handle, os64_gui_event_t *event)
+{
+    (void)user;
+    if (handle != g.win)
+        return g.native.poll(g.native.user, handle, event);
+    bool quarantine = !os64_ui_dispatcher_can_create(&g.dispatcher);
+    return yonder_event_batch_draining(&g.batch, event, event_poll, NULL, quarantine) ? 1 : 0;
+}
+
+// One of yonder's window's events. The pointer is read before libui
+// because a widget is handed moves only while a button is held and the
+// status line follows its current position; the question bar answers by
+// its own rules.
+static void window_event(void *user, const os64_gui_event_t *event)
+{
+    (void)user;
+    if (!g.running || g.ui.quit)
+        return;
+    const os64_gui_event_t ev = *event;
+    if (ev.type == OS64_GUI_EVENT_INPUT_LOST)
+        input_lost();
+    if (ev.type == OS64_GUI_EVENT_MOUSE_MOVE)
+        hover(ev.mouse.x, ev.mouse.y);
+    else if (ev.type == OS64_GUI_EVENT_POINTER_STATE)
+        hover(ev.pointer.inside ? ev.pointer.x : -1, ev.pointer.inside ? ev.pointer.y : -1);
+    else if (ev.type == OS64_GUI_EVENT_WINDOW_COVERED ||
+             ev.type == OS64_GUI_EVENT_WINDOW_UNCOVERED)
+        window_seen();
+    if (ev.type == OS64_GUI_EVENT_SETTINGS)
+        yonder_settings_open(g.win, &g.dispatcher, g.way.agent, settings_use, g.cache,
+                             g.scripts_on, (uint32_t)(g.script_ms / 1000), g.zoom_default,
+                             zoom_use, s_dark, dark_use, s_animations, s_reduce_motion,
+                             motion_use, g.modern, modern_use,
+                             s_cookies != NULL ? yonder_cookies_mode(s_cookies) : s_cookies_asked,
+                             cookies_use);
+    else if (!bar_event(&ev) && !zoom_event(&ev) && !address_event(&ev) && !key_event(&ev) &&
+             !password_key(&ev))
+        os64_ui_dispatch(&g.ui, &ev);
+    interface_font_finish();
+    // What the event became, as DOM events, now libui is done with it.
+    inputs_run();
+}
+
+// yonder paints its window after the turn, with the page's work.
+static void window_paint(void *user)
+{
+    (void)user;
+}
+
 int main(int argc, char **argv)
 {
     const char *why = faces_open();
@@ -12504,6 +12641,7 @@ int main(int argc, char **argv)
     g.way.jar = way_jar_new();          // NULL keeps no cookies: the pages still load
     const char *cookies_refused;
     yonder_cookies_mode_t cookies = yonder_settings_saved_cookies(&cookies_refused);
+    s_cookies_asked = cookies;
     s_cookies = yonder_cookies_new(g.way.jar, profile, cookies);
     if (s_cookies == NULL)
         way_jar_refuse(g.way.jar, cookies == YONDER_COOKIES_OFF);
@@ -12590,57 +12728,59 @@ int main(int argc, char **argv)
     sync_bars();
 
     // P5 testing: Million Dollar Homepage's popup stalled while motion kept
-    // the queue busy. Bound input and coalesce idle moves before their scripts
-    // run, so each batch reaches painting without waiting for an empty queue.
-    // The pointer is read before libui because a widget is handed moves only
-    // while a button is held and the status
-    // line follows its current position; the question bar answers by its
-    // own rules. After painting, a bar not yet armed is armed only if the
-    // queue is EMPTY: anything waiting may have been done before the bar
-    // could be seen, so it is dispatched to a disarmed bar first.
+    // the queue busy. Each turn reads a bounded batch of yonder's window's
+    // events, idle moves merged (window_poll), so it reaches painting
+    // without waiting for an empty queue. The turn is the dispatcher's
+    // (DROPDOWN.md § Step 1), which reads every window yonder owns; the
+    // wait is yonder's, so its sleep is measured as it always was. After
+    // painting, a bar not yet armed is armed only if the queues are EMPTY:
+    // anything waiting may have been done before the bar could be seen, so
+    // the next turn does not sleep, dispatches it to the disarmed bar, and
+    // only a turn that finds nothing arms it.
     g.running = true;
     frame_follow();
     glass_paint();
-    os64_gui_event_t ev;
-    bool held = false;              // an event taken while looking for an empty queue
-    int64_t woke = 1;               // the event wait's last answer, said as yonder leaves
+    g.native = os64_ui_dispatcher_native();
+    os64_ui_window_backend_t backend = g.native;
+    backend.poll = window_poll;
+    os64_ui_dispatcher_init(&g.dispatcher, &backend);
+    if (os64_ui_dispatcher_add(&g.dispatcher, g.win, &g.ui, window_event, window_paint, NULL) != OS64_UI_OK) {
+        s_leaving = "the dispatcher refused yonder's window";
+        g.running = false;
+    } else if (os64_ui_menu_session_create(&g.dispatcher, &g.ui, g.win, NULL, NULL, NULL, &g.menus) != OS64_UI_OK) {
+        g.menus = NULL;
+        status_rest("No popup controller; a one-line list will not open.");
+    }
+    int64_t woke = 1;               // the wait's or the turn's last answer, said as yonder leaves
+    bool looking = false;           // a disarmed bar: is anything waiting?
     while (g.running && !g.ui.quit) {
-        uint64_t asleep = cycles();
-        woke = held ? 1 : os64_gui_event_wait(g.win, &ev);
-        uint64_t slept = cycles_since(asleep);
-        s_cost.waited += slept;
-        if (slept > s_cost.slept_most)
-            s_cost.slept_most = slept;
-        if (woke != 1)
-            break;
-        held = false;
-        YonderEventBatch batch = {.held=true,.pending=ev};
-        while (g.running && !g.ui.quit && yonder_event_batch_next(&batch,&ev,event_poll,NULL)) {
-            if (ev.type == OS64_GUI_EVENT_INPUT_LOST)
-                input_lost();
-            if (ev.type == OS64_GUI_EVENT_MOUSE_MOVE)
-                hover(ev.mouse.x, ev.mouse.y);
-            else if (ev.type == OS64_GUI_EVENT_POINTER_STATE)
-                hover(ev.pointer.inside ? ev.pointer.x : -1, ev.pointer.inside ? ev.pointer.y : -1);
-            else if (ev.type == OS64_GUI_EVENT_WINDOW_COVERED ||
-                     ev.type == OS64_GUI_EVENT_WINDOW_UNCOVERED)
-                window_seen();
-            if (ev.type == OS64_GUI_EVENT_SETTINGS)
-                yonder_settings_open(g.win, BELL_SETTINGS, g.way.agent, settings_use, g.cache,
-                                     g.scripts_on, (uint32_t)(g.script_ms / 1000), g.zoom_default,
-                                     zoom_use, s_dark, dark_use, s_animations, s_reduce_motion,
-                                     motion_use, g.modern, modern_use,
-                                     s_cookies != NULL ? yonder_cookies_mode(s_cookies) : cookies, cookies_use);
-            else if (!bar_event(&ev) && !zoom_event(&ev) && !address_event(&ev) && !key_event(&ev) &&
-                     !password_key(&ev))
-                os64_ui_dispatch(&g.ui, &ev);
-            interface_font_finish();
-            // What the event became, as DOM events, now libui is done with it.
-            inputs_run();
+        // No sleep when a lookahead the last batch holds is waiting already,
+        // or (the dispatcher's own rule, can_create false) while the queues
+        // drain after a window of yonder's was destroyed.
+        if (!looking && !g.batch.held && os64_ui_dispatcher_can_create(&g.dispatcher)) {
+            int64_t ready = 0;
+            uint64_t asleep = cycles();
+            woke = os64_gui_event_wait_any(&ready);
+            uint64_t slept = cycles_since(asleep);
+            s_cost.waited += slept;
+            if (slept > s_cost.slept_most)
+                s_cost.slept_most = slept;
+            if (woke != 1)
+                break;
         }
-        if (batch.held) {
-            ev = batch.pending;
-            held = true;
+        g.batch.consumed = 0;
+        g.batch.drained = false;
+        int64_t events = os64_ui_dispatcher_turn(&g.dispatcher, false);
+        if (events < 0) {
+            woke = events;
+            break;
+        }
+        if (looking && events == 0 && !g.batch.held) {
+            looking = false;
+            yonder_bar_settled(&g.bar);
+            bar_show(true);
+            glass_paint();
+            continue;
         }
         if (g.relayout_due) {
             g.relayout_due = false;
@@ -12669,23 +12809,16 @@ int main(int argc, char **argv)
         // A task may have set or cleared a timer, and a frame for an
         // animation has its whole cost now: the ticker hears of both.
         pictures_schedule();
-        if (g.bar.up && !g.bar.armed) {
-            // P5 batching may hold a lookahead event. Preserve it and leave
-            // the bar disarmed until that older input has been dispatched.
-            if (held || os64_gui_event_poll(g.win, &ev) == 1) {
-                held = true;
-            } else {
-                yonder_bar_settled(&g.bar);
-                bar_show(true);
-                glass_paint();
-            }
-        }
+        looking = g.bar.up && !g.bar.armed;
     }
 
     left_said(woke);
-    // The clock and the Settings window's relay first: they only ring, and
-    // nothing after this should.
+    // The Settings dialog, the popup controller (an open list goes with it)
+    // and the clock first; the clock only rings, and nothing after this
+    // should.
     yonder_settings_close();
+    if (g.menus != NULL && os64_ui_menu_session_dispose(g.menus) == OS64_UI_OK)
+        g.menus = NULL;
     yonder_ticker_stop(g.ticker);
     g.ticker = NULL;                    // the page's record, written after, reads its counts
     // The workers next: destroy cancels them — a fetch and a question

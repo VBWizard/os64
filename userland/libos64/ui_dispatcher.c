@@ -16,11 +16,15 @@ static int64_t native_screen(void *u, uint32_t *w, uint32_t *h)
 { (void)u; return os64_gui_screen_info(w,h); }
 static void native_publish(void *u, int64_t h, os64_gui_rect_t r)
 { (void)u; (void)os64_gui_window_publish(h,&r); }
+os64_ui_window_backend_t os64_ui_dispatcher_native(void)
+{
+    return (os64_ui_window_backend_t){NULL,native_poll,native_wait,
+        native_destroy,native_create,native_rect,native_surface,native_screen,native_publish};
+}
 void os64_ui_dispatcher_init(os64_ui_dispatcher_t *d, const os64_ui_window_backend_t *b)
 {
     *d=(os64_ui_dispatcher_t){0};
-    d->native=b?*b:(os64_ui_window_backend_t){NULL,native_poll,native_wait,
-        native_destroy,native_create,native_rect,native_surface,native_screen,native_publish};
+    d->native=b?*b:os64_ui_dispatcher_native();
 }
 bool os64_ui_dispatcher_can_create(const os64_ui_dispatcher_t *d) { return d&&!d->dead_count; }
 bool os64_ui_dispatcher_live(const os64_ui_dispatcher_t *d,int64_t h)
