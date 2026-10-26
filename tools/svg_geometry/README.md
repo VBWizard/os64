@@ -7,9 +7,8 @@ python3 tools/test_svg_geometry.py --output /tmp/svg-geometry
 ```
 
 The runner builds the shipped FreeType source lists and port configuration,
-plus upstream `ftstroke.c`, `ftglyph.c` and `ftbitmap.c`. These three units are
-linked by this experiment; they are not added to the shipped library's build
-list. It links the private hosted adapter in `proof.c`, with ASan, UBSan and
+including `ftstroke.c`, `ftglyph.c` and `ftbitmap.c`. The default mode links the
+private hosted adapter in `proof.c`, with ASan, UBSan and
 leak detection enabled, and keeps the binary, raw PGM coverage, PNG previews,
 results and a self-contained `index.html` in the chosen output directory.
 The PNG/HTML generator uses the Python standard library. The adapter uses
@@ -41,4 +40,15 @@ attachment failure as a clean leak result. The binary takes the output
 directory as its single argument.
 
 See [the geometry results](../../docs/design/pending/SVG_GEOMETRY.md) for the
-measured envelope, upstream fix and production decisions still required.
+measured envelope and upstream fix. To test the exported production table:
+
+```sh
+python3 tools/test_svg_geometry.py --backend --output /tmp/geometry-backend
+```
+
+This mode uses `backend_test.c`, which includes the public geometry header
+and calls its table without FreeType headers. It checks independent capsule
+coverage, clip/padding, fill/closure, zoom/translation, miter/count/precision
+limits, ownership, allocation failures, work limits, cancellation and callback
+re-entry. It saves the binary and result log; it does not regenerate the
+private experiment's gallery. See [the production contract](../../docs/design/pending/SVG_GEOMETRY_BACKEND.md).

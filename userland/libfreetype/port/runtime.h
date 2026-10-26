@@ -8,8 +8,8 @@
  * `memcmp`: a struct assignment or a large initializer becomes a call to one
  * of them under any optimization level, whatever `-ffreestanding` suggests).
  *
- * Everything here is hidden: the version script exports `os64_freetype_backend_v1`
- * and nothing else, so these names never reach another object's symbol
+ * Everything here is hidden: the version script exports the font and geometry
+ * table getters, so these runtime names never reach another object's symbol
  * resolution and cannot interpose on, or be interposed by, libos64's own
  * copies of the same operations.
  */

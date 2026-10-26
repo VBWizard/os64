@@ -1,8 +1,8 @@
-# libfreetype — os64's font engine
+# libfreetype — os64's font and geometry engine
 
-`/lib/libfreetype.so` turns outline fonts into grayscale coverage masks. It
-is FreeType 2.14.3, pinned and trimmed, behind an os64-owned interface that
-lets no FreeType type reach a consumer.
+`/lib/libfreetype.so` turns fonts and vector paths into grayscale coverage
+masks. It is FreeType 2.14.3, pinned and trimmed, behind separate os64-owned
+font and geometry interfaces. No FreeType type reaches a consumer.
 
 **It is a LEAF.** No `DT_NEEDED` at all — not even libos64 — so libos64 can
 consume it later without the two importing each other. That is why the port
@@ -16,7 +16,8 @@ the property from an intention into a build failure.
 | `upstream/` | the pinned FreeType sources, imported whole per module |
 | `patches/` | upstream fixes backported onto the pin, applied in order |
 | `manifest.json` | provenance plus a digest for every imported file |
-| `port/backend.c` | the adapter: the whole of what this library exports |
+| `port/backend.c` | the font operation table |
+| `port/geometry.c` | the geometry operation table, with opaque context/outline lifetimes |
 | `port/os64_ft*.h`, `port/ft2build.h` | which FreeType this is — options, modules, and the C library it may call |
 | `port/runtime.c`, `port/nonlocal.S` | the freestanding C runtime a leaf has to bring |
 | `port/ftsystem.c` | the refusal that replaces upstream's platform layer |
@@ -26,8 +27,12 @@ the property from an intention into a build failure.
 The interface is F0's, declared in
 `userland/libos64/include/os64/font_backend.h` and specified in
 `FONT_CONTRACTS.md`. Consumers call `os64_freetype_backend_v1()` and check
-`revision` and `struct_size` before using the table; it is the only symbol
-this library exports.
+`revision` and `struct_size` before using the table. The independent
+`os64_freetype_geometry_v1()` getter follows the same version-check convention;
+its header is `userland/libos64/include/os64/geometry_backend.h` and its
+[contract and verification](../../docs/design/pending/SVG_GEOMETRY_BACKEND.md)
+cover caller-owned allocation, work limits, precision and cancellation.
+These two getters are the library's exports. The font table is unchanged.
 
 ## Building and checking it
 
@@ -35,7 +40,7 @@ this library exports.
 make -C userland                                   # the library, with everything else
 x86_64-elf-readelf -dW  userland/bin/libfreetype.so # expect NO DT_NEEDED
 x86_64-elf-nm -D -u     userland/bin/libfreetype.so # expect nothing
-x86_64-elf-nm -D --defined-only userland/bin/libfreetype.so  # expect one symbol
+x86_64-elf-nm -D --defined-only userland/bin/libfreetype.so  # expect two getters
 x86_64-elf-readelf -lW  userland/bin/libfreetype.so # expect R / R+E / RW, never RWX
 x86_64-elf-readelf -rW  userland/bin/libfreetype.so # expect R_X86_64_RELATIVE only
 x86_64-elf-size         userland/bin/libfreetype.so
@@ -43,8 +48,8 @@ x86_64-elf-size         userland/bin/libfreetype.so
 
 The four expectations above are the library's contract with the loader, and
 each fails loudly rather than quietly: a `DT_NEEDED` means the leaf property
-is gone, an undefined symbol means `--no-undefined` was bypassed, a second
-exported symbol means the version script was widened, and a writable
+is gone, an undefined symbol means `--no-undefined` was bypassed, an export
+besides the two getters means the version script was widened, and a writable
 executable segment means `-z separate-code` stopped working.
 
 ## Testing it
@@ -57,6 +62,7 @@ tools/test_freetype_host.py            # ASan + UBSan at -O2, the level that shi
 tools/test_freetype_host.py --plain    # no sanitizers, for a fast pass
 tools/test_freetype_host.py -O0        # the same tests at another level
 python3 tools/test_freetype_target_runtime.py --mutation # target runtime + flag policy
+python3 tools/test_svg_geometry.py --backend --output /tmp/geometry-backend
 ```
 
 It compiles the production sources with the host compiler and the same

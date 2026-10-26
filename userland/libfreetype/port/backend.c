@@ -1,7 +1,7 @@
 /* backend.c — os64's font backend, implemented on the pinned FreeType.
  *
- * This is the whole of what leaves the library: `os64_freetype_backend_v1()`
- * hands back a table of function pointers and nothing else is exported, so no
+ * `os64_freetype_backend_v1()` exposes the font operation table; geometry has
+ * its own versioned getter in geometry.c. Both hide upstream details, so no
  * FreeType type, constant or version-specific struct reaches a consumer. The
  * contract those functions implement is F0's — `os64/font_backend.h` for the
  * declarations, FONT_CONTRACTS.md for the semantics — and this file's job is
@@ -1097,7 +1097,7 @@ static void glyph_release( os64_font_glyph_t *glyph )
 }
 
 
-/* ── the table, and the only symbol that leaves ────────────────────────── */
+/* ── the font table and its exported getter ────────────────────────── */
 
 static const os64_font_backend_t backend = {
     .revision      = OS64_FONT_BACKEND_REVISION,
