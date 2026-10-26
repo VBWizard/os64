@@ -126,7 +126,9 @@ struct os64_ui_dropdown {
 };
 void os64_ui_dropdown(os64_ui_dropdown_t *d,size_t count,const char *(*label)(size_t,void *),
     void (*on_change)(os64_ui_dropdown_t *,void *),void *user);
-/* Sets the rows and the value; an open list closes, its rows being stale. */
+/* Sets the rows and the value. A set that changes either closes an open
+ * list, its rows being stale; one that changes neither leaves it open, so a
+ * caller may sync from its model as often as it likes. */
 void os64_ui_dropdown_set(os64_ui_t *ui,os64_ui_dropdown_t *d,size_t count,int selected);
 /* Fallback widget storage must outlive the session. Close before removing or
  * freeing widgets; hidden/detached restoration targets use this fallback. */

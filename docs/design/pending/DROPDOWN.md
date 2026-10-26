@@ -256,8 +256,59 @@ different value fires each once.
   session's popups do. At 150% the box is larger than its list; Chrome
   scales its popup and Firefox's does not.
 - A long list scrolls by the popup's arrow strips and the wheel, a classic
-  menu's way; a browser's select list has a scrollbar. A DEBTS row when
-  step 3 lands.
+  menu's way; a browser's select list has a scrollbar (DEBTS.md § GUI).
 - libpage's option list has no row for an optgroup's heading, so the list
   is flat; an option a disabled optgroup holds is disabled (the row's
   enabled flag carries it).
+
+## Steps 2 and 3, as built
+
+**The session's list** (`ui_menu.c`, `ui_menu_widget.c`):
+`os64_ui_menu_open_list` and `os64_ui_menu_list_detach` as the cut says,
+the popup's content answered through `menu_count`, `menu_separator`,
+`menu_selectable`, `menu_label` and `menu_mnemonic`, and a list's runs
+staged by viewport (`stage_list`). The session's boundary hook opens a
+pending list after the drain, retries a detached list's refused close,
+and closes a list whose anchor widget was hidden or moved. A label is
+kept to 127 bytes, cut at a character boundary, which is what a row lays
+out.
+
+**The widget** (`ui_dropdown.c`, declared in `ui_menu.h`): the closed box
+in the field colours with its arrow, its caption staged with the face. It
+reads a HID keyboard's arrows and Enter as the session reads its named
+keys, as well as from an ESC [ burst: `os64_ui_decode_key` reads only the
+burst. `os64_ui_dropdown_set` closes an open list only when the rows'
+count or the value changes, so yonder syncs from its model as often as it
+likes without closing the list under the person's pointer.
+
+**yonder**: a one-line select (`select_one_line`) is an `FW_DROPDOWN`,
+sized one row and twenty pixels wider for the arrow; its pick and its
+keys reach the page through the listbox's own path (`option_chosen`:
+libpage's choice, then `IN_LIST`'s `input` and `change`). yonder makes its
+window's menu session after registering the window, and disposes of it
+first as it leaves. The hosts have no popups: `yonder_host_menus.c` keeps
+a record of the list asked for and plays the person's pick into it.
+
+**Proof.**
+- The menu host (`tools/test_ui_action_host.py --menu --real`), 164,831
+  checks, 0 failures (150,444 before, unchanged for menus): the list's
+  cases, Quinn's acceptance checks under the path invariants (which now
+  know a list), and the widget over a real session (a click, Space and
+  Alt+Down open it; a commit of the value and of another; the closed
+  box's keys; a set that changes nothing and one that does; destroyed
+  while open). Eight hand mutants of the rules (a letter that commits, a
+  detach that keeps the pick, an unwatched anchor, a list that never
+  waits, rows borrowed, a same-value commit that notifies, a destroy that
+  keeps the list, no named keys) were each caught.
+- The scripted-page host, 8,110 checks: a one-line select is a dropdown
+  and one with a size a listbox; a click opens its list on the value with
+  the disabled option refused; a pick of another option fires `input` and
+  `change` once, and a pick of the same, nothing.
+- QEMU, over the wire, the shop demo's inventory page (its sort control):
+  a click opens the native popup with its four options, the value marked;
+  a pick re-sorts the products (React heard the change); Escape closes it
+  with no change; Down and Up on the closed box change the value and
+  re-sort. After a change the select loses focus to the page, which is
+  the page's: react-burger-menu's effect blurs `document.activeElement`
+  whenever the page re-renders with its menu closed, as it would in
+  Chrome.

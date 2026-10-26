@@ -19,6 +19,7 @@ os64_js_status_t __real_os64_js_create_with_teardown(const os64_js_config_t *,
 #define s settings_fixture
 #include "../userland/apps/yonder/settings.c"
 #undef s
+#include "yonder_host_menus.h"
 
 static yonder_diag_t *diag_new_claimed(const char *url, uint32_t seq);
 
@@ -2485,6 +2486,41 @@ static void input_script_buttons(void) {
     check(status_says("belongs to no form"),"input: without scripts, a formless button says why it did nothing");
     probe_drop();
 }
+/* A one-line select is a dropdown (DROPDOWN.md); a select with a size is a
+ * listbox. A click opens the list with the options' labels and the
+ * disabled one refused; a pick of another option sets the model and fires
+ * input and change once; a pick of the option it has fires nothing. */
+static void input_select_dropdown(void) {
+    probe_page("<select id=sort><option value=az>Name (A to Z)<option value=za>Name (Z to A)"
+        "<option disabled>Retired<option value=lohi>Price (low to high)</select>"
+        "<select id=many size=3><option>1<option>2<option>3</select><p id=log>-</p>"
+        "<script>var log=[];var s=document.getElementById('sort');"
+        "s.addEventListener('input',function(){log.push('input '+s.value)});"
+        "s.addEventListener('change',function(){log.push('change '+s.value);"
+        "document.getElementById('log').textContent=log.join('|')});</script>",true);
+    script_turn();
+    FormWidget *sort=probe_field("sort"),*many=probe_field("many");
+    check(sort!=NULL && sort->kind==FW_DROPDOWN && many!=NULL && many->kind==FW_LIST,
+          "select: a one-line select is a dropdown, one with a size a listbox");
+    void *menus=g.ui.menu;
+    g.ui.menu=&yonder_host_list;            /* the hosts' session (yonder_host_menus.c) */
+    yonder_host_list=(yonder_host_list_t){0};
+    os64_gui_event_t down={.type=OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+    down.mouse.button=OS64_GUI_MOUSE_LEFT;
+    sort->w->cls->event(sort->w,&g.ui,&down);
+    check(yonder_host_list.opens==1 && yonder_host_list.count==4 && yonder_host_list.selected==0 &&
+          !strcmp(yonder_host_list.labels[3],"Price (low to high)") && !yonder_host_list.enabled[2] &&
+          yonder_host_list.enabled[3],
+          "select: a click opens the list, on its value, the disabled option refused");
+    check(yonder_host_list_pick(3) && (inputs_run(),1) && probe_text_is("log","input lohi|change lohi") &&
+          sort->u.drop.selected==3,
+          "select: a pick of another option is the model's choice, and input and change once");
+    sort->w->cls->event(sort->w,&g.ui,&down);
+    check(yonder_host_list_pick(3) && (inputs_run(),1) && probe_text_is("log","input lohi|change lohi"),
+          "select: a pick of the option it has fires nothing");
+    g.ui.menu=menus;
+    probe_drop();
+}
 static void input_cases(void) {
     g.seq=2;g.key_seq=2;g.pressed_link=9;
     yonder_bar_raise(&g.bar,1);yonder_bar_settled(&g.bar);
@@ -2502,6 +2538,7 @@ static void input_cases(void) {
     input_hover();
     input_forms();
     input_script_buttons();
+    input_select_dropdown();
 }
 
 /* ── THE STREAM (docs/design/pending/DOM_D4.md) ─────────────────────────

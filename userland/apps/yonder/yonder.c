@@ -35,6 +35,7 @@
 #include "os64/url.h"
 #include "os64/ui.h"
 #include "os64/ui_dispatcher.h"
+#include "os64/ui_menu.h"
 #include "os64/work.h"
 #include "agent.h"
 #include "bar.h"
@@ -1217,7 +1218,7 @@ typedef enum { ASK_NONE = 0, ASK_WORKER, ASK_REQUEST } Asker;
 
 // A control's widget (YONDER.md § Y4), allocated individually so its
 // address and editor state survive a rebuilt model.
-typedef enum { FW_TEXT, FW_PASSWORD, FW_CHECK, FW_BUTTON, FW_LIST, FW_FILE } FormKind;
+typedef enum { FW_TEXT, FW_PASSWORD, FW_CHECK, FW_BUTTON, FW_LIST, FW_DROPDOWN, FW_FILE } FormKind;
 
 typedef struct {
     FormKind kind;
@@ -1231,6 +1232,7 @@ typedef struct {
         os64_ui_checkbox_t check;
         os64_ui_widget_t button;
         os64_ui_listbox_t list;
+        os64_ui_dropdown_t drop;
     } u;
     os64_ui_widget_t *w;
     // The widget's own class, kept while a gadget's draws nothing
@@ -1267,6 +1269,9 @@ static struct {
     os64_ui_dispatcher_t dispatcher;
     os64_ui_window_backend_t native;
     YonderEventBatch batch;
+    // The window's popup controller, which a dropdown's list opens in
+    // (DROPDOWN.md); NULL if it could not be made, and then no list opens.
+    os64_ui_menu_session_t *menus;
     os64_ui_widget_t root, status, view, back, forward, reload, stop;
     // The badge at the right of the status bar: the shown page's MISSING
     // and FAILED counts, the file's own tokens, present only when nonzero.
@@ -1692,7 +1697,16 @@ static int64_t size_rows(const char *v)
     return n;
 }
 
-// A select's box: the rows its list shows, as wide as its longest option.
+// A one-line select (HTML § 4.10.7): no `multiple`, and a `size` of 1 or
+// none. It is a dropdown (DROPDOWN.md); any other select is a listbox.
+static bool select_one_line(const os64_page_control_t *c, const os64_html_node_t *node)
+{
+    const os64_html_attr_t *size = os64_html_attr(node, "size");
+    return !c->multiple && (size == NULL || size->value == NULL || size_rows(size->value) <= 1);
+}
+
+// A select's box: as wide as its longest option, and for a listbox the
+// rows its list shows, for a dropdown one row and room for its arrow.
 // Measured in the controls' face (controls_face_at), the one its widget
 // paints in. The page chooses `size` (at most INT32_MAX rows, by
 // size_rows), so the arithmetic is 64-bit and the answer clamped.
@@ -1700,8 +1714,11 @@ static void select_size(const os64_page_control_t *c, const os64_html_node_t *no
                         int32_t *w, int32_t *h)
 {
     const os64_html_attr_t *size = os64_html_attr(node, "size");
+    bool one_line = select_one_line(c, node);
     int64_t rows = size != NULL && size->value != NULL ? size_rows(size->value) : 0;
-    if (rows <= 1)
+    if (one_line)
+        rows = 1;
+    else if (rows <= 1)
         rows = c->noptions < SELECT_ROWS ? c->noptions : SELECT_ROWS;
     if (rows < 1)
         rows = 1;
@@ -1714,13 +1731,14 @@ static void select_size(const os64_page_control_t *c, const os64_html_node_t *no
             widest = px;
     }
     // The listbox's own arithmetic: a two-pixel frame, rows eight pixels
-    // taller than the face's, labels six pixels in. The face is already at
+    // taller than the face's, labels six pixels in; a dropdown's box is one
+    // such row, twenty pixels wider for its arrow. The face is already at
     // the zoom and libflow scales a replaced box's own size by it, so the
     // answer goes back in CSS pixels, rounded up so no row is cut. At most
     // INT32_MAX rows of a face under a thousand pixels, so 64 bits hold it.
     int64_t zoom = s_env.zoom > 0 ? s_env.zoom : 1000;
     int64_t dh = rows * ((int64_t)os64_ui_font_row_height(&g.ui, OS64_UI_FONT_APP) + 8) + 4;
-    int64_t dw = (int64_t)widest + 2 * 6 + 4;
+    int64_t dw = (int64_t)widest + 2 * 6 + 4 + (one_line ? 20 : 0);
     *h = clamp32((dh * 1000 + zoom - 1) / zoom);
     *w = clamp32((dw * 1000 + zoom - 1) / zoom);
     if (*w < 48)
@@ -6772,6 +6790,15 @@ static const char *option_label(size_t i, void *user)
                ? c->options[i].label : "";
 }
 
+// Whether a dropdown's list may choose option i: not when it, or its
+// optgroup, is disabled.
+static bool option_enabled(size_t i, void *user)
+{
+    const FormWidget *fw = user;
+    const os64_page_control_t *c = os64_page_control(page_model(&g.page), widget_control(fw));
+    return c != NULL && (int32_t)i < c->noptions && !c->options[i].disabled;
+}
+
 static void form_send(int32_t control, os64_page_activation_t how);
 
 static void field_submitted(os64_ui_textfield_t *tf, void *user)
@@ -6819,14 +6846,26 @@ static void check_changed(os64_ui_checkbox_t *cb, void *user)
         input_queue(IN_CHECK, fw->node, NULL, g.pointer_x, g.pointer_y, was);
 }
 
-static void list_changed(os64_ui_listbox_t *list, void *user)
+// A listbox's row chosen, or a dropdown's value changed: the model's choice,
+// then the page's `input` and `change` (IN_LIST). A dropdown calls it only
+// for a new value, never for a commit of the value it had.
+static void option_chosen(const FormWidget *fw, int selected)
 {
-    const FormWidget *fw = user;
-    if (list->selected >= 0)
-        (void)os64_page_set_chosen(page_model(&g.page), widget_control(fw), (int32_t)list->selected, true);
+    if (selected >= 0)
+        (void)os64_page_set_chosen(page_model(&g.page), widget_control(fw), (int32_t)selected, true);
     forms_sync_from_model(false);
     if (scripts_live())
         input_queue(IN_LIST, fw->node, NULL, 0, 0, false);
+}
+
+static void list_changed(os64_ui_listbox_t *list, void *user)
+{
+    option_chosen(user, list->selected);
+}
+
+static void drop_changed(os64_ui_dropdown_t *drop, void *user)
+{
+    option_chosen(user, drop->selected);
 }
 
 // A form reset, by a reset button or a script's reset(): libpage puts the
@@ -6931,12 +6970,16 @@ static void forms_sync_from_model(bool text)
         case FW_CHECK:
             os64_ui_checkbox_set(&g.ui, &fw->u.check, c->checked);
             break;
-        case FW_LIST: {
+        case FW_LIST:
+        case FW_DROPDOWN: {
             int selected = -1;
             for (int32_t k = 0; k < c->noptions && selected < 0; k++)
                 if (c->options[k].selected)
                     selected = k;
-            os64_ui_listbox_set(&g.ui, &fw->u.list, (size_t)c->noptions, selected);
+            if (fw->kind == FW_DROPDOWN)
+                os64_ui_dropdown_set(&g.ui, &fw->u.drop, (size_t)c->noptions, selected);
+            else
+                os64_ui_listbox_set(&g.ui, &fw->u.list, (size_t)c->noptions, selected);
             os64_ui_mark_dirty(&g.ui, fw->w);
             break;
         }
@@ -7058,7 +7101,7 @@ static bool password_key(const os64_gui_event_t *ev)
 static FormKind control_kind(const os64_page_control_t *c)
 {
     if (c->element == OS64_PAGE_EL_SELECT)
-        return FW_LIST;
+        return select_one_line(c, c->node) ? FW_DROPDOWN : FW_LIST;
     if (c->element == OS64_PAGE_EL_BUTTON || c->submits || c->resets ||
         c->input == OS64_PAGE_INPUT_BUTTON || c->input == OS64_PAGE_INPUT_FILE)
         return c->input == OS64_PAGE_INPUT_FILE ? FW_FILE : FW_BUTTON;
@@ -7130,6 +7173,11 @@ static void forms_build(void)
         case FW_LIST:
             os64_ui_listbox(&fw->u.list, (size_t)c->noptions, option_label, list_changed, fw);
             fw->w = &fw->u.list.w;
+            break;
+        case FW_DROPDOWN:
+            os64_ui_dropdown(&fw->u.drop, (size_t)c->noptions, option_label, drop_changed, fw);
+            fw->u.drop.enabled = option_enabled;
+            fw->w = &fw->u.drop.w;
             break;
         case FW_BUTTON:
         case FW_FILE:
@@ -12612,6 +12660,9 @@ int main(int argc, char **argv)
     if (os64_ui_dispatcher_add(&g.dispatcher, g.win, &g.ui, window_event, window_paint, NULL) != OS64_UI_OK) {
         s_leaving = "the dispatcher refused yonder's window";
         g.running = false;
+    } else if (os64_ui_menu_session_create(&g.dispatcher, &g.ui, g.win, NULL, NULL, NULL, &g.menus) != OS64_UI_OK) {
+        g.menus = NULL;
+        status_rest("No popup controller; a one-line list will not open.");
     }
     int64_t woke = 1;               // the wait's or the turn's last answer, said as yonder leaves
     bool looking = false;           // a disarmed bar: is anything waiting?
@@ -12675,9 +12726,12 @@ int main(int argc, char **argv)
     }
 
     left_said(woke);
-    // The Settings dialog and the clock first; the clock only rings, and
-    // nothing after this should.
+    // The Settings dialog, the popup controller (an open list goes with it)
+    // and the clock first; the clock only rings, and nothing after this
+    // should.
     yonder_settings_close();
+    if (g.menus != NULL && os64_ui_menu_session_dispose(g.menus) == OS64_UI_OK)
+        g.menus = NULL;
     yonder_ticker_stop(g.ticker);
     g.ticker = NULL;                    // the page's record, written after, reads its counts
     // The workers next: destroy cancels them — a fetch and a question

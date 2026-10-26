@@ -1544,6 +1544,10 @@ static void dropdown_widget(void)
     current="dropdown: Space and Alt+Down open it";
     key(1,' ',0x39,0);h=popup_handle();CHECK(h);key(h,27,0x01,0);CHECK(!popup_handle()&&drop_changes==3);
     key(1,0,0x50,OS64_GUI_MOD_ALT);h=popup_handle();CHECK(h);key(h,27,0x01,0);drain();
+    current="dropdown: a set that changes nothing leaves the list open, one that does closes it";
+    queue(1,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,610,610,OS64_GUI_MOUSE_LEFT));drain();h=popup_handle();CHECK(h);
+    os64_ui_dropdown_set(&g.ui,&d,4,d.selected);drain();CHECK(popup_handle()==h&&os64_ui_menu_active(g.menus));
+    os64_ui_dropdown_set(&g.ui,&d,4,1);drain();CHECK(!popup_handle()&&!os64_ui_menu_active(g.menus)&&drop_changes==3);
     current="dropdown: destroyed while open, its list closes and no pick follows";
     queue(1,mouse(OS64_GUI_EVENT_MOUSE_BUTTON_DOWN,610,610,OS64_GUI_MOUSE_LEFT));drain();h=popup_handle();CHECK(h);
     d.w.cls->destroy(&d.w);CHECK(!os64_ui_menu_active(g.menus));drain();CHECK(!popup_handle()&&drop_changes==3);

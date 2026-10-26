@@ -220,8 +220,10 @@ void os64_ui_dropdown(os64_ui_dropdown_t *d, size_t count, const char *(*label)(
 
 void os64_ui_dropdown_set(os64_ui_t *ui, os64_ui_dropdown_t *d, size_t count, int selected)
 {
+    int value = selected >= 0 && (size_t)selected < count ? selected : -1;
+    if (count == d->count && value == d->selected) return;
     if (ui && ui->menu) os64_ui_menu_list_detach(ui->menu, d);
     d->count = count;
-    d->selected = selected >= 0 && (size_t)selected < count ? selected : -1;
+    d->selected = value;
     if (ui) os64_ui_mark_dirty(ui, &d->w);
 }
