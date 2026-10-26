@@ -2460,10 +2460,11 @@ static void input_forms(void) {
  * page's script's to act on: its click runs, and the status line does not
  * say the press was refused. */
 static void input_script_buttons(void) {
-    probe_page("<button id=loose>pdf</button><form action=/send><input name=q>"
+    probe_page("<button id=loose>pdf</button><button id=bad>bad</button><form action=/send><input name=q>"
         "<button id=plain type=button>plain</button></form><p id=log>-</p>"
         "<script>var log=[];function note(n){log.push(n);document.getElementById('log').textContent=log.join('|');}"
         "document.getElementById('loose').onclick=function(){note('loose')};"
+        "document.getElementById('bad').onclick=function(){throw new Error('handler boom')};"
         "document.getElementById('plain').onclick=function(){note('plain')};</script>",true);
     script_turn();
     os64_strcopy(g.status_text,sizeof(g.status_text),"-");
@@ -2472,6 +2473,12 @@ static void input_script_buttons(void) {
     button_clicked(plain->w,plain); inputs_run();
     check(probe_text_is("log","loose|plain") && !status_says("belongs to no form") && !status_says("submits nothing"),
           "input: a formless button and a type=button are the script's, with no refusal on the status line");
+    /* A handler that fails is what the status line says, as the shop
+     * demo's PDF button failed (WebAssembly): no reason overwrites it. */
+    FormWidget *bad=probe_field("bad");
+    button_clicked(bad->w,bad); inputs_run();
+    check(status_says("handler boom") && !status_says("belongs to no form"),
+          "input: a formless button's failing handler is the status line's last word");
     probe_drop();
 }
 static void input_cases(void) {
