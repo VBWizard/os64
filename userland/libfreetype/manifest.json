@@ -86,6 +86,12 @@
       "upstream_commit": "0db9ecac025aecf1d270def1f2879e798bb58697",
       "subject": "[PATCH] * src/truetype/ttgload.c (TT_Load_Simple_Glyph): Use unsigned",
       "sha256": "f2866dcf1e8d231e16562a1985d6535f18ec51f47ad98b302fd6b4190f0864d8"
+    },
+    {
+      "file": "0012-base-ftstroke-empty-subpath.patch",
+      "upstream_commit": "5c79d6cd1ac73d70a55f3d963fb568aa32f6d794",
+      "subject": "[PATCH] * src/base/ftstroke.c (FT_Stroker_EndSubPath): Handle an",
+      "sha256": "5cbffbb0a49e88c6008e8719e5c3e08d77845f5d868b4186c7f09d8d47e3ca1e"
     }
   ],
   "files": {
@@ -274,7 +280,7 @@
     "src/base/ftrfork.c": "7f35f81d18d6ddabbb850685e4c1524e91e0dd9b5bb9e76dd68120e75269b6b0",
     "src/base/ftsnames.c": "3ffaeb114165248cdbe25af92bee4926beb59c563941c50d4bafc7a291cc6d1c",
     "src/base/ftstream.c": "438f1170e70f39cbe051d21726b6e25fd02a2ea286e72dbbaf2bf0e10e10584b",
-    "src/base/ftstroke.c": "05d6f37f5a6fc084c4aeec53dea581ad469ce6b0183acdedda86841c9e1570b3",
+    "src/base/ftstroke.c": "b5f82138906d4b26c91b0c3631141c5cc9bc3ccced36ee5d98409c260ebbc478",
     "src/base/ftsynth.c": "a9e72d6ce793c46624ac932405d60dda3ea10acc67a78a1b95de962e6a123a01",
     "src/base/ftsystem.c": "b545e79c8a7ceaeeeebe76dbeaffe8c9c890dab6c0db1d09d4f10febe33cf10a",
     "src/base/fttrigon.c": "68b511c61c8370c430a1fcbf3c531e107493db33b7eb86c671d9e5b43e32dcf7",

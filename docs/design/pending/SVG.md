@@ -22,8 +22,10 @@ support is a milestone, not a claim of complete SVG compatibility. Build
 against standards and reference tests; use real pages as acceptance cases.
 
 The implementation must prove the geometry adapter before freezing its ABI.
-The outstanding experiments are listed under Implementation stages. This
-design does not establish performance or compatibility percentages.
+The [private geometry proof](SVG_GEOMETRY.md) records the first fixture,
+precision and allocation results. The production adapter and remaining gates
+are listed under Implementation stages. This design does not establish
+performance or compatibility percentages.
 
 ## Library boundaries
 
