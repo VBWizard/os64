@@ -51,7 +51,7 @@ static void clear_help(os64_ui_menu_session_t *s)
 static void help(os64_ui_menu_session_t *s,os64_ui_popup_t *p)
 {
     clear_help(s);
-    if(!s->status||p->selected==MENU_NONE) return;
+    if(!s->status||p->selected==MENU_NONE||p->list) return;
     menu_row *r=&p->rows[p->selected];
     if(r->spec.help&&*r->spec.help) (void)os64_ui_status_help(s->status,r->spec.help,&s->help_token);
 }
@@ -95,6 +95,7 @@ os64_ui_status_code_t os64_ui_menu_close(os64_ui_menu_session_t *s,os64_ui_menu_
     if(rc) return rc;
     s->active=false; s->dismissed=reason==OS64_UI_MENU_DISMISSED;
     if(s->view) { os64_ui_action_view_release(s->view); s->view=NULL; }
+    os64_free(s->list); s->list=NULL; s->list_pending=false; s->close_retry=false;
     if(s->bar&&s->bar->temporary) {
         s->bar->temporary=false; os64_ui_set_hidden(s->ui,&s->bar->w,true);
         if(s->layout) s->layout(s->user);
@@ -125,6 +126,7 @@ os64_ui_status_code_t os64_ui_menu_place(os64_gui_rect_t a,int32_t w,int32_t h,
     if(y+h+1>sh) y=(int64_t)sh-h-1;
     *out=(os64_gui_rect_t){(int32_t)x,(int32_t)y,w,h}; return OS64_UI_OK;
 }
+/* A NULL model opens the session's list, which is always level 0. */
 static os64_ui_status_code_t open_panel(os64_ui_menu_session_t *s,os64_ui_menu_model_t *model,size_t level)
 {
     os64_ui_dispatcher_t *d=s->dispatcher;
@@ -145,7 +147,9 @@ static os64_ui_status_code_t open_panel(os64_ui_menu_session_t *s,os64_ui_menu_m
     if(x<INT32_MIN||x>INT32_MAX||y<INT32_MIN||y>INT32_MAX) return OS64_UI_LIMIT;
     a.x=(int32_t)x; a.y=(int32_t)y;
     os64_ui_popup_t *widget=NULL;
-    os64_ui_status_code_t rc=os64_ui_popup_create(s->ui,model,s->view,s->provider,(int32_t)sw-2,(int32_t)sh-2,&widget);
+    os64_ui_status_code_t rc=model
+        ? os64_ui_popup_create(s->ui,model,s->view,s->provider,(int32_t)sw-2,(int32_t)sh-2,&widget)
+        : menu_popup_create_list(s->ui,s->list,(int32_t)sw-2,(int32_t)sh-2,&widget);
     if(rc) return rc;
     os64_gui_rect_t placed;
     rc=os64_ui_menu_place(a,widget->w.bounds.w,widget->w.bounds.h,sw,sh,level!=0,&placed);
@@ -169,7 +173,10 @@ static os64_ui_status_code_t open_panel(os64_ui_menu_session_t *s,os64_ui_menu_m
         p->draw.surf.width!=(uint32_t)widget->w.bounds.w||p->draw.surf.height!=(uint32_t)widget->w.bounds.h) {
         close_to(s,level); return OS64_UI_ERROR;
     }
-    for(size_t i=0;i<model->count;++i) if(menu_selectable(widget,i)) { os64_ui_popup_select(widget,i); break; }
+    /* A list opens on its value, a menu (and a list whose value is not a
+     * row it may choose) on the first row it may. */
+    if(!model&&menu_selectable(widget,s->list->value)) os64_ui_popup_select(widget,s->list->value);
+    else for(size_t i=0;i<menu_count(widget);++i) if(menu_selectable(widget,i)) { os64_ui_popup_select(widget,i); break; }
     help(s,widget); panel_paint(p); return OS64_UI_OK;
 }
 static void report(os64_ui_menu_session_t *s,os64_ui_status_code_t rc)
@@ -218,6 +225,61 @@ os64_ui_status_code_t os64_ui_menu_open(os64_ui_menu_session_t *s,os64_ui_menu_m
     if(rc!=OS64_UI_OK&&rc!=OS64_UI_BUSY) { rc=close_after_failure(s,rc); report(s,rc); }
     return rc;
 }
+/* The session's copy of a list, in one block: the label pointers, the
+ * flags, then the labels. A label is kept to 127 bytes, cut at a character
+ * boundary, which is what a row lays out (menu_row.label). */
+static os64_ui_status_code_t list_copy(const os64_ui_menu_list_t *l,menu_list **out)
+{
+    size_t text=0;
+    for(size_t i=0;i<l->count;++i) {
+        size_t n=l->labels[i]?os64_strlen(l->labels[i]):0;
+        text+=(n>127?127:n)+1;
+    }
+    if(l->count>(SIZE_MAX-sizeof(menu_list)-text)/(sizeof(char *)+sizeof(bool))) return OS64_UI_LIMIT;
+    menu_list *c=os64_malloc(sizeof(*c)+l->count*(sizeof(char *)+sizeof(bool))+text);
+    if(!c) return OS64_UI_NO_MEMORY;
+    *c=(menu_list){.count=l->count,.value=l->selected<l->count?l->selected:MENU_NONE,.min_width=l->min_width,
+        .pick=l->pick,.user=l->user,.widget=l->widget,.widget_bounds=l->widget?l->widget->bounds:(os64_gui_rect_t){0}};
+    c->labels=(const char **)(c+1);
+    c->enabled=(bool *)(c->labels+l->count);
+    char *at=(char *)(c->enabled+l->count);
+    for(size_t i=0;i<l->count;++i) {
+        const char *s=l->labels[i]?l->labels[i]:"";
+        size_t n=os64_strlen(s);
+        if(n>127) { n=127; while(n&&((unsigned char)s[n]&0xC0)==0x80) --n; }
+        os64_memcpy(at,s,n); at[n]=0;
+        c->labels[i]=at; at+=n+1;
+        c->enabled[i]=l->enabled[i];
+    }
+    *out=c; return OS64_UI_OK;
+}
+os64_ui_status_code_t os64_ui_menu_open_list(os64_ui_menu_session_t *s,const os64_ui_menu_list_t *l,
+    os64_gui_rect_t anchor)
+{
+    if(!s||!l||!l->labels||!l->enabled||anchor.w<0||anchor.h<0) return OS64_UI_INVALID;
+    if(!l->count) return OS64_UI_EMPTY;
+    menu_list *copy=NULL;
+    os64_ui_status_code_t rc=list_copy(l,&copy);
+    if(rc) return rc;
+    rc=os64_ui_menu_close(s,OS64_UI_MENU_EXPLICIT);
+    if(rc) { os64_free(copy); return rc; }
+    s->list=copy; s->anchor=anchor; s->kind=OS64_UI_MENU_CONTEXT; s->active=true;
+    if(s->bar) os64_ui_mark_dirty(s->ui,&s->bar->w);
+    s->saved_focus=s->ui->focus; os64_ui_cancel_gestures(s->ui);
+    rc=open_panel(s,NULL,0);
+    if(rc==OS64_UI_BUSY) s->list_pending=true;
+    else if(rc) { rc=close_after_failure(s,rc); report(s,rc); }
+    return rc;
+}
+void os64_ui_menu_list_detach(os64_ui_menu_session_t *s,void *user)
+{
+    if(!s||!s->list||s->list->user!=user) return;
+    s->list->pick=NULL; s->list->user=NULL; s->list->widget=NULL;
+    /* With no native window yet (pending) the close cannot be refused. */
+    if(os64_ui_menu_close(s,OS64_UI_MENU_GEOMETRY)!=OS64_UI_OK) s->close_retry=true;
+}
+static bool same_rect(os64_gui_rect_t a,os64_gui_rect_t b)
+{ return a.x==b.x&&a.y==b.y&&a.w==b.w&&a.h==b.h; }
 static void boundary(void *user,bool empty)
 {
     os64_ui_menu_session_t *s=user;
@@ -230,6 +292,20 @@ static void boundary(void *user,bool empty)
         os64_ui_menu_model_release(m);
         if(rc) report(s,close_after_failure(s,rc));
     }
+    if(s->list_pending&&s->active&&os64_ui_dispatcher_can_create(s->dispatcher)) {
+        s->list_pending=false;
+        os64_ui_status_code_t rc=open_panel(s,NULL,0);
+        if(rc==OS64_UI_BUSY) s->list_pending=true;
+        else if(rc) report(s,close_after_failure(s,rc));
+    }
+    /* A detached list whose close was refused is asked again, quietly: its
+     * popup holds only the session's copy and calls no one meanwhile. A list
+     * whose box was hidden or moved since it opened closes. */
+    if(s->close_retry) {
+        if(os64_ui_menu_close(s,OS64_UI_MENU_GEOMETRY)!=OS64_UI_OK) s->close_retry=true;
+    } else if(s->active&&s->list&&s->list->widget&&
+              (s->list->widget->hidden||!same_rect(s->list->widget->bounds,s->list->widget_bounds)))
+        (void)close_report(s,OS64_UI_MENU_GEOMETRY);
 }
 os64_ui_status_code_t os64_ui_menu_session_create(os64_ui_dispatcher_t *d,os64_ui_t *ui,int64_t owner,
     os64_ui_menubar_t *b,os64_ui_status_t *status,const os64_ui_icon_provider_t *provider,os64_ui_menu_session_t **out)
@@ -343,7 +419,7 @@ static void invoke(os64_ui_menu_session_t *s,uint32_t id)
 static void child(os64_ui_menu_session_t *s,size_t level,bool explicit)
 {
     os64_ui_popup_t *p=s->panels[level].widget;
-    if(p->selected==MENU_NONE||!menu_selectable(p,p->selected)) return;
+    if(p->list||p->selected==MENU_NONE||!menu_selectable(p,p->selected)) return;
     if(!explicit&&s->failed_panel==level&&s->failed_row==p->selected) return;
     s->failed_panel=MENU_NONE; s->failed_row=MENU_NONE;
     os64_ui_menu_entry_t *e=&p->model->entries[p->selected];
@@ -366,18 +442,28 @@ static bool panel_select(os64_ui_menu_session_t *s,size_t level,size_t row)
     }
     help(s,p); return true;
 }
+/* A list's commit: the family closes first, as invoke closes before the
+ * command runs, then the row goes to whoever opened the list, unless they
+ * detached. A close the native destroy refuses commits nothing. */
+static void commit(os64_ui_menu_session_t *s,size_t row)
+{
+    void (*pick)(void *,size_t)=s->list->pick;
+    void *user=s->list->user;
+    if(close_report(s,OS64_UI_MENU_EXPLICIT)==OS64_UI_OK&&pick) pick(user,row);
+}
 static void activate(os64_ui_menu_session_t *s,size_t level,size_t row)
 {
     os64_ui_popup_t *p=s->panels[level].widget;
     if(!menu_selectable(p,row)) return;
     if(!panel_select(s,level,row)) return;
+    if(p->list) { commit(s,row); return; }
     os64_ui_menu_entry_t e=p->model->entries[row];
     if(e.child) child(s,level,true); else invoke(s,e.action);
 }
 static void select_step(os64_ui_menu_session_t *s,size_t level,int delta,bool edge)
 {
     os64_ui_popup_t *p=s->panels[level].widget;
-    size_t n=p->model->count,i=p->selected;
+    size_t n=menu_count(p),i=p->selected;
     if(edge) i=delta>0?n-1:0;
     else if(i==MENU_NONE) i=delta>0?(p->top?p->top-1:n-1):(p->bottom<n?p->bottom:0);
     for(size_t k=0;k<n;++k) {
@@ -391,7 +477,7 @@ static void select_page(os64_ui_menu_session_t *s,size_t level,int delta)
     size_t span=p->bottom-p->top;
     if(!span) return;
     int64_t base=p->selected==MENU_NONE?(int64_t)(delta>0?p->top:p->bottom-1):(int64_t)p->selected;
-    int64_t target=base+delta*(int64_t)span,n=(int64_t)p->model->count;
+    int64_t target=base+delta*(int64_t)span,n=(int64_t)menu_count(p);
     if(target<0) target=0;
     if(target>=n) target=n-1;
     /* Count model rows once, then adjust for an enabled landing entry. Sparse
@@ -586,8 +672,8 @@ static bool key_event(os64_ui_menu_session_t *s,const os64_gui_event_t *e)
     size_t count=0,match=MENU_NONE,next=MENU_NONE;
     if(k==K_CHAR&&!mods&&s->depth) {
         os64_ui_popup_t *p=s->panels[s->depth-1].widget;
-        for(size_t i=0;i<p->model->count;++i) {
-            char mnemonic=p->model->entries[i].child?p->model->entries[i].mnemonic:p->rows[i].spec.mnemonic;
+        for(size_t i=0;i<menu_count(p);++i) {
+            char mnemonic=menu_mnemonic(p,i);
             if(mnemonic&&lower(mnemonic)==lower(ch)&&menu_selectable(p,i)) {
                 ++count; if(match==MENU_NONE) match=i;
                 if(next==MENU_NONE&&(p->selected==MENU_NONE||i>p->selected)) next=i;
@@ -626,7 +712,7 @@ static bool key_event(os64_ui_menu_session_t *s,const os64_gui_event_t *e)
     } else if(k==K_PGUP||k==K_PGDN) {
         select_page(s,level,k==K_PGDN?1:-1);
     } else if(k==K_RIGHT) {
-        if(p->selected!=MENU_NONE&&p->model->entries[p->selected].child) child(s,level,true);
+        if(!p->list&&p->selected!=MENU_NONE&&p->model->entries[p->selected].child) child(s,level,true);
         else if(s->kind==OS64_UI_MENU_BAR&&level==0) bar_step(s,1,true);
     } else if(k==K_LEFT) {
         if(level) report(s,close_to(s,level)); else if(s->kind==OS64_UI_MENU_BAR) bar_step(s,-1,true);
@@ -635,7 +721,10 @@ static bool key_event(os64_ui_menu_session_t *s,const os64_gui_event_t *e)
             s->pressed_key=(uint16_t)(id+1); s->pressed_panel=level; s->pressed_row=p->selected;
         }
     } else if(k==K_CHAR&&!mods) {
-        if(count==1) activate(s,level,match);
+        /* A menu's unique mnemonic runs its command; in a list a letter only
+         * moves the highlight, a unique match included: the value changes
+         * when it is committed (DROPDOWN.md, contract 2). */
+        if(count==1&&!p->list) activate(s,level,match);
         else if(count) (void)panel_select(s,level,next==MENU_NONE?match:next);
     }
     return true;
@@ -755,7 +844,7 @@ static void panel_event(void *user,const os64_gui_event_t *e)
             if(s->pressed_panel==level&&s->pressed_row!=(size_t)row) cancel_press(s);
             if(row>=0) {
                 if(!panel_select(s,level,(size_t)row)) return;
-                if(p->selected!=MENU_NONE&&p->model->entries[p->selected].child) child(s,level,false);
+                if(!p->list&&p->selected!=MENU_NONE&&p->model->entries[p->selected].child) child(s,level,false);
                 else { release_pending(s); report(s,close_to(s,level+1)); }
             }
         } else if(e->type==OS64_GUI_EVENT_MOUSE_BUTTON_DOWN&&e->mouse.button==OS64_GUI_MOUSE_LEFT) {

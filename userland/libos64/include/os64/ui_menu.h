@@ -75,6 +75,33 @@ os64_ui_status_code_t os64_ui_menu_session_dispose(os64_ui_menu_session_t *);
 os64_ui_status_code_t os64_ui_menu_open(os64_ui_menu_session_t *,os64_ui_menu_model_t *,
     os64_ui_action_view_t *,os64_gui_rect_t anchor,os64_ui_menu_invocation_t);
 os64_ui_status_code_t os64_ui_menu_close(os64_ui_menu_session_t *,os64_ui_menu_close_t);
+/* THE SESSION IS THE OWNER WINDOW'S POPUP CONTROLLER, and a menu is one
+ * thing it carries; a dropdown's LIST is the second (DROPDOWN.md § Step 2):
+ * one level of rows, no actions, no cascades, no help line. The rows are
+ * COPIED at the call, so the caller may change or free its arrays once it
+ * returns, and the list shows what they were. In the list Up/Down and a
+ * letter move the highlight only; Enter, Space or a click commit: the list
+ * closes, then pick runs with the row, once. A list opened while the
+ * dispatcher quarantines a destroyed popup waits, as a menu does, holding
+ * its copy. `widget`, when given, is the box the list drops from: hidden,
+ * or moved from where it was at the call, the list closes (GEOMETRY) at the
+ * session's next boundary. Opening replaces any open menu or list. */
+typedef struct {
+    const char *const *labels;          /* `count` labels, read only during the call */
+    const bool *enabled;                /* `count` flags, read only during the call */
+    size_t count, selected;             /* the row highlighted at open, marked as the value; count or more: none */
+    int32_t min_width;                  /* the list is at least as wide as its box */
+    os64_ui_widget_t *widget;           /* optional anchor widget, watched while open */
+    void (*pick)(void *user, size_t row);
+    void *user;
+} os64_ui_menu_list_t;
+os64_ui_status_code_t os64_ui_menu_open_list(os64_ui_menu_session_t *,const os64_ui_menu_list_t *,
+    os64_gui_rect_t anchor);
+/* From now on no pick reaches `user`, the anchor widget is not read, and a
+ * list still waiting to open is cancelled; an open one is asked to close,
+ * and if its native destroy is refused the session retries at its next
+ * boundary, the popup holding only its own copy meanwhile. Cannot fail. */
+void os64_ui_menu_list_detach(os64_ui_menu_session_t *,void *user);
 /* Fallback widget storage must outlive the session. Close before removing or
  * freeing widgets; hidden/detached restoration targets use this fallback. */
 void os64_ui_menu_focus_fallback(os64_ui_menu_session_t *,os64_ui_widget_t *);
