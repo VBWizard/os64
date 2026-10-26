@@ -76,7 +76,7 @@ static char *modern_chain_shape(DomFixture *f)
         "document.doctype,document.implementation,document.implementation.createHTMLDocument('')];"
         "var row=/(^constructor$|_NODE$|^DOCUMENT_POSITION_|^onscroll$|^onresize$|^scrollingElement$|^defaultView$"
         "|^onerror$|^getRootNode$|^wholeText$|^splitText$|^selectionStart$|^selectionEnd$|^selectionDirection$"
-        "|^setSelectionRange$|^select$)/;"
+        "|^setSelectionRange$|^select$|^content$)/;"
         "var documentRow=/^(readyState|onreadystatechange|visibilityState|hidden|onvisibilitychange|referrer|"
         "activeElement|hasFocus|currentScript|title|prerendering|onprerenderingchange|domain|URL|documentURI|"
         "wasDiscarded|compatMode|dir|characterSet|charset|inputEncoding|contentType|lastModified|rootElement|"
@@ -215,6 +215,17 @@ static void dom_modern_cases(void)
         "bad=false;try{DOMParser()}catch(e){bad=e instanceof TypeError}assert(bad,'a constructor only');"
         "bad=false;try{DOMParser.prototype.parseFromString.call({},'x','text/html')}catch(e){bad=e instanceof TypeError}assert(bad,'its own');",
         "modern-on-dom-parser");
+    /* A template's content, as Svelte builds its markup */
+    dom_script(&f, MODERN_ASSERT
+        "var t=document.createElement('template');assert(t instanceof HTMLTemplateElement&&t instanceof HTMLElement);"
+        "t.innerHTML='<p>x</p><!---->';var c=t.content;"
+        "assert(c instanceof DocumentFragment&&c===t.content&&c.firstChild.tagName==='P'&&t.childNodes.length===0,'its own fragment');"
+        "var copy=c.cloneNode(true);assert(copy.childNodes.length===2&&copy.firstChild!==c.firstChild,'cloned whole');"
+        "var h=document.createElement('div');h.innerHTML='<template id=tp><b>y</b></template>';"
+        "assert(h.firstChild.content.firstChild.tagName==='B','a parsed one too');"
+        "var bad=false;try{Object.getOwnPropertyDescriptor(HTMLTemplateElement.prototype,'content').get.call(h)}"
+        "catch(e){bad=e instanceof TypeError}assert(bad,'a template only');",
+        "modern-on-template-content");
     /* createElementNS: React's SVG and Svelte's every element */
     dom_script(&f, MODERN_ASSERT
         "var SVG='http://www.w3.org/2000/svg',X='http://www.w3.org/1999/xhtml';"

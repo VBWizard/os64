@@ -29,7 +29,7 @@ static const DModernRow kModern[] = {
                            "DOMTokenList", "DOMStringMap", "Element", "SVGElement",
                            "HTMLElement", "HTMLFormElement", "HTMLInputElement",
                            "HTMLTextAreaElement", "HTMLSelectElement", "HTMLOptionElement",
-                           "HTMLOptGroupElement", "HTMLButtonElement",
+                           "HTMLOptGroupElement", "HTMLTemplateElement", "HTMLButtonElement",
                            "HTMLImageElement", "HTMLScriptElement", "HTMLAnchorElement",
                            "HTMLLinkElement", NULL},
      d_interfaces_install},
@@ -84,8 +84,8 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"structuredClone", NULL}, d_clone_install},
     {(const char *const[]){"postMessage", "onmessage", "onmessageerror", "MessageEvent", NULL}, d_message_install},
     {(const char *const[]){"requestIdleCallback", "cancelIdleCallback", "IdleDeadline", NULL}, d_idle_install},
-    /* 0f's P1a: members of Node's, Attr's and Text's prototypes, none of
-     * window's (as P1-Da's row). */
+    /* 0f's node row: members of Node's, Attr's, Text's and a template's
+     * prototypes, none of window's (as P1-Da's row). */
     {(const char *const[]){NULL}, d_nodes_install},
     /* After the interfaces row, whose HTMLCollection its
      * HTMLOptionsCollection inherits. */

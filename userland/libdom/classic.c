@@ -440,6 +440,7 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         {"HTMLFormElement", D_PROTO_FORM}, {"HTMLInputElement", D_PROTO_INPUT},
         {"HTMLTextAreaElement", D_PROTO_TEXTAREA}, {"HTMLSelectElement", D_PROTO_SELECT},
         {"HTMLOptionElement", D_PROTO_OPTION}, {"HTMLOptGroupElement", D_PROTO_OPTGROUP},
+        {"HTMLTemplateElement", D_PROTO_TEMPLATE},
         {"HTMLButtonElement", D_PROTO_BUTTON}, {"HTMLImageElement", D_PROTO_IMAGE},
         {"HTMLScriptElement", D_PROTO_SCRIPT}, {"HTMLAnchorElement", D_PROTO_ANCHOR},
         {"HTMLLinkElement", D_PROTO_LINK},

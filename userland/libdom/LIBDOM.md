@@ -59,8 +59,8 @@ are read from the attached tree rather than trusted parser-time pointers.
 
 Kind prototypes inherit Node. An HTML element's prototype is HTMLElement's,
 which inherits Element's, or, for the elements with members of their own
-(the form controls, option, optgroup, form, image, script, anchor, link and
-iframe), a prototype that inherits HTMLElement's; an SVG element's is
+(the form controls, option, optgroup, form, image, script, anchor, link,
+iframe and template), a prototype that inherits HTMLElement's; an SVG element's is
 SVGElement's, which inherits Element's; an element of any other namespace
 (MathML) has Element's. A text node's prototype is Text's and a comment's
 Comment's, each inheriting CharacterData's. The supported properties and
