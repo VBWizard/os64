@@ -2,6 +2,7 @@
 
 #include "modules.h"
 
+#include "importmap.h"
 #include "os64/fmt.h"
 #include "os64/mem.h"
 #include "os64/str.h"
@@ -32,8 +33,9 @@ typedef struct {
     // The engine's name for it: the URL asked for (the map's key, as
     // HTML's map is keyed), or an inline module's own.
     char *name;
-    // What its imports resolve against: its URL after its redirects; NULL
-    // for an inline module, whose imports resolve as the document's links.
+    // What its imports resolve against, its base URL: its URL after its
+    // redirects, or an inline module's document's base URL when it was
+    // prepared.
     char *base;
     char *meta;             // PENDING: the import.meta.url its compile will give it
     ModState state;
@@ -59,6 +61,8 @@ struct yonder_modules {
     bool dropped;
     int32_t reading;        // the module whose requests are being read
     bool taken;             // a fetch the loader took over: graphs to walk again
+    yonder_import_map_t *imports;   // the window's import map (importmap.h)
+    bool mapped;            // an import map has been registered
 };
 
 static char *copy(const char *text)
@@ -135,50 +139,19 @@ static void fetch_start(yonder_modules_t *m, int32_t i)
         m->mods[i].job = job;
 }
 
-static bool relative(const char *specifier)
+// HTML's "resolve a module specifier", through the window's import map,
+// for a script whose base URL is `base` (NULL: the document's, as a
+// classic inline script's is when it imports).
+static yonder_specifier_t resolve_against(yonder_modules_t *m, const char *base, const char *specifier, char *out,
+                                          size_t cap)
 {
-    return specifier[0] == '/' || (specifier[0] == '.' && specifier[1] == '/') ||
-           (specifier[0] == '.' && specifier[1] == '.' && specifier[2] == '/');
-}
-
-// Whether `text` begins with a scheme and its colon: an absolute URL.
-static bool absolute(const char *text)
-{
-    bool alpha = (text[0] | 0x20) >= 'a' && (text[0] | 0x20) <= 'z';
-    if (!alpha)
-        return false;
-    for (size_t i = 1; text[i] != '\0'; i++) {
-        char c = text[i];
-        if (c == ':')
-            return true;
-        bool ok = ((c | 0x20) >= 'a' && (c | 0x20) <= 'z') || (c >= '0' && c <= '9') || c == '+' || c == '-' ||
-                  c == '.';
-        if (!ok)
-            return false;
+    char document[OS64_DOM_URL_MAX];
+    if (base == NULL) {
+        if (m->net.base == NULL || !m->net.base(m->net.opaque, document, sizeof(document)))
+            return YONDER_SPECIFIER_FAILED;
+        base = document;
     }
-    return false;
-}
-
-// HTML's "resolve a module specifier", without import maps: a URL relative
-// to `base` (NULL: to the document, as an inline script's are), or an
-// absolute one. A bare name ("lodash") names nothing: false.
-static bool resolve_against(yonder_modules_t *m, const char *base, const char *specifier, char *out, size_t cap)
-{
-    if (relative(specifier)) {
-        if (base == NULL)
-            return m->net.resolve != NULL && m->net.resolve(m->net.opaque, specifier, out, cap);
-        os64_url_t parsed;
-        return os64_url_parse(base, &parsed) == OS64_URL_OK && os64_url_absolute(&parsed, specifier, out, cap);
-    }
-    if (!absolute(specifier))
-        return false;
-    return os64_strcopy(out, cap, specifier) < cap;
-}
-
-// A specifier as the module in slot `from` means it.
-static bool resolve_specifier(yonder_modules_t *m, int32_t from, const char *specifier, char *out, size_t cap)
-{
-    return resolve_against(m, m->mods[from].base, specifier, out, cap);
+    return yonder_import_map_resolve(m->imports, base, specifier, out, cap);
 }
 
 // Whether a header's name (not NUL-terminated) is `want`, in any case.
@@ -295,11 +268,16 @@ static void each_request(void *opaque, const char *specifier)
     if (from < 0 || m->mods[from].state != MOD_COMPILED)
         return;
     char url[OS64_DOM_URL_MAX];
-    if (!resolve_specifier(m, from, specifier, url, sizeof(url))) {
+    yonder_specifier_t resolved = resolve_against(m, m->mods[from].base, specifier, url, sizeof(url));
+    if (resolved != YONDER_SPECIFIER_OK) {
         // Not the graph's failure: the run resolves it again and throws a
         // TypeError, which the window hears (HTML's specifier error).
         char why[160];
-        os64_snprintf(why, sizeof(why), "the import \"%.100s\" names no module (a bare name needs an import map)",
+        os64_snprintf(why, sizeof(why),
+                      resolved == YONDER_SPECIFIER_BLOCKED ? "the import \"%.100s\" is blocked by the page's import map"
+                      : resolved == YONDER_SPECIFIER_FAILED ? "the import \"%.100s\" could not be resolved"
+                      : m->mapped ? "the import \"%.100s\" is a bare name no import map maps"
+                      : "the import \"%.100s\" names no module (a bare name needs an import map)",
                       specifier);
         record(m, from, why);
         return;
@@ -340,9 +318,9 @@ static char *engine_resolve(void *opaque, const char *base, const char *specifie
     // A base that is no module is a classic script's dynamic import(): it
     // resolves against that script's address (the page's when inline).
     const char *script = from < 0 && m->net.script_base != NULL ? m->net.script_base(m->net.opaque, base) : NULL;
-    bool resolved = from >= 0 ? resolve_specifier(m, from, specifier, url, sizeof(url))
-                              : resolve_against(m, script, specifier, url, sizeof(url));
-    return resolved ? copy(url) : NULL;
+    return resolve_against(m, from >= 0 ? m->mods[from].base : script, specifier, url, sizeof(url)) ==
+                   YONDER_SPECIFIER_OK
+               ? copy(url) : NULL;
 }
 
 static bool engine_source(void *opaque, const char *name, const char **bytes, size_t *length)
@@ -408,9 +386,11 @@ yonder_modules_t *yonder_modules_new(os64_js_runtime_t *runtime, const yonder_mo
     m->net = *net;
     m->diag = diag;
     m->reading = -1;
+    m->imports = yonder_import_map_new();
     os64_js_outcome_t out;
     const os64_js_module_loader_t loader = {m, engine_resolve, engine_source};
-    if (os64_js_set_module_loader(runtime, OS64_JS_ABI_ID, &loader, &out) != OS64_JS_OK) {
+    if (m->imports == NULL || os64_js_set_module_loader(runtime, OS64_JS_ABI_ID, &loader, &out) != OS64_JS_OK) {
+        yonder_import_map_free(m->imports);
         os64_free(m);
         return NULL;
     }
@@ -448,7 +428,18 @@ void yonder_modules_free(yonder_modules_t *m)
         os64_free(m->mods[i].why);
     }
     os64_free(m->mods);
+    yonder_import_map_free(m->imports);
     os64_free(m);
+}
+
+bool yonder_modules_import_map(yonder_modules_t *m, yonder_import_map_t *parsed)
+{
+    if (m == NULL || m->dropped) {
+        yonder_import_map_free(parsed);
+        return false;
+    }
+    m->mapped = true;
+    return yonder_import_map_merge(m->imports, parsed);
 }
 
 int32_t yonder_modules_entry_src(yonder_modules_t *m, const char *url)
@@ -464,14 +455,22 @@ int32_t yonder_modules_entry_src(yonder_modules_t *m, const char *url)
     return i;
 }
 
-int32_t yonder_modules_entry_inline(yonder_modules_t *m, const char *source, size_t length, const char *name,
-                                    const char *url)
+int32_t yonder_modules_entry_inline(yonder_modules_t *m, const char *source, size_t length, const char *name)
 {
     if (m == NULL || m->dropped || source == NULL || name == NULL)
         return -1;
     int32_t i = slot_new(m, name);
     if (i < 0)
         return -1;
+    // Its base URL is the document's now, as HTML fixes a script's when it
+    // is prepared, whatever <base> becomes before it compiles; and it is
+    // the module's import.meta.url, as an inline module script's is.
+    char base[OS64_DOM_URL_MAX];
+    if (m->net.base == NULL || !m->net.base(m->net.opaque, base, sizeof(base)) ||
+        (m->mods[i].base = copy(base)) == NULL) {
+        fail(m, i, "the page's base URL could not be read");
+        return i;
+    }
     char *text = os64_malloc(length + 1);
     if (text == NULL) {
         fail(m, i, "no memory for the module's source");
@@ -479,7 +478,7 @@ int32_t yonder_modules_entry_inline(yonder_modules_t *m, const char *source, siz
     }
     os64_memcpy(text, source, length);
     text[length] = '\0';
-    compile(m, i, text, length, url);
+    compile(m, i, text, length, m->mods[i].base);
     return i;
 }
 

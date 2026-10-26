@@ -106,7 +106,8 @@ typedef struct {
     uint64_t (*now_ms)(void *opaque);
     /* Notices, each on the owner thread from inside a script's task. The
      * host records them and acts after the task; it must not enter JS here.
-     * script_connected: a verb connected a classic script element that had
+     * script_connected: a verb connected a script element of a kind that
+     * runs (os64_dom_script_kind: classic, module or import map) that had
      * not started, which the binding has now marked started (NULL: nothing is
      * marked and nothing is told). activate: an ask that reaches widgets.
      * Both pass borrowed nodes; the host holds what it keeps. */
@@ -240,7 +241,8 @@ typedef struct {
 typedef enum {
     OS64_DOM_SCRIPT_NONE = 0,   /* not a script element, or a type nothing runs */
     OS64_DOM_SCRIPT_CLASSIC,
-    OS64_DOM_SCRIPT_MODULE      /* the host runs it as a module (yonder's modules.c) */
+    OS64_DOM_SCRIPT_MODULE,     /* the host runs it as a module (yonder's modules.c) */
+    OS64_DOM_SCRIPT_IMPORTMAP   /* the host registers it (yonder's importmap.c) */
 } os64_dom_script_kind_t;
 
 /* Numeric snapshot in CSS pixels. Offset/client members are integer pixels;
@@ -756,7 +758,8 @@ const char *os64_dom_script_address(const os64_dom_t *dom, const char *name);
 bool os64_dom_script_ended(os64_dom_t *dom, const char *name, os64_js_outcome_t *outcome);
 
 /* SCRIPT ELEMENTS. kind follows HTML's "prepare the script element" type
- * rules (type, else language, the sixteen JavaScript MIME essences, module);
+ * rules (type, else language, the sixteen JavaScript MIME essences, module,
+ * importmap);
  * it reads attributes only and works without a binding. start marks a script
  * ALREADY STARTED: 1 when it was not, 0 when it was, -1 when the binding
  * could not record it. A script parsed by innerHTML, or copied from a started
@@ -768,6 +771,27 @@ int os64_dom_script_start(os64_dom_t *dom, const os64_html_node_t *node);
  * case, is one of the same sixteen essences a script's type is judged by.
  * HTML fetches a module script only with such a type. */
 bool os64_dom_javascript_mime(const char *value, size_t length);
+
+/* IMPORT MAPS (HTML § 8.1.5.3; MODERN_WEB.md § Import maps, as built). An
+ * import map script's text, `length` bytes NUL-terminated, parsed as JSON
+ * as one task named `name`: HTML's "parse an import map string" up to normalizing,
+ * which the host does. The walk is handed every entry of "imports" (scope
+ * NULL) and of each scope (its key as written), in the JSON's order, the
+ * value when it is a string and NULL when it is anything else; a key, or
+ * a string, holding a NUL is passed over and a NUL value is NULL. An entry
+ * the walk cannot keep (false) fails the parse with a RangeError. What
+ * the parse throws (a SyntaxError for the JSON; a TypeError for a
+ * top-level value that is no object, an "imports", "scopes" or "integrity"
+ * that is none, or a scope that is none; each thrown before any entry is
+ * walked) is reported at the window as a task's exception is, and is the
+ * outcome: the host registers nothing then. Integrity's entries are not
+ * walked. Owner thread, between tasks. */
+typedef struct {
+    void *opaque;
+    bool (*entry)(void *opaque, const char *scope, const char *key, const char *value);
+} os64_dom_import_map_walk_t;
+os64_js_status_t os64_dom_import_map(os64_dom_t *dom, const char *name, const char *text, size_t length,
+                                     const os64_dom_import_map_walk_t *walk, os64_js_outcome_t *outcome);
 
 /* A reference a script names, resolved exactly as a link in the document
  * would be: os64_page_resolve_in, so the input cleaning, the `<base href>`

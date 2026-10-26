@@ -1,0 +1,14 @@
+# The data-driven import map cases yonder's map fails, written by
+# tools/test_importmap_host.sh --update. Each line is a case and the
+# check that fails in it; MODERN_WEB.md § Import maps, as built, says why.
+empty-import-map: HTTPS scheme absolute URLs: https://///fetch-scheme.com/// from https://example.com/js/app.mjs
+empty-import-map: HTTPS scheme absolute URLs: https://fetch%2Dscheme.com/ from https://example.com/js/app.mjs
+empty-import-map: HTTPS scheme absolute URLs: https:fetch-scheme.org from https://example.com/js/app.mjs
+empty-import-map: non-fetch scheme absolute URLs: wss:non-fetch-scheme from https://example.com/js/app.mjs
+parsing-addresses-absolute: should only accept absolute URL addresses with fetch schemes: parse
+parsing-addresses-absolute: should parse absolute URLs, ignoring unparseable ones: parse
+parsing-scope-keys: Relative URL scope keys should deduplicate based on URL parsing rules: parse
+parsing-specifier-keys: Absolute URL specifier keys should accept all absolute URL specifier keys, with or without fetch schemes: parse
+parsing-specifier-keys: Absolute URL specifier keys should parse absolute URLs, treating unparseable ones as bare specifiers: parse
+parsing-specifier-keys: Relative URL specifier keys should deduplicate based on URL parsing rules: parse
+url-specifiers: Ordinary URL-like specifiers: https://///example.com/lib/foo.mjs from https://example.com/js/app.mjs

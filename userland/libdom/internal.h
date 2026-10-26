@@ -244,6 +244,9 @@ struct os64_dom {
     DValue *event_target_prototype, *window_prototype;
     bool sweep_pending;
     DListener *invoking;
+    /* The import map os64_dom_import_map is parsing, while it does
+     * (importmap.c). */
+    struct DImportParse *import_parse;
     DValue *invoking_entry;
     DTimer *timers;
     size_t timer_count;
@@ -1016,6 +1019,8 @@ int d_options_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* The text controls' selection members and the window's Selection
  * (selection.c, 0f's P2 core). */
 int d_selection_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* HTMLScriptElement.supports (importmap.c). */
+int d_import_map_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* HTMLOptionsCollection's indexed setter (HTML § 2.6.2.2), for the
  * collection's exotic: null or undefined removes the option at `index`, an
  * option past the end is appended after empty options fill the gap, and

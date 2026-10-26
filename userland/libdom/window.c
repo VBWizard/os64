@@ -1211,6 +1211,16 @@ static bool javascript_type(const char *value, size_t length, bool from_language
     return false;
 }
 
+/* Whether `length` bytes of `value` are `word` (lowercase letters) in any
+ * ASCII case. */
+static bool type_named(const char *value, size_t length, const char *word)
+{
+    if (length != os64_strlen(word)) return false;
+    for (size_t i = 0; i < length; i++)
+        if ((value[i] | 0x20) != word[i]) return false;
+    return true;
+}
+
 os64_dom_script_kind_t os64_dom_script_kind(const os64_html_node_t *node)
 {
     if (!html_element(node, OS64_HTML_TAG_SCRIPT)) return OS64_DOM_SCRIPT_NONE;
@@ -1219,17 +1229,16 @@ os64_dom_script_kind_t os64_dom_script_kind(const os64_html_node_t *node)
     const char *value = type != NULL ? type->value : language != NULL ? language->value : NULL;
     if (value == NULL || value[0] == '\0') return OS64_DOM_SCRIPT_CLASSIC;
     size_t length = os64_strlen(value);
-    /* Only a present type is trimmed. Empty attributes default before
-     * trimming, so whitespace-only type and padded language do not default. */
+    /* `module` and `importmap` are a type as written, in any case: HTML
+     * trims a type only to ask whether it is JavaScript's (whatwg/html
+     * #13012), so `type=" module "` runs nothing. Only a present type is
+     * trimmed. Empty attributes default before trimming, so whitespace-only
+     * type and padded language do not default. */
     if (type != NULL) {
+        if (type_named(value, length, "module")) return OS64_DOM_SCRIPT_MODULE;
+        if (type_named(value, length, "importmap")) return OS64_DOM_SCRIPT_IMPORTMAP;
         while (length != 0 && ascii_space((unsigned char)*value)) { value++; length--; }
         while (length != 0 && ascii_space((unsigned char)value[length - 1])) length--;
-        if (length == 6) {
-            const char *module = "module";
-            size_t i = 0;
-            while (i < 6 && (value[i] | 0x20) == module[i]) i++;
-            if (i == 6) return OS64_DOM_SCRIPT_MODULE;
-        }
     }
     return javascript_type(value, length, type == NULL) ? OS64_DOM_SCRIPT_CLASSIC : OS64_DOM_SCRIPT_NONE;
 }
@@ -1310,10 +1319,10 @@ int d_script_copy_marks(os64_dom_t *dom, const os64_html_node_t *from, const os6
     return 0;
 }
 
-/* The classic and module scripts a verb is about to move, in tree order: a
- * fragment's children, or the node's own subtree. Answers how many there
- * are; at most cap are stored. Whether one has started is asked once it is
- * connected. */
+/* The scripts of a kind that runs (classic, module, import map) a verb is
+ * about to move, in tree order: a fragment's children, or the node's own
+ * subtree. Answers how many there are; at most cap are stored. Whether one
+ * has started is asked once it is connected. */
 size_t d_script_collect(const os64_html_node_t *node,
                         const os64_html_node_t **out, size_t cap)
 {
@@ -1330,8 +1339,8 @@ size_t d_script_collect(const os64_html_node_t *node,
 }
 
 /* HTML prepares a script element when it becomes connected: one that has
- * not started, classic or module, is marked started and handed to the
- * host, which runs it (or records a module it does not run).
+ * not started, of a kind that runs, is marked started and handed to the
+ * host, which runs it or registers it (or records one it does not).
  * Connected to a document with no window, it is marked started all the
  * same and runs nowhere, then or after it is moved into the page (HTML's
  * "prepare the script element": scripting is disabled for it), unless the
@@ -1340,8 +1349,7 @@ void d_script_connected(os64_dom_t *dom, const os64_html_node_t *const *scripts,
 {
     for (size_t i = 0; i < count; i++) {
         const os64_html_node_t *script = scripts[i];
-        os64_dom_script_kind_t kind = os64_dom_script_kind(script);
-        if (kind != OS64_DOM_SCRIPT_CLASSIC && kind != OS64_DOM_SCRIPT_MODULE) continue;
+        if (os64_dom_script_kind(script) == OS64_DOM_SCRIPT_NONE) continue;
         if (d_in_window_tree(dom, script)) {
             if (d_script_mark(dom, script) == 1) dom->options.script_connected(dom->options.host_opaque, script);
         } else if (d_connected(script)) {

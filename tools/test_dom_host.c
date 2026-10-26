@@ -231,6 +231,7 @@ static char *native_serialized(const os64_html_node_t *node)
 #include "test_dom_report.inc"
 #include "test_dom_document.inc"
 #include "test_dom_message.inc"
+#include "test_dom_importmap.inc"
 #define GEOMETRY_ASSERT "function assert(x,m){if(!x)throw Error(m||'assertion');}" \
     "function throws(n,f){let ok=false;try{f()}catch(e){ok=e.name===n}assert(ok,n)}"
 
@@ -421,6 +422,7 @@ int main(int argc, char **argv)
     dom_report_cases();
     dom_document_cases();
     dom_p2b_cases();
+    dom_import_map_cases();
     dom_geometry_cases();
     dom_global_miss_cases();
     dom_surface_cases();
@@ -445,7 +447,7 @@ int main(int argc, char **argv)
     dom_event_cases();
     dom_implementation_cases();
     dom_attributes_cases();
-    if(!mutation_mode){dom_report_sweep_cases();dom_p2b_sweep_cases();dom_allocation_cases();dom_clone_allocation_cases();dom_view_allocation_cases();dom_view_host_allocation_cases();implementation_allocation_cases();attributes_allocation_cases();}
+    if(!mutation_mode){dom_report_sweep_cases();dom_p2b_sweep_cases();dom_import_map_sweep_cases();dom_allocation_cases();dom_clone_allocation_cases();dom_view_allocation_cases();dom_view_host_allocation_cases();implementation_allocation_cases();attributes_allocation_cases();}
     printf("DOM host: %u checks, %u failed; binding allocation sweeps=%zu\n", checks, failures, dom_sweeps);
     return failures ? 1 : 0;
 }

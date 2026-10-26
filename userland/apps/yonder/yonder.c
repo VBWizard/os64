@@ -1414,6 +1414,9 @@ static struct {
         // said OK to that, and the deferred scripts may run. `ended_ms` is
         // when: the timers due by then run before DOMContentLoaded.
         bool stopped, ending, ended;
+        // Stopped, and the script the parse stopped at has run: the parse
+        // goes on once the inline scripts it connected have (stream_turn).
+        bool ran;
         uint64_t ended_ms;
         bool scriptless;                // its host could not be made: no script runs
         // Its navigation timing (performance.timing), from the moment it
@@ -10221,16 +10224,17 @@ static bool stream_streaming(void)
 // model will adopt when the parse is over.
 static yonder_stop_t stream_stop(os64_html_node_t *script)
 {
-    // A module runs with the Modern Web surface (its host's modules.c);
-    // without it, it is what a scripted page asked for and did not get.
-    // With scripts off nothing runs, and that is a setting.
+    // A module runs, and an import map registers, with the Modern Web
+    // surface (its host's modules.c); without it, each is what a scripted
+    // page asked for and did not get. With scripts off nothing runs, and
+    // that is a setting.
     os64_dom_script_kind_t kind = os64_dom_script_kind(script);
     if (g.stream.scripting && kind == OS64_DOM_SCRIPT_MODULE && !g.stream.modern)
         yonder_diag_missing(g.stream.diag, "script", "module", 1);
-    if (g.stream.scripting && kind == OS64_DOM_SCRIPT_NONE && yonder_scripts_importmap(script))
+    if (g.stream.scripting && kind == OS64_DOM_SCRIPT_IMPORTMAP && !g.stream.modern)
         yonder_diag_missing(g.stream.diag, "script", "importmap", 1);
-    if (!g.stream.scripting || g.stream.scriptless ||
-        (kind != OS64_DOM_SCRIPT_CLASSIC && (kind != OS64_DOM_SCRIPT_MODULE || !g.stream.modern)))
+    if (!g.stream.scripting || g.stream.scriptless || kind == OS64_DOM_SCRIPT_NONE ||
+        (kind != OS64_DOM_SCRIPT_CLASSIC && !g.stream.modern))
         return YONDER_STOP_RESUME;
     if (g.stream.scripts == NULL) {
         os64_html_document_t *doc = os64_html_parser_document(g.stream.parser);
@@ -10448,21 +10452,31 @@ static bool stream_turn(void)
         // waits for the next turn. While its `src` is out, a ready script
         // (async, or one a script connected) or a due timer runs: HTML's
         // loop runs other tasks while a parser-blocking script is fetched.
-        if (yonder_scripts_alive(host) && !yonder_scripts_blocking_ready(host))
-            return scripts_owed(host) ? stream_task() : false;
-        // Its sheets the same way: their reap or the ticker carries the
-        // turn on, and other tasks run meanwhile.
-        if (yonder_scripts_alive(host) && stream_sheets_hold())
-            return scripts_owed(host) ? stream_task() : false;
-        g.stream.sheets_due = 0;
-        os64_js_outcome_t out;
-        int64_t began = task_begin(host);
-        if (yonder_scripts_run_blocking(host, &out)) {
-            task_said(host, true, "script", &out, began);
-            asks_perform(host, os64_html_parser_document(g.stream.parser), false);
-            if (!g.stream.active || g.stream.serial != serial)
-                return false;
+        if (!g.stream.ran) {
+            if (yonder_scripts_alive(host) && !yonder_scripts_blocking_ready(host))
+                return scripts_owed(host) ? stream_task() : false;
+            // Its sheets the same way: their reap or the ticker carries the
+            // turn on, and other tasks run meanwhile.
+            if (yonder_scripts_alive(host) && stream_sheets_hold())
+                return scripts_owed(host) ? stream_task() : false;
+            g.stream.sheets_due = 0;
+            os64_js_outcome_t out;
+            int64_t began = task_begin(host);
+            if (yonder_scripts_run_blocking(host, &out)) {
+                task_said(host, true, "script", &out, began);
+                asks_perform(host, os64_html_parser_document(g.stream.parser), false);
+                if (!g.stream.active || g.stream.serial != serial)
+                    return false;
+            }
+            g.stream.ran = true;
+            // What it connected without a `src` runs first, on the turns
+            // after this one (stream_connected, above), as a browser runs
+            // it inside the verb: an import map a script connects is
+            // registered before the markup after that script is parsed.
+            if (yonder_scripts_connected_pending(host))
+                return true;
         }
+        g.stream.ran = false;
         g.stream.stopped = false;
         int64_t r = stream_parsed(os64_html_parser_resume(g.stream.parser));
         if (r != OS64_HTML_OK && r != OS64_HTML_SCRIPT) {

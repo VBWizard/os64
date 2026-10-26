@@ -3334,8 +3334,8 @@ kept records said `MISSING script module`.
   (and marked started) where modules run; a module runs as one task named
   as the page's code (CORS-fetched, so never muted), with no
   `currentScript`, its owed error events settled after. `type=importmap`
-  is on the record as missing (the stream's parse and the host both say
-  it). A classic script's `import()` resolves against the script's own
+  was on the record as missing until § Import maps, as built, registered
+  it. A classic script's `import()` resolves against the script's own
   address (`os64_dom_script_address`), which is how a bundler's lazy
   chunk loads. With the switch off nothing of this exists and a module is
   missing, as before.
@@ -3418,6 +3418,174 @@ kept records said `MISSING script module`.
   select-event code, which calls `window.getSelection` unguarded when the
   focused element is not a text field, and its absence unmounted the app.
 - **P5**: GitHub's page, Chris's to run.
+
+### Import maps, as built
+
+Slice 3's DEBTS row, built at the end of the 0f page-fix batch because
+GitHub's pages import `react` and its siblings by bare name (192 modules on
+one of Chris's P5 records said "a bare name needs an import map"). HTML
+§ 8.1.5 whole, as of the merging revision (any number of maps, before or
+after modules load, each merged into the window's), except `integrity`,
+which is read for its shape and dropped: yonder checks no Subresource
+Integrity at all (DEBTS.md).
+
+- **Two halves.** libdom's `os64_dom_import_map` is the JSON and the
+  exceptions: "parse an import map string" up to normalizing, run as one
+  task named as the script, so its SyntaxError, or a TypeError for a
+  top-level value, an `imports`, `scopes` or `integrity`, or a scope that
+  is no object, reaches the window as any task's exception does, and the
+  map registers nothing. Every TypeError is asked before an entry is
+  walked; normalizing throws nothing, so the answer is HTML's. A map that
+  parses is walked to the host entry by entry, in JSON.parse's order.
+  yonder's `importmap.c` is the rest, pure: "normalize a specifier key",
+  "sort and normalize a module specifier map" and the scopes, the merge,
+  the resolved module set, and "resolve a module specifier", which every
+  import, static or dynamic, now goes through (`modules.c`
+  `resolve_against`).
+- **One spelling for an address.** A rule's key and a specifier meet only
+  when they are spelled alike, so the map's keys and addresses, the base
+  URLs it is asked against and every specifier go through libpage's rule
+  (`os64_page_resolve_in`), as libdom's `URL` does. Until now an absolute
+  specifier was kept as written while a relative one went through
+  libos64's grammar, so one module spelled two ways was two modules: that
+  DEBTS row is paid. What the grammar still does not do is what the map
+  cannot (the URL grammar's row in DEBTS.md: `https:host`, extra slashes, a
+  percent-encoded host, a backslash).
+- **A script's base URL is fixed when it is prepared**: an import map's,
+  for its addresses, and an inline module's, which is its base for
+  imports, its scope match and its `import.meta.url`. Both read the tree
+  as it stood (`os64_page_base_in`). An inline module used the document's
+  URL as its meta URL and the tree as it stood at each resolve: that DEBTS
+  row is paid.
+- **When a map registers.** A parser-inserted `<script type=importmap>` is
+  a blocking item: the parse stops at it, it registers, and the parse goes
+  on, as HTML executes one at once, so the modules after it resolve
+  through it. One a script connects registers on the turn after that
+  script's task and before the parse goes on: the stream now runs what a
+  parser-blocking script connected before resuming, which is what its own
+  comment always said and what a classic inline script connected that way
+  now gets too. libdom reports a connected import map to the host
+  (`OS64_DOM_SCRIPT_IMPORTMAP`, a script kind of its own), which it did not.
+  The kind is HTML's type rule as it now stands (whatwg/html#13012): a
+  type is trimmed only to ask whether it is JavaScript's, so `importmap`
+  and `module` match as written, in any case, and `type=" module "` runs
+  nothing, where libdom used to trim it into a module.
+  `src` on one is a failure on the record, nothing fetched; the `error`
+  event HTML fires at it is the script element's, which yonder fires for
+  none (DEBTS.md). With the switch off a map is MISSING on the record, as
+  a module is.
+- **`HTMLScriptElement.supports(type)`**: true for `classic`, `module` and
+  `importmap`, false for anything else, `speculationrules` included. A shim
+  that loads modules itself (es-module-shims) asks it before taking over,
+  and that takeover goes through blob: URLs, which the module map does not
+  fetch.
+- **The record.** A bare name nothing maps is a line of the importing
+  module's, worded for a page with a map ("a bare name no import map
+  maps") and one without ("a bare name needs an import map"); a rule
+  blocked by a null entry says so. A rule the merge dropped is not on the
+  record: HTML's warnings are a console's, and yonder has none.
+- **Bounds.** A map holds at most 16,384 rules, all its scopes' together;
+  an entry past them fails the parse with a RangeError (the page's map is
+  too large, which is no reason to retire its runtime, as an engine's
+  out-of-memory would). The resolved module set records at most 65,536
+  resolutions, each once; past that a later map's merge could change one
+  already made.
+- **The merge and the resolution look up; neither scans.** A merge runs
+  after the parse's task has closed, where no budget stops it, and HTML's
+  merge compares every resolution made with every rule a map brings. Every
+  rule that could decide a resolution has a key that is the specifier or a
+  prefix of it ending in a slash, every scope that could apply has a
+  prefix that is the base URL or such a prefix of it, and every key that
+  begins with a specifier sorts just before it: each is a lookup in a
+  sorted list, and a dropped rule is marked and the lists compacted once.
+  Resolution reads the longest such key that is there, which is the first
+  HTML's descending scan would meet.
+
+**Decisions** (web semantics, mine to make):
+
+1. **A connected map registers after the verb**, as yonder runs every
+   connected inline script, not inside it: no script runs inside a verb
+   here. The stream change makes "after the verb" mean "before the next
+   markup", which is the part a page can see.
+2. **A module compiled before a map registered resolves again at its
+   run.** Its unresolved imports are not in its graph; when it runs, the
+   engine asks the loader, which now finds the map's rule and fetches
+   inline. HTML would have thrown. The page works where Chrome's would not,
+   which is the direction to be wrong in, and a module before its own map
+   is the page's mistake.
+3. **Integrity is dropped, not refused.** A map with `integrity` registers
+   whole; checking nothing is what yonder does with every script's
+   integrity today.
+
+**Numbers.**
+
+- **WPT** `import-maps`, a directory added to `tools/wpt_fetch.sh`: 8 → 36
+  of 98, 29 of them `[required]` and each failing with the switch off (the
+  rest pass either way: a map never runs as a script, and a padded type is
+  no map's). The module directory 101 → 104, `type.html`'s padded
+  `module` types. The other 39 directories with expectations lose
+  nothing. The runner learned two things wptserve does for a static file
+  and nearly every import map page asks of one: the `sub` pipe
+  (`?pipe=sub`, which fills a file's templates as a `.sub.` name does) and
+  the `{{GET[name]}}` template, the request's own query parameter. Before
+  it, every module the pages logged through `log.js?pipe=sub&name=B` logged
+  the template, and the directory said 8 whatever yonder did.
+- **WPT's data-driven cases**, which the directory's own page runs in an
+  iframe through `import.meta.resolve` (yonder has neither), driven
+  straight into `importmap.c` (`tools/wpt/importmap_cases.py`,
+  `tools/test_importmap_host.sh`): 252 checks pass, the 11 that fail are
+  the URL grammar's (`tools/wpt/import-maps-data.txt`), and 21 maps whose
+  JSON libdom refuses are the DOM host's to hold. The same host holds the
+  merge to HTML's own examples, holds 4,096 resolutions, a 4,096-rule merge
+  under one 1,800-byte path and 4,096 resolutions through it to a CPU bound
+  (2.4 s under the sanitizers; the first build's scan had not finished
+  after 120), and fails each of a parse's, two merges' and their
+  resolutions' 316 allocations in turn.
+- **Hosts**, 0 failed: DOM 15,977 and 105,102 (the parse's walk order,
+  every error it throws and the window's events for them, a page's
+  `Object.prototype.imports`, a NUL, a refused entry, `supports`, the type
+  rule; and every engine allocation of a parse that walks and of one that
+  throws, 38 and 56, failed in turn); scripted page 8,149 (a bare name, a
+  prefix and a scope through yonder's window, each module fetched once; a
+  syntax error, a top-level array and a `src` map; two maps and a
+  connected one merging; a `<base>` under the map and the inline module's
+  meta URL); yonder 2,028.
+- **Mutants** (`tools/test_modules_mutants.py`, its import maps group, and
+  `connected-skips-import-maps` beside the modules' own): 32, each caught.
+  Two were first missed. The verb fired the parse's error event itself
+  and the task's checkpoint fires it again, so the first was dead code and
+  went. The merge's "a specifier as a URL that is null or special" is
+  equivalent: a prefix rule matches only a bare specifier or a special
+  URL, so one kept over a non-special record changes no resolution; the
+  harness says so where the mutant would be. Five first did not build (a
+  name `-Werror` found unused) and were reworded. Codex's round added five
+  (the lookups' runs, deciders and compaction, a prefix that never
+  matches, the started mark) and retired one: the scopes' order is
+  equivalent once a scope is only looked up. 36, each caught.
+- **QEMU**, over the wire: a served site with two maps (the second's rule
+  for `react` losing to the first's, its `extra` joining), a prefix rule,
+  a scope that gives one widget an older React, an inline module and a
+  dynamic import, each resolved as the maps say and fetched once, and
+  `HTMLScriptElement.supports('importmap')` true. Its first run proved
+  the prefix rule the hard way: the page imported `react/jsx-runtime` and
+  the file was `jsx-runtime.js`, which the map sent to a 404, as Chrome's
+  would.
+- **P5**, Chris, on GitHub's pages: a repository's page fetches 118
+  modules through its maps, each once; what stops its code next is
+  `customElements`, then `MutationObserver` (slice 5a),
+  `IntersectionObserver` and `ReadableStream`, and its placeholders stay
+  gray where that code would have filled them.
+
+**Codex, round 1**: three findings. Fixed: an import map that was the
+page's first script was never marked started (the binding did not exist
+yet when it was prepared), so a script could take it out, rewrite it and
+register it again; it now makes the runtime as a module script does, and
+the scripted host holds it. Fixed as a class: the merge compared every
+resolution with every incoming rule, outside any task's budget, and every
+resolution scanned the whole map; both look up now (§ the bullet above,
+and the scale case). Booked in DEBTS.md by the triage rule (a hand-made
+map): two scope keys that normalize to one URL are combined, where HTML's
+later one replaces the earlier.
 
 ### Slice 0f, as built
 

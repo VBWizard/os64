@@ -108,7 +108,8 @@ with recovery and zero live ledger bytes after each call. Its fixture peak is
 and binary provenance accompanies the run.
 
 The existing Yonder suite passes **2,028 checks** and the full window/script
-suite passes **8,174 checks**. The garb parser/cascade regression suite passes.
+suite passes **8,188 checks** after merging import maps (#366). The garb
+parser/cascade regression suite passes.
 The full window harness checks root opacity, explicit visible descendants of a
 hidden SVG, CSS replacing the root transform attribute, and script recoloring
 through the actual compositor. Host runs preserve ASan, UBSan and LeakSanitizer;
@@ -129,7 +130,9 @@ backgrounds while the painted amber SVG path retains its color. With scripts
 enabled, clicking the fixture button changes the check mark from blue to
 orange. The button sets orange on each click; it is not a toggle. These
 hardware observations do not establish broader browser/WPT equivalence or
-page-scale performance.
+page-scale performance. The guest and P5 checks used `cf1ba15f`, before the
+import-map merge. The combined revision passes the window/script suite above
+and the freestanding Yonder/flowdump build.
 
 ## P5 checkpoint and next work
 

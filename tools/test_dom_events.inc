@@ -457,7 +457,9 @@ static void dom_script_flag_cases(void)
     DomFixture f = event_fixture("<!doctype html><body><div id=host></div>"
         "<script id=inline>1</script><script id=module type=module></script>"
         "<script id=vb type=text/vbscript></script><script id=lang language=JavaScript1.2></script>"
-        "<script id=padded type=' text/javascript '></script></body>", "http://example.test/");
+        "<script id=padded type=' text/javascript '></script><script id=map type=ImportMap></script>"
+        "<script id=padded-module type=' module'></script><script id=padded-map type='importmap '></script>"
+        "</body>", "http://example.test/");
     if (!fixture_ready(&f)) return;
     const os64_html_node_t *root = f.document->document;
     check(os64_dom_script_kind(native_id((os64_html_node_t *)root, "inline")) == OS64_DOM_SCRIPT_CLASSIC &&
@@ -465,8 +467,11 @@ static void dom_script_flag_cases(void)
           os64_dom_script_kind(native_id((os64_html_node_t *)root, "vb")) == OS64_DOM_SCRIPT_NONE &&
           os64_dom_script_kind(native_id((os64_html_node_t *)root, "lang")) == OS64_DOM_SCRIPT_CLASSIC &&
           os64_dom_script_kind(native_id((os64_html_node_t *)root, "padded")) == OS64_DOM_SCRIPT_CLASSIC &&
+          os64_dom_script_kind(native_id((os64_html_node_t *)root, "map")) == OS64_DOM_SCRIPT_IMPORTMAP &&
+          os64_dom_script_kind(native_id((os64_html_node_t *)root, "padded-module")) == OS64_DOM_SCRIPT_NONE &&
+          os64_dom_script_kind(native_id((os64_html_node_t *)root, "padded-map")) == OS64_DOM_SCRIPT_NONE &&
           os64_dom_script_kind(native_id((os64_html_node_t *)root, "host")) == OS64_DOM_SCRIPT_NONE,
-          "script kinds follow HTML's type rules");
+          "script kinds follow HTML's type rules: a JavaScript type trimmed, module and importmap as written");
     const os64_html_node_t *inline_script = native_id((os64_html_node_t *)root, "inline");
     check(os64_dom_script_start(f.binding, inline_script) == 1 && os64_dom_script_start(f.binding, inline_script) == 0,
           "a script starts once");
