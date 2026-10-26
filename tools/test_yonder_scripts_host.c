@@ -2547,6 +2547,81 @@ static void stream_window_drop(void) {
     way_history_clear(&g.way);
     while(nsheet_jobs>0) os64_free(sheet_jobs[--nsheet_jobs].job);
 }
+/* The real window layout participates in font adoption: a larger interface
+ * face must grow its rows, without replacing the page controls' lent face
+ * or losing a partially edited address. An aborted plan moves nothing. */
+static os64_font_set_t *interface_test_set(uint32_t px)
+{
+    static const uint8_t face = 'A';
+    os64_font_role_spec_t specs[OS64_FONT_ROLE_COUNT] = {0};
+    specs[OS64_FONT_ROLE_UI].primary = (os64_font_source_t){OS64_FONT_SOURCE_OUTLINE, &face, 1};
+    specs[OS64_FONT_ROLE_UI].pixel_height = px;
+    os64_font_set_t *set = NULL;
+    check(os64_font_set_prepare(os64_ui_font_context(&g.ui), specs, &set) == OS64_FONT_OK,
+          "interface font: candidate opens");
+    return set;
+}
+
+static void interface_font_cases(void)
+{
+    stream_window();
+    layout();
+    int32_t initial_h = g.back.bounds.h;
+    os64_font_set_t *web = interface_test_set(13);
+    check(os64_ui_font_app(&g.ui, web, OS64_FONT_ROLE_UI) == OS64_FONT_OK,
+          "interface font: page controls have their own face");
+    int32_t web_h = os64_ui_font_row_height(&g.ui, OS64_UI_FONT_APP);
+    check(os64_ui_font_planner(&g.ui, interface_font_plan, interface_font_commit,
+                              interface_font_discard, NULL) == OS64_FONT_OK,
+          "interface font: window planner installed before adoption");
+    os64_font_consumer_t consumer;
+    os64_ui_font_consumer(&g.ui, &consumer);
+    os64_font_set_t *large = interface_test_set(24);
+    check(os64_font_adopt(large, &consumer, 1, NULL) == OS64_FONT_OK,
+          "interface font: larger startup face is accepted");
+    interface_font_finish();
+    check(g.back.bounds.h > initial_h && g.field.w.bounds.h == g.back.bounds.h &&
+          g.status.bounds.h == g.back.bounds.h && g.view.bounds.y >= g.back.bounds.y + g.back.bounds.h,
+          "interface font: toolbar, address and status grow without overlapping the page");
+    os64_ui_textfield_set(&g.ui, &g.field, "http://fixture.test/unfinished");
+    os64_ui_set_focus(&g.ui, &g.field.w);
+    g.field.cursor = 12; g.field.anchor = 7; g.field.selected = true;
+    os64_gui_rect_t before = g.field.w.bounds;
+    int32_t old_row = os64_ui_font_row_height(&g.ui, OS64_FONT_ROLE_UI);
+    os64_font_set_t *larger = interface_test_set(32);
+    void *plan = NULL;
+    check(consumer.prepare(consumer.user, larger, &plan) == OS64_FONT_OK,
+          "interface font: a live change can be staged");
+    check(!memcmp(&g.field.w.bounds, &before, sizeof(before)) &&
+          os64_ui_widget_planned_bounds(&g.field.w).h > before.h,
+          "interface font: staging measures the new face without moving live bounds");
+    consumer.abort(consumer.user, plan);
+    check(!g.field.w.bounds_staged_valid && !memcmp(&g.field.w.bounds, &before, sizeof(before)) &&
+          os64_ui_font_row_height(&g.ui, OS64_FONT_ROLE_UI) == old_row && !s_interface_resize_due,
+          "interface font: abort retains the live face and geometry");
+    check(os64_font_adopt(larger, &consumer, 1, NULL) == OS64_FONT_OK,
+          "interface font: a live larger face is accepted");
+    interface_font_finish();
+    check(g.field.w.bounds.h > before.h && g.relayout_due &&
+          g.ui.focus == &g.field.w && g.field.cursor == 12 && g.field.anchor == 7 && g.field.selected &&
+          os64_streq(g.field_buf, "http://fixture.test/unfinished"),
+          "interface font: live change preserves address text, focus and selection and resizes the viewport");
+    check(os64_ui_font_row_height(&g.ui, OS64_UI_FONT_APP) == web_h &&
+          s_env.viewport_font_px == 16 && g.zoom == 1000,
+          "interface font: page control face, default text size and zoom are unchanged");
+    before = g.field.w.bounds;
+    os64_font_set_t *huge = interface_test_set(96);
+    check(os64_font_adopt(huge, &consumer, 1, NULL) == OS64_FONT_LIMIT &&
+          !memcmp(&g.field.w.bounds, &before, sizeof(before)) && !g.back.bounds_staged_valid &&
+          !s_interface_resize_due,
+          "interface font: a face wider than the toolbar fits is refused atomically");
+    os64_font_set_release(huge);
+    os64_font_set_release(larger);
+    os64_font_set_release(large);
+    os64_font_set_release(web);
+    stream_window_drop();
+}
+
 /* The worker's part: a head for `url`, the body in `chunk`-sized posts, the verdict. */
 static way_head_t stream_head(const char *type, const char *charset, bool posted) {
     way_head_t h; memset(&h,0,sizeof(h));
@@ -9810,6 +9885,7 @@ int main(void)
     check(os64_text_font_bitmap(probe_text,&probe_font)==OS64_FONT_OK,"bitmap face");
     classic_browser_cases();
     address_key_cases();
+    interface_font_cases();
     inserted_frame_cases();
     stand_in_paint_cases();
     covered_link_cases();
