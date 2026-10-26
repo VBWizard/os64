@@ -1098,8 +1098,9 @@ int d_xhr_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if ((!JS_IsRegisteredClass(dom->engine, xhr_id) && JS_NewClass(dom->engine, xhr_id, &xhr_class) < 0) ||
         (!JS_IsRegisteredClass(dom->engine, upload_id) && JS_NewClass(dom->engine, upload_id, &upload_class) < 0))
         return -1;
-    /* XMLHttpRequestEventTarget's prototype carries the EventTarget methods
-     * and the seven handlers both inherit. */
+    /* XMLHttpRequestEventTarget's prototype inherits the EventTarget
+     * methods (d_event_target) and carries the seven handlers both
+     * inherit. */
     DValue *base = d_retain(dom, ctx, JS_NewObject(ctx));
     DValue *xhr = base != NULL ? d_retain(dom, ctx, JS_NewObjectProto(ctx, base->value)) : NULL;
     DValue *upload = xhr != NULL ? d_retain(dom, ctx, JS_NewObjectProto(ctx, base->value)) : NULL;

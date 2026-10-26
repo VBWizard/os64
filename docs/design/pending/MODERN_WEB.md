@@ -3599,6 +3599,47 @@ chain): a prefixed name in `createElementNS` names the element whole, and
 a kept selection is clamped when read rather than when a clean control's
 default shrinks.
 
+### 0f's P1b, as built
+
+What P1b had left after the page fixes named the four lists
+(INTERFACES_FORMS.md § P1b): EventTarget and Window.
+
+- **One EventTarget.prototype** (`event.c` `d_event_install`) holds
+  `addEventListener`, `removeEventListener` and `dispatchEvent`, which had
+  been copied onto Node.prototype, the global and every plain target's
+  prototype. Node.prototype inherits it; the global inherits
+  Window.prototype, which inherits it; and `d_event_target` makes a plain
+  target's prototype inherit it when its chain does not reach it already
+  (Attr's does, through Node's). These levels are there with the switch
+  on or off, so a page with it off finds the same methods by the same
+  lookup, and a bare `addEventListener` is still window's.
+- **The row** (`d_targets_install`, the table's last) names
+  `EventTarget` and `Window`. `new EventTarget()`, and a subclass's
+  `super()`, makes a plain target of its own class with its entry in the
+  object, as an AbortSignal's is, so `class Bus extends EventTarget` works;
+  `new Window()` is a TypeError. Every global interface whose prototype
+  inherits EventTarget.prototype directly comes to inherit EventTarget as
+  WebIDL's interface objects follow their prototypes (`Node`,
+  `AbortSignal`, `XMLHttpRequestEventTarget`, …), which is why the row runs
+  last. The engine's own `[Symbol.toStringTag]` of "global" on the global
+  is deleted, so `String(window)` is "[object Window]".
+- **Not built:** `WindowProperties` and named access stay in P3c, and
+  `addEventListener`'s `signal` option and `passive` stay as they were
+  (dom/events' failures say so).
+
+**Numbers.** WPT, against userland 8688df17: `dom/events` +17,
+`the-window-object` +61 (`window-prototype-chain.html` among them, all but
+its WindowProperties tests); nothing lost there, in `dom/nodes` or in
+`html/dom`. `dom/nodes`' `ParentNode-querySelectors-namespaces.html` passes
+on userland without this branch and is not recorded here. Hosts, 0 failed:
+DOM 15,682 and its allocation sweep 104,577 (a plain and a subclassed
+target, the chains with the switch on, bare calls, the adopted interfaces,
+the tags); scripted page 8,135. Mutants (`tools/test_interfaces_mutants.py`,
+its P1b group): 14, each caught. QuickJS needed patch 0013 first:
+`JS_SetPrototypeInternal` leaked its reference to the new prototype when the
+shape update failed, which the allocation sweep found the first time libdom
+reparented a prototype it had made (`userland/libjs/UPSTREAM_REVIEW.md`).
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.

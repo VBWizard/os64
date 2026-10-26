@@ -19,6 +19,7 @@ accessing-other-browsing-contexts/indexed-browsing-contexts-03.html	Indexed chil
 accessing-other-browsing-contexts/iterator.html	window[@@iterator]
 accessing-other-browsing-contexts/window_length.html	No child browsing contexts
 accessing-other-browsing-contexts/window_length.html	iframe not inserted into the document
+historical.window.html	showModalDialog() has been removed from the platform
 named-access-on-the-window-object/basics.html	A named property must not be enumerable
 named-access-on-the-window-object/basics.html	A named property must not be set if the element is not reachable from the Document
 named-access-on-the-window-object/doc-no-window.html	A document without a Window must not cause errors
@@ -36,6 +37,7 @@ named-access-on-the-window-object/id-non-html-elements.html	An element in the SV
 named-access-on-the-window-object/id-non-html-elements.html	An element in the SVG namespace whose local name is object is not exposed by its name attribute
 named-access-on-the-window-object/name-attribute-elements.html	Only elements with specific local names may be returned if their name attribute matches (negative test)
 named-access-on-the-window-object/nested-context.html	A named property that matches any element that contains a nested browsing context, must return the WindowProxy of that context
+named-access-on-the-window-object/prototype.html	Property on Object.prototype.
 named-access-on-the-window-object/scoped-to-associated-document.html	Elements of a document created by createHTMLDocument() are not exposed
 named-access-on-the-window-object/scoped-to-associated-document.html	Ids set after insertion into another document are not exposed
 named-access-on-the-window-object/strict-mode-redefine-readonly-property.html	Adding/removing form with a name referring to a non-configurable property
@@ -57,8 +59,10 @@ window-indexed-access-vs-named-access.html	WindowProxy: document-tree child navi
 window-indexed-access-vs-named-access.html	WindowProxy: document-tree child navigable with target name 3 (named access)
 window-indexed-properties-strict.html	Borderline numeric key: 2 ** 32 - 1 is not an index (strict mode)
 window-indexed-properties-strict.html	Indexed properties of the window object (strict mode)
+window-indexed-properties-strict.html	Indexed properties of the window object (strict mode) 3
 window-indexed-properties.html	Borderline numeric key: 2 ** 32 - 1 is not an index
 window-indexed-properties.html	Indexed properties of the window object (non-strict mode)
+window-indexed-properties.html	Indexed properties of the window object (non-strict mode) 3
 window-properties.https.html	Constructor Properties of the Global Object
 window-properties.https.html	Constructor Property: Array
 window-properties.https.html	Constructor Property: Boolean
@@ -94,4 +98,61 @@ window-properties.https.html	Value Properties of the Global Object
 window-properties.https.html	Value Property: Infinity
 window-properties.https.html	Value Property: NaN
 window-properties.https.html	Value Property: undefined
+window-properties.https.html	Window attribute: onblur
+window-properties.https.html	Window attribute: onchange
+window-properties.https.html	Window attribute: onclick
+window-properties.https.html	Window attribute: onerror
+window-properties.https.html	Window attribute: onfocus
+window-properties.https.html	Window attribute: onhashchange
+window-properties.https.html	Window attribute: oninput
+window-properties.https.html	Window attribute: onkeydown
+window-properties.https.html	Window attribute: onkeypress
+window-properties.https.html	Window attribute: onkeyup
+window-properties.https.html	Window attribute: onload
+window-properties.https.html	Window attribute: onmessage
+window-properties.https.html	Window attribute: onmousedown
+window-properties.https.html	Window attribute: onmousemove
+window-properties.https.html	Window attribute: onmouseout
+window-properties.https.html	Window attribute: onmouseover
+window-properties.https.html	Window attribute: onmouseup
+window-properties.https.html	Window attribute: onoffline
+window-properties.https.html	Window attribute: ononline
+window-properties.https.html	Window attribute: onpopstate
+window-properties.https.html	Window attribute: onreset
+window-properties.https.html	Window attribute: onresize
+window-properties.https.html	Window attribute: onscroll
+window-properties.https.html	Window attribute: onsubmit
+window-properties.https.html	Window attribute: opener
+window-properties.https.html	Window attribute: status
 window-properties.https.html	Window interface
+window-properties.https.html	Window readonly attribute: frameElement
+window-properties.https.html	Window readonly attribute: history
+window-properties.https.html	Window readonly attribute: localStorage
+window-properties.https.html	Window readonly attribute: navigator
+window-properties.https.html	Window readonly attribute: sessionStorage
+window-properties.https.html	Window replaceable attribute: devicePixelRatio
+window-properties.https.html	Window replaceable attribute: external
+window-properties.https.html	Window replaceable attribute: innerHeight
+window-properties.https.html	Window replaceable attribute: innerWidth
+window-properties.https.html	Window replaceable attribute: length
+window-properties.https.html	Window replaceable attribute: locationbar
+window-properties.https.html	Window replaceable attribute: menubar
+window-properties.https.html	Window replaceable attribute: origin
+window-properties.https.html	Window replaceable attribute: outerHeight
+window-properties.https.html	Window replaceable attribute: outerWidth
+window-properties.https.html	Window replaceable attribute: pageXOffset
+window-properties.https.html	Window replaceable attribute: pageYOffset
+window-properties.https.html	Window replaceable attribute: parent
+window-properties.https.html	Window replaceable attribute: personalbar
+window-properties.https.html	Window replaceable attribute: screen
+window-properties.https.html	Window replaceable attribute: scrollX
+window-properties.https.html	Window replaceable attribute: scrollY
+window-properties.https.html	Window replaceable attribute: scrollbars
+window-properties.https.html	Window replaceable attribute: statusbar
+window-properties.https.html	Window replaceable attribute: toolbar
+window-properties.https.html	Window unforgeable attribute: document
+window-properties.https.html	Window unforgeable attribute: top
+window-properties.https.html	Window unforgeable attribute: window
+window-properties.https.html	constructor
+window-prototype-chain.html	Window.prototype
+window-prototype-chain.html	window object
