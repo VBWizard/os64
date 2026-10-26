@@ -2456,6 +2456,24 @@ static void input_forms(void) {
     check(status_says("background workers"),"input: an uncancelled submit sends the form after its listeners");
     probe_drop();
 }
+/* A button whose default action is nothing (no form, or type=button) is the
+ * page's script's to act on: its click runs, and the status line does not
+ * say the press was refused. */
+static void input_script_buttons(void) {
+    probe_page("<button id=loose>pdf</button><form action=/send><input name=q>"
+        "<button id=plain type=button>plain</button></form><p id=log>-</p>"
+        "<script>var log=[];function note(n){log.push(n);document.getElementById('log').textContent=log.join('|');}"
+        "document.getElementById('loose').onclick=function(){note('loose')};"
+        "document.getElementById('plain').onclick=function(){note('plain')};</script>",true);
+    script_turn();
+    os64_strcopy(g.status_text,sizeof(g.status_text),"-");
+    FormWidget *loose=probe_field("loose"),*plain=probe_field("plain");
+    button_clicked(loose->w,loose); inputs_run();
+    button_clicked(plain->w,plain); inputs_run();
+    check(probe_text_is("log","loose|plain") && !status_says("belongs to no form") && !status_says("submits nothing"),
+          "input: a formless button and a type=button are the script's, with no refusal on the status line");
+    probe_drop();
+}
 static void input_cases(void) {
     g.seq=2;g.key_seq=2;g.pressed_link=9;
     yonder_bar_raise(&g.bar,1);yonder_bar_settled(&g.bar);
@@ -2472,6 +2490,7 @@ static void input_cases(void) {
     input_attribute_backstop();
     input_hover();
     input_forms();
+    input_script_buttons();
 }
 
 /* ── THE STREAM (docs/design/pending/DOM_D4.md) ─────────────────────────

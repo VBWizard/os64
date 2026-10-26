@@ -6989,9 +6989,15 @@ static void form_send_as(int32_t control, os64_page_activation_t how, NavKind ki
     if (verdict == OS64_PAGE_FRAGMENT) {
         scroll_to_node(request.anchor);
     } else {
+        // A button with no form, or one whose type submits nothing, does
+        // nothing by HTML's own rule: on a page whose scripts run, what it
+        // does is theirs, and saying it refused would be wrong. Without
+        // scripts the sentence is why nothing happened.
+        bool scripts_own_it = scripts_live() && (request.reason == OS64_PAGE_REASON_NO_FORM ||
+                                                 request.reason == OS64_PAGE_REASON_NO_SUBMISSION);
         if (reason_refuses(request.reason))
             say_failed(g.page.diag, "form refused", os64_page_reason_name(request.reason));
-        else
+        else if (!scripts_own_it)
             status_rest(os64_page_reason_name(request.reason));
         FormWidget *failed = request.reason == OS64_PAGE_REASON_INVALID
                                  ? form_widget(request.control) : NULL;
