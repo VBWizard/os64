@@ -487,8 +487,30 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     /* NamedNodeMap's objects are no nodes, so its prototype is attr.c's. */
     JSValue map = d_attr_map_interface(dom, ctx);
     if (JS_IsException(map)) return -1;
-    return JS_DefinePropertyValueStr(ctx, global, "NamedNodeMap", map, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0
-        ? -1 : 0;
+    if (JS_DefinePropertyValueStr(ctx, global, "NamedNodeMap", map, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+        return -1;
+    /* The lists the nodes hand out, each over the prototype its objects
+     * already have (0f's P1b): a NodeList's (collection.c's static list
+     * prototype, which childNodes and getElementsByName have too), an
+     * HTMLCollection's (every other live collection), classList's and
+     * relList's DOMTokenList, dataset's DOMStringMap. None constructs. */
+    JSValue collection = JS_GetClassProto(ctx, dom->collection_class);
+    JSValue tokens = JS_GetClassProto(ctx, dom->token_class);
+    JSValue strings = JS_GetClassProto(ctx, dom->map_class);
+    const struct { const char *name; JSValueConst prototype; } kLists[] = {
+        {"NodeList", dom->static_list->value}, {"HTMLCollection", collection},
+        {"DOMTokenList", tokens}, {"DOMStringMap", strings},
+    };
+    for (size_t i = 0; result == 0 && i < sizeof(kLists) / sizeof(kLists[0]); i++) {
+        JSValue f = d_interface_new(ctx, kLists[i].name, 0, NULL, kLists[i].prototype, JS_UNDEFINED);
+        if (JS_IsException(f) ||
+            JS_DefinePropertyValueStr(ctx, global, kLists[i].name, f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+            result = -1;
+    }
+    JS_FreeValue(ctx, collection);
+    JS_FreeValue(ctx, tokens);
+    JS_FreeValue(ctx, strings);
+    return result;
 }
 
 JSValue d_interface_new(JSContext *ctx, const char *name, int length, JSCFunction *constructor,

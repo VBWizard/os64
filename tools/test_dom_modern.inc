@@ -154,6 +154,42 @@ static void dom_modern_cases(void)
         "bad=false;try{Text.prototype.splitText.call(document.createComment('c'),0)}catch(e){bad=e instanceof TypeError}"
         "assert(bad,'a Text member on a comment');",
         "modern-on-node-row");
+    /* 0f's P1b lists: NodeList apart from HTMLCollection, and the names of
+     * the token and string lists (ES5 TodoMVC patches NodeList.prototype). */
+    dom_script(&f, MODERN_ASSERT
+        "var b=document.body,box=document.createElement('div');b.appendChild(box);"
+        "box.innerHTML='<p class=k name=n>1</p><p class=k name=n>2</p>';"
+        "var cn=box.childNodes,qs=box.querySelectorAll('p'),byName=document.getElementsByName('n');"
+        "assert(cn instanceof NodeList&&!(cn instanceof HTMLCollection)&&qs instanceof NodeList&&byName instanceof NodeList,'NodeLists');"
+        "assert(box.children instanceof HTMLCollection&&box.getElementsByClassName('k') instanceof HTMLCollection&&"
+        "document.forms instanceof HTMLCollection&&!(box.children instanceof NodeList),'HTMLCollections');"
+        "assert(!('namedItem' in cn)&&'namedItem' in box.children&&cn.length===2&&cn.item(1)===box.lastChild&&qs.item(0)===box.firstChild);"
+        "assert(Object.getPrototypeOf(cn)===NodeList.prototype&&Object.getPrototypeOf(qs)===NodeList.prototype);"
+        "var seen=[];NodeList.prototype.forEach=function(f){for(var i=0;i<this.length;i++)f(this[i],i);seen.push('patched')};"
+        "qs.forEach(function(){});cn.forEach(function(){});assert(seen.join()==='patched,patched','a patch reaches both kinds');"
+        "NodeList.prototype.forEach=Array.prototype.forEach;"
+        "assert(Object.prototype.toString.call(qs)==='[object NodeList]'&&Object.prototype.toString.call(box.children)==='[object HTMLCollection]');"
+        "var bad=false;try{new NodeList()}catch(e){bad=e instanceof TypeError}assert(bad,'no constructor');"
+        "assert(b.classList instanceof DOMTokenList&&b.dataset instanceof DOMStringMap&&Object.getPrototypeOf(b.dataset)===DOMStringMap.prototype);"
+        "assert(typeof b.dataset.hasOwnProperty==='function','a dataset inherits Object.prototype');"
+        "var sel=document.createElement('select');"
+        "assert(sel.options instanceof HTMLOptionsCollection&&sel.options instanceof HTMLCollection&&"
+        "Object.getPrototypeOf(HTMLOptionsCollection)===HTMLCollection);",
+        "modern-on-lists");
+    /* DOMParser, HTML only, as ES5 TodoMVC renders its list */
+    dom_script(&f, MODERN_ASSERT
+        "var p=new DOMParser();assert(p instanceof DOMParser&&Object.prototype.toString.call(p)==='[object DOMParser]');"
+        "var d=p.parseFromString('<title>T</title><li data-id=1>one</li><li data-id=2>two</li><script>globalThis.ran=1<\\/script>','text/html');"
+        "assert(d.nodeType===9&&d!==document&&d.head.firstChild.textContent==='T'&&d.body.children.length===3,'head and body as a document parse puts them');"
+        "assert(typeof globalThis.ran==='undefined','its script never runs');"
+        "var ul=document.createElement('ul');document.body.appendChild(ul);ul.appendChild(document.createElement('i'));"
+        "ul.replaceChildren(...p.parseFromString('<li>a</li><li>b</li>','text/html').body.childNodes);"
+        "assert(ul.children.length===2&&ul.lastChild.textContent==='b'&&ul.lastChild.ownerDocument===document,'ES5 TodoMVC renders so');"
+        "var bad=false;try{p.parseFromString('<a/>','text/xml')}catch(e){bad=e.name==='NotSupportedError'}assert(bad,'XML is not parsed');"
+        "bad=false;try{p.parseFromString('x','text/plain')}catch(e){bad=e instanceof TypeError}assert(bad,'not a parser type');"
+        "bad=false;try{DOMParser()}catch(e){bad=e instanceof TypeError}assert(bad,'a constructor only');"
+        "bad=false;try{DOMParser.prototype.parseFromString.call({},'x','text/html')}catch(e){bad=e instanceof TypeError}assert(bad,'its own');",
+        "modern-on-dom-parser");
     /* 0f's P1a select row: React's option updater first, as it runs. */
     dom_script(&f, MODERN_ASSERT
         "var h=document.createElement('div');document.body.appendChild(h);"

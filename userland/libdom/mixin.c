@@ -1077,6 +1077,12 @@ int d_mixin_install(os64_dom_t *dom, JSContext *ctx)
     DValue *token_prototype = d_retain(dom, ctx, tokens);
     if (token_prototype == NULL) return -1;
     JS_SetClassProto(ctx, dom->token_class, JS_DupValue(ctx, tokens));
+    /* DOMStringMap's prototype, which a dataset inherits as WebIDL makes an
+     * interface's prototype inherit Object.prototype (its named properties
+     * are the dataset's exotic's); the interfaces row names it. */
+    JSValue strings = JS_NewObject(ctx);
+    if (d_retain(dom, ctx, strings) == NULL) return -1;
+    JS_SetClassProto(ctx, dom->map_class, JS_DupValue(ctx, strings));
     for (size_t i = 0; i < sizeof(members) / sizeof(members[0]); i++)
         if ((members[i].accessor
                 ? d_accessor(dom, ctx, tokens, members[i].name, token_method, members[i].magic, members[i].writable)

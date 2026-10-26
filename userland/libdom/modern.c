@@ -25,7 +25,8 @@ typedef struct {
 
 static const DModernRow kModern[] = {
     {(const char *const[]){"Node", "CharacterData", "Text", "Comment", "DocumentFragment", "Document",
-                           "DocumentType", "Attr", "NamedNodeMap", "Element", "SVGElement",
+                           "DocumentType", "Attr", "NamedNodeMap", "NodeList", "HTMLCollection",
+                           "DOMTokenList", "DOMStringMap", "Element", "SVGElement",
                            "HTMLElement", "HTMLFormElement", "HTMLInputElement",
                            "HTMLTextAreaElement", "HTMLSelectElement", "HTMLOptionElement",
                            "HTMLOptGroupElement", "HTMLButtonElement",
@@ -50,7 +51,7 @@ static const DModernRow kModern[] = {
     {(const char *const[]){"TextEncoder", "TextDecoder", NULL}, d_encoding_install},
     {(const char *const[]){"screen", "devicePixelRatio", "Screen", "ScreenOrientation", NULL}, d_screen_install},
     {(const char *const[]){"btoa", "atob", NULL}, d_base64_install},
-    {(const char *const[]){"DOMImplementation", NULL}, d_implementation_install},
+    {(const char *const[]){"DOMImplementation", "DOMParser", NULL}, d_implementation_install},
     {(const char *const[]){"DOMException", NULL}, d_exception_install},
     {(const char *const[]){"AbortController", "AbortSignal", NULL}, d_abort_install},
     {(const char *const[]){"Blob", "File", "FormData", NULL}, d_blob_install},
@@ -86,7 +87,9 @@ static const DModernRow kModern[] = {
     /* 0f's P1a: members of Node's, Attr's and Text's prototypes, none of
      * window's (as P1-Da's row). */
     {(const char *const[]){NULL}, d_nodes_install},
-    {(const char *const[]){"Option", NULL}, d_options_install},
+    /* After the interfaces row, whose HTMLCollection its
+     * HTMLOptionsCollection inherits. */
+    {(const char *const[]){"Option", "HTMLOptionsCollection", NULL}, d_options_install},
 };
 
 int d_modern_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)

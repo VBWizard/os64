@@ -183,6 +183,9 @@ JSValue d_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *ro
     return JS_DupValue(ctx, object);
 }
 
+static JSValue as_node_list(os64_dom_t *dom, JSContext *ctx, JSValue collection);
+
+/* children is an HTMLCollection, childNodes a NodeList. */
 JSValue d_children(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root,
                    bool elements)
 {
@@ -192,6 +195,7 @@ JSValue d_children(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root
     DQuery *query = elements ? entry->children : entry->child_nodes;
     if (query != NULL) return JS_DupValue(ctx, query->entry->value);
     JSValue value = d_collection(dom, ctx, root, false, elements, NULL);
+    if (!elements) value = as_node_list(dom, ctx, value);
     if (JS_IsException(value)) return value;
     query = JS_GetOpaque(value, dom->collection_class);
     if (elements) entry->children = query;
@@ -439,19 +443,49 @@ static JSValue static_item(JSContext *ctx, JSValueConst self, int argc,
     return index < length ? JS_GetPropertyUint32(ctx, self, index) : JS_NULL;
 }
 
-/* THE STATIC NODELIST querySelectorAll answers with: what matched when it
+/* NodeList's item() for both kinds: a live one (childNodes,
+ * getElementsByName) answers as a collection does, a static one from its
+ * own indices. */
+static JSValue node_list_item(JSContext *ctx, JSValueConst self, int argc,
+                              JSValueConst *argv, int magic, JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    if (JS_GetOpaque(self, dom->collection_class) != NULL)
+        return collection_method(ctx, self, argc, argv, 1, data);
+    return static_item(ctx, self, argc, argv, magic, data);
+}
+
+/* NODELIST'S PROTOTYPE (DOM § 4.2.10.1), which both kinds of NodeList have.
+ * THE STATIC NODELIST querySelectorAll answers with: what matched when it
  * was asked, never refreshed. So it is an ordinary object, its elements
- * fixed own indices and its `length` fixed, owned by the engine like any
- * value a script makes. Kept in the registry as a live collection is, a
- * page asking in a loop would hold every answer it ever had until it left. */
+ * fixed own indices and its `length` fixed (its own, over the prototype's
+ * accessor), owned by the engine like any value a script makes. Kept in
+ * the registry as a live collection is, a page asking in a loop would hold
+ * every answer it ever had until it left. A live NodeList is a collection
+ * (childNodes, getElementsByName) given this prototype, whose `length` and
+ * item() answer it as a collection's do; it has no namedItem, which is
+ * HTMLCollection's. */
 int d_static_list_install(os64_dom_t *dom, JSContext *ctx)
 {
     if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return -1;
     JSValue prototype = JS_NewObject(ctx);
     dom->static_list = d_retain(dom, ctx, prototype);
     if (dom->static_list == NULL) return -1;
-    if (d_method(dom, ctx, prototype, "item", static_item, 1, 0) < 0) return -1;
+    if (d_accessor(dom, ctx, prototype, "length", collection_method, 0, false) < 0 ||
+        d_method(dom, ctx, prototype, "item", node_list_item, 1, 0) < 0) return -1;
     return d_iterable(ctx, prototype, true);
+}
+
+/* A live collection that is a NodeList, not an HTMLCollection. */
+static JSValue as_node_list(os64_dom_t *dom, JSContext *ctx, JSValue collection)
+{
+    if (JS_IsException(collection)) return collection;
+    if (JS_SetPrototype(ctx, collection, dom->static_list->value) < 0) {
+        JS_FreeValue(ctx, collection);
+        return JS_EXCEPTION;
+    }
+    return collection;
 }
 
 /* Selectors API (DOM § ParentNode): the elements among `root`'s descendants,
@@ -581,5 +615,7 @@ JSValue d_attribute_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_
     JSValue result = d_special_collection(dom, ctx, root, by_name ? D_QUERY_NAME : D_QUERY_CLASSES,
                                           string.data);
     d_string_free(dom, &string);
-    return result;
+    /* getElementsByName's answer is a NodeList, getElementsByClassName's an
+     * HTMLCollection. */
+    return by_name ? as_node_list(dom, ctx, result) : result;
 }

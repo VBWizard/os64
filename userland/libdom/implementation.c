@@ -388,10 +388,85 @@ int d_implementation_classic(os64_dom_t *dom, JSContext *ctx)
 
 /* The Modern Web table's row (modern.c): the interface object that names
  * DOMImplementation's prototype, which the classic surface made. */
+/* ── DOMParser (HTML § 8.5.1), HTML only ──────────────────────────────── */
+
+static JSClassID parser_slot;
+
+/* `new DOMParser()`: an object of the parser's class, which carries no
+ * state, with new.target's prototype (a subclass's) or DOMParser's. */
+static JSValue parser_construct(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
+{
+    (void)argc; (void)argv;
+    if (d_binding(ctx) == NULL) return JS_EXCEPTION;
+    JSClassID id = os64_js_class_id(&parser_slot);
+    JSValue prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
+    if (JS_IsException(prototype)) return prototype;
+    JSValue made = JS_IsObject(prototype) ? JS_NewObjectProtoClass(ctx, prototype, id) : JS_NewObjectClass(ctx, (int)id);
+    JS_FreeValue(ctx, prototype);
+    if (!JS_IsException(made)) JS_SetOpaque(made, &parser_slot);
+    return made;
+}
+
+/* parseFromString(string, type): for "text/html", a new HTML document of
+ * the string, parsed with scripting off (HTML's "parse HTML from a
+ * string": a script in it is born started and never runs, and noscript is
+ * markup). The string is parsed in an `html` element's context, which puts
+ * the head's and the body's content where a whole document's parse would;
+ * a doctype in it is not kept, so the document is in no-quirks mode. The
+ * XML types are a NotSupportedError: there is no XML parser (DEBTS.md). */
+static JSValue parse_from_string(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                                 JSValue *data)
+{
+    (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    if (JS_GetOpaque(self, os64_js_class_id(&parser_slot)) == NULL) return JS_ThrowTypeError(ctx, "Expected a DOMParser");
+    if (argc < 2) return JS_ThrowTypeError(ctx, "parseFromString needs a string and a type");
+    DString text = {0}, type = {0};
+    if (!d_string(dom, ctx, argv[0], &text)) return JS_EXCEPTION;
+    if (!d_string(dom, ctx, argv[1], &type)) { d_string_free(dom, &text); return JS_EXCEPTION; }
+    static const char *const kTypes[] = {"text/html", "text/xml", "application/xml", "application/xhtml+xml",
+                                         "image/svg+xml"};
+    int kind = -1;
+    for (int i = 0; i < 5 && kind < 0; i++)
+        if (os64_streq(type.data != NULL ? type.data : "", kTypes[i])) kind = i;
+    d_string_free(dom, &type);
+    JSValue result;
+    if (kind < 0) result = JS_ThrowTypeError(ctx, "Not a DOMParserSupportedType");
+    else if (kind > 0) result = d_error(ctx, "NotSupportedError", "DOMParser parses HTML only");
+    else {
+        int64_t status = OS64_HTML_OK;
+        os64_html_document_t *doc = dom->document;
+        os64_html_node_t *document = document_made(dom, ctx), *html = NULL, *fragment = NULL;
+        bool built = document != NULL &&
+            (html = made(ctx, os64_html_create_element(doc, OS64_HTML_NS_HTML, "html", &status), &status)) != NULL &&
+            (status = os64_html_insert(doc, document, html, NULL)) == OS64_HTML_OK &&
+            (fragment = made(ctx, os64_html_parse_fragment(doc, html, text.data != NULL ? text.data : "", text.length,
+                                                           false, &status), &status)) != NULL;
+        if (built && d_script_mark_tree(dom, fragment) < 0) { status = OS64_HTML_NO_MEMORY; built = false; }
+        if (built) status = os64_html_insert(doc, html, fragment, NULL);
+        if (built && status == OS64_HTML_OK) result = document_new(dom, ctx, document, D_DOCUMENT_HTML);
+        else result = document == NULL || JS_HasException(ctx) ? JS_EXCEPTION : d_html_error(ctx, status);
+    }
+    d_string_free(dom, &text);
+    return result;
+}
+
 int d_implementation_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     JSValue f = d_interface_new(ctx, "DOMImplementation", 0, NULL, dom->implementation_prototype->value,
                                 JS_UNDEFINED);
-    if (JS_IsException(f)) return -1;
-    return JS_DefinePropertyValueStr(ctx, global, "DOMImplementation", f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+    if (JS_IsException(f) ||
+        JS_DefinePropertyValueStr(ctx, global, "DOMImplementation", f, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+        return -1;
+    static const JSClassDef parser_definition = {.class_name = "DOMParser"};
+    JSClassID id = os64_js_class_id(&parser_slot);
+    if (!JS_IsRegisteredClass(dom->engine, id) && JS_NewClass(dom->engine, id, &parser_definition) < 0) return -1;
+    JSValue prototype = JS_NewObject(ctx);
+    if (d_retain(dom, ctx, prototype) == NULL) return -1;
+    JS_SetClassProto(ctx, id, JS_DupValue(ctx, prototype));
+    if (d_method(dom, ctx, prototype, "parseFromString", parse_from_string, 2, 0) < 0) return -1;
+    JSValue parser = d_interface_new(ctx, "DOMParser", 0, parser_construct, prototype, JS_UNDEFINED);
+    if (JS_IsException(parser)) return -1;
+    return JS_DefinePropertyValueStr(ctx, global, "DOMParser", parser, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
 }

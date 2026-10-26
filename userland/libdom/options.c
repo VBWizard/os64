@@ -476,9 +476,9 @@ int d_options_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         if (d_method(dom, ctx, select, kSelectMethods[i].name, select_member, kSelectMethods[i].argc,
                      kSelectMethods[i].magic) < 0)
             return -1;
-    /* HTMLOptionsCollection.prototype, over a collection's; its interface
-     * object waits for HTMLCollection's (INTERFACES_FORMS.md P1b), which it
-     * would inherit. */
+    /* HTMLOptionsCollection.prototype, over a collection's (HTMLCollection's,
+     * whose interface object the interfaces row, which runs first, put on
+     * window); its interface object inherits that one. */
     JSValue collection = JS_GetClassProto(ctx, dom->collection_class);
     JSValue options = JS_NewObjectProto(ctx, collection);
     JS_FreeValue(ctx, collection);
@@ -488,8 +488,15 @@ int d_options_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     if (d_accessor(dom, ctx, options, "length", select_member, C_LENGTH, true) < 0 ||
         d_accessor(dom, ctx, options, "selectedIndex", select_member, C_SELECTED_INDEX, true) < 0 ||
         d_method(dom, ctx, options, "add", select_member, 1, C_ADD) < 0 ||
-        d_method(dom, ctx, options, "remove", select_member, 1, C_REMOVE) < 0 ||
-        d_string_tag(ctx, options, "HTMLOptionsCollection") < 0)
+        d_method(dom, ctx, options, "remove", select_member, 1, C_REMOVE) < 0)
+        return -1;
+    JSValue parent = JS_GetPropertyStr(ctx, global, "HTMLCollection");
+    if (JS_IsException(parent)) return -1;
+    JSValue interface = d_interface_new(ctx, "HTMLOptionsCollection", 0, NULL, options, parent);
+    JS_FreeValue(ctx, parent);
+    if (JS_IsException(interface) ||
+        JS_DefinePropertyValueStr(ctx, global, "HTMLOptionsCollection", interface,
+                                  JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
         return -1;
     /* Option: its `prototype` is HTMLOptionElement's, whose `constructor`
      * stays HTMLOptionElement (WebIDL § 3.7.2, a legacy factory function). */
