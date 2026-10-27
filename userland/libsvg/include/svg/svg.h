@@ -136,8 +136,10 @@ typedef struct {
     svg_status_t (*shape)(void *, void *snapshot, const svg_style_request_t *, svg_shape_t *);
     /* Required for displayed USE nodes, whose first_child must be zero.
      * Return one source (zero for an empty reference); its next_sibling is
-     * excluded from the instance. Active-ancestry reference cycles are empty.
-     * Source identity remains shared; style receives fresh instance ancestry.
+     * excluded from the instance. A loop containing a reference edge suppresses
+     * the repeated occurrence, retaining ordinary siblings; child-only loops
+     * remain provider errors. Source identity stays shared; style receives
+     * fresh instance ancestry.
      * Resolve inside the pinned snapshot and honor the processing mode. */
     svg_status_t (*reference)(void *, void *snapshot, const svg_style_request_t *, uint64_t *source);
 } svg_provider_t;

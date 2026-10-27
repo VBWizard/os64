@@ -20,7 +20,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     source, output = args.native.resolve(), args.output.resolve()
-    if 'SVG use: 24 exact expanded references' not in (source/'results.txt').read_text():
+    if 'SVG use: 26 exact expanded references' not in (source/'results.txt').read_text():
         raise ValueError('native use suite did not complete')
     provenance = json.loads((source/'provenance.json').read_text())
     if output.exists() and any(output.iterdir()):
@@ -31,7 +31,7 @@ def main():
         (pages/page.name).write_bytes(page.read_bytes())
     records = []
     with Capture(pages, width=128, height=128) as browser:
-        for i in range(24):
+        for i in range(26):
             base = f'use-{i:02}'
             native = output/(base+'-native.png')
             with Image.open(source/(base+'.ppm')) as im:

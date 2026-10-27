@@ -131,29 +131,33 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
         ++visits;
         uint64_t source = frame->next;
         size_t parent = frame->parent;
-        /* Check the active ancestry, not a document-global visited set: the
-         * same source can occur in distinct use instances. */
-        for (size_t i = 1; i < depth; ++i) {
+        /* Classify the whole loop, not just its closing edge. A use expansion
+         * can close through a source child; a reference above a malformed
+         * child-only loop does not make that loop valid. */
+        bool reference_on_path = false, cycle = false;
+        for (size_t i = depth; i-- > 1;) {
             if (!svg_spend(c, 1)) {
                 status = c->why;
                 goto done;
             }
+            reference_on_path |= stack[i].reference;
             if (scene->items[stack[i].parent].source == source) {
-                if (frame->reference) {
-                    frame->next = 0;
-                    break;
+                if (!reference_on_path) {
+                    status = SVG_PROVIDER_ERROR;
+                    goto done;
                 }
-                status = SVG_PROVIDER_ERROR;
-                goto done;
+                cycle = true;
+                break;
             }
         }
-        if (!frame->next)
-            continue;
         svg_node_t node = {0};
         status = provider_status(provider->node(provider->context, scene->snapshot, source, &node));
         if (status != SVG_OK)
             break;
         frame->next = parent == SIZE_MAX || frame->reference ? 0 : node.next_sibling;
+        // Empty the repeated occurrence, preserving its ordinary siblings.
+        if (cycle)
+            continue;
         svg_style_request_t request = {
             .source = source,
             .instance = visits,

@@ -298,7 +298,7 @@ static void arc_accuracy(void)
 
 typedef struct {
     Ledger *ledger;
-    svg_node_t nodes[5];
+    svg_node_t nodes[10];
     size_t acquired, released;
     size_t chain;
     bool suppress, hidden, unsupported, cyclic, pending, malformed, shaped;
@@ -331,7 +331,7 @@ static svg_status_t node(void *user, void *snapshot, uint64_t source, svg_node_t
                             source == p->chain ? 0 : source + 1, 0};
         return SVG_OK;
     }
-    CHECK(source < 5);
+    CHECK(source < 10);
     *out = p->nodes[source];
     if (source == 2 && p->unsupported)
         out->kind = SVG_NODE_UNSUPPORTED;
@@ -506,6 +506,70 @@ static void instances(void)
     svg_scene_items(scene, &count);
     CHECK(count == 3);
     CHECK(svg_scene_release(c, scene) == SVG_OK);
+    CHECK(p.acquired == p.released);
+    CHECK(svg_destroy(c) == SVG_OK && !l.live);
+}
+static svg_status_t cycle_reference(void *user, void *snapshot, const svg_style_request_t *r,
+                                    uint64_t *source)
+{
+    CHECK(user == snapshot);
+    CHECK(r->source == 2 || r->source == 4 || r->source == 5);
+    *source = r->source + 1;
+    return SVG_OK;
+}
+static svg_status_t cycle_style(void *user, void *snapshot, const svg_style_request_t *r,
+                                svg_style_t *s, svg_string_t *d)
+{
+    svg_status_t status = style(user, snapshot, r, s, d);
+    if (r->source >= 7)
+        *d = (svg_string_t){"M0 0H8V8Z", 9};
+    return status;
+}
+static void descendant_cycles(void)
+{
+    Ledger l = {0};
+    svg_context_t *c = context(&l);
+    Provider p = provider(&l);
+    p.nodes[1] = (svg_node_t){SVG_NODE_GROUP, 2, 0};
+    p.nodes[2] = (svg_node_t){SVG_NODE_USE, 0, 9};
+    p.nodes[3] = (svg_node_t){SVG_NODE_GROUP, 4, 8};
+    p.nodes[4] = (svg_node_t){SVG_NODE_USE, 0, 0};
+    p.nodes[5] = (svg_node_t){SVG_NODE_USE, 0, 0};
+    p.nodes[6] = (svg_node_t){SVG_NODE_GROUP, 7, 0};
+    p.nodes[7] = (svg_node_t){SVG_NODE_PATH, 0, 3};
+    p.nodes[8] = (svg_node_t){SVG_NODE_PATH, 0, 0};
+    p.nodes[9] = (svg_node_t){SVG_NODE_PATH, 0, 0};
+    svg_provider_t cb = callbacks(&p);
+    cb.style = cycle_style;
+    cb.reference = cycle_reference;
+    svg_scene_t *scene = NULL;
+    size_t before = l.allocations, polls = l.polls, count;
+    // 3 -> 4 -> 5 -> 6 -> 3 closes on an ordinary child edge. Keep the
+    // geometry before/after that edge and the unrelated outer sibling.
+    CHECK(svg_scene_prepare(c, &cb, SVG_MODE_INLINE, &identity, &scene) == SVG_OK);
+    size_t calls = l.allocations - before;
+    polls = l.polls - polls;
+    const svg_scene_item_t *items = svg_scene_items(scene, &count);
+    CHECK(count == 9);
+    for (size_t i = 0; i < count; ++i)
+        CHECK(items[i].source == i + 1);
+    CHECK(items[6].parent == 5 && items[7].parent == 5 && items[8].parent == 0);
+    CHECK(items[6].path && items[7].path && items[8].path);
+    CHECK(svg_scene_release(c, scene) == SVG_OK);
+    for (size_t i = 1; i <= calls; ++i) {
+        l.fail = l.allocations + i;
+        CHECK(svg_scene_prepare(c, &cb, SVG_MODE_IMAGE, &identity, &scene) == SVG_NO_MEMORY && !scene);
+        l.fail = 0;
+    }
+    for (size_t i = 1; i <= polls; ++i) {
+        l.cancel = l.polls + i;
+        CHECK(svg_scene_prepare(c, &cb, SVG_MODE_IMAGE, &identity, &scene) == SVG_CANCELLED && !scene);
+        l.cancel = 0;
+    }
+    // A reference above a purely ordinary child loop must not conceal a
+    // malformed provider graph: the loop itself contains no reference edge.
+    p.nodes[7] = (svg_node_t){SVG_NODE_GROUP, 7, 0};
+    CHECK(svg_scene_prepare(c, &cb, SVG_MODE_INLINE, &identity, &scene) == SVG_PROVIDER_ERROR && !scene);
     CHECK(p.acquired == p.released);
     CHECK(svg_destroy(c) == SVG_OK && !l.live);
 }
@@ -878,6 +942,7 @@ int main(void)
     arc_accuracy();
     scenes();
     instances();
+    descendant_cycles();
     failures();
     boundaries();
     backend();

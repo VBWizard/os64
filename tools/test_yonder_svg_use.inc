@@ -76,6 +76,17 @@ static void use_cases(const char *dir)
          "height='24'/></g></defs><use href='#r' x=8 y=8 opacity='.5' fill='blue'/>",
          "<g transform='translate(8 8)' opacity='.5'><g opacity='.5' fill=blue><rect width=24 "
          "height='24'/><rect x=8 y=8 width=24 height='24'/></g></g>"},
+        {"<defs><g id=a><g id=b><use href='#c'/></g></g><use id=c href='#a'/></defs>"
+         "<use href='#b'/><rect x=8 y=8 width=16 height=16 fill='blue'/>",
+         "<rect x=8 y=8 width=16 height=16 fill='blue'/>"},
+        {"<defs><g id=a><rect x=40 width=16 height=16 fill='red'/>"
+         "<g id=b><rect x=20 width=16 height=16 fill='orange'/><use href='#c'/>"
+         "<rect x=60 width=16 height=16 fill='green'/></g>"
+         "<rect x=80 width=16 height=16 fill='purple'/></g><use id=c href='#a'/></defs>"
+         "<use href='#b'/><rect y=32 width=16 height=16 fill='blue'/>",
+         "<rect x=20 width=16 height=16 fill='orange'/><rect x=40 width=16 height=16 fill='red'/>"
+         "<rect x=60 width=16 height=16 fill='green'/><rect x=80 width=16 height=16 fill='purple'/>"
+         "<rect y=32 width=16 height=16 fill='blue'/>"},
     };
     SvgLedger l = {.cap = 64 << 20};
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {

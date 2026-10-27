@@ -4023,7 +4023,7 @@ groups and nested uses, with separate instance ancestry and bounded expansion.
 The source keeps its identity; inherited color, paint and geometry come from
 the copy's parent. A source edit repaints uses in different SVG roots. The new
 `/tests/pages/svg-use.html` gallery demonstrates that with a reversible button.
-Twenty-four exact expanded references, 72 expected Chromium outcomes,
+Twenty-six exact expanded references, 78 expected Chromium outcomes,
 allocation-failure sweeps and a real-window mutation regression cover this
 increment. Referenced viewports and per-instance variable substitution remain
 explicit profile limits; this does not complete static SVG.

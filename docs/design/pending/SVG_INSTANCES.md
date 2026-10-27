@@ -15,9 +15,12 @@ snapshot-local identity; each visit receives a new instance identity and
 its actual instance parent's identity/style. The provider structure grows;
 rebuild consumers and install the matching library cohort together.
 
-The existing ancestry check distinguishes reference edges from ordinary
-child edges. A reference to an active ancestor is empty, while a malformed
-provider child cycle remains `SVG_PROVIDER_ERROR`. Each reference, visit
+The ancestry check examines the edges from the current occurrence back to
+its nearest matching ancestor. If that loop contains a reference edge, the
+repeated occurrence is suppressed, including when an ordinary child closes
+the loop. Its ordinary siblings remain eligible for traversal. A child-only
+loop remains `SVG_PROVIDER_ERROR`, even when a reference above the loop led
+to that subtree. Each reference, visit
 and ancestry comparison spends work; depth, visits and allocations retain
 the library limits. Missing callbacks and callback refusals unwind the
 scene, owned paths/dashes and snapshot pin. Use containers participate in
@@ -43,8 +46,9 @@ path, shape or group. The root flow transform/opacity boundary is unchanged.
 Only fragment hrefs are admitted. The adapter decodes percent escapes,
 looks up the first matching ID in document order, and can find artwork in
 another SVG root. Template contents remain separate trees. An unresolved
-ID, a first matching non-SVG node, an empty href, a self/DOM-ancestor
-reference or an active expansion cycle paints no referenced content.
+ID, a first matching non-SVG node, an empty href or a self/DOM-ancestor
+reference paints no referenced content. An active expansion cycle suppresses
+the repeated occurrence while preserving non-cyclic sibling artwork.
 An href attribute takes precedence over xlink:href even when empty.
 
 External hrefs return `SVG_UNSUPPORTED`; the adapter issues no fetches.
@@ -105,15 +109,15 @@ establish general SVG conformance or a page-scale performance guarantee.
 
 ## Recorded results
 
-- Native core: **151,145 checks**.
+- Native core: **155,998 checks**.
 - Painter: **1,241,506 assertions**, including allocation/cancellation sweeps.
-- Adapter: **24 exact instance/expanded pairs**, **266 allocation cuts** in both
+- Adapter: **26 exact instance/expanded pairs**, **266 allocation cuts** in both
   refusal modes; the existing 35 stroke and 19 shape fixtures also pass.
 - Window/scripts: **8,258 checks, zero failures**, including cross-root mutation.
 - Full CSS host suite passes; libpage: **254,176 checks, zero failures** and
   **399 allocation cuts**. ASan, UBSan and LeakSanitizer enabled.
-- Pinned Chromium **140.0.7339.16**, Playwright **1.55.0**: **72/72 expected
-  outcomes**, including 24 rejected shifted controls. The
+- Pinned Chromium **140.0.7339.16**, Playwright **1.55.0**: **78/78 expected
+  outcomes**, including 26 rejected shifted controls. The
   [machine-readable record](../../svg-evidence/use-results.json) carries
   source/binary hashes and comparison bounds.
 - Freestanding Yonder and flowdump build succeeds. The `eq` helper was renamed
@@ -126,6 +130,14 @@ establish general SVG conformance or a page-scale performance guarantee.
   the copies, including their cousins in the other SVG root. The 400% zoom
   check also passes. This is interactive hardware validation, not a measured
   frame-rate or timed-animation claim.
+
+The descendant-cycle review regression first reproduced `SVG_PROVIDER_ERROR`
+with no output pixels. The corrected traversal passes that example and a
+second fixture retaining artwork before/after the closing child edge and
+outside the expansion. Both match Chromium exactly. Native checks also reject
+a child-only loop inside referenced content and sweep allocation/cancellation
+failures through the mixed-edge cycle. The correction passes the freestanding
+build; the guest/P5 captures below record the original gallery checkpoint.
 
 Guest captures: [initial](../../svg-evidence/yonder-use-top.png),
 [changed source](../../svg-evidence/yonder-use-changed.png),

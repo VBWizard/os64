@@ -14,7 +14,7 @@
     "colorScheme": "light",
     "fonts": "recorded per capture; fixtures contain no text"
   },
-  "native_binary_sha256": "76ef6e195700181363e5d110b19eee45428aa2ea89f31bdb6a22e9b94194f700",
+  "native_binary_sha256": "86cb2e7acf0e2cbdad4ab4c5f05f9ad5db9e647783daf3826cac9e38b67a33ad",
   "native_inputs": {
     "abi/include/os64/ansi.h": "c9202b2b7a0e930e65a7c4b2d74e07e9ab48c0f804694b7aa57763beafdf2b65",
     "abi/include/os64/appearance.h": "3c7ff8f72ee55668b2fee8dec93c10ef327f87e2830536eb014d048cd71d7927",
@@ -58,7 +58,7 @@
     "tools/test_yonder_host.sh": "f2f33c582ae4546c30d924f40df2ed9a46a001e5bd811151b9fd98bdf2696c74",
     "tools/test_yonder_replay_fs.h": "a4bbff32ca3d6e7ae83958b473523b64bfb1b1d021658dd31f3d3ddb7e6670a9",
     "tools/test_yonder_svg.c": "f77df7a5e765e3c94f476437369094338fa998621235e53de7f7133eed9b5127",
-    "tools/test_yonder_svg_use.inc": "3cafb5ad6207d7050c3237395be352181e6ac1ecadd0f6ad0b8043d89e2559cf",
+    "tools/test_yonder_svg_use.inc": "54e1bb94d086b784a78a6cb2eda09021695099244b28a9ff3fa27d3468835714",
     "tools/tls_engine_fixture.h": "6f760e666c51221c70188543ee5ebbbad004da71f6dca5a8ed843a75226e57cb",
     "tools/yonder_host_menus.h": "4953aa50e04bbba861ede1d2ad1de270978662e6d2e40d96518b843f285c2c87",
     "userland/apps/yonder/agent.c": "b9a2160d0d6906da91536c3bbb423f8fcef2b400167ca961111e5db0a3aa247d",
@@ -90,7 +90,7 @@
     "userland/apps/yonder/settings.h": "f1b5f8878229b83dd60bea01bd3ddb9b15b80de42d28fafdddc95c1a1ed8a019",
     "userland/apps/yonder/sheet.h": "8210252131d97aaa5185759535f5b89838ba805bd6e4366ad02490e31ad648e8",
     "userland/apps/yonder/storage.h": "745ef1e693a9dbf474ad89506f64c480380bcbbe2e5c1dd5cdc0ac0fa56e3011",
-    "userland/apps/yonder/svg.c": "c54e24375bd5a19fb912a2ede037e762e9cc35c511ea7833630aaa80ae18deb9",
+    "userland/apps/yonder/svg.c": "c668af3fd2fde8c90a9e515a2f342850443fc966a54a9cd37362a79d23eb3386",
     "userland/apps/yonder/svg.h": "7cc85fcd5ccce33d8acce633c9a73efa71985276f5f4c687b35d45c6cfd95190",
     "userland/apps/yonder/ticker.h": "b77007838486b293f2b55551403d1dbbed879d71cd44b908a2e955bf092cd780",
     "userland/apps/yonder/trip.h": "2b80dd8b74c46777847983b544ccdb0c7e0dcb092361e320cc38436c379d8e39",
@@ -618,12 +618,12 @@
     "userland/libpage/value.c": "9f8aec2a2e610456745a5c40f29674a22e6f33e03e1b4263bcdc4ab75df55f5c",
     "userland/libsvg/core.c": "25fa06819e7ae710708d973124e318f66495fb36fcc0e730913a82c61ee1145b",
     "userland/libsvg/geometry.c": "98c4fe1b1eb8311a91cb8dc4ff037f3c4392ae6087bdaaef908121560b4994ad",
-    "userland/libsvg/include/svg/svg.h": "43776b84dbbeb3b1afbe73e0a58122528b4348178a1ae28f5312c1471c03e0f9",
+    "userland/libsvg/include/svg/svg.h": "e9ad736c0570b9010d3959c2ab228d4605a8859cba1a482a03a38e7e5127ca55",
     "userland/libsvg/internal.h": "aa320b09a5d7aa646e62ccbc5bc1b29ab87b460d35432ce410b50f8bde7a0f26",
     "userland/libsvg/library.mk": "c8df2e9e03b28c5ddf4029e113de2849f8d33641a6d1a3c1baad6e17a0ccd0ce",
     "userland/libsvg/paint.c": "d7abc075d961d6dfb4094af6737f868a2018d87a0ab341d0a6f5678ed5d6dc28",
     "userland/libsvg/path.c": "78ad6a3c53936b793f9008de069663a3f84980a148c58a725c606dac3a2b18b6",
-    "userland/libsvg/scene.c": "a0b3a103b4ec2c88830efb031f6d58afd6d7b9e640fd84829bc4b82ed80dad29",
+    "userland/libsvg/scene.c": "d7ff866fdc892ec6e9cec9596312e4dcbfe6946ca650f4c1fc3a40c2aa586201",
     "userland/libsvg/stroke.c": "60e693bb95a26511323686091acf4024143a41e81b2f0f82bb823c0a6534f3a3",
     "userland/libtls/include/tls/tls.h": "f72a2d77f09a0030121e585d6b77a8e43819bfbe68f7cecefe8d497123659084",
     "userland/libtls/include/tls/transport.h": "eb8c3f2c1c387825f118d90be1eca3fdd930748ec32e2c2b2c2716a4b0196142",
@@ -2432,6 +2432,156 @@
       "source_sha256": "dc8af5446210c18bca03d7727ce8c4740e4b21186dc77d2214f0848d663648ef",
       "native_sha256": "d9138fba8c4ca1432d96e515ba38a25db362413cd12cbe6c8f1fa5d5a15fdc9c",
       "browser_sha256": "d1c0624de4220836f1974e2de17be1db1c6cb1b6b7bb143dd2c55d22203818f4",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 24,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "011abe3a80537b5ddd5a1839b75448b17358ac9489ae02f3d556e866534b505b",
+      "native_sha256": "8f7b53c89602b5c6598671c76fca84983da47ca581579b8cd5dbc9cc6caff361",
+      "browser_sha256": "ab65a31fa22b0b136b582da252f46e2d20100ff516a4310b1d891382a3ce80cc",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 24,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "e5215f752574efeb53eacaa00b746c1d1a921c3ade17dbf6c4571191b5021567",
+      "native_sha256": "8f7b53c89602b5c6598671c76fca84983da47ca581579b8cd5dbc9cc6caff361",
+      "browser_sha256": "ab65a31fa22b0b136b582da252f46e2d20100ff516a4310b1d891382a3ce80cc",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 96,
+      "sumMaxChannelDifference": 24480,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 24,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "97fe1405748a17fde64892d79e5757ef739a6ae34fa14fd1f6036ebddb87f352",
+      "native_sha256": "8f7b53c89602b5c6598671c76fca84983da47ca581579b8cd5dbc9cc6caff361",
+      "browser_sha256": "ab885abafc0874762420ac28e6e6ccf1954da0639f1677f10442010917ea6102",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 25,
+      "kind": "actual",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "8f8306c8112bb4ec60cd95e738ae14bd0b1e1434bcc94b67f75c489e0adaa4a9",
+      "native_sha256": "58bbbcc7a0940e83eca767860ec6063b075083769aff7536f82243d63d014a3a",
+      "browser_sha256": "3a013c44c20a7789ff6aa578c836e70e18b340614f31c757dc4e2f10f9cb404f",
+      "as_expected": true
+    },
+    {
+      "pass": true,
+      "maxDifference": 0,
+      "totalPixels": 0,
+      "sumMaxChannelDifference": 0,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 25,
+      "kind": "reference",
+      "expected_match": true,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "c57b88f4196136193d5f280a9d190810773cf516995a126c599e1320553ada42",
+      "native_sha256": "58bbbcc7a0940e83eca767860ec6063b075083769aff7536f82243d63d014a3a",
+      "browser_sha256": "3a013c44c20a7789ff6aa578c836e70e18b340614f31c757dc4e2f10f9cb404f",
+      "as_expected": true
+    },
+    {
+      "pass": false,
+      "maxDifference": 255,
+      "totalPixels": 480,
+      "sumMaxChannelDifference": 122400,
+      "relation": "match",
+      "fuzzy": {
+        "difference": [
+          0,
+          0
+        ],
+        "pixels": [
+          0,
+          0
+        ]
+      },
+      "case": 25,
+      "kind": "shifted",
+      "expected_match": false,
+      "maxPixelEquivalents": 0,
+      "source_sha256": "36fc0241506de2a1a1c32abd9397d90a97e128f162d82841a58c9acbbc55c7a7",
+      "native_sha256": "58bbbcc7a0940e83eca767860ec6063b075083769aff7536f82243d63d014a3a",
+      "browser_sha256": "bdfb84213b5a915763c9f4c8e14ae210b6da30223858aa174e32bc282abd506c",
       "as_expected": true
     }
   ]
