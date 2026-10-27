@@ -76,7 +76,7 @@ static char *modern_chain_shape(DomFixture *f)
         "|^setSelectionRange$|^select$|^setRangeText$|^content$"
         "|^(accept|alt|autocomplete|defaultChecked|defaultValue|dirName|disabled|formAction|formEnctype|formMethod"
         "|formNoValidate|formTarget|height|indeterminate|max|maxLength|min|minLength|multiple|pattern|placeholder"
-        "|readOnly|required|size|src|step|width|align|useMap|form|labels)$)/;"
+        "|readOnly|required|size|src|step|width|align|useMap|form|labels|localName|namespaceURI|prefix)$)/;"
         "var documentRow=/^(readyState|onreadystatechange|visibilityState|hidden|onvisibilitychange|referrer|"
         "activeElement|hasFocus|currentScript|title|prerendering|onprerenderingchange|domain|URL|documentURI|"
         "wasDiscarded|compatMode|dir|characterSet|charset|inputEncoding|contentType|lastModified|rootElement|"
@@ -233,6 +233,19 @@ static void dom_modern_cases(void)
         "assert(a.value==='Zbc'&&a.textContent==='abc','a textarea, its children untouched');"
         "a.textContent='new';assert(a.value==='Zbc','and its value dirty: a new default does not reach it');",
         "modern-on-range-text");
+    /* The node row: an element's names. */
+    dom_script(&f, MODERN_ASSERT
+        "var d=document.createElement('DIV');"
+        "assert(d.localName==='div'&&d.namespaceURI==='http://www.w3.org/1999/xhtml'&&d.prefix===null,'html');"
+        "var h=document.createElement('div');h.innerHTML='<svg><circle/></svg>';var c=h.firstChild.firstChild;"
+        "assert(c.localName==='circle'&&c.namespaceURI==='http://www.w3.org/2000/svg','svg');"
+        "h.innerHTML='<math><mi>x</mi></math>';var m=h.firstChild.firstChild;"
+        "assert(m.localName==='mi'&&m.namespaceURI==='http://www.w3.org/1998/Math/MathML'&&m.prefix===null,'mathml');"
+        "var s=document.createElementNS('http://www.w3.org/2000/svg','rect');"
+        "assert(s.localName==='rect'&&s.namespaceURI==='http://www.w3.org/2000/svg','made in a namespace');"
+        "var bad=false;try{Object.getOwnPropertyDescriptor(Element.prototype,'localName').get.call(document)}"
+        "catch(x){bad=x instanceof TypeError}assert(bad,'an element only');",
+        "modern-on-element-names");
     /* 0f's P3a: the controls' reflections, by each of HTML's rules, and the
      * members that are no plain reflection. */
     dom_script(&f, MODERN_ASSERT
@@ -533,6 +546,8 @@ static void dom_modern_cases(void)
         /* the frames row's: an iframe has HTMLElement's members alone */
         "var fr=document.createElement('iframe');fr.src='/frame.html';"
         "assert(fr.getAttribute('src')===null&&fr.hasOwnProperty('src')&&!('HTMLIFrameElement' in window));"
+        /* the node row's element names */
+        "assert(!('localName' in b)&&!('namespaceURI' in b)&&!('prefix' in b));"
         /* 0f's P3a's controls' members; their name and value are every page's */
         "var ci=document.createElement('input');"
         "assert(!('formAction' in ci)&&!('labels' in ci)&&!('indeterminate' in ci)&&!('form' in ci)&&"

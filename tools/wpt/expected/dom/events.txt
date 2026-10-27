@@ -10,6 +10,12 @@
 CustomEvent.html	initCustomEvent's default parameter values.
 Event-init-while-dispatching.html	Calling initCustomEvent while dispatching.
 EventTarget-dispatchEvent.html	If the event's initialized flag is not set, an InvalidStateError must be thrown (CustomEvent).
+# The node row's element names (MODERN_WEB.md § Element names, as built):
+# localName, namespaceURI and prefix. Each fails with the switch off.
+Event-dispatch-click.html	disabled checkbox still has activation behavior
+Event-dispatch-click.html	disabled checkbox still has activation behavior, part 2
+Event-dispatch-click.html	disabled radio still has activation behavior
+event-disabled-dynamic.html	disabled is honored properly in presence of dynamic changes
 [excluded]
 Event-dispatch-on-disabled-elements.html	needs test_driver input, which the runner does not have
 Event-dispatch-redispatch.html	needs test_driver input, which the runner does not have
@@ -181,6 +187,9 @@ Event-dispatch-bubbles-true.html	In window.document with click event
 Event-dispatch-bubbles-true.html	In window.document with load event
 Event-dispatch-click.html	basic with click()
 Event-dispatch-click.html	basic with wrong event class
+Event-dispatch-click.html	disabled checkbox still has activation behavior
+Event-dispatch-click.html	disabled checkbox still has activation behavior, part 2
+Event-dispatch-click.html	disabled radio still has activation behavior
 Event-dispatch-click.html	disabling checkbox in onclick listener shouldn't suppress onchange
 Event-dispatch-click.html	disabling checkbox in onclick listener shouldn't suppress oninput
 Event-dispatch-click.html	disabling radio in onclick listener shouldn't suppress onchange
@@ -383,6 +392,7 @@ KeyEvent-initKeyEvent.html	KeyboardEvent.initKeyEvent shouldn't be defined (crea
 element-click.html	dynamic querySelectorAll, toggle async
 element-click.html	dynamic querySelectorAll, toggle sync
 element-click.html	static querySelectorAll
+event-disabled-dynamic.html	disabled is honored properly in presence of dynamic changes
 event-global-event-targets.html	An event target's _document property does not affect window.event
 event-global-event-targets.html	window.event is set when dispatching on AbortSignal
 event-global-event-targets.html	window.event is set when dispatching on EventTarget

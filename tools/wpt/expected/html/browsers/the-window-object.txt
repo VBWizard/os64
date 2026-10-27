@@ -9,6 +9,9 @@
 # Window.prototype (P3c), and fail whole; open-close and named-access-*
 # wait for P3.
 noopener-noreferrer-BarProp.window.html	All bars visible
+# The node row's element names (MODERN_WEB.md § Element names, as built):
+# localName, namespaceURI and prefix. Each fails with the switch off.
+named-access-on-the-window-object/scoped-to-associated-document.html	Elements of a document created by DOMParser are not exposed
 [excluded]
 [passing]
 Document-defaultView.html	Document created with HTML DOMParser
@@ -38,6 +41,7 @@ named-access-on-the-window-object/id-non-html-elements.html	An element in the SV
 named-access-on-the-window-object/name-attribute-elements.html	Only elements with specific local names may be returned if their name attribute matches (negative test)
 named-access-on-the-window-object/nested-context.html	A named property that matches any element that contains a nested browsing context, must return the WindowProxy of that context
 named-access-on-the-window-object/prototype.html	Property on Object.prototype.
+named-access-on-the-window-object/scoped-to-associated-document.html	Elements of a document created by DOMParser are not exposed
 named-access-on-the-window-object/scoped-to-associated-document.html	Elements of a document created by createHTMLDocument() are not exposed
 named-access-on-the-window-object/scoped-to-associated-document.html	Ids set after insertion into another document are not exposed
 named-access-on-the-window-object/strict-mode-redefine-readonly-property.html	Adding/removing form with a name referring to a non-configurable property

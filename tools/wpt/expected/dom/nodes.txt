@@ -294,6 +294,61 @@ Document-createEvent.https.html	hashchangeevent should be an alias for HashChang
 Document-createEvent.https.html	MESSAGEEVENT should be an alias for MessageEvent.
 Document-createEvent.https.html	MessageEvent should be an alias for MessageEvent.
 Document-createEvent.https.html	messageevent should be an alias for MessageEvent.
+# The node row's element names (MODERN_WEB.md § Element names, as built):
+# localName, namespaceURI and prefix. Each fails with the switch off.
+DOMImplementation-createDocument.html	createDocument test: metadata for "http://www.w3.org/1999/xhtml","",null
+DOMImplementation-createHTMLDocument.html	createHTMLDocument(): metadata
+Document-createElement.html	createElement(":") in HTML document
+Document-createElement.html	createElement(":foo") in HTML document
+Document-createElement.html	createElement("FOO") in HTML document
+Document-createElement.html	createElement("\\ufffffoo") in HTML document
+Document-createElement.html	createElement("f1oo") in HTML document
+Document-createElement.html	createElement("f::oo") in HTML document
+Document-createElement.html	createElement("f::oo:") in HTML document
+Document-createElement.html	createElement("f:o:o") in HTML document
+Document-createElement.html	createElement("f:oo") in HTML document
+Document-createElement.html	createElement("f<oo") in HTML document
+Document-createElement.html	createElement("f\\uffffoo") in HTML document
+Document-createElement.html	createElement("foo") in HTML document
+Document-createElement.html	createElement("foo1") in HTML document
+Document-createElement.html	createElement("foo:") in HTML document
+Document-createElement.html	createElement("foo:0") in HTML document
+Document-createElement.html	createElement("foo:_") in HTML document
+Document-createElement.html	createElement("foo:fooெ") in HTML document
+Document-createElement.html	createElement("foo:ெ") in HTML document
+Document-createElement.html	createElement("foo\\uffff") in HTML document
+Document-createElement.html	createElement("foo}") in HTML document
+Document-createElement.html	createElement("fooெ") in HTML document
+Document-createElement.html	createElement("fooெ:foo") in HTML document
+Document-createElement.html	createElement("f}oo") in HTML document
+Document-createElement.html	createElement("fெ") in HTML document
+Document-createElement.html	createElement("marK") in HTML document
+Document-createElement.html	createElement("math") in HTML document
+Document-createElement.html	createElement("svg") in HTML document
+Document-createElement.html	createElement("xml") in HTML document
+Document-createElement.html	createElement("xml:foo") in HTML document
+Document-createElement.html	createElement("xmlfoo") in HTML document
+Document-createElement.html	createElement("xmlfoo:bar") in HTML document
+Document-createElement.html	createElement("xmlns") in HTML document
+Document-createElement.html	createElement("xmlns:foo") in HTML document
+Document-createElement.html	createElement("İnput") in HTML document
+Document-createElement.html	createElement("ınput") in HTML document
+Document-createElement.html	createElement("̀") in HTML document
+Document-createElement.html	createElement("̀foo") in HTML document
+Document-createElement.html	createElement(null) in HTML document
+Document-createElement.html	createElement(undefined) in HTML document
+Document-getElementsByTagName.html	Element in HTML namespace, no prefix, non-ascii characters in name
+Document-getElementsByTagName.html	HTML element with uppercase tagName never matches in HTML Documents
+Element-getElementsByTagName.html	Element in HTML namespace, no prefix, non-ascii characters in name
+Element-getElementsByTagName.html	HTML element with uppercase tagName never matches in HTML Documents
+Node-cloneNode-svg.html	cloned <svg> should have the right properties
+Node-cloneNode-svg.html	cloned <use> should have the right properties
+NodeList-Iterable.html	live NodeLists are for-of iterable and update appropriately
+case.html	createElement ABC
+case.html	createElement Abc
+case.html	createElement abc
+case.html	createElement Ä
+case.html	createElement ä
 [excluded]
 [passing]
 Attr-prefix.html	Attr.prefix absent (HTML)
@@ -535,6 +590,7 @@ DOMImplementation-createDocument.html	createDocument test: characterSet aliases 
 DOMImplementation-createDocument.html	createDocument test: characterSet aliases for undefined,"",undefined
 DOMImplementation-createDocument.html	createDocument test: characterSet aliases for undefined,null,null
 DOMImplementation-createDocument.html	createDocument test: characterSet aliases for undefined,null,undefined
+DOMImplementation-createDocument.html	createDocument test: metadata for "http://www.w3.org/1999/xhtml","",null
 DOMImplementation-createDocument.html	createDocument test: null,"-foo",null,"INVALID_CHARACTER_ERR"
 DOMImplementation-createDocument.html	createDocument test: null,".foo",null,"INVALID_CHARACTER_ERR"
 DOMImplementation-createDocument.html	createDocument test: null,"1foo",null,"INVALID_CHARACTER_ERR"
@@ -649,6 +705,7 @@ DOMImplementation-createDocumentType.html	createDocumentType("}", "", "") should
 DOMImplementation-createDocumentType.html	createDocumentType("~", "", "") should work
 DOMImplementation-createHTMLDocument.html	createHTMLDocument(): characterSet aliases
 DOMImplementation-createHTMLDocument.html	createHTMLDocument(): document location getter is null
+DOMImplementation-createHTMLDocument.html	createHTMLDocument(): metadata
 DOMImplementation-hasFeature.html	DOMImplementation.hasFeature(feature, version)
 DOMImplementation-hasFeature.html	hasFeature(" Core", "")
 DOMImplementation-hasFeature.html	hasFeature(" Core", null)
@@ -831,11 +888,50 @@ Document-createElement.html	createElement("-foo") in HTML document
 Document-createElement.html	createElement(".foo") in HTML document
 Document-createElement.html	createElement("1:foo") in HTML document
 Document-createElement.html	createElement("1foo") in HTML document
+Document-createElement.html	createElement(":") in HTML document
+Document-createElement.html	createElement(":foo") in HTML document
 Document-createElement.html	createElement("<foo") in HTML document
 Document-createElement.html	createElement("<foo>") in HTML document
+Document-createElement.html	createElement("FOO") in HTML document
+Document-createElement.html	createElement("\\ufffffoo") in HTML document
+Document-createElement.html	createElement("f1oo") in HTML document
+Document-createElement.html	createElement("f::oo") in HTML document
+Document-createElement.html	createElement("f::oo:") in HTML document
+Document-createElement.html	createElement("f:o:o") in HTML document
+Document-createElement.html	createElement("f:oo") in HTML document
+Document-createElement.html	createElement("f<oo") in HTML document
+Document-createElement.html	createElement("f\\uffffoo") in HTML document
 Document-createElement.html	createElement("fo o") in HTML document
+Document-createElement.html	createElement("foo") in HTML document
+Document-createElement.html	createElement("foo1") in HTML document
+Document-createElement.html	createElement("foo:") in HTML document
+Document-createElement.html	createElement("foo:0") in HTML document
+Document-createElement.html	createElement("foo:_") in HTML document
+Document-createElement.html	createElement("foo:fooெ") in HTML document
+Document-createElement.html	createElement("foo:ெ") in HTML document
 Document-createElement.html	createElement("foo>") in HTML document
+Document-createElement.html	createElement("foo\\uffff") in HTML document
+Document-createElement.html	createElement("foo}") in HTML document
+Document-createElement.html	createElement("fooெ") in HTML document
+Document-createElement.html	createElement("fooெ:foo") in HTML document
+Document-createElement.html	createElement("f}oo") in HTML document
+Document-createElement.html	createElement("fெ") in HTML document
+Document-createElement.html	createElement("marK") in HTML document
+Document-createElement.html	createElement("math") in HTML document
+Document-createElement.html	createElement("svg") in HTML document
+Document-createElement.html	createElement("xml") in HTML document
+Document-createElement.html	createElement("xml:foo") in HTML document
+Document-createElement.html	createElement("xmlfoo") in HTML document
+Document-createElement.html	createElement("xmlfoo:bar") in HTML document
+Document-createElement.html	createElement("xmlns") in HTML document
+Document-createElement.html	createElement("xmlns:foo") in HTML document
 Document-createElement.html	createElement("}foo") in HTML document
+Document-createElement.html	createElement("İnput") in HTML document
+Document-createElement.html	createElement("ınput") in HTML document
+Document-createElement.html	createElement("̀") in HTML document
+Document-createElement.html	createElement("̀foo") in HTML document
+Document-createElement.html	createElement(null) in HTML document
+Document-createElement.html	createElement(undefined) in HTML document
 Document-createElementNS.html	createElementNS test in HTML document: "","","INVALID_CHARACTER_ERR"
 Document-createElementNS.html	createElementNS test in HTML document: "",":foo","INVALID_CHARACTER_ERR"
 Document-createElementNS.html	createElementNS test in HTML document: "","f:oo","NAMESPACE_ERR"
@@ -1201,7 +1297,9 @@ Document-getElementById.html	update `id` attribute via setAttribute/removeAttrib
 Document-getElementById.html	where insertion order and tree order don't match
 Document-getElementsByClassName.html	getElementsByClassName() should be a live collection
 Document-getElementsByTagName.html	Caching is allowed
+Document-getElementsByTagName.html	Element in HTML namespace, no prefix, non-ascii characters in name
 Document-getElementsByTagName.html	Element in HTML namespace, prefix, non-ascii characters in name
+Document-getElementsByTagName.html	HTML element with uppercase tagName never matches in HTML Documents
 Document-getElementsByTagName.html	Interfaces
 Document-getElementsByTagName.html	Should be able to set expando shadowing a proto prop (item)
 Document-getElementsByTagName.html	Should be able to set expando shadowing a proto prop (namedItem)
@@ -2112,7 +2210,9 @@ Element-getElementsByClassName.html	Interface should be correct.
 Element-getElementsByClassName.html	getElementsByClassName should work on disconnected subtrees.
 Element-getElementsByClassName.html	getElementsByClassName() should be a live collection
 Element-getElementsByTagName.html	Caching is allowed
+Element-getElementsByTagName.html	Element in HTML namespace, no prefix, non-ascii characters in name
 Element-getElementsByTagName.html	Element in HTML namespace, prefix, non-ascii characters in name
+Element-getElementsByTagName.html	HTML element with uppercase tagName never matches in HTML Documents
 Element-getElementsByTagName.html	Interfaces
 Element-getElementsByTagName.html	Matching the context object
 Element-getElementsByTagName.html	Should be able to set expando shadowing a proto prop (item)
@@ -2183,7 +2283,9 @@ Node-childNodes.html	Node.childNodes on an Element.
 Node-childNodes.html	Node.childNodes should be a live collection
 Node-cloneNode-parser-created-names.html	cloneNode on elements with names containing angle brackets
 Node-cloneNode-parser-created-names.html	cloneNode on elements with names containing colons
+Node-cloneNode-svg.html	cloned <svg> should have the right properties
 Node-cloneNode-svg.html	cloned <svg>'s xmlns:xlink attribute should have the right properties
+Node-cloneNode-svg.html	cloned <use> should have the right properties
 Node-cloneNode-svg.html	cloned <use>'s xlink:href attribute should have the right properties
 Node-cloneNode.html	createAttribute
 Node-cloneNode.html	createAttributeNS
@@ -2377,6 +2479,7 @@ NodeList-Iterable.html	NodeList has length method.
 NodeList-Iterable.html	NodeList has values method.
 NodeList-Iterable.html	NodeList is iterable via for-of loop.
 NodeList-Iterable.html	NodeList responds to Object.keys correctly
+NodeList-Iterable.html	live NodeLists are for-of iterable and update appropriately
 NodeList-live-mutations.window.html	NodeList live mutations: NodeList ownPropertyNames
 NodeList-live-mutations.window.html	NodeList live mutations: NodeList.item(index)
 NodeList-live-mutations.window.html	NodeList live mutations: NodeList.length
@@ -2582,6 +2685,7 @@ ParentNode-querySelectorAll-svg-append.html	Append child nodes to svg
 ParentNode-querySelectorAll-svg-append.html	Sanity check with div
 ParentNode-querySelectorAll-svg-class.html	Selecting a svg element with a class selector
 ParentNode-querySelectors-exclusive.html	querySelector/querySelectorAll should not include their thisArg
+ParentNode-querySelectors-namespaces.html	querySelectorAll must work with namespace attribute selectors on SVG
 ParentNode-querySelectors-space-and-dash-attribute-value.html	querySelector
 ParentNode-querySelectors-space-and-dash-attribute-value.html	querySelectorAll
 ParentNode-replaceChildren.html	Document.replaceChildren() with text throws a HierarchyRequestError.
@@ -2640,6 +2744,11 @@ attributes.html	setAttributeNode, if it fires mutation events, should fire one w
 attributes.html	setAttributeNode, if it fires mutation events, should fire one with the new node when resetting an existing attribute (outer shell)
 attributes.html	toggleAttribute should not change the order of previously set attributes.
 attributes.html	toggleAttribute should not throw even when qualifiedName starts with 'xmlns'
+case.html	createElement ABC
+case.html	createElement Abc
+case.html	createElement abc
+case.html	createElement Ä
+case.html	createElement ä
 case.html	getAttribute ABC
 case.html	getAttribute Abc
 case.html	getAttribute abc

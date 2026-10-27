@@ -1194,12 +1194,32 @@ static JSValue template_content(JSContext *ctx, JSValueConst this_value, int arg
     return d_wrap(dom, ctx, self->template_contents);
 }
 
+/* An element's names (DOM § 4.9): `localName`, its name as libhtml keeps
+ * it; `namespaceURI`, its namespace's (os64_html_namespace_uri), null for
+ * none; and `prefix`, libhtml's, null for none. */
+enum { E_LOCAL_NAME, E_NAMESPACE_URI, E_PREFIX };
+
+static JSValue element_names(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv, int magic,
+                             JSValue *data)
+{
+    (void)argc; (void)argv;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    const os64_html_node_t *self = d_node(dom, ctx, this_value);
+    if (self == NULL) return JS_EXCEPTION;
+    if (!is_element(self)) return JS_ThrowTypeError(ctx, "An element's name requires an element");
+    const char *name = magic == E_LOCAL_NAME ? self->name : magic == E_PREFIX ? self->prefix
+                                                                             : os64_html_namespace_uri(self);
+    return name != NULL ? JS_NewString(ctx, name) : JS_NULL;
+}
+
 /* 0f's P1a, the Modern Web table's node row (INTERFACES_FORMS.md):
  * getRootNode on Node's prototype, which Vue's v-model asks, and on Attr's,
  * whose shadow answers every Node member for an Attr; Text's own
- * `wholeText` and `splitText`; and a template's `content`. Members of
- * prototypes, so the row names nothing on window; the DOM host's chain
- * shape holds them (tools/test_dom_modern.inc). */
+ * `wholeText` and `splitText`; a template's `content`; and an element's
+ * `localName`, `namespaceURI` and `prefix`. Members of prototypes, so the
+ * row names nothing on window; the DOM host's chain shape holds them
+ * (tools/test_dom_modern.inc). */
 int d_nodes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     (void)global;
@@ -1209,5 +1229,12 @@ int d_nodes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         d_method(dom, ctx, text, "splitText", text_member, 1, T_SPLIT_TEXT) < 0 ||
         d_accessor(dom, ctx, dom->prototypes[D_PROTO_TEMPLATE]->value, "content", template_content, 0, false) < 0)
         return -1;
+    static const struct { const char *name; int magic; } kNames[] = {
+        {"localName", E_LOCAL_NAME}, {"namespaceURI", E_NAMESPACE_URI}, {"prefix", E_PREFIX},
+    };
+    for (size_t i = 0; i < sizeof(kNames) / sizeof(kNames[0]); i++)
+        if (d_accessor(dom, ctx, dom->prototypes[D_PROTO_ELEMENT]->value, kNames[i].name, element_names,
+                       kNames[i].magic, false) < 0)
+            return -1;
     return d_attr_root_install(dom, ctx);
 }
