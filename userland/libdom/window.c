@@ -362,6 +362,15 @@ static bool type_is(const os64_html_node_t *node, const char *wanted, bool missi
     return *a == '\0' && *b == '\0';
 }
 
+/* A submit button (HTML § 4.10.2): a button of type submit, or of a type
+ * that is neither reset nor button; an input of type submit or image. */
+static bool submit_button(const os64_html_node_t *node)
+{
+    if (html_element(node, OS64_HTML_TAG_BUTTON))
+        return type_is(node, "submit", true) || !(type_is(node, "reset", false) || type_is(node, "button", false));
+    return html_element(node, OS64_HTML_TAG_INPUT) && (type_is(node, "submit", false) || type_is(node, "image", false));
+}
+
 static const os64_html_node_t *tree_root(const os64_html_node_t *node)
 {
     while (node->parent != NULL) node = node->parent;
@@ -454,12 +463,12 @@ enum { A_CLICK, A_FOCUS, A_BLUR, A_SUBMIT, A_REQUEST_SUBMIT, A_RESET };
 
 /* A form's submission: HTML fires submit at the form unless the script
  * called submit() itself, and a submit nobody cancelled becomes the ask. A
- * form in a document with no window cannot navigate, and HTML submits
- * nothing from it, not even the event. */
+ * form in a document with no window, or in no document, cannot navigate,
+ * and HTML submits nothing from it, not even the event. */
 static int submit(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form,
                   const os64_html_node_t *submitter, bool event)
 {
-    if (!d_window_document(dom, form)) return 1;
+    if (!d_window_document(dom, form) || !d_connected(form)) return 1;
     int result = event ? fire(dom, ctx, form, "submit", true, true) : 1;
     if (result > 0) d_navigate(dom, OS64_DOM_NAVIGATE_SUBMIT, form, submitter, NULL, 0);
     return result;
@@ -516,9 +525,7 @@ static int click_activate(os64_dom_t *dom, JSContext *ctx, const os64_html_node_
     bool input = html_element(node, OS64_HTML_TAG_INPUT);
     const os64_html_node_t *form = d_form_owner(node);
     if (form == NULL) return 1;
-    if ((button && (type_is(node, "submit", true) || !(type_is(node, "reset", false) || type_is(node, "button", false)))) ||
-        (input && (type_is(node, "submit", false) || type_is(node, "image", false))))
-        return submit(dom, ctx, form, node, true);
+    if (submit_button(node)) return submit(dom, ctx, form, node, true);
     if ((button || input) && type_is(node, "reset", false)) return reset(dom, ctx, form);
     return 1;
 }
@@ -562,12 +569,21 @@ JSValue d_element_action(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t
 static JSValue element_method(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                               int magic, JSValue *data)
 {
-    (void)argc; (void)argv;
     os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
     const os64_html_node_t *node = d_node(dom, ctx, self);
     if (node == NULL) return JS_EXCEPTION;
     if (node->kind != OS64_HTML_ELEMENT) return JS_ThrowTypeError(ctx, "Expected an element");
+    /* requestSubmit(submitter) (HTML § 4.10.3): a submitter given is a
+     * submit button this form owns, and the submission is its. */
+    if (magic == A_REQUEST_SUBMIT && argc > 0 && !JS_IsUndefined(argv[0]) && !JS_IsNull(argv[0])) {
+        const os64_html_node_t *submitter = d_node(dom, ctx, argv[0]);
+        if (submitter == NULL) return JS_EXCEPTION;
+        if (!submit_button(submitter)) return JS_ThrowTypeError(ctx, "The submitter is not a submit button");
+        if (d_form_owner(submitter) != node)
+            return d_error(ctx, "NotFoundError", "The submitter is not this form's");
+        return submit(dom, ctx, node, submitter, true) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+    }
     return d_element_action(dom, ctx, node, magic);
 }
 

@@ -547,6 +547,12 @@ run now, nothing excluded. P3b is the rest: the form's members and its
 collections, and the label, fieldset, legend and output, whose `htmlFor`
 and `control` most of `the-label-element`'s failures wait on.
 
+**As built, P3b** (MODERN_WEB.md § 0f's P3b, as built, is the record): the
+rest of the phase, as listed, with the form's `elements` holding HTML's
+listed elements, the form a legacy platform object, and Node's `baseURI`
+beside it; an output's reset and the form's past names map are DEBTS.md
+rows.
+
 ### P4 — constraint validation, whole (49 members and `ValidityState`)
 
 (b) to 99.6% distinctive.

@@ -31,7 +31,8 @@ static const DModernRow kModern[] = {
                            "HTMLTextAreaElement", "HTMLSelectElement", "HTMLOptionElement",
                            "HTMLOptGroupElement", "HTMLTemplateElement", "HTMLButtonElement",
                            "HTMLImageElement", "HTMLScriptElement", "HTMLAnchorElement",
-                           "HTMLLinkElement", NULL},
+                           "HTMLLinkElement", "HTMLLabelElement", "HTMLFieldSetElement",
+                           "HTMLLegendElement", "HTMLOutputElement", NULL},
      d_interfaces_install},
     /* After the interfaces row, whose HTMLElement its interface inherits. */
     {(const char *const[]){"HTMLIFrameElement", NULL}, d_frames_install},
@@ -95,6 +96,11 @@ static const DModernRow kModern[] = {
     /* 0f's P3a: the controls' reflections and state, members of the
      * interfaces row's control prototypes and none of window's. */
     {(const char *const[]){NULL}, d_controls_install},
+    /* 0f's P3b: a form's controls collection and RadioNodeList, over the
+     * interfaces row's HTMLCollection and NodeList; and the form's,
+     * label's, fieldset's, legend's and output's own members. */
+    {(const char *const[]){"HTMLFormControlsCollection", "RadioNodeList", NULL}, d_form_collections_install},
+    {(const char *const[]){NULL}, d_forms_install},
     /* Import maps: HTMLScriptElement.supports, a member of the interfaces
      * row's HTMLScriptElement and none of window's (as P1-Da's row). */
     {(const char *const[]){NULL}, d_import_map_install},

@@ -36,7 +36,8 @@ enum {
     D_PROTO_FRAGMENT, D_PROTO_DOCTYPE, D_PROTO_ATTR, D_PROTO_HTML_ELEMENT, D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT,
     D_PROTO_BUTTON, D_PROTO_FORM, D_PROTO_IMAGE, D_PROTO_SCRIPT, D_PROTO_ANCHOR,
     D_PROTO_LINK, D_PROTO_IFRAME, D_PROTO_OPTION, D_PROTO_OPTGROUP,
-    D_PROTO_TEXT, D_PROTO_COMMENT, D_PROTO_SVG, D_PROTO_TEMPLATE, D_PROTO_COUNT
+    D_PROTO_TEXT, D_PROTO_COMMENT, D_PROTO_SVG, D_PROTO_TEMPLATE,
+    D_PROTO_LABEL, D_PROTO_FIELDSET, D_PROTO_LEGEND, D_PROTO_OUTPUT, D_PROTO_COUNT
 };
 /* The kind a kind's prototype inherits, as its interface inherits: Node's
  * for the node kinds, CharacterData's for TEXT and COMMENT, Element's for
@@ -80,7 +81,7 @@ struct DValue {
     DValue *next, *hash_next;
     const os64_html_node_t *node, *target;
     os64_dom_t *dom;
-    DValue *style, *class_list, *rel_list, *dataset, *attributes;
+    DValue *style, *class_list, *rel_list, *for_list, *dataset, *attributes;
     /* An Attr's own entry: its record (attr.c). */
     struct DAttr *attr;
     DQuery *child_nodes, *children, *images, *forms, *elements;
@@ -88,6 +89,14 @@ struct DValue {
     DQuery *options, *selected_options;
     /* A labelable element's labels, made once ([SameObject]). */
     DQuery *labels;
+    /* A form's RadioNodeLists, one a name, each made once
+     * (d_radio_list), as browsers answer `form.r === form.r`. */
+    DQuery *radio_lists;
+    /* An output's default value override (HTML § 4.10.12): its text when
+     * `output_default_set`, d_alloc'd; else it has none. */
+    char *output_default;
+    size_t output_default_len;
+    bool output_default_set;
     DListener *listeners, *last_listener;
     /* The document the node was made in, copied from or last taken out of,
      * when that is not the window's (implementation.c); NULL is the
@@ -98,8 +107,8 @@ struct DValue {
      * kind of document it is. */
     DValue *implementation;
     uint8_t document_type;
-    /* A DOMTokenList's own entry: over `rel` (a relList), not `class`. */
-    bool rel_tokens;
+    /* A DOMTokenList's own entry: the attribute it is over (D_TOKENS_*). */
+    uint8_t tokens;
     /* A plain target's entry IN THE OBJECT (d_event_target_init): this
      * record is the first member of the object's own state, outside the
      * registry; `value` is the object itself, not a reference; its
@@ -129,6 +138,11 @@ struct DQuery {
     uint64_t version;
     uint64_t state_version;     /* SELECTED_OPTIONS: the control state it was read at */
     bool descendants, elements;
+    /* A NodeList (as_node_list): its entries are reached by index alone,
+     * with no named properties, whatever its kind. */
+    bool node_list;
+    /* The next of its form's RadioNodeLists (DValue.radio_lists). */
+    DQuery *radio_next;
 };
 /* One addEventListener registration, or a target's on<type> handler slot.
  * The callback is a C-held engine value, drained with the registry. A
@@ -202,6 +216,10 @@ struct os64_dom {
     /* HTMLOptionsCollection's prototype (options.c), over a collection's;
      * NULL with the modern switch off. */
     DValue *options_prototype;
+    /* HTMLFormControlsCollection's prototype, over a collection's, and
+     * RadioNodeList's, over a NodeList's (collection.c, 0f's P3b); NULL
+     * with the modern switch off. */
+    DValue *controls_prototype, *radio_prototype;
     /* The window's Selection (selection.c), the one getSelection answers;
      * NULL with the modern switch off. */
     DValue *selection;
@@ -662,11 +680,21 @@ enum {
  * walk, os64_page_option_next) and the ones of it that are selected; the
  * second also changes with control state, not only with the tree. LABELS
  * are the labels whose labeled control is the query's owner, walked from
- * the root of the owner's tree, that root included (d_labels). */
+ * the root of the owner's tree, that root included (d_labels). FIELDSET is
+ * a fieldset's listed elements (d_listed) among its descendants. */
 enum { D_QUERY_GENERIC, D_QUERY_IMAGES, D_QUERY_FORMS, D_QUERY_CONTROLS, D_QUERY_DOCUMENT_NAMES,
-       D_QUERY_CLASSES, D_QUERY_NAME, D_QUERY_OPTIONS, D_QUERY_SELECTED_OPTIONS, D_QUERY_LABELS };
+       D_QUERY_CLASSES, D_QUERY_NAME, D_QUERY_OPTIONS, D_QUERY_SELECTED_OPTIONS, D_QUERY_LABELS,
+       D_QUERY_FIELDSET };
 bool d_named_match(const os64_html_node_t *node, const char *name);
 bool d_classic_match(const os64_html_node_t *root, const os64_html_node_t *node, unsigned kind);
+/* One of the elements a form's and a fieldset's `elements` list (HTML §
+ * 4.10.2's listed elements, an image button excepted): button, fieldset,
+ * input, object, output, select, textarea. */
+bool d_listed(const os64_html_node_t *node);
+/* A form's controls as its `elements` lists them, where it looks for them
+ * (classic.c): the `index`th, NULL past the last; *count, when not NULL,
+ * how many there are. */
+const os64_html_node_t *d_form_control(const os64_html_node_t *form, uint32_t index, uint32_t *count);
 JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root, unsigned kind, const char *named);
 JSValue d_classic_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, unsigned kind);
 int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
@@ -1012,11 +1040,15 @@ int d_url_parse(os64_dom_t *dom, JSContext *ctx, JSValueConst input, char **out)
  * (event.c). LIBDOM.md § P1-Da's rows is the record. ── */
 int d_document_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_custom_event_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
-/* ── 0f's P1a (INTERFACES_FORMS.md): Node's getRootNode and Text's own
- * members (mixin.c), and Attr's getRootNode beside them (attr.c), whose
+/* ── The node row (0f's P1a and after; INTERFACES_FORMS.md): Node's
+ * getRootNode and baseURI, Text's own members and Element's names
+ * (mixin.c), and Attr's getRootNode and baseURI beside them (attr.c), whose
  * shadow covers Node.prototype whole. ── */
 int d_nodes_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_attr_root_install(os64_dom_t *dom, JSContext *ctx);
+/* Node's `baseURI` for a node of a document (mixin.c): that document's base
+ * URL, about:blank for one with no window. */
+JSValue d_base_uri(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
 /* The select's, option's and optgroup's members, HTMLOptionsCollection's
  * prototype and the Option factory (options.c). */
 int d_options_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
@@ -1038,6 +1070,23 @@ const os64_html_node_t *d_label_control(const os64_html_node_t *label);
  * made once, of the labels in its tree whose labeled control it is
  * (collection.c). */
 JSValue d_labels(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *control);
+/* A form's controls named `name` (collection.c): with the modern switch
+ * on, its live RadioNodeList of that name, made once; with it off, a new
+ * collection of them. */
+JSValue d_radio_list(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form, const char *name);
+/* HTMLFormControlsCollection and RadioNodeList (collection.c, 0f's P3b). */
+int d_form_collections_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The form's, label's, fieldset's, legend's and output's own members
+ * (forms.c, 0f's P3b). */
+int d_forms_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* What a DOMTokenList is over: `class` (a classList), `rel` (a relList),
+ * `for` (an output's htmlFor). */
+enum { D_TOKENS_CLASS, D_TOKENS_REL, D_TOKENS_FOR };
+/* An output's htmlFor (mixin.c): a DOMTokenList over `for`, made once. */
+JSValue d_for_list(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
+/* A form's relList and rel (mixin.c): installed on its prototype as a
+ * link's are. */
+int d_form_rel_install(os64_dom_t *dom, JSContext *ctx);
 /* HTMLScriptElement.supports (importmap.c). */
 int d_import_map_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* HTMLOptionsCollection's indexed setter (HTML § 2.6.2.2), for the

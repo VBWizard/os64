@@ -76,6 +76,11 @@ WPT_DIRS=(
     html/semantics/forms/the-textarea-element
     html/semantics/forms/the-button-element
     html/semantics/forms/the-label-element
+    html/semantics/forms/the-form-element
+    html/semantics/forms/the-fieldset-element
+    html/semantics/forms/the-legend-element
+    html/semantics/forms/the-output-element
+    html/infrastructure/common-dom-interfaces/collections
 )
 
 top=$(git rev-parse --show-toplevel)

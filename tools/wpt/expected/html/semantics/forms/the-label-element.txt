@@ -53,6 +53,29 @@ labelable-elements.html	Check if the hidden input element has null 'labels'
 labelable-elements.html	Check if the input element in radio state can access 'labels'
 labelable-elements.html	Check if the select element can access 'labels'
 labelable-elements.html	Check if the textarea element can access 'labels'
+# 0f's P3b (MODERN_WEB.md § 0f's P3b, as built): the form's, label's,
+# fieldset's, legend's and output's members, and the form's controls
+# collection and RadioNodeList. Each fails with the switch off.
+disabled-labeled-control.html	A disabled checkbox input remains its explicit label's control
+disabled-labeled-control.html	A disabled checkbox input remains its implicit label's control
+disabled-labeled-control.html	A disabled text input remains its explicit label's control
+disabled-labeled-control.html	A disabled text input remains its implicit label's control
+labelable-elements.html	Check if the button element is a labelable element
+labelable-elements.html	Check if the fieldset element is not a labelable element
+labelable-elements.html	Check if the hidden input element is not a labelable element.
+labelable-elements.html	Check if the img element is not a labelable element
+labelable-elements.html	Check if the input element in radio state is a labelable element
+labelable-elements.html	Check if the keygen element is not a labelable element
+labelable-elements.html	Check if the label element is not a labelable element
+labelable-elements.html	Check if the meter element is a labelable element
+labelable-elements.html	Check if the object element is not a labelable element
+labelable-elements.html	Check if the output element can access 'labels'
+labelable-elements.html	Check if the output element is a labelable element
+labelable-elements.html	Check if the progress element is a labelable element
+labelable-elements.html	Check if the select element is a labelable element
+labelable-elements.html	Check if the textarea element is a labelable form-element
+labels-live-attribute-changes.html	The labels NodeList stays live when label associations change.
+labels-live-label-removal.html	A retained labels list updates when an explicit label's subtree is removed and reinserted
 [excluded]
 [passing]
 clicking-interactive-content.html	interactive content <a href="about:blank" onclick="event.preventDefault()"></a> as first child of <label>
@@ -97,13 +120,33 @@ clicking-noninteractive-labelable-content.html	labelable element <output></outpu
 clicking-noninteractive-labelable-content.html	labelable element <output></output> deeply nested under <label>
 clicking-noninteractive-labelable-content.html	labelable element <progress></progress> as first child of <label>
 clicking-noninteractive-labelable-content.html	labelable element <progress></progress> deeply nested under <label>
+disabled-labeled-control.html	A disabled checkbox input remains its explicit label's control
+disabled-labeled-control.html	A disabled checkbox input remains its implicit label's control
+disabled-labeled-control.html	A disabled text input remains its explicit label's control
+disabled-labeled-control.html	A disabled text input remains its implicit label's control
 labelable-elements.html	Check if the button element can access 'labels'
+labelable-elements.html	Check if the button element is a labelable element
 labelable-elements.html	Check if the fieldset element can access 'labels'
+labelable-elements.html	Check if the fieldset element is not a labelable element
 labelable-elements.html	Check if the hidden input element has null 'labels'
+labelable-elements.html	Check if the hidden input element is not a labelable element.
 labelable-elements.html	Check if the img element can access 'labels'
+labelable-elements.html	Check if the img element is not a labelable element
 labelable-elements.html	Check if the input element in radio state can access 'labels'
+labelable-elements.html	Check if the input element in radio state is a labelable element
 labelable-elements.html	Check if the keygen element can access 'labels'
+labelable-elements.html	Check if the keygen element is not a labelable element
 labelable-elements.html	Check if the label element can access 'labels'
+labelable-elements.html	Check if the label element is not a labelable element
+labelable-elements.html	Check if the meter element is a labelable element
 labelable-elements.html	Check if the object element can access 'labels'
+labelable-elements.html	Check if the object element is not a labelable element
+labelable-elements.html	Check if the output element can access 'labels'
+labelable-elements.html	Check if the output element is a labelable element
+labelable-elements.html	Check if the progress element is a labelable element
 labelable-elements.html	Check if the select element can access 'labels'
+labelable-elements.html	Check if the select element is a labelable element
 labelable-elements.html	Check if the textarea element can access 'labels'
+labelable-elements.html	Check if the textarea element is a labelable form-element
+labels-live-attribute-changes.html	The labels NodeList stays live when label associations change.
+labels-live-label-removal.html	A retained labels list updates when an explicit label's subtree is removed and reinserted

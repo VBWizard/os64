@@ -222,6 +222,25 @@ JSValue d_labels(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *contro
     return value;
 }
 
+/* A collection's named item (HTML § 2.6.2.1): its first entry whose id or
+ * name is `name`, none for an empty one; JS_NULL for none. A form's
+ * controls answer, with the modern switch on, a RadioNodeList of every one
+ * of that name when there are two or more (§ 2.6.2.4). The caller has
+ * refreshed the query. */
+static JSValue named_item(DQuery *query, JSContext *ctx, const char *name)
+{
+    size_t first = query->count, count = 0;
+    for (size_t i = 0; *name != '\0' && i < query->count; i++)
+        if (d_named_match(query->nodes[i], name)) {
+            if (first == query->count) first = i;
+            count++;
+        }
+    if (count == 0) return JS_NULL;
+    if (count > 1 && query->kind == D_QUERY_CONTROLS && query->named == NULL && query->dom->radio_prototype != NULL)
+        return d_radio_list(query->dom, ctx, query->owner, name);
+    return d_wrap(query->dom, ctx, query->nodes[first]);
+}
+
 static JSValue collection_method(JSContext *ctx, JSValueConst self, int argc,
                                  JSValueConst *argv, int magic, JSValue *data)
 {
@@ -233,10 +252,8 @@ static JSValue collection_method(JSContext *ctx, JSValueConst self, int argc,
         DString name = {0};
         if (argc < 1) return JS_ThrowTypeError(ctx, "Missing collection name");
         if (!d_string(dom, ctx, argv[0], &name)) return JS_EXCEPTION;
-        JSValue result = JS_NULL;
-        if (!refresh(query, ctx)) result = JS_EXCEPTION;
-        else if (name.length != 0) for (size_t i = 0; i < query->count; i++)
-            if (d_named_match(query->nodes[i], name.data)) { result = d_wrap(dom, ctx, query->nodes[i]); break; }
+        JSValue result = refresh(query, ctx) ? named_item(query, ctx, name.data != NULL ? name.data : "")
+                                             : JS_EXCEPTION;
         d_string_free(dom, &name);
         return result;
     }
@@ -289,8 +306,9 @@ static int own_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst
     int numeric = d_index_key(ctx, atom, &index);
     if (numeric < 0) return -1;
     if (!refresh(query, ctx)) return -1;
+    JSValue value = JS_UNDEFINED;
     if (!numeric) {
-        if (!query->elements) return 0;
+        if (!query->elements || query->node_list) return 0;
         JSValue prototype = JS_GetPrototype(ctx, object);
         if (JS_IsException(prototype)) return -1;
         int reserved = JS_IsNull(prototype) ? 0 : JS_HasProperty(ctx, prototype, atom);
@@ -302,23 +320,29 @@ static int own_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst
         const char *name = JS_ToCString(ctx, key);
         JS_FreeValue(ctx, key);
         if (name == NULL) return -1;
-        index = (uint32_t)query->count;
-        if (*name != '\0' && os64_strcmp(name,"length") && os64_strcmp(name,"item") && os64_strcmp(name,"namedItem"))
-            for (size_t i = 0; i < query->count; i++) if (d_named_match(query->nodes[i], name)) { index = (uint32_t)i; break; }
+        value = os64_strcmp(name, "length") && os64_strcmp(name, "item") && os64_strcmp(name, "namedItem")
+            ? named_item(query, ctx, name) : JS_NULL;
         JS_FreeCString(ctx, name);
-    }
-    if (index >= query->count) return 0;
-    if (desc != NULL) {
-        JSValue value = d_wrap(query->dom, ctx, query->nodes[index]);
         if (JS_IsException(value)) return -1;
-        /* An options collection's indices are writable: it has an indexed
-         * setter (define_property). */
-        desc->flags = JS_PROP_CONFIGURABLE | (numeric ? JS_PROP_ENUMERABLE : 0) |
-                      (numeric && query->kind == D_QUERY_OPTIONS ? JS_PROP_WRITABLE : 0);
-        desc->value = value;
-        desc->getter = JS_UNDEFINED;
-        desc->setter = JS_UNDEFINED;
+        if (JS_IsNull(value)) return 0;
+    } else if (index >= query->count) {
+        return 0;
     }
+    if (desc == NULL) {
+        JS_FreeValue(ctx, value);
+        return 1;
+    }
+    if (numeric) {
+        value = d_wrap(query->dom, ctx, query->nodes[index]);
+        if (JS_IsException(value)) return -1;
+    }
+    /* An options collection's indices are writable: it has an indexed
+     * setter (define_property). */
+    desc->flags = JS_PROP_CONFIGURABLE | (numeric ? JS_PROP_ENUMERABLE : 0) |
+                  (numeric && query->kind == D_QUERY_OPTIONS ? JS_PROP_WRITABLE : 0);
+    desc->value = value;
+    desc->getter = JS_UNDEFINED;
+    desc->setter = JS_UNDEFINED;
     return 1;
 }
 
@@ -504,6 +528,7 @@ static JSValue as_node_list(os64_dom_t *dom, JSContext *ctx, JSValue collection)
         JS_FreeValue(ctx, collection);
         return JS_EXCEPTION;
     }
+    ((DQuery *)JS_GetOpaque(collection, dom->collection_class))->node_list = true;
     return collection;
 }
 
@@ -637,4 +662,122 @@ JSValue d_attribute_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_
     /* getElementsByName's answer is a NodeList, getElementsByClassName's an
      * HTMLCollection. */
     return by_name ? as_node_list(dom, ctx, result) : result;
+}
+
+/* ── A form's controls (0f's P3b): HTMLFormControlsCollection and
+ * RadioNodeList ───────────────────────────────────────────────────────── */
+
+JSValue d_radio_list(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form, const char *name)
+{
+    DValue *entry = dom->radio_prototype != NULL ? d_find(dom, form) : NULL;
+    for (DQuery *made = entry != NULL ? entry->radio_lists : NULL; made != NULL; made = made->radio_next)
+        if (os64_streq(made->named, name)) return JS_DupValue(ctx, made->entry->value);
+    /* refresh() roots a form's controls at the document its form is in. */
+    JSValue value = d_special_collection(dom, ctx, form, D_QUERY_CONTROLS, name);
+    if (JS_IsException(value)) return value;
+    DQuery *query = JS_GetOpaque(value, dom->collection_class);
+    query->owner = form;
+    if (dom->radio_prototype == NULL) return value;
+    query->node_list = true;
+    if (JS_SetPrototype(ctx, value, dom->radio_prototype->value) < 0) {
+        JS_FreeValue(ctx, value);
+        return JS_EXCEPTION;
+    }
+    if (entry != NULL) {
+        query->radio_next = entry->radio_lists;
+        entry->radio_lists = query;
+    }
+    return value;
+}
+
+static bool is_radio(const os64_html_node_t *node)
+{
+    const os64_html_attr_t *type = node->kind == OS64_HTML_ELEMENT && node->ns == OS64_HTML_NS_HTML &&
+        node->tag == OS64_HTML_TAG_INPUT ? os64_html_attr(node, "type") : NULL;
+    return type != NULL && os64_streq_nocase(type->value, "radio");
+}
+
+/* RadioNodeList's `value` (HTML § 2.6.2.4), over its radio buttons alone:
+ * read, the first checked one's value, "" for none; set, the first one
+ * whose value it is is checked, and none for no such one. The new value is
+ * converted before the list is read. */
+static JSValue radio_value(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv, int magic,
+                           JSValue *data)
+{
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    DQuery *query = JS_GetOpaque(self, dom->collection_class);
+    if (query == NULL || query->kind != D_QUERY_CONTROLS || query->named == NULL)
+        return JS_ThrowTypeError(ctx, "Expected a RadioNodeList");
+    bool set = (magic & D_SET) != 0;
+    DString wanted = {0};
+    if (set && !d_string(dom, ctx, argc > 0 ? argv[0] : JS_UNDEFINED, &wanted)) return JS_EXCEPTION;
+    JSValue result = set ? JS_UNDEFINED : JS_NewString(ctx, "");
+    if (!refresh(query, ctx)) {
+        JS_FreeValue(ctx, result);
+        result = JS_EXCEPTION;
+    }
+    for (size_t i = 0; !JS_IsException(result) && i < query->count; i++) {
+        const os64_html_node_t *node = query->nodes[i];
+        if (!is_radio(node)) continue;
+        const char *text;
+        size_t length;
+        int64_t status = os64_page_node_value(dom->state, node, &text, &length);
+        if (status < 0) {
+            JS_FreeValue(ctx, result);
+            result = d_page_error(ctx, status);
+            break;
+        }
+        if (set) {
+            if (length != wanted.length || os64_memcmp(text, wanted.data != NULL ? wanted.data : "", length) != 0)
+                continue;
+            status = os64_page_node_set_checked(dom->state, node, true);
+            if (status < 0) result = d_page_error(ctx, status);
+            break;
+        }
+        bool on = false;
+        if (os64_page_node_checked(dom->state, node, &on) == 0 && on) {
+            JS_FreeValue(ctx, result);
+            result = JS_NewStringLen(ctx, text, length);
+            break;
+        }
+    }
+    d_string_free(dom, &wanted);
+    return result;
+}
+
+int d_form_collections_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    /* HTMLFormControlsCollection.prototype, over a collection's, with the
+     * namedItem that answers a RadioNodeList; its interface object
+     * inherits HTMLCollection's, which the interfaces row made. */
+    JSValue collection = JS_GetClassProto(ctx, dom->collection_class);
+    JSValue controls = JS_NewObjectProto(ctx, collection);
+    JS_FreeValue(ctx, collection);
+    if (JS_IsException(controls)) return -1;
+    dom->controls_prototype = d_retain(dom, ctx, controls);
+    if (dom->controls_prototype == NULL ||
+        d_method(dom, ctx, controls, "namedItem", collection_method, 1, 2) < 0)
+        return -1;
+    /* RadioNodeList.prototype, over a NodeList's. */
+    JSValue radio = JS_NewObjectProto(ctx, dom->static_list->value);
+    if (JS_IsException(radio)) return -1;
+    dom->radio_prototype = d_retain(dom, ctx, radio);
+    if (dom->radio_prototype == NULL || d_accessor(dom, ctx, radio, "value", radio_value, 0, true) < 0)
+        return -1;
+    static const struct { const char *name, *parent; bool controls; } kInterfaces[] = {
+        {"HTMLFormControlsCollection", "HTMLCollection", true}, {"RadioNodeList", "NodeList", false},
+    };
+    for (size_t i = 0; i < sizeof(kInterfaces) / sizeof(kInterfaces[0]); i++) {
+        JSValue parent = JS_GetPropertyStr(ctx, global, kInterfaces[i].parent);
+        if (JS_IsException(parent)) return -1;
+        JSValue interface = d_interface_new(ctx, kInterfaces[i].name, 0, NULL,
+                                            kInterfaces[i].controls ? controls : radio, parent);
+        JS_FreeValue(ctx, parent);
+        if (JS_IsException(interface) ||
+            JS_DefinePropertyValueStr(ctx, global, kInterfaces[i].name, interface,
+                                      JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+            return -1;
+    }
+    return 0;
 }

@@ -4038,6 +4038,78 @@ mutants in `tools/test_interfaces_mutants.py`, each caught. `css/cssom`'s
 without this change (SVG's computed longhands), and is left for its own
 fix.
 
+### 0f's P3b, as built
+
+P3's second PR (INTERFACES_FORMS.md § P3): the form's own members and its
+collections, and the label, fieldset, legend and output.
+
+- **Four kinds of their own**: HTMLLabelElement, HTMLFieldSetElement,
+  HTMLLegendElement and HTMLOutputElement, made by the interfaces row
+  (`node_prototype_kind`, the classic interface table).
+- **Their reflections are P3a's table's rows** (libdom `controls.c`): the
+  form's `acceptCharset`, `action` (the document's URL when missing or
+  empty, as formAction's), `autocomplete` (on or off, `on` by default),
+  `enctype` and its `encoding`, `method` (get, post, dialog; `get` by
+  default), `noValidate` and `target`; a fieldset's `disabled` and
+  `name`, an output's `name`, a label's `htmlFor`, a legend's `align`; and
+  P3a's `form` and `labels` reach a fieldset and an output.
+- **The rest** (libdom `forms.c`, a row of its own): a form's `length` and
+  `rel` and `relList` (mixin.c's, a link's, whose `supports` names nothing
+  yonder acts on for a form); a label's `control` (P3a's
+  `d_label_control`) and `form` (its control's form owner); a fieldset's
+  `type` and `elements` (a live collection of its listed descendants); a
+  legend's `form` (its fieldset parent's); and an output's `value`,
+  `defaultValue`, `type` and `htmlFor`, a DOMTokenList over `for` (the
+  DOMTokenLists now say which attribute they are over, `D_TOKENS_*`). An
+  output keeps HTML's default value override on its wrapper's record.
+- **A form's controls** (libdom `collection.c`): `elements` lists HTML's
+  listed elements (fieldsets, outputs and objects with them, an image
+  button left out: `d_listed`, a classic fix both ways) and is an
+  HTMLFormControlsCollection, whose `namedItem`, and named access on it and
+  on the form, answer a RadioNodeList for a name two or more controls
+  share: a live NodeList, one a form and a name, whose `value` is its
+  first checked radio button's and sets the first of that value. A
+  NodeList has no named properties (`node_list`), which also corrects
+  P3a's `labels` and `getElementsByName`.
+- **The form as a legacy platform object**, with the switch on: `form[i]`
+  is its i-th control; a control's name hides the prototype's member of
+  that name ([LegacyOverrideBuiltIns]: an input named `submit` is
+  `form.submit`, as in every browser); its own names are its indices and,
+  not enumerable, its controls' ids and names; an index or a name is not
+  redefined or deleted.
+- **Beside them**: Node's `baseURI` (and an Attr's), which WPT's form
+  pages resolve their expectations against; `autocomplete="webauthn"`
+  alone; and, classic fixes both ways, `requestSubmit(submitter)` held to
+  HTML (no submit button: a TypeError; another form's: NotFoundError; the
+  submission the submitter's), with a form in no document submitting
+  nothing, not even its event.
+
+**Numbers.**
+
+- **WPT**: five directories join the run (`tools/wpt_fetch.sh`):
+  `the-form-element` 114 passes (81 of them on `userland` before this
+  change), `the-fieldset-element` 14 (9), `the-legend-element` 5 (0),
+  `the-output-element` 2 (0) and `common-dom-interfaces/collections` 53
+  (41); their `[required]` lines, 88, 5, 5, 2 and 37, are every pass that
+  fails with the switch off, the earlier phases' among them. And
+  `the-label-element` +20, `form-control-infrastructure` +40 and
+  `html/dom`'s `reflection-forms.html` +508, all `[required]`. Nothing
+  lost, here or in P3a's directories; with the switch off, no required
+  line passes.
+- **Hosts**, 0 failed, on `userland` with #374 in: DOM 17,215 and
+  113,259 (the four kinds, every reflection rule above, `elements` and
+  `length`, `form[i]`, RadioNodeList's identity and value, the legacy
+  platform object, the output's override, `baseURI`,
+  `requestSubmit`'s refusals; and with the switch off, none of it); the
+  scripted page 8,429; yonder 2,028.
+- **Mutants** (`tools/test_interfaces_mutants.py`, its P3b group): 22,
+  each caught — a rule of the table (method's default, autocomplete's),
+  an output's labels, the listed elements, form[i], the names over
+  builtins, the own names, redefinition and deletion, the controls
+  collection and RadioNodeList (made once, radios only, the value set), a
+  NodeList's names, the output's override both ways, a label's form, the
+  submitter's two refusals and a detached form.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.

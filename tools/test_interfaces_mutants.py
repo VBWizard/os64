@@ -10,8 +10,10 @@ createElementNS and the formless button's status line; to P1b's
 EventTarget, its constructor and Window; and to P2's selections (where one
 begins, setRangeText, the select event, and the field's caret and the
 record kept as one); and to P3a's controls (their reflections by each of
-HTML's rules, indeterminate, autocomplete, form and labels); and to the
-node row's element names (localName, namespaceURI, prefix) - against the
+HTML's rules, indeterminate, autocomplete, form and labels); to P3b's form,
+label, fieldset, legend and output, the form's controls collection and
+RadioNodeList; and to the node row's element names (localName,
+namespaceURI, prefix) - against the
 harnesses that hold each rule: a mutant is
 CAUGHT when one of its harnesses fails, MISSED when they all pass, which
 means a test is missing and gets written. A build failure is neither.
@@ -49,6 +51,7 @@ EVENT_C = 'userland/libdom/event.c'
 UI_TEXT_C = 'userland/libos64/ui_text.c'
 CONTROLS_C = 'userland/libdom/controls.c'
 WINDOW_C = 'userland/libdom/window.c'
+FORMS_C = 'userland/libdom/forms.c'
 UI_CONTROLS_C = 'userland/libos64/ui_controls.c'
 DOM = 'tools/test_dom_host.sh'
 PAGE = 'tools/test_libpage_host.sh'
@@ -300,6 +303,53 @@ mutants = [
      '        return;', (SCRIPTS,)),
     ('select-range-never-selects', UI_TEXT_C, '\ttf->selected = tf->anchor != tf->cursor;', '\ttf->selected = false;',
      (SCRIPTS,)),
+    # P3b. the form's, label's, fieldset's, legend's and output's own
+    ('form-method-missing-empty', CONTROLS_C, '    {"method", "method", K_ENUM, FO, kMethods, "get", "get", 0},',
+     '    {"method", "method", K_ENUM, FO, kMethods, "", "get", 0},', (DOM,)),
+    ('form-autocomplete-off', CONTROLS_C, '{"autocomplete", "autocomplete", K_ENUM, FO, kAutocomplete, "on", "on", 0},',
+     '{"autocomplete", "autocomplete", K_ENUM, FO, kAutocomplete, "off", "on", 0},', (DOM,)),
+    ('output-has-no-labels', CONTROLS_C, '{"labels", M_LABELS, false, IN | TA | SE | BU | OU},',
+     '{"labels", M_LABELS, false, IN | TA | SE | BU},', (DOM,)),
+    ('image-button-listed', CLASSIC_C, '        return type == NULL || !os64_streq_nocase(type->value, "image");',
+     '        return type == NULL || true;', (DOM,)),
+    ('fieldset-not-listed', CLASSIC_C, '    case OS64_HTML_TAG_BUTTON: case OS64_HTML_TAG_FIELDSET: case OS64_HTML_TAG_OBJECT:',
+     '    case OS64_HTML_TAG_BUTTON: case OS64_HTML_TAG_OBJECT:', (DOM,)),
+    ('form-has-no-index', CLASSIC_C, '        ? d_index_key(ctx, atom, &index) : 0;', '        ? 0 * d_index_key(ctx, atom, &index) : 0;',
+     (DOM,)),
+    ('builtins-win', CLASSIC_C, '    if (!(kind == D_QUERY_CONTROLS && entry->dom->controls_prototype != NULL)) {',
+     '    if (true || !(kind == D_QUERY_CONTROLS && entry->dom->controls_prototype != NULL)) {', (DOM,)),
+    ('form-names-unlisted', CLASSIC_C, '    DValue *entry = modern_form(object);\n    if (entry == NULL || !d_context(entry->dom, ctx, OS64_JS_ABI_ID)) return entry == NULL ? 0 : -1;',
+     '    DValue *entry = modern_form(object) != NULL ? NULL : NULL;\n    if (entry == NULL || !d_context(entry->dom, ctx, OS64_JS_ABI_ID)) return entry == NULL ? 0 : -1;', (DOM,)),
+    ('form-name-redefinable', CLASSIC_C, '    int named = entry != NULL ? named_property(ctx, NULL, object, atom) : 0;',
+     '    int named = entry != NULL ? 0 * named_property(ctx, NULL, object, atom) : 0;', (DOM,)),
+    ('form-index-deletable', CLASSIC_C, '    return named < 0 ? -1 : !named;', '    return named < 0 ? -1 : 1;', (DOM,)),
+    ('elements-plain-collection', CLASSIC_C, '        if (kind == D_QUERY_CONTROLS && dom->controls_prototype != NULL &&',
+     '        if (kind == D_QUERY_CONTROLS && dom->controls_prototype != NULL && false &&', (DOM,)),
+    ('named-item-first-only', COLLECTION_C,
+     '    if (count > 1 && query->kind == D_QUERY_CONTROLS && query->named == NULL && query->dom->radio_prototype != NULL)',
+     '    if (count > 1 && query->kind == D_QUERY_CONTROLS && query->named == NULL && false)', (DOM,)),
+    ('radio-list-made-each-time', COLLECTION_C, '        if (os64_streq(made->named, name)) return JS_DupValue(ctx, made->entry->value);',
+     '        if (os64_streq(made->named, name) && false) return JS_DupValue(ctx, made->entry->value);', (DOM,)),
+    ('radio-value-counts-checkboxes', COLLECTION_C, '        if (!is_radio(node)) continue;\n',
+     '        if (!is_radio(node) && false) continue;\n', (DOM,)),
+    ('radio-set-any-value', COLLECTION_C,
+     '            if (length != wanted.length || os64_memcmp(text, wanted.data != NULL ? wanted.data : "", length) != 0)\n                continue;',
+     '            if (false)\n                continue;', (DOM,)),
+    ('node-list-has-names', COLLECTION_C, '        if (!query->elements || query->node_list) return 0;',
+     '        if (!query->elements) return 0;', (DOM,)),
+    ('output-value-keeps-no-default', FORMS_C,
+     '                  keep_default(dom, ctx, entry, kept.data != NULL ? kept.data : "", kept.length);',
+     '                  true;', (DOM,)),
+    ('output-default-always-text', FORMS_C, '    if (entry->output_default_set)\n        return JS_NewStringLen(',
+     '    if (entry->output_default_set && false)\n        return JS_NewStringLen(', (DOM,)),
+    ('label-form-its-own', FORMS_C, '        return d_wrap(dom, ctx, control != NULL ? d_form_owner(control) : NULL);',
+     '        return d_wrap(dom, ctx, control != NULL ? d_form_owner(node) : NULL);', (DOM,)),
+    ('submitter-unchecked', WINDOW_C, '        if (!submit_button(submitter)) return JS_ThrowTypeError(',
+     '        if (!submit_button(submitter) && false) return JS_ThrowTypeError(', (DOM,)),
+    ('submitter-of-any-form', WINDOW_C, '        if (d_form_owner(submitter) != node)\n',
+     '        if (d_form_owner(submitter) != node && false)\n', (DOM,)),
+    ('detached-form-submits', WINDOW_C, '    if (!d_window_document(dom, form) || !d_connected(form)) return 1;',
+     '    if (!d_window_document(dom, form)) return 1;', (DOM,)),
     # the node row: an element's names
     ('names-swapped', MIXIN_C, "    const char *name = magic == E_LOCAL_NAME ? self->name : magic == E_PREFIX ? self->prefix",
      "    const char *name = magic == E_PREFIX ? self->name : magic == E_LOCAL_NAME ? self->prefix", (DOM,)),

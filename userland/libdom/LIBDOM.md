@@ -1375,7 +1375,11 @@ answers it with the Attr itself; Text's `wholeText` (the data of the run
 of text siblings it is in) and `splitText(offset)` (the offset in UTF-16
 code units; the tail a new text node, the next sibling when there is a
 parent; the node shortened first and given its data back if the insertion
-fails).
+fails); Element's `localName`, `namespaceURI` and `prefix` (libhtml's name,
+`os64_html_namespace_uri`, libhtml's prefix, each null for none); and
+Node's `baseURI`, its node document's base URL (`d_base_uri`; about:blank
+for a document with no window), which Attr's prototype shadows with the
+same answer.
 
 **The select row** (`options.c`, which names `Option` on window): an
 option's `value` (its attribute, else its text), `text` (its descendant
@@ -1408,7 +1412,8 @@ argument is converted before the option is made. A select's own indices
 (`select[0]`) are a DEBTS.md row (§ Classic browser scripting).
 
 **The controls row** (`controls.c`, naming nothing on window): input's,
-textarea's, select's and button's reflections, as one table of rows, each
+textarea's, select's and button's reflections, and the form's, label's,
+fieldset's, legend's and output's, as one table of rows, each
 a member, its content attribute, which of HTML's reflection rules reads
 it (string, URL, boolean, enumerated with its missing and invalid
 defaults, and the integer kinds with their defaults and range errors) and
@@ -1416,7 +1421,24 @@ the interfaces it is on; one accessor reads every row, and a row's member
 called on another interface is a TypeError. Beside them textarea's
 `defaultValue` and `textLength`, `autocomplete` through HTML's autofill
 grammar, input's `width`, `height` and `indeterminate` (libpage's
-`os64_page_node_set_indeterminate`), and every control's `form`
-(`d_form_owner`) and `labels`: a live NodeList made once (the collection
-kind LABELS), of the labels whose labeled control (`d_label_control`) the
-control is, walked from its tree's root.
+`os64_page_node_set_indeterminate`), and the `form` (`d_form_owner`) of
+every control, fieldset and output and the `labels` of every control and
+output: a live NodeList made once (the collection kind LABELS), of the
+labels whose labeled control (`d_label_control`) the element is, walked
+from its tree's root.
+
+**The forms rows** (naming HTMLFormControlsCollection and RadioNodeList on
+window, and nothing else). `collection.c`'s: a form's `elements` is an
+HTMLFormControlsCollection, over a collection's, of its listed elements
+(`d_listed`); its `namedItem`, and named access on it and on the form,
+answer a RadioNodeList for a name two or more controls share, a live
+NodeList made once a form and a name (`d_radio_list`), whose `value` reads
+its first checked radio button's and sets the first of that value; a
+NodeList answers no names (`node_list`). `forms.c`'s: a form's `length`,
+`rel` and `relList`; a label's `control` and `form`; a fieldset's `type`
+and `elements` (the collection kind FIELDSET); a legend's `form`; an
+output's `value`, `defaultValue` (its override kept on its wrapper's
+record), `type` and `htmlFor`. With the switch on the form is a legacy
+platform object (classic.c's exotic): `form[i]`, names over its
+prototype's members, its indices and names its own, and none of them
+redefined or deleted.

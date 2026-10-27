@@ -28,6 +28,8 @@ LIBDOM_SRCS += libdom/options.c
 LIBDOM_SRCS += libdom/selection.c
 # 0f P3a: the controls' reflections, form owner and labels.
 LIBDOM_SRCS += libdom/controls.c
+# 0f P3b: the form's, label's, fieldset's, legend's and output's own members.
+LIBDOM_SRCS += libdom/forms.c
 # Import maps: the map's JSON and HTMLScriptElement.supports.
 LIBDOM_SRCS += libdom/importmap.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))

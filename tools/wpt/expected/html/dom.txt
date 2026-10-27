@@ -2157,6 +2157,517 @@ reflection-forms.html	button.formAction: setAttribute() to ""
 reflection-forms.html	input.formAction: IDL get with DOM attribute unset
 reflection-forms.html	input.formAction: IDL set to ""
 reflection-forms.html	input.formAction: setAttribute() to ""
+# 0f's P3b (MODERN_WEB.md § 0f's P3b, as built): the form's, label's,
+# fieldset's, legend's and output's members, and the form's controls
+# collection and RadioNodeList. Each fails with the switch off.
+reflection-forms.html	fieldset.disabled: IDL get with DOM attribute unset
+reflection-forms.html	fieldset.disabled: IDL set to " foo "
+reflection-forms.html	fieldset.disabled: IDL set to ""
+reflection-forms.html	fieldset.disabled: IDL set to "+100"
+reflection-forms.html	fieldset.disabled: IDL set to ".5"
+reflection-forms.html	fieldset.disabled: IDL set to "5%"
+reflection-forms.html	fieldset.disabled: IDL set to "\\0"
+reflection-forms.html	fieldset.disabled: IDL set to -Infinity
+reflection-forms.html	fieldset.disabled: IDL set to 1.5
+reflection-forms.html	fieldset.disabled: IDL set to 7
+reflection-forms.html	fieldset.disabled: IDL set to Infinity
+reflection-forms.html	fieldset.disabled: IDL set to NaN
+reflection-forms.html	fieldset.disabled: IDL set to false
+reflection-forms.html	fieldset.disabled: IDL set to null
+reflection-forms.html	fieldset.disabled: IDL set to object "[object Object]"
+reflection-forms.html	fieldset.disabled: IDL set to object "test-toString"
+reflection-forms.html	fieldset.disabled: IDL set to object "test-valueOf"
+reflection-forms.html	fieldset.disabled: IDL set to undefined
+reflection-forms.html	fieldset.disabled: setAttribute() to " foo "
+reflection-forms.html	fieldset.disabled: setAttribute() to ""
+reflection-forms.html	fieldset.disabled: setAttribute() to "+100"
+reflection-forms.html	fieldset.disabled: setAttribute() to ".5"
+reflection-forms.html	fieldset.disabled: setAttribute() to "5%"
+reflection-forms.html	fieldset.disabled: setAttribute() to "disabled"
+reflection-forms.html	fieldset.disabled: setAttribute() to -Infinity
+reflection-forms.html	fieldset.disabled: setAttribute() to 1.5
+reflection-forms.html	fieldset.disabled: setAttribute() to 7
+reflection-forms.html	fieldset.disabled: setAttribute() to Infinity
+reflection-forms.html	fieldset.disabled: setAttribute() to NaN
+reflection-forms.html	fieldset.disabled: setAttribute() to false
+reflection-forms.html	fieldset.disabled: setAttribute() to null
+reflection-forms.html	fieldset.disabled: setAttribute() to object "[object Object]"
+reflection-forms.html	fieldset.disabled: setAttribute() to object "test-toString"
+reflection-forms.html	fieldset.disabled: setAttribute() to object "test-valueOf"
+reflection-forms.html	fieldset.disabled: setAttribute() to true
+reflection-forms.html	fieldset.disabled: setAttribute() to undefined
+reflection-forms.html	fieldset.disabled: typeof IDL attribute
+reflection-forms.html	fieldset.name: IDL get with DOM attribute unset
+reflection-forms.html	fieldset.name: IDL set to ""
+reflection-forms.html	fieldset.name: IDL set to "+100"
+reflection-forms.html	fieldset.name: IDL set to ".5"
+reflection-forms.html	fieldset.name: IDL set to "5%"
+reflection-forms.html	fieldset.name: IDL set to -Infinity
+reflection-forms.html	fieldset.name: IDL set to 1.5
+reflection-forms.html	fieldset.name: IDL set to 7
+reflection-forms.html	fieldset.name: IDL set to Infinity
+reflection-forms.html	fieldset.name: IDL set to NaN
+reflection-forms.html	fieldset.name: IDL set to false
+reflection-forms.html	fieldset.name: IDL set to null
+reflection-forms.html	fieldset.name: IDL set to object "[object Object]"
+reflection-forms.html	fieldset.name: IDL set to object "test-toString"
+reflection-forms.html	fieldset.name: IDL set to object "test-valueOf"
+reflection-forms.html	fieldset.name: IDL set to true
+reflection-forms.html	fieldset.name: IDL set to undefined
+reflection-forms.html	fieldset.name: setAttribute() to ""
+reflection-forms.html	fieldset.name: setAttribute() to "+100"
+reflection-forms.html	fieldset.name: setAttribute() to ".5"
+reflection-forms.html	fieldset.name: setAttribute() to "5%"
+reflection-forms.html	fieldset.name: setAttribute() to -Infinity
+reflection-forms.html	fieldset.name: setAttribute() to 1.5
+reflection-forms.html	fieldset.name: setAttribute() to 7
+reflection-forms.html	fieldset.name: setAttribute() to Infinity
+reflection-forms.html	fieldset.name: setAttribute() to NaN
+reflection-forms.html	fieldset.name: setAttribute() to false
+reflection-forms.html	fieldset.name: setAttribute() to null
+reflection-forms.html	fieldset.name: setAttribute() to object "[object Object]"
+reflection-forms.html	fieldset.name: setAttribute() to object "test-toString"
+reflection-forms.html	fieldset.name: setAttribute() to object "test-valueOf"
+reflection-forms.html	fieldset.name: setAttribute() to true
+reflection-forms.html	fieldset.name: setAttribute() to undefined
+reflection-forms.html	fieldset.name: typeof IDL attribute
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL get with DOM attribute unset
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to ""
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to "+100"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to ".5"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to "5%"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to -Infinity
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to 1.5
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to 7
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to Infinity
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to NaN
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to false
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to null
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to object "[object Object]"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to object "test-toString"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to object "test-valueOf"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to true
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to undefined
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to ""
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to "+100"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to ".5"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to "5%"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to -Infinity
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to 1.5
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to 7
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to Infinity
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to NaN
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to false
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to null
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to object "[object Object]"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to object "test-toString"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to object "test-valueOf"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to true
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to undefined
+reflection-forms.html	form.acceptCharset (<form accept-charset>): typeof IDL attribute
+reflection-forms.html	form.action: IDL get with DOM attribute unset
+reflection-forms.html	form.action: IDL set to ""
+reflection-forms.html	form.action: setAttribute() to ""
+reflection-forms.html	form.action: typeof IDL attribute
+reflection-forms.html	form.autocomplete: IDL get with DOM attribute unset
+reflection-forms.html	form.autocomplete: IDL set to ""
+reflection-forms.html	form.autocomplete: IDL set to "+100"
+reflection-forms.html	form.autocomplete: IDL set to ".5"
+reflection-forms.html	form.autocomplete: IDL set to "5%"
+reflection-forms.html	form.autocomplete: IDL set to "OFF"
+reflection-forms.html	form.autocomplete: IDL set to "ON"
+reflection-forms.html	form.autocomplete: IDL set to "ff"
+reflection-forms.html	form.autocomplete: IDL set to "n"
+reflection-forms.html	form.autocomplete: IDL set to "off"
+reflection-forms.html	form.autocomplete: IDL set to "on"
+reflection-forms.html	form.autocomplete: IDL set to "xoff"
+reflection-forms.html	form.autocomplete: IDL set to "xon"
+reflection-forms.html	form.autocomplete: IDL set to -Infinity
+reflection-forms.html	form.autocomplete: IDL set to 1.5
+reflection-forms.html	form.autocomplete: IDL set to 7
+reflection-forms.html	form.autocomplete: IDL set to Infinity
+reflection-forms.html	form.autocomplete: IDL set to NaN
+reflection-forms.html	form.autocomplete: IDL set to false
+reflection-forms.html	form.autocomplete: IDL set to null
+reflection-forms.html	form.autocomplete: IDL set to object "[object Object]"
+reflection-forms.html	form.autocomplete: IDL set to object "test-toString"
+reflection-forms.html	form.autocomplete: IDL set to object "test-valueOf"
+reflection-forms.html	form.autocomplete: IDL set to true
+reflection-forms.html	form.autocomplete: IDL set to undefined
+reflection-forms.html	form.autocomplete: setAttribute() to ""
+reflection-forms.html	form.autocomplete: setAttribute() to "+100"
+reflection-forms.html	form.autocomplete: setAttribute() to ".5"
+reflection-forms.html	form.autocomplete: setAttribute() to "5%"
+reflection-forms.html	form.autocomplete: setAttribute() to "OFF"
+reflection-forms.html	form.autocomplete: setAttribute() to "ON"
+reflection-forms.html	form.autocomplete: setAttribute() to "ff"
+reflection-forms.html	form.autocomplete: setAttribute() to "n"
+reflection-forms.html	form.autocomplete: setAttribute() to "off"
+reflection-forms.html	form.autocomplete: setAttribute() to "on"
+reflection-forms.html	form.autocomplete: setAttribute() to "xoff"
+reflection-forms.html	form.autocomplete: setAttribute() to "xon"
+reflection-forms.html	form.autocomplete: setAttribute() to -Infinity
+reflection-forms.html	form.autocomplete: setAttribute() to 1.5
+reflection-forms.html	form.autocomplete: setAttribute() to 7
+reflection-forms.html	form.autocomplete: setAttribute() to Infinity
+reflection-forms.html	form.autocomplete: setAttribute() to NaN
+reflection-forms.html	form.autocomplete: setAttribute() to false
+reflection-forms.html	form.autocomplete: setAttribute() to null
+reflection-forms.html	form.autocomplete: setAttribute() to object "[object Object]"
+reflection-forms.html	form.autocomplete: setAttribute() to object "test-toString"
+reflection-forms.html	form.autocomplete: setAttribute() to object "test-valueOf"
+reflection-forms.html	form.autocomplete: setAttribute() to true
+reflection-forms.html	form.autocomplete: setAttribute() to undefined
+reflection-forms.html	form.autocomplete: typeof IDL attribute
+reflection-forms.html	form.encoding (<form enctype>): IDL get with DOM attribute unset
+reflection-forms.html	form.encoding (<form enctype>): IDL set to ""
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "+100"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to ".5"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "5%"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "APPLICATION/X-WWW-FORM-URLENCODED"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "MULTIPART/FORM-DATA"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "TEXT/PLAIN"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "application/x-www-form-urlencoded"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "ext/plain"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "multipart/form-data"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "pplication/x-www-form-urlencoded"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "text/plain"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "ultipart/form-data"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "xapplication/x-www-form-urlencoded"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "xmultipart/form-data"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "xtext/plain"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to -Infinity
+reflection-forms.html	form.encoding (<form enctype>): IDL set to 1.5
+reflection-forms.html	form.encoding (<form enctype>): IDL set to 7
+reflection-forms.html	form.encoding (<form enctype>): IDL set to Infinity
+reflection-forms.html	form.encoding (<form enctype>): IDL set to NaN
+reflection-forms.html	form.encoding (<form enctype>): IDL set to false
+reflection-forms.html	form.encoding (<form enctype>): IDL set to null
+reflection-forms.html	form.encoding (<form enctype>): IDL set to object "[object Object]"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to object "test-toString"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to object "test-valueOf"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to true
+reflection-forms.html	form.encoding (<form enctype>): IDL set to undefined
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to ""
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "+100"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to ".5"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "5%"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "APPLICATION/X-WWW-FORM-URLENCODED"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "MULTIPART/FORM-DATA"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "TEXT/PLAIN"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "application/x-www-form-urlencoded"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "ext/plain"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "multipart/form-data"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "pplication/x-www-form-urlencoded"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "text/plain"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "ultipart/form-data"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "xapplication/x-www-form-urlencoded"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "xmultipart/form-data"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "xtext/plain"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to -Infinity
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to 1.5
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to 7
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to Infinity
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to NaN
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to false
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to null
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to object "[object Object]"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to object "test-toString"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to object "test-valueOf"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to true
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to undefined
+reflection-forms.html	form.encoding (<form enctype>): typeof IDL attribute
+reflection-forms.html	form.enctype: IDL get with DOM attribute unset
+reflection-forms.html	form.enctype: IDL set to ""
+reflection-forms.html	form.enctype: IDL set to "+100"
+reflection-forms.html	form.enctype: IDL set to ".5"
+reflection-forms.html	form.enctype: IDL set to "5%"
+reflection-forms.html	form.enctype: IDL set to "APPLICATION/X-WWW-FORM-URLENCODED"
+reflection-forms.html	form.enctype: IDL set to "MULTIPART/FORM-DATA"
+reflection-forms.html	form.enctype: IDL set to "TEXT/PLAIN"
+reflection-forms.html	form.enctype: IDL set to "application/x-www-form-urlencoded"
+reflection-forms.html	form.enctype: IDL set to "ext/plain"
+reflection-forms.html	form.enctype: IDL set to "multipart/form-data"
+reflection-forms.html	form.enctype: IDL set to "pplication/x-www-form-urlencoded"
+reflection-forms.html	form.enctype: IDL set to "text/plain"
+reflection-forms.html	form.enctype: IDL set to "ultipart/form-data"
+reflection-forms.html	form.enctype: IDL set to "xapplication/x-www-form-urlencoded"
+reflection-forms.html	form.enctype: IDL set to "xmultipart/form-data"
+reflection-forms.html	form.enctype: IDL set to "xtext/plain"
+reflection-forms.html	form.enctype: IDL set to -Infinity
+reflection-forms.html	form.enctype: IDL set to 1.5
+reflection-forms.html	form.enctype: IDL set to 7
+reflection-forms.html	form.enctype: IDL set to Infinity
+reflection-forms.html	form.enctype: IDL set to NaN
+reflection-forms.html	form.enctype: IDL set to false
+reflection-forms.html	form.enctype: IDL set to null
+reflection-forms.html	form.enctype: IDL set to object "[object Object]"
+reflection-forms.html	form.enctype: IDL set to object "test-toString"
+reflection-forms.html	form.enctype: IDL set to object "test-valueOf"
+reflection-forms.html	form.enctype: IDL set to true
+reflection-forms.html	form.enctype: IDL set to undefined
+reflection-forms.html	form.enctype: setAttribute() to ""
+reflection-forms.html	form.enctype: setAttribute() to "+100"
+reflection-forms.html	form.enctype: setAttribute() to ".5"
+reflection-forms.html	form.enctype: setAttribute() to "5%"
+reflection-forms.html	form.enctype: setAttribute() to "APPLICATION/X-WWW-FORM-URLENCODED"
+reflection-forms.html	form.enctype: setAttribute() to "MULTIPART/FORM-DATA"
+reflection-forms.html	form.enctype: setAttribute() to "TEXT/PLAIN"
+reflection-forms.html	form.enctype: setAttribute() to "application/x-www-form-urlencoded"
+reflection-forms.html	form.enctype: setAttribute() to "ext/plain"
+reflection-forms.html	form.enctype: setAttribute() to "multipart/form-data"
+reflection-forms.html	form.enctype: setAttribute() to "pplication/x-www-form-urlencoded"
+reflection-forms.html	form.enctype: setAttribute() to "text/plain"
+reflection-forms.html	form.enctype: setAttribute() to "ultipart/form-data"
+reflection-forms.html	form.enctype: setAttribute() to "xapplication/x-www-form-urlencoded"
+reflection-forms.html	form.enctype: setAttribute() to "xmultipart/form-data"
+reflection-forms.html	form.enctype: setAttribute() to "xtext/plain"
+reflection-forms.html	form.enctype: setAttribute() to -Infinity
+reflection-forms.html	form.enctype: setAttribute() to 1.5
+reflection-forms.html	form.enctype: setAttribute() to 7
+reflection-forms.html	form.enctype: setAttribute() to Infinity
+reflection-forms.html	form.enctype: setAttribute() to NaN
+reflection-forms.html	form.enctype: setAttribute() to false
+reflection-forms.html	form.enctype: setAttribute() to null
+reflection-forms.html	form.enctype: setAttribute() to object "[object Object]"
+reflection-forms.html	form.enctype: setAttribute() to object "test-toString"
+reflection-forms.html	form.enctype: setAttribute() to object "test-valueOf"
+reflection-forms.html	form.enctype: setAttribute() to true
+reflection-forms.html	form.enctype: setAttribute() to undefined
+reflection-forms.html	form.enctype: typeof IDL attribute
+reflection-forms.html	form.method: IDL get with DOM attribute unset
+reflection-forms.html	form.method: IDL set to ""
+reflection-forms.html	form.method: IDL set to "+100"
+reflection-forms.html	form.method: IDL set to ".5"
+reflection-forms.html	form.method: IDL set to "5%"
+reflection-forms.html	form.method: IDL set to "DIALOG"
+reflection-forms.html	form.method: IDL set to "GET"
+reflection-forms.html	form.method: IDL set to "POST"
+reflection-forms.html	form.method: IDL set to "dialog"
+reflection-forms.html	form.method: IDL set to "et"
+reflection-forms.html	form.method: IDL set to "get"
+reflection-forms.html	form.method: IDL set to "ialog"
+reflection-forms.html	form.method: IDL set to "ost"
+reflection-forms.html	form.method: IDL set to "post"
+reflection-forms.html	form.method: IDL set to "poſt"
+reflection-forms.html	form.method: IDL set to "xdialog"
+reflection-forms.html	form.method: IDL set to "xget"
+reflection-forms.html	form.method: IDL set to "xpost"
+reflection-forms.html	form.method: IDL set to -Infinity
+reflection-forms.html	form.method: IDL set to 1.5
+reflection-forms.html	form.method: IDL set to 7
+reflection-forms.html	form.method: IDL set to Infinity
+reflection-forms.html	form.method: IDL set to NaN
+reflection-forms.html	form.method: IDL set to false
+reflection-forms.html	form.method: IDL set to null
+reflection-forms.html	form.method: IDL set to object "[object Object]"
+reflection-forms.html	form.method: IDL set to object "test-toString"
+reflection-forms.html	form.method: IDL set to object "test-valueOf"
+reflection-forms.html	form.method: IDL set to true
+reflection-forms.html	form.method: IDL set to undefined
+reflection-forms.html	form.method: setAttribute() to ""
+reflection-forms.html	form.method: setAttribute() to "+100"
+reflection-forms.html	form.method: setAttribute() to ".5"
+reflection-forms.html	form.method: setAttribute() to "5%"
+reflection-forms.html	form.method: setAttribute() to "DIALOG"
+reflection-forms.html	form.method: setAttribute() to "GET"
+reflection-forms.html	form.method: setAttribute() to "POST"
+reflection-forms.html	form.method: setAttribute() to "dialog"
+reflection-forms.html	form.method: setAttribute() to "et"
+reflection-forms.html	form.method: setAttribute() to "get"
+reflection-forms.html	form.method: setAttribute() to "ialog"
+reflection-forms.html	form.method: setAttribute() to "ost"
+reflection-forms.html	form.method: setAttribute() to "post"
+reflection-forms.html	form.method: setAttribute() to "poſt"
+reflection-forms.html	form.method: setAttribute() to "xdialog"
+reflection-forms.html	form.method: setAttribute() to "xget"
+reflection-forms.html	form.method: setAttribute() to "xpost"
+reflection-forms.html	form.method: setAttribute() to -Infinity
+reflection-forms.html	form.method: setAttribute() to 1.5
+reflection-forms.html	form.method: setAttribute() to 7
+reflection-forms.html	form.method: setAttribute() to Infinity
+reflection-forms.html	form.method: setAttribute() to NaN
+reflection-forms.html	form.method: setAttribute() to false
+reflection-forms.html	form.method: setAttribute() to null
+reflection-forms.html	form.method: setAttribute() to object "[object Object]"
+reflection-forms.html	form.method: setAttribute() to object "test-toString"
+reflection-forms.html	form.method: setAttribute() to object "test-valueOf"
+reflection-forms.html	form.method: setAttribute() to true
+reflection-forms.html	form.method: setAttribute() to undefined
+reflection-forms.html	form.method: typeof IDL attribute
+reflection-forms.html	form.noValidate: IDL get with DOM attribute unset
+reflection-forms.html	form.noValidate: IDL set to " foo "
+reflection-forms.html	form.noValidate: IDL set to ""
+reflection-forms.html	form.noValidate: IDL set to "+100"
+reflection-forms.html	form.noValidate: IDL set to ".5"
+reflection-forms.html	form.noValidate: IDL set to "5%"
+reflection-forms.html	form.noValidate: IDL set to "\\0"
+reflection-forms.html	form.noValidate: IDL set to -Infinity
+reflection-forms.html	form.noValidate: IDL set to 1.5
+reflection-forms.html	form.noValidate: IDL set to 7
+reflection-forms.html	form.noValidate: IDL set to Infinity
+reflection-forms.html	form.noValidate: IDL set to NaN
+reflection-forms.html	form.noValidate: IDL set to false
+reflection-forms.html	form.noValidate: IDL set to null
+reflection-forms.html	form.noValidate: IDL set to object "[object Object]"
+reflection-forms.html	form.noValidate: IDL set to object "test-toString"
+reflection-forms.html	form.noValidate: IDL set to object "test-valueOf"
+reflection-forms.html	form.noValidate: IDL set to undefined
+reflection-forms.html	form.noValidate: setAttribute() to " foo "
+reflection-forms.html	form.noValidate: setAttribute() to ""
+reflection-forms.html	form.noValidate: setAttribute() to "+100"
+reflection-forms.html	form.noValidate: setAttribute() to ".5"
+reflection-forms.html	form.noValidate: setAttribute() to "5%"
+reflection-forms.html	form.noValidate: setAttribute() to "noValidate"
+reflection-forms.html	form.noValidate: setAttribute() to -Infinity
+reflection-forms.html	form.noValidate: setAttribute() to 1.5
+reflection-forms.html	form.noValidate: setAttribute() to 7
+reflection-forms.html	form.noValidate: setAttribute() to Infinity
+reflection-forms.html	form.noValidate: setAttribute() to NaN
+reflection-forms.html	form.noValidate: setAttribute() to false
+reflection-forms.html	form.noValidate: setAttribute() to null
+reflection-forms.html	form.noValidate: setAttribute() to object "[object Object]"
+reflection-forms.html	form.noValidate: setAttribute() to object "test-toString"
+reflection-forms.html	form.noValidate: setAttribute() to object "test-valueOf"
+reflection-forms.html	form.noValidate: setAttribute() to true
+reflection-forms.html	form.noValidate: setAttribute() to undefined
+reflection-forms.html	form.noValidate: typeof IDL attribute
+reflection-forms.html	form.target: IDL get with DOM attribute unset
+reflection-forms.html	form.target: IDL set to ""
+reflection-forms.html	form.target: IDL set to "+100"
+reflection-forms.html	form.target: IDL set to ".5"
+reflection-forms.html	form.target: IDL set to "5%"
+reflection-forms.html	form.target: IDL set to -Infinity
+reflection-forms.html	form.target: IDL set to 1.5
+reflection-forms.html	form.target: IDL set to 7
+reflection-forms.html	form.target: IDL set to Infinity
+reflection-forms.html	form.target: IDL set to NaN
+reflection-forms.html	form.target: IDL set to false
+reflection-forms.html	form.target: IDL set to null
+reflection-forms.html	form.target: IDL set to object "[object Object]"
+reflection-forms.html	form.target: IDL set to object "test-toString"
+reflection-forms.html	form.target: IDL set to object "test-valueOf"
+reflection-forms.html	form.target: IDL set to true
+reflection-forms.html	form.target: IDL set to undefined
+reflection-forms.html	form.target: setAttribute() to ""
+reflection-forms.html	form.target: setAttribute() to "+100"
+reflection-forms.html	form.target: setAttribute() to ".5"
+reflection-forms.html	form.target: setAttribute() to "5%"
+reflection-forms.html	form.target: setAttribute() to -Infinity
+reflection-forms.html	form.target: setAttribute() to 1.5
+reflection-forms.html	form.target: setAttribute() to 7
+reflection-forms.html	form.target: setAttribute() to Infinity
+reflection-forms.html	form.target: setAttribute() to NaN
+reflection-forms.html	form.target: setAttribute() to false
+reflection-forms.html	form.target: setAttribute() to null
+reflection-forms.html	form.target: setAttribute() to object "[object Object]"
+reflection-forms.html	form.target: setAttribute() to object "test-toString"
+reflection-forms.html	form.target: setAttribute() to object "test-valueOf"
+reflection-forms.html	form.target: setAttribute() to true
+reflection-forms.html	form.target: setAttribute() to undefined
+reflection-forms.html	form.target: typeof IDL attribute
+reflection-forms.html	label.htmlFor (<label for>): IDL get with DOM attribute unset
+reflection-forms.html	label.htmlFor (<label for>): IDL set to ""
+reflection-forms.html	label.htmlFor (<label for>): IDL set to "+100"
+reflection-forms.html	label.htmlFor (<label for>): IDL set to ".5"
+reflection-forms.html	label.htmlFor (<label for>): IDL set to "5%"
+reflection-forms.html	label.htmlFor (<label for>): IDL set to -Infinity
+reflection-forms.html	label.htmlFor (<label for>): IDL set to 1.5
+reflection-forms.html	label.htmlFor (<label for>): IDL set to 7
+reflection-forms.html	label.htmlFor (<label for>): IDL set to Infinity
+reflection-forms.html	label.htmlFor (<label for>): IDL set to NaN
+reflection-forms.html	label.htmlFor (<label for>): IDL set to false
+reflection-forms.html	label.htmlFor (<label for>): IDL set to null
+reflection-forms.html	label.htmlFor (<label for>): IDL set to object "[object Object]"
+reflection-forms.html	label.htmlFor (<label for>): IDL set to object "test-toString"
+reflection-forms.html	label.htmlFor (<label for>): IDL set to object "test-valueOf"
+reflection-forms.html	label.htmlFor (<label for>): IDL set to true
+reflection-forms.html	label.htmlFor (<label for>): IDL set to undefined
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to ""
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to "+100"
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to ".5"
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to "5%"
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to -Infinity
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to 1.5
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to 7
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to Infinity
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to NaN
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to false
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to null
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to object "[object Object]"
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to object "test-toString"
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to object "test-valueOf"
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to true
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to undefined
+reflection-forms.html	label.htmlFor (<label for>): typeof IDL attribute
+reflection-forms.html	legend.align: IDL get with DOM attribute unset
+reflection-forms.html	legend.align: IDL set to ""
+reflection-forms.html	legend.align: IDL set to "+100"
+reflection-forms.html	legend.align: IDL set to ".5"
+reflection-forms.html	legend.align: IDL set to "5%"
+reflection-forms.html	legend.align: IDL set to -Infinity
+reflection-forms.html	legend.align: IDL set to 1.5
+reflection-forms.html	legend.align: IDL set to 7
+reflection-forms.html	legend.align: IDL set to Infinity
+reflection-forms.html	legend.align: IDL set to NaN
+reflection-forms.html	legend.align: IDL set to false
+reflection-forms.html	legend.align: IDL set to null
+reflection-forms.html	legend.align: IDL set to object "[object Object]"
+reflection-forms.html	legend.align: IDL set to object "test-toString"
+reflection-forms.html	legend.align: IDL set to object "test-valueOf"
+reflection-forms.html	legend.align: IDL set to true
+reflection-forms.html	legend.align: IDL set to undefined
+reflection-forms.html	legend.align: setAttribute() to ""
+reflection-forms.html	legend.align: setAttribute() to "+100"
+reflection-forms.html	legend.align: setAttribute() to ".5"
+reflection-forms.html	legend.align: setAttribute() to "5%"
+reflection-forms.html	legend.align: setAttribute() to -Infinity
+reflection-forms.html	legend.align: setAttribute() to 1.5
+reflection-forms.html	legend.align: setAttribute() to 7
+reflection-forms.html	legend.align: setAttribute() to Infinity
+reflection-forms.html	legend.align: setAttribute() to NaN
+reflection-forms.html	legend.align: setAttribute() to false
+reflection-forms.html	legend.align: setAttribute() to null
+reflection-forms.html	legend.align: setAttribute() to object "[object Object]"
+reflection-forms.html	legend.align: setAttribute() to object "test-toString"
+reflection-forms.html	legend.align: setAttribute() to object "test-valueOf"
+reflection-forms.html	legend.align: setAttribute() to true
+reflection-forms.html	legend.align: setAttribute() to undefined
+reflection-forms.html	legend.align: typeof IDL attribute
+reflection-forms.html	output.name: IDL get with DOM attribute unset
+reflection-forms.html	output.name: IDL set to ""
+reflection-forms.html	output.name: IDL set to "+100"
+reflection-forms.html	output.name: IDL set to ".5"
+reflection-forms.html	output.name: IDL set to "5%"
+reflection-forms.html	output.name: IDL set to -Infinity
+reflection-forms.html	output.name: IDL set to 1.5
+reflection-forms.html	output.name: IDL set to 7
+reflection-forms.html	output.name: IDL set to Infinity
+reflection-forms.html	output.name: IDL set to NaN
+reflection-forms.html	output.name: IDL set to false
+reflection-forms.html	output.name: IDL set to null
+reflection-forms.html	output.name: IDL set to object "[object Object]"
+reflection-forms.html	output.name: IDL set to object "test-toString"
+reflection-forms.html	output.name: IDL set to object "test-valueOf"
+reflection-forms.html	output.name: IDL set to true
+reflection-forms.html	output.name: IDL set to undefined
+reflection-forms.html	output.name: setAttribute() to ""
+reflection-forms.html	output.name: setAttribute() to "+100"
+reflection-forms.html	output.name: setAttribute() to ".5"
+reflection-forms.html	output.name: setAttribute() to "5%"
+reflection-forms.html	output.name: setAttribute() to -Infinity
+reflection-forms.html	output.name: setAttribute() to 1.5
+reflection-forms.html	output.name: setAttribute() to 7
+reflection-forms.html	output.name: setAttribute() to Infinity
+reflection-forms.html	output.name: setAttribute() to NaN
+reflection-forms.html	output.name: setAttribute() to false
+reflection-forms.html	output.name: setAttribute() to null
+reflection-forms.html	output.name: setAttribute() to object "[object Object]"
+reflection-forms.html	output.name: setAttribute() to object "test-toString"
+reflection-forms.html	output.name: setAttribute() to object "test-valueOf"
+reflection-forms.html	output.name: setAttribute() to true
+reflection-forms.html	output.name: setAttribute() to undefined
+reflection-forms.html	output.name: typeof IDL attribute
 [excluded]
 access-key-label.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
 aria-attribute-reflection-enumerated.tentative.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
@@ -3382,7 +3893,44 @@ reflection-forms.html	fieldset.dir: setAttribute() to object "test-valueOf"
 reflection-forms.html	fieldset.dir: setAttribute() to true
 reflection-forms.html	fieldset.dir: setAttribute() to undefined
 reflection-forms.html	fieldset.dir: typeof IDL attribute
+reflection-forms.html	fieldset.disabled: IDL get with DOM attribute unset
+reflection-forms.html	fieldset.disabled: IDL set to " foo "
+reflection-forms.html	fieldset.disabled: IDL set to ""
+reflection-forms.html	fieldset.disabled: IDL set to "+100"
+reflection-forms.html	fieldset.disabled: IDL set to ".5"
+reflection-forms.html	fieldset.disabled: IDL set to "5%"
+reflection-forms.html	fieldset.disabled: IDL set to "\\0"
+reflection-forms.html	fieldset.disabled: IDL set to -Infinity
+reflection-forms.html	fieldset.disabled: IDL set to 1.5
+reflection-forms.html	fieldset.disabled: IDL set to 7
+reflection-forms.html	fieldset.disabled: IDL set to Infinity
+reflection-forms.html	fieldset.disabled: IDL set to NaN
+reflection-forms.html	fieldset.disabled: IDL set to false
+reflection-forms.html	fieldset.disabled: IDL set to null
+reflection-forms.html	fieldset.disabled: IDL set to object "[object Object]"
+reflection-forms.html	fieldset.disabled: IDL set to object "test-toString"
+reflection-forms.html	fieldset.disabled: IDL set to object "test-valueOf"
 reflection-forms.html	fieldset.disabled: IDL set to true
+reflection-forms.html	fieldset.disabled: IDL set to undefined
+reflection-forms.html	fieldset.disabled: setAttribute() to " foo "
+reflection-forms.html	fieldset.disabled: setAttribute() to ""
+reflection-forms.html	fieldset.disabled: setAttribute() to "+100"
+reflection-forms.html	fieldset.disabled: setAttribute() to ".5"
+reflection-forms.html	fieldset.disabled: setAttribute() to "5%"
+reflection-forms.html	fieldset.disabled: setAttribute() to "disabled"
+reflection-forms.html	fieldset.disabled: setAttribute() to -Infinity
+reflection-forms.html	fieldset.disabled: setAttribute() to 1.5
+reflection-forms.html	fieldset.disabled: setAttribute() to 7
+reflection-forms.html	fieldset.disabled: setAttribute() to Infinity
+reflection-forms.html	fieldset.disabled: setAttribute() to NaN
+reflection-forms.html	fieldset.disabled: setAttribute() to false
+reflection-forms.html	fieldset.disabled: setAttribute() to null
+reflection-forms.html	fieldset.disabled: setAttribute() to object "[object Object]"
+reflection-forms.html	fieldset.disabled: setAttribute() to object "test-toString"
+reflection-forms.html	fieldset.disabled: setAttribute() to object "test-valueOf"
+reflection-forms.html	fieldset.disabled: setAttribute() to true
+reflection-forms.html	fieldset.disabled: setAttribute() to undefined
+reflection-forms.html	fieldset.disabled: typeof IDL attribute
 reflection-forms.html	fieldset.hidden: IDL get with DOM attribute unset
 reflection-forms.html	fieldset.hidden: IDL set to " foo "
 reflection-forms.html	fieldset.hidden: IDL set to ""
@@ -3456,6 +4004,40 @@ reflection-forms.html	fieldset.lang: setAttribute() to object "test-valueOf"
 reflection-forms.html	fieldset.lang: setAttribute() to true
 reflection-forms.html	fieldset.lang: setAttribute() to undefined
 reflection-forms.html	fieldset.lang: typeof IDL attribute
+reflection-forms.html	fieldset.name: IDL get with DOM attribute unset
+reflection-forms.html	fieldset.name: IDL set to ""
+reflection-forms.html	fieldset.name: IDL set to "+100"
+reflection-forms.html	fieldset.name: IDL set to ".5"
+reflection-forms.html	fieldset.name: IDL set to "5%"
+reflection-forms.html	fieldset.name: IDL set to -Infinity
+reflection-forms.html	fieldset.name: IDL set to 1.5
+reflection-forms.html	fieldset.name: IDL set to 7
+reflection-forms.html	fieldset.name: IDL set to Infinity
+reflection-forms.html	fieldset.name: IDL set to NaN
+reflection-forms.html	fieldset.name: IDL set to false
+reflection-forms.html	fieldset.name: IDL set to null
+reflection-forms.html	fieldset.name: IDL set to object "[object Object]"
+reflection-forms.html	fieldset.name: IDL set to object "test-toString"
+reflection-forms.html	fieldset.name: IDL set to object "test-valueOf"
+reflection-forms.html	fieldset.name: IDL set to true
+reflection-forms.html	fieldset.name: IDL set to undefined
+reflection-forms.html	fieldset.name: setAttribute() to ""
+reflection-forms.html	fieldset.name: setAttribute() to "+100"
+reflection-forms.html	fieldset.name: setAttribute() to ".5"
+reflection-forms.html	fieldset.name: setAttribute() to "5%"
+reflection-forms.html	fieldset.name: setAttribute() to -Infinity
+reflection-forms.html	fieldset.name: setAttribute() to 1.5
+reflection-forms.html	fieldset.name: setAttribute() to 7
+reflection-forms.html	fieldset.name: setAttribute() to Infinity
+reflection-forms.html	fieldset.name: setAttribute() to NaN
+reflection-forms.html	fieldset.name: setAttribute() to false
+reflection-forms.html	fieldset.name: setAttribute() to null
+reflection-forms.html	fieldset.name: setAttribute() to object "[object Object]"
+reflection-forms.html	fieldset.name: setAttribute() to object "test-toString"
+reflection-forms.html	fieldset.name: setAttribute() to object "test-valueOf"
+reflection-forms.html	fieldset.name: setAttribute() to true
+reflection-forms.html	fieldset.name: setAttribute() to undefined
+reflection-forms.html	fieldset.name: typeof IDL attribute
 reflection-forms.html	fieldset.tabIndex: IDL set to -1
 reflection-forms.html	fieldset.tabIndex: IDL set to -2147483648
 reflection-forms.html	fieldset.tabIndex: IDL set to -36
@@ -3518,6 +4100,94 @@ reflection-forms.html	fieldset.title: setAttribute() to object "test-valueOf"
 reflection-forms.html	fieldset.title: setAttribute() to true
 reflection-forms.html	fieldset.title: setAttribute() to undefined
 reflection-forms.html	fieldset.title: typeof IDL attribute
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL get with DOM attribute unset
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to ""
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to "+100"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to ".5"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to "5%"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to -Infinity
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to 1.5
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to 7
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to Infinity
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to NaN
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to false
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to null
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to object "[object Object]"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to object "test-toString"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to object "test-valueOf"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to true
+reflection-forms.html	form.acceptCharset (<form accept-charset>): IDL set to undefined
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to ""
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to "+100"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to ".5"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to "5%"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to -Infinity
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to 1.5
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to 7
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to Infinity
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to NaN
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to false
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to null
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to object "[object Object]"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to object "test-toString"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to object "test-valueOf"
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to true
+reflection-forms.html	form.acceptCharset (<form accept-charset>): setAttribute() to undefined
+reflection-forms.html	form.acceptCharset (<form accept-charset>): typeof IDL attribute
+reflection-forms.html	form.action: IDL get with DOM attribute unset
+reflection-forms.html	form.action: IDL set to ""
+reflection-forms.html	form.action: setAttribute() to ""
+reflection-forms.html	form.action: typeof IDL attribute
+reflection-forms.html	form.autocomplete: IDL get with DOM attribute unset
+reflection-forms.html	form.autocomplete: IDL set to ""
+reflection-forms.html	form.autocomplete: IDL set to "+100"
+reflection-forms.html	form.autocomplete: IDL set to ".5"
+reflection-forms.html	form.autocomplete: IDL set to "5%"
+reflection-forms.html	form.autocomplete: IDL set to "OFF"
+reflection-forms.html	form.autocomplete: IDL set to "ON"
+reflection-forms.html	form.autocomplete: IDL set to "ff"
+reflection-forms.html	form.autocomplete: IDL set to "n"
+reflection-forms.html	form.autocomplete: IDL set to "off"
+reflection-forms.html	form.autocomplete: IDL set to "on"
+reflection-forms.html	form.autocomplete: IDL set to "xoff"
+reflection-forms.html	form.autocomplete: IDL set to "xon"
+reflection-forms.html	form.autocomplete: IDL set to -Infinity
+reflection-forms.html	form.autocomplete: IDL set to 1.5
+reflection-forms.html	form.autocomplete: IDL set to 7
+reflection-forms.html	form.autocomplete: IDL set to Infinity
+reflection-forms.html	form.autocomplete: IDL set to NaN
+reflection-forms.html	form.autocomplete: IDL set to false
+reflection-forms.html	form.autocomplete: IDL set to null
+reflection-forms.html	form.autocomplete: IDL set to object "[object Object]"
+reflection-forms.html	form.autocomplete: IDL set to object "test-toString"
+reflection-forms.html	form.autocomplete: IDL set to object "test-valueOf"
+reflection-forms.html	form.autocomplete: IDL set to true
+reflection-forms.html	form.autocomplete: IDL set to undefined
+reflection-forms.html	form.autocomplete: setAttribute() to ""
+reflection-forms.html	form.autocomplete: setAttribute() to "+100"
+reflection-forms.html	form.autocomplete: setAttribute() to ".5"
+reflection-forms.html	form.autocomplete: setAttribute() to "5%"
+reflection-forms.html	form.autocomplete: setAttribute() to "OFF"
+reflection-forms.html	form.autocomplete: setAttribute() to "ON"
+reflection-forms.html	form.autocomplete: setAttribute() to "ff"
+reflection-forms.html	form.autocomplete: setAttribute() to "n"
+reflection-forms.html	form.autocomplete: setAttribute() to "off"
+reflection-forms.html	form.autocomplete: setAttribute() to "on"
+reflection-forms.html	form.autocomplete: setAttribute() to "xoff"
+reflection-forms.html	form.autocomplete: setAttribute() to "xon"
+reflection-forms.html	form.autocomplete: setAttribute() to -Infinity
+reflection-forms.html	form.autocomplete: setAttribute() to 1.5
+reflection-forms.html	form.autocomplete: setAttribute() to 7
+reflection-forms.html	form.autocomplete: setAttribute() to Infinity
+reflection-forms.html	form.autocomplete: setAttribute() to NaN
+reflection-forms.html	form.autocomplete: setAttribute() to false
+reflection-forms.html	form.autocomplete: setAttribute() to null
+reflection-forms.html	form.autocomplete: setAttribute() to object "[object Object]"
+reflection-forms.html	form.autocomplete: setAttribute() to object "test-toString"
+reflection-forms.html	form.autocomplete: setAttribute() to object "test-valueOf"
+reflection-forms.html	form.autocomplete: setAttribute() to true
+reflection-forms.html	form.autocomplete: setAttribute() to undefined
+reflection-forms.html	form.autocomplete: typeof IDL attribute
 reflection-forms.html	form.autofocus: IDL set to true
 reflection-forms.html	form.className (<form class>): IDL get with DOM attribute unset
 reflection-forms.html	form.className (<form class>): IDL set to ""
@@ -3611,6 +4281,122 @@ reflection-forms.html	form.dir: setAttribute() to object "test-valueOf"
 reflection-forms.html	form.dir: setAttribute() to true
 reflection-forms.html	form.dir: setAttribute() to undefined
 reflection-forms.html	form.dir: typeof IDL attribute
+reflection-forms.html	form.encoding (<form enctype>): IDL get with DOM attribute unset
+reflection-forms.html	form.encoding (<form enctype>): IDL set to ""
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "+100"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to ".5"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "5%"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "APPLICATION/X-WWW-FORM-URLENCODED"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "MULTIPART/FORM-DATA"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "TEXT/PLAIN"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "application/x-www-form-urlencoded"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "ext/plain"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "multipart/form-data"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "pplication/x-www-form-urlencoded"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "text/plain"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "ultipart/form-data"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "xapplication/x-www-form-urlencoded"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "xmultipart/form-data"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to "xtext/plain"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to -Infinity
+reflection-forms.html	form.encoding (<form enctype>): IDL set to 1.5
+reflection-forms.html	form.encoding (<form enctype>): IDL set to 7
+reflection-forms.html	form.encoding (<form enctype>): IDL set to Infinity
+reflection-forms.html	form.encoding (<form enctype>): IDL set to NaN
+reflection-forms.html	form.encoding (<form enctype>): IDL set to false
+reflection-forms.html	form.encoding (<form enctype>): IDL set to null
+reflection-forms.html	form.encoding (<form enctype>): IDL set to object "[object Object]"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to object "test-toString"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to object "test-valueOf"
+reflection-forms.html	form.encoding (<form enctype>): IDL set to true
+reflection-forms.html	form.encoding (<form enctype>): IDL set to undefined
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to ""
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "+100"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to ".5"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "5%"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "APPLICATION/X-WWW-FORM-URLENCODED"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "MULTIPART/FORM-DATA"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "TEXT/PLAIN"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "application/x-www-form-urlencoded"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "ext/plain"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "multipart/form-data"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "pplication/x-www-form-urlencoded"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "text/plain"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "ultipart/form-data"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "xapplication/x-www-form-urlencoded"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "xmultipart/form-data"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to "xtext/plain"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to -Infinity
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to 1.5
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to 7
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to Infinity
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to NaN
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to false
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to null
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to object "[object Object]"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to object "test-toString"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to object "test-valueOf"
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to true
+reflection-forms.html	form.encoding (<form enctype>): setAttribute() to undefined
+reflection-forms.html	form.encoding (<form enctype>): typeof IDL attribute
+reflection-forms.html	form.enctype: IDL get with DOM attribute unset
+reflection-forms.html	form.enctype: IDL set to ""
+reflection-forms.html	form.enctype: IDL set to "+100"
+reflection-forms.html	form.enctype: IDL set to ".5"
+reflection-forms.html	form.enctype: IDL set to "5%"
+reflection-forms.html	form.enctype: IDL set to "APPLICATION/X-WWW-FORM-URLENCODED"
+reflection-forms.html	form.enctype: IDL set to "MULTIPART/FORM-DATA"
+reflection-forms.html	form.enctype: IDL set to "TEXT/PLAIN"
+reflection-forms.html	form.enctype: IDL set to "application/x-www-form-urlencoded"
+reflection-forms.html	form.enctype: IDL set to "ext/plain"
+reflection-forms.html	form.enctype: IDL set to "multipart/form-data"
+reflection-forms.html	form.enctype: IDL set to "pplication/x-www-form-urlencoded"
+reflection-forms.html	form.enctype: IDL set to "text/plain"
+reflection-forms.html	form.enctype: IDL set to "ultipart/form-data"
+reflection-forms.html	form.enctype: IDL set to "xapplication/x-www-form-urlencoded"
+reflection-forms.html	form.enctype: IDL set to "xmultipart/form-data"
+reflection-forms.html	form.enctype: IDL set to "xtext/plain"
+reflection-forms.html	form.enctype: IDL set to -Infinity
+reflection-forms.html	form.enctype: IDL set to 1.5
+reflection-forms.html	form.enctype: IDL set to 7
+reflection-forms.html	form.enctype: IDL set to Infinity
+reflection-forms.html	form.enctype: IDL set to NaN
+reflection-forms.html	form.enctype: IDL set to false
+reflection-forms.html	form.enctype: IDL set to null
+reflection-forms.html	form.enctype: IDL set to object "[object Object]"
+reflection-forms.html	form.enctype: IDL set to object "test-toString"
+reflection-forms.html	form.enctype: IDL set to object "test-valueOf"
+reflection-forms.html	form.enctype: IDL set to true
+reflection-forms.html	form.enctype: IDL set to undefined
+reflection-forms.html	form.enctype: setAttribute() to ""
+reflection-forms.html	form.enctype: setAttribute() to "+100"
+reflection-forms.html	form.enctype: setAttribute() to ".5"
+reflection-forms.html	form.enctype: setAttribute() to "5%"
+reflection-forms.html	form.enctype: setAttribute() to "APPLICATION/X-WWW-FORM-URLENCODED"
+reflection-forms.html	form.enctype: setAttribute() to "MULTIPART/FORM-DATA"
+reflection-forms.html	form.enctype: setAttribute() to "TEXT/PLAIN"
+reflection-forms.html	form.enctype: setAttribute() to "application/x-www-form-urlencoded"
+reflection-forms.html	form.enctype: setAttribute() to "ext/plain"
+reflection-forms.html	form.enctype: setAttribute() to "multipart/form-data"
+reflection-forms.html	form.enctype: setAttribute() to "pplication/x-www-form-urlencoded"
+reflection-forms.html	form.enctype: setAttribute() to "text/plain"
+reflection-forms.html	form.enctype: setAttribute() to "ultipart/form-data"
+reflection-forms.html	form.enctype: setAttribute() to "xapplication/x-www-form-urlencoded"
+reflection-forms.html	form.enctype: setAttribute() to "xmultipart/form-data"
+reflection-forms.html	form.enctype: setAttribute() to "xtext/plain"
+reflection-forms.html	form.enctype: setAttribute() to -Infinity
+reflection-forms.html	form.enctype: setAttribute() to 1.5
+reflection-forms.html	form.enctype: setAttribute() to 7
+reflection-forms.html	form.enctype: setAttribute() to Infinity
+reflection-forms.html	form.enctype: setAttribute() to NaN
+reflection-forms.html	form.enctype: setAttribute() to false
+reflection-forms.html	form.enctype: setAttribute() to null
+reflection-forms.html	form.enctype: setAttribute() to object "[object Object]"
+reflection-forms.html	form.enctype: setAttribute() to object "test-toString"
+reflection-forms.html	form.enctype: setAttribute() to object "test-valueOf"
+reflection-forms.html	form.enctype: setAttribute() to true
+reflection-forms.html	form.enctype: setAttribute() to undefined
+reflection-forms.html	form.enctype: typeof IDL attribute
 reflection-forms.html	form.hidden: IDL get with DOM attribute unset
 reflection-forms.html	form.hidden: IDL set to " foo "
 reflection-forms.html	form.hidden: IDL set to ""
@@ -3684,6 +4470,66 @@ reflection-forms.html	form.lang: setAttribute() to object "test-valueOf"
 reflection-forms.html	form.lang: setAttribute() to true
 reflection-forms.html	form.lang: setAttribute() to undefined
 reflection-forms.html	form.lang: typeof IDL attribute
+reflection-forms.html	form.method: IDL get with DOM attribute unset
+reflection-forms.html	form.method: IDL set to ""
+reflection-forms.html	form.method: IDL set to "+100"
+reflection-forms.html	form.method: IDL set to ".5"
+reflection-forms.html	form.method: IDL set to "5%"
+reflection-forms.html	form.method: IDL set to "DIALOG"
+reflection-forms.html	form.method: IDL set to "GET"
+reflection-forms.html	form.method: IDL set to "POST"
+reflection-forms.html	form.method: IDL set to "dialog"
+reflection-forms.html	form.method: IDL set to "et"
+reflection-forms.html	form.method: IDL set to "get"
+reflection-forms.html	form.method: IDL set to "ialog"
+reflection-forms.html	form.method: IDL set to "ost"
+reflection-forms.html	form.method: IDL set to "post"
+reflection-forms.html	form.method: IDL set to "poſt"
+reflection-forms.html	form.method: IDL set to "xdialog"
+reflection-forms.html	form.method: IDL set to "xget"
+reflection-forms.html	form.method: IDL set to "xpost"
+reflection-forms.html	form.method: IDL set to -Infinity
+reflection-forms.html	form.method: IDL set to 1.5
+reflection-forms.html	form.method: IDL set to 7
+reflection-forms.html	form.method: IDL set to Infinity
+reflection-forms.html	form.method: IDL set to NaN
+reflection-forms.html	form.method: IDL set to false
+reflection-forms.html	form.method: IDL set to null
+reflection-forms.html	form.method: IDL set to object "[object Object]"
+reflection-forms.html	form.method: IDL set to object "test-toString"
+reflection-forms.html	form.method: IDL set to object "test-valueOf"
+reflection-forms.html	form.method: IDL set to true
+reflection-forms.html	form.method: IDL set to undefined
+reflection-forms.html	form.method: setAttribute() to ""
+reflection-forms.html	form.method: setAttribute() to "+100"
+reflection-forms.html	form.method: setAttribute() to ".5"
+reflection-forms.html	form.method: setAttribute() to "5%"
+reflection-forms.html	form.method: setAttribute() to "DIALOG"
+reflection-forms.html	form.method: setAttribute() to "GET"
+reflection-forms.html	form.method: setAttribute() to "POST"
+reflection-forms.html	form.method: setAttribute() to "dialog"
+reflection-forms.html	form.method: setAttribute() to "et"
+reflection-forms.html	form.method: setAttribute() to "get"
+reflection-forms.html	form.method: setAttribute() to "ialog"
+reflection-forms.html	form.method: setAttribute() to "ost"
+reflection-forms.html	form.method: setAttribute() to "post"
+reflection-forms.html	form.method: setAttribute() to "poſt"
+reflection-forms.html	form.method: setAttribute() to "xdialog"
+reflection-forms.html	form.method: setAttribute() to "xget"
+reflection-forms.html	form.method: setAttribute() to "xpost"
+reflection-forms.html	form.method: setAttribute() to -Infinity
+reflection-forms.html	form.method: setAttribute() to 1.5
+reflection-forms.html	form.method: setAttribute() to 7
+reflection-forms.html	form.method: setAttribute() to Infinity
+reflection-forms.html	form.method: setAttribute() to NaN
+reflection-forms.html	form.method: setAttribute() to false
+reflection-forms.html	form.method: setAttribute() to null
+reflection-forms.html	form.method: setAttribute() to object "[object Object]"
+reflection-forms.html	form.method: setAttribute() to object "test-toString"
+reflection-forms.html	form.method: setAttribute() to object "test-valueOf"
+reflection-forms.html	form.method: setAttribute() to true
+reflection-forms.html	form.method: setAttribute() to undefined
+reflection-forms.html	form.method: typeof IDL attribute
 reflection-forms.html	form.name: IDL get with DOM attribute unset
 reflection-forms.html	form.name: IDL set to ""
 reflection-forms.html	form.name: IDL set to "+100"
@@ -3718,7 +4564,44 @@ reflection-forms.html	form.name: setAttribute() to object "test-valueOf"
 reflection-forms.html	form.name: setAttribute() to true
 reflection-forms.html	form.name: setAttribute() to undefined
 reflection-forms.html	form.name: typeof IDL attribute
+reflection-forms.html	form.noValidate: IDL get with DOM attribute unset
+reflection-forms.html	form.noValidate: IDL set to " foo "
+reflection-forms.html	form.noValidate: IDL set to ""
+reflection-forms.html	form.noValidate: IDL set to "+100"
+reflection-forms.html	form.noValidate: IDL set to ".5"
+reflection-forms.html	form.noValidate: IDL set to "5%"
+reflection-forms.html	form.noValidate: IDL set to "\\0"
+reflection-forms.html	form.noValidate: IDL set to -Infinity
+reflection-forms.html	form.noValidate: IDL set to 1.5
+reflection-forms.html	form.noValidate: IDL set to 7
+reflection-forms.html	form.noValidate: IDL set to Infinity
+reflection-forms.html	form.noValidate: IDL set to NaN
+reflection-forms.html	form.noValidate: IDL set to false
+reflection-forms.html	form.noValidate: IDL set to null
+reflection-forms.html	form.noValidate: IDL set to object "[object Object]"
+reflection-forms.html	form.noValidate: IDL set to object "test-toString"
+reflection-forms.html	form.noValidate: IDL set to object "test-valueOf"
 reflection-forms.html	form.noValidate: IDL set to true
+reflection-forms.html	form.noValidate: IDL set to undefined
+reflection-forms.html	form.noValidate: setAttribute() to " foo "
+reflection-forms.html	form.noValidate: setAttribute() to ""
+reflection-forms.html	form.noValidate: setAttribute() to "+100"
+reflection-forms.html	form.noValidate: setAttribute() to ".5"
+reflection-forms.html	form.noValidate: setAttribute() to "5%"
+reflection-forms.html	form.noValidate: setAttribute() to "noValidate"
+reflection-forms.html	form.noValidate: setAttribute() to -Infinity
+reflection-forms.html	form.noValidate: setAttribute() to 1.5
+reflection-forms.html	form.noValidate: setAttribute() to 7
+reflection-forms.html	form.noValidate: setAttribute() to Infinity
+reflection-forms.html	form.noValidate: setAttribute() to NaN
+reflection-forms.html	form.noValidate: setAttribute() to false
+reflection-forms.html	form.noValidate: setAttribute() to null
+reflection-forms.html	form.noValidate: setAttribute() to object "[object Object]"
+reflection-forms.html	form.noValidate: setAttribute() to object "test-toString"
+reflection-forms.html	form.noValidate: setAttribute() to object "test-valueOf"
+reflection-forms.html	form.noValidate: setAttribute() to true
+reflection-forms.html	form.noValidate: setAttribute() to undefined
+reflection-forms.html	form.noValidate: typeof IDL attribute
 reflection-forms.html	form.tabIndex: IDL set to -1
 reflection-forms.html	form.tabIndex: IDL set to -2147483648
 reflection-forms.html	form.tabIndex: IDL set to -36
@@ -3747,6 +4630,40 @@ reflection-forms.html	form.tabIndex: setAttribute() to 2147483647
 reflection-forms.html	form.tabIndex: setAttribute() to object "2"
 reflection-forms.html	form.tabIndex: setAttribute() to object "3"
 reflection-forms.html	form.tabIndex: typeof IDL attribute
+reflection-forms.html	form.target: IDL get with DOM attribute unset
+reflection-forms.html	form.target: IDL set to ""
+reflection-forms.html	form.target: IDL set to "+100"
+reflection-forms.html	form.target: IDL set to ".5"
+reflection-forms.html	form.target: IDL set to "5%"
+reflection-forms.html	form.target: IDL set to -Infinity
+reflection-forms.html	form.target: IDL set to 1.5
+reflection-forms.html	form.target: IDL set to 7
+reflection-forms.html	form.target: IDL set to Infinity
+reflection-forms.html	form.target: IDL set to NaN
+reflection-forms.html	form.target: IDL set to false
+reflection-forms.html	form.target: IDL set to null
+reflection-forms.html	form.target: IDL set to object "[object Object]"
+reflection-forms.html	form.target: IDL set to object "test-toString"
+reflection-forms.html	form.target: IDL set to object "test-valueOf"
+reflection-forms.html	form.target: IDL set to true
+reflection-forms.html	form.target: IDL set to undefined
+reflection-forms.html	form.target: setAttribute() to ""
+reflection-forms.html	form.target: setAttribute() to "+100"
+reflection-forms.html	form.target: setAttribute() to ".5"
+reflection-forms.html	form.target: setAttribute() to "5%"
+reflection-forms.html	form.target: setAttribute() to -Infinity
+reflection-forms.html	form.target: setAttribute() to 1.5
+reflection-forms.html	form.target: setAttribute() to 7
+reflection-forms.html	form.target: setAttribute() to Infinity
+reflection-forms.html	form.target: setAttribute() to NaN
+reflection-forms.html	form.target: setAttribute() to false
+reflection-forms.html	form.target: setAttribute() to null
+reflection-forms.html	form.target: setAttribute() to object "[object Object]"
+reflection-forms.html	form.target: setAttribute() to object "test-toString"
+reflection-forms.html	form.target: setAttribute() to object "test-valueOf"
+reflection-forms.html	form.target: setAttribute() to true
+reflection-forms.html	form.target: setAttribute() to undefined
+reflection-forms.html	form.target: typeof IDL attribute
 reflection-forms.html	form.title: IDL get with DOM attribute unset
 reflection-forms.html	form.title: IDL set to ""
 reflection-forms.html	form.title: IDL set to "+100"
@@ -5371,6 +6288,40 @@ reflection-forms.html	label.hidden: setAttribute() to object "test-valueOf"
 reflection-forms.html	label.hidden: setAttribute() to true
 reflection-forms.html	label.hidden: setAttribute() to undefined
 reflection-forms.html	label.hidden: typeof IDL attribute
+reflection-forms.html	label.htmlFor (<label for>): IDL get with DOM attribute unset
+reflection-forms.html	label.htmlFor (<label for>): IDL set to ""
+reflection-forms.html	label.htmlFor (<label for>): IDL set to "+100"
+reflection-forms.html	label.htmlFor (<label for>): IDL set to ".5"
+reflection-forms.html	label.htmlFor (<label for>): IDL set to "5%"
+reflection-forms.html	label.htmlFor (<label for>): IDL set to -Infinity
+reflection-forms.html	label.htmlFor (<label for>): IDL set to 1.5
+reflection-forms.html	label.htmlFor (<label for>): IDL set to 7
+reflection-forms.html	label.htmlFor (<label for>): IDL set to Infinity
+reflection-forms.html	label.htmlFor (<label for>): IDL set to NaN
+reflection-forms.html	label.htmlFor (<label for>): IDL set to false
+reflection-forms.html	label.htmlFor (<label for>): IDL set to null
+reflection-forms.html	label.htmlFor (<label for>): IDL set to object "[object Object]"
+reflection-forms.html	label.htmlFor (<label for>): IDL set to object "test-toString"
+reflection-forms.html	label.htmlFor (<label for>): IDL set to object "test-valueOf"
+reflection-forms.html	label.htmlFor (<label for>): IDL set to true
+reflection-forms.html	label.htmlFor (<label for>): IDL set to undefined
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to ""
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to "+100"
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to ".5"
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to "5%"
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to -Infinity
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to 1.5
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to 7
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to Infinity
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to NaN
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to false
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to null
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to object "[object Object]"
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to object "test-toString"
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to object "test-valueOf"
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to true
+reflection-forms.html	label.htmlFor (<label for>): setAttribute() to undefined
+reflection-forms.html	label.htmlFor (<label for>): typeof IDL attribute
 reflection-forms.html	label.inert: IDL set to true
 reflection-forms.html	label.lang: IDL get with DOM attribute unset
 reflection-forms.html	label.lang: IDL set to ""
@@ -5468,6 +6419,40 @@ reflection-forms.html	label.title: setAttribute() to object "test-valueOf"
 reflection-forms.html	label.title: setAttribute() to true
 reflection-forms.html	label.title: setAttribute() to undefined
 reflection-forms.html	label.title: typeof IDL attribute
+reflection-forms.html	legend.align: IDL get with DOM attribute unset
+reflection-forms.html	legend.align: IDL set to ""
+reflection-forms.html	legend.align: IDL set to "+100"
+reflection-forms.html	legend.align: IDL set to ".5"
+reflection-forms.html	legend.align: IDL set to "5%"
+reflection-forms.html	legend.align: IDL set to -Infinity
+reflection-forms.html	legend.align: IDL set to 1.5
+reflection-forms.html	legend.align: IDL set to 7
+reflection-forms.html	legend.align: IDL set to Infinity
+reflection-forms.html	legend.align: IDL set to NaN
+reflection-forms.html	legend.align: IDL set to false
+reflection-forms.html	legend.align: IDL set to null
+reflection-forms.html	legend.align: IDL set to object "[object Object]"
+reflection-forms.html	legend.align: IDL set to object "test-toString"
+reflection-forms.html	legend.align: IDL set to object "test-valueOf"
+reflection-forms.html	legend.align: IDL set to true
+reflection-forms.html	legend.align: IDL set to undefined
+reflection-forms.html	legend.align: setAttribute() to ""
+reflection-forms.html	legend.align: setAttribute() to "+100"
+reflection-forms.html	legend.align: setAttribute() to ".5"
+reflection-forms.html	legend.align: setAttribute() to "5%"
+reflection-forms.html	legend.align: setAttribute() to -Infinity
+reflection-forms.html	legend.align: setAttribute() to 1.5
+reflection-forms.html	legend.align: setAttribute() to 7
+reflection-forms.html	legend.align: setAttribute() to Infinity
+reflection-forms.html	legend.align: setAttribute() to NaN
+reflection-forms.html	legend.align: setAttribute() to false
+reflection-forms.html	legend.align: setAttribute() to null
+reflection-forms.html	legend.align: setAttribute() to object "[object Object]"
+reflection-forms.html	legend.align: setAttribute() to object "test-toString"
+reflection-forms.html	legend.align: setAttribute() to object "test-valueOf"
+reflection-forms.html	legend.align: setAttribute() to true
+reflection-forms.html	legend.align: setAttribute() to undefined
+reflection-forms.html	legend.align: typeof IDL attribute
 reflection-forms.html	legend.autofocus: IDL set to true
 reflection-forms.html	legend.className (<legend class>): IDL get with DOM attribute unset
 reflection-forms.html	legend.className (<legend class>): IDL set to ""
@@ -6728,6 +7713,40 @@ reflection-forms.html	output.lang: setAttribute() to object "test-valueOf"
 reflection-forms.html	output.lang: setAttribute() to true
 reflection-forms.html	output.lang: setAttribute() to undefined
 reflection-forms.html	output.lang: typeof IDL attribute
+reflection-forms.html	output.name: IDL get with DOM attribute unset
+reflection-forms.html	output.name: IDL set to ""
+reflection-forms.html	output.name: IDL set to "+100"
+reflection-forms.html	output.name: IDL set to ".5"
+reflection-forms.html	output.name: IDL set to "5%"
+reflection-forms.html	output.name: IDL set to -Infinity
+reflection-forms.html	output.name: IDL set to 1.5
+reflection-forms.html	output.name: IDL set to 7
+reflection-forms.html	output.name: IDL set to Infinity
+reflection-forms.html	output.name: IDL set to NaN
+reflection-forms.html	output.name: IDL set to false
+reflection-forms.html	output.name: IDL set to null
+reflection-forms.html	output.name: IDL set to object "[object Object]"
+reflection-forms.html	output.name: IDL set to object "test-toString"
+reflection-forms.html	output.name: IDL set to object "test-valueOf"
+reflection-forms.html	output.name: IDL set to true
+reflection-forms.html	output.name: IDL set to undefined
+reflection-forms.html	output.name: setAttribute() to ""
+reflection-forms.html	output.name: setAttribute() to "+100"
+reflection-forms.html	output.name: setAttribute() to ".5"
+reflection-forms.html	output.name: setAttribute() to "5%"
+reflection-forms.html	output.name: setAttribute() to -Infinity
+reflection-forms.html	output.name: setAttribute() to 1.5
+reflection-forms.html	output.name: setAttribute() to 7
+reflection-forms.html	output.name: setAttribute() to Infinity
+reflection-forms.html	output.name: setAttribute() to NaN
+reflection-forms.html	output.name: setAttribute() to false
+reflection-forms.html	output.name: setAttribute() to null
+reflection-forms.html	output.name: setAttribute() to object "[object Object]"
+reflection-forms.html	output.name: setAttribute() to object "test-toString"
+reflection-forms.html	output.name: setAttribute() to object "test-valueOf"
+reflection-forms.html	output.name: setAttribute() to true
+reflection-forms.html	output.name: setAttribute() to undefined
+reflection-forms.html	output.name: typeof IDL attribute
 reflection-forms.html	output.tabIndex: IDL set to -1
 reflection-forms.html	output.tabIndex: IDL set to -2147483648
 reflection-forms.html	output.tabIndex: IDL set to -36

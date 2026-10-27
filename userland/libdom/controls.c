@@ -1,10 +1,12 @@
 #include "internal.h"
 #include "os64/fmt.h"
 
-/* THE CONTROLS' REFLECTIONS AND STATE (0f's P3a; INTERFACES_FORMS.md § P3).
+/* THE CONTROLS' REFLECTIONS AND STATE (0f's P3a and P3b; INTERFACES_FORMS.md
+ * § P3).
  *
- * Most of what input, textarea, select and button add is a content
- * attribute reflected as an IDL attribute, by one of HTML's few rules
+ * Most of what input, textarea, select and button add, and the form,
+ * label, fieldset, legend and output beside them, is a content attribute
+ * reflected as an IDL attribute, by one of HTML's few rules
  * (§ 2.6.1): a string; a URL, read resolved; a boolean, present or not; an
  * enumerated one, read as its canonical keyword or a default; and the
  * integers, each with its own default and its own answer to a value out of
@@ -14,8 +16,10 @@
  * Beside them, the members that are not a plain attribute: textarea's
  * defaultValue (its child text) and textLength; input's indeterminate (a
  * flag with no attribute, libpage's, which yonder's checkbox draws), its
- * autocomplete and its width and height; and each control's form (its form
- * owner) and labels.
+ * autocomplete and its width and height; and the form owner (`form`) of each
+ * control, fieldset and output, and the labels of each control and output.
+ * The other members of a form, label, fieldset, legend and output are
+ * forms.c's.
  *
  * One row of the Modern Web table, naming nothing of window's. */
 
@@ -26,11 +30,17 @@ enum { K_STRING, K_URL, K_FORM_ACTION, K_BOOLEAN, K_ENUM, K_LIMITED_LONG, K_UNSI
 #define TA (1u << D_PROTO_TEXTAREA)
 #define SE (1u << D_PROTO_SELECT)
 #define BU (1u << D_PROTO_BUTTON)
+#define FO (1u << D_PROTO_FORM)
+#define LA (1u << D_PROTO_LABEL)
+#define FS (1u << D_PROTO_FIELDSET)
+#define LE (1u << D_PROTO_LEGEND)
+#define OU (1u << D_PROTO_OUTPUT)
 
 static const char *const kEnctypes[] = {"application/x-www-form-urlencoded", "multipart/form-data", "text/plain",
                                         NULL};
 /* formmethod's keywords are a form's method's, on an input as on a button. */
 static const char *const kMethods[] = {"get", "post", "dialog", NULL};
+static const char *const kAutocomplete[] = {"on", "off", NULL};
 
 typedef struct {
     const char *property, *attribute;
@@ -50,7 +60,7 @@ static const DReflection kReflections[] = {
     {"defaultChecked", "checked", K_BOOLEAN, IN, NULL, NULL, NULL, 0},
     {"defaultValue", "value", K_STRING, IN, NULL, NULL, NULL, 0},
     {"dirName", "dirname", K_STRING, IN | TA, NULL, NULL, NULL, 0},
-    {"disabled", "disabled", K_BOOLEAN, IN | TA | SE | BU, NULL, NULL, NULL, 0},
+    {"disabled", "disabled", K_BOOLEAN, IN | TA | SE | BU | FS, NULL, NULL, NULL, 0},
     {"formAction", "formaction", K_FORM_ACTION, IN | BU, NULL, NULL, NULL, 0},
     {"formEnctype", "formenctype", K_ENUM, IN | BU, kEnctypes, "", "application/x-www-form-urlencoded", 0},
     {"formMethod", "formmethod", K_ENUM, IN | BU, kMethods, "", "get", 0},
@@ -71,8 +81,23 @@ static const DReflection kReflections[] = {
     {"cols", "cols", K_UNSIGNED_FALLBACK, TA, NULL, NULL, NULL, 20},
     {"rows", "rows", K_UNSIGNED_FALLBACK, TA, NULL, NULL, NULL, 2},
     {"wrap", "wrap", K_STRING, TA, NULL, NULL, NULL, 0},
+    /* A form's own (P3b): the attributes its controls' form* override. */
+    {"acceptCharset", "accept-charset", K_STRING, FO, NULL, NULL, NULL, 0},
+    {"action", "action", K_FORM_ACTION, FO, NULL, NULL, NULL, 0},
+    {"autocomplete", "autocomplete", K_ENUM, FO, kAutocomplete, "on", "on", 0},
+    {"enctype", "enctype", K_ENUM, FO, kEnctypes, "application/x-www-form-urlencoded",
+     "application/x-www-form-urlencoded", 0},
+    {"encoding", "enctype", K_ENUM, FO, kEnctypes, "application/x-www-form-urlencoded",
+     "application/x-www-form-urlencoded", 0},
+    {"method", "method", K_ENUM, FO, kMethods, "get", "get", 0},
+    {"noValidate", "novalidate", K_BOOLEAN, FO, NULL, NULL, NULL, 0},
+    {"target", "target", K_STRING, FO, NULL, NULL, NULL, 0},
+    /* A fieldset's and an output's name (a form's and a control's are every
+     * page's), and a label's for. */
+    {"name", "name", K_STRING, FS | OU, NULL, NULL, NULL, 0},
+    {"htmlFor", "for", K_STRING, LA, NULL, NULL, NULL, 0},
     /* Obsolete, and still read. */
-    {"align", "align", K_STRING, IN, NULL, NULL, NULL, 0},
+    {"align", "align", K_STRING, IN | LE, NULL, NULL, NULL, 0},
     {"useMap", "usemap", K_STRING, IN, NULL, NULL, NULL, 0},
 };
 
@@ -89,7 +114,10 @@ static bool html(const os64_html_node_t *node, os64_html_tag_t tag)
 static unsigned control_kind(const os64_html_node_t *node)
 {
     return html(node, OS64_HTML_TAG_INPUT) ? IN : html(node, OS64_HTML_TAG_TEXTAREA) ? TA :
-           html(node, OS64_HTML_TAG_SELECT) ? SE : html(node, OS64_HTML_TAG_BUTTON) ? BU : 0;
+           html(node, OS64_HTML_TAG_SELECT) ? SE : html(node, OS64_HTML_TAG_BUTTON) ? BU :
+           html(node, OS64_HTML_TAG_FORM) ? FO : html(node, OS64_HTML_TAG_LABEL) ? LA :
+           html(node, OS64_HTML_TAG_FIELDSET) ? FS : html(node, OS64_HTML_TAG_LEGEND) ? LE :
+           html(node, OS64_HTML_TAG_OUTPUT) ? OU : 0;
 }
 
 static bool is_space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r'; }
@@ -151,7 +179,8 @@ static JSValue reflection_get(os64_dom_t *dom, JSContext *ctx, const os64_html_n
     case K_BOOLEAN: return JS_NewBool(ctx, attr != NULL);
     case K_URL: return attr != NULL ? url_value(dom, ctx, attr->value) : JS_NewString(ctx, "");
     case K_FORM_ACTION:
-        /* formAction reads the document's URL when it is missing or empty. */
+        /* formAction, and a form's action, read the document's URL when
+         * the attribute is missing or empty. */
         if (attr == NULL || attr->value[0] == '\0')
             return JS_NewString(ctx, d_window_document(dom, node) && dom->url != NULL ? dom->url : "about:blank");
         return url_value(dom, ctx, attr->value);
@@ -238,9 +267,10 @@ static bool token_in(Token token, const char *const *words)
 
 /* HTML § 4.10.18.7.1, the autocomplete attribute's grammar read from its
  * last token back: [section-*] [shipping|billing] [home|work|...] field
- * [webauthn], or a lone "on" or "off" (not on a hidden input, which wears
- * the autofill anchor mantle). The tokens it took, lowercased and one
- * space apart; "" for a value the grammar refuses or a missing one. */
+ * [webauthn], `webauthn` alone, or a lone "on" or "off" (not on a hidden
+ * input, which wears the autofill anchor mantle). The tokens it took,
+ * lowercased and one space apart; "" for a value the grammar refuses or a
+ * missing one. */
 static JSValue autocomplete_value(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 {
     const os64_html_attr_t *attr = os64_html_attr(node, "autocomplete");
@@ -264,7 +294,8 @@ static JSValue autocomplete_value(os64_dom_t *dom, JSContext *ctx, const os64_ht
         return JS_NewString(ctx, lower(tokens[0].at[1]) == 'n' ? "on" : "off");
     size_t last = count;
     if (token_in(tokens[last - 1], (const char *const[]){"webauthn", NULL})) last--;
-    if (last == 0) return JS_NewString(ctx, "");
+    /* `webauthn` alone is a field of its own. */
+    if (last == 0) return JS_NewString(ctx, "webauthn");
     Token field = tokens[last - 1];
     bool contact = token_in(field, kContactNames);
     if (!contact && !token_in(field, kFieldNames)) return JS_NewString(ctx, "");
@@ -419,10 +450,10 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
         return image_input(node) ? reflection_get(dom, ctx, node, row) : JS_NewUint32(ctx, 0);
     }
     case M_FORM:
-        if (kind == 0) return JS_ThrowTypeError(ctx, "Illegal invocation");
+        if ((kind & (IN | TA | SE | BU | FS | OU)) == 0) return JS_ThrowTypeError(ctx, "Illegal invocation");
         return d_wrap(dom, ctx, d_form_owner(node));
     case M_LABELS:
-        if (kind == 0) return JS_ThrowTypeError(ctx, "Illegal invocation");
+        if ((kind & (IN | TA | SE | BU | OU)) == 0) return JS_ThrowTypeError(ctx, "Illegal invocation");
         return labelable(node) ? d_labels(dom, ctx, node) : JS_NULL;
     default: return JS_ThrowTypeError(ctx, "Unknown control member");
     }
@@ -435,9 +466,10 @@ int d_controls_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         {"defaultValue", M_TEXT_DEFAULT, true, TA}, {"textLength", M_TEXT_LENGTH, false, TA},
         {"indeterminate", M_INDETERMINATE, true, IN}, {"autocomplete", M_AUTOCOMPLETE, true, IN | TA | SE},
         {"width", M_WIDTH, true, IN}, {"height", M_HEIGHT, true, IN},
-        {"form", M_FORM, false, IN | TA | SE | BU}, {"labels", M_LABELS, false, IN | TA | SE | BU},
+        {"form", M_FORM, false, IN | TA | SE | BU | FS | OU}, {"labels", M_LABELS, false, IN | TA | SE | BU | OU},
     };
-    static const int kinds[] = {D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT, D_PROTO_BUTTON};
+    static const int kinds[] = {D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT, D_PROTO_BUTTON, D_PROTO_FORM,
+                                D_PROTO_LABEL, D_PROTO_FIELDSET, D_PROTO_LEGEND, D_PROTO_OUTPUT};
     for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
         JSValueConst prototype = dom->prototypes[kinds[k]]->value;
         unsigned mask = 1u << kinds[k];
