@@ -121,7 +121,11 @@ establish general SVG conformance or a page-scale performance guarantee.
 - Windowed QEMU on private root/home disks: all six cards, reversible mutation
   across SVG roots, scrolling and 400% zoom pass. The 25 installed guest files
   match the frozen delivery's hashes. Orderly shutdown completes and both
-  filesystems pass `e2fsck -fn` with exit 0. P5 validation is still pending.
+  filesystems pass `e2fsck -fn` with exit 0.
+- P5: Chris confirmed repeated clicks on **Change the shared drawing** update
+  the copies, including their cousins in the other SVG root. The 400% zoom
+  check also passes. This is interactive hardware validation, not a measured
+  frame-rate or timed-animation claim.
 
 Guest captures: [initial](../../svg-evidence/yonder-use-top.png),
 [changed source](../../svg-evidence/yonder-use-changed.png),
