@@ -3226,12 +3226,13 @@ static bool draws_at(const flow_box_t *b, int32_t x, int32_t y)
         return true;
     // An inset shadow paints the padding box but its hole: the padding box
     // moved by the shadow's offset and drawn in by its spread, the blur
-    // reaching in as far again.
+    // reaching in as far again as the painter blurs it
+    // (flow_shadow_blur_reach).
     for (int32_t i = 0; i < s->nbox_shadows; i++) {
         const flow_shadow_t *sh = &s->box_shadows[i];
         if (!sh->inset)
             continue;
-        int64_t in = (int64_t)sh->spread + sh->blur;
+        int64_t in = (int64_t)sh->spread + flow_shadow_blur_reach(sh->blur);
         if (x < x0 + sh->x + in || y < y0 + sh->y + in || x >= x1 + sh->x - in || y >= y1 + sh->y - in)
             return true;
     }

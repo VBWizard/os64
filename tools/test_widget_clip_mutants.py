@@ -63,6 +63,8 @@ mutants = [
     ('an-inset-shadow-draws-everywhere', FLOW,
      '        if (x < x0 + sh->x + in || y < y0 + sh->y + in || x >= x1 + sh->x - in || y >= y1 + sh->y - in)',
      '        if (true || x < x0 + sh->x + in || y < y0 + sh->y + in)', LIBFLOW),
+    ('an-inset-blur-reaches-its-radius', FLOW, '        int64_t in = (int64_t)sh->spread + flow_shadow_blur_reach(sh->blur);',
+     '        int64_t in = (int64_t)sh->spread + sh->blur;', LIBFLOW),
     ('holds-ignores-the-clip', UI_INTERNAL, '\t       (!w->clipped || (x >= c.x', '\t       (true || (x >= c.x', UI_DAMAGE),
     ('a-list-chooses-a-cut-row', UI_LIST, '    if (!ui_widget_holds(&list->w, x, y) || x < r.x + 2',
      '    if (x < r.x + 2', UI_DAMAGE),
