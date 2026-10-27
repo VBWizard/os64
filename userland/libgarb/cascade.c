@@ -2019,6 +2019,7 @@ static int32_t svg_attributes(garb_cascade_t *c, const os64_html_node_t *el, Dec
                                         "opacity",
                                         "display",
                                         "visibility",
+                                        "overflow",
                                         "width",
                                         "height", "x", "y", "cx", "cy", "r", "rx", "ry"};
     Decl *d = NULL;

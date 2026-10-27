@@ -16,11 +16,13 @@ typedef struct {
     const garb_val_t *transform_css, *opacity_css, *dash_css, *dashoffset_css;
     uint32_t color;
     bool current_fill, current_stroke, vector, linear;
+    int overflow[2]; // visible, hidden, scroll, auto, clip
 } Computed;
 typedef struct {
     const os64_html_node_t *source;
     uint64_t parent;
     bool instanced;
+    double width, height; // Descendant percentage basis in viewport user units.
 } Instance;
 typedef struct {
     const os64_html_document_t *doc;
@@ -326,24 +328,23 @@ bool yonder_svg_size(const os64_html_node_t *n, int32_t *w, int32_t *h)
     *h = (int32_t)(height + .5);
     return true;
 }
-static svg_status_t viewport(Adapter *a, int32_t w, int32_t h, uint32_t zoom, Map *m)
+static svg_status_t viewport_map(const os64_html_node_t *node, double w, double h,
+                                 double *user_width, double *user_height, Map *m)
 {
     double v[4];
     *m = identity;
-    a->width = w * 1000.0 / zoom;
-    a->height = h * 1000.0 / zoom;
-    if (!*attr(a->root, "viewBox")) {
-        m->a = m->d = zoom / 1000.0;
+    *user_width = w;
+    *user_height = h;
+    if (!*attr(node, "viewBox"))
         return SVG_OK;
-    }
-    if (!viewbox(a->root, v))
+    if (!viewbox(node, v))
         return SVG_MALFORMED;
     if (!v[2] || !v[3])
         return SVG_PENDING; // A zero viewport has no painted content.
-    a->width = v[2];
-    a->height = v[3];
+    *user_width = v[2];
+    *user_height = v[3];
     double sx = w / v[2], sy = h / v[3];
-    const char *par = attr(a->root, "preserveAspectRatio");
+    const char *par = attr(node, "preserveAspectRatio");
     Scanner s;
     if (!scanner(par, &s))
         return SVG_LIMIT;
@@ -392,6 +393,14 @@ static svg_status_t viewport(Adapter *a, int32_t w, int32_t h, uint32_t zoom, Ma
                -v[1] * scale + (h - v[3] * scale) * ay / 2};
     return finite_map(*m) ? SVG_OK : SVG_LIMIT;
 }
+static svg_status_t viewport(Adapter *a, int32_t w, int32_t h, uint32_t zoom, Map *m)
+{
+    svg_status_t status =
+        viewport_map(a->root, w * 1000.0 / zoom, h * 1000.0 / zoom, &a->width, &a->height, m);
+    if (status == SVG_OK)
+        *m = multiply((Map){zoom / 1000.0, 0, 0, zoom / 1000.0, 0, 0}, *m);
+    return status;
+}
 static const garb_val_t *winner(const garb_cascade_t *c, const os64_html_node_t *n,
                                 garb_prop_t prop)
 {
@@ -433,6 +442,10 @@ static Computed initial(uint32_t ink)
 static void copy_property(Computed *d, const Computed *s, garb_prop_t p)
 {
     switch (p) {
+    case GARB_OVERFLOW_X:
+    case GARB_OVERFLOW_Y:
+        d->overflow[p == GARB_OVERFLOW_Y] = s->overflow[p == GARB_OVERFLOW_Y];
+        break;
     case GARB_COLOR:
         d->color = s->color;
         break;
@@ -541,6 +554,14 @@ static svg_status_t apply(Adapter *a, Computed *c, const Computed *parent, garb_
     }
     double n = 0;
     switch (prop) {
+    case GARB_OVERFLOW_X:
+    case GARB_OVERFLOW_Y:
+        c->overflow[prop == GARB_OVERFLOW_Y] = keyword(v, "hidden")   ? 1
+                                               : keyword(v, "scroll") ? 2
+                                               : keyword(v, "auto")   ? 3
+                                               : keyword(v, "clip")   ? 4
+                                                                      : 0;
+        break;
     case GARB_COLOR:
         c->color = color(v->color, parent->color);
         break;
@@ -656,6 +677,8 @@ static svg_status_t remember(Adapter *a, const svg_style_request_t *r)
     a->instances[r->instance] = (Instance){
         .source = (const void *)(uintptr_t)r->source,
         .parent = r->parent_instance,
+        .width = parent.source ? parent.width : a->width,
+        .height = parent.source ? parent.height : a->height,
         .instanced = parent.instanced || (parent.source && parent.source->ns == OS64_HTML_NS_SVG &&
                                           same_word(parent.source->name, "use"))};
     return SVG_OK;
@@ -694,6 +717,11 @@ static svg_status_t compute(Adapter *a, uint64_t instance, Computed *c)
         c->transform_css = NULL;
         c->s.display = true;
         c->vector = false;
+        // SVG's UA rule clips nested svg and symbol viewports by default.
+        c->overflow[0] = c->overflow[1] =
+            p->ns == OS64_HTML_NS_SVG && (same_word(p->name, "svg") || same_word(p->name, "symbol"))
+                ? 1
+                : 0;
         garb_style_t style = garb_style_for(a->cascade, p);
         // Resolve color first. An inherited currentColor paint stays symbolic
         // until the descendant's own color has been computed.
@@ -803,6 +831,66 @@ static svg_status_t geometry_value(Adapter *a, uint64_t instance, garb_prop_t pr
     }
     return SVG_OK;
 }
+static svg_status_t nested_viewport(Adapter *a, const svg_style_request_t *r, const Computed *c,
+                                    svg_style_t *out)
+{
+    const os64_html_node_t *n = (const void *)(uintptr_t)r->source;
+    uint64_t parent = r->parent_instance;
+    const os64_html_node_t *host = parent ? a->instances[parent].source : NULL;
+    bool referenced = host && host->ns == OS64_HTML_NS_SVG && same_word(host->name, "use");
+    if (same_word(n->name, "symbol") && (*attr(n, "refX") || *attr(n, "refY")))
+        return SVG_UNSUPPORTED;
+    double w = NAN, h = NAN, x, y;
+    svg_status_t status = SVG_OK;
+    if (referenced) {
+        status = geometry_value(a, parent, GARB_WIDTH, a->width, NAN, &w);
+        if (status == SVG_OK)
+            status = geometry_value(a, parent, GARB_HEIGHT, a->height, NAN, &h);
+    }
+    if (status == SVG_OK && isnan(w))
+        status = geometry_value(a, r->instance, GARB_WIDTH, a->width, a->width, &w);
+    if (status == SVG_OK && isnan(h))
+        status = geometry_value(a, r->instance, GARB_HEIGHT, a->height, a->height, &h);
+    if (status == SVG_OK)
+        status = geometry_value(a, r->instance, GARB_X, a->width, 0, &x);
+    if (status == SVG_OK)
+        status = geometry_value(a, r->instance, GARB_Y, a->height, 0, &y);
+    if (status != SVG_OK)
+        return status;
+    if (w <= 0 || h <= 0) {
+        out->display = false;
+        return SVG_OK;
+    }
+    Map content;
+    double uw, uh;
+    status = viewport_map(n, w, h, &uw, &uh, &content);
+    if (status == SVG_PENDING) {
+        out->display = false;
+        return SVG_OK;
+    }
+    if (status != SVG_OK)
+        return status;
+    // Scroll/auto require a scrolling or visibility policy beyond this static profile.
+    if (c->overflow[0] == 2 || c->overflow[0] == 3 || c->overflow[1] == 2 || c->overflow[1] == 3)
+        return SVG_UNSUPPORTED;
+    int overflow[2] = {c->overflow[0], c->overflow[1]};
+    for (int i = 0; i < 2; ++i)
+        if (c->overflow[1 - i] != 0 && c->overflow[1 - i] != 4) {
+            if (overflow[i] == 0)
+                overflow[i] = 3;
+            if (overflow[i] == 4)
+                overflow[i] = 1;
+        }
+    if ((overflow[0] != 0) != (overflow[1] != 0))
+        return SVG_UNSUPPORTED; // One-axis clip/visible needs an unbounded strip mask.
+    out->viewport = (svg_viewport_t){true, overflow[0] != 0, w, h, content};
+    out->transform = multiply(out->transform, (Map){1, 0, 0, 1, x, y});
+    if (!finite_map(out->transform))
+        return SVG_LIMIT;
+    a->instances[r->instance].width = uw;
+    a->instances[r->instance].height = uh;
+    return SVG_OK;
+}
 static svg_status_t line_coordinate(Adapter *a, const os64_html_node_t *n, const char *name,
                                     double percent, double *out)
 {
@@ -896,7 +984,9 @@ static svg_status_t node(void *ctx, void *snapshot, uint64_t source, svg_node_t 
     Adapter *a = ctx;
     (void)snapshot;
     const os64_html_node_t *n = (const void *)(uintptr_t)source;
-    bool group = n == a->root || (n->ns == OS64_HTML_NS_SVG && same_word(n->name, "g"));
+    bool group =
+        n->ns == OS64_HTML_NS_SVG &&
+        (same_word(n->name, "g") || same_word(n->name, "svg") || same_word(n->name, "symbol"));
     out->kind = group                                                     ? SVG_NODE_GROUP
                 : n->ns == OS64_HTML_NS_SVG && same_word(n->name, "path") ? SVG_NODE_PATH
                 : n->ns == OS64_HTML_NS_SVG && same_word(n->name, "use")  ? SVG_NODE_USE
@@ -912,7 +1002,11 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
     Adapter *a = ctx;
     (void)snapshot;
     const os64_html_node_t *n = (const void *)(uintptr_t)r->source;
-    if (ignored(n)) {
+    const os64_html_node_t *parent =
+        r->parent_instance ? a->instances[r->parent_instance].source : NULL;
+    bool symbol = n->ns == OS64_HTML_NS_SVG && same_word(n->name, "symbol");
+    if (ignored(n) ||
+        (symbol && !(parent && parent->ns == OS64_HTML_NS_SVG && same_word(parent->name, "use")))) {
         *out = svg_initial_style();
         out->display = false;
         return SVG_OK;
@@ -920,6 +1014,8 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
     svg_status_t status = remember(a, r);
     if (status != SVG_OK)
         return status;
+    a->width = a->instances[r->instance].width;
+    a->height = a->instances[r->instance].height;
     Computed c;
     status = compute(a, r->instance, &c);
     if (status != SVG_OK)
@@ -955,6 +1051,11 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
         out->transform = multiply(out->transform, (Map){1, 0, 0, 1, x, y});
         if (!finite_map(out->transform))
             return SVG_LIMIT;
+    }
+    if (n != a->root && n->ns == OS64_HTML_NS_SVG && (symbol || same_word(n->name, "svg"))) {
+        status = nested_viewport(a, r, &c, out);
+        if (status != SVG_OK || !out->display)
+            return status;
     }
     bool path = n->ns == OS64_HTML_NS_SVG && same_word(n->name, "path");
     bool geometry = path || basic_shape(n);
@@ -1111,8 +1212,6 @@ static svg_status_t reference(void *ctx, void *snapshot, const svg_style_request
         if (p == target)
             return SVG_OK;
     }
-    if (same_word(target->name, "svg") || same_word(target->name, "symbol"))
-        return SVG_UNSUPPORTED; // Referenced viewports need their own clipping.
     *source = (uintptr_t)target;
     return SVG_OK;
 }

@@ -91,6 +91,11 @@ typedef struct {
     double offset;        /* Signed user units, reduced modulo the pattern. */
 } svg_dash_t;
 typedef struct {
+    bool active, clip;
+    double width, height; /* Frame at (0,0), before the content transform. */
+    os64_geometry_map_t content_transform; /* Applies to descendants, not the frame. */
+} svg_viewport_t;
+typedef struct {
     svg_paint_t fill, stroke;
     double fill_opacity, stroke_opacity, opacity;
     os64_geometry_stroke_t stroke_style;
@@ -100,6 +105,7 @@ typedef struct {
      * and node placement such as use x/y. The provider must not multiply a
      * losing transform attribute into it. */
     os64_geometry_map_t transform;
+    svg_viewport_t viewport; /* Optional on containers; zero dimensions suppress the subtree. */
 } svg_style_t;
 typedef struct {
     svg_node_kind_t kind;
@@ -124,7 +130,7 @@ typedef struct {
      * The inherited input is the parent's complete style, not a directive to
      * inherit non-inherited properties such as opacity or transform. Return
      * UNSUPPORTED for active features this profile cannot express: vector
-     * effects, clipping, paint order, resources, non-sRGB interpolation or
+     * effects, general clip paths, paint order, resources, non-sRGB interpolation or
      * non-normal blending. Dash values survive until the next provider
      * callback; preparation copies them into scene ownership. Providers must
      * honor mode; IMAGE callbacks must not fetch. */
@@ -198,9 +204,10 @@ svg_status_t svg_path_lower(svg_context_t *, const svg_path_t *, const os64_geom
                             double arc_error, svg_geometry_t **);
 const os64_geometry_command_t *svg_geometry_commands(const svg_geometry_t *, size_t *count);
 svg_status_t svg_geometry_release(svg_context_t *, svg_geometry_t *);
-/* Prepares groups, paths and basic shapes. The caller supplies the resolved root viewport
- * map; viewport/layout negotiation, use expansion and resources are separate
- * features. Painting uses svg_scene_render. Unsupported visible nodes fail explicitly. display:none
+/* Prepares groups, paths, basic shapes and bounded same-document use instances.
+ * The provider supplies resolved viewport frames/content maps and reference targets;
+ * CSS layout negotiation and resource loading stay outside this API. Painting
+ * uses svg_scene_render. Unsupported visible nodes fail explicitly. display:none
  * suppresses a subtree; visibility:hidden retains it for visible descendants.
  * No resolver or I/O callback exists. IMAGE does not authorize resource loads.
  * A successful scene retains the snapshot for source identity lifetime. */
@@ -220,7 +227,8 @@ svg_render_options_t svg_render_options_default(const os64_geometry_backend_t *)
  * allocation counters exclude that backend subdivision). A conforming injected
  * backend table and its code must remain alive for this call. No callbacks into
  * the document/style provider occur during painting.
- * Vector effects, clipping, non-default paint order, resources and
+ * Rectangular viewport masks clip isolated container layers. Vector effects,
+ * general clip paths, non-default paint order, resources and
  * non-sRGB interpolation/non-normal blending require the provider to report
  * UNSUPPORTED. Unsupported joins and nonzero strokes that collapse below
  * the backend working grid propagate explicitly. Exact zero-length caps are

@@ -134,7 +134,8 @@ button. The button is a toggle. Scroll and change zoom to check repaint.
 
 [Dashes and exact zero-length caps](SVG_STROKES.md) extend this checkpoint.
 [Same-document use instances](SVG_INSTANCES.md) add reusable artwork.
-Referenced symbol/SVG viewports, nested viewports, clipping and the remaining static SVG
+[Referenced/nested viewports](SVG_VIEWPORTS.md) add sizing and rectangular clips.
+General clip paths and the remaining static SVG
 features stay in [DEBTS.md](../../../DEBTS.md). Relative/calc geometry, SVG
 animated-length and point-list DOM objects, hit testing and pathLength-based
 stroke calibration are not added here. Nonzero working-grid degeneracies

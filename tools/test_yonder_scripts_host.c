@@ -5620,6 +5620,21 @@ static void svg_window_cases(void)
     check(g.page.svg_bytes==0,"SVG use: cross-root mutation leaves no SVG allocation live");
     os64_free(px);probe_drop();
 
+    probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
+        "<svg width=128 height=64><defs><symbol id=master viewBox='0 0 10 10'>"
+        "<rect x=-10 y=-10 width=30 height=30 fill='#2091de'/></symbol></defs>"
+        "<use id=copy href='#master' x=8 y=8 width=20 height='20'/></svg>"
+        "<script>document.getElementById('copy').setAttribute('width','40')</script>",true);
+    px=stand_in_shot();
+    check((px[16*800+24]&0xffffffu)==0x2091de && (px[16*800+40]&0xffffffu)==0xffffff,
+        "SVG viewports: symbol overflow clips at the initial use width");
+    os64_free(px);while(yonder_scripts_pending(g.page.scripts))script_turn();
+    px=stand_in_shot();
+    check((px[16*800+40]&0xffffffu)==0x2091de && (px[16*800+52]&0xffffffu)==0xffffff,
+        "SVG viewports: width mutation changes the frame and its clip together");
+    check(g.page.svg_bytes==0,"SVG viewports: resized symbol leaves no SVG allocation live");
+    os64_free(px);probe_drop();
+
 }
 
 /* THE STAND-INS' OWN PAINTING (yonder.c's pane_stand_in, stand_in_label,

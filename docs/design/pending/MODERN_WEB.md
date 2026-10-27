@@ -4025,5 +4025,14 @@ the copy's parent. A source edit repaints uses in different SVG roots. The new
 `/tests/pages/svg-use.html` gallery demonstrates that with a reversible button.
 Twenty-six exact expanded references, 78 expected Chromium outcomes,
 allocation-failure sweeps and a real-window mutation regression cover this
-increment. Referenced viewports and per-instance variable substitution remain
-explicit profile limits; this does not complete static SVG.
+increment. Per-instance variable substitution remains an explicit profile limit;
+this does not complete static SVG.
+
+### Slice 6b, referenced and nested viewports — 2026-10-27
+
+[SVG_VIEWPORTS.md](SVG_VIEWPORTS.md) adds symbol/SVG instance sizing, nested
+viewBox maps, percentage bases and rectangular overflow clips, including
+rotated frames and nested opacity. `/tests/pages/svg-viewports.html` has six
+cards and a reversible width toggle. Native flattened-reference comparisons,
+mask allocation/cancellation sweeps and browser evidence cover this increment.
+General clip paths and the remaining static SVG debts stay open.
