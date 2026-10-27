@@ -1046,10 +1046,14 @@ static void gradient_scene_contracts(bool radial)
            prepare_allocations, render_allocations, prepare_polls, render_polls);
 }
 
+
+#include "test_svg_cache.inc"
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
     setvbuf(stdout, NULL, _IONBF, 0);
+    raster_cache_contracts();
     radial_sampler_contracts();
     gradient_scene_contracts(false);
     gradient_scene_contracts(true);

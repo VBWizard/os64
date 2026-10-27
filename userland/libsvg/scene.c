@@ -115,7 +115,7 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
     svg_scene_t *scene = svg_alloc(c, sizeof(*scene));
     if (!scene)
         return svg_leave(c, c->why);
-    *scene = (svg_scene_t){.owner = c, .provider = *provider};
+    *scene = (svg_scene_t){.owner = c, .provider = *provider, .mode = mode};
     Frame *stack = NULL;
     double *pending_dash = NULL;
     void *pending_gradient[2] = {0};
