@@ -1218,7 +1218,9 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
             if (winner(a->cascade, n, unsupported_props[i]))
                 return SVG_UNSUPPORTED;
     }
-    if (!geometry) {
+    // Hidden shapes still supply geometry for bounds, but their unresolved
+    // paint URLs must not reach the scene's supported-paint validation.
+    if (!geometry || !out->visible) {
         out->fill.kind = SVG_PAINT_NONE;
         out->stroke.kind = SVG_PAINT_NONE;
     }
@@ -1380,7 +1382,8 @@ static svg_status_t stop_style_step(Adapter *a, const os64_html_node_t *node,
             continue;
         bool inherit =
             v->kind == GARB_V_WIDE &&
-            (keyword(v, "inherit") || (!keyword(v, "initial") && garb_prop_inherited(props[i])));
+            (same_word(v->keyword, "inherit") ||
+             (!same_word(v->keyword, "initial") && garb_prop_inherited(props[i])));
         if (v->kind == GARB_V_WIDE) {
             if (props[i] == GARB_COLOR)
                 out->color = inherit ? parent->color : a->initial_color;
