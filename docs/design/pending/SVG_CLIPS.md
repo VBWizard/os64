@@ -1,8 +1,7 @@
 # SVG clip-path silhouettes
 
-2026-10-27. This increment is stacked on viewport PR #376, commit `568ffa97`,
-in `codex/svg-clip-paths`. Its immediate review base is `codex/svg-viewports`;
-after that parent merges, retarget it to `codex/svg-integration`. The gallery
+2026-10-27. This increment follows merged viewport PR #376 on
+`codex/svg-clip-paths`. Its review target is `codex/svg-integration`. The gallery
 is `/tests/pages/svg-clips.html`, **SVG: cut to shape**.
 
 ## The supported cut
@@ -110,10 +109,11 @@ Install the matching Yonder/library cohort and open `/tests/pages/svg-clips.html
 with Modern Web and scripts enabled. **Move the window** shifts the round
 opening in cards 1 and 6, then restores it. Their artwork stays stationary.
 Inspect the star, transparent rectangular hole, intersected circle/band and
-rotated rounded silhouette. Scroll and try 25% and 400% zoom. P5 is pending.
+rotated rounded silhouette. Scroll and try 25% and 400% zoom.
+Chris confirmed the gallery works correctly on the P5 on 2026-10-27.
 
 
-## Recorded host evidence — 2026-10-27
+## Recorded evidence — 2026-10-27
 
 - Native core: 155,998 checks. Painter: 1,514,235 assertions. The new clip
   fixture cuts 12 preparation and 58 render allocations in both refusal
@@ -132,7 +132,8 @@ rotated rounded silhouette. Scroll and try 25% and 400% zoom. P5 is pending.
 
 - Private windowed QEMU: six cards inspected, shared opening moved and restored,
   25% and 400% zoom and restoration checked. Shutdown completed normally;
-  read-only root/home filesystem checks both returned zero. P5 is pending.
+  read-only root/home filesystem checks both returned zero.
+- P5: Chris confirmed the page works correctly and approved the slice for review.
 
 Screenshots: [initial](../../svg-evidence/yonder-clips-top.png),
 [moved](../../svg-evidence/yonder-clips-changed.png),
