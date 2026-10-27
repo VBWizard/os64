@@ -195,9 +195,10 @@ module's item name; `<input>` for a function made by eval or `new
 Function`). A script's own code and an anonymous function have no name
 there. Text that did not parse is no script's place: `JSON.parse` given a
 page of HTML fails at the line that called it, and so does an eval of
-source that does not compile. A failure whose value has no stack (a DOMException, a thrown
-primitive) says its message alone (DEBTS.md). The same message at two
-places is two lines; the status line says the message alone, as before.
+source that does not compile. A failure whose value has no stack (a
+DOMException, a thrown primitive) says its message alone (DEBTS.md). The
+same message at two places is two lines; the status line says the
+message alone, as before.
 
 ### The page's fonts (S9a4, PILE3.md § Web fonts)
 
