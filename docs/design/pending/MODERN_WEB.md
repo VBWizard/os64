@@ -4081,9 +4081,11 @@ collections, and the label, fieldset, legend and output.
   included (it has no indexed setter), and an index or a name it has is
   not redefined or deleted.
 - **Beside them**: Node's `baseURI` (and an Attr's), which WPT's form
-  pages resolve their expectations against: the document's base URL with
-  its fragment, which resolution never keeps (libpage's
-  `os64_page_base_url_in`); `autocomplete="webauthn"`
+  pages resolve their expectations against: the node's document's base
+  URL with its fragment, which resolution never keeps (libpage's
+  `os64_page_base_url_in`), a document a script made included, whose own
+  `<base>` counts against its fallback, about:blank;
+  `autocomplete="webauthn"`
   alone; and, classic fixes both ways, `requestSubmit(submitter)` held to
   HTML (no submit button: a TypeError; another form's: NotFoundError; the
   submission the submitter's), with a form in no document submitting
@@ -4108,15 +4110,16 @@ collections, and the label, fieldset, legend and output.
   `requestSubmit`'s refusals; and with the switch off, none of it); the
   scripted page 8,429; yonder 2,028; libpage 254,199 (the document base
   URL, a fragment's every source).
-- **Mutants** (`tools/test_interfaces_mutants.py`, its P3b group): 28,
-  each caught — a rule of the table (method's default, autocomplete's),
-  an output's labels, the listed elements (a fieldset's image button
-  too), form[i], the names over builtins, the own names (an index's or
-  an expando's spelling once), redefinition (an index it has no control for too) and
-  deletion, `baseURI`'s fragment (libdom's and libpage's), the controls
-  collection and RadioNodeList (made once, radios only, the value set), a
-  NodeList's names, the output's override both ways, a label's form, the
-  submitter's two refusals and a detached form.
+- **Mutants** (`tools/test_interfaces_mutants.py`, its P3b group): 29,
+  each caught — a rule of the table (method's default, autocomplete's), an
+  output's labels, the listed elements (a fieldset's image button too),
+  form[i], the names over builtins, the own names (an index's or an
+  expando's spelling once), redefinition (an index it has no control for
+  too) and deletion, `baseURI`'s fragment (libdom's and libpage's) and a
+  made document's base, the controls collection and RadioNodeList (made
+  once, radios only, the value set), a NodeList's names, the output's
+  override both ways, a label's form, the submitter's two refusals and a
+  detached form.
 
 ### The page's style sheets, as built — 2026-10-27
 
