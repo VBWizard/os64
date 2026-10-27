@@ -34,10 +34,135 @@ static void gradient_resource_contracts(void)
     printf("SVG gradient resources: cycles, blocked URLs, inert children and stop limits pass\n");
 }
 
+static void gradient_review_contracts(void)
+{
+    const struct {
+        const char *name, *body;
+        uint32_t left, right;
+    } cases[] = {
+        {"stop-color inherit",
+         "<linearGradient id='g' stop-color='red'><stop "
+         "stop-color='inherit'/></linearGradient><rect width='128' height='128' fill='url(#g)'/>",
+         0xffff0000, 0xffff0000},
+        {"stop-opacity inherit",
+         "<linearGradient id='g' stop-opacity='0'><stop stop-color='red' "
+         "stop-opacity='inherit'/></linearGradient><rect width='128' height='128' fill='url(#g)'/>",
+         0, 0},
+        {"stop-color initial",
+         "<linearGradient id='g' stop-color='red'><stop "
+         "stop-color='initial'/></linearGradient><rect width='128' height='128' fill='url(#g)'/>",
+         0xff000000, 0xff000000},
+        {"stop-color unset",
+         "<linearGradient id='g' stop-color='red'><stop stop-color='unset'/></linearGradient><rect "
+         "width='128' height='128' fill='url(#g)'/>",
+         0xff000000, 0xff000000},
+        {"stop-opacity initial",
+         "<linearGradient id='g' stop-opacity='0'><stop stop-color='red' "
+         "stop-opacity='initial'/></linearGradient><rect width='128' height='128' fill='url(#g)'/>",
+         0xffff0000, 0xffff0000},
+        {"stop-opacity unset",
+         "<linearGradient id='g' stop-opacity='0'><stop stop-color='red' "
+         "stop-opacity='unset'/></linearGradient><rect width='128' height='128' fill='url(#g)'/>",
+         0xffff0000, 0xffff0000},
+        {"stop color initial",
+         "<linearGradient id='g' color='red'><stop color='initial' "
+         "stop-color='currentColor'/></linearGradient><rect width='128' height='128' "
+         "fill='url(#g)'/>",
+         0xff000000, 0xff000000},
+        {"stop color inherit",
+         "<linearGradient id='g' color='red'><stop color='inherit' "
+         "stop-color='currentColor'/></linearGradient><rect width='128' height='128' "
+         "fill='url(#g)'/>",
+         0xffff0000, 0xffff0000},
+        {"stop color unset",
+         "<linearGradient id='g' color='red'><stop color='unset' "
+         "stop-color='currentColor'/></linearGradient><rect width='128' height='128' "
+         "fill='url(#g)'/>",
+         0xffff0000, 0xffff0000},
+        {"gradient color initial",
+         "<g color='red'><linearGradient id='g' color='initial'><stop "
+         "stop-color='currentColor'/></linearGradient></g><rect width='128' height='128' "
+         "fill='url(#g)'/>",
+         0xff000000, 0xff000000},
+        {"gradient stop inheritance",
+         "<g stop-color='red'><linearGradient id='g' stop-color='inherit'><stop "
+         "stop-color='inherit'/></linearGradient></g><rect width='128' height='128' "
+         "fill='url(#g)'/>",
+         0xffff0000, 0xffff0000},
+        {"inherited currentColor",
+         "<linearGradient id='g' color='red' stop-color='currentColor'><stop color='blue' "
+         "stop-color='inherit'/></linearGradient><rect width='128' height='128' fill='url(#g)'/>",
+         0xff0000ff, 0xff0000ff},
+        {"hidden gradient fill",
+         "<linearGradient id='g'><stop stop-color='red'/></linearGradient><rect width='128' "
+         "height='128' visibility='hidden' fill='url(#g)'/><rect x='64' width='64' height='128' "
+         "fill='#008000'/>",
+         0, 0xff008000},
+        {"hidden gradient stroke",
+         "<linearGradient id='g'><stop stop-color='red'/></linearGradient><path d='M0 "
+         "0H128V128H0Z' visibility='hidden' fill='none' stroke='url(#g)'/><rect x='64' width='64' "
+         "height='128' fill='#008000'/>",
+         0, 0xff008000},
+        {"visible descendant",
+         "<linearGradient id='g'><stop stop-color='red'/></linearGradient><g visibility='hidden' "
+         "fill='url(#g)'><rect width='64' height='128'/><rect x='64' width='64' height='128' "
+         "visibility='visible'/></g>",
+         0, 0xffff0000},
+        {"hidden geometry bounds",
+         "<linearGradient id='g'><stop stop-color='red'/></linearGradient><clipPath id='c' "
+         "clipPathUnits='objectBoundingBox'><rect x='.5' width='.5' height='1'/></clipPath><g "
+         "clip-path='url(#c)'><rect width='128' height='128' visibility='hidden' "
+         "fill='url(#g)'/><rect x='64' width='64' height='128' fill='#008000'/></g>",
+         0, 0xff008000},
+    };
+    size_t baseline = live, failures = 0;
+    SvgLedger ledger = {.cap = 64 << 20};
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        char xml[4096], html[4096];
+        snprintf(xml, sizeof(xml),
+                 "<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'>%s</svg>",
+                 cases[i].body);
+        snprintf(
+            html, sizeof(html),
+            "<!doctype html><body style='margin:0'><svg id='art' width='128' height='128'>%s</svg>",
+            cases[i].body);
+        yonder_svg_document_t *doc = NULL;
+        assert(yonder_svg_document_parse(xml, strlen(xml), NULL, NULL, &doc, NULL) == SVG_OK);
+        Fixture f = fixture_make(html);
+        // Match the standalone image's black initial ink for exact comparison.
+        f.env.ink = 0;
+        yonder_svg_pixels_t image, inl;
+        svg_status_t image_status = image_draw(doc, &ledger, &image);
+        svg_status_t inline_status = draw_fixture(&f, &ledger, &inl, f.box->rect);
+        bool ok = image_status == SVG_OK && inline_status == SVG_OK &&
+                  pixel(&image, 32, 64) == cases[i].left &&
+                  pixel(&image, 80, 64) == cases[i].right && image.bytes == inl.bytes &&
+                  !memcmp(image.pixels, inl.pixels, image.bytes);
+        if (!ok) {
+            ++failures;
+            fprintf(stderr,
+                    "gradient review %s: image=%d inline=%d pixels=%08x/%08x expected=%08x/%08x\n",
+                    cases[i].name, image_status, inline_status,
+                    image_status == SVG_OK ? pixel(&image, 32, 64) : 0,
+                    image_status == SVG_OK ? pixel(&image, 80, 64) : 0, cases[i].left,
+                    cases[i].right);
+        }
+        os64_geometry_memory_t memory = {&ledger, svg_alloc_test, svg_free_test};
+        yonder_svg_pixels_free(&memory, &image);
+        yonder_svg_pixels_free(&memory, &inl);
+        fixture_free(&f);
+        yonder_svg_document_free(doc);
+        assert(live == baseline && !ledger.live);
+    }
+    assert(!failures);
+    printf("SVG gradient review regressions: %zu inline/image pairs pass\n",
+           sizeof(cases) / sizeof(cases[0]));
+}
 static void gradient_cases(const char *directory)
 {
     gradient_sampler_contracts();
     gradient_resource_contracts();
+    gradient_review_contracts();
     const char *bodies[] = {
         "<linearGradient id='g' ><stop offset='0' stop-color='#e04020'/><stop offset='1' "
         "stop-color='#2040e0'/></linearGradient><rect x='16' y='16' width='96' height='64' "

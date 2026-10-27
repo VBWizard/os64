@@ -122,6 +122,24 @@ python3 tools/svg_reftests/gradients.py --native /tmp/svg-gradients-native --out
 The browser command requires the pinned environment described in
 [the comparison harness](../../../tools/svg_reftests/README.md).
 
+## Review regressions
+
+PR #384 exposed two adapter defects. CSS-wide stop declarations were compared
+through a helper restricted to ordinary keyword values, so explicit inheritance
+and `color: initial` resolved incorrectly. Hidden geometry skipped gradient
+resolution but retained unsupported-paint sentinels, causing scene validation
+to reject visible siblings. The adapter now compares CSS-wide values directly
+and clears hidden paints while retaining the geometry used for bounds.
+
+Sixteen additional inline/image pairs check stop-color and stop-opacity
+inheritance, initial/unset values, currentColor, gradient ancestry, hidden
+fills/strokes, visible descendants and hidden geometry's contribution to object
+bounds. Ten cases reproduced failures before the correction. The full adapter
+suite passes under ASan, UBSan and LeakSanitizer; the freestanding Yonder build
+passes. The [review browser report](../../svg-evidence/gradients-review-results.json)
+records the corrected source and the 50 expected linear-gradient outcomes.
+The initial gallery delivery below remains frozen at its tested revision.
+
 ## Delivery checkpoint
 
 The [frozen manifest](../../svg-evidence/gradients-delivery.sha256) identifies
