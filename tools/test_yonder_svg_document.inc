@@ -144,8 +144,67 @@ static bool image_cancel(void *opaque)
     ImageCancel *c = opaque;
     return ++c->polls == c->stop;
 }
+static void document_inert_clips(void)
+{
+    const char *names[] = {"script", "animate", "animateMotion", "animateTransform", "set", "discard"};
+    const char *shape = "<rect x='16' y='16' width='64' height='48'/>";
+    const char *art = "<rect width='128' height='128' fill='blue' clip-path='url(#c)'/>";
+    size_t baseline = live;
+    SvgLedger ledger = {.cap = 64 << 20};
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
+        for (int position = 0; position < 3; ++position) {
+            char source[2048], expected[1024];
+            // A namespaced inert element must be skipped before style/geometry
+            // resolution, including its children, regardless of sibling order.
+            snprintf(source, sizeof(source),
+                     "<svg xmlns='http://www.w3.org/2000/svg' xmlns:s='http://www.w3.org/2000/svg'>"
+                     "<clipPath id='c'>%s<s:%s attributeName='opacity' to='0' begin='0s' "
+                     "style='transform-origin:50%% 50%%'><rect width='128' height='128'/>"
+                     "</s:%s>%s</clipPath>%s</svg>",
+                     position == 1 ? shape : "", names[i], names[i],
+                     position == 0 ? shape : "", art);
+            snprintf(expected, sizeof(expected),
+                     "<svg xmlns='http://www.w3.org/2000/svg'><clipPath id='c'>%s</clipPath>%s</svg>",
+                     position == 2 ? "" : shape, art);
+            yonder_svg_document_t *actual_doc = NULL, *expected_doc = NULL;
+            assert(yonder_svg_document_parse(source, strlen(source), NULL, NULL,
+                                              &actual_doc, NULL) == SVG_OK);
+            assert(yonder_svg_document_parse(expected, strlen(expected), NULL, NULL,
+                                              &expected_doc, NULL) == SVG_OK);
+            yonder_svg_pixels_t actual, reference;
+            svg_status_t status = image_draw(actual_doc, &ledger, &actual);
+            if (status != SVG_OK)
+                fprintf(stderr, "inert clip %s position %d: status %d\n", names[i], position, status);
+            assert(status == SVG_OK);
+            assert(image_draw(expected_doc, &ledger, &reference) == SVG_OK);
+            assert(actual.bytes == reference.bytes &&
+                   (!actual.bytes || !memcmp(actual.pixels, reference.pixels, actual.bytes)));
+            os64_geometry_memory_t memory = {&ledger, svg_alloc_test, svg_free_test};
+            yonder_svg_pixels_free(&memory, &actual);
+            yonder_svg_pixels_free(&memory, &reference);
+            yonder_svg_document_free(actual_doc);
+            yonder_svg_document_free(expected_doc);
+            assert(live == baseline && !ledger.live);
+        }
+    }
+    const char *refused[] = {"<set xmlns='urn:foreign'/>", "<Set/>", "<rect width='8' height='8'/>"};
+    for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); ++i) {
+        char source[1024];
+        snprintf(source, sizeof(source),
+                 "<svg xmlns='http://www.w3.org/2000/svg'><clipPath id='c'>%s%s</clipPath>%s</svg>",
+                 shape, refused[i], art);
+        yonder_svg_document_t *d = NULL;
+        yonder_svg_pixels_t pixels;
+        assert(yonder_svg_document_parse(source, strlen(source), NULL, NULL, &d, NULL) == SVG_OK);
+        assert(image_draw(d, &ledger, &pixels) == SVG_UNSUPPORTED && !pixels.pixels);
+        yonder_svg_document_free(d);
+        assert(live == baseline && !ledger.live);
+    }
+    printf("SVG inert clips: 18 exact references and 3 refusal controls pass\n");
+}
 static void document_contracts(void)
 {
+    document_inert_clips();
     const char *xml = "<s:svg xmlns:s='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
                       "<s:style>:root{color:blue} rect{fill:currentColor}</s:style>"
                       "<s:rect width='64' height='64'/></s:svg>";
