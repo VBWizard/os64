@@ -2147,6 +2147,16 @@ reflection-forms.html	textarea.wrap: setAttribute() to object "test-valueOf"
 reflection-forms.html	textarea.wrap: setAttribute() to true
 reflection-forms.html	textarea.wrap: setAttribute() to undefined
 reflection-forms.html	textarea.wrap: typeof IDL attribute
+# The node row's element names (MODERN_WEB.md § Element names, as built):
+# localName, namespaceURI and prefix. Each fails with the switch off.
+documents/dom-tree-accessors/document.title-09.html	No title element in SVG document
+documents/dom-tree-accessors/document.title-09.html	Title element not child of SVG root
+reflection-forms.html	button.formAction: IDL get with DOM attribute unset
+reflection-forms.html	button.formAction: IDL set to ""
+reflection-forms.html	button.formAction: setAttribute() to ""
+reflection-forms.html	input.formAction: IDL get with DOM attribute unset
+reflection-forms.html	input.formAction: IDL set to ""
+reflection-forms.html	input.formAction: setAttribute() to ""
 [excluded]
 access-key-label.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
 aria-attribute-reflection-enumerated.tentative.html	not P1-W's oracle (self-origin.any.js) or P1-Da's (its documents/ pages); the phase whose oracle names this page runs it (WINDOW_DOCUMENT.md)
@@ -2442,8 +2452,10 @@ documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 6: "
 documents/dom-tree-accessors/document.title-07.html	createHTMLDocument test 7: "foo\\r\\rbar baz","foo\\r\\rbar baz","foo bar baz"
 documents/dom-tree-accessors/document.title-08.html	No title element
 documents/dom-tree-accessors/document.title-08.html	title element contains multiple child text nodes
+documents/dom-tree-accessors/document.title-09.html	No title element in SVG document
 documents/dom-tree-accessors/document.title-09.html	Root element not named "svg"
 documents/dom-tree-accessors/document.title-09.html	Title element in SVG document
+documents/dom-tree-accessors/document.title-09.html	Title element not child of SVG root
 documents/dom-tree-accessors/document.title-09.html	Title element not in SVG namespace
 documents/resource-metadata-management/document-compatmode-01.html	document.compatMode: Standards
 documents/resource-metadata-management/document-compatmode-02.html	document.compatMode: Almost standards
@@ -2590,6 +2602,9 @@ reflection-forms.html	button.disabled: setAttribute() to object "test-valueOf"
 reflection-forms.html	button.disabled: setAttribute() to true
 reflection-forms.html	button.disabled: setAttribute() to undefined
 reflection-forms.html	button.disabled: typeof IDL attribute
+reflection-forms.html	button.formAction: IDL get with DOM attribute unset
+reflection-forms.html	button.formAction: IDL set to ""
+reflection-forms.html	button.formAction: setAttribute() to ""
 reflection-forms.html	button.formAction: typeof IDL attribute
 reflection-forms.html	button.formEnctype: IDL get with DOM attribute unset
 reflection-forms.html	button.formEnctype: IDL set to ""
@@ -4122,6 +4137,9 @@ reflection-forms.html	input.disabled: setAttribute() to object "test-valueOf"
 reflection-forms.html	input.disabled: setAttribute() to true
 reflection-forms.html	input.disabled: setAttribute() to undefined
 reflection-forms.html	input.disabled: typeof IDL attribute
+reflection-forms.html	input.formAction: IDL get with DOM attribute unset
+reflection-forms.html	input.formAction: IDL set to ""
+reflection-forms.html	input.formAction: setAttribute() to ""
 reflection-forms.html	input.formAction: typeof IDL attribute
 reflection-forms.html	input.formEnctype: IDL get with DOM attribute unset
 reflection-forms.html	input.formEnctype: IDL set to ""

@@ -10,7 +10,8 @@ createElementNS and the formless button's status line; to P1b's
 EventTarget, its constructor and Window; and to P2's selections (where one
 begins, setRangeText, the select event, and the field's caret and the
 record kept as one); and to P3a's controls (their reflections by each of
-HTML's rules, indeterminate, autocomplete, form and labels) - against the
+HTML's rules, indeterminate, autocomplete, form and labels); and to the
+node row's element names (localName, namespaceURI, prefix) - against the
 harnesses that hold each rule: a mutant is
 CAUGHT when one of its harnesses fails, MISSED when they all pass, which
 means a test is missing and gets written. A build failure is neither.
@@ -299,6 +300,15 @@ mutants = [
      '        return;', (SCRIPTS,)),
     ('select-range-never-selects', UI_TEXT_C, '\ttf->selected = tf->anchor != tf->cursor;', '\ttf->selected = false;',
      (SCRIPTS,)),
+    # the node row: an element's names
+    ('names-swapped', MIXIN_C, "    const char *name = magic == E_LOCAL_NAME ? self->name : magic == E_PREFIX ? self->prefix",
+     "    const char *name = magic == E_PREFIX ? self->name : magic == E_LOCAL_NAME ? self->prefix", (DOM,)),
+    ('namespace-always-html', MIXIN_C, "                                                                             : os64_html_namespace_uri(self);",
+     '                                                                             : "http://www.w3.org/1999/xhtml";',
+     (DOM,)),
+    ('names-of-any-node', MIXIN_C,
+     '    if (!is_element(self)) return JS_ThrowTypeError(ctx, "An element\'s name requires an element");\n',
+     '', (DOM,)),
     # P3a. the reflections' rules
     ('enum-case-sensitive', CONTROLS_C, 'if (os64_strlen(*word) == length && same_folded(*word, attr->value, length))',
      'if (os64_strlen(*word) == length && os64_memcmp(*word, attr->value, length) == 0)', (DOM,)),

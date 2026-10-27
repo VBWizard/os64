@@ -3,6 +3,9 @@
 # [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/semantics/forms/the-select-element --update
 # rewrites [passing].
 [required]
+# The node row's element names (MODERN_WEB.md § Element names, as built):
+# localName, namespaceURI and prefix. Each fails with the switch off.
+common-HTMLOptionsCollection.html	Changing the length adds new nodes; The number of new nodes = new length minus old length
 [excluded]
 [passing]
 common-HTMLOptionsCollection-add.html	if before and node are the same element nothing should be done
@@ -12,6 +15,7 @@ common-HTMLOptionsCollection-namedItem.html	if multiple items have a name or *id
 common-HTMLOptionsCollection-namedItem.html	if no item has a name or id value matching the parameter, return null and stop
 common-HTMLOptionsCollection-namedItem.html	if only one item has a *name* or id value matching the parameter, return that object and stop
 common-HTMLOptionsCollection-namedItem.html	if only one item has a name or *id* value matching the parameter, return that object and stop
+common-HTMLOptionsCollection.html	Changing the length adds new nodes; The number of new nodes = new length minus old length
 common-HTMLOptionsCollection.html	On getting, the length attribute must return the number of nodes represented by the collection.
 common-HTMLOptionsCollection.html	Setting a length equal to existing length changes nothing
 common-HTMLOptionsCollection.html	Setting a length lower than the old length trims nodes from the end

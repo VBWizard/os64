@@ -3,6 +3,9 @@
 # [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/semantics/forms/the-option-element --update
 # rewrites [passing].
 [required]
+# The node row's element names (MODERN_WEB.md § Element names, as built):
+# localName, namespaceURI and prefix. Each fails with the switch off.
+option-form.html	form
 [excluded]
 [passing]
 option-element-constructor.html	Option constructor creates HTMLOptionElement with specified text and value
@@ -15,6 +18,7 @@ option-element-constructor.html	Option constructor treats undefined text and val
 option-element-constructor.html	Option constructor with falsy arguments
 option-element-constructor.html	Option constructor with no arguments
 option-element-constructor.html	Prototype of object created with named constructor
+option-form.html	form
 option-index.html	option index should always be 0 for options in datalists
 option-index.html	option index should always be 0 for options not even in the document
 option-index.html	option index should always be 0 for options with no container

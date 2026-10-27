@@ -4015,6 +4015,29 @@ is empty. Booked: URL reflections resolve against the window's document,
 not the element's own, which mixin.c's reflections share (DEBTS.md). Two
 mutants, each caught: the group is 34.
 
+### Element names, as built
+
+What P3a found missing (§ 0f's P3a, as built): Element's `localName`,
+`namespaceURI` and `prefix`, in the node row beside getRootNode
+(libdom `mixin.c`, `element_names`). `localName` is the name libhtml keeps,
+`namespaceURI` its namespace's (`os64_html_namespace_uri`) and `prefix`
+libhtml's, each null for none; a binding document holds only HTML, SVG and
+MathML elements, so `prefix` is null on every element a script can reach
+today, and a prefixed name `createElementNS` is given keeps its prefix in
+its name (DEBTS.md's row on prefixed names). With them WPT's reflection
+harness sees `formAction`'s default as the document's URL, which P3a's two
+failures waited on.
+
+**Numbers.** WPT: 69 new passes in six directories, 68 of them
+`[required]` (each fails with the switch off): `dom/nodes` +54,
+`html/dom` +8, `dom/events` +4, `html/browsers/the-window-object`,
+`the-option-element` and `the-select-element` +1 each; nothing lost. The
+DOM host's chain shape and switch-off checks hold the three names; three
+mutants in `tools/test_interfaces_mutants.py`, each caught. `css/cssom`'s
+`serialize-all-longhands.html` "Computed style" fails on `userland`
+without this change (SVG's computed longhands), and is left for its own
+fix.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.
