@@ -131,8 +131,8 @@ external postcard. Visible QEMU checks pass the toggle in both directions,
 shared consumers, user-space coordinates, repeat/reflect, transparency,
 independent image colors and 25%/400% zoom. The restored sky, rectangle and
 stroke match their original captured pixels exactly. The guest shuts down
-cleanly and both ext2 volumes pass read-only filesystem checks. P5 verification
-is pending.
+cleanly and both ext2 volumes pass read-only filesystem checks. Chris confirmed
+the frozen `79b6d015` gallery delivery passed on the P5 on 2026-10-27.
 
 Screenshots: [morning](../../svg-evidence/yonder-gradients-top.png),
 [evening](../../svg-evidence/yonder-gradients-changed.png),
