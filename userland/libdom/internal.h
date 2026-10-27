@@ -220,6 +220,9 @@ struct os64_dom {
      * RadioNodeList's, over a NodeList's (collection.c, 0f's P3b); NULL
      * with the modern switch off. */
     DValue *controls_prototype, *radio_prototype;
+    /* A form's names are being listed for its ordinary keys alone
+     * (classic.c's node_names asking the engine). */
+    bool listing_names;
     /* The window's Selection (selection.c), the one getSelection answers;
      * NULL with the modern switch off. */
     DValue *selection;

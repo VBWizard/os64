@@ -194,12 +194,17 @@ static DValue *modern_form(JSValueConst object)
 
 /* A form's own names: its controls' indices, then each id and name they
  * carry, once, not enumerable ([LegacyUnenumerableNamedProperties]). Any
- * other node has none of its own here. */
+ * other node has none of its own here. The engine lists an object's
+ * ordinary keys beside these and does not merge them, so a name the form
+ * already has as one (an expando made before the control came) is left
+ * to the engine's list. */
 static int node_names(JSContext *ctx, JSPropertyEnum **table, uint32_t *length, JSValueConst object)
 {
     *table = NULL;
     *length = 0;
     DValue *entry = modern_form(object);
+    /* The ask below, for the ordinary keys alone. */
+    if (entry != NULL && entry->dom->listing_names) return 0;
     if (entry == NULL || !d_context(entry->dom, ctx, OS64_JS_ABI_ID)) return entry == NULL ? 0 : -1;
     uint32_t count = 0;
     (void)d_form_control(entry->node, UINT32_MAX, &count);
@@ -207,9 +212,15 @@ static int node_names(JSContext *ctx, JSPropertyEnum **table, uint32_t *length, 
         d_error(ctx, "QuotaExceededError", "Too many form controls");
         return -1;
     }
+    JSPropertyEnum *own = NULL;
+    uint32_t own_count = 0;
+    entry->dom->listing_names = true;
+    int listed = JS_GetOwnPropertyNames(ctx, &own, &own_count, object, JS_GPN_STRING_MASK);
+    entry->dom->listing_names = false;
+    if (listed < 0) return -1;
     JSPropertyEnum *entries = count != 0 ? js_malloc(ctx, (size_t)count * 3 * sizeof(*entries)) : NULL;
-    if (count != 0 && entries == NULL) return -1;
     uint32_t n = 0;
+    if (count != 0 && entries == NULL) goto fail;
     for (uint32_t i = 0; i < count; i++) {
         entries[n].is_enumerable = true;
         entries[n].atom = JS_NewAtomUInt32(ctx, i);
@@ -227,6 +238,7 @@ static int node_names(JSContext *ctx, JSPropertyEnum **table, uint32_t *length, 
             /* A name an index spells (`name=0`) is that index's key. */
             bool seen = false;
             for (uint32_t s = 0; s < n && !seen; s++) seen = entries[s].atom == atom;
+            for (uint32_t s = 0; s < own_count && !seen; s++) seen = own[s].atom == atom;
             if (seen) {
                 JS_FreeAtom(ctx, atom);
                 continue;
@@ -236,12 +248,14 @@ static int node_names(JSContext *ctx, JSPropertyEnum **table, uint32_t *length, 
             n++;
         }
     }
+    JS_FreePropertyEnum(ctx, own, own_count);
     *table = entries;
     *length = n;
     return 0;
 fail:
     while (n != 0) JS_FreeAtom(ctx, entries[--n].atom);
     js_free(ctx, entries);
+    JS_FreePropertyEnum(ctx, own, own_count);
     return -1;
 }
 

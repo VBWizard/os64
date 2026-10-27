@@ -392,6 +392,10 @@ static void dom_modern_cases(void)
         "var N=document.createElement('form');N.innerHTML='<input name=0><input id=1 name=n>';"
         "assert(Object.getOwnPropertyNames(N).join()==='0,1,n'&&Object.keys(N).join()==='0,1',"
         "'a name an index spells is that index');"
+        "var X=document.createElement('form');X.extra=1;var XI=document.createElement('input');XI.name='extra';"
+        "X.appendChild(XI);var xn=Object.getOwnPropertyNames(X),xk=Object.keys(X);"
+        "assert(xn.filter(function(k){return k==='extra'}).length===1&&xk.filter(function(k){return k==='extra'}).length===1&&"
+        "xn.indexOf('0')>=0,'a name the form has as an expando is listed once');"
         "var FI=document.createElement('fieldset');FI.innerHTML='<input type=image><input>';"
         "assert(FI.elements.length===2,'a fieldset lists an image button, as a form does not');"
         /* baseURI and a lone webauthn */

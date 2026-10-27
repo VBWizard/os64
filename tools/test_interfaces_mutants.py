@@ -332,6 +332,8 @@ mutants = [
      '    int numeric = entry != NULL ? 0 * d_index_key(ctx, atom, &index) : 0;', (DOM,)),
     ('index-named-twice', CLASSIC_C, '            for (uint32_t s = 0; s < n && !seen; s++)',
      '            for (uint32_t s = count; s < n && !seen; s++)', (DOM,)),
+    ('expando-named-twice', CLASSIC_C, '            for (uint32_t s = 0; s < own_count && !seen; s++)',
+     '            for (uint32_t s = own_count; s < own_count && !seen; s++)', (DOM,)),
     ('base-uri-loses-fragment', MIXIN_C, '    JSValue result = os64_page_base_url_in(dom->document,',
      '    JSValue result = os64_page_base_in(dom->document,', (DOM,)),
     ('base-fragment-is-the-documents', RESOLVE_C, '    page->base_fragment = os64_strchr(clean, \'#\');\n    page->base_hierarchical',

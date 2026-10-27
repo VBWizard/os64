@@ -4076,8 +4076,8 @@ collections, and the label, fieldset, legend and output.
   is its i-th control; a control's name hides the prototype's member of
   that name ([LegacyOverrideBuiltIns]: an input named `submit` is
   `form.submit`, as in every browser); its own names are its indices and,
-  not enumerable, its controls' ids and names, a name an index spells
-  listed once; no index is defined on it, one it has no control for yet
+  not enumerable, its controls' ids and names, a name an index or an
+  expando already spells listed once; no index is defined on it, one it has no control for yet
   included (it has no indexed setter), and an index or a name it has is
   not redefined or deleted.
 - **Beside them**: Node's `baseURI` (and an Attr's), which WPT's form
@@ -4108,11 +4108,11 @@ collections, and the label, fieldset, legend and output.
   `requestSubmit`'s refusals; and with the switch off, none of it); the
   scripted page 8,429; yonder 2,028; libpage 254,199 (the document base
   URL, a fragment's every source).
-- **Mutants** (`tools/test_interfaces_mutants.py`, its P3b group): 27,
+- **Mutants** (`tools/test_interfaces_mutants.py`, its P3b group): 28,
   each caught — a rule of the table (method's default, autocomplete's),
   an output's labels, the listed elements (a fieldset's image button
-  too), form[i], the names over builtins, the own names (an index's
-  spelling once), redefinition (an index it has no control for too) and
+  too), form[i], the names over builtins, the own names (an index's or
+  an expando's spelling once), redefinition (an index it has no control for too) and
   deletion, `baseURI`'s fragment (libdom's and libpage's), the controls
   collection and RadioNodeList (made once, radios only, the value set), a
   NodeList's names, the output's override both ways, a label's form, the
