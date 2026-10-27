@@ -19,6 +19,20 @@ svg_status_t yonder_svg_render(const os64_html_document_t *, const garb_cascade_
                                uint32_t zoom, uint32_t initial_color,
                                const os64_geometry_memory_t *, const os64_geometry_backend_t *,
                                yonder_svg_pixels_t *);
+/* Image viewport dimensions are caller-resolved CSS pixels at resolution 1.
+ * Root presentation is independent of a host page's box/style. */
+typedef struct {
+    uint32_t width, height;
+    bool dark, reduced_motion;
+    void *cancel_context;
+    bool (*cancelled)(void *);
+} yonder_svg_image_view_t;
+/* Internal document adapter entry; the standalone owner constructs the isolated
+ * cascade. It uses IMAGE mode and never invokes flow or a resource resolver. */
+svg_status_t yonder_svg_render_image_tree(const os64_html_document_t *, const garb_cascade_t *,
+                                         const yonder_svg_image_view_t *,
+                                         const os64_geometry_memory_t *,
+                                         const os64_geometry_backend_t *, yonder_svg_pixels_t *);
 void yonder_svg_pixels_free(const os64_geometry_memory_t *, yonder_svg_pixels_t *);
 bool yonder_svg_size(const os64_html_node_t *, int32_t *, int32_t *);
 #endif

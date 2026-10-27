@@ -37,12 +37,29 @@ typedef struct {
     Instance *instances;
     size_t capacity;
     bool base_checked, clip_geometry, clip_style;
+    svg_mode_t mode;
+    svg_viewport_t image_viewport;
+    svg_status_t stopped;
+    void *cancel_context;
+    bool (*cancelled)(void *);
 } Adapter;
 typedef struct {
     const char *p;
     size_t left;
 } Scanner;
 static const Map identity = {1, 0, 0, 1, 0, 0};
+static bool adapter_spend(Adapter *a, uint64_t amount)
+{
+    if (a->stopped != SVG_OK)
+        return false;
+    if (a->cancelled && a->cancelled(a->cancel_context))
+        a->stopped = SVG_CANCELLED;
+    else if (amount > SVG_ADAPTER_WORK - a->work)
+        a->stopped = SVG_LIMIT;
+    else
+        a->work += amount;
+    return a->stopped == SVG_OK;
+}
 static bool same_word(const char *a, const char *b)
 {
     return a && os64_streq(a, b);
@@ -652,6 +669,13 @@ static svg_status_t apply(Adapter *a, Computed *c, const Computed *parent, garb_
     }
     return SVG_OK;
 }
+static bool image_inert(const Adapter *a, const os64_html_node_t *n)
+{
+    return a->mode == SVG_MODE_IMAGE && n->ns == OS64_HTML_NS_SVG &&
+           (same_word(n->name, "script") || same_word(n->name, "animate") ||
+            same_word(n->name, "animateMotion") || same_word(n->name, "animateTransform") ||
+            same_word(n->name, "set") || same_word(n->name, "discard"));
+}
 static bool ignored(const os64_html_node_t *n)
 {
     return n->ns == OS64_HTML_NS_SVG &&
@@ -720,8 +744,8 @@ static svg_status_t compute(Adapter *a, uint64_t instance, Computed *c)
     }
     *c = initial(a->initial_color);
     while (depth) {
-        if (++a->work > SVG_ADAPTER_WORK)
-            return SVG_LIMIT;
+        if (!adapter_spend(a, 1))
+            return a->stopped;
         const os64_html_node_t *p = chain[--depth];
         Computed parent = *c;
         c->s.opacity = 1;
@@ -746,8 +770,8 @@ static svg_status_t compute(Adapter *a, uint64_t instance, Computed *c)
                 return s;
         }
         for (int32_t j = 0; j < style.n; ++j) {
-            if (++a->work > SVG_ADAPTER_WORK)
-                return SVG_LIMIT;
+            if (!adapter_spend(a, 1))
+                return a->stopped;
             garb_prop_t prop = style.sets[j].prop;
             if (prop == GARB_COLOR)
                 continue;
@@ -766,15 +790,14 @@ static svg_status_t compute(Adapter *a, uint64_t instance, Computed *c)
         }
         // The outer CSS box includes HTML presentation hints and the face
         // ink; its resolved color is the SVG subtree's inheritance boundary.
-        if (p == a->root)
+        if (p == a->root && a->mode == SVG_MODE_INLINE)
             c->color = a->root_color;
         if (p->ns == OS64_HTML_NS_SVG && !winner(a->cascade, p, GARB_TRANSFORM)) {
             Scanner scan;
             if (!scanner(attr(p, "transform"), &scan))
                 return SVG_LIMIT;
-            a->work += scan.left;
-            if (a->work > SVG_ADAPTER_WORK)
-                return SVG_LIMIT;
+            if (!adapter_spend(a, scan.left))
+                return a->stopped;
             if (!transform_attribute(scan.p, &c->s.transform))
                 return SVG_MALFORMED;
         }
@@ -788,7 +811,7 @@ static svg_status_t compute(Adapter *a, uint64_t instance, Computed *c)
 static svg_status_t acquire(void *ctx, svg_mode_t mode, void **snapshot, uint64_t *root)
 {
     Adapter *a = ctx;
-    if (mode != SVG_MODE_INLINE)
+    if (mode != a->mode)
         return SVG_UNSUPPORTED;
     a->pin = os64_html_pin(a->doc);
     if (!a->pin)
@@ -811,7 +834,7 @@ static void release(void *ctx, void *snapshot)
 static const os64_html_node_t *element(Adapter *a, const os64_html_node_t *n)
 {
     while (n && n->kind != OS64_HTML_ELEMENT) {
-        if (++a->work > SVG_ADAPTER_WORK)
+        if (!adapter_spend(a, 1))
             return NULL;
         n = n->next;
     }
@@ -833,8 +856,10 @@ static svg_status_t geometry_value(Adapter *a, uint64_t instance, garb_prop_t pr
     const os64_html_node_t *n = a->instances[instance].source;
     size_t depth = 0;
     while (n && n->kind == OS64_HTML_ELEMENT) {
-        if (++depth > SVG_DEPTH_MAX || ++a->work > SVG_ADAPTER_WORK)
+        if (++depth > SVG_DEPTH_MAX)
             return SVG_LIMIT;
+        if (!adapter_spend(a, 1))
+            return a->stopped;
         const garb_val_t *v = winner(a->cascade, n, prop);
         if (!v || keyword(v, "auto"))
             return SVG_OK;
@@ -919,9 +944,8 @@ static svg_status_t line_coordinate(Adapter *a, const os64_html_node_t *n, const
     *out = 0;
     if (!scanner(attr(n, name), &s))
         return SVG_LIMIT;
-    a->work += s.left;
-    if (a->work > SVG_ADAPTER_WORK)
-        return SVG_LIMIT;
+    if (!adapter_spend(a, s.left))
+        return a->stopped;
     double parsed;
     if (!number(&s, &parsed))
         return SVG_OK; // Invalid coordinates use the attribute's initial zero.
@@ -1017,7 +1041,7 @@ static svg_status_t node(void *ctx, void *snapshot, uint64_t source, svg_node_t 
                                                                           : SVG_NODE_UNSUPPORTED;
     out->first_child = group ? (uintptr_t)element(a, n->first_child) : 0;
     out->next_sibling = (uintptr_t)element(a, n->next);
-    return a->work > SVG_ADAPTER_WORK ? SVG_LIMIT : SVG_OK;
+    return a->stopped;
 }
 static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *r, svg_style_t *out,
                           svg_string_t *d)
@@ -1028,7 +1052,7 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
     const os64_html_node_t *parent =
         r->parent_instance ? a->instances[r->parent_instance].source : NULL;
     bool symbol = n->ns == OS64_HTML_NS_SVG && same_word(n->name, "symbol");
-    if (ignored(n) ||
+    if (image_inert(a, n) || ignored(n) ||
         (symbol && !(parent && parent->ns == OS64_HTML_NS_SVG && same_word(parent->name, "use")))) {
         *out = svg_initial_style();
         out->display = false;
@@ -1044,25 +1068,33 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
     if (status != SVG_OK)
         return status;
     *out = c.s;
-    // Flow owns HTML ancestor and root opacity, and the root CSS transform.
-    // Retain the cascade values for explicit inheritance, but evaluate them
-    // through SVG's narrower profile only for descendants that paint them.
-    if (n == a->root) {
+    // Inline roots leave their outer box effects to flow. Image roots own
+    // these effects, including opacity of the complete image contents.
+    bool inline_root = n == a->root && a->mode == SVG_MODE_INLINE;
+    if (inline_root) {
         out->opacity = 1;
         out->transform = identity;
     }
     if (!out->display)
         return SVG_OK;
-    if (n != a->root && c.opacity_css) {
+    if (!inline_root && c.opacity_css) {
         double opacity;
         if (!value(c.opacity_css, 1, &opacity))
             return SVG_UNSUPPORTED;
         out->opacity = fmax(0, fmin(1, opacity));
     }
-    if (n != a->root && c.transform_css) {
+    if (!inline_root && c.transform_css) {
         status = css_transform(c.transform_css, &out->transform);
         if (status != SVG_OK)
             return status;
+    }
+    if (n == a->root && a->mode == SVG_MODE_IMAGE) {
+        // The standalone root's default transform origin is its viewport
+        // center, outside viewBox. Explicit origins require a separate resolver.
+        double x = a->image_viewport.width / 2, y = a->image_viewport.height / 2;
+        out->transform = multiply((Map){1, 0, 0, 1, x, y},
+                                  multiply(out->transform, (Map){1, 0, 0, 1, -x, -y}));
+        out->viewport = a->image_viewport;
     }
     if (n->ns == OS64_HTML_NS_SVG && same_word(n->name, "use")) {
         double x, y;
@@ -1121,7 +1153,7 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
         if (*v && !same_word(v, "none") && !same_word(v, "normal"))
             return SVG_UNSUPPORTED;
     }
-    if (n != a->root) {
+    if (!inline_root) {
         const garb_prop_t unsupported_props[] = {GARB_TRANSFORM_ORIGIN, GARB_TRANSLATE, GARB_ROTATE,
                                                  GARB_SCALE};
         for (size_t i = 0; i < sizeof(unsupported_props) / sizeof(unsupported_props[0]); ++i)
@@ -1165,7 +1197,9 @@ static svg_status_t fragment_target(Adapter *a, const char *text, uint64_t *sour
     if (!scan.left)
         return SVG_OK;
     if (*scan.p != '#')
-        return SVG_UNSUPPORTED; // This profile has no external resource resolver.
+        // Image mode treats blocked external references as failed resources.
+        // Embedded data SVG targets are outside this profile too; no resolver.
+        return a->mode == SVG_MODE_IMAGE ? SVG_OK : SVG_UNSUPPORTED;
     char id[SVG_ATTR_MAX + 1];
     size_t len = 0;
     for (size_t i = 1; i < scan.left; ++i) {
@@ -1185,8 +1219,8 @@ static svg_status_t fragment_target(Adapter *a, const char *text, uint64_t *sour
     // separate trees. The first ID wins even when it names a non-SVG element.
     const os64_html_node_t *n = a->doc->document, *target = NULL;
     while (n) {
-        if (++a->work > SVG_ADAPTER_WORK)
-            return SVG_LIMIT;
+        if (!adapter_spend(a, 1))
+            return a->stopped;
         if (n->kind == OS64_HTML_ELEMENT) {
             // Fragment-only lookup requires a document-local base. A URL
             // resolver is needed before base-changing documents can use it.
@@ -1198,9 +1232,8 @@ static svg_status_t fragment_target(Adapter *a, const char *text, uint64_t *sour
             size_t i = 0;
             while (i < len && candidate[i] && candidate[i] == id[i])
                 ++i;
-            a->work += i;
-            if (a->work > SVG_ADAPTER_WORK)
-                return SVG_LIMIT;
+            if (!adapter_spend(a, i))
+                return a->stopped;
             if (!target && i == len && !candidate[i]) {
                 target = n;
                 if (a->base_checked)
@@ -1211,8 +1244,8 @@ static svg_status_t fragment_target(Adapter *a, const char *text, uint64_t *sour
             n = n->first_child;
         else {
             while (n && !n->next) {
-                if (++a->work > SVG_ADAPTER_WORK)
-                    return SVG_LIMIT;
+                if (!adapter_spend(a, 1))
+                    return a->stopped;
                 n = n->parent;
             }
             if (n)
@@ -1232,14 +1265,32 @@ static svg_status_t reference(void *ctx, void *snapshot, const svg_style_request
     (void)snapshot;
     const os64_html_node_t *use = (const void *)(uintptr_t)r->source;
     const os64_html_attr_t *href = os64_html_attr(use, "href");
-    // Presence, including an empty href, takes precedence over xlink:href.
-    svg_status_t status = fragment_target(a, href ? href->value : attr(use, "xlink:href"), source);
+    // An unqualified href, including an empty one, precedes XLink href.
+    if (!href) {
+        for (const os64_html_attr_t *v = use->attrs; v; v = v->next) {
+            if (!adapter_spend(a, 1))
+                return a->stopped;
+            if (!same_word(v->ns, "http://www.w3.org/1999/xlink"))
+                continue;
+            const char *local = v->name;
+            for (const char *p = v->name; *p; ++p)
+                if (*p == ':')
+                    local = p + 1;
+            if (same_word(local, "href")) {
+                href = v;
+                break;
+            }
+        }
+    }
+    svg_status_t status = fragment_target(a, href ? href->value : "", source);
     if (status != SVG_OK || !*source)
         return status;
     size_t depth = 0;
     for (const os64_html_node_t *p = use; p; p = p->parent) {
-        if (++depth > SVG_DEPTH_MAX || ++a->work > SVG_ADAPTER_WORK)
+        if (++depth > SVG_DEPTH_MAX)
             return SVG_LIMIT;
+        if (!adapter_spend(a, 1))
+            return a->stopped;
         if ((uintptr_t)p == *source) {
             *source = 0;
             break;
@@ -1311,13 +1362,14 @@ static svg_status_t clip_source(void *ctx, void *snapshot, const svg_style_reque
                                .outer_transform = container.s.transform};
     bool found = false;
     for (const os64_html_node_t *n = resource->first_child; n; n = n->next) {
-        if (++a->work > SVG_ADAPTER_WORK)
-            return SVG_LIMIT;
+        if (!adapter_spend(a, 1))
+            return a->stopped;
         if (n->kind != OS64_HTML_ELEMENT)
             continue;
         if (n->ns != OS64_HTML_NS_SVG)
             return SVG_UNSUPPORTED;
-        if (same_word(n->name, "title") || same_word(n->name, "desc") ||
+        // Scripts and animation do not contribute clip silhouettes in image mode.
+        if (image_inert(a, n) || same_word(n->name, "title") || same_word(n->name, "desc") ||
             same_word(n->name, "metadata") || same_word(n->name, "style"))
             continue;
         Computed child;
@@ -1359,6 +1411,25 @@ static svg_status_t clip_source(void *ctx, void *snapshot, const svg_style_reque
                 return status;
         }
     }
+    if (a->mode == SVG_MODE_IMAGE && r->source == (uintptr_t)a->root) {
+        // The outer image root has a CSS viewport box. Its clip uses that box
+        // and viewport units, outside viewBox; the scene consumes content units.
+        Map content = a->image_viewport.content_transform;
+        if (!content.a || !content.d)
+            return SVG_LIMIT;
+        Map inverse = {1 / content.a, 0, 0, 1 / content.d,
+                       -content.tx / content.a, -content.ty / content.d};
+        Map clip = out->transform;
+        if (object_bbox) {
+            Map box = {a->image_viewport.width, 0, 0, a->image_viewport.height, 0, 0};
+            clip = multiply(out->outer_transform, multiply(box, clip));
+        }
+        out->transform = multiply(inverse, clip);
+        out->outer_transform = identity;
+        out->object_bbox = false;
+        if (!finite_map(out->transform))
+            return SVG_LIMIT;
+    }
     return SVG_OK;
 }
 void yonder_svg_pixels_free(const os64_geometry_memory_t *m, yonder_svg_pixels_t *out)
@@ -1366,6 +1437,48 @@ void yonder_svg_pixels_free(const os64_geometry_memory_t *m, yonder_svg_pixels_t
     if (out->pixels)
         m->free(m->context, out->pixels, out->bytes);
     *out = (yonder_svg_pixels_t){0};
+}
+static svg_status_t render_adapter(Adapter *a, const Map *map, os64_gui_rect_t content,
+                                    int64_t x, int64_t y, uint64_t width, uint64_t height,
+                                    const os64_geometry_backend_t *backend,
+                                    yonder_svg_pixels_t *out)
+{
+    svg_context_t *c = NULL;
+    svg_scene_t *scene = NULL;
+    svg_options_t options = {.memory = a->memory, .cancel_context = a->cancel_context,
+                             .cancelled = a->cancelled, .limits = svg_default_limits()};
+    options.limits.scene_nodes = SVG_VISITS_MAX;
+    svg_status_t status = svg_create(&options, &c);
+    if (status != SVG_OK)
+        return status;
+    svg_provider_t provider = {a, acquire, release, node, style, shape, reference, clip_source};
+    status = svg_scene_prepare(c, &provider, a->mode, map, &scene);
+    if (status == SVG_OK) {
+        out->bytes = (size_t)(width * height * 4);
+        void *pixels = NULL;
+        os64_geometry_status_t allocation = a->memory.alloc(a->memory.context, out->bytes, &pixels);
+        if (allocation != OS64_GEOMETRY_OK || !pixels)
+            status = allocation == OS64_GEOMETRY_LIMIT ? SVG_LIMIT : SVG_NO_MEMORY;
+        else {
+            out->pixels = pixels;
+            out->rect = (os64_gui_rect_t){(int32_t)x, (int32_t)y, (int32_t)width, (int32_t)height};
+            svg_render_target_t target = {.origin_x = (double)(x - content.x),
+                                          .origin_y = (double)(y - content.y),
+                                          .width = (uint32_t)width,
+                                          .height = (uint32_t)height,
+                                          .stride = (size_t)width * 4,
+                                          .capacity = out->bytes,
+                                          .pixels = out->pixels};
+            svg_render_options_t render = svg_render_options_default(backend);
+            status = svg_scene_render(c, scene, &render, &target, NULL);
+        }
+    }
+    if (scene)
+        svg_scene_release(c, scene);
+    svg_destroy(c);
+    if (status != SVG_OK)
+        yonder_svg_pixels_free(&a->memory, out);
+    return status;
 }
 svg_status_t yonder_svg_render(const os64_html_document_t *doc, const garb_cascade_t *cascade,
                                const flow_box_t *box, os64_gui_rect_t content, os64_gui_rect_t clip,
@@ -1415,39 +1528,42 @@ svg_status_t yonder_svg_render(const os64_html_document_t *doc, const garb_casca
         if (!finite_map(map))
             return SVG_LIMIT;
     }
-    svg_context_t *c = NULL;
-    svg_scene_t *scene = NULL;
-    svg_options_t options = {.memory = *memory, .limits = svg_default_limits()};
-    options.limits.scene_nodes = SVG_VISITS_MAX;
-    status = svg_create(&options, &c);
+    return render_adapter(&a, &map, content, x, y, width, height, backend, out);
+}
+
+svg_status_t yonder_svg_render_image_tree(const os64_html_document_t *doc,
+                                         const garb_cascade_t *cascade,
+                                         const yonder_svg_image_view_t *view,
+                                         const os64_geometry_memory_t *memory,
+                                         const os64_geometry_backend_t *backend,
+                                         yonder_svg_pixels_t *out)
+{
+    if (!out)
+        return SVG_BAD_ARGUMENT;
+    *out = (yonder_svg_pixels_t){0};
+    if (!doc || !doc->is_xml || !cascade || !view || !memory || !memory->alloc || !memory->free)
+        return SVG_BAD_ARGUMENT;
+    const os64_html_node_t *root = os64_html_document_element(doc);
+    if (!root || root->ns != OS64_HTML_NS_SVG || !same_word(root->name, "svg"))
+        return SVG_UNSUPPORTED;
+    if (garb_cascade_incomplete(cascade))
+        return SVG_LIMIT;
+    if (view->width > 16384 || view->height > 16384 ||
+        (uint64_t)view->width * view->height > 8388608)
+        return SVG_LIMIT;
+    if (!view->width || !view->height)
+        return SVG_OK;
+    Adapter a = {.doc = doc, .cascade = cascade, .root = root, .initial_color = 0xff000000,
+                 .memory = *memory, .mode = SVG_MODE_IMAGE,
+                 .cancel_context = view->cancel_context, .cancelled = view->cancelled};
+    Map content_map;
+    svg_status_t status = viewport(&a, view->width, view->height, 1000, &content_map);
+    if (status == SVG_PENDING)
+        return SVG_OK;
     if (status != SVG_OK)
         return status;
-    svg_provider_t provider = {&a, acquire, release, node, style, shape, reference, clip_source};
-    status = svg_scene_prepare(c, &provider, SVG_MODE_INLINE, &map, &scene);
-    if (status == SVG_OK) {
-        out->bytes = (size_t)(width * height * 4);
-        void *pixels = NULL;
-        os64_geometry_status_t allocation = memory->alloc(memory->context, out->bytes, &pixels);
-        if (allocation != OS64_GEOMETRY_OK || !pixels)
-            status = allocation == OS64_GEOMETRY_LIMIT ? SVG_LIMIT : SVG_NO_MEMORY;
-        else {
-            out->pixels = pixels;
-            out->rect = (os64_gui_rect_t){(int32_t)x, (int32_t)y, (int32_t)width, (int32_t)height};
-            svg_render_target_t target = {.origin_x = (double)(x - content.x),
-                                          .origin_y = (double)(y - content.y),
-                                          .width = (uint32_t)width,
-                                          .height = (uint32_t)height,
-                                          .stride = (size_t)width * 4,
-                                          .capacity = out->bytes,
-                                          .pixels = out->pixels};
-            svg_render_options_t render = svg_render_options_default(backend);
-            status = svg_scene_render(c, scene, &render, &target, NULL);
-        }
-    }
-    if (scene)
-        svg_scene_release(c, scene);
-    svg_destroy(c);
-    if (status != SVG_OK)
-        yonder_svg_pixels_free(memory, out);
-    return status;
+    a.image_viewport = (svg_viewport_t){.active = true, .width = view->width,
+                                       .height = view->height, .content_transform = content_map};
+    return render_adapter(&a, &identity, (os64_gui_rect_t){0,0,view->width,view->height},
+                          0, 0, view->width, view->height, backend, out);
 }

@@ -557,6 +557,7 @@ static void stroke_cases(const char *dir)
 #include "test_yonder_svg_viewports.inc"
 #include "test_yonder_svg_clips.inc"
 #include "test_yonder_svg_bounds.inc"
+#include "test_yonder_svg_document.inc"
 
 int main(int argc, char **argv)
 {
@@ -569,6 +570,8 @@ int main(int argc, char **argv)
     size_t base = live;
     clip_cases(argv[1]);
     bounds_cases(argv[1]);
+    document_cases(argv[1]);
+    document_contracts();
     viewport_cases(argv[1]);
     use_cases(argv[1]);
     stroke_cases(argv[1]);
