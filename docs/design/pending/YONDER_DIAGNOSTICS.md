@@ -188,12 +188,14 @@ failing task's own `src` script, classic or module, that is the line and
 column, `TypeError: cannot read property 'length' of undefined, at Xa
 1:23456`, which finds the place in a minified script that is one line
 long; in another script's function, that script's address before them,
-`at boom https://site/lib.js:2:7`; in one of the page's inline scripts,
-`inline`, `at inline:3:1`; and anywhere else, the engine's own name for
-the file (`at onclick onclick attribute:2:5`). A script's own code and an
-anonymous function have no name there. JSON text and eval'd code are no
-script's place: `JSON.parse` given a page of HTML fails at the line that
-called it. A failure whose value has no stack (a DOMException, a thrown
+`at boom https://site/lib.js:2:7`; in one of the page's classic inline
+scripts, `inline`, `at inline:3:1`; and anywhere else, the engine's own
+name for the file (`at onclick onclick attribute:2:5`; an inline
+module's item name; `<input>` for a function made by eval or `new
+Function`). A script's own code and an anonymous function have no name
+there. Text that did not parse is no script's place: `JSON.parse` given a
+page of HTML fails at the line that called it, and so does an eval of
+source that does not compile. A failure whose value has no stack (a DOMException, a thrown
 primitive) says its message alone (DEBTS.md). The same message at two
 places is two lines; the status line says the message alone, as before.
 

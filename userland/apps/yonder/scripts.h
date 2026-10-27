@@ -227,9 +227,9 @@ const char *yonder_scripts_task_address(const yonder_scripts_t *scripts);
 // `TypeError: x is undefined, at f 12:5`. A place in `own`, the failing
 // task's script's address (NULL for an inline script, an event or a
 // timer), is its line and column; in another script, that script's
-// address before them; in one of the page's inline scripts, `inline`; and
-// anywhere else, the engine's own name for it. A script's own code and an
-// anonymous function have no name there. `scripts`, the page's host, says
+// address before them; in one of the page's classic inline scripts,
+// `inline`; and anywhere else, the engine's own name for it. A script's
+// own code and an anonymous function have no name there. `scripts`, the page's host, says
 // which script a classic script's file is, and may be NULL where only
 // modules, which are compiled under their address, can have failed.
 // `message` alone when the stack names no place, which a DOMException's

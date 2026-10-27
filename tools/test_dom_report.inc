@@ -739,6 +739,8 @@ static void dom_report_frame_cases(void)
     check(frame_is("    at <input>:1:1\n    at parse (native)\n    at f (os64-script:3:1:9)\n", "f", "os64-script:3", 1, 9) &&
           frame_is("    at <body>:1:1\n    at g (os64-script:4:2:5)\n", "g", "os64-script:4", 2, 5),
           "frame: JSON text names no place: the script that parsed it does");
+    check(frame_is("    at render (<input>:12:5)\n    at draw (os64-script:3:1:900)\n", "render", "<input>", 12, 5),
+          "frame: but a function running in eval'd code is where it failed");
     check(frame_is("    at f (os64-script:3:12", NULL, NULL, 0, 0) &&
           frame_is("    at f (os64-script:3:12:5)\n    at g (os64-scr", "f", "os64-script:3", 12, 5),
           "frame: a line the cap cut short is no frame");

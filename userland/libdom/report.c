@@ -489,11 +489,14 @@ bool os64_dom_stack_frame(const char *stack, os64_dom_frame_t *frame)
                         frame->file_length = (size_t)(file_end - open);
                         break;
                     }
-            /* A file the engine or the binding names in angle brackets is
-             * no script's: JSON text (`<input>`, `<body>`, `<response>`)
-             * or eval'd code. It is passed over as a native frame is, so
-             * the place is the script that asked. */
-            if (!(frame->file_length >= 2 && frame->file[0] == '<' && frame->file[frame->file_length - 1] == '>'))
+            /* Text that did not parse, in a file the engine or the binding
+             * names in angle brackets, is no script's: JSON (`<input>`,
+             * `<body>`, `<response>`) or an eval's source that did not
+             * compile. That frame, the parse-error form with no function,
+             * is passed over as a native one is, so the place is the script
+             * that asked. A function running in eval'd code keeps its own. */
+            if (!(last == end && frame->file_length >= 2 && frame->file[0] == '<' &&
+                  frame->file[frame->file_length - 1] == '>'))
                 return true;
         }
         start = end + 1;

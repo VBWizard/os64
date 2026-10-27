@@ -751,9 +751,10 @@ const char *os64_dom_script_address(const os64_dom_t *dom, const char *name);
  * outcome's stack_trace) that names a place in a script, as the engine
  * writes a frame a line, ending it with a newline: "    at f
  * (file:line:col)", or "    at file:line:col" for a script that did not
- * compile. A native frame names no place, nor does a file the engine or
- * the binding names in angle brackets (JSON text, eval'd code), and a last
- * line with no newline was cut short: each is passed over. `file` and
+ * compile. A native frame names no place, nor does the second form in a
+ * file the engine or the binding names in angle brackets (JSON text, or
+ * eval'd source, that did not parse), and a last line with no newline was
+ * cut short: each is passed over. `file` and
  * `function` point into `stack`, with their lengths; `function` is NULL
  * for the second form, and for a name the engine wrote in angle brackets:
  * an anonymous function's, a script's own code's. The file of a classic
