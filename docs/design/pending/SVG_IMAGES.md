@@ -157,8 +157,11 @@ external stylesheet; in Yonder it remains green. Chromium's animated image
 mode can turn it red, so that card is a processing-mode check rather than a
 cross-browser color reference.
 
-P5 verification is pending. Use the frozen tested binary/library/fixture
-cohort for this increment. Gradients, raster-variant caching and corpus-led
-latency/fidelity work remain in 6c; broader graphics remain in 6d. SVGZ,
+Chris verified the `a013caf7` delivery on the P5: the complete gallery passes
+from 25% through 400% zoom. The frozen binary/library/fixture cohort contains
+33 files; the update transferred 26 changed files.
+
+Gradients, raster-variant caching and corpus-led latency/fidelity work remain
+in 6c; broader graphics remain in 6d. SVGZ,
 data-URL picture dispatch, fragment-view selection and full intrinsic sizing
 are not delivered by this route.
