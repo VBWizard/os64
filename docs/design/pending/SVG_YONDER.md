@@ -72,9 +72,10 @@ The inline profile handles paths, groups and [basic shapes](SVG_SHAPES.md),
 plus [dashes and zero-length caps](SVG_STROKES.md) and
 [same-document use instances](SVG_INSTANCES.md) and
 [referenced/nested viewports](SVG_VIEWPORTS.md) with rectangular overflow clipping.
-Definitions, uninstantiated symbols, metadata, titles, descriptions and style
+[One-silhouette clip resources](SVG_CLIPS.md) extend clipping beyond rectangles.
+Definitions, clip resources, uninstantiated symbols, metadata, titles, descriptions and style
 elements are omitted from drawing. Other active element kinds refuse the SVG job. Text, gradients,
-patterns, images, markers, clip paths, masks, filters, non-scaling
+patterns, images, markers, broader clip combinations, masks, filters, non-scaling
 strokes and animation remain follow-on work. External SVG image decoding is
 not connected to libimage. SVG-specific hit testing and DOM interfaces are
 also outside this slice.

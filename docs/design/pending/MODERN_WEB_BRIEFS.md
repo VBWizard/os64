@@ -46,6 +46,7 @@ caps, with a reversible phase toggle and independent analytic coverage checks.
 The [instance increment](SVG_INSTANCES.md) adds fragment use references, separate
 instance inheritance and cross-root source mutation. The [viewport increment](SVG_VIEWPORTS.md)
 adds referenced symbol/SVG sizing, nested viewports and rectangular overflow clips.
+[SVG_CLIPS.md](SVG_CLIPS.md) adds one-silhouette clip resources and ancestor intersections.
 The static inline renderer stage remains
 active; the first P5 fixture does not complete its broader feature profile.
 

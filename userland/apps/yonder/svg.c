@@ -13,15 +13,16 @@ typedef os64_geometry_map_t Map;
 typedef struct {
     svg_style_t s;
     // Borrowed from the live cascade; evaluate when SVG paints these values.
-    const garb_val_t *transform_css, *opacity_css, *dash_css, *dashoffset_css;
+    const garb_val_t *transform_css, *opacity_css, *dash_css, *dashoffset_css, *clip_css;
     uint32_t color;
-    bool current_fill, current_stroke, vector, linear;
+    bool current_fill, current_stroke, vector, linear, clip_even_odd;
     int overflow[2]; // visible, hidden, scroll, auto, clip
 } Computed;
 typedef struct {
     const os64_html_node_t *source;
     uint64_t parent;
     bool instanced;
+    const garb_val_t *clip_css;
     double width, height; // Descendant percentage basis in viewport user units.
 } Instance;
 typedef struct {
@@ -35,7 +36,7 @@ typedef struct {
     os64_geometry_memory_t memory;
     Instance *instances;
     size_t capacity;
-    bool base_checked;
+    bool base_checked, clip_geometry, clip_style;
 } Adapter;
 typedef struct {
     const char *p;
@@ -473,6 +474,12 @@ static void copy_property(Computed *d, const Computed *s, garb_prop_t p)
     case GARB_DISPLAY:
         d->s.display = s->s.display;
         break;
+    case GARB_CLIP_PATH:
+        d->clip_css = s->clip_css;
+        break;
+    case GARB_CLIP_RULE:
+        d->clip_even_odd = s->clip_even_odd;
+        break;
     case GARB_FILL_RULE:
         d->s.even_odd = s->s.even_odd;
         break;
@@ -554,6 +561,12 @@ static svg_status_t apply(Adapter *a, Computed *c, const Computed *parent, garb_
     }
     double n = 0;
     switch (prop) {
+    case GARB_CLIP_PATH:
+        c->clip_css = v;
+        break;
+    case GARB_CLIP_RULE:
+        c->clip_even_odd = keyword(v, "evenodd");
+        break;
     case GARB_OVERFLOW_X:
     case GARB_OVERFLOW_Y:
         c->overflow[prop == GARB_OVERFLOW_Y] = keyword(v, "hidden")   ? 1
@@ -644,7 +657,7 @@ static bool ignored(const os64_html_node_t *n)
     return n->ns == OS64_HTML_NS_SVG &&
            (same_word(n->name, "defs") || same_word(n->name, "title") ||
             same_word(n->name, "desc") || same_word(n->name, "metadata") ||
-            same_word(n->name, "style"));
+            same_word(n->name, "style") || same_word(n->name, "clipPath"));
 }
 // Instance IDs come from libsvg's bounded visit sequence. Records preserve
 // inheritance without cloning the DOM or retaining pointers into a growable array.
@@ -713,6 +726,7 @@ static svg_status_t compute(Adapter *a, uint64_t instance, Computed *c)
         Computed parent = *c;
         c->s.opacity = 1;
         c->opacity_css = NULL;
+        c->clip_css = NULL;
         c->s.transform = identity;
         c->transform_css = NULL;
         c->s.display = true;
@@ -736,6 +750,11 @@ static svg_status_t compute(Adapter *a, uint64_t instance, Computed *c)
                 return SVG_LIMIT;
             garb_prop_t prop = style.sets[j].prop;
             if (prop == GARB_COLOR)
+                continue;
+            // Clip silhouettes have no fill, stroke, opacity or color-space
+            // paint semantics; even unsupported paint values cannot alter them.
+            if (a->clip_style && prop != GARB_DISPLAY && prop != GARB_VISIBILITY &&
+                prop != GARB_TRANSFORM && prop != GARB_CLIP_PATH && prop != GARB_CLIP_RULE)
                 continue;
             // HTML ancestors contribute inherited paint/color, not their box
             // transforms. The outer SVG's CSS transform is painted by flow.
@@ -827,6 +846,8 @@ static svg_status_t geometry_value(Adapter *a, uint64_t instance, garb_prop_t pr
             instance = parent;
             continue;
         }
+        if (a->clip_geometry && v->kind == GARB_V_PERCENTAGE)
+            return SVG_UNSUPPORTED; // Resource percentage bases need their own viewport contract.
         return value(v, percent, out) ? SVG_OK : SVG_UNSUPPORTED;
     }
     return SVG_OK;
@@ -905,6 +926,8 @@ static svg_status_t line_coordinate(Adapter *a, const os64_html_node_t *n, const
     if (!number(&s, &parsed))
         return SVG_OK; // Invalid coordinates use the attribute's initial zero.
     if (s.left && *s.p == '%') {
+        if (a->clip_geometry)
+            return SVG_UNSUPPORTED;
         parsed *= percent / 100;
         ++s.p;
         --s.left;
@@ -1057,6 +1080,7 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
         if (status != SVG_OK || !out->display)
             return status;
     }
+    a->instances[r->instance].clip_css = c.clip_css;
     bool path = n->ns == OS64_HTML_NS_SVG && same_word(n->name, "path");
     bool geometry = path || basic_shape(n);
     if (geometry && out->visible && out->stroke.kind != SVG_PAINT_NONE) {
@@ -1090,7 +1114,7 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
     // Features absent from the prepared-scene profile must not masquerade as
     // ordinary solid artwork. CSS declarations not read by garb are also
     // recorded by the page's existing skipped-style diagnostics.
-    const char *unsupported[] = {"clip-path",  "mask",       "filter",     "marker-start",
+    const char *unsupported[] = {"mask",       "filter",     "marker-start",
                                  "marker-mid", "marker-end", "paint-order"};
     for (size_t i = 0; i < sizeof(unsupported) / sizeof(unsupported[0]); ++i) {
         const char *v = attr(n, unsupported[i]);
@@ -1129,15 +1153,8 @@ static int hex(char c)
         return c - 'A' + 10;
     return -1;
 }
-static svg_status_t reference(void *ctx, void *snapshot, const svg_style_request_t *r,
-                              uint64_t *source)
+static svg_status_t fragment_target(Adapter *a, const char *text, uint64_t *source)
 {
-    Adapter *a = ctx;
-    (void)snapshot;
-    const os64_html_node_t *use = (const void *)(uintptr_t)r->source;
-    const os64_html_attr_t *href = os64_html_attr(use, "href");
-    // Presence, including an empty href, takes precedence over xlink:href.
-    const char *text = href ? href->value : attr(use, "xlink:href");
     Scanner scan;
     *source = 0;
     if (!scanner(text ? text : "", &scan))
@@ -1205,14 +1222,139 @@ static svg_status_t reference(void *ctx, void *snapshot, const svg_style_request
     a->base_checked = true;
     if (!target || target->ns != OS64_HTML_NS_SVG)
         return SVG_OK;
+    *source = (uintptr_t)target;
+    return SVG_OK;
+}
+static svg_status_t reference(void *ctx, void *snapshot, const svg_style_request_t *r,
+                              uint64_t *source)
+{
+    Adapter *a = ctx;
+    (void)snapshot;
+    const os64_html_node_t *use = (const void *)(uintptr_t)r->source;
+    const os64_html_attr_t *href = os64_html_attr(use, "href");
+    // Presence, including an empty href, takes precedence over xlink:href.
+    svg_status_t status = fragment_target(a, href ? href->value : attr(use, "xlink:href"), source);
+    if (status != SVG_OK || !*source)
+        return status;
     size_t depth = 0;
     for (const os64_html_node_t *p = use; p; p = p->parent) {
         if (++depth > SVG_DEPTH_MAX || ++a->work > SVG_ADAPTER_WORK)
             return SVG_LIMIT;
-        if (p == target)
-            return SVG_OK;
+        if ((uintptr_t)p == *source) {
+            *source = 0;
+            break;
+        }
     }
-    *source = (uintptr_t)target;
+    return SVG_OK;
+}
+// A clip source inherits through its own DOM ancestors. Temporarily using the
+// consumer's record avoids a second ancestry mechanism; restore it on every exit.
+static svg_status_t clip_computed(Adapter *a, uint64_t instance, const os64_html_node_t *n,
+                                  Computed *out)
+{
+    Instance saved = a->instances[instance];
+    a->instances[instance] = (Instance){.source = n};
+    a->clip_style = true;
+    svg_status_t status = compute(a, instance, out);
+    a->clip_style = false;
+    a->instances[instance] = saved;
+    if (status == SVG_OK && out->transform_css)
+        status = css_transform(out->transform_css, &out->s.transform);
+    if (status != SVG_OK)
+        return status;
+    if (out->clip_css && !keyword(out->clip_css, "none"))
+        return SVG_UNSUPPORTED;
+    const garb_prop_t transforms[] = {GARB_TRANSFORM_ORIGIN, GARB_TRANSLATE, GARB_ROTATE,
+                                      GARB_SCALE};
+    for (size_t i = 0; i < sizeof(transforms) / sizeof(transforms[0]); ++i)
+        if (winner(a->cascade, n, transforms[i]))
+            return SVG_UNSUPPORTED;
+    return SVG_OK;
+}
+static svg_status_t clip_source(void *ctx, void *snapshot, const svg_style_request_t *r,
+                                svg_clip_source_t *out)
+{
+    Adapter *a = ctx;
+    (void)snapshot;
+    *out = (svg_clip_source_t){0};
+    a->width = a->instances[r->instance].width;
+    a->height = a->instances[r->instance].height;
+    svg_status_t status;
+    const garb_val_t *v = a->instances[r->instance].clip_css;
+    if (!v || keyword(v, "none"))
+        return SVG_OK;
+    if (v->kind != GARB_V_URL)
+        return SVG_UNSUPPORTED;
+    if (v->len > SVG_ATTR_MAX)
+        return SVG_LIMIT;
+    char url[SVG_ATTR_MAX + 1];
+    for (size_t i = 0; i < v->len; ++i)
+        url[i] = v->text[i];
+    url[v->len] = 0;
+    uint64_t source;
+    status = fragment_target(a, url, &source);
+    if (status != SVG_OK || !source)
+        return status;
+    const os64_html_node_t *resource = (const void *)(uintptr_t)source;
+    if (!same_word(resource->name, "clipPath"))
+        return SVG_OK;
+    const char *units = attr(resource, "clipPathUnits");
+    if (*units && !same_word(units, "userSpaceOnUse"))
+        return SVG_UNSUPPORTED;
+    Computed container;
+    status = clip_computed(a, r->instance, resource, &container);
+    if (status != SVG_OK)
+        return status;
+    *out = (svg_clip_source_t){.active = true, .kind = SVG_NODE_PATH, .transform = identity};
+    bool found = false;
+    for (const os64_html_node_t *n = resource->first_child; n; n = n->next) {
+        if (++a->work > SVG_ADAPTER_WORK)
+            return SVG_LIMIT;
+        if (n->kind != OS64_HTML_ELEMENT)
+            continue;
+        if (n->ns != OS64_HTML_NS_SVG)
+            return SVG_UNSUPPORTED;
+        if (same_word(n->name, "title") || same_word(n->name, "desc") ||
+            same_word(n->name, "metadata") || same_word(n->name, "style"))
+            continue;
+        Computed child;
+        status = clip_computed(a, r->instance, n, &child);
+        if (status != SVG_OK)
+            return status;
+        if (!child.s.display || !child.s.visible)
+            continue;
+        if (found)
+            return SVG_UNSUPPORTED; // Multiple silhouettes need a geometric union.
+        bool path = same_word(n->name, "path");
+        if (!path && !basic_shape(n))
+            return SVG_UNSUPPORTED;
+        found = true;
+        out->even_odd = child.clip_even_odd;
+        out->transform = multiply(container.s.transform, child.s.transform);
+        if (!finite_map(out->transform))
+            return SVG_LIMIT;
+        if (path) {
+            const char *d = attr(n, "d");
+            size_t len = 0;
+            while (len <= 1048576 && d[len])
+                ++len;
+            if (len > 1048576)
+                return SVG_LIMIT;
+            out->d = (svg_string_t){d, len};
+        } else {
+            out->kind = SVG_NODE_SHAPE;
+            Instance saved = a->instances[r->instance];
+            a->instances[r->instance] = (Instance){.source = n};
+            svg_style_request_t req = *r;
+            req.source = (uintptr_t)n;
+            a->clip_geometry = true;
+            status = shape(a, snapshot, &req, &out->shape);
+            a->clip_geometry = false;
+            a->instances[r->instance] = saved;
+            if (status != SVG_OK)
+                return status;
+        }
+    }
     return SVG_OK;
 }
 void yonder_svg_pixels_free(const os64_geometry_memory_t *m, yonder_svg_pixels_t *out)
@@ -1276,7 +1418,7 @@ svg_status_t yonder_svg_render(const os64_html_document_t *doc, const garb_casca
     status = svg_create(&options, &c);
     if (status != SVG_OK)
         return status;
-    svg_provider_t provider = {&a, acquire, release, node, style, shape, reference};
+    svg_provider_t provider = {&a, acquire, release, node, style, shape, reference, clip_source};
     status = svg_scene_prepare(c, &provider, SVG_MODE_INLINE, &map, &scene);
     if (status == SVG_OK) {
         out->bytes = (size_t)(width * height * 4);

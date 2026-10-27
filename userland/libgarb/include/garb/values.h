@@ -138,6 +138,7 @@ typedef enum {
     GARB_X, GARB_Y, GARB_CX, GARB_CY, GARB_R, GARB_RX, GARB_RY,
     // Inherited offset; appended to preserve the existing property IDs.
     GARB_STROKE_DASHOFFSET,
+    GARB_CLIP_PATH, GARB_CLIP_RULE,
     GARB_NPROPS
 } garb_prop_t;
 

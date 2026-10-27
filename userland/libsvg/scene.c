@@ -66,6 +66,7 @@ static void free_scene(Context *c, svg_scene_t *scene)
 {
     for (size_t i = 0; i < scene->count; ++i) {
         svg_free_path(c, (svg_path_t *)scene->items[i].path);
+        svg_free_path(c, (svg_path_t *)scene->items[i].clip.path);
         svg_free(c, (void *)scene->items[i].style.dash.values);
     }
     svg_free(c, scene->items);
@@ -259,6 +260,35 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
         size_t index = scene->count;
         scene->items[scene->count++] = item;
         pending_dash = NULL;
+        if (provider->clip) {
+            svg_clip_source_t clip = {0};
+            request.parent_style = parent == SIZE_MAX ? NULL : &scene->items[parent].style;
+            if (!svg_spend(c, 1)) {
+                status = c->why;
+                break;
+            }
+            status = provider_status(
+                provider->clip(provider->context, scene->snapshot, &request, &clip));
+            if (status != SVG_OK)
+                break;
+            if (clip.active) {
+                if (!svg_map_valid(&clip.transform) ||
+                    (clip.kind != SVG_NODE_PATH && clip.kind != SVG_NODE_SHAPE)) {
+                    status = SVG_PROVIDER_ERROR;
+                    break;
+                }
+                svg_path_t *path = NULL;
+                svg_parse_result_t result;
+                status = clip.kind == SVG_NODE_PATH
+                             ? svg_parse(c, clip.d, &path, &result)
+                             : svg_make_shape(c, &clip.shape, &path, &result);
+                if (status != SVG_OK && status != SVG_MALFORMED)
+                    break;
+                path->in_scene = true;
+                scene->items[index].clip = (svg_clip_t){true, clip.even_odd, clip.transform, path};
+                status = SVG_OK;
+            }
+        }
         uint64_t child = node.first_child;
         if (node.kind == SVG_NODE_USE) {
             if (!provider->reference) {

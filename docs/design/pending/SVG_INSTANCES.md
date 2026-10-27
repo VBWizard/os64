@@ -74,7 +74,8 @@ Ordinary use hosts can use DOM-resolved custom properties and pass their
 computed paint down. Custom-property definitions alone do not trigger refusal.
 [Referenced and nested viewports](SVG_VIEWPORTS.md) add symbol/SVG sizing and
 rectangular overflow clips. Per-instance substitution, shadow-tree selector
-rematching and general clip paths remain in [DEBTS.md](../../../DEBTS.md).
+rematching and broader clip combinations remain in [DEBTS.md](../../../DEBTS.md).
+[Clip silhouettes](SVG_CLIPS.md) support one direct path/shape resource.
 
 These semantics are grounded in SVG2's [use element and its shadow tree](https://www.w3.org/TR/SVG2/struct.html#UseElement).
 The static profile does not expose SVG animated-length objects, instance
