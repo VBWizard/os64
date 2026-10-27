@@ -4089,3 +4089,14 @@ stop styling, coordinate units and pad/repeat/reflect spread.
 `/tests/pages/svg-gradients.html` changes a sky and its shared consumers while
 an external SVG postcard retains its private colors. Radial gradients,
 raster-variant caching and corpus-led performance work remain in 6c.
+
+
+### Slice 6c, radial gradient paint — 2026-10-27
+
+[SVG_RADIAL.md](SVG_RADIAL.md) extends fill/stroke servers to centered and
+eccentric radial gradients, focal circles, repeat/reflect, outside foci and
+cross-type templates. A numeric circle-position query separates geometry from
+SVG's tangent-edge coloring for a future Canvas caller.
+`/tests/pages/svg-radial.html` moves a highlight across shared consumers while
+an independent SVG keeps its own light. Raster caching and corpus-led
+latency/fidelity gates remain in 6c.

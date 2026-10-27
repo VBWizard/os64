@@ -3,7 +3,7 @@
 2026-10-27. Linear paint servers extend the inline and standalone-image
 profiles. The gallery is `/tests/pages/svg-gradients.html`, **SVG: a change
 in atmosphere**. Modern Web enables SVG; scripts enable its reversible sky
-button. Radial gradients are a separate increment on this numeric foundation.
+button. [Radial gradients](SVG_RADIAL.md) extend this numeric foundation.
 
 ## Numeric library boundary
 
@@ -50,8 +50,9 @@ fallback. Image-mode external references fail without fetching.
 The adapter supports objectBoundingBox and userSpaceOnUse; percentages in
 user space use the consumer's current viewport. Numeric and absolute-unit
 coordinates are resolved before calling libsvg. Relative/calc coordinates,
-radial resources, cross-type gradient templates, individual CSS transforms
-and explicit transform origins are outside this increment. CSS transform on
+individual CSS transforms and explicit transform origins are outside this
+increment. [Radial paint](SVG_RADIAL.md) extends the resource resolver to both
+gradient types and cross-type templates. CSS transform on
 the referenced gradient replaces its gradientTransform attribute.
 
 `stop-color` and `stop-opacity` are typed, non-inherited libgarb properties,
@@ -142,6 +143,6 @@ Screenshots: [morning](../../svg-evidence/yonder-gradients-top.png),
 [25%](../../svg-evidence/yonder-gradients-25-percent.png),
 [400%](../../svg-evidence/yonder-gradients-400-percent.png).
 
-Radial gradients, raster-variant caching and corpus-led latency/fidelity gates
+Raster-variant caching and corpus-led latency/fidelity gates
 remain in 6c. Text and broader graphics remain later work; this increment does
 not claim complete static SVG or Canvas support.

@@ -951,7 +951,8 @@ static void object_bounds_contracts(void)
 }
 
 #include "test_svg_gradient_sampler.inc"
-static void gradient_scene_contracts(void)
+#include "test_svg_radial_sampler.inc"
+static void gradient_scene_contracts(bool radial)
 {
     gradient_sampler_contracts();
     Ledger l = {0};
@@ -965,6 +966,17 @@ static void gradient_scene_contracts(void)
     svg_linear_gradient_t g = {
         .x2 = 1, .object_bbox = true, .transform = map, .stops = stops, .count = 2};
     d.nodes[1].style.fill = (svg_paint_t){.kind = SVG_PAINT_LINEAR, .linear = &g};
+    svg_radial_gradient_t rg = {.cx = .5,
+                                .cy = .5,
+                                .fx = .5,
+                                .fy = .5,
+                                .r = .5,
+                                .object_bbox = true,
+                                .transform = map,
+                                .stops = stops,
+                                .count = 2};
+    if (radial)
+        d.nodes[1].style.fill = (svg_paint_t){.kind = SVG_PAINT_RADIAL, .radial = &rg};
     d.nodes[1].style.stroke = d.nodes[1].style.fill;
     d.nodes[1].style.stroke_style.width = 4;
     svg_provider_t provider = {&d, acquire, unpin, node, style, NULL, NULL, clip_source};
@@ -980,11 +992,16 @@ static void gradient_scene_contracts(void)
     stops[0].offset = NAN;
     stops[0].argb = 0;
     g.count = 999;
+    rg.count = 999;
     allocations = l.allocations;
     polls = l.polls;
     CHECK(svg_scene_render(c, scene, &options, &t, NULL) == SVG_OK);
     size_t render_allocations = l.allocations - allocations, render_polls = l.polls - polls;
-    CHECK(pixels[32 * 68 + 8] == 0xfffc0003 && pixels[32 * 68 + 55] == 0xff0300fc);
+    if (radial) {
+        CHECK(pixels[32 * 68 + 8] == pixels[32 * 68 + 55]);
+        CHECK((pixels[32 * 68 + 32] & 0xff0000) > 0xf00000);
+    } else
+        CHECK(pixels[32 * 68 + 8] == 0xfffc0003 && pixels[32 * 68 + 55] == 0xff0300fc);
     padding(pixels);
     size_t kept = l.live;
     for (unsigned mode = 0; mode < 2; ++mode)
@@ -1005,6 +1022,7 @@ static void gradient_scene_contracts(void)
     CHECK(svg_scene_release(c, scene) == SVG_OK && l.live == baseline && !d.pins);
     stops[0] = (svg_gradient_stop_t){0, 0xffff0000};
     g.count = 2;
+    rg.count = 2;
     for (unsigned mode = 0; mode < 2; ++mode)
         for (size_t i = 1; i <= prepare_allocations; ++i) {
             scene = NULL;
@@ -1032,7 +1050,9 @@ int main(int argc, char **argv)
 {
     CHECK(argc == 2);
     setvbuf(stdout, NULL, _IONBF, 0);
-    gradient_scene_contracts();
+    radial_sampler_contracts();
+    gradient_scene_contracts(false);
+    gradient_scene_contracts(true);
     clip_contracts(false);
     clip_contracts(true);
     object_bounds_contracts();

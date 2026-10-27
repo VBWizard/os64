@@ -58,7 +58,7 @@ not the prefix's spelling; an unqualified href, including an empty one, wins.
 These choices implement the security boundary of SVG's
 [secure static processing mode](https://www.w3.org/TR/SVG2/conform.html#secure-static-mode)
 within the supported graphics profile. They do not claim full SVG conformance:
-embedded data images, radial gradients, text and the other recorded graphics debts
+embedded data images, text and the other recorded graphics debts
 remain unsupported. An active `<image>` element is refused without fetching.
 
 Unlike the inline adapter, which leaves outer box effects to libflow, the
@@ -143,8 +143,8 @@ or P5 test of an external image-loading route.
 The [image route](SVG_IMAGES.md) supplies tagged picture jobs, default object
 sizing, content recognition, lifetime/cancellation and admission accounting,
 with real `<img>` delivery and a P5 gallery. [Linear gradients](SVG_GRADIENTS.md)
-add reusable paint servers. Radial gradients and cache/corpus work remain
-part of 6c. The renderer continues to receive caller-resolved dimensions;
+add reusable paint servers, extended by [radial gradients](SVG_RADIAL.md).
+Cache/corpus work remains part of 6c. The renderer continues to receive caller-resolved dimensions;
 the image route supplies default natural dimensions, while full replaced-element
 intrinsic sizing and raster-variant caches remain follow-ups.
 
