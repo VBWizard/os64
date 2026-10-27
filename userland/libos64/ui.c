@@ -265,17 +265,12 @@ bool os64_ui_focus_next(os64_ui_t *ui, bool reverse, bool wrap)
 
 // ── hit testing ─────────────────────────────────────────────────────────────
 
-static bool rect_contains(os64_gui_rect_t r, int32_t x, int32_t y)
-{
-	return x >= r.x && y >= r.y && (int64_t)x < (int64_t)r.x + r.w &&
-	       (int64_t)y < (int64_t)r.y + r.h;
-}
-
 // Deepest visible widget under the point. Children are checked LAST-first so
-// a hit resolves to whatever painted on top (list order is paint order).
+// a hit resolves to whatever painted on top (list order is paint order). A
+// clipped widget is there only where it is seen (ui_widget_holds).
 static os64_ui_widget_t *hit_test(os64_ui_widget_t *w, int32_t x, int32_t y)
 {
-	if (w == (os64_ui_widget_t *)0 || w->hidden || !rect_contains(w->bounds, x, y))
+	if (w == (os64_ui_widget_t *)0 || w->hidden || !ui_widget_holds(w, x, y))
 		return (os64_ui_widget_t *)0;
 
 	os64_ui_widget_t *best = (os64_ui_widget_t *)0;
@@ -459,6 +454,71 @@ bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev)
 
 // ── paint ───────────────────────────────────────────────────────────────────
 
+// One walk, parent before children (children overpaint), so a widget
+// painted for several rectangles is painted for all of them before any
+// child is. A paints_part class is painted once for each rectangle it
+// meets, cut to it; any other is painted whole, once, even when only
+// partly dirty: the canvas beyond the rectangles just gets the same
+// bytes it already shows (repaint-from-state), and only the rectangles
+// are published. Widgets paint INSIDE their bounds by contract — the
+// primitives clip to the CANVAS, so a widget that strays stomps a
+// sibling, which is LIBDRAW.md's named fingerprint for this layer.
+static void paint_self(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_rect_t *list, uint32_t count,
+                       os64_gui_rect_t met)
+{
+	os64_gui_rect_t clip;
+	os64_ui_theme_t t = ui->theme;
+	if (!os64_ui_widget_enabled(w)) {
+		t.panel_bg = t.button_face = t.button_face_pressed = t.button_face_hover =
+		    t.text_bg = t.field_bg = t.scroll_track = t.disabled_bg;
+		t.label_fg = t.button_fg = t.text_fg = t.field_fg = t.scroll_thumb =
+		    t.button_border = t.field_border = t.button_highlight = t.button_shadow =
+		    t.hover_border = t.focus_ring = t.text_caret = t.disabled_fg;
+		t.text_sel_bg = t.disabled_fg;
+		t.text_sel_fg = t.disabled_bg;
+	}
+	if (w->cls->paints_part) {
+		for (uint32_t i = 0; i < count; i++)
+			if (os64_rect_intersect(w->bounds, list[i], &clip)) {
+				ui->dirty = list[i];
+				w->cls->paint(w, ui->ctx, &t);
+			}
+	} else {
+		ui->dirty = met;
+		w->cls->paint(w, ui->ctx, &t);
+	}
+}
+
+// A clipped widget painted through its clip: a sub-surface whose origin is
+// the corner of what is seen, the widget's bounds and the rectangles it is
+// painted for moved into it for the paint and put back after, so the
+// primitives' own clip to the canvas is the cut. Wholly seen, it is painted
+// as any widget is; not seen at all, not painted.
+static void paint_cut(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_rect_t *list, uint32_t count,
+                      os64_gui_rect_t met)
+{
+	os64_gui_surface_t whole = ui->ctx->surf;
+	os64_gui_rect_t canvas = {0, 0, (int32_t)whole.width, (int32_t)whole.height}, seen;
+	if (!os64_rect_intersect(w->bounds, w->clip, &seen) || !os64_rect_intersect(seen, canvas, &seen))
+		return;
+	if (seen.x == w->bounds.x && seen.y == w->bounds.y && seen.w == w->bounds.w && seen.h == w->bounds.h) {
+		paint_self(w, ui, list, count, met);
+		return;
+	}
+	os64_gui_rect_t moved[OS64_UI_DAMAGE_MAX];
+	for (uint32_t i = 0; i < count; i++)
+		moved[i] = (os64_gui_rect_t){list[i].x - seen.x, list[i].y - seen.y, list[i].w, list[i].h};
+	os64_gui_rect_t bounds = w->bounds;
+	ui->ctx->surf.pixels = whole.pixels + (size_t)seen.y * whole.pitch_px + (size_t)seen.x;
+	ui->ctx->surf.width = (uint32_t)seen.w;
+	ui->ctx->surf.height = (uint32_t)seen.h;
+	w->bounds.x -= seen.x;
+	w->bounds.y -= seen.y;
+	paint_self(w, ui, moved, count, (os64_gui_rect_t){met.x - seen.x, met.y - seen.y, met.w, met.h});
+	w->bounds = bounds;
+	ui->ctx->surf = whole;
+}
+
 static void paint_recursive(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_rect_t *list,
                             uint32_t count)
 {
@@ -474,36 +534,11 @@ static void paint_recursive(os64_ui_widget_t *w, os64_ui_t *ui, const os64_gui_r
 		}
 	if (!meets)
 		return;
-	// One walk, parent before children (children overpaint), so a widget
-	// painted for several rectangles is painted for all of them before any
-	// child is. A paints_part class is painted once for each rectangle it
-	// meets, cut to it; any other is painted whole, once, even when only
-	// partly dirty: the canvas beyond the rectangles just gets the same
-	// bytes it already shows (repaint-from-state), and only the rectangles
-	// are published. Widgets paint INSIDE their bounds by contract — the
-	// primitives clip to the CANVAS, so a widget that strays stomps a
-	// sibling, which is LIBDRAW.md's named fingerprint for this layer.
 	if (w->cls->paint) {
-		os64_ui_theme_t t = ui->theme;
-		if (!os64_ui_widget_enabled(w)) {
-			t.panel_bg = t.button_face = t.button_face_pressed = t.button_face_hover =
-			    t.text_bg = t.field_bg = t.scroll_track = t.disabled_bg;
-			t.label_fg = t.button_fg = t.text_fg = t.field_fg = t.scroll_thumb =
-			    t.button_border = t.field_border = t.button_highlight = t.button_shadow =
-			    t.hover_border = t.focus_ring = t.text_caret = t.disabled_fg;
-			t.text_sel_bg = t.disabled_fg;
-			t.text_sel_fg = t.disabled_bg;
-		}
-		if (w->cls->paints_part) {
-			for (uint32_t i = 0; i < count; i++)
-				if (os64_rect_intersect(w->bounds, list[i], &clip)) {
-					ui->dirty = list[i];
-					w->cls->paint(w, ui->ctx, &t);
-				}
-		} else {
-			ui->dirty = met;
-			w->cls->paint(w, ui->ctx, &t);
-		}
+		if (!w->clipped)
+			paint_self(w, ui, list, count, met);
+		else
+			paint_cut(w, ui, list, count, met);
 	}
 	for (os64_ui_widget_t *c = w->first_child; c; c = c->next_sibling)
 		paint_recursive(c, ui, list, count);
@@ -771,7 +806,7 @@ static bool button_event(os64_ui_widget_t *w, os64_ui_t *ui,
 	case OS64_GUI_EVENT_MOUSE_MOVE: {
 		// Held button, cursor wandering: pressed tracks whether release
 		// here would still count. The visual IS the contract.
-		bool inside = rect_contains(w->bounds, ev->mouse.x, ev->mouse.y);
+		bool inside = ui_widget_holds(w, ev->mouse.x, ev->mouse.y);
 		if (inside != w->pressed) {
 			w->pressed = inside;
 			os64_ui_mark_dirty(ui, w);
@@ -779,8 +814,7 @@ static bool button_event(os64_ui_widget_t *w, os64_ui_t *ui,
 		return true;
 	}
 	case OS64_GUI_EVENT_MOUSE_BUTTON_UP: {
-		bool fire = w->pressed &&
-		            rect_contains(w->bounds, ev->mouse.x, ev->mouse.y);
+		bool fire = w->pressed && ui_widget_holds(w, ev->mouse.x, ev->mouse.y);
 		w->pressed = false;
 		os64_ui_mark_dirty(ui, w);
 		if (fire && w->on_click)

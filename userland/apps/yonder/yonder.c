@@ -7495,14 +7495,15 @@ refused:
     forms_sync_from_model(true);
 }
 
-// Every control's widget at its box on the glass — or hidden, when its box
-// is not wholly inside the page view, because libui does not clip a child
-// to its parent and a widget half out of the view would paint over the
-// toolbar; and hidden when the pointer cannot reach the control at its
-// centre (flow_box_covered; POSITION.md, ruling 9): a field under a fixed
-// header, a hidden dialog's field, one `visibility: hidden`. Whatever of
-// its frame the page draws, the painter draws. Without a layout there is
-// no box to place a control at, so the widgets stay hidden.
+// Every control's widget at its box on the glass, clipped to the page view
+// (libui's `clipped`), so a control half scrolled out of the view is half a
+// control and takes no click on the toolbar it would otherwise cross; and
+// hidden when none of it is in the view, or when the pointer cannot reach
+// the control at its centre (flow_box_covered; POSITION.md, ruling 9 and
+// its amendment): a field under a fixed header, a hidden dialog's field,
+// one `visibility: hidden`. Whatever of its frame the page draws, the
+// painter draws. Without a layout there is no box to place a control at,
+// so the widgets stay hidden.
 // A control the page made invisible (`opacity: 0`) is drawn when it is a
 // FIELD — in a form, or named, so something is submitted — because then it
 // is nearly always a custom checkbox's real input, whose styled stand-in
@@ -7559,9 +7560,10 @@ static void forms_place(void)
         const os64_ui_class_t *cls = fw->own_class;
         if (gadget(b, widget_control(fw)))
             cls = unpainted_class(fw->own_class);
-        bool shown = x >= v.x && y >= v.y && x + at.w <= (int64_t)v.x + v.w &&
-                     y + at.h <= (int64_t)v.y + v.h && at.w > 0 && at.h > 0 &&
-                     !flow_box_covered(g.page.tree, b, scroll_now()) && cls != NULL;
+        bool shown = x < (int64_t)v.x + v.w && y < (int64_t)v.y + v.h && x + at.w > v.x && y + at.h > v.y &&
+                     at.w > 0 && at.h > 0 && !flow_box_covered(g.page.tree, b, scroll_now()) && cls != NULL;
+        fw->w->clipped = true;
+        fw->w->clip = v;
         if (cls != NULL && cls != fw->w->cls) {
             fw->w->cls = cls;
             os64_ui_mark_dirty(&g.ui, fw->w);
@@ -11134,9 +11136,9 @@ static void glass_image(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_
 
 static FormWidget *form_widget(int32_t control);
 
-// A control whose widget is showing draws itself; one hidden (its box not
-// wholly in the view), or with no widget, is drawn inert: a white well with
-// a sunken edge.
+// A control whose widget is showing draws itself; one hidden (out of the
+// view, or covered), or with no widget, is drawn inert: a white well with a
+// sunken edge.
 static void glass_control(void *ctx, const flow_box_t *b, os64_gui_rect_t c, os64_gui_rect_t clip)
 {
     const FormWidget *fw = form_widget(os64_page_control_for(page_model(&g.page), b->node));
