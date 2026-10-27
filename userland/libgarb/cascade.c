@@ -138,6 +138,7 @@ typedef struct {
     const CustomMap *customs;
     OwnFrames *frames;
     int32_t nframes;
+    bool needs_substitution;
 } Slot;
 
 struct garb_cascade {
@@ -2174,6 +2175,7 @@ static void cascade_element(garb_cascade_t *c, const os64_html_node_t *el,
             }
             continue;
         }
+        slot->needs_substitution = true;
         // var()/env(): replaced now, then read. A value that fails either
         // way is invalid AT COMPUTED-VALUE TIME, and the property acts as
         // `unset` (Custom Properties 1 § 3.1) — it does not fall back to
@@ -2386,6 +2388,12 @@ garb_style_t garb_style_for(const garb_cascade_t *c, const os64_html_node_t *ele
         return none;
     const Slot *s = slot_for(c, element, false);
     return s != NULL ? s->style : none;
+}
+
+bool garb_style_needs_substitution(const garb_cascade_t *c, const os64_html_node_t *element)
+{
+    const Slot *s = c ? slot_for(c, element, false) : NULL;
+    return s && s->needs_substitution;
 }
 
 int32_t garb_keyframes(const garb_cascade_t *c, const os64_html_node_t *element,

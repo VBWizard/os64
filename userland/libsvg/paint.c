@@ -494,7 +494,7 @@ Status svg_scene_render(Context *c, const svg_scene_t *scene, const svg_render_o
                 break;
             const svg_scene_item_t *s = &scene->items[i];
             Layer *surface = depth ? frames[depth - 1].surface : &root;
-            if (s->kind == SVG_NODE_GROUP) {
+            if (s->kind == SVG_NODE_GROUP || s->kind == SVG_NODE_USE) {
                 if (depth == capacity) {
                     status = SVG_LIMIT;
                     goto done;

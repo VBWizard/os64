@@ -72,6 +72,7 @@ static void free_scene(Context *c, svg_scene_t *scene)
 typedef struct {
     uint64_t next;
     size_t parent;
+    bool reference;
 } Frame;
 
 Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t mode,
@@ -112,7 +113,7 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
         status = c->why;
         goto done;
     }
-    stack[depth++] = (Frame){root, SIZE_MAX};
+    stack[depth++] = (Frame){root, SIZE_MAX, false};
     while (depth) {
         Frame *frame = &stack[depth - 1];
         if (!frame->next) {
@@ -130,23 +131,33 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
         ++visits;
         uint64_t source = frame->next;
         size_t parent = frame->parent;
-        /* Check the active ancestry, not a document-global visited set: the
-         * same source can legitimately occur in distinct future use instances. */
-        for (size_t i = 1; i < depth; ++i) {
+        /* Classify the whole loop, not just its closing edge. A use expansion
+         * can close through a source child; a reference above a malformed
+         * child-only loop does not make that loop valid. */
+        bool reference_on_path = false, cycle = false;
+        for (size_t i = depth; i-- > 1;) {
             if (!svg_spend(c, 1)) {
                 status = c->why;
                 goto done;
             }
+            reference_on_path |= stack[i].reference;
             if (scene->items[stack[i].parent].source == source) {
-                status = SVG_PROVIDER_ERROR;
-                goto done;
+                if (!reference_on_path) {
+                    status = SVG_PROVIDER_ERROR;
+                    goto done;
+                }
+                cycle = true;
+                break;
             }
         }
         svg_node_t node = {0};
         status = provider_status(provider->node(provider->context, scene->snapshot, source, &node));
         if (status != SVG_OK)
             break;
-        frame->next = parent == SIZE_MAX ? 0 : node.next_sibling;
+        frame->next = parent == SIZE_MAX || frame->reference ? 0 : node.next_sibling;
+        // Empty the repeated occurrence, preserving its ordinary siblings.
+        if (cycle)
+            continue;
         svg_style_request_t request = {
             .source = source,
             .instance = visits,
@@ -173,7 +184,7 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
         if (status != SVG_OK)
             break;
         if (node.kind != SVG_NODE_GROUP && node.kind != SVG_NODE_PATH &&
-            node.kind != SVG_NODE_SHAPE) {
+            node.kind != SVG_NODE_SHAPE && node.kind != SVG_NODE_USE) {
             status = node.kind == SVG_NODE_UNSUPPORTED ? SVG_UNSUPPORTED : SVG_PROVIDER_ERROR;
             break;
         }
@@ -235,13 +246,29 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
         size_t index = scene->count;
         scene->items[scene->count++] = item;
         pending_dash = NULL;
-        if (node.first_child) {
+        uint64_t child = node.first_child;
+        if (node.kind == SVG_NODE_USE) {
+            if (!provider->reference) {
+                status = SVG_PROVIDER_ERROR;
+                break;
+            }
+            if (!svg_spend(c, 1)) {
+                status = c->why;
+                break;
+            }
+            request.parent_style = parent == SIZE_MAX ? NULL : &scene->items[parent].style;
+            status = provider_status(
+                provider->reference(provider->context, scene->snapshot, &request, &child));
+            if (status != SVG_OK)
+                break;
+        }
+        if (child) {
             stack = svg_grow(c, stack, &capacity, depth, sizeof(*stack), c->options.limits.depth);
             if (c->why != SVG_OK) {
                 status = c->why;
                 break;
             }
-            stack[depth++] = (Frame){node.first_child, index};
+            stack[depth++] = (Frame){child, index, node.kind == SVG_NODE_USE};
         }
     }
 done:

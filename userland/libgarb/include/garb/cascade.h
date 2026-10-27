@@ -131,6 +131,10 @@ bool garb_cascade_incomplete(const garb_cascade_t *c);
 garb_env_t garb_cascade_env(const garb_cascade_t *c);
 // `element`'s winners; an element no author rule reached has none.
 garb_style_t garb_style_for(const garb_cascade_t *c, const os64_html_node_t *element);
+/* True when a matched non-custom declaration needs var()/env() substitution,
+ * including declarations superseded later in the cascade. Such source styles
+ * cannot be reused under different inheritance without substituting again. */
+bool garb_style_needs_substitution(const garb_cascade_t *c, const os64_html_node_t *element);
 
 // One keyframe of an animation (Animations 2 § 3.2): its offset in [0, 1];
 // its easing — the keyframe's own `animation-timing-function`, or NULL for

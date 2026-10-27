@@ -5603,6 +5603,23 @@ static void svg_window_cases(void)
     check(g.page.svg_bytes==0,"SVG shapes: mutation leaves no SVG allocation live");
     os64_free(px);probe_drop();
 
+    probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
+        "<svg width=64 height=64><defs><rect id=master width=16 height='16'/></defs>"
+        "<use href='#master' fill='#2091de'/></svg>"
+        "<svg width=64 height=64><use id=copy href='#master' fill='#e87925'/></svg>"
+        "<script>document.getElementById('master').setAttribute('width','32');"
+        "document.getElementById('copy').setAttribute('fill','#338363');</script>",true);
+    px=stand_in_shot();
+    check((px[8*800+8]&0xffffffu)==0x2091de && (px[72*800+8]&0xffffffu)==0xe87925 &&
+        (px[8*800+24]&0xffffffu)==0xffffff && (px[72*800+24]&0xffffffu)==0xffffff,
+        "SVG use: two roots share geometry with independent instance colors");
+    os64_free(px);while(yonder_scripts_pending(g.page.scripts))script_turn();
+    px=stand_in_shot();
+    check((px[8*800+24]&0xffffffu)==0x2091de && (px[72*800+24]&0xffffffu)==0x338363,
+        "SVG use: source mutation repaints both roots and host mutation stays local");
+    check(g.page.svg_bytes==0,"SVG use: cross-root mutation leaves no SVG allocation live");
+    os64_free(px);probe_drop();
+
 }
 
 /* THE STAND-INS' OWN PAINTING (yonder.c's pane_stand_in, stand_in_label,

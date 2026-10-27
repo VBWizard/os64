@@ -28,9 +28,10 @@ and [comparison harness](SVG_REFTESTS.md) record their implemented contracts,
 measured limits and remaining gates. The first [6b core increment](SVG_CORE.md)
 adds reusable paths and group/path scene preparation. The
 [solid painter](SVG_PAINT.md) adds fills, ordinary strokes and isolated opacity;
-the [Yonder connection](SVG_YONDER.md) paints a bounded inline path/group/basic-shape profile;
+the [Yonder connection](SVG_YONDER.md) paints a bounded inline path/group/basic-shape/use profile;
 [SVG_SHAPES.md](SVG_SHAPES.md) records the geometry increment and
 [SVG_STROKES.md](SVG_STROKES.md) adds dash patterns, offsets and exact zero-length caps.
+[SVG_INSTANCES.md](SVG_INSTANCES.md) adds bounded fragment reuse with instance ancestry.
 This design does not establish
 performance or compatibility percentages.
 
