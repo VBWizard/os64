@@ -124,7 +124,11 @@ the prior tested delivery bytes. Against that delivery, 33 files are unchanged;
 the update consists of Yonder, libsvg and the two new gallery assets.
 The six-card gallery covers a movable pearl highlight,
 shared elliptical/stroked consumers, repeat/reflect rings, a focal circle,
-a transparent glow and an independent image. P5 verification is pending.
+a transparent glow and an independent image. P5 verification accepted commit
+`21a007f4` on 2026-10-27: the focal-point toggle affected cards 1 and 2 as
+expected, and the other inspected zoom levels rendered correctly. At 25% the
+rings were too small for the tester to verify their detail completely; the
+automated and QEMU evidence above covers that scale separately.
 
 Raster-variant caching and corpus-led latency/fidelity gates remain in 6c.
 Broader graphics and text remain separate work. There is no new animation loop
