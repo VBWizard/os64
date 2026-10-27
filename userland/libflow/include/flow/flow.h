@@ -1443,8 +1443,8 @@ int32_t flow_box_scroller(const flow_box_t *box);
 // through itself. A box covers only where it draws: the hit passes a box
 // that draws nothing of its own at the centre — one of opacity 0
 // (`unpainted`), or one whose background is transparent, inside its
-// borders and clear of its inset shadows — unless it is `box` or inside
-// it. A face that draws live
+// borders and clear of its inset shadows and its outline — unless it is
+// `box` or inside it. A face that draws live
 // widgets over the page draws a control's exactly when this is false
 // (POSITION.md, ruling 9 and its amendment): a text field under a fixed
 // header must not draw over the header and take its click, while a

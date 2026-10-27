@@ -3203,9 +3203,10 @@ static bool within(const flow_box_t *b, const flow_box_t *of)
 // Whether a box draws anything of its own at (x, y), a point in its rect:
 // nothing when it is of opacity 0 (`unpainted`); else text, a list
 // marker, a picture and a control draw what they hold; and any other box
-// draws only its background, a colour or a picture, its borders, and its
-// inset shadows, so inside its borders a transparent one draws nothing
-// but where an inset shadow falls — its content is its children's, which
+// draws only its background, a colour or a picture, its borders, its inset
+// shadows and its outline (an outer shadow is drawn outside its border
+// box), so inside its borders a transparent one draws nothing but where an
+// inset shadow or an outline falls — its content is its children's, which
 // answer for themselves. An inline-block's atom is such a box: a replaced
 // one has nothing inside it.
 static bool draws_at(const flow_box_t *b, int32_t x, int32_t y)
@@ -3235,6 +3236,15 @@ static bool draws_at(const flow_box_t *b, int32_t x, int32_t y)
             continue;
         int64_t in = (int64_t)sh->spread + flow_shadow_blur_reach(sh->blur);
         if (x < x0 + sh->x + in || y < y0 + sh->y + in || x >= x1 + sh->x - in || y >= y1 + sh->y - in)
+            return true;
+    }
+    // An outline paints its ring (flow_outline_rect, the rect less the
+    // outline's width), which a negative offset brings inside the box.
+    os64_gui_rect_t ring;
+    if (flow_outline_rect(b, &ring)) {
+        int64_t w = size_px(s->outline_width);
+        if (holds(ring, x, y) && (x < (int64_t)ring.x + w || y < (int64_t)ring.y + w ||
+                                  x >= (int64_t)ring.x + ring.w - w || y >= (int64_t)ring.y + ring.h - w))
             return true;
     }
     return false;
