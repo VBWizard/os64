@@ -447,7 +447,7 @@ int32_t os64_page_background_for(const os64_page_t *page, const os64_html_node_t
 // that is neither empty nor `text/css` names a language this browser does
 // not read, and a `disabled` link is off: neither is listed. `media` is as
 // written, NULL when absent — judging it is the cascade's, since a resize
-// changes the answer. HTML elements only: an SVG `style` styles SVG.
+// changes the answer. SVG `style` elements participate in the same document order.
 typedef struct {
     const os64_html_node_t *node;   // the `style` or the `link`
     bool linked;                    // a `link`: its sheet is at `href`
