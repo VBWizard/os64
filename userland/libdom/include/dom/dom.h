@@ -748,13 +748,16 @@ bool os64_dom_script_name(os64_dom_t *dom, const char *address, char *out, size_
  * URL). */
 const char *os64_dom_script_address(const os64_dom_t *dom, const char *name);
 /* The first frame of an engine stack text (an Error's `stack`, an
- * outcome's stack_trace) that names a place, as the engine writes a frame
- * a line: "    at f (file:line:col)", or "    at file:line:col" for a
- * script that did not compile; a native frame names none and is passed
- * over. `file` and `function` point into `stack`, with their lengths;
- * `function` is NULL for the second form, and for a name the engine wrote
- * in angle brackets: an anonymous function's, a script's own code's.
- * The file of a script run through the binding is its name for it
+ * outcome's stack_trace) that names a place in a script, as the engine
+ * writes a frame a line, ending it with a newline: "    at f
+ * (file:line:col)", or "    at file:line:col" for a script that did not
+ * compile. A native frame names no place, nor does a file the engine or
+ * the binding names in angle brackets (JSON text, eval'd code), and a last
+ * line with no newline was cut short: each is passed over. `file` and
+ * `function` point into `stack`, with their lengths; `function` is NULL
+ * for the second form, and for a name the engine wrote in angle brackets:
+ * an anonymous function's, a script's own code's. The file of a classic
+ * script run through the binding is its name for it
  * (os64_dom_script_name), which os64_dom_frame_script reads back. False
  * when no frame names a place. */
 typedef struct {
@@ -763,11 +766,11 @@ typedef struct {
     uint32_t line, column;
 } os64_dom_frame_t;
 bool os64_dom_stack_frame(const char *stack, os64_dom_frame_t *frame);
-/* The script a frame's file names: its address, as os64_dom_script_address
- * reads one, with *page true when the file is the page's own name, its
- * inline scripts'. NULL and false for a file that is not one of the
- * binding's names, and NULL for one of another site's scripts the binding
- * keeps no address for. */
+/* The script a frame's file names, when it is one of the binding's names:
+ * its address, as os64_dom_script_address reads one. The page's own name,
+ * its inline scripts', is NULL with *page true; any other file, and one of
+ * another site's scripts the binding keeps no address for, NULL with
+ * *page false. */
 const char *os64_dom_frame_script(const os64_dom_t *dom, const os64_dom_frame_t *frame, bool *page);
 /* After that script ran (and drained): what it left owed, settled as one
  * task named `name`, the host's own name for it (MODERN_WEB.md § P2a). The

@@ -157,6 +157,21 @@ static void window_frame_case(void) {
     check(window_record_has("FAILED script http://fixture.test/final#inline-1: TypeError: cannot read property "
                             "'x' of null, at boom http://fixture.test/lib.js:2:7 (1)"),
         "window: an inline script's failure in the library's function names the function and the library");
+    check(!status_says(", at "),"window: the status line says the message alone");
+    loop_drop();
+    loop_page("<p id=c onclick=\"null.z\">c</p><script>function j(){JSON.parse('<html>')}j()</script>"
+        "<script>Promise.reject(new Error('same'));\nPromise.reject(new Error('same'))</script>");
+    check(loop_settle(),"window: a page that parses HTML as JSON and fails one way twice arrives");
+    check(window_record_has("FAILED script http://fixture.test/final#inline-1: SyntaxError: unexpected token: "
+                            "'<', at j inline:1:24 (1)"),
+        "window: JSON that does not parse is placed in the script that parsed it, not in the JSON");
+    check(window_record_has("unhandled rejection: Error: same, at inline:1:25 (1)") &&
+          window_record_has("unhandled rejection: Error: same, at inline:2:25 (1)"),
+        "window: the same failure at two places is two lines");
+    input_click_at("c");
+    check(window_record_has("FAILED script click event: TypeError: cannot read property 'z' of null, "
+                            "at onclick onclick attribute:2:5 (1)"),
+        "window: a place in no script the binding named is the engine's own name for it");
     loop_drop();
 }
 

@@ -30,6 +30,7 @@ WINDOW = 'tools/test_yonder_scripts_host.sh'
 REPORT = 'userland/libdom/report.c'
 EVENT = 'userland/libdom/event.c'
 DOM = 'tools/test_dom_host.sh'
+MODULES = 'userland/apps/yonder/modules.c'
 CASCADE = 'userland/libgarb/cascade.c'
 GARB = 'tools/test_garb_host.sh'
 
@@ -81,11 +82,24 @@ mutants = [
      '    if (address != NULL && own != NULL && false) {', WINDOW),
     ('another-script-is-unnamed', SCRIPTS, '    } else if (address != NULL) {', '    } else if (false) {', WINDOW),
     ('the-outcome-place-is-dropped', YONDER,
-     '    yonder_scripts_failure(host, failure, out->stack_trace, placed, sizeof(placed));',
-     '    yonder_scripts_failure(host, failure, "", placed, sizeof(placed));', WINDOW),
+     '    yonder_scripts_failure(host, address, failure, out->stack_trace, placed, sizeof(placed));',
+     '    yonder_scripts_failure(host, address, failure, "", placed, sizeof(placed));', WINDOW),
     ('a-told-place-is-dropped', SCRIPTS,
-     '    yonder_scripts_failure(s, message, stack, failure, sizeof(failure));',
-     '    yonder_scripts_failure(s, message, stack + os64_strlen(stack), failure, sizeof(failure));', WINDOW),
+     '    yonder_scripts_failure(s, s->task_address, message, stack, failure, sizeof(failure));',
+     '    yonder_scripts_failure(s, s->task_address, message, stack + os64_strlen(stack), failure, sizeof(failure));',
+     WINDOW),
+    ('json-text-is-a-place', REPORT,
+     "            if (!(frame->file_length >= 2 && frame->file[0] == '<' && frame->file[frame->file_length - 1] == '>'))",
+     '            if (true)', WINDOW),
+    ('a-cut-line-is-a-frame', REPORT, "        if (*end != '\\n') break;",
+     "        if (*end != '\\n' && !(end > start && end[-1] >= '0' && end[-1] <= '9')) break;", DOM),
+    ('a-module-is-not-its-own', SCRIPTS,
+     '    if (address == NULL && !page && own != NULL && os64_strlen(own) == frame.file_length &&',
+     '    if (false && address == NULL && !page && own != NULL && os64_strlen(own) == frame.file_length &&', WINDOW),
+    ('a-module-compile-is-unplaced', MODULES,
+     '    yonder_scripts_failure(NULL, m->mods[i].name, why, stack, placed, sizeof(placed));',
+     '    yonder_scripts_failure(NULL, m->mods[i].name, why, stack + os64_strlen(stack), placed, sizeof(placed));',
+     WINDOW),
     ('a-lost-load-writes-nothing', YONDER,
      'static void stream_failed(const char *line)\n{\n    yonder_diag_failed(g.stream.diag, "page", line);',
      'static void stream_failed(const char *line)\n{\n    (void)line;', WINDOW),

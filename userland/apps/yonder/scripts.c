@@ -264,7 +264,7 @@ static void failed(void *opaque, const char *task, const char *message, const ch
     char key[OS64_DOM_URL_MAX + 16];
     os64_snprintf(key, sizeof(key), "script %s", s->task_address != NULL ? s->task_address : task);
     char failure[OS64_JS_MESSAGE_CAP + OS64_DOM_URL_MAX + 64];
-    yonder_scripts_failure(s, message, stack, failure, sizeof(failure));
+    yonder_scripts_failure(s, s->task_address, message, stack, failure, sizeof(failure));
     yonder_diag_failed(s->options.diag, key, failure);
 }
 
@@ -1568,8 +1568,8 @@ const char *yonder_scripts_task_address(const yonder_scripts_t *s)
     return s != NULL ? s->task_address : NULL;
 }
 
-void yonder_scripts_failure(const yonder_scripts_t *s, const char *message, const char *stack, char *out,
-                            size_t cap)
+void yonder_scripts_failure(const yonder_scripts_t *s, const char *own, const char *message, const char *stack,
+                            char *out, size_t cap)
 {
     os64_dom_frame_t frame;
     if (!os64_dom_stack_frame(stack, &frame)) {
@@ -1578,7 +1578,11 @@ void yonder_scripts_failure(const yonder_scripts_t *s, const char *message, cons
     }
     bool page = false;
     const char *address = s != NULL ? os64_dom_frame_script(s->dom, &frame, &page) : NULL;
-    const char *own = s != NULL ? s->task_address : NULL;
+    // A classic script's file is the binding's name for it, a module's its
+    // own address (modules.c compiles it under its URL).
+    if (address == NULL && !page && own != NULL && os64_strlen(own) == frame.file_length &&
+        os64_memcmp(own, frame.file, frame.file_length) == 0)
+        address = own;
     // The place: the line and column alone in the task's own script.
     const char *file = frame.file;
     size_t file_length = frame.file_length;

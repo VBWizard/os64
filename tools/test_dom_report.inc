@@ -734,8 +734,14 @@ static void dom_report_frame_cases(void)
           "frame: nor has a script's own code");
     check(frame_is("    at os64-script:2:7:3\n", NULL, "os64-script:2", 7, 3),
           "frame: a script that did not compile, its file alone");
-    check(frame_is("    at get value (os64-script:1:2:3)", "get value", "os64-script:1", 2, 3),
-          "frame: a name with a space in it, and no line end");
+    check(frame_is("    at get value (os64-script:1:2:3)\n", "get value", "os64-script:1", 2, 3),
+          "frame: a name with a space in it");
+    check(frame_is("    at <input>:1:1\n    at parse (native)\n    at f (os64-script:3:1:9)\n", "f", "os64-script:3", 1, 9) &&
+          frame_is("    at <body>:1:1\n    at g (os64-script:4:2:5)\n", "g", "os64-script:4", 2, 5),
+          "frame: JSON text names no place: the script that parsed it does");
+    check(frame_is("    at f (os64-script:3:12", NULL, NULL, 0, 0) &&
+          frame_is("    at f (os64-script:3:12:5)\n    at g (os64-scr", "f", "os64-script:3", 12, 5),
+          "frame: a line the cap cut short is no frame");
     check(frame_is("    at f (os64-script:1)\n    at g (native)\n", NULL, NULL, 0, 0) &&
           frame_is("", NULL, NULL, 0, 0) && frame_is(NULL, NULL, NULL, 0, 0),
           "frame: none that names a line, an empty stack and none at all");
@@ -777,8 +783,9 @@ static void dom_report_frame_cases(void)
           os64_dom_frame_script(f.binding, &frame, &page) != NULL &&
           !strcmp(os64_dom_frame_script(f.binding, &frame, &page), "https://example.test/js/lib.js") && !page,
           "frame: a src script's frame names its address");
-    check(os64_dom_stack_frame("    at f (<input>:1:2)", &frame) && os64_dom_frame_script(f.binding, &frame, &page) == NULL &&
-          !page, "frame: and a file that is none of the binding's names, none");
+    check(os64_dom_stack_frame("    at onclick (onclick attribute:1:2)\n", &frame) &&
+          os64_dom_frame_script(f.binding, &frame, &page) == NULL && !page,
+          "frame: and a file that is none of the binding's names, none");
     report_failed[0] = report_failed_at[0] = '\0';
     fixture_free(&f);
 }

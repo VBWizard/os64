@@ -459,9 +459,12 @@ static bool number_before(const char *text, const char *end, const char **start,
 bool os64_dom_stack_frame(const char *stack, os64_dom_frame_t *frame)
 {
     if (stack == NULL || frame == NULL) return false;
+    /* The engine ends every frame with a newline, so a line without one
+     * was cut short (an outcome's stack_trace is capped) and is no frame. */
     for (const char *start = stack; *start != '\0';) {
         const char *end = start;
         while (*end != '\0' && *end != '\n') end++;
+        if (*end != '\n') break;
         const char *at, *last = end > start && end[-1] == ')' ? end - 1 : end;
         uint32_t line, column;
         if (number_before(start, last, &at, &column) && at > start && at[-1] == ':' &&
@@ -486,9 +489,14 @@ bool os64_dom_stack_frame(const char *stack, os64_dom_frame_t *frame)
                         frame->file_length = (size_t)(file_end - open);
                         break;
                     }
-            return true;
+            /* A file the engine or the binding names in angle brackets is
+             * no script's: JSON text (`<input>`, `<body>`, `<response>`)
+             * or eval'd code. It is passed over as a native frame is, so
+             * the place is the script that asked. */
+            if (!(frame->file_length >= 2 && frame->file[0] == '<' && frame->file[frame->file_length - 1] == '>'))
+                return true;
         }
-        start = *end == '\n' ? end + 1 : end;
+        start = end + 1;
     }
     return false;
 }

@@ -8094,7 +8094,7 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
     }
     os64_snprintf(line + at, sizeof(line) - at, "Script %s: %s", name, failure);
     char placed[OS64_JS_MESSAGE_CAP + OS64_DOM_URL_MAX + 128];
-    yonder_scripts_failure(host, failure, out->stack_trace, placed, sizeof(placed));
+    yonder_scripts_failure(host, address, failure, out->stack_trace, placed, sizeof(placed));
     yonder_diag_failed(diag, key, placed);
     if (out->source_name[0] != '\0')
         yonder_diag_fact(diag, key, died);
