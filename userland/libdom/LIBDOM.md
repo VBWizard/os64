@@ -1445,3 +1445,17 @@ platform object (classic.c's exotic): `form[i]`, names over its
 prototype's members, its indices and names its own, and none of them
 redefined or deleted; nor is an index it has no control for defined, as it
 has no indexed setter.
+
+**The style sheets row** (`sheets.c`, naming StyleSheetList, StyleSheet
+and CSSStyleSheet on window; MODERN_WEB.md § The page's style sheets).
+`document.styleSheets` is a live collection of the query kind SHEETS,
+made once a document (`d_style_sheets`), over StyleSheetList's own
+prototype (`length`, `item()`, iterable, no names): the nodes libpage's
+rule says name a sheet (`os64_page_names_sheet`, the cascade's rule),
+each answered as its CSSStyleSheet (`d_sheet`), not the node. A sheet is
+made once a node and kept on its record; it answers `type`, `href`,
+`ownerNode`, `title`, `disabled`, `parentStyleSheet` and `ownerRule`,
+and nothing it holds. A link's and a style's `sheet` is that sheet while
+the node names one in a document, else null, and the sheet then has no
+`ownerNode`; the style element is a kind of its own for it
+(HTMLStyleElement).

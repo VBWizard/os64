@@ -1,0 +1,40 @@
+# WPT's html/semantics/document-metadata/the-style-element in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/semantics/document-metadata/the-style-element --update
+# rewrites [passing].
+[required]
+# The page's style sheets (MODERN_WEB.md § The page's style sheets, as
+# built): document.styleSheets, StyleSheet, CSSStyleSheet and a node's
+# sheet. Each fails with the switch off.
+mutations.window.html	Mutating the style element: inserting an empty DocumentFragment node
+no-browsing-context.html	no impact on getComputedStyle
+non-parser-created-doc.html	CSS API should work on non-parser-created documents
+sheet-with-disconnected-style.html	After removing a style element, it should have a null sheet property
+sheet-with-disconnected-style.html	Never-connected style elements should have a null sheet property
+sheet-with-empty-style.html	The sheet property should work even with an empty style element
+style_non_matching_media.html	HTML Test: Non-matching media type should have stylesheet
+style_type_change.html	Check initial styleSheets length type
+style_type_html.html	With a charset parameter in the type attribute, the style should not apply
+style_type_html.html	With a mixed-case type attribute, the style should apply
+style_type_html.html	With a whitespace-surrounded type attribute, the style should not apply
+style_type_html.html	With an empty type attribute, the style should apply
+style_type_html.html	With no type attribute, the style should apply
+with-spaces.html	Spaces inside style sheet properties should work fine
+[excluded]
+[passing]
+historical.html	style.scoped should not be supported
+mutations.window.html	Mutating the style element: inserting an empty DocumentFragment node
+no-browsing-context.html	Inserting an importing style without a browsing context does not throw
+no-browsing-context.html	no impact on getComputedStyle
+non-parser-created-doc.html	CSS API should work on non-parser-created documents
+sheet-with-disconnected-style.html	After removing a style element, it should have a null sheet property
+sheet-with-disconnected-style.html	Never-connected style elements should have a null sheet property
+sheet-with-empty-style.html	The sheet property should work even with an empty style element
+style_non_matching_media.html	HTML Test: Non-matching media type should have stylesheet
+style_type_change.html	Check initial styleSheets length type
+style_type_html.html	With a charset parameter in the type attribute, the style should not apply
+style_type_html.html	With a mixed-case type attribute, the style should apply
+style_type_html.html	With a whitespace-surrounded type attribute, the style should not apply
+style_type_html.html	With an empty type attribute, the style should apply
+style_type_html.html	With no type attribute, the style should apply
+with-spaces.html	Spaces inside style sheet properties should work fine

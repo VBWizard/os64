@@ -73,7 +73,7 @@ static char *modern_chain_shape(DomFixture *f)
         "document.doctype,document.implementation,document.implementation.createHTMLDocument('')];"
         "var row=/(^constructor$|_NODE$|^DOCUMENT_POSITION_|^onscroll$|^onresize$|^scrollingElement$|^defaultView$"
         "|^onerror$|^getRootNode$|^wholeText$|^splitText$|^selectionStart$|^selectionEnd$|^selectionDirection$"
-        "|^setSelectionRange$|^select$|^setRangeText$|^content$"
+        "|^setSelectionRange$|^select$|^setRangeText$|^content$|^styleSheets$"
         "|^(accept|alt|autocomplete|defaultChecked|defaultValue|dirName|disabled|formAction|formEnctype|formMethod"
         "|formNoValidate|formTarget|height|indeterminate|max|maxLength|min|minLength|multiple|pattern|placeholder"
         "|readOnly|required|size|src|step|width|align|useMap|form|labels|localName|namespaceURI|prefix|baseURI)$)/;"
@@ -632,6 +632,36 @@ static void dom_modern_cases(void)
             "document.createAttribute('q').baseURI===document.baseURI,'a base, its own fragment kept');"
             "B.remove();assert(document.baseURI==='https://example.test/dir/page#top','and without it again');",
             "modern-on-base-uri");
+    /* The page's style sheets (sheets.c): document.styleSheets, live, by
+     * libpage's rule; a sheet made once a node, and a node's `sheet`. */
+    if (fixture_ready(&f))
+        dom_script(&f, MODERN_ASSERT
+            "assert(typeof StyleSheetList==='function'&&typeof StyleSheet==='function'&&"
+            "Object.getPrototypeOf(CSSStyleSheet.prototype)===StyleSheet.prototype&&"
+            "document.createElement('style') instanceof HTMLStyleElement,'interfaces');"
+            "var L=document.styleSheets,n=L.length;"
+            "assert(L instanceof StyleSheetList&&L===document.styleSheets,'one list');"
+            "var s=document.createElement('style');s.textContent='p{}';s.title='T';s.id='sid';document.head.appendChild(s);"
+            "assert(L.length===n+1&&L[n]===s.sheet&&L.item(n)===s.sheet&&L.item(n+1)===null&&L[n+1]===undefined,"
+            "'live, the new one last');"
+            "var S=s.sheet;assert(S instanceof CSSStyleSheet&&S===s.sheet&&S.type==='text/css'&&S.href===null&&"
+            "S.ownerNode===s&&S.title==='T'&&S.disabled===false&&S.parentStyleSheet===null&&S.ownerRule===null,"
+            "'a style element\\'s sheet');"
+            "s.title='';assert(S.title===null,'an empty title is none');"
+            "var k=document.createElement('link');k.rel='stylesheet';k.href='/x.css';document.head.appendChild(k);"
+            "assert(L.length===n+2&&L[n+1]===k.sheet&&k.sheet.href==='https://example.test/x.css'&&"
+            "k.sheet.title===null,'a linked sheet, its address resolved');"
+            "var a=document.createElement('link');a.rel='alternate stylesheet';a.href='y.css';"
+            "var t=document.createElement('style');t.setAttribute('type','text/plain');document.head.append(a,t);"
+            "assert(L.length===n+2&&a.sheet===null&&t.sheet===null,'an alternate sheet and another language name none');"
+            "var seen=[];for(var x of L)seen.push(x);"
+            "assert(seen.length===n+2&&seen[n]===S&&L.namedItem===undefined&&L.sid===undefined&&!('sid' in L),'iterable, and no names');"
+            "s.remove();assert(L.length===n+1&&s.sheet===null&&S.ownerNode===null,"
+            "'a removed style has no sheet, and its sheet no owner');"
+            "var bad=false;try{Object.getOwnPropertyDescriptor(StyleSheet.prototype,'type').get.call({})}"
+            "catch(e){bad=e instanceof TypeError}assert(bad,'the brand is checked');"
+            "k.remove();a.remove();t.remove();",
+            "modern-on-sheets");
     fixture_free(&f);
 
     options = os64_dom_default_options();
@@ -668,6 +698,9 @@ static void dom_modern_cases(void)
         "var lf=document.createElement('form');lf.innerHTML='<input name=x><input name=x>';"
         "assert(!('control' in document.createElement('label'))&&!('length' in lf)&&lf[0]===undefined&&"
         "('namedItem' in lf.x)&&!('value' in lf.x));"
+        /* the page's style sheets */
+        "assert(!('styleSheets' in document)&&!('sheet' in document.createElement('style'))&&"
+        "!('sheet' in document.createElement('link')));"
         /* 0f's P3a's controls' members; their name and value are every page's */
         "var ci=document.createElement('input');"
         "assert(!('formAction' in ci)&&!('labels' in ci)&&!('indeterminate' in ci)&&!('form' in ci)&&"

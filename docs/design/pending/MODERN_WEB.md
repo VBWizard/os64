@@ -4118,6 +4118,49 @@ collections, and the label, fieldset, legend and output.
   NodeList's names, the output's override both ways, a label's form, the
   submitter's two refusals and a detached form.
 
+### The page's style sheets, as built — 2026-10-27
+
+Not a phase of 0f's: the record of a real page's failure asked for it.
+Google's sign-in script loads late CSS, counts `document.styleSheets` to
+see its sheet arrive, and finds it by its `ownerNode`; yonder had no
+`styleSheets`, so the script died reading `.length` of undefined
+(replayed with the FAILED line's place, #381) and nothing it wires,
+the Next button among them, was ever wired. Chris ruled the slice
+2026-10-27, as long as it was not a whole day.
+
+- **`document.styleSheets`** (libdom `collection.c`): a live
+  StyleSheetList, made once a document, a collection of the query kind
+  SHEETS. Which nodes have a sheet is libpage's rule, the one the cascade
+  ranks by, now public (`os64_page_names_sheet`): a `style`, HTML's or
+  SVG's, and a `link` whose `rel` holds `stylesheet` and not `alternate`,
+  with an `href` and not `disabled`; neither of a type other than CSS.
+  Its entries are sheets, not nodes; `length`, `item()` and its indices,
+  iterable, no names.
+- **A sheet** (libdom `sheets.c`, a row of its own): a CSSStyleSheet over
+  StyleSheet, one a `style` or `link`, made once and kept on the node's
+  record. It says `type`, `href` (a link's, resolved as the page resolves
+  it; a style's null), `ownerNode`, `title` (null for none or empty),
+  `disabled` (false), `parentStyleSheet` and `ownerRule` (null). A node
+  that no longer names a sheet, or is in no document, has none (`sheet`
+  null), and its sheet no `ownerNode`.
+- **LinkStyle's `sheet`** on a link and a style, which made the style
+  element a kind of its own: HTMLStyleElement (the interfaces row).
+- What a sheet holds is not here: no `cssRules`, no `media` list, and
+  `disabled` cannot be set (DEBTS.md).
+
+**Numbers.** WPT: `css/cssom` +34, all `[required]` (StyleSheet's
+properties, StyleSheetList, the document extensions, titles); and
+`html/semantics/document-metadata/the-style-element` joins the run
+(`tools/wpt_fetch.sh`), 16 passes, 14 of them `[required]`; nothing lost
+in `the-link-element`, `css/cssom-view` or `html/dom`, and with the switch
+off no required line passes. `css/cssom`'s `serialize-all-longhands.html`
+"Computed style" fails on `userland` without this change, as P3a found.
+Hosts, 0 failed: DOM 17,337 and 114,000 (the interfaces, the list live
+and made once, a style's and a link's sheet, an alternate sheet and
+another language naming none, a removed style's, the brand; with the
+switch off, none of it). Mutants (`tools/test_interfaces_mutants.py`,
+its group for this slice): 9, each caught.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.

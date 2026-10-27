@@ -614,7 +614,7 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         {"HTMLScriptElement", D_PROTO_SCRIPT}, {"HTMLAnchorElement", D_PROTO_ANCHOR},
         {"HTMLLinkElement", D_PROTO_LINK}, {"HTMLLabelElement", D_PROTO_LABEL},
         {"HTMLFieldSetElement", D_PROTO_FIELDSET}, {"HTMLLegendElement", D_PROTO_LEGEND},
-        {"HTMLOutputElement", D_PROTO_OUTPUT},
+        {"HTMLOutputElement", D_PROTO_OUTPUT}, {"HTMLStyleElement", D_PROTO_STYLE},
     };
     /* HTMLIFrameElement's is the frames row's (frames.c), with its members:
      * IFRAME.md's HTMLIFrameElement is one row. */

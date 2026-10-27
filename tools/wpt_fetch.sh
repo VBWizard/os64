@@ -65,6 +65,7 @@ WPT_DIRS=(
     requestidlecallback
     webmessaging/without-ports
     html/semantics/document-metadata/the-link-element
+    html/semantics/document-metadata/the-style-element
     preload
     html/semantics/forms/the-select-element
     html/semantics/forms/the-option-element

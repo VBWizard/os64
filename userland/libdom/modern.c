@@ -32,7 +32,7 @@ static const DModernRow kModern[] = {
                            "HTMLOptGroupElement", "HTMLTemplateElement", "HTMLButtonElement",
                            "HTMLImageElement", "HTMLScriptElement", "HTMLAnchorElement",
                            "HTMLLinkElement", "HTMLLabelElement", "HTMLFieldSetElement",
-                           "HTMLLegendElement", "HTMLOutputElement", NULL},
+                           "HTMLLegendElement", "HTMLOutputElement", "HTMLStyleElement", NULL},
      d_interfaces_install},
     /* After the interfaces row, whose HTMLElement its interface inherits. */
     {(const char *const[]){"HTMLIFrameElement", NULL}, d_frames_install},
@@ -101,6 +101,10 @@ static const DModernRow kModern[] = {
      * label's, fieldset's, legend's and output's own members. */
     {(const char *const[]){"HTMLFormControlsCollection", "RadioNodeList", NULL}, d_form_collections_install},
     {(const char *const[]){NULL}, d_forms_install},
+    /* The page's style sheets: StyleSheetList, StyleSheet and
+     * CSSStyleSheet, document.styleSheets, and a link's and a style's
+     * `sheet` (sheets.c), after the interfaces row's HTMLStyleElement. */
+    {(const char *const[]){"StyleSheetList", "StyleSheet", "CSSStyleSheet", NULL}, d_sheets_install},
     /* Import maps: HTMLScriptElement.supports, a member of the interfaces
      * row's HTMLScriptElement and none of window's (as P1-Da's row). */
     {(const char *const[]){NULL}, d_import_map_install},

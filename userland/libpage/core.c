@@ -801,9 +801,9 @@ static bool css_type(const os64_html_node_t *n)
     return type == NULL || type[0] == '\0' || os64_streq_nocase(type, "text/css");
 }
 
-// Whether `n` names a sheet: os64_page_sheet's rule, the one both the model
-// and os64_page_sheets_in list by.
-static bool sheet_wanted(const os64_html_node_t *n)
+// Whether `n` names a sheet: os64_page_sheet's rule, the one the model,
+// os64_page_sheets_in and a script's document.styleSheets list by.
+bool os64_page_names_sheet(const os64_html_node_t *n)
 {
     if (n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_SVG &&
         os64_streq(n->name, "style"))
@@ -833,7 +833,7 @@ static void sheet_fill(os64_page_t *page, const os64_html_node_t *n, os64_page_s
 
 static void add_sheet(os64_page_t *page, const os64_html_node_t *n)
 {
-    if (!sheet_wanted(n))
+    if (!os64_page_names_sheet(n))
         return;
     if (!p_grow((void **)&page->sheets, &page->sheetcap, page->nsheets, sizeof(*page->sheets))) {
         page->incomplete = true;
@@ -856,7 +856,7 @@ typedef struct {
 static bool walk_sheets(SheetsWalk *w, const os64_html_node_t *n)
 {
     for (; n != NULL; n = n->next) {
-        if (sheet_wanted(n)) {
+        if (os64_page_names_sheet(n)) {
             sheet_fill(w->page, n, &w->one);
             w->count++;
             if (!w->each(w->ctx, &w->one))

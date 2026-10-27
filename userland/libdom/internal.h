@@ -37,7 +37,7 @@ enum {
     D_PROTO_BUTTON, D_PROTO_FORM, D_PROTO_IMAGE, D_PROTO_SCRIPT, D_PROTO_ANCHOR,
     D_PROTO_LINK, D_PROTO_IFRAME, D_PROTO_OPTION, D_PROTO_OPTGROUP,
     D_PROTO_TEXT, D_PROTO_COMMENT, D_PROTO_SVG, D_PROTO_TEMPLATE,
-    D_PROTO_LABEL, D_PROTO_FIELDSET, D_PROTO_LEGEND, D_PROTO_OUTPUT, D_PROTO_COUNT
+    D_PROTO_LABEL, D_PROTO_FIELDSET, D_PROTO_LEGEND, D_PROTO_OUTPUT, D_PROTO_STYLE, D_PROTO_COUNT
 };
 /* The kind a kind's prototype inherits, as its interface inherits: Node's
  * for the node kinds, CharacterData's for TEXT and COMMENT, Element's for
@@ -89,6 +89,10 @@ struct DValue {
     DQuery *options, *selected_options;
     /* A labelable element's labels, made once ([SameObject]). */
     DQuery *labels;
+    /* A document's styleSheets, made once ([SameObject]), and a `style` or
+     * `link`'s CSSStyleSheet, made once (sheets.c). */
+    DQuery *style_sheets;
+    DValue *sheet;
     /* A form's RadioNodeLists, one a name, each made once
      * (d_radio_list), as browsers answer `form.r === form.r`. */
     DQuery *radio_lists;
@@ -223,6 +227,9 @@ struct os64_dom {
     /* A form's names are being listed for its ordinary keys alone
      * (classic.c's node_names asking the engine). */
     bool listing_names;
+    /* StyleSheetList's prototype (collection.c) and CSSStyleSheet's
+     * (sheets.c); NULL with the modern switch off. */
+    DValue *sheet_list_prototype, *sheet_prototype;
     /* The window's Selection (selection.c), the one getSelection answers;
      * NULL with the modern switch off. */
     DValue *selection;
@@ -684,10 +691,12 @@ enum {
  * second also changes with control state, not only with the tree. LABELS
  * are the labels whose labeled control is the query's owner, walked from
  * the root of the owner's tree, that root included (d_labels). FIELDSET is
- * a fieldset's listed elements (d_listed) among its descendants. */
+ * a fieldset's listed elements (d_listed) among its descendants. SHEETS is
+ * a document's style sheets, by libpage's rule (os64_page_names_sheet),
+ * whose entries are each node's CSSStyleSheet (d_sheet), not the node. */
 enum { D_QUERY_GENERIC, D_QUERY_IMAGES, D_QUERY_FORMS, D_QUERY_CONTROLS, D_QUERY_DOCUMENT_NAMES,
        D_QUERY_CLASSES, D_QUERY_NAME, D_QUERY_OPTIONS, D_QUERY_SELECTED_OPTIONS, D_QUERY_LABELS,
-       D_QUERY_FIELDSET };
+       D_QUERY_FIELDSET, D_QUERY_SHEETS };
 bool d_named_match(const os64_html_node_t *node, const char *name);
 bool d_classic_match(const os64_html_node_t *root, const os64_html_node_t *node, unsigned kind);
 /* One of HTML § 4.10.2's listed elements, which a fieldset's `elements`
@@ -1079,6 +1088,17 @@ JSValue d_labels(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *contro
 JSValue d_radio_list(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form, const char *name);
 /* HTMLFormControlsCollection and RadioNodeList (collection.c, 0f's P3b). */
 int d_form_collections_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* A document's styleSheets (collection.c): its live StyleSheetList, made
+ * once. */
+JSValue d_style_sheets(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *document);
+/* StyleSheetList's prototype and interface (collection.c). */
+int d_sheet_list_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* A `style` or `link`'s CSSStyleSheet (sheets.c), made once, whether or
+ * not the node names a sheet now. */
+JSValue d_sheet(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
+/* document.styleSheets, StyleSheet, CSSStyleSheet and LinkStyle's `sheet`
+ * (sheets.c): one row of the Modern Web table. */
+int d_sheets_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* The form's, label's, fieldset's, legend's and output's own members
  * (forms.c, 0f's P3b). */
 int d_forms_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);

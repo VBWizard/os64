@@ -26,9 +26,66 @@ getComputedStyle-live.html	getComputedStyle() returns live values
 getComputedStyle-math-function-percentage.html	getComputedStyle() returns computed value for width: 50%
 getComputedStyle-mutations.html	Assigning to attribute updates the computed style
 getComputedStyle-property-order.html	Computed style properties should be sorted lexicographically
+# The page's style sheets (MODERN_WEB.md § The page's style sheets, as
+# built): document.styleSheets, StyleSheet, CSSStyleSheet and a node's
+# sheet. Each fails with the switch off.
+HTMLLinkElement-disabled-001.html	<link disabled> prevents the stylesheet from being in document.styleSheets (from parser)
+StyleSheet-properties.html	<link>: disabled is false initially
+StyleSheet-properties.html	<link>: href is the resolved URL of the stylesheet
+StyleSheet-properties.html	<link>: ownerNode is the link element
+StyleSheet-properties.html	<link>: ownerRule is null for non-imported sheets
+StyleSheet-properties.html	<link>: parentStyleSheet is null for top-level sheets
+StyleSheet-properties.html	<link>: title is null when the link element has no title attribute
+StyleSheet-properties.html	<link>: title reflects the link element's title attribute
+StyleSheet-properties.html	<link>: type is 'text/css'
+StyleSheet-properties.html	<style>: disabled is false initially
+StyleSheet-properties.html	<style>: href is null for inline sheets
+StyleSheet-properties.html	<style>: ownerNode is the style element
+StyleSheet-properties.html	<style>: ownerRule is null for non-imported sheets
+StyleSheet-properties.html	<style>: parentStyleSheet is null for top-level sheets
+StyleSheet-properties.html	<style>: title is null when the style element has no title attribute
+StyleSheet-properties.html	<style>: title reflects the style element's title attribute
+StyleSheet-properties.html	<style>: type is 'text/css'
+StyleSheet-properties.html	Programmatically setting title on a <style> element is reflected in sheet.title
+StyleSheet-properties.html	Removing a <link> element nulls ownerNode, parentStyleSheet, and ownerRule
+StyleSheet-properties.html	Removing a <style> element nulls ownerNode, parentStyleSheet, and ownerRule
+link-element-stylesheet-title.html	Executing setAttribute('title', '') results in the title being set to null
+link-element-stylesheet-title.html	StyleSheet.title
+medialist-interfaces-002.html	deleteMedium_called_without_argument
+overflow-serialization.html	Single value overflow on element with CSS-wide keyword should serialize correctly.
+overflow-serialization.html	Single value overflow on element with non-CSS-wide keyword should serialize correctly.
+style-sheet-interfaces-001.html	sheet_property
+stylesheet-title.html	StyleSheet.title
+ttwf-cssom-doc-ext-load-tree-order.html	styleSheets item 0 title must be aaa
+ttwf-cssom-doc-ext-load-tree-order.html	styleSheets item 0 title must be alpha
+ttwf-cssom-doc-ext-load-tree-order.html	styleSheets item 0 title must be kilo
+ttwf-cssom-doc-ext-load-tree-order.html	styleSheets item 0 title must be zebra
+ttwf-cssom-doc-ext-load-tree-order.html	styleSheets item 1 title must be zebra
+ttwf-cssom-doc-ext-load-tree-order.html	styleSheets.length must be 5
+ttwf-cssom-document-extension.html	CSSOM - Extensions to the Document Interface: StyleSheetList length is 0 when no sheets loaded
 [excluded]
 [passing]
 CSS-escape-numeric-id.html	Sanity check
+HTMLLinkElement-disabled-001.html	<link disabled> prevents the stylesheet from being in document.styleSheets (from parser)
+StyleSheet-properties.html	<link>: disabled is false initially
+StyleSheet-properties.html	<link>: href is the resolved URL of the stylesheet
+StyleSheet-properties.html	<link>: ownerNode is the link element
+StyleSheet-properties.html	<link>: ownerRule is null for non-imported sheets
+StyleSheet-properties.html	<link>: parentStyleSheet is null for top-level sheets
+StyleSheet-properties.html	<link>: title is null when the link element has no title attribute
+StyleSheet-properties.html	<link>: title reflects the link element's title attribute
+StyleSheet-properties.html	<link>: type is 'text/css'
+StyleSheet-properties.html	<style>: disabled is false initially
+StyleSheet-properties.html	<style>: href is null for inline sheets
+StyleSheet-properties.html	<style>: ownerNode is the style element
+StyleSheet-properties.html	<style>: ownerRule is null for non-imported sheets
+StyleSheet-properties.html	<style>: parentStyleSheet is null for top-level sheets
+StyleSheet-properties.html	<style>: title is null when the style element has no title attribute
+StyleSheet-properties.html	<style>: title reflects the style element's title attribute
+StyleSheet-properties.html	<style>: type is 'text/css'
+StyleSheet-properties.html	Programmatically setting title on a <style> element is reflected in sheet.title
+StyleSheet-properties.html	Removing a <link> element nulls ownerNode, parentStyleSheet, and ownerRule
+StyleSheet-properties.html	Removing a <style> element nulls ownerNode, parentStyleSheet, and ownerRule
 StyleSheet-properties.html	StyleSheet and CSSStyleSheet properties
 computed-style-001.html	inherited_property_values
 computed-style-001.html	property_values
@@ -489,8 +546,13 @@ historical.html	Historical interface: RGBColor
 historical.html	Historical interface: Rect
 inline-style-001.html	CSSStyleDeclaration_accessible
 inline-style-001.html	read
+link-element-stylesheet-title.html	Executing setAttribute('title', '') results in the title being set to null
+link-element-stylesheet-title.html	StyleSheet.title
+medialist-interfaces-002.html	deleteMedium_called_without_argument
 mediaquery-sort-dedup.html	Media queries are not deduplicated
 mediaquery-sort-dedup.html	Media queries are not sorted lexicographically
+overflow-serialization.html	Single value overflow on element with CSS-wide keyword should serialize correctly.
+overflow-serialization.html	Single value overflow on element with non-CSS-wide keyword should serialize correctly.
 serialization-CSSDeclaration-with-important.html	Inline style declaration without whitespace between '!' and 'important'.
 serialization-CSSDeclaration-with-important.html	Style set dynamically via cssText without whitespace between '!' and 'important'.
 serialize-all-longhands.html	Computed style
@@ -979,6 +1041,15 @@ style-color.html	Setting a color with a decimal transparency should update the s
 style-color.html	Setting a mixed percent and value color should NOT update the style
 style-element-insertion-removal-computed.html	Styles should be recomputed correctly after a <style> element is removed.
 style-global-variable.html	Setting CSS global variables
+style-sheet-interfaces-001.html	sheet_property
+stylesheet-title.html	StyleSheet.title
 system-color-inherit.html	Dynamically override inherited color
 system-color-inherit.html	Test color inheritance
 system-color-lowercase.html	Color with upper cased kelvin sign
+ttwf-cssom-doc-ext-load-tree-order.html	styleSheets item 0 title must be aaa
+ttwf-cssom-doc-ext-load-tree-order.html	styleSheets item 0 title must be alpha
+ttwf-cssom-doc-ext-load-tree-order.html	styleSheets item 0 title must be kilo
+ttwf-cssom-doc-ext-load-tree-order.html	styleSheets item 0 title must be zebra
+ttwf-cssom-doc-ext-load-tree-order.html	styleSheets item 1 title must be zebra
+ttwf-cssom-doc-ext-load-tree-order.html	styleSheets.length must be 5
+ttwf-cssom-document-extension.html	CSSOM - Extensions to the Document Interface: StyleSheetList length is 0 when no sheets loaded
