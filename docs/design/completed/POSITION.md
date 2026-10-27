@@ -498,8 +498,8 @@ he said, not a CSS one — and Fable ruled as he had recommended:
    `flow_box_covered`'s hit passes a box that draws nothing of its own at
    the control's centre, unless it is the control or inside it: one of
    opacity 0 (`unpainted`), and one whose background is transparent, at a
-   point inside its borders (text, a marker, a picture and a control draw
-   what they hold). The receipt: a major sign-in page's email field lies
+   point inside its borders that no inset shadow of its falls on (text, a
+   marker, a picture and a control draw what they hold). The receipt: a major sign-in page's email field lies
    under two boxes the size of the whole field, its outline (a 1px border
    round a transparent box) and its focus ring (the same, at `opacity: 0`
    until the field is focused), neither with `pointer-events: none`. A

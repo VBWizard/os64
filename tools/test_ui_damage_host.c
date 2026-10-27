@@ -362,9 +362,75 @@ static void clipped(void)
     hits = 0; os64_ui_context(&ui, &ev, false); CHECK(hits == 0);
 }
 
+/* What is clipped away is not there to be released over or chosen from: a
+ * button pressed where it is seen and let go where it is cut does not
+ * fire, and a list's row cut in two is chosen only where it is seen. The
+ * classes' own event functions, which a grab sends the moves and the
+ * release to whatever the hit test says. */
+static int clicks;
+static void clicked(os64_ui_widget_t *w, void *user) { (void)w; (void)user; ++clicks; }
+static const char *row_label(size_t i, void *user) { (void)i; (void)user; return "row"; }
+static int choices;
+static void chosen(os64_ui_listbox_t *l, void *user) { (void)l; (void)user; ++choices; }
+
+static void clipped_release(void)
+{
+    current = "clipped release";
+    widget(&kids[0], &kBare, (os64_gui_rect_t){0, 0, 0, 0});
+    window(1);
+    os64_gui_rect_t view = {0, 0, W, 60};
+    os64_ui_widget_t button;
+    os64_ui_button(&button, "Go", clicked, NULL);
+    button.bounds = (os64_gui_rect_t){40, 40, 60, 40};
+    button.clipped = true;
+    button.clip = view;
+    button.ui = &ui;
+    os64_gui_event_t ev = {.type = OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+    ev.mouse.button = OS64_GUI_MOUSE_LEFT;
+    ev.mouse.x = 50; ev.mouse.y = 55;
+    clicks = 0;
+    os64_ui_button_class.event(&button, &ui, &ev);
+    ev.type = OS64_GUI_EVENT_MOUSE_MOVE; ev.mouse.y = 65;
+    os64_ui_button_class.event(&button, &ui, &ev);
+    CHECK(!button.pressed);
+    ev.type = OS64_GUI_EVENT_MOUSE_BUTTON_UP;
+    os64_ui_button_class.event(&button, &ui, &ev);
+    CHECK(clicks == 0);
+    ev.type = OS64_GUI_EVENT_MOUSE_BUTTON_DOWN; ev.mouse.y = 55;      /* let go where it is cut, no move between */
+    os64_ui_button_class.event(&button, &ui, &ev);
+    ev.type = OS64_GUI_EVENT_MOUSE_BUTTON_UP; ev.mouse.y = 65;
+    os64_ui_button_class.event(&button, &ui, &ev);
+    CHECK(clicks == 0);
+    ev.type = OS64_GUI_EVENT_MOUSE_BUTTON_DOWN; ev.mouse.y = 55;
+    os64_ui_button_class.event(&button, &ui, &ev);
+    ev.type = OS64_GUI_EVENT_MOUSE_BUTTON_UP; ev.mouse.y = 58;
+    os64_ui_button_class.event(&button, &ui, &ev);
+    CHECK(clicks == 1);
+
+    os64_ui_listbox_t list;
+    os64_ui_listbox(&list, 3, row_label, chosen, NULL);
+    list.row_h = 12;                                 /* rows 20 high: the first 42..62, cut at 60 */
+    list.w.bounds = (os64_gui_rect_t){10, 40, 100, 60};
+    list.w.clipped = true;
+    list.w.clip = view;
+    list.w.ui = &ui;
+    choices = 0;
+    ev.type = OS64_GUI_EVENT_MOUSE_BUTTON_DOWN; ev.mouse.x = 50; ev.mouse.y = 50;
+    list.w.cls->event(&list.w, &ui, &ev);
+    ev.type = OS64_GUI_EVENT_MOUSE_BUTTON_UP; ev.mouse.y = 61;
+    list.w.cls->event(&list.w, &ui, &ev);
+    CHECK(choices == 0 && list.selected == -1);
+    ev.type = OS64_GUI_EVENT_MOUSE_BUTTON_DOWN; ev.mouse.y = 50;
+    list.w.cls->event(&list.w, &ui, &ev);
+    ev.type = OS64_GUI_EVENT_MOUSE_BUTTON_UP; ev.mouse.y = 55;
+    list.w.cls->event(&list.w, &ui, &ev);
+    CHECK(choices == 1 && list.selected == 0);
+}
+
 int main(void)
 {
     clipped();
+    clipped_release();
     far_apart();
     root_swallows();
     collapse();

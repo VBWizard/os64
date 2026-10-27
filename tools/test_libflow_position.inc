@@ -595,13 +595,17 @@ static void position_fixed_door_cases(void)
                      "box-sizing:border-box} .veil{position:absolute;top:0;left:0;width:200px;height:40px;"
                      "opacity:0;background:red} .pic{position:absolute;top:0;left:0;width:200px;height:40px;"
                      "background-image:linear-gradient(red,blue)} .words{position:absolute;top:0;left:0;width:200px;"
-                     "height:40px;line-height:20px}</style>"
+                     "height:40px;line-height:20px} .inset{position:absolute;top:0;left:0;width:200px;height:40px;"
+                     "box-shadow:inset 0 0 0 100px white} .rim{position:absolute;top:0;left:0;width:200px;"
+                     "height:40px;box-shadow:inset 0 0 0 1px gray}</style>"
                      "<p class=wrap><input name=a><span class=line></span><span class=ring></span></p>"
                      "<p class=wrap><input name=b><span class=bar></span><span class=ring></span></p>"
                      "<p class=wrap><input name=c><span class=thick></span></p>"
                      "<p class=wrap><input name=d><span class=veil></span></p>"
                      "<p class=wrap><input name=e><span class=pic></span></p>"
-                     "<p class=wrap><input name=f><span class=words>WWWWWWWWWWWWWWWWWWWWWWWWWWWWWW</span></p>",
+                     "<p class=wrap><input name=f><span class=words>WWWWWWWWWWWWWWWWWWWWWWWWWWWWWW</span></p>"
+                     "<p class=wrap><input name=g><span class=inset></span></p>"
+                     "<p class=wrap><input name=h><span class=rim></span></p>",
                  400, 600);
     t = flow_layout(q.doc, q.page, 400, &q.env);
     a = t != NULL ? flow_control(t, 0) : NULL;
@@ -623,6 +627,10 @@ static void position_fixed_door_cases(void)
            d != NULL && !flow_box_covered(t, d, top), NULL);
     expect("fixed door: a background picture covers", e != NULL && flow_box_covered(t, e, top), NULL);
     expect("fixed door: text over a field's centre covers it", f != NULL && flow_box_covered(t, f, top), NULL);
+    const flow_box_t *g6 = t != NULL ? flow_control(t, 6) : NULL, *h7 = t != NULL ? flow_control(t, 7) : NULL;
+    expect("fixed door: an inset shadow that fills a box covers", g6 != NULL && flow_box_covered(t, g6, top), NULL);
+    expect("fixed door: an inset shadow at a box's edge leaves its centre",
+           h7 != NULL && !flow_box_covered(t, h7, top), NULL);
     flow_free(t);
     sheeted_close(&q);
 }

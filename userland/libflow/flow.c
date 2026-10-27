@@ -3203,10 +3203,11 @@ static bool within(const flow_box_t *b, const flow_box_t *of)
 // Whether a box draws anything of its own at (x, y), a point in its rect:
 // nothing when it is of opacity 0 (`unpainted`); else text, a list
 // marker, a picture and a control draw what they hold; and any other box
-// draws only its background, a colour or a picture, and its borders, so
-// inside its borders a transparent one draws nothing — its content is its
-// children's, which answer for themselves. An inline-block's atom is such
-// a box: a replaced one has nothing inside it.
+// draws only its background, a colour or a picture, its borders, and its
+// inset shadows, so inside its borders a transparent one draws nothing
+// but where an inset shadow falls — its content is its children's, which
+// answer for themselves. An inline-block's atom is such a box: a replaced
+// one has nothing inside it.
 static bool draws_at(const flow_box_t *b, int32_t x, int32_t y)
 {
     if (b->unpainted)
@@ -3219,8 +3220,22 @@ static bool draws_at(const flow_box_t *b, int32_t x, int32_t y)
         return true;
     int64_t top = s->border_width[0] / FLOW_UNITS_PER_PX, right = s->border_width[1] / FLOW_UNITS_PER_PX;
     int64_t bottom = s->border_width[2] / FLOW_UNITS_PER_PX, left = s->border_width[3] / FLOW_UNITS_PER_PX;
-    return x < (int64_t)b->rect.x + left || y < (int64_t)b->rect.y + top ||
-           x >= (int64_t)b->rect.x + b->rect.w - right || y >= (int64_t)b->rect.y + b->rect.h - bottom;
+    int64_t x0 = (int64_t)b->rect.x + left, y0 = (int64_t)b->rect.y + top;
+    int64_t x1 = (int64_t)b->rect.x + b->rect.w - right, y1 = (int64_t)b->rect.y + b->rect.h - bottom;
+    if (x < x0 || y < y0 || x >= x1 || y >= y1)
+        return true;
+    // An inset shadow paints the padding box but its hole: the padding box
+    // moved by the shadow's offset and drawn in by its spread, the blur
+    // reaching in as far again.
+    for (int32_t i = 0; i < s->nbox_shadows; i++) {
+        const flow_shadow_t *sh = &s->box_shadows[i];
+        if (!sh->inset)
+            continue;
+        int64_t in = (int64_t)sh->spread + sh->blur;
+        if (x < x0 + sh->x + in || y < y0 + sh->y + in || x >= x1 + sh->x - in || y >= y1 + sh->y - in)
+            return true;
+    }
+    return false;
 }
 
 // What is clipped away is not there to be pointed at, and neither is a box

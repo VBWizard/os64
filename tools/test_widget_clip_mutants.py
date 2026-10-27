@@ -3,9 +3,11 @@
 POSITION.md ruling 9's amendment (libflow's flow_box_covered passes a box
 that draws nothing at the control's centre unless it is the control or
 inside it: draws_at) and the widgets
-clipped to the page view (yonder's forms_place), against the cases that
-state each rule: libflow's host and the scripted page's. libui's half,
-the clipped widget's cut paint and hit, is test_ui_damage_mutants.py's. A
+clipped to the page view (yonder's forms_place, and what libui holds of a
+clipped widget: ui_widget_holds, a list's rows), against the cases that
+state each rule: libflow's host, libui's damage host and the scripted
+page's. The rest of libui's half, the cut paint and the hit test, press
+and release in ui.c, is test_ui_damage_mutants.py's. A
 mutant is CAUGHT when its cases fail, MISSED when they pass, which means a
 test is missing and gets written. A build failure is neither.
 
@@ -31,7 +33,10 @@ args.logs.mkdir(parents=True, exist_ok=True)
 
 FLOW = 'userland/libflow/flow.c'
 YONDER = 'userland/apps/yonder/yonder.c'
+UI_INTERNAL = 'userland/libos64/ui_internal.h'
+UI_LIST = 'userland/libos64/ui_list.c'
 LIBFLOW = 'bash tools/test_libflow_host.sh'
+UI_DAMAGE = 'bash tools/test_ui_damage_host.sh'
 WINDOW = 'bash tools/test_yonder_scripts_host.sh'
 
 # (name, file, old, new, cases). Each breaks one rule the design states.
@@ -42,13 +47,10 @@ mutants = [
      '    if (t->painted != NULL && !within(b, t->painted) && holds(b->rect, x, y) && !draws_at(b, x, y))',
      '    if (t->painted != NULL && (!within(b, t->painted) || true) && holds(b->rect, x, y) && !draws_at(b, x, y))',
      LIBFLOW),
-    ('every-box-draws-everywhere', FLOW,
-     '    return x < (int64_t)b->rect.x + left || y < (int64_t)b->rect.y + top ||',
-     '    return true || x < (int64_t)b->rect.x + left || y < (int64_t)b->rect.y + top ||', LIBFLOW),
-    ('a-border-draws-nothing', FLOW,
-     '    return x < (int64_t)b->rect.x + left || y < (int64_t)b->rect.y + top ||',
-     '    return false || (int64_t)b->rect.x + left < 0 || y < (int64_t)b->rect.y + top - (int64_t)1e12 ||',
-     LIBFLOW),
+    ('every-box-draws-everywhere', FLOW, '    if (x < x0 || y < y0 || x >= x1 || y >= y1)\n        return true;',
+     '    if (true || x < x0 || y < y0 || x >= x1 || y >= y1)\n        return true;', LIBFLOW),
+    ('a-border-draws-nothing', FLOW, '    if (x < x0 || y < y0 || x >= x1 || y >= y1)\n        return true;',
+     '    if (false && (x < x0 || y < y0 || x >= x1 || y >= y1))\n        return true;', LIBFLOW),
     ('a-background-draws-nothing', FLOW, '    if (s->has_background || flow_background_has_image(s))',
      '    if (flow_background_has_image(s))', LIBFLOW),
     ('a-background-picture-draws-nothing', FLOW, '    if (s->has_background || flow_background_has_image(s))',
@@ -56,6 +58,14 @@ mutants = [
     ('text-draws-nothing', FLOW,
      '    if (b->kind == FLOW_BOX_TEXT || b->kind == FLOW_BOX_MARKER || b->kind == FLOW_BOX_REPLACED ||',
      '    if (b->kind == FLOW_BOX_MARKER || b->kind == FLOW_BOX_REPLACED ||', LIBFLOW),
+    ('an-inset-shadow-draws-nothing', FLOW, '        if (!sh->inset)\n            continue;',
+     '        if (!sh->inset || true)\n            continue;', LIBFLOW),
+    ('an-inset-shadow-draws-everywhere', FLOW,
+     '        if (x < x0 + sh->x + in || y < y0 + sh->y + in || x >= x1 + sh->x - in || y >= y1 + sh->y - in)',
+     '        if (true || x < x0 + sh->x + in || y < y0 + sh->y + in)', LIBFLOW),
+    ('holds-ignores-the-clip', UI_INTERNAL, '\t       (!w->clipped || (x >= c.x', '\t       (true || (x >= c.x', UI_DAMAGE),
+    ('a-list-chooses-a-cut-row', UI_LIST, '    if (!ui_widget_holds(&list->w, x, y) || x < r.x + 2',
+     '    if (x < r.x + 2', UI_DAMAGE),
     ('covered-asks-the-pointer', FLOW, '                                 scroll, NULL, box);',
      '                                 scroll, NULL, NULL);', LIBFLOW),
     ('the-pointer-passes-invisible-boxes', FLOW, '    return hit_at(tree, x, y, scroll, cuts, NULL);',

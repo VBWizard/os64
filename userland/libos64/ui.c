@@ -265,19 +265,12 @@ bool os64_ui_focus_next(os64_ui_t *ui, bool reverse, bool wrap)
 
 // ── hit testing ─────────────────────────────────────────────────────────────
 
-static bool rect_contains(os64_gui_rect_t r, int32_t x, int32_t y)
-{
-	return x >= r.x && y >= r.y && (int64_t)x < (int64_t)r.x + r.w &&
-	       (int64_t)y < (int64_t)r.y + r.h;
-}
-
 // Deepest visible widget under the point. Children are checked LAST-first so
 // a hit resolves to whatever painted on top (list order is paint order). A
-// clipped widget is there only where it is seen.
+// clipped widget is there only where it is seen (ui_widget_holds).
 static os64_ui_widget_t *hit_test(os64_ui_widget_t *w, int32_t x, int32_t y)
 {
-	if (w == (os64_ui_widget_t *)0 || w->hidden || !rect_contains(w->bounds, x, y) ||
-	    (w->clipped && !rect_contains(w->clip, x, y)))
+	if (w == (os64_ui_widget_t *)0 || w->hidden || !ui_widget_holds(w, x, y))
 		return (os64_ui_widget_t *)0;
 
 	os64_ui_widget_t *best = (os64_ui_widget_t *)0;
@@ -813,7 +806,7 @@ static bool button_event(os64_ui_widget_t *w, os64_ui_t *ui,
 	case OS64_GUI_EVENT_MOUSE_MOVE: {
 		// Held button, cursor wandering: pressed tracks whether release
 		// here would still count. The visual IS the contract.
-		bool inside = rect_contains(w->bounds, ev->mouse.x, ev->mouse.y);
+		bool inside = ui_widget_holds(w, ev->mouse.x, ev->mouse.y);
 		if (inside != w->pressed) {
 			w->pressed = inside;
 			os64_ui_mark_dirty(ui, w);
@@ -821,8 +814,7 @@ static bool button_event(os64_ui_widget_t *w, os64_ui_t *ui,
 		return true;
 	}
 	case OS64_GUI_EVENT_MOUSE_BUTTON_UP: {
-		bool fire = w->pressed &&
-		            rect_contains(w->bounds, ev->mouse.x, ev->mouse.y);
+		bool fire = w->pressed && ui_widget_holds(w, ev->mouse.x, ev->mouse.y);
 		w->pressed = false;
 		os64_ui_mark_dirty(ui, w);
 		if (fire && w->on_click)
