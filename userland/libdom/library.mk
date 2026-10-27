@@ -26,6 +26,8 @@ LIBDOM_SRCS += libdom/clone.c libdom/message.c libdom/idle.c
 LIBDOM_SRCS += libdom/options.c
 # 0f P2's core: the text controls' selection and the window's Selection.
 LIBDOM_SRCS += libdom/selection.c
+# 0f P3a: the controls' reflections, form owner and labels.
+LIBDOM_SRCS += libdom/controls.c
 # Import maps: the map's JSON and HTMLScriptElement.supports.
 LIBDOM_SRCS += libdom/importmap.c
 LIBDOM_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBDOM_SRCS))

@@ -1845,6 +1845,28 @@ static void ui_test_field_on_change(void)
     ui_test_field_key(&tf,&ui,'y');CHECK(ui_test_changes==full);
     CHECK(os64_ui_font_release(&ui)==OS64_FONT_OK);
 }
+/* A checkbox's third look: set without its callback, and cleared by the
+ * click that ticks the box. */
+static void ui_test_checkbox_indeterminate_changed(os64_ui_checkbox_t *cb, void *user)
+{
+    (void)cb;
+    ++*(unsigned *)user;
+}
+static void ui_test_checkbox_indeterminate(void)
+{
+    current="checkbox indeterminate";
+    os64_ui_t ui={0};ui_test_view_theme(&ui.theme);
+    unsigned changes=0;
+    os64_ui_checkbox_t cb;
+    os64_ui_checkbox(&cb,"",false,ui_test_checkbox_indeterminate_changed,&changes);
+    cb.w.bounds=(os64_gui_rect_t){0,0,180,28};os64_ui_set_root(&ui,&cb.w);os64_ui_set_focus(&ui,&cb.w);
+    os64_ui_checkbox_set_indeterminate(&ui,&cb,true);CHECK(cb.indeterminate && changes==0);
+    os64_gui_event_t ev={.type=OS64_GUI_EVENT_KEY_DOWN,.key={.ascii=' ',.scancode=57}};
+    os64_ui_dispatch(&ui,&ev);
+    ev.type=OS64_GUI_EVENT_KEY_UP;os64_ui_dispatch(&ui,&ev);
+    CHECK(cb.checked && !cb.indeterminate && changes==1);
+    CHECK(os64_ui_font_release(&ui)==OS64_FONT_OK);
+}
 static void ui_test_field_selection(void)
 {
     current="field selection and clipboard";
@@ -3259,6 +3281,7 @@ int main(int argc, char **argv)
 #if __INCLUDE_LEVEL__ == 0
     ui_test_field_selection();
     ui_test_field_on_change();
+    ui_test_checkbox_indeterminate();
 #endif
     textfield_edits_by_cluster(dir);
     textfield_scroll_follows_the_face(dir);

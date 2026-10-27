@@ -1,0 +1,109 @@
+# WPT's html/semantics/forms/the-label-element in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/semantics/forms/the-label-element --update
+# rewrites [passing].
+[required]
+# 0f's phases (INTERFACES_FORMS.md): added whole by P3a; each line fails
+# with the switch off, the earlier phases' interfaces among them. The passes
+# not listed here pass either way.
+clicking-interactive-content.html	interactive content <a href="about:blank" onclick="event.preventDefault()"></a> as first child of <label>
+clicking-interactive-content.html	interactive content <a href="about:blank" onclick="event.preventDefault()"></a> as second child under <label>
+clicking-interactive-content.html	interactive content <a href="about:blank" onclick="event.preventDefault()"></a> deeply nested under <label>
+clicking-interactive-content.html	interactive content <audio controls=""></audio> as first child of <label>
+clicking-interactive-content.html	interactive content <audio controls=""></audio> as second child under <label>
+clicking-interactive-content.html	interactive content <audio controls=""></audio> deeply nested under <label>
+clicking-interactive-content.html	interactive content <button></button> as first child of <label>
+clicking-interactive-content.html	interactive content <button></button> as second child under <label>
+clicking-interactive-content.html	interactive content <button></button> deeply nested under <label>
+clicking-interactive-content.html	interactive content <details></details> as first child of <label>
+clicking-interactive-content.html	interactive content <details></details> as second child under <label>
+clicking-interactive-content.html	interactive content <details></details> deeply nested under <label>
+clicking-interactive-content.html	interactive content <embed> as first child of <label>
+clicking-interactive-content.html	interactive content <embed> as second child under <label>
+clicking-interactive-content.html	interactive content <embed> deeply nested under <label>
+clicking-interactive-content.html	interactive content <iframe></iframe> as first child of <label>
+clicking-interactive-content.html	interactive content <iframe></iframe> as second child under <label>
+clicking-interactive-content.html	interactive content <iframe></iframe> deeply nested under <label>
+clicking-interactive-content.html	interactive content <img usemap=""> as first child of <label>
+clicking-interactive-content.html	interactive content <img usemap=""> as second child under <label>
+clicking-interactive-content.html	interactive content <img usemap=""> deeply nested under <label>
+clicking-interactive-content.html	interactive content <input> as first child of <label>
+clicking-interactive-content.html	interactive content <input> as second child under <label>
+clicking-interactive-content.html	interactive content <input> deeply nested under <label>
+clicking-interactive-content.html	interactive content <label>label</label> as first child of <label>
+clicking-interactive-content.html	interactive content <label>label</label> as second child under <label>
+clicking-interactive-content.html	interactive content <label>label</label> deeply nested under <label>
+clicking-interactive-content.html	interactive content <select></select> as first child of <label>
+clicking-interactive-content.html	interactive content <select></select> as second child under <label>
+clicking-interactive-content.html	interactive content <select></select> deeply nested under <label>
+clicking-interactive-content.html	interactive content <textarea></textarea> as first child of <label>
+clicking-interactive-content.html	interactive content <textarea></textarea> as second child under <label>
+clicking-interactive-content.html	interactive content <textarea></textarea> deeply nested under <label>
+clicking-interactive-content.html	interactive content <video controls=""></video> as first child of <label>
+clicking-interactive-content.html	interactive content <video controls=""></video> as second child under <label>
+clicking-interactive-content.html	interactive content <video controls=""></video> deeply nested under <label>
+clicking-noninteractive-labelable-content.html	labelable element <meter></meter> as first child of <label>
+clicking-noninteractive-labelable-content.html	labelable element <meter></meter> deeply nested under <label>
+clicking-noninteractive-labelable-content.html	labelable element <output></output> as first child of <label>
+clicking-noninteractive-labelable-content.html	labelable element <output></output> deeply nested under <label>
+clicking-noninteractive-labelable-content.html	labelable element <progress></progress> as first child of <label>
+clicking-noninteractive-labelable-content.html	labelable element <progress></progress> deeply nested under <label>
+labelable-elements.html	Check if the button element can access 'labels'
+labelable-elements.html	Check if the hidden input element has null 'labels'
+labelable-elements.html	Check if the input element in radio state can access 'labels'
+labelable-elements.html	Check if the select element can access 'labels'
+labelable-elements.html	Check if the textarea element can access 'labels'
+[excluded]
+[passing]
+clicking-interactive-content.html	interactive content <a href="about:blank" onclick="event.preventDefault()"></a> as first child of <label>
+clicking-interactive-content.html	interactive content <a href="about:blank" onclick="event.preventDefault()"></a> as second child under <label>
+clicking-interactive-content.html	interactive content <a href="about:blank" onclick="event.preventDefault()"></a> deeply nested under <label>
+clicking-interactive-content.html	interactive content <audio controls=""></audio> as first child of <label>
+clicking-interactive-content.html	interactive content <audio controls=""></audio> as second child under <label>
+clicking-interactive-content.html	interactive content <audio controls=""></audio> deeply nested under <label>
+clicking-interactive-content.html	interactive content <button></button> as first child of <label>
+clicking-interactive-content.html	interactive content <button></button> as second child under <label>
+clicking-interactive-content.html	interactive content <button></button> deeply nested under <label>
+clicking-interactive-content.html	interactive content <details></details> as first child of <label>
+clicking-interactive-content.html	interactive content <details></details> as second child under <label>
+clicking-interactive-content.html	interactive content <details></details> deeply nested under <label>
+clicking-interactive-content.html	interactive content <embed> as first child of <label>
+clicking-interactive-content.html	interactive content <embed> as second child under <label>
+clicking-interactive-content.html	interactive content <embed> deeply nested under <label>
+clicking-interactive-content.html	interactive content <iframe></iframe> as first child of <label>
+clicking-interactive-content.html	interactive content <iframe></iframe> as second child under <label>
+clicking-interactive-content.html	interactive content <iframe></iframe> deeply nested under <label>
+clicking-interactive-content.html	interactive content <img usemap=""> as first child of <label>
+clicking-interactive-content.html	interactive content <img usemap=""> as second child under <label>
+clicking-interactive-content.html	interactive content <img usemap=""> deeply nested under <label>
+clicking-interactive-content.html	interactive content <input> as first child of <label>
+clicking-interactive-content.html	interactive content <input> as second child under <label>
+clicking-interactive-content.html	interactive content <input> deeply nested under <label>
+clicking-interactive-content.html	interactive content <label>label</label> as first child of <label>
+clicking-interactive-content.html	interactive content <label>label</label> as second child under <label>
+clicking-interactive-content.html	interactive content <label>label</label> deeply nested under <label>
+clicking-interactive-content.html	interactive content <select></select> as first child of <label>
+clicking-interactive-content.html	interactive content <select></select> as second child under <label>
+clicking-interactive-content.html	interactive content <select></select> deeply nested under <label>
+clicking-interactive-content.html	interactive content <textarea></textarea> as first child of <label>
+clicking-interactive-content.html	interactive content <textarea></textarea> as second child under <label>
+clicking-interactive-content.html	interactive content <textarea></textarea> deeply nested under <label>
+clicking-interactive-content.html	interactive content <video controls=""></video> as first child of <label>
+clicking-interactive-content.html	interactive content <video controls=""></video> as second child under <label>
+clicking-interactive-content.html	interactive content <video controls=""></video> deeply nested under <label>
+clicking-noninteractive-labelable-content.html	labelable element <meter></meter> as first child of <label>
+clicking-noninteractive-labelable-content.html	labelable element <meter></meter> deeply nested under <label>
+clicking-noninteractive-labelable-content.html	labelable element <output></output> as first child of <label>
+clicking-noninteractive-labelable-content.html	labelable element <output></output> deeply nested under <label>
+clicking-noninteractive-labelable-content.html	labelable element <progress></progress> as first child of <label>
+clicking-noninteractive-labelable-content.html	labelable element <progress></progress> deeply nested under <label>
+labelable-elements.html	Check if the button element can access 'labels'
+labelable-elements.html	Check if the fieldset element can access 'labels'
+labelable-elements.html	Check if the hidden input element has null 'labels'
+labelable-elements.html	Check if the img element can access 'labels'
+labelable-elements.html	Check if the input element in radio state can access 'labels'
+labelable-elements.html	Check if the keygen element can access 'labels'
+labelable-elements.html	Check if the label element can access 'labels'
+labelable-elements.html	Check if the object element can access 'labels'
+labelable-elements.html	Check if the select element can access 'labels'
+labelable-elements.html	Check if the textarea element can access 'labels'

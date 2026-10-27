@@ -9,7 +9,8 @@ HTMLElement's members, template content, the selections, DOMParser,
 createElementNS and the formless button's status line; to P1b's
 EventTarget, its constructor and Window; and to P2's selections (where one
 begins, setRangeText, the select event, and the field's caret and the
-record kept as one) - against the
+record kept as one); and to P3a's controls (their reflections by each of
+HTML's rules, indeterminate, autocomplete, form and labels) - against the
 harnesses that hold each rule: a mutant is
 CAUGHT when one of its harnesses fails, MISSED when they all pass, which
 means a test is missing and gets written. A build failure is neither.
@@ -45,10 +46,14 @@ YONDER_C = 'userland/apps/yonder/yonder.c'
 FRAGMENT_C = 'userland/libhtml/fragment.c'
 EVENT_C = 'userland/libdom/event.c'
 UI_TEXT_C = 'userland/libos64/ui_text.c'
+CONTROLS_C = 'userland/libdom/controls.c'
+WINDOW_C = 'userland/libdom/window.c'
+UI_CONTROLS_C = 'userland/libos64/ui_controls.c'
 DOM = 'tools/test_dom_host.sh'
 PAGE = 'tools/test_libpage_host.sh'
 SCRIPTS = 'tools/test_yonder_scripts_host.sh'
 HTML = 'tools/test_html_fragment_host.sh'
+UI_TEXT = 'tools/test_ui_text_host.py --real'
 
 # (name, file, old, new, harnesses). Each breaks one rule the phase
 # states; none supplies a replacement expectation.
@@ -294,6 +299,85 @@ mutants = [
      '        return;', (SCRIPTS,)),
     ('select-range-never-selects', UI_TEXT_C, '\ttf->selected = tf->anchor != tf->cursor;', '\ttf->selected = false;',
      (SCRIPTS,)),
+    # P3a. the reflections' rules
+    ('enum-case-sensitive', CONTROLS_C, 'if (os64_strlen(*word) == length && same_folded(*word, attr->value, length))',
+     'if (os64_strlen(*word) == length && os64_memcmp(*word, attr->value, length) == 0)', (DOM,)),
+    ('enum-invalid-is-missing', CONTROLS_C, '        return JS_NewString(ctx, row->invalid);',
+     '        return JS_NewString(ctx, row->missing);', (DOM,)),
+    ('form-action-empty-as-written', CONTROLS_C, "        if (attr == NULL || attr->value[0] == '\\0')",
+     '        if (attr == NULL)', (DOM,)),
+    ('integer-no-leading-space', CONTROLS_C, '    while (is_space(*text)) text++;\n    bool negative',
+     '    bool negative', (DOM,)),
+    ('minus-zero-negative', CONTROLS_C, '    return negative && value != 0 ? -1 : value;',
+     '    return negative ? -1 : value;', (DOM,)),
+    ('integer-past-range-kept', CONTROLS_C, '        return JS_NewInt32(ctx, value >= 0 && value <= INT32_MAX ? (int32_t)value : -1);',
+     '        return JS_NewInt32(ctx, value >= 0 ? (int32_t)value : -1);', (DOM,)),
+    ('limited-zero-read', CONTROLS_C, '        int64_t least = row->kind == K_UNSIGNED ? 0 : 1;',
+     '        int64_t least = 0;', (DOM,)),
+    ('negative-set-allowed', CONTROLS_C, '        if (number < 0) return d_error(ctx, "IndexSizeError"',
+     '        if (number < -2) return d_error(ctx, "IndexSizeError"', (DOM,)),
+    ('zero-set-allowed', CONTROLS_C, '        if (number == 0 && row->kind == K_LIMITED_UNSIGNED)',
+     '        if (number == 0 && row->kind == K_UNSIGNED)', (DOM,)),
+    ('past-range-set-kept', CONTROLS_C, '                          number >= least && number <= INT32_MAX ? number : row->number);',
+     '                          number >= least ? number : row->number);', (DOM,)),
+    ('brand-unchecked', CONTROLS_C, '        if ((row->on & kind) == 0) return JS_ThrowTypeError(ctx, "Illegal invocation");',
+     '        if ((row->on & kind) == 0 && false) return JS_ThrowTypeError(ctx, "Illegal invocation");', (DOM,)),
+    # P3a. the members that are no plain reflection
+    ('text-length-in-bytes', CONTROLS_C, 'JS_NewUint32(ctx, d_utf16_length(text, length));',
+     'JS_NewUint32(ctx, (uint32_t)length + 0 * d_utf16_length(text, length));', (DOM,)),
+    ('text-default-null-empty', CONTROLS_C, '        JSValue text = JS_ToString(ctx, value);',
+     '        JSValue text = JS_IsNull(value) ? JS_NewString(ctx, "") : JS_ToString(ctx, value);', (DOM,)),
+    ('autocomplete-any-contact-kind', CONTROLS_C,
+     '    if (contact && first > 0 && token_in(tokens[first - 1], kContactKinds)) first--;',
+     '    if ((contact || true) && first > 0 && token_in(tokens[first - 1], kContactKinds)) first--;', (DOM,)),
+    ('autocomplete-hidden-on', CONTROLS_C, '    if (count == 1 && !hidden && ',
+     '    if (count == 1 && (!hidden || true) && ', (DOM,)),
+    ('image-width-any-type', CONTROLS_C,
+     '        return image_input(node) ? reflection_get(dom, ctx, node, row) : JS_NewUint32(ctx, 0);',
+     '        return image_input(node) || true ? reflection_get(dom, ctx, node, row) : JS_NewUint32(ctx, 0);', (DOM,)),
+    # P3a. indeterminate
+    ('click-keeps-indeterminate', WINDOW_C,
+     '        if (status >= 0 && checkbox) status = os64_page_node_set_indeterminate(dom->state, node, false);',
+     '        if (status >= 0 && checkbox && false) status = os64_page_node_set_indeterminate(dom->state, node, false);',
+     (DOM,)),
+    ('cancel-forgets-indeterminate', WINDOW_C,
+     '                status = os64_page_node_set_indeterminate(dom->state, node, was_indeterminate);',
+     '                status = os64_page_node_set_indeterminate(dom->state, node, was_indeterminate && false);', (DOM,)),
+    ('tick-keeps-indeterminate', CORE_C, '    if (status >= 0 && checkbox)\n        (void)os64_page_node_set_indeterminate',
+     '    if (status >= 0 && checkbox && false)\n        (void)os64_page_node_set_indeterminate', (PAGE, SCRIPTS)),
+    ('clone-drops-indeterminate', STATE_C, '                fresh->indeterminate = old != NULL && old->indeterminate;',
+     '                fresh->indeterminate = false;', (PAGE, DOM)),
+    ('indeterminate-unpublished', CORE_C, '    c->indeterminate = edit != NULL && edit->indeterminate;',
+     '    c->indeterminate = false;', (PAGE, SCRIPTS)),
+    ('radio-drawn-indeterminate', YONDER_C, '                                               c->indeterminate && c->input == OS64_PAGE_INPUT_CHECKBOX);',
+     '                                               c->indeterminate);', (SCRIPTS,)),
+    ('yonder-cancel-forgets-indeterminate', YONDER_C, '                                                           (in.was & WAS_INDETERMINATE) != 0);',
+     '                                                           false);', (SCRIPTS,)),
+    ('widget-click-keeps-indeterminate', UI_CONTROLS_C, '    cb->indeterminate = false;\n    if (cb->on_change)',
+     '    if (cb->on_change)', (UI_TEXT,)),
+    # P3a. form and labels
+    ('hidden-input-labelable', CONTROLS_C,
+     '        return type == NULL || os64_strlen(type->value) != 6 || !same_folded(type->value, "hidden", 6);',
+     '        return type == NULL || true;', (DOM,)),
+    ('label-for-searches-on', CONTROLS_C, '            if (id != NULL && os64_streq(id->value, named->value)) return labelable(at) ? at : NULL;',
+     '            if (id != NULL && os64_streq(id->value, named->value) && labelable(at)) return at;', (DOM,)),
+    ('method-no-dialog', CONTROLS_C, 'static const char *const kMethods[] = {"get", "post", "dialog", NULL};',
+     'static const char *const kMethods[] = {"get", "post", NULL};', (DOM,)),
+    ('label-empty-for-matches', CONTROLS_C, "    if (named != NULL && named->value[0] == '\\0') return NULL;\n",
+     '', (DOM,)),
+    ('labels-root-left-out', COLLECTION_C,
+     '    if (at == NULL) return query->kind == D_QUERY_LABELS ? query->root : query->root->first_child;',
+     '    if (at == NULL) return query->root->first_child;', (DOM,)),
+    ('labels-not-rerooted', COLLECTION_C,
+     '    if ((query->kind == D_QUERY_CONTROLS || query->kind == D_QUERY_LABELS) && query->owner != NULL) {',
+     '    if (query->kind == D_QUERY_CONTROLS && query->owner != NULL) {', (DOM,)),
+    ('labels-made-each-time', COLLECTION_C, '    entry->labels = query;\n    return value;', '    return value;', (DOM,)),
+    ('form-empty-id-matches', WINDOW_C, "        if (named->value[0] == '\\0') return NULL;\n", '', (DOM,)),
+    ('form-detached-attribute-wins', WINDOW_C, '    if (named != NULL && d_connected(node)) {',
+     '    if (named != NULL) {\n        if (!d_connected(node)) return NULL;', (DOM,)),
+    ('radio-owner-empty-id-matches', STATE_C,
+     "        for (const os64_html_node_t *at = root; at != NULL && form[0] != '\\0'; at = tree_next(root, at)) {",
+     '        for (const os64_html_node_t *at = root; at != NULL; at = tree_next(root, at)) {', (PAGE,)),
 ]
 
 caught, missed, unbuilt = [], [], []
@@ -313,8 +397,11 @@ for name, rel, old, new, harnesses in mutants:
         path.write_text(text.replace(old, new))
         with log.open('w') as out:
             for harness in harnesses:
+                # A harness is a script and its flags: a .py is Python's.
+                script, *flags = harness.split()
+                runner = 'python3' if script.endswith('.py') else 'bash'
                 try:
-                    result = subprocess.run(['bash', str(root / harness)], cwd=root, stdout=out, stderr=out,
+                    result = subprocess.run([runner, str(root / script), *flags], cwd=root, stdout=out, stderr=out,
                                             timeout=900)
                     codes.append(result.returncode)
                 except subprocess.TimeoutExpired:

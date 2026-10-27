@@ -22,7 +22,11 @@ static void checkbox_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
     box.bounds = (os64_gui_rect_t){w->bounds.x,
         w->bounds.y + (w->bounds.h - size) / 2, size, size};
     os64_ui_button_class.paint(&box, ctx, t);
-    if (cb->checked && size >= 8) {
+    if (cb->indeterminate && size >= 8) {
+        // A bar across the box's middle.
+        os64_draw_fill_rect(&ctx->surf, (os64_gui_rect_t){box.bounds.x + 3, box.bounds.y + size / 2 - 1,
+            size - 6, 2}, t->button_fg);
+    } else if (cb->checked && size >= 8) {
         // A block check remains legible in the bitmap renderer at small sizes.
         int32_t x = box.bounds.x + 3, y = box.bounds.y + size / 2;
         os64_draw_fill_rect(&ctx->surf, (os64_gui_rect_t){x, y, 2, 3}, t->button_fg);
@@ -43,6 +47,7 @@ static void checkbox_click(os64_ui_widget_t *w, void *user)
     (void)user;
     os64_ui_checkbox_t *cb = (os64_ui_checkbox_t *)w;
     cb->checked = !cb->checked;
+    cb->indeterminate = false;
     if (cb->on_change) cb->on_change(cb, cb->check_user);
 }
 
@@ -80,6 +85,13 @@ void os64_ui_checkbox_set(os64_ui_t *ui, os64_ui_checkbox_t *cb, bool checked)
 {
     if (cb->checked == checked) return;
     cb->checked = checked;
+    os64_ui_mark_dirty(ui, &cb->w);
+}
+
+void os64_ui_checkbox_set_indeterminate(os64_ui_t *ui, os64_ui_checkbox_t *cb, bool indeterminate)
+{
+    if (cb->indeterminate == indeterminate) return;
+    cb->indeterminate = indeterminate;
     os64_ui_mark_dirty(ui, &cb->w);
 }
 

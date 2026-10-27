@@ -2659,6 +2659,28 @@ static void input_select_dropdown(void) {
     g.ui.menu=menus;
     probe_drop();
 }
+/* A checkbox's indeterminate flag, which a script sets: drawn on a
+ * checkbox and on no radio; a person's click clears it; a cancelled click
+ * puts it back with the box. */
+static void checkbox_indeterminate(void) {
+    probe_page("<input id=a type=checkbox><input id=b type=checkbox><input id=r type=radio>"
+        "<script>for(var id of ['a','b','r'])document.getElementById(id).indeterminate=true;"
+        "document.getElementById('b').addEventListener('click',function(e){e.preventDefault()})</script>",true);
+    script_turn();
+    check(probe_field("a")->u.check.indeterminate && probe_field("b")->u.check.indeterminate &&
+          !probe_field("r")->u.check.indeterminate,
+          "indeterminate: drawn on a checkbox a script set it on, and on no radio");
+    os64_page_t *model=page_model(&g.page);
+    const os64_page_control_t *a=os64_page_control(model,os64_page_control_for(model,probe_id("a")));
+    ui_click_on("a");
+    check(!probe_field("a")->u.check.indeterminate && a->checked && !a->indeterminate,
+          "indeterminate: a person's click clears it, in the widget and the model");
+    ui_click_on("b");
+    const os64_page_control_t *b=os64_page_control(model,os64_page_control_for(model,probe_id("b")));
+    check(probe_field("b")->u.check.indeterminate && !b->checked && b->indeterminate,
+          "indeterminate: a cancelled click puts it back with the box");
+    probe_drop();
+}
 static void input_cases(void) {
     g.seq=2;g.key_seq=2;g.pressed_link=9;
     yonder_bar_raise(&g.bar,1);yonder_bar_settled(&g.bar);
@@ -10220,6 +10242,7 @@ int main(void)
     snapshot_actions();
     bounded_resources();
     stylesheet_reuse();
+    checkbox_indeterminate();
     input_cases();
     if(getenv("YONDER_NO_STREAM")==NULL) stream_cases();
     reporting_teardown();

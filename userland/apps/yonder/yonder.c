@@ -1285,8 +1285,12 @@ typedef struct {
     const os64_html_node_t *related;    // held: over/out's other node, a click's link
     const os64_html_document_t *doc;
     int32_t x, y;                       // window coordinates, for a mouse event
-    bool was;                           // IN_CHECK: the box before the click
+    uint8_t was;                        // IN_CHECK: the box before the click (WAS_*)
 } Input;
+
+// What a box was before its click, which a cancelled click puts back.
+#define WAS_CHECKED 1u
+#define WAS_INDETERMINATE 2u
 
 #define INPUTS_MAX 32
 
@@ -2928,7 +2932,7 @@ static void script_release(void *opaque, os64_dom_response_t *response);
 static void request_arrived(const yonder_fetch_job_t *job, const yonder_fetched_t *got);
 static bool scripts_live(void);
 static void input_queue(InputKind kind, const os64_html_node_t *node, const os64_html_node_t *related,
-                        int32_t x, int32_t y, bool was);
+                        int32_t x, int32_t y, uint8_t was);
 static void inputs_drop(void);
 
 static void refresh_if_declared(void)
@@ -6888,10 +6892,10 @@ static void forms_sync_from_model(bool text);
 static void check_changed(os64_ui_checkbox_t *cb, void *user)
 {
     const FormWidget *fw = user;
-    bool was = false;
+    uint8_t was = 0;
     const os64_page_control_t *c = os64_page_control(page_model(&g.page), widget_control(fw));
     if (c != NULL)
-        was = c->checked;
+        was = (c->checked ? WAS_CHECKED : 0) | (c->indeterminate ? WAS_INDETERMINATE : 0);
     if (os64_page_set_checked(page_model(&g.page), widget_control(fw), cb->checked) < 0)
         status_rest("the page keeps that one as it is");
     forms_sync_from_model(false);
@@ -7032,6 +7036,9 @@ static void forms_sync_from_model(bool text)
         }
         case FW_CHECK:
             os64_ui_checkbox_set(&g.ui, &fw->u.check, c->checked);
+            // HTML shows a checkbox's indeterminate flag and no radio's.
+            os64_ui_checkbox_set_indeterminate(&g.ui, &fw->u.check,
+                                               c->indeterminate && c->input == OS64_PAGE_INPUT_CHECKBOX);
             break;
         case FW_LIST:
         case FW_DROPDOWN: {
@@ -9676,7 +9683,7 @@ static bool scripts_live(void)
 }
 
 static void input_queue(InputKind kind, const os64_html_node_t *node, const os64_html_node_t *related,
-                        int32_t x, int32_t y, bool was)
+                        int32_t x, int32_t y, uint8_t was)
 {
     const os64_html_document_t *doc = page_doc(&g.page);
     if (node == NULL || doc == NULL)
@@ -9943,9 +9950,12 @@ static void inputs_run(void)
         case IN_CHECK: {
             os64_dom_event_t ev = mouse_event("click", true, &in);
             if (page_event(&ev, in.node)) {
-                // A cancelled click puts the box back.
+                // A cancelled click puts the box back, and its
+                // indeterminate flag, which the tick cleared.
                 control = os64_page_control_for(page_model(&g.page), in.node);
-                (void)os64_page_set_checked(page_model(&g.page), control, in.was);
+                if (os64_page_set_checked(page_model(&g.page), control, (in.was & WAS_CHECKED) != 0) >= 0)
+                    (void)os64_page_node_set_indeterminate(os64_page_shared_state(page_model(&g.page)), in.node,
+                                                           (in.was & WAS_INDETERMINATE) != 0);
                 forms_sync_from_model(false);
                 break;
             }

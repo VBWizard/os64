@@ -72,6 +72,7 @@ static bool matches(const DQuery *query, const os64_html_node_t *node)
         bool on = false;
         return os64_page_node_option_selected(query->dom->state, node, &on) == 0 && on;
     }
+    if (query->kind == D_QUERY_LABELS) return d_label_control(node) == query->owner;
     if (query->kind != D_QUERY_GENERIC && !d_classic_match(query->owner != NULL ? query->owner : query->root, node, query->kind)) return false;
     if (query->named != NULL && !d_named_match(node, query->named)) return false;
     if (query->name == NULL || os64_strcmp(query->name, "*") == 0) return true;
@@ -86,7 +87,8 @@ static const os64_html_node_t *query_step(const DQuery *query, const os64_html_n
 {
     if (query->kind == D_QUERY_OPTIONS || query->kind == D_QUERY_SELECTED_OPTIONS)
         return os64_page_option_next(query->root, at);
-    return at == NULL ? query->root->first_child : query_next(query, at);
+    if (at == NULL) return query->kind == D_QUERY_LABELS ? query->root : query->root->first_child;
+    return query_next(query, at);
 }
 
 /* Build and hold the full successor before releasing the previous answer:
@@ -94,10 +96,10 @@ static const os64_html_node_t *query_step(const DQuery *query, const os64_html_n
 static bool refresh(DQuery *query, JSContext *ctx)
 {
     if (!d_context(query->dom, ctx, OS64_JS_ABI_ID)) return false;
-    if (query->kind == D_QUERY_CONTROLS && query->owner != NULL) {
+    if ((query->kind == D_QUERY_CONTROLS || query->kind == D_QUERY_LABELS) && query->owner != NULL) {
         const os64_html_node_t *root = query->owner;
         while (root->parent != NULL) root = root->parent;
-        if (root->kind != OS64_HTML_DOCUMENT) root = query->owner;
+        if (root->kind != OS64_HTML_DOCUMENT && query->kind == D_QUERY_CONTROLS) root = query->owner;
         if (root != query->root) {
             os64_html_hold(query->dom->document, root);
             os64_html_release(query->dom->document, query->root);
@@ -200,6 +202,23 @@ JSValue d_children(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *root
     query = JS_GetOpaque(value, dom->collection_class);
     if (elements) entry->children = query;
     else entry->child_nodes = query;
+    return value;
+}
+
+JSValue d_labels(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *control)
+{
+    if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
+    DValue *entry = d_find(dom, control);
+    if (entry == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
+    if (entry->labels != NULL) return JS_DupValue(ctx, entry->labels->entry->value);
+    JSValue value = d_special_collection(dom, ctx, control, D_QUERY_LABELS, NULL);
+    if (JS_IsException(value)) return value;
+    /* refresh() roots it at the control's tree, whose root moves with it. */
+    DQuery *query = JS_GetOpaque(value, dom->collection_class);
+    query->owner = control;
+    value = as_node_list(dom, ctx, value);
+    if (JS_IsException(value)) return value;
+    entry->labels = query;
     return value;
 }
 

@@ -537,6 +537,16 @@ excluded by name where they need `test_driver`), `the-fieldset-element`,
 `htmlformcontrolscollection.html` and `radionodelist.html` from P1a's
 collections directory.
 
+**As built, P3a** (MODERN_WEB.md § 0f's P3a, as built, is the record): the
+first bullet whole, the controls' reflections as one table of HTML's
+rules, with `indeterminate` libpage's and drawn by yonder, and each
+control's `form` and `labels`; and two form-owner rules WPT's
+`form_attribute.html` found wrong (an empty `form` attribute, a control in
+no document). `reflection-forms.html` and four of the oracle's directories
+run now, nothing excluded. P3b is the rest: the form's members and its
+collections, and the label, fieldset, legend and output, whose `htmlFor`
+and `control` most of `the-label-element`'s failures wait on.
+
 ### P4 — constraint validation, whole (49 members and `ValidityState`)
 
 (b) to 99.6% distinctive.

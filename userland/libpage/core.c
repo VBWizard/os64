@@ -1504,6 +1504,7 @@ void p_publish(os64_page_t *page, int32_t control)
         c->checked = edit->on != 0;
     else if (c->input == OS64_PAGE_INPUT_RADIO || c->input == OS64_PAGE_INPUT_CHECKBOX)
         c->checked = p_has_attr(c->node, "checked");
+    c->indeterminate = edit != NULL && edit->indeterminate;
     for (int32_t i = 0; i < c->noptions; i++) {
         bool selected = p_has_attr(c->options[i].node, "selected");
         const PNodeState *option = p_state_find(page->state, c->options[i].node);
@@ -1565,7 +1566,13 @@ int64_t os64_page_set_checked(os64_page_t *page, int32_t control, bool on)
         return -OS64_PAGE_REASON_DISABLED;
     if (page->incomplete)
         return -OS64_PAGE_REASON_NO_MEMORY;
-    return os64_page_node_set_checked(page->state, c->node, on);
+    const os64_html_node_t *node = c->node;
+    bool checkbox = c->input == OS64_PAGE_INPUT_CHECKBOX;
+    int64_t status = os64_page_node_set_checked(page->state, node, on);
+    // The tick kept the node's record, so clearing the flag cannot fail.
+    if (status >= 0 && checkbox)
+        (void)os64_page_node_set_indeterminate(page->state, node, false);
+    return status;
 }
 
 int64_t os64_page_set_chosen(os64_page_t *page, int32_t control, int32_t option, bool on)

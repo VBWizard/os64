@@ -228,6 +228,9 @@ typedef struct {
     bool required;
     bool multiple;          // SELECT, and `multiple` on a file input
     bool checked;           // CHECKBOX / RADIO, now, a person's tick included
+    // Its indeterminate flag (os64_page_node_set_indeterminate), any input's;
+    // HTML shows only a checkbox's.
+    bool indeterminate;
     // The page spelled a `value` attribute at all. A tick with none sends
     // `on`, the standard's default, but one that says `value=""` asked for
     // an empty answer, and sending `on` for it picks a different branch on
@@ -497,7 +500,8 @@ os64_page_reason_t os64_page_resolve_fragment(const os64_page_t *page,
 // into a tick's, a button's or a hidden field's value; a `disabled` control
 // takes no edit at all, and a `readonly` one takes no text; a disabled option
 // cannot be chosen. The rule lives here and not in each face because a rule
-// every face must remember is a rule some face forgets.
+// every face must remember is a rule some face forgets. A tick of a
+// checkbox also clears its indeterminate flag, as a person's click does.
 //
 // Clearing a one-line single-choice list's choice hands the answer to its
 // first enabled option, which is the selection rule the standard applies
@@ -608,6 +612,14 @@ int64_t os64_page_node_checked(os64_page_state_t *state, const os64_html_node_t 
                                bool *on);
 int64_t os64_page_node_selected_index(os64_page_state_t *state,
                                       const os64_html_node_t *node, int32_t *index);
+// An input's indeterminate flag (HTML § 4.10.5): false until a script sets
+// it; no attribute stands for it, and a clone copies it. A person's
+// tick of a checkbox (os64_page_set_checked) clears it. Setting it changes
+// the control-state revision when it changes. WRONG_KIND for a node that
+// is not an input; NO_MEMORY when its record cannot be kept, and then
+// nothing changes.
+int64_t os64_page_node_indeterminate(os64_page_state_t *state, const os64_html_node_t *node, bool *on);
+int64_t os64_page_node_set_indeterminate(os64_page_state_t *state, const os64_html_node_t *node, bool on);
 // A text control's selection (HTML § 4.10.6), by node, in UTF-16 code
 // units of its value: collapsed at 0 until something moves it; at the
 // value's end once a value that differs is set; else where a script, or

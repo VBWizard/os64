@@ -5,7 +5,7 @@
 [required]
 # 0f's phases (INTERFACES_FORMS.md): added whole by P2 for its
 # selection.html; each line fails with the switch off, P1a's interfaces
-# and the page fixes' among them. P3 grows this list.
+# and the page fixes' among them.
 cloning-steps.html	input element's dirty value flag should be cloned, so setAttribute doesn't affect the cloned input's value
 cloning-steps.html	input element's value should be cloned
 cloning-steps.html	input[type=button] element's checkedness should be cloned
@@ -498,8 +498,86 @@ type-change-state.html	change state from url to tel
 type-change-state.html	change state from url to text
 type-change-state.html	change state from url to time
 valueMode.html	value IDL attribute of input type file without value attribute
+# 0f's P3a (MODERN_WEB.md § 0f's P3a, as built): the controls' reflections
+# and state, form and labels. Each fails with the switch off; the passes
+# not listed here pass either way.
+button.html	clicking on button should not change its indeterminate IDL attribute
+checkbox.html	canceled activation steps on unchecked checkbox
+checkbox.html	canceled activation steps on unchecked checkbox (indeterminate=true in onclick)
+checkbox.html	pre-activation steps on checked checkbox
+checkbox.html	pre-activation steps on unchecked checkbox
+cloning-steps.html	input[type=button] element's indeterminateness should be cloned
+cloning-steps.html	input[type=checkbox] element's indeterminateness should be cloned
+cloning-steps.html	input[type=color] element's indeterminateness should be cloned
+cloning-steps.html	input[type=date] element's indeterminateness should be cloned
+cloning-steps.html	input[type=datetime-local] element's indeterminateness should be cloned
+cloning-steps.html	input[type=email] element's indeterminateness should be cloned
+cloning-steps.html	input[type=file] element's indeterminateness should be cloned
+cloning-steps.html	input[type=hidden] element's indeterminateness should be cloned
+cloning-steps.html	input[type=image] element's indeterminateness should be cloned
+cloning-steps.html	input[type=month] element's indeterminateness should be cloned
+cloning-steps.html	input[type=number] element's indeterminateness should be cloned
+cloning-steps.html	input[type=password] element's indeterminateness should be cloned
+cloning-steps.html	input[type=radio] element's indeterminateness should be cloned
+cloning-steps.html	input[type=range] element's indeterminateness should be cloned
+cloning-steps.html	input[type=reset] element's indeterminateness should be cloned
+cloning-steps.html	input[type=search] element's indeterminateness should be cloned
+cloning-steps.html	input[type=submit] element's indeterminateness should be cloned
+cloning-steps.html	input[type=tel] element's indeterminateness should be cloned
+cloning-steps.html	input[type=text] element's indeterminateness should be cloned
+cloning-steps.html	input[type=time] element's indeterminateness should be cloned
+cloning-steps.html	input[type=url] element's indeterminateness should be cloned
+cloning-steps.html	input[type=week] element's indeterminateness should be cloned
+date.html	The max attribute must be reflected verbatim by the max property.
+date.html	The min attribute must be reflected verbatim by the min property.
+datetime-weekmonth.html	[month] The max attribute must have a value that is a valid global date and time string
+datetime-weekmonth.html	[month] The min attribute must have a value that is a valid global date and time string
+datetime-weekmonth.html	[month] The step attribute must be expressed in seconds
+datetime-weekmonth.html	[week] The max attribute must have a value that is a valid global date and time string
+datetime-weekmonth.html	[week] The min attribute must have a value that is a valid global date and time string
+datetime-weekmonth.html	[week] The step attribute must be expressed in seconds
+datetime.html	[date] The max attribute must have a value that is a valid global date and time string
+datetime.html	[date] The min attribute must have a value that is a valid global date and time string
+datetime.html	[date] The step attribute must be expressed in seconds
+datetime.html	[datetime-local] The max attribute must have a value that is a valid local date and time string
+datetime.html	[datetime-local] The min attribute must have a value that is a valid local date and time string
+datetime.html	[datetime-local] The step attribute must be expressed in seconds
+datetime.html	[time] The max attribute must have a value that is a valid global date and time string
+datetime.html	[time] The min attribute must have a value that is a valid global date and time string
+datetime.html	[time] The step attribute must be expressed in seconds
+email.html	multiple_email has the multiple attribute
+email.html	single_email doesn't have the multiple attribute
+input-labels.html	Forms
+input-type-checkbox.html	a checkbox has an indeterminate state set to false onload
+input-value-dirty-flag.html	Input value/defaultValue dirty value flag semantics
+maxlength.html	Assigning negative integer throws IndexSizeError
+maxlength.html	Assigning non-numeric to maxlength sets maxlength to 0
+maxlength.html	Negative maxlength is always -1
+maxlength.html	Non-numeric maxlength is -1
+maxlength.html	Unset maxlength is -1
+minlength.html	Assigning negative integer throws IndexSizeError
+minlength.html	Assigning non-numeric to minlength sets minlength to 0
+minlength.html	Negative minlength is always -1
+minlength.html	Non-numeric minlength is -1
+minlength.html	Unset minlength is -1
+number-disabled.html	disabled works on number input regardless of appearance
+range.html	Illegal value of max attribute
+range.html	Illegal value of min attribute
+range.html	Illegal value of step attribute
+range.html	default value of max attribute in input type=range
+range.html	default value of min attribute in input type=range
+range.html	max attribute support on input element
+range.html	min attribute support on input element
+search_input.html	placeholder attribute support on input element
+time.html	max  attribute on default value check
+time.html	max attribute support on input element
+time.html	min  attribute on default value check
+time.html	min attribute support on input element
+time.html	step attribute on default value check
+time.html	step attribute support on input element
 [excluded]
 [passing]
+button.html	clicking on button should not change its indeterminate IDL attribute
 button.html	clicking on button should not reset other form fields
 button.html	clicking on button should not submit a form
 button.html	clicking on button should not unchecked radio buttons
@@ -507,7 +585,11 @@ checkable-active-onblur-with-click.html	Wait for load
 checkbox-click-events.html	a checkbox input emits click, input, change events in order after synthetic click
 checkbox-click-events.html	checkbox input respects cancel behavior on synthetic clicks
 checkbox-click-events.html	clicking and preventDefaulting a checkbox causes the checkbox to be checked during the click handler but reverted
+checkbox.html	canceled activation steps on unchecked checkbox
+checkbox.html	canceled activation steps on unchecked checkbox (indeterminate=true in onclick)
 checkbox.html	click on non-mutable checkbox doesn't fire the input or change event
+checkbox.html	pre-activation steps on checked checkbox
+checkbox.html	pre-activation steps on unchecked checkbox
 clone.html	Checkbox must retain checked state.
 clone.html	Checkbox must retain unchecked state.
 clone.html	Color picker must retain changed value.
@@ -531,48 +613,70 @@ cloning-steps.html	input element's dirty value flag should be cloned, so setAttr
 cloning-steps.html	input element's value should be cloned
 cloning-steps.html	input[type=button] element's checkedness should be cloned
 cloning-steps.html	input[type=button] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=button] element's indeterminateness should be cloned
 cloning-steps.html	input[type=checkbox] element's checkedness should be cloned
 cloning-steps.html	input[type=checkbox] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=checkbox] element's indeterminateness should be cloned
 cloning-steps.html	input[type=color] element's checkedness should be cloned
 cloning-steps.html	input[type=color] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=color] element's indeterminateness should be cloned
 cloning-steps.html	input[type=date] element's checkedness should be cloned
 cloning-steps.html	input[type=date] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=date] element's indeterminateness should be cloned
 cloning-steps.html	input[type=datetime-local] element's checkedness should be cloned
 cloning-steps.html	input[type=datetime-local] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=datetime-local] element's indeterminateness should be cloned
 cloning-steps.html	input[type=email] element's checkedness should be cloned
 cloning-steps.html	input[type=email] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=email] element's indeterminateness should be cloned
 cloning-steps.html	input[type=file] element's checkedness should be cloned
 cloning-steps.html	input[type=file] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=file] element's indeterminateness should be cloned
 cloning-steps.html	input[type=hidden] element's checkedness should be cloned
 cloning-steps.html	input[type=hidden] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=hidden] element's indeterminateness should be cloned
 cloning-steps.html	input[type=image] element's checkedness should be cloned
 cloning-steps.html	input[type=image] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=image] element's indeterminateness should be cloned
 cloning-steps.html	input[type=month] element's checkedness should be cloned
 cloning-steps.html	input[type=month] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=month] element's indeterminateness should be cloned
 cloning-steps.html	input[type=number] element's checkedness should be cloned
 cloning-steps.html	input[type=number] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=number] element's indeterminateness should be cloned
 cloning-steps.html	input[type=password] element's checkedness should be cloned
 cloning-steps.html	input[type=password] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=password] element's indeterminateness should be cloned
 cloning-steps.html	input[type=radio] element's checkedness should be cloned
 cloning-steps.html	input[type=radio] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=radio] element's indeterminateness should be cloned
 cloning-steps.html	input[type=range] element's checkedness should be cloned
 cloning-steps.html	input[type=range] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=range] element's indeterminateness should be cloned
 cloning-steps.html	input[type=reset] element's checkedness should be cloned
 cloning-steps.html	input[type=reset] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=reset] element's indeterminateness should be cloned
 cloning-steps.html	input[type=search] element's checkedness should be cloned
 cloning-steps.html	input[type=search] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=search] element's indeterminateness should be cloned
 cloning-steps.html	input[type=submit] element's checkedness should be cloned
 cloning-steps.html	input[type=submit] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=submit] element's indeterminateness should be cloned
 cloning-steps.html	input[type=tel] element's checkedness should be cloned
 cloning-steps.html	input[type=tel] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=tel] element's indeterminateness should be cloned
 cloning-steps.html	input[type=text] element's checkedness should be cloned
 cloning-steps.html	input[type=text] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=text] element's indeterminateness should be cloned
 cloning-steps.html	input[type=time] element's checkedness should be cloned
 cloning-steps.html	input[type=time] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=time] element's indeterminateness should be cloned
 cloning-steps.html	input[type=url] element's checkedness should be cloned
 cloning-steps.html	input[type=url] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=url] element's indeterminateness should be cloned
 cloning-steps.html	input[type=week] element's checkedness should be cloned
 cloning-steps.html	input[type=week] element's dirty checkedness should be cloned, so setAttribute doesn't affect the cloned input's checkedness
+cloning-steps.html	input[type=week] element's indeterminateness should be cloned
 color.html	Empty value should return #000000
 color.html	Invalid color: PILE OF POO (U+1F4A9)
 color.html	Invalid color: keyword inherit
@@ -603,6 +707,8 @@ color.window.html	Testing 'transparent' with color space 'limited-srgb' and  wit
 color.window.html	Testing no value with color space 'limited-srgb' and  without alpha (setAttribute("value"))
 color.window.html	Testing the empty string with color space 'limited-srgb' and  without alpha (setAttribute("value"))
 date.html	Number of days
+date.html	The max attribute must be reflected verbatim by the max property.
+date.html	The min attribute must be reflected verbatim by the min property.
 date.html	The value attribute, if specified and not empty, must have a value that is a valid date string.
 date.html	User agents must not allow the user to set the value to a non-empty string that is not a valid date string.
 date.html	date type support on input element
@@ -623,12 +729,27 @@ datetime-local.html	invalid datetime-local input value 3
 datetime-local.html	invalid datetime-local input value 4
 datetime-local.html	invalid datetime-local input value 5
 datetime-local.html	invalid datetime-local input value 6
+datetime-weekmonth.html	[month] The max attribute must have a value that is a valid global date and time string
+datetime-weekmonth.html	[month] The min attribute must have a value that is a valid global date and time string
+datetime-weekmonth.html	[month] The step attribute must be expressed in seconds
 datetime-weekmonth.html	[month] The value must be a value that is a valid global date and time string
+datetime-weekmonth.html	[week] The max attribute must have a value that is a valid global date and time string
+datetime-weekmonth.html	[week] The min attribute must have a value that is a valid global date and time string
+datetime-weekmonth.html	[week] The step attribute must be expressed in seconds
 datetime-weekmonth.html	[week] The value must be a value that is a valid global date and time string
 datetime-weekmonth.html	month type support on input element
 datetime-weekmonth.html	week type support on input element
+datetime.html	[date] The max attribute must have a value that is a valid global date and time string
+datetime.html	[date] The min attribute must have a value that is a valid global date and time string
+datetime.html	[date] The step attribute must be expressed in seconds
 datetime.html	[date] The value must be a valid global date and time string
+datetime.html	[datetime-local] The max attribute must have a value that is a valid local date and time string
+datetime.html	[datetime-local] The min attribute must have a value that is a valid local date and time string
 datetime.html	[datetime-local] The must be a valid local date and time string
+datetime.html	[datetime-local] The step attribute must be expressed in seconds
+datetime.html	[time] The max attribute must have a value that is a valid global date and time string
+datetime.html	[time] The min attribute must have a value that is a valid global date and time string
+datetime.html	[time] The step attribute must be expressed in seconds
 datetime.html	[time] The value must be a valid global date and time string
 datetime.html	[time] time type support on input element
 datetime.html	date type support on input element
@@ -659,11 +780,14 @@ default-type.html	url should be recognized as a valid input type (HTML)
 default-type.html	week should be recognized as a valid input type (HTML)
 email.html	When the multiple attribute is removed, the user agent must run the value sanitization algorithm
 email.html	When the multiple attribute is set, the user agent must run the value sanitization algorithm
+email.html	multiple_email has the multiple attribute
 email.html	run the value sanitization algorithm after setting a new value
+email.html	single_email doesn't have the multiple attribute
 email.html	value should be sanitized: strip line breaks
 hidden.html	Setting value changes the current value for hidden
 hidden.html	Value returns the current value for hidden
 input-height.html	Forms
+input-labels.html	Forms
 input-seconds-leading-zeroes.html	Expected digits unchanged in round-trip of 2000-01-01T12:30:00.003
 input-seconds-leading-zeroes.html	Expected digits unchanged in round-trip of 2000-01-01T12:30:00.04
 input-seconds-leading-zeroes.html	Expected digits unchanged in round-trip of 2000-01-01T12:30:00.5
@@ -673,6 +797,7 @@ input-type-button.html	empty value attribute
 input-type-button.html	immutable element has no activation behavior.
 input-type-button.html	mutable element's activation behavior is to do nothing.
 input-type-change-value.html	Without focus
+input-type-checkbox.html	a checkbox has an indeterminate state set to false onload
 input-type-checkbox.html	changing the checked attribute to a string sets the checkedness state
 input-type-checkbox.html	checkbox with initial state set to checked has checkedness state
 input-type-checkbox.html	default checkbox has no checkedness state
@@ -681,6 +806,7 @@ input-type-checkbox.html	on getting, if the element has a value attribute, it mu
 input-type-checkbox.html	on setting, a checkbox's indeterminate state must be set to the new value and returns the last value it was set to
 input-value-dirty-flag.html	Input checked/defaultChecked dirty checkedness semantics
 input-value-dirty-flag.html	Input type defaults to 'text' on the property despite no attribute
+input-value-dirty-flag.html	Input value/defaultValue dirty value flag semantics
 input-value-dirty-flag.html	Parsed input type attribute is reflected in both property and attribute
 input-value-dirty-flag.html	Setting input type property sets the attribute
 input-value-invalidstateerr.html	Forms
@@ -696,6 +822,16 @@ input-valueasnumber.html	valueAsNumber setter on type range (actual valueAsNumbe
 input-valueasnumber.html	valueAsNumber setter on type time (actual valueAsNumber: 86340000, expected value: 23:59)
 input-valueasnumber.html	valueAsNumber setter on type week (actual valueAsNumber: -20217600000, expected value: 1969-W20)
 input-width.html	Forms
+maxlength.html	Assigning negative integer throws IndexSizeError
+maxlength.html	Assigning non-numeric to maxlength sets maxlength to 0
+maxlength.html	Negative maxlength is always -1
+maxlength.html	Non-numeric maxlength is -1
+maxlength.html	Unset maxlength is -1
+minlength.html	Assigning negative integer throws IndexSizeError
+minlength.html	Assigning non-numeric to minlength sets minlength to 0
+minlength.html	Negative minlength is always -1
+minlength.html	Non-numeric minlength is -1
+minlength.html	Unset minlength is -1
 month.html	Month should be <= 13: If the value of the element is not a valid month string, then set it to the empty string instead.
 month.html	Month should be > 0: If the value of the element is not a valid month string, then set it to the empty string instead.>
 month.html	Month should be two digits not characters: If the value of the element is not a valid month string, then set it to the empty string instead.>
@@ -710,6 +846,7 @@ month.html	month type support on input element
 month.html	valid value test
 month.html	year can be more than four digits
 month.html	year can contain prefixes of zero, as long as there are at least four digits
+number-disabled.html	disabled works on number input regardless of appearance
 number.html	 value = Infinity
 number.html	Value < min attribute
 number.html	Value <= max attribute
@@ -778,19 +915,27 @@ range-2.html	range input value equals 50
 range-2.html	range input value set to ''
 range-2.html	range input value set to an integer
 range.html	Converting an illegal string to the default value
+range.html	Illegal value of max attribute
+range.html	Illegal value of min attribute
+range.html	Illegal value of step attribute
 range.html	Input should be reset to the default value when value attribute has whitespace
 range.html	Multiply value by ten raised to the exponentth power with `E`
 range.html	Multiply value by ten raised to the exponentth power with `e`
 range.html	Solving the step mismatch
 range.html	Step scale factor behavior when min attribute has integer value but max attribute is non-integer 
 range.html	The default step scale factor is 1, unless min attribute has non-integer value
+range.html	default value of max attribute in input type=range
+range.html	default value of min attribute in input type=range
 range.html	default value when both min and max attributes are given, while min > max
 range.html	default value when min and max attributes are given (= min plus half the difference between min and max)
 range.html	default value with step control when both min and max attributes are given
+range.html	max attribute support on input element
+range.html	min attribute support on input element
 range.html	range type support on input element
 range.html	the value is set to max when a larger value than max attribute is given
 range.html	the value is set to min when a smaller value than min attribute is given
 required_attribute.html	required attribute support on input element
+search_input.html	placeholder attribute support on input element
 search_input.html	search type support on input element
 selection-weekmonth.html	Input element programmatic selection support
 selection-weekmonth.html	Input element programmatic selection support 1
@@ -876,7 +1021,13 @@ time-2.html	Value <= max attribute
 time-2.html	Value > max attribute
 time-2.html	Value >= min attribute
 time-2.html	empty value
+time.html	max  attribute on default value check
+time.html	max attribute support on input element
+time.html	min  attribute on default value check
+time.html	min attribute support on input element
 time.html	set value on not time format value
+time.html	step attribute on default value check
+time.html	step attribute support on input element
 time.html	time element of default time value
 time.html	type attribute support on input element
 type-change-state-weekmonth.html	change state from button to month

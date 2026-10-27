@@ -1,0 +1,31 @@
+# WPT's html/semantics/forms/the-button-element in yonder, at WPT a699fb16767be39ba3e61a8e8b6bef60383f08ee.
+# tools/test_yonder_wpt_host.c says what each section means. [required] and
+# [excluded] are written by hand; tools/test_yonder_wpt_host.sh html/semantics/forms/the-button-element --update
+# rewrites [passing].
+[required]
+# 0f's phases (INTERFACES_FORMS.md): added whole by P3a; each line fails
+# with the switch off, the earlier phases' interfaces among them. The passes
+# not listed here pass either way.
+button-labels.html	Forms
+[excluded]
+[passing]
+button-click-resets-with-commandfor.html	clicking a button should trigger a reset (with command and commandfor attribute)
+button-click-resets-with-commandfor.html	clicking a button should trigger a reset (with commandfor attribute)
+button-click-resets-with-commandfor.html	clicking a reset button should trigger a reset (with command attribute)
+button-click-submits-with-commandfor.html	clicking a button (explicit type=submit) SHOULD trigger a submit (with command and commandfor attribute)
+button-click-submits-with-commandfor.html	clicking a button (explicit type=submit) SHOULD trigger a submit (with command attribute)
+button-click-submits-with-commandfor.html	clicking a button (explicit type=submit) SHOULD trigger a submit (with commandfor attribute)
+button-events.html	Anchor inside a button should be prevent button activation
+button-events.html	Innermost button should reset its form
+button-events.html	Innermost button should submit its form
+button-events.html	Switching from type=button to type=reset should reset the form
+button-events.html	Switching from type=button to type=submit should submit the form
+button-events.html	input type=submit inside a button should be prevent button activation
+button-events.html	type=button shouldn't trigger submit or reset events
+button-labels.html	Forms
+button-menu-historical.html	button.menu, the potentially-reflecting IDL attribute, does not exist
+button-menu-historical.html	button.type reflects properly
+button-type-enumerated-ascii-case-insensitive.html	keyword reset
+button-type-enumerated-ascii-case-insensitive.html	keyword submit
+button-type.html	a button's type should be submit by default
+button-type.html	a button's type should stay within the range of valid values
