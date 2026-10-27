@@ -27,6 +27,10 @@ static Status style_status(const svg_style_t *s)
         s->fill.kind > SVG_PAINT_UNSUPPORTED || s->stroke.kind < SVG_PAINT_NONE ||
         s->stroke.kind > SVG_PAINT_UNSUPPORTED)
         return SVG_PROVIDER_ERROR;
+    if (s->viewport.active &&
+        (!isfinite(s->viewport.width) || !isfinite(s->viewport.height) || s->viewport.width < 0 ||
+         s->viewport.height < 0 || !svg_map_valid(&s->viewport.content_transform)))
+        return SVG_PROVIDER_ERROR;
     if (s->dash.count > SVG_DASH_MAX)
         return SVG_LIMIT;
     if ((s->dash.count && !s->dash.values) || !isfinite(s->dash.offset))
@@ -192,9 +196,18 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
             status = SVG_UNSUPPORTED;
             break;
         }
-        item.user_to_viewport =
-            compose(parent == SIZE_MAX ? *viewport : scene->items[parent].user_to_viewport,
-                    item.style.transform);
+        if (item.style.viewport.active) {
+            if (node.kind != SVG_NODE_GROUP && node.kind != SVG_NODE_USE) {
+                status = SVG_PROVIDER_ERROR;
+                break;
+            }
+            if (!item.style.viewport.width || !item.style.viewport.height)
+                continue;
+        }
+        Map inherited = parent == SIZE_MAX ? *viewport : scene->items[parent].user_to_viewport;
+        if (parent != SIZE_MAX && scene->items[parent].style.viewport.active)
+            inherited = compose(inherited, scene->items[parent].style.viewport.content_transform);
+        item.user_to_viewport = compose(inherited, item.style.transform);
         if (!svg_map_valid(&item.user_to_viewport)) {
             status = SVG_LIMIT;
             break;

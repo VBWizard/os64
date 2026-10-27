@@ -44,7 +44,9 @@ adds native geometry and CSS geometry properties with a second live gallery.
 The [stroke increment](SVG_STROKES.md) adds dashes, offsets and exact zero-length
 caps, with a reversible phase toggle and independent analytic coverage checks.
 The [instance increment](SVG_INSTANCES.md) adds fragment use references, separate
-instance inheritance and cross-root source mutation. The static inline renderer stage remains
+instance inheritance and cross-root source mutation. The [viewport increment](SVG_VIEWPORTS.md)
+adds referenced symbol/SVG sizing, nested viewports and rectangular overflow clips.
+The static inline renderer stage remains
 active; the first P5 fixture does not complete its broader feature profile.
 
 Slice 5 follows Fable's 2026-10-21 design. Slice 6 follows Quinn's

@@ -72,8 +72,9 @@ An instanced source with that indication returns `SVG_UNSUPPORTED`, because
 reusing its DOM-resolved value could import the wrong custom-property ancestry.
 Ordinary use hosts can use DOM-resolved custom properties and pass their
 computed paint down. Custom-property definitions alone do not trigger refusal.
-Per-instance substitution, shadow-tree selector rematching, referenced
-symbol/SVG viewports and clipping remain in [DEBTS.md](../../../DEBTS.md).
+[Referenced and nested viewports](SVG_VIEWPORTS.md) add symbol/SVG sizing and
+rectangular overflow clips. Per-instance substitution, shadow-tree selector
+rematching and general clip paths remain in [DEBTS.md](../../../DEBTS.md).
 
 These semantics are grounded in SVG2's [use element and its shadow tree](https://www.w3.org/TR/SVG2/struct.html#UseElement).
 The static profile does not expose SVG animated-length objects, instance

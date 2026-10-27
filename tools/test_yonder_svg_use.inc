@@ -125,8 +125,8 @@ static void use_cases(const char *dir)
     }
     const char *refused[] = {
         "<use href='other.svg#r'/>",
-        "<defs><symbol id=r><rect width=16 height='16'/></symbol></defs><use href='#r'/>",
-        "<defs><svg id=r><rect width=16 height='16'/></svg></defs><use href='#r'/>",
+        "<defs><symbol id=r refX=4><rect width=16 height='16'/></symbol></defs><use href='#r'/>",
+        "<defs><svg id=r style='overflow-x:clip;overflow-y:visible'><rect width=16 height='16'/></svg></defs><use href='#r'/>",
         "<defs style='--ink:red'><rect id=r width=16 height=16 "
         "style='fill:var(--ink)'/></defs><use href='#r' style='--ink:blue'/>",
         "<defs><g id=r style='--ink:red'><rect width=16 height=16 "

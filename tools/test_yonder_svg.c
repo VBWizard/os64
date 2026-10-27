@@ -554,6 +554,7 @@ static void stroke_cases(const char *dir)
 
 
 #include "test_yonder_svg_use.inc"
+#include "test_yonder_svg_viewports.inc"
 
 int main(int argc, char **argv)
 {
@@ -564,6 +565,7 @@ int main(int argc, char **argv)
     assert(os64_text_create(&o, &s_text) == OS64_FONT_OK);
     kEnv.text = s_text;
     size_t base = live;
+    viewport_cases(argv[1]);
     use_cases(argv[1]);
     stroke_cases(argv[1]);
     shape_cases(argv[1]);

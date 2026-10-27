@@ -722,10 +722,80 @@ static void dashed_circle(void)
     CHECK(maximum <= 48 && sum <= 16);
     CHECK(svg_scene_release(c, s) == SVG_OK && svg_destroy(c) == SVG_OK && !l.live);
 }
+static void viewport_contracts(void)
+{
+    Ledger l = {0};
+    svg_context_t *c = create(&l);
+    Document d = {0};
+    add(&d, SIZE_MAX, NULL, 0);
+    add(&d, 0, NULL, 0);
+    d.nodes[1].style.transform.tx = d.nodes[1].style.transform.ty = 16;
+    d.nodes[1].style.viewport = (svg_viewport_t){true, true, 32, 24, {2, 0, 0, 2, 0, 0}};
+    add(&d, 1, "M-100 -100H100V100H-100Z", 0xffff0000);
+    add(&d, 1, NULL, 0);
+    d.nodes[3].style.transform.tx = 6;
+    d.nodes[3].style.transform.ty = 4;
+    d.nodes[3].style.viewport = (svg_viewport_t){true, true, 10, 10, {1, 0, 0, 1, 0, 0}};
+    add(&d, 3, "M-100 -100H100V100H-100Z", 0xff0000ff);
+    add(&d, 0, "M2 2H10V10H2Z", 0xff008000);
+    svg_scene_t *scene = prepare(c, &d);
+    uint32_t pixels[68 * 64], crop[68 * 64];
+    svg_render_target_t t = target(pixels);
+    svg_render_options_t o = svg_render_options_default(os64_freetype_geometry_v1());
+    size_t baseline = l.live, calls = l.allocations, polls = l.polls;
+    sentinel(pixels);
+    CHECK(svg_scene_render(c, scene, &o, &t, NULL) == SVG_OK);
+    calls = l.allocations - calls;
+    polls = l.polls - polls;
+    CHECK(l.live == baseline);
+    for (size_t y = 0; y < 64; ++y)
+        for (size_t x = 0; x < 64; ++x) {
+            uint32_t expected = x >= 16 && x < 48 && y >= 16 && y < 40 ?
+                (x >= 28 && y >= 24 ? 0xff0000ff : 0xffff0000) : 0;
+            if (x >= 2 && x < 10 && y >= 2 && y < 10) expected = 0xff008000;
+            CHECK(pixels[y * 68 + x] == expected);
+        }
+    padding(pixels);
+    svg_render_target_t part = target(crop);
+    part.origin_x = 17; part.origin_y = 19; part.width = 21; part.height = 18;
+    sentinel(crop);
+    CHECK(svg_scene_render(c, scene, &o, &part, NULL) == SVG_OK && l.live == baseline);
+    for (size_t y = 0; y < 64; ++y)
+        for (size_t x = 0; x < 68; ++x)
+            CHECK(crop[y * 68 + x] == (y < 18 && x < 21 ? pixels[(y + 19) * 68 + x + 17] : 0xdeadbeef));
+    for (size_t i = 1; i <= calls; ++i)
+        for (int admission = 0; admission < 2; ++admission) {
+            l.admission = admission; l.fail = l.allocations + i;
+            CHECK(svg_scene_render(c, scene, &o, &t, NULL) == (admission ? SVG_LIMIT : SVG_NO_MEMORY));
+            CHECK(l.live == baseline); l.fail = 0;
+        }
+    for (size_t i = 1; i <= polls; ++i) {
+        l.cancel = l.polls + i;
+        CHECK(svg_scene_render(c, scene, &o, &t, NULL) == SVG_CANCELLED && l.live == baseline);
+        l.cancel = 0;
+    }
+    CHECK(svg_scene_release(c, scene) == SVG_OK);
+    d.nodes[1].style.viewport.width = 0;
+    scene = prepare(c, &d);
+    CHECK(svg_scene_render(c, scene, &o, &t, NULL) == SVG_OK);
+    CHECK(!pixels[20 * 68 + 20] && pixels[4 * 68 + 4] == 0xff008000);
+    CHECK(svg_scene_release(c, scene) == SVG_OK);
+    svg_provider_t provider = {&d, acquire, unpin, node, style, NULL, NULL};
+    os64_geometry_map_t map = {1, 0, 0, 1, 0, 0};
+    d.nodes[1].style.viewport.width = -1;
+    CHECK(svg_scene_prepare(c, &provider, SVG_MODE_INLINE, &map, &scene) == SVG_PROVIDER_ERROR && !scene);
+    d.nodes[1].style.viewport.width = 32;
+    d.nodes[1].style.viewport.content_transform.tx = INFINITY;
+    CHECK(svg_scene_prepare(c, &provider, SVG_MODE_INLINE, &map, &scene) == SVG_PROVIDER_ERROR && !scene);
+    CHECK(!d.pins && svg_destroy(c) == SVG_OK && !l.live);
+    printf("Viewport masks: %zu allocation cuts in both modes, %zu cancellation cuts, exact crop and bounds pass\n",calls,polls);
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
     setvbuf(stdout, NULL, _IONBF, 0);
+    viewport_contracts();
     pictures(argv[1]);
     limits();
     clipping();
