@@ -3978,14 +3978,17 @@ form's collections, are P3b's.
   harness judges by `localName`, which Element lacks (both DEBTS.md); the
   rest is P3b's (`htmlFor`, `label.control`, fieldset, output, the form's
   members), P4's validity, or no interface's (meter, progress, object).
-- **Hosts**, 0 failed: libpage 254,183 (indeterminate: default, published,
+- **Hosts**, on `userland` with SVG's #368 and #369 in: libpage 254,184
+  (indeterminate: default, published,
   the revision, a clone, a person's tick of a checkbox and not a radio, a
   script's checked set; and the empty form attribute in the model and a
-  radio group); DOM 15,771 and 108,157 (every rule of the table, the
+  radio group), its 3 failures the sheet census's, which counts an SVG
+  `style` since #368 while its case still expects six; DOM 15,783 and
+  111,223, 0 failed (every rule of the table, the
   brand check, defaultValue, textLength, indeterminate through a click and
   a cancelled one, autocomplete's grammar, width and height, form by
   ancestor and attribute, labels live and in tree order, and with the
-  switch off none of them); scripted page 8,201 (the bar drawn on a
+  switch off none of them); scripted page 8,258 (the bar drawn on a
   checkbox and no radio, a person's click clearing it, a cancelled one
   putting it back); yonder 2,028; libui's text 152 and 1,645 (the
   checkbox's third look, set without its callback and cleared by a click);
