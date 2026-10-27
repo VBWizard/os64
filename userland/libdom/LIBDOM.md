@@ -1432,8 +1432,9 @@ from its tree's root.
 window, and nothing else). `collection.c`'s: a form's `elements` is an
 HTMLFormControlsCollection, over a collection's, of its listed elements
 but an image button (`d_listed`); its `namedItem`, and named access on it and on the form,
-answer a RadioNodeList for a name two or more controls share, a live
-NodeList made once a form and a name (`d_radio_list`), whose `value` reads
+answer a RadioNodeList for a name two or more controls share (HTMLCollection's
+own `namedItem`, called on it, the first), a live NodeList made once a
+form and a name (`d_radio_list`), whose `value` reads
 its first checked radio button's and sets the first of that value; a
 NodeList answers no names (`node_list`). `forms.c`'s: a form's `length`,
 `rel` and `relList`; a label's `control` and `form`; a fieldset's `type`

@@ -4068,7 +4068,8 @@ collections, and the label, fieldset, legend and output.
   classic fix both ways) and is an
   HTMLFormControlsCollection, whose `namedItem`, and named access on it and
   on the form, answer a RadioNodeList for a name two or more controls
-  share: a live NodeList, one a form and a name, whose `value` is its
+  share (HTMLCollection's own `namedItem`, called on it, stays the
+  first): a live NodeList, one a form and a name, whose `value` is its
   first checked radio button's and sets the first of that value. A
   NodeList has no named properties (`node_list`), which also corrects
   P3a's `labels` and `getElementsByName`.
@@ -4110,16 +4111,16 @@ collections, and the label, fieldset, legend and output.
   `requestSubmit`'s refusals; and with the switch off, none of it); the
   scripted page 8,429; yonder 2,028; libpage 254,199 (the document base
   URL, a fragment's every source).
-- **Mutants** (`tools/test_interfaces_mutants.py`, its P3b group): 29,
+- **Mutants** (`tools/test_interfaces_mutants.py`, its P3b group): 30,
   each caught — a rule of the table (method's default, autocomplete's), an
   output's labels, the listed elements (a fieldset's image button too),
   form[i], the names over builtins, the own names (an index's or an
   expando's spelling once), redefinition (an index it has no control for
   too) and deletion, `baseURI`'s fragment (libdom's and libpage's) and a
   made document's base, the controls collection and RadioNodeList (made
-  once, radios only, the value set), a NodeList's names, the output's
-  override both ways, a label's form, the submitter's two refusals and a
-  detached form.
+  once, radios only, the value set, the base namedItem the first), a
+  NodeList's names, the output's override both ways, a label's form, the
+  submitter's two refusals and a detached form.
 
 ### Slice 6a, XML foundation as built — 2026-10-25
 

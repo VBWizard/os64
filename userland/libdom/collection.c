@@ -223,11 +223,13 @@ JSValue d_labels(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *contro
 }
 
 /* A collection's named item (HTML § 2.6.2.1): its first entry whose id or
- * name is `name`, none for an empty one; JS_NULL for none. A form's
- * controls answer, with the modern switch on, a RadioNodeList of every one
- * of that name when there are two or more (§ 2.6.2.4). The caller has
- * refreshed the query. */
-static JSValue named_item(DQuery *query, JSContext *ctx, const char *name)
+ * name is `name`, none for an empty one; JS_NULL for none. HTMLFormControls-
+ * Collection's own (`radios`: its namedItem and named properties, with
+ * the modern switch on) answers instead a RadioNodeList of every one of
+ * that name when there are two or more (§ 2.6.2.4); HTMLCollection's, called
+ * on a form's controls, stays the first. The caller has refreshed the
+ * query. */
+static JSValue named_item(DQuery *query, JSContext *ctx, const char *name, bool radios)
 {
     size_t first = query->count, count = 0;
     for (size_t i = 0; *name != '\0' && i < query->count; i++)
@@ -236,7 +238,8 @@ static JSValue named_item(DQuery *query, JSContext *ctx, const char *name)
             count++;
         }
     if (count == 0) return JS_NULL;
-    if (count > 1 && query->kind == D_QUERY_CONTROLS && query->named == NULL && query->dom->radio_prototype != NULL)
+    if (radios && count > 1 && query->kind == D_QUERY_CONTROLS && query->named == NULL &&
+        query->dom->radio_prototype != NULL)
         return d_radio_list(query->dom, ctx, query->owner, name);
     return d_wrap(query->dom, ctx, query->nodes[first]);
 }
@@ -248,11 +251,12 @@ static JSValue collection_method(JSContext *ctx, JSValueConst self, int argc,
     if (dom == NULL) return JS_EXCEPTION;
     DQuery *query = JS_GetOpaque(self, dom->collection_class);
     if (query == NULL) return JS_ThrowTypeError(ctx, "Expected a collection");
-    if (magic == 2) {
+    /* namedItem: HTMLCollection's (2), HTMLFormControlsCollection's (3). */
+    if (magic == 2 || magic == 3) {
         DString name = {0};
         if (argc < 1) return JS_ThrowTypeError(ctx, "Missing collection name");
         if (!d_string(dom, ctx, argv[0], &name)) return JS_EXCEPTION;
-        JSValue result = refresh(query, ctx) ? named_item(query, ctx, name.data != NULL ? name.data : "")
+        JSValue result = refresh(query, ctx) ? named_item(query, ctx, name.data != NULL ? name.data : "", magic == 3)
                                              : JS_EXCEPTION;
         d_string_free(dom, &name);
         return result;
@@ -321,7 +325,7 @@ static int own_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst
         JS_FreeValue(ctx, key);
         if (name == NULL) return -1;
         value = os64_strcmp(name, "length") && os64_strcmp(name, "item") && os64_strcmp(name, "namedItem")
-            ? named_item(query, ctx, name) : JS_NULL;
+            ? named_item(query, ctx, name, true) : JS_NULL;
         JS_FreeCString(ctx, name);
         if (JS_IsException(value)) return -1;
         if (JS_IsNull(value)) return 0;
@@ -757,7 +761,7 @@ int d_form_collections_install(os64_dom_t *dom, JSContext *ctx, JSValueConst glo
     if (JS_IsException(controls)) return -1;
     dom->controls_prototype = d_retain(dom, ctx, controls);
     if (dom->controls_prototype == NULL ||
-        d_method(dom, ctx, controls, "namedItem", collection_method, 1, 2) < 0)
+        d_method(dom, ctx, controls, "namedItem", collection_method, 1, 3) < 0)
         return -1;
     /* RadioNodeList.prototype, over a NodeList's. */
     JSValue radio = JS_NewObjectProto(ctx, dom->static_list->value);
