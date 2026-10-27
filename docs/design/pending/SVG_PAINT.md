@@ -22,17 +22,17 @@ the device map: `scale(4,1)` transforms a round cap into an ellipse. Group
 visibility does not suppress explicitly visible descendants. Empty paths and
 malformed paths with an empty complete prefix paint nothing.
 
-The provider must report active features it cannot represent, including dashes,
+The provider must report active features it cannot represent, including
 vector effects, clipping paths, resources, non-default paint order, non-normal
-blending and non-sRGB color interpolation. Unsupported backend joins or
-degenerate non-butt caps propagate `SVG_UNSUPPORTED`; the painter does not
+blending and non-sRGB color interpolation. Unsupported backend joins or nonzero curves that
+collapse below the working grid with non-butt caps propagate `SVG_UNSUPPORTED`; the painter does not
 silently omit their geometry. Target-rectangle cropping is implemented, but
 that is not SVG `clipPath` support.
 
 `libsvg.so` still imports only math functions from `libmath.so`. Rendering
 receives the public geometry table explicitly. The table and its implementation
 must outlive the render call. FreeType retains its two getters, no dynamic
-dependencies and no undefined symbols. No application links libsvg yet.
+dependencies and no undefined symbols. Yonder consumes the library through its inline SVG adapter.
 
 ## Coverage, color and isolation
 
@@ -179,8 +179,8 @@ recorded in SVG_CORE.md; tightening positional tolerance alone does not solve it
 ## Following work
 
 The [Yonder connection](SVG_YONDER.md) adds the real tree/style adapter, computed
-paint properties, outer sizing and inline painting. Continue 6b with shapes, dashes,
-degenerate-cap/join handling, use/symbol, nested viewports and SVG clipping.
+paint properties, outer sizing and inline painting. Basic shapes and [dash/cap construction](SVG_STROKES.md) extend this painter.
+Continue 6b with remaining join handling, use/symbol, nested viewports and SVG clipping.
 Keep the Yonder connection in its own PR, inspect concurrent browser changes
 before touching shared files, and stack dependent follow-ons while it is
 unmerged, as recorded in SVG_CORE.md.

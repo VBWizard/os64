@@ -69,10 +69,10 @@ work; they are not a demonstrated frame-time guarantee for arbitrary pages.
 ## Explicit limits
 
 The inline profile handles paths, groups and [basic shapes](SVG_SHAPES.md),
-with definitions, metadata, titles, descriptions and style elements omitted
+plus [dashes and zero-length caps](SVG_STROKES.md), with definitions, metadata, titles, descriptions and style elements omitted
 from drawing. Other active element kinds refuse the SVG job. Use/symbol,
 nested viewports, text, gradients,
-patterns, images, markers, clip paths, masks, filters, dashes, non-scaling
+patterns, images, markers, clip paths, masks, filters, non-scaling
 strokes and animation remain follow-on work. External SVG image decoding is
 not connected to libimage. SVG-specific hit testing and DOM interfaces are
 also outside this slice.
@@ -83,7 +83,7 @@ that require evaluation inside the SVG adapter are refused. Flow-owned
 ancestor/root opacity and root transforms retain libflow's support; a
 descendant explicitly inheriting a calc opacity is outside the adapter profile. Descendant CSS transform-origin and individual
 translate/rotate/scale properties are refused. Color interpolation is sRGB.
-The native painter's degenerate-stroke and arc-coverage limits still apply.
+Nonzero strokes that collapse below the backend grid and the native arc-coverage limits still apply.
 
 Active unsupported paints/elements and recognized unsupported presentation
 attributes refuse the job without publishing partial pixels. Yonder records
@@ -107,7 +107,7 @@ The focused integration harness compiles production HTML, page, cascade, layout,
 SVG, FreeType and pinned math sources. It checks actual paint dispatch and
 pixels, presentation/CSS precedence, embedded SVG stylesheets, currentColor,
 viewBox alignment/stretch/slice, zoom, cropped placement, mutation and disabled
-Modern Web. Unsupported elements/paints/dashes return no output. It sweeps
+Modern Web. Unsupported elements/paints return no output. It sweeps
 **81 allocation positions in both admission and allocator refusal modes**,
 with recovery and zero live ledger bytes after each call. Its fixture peak is
 **233,084 bytes**, not a real-page performance estimate. Source/header/compiler

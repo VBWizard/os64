@@ -136,6 +136,8 @@ typedef enum {
     GARB_STROKE_DASHARRAY, GARB_VECTOR_EFFECT, GARB_COLOR_INTERPOLATION,
     // Non-inherited SVG geometry; width/height use the existing properties.
     GARB_X, GARB_Y, GARB_CX, GARB_CY, GARB_R, GARB_RX, GARB_RY,
+    // Inherited offset; appended to preserve the existing property IDs.
+    GARB_STROKE_DASHOFFSET,
     GARB_NPROPS
 } garb_prop_t;
 

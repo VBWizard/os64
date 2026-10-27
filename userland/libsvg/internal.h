@@ -49,4 +49,6 @@ Status svg_make_shape(Context *, const svg_shape_t *, svg_path_t **, svg_parse_r
 void svg_free_path(Context *, svg_path_t *);
 Status svg_lower(Context *, const svg_path_t *, const Map *, double, svg_geometry_t **);
 void svg_free_geometry(Context *, svg_geometry_t *);
+Status svg_stroke_geometry(Context *, const svg_geometry_t *, const Map *, double,
+                           const svg_style_t *, svg_geometry_t **centerline, svg_geometry_t **caps);
 #endif

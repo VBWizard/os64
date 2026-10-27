@@ -2011,6 +2011,7 @@ static int32_t svg_attributes(garb_cascade_t *c, const os64_html_node_t *el, Dec
                                         "stroke-linejoin",
                                         "stroke-miterlimit",
                                         "stroke-dasharray",
+                                        "stroke-dashoffset",
                                         "vector-effect",
                                         "color-interpolation",
                                         "color",

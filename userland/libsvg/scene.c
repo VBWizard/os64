@@ -27,6 +27,13 @@ static Status style_status(const svg_style_t *s)
         s->fill.kind > SVG_PAINT_UNSUPPORTED || s->stroke.kind < SVG_PAINT_NONE ||
         s->stroke.kind > SVG_PAINT_UNSUPPORTED)
         return SVG_PROVIDER_ERROR;
+    if (s->dash.count > SVG_DASH_MAX)
+        return SVG_LIMIT;
+    if ((s->dash.count && !s->dash.values) || !isfinite(s->dash.offset))
+        return SVG_PROVIDER_ERROR;
+    for (size_t i = 0; i < s->dash.count; ++i)
+        if (!isfinite(s->dash.values[i]) || s->dash.values[i] < 0)
+            return SVG_PROVIDER_ERROR;
     if (s->fill.kind == SVG_PAINT_UNSUPPORTED || s->stroke.kind == SVG_PAINT_UNSUPPORTED)
         return SVG_UNSUPPORTED;
     return SVG_OK;
@@ -53,8 +60,10 @@ static Status provider_status(Status s)
 }
 static void free_scene(Context *c, svg_scene_t *scene)
 {
-    for (size_t i = 0; i < scene->count; ++i)
+    for (size_t i = 0; i < scene->count; ++i) {
         svg_free_path(c, (svg_path_t *)scene->items[i].path);
+        svg_free(c, (void *)scene->items[i].style.dash.values);
+    }
     svg_free(c, scene->items);
     if (scene->pinned)
         scene->provider.release(scene->provider.context, scene->snapshot);
@@ -83,6 +92,7 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
         return svg_leave(c, c->why);
     *scene = (svg_scene_t){.owner = c, .provider = *provider};
     Frame *stack = NULL;
+    double *pending_dash = NULL;
     size_t capacity = 0, depth = 0, visits = 0;
     uint64_t root = 0;
     if (!svg_spend(c, 1)) {
@@ -178,6 +188,16 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
             status = SVG_LIMIT;
             break;
         }
+        if (item.style.dash.count) {
+            pending_dash = svg_alloc(c, item.style.dash.count * sizeof(*pending_dash));
+            if (!pending_dash) {
+                status = c->why;
+                break;
+            }
+            for (size_t i = 0; i < item.style.dash.count; ++i)
+                pending_dash[i] = item.style.dash.values[i];
+        }
+        item.style.dash.values = pending_dash;
         scene->items = svg_grow(c, scene->items, &scene->capacity, scene->count,
                                 sizeof(*scene->items), c->options.limits.scene_nodes);
         if (c->why != SVG_OK) {
@@ -214,6 +234,7 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
         }
         size_t index = scene->count;
         scene->items[scene->count++] = item;
+        pending_dash = NULL;
         if (node.first_child) {
             stack = svg_grow(c, stack, &capacity, depth, sizeof(*stack), c->options.limits.depth);
             if (c->why != SVG_OK) {
@@ -224,6 +245,7 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
         }
     }
 done:
+    svg_free(c, pending_dash);
     svg_free(c, stack);
     if (status == SVG_OK) {
         ++c->stats.scenes;

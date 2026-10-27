@@ -365,8 +365,9 @@ fail:
     discard(c, o);
     return leave(c, s);
 }
-static Status stroke(Context *c, const Command *commands, size_t n, const Map *map,
-                     double tolerance, const os64_geometry_stroke_t *style, Outline **out)
+static Status stroke_with_caps(Context *c, const Command *commands, size_t n,
+                               const Command *cap_commands, size_t cap_count, const Map *map,
+                               double tolerance, const os64_geometry_stroke_t *style, Outline **out)
 {
     if (out)
         *out = NULL;
@@ -385,7 +386,25 @@ static Status stroke(Context *c, const Command *commands, size_t n, const Map *m
     if (c->stats.live_outlines == UINT32_MAX)
         return leave(c, LIMIT);
     Frame f;
-    s = prepare(c, commands, n, map, tolerance, style->width, style->miter_limit, &f);
+    if ((n && !commands) || (cap_count && !cap_commands) || (!n && !cap_count))
+        return leave(c, BAD);
+    if ((n && commands[0].verb != OS64_GEOMETRY_MOVE) ||
+        (cap_count && cap_commands[0].verb != OS64_GEOMETRY_MOVE))
+        return leave(c, BAD);
+    if (n > OS64_GEOMETRY_COMMAND_MAX || cap_count > OS64_GEOMETRY_COMMAND_MAX - n)
+        return leave(c, LIMIT);
+    Command *combined = NULL;
+    const Command *planned = commands;
+    if (cap_count) {
+        combined = allocate(c, (n + cap_count) * sizeof(*combined));
+        if (!combined)
+            return leave(c, c->why);
+        for (size_t i = 0; i < n + cap_count; ++i)
+            combined[i] = i < n ? commands[i] : cap_commands[i - n];
+        planned = combined;
+    }
+    s = prepare(c, planned, n + cap_count, map, tolerance, style->width, style->miter_limit, &f);
+    free_block(c, combined);
     if (s)
         return leave(c, s);
     Outline *o = allocate(c, sizeof(*o));
@@ -482,7 +501,20 @@ static Status stroke(Context *c, const Command *commands, size_t n, const Map *m
         s = backend(c, e);
         goto fail;
     }
-    s = new_ft_outline(c, points, contours, &o->ft);
+    unsigned cap_points = 0, cap_contours = 0;
+    for (size_t i = 0; i < cap_count; ++i) {
+        if (!spend(c, 1)) {
+            s = c->why;
+            goto fail;
+        }
+        cap_points += point_count(cap_commands[i].verb);
+        cap_contours += cap_commands[i].verb == OS64_GEOMETRY_MOVE;
+    }
+    if (points > OS64_GEOMETRY_POINT_MAX || cap_points > OS64_GEOMETRY_POINT_MAX - points) {
+        s = LIMIT;
+        goto fail;
+    }
+    s = new_ft_outline(c, points + cap_points, contours + cap_contours, &o->ft);
     if (s)
         goto fail;
     o->ft.n_points = o->ft.n_contours = 0;
@@ -491,6 +523,50 @@ static Status stroke(Context *c, const Command *commands, size_t n, const Map *m
         s = ENGINE;
         goto fail;
     }
+    // Match the stroke's outer winding so cap overlaps add rather than cancel.
+    bool reverse_caps = FT_Outline_Get_Orientation(&o->ft) != FT_ORIENTATION_POSTSCRIPT;
+    unsigned written = points, closed = contours;
+    for (size_t i = 0; i < cap_count; ++i) {
+        if (!spend(c, 1)) {
+            s = c->why;
+            goto fail;
+        }
+        const Command *p = cap_commands + i;
+        if (p->verb == OS64_GEOMETRY_CLOSE)
+            continue;
+        if (p->verb == OS64_GEOMETRY_MOVE && written > points)
+            o->ft.contours[closed++] = (unsigned short)(written - 1);
+        unsigned count = point_count(p->verb);
+        for (unsigned j = 0; j < count; ++j) {
+            o->ft.points[written] = vector(f, p->p[j]);
+            o->ft.tags[written++] = j + 1 == count                       ? FT_CURVE_TAG_ON
+                                    : p->verb == OS64_GEOMETRY_QUADRATIC ? FT_CURVE_TAG_CONIC
+                                                                         : FT_CURVE_TAG_CUBIC;
+        }
+    }
+    if (cap_points)
+        o->ft.contours[closed++] = (unsigned short)(written - 1);
+    if (reverse_caps) {
+        unsigned first = points;
+        for (unsigned i = contours; i < closed; ++i) {
+            unsigned last = o->ft.contours[i];
+            for (unsigned a = first, b = last; a < b; ++a, --b) {
+                if (!spend(c, 1)) {
+                    s = c->why;
+                    goto fail;
+                }
+                FT_Vector point = o->ft.points[a];
+                char tag = o->ft.tags[a];
+                o->ft.points[a] = o->ft.points[b];
+                o->ft.tags[a] = o->ft.tags[b];
+                o->ft.points[b] = point;
+                o->ft.tags[b] = tag;
+            }
+            first = last + 1;
+        }
+    }
+    o->ft.n_points = (unsigned short)written;
+    o->ft.n_contours = (unsigned short)closed;
 success:
     FT_Stroker_Done(st);
     ++c->stats.live_outlines;
@@ -500,6 +576,11 @@ fail:
     FT_Stroker_Done(st);
     discard(c, o);
     return leave(c, s);
+}
+static Status stroke(Context *c, const Command *commands, size_t n, const Map *map,
+                     double tolerance, const os64_geometry_stroke_t *style, Outline **out)
+{
+    return stroke_with_caps(c, commands, n, NULL, 0, map, tolerance, style, out);
 }
 static Status info(Context *c, const Outline *o, os64_geometry_outline_info_t *out)
 {
@@ -690,7 +771,8 @@ static const os64_geometry_backend_t operations = {OS64_GEOMETRY_BACKEND_REVISIO
                                                    info,
                                                    release,
                                                    raster,
-                                                   bounds};
+                                                   bounds,
+                                                   stroke_with_caps};
 const os64_geometry_backend_t *os64_freetype_geometry_v1(void)
 {
     return &operations;
