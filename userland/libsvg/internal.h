@@ -45,6 +45,7 @@ void *svg_grow(Context *, void *, size_t *, size_t count, size_t size, size_t li
 bool svg_map_valid(const Map *);
 bool svg_point_valid(Point);
 Status svg_parse(Context *, svg_string_t, svg_path_t **, svg_parse_result_t *);
+Status svg_make_shape(Context *, const svg_shape_t *, svg_path_t **, svg_parse_result_t *);
 void svg_free_path(Context *, svg_path_t *);
 Status svg_lower(Context *, const svg_path_t *, const Map *, double, svg_geometry_t **);
 void svg_free_geometry(Context *, svg_geometry_t *);

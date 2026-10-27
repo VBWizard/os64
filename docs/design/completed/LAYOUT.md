@@ -206,7 +206,7 @@ so a cascade slots in above this struct with no field renamed:
 
 | Field | Values | Inherited |
 |---|---|---|
-| `display` | inline, block, list-item, inline-block (form controls, `meter`, `progress`, `marquee`), table, table-caption, table-row-group, table-header-group, table-footer-group, table-row, table-cell, table-column-group, table-column, contents (`slot`, and an SVG or MathML element, whose HTML descendants still render), none | no |
+| `display` | inline, block, list-item, inline-block (form controls, `meter`, `progress`, `marquee`), table, table-caption, table-row-group, table-header-group, table-footer-group, table-row, table-cell, table-column-group, table-column, contents (`slot` and foreign content without an enabled replaced SVG viewport), none | no |
 | `family` | a list of names as the page wrote them (slices of the attribute, never copied), ending in a generic: serif, sans, mono | yes |
 | `font_weight`, `font_style`, `font_size` | 1..1000 (`bolder` and `lighter` by CSS Fonts' table); normal or italic; 26.6 px | yes |
 | `color`, `background` | XRGB; background may be absent (transparent) | color yes, background no |
@@ -329,9 +329,11 @@ CLOSING EDGES of an inline box in its container's item sequence;
 controls still belong to libpage's model, which is what makes a hidden
 field submit). `template` contents are the fragment branch and are never
 reached; comments make nothing; `noscript` is shown (we run no script).
-Foreign elements (SVG, MathML) are `contents`: their HTML descendants are
+Foreign elements normally use `contents`: their HTML descendants are
 walked and their own text is not drawn, `wend`'s rule — a formula's
-tokens in reading order would say something the page does not. A closed
+tokens in reading order would say something the page does not. A face that
+sets `flow_env_t.svg` instead gives outer SVG roots replaced viewports,
+whose subtrees are painted by the face's SVG adapter (SVG_YONDER.md). A closed
 `details` shows its first `summary` and nothing else, text included.
 
 **The item sequence.** A block container whose content is inline holds,
@@ -1057,7 +1059,7 @@ dump (F2's rule: fixed expected geometry, never a self-consistency test):
 | Dotted underlines (`abbr[title]`) | drawn as a plain underline; the line's style is a cascade property | the cascade |
 | `iframe` content | a document inside a document is a second fetch and a second tree; drawn as a link to its `src`, `wend`'s frame rule | a page whose meaning is in the frame |
 | `object`/`embed`/`video`/`audio`/`canvas` | nothing plays or scripts them; fallback content is shown | media, after JS |
-| SVG drawing | a renderer of its own | the first inline SVG worth seeing |
+| SVG beyond the inline path/group/basic-shape subset | Yonder supplies its own renderer for enabled replaced SVG viewports; other faces keep foreign-content fallback | remaining SVG profile work; SVG_YONDER.md |
 
 ## Review tier
 

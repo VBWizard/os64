@@ -5517,6 +5517,102 @@ static uint32_t *stand_in_shot(void) {
     yonder_scratch_free(g.paint_scratch); g.paint_scratch=NULL;
     return screen.surf.pixels;
 }
+static void svg_window_cases(void)
+{
+    probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
+        "<svg width=64 height=64 viewBox='0 0 64 64' opacity='.5'>"
+        "<path fill=red d='M0 0H48V48H0Z'/><path fill=red d='M16 16H64V64H16Z'/></svg>",false);
+    uint32_t *px=stand_in_shot();
+    uint32_t edge=px[8*800+8]&0xffffffu,overlap=px[24*800+24]&0xffffffu;
+    check(edge==overlap && (edge>>16)==255 && (edge&255)>=126 && (edge&255)<=129,
+        "SVG window: root opacity applies once after children overlap");
+    check(g.page.svg_bytes==0 && g.page.svg_peak>0,"SVG window: render/destination ledger returns to zero");
+    os64_free(px);probe_drop();
+
+    const struct { const char *wrapper, *root, *child; unsigned channel; } opacity_cases[]={
+        {"opacity:calc(.5)","","",128},
+        {"","opacity:calc(.5)","",128},
+        {"opacity:calc(.5)","opacity:inherit","",191},
+        {"","opacity:.5","opacity:inherit",191},
+        {"","opacity:.5","opacity:unset",128},
+        {"","opacity:.5","opacity:initial",128},
+        {"","opacity:.5","opacity:50%",191},
+    };
+    for(size_t i=0;i<sizeof(opacity_cases)/sizeof(opacity_cases[0]);++i) {
+        char html[640];
+        snprintf(html,sizeof(html),"<!doctype html><style>body{margin:0;background:white}"
+            "svg{display:block}</style><div style='%s'><svg width=64 height=64 style='%s'>"
+            "<g style='%s'><path fill=red d='M0 0H32V32H0Z'/></g></svg></div>",
+            opacity_cases[i].wrapper,opacity_cases[i].root,opacity_cases[i].child);
+        probe_page(html,false);px=stand_in_shot();
+        uint32_t actual=px[8*800+8]&0xffffffu;unsigned channel=opacity_cases[i].channel;
+        check((actual>>16)==255 && (actual&255)>=channel-1 && (actual&255)<=channel+1 &&
+            ((actual>>8)&255)==(actual&255),
+            "SVG window: flow owns wrapper/root opacity; descendants inherit only explicitly");
+        os64_free(px);probe_drop();
+    }
+
+    probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block;visibility:hidden}</style>"
+        "<svg width=64 height=64><path style='visibility:visible' fill='#2091de' d='M8 8H40V40H8Z'/></svg>",false);
+    px=stand_in_shot();check((px[16*800+16]&0xffffffu)==0x2091de,
+        "SVG window: visible descendant paints through hidden root visibility");
+    os64_free(px);probe_drop();
+
+    probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block;transform:translate(20px,0px)}</style>"
+        "<svg width=64 height=64 transform='translate(80 0)'><path fill='#2091de' d='M0 0H16V16H0Z'/></svg>",false);
+    px=stand_in_shot();check((px[8*800+28]&0xffffffu)==0x2091de &&
+        (px[8*800+8]&0xffffffu)==0xffffff && (px[8*800+108]&0xffffffu)==0xffffff,
+        "SVG window: CSS root transform replaces attribute and paints once");
+    os64_free(px);probe_drop();
+
+    const char *root_transforms[]={"translateX(20px)","scaleX(2)","translate(50%,0px)"};
+    const int inside[]={28,24,40},outside[]={8,40,8};
+    for (size_t i=0;i<sizeof(root_transforms)/sizeof(root_transforms[0]);++i) {
+        char html[512];
+        snprintf(html,sizeof(html),"<!doctype html><style>body{margin:0;background:white}"
+            "svg{display:block;transform-origin:0px 0px;transform:%s}</style>"
+            "<svg width=64 height=64 transform='translate(80 0)'>"
+            "<path fill='#2091de' d='M0 0H16V16H0Z'/></svg>",root_transforms[i]);
+        probe_page(html,false);px=stand_in_shot();
+        check((px[8*800+inside[i]]&0xffffffu)==0x2091de &&
+            (px[8*800+outside[i]]&0xffffffu)==0xffffff,
+            "SVG window: flow's root CSS transform needs no descendant-parser support");
+        os64_free(px);probe_drop();
+    }
+    probe_page("<!doctype html><style>body{margin:0;background:white}"
+        "svg{display:block;transform:translate(20px,0px)}</style>"
+        "<svg width=64 height=64><g style='transform:inherit'>"
+        "<path fill='#2091de' d='M0 0H16V16H0Z'/></g></svg>",false);
+    px=stand_in_shot();check((px[8*800+48]&0xffffffu)==0x2091de &&
+        (px[8*800+28]&0xffffffu)==0xffffff,
+        "SVG window: a descendant explicitly inherits the root CSS transform");
+    os64_free(px);probe_drop();
+
+    probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block;color:#2091de}</style>"
+        "<svg id=art width=64 height=64><path fill=currentColor d='M0 0H32V32H0Z'/></svg>"
+        "<script>document.getElementById('art').style.color='#e87925'</script>",true);
+    px=stand_in_shot();check((px[8*800+8]&0xffffffu)==0x2091de,"SVG window: initial currentColor paints blue");
+    os64_free(px);while(yonder_scripts_pending(g.page.scripts))script_turn();
+    px=stand_in_shot();check((px[8*800+8]&0xffffffu)==0xe87925,"SVG window: script mutation rebuilds and paints orange");
+    os64_free(px);probe_drop();
+
+    probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}"
+        "rect{fill:#2091de;width:20px;height:20px}</style><svg width=120 height=64>"
+        "<rect id=shape x=8 y=8 width=80 height=40/></svg>"
+        "<script>var s=document.getElementById('shape');s.style.width='60px';"
+        "s.setAttribute('x','16');s.style.fill='#e87925';</script>",true);
+    px=stand_in_shot();
+    check((px[16*800+16]&0xffffffu)==0x2091de && (px[16*800+48]&0xffffffu)==0xffffff,
+        "SVG shapes: CSS geometry overrides presentation dimensions in the window");
+    os64_free(px);while(yonder_scripts_pending(g.page.scripts))script_turn();
+    px=stand_in_shot();
+    check((px[16*800+48]&0xffffffu)==0xe87925 && (px[16*800+10]&0xffffffu)==0xffffff,
+        "SVG shapes: script changes geometry and paint through the live cascade");
+    check(g.page.svg_bytes==0,"SVG shapes: mutation leaves no SVG allocation live");
+    os64_free(px);probe_drop();
+
+}
+
 /* THE STAND-INS' OWN PAINTING (yonder.c's pane_stand_in, stand_in_label,
  * glass_stand_in), which the yonder host's recorder stands in for: what a
  * label says, that a canvas has no paper, and what laying labels out costs. */
@@ -10114,6 +10210,7 @@ int main(void)
     interface_font_cases();
     inserted_frame_cases();
     stand_in_paint_cases();
+    svg_window_cases();
     covered_link_cases();
     classic_downloaded_cases();
     hover_batch_cases();

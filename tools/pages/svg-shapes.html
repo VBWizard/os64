@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>SVG: taking shape</title>
+<style>
+body { margin:24px; background:#eef3f9; color:#182b45; font:16px sans-serif; }
+h1 { margin-bottom:8px; } h2 { font-size:20px; margin:0 0 10px; }
+p { max-width:720px; line-height:1.5; }
+.card { display:inline-block; vertical-align:top; width:300px; margin:0 16px 20px 0; padding:18px; background:white; border:1px solid #b8c9dd; border-radius:12px; }
+.card svg { display:block; width:280px; height:168px; background:#f5f8fc; }
+#changing { width:68px; height:42px; rx:8px; fill:#2091de; }
+button { padding:10px 18px; font:inherit; }
+</style></head><body>
+<h1>SVG: taking shape</h1>
+<p>Rectangles, circles, ellipses, lines and polygons, drawn live by Yonder.
+Try page zoom, scrolling and dark pages. The captions explain what each picture should do.</p>
+<div class="card"><h2>1. A home for our pixels</h2>
+<svg viewBox="0 0 280 168">
+<rect width="280" height="168" fill="#d8ebfb"/>
+<circle cx="232" cy="34" r="21" fill="#f4b64c"/>
+<ellipse cx="76" cy="38" rx="43" ry="13" fill="white"/>
+<rect y="132" width="280" height="36" fill="#b9d9c1"/>
+<rect x="80" y="75" width="120" height="77" fill="#e8b38d"/>
+<polygon points="64,78 140,22 216,78" fill="#376d78"/>
+<rect x="127" y="105" width="27" height="47" rx="4" fill="#795444"/>
+<rect x="94" y="95" width="22" height="22" rx="2" fill="#e9f6ff"/>
+<rect x="165" y="95" width="22" height="22" rx="2" fill="#e9f6ff"/>
+<line x1="105" y1="95" x2="105" y2="117" stroke="#376d78" stroke-width="2"/>
+<line x1="176" y1="95" x2="176" y2="117" stroke="#376d78" stroke-width="2"/>
+<circle cx="147" cy="130" r="2" fill="#f4b64c"/>
+</svg><p>A house, amber sun and white cloud. Painted colors stay fixed when the surrounding page changes theme.</p></div>
+<div class="card"><h2>2. Corners have limits</h2>
+<svg viewBox="0 0 140 84">
+<rect x="8" y="10" width="54" height="28" rx="7" fill="#2091de"/>
+<rect x="78" y="10" width="54" height="28" rx="999" fill="#e87925"/>
+<rect x="8" y="48" width="54" height="28" rx="12" ry="3" fill="#376d78"/>
+<rect x="78" y="48" width="54" height="28" rx="12" ry="0" fill="#b577ad"/>
+</svg><p>Rounded blue, oval orange, shallow green corners and square purple corners. A zero radius on either axis makes square corners.</p></div>
+<div class="card"><h2>3. Percentages find their place</h2>
+<svg viewBox="0 0 140 84">
+<rect x="10%" y="15%" width="80%" height="70%" rx="5%" fill="#d8ebfb"/>
+<ellipse cx="50%" cy="50%" rx="30%" ry="20%" fill="#2091de"/>
+<circle cx="50%" cy="50%" r="10%" fill="#f4b64c"/>
+</svg><p>A centered blue ellipse and amber circle. Their proportions remain stable as you zoom.</p></div>
+<div class="card"><h2>4. Open and closed</h2>
+<svg viewBox="0 0 140 84" fill="#b9d9e6" stroke="#376d78" stroke-width="4" stroke-linejoin="round">
+<polyline points="12,64 35,16 58,64"/>
+<polygon points="82,64 105,16 128,64"/>
+</svg><p>Both triangles are filled. The left outline stays open at the bottom; the right outline closes.</p></div>
+<div class="card"><h2>5. Lines keep their stroke</h2>
+<svg viewBox="0 0 140 84" fill="none" stroke-width="8">
+<line x1="16" y1="18" x2="124" y2="18" stroke="#2091de" stroke-linecap="butt"/>
+<line x1="16" y1="42" x2="124" y2="42" stroke="#e87925" stroke-linecap="round"/>
+<g transform="translate(16 66) scale(4 1)"><line x2="27" stroke="#376d78" stroke-linecap="round"/></g>
+</svg><p>Flat blue ends, round orange ends and wide elliptical green ends. The green line is stretched horizontally.</p></div>
+<div class="card"><h2>6. CSS changes the shape</h2>
+<svg viewBox="0 0 140 84"><rect id="changing" x="12" y="21" width="116" height="42" fill="red"/></svg>
+<p>The stylesheet makes this blue rectangle narrower than its attributes request. Enable scripts and press the button to toggle its size and color.</p>
+<button id="reshape">Change the shape</button></div>
+<p id="result">Ready. The rectangle starts narrow and blue.</p>
+<script>
+var expanded = false;
+document.getElementById('reshape').addEventListener('click', function () {
+    expanded = !expanded;
+    var shape = document.getElementById('changing');
+    shape.style.width = expanded ? '116px' : '68px';
+    shape.style.rx = expanded ? '21px' : '8px';
+    shape.style.fill = expanded ? '#e87925' : '#2091de';
+    document.getElementById('result').textContent = expanded ?
+        'The rectangle is now wide and orange. Press again to return to blue.' :
+        'Back to narrow and blue.';
+});
+</script></body></html>

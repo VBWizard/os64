@@ -2074,7 +2074,10 @@ static void ellipsis(const Painter *p, const flow_box_t *line)
 // moves — and every verb is handed the view, so the view is narrowed.
 static bool box_painter(const Painter *outer, const flow_box_t *b, Painter *out)
 {
-    if (b->style->visibility != FLOW_VISIBLE || outer->groups->hidden != 0)
+    // SVG visibility is inherited inside the viewport; a child may explicitly
+    // become visible even when the outer SVG's own frame is hidden.
+    if ((b->style->visibility != FLOW_VISIBLE && !(b->replaced && flow_svg_root(b->node))) ||
+        outer->groups->hidden != 0)
         return false;
     Painter clipped = *outer;
     clipped.off = flow_box_doc_offset(b, outer->scroll);
@@ -2103,7 +2106,7 @@ static bool box_painter(const Painter *outer, const flow_box_t *b, Painter *out)
 static void paint_outline(void *ctx, const flow_box_t *b)
 {
     Painter p;
-    if (box_painter(ctx, b, &p) && !past_ellipsis(&p, b))
+    if (b->style->visibility == FLOW_VISIBLE && box_painter(ctx, b, &p) && !past_ellipsis(&p, b))
         outline(&p, b);
 }
 
@@ -2152,10 +2155,11 @@ static void paint_box(void *ctx, const flow_box_t *b)
         return;
     case FLOW_BOX_ATOMIC:
     case FLOW_BOX_REPLACED:
-        frame(p, b);
+        if (b->style->visibility == FLOW_VISIBLE)
+            frame(p, b);
         if (b->control >= 0)
             p->v->control(p->v->ctx, b, on_page(p, content_of(b)), on_page(p, p->view));
-        else if (is_picture(b))
+        else if (is_picture(b) || (b->replaced && flow_svg_root(b->node)))
             p->v->image(p->v->ctx, b, on_page(p, content_of(b)), on_page(p, p->view));
         else if ((is_frame(b) || is_canvas(b)) && p->v->stand_in != NULL)
             p->v->stand_in(p->v->ctx, b, on_page(p, content_of(b)), on_page(p, p->view),

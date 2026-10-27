@@ -138,7 +138,7 @@ static Status prepare_outlines(Render *r, const svg_scene_t *scene, Item *items)
         const svg_scene_item_t *s = &scene->items[i];
         Item *p = &items[i];
         p->active = s->style.opacity > 0 && (s->parent == SIZE_MAX || items[s->parent].active);
-        if (!p->active || s->kind != SVG_NODE_PATH || !s->style.visible || !s->path->count)
+        if (!p->active || (s->kind != SVG_NODE_PATH && s->kind != SVG_NODE_SHAPE) || !s->style.visible || !s->path->count)
             continue;
         p->map = compose(r->options->viewport_to_device, s->user_to_viewport);
         if (!svg_map_valid(&p->map))

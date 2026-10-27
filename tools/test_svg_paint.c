@@ -131,7 +131,7 @@ static svg_context_t *create(Ledger *l)
 }
 static svg_scene_t *prepare(svg_context_t *c, Document *d)
 {
-    svg_provider_t p = {d, acquire, unpin, node, style};
+    svg_provider_t p = {d, acquire, unpin, node, style, NULL};
     os64_geometry_map_t map = {1, 0, 0, 1, 0, 0};
     svg_scene_t *scene = NULL;
     CHECK(svg_scene_prepare(c, &p, SVG_MODE_INLINE, &map, &scene) == SVG_OK);

@@ -805,6 +805,9 @@ static bool css_type(const os64_html_node_t *n)
 // and os64_page_sheets_in list by.
 static bool sheet_wanted(const os64_html_node_t *n)
 {
+    if (n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_SVG &&
+        os64_streq(n->name, "style"))
+        return css_type(n);
     if (n->kind != OS64_HTML_ELEMENT || n->ns != OS64_HTML_NS_HTML ||
         (!p_is(n, OS64_HTML_TAG_STYLE) && !p_is(n, OS64_HTML_TAG_LINK)) || !css_type(n))
         return false;
@@ -1021,7 +1024,6 @@ static void collect_node(os64_page_t *page, const os64_html_node_t *n, bool off)
             add_image(page, n);
         if (takes_background(n))
             add_background(page, n);
-        add_sheet(page, n);
         // A `meta` inside `noscript` counts, and that is the case that
         // matters: with scripting off those contents ARE the document's,
         // which is the whole reason the element exists.
@@ -1031,6 +1033,7 @@ static void collect_node(os64_page_t *page, const os64_html_node_t *n, bool off)
         if (element_kind(n, &element))
             add_control(page, n, element, off);
     }
+    add_sheet(page, n);
     // `template` contents are a separate fragment and belong to no form, so
     // the walk never follows them: they hang off their own pointer rather
     // than off first_child, which is what makes that free.
