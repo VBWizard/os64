@@ -183,6 +183,24 @@ static Status prepare_outlines(Render *r, const svg_scene_t *scene, Item *items)
             return SVG_LIMIT;
         p->clips[0] = s->style.viewport.active && s->style.viewport.clip;
         p->clips[1] = s->clip.active;
+        p->clip_map[1] = s->clip.transform;
+        if (p->clips[1] && s->clip.object_bbox) {
+            svg_bounds_t box;
+            Status status = svg_object_bounds(r->c, scene, i, &box);
+            if (status != SVG_OK)
+                return status;
+            /* SVG object-box effects are ignored for zero geometric extent,
+             * even when a stroke gives that geometry visible thickness. */
+            if (box.empty || box.min_x == box.max_x || box.min_y == box.max_y) {
+                p->clips[1] = false;
+            } else {
+                Map units = {box.max_x - box.min_x, 0, 0, box.max_y - box.min_y,
+                             box.min_x, box.min_y};
+                p->clip_map[1] = compose(s->clip.outer_transform, compose(units, s->clip.transform));
+                if (!svg_map_valid(&units) || !svg_map_valid(&p->clip_map[1]))
+                    return SVG_LIMIT;
+            }
+        }
         if (paints > (UINT64_MAX - 1) / 3 - 3)
             return SVG_LIMIT;
         paints += p->clips[0] + p->clips[1];
@@ -250,7 +268,7 @@ static Status prepare_outlines(Render *r, const svg_scene_t *scene, Item *items)
             Map base = p->map;
             if (s->style.viewport.active)
                 base = compose(base, s->style.viewport.content_transform);
-            p->clip_map[1] = compose(base, s->clip.transform);
+            p->clip_map[1] = compose(base, p->clip_map[1]);
             if (!svg_map_valid(&p->clip_map[1]))
                 return SVG_LIMIT;
             p->clip_even_odd[1] = s->clip.even_odd;
