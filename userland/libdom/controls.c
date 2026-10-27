@@ -29,8 +29,8 @@ enum { K_STRING, K_URL, K_FORM_ACTION, K_BOOLEAN, K_ENUM, K_LIMITED_LONG, K_UNSI
 
 static const char *const kEnctypes[] = {"application/x-www-form-urlencoded", "multipart/form-data", "text/plain",
                                         NULL};
-static const char *const kInputMethods[] = {"get", "post", NULL};
-static const char *const kButtonMethods[] = {"get", "post", "dialog", NULL};
+/* formmethod's keywords are a form's method's, on an input as on a button. */
+static const char *const kMethods[] = {"get", "post", "dialog", NULL};
 
 typedef struct {
     const char *property, *attribute;
@@ -53,8 +53,7 @@ static const DReflection kReflections[] = {
     {"disabled", "disabled", K_BOOLEAN, IN | TA | SE | BU, NULL, NULL, NULL, 0},
     {"formAction", "formaction", K_FORM_ACTION, IN | BU, NULL, NULL, NULL, 0},
     {"formEnctype", "formenctype", K_ENUM, IN | BU, kEnctypes, "", "application/x-www-form-urlencoded", 0},
-    {"formMethod", "formmethod", K_ENUM, IN, kInputMethods, "", "get", 0},
-    {"formMethod", "formmethod", K_ENUM, BU, kButtonMethods, "", "get", 0},
+    {"formMethod", "formmethod", K_ENUM, IN | BU, kMethods, "", "get", 0},
     {"formNoValidate", "formnovalidate", K_BOOLEAN, IN | BU, NULL, NULL, NULL, 0},
     {"formTarget", "formtarget", K_STRING, IN | BU, NULL, NULL, NULL, 0},
     {"max", "max", K_STRING, IN, NULL, NULL, NULL, 0},
@@ -336,6 +335,8 @@ const os64_html_node_t *d_label_control(const os64_html_node_t *label)
 {
     if (!html(label, OS64_HTML_TAG_LABEL)) return NULL;
     const os64_html_attr_t *named = os64_html_attr(label, "for");
+    /* No ID is empty, so an empty `for` names no control. */
+    if (named != NULL && named->value[0] == '\0') return NULL;
     const os64_html_node_t *root = label;
     if (named != NULL) {
         while (root->parent != NULL) root = root->parent;

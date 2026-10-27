@@ -249,7 +249,8 @@ static void dom_modern_cases(void)
         /* enumerated */
         "assert(i.formMethod===''&&i.formEnctype==='','missing is empty');"
         "i.setAttribute('formmethod','POST');assert(i.formMethod==='post','canonical');"
-        "i.setAttribute('formmethod','dialog');assert(i.formMethod==='get','an input has no dialog');"
+        "i.setAttribute('formmethod','Dialog');assert(i.formMethod==='dialog','an input has dialog too');"
+        "i.setAttribute('formmethod','put');assert(i.formMethod==='get','an unknown one is get');"
         "b.setAttribute('formmethod','DiAlOg');assert(b.formMethod==='dialog','a button has');"
         "i.formEnctype='nonsense';assert(i.getAttribute('formenctype')==='nonsense'&&"
         "i.formEnctype==='application/x-www-form-urlencoded','invalid');"
@@ -320,6 +321,8 @@ static void dom_modern_cases(void)
         "var d=document.createElement('div');d.id='twice';var w=document.createElement('input');w.id='twice';"
         "var lf=document.createElement('label');lf.setAttribute('for','twice');document.body.append(lf,d,w);"
         "assert(w.labels.length===0,'for names the first element with the ID, which is no control');"
+        "var ei=document.createElement('input');ei.setAttribute('id','');var el=document.createElement('label');"
+        "el.setAttribute('for','');document.body.append(el,ei);assert(ei.labels.length===0,'an empty for names nothing');"
         /* the form owner's rules: no ID is empty, and a form attribute is read only in a document */
         "var ef=document.createElement('form');ef.id='';document.body.appendChild(ef);"
         "var eb=document.createElement('button');eb.setAttribute('form','');ef.appendChild(eb);"

@@ -4007,6 +4007,14 @@ form's collections, are P3b's.
   clear the bar, and its change listener reads `checked=true
   indeterminate=false`.
 
+**Codex, round 1**: three findings. Fixed: an input's `formMethod` did not
+know `dialog`, which `formmethod` shares with a form's `method` on every
+submit button (WPT's table for input lists only get and post, so the
+oracle never asked); and an empty `for` matched an empty `id`, where no ID
+is empty. Booked: URL reflections resolve against the window's document,
+not the element's own, which mixin.c's reflections share (DEBTS.md). Two
+mutants, each caught: the group is 34.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.
