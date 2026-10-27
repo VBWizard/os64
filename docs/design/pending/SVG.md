@@ -33,6 +33,7 @@ the [Yonder connection](SVG_YONDER.md) paints a bounded inline path/group/basic-
 [SVG_STROKES.md](SVG_STROKES.md) adds dash patterns, offsets and exact zero-length caps.
 [SVG_INSTANCES.md](SVG_INSTANCES.md) adds bounded fragment reuse with instance ancestry.
 [SVG_VIEWPORTS.md](SVG_VIEWPORTS.md) adds symbol/nested viewport sizing and rectangular clips.
+[SVG_CLIPS.md](SVG_CLIPS.md) adds one-silhouette clip resources and ancestor intersections.
 This design does not establish
 performance or compatibility percentages.
 

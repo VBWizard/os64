@@ -14,9 +14,10 @@ typedef struct {
     bool active, paint[2];
     Map map;
     Rect box, ink[2];
-    os64_geometry_outline_t *outline[2], *clip;
-    Rect clip_box;
-    bool clips;
+    os64_geometry_outline_t *outline[2], *clip[2];
+    Map clip_map[2];
+    Rect clip_box[2];
+    bool clips[2], clip_even_odd[2];
 } Item;
 typedef struct {
     size_t index;
@@ -180,10 +181,11 @@ static Status prepare_outlines(Render *r, const svg_scene_t *scene, Item *items)
         p->map = compose(r->options->viewport_to_device, s->user_to_viewport);
         if (!svg_map_valid(&p->map))
             return SVG_LIMIT;
-        p->clips = s->style.viewport.active && s->style.viewport.clip;
+        p->clips[0] = s->style.viewport.active && s->style.viewport.clip;
+        p->clips[1] = s->clip.active;
         if (paints > (UINT64_MAX - 1) / 3 - 3)
             return SVG_LIMIT;
-        paints += p->clips;
+        paints += p->clips[0] + p->clips[1];
         if ((s->kind != SVG_NODE_PATH && s->kind != SVG_NODE_SHAPE) || !s->style.visible ||
             !s->path->count)
             continue;
@@ -198,7 +200,7 @@ static Status prepare_outlines(Render *r, const svg_scene_t *scene, Item *items)
     if (!paints)
         return SVG_OK;
     /* The backend's work cap is per call. Reserve an equal quota for create
-     * plus build/bounds/raster for each paint or viewport mask, before work starts.
+     * plus build/bounds/raster for each paint or clip mask, before work starts.
      * Calls may leave quota unused; they cannot collectively exceed the render
      * budget. This deliberately conservative division can refuse uneven jobs. */
     r->quota = r->options->max_geometry_work / (1 + 3 * (uint64_t)paints);
@@ -220,7 +222,8 @@ static Status prepare_outlines(Render *r, const svg_scene_t *scene, Item *items)
             return r->c->why;
         Item *p = &items[i];
         const svg_scene_item_t *s = &scene->items[i];
-        if (p->clips) {
+        if (p->clips[0]) {
+            p->clip_map[0] = p->map;
             double w = s->style.viewport.width, h = s->style.viewport.height;
             os64_geometry_command_t rectangle[] = {{OS64_GEOMETRY_MOVE, {{0, 0}}},
                                                    {OS64_GEOMETRY_LINE, {{w, 0}}},
@@ -228,18 +231,46 @@ static Status prepare_outlines(Render *r, const svg_scene_t *scene, Item *items)
                                                    {OS64_GEOMETRY_LINE, {{0, h}}},
                                                    {OS64_GEOMETRY_CLOSE, {{0, 0}}}};
             status = operation(r, r->backend->path(r->engine, rectangle, 5, &p->map,
-                                                   r->options->quantization_error, &p->clip));
+                                                   r->options->quantization_error, &p->clip[0]));
             if (status != SVG_OK)
                 return status;
-            if (!p->clip)
+            if (!p->clip[0])
                 return SVG_ENGINE_ERROR;
             os64_geometry_bounds_t bounds;
             status =
-                operation(r, r->backend->bounds(r->engine, p->clip, &p->map, r->target->origin_x,
+                operation(r, r->backend->bounds(r->engine, p->clip[0], &p->map, r->target->origin_x,
                                                 r->target->origin_y, &bounds));
             if (status != SVG_OK)
                 return status;
-            status = clip_bounds(r, bounds, &p->clip_box);
+            status = clip_bounds(r, bounds, &p->clip_box[0]);
+            if (status != SVG_OK)
+                return status;
+        }
+        if (p->clips[1] && s->clip.path->count) {
+            Map base = p->map;
+            if (s->style.viewport.active)
+                base = compose(base, s->style.viewport.content_transform);
+            p->clip_map[1] = compose(base, s->clip.transform);
+            if (!svg_map_valid(&p->clip_map[1]))
+                return SVG_LIMIT;
+            p->clip_even_odd[1] = s->clip.even_odd;
+            svg_geometry_t *g = NULL;
+            status = svg_lower(r->c, s->clip.path, &p->clip_map[1], r->options->arc_error, &g);
+            if (status == SVG_OK)
+                status =
+                    operation(r, r->backend->path(r->engine, g->commands, g->count, &p->clip_map[1],
+                                                  r->options->quantization_error, &p->clip[1]));
+            svg_free_geometry(r->c, g);
+            if (status != SVG_OK)
+                return status;
+            if (!p->clip[1])
+                return SVG_ENGINE_ERROR;
+            os64_geometry_bounds_t bounds;
+            status =
+                operation(r, r->backend->bounds(r->engine, p->clip[1], &p->clip_map[1],
+                                                r->target->origin_x, r->target->origin_y, &bounds));
+            if (status == SVG_OK)
+                status = clip_bounds(r, bounds, &p->clip_box[1]);
             if (status != SVG_OK)
                 return status;
         }
@@ -283,8 +314,9 @@ static Status prepare_outlines(Render *r, const svg_scene_t *scene, Item *items)
     for (size_t i = scene->count; i-- > 0;) {
         if (!svg_spend(r->c, 1))
             return r->c->why;
-        if (items[i].clips)
-            items[i].box = intersect(items[i].box, items[i].clip_box);
+        for (unsigned mask = 0; mask < 2; ++mask)
+            if (items[i].clips[mask])
+                items[i].box = intersect(items[i].box, items[i].clip_box[mask]);
         size_t parent = scene->items[i].parent;
         if (parent != SIZE_MAX)
             items[parent].box = unite(items[parent].box, items[i].box);
@@ -368,10 +400,10 @@ static Status composite(Render *r, Layer *dest, Layer *source, uint16_t opacity)
     }
     return SVG_OK;
 }
-static Status clip_layer(Render *r, const Item *p, Layer *layer)
+static Status clip_one(Render *r, const Item *p, unsigned mask_index, Layer *layer)
 {
     Rect b = layer->box;
-    if (!p->clips || empty(b))
+    if (!p->clips[mask_index] || empty(b))
         return SVG_OK;
     uint8_t *coverage = svg_alloc(r->c, area(b));
     if (!coverage)
@@ -382,12 +414,14 @@ static Status clip_layer(Render *r, const Item *p, Layer *layer)
                                      .height = b.y1 - b.y0,
                                      .stride = b.x1 - b.x0,
                                      .capacity = area(b),
-                                     .pixels = coverage};
+                                     .pixels = coverage,
+                                     .even_odd = p->clip_even_odd[mask_index]};
     Status status = SVG_OK;
     if (!raster_work(r, area(b)))
         status = r->c->why;
     if (status == SVG_OK)
-        status = operation(r, r->backend->raster(r->engine, p->clip, &p->map, &target));
+        status = operation(r, r->backend->raster(r->engine, p->clip[mask_index],
+                                                 &p->clip_map[mask_index], &target));
     if (status == SVG_OK)
         for (uint32_t y = b.y0; y < b.y1; ++y) {
             if (!raster_work(r, b.x1 - b.x0)) {
@@ -404,6 +438,11 @@ static Status clip_layer(Render *r, const Item *p, Layer *layer)
         }
     svg_free(r->c, coverage);
     return status;
+}
+static Status clip_layer(Render *r, const Item *p, Layer *layer)
+{
+    Status status = clip_one(r, p, 0, layer);
+    return status == SVG_OK ? clip_one(r, p, 1, layer) : status;
 }
 static Status paint_path(Render *r, const svg_scene_item_t *s, Item *p, Layer *surface)
 {
@@ -592,7 +631,8 @@ Status svg_scene_render(Context *c, const svg_scene_t *scene, const svg_render_o
                 Frame *frame = &frames[depth];
                 *frame =
                     (Frame){.index = i, .surface = surface, .opacity = alpha(s->style.opacity)};
-                if ((s->style.opacity < 1 || items[i].clips) && !empty(items[i].box)) {
+                if ((s->style.opacity < 1 || items[i].clips[0] || items[i].clips[1]) &&
+                    !empty(items[i].box)) {
                     status = new_layer(&r, items[i].box, &frame->layer);
                     if (status != SVG_OK)
                         goto done;
@@ -602,13 +642,15 @@ Status svg_scene_render(Context *c, const svg_scene_t *scene, const svg_render_o
                 ++depth;
             } else if (!empty(items[i].box)) {
                 Layer element = {0};
-                bool isolate = s->style.opacity < 1;
+                bool isolate = s->style.opacity < 1 || items[i].clips[1];
                 if (isolate) {
                     status = new_layer(&r, items[i].box, &element);
                     if (status != SVG_OK)
                         goto done;
                 }
                 status = paint_path(&r, s, &items[i], isolate ? &element : surface);
+                if (status == SVG_OK && isolate)
+                    status = clip_layer(&r, &items[i], &element);
                 if (status == SVG_OK && isolate)
                     status = composite(&r, surface, &element, alpha(s->style.opacity));
                 free_layer(&r, &element);
@@ -629,8 +671,10 @@ done:
                 if (items[i].outline[part] &&
                     r.backend->release(r.engine, items[i].outline[part]) != OS64_GEOMETRY_OK)
                     status = SVG_ENGINE_ERROR;
-            if (items[i].clip && r.backend->release(r.engine, items[i].clip) != OS64_GEOMETRY_OK)
-                status = SVG_ENGINE_ERROR;
+            for (unsigned mask = 0; mask < 2; ++mask)
+                if (items[i].clip[mask] &&
+                    r.backend->release(r.engine, items[i].clip[mask]) != OS64_GEOMETRY_OK)
+                    status = SVG_ENGINE_ERROR;
         }
     if (r.engine && r.backend->destroy(r.engine) != OS64_GEOMETRY_OK)
         status = SVG_ENGINE_ERROR;

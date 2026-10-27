@@ -5635,6 +5635,23 @@ static void svg_window_cases(void)
     check(g.page.svg_bytes==0,"SVG viewports: resized symbol leaves no SVG allocation live");
     os64_free(px);probe_drop();
 
+    probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
+        "<svg width=128 height=64><clipPath id=aperture><rect id=window x=8 y=8 width=20 height='20'/></clipPath>"
+        "<rect width=128 height=64 fill='#2091de' clip-path='url(#aperture)'/></svg>"
+        "<svg width=128 height=64><rect width=128 height=64 fill='#338363' clip-path='url(#aperture)'/></svg>"
+        "<script>document.getElementById('window').setAttribute('width','40')</script>",true);
+    px=stand_in_shot();
+    check((px[16*800+24]&0xffffffu)==0x2091de && (px[80*800+24]&0xffffffu)==0x338363 &&
+        (px[16*800+40]&0xffffffu)==0xffffff && (px[80*800+40]&0xffffffu)==0xffffff,
+        "SVG clips: two roots share the initial clipping aperture");
+    os64_free(px);while(yonder_scripts_pending(g.page.scripts))script_turn();
+    px=stand_in_shot();
+    check((px[16*800+40]&0xffffffu)==0x2091de && (px[80*800+40]&0xffffffu)==0x338363,
+        "SVG clips: source geometry mutation repaints both clipped roots");
+    check(g.page.svg_bytes==0,"SVG clips: shared clip mutation leaves no SVG allocation live");
+    os64_free(px);probe_drop();
+
+
 }
 
 /* THE STAND-INS' OWN PAINTING (yonder.c's pane_stand_in, stand_in_label,

@@ -391,7 +391,7 @@ static svg_status_t provide_shape(void *user, void *snapshot, const svg_style_re
 }
 static svg_provider_t callbacks(Provider *p)
 {
-    return (svg_provider_t){p, acquire, unpin, node, style, NULL, NULL};
+    return (svg_provider_t){p, acquire, unpin, node, style, NULL, NULL, NULL};
 }
 static void scenes(void)
 {

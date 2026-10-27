@@ -2007,6 +2007,8 @@ static int32_t svg_attributes(garb_cascade_t *c, const os64_html_node_t *el, Dec
                                         "fill-opacity",
                                         "stroke-opacity",
                                         "fill-rule",
+                                        "clip-path",
+                                        "clip-rule",
                                         "stroke-width",
                                         "stroke-linecap",
                                         "stroke-linejoin",

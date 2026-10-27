@@ -84,7 +84,7 @@ def main():
     subprocess.run([cc, *common, *map(str, objects), '-o', str(binary)], check=True)
     inputs = {p for p, _ in entries}
     if args.yonder:
-        inputs.update([ROOT/'tools/test_yonder_host.c', ROOT/'tools/test_yonder_host.sh', ROOT/'tools/test_yonder_svg_use.inc', ROOT/'tools/test_yonder_svg_viewports.inc'])
+        inputs.update([ROOT/'tools/test_yonder_host.c', ROOT/'tools/test_yonder_host.sh', ROOT/'tools/test_yonder_svg_use.inc', ROOT/'tools/test_yonder_svg_viewports.inc', ROOT/'tools/test_yonder_svg_clips.inc'])
         for directory in ('abi/include', 'tools', 'userland/apps/yonder',
                           'userland/libflow', 'userland/libhtml', 'userland/libpage',
                           'userland/libgarb', 'userland/libfetch/include',

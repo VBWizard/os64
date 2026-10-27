@@ -59,7 +59,8 @@ normalizes to clipping on both axes. Explicit auto/scroll and a mixed
 clip/visible pair are refused: scrolling and an unbounded one-axis strip mask
 are outside this static profile.
 
-Symbol refX/refY, general clipPath/masks, relative/calc viewport dimensions,
+[Clip silhouettes](SVG_CLIPS.md) add one direct path/shape clip resource.
+Symbol refX/refY, broader clip combinations/masks, relative/calc viewport dimensions,
 per-instance custom-property substitution and the other resource/paint-server
 features remain in [DEBTS.md](../../../DEBTS.md). The existing same-document
 reference, base-URL, selector-matching, work and ownership boundaries apply.

@@ -92,7 +92,7 @@ typedef struct {
 } svg_dash_t;
 typedef struct {
     bool active, clip;
-    double width, height; /* Frame at (0,0), before the content transform. */
+    double width, height;                  /* Frame at (0,0), before the content transform. */
     os64_geometry_map_t content_transform; /* Applies to descendants, not the frame. */
 } svg_viewport_t;
 typedef struct {
@@ -111,6 +111,21 @@ typedef struct {
     svg_node_kind_t kind;
     uint64_t first_child, next_sibling; /* Zero means absent; identity is snapshot-local. */
 } svg_node_t;
+/* One resolved silhouette in the referencing element's user space. The provider
+ * retains borrowed strings until the next callback. An active empty path clips
+ * everything; inactive means no clip. Resource lookup stays with the provider. */
+typedef struct {
+    bool active, even_odd;
+    os64_geometry_map_t transform;
+    svg_node_kind_t kind; /* PATH or SHAPE when active. */
+    svg_string_t d;
+    svg_shape_t shape;
+} svg_clip_source_t;
+typedef struct {
+    bool active, even_odd;
+    os64_geometry_map_t transform;
+    const svg_path_t *path; /* Scene owned. */
+} svg_clip_t;
 typedef struct {
     uint64_t source, instance, parent_instance;
     const svg_style_t *parent_style; /* Borrowed for the callback; NULL at root. */
@@ -130,7 +145,7 @@ typedef struct {
      * The inherited input is the parent's complete style, not a directive to
      * inherit non-inherited properties such as opacity or transform. Return
      * UNSUPPORTED for active features this profile cannot express: vector
-     * effects, general clip paths, paint order, resources, non-sRGB interpolation or
+     * effects, unsupported clip combinations, paint order, paint servers, non-sRGB interpolation or
      * non-normal blending. Dash values survive until the next provider
      * callback; preparation copies them into scene ownership. Providers must
      * honor mode; IMAGE callbacks must not fetch. */
@@ -147,7 +162,13 @@ typedef struct {
      * remain provider errors. Source identity stays shared; style receives
      * fresh instance ancestry.
      * Resolve inside the pinned snapshot and honor the processing mode. */
-    svg_status_t (*reference)(void *, void *snapshot, const svg_style_request_t *, uint64_t *source);
+    svg_status_t (*reference)(void *, void *snapshot, const svg_style_request_t *,
+                              uint64_t *source);
+    /* Optional. Called after this element's ordinary geometry has been copied.
+     * Resolve a single silhouette, including its clip-rule and transforms.
+     * Resource styling uses resource ancestry, not the referencing element's
+     * inherited paint. Unsupported unions/units must be reported explicitly. */
+    svg_status_t (*clip)(void *, void *snapshot, const svg_style_request_t *, svg_clip_source_t *);
 } svg_provider_t;
 typedef struct {
     uint64_t source, instance;
@@ -157,6 +178,7 @@ typedef struct {
     os64_geometry_map_t user_to_viewport;
     const svg_path_t *path; /* Borrowed from scene, never release separately. */
     svg_parse_result_t path_result;
+    svg_clip_t clip;
 } svg_scene_item_t;
 
 typedef struct {
@@ -227,8 +249,8 @@ svg_render_options_t svg_render_options_default(const os64_geometry_backend_t *)
  * allocation counters exclude that backend subdivision). A conforming injected
  * backend table and its code must remain alive for this call. No callbacks into
  * the document/style provider occur during painting.
- * Rectangular viewport masks clip isolated container layers. Vector effects,
- * general clip paths, non-default paint order, resources and
+ * Viewport and silhouette masks clip isolated element/container layers. Vector effects,
+ * unsupported clip combinations, non-default paint order, paint servers and
  * non-sRGB interpolation/non-normal blending require the provider to report
  * UNSUPPORTED. Unsupported joins and nonzero strokes that collapse below
  * the backend working grid propagate explicitly. Exact zero-length caps are

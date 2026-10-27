@@ -4036,3 +4036,13 @@ rotated frames and nested opacity. `/tests/pages/svg-viewports.html` has six
 cards and a reversible width toggle. Native flattened-reference comparisons,
 mask allocation/cancellation sweeps and browser evidence cover this increment.
 General clip paths and the remaining static SVG debts stay open.
+
+
+### Slice 6b, clip silhouettes — 2026-10-27
+
+[SVG_CLIPS.md](SVG_CLIPS.md) adds fragment clip-path resources with one direct
+path/shape silhouette, clip-rule holes, transforms, ancestor intersections and
+shared source mutation. `/tests/pages/svg-clips.html` moves a circular opening
+across two drawings. Geometric unions, object-bounds/resource percentage
+coordinates and references inside clip resources remain explicit follow-ups.
+This is still inline work; the external SVG image route remains stage 6c.
