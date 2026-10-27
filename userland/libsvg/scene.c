@@ -273,6 +273,7 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
                 break;
             if (clip.active) {
                 if (!svg_map_valid(&clip.transform) ||
+                    (clip.object_bbox && !svg_map_valid(&clip.outer_transform)) ||
                     (clip.kind != SVG_NODE_PATH && clip.kind != SVG_NODE_SHAPE)) {
                     status = SVG_PROVIDER_ERROR;
                     break;
@@ -285,7 +286,8 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
                 if (status != SVG_OK && status != SVG_MALFORMED)
                     break;
                 path->in_scene = true;
-                scene->items[index].clip = (svg_clip_t){true, clip.even_odd, clip.transform, path};
+                scene->items[index].clip = (svg_clip_t){true, clip.even_odd, clip.transform, path,
+                                                       clip.object_bbox, clip.outer_transform};
                 status = SVG_OK;
             }
         }

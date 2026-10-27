@@ -47,6 +47,8 @@ The [instance increment](SVG_INSTANCES.md) adds fragment use references, separat
 instance inheritance and cross-root source mutation. The [viewport increment](SVG_VIEWPORTS.md)
 adds referenced symbol/SVG sizing, nested viewports and rectangular overflow clips.
 [SVG_CLIPS.md](SVG_CLIPS.md) adds one-silhouette clip resources and ancestor intersections.
+[SVG_BOUNDS.md](SVG_BOUNDS.md) adds geometric bounds and numeric object-coordinate
+clips, with shared-consumer boundaries for gradients and future Canvas 2D.
 The static inline renderer stage remains
 active; the first P5 fixture does not complete its broader feature profile.
 

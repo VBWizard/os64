@@ -8,7 +8,8 @@ is `/tests/pages/svg-clips.html`, **SVG: cut to shape**.
 
 A fragment `clip-path: url(#id)` resolves a same-document SVG clipPath resource.
 This profile admits one visible direct path or basic-shape child, in
-userSpaceOnUse coordinates. A path can have multiple contours, curves and
+userSpaceOnUse coordinates; [object-coordinate clips](SVG_BOUNDS.md) add
+objectBoundingBox units and geometric bounds. A path can have multiple contours, curves and
 holes. The resource and child transforms compose; the child's inherited
 clip-rule selects nonzero or even-odd filling. Resource styling follows its
 own DOM ancestry, not the referencing element's paint inheritance. CSS
@@ -19,7 +20,8 @@ Clip resources are not drawn directly. Display on the resource or its
 ancestors does not prevent referencing it; display/visibility on a child
 controls whether that child contributes. Fill, stroke, opacity and color-space
 paint values on clip geometry do not affect the silhouette, including values
-unsupported for ordinary painting. An empty resource clips everything away.
+unsupported for ordinary painting. An empty resource clips everything away,
+except for ignored zero-extent object-box effects described in [SVG_BOUNDS.md](SVG_BOUNDS.md).
 A missing or wrong-kind target leaves the drawing unclipped. The source
 lookup shares use's bounded document-order ID lookup, percent-decoded
 fragments, first-ID behavior and conservative base-URL restriction.
@@ -55,7 +57,7 @@ The native provider/scene layout changes require matching consumers/libraries.
 
 Multiple visible clip children need a geometric union, not alpha addition or
 maximum coverage at shared edges. They return SVG_UNSUPPORTED in this cut.
-So do objectBoundingBox units, use/text/group children, clip-path references
+So do use/text/group children, clip-path references
 on the resource or its child, and resource geometry percentages. Percentage
 bases need a resource-viewport contract distinct from ordinary instance
 percentages; an initial consumer-viewport implementation disagreed with
@@ -66,7 +68,7 @@ the parser's skipped-style diagnostics. HTML box clipping is not implemented
 by this SVG adapter. Masks, paint servers and resource fetching remain separate.
 
 This is the first arbitrary-silhouette increment, not completion of general
-SVG clipping. The union, object-bounds and resource-coordinate work stays in
+SVG clipping. The union and resource-coordinate work stays in
 DEBTS.md. It does not advance the external-image milestone: website SVG files
 through `<img>` remain stage 6c, the image-route checkpoint.
 

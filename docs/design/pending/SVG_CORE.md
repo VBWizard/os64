@@ -217,7 +217,9 @@ sizing, nested viewports and rectangular overflow clipping.
 broader clip combinations remain part of 6b. The
 [solid painter](SVG_PAINT.md) consumes prepared paths/groups and isolates opacity;
 the connection paints them in real inline SVG boxes. Parsed-path interning, cache lookup,
-geometric bounds, length/marker APIs and stroke-error control need their own evidence.
+length/marker APIs and stroke-error control need their own evidence.
+[Geometric bounds](SVG_BOUNDS.md) adds allocation-free path/subtree queries
+and object-coordinate clip mapping with separate analytic/browser evidence.
 
 The first useful P5 checkpoint is the connection's real inline fixture page
 reaching Yonder's paint path. Full 6b completion is not a prerequisite for that checkpoint,

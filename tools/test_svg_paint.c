@@ -813,14 +813,15 @@ static void viewport_contracts(void)
            calls, polls);
 }
 
-static void clip_contracts(void)
+static void clip_contracts(bool object_bbox)
 {
     Ledger l = {0};
     svg_context_t *c = create(&l);
     Document d = {0};
     add(&d, SIZE_MAX, NULL, 0);
     add(&d, 0, NULL, 0);
-    const char *window = "M8 8H56V56H8ZM24 24H40V40H24Z";
+    const char *window = object_bbox ? "M.125 .125H.875V.875H.125ZM.375 .375H.625V.625H.375Z"
+                                     : "M8 8H56V56H8ZM24 24H40V40H24Z";
     d.nodes[1].clip = (svg_clip_source_t){.active = true,
                                           .even_odd = true,
                                           .transform = {1, 0, 0, 1, 0, 0},
@@ -833,6 +834,14 @@ static void clip_contracts(void)
                             .transform = {1, 0, 0, 1, 0, 0},
                             .kind = SVG_NODE_SHAPE,
                             .shape = {.kind = SVG_SHAPE_RECT, .width = 32, .height = 64}};
+    if (object_bbox) {
+        d.nodes[1].clip.object_bbox = true;
+        d.nodes[1].clip.outer_transform = (os64_geometry_map_t){1,0,0,1,0,0};
+        d.nodes[3].clip.outer_transform = (os64_geometry_map_t){1,0,0,1,0,0};
+        d.nodes[3].clip.object_bbox = true;
+        d.nodes[3].clip.shape.width = .5;
+        d.nodes[3].clip.shape.height = 1;
+    }
     size_t baseline = l.live, before = l.allocations;
     svg_scene_t *scene = prepare(c, &d);
     size_t prep_cuts = l.allocations - before;
@@ -902,11 +911,52 @@ static void clip_contracts(void)
            prep_cuts, cuts, polls);
 }
 
+static void object_bounds_contracts(void)
+{
+    Ledger l = {0};
+    svg_context_t *c = create(&l);
+    Document d = {0};
+    add(&d, SIZE_MAX, NULL, 0);
+    d.nodes[0].style.transform = (os64_geometry_map_t){3,0,0,3,100,100};
+    add(&d, 0, NULL, 0);
+    d.nodes[1].style.transform.tx = 10;
+    d.nodes[1].style.viewport = (svg_viewport_t){true,true,20,20,{2,0,0,3,7,11}};
+    add(&d, 1, "M0 0Q10 20 20 0Z", 0xff0000ff);
+    d.nodes[2].style.transform = (os64_geometry_map_t){1,0,1,1,0,0};
+    d.nodes[2].style.visible = false;
+    d.nodes[2].style.opacity = 0;
+    add(&d, 0, "M200 200L300 300", 0);
+    d.nodes[3].style.display = false;
+    add(&d, 0, "M90 90L100 100", 0);
+    d.nodes[4].style.fill.kind = SVG_PAINT_NONE;
+    svg_scene_t *scene = prepare(c, &d);
+    size_t allocations = l.allocations, polls = l.polls;
+    svg_bounds_t b;
+    CHECK(svg_scene_object_bounds(c, scene, 0, &b) == SVG_OK && !b.empty);
+    CHECK(b.min_x == 17 && b.min_y == 11 && b.max_x == 100 && b.max_y == 100);
+    polls = l.polls - polls;
+    CHECK(svg_scene_object_bounds(c, scene, 1, &b) == SVG_OK && !b.empty);
+    CHECK(b.min_x == 0 && b.min_y == 0 && b.max_x == 22.5 && b.max_y == 10);
+    CHECK(svg_scene_object_bounds(c, scene, 2, &b) == SVG_OK && !b.empty);
+    CHECK(b.min_x == 0 && b.min_y == 0 && b.max_x == 20 && b.max_y == 10);
+    CHECK(l.allocations == allocations);
+    for (size_t i = 1; i <= polls; ++i) {
+        l.cancel = l.polls + i;
+        CHECK(svg_scene_object_bounds(c, scene, 0, &b) == SVG_CANCELLED && b.empty);
+        l.cancel = 0;
+    }
+    CHECK(svg_scene_object_bounds(c, scene, 99, &b) == SVG_BAD_ARGUMENT && b.empty);
+    CHECK(svg_scene_release(c, scene) == SVG_OK);
+    CHECK(svg_destroy(c) == SVG_OK && !l.live);
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
     setvbuf(stdout, NULL, _IONBF, 0);
-    clip_contracts();
+    clip_contracts(false);
+    clip_contracts(true);
+    object_bounds_contracts();
     viewport_contracts();
     pictures(argv[1]);
     limits();

@@ -34,6 +34,8 @@ the [Yonder connection](SVG_YONDER.md) paints a bounded inline path/group/basic-
 [SVG_INSTANCES.md](SVG_INSTANCES.md) adds bounded fragment reuse with instance ancestry.
 [SVG_VIEWPORTS.md](SVG_VIEWPORTS.md) adds symbol/nested viewport sizing and rectangular clips.
 [SVG_CLIPS.md](SVG_CLIPS.md) adds one-silhouette clip resources and ancestor intersections.
+[SVG_BOUNDS.md](SVG_BOUNDS.md) adds geometric bounds and object-coordinate clips,
+with shared-consumer boundaries for gradients and Canvas 2D through 6c.
 This design does not establish
 performance or compatibility percentages.
 

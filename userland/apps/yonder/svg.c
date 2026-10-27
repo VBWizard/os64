@@ -1299,13 +1299,16 @@ static svg_status_t clip_source(void *ctx, void *snapshot, const svg_style_reque
     if (!same_word(resource->name, "clipPath"))
         return SVG_OK;
     const char *units = attr(resource, "clipPathUnits");
-    if (*units && !same_word(units, "userSpaceOnUse"))
+    bool object_bbox = same_word(units, "objectBoundingBox");
+    if (*units && !same_word(units, "userSpaceOnUse") && !object_bbox)
         return SVG_UNSUPPORTED;
     Computed container;
     status = clip_computed(a, r->instance, resource, &container);
     if (status != SVG_OK)
         return status;
-    *out = (svg_clip_source_t){.active = true, .kind = SVG_NODE_PATH, .transform = identity};
+    *out = (svg_clip_source_t){.active = true, .kind = SVG_NODE_PATH,
+                               .transform = identity, .object_bbox = object_bbox,
+                               .outer_transform = container.s.transform};
     bool found = false;
     for (const os64_html_node_t *n = resource->first_child; n; n = n->next) {
         if (++a->work > SVG_ADAPTER_WORK)
@@ -1330,7 +1333,8 @@ static svg_status_t clip_source(void *ctx, void *snapshot, const svg_style_reque
             return SVG_UNSUPPORTED;
         found = true;
         out->even_odd = child.clip_even_odd;
-        out->transform = multiply(container.s.transform, child.s.transform);
+        out->transform = object_bbox ? child.s.transform
+                                     : multiply(container.s.transform, child.s.transform);
         if (!finite_map(out->transform))
             return SVG_LIMIT;
         if (path) {

@@ -47,6 +47,13 @@ bool svg_point_valid(Point);
 Status svg_parse(Context *, svg_string_t, svg_path_t **, svg_parse_result_t *);
 Status svg_make_shape(Context *, const svg_shape_t *, svg_path_t **, svg_parse_result_t *);
 void svg_free_path(Context *, svg_path_t *);
+typedef struct {
+    Point center, u, v;
+    double angle, sweep, numerical_error;
+} SvgArc;
+bool svg_arc_center(Context *, Point, const svg_command_t *, SvgArc *);
+Status svg_geometric_bounds(Context *, const svg_path_t *, const Map *, svg_bounds_t *);
+Status svg_object_bounds(Context *, const svg_scene_t *, size_t, svg_bounds_t *);
 Status svg_lower(Context *, const svg_path_t *, const Map *, double, svg_geometry_t **);
 void svg_free_geometry(Context *, svg_geometry_t *);
 Status svg_stroke_geometry(Context *, const svg_geometry_t *, const Map *, double,

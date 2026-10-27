@@ -4043,6 +4043,15 @@ General clip paths and the remaining static SVG debts stay open.
 [SVG_CLIPS.md](SVG_CLIPS.md) adds fragment clip-path resources with one direct
 path/shape silhouette, clip-rule holes, transforms, ancestor intersections and
 shared source mutation. `/tests/pages/svg-clips.html` moves a circular opening
-across two drawings. Geometric unions, object-bounds/resource percentage
+across two drawings. Geometric unions, resource percentage
 coordinates and references inside clip resources remain explicit follow-ups.
 This is still inline work; the external SVG image route remains stage 6c.
+
+
+### Slice 6b, object coordinates — 2026-10-27
+
+[SVG_BOUNDS.md](SVG_BOUNDS.md) adds analytic path/subtree geometric bounds and
+numeric objectBoundingBox clips. `/tests/pages/svg-bounds.html` demonstrates a
+clip following a drawing's changing width, with independent curve, stroke,
+group and transform cases. It records shared-consumer boundaries for gradients
+and Canvas 2D through 6c. External SVG images remain the image-route milestone.

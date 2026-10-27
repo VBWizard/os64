@@ -111,20 +111,33 @@ typedef struct {
     svg_node_kind_t kind;
     uint64_t first_child, next_sibling; /* Zero means absent; identity is snapshot-local. */
 } svg_node_t;
-/* One resolved silhouette in the referencing element's user space. The provider
- * retains borrowed strings until the next callback. An active empty path clips
- * everything; inactive means no clip. Resource lookup stays with the provider. */
+typedef struct {
+    bool empty; /* No geometry; distinct from a point or a zero-width/height path. */
+    double min_x, min_y, max_x, max_y;
+} svg_bounds_t;
+
+/* One silhouette in user space or normalized object-box coordinates. The provider
+ * retains borrowed strings until the next callback. An active empty path defines
+ * an empty clipping region; object-box effects on zero-width/height consumers
+ * are ignored. Inactive means no clip. Resource lookup stays with the provider. */
 typedef struct {
     bool active, even_odd;
     os64_geometry_map_t transform;
     svg_node_kind_t kind; /* PATH or SHAPE when active. */
     svg_string_t d;
     svg_shape_t shape;
+    bool object_bbox;
+    /* When object_bbox is true: outer_transform * box-map * transform.
+     * The outer map acts in consumer user units; supply identity if absent.
+     * Otherwise transform acts directly in consumer user units. */
+    os64_geometry_map_t outer_transform;
 } svg_clip_source_t;
 typedef struct {
     bool active, even_odd;
     os64_geometry_map_t transform;
     const svg_path_t *path; /* Scene owned. */
+    bool object_bbox;
+    os64_geometry_map_t outer_transform;
 } svg_clip_t;
 typedef struct {
     uint64_t source, instance, parent_instance;
@@ -218,6 +231,12 @@ svg_status_t svg_path_from_shape(svg_context_t *, const svg_shape_t *, svg_path_
                                  svg_parse_result_t *);
 const svg_command_t *svg_path_commands(const svg_path_t *, size_t *count);
 svg_status_t svg_path_release(svg_context_t *, svg_path_t *);
+/* Analytic geometric extrema in the supplied coordinate space, evaluated in
+ * binary64. Excludes stroke and raster expansion; moves and zero-length
+ * segments contribute points. Empty input yields empty=true. No allocation.
+ * Failure leaves out empty. Non-finite arithmetic returns LIMIT, not clamped coordinates. */
+svg_status_t svg_path_bounds(svg_context_t *, const svg_path_t *, const os64_geometry_map_t *,
+                             svg_bounds_t *out);
 /* Lower arcs to cubic Hermite pieces using a per-axis device-space positional
  * error budget. This is separate from backend quantization, stroke-boundary
  * error and raster coverage. Lowering retains user-space coordinates and adds
@@ -237,6 +256,13 @@ svg_status_t svg_scene_prepare(svg_context_t *, const svg_provider_t *, svg_mode
                                const os64_geometry_map_t *viewport, svg_scene_t **);
 const svg_scene_item_t *svg_scene_items(const svg_scene_t *, size_t *count);
 svg_status_t svg_scene_release(svg_context_t *, svg_scene_t *);
+/* Bounds of retained paths in a subtree, in that item's content user space.
+ * Includes descendant transforms/viewports; excludes the item's placement and
+ * own viewBox map. Paint, visibility, opacity and clips do not change bounds.
+ * display:none and zero-sized viewports were omitted at preparation. Empty
+ * paths/containers add nothing. This is not the DOM getBBox interface. */
+svg_status_t svg_scene_object_bounds(svg_context_t *, const svg_scene_t *, size_t item,
+                                     svg_bounds_t *out);
 svg_render_options_t svg_render_options_default(const os64_geometry_backend_t *);
 /* Paints solid fills followed by ordinary user-space strokes, using source-over
  * in sRGB and isolated element/group opacity. Replaces the target, including

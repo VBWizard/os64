@@ -115,7 +115,7 @@ static void clip_cases(const char *dir)
         "height='20'/></clipPath>",
         "<g clip-path='url(https://example.invalid/art.svg#c)'><rect width=20 height='20'/></g>",
         "<clipPath id=c><rect width=20 height='20'/><circle r='10'/></clipPath>",
-        "<clipPath id=c clipPathUnits=objectBoundingBox><rect width=1 height='1'/></clipPath>",
+        "<clipPath id=c clipPathUnits=objectBoundingBox><rect width='50%' height='1'/></clipPath>",
         "<clipPath id=c clip-path='url(#c)'><rect width=20 height='20'/></clipPath>",
         "<clipPath id=c><rect width=20 height=20 clip-path='url(#c)'/></clipPath>",
         "<clipPath id=c><use href='#shape'/></clipPath><rect id=shape width=20 height='20'/>"};

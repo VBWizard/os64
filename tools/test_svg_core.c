@@ -934,9 +934,75 @@ static void shapes(void)
     }
     CHECK(svg_destroy(c) == SVG_OK && !l.live);
 }
+static void geometric_bounds(void)
+{
+    Ledger l = {0};
+    svg_context_t *c = context(&l);
+    static const struct {
+        const char *d;
+        os64_geometry_map_t map;
+        double x0, y0, x1, y1;
+    } cases[] = {
+        {"M10 20", {1, 0, 0, 1, 0, 0}, 10, 20, 10, 20},
+        {"M10 20L10 20Z", {1, 0, 0, 1, 0, 0}, 10, 20, 10, 20},
+        {"M0 0L10 10M100 100", {1, 0, 0, 1, 0, 0}, 0, 0, 100, 100},
+        {"M0 0Q10 20 20 0", {1, 0, 0, 1, 0, 0}, 0, 0, 20, 10},
+        {"M0 0C0 40 40 40 40 0", {1, 0, 0, 1, 0, 0}, 0, 0, 40, 30},
+        {"M0 0C0 40 40 40 40 0", {0, 2, -3, 0, 7, 11}, -83, 11, 7, 91},
+        {"M0 0C0 40 40 -40 40 0",
+         {1, 0, 0, 1, 0, 0},
+         0,
+         -11.547005383792516,
+         40,
+         11.547005383792516},
+        {"M0 0Q10 20 20 0", {1, 0, 1, 1, 0, 0}, 0, 0, 22.5, 10},
+        {"M-10 0A10 20 0 1 0 10 0A10 20 0 1 0 -10 0Z", {1, 0, 0, 1, 0, 0}, -10, -20, 10, 20},
+        {"M-10 0A10 20 0 1 0 10 0A10 20 0 1 0 -10 0Z",
+         {1, 0, 1, 1, 3, 7},
+         -19.360679774997898,
+         -13,
+         25.360679774997898,
+         27},
+        {"M-10 0A10 10 0 0 1 10 0", {1, 0, 0, 1, 0, 0}, -10, -10, 10, 0},
+        {"M-10 0A10 10 0 0 0 10 0", {1, 0, 0, 1, 0, 0}, -10, 0, 10, 10},
+        {"M-10 0A2 2 0 0 1 10 0", {1, 0, 0, 1, 0, 0}, -10, -10, 10, 0},
+        {"M0 0A0 10 0 0 1 20 30", {1, 0, 0, 1, 0, 0}, 0, 0, 20, 30},
+        {"M0 0C0 40 40 40 40 0", {0, 0, 0, 0, 7, 9}, 7, 9, 7, 9},
+        {"M0 0C10 20 20 20 30 0", {1, 0, 0, 1, 0, 0}, 0, 0, 30, 15},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        svg_path_t *p = parse(c, cases[i].d, SVG_OK);
+        svg_bounds_t b;
+        size_t allocations = l.allocations, before = l.polls;
+        CHECK(svg_path_bounds(c, p, &cases[i].map, &b) == SVG_OK && !b.empty);
+        size_t polls = l.polls - before;
+        near(b.min_x, cases[i].x0);
+        near(b.min_y, cases[i].y0);
+        near(b.max_x, cases[i].x1);
+        near(b.max_y, cases[i].y1);
+        CHECK(l.allocations == allocations);
+        for (size_t j = 1; j <= polls; ++j) {
+            l.cancel = l.polls + j;
+            CHECK(svg_path_bounds(c, p, &cases[i].map, &b) == SVG_CANCELLED && b.empty);
+            l.cancel = 0;
+        }
+        CHECK(svg_path_release(c, p) == SVG_OK);
+    }
+    svg_bounds_t b;
+    svg_path_t *p = parse(c, "", SVG_OK);
+    CHECK(svg_path_bounds(c, p, &identity, &b) == SVG_OK && b.empty);
+    CHECK(svg_path_bounds(c, p, NULL, &b) == SVG_BAD_ARGUMENT && b.empty);
+    CHECK(svg_path_release(c, p) == SVG_OK);
+    p = parse(c, "M1e308 0L1e308 1", SVG_OK);
+    os64_geometry_map_t huge = {2, 0, 0, 1, 0, 0};
+    CHECK(svg_path_bounds(c, p, &huge, &b) == SVG_LIMIT && b.empty);
+    CHECK(svg_path_release(c, p) == SVG_OK);
+    CHECK(svg_destroy(c) == SVG_OK && !l.live);
+}
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
+    geometric_bounds();
     shapes();
     grammar();
     arc_accuracy();
