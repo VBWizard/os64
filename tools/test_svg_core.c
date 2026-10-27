@@ -391,7 +391,7 @@ static svg_status_t provide_shape(void *user, void *snapshot, const svg_style_re
 }
 static svg_provider_t callbacks(Provider *p)
 {
-    return (svg_provider_t){p, acquire, unpin, node, style, NULL};
+    return (svg_provider_t){p, acquire, unpin, node, style, NULL, NULL};
 }
 static void scenes(void)
 {
@@ -450,6 +450,62 @@ static void scenes(void)
     CHECK(svg_scene_release(c,scene)==SVG_OK);
     p.pending = true;
     CHECK(svg_scene_prepare(c,&cb,SVG_MODE_IMAGE,&identity,&scene)==SVG_PENDING && !scene);
+    CHECK(p.acquired == p.released);
+    CHECK(svg_destroy(c) == SVG_OK && !l.live);
+}
+static svg_status_t use_reference(void *user, void *snapshot, const svg_style_request_t *r,
+                                  uint64_t *source)
+{
+    Provider *p = user;
+    CHECK(snapshot == p && r->parent_style && r->parent_instance);
+    CHECK(r->mode == SVG_MODE_INLINE || r->mode == SVG_MODE_IMAGE);
+    if (p->pending)
+        return SVG_PENDING;
+    *source = p->hidden ? 1 : 3;
+    return SVG_OK;
+}
+static void instances(void)
+{
+    Ledger l = {0};
+    svg_context_t *c = context(&l);
+    Provider p = provider(&l);
+    p.nodes[2] = (svg_node_t){SVG_NODE_USE, 0, 4};
+    p.nodes[4] = (svg_node_t){SVG_NODE_USE, 0, 0};
+    p.nodes[3].next_sibling = 999; // A reference must not visit source siblings.
+    svg_provider_t cb = callbacks(&p);
+    svg_scene_t *scene = NULL;
+    CHECK(svg_scene_prepare(c, &cb, SVG_MODE_INLINE, &identity, &scene) == SVG_PROVIDER_ERROR);
+    cb.reference = use_reference;
+    size_t calls = l.allocations, polls = l.polls, count;
+    CHECK(svg_scene_prepare(c, &cb, SVG_MODE_IMAGE, &identity, &scene) == SVG_OK);
+    calls = l.allocations - calls;
+    polls = l.polls - polls;
+    const svg_scene_item_t *items = svg_scene_items(scene, &count);
+    CHECK(count == 5 && items[1].kind == SVG_NODE_USE && items[3].kind == SVG_NODE_USE);
+    CHECK(items[2].source == 3 && items[4].source == 3 && items[2].instance != items[4].instance);
+    CHECK(items[2].style.fill.argb == 0xffff0000 && items[4].style.fill.argb == 0xff0000ff);
+    near(items[2].user_to_viewport.tx, 19);
+    near(items[4].user_to_viewport.tx, 5);
+    CHECK(svg_scene_release(c, scene) == SVG_OK);
+    for (size_t i = 1; i <= calls; ++i) {
+        l.fail = l.allocations + i;
+        CHECK(svg_scene_prepare(c, &cb, SVG_MODE_IMAGE, &identity, &scene) == SVG_NO_MEMORY && !scene);
+        l.fail = 0;
+    }
+    for (size_t i = 1; i <= polls; ++i) {
+        l.cancel = l.polls + i;
+        CHECK(svg_scene_prepare(c, &cb, SVG_MODE_IMAGE, &identity, &scene) == SVG_CANCELLED && !scene);
+        l.cancel = 0;
+    }
+    p.pending = true;
+    CHECK(svg_scene_prepare(c, &cb, SVG_MODE_INLINE, &identity, &scene) == SVG_PENDING && !scene);
+    p.pending = false;
+    p.hidden = true;
+    // A reference to an active ancestor is empty; ordinary child cycles remain errors.
+    CHECK(svg_scene_prepare(c, &cb, SVG_MODE_INLINE, &identity, &scene) == SVG_OK);
+    svg_scene_items(scene, &count);
+    CHECK(count == 3);
+    CHECK(svg_scene_release(c, scene) == SVG_OK);
     CHECK(p.acquired == p.released);
     CHECK(svg_destroy(c) == SVG_OK && !l.live);
 }
@@ -821,6 +877,7 @@ int main(void)
     grammar();
     arc_accuracy();
     scenes();
+    instances();
     failures();
     boundaries();
     backend();

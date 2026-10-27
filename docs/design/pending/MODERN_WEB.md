@@ -4015,3 +4015,15 @@ Nineteen shape/path pixel comparisons, allocator-failure sweeps, window mutation
 checks and selected Chromium comparisons cover the increment. The new gallery
 is `/tests/pages/svg-shapes.html`; its button toggles geometry and color.
 This remains part of the static inline milestone, with its broader debts open.
+
+### Slice 6b, same-document instances — 2026-10-26
+
+[SVG_INSTANCES.md](SVG_INSTANCES.md) adds fragment references to paths, shapes,
+groups and nested uses, with separate instance ancestry and bounded expansion.
+The source keeps its identity; inherited color, paint and geometry come from
+the copy's parent. A source edit repaints uses in different SVG roots. The new
+`/tests/pages/svg-use.html` gallery demonstrates that with a reversible button.
+Twenty-four exact expanded references, 72 expected Chromium outcomes,
+allocation-failure sweeps and a real-window mutation regression cover this
+increment. Referenced viewports and per-instance variable substitution remain
+explicit profile limits; this does not complete static SVG.

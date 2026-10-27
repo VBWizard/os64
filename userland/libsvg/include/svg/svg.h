@@ -60,7 +60,8 @@ typedef enum {
     SVG_NODE_GROUP,
     SVG_NODE_PATH,
     SVG_NODE_UNSUPPORTED,
-    SVG_NODE_SHAPE
+    SVG_NODE_SHAPE,
+    SVG_NODE_USE
 } svg_node_kind_t;
 typedef enum {
     SVG_SHAPE_RECT,
@@ -95,8 +96,9 @@ typedef struct {
     os64_geometry_stroke_t stroke_style;
     svg_dash_t dash;
     bool even_odd, display, visible;
-    /* Resolved winning CSS/attribute transform, including its resolved origin.
-     * The provider must not multiply a losing transform attribute into it. */
+    /* Resolved winning CSS/attribute transform, including its resolved origin
+     * and node placement such as use x/y. The provider must not multiply a
+     * losing transform attribute into it. */
     os64_geometry_map_t transform;
 } svg_style_t;
 typedef struct {
@@ -132,6 +134,12 @@ typedef struct {
      * returned point bytes survive until the next provider callback. The
      * library copies geometry into its owned path without text serialization. */
     svg_status_t (*shape)(void *, void *snapshot, const svg_style_request_t *, svg_shape_t *);
+    /* Required for displayed USE nodes, whose first_child must be zero.
+     * Return one source (zero for an empty reference); its next_sibling is
+     * excluded from the instance. Active-ancestry reference cycles are empty.
+     * Source identity remains shared; style receives fresh instance ancestry.
+     * Resolve inside the pinned snapshot and honor the processing mode. */
+    svg_status_t (*reference)(void *, void *snapshot, const svg_style_request_t *, uint64_t *source);
 } svg_provider_t;
 typedef struct {
     uint64_t source, instance;

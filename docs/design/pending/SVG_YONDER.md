@@ -69,8 +69,9 @@ work; they are not a demonstrated frame-time guarantee for arbitrary pages.
 ## Explicit limits
 
 The inline profile handles paths, groups and [basic shapes](SVG_SHAPES.md),
-plus [dashes and zero-length caps](SVG_STROKES.md), with definitions, metadata, titles, descriptions and style elements omitted
-from drawing. Other active element kinds refuse the SVG job. Use/symbol,
+plus [dashes and zero-length caps](SVG_STROKES.md) and
+[same-document use instances](SVG_INSTANCES.md), with definitions, metadata, titles, descriptions and style elements omitted
+from drawing. Other active element kinds refuse the SVG job. Referenced symbol/SVG viewports,
 nested viewports, text, gradients,
 patterns, images, markers, clip paths, masks, filters, non-scaling
 strokes and animation remain follow-on work. External SVG image decoding is

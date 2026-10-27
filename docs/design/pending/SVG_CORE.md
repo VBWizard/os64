@@ -208,8 +208,8 @@ its base merges so review diffs show each increment's work.
 
 The [Yonder connection](SVG_YONDER.md) supplies the native tree/style adapter,
 paint properties, outer sizing and viewBox mapping. [Basic shapes](SVG_SHAPES.md)
-and [dash/cap construction](SVG_STROKES.md) extend that consumer. Continue 6b
-with use/symbol, nested viewports and clipping. The subsequent
+[dash/cap construction](SVG_STROKES.md) and [same-document instances](SVG_INSTANCES.md)
+extend that consumer. Continue 6b with symbol/referenced SVG viewports, nested viewports and clipping. The subsequent
 [solid painter](SVG_PAINT.md) consumes prepared paths/groups and isolates opacity;
 the connection paints them in real inline SVG boxes. Parsed-path interning, cache lookup,
 geometric bounds, length/marker APIs and stroke-error control need their own evidence.

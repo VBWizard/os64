@@ -180,7 +180,8 @@ recorded in SVG_CORE.md; tightening positional tolerance alone does not solve it
 
 The [Yonder connection](SVG_YONDER.md) adds the real tree/style adapter, computed
 paint properties, outer sizing and inline painting. Basic shapes and [dash/cap construction](SVG_STROKES.md) extend this painter.
-Continue 6b with remaining join handling, use/symbol, nested viewports and SVG clipping.
+[Same-document instances](SVG_INSTANCES.md) add use containers with isolated opacity.
+Continue 6b with remaining join handling, referenced viewports, nested viewports and SVG clipping.
 Keep the Yonder connection in its own PR, inspect concurrent browser changes
 before touching shared files, and stack dependent follow-ons while it is
 unmerged, as recorded in SVG_CORE.md.

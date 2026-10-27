@@ -131,7 +131,7 @@ static svg_context_t *create(Ledger *l)
 }
 static svg_scene_t *prepare(svg_context_t *c, Document *d)
 {
-    svg_provider_t p = {d, acquire, unpin, node, style, NULL};
+    svg_provider_t p = {d, acquire, unpin, node, style, NULL, NULL};
     os64_geometry_map_t map = {1, 0, 0, 1, 0, 0};
     svg_scene_t *scene = NULL;
     CHECK(svg_scene_prepare(c, &p, SVG_MODE_INLINE, &map, &scene) == SVG_OK);
@@ -657,7 +657,7 @@ static void dash_contracts(void)
     size_t baseline = l.live;
     CHECK(svg_scene_render(c, s, &o, &t, NULL) == SVG_LIMIT && l.live == baseline);
     CHECK(svg_scene_release(c, s) == SVG_OK);
-    svg_provider_t provider = {&d, acquire, unpin, node, style, NULL};
+    svg_provider_t provider = {&d, acquire, unpin, node, style, NULL, NULL};
     os64_geometry_map_t map = {1, 0, 0, 1, 0, 0};
     dash[0] = -1;
     CHECK(svg_scene_prepare(c, &provider, SVG_MODE_INLINE, &map, &s) == SVG_PROVIDER_ERROR && !s);

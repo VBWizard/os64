@@ -18,6 +18,11 @@ typedef struct {
     bool current_fill, current_stroke, vector, linear;
 } Computed;
 typedef struct {
+    const os64_html_node_t *source;
+    uint64_t parent;
+    bool instanced;
+} Instance;
+typedef struct {
     const os64_html_document_t *doc;
     const garb_cascade_t *cascade;
     const os64_html_node_t *root;
@@ -25,13 +30,17 @@ typedef struct {
     double width, height;
     double dash_values[SVG_DASH_MAX];
     uint32_t root_color, initial_color;
+    os64_geometry_memory_t memory;
+    Instance *instances;
+    size_t capacity;
+    bool base_checked;
 } Adapter;
 typedef struct {
     const char *p;
     size_t left;
 } Scanner;
 static const Map identity = {1, 0, 0, 1, 0, 0};
-static bool eq(const char *a, const char *b)
+static bool same_word(const char *a, const char *b)
 {
     return a && os64_streq(a, b);
 }
@@ -169,21 +178,21 @@ static bool finite_map(Map m)
 static bool function(const char *name, const double *v, size_t n, Map *m)
 {
     *m = identity;
-    if (eq(name, "matrix") && n == 6) {
+    if (same_word(name, "matrix") && n == 6) {
         *m = (Map){v[0], v[1], v[2], v[3], v[4], v[5]};
         return true;
     }
-    if (eq(name, "translate") && (n == 1 || n == 2)) {
+    if (same_word(name, "translate") && (n == 1 || n == 2)) {
         m->tx = v[0];
         m->ty = n == 2 ? v[1] : 0;
         return true;
     }
-    if (eq(name, "scale") && (n == 1 || n == 2)) {
+    if (same_word(name, "scale") && (n == 1 || n == 2)) {
         m->a = v[0];
         m->d = n == 2 ? v[1] : v[0];
         return true;
     }
-    if (eq(name, "rotate") && (n == 1 || n == 3)) {
+    if (same_word(name, "rotate") && (n == 1 || n == 3)) {
         double r = v[0] * PI / 180;
         m->a = m->d = cos(r);
         m->b = sin(r);
@@ -194,11 +203,11 @@ static bool function(const char *name, const double *v, size_t n, Map *m)
         }
         return finite_map(*m);
     }
-    if ((eq(name, "skewX") || eq(name, "skewx")) && n == 1) {
+    if ((same_word(name, "skewX") || same_word(name, "skewx")) && n == 1) {
         m->c = tan(v[0] * PI / 180);
         return isfinite(m->c);
     }
-    if ((eq(name, "skewY") || eq(name, "skewy")) && n == 1) {
+    if ((same_word(name, "skewY") || same_word(name, "skewy")) && n == 1) {
         m->b = tan(v[0] * PI / 180);
         return isfinite(m->b);
     }
@@ -359,7 +368,7 @@ static svg_status_t viewport(Adapter *a, int32_t w, int32_t h, uint32_t zoom, Ma
         else if (s.left != 4 || os64_memcmp(s.p, "meet", 4))
             return SVG_MALFORMED;
     }
-    if (eq(align, "none")) {
+    if (same_word(align, "none")) {
         *m = (Map){sx, 0, 0, sy, -v[0] * sx, -v[1] * sy};
         return SVG_OK;
     }
@@ -394,7 +403,7 @@ static const garb_val_t *winner(const garb_cascade_t *c, const os64_html_node_t 
 }
 static bool keyword(const garb_val_t *v, const char *word)
 {
-    return v && v->kind == GARB_V_KEYWORD && eq(v->keyword, word);
+    return v && v->kind == GARB_V_KEYWORD && same_word(v->keyword, word);
 }
 static bool value(const garb_val_t *v, double percent, double *out)
 {
@@ -525,8 +534,8 @@ static svg_status_t apply(Adapter *a, Computed *c, const Computed *parent, garb_
 {
     Computed defaults = initial(a->initial_color);
     if (v->kind == GARB_V_WIDE) {
-        bool inherit =
-            eq(v->keyword, "inherit") || (!eq(v->keyword, "initial") && garb_prop_inherited(prop));
+        bool inherit = same_word(v->keyword, "inherit") ||
+                       (!same_word(v->keyword, "initial") && garb_prop_inherited(prop));
         copy_property(c, inherit ? parent : &defaults, prop);
         return SVG_OK;
     }
@@ -612,14 +621,63 @@ static svg_status_t apply(Adapter *a, Computed *c, const Computed *parent, garb_
 static bool ignored(const os64_html_node_t *n)
 {
     return n->ns == OS64_HTML_NS_SVG &&
-           (eq(n->name, "defs") || eq(n->name, "title") || eq(n->name, "desc") ||
-            eq(n->name, "metadata") || eq(n->name, "style"));
+           (same_word(n->name, "defs") || same_word(n->name, "title") ||
+            same_word(n->name, "desc") || same_word(n->name, "metadata") ||
+            same_word(n->name, "style"));
 }
-static svg_status_t compute(Adapter *a, const os64_html_node_t *n, Computed *c)
+// Instance IDs come from libsvg's bounded visit sequence. Records preserve
+// inheritance without cloning the DOM or retaining pointers into a growable array.
+static svg_status_t remember(Adapter *a, const svg_style_request_t *r)
+{
+    if (!r->instance || r->instance > SVG_VISITS_MAX || r->parent_instance >= r->instance)
+        return SVG_PROVIDER_ERROR;
+    if (r->instance >= a->capacity) {
+        size_t capacity = a->capacity ? a->capacity * 2 : 16;
+        while (capacity <= r->instance)
+            capacity *= 2;
+        if (capacity > SVG_VISITS_MAX + 1)
+            capacity = SVG_VISITS_MAX + 1;
+        void *p = NULL;
+        os64_geometry_status_t status =
+            a->memory.alloc(a->memory.context, capacity * sizeof(Instance), &p);
+        if (status != OS64_GEOMETRY_OK || !p)
+            return status == OS64_GEOMETRY_LIMIT ? SVG_LIMIT : SVG_NO_MEMORY;
+        os64_memset(p, 0, capacity * sizeof(Instance));
+        if (a->instances) {
+            os64_memcpy(p, a->instances, a->capacity * sizeof(Instance));
+            a->memory.free(a->memory.context, a->instances, a->capacity * sizeof(Instance));
+        }
+        a->instances = p;
+        a->capacity = capacity;
+    }
+    Instance parent = a->instances[r->parent_instance];
+    if (r->parent_instance && !parent.source)
+        return SVG_PROVIDER_ERROR;
+    a->instances[r->instance] = (Instance){
+        .source = (const void *)(uintptr_t)r->source,
+        .parent = r->parent_instance,
+        .instanced = parent.instanced || (parent.source && parent.source->ns == OS64_HTML_NS_SVG &&
+                                          same_word(parent.source->name, "use"))};
+    return SVG_OK;
+}
+static svg_status_t compute(Adapter *a, uint64_t instance, Computed *c)
 {
     const os64_html_node_t *chain[SVG_DEPTH_MAX];
     size_t depth = 0;
-    for (const os64_html_node_t *p = n; p && p->kind == OS64_HTML_ELEMENT; p = p->parent) {
+    const os64_html_node_t *p = NULL;
+    while (instance) {
+        Instance record = a->instances[instance];
+        p = record.source;
+        if (depth == SVG_DEPTH_MAX)
+            return SVG_LIMIT;
+        // Source-selector matching is reusable, DOM-resolved custom properties
+        // are not. Instance substitution is outside this profile (SVG_INSTANCES.md).
+        if (record.instanced && garb_style_needs_substitution(a->cascade, p))
+            return SVG_UNSUPPORTED;
+        chain[depth++] = p;
+        instance = record.parent;
+    }
+    for (p = p ? p->parent : NULL; p && p->kind == OS64_HTML_ELEMENT; p = p->parent) {
         if (depth == SVG_DEPTH_MAX)
             return SVG_LIMIT;
         chain[depth++] = p;
@@ -698,6 +756,10 @@ static void release(void *ctx, void *snapshot)
     (void)snapshot;
     os64_html_unpin(a->doc, a->pin);
     a->pin = 0;
+    if (a->instances)
+        a->memory.free(a->memory.context, a->instances, a->capacity * sizeof(Instance));
+    a->instances = NULL;
+    a->capacity = 0;
 }
 static const os64_html_node_t *element(Adapter *a, const os64_html_node_t *n)
 {
@@ -711,15 +773,17 @@ static const os64_html_node_t *element(Adapter *a, const os64_html_node_t *n)
 static bool basic_shape(const os64_html_node_t *n)
 {
     return n->ns == OS64_HTML_NS_SVG &&
-           (eq(n->name, "rect") || eq(n->name, "circle") || eq(n->name, "ellipse") ||
-            eq(n->name, "line") || eq(n->name, "polyline") || eq(n->name, "polygon"));
+           (same_word(n->name, "rect") || same_word(n->name, "circle") ||
+            same_word(n->name, "ellipse") || same_word(n->name, "line") ||
+            same_word(n->name, "polyline") || same_word(n->name, "polygon"));
 }
 // Geometry is non-inherited. Follow ancestry only for an explicit inherit,
 // keeping percentages symbolic until the consuming shape's viewport is known.
-static svg_status_t geometry_value(Adapter *a, const os64_html_node_t *n, garb_prop_t prop,
-                                   double percent, double initial_value, double *out)
+static svg_status_t geometry_value(Adapter *a, uint64_t instance, garb_prop_t prop, double percent,
+                                   double initial_value, double *out)
 {
     *out = initial_value;
+    const os64_html_node_t *n = a->instances[instance].source;
     size_t depth = 0;
     while (n && n->kind == OS64_HTML_ELEMENT) {
         if (++depth > SVG_DEPTH_MAX || ++a->work > SVG_ADAPTER_WORK)
@@ -728,9 +792,11 @@ static svg_status_t geometry_value(Adapter *a, const os64_html_node_t *n, garb_p
         if (!v || keyword(v, "auto"))
             return SVG_OK;
         if (v->kind == GARB_V_WIDE) {
-            if (!eq(v->keyword, "inherit"))
+            if (!same_word(v->keyword, "inherit"))
                 return SVG_OK;
-            n = n->parent;
+            uint64_t parent = instance ? a->instances[instance].parent : 0;
+            n = parent ? a->instances[parent].source : n->parent;
+            instance = parent;
             continue;
         }
         return value(v, percent, out) ? SVG_OK : SVG_UNSUPPORTED;
@@ -772,8 +838,8 @@ static svg_status_t shape(void *ctx, void *snapshot, const svg_style_request_t *
     (void)snapshot;
     const os64_html_node_t *n = (const void *)(uintptr_t)r->source;
     *out = (svg_shape_t){0};
-    if (eq(n->name, "polyline") || eq(n->name, "polygon")) {
-        out->kind = eq(n->name, "polygon") ? SVG_SHAPE_POLYGON : SVG_SHAPE_POLYLINE;
+    if (same_word(n->name, "polyline") || same_word(n->name, "polygon")) {
+        out->kind = same_word(n->name, "polygon") ? SVG_SHAPE_POLYGON : SVG_SHAPE_POLYLINE;
         const char *points = attr(n, "points");
         size_t len = 0;
         while (len <= 1048576 && points[len])
@@ -783,7 +849,7 @@ static svg_status_t shape(void *ctx, void *snapshot, const svg_style_request_t *
         out->points = (svg_string_t){points, len};
         return SVG_OK;
     }
-    if (eq(n->name, "line")) {
+    if (same_word(n->name, "line")) {
         out->kind = SVG_SHAPE_LINE;
         const char *names[] = {"x1", "y1", "x2", "y2"};
         double *coords[] = {&out->x, &out->y, &out->x2, &out->y2};
@@ -795,7 +861,7 @@ static svg_status_t shape(void *ctx, void *snapshot, const svg_style_request_t *
         }
         return SVG_OK;
     }
-    bool rect = eq(n->name, "rect"), circle = eq(n->name, "circle");
+    bool rect = same_word(n->name, "rect"), circle = same_word(n->name, "circle");
     out->kind = rect ? SVG_SHAPE_RECT : SVG_SHAPE_ELLIPSE;
     const garb_prop_t props[] = {rect ? GARB_X : GARB_CX,
                                  rect ? GARB_Y : GARB_CY,
@@ -812,7 +878,7 @@ static svg_status_t shape(void *ctx, void *snapshot, const svg_style_request_t *
                          : i % 2 ? a->height
                                  : a->width;
         svg_status_t status =
-            geometry_value(a, n, props[i], percent, i == 4 || i == 5 ? -1 : 0, coords[i]);
+            geometry_value(a, r->instance, props[i], percent, i == 4 || i == 5 ? -1 : 0, coords[i]);
         if (status != SVG_OK)
             return status;
     }
@@ -830,11 +896,12 @@ static svg_status_t node(void *ctx, void *snapshot, uint64_t source, svg_node_t 
     Adapter *a = ctx;
     (void)snapshot;
     const os64_html_node_t *n = (const void *)(uintptr_t)source;
-    bool group = n == a->root || (n->ns == OS64_HTML_NS_SVG && eq(n->name, "g"));
-    out->kind = group                                              ? SVG_NODE_GROUP
-                : n->ns == OS64_HTML_NS_SVG && eq(n->name, "path") ? SVG_NODE_PATH
-                : basic_shape(n)                                   ? SVG_NODE_SHAPE
-                                                                   : SVG_NODE_UNSUPPORTED;
+    bool group = n == a->root || (n->ns == OS64_HTML_NS_SVG && same_word(n->name, "g"));
+    out->kind = group                                                     ? SVG_NODE_GROUP
+                : n->ns == OS64_HTML_NS_SVG && same_word(n->name, "path") ? SVG_NODE_PATH
+                : n->ns == OS64_HTML_NS_SVG && same_word(n->name, "use")  ? SVG_NODE_USE
+                : basic_shape(n)                                          ? SVG_NODE_SHAPE
+                                                                          : SVG_NODE_UNSUPPORTED;
     out->first_child = group ? (uintptr_t)element(a, n->first_child) : 0;
     out->next_sibling = (uintptr_t)element(a, n->next);
     return a->work > SVG_ADAPTER_WORK ? SVG_LIMIT : SVG_OK;
@@ -850,8 +917,11 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
         out->display = false;
         return SVG_OK;
     }
+    svg_status_t status = remember(a, r);
+    if (status != SVG_OK)
+        return status;
     Computed c;
-    svg_status_t status = compute(a, n, &c);
+    status = compute(a, r->instance, &c);
     if (status != SVG_OK)
         return status;
     *out = c.s;
@@ -875,7 +945,18 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
         if (status != SVG_OK)
             return status;
     }
-    bool path = n->ns == OS64_HTML_NS_SVG && eq(n->name, "path");
+    if (n->ns == OS64_HTML_NS_SVG && same_word(n->name, "use")) {
+        double x, y;
+        status = geometry_value(a, r->instance, GARB_X, a->width, 0, &x);
+        if (status == SVG_OK)
+            status = geometry_value(a, r->instance, GARB_Y, a->height, 0, &y);
+        if (status != SVG_OK)
+            return status;
+        out->transform = multiply(out->transform, (Map){1, 0, 0, 1, x, y});
+        if (!finite_map(out->transform))
+            return SVG_LIMIT;
+    }
+    bool path = n->ns == OS64_HTML_NS_SVG && same_word(n->name, "path");
     bool geometry = path || basic_shape(n);
     if (geometry && out->visible && out->stroke.kind != SVG_PAINT_NONE) {
         if (c.vector)
@@ -912,7 +993,7 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
                                  "marker-mid", "marker-end", "paint-order"};
     for (size_t i = 0; i < sizeof(unsupported) / sizeof(unsupported[0]); ++i) {
         const char *v = attr(n, unsupported[i]);
-        if (*v && !eq(v, "none") && !eq(v, "normal"))
+        if (*v && !same_word(v, "none") && !same_word(v, "normal"))
             return SVG_UNSUPPORTED;
     }
     if (n != a->root) {
@@ -926,7 +1007,7 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
         out->fill.kind = SVG_PAINT_NONE;
         out->stroke.kind = SVG_PAINT_NONE;
     }
-    if (basic_shape(n) && eq(n->name, "line"))
+    if (basic_shape(n) && same_word(n->name, "line"))
         out->fill.kind = SVG_PAINT_NONE;
     const char *data = path ? attr(n, "d") : "";
     size_t len = 0;
@@ -935,6 +1016,104 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
     if (len > 1048576)
         return SVG_LIMIT;
     *d = (svg_string_t){data, len};
+    return SVG_OK;
+}
+static int hex(char c)
+{
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
+    return -1;
+}
+static svg_status_t reference(void *ctx, void *snapshot, const svg_style_request_t *r,
+                              uint64_t *source)
+{
+    Adapter *a = ctx;
+    (void)snapshot;
+    const os64_html_node_t *use = (const void *)(uintptr_t)r->source;
+    const os64_html_attr_t *href = os64_html_attr(use, "href");
+    // Presence, including an empty href, takes precedence over xlink:href.
+    const char *text = href ? href->value : attr(use, "xlink:href");
+    Scanner scan;
+    *source = 0;
+    if (!scanner(text ? text : "", &scan))
+        return SVG_LIMIT;
+    ws(&scan);
+    while (scan.left && space(scan.p[scan.left - 1]))
+        --scan.left;
+    if (!scan.left)
+        return SVG_OK;
+    if (*scan.p != '#')
+        return SVG_UNSUPPORTED; // This profile has no external resource resolver.
+    char id[SVG_ATTR_MAX + 1];
+    size_t len = 0;
+    for (size_t i = 1; i < scan.left; ++i) {
+        char c = scan.p[i];
+        if (c == '%' && i + 2 < scan.left && hex(scan.p[i + 1]) >= 0 && hex(scan.p[i + 2]) >= 0) {
+            c = (char)(hex(scan.p[i + 1]) * 16 + hex(scan.p[i + 2]));
+            i += 2;
+        }
+        if (!c)
+            return SVG_OK;
+        id[len++] = c;
+    }
+    id[len] = 0;
+    if (!len)
+        return SVG_OK;
+    // Search document order, including other SVG roots. Template contents are
+    // separate trees. The first ID wins even when it names a non-SVG element.
+    const os64_html_node_t *n = a->doc->document, *target = NULL;
+    while (n) {
+        if (++a->work > SVG_ADAPTER_WORK)
+            return SVG_LIMIT;
+        if (n->kind == OS64_HTML_ELEMENT) {
+            // Fragment-only lookup requires a document-local base. A URL
+            // resolver is needed before base-changing documents can use it.
+            if (!a->base_checked &&
+                ((n->ns == OS64_HTML_NS_HTML && same_word(n->name, "base") && *attr(n, "href")) ||
+                 *attr(n, "xml:base")))
+                return SVG_UNSUPPORTED;
+            const char *candidate = attr(n, "id");
+            size_t i = 0;
+            while (i < len && candidate[i] && candidate[i] == id[i])
+                ++i;
+            a->work += i;
+            if (a->work > SVG_ADAPTER_WORK)
+                return SVG_LIMIT;
+            if (!target && i == len && !candidate[i]) {
+                target = n;
+                if (a->base_checked)
+                    break;
+            }
+        }
+        if (n->first_child)
+            n = n->first_child;
+        else {
+            while (n && !n->next) {
+                if (++a->work > SVG_ADAPTER_WORK)
+                    return SVG_LIMIT;
+                n = n->parent;
+            }
+            if (n)
+                n = n->next;
+        }
+    }
+    a->base_checked = true;
+    if (!target || target->ns != OS64_HTML_NS_SVG)
+        return SVG_OK;
+    size_t depth = 0;
+    for (const os64_html_node_t *p = use; p; p = p->parent) {
+        if (++depth > SVG_DEPTH_MAX || ++a->work > SVG_ADAPTER_WORK)
+            return SVG_LIMIT;
+        if (p == target)
+            return SVG_OK;
+    }
+    if (same_word(target->name, "svg") || same_word(target->name, "symbol"))
+        return SVG_UNSUPPORTED; // Referenced viewports need their own clipping.
+    *source = (uintptr_t)target;
     return SVG_OK;
 }
 void yonder_svg_pixels_free(const os64_geometry_memory_t *m, yonder_svg_pixels_t *out)
@@ -971,7 +1150,8 @@ svg_status_t yonder_svg_render(const os64_html_document_t *doc, const garb_casca
                  .cascade = cascade,
                  .root = box->node,
                  .root_color = box->style->color ^ 0xff000000u,
-                 .initial_color = initial_color};
+                 .initial_color = initial_color,
+                 .memory = *memory};
     Map map;
     svg_status_t status = viewport(&a, content.w, content.h, zoom, &map);
     if (status == SVG_PENDING)
@@ -997,7 +1177,7 @@ svg_status_t yonder_svg_render(const os64_html_document_t *doc, const garb_casca
     status = svg_create(&options, &c);
     if (status != SVG_OK)
         return status;
-    svg_provider_t provider = {&a, acquire, release, node, style, shape};
+    svg_provider_t provider = {&a, acquire, release, node, style, shape, reference};
     status = svg_scene_prepare(c, &provider, SVG_MODE_INLINE, &map, &scene);
     if (status == SVG_OK) {
         out->bytes = (size_t)(width * height * 4);

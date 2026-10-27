@@ -285,7 +285,7 @@ static void svg_cases(const char *dir)
     assert(draw_fixture(&f, &l, &p, f.box->rect) == SVG_UNSUPPORTED && !p.pixels && !l.live);
     fixture_free(&f);
     const char *bad[] = {
-        "<use href='#unknown'/>",
+        "<use href='external.svg#unknown'/>",
         "<rect width=20 height=20 style='x:calc(2px)'/>",
         "<rect width=20 height=20 stroke=red stroke-dasharray='2 2' pathLength='100'/>",
         "<path style='transform:translateX(20px)' d='M0 0H20V20Z'/>",
@@ -552,6 +552,9 @@ static void stroke_cases(const char *dir)
         sizeof(cases) / sizeof(cases[0]), exact, cuts);
 }
 
+
+#include "test_yonder_svg_use.inc"
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
@@ -561,6 +564,7 @@ int main(int argc, char **argv)
     assert(os64_text_create(&o, &s_text) == OS64_FONT_OK);
     kEnv.text = s_text;
     size_t base = live;
+    use_cases(argv[1]);
     stroke_cases(argv[1]);
     shape_cases(argv[1]);
     svg_dimension_cases();
