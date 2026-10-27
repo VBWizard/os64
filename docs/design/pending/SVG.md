@@ -37,7 +37,8 @@ the [Yonder connection](SVG_YONDER.md) paints a bounded inline path/group/basic-
 [SVG_BOUNDS.md](SVG_BOUNDS.md) adds geometric bounds and object-coordinate clips,
 with shared-consumer boundaries for gradients and Canvas 2D through 6c.
 [SVG_DOCUMENTS.md](SVG_DOCUMENTS.md) adds independently owned XML image documents,
-isolated embedded styles and secure-static rendering before picture-job integration.
+isolated embedded styles and secure-static rendering. [SVG_IMAGES.md](SVG_IMAGES.md)
+connects picture jobs, default object sizing, `<img>` and background painting.
 This design does not establish
 performance or compatibility percentages.
 

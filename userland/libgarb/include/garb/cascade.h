@@ -114,7 +114,18 @@ typedef struct {
 // sheet is the same after any number of cascades as before the first.
 garb_cascade_t *garb_cascade(const garb_sheet_in_t *sheets, int32_t n,
                              const os64_html_document_t *doc, garb_env_t env);
-// What one cascade may read of all its sheets together: their rules'
+// Independent arena caps for an owner with a smaller working allowance.
+// attribute_bytes bounds each retained style-attribute parse and the temporary
+// presentation-value parse. attributes bounds their retained count. Scratch,
+// slot tables and selector/match arrays are separate; these are not a unified
+// allocator budget. Zero limits are literal. Input sheets remain caller-owned.
+typedef struct {
+    size_t state_bytes, read_bytes, attribute_bytes, attributes;
+} garb_cascade_limits_t;
+garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *, int32_t,
+                                     const os64_html_document_t *, garb_env_t,
+                                     garb_cascade_limits_t);
+// The default cap on what a cascade reads of its sheets together: their rules'
 // blocks, selectors and values go into one arena held to this, beside the
 // cascade's own state (held to GARB_ARENA_MAX), and a cascade that reaches
 // it comes up short as any short read does (garb_cascade_incomplete).

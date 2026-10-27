@@ -480,18 +480,6 @@ int64_t yonder_##kind##_run(void *job, bool (*cancelled)(void *), void *ctx, voi
 void yonder_##kind##_release(void *job, void *product) { \
     (void)job; (void)product; check(false,"unexpected worker product"); \
 }
-int64_t yonder_picture_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
-    (void)job; (void)cancelled; (void)ctx; (void)out;
-    check(false,"unexpected worker execution"); return -1;
-}
-/* As picture.c releases a picture job and a product with no pixels: a case
- * that hands reaped() a picture makes both with os64_calloc. */
-void yonder_picture_release(void *job, void *product) {
-    yonder_picture_t *got=product;
-    check(got==NULL || (got->image.pixels==NULL && got->sequence==NULL),"a released picture holds no pixels here");
-    os64_free(got);
-    os64_free(job);
-}
 int64_t yonder_webfont_run(void *job, bool (*cancelled)(void *), void *ctx, void **out) {
     (void)job; (void)cancelled; (void)ctx; (void)out;
     check(false,"unexpected worker execution"); return -1;
@@ -546,6 +534,42 @@ static bool script_land_from(const char *tail, const char *source, const char *f
     }
     return false;
 }
+/* Picture transport/codec fixtures. The SVG worker and owner are production
+ * code; these stand in for the network and already-tested raster codecs. */
+static const char *picture_http_bytes, *picture_http_type;
+static int picture_http_status, picture_fetches, picture_raster_decodes;
+static bool picture_http_failure;
+bool way_fetch_whole(way_hooks_t *hooks, const char *url, os64_fetch_options_t *options,
+                       size_t cap, way_whole_t *out) {
+    (void)url; (void)options; ++picture_fetches; memset(out,0,sizeof(*out));
+    if(picture_http_failure || (hooks->cancelled && hooks->cancelled(hooks->cancel_ctx))) return false;
+    size_t n=picture_http_bytes ? strlen(picture_http_bytes) : 0;
+    if(n>cap) return false;
+    out->bytes=os64_malloc(n+1); if(!out->bytes) return false;
+    if(n) memcpy(out->bytes,picture_http_bytes,n);
+    out->bytes[n]=0; out->len=n;
+    out->status=picture_http_status;
+    os64_strcopy(out->content_type,sizeof(out->content_type),picture_http_type ? picture_http_type : "");
+    return true;
+}
+os64_image_status_t os64_image_decode(const uint8_t *bytes,size_t len,os64_image_t *out) {
+    ++picture_raster_decodes; memset(out,0,sizeof(*out));
+    if(len==6 && !memcmp(bytes,"RASTER",6)) {
+        out->pixels=os64_malloc(4); if(!out->pixels) return OS64_IMAGE_NO_MEMORY;
+        out->width=out->height=1; out->pixels[0]=0xff123456; return OS64_IMAGE_OK;
+    }
+    return OS64_IMAGE_UNKNOWN_FORMAT;
+}
+os64_image_status_t os64_image_sequence_decode(const uint8_t *bytes,size_t len,
+                                               os64_image_sequence_t **out) {
+    (void)bytes;(void)len;*out=NULL;return OS64_IMAGE_UNSUPPORTED;
+}
+const char *os64_fetch_status_name(os64_fetch_status_t status) {
+    (void)status; return "fixture fetch status";
+}
+const char *os64_image_status_name(os64_image_status_t status) {
+    (void)status; return "fixture status";
+}
 /* A moving picture a case plays (picture_tick_cases): its frame, and how
  * many times it was advanced. No other case has one. */
 struct os64_image_sequence { os64_image_frame_t frame; uint32_t nexts; };
@@ -583,7 +607,9 @@ os64_slurp_status_t os64_slurp(const char *path, size_t cap, uint8_t **bytes, si
     if(slurp_path==NULL || !os64_streq(path,slurp_path)) return OS64_SLURP_NO_FILE;
     clock_us+=slurp_us;
     *length=slurp_length!=0 ? slurp_length : strlen(slurp_bytes);
-    *bytes=os64_malloc(*length+1); memcpy(*bytes,slurp_bytes,*length); (*bytes)[*length]=0;
+    if(*length>cap) return OS64_SLURP_TOO_BIG;
+    *bytes=os64_malloc(*length+1); if(!*bytes) return OS64_SLURP_NO_MEMORY;
+    memcpy(*bytes,slurp_bytes,*length); (*bytes)[*length]=0;
     return OS64_SLURP_OK;
 }
 
@@ -5495,6 +5521,8 @@ static uint32_t *stand_in_shot(void) {
     yonder_scratch_free(g.paint_scratch); g.paint_scratch=NULL;
     return screen.surf.pixels;
 }
+#include "test_yonder_svg_images.inc"
+
 static void svg_window_cases(void)
 {
     probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
@@ -10252,6 +10280,7 @@ int main(void)
     inserted_frame_cases();
     stand_in_paint_cases();
     svg_window_cases();
+    picture_svg_window_cases();
     covered_link_cases();
     classic_downloaded_cases();
     hover_batch_cases();

@@ -22,7 +22,10 @@ svg_status_t yonder_svg_render(const os64_html_document_t *, const garb_cascade_
 /* Image viewport dimensions are caller-resolved CSS pixels at resolution 1.
  * Root presentation is independent of a host page's box/style. */
 typedef struct {
-    uint32_t width, height;
+    double width, height;
+    // Both zero: one output pixel per CSS pixel. Otherwise the raster extent;
+    // zoom changes these, not the CSS viewport or media-query environment.
+    uint32_t pixel_width, pixel_height;
     bool dark, reduced_motion;
     void *cancel_context;
     bool (*cancelled)(void *);
@@ -34,5 +37,6 @@ svg_status_t yonder_svg_render_image_tree(const os64_html_document_t *, const ga
                                          const os64_geometry_memory_t *,
                                          const os64_geometry_backend_t *, yonder_svg_pixels_t *);
 void yonder_svg_pixels_free(const os64_geometry_memory_t *, yonder_svg_pixels_t *);
+bool yonder_svg_natural_size(const os64_html_node_t *, const garb_cascade_t *, int32_t *, int32_t *);
 bool yonder_svg_size(const os64_html_node_t *, int32_t *, int32_t *);
 #endif

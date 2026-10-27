@@ -4066,3 +4066,14 @@ resource isolation, allocation/cancellation cuts and native/browser references
 are covered. Picture-job dispatch, intrinsic sizing, admission accounting,
 gradients and caches remain separate integration work; this increment does not
 make external SVG images load through Yonder's `<img>` path.
+
+
+### Slice 6c, SVG image route — 2026-10-27
+
+[SVG_IMAGES.md](SVG_IMAGES.md) connects file/HTTP(S) SVG documents to tagged
+picture jobs, retained page ownership, default object sizing and size-aware
+`<img>`/background painting. CSS viewport dimensions stay independent of zoomed
+output pixels. Caller-bounded cascade and attribute-parse limits support
+admission accounting. `/tests/pages/svg-images.html` exercises source changes,
+shared URLs, contain/cover, private styles, static processing and tiled SVG.
+Gradients, pixel-variant caches and corpus-led performance work remain in 6c.

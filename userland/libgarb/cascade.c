@@ -11,7 +11,7 @@
 // WHAT A CASCADE READS IS ITS OWN. A sheet keeps each rule's block as the
 // component values its parse made, and a cascade reads them — the blocks,
 // the selectors, the values — into one arena of its own for all its
-// sheets (`reads`), held to GARB_CASCADE_READ_MAX, and freed with the
+// sheets (`reads`), held to the selected read cap, and freed with the
 // cascade. Nothing is written into a sheet, so a sheet is the same after
 // any number of cascades as before the first, and every cascade starts
 // from the whole budget (GARB.md § The cost).
@@ -146,12 +146,13 @@ struct garb_cascade {
     os64_html_pin_t pin;
     garb_parsed_t self;         // the cascade's own arena, in a parse's shape
     // What it read of the sheets it applied, all of them: one arena held to
-    // GARB_CASCADE_READ_MAX, in a parse's shape, so a read that ran short —
+    // the selected read limit, in a parse's shape, so a read that ran short —
     // of memory or of that budget — says so in `incomplete` as a parse's
     // does (none where there was no memory for the arena: the reads went
     // into `self`). Freed with the cascade.
     garb_parsed_t reads;
     garb_env_t env;
+    garb_cascade_limits_t limits;
     os64_html_quirks_t quirks;
     bool incomplete;
     Rule *rules;
@@ -1941,10 +1942,14 @@ static int32_t inline_decls(garb_cascade_t *c, const os64_html_node_t *el, Decl 
     const os64_html_attr_t *a = os64_html_attr(el, "style");
     if (a == NULL || a->value == NULL || a->value[0] == '\0')
         return 0;
+    if ((size_t)c->nattrs >= c->limits.attributes) {
+        c->incomplete = true;
+        return 0;
+    }
     if (!grow(c, (void **)&c->attrs, c->nattrs, &c->attrcap, sizeof(garb_parsed_t)))
         return 0;
     garb_parsed_t *p = &c->attrs[c->nattrs];
-    if (garb_parse_block(a->value, os64_strlen(a->value), p) != GARB_OK) {
+    if (garb_parse_block_limited(a->value, os64_strlen(a->value), c->limits.attribute_bytes, p) != GARB_OK) {
         garb_free(p);
         c->incomplete = true;           // a style the page gave was not read
         return 0;
@@ -2036,7 +2041,8 @@ static int32_t svg_attributes(garb_cascade_t *c, const os64_html_node_t *el, Dec
                 return 0;
         }
         garb_parsed_t temporary = {0};
-        if (garb_parse_values(a->value, os64_strlen(a->value), &temporary) != GARB_OK ||
+        if (garb_parse_values_limited(a->value, os64_strlen(a->value),
+                                      c->limits.attribute_bytes, &temporary) != GARB_OK ||
             temporary.incomplete) {
             garb_free(&temporary);
             c->incomplete = true;
@@ -2249,10 +2255,22 @@ static bool is_el(const os64_html_node_t *n)
 garb_cascade_t *garb_cascade(const garb_sheet_in_t *sheets, int32_t n,
                              const os64_html_document_t *doc, garb_env_t env)
 {
+    return garb_cascade_limited(sheets, n, doc, env,
+        (garb_cascade_limits_t){GARB_ARENA_MAX, GARB_CASCADE_READ_MAX, GARB_ARENA_MAX, SIZE_MAX});
+}
+
+garb_cascade_t *garb_cascade_limited(const garb_sheet_in_t *sheets, int32_t n,
+                                     const os64_html_document_t *doc, garb_env_t env,
+                                     garb_cascade_limits_t limits)
+{
+    if (!limits.state_bytes || !limits.read_bytes || !limits.attribute_bytes)
+        return NULL;
     garb_cascade_t *c = os64_calloc(1, sizeof(*c));
     if (c == NULL)
         return NULL;
-    c->self.arena = os64_arena_create(0, GARB_ARENA_MAX);
+    c->limits = limits;
+    c->self.arena_max = limits.state_bytes;
+    c->self.arena = os64_arena_create(0, limits.state_bytes);
     if (c->self.arena == NULL) {
         os64_free(c);
         return NULL;
@@ -2272,8 +2290,8 @@ garb_cascade_t *garb_cascade(const garb_sheet_in_t *sheets, int32_t n,
     // the cascade's all the same, and says so when it runs short.
     garb_parsed_t *into = &c->self;
     if (n > 0) {
-        c->reads.arena = os64_arena_create(0, GARB_CASCADE_READ_MAX);
-        c->reads.arena_max = GARB_CASCADE_READ_MAX;
+        c->reads.arena = os64_arena_create(0, limits.read_bytes);
+        c->reads.arena_max = limits.read_bytes;
         if (c->reads.arena != NULL)
             into = &c->reads;
     }

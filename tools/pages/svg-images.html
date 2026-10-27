@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>SVG: special delivery</title>
+<style>
+body { margin:24px; background:#eaf3ed; color:#243e35; font:16px sans-serif; }
+h1 { margin-bottom:8px; } h2 { font-size:20px; margin:0 0 10px; }
+p { max-width:720px; line-height:1.5; }
+.card { display:inline-block; vertical-align:top; width:300px; margin:0 16px 20px 0; padding:18px; background:white; border:1px solid #b5ccbd; border-radius:12px; }
+.hero { display:block; width:280px; height:168px; }
+.small { width:70px; height:42px; } .medium { width:140px; height:84px; }
+.square { width:132px; height:132px; background:#f3f7f4; }
+.contain { object-fit:contain; } .cover { object-fit:cover; }
+button { padding:10px 18px; font:inherit; }
+/* This page's selectors must not reach inside its separate SVG images. */
+rect, path, circle { fill:#be4c94!important; }
+.swatch { display:inline-block; width:22px; height:22px; background:#be4c94; vertical-align:middle; }
+.tiles { width:280px; height:168px; background-image:url(svg-leaf-tile.svg); background-size:48px 48px; }
+</style></head><body>
+<h1>SVG: special delivery</h1>
+<p>These drawings arrived as separate image files. Try the button with scripts enabled, then 25% and 400% zoom.</p>
+<div class="card"><h2>1. A postcard arrived</h2>
+<img id="postcard" class="hero" src="svg-postcard-blue.svg" alt="A mountain lake with a golden sun">
+<p>A real SVG image, loaded through the same door as a photograph.</p>
+<button id="swap">Send the other postcard</button><p id="result">Blue water, golden sunshine.</p></div>
+<div class="card"><h2>2. Same address, new sizes</h2>
+<img class="small" src="svg-postcard-blue.svg" alt="Small mountain lake">
+<img class="medium" src="svg-postcard-blue.svg" alt="Larger mountain lake">
+<p>One fetched drawing, two sizes. Both should keep their sharp edges when you zoom.</p></div>
+<div class="card"><h2>3. Room or a close-up?</h2>
+<img class="square contain" src="svg-postcard-blue.svg" alt="Whole postcard with space above and below">
+<img class="square cover" src="svg-postcard-blue.svg" alt="Postcard cropped to fill a square">
+<p>The left keeps the whole scene. The right fills its square and crops the sides.</p></div>
+<div class="card"><h2>4. A private wardrobe</h2>
+<img class="hero" src="svg-postcard-blue.svg" alt="A postcard keeping its original colors">
+<p><span class="swatch"></span> This page asks shapes to wear purple. The image keeps its own blue, green and gold.</p></div>
+<div class="card"><h2>5. A quiet passenger</h2>
+<img src="svg-private-badge.svg" width="120" height="120" alt="A green shield with a cream check mark">
+<p>This image asks to run code, animate and fetch another style. In Yonder's static image mode, it stays green and quiet—even with page scripts enabled.</p></div>
+<div class="card"><h2>6. Leaves behind the scenes</h2>
+<div class="tiles"></div>
+<p>SVG works as a repeating background too. Each leaf is drawn for the tile's size.</p></div>
+<script>
+var amber = false;
+document.getElementById('swap').addEventListener('click', function () {
+  amber = !amber;
+  document.getElementById('postcard').setAttribute('src', amber ? 'svg-postcard-amber.svg' : 'svg-postcard-blue.svg');
+  document.getElementById('result').textContent = amber ? 'Green water, an amber evening.' : 'Blue water, golden sunshine.';
+});
+</script></body></html>

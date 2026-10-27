@@ -1,4 +1,5 @@
 #include "svg_document.h"
+#include <math.h>
 #include <os64/arena.h>
 #include <os64/mem.h>
 #include <os64/str.h>
@@ -8,6 +9,8 @@ struct yonder_svg_document {
     garb_parsed_t sheets[YONDER_SVG_DOCUMENT_SHEETS];
     const char *media[YONDER_SVG_DOCUMENT_SHEETS];
     size_t nsheets, cost;
+    bool measured, dark, reduced_motion;
+    uint32_t width, height;
 };
 static svg_status_t xml_verdict(xml_status_t s)
 {
@@ -185,6 +188,47 @@ svg_status_t yonder_svg_document_parse(const void *bytes, size_t len, bool (*can
         *out = d;
     return status;
 }
+static garb_cascade_t *document_cascade(const yonder_svg_document_t *d, garb_env_t env)
+{
+    garb_sheet_in_t sheets[YONDER_SVG_DOCUMENT_SHEETS] = {0};
+    for (size_t i = 0; i < d->nsheets; ++i)
+        sheets[i] = (garb_sheet_in_t){.sheet = &d->sheets[i], .media = d->media[i]};
+    return garb_cascade_limited(sheets, (int32_t)d->nsheets, d->tree, env,
+        (garb_cascade_limits_t){YONDER_SVG_CASCADE_BYTES, YONDER_SVG_READ_BYTES,
+                                YONDER_SVG_ATTRIBUTE_BYTES, YONDER_SVG_ATTRIBUTES});
+}
+svg_status_t yonder_svg_document_size(yonder_svg_document_t *d, bool dark, bool reduced,
+                                      bool (*cancelled)(void *), void *context,
+                                      uint32_t *width, uint32_t *height)
+{
+    if (!d || !width || !height)
+        return SVG_BAD_ARGUMENT;
+    *width = *height = 0;
+    if (cancelled && cancelled(context))
+        return SVG_CANCELLED;
+    if (!d->measured || d->dark != dark || d->reduced_motion != reduced) {
+        garb_env_t env = {.width = 300, .height = 150, .dark = dark,
+                          .reduced_motion = reduced, .resolution = 1};
+        garb_cascade_t *cascade = document_cascade(d, env);
+        if (!cascade)
+            return SVG_NO_MEMORY;
+        int32_t w, h;
+        bool sized = yonder_svg_natural_size(os64_html_document_element(d->tree), cascade, &w, &h);
+        garb_cascade_free(cascade);
+        if (cancelled && cancelled(context))
+            return SVG_CANCELLED;
+        if (!sized)
+            return SVG_LIMIT;
+        d->width = (uint32_t)w;
+        d->height = (uint32_t)h;
+        d->dark = dark;
+        d->reduced_motion = reduced;
+        d->measured = true;
+    }
+    *width = d->width;
+    *height = d->height;
+    return SVG_OK;
+}
 svg_status_t yonder_svg_document_render(const yonder_svg_document_t *d,
                                         const yonder_svg_image_view_t *view,
                                         const os64_geometry_memory_t *memory,
@@ -196,23 +240,27 @@ svg_status_t yonder_svg_document_render(const yonder_svg_document_t *d,
     *out = (yonder_svg_pixels_t){0};
     if (!d || !view || !memory || !memory->alloc || !memory->free)
         return SVG_BAD_ARGUMENT;
-    if (view->width > 16384 || view->height > 16384 ||
-        (uint64_t)view->width * view->height > 8388608)
+    if ((!view->pixel_width) != (!view->pixel_height))
+        return SVG_BAD_ARGUMENT;
+    if (!isfinite(view->width) || !isfinite(view->height) ||
+        view->width < 0 || view->height < 0 || view->width > 16384 || view->height > 16384)
+        return SVG_LIMIT;
+    uint32_t pw = view->pixel_width ? view->pixel_width : (uint32_t)ceil(view->width);
+    uint32_t ph = view->pixel_height ? view->pixel_height : (uint32_t)ceil(view->height);
+    if (pw > 16384 || ph > 16384 ||
+        (uint64_t)pw * ph > 8388608)
         return SVG_LIMIT;
     if (view->cancelled && view->cancelled(view->cancel_context))
         return SVG_CANCELLED;
     if (!view->width || !view->height)
         return SVG_OK;
-    garb_sheet_in_t sheets[YONDER_SVG_DOCUMENT_SHEETS] = {0};
-    for (size_t i = 0; i < d->nsheets; ++i)
-        sheets[i] = (garb_sheet_in_t){.sheet = &d->sheets[i], .media = d->media[i]};
     garb_env_t env = {.width = view->width,
                       .height = view->height,
                       .dark = view->dark,
                       .reduced_motion = view->reduced_motion,
                       .scripting = false,
                       .resolution = 1};
-    garb_cascade_t *cascade = garb_cascade(sheets, (int32_t)d->nsheets, d->tree, env);
+    garb_cascade_t *cascade = document_cascade(d, env);
     if (!cascade)
         return SVG_NO_MEMORY;
     svg_status_t status;

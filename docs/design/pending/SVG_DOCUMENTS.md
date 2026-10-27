@@ -3,8 +3,8 @@
 2026-10-27. This first 6c increment connects XML bytes to the existing SVG
 renderer through an independently owned document and cascade. It builds on
 [object coordinates](SVG_BOUNDS.md) and the [XML tree adapter](XML.md).
-It does not connect Yonder's picture jobs or `<img>` dispatch. There is no new
-P5-visible feature or gallery in this increment.
+The following [image-route increment](SVG_IMAGES.md) connects picture jobs
+and adds the P5 gallery; this document records the standalone owner contract.
 
 ## Ownership and interface
 
@@ -18,11 +18,13 @@ parser status independently of later CSS/profile errors.
 
 The owner retains its tree, parsed sheets and media strings. Render rebuilds
 an isolated cascade for a caller-resolved width/height in CSS pixels at
-resolution 1, dark preference and reduced-motion preference. No host-page
+resolution 1, dark preference and reduced-motion preference. The image route
+also accepts a separate output pixel extent for zoom. No host-page
 styles or computed `color` enter this interface. `currentColor` starts at
 black and inherits within the SVG. SVG `style` elements accept absent/empty
 `type` or `text/css`; their `media` conditions use the image environment.
-Calls on one document require owner serialization. No mutable tree is exposed.
+Calls on one document require owner serialization. No mutable tree is exposed;
+default-size results are memoized for the last preference pair.
 
 Pixels use the caller's geometry-memory ledger, with the existing
 `yonder_svg_pixels_free` contract. They can outlive the document. Scene,
@@ -84,13 +86,15 @@ and the [CSS transforms origin rule](https://www.w3.org/TR/css-transforms-1/#tra
 
 The retained-document cap is checked after each stylesheet parse. That parse
 can temporarily reach libgarb's separate 96 MiB arena cap before rejection;
-this is not a 32 MiB peak-memory guarantee. Each render also uses libgarb's
-96 MiB cascade-state and 192 MiB read arenas. XML parser bookkeeping has its
+this is not a 32 MiB peak-memory guarantee. Each render uses caller-bounded libgarb arenas: 32 MiB state, 64 MiB reads,
+at most 128 retained inline-style parses of 2 MiB each, and a temporary
+2 MiB presentation-value parse. The image route records scratch/admission
+accounting separately. XML parser bookkeeping has its
 own limits. `document_cost` reports retained document/tree/sheet storage,
 excluding temporary cascade/render allocations and allocator overhead.
-Picture-job admission must account for these separate owners before wiring
-untrusted downloads into asynchronous image loading; the render ledger alone
-is not a total-document memory budget.
+The [image route](SVG_IMAGES.md#working-allowances) accounts for these owners
+separately from the render ledger; that ledger alone is not a total-document
+memory budget.
 
 Cancellation is checked by XML parsing, stylesheet collection, adapter work
 and the native scene/paint context. CSS parsing/cascade construction is bounded
@@ -134,13 +138,14 @@ Freestanding Yonder/flowdump and their matching libraries build successfully.
 The host fixtures exercise the new API directly; this does not claim a guest
 or P5 test of an external image-loading route.
 
-## Next integration gate
+## Following integration
 
-The next slice is the image route: tagged SVG picture jobs, intrinsic sizing,
-content recognition, lifetime/cancellation and admission accounting, followed
-by real `<img>` delivery and a P5 gallery. Gradients and cache/corpus work remain
+The [image route](SVG_IMAGES.md) supplies tagged picture jobs, default object
+sizing, content recognition, lifetime/cancellation and admission accounting,
+with real `<img>` delivery and a P5 gallery. Gradients and cache/corpus work remain
 part of 6c. The renderer continues to receive caller-resolved dimensions;
-this increment does not implement replaced-element intrinsic sizing or caches.
+the image route supplies default natural dimensions, while full replaced-element
+intrinsic sizing and raster-variant caches remain follow-ups.
 
 
 ## Clip-resource processing regression
