@@ -136,8 +136,12 @@ theme and zoom to 400% to check repaint.
 - Private windowed QEMU: six cards inspected, width toggled both ways, 400%
   zoom and normal-size restoration checked. Shutdown completed normally;
   read-only root and home filesystem checks both returned zero.
-- P5 verification is pending. The frozen delivery contains the guest-tested
-  Yonder, flowdump, 19 matching libraries and five gallery pages.
+- P5: Chris confirmed the gallery passes, including 400% and 25% zoom.
+  Card 4 intentionally offsets the inner window to the right: its 88-unit
+  width starts at x=18 inside the 112-unit pale frame, leaving margins of
+  18 units left and 6 right. The reported placement matches the fixture.
+  The frozen delivery contains the guest-tested Yonder, flowdump, 19 matching
+  libraries and five gallery pages.
 
 Screenshots: [initial](../../svg-evidence/yonder-viewports-top.png),
 [widened](../../svg-evidence/yonder-viewports-changed.png),
