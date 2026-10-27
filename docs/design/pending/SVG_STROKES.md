@@ -130,7 +130,11 @@ QEMU uses private copies of both root and home disks. All six cards and both
 toggle directions pass; the restored dash-card pixels exactly match the
 initial phase. Magnified strokes repaint at 400% zoom, then return to normal
 zoom. The guest shuts down cleanly and both filesystems pass `e2fsck -fn`.
-The P5 checkpoint remains for the user to verify.
+
+Chris confirmed that the `32b65107` delivery passes on the P5. Repeated rapid
+clicks on "Shift the dashes" produce apparent motion, including at 400% page
+zoom. This exercises script-driven dash-offset mutation and repaint on real
+hardware; it does not measure frame rate or validate timed SVG animation.
 
 Guest captures: [gallery](../../svg-evidence/yonder-strokes-qemu.png),
 [shifted phase](../../svg-evidence/yonder-strokes-shifted-qemu.png),
