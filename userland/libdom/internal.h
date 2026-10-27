@@ -796,6 +796,10 @@ JSValue d_rejection_event_new(os64_dom_t *dom, JSContext *ctx, const char *type,
  * message, a primitive's own spelling, and for any other object a fixed
  * phrase. */
 void d_error_text(os64_dom_t *dom, JSContext *ctx, JSValueConst value, char *out, size_t cap);
+/* An Error's own `stack` into `out` (an outcome's stack_trace), read as a
+ * data property so no page code runs, "" for anything else; true when it
+ * was cut short. */
+bool d_error_stack(JSContext *ctx, JSValueConst error, char *out, size_t cap);
 /* The DOMException's own name and message (exception.c), borrowed; false
  * for a value that is not one. */
 bool d_dom_exception_fields(JSValueConst value, const char **name, const char **message);

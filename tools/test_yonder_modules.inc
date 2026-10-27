@@ -301,7 +301,29 @@ static void import_map_base_case(void) {
     request_drop();
 }
 
+/* Where a module failed (scripts.c's yonder_scripts_failure): a module is
+ * compiled under its address, so a place in its own source is the line
+ * and column alone, whether it threw or did not compile. */
+static void module_place_case(void) {
+    fake_fetch_reset();
+    fake_answer("GET","http://fixture.test/m/throws.js",200,MODULE_JS,"note('throws');\n  null.x");
+    fake_answer("GET","http://fixture.test/m/broken.js",200,MODULE_JS,"note('broken');\nlet = ;");
+    module_page("<script type=module src=/m/throws.js></script><script type=module src=/m/broken.js></script>");
+    check(loop_settle() && request_land("/m/throws.js") && request_land("/m/broken.js") && loop_settle(),
+          "modules: a page whose modules throw and do not compile settles");
+    const char *record=request_record_text();
+    check(strstr(record,"FAILED script http://fixture.test/m/throws.js: cannot read property 'x' of null, "
+                        "at 2:7 (1)")!=NULL,
+          "modules: a module's own failure is at its line and column");
+    check(strstr(record,"FAILED script http://fixture.test/m/broken.js: SyntaxError: variable name expected, "
+                        "at 2:5 (2)")!=NULL,
+          "modules: and one that does not compile, at its line, said when it compiled as its entry's rethrow says "
+          "it: one line");
+    request_drop();
+}
+
 static void module_cases(void) {
+    module_place_case();
     module_graph_case();
     module_order_case();
     module_dynamic_case();

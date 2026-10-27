@@ -1201,7 +1201,18 @@ as one counted line as the task closes (`and <n> more unhandled
 rejections`), so what a page's flood costs the host is not the page's to
 size, and none goes unrecorded. An
 exception's outcome is libjs's diagnostic as before, whatever an error
-listener did with its event.
+listener did with its event. A failure carries the stack its value has:
+libjs's diagnostic takes an exception's, and the binding takes a
+rejection's reason's and an error's it reported itself (an Error's own
+`stack`, read as a data property so no page code runs, `d_error_stack`)
+into the outcome's `stack_trace`, and gives it to `options.failed`
+beside the message. A DOMException carries none here, nor does a thrown
+primitive (DEBTS.md). A host finds where a failure happened with
+`os64_dom_stack_frame` (a stack's first frame that names a place in a
+script) and `os64_dom_frame_script` (the address of the script that
+frame's file names, or the page's own), rather than reading the engine's
+text itself; yonder's record is the first such host
+(YONDER_DIAGNOSTICS.md).
 
 **The interfaces.** `new ErrorEvent(type, {message, filename, lineno, colno,
 error})` and `new PromiseRejectionEvent(type, {promise, reason})` read
