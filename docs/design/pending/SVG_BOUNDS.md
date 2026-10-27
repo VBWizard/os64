@@ -122,7 +122,8 @@ Windowed QEMU verified six cards, the width toggle in both directions, 25% and
 400% zoom, and restoration to 100%. The frozen 28-file payload was installed
 byte-for-byte into private guest disks. Screenshots are in `docs/svg-evidence/`
 with the `yonder-bounds-` prefix. Orderly shutdown and read-only checks of both
-filesystems passed. P5 verification remains pending.
+filesystems passed. Chris built this worktree, installed it on the P5, and
+confirmed that the gallery passed on 2026-10-27; approved for review.
 
 Reproduce with `tools/test_svg_core.py` (core, `--paint`, `--yonder`),
 `tools/test_yonder_scripts_host.sh`, and `tools/svg_reftests/bounds.py` pointed
