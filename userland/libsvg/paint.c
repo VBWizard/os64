@@ -129,6 +129,35 @@ static Status clip_bounds(Render *r, os64_geometry_bounds_t b, Rect *out)
     *out = (Rect){(uint32_t)x0, (uint32_t)y0, (uint32_t)x1, (uint32_t)y1};
     return SVG_OK;
 }
+static Status stroke_outline(Render *r, const svg_geometry_t *geometry, const svg_style_t *style,
+                             const Map *map, os64_geometry_outline_t **out)
+{
+    svg_geometry_t *center = NULL, *caps = NULL;
+    Status status =
+        svg_stroke_geometry(r->c, geometry, map, r->options->arc_error, style, &center, &caps);
+    if (status == SVG_OK && (center->count || caps->count)) {
+        os64_geometry_status_t result;
+        if (caps->count) {
+            if (r->backend->struct_size < sizeof(*r->backend) || !r->backend->stroke_with_caps) {
+                status = SVG_UNSUPPORTED;
+                goto done;
+            }
+            result = r->backend->stroke_with_caps(
+                r->engine, center->commands, center->count, caps->commands, caps->count, map,
+                r->options->quantization_error, &style->stroke_style, out);
+        } else {
+            result = r->backend->stroke(r->engine, center->commands, center->count, map,
+                                        r->options->quantization_error, &style->stroke_style, out);
+        }
+        status = operation(r, result);
+        if (status == SVG_OK && !*out)
+            status = SVG_ENGINE_ERROR;
+    }
+done:
+    svg_free_geometry(r->c, center);
+    svg_free_geometry(r->c, caps);
+    return status;
+}
 static Status prepare_outlines(Render *r, const svg_scene_t *scene, Item *items)
 {
     size_t paints = 0;
@@ -185,19 +214,19 @@ static Status prepare_outlines(Render *r, const svg_scene_t *scene, Item *items)
         for (unsigned part = 0; part < 2; ++part) {
             if (!p->paint[part])
                 continue;
-            os64_geometry_status_t result =
-                part ? r->backend->stroke(r->engine, g->commands, g->count, &p->map,
-                                          r->options->quantization_error, &s->style.stroke_style,
-                                          &p->outline[part])
-                     : r->backend->path(r->engine, g->commands, g->count, &p->map,
-                                        r->options->quantization_error, &p->outline[part]);
-            status = operation(r, result);
+            if (part) {
+                status = stroke_outline(r, g, &s->style, &p->map, &p->outline[part]);
+            } else {
+                status = operation(r, r->backend->path(r->engine, g->commands, g->count, &p->map,
+                                                       r->options->quantization_error,
+                                                       &p->outline[part]));
+                if (status == SVG_OK && !p->outline[part])
+                    status = SVG_ENGINE_ERROR;
+            }
             if (status != SVG_OK)
                 break;
-            if (!p->outline[part]) {
-                status = SVG_ENGINE_ERROR;
-                break;
-            }
+            if (!p->outline[part])
+                continue; // Empty dash results and move-only strokes have no ink.
             os64_geometry_bounds_t bounds;
             status =
                 operation(r, r->backend->bounds(r->engine, p->outline[part], &p->map,
@@ -384,7 +413,8 @@ static Status validate(const svg_render_options_t *o, const svg_render_target_t 
         t->width > o->max_pixels / t->height)
         return SVG_LIMIT;
     const os64_geometry_backend_t *b = o->geometry;
-    if (!b || b->revision != OS64_GEOMETRY_BACKEND_REVISION || b->struct_size < sizeof(*b))
+    if (!b || b->revision != OS64_GEOMETRY_BACKEND_REVISION ||
+        b->struct_size < offsetof(os64_geometry_backend_t, stroke_with_caps))
         return SVG_UNSUPPORTED;
     if (!b->create || !b->destroy || !b->stats || !b->path || !b->stroke || !b->release ||
         !b->raster || !b->bounds)

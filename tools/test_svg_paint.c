@@ -493,7 +493,8 @@ static void limits(void)
     d = fixture(5);
     d.nodes[1].d = "M8 8L8 8";
     s = prepare(c, &d);
-    CHECK(svg_scene_render(c, s, &good, &t, NULL) == SVG_UNSUPPORTED);
+    CHECK(svg_scene_render(c, s, &good, &t, NULL) == SVG_OK);
+    CHECK(pixels[16 * 68 + 32] == 0xff2091de);
     CHECK(svg_scene_release(c, s) == SVG_OK);
     d = fixture(0);
     d.nodes[0].style.opacity = 0;
@@ -526,6 +527,9 @@ static void failure_sweeps(void)
     /* Include both paint operations under nested opacity and preserve a sibling
      * scene across failures; release must leave its pins and allocations intact. */
     stroke(&d.nodes[2], 0xff2091de, 4);
+    const double dash[] = {0, 8, 12, 4};
+    d.nodes[2].style.dash = (svg_dash_t){dash, 4, 0};
+    d.nodes[2].style.stroke_style.cap = OS64_GEOMETRY_ROUND_CAP;
     svg_scene_t *s = prepare(c, &d), *other = prepare(c, &d);
     uint32_t pixels[68 * 64];
     svg_render_target_t t = target(pixels);
@@ -618,6 +622,106 @@ static void clipping(void)
     CHECK(svg_scene_release(c, s) == SVG_OK);
     CHECK(svg_destroy(c) == SVG_OK && !l.live);
 }
+static void dash_contracts(void)
+{
+    Ledger l = {0};
+    svg_context_t *c = create(&l);
+    Document d = {0};
+    add(&d, SIZE_MAX, NULL, 0);
+    add(&d, 0, "M4 16H60", 0);
+    stroke(&d.nodes[1], 0xff2091de, 4);
+    double dash[] = {8, 4};
+    d.nodes[1].style.dash = (svg_dash_t){dash, 2, 0};
+    svg_scene_t *s = prepare(c, &d);
+    dash[0] = 60;
+    dash[1] = 0;
+    uint32_t pixels[68 * 64];
+    svg_render_target_t t = target(pixels);
+    os64_geometry_backend_t old = *os64_freetype_geometry_v1();
+    old.struct_size = offsetof(os64_geometry_backend_t, stroke_with_caps);
+    old.stroke_with_caps = NULL;
+    svg_render_options_t o = svg_render_options_default(&old);
+    CHECK(svg_scene_render(c, s, &o, &t, NULL) == SVG_OK);
+    CHECK(pixels[16 * 68 + 8] == 0xff2091de && !pixels[16 * 68 + 14]);
+    CHECK(svg_scene_release(c, s) == SVG_OK);
+    d.nodes[1].d = "M16 16h0";
+    d.nodes[1].style.stroke_style.cap = OS64_GEOMETRY_ROUND_CAP;
+    s = prepare(c, &d);
+    CHECK(svg_scene_render(c, s, &o, &t, NULL) == SVG_UNSUPPORTED);
+    CHECK(svg_scene_release(c, s) == SVG_OK);
+    d.nodes[1].d = "M4 16H60";
+    d.nodes[1].style.stroke_style.cap = OS64_GEOMETRY_BUTT;
+    dash[0] = dash[1] = .000001;
+    s = prepare(c, &d);
+    o = svg_render_options_default(os64_freetype_geometry_v1());
+    size_t baseline = l.live;
+    CHECK(svg_scene_render(c, s, &o, &t, NULL) == SVG_LIMIT && l.live == baseline);
+    CHECK(svg_scene_release(c, s) == SVG_OK);
+    svg_provider_t provider = {&d, acquire, unpin, node, style, NULL};
+    os64_geometry_map_t map = {1, 0, 0, 1, 0, 0};
+    dash[0] = -1;
+    CHECK(svg_scene_prepare(c, &provider, SVG_MODE_INLINE, &map, &s) == SVG_PROVIDER_ERROR && !s);
+    dash[0] = NAN;
+    CHECK(svg_scene_prepare(c, &provider, SVG_MODE_INLINE, &map, &s) == SVG_PROVIDER_ERROR && !s);
+    d.nodes[1].style.dash.count = SVG_DASH_MAX + 1;
+    CHECK(svg_scene_prepare(c, &provider, SVG_MODE_INLINE, &map, &s) == SVG_LIMIT && !s);
+    CHECK(!d.pins && svg_destroy(c) == SVG_OK && !l.live);
+}
+static void dashed_circle(void)
+{
+    Ledger l = {0};
+    svg_context_t *c = create(&l);
+    Document d = {0};
+    add(&d, SIZE_MAX, NULL, 0);
+    add(&d, 0, "M56 32A24 24 0 0 1 32 56A24 24 0 0 1 8 32A24 24 0 0 1 32 8A24 24 0 0 1 56 32Z", 0);
+    stroke(&d.nodes[1], 0xff2091de, 4);
+    const double dash[] = {8, 4};
+    d.nodes[1].style.dash = (svg_dash_t){dash, 2, 0};
+    d.nodes[1].style.stroke_style.cap = OS64_GEOMETRY_ROUND_CAP;
+    svg_scene_t *s = prepare(c, &d);
+    uint32_t pixels[68 * 64];
+    svg_render_target_t t = target(pixels);
+    svg_render_options_t o = svg_render_options_default(os64_freetype_geometry_v1());
+    CHECK(svg_scene_render(c, s, &o, &t, NULL) == SVG_OK);
+    /* Independent circular annular sectors plus endpoint disks. No native
+     * lowering or stroking routine participates in this area reference. */
+    double total = 48 * acos(-1), cx[26], cy[26];
+    size_t n = 0;
+    for (double at = 0; at < total; at += 12) {
+        cx[n] = 24 * cos(at / 24);
+        cy[n++] = 24 * sin(at / 24);
+        double end = fmin(at + 8, total);
+        cx[n] = 24 * cos(end / 24);
+        cy[n++] = 24 * sin(end / 24);
+    }
+    unsigned maximum = 0;
+    double sum = 0;
+    for (unsigned y = 0; y < 64; ++y)
+        for (unsigned x = 0; x < 64; ++x) {
+            unsigned hit = 0;
+            for (unsigned j = 0; j < 32; ++j)
+                for (unsigned i = 0; i < 32; ++i) {
+                    double dx = x + (i + .5) / 32 - 32, dy = y + (j + .5) / 32 - 32;
+                    double angle = atan2(dy, dx);
+                    if (angle < 0)
+                        angle += 2 * acos(-1);
+                    bool inside = fmod(angle * 24, 12) <= 8 && fabs(hypot(dx, dy) - 24) <= 2;
+                    for (size_t k = 0; !inside && k < n; ++k) {
+                        double ax = dx - cx[k], ay = dy - cy[k];
+                        inside = ax * ax + ay * ay <= 4;
+                    }
+                    hit += inside;
+                }
+            unsigned expected = (hit * 255 + 512) / 1024;
+            unsigned delta = (unsigned)abs((int)(pixels[y * 68 + x] >> 24) - (int)expected);
+            if (delta > maximum)
+                maximum = delta;
+            sum += delta / 255.0;
+        }
+    printf("Analytic dashed circle: alpha max %u/255, L1 %.6f\n", maximum, sum);
+    CHECK(maximum <= 48 && sum <= 16);
+    CHECK(svg_scene_release(c, s) == SVG_OK && svg_destroy(c) == SVG_OK && !l.live);
+}
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
@@ -625,6 +729,8 @@ int main(int argc, char **argv)
     pictures(argv[1]);
     limits();
     clipping();
+    dash_contracts();
+    dashed_circle();
     failure_sweeps();
     printf("SVG paint: %zu assertions passed\n", checks);
     return 0;

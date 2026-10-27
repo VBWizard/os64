@@ -219,7 +219,13 @@ static Status operation(Context *c)
                   {OS64_GEOMETRY_QUADRATIC, {{50, 5}, {80, 40}}},
                   {OS64_GEOMETRY_CUBIC, {{110, 110}, {140, 5}, {170, 70}}}};
     Outline *o = NULL;
-    Status s = api->stroke(c, path, COUNT(path), &identity, 1.0 / 64, &round_stroke, &o);
+    const Cmd caps[] = {{OS64_GEOMETRY_MOVE, {{16, 56}}},
+                        {OS64_GEOMETRY_LINE, {{24, 56}}},
+                        {OS64_GEOMETRY_LINE, {{24, 64}}},
+                        {OS64_GEOMETRY_LINE, {{16, 64}}},
+                        {OS64_GEOMETRY_CLOSE}};
+    Status s = api->stroke_with_caps(c, path, COUNT(path), caps, COUNT(caps), &identity, 1.0 / 64,
+                                     &round_stroke, &o);
     if (s) {
         assert(!o);
         return s;
@@ -295,6 +301,21 @@ static void contracts(void)
     assert(api->raster(ca, o, &identity, &t) == LIMIT);
     assert(api->release(ca, o) == OK);
     Outline *out = (void *)1;
+    assert(api->stroke_with_caps(ca, NULL, 0, NULL, 0, &identity, 1.0 / 64, &round_stroke, &out) ==
+               BAD &&
+           !out);
+    assert(api->stroke_with_caps(ca, line, COUNT(line), NULL, 1, &identity, 1.0 / 64, &round_stroke,
+                                 &out) == BAD &&
+           !out);
+    assert(api->stroke_with_caps(ca, line, COUNT(line), line + 1, 1, &identity, 1.0 / 64,
+                                 &round_stroke, &out) == BAD &&
+           !out);
+    assert(api->stroke_with_caps(ca, line + 1, 1, line, COUNT(line), &identity, 1.0 / 64,
+                                 &round_stroke, &out) == BAD &&
+           !out);
+    assert(api->stroke_with_caps(ca, line, COUNT(line), line, OS64_GEOMETRY_COMMAND_MAX, &identity,
+                                 1.0 / 64, &round_stroke, &out) == LIMIT &&
+           !out);
     assert(api->path(ca, NULL, 2, &identity, 1.0 / 64, &out) == BAD && !out);
     assert(api->path(ca, line, COUNT(line), &identity, 1.0 / 128, &out) == BAD && !out);
     assert(api->path(ca, line, OS64_GEOMETRY_COMMAND_MAX + 1, &identity, 1.0 / 64, &out) == LIMIT);

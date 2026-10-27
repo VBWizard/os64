@@ -5498,6 +5498,20 @@ static uint32_t *stand_in_shot(void) {
 static void svg_window_cases(void)
 {
     probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
+        "<svg width=64 height=64><path id=dash fill=none stroke=red stroke-width=4 "
+        "stroke-dasharray='8 4' d='M4 16H60'/></svg>"
+        "<script>document.getElementById('dash').setAttribute('stroke-dashoffset','4');</script>",true);
+    uint32_t *dash_pixels=stand_in_shot();
+    check((dash_pixels[16*800+10]&0xffffffu)==0xff0000 &&
+        (dash_pixels[16*800+14]&0xffffffu)==0xffffff,"SVG dashes: initial phase reaches the window");
+    os64_free(dash_pixels);while(yonder_scripts_pending(g.page.scripts))script_turn();
+    dash_pixels=stand_in_shot();
+    check((dash_pixels[16*800+10]&0xffffffu)==0xffffff &&
+        (dash_pixels[16*800+14]&0xffffffu)==0xff0000,"SVG dashes: script offset mutation moves the gaps");
+    check(g.page.svg_bytes==0,"SVG dashes: repaint releases its geometry and pixels");
+    os64_free(dash_pixels);probe_drop();
+
+    probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
         "<svg width=64 height=64 viewBox='0 0 64 64' opacity='.5'>"
         "<path fill=red d='M0 0H48V48H0Z'/><path fill=red d='M16 16H64V64H16Z'/></svg>",false);
     uint32_t *px=stand_in_shot();

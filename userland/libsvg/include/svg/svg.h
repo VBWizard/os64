@@ -83,10 +83,17 @@ typedef struct {
     svg_paint_kind_t kind;
     uint32_t argb; /* Straight-alpha color. */
 } svg_paint_t;
+#define SVG_DASH_MAX 256u
+typedef struct {
+    const double *values; /* Nonnegative user-unit lengths; borrowed by a provider. */
+    size_t count;         /* Zero is solid; odd lists repeat to even length. */
+    double offset;        /* Signed user units, reduced modulo the pattern. */
+} svg_dash_t;
 typedef struct {
     svg_paint_t fill, stroke;
     double fill_opacity, stroke_opacity, opacity;
     os64_geometry_stroke_t stroke_style;
+    svg_dash_t dash;
     bool even_odd, display, visible;
     /* Resolved winning CSS/attribute transform, including its resolved origin.
      * The provider must not multiply a losing transform attribute into it. */
@@ -114,10 +121,11 @@ typedef struct {
      * cascade; returned bytes survive until this callback is called again.
      * The inherited input is the parent's complete style, not a directive to
      * inherit non-inherited properties such as opacity or transform. Return
-     * UNSUPPORTED for active features this profile cannot express (dashes,
-     * vector effects, clipping, paint order, resources, non-sRGB interpolation
-     * or non-normal blending), rather than dropping
-     * them. Providers must honor mode; IMAGE callbacks must not fetch. */
+     * UNSUPPORTED for active features this profile cannot express: vector
+     * effects, clipping, paint order, resources, non-sRGB interpolation or
+     * non-normal blending. Dash values survive until the next provider
+     * callback; preparation copies them into scene ownership. Providers must
+     * honor mode; IMAGE callbacks must not fetch. */
     svg_status_t (*style)(void *, void *snapshot, const svg_style_request_t *, svg_style_t *,
                           svg_string_t *d);
     /* Required for SHAPE nodes. Called after a displayed element's style;
@@ -202,10 +210,11 @@ svg_render_options_t svg_render_options_default(const os64_geometry_backend_t *)
  * allocation counters exclude that backend subdivision). A conforming injected
  * backend table and its code must remain alive for this call. No callbacks into
  * the document/style provider occur during painting.
- * Dashes, vector effects, clipping, non-default paint order, resources and
+ * Vector effects, clipping, non-default paint order, resources and
  * non-sRGB interpolation/non-normal blending require the provider to report
- * UNSUPPORTED. Unsupported stroke joins/degenerate caps from
- * the backend propagate explicitly. stats is optional, including on failure. */
+ * UNSUPPORTED. Unsupported joins and nonzero strokes that collapse below
+ * the backend working grid propagate explicitly. Exact zero-length caps are
+ * constructed by libsvg. stats is optional, including on failure. */
 svg_status_t svg_scene_render(svg_context_t *, const svg_scene_t *, const svg_render_options_t *,
                               const svg_render_target_t *, svg_render_stats_t *stats);
 #pragma GCC visibility pop

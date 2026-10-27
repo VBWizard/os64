@@ -41,6 +41,8 @@ isolated element/group opacity, with analytic coverage and Chromium comparisons.
 The [Yonder connection](SVG_YONDER.md) paints inline paths/groups using the real
 DOM, cascade, layout and compositor. The [basic-shape increment](SVG_SHAPES.md)
 adds native geometry and CSS geometry properties with a second live gallery.
+The [stroke increment](SVG_STROKES.md) adds dashes, offsets and exact zero-length
+caps, with a reversible phase toggle and independent analytic coverage checks.
 The static inline renderer stage remains
 active; the first P5 fixture does not complete its broader feature profile.
 

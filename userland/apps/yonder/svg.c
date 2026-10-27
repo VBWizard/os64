@@ -13,9 +13,9 @@ typedef os64_geometry_map_t Map;
 typedef struct {
     svg_style_t s;
     // Borrowed from the live cascade; evaluate when SVG paints these values.
-    const garb_val_t *transform_css, *opacity_css;
+    const garb_val_t *transform_css, *opacity_css, *dash_css, *dashoffset_css;
     uint32_t color;
-    bool current_fill, current_stroke, dashes, vector, linear;
+    bool current_fill, current_stroke, vector, linear;
 } Computed;
 typedef struct {
     const os64_html_document_t *doc;
@@ -23,6 +23,7 @@ typedef struct {
     const os64_html_node_t *root;
     uint64_t pin, work;
     double width, height;
+    double dash_values[SVG_DASH_MAX];
     uint32_t root_color, initial_color;
 } Adapter;
 typedef struct {
@@ -466,7 +467,10 @@ static void copy_property(Computed *d, const Computed *s, garb_prop_t p)
         d->s.stroke_style.join = s->s.stroke_style.join;
         break;
     case GARB_STROKE_DASHARRAY:
-        d->dashes = s->dashes;
+        d->dash_css = s->dash_css;
+        break;
+    case GARB_STROKE_DASHOFFSET:
+        d->dashoffset_css = s->dashoffset_css;
         break;
     case GARB_VECTOR_EFFECT:
         d->vector = s->vector;
@@ -586,7 +590,10 @@ static svg_status_t apply(Adapter *a, Computed *c, const Computed *parent, garb_
                                                             : OS64_GEOMETRY_MITER;
         break;
     case GARB_STROKE_DASHARRAY:
-        c->dashes = !keyword(v, "none");
+        c->dash_css = v;
+        break;
+    case GARB_STROKE_DASHOFFSET:
+        c->dashoffset_css = v;
         break;
     case GARB_VECTOR_EFFECT:
         c->vector = !keyword(v, "none");
@@ -870,8 +877,32 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
     }
     bool path = n->ns == OS64_HTML_NS_SVG && eq(n->name, "path");
     bool geometry = path || basic_shape(n);
-    if (geometry && out->visible && ((c.dashes || c.vector) && out->stroke.kind != SVG_PAINT_NONE))
-        return SVG_UNSUPPORTED;
+    if (geometry && out->visible && out->stroke.kind != SVG_PAINT_NONE) {
+        if (c.vector)
+            return SVG_UNSUPPORTED;
+        double percent = hypot(a->width, a->height) / sqrt(2);
+        if (c.dash_css && !keyword(c.dash_css, "none")) {
+            if (c.dash_css->nitems <= 0 || c.dash_css->nitems > (int32_t)SVG_DASH_MAX)
+                return SVG_UNSUPPORTED;
+            bool nonzero = false;
+            for (int32_t i = 0; i < c.dash_css->nitems; ++i) {
+                if (!value(&c.dash_css->items[i], percent, &a->dash_values[i]))
+                    return SVG_UNSUPPORTED;
+                nonzero |= a->dash_values[i] > 0;
+            }
+            if (nonzero) {
+                out->dash.values = a->dash_values;
+                out->dash.count = (size_t)c.dash_css->nitems;
+                // Calibrated path lengths need their own metric contract.
+                // Refuse an active calibration rather than silently ignoring it.
+                if (*attr(n, "pathLength"))
+                    return SVG_UNSUPPORTED;
+            }
+        }
+        if (out->dash.count && c.dashoffset_css &&
+            !value(c.dashoffset_css, percent, &out->dash.offset))
+            return SVG_UNSUPPORTED;
+    }
     if (c.linear)
         return SVG_UNSUPPORTED;
     // Features absent from the prepared-scene profile must not masquerade as
