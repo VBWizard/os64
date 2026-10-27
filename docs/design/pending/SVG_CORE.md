@@ -220,6 +220,8 @@ the connection paints them in real inline SVG boxes. Parsed-path interning, cach
 length/marker APIs and stroke-error control need their own evidence.
 [Geometric bounds](SVG_BOUNDS.md) adds allocation-free path/subtree queries
 and object-coordinate clip mapping with separate analytic/browser evidence.
+[Standalone documents](SVG_DOCUMENTS.md) reuse this renderer through isolated
+XML trees and cascades in image mode; picture-job integration remains separate.
 
 The first useful P5 checkpoint is the connection's real inline fixture page
 reaching Yonder's paint path. Full 6b completion is not a prerequisite for that checkpoint,

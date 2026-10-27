@@ -4055,3 +4055,14 @@ numeric objectBoundingBox clips. `/tests/pages/svg-bounds.html` demonstrates a
 clip following a drawing's changing width, with independent curve, stroke,
 group and transform cases. It records shared-consumer boundaries for gradients
 and Canvas 2D through 6c. External SVG images remain the image-route milestone.
+
+
+### Slice 6c, standalone SVG documents — 2026-10-27
+
+[SVG_DOCUMENTS.md](SVG_DOCUMENTS.md) adds independently owned XML SVG trees,
+embedded author sheets, isolated cascades and secure-static image-mode rendering.
+Root opacity/transforms/clips belong to the image viewport. Namespace aliases,
+resource isolation, allocation/cancellation cuts and native/browser references
+are covered. Picture-job dispatch, intrinsic sizing, admission accounting,
+gradients and caches remain separate integration work; this increment does not
+make external SVG images load through Yonder's `<img>` path.

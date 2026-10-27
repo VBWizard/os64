@@ -6,6 +6,10 @@ It is the first P5 checkpoint, not completion of the static SVG profile in
 [SVG.md](SVG.md). The fixture is `tools/pages/svg-inline.html`, installed by
 `make stage-pages` as `/tests/pages/svg-inline.html`.
 
+The [standalone document adapter](SVG_DOCUMENTS.md) also uses this renderer
+with an isolated XML tree/cascade and image-owned root effects. It is exercised
+through the host API; Yonder picture jobs do not dispatch SVG images.
+
 ## What reaches the screen
 
 With Modern Web enabled, an outer inline SVG creates a replaced CSS box.
