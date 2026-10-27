@@ -86,7 +86,8 @@ void d_task_close(os64_dom_t *dom, const char *task, os64_js_outcome_t *outcome)
             if (task != NULL && task[0] != '\0')
                 os64_strcopy(outcome->source_name, sizeof(outcome->source_name), task);
         } else if (tell) {
-            dom->options.failed(dom->options.host_opaque, task != NULL ? task : "", dom->report.message);
+            dom->options.failed(dom->options.host_opaque, task != NULL ? task : "", dom->report.message,
+                                dom->report.stack_trace);
         }
         os64_memset(&dom->report, 0, sizeof(dom->report));
     }
@@ -94,7 +95,7 @@ void d_task_close(os64_dom_t *dom, const char *task, os64_js_outcome_t *outcome)
         char line[96];
         os64_snprintf(line, sizeof(line), "and %llu more unhandled rejections",
                       (unsigned long long)dom->rejections_untold);
-        dom->options.failed(dom->options.host_opaque, task != NULL ? task : "", line);
+        dom->options.failed(dom->options.host_opaque, task != NULL ? task : "", line, "");
     }
     dom->rejections_told = 0;
     dom->rejections_untold = 0;
@@ -211,6 +212,19 @@ const char *os64_dom_script_address(const os64_dom_t *dom, const char *name)
     if (dom == NULL) return NULL;
     uint32_t script = script_named(dom, name);
     return script != D_NO_SCRIPT ? dom->script_names[script].address : NULL;
+}
+
+const char *os64_dom_frame_script(const os64_dom_t *dom, const os64_dom_frame_t *frame, bool *page)
+{
+    if (page != NULL) *page = false;
+    char name[32], page_name[32];
+    if (dom == NULL || frame == NULL || page == NULL || frame->file == NULL || frame->file_length >= sizeof(name))
+        return NULL;
+    os64_memcpy(name, frame->file, frame->file_length);
+    name[frame->file_length] = '\0';
+    os64_snprintf(page_name, sizeof(page_name), D_SCRIPT_PREFIX "%u", D_SCRIPT_PAGE);
+    *page = os64_streq(name, page_name);
+    return os64_dom_script_address(dom, name);
 }
 
 /* The address an error event names for a script: its own, else the page's. */
@@ -442,43 +456,89 @@ static bool number_before(const char *text, const char *end, const char **start,
     return true;
 }
 
-/* Where an error was made, its line and column, from its own stack text as
- * the engine writes it, a frame a line, "    at f (name:line:col)", or
- * "    at name:line:col" for a script that did not compile: the first frame
- * that names a place, which skips the native ones. Only an Error's is
- * read, and only as a data property, so no page code runs; a stack the
- * page wrote there is read the same way and believed: it is the page's own
- * error. It says where, never whose: that is the script's name's
- * (running_script), which no text decides. */
-static void error_location(JSContext *ctx, JSValueConst error, uint32_t *line, uint32_t *col)
+bool os64_dom_stack_frame(const char *stack, os64_dom_frame_t *frame)
 {
-    *line = *col = 0;
-    if (!JS_IsError(ctx, error)) return;
-    JSAtom atom = JS_NewAtom(ctx, "stack");
-    if (atom == JS_ATOM_NULL) { discard(ctx); return; }
-    JSPropertyDescriptor descriptor;
-    int present = JS_GetOwnProperty(ctx, &descriptor, error, atom);
-    JS_FreeAtom(ctx, atom);
-    if (present < 0) { discard(ctx); return; }
-    if (present == 0) return;
-    const char *text = !(descriptor.flags & JS_PROP_GETSET) && JS_IsString(descriptor.value)
-        ? JS_ToCString(ctx, descriptor.value) : NULL;
-    JS_FreeValue(ctx, descriptor.value);
-    JS_FreeValue(ctx, descriptor.getter);
-    JS_FreeValue(ctx, descriptor.setter);
-    if (text == NULL) return;
-    for (const char *start = text; *start != '\0';) {
+    if (stack == NULL || frame == NULL) return false;
+    for (const char *start = stack; *start != '\0';) {
         const char *end = start;
         while (*end != '\0' && *end != '\n') end++;
         const char *at, *last = end > start && end[-1] == ')' ? end - 1 : end;
-        uint32_t l, c;
-        if (number_before(start, last, &at, &c) && at > start && at[-1] == ':' &&
-            number_before(start, at - 1, &at, &l) && at > start && at[-1] == ':') {
-            *line = l;
-            *col = c;
-            break;
+        uint32_t line, column;
+        if (number_before(start, last, &at, &column) && at > start && at[-1] == ':' &&
+            number_before(start, at - 1, &at, &line) && at > start && at[-1] == ':') {
+            const char *text = start, *file_end = at - 1;
+            while (text < file_end && *text == ' ') text++;
+            if (file_end - text >= 3 && os64_memcmp(text, "at ", 3) == 0) text += 3;
+            *frame = (os64_dom_frame_t){.file = text, .file_length = (size_t)(file_end - text),
+                                        .line = line, .column = column};
+            /* "f (file:line:col)": the file is after the last " (", the
+             * function before it; the binding's names hold no " (". */
+            if (last != end)
+                for (const char *open = file_end; open > text + 1; open--)
+                    if (open[-1] == '(' && open[-2] == ' ') {
+                        /* The engine's `<anonymous>` and `<eval>` (a
+                         * script's own code) name no function. */
+                        size_t length = (size_t)(open - 2 - text);
+                        bool anonymous = length >= 2 && text[0] == '<' && text[length - 1] == '>';
+                        frame->function = anonymous || length == 0 ? NULL : text;
+                        frame->function_length = frame->function != NULL ? length : 0;
+                        frame->file = open;
+                        frame->file_length = (size_t)(file_end - open);
+                        break;
+                    }
+            return true;
         }
         start = *end == '\n' ? end + 1 : end;
+    }
+    return false;
+}
+
+/* An Error's own `stack`, as the engine wrote it, read as a data property
+ * so no page code runs; a stack the page wrote there is read the same way
+ * and believed: it is the page's own error. NULL for anything else; the
+ * caller frees the text. */
+static const char *own_stack(JSContext *ctx, JSValueConst error)
+{
+    if (!JS_IsError(ctx, error)) return NULL;
+    JSAtom atom = JS_NewAtom(ctx, "stack");
+    if (atom == JS_ATOM_NULL) { discard(ctx); return NULL; }
+    JSPropertyDescriptor descriptor;
+    int present = JS_GetOwnProperty(ctx, &descriptor, error, atom);
+    JS_FreeAtom(ctx, atom);
+    if (present < 0) { discard(ctx); return NULL; }
+    if (present == 0) return NULL;
+    const char *text = !(descriptor.flags & JS_PROP_GETSET) && JS_IsString(descriptor.value)
+        ? JS_ToCString(ctx, descriptor.value) : NULL;
+    if (JS_IsString(descriptor.value) && text == NULL) discard(ctx);
+    JS_FreeValue(ctx, descriptor.value);
+    JS_FreeValue(ctx, descriptor.getter);
+    JS_FreeValue(ctx, descriptor.setter);
+    return text;
+}
+
+bool d_error_stack(JSContext *ctx, JSValueConst error, char *out, size_t cap)
+{
+    if (cap != 0) out[0] = '\0';
+    const char *text = own_stack(ctx, error);
+    if (text == NULL) return false;
+    bool truncated = os64_strcopy(out, cap, text) >= cap;
+    JS_FreeCString(ctx, text);
+    return truncated;
+}
+
+/* Where an error was made, its line and column: its own stack's first
+ * frame that names a place (os64_dom_stack_frame). It says where, never
+ * whose: that is the script's name's (running_script), which no text
+ * decides. */
+static void error_location(JSContext *ctx, JSValueConst error, uint32_t *line, uint32_t *col)
+{
+    *line = *col = 0;
+    const char *text = own_stack(ctx, error);
+    if (text == NULL) return;
+    os64_dom_frame_t frame;
+    if (os64_dom_stack_frame(text, &frame)) {
+        *line = frame.line;
+        *col = frame.column;
     }
     JS_FreeCString(ctx, text);
 }
@@ -640,9 +700,10 @@ static void unhandled(os64_dom_t *dom, JSValue promise, JSValue reason, const ch
         failure.diagnostic_truncated =
             (size_t)os64_snprintf(failure.message, sizeof(failure.message), "unhandled rejection: %s", text) >=
             sizeof(failure.message);
+        failure.diagnostic_truncated |= d_error_stack(ctx, reason, failure.stack_trace, sizeof(failure.stack_trace));
         os64_strcopy(failure.source_name, sizeof(failure.source_name), task);
         if (first) d_outcome_fold(outcome, &failure);
-        else dom->options.failed(dom->options.host_opaque, task, failure.message);
+        else dom->options.failed(dom->options.host_opaque, task, failure.message, failure.stack_trace);
     }
     JS_FreeValueRT(dom->engine, promise);
     JS_FreeValueRT(dom->engine, reason);

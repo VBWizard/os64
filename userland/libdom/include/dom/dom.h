@@ -141,17 +141,19 @@ typedef struct {
      * one is told, and the binding carries on as the sentence says. */
     void (*broken)(void *opaque, const char *sentence);
     /* A failure of the task being run past the one its outcome carries: an
-     * unhandled rejection (`message` begins "unhandled rejection: ") of a
+     * unhandled rejection (`message` begins "unhandled rejection: "), or
+     * an error the binding caught and reported itself (a listener's), of a
      * task whose outcome already holds a failure, which the host records
      * as it records the outcome's, under `task`, the task's source name.
-     * The first sixteen of a task are told one by one, and the rest as
+     * A task's first sixteen such rejections are told one by one, the rest as
      * one line as the task closes, `and <n> more unhandled rejections`:
      * a page can leave hundreds of thousands in one task, and what each
      * costs the host must not be its to size (report.c's
      * D_REJECTIONS_TOLD). On the owner thread, between a task's calls or
      * as it closes; it must not enter JS. NULL: only the outcome's
-     * failure is known. */
-    void (*failed)(void *opaque, const char *task, const char *message);
+     * failure is known. `stack` is the failure's as an outcome's
+     * stack_trace is, "" when it has none. */
+    void (*failed)(void *opaque, const char *task, const char *message, const char *stack);
     /* crypto.getRandomValues' and randomUUID's randomness: `length` bytes
      * (never more than 65,536) written into `out` from the host's
      * cryptographically strong source, true when every one was. False is
@@ -745,6 +747,28 @@ bool os64_dom_script_name(os64_dom_t *dom, const char *address, char *out, size_
  * classic script resolves against it (HTML's referencing script's base
  * URL). */
 const char *os64_dom_script_address(const os64_dom_t *dom, const char *name);
+/* The first frame of an engine stack text (an Error's `stack`, an
+ * outcome's stack_trace) that names a place, as the engine writes a frame
+ * a line: "    at f (file:line:col)", or "    at file:line:col" for a
+ * script that did not compile; a native frame names none and is passed
+ * over. `file` and `function` point into `stack`, with their lengths;
+ * `function` is NULL for the second form, and for a name the engine wrote
+ * in angle brackets: an anonymous function's, a script's own code's.
+ * The file of a script run through the binding is its name for it
+ * (os64_dom_script_name), which os64_dom_frame_script reads back. False
+ * when no frame names a place. */
+typedef struct {
+    const char *function, *file;
+    size_t function_length, file_length;
+    uint32_t line, column;
+} os64_dom_frame_t;
+bool os64_dom_stack_frame(const char *stack, os64_dom_frame_t *frame);
+/* The script a frame's file names: its address, as os64_dom_script_address
+ * reads one, with *page true when the file is the page's own name, its
+ * inline scripts'. NULL and false for a file that is not one of the
+ * binding's names, and NULL for one of another site's scripts the binding
+ * keeps no address for. */
+const char *os64_dom_frame_script(const os64_dom_t *dom, const os64_dom_frame_t *frame, bool *page);
 /* After that script ran (and drained): what it left owed, settled as one
  * task named `name`, the host's own name for it (MODERN_WEB.md § P2a). The
  * window's error event for each exception it threw, said to come from its

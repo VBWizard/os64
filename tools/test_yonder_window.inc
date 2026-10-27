@@ -69,22 +69,23 @@ static void window_rejection_case(void) {
         "later();setTimeout(function(){kept.catch(function(){})},50);</script>");
     check(loop_settle() && script_rebuild(),"window: a page that leaves rejections unhandled arrives");
     check(window_record_has("FAILED script http://fixture.test/final#inline-1: unhandled rejection: "
-                            "Error: from the script (1)"),
-        "window: a script's unhandled rejection is its FAILED line, said as one");
+                            "Error: from the script, at inline:1:267 (1)"),
+        "window: a script's unhandled rejection is its FAILED line, said as one, with where it was made");
     check(window_record_has("FAILED script http://fixture.test/final#inline-1: unhandled rejection: "
-                            "Error: and another (1)"),
+                            "Error: and another, at inline:1:312 (1)"),
         "window: and each rejection it left is a line of its own");
     check(strstr(window_record_text(),"caught")==NULL,"window: a caught rejection is no failure");
     input_click_at("b");
-    check(window_record_has("FAILED script click event: unhandled rejection: TypeError: in a click (1)"),
-        "window: an async click handler that throws is the click's FAILED line");
+    check(window_record_has("FAILED script click event: unhandled rejection: TypeError: in a click, "
+                            "at inline:1:475 (1)"),
+        "window: an async click handler that throws is the click's FAILED line, at its handler");
     check(status_says("unhandled rejection: TypeError: in a click"),
         "window: and the status line says it, as it says a script's error");
     now_ms+=100;
     for(int i=0;i<4;i++) script_turn();
     check(window_record_has("FAILED script http://fixture.test/final#timer-1: unhandled rejection: "
-                            "Error: after a timer (1)"),
-        "window: one a timer's task left is the timer's");
+                            "Error: after a timer, at later inline:1:579 (1)"),
+        "window: one a timer's task left is the timer's, in the function that threw");
     check(script_rebuild() && probe_text_is("log","unhandled from the script|unhandled and another|"
                                                  "unhandled in a click|unhandled after a timer|handled from the script"),
         "window: each was the page's unhandledrejection, and the late handler its rejectionhandled");
@@ -96,7 +97,7 @@ static void window_rejection_case(void) {
         "window: a rejection the page's listener cancelled is no failure");
     check(probe_text_is("log","Uncaught ReferenceError: 'missing' is not defined http://fixture.test/final 1 1") &&
           window_record_has("FAILED script http://fixture.test/final#inline-2: ReferenceError: 'missing' is not "
-                            "defined (1)"),
+                            "defined, at inline:1:1 (1)"),
         "window: window.onerror hears a script's error, which is its FAILED line as before");
     loop_drop();
 }
@@ -132,12 +133,30 @@ static void window_redirect_case(const char *final, bool muted) {
     check(script_land_from("/lib.js","Promise.reject(new Error('rejected'));throw new Error('thrown')",final),
         "window: the redirected script's fetch comes back");
     check(loop_settle() && script_rebuild(),"window: the page with a redirected script settles");
-    snprintf(record,sizeof(record),"FAILED script %s: Error: thrown (1)",final);
+    snprintf(record,sizeof(record),"FAILED script %s: Error: thrown, at 1:54 (1)",final);
     snprintf(told,sizeof(told),"Uncaught Error: thrown %s|unhandled rejected",final);
     check(window_record_has(record),"window: the record names the script by the address it came from");
     check(probe_text_is("log",muted ? "Script error. " : told),
         muted ? "window: a same-origin address redirected to another site is muted"
               : "window: one redirected within the site is told whole, by where it came from");
+    loop_drop();
+}
+
+/* Where a script failed, on its FAILED line (scripts.c's
+ * yonder_scripts_failure): in a function of another script, that script's
+ * address, the function's name and the line; in its own, the line alone. */
+static void window_frame_case(void) {
+    loop_page("<script src=/lib.js></script><script>\n\nboom()</script>");
+    check(loop_settle() && nscript_jobs==1,"window: the parse waits for the library's fetch");
+    check(script_land("/lib.js","function boom(){\n  null.x}\nfunction ok(){}\nnull.y"),
+        "window: the library's fetch comes back");
+    check(loop_settle(),"window: the page whose library and inline script both fail settles");
+    check(window_record_has("FAILED script http://fixture.test/lib.js: TypeError: cannot read property 'y' "
+                            "of null, at 4:5 (1)"),
+        "window: a src script's own failure is at its line and column");
+    check(window_record_has("FAILED script http://fixture.test/final#inline-1: TypeError: cannot read property "
+                            "'x' of null, at boom http://fixture.test/lib.js:2:7 (1)"),
+        "window: an inline script's failure in the library's function names the function and the library");
     loop_drop();
 }
 
@@ -212,6 +231,7 @@ static void window_cases(void) {
     window_idle_case();
     window_redirect_case("http://other.test/lib.js",true);
     window_redirect_case("http://fixture.test/moved/lib.js",false);
+    window_frame_case();
     window_rejection_case();
     window_rejection_flood_case();
     window_crypto_case();

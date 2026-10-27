@@ -253,16 +253,19 @@ static void broken(void *opaque, const char *sentence)
     yonder_diag_failed(s->options.diag, "page", sentence);
 }
 
-// A rejection the task left beyond the failure its outcome carries
-// (libdom's options.failed): a FAILED line under the key the outcome's
-// gets (yonder.c's task_said), the script's whole address when the task
-// is a `src` script's.
-static void failed(void *opaque, const char *task, const char *message)
+// A failure the task left beyond the one its outcome carries (libdom's
+// options.failed: a rejection, or an error the binding reported): a FAILED
+// line under the key the outcome's gets (yonder.c's task_said), the
+// script's whole address when the task is a `src` script's, and said as
+// that one is, with where it happened (yonder_scripts_failure).
+static void failed(void *opaque, const char *task, const char *message, const char *stack)
 {
     yonder_scripts_t *s = opaque;
     char key[OS64_DOM_URL_MAX + 16];
     os64_snprintf(key, sizeof(key), "script %s", s->task_address != NULL ? s->task_address : task);
-    yonder_diag_failed(s->options.diag, key, message);
+    char failure[OS64_JS_MESSAGE_CAP + OS64_DOM_URL_MAX + 64];
+    yonder_scripts_failure(s, message, stack, failure, sizeof(failure));
+    yonder_diag_failed(s->options.diag, key, failure);
 }
 
 static uint64_t now_ms(void *opaque)
@@ -1563,6 +1566,34 @@ uint64_t yonder_scripts_written(const yonder_scripts_t *s)
 const char *yonder_scripts_task_address(const yonder_scripts_t *s)
 {
     return s != NULL ? s->task_address : NULL;
+}
+
+void yonder_scripts_failure(const yonder_scripts_t *s, const char *message, const char *stack, char *out,
+                            size_t cap)
+{
+    os64_dom_frame_t frame;
+    if (!os64_dom_stack_frame(stack, &frame)) {
+        os64_strcopy(out, cap, message);
+        return;
+    }
+    bool page = false;
+    const char *address = s != NULL ? os64_dom_frame_script(s->dom, &frame, &page) : NULL;
+    const char *own = s != NULL ? s->task_address : NULL;
+    // The place: the line and column alone in the task's own script.
+    const char *file = frame.file;
+    size_t file_length = frame.file_length;
+    if (address != NULL && own != NULL && os64_streq(address, own)) {
+        file_length = 0;
+    } else if (address != NULL) {
+        file = address;
+        file_length = os64_strlen(address);
+    } else if (page) {
+        file = "inline";
+        file_length = os64_strlen(file);
+    }
+    os64_snprintf(out, cap, "%s, at %.*s%s%.*s%s%u:%u", message, (int)frame.function_length,
+                  frame.function != NULL ? frame.function : "", frame.function != NULL ? " " : "", (int)file_length,
+                  file, file_length != 0 ? ":" : "", frame.line, frame.column);
 }
 
 int64_t yonder_scripts_task_us(const yonder_scripts_t *s)
