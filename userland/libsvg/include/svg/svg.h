@@ -79,10 +79,36 @@ typedef struct {
     double x, y, width, height, rx, ry, x2, y2;
     svg_string_t points; /* Borrowed coordinate pairs for polyline/polygon. */
 } svg_shape_t;
-typedef enum { SVG_PAINT_NONE, SVG_PAINT_COLOR, SVG_PAINT_UNSUPPORTED } svg_paint_kind_t;
+#define SVG_GRADIENT_STOPS_MAX 256u
+typedef enum { SVG_SPREAD_PAD, SVG_SPREAD_REPEAT, SVG_SPREAD_REFLECT } svg_spread_t;
+typedef struct {
+    double offset; /* Normalized, nondecreasing [0,1]; duplicate offsets retain order. */
+    uint32_t argb; /* Straight-alpha sRGB. */
+} svg_gradient_stop_t;
+typedef struct {
+    double x1, y1, x2, y2;
+    os64_geometry_map_t transform;
+    bool object_bbox;
+    svg_spread_t spread;
+    const svg_gradient_stop_t *stops;
+    size_t count;
+} svg_linear_gradient_t;
+/* Prepared numeric sampler. Stop storage is borrowed and must remain immutable
+ * until sampling ends. Initialize with svg_linear_gradient_prepare; sample
+ * positions use the coordinate space selected by that call's map. */
+typedef struct {
+    const svg_gradient_stop_t *stops;
+    size_t count;
+    double x, y, bias;
+    svg_spread_t spread;
+    bool constant;
+} svg_linear_sampler_t;
+typedef enum { SVG_PAINT_NONE, SVG_PAINT_COLOR, SVG_PAINT_UNSUPPORTED,
+               SVG_PAINT_LINEAR } svg_paint_kind_t;
 typedef struct {
     svg_paint_kind_t kind;
     uint32_t argb; /* Straight-alpha color. */
+    const svg_linear_gradient_t *linear; /* Borrowed by providers; scene owns a copy. */
 } svg_paint_t;
 #define SVG_DASH_MAX 256u
 typedef struct {
@@ -158,9 +184,10 @@ typedef struct {
      * The inherited input is the parent's complete style, not a directive to
      * inherit non-inherited properties such as opacity or transform. Return
      * UNSUPPORTED for active features this profile cannot express: vector
-     * effects, unsupported clip combinations, paint order, paint servers, non-sRGB interpolation or
+     * effects, unsupported clip combinations, paint order, unsupported paint servers, non-sRGB interpolation or
      * non-normal blending. Dash values survive until the next provider
-     * callback; preparation copies them into scene ownership. Providers must
+     * callback; gradient descriptors/stops share that lifetime. Preparation copies
+     * them into scene ownership. Providers must
      * honor mode; IMAGE callbacks must not fetch. */
     svg_status_t (*style)(void *, void *snapshot, const svg_style_request_t *, svg_style_t *,
                           svg_string_t *d);
@@ -214,6 +241,13 @@ typedef struct {
 } svg_render_stats_t;
 
 #pragma GCC visibility push(default)
+/* No markup, cascade or allocator is involved. user_to_sample maps consumer user
+ * space to the sampling space. Object-box gradients require geometric bounds;
+ * a singular map or zero object extent produces a transparent sampler. */
+svg_status_t svg_linear_gradient_prepare(const svg_linear_gradient_t *,
+    const os64_geometry_map_t *user_to_sample, const svg_bounds_t *, svg_linear_sampler_t *);
+uint32_t svg_linear_gradient_sample(const svg_linear_sampler_t *, double x, double y);
+
 svg_limits_t svg_default_limits(void);
 svg_style_t svg_initial_style(void);
 svg_status_t svg_create(const svg_options_t *, svg_context_t **);
@@ -264,7 +298,7 @@ svg_status_t svg_scene_release(svg_context_t *, svg_scene_t *);
 svg_status_t svg_scene_object_bounds(svg_context_t *, const svg_scene_t *, size_t item,
                                      svg_bounds_t *out);
 svg_render_options_t svg_render_options_default(const os64_geometry_backend_t *);
-/* Paints solid fills followed by ordinary user-space strokes, using source-over
+/* Paints solid/linear-gradient fills followed by ordinary user-space strokes, using source-over
  * in sRGB and isolated element/group opacity. Replaces the target, including
  * transparent pixels; preserves row padding. RGB is zero when exported alpha
  * is zero. The scene stays reusable and the renderer never frees the target.
@@ -276,7 +310,7 @@ svg_render_options_t svg_render_options_default(const os64_geometry_backend_t *)
  * backend table and its code must remain alive for this call. No callbacks into
  * the document/style provider occur during painting.
  * Viewport and silhouette masks clip isolated element/container layers. Vector effects,
- * unsupported clip combinations, non-default paint order, paint servers and
+ * unsupported clip combinations, non-default paint order, unsupported paint servers and
  * non-sRGB interpolation/non-normal blending require the provider to report
  * UNSUPPORTED. Unsupported joins and nonzero strokes that collapse below
  * the backend working grid propagate explicitly. Exact zero-length caps are

@@ -12,6 +12,7 @@ typedef struct {
 } Layer;
 typedef struct {
     bool active, paint[2];
+    svg_linear_sampler_t gradient[2];
     Map map;
     Rect box, ink[2];
     os64_geometry_outline_t *outline[2], *clip[2];
@@ -207,10 +208,26 @@ static Status prepare_outlines(Render *r, const svg_scene_t *scene, Item *items)
         if ((s->kind != SVG_NODE_PATH && s->kind != SVG_NODE_SHAPE) || !s->style.visible ||
             !s->path->count)
             continue;
-        p->paint[0] = s->style.fill.kind == SVG_PAINT_COLOR && (s->style.fill.argb >> 24) &&
-                      s->style.fill_opacity > 0;
-        p->paint[1] = s->style.stroke.kind == SVG_PAINT_COLOR && (s->style.stroke.argb >> 24) &&
-                      s->style.stroke_opacity > 0 && s->style.stroke_style.width > 0;
+        const svg_paint_t *paints_for_item[] = {&s->style.fill, &s->style.stroke};
+        for (unsigned part = 0; part < 2; ++part) {
+            const svg_paint_t *paint = paints_for_item[part];
+            bool ink = paint->kind == SVG_PAINT_COLOR && (paint->argb >> 24);
+            if (paint->kind == SVG_PAINT_LINEAR) {
+                svg_bounds_t box = {0};
+                Status status = SVG_OK;
+                if (paint->linear->object_bbox)
+                    status = svg_object_bounds(r->c, scene, i, &box);
+                if (status == SVG_OK)
+                    status = svg_linear_gradient_prepare(paint->linear, &p->map, &box,
+                                                         &p->gradient[part]);
+                if (status != SVG_OK)
+                    return status;
+                ink = p->gradient[part].count != 0;
+            }
+            p->paint[part] =
+                ink && (part ? s->style.stroke_opacity > 0 && s->style.stroke_style.width > 0
+                             : s->style.fill_opacity > 0);
+        }
         if (paints > (UINT64_MAX - 1) / 3 - 2)
             return SVG_LIMIT;
         paints += p->paint[0] + p->paint[1];
@@ -489,20 +506,25 @@ static Status paint_path(Render *r, const svg_scene_item_t *s, Item *p, Layer *s
             svg_free(r->c, coverage);
             return status;
         }
-        uint32_t color = part ? s->style.stroke.argb : s->style.fill.argb;
+        const svg_paint_t *paint = part ? &s->style.stroke : &s->style.fill;
         uint16_t opacity = alpha(part ? s->style.stroke_opacity : s->style.fill_opacity);
-        uint16_t a = multiply((uint16_t)((color >> 24) * 257), opacity);
-        uint16_t red = (uint16_t)(((color >> 16) & 255) * 257);
-        uint16_t green = (uint16_t)(((color >> 8) & 255) * 257),
-                 blue = (uint16_t)((color & 255) * 257);
+        bool gradient = paint->kind == SVG_PAINT_LINEAR;
         for (uint32_t y = b.y0; y < b.y1; ++y) {
-            if (!raster_work(r, b.x1 - b.x0)) {
+            if (!raster_work(r, (uint64_t)(b.x1 - b.x0) * (gradient ? 12 : 1))) {
                 status = r->c->why;
                 break;
             }
             Pixel *dest = at(surface, b.x0, y);
             uint8_t *mask = coverage + (size_t)(y - b.y0) * (b.x1 - b.x0);
             for (uint32_t x = b.x0; x < b.x1; ++x, ++dest, ++mask) {
+                uint32_t color = gradient ? svg_linear_gradient_sample(&p->gradient[part],
+                                                                       r->target->origin_x + x + .5,
+                                                                       r->target->origin_y + y + .5)
+                                          : paint->argb;
+                uint16_t a = multiply((uint16_t)((color >> 24) * 257), opacity);
+                uint16_t red = (uint16_t)(((color >> 16) & 255) * 257);
+                uint16_t green = (uint16_t)(((color >> 8) & 255) * 257);
+                uint16_t blue = (uint16_t)((color & 255) * 257);
                 uint16_t sa = multiply(a, (uint16_t)(*mask * 257));
                 Pixel source = {sa, multiply(red, sa), multiply(green, sa), multiply(blue, sa)};
                 *dest = over(source, *dest);

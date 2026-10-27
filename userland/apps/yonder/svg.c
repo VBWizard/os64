@@ -14,6 +14,7 @@ typedef struct {
     svg_style_t s;
     // Borrowed from the live cascade; evaluate when SVG paints these values.
     const garb_val_t *transform_css, *opacity_css, *dash_css, *dashoffset_css, *clip_css;
+    const garb_val_t *fill_css, *stroke_css;
     uint32_t color;
     bool current_fill, current_stroke, vector, linear, clip_even_odd;
     int overflow[2]; // visible, hidden, scroll, auto, clip
@@ -32,6 +33,8 @@ typedef struct {
     uint64_t pin, work;
     double width, height;
     double dash_values[SVG_DASH_MAX];
+    svg_linear_gradient_t gradients[2];
+    svg_gradient_stop_t gradient_stops[2][SVG_GRADIENT_STOPS_MAX];
     uint32_t root_color, initial_color;
     os64_geometry_memory_t memory;
     Instance *instances;
@@ -506,10 +509,12 @@ static void copy_property(Computed *d, const Computed *s, garb_prop_t p)
     case GARB_FILL:
         d->s.fill = s->s.fill;
         d->current_fill = s->current_fill;
+        d->fill_css = s->fill_css;
         break;
     case GARB_STROKE:
         d->s.stroke = s->s.stroke;
         d->current_stroke = s->current_stroke;
+        d->stroke_css = s->stroke_css;
         break;
     case GARB_FILL_OPACITY:
         d->s.fill_opacity = s->s.fill_opacity;
@@ -636,9 +641,14 @@ static svg_status_t apply(Adapter *a, Computed *c, const Computed *parent, garb_
         svg_paint_t *p = prop == GARB_FILL ? &c->s.fill : &c->s.stroke;
         bool *current = prop == GARB_FILL ? &c->current_fill : &c->current_stroke;
         *current = v->kind == GARB_V_COLOR && v->color.current;
-        *p = keyword(v, "none")        ? (svg_paint_t){SVG_PAINT_NONE, 0}
-             : v->kind == GARB_V_COLOR ? (svg_paint_t){SVG_PAINT_COLOR, color(v->color, c->color)}
-                                       : (svg_paint_t){SVG_PAINT_UNSUPPORTED, 0};
+        if (prop == GARB_FILL)
+            c->fill_css = v;
+        else
+            c->stroke_css = v;
+        *p = keyword(v, "none") ? (svg_paint_t){.kind = SVG_PAINT_NONE}
+             : v->kind == GARB_V_COLOR
+                 ? (svg_paint_t){.kind = SVG_PAINT_COLOR, .argb = color(v->color, c->color)}
+                 : (svg_paint_t){.kind = SVG_PAINT_UNSUPPORTED};
         break;
     }
     case GARB_OPACITY:
@@ -717,7 +727,9 @@ static bool ignored(const os64_html_node_t *n)
     return n->ns == OS64_HTML_NS_SVG &&
            (same_word(n->name, "defs") || same_word(n->name, "title") ||
             same_word(n->name, "desc") || same_word(n->name, "metadata") ||
-            same_word(n->name, "style") || same_word(n->name, "clipPath"));
+            same_word(n->name, "style") || same_word(n->name, "clipPath") ||
+            same_word(n->name, "linearGradient") || same_word(n->name, "radialGradient") ||
+            same_word(n->name, "stop"));
 }
 // Instance IDs come from libsvg's bounded visit sequence. Records preserve
 // inheritance without cloning the DOM or retaining pointers into a growable array.
@@ -1079,6 +1091,8 @@ static svg_status_t node(void *ctx, void *snapshot, uint64_t source, svg_node_t 
     out->next_sibling = (uintptr_t)element(a, n->next);
     return a->stopped;
 }
+static svg_status_t gradient_paint(Adapter *, const garb_val_t *, uint32_t, unsigned,
+                                   svg_paint_t *);
 static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *r, svg_style_t *out,
                           svg_string_t *d)
 {
@@ -1176,6 +1190,13 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
         if (out->dash.count && c.dashoffset_css &&
             !value(c.dashoffset_css, percent, &out->dash.offset))
             return SVG_UNSUPPORTED;
+    }
+    if (geometry && out->visible) {
+        status = gradient_paint(a, c.fill_css, c.color, 0, &out->fill);
+        if (status == SVG_OK)
+            status = gradient_paint(a, c.stroke_css, c.color, 1, &out->stroke);
+        if (status != SVG_OK)
+            return status;
     }
     if (c.linear)
         return SVG_UNSUPPORTED;
@@ -1294,12 +1315,8 @@ static svg_status_t fragment_target(Adapter *a, const char *text, uint64_t *sour
     *source = (uintptr_t)target;
     return SVG_OK;
 }
-static svg_status_t reference(void *ctx, void *snapshot, const svg_style_request_t *r,
-                              uint64_t *source)
+static svg_status_t href_target(Adapter *a, const os64_html_node_t *use, uint64_t *source)
 {
-    Adapter *a = ctx;
-    (void)snapshot;
-    const os64_html_node_t *use = (const void *)(uintptr_t)r->source;
     const os64_html_attr_t *href = os64_html_attr(use, "href");
     // An unqualified href, including an empty one, precedes XLink href.
     if (!href) {
@@ -1318,7 +1335,15 @@ static svg_status_t reference(void *ctx, void *snapshot, const svg_style_request
             }
         }
     }
-    svg_status_t status = fragment_target(a, href ? href->value : "", source);
+    return fragment_target(a, href ? href->value : "", source);
+}
+static svg_status_t reference(void *ctx, void *snapshot, const svg_style_request_t *r,
+                              uint64_t *source)
+{
+    Adapter *a = ctx;
+    (void)snapshot;
+    const os64_html_node_t *use = (const void *)(uintptr_t)r->source;
+    svg_status_t status = href_target(a, use, source);
     if (status != SVG_OK || !*source)
         return status;
     size_t depth = 0;
@@ -1332,6 +1357,262 @@ static svg_status_t reference(void *ctx, void *snapshot, const svg_style_request
             break;
         }
     }
+    return SVG_OK;
+}
+typedef struct {
+    uint32_t color, stop;
+    double opacity;
+    bool current, linear;
+} StopStyle;
+static svg_status_t stop_style_step(Adapter *a, const os64_html_node_t *node,
+                                    const StopStyle *parent, StopStyle *out)
+{
+    *out = (StopStyle){
+        .color = parent->color, .stop = 0xff000000, .opacity = 1, .linear = parent->linear};
+    const garb_prop_t props[] = {GARB_COLOR, GARB_STOP_COLOR, GARB_STOP_OPACITY,
+                                 GARB_COLOR_INTERPOLATION};
+    for (size_t i = 0; i < sizeof(props) / sizeof(props[0]); ++i) {
+        if (!adapter_spend(a, 1))
+            return a->stopped;
+        const garb_val_t *v = winner(a->cascade, node, props[i]);
+        if (!v)
+            continue;
+        bool inherit =
+            v->kind == GARB_V_WIDE &&
+            (keyword(v, "inherit") || (!keyword(v, "initial") && garb_prop_inherited(props[i])));
+        if (v->kind == GARB_V_WIDE) {
+            if (props[i] == GARB_COLOR)
+                out->color = inherit ? parent->color : a->initial_color;
+            if (props[i] == GARB_STOP_COLOR && inherit) {
+                out->stop = parent->stop;
+                out->current = parent->current;
+            }
+            if (props[i] == GARB_STOP_OPACITY && inherit)
+                out->opacity = parent->opacity;
+            if (props[i] == GARB_COLOR_INTERPOLATION)
+                out->linear = inherit && parent->linear;
+        } else if (props[i] == GARB_COLOR)
+            out->color = color(v->color, parent->color);
+        else if (props[i] == GARB_STOP_COLOR) {
+            out->stop = color(v->color, out->color);
+            out->current = v->color.current;
+        } else if (props[i] == GARB_STOP_OPACITY) {
+            if (!value(v, 1, &out->opacity))
+                return SVG_UNSUPPORTED;
+            out->opacity = fmin(1, fmax(0, out->opacity));
+        } else
+            out->linear = keyword(v, "linearrgb");
+    }
+    return SVG_OK;
+}
+static svg_status_t gradient_style(Adapter *a, const os64_html_node_t *node, StopStyle *out)
+{
+    const os64_html_node_t *chain[SVG_DEPTH_MAX];
+    size_t depth = 0;
+    for (; node && node->kind == OS64_HTML_ELEMENT; node = node->parent) {
+        if (depth == SVG_DEPTH_MAX)
+            return SVG_LIMIT;
+        chain[depth++] = node;
+    }
+    *out = (StopStyle){.color = a->initial_color, .stop = 0xff000000, .opacity = 1};
+    while (depth) {
+        StopStyle parent = *out;
+        svg_status_t st = stop_style_step(a, chain[--depth], &parent, out);
+        if (st != SVG_OK)
+            return st;
+    }
+    return SVG_OK;
+}
+static svg_status_t gradient_number(Adapter *a, const char *text, double percent, bool offset,
+                                    double *out)
+{
+    Scanner s;
+    if (!scanner(text, &s))
+        return SVG_LIMIT;
+    if (!adapter_spend(a, s.left))
+        return a->stopped;
+    double n;
+    if (!number(&s, &n))
+        return SVG_MALFORMED;
+    double factor = 1;
+    if (s.left && *s.p == '%') {
+        factor = percent / 100;
+        ++s.p;
+        --s.left;
+    } else if (!offset && s.left && !space(*s.p)) {
+        const struct {
+            const char *unit;
+            double factor;
+        } units[] = {{"px", 1},         {"in", 96},        {"cm", 96 / 2.54}, {"mm", 96 / 25.4},
+                     {"Q", 96 / 101.6}, {"pt", 96 / 72.0}, {"pc", 16}};
+        bool matched = false;
+        for (size_t i = 0; i < sizeof(units) / sizeof(units[0]); ++i) {
+            size_t len = os64_strlen(units[i].unit);
+            if (s.left >= len && !os64_memcmp(s.p, units[i].unit, len)) {
+                factor = units[i].factor;
+                s.p += len;
+                s.left -= len;
+                matched = true;
+                break;
+            }
+        }
+        if (!matched)
+            return SVG_UNSUPPORTED;
+    }
+    ws(&s);
+    if (s.left)
+        return SVG_MALFORMED;
+    *out = n * factor;
+    return isfinite(*out) ? SVG_OK : SVG_LIMIT;
+}
+static svg_status_t gradient_paint(Adapter *a, const garb_val_t *paint, uint32_t ink, unsigned part,
+                                   svg_paint_t *out)
+{
+    if (!paint || paint->kind != GARB_V_URL)
+        return SVG_OK;
+    *out = (svg_paint_t){.kind = SVG_PAINT_NONE};
+    if (paint->nitems && paint->items[0].kind == GARB_V_COLOR)
+        *out = (svg_paint_t){.kind = SVG_PAINT_COLOR, .argb = color(paint->items[0].color, ink)};
+    if (paint->len > SVG_ATTR_MAX)
+        return SVG_LIMIT;
+    char url[SVG_ATTR_MAX + 1];
+    os64_memcpy(url, paint->text, paint->len);
+    url[paint->len] = 0;
+    uint64_t target = 0;
+    svg_status_t status = fragment_target(a, url, &target);
+    if (status != SVG_OK || !target)
+        return status;
+    const os64_html_node_t *resource = (const void *)(uintptr_t)target;
+    if (same_word(resource->name, "radialGradient"))
+        return SVG_UNSUPPORTED;
+    if (!same_word(resource->name, "linearGradient"))
+        return SVG_OK;
+    const char *names[] = {
+        "x1", "y1", "x2", "y2", "gradientUnits", "spreadMethod", "gradientTransform"};
+    const char *attrs[7] = {0};
+    const os64_html_node_t *seen[SVG_DEPTH_MAX], *stops = NULL, *node = resource;
+    size_t depth = 0;
+    while (node) {
+        if (!adapter_spend(a, 1))
+            return a->stopped;
+        if (depth == SVG_DEPTH_MAX)
+            return SVG_LIMIT;
+        if (!adapter_spend(a, depth))
+            return a->stopped;
+        for (size_t i = 0; i < depth; ++i)
+            if (seen[i] == node)
+                return SVG_OK;
+        seen[depth++] = node;
+        if (!same_word(node->name, "linearGradient"))
+            return SVG_UNSUPPORTED;
+        for (size_t i = 0; i < 7; ++i) {
+            const os64_html_attr_t *v = os64_html_attr(node, names[i]);
+            if (!attrs[i] && v && !v->ns)
+                attrs[i] = v->value;
+        }
+        if (!stops) {
+            for (const os64_html_node_t *child = node->first_child; child; child = child->next) {
+                if (!adapter_spend(a, 1))
+                    return a->stopped;
+                if (child->kind != OS64_HTML_ELEMENT)
+                    continue;
+                if (child->ns == OS64_HTML_NS_SVG && same_word(child->name, "stop")) {
+                    stops = node;
+                    break;
+                }
+                if (!image_inert(a, child) && !ignored(child))
+                    return SVG_UNSUPPORTED;
+            }
+        }
+        uint64_t next = 0;
+        status = href_target(a, node, &next);
+        if (status != SVG_OK)
+            return status;
+        node = (const void *)(uintptr_t)next;
+        if (node && !same_word(node->name, "linearGradient") &&
+            !same_word(node->name, "radialGradient"))
+            node = NULL;
+    }
+    svg_linear_gradient_t *g = &a->gradients[part];
+    *g = (svg_linear_gradient_t){
+        .x2 = 1, .transform = identity, .object_bbox = true, .stops = a->gradient_stops[part]};
+    if (attrs[4]) {
+        if (same_word(attrs[4], "userSpaceOnUse"))
+            g->object_bbox = false;
+        else if (!same_word(attrs[4], "objectBoundingBox"))
+            return SVG_UNSUPPORTED;
+    }
+    if (attrs[5]) {
+        if (same_word(attrs[5], "repeat"))
+            g->spread = SVG_SPREAD_REPEAT;
+        else if (same_word(attrs[5], "reflect"))
+            g->spread = SVG_SPREAD_REFLECT;
+        else if (!same_word(attrs[5], "pad"))
+            return SVG_UNSUPPORTED;
+    }
+    double *coords[] = {&g->x1, &g->y1, &g->x2, &g->y2};
+    const char *defaults[] = {"0%", "0%", "100%", "0%"};
+    for (size_t i = 0; i < 4; ++i) {
+        double percent = g->object_bbox ? 1 : i % 2 ? a->height : a->width;
+        status = gradient_number(a, attrs[i] ? attrs[i] : defaults[i], percent, false, coords[i]);
+        if (status != SVG_OK)
+            return status;
+    }
+    const garb_val_t *transform = winner(a->cascade, resource, GARB_TRANSFORM);
+    if (transform)
+        status = css_transform(transform, &g->transform);
+    else if (attrs[6]) {
+        Scanner scan;
+        if (!scanner(attrs[6], &scan))
+            return SVG_LIMIT;
+        if (!adapter_spend(a, scan.left))
+            return a->stopped;
+        if (!transform_attribute(attrs[6], &g->transform))
+            status = SVG_MALFORMED;
+    }
+    if (status != SVG_OK)
+        return status;
+    const garb_prop_t extra[] = {GARB_TRANSFORM_ORIGIN, GARB_TRANSLATE, GARB_ROTATE, GARB_SCALE};
+    for (size_t i = 0; i < sizeof(extra) / sizeof(extra[0]); ++i)
+        if (winner(a->cascade, resource, extra[i]))
+            return SVG_UNSUPPORTED;
+    StopStyle host;
+    status = gradient_style(a, resource, &host);
+    if (status != SVG_OK)
+        return status;
+    if (host.linear)
+        return SVG_UNSUPPORTED;
+    if (stops)
+        for (const os64_html_node_t *child = stops->first_child; child; child = child->next) {
+            if (!adapter_spend(a, 1))
+                return a->stopped;
+            if (child->kind != OS64_HTML_ELEMENT)
+                continue;
+            if (child->ns != OS64_HTML_NS_SVG || !same_word(child->name, "stop")) {
+                if (image_inert(a, child) || ignored(child))
+                    continue;
+                return SVG_UNSUPPORTED;
+            }
+            if (g->count == SVG_GRADIENT_STOPS_MAX)
+                return SVG_LIMIT;
+            if (stops != resource && garb_style_needs_substitution(a->cascade, child))
+                return SVG_UNSUPPORTED;
+            StopStyle stop;
+            status = stop_style_step(a, child, &host, &stop);
+            if (status != SVG_OK)
+                return status;
+            double offset = 0;
+            const char *text = attr(child, "offset");
+            if (*text)
+                status = gradient_number(a, text, 1, true, &offset);
+            if (status != SVG_OK)
+                return status;
+            offset = fmin(1, fmax(g->count ? g->stops[g->count - 1].offset : 0, offset));
+            uint32_t rgba = stop.current ? stop.color : stop.stop;
+            rgba = (rgba & 0xffffff) | (uint32_t)((rgba >> 24) * stop.opacity + .5) << 24;
+            a->gradient_stops[part][g->count++] = (svg_gradient_stop_t){offset, rgba};
+        }
+    *out = (svg_paint_t){.kind = SVG_PAINT_LINEAR, .linear = g};
     return SVG_OK;
 }
 // A clip source inherits through its own DOM ancestors. Temporarily using the

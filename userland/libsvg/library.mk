@@ -1,5 +1,5 @@
 # SVG owns no system allocator or I/O; libmath supplies arc arithmetic.
-LIBSVG_SRCS := libsvg/core.c libsvg/path.c libsvg/geometry.c libsvg/bounds.c libsvg/stroke.c libsvg/scene.c libsvg/paint.c
+LIBSVG_SRCS := libsvg/core.c libsvg/path.c libsvg/geometry.c libsvg/bounds.c libsvg/stroke.c libsvg/scene.c libsvg/paint.c libsvg/gradient.c
 LIBSVG_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBSVG_SRCS))
 LIBSVG_SO := $(BIN)/libsvg.so
 LIBSVG_BASE = $(patsubst libsvg.so=%,%,$(filter libsvg.so=%,$(LIB_BASE_PAIRS)))

@@ -289,7 +289,7 @@ static void svg_cases(const char *dir)
         "<rect width=20 height=20 style='x:calc(2px)'/>",
         "<rect width=20 height=20 stroke=red stroke-dasharray='2 2' pathLength='100'/>",
         "<path style='transform:translateX(20px)' d='M0 0H20V20Z'/>",
-        "<path fill='url(#gradient)' d='M0 0H20V20Z'/>",
+        "<radialGradient id='gradient'/><path fill='url(#gradient)' d='M0 0H20V20Z'/>",
         "<path fill=none stroke=red stroke-dasharray='2em 2em' d='M0 0L20 20'/>"};
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
         char page[1024];
@@ -558,6 +558,7 @@ static void stroke_cases(const char *dir)
 #include "test_yonder_svg_clips.inc"
 #include "test_yonder_svg_bounds.inc"
 #include "test_yonder_svg_document.inc"
+#include "test_yonder_svg_gradients.inc"
 
 int main(int argc, char **argv)
 {
@@ -570,6 +571,7 @@ int main(int argc, char **argv)
     size_t base = live;
     clip_cases(argv[1]);
     bounds_cases(argv[1]);
+    gradient_cases(argv[1]);
     document_cases(argv[1]);
     document_contracts();
     image_route_contracts(argv[1]);

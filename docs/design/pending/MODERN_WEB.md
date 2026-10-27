@@ -4077,3 +4077,15 @@ output pixels. Caller-bounded cascade and attribute-parse limits support
 admission accounting. `/tests/pages/svg-images.html` exercises source changes,
 shared URLs, contain/cover, private styles, static processing and tiled SVG.
 Gradients, pixel-variant caches and corpus-led performance work remain in 6c.
+
+
+### Slice 6c, linear gradient paint — 2026-10-27
+
+[SVG_GRADIENTS.md](SVG_GRADIENTS.md) adds linear fill/stroke paint servers to
+inline SVG and independent image documents. A numeric libsvg sampler accepts
+resolved stops, maps and geometric bounds without a DOM or CSS dependency, so
+a future Canvas 2D adapter can reuse it. The adapter handles local templates,
+stop styling, coordinate units and pad/repeat/reflect spread.
+`/tests/pages/svg-gradients.html` changes a sky and its shared consumers while
+an external SVG postcard retains its private colors. Radial gradients,
+raster-variant caching and corpus-led performance work remain in 6c.

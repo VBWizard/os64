@@ -79,7 +79,8 @@ plus [dashes and zero-length caps](SVG_STROKES.md) and
 [One-silhouette clip resources](SVG_CLIPS.md) extend clipping beyond rectangles;
 [object-coordinate clips](SVG_BOUNDS.md) fit the drawing's geometric bounds.
 Definitions, clip resources, uninstantiated symbols, metadata, titles, descriptions and style
-elements are omitted from drawing. Other active element kinds refuse the SVG job. Text, gradients,
+elements are omitted from drawing. [Linear gradients](SVG_GRADIENTS.md) supply fill and stroke paint.
+Other active element kinds refuse the SVG job. Text, radial gradients,
 patterns, images, markers, broader clip combinations, masks, filters, non-scaling
 strokes and animation remain follow-on work. External SVG images use the [Yonder picture route](SVG_IMAGES.md),
 with document ownership separate from libimage raster decoding. SVG-specific hit testing and DOM interfaces are
