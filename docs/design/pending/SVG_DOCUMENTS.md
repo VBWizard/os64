@@ -46,7 +46,9 @@ The adapter requests `SVG_MODE_IMAGE`. This is a host-policy input to libsvg;
 the document owner enforces policy by exposing no network/file resolver,
 page/script context, event loop or stylesheet-loading callback. Scripts and
 event attributes are inert. SVG animation elements are skipped, including
-`set` beginning at time zero. CSS is cascaded without a motion sampler.
+`set` beginning at time zero. The same image-mode filter applies to direct
+clip-resource children before style resolution or silhouette counting; an
+inert-only clip remains empty. CSS is cascaded without a motion sampler.
 XML stylesheet PIs and CSS imports do not load resources. Fragment references
 remain document-local, subject to the existing base-URL refusal; blocked
 external `use`/clip references behave as failed resources. Namespace URIs
@@ -144,3 +146,13 @@ with real `<img>` delivery and a P5 gallery. Gradients and cache/corpus work rem
 part of 6c. The renderer continues to receive caller-resolved dimensions;
 the image route supplies default natural dimensions, while full replaced-element
 intrinsic sizing and raster-variant caches remain follow-ups.
+
+
+## Clip-resource processing regression
+
+The image-mode filter is shared by scene styling and clip-resource collection.
+The regression suite compares all six inert element kinds before/after a clip
+shape and in an otherwise empty clip against the artwork with those elements
+removed (18 exact references). Foreign-namespace elements, differently cased
+names and a second real silhouette remain refused. Inert subtrees and their
+unsupported style values do not become clip geometry.

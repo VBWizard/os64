@@ -705,6 +705,13 @@ static svg_status_t apply(Adapter *a, Computed *c, const Computed *parent, garb_
     }
     return SVG_OK;
 }
+static bool image_inert(const Adapter *a, const os64_html_node_t *n)
+{
+    return a->mode == SVG_MODE_IMAGE && n->ns == OS64_HTML_NS_SVG &&
+           (same_word(n->name, "script") || same_word(n->name, "animate") ||
+            same_word(n->name, "animateMotion") || same_word(n->name, "animateTransform") ||
+            same_word(n->name, "set") || same_word(n->name, "discard"));
+}
 static bool ignored(const os64_html_node_t *n)
 {
     return n->ns == OS64_HTML_NS_SVG &&
@@ -1081,11 +1088,7 @@ static svg_status_t style(void *ctx, void *snapshot, const svg_style_request_t *
     const os64_html_node_t *parent =
         r->parent_instance ? a->instances[r->parent_instance].source : NULL;
     bool symbol = n->ns == OS64_HTML_NS_SVG && same_word(n->name, "symbol");
-    bool inert = a->mode == SVG_MODE_IMAGE && n->ns == OS64_HTML_NS_SVG &&
-                 (same_word(n->name, "script") || same_word(n->name, "animate") ||
-                  same_word(n->name, "animateMotion") || same_word(n->name, "animateTransform") ||
-                  same_word(n->name, "set") || same_word(n->name, "discard"));
-    if (inert || ignored(n) ||
+    if (image_inert(a, n) || ignored(n) ||
         (symbol && !(parent && parent->ns == OS64_HTML_NS_SVG && same_word(parent->name, "use")))) {
         *out = svg_initial_style();
         out->display = false;
@@ -1401,7 +1404,8 @@ static svg_status_t clip_source(void *ctx, void *snapshot, const svg_style_reque
             continue;
         if (n->ns != OS64_HTML_NS_SVG)
             return SVG_UNSUPPORTED;
-        if (same_word(n->name, "title") || same_word(n->name, "desc") ||
+        // Scripts and animation do not contribute clip silhouettes in image mode.
+        if (image_inert(a, n) || same_word(n->name, "title") || same_word(n->name, "desc") ||
             same_word(n->name, "metadata") || same_word(n->name, "style"))
             continue;
         Computed child;
