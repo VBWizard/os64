@@ -638,12 +638,13 @@ static void consume_declaration_list(Parse *p, Input *in, List *items)
 
 // ── The entry points (§5.3) ─────────────────────────────────────────────
 
-static bool start(garb_parsed_t *out, Parse *p)
+static bool start_limited(garb_parsed_t *out, Parse *p, size_t max)
 {
     os64_memset(out, 0, sizeof(*out));
     os64_memset(p, 0, sizeof(*p));
-    p->arena = os64_arena_create(0, GARB_ARENA_MAX);
-    p->max = GARB_ARENA_MAX;
+    p->arena = max ? os64_arena_create(0, max) : NULL;
+    p->max = max;
+    out->arena_max = max;
     out->arena = p->arena;
     return p->arena != NULL;
 }
@@ -750,10 +751,11 @@ static garb_status_t run(Mode mode, Parse *p, Input *in, garb_parsed_t *out)
     return st;
 }
 
-static garb_status_t parse_text(Mode mode, const char *text, size_t len, garb_parsed_t *out)
+static garb_status_t parse_text_limited(Mode mode, const char *text, size_t len,
+                                         size_t max, garb_parsed_t *out)
 {
     Parse p;
-    if (!start(out, &p)) {
+    if (!start_limited(out, &p, max)) {
         out->incomplete = true;
         return GARB_NO_MEMORY;
     }
@@ -771,6 +773,23 @@ static garb_status_t parse_text(Mode mode, const char *text, size_t len, garb_pa
     in.owner = &p;
     garb_status_t st = run(mode, &p, &in, out);
     return finish(out, &p, &tz, st);
+}
+
+static garb_status_t parse_text(Mode mode, const char *text, size_t len, garb_parsed_t *out)
+{
+    return parse_text_limited(mode, text, len, GARB_ARENA_MAX, out);
+}
+
+garb_status_t garb_parse_block_limited(const char *text, size_t len, size_t max,
+                                      garb_parsed_t *out)
+{
+    return parse_text_limited(M_BLOCK, text, len, max, out);
+}
+
+garb_status_t garb_parse_values_limited(const char *text, size_t len, size_t max,
+                                       garb_parsed_t *out)
+{
+    return parse_text_limited(M_VALUES, text, len, max, out);
 }
 
 garb_status_t garb_parse_sheet_text(const char *text, size_t len, garb_parsed_t *out)

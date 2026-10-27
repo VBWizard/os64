@@ -12,12 +12,16 @@
 #include "image/sequence.h"
 #include "webp/webp.h"
 #include "jobs.h"
+#include "svg_document.h"
 #include "way/way.h"
 
-// What one picture job may cost, declared to the pool: libimage's file cap,
-// plus the largest codec working budget (WebP). This also covers JPEG's
-// 128 MiB budget, PNG's raster/row/window storage and GIF's sequence charge.
-#define PICTURE_RESERVE ((size_t)OS64_IMAGE_CAP_DEFAULT + OS64_WEBP_MEMORY_DEFAULT)
+// Admission covers the encoded body, XML/tree/sheet parsing, bounded SVG
+// measurement cascade (including retained attribute parses and scratch), or
+// libimage's largest codec budget. Retained products move to the page account.
+#define PICTURE_RESERVE ((size_t)512u << 20)
+_Static_assert(PICTURE_RESERVE >= (size_t)OS64_IMAGE_CAP_DEFAULT + OS64_WEBP_MEMORY_DEFAULT,
+               "picture admission must cover the raster codec budget");
+typedef enum { YONDER_PICTURE_RASTER, YONDER_PICTURE_SEQUENCE, YONDER_PICTURE_SVG } yonder_picture_kind_t;
 
 typedef struct {
     uint32_t kind;                  // YONDER_JOB_PICTURE
@@ -30,14 +34,18 @@ typedef struct {
     // preset lines and the picture's Fetch Metadata; and the browser's
     // cache, which may answer instead (CACHE.md).
     way_hooks_t hooks;
+    bool svg_enabled, dark, reduced_motion;
 } yonder_picture_job_t;
 
-// The picture: a still image, or — a GIF with more than one frame — a
-// sequence, its first frame ready (YONDER.md § Y5b). `cost` is what
-// keeping it costs, in bytes, for the page's account.
+// A tagged product: raster pixels, a moving GIF sequence, or an independently
+// owned SVG document. `cost` charges retained storage to the page account;
+// temporary SVG rasterization has a separate serialized working allowance.
 typedef struct {
+    yonder_picture_kind_t kind;
+    yonder_svg_document_t *svg;      // when kind is YONDER_PICTURE_SVG
+    uint32_t width, height;         // SVG default object size in CSS pixels
     os64_image_status_t status;     // OK, or why there is no picture
-    os64_image_t image;             // when `sequence` is NULL
+    os64_image_t image;             // when kind is YONDER_PICTURE_RASTER
     os64_image_sequence_t *sequence;
     size_t cost;
     // UNKNOWN_FORMAT: what the bytes are (yonder_diag_image_format), for

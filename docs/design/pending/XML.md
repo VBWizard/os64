@@ -317,8 +317,8 @@ The existing HTML serializer retains qualified element spelling and emits
 PI nodes according to its HTML contract. It does not perform XML namespace
 fixup or XML serialization. HTML fragment parsing refuses XML documents and
 unknown/no-namespace contexts; there is no XML fragment parser or general
-namespace-aware creation API. DOMParser, responseXML, script bindings and
-SVG image jobs do not consume this native builder. These boundaries are
+namespace-aware creation API. [SVG image jobs](SVG_IMAGES.md) consume the
+native builder; DOMParser, responseXML and script bindings do not. These boundaries are
 recorded in DEBTS.md rather than treated as completed browser features.
 
 **Verification.** `tools/test_xml_tree_host.sh` checks whole-buffer, one-byte

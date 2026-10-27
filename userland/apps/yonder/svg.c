@@ -321,12 +321,12 @@ static bool dimension(const char *text, double *out)
     *out = parsed;
     return true;
 }
-bool yonder_svg_size(const os64_html_node_t *n, int32_t *w, int32_t *h)
+static bool natural_size(const os64_html_node_t *n, double width, double height,
+                         bool wb, bool hb, int32_t *w, int32_t *h)
 {
-    if (!flow_svg_root(n))
-        return false;
-    double v[4], width = 300, height = 150;
-    bool wb = dimension(attr(n, "width"), &width), hb = dimension(attr(n, "height"), &height);
+    double v[4];
+    if (!wb) width = 300;
+    if (!hb) height = 150;
     if (viewbox(n, v) && v[2] > 0 && v[3] > 0) {
         double ratio = v[2] / v[3];
         if (wb && !hb)
@@ -345,6 +345,14 @@ bool yonder_svg_size(const os64_html_node_t *n, int32_t *w, int32_t *h)
     *w = (int32_t)(width + .5);
     *h = (int32_t)(height + .5);
     return true;
+}
+bool yonder_svg_size(const os64_html_node_t *n, int32_t *w, int32_t *h)
+{
+    if (!flow_svg_root(n))
+        return false;
+    double width = 300, height = 150;
+    bool wb = dimension(attr(n, "width"), &width), hb = dimension(attr(n, "height"), &height);
+    return natural_size(n, width, height, wb, hb, w, h);
 }
 static svg_status_t viewport_map(const os64_html_node_t *node, double w, double h,
                                  double *user_width, double *user_height, Map *m)
@@ -443,6 +451,34 @@ static bool value(const garb_val_t *v, double percent, double *out)
     else
         return false;
     return isfinite(*out);
+}
+static bool natural_dimension(const garb_val_t *v, double *out)
+{
+    if (!v || v->kind != GARB_V_LENGTH || v->number < 0)
+        return false;
+    double factor;
+    switch (v->unit) {
+    case GARB_U_PX: factor = 1; break;
+    case GARB_U_IN: factor = 96; break;
+    case GARB_U_CM: factor = 96 / 2.54; break;
+    case GARB_U_MM: factor = 96 / 25.4; break;
+    case GARB_U_Q: factor = 96 / 101.6; break;
+    case GARB_U_PT: factor = 96 / 72.0; break;
+    case GARB_U_PC: factor = 16; break;
+    default: return false;
+    }
+    *out = v->number * factor;
+    return isfinite(*out);
+}
+bool yonder_svg_natural_size(const os64_html_node_t *n, const garb_cascade_t *c,
+                              int32_t *w, int32_t *h)
+{
+    if (!flow_svg_root(n) || !c || garb_cascade_incomplete(c))
+        return false;
+    double width = 300, height = 150;
+    bool wb = natural_dimension(winner(c, n, GARB_WIDTH), &width);
+    bool hb = natural_dimension(winner(c, n, GARB_HEIGHT), &height);
+    return natural_size(n, width, height, wb, hb, w, h);
 }
 static uint32_t color(garb_color_t c, uint32_t current)
 {
@@ -1544,8 +1580,15 @@ svg_status_t yonder_svg_render_image_tree(const os64_html_document_t *doc,
         return SVG_UNSUPPORTED;
     if (garb_cascade_incomplete(cascade))
         return SVG_LIMIT;
-    if (view->width > 16384 || view->height > 16384 ||
-        (uint64_t)view->width * view->height > 8388608)
+    if ((!view->pixel_width) != (!view->pixel_height))
+        return SVG_BAD_ARGUMENT;
+    if (!isfinite(view->width) || !isfinite(view->height) ||
+        view->width < 0 || view->height < 0 || view->width > 16384 || view->height > 16384)
+        return SVG_LIMIT;
+    uint32_t pw = view->pixel_width ? view->pixel_width : (uint32_t)ceil(view->width);
+    uint32_t ph = view->pixel_height ? view->pixel_height : (uint32_t)ceil(view->height);
+    if (pw > 16384 || ph > 16384 ||
+        (uint64_t)pw * ph > 8388608)
         return SVG_LIMIT;
     if (!view->width || !view->height)
         return SVG_OK;
@@ -1560,6 +1603,7 @@ svg_status_t yonder_svg_render_image_tree(const os64_html_document_t *doc,
         return status;
     a.image_viewport = (svg_viewport_t){.active = true, .width = view->width,
                                        .height = view->height, .content_transform = content_map};
-    return render_adapter(&a, &identity, (os64_gui_rect_t){0,0,view->width,view->height},
-                          0, 0, view->width, view->height, backend, out);
+    Map output = {(double)pw / view->width, 0, 0, (double)ph / view->height, 0, 0};
+    return render_adapter(&a, &output, (os64_gui_rect_t){0, 0, pw, ph},
+                          0, 0, pw, ph, backend, out);
 }

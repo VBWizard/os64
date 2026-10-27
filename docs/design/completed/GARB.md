@@ -158,6 +158,14 @@ after that would style a fraction of the page. So a sheet is the same
 after any number of cascades as before the first, and every cascade
 starts from the whole budget.
 
+Callers with a smaller working allowance can use `garb_cascade_limited` to
+select state, read and per-attribute arena caps plus a retained attribute
+parse count. `garb_parse_block_limited` and `garb_parse_values_limited` retain
+the chosen arena cap for later reads too. The original entry points keep
+the defaults described here. Tokenizer/parser scratch and separately allocated
+slot/match arrays are outside these arena caps. The SVG image adapter's
+selected limits and working allowance are recorded in [SVG_IMAGES.md](../pending/SVG_IMAGES.md).
+
 What a cascade reads of a Bootstrap-shaped sheet costs about a third more
 than the sheet's parse, 21.5 bytes a byte; of the densest, about twice;
 and across the corpus's 137 sheets over 100 KiB, what a cascade holds for

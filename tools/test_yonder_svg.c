@@ -572,6 +572,7 @@ int main(int argc, char **argv)
     bounds_cases(argv[1]);
     document_cases(argv[1]);
     document_contracts();
+    image_route_contracts(argv[1]);
     viewport_cases(argv[1]);
     use_cases(argv[1]);
     stroke_cases(argv[1]);

@@ -771,7 +771,7 @@ its alpha over what is beneath, one row of the visible part at a time
 not, keeps Y1's frame. A GIF's other frames are § Y5b's.
 
 **Memory kept.** Decoded pictures stay while their page is shown, up to
-256 MiB of pixels; past that, a picture is not kept and draws as its frame,
+256 MiB of retained pixels or SVG document storage; past that, a picture is not kept and draws as its frame,
 and the status line says how many were left out. Back and Forward decode
 them again, from the disk when the cache kept them (CACHE.md) and from
 the network when it did not.
@@ -910,7 +910,7 @@ page failed with "out of handles or ports"; the table is 64 now
 | Links on a page from disk | a relative address does not resolve against a `file:` page | Y3, where pages come from the network |
 | A multi-line textarea, a drop-down select, several choices in a multiple select, a file chooser | each is a widget libui does not have yet (a multi-line field sized to its box, a popup list, a multiple-selection list, a file dialog) | the first form that needs one |
 | Back and Forward to the reply to a form | the history holds addresses, so going back to a POST's reply fetches its address with GET, which a server may answer with something else; Chrome shows the page from its back-forward cache or an HTTP cache keyed by the upload, and a "resubmit?" page only when it has neither. BROWSER_DEBTS.md has the first site it showed on, and the fix | a second site depends on it |
-| SVG pictures | libimage decodes raster formats; SVG is a vector language with a renderer of its own | the modern web's logos, which are mostly SVG |
+| Broader SVG pictures | [The image route](../pending/SVG_IMAGES.md) supports the secure-static solid-graphics subset; gradients, text and raster-variant caching remain | corpus evidence and the remaining SVG slices |
 | `data:` pictures | a data: address needs no fetch but a decoder of its own | a page that needs one |
 | Decoded pictures between pages | the cache (CACHE.md) keeps the download, and Back and Forward decode it again | decoding shows in the time to a laid-out page |
 | Layout on a worker | every page shares one text context, which one thread uses at a time; a worker would need its own, with its own fonts opened | a page whose layout makes the window stop answering for long enough to matter (fetch.spec.whatwg.org takes 6 s to lay out again at full screen on the P5) |

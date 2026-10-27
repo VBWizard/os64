@@ -161,9 +161,9 @@ typedef enum {
 // cascade does, learns from `incomplete` alone that it is short.
 typedef struct {
     struct os64_arena *arena;
-    // What `arena` was made to hold; 0 is GARB_ARENA_MAX, which every parse
-    // is. A reader that keeps reads (garb_items_of) in an arena of its own
-    // of another size says so here, and the reads keep to it.
+    // What `arena` was made to hold; 0 means the default GARB_ARENA_MAX.
+    // Caller-bounded parses and readers with their own arena state its cap
+    // here, so subsequent reads keep to that same limit.
     size_t arena_max;
     bool incomplete;
     garb_item_t *items;     // a list of rules or of a block's contents
@@ -190,6 +190,13 @@ garb_status_t garb_parse_sheet_text(const char *text, size_t len, garb_parsed_t 
 garb_status_t garb_parse_rules(const char *text, size_t len, garb_parsed_t *out);
 // A block's contents (§5.3.6) — what a `style` attribute is — into `items`.
 garb_status_t garb_parse_block(const char *text, size_t len, garb_parsed_t *out);
+// Caller-bounded variants. max is a literal arena limit, including zero;
+// parser/tokenizer scratch is separate. Short results set incomplete, as in
+// the default entry points. The returned arena retains this limit for reads.
+garb_status_t garb_parse_block_limited(const char *text, size_t len, size_t max,
+                                      garb_parsed_t *out);
+garb_status_t garb_parse_values_limited(const char *text, size_t len, size_t max,
+                                       garb_parsed_t *out);
 // A list of declarations: a block's contents without its qualified rules,
 // kept for the suite's `declaration_list` and for at-rules that take one.
 garb_status_t garb_parse_declaration_list(const char *text, size_t len, garb_parsed_t *out);

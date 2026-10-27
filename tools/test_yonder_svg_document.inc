@@ -1,4 +1,5 @@
 #include "svg_document.h"
+#include <os64/arena.h>
 static yonder_svg_image_view_t image_view = {.width = 128, .height = 128};
 static svg_status_t image_draw(yonder_svg_document_t *d, SvgLedger *l, yonder_svg_pixels_t *p)
 {
@@ -311,4 +312,84 @@ static void document_contracts(void)
            "parse/%zu render cancellation positions; ownership, namespaces, encodings, isolation, "
            "media and limits pass\n",
            parse_allocations, cascade_allocations, render_allocations, parse_polls, render_polls);
+}
+
+static void image_route_contracts(const char *directory)
+{
+    static const struct { const char *attrs, *body; uint32_t w, h; } sizes[] = {
+        {"width='80' height='40'", "", 80, 40},
+        {"viewBox='0 0 60 30'", "", 300, 150},
+        {"viewBox='0 0 30 60'", "", 75, 150},
+        {"width='80' viewBox='0 0 60 30'", "", 80, 40},
+        {"height='40' viewBox='0 0 60 30'", "", 80, 40},
+        {"", "", 300, 150},
+        {"width='100%' height='100%' viewBox='0 0 20 20'", "", 150, 150},
+        {"width='1in' height='36pt'", "", 96, 48},
+        {"width='10' height='20' style='width:80px;height:40px'", "", 80, 40},
+        {"width='10' height='20'", "<style>:root{width:80px;height:40px}</style>", 80, 40},
+        {"width='0' height='20'", "", 0, 20},
+    };
+    size_t baseline = live;
+    yonder_svg_document_t *d = NULL;
+    char filename[1024];
+    snprintf(filename,sizeof(filename),"%s/image-sizing.json",directory);
+    FILE *manifest=fopen(filename,"w"); assert(manifest); fputs("[",manifest);
+    for (size_t i = 0; i < sizeof(sizes)/sizeof(sizes[0]); ++i) {
+        char xml[1024];
+        snprintf(xml,sizeof(xml),"<svg xmlns='http://www.w3.org/2000/svg' %s>%s</svg>",
+                 sizes[i].attrs,sizes[i].body);
+        assert(yonder_svg_document_parse(xml,strlen(xml),NULL,NULL,&d,NULL)==SVG_OK);
+        uint32_t w,h;
+        assert(yonder_svg_document_size(d,false,false,NULL,NULL,&w,&h)==SVG_OK);
+        if(w!=sizes[i].w || h!=sizes[i].h) fprintf(stderr,"size %zu: %u,%u\n",i,w,h);
+        assert(w==sizes[i].w && h==sizes[i].h);
+        snprintf(filename,sizeof(filename),"%s/image-size-%02zu.svg",directory,i);
+        FILE *source=fopen(filename,"w");assert(source);fputs(xml,source);assert(!fclose(source));
+        fprintf(manifest,"%s{\"file\":\"image-size-%02zu.svg\",\"width\":%u,\"height\":%u}",i?",":"",i,w,h);
+        size_t calls=s_mallocs;
+        assert(yonder_svg_document_size(d,false,false,NULL,NULL,&w,&h)==SVG_OK && s_mallocs==calls);
+        yonder_svg_document_free(d);
+        assert(live==baseline);
+    }
+    fputs("]\n",manifest);assert(!fclose(manifest));
+    const char *xml="<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'>"
+        "<style>rect{fill:red}@media(min-width:100px){rect{fill:blue}}"
+        "@media(prefers-color-scheme:dark){:root{width:80px;height:40px}}</style>"
+        "<rect width='128' height='128'/></svg>";
+    assert(yonder_svg_document_parse(xml,strlen(xml),NULL,NULL,&d,NULL)==SVG_OK);
+    uint32_t w,h;
+    assert(yonder_svg_document_size(d,false,false,NULL,NULL,&w,&h)==SVG_OK && w==150 && h==150);
+    assert(yonder_svg_document_size(d,true,false,NULL,NULL,&w,&h)==SVG_OK && w==80 && h==40);
+    SvgLedger ledger={.cap=64<<20};
+    os64_geometry_memory_t memory={&ledger,svg_alloc_test,svg_free_test};
+    for(uint32_t extent=32;extent<=512;extent*=4) {
+        yonder_svg_image_view_t view={.width=128,.height=128,.pixel_width=extent,.pixel_height=extent};
+        yonder_svg_pixels_t pixels;
+        assert(yonder_svg_document_render(d,&view,&memory,os64_freetype_geometry_v1(),&pixels)==SVG_OK);
+        assert(pixels.rect.w==(int32_t)extent && pixel(&pixels,extent/2,extent/2)==0xff0000ff);
+        pixels_free(&ledger,&pixels);
+    }
+    yonder_svg_image_view_t invalid={.width=128,.height=128,.pixel_width=32};
+    yonder_svg_pixels_t pixels;
+    assert(yonder_svg_document_render(d,&invalid,&memory,os64_freetype_geometry_v1(),&pixels)==SVG_BAD_ARGUMENT && !pixels.pixels);
+    invalid=(yonder_svg_image_view_t){.width=NAN,.height=128};
+    assert(yonder_svg_document_render(d,&invalid,&memory,os64_freetype_geometry_v1(),&pixels)==SVG_LIMIT);
+    yonder_svg_document_free(d);
+    char many[8192]="<svg xmlns='http://www.w3.org/2000/svg'>";
+    for(size_t i=0;i<YONDER_SVG_ATTRIBUTES+1;i++) strcat(many,"<rect style='fill:blue' width='1' height='1'/>");
+    strcat(many,"</svg>");
+    assert(yonder_svg_document_parse(many,strlen(many),NULL,NULL,&d,NULL)==SVG_OK);
+    assert(yonder_svg_document_size(d,false,false,NULL,NULL,&w,&h)==SVG_LIMIT);
+    assert(image_draw(d,&ledger,&pixels)==SVG_LIMIT && !pixels.pixels);
+    yonder_svg_document_free(d);
+    garb_parsed_t limited={0};
+    assert(garb_parse_block_limited("fill:blue",9,0,&limited)==GARB_NO_MEMORY && limited.incomplete);
+    garb_free(&limited);
+    assert(garb_parse_block_limited("fill:blue",9,1024,&limited)!=GARB_OK || limited.incomplete);
+    garb_free(&limited);
+    assert(garb_parse_block_limited("fill:blue",9,2u<<20,&limited)==GARB_OK && !limited.incomplete);
+    assert(os64_arena_stats(limited.arena).reserved_bytes<=(2u<<20));
+    garb_free(&limited);
+    assert(live==baseline && !ledger.live);
+    puts("SVG image sizing: 11 natural sizes, preference cache, independent CSS/raster extents and bounded attribute cascades pass");
 }
