@@ -385,6 +385,15 @@ static void dom_modern_cases(void)
         "refused=false;try{(function(){'use strict';delete K[0]})()}catch(x){refused=x instanceof TypeError}"
         "assert(refused&&K[0].localName==='input','an index is not deleted');"
         "K.expando=1;assert(K.expando===1&&delete K.expando&&K.expando===undefined,'an expando is as it was');"
+        "var Z=document.createElement('form');refused=false;"
+        "try{Object.defineProperty(Z,'0',{value:1})}catch(x){refused=x instanceof TypeError}"
+        "Z.appendChild(document.createElement('input'));"
+        "assert(refused&&Z[0]===Z.elements[0]&&Z[0].localName==='input','an index it has no control for is refused too');"
+        "var N=document.createElement('form');N.innerHTML='<input name=0><input id=1 name=n>';"
+        "assert(Object.getOwnPropertyNames(N).join()==='0,1,n'&&Object.keys(N).join()==='0,1',"
+        "'a name an index spells is that index');"
+        "var FI=document.createElement('fieldset');FI.innerHTML='<input type=image><input>';"
+        "assert(FI.elements.length===2,'a fieldset lists an image button, as a form does not');"
         /* baseURI and a lone webauthn */
         "assert(document.body.baseURI===document.baseURI&&typeof document.baseURI==='string','baseURI');"
         "var at=document.createAttribute('q');assert(at.baseURI===document.baseURI,'an Attr\\'s');"
@@ -605,7 +614,23 @@ static void dom_modern_cases(void)
     char *chain_on = modern_chain_shape(&f);
     fixture_free(&f);
 
+    /* baseURI is the document's base URL, its fragment kept: the page's
+     * address's, and a base's own. */
     os64_dom_options_t options = os64_dom_default_options();
+    options.url = "https://example.test/dir/page#top";
+    f = fixture_new(&options);
+    if (fixture_ready(&f))
+        dom_script(&f, MODERN_ASSERT
+            "assert(document.baseURI==='https://example.test/dir/page#top'&&"
+            "document.body.baseURI===document.baseURI,'the page\\'s address, its fragment kept');"
+            "var B=document.createElement('base');B.setAttribute('href','/other/x#frag');document.head.appendChild(B);"
+            "assert(document.baseURI==='https://example.test/other/x#frag'&&"
+            "document.createAttribute('q').baseURI===document.baseURI,'a base, its own fragment kept');"
+            "B.remove();assert(document.baseURI==='https://example.test/dir/page#top','and without it again');",
+            "modern-on-base-uri");
+    fixture_free(&f);
+
+    options = os64_dom_default_options();
     options.modern = false;
     f = fixture_new(&options);
     if (!fixture_ready(&f)) { modern_names_free(on, non); free(chain_on); return; }

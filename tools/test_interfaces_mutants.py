@@ -52,6 +52,7 @@ UI_TEXT_C = 'userland/libos64/ui_text.c'
 CONTROLS_C = 'userland/libdom/controls.c'
 WINDOW_C = 'userland/libdom/window.c'
 FORMS_C = 'userland/libdom/forms.c'
+RESOLVE_C = 'userland/libpage/resolve.c'
 UI_CONTROLS_C = 'userland/libos64/ui_controls.c'
 DOM = 'tools/test_dom_host.sh'
 PAGE = 'tools/test_libpage_host.sh'
@@ -310,18 +311,31 @@ mutants = [
      '{"autocomplete", "autocomplete", K_ENUM, FO, kAutocomplete, "off", "on", 0},', (DOM,)),
     ('output-has-no-labels', CONTROLS_C, '{"labels", M_LABELS, false, IN | TA | SE | BU | OU},',
      '{"labels", M_LABELS, false, IN | TA | SE | BU},', (DOM,)),
-    ('image-button-listed', CLASSIC_C, '        return type == NULL || !os64_streq_nocase(type->value, "image");',
-     '        return type == NULL || true;', (DOM,)),
-    ('fieldset-not-listed', CLASSIC_C, '    case OS64_HTML_TAG_BUTTON: case OS64_HTML_TAG_FIELDSET: case OS64_HTML_TAG_OBJECT:',
-     '    case OS64_HTML_TAG_BUTTON: case OS64_HTML_TAG_OBJECT:', (DOM,)),
+    ('image-button-listed', CLASSIC_C, '        return d_listed(node) && !image_button(node) && d_form_owner(node) == root;',
+     '        return d_listed(node) && (!image_button(node) || true) && d_form_owner(node) == root;', (DOM,)),
+    ('fieldset-drops-image-buttons', CLASSIC_C, '    case D_QUERY_FIELDSET: return d_listed(node);',
+     '    case D_QUERY_FIELDSET: return d_listed(node) && !image_button(node);', (DOM,)),
+    ('fieldset-not-listed', CLASSIC_C,
+     '    case OS64_HTML_TAG_BUTTON: case OS64_HTML_TAG_FIELDSET: case OS64_HTML_TAG_INPUT: case OS64_HTML_TAG_OBJECT:',
+     '    case OS64_HTML_TAG_BUTTON: case OS64_HTML_TAG_INPUT: case OS64_HTML_TAG_OBJECT:', (DOM,)),
     ('form-has-no-index', CLASSIC_C, '        ? d_index_key(ctx, atom, &index) : 0;', '        ? 0 * d_index_key(ctx, atom, &index) : 0;',
      (DOM,)),
     ('builtins-win', CLASSIC_C, '    if (!(kind == D_QUERY_CONTROLS && entry->dom->controls_prototype != NULL)) {',
      '    if (true || !(kind == D_QUERY_CONTROLS && entry->dom->controls_prototype != NULL)) {', (DOM,)),
     ('form-names-unlisted', CLASSIC_C, '    DValue *entry = modern_form(object);\n    if (entry == NULL || !d_context(entry->dom, ctx, OS64_JS_ABI_ID)) return entry == NULL ? 0 : -1;',
      '    DValue *entry = modern_form(object) != NULL ? NULL : NULL;\n    if (entry == NULL || !d_context(entry->dom, ctx, OS64_JS_ABI_ID)) return entry == NULL ? 0 : -1;', (DOM,)),
-    ('form-name-redefinable', CLASSIC_C, '    int named = entry != NULL ? named_property(ctx, NULL, object, atom) : 0;',
-     '    int named = entry != NULL ? 0 * named_property(ctx, NULL, object, atom) : 0;', (DOM,)),
+    ('form-name-redefinable', CLASSIC_C,
+     '    int named = numeric == 0 && entry != NULL ? named_property(ctx, NULL, object, atom) : 0;',
+     '    int named = numeric == 0 && entry != NULL ? 0 * named_property(ctx, NULL, object, atom) : 0;', (DOM,)),
+    ('unsupported-index-definable', CLASSIC_C,
+     '    int numeric = entry != NULL ? d_index_key(ctx, atom, &index) : 0;',
+     '    int numeric = entry != NULL ? 0 * d_index_key(ctx, atom, &index) : 0;', (DOM,)),
+    ('index-named-twice', CLASSIC_C, '            for (uint32_t s = 0; s < n && !seen; s++)',
+     '            for (uint32_t s = count; s < n && !seen; s++)', (DOM,)),
+    ('base-uri-loses-fragment', MIXIN_C, '    JSValue result = os64_page_base_url_in(dom->document,',
+     '    JSValue result = os64_page_base_in(dom->document,', (DOM,)),
+    ('base-fragment-is-the-documents', RESOLVE_C, '    page->base_fragment = os64_strchr(clean, \'#\');\n    page->base_hierarchical',
+     '    page->base_hierarchical', (PAGE,)),
     ('form-index-deletable', CLASSIC_C, '    return named < 0 ? -1 : !named;', '    return named < 0 ? -1 : 1;', (DOM,)),
     ('elements-plain-collection', CLASSIC_C, '        if (kind == D_QUERY_CONTROLS && dom->controls_prototype != NULL &&',
      '        if (kind == D_QUERY_CONTROLS && dom->controls_prototype != NULL && false &&', (DOM,)),

@@ -43,15 +43,17 @@ bool d_listed(const os64_html_node_t *node)
 {
     if (node->kind != OS64_HTML_ELEMENT || node->ns != OS64_HTML_NS_HTML) return false;
     switch (node->tag) {
-    case OS64_HTML_TAG_INPUT: {
-        const os64_html_attr_t *type = os64_html_attr(node, "type");
-        return type == NULL || !os64_streq_nocase(type->value, "image");
-    }
-    case OS64_HTML_TAG_BUTTON: case OS64_HTML_TAG_FIELDSET: case OS64_HTML_TAG_OBJECT:
+    case OS64_HTML_TAG_BUTTON: case OS64_HTML_TAG_FIELDSET: case OS64_HTML_TAG_INPUT: case OS64_HTML_TAG_OBJECT:
     case OS64_HTML_TAG_OUTPUT: case OS64_HTML_TAG_SELECT: case OS64_HTML_TAG_TEXTAREA:
         return true;
     default: return false;
     }
+}
+
+static bool image_button(const os64_html_node_t *node)
+{
+    const os64_html_attr_t *type = node->tag == OS64_HTML_TAG_INPUT ? os64_html_attr(node, "type") : NULL;
+    return type != NULL && os64_streq_nocase(type->value, "image");
 }
 
 bool d_classic_match(const os64_html_node_t *root,
@@ -65,8 +67,9 @@ bool d_classic_match(const os64_html_node_t *root,
         return node->tag == OS64_HTML_TAG_FORM || node->tag == OS64_HTML_TAG_IMG;
     case D_QUERY_CONTROLS:
         /* A form's listed elements (HTML § 4.10.2) it owns, but an image
-         * button, which `elements` leaves out. */
-        return d_listed(node) && d_form_owner(node) == root;
+         * button, which a form's `elements` leaves out and a fieldset's
+         * does not. */
+        return d_listed(node) && !image_button(node) && d_form_owner(node) == root;
     case D_QUERY_FIELDSET: return d_listed(node);
     default: return true;
     }
@@ -221,8 +224,9 @@ static int node_names(JSContext *ctx, JSPropertyEnum **table, uint32_t *length, 
             if (attr == NULL || attr->value[0] == '\0') continue;
             JSAtom atom = JS_NewAtom(ctx, attr->value);
             if (atom == JS_ATOM_NULL) goto fail;
+            /* A name an index spells (`name=0`) is that index's key. */
             bool seen = false;
-            for (uint32_t s = count; s < n && !seen; s++) seen = entries[s].atom == atom;
+            for (uint32_t s = 0; s < n && !seen; s++) seen = entries[s].atom == atom;
             if (seen) {
                 JS_FreeAtom(ctx, atom);
                 continue;
@@ -243,15 +247,21 @@ fail:
 
 /* A form's index or name is not a node's to redefine or delete: refused,
  * as a nonextensible object refuses one (a TypeError where the caller
- * asked for one); anything else is an ordinary property. */
+ * asked for one); anything else is an ordinary property. A form has no
+ * indexed setter, so any index at all is refused a definition, one it has
+ * no control for yet included (WebIDL § 3.9.3), or a property defined
+ * there would shadow its control once it had one; only one it has is
+ * refused a delete. */
 static int node_define(JSContext *ctx, JSValueConst object, JSAtom atom, JSValueConst value, JSValueConst getter,
                        JSValueConst setter, int flags)
 {
     DValue *entry = modern_form(object);
-    int named = entry != NULL ? named_property(ctx, NULL, object, atom) : 0;
-    if (named < 0) return -1;
-    return JS_DefineProperty(ctx, named ? entry->dom->index_guard->value : object, atom, value, getter, setter,
-                             flags | JS_PROP_NO_EXOTIC);
+    uint32_t index;
+    int numeric = entry != NULL ? d_index_key(ctx, atom, &index) : 0;
+    int named = numeric == 0 && entry != NULL ? named_property(ctx, NULL, object, atom) : 0;
+    if (numeric < 0 || named < 0) return -1;
+    return JS_DefineProperty(ctx, numeric || named ? entry->dom->index_guard->value : object, atom, value, getter,
+                             setter, flags | JS_PROP_NO_EXOTIC);
 }
 
 static int node_delete(JSContext *ctx, JSValueConst object, JSAtom atom)

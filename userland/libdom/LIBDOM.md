@@ -1377,8 +1377,9 @@ code units; the tail a new text node, the next sibling when there is a
 parent; the node shortened first and given its data back if the insertion
 fails); Element's `localName`, `namespaceURI` and `prefix` (libhtml's name,
 `os64_html_namespace_uri`, libhtml's prefix, each null for none); and
-Node's `baseURI`, its node document's base URL (`d_base_uri`; about:blank
-for a document with no window), which Attr's prototype shadows with the
+Node's `baseURI`, its node document's base URL, its fragment kept
+(`d_base_uri`, over libpage's `os64_page_base_url_in`; about:blank for a
+document with no window), which Attr's prototype shadows with the
 same answer.
 
 **The select row** (`options.c`, which names `Option` on window): an
@@ -1430,15 +1431,17 @@ from its tree's root.
 **The forms rows** (naming HTMLFormControlsCollection and RadioNodeList on
 window, and nothing else). `collection.c`'s: a form's `elements` is an
 HTMLFormControlsCollection, over a collection's, of its listed elements
-(`d_listed`); its `namedItem`, and named access on it and on the form,
+but an image button (`d_listed`); its `namedItem`, and named access on it and on the form,
 answer a RadioNodeList for a name two or more controls share, a live
 NodeList made once a form and a name (`d_radio_list`), whose `value` reads
 its first checked radio button's and sets the first of that value; a
 NodeList answers no names (`node_list`). `forms.c`'s: a form's `length`,
 `rel` and `relList`; a label's `control` and `form`; a fieldset's `type`
-and `elements` (the collection kind FIELDSET); a legend's `form`; an
+and `elements` (the collection kind FIELDSET, its listed descendants, an
+image button among them); a legend's `form`; an
 output's `value`, `defaultValue` (its override kept on its wrapper's
 record), `type` and `htmlFor`. With the switch on the form is a legacy
 platform object (classic.c's exotic): `form[i]`, names over its
 prototype's members, its indices and names its own, and none of them
-redefined or deleted.
+redefined or deleted; nor is an index it has no control for defined, as it
+has no indexed setter.

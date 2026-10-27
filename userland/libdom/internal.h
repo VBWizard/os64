@@ -687,9 +687,9 @@ enum { D_QUERY_GENERIC, D_QUERY_IMAGES, D_QUERY_FORMS, D_QUERY_CONTROLS, D_QUERY
        D_QUERY_FIELDSET };
 bool d_named_match(const os64_html_node_t *node, const char *name);
 bool d_classic_match(const os64_html_node_t *root, const os64_html_node_t *node, unsigned kind);
-/* One of the elements a form's and a fieldset's `elements` list (HTML §
- * 4.10.2's listed elements, an image button excepted): button, fieldset,
- * input, object, output, select, textarea. */
+/* One of HTML § 4.10.2's listed elements, which a fieldset's `elements`
+ * lists, and a form's all but an image button: button, fieldset, input,
+ * object, output, select, textarea. */
 bool d_listed(const os64_html_node_t *node);
 /* A form's controls as its `elements` lists them, where it looks for them
  * (classic.c): the `index`th, NULL past the last; *count, when not NULL,

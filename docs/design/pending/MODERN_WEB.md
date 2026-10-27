@@ -4064,7 +4064,8 @@ collections, and the label, fieldset, legend and output.
   output keeps HTML's default value override on its wrapper's record.
 - **A form's controls** (libdom `collection.c`): `elements` lists HTML's
   listed elements (fieldsets, outputs and objects with them, an image
-  button left out: `d_listed`, a classic fix both ways) and is an
+  button left out, which a fieldset's `elements` keeps: `d_listed`, a
+  classic fix both ways) and is an
   HTMLFormControlsCollection, whose `namedItem`, and named access on it and
   on the form, answer a RadioNodeList for a name two or more controls
   share: a live NodeList, one a form and a name, whose `value` is its
@@ -4075,10 +4076,14 @@ collections, and the label, fieldset, legend and output.
   is its i-th control; a control's name hides the prototype's member of
   that name ([LegacyOverrideBuiltIns]: an input named `submit` is
   `form.submit`, as in every browser); its own names are its indices and,
-  not enumerable, its controls' ids and names; an index or a name is not
-  redefined or deleted.
+  not enumerable, its controls' ids and names, a name an index spells
+  listed once; no index is defined on it, one it has no control for yet
+  included (it has no indexed setter), and an index or a name it has is
+  not redefined or deleted.
 - **Beside them**: Node's `baseURI` (and an Attr's), which WPT's form
-  pages resolve their expectations against; `autocomplete="webauthn"`
+  pages resolve their expectations against: the document's base URL with
+  its fragment, which resolution never keeps (libpage's
+  `os64_page_base_url_in`); `autocomplete="webauthn"`
   alone; and, classic fixes both ways, `requestSubmit(submitter)` held to
   HTML (no submit button: a TypeError; another form's: NotFoundError; the
   submission the submitter's), with a form in no document submitting
@@ -4097,15 +4102,18 @@ collections, and the label, fieldset, legend and output.
   lost, here or in P3a's directories; with the switch off, no required
   line passes.
 - **Hosts**, 0 failed, on `userland` with #374 in: DOM 17,215 and
-  113,259 (the four kinds, every reflection rule above, `elements` and
+  113,265 (the four kinds, every reflection rule above, `elements` and
   `length`, `form[i]`, RadioNodeList's identity and value, the legacy
-  platform object, the output's override, `baseURI`,
+  platform object, the output's override, `baseURI` and its fragment,
   `requestSubmit`'s refusals; and with the switch off, none of it); the
-  scripted page 8,429; yonder 2,028.
-- **Mutants** (`tools/test_interfaces_mutants.py`, its P3b group): 22,
+  scripted page 8,429; yonder 2,028; libpage 254,199 (the document base
+  URL, a fragment's every source).
+- **Mutants** (`tools/test_interfaces_mutants.py`, its P3b group): 27,
   each caught — a rule of the table (method's default, autocomplete's),
-  an output's labels, the listed elements, form[i], the names over
-  builtins, the own names, redefinition and deletion, the controls
+  an output's labels, the listed elements (a fieldset's image button
+  too), form[i], the names over builtins, the own names (an index's
+  spelling once), redefinition (an index it has no control for too) and
+  deletion, `baseURI`'s fragment (libdom's and libpage's), the controls
   collection and RadioNodeList (made once, radios only, the value set), a
   NodeList's names, the output's override both ways, a label's form, the
   submitter's two refusals and a detached form.
