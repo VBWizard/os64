@@ -3218,8 +3218,9 @@ static bool draws_at(const flow_box_t *b, int32_t x, int32_t y)
     const flow_style_t *s = b->style;
     if (s->has_background || flow_background_has_image(s))
         return true;
-    int64_t top = s->border_width[0] / FLOW_UNITS_PER_PX, right = s->border_width[1] / FLOW_UNITS_PER_PX;
-    int64_t bottom = s->border_width[2] / FLOW_UNITS_PER_PX, left = s->border_width[3] / FLOW_UNITS_PER_PX;
+    // Each border as wide as the painter draws it: its width rounded.
+    int64_t top = round_px(s->border_width[0]), right = round_px(s->border_width[1]);
+    int64_t bottom = round_px(s->border_width[2]), left = round_px(s->border_width[3]);
     int64_t x0 = (int64_t)b->rect.x + left, y0 = (int64_t)b->rect.y + top;
     int64_t x1 = (int64_t)b->rect.x + b->rect.w - right, y1 = (int64_t)b->rect.y + b->rect.h - bottom;
     if (x < x0 || y < y0 || x >= x1 || y >= y1)

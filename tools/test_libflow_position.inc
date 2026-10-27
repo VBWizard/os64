@@ -598,7 +598,8 @@ static void position_fixed_door_cases(void)
                      "height:40px;line-height:20px} .inset{position:absolute;top:0;left:0;width:200px;height:40px;"
                      "box-shadow:inset 0 0 0 100px white} .rim{position:absolute;top:0;left:0;width:200px;"
                      "height:40px;box-shadow:inset 0 0 0 1px gray} .haze{position:absolute;top:0;left:0;width:200px;"
-                     "height:90px;box-shadow:inset 0 0 40px black}</style>"
+                     "height:90px;box-shadow:inset 0 0 40px black} .hair{position:absolute;top:0;left:50px;width:40px;height:20px;border-left:0.5px solid black}"
+                     "</style>"
                      "<p class=wrap><input name=a><span class=line></span><span class=ring></span></p>"
                      "<p class=wrap><input name=b><span class=bar></span><span class=ring></span></p>"
                      "<p class=wrap><input name=c><span class=thick></span></p>"
@@ -607,7 +608,9 @@ static void position_fixed_door_cases(void)
                      "<p class=wrap><input name=f><span class=words>WWWWWWWWWWWWWWWWWWWWWWWWWWWWWW</span></p>"
                      "<p class=wrap><input name=g><span class=inset></span></p>"
                      "<p class=wrap><input name=h><span class=rim></span></p>"
-                     "<p class=wrap style='height:90px'><input name=i style='margin-top:35px'><span class=haze></span></p>",
+                     "<p class=wrap style='height:90px'><input name=i style='margin-top:35px'><span class=haze></span></p>"
+                     "<p class=wrap><input name=j style='width:100px;height:20px;margin:0;padding:0;border:0'>"
+                     "<span class=hair id=hair></span></p>",
                  400, 600);
     t = flow_layout(q.doc, q.page, 400, &q.env);
     a = t != NULL ? flow_control(t, 0) : NULL;
@@ -636,6 +639,9 @@ static void position_fixed_door_cases(void)
     const flow_box_t *i8 = t != NULL ? flow_control(t, 8) : NULL;
     expect("fixed door: a blurred inset shadow covers as far as the painter's blur reaches",
            i8 != NULL && flow_box_covered(t, i8, top), NULL);
+    const flow_box_t *j9 = t != NULL ? flow_control(t, 9) : NULL;
+    expect("fixed door: half a pixel of border is a pixel, as the painter rounds it",
+           j9 != NULL && flow_box_covered(t, j9, top), NULL);
     flow_free(t);
     sheeted_close(&q);
 }
