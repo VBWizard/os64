@@ -1378,9 +1378,9 @@ parent; the node shortened first and given its data back if the insertion
 fails); Element's `localName`, `namespaceURI` and `prefix` (libhtml's name,
 `os64_html_namespace_uri`, libhtml's prefix, each null for none); and
 Node's `baseURI`, its node document's base URL, its fragment kept
-(`d_base_uri`, over libpage's `os64_page_base_url_in`; about:blank for a
-document with no window), which Attr's prototype shadows with the
-same answer.
+(`d_base_uri`, over libpage's `os64_page_base_url_in`; a document with no
+window has about:blank for a fallback, and its own `<base>` counts), which
+Attr's prototype shadows with the same answer.
 
 **The select row** (`options.c`, which names `Option` on window): an
 option's `value` (its attribute, else its text), `text` (its descendant

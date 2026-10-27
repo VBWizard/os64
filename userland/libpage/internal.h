@@ -153,6 +153,10 @@ struct os64_page {
     // document base URL keeps one (os64_page_base_url_in): the document's
     // own, or its base's, from the `#` on as written, NULL for none.
     const char *document_fragment, *base_fragment;
+    // The tree p_base looks for a `<base href>` in: NULL for the
+    // document's own, else another document libhtml keeps beside it (one a
+    // script made: os64_page_base_url_in).
+    const os64_html_node_t *base_root;
     os64_url_t document, base;
     bool document_hierarchical, base_hierarchical;
     char document_scheme[OS64_URL_SCHEME_MAX];

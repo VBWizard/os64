@@ -608,11 +608,11 @@ static void base_url_cases(void)
         checks++;
         os64_html_document_t *doc = parse(kCases[i].html, "utf-8");
         char base[256];
-        if (doc == NULL || !os64_page_base_url_in(doc, kCases[i].url, base, sizeof(base)) ||
+        if (doc == NULL || !os64_page_base_url_in(doc, NULL, kCases[i].url, base, sizeof(base)) ||
             strcmp(base, kCases[i].want) != 0)
             fail("base url", "case %zu: %s, not %s", i, doc != NULL ? base : "(no document)", kCases[i].want);
         checks++;
-        if (doc != NULL && os64_page_base_url_in(doc, kCases[i].url, base, 4))
+        if (doc != NULL && os64_page_base_url_in(doc, NULL, kCases[i].url, base, 4))
             fail("base url", "case %zu fit into four bytes", i);
         os64_html_document_free(doc);
     }

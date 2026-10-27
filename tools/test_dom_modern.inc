@@ -630,7 +630,13 @@ static void dom_modern_cases(void)
             "var B=document.createElement('base');B.setAttribute('href','/other/x#frag');document.head.appendChild(B);"
             "assert(document.baseURI==='https://example.test/other/x#frag'&&"
             "document.createAttribute('q').baseURI===document.baseURI,'a base, its own fragment kept');"
-            "B.remove();assert(document.baseURI==='https://example.test/dir/page#top','and without it again');",
+            "B.remove();assert(document.baseURI==='https://example.test/dir/page#top','and without it again');"
+            "var D=document.implementation.createHTMLDocument('x');"
+            "assert(D.baseURI==='about:blank'&&D.body.baseURI==='about:blank','a document with no window: about:blank');"
+            "var DB=D.createElement('base');DB.setAttribute('href','https://example.test/assets/#a');D.head.appendChild(DB);"
+            "assert(D.baseURI==='https://example.test/assets/#a'&&D.body.baseURI===D.baseURI&&"
+            "document.baseURI==='https://example.test/dir/page#top','its own base counts, and is not the page\\'s');"
+            "DB.setAttribute('href','rel/');assert(D.baseURI==='about:blank','one that will not resolve: its fallback');",
             "modern-on-base-uri");
     fixture_free(&f);
 

@@ -1229,16 +1229,18 @@ static JSValue element_names(JSContext *ctx, JSValueConst this_value, int argc, 
 }
 
 /* Node's `baseURI` (DOM § 4.4): its node document's base URL, the `<base
- * href>` as the tree stands now, its fragment kept (libpage's
- * os64_page_base_url_in); about:blank for a node of a document with no
- * window, which has no URL of its own. */
+ * href>` as that document's tree stands now, its fragment kept (libpage's
+ * os64_page_base_url_in). A document with no window has no URL of its
+ * own, so about:blank is its fallback, and a base in it still counts. */
 JSValue d_base_uri(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *self)
 {
-    if (!d_window_document(dom, self) || dom->url == NULL) return JS_NewString(ctx, "about:blank");
+    bool window = d_window_document(dom, self);
+    const char *url = window && dom->url != NULL ? dom->url : "about:blank";
     char *base = d_alloc(dom, OS64_DOM_URL_MAX);
     if (base == NULL) return d_error(ctx, "QuotaExceededError", "DOM address quota exceeded");
-    JSValue result = os64_page_base_url_in(dom->document, dom->url, base, OS64_DOM_URL_MAX)
-        ? JS_NewString(ctx, base) : JS_NewString(ctx, dom->url);
+    JSValue result = os64_page_base_url_in(dom->document, window ? NULL : d_node_document(dom, self), url, base,
+                                           OS64_DOM_URL_MAX)
+        ? JS_NewString(ctx, base) : JS_NewString(ctx, url);
     d_free(dom, base);
     return result;
 }

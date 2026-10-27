@@ -352,7 +352,8 @@ bool p_base(os64_page_t *page)
     page->base = page->document;
     page->base_hierarchical = page->document_hierarchical;
 
-    const os64_html_node_t *root = page->doc != NULL ? page->doc->document : NULL;
+    const os64_html_node_t *root = page->base_root != NULL ? page->base_root
+                                   : page->doc != NULL ? page->doc->document : NULL;
     if (root == NULL && page->doc != NULL)
         root = page->doc->html;
     const char *href = find_base(root);
@@ -519,8 +520,8 @@ bool os64_page_base_in(const os64_html_document_t *doc, const char *document_url
     return ok;
 }
 
-bool os64_page_base_url_in(const os64_html_document_t *doc, const char *document_url, char *out,
-                           size_t cap)
+bool os64_page_base_url_in(const os64_html_document_t *doc, const os64_html_node_t *root,
+                           const char *document_url, char *out, size_t cap)
 {
     if (out == NULL || cap == 0)
         return false;
@@ -529,6 +530,7 @@ bool os64_page_base_url_in(const os64_html_document_t *doc, const char *document
     if (page == NULL)
         return false;
     page->doc = doc;
+    page->base_root = root;
     bool ok = p_document_url(page, document_url) && p_base(page) && page->base_url != NULL &&
               (size_t)os64_snprintf(out, cap, "%s%s", page->base_url,
                                     page->base_fragment != NULL ? page->base_fragment : "") < cap;
