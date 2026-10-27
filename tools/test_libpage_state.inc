@@ -569,7 +569,7 @@ static void state_backgrounds(void)
 // The page's style sheets, in document order: a `style` and a
 // `link rel=stylesheet`, the rel read as tokens without regard to case,
 // alternates and disabled links off, another language's `type` not ours,
-// an empty href naming nothing, an SVG `style` SVG's, `template` inert.
+// an empty href naming nothing, SVG `style` in the same order, `template` inert.
 static void state_sheets(void)
 {
     os64_html_document_t *doc = parse(
@@ -590,7 +590,7 @@ static void state_sheets(void)
         "<style>late{}</style></body>", "utf-8");
     os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
     state_expect("sheets: the style elements and stylesheet links, and only those",
-                 os64_page_nsheets(page) == 6);
+                 os64_page_nsheets(page) == 7);
     const os64_page_sheet_t *s = os64_page_sheet(page, 0);
     state_expect("sheets: a link, resolved against the base, no media",
                  s != NULL && s->linked && s->href.url != NULL &&
@@ -611,10 +611,17 @@ static void state_sheets(void)
                  s != NULL && s->linked && s->href.url == NULL &&
                  s->href.refused != OS64_PAGE_REASON_OK);
     s = os64_page_sheet(page, 5);
+    state_expect("sheets: an SVG style participates before the later HTML style",
+                 s != NULL && !s->linked && s->node->ns == OS64_HTML_NS_SVG &&
+                 strcmp(s->node->name, "style") == 0 && s->node->first_child != NULL &&
+                 strcmp(s->node->first_child->text, "circle{}") == 0);
+    s = os64_page_sheet(page, 6);
     state_expect("sheets: one in the body counts, last",
-                 s != NULL && !s->linked && s->node->tag == OS64_HTML_TAG_STYLE);
+                 s != NULL && !s->linked && s->node->ns == OS64_HTML_NS_HTML &&
+                 s->node->tag == OS64_HTML_TAG_STYLE && s->node->first_child != NULL &&
+                 strcmp(s->node->first_child->text, "late{}") == 0);
     state_expect("sheets: out of range is NULL",
-                 os64_page_sheet(page, -1) == NULL && os64_page_sheet(page, 6) == NULL &&
+                 os64_page_sheet(page, -1) == NULL && os64_page_sheet(page, 7) == NULL &&
                  os64_page_nsheets(NULL) == 0);
     os64_page_free(page);
     os64_html_document_free(doc);
