@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """One deliberate break at a time to libui's dirty list (userland/libos64/
 ui.c: the swallow, the hand clear, covers, the per-rectangle walk, the
-panel's part, the box, the collapse count), against
+panel's part, the box, the collapse count, a clipped widget's cut paint and
+hit), against
 tools/test_ui_damage_host.sh: a mutant is CAUGHT when the suite fails,
 MISSED when it passes, which means a test is missing and gets written. A
 build failure is neither.
@@ -32,9 +33,19 @@ mutants = [
     ('a-mark-swallows-nothing', '\t\tif (!rect_holds(r, ui->damage[i]))\n', '\t\tif (true)\n'),
     ('a-hand-clear-keeps-the-list', '\tif (!ui->any_dirty)\n\t\tui->damage_count = 0;\n', ''),
     ('covers-reads-a-clean-list', 'ui->any_dirty && i < ui->damage_count', 'i < ui->damage_count'),
-    ('a-part-class-is-painted-once', '\t\tif (w->cls->paints_part) {', '\t\tif (false) {'),
-    ('every-class-is-painted-per-rectangle', '\t\tif (w->cls->paints_part) {', '\t\tif (true) {'),
-    ('a-whole-paint-keeps-the-last-dirty', '\t\t\tui->dirty = met;\n', ''),
+    ('a-part-class-is-painted-once', '\tif (w->cls->paints_part) {', '\tif (false) {'),
+    ('every-class-is-painted-per-rectangle', '\tif (w->cls->paints_part) {', '\tif (true) {'),
+    ('a-whole-paint-keeps-the-last-dirty', '\t\tui->dirty = met;\n', '\t\t(void)met;\n'),
+    # the clip: the paint cut, the rectangles moved, the canvas and bounds put back, the hit refused
+    ('a-clipped-widget-is-painted-whole', '\t\tif (!w->clipped)\n', '\t\tif (true)\n'),
+    ('a-cut-paint-keeps-the-width', '\tui->ctx->surf.width = (uint32_t)seen.w;\n', ''),
+    ('a-cut-paint-keeps-the-height', '\tui->ctx->surf.height = (uint32_t)seen.h;\n', ''),
+    ('a-cut-paint-moves-no-rectangle', '{list[i].x - seen.x, list[i].y - seen.y, list[i].w, list[i].h}',
+     '{list[i].x, list[i].y, list[i].w, list[i].h}'),
+    ('a-cut-paint-leaves-bounds-moved', '\tw->bounds = bounds;\n\tui->ctx->surf = whole;', '\t(void)bounds;\n\tui->ctx->surf = whole;'),
+    ('a-cut-paint-leaves-the-sub-surface', '\tw->bounds = bounds;\n\tui->ctx->surf = whole;', '\tw->bounds = bounds;'),
+    ('nothing-seen-is-painted', '!os64_rect_intersect(w->bounds, w->clip, &seen) ||', 'false ||'),
+    ('a-hit-ignores-the-clip', '(w->clipped && !rect_contains(w->clip, x, y))', '(w->clipped && false)'),
     ('the-panel-fills-its-bounds', '\tos64_draw_fill_rect(&ctx->surf, part, t->panel_bg);',
      '\tos64_draw_fill_rect(&ctx->surf, w->bounds, t->panel_bg);'),
     ('the-panel-outlines-its-bounds', '\t\tif (os64_rect_intersect(edges[i], part, &edge))',

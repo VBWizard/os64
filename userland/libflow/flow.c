@@ -3182,22 +3182,58 @@ void flow_visit_groups(const flow_tree_t *tree, os64_gui_rect_t viewport, flow_p
     os64_free(bounds);
 }
 
+// One hit's walk: the tree, and the cuts of its lines that end in an
+// ellipsis, each worked once a hit (flow_cut_memo_t). `painted`, when it
+// is not NULL, asks what is DRAWN over that box rather than what the
+// pointer finds (flow_box_covered): a box that draws nothing at the point
+// (draws_at) answers for itself only when it is that box or inside it.
+typedef struct {
+    const flow_tree_t *tree;
+    flow_cut_memo_t *cuts;
+    const flow_box_t *painted;
+} HitWalk;
+
+static bool within(const flow_box_t *b, const flow_box_t *of)
+{
+    while (b != NULL && b != of)
+        b = b->parent;
+    return b != NULL;
+}
+
+// Whether a box draws anything of its own at (x, y), a point in its rect:
+// nothing when it is of opacity 0 (`unpainted`); else text, a list
+// marker, a picture and a control draw what they hold; and any other box
+// draws only its background, a colour or a picture, and its borders, so
+// inside its borders a transparent one draws nothing — its content is its
+// children's, which answer for themselves. An inline-block's atom is such
+// a box: a replaced one has nothing inside it.
+static bool draws_at(const flow_box_t *b, int32_t x, int32_t y)
+{
+    if (b->unpainted)
+        return false;
+    if (b->kind == FLOW_BOX_TEXT || b->kind == FLOW_BOX_MARKER || b->kind == FLOW_BOX_REPLACED ||
+        b->control >= 0 || (b->kind == FLOW_BOX_ATOMIC && b->first == NULL))
+        return true;
+    const flow_style_t *s = b->style;
+    if (s->has_background || flow_background_has_image(s))
+        return true;
+    int64_t top = s->border_width[0] / FLOW_UNITS_PER_PX, right = s->border_width[1] / FLOW_UNITS_PER_PX;
+    int64_t bottom = s->border_width[2] / FLOW_UNITS_PER_PX, left = s->border_width[3] / FLOW_UNITS_PER_PX;
+    return x < (int64_t)b->rect.x + left || y < (int64_t)b->rect.y + top ||
+           x >= (int64_t)b->rect.x + b->rect.w - right || y >= (int64_t)b->rect.y + b->rect.h - bottom;
+}
+
 // What is clipped away is not there to be pointed at, and neither is a box
 // that lets the pointer through or is not drawn at all — asked of each
 // box, since both are inherited and a descendant may undo them.
-static const flow_box_t *hit_self(const flow_box_t *b, int32_t x, int32_t y)
+static const flow_box_t *hit_self(const HitWalk *t, const flow_box_t *b, int32_t x, int32_t y)
 {
+    if (t->painted != NULL && !within(b, t->painted) && holds(b->rect, x, y) && !draws_at(b, x, y))
+        return NULL;
     return holds(b->rect, x, y) && (!b->clipped || holds(b->clip, x, y)) &&
                    !b->style->pointer_events_none && b->style->visibility == FLOW_VISIBLE
                ? b : NULL;
 }
-
-// One hit's walk: the tree, and the cuts of its lines that end in an
-// ellipsis, each worked once a hit (flow_cut_memo_t).
-typedef struct {
-    const flow_tree_t *tree;
-    flow_cut_memo_t *cuts;
-} HitWalk;
 
 static const flow_box_t *hit(HitWalk *t, const flow_box_t *b, int32_t x, int32_t y);
 
@@ -3228,7 +3264,7 @@ static const flow_box_t *hit_ranked(HitWalk *t, const flow_box_t *c, int32_t x,
     if (h != NULL)
         return h;
     *rank = RANK_BLOCK;
-    return hit_self(c, x, y);
+    return hit_self(t, c, x, y);
 }
 
 // The deepest of a box's descendants the tree reaches (its stacked ones
@@ -3297,15 +3333,15 @@ static const flow_box_t *hit(HitWalk *t, const flow_box_t *b, int32_t x, int32_t
             return NULL;
     }
     const flow_box_t *h = hit_kids(t, b, x, y);
-    return h != NULL ? h : hit_self(b, x, y);
+    return h != NULL ? h : hit_self(t, b, x, y);
 }
 
 // What is painted last is on top: the layers backwards, each asked in its
 // own coordinates. What clips the frames a layer's box is in from outside
 // is asked once, of the layer; the scroll containers inside it, as the
-// walk enters each (hit_kids).
-const flow_box_t *flow_hit_counted(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll,
-                                   uint64_t *cuts)
+// walk enters each (hit_kids). `painted` is HitWalk's.
+static const flow_box_t *hit_at(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll,
+                                uint64_t *cuts, const flow_box_t *painted)
 {
     if (cuts != NULL)
         *cuts = 0;
@@ -3313,7 +3349,7 @@ const flow_box_t *flow_hit_counted(const flow_tree_t *tree, int32_t x, int32_t y
         return NULL;
     flow_cut_memo_t memo;
     flow_cut_memo_open(&memo, tree);
-    HitWalk walk = {tree, &memo};
+    HitWalk walk = {tree, &memo, painted};
     const flow_box_t *found = NULL;
     for (int32_t i = tree->nlayers; i > 0 && found == NULL; i--) {
         const flow_box_t *b = tree->layers[i - 1].box;
@@ -3332,7 +3368,7 @@ const flow_box_t *flow_hit_counted(const flow_tree_t *tree, int32_t x, int32_t y
             continue;
         switch (tree->layers[i - 1].part) {
         case PART_WHOLE: found = hit(&walk, b, (int32_t)px, (int32_t)py); break;
-        case PART_SELF: found = hit_self(b, (int32_t)px, (int32_t)py); break;
+        case PART_SELF: found = hit_self(&walk, b, (int32_t)px, (int32_t)py); break;
         case PART_BODY: found = hit_kids(&walk, b, (int32_t)px, (int32_t)py); break;
         case PART_OPEN: case PART_CLOSE: case PART_OUTLINES: break;     // no box's own
         }
@@ -3341,6 +3377,12 @@ const flow_box_t *flow_hit_counted(const flow_tree_t *tree, int32_t x, int32_t y
         *cuts = memo.worked;
     flow_cut_memo_close(&memo);
     return found;
+}
+
+const flow_box_t *flow_hit_counted(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll,
+                                   uint64_t *cuts)
+{
+    return hit_at(tree, x, y, scroll, cuts, NULL);
 }
 
 const flow_box_t *flow_hit(const flow_tree_t *tree, int32_t x, int32_t y, flow_point_t scroll)
@@ -3353,8 +3395,8 @@ bool flow_box_covered(const flow_tree_t *tree, const flow_box_t *box, flow_point
     if (tree == NULL || box == NULL)
         return false;
     os64_gui_rect_t r = flow_box_doc_rect(box, scroll);
-    const flow_box_t *h = flow_hit(tree, (int32_t)((int64_t)r.x + r.w / 2),
-                                   (int32_t)((int64_t)r.y + r.h / 2), scroll);
+    const flow_box_t *h = hit_at(tree, (int32_t)((int64_t)r.x + r.w / 2), (int32_t)((int64_t)r.y + r.h / 2),
+                                 scroll, NULL, box);
     while (h != NULL && h != box)
         h = h->parent;
     return h == NULL;

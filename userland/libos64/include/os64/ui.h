@@ -286,6 +286,12 @@ struct os64_ui_widget
     const os64_ui_class_t *cls;
     os64_gui_rect_t bounds;      // content-local, assigned by app or layout
     bool hidden;                 // skipped by paint AND hit-test
+    // When `clipped`, the widget is seen and reached only through `clip`:
+    // its paint is cut to it and a point outside it is not the widget's, as
+    // a page's control half scrolled out of its view is. Its children's
+    // paint is not cut, though a point outside the clip reaches none of them.
+    bool clipped;
+    os64_gui_rect_t clip;
     bool disabled;               // disables this subtree; use runtime setters below
     bool focusable;              // participates in keyboard traversal
     bool accepts_tab;            // literal Tab input; Ctrl+Tab still traverses

@@ -318,8 +318,53 @@ static void box_and_covers(void)
     CHECK(!os64_ui_render(&ui, &box) && !os64_ui_render(&ui, NULL));
 }
 
+/* A clipped widget is seen and reached only through its clip: its paint is
+ * cut there, whether it paints whole or part, its bounds and the canvas are
+ * as they were after, one with nothing seen is not painted, and a point
+ * outside the clip is not its. */
+static int hits;
+static bool hit_context(os64_ui_widget_t *w, const os64_gui_event_t *ev, void *user)
+{
+    (void)w; (void)ev; (void)user;
+    ++hits;
+    return true;
+}
+
+static void clipped(void)
+{
+    current = "clipped";
+    os64_gui_rect_t view = {0, 0, W, 60};
+    widget(&kids[0], &kWhole, (os64_gui_rect_t){40, 40, 60, 40});
+    widget(&kids[1], &kPart, (os64_gui_rect_t){200, 50, 60, 40});
+    widget(&kids[2], &kWhole, (os64_gui_rect_t){120, 70, 20, 20});
+    widget(&kids[3], &kWhole, (os64_gui_rect_t){150, 50, 20, 20});
+    kids[3].on_context = hit_context;
+    for (int i = 0; i < 4; i++) {
+        kids[i].clipped = true;
+        kids[i].clip = view;
+    }
+    kids[1].clip = (os64_gui_rect_t){0, 0, 240, 60};    /* cut on its right as well */
+    window(4);
+    for (int i = 0; i < 4; i++)
+        os64_ui_mark_dirty(&ui, &kids[i]);
+    os64_gui_rect_t list[OS64_UI_DAMAGE_MAX];
+    CHECK(os64_ui_render_list(&ui, list) > 0);
+    CHECK(px[50 * W + 50] == INK && px[59 * W + 99] == INK && px[60 * W + 50] != INK && px[79 * W + 99] != INK);
+    CHECK(px[55 * W + 210] == INK && px[55 * W + 239] == INK && px[65 * W + 210] != INK && px[55 * W + 245] != INK);
+    CHECK(paints_of(&kids[2]) == 0 && px[75 * W + 125] != INK);
+    CHECK(same(kids[0].bounds, (os64_gui_rect_t){40, 40, 60, 40}) &&
+          same(kids[1].bounds, (os64_gui_rect_t){200, 50, 60, 40}));
+    CHECK(dc.surf.pixels == px && dc.surf.width == W && dc.surf.height == H);
+    os64_gui_event_t ev = {.type = OS64_GUI_EVENT_MOUSE_BUTTON_DOWN};
+    ev.mouse.x = 155; ev.mouse.y = 55;
+    hits = 0; os64_ui_context(&ui, &ev, false); CHECK(hits == 1);
+    ev.mouse.y = 65;
+    hits = 0; os64_ui_context(&ui, &ev, false); CHECK(hits == 0);
+}
+
 int main(void)
 {
+    clipped();
     far_apart();
     root_swallows();
     collapse();

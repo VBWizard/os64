@@ -10140,6 +10140,31 @@ static void covered_link_cases(void) {
     probe_drop();
 }
 
+/* A control half out of the view is half a control: shown, clipped to the
+ * view; one wholly out is hidden. And a field under an outline and an
+ * invisible focus ring laid over the whole of it (a sign-in page's, whose
+ * script answers a click on them by focusing the field) keeps its widget:
+ * neither draws at its centre, so neither covers it (POSITION.md, ruling
+ * 9's amendment). */
+static void clipped_control_cases(void) {
+    probe_page("<!doctype html><style>body{margin:0} p{margin:0}"
+        ".wrap{position:relative;width:200px;height:40px} .ring,.line{position:absolute;top:0;bottom:0;left:0;right:0}"
+        ".ring{opacity:0;border:2px solid blue} .line{border:1px solid gray} #edge{position:absolute;top:580px;left:0;height:40px}"
+        " #below{position:absolute;top:700px;left:0}</style>"
+        "<p class=wrap><input id=field name=identifier><span class=line></span><span class=ring></span></p>"
+        "<button id=edge>Next</button><button id=below>Later</button>",false);
+    forms_place();
+    check(probe_field("field")!=NULL && !probe_field("field")->w->hidden,
+        "outline: a field under an outline and an invisible ring keeps its widget");
+    FormWidget *edge=probe_field("edge"), *below=probe_field("below");
+    check(edge!=NULL && !edge->w->hidden && edge->w->clipped && edge->w->clip.x==g.view.bounds.x &&
+          edge->w->clip.y==g.view.bounds.y && edge->w->clip.w==g.view.bounds.w && edge->w->clip.h==g.view.bounds.h &&
+          edge->w->bounds.y+edge->w->bounds.h>g.view.bounds.y+g.view.bounds.h,
+        "clip: a button across the view's edge is shown, clipped to the view");
+    check(below!=NULL && below->w->hidden, "clip: a button wholly out of the view is hidden");
+    probe_drop();
+}
+
 #include "test_yonder_requests.inc"
 #include "test_yonder_modules.inc"
 #include "test_yonder_window.inc"
@@ -10190,6 +10215,7 @@ int main(void)
     stand_in_paint_cases();
     svg_window_cases();
     covered_link_cases();
+    clipped_control_cases();
     classic_downloaded_cases();
     hover_batch_cases();
     classic_hover_profile();

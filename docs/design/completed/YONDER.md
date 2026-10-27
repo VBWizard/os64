@@ -295,7 +295,7 @@ in-house (CLAUDE.md's reviewer-to-risk rule).
 | Y2 | Packet 06: the navigator out of `wend` into its library | the packet's own evidence; `wend`'s acceptance passes unchanged |
 | Y3 | The network, through libway on packet 07's pool: http and https, a click follows a link, back, forward, reload and stop, a fragment scrolls to its target, declared refreshes, POST (Quinn's packet 05 carried across from wend), the questions asked in the window | § Y3 below |
 | Y3b | libway's cookie jar and `Referer`, on packet 05's hooks, for both browsers | § Y3b below |
-| Y4 | Forms: every control libflow placed becomes a real libui widget at its box, moved when the page scrolls and hidden when it leaves the view (libui does not clip a child to its parent), submitted through libpage's form model, GET or POST | § Y4 below |
+| Y4 | Forms: every control libflow placed becomes a real libui widget at its box, moved when the page scrolls, clipped to the view and hidden when none of it is in view (libui's `clipped`, 2026-10-26; before it, hidden when not wholly in view), submitted through libpage's form model, GET or POST | § Y4 below |
 | Y5 | Images: fetched in parallel on the pool, decoded, drawn scaled and blended, the page laid out again when a size arrives | § Y5 below |
 | Y5b | Moving pictures and pictures behind: GIF animation on a frame clock that sleeps when nothing can be seen, and the `background` attribute of the body and of tables, tiled | § Y5b below |
 
@@ -626,10 +626,14 @@ The page's own `width` and `height` still win, as they do for a picture.
 
 **Where the widget is.** On every paint that moves the page — a scroll, a
 relayout, an arrival — each widget is put at its control's box on the
-glass. libui does not clip a child to its parent, so a widget whose box is
-not WHOLLY inside the page view is hidden, and the painter draws the inert
-frame in its place (the painter draws a control's frame only for a hidden
-widget). Disabled controls get disabled widgets; a readonly one, a disabled
+glass, clipped to the page view (libui's `clipped`: its paint is cut
+there, and a point outside it is not the widget's), so a control half
+scrolled out of the view is half a control and takes no click on the
+toolbar. A widget none of which is in the view is hidden, and the painter
+draws the inert frame in its place (the painter draws a control's frame
+only for a hidden widget). Until 2026-10-26 libui could not clip a child,
+and a widget not WHOLLY in the view was hidden; its frame then showed a
+captionless well over the page's own button styling. Disabled controls get disabled widgets; a readonly one, a disabled
 text field.
 
 **The values are the page model's.** A checkbox, radio or list writes its
