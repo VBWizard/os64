@@ -53,12 +53,12 @@ performance or compatibility percentages.
 |---|---|
 | `libhtml` and its document adapters | Inline SVG nodes, namespaced attributes, document identity, mutation and lifetime |
 | `libxml` | Standalone XML byte-to-event parser; `libhtml` consumes its events to build the shared tree |
-| `libgarb` | Selectors, presentation attributes, cascade and SVG computed styles |
-| `libflow` | The outer SVG's participation in CSS layout and sizing negotiation |
+| `libgarb` | Selectors, presentation attributes and cascade winners |
+| `libflow` | The outer SVG's CSS layout and sizing negotiation; CSSOM resolved-value serialization |
 | `libsvg` | SVG scene construction, paths, viewports, instances, paint servers, clipping and compositing |
 | FreeType port | Outline rasterization, stroke expansion and later glyph-outline export |
 | `libimage` | Raster decoding and its existing owned pixel representation |
-| Yonder | Fetching, processing mode, style/text providers, caches, work scheduling, diagnostics and display |
+| Yonder | Fetching, processing mode, SVG style computation/providers, caches, work scheduling, diagnostics and display |
 
 SVG belongs in its own library. Its inputs include a viewport and document
 state, and its result can change without new encoded bytes. Do not make

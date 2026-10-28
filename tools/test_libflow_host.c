@@ -1411,6 +1411,19 @@ int main(int argc, char **argv)
         text_teardown();
         return 0;
     }
+    // CSSOM's serializers and their allocation/buffer contracts, without
+    // the layout fuzz and allocation sweeps.
+    if (argc == 2 && strcmp(argv[1], "--computed") == 0) {
+        text_setup();
+        computed_cases();
+        computed_round1_cases();
+        computed_round2_cases();
+        computed_svg_cases();
+        text_teardown();
+        printf("libflow: %d checks, %d failed%s\n", checks, failures,
+               live != 0 ? " (AND LEAKED)" : "");
+        return failures != 0 || live != 0 ? 1 : 0;
+    }
     bool full_fuzz = argc >= 2 && strcmp(argv[1], "--fuzz") == 0;
     // `--fuzz PAGE K N`: only the full fuzz, of one corpus page, and only
     // its Kth of N shares — the whole thing is hours in one process.
@@ -1533,6 +1546,7 @@ int main(int argc, char **argv)
     computed_cases();
     computed_round1_cases();
     computed_round2_cases();
+    computed_svg_cases();
     fixed_cases();
     paint_cases();
     decoration_colour_cases();

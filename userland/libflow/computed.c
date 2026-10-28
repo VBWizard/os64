@@ -4,9 +4,9 @@
 // computed one, but for the properties CSSOM names — the sizes, the
 // margins and padding, the insets of a positioned box, a line height that
 // is not `normal`, a transform and its origin — which read the laid-out
-// box when the element has one. Everything here is read from the style
-// pass 1 made (flow_style_t, in device pixels at the layout's zoom) and
-// written in CSS pixels.
+// box when the element has one. Layout properties read pass 1's style
+// (flow_style_t, in zoomed device pixels); SVG properties compute from the
+// cascade and the declaring element's font. Lengths are written in CSS pixels.
 
 #include <float.h>
 
@@ -937,43 +937,208 @@ static void put_value(Out *o, const garb_val_t *v)
         o->out[o->len < o->cap ? o->len : o->cap - 1] = '\0';
 }
 
-// The winner the page's own sheets gave the property on the element, or
-// on the ancestors its value comes from: what a property libflow does not
-// model computes to, written as libgarb writes a value. The CSS-wide
-// keywords mean what the cascade gives them (style.c's lay_sets):
-// `inherit`, and `unset` on an inherited property, take the parent's; no
-// winner on an inherited property does too; `initial`, `unset` on a
-// property that is not inherited, and no winner on one, are the initial
-// value. `revert` and `revert-layer` go back to the user-agent origin,
-// which declares none of these properties, so they are `unset`. False for
-// the initial value, which the caller writes (its own word, or nothing).
-static bool declared(const flow_computed_t *c, int32_t prop, Out *o)
+typedef struct {
+    const garb_val_t *value;
+    const os64_html_node_t *element;
+    int32_t sheet;
+} Declared;
+
+// Resolve CSS-wide keywords before serializing. Inherited relative lengths
+// compute at the declaring ancestor; currentColor remains symbolic until
+// read on the receiving element. Revert reaches the UA origin, which has no
+// declarations for these properties, and therefore behaves as unset.
+static Declared declaration(const flow_computed_t *c, int32_t prop)
 {
     const garb_cascade_t *cascade = c->env.cascade;
     if (cascade == NULL)
-        return false;
+        return (Declared){0};
     bool inherited = garb_prop_inherited((garb_prop_t)prop);
     for (const os64_html_node_t *n = c->element; n != NULL && n->kind == OS64_HTML_ELEMENT; n = n->parent) {
         garb_style_t st = garb_style_for(cascade, n);
         const garb_val_t *won = NULL;
-        for (int32_t i = 0; i < st.n && won == NULL; i++)
-            if ((int32_t)st.sets[i].prop == prop)
+        int32_t sheet = -1;
+        for (int32_t i = 0; i < st.n && won == NULL; i++) {
+            if ((int32_t)st.sets[i].prop == prop) {
                 won = &st.sets[i].value;
+                sheet = st.sheet != NULL ? st.sheet[i] : -1;
+            }
+        }
         if (won == NULL) {
             if (!inherited)
-                return false;
+                return (Declared){0};
             continue;
         }
-        if (won->kind != GARB_V_WIDE) {
-            put_value(o, won);
-            return true;
-        }
+        if (won->kind != GARB_V_WIDE)
+            return (Declared){won, n, sheet};
         bool from_parent = os64_streq(won->keyword, "inherit") ||
                            (!os64_streq(won->keyword, "initial") && inherited);
         if (!from_parent)
-            return false;
+            return (Declared){0};
     }
+    return (Declared){0};
+}
+
+static bool declared(const flow_computed_t *c, int32_t prop, Out *o)
+{
+    Declared d = declaration(c, prop);
+    if (d.value == NULL)
+        return false;
+    put_value(o, d.value);
+    return true;
+}
+
+static const FStyled *computed_style_of(const flow_computed_t *c, const os64_html_node_t *n)
+{
+    const FStyled *s = f_style_of(f_tree_styles(c->tree), n);
+    return s != NULL ? s : c->extra != NULL ? f_style_of(c->extra, n) : NULL;
+}
+
+static bool svg_numeric(const flow_computed_t *c, const Declared *d, const garb_val_t *v,
+                        FNumeric *out)
+{
+    const FStyled *own = computed_style_of(c, d->element);
+    const FStyles *styles = f_tree_styles(c->tree);
+    const FStyled *root = computed_style_of(c, styles->doc->html);
+    flow_unit_t root_font = root != NULL ? root->style.font_size :
+                           f_css_units(&c->env, c->env.viewport_font_px);
+    return f_style_numeric(&c->env, own != NULL ? own->style.font_size : c->style->font_size,
+                           root_font, v, out);
+}
+
+static bool calc_has_percent(const garb_calc_t *k)
+{
+    if (k->op == GARB_CALC_LEAF)
+        return k->leaf.kind == GARB_V_PERCENTAGE;
+    for (int32_t i = 0; i < k->nargs; i++)
+        if (calc_has_percent(k->args[i]))
+            return true;
     return false;
+}
+
+static void svg_dimension(Out *o, FNumeric r, bool percentage)
+{
+    if (percentage && r.px != 0) {
+        puts_(o, "calc(");
+        number(o, r.pct);
+        puts_(o, r.px < 0 ? "% - " : "% + ");
+        number(o, r.px < 0 ? -r.px : r.px);
+        puts_(o, "px)");
+    } else {
+        number(o, percentage ? r.pct : r.px);
+        puts_(o, percentage ? "%" : "px");
+    }
+}
+
+// A percentage/length comparison cannot be evaluated without a viewport
+// basis. Keep the expression, but compute its relative-length leaves.
+// The parser bounds the depth and node count of the calculation tree.
+static void svg_expression(const flow_computed_t *c, Out *o, const Declared *d,
+                           const garb_calc_t *k)
+{
+    garb_val_t v = {.kind = GARB_V_CALC, .calc = k};
+    FNumeric r;
+    if (svg_numeric(c, d, &v, &r)) {
+        if (r.number)
+            number(o, r.px);
+        else
+            svg_dimension(o, r, calc_has_percent(k));
+        return;
+    }
+    const char *name = k->op == GARB_CALC_MIN ? "min(" : k->op == GARB_CALC_MAX ? "max(" :
+                       k->op == GARB_CALC_CLAMP ? "clamp(" : "calc(";
+    puts_(o, name);
+    for (int32_t i = 0; i < k->nargs; i++) {
+        if (i != 0) {
+            bool inverse = k->invert != NULL && k->invert[i];
+            puts_(o, k->op == GARB_CALC_SUM ? (inverse ? " - " : " + ") :
+                     k->op == GARB_CALC_PRODUCT ? (inverse ? " / " : " * ") : ", ");
+        }
+        svg_expression(c, o, d, k->args[i]);
+    }
+    puts_(o, ")");
+}
+
+static void svg_value(const flow_computed_t *c, Out *o, const Declared *d,
+                      const garb_val_t *v, int32_t prop)
+{
+    if (v->nitems > 0 && prop == GARB_STROKE_DASHARRAY) {
+        for (int32_t i = 0; i < v->nitems; i++) {
+            if (i > 0) puts_(o, ", ");
+            svg_value(c, o, d, &v->items[i], prop);
+        }
+    } else if (v->kind == GARB_V_COLOR) {
+        colour(o, v->color.current ? c->style->color : f_style_colour(v->color));
+    } else if (v->kind == GARB_V_URL) {
+        flow_bg_image_t im = {.url = v->text, .len = v->len, .sheet = d->sheet};
+        // A local URL retains its fragment-only serialization; other URLs
+        // use the declaring sheet's base.
+        if (v->len > 0 && v->text[0] == '#') {
+            flow_computed_t local = *c;
+            local.options.url = NULL;
+            image(&local, o, &im);
+        } else {
+            image(c, o, &im);
+        }
+        if (v->nitems > 0) {
+            puts_(o, " ");
+            svg_value(c, o, d, &v->items[0], prop);
+        }
+    } else if (v->kind == GARB_V_KEYWORD) {
+        puts_(o, v->keyword);
+    } else {
+        FNumeric r;
+        if (!svg_numeric(c, d, v, &r)) {
+            if (v->kind == GARB_V_CALC)
+                svg_expression(c, o, d, v->calc);
+            return;
+        }
+        bool alpha = prop == GARB_FILL_OPACITY || prop == GARB_STROKE_OPACITY ||
+                     prop == GARB_STOP_OPACITY;
+        if (alpha || prop == GARB_STROKE_MITERLIMIT) {
+            double n = r.px + r.pct / 100;
+            number(o, alpha ? (n < 0 ? 0 : n > 1 ? 1 : n) : n);
+            return;
+        }
+        bool percent = v->kind == GARB_V_PERCENTAGE ||
+                       (v->kind == GARB_V_CALC && calc_has_percent(v->calc));
+        bool positive = prop == GARB_R || prop == GARB_RX || prop == GARB_RY ||
+                        prop == GARB_STROKE_WIDTH || prop == GARB_STROKE_DASHARRAY;
+        if (positive && (r.px == 0 || r.pct == 0)) {
+            if (r.px < 0) r.px = 0;
+            if (r.pct < 0) r.pct = 0;
+        }
+        bool number_calc = v->kind == GARB_V_CALC && r.number;
+        if (number_calc) puts_(o, "calc(");
+        svg_dimension(o, r, percent);
+        if (number_calc) puts_(o, ")");
+    }
+}
+
+static bool svg_property(const flow_computed_t *c, Out *o, int32_t prop)
+{
+    const char *initial;
+    switch (prop) {
+    case GARB_FILL: case GARB_STOP_COLOR: initial = "rgb(0, 0, 0)"; break;
+    case GARB_FILL_OPACITY: case GARB_STROKE_OPACITY: case GARB_STOP_OPACITY: initial = "1"; break;
+    case GARB_FILL_RULE: case GARB_CLIP_RULE: initial = "nonzero"; break;
+    case GARB_STROKE: case GARB_STROKE_DASHARRAY: case GARB_VECTOR_EFFECT:
+    case GARB_CLIP_PATH: initial = "none"; break;
+    case GARB_STROKE_WIDTH: initial = "1px"; break;
+    case GARB_STROKE_LINECAP: initial = "butt"; break;
+    case GARB_STROKE_LINEJOIN: initial = "miter"; break;
+    case GARB_STROKE_MITERLIMIT: initial = "4"; break;
+    case GARB_COLOR_INTERPOLATION: initial = "srgb"; break;
+    case GARB_X: case GARB_Y: case GARB_CX: case GARB_CY: case GARB_R:
+    case GARB_STROKE_DASHOFFSET: initial = "0px"; break;
+    case GARB_RX: case GARB_RY: initial = "auto"; break;
+    default: return false;
+    }
+    Declared d = declaration(c, prop);
+    if (d.value == NULL)
+        puts_(o, initial);
+    else
+        svg_value(c, o, &d, d.value, prop);
+    return true;
 }
 
 size_t flow_computed_text(const flow_computed_t *c, int32_t prop, char *out, size_t cap)
@@ -983,6 +1148,8 @@ size_t flow_computed_text(const flow_computed_t *c, int32_t prop, char *out, siz
         out[0] = '\0';
     if (c == NULL || c->style == NULL || prop < 0 || prop >= GARB_NPROPS)
         return 0;
+    if (svg_property(c, &o, prop))
+        return o.len;
     const flow_style_t *s = c->style;
     int side = 0;
     switch (prop) {
