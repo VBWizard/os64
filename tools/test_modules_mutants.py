@@ -70,7 +70,7 @@ mutants = [
     ('any-type-is-javascript', MODULES_C, '            typed = os64_dom_javascript_mime(h.value, h.value_len);',
      '            typed = true;', (SCRIPTS,)),
     ('bare-fails-the-graph', MODULES_C,
-     '        record(m, from, why);\n        return;\n    }\n    int32_t dep = find(m, url);',
+     '        record(m, from, why, "");\n        return;\n    }\n    int32_t dep = find(m, url);',
      '        fail(m, from, why);\n        return;\n    }\n    int32_t dep = find(m, url);', (SCRIPTS,)),
     ('syntax-error-fails-the-graph', MODULES_C, '        m->mods[i].state = MOD_BROKEN;', '        m->mods[i].state = MOD_FAILED;', (SCRIPTS,)),
     ('busy-compile-fails', MODULES_C, '        m->mods[i].state = MOD_PENDING;\n        return;',
