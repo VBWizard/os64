@@ -142,6 +142,9 @@ struct DValue {
     DQuery *options, *selected_options;
     /* A labelable element's labels, made once ([SameObject]). */
     DQuery *labels;
+    /* A table's rows (`members`) and tBodies, a section's rows, a row's
+     * cells and a map's areas, each made once ([SameObject], tables.c). */
+    DQuery *members, *bodies;
     /* A document's styleSheets, made once ([SameObject]), and a `style` or
      * `link`'s CSSStyleSheet, made once (sheets.c). */
     DQuery *style_sheets;
@@ -770,10 +773,24 @@ enum {
  * the root of the owner's tree, that root included (d_labels). FIELDSET is
  * a fieldset's listed elements (d_listed) among its descendants. SHEETS is
  * a document's style sheets, by libpage's rule (os64_page_names_sheet),
- * whose entries are each node's CSSStyleSheet (d_sheet), not the node. */
+ * whose entries are each node's CSSStyleSheet (d_sheet), not the node.
+ * The table kinds (0f's P6b, d_table_query): TBODIES a table's tbody
+ * children; TABLE_ROWS a table's rows, its tr children and its sections'
+ * (thead, tbody, tfoot children of it), the thead's first and the tfoot's
+ * last, each group in tree order (HTML § 4.9.1); SECTION_ROWS a section's
+ * tr children; CELLS a row's td and th children; AREAS a map's area
+ * descendants. */
 enum { D_QUERY_GENERIC, D_QUERY_IMAGES, D_QUERY_FORMS, D_QUERY_CONTROLS, D_QUERY_DOCUMENT_NAMES,
        D_QUERY_CLASSES, D_QUERY_NAME, D_QUERY_OPTIONS, D_QUERY_SELECTED_OPTIONS, D_QUERY_LABELS,
-       D_QUERY_FIELDSET, D_QUERY_SHEETS };
+       D_QUERY_FIELDSET, D_QUERY_SHEETS, D_QUERY_TBODIES, D_QUERY_TABLE_ROWS, D_QUERY_SECTION_ROWS,
+       D_QUERY_CELLS, D_QUERY_AREAS };
+/* The live HTMLCollection of a table kind (above) that `owner` has,
+ * made once ([SameObject]) and kept on its entry; NULL with an exception
+ * pending. Its object is the query's entry's value. */
+DQuery *d_table_query(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *owner, unsigned kind);
+/* A query's nodes as they are now, refreshed: borrowed until the query's
+ * next refresh. False with an exception pending. */
+bool d_query_items(DQuery *query, JSContext *ctx, const os64_html_node_t *const **nodes, size_t *count);
 bool d_named_match(const os64_html_node_t *node, const char *name);
 bool d_classic_match(const os64_html_node_t *root, const os64_html_node_t *node, unsigned kind);
 /* One of HTML § 4.10.2's listed elements, which a fieldset's `elements`
@@ -1160,6 +1177,9 @@ JSValue d_child_text(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *no
 /* The element kinds whose members are reflections, and a title's text and
  * a body's window-reflecting handlers (elements.c, 0f's P6a). */
 int d_elements_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* The tables' tree verbs and collections, and a map's areas (tables.c,
+ * 0f's P6b). */
+int d_tables_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* A label's labeled control (HTML § 4.10.4): the labelable element its
  * `for` names, when the first element of its tree with that ID is one;
  * without `for`, its first labelable descendant. NULL for none, or for a

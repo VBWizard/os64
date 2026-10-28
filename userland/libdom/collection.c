@@ -56,9 +56,43 @@ static bool has_classes(const os64_dom_t *dom, const os64_html_node_t *node, con
     return any;
 }
 
+static bool html_is(const os64_html_node_t *node, os64_html_tag_t tag)
+{
+    return node != NULL && node->kind == OS64_HTML_ELEMENT && node->ns == OS64_HTML_NS_HTML && node->tag == tag;
+}
+
+static bool table_section(const os64_html_node_t *node)
+{
+    return html_is(node, OS64_HTML_TAG_THEAD) || html_is(node, OS64_HTML_TAG_TBODY) ||
+           html_is(node, OS64_HTML_TAG_TFOOT);
+}
+
+/* A table's row's group in its rows' order: a thead's first, a tfoot's
+ * last, the table's own and its tbodies' between. */
+static unsigned row_group(const os64_html_node_t *row)
+{
+    return html_is(row->parent, OS64_HTML_TAG_THEAD) ? 0 : html_is(row->parent, OS64_HTML_TAG_TFOOT) ? 2 : 1;
+}
+
+/* The table kinds (internal.h); `root` is the query's owner. */
+static bool table_member(const DQuery *query, const os64_html_node_t *node)
+{
+    switch (query->kind) {
+    case D_QUERY_TBODIES: return html_is(node, OS64_HTML_TAG_TBODY);
+    case D_QUERY_SECTION_ROWS: return html_is(node, OS64_HTML_TAG_TR);
+    case D_QUERY_CELLS: return html_is(node, OS64_HTML_TAG_TD) || html_is(node, OS64_HTML_TAG_TH);
+    case D_QUERY_AREAS: return html_is(node, OS64_HTML_TAG_AREA);
+    case D_QUERY_TABLE_ROWS:
+        return html_is(node, OS64_HTML_TAG_TR) &&
+               (node->parent == query->root || (table_section(node->parent) && node->parent->parent == query->root));
+    default: return false;
+    }
+}
+
 static bool matches(const DQuery *query, const os64_html_node_t *node)
 {
     if (query->elements && node->kind != OS64_HTML_ELEMENT) return false;
+    if (query->kind >= D_QUERY_TBODIES) return table_member(query, node);
     if (query->kind == D_QUERY_CLASSES) return has_classes(query->dom, node, query->named);
     if (query->kind == D_QUERY_NAME) {
         const os64_html_attr_t *name = node->kind == OS64_HTML_ELEMENT && node->ns == OS64_HTML_NS_HTML
@@ -118,11 +152,14 @@ static bool refresh(DQuery *query, JSContext *ctx)
     const os64_html_node_t **nodes = count != 0 ? d_alloc(query->dom, count * sizeof(*nodes)) : NULL;
     if (count != 0 && nodes == NULL) goto quota;
     size_t index = 0;
-    for (const os64_html_node_t *at = query_step(query, NULL); at != NULL; at = query_step(query, at))
-        if (matches(query, at)) {
-            os64_html_hold(query->dom->document, at);
-            nodes[index++] = at;
-        }
+    /* A table's rows are three groups, each in tree order: a walk each. */
+    unsigned groups = query->kind == D_QUERY_TABLE_ROWS ? 3 : 1;
+    for (unsigned group = 0; group < groups; group++)
+        for (const os64_html_node_t *at = query_step(query, NULL); at != NULL; at = query_step(query, at))
+            if (matches(query, at) && (groups == 1 || row_group(at) == group)) {
+                os64_html_hold(query->dom->document, at);
+                nodes[index++] = at;
+            }
     const os64_html_node_t **old = query->nodes;
     size_t old_count = query->count;
     query->nodes = nodes;
@@ -659,6 +696,43 @@ JSValue d_special_collection(os64_dom_t *dom, JSContext *ctx, const os64_html_no
     query->kind = kind;
     query->named = copy;
     return result;
+}
+
+DQuery *d_table_query(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *owner, unsigned kind)
+{
+    if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return NULL;
+    /* The owner may be a node no script has touched (a row's table, asked
+     * for its rowIndex): its entry is made with its wrapper. */
+    JSValue wrapper = d_wrap(dom, ctx, owner);
+    if (JS_IsException(wrapper)) return NULL;
+    JS_FreeValue(ctx, wrapper);
+    DValue *entry = d_find(dom, owner);
+    if (entry == NULL) {
+        JS_ThrowTypeError(ctx, "Missing node wrapper");
+        return NULL;
+    }
+    DQuery **made = kind == D_QUERY_TBODIES ? &entry->bodies : &entry->members;
+    if (*made != NULL) return *made;
+    /* Children, but for a table's rows, which reach into its sections,
+     * and a map's areas, which may lie anywhere below it. */
+    bool descendants = kind == D_QUERY_TABLE_ROWS || kind == D_QUERY_AREAS;
+    JSValue value = d_collection(dom, ctx, owner, descendants, true, NULL);
+    if (JS_IsException(value)) return NULL;
+    DQuery *query = JS_GetOpaque(value, dom->collection_class);
+    query->kind = kind;
+    *made = query;
+    /* The registry holds the collection (its entry); the object made here
+     * is the caller's no more. */
+    JS_FreeValue(ctx, value);
+    return query;
+}
+
+bool d_query_items(DQuery *query, JSContext *ctx, const os64_html_node_t *const **nodes, size_t *count)
+{
+    if (!refresh(query, ctx)) return false;
+    *nodes = query->nodes;
+    *count = query->count;
+    return true;
 }
 
 /* getElementsByClassName (`by_name` false) and getElementsByName: live

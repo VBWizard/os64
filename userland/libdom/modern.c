@@ -108,6 +108,9 @@ static const DModernRow kModern[] = {
     /* 0f's P6a: the element kinds whose members are reflections, members
      * of the interfaces row's prototypes and none of window's. */
     {(const char *const[]){NULL}, d_elements_install},
+    /* 0f's P6b: the tables' tree verbs and collections, and a map's
+     * areas, over the interfaces row's HTMLCollection. */
+    {(const char *const[]){NULL}, d_tables_install},
     /* 0f's P3b: a form's controls collection and RadioNodeList, over the
      * interfaces row's HTMLCollection and NodeList; and the form's,
      * label's, fieldset's, legend's and output's own members. */
