@@ -521,6 +521,13 @@ static void dom_modern_cases(void)
         "rs[1].checked=true;assert(rs[0].validity.valid&&rs[1].validity.valid,'one ticked');"
         "var se=el('select',{required:''});se.innerHTML='<option value=\"\">Choose<option>A';"
         "assert(se.validity.valueMissing,'the placeholder');se.selectedIndex=1;assert(se.validity.valid,'a real one');"
+        /* P4b: min, max and step, the step's grid drawn from the min */
+        "var r=el('input',{type:'number',min:'2',max:'5',step:'2'});r.value='1';"
+        "assert(r.validity.rangeUnderflow&&r.validationMessage==='Value must be greater than or equal to 2.','underflow');"
+        "r.value='7';assert(r.validity.rangeOverflow&&!r.validity.rangeUnderflow,'overflow');"
+        "r.value='3';assert(r.validity.stepMismatch,'off the grid');r.value='4';assert(r.validity.valid,'on it');"
+        "var dd=el('input',{type:'date',min:'2000-01-02'});dd.value='2000-01-01';"
+        "assert(dd.validity.rangeUnderflow&&dd.validationMessage==='Value must be 2000-01-02 or later.','a date');"
         /* a value a script sets is never bad input */
         "var n=el('input',{type:'number'});n.value='abc';assert(n.value===''&&!n.validity.badInput,'badInput');",
         "modern-on-validity");

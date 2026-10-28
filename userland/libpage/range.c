@@ -269,3 +269,14 @@ const char *p_range_value(PArena *arena, const os64_html_node_t *node,
     char text[32];*len=p_number_spell(result,text);
     return p_arena_copy(arena,text,*len);
 }
+
+bool p_step_aligned(double value, double base, double step)
+{
+    RDecimal chosen=from_double(value), origin=from_double(base), stride=from_double(step);
+    int exponent=chosen.exponent;
+    if (origin.exponent < exponent) exponent=origin.exponent;
+    if (stride.exponent < exponent) exponent=stride.exponent;
+    align(&chosen,exponent);align(&origin,exponent);align(&stride,exponent);
+    RDecimal rem=range_remainder(subtract(chosen,origin),&stride);
+    return rem.used == 0;
+}

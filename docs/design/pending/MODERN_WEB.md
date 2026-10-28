@@ -4259,6 +4259,42 @@ with no `validity` it threw on every press.
   sentence). `tools/test_yonder_loop_mutants.py`'s two that this moved are
   re-anchored, and caught.
 
+### 0f's P4b, as built — 2026-10-28
+
+P4's second PR: `rangeUnderflow`, `rangeOverflow` and `stepMismatch`,
+which P4a left reading false.
+
+- **Each type read as a number** (libpage `value.c`'s `p_input_number`,
+  HTML's "convert a string to a number", which `valueAsNumber` can share):
+  a number and a range as themselves; a date as milliseconds since
+  1970-01-01, a month as months since January 1970, a week as its
+  Monday's milliseconds, a time as milliseconds since midnight, a local
+  date and time as both. The year is read whole, not as the residue the
+  syntax check keeps, and none past 275760, the last a Date holds.
+- **The flags** (`submit.c`'s `range_flags`, the judge's, so a
+  submission's validation obeys them too): below a min that converts,
+  above a max that does (a range's default to 0 and 100); a time whose max
+  is below its min wraps past midnight and is out of range only between
+  the two. The step draws a grid from its base (the min, else the value
+  attribute, else the type's default, a week's the Monday 1969-12-29),
+  each type's scale and default step applied, `any` drawing none; whether
+  a value is on it is judged in exact decimal (`range.c`'s arithmetic,
+  `p_step_aligned`), as `step=1e-12` against `-12345678.9` needs.
+- **The sentences**: "Value must be greater than or equal to 2." for a
+  number, "Value must be 2000-01-02 or later." for a date, the bound as
+  the page wrote it.
+
+**Numbers.** WPT: `constraints` +140, 895 of 921, all `[required]`; what
+fails is `:invalid`, an element in no namespace, `object`, `execCommand`,
+`getClientRects` and named access. Nothing new or lost in P3's and P4a's
+other directories; with the switch off no required line passes. Hosts, 0
+failed: libpage 254,264 (29 range and step cases across the types); DOM
+17,810 and 115,923. Mutants (`tools/test_interfaces_mutants.py`, its P4b
+group): 10, each caught — a date's, a month's, a week's and a time
+fraction's conversion, a week's step base, a time's wrap, `step=any`, the
+step base from the min and from the value attribute, and the exact
+remainder.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.

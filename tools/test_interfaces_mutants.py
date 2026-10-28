@@ -60,6 +60,8 @@ VALIDITY_C = 'userland/libdom/validity.c'
 SUBMIT_C = 'userland/libpage/submit.c'
 ACTIVATE_C = 'userland/libpage/activate.c'
 SCRIPTS_C = 'userland/apps/yonder/scripts.c'
+VALUE_C = 'userland/libpage/value.c'
+RANGE_C = 'userland/libpage/range.c'
 UI_CONTROLS_C = 'userland/libos64/ui_controls.c'
 DOM = 'tools/test_dom_host.sh'
 PAGE = 'tools/test_libpage_host.sh'
@@ -586,6 +588,28 @@ mutants = [
     ('single-select-placeholder-ignored', SUBMIT_C,
      '        return one_line && index == 0 && first != NULL',
      '        return false && one_line && index == 0 && first != NULL', (PAGE, DOM)),
+    # P4b. min, max and step over each type read as a number
+    ('date-in-days', VALUE_C,
+     '        *out = (double)days_from_civil(year, month, day) * 86400000.0;\n        return true;\n    case OS64_PAGE_INPUT_MONTH:',
+     '        *out = (double)days_from_civil(year, month, day);\n        return true;\n    case OS64_PAGE_INPUT_MONTH:', (PAGE,)),
+    ('month-from-one', VALUE_C, '        *out = (double)(((int64_t)year - 1970) * 12 + month - 1);',
+     '        *out = (double)(((int64_t)year - 1970) * 12 + month);', (PAGE,)),
+    ('week-from-january-4', VALUE_C, '        int64_t monday = jan4 - (((jan4 % 7) + 7 + 3) % 7);',
+     '        int64_t monday = jan4;', (PAGE,)),
+    ('time-fraction-unscaled', VALUE_C, '    while (places++ < 3)\n        fraction *= 10;\n',
+     '    while (places++ < 3)\n        fraction *= 1;\n', (PAGE,)),
+    ('week-base-zero', VALUE_C, '    case OS64_PAGE_INPUT_WEEK: *scale = 604800000; *base = -259200000; break;',
+     '    case OS64_PAGE_INPUT_WEEK: *scale = 604800000; *base = 0; break;', (PAGE,)),
+    ('time-never-wraps', SUBMIT_C, '    if (input == OS64_PAGE_INPUT_TIME && has_min && has_max && max < min) {',
+     '    if (false && input == OS64_PAGE_INPUT_TIME && has_min && has_max && max < min) {', (PAGE,)),
+    ('step-any-ignored', SUBMIT_C, '    if (step_text != NULL && os64_streq_nocase(step_text, "any"))\n        return flags;\n',
+     '', (PAGE,)),
+    ('step-base-ignores-min', SUBMIT_C, '    if (min_spelled)\n        base = min;', '    if (false)\n        base = min;',
+     (PAGE, DOM)),
+    ('step-base-ignores-value-attribute', SUBMIT_C,
+     '    else if (p_input_number(input, p_attr(n, "value"), &from))',
+     '    else if (false && p_input_number(input, p_attr(n, "value"), &from))', (PAGE,)),
+    ('step-judged-inexactly', RANGE_C, '    return rem.used == 0;', '    return rem.used == 0 || step < 1e-9;', (PAGE,)),
     ('host-submission-reentered', VALIDITY_C,
      '    dom->submitting = &self;\n    /* Through the wrapper',
      '    (void)self;\n    /* Through the wrapper', (SCRIPTS,)),

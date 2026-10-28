@@ -191,6 +191,147 @@ static bool valid_for(os64_page_input_t input, const char *s)
     }
 }
 
+// ── A value as a number (HTML's "convert a string to a number") ─────────
+
+// The year itself, not its residue: four digits or more, and none past
+// 275760, the last year a Date reaches, which HTML's numbers are kept in.
+static bool whole_year(const char **at, int32_t *year)
+{
+    const char *s = *at;
+    int64_t y = 0;
+    size_t seen = 0;
+    while (digit(*s)) {
+        y = y * 10 + (*s - '0');
+        if (y > 275760)
+            return false;
+        s++;
+        seen++;
+    }
+    if (seen < 4 || y == 0)
+        return false;
+    *year = (int32_t)y;
+    *at = s;
+    return true;
+}
+
+// Days from 1970-01-01 to a proleptic Gregorian date (Hinnant's civil
+// algorithm).
+static int64_t days_from_civil(int64_t y, int32_t m, int32_t d)
+{
+    y -= m <= 2;
+    int64_t era = (y >= 0 ? y : y - 399) / 400;
+    int64_t yoe = y - era * 400;
+    int64_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
+static bool whole_date(const char **at, int32_t *year, int32_t *month, int32_t *day)
+{
+    const char *s = *at;
+    int32_t y = 0, m = 0, d = 0;
+    if (!whole_year(&s, &y) || *s++ != '-' || !digits(&s, 2, 2, &m) || m < 1 || m > 12)
+        return false;
+    if (day != NULL) {
+        if (*s++ != '-' || !digits(&s, 2, 2, &d) || d < 1 || d > days_in(y, m))
+            return false;
+        *day = d;
+    }
+    *year = y;
+    *month = m;
+    *at = s;
+    return true;
+}
+
+// Milliseconds since midnight: hh:mm, then :ss and up to three digits of
+// its fraction.
+static bool whole_time(const char **at, double *ms)
+{
+    const char *s = *at;
+    int32_t hour = 0, minute = 0, second = 0, fraction = 0, places = 0;
+    if (!digits(&s, 2, 2, &hour) || hour > 23 || *s++ != ':' || !digits(&s, 2, 2, &minute) || minute > 59)
+        return false;
+    if (*s == ':') {
+        s++;
+        if (!digits(&s, 2, 2, &second) || second > 59)
+            return false;
+        if (*s == '.') {
+            s++;
+            const char *start = s;
+            if (!digits(&s, 1, 3, &fraction))
+                return false;
+            places = (int32_t)(s - start);
+        }
+    }
+    while (places++ < 3)
+        fraction *= 10;
+    *ms = (double)(((hour * 60 + minute) * 60 + second) * 1000 + fraction);
+    *at = s;
+    return true;
+}
+
+bool p_input_number(os64_page_input_t input, const char *s, double *out)
+{
+    if (s == NULL)
+        return false;
+    int32_t year = 0, month = 0, day = 0, week = 0;
+    double ms = 0;
+    switch (input) {
+    case OS64_PAGE_INPUT_NUMBER:
+    case OS64_PAGE_INPUT_RANGE:
+        return p_number_parse(s, true, out);
+    case OS64_PAGE_INPUT_DATE:
+        if (!whole_date(&s, &year, &month, &day) || *s != '\0')
+            return false;
+        *out = (double)days_from_civil(year, month, day) * 86400000.0;
+        return true;
+    case OS64_PAGE_INPUT_MONTH:
+        // Months since January 1970, as HTML counts a month.
+        if (!whole_date(&s, &year, &month, NULL) || *s != '\0')
+            return false;
+        *out = (double)(((int64_t)year - 1970) * 12 + month - 1);
+        return true;
+    case OS64_PAGE_INPUT_WEEK: {
+        // The Monday that begins the ISO week: week 1 holds January 4.
+        if (!whole_year(&s, &year) || *s++ != '-' || *s++ != 'W' || !digits(&s, 2, 2, &week) || week < 1 ||
+            week > weeks_in(year) || *s != '\0')
+            return false;
+        int64_t jan4 = days_from_civil(year, 1, 4);
+        int64_t monday = jan4 - (((jan4 % 7) + 7 + 3) % 7);
+        *out = (double)(monday + (int64_t)(week - 1) * 7) * 86400000.0;
+        return true;
+    }
+    case OS64_PAGE_INPUT_TIME:
+        if (!whole_time(&s, &ms) || *s != '\0')
+            return false;
+        *out = ms;
+        return true;
+    case OS64_PAGE_INPUT_DATETIME_LOCAL:
+        if (!whole_date(&s, &year, &month, &day) || (*s != 'T' && *s != ' '))
+            return false;
+        s++;
+        if (!whole_time(&s, &ms) || *s != '\0')
+            return false;
+        *out = (double)days_from_civil(year, month, day) * 86400000.0 + ms;
+        return true;
+    default:
+        return false;
+    }
+}
+
+void p_input_step(os64_page_input_t input, double *step, double *scale, double *base)
+{
+    *step = 1;
+    *scale = 1;
+    *base = 0;
+    switch (input) {
+    case OS64_PAGE_INPUT_DATE: *scale = 86400000; break;
+    case OS64_PAGE_INPUT_WEEK: *scale = 604800000; *base = -259200000; break;
+    case OS64_PAGE_INPUT_TIME: case OS64_PAGE_INPUT_DATETIME_LOCAL: *step = 60; *scale = 1000; break;
+    default: break;
+    }
+}
+
 // ── The sanitizers ──────────────────────────────────────────────────────
 
 static char *strip_breaks(PArena *arena, const char *s, size_t n, size_t *len)

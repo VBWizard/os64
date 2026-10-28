@@ -638,8 +638,6 @@ int64_t os64_page_node_set_indeterminate(os64_page_state_t *state, const os64_ht
 // validation (os64_page_activate), which asks it control by control.
 //
 // The flags, one per ValidityState member that is not `valid`.
-// UNDERFLOW, OVERFLOW and STEP are not judged, and stay clear
-// (DEBTS.md § libpage).
 enum {
     OS64_PAGE_VALIDITY_MISSING = 1u << 0,
     OS64_PAGE_VALIDITY_TYPE = 1u << 1,
