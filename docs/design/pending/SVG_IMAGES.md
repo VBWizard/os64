@@ -60,9 +60,9 @@ Rasterization is synchronous on the window, serialized with document size
 queries and teardown. The output uses the existing 64 MiB geometry/pixel
 ledger and is released after compositing/tiling. Unsupported or over-budget
 painting produces a diagnostic and an image frame (or no background tile).
-There is no raster-variant cache or asynchronous SVG paint worker in this
-increment; large/many images can therefore affect paint latency. Retained
-XML/styles are reused, but cascades/scenes/pixels are rebuilt for painting.
+[Raster variants](SVG_CACHE_YONDER.md) reuse matching resolved pixels while
+sharing this ledger. Cascades/scenes are rebuilt before lookup; no asynchronous
+SVG paint worker is involved. Large/many images can still affect paint latency.
 
 Root CSS sizing follows [SVG2 intrinsic sizing](https://www.w3.org/TR/SVG2/coords.html#IntrinsicSizing).
 Pinned Chromium 140 reports the attribute dimensions in the two fixtures
@@ -162,7 +162,7 @@ from 25% through 400% zoom. The frozen binary/library/fixture cohort contains
 33 files; the update transferred 26 changed files.
 
 [Linear](SVG_GRADIENTS.md) and [radial gradients](SVG_RADIAL.md) extend the image
-profile. Raster-variant caching and corpus-led latency/fidelity work remain
-in 6c; broader graphics remain in 6d. SVGZ,
+profile. [Raster caching](SVG_CACHE_YONDER.md) reuses resolved pixels.
+Corpus-led latency/fidelity work remains in 6c; broader graphics remain in 6d. SVGZ,
 data-URL picture dispatch, fragment-view selection and full intrinsic sizing
 are not delivered by this route.

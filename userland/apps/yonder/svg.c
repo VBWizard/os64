@@ -1820,6 +1820,143 @@ static svg_status_t clip_source(void *ctx, void *snapshot, const svg_style_reque
     }
     return SVG_OK;
 }
+struct yonder_svg_cache {
+    os64_geometry_memory_t memory;
+    svg_context_t *context;
+    svg_raster_cache_t *raster;
+    size_t owned_bytes, key_bytes;
+    uint64_t rasterizations, bypasses;
+    bool active;
+    void *cancel_context;
+    bool (*cancelled)(void *);
+};
+static os64_geometry_status_t cache_allocate(void *ctx, size_t bytes, void **out)
+{
+    yonder_svg_cache_t *cache = ctx;
+    os64_geometry_status_t status = cache->memory.alloc(cache->memory.context, bytes, out);
+    if (status == OS64_GEOMETRY_OK && *out)
+        cache->owned_bytes += bytes;
+    return status;
+}
+static void cache_free(void *ctx, void *p, size_t bytes)
+{
+    yonder_svg_cache_t *cache = ctx;
+    cache->memory.free(cache->memory.context, p, bytes);
+    cache->owned_bytes -= bytes;
+}
+static bool cache_cancelled(void *ctx)
+{
+    yonder_svg_cache_t *cache = ctx;
+    return cache->cancelled && cache->cancelled(cache->cancel_context);
+}
+yonder_svg_cache_t *yonder_svg_cache_create(const os64_geometry_memory_t *memory, size_t bytes,
+                                            size_t entries, size_t key_bytes)
+{
+    if (!memory || !memory->alloc || !memory->free || !bytes || !entries || !key_bytes)
+        return NULL;
+    void *storage = NULL;
+    if (memory->alloc(memory->context, sizeof(yonder_svg_cache_t), &storage) != OS64_GEOMETRY_OK ||
+        !storage)
+        return NULL;
+    yonder_svg_cache_t *cache = storage;
+    *cache = (yonder_svg_cache_t){
+        .memory = *memory, .owned_bytes = sizeof(*cache), .key_bytes = key_bytes};
+    svg_options_t options = {.memory = {cache, cache_allocate, cache_free},
+                             .limits = svg_default_limits(),
+                             .cancel_context = cache,
+                             .cancelled = cache_cancelled};
+    // Entry admission charges allocation plus copying; cover an 8 MiB entry
+    // while retaining a finite comparison/copy budget independent of raster work.
+    options.limits.work = 64u << 20;
+    if (svg_create(&options, &cache->context) != SVG_OK ||
+        svg_raster_cache_create(cache->context, bytes, entries, &cache->raster) != SVG_OK) {
+        yonder_svg_cache_free(cache);
+        return NULL;
+    }
+    return cache;
+}
+void yonder_svg_cache_free(yonder_svg_cache_t *cache)
+{
+    if (!cache)
+        return;
+    if (cache->raster)
+        svg_raster_cache_release(cache->context, cache->raster);
+    if (cache->context)
+        svg_destroy(cache->context);
+    cache->memory.free(cache->memory.context, cache, sizeof(*cache));
+}
+void yonder_svg_cache_trim(yonder_svg_cache_t *cache)
+{
+    if (cache && !cache->active)
+        svg_raster_cache_clear(cache->context, cache->raster);
+}
+yonder_svg_cache_stats_t yonder_svg_cache_stats(const yonder_svg_cache_t *cache)
+{
+    yonder_svg_cache_stats_t stats = {0};
+    if (cache) {
+        svg_raster_cache_stats(cache->raster, &stats.raster);
+        stats.owned_bytes = cache->owned_bytes;
+        stats.rasterizations = cache->rasterizations;
+        stats.bypasses = cache->bypasses;
+    }
+    return stats;
+}
+static svg_status_t render_cached(Adapter *a, svg_context_t *context, const svg_scene_t *scene,
+                                  const svg_render_options_t *options,
+                                  const svg_render_target_t *target, yonder_svg_cache_t *cache)
+{
+    if (!cache)
+        return svg_scene_render(context, scene, options, target, NULL);
+    svg_raster_key_t *key = NULL;
+    bool hit = false;
+    svg_status_t status =
+        svg_raster_key_create(context, scene, options, target, cache->key_bytes, &key);
+    if (status == SVG_CANCELLED)
+        return status;
+    if (status != SVG_OK)
+        ++cache->bypasses;
+    if (key) {
+        cache->active = true;
+        cache->cancel_context = a->cancel_context;
+        cache->cancelled = a->cancelled;
+        status = svg_raster_cache_read(cache->context, cache->raster, key, target, &hit);
+        cache->active = false;
+        cache->cancel_context = NULL;
+        cache->cancelled = NULL;
+        if (status != SVG_OK && status != SVG_CANCELLED)
+            ++cache->bypasses;
+    }
+    if (status != SVG_CANCELLED && !hit) {
+        ++cache->rasterizations;
+        status = svg_scene_render(context, scene, options, target, NULL);
+        if (key && (status == SVG_LIMIT || status == SVG_NO_MEMORY)) {
+            // The optional key competes with raster scratch in the owner ledger.
+            // Retry without it; the renderer replaces the whole destination.
+            svg_raster_key_release(context, key);
+            key = NULL;
+            ++cache->bypasses;
+            ++cache->rasterizations;
+            status = svg_scene_render(context, scene, options, target, NULL);
+        }
+        if (status == SVG_OK && key) {
+            cache->active = true;
+            cache->cancel_context = a->cancel_context;
+            cache->cancelled = a->cancelled;
+            svg_status_t stored =
+                svg_raster_cache_store(cache->context, cache->raster, key, target, status);
+            cache->active = false;
+            cache->cancel_context = NULL;
+            cache->cancelled = NULL;
+            if (stored == SVG_CANCELLED)
+                status = stored;
+            else if (stored != SVG_OK)
+                ++cache->bypasses;
+        }
+    }
+    if (key)
+        svg_raster_key_release(context, key);
+    return status;
+}
 void yonder_svg_pixels_free(const os64_geometry_memory_t *m, yonder_svg_pixels_t *out)
 {
     if (out->pixels)
@@ -1829,7 +1966,7 @@ void yonder_svg_pixels_free(const os64_geometry_memory_t *m, yonder_svg_pixels_t
 static svg_status_t render_adapter(Adapter *a, const Map *map, os64_gui_rect_t content,
                                     int64_t x, int64_t y, uint64_t width, uint64_t height,
                                     const os64_geometry_backend_t *backend,
-                                    yonder_svg_pixels_t *out)
+                                    yonder_svg_cache_t *cache, yonder_svg_pixels_t *out)
 {
     svg_context_t *c = NULL;
     svg_scene_t *scene = NULL;
@@ -1858,7 +1995,7 @@ static svg_status_t render_adapter(Adapter *a, const Map *map, os64_gui_rect_t c
                                           .capacity = out->bytes,
                                           .pixels = out->pixels};
             svg_render_options_t render = svg_render_options_default(backend);
-            status = svg_scene_render(c, scene, &render, &target, NULL);
+            status = render_cached(a, c, scene, &render, &target, cache);
         }
     }
     if (scene)
@@ -1872,7 +2009,8 @@ svg_status_t yonder_svg_render(const os64_html_document_t *doc, const garb_casca
                                const flow_box_t *box, os64_gui_rect_t content, os64_gui_rect_t clip,
                                uint32_t zoom, uint32_t initial_color,
                                const os64_geometry_memory_t *memory,
-                               const os64_geometry_backend_t *backend, yonder_svg_pixels_t *out)
+                               const os64_geometry_backend_t *backend, yonder_svg_cache_t *cache,
+                               yonder_svg_pixels_t *out)
 {
     if (!out)
         return SVG_BAD_ARGUMENT;
@@ -1916,7 +2054,7 @@ svg_status_t yonder_svg_render(const os64_html_document_t *doc, const garb_casca
         if (!finite_map(map))
             return SVG_LIMIT;
     }
-    return render_adapter(&a, &map, content, x, y, width, height, backend, out);
+    return render_adapter(&a, &map, content, x, y, width, height, backend, cache, out);
 }
 
 svg_status_t yonder_svg_render_image_tree(const os64_html_document_t *doc,
@@ -1961,5 +2099,5 @@ svg_status_t yonder_svg_render_image_tree(const os64_html_document_t *doc,
                                        .height = view->height, .content_transform = content_map};
     Map output = {(double)pw / view->width, 0, 0, (double)ph / view->height, 0, 0};
     return render_adapter(&a, &output, (os64_gui_rect_t){0, 0, pw, ph},
-                          0, 0, pw, ph, backend, out);
+                          0, 0, pw, ph, backend, view->cache, out);
 }

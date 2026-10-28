@@ -144,9 +144,9 @@ The [image route](SVG_IMAGES.md) supplies tagged picture jobs, default object
 sizing, content recognition, lifetime/cancellation and admission accounting,
 with real `<img>` delivery and a P5 gallery. [Linear gradients](SVG_GRADIENTS.md)
 add reusable paint servers, extended by [radial gradients](SVG_RADIAL.md).
-Cache/corpus work remains part of 6c. The renderer continues to receive caller-resolved dimensions;
+[Raster caching](SVG_CACHE_YONDER.md) reuses resolved pixels; corpus work remains in 6c. The renderer continues to receive caller-resolved dimensions;
 the image route supplies default natural dimensions, while full replaced-element
-intrinsic sizing and raster-variant caches remain follow-ups.
+intrinsic sizing remains a follow-up.
 
 
 ## Clip-resource processing regression

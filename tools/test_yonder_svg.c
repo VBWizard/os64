@@ -113,7 +113,7 @@ static svg_status_t draw_fixture(Fixture *f, SvgLedger *l, yonder_svg_pixels_t *
 {
     os64_geometry_memory_t m = {l, svg_alloc_test, svg_free_test};
     return yonder_svg_render(f->doc, f->cascade, f->box, f->box->rect, clip, (uint32_t)f->env.zoom,
-                             f->env.ink ^ 0xff000000u, &m, os64_freetype_geometry_v1(), pixels);
+                             f->env.ink ^ 0xff000000u, &m, os64_freetype_geometry_v1(), NULL, pixels);
 }
 static void pixels_free(SvgLedger *l, yonder_svg_pixels_t *p)
 {
@@ -560,6 +560,7 @@ static void stroke_cases(const char *dir)
 #include "test_yonder_svg_document.inc"
 #include "test_yonder_svg_gradients.inc"
 #include "test_yonder_svg_radial.inc"
+#include "test_yonder_svg_cache.inc"
 
 int main(int argc, char **argv)
 {
@@ -570,6 +571,7 @@ int main(int argc, char **argv)
     assert(os64_text_create(&o, &s_text) == OS64_FONT_OK);
     kEnv.text = s_text;
     size_t base = live;
+    svg_cache_adapter_contracts();
     clip_cases(argv[1]);
     bounds_cases(argv[1]);
     gradient_cases(argv[1]);

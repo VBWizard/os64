@@ -149,6 +149,7 @@ expected, and the other inspected zoom levels rendered correctly. At 25% the
 rings were too small for the tester to verify their detail completely; the
 automated and QEMU evidence above covers that scale separately.
 
-Raster-variant caching and corpus-led latency/fidelity gates remain in 6c.
+[Raster caching](SVG_CACHE_YONDER.md) connects both painting routes.
+Corpus-led latency/fidelity gates remain in 6c.
 Broader graphics and text remain separate work. There is no new animation loop
 or asynchronous raster worker in this slice.
