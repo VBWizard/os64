@@ -421,7 +421,8 @@ static uint32_t range_flags(const os64_html_node_t *n, os64_page_input_t input, 
     const char *step_text = p_attr(n, "step");
     if (step_text != NULL && os64_streq_nocase(step_text, "any"))
         return flags;
-    double step = 0, scale = 1, base = 0, fallback = 1;
+    double step = 0, base = 0, fallback = 1;
+    uint32_t scale = 1;
     p_input_step(input, &fallback, &scale, &base);
     if (!p_number_parse(step_text, false, &step) || step <= 0)
         step = fallback;
@@ -432,7 +433,7 @@ static uint32_t range_flags(const os64_html_node_t *n, os64_page_input_t input, 
         base = min;
     else if (p_input_number(input, p_attr(n, "value"), &from))
         base = from;
-    if (!p_step_aligned(number, base, step * scale))
+    if (!p_step_aligned(number, base, step, scale))
         flags |= OS64_PAGE_VALIDITY_STEP;
     return flags;
 }
@@ -638,17 +639,24 @@ int64_t os64_page_node_validation_message(os64_page_state_t *state, const os64_h
         (void)p_nonnegative(p_attr(node, "minlength"), &limit);
         os64_snprintf(out, cap, "Please lengthen this text to %llu characters or more.", (unsigned long long)limit);
     } else if (flags & (OS64_PAGE_VALIDITY_UNDERFLOW | OS64_PAGE_VALIDITY_OVERFLOW)) {
-        // The bound as the page wrote it; a range's default when it wrote
-        // none.
-        bool under = (flags & OS64_PAGE_VALIDITY_UNDERFLOW) != 0;
-        const char *bound = p_attr(node, under ? "min" : "max");
-        if (bound == NULL)
-            bound = under ? "0" : "100";
+        // The bound as the page wrote it, when it converts; a range's
+        // default when it does not (the range judged against the default).
+        const char *min = p_attr(node, "min"), *max = p_attr(node, "max");
+        double ignored = 0;
+        if (!p_input_number(input, min, &ignored))
+            min = "0";
+        if (!p_input_number(input, max, &ignored))
+            max = "100";
         bool numeric = input == OS64_PAGE_INPUT_NUMBER || input == OS64_PAGE_INPUT_RANGE;
-        os64_snprintf(out, cap,
-                      numeric ? (under ? "Value must be greater than or equal to %s." : "Value must be less than or equal to %s.")
-                              : (under ? "Value must be %s or later." : "Value must be %s or earlier."),
-                      bound);
+        if ((flags & OS64_PAGE_VALIDITY_UNDERFLOW) && (flags & OS64_PAGE_VALIDITY_OVERFLOW))
+            // A time whose max is below its min: either side of midnight.
+            os64_snprintf(out, cap, "Value must be %s or later, or %s or earlier.", min, max);
+        else if (flags & OS64_PAGE_VALIDITY_UNDERFLOW)
+            os64_snprintf(out, cap, numeric ? "Value must be greater than or equal to %s." : "Value must be %s or later.",
+                          min);
+        else
+            os64_snprintf(out, cap, numeric ? "Value must be less than or equal to %s." : "Value must be %s or earlier.",
+                          max);
     } else if (flags & OS64_PAGE_VALIDITY_BAD_INPUT) {
         os64_strcopy(out, cap,
                      input == OS64_PAGE_INPUT_NUMBER ? "Please enter a number." : "Please enter a valid value.");

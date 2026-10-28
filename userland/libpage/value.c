@@ -193,8 +193,10 @@ static bool valid_for(os64_page_input_t input, const char *s)
 
 // ── A value as a number (HTML's "convert a string to a number") ─────────
 
-// The year itself, not its residue: four digits or more, and none past
-// 275760, the last year a Date reaches, which HTML's numbers are kept in.
+// The year itself, not its residue: four digits or more. A year of more
+// than nine digits is refused, which keeps the day arithmetic in range;
+// any year the value sanitizer keeps short of that converts, so min, max
+// and step judge it.
 static bool whole_year(const char **at, int32_t *year)
 {
     const char *s = *at;
@@ -202,7 +204,7 @@ static bool whole_year(const char **at, int32_t *year)
     size_t seen = 0;
     while (digit(*s)) {
         y = y * 10 + (*s - '0');
-        if (y > 275760)
+        if (y > 999999999)
             return false;
         s++;
         seen++;
@@ -279,7 +281,10 @@ bool p_input_number(os64_page_input_t input, const char *s, double *out)
     switch (input) {
     case OS64_PAGE_INPUT_NUMBER:
     case OS64_PAGE_INPUT_RANGE:
-        return p_number_parse(s, true, out);
+        // HTML's rules for parsing floating-point number values, lenient,
+        // as range.c's sanitizer reads min, max and step: a judge stricter
+        // than the sanitizer would put a range's own value off its grid.
+        return p_number_parse(s, false, out);
     case OS64_PAGE_INPUT_DATE:
         if (!whole_date(&s, &year, &month, &day) || *s != '\0')
             return false;
@@ -319,7 +324,7 @@ bool p_input_number(os64_page_input_t input, const char *s, double *out)
     }
 }
 
-void p_input_step(os64_page_input_t input, double *step, double *scale, double *base)
+void p_input_step(os64_page_input_t input, double *step, uint32_t *scale, double *base)
 {
     *step = 1;
     *scale = 1;

@@ -1010,9 +1010,22 @@ static void state_validity_range(void)
         {"<input type=time step=120>", "12:03", OS64_PAGE_VALIDITY_STEP, NULL},
         {"<input type=time step=0.001>", "12:00:00.001", 0, NULL},
         {"<input type=time step=0.5>", "12:00:00.5", 0, NULL},
+        /* the scale multiplied in decimal: 16.1 s is 16100 ms exactly */
+        {"<input type=time step=16.1>", "00:00:16.1", 0, NULL},
+        {"<input type=datetime-local step=1.001>", "1970-01-01T00:00:01.001", 0, NULL},
+        {"<input type=week step=1e300>", "1970-W01", 0, NULL},
+        /* min, max and the base read as the sanitizer reads them */
+        {"<input type=range min='10 ' step=3>", NULL, 0, NULL},
+        {"<input type=number min='+10'>", "5", OS64_PAGE_VALIDITY_UNDERFLOW, NULL},
+        /* a year past a Date's still converts, and is judged */
+        {"<input type=date max=2030-12-31>", "300000-01-01", OS64_PAGE_VALIDITY_OVERFLOW, NULL},
+        /* a range's bound that does not convert is named by its default */
+        {"<input type=range min=150 max=abc>", NULL, OS64_PAGE_VALIDITY_OVERFLOW,
+         "Value must be less than or equal to 100."},
         {"<input type=time min=22:00 max=02:00>", "23:00", 0, NULL},
         {"<input type=time min=22:00 max=02:00>", "12:00",
-         OS64_PAGE_VALIDITY_UNDERFLOW | OS64_PAGE_VALIDITY_OVERFLOW, NULL},
+         OS64_PAGE_VALIDITY_UNDERFLOW | OS64_PAGE_VALIDITY_OVERFLOW,
+         "Value must be 22:00 or later, or 02:00 or earlier."},
         {"<input type=datetime-local step=120>", "1970-01-01T12:03", OS64_PAGE_VALIDITY_STEP, NULL},
         {"<input type=datetime-local min=2000-01-01T00:00>", "1999-12-31T23:59", OS64_PAGE_VALIDITY_UNDERFLOW, NULL},
         {"<input type=text min=5>", "1", 0, NULL},

@@ -1,4 +1,5 @@
-// Exact decimal grid arithmetic for Range state. Shortest binary64 strings
+// Exact decimal grid arithmetic: a range's sanitized value, and every type's
+// stepMismatch (p_step_aligned). Shortest binary64 strings
 // need at most 17 significant digits and exponents from -324 through 308.
 // Aligning their coefficients, including a midpoint, fits in 80 base-1e9
 // limbs. Storage and division work are bounded independently of input length.
@@ -270,9 +271,12 @@ const char *p_range_value(PArena *arena, const os64_html_node_t *node,
     return p_arena_copy(arena,text,*len);
 }
 
-bool p_step_aligned(double value, double base, double step)
+bool p_step_aligned(double value, double base, double step, uint32_t scale)
 {
     RDecimal chosen=from_double(value), origin=from_double(base), stride=from_double(step);
+    // The scale multiplies in decimal: 16.1 seconds is exactly 16100 ms,
+    // where the binary product is not.
+    multiply(&stride,scale);
     int exponent=chosen.exponent;
     if (origin.exponent < exponent) exponent=origin.exponent;
     if (stride.exponent < exponent) exponent=stride.exponent;

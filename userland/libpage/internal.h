@@ -328,10 +328,11 @@ const char *p_range_value(PArena *arena, const os64_html_node_t *node,
 // it were UTC.
 bool p_input_number(os64_page_input_t input, const char *s, double *out);
 // The type's default step, step scale factor and default step base.
-void p_input_step(os64_page_input_t input, double *step, double *scale, double *base);
-// Whether `value` is `base` plus a whole number of `step`s, exactly, in
-// decimal (range.c's arithmetic): what stepMismatch asks.
-bool p_step_aligned(double value, double base, double step);
+void p_input_step(os64_page_input_t input, double *step, uint32_t *scale, double *base);
+// Whether `value` is `base` plus a whole number of `step` times `scale`,
+// exactly, in decimal (range.c's arithmetic), the scale multiplied there
+// too: what stepMismatch asks.
+bool p_step_aligned(double value, double base, double step, uint32_t scale);
 os64_page_input_t p_input_type(const os64_html_node_t *n);
 // Shared by initial values and edits; temporary storage belongs to arena.
 // raw_len is authoritative; raw also has a terminator at that offset.
