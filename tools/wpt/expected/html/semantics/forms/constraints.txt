@@ -760,6 +760,148 @@ radio-valueMissing.html	One of the radios is required, but none checked
 radio-valueMissing.html	One of the radios is required, checked and disabled
 radio-valueMissing.html	The required attribute is not set
 using-form-attribute.html	Forms outside the form element that use the form="" attribute still get validated
+# 0f's P4b (MODERN_WEB.md § 0f's P4b, as built): range and step. Each fails with
+# the switch off.
+form-validation-checkValidity.html	[INPUT in DATE status] suffering from a step mismatch
+form-validation-checkValidity.html	[INPUT in DATE status] suffering from a step mismatch (in a form)
+form-validation-checkValidity.html	[INPUT in DATE status] suffering from an overflow
+form-validation-checkValidity.html	[INPUT in DATE status] suffering from an overflow (in a form)
+form-validation-checkValidity.html	[INPUT in DATE status] suffering from an underflow
+form-validation-checkValidity.html	[INPUT in DATE status] suffering from an underflow (in a form)
+form-validation-checkValidity.html	[INPUT in DATETIME-LOCAL status] suffering from a step mismatch
+form-validation-checkValidity.html	[INPUT in DATETIME-LOCAL status] suffering from a step mismatch (in a form)
+form-validation-checkValidity.html	[INPUT in DATETIME-LOCAL status] suffering from an overflow
+form-validation-checkValidity.html	[INPUT in DATETIME-LOCAL status] suffering from an overflow (in a form)
+form-validation-checkValidity.html	[INPUT in DATETIME-LOCAL status] suffering from an underflow
+form-validation-checkValidity.html	[INPUT in DATETIME-LOCAL status] suffering from an underflow (in a form)
+form-validation-checkValidity.html	[INPUT in MONTH status] suffering from a step mismatch
+form-validation-checkValidity.html	[INPUT in MONTH status] suffering from a step mismatch (in a form)
+form-validation-checkValidity.html	[INPUT in MONTH status] suffering from an overflow
+form-validation-checkValidity.html	[INPUT in MONTH status] suffering from an overflow (in a form)
+form-validation-checkValidity.html	[INPUT in MONTH status] suffering from an underflow
+form-validation-checkValidity.html	[INPUT in MONTH status] suffering from an underflow (in a form)
+form-validation-checkValidity.html	[INPUT in NUMBER status] suffering from a step mismatch
+form-validation-checkValidity.html	[INPUT in NUMBER status] suffering from a step mismatch (in a form)
+form-validation-checkValidity.html	[INPUT in NUMBER status] suffering from an overflow
+form-validation-checkValidity.html	[INPUT in NUMBER status] suffering from an overflow (in a form)
+form-validation-checkValidity.html	[INPUT in NUMBER status] suffering from an underflow
+form-validation-checkValidity.html	[INPUT in NUMBER status] suffering from an underflow (in a form)
+form-validation-checkValidity.html	[INPUT in TIME status] suffering from a step mismatch
+form-validation-checkValidity.html	[INPUT in TIME status] suffering from a step mismatch (in a form)
+form-validation-checkValidity.html	[INPUT in TIME status] suffering from an overflow
+form-validation-checkValidity.html	[INPUT in TIME status] suffering from an overflow (in a form)
+form-validation-checkValidity.html	[INPUT in TIME status] suffering from an underflow
+form-validation-checkValidity.html	[INPUT in TIME status] suffering from an underflow (in a form)
+form-validation-checkValidity.html	[INPUT in WEEK status] suffering from a step mismatch
+form-validation-checkValidity.html	[INPUT in WEEK status] suffering from a step mismatch (in a form)
+form-validation-checkValidity.html	[INPUT in WEEK status] suffering from an overflow
+form-validation-checkValidity.html	[INPUT in WEEK status] suffering from an overflow (in a form)
+form-validation-checkValidity.html	[INPUT in WEEK status] suffering from an underflow
+form-validation-checkValidity.html	[INPUT in WEEK status] suffering from an underflow (in a form)
+form-validation-reportValidity.html	[INPUT in DATE status] suffering from a step mismatch
+form-validation-reportValidity.html	[INPUT in DATE status] suffering from a step mismatch (in a form)
+form-validation-reportValidity.html	[INPUT in DATE status] suffering from an overflow
+form-validation-reportValidity.html	[INPUT in DATE status] suffering from an overflow (in a form)
+form-validation-reportValidity.html	[INPUT in DATE status] suffering from an underflow
+form-validation-reportValidity.html	[INPUT in DATE status] suffering from an underflow (in a form)
+form-validation-reportValidity.html	[INPUT in DATETIME-LOCAL status] suffering from a step mismatch
+form-validation-reportValidity.html	[INPUT in DATETIME-LOCAL status] suffering from a step mismatch (in a form)
+form-validation-reportValidity.html	[INPUT in DATETIME-LOCAL status] suffering from an overflow
+form-validation-reportValidity.html	[INPUT in DATETIME-LOCAL status] suffering from an overflow (in a form)
+form-validation-reportValidity.html	[INPUT in DATETIME-LOCAL status] suffering from an underflow
+form-validation-reportValidity.html	[INPUT in DATETIME-LOCAL status] suffering from an underflow (in a form)
+form-validation-reportValidity.html	[INPUT in MONTH status] suffering from a step mismatch
+form-validation-reportValidity.html	[INPUT in MONTH status] suffering from a step mismatch (in a form)
+form-validation-reportValidity.html	[INPUT in MONTH status] suffering from an overflow
+form-validation-reportValidity.html	[INPUT in MONTH status] suffering from an overflow (in a form)
+form-validation-reportValidity.html	[INPUT in MONTH status] suffering from an underflow
+form-validation-reportValidity.html	[INPUT in MONTH status] suffering from an underflow (in a form)
+form-validation-reportValidity.html	[INPUT in NUMBER status] suffering from a step mismatch
+form-validation-reportValidity.html	[INPUT in NUMBER status] suffering from a step mismatch (in a form)
+form-validation-reportValidity.html	[INPUT in NUMBER status] suffering from an overflow
+form-validation-reportValidity.html	[INPUT in NUMBER status] suffering from an overflow (in a form)
+form-validation-reportValidity.html	[INPUT in NUMBER status] suffering from an underflow
+form-validation-reportValidity.html	[INPUT in NUMBER status] suffering from an underflow (in a form)
+form-validation-reportValidity.html	[INPUT in TIME status] suffering from a step mismatch
+form-validation-reportValidity.html	[INPUT in TIME status] suffering from a step mismatch (in a form)
+form-validation-reportValidity.html	[INPUT in TIME status] suffering from an overflow
+form-validation-reportValidity.html	[INPUT in TIME status] suffering from an overflow (in a form)
+form-validation-reportValidity.html	[INPUT in TIME status] suffering from an underflow
+form-validation-reportValidity.html	[INPUT in TIME status] suffering from an underflow (in a form)
+form-validation-reportValidity.html	[INPUT in WEEK status] suffering from a step mismatch
+form-validation-reportValidity.html	[INPUT in WEEK status] suffering from a step mismatch (in a form)
+form-validation-reportValidity.html	[INPUT in WEEK status] suffering from an overflow
+form-validation-reportValidity.html	[INPUT in WEEK status] suffering from an overflow (in a form)
+form-validation-reportValidity.html	[INPUT in WEEK status] suffering from an underflow
+form-validation-reportValidity.html	[INPUT in WEEK status] suffering from an underflow (in a form)
+form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in MONTH status] The value attribute is greater than max attribute
+form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in MONTH status] The value attribute is greater than max attribute(Year is 10000 should be valid)
+form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in WEEK status] The value attribute is greater than max attribute
+form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in WEEK status] The value attribute is greater than max attribute(Year is 10000 should be valid)
+form-validation-validity-rangeOverflow.html	[INPUT in DATE status] The value attribute is greater than max attribute
+form-validation-validity-rangeOverflow.html	[INPUT in DATE status] The value attribute is greater than max attribute(Year is 10000 should be valid)
+form-validation-validity-rangeOverflow.html	[INPUT in DATETIME-LOCAL status] The value is greater than max
+form-validation-validity-rangeOverflow.html	[INPUT in DATETIME-LOCAL status] The value is greater than max(Year is 10000 should be valid)
+form-validation-validity-rangeOverflow.html	[INPUT in DATETIME-LOCAL status] The value is greater than max(with millisecond in 1 digit)
+form-validation-validity-rangeOverflow.html	[INPUT in DATETIME-LOCAL status] The value is greater than max(with millisecond in 2 digits)
+form-validation-validity-rangeOverflow.html	[INPUT in DATETIME-LOCAL status] The value is greater than max(with millisecond in 3 digits)
+form-validation-validity-rangeOverflow.html	[INPUT in NUMBER status] The value is greater than max(floating number)
+form-validation-validity-rangeOverflow.html	[INPUT in NUMBER status] The value is greater than max(integer)
+form-validation-validity-rangeOverflow.html	[INPUT in NUMBER status] The value is greater than max(scientific notation)
+form-validation-validity-rangeOverflow.html	[INPUT in NUMBER status] The value is greater than max(special floating number)
+form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The time is outside the accepted range for reversed range
+form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The time missing second part is valid
+form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The value attribute is greater than max attribute
+form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The value is greater than max(with millisecond in 1 digit)
+form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The value is greater than max(with millisecond in 2 digit)
+form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The value is greater than max(with millisecond in 3 digit)
+form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in MONTH status] The value attribute is less than min attribute
+form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in MONTH status] The value attribute is less than min attribute(Year is 10000 should be valid)
+form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in WEEK status] The value attribute is less than min attribute
+form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in WEEK status] The value attribute is less than min attribute(Year is 10000 should be valid)
+form-validation-validity-rangeUnderflow.html	[INPUT in DATE status] The value attribute is less than min attribute
+form-validation-validity-rangeUnderflow.html	[INPUT in DATE status] The value attribute is less than min attribute(Year is 10000 should be valid)
+form-validation-validity-rangeUnderflow.html	[INPUT in DATETIME-LOCAL status] The value is less than min
+form-validation-validity-rangeUnderflow.html	[INPUT in DATETIME-LOCAL status] The value is less than min(Year is 10000 should be valid)
+form-validation-validity-rangeUnderflow.html	[INPUT in DATETIME-LOCAL status] The value is less than min(with millisecond in 1 digit)
+form-validation-validity-rangeUnderflow.html	[INPUT in DATETIME-LOCAL status] The value is less than min(with millisecond in 2 digits)
+form-validation-validity-rangeUnderflow.html	[INPUT in DATETIME-LOCAL status] The value is less than min(with millisecond in 3 digits)
+form-validation-validity-rangeUnderflow.html	[INPUT in NUMBER status] The value is less than min(floating number)
+form-validation-validity-rangeUnderflow.html	[INPUT in NUMBER status] The value is less than min(integer)
+form-validation-validity-rangeUnderflow.html	[INPUT in NUMBER status] The value is less than min(scientific notation)
+form-validation-validity-rangeUnderflow.html	[INPUT in NUMBER status] The value is less than min(special floating number)
+form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] The time is outside the accepted range for reversed range
+form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] The time missing second part is valid
+form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] The value attribute is less than min attribute
+form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] The value is less than min(with millisecond in 1 digit)
+form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] The value is less than min(with millisecond in 2 digit)
+form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] The value is less than min(with millisecond in 3 digit)
+form-validation-validity-stepMismatch.html	[INPUT in DATE status] The value must mismatch the step
+form-validation-validity-stepMismatch.html	[INPUT in DATETIME-LOCAL status] The value must mismatch the step
+form-validation-validity-stepMismatch.html	[INPUT in MONTH status] The value must mismatch the step
+form-validation-validity-stepMismatch.html	[INPUT in NUMBER status] Step mismatch when step is a very small floating number and value is not its integral multiple
+form-validation-validity-stepMismatch.html	[INPUT in NUMBER status] The step attribute is not set and the value attribute is a floating number
+form-validation-validity-stepMismatch.html	[INPUT in NUMBER status] The value must mismatch the step
+form-validation-validity-stepMismatch.html	[INPUT in TIME status] The value must mismatch the step
+form-validation-validity-stepMismatch.html	[INPUT in WEEK status] The value must mismatch the step
+form-validation-validity-valid-weekmonth.html	[INPUT in MONTH status] validity.valid must be false if validity.rangeOverflow is true
+form-validation-validity-valid-weekmonth.html	[INPUT in MONTH status] validity.valid must be false if validity.rangeUnderflow is true
+form-validation-validity-valid-weekmonth.html	[INPUT in MONTH status] validity.valid must be false if validity.stepMismatch is true
+form-validation-validity-valid-weekmonth.html	[INPUT in WEEK status] validity.valid must be false if validity.rangeOverflow is true
+form-validation-validity-valid-weekmonth.html	[INPUT in WEEK status] validity.valid must be false if validity.rangeUnderflow is true
+form-validation-validity-valid-weekmonth.html	[INPUT in WEEK status] validity.valid must be false if validity.stepMismatch is true
+form-validation-validity-valid.html	[INPUT in DATE status] validity.valid must be false if validity.rangeOverflow is true
+form-validation-validity-valid.html	[INPUT in DATE status] validity.valid must be false if validity.rangeUnderflow is true
+form-validation-validity-valid.html	[INPUT in DATE status] validity.valid must be false if validity.stepMismatch is true
+form-validation-validity-valid.html	[INPUT in DATETIME-LOCAL status] validity.valid must be false if validity.rangeOverflow is true
+form-validation-validity-valid.html	[INPUT in DATETIME-LOCAL status] validity.valid must be false if validity.rangeUnderflow is true
+form-validation-validity-valid.html	[INPUT in DATETIME-LOCAL status] validity.valid must be false if validity.stepMismatch is true
+form-validation-validity-valid.html	[INPUT in NUMBER status] validity.valid must be false if validity.rangeOverflow is true
+form-validation-validity-valid.html	[INPUT in NUMBER status] validity.valid must be false if validity.rangeUnderflow is true
+form-validation-validity-valid.html	[INPUT in NUMBER status] validity.valid must be false if validity.stepMismatch is true
+form-validation-validity-valid.html	[INPUT in TIME status] validity.valid must be false if validity.rangeOverflow is true
+form-validation-validity-valid.html	[INPUT in TIME status] validity.valid must be false if validity.rangeUnderflow is true
+form-validation-validity-valid.html	[INPUT in TIME status] validity.valid must be false if validity.stepMismatch is true
 [excluded]
 [passing]
 form-validation-checkValidity.html	[INPUT in CHECKBOX status] no constraint
@@ -768,10 +910,22 @@ form-validation-checkValidity.html	[INPUT in CHECKBOX status] suffering from bei
 form-validation-checkValidity.html	[INPUT in CHECKBOX status] suffering from being missing (in a form)
 form-validation-checkValidity.html	[INPUT in DATE status] no constraint
 form-validation-checkValidity.html	[INPUT in DATE status] no constraint (in a form)
+form-validation-checkValidity.html	[INPUT in DATE status] suffering from a step mismatch
+form-validation-checkValidity.html	[INPUT in DATE status] suffering from a step mismatch (in a form)
+form-validation-checkValidity.html	[INPUT in DATE status] suffering from an overflow
+form-validation-checkValidity.html	[INPUT in DATE status] suffering from an overflow (in a form)
+form-validation-checkValidity.html	[INPUT in DATE status] suffering from an underflow
+form-validation-checkValidity.html	[INPUT in DATE status] suffering from an underflow (in a form)
 form-validation-checkValidity.html	[INPUT in DATE status] suffering from being missing
 form-validation-checkValidity.html	[INPUT in DATE status] suffering from being missing (in a form)
 form-validation-checkValidity.html	[INPUT in DATETIME-LOCAL status] no constraint
 form-validation-checkValidity.html	[INPUT in DATETIME-LOCAL status] no constraint (in a form)
+form-validation-checkValidity.html	[INPUT in DATETIME-LOCAL status] suffering from a step mismatch
+form-validation-checkValidity.html	[INPUT in DATETIME-LOCAL status] suffering from a step mismatch (in a form)
+form-validation-checkValidity.html	[INPUT in DATETIME-LOCAL status] suffering from an overflow
+form-validation-checkValidity.html	[INPUT in DATETIME-LOCAL status] suffering from an overflow (in a form)
+form-validation-checkValidity.html	[INPUT in DATETIME-LOCAL status] suffering from an underflow
+form-validation-checkValidity.html	[INPUT in DATETIME-LOCAL status] suffering from an underflow (in a form)
 form-validation-checkValidity.html	[INPUT in DATETIME-LOCAL status] suffering from being missing
 form-validation-checkValidity.html	[INPUT in DATETIME-LOCAL status] suffering from being missing (in a form)
 form-validation-checkValidity.html	[INPUT in EMAIL status] no constraint
@@ -790,8 +944,20 @@ form-validation-checkValidity.html	[INPUT in FILE status] suffering from being m
 form-validation-checkValidity.html	[INPUT in FILE status] suffering from being missing (in a form)
 form-validation-checkValidity.html	[INPUT in MONTH status] no constraint
 form-validation-checkValidity.html	[INPUT in MONTH status] no constraint (in a form)
+form-validation-checkValidity.html	[INPUT in MONTH status] suffering from a step mismatch
+form-validation-checkValidity.html	[INPUT in MONTH status] suffering from a step mismatch (in a form)
+form-validation-checkValidity.html	[INPUT in MONTH status] suffering from an overflow
+form-validation-checkValidity.html	[INPUT in MONTH status] suffering from an overflow (in a form)
+form-validation-checkValidity.html	[INPUT in MONTH status] suffering from an underflow
+form-validation-checkValidity.html	[INPUT in MONTH status] suffering from an underflow (in a form)
 form-validation-checkValidity.html	[INPUT in MONTH status] suffering from being missing
 form-validation-checkValidity.html	[INPUT in MONTH status] suffering from being missing (in a form)
+form-validation-checkValidity.html	[INPUT in NUMBER status] suffering from a step mismatch
+form-validation-checkValidity.html	[INPUT in NUMBER status] suffering from a step mismatch (in a form)
+form-validation-checkValidity.html	[INPUT in NUMBER status] suffering from an overflow
+form-validation-checkValidity.html	[INPUT in NUMBER status] suffering from an overflow (in a form)
+form-validation-checkValidity.html	[INPUT in NUMBER status] suffering from an underflow
+form-validation-checkValidity.html	[INPUT in NUMBER status] suffering from an underflow (in a form)
 form-validation-checkValidity.html	[INPUT in NUMBER status] suffering from being missing
 form-validation-checkValidity.html	[INPUT in NUMBER status] suffering from being missing (in a form)
 form-validation-checkValidity.html	[INPUT in PASSWORD status] no constraint
@@ -832,6 +998,12 @@ form-validation-checkValidity.html	[INPUT in TEXT status] suffering from being m
 form-validation-checkValidity.html	[INPUT in TEXT status] suffering from being missing (in a form)
 form-validation-checkValidity.html	[INPUT in TIME status] no constraint
 form-validation-checkValidity.html	[INPUT in TIME status] no constraint (in a form)
+form-validation-checkValidity.html	[INPUT in TIME status] suffering from a step mismatch
+form-validation-checkValidity.html	[INPUT in TIME status] suffering from a step mismatch (in a form)
+form-validation-checkValidity.html	[INPUT in TIME status] suffering from an overflow
+form-validation-checkValidity.html	[INPUT in TIME status] suffering from an overflow (in a form)
+form-validation-checkValidity.html	[INPUT in TIME status] suffering from an underflow
+form-validation-checkValidity.html	[INPUT in TIME status] suffering from an underflow (in a form)
 form-validation-checkValidity.html	[INPUT in TIME status] suffering from being missing
 form-validation-checkValidity.html	[INPUT in TIME status] suffering from being missing (in a form)
 form-validation-checkValidity.html	[INPUT in URL status] no constraint
@@ -846,6 +1018,12 @@ form-validation-checkValidity.html	[INPUT in URL status] suffering from being to
 form-validation-checkValidity.html	[INPUT in URL status] suffering from being too long (in a form)
 form-validation-checkValidity.html	[INPUT in WEEK status] no constraint
 form-validation-checkValidity.html	[INPUT in WEEK status] no constraint (in a form)
+form-validation-checkValidity.html	[INPUT in WEEK status] suffering from a step mismatch
+form-validation-checkValidity.html	[INPUT in WEEK status] suffering from a step mismatch (in a form)
+form-validation-checkValidity.html	[INPUT in WEEK status] suffering from an overflow
+form-validation-checkValidity.html	[INPUT in WEEK status] suffering from an overflow (in a form)
+form-validation-checkValidity.html	[INPUT in WEEK status] suffering from an underflow
+form-validation-checkValidity.html	[INPUT in WEEK status] suffering from an underflow (in a form)
 form-validation-checkValidity.html	[INPUT in WEEK status] suffering from being missing
 form-validation-checkValidity.html	[INPUT in WEEK status] suffering from being missing (in a form)
 form-validation-checkValidity.html	[select]  no constraint
@@ -862,10 +1040,22 @@ form-validation-reportValidity.html	[INPUT in CHECKBOX status] suffering from be
 form-validation-reportValidity.html	[INPUT in CHECKBOX status] suffering from being missing (in a form)
 form-validation-reportValidity.html	[INPUT in DATE status] no constraint
 form-validation-reportValidity.html	[INPUT in DATE status] no constraint (in a form)
+form-validation-reportValidity.html	[INPUT in DATE status] suffering from a step mismatch
+form-validation-reportValidity.html	[INPUT in DATE status] suffering from a step mismatch (in a form)
+form-validation-reportValidity.html	[INPUT in DATE status] suffering from an overflow
+form-validation-reportValidity.html	[INPUT in DATE status] suffering from an overflow (in a form)
+form-validation-reportValidity.html	[INPUT in DATE status] suffering from an underflow
+form-validation-reportValidity.html	[INPUT in DATE status] suffering from an underflow (in a form)
 form-validation-reportValidity.html	[INPUT in DATE status] suffering from being missing
 form-validation-reportValidity.html	[INPUT in DATE status] suffering from being missing (in a form)
 form-validation-reportValidity.html	[INPUT in DATETIME-LOCAL status] no constraint
 form-validation-reportValidity.html	[INPUT in DATETIME-LOCAL status] no constraint (in a form)
+form-validation-reportValidity.html	[INPUT in DATETIME-LOCAL status] suffering from a step mismatch
+form-validation-reportValidity.html	[INPUT in DATETIME-LOCAL status] suffering from a step mismatch (in a form)
+form-validation-reportValidity.html	[INPUT in DATETIME-LOCAL status] suffering from an overflow
+form-validation-reportValidity.html	[INPUT in DATETIME-LOCAL status] suffering from an overflow (in a form)
+form-validation-reportValidity.html	[INPUT in DATETIME-LOCAL status] suffering from an underflow
+form-validation-reportValidity.html	[INPUT in DATETIME-LOCAL status] suffering from an underflow (in a form)
 form-validation-reportValidity.html	[INPUT in DATETIME-LOCAL status] suffering from being missing
 form-validation-reportValidity.html	[INPUT in DATETIME-LOCAL status] suffering from being missing (in a form)
 form-validation-reportValidity.html	[INPUT in EMAIL status] no constraint
@@ -884,8 +1074,20 @@ form-validation-reportValidity.html	[INPUT in FILE status] suffering from being 
 form-validation-reportValidity.html	[INPUT in FILE status] suffering from being missing (in a form)
 form-validation-reportValidity.html	[INPUT in MONTH status] no constraint
 form-validation-reportValidity.html	[INPUT in MONTH status] no constraint (in a form)
+form-validation-reportValidity.html	[INPUT in MONTH status] suffering from a step mismatch
+form-validation-reportValidity.html	[INPUT in MONTH status] suffering from a step mismatch (in a form)
+form-validation-reportValidity.html	[INPUT in MONTH status] suffering from an overflow
+form-validation-reportValidity.html	[INPUT in MONTH status] suffering from an overflow (in a form)
+form-validation-reportValidity.html	[INPUT in MONTH status] suffering from an underflow
+form-validation-reportValidity.html	[INPUT in MONTH status] suffering from an underflow (in a form)
 form-validation-reportValidity.html	[INPUT in MONTH status] suffering from being missing
 form-validation-reportValidity.html	[INPUT in MONTH status] suffering from being missing (in a form)
+form-validation-reportValidity.html	[INPUT in NUMBER status] suffering from a step mismatch
+form-validation-reportValidity.html	[INPUT in NUMBER status] suffering from a step mismatch (in a form)
+form-validation-reportValidity.html	[INPUT in NUMBER status] suffering from an overflow
+form-validation-reportValidity.html	[INPUT in NUMBER status] suffering from an overflow (in a form)
+form-validation-reportValidity.html	[INPUT in NUMBER status] suffering from an underflow
+form-validation-reportValidity.html	[INPUT in NUMBER status] suffering from an underflow (in a form)
 form-validation-reportValidity.html	[INPUT in NUMBER status] suffering from being missing
 form-validation-reportValidity.html	[INPUT in NUMBER status] suffering from being missing (in a form)
 form-validation-reportValidity.html	[INPUT in PASSWORD status] no constraint
@@ -926,6 +1128,12 @@ form-validation-reportValidity.html	[INPUT in TEXT status] suffering from being 
 form-validation-reportValidity.html	[INPUT in TEXT status] suffering from being missing (in a form)
 form-validation-reportValidity.html	[INPUT in TIME status] no constraint
 form-validation-reportValidity.html	[INPUT in TIME status] no constraint (in a form)
+form-validation-reportValidity.html	[INPUT in TIME status] suffering from a step mismatch
+form-validation-reportValidity.html	[INPUT in TIME status] suffering from a step mismatch (in a form)
+form-validation-reportValidity.html	[INPUT in TIME status] suffering from an overflow
+form-validation-reportValidity.html	[INPUT in TIME status] suffering from an overflow (in a form)
+form-validation-reportValidity.html	[INPUT in TIME status] suffering from an underflow
+form-validation-reportValidity.html	[INPUT in TIME status] suffering from an underflow (in a form)
 form-validation-reportValidity.html	[INPUT in TIME status] suffering from being missing
 form-validation-reportValidity.html	[INPUT in TIME status] suffering from being missing (in a form)
 form-validation-reportValidity.html	[INPUT in URL status] no constraint
@@ -940,6 +1148,12 @@ form-validation-reportValidity.html	[INPUT in URL status] suffering from being m
 form-validation-reportValidity.html	[INPUT in URL status] suffering from being missing (in a form)
 form-validation-reportValidity.html	[INPUT in WEEK status] no constraint
 form-validation-reportValidity.html	[INPUT in WEEK status] no constraint (in a form)
+form-validation-reportValidity.html	[INPUT in WEEK status] suffering from a step mismatch
+form-validation-reportValidity.html	[INPUT in WEEK status] suffering from a step mismatch (in a form)
+form-validation-reportValidity.html	[INPUT in WEEK status] suffering from an overflow
+form-validation-reportValidity.html	[INPUT in WEEK status] suffering from an overflow (in a form)
+form-validation-reportValidity.html	[INPUT in WEEK status] suffering from an underflow
+form-validation-reportValidity.html	[INPUT in WEEK status] suffering from an underflow (in a form)
 form-validation-reportValidity.html	[INPUT in WEEK status] suffering from being missing
 form-validation-reportValidity.html	[INPUT in WEEK status] suffering from being missing (in a form)
 form-validation-reportValidity.html	[select]  no constraint
@@ -1066,6 +1280,8 @@ form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in MONTH status] Th
 form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in MONTH status] The max attribute is greater than value attribute
 form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in MONTH status] The max attribute is not set
 form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in MONTH status] The value attribute is an invalid month string
+form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in MONTH status] The value attribute is greater than max attribute
+form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in MONTH status] The value attribute is greater than max attribute(Year is 10000 should be valid)
 form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in MONTH status] The value is an invalid month string(month is greater than 12)
 form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in MONTH status] The value is an invalid month string(year is three digits)
 form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in MONTH status] Value is empty string
@@ -1074,6 +1290,8 @@ form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in WEEK status] The
 form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in WEEK status] The max attribute is not set
 form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in WEEK status] The value attribute is an invalid week string
 form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in WEEK status] The value attribute is an invalid week string(w is in lowercase)
+form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in WEEK status] The value attribute is greater than max attribute
+form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in WEEK status] The value attribute is greater than max attribute(Year is 10000 should be valid)
 form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in WEEK status] The value is an invalid week string(week is too greater)
 form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in WEEK status] The value is an invalid week string(year is three digits)
 form-validation-validity-rangeOverflow-weekmonth.html	[INPUT in WEEK status] Value is empty string
@@ -1081,6 +1299,8 @@ form-validation-validity-rangeOverflow.html	[INPUT in DATE status] The max attri
 form-validation-validity-rangeOverflow.html	[INPUT in DATE status] The max attribute is greater than value attribute
 form-validation-validity-rangeOverflow.html	[INPUT in DATE status] The max attribute is not set
 form-validation-validity-rangeOverflow.html	[INPUT in DATE status] The value attribute is an invalid date
+form-validation-validity-rangeOverflow.html	[INPUT in DATE status] The value attribute is greater than max attribute
+form-validation-validity-rangeOverflow.html	[INPUT in DATE status] The value attribute is greater than max attribute(Year is 10000 should be valid)
 form-validation-validity-rangeOverflow.html	[INPUT in DATE status] The value is an invalid date(date is greater than 29 for Feb)
 form-validation-validity-rangeOverflow.html	[INPUT in DATE status] The value is an invalid date(month is greater than 12)
 form-validation-validity-rangeOverflow.html	[INPUT in DATE status] The value is an invalid date(year is three digits)
@@ -1090,11 +1310,20 @@ form-validation-validity-rangeOverflow.html	[INPUT in DATETIME-LOCAL status] The
 form-validation-validity-rangeOverflow.html	[INPUT in DATETIME-LOCAL status] The max attribute is not set
 form-validation-validity-rangeOverflow.html	[INPUT in DATETIME-LOCAL status] The value if an invalid local date time string(year is two digits)
 form-validation-validity-rangeOverflow.html	[INPUT in DATETIME-LOCAL status] The value is an invalid local date time string(hour is greater than 23)
+form-validation-validity-rangeOverflow.html	[INPUT in DATETIME-LOCAL status] The value is greater than max
+form-validation-validity-rangeOverflow.html	[INPUT in DATETIME-LOCAL status] The value is greater than max(Year is 10000 should be valid)
+form-validation-validity-rangeOverflow.html	[INPUT in DATETIME-LOCAL status] The value is greater than max(with millisecond in 1 digit)
+form-validation-validity-rangeOverflow.html	[INPUT in DATETIME-LOCAL status] The value is greater than max(with millisecond in 2 digits)
+form-validation-validity-rangeOverflow.html	[INPUT in DATETIME-LOCAL status] The value is greater than max(with millisecond in 3 digits)
 form-validation-validity-rangeOverflow.html	[INPUT in DATETIME-LOCAL status] Value is empty string
 form-validation-validity-rangeOverflow.html	[INPUT in NUMBER status] The max attribute is not set
 form-validation-validity-rangeOverflow.html	[INPUT in NUMBER status] The max equals to value
 form-validation-validity-rangeOverflow.html	[INPUT in NUMBER status] The max is greater than value(floating number)
 form-validation-validity-rangeOverflow.html	[INPUT in NUMBER status] The max is greater than value(integer)
+form-validation-validity-rangeOverflow.html	[INPUT in NUMBER status] The value is greater than max(floating number)
+form-validation-validity-rangeOverflow.html	[INPUT in NUMBER status] The value is greater than max(integer)
+form-validation-validity-rangeOverflow.html	[INPUT in NUMBER status] The value is greater than max(scientific notation)
+form-validation-validity-rangeOverflow.html	[INPUT in NUMBER status] The value is greater than max(special floating number)
 form-validation-validity-rangeOverflow.html	[INPUT in NUMBER status] The value is not a number
 form-validation-validity-rangeOverflow.html	[INPUT in NUMBER status] Value is empty string
 form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The max attribute is an invalid time string
@@ -1103,16 +1332,24 @@ form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The max attri
 form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The time is inside the accepted range for reversed range
 form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The time is max for reversed range
 form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The time is min for reversed range
+form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The time is outside the accepted range for reversed range
 form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The time missing second and minute parts is invalid
+form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The time missing second part is valid
 form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The value attribute is an invalid time string
 form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The value attribute is an invalid time string(hour is greater than 23)
 form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The value attribute is an invalid time string(minute is greater than 59)
 form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The value attribute is an invalid time string(second is greater than 59)
+form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The value attribute is greater than max attribute
+form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The value is greater than max(with millisecond in 1 digit)
+form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The value is greater than max(with millisecond in 2 digit)
+form-validation-validity-rangeOverflow.html	[INPUT in TIME status] The value is greater than max(with millisecond in 3 digit)
 form-validation-validity-rangeOverflow.html	[INPUT in TIME status] Value is empty string
 form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in MONTH status] The min attribute is an invalid month string
 form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in MONTH status] The min attribute is less than value attribute
 form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in MONTH status] The min attribute is not set
 form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in MONTH status] The value attribute is an invalid month string
+form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in MONTH status] The value attribute is less than min attribute
+form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in MONTH status] The value attribute is less than min attribute(Year is 10000 should be valid)
 form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in MONTH status] The value is an invalid month string(month is less than 12)
 form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in MONTH status] The value is an invalid month string(year is three digits)
 form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in MONTH status] Value is empty string
@@ -1121,6 +1358,8 @@ form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in WEEK status] Th
 form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in WEEK status] The min attribute is not set
 form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in WEEK status] The value attribute is an invalid week string
 form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in WEEK status] The value attribute is an invalid week string(w is in lowercase)
+form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in WEEK status] The value attribute is less than min attribute
+form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in WEEK status] The value attribute is less than min attribute(Year is 10000 should be valid)
 form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in WEEK status] The value is an invalid week string(week is too greater)
 form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in WEEK status] The value is an invalid week string(year is three digits)
 form-validation-validity-rangeUnderflow-weekmonth.html	[INPUT in WEEK status] Value is empty string
@@ -1128,6 +1367,8 @@ form-validation-validity-rangeUnderflow.html	[INPUT in DATE status] The min attr
 form-validation-validity-rangeUnderflow.html	[INPUT in DATE status] The min attribute is less than value attribute
 form-validation-validity-rangeUnderflow.html	[INPUT in DATE status] The min attribute is not set
 form-validation-validity-rangeUnderflow.html	[INPUT in DATE status] The value attribute is an invalid date
+form-validation-validity-rangeUnderflow.html	[INPUT in DATE status] The value attribute is less than min attribute
+form-validation-validity-rangeUnderflow.html	[INPUT in DATE status] The value attribute is less than min attribute(Year is 10000 should be valid)
 form-validation-validity-rangeUnderflow.html	[INPUT in DATE status] The value is an invalid date(date is less than 29 for Feb)
 form-validation-validity-rangeUnderflow.html	[INPUT in DATE status] The value is an invalid date(month is less than 12)
 form-validation-validity-rangeUnderflow.html	[INPUT in DATE status] The value is an invalid date(year is three digits)
@@ -1138,11 +1379,20 @@ form-validation-validity-rangeUnderflow.html	[INPUT in DATETIME-LOCAL status] Th
 form-validation-validity-rangeUnderflow.html	[INPUT in DATETIME-LOCAL status] The value is an invalid local date time string(hour is greater than 23)
 form-validation-validity-rangeUnderflow.html	[INPUT in DATETIME-LOCAL status] The value is an invalid local date time string(year is two digits)
 form-validation-validity-rangeUnderflow.html	[INPUT in DATETIME-LOCAL status] The value is greater than max
+form-validation-validity-rangeUnderflow.html	[INPUT in DATETIME-LOCAL status] The value is less than min
+form-validation-validity-rangeUnderflow.html	[INPUT in DATETIME-LOCAL status] The value is less than min(Year is 10000 should be valid)
+form-validation-validity-rangeUnderflow.html	[INPUT in DATETIME-LOCAL status] The value is less than min(with millisecond in 1 digit)
+form-validation-validity-rangeUnderflow.html	[INPUT in DATETIME-LOCAL status] The value is less than min(with millisecond in 2 digits)
+form-validation-validity-rangeUnderflow.html	[INPUT in DATETIME-LOCAL status] The value is less than min(with millisecond in 3 digits)
 form-validation-validity-rangeUnderflow.html	[INPUT in DATETIME-LOCAL status] Value is empty string
 form-validation-validity-rangeUnderflow.html	[INPUT in NUMBER status] The min attribute is not set
 form-validation-validity-rangeUnderflow.html	[INPUT in NUMBER status] The min equals to value
 form-validation-validity-rangeUnderflow.html	[INPUT in NUMBER status] The min is less than value(floating number)
 form-validation-validity-rangeUnderflow.html	[INPUT in NUMBER status] The min is less than value(integer)
+form-validation-validity-rangeUnderflow.html	[INPUT in NUMBER status] The value is less than min(floating number)
+form-validation-validity-rangeUnderflow.html	[INPUT in NUMBER status] The value is less than min(integer)
+form-validation-validity-rangeUnderflow.html	[INPUT in NUMBER status] The value is less than min(scientific notation)
+form-validation-validity-rangeUnderflow.html	[INPUT in NUMBER status] The value is less than min(special floating number)
 form-validation-validity-rangeUnderflow.html	[INPUT in NUMBER status] The value is not a number
 form-validation-validity-rangeUnderflow.html	[INPUT in NUMBER status] Value is empty string
 form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] The min attribute is an invalid time string
@@ -1151,29 +1401,43 @@ form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] The min attr
 form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] The time is inside the accepted range for reversed range
 form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] The time is max for reversed range
 form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] The time is min for reversed range
+form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] The time is outside the accepted range for reversed range
 form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] The time missing second and minute parts is invalid
+form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] The time missing second part is valid
 form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] The value attribute is an invalid time string
+form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] The value attribute is less than min attribute
+form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] The value is less than min(with millisecond in 1 digit)
+form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] The value is less than min(with millisecond in 2 digit)
+form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] The value is less than min(with millisecond in 3 digit)
 form-validation-validity-rangeUnderflow.html	[INPUT in TIME status] Value is empty string
 form-validation-validity-stepMismatch.html	[INPUT in DATE status] The step attribute is not set
 form-validation-validity-stepMismatch.html	[INPUT in DATE status] The value attibute is empty string
 form-validation-validity-stepMismatch.html	[INPUT in DATE status] The value must match the step
+form-validation-validity-stepMismatch.html	[INPUT in DATE status] The value must mismatch the step
 form-validation-validity-stepMismatch.html	[INPUT in DATETIME-LOCAL status] The step attribute is not set
 form-validation-validity-stepMismatch.html	[INPUT in DATETIME-LOCAL status] The value attibute is empty string
 form-validation-validity-stepMismatch.html	[INPUT in DATETIME-LOCAL status] The value must match the step
+form-validation-validity-stepMismatch.html	[INPUT in DATETIME-LOCAL status] The value must mismatch the step
 form-validation-validity-stepMismatch.html	[INPUT in MONTH status] The step attribute is not set
 form-validation-validity-stepMismatch.html	[INPUT in MONTH status] The value attibute is empty string
 form-validation-validity-stepMismatch.html	[INPUT in MONTH status] The value must match the step
+form-validation-validity-stepMismatch.html	[INPUT in MONTH status] The value must mismatch the step
 form-validation-validity-stepMismatch.html	[INPUT in NUMBER status] No step mismatch when step is a floating number and value is its integral multiple
 form-validation-validity-stepMismatch.html	[INPUT in NUMBER status] No step mismatch when step is a floating number in exponent format and value is its integral multiple
+form-validation-validity-stepMismatch.html	[INPUT in NUMBER status] Step mismatch when step is a very small floating number and value is not its integral multiple
 form-validation-validity-stepMismatch.html	[INPUT in NUMBER status] The step attribute is not set
+form-validation-validity-stepMismatch.html	[INPUT in NUMBER status] The step attribute is not set and the value attribute is a floating number
 form-validation-validity-stepMismatch.html	[INPUT in NUMBER status] The value attribute is empty string
 form-validation-validity-stepMismatch.html	[INPUT in NUMBER status] The value must match the step
+form-validation-validity-stepMismatch.html	[INPUT in NUMBER status] The value must mismatch the step
 form-validation-validity-stepMismatch.html	[INPUT in TIME status] The step attribute is not set
 form-validation-validity-stepMismatch.html	[INPUT in TIME status] The value attibute is empty string
 form-validation-validity-stepMismatch.html	[INPUT in TIME status] The value must match the step
+form-validation-validity-stepMismatch.html	[INPUT in TIME status] The value must mismatch the step
 form-validation-validity-stepMismatch.html	[INPUT in WEEK status] The step attribute is not set
 form-validation-validity-stepMismatch.html	[INPUT in WEEK status] The value attibute is empty string
 form-validation-validity-stepMismatch.html	[INPUT in WEEK status] The value must match the step
+form-validation-validity-stepMismatch.html	[INPUT in WEEK status] The value must mismatch the step
 form-validation-validity-textarea-defaultValue.html	Setting textarea.defaultValue should not trigger validation
 form-validation-validity-tooLong.html	[INPUT in EMAIL status] Dirty value - length of value is greater than maxlength
 form-validation-validity-tooLong.html	[INPUT in EMAIL status] Dirty value - length of value(AAA) in unicode is less than maxlength
@@ -1312,15 +1576,30 @@ form-validation-validity-typeMismatch.html	[INPUT in URL status] The value is a 
 form-validation-validity-typeMismatch.html	[INPUT in URL status] The value is a valid url with some white spaces.
 form-validation-validity-typeMismatch.html	[INPUT in URL status] The value is empty
 form-validation-validity-typeMismatch.html	[INPUT in URL status] The value is not an url
+form-validation-validity-valid-weekmonth.html	[INPUT in MONTH status] validity.valid must be false if validity.rangeOverflow is true
+form-validation-validity-valid-weekmonth.html	[INPUT in MONTH status] validity.valid must be false if validity.rangeUnderflow is true
+form-validation-validity-valid-weekmonth.html	[INPUT in MONTH status] validity.valid must be false if validity.stepMismatch is true
 form-validation-validity-valid-weekmonth.html	[INPUT in MONTH status] validity.valid must be false if validity.valueMissing is true
+form-validation-validity-valid-weekmonth.html	[INPUT in WEEK status] validity.valid must be false if validity.rangeOverflow is true
+form-validation-validity-valid-weekmonth.html	[INPUT in WEEK status] validity.valid must be false if validity.rangeUnderflow is true
+form-validation-validity-valid-weekmonth.html	[INPUT in WEEK status] validity.valid must be false if validity.stepMismatch is true
 form-validation-validity-valid-weekmonth.html	[INPUT in WEEK status] validity.valid must be false if validity.valueMissing is true
 form-validation-validity-valid.html	[INPUT in CHECKBOX status] validity.valid must be false if validity.valueMissing is true
+form-validation-validity-valid.html	[INPUT in DATE status] validity.valid must be false if validity.rangeOverflow is true
+form-validation-validity-valid.html	[INPUT in DATE status] validity.valid must be false if validity.rangeUnderflow is true
+form-validation-validity-valid.html	[INPUT in DATE status] validity.valid must be false if validity.stepMismatch is true
 form-validation-validity-valid.html	[INPUT in DATE status] validity.valid must be false if validity.valueMissing is true
+form-validation-validity-valid.html	[INPUT in DATETIME-LOCAL status] validity.valid must be false if validity.rangeOverflow is true
+form-validation-validity-valid.html	[INPUT in DATETIME-LOCAL status] validity.valid must be false if validity.rangeUnderflow is true
+form-validation-validity-valid.html	[INPUT in DATETIME-LOCAL status] validity.valid must be false if validity.stepMismatch is true
 form-validation-validity-valid.html	[INPUT in DATETIME-LOCAL status] validity.valid must be false if validity.valueMissing is true
 form-validation-validity-valid.html	[INPUT in EMAIL status] validity.valid must be false if validity.patternMismatch is true
 form-validation-validity-valid.html	[INPUT in EMAIL status] validity.valid must be false if validity.typeMismatch is true
 form-validation-validity-valid.html	[INPUT in EMAIL status] validity.valid must be false if validity.valueMissing is true
 form-validation-validity-valid.html	[INPUT in FILE status] validity.valid must be false if validity.valueMissing is true
+form-validation-validity-valid.html	[INPUT in NUMBER status] validity.valid must be false if validity.rangeOverflow is true
+form-validation-validity-valid.html	[INPUT in NUMBER status] validity.valid must be false if validity.rangeUnderflow is true
+form-validation-validity-valid.html	[INPUT in NUMBER status] validity.valid must be false if validity.stepMismatch is true
 form-validation-validity-valid.html	[INPUT in NUMBER status] validity.valid must be false if validity.valueMissing is true
 form-validation-validity-valid.html	[INPUT in PASSWORD status] validity.valid must be false if validity.patternMismatch is true
 form-validation-validity-valid.html	[INPUT in PASSWORD status] validity.valid must be false if validity.valueMissing is true
@@ -1331,6 +1610,9 @@ form-validation-validity-valid.html	[INPUT in TEL status] validity.valid must be
 form-validation-validity-valid.html	[INPUT in TEL status] validity.valid must be false if validity.valueMissing is true
 form-validation-validity-valid.html	[INPUT in TEXT status] validity.valid must be false if validity.patternMismatch is true
 form-validation-validity-valid.html	[INPUT in TEXT status] validity.valid must be false if validity.valueMissing is true
+form-validation-validity-valid.html	[INPUT in TIME status] validity.valid must be false if validity.rangeOverflow is true
+form-validation-validity-valid.html	[INPUT in TIME status] validity.valid must be false if validity.rangeUnderflow is true
+form-validation-validity-valid.html	[INPUT in TIME status] validity.valid must be false if validity.stepMismatch is true
 form-validation-validity-valid.html	[INPUT in TIME status] validity.valid must be false if validity.valueMissing is true
 form-validation-validity-valid.html	[INPUT in URL status] validity.valid must be false if validity.patternMismatch is true
 form-validation-validity-valid.html	[INPUT in URL status] validity.valid must be false if validity.typeMismatch is true

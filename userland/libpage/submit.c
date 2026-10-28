@@ -389,6 +389,64 @@ static bool pattern_mismatch(const os64_html_node_t *n, os64_page_input_t input,
     }
 }
 
+// rangeUnderflow, rangeOverflow and stepMismatch (HTML's min, max and step
+// attributes), for the types they apply to, read as numbers (value.c's
+// p_input_number): a value below a min that converts, above a max that
+// does, or off the grid its step draws from its step base. A range's min
+// and max default to 0 and 100, and its max is never below its min. A time
+// whose max is below its min wraps
+// past midnight, and is out of range only between the two. `step=any`
+// draws no grid; a step that is no positive number is the type's default.
+static uint32_t range_flags(const os64_html_node_t *n, os64_page_input_t input, const char *value, size_t len)
+{
+    double number = 0;
+    if (len == 0 || !p_input_number(input, value, &number))
+        return 0;
+    uint32_t flags = 0;
+    double min = 0, max = 0;
+    bool min_spelled = p_input_number(input, p_attr(n, "min"), &min);
+    bool has_min = min_spelled, has_max = p_input_number(input, p_attr(n, "max"), &max);
+    if (input == OS64_PAGE_INPUT_RANGE) {
+        if (!has_min) { min = 0; has_min = true; }
+        if (!has_max) { max = 100; has_max = true; }
+        // A max below the min is the min, as Blink makes it: the
+        // sanitizer puts the value at the min, which no slider can move
+        // below, so judging it above the max refused every submission. Nor
+        // is that pinned value snapped to a step, so no step judges it.
+        if (max < min) {
+            max = min;
+            return flags;
+        }
+    }
+    if (input == OS64_PAGE_INPUT_TIME && has_min && has_max && max < min) {
+        if (number < min && number > max)
+            flags |= OS64_PAGE_VALIDITY_UNDERFLOW | OS64_PAGE_VALIDITY_OVERFLOW;
+    } else {
+        if (has_min && number < min)
+            flags |= OS64_PAGE_VALIDITY_UNDERFLOW;
+        if (has_max && number > max)
+            flags |= OS64_PAGE_VALIDITY_OVERFLOW;
+    }
+    const char *step_text = p_attr(n, "step");
+    if (step_text != NULL && os64_streq_nocase(step_text, "any"))
+        return flags;
+    double step = 0, base = 0, fallback = 1;
+    uint32_t scale = 1;
+    p_input_step(input, &fallback, &scale, &base);
+    if (!p_number_parse(step_text, false, &step) || step <= 0)
+        step = fallback;
+    // The step base: the min attribute's number, else the value
+    // attribute's, else the type's default.
+    double from = 0;
+    if (min_spelled)
+        base = min;
+    else if (p_input_number(input, p_attr(n, "value"), &from))
+        base = from;
+    if (!p_step_aligned(number, base, step, scale, input == OS64_PAGE_INPUT_RANGE))
+        flags |= OS64_PAGE_VALIDITY_STEP;
+    return flags;
+}
+
 // THE JUDGE: every flag a control's validity has (ValidityState, § 4.10.20.3),
 // for a node of the kinds the value verbs take, given its value and its
 // radio group's answer — which the model has from its chains and a node
@@ -457,7 +515,7 @@ static uint32_t judge(os64_page_state_t *state, const os64_html_node_t *n, os64_
     // value (state.c's unparsed), and a change of type clears it.
     if (p_node_bad_input(state, n))
         flags |= OS64_PAGE_VALIDITY_BAD_INPUT;
-    return flags;
+    return flags | range_flags(n, input, value, len);
 }
 
 bool p_validate(const os64_page_t *page, int32_t form, int32_t *control)
@@ -589,6 +647,32 @@ int64_t os64_page_node_validation_message(os64_page_state_t *state, const os64_h
     } else if (flags & OS64_PAGE_VALIDITY_TOO_SHORT) {
         (void)p_nonnegative(p_attr(node, "minlength"), &limit);
         os64_snprintf(out, cap, "Please lengthen this text to %llu characters or more.", (unsigned long long)limit);
+    } else if (flags & (OS64_PAGE_VALIDITY_UNDERFLOW | OS64_PAGE_VALIDITY_OVERFLOW)) {
+        // A date's or a time's bound as the page wrote it, which converted
+        // only as a valid value; a number's as the number it was read as,
+        // which the lenient rules read from "5px" too.
+        const char *min = p_attr(node, "min"), *max = p_attr(node, "max");
+        bool numeric = input == OS64_PAGE_INPUT_NUMBER || input == OS64_PAGE_INPUT_RANGE;
+        char min_text[32], max_text[32];
+        double bound = 0;
+        if (numeric) {
+            p_number_spell(p_input_number(input, min, &bound) ? bound : 0, min_text);
+            p_number_spell(p_input_number(input, max, &bound) ? bound : 100, max_text);
+            min = min_text;
+            max = max_text;
+        }
+        if (min == NULL) min = "";
+        if (max == NULL) max = "";
+        if (input == OS64_PAGE_INPUT_TIME && (flags & OS64_PAGE_VALIDITY_UNDERFLOW) &&
+            (flags & OS64_PAGE_VALIDITY_OVERFLOW))
+            // A time whose max is below its min: either side of midnight.
+            os64_snprintf(out, cap, "Value must be %s or later, or %s or earlier.", min, max);
+        else if (flags & OS64_PAGE_VALIDITY_UNDERFLOW)
+            os64_snprintf(out, cap, numeric ? "Value must be greater than or equal to %s." : "Value must be %s or later.",
+                          min);
+        else
+            os64_snprintf(out, cap, numeric ? "Value must be less than or equal to %s." : "Value must be %s or earlier.",
+                          max);
     } else if (flags & OS64_PAGE_VALIDITY_BAD_INPUT) {
         os64_strcopy(out, cap,
                      input == OS64_PAGE_INPUT_NUMBER ? "Please enter a number." : "Please enter a valid value.");

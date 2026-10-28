@@ -4259,6 +4259,61 @@ with no `validity` it threw on every press.
   sentence). `tools/test_yonder_loop_mutants.py`'s two that this moved are
   re-anchored, and caught.
 
+### 0f's P4b, as built — 2026-10-28
+
+P4's second PR: `rangeUnderflow`, `rangeOverflow` and `stepMismatch`,
+which P4a left reading false.
+
+- **Each type read as a number** (libpage `value.c`'s `p_input_number`,
+  HTML's "convert a string to a number", which `valueAsNumber` can share):
+  a number and a range as themselves; a date as milliseconds since
+  1970-01-01, a month as months since January 1970, a week as its
+  Monday's milliseconds, a time as milliseconds since midnight, a local
+  date and time as both. The year is read whole, not as the residue the
+  syntax check keeps, through 275760, where a Date's range ends and a
+  double still holds every millisecond (a later year the sanitizer keeps
+  is judged by nothing: DEBTS.md). A number's and a range's strings are read by HTML's lenient
+  rules for floating-point values, as range.c's sanitizer reads min, max
+  and step: a stricter judge put a range's own value off its grid.
+- **The flags** (`submit.c`'s `range_flags`, the judge's, so a
+  submission's validation obeys them too): below a min that converts,
+  above a max that does (a range's default to 0 and 100, and a range's max
+  below its min taken as its min, as Blink takes it, since the value
+  sits at the min and no slider moves it lower); a time whose max
+  is below its min wraps past midnight and is out of range only between
+  the two. The step draws a grid from its base (the min, else the value
+  attribute, else the type's default, a week's the Monday 1969-12-29),
+  each type's scale and default step applied, `any` drawing none; whether
+  a value is on it is judged in exact decimal, the scale multiplied there
+  too (`range.c`'s arithmetic, `p_step_aligned`), as `step=1e-12` against
+  `-12345678.9` and a time's `step=16.1` need. A range's value, which its
+  sanitizer chose on the grid and held as the nearest double, is on the
+  grid when it is that double (a step of seventeen digits, or one finer
+  than the value's precision, puts the point between doubles); a number a
+  script or a person gave is judged as given, as WPT's `step=3e-15`
+  against 17 asks. No step judges a range pinned at its min. A bound's time fraction is read at
+  any length, its first three digits kept.
+- **The sentences**: "Value must be greater than or equal to 2." for a
+  number, "Value must be 2000-01-02 or later." for a date: a date's bound
+  as the page wrote it, a number's as the number it was read as ("5px"
+  says 5); and "Value must be 22:00 or later, or 02:00 or earlier." for a
+  time whose range wraps, which no other type does.
+
+**Numbers.** WPT: `constraints` +140, all `[required]`, 895 of 921; what
+fails is `:invalid`, an element in no namespace, `object`, `execCommand`,
+`getClientRects` and named access. Nothing new or lost in P3's and P4a's
+other directories; with the switch off no required line passes. Hosts, 0
+failed: libpage 254,277 (42 range and step cases across the types); DOM
+17,810 and 115,923. Mutants (`tools/test_interfaces_mutants.py`, its P4b
+group): 21, each caught — a date's, a month's, a week's and a time
+fraction's conversion, the year's bound, a number read leniently, a
+week's step base, a time's wrap and its sentence (and a date's that does
+not wrap), `step=any`, the step base from the min and from the value
+attribute, the exact remainder and the scale multiplied exactly, a
+range's max below its min and its pinned value's step, a range's grid
+point held as a double and only a range's, a bound's long time fraction,
+and a number's bound as read.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.

@@ -979,9 +979,94 @@ static void state_validity(void)
     os64_html_document_free(doc);
 }
 
+/* 0f's P4b: min, max and step, over each type read as a number. Each case
+ * is one input, judged with its flags. */
+static void state_validity_range(void)
+{
+    static const struct { const char *html, *value; uint32_t want; const char *message; } cases[] = {
+        {"<input type=number min=2>", "1", OS64_PAGE_VALIDITY_UNDERFLOW, "Value must be greater than or equal to 2."},
+        {"<input type=number max=2>", "3", OS64_PAGE_VALIDITY_OVERFLOW, "Value must be less than or equal to 2."},
+        {"<input type=number>", "-.8", OS64_PAGE_VALIDITY_STEP, "Please enter a valid value."},
+        {"<input type=number step=0.003>", "3.6", 0, ""},
+        {"<input type=number step=1e-12>", "-12345678.9", 0, ""},
+        {"<input type=number step=3e-15>", "17", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=number step=any>", "0.5", 0, ""},
+        {"<input type=number step=0>", "0.5", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=number min=0.5 step=1>", "1.5", 0, ""},
+        /* a min that does not convert: the value attribute is the base */
+        {"<input type=number step=2 value=3 min=nope>", NULL, 0, NULL},
+        /* a range's max below its min is its min: the value it is put at is valid */
+        {"<input type=range value=50 min=60 max=40>", NULL, 0, NULL},
+        {"<input type=date min=2000-01-02>", "2000-01-01", OS64_PAGE_VALIDITY_UNDERFLOW,
+         "Value must be 2000-01-02 or later."},
+        {"<input type=date max=275760-09-13>", "2000-01-01", 0, ""},
+        {"<input type=date step=2>", "1970-01-02", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=date step=2>", "1970-01-03", 0, NULL},
+        {"<input type=month step=2>", "1970-04", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=month max=2000-01>", "2000-02", OS64_PAGE_VALIDITY_OVERFLOW, "Value must be 2000-01 or earlier."},
+        {"<input type=week step=2>", "1970-W04", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=week step=2>", "1970-W03", 0, NULL},
+        {"<input type=week min=2009-W53>", "2010-W01", 0, NULL},
+        {"<input type=week min=2010-W01>", "2009-W53", OS64_PAGE_VALIDITY_UNDERFLOW, NULL},
+        {"<input type=time step=120>", "12:03", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=time step=0.001>", "12:00:00.001", 0, NULL},
+        {"<input type=time step=0.5>", "12:00:00.5", 0, NULL},
+        /* the scale multiplied in decimal: 16.1 s is 16100 ms exactly */
+        {"<input type=time step=16.1>", "00:00:16.1", 0, NULL},
+        {"<input type=datetime-local step=1.001>", "1970-01-01T00:00:01.001", 0, NULL},
+        {"<input type=week step=1e300>", "1970-W01", 0, NULL},
+        /* min, max and the base read as the sanitizer reads them */
+        {"<input type=range min='10 ' step=3>", NULL, 0, NULL},
+        {"<input type=number min='+10'>", "5", OS64_PAGE_VALIDITY_UNDERFLOW, NULL},
+        /* a year past a Date's does not convert (DEBTS.md § libpage) */
+        {"<input type=date max=2030-12-31>", "300000-01-01", 0, NULL},
+        {"<input type=range min=150 max=abc>", NULL, 0, NULL},
+        /* the value a range's sanitizer chose, a grid point held as the
+         * nearest double, is on the grid: a step finer than the value's
+         * precision, and a step of seventeen digits */
+        {"<input type=range step=0.12345678901234567>", NULL, 0, NULL},
+        {"<input type=range min=0 max=1e17 step=0.3>", NULL, 0, NULL},
+        /* a range pinned at its min is snapped to no step, nor judged by one */
+        {"<input type=range max=-10 value=0.5>", NULL, 0, NULL},
+        /* a bound's fraction of any length, its first three digits kept */
+        {"<input type=time min=09:00:00.0000>", "08:00", OS64_PAGE_VALIDITY_UNDERFLOW, NULL},
+        /* a number's bound said as the number it was read as */
+        {"<input type=number min=5px>", "1", OS64_PAGE_VALIDITY_UNDERFLOW, "Value must be greater than or equal to 5."},
+        /* a date whose max is below its min does not wrap: one bound is said */
+        {"<input type=date min=2020-01-01 max=2019-01-01>", "2019-06-01",
+         OS64_PAGE_VALIDITY_UNDERFLOW | OS64_PAGE_VALIDITY_OVERFLOW, "Value must be 2020-01-01 or later."},
+        {"<input type=time min=22:00 max=02:00>", "23:00", 0, NULL},
+        {"<input type=time min=22:00 max=02:00>", "12:00",
+         OS64_PAGE_VALIDITY_UNDERFLOW | OS64_PAGE_VALIDITY_OVERFLOW,
+         "Value must be 22:00 or later, or 02:00 or earlier."},
+        {"<input type=datetime-local step=120>", "1970-01-01T12:03", OS64_PAGE_VALIDITY_STEP, NULL},
+        {"<input type=datetime-local min=2000-01-01T00:00>", "1999-12-31T23:59", OS64_PAGE_VALIDITY_UNDERFLOW, NULL},
+        {"<input type=text min=5>", "1", 0, NULL},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        char name[160];
+        snprintf(name, sizeof(name), "validity range: %s", cases[i].html);
+        os64_html_document_t *doc = parse(cases[i].html, "utf-8");
+        os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+        if (cases[i].value != NULL)
+            os64_page_node_set_value(os64_page_shared_state(page), os64_page_control(page, 0)->node, cases[i].value,
+                                     strlen(cases[i].value));
+        uint32_t got = validity_of(page, 0, NULL);
+        if (got != cases[i].want)
+            fprintf(stderr, "%s: flags %#x, wanted %#x\n", name, got, cases[i].want);
+        bool said = cases[i].message == NULL || strcmp(validity_message(page, 0), cases[i].message) == 0;
+        if (!said)
+            fprintf(stderr, "%s: said '%s'\n", name, validity_message(page, 0));
+        state_expect(name, got == cases[i].want && said);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
+}
+
 static void state_cases(void)
 {
     state_validity();
+    state_validity_range();
     state_option_labels();
     state_scale();
     state_taken_away();

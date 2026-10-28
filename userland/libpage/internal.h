@@ -319,6 +319,26 @@ size_t p_number_spell(double value, char out[32]);
 long double p_number_mod(long double x, long double y);
 const char *p_range_value(PArena *arena, const os64_html_node_t *node,
                           const char *raw, size_t *len);
+// HTML's "convert a string to a number" for the types min, max and step
+// apply to (number, range, the dates and times; value.c): false for any
+// other type, and for a string that does not convert — which is not the
+// same as no valid value: a number's or range's string is read by the
+// lenient floating-point rules ("10 " and "5px" convert), and a date or
+// time whose year is past 275760 does not, valid or not. A date
+// is milliseconds since 1970-01-01T00:00Z, a month months since January
+// 1970, a week the milliseconds of its Monday, a time milliseconds since
+// midnight, a local date and time milliseconds since the epoch as though
+// it were UTC.
+bool p_input_number(os64_page_input_t input, const char *s, double *out);
+// The type's default step, step scale factor and default step base.
+void p_input_step(os64_page_input_t input, double *step, uint32_t *scale, double *base);
+// Whether `value` is `base` plus a whole number of `step` times `scale`,
+// in decimal over each double's shortest spelling (range.c's arithmetic),
+// the scale multiplied there too; or, when `held` (a range's value, which
+// its sanitizer chose on the grid), is the double nearest such a grid
+// point, as the sanitizer holds the point it chooses: what stepMismatch
+// asks.
+bool p_step_aligned(double value, double base, double step, uint32_t scale, bool held);
 os64_page_input_t p_input_type(const os64_html_node_t *n);
 // Shared by initial values and edits; temporary storage belongs to arena.
 // raw_len is authoritative; raw also has a terminator at that offset.
