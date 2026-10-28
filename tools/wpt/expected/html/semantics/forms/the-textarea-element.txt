@@ -33,6 +33,11 @@ wrapping-transformation.window.html	Textarea wrapping transformation: wrapping r
 wrapping-transformation.window.html	Textarea wrapping transformation: wrapping round-trips: Some text that is too long for the specified character width.
 wrapping-transformation.window.html	Textarea wrapping transformation: wrapping round-trips: Some text that is too long for the\n\n\nspecified character width.
 wrapping-transformation.window.html	Textarea wrapping transformation: wrapping round-trips: exact  len
+# 0f's P4a (MODERN_WEB.md § 0f's P4a, as built): constraint validation. Each
+# fails with the switch off; the passes not listed pass either way.
+textarea-setcustomvalidity.html	textarea setCustomValidity is correct
+textarea-validity-clone.html	<textarea> validity state should be preserved after a clone
+textarea-validity-valueMissing-inside-datalist.html	textarea element with "required" attribute and empty value is considered "suffering from being missing" even if inside datalist element
 [excluded]
 [passing]
 cloning-steps.html	textarea element's dirty value flag should be cloned, so setAttribute doesn't affect the cloned textarea's value
@@ -48,8 +53,11 @@ textarea-minlength.html	Negative minlength is always -1
 textarea-minlength.html	Non-numeric minlength is -1
 textarea-minlength.html	Unset minlength is -1
 textarea-placeholder-lineheight.html	ComputedStyle line-height for textarea must be the same as set value
+textarea-setcustomvalidity.html	textarea setCustomValidity is correct
 textarea-textLength.html	Textarea's 'testLength' should work for utf-16.
 textarea-type.html	Textarea's type attribute should return 'textarea'
+textarea-validity-clone.html	<textarea> validity state should be preserved after a clone
+textarea-validity-valueMissing-inside-datalist.html	textarea element with "required" attribute and empty value is considered "suffering from being missing" even if inside datalist element
 value-defaultValue-textContent.html	Setting defaultValue wipes out any children, including elements (just like setting textContent)
 value-defaultValue-textContent.html	defaultValue and value are affected by setting data on a child text node
 value-defaultValue-textContent.html	defaultValue and value are affected by setting nodeValue on a child text node

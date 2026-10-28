@@ -71,7 +71,8 @@ static char *modern_chain_shape(DomFixture *f)
         "document.createElement('a'),document.createElement('script'),holder.firstChild,"
         "document.createTextNode('t'),document.createComment('c'),document.createDocumentFragment(),"
         "document.doctype,document.implementation,document.implementation.createHTMLDocument('')];"
-        "var row=/(^constructor$|_NODE$|^DOCUMENT_POSITION_|^onscroll$|^onresize$|^scrollingElement$|^defaultView$"
+        "var row=/(^constructor$|_NODE$|^DOCUMENT_POSITION_|^onscroll$|^onresize$|^oninvalid$|^scrollingElement$"
+        "|^defaultView$|^(willValidate|validity|validationMessage|checkValidity|reportValidity|setCustomValidity)$"
         "|^onerror$|^getRootNode$|^wholeText$|^splitText$|^selectionStart$|^selectionEnd$|^selectionDirection$"
         "|^setSelectionRange$|^select$|^setRangeText$|^content$|^styleSheets$"
         "|^(accept|alt|autocomplete|defaultChecked|defaultValue|dirName|disabled|formAction|formEnctype|formMethod"
@@ -445,6 +446,128 @@ static void dom_modern_cases(void)
         "bad=false;try{Object.getOwnPropertyDescriptor(HTMLOutputElement.prototype,'value').get.call(L)}"
         "catch(x){bad=x instanceof TypeError}assert(bad,'the brand is checked');",
         "modern-on-forms");
+    /* 0f's P4: constraint validation. */
+    dom_script(&f, MODERN_ASSERT
+        "function el(t,a){var e=document.createElement(t);for(var k in a)e.setAttribute(k,a[k]);return e}"
+        "var i=el('input',{required:''});"
+        "assert(typeof ValidityState==='function'&&i.validity instanceof ValidityState&&i.validity===i.validity,"
+        "'one ValidityState, [SameObject]');"
+        "assert(Object.prototype.toString.call(i.validity)==='[object ValidityState]','its class string');"
+        "var bad=false;try{new ValidityState()}catch(x){bad=x instanceof TypeError}assert(bad,'no constructor');"
+        "assert(i.validity.valueMissing&&!i.validity.valid&&i.willValidate,'required and empty');"
+        "assert(i.validationMessage==='Please fill out this field.','its sentence');"
+        "i.value='x';assert(i.validity.valid&&!i.validity.valueMissing&&i.validationMessage==='','filled: the flags follow');"
+        /* the type mismatches */
+        "var m=el('input',{type:'email'});m.value='a@b.c';assert(m.validity.valid,'an address');"
+        "m.value='abc';assert(m.validity.typeMismatch,'not an address');"
+        "m.value='a\\0b@c.d';assert(m.validity.typeMismatch,'a NUL is no address character');"
+        "m.value='a@b.c,d@e.f';assert(m.validity.typeMismatch,'two need multiple');"
+        "m.multiple=true;assert(m.validity.valid,'a list');m.value='a@b.c;d@e.f';"
+        "assert(m.validity.typeMismatch,'not a list');m.value='a@-b.c';assert(m.validity.typeMismatch,'a label');"
+        "var u=el('input',{type:'url'});u.value='http://x.example';assert(u.validity.valid,'a URL');"
+        "u.value='abc';assert(u.validity.typeMismatch,'no scheme');u.value='mailto:a';"
+        "assert(u.validity.valid,'a scheme without a host');u.value='http://';assert(u.validity.typeMismatch,'no host');"
+        /* the pattern: the engine's, anchored, with v; one that does not compile is none */
+        "var p=el('input',{pattern:'[a-z]+'});p.value='abc';assert(p.validity.valid,'matches');"
+        "p.value='abc1';assert(p.validity.patternMismatch,'anchored at the end');"
+        "p.value='';assert(p.validity.valid,'an empty value is no mismatch');"
+        "p.setAttribute('pattern','http://a-b.example');p.value='http://a-b.example';"
+        "assert(p.validity.valid,'a slash and a hyphen outside a class');p.value='http://a-b.examplf';"
+        "assert(p.validity.patternMismatch,'and the pattern judged');"
+        "p.setAttribute('pattern','a)(b');p.value='zzz';assert(p.validity.valid,'one that escapes its group is none');"
+        "p.setAttribute('pattern','[');assert(p.validity.valid,'one that does not compile is none');"
+        "var pm=el('input',{type:'email',multiple:'',pattern:'[a-z]+@[a-z]+\\\\.example'});"
+        "pm.value='x@a.example,y@b.example';assert(pm.validity.valid,'an email list address by address');"
+        "pm.value='x@a.example,Y@b.example';assert(pm.validity.patternMismatch,'one address that does not match');"
+        "p.setAttribute('pattern','[\\\\p{L}--[a-z]]');p.value='A';"
+        "assert(p.validity.valid,'the v flag: a set difference');p.value='a';"
+        "assert(p.validity.patternMismatch,'and judged by it');"
+        "var hp=el('input',{type:'hidden',pattern:'x'});hp.value='y';assert(hp.validity.valid,'no pattern on hidden');"
+        /* the custom error, which barring does not clear */
+        "var c=el('input');c.setCustomValidity('Nope');"
+        "assert(c.validity.customError&&!c.validity.valid&&c.validationMessage==='Nope','a custom error');"
+        "c.disabled=true;assert(c.validity.customError&&c.validationMessage===''&&!c.willValidate&&c.checkValidity(),"
+        "'disabled: still its flag, but it counts for nothing');"
+        "c.disabled=false;c.setCustomValidity('');assert(c.validity.valid,'cleared');"
+        "var long='\\u00e9'.repeat(300);c.setCustomValidity(long);"
+        "assert(c.validationMessage===long,'a long message whole');"
+        "c.setCustomValidity('a\\0b');"
+        "assert(c.validationMessage==='a\\ufffdb','a NUL, which the binding\\'s text never holds, is U+FFFD');"
+        "c.setCustomValidity('');"
+        "c.setCustomValidity('Nope');assert(!c.cloneNode().validity.customError,'a clone does not copy it');"
+        "var fs=el('fieldset');fs.setCustomValidity('f');"
+        "assert(fs.validity.customError&&!fs.willValidate&&fs.checkValidity()&&fs.validationMessage==='',"
+        "'a fieldset has a custom error and never validates');"
+        "var o=el('output');assert(!o.willValidate&&o.validity.valid,'an output');"
+        /* willValidate */
+        "assert(!el('input',{type:'hidden'}).willValidate&&!el('input',{type:'reset'}).willValidate&&"
+        "!el('input',{type:'button'}).willValidate&&!el('button',{type:'button'}).willValidate&&"
+        "el('button').willValidate,'the types that are not fields');"
+        "assert(!el('input',{readonly:''}).willValidate&&!el('input',{type:'checkbox',readonly:''}).willValidate&&"
+        "!el('textarea',{readonly:''}).willValidate&&el('select',{readonly:''}).willValidate,"
+        "'readonly bars any input, applying or not, and a textarea; not a select');"
+        "var dl=el('datalist');var di=el('input');dl.appendChild(di);assert(!di.willValidate,'in a datalist');"
+        "var dfs=el('fieldset',{disabled:''});var lg=el('legend');var inl=el('input');var outl=el('input');"
+        "lg.appendChild(inl);dfs.appendChild(lg);dfs.appendChild(outl);"
+        "assert(inl.willValidate&&!outl.willValidate,'a disabled fieldset, but its first legend');"
+        /* what a disabled control still suffers from */
+        "var dc=el('input',{type:'checkbox',required:'',disabled:''});assert(dc.validity.valueMissing,'a tick');"
+        "var dt=el('input',{required:'',disabled:''});assert(!dt.validity.valueMissing,'a field it cannot fill');"
+        /* radios, the select's placeholder */
+        "var rf=el('form');rf.innerHTML='<input type=radio name=r required><input type=radio name=r>"
+        "<input type=radio required>';var rs=rf.querySelectorAll('input');"
+        "assert(rs[0].validity.valueMissing&&rs[1].validity.valueMissing,'the group is required');"
+        "assert(!rs[2].validity.valueMissing,'a radio with no name is in no group');"
+        "rs[1].checked=true;assert(rs[0].validity.valid&&rs[1].validity.valid,'one ticked');"
+        "var se=el('select',{required:''});se.innerHTML='<option value=\"\">Choose<option>A';"
+        "assert(se.validity.valueMissing,'the placeholder');se.selectedIndex=1;assert(se.validity.valid,'a real one');"
+        /* a value a script sets is never bad input */
+        "var n=el('input',{type:'number'});n.value='abc';assert(n.value===''&&!n.validity.badInput,'badInput');",
+        "modern-on-validity");
+    dom_script(&f, MODERN_ASSERT
+        "function el(t,a){var e=document.createElement(t);for(var k in a)e.setAttribute(k,a[k]);return e}"
+        /* checkValidity and reportValidity fire invalid: cancelable, not bubbling, trusted */
+        "var heard=[];var i=el('input',{required:''});document.body.appendChild(i);"
+        "document.body.addEventListener('invalid',function(){heard.push('bubbled')});"
+        "i.addEventListener('invalid',function(e){heard.push(e.type+e.cancelable+e.bubbles+e.isTrusted)});"
+        "assert(i.checkValidity()===false&&heard.join()==='invalidtruefalsetrue','checkValidity');"
+        "heard=[];assert(i.reportValidity()===false&&heard.length===1,'reportValidity');"
+        "i.value='x';heard=[];assert(i.checkValidity()&&i.reportValidity()&&heard.length===0,'valid: no event');"
+        /* oninvalid */
+        "var h=el('input',{required:''});var got=0;h.oninvalid=function(){got++};h.checkValidity();"
+        "assert(got===1&&'oninvalid' in window&&'oninvalid' in document,'the handler');"
+        "h.setAttribute('oninvalid','window.attrHeard=1');h.checkValidity();assert(window.attrHeard===1,'its attribute');"
+        /* a form: each invalid control it owns, in tree order, and only those */
+        "var F=el('form',{id:'vf'});document.body.appendChild(F);"
+        "F.innerHTML='<input name=a required><fieldset><input name=b required></fieldset>"
+        "<input name=c><input name=d required disabled>';"
+        "var outside=el('input',{form:'vf',required:''});document.body.appendChild(outside);"
+        "var stray=el('input',{name:'stray',required:''});document.body.appendChild(stray);"
+        "var order=[];document.addEventListener('invalid',function(e){order.push(e.target.name||'outside')},true);"
+        "assert(F.checkValidity()===false&&order.join()==='a,b,outside','the form, its owned controls in tree order');"
+        /* a listener that cancels invalid leaves nothing to report, and the form is still invalid */
+        "order=[];F.addEventListener('invalid',function(e){e.preventDefault()},true);"
+        "assert(F.reportValidity()===false&&order.length===3,'reportValidity of the form');"
+        /* requestSubmit: invalid stops the submission before submit */
+        "var sent=0;F.addEventListener('submit',function(e){sent++;e.preventDefault()});"
+        "F.requestSubmit();assert(sent===0,'invalid: no submit event');"
+        /* a submission an invalid listener asks of its own form does nothing */
+        "var nested=0;var again=function(){nested++;F.requestSubmit()};F.addEventListener('invalid',again,true);"
+        "order=[];F.requestSubmit();F.removeEventListener('invalid',again,true);"
+        "assert(nested===2&&order.length===3&&sent===0,'no submission inside its own validation');"
+        "F.noValidate=true;F.requestSubmit();assert(sent===1,'novalidate: submitted');F.noValidate=false;"
+        "var fb=el('button',{formnovalidate:''});F.appendChild(fb);F.requestSubmit(fb);"
+        "assert(sent===2,'formnovalidate: submitted');"
+        "Array.prototype.forEach.call(F.querySelectorAll('input'),function(x){x.value='v'});outside.value='v';"
+        "F.requestSubmit();assert(sent===3,'valid: submitted');"
+        "sent=0;order=[];F.elements.a.value='';F.submit();"
+        "assert(sent===0&&order.length===0,'submit() fires nothing, validates nothing');"
+        /* the brand */
+        "var bad=false;try{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'validity').get.call(el('div'))}"
+        "catch(x){bad=x instanceof TypeError}assert(bad,'the brand is checked');"
+        "bad=false;try{Object.getOwnPropertyDescriptor(ValidityState.prototype,'valid').get.call({})}"
+        "catch(x){bad=x instanceof TypeError}assert(bad,'a ValidityState is checked');",
+        "modern-on-validity-events");
     /* The select event a set queues: a task of its own, which the host runs
      * (a binding timer due at once); trusted, bubbling, not cancelable; and
      * none for a set that moves nothing. The cases before this one queued

@@ -8,7 +8,11 @@
 # phases' members among them. The passes not listed pass either way.
 mutations.window.html	Descendant mutations and output.value and .defaultValue
 output.html	output value and defaultValue
+# 0f's P4a (MODERN_WEB.md § 0f's P4a, as built): constraint validation. Each
+# fails with the switch off; the passes not listed pass either way.
+output-setcustomvalidity.html	output setCustomValidity is correct
 [excluded]
 [passing]
 mutations.window.html	Descendant mutations and output.value and .defaultValue
+output-setcustomvalidity.html	output setCustomValidity is correct
 output.html	output value and defaultValue

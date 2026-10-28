@@ -7,8 +7,22 @@
 # with the switch off, the earlier phases' interfaces among them. The passes
 # not listed here pass either way.
 button-labels.html	Forms
+# 0f's P4a (MODERN_WEB.md § 0f's P4a, as built): constraint validation. Each
+# fails with the switch off; the passes not listed pass either way.
+button-checkvalidity.html	Forms
+button-setcustomvalidity.html	button setCustomValidity is correct
+button-validation.html	button type attribute
+button-validation.html	historical menu type attribute
+button-validation.html	invalid type attribute
+button-validation.html	missing type attribute
+button-validation.html	reset type attribute
+button-validation.html	submit type attribute
+button-validationmessage.html	Forms
+button-validity.html	Forms
+button-willvalidate.html	Forms
 [excluded]
 [passing]
+button-checkvalidity.html	Forms
 button-click-resets-with-commandfor.html	clicking a button should trigger a reset (with command and commandfor attribute)
 button-click-resets-with-commandfor.html	clicking a button should trigger a reset (with commandfor attribute)
 button-click-resets-with-commandfor.html	clicking a reset button should trigger a reset (with command attribute)
@@ -25,7 +39,17 @@ button-events.html	type=button shouldn't trigger submit or reset events
 button-labels.html	Forms
 button-menu-historical.html	button.menu, the potentially-reflecting IDL attribute, does not exist
 button-menu-historical.html	button.type reflects properly
+button-setcustomvalidity.html	button setCustomValidity is correct
 button-type-enumerated-ascii-case-insensitive.html	keyword reset
 button-type-enumerated-ascii-case-insensitive.html	keyword submit
 button-type.html	a button's type should be submit by default
 button-type.html	a button's type should stay within the range of valid values
+button-validation.html	button type attribute
+button-validation.html	historical menu type attribute
+button-validation.html	invalid type attribute
+button-validation.html	missing type attribute
+button-validation.html	reset type attribute
+button-validation.html	submit type attribute
+button-validationmessage.html	Forms
+button-validity.html	Forms
+button-willvalidate.html	Forms

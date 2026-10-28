@@ -105,7 +105,7 @@ struct yonder_scripts {
     // attribute has no runtime until an event one of them names.
     uint64_t handlers_version;
     bool handlers_scanned;
-    uint32_t handlers;
+    uint64_t handlers;
     char note[256];
     // The whole address of the script the last task ran, NULL when it was
     // an inline script, an event or a timer (yonder_scripts_task_address).
@@ -1378,7 +1378,7 @@ void yonder_scripts_fetched(yonder_scripts_t *s, uint32_t token, const char *sou
 
 // Which types the document's on<type> attributes name (libdom's own walk):
 // one walk per tree version, and only while the page has no runtime.
-static uint32_t handler_types(yonder_scripts_t *s)
+static uint64_t handler_types(yonder_scripts_t *s)
 {
     uint64_t version = os64_html_version(s->doc);
     if (s->handlers_scanned && s->handlers_version == version)
@@ -1430,6 +1430,46 @@ os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *s, const os64_html_no
     if (heard)
         judged(s, out);
     return out->status;
+}
+
+bool yonder_scripts_form_validate(yonder_scripts_t *s, const os64_html_node_t *form,
+                                  const os64_html_node_t *submitter, bool *valid, os64_js_outcome_t *out)
+{
+    os64_memset(out, 0, sizeof(*out));
+    *valid = true;
+    if (s != NULL) {
+        s->task_address = NULL;
+        s->task_us = -1;
+    }
+    if (s == NULL || s->dead)
+        return false;
+    s->written = 0;
+    if (s->dom == NULL) {
+        // A page all handlers makes its runtime for an invalid handler, and
+        // for a submit handler too: HTML fires submit only at a valid form,
+        // so the page validates before that handler runs.
+        if ((handler_types(s) & (os64_dom_handler_bit("invalid") | os64_dom_handler_bit("submit"))) == 0)
+            return false;
+        if (!ensure_runtime(s, out)) {
+            retire(s);
+            return true;
+        }
+    }
+    bool ran = false;
+    os64_dom_form_validate(s->dom, form, submitter, valid, &ran, out);
+    if (ran)
+        judged(s, out);
+    return ran;
+}
+
+bool yonder_scripts_report_message(const yonder_scripts_t *s, const os64_html_node_t *node, char *out, size_t cap)
+{
+    if (s == NULL || s->dom == NULL) {
+        if (out != NULL && cap != 0)
+            out[0] = '\0';
+        return false;
+    }
+    return os64_dom_report_message(s->dom, node, out, cap);
 }
 
 bool yonder_scripts_listens(yonder_scripts_t *s, const char *type)

@@ -632,6 +632,66 @@ int64_t os64_page_node_selected_index(os64_page_state_t *state,
 // nothing changes.
 int64_t os64_page_node_indeterminate(os64_page_state_t *state, const os64_html_node_t *node, bool *on);
 int64_t os64_page_node_set_indeterminate(os64_page_state_t *state, const os64_html_node_t *node, bool on);
+// Constraint validation (HTML § 4.10.20), by node, judged from the node and
+// the live state, so a control no model holds (one a script made and never
+// attached) is judged too. One judge answers these verbs and a submission's
+// validation (os64_page_activate), which asks it control by control.
+//
+// The flags, one per ValidityState member that is not `valid`.
+// UNDERFLOW, OVERFLOW and STEP are not judged, and stay clear
+// (DEBTS.md § libpage).
+enum {
+    OS64_PAGE_VALIDITY_MISSING = 1u << 0,
+    OS64_PAGE_VALIDITY_TYPE = 1u << 1,
+    OS64_PAGE_VALIDITY_PATTERN = 1u << 2,
+    OS64_PAGE_VALIDITY_TOO_LONG = 1u << 3,
+    OS64_PAGE_VALIDITY_TOO_SHORT = 1u << 4,
+    OS64_PAGE_VALIDITY_UNDERFLOW = 1u << 5,
+    OS64_PAGE_VALIDITY_OVERFLOW = 1u << 6,
+    OS64_PAGE_VALIDITY_STEP = 1u << 7,
+    OS64_PAGE_VALIDITY_BAD_INPUT = 1u << 8,
+    OS64_PAGE_VALIDITY_CUSTOM = 1u << 9,
+};
+// HTML's pattern is a regular expression of the script engine's (§
+// 4.10.5.3.6), so the caller matches it: 1 when `value` (UTF-8, `len`
+// bytes) matches the whole of `pattern`, 0 when it does not, -1 when the
+// pattern does not compile, which HTML judges as no constraint. A NULL
+// matcher judges no pattern, as the model's own validation of a
+// submission does (os64_page_activate).
+typedef int (*os64_page_pattern_t)(void *opaque, const char *pattern, const char *value, size_t len);
+// willValidate: whether the node is a candidate for constraint validation —
+// an input, textarea, select or button not barred (a type that is not a
+// field, a button that does not submit, disabled, an input or textarea
+// with `readonly` whatever the input's type, in a datalist). False for a
+// fieldset or an output, which have
+// only a custom validity. WRONG_KIND for any other node or a foreign one.
+int64_t os64_page_node_will_validate(os64_page_state_t *state, const os64_html_node_t *node, bool *will);
+// The node's flags. A barred control has its flags still (a disabled
+// control keeps its custom error), but for valueMissing, which a field a
+// person cannot type into does not suffer; willValidate decides whether
+// they count.
+// May read the value, so NO_MEMORY as os64_page_node_value; WRONG_KIND as
+// will_validate.
+int64_t os64_page_node_validity(os64_page_state_t *state, const os64_html_node_t *node, os64_page_pattern_t matcher,
+                                void *opaque, uint32_t *flags);
+// The sentence for `flags`' first flag in ValidityState's order, or the
+// custom message when CUSTOM is among them, into `out` (cut to `cap`
+// between characters, terminated); "" for no flags. Plain ASCII apart from
+// a custom message, which is the page's own UTF-8 and may hold a NUL that
+// ends it here: os64_page_node_custom_validity has its whole bytes.
+int64_t os64_page_node_validation_message(os64_page_state_t *state, const os64_html_node_t *node, uint32_t flags,
+                                          char *out, size_t cap);
+// setCustomValidity: the node's custom message, "" for none, kept until
+// set again (a reset keeps it; a clone does not copy it). Input, textarea,
+// select, button, fieldset and output; WRONG_KIND for any other node;
+// NO_MEMORY when it cannot be kept, and then the old one stays.
+int64_t os64_page_node_set_custom_validity(os64_page_state_t *state, const os64_html_node_t *node,
+                                           const char *utf8, size_t len);
+// The custom message as it was set, all `len` bytes ("" and 0 for none),
+// borrowed until it is set again or the state is freed. WRONG_KIND as
+// will_validate.
+int64_t os64_page_node_custom_validity(os64_page_state_t *state, const os64_html_node_t *node, const char **message,
+                                       size_t *len);
 // A text control's selection (HTML § 4.10.6), by node, in UTF-16 code
 // units of its value: collapsed at 0 until something moves it; at the
 // value's end once a value that differs is set; else where a script, or
@@ -745,7 +805,21 @@ typedef struct {
 // REFUSED.
 os64_page_verdict_t os64_page_activate(const os64_page_t *page, os64_page_what_t what,
                                        os64_page_request_t *out);
+// The same for a submission the page's scripts validated before its submit
+// event (os64_dom_form_validate, or the binding's own submit): HTML
+// validates once, there, so what a submit listener changes after it cannot
+// refuse the submission, and the model does not validate it again.
+os64_page_verdict_t os64_page_activate_validated(const os64_page_t *page, os64_page_what_t what,
+                                                 os64_page_request_t *out);
 void os64_page_request_free(os64_page_request_t *request);
+// The submitter os64_page_activate would take for a button pressed or Enter
+// in a field (its own first question, asked alone): the control's index, -1
+// when the form submits itself. False when the ask would submit nothing,
+// and for any ask but those two (a form submitting itself has no
+// submitter; a link or a refresh is no submission). A host that
+// validates a person's submission before its submit event asks it, so the
+// validation knows the submission is happening and whose it is.
+bool os64_page_submitter(const os64_page_t *page, os64_page_what_t what, int32_t *submitter);
 
 #pragma GCC visibility pop
 

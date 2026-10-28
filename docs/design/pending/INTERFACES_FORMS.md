@@ -557,6 +557,11 @@ rows.
 
 (b) to 99.6% distinctive.
 
+Built in two PRs (MODERN_WEB.md § 0f's P4a, as built). **P4a**: every
+member, `invalid` and the report, and every flag but three. **P4b**:
+`rangeUnderflow`, `rangeOverflow` and `stepMismatch`, which read the date
+and time types as numbers, as P5's `valueAsNumber` does.
+
 - `ValidityState` (its 11 flags), and `willValidate`, `validity`,
   `validationMessage`, `checkValidity`, `reportValidity` and
   `setCustomValidity` on input, select, textarea, button, fieldset and

@@ -94,6 +94,10 @@ form-nameditem.html	Trying to set an expando that would shadow an already-existi
 form-requestsubmit.html	Passing a submit button not owned by the context object should throw
 form-requestsubmit.html	The constructed FormData object should not contain an entry for the submit button that was used to submit the form.
 form-requestsubmit.html	Using requestSubmit on a disabled button (via disabled attribute) should trigger submit but not be visible in FormData
+# 0f's P4a (MODERN_WEB.md § 0f's P4a, as built): constraint validation. Each
+# fails with the switch off; the passes not listed pass either way.
+form-checkvalidity.html	Forms
+form-requestsubmit.html	requestSubmit() doesn't run interactive validation reentrantly
 [excluded]
 [passing]
 form-action-reflection-with-base-url.html	A missing action content attribute should cause the IDL attribute to return the document's URL (not the document's base URL)
@@ -171,6 +175,7 @@ form-autocomplete.html	transaction-currency is an allowed autocomplete field nam
 form-autocomplete.html	url is an allowed autocomplete field name
 form-autocomplete.html	username is an allowed autocomplete field name
 form-autocomplete.html	webauthn is an allowed autocomplete field name
+form-checkvalidity.html	Forms
 form-elements-filter.html	form.elements must contain all listed elements with the form owner
 form-elements-form-owner.html	`form.elements` should update on form ID changes
 form-elements-interfaces-01.html	Testing interface HTMLCollection
@@ -208,5 +213,6 @@ form-requestsubmit.html	Passing an element which is not a submit button should t
 form-requestsubmit.html	The constructed FormData object should not contain an entry for the submit button that was used to submit the form.
 form-requestsubmit.html	Using requestSubmit on a disabled button (via disabled attribute) should trigger submit but not be visible in FormData
 form-requestsubmit.html	requestSubmit() doesn't run form submission reentrantly
+form-requestsubmit.html	requestSubmit() doesn't run interactive validation reentrantly
 form-requestsubmit.html	requestSubmit() for a disconnected form should not submit the form
 form-requestsubmit.html	requestSubmit() should accept button[type=submit], input[type=submit], and input[type=image]

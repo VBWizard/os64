@@ -314,7 +314,9 @@ static void state_byte_spans(void)
     };
     for (size_t i=0;i<sizeof(cases)/sizeof(cases[0]);i++) {
         char html[256], name[80];
-        snprintf(html,sizeof(html),"<form method=post>%s<button>Go</button></form>",cases[i].control);
+        // novalidate: these spans are judged by what is sent, and several
+        // are a typeMismatch or a person's bad input that validation stops.
+        snprintf(html,sizeof(html),"<form method=post novalidate>%s<button>Go</button></form>",cases[i].control);
         snprintf(name,sizeof(name),"byte span: case %zu",i);
         os64_html_document_t *doc=parse(html,"utf-8");
         os64_page_t *page=os64_page_build(doc,kPage,NULL, NULL);
@@ -763,8 +765,223 @@ static void state_option_labels(void)
     os64_html_document_free(doc);
 }
 
+static int validity_calls;
+static char validity_last[64];
+
+/* A matcher that says `value` matches when it equals the pattern. */
+static int validity_equal(void *opaque, const char *pattern, const char *value, size_t len)
+{
+    (void)opaque;
+    validity_calls++;
+    snprintf(validity_last, sizeof(validity_last), "%.*s", (int)len, value);
+    if (strcmp(pattern, "[") == 0)
+        return -1;
+    return strlen(pattern) == len && memcmp(pattern, value, len) == 0;
+}
+
+/* The first element with this tag under `at`, in tree order. */
+static const os64_html_node_t *validity_find(const os64_html_node_t *at, os64_html_tag_t tag)
+{
+    for (; at != NULL; at = at->next) {
+        if (at->kind == OS64_HTML_ELEMENT && at->tag == tag)
+            return at;
+        const os64_html_node_t *inner = validity_find(at->first_child, tag);
+        if (inner != NULL)
+            return inner;
+    }
+    return NULL;
+}
+
+static uint32_t validity_of(os64_page_t *page, int32_t control, os64_page_pattern_t matcher)
+{
+    uint32_t flags = 0xffffffffu;
+    const os64_page_control_t *c = os64_page_control(page, control);
+    if (c == NULL || os64_page_node_validity(os64_page_shared_state(page), c->node, matcher, NULL, &flags) < 0)
+        return 0xffffffffu;
+    return flags;
+}
+
+static const char *validity_message(os64_page_t *page, int32_t control)
+{
+    static char out[128];
+    uint32_t flags = validity_of(page, control, NULL);
+    const os64_page_control_t *c = os64_page_control(page, control);
+    if (c == NULL || os64_page_node_validation_message(os64_page_shared_state(page), c->node, flags, out,
+                                                       sizeof(out)) < 0)
+        return "(refused)";
+    return out;
+}
+
+/* Constraint validation by node (0f's P4): the judge's flags and sentences,
+ * the custom message's life, a person's bad input, and the submission that
+ * obeys them. */
+static void state_validity(void)
+{
+    os64_html_document_t *doc = parse("<form action=/s method=get>"
+        "<input name=q required>"                                   // 0
+        "<input type=email name=e value=nope>"                      // 1
+        "<input type=url name=u value=http://x.example>"            // 2
+        "<input type=number name=n>"                                // 3
+        "<input name=p pattern=abc value=abd>"                      // 4
+        "<input name=l maxlength=2>"                                // 5
+        "<input type=radio required>"                               // 6
+        "<input type=checkbox name=k readonly required>"            // 7
+        "<input type=hidden name=h>"                                // 8
+        "<button name=b>Go</button></form>"                         // 9
+        "<fieldset id=fs></fieldset><div id=d></div>", "utf-8");
+    os64_page_t *page = os64_page_build(doc, kPage, NULL, NULL);
+    os64_page_state_t *state = os64_page_shared_state(page);
+    state_expect("validity: missing", validity_of(page, 0, NULL) == OS64_PAGE_VALIDITY_MISSING);
+    state_expect("validity: missing's sentence", strcmp(validity_message(page, 0), "Please fill out this field.") == 0);
+    state_expect("validity: email", validity_of(page, 1, NULL) == OS64_PAGE_VALIDITY_TYPE);
+    state_expect("validity: email's sentence", strcmp(validity_message(page, 1), "Please enter an email address.") == 0);
+    state_expect("validity: url", validity_of(page, 2, NULL) == 0);
+    state_expect("validity: no matcher, no pattern", validity_of(page, 4, NULL) == 0 && validity_calls == 0);
+    state_expect("validity: the matcher judges the value",
+                 validity_of(page, 4, validity_equal) == OS64_PAGE_VALIDITY_PATTERN && validity_calls == 1 &&
+                 strcmp(validity_last, "abd") == 0);
+    state_expect("validity: an unnamed radio is never missing", validity_of(page, 6, NULL) == 0);
+    bool will = true;
+    const os64_page_control_t *tick = os64_page_control(page, 7);
+    state_expect("validity: readonly bars a tick",
+                 os64_page_node_will_validate(state, tick->node, &will) == 0 && !will &&
+                 validity_of(page, 7, NULL) == OS64_PAGE_VALIDITY_MISSING);
+    will = true;
+    state_expect("validity: hidden is barred",
+                 os64_page_node_will_validate(state, os64_page_control(page, 8)->node, &will) == 0 && !will);
+    const os64_html_node_t *fs = validity_find(doc->document, OS64_HTML_TAG_FIELDSET);
+    const os64_html_node_t *d = validity_find(doc->document, OS64_HTML_TAG_DIV);
+    will = true;
+    uint32_t flags = 1;
+    state_expect("validity: a fieldset never validates",
+                 fs != NULL && os64_page_node_will_validate(state, fs, &will) == 0 && !will &&
+                 os64_page_node_validity(state, fs, NULL, NULL, &flags) == 0 && flags == 0);
+    state_expect("validity: a div is no kind",
+                 d != NULL && os64_page_node_validity(state, d, NULL, NULL, &flags) == -OS64_PAGE_REASON_WRONG_KIND &&
+                 os64_page_node_set_custom_validity(state, d, "x", 1) == -OS64_PAGE_REASON_WRONG_KIND);
+    /* the custom message: kept until cleared, by a reset too; a fieldset's alone */
+    const os64_page_control_t *b = os64_page_control(page, 9);
+    state_expect("validity: custom", os64_page_node_set_custom_validity(state, b->node, "No\xc3\xa9", 4) == 0 &&
+                 validity_of(page, 9, NULL) == OS64_PAGE_VALIDITY_CUSTOM &&
+                 strcmp(validity_message(page, 9), "No\xc3\xa9") == 0);
+    state_expect("validity: a fieldset's custom",
+                 os64_page_node_set_custom_validity(state, fs, "f", 1) == 0 &&
+                 os64_page_node_validity(state, fs, NULL, NULL, &flags) == 0 && flags == OS64_PAGE_VALIDITY_CUSTOM);
+    /* a person's text a number cannot hold, and what clears it */
+    state_expect("validity: bad input", os64_page_set_text(page, 3, "abc", 3) == 0 &&
+                 validity_of(page, 3, NULL) == OS64_PAGE_VALIDITY_BAD_INPUT &&
+                 strcmp(validity_message(page, 3), "Please enter a number.") == 0);
+    state_expect("validity: white space is no input", os64_page_set_text(page, 3, "  ", 2) == 0 &&
+                 validity_of(page, 3, NULL) == 0);
+    state_expect("validity: bad again", os64_page_set_text(page, 3, "x", 1) == 0 &&
+                 validity_of(page, 3, NULL) == OS64_PAGE_VALIDITY_BAD_INPUT);
+    const os64_page_control_t *n = os64_page_control(page, 3);
+    state_expect("validity: a script's value clears it",
+                 os64_page_node_set_value(state, n->node, "abc", 3) == 0 && validity_of(page, 3, NULL) == 0);
+    state_expect("validity: a reset clears it", os64_page_set_text(page, 3, "x", 1) == 0 &&
+                 validity_of(page, 3, NULL) == OS64_PAGE_VALIDITY_BAD_INPUT && os64_page_reset(page, 0) == 0 &&
+                 validity_of(page, 3, NULL) == 0);
+    /* a person's text past maxlength, and its sentence */
+    state_expect("validity: too long", os64_page_set_text(page, 5, "abc", 3) == 0 &&
+                 validity_of(page, 5, NULL) == OS64_PAGE_VALIDITY_TOO_LONG &&
+                 strcmp(validity_message(page, 5), "Please shorten this text to 2 characters or less.") == 0);
+    /* the submission obeys the judge: the first invalid control, in order */
+    os64_page_set_text(page, 0, "q", 1);
+    os64_page_request_t req;
+    os64_page_what_t what = {OS64_PAGE_ACTIVATE_CONTROL, 9, 0, 0};
+    state_expect("validity: submission stops at the email",
+                 os64_page_activate(page, what, &req) == OS64_PAGE_NOTHING &&
+                 req.reason == OS64_PAGE_REASON_INVALID && req.control == 1);
+    os64_page_request_free(&req);
+    os64_page_set_text(page, 1, "a@b.c", 5);
+    os64_page_set_text(page, 5, "ab", 2);
+    state_expect("validity: then at the custom error",
+                 os64_page_activate(page, what, &req) == OS64_PAGE_NOTHING && req.control == 9);
+    os64_page_request_free(&req);
+    os64_page_node_set_custom_validity(state, b->node, "", 0);
+    state_expect("validity: cleared, it is sent (the pattern unjudged)",
+                 os64_page_activate(page, what, &req) == OS64_PAGE_NAVIGATE);
+    os64_page_request_free(&req);
+    os64_page_set_text(page, 0, "", 0);
+    state_expect("validity: invalid again", os64_page_activate(page, what, &req) == OS64_PAGE_NOTHING);
+    os64_page_request_free(&req);
+    state_expect("validity: a submission the scripts validated is not judged again",
+                 os64_page_activate_validated(page, what, &req) == OS64_PAGE_NAVIGATE);
+    os64_page_request_free(&req);
+    /* a long custom message's sentence is cut between characters, and a
+     * NUL in an address is no address character */
+    char long_message[600];
+    for (int k = 0; k < 300; k++) { long_message[2 * k] = (char)0xc3; long_message[2 * k + 1] = (char)0xa9; }
+    char cut[256];
+    uint32_t custom = OS64_PAGE_VALIDITY_CUSTOM;
+    size_t whole = 0;
+    const char *kept = NULL;
+    state_expect("validity: a long message, cut between characters",
+                 os64_page_node_set_custom_validity(state, b->node, long_message, 600) == 0 &&
+                 os64_page_node_validation_message(state, b->node, custom, cut, sizeof(cut)) == 0 &&
+                 strlen(cut) == 254 && os64_page_node_custom_validity(state, b->node, &kept, &whole) == 0 &&
+                 whole == 600 && memcmp(kept, long_message, 600) == 0);
+    os64_page_node_set_custom_validity(state, b->node, "", 0);
+    const os64_page_control_t *mail = os64_page_control(page, 1);
+    state_expect("validity: a NUL in an address",
+                 os64_page_node_set_value(state, mail->node, "a\0b@c.d", 7) == 0 &&
+                 (validity_of(page, 1, NULL) & OS64_PAGE_VALIDITY_TYPE) != 0);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+
+    /* the submitter a submission would take */
+    doc = parse("<form><input name=a><input name=b><button>Go</button></form>"
+                "<form><input name=c></form><form><input name=d><input name=e></form>", "utf-8");
+    page = os64_page_build(doc, kPage, NULL, NULL);
+    int32_t who = 5;
+    state_expect("submitter: the button pressed",
+                 os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_CONTROL, 2, 0, 0}, &who) && who == 2);
+    state_expect("submitter: Enter takes the default button",
+                 os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_IMPLICIT, 0, 0, 0}, &who) && who == 2);
+    state_expect("submitter: one field submits its form itself",
+                 os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_IMPLICIT, 3, 0, 0}, &who) && who == -1);
+    state_expect("submitter: two fields and no button submit nothing",
+                 !os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_IMPLICIT, 4, 0, 0}, &who));
+    state_expect("submitter: a form has none",
+                 !os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_FORM, 0, 0, 0}, &who));
+    state_expect("submitter: a link or a refresh is no submission",
+                 !os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_LINK, 0, 0, 0}, &who) &&
+                 !os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_REFRESH, 0, 0, 0}, &who));
+    os64_page_free(page);
+    os64_html_document_free(doc);
+
+    /* a placeholder whose only text is a script's: its value is empty, as
+     * the option's own text leaves scripts out */
+    doc = parse("<select required><option><script>0</script></option><option>A</option></select>", "utf-8");
+    page = os64_page_build(doc, kPage, NULL, NULL);
+    state_expect("validity: a script's text is no option text",
+                 validity_of(page, 0, NULL) == OS64_PAGE_VALIDITY_MISSING);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+
+    /* a type change is a new field: it clears the bad input */
+    doc = parse("<input type=number>", "utf-8");
+    page = os64_page_build(doc, kPage, NULL, NULL);
+    state = os64_page_shared_state(page);
+    const os64_html_node_t *field = os64_page_control(page, 0)->node;
+    uint32_t after = 0;
+    state_expect("validity: a type that cannot be bad is not",
+                 os64_page_set_text(page, 0, "x", 1) == 0 &&
+                 validity_of(page, 0, NULL) == OS64_PAGE_VALIDITY_BAD_INPUT &&
+                 os64_page_node_set_attr(state, field, "type", "text", 4, false) == 0 &&
+                 os64_page_node_validity(state, field, NULL, NULL, &after) == 0 &&
+                 (after & OS64_PAGE_VALIDITY_BAD_INPUT) == 0);
+    state_expect("validity: and back to a number, the old text is not this field's",
+                 os64_page_node_set_attr(state, field, "value", "7", 1, false) == 0 &&
+                 os64_page_node_set_attr(state, field, "type", "number", 6, false) == 0 &&
+                 os64_page_node_validity(state, field, NULL, NULL, &after) == 0 && after == 0);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
 static void state_cases(void)
 {
+    state_validity();
     state_option_labels();
     state_scale();
     state_taken_away();

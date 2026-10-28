@@ -4165,6 +4165,100 @@ another language naming none, a removed style's, the brand; with the
 switch off, none of it). Mutants (`tools/test_interfaces_mutants.py`,
 its group for this slice): 9, each caught.
 
+### 0f's P4a, as built — 2026-10-28
+
+P4's first PR (INTERFACES_FORMS.md § P4): constraint validation's API
+whole, and every flag but range and step. A real page asked for it first:
+Google's sign-in reads `input.validity.badInput` when Next is pressed, and
+with no `validity` it threw on every press.
+
+- **One judge** (libpage `submit.c`'s `judge`, public as
+  `os64_page_node_validity`): every flag of a control from the node and
+  the live state, so a control no model holds (WPT judges detached
+  clones) is judged, and the same judge a submission's validation asks
+  control by control. It says `valueMissing` (a field, while it can be
+  typed into; a box, a radio group and a file whatever their mutability;
+  a list's placeholder; a radio with no name is in no group, as browsers
+  answer), `typeMismatch` (`email` and its lists, `url` as a scheme check:
+  DEBTS.md), `tooLong`/`tooShort` on a person's edit, `badInput` (a
+  person's text a number or a date type could not hold, recorded by the
+  state and cleared by any other value and by a reset), and `customError`
+  (a message kept on the node's record, kept by a reset, not copied by a
+  clone). `patternMismatch` is the caller's: HTML's pattern is the
+  engine's regular expression. `readonly` bars any input it is spelled
+  on, as browsers do and WPT holds them to, though it takes effect only on
+  the text-like types (a ruling made here: the model barred only those).
+- **The binding** (libdom `validity.c`, a row of its own): the pattern
+  compiled alone with `v`, then `^(?:pattern)$`, by the RegExp taken
+  before any page ran; ValidityState, made once an element and read live;
+  `willValidate`, `validity`, `validationMessage`, `checkValidity`,
+  `reportValidity` and `setCustomValidity` on input, select, textarea,
+  button, fieldset and output; a form's `checkValidity` and
+  `reportValidity`; `invalid`, cancelable and not bubbling, and
+  `oninvalid` (the handler mask is 64 bits now: the 33rd event kind).
+- **Submission validates before `submit`**: `requestSubmit()` and a
+  submit button's `click()` (window.c's `submit`), and a person's button
+  and Enter (yonder's `page_validates`, through `os64_dom_form_validate`
+  as a task whose validation is one call through the wrapper, so the
+  pattern and the invalid listeners run under the task's budget, as a
+  script's `checkValidity()` runs them; by the submitter libpage would
+  take, now public as
+  `os64_page_submitter`). It is validated once, as HTML does: what a
+  submit listener changes after it cannot refuse the submission, so the
+  model, told (`os64_page_activate_validated`), does not judge it again;
+  and a form being submitted cannot be submitted again from its own
+  invalid or submit listener (HTML's firing-submission-events flag). A
+  report (ruling 5) is the host's
+  (`OS64_DOM_ACTIVATE_REPORT`): the control focused, its sentence on the
+  status line; the model's own refusal says the control's sentence too.
+- **libjs patch 0014**: the pinned engine applied the `v` flag's class
+  rules to every atom outside a class, so `new RegExp("a/b", "v")` threw
+  and every pattern with a slash or a hyphen was no constraint. The rules
+  now hold where ES2024 puts them (UPSTREAM_REVIEW.md).
+- **Left**: range and step (P4b); a pattern in a submission the model
+  judges alone; `:invalid`; an image button's events (DEBTS.md).
+
+**Numbers.**
+
+- **WPT**: `html/semantics/forms/constraints` joins the run
+  (`tools/wpt_fetch.sh`): 755 passes of 921, 754 `[required]` (one passes
+  either way); what fails is range and step, `:invalid`, an element in no
+  namespace, `object`, `execCommand`, `getClientRects` and named access.
+  `the-input-element` +17, `the-select-element` +11, `the-button-element`
+  +11, `the-fieldset-element` +10, `the-textarea-element` +3,
+  `the-form-element` +2, `the-output-element` +1 and the window object's
+  `oninvalid` +1, all `[required]`. Nothing lost there, or in `html/dom`,
+  `dom/events`, `dom/nodes`, `html/webappapis/scripting` and P3's other
+  directories; `dom/nodes`' 14 and `dom/events`' 1 new passes are P3b's
+  and the style sheets', recorded now. With the switch off no required
+  line passes.
+- **Hosts**, 0 failed: DOM 17,810 and 115,923; the scripted page 8,567;
+  yonder 2,028; libpage 254,235; libjs's runtime 1,285 and 6,115.
+- **Mutants** (`tools/test_interfaces_mutants.py`, its P4a group): 62,
+  each caught — the judge (an unnamed radio, a group's tick, readonly's
+  bar both ways and a select's, a fieldset's legend, a placeholder's text
+  without its scripts, mutability for a field and not a box, an email list
+  and a label, a URL's scheme and host, where a pattern applies and an
+  empty value, an email list matched address by address, bad input's
+  record, person, white space, reset and type change, the custom message
+  kept, judged and said and cut between
+  characters, a NUL in an address, a submission judging every flag and
+  not again once validated, a submitter for a button or Enter alone); the
+  binding (the pattern matched,
+  anchored, compiled alone, with `v`; invalid's bubbling and
+  cancelability; checkValidity's event; a barred control; ValidityState
+  made once and `valid`; a barred control's message, and a long custom
+  one whole; setCustomValidity; a form's own controls; the report;
+  formnovalidate both in the binding and for the host; submit() and
+  requestSubmit(); no submission inside a form's own, in the binding and
+  for the host, its validation and its submit event; a person's
+  validation under the task's budget; oninvalid); and
+  yonder (an onsubmit attribute alone validated before it runs; a button
+  and Enter validated, and
+  not again by the model, the report's focus and sentence, the refusal's
+  sentence). `tools/test_yonder_loop_mutants.py`'s two that this moved are
+  re-anchored, and caught.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.

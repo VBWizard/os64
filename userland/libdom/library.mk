@@ -30,6 +30,8 @@ LIBDOM_SRCS += libdom/selection.c
 LIBDOM_SRCS += libdom/controls.c
 # 0f P3b: the form's, label's, fieldset's, legend's and output's own members.
 LIBDOM_SRCS += libdom/forms.c
+# 0f P4: constraint validation.
+LIBDOM_SRCS += libdom/validity.c
 LIBDOM_SRCS += libdom/sheets.c
 # Import maps: the map's JSON and HTMLScriptElement.supports.
 LIBDOM_SRCS += libdom/importmap.c

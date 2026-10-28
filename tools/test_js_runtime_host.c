@@ -268,6 +268,28 @@ static void diagnostic_cases(void)
     os64_js_destroy(runtime);
 }
 
+/* Patch 0014: the v flag's ClassSetCharacter rules hold inside a class and
+ * a class string, and nowhere else: an atom outside a class may be a slash,
+ * a hyphen or a doubled punctuator, as it may be with the u flag. */
+static void regexp_unicode_sets_cases(void)
+{
+    os64_js_config_t config = fixture_config();
+    os64_js_runtime_t *runtime = create_fixture(&config);
+    if (!runtime) return;
+    os64_js_outcome_t outcome;
+    check(execute_fixture(runtime,
+          "if(!new RegExp('^(?:http://a-b.example)$','v').test('http://a-b.example'))throw Error('slash, hyphen');"
+          "if(!/a::b@@c/v.test('a::b@@c'))throw Error('doubled punctuators outside a class');"
+          "if(new RegExp('^(?:a/b)$','v').test('a-b'))throw Error('the slash is a character');", &outcome) == OS64_JS_OK,
+          "a v-flag atom outside a class may be a slash, a hyphen or a doubled punctuator");
+    static const char *const refused[] = {"/[a-]/v", "/[(]/v", "/[a&&&b]/v", "/[\\q{a/b}]/v", "/[\\q{a::b}]/v"};
+    for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); i++)
+        check(execute_fixture(runtime, refused[i], &outcome) == OS64_JS_EXCEPTION, "a v-flag class keeps its rules");
+    check(execute_fixture(runtime, "if(!/[\\q{a\\-b}]/v.test('a-b'))throw Error('escaped')", &outcome) == OS64_JS_OK,
+          "a class string's escaped hyphen is a class atom's");
+    os64_js_destroy(runtime);
+}
+
 static void allocation_cases(void)
 {
     os64_js_config_t config = fixture_config();
@@ -1614,7 +1636,7 @@ int main(int argc, char **argv)
         }
         return 1;
     }
-    tracked_allocator_cases(); tracked_construction_cases(); set_prototype_refused_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); allocation_cases(); thread_cases();
+    tracked_allocator_cases(); tracked_construction_cases(); set_prototype_refused_cases(); teardown_cases(); runtime_cases(); clock_cases(); diagnostic_cases(); regexp_unicode_sets_cases(); allocation_cases(); thread_cases();
     file_cases(); file_boundary_cases(); output_cases(); console_cases(); transaction_descriptor_cases(); transaction_trap_case(); setup_allocation_cases();
     task_cases();
     script_host_cases();

@@ -55,6 +55,17 @@ struct PNodeState {
     // An input's indeterminate flag (os64_page_node_set_indeterminate):
     // no attribute stands for it, and a clone copies it.
     bool indeterminate;
+    // A person's text the control's value could not hold: a number or a
+    // date the type's grammar refused, which left the value "". It is the
+    // field's, not the value's, so a clone does not copy it, and any value
+    // set by other than a person, a reset, or a change of the input's type
+    // clears it (badInput).
+    bool bad_input;
+    // The control's custom validity message (setCustomValidity), NULL being
+    // none: a reset keeps it, and a clone does not copy it, as HTML's
+    // cloning steps do not list it.
+    char *custom;
+    size_t custom_len;
     // A text control's selection, in UTF-16 code units of its value: one a
     // script or the host set (os64_page_node_set_selection), or the value's
     // end where a changed value put it. `range_kept` says there is one;
@@ -108,6 +119,16 @@ void p_reserve_abort(PReserve *reserve);
 void p_state_publish(os64_page_state_t *state);
 void p_state_changed(os64_page_state_t *state);
 bool p_value_is_attribute(os64_page_element_t element, os64_page_input_t input);
+// Constraint validation's questions of the live state (state.c), asked by
+// submit.c's judge. The control's kind, as the value verbs accept it; its
+// radio group required with nothing ticked (HTML's Radio Button state), over
+// the tree the node is in, never for a radio with no name; its bad input; its
+// custom message, NULL for none.
+bool p_node_kind(os64_page_state_t *state, const os64_html_node_t *node, os64_page_element_t *element,
+                 os64_page_input_t *input);
+bool p_radio_group_missing(os64_page_state_t *state, const os64_html_node_t *node);
+bool p_node_bad_input(const os64_page_state_t *state, const os64_html_node_t *node);
+const char *p_node_custom(const os64_page_state_t *state, const os64_html_node_t *node, size_t *len);
 int64_t p_state_set_value(os64_page_state_t *state, const os64_html_node_t *node,
                           const char *utf8, size_t len, bool user);
 bool p_state_normalize(os64_page_t *page);
@@ -246,6 +267,8 @@ char *p_child_text_into(PArena *arena, const os64_html_node_t *node, size_t *len
 bool p_nonnegative(const char *text, uint64_t *value);
 // Whether the select display size is one, using HTML integer parsing.
 bool p_select_one_line(const os64_page_control_t *control);
+// The text-like input types (core.c says why one list serves several rules).
+bool p_text_like_input(os64_page_input_t input);
 // The select's list of options in tree order, excluding the subtrees the
 // HTML list-of-options algorithm skips. NULL starts or ends the walk.
 const os64_html_node_t *p_option_next(const os64_html_node_t *select,

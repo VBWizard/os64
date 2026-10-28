@@ -461,9 +461,15 @@ submit button fires `submit` at its form and, uncancelled, asks for the
 submission; a reset button fires `reset`. An element already being
 clicked ignores another `click()` until its own finishes (HTML's
 click-in-progress flag); another element can still be clicked from its
-listener. `form.submit()` asks without a `submit` event, `requestSubmit()` with one, and `reset()` fires `reset`. A
-reset not cancelled, `focus()` and `blur()` reach the host through
-`options.activate`, which records them.
+listener. `form.submit()` asks without a `submit` event, `requestSubmit()` with one, and `reset()` fires `reset`.
+With the Modern Web switch on, a submit button's click and
+`requestSubmit()` first validate the form's constraints, unless the
+submitter's `formnovalidate` or the form's `novalidate` says not to, and
+stop before `submit` when they fail (§ The Modern Web's surface, the
+validity row); `form.submit()` validates nothing. A reset not cancelled,
+`focus()`, `blur()` and a control's constraint problem reported
+(OS64_DOM_ACTIVATE_REPORT, whose sentence `os64_dom_report_message`
+keeps) reach the host through `options.activate`, which records them.
 
 ## Script elements
 
@@ -1471,3 +1477,21 @@ and nothing it holds. A link's and a style's `sheet` is that sheet while
 the node names one in a document, else null, and the sheet then has no
 `ownerNode`; the style element is a kind of its own for it
 (HTMLStyleElement).
+
+**The validity row** (`validity.c`, naming ValidityState and oninvalid on
+window; MODERN_WEB.md § 0f's P4a). libpage judges a control
+(`os64_page_node_validity`) from the node and the live state, the judge a
+submission's validation asks too, so a control no page holds is judged.
+The binding matches its `pattern` with the engine: compiled alone with
+the `v` flag first, then `^(?:pattern)$`, by the RegExp constructor and
+`exec` taken before any page ran, a pattern that does not compile being
+no constraint. A ValidityState is made once an element and read live;
+`willValidate`, `validity`, `validationMessage`, `checkValidity`,
+`reportValidity` and `setCustomValidity` are on input, select, textarea,
+button, fieldset and output, and a form's `checkValidity` and
+`reportValidity` (`d_form_validate`) collect its invalid submittable
+controls in tree order before firing `invalid` (cancelable, not bubbling)
+at each. A report is the host's: `os64_dom_form_validate` runs a person's
+submission's validation as a task, before the host fires `submit`, as one
+call through the wrapper (`os64_js_call` of the binding's own function), so
+its pattern and its invalid listeners run under the task's budget.

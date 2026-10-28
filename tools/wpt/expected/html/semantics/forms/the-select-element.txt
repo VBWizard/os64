@@ -6,6 +6,19 @@
 # The node row's element names (MODERN_WEB.md § Element names, as built):
 # localName, namespaceURI and prefix. Each fails with the switch off.
 common-HTMLOptionsCollection.html	Changing the length adds new nodes; The number of new nodes = new length minus old length
+# 0f's P4a (MODERN_WEB.md § 0f's P4a, as built): constraint validation. Each
+# fails with the switch off; the passes not listed pass either way.
+customizable-select/placeholder-label-option-wrapper.html	A multiple select has no placeholder label option.
+customizable-select/placeholder-label-option-wrapper.html	An option inside a wrapped optgroup is not the placeholder label option.
+customizable-select/placeholder-label-option-wrapper.html	An option inside an optgroup is not the placeholder label option.
+customizable-select/placeholder-label-option-wrapper.html	Selecting past the wrapped placeholder label option validates the select.
+select-setcustomvalidity.html	select setCustomValidity is correct
+select-validity.html	Placeholder label options within a select
+select-validity.html	Placeholder label-like options within optgroup
+select-validity.html	Remove and add back the placeholder label option
+select-validity.html	Validation on selects with display size set as more than one
+select-validity.html	Validation on selects with multiple set
+select-validity.html	Validation on selects with non-empty disabled option
 [excluded]
 [passing]
 common-HTMLOptionsCollection-add.html	if before and node are the same element nothing should be done
@@ -32,6 +45,10 @@ customizable-select/option-form-ancestor-select.html	option.form should look up 
 customizable-select/option-list-wrapped-optgroup.html	nested optgroups inside wrapper still excluded from option list
 customizable-select/option-list-wrapped-optgroup.html	option inside optgroup inside wrapper div is in the option list
 customizable-select/option-list.html	select's option list should not include descendants of options, hrs, or nested optgroups.
+customizable-select/placeholder-label-option-wrapper.html	A multiple select has no placeholder label option.
+customizable-select/placeholder-label-option-wrapper.html	An option inside a wrapped optgroup is not the placeholder label option.
+customizable-select/placeholder-label-option-wrapper.html	An option inside an optgroup is not the placeholder label option.
+customizable-select/placeholder-label-option-wrapper.html	Selecting past the wrapped placeholder label option validates the select.
 customizable-select/select-input-parsing.tentative.html	Input tags should close select when directly inside an <option>
 customizable-select/select-input-parsing.tentative.html	Input tags should close select when placed after an <option>
 customizable-select/select-multiple-removed.html	Removing the multiple attribute should not crash.
@@ -111,6 +128,7 @@ select-selectedOptions.html	.selectedOptions using the 'multiple' attribute with
 select-selectedOptions.html	.selectedOptions with no selected option
 select-selectedOptions.html	.selectedOptions with one selected option
 select-selectedOptions.html	.selectedOptions without the 'multiple' attribute but more than one selected option should return the last one
+select-setcustomvalidity.html	select setCustomValidity is correct
 select-setter-dirtiness.html	The selected setter of an option in a select sets its dirtiness
 select-setter-dirtiness.html	The selected setter of an option in a select sets its dirtiness when the option is already selected
 select-setter-dirtiness.html	The selectedIndex setter of HTMLOptionsCollection sets the dirtiness of the option it selects
@@ -118,6 +136,12 @@ select-setter-dirtiness.html	The selectedIndex setter of a select sets the dirti
 select-setter-dirtiness.html	The selectedIndex setter of a select sets the dirtiness of the option it selects when that option is already selected
 select-setter-dirtiness.html	The value setter of a select sets the dirtiness of the option it selects
 select-setter-dirtiness.html	The value setter of a select sets the dirtiness of the option it selects when that option is already selected
+select-validity.html	Placeholder label options within a select
+select-validity.html	Placeholder label-like options within optgroup
+select-validity.html	Remove and add back the placeholder label option
+select-validity.html	Validation on selects with display size set as more than one
+select-validity.html	Validation on selects with multiple set
+select-validity.html	Validation on selects with non-empty disabled option
 select-value.html	no options
 select-value.html	optgroups
 select-value.html	option is child of div

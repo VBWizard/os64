@@ -195,6 +195,7 @@ Event-dispatch-click.html	disabling checkbox in onclick listener shouldn't suppr
 Event-dispatch-click.html	disabling radio in onclick listener shouldn't suppress onchange
 Event-dispatch-click.html	disabling radio in onclick listener shouldn't suppress oninput
 Event-dispatch-click.html	disconnected checkbox should be checked
+Event-dispatch-click.html	disconnected form should not submit
 Event-dispatch-click.html	disconnected radio should be checked
 Event-dispatch-click.tentative.html	disabled checkbox should not be checked from label click
 Event-dispatch-click.tentative.html	disabled radio should not be checked from label click
