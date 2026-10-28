@@ -35,7 +35,7 @@
       "-Wextra",
       "-Werror"
     ],
-    "binary_sha256": "1beff5bcee8f162eb14f06bd0c4e0a6c68ef8d8096d71c156fb05a4282bf90e3",
+    "binary_sha256": "9008be4ae0e4a9bc6414ce088e5add4445e7ecee80e7975715811b3d37a2d574",
     "inputs": {
       "abi/include/os64/ansi.h": "c9202b2b7a0e930e65a7c4b2d74e07e9ab48c0f804694b7aa57763beafdf2b65",
       "abi/include/os64/appearance.h": "3c7ff8f72ee55668b2fee8dec93c10ef327f87e2830536eb014d048cd71d7927",
@@ -83,7 +83,7 @@
       "tools/test_yonder_svg_bounds.inc": "25105cd34a29684d8068f4e0352a2a797129e7cab2dfc3cb665315761f354757",
       "tools/test_yonder_svg_clips.inc": "d783f1e25aa316f6fc1b5634fb59c57175aecaa4bd359031cdef65b5754c7418",
       "tools/test_yonder_svg_document.inc": "5a3fec20399a34a5afc56db8e7b4af1612815997872c4deb54ac5efd4420cffc",
-      "tools/test_yonder_svg_gradients.inc": "9c92ac2fdad2ee26dab78654df5f8d4cbb7e2ae43123887c878fc1416724aef0",
+      "tools/test_yonder_svg_gradients.inc": "df8e42cdb3ea79c13e3139a29efb3023fe26c08b23e5ec841c2623785d25d79f",
       "tools/test_yonder_svg_use.inc": "d25e15abf3817cf96a1d596c796cc145885de9a45c22b1dd6df6764e764149ce",
       "tools/test_yonder_svg_viewports.inc": "e920423d7c115824de4f20016928b75d0e7b5b9e19805eae73057a0d6cc6ee6a",
       "tools/tls_engine_fixture.h": "6f760e666c51221c70188543ee5ebbbad004da71f6dca5a8ed843a75226e57cb",
@@ -117,7 +117,7 @@
       "userland/apps/yonder/settings.h": "f1b5f8878229b83dd60bea01bd3ddb9b15b80de42d28fafdddc95c1a1ed8a019",
       "userland/apps/yonder/sheet.h": "8210252131d97aaa5185759535f5b89838ba805bd6e4366ad02490e31ad648e8",
       "userland/apps/yonder/storage.h": "745ef1e693a9dbf474ad89506f64c480380bcbbe2e5c1dd5cdc0ac0fa56e3011",
-      "userland/apps/yonder/svg.c": "6581343d75e2f47ba89985400a059de7332724f5fb5fdedcf82b860d94eb913d",
+      "userland/apps/yonder/svg.c": "4dcd4c419d35d8d04855579c5084077ce8d7c2af2d290960439b794eacb7a4a5",
       "userland/apps/yonder/svg.h": "ab5acc49b8f81e0a1c030e688e63f437dd995a594489d21a55b7d0fe7e8335e3",
       "userland/apps/yonder/svg_document.c": "a7d757057956bb63b39be2b379eaf3bad4f21d0a5b154dea060990a522c781d3",
       "userland/apps/yonder/svg_document.h": "ecad1eb83172479123b9d8851cb467cfaf7fb2e0f99e1df1c3a67f7c2a4136bb",
