@@ -19,7 +19,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     profile = parser.add_mutually_exclusive_group()
-    profile.add_argument('--paint', action='store_true', help='run solid painting tests and write fixtures')
+    profile.add_argument('--paint', action='store_true', help='run scene painting tests and write fixtures')
     profile.add_argument('--yonder', action='store_true', help='run the real HTML/CSS/layout SVG adapter')
     args = parser.parse_args()
     output = args.output.resolve()
@@ -84,8 +84,9 @@ def main():
     binary = build/('svg-yonder' if args.yonder else 'svg-paint' if args.paint else 'svg-core')
     subprocess.run([cc, *common, *map(str, objects), '-o', str(binary)], check=True)
     inputs = {p for p, _ in entries}
+    inputs.add(ROOT/'tools/test_svg_gradient_sampler.inc')
     if args.yonder:
-        inputs.update([ROOT/'tools/test_yonder_host.c', ROOT/'tools/test_yonder_host.sh', ROOT/'tools/test_yonder_svg_use.inc', ROOT/'tools/test_yonder_svg_viewports.inc', ROOT/'tools/test_yonder_svg_clips.inc', ROOT/'tools/test_yonder_svg_bounds.inc', ROOT/'tools/test_yonder_svg_document.inc'])
+        inputs.update([ROOT/'tools/test_yonder_host.c', ROOT/'tools/test_yonder_host.sh', ROOT/'tools/test_yonder_svg_use.inc', ROOT/'tools/test_yonder_svg_viewports.inc', ROOT/'tools/test_yonder_svg_clips.inc', ROOT/'tools/test_yonder_svg_bounds.inc', ROOT/'tools/test_yonder_svg_document.inc', ROOT/'tools/test_yonder_svg_gradients.inc', ROOT/'tools/test_svg_gradient_sampler.inc'])
         for directory in ('abi/include', 'tools', 'userland/apps/yonder',
                           'userland/libflow', 'userland/libhtml', 'userland/libxml', 'userland/libpage',
                           'userland/libgarb', 'userland/libfetch/include',

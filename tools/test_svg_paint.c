@@ -164,7 +164,7 @@ static void padding(const uint32_t *p)
 }
 static void stroke(Node *n, uint32_t color, double width)
 {
-    n->style.stroke = (svg_paint_t){SVG_PAINT_COLOR, color};
+    n->style.stroke = (svg_paint_t){.kind = SVG_PAINT_COLOR, .argb = color};
     n->style.stroke_style.width = width;
 }
 static Document fixture(unsigned which)
@@ -950,10 +950,89 @@ static void object_bounds_contracts(void)
     CHECK(svg_destroy(c) == SVG_OK && !l.live);
 }
 
+#include "test_svg_gradient_sampler.inc"
+static void gradient_scene_contracts(void)
+{
+    gradient_sampler_contracts();
+    Ledger l = {0};
+    svg_context_t *c = create(&l);
+    size_t baseline = l.live;
+    Document d = {0};
+    add(&d, SIZE_MAX, NULL, 0);
+    add(&d, 0, "M8 8H56V56H8Z", 0);
+    svg_gradient_stop_t stops[] = {{0, 0xffff0000}, {1, 0xff0000ff}};
+    os64_geometry_map_t map = {1, 0, 0, 1, 0, 0};
+    svg_linear_gradient_t g = {
+        .x2 = 1, .object_bbox = true, .transform = map, .stops = stops, .count = 2};
+    d.nodes[1].style.fill = (svg_paint_t){.kind = SVG_PAINT_LINEAR, .linear = &g};
+    d.nodes[1].style.stroke = d.nodes[1].style.fill;
+    d.nodes[1].style.stroke_style.width = 4;
+    svg_provider_t provider = {&d, acquire, unpin, node, style, NULL, NULL, clip_source};
+    svg_scene_t *scene = NULL;
+    size_t allocations = l.allocations, polls = l.polls;
+    CHECK(svg_scene_prepare(c, &provider, SVG_MODE_INLINE, &map, &scene) == SVG_OK);
+    size_t prepare_allocations = l.allocations - allocations, prepare_polls = l.polls - polls;
+    uint32_t pixels[68 * 64];
+    sentinel(pixels);
+    svg_render_target_t t = target(pixels);
+    svg_render_options_t options = svg_render_options_default(os64_freetype_geometry_v1());
+    // Provider storage may be reused as soon as preparation returns.
+    stops[0].offset = NAN;
+    stops[0].argb = 0;
+    g.count = 999;
+    allocations = l.allocations;
+    polls = l.polls;
+    CHECK(svg_scene_render(c, scene, &options, &t, NULL) == SVG_OK);
+    size_t render_allocations = l.allocations - allocations, render_polls = l.polls - polls;
+    CHECK(pixels[32 * 68 + 8] == 0xfffc0003 && pixels[32 * 68 + 55] == 0xff0300fc);
+    padding(pixels);
+    size_t kept = l.live;
+    for (unsigned mode = 0; mode < 2; ++mode)
+        for (size_t i = 1; i <= render_allocations; ++i) {
+            l.admission = mode;
+            l.fail = l.allocations + i;
+            CHECK(svg_scene_render(c, scene, &options, &t, NULL) ==
+                  (mode ? SVG_LIMIT : SVG_NO_MEMORY));
+            l.fail = 0;
+            CHECK(l.live == kept);
+        }
+    for (size_t i = 1; i <= render_polls; ++i) {
+        l.cancel = l.polls + i;
+        CHECK(svg_scene_render(c, scene, &options, &t, NULL) == SVG_CANCELLED);
+        l.cancel = 0;
+        CHECK(l.live == kept);
+    }
+    CHECK(svg_scene_release(c, scene) == SVG_OK && l.live == baseline && !d.pins);
+    stops[0] = (svg_gradient_stop_t){0, 0xffff0000};
+    g.count = 2;
+    for (unsigned mode = 0; mode < 2; ++mode)
+        for (size_t i = 1; i <= prepare_allocations; ++i) {
+            scene = NULL;
+            l.admission = mode;
+            l.fail = l.allocations + i;
+            CHECK(svg_scene_prepare(c, &provider, SVG_MODE_INLINE, &map, &scene) ==
+                  (mode ? SVG_LIMIT : SVG_NO_MEMORY));
+            l.fail = 0;
+            CHECK(!scene && !d.pins && l.live == baseline);
+        }
+    for (size_t i = 1; i <= prepare_polls; ++i) {
+        scene = NULL;
+        l.cancel = l.polls + i;
+        CHECK(svg_scene_prepare(c, &provider, SVG_MODE_INLINE, &map, &scene) == SVG_CANCELLED);
+        l.cancel = 0;
+        CHECK(!scene && !d.pins && l.live == baseline);
+    }
+    CHECK(svg_destroy(c) == SVG_OK && !l.live);
+    printf("SVG gradient ownership: %zu preparation/%zu render allocation cuts, %zu/%zu "
+           "cancellation cuts pass\n",
+           prepare_allocations, render_allocations, prepare_polls, render_polls);
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
     setvbuf(stdout, NULL, _IONBF, 0);
+    gradient_scene_contracts();
     clip_contracts(false);
     clip_contracts(true);
     object_bounds_contracts();

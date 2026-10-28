@@ -5523,6 +5523,43 @@ static uint32_t *stand_in_shot(void) {
 }
 #include "test_yonder_svg_images.inc"
 
+static void svg_gradient_window_cases(void)
+{
+    probe_page(
+        "<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
+        "<svg width='64' height='32'><linearGradient id='g'><stop id='start' stop-color='red'/>"
+        "<stop offset='1' stop-color='white'/></linearGradient><rect width='64' height='32' "
+        "fill='url(#g)'/></svg>"
+        "<svg width='64' height='32'><rect width='64' height='32' fill='url(#g)'/></svg>"
+        "<script>document.getElementById('start').setAttribute('stop-color','blue')</script>",
+        true);
+    uint32_t *px = stand_in_shot();
+    check((px[16 * 800 + 16] & 0xffffff) == 0xff4242 && (px[48 * 800 + 16] & 0xffffff) == 0xff4242,
+          "SVG gradient: shared resource colors both roots");
+    os64_free(px);
+    while (yonder_scripts_pending(g.page.scripts))
+        script_turn();
+    px = stand_in_shot();
+    check((px[16 * 800 + 16] & 0xffffff) == 0x4242ff && (px[48 * 800 + 16] & 0xffffff) == 0x4242ff,
+          "SVG gradient: stop mutation repaints both consumers");
+    os64_free(px);
+    check(g.page.svg_bytes == 0, "SVG gradients return the geometry/pixel ledger");
+    probe_drop();
+    const char *xml = "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='32'>"
+                      "<linearGradient id='g'><stop stop-color='red'/><stop offset='1' "
+                      "stop-color='white'/></linearGradient>"
+                      "<rect width='64' height='32' fill='url(#g)'/></svg>";
+    picture_svg_arrive(
+        "<!doctype html><style>body{margin:0;background:white}stop{stop-color:black!important}"
+        "img{display:block}</style><img src=file:///svg-image.svg>",
+        xml);
+    px = stand_in_shot();
+    check((px[16 * 800 + 16] & 0xffffff) == 0xff4242,
+          "SVG image gradient keeps its own stop styling");
+    os64_free(px);
+    probe_drop();
+}
+
 static void svg_window_cases(void)
 {
     probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
@@ -10279,6 +10316,7 @@ int main(void)
     interface_font_cases();
     inserted_frame_cases();
     stand_in_paint_cases();
+    svg_gradient_window_cases();
     svg_window_cases();
     picture_svg_window_cases();
     covered_link_cases();

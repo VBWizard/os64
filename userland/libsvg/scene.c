@@ -2,8 +2,8 @@
 
 svg_style_t svg_initial_style(void)
 {
-    return (svg_style_t){.fill = {SVG_PAINT_COLOR, 0xff000000},
-                         .stroke = {SVG_PAINT_NONE, 0},
+    return (svg_style_t){.fill = {.kind = SVG_PAINT_COLOR, .argb = 0xff000000},
+                         .stroke = {.kind = SVG_PAINT_NONE},
                          .fill_opacity = 1,
                          .stroke_opacity = 1,
                          .opacity = 1,
@@ -24,8 +24,8 @@ static Status style_status(const svg_style_t *s)
         s->stroke_style.miter_limit < 1 || s->stroke_style.cap < OS64_GEOMETRY_BUTT ||
         s->stroke_style.cap > OS64_GEOMETRY_SQUARE || s->stroke_style.join < OS64_GEOMETRY_MITER ||
         s->stroke_style.join > OS64_GEOMETRY_ARCS || s->fill.kind < SVG_PAINT_NONE ||
-        s->fill.kind > SVG_PAINT_UNSUPPORTED || s->stroke.kind < SVG_PAINT_NONE ||
-        s->stroke.kind > SVG_PAINT_UNSUPPORTED)
+        s->fill.kind > SVG_PAINT_LINEAR || s->stroke.kind < SVG_PAINT_NONE ||
+        s->stroke.kind > SVG_PAINT_LINEAR)
         return SVG_PROVIDER_ERROR;
     if (s->viewport.active &&
         (!isfinite(s->viewport.width) || !isfinite(s->viewport.height) || s->viewport.width < 0 ||
@@ -38,6 +38,17 @@ static Status style_status(const svg_style_t *s)
     for (size_t i = 0; i < s->dash.count; ++i)
         if (!isfinite(s->dash.values[i]) || s->dash.values[i] < 0)
             return SVG_PROVIDER_ERROR;
+    const svg_paint_t *paints[] = {&s->fill, &s->stroke};
+    for (unsigned i = 0; i < 2; ++i) {
+        if (paints[i]->kind != SVG_PAINT_LINEAR)
+            continue;
+        Map identity = {1, 0, 0, 1, 0, 0};
+        svg_bounds_t box = {.max_x = 1, .max_y = 1};
+        svg_linear_sampler_t sampler;
+        Status status = svg_linear_gradient_prepare(paints[i]->linear, &identity, &box, &sampler);
+        if (status != SVG_OK)
+            return status == SVG_BAD_ARGUMENT ? SVG_PROVIDER_ERROR : status;
+    }
     if (s->fill.kind == SVG_PAINT_UNSUPPORTED || s->stroke.kind == SVG_PAINT_UNSUPPORTED)
         return SVG_UNSUPPORTED;
     return SVG_OK;
@@ -68,6 +79,8 @@ static void free_scene(Context *c, svg_scene_t *scene)
         svg_free_path(c, (svg_path_t *)scene->items[i].path);
         svg_free_path(c, (svg_path_t *)scene->items[i].clip.path);
         svg_free(c, (void *)scene->items[i].style.dash.values);
+        svg_free(c, (void *)scene->items[i].style.fill.linear);
+        svg_free(c, (void *)scene->items[i].style.stroke.linear);
     }
     svg_free(c, scene->items);
     if (scene->pinned)
@@ -99,6 +112,7 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
     *scene = (svg_scene_t){.owner = c, .provider = *provider};
     Frame *stack = NULL;
     double *pending_dash = NULL;
+    svg_linear_gradient_t *pending_gradient[2] = {0};
     size_t capacity = 0, depth = 0, visits = 0;
     uint64_t root = 0;
     if (!svg_spend(c, 1)) {
@@ -213,6 +227,26 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
             status = SVG_LIMIT;
             break;
         }
+        svg_paint_t *paints[] = {&item.style.fill, &item.style.stroke};
+        for (unsigned part = 0; part < 2; ++part) {
+            const svg_linear_gradient_t *source = paints[part]->linear;
+            paints[part]->linear = NULL;
+            if (paints[part]->kind != SVG_PAINT_LINEAR)
+                continue;
+            size_t bytes = sizeof(*source) + source->count * sizeof(*source->stops);
+            svg_linear_gradient_t *copy = svg_alloc(c, bytes);
+            pending_gradient[part] = copy;
+            if (!copy || !svg_spend(c, source->count)) {
+                status = c->why;
+                goto done;
+            }
+            *copy = *source;
+            svg_gradient_stop_t *stops = (void *)(copy + 1);
+            for (size_t i = 0; i < source->count; ++i)
+                stops[i] = source->stops[i];
+            copy->stops = stops;
+            paints[part]->linear = copy;
+        }
         if (item.style.dash.count) {
             pending_dash = svg_alloc(c, item.style.dash.count * sizeof(*pending_dash));
             if (!pending_dash) {
@@ -260,6 +294,7 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
         size_t index = scene->count;
         scene->items[scene->count++] = item;
         pending_dash = NULL;
+        pending_gradient[0] = pending_gradient[1] = NULL;
         if (provider->clip) {
             svg_clip_source_t clip = {0};
             request.parent_style = parent == SIZE_MAX ? NULL : &scene->items[parent].style;
@@ -318,6 +353,8 @@ Status svg_scene_prepare(Context *c, const svg_provider_t *provider, svg_mode_t 
     }
 done:
     svg_free(c, pending_dash);
+    svg_free(c, pending_gradient[0]);
+    svg_free(c, pending_gradient[1]);
     svg_free(c, stack);
     if (status == SVG_OK) {
         ++c->stats.scenes;

@@ -128,8 +128,8 @@ typedef enum {
     GARB_OBJECT_FIT, GARB_OBJECT_POSITION,
     // CSS Sizing 4 § 4.1: the KEYWORD auto, or a RATIO.
     GARB_ASPECT_RATIO,
-    // SVG solid paint values. Resource paints are retained for explicit refusal
-    // by a renderer without paint servers; lengths may use SVG user units.
+    // SVG paint values, including resource URLs and optional fallback paints.
+    // Lengths may use SVG user units.
     GARB_FILL, GARB_STROKE, GARB_FILL_OPACITY, GARB_STROKE_OPACITY,
     GARB_FILL_RULE, GARB_STROKE_WIDTH, GARB_STROKE_LINECAP,
     GARB_STROKE_LINEJOIN, GARB_STROKE_MITERLIMIT,
@@ -139,6 +139,7 @@ typedef enum {
     // Inherited offset; appended to preserve the existing property IDs.
     GARB_STROKE_DASHOFFSET,
     GARB_CLIP_PATH, GARB_CLIP_RULE,
+    GARB_STOP_COLOR, GARB_STOP_OPACITY,
     GARB_NPROPS
 } garb_prop_t;
 

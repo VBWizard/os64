@@ -2009,6 +2009,7 @@ static int32_t svg_attributes(garb_cascade_t *c, const os64_html_node_t *el, Dec
         return 0;
     static const char *const names[] = {"fill",
                                         "stroke",
+                                        "stop-color", "stop-opacity",
                                         "fill-opacity",
                                         "stroke-opacity",
                                         "fill-rule",
