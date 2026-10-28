@@ -145,6 +145,51 @@ static bool image_cancel(void *opaque)
     ImageCancel *c = opaque;
     return ++c->polls == c->stop;
 }
+static void document_foreign_metadata(void)
+{
+    const char *foreign[] = {
+        "<e:namedview xmlns:e='http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd' "
+        "pagecolor='#fff'/>",
+        "<rect xmlns='urn:editor' style='transform-origin:50% 50%'>"
+        "<path xmlns='http://www.w3.org/2000/svg' d='malformed'/></rect>",
+        "<foreign xmlns=''><rect xmlns='http://www.w3.org/2000/svg' "
+        "width='128' height='128' fill='red'/></foreign>",
+    };
+    const char *contexts[] = {
+        "%s<rect x='16' y='16' width='64' height='48' fill='blue'/>",
+        "<rect x='16' y='16' width='64' height='48' fill='blue'/>%s",
+        "<clipPath id='c'>%s<rect x='16' y='16' width='64' height='48'/></clipPath>"
+        "<rect width='128' height='128' fill='blue' clip-path='url(#c)'/>",
+        "<linearGradient id='g'>%s<stop stop-color='blue'/></linearGradient>"
+        "<rect x='16' y='16' width='64' height='48' fill='url(#g)'/>",
+        "<linearGradient id='g'><stop stop-color='blue'/>%s</linearGradient>"
+        "<rect x='16' y='16' width='64' height='48' fill='url(#g)'/>",
+    };
+    size_t baseline = live;
+    SvgLedger ledger = {.cap = 64 << 20};
+    os64_geometry_memory_t memory = {&ledger, svg_alloc_test, svg_free_test};
+    for (size_t i = 0; i < sizeof(foreign) / sizeof(foreign[0]); ++i)
+        for (size_t j = 0; j < sizeof(contexts) / sizeof(contexts[0]); ++j) {
+            char body[2048], xml[2304];
+            snprintf(body, sizeof(body), contexts[j], foreign[i]);
+            snprintf(xml, sizeof(xml), "<svg xmlns='http://www.w3.org/2000/svg'>%s</svg>", body);
+            yonder_svg_document_t *d = NULL;
+            assert(yonder_svg_document_parse(xml, strlen(xml), NULL, NULL, &d, NULL) == SVG_OK);
+            yonder_svg_pixels_t p;
+            svg_status_t status = image_draw(d, &ledger, &p);
+            if (status != SVG_OK)
+                fprintf(stderr, "foreign metadata %zu context %zu: %d\n", i, j, status);
+            assert(status == SVG_OK);
+            for (int y = 0; y < 128; ++y)
+                for (int x = 0; x < 128; ++x)
+                    assert(pixel(&p, x, y) ==
+                           (x >= 16 && x < 80 && y >= 16 && y < 64 ? 0xff0000ff : 0));
+            yonder_svg_pixels_free(&memory, &p);
+            yonder_svg_document_free(d);
+            assert(live == baseline && !ledger.live);
+        }
+    puts("SVG foreign metadata: 15 scene, clip and gradient contexts preserve artwork");
+}
 static void document_inert_clips(void)
 {
     const char *names[] = {"script", "animate", "animateMotion", "animateTransform", "set", "discard"};
@@ -188,7 +233,7 @@ static void document_inert_clips(void)
             assert(live == baseline && !ledger.live);
         }
     }
-    const char *refused[] = {"<set xmlns='urn:foreign'/>", "<Set/>", "<rect width='8' height='8'/>"};
+    const char *refused[] = {"<foreignObject/>", "<Set/>", "<rect width='8' height='8'/>"};
     for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); ++i) {
         char source[1024];
         snprintf(source, sizeof(source),
@@ -205,6 +250,7 @@ static void document_inert_clips(void)
 }
 static void document_contracts(void)
 {
+    document_foreign_metadata();
     document_inert_clips();
     const char *xml = "<s:svg xmlns:s='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
                       "<s:style>:root{color:blue} rect{fill:currentColor}</s:style>"
@@ -304,7 +350,7 @@ static void document_contracts(void)
            !d);
     // Namespace identity and case are independent of the qualified spelling.
     const char *refused[] = {"<RECT width='10' height='10'/>",
-                             "<rect xmlns='urn:foreign' width='10' height='10'/>",
+                             "<foreignObject/>",
                              "<rect width='10' height='10' style='transform-origin:50% 50%'/>",
                              "<image href='https://example.invalid/image.png'/>"};
     for (size_t i = 0; i < sizeof(refused) / sizeof(refused[0]); ++i) {

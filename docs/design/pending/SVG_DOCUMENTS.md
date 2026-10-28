@@ -154,6 +154,15 @@ intrinsic sizing remains a follow-up.
 The image-mode filter is shared by scene styling and clip-resource collection.
 The regression suite compares all six inert element kinds before/after a clip
 shape and in an otherwise empty clip against the artwork with those elements
-removed (18 exact references). Foreign-namespace elements, differently cased
-names and a second real silhouette remain refused. Inert subtrees and their
+removed (18 exact references). Differently cased SVG names, `foreignObject`
+and a second real silhouette remain refused. Inert subtrees and their
 unsupported style values do not become clip geometry.
+
+Foreign-namespace elements are retained as document data but excluded from
+scene, clip and gradient rendering, including their subtrees. Editor metadata
+such as Inkscape's `sodipodi:namedview` therefore does not reject an otherwise
+supported image. This follows SVG's [foreign-namespace processing
+rules](https://www.w3.org/TR/SVG/struct.html#ForeignNamespaces). Fifteen exact
+pixel cases cover scene siblings, clips and both gradient-stop traversal
+paths; malformed SVG descendants under the ignored data stay inert. The
+outer document must still have an SVG root in the SVG namespace.

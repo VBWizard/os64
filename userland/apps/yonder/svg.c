@@ -765,7 +765,9 @@ static bool image_inert(const Adapter *a, const os64_html_node_t *n)
 }
 static bool ignored(const os64_html_node_t *n)
 {
-    return n->ns == OS64_HTML_NS_SVG &&
+    // Foreign-namespace data stays in the DOM but contributes no SVG
+    // artwork, including SVG descendants nested beneath that data.
+    return n->ns != OS64_HTML_NS_SVG ||
            (same_word(n->name, "defs") || same_word(n->name, "title") ||
             same_word(n->name, "desc") || same_word(n->name, "metadata") ||
             same_word(n->name, "style") || same_word(n->name, "clipPath") ||
@@ -1755,7 +1757,7 @@ static svg_status_t clip_source(void *ctx, void *snapshot, const svg_style_reque
         if (n->kind != OS64_HTML_ELEMENT)
             continue;
         if (n->ns != OS64_HTML_NS_SVG)
-            return SVG_UNSUPPORTED;
+            continue;
         // Scripts and animation do not contribute clip silhouettes in image mode.
         if (image_inert(a, n) || same_word(n->name, "title") || same_word(n->name, "desc") ||
             same_word(n->name, "metadata") || same_word(n->name, "style"))
