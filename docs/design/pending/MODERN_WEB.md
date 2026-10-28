@@ -372,6 +372,16 @@ says once modules run. With modules and import maps in, the census said it
 `ReadableStream`, and its loading placeholders stay where that code would
 have filled them. Chris bookmarked custom elements to follow 0f.
 
+**Browser-own, between slices (2026-10-28).** Two fixes that are not
+platform surface but gate what the platform work can show on the P5, each
+designed in HEAP_BINS.md and booked in DEBTS.md: the CSS parser's scratch
+kept by its owner across a cascade's reads (§ Browser layout, size S,
+libgarb) and size-class bins in the userland heap (§ Heap, size M, Chris's
+malloc). The measurement: a 22,415-rule page spent 8 of its 11.7 s of
+layout in the heap's first-fit walk, one walk per rule, and the window's
+thread holds 7% of a core idle on the same walk. Order: the scratch first,
+the bins when heap.c is opened; neither makes the other optional.
+
 ## How the slices run side by side (2026-10-21)
 
 Chris opened the arc on 2026-10-21 with a week's model usage to spend and
