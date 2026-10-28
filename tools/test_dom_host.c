@@ -297,6 +297,21 @@ static void dom_geometry_cases(void)
     dom_script(&f,GEOMETRY_ASSERT "throws('InvalidStateError',()=>document.body.offsetHeight);", "geometry-refusal");
     check(os64_dom_geometry_stats(f.binding,false).layouts==1,
           "failed geometry retains attempted-layout telemetry");
+    /* 0f's P4a: a person's submission's validation runs its invalid
+     * listeners through the wrapper's own call, so geometry has its budget,
+     * as it has for a script's checkValidity(). */
+    provider.refuse=false;
+    dom_script(&f,GEOMETRY_ASSERT
+        "var vf=document.createElement('form');vf.id='vf';vf.innerHTML='<input required>';document.body.appendChild(vf);"
+        "globalThis.measured=null;vf.addEventListener('invalid',function(){"
+        "try{measured=document.body.offsetWidth}catch(e){measured=String(e)}},true);",
+        "validity-geometry-setup");
+    bool form_valid=true, form_ran=false;
+    os64_js_outcome_t validated;
+    os64_html_node_t *vf=native_id(f.document->document,"vf");
+    check(vf!=NULL&&os64_dom_form_validate(f.binding,vf,NULL,&form_valid,&form_ran,&validated)==OS64_JS_OK&&
+          form_ran&&!form_valid,"a person's submission's validation runs as a task, and finds the form invalid");
+    dom_script(&f,GEOMETRY_ASSERT "assert(measured===21,'measured '+measured);","validity-geometry-budget");
     provider.refuse=false;provider.slow=true;provider.calls=0;
     os64_js_outcome_t outcome;
     const char *source="try{document.body.offsetWidth}catch(e){};try{document.body.offsetWidth}catch(e){}";

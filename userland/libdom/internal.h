@@ -244,10 +244,12 @@ struct os64_dom {
     DValue *sheet_list_prototype, *sheet_prototype;
     /* Constraint validation (validity.c): ValidityState's prototype; the
      * RegExp constructor and RegExp.prototype.exec, taken before any page
-     * ran, which judge a control's pattern; and the control last reported
-     * to the person, with its message, which the host reads after the
-     * task (os64_dom_report_message). NULL with the modern switch off. */
-    DValue *validity_prototype, *regexp, *regexp_exec;
+     * ran, which judge a control's pattern; the native function a person's
+     * submission's validation is called through (os64_dom_form_validate);
+     * and the control last reported to the person, with its message, which
+     * the host reads after the task (os64_dom_report_message). NULL with
+     * the modern switch off. */
+    DValue *validity_prototype, *regexp, *regexp_exec, *validate;
     const os64_html_node_t *reported;
     char reported_message[256];
     /* The window's Selection (selection.c), the one getSelection answers;

@@ -58,7 +58,8 @@ struct PNodeState {
     // A person's text the control's value could not hold: a number or a
     // date the type's grammar refused, which left the value "". It is the
     // field's, not the value's, so a clone does not copy it, and any value
-    // set by other than a person, or a reset, clears it (badInput).
+    // set by other than a person, a reset, or a change of the input's type
+    // clears it (badInput).
     bool bad_input;
     // The control's custom validity message (setCustomValidity), NULL being
     // none: a reset keeps it, and a clone does not copy it, as HTML's

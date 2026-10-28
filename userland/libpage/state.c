@@ -1810,6 +1810,12 @@ int64_t os64_page_node_set_attr(os64_page_state_t *state, const os64_html_node_t
     }
     p_state_publish(state);
     attr_stages_free(state, stages);
+    // A new type is a new field: the text a person typed into the old one,
+    // which its value could not hold, is not this one's bad input.
+    PNodeState *typed = p_is(node, OS64_HTML_TAG_INPUT) && os64_streq_nocase(name, "type")
+        ? p_state_find(state, node) : NULL;
+    if (typed != NULL)
+        typed->bad_input = false;
     if (changed)
         p_state_changed(state);
     p_arena_free(&temporary);

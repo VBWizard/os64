@@ -311,6 +311,21 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
     }
 }
 
+/* A person's submission's validation, as os64_dom_form_validate calls it
+ * through the wrapper: the form, reported when invalid; a strict false for
+ * an invalid form, true for a valid one. */
+static JSValue validate_form(JSContext *ctx, JSValueConst this_value, int argc, JSValueConst *argv, int magic,
+                             JSValue *data)
+{
+    (void)this_value; (void)magic;
+    os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
+    if (dom == NULL) return JS_EXCEPTION;
+    const os64_html_node_t *form = argc > 0 ? d_node(dom, ctx, argv[0]) : NULL;
+    if (form == NULL) return JS_EXCEPTION;
+    int valid = d_form_validate(dom, ctx, form, true);
+    return valid < 0 ? JS_EXCEPTION : JS_NewBool(ctx, valid > 0);
+}
+
 /* Take `name` of `from` and keep it for the binding's life (the registry
  * owns the reference d_retain is given). */
 static DValue *take(os64_dom_t *dom, JSContext *ctx, JSValueConst from, const char *name)
@@ -337,6 +352,10 @@ int d_validity_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     dom->regexp_exec = take(dom, ctx, regexp_prototype, "exec");
     JS_FreeValue(ctx, regexp_prototype);
     if (dom->regexp_exec == NULL) return -1;
+    JSValue validate = JS_NewCFunctionData(ctx, validate_form, 1, 0, 1, &dom->anchor->value);
+    if (JS_IsException(validate)) return -1;
+    dom->validate = d_retain(dom, ctx, validate);
+    if (dom->validate == NULL) return -1;
     JSValue prototype = JS_NewObject(ctx);
     if (JS_IsException(prototype)) return -1;
     dom->validity_prototype = d_retain(dom, ctx, prototype);
@@ -411,19 +430,27 @@ os64_js_status_t os64_dom_form_validate(os64_dom_t *dom, const os64_html_node_t 
      * an invalid listener asks of it does nothing. */
     struct DClicking self = {form, dom->submitting};
     dom->submitting = &self;
-    int result = d_form_validate(dom, ctx, form, true);
-    dom->submitting = self.next;
-    if (result < 0 && JS_HasException(ctx)) {
-        /* A runtime that must stop is the task's failure, which task_end
-         * reports; the binding's own refusal is the page's error. */
-        JSValue error = JS_GetException(ctx);
-        if (d_exception_catchable(ctx)) d_report(dom, ctx, error);
-        JS_FreeValue(ctx, error);
+    /* Through the wrapper's own call, so the pattern's matching and the
+     * invalid listeners run under the task's budget, as a script's
+     * checkValidity() runs them: geometry and deadlines need one. */
+    JSValue argument = d_wrap(dom, ctx, form);
+    bool invalid_form = false;
+    os64_js_outcome_t call;
+    os64_memset(&call, 0, sizeof(call));
+    if (JS_IsException(argument)) {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        call.status = OS64_JS_FAILED_RUNTIME;
+    } else {
+        os64_js_call(dom->runtime, OS64_JS_ABI_ID, dom->validate->value, JS_UNDEFINED, 1, &argument, &invalid_form,
+                     &call);
+        JS_FreeValue(ctx, argument);
     }
+    dom->submitting = self.next;
+    d_outcome_fold(outcome, &call);
     /* A validation the binding could not finish stops nothing: the
-     * model's judge still validates the submission (libpage's
-     * os64_page_activate). */
-    *valid = result != 0;
+     * model's judge still validates the submission (yonder asks it unless
+     * the task ended well). */
+    *valid = call.status != OS64_JS_OK || !invalid_form;
     return d_task_finish(dom, outcome);
 }
 

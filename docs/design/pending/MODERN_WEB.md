@@ -4199,7 +4199,10 @@ with no `validity` it threw on every press.
 - **Submission validates before `submit`**: `requestSubmit()` and a
   submit button's `click()` (window.c's `submit`), and a person's button
   and Enter (yonder's `page_validates`, through `os64_dom_form_validate`
-  as a task, by the submitter libpage would take, now public as
+  as a task whose validation is one call through the wrapper, so the
+  pattern and the invalid listeners run under the task's budget, as a
+  script's `checkValidity()` runs them; by the submitter libpage would
+  take, now public as
   `os64_page_submitter`). It is validated once, as HTML does: what a
   submit listener changes after it cannot refuse the submission, so the
   model, told (`os64_page_activate_validated`), does not judge it again;
@@ -4229,15 +4232,16 @@ with no `validity` it threw on every press.
   directories; `dom/nodes`' 14 and `dom/events`' 1 new passes are P3b's
   and the style sheets', recorded now. With the switch off no required
   line passes.
-- **Hosts**, 0 failed: DOM 17,856 and 115,883; the scripted page 8,565;
-  yonder 2,028; libpage 254,233; libjs's runtime 1,285 and 6,115.
-- **Mutants** (`tools/test_interfaces_mutants.py`, its P4a group): 60,
+- **Hosts**, 0 failed: DOM 17,810 and 115,923; the scripted page 8,567;
+  yonder 2,028; libpage 254,235; libjs's runtime 1,285 and 6,115.
+- **Mutants** (`tools/test_interfaces_mutants.py`, its P4a group): 62,
   each caught — the judge (an unnamed radio, a group's tick, readonly's
-  bar both ways and a select's, a fieldset's legend, mutability for a
-  field and not a box, an email list and a label, a URL's scheme and host,
-  where a pattern applies and an empty value, an email list matched
-  address by address, bad input's type, record, person, white space and
-  reset, the custom message kept, judged and said and cut between
+  bar both ways and a select's, a fieldset's legend, a placeholder's text
+  without its scripts, mutability for a field and not a box, an email list
+  and a label, a URL's scheme and host, where a pattern applies and an
+  empty value, an email list matched address by address, bad input's
+  record, person, white space, reset and type change, the custom message
+  kept, judged and said and cut between
   characters, a NUL in an address, a submission judging every flag and
   not again once validated, a submitter for a button or Enter alone); the
   binding (the pattern matched,
@@ -4247,7 +4251,8 @@ with no `validity` it threw on every press.
   one whole; setCustomValidity; a form's own controls; the report;
   formnovalidate both in the binding and for the host; submit() and
   requestSubmit(); no submission inside a form's own, in the binding and
-  for the host, its validation and its submit event; oninvalid); and
+  for the host, its validation and its submit event; a person's
+  validation under the task's budget; oninvalid); and
   yonder (an onsubmit attribute alone validated before it runs; a button
   and Enter validated, and
   not again by the model, the report's focus and sentence, the refusal's

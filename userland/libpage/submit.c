@@ -150,6 +150,23 @@ static bool radio_group_ok(const os64_page_t *page, int32_t control)
     return !required || ticked;
 }
 
+// Whether the text under `n` is all white space, gathered as an option's
+// text is (core.c's gather: every element's text but a script's).
+static bool text_blank(const os64_html_node_t *n)
+{
+    for (; n != NULL; n = n->next) {
+        if (n->kind == OS64_HTML_TEXT) {
+            for (size_t i = 0; i < n->text_len; i++)
+                if (n->text[i] != ' ' && n->text[i] != '\t' && n->text[i] != '\n' && n->text[i] != '\r' &&
+                    n->text[i] != '\f')
+                    return false;
+        } else if (n->kind == OS64_HTML_ELEMENT && !p_is(n, OS64_HTML_TAG_SCRIPT) && !text_blank(n->first_child)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // An option's value is empty: its value attribute, else its text with the
 // white space stripped and collapsed, which is empty when the text is all
 // white space.
@@ -158,17 +175,7 @@ static bool option_value_empty(const os64_html_node_t *option)
     const char *value = p_attr(option, "value");
     if (value != NULL)
         return value[0] == '\0';
-    for (const os64_html_node_t *at = option->first_child; at != NULL;) {
-        if (at->kind == OS64_HTML_TEXT)
-            for (size_t i = 0; i < at->text_len; i++)
-                if (at->text[i] != ' ' && at->text[i] != '\t' && at->text[i] != '\n' && at->text[i] != '\r' &&
-                    at->text[i] != '\f')
-                    return false;
-        if (at->first_child != NULL) { at = at->first_child; continue; }
-        while (at != option && at->next == NULL) at = at->parent;
-        at = at != option ? at->next : NULL;
-    }
-    return true;
+    return text_blank(option->first_child);
 }
 
 // The standard's "suffering from being missing" for a list: it is required
@@ -382,14 +389,6 @@ static bool pattern_mismatch(const os64_html_node_t *n, os64_page_input_t input,
     }
 }
 
-// The types whose person's text can fail to become a value (state.c's
-// unparsed); badInput stays false for any other, whatever the record says.
-static bool can_be_bad(os64_page_input_t input)
-{
-    return input == OS64_PAGE_INPUT_NUMBER || input == OS64_PAGE_INPUT_DATE || input == OS64_PAGE_INPUT_MONTH ||
-        input == OS64_PAGE_INPUT_WEEK || input == OS64_PAGE_INPUT_TIME || input == OS64_PAGE_INPUT_DATETIME_LOCAL;
-}
-
 // THE JUDGE: every flag a control's validity has (ValidityState, § 4.10.20.3),
 // for a node of the kinds the value verbs take, given its value and its
 // radio group's answer — which the model has from its chains and a node
@@ -454,7 +453,9 @@ static uint32_t judge(os64_page_state_t *state, const os64_html_node_t *n, os64_
         if (least != NULL && p_nonnegative(least, &limit) && len != 0 && units < limit)
             flags |= OS64_PAGE_VALIDITY_TOO_SHORT;
     }
-    if (can_be_bad(input) && p_node_bad_input(state, n))
+    // The record is set only for the types whose text can fail to become a
+    // value (state.c's unparsed), and a change of type clears it.
+    if (p_node_bad_input(state, n))
         flags |= OS64_PAGE_VALIDITY_BAD_INPUT;
     return flags;
 }

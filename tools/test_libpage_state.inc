@@ -950,8 +950,16 @@ static void state_validity(void)
     os64_page_free(page);
     os64_html_document_free(doc);
 
-    /* a bad input record outlives a type change, and a type that cannot be
-     * bad does not read it */
+    /* a placeholder whose only text is a script's: its value is empty, as
+     * the option's own text leaves scripts out */
+    doc = parse("<select required><option><script>0</script></option><option>A</option></select>", "utf-8");
+    page = os64_page_build(doc, kPage, NULL, NULL);
+    state_expect("validity: a script's text is no option text",
+                 validity_of(page, 0, NULL) == OS64_PAGE_VALIDITY_MISSING);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+
+    /* a type change is a new field: it clears the bad input */
     doc = parse("<input type=number>", "utf-8");
     page = os64_page_build(doc, kPage, NULL, NULL);
     state = os64_page_shared_state(page);
@@ -963,6 +971,10 @@ static void state_validity(void)
                  os64_page_node_set_attr(state, field, "type", "text", 4, false) == 0 &&
                  os64_page_node_validity(state, field, NULL, NULL, &after) == 0 &&
                  (after & OS64_PAGE_VALIDITY_BAD_INPUT) == 0);
+    state_expect("validity: and back to a number, the old text is not this field's",
+                 os64_page_node_set_attr(state, field, "value", "7", 1, false) == 0 &&
+                 os64_page_node_set_attr(state, field, "type", "number", 6, false) == 0 &&
+                 os64_page_node_validity(state, field, NULL, NULL, &after) == 0 && after == 0);
     os64_page_free(page);
     os64_html_document_free(doc);
 }

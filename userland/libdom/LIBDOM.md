@@ -1492,4 +1492,6 @@ button, fieldset and output, and a form's `checkValidity` and
 `reportValidity` (`d_form_validate`) collect its invalid submittable
 controls in tree order before firing `invalid` (cancelable, not bubbling)
 at each. A report is the host's: `os64_dom_form_validate` runs a person's
-submission's validation as a task, before the host fires `submit`.
+submission's validation as a task, before the host fires `submit`, as one
+call through the wrapper (`os64_js_call` of the binding's own function), so
+its pattern and its invalid listeners run under the task's budget.
