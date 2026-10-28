@@ -607,6 +607,46 @@ static svg_status_t css_transform(const garb_val_t *v, Map *out)
     }
     return SVG_OK;
 }
+static svg_status_t resource_transform(Adapter *a, const os64_html_node_t *node,
+                                       const char *fallback, Map *out)
+{
+    *out = identity;
+    size_t depth = 0;
+    while (node && node->kind == OS64_HTML_ELEMENT) {
+        if (++depth > SVG_DEPTH_MAX)
+            return SVG_LIMIT;
+        if (!adapter_spend(a, 1))
+            return a->stopped;
+        const garb_val_t *v = winner(a->cascade, node, GARB_TRANSFORM);
+        if (v) {
+            if (v->kind != GARB_V_WIDE)
+                return css_transform(v, out);
+            // Transform is not inherited by default. Explicit inherit follows
+            // the source parent, not href templates or composed ancestor maps.
+            if (!same_word(v->keyword, "inherit"))
+                return SVG_OK;
+            node = node->parent;
+            fallback = NULL;
+            continue;
+        }
+        const char *text = fallback;
+        if (!text) {
+            const char *name =
+                same_word(node->name, "linearGradient") || same_word(node->name, "radialGradient")
+                    ? "gradientTransform"
+                : same_word(node->name, "pattern") ? "patternTransform"
+                                                   : "transform";
+            text = node->ns == OS64_HTML_NS_SVG ? attr(node, name) : "";
+        }
+        Scanner scan;
+        if (!scanner(text, &scan))
+            return SVG_LIMIT;
+        if (!adapter_spend(a, scan.left))
+            return a->stopped;
+        return transform_attribute(scan.p, out) ? SVG_OK : SVG_MALFORMED;
+    }
+    return SVG_OK;
+}
 static svg_status_t apply(Adapter *a, Computed *c, const Computed *parent, garb_prop_t prop,
                           const garb_val_t *v)
 {
@@ -1561,18 +1601,7 @@ static svg_status_t gradient_paint(Adapter *a, const garb_val_t *paint, uint32_t
         if (status != SVG_OK)
             return status;
     }
-    const garb_val_t *transform = winner(a->cascade, resource, GARB_TRANSFORM);
-    if (transform)
-        status = css_transform(transform, &g->transform);
-    else if (attrs[6]) {
-        Scanner scan;
-        if (!scanner(attrs[6], &scan))
-            return SVG_LIMIT;
-        if (!adapter_spend(a, scan.left))
-            return a->stopped;
-        if (!transform_attribute(attrs[6], &g->transform))
-            status = SVG_MALFORMED;
-    }
+    status = resource_transform(a, resource, attrs[6], &g->transform);
     if (status != SVG_OK)
         return status;
     const garb_prop_t extra[] = {GARB_TRANSFORM_ORIGIN, GARB_TRANSLATE, GARB_ROTATE, GARB_SCALE};

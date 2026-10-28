@@ -52,7 +52,10 @@ user space use the consumer's current viewport. Numeric and absolute-unit
 coordinates are resolved before calling libsvg. Relative/calc coordinates,
 radial resources, cross-type gradient templates, individual CSS transforms
 and explicit transform origins are outside this increment. CSS transform on
-the referenced gradient replaces its gradientTransform attribute.
+the referenced gradient replaces its gradientTransform attribute. CSS-wide
+`initial` and `unset` reset that non-inherited property to identity. Explicit
+`inherit` resolves the source parent's computed transform, including a bounded
+chain of explicit inheritance, without composing ancestor maps.
 
 `stop-color` and `stop-opacity` are typed, non-inherited libgarb properties,
 including presentation attributes and CSS-wide inheritance. Resource colors
@@ -137,6 +140,31 @@ bounds. Ten cases reproduced failures before the correction. The full adapter
 suite passes under ASan, UBSan and LeakSanitizer; the freestanding Yonder build
 passes. The [review browser report](../../svg-evidence/gradients-review-results.json)
 records the corrected source and the 50 expected linear-gradient outcomes.
+A further review found that CSS-wide gradient transforms reached the ordinary
+transform-function parser and refused the entire SVG. Fourteen additional
+inline/image/explicit-reference triples cover resets, source-parent inheritance,
+CSS and attribute ancestors, inheritance chains, template fallback and losing
+malformed attributes. Eleven cases failed before the correction. The full
+adapter suite and freestanding build pass, with leak detection enabled for
+host tests. The [transform report](../../svg-evidence/gradient-transform-results.json)
+records 29 expected browser outcomes: thirteen direct matches, one explicit
+identity-reference match, one pinned difference and fourteen negative controls.
+The original 50 linear-gradient browser outcomes also pass on the corrected
+source.
+
+For a referencing gradient with `transform: initial`, Chromium retains the
+href template's rotated transform; replacing `initial` with an identity matrix
+agrees with native. The adapter treats the copied `gradientTransform` as a
+presentation-attribute fallback, overridden by the winning CSS declaration.
+This follows [SVG2's presentation-attribute mapping](https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes)
+and the [transform property's initial value and inheritance rules](https://www.w3.org/TR/css-transforms-1/#transform-property).
+The comparison records the browser difference with fixed metrics rather than
+relaxing the match tolerance. Reproduce the additional comparisons with:
+
+```sh
+python3 tools/svg_reftests/gradient_transforms.py --native /tmp/svg-gradients-native --output /tmp/svg-transform-browser
+```
+
 The initial gallery delivery below remains frozen at its tested revision.
 
 ## Delivery checkpoint
