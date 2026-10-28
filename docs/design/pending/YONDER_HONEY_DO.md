@@ -343,3 +343,46 @@ the same vintage, listed so one PR list covers the between-arcs work:
   bundle has a 3,666-byte `src`), a `<select>` laid out as every option at
   once, load failures that live only on the status line instead of an
   error page.
+
+## Added 2026-10-28, from a surf with Fable
+
+Polish and tooling found while reading records beside Chris. None is
+platform surface; each is small; none is scheduled.
+
+- **The census should say whose global is missing.** `MISSING global`
+  lists every name a script read as a global and found undefined, so
+  `requestAnimationFrame` (ours to supply) and `jQuery`, `$`, `RLQ` (the
+  page's own, unloaded because a loader died upstream) sit in one list
+  with one spelling. The tally knows the platform's globals; a name not
+  among them is the page's, and the record can say so, so a reader does
+  not have to.
+- **An agent preset per site.** A search engine served three tiers to the
+  Chrome identity, full, lite, then quietly worse results, and good
+  results to yonder's own name, because the Chrome agent with a non-Chrome
+  connection reads as automated. The identity preset already carries its
+  companion headers (W1); what is missing is choosing it by site, a Chrome
+  identity for sites that gate on it and yonder's name for those that
+  reward honesty. A settings row keyed by host.
+- **A video's poster with a play badge.** DEBTS § Browser layout books
+  video as having no stand-in. The polish shape: when a `video` or a
+  player's `img` poster is in the markup, draw the poster at the box's
+  size with a play badge over it, and nothing plays. A picture of the
+  video is what a reader wanted from the page; the badge says why it does
+  not move.
+- **Split "laid out in".** The status line's number is the arrival's
+  model refresh, cascade and layout in one figure; on 2026-10-28 it took
+  an afternoon with per-second `/proc` logs to learn that 8 of 11.7 s were
+  the heap under the cascade (HEAP_BINS.md). The line and the record
+  should carry the three parts, and `/proc/<task>/heap` should carry
+  `walk_steps` (the bins design has it).
+- **`--script-audit` only as the first argument.** `yonder <address>
+  --script-audit` switches nothing on and says nothing; the flag is read
+  from `argv[1]` alone. Either take it anywhere or refuse it anywhere
+  else, and say which in the help.
+- **Placeholder text** (from 10/25): a text field never draws its
+  `placeholder` attribute. Cheap, visible on every form.
+- **A clickable FAILED badge** (Chris, 10/25): the status bar says one
+  failure at a time and the next replaces it; a click on the badge should
+  show them all.
+- **An `img` with no `src` paints as a picture still coming**: booked in
+  DEBTS § Browser layout the same day; listed here so the batch sees it.
