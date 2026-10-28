@@ -148,6 +148,11 @@ DValue *d_retain(os64_dom_t *dom, JSContext *ctx, JSValue value)
     return entry;
 }
 
+bool d_same_object(JSValueConst value, const DValue *held)
+{
+    return held != NULL && JS_IsObject(value) && JS_VALUE_GET_PTR(value) == JS_VALUE_GET_PTR(held->value);
+}
+
 DValue *d_intrinsic(os64_dom_t *dom, JSContext *ctx, JSValueConst from, const char *name)
 {
     JSValue value = JS_GetPropertyStr(ctx, from, name);

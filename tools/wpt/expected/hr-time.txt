@@ -15,12 +15,65 @@ performance-tojson.html	Test performance.toJSON()
 timeOrigin.html	Window timeOrigin is close to Date.now() when there is no system clock adjustment.
 # P1-W: the coarsened clock read beside crossOriginIsolated, which is false.
 timing-attack.html	The recommended minimum resolution of the Performance interface has been set to 100 microseconds for cross-origin isolated contexts.
+# 0f's P7 (MODERN_WEB.md § 0f's P7, as built): pages that read WPT's
+# WebIDL, which run once interfaces/ is fetched and the runner serves the
+# WebIDL parser. Each fails with the switch off.
+idlharness.any.html	Partial interface Window: member names are unique
+idlharness.any.html	Partial interface mixin WindowOrWorkerGlobalScope: member names are unique
+idlharness.any.html	Partial interface mixin WindowOrWorkerGlobalScope: original interface mixin defined
+idlharness.any.html	Performance interface object length
+idlharness.any.html	Performance interface object name
+idlharness.any.html	Performance interface: default toJSON operation on performance
+idlharness.any.html	Performance interface: existence and properties of interface object
+idlharness.any.html	Performance interface: existence and properties of interface prototype object
+idlharness.any.html	Performance interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	Performance interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	Performance interface: performance must inherit property "now()" with the proper type
+idlharness.any.html	Performance interface: performance must inherit property "timeOrigin" with the proper type
+idlharness.any.html	Performance interface: performance must inherit property "toJSON()" with the proper type
+idlharness.any.html	Performance must be primary interface of performance
+idlharness.any.html	Stringification of performance
+idlharness.any.html	Window includes AnimationFrameProvider: member names are unique
+idlharness.any.html	Window includes GlobalEventHandlers: member names are unique
+idlharness.any.html	Window includes WindowEventHandlers: member names are unique
+idlharness.any.html	Window includes WindowLocalStorage: member names are unique
+idlharness.any.html	Window includes WindowOrWorkerGlobalScope: member names are unique
+idlharness.any.html	Window includes WindowSessionStorage: member names are unique
+idlharness.any.html	Window interface: self must inherit property "performance" with the proper type
+idlharness.any.html	WorkerGlobalScope includes WindowOrWorkerGlobalScope: member names are unique
+idlharness.any.html	idl_test setup
+idlharness.any.html	idl_test validation
 [excluded]
 [passing]
 basic.any.html	Performance interface extends EventTarget.
 basic.any.html	self.performance.now() difference is not negative
 basic.any.html	self.performance.now() is a function that returns a number
 basic.any.html	self.performance.now() returns a positive number
+idlharness.any.html	Partial interface Window: member names are unique
+idlharness.any.html	Partial interface mixin WindowOrWorkerGlobalScope: member names are unique
+idlharness.any.html	Partial interface mixin WindowOrWorkerGlobalScope: original interface mixin defined
+idlharness.any.html	Performance interface object length
+idlharness.any.html	Performance interface object name
+idlharness.any.html	Performance interface: default toJSON operation on performance
+idlharness.any.html	Performance interface: existence and properties of interface object
+idlharness.any.html	Performance interface: existence and properties of interface prototype object
+idlharness.any.html	Performance interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	Performance interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	Performance interface: performance must inherit property "now()" with the proper type
+idlharness.any.html	Performance interface: performance must inherit property "timeOrigin" with the proper type
+idlharness.any.html	Performance interface: performance must inherit property "toJSON()" with the proper type
+idlharness.any.html	Performance must be primary interface of performance
+idlharness.any.html	Stringification of performance
+idlharness.any.html	Window includes AnimationFrameProvider: member names are unique
+idlharness.any.html	Window includes GlobalEventHandlers: member names are unique
+idlharness.any.html	Window includes WindowEventHandlers: member names are unique
+idlharness.any.html	Window includes WindowLocalStorage: member names are unique
+idlharness.any.html	Window includes WindowOrWorkerGlobalScope: member names are unique
+idlharness.any.html	Window includes WindowSessionStorage: member names are unique
+idlharness.any.html	Window interface: self must inherit property "performance" with the proper type
+idlharness.any.html	WorkerGlobalScope includes WindowOrWorkerGlobalScope: member names are unique
+idlharness.any.html	idl_test setup
+idlharness.any.html	idl_test validation
 monotonic-clock.any.html	self.performance.now() difference is not negative
 monotonic-clock.any.html	self.performance.now() returns a positive number
 performance-tojson.html	Test performance.toJSON()

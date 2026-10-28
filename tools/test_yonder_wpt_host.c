@@ -42,7 +42,8 @@
  * kWptHosts (the page's own, its www subdomains, and a second site,
  * wpt-alt.test, for the cross-origin cases) is answered from the checkout
  * (a .py handler is not: nothing here runs one, and a request for one is a
- * network error), /resources/testharnessreport.js from --report
+ * network error; /resources/WebIDLParser.js is the WebIDL parser's own
+ * file, as WPT's server rewrites it), /resources/testharnessreport.js from --report
  * (tools/wpt/'s, which leaves the results in the tree; read once, before
  * any page, and a run without it cannot be judged), and everything else
  * fails as a fetch that did not arrive does. A script's request is
@@ -661,6 +662,12 @@ static char *wpt_serve(const char *url, size_t *len) {
         path[n++]=(char)c;
     }
     path[n]='\0';
+    /* WPT's server's rewrite (tools/serve/serve.py's `rewrites`):
+     * idlharness's WebIDL parser, from its own place. */
+    if(!strcmp(path,"resources/WebIDLParser.js")) {
+        free(path);
+        path=wpt_strdup("resources/webidl2/lib/webidl2.js");
+    }
     char *bytes=NULL;
     /* Nothing above the checkout, and no server-side handler. */
     if(!strcmp(path,"..") || !strncmp(path,"../",3) || strstr(path,"/../")!=NULL ||

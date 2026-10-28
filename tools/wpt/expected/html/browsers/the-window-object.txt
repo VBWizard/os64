@@ -15,6 +15,9 @@ named-access-on-the-window-object/scoped-to-associated-document.html	Elements of
 # 0f's P4a (MODERN_WEB.md § 0f's P4a, as built): window's oninvalid. It fails
 # with the switch off.
 window-properties.https.html	Window attribute: oninvalid
+# 0f's P7 (MODERN_WEB.md § 0f's P7, as built): the location's
+# [LegacyUnforgeable] members. Fails with the switch off.
+proxy-getOwnPropertyDescriptor.html	Location target, no trap, [LegacyUnforgeable] "hash" attribute
 [excluded]
 [passing]
 Document-defaultView.html	Document created with HTML DOMParser
@@ -52,6 +55,7 @@ named-access-on-the-window-object/window-null-names.html	Named access with null 
 noopener-noreferrer-BarProp.window.html	All bars visible
 proxy-getOwnPropertyDescriptor.html	Document proxy target, custom trap, non-existent value attribute
 proxy-getOwnPropertyDescriptor.html	Location proxy target, forwarding trap, [LegacyUnforgeable] "reload" method
+proxy-getOwnPropertyDescriptor.html	Location target, no trap, [LegacyUnforgeable] "hash" attribute
 proxy-getOwnPropertyDescriptor.html	Window proxy target, custom trap, "onclick" event handler attribute
 proxy-getOwnPropertyDescriptor.html	Window target, forwarding trap, [LegacyUnforgeable] "document" attribute
 window-aliases.html	frames should be the global object

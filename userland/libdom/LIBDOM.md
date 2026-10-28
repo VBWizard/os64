@@ -396,9 +396,10 @@ switch on `scroll`, `resize`, `popstate`, `hashchange`, `online`, `offline`,
 `languagechange`, `error`, `unhandledrejection`, `rejectionhandled`,
 `message` and `messageerror`) are window's. For the ones every element has a
 property for (`load`, `focus`, `blur`, `scroll`, `resize`) that is so from
-`<body onload>` and `document.body.onload` alike; for the others it is so
-from the body's content attribute only, since the body has no such IDL
-property (`document.body.onpopstate` is an ordinary expando; DEBTS.md).
+`<body onload>` and `document.body.onload` alike, and for the others
+HTMLBodyElement has them too (0f's P6a's WindowEventHandlers), but for
+`error`: no element has `onerror` here, so `document.body.onerror` is an
+ordinary expando, and only the content attribute is window's (DEBTS.md).
 
 The body is first checked by the intrinsic Function constructor, taken
 before any page script could replace it. QuickJS builds that function by
@@ -756,7 +757,16 @@ which do nothing, the window being the person's to raise; `matchMedia`,
 `CSSStyleDeclaration` interface, which names the style object's prototype
 and which the computed declaration's inherits; and
 `onpopstate`, `onhashchange`, `PopStateEvent` and `HashChangeEvent`, with
-`pushState`, `replaceState`, `state` and `scrollRestoration` on history).
+`pushState`, `replaceState`, `state` and `scrollRestoration` on history;
+and `Location`, `History` and `Navigator`, the window's own objects as
+their interfaces' (0f's P7, `window.c`'s `d_window_objects_install`):
+History's and Navigator's members moved to their prototypes, named and
+an operation enumerable as WebIDL makes them; Location's left on the
+location, [LegacyUnforgeable], with its own `valueOf` and
+`Symbol.toPrimitive`, its prototype holding no member. Each object is made
+over a prototype level of its own, empty without the switch, so its chain
+has the same levels either way, and each member checks that it is called
+on its object, with the switch or without).
 With the switch off none of those names exists, nor
 `document.scrollingElement`, `document.defaultView` or an element's
 `onscroll`; the arc's handler types' content attributes are not handlers

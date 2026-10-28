@@ -549,6 +549,9 @@ DValue *d_retain(os64_dom_t *dom, JSContext *ctx, JSValue value);
  * d_retain is given): the engine's own, whatever a page later puts there.
  * NULL, with a TypeError pending, when it is no function. */
 DValue *d_intrinsic(os64_dom_t *dom, JSContext *ctx, JSValueConst from, const char *name);
+/* Whether `value` is the very object `held` holds (false for NULL): the
+ * brand check of a member of an object the binding makes one of. */
+bool d_same_object(JSValueConst value, const DValue *held);
 int d_method(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
              const char *name, JSCFunctionData *fn, int argc, int magic);
 int d_accessor(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
@@ -829,6 +832,9 @@ int d_view_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_media_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_computed_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 int d_history_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* Location, History and Navigator as interfaces, over the objects the
+ * classic install made (window.c, 0f's P7). */
+int d_window_objects_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* The view's records freed, after the engine (os64_dom_free). */
 void d_view_free(os64_dom_t *dom);
 int d_storage_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);

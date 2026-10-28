@@ -4229,6 +4229,59 @@ historical.any.html	URLSearchParams: no structured serialize/deserialize support
 # 0f's P6a (MODERN_WEB.md § 0f's P6a, as built): an area's href. Fails
 # with the switch off.
 url-setters-a-area.window.html?exclude=(file|javascript|mailto)	<area>: Setting <https://example.net>.search = ''
+# 0f's P7 (MODERN_WEB.md § 0f's P7, as built): pages that read WPT's
+# WebIDL, which run once interfaces/ is fetched and the runner serves the
+# WebIDL parser. Each fails with the switch off.
+idlharness.any.html	Stringification of new URL("http://foo")
+idlharness.any.html	Stringification of new URLSearchParams("hi=there&thank=you")
+idlharness.any.html	URL interface object length
+idlharness.any.html	URL interface object name
+idlharness.any.html	URL interface: calling canParse(USVString, optional USVString) on new URL("http://foo") with too few arguments must throw TypeError
+idlharness.any.html	URL interface: calling parse(USVString, optional USVString) on new URL("http://foo") with too few arguments must throw TypeError
+idlharness.any.html	URL interface: existence and properties of interface object
+idlharness.any.html	URL interface: existence and properties of interface prototype object
+idlharness.any.html	URL interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	URL interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "canParse(USVString, optional USVString)" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "hash" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "host" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "hostname" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "href" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "origin" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "parse(USVString, optional USVString)" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "password" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "pathname" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "port" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "protocol" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "search" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "searchParams" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "toJSON()" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "username" with the proper type
+idlharness.any.html	URL interface: toJSON operation on new URL("http://foo")
+idlharness.any.html	URL must be primary interface of new URL("http://foo")
+idlharness.any.html	URLSearchParams interface object length
+idlharness.any.html	URLSearchParams interface object name
+idlharness.any.html	URLSearchParams interface: calling append(USVString, USVString) on new URLSearchParams("hi=there&thank=you") with too few arguments must throw TypeError
+idlharness.any.html	URLSearchParams interface: calling delete(USVString, optional USVString) on new URLSearchParams("hi=there&thank=you") with too few arguments must throw TypeError
+idlharness.any.html	URLSearchParams interface: calling get(USVString) on new URLSearchParams("hi=there&thank=you") with too few arguments must throw TypeError
+idlharness.any.html	URLSearchParams interface: calling getAll(USVString) on new URLSearchParams("hi=there&thank=you") with too few arguments must throw TypeError
+idlharness.any.html	URLSearchParams interface: calling has(USVString, optional USVString) on new URLSearchParams("hi=there&thank=you") with too few arguments must throw TypeError
+idlharness.any.html	URLSearchParams interface: calling set(USVString, USVString) on new URLSearchParams("hi=there&thank=you") with too few arguments must throw TypeError
+idlharness.any.html	URLSearchParams interface: existence and properties of interface object
+idlharness.any.html	URLSearchParams interface: existence and properties of interface prototype object
+idlharness.any.html	URLSearchParams interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	URLSearchParams interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	URLSearchParams interface: new URLSearchParams("hi=there&thank=you") must inherit property "append(USVString, USVString)" with the proper type
+idlharness.any.html	URLSearchParams interface: new URLSearchParams("hi=there&thank=you") must inherit property "delete(USVString, optional USVString)" with the proper type
+idlharness.any.html	URLSearchParams interface: new URLSearchParams("hi=there&thank=you") must inherit property "get(USVString)" with the proper type
+idlharness.any.html	URLSearchParams interface: new URLSearchParams("hi=there&thank=you") must inherit property "getAll(USVString)" with the proper type
+idlharness.any.html	URLSearchParams interface: new URLSearchParams("hi=there&thank=you") must inherit property "has(USVString, optional USVString)" with the proper type
+idlharness.any.html	URLSearchParams interface: new URLSearchParams("hi=there&thank=you") must inherit property "set(USVString, USVString)" with the proper type
+idlharness.any.html	URLSearchParams interface: new URLSearchParams("hi=there&thank=you") must inherit property "size" with the proper type
+idlharness.any.html	URLSearchParams interface: new URLSearchParams("hi=there&thank=you") must inherit property "sort()" with the proper type
+idlharness.any.html	URLSearchParams must be primary interface of new URLSearchParams("hi=there&thank=you")
+idlharness.any.html	idl_test setup
+idlharness.any.html	idl_test validation
 [excluded]
 [passing]
 IdnaTestV2-removed.any.html	Loading data…
@@ -7043,6 +7096,56 @@ historical.any.html	URL.domainToUnicode should be undefined
 historical.any.html	URL: no structured serialize/deserialize support
 historical.any.html	URLSearchParams: no structured serialize/deserialize support
 historical.any.html	searchParams on location object
+idlharness.any.html	Stringification of new URL("http://foo")
+idlharness.any.html	Stringification of new URLSearchParams("hi=there&thank=you")
+idlharness.any.html	URL interface object length
+idlharness.any.html	URL interface object name
+idlharness.any.html	URL interface: calling canParse(USVString, optional USVString) on new URL("http://foo") with too few arguments must throw TypeError
+idlharness.any.html	URL interface: calling parse(USVString, optional USVString) on new URL("http://foo") with too few arguments must throw TypeError
+idlharness.any.html	URL interface: existence and properties of interface object
+idlharness.any.html	URL interface: existence and properties of interface prototype object
+idlharness.any.html	URL interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	URL interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "canParse(USVString, optional USVString)" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "hash" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "host" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "hostname" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "href" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "origin" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "parse(USVString, optional USVString)" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "password" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "pathname" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "port" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "protocol" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "search" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "searchParams" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "toJSON()" with the proper type
+idlharness.any.html	URL interface: new URL("http://foo") must inherit property "username" with the proper type
+idlharness.any.html	URL interface: toJSON operation on new URL("http://foo")
+idlharness.any.html	URL must be primary interface of new URL("http://foo")
+idlharness.any.html	URLSearchParams interface object length
+idlharness.any.html	URLSearchParams interface object name
+idlharness.any.html	URLSearchParams interface: calling append(USVString, USVString) on new URLSearchParams("hi=there&thank=you") with too few arguments must throw TypeError
+idlharness.any.html	URLSearchParams interface: calling delete(USVString, optional USVString) on new URLSearchParams("hi=there&thank=you") with too few arguments must throw TypeError
+idlharness.any.html	URLSearchParams interface: calling get(USVString) on new URLSearchParams("hi=there&thank=you") with too few arguments must throw TypeError
+idlharness.any.html	URLSearchParams interface: calling getAll(USVString) on new URLSearchParams("hi=there&thank=you") with too few arguments must throw TypeError
+idlharness.any.html	URLSearchParams interface: calling has(USVString, optional USVString) on new URLSearchParams("hi=there&thank=you") with too few arguments must throw TypeError
+idlharness.any.html	URLSearchParams interface: calling set(USVString, USVString) on new URLSearchParams("hi=there&thank=you") with too few arguments must throw TypeError
+idlharness.any.html	URLSearchParams interface: existence and properties of interface object
+idlharness.any.html	URLSearchParams interface: existence and properties of interface prototype object
+idlharness.any.html	URLSearchParams interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	URLSearchParams interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	URLSearchParams interface: new URLSearchParams("hi=there&thank=you") must inherit property "append(USVString, USVString)" with the proper type
+idlharness.any.html	URLSearchParams interface: new URLSearchParams("hi=there&thank=you") must inherit property "delete(USVString, optional USVString)" with the proper type
+idlharness.any.html	URLSearchParams interface: new URLSearchParams("hi=there&thank=you") must inherit property "get(USVString)" with the proper type
+idlharness.any.html	URLSearchParams interface: new URLSearchParams("hi=there&thank=you") must inherit property "getAll(USVString)" with the proper type
+idlharness.any.html	URLSearchParams interface: new URLSearchParams("hi=there&thank=you") must inherit property "has(USVString, optional USVString)" with the proper type
+idlharness.any.html	URLSearchParams interface: new URLSearchParams("hi=there&thank=you") must inherit property "set(USVString, USVString)" with the proper type
+idlharness.any.html	URLSearchParams interface: new URLSearchParams("hi=there&thank=you") must inherit property "size" with the proper type
+idlharness.any.html	URLSearchParams interface: new URLSearchParams("hi=there&thank=you") must inherit property "sort()" with the proper type
+idlharness.any.html	URLSearchParams must be primary interface of new URLSearchParams("hi=there&thank=you")
+idlharness.any.html	idl_test setup
+idlharness.any.html	idl_test validation
 toascii.window.html	lookout.net (using URL)
 toascii.window.html	lookout.net (using URL.host)
 toascii.window.html	lookout.net (using URL.hostname)
