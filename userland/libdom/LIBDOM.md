@@ -1439,7 +1439,11 @@ the interfaces it is on; one accessor reads every row, and a row's member
 called on another interface is a TypeError. Beside them textarea's
 `defaultValue` and `textLength`, `autocomplete` through HTML's autofill
 grammar, input's `width`, `height` and `indeterminate` (libpage's
-`os64_page_node_set_indeterminate`), and the `form` (`d_form_owner`) of
+`os64_page_node_set_indeterminate`), input's `valueAsNumber`,
+`valueAsDate`, `stepUp` and `stepDown` (libpage's
+`os64_page_node_value_as`, `os64_page_node_set_value_as` and
+`os64_page_node_step`; a Date read by the `getTime` taken before any page
+ran, which refuses anything that is no Date), and the `form` (`d_form_owner`) of
 every control, fieldset and output and the `labels` of every control and
 output: a live NodeList made once (the collection kind LABELS), of the
 labels whose labeled control (`d_label_control`) the element is, walked

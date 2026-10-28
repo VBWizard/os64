@@ -326,30 +326,16 @@ static JSValue validate_form(JSContext *ctx, JSValueConst this_value, int argc, 
     return valid < 0 ? JS_EXCEPTION : JS_NewBool(ctx, valid > 0);
 }
 
-/* Take `name` of `from` and keep it for the binding's life (the registry
- * owns the reference d_retain is given). */
-static DValue *take(os64_dom_t *dom, JSContext *ctx, JSValueConst from, const char *name)
-{
-    JSValue value = JS_GetPropertyStr(ctx, from, name);
-    if (JS_IsException(value)) return NULL;
-    if (!JS_IsFunction(ctx, value)) {
-        JS_FreeValue(ctx, value);
-        JS_ThrowTypeError(ctx, "Missing intrinsic %s", name);
-        return NULL;
-    }
-    return d_retain(dom, ctx, value);
-}
-
 int d_validity_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     JSClassID id = os64_js_class_id(&validity_slot);
     static const JSClassDef definition = {.class_name = "ValidityState", .finalizer = validity_finalizer};
     if (!JS_IsRegisteredClass(dom->engine, id) && JS_NewClass(dom->engine, id, &definition) < 0) return -1;
-    dom->regexp = take(dom, ctx, global, "RegExp");
+    dom->regexp = d_intrinsic(dom, ctx, global, "RegExp");
     if (dom->regexp == NULL) return -1;
     JSValue regexp_prototype = JS_GetPropertyStr(ctx, dom->regexp->value, "prototype");
     if (JS_IsException(regexp_prototype)) return -1;
-    dom->regexp_exec = take(dom, ctx, regexp_prototype, "exec");
+    dom->regexp_exec = d_intrinsic(dom, ctx, regexp_prototype, "exec");
     JS_FreeValue(ctx, regexp_prototype);
     if (dom->regexp_exec == NULL) return -1;
     JSValue validate = JS_NewCFunctionData(ctx, validate_form, 1, 0, 1, &dom->anchor->value);

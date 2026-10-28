@@ -16,7 +16,9 @@
  * Beside them, the members that are not a plain attribute: textarea's
  * defaultValue (its child text) and textLength; input's indeterminate (a
  * flag with no attribute, libpage's, which yonder's checkbox draws), its
- * autocomplete and its width and height; and the form owner (`form`) of each
+ * autocomplete and its width and height, and its value as a number:
+ * valueAsNumber, valueAsDate, stepUp and stepDown (0f's P5), libpage's
+ * conversions both ways; and the form owner (`form`) of each
  * control, fieldset and output, and the labels of each control and output.
  * The other members of a form, label, fieldset, legend and output are
  * forms.c's.
@@ -102,7 +104,8 @@ static const DReflection kReflections[] = {
 };
 
 /* The members that are no plain reflection, numbered after the rows. */
-enum { M_TEXT_DEFAULT = 256, M_TEXT_LENGTH, M_INDETERMINATE, M_AUTOCOMPLETE, M_WIDTH, M_HEIGHT, M_FORM, M_LABELS };
+enum { M_TEXT_DEFAULT = 256, M_TEXT_LENGTH, M_INDETERMINATE, M_AUTOCOMPLETE, M_WIDTH, M_HEIGHT, M_FORM, M_LABELS,
+       M_AS_NUMBER, M_AS_DATE, M_STEP_UP, M_STEP_DOWN };
 
 static bool html(const os64_html_node_t *node, os64_html_tag_t tag)
 {
@@ -449,6 +452,62 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
         if (set) return reflection_set(dom, ctx, node, row, value);
         return image_input(node) ? reflection_get(dom, ctx, node, row) : JS_NewUint32(ctx, 0);
     }
+    case M_AS_NUMBER: case M_AS_DATE: {
+        if (kind != IN) return JS_ThrowTypeError(ctx, "Illegal invocation");
+        os64_page_as_t as = magic == M_AS_DATE ? OS64_PAGE_AS_DATE : OS64_PAGE_AS_NUMBER;
+        double number = 0;
+        bool applies = false;
+        int64_t status = 0;
+        if (!set) {
+            status = os64_page_node_value_as(dom->state, node, as, &number, &applies);
+            if (status < 0) return d_page_error(ctx, status);
+            if (as == OS64_PAGE_AS_NUMBER) return JS_NewFloat64(ctx, number);
+            /* A time value past a Date's 8.64e15 ms (late in the year
+             * 275760, which the value's grammar keeps) is no Date: null,
+             * where the Date would be an invalid one. */
+            return number != number || number > 8.64e15 || number < -8.64e15 ? JS_NULL : JS_NewDate(ctx, number);
+        }
+        if (as == OS64_PAGE_AS_NUMBER) {
+            /* unrestricted double, converted first; then HTML's order:
+             * infinity, whether it applies, NaN as empty. */
+            if (JS_ToFloat64(ctx, &number, value) < 0) return JS_EXCEPTION;
+            if (number == number && number - number != 0)
+                return JS_ThrowTypeError(ctx, "valueAsNumber cannot be infinite");
+        } else {
+            /* WebIDL's `object?` first: undefined is null, and anything
+             * else that is no object a TypeError. Then HTML's order:
+             * whether it applies, null as empty, and the time value of a
+             * Date, which getTime reads and refuses any other object with
+             * a TypeError. */
+            bool empty = JS_IsNull(value) || JS_IsUndefined(value);
+            if (!empty && !JS_IsObject(value)) return JS_ThrowTypeError(ctx, "valueAsDate takes a Date or null");
+            status = os64_page_node_value_as(dom->state, node, as, &number, &applies);
+            if (status < 0) return d_page_error(ctx, status);
+            if (!applies) return d_error(ctx, "InvalidStateError", "valueAsDate does not apply to this input");
+            number = __builtin_nan("");
+            if (!empty) {
+                JSValue time = JS_Call(ctx, dom->date_get_time->value, value, 0, NULL);
+                if (JS_IsException(time)) return time;
+                int converted = JS_ToFloat64(ctx, &number, time);
+                JS_FreeValue(ctx, time);
+                if (converted < 0) return JS_EXCEPTION;
+            }
+        }
+        status = os64_page_node_set_value_as(dom->state, node, as, number, &applies);
+        if (status < 0) return d_page_error(ctx, status);
+        return applies ? JS_UNDEFINED : d_error(ctx, "InvalidStateError", "valueAsNumber does not apply to this input");
+    }
+    case M_STEP_UP: case M_STEP_DOWN: {
+        if (kind != IN) return JS_ThrowTypeError(ctx, "Illegal invocation");
+        /* `optional long n = 1`: ToInt32's wrap, as WebIDL's long has it. */
+        int32_t n = 1;
+        if (argc > 0 && !JS_IsUndefined(argv[0]) && JS_ToInt32(ctx, &n, argv[0]) < 0) return JS_EXCEPTION;
+        bool applies = false;
+        int64_t status = os64_page_node_step(dom->state, node, n, magic == M_STEP_DOWN, &applies);
+        if (status < 0) return d_page_error(ctx, status);
+        return applies ? JS_UNDEFINED
+                       : d_error(ctx, "InvalidStateError", "This input has no allowed value step to step by");
+    }
     case M_FORM:
         if ((kind & (IN | TA | SE | BU | FS | OU)) == 0) return JS_ThrowTypeError(ctx, "Illegal invocation");
         return d_wrap(dom, ctx, d_form_owner(node));
@@ -461,11 +520,19 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
 
 int d_controls_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
-    (void)global;
+    JSValue date = JS_GetPropertyStr(ctx, global, "Date");
+    if (JS_IsException(date)) return -1;
+    JSValue date_prototype = JS_GetPropertyStr(ctx, date, "prototype");
+    JS_FreeValue(ctx, date);
+    if (JS_IsException(date_prototype)) return -1;
+    dom->date_get_time = d_intrinsic(dom, ctx, date_prototype, "getTime");
+    JS_FreeValue(ctx, date_prototype);
+    if (dom->date_get_time == NULL) return -1;
     static const struct { const char *name; int magic; bool writable; unsigned on; } kMembers[] = {
         {"defaultValue", M_TEXT_DEFAULT, true, TA}, {"textLength", M_TEXT_LENGTH, false, TA},
         {"indeterminate", M_INDETERMINATE, true, IN}, {"autocomplete", M_AUTOCOMPLETE, true, IN | TA | SE},
         {"width", M_WIDTH, true, IN}, {"height", M_HEIGHT, true, IN},
+        {"valueAsNumber", M_AS_NUMBER, true, IN}, {"valueAsDate", M_AS_DATE, true, IN},
         {"form", M_FORM, false, IN | TA | SE | BU | FS | OU}, {"labels", M_LABELS, false, IN | TA | SE | BU | OU},
     };
     static const int kinds[] = {D_PROTO_INPUT, D_PROTO_TEXTAREA, D_PROTO_SELECT, D_PROTO_BUTTON, D_PROTO_FORM,
@@ -483,5 +550,9 @@ int d_controls_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
                            kMembers[i].writable) < 0)
                 return -1;
     }
+    JSValueConst input = dom->prototypes[D_PROTO_INPUT]->value;
+    if (d_method_named(dom, ctx, input, "stepUp", control_member, 0, M_STEP_UP) < 0 ||
+        d_method_named(dom, ctx, input, "stepDown", control_member, 0, M_STEP_DOWN) < 0)
+        return -1;
     return 0;
 }

@@ -252,6 +252,11 @@ struct os64_dom {
     DValue *validity_prototype, *regexp, *regexp_exec, *validate;
     const os64_html_node_t *reported;
     char reported_message[256];
+    /* Date.prototype.getTime, taken before any page ran: valueAsDate's
+     * setter reads a Date's time value with it, and anything that is no
+     * Date throws its TypeError (controls.c). NULL with the modern switch
+     * off. */
+    DValue *date_get_time;
     /* The window's Selection (selection.c), the one getSelection answers;
      * NULL with the modern switch off. */
     DValue *selection;
@@ -492,6 +497,11 @@ int d_dictionary(JSContext *ctx, int argc, JSValueConst *argv, int at);
 JSValue d_html_error(JSContext *ctx, int64_t status);
 JSValue d_page_error(JSContext *ctx, int64_t status);
 DValue *d_retain(os64_dom_t *dom, JSContext *ctx, JSValue value);
+/* The function `name` of `from`, taken at install, before any page ran,
+ * and kept for the binding's life (the registry owns the reference
+ * d_retain is given): the engine's own, whatever a page later puts there.
+ * NULL, with a TypeError pending, when it is no function. */
+DValue *d_intrinsic(os64_dom_t *dom, JSContext *ctx, JSValueConst from, const char *name);
 int d_method(os64_dom_t *dom, JSContext *ctx, JSValueConst target,
              const char *name, JSCFunctionData *fn, int argc, int magic);
 int d_accessor(os64_dom_t *dom, JSContext *ctx, JSValueConst target,

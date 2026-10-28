@@ -1063,10 +1063,204 @@ static void state_validity_range(void)
     }
 }
 
+/* 0f's P5: valueAsNumber, valueAsDate, stepUp and stepDown, each case one
+ * input. A NULL value leaves the input's own. */
+static os64_page_t *value_as_page(const char *html, const char *value, os64_html_document_t **doc,
+                                  const os64_html_node_t **node)
+{
+    *doc = parse(html, "utf-8");
+    os64_page_t *page = os64_page_build(*doc, kPage, NULL, NULL);
+    *node = os64_page_control(page, 0)->node;
+    if (value != NULL)
+        os64_page_node_set_value(os64_page_shared_state(page), *node, value, strlen(value));
+    return page;
+}
+
+static const char *value_of(os64_page_t *page, const os64_html_node_t *node)
+{
+    const char *text = NULL;
+    size_t len = 0;
+    return os64_page_node_value(os64_page_shared_state(page), node, &text, &len) == 0 ? text : "(refused)";
+}
+
+static void state_value_as(void)
+{
+    const double nan = __builtin_nan("");
+    static const struct { const char *html, *value; os64_page_as_t as; double want; bool applies; } reads[] = {
+        {"<input type=date>", "2019-12-10", OS64_PAGE_AS_NUMBER, 1575936000000.0, true},
+        {"<input type=date>", "2019-12-10", OS64_PAGE_AS_DATE, 1575936000000.0, true},
+        {"<input type=date>", "", OS64_PAGE_AS_NUMBER, __builtin_nan(""), true},
+        {"<input type=month>", "2019-12", OS64_PAGE_AS_NUMBER, 599, true},
+        {"<input type=month>", "2019-12", OS64_PAGE_AS_DATE, 1575158400000.0, true},
+        {"<input type=month>", "1969-12", OS64_PAGE_AS_DATE, -2678400000.0, true},
+        {"<input type=week>", "1969-W20", OS64_PAGE_AS_NUMBER, -20217600000.0, true},
+        {"<input type=time>", "23:59", OS64_PAGE_AS_DATE, 86340000, true},
+        {"<input type=datetime-local>", "2019-12-10T12:00", OS64_PAGE_AS_NUMBER, 1575979200000.0, true},
+        {"<input type=datetime-local>", "2019-12-10T12:00", OS64_PAGE_AS_DATE, __builtin_nan(""), false},
+        {"<input type=number>", "1e3", OS64_PAGE_AS_NUMBER, 1000, true},
+        {"<input type=number>", "1", OS64_PAGE_AS_DATE, __builtin_nan(""), false},
+        /* a range's sanitized value: no value is its midpoint */
+        {"<input type=range>", NULL, OS64_PAGE_AS_NUMBER, 50, true},
+        {"<input type=text>", "5", OS64_PAGE_AS_NUMBER, __builtin_nan(""), false},
+        /* a year past a Date's is kept, and converts to nothing */
+        {"<input type=date>", "300000-01-01", OS64_PAGE_AS_NUMBER, __builtin_nan(""), true},
+    };
+    for (size_t i = 0; i < sizeof(reads) / sizeof(reads[0]); i++) {
+        char name[160];
+        snprintf(name, sizeof(name), "value as: read %s %s %d", reads[i].html, reads[i].value ? reads[i].value : "-",
+                 (int)reads[i].as);
+        os64_html_document_t *doc;
+        const os64_html_node_t *node;
+        os64_page_t *page = value_as_page(reads[i].html, reads[i].value, &doc, &node);
+        double got = 0;
+        bool applies = !reads[i].applies;
+        int64_t status = os64_page_node_value_as(os64_page_shared_state(page), node, reads[i].as, &got, &applies);
+        bool same = got == reads[i].want || (got != got && reads[i].want != reads[i].want);
+        if (!same) fprintf(stderr, "%s: %.17g\n", name, got);
+        state_expect(name, status == 0 && same && applies == reads[i].applies);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
+    static const struct { const char *html; double number; os64_page_as_t as; const char *want; bool applies; } writes[] = {
+        {"<input type=date>", 0, OS64_PAGE_AS_NUMBER, "1970-01-01", true},
+        /* rounded to the nearest millisecond, as Blink rounds */
+        {"<input type=date>", 86399999.5, OS64_PAGE_AS_NUMBER, "1970-01-02", true},
+        {"<input type=date>", -62135596800000.0, OS64_PAGE_AS_NUMBER, "0001-01-01", true},
+        /* before year 1, or past 275760: nothing to spell, so empty */
+        {"<input type=date value=2000-01-01>", -62135596800001.0, OS64_PAGE_AS_NUMBER, "", true},
+        {"<input type=date value=2000-01-01>", 8.7e15, OS64_PAGE_AS_NUMBER, "", true},
+        {"<input type=datetime-local>", 2.7343337071894478e26, OS64_PAGE_AS_NUMBER, "", true},
+        {"<input type=month>", -1, OS64_PAGE_AS_NUMBER, "1969-12", true},
+        {"<input type=month>", 2.5, OS64_PAGE_AS_NUMBER, "1970-04", true},
+        {"<input type=month>", 1575936000000.0, OS64_PAGE_AS_DATE, "2019-12", true},
+        {"<input type=week>", 0, OS64_PAGE_AS_NUMBER, "1970-W01", true},
+        {"<input type=week>", -20217600000.0, OS64_PAGE_AS_NUMBER, "1969-W20", true},
+        /* a Sunday is its ISO week's last day, in the year its Thursday is */
+        {"<input type=week>", 1609632000000.0, OS64_PAGE_AS_DATE, "2020-W53", true},
+        /* a time's place in its day, exact however large the number */
+        {"<input type=time>", 2.7343337071894478e26, OS64_PAGE_AS_NUMBER, "10:54:10.944", true},
+        {"<input type=time>", -3600000, OS64_PAGE_AS_NUMBER, "23:00", true},
+        {"<input type=time>", -0.5, OS64_PAGE_AS_NUMBER, "23:59:59.999", true},
+        {"<input type=time>", 1000, OS64_PAGE_AS_DATE, "00:00:01", true},
+        {"<input type=datetime-local>", -86400000, OS64_PAGE_AS_NUMBER, "1969-12-31T00:00", true},
+        /* the local date and time's sanitizer shortens the fraction */
+        {"<input type=datetime-local>", 500, OS64_PAGE_AS_NUMBER, "1970-01-01T00:00:00.5", true},
+        {"<input type=number>", 123.456, OS64_PAGE_AS_NUMBER, "123.456", true},
+        {"<input type=number>", 1e21, OS64_PAGE_AS_NUMBER, "1e+21", true},
+        {"<input type=number value=4>", __builtin_nan(""), OS64_PAGE_AS_NUMBER, "", true},
+        {"<input type=time value=12:00>", __builtin_nan(""), OS64_PAGE_AS_DATE, "", true},
+        {"<input type=range>", 100, OS64_PAGE_AS_NUMBER, "100", true},
+        {"<input type=checkbox value=on>", 5, OS64_PAGE_AS_NUMBER, "on", false},
+        {"<input type=datetime-local value=2000-01-01T00:00>", 0, OS64_PAGE_AS_DATE, "2000-01-01T00:00", false},
+    };
+    for (size_t i = 0; i < sizeof(writes) / sizeof(writes[0]); i++) {
+        char name[160];
+        snprintf(name, sizeof(name), "value as: write %s %.17g %d", writes[i].html, writes[i].number,
+                 (int)writes[i].as);
+        os64_html_document_t *doc;
+        const os64_html_node_t *node;
+        os64_page_t *page = value_as_page(writes[i].html, NULL, &doc, &node);
+        bool applies = !writes[i].applies;
+        int64_t status = os64_page_node_set_value_as(os64_page_shared_state(page), node, writes[i].as,
+                                                     writes[i].number, &applies);
+        const char *got = value_of(page, node);
+        if (strcmp(got, writes[i].want) != 0) fprintf(stderr, "%s: '%s'\n", name, got);
+        state_expect(name, status == 0 && applies == writes[i].applies && strcmp(got, writes[i].want) == 0);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
+    static const struct { const char *html, *value; int32_t n; bool down; const char *want; bool applies; } steps[] = {
+        /* WPT's input-stepdown-02: a value that did not convert is 0, and
+         * moves wherever its clamp puts it */
+        {"<input type=number>", "", 1, true, "-1", true},
+        {"<input type=number min=7>", "", 1, true, "7", true},
+        {"<input type=number min=-7>", "", 1, true, "-1", true},
+        {"<input type=number min=7>", "7", 1, true, "7", true},
+        {"<input type=number min=7>", "3", 1, true, "3", true},
+        {"<input type=number min=7>", "10", 1, true, "9", true},
+        {"<input type=number max=30 step=3>", "30", 5, true, "15", true},
+        {"<input type=number min=300 step=1>", "200", 1, true, "200", true},
+        /* in decimal: 1.2 - 0.3 is 0.9, where binary64 makes 0.8999... */
+        {"<input type=number step=0.3>", "1.2", 1, true, "0.9", true},
+        {"<input type=number min=0 step=2>", "5", 1, false, "6", true},
+        {"<input type=number min=0 step=3>", "8", 1, true, "6", true},
+        {"<input type=number min=10 max=5>", "0", 1, false, "0", true},
+        {"<input type=number step=3 max=7>", "0", 3, false, "6", true},
+        /* the snap onto the grid is one of the steps (Blink, Gecko) */
+        {"<input type=number step=2>", "5", 3, false, "10", true},
+        {"<input type=number step=2>", "5", -2, false, "2", true},
+        /* a step down that snaps, then clamps up to the min, is the wrong
+         * way for a value that converted: nothing changes (the spec's step
+         * 10 and Gecko; Blink counts the snap off first and moves it) */
+        {"<input type=number min=5 step=2>", "4", 1, true, "4", true},
+        /* step 10 by the signed count, as Blink and Gecko read it, where
+         * the spec names the method: stepDown(-1) moves up */
+        {"<input type=number>", "5", -1, true, "6", true},
+        /* the min is the step base, so always a grid point: a value that
+         * did not convert snaps up onto it */
+        {"<input type=number min=1 max=2 step=5>", "", 1, false, "1", true},
+        /* a stride times a count past the decimal base: its carry spans
+         * words, and the clamp compares it whole */
+        {"<input type=number step=999999999 max=1e18>", "0", INT32_MAX, false, "1000000000000000000", true},
+        /* and taken from a value it outgrows, which compares them whole */
+        {"<input type=number step=999999999>", "1500000000000000000", INT32_MAX, true, "-647483644352516400", true},
+        /* -(INT32_MIN) steps */
+        {"<input type=number>", "0", INT32_MIN, true, "2147483648", true},
+        /* past the largest double: nothing changes */
+        {"<input type=number step=1e308>", "1.7976931348623157e308", 1, false, "1.7976931348623157e308", true},
+        {"<input type=date>", "", 1, false, "1970-01-02", true},
+        {"<input type=month>", "", 1, false, "1970-02", true},
+        /* week 1 of 1970 began on 1969-12-29: 0 is off its grid */
+        {"<input type=week>", "", 1, false, "1970-W02", true},
+        {"<input type=time>", "", 1, false, "00:01", true},
+        {"<input type=datetime-local>", "", 1, false, "1970-01-01T00:01", true},
+        {"<input type=time step=2>", "00:00:01", 1, false, "00:00:02", true},
+        {"<input type=range>", NULL, 1, false, "51", true},
+        {"<input type=range min=60 max=40>", NULL, 1, false, "60", true},
+        {"<input type=number step=any>", "1", 1, false, "1", false},
+        {"<input type=text>", "1", 1, false, "1", false},
+    };
+    for (size_t i = 0; i < sizeof(steps) / sizeof(steps[0]); i++) {
+        char name[160];
+        snprintf(name, sizeof(name), "value as: step %s %s %d %s", steps[i].html, steps[i].value ? steps[i].value : "-",
+                 (int)steps[i].n, steps[i].down ? "down" : "up");
+        os64_html_document_t *doc;
+        const os64_html_node_t *node;
+        os64_page_t *page = value_as_page(steps[i].html, steps[i].value, &doc, &node);
+        bool applies = !steps[i].applies;
+        int64_t status = os64_page_node_step(os64_page_shared_state(page), node, steps[i].n, steps[i].down, &applies);
+        const char *got = value_of(page, node);
+        if (strcmp(got, steps[i].want) != 0) fprintf(stderr, "%s: '%s'\n", name, got);
+        state_expect(name, status == 0 && applies == steps[i].applies && strcmp(got, steps[i].want) == 0);
+        os64_page_free(page);
+        os64_html_document_free(doc);
+    }
+    /* An infinite number is the caller's TypeError; a node that is no
+     * input, any member's WRONG_KIND. */
+    os64_html_document_t *doc;
+    const os64_html_node_t *node;
+    os64_page_t *page = value_as_page("<input type=number>", NULL, &doc, &node);
+    os64_page_state_t *state = os64_page_shared_state(page);
+    bool applies = false;
+    double got = 0;
+    state_expect("value as: infinity refused",
+                 os64_page_node_set_value_as(state, node, OS64_PAGE_AS_NUMBER, 1.0 / 0.0, &applies) ==
+                     -OS64_PAGE_REASON_WRONG_KIND);
+    state_expect("value as: NaN taken", os64_page_node_set_value_as(state, node, OS64_PAGE_AS_NUMBER, nan, &applies) ==
+                                            0 && applies);
+    state_expect("value as: not an input",
+                 os64_page_node_value_as(state, node->parent, OS64_PAGE_AS_NUMBER, &got, &applies) ==
+                     -OS64_PAGE_REASON_WRONG_KIND &&
+                     os64_page_node_step(state, node->parent, 1, false, &applies) == -OS64_PAGE_REASON_WRONG_KIND);
+    os64_page_free(page);
+    os64_html_document_free(doc);
+}
+
 static void state_cases(void)
 {
     state_validity();
     state_validity_range();
+    state_value_as();
     state_option_labels();
     state_scale();
     state_taken_away();

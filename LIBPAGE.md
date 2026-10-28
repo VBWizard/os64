@@ -325,7 +325,13 @@ verbatim (then the line-break rule of D at submission); `number` and the
 date family sanitised to the empty string when the value does not parse
 as the type requires; `checkbox`/`radio`/`submit`/`image`/`button` as D
 says. Anything not listed is `text`, which is the
-standard's own fallback for an unknown type.
+standard's own fallback for an unknown type. The number and date types'
+values are also numbers, both ways (0f's P5): `os64_page_node_value_as`
+reads one as family I's judge does, `os64_page_node_set_value_as` spells
+a number as the type's string and sets it (empty for one the type cannot
+spell, a date outside years 1 to 275760), and `os64_page_node_step` is
+`stepUp` and `stepDown`, in exact decimal over min, max and step as the
+judge reads them.
 
 **I. Constraint validation** (§4.10.20). One door: `page_validate(page,
 form, submitter)`, run before the entry list unless the form's `novalidate`

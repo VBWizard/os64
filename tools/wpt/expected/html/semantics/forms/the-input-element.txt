@@ -594,6 +594,243 @@ radio-disconnected-group-owner.html	Removed elements are moved into separate rad
 radio-multiple-selected.html	Form should be valid since one of the radio elements is checked
 radio.html	Radio buttons in an orphan tree should make a group
 reset.html	the element is barred from constraint validation
+# 0f's P5 (MODERN_WEB.md § 0f's P5, as built): valueAsNumber, valueAsDate,
+# stepUp and stepDown. Each fails with the switch off.
+datetime-weekmonth.html	[month] stepDown method support on input 'month' element
+datetime-weekmonth.html	[month] stepUp method support on input 'month' element
+datetime-weekmonth.html	[week] stepDown method support on input 'week' element
+datetime-weekmonth.html	[week] stepUp method support on input 'week' element
+datetime.html	[date] stepDown method support on input 'date' element
+datetime.html	[date] stepUp method support on input 'date' element
+datetime.html	[datetime-local] stepDown method support on input 'datetime-local' element
+datetime.html	[datetime-local] stepUp method support on input 'datetime-local' element
+datetime.html	[time] stepDown method support on input 'time' element
+datetime.html	[time] stepUp method support on input 'time' element
+hidden.html	stepDown does not apply for hidden
+hidden.html	stepUp does not apply for hidden
+hidden.html	valueAsDate attribute must return null for hidden
+hidden.html	valueAsNumber attribute must return NaN for hidden
+input-seconds-leading-zeroes.html	Expected valueAsNumber=45000003 from 12:30:00.003
+input-seconds-leading-zeroes.html	Expected valueAsNumber=45000040 from 12:30:00.04
+input-seconds-leading-zeroes.html	Expected valueAsNumber=45000500 from 12:30:00.5
+input-seconds-leading-zeroes.html	Expected valueAsNumber=45001000 from 12:30:01
+input-seconds-leading-zeroes.html	Expected valueAsNumber=946729800003 from 2000-01-01T12:30:00.003
+input-seconds-leading-zeroes.html	Expected valueAsNumber=946729800040 from 2000-01-01T12:30:00.04
+input-seconds-leading-zeroes.html	Expected valueAsNumber=946729800500 from 2000-01-01T12:30:00.5
+input-seconds-leading-zeroes.html	Expected valueAsNumber=946729801000 from 2000-01-01T12:30:01
+input-step-float.html	input.stepUp/Down work over decimal floats
+input-step-realignment.html	input.stepUp/Down work when starting from a value not aligned with value step
+input-stepdown-02.html	stepDown() on input with initial value equal to min value
+input-stepdown-02.html	stepDown() on input with initial value greater than min value
+input-stepdown-02.html	stepDown() on input with initial value less than min value
+input-stepdown-02.html	stepDown() on input with no initial or min values
+input-stepdown-02.html	stepDown() on input with no initial value and negative min value
+input-stepdown-02.html	stepDown() on input with no initial value and positive min value
+input-stepdown-weekmonth.html	Calling stepDown() on input - month - where value < min should not modify value.
+input-stepdown-weekmonth.html	Calling stepDown() on input - week - where value < min should not modify value.
+input-stepdown.html	Calling stepDown() on input - date - where value < min should not modify value.
+input-stepdown.html	Calling stepDown() on input - datetime-local - where value < min should not modify value.
+input-stepdown.html	Calling stepDown() on input - number - where value < min should not modify value.
+input-stepdown.html	Calling stepDown() on input - time - where value < min should not modify value.
+input-stepdown.html	Forms
+input-stepup.html	Calling stepUp on input type=button should throw a DOMException
+input-stepup.html	Calling stepUp on input type=checkbox should throw a DOMException
+input-stepup.html	Calling stepUp on input type=color should throw a DOMException
+input-stepup.html	Calling stepUp on input type=email should throw a DOMException
+input-stepup.html	Calling stepUp on input type=file should throw a DOMException
+input-stepup.html	Calling stepUp on input type=hidden should throw a DOMException
+input-stepup.html	Calling stepUp on input type=image should throw a DOMException
+input-stepup.html	Calling stepUp on input type=password should throw a DOMException
+input-stepup.html	Calling stepUp on input type=radio should throw a DOMException
+input-stepup.html	Calling stepUp on input type=reset should throw a DOMException
+input-stepup.html	Calling stepUp on input type=search should throw a DOMException
+input-stepup.html	Calling stepUp on input type=submit should throw a DOMException
+input-stepup.html	Calling stepUp on input type=tel should throw a DOMException
+input-stepup.html	Calling stepUp on input type=text should throw a DOMException
+input-stepup.html	Calling stepUp on input type=url should throw a DOMException
+input-stepup.html	Calling stepUp when the step attribute is "any" should throw a DOMException
+input-stepup.html	Step delta from stepUp on input type=date with no step attribute
+input-stepup.html	Step delta from stepUp on input type=date with step=-2
+input-stepup.html	Step delta from stepUp on input type=date with step=0
+input-stepup.html	Step delta from stepUp on input type=date with step=2
+input-stepup.html	Step delta from stepUp on input type=date with step=bogus
+input-stepup.html	Step delta from stepUp on input type=datetime-local with no step attribute
+input-stepup.html	Step delta from stepUp on input type=datetime-local with step=-2
+input-stepup.html	Step delta from stepUp on input type=datetime-local with step=0
+input-stepup.html	Step delta from stepUp on input type=datetime-local with step=2
+input-stepup.html	Step delta from stepUp on input type=datetime-local with step=bogus
+input-stepup.html	Step delta from stepUp on input type=month with no step attribute
+input-stepup.html	Step delta from stepUp on input type=month with step=-2
+input-stepup.html	Step delta from stepUp on input type=month with step=0
+input-stepup.html	Step delta from stepUp on input type=month with step=2
+input-stepup.html	Step delta from stepUp on input type=month with step=bogus
+input-stepup.html	Step delta from stepUp on input type=number with no step attribute
+input-stepup.html	Step delta from stepUp on input type=number with step=-2
+input-stepup.html	Step delta from stepUp on input type=number with step=0
+input-stepup.html	Step delta from stepUp on input type=number with step=2
+input-stepup.html	Step delta from stepUp on input type=number with step=bogus
+input-stepup.html	Step delta from stepUp on input type=range with no step attribute
+input-stepup.html	Step delta from stepUp on input type=range with step=-2
+input-stepup.html	Step delta from stepUp on input type=range with step=0
+input-stepup.html	Step delta from stepUp on input type=range with step=2
+input-stepup.html	Step delta from stepUp on input type=range with step=bogus
+input-stepup.html	Step delta from stepUp on input type=time with no step attribute
+input-stepup.html	Step delta from stepUp on input type=time with step=-2
+input-stepup.html	Step delta from stepUp on input type=time with step=0
+input-stepup.html	Step delta from stepUp on input type=time with step=2
+input-stepup.html	Step delta from stepUp on input type=time with step=bogus
+input-stepup.html	Step delta from stepUp on input type=week with no step attribute
+input-stepup.html	Step delta from stepUp on input type=week with step=-2
+input-stepup.html	Step delta from stepUp on input type=week with step=0
+input-stepup.html	Step delta from stepUp on input type=week with step=2
+input-stepup.html	Step delta from stepUp on input type=week with step=bogus
+input-stepup.html	stepUp should clamp to the input maximum
+input-stepup.html	stepUp should do nothing if the input minimum is larger than the input maximum
+input-valueasdate-invalidstateerr.html	Forms
+input-valueasdate-null.html	Assigning null to valueAsDate clears an input of type date
+input-valueasdate-null.html	Assigning null to valueAsDate clears an input of type month
+input-valueasdate-null.html	Assigning null to valueAsDate clears an input of type time
+input-valueasdate-null.html	Assigning null to valueAsDate clears an input of type week
+input-valueasdate-stepping.html	date should step correctly
+input-valueasdate-stepping.html	month should step correctly
+input-valueasdate-stepping.html	time should step correctly
+input-valueasdate-stepping.html	week should step correctly
+input-valueasdate-typeerror.html	valueAsDate setter with non-Date object (input type date)
+input-valueasdate-typeerror.html	valueAsDate setter with non-Date object (input type month)
+input-valueasdate-typeerror.html	valueAsDate setter with non-Date object (input type time)
+input-valueasdate-typeerror.html	valueAsDate setter with non-Date object (input type week)
+input-valueasdate.html	valueAsDate getter on type date (with value: "")
+input-valueasdate.html	valueAsDate getter on type date (with value: "0000-12-10")
+input-valueasdate.html	valueAsDate getter on type date (with value: "2016-02-29")
+input-valueasdate.html	valueAsDate getter on type date (with value: "2019-00-12")
+input-valueasdate.html	valueAsDate getter on type date (with value: "2019-02-29")
+input-valueasdate.html	valueAsDate getter on type date (with value: "2019-12-00")
+input-valueasdate.html	valueAsDate getter on type date (with value: "2019-12-10")
+input-valueasdate.html	valueAsDate getter on type date (with value: "2019-13-10")
+input-valueasdate.html	valueAsDate getter on type month (with value: "")
+input-valueasdate.html	valueAsDate getter on type month (with value: "0000-12")
+input-valueasdate.html	valueAsDate getter on type month (with value: "2019-00")
+input-valueasdate.html	valueAsDate getter on type month (with value: "2019-12")
+input-valueasdate.html	valueAsDate getter on type time (with value: "")
+input-valueasdate.html	valueAsDate getter on type time (with value: "00:00")
+input-valueasdate.html	valueAsDate getter on type time (with value: "00:60")
+input-valueasdate.html	valueAsDate getter on type time (with value: "12:00")
+input-valueasdate.html	valueAsDate getter on type time (with value: "23:59")
+input-valueasdate.html	valueAsDate getter on type time (with value: "24:00")
+input-valueasdate.html	valueAsDate getter on type week (with value: "")
+input-valueasdate.html	valueAsDate getter on type week (with value: "0000-W50")
+input-valueasdate.html	valueAsDate getter on type week (with value: "2019-W00")
+input-valueasdate.html	valueAsDate getter on type week (with value: "2019-W50")
+input-valueasdate.html	valueAsDate getter on type week (with value: "2019-W60")
+input-valueasdate.html	valueAsDate setter on type date (new Date("2019-12-10T00:00:00.000Z"))
+input-valueasdate.html	valueAsDate setter on type time (new Date("1970-01-01T00:00:00.000Z"))
+input-valueasdate.html	valueAsDate setter on type time (new Date("1970-01-01T12:00:00.000Z"))
+input-valueasnumber-invalidstateerr.html	Forms
+input-valueasnumber-nan.html	value and valueAsNumber are setting each other correctly for input[type=number]
+input-valueasnumber-stepping.html	date should step correctly
+input-valueasnumber-stepping.html	datetime-local should step correctly
+input-valueasnumber-stepping.html	month should step correctly
+input-valueasnumber-stepping.html	number should step correctly
+input-valueasnumber-stepping.html	range should step correctly
+input-valueasnumber-stepping.html	time should step correctly
+input-valueasnumber-stepping.html	week should step correctly
+input-valueasnumber-typeerror.html	valueAsNumber = -Infinity (input type does apply)
+input-valueasnumber-typeerror.html	valueAsNumber = -Infinity (input type does not apply)
+input-valueasnumber-typeerror.html	valueAsNumber = Infinity (input type does apply)
+input-valueasnumber-typeerror.html	valueAsNumber = Infinity (input type does not apply)
+input-valueasnumber.html	valueAsNumber getter on type date (actual value: , expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type date (actual value: 0000-12-10, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type date (actual value: 2016-02-29, expected valueAsNumber: 1456704000000)
+input-valueasnumber.html	valueAsNumber getter on type date (actual value: 2019-00-12, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type date (actual value: 2019-02-29, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type date (actual value: 2019-12-00, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type date (actual value: 2019-12-10, expected valueAsNumber: 1575936000000)
+input-valueasnumber.html	valueAsNumber getter on type date (actual value: 2019-13-10, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type datetime-local (actual value: , expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type datetime-local (actual value: 2019-12-10T00:00, expected valueAsNumber: 1575936000000)
+input-valueasnumber.html	valueAsNumber getter on type datetime-local (actual value: 2019-12-10T12:00, expected valueAsNumber: 1575979200000)
+input-valueasnumber.html	valueAsNumber getter on type month (actual value: , expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type month (actual value: 0000-12, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type month (actual value: 1969-12, expected valueAsNumber: -1)
+input-valueasnumber.html	valueAsNumber getter on type month (actual value: 2019-00, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type month (actual value: 2019-12, expected valueAsNumber: 599)
+input-valueasnumber.html	valueAsNumber getter on type number (actual value: , expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type number (actual value: -123, expected valueAsNumber: -123)
+input-valueasnumber.html	valueAsNumber getter on type number (actual value: 123, expected valueAsNumber: 123)
+input-valueasnumber.html	valueAsNumber getter on type number (actual value: 123.456, expected valueAsNumber: 123.456)
+input-valueasnumber.html	valueAsNumber getter on type number (actual value: 1e, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type number (actual value: 1e3, expected valueAsNumber: 1000)
+input-valueasnumber.html	valueAsNumber getter on type range (actual value: , expected valueAsNumber: 50)
+input-valueasnumber.html	valueAsNumber getter on type range (actual value: -10, expected valueAsNumber: 0)
+input-valueasnumber.html	valueAsNumber getter on type range (actual value: 0, expected valueAsNumber: 0)
+input-valueasnumber.html	valueAsNumber getter on type range (actual value: 100, expected valueAsNumber: 100)
+input-valueasnumber.html	valueAsNumber getter on type range (actual value: 110, expected valueAsNumber: 100)
+input-valueasnumber.html	valueAsNumber getter on type range (actual value: 50, expected valueAsNumber: 50)
+input-valueasnumber.html	valueAsNumber getter on type time (actual value: , expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type time (actual value: 00:00, expected valueAsNumber: 0)
+input-valueasnumber.html	valueAsNumber getter on type time (actual value: 00:60, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type time (actual value: 12:00, expected valueAsNumber: 43200000)
+input-valueasnumber.html	valueAsNumber getter on type time (actual value: 23:59, expected valueAsNumber: 86340000)
+input-valueasnumber.html	valueAsNumber getter on type time (actual value: 24:00, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type week (actual value: , expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type week (actual value: 0000-W50, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type week (actual value: 1969-W20, expected valueAsNumber: -20217600000)
+input-valueasnumber.html	valueAsNumber getter on type week (actual value: 2019-W00, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type week (actual value: 2019-W50, expected valueAsNumber: 1575849600000)
+input-valueasnumber.html	valueAsNumber getter on type week (actual value: 2019-W60, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber setter on type date (actual valueAsNumber: 0, expected value: 1970-01-01)
+input-valueasnumber.html	valueAsNumber setter on type date (actual valueAsNumber: 1575936000000, expected value: 2019-12-10)
+input-valueasnumber.html	valueAsNumber setter on type datetime-local (actual valueAsNumber: -86400000, expected value: 1969-12-31T00:00)
+input-valueasnumber.html	valueAsNumber setter on type datetime-local (actual valueAsNumber: 1575936000000, expected value: 2019-12-10T00:00)
+input-valueasnumber.html	valueAsNumber setter on type datetime-local (actual valueAsNumber: 2.734333707189448e+26, expected value: )
+input-valueasnumber.html	valueAsNumber setter on type month (actual valueAsNumber: 599, expected value: 2019-12)
+input-valueasnumber.html	valueAsNumber setter on type number (actual valueAsNumber: 1000, expected value: 1000)
+input-valueasnumber.html	valueAsNumber setter on type number (actual valueAsNumber: 123, expected value: 123)
+input-valueasnumber.html	valueAsNumber setter on type number (actual valueAsNumber: 123.456, expected value: 123.456)
+input-valueasnumber.html	valueAsNumber setter on type range (actual valueAsNumber: 0, expected value: 0)
+input-valueasnumber.html	valueAsNumber setter on type range (actual valueAsNumber: 50, expected value: 50)
+input-valueasnumber.html	valueAsNumber setter on type time (actual valueAsNumber: -3600000, expected value: 23:00)
+input-valueasnumber.html	valueAsNumber setter on type time (actual valueAsNumber: 0, expected value: 00:00)
+input-valueasnumber.html	valueAsNumber setter on type time (actual valueAsNumber: 2.734333707189448e+26, expected value: 10:54:10.944)
+input-valueasnumber.html	valueAsNumber setter on type time (actual valueAsNumber: 43200000, expected value: 12:00)
+input-valueasnumber.html	valueAsNumber setter on type week (actual valueAsNumber: 0, expected value: 1970-W01)
+input-valueasnumber.html	valueAsNumber setter on type week (actual valueAsNumber: 1575849600000, expected value: 2019-W50)
+month.html	When step attribute is given invalid value, it must ignore the invalid value and use defaul value instead.
+range.html	Performing stepDown()
+range.html	Performing stepDown() beyond the value of the min attribute
+range.html	Performing stepUp()
+range.html	Performing stepUp() beyond the value of the max attribute
+text.html	stepDown does not apply for search
+text.html	stepDown does not apply for text
+text.html	stepUp does not apply for search
+text.html	stepUp does not apply for text
+text.html	valueAsDate attribute must return null for search
+text.html	valueAsDate attribute must return null for text
+text.html	valueAsNumber attribute must return NaN for search
+text.html	valueAsNumber attribute must return NaN for text
+time.html	 empty value of stepUp
+time.html	stepDown argument 2 times
+time.html	stepDown function support on input Element
+time.html	stepDown on step value 24 hour 
+time.html	stepDown on step value hour 
+time.html	stepDown on step value minus
+time.html	stepDown on step value second 
+time.html	stepDown on step value with fractional seconds
+time.html	stepDown on step value zero 
+time.html	stepDown step value empty default step value
+time.html	stepDown stop so lower than the minimum value
+time.html	stepUp argument 2 times
+time.html	stepUp function support on input Element
+time.html	stepUp on step value 24 hour
+time.html	stepUp on step value hour  
+time.html	stepUp on step value minus
+time.html	stepUp on step value second 
+time.html	stepUp on step value with fractional seconds
+time.html	stepUp on step value zero 
+time.html	stepUp step value empty on default step value 
+time.html	stepUp stop because it exceeds the maximum value
+time.html	stop at border on stepDown
+time.html	stop at border on stepUp
 [excluded]
 [passing]
 button.html	clicking on button should not change its indeterminate IDL attribute
@@ -753,24 +990,34 @@ datetime-weekmonth.html	[month] The max attribute must have a value that is a va
 datetime-weekmonth.html	[month] The min attribute must have a value that is a valid global date and time string
 datetime-weekmonth.html	[month] The step attribute must be expressed in seconds
 datetime-weekmonth.html	[month] The value must be a value that is a valid global date and time string
+datetime-weekmonth.html	[month] stepDown method support on input 'month' element
+datetime-weekmonth.html	[month] stepUp method support on input 'month' element
 datetime-weekmonth.html	[week] The max attribute must have a value that is a valid global date and time string
 datetime-weekmonth.html	[week] The min attribute must have a value that is a valid global date and time string
 datetime-weekmonth.html	[week] The step attribute must be expressed in seconds
 datetime-weekmonth.html	[week] The value must be a value that is a valid global date and time string
+datetime-weekmonth.html	[week] stepDown method support on input 'week' element
+datetime-weekmonth.html	[week] stepUp method support on input 'week' element
 datetime-weekmonth.html	month type support on input element
 datetime-weekmonth.html	week type support on input element
 datetime.html	[date] The max attribute must have a value that is a valid global date and time string
 datetime.html	[date] The min attribute must have a value that is a valid global date and time string
 datetime.html	[date] The step attribute must be expressed in seconds
 datetime.html	[date] The value must be a valid global date and time string
+datetime.html	[date] stepDown method support on input 'date' element
+datetime.html	[date] stepUp method support on input 'date' element
 datetime.html	[datetime-local] The max attribute must have a value that is a valid local date and time string
 datetime.html	[datetime-local] The min attribute must have a value that is a valid local date and time string
 datetime.html	[datetime-local] The must be a valid local date and time string
 datetime.html	[datetime-local] The step attribute must be expressed in seconds
+datetime.html	[datetime-local] stepDown method support on input 'datetime-local' element
+datetime.html	[datetime-local] stepUp method support on input 'datetime-local' element
 datetime.html	[time] The max attribute must have a value that is a valid global date and time string
 datetime.html	[time] The min attribute must have a value that is a valid global date and time string
 datetime.html	[time] The step attribute must be expressed in seconds
 datetime.html	[time] The value must be a valid global date and time string
+datetime.html	[time] stepDown method support on input 'time' element
+datetime.html	[time] stepUp method support on input 'time' element
 datetime.html	[time] time type support on input element
 datetime.html	date type support on input element
 datetime.html	datetime-local type support on input element
@@ -809,6 +1056,10 @@ email.html	value should be sanitized: strip line breaks
 hidden.html	Setting value changes the current value for hidden
 hidden.html	Value returns the current value for hidden
 hidden.html	input type=hidden is barred from constraint validation
+hidden.html	stepDown does not apply for hidden
+hidden.html	stepUp does not apply for hidden
+hidden.html	valueAsDate attribute must return null for hidden
+hidden.html	valueAsNumber attribute must return NaN for hidden
 input-checkvalidity.html	Forms
 input-height.html	Forms
 input-labels.html	Forms
@@ -816,7 +1067,83 @@ input-seconds-leading-zeroes.html	Expected digits unchanged in round-trip of 200
 input-seconds-leading-zeroes.html	Expected digits unchanged in round-trip of 2000-01-01T12:30:00.04
 input-seconds-leading-zeroes.html	Expected digits unchanged in round-trip of 2000-01-01T12:30:00.5
 input-seconds-leading-zeroes.html	Expected digits unchanged in round-trip of 2000-01-01T12:30:01
+input-seconds-leading-zeroes.html	Expected valueAsNumber=45000003 from 12:30:00.003
+input-seconds-leading-zeroes.html	Expected valueAsNumber=45000040 from 12:30:00.04
+input-seconds-leading-zeroes.html	Expected valueAsNumber=45000500 from 12:30:00.5
+input-seconds-leading-zeroes.html	Expected valueAsNumber=45001000 from 12:30:01
+input-seconds-leading-zeroes.html	Expected valueAsNumber=946729800003 from 2000-01-01T12:30:00.003
+input-seconds-leading-zeroes.html	Expected valueAsNumber=946729800040 from 2000-01-01T12:30:00.04
+input-seconds-leading-zeroes.html	Expected valueAsNumber=946729800500 from 2000-01-01T12:30:00.5
+input-seconds-leading-zeroes.html	Expected valueAsNumber=946729801000 from 2000-01-01T12:30:01
 input-setcustomvalidity.html	input setCustomValidity is correct
+input-step-float.html	input.stepUp/Down work over decimal floats
+input-step-realignment.html	input.stepUp/Down work when starting from a value not aligned with value step
+input-stepdown-02.html	stepDown() on input with initial value equal to min value
+input-stepdown-02.html	stepDown() on input with initial value greater than min value
+input-stepdown-02.html	stepDown() on input with initial value less than min value
+input-stepdown-02.html	stepDown() on input with no initial or min values
+input-stepdown-02.html	stepDown() on input with no initial value and negative min value
+input-stepdown-02.html	stepDown() on input with no initial value and positive min value
+input-stepdown-weekmonth.html	Calling stepDown() on input - month - where value < min should not modify value.
+input-stepdown-weekmonth.html	Calling stepDown() on input - week - where value < min should not modify value.
+input-stepdown.html	Calling stepDown() on input - date - where value < min should not modify value.
+input-stepdown.html	Calling stepDown() on input - datetime-local - where value < min should not modify value.
+input-stepdown.html	Calling stepDown() on input - number - where value < min should not modify value.
+input-stepdown.html	Calling stepDown() on input - time - where value < min should not modify value.
+input-stepdown.html	Forms
+input-stepup.html	Calling stepUp on input type=button should throw a DOMException
+input-stepup.html	Calling stepUp on input type=checkbox should throw a DOMException
+input-stepup.html	Calling stepUp on input type=color should throw a DOMException
+input-stepup.html	Calling stepUp on input type=email should throw a DOMException
+input-stepup.html	Calling stepUp on input type=file should throw a DOMException
+input-stepup.html	Calling stepUp on input type=hidden should throw a DOMException
+input-stepup.html	Calling stepUp on input type=image should throw a DOMException
+input-stepup.html	Calling stepUp on input type=password should throw a DOMException
+input-stepup.html	Calling stepUp on input type=radio should throw a DOMException
+input-stepup.html	Calling stepUp on input type=reset should throw a DOMException
+input-stepup.html	Calling stepUp on input type=search should throw a DOMException
+input-stepup.html	Calling stepUp on input type=submit should throw a DOMException
+input-stepup.html	Calling stepUp on input type=tel should throw a DOMException
+input-stepup.html	Calling stepUp on input type=text should throw a DOMException
+input-stepup.html	Calling stepUp on input type=url should throw a DOMException
+input-stepup.html	Calling stepUp when the step attribute is "any" should throw a DOMException
+input-stepup.html	Step delta from stepUp on input type=date with no step attribute
+input-stepup.html	Step delta from stepUp on input type=date with step=-2
+input-stepup.html	Step delta from stepUp on input type=date with step=0
+input-stepup.html	Step delta from stepUp on input type=date with step=2
+input-stepup.html	Step delta from stepUp on input type=date with step=bogus
+input-stepup.html	Step delta from stepUp on input type=datetime-local with no step attribute
+input-stepup.html	Step delta from stepUp on input type=datetime-local with step=-2
+input-stepup.html	Step delta from stepUp on input type=datetime-local with step=0
+input-stepup.html	Step delta from stepUp on input type=datetime-local with step=2
+input-stepup.html	Step delta from stepUp on input type=datetime-local with step=bogus
+input-stepup.html	Step delta from stepUp on input type=month with no step attribute
+input-stepup.html	Step delta from stepUp on input type=month with step=-2
+input-stepup.html	Step delta from stepUp on input type=month with step=0
+input-stepup.html	Step delta from stepUp on input type=month with step=2
+input-stepup.html	Step delta from stepUp on input type=month with step=bogus
+input-stepup.html	Step delta from stepUp on input type=number with no step attribute
+input-stepup.html	Step delta from stepUp on input type=number with step=-2
+input-stepup.html	Step delta from stepUp on input type=number with step=0
+input-stepup.html	Step delta from stepUp on input type=number with step=2
+input-stepup.html	Step delta from stepUp on input type=number with step=bogus
+input-stepup.html	Step delta from stepUp on input type=range with no step attribute
+input-stepup.html	Step delta from stepUp on input type=range with step=-2
+input-stepup.html	Step delta from stepUp on input type=range with step=0
+input-stepup.html	Step delta from stepUp on input type=range with step=2
+input-stepup.html	Step delta from stepUp on input type=range with step=bogus
+input-stepup.html	Step delta from stepUp on input type=time with no step attribute
+input-stepup.html	Step delta from stepUp on input type=time with step=-2
+input-stepup.html	Step delta from stepUp on input type=time with step=0
+input-stepup.html	Step delta from stepUp on input type=time with step=2
+input-stepup.html	Step delta from stepUp on input type=time with step=bogus
+input-stepup.html	Step delta from stepUp on input type=week with no step attribute
+input-stepup.html	Step delta from stepUp on input type=week with step=-2
+input-stepup.html	Step delta from stepUp on input type=week with step=0
+input-stepup.html	Step delta from stepUp on input type=week with step=2
+input-stepup.html	Step delta from stepUp on input type=week with step=bogus
+input-stepup.html	stepUp should clamp to the input maximum
+input-stepup.html	stepUp should do nothing if the input minimum is larger than the input maximum
 input-type-button.html	default behavior
 input-type-button.html	empty value attribute
 input-type-button.html	immutable element has no activation behavior.
@@ -837,17 +1164,126 @@ input-value-dirty-flag.html	Input value/defaultValue dirty value flag semantics
 input-value-dirty-flag.html	Parsed input type attribute is reflected in both property and attribute
 input-value-dirty-flag.html	Setting input type property sets the attribute
 input-value-invalidstateerr.html	Forms
+input-valueasdate-invalidstateerr.html	Forms
+input-valueasdate-null.html	Assigning null to valueAsDate clears an input of type date
+input-valueasdate-null.html	Assigning null to valueAsDate clears an input of type month
+input-valueasdate-null.html	Assigning null to valueAsDate clears an input of type time
+input-valueasdate-null.html	Assigning null to valueAsDate clears an input of type week
+input-valueasdate-stepping.html	date should step correctly
+input-valueasdate-stepping.html	month should step correctly
+input-valueasdate-stepping.html	time should step correctly
+input-valueasdate-stepping.html	week should step correctly
+input-valueasdate-typeerror.html	valueAsDate setter with non-Date object (input type date)
+input-valueasdate-typeerror.html	valueAsDate setter with non-Date object (input type month)
+input-valueasdate-typeerror.html	valueAsDate setter with non-Date object (input type time)
+input-valueasdate-typeerror.html	valueAsDate setter with non-Date object (input type week)
+input-valueasdate.html	valueAsDate getter on type date (with value: "")
+input-valueasdate.html	valueAsDate getter on type date (with value: "0000-12-10")
+input-valueasdate.html	valueAsDate getter on type date (with value: "2016-02-29")
+input-valueasdate.html	valueAsDate getter on type date (with value: "2019-00-12")
+input-valueasdate.html	valueAsDate getter on type date (with value: "2019-02-29")
+input-valueasdate.html	valueAsDate getter on type date (with value: "2019-12-00")
+input-valueasdate.html	valueAsDate getter on type date (with value: "2019-12-10")
+input-valueasdate.html	valueAsDate getter on type date (with value: "2019-13-10")
+input-valueasdate.html	valueAsDate getter on type month (with value: "")
+input-valueasdate.html	valueAsDate getter on type month (with value: "0000-12")
+input-valueasdate.html	valueAsDate getter on type month (with value: "2019-00")
+input-valueasdate.html	valueAsDate getter on type month (with value: "2019-12")
+input-valueasdate.html	valueAsDate getter on type time (with value: "")
+input-valueasdate.html	valueAsDate getter on type time (with value: "00:00")
+input-valueasdate.html	valueAsDate getter on type time (with value: "00:60")
+input-valueasdate.html	valueAsDate getter on type time (with value: "12:00")
+input-valueasdate.html	valueAsDate getter on type time (with value: "23:59")
+input-valueasdate.html	valueAsDate getter on type time (with value: "24:00")
+input-valueasdate.html	valueAsDate getter on type week (with value: "")
+input-valueasdate.html	valueAsDate getter on type week (with value: "0000-W50")
+input-valueasdate.html	valueAsDate getter on type week (with value: "2019-W00")
+input-valueasdate.html	valueAsDate getter on type week (with value: "2019-W50")
+input-valueasdate.html	valueAsDate getter on type week (with value: "2019-W60")
 input-valueasdate.html	valueAsDate setter on type date (new Date("2016-02-29T00:00:00.000Z"))
+input-valueasdate.html	valueAsDate setter on type date (new Date("2019-12-10T00:00:00.000Z"))
 input-valueasdate.html	valueAsDate setter on type month (new Date("2019-12-01T00:00:00.000Z"))
+input-valueasdate.html	valueAsDate setter on type time (new Date("1970-01-01T00:00:00.000Z"))
+input-valueasdate.html	valueAsDate setter on type time (new Date("1970-01-01T12:00:00.000Z"))
 input-valueasdate.html	valueAsDate setter on type time (new Date("1970-01-01T23:59:00.000Z"))
 input-valueasdate.html	valueAsDate setter on type week (new Date("2019-12-09T00:00:00.000Z"))
+input-valueasnumber-invalidstateerr.html	Forms
+input-valueasnumber-nan.html	value and valueAsNumber are setting each other correctly for input[type=number]
+input-valueasnumber-stepping.html	date should step correctly
+input-valueasnumber-stepping.html	datetime-local should step correctly
+input-valueasnumber-stepping.html	month should step correctly
+input-valueasnumber-stepping.html	number should step correctly
+input-valueasnumber-stepping.html	range should step correctly
+input-valueasnumber-stepping.html	time should step correctly
+input-valueasnumber-stepping.html	week should step correctly
+input-valueasnumber-typeerror.html	valueAsNumber = -Infinity (input type does apply)
+input-valueasnumber-typeerror.html	valueAsNumber = -Infinity (input type does not apply)
+input-valueasnumber-typeerror.html	valueAsNumber = Infinity (input type does apply)
+input-valueasnumber-typeerror.html	valueAsNumber = Infinity (input type does not apply)
+input-valueasnumber.html	valueAsNumber getter on type date (actual value: , expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type date (actual value: 0000-12-10, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type date (actual value: 2016-02-29, expected valueAsNumber: 1456704000000)
+input-valueasnumber.html	valueAsNumber getter on type date (actual value: 2019-00-12, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type date (actual value: 2019-02-29, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type date (actual value: 2019-12-00, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type date (actual value: 2019-12-10, expected valueAsNumber: 1575936000000)
+input-valueasnumber.html	valueAsNumber getter on type date (actual value: 2019-13-10, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type datetime-local (actual value: , expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type datetime-local (actual value: 2019-12-10T00:00, expected valueAsNumber: 1575936000000)
+input-valueasnumber.html	valueAsNumber getter on type datetime-local (actual value: 2019-12-10T12:00, expected valueAsNumber: 1575979200000)
+input-valueasnumber.html	valueAsNumber getter on type month (actual value: , expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type month (actual value: 0000-12, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type month (actual value: 1969-12, expected valueAsNumber: -1)
+input-valueasnumber.html	valueAsNumber getter on type month (actual value: 2019-00, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type month (actual value: 2019-12, expected valueAsNumber: 599)
+input-valueasnumber.html	valueAsNumber getter on type number (actual value: , expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type number (actual value: -123, expected valueAsNumber: -123)
+input-valueasnumber.html	valueAsNumber getter on type number (actual value: 123, expected valueAsNumber: 123)
+input-valueasnumber.html	valueAsNumber getter on type number (actual value: 123.456, expected valueAsNumber: 123.456)
+input-valueasnumber.html	valueAsNumber getter on type number (actual value: 1e, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type number (actual value: 1e3, expected valueAsNumber: 1000)
+input-valueasnumber.html	valueAsNumber getter on type range (actual value: , expected valueAsNumber: 50)
+input-valueasnumber.html	valueAsNumber getter on type range (actual value: -10, expected valueAsNumber: 0)
+input-valueasnumber.html	valueAsNumber getter on type range (actual value: 0, expected valueAsNumber: 0)
+input-valueasnumber.html	valueAsNumber getter on type range (actual value: 100, expected valueAsNumber: 100)
+input-valueasnumber.html	valueAsNumber getter on type range (actual value: 110, expected valueAsNumber: 100)
+input-valueasnumber.html	valueAsNumber getter on type range (actual value: 50, expected valueAsNumber: 50)
+input-valueasnumber.html	valueAsNumber getter on type time (actual value: , expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type time (actual value: 00:00, expected valueAsNumber: 0)
+input-valueasnumber.html	valueAsNumber getter on type time (actual value: 00:60, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type time (actual value: 12:00, expected valueAsNumber: 43200000)
+input-valueasnumber.html	valueAsNumber getter on type time (actual value: 23:59, expected valueAsNumber: 86340000)
+input-valueasnumber.html	valueAsNumber getter on type time (actual value: 24:00, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type week (actual value: , expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type week (actual value: 0000-W50, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type week (actual value: 1969-W20, expected valueAsNumber: -20217600000)
+input-valueasnumber.html	valueAsNumber getter on type week (actual value: 2019-W00, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber getter on type week (actual value: 2019-W50, expected valueAsNumber: 1575849600000)
+input-valueasnumber.html	valueAsNumber getter on type week (actual value: 2019-W60, expected valueAsNumber: NaN)
+input-valueasnumber.html	valueAsNumber setter on type date (actual valueAsNumber: 0, expected value: 1970-01-01)
 input-valueasnumber.html	valueAsNumber setter on type date (actual valueAsNumber: 1456704000000, expected value: 2016-02-29)
+input-valueasnumber.html	valueAsNumber setter on type date (actual valueAsNumber: 1575936000000, expected value: 2019-12-10)
+input-valueasnumber.html	valueAsNumber setter on type datetime-local (actual valueAsNumber: -86400000, expected value: 1969-12-31T00:00)
+input-valueasnumber.html	valueAsNumber setter on type datetime-local (actual valueAsNumber: 1575936000000, expected value: 2019-12-10T00:00)
 input-valueasnumber.html	valueAsNumber setter on type datetime-local (actual valueAsNumber: 1575979200000, expected value: 2019-12-10T12:00)
+input-valueasnumber.html	valueAsNumber setter on type datetime-local (actual valueAsNumber: 2.734333707189448e+26, expected value: )
 input-valueasnumber.html	valueAsNumber setter on type month (actual valueAsNumber: -1, expected value: 1969-12)
+input-valueasnumber.html	valueAsNumber setter on type month (actual valueAsNumber: 599, expected value: 2019-12)
 input-valueasnumber.html	valueAsNumber setter on type number (actual valueAsNumber: -123, expected value: -123)
+input-valueasnumber.html	valueAsNumber setter on type number (actual valueAsNumber: 1000, expected value: 1000)
+input-valueasnumber.html	valueAsNumber setter on type number (actual valueAsNumber: 123, expected value: 123)
+input-valueasnumber.html	valueAsNumber setter on type number (actual valueAsNumber: 123.456, expected value: 123.456)
+input-valueasnumber.html	valueAsNumber setter on type range (actual valueAsNumber: 0, expected value: 0)
 input-valueasnumber.html	valueAsNumber setter on type range (actual valueAsNumber: 100, expected value: 100)
+input-valueasnumber.html	valueAsNumber setter on type range (actual valueAsNumber: 50, expected value: 50)
+input-valueasnumber.html	valueAsNumber setter on type time (actual valueAsNumber: -3600000, expected value: 23:00)
+input-valueasnumber.html	valueAsNumber setter on type time (actual valueAsNumber: 0, expected value: 00:00)
+input-valueasnumber.html	valueAsNumber setter on type time (actual valueAsNumber: 2.734333707189448e+26, expected value: 10:54:10.944)
+input-valueasnumber.html	valueAsNumber setter on type time (actual valueAsNumber: 43200000, expected value: 12:00)
 input-valueasnumber.html	valueAsNumber setter on type time (actual valueAsNumber: 86340000, expected value: 23:59)
 input-valueasnumber.html	valueAsNumber setter on type week (actual valueAsNumber: -20217600000, expected value: 1969-W20)
+input-valueasnumber.html	valueAsNumber setter on type week (actual valueAsNumber: 0, expected value: 1970-W01)
+input-valueasnumber.html	valueAsNumber setter on type week (actual valueAsNumber: 1575849600000, expected value: 2019-W50)
 input-width.html	Forms
 input-willvalidate.html	Forms
 maxlength.html	Assigning negative integer throws IndexSizeError
@@ -867,6 +1303,7 @@ month.html	Month should be two digits: If the value of the element is not a vali
 month.html	Month value can be empty string.
 month.html	User agents must not allow the user to set the value to a non-empty string that is not a valid month string.
 month.html	Value should be two parts: If the value of the element is not a valid month string, then set it to the empty string instead.>
+month.html	When step attribute is given invalid value, it must ignore the invalid value and use defaul value instead.
 month.html	When value attribute has two digits year value, the value,which is invalid, must return empty string.
 month.html	When value is set with invalid value, the value must return empty string.
 month.html	Year should be > 0: If the value of the element is not a valid year string, then set it to the empty string instead.>
@@ -956,6 +1393,10 @@ range.html	Illegal value of step attribute
 range.html	Input should be reset to the default value when value attribute has whitespace
 range.html	Multiply value by ten raised to the exponentth power with `E`
 range.html	Multiply value by ten raised to the exponentth power with `e`
+range.html	Performing stepDown()
+range.html	Performing stepDown() beyond the value of the min attribute
+range.html	Performing stepUp()
+range.html	Performing stepUp() beyond the value of the max attribute
 range.html	Solving the step mismatch
 range.html	Step scale factor behavior when min attribute has integer value but max attribute is non-integer 
 range.html	The default step scale factor is 1, unless min attribute has non-integer value
@@ -1040,6 +1481,14 @@ text.html	Value returns the current value for search
 text.html	Value returns the current value for text
 text.html	Value sanitization algorithm should strip line breaks for search
 text.html	Value sanitization algorithm should strip line breaks for text
+text.html	stepDown does not apply for search
+text.html	stepDown does not apply for text
+text.html	stepUp does not apply for search
+text.html	stepUp does not apply for text
+text.html	valueAsDate attribute must return null for search
+text.html	valueAsDate attribute must return null for text
+text.html	valueAsNumber attribute must return NaN for search
+text.html	valueAsNumber attribute must return NaN for text
 time-2.html	Invalid value: fraction should have one, two or three ASCII digits. Value should be empty
 time-2.html	Invalid value: hour > 23. Value should be empty
 time-2.html	Invalid value: hour should have two ASCII digits. Value should be empty
@@ -1057,6 +1506,7 @@ time-2.html	Value <= max attribute
 time-2.html	Value > max attribute
 time-2.html	Value >= min attribute
 time-2.html	empty value
+time.html	 empty value of stepUp
 time.html	max  attribute on default value check
 time.html	max attribute support on input element
 time.html	min  attribute on default value check
@@ -1064,6 +1514,28 @@ time.html	min attribute support on input element
 time.html	set value on not time format value
 time.html	step attribute on default value check
 time.html	step attribute support on input element
+time.html	stepDown argument 2 times
+time.html	stepDown function support on input Element
+time.html	stepDown on step value 24 hour 
+time.html	stepDown on step value hour 
+time.html	stepDown on step value minus
+time.html	stepDown on step value second 
+time.html	stepDown on step value with fractional seconds
+time.html	stepDown on step value zero 
+time.html	stepDown step value empty default step value
+time.html	stepDown stop so lower than the minimum value
+time.html	stepUp argument 2 times
+time.html	stepUp function support on input Element
+time.html	stepUp on step value 24 hour
+time.html	stepUp on step value hour  
+time.html	stepUp on step value minus
+time.html	stepUp on step value second 
+time.html	stepUp on step value with fractional seconds
+time.html	stepUp on step value zero 
+time.html	stepUp step value empty on default step value 
+time.html	stepUp stop because it exceeds the maximum value
+time.html	stop at border on stepDown
+time.html	stop at border on stepUp
 time.html	time element of default time value
 time.html	type attribute support on input element
 type-change-state-weekmonth.html	change state from button to month
