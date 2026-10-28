@@ -83,6 +83,7 @@ WPT_DIRS=(
     html/semantics/forms/the-output-element
     html/semantics/forms/constraints
     html/infrastructure/common-dom-interfaces/collections
+    html/semantics/tabular-data
 )
 
 top=$(git rev-parse --show-toplevel)

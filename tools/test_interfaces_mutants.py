@@ -63,6 +63,7 @@ SCRIPTS_C = 'userland/apps/yonder/scripts.c'
 VALUE_C = 'userland/libpage/value.c'
 RANGE_C = 'userland/libpage/range.c'
 ELEMENTS_C = 'userland/libdom/elements.c'
+TABLES_C = 'userland/libdom/tables.c'
 INTERNAL_H = 'userland/libdom/internal.h'
 UI_CONTROLS_C = 'userland/libos64/ui_controls.c'
 DOM = 'tools/test_dom_host.sh'
@@ -798,6 +799,37 @@ mutants = [
     ('window-handlers-off-the-body', ELEMENTS_C,
      '    JSValueConst body = dom->prototypes[D_PROTO_BODY]->value;',
      '    JSValueConst body = dom->prototypes[D_PROTO_HTML_ELEMENT]->value;', (DOM,)),
+    # P6b. the tables' collections and tree verbs
+    ('rows-in-tree-order', COLLECTION_C, '    unsigned groups = query->kind == D_QUERY_TABLE_ROWS ? 3 : 1;',
+     '    unsigned groups = query->kind == D_QUERY_TABLE_ROWS ? 1 : 1;', (DOM,)),
+    ('foot-rows-in-the-middle', COLLECTION_C, 'html_is(row->parent, OS64_HTML_TAG_TFOOT) ? 2 : 1;',
+     'html_is(row->parent, OS64_HTML_TAG_TFOOT) ? 1 : 1;', (DOM,)),
+    ('nested-rows-counted', COLLECTION_C,
+     '(node->parent == query->root || (table_section(node->parent) && node->parent->parent == query->root));',
+     '(true || table_section(node->parent));', (DOM,)),
+    ('areas-children-only', COLLECTION_C,
+     '    bool descendants = kind == D_QUERY_TABLE_ROWS || kind == D_QUERY_AREAS;',
+     '    bool descendants = kind == D_QUERY_TABLE_ROWS;', (DOM,)),
+    ('collections-made-each-time', COLLECTION_C, '    if (*made != NULL) return *made;\n', '', (DOM,)),
+    ('delete-first-for-minus-one', TABLES_C, '        index = (int32_t)count - 1;', '        index = 0;', (DOM,)),
+    ('row-in-the-table-itself', TABLES_C, '    if (parent != NULL) return placed(dom, ctx, parent, made, before, row);',
+     '    return placed(dom, ctx, parent != NULL ? parent : table, made, before, row);', (DOM,)),
+    ('minus-one-in-the-first-group', TABLES_C, '        parent = rows[count - 1]->parent;',
+     '        parent = rows[0]->parent;', (DOM,)),
+    ('head-before-the-caption', TABLES_C, '                                     member == T_HEAD ? after_captions(table) : NULL;',
+     '                                     member == T_HEAD ? table->first_child : NULL;', (DOM,)),
+    ('any-section-a-head', TABLES_C,
+     '        if (!html_is(given, tag)) return d_error(ctx, "HierarchyRequestError", "The section is not the member\'s");\n',
+     '', (DOM,)),
+    ('tables-brand-unchecked', TABLES_C,
+     '    if (d_node_kind(node) != member_kind(magic)) return JS_ThrowTypeError(ctx, "Illegal invocation");',
+     '    (void)member_kind;', (DOM,)),
+    ('cell-index-in-any-parent', TABLES_C, '        return html_is(node->parent, OS64_HTML_TAG_TR) ?',
+     '        return node->parent != NULL ?', (DOM,)),
+    ('untouched-owner-refused', COLLECTION_C, '    JSValue wrapper = d_wrap(dom, ctx, owner);',
+     '    JSValue wrapper = JS_UNDEFINED;', (DOM,)),
+    ('undefined-a-type-error', TABLES_C, '    if (!JS_IsNull(value) && !JS_IsUndefined(value)) {',
+     '    if (!JS_IsNull(value)) {', (DOM,)),
 ]
 
 caught, missed, unbuilt = [], [], []

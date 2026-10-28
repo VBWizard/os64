@@ -1465,6 +1465,19 @@ them a title's `text` and a body's WindowEventHandlers, which are
 window's. A set of kinds is a uint64_t (`D_KIND`); a static assertion
 holds the kinds to 64.
 
+**The tables row** (`tables.c`, naming nothing on window; MODERN_WEB.md
+§ 0f's P6b). A table's `caption`, `tHead` and `tFoot`, read and replaced,
+and their create and delete verbs; its `tBodies` and `createTBody`; its
+`rows`, a section's and a row's `cells`, each with its insert and delete
+verbs; a row's `rowIndex` and `sectionRowIndex` and a cell's `cellIndex`;
+and a map's `areas`. The collections are `collection.c`'s table kinds
+(`d_table_query`), live and made once on the owner's entry; a table's
+rows are in HTML's order, a thead's first and a tfoot's last. A verb
+reads the collection a page reads (`d_query_items`), so the two agree on
+every index, and changes the tree through `d_tree_change`, the door
+appendChild takes; an element it makes joins the owner's tree at once,
+and with it the owner's node document.
+
 **The forms rows** (naming HTMLFormControlsCollection and RadioNodeList on
 window, and nothing else). `collection.c`'s: a form's `elements` is an
 HTMLFormControlsCollection, over a collection's, of its listed elements

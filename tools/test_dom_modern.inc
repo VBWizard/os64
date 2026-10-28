@@ -617,6 +617,63 @@ static void dom_modern_cases(void)
         "window.onpopstate=null;assert(Object.prototype.hasOwnProperty.call(HTMLBodyElement.prototype,'onmessage'),"
         "'WindowEventHandlers on the body');",
         "modern-on-elements");
+    /* 0f's P6b: the tables' tree verbs and collections, and a map's areas. */
+    dom_script(&f, MODERN_ASSERT
+        "function el(t){return document.createElement(t)}"
+        "function throws(f,name){try{f()}catch(x){return x.name===name}return false}"
+        "var t=el('table');"
+        "assert(t.caption===null&&t.tHead===null&&t.tFoot===null&&t.rows.length===0&&t.tBodies.length===0,'empty');"
+        "assert(t.rows===t.rows&&t.tBodies===t.tBodies&&t.rows instanceof HTMLCollection,'[SameObject]');"
+        "var r=t.insertRow();"
+        "assert(t.tBodies.length===1&&r.parentNode===t.tBodies[0]&&r instanceof HTMLTableRowElement,'a new tbody');"
+        "var foot=t.createTFoot(),head=t.createTHead(),cap=t.createCaption();"
+        "assert(t.firstChild===cap&&cap.nextSibling===head&&t.lastChild===foot&&t.createTHead()===head,"
+        "'the parts where they go');"
+        "foot.insertRow();head.insertRow();"
+        "assert(t.rows.length===3&&t.rows[0].parentNode===head&&t.rows[1]===r&&t.rows[2].parentNode===foot,"
+        "'a head\\'s rows first, a foot\\'s last');"
+        "assert(r.rowIndex===1&&r.sectionRowIndex===0&&head.rows.length===1,'indexes');"
+        "var last=t.insertRow(-1);assert(last.parentNode===foot,'-1: the last row\\'s parent');"
+        "var c=r.insertCell();"
+        "assert(c instanceof HTMLTableCellElement&&c.tagName==='TD'&&c.cellIndex===0&&r.cells.length===1,'a cell');"
+        "r.insertCell(0);assert(r.cells[1]===c&&c.cellIndex===1&&r.cells===r.cells,'insertCell(0)');"
+        "assert(throws(function(){r.insertCell(5)},'IndexSizeError')&&throws(function(){r.insertCell(-2)},"
+        "'IndexSizeError'),'insertCell\\'s bounds');"
+        "r.deleteCell(-1);assert(r.cells.length===1&&r.cells[0]!==c,'deleteCell(-1)');"
+        "assert(throws(function(){r.deleteCell(1)},'IndexSizeError')&&throws(function(){r.deleteCell()},'TypeError'),"
+        "'deleteCell\\'s bounds and its index');"
+        "assert(throws(function(){t.deleteRow(-2147483648)},'IndexSizeError'),'the least long');"
+        "t.deleteRow(0);assert(t.rows.length===3&&head.rows.length===0,'deleteRow(0)');"
+        "assert(throws(function(){t.tHead=el('tbody')},'HierarchyRequestError')&&"
+        "throws(function(){t.tHead=el('div')},'TypeError')&&throws(function(){t.caption={}},'TypeError'),"
+        "'the setters\\' checks');"
+        "var head2=el('thead');t.tHead=head2;assert(t.tHead===head2&&head.parentNode===null&&cap.nextSibling===head2,"
+        "'tHead replaced, after the caption');"
+        "t.tHead=head2;assert(t.tHead===head2&&cap.nextSibling===head2,'set to itself');"
+        "t.caption=null;assert(t.caption===null&&cap.parentNode===null,'caption cleared');"
+        "t.createCaption();t.caption=undefined;assert(t.caption===null,'undefined is null');"
+        "var parsed=el('div');parsed.innerHTML='<table><thead></thead><tbody><tr id=r><td id=c></td></tr></tbody></table>';"
+        "assert(parsed.querySelector('#c').cellIndex===0&&parsed.querySelector('#r').rowIndex===0&&"
+        "parsed.querySelector('#r').sectionRowIndex===0,'a table no script has touched');"
+        "t.deleteTFoot();assert(t.tFoot===null&&foot.parentNode===null,'deleteTFoot');"
+        "var b2=t.createTBody();assert(t.tBodies.length===2&&t.tBodies[1]===b2,'createTBody after the last');"
+        "var m=el('map');m.innerHTML='<p><area></p><area><b></b>';"
+        "assert(m.areas.length===2&&m.areas===m.areas,'a map\\'s areas, all below it');"
+        "assert(el('tr').rowIndex===-1&&el('tr').sectionRowIndex===-1&&el('td').cellIndex===-1,'in no table');"
+        "var holder=el('div');holder.appendChild(el('td'));assert(holder.firstChild.cellIndex===-1,'a cell in no row');"
+        "var order=el('table');order.innerHTML='<tfoot><tr id=f></tr></tfoot><tbody><tr id=b></tr></tbody>"
+        "<thead><tr id=h></tr></thead><tr id=t></tr>';"
+        "assert(Array.prototype.map.call(order.rows,function(x){return x.id}).join()==='h,b,t,f',"
+        "'rows: a head\\'s, the body\\'s and the table\\'s in tree order, a foot\\'s');"
+        "var outer=el('table');outer.innerHTML='<tr><td><table><tr><td></td></tr></table></td></tr><tr></tr>';"
+        "assert(outer.rows.length===2&&outer.rows[1].rowIndex===1,'a nested table\\'s rows are its own');"
+        "var two=el('table');two.innerHTML='<caption>a</caption><caption>b</caption>';var second=two.lastChild;"
+        "two.caption=second;assert(two.firstChild===second&&two.childNodes.length===1,'the second caption first');"
+        "var rows=Object.getOwnPropertyDescriptor(HTMLTableElement.prototype,'rows').get;"
+        "assert(throws(function(){rows.call(el('tbody'))},'TypeError'),'the brand');"
+        "var own=document.implementation.createHTMLDocument('');var made=own.createElement('table').insertRow();"
+        "assert(made.ownerDocument===own,'made in the table\\'s document');",
+        "modern-on-tables");
     dom_script(&f, MODERN_ASSERT
         "function el(t,a){var e=document.createElement(t);for(var k in a)e.setAttribute(k,a[k]);return e}"
         /* checkValidity and reportValidity fire invalid: cancelable, not bubbling, trusted */
@@ -932,7 +989,10 @@ static void dom_modern_cases(void)
         /* 0f's P6a's element kinds' members; an anchor's href is every page's */
         "assert(!('href' in document.createElement('area'))&&!('colSpan' in document.createElement('td'))&&"
         "!('text' in document.createElement('title'))&&!('onpopstate' in document.body)&&"
-        "'href' in document.createElement('a'));",
+        "'href' in document.createElement('a'));"
+        /* 0f's P6b's tables and areas */
+        "assert(!('rows' in document.createElement('table'))&&!('insertCell' in document.createElement('tr'))&&"
+        "!('areas' in document.createElement('map')));",
         "modern-off-absent");
 
     bool exact = on != NULL && off != NULL;

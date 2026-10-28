@@ -4444,6 +4444,60 @@ handlers, and an area's `href` without the switch. Five anchors the
 rewrites moved were re-anchored (one in `test_dom_mutants.py`, whose
 harness does not build: DEBTS.md).
 
+### 0f's P6b, as built — 2026-10-28
+
+P6's second PR, and its last: what of the 36 interfaces is not a
+reflection. A table's `caption`, `tHead` and `tFoot`, read and replaced
+(WebIDL's TypeError for an element of another interface, HTML's
+HierarchyRequestError for a section of the wrong tag), with their create
+and delete verbs; its `tBodies` and `createTBody`; `rows` on a table and
+a section and `cells` on a row, each with its insert and delete verbs
+(an index below -1 is an IndexSizeError, and so is one past the count
+for an insert, at or past it for a delete); a row's
+`rowIndex` and `sectionRowIndex`; a cell's `cellIndex`; a map's `areas`.
+
+- **The collections are live queries** (`collection.c`'s table kinds,
+  `d_table_query`), made once and kept on the owner's entry
+  ([SameObject]). A table's rows are HTML's three groups — a thead's,
+  then the table's own and its tbodies', then a tfoot's — each in tree
+  order, which a walk a group gives; a nested table's rows are its own.
+- **A verb reads the collection a page reads** (`d_query_items`), so
+  `insertRow(i)` and `rows[i]` cannot disagree, and changes the tree
+  through `d_tree_change`, appendChild's door (scripts a moved caption
+  carries connect as they would). What it makes joins the owner's tree
+  at once, and with it the owner's node document, so a table in a
+  document of its own fills that document.
+- A table with no rows takes `insertRow`'s row in its last tbody, or in
+  a new one; `insertRow(-1)` appends to the last row's parent, a tfoot's
+  when it has rows.
+- **Booked** (DEBTS.md): a collection's own property names list its
+  indices and not its names.
+
+**Numbers.** WPT: `html/semantics/tabular-data`, fetched for this phase,
++102, all `[required]`, 120 passing. What fails is elsewhere's: an element
+in no namespace, DOMParser, a window's named access, a prefixed HTML
+element (DEBTS.md), a collection's property names, a table of tens of
+thousands of rows past the HTML arena, and `caption-methods.html`, whose page waits for an
+iframe's srcdoc to load, which the runner does not, so the page fails
+whole. `dom/nodes` +4 and `collections` +5, pages that reach a cell
+through `tBodies`, `rows` and `cells`, each required; every other
+directory unchanged. Hosts, 0 failed: DOM 20,075 and 126,128; yonder's
+scripted pages 8,926; userland builds. Read cold once: a row's or cell's
+index threw for a table no script had touched (its collection wanted the
+owner's wrapper, which a parsed table lacks; eight of WPT's
+`sectionRowIndex` subtests are that), `undefined` given to a part's
+setter threw where WebIDL makes it null, and the table kinds' match
+fell to the rows' rule for any kind not named; one of text. All fixed.
+Mutants (`tools/test_interfaces_mutants.py`, its P6b group): 14, each
+caught — the rows' groups and a foot's place in them, a nested table's
+rows, a map's areas below its children, [SameObject], deleting the last
+for -1, a row's new tbody, -1's parent, a head before the caption, a
+body set as a head, the brand, a cell outside a row, an untouched
+owner, and undefined as null. Two pieces the first run found no test
+could see are gone: the before-itself guard (libhtml's insert already
+reads a node as its own reference so) and a node-document record for
+what a verb makes (it joins the owner's tree at once).
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.

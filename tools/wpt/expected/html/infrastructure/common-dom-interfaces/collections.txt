@@ -43,13 +43,25 @@ radionodelist.html	Check the RadioNodeList.value on setting
 radionodelist.html	Check the RadioNodeList.value on setting to 'on'
 radionodelist.html	The RadioNodeList.value must be the first checked radio button's value
 radionodelist.html	The value attribute should be empty if no element is checked
+# 0f's P6b (MODERN_WEB.md § 0f's P6b, as built): the tables' collections
+# and a map's areas. Each fails with the switch off.
+detached-root-gc.html	map.areas
+detached-root-gc.html	table.rows
+detached-root-gc.html	table.tBodies
+detached-root-gc.html	tbody.rows
+detached-root-gc.html	tr.cells
 [excluded]
 [passing]
 detached-root-gc.html	fieldset.elements
 detached-root-gc.html	form.elements
 detached-root-gc.html	input.labels
+detached-root-gc.html	map.areas
 detached-root-gc.html	select.options
 detached-root-gc.html	select.selectedOptions
+detached-root-gc.html	table.rows
+detached-root-gc.html	table.tBodies
+detached-root-gc.html	tbody.rows
+detached-root-gc.html	tr.cells
 historical.html	HTMLFormControlsCollection legacycaller should not be supported
 historical.html	HTMLOptionsCollection legacycaller should not be supported
 htmlallcollection.html	legacy caller is not a constructor

@@ -412,6 +412,12 @@ insert-adjacent.html	insertAdjacentElement(afterbegin, [object HTMLHeadingElemen
 insert-adjacent.html	insertAdjacentElement(afterend, [object HTMLHeadingElement] )
 insert-adjacent.html	insertAdjacentElement(beforebegin, [object HTMLHeadingElement] )
 insert-adjacent.html	insertAdjacentElement(beforeend, [object HTMLHeadingElement] )
+# 0f's P6b (MODERN_WEB.md § 0f's P6b, as built): pages that reach a cell
+# through tBodies, rows and cells. Each fails with the switch off.
+getElementsByClassName-20.htm	get elements in document then add element to collection
+getElementsByClassName-21.htm	delete element from collection
+getElementsByClassName-22.htm	move item in collection order
+getElementsByClassName-25.htm	verify spacing is handled correctly
 [excluded]
 [passing]
 Attr-prefix.html	Attr.prefix absent (HTML)
@@ -2911,8 +2917,12 @@ getElementsByClassName-16.htm	document.getElementsByClassName(array): "b","a"
 getElementsByClassName-17.htm	document.getElementsByClassName(array): "b a"
 getElementsByClassName-18.htm	element.getElementsByClassName(array): "a", "b"
 getElementsByClassName-19.htm	get elements in document
+getElementsByClassName-20.htm	get elements in document then add element to collection
+getElementsByClassName-21.htm	delete element from collection
+getElementsByClassName-22.htm	move item in collection order
 getElementsByClassName-23.htm	multiple defined classes
 getElementsByClassName-24.htm	handle unicode chars
+getElementsByClassName-25.htm	verify spacing is handled correctly
 getElementsByClassName-26.htm	multiple class attributes
 getElementsByClassName-27.htm	generic element listed
 getElementsByClassName-28.htm	generic element listed
