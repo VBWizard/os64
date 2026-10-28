@@ -393,9 +393,11 @@ static bool can_be_bad(os64_page_input_t input)
 // THE JUDGE: every flag a control's validity has (ValidityState, § 4.10.20.3),
 // for a node of the kinds the value verbs take, given its value and its
 // radio group's answer — which the model has from its chains and a node
-// asked alone walks its tree for. Whether it is barred is not asked here:
-// a barred control's flags are still its flags (customError survives
-// disabled), and what bars it only stops them counting.
+// asked alone walks its tree for. Disabled and readonly are asked only as
+// mutability, which a typed-into field's valueMissing needs (a field a
+// person cannot fill is not missing); otherwise a barred control's flags
+// are still its flags (customError survives disabled), and what bars it
+// only stops them counting, which is willValidate's to say.
 static uint32_t judge(os64_page_state_t *state, const os64_html_node_t *n, os64_page_element_t element,
                       os64_page_input_t input, const char *value, size_t len, bool radio_missing,
                       os64_page_pattern_t matcher, void *opaque)
@@ -468,7 +470,8 @@ bool p_validate(const os64_page_t *page, int32_t form, int32_t *control)
         // submission the page's scripts validated does not reach this
         // (os64_page_activate_validated); one they did not (scripts off,
         // the Modern Web switch off, no runtime yet, an image button) is
-        // judged without its pattern (DEBTS.md § libpage).
+        // judged without its pattern (DEBTS.md § libpage), but for a form
+        // that submits itself (activate.c's submit says why).
         if (judge(page->state, c->node, c->element, c->input, c->value, c->value_len, radio_missing, NULL,
                   NULL) != 0) {
             *control = i;
@@ -527,10 +530,7 @@ int64_t os64_page_node_validity(os64_page_state_t *state, const os64_html_node_t
     return 0;
 }
 
-// The sentence a person is shown for the first flag a control has, in the
-// order ValidityState lists them, or its custom message; "" for none. The
-// sentences are plain ASCII, as a status line prints them; a custom
-// message is the page's own UTF-8.
+// The custom message as it was set, borrowed; "" for none.
 int64_t os64_page_node_custom_validity(os64_page_state_t *state, const os64_html_node_t *node, const char **message,
                                        size_t *len)
 {
@@ -545,6 +545,10 @@ int64_t os64_page_node_custom_validity(os64_page_state_t *state, const os64_html
     return 0;
 }
 
+// The sentence a person is shown for the first flag a control has, in the
+// order ValidityState lists them, or its custom message; "" for none. The
+// sentences are plain ASCII, as a status line prints them; a custom
+// message is the page's own UTF-8.
 int64_t os64_page_node_validation_message(os64_page_state_t *state, const os64_html_node_t *node, uint32_t flags,
                                           char *out, size_t cap)
 {

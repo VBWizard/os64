@@ -289,8 +289,11 @@ static os64_page_verdict_t submit(const os64_page_t *page, os64_page_what_t what
     const os64_page_ref_t *action = NULL;
     bool novalidate = false;
     p_effective(page, form, submitter, &action, &out->method, &out->enctype, &novalidate);
-    // A form a script sends itself is not validated: the script chose to.
-    // Nor is one the page's scripts validated before its submit event.
+    // A form a script sends itself (form.submit()) is not validated: the
+    // script chose to. requestSubmit() with no submitter arrives the same
+    // way; the binding validated it, with the Modern Web switch on, and
+    // with it off nothing does (DEBTS.md § libpage). Nor is a submission
+    // the page's scripts validated before its submit event.
     if (what.how == OS64_PAGE_ACTIVATE_FORM || validated)
         novalidate = true;
 

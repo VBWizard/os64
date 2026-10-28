@@ -344,7 +344,10 @@ the model's own submission has none, and judges no pattern. A
 submission the page's scripts already validated, before its submit event,
 says so (`os64_page_activate_validated`) and is not validated again, as
 HTML validates once; any other (scripts off, the Modern Web switch off,
-no runtime yet, an image button) is validated here without its pattern.
+no runtime yet, an image button) is validated here without its pattern,
+except a form that submits itself (`form.submit()`, which validates
+nothing; and `requestSubmit()` with no submitter, which the binding
+validated with the switch on and nothing validates with it off).
 **Booked**: `min`/`max`/`step`, and that pattern (DEBTS.md § libpage).
 
 **K. The navigation a document declares** (the `refresh` pragma directive

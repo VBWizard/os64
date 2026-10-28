@@ -667,7 +667,9 @@ typedef int (*os64_page_pattern_t)(void *opaque, const char *pattern, const char
 // only a custom validity. WRONG_KIND for any other node or a foreign one.
 int64_t os64_page_node_will_validate(os64_page_state_t *state, const os64_html_node_t *node, bool *will);
 // The node's flags. A barred control has its flags still (a disabled
-// control keeps its custom error); willValidate decides whether they count.
+// control keeps its custom error), but for valueMissing, which a field a
+// person cannot type into does not suffer; willValidate decides whether
+// they count.
 // May read the value, so NO_MEMORY as os64_page_node_value; WRONG_KIND as
 // will_validate.
 int64_t os64_page_node_validity(os64_page_state_t *state, const os64_html_node_t *node, os64_page_pattern_t matcher,
