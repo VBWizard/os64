@@ -4270,13 +4270,16 @@ which P4a left reading false.
   1970-01-01, a month as months since January 1970, a week as its
   Monday's milliseconds, a time as milliseconds since midnight, a local
   date and time as both. The year is read whole, not as the residue the
-  syntax check keeps, up to nine digits, so a year past a Date's is
-  judged too. A number's and a range's strings are read by HTML's lenient
+  syntax check keeps, through 275760, where a Date's range ends and a
+  double still holds every millisecond (a later year the sanitizer keeps
+  is judged by nothing: DEBTS.md). A number's and a range's strings are read by HTML's lenient
   rules for floating-point values, as range.c's sanitizer reads min, max
   and step: a stricter judge put a range's own value off its grid.
 - **The flags** (`submit.c`'s `range_flags`, the judge's, so a
   submission's validation obeys them too): below a min that converts,
-  above a max that does (a range's default to 0 and 100); a time whose max
+  above a max that does (a range's default to 0 and 100, and a range's max
+  below its min taken as its min, as Blink takes it, since the value
+  sits at the min and no slider moves it lower); a time whose max
   is below its min wraps past midnight and is out of range only between
   the two. The step draws a grid from its base (the min, else the value
   attribute, else the type's default, a week's the Monday 1969-12-29),
@@ -4285,22 +4288,23 @@ which P4a left reading false.
   too (`range.c`'s arithmetic, `p_step_aligned`), as `step=1e-12` against
   `-12345678.9` and a time's `step=16.1` need.
 - **The sentences**: "Value must be greater than or equal to 2." for a
-  number, "Value must be 2000-01-02 or later." for a date, the bound as
-  the page wrote it (a range's default when its own does not convert),
-  and "Value must be 22:00 or later, or 02:00 or earlier." for a time
-  whose range wraps.
+  number, "Value must be 2000-01-02 or later." for a date: a date's bound
+  as the page wrote it, a number's as the number it was read as ("5px"
+  says 5); and "Value must be 22:00 or later, or 02:00 or earlier." for a
+  time whose range wraps, which no other type does.
 
 **Numbers.** WPT: `constraints` +140, all `[required]`, 895 of 921; what
 fails is `:invalid`, an element in no namespace, `object`, `execCommand`,
 `getClientRects` and named access. Nothing new or lost in P3's and P4a's
 other directories; with the switch off no required line passes. Hosts, 0
-failed: libpage 254,271 (36 range and step cases across the types); DOM
+failed: libpage 254,273 (38 range and step cases across the types); DOM
 17,810 and 115,923. Mutants (`tools/test_interfaces_mutants.py`, its P4b
-group): 15, each caught — a date's, a month's, a week's and a time
-fraction's conversion, a year past a Date's, a number read leniently, a
-week's step base, a time's wrap and its sentence, `step=any`, the step
-base from the min and from the value attribute, the exact remainder and
-the scale multiplied exactly, and a range's unconverted bound.
+group): 17, each caught — a date's, a month's, a week's and a time
+fraction's conversion, the year's bound, a number read leniently, a
+week's step base, a time's wrap and its sentence (and a date's that does
+not wrap), `step=any`, the step base from the min and from the value
+attribute, the exact remainder and the scale multiplied exactly, a
+range's max below its min, and a number's bound as read.
 
 ### Slice 6a, XML foundation as built — 2026-10-25
 

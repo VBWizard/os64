@@ -321,7 +321,10 @@ const char *p_range_value(PArena *arena, const os64_html_node_t *node,
                           const char *raw, size_t *len);
 // HTML's "convert a string to a number" for the types min, max and step
 // apply to (number, range, the dates and times; value.c): false for any
-// other type, and for a string that is no valid value of this one. A date
+// other type, and for a string that does not convert — which is not the
+// same as no valid value: a number's or range's string is read by the
+// lenient floating-point rules ("10 " and "5px" convert), and a date or
+// time whose year is past 275760 does not, valid or not. A date
 // is milliseconds since 1970-01-01T00:00Z, a month months since January
 // 1970, a week the milliseconds of its Monday, a time milliseconds since
 // midnight, a local date and time milliseconds since the epoch as though

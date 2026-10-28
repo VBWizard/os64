@@ -193,10 +193,11 @@ static bool valid_for(os64_page_input_t input, const char *s)
 
 // ── A value as a number (HTML's "convert a string to a number") ─────────
 
-// The year itself, not its residue: four digits or more. A year of more
-// than nine digits is refused, which keeps the day arithmetic in range;
-// any year the value sanitizer keeps short of that converts, so min, max
-// and step judge it.
+// The year itself, not its residue: four digits or more, and none past
+// 275760, the year a Date's range ends in, below the one (about 285616)
+// where a double stops holding every millisecond, which a local date and
+// time's step needs. A later year the value sanitizer keeps does not
+// convert, and min, max and step say nothing of it (DEBTS.md § libpage).
 static bool whole_year(const char **at, int32_t *year)
 {
     const char *s = *at;
@@ -204,7 +205,7 @@ static bool whole_year(const char **at, int32_t *year)
     size_t seen = 0;
     while (digit(*s)) {
         y = y * 10 + (*s - '0');
-        if (y > 999999999)
+        if (y > 275760)
             return false;
         s++;
         seen++;

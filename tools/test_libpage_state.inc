@@ -995,7 +995,8 @@ static void state_validity_range(void)
         {"<input type=number min=0.5 step=1>", "1.5", 0, ""},
         /* a min that does not convert: the value attribute is the base */
         {"<input type=number step=2 value=3 min=nope>", NULL, 0, NULL},
-        {"<input type=range value=50 min=60 max=40>", NULL, OS64_PAGE_VALIDITY_OVERFLOW, NULL},
+        /* a range's max below its min is its min: the value it is put at is valid */
+        {"<input type=range value=50 min=60 max=40>", NULL, 0, NULL},
         {"<input type=date min=2000-01-02>", "2000-01-01", OS64_PAGE_VALIDITY_UNDERFLOW,
          "Value must be 2000-01-02 or later."},
         {"<input type=date max=275760-09-13>", "2000-01-01", 0, ""},
@@ -1017,11 +1018,14 @@ static void state_validity_range(void)
         /* min, max and the base read as the sanitizer reads them */
         {"<input type=range min='10 ' step=3>", NULL, 0, NULL},
         {"<input type=number min='+10'>", "5", OS64_PAGE_VALIDITY_UNDERFLOW, NULL},
-        /* a year past a Date's still converts, and is judged */
-        {"<input type=date max=2030-12-31>", "300000-01-01", OS64_PAGE_VALIDITY_OVERFLOW, NULL},
-        /* a range's bound that does not convert is named by its default */
-        {"<input type=range min=150 max=abc>", NULL, OS64_PAGE_VALIDITY_OVERFLOW,
-         "Value must be less than or equal to 100."},
+        /* a year past a Date's does not convert (DEBTS.md § libpage) */
+        {"<input type=date max=2030-12-31>", "300000-01-01", 0, NULL},
+        {"<input type=range min=150 max=abc>", NULL, 0, NULL},
+        /* a number's bound said as the number it was read as */
+        {"<input type=number min=5px>", "1", OS64_PAGE_VALIDITY_UNDERFLOW, "Value must be greater than or equal to 5."},
+        /* a date whose max is below its min does not wrap: one bound is said */
+        {"<input type=date min=2020-01-01 max=2019-01-01>", "2019-06-01",
+         OS64_PAGE_VALIDITY_UNDERFLOW | OS64_PAGE_VALIDITY_OVERFLOW, "Value must be 2020-01-01 or later."},
         {"<input type=time min=22:00 max=02:00>", "23:00", 0, NULL},
         {"<input type=time min=22:00 max=02:00>", "12:00",
          OS64_PAGE_VALIDITY_UNDERFLOW | OS64_PAGE_VALIDITY_OVERFLOW,
