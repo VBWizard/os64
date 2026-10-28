@@ -674,6 +674,42 @@ static void dom_modern_cases(void)
         "var own=document.implementation.createHTMLDocument('');var made=own.createElement('table').insertRow();"
         "assert(made.ownerDocument===own,'made in the table\\'s document');",
         "modern-on-tables");
+    /* 0f's P7: the window's own objects as their interfaces'. */
+    dom_script(&f, MODERN_ASSERT
+        "function throws(f,name){try{f()}catch(x){return x.name===name}return false}"
+        "function own(o,n){return Object.prototype.hasOwnProperty.call(o,n)}"
+        "assert(location instanceof Location&&Object.getPrototypeOf(location)===Location.prototype&&"
+        "Object.prototype.toString.call(location)==='[object Location]','Location');"
+        "var d=Object.getOwnPropertyDescriptor(location,'href');"
+        "assert(d&&!d.configurable&&d.enumerable&&d.set,'href: [LegacyUnforgeable]');"
+        "d=Object.getOwnPropertyDescriptor(location,'assign');assert(!d.configurable&&!d.writable,'assign too');"
+        "assert(location.valueOf===Object.prototype.valueOf&&own(location,'valueOf')&&"
+        "own(location,Symbol.toPrimitive)&&location[Symbol.toPrimitive]===undefined,'its own valueOf and toPrimitive');"
+        "assert(Object.getOwnPropertyNames(Location.prototype).join()==='constructor','an empty prototype');"
+        "assert(Object.getPrototypeOf(Location.prototype)===Object.prototype&&"
+        "Object.getPrototypeOf(History.prototype)===Object.prototype&&"
+        "Object.getPrototypeOf(Navigator.prototype)===Object.prototype,'the same levels as without the switch');"
+        "assert(throws(function(){Object.getOwnPropertyDescriptor(location,'href').get.call({})},'TypeError'),"
+        "'Location\\'s brand');"
+        "assert(history instanceof History&&!own(history,'back')&&!own(history,'pushState')&&"
+        "typeof History.prototype.pushState==='function'&&own(History.prototype,'length'),'History\\'s members');"
+        "assert(throws(function(){History.prototype.back.call({})},'TypeError')&&"
+        "throws(function(){Object.getOwnPropertyDescriptor(History.prototype,'length').get.call({})},'TypeError')&&"
+        "throws(function(){History.prototype.pushState.call({},null,'')},'TypeError'),'History\\'s brand');"
+        "assert(history.length>=1&&typeof history.state!=='undefined','still answering');"
+        "assert(Object.getOwnPropertyDescriptor(History.prototype,'length').get.name==='get length'&&"
+        "Object.getOwnPropertyDescriptor(History.prototype,'scrollRestoration').set.name==='set scrollRestoration'&&"
+        "Object.getOwnPropertyDescriptor(location,'href').get.name==='get href','accessors named');"
+        "assert(Object.getOwnPropertyDescriptor(History.prototype,'back').enumerable&&"
+        "Object.getOwnPropertyDescriptor(location,'assign').enumerable&&"
+        "!Object.getOwnPropertyDescriptor(location,'valueOf').enumerable,'operations enumerable');"
+        "assert(History.prototype.back.name==='back'&&History.prototype.go.length===0&&location.assign.name==='assign',"
+        "'operations named, go\\'s optional delta');"
+        "assert(navigator instanceof Navigator&&!own(navigator,'userAgent')&&typeof navigator.userAgent==='string'&&"
+        "clientInformation===navigator,'Navigator');"
+        "assert(throws(function(){new Location()},'TypeError')&&throws(function(){new History()},'TypeError')&&"
+        "throws(function(){new Navigator()},'TypeError'),'no constructors');",
+        "modern-on-window-objects");
     dom_script(&f, MODERN_ASSERT
         "function el(t,a){var e=document.createElement(t);for(var k in a)e.setAttribute(k,a[k]);return e}"
         /* checkValidity and reportValidity fire invalid: cancelable, not bubbling, trusted */
@@ -992,7 +1028,16 @@ static void dom_modern_cases(void)
         "'href' in document.createElement('a'));"
         /* 0f's P6b's tables and areas */
         "assert(!('rows' in document.createElement('table'))&&!('insertCell' in document.createElement('tr'))&&"
-        "!('areas' in document.createElement('map')));",
+        "!('areas' in document.createElement('map')));"
+        /* 0f's P7's interfaces; the objects keep their members as they were */
+        "assert(typeof Location==='undefined'&&typeof History==='undefined'&&typeof Navigator==='undefined'&&"
+        "Object.prototype.hasOwnProperty.call(history,'back')&&"
+        "Object.prototype.hasOwnProperty.call(navigator,'userAgent')&&"
+        "Object.getOwnPropertyDescriptor(location,'href').configurable);"
+        /* over a level of their own, so the chains' levels match the switch's */
+        "[location,history,navigator].forEach(function(o){var p=Object.getPrototypeOf(o);"
+        "assert(p!==Object.prototype&&Object.getPrototypeOf(p)===Object.prototype&&"
+        "Object.getOwnPropertyNames(p).length===0,'an empty level of its own')});",
         "modern-off-absent");
 
     bool exact = on != NULL && off != NULL;

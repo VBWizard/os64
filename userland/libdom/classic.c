@@ -737,7 +737,12 @@ int d_interface_class(os64_dom_t *dom, JSContext *ctx, JSValueConst global, JSCl
 int d_classic_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
 {
     if (d_style_install(dom, ctx) < 0) return -1;
-    JSValue object = JS_NewObject(ctx);
+    /* Over a prototype level of its own, which the Modern Web's row makes
+     * Navigator.prototype (window.c's d_window_objects_install). */
+    JSValue level = JS_NewObject(ctx);
+    if (JS_IsException(level)) return -1;
+    JSValue object = JS_NewObjectProto(ctx, level);
+    JS_FreeValue(ctx, level);
     dom->navigator = d_retain(dom,ctx,object);
     if (dom->navigator == NULL) return -1;
     const char *names[] = {"userAgent","appName","appVersion","platform"};

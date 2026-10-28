@@ -469,6 +469,39 @@ user_timing_exists.any.html	self.performance.clearMarks is defined.
 user_timing_exists.any.html	self.performance.clearMeasures is defined.
 user_timing_exists.any.html	self.performance.mark is defined.
 user_timing_exists.any.html	self.performance.measure is defined.
+# 0f's P7 (MODERN_WEB.md § 0f's P7, as built): pages that read WPT's
+# WebIDL, which run once interfaces/ is fetched and the runner serves the
+# WebIDL parser. Each fails with the switch off.
+idlharness.any.html	Partial interface Performance: member names are unique
+idlharness.any.html	Partial interface Performance: original interface defined
+idlharness.any.html	Performance interface: calling clearMarks(optional DOMString) on performance with too few arguments must throw TypeError
+idlharness.any.html	Performance interface: calling clearMeasures(optional DOMString) on performance with too few arguments must throw TypeError
+idlharness.any.html	Performance interface: calling mark(DOMString, optional PerformanceMarkOptions) on performance with too few arguments must throw TypeError
+idlharness.any.html	Performance interface: calling measure(DOMString, optional (DOMString or PerformanceMeasureOptions), optional DOMString) on performance with too few arguments must throw TypeError
+idlharness.any.html	Performance interface: performance must inherit property "clearMarks(optional DOMString)" with the proper type
+idlharness.any.html	Performance interface: performance must inherit property "clearMeasures(optional DOMString)" with the proper type
+idlharness.any.html	Performance interface: performance must inherit property "mark(DOMString, optional PerformanceMarkOptions)" with the proper type
+idlharness.any.html	Performance interface: performance must inherit property "measure(DOMString, optional (DOMString or PerformanceMeasureOptions), optional DOMString)" with the proper type
+idlharness.any.html	PerformanceMark interface object length
+idlharness.any.html	PerformanceMark interface object name
+idlharness.any.html	PerformanceMark interface: existence and properties of interface object
+idlharness.any.html	PerformanceMark interface: existence and properties of interface prototype object
+idlharness.any.html	PerformanceMark interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	PerformanceMark interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	PerformanceMark interface: mark must inherit property "detail" with the proper type
+idlharness.any.html	PerformanceMark must be primary interface of mark
+idlharness.any.html	PerformanceMeasure interface object length
+idlharness.any.html	PerformanceMeasure interface object name
+idlharness.any.html	PerformanceMeasure interface: existence and properties of interface object
+idlharness.any.html	PerformanceMeasure interface: existence and properties of interface prototype object
+idlharness.any.html	PerformanceMeasure interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	PerformanceMeasure interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	PerformanceMeasure interface: measure must inherit property "detail" with the proper type
+idlharness.any.html	PerformanceMeasure must be primary interface of measure
+idlharness.any.html	Stringification of mark
+idlharness.any.html	Stringification of measure
+idlharness.any.html	idl_test setup
+idlharness.any.html	idl_test validation
 [excluded]
 [passing]
 clearMarks.html	First loop: checking entries after removing "". Entries in entrylist should be in order.
@@ -593,6 +626,36 @@ clear_one_mark.any.html	Clearing an existent mark doesn't affect other existing 
 clear_one_measure.any.html	Clearing an existent measure doesn't affect other existing measures
 entry_type.any.html	Validate the user timing entry type PerformanceMark
 entry_type.any.html	Validate the user timing entry type PerformanceMeasure
+idlharness.any.html	Partial interface Performance: member names are unique
+idlharness.any.html	Partial interface Performance: original interface defined
+idlharness.any.html	Performance interface: calling clearMarks(optional DOMString) on performance with too few arguments must throw TypeError
+idlharness.any.html	Performance interface: calling clearMeasures(optional DOMString) on performance with too few arguments must throw TypeError
+idlharness.any.html	Performance interface: calling mark(DOMString, optional PerformanceMarkOptions) on performance with too few arguments must throw TypeError
+idlharness.any.html	Performance interface: calling measure(DOMString, optional (DOMString or PerformanceMeasureOptions), optional DOMString) on performance with too few arguments must throw TypeError
+idlharness.any.html	Performance interface: performance must inherit property "clearMarks(optional DOMString)" with the proper type
+idlharness.any.html	Performance interface: performance must inherit property "clearMeasures(optional DOMString)" with the proper type
+idlharness.any.html	Performance interface: performance must inherit property "mark(DOMString, optional PerformanceMarkOptions)" with the proper type
+idlharness.any.html	Performance interface: performance must inherit property "measure(DOMString, optional (DOMString or PerformanceMeasureOptions), optional DOMString)" with the proper type
+idlharness.any.html	PerformanceMark interface object length
+idlharness.any.html	PerformanceMark interface object name
+idlharness.any.html	PerformanceMark interface: existence and properties of interface object
+idlharness.any.html	PerformanceMark interface: existence and properties of interface prototype object
+idlharness.any.html	PerformanceMark interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	PerformanceMark interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	PerformanceMark interface: mark must inherit property "detail" with the proper type
+idlharness.any.html	PerformanceMark must be primary interface of mark
+idlharness.any.html	PerformanceMeasure interface object length
+idlharness.any.html	PerformanceMeasure interface object name
+idlharness.any.html	PerformanceMeasure interface: existence and properties of interface object
+idlharness.any.html	PerformanceMeasure interface: existence and properties of interface prototype object
+idlharness.any.html	PerformanceMeasure interface: existence and properties of interface prototype object's "constructor" property
+idlharness.any.html	PerformanceMeasure interface: existence and properties of interface prototype object's @@unscopables property
+idlharness.any.html	PerformanceMeasure interface: measure must inherit property "detail" with the proper type
+idlharness.any.html	PerformanceMeasure must be primary interface of measure
+idlharness.any.html	Stringification of mark
+idlharness.any.html	Stringification of measure
+idlharness.any.html	idl_test setup
+idlharness.any.html	idl_test validation
 invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute connectEnd
 invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute connectStart
 invoke_with_timing_attributes.html	performance.mark should throw if used with timing attribute domComplete

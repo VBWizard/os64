@@ -272,6 +272,11 @@ static JSValue window_member(JSContext *ctx, JSValueConst self, int argc, JSValu
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
+    /* A Location's member is the location's, a History's the history
+     * object's: called on anything else, WebIDL's brand check refuses it. */
+    if ((magic <= L_TO_STRING && !d_same_object(self, dom->location)) ||
+        (magic >= H_BACK && magic <= H_LENGTH && !d_same_object(self, dom->history)))
+        return JS_ThrowTypeError(ctx, "Illegal invocation");
     switch (magic) {
     case L_HREF:
         return set ? ask_url(dom, ctx, OS64_DOM_NAVIGATE_URL, value, false) : location_part(dom, ctx, magic);
@@ -605,7 +610,13 @@ typedef struct { const char *name; int magic, argc; bool accessor, writable; } M
 static JSValue object_with(os64_dom_t *dom, JSContext *ctx, DValue **slot, const Member *members,
                            size_t count)
 {
-    JSValue object = JS_NewObject(ctx);
+    /* Over a prototype level of its own, empty but for what the Modern
+     * Web's row puts there (d_window_objects_install), so the object's
+     * chain has the same levels with the switch on or off. */
+    JSValue level = JS_NewObject(ctx);
+    if (JS_IsException(level)) return JS_EXCEPTION;
+    JSValue object = JS_NewObjectProto(ctx, level);
+    JS_FreeValue(ctx, level);
     *slot = d_retain(dom, ctx, object);
     if (*slot == NULL) return JS_EXCEPTION;
     for (size_t i = 0; i < count; i++)
@@ -629,7 +640,9 @@ int d_window_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     };
     static const Member history[] = {
         {"back", H_BACK, 0, false, false}, {"forward", H_FORWARD, 0, false, false},
-        {"go", H_GO, 1, false, false}, {"length", H_LENGTH, 0, true, false}
+        /* go's delta is optional, so its length is 0 (WebIDL's
+         * operations). */
+        {"go", H_GO, 0, false, false}, {"length", H_LENGTH, 0, true, false}
     };
     if (JS_IsException(object_with(dom, ctx, &dom->location, location,
                                    sizeof(location) / sizeof(location[0]))) ||
@@ -1097,9 +1110,9 @@ enum { HS_PUSH, HS_REPLACE, HS_STATE, HS_RESTORATION };
 static JSValue history_member(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv,
                               int magic, JSValue *data)
 {
-    (void)self;
     os64_dom_t *dom = d_callback(ctx, data, OS64_JS_ABI_ID);
     if (dom == NULL) return JS_EXCEPTION;
+    if (!d_same_object(self, dom->history)) return JS_ThrowTypeError(ctx, "Illegal invocation");
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     switch (magic) {
@@ -1208,6 +1221,164 @@ int d_history_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     }
     JS_FreeValue(ctx, event_prototype);
     JS_FreeValue(ctx, event);
+    return result;
+}
+
+/* THE WINDOW'S OWN OBJECTS AS THEIR INTERFACES' (0f's P7; HTML's Location,
+ * History and Navigator interfaces): the Modern Web table's row, after the
+ * history row, reshaping what the classic install made so that the
+ * surface without the switch cannot move. The classic install made each
+ * object over an empty prototype level of its own, so its chain has the
+ * same levels either way; the row makes each level its interface's
+ * prototype object. History's members and Navigator's go to it, leaving
+ * the objects none of their own; Location's stay on the location
+ * ([LegacyUnforgeable]), made unconfigurable, with its own valueOf and
+ * Symbol.toPrimitive (HTML's "Location object setup"), and its prototype
+ * holds no member. Each interface object is an Illegal constructor. */
+
+/* WebIDL's names for a member's functions: an operation's its own, an
+ * attribute's accessors "get href" and "set href" (WebIDL's operations and
+ * attributes). The binding makes most of them nameless, and one it named
+ * is named again the same; a symbol-keyed property keeps what it has. */
+static int name_accessors(JSContext *ctx, JSAtom atom, const JSPropertyDescriptor *desc)
+{
+    if (!(desc->flags & JS_PROP_GETSET) && !JS_IsFunction(ctx, desc->value)) return 0;
+    JSValue key = JS_AtomToValue(ctx, atom);
+    if (JS_IsException(key)) return -1;
+    bool text = JS_IsString(key);
+    JS_FreeValue(ctx, key);
+    if (!text) return 0;
+    const char *name = JS_AtomToCString(ctx, atom);
+    if (name == NULL) return -1;
+    int result = 0;
+    bool operation = !(desc->flags & JS_PROP_GETSET);
+    JSValueConst functions[2] = {operation ? desc->value : desc->getter, operation ? JS_UNDEFINED : desc->setter};
+    for (int i = 0; result == 0 && i < 2; i++) {
+        if (!JS_IsFunction(ctx, functions[i])) continue;
+        char spelled[96];
+        os64_snprintf(spelled, sizeof(spelled), "%s%s", operation ? "" : i == 0 ? "get " : "set ", name);
+        if (JS_DefinePropertyValueStr(ctx, functions[i], "name", JS_NewString(ctx, spelled), JS_PROP_CONFIGURABLE) < 0)
+            result = -1;
+    }
+    JS_FreeCString(ctx, name);
+    return result;
+}
+
+/* Every own property of `object` moved to `prototype`, as it was but that
+ * an operation is enumerable and an attribute's functions are named, as
+ * WebIDL makes an interface's members (its operations and attributes). */
+static int move_members(JSContext *ctx, JSValueConst object, JSValueConst prototype)
+{
+    JSPropertyEnum *names;
+    uint32_t count;
+    if (JS_GetOwnPropertyNames(ctx, &names, &count, object, JS_GPN_STRING_MASK | JS_GPN_SYMBOL_MASK) < 0)
+        return -1;
+    int result = 0;
+    for (uint32_t i = 0; result == 0 && i < count; i++) {
+        JSPropertyDescriptor desc;
+        int has = JS_GetOwnProperty(ctx, &desc, object, names[i].atom);
+        if (has <= 0) {
+            result = has;
+            continue;
+        }
+        int flags = (desc.flags & (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE)) | JS_PROP_ENUMERABLE |
+            JS_PROP_HAS_CONFIGURABLE | JS_PROP_HAS_ENUMERABLE |
+            ((desc.flags & JS_PROP_GETSET) ? JS_PROP_HAS_GET | JS_PROP_HAS_SET : JS_PROP_HAS_VALUE | JS_PROP_HAS_WRITABLE);
+        if (name_accessors(ctx, names[i].atom, &desc) < 0 ||
+            JS_DefineProperty(ctx, prototype, names[i].atom, desc.value, desc.getter, desc.setter, flags) < 0 ||
+            JS_DeleteProperty(ctx, object, names[i].atom, 0) < 0)
+            result = -1;
+        JS_FreeValue(ctx, desc.value);
+        JS_FreeValue(ctx, desc.getter);
+        JS_FreeValue(ctx, desc.setter);
+    }
+    JS_FreePropertyEnum(ctx, names, count);
+    return result;
+}
+
+/* [LegacyUnforgeable]: each own property of `object` unconfigurable, a
+ * method unwritable too and enumerable, a member's functions named
+ * (WebIDL's operations and attributes). */
+static int unforgeable(JSContext *ctx, JSValueConst object)
+{
+    JSPropertyEnum *names;
+    uint32_t count;
+    if (JS_GetOwnPropertyNames(ctx, &names, &count, object, JS_GPN_STRING_MASK | JS_GPN_SYMBOL_MASK) < 0)
+        return -1;
+    int result = 0;
+    for (uint32_t i = 0; result == 0 && i < count; i++) {
+        JSPropertyDescriptor desc;
+        int has = JS_GetOwnProperty(ctx, &desc, object, names[i].atom);
+        if (has <= 0) {
+            result = has;
+            continue;
+        }
+        /* valueOf and Symbol.toPrimitive, defined unconfigurable already,
+         * are no members: they stay unenumerable, and valueOf, which is
+         * Object.prototype's own function, is not renamed. */
+        bool member = (desc.flags & JS_PROP_CONFIGURABLE) != 0;
+        int flags = JS_PROP_HAS_CONFIGURABLE |
+            ((desc.flags & JS_PROP_GETSET) ? 0 : JS_PROP_HAS_WRITABLE |
+             (member ? JS_PROP_HAS_ENUMERABLE | JS_PROP_ENUMERABLE : 0));
+        if ((member && name_accessors(ctx, names[i].atom, &desc) < 0) ||
+            JS_DefineProperty(ctx, object, names[i].atom, JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED, flags) < 0)
+            result = -1;
+        JS_FreeValue(ctx, desc.value);
+        JS_FreeValue(ctx, desc.getter);
+        JS_FreeValue(ctx, desc.setter);
+    }
+    JS_FreePropertyEnum(ctx, names, count);
+    return result;
+}
+
+/* The interface `name` over a new prototype, defined on window. */
+static int interface_over(JSContext *ctx, JSValueConst global, const char *name, JSValue prototype)
+{
+    JSValue interface = d_interface_new(ctx, name, 0, NULL, prototype, JS_UNDEFINED);
+    JS_FreeValue(ctx, prototype);
+    if (JS_IsException(interface)) return -1;
+    return JS_DefinePropertyValueStr(ctx, global, name, interface, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+}
+
+int d_window_objects_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    JSValueConst location = dom->location->value, history = dom->history->value,
+                 navigator = dom->navigator->value;
+    /* The location's own valueOf, Object.prototype's, taken before any
+     * page ran, and its Symbol.toPrimitive, undefined. */
+    JSValue object = JS_GetPropertyStr(ctx, global, "Object");
+    JSValue object_prototype = JS_IsException(object) ? JS_EXCEPTION : JS_GetPropertyStr(ctx, object, "prototype");
+    JS_FreeValue(ctx, object);
+    if (JS_IsException(object_prototype)) return -1;
+    JSValue value_of = JS_GetPropertyStr(ctx, object_prototype, "valueOf");
+    JS_FreeValue(ctx, object_prototype);
+    if (JS_IsException(value_of)) return -1;
+    if (JS_DefinePropertyValueStr(ctx, location, "valueOf", value_of, 0) < 0) return -1;
+    JSAtom primitive = JS_NewAtom(ctx, "toPrimitive");
+    JSValue symbol = JS_GetPropertyStr(ctx, global, "Symbol");
+    JSValue key = JS_IsException(symbol) ? JS_EXCEPTION : JS_GetProperty(ctx, symbol, primitive);
+    JS_FreeValue(ctx, symbol);
+    JS_FreeAtom(ctx, primitive);
+    if (JS_IsException(key)) return -1;
+    JSAtom key_atom = JS_ValueToAtom(ctx, key);
+    JS_FreeValue(ctx, key);
+    if (key_atom == JS_ATOM_NULL) return -1;
+    int defined = JS_DefinePropertyValue(ctx, location, key_atom, JS_UNDEFINED, 0);
+    JS_FreeAtom(ctx, key_atom);
+    if (defined < 0 || unforgeable(ctx, location) < 0) return -1;
+    /* Each object's own prototype level, which the classic install made
+     * empty, becomes its interface's prototype object. */
+    static const char *const kNames[3] = {"Location", "History", "Navigator"};
+    JSValueConst objects[3] = {location, history, navigator};
+    int result = 0;
+    for (int i = 0; result == 0 && i < 3; i++) {
+        JSValue prototype = JS_GetPrototype(ctx, objects[i]);
+        if (JS_IsException(prototype) ||
+            (i > 0 && move_members(ctx, objects[i], prototype) < 0) ||
+            interface_over(ctx, global, kNames[i], JS_DupValue(ctx, prototype)) < 0)
+            result = -1;
+        JS_FreeValue(ctx, prototype);
+    }
     return result;
 }
 

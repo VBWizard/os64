@@ -4498,6 +4498,62 @@ could see are gone: the before-itself guard (libhtml's insert already
 reads a node as its own reference so) and a node-document record for
 what a verb makes (it joins the owner's tree at once).
 
+### 0f's P7, as built — 2026-10-28
+
+The window's own objects as their interfaces': `location`, `history` and
+`navigator` are a Location, a History and a Navigator. The brief is in
+the opus kit.
+
+- **One row reshapes what the classic install made** (`window.c`'s
+  `d_window_objects_install`, after the history row), so the surface
+  without the switch does not move. The classic install now makes each
+  object over an empty prototype level of its own, as every node kind
+  has a prototype either way, so the chains have the same levels with the
+  switch on or off; the row makes each level its interface's prototype
+  object.
+- **History's and Navigator's members move to their prototypes**, the
+  objects keeping none of their own, each named and an operation
+  enumerable as WebIDL makes them (`go`'s length is 0: its delta is
+  optional). **Location's stay on the location**, [LegacyUnforgeable]:
+  unconfigurable, an operation unwritable, with its own `valueOf`
+  (Object.prototype's) and `Symbol.toPrimitive` (undefined), as HTML's
+  "Location object setup" defines them. Each interface object is an
+  Illegal constructor.
+- **Brand checks**: a Location's member called on anything but the
+  location, and a History's on anything but the history object, is a
+  TypeError (`d_same_object`), with the switch or without; Navigator's
+  getters already checked.
+- **The oracle needed two things of the runner**: WPT's `interfaces/`,
+  now fetched, and `/resources/WebIDLParser.js`, which WPT's server
+  rewrites to the parser's own file and the runner now serves so. With
+  both, every directory's idlharness page runs, not only `html/dom`'s.
+- **Booked** (DEBTS.md): the location's exotic internal methods
+  (preventExtensions throws, an immutable prototype) and its
+  `ancestorOrigins`; Navigator's missing members (`language`, `onLine`,
+  `cookieEnabled`, NavigatorID's constants and the rest). Paid in
+  passing: P6a had given the body WindowEventHandlers, and the DEBTS row
+  that said it had none is now its remainder (`onerror`, and a frameset).
+
+**Numbers.** WPT: `html/browsers/history/the-location-interface`, new
+here, 42 passing, 22 `[required]` (with P7's, the Modern Web's earlier
+fragment and history work); `html/dom`'s idlharness page, excluded until
+this phase, +222. The idlharness pages elsewhere, which run now:
+`css/cssom` +119, `css/cssom-view` +147, `encoding` +34, `hr-time` +25,
+`html/webappapis/scripting` +281, `url` +50, `user-timing` +30, `xhr`
++139 (its timeout tests' sometime passes left out), and
+`the-window-object` +1 (the location's unforgeable `hash`). Each fails
+with the switch off; nothing lost (`css/cssom`'s serialize-all-longhands
+loss predates this and is kept on record). Hosts, 0 failed: DOM 20,222
+and 126,669; yonder's scripted pages 8,913; userland builds. Read cold
+once: no code defect; the Modern Web table's promise that the chains'
+levels are the same either way was broken (a prototype level made only
+with the switch), now kept by the classic install's empty levels; wrong
+section numbers, half-true comments, and the oracle's exotic Location
+unbooked; all fixed. Mutants (`tools/test_interfaces_mutants.py`, its
+P7 group): 10, each caught — the location's unforgeability, members left
+on the objects, the level without the switch, the three brand checks,
+the own valueOf, the names, enumerable operations, and go's length.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.
