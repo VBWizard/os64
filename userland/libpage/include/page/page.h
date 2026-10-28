@@ -632,6 +632,36 @@ int64_t os64_page_node_selected_index(os64_page_state_t *state,
 // nothing changes.
 int64_t os64_page_node_indeterminate(os64_page_state_t *state, const os64_html_node_t *node, bool *on);
 int64_t os64_page_node_set_indeterminate(os64_page_state_t *state, const os64_html_node_t *node, bool on);
+// An input's value as a number (HTML § 4.10.5.4), by node: valueAsNumber,
+// valueAsDate, stepUp and stepDown, over the conversions an input's min,
+// max and step are read by. `applies` says whether the member applies to
+// the input's type, which the binding answers with NaN, null or an
+// InvalidStateError when it does not; nothing changes then. WRONG_KIND for
+// a node that is not an input, or a foreign one; NO_MEMORY as
+// os64_page_node_value and os64_page_node_set_value.
+typedef enum { OS64_PAGE_AS_NUMBER, OS64_PAGE_AS_DATE } os64_page_as_t;
+// The value's number, NaN when it does not convert: valueAsNumber's (a
+// month a count of months since January 1970), or the time value of
+// valueAsDate's Date (a month its first midnight, UTC). valueAsNumber
+// applies to number, range and the date and time types, valueAsDate to
+// date, month, week and time.
+int64_t os64_page_node_value_as(os64_page_state_t *state, const os64_html_node_t *node, os64_page_as_t as,
+                                double *number, bool *applies);
+// Setting it: the type's string for `number`, through
+// os64_page_node_set_value; the empty string for NaN, and for a number
+// the type cannot spell (a date before year 1 or after 275760, the years
+// the value's number is read through; Blink's last is 275760-09-13). An
+// infinite number is the caller's TypeError, and WRONG_KIND here.
+int64_t os64_page_node_set_value_as(os64_page_state_t *state, const os64_html_node_t *node, os64_page_as_t as,
+                                    double number, bool *applies);
+// stepUp(n), or stepDown(n) when `down`. They apply to valueAsNumber's
+// types, and not to an input whose step is `any`, which has no allowed
+// value step (the same InvalidStateError). A step past the min or the max
+// stops at the grid point inside it; one with no grid point between them,
+// one that would move a number the wrong way, or one past the largest
+// double changes nothing.
+int64_t os64_page_node_step(os64_page_state_t *state, const os64_html_node_t *node, int32_t n, bool down,
+                            bool *applies);
 // Constraint validation (HTML § 4.10.20), by node, judged from the node and
 // the live state, so a control no model holds (one a script made and never
 // attached) is judged too. One judge answers these verbs and a submission's

@@ -6,6 +6,7 @@
 // helpers with their contracts recorded in LIBPAGE_REVIEW.md.
 
 #include "internal.h"
+#include "os64/fmt.h"
 
 os64_page_input_t p_input_type(const os64_html_node_t *n)
 {
@@ -340,6 +341,290 @@ void p_input_step(os64_page_input_t input, double *step, uint32_t *scale, double
     case OS64_PAGE_INPUT_TIME: case OS64_PAGE_INPUT_DATETIME_LOCAL: *step = 60; *scale = 1000; break;
     default: break;
     }
+}
+
+void p_input_limits(const os64_html_node_t *n, os64_page_input_t input, PLimits *out)
+{
+    *out = (PLimits){0};
+    double fallback = 1;
+    p_input_step(input, &fallback, &out->scale, &out->base);
+    bool min_spelled = p_input_number(input, p_attr(n, "min"), &out->min);
+    out->has_min = min_spelled;
+    out->has_max = p_input_number(input, p_attr(n, "max"), &out->max);
+    if (input == OS64_PAGE_INPUT_RANGE) {
+        if (!out->has_min) { out->min = 0; out->has_min = true; }
+        if (!out->has_max) { out->max = 100; out->has_max = true; }
+        if (out->max < out->min) { out->max = out->min; out->pinned = true; }
+    }
+    const char *step_text = p_attr(n, "step");
+    out->any = step_text != NULL && os64_streq_nocase(step_text, "any");
+    if (!p_number_parse(step_text, false, &out->step) || out->step <= 0)
+        out->step = fallback;
+    double from = 0;
+    if (min_spelled)
+        out->base = out->min;
+    else if (p_input_number(input, p_attr(n, "value"), &from))
+        out->base = from;
+}
+
+// ── A number spelled for a type ─────────────────────────────────────────
+
+// The proleptic Gregorian date `days` after 1970-01-01 (Hinnant's
+// inverse of days_from_civil).
+static void civil_from_days(int64_t days, int64_t *year, int32_t *month, int32_t *day)
+{
+    days += 719468;
+    int64_t era = (days >= 0 ? days : days - 146096) / 146097;
+    int64_t doe = days - era * 146097;
+    int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    int64_t mp = (5 * doy + 2) / 153;
+    *day = (int32_t)(doy - (153 * mp + 2) / 5 + 1);
+    *month = (int32_t)(mp < 10 ? mp + 3 : mp - 9);
+    *year = yoe + era * 400 + (*month <= 2);
+}
+
+// The nearest whole number, a half away from zero (C's round, which
+// libpage has no libm for); every double past 2^52 is already whole.
+static double nearest(double x)
+{
+    if (x >= 4503599627370496.0 || x <= -4503599627370496.0)
+        return x;
+    double whole = (double)(int64_t)x, part = x - whole;
+    return part >= 0.5 ? whole + 1 : part <= -0.5 ? whole - 1 : whole;
+}
+
+// A rounded time value as its day and the milliseconds into it: false
+// past 2^53, which no year a date holds reaches.
+static bool split_day(double ms, int64_t *days, int64_t *in_day)
+{
+    if (!(ms > -9007199254740992.0 && ms < 9007199254740992.0))
+        return false;
+    int64_t whole = (int64_t)nearest(ms);
+    *days = whole / 86400000 - (whole % 86400000 < 0);
+    *in_day = whole - *days * 86400000;
+    return true;
+}
+
+// The floor of a time value's place in its day, exact for any finite
+// double, however large: x is m * 2^e, so its remainder is m's times
+// 2^e's, by doubling, and a fraction lowers a negative x's by one.
+static int64_t time_of_day(double x)
+{
+    const uint64_t day = 86400000;
+    union { double f; uint64_t bits; } u = {x};
+    bool negative = (u.bits >> 63) != 0;
+    int32_t exponent = (int32_t)(u.bits >> 52 & 0x7ff);
+    uint64_t mantissa = u.bits & ((1ull << 52) - 1);
+    if (exponent == 0)
+        exponent = 1;
+    else
+        mantissa |= 1ull << 52;
+    exponent -= 1075;
+    uint64_t whole = 0;
+    bool fraction = false;
+    if (exponent >= 0) {
+        whole = mantissa % day;
+        for (int32_t i = 0; i < exponent; i++)
+            whole = whole * 2 % day;
+    } else if (exponent > -64) {
+        whole = (mantissa >> -exponent) % day;
+        fraction = (mantissa & ((1ull << -exponent) - 1)) != 0;
+    } else {
+        fraction = mantissa != 0;
+    }
+    if (!negative || (whole == 0 && !fraction))
+        return (int64_t)whole;
+    return (int64_t)(day - whole - fraction);
+}
+
+static size_t spell_date(char *out, size_t cap, int64_t days, bool day_too)
+{
+    int64_t year = 0;
+    int32_t month = 0, day = 0;
+    civil_from_days(days, &year, &month, &day);
+    if (year < 1 || year > 275760)
+        return 0;
+    return day_too ? (size_t)os64_snprintf(out, cap, "%04lld-%02d-%02d", (long long)year, (int)month, (int)day)
+                   : (size_t)os64_snprintf(out, cap, "%04lld-%02d", (long long)year, (int)month);
+}
+
+// hh:mm, then :ss when there are seconds, then .sss when there are
+// milliseconds, as Blink spells a time; a local date and time's sanitizer
+// shortens its fraction.
+static void spell_time(char *out, size_t cap, int64_t ms)
+{
+    int32_t milli = (int32_t)(ms % 1000), second = (int32_t)(ms / 1000 % 60), minute = (int32_t)(ms / 60000 % 60),
+            hour = (int32_t)(ms / 3600000);
+    if (milli != 0)
+        os64_snprintf(out, cap, "%02d:%02d:%02d.%03d", hour, minute, second, milli);
+    else if (second != 0)
+        os64_snprintf(out, cap, "%02d:%02d:%02d", hour, minute, second);
+    else
+        os64_snprintf(out, cap, "%02d:%02d", hour, minute);
+}
+
+bool p_input_spell(os64_page_input_t input, double number, bool as_date, char out[32])
+{
+    int64_t days = 0, in_day = 0;
+    out[0] = '\0';
+    switch (input) {
+    case OS64_PAGE_INPUT_NUMBER:
+    case OS64_PAGE_INPUT_RANGE:
+        p_number_spell(number, out);
+        return true;
+    case OS64_PAGE_INPUT_DATE:
+        return split_day(number, &days, &in_day) && spell_date(out, 32, days, true) != 0;
+    case OS64_PAGE_INPUT_MONTH: {
+        if (as_date)
+            return split_day(number, &days, &in_day) && spell_date(out, 32, days, false) != 0;
+        // A count of months, rounded. The bound keeps the cast exact and
+        // loses nothing: a spelled year allows about 3.3 million.
+        if (!(number > -1e8 && number < 1e8))
+            return false;
+        int64_t months = (int64_t)nearest(number), whole = months / 12 - (months % 12 < 0);
+        int64_t year = 1970 + whole, month = months - whole * 12 + 1;
+        if (year < 1 || year > 275760)
+            return false;
+        os64_snprintf(out, 32, "%04lld-%02lld", (long long)year, (long long)month);
+        return true;
+    }
+    case OS64_PAGE_INPUT_WEEK: {
+        // The ISO week holding the day: its Thursday's year, and that
+        // Thursday's place among the year's.
+        if (!split_day(number, &days, &in_day))
+            return false;
+        int64_t weekday = ((days + 3) % 7 + 7) % 7, thursday = days - weekday + 3, year = 0;
+        int32_t month = 0, day = 0;
+        civil_from_days(thursday, &year, &month, &day);
+        if (year < 1 || year > 275760)
+            return false;
+        int64_t week = (thursday - days_from_civil(year, 1, 1)) / 7 + 1;
+        os64_snprintf(out, 32, "%04lld-W%02lld", (long long)year, (long long)week);
+        return true;
+    }
+    case OS64_PAGE_INPUT_TIME:
+        spell_time(out, 32, time_of_day(number));
+        return true;
+    case OS64_PAGE_INPUT_DATETIME_LOCAL: {
+        if (!split_day(number, &days, &in_day))
+            return false;
+        size_t at = spell_date(out, 32, days, true);
+        if (at == 0)
+            return false;
+        out[at++] = 'T';
+        spell_time(out + at, 32 - at, in_day);
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+// ── valueAsNumber, valueAsDate, stepUp and stepDown ─────────────────────
+
+static bool input_node(const os64_html_node_t *n)
+{
+    return n != NULL && n->kind == OS64_HTML_ELEMENT && n->ns == OS64_HTML_NS_HTML && n->tag == OS64_HTML_TAG_INPUT;
+}
+
+static bool as_applies(os64_page_input_t input, os64_page_as_t as)
+{
+    switch (input) {
+    case OS64_PAGE_INPUT_DATE: case OS64_PAGE_INPUT_MONTH: case OS64_PAGE_INPUT_WEEK: case OS64_PAGE_INPUT_TIME:
+        return true;
+    case OS64_PAGE_INPUT_DATETIME_LOCAL: case OS64_PAGE_INPUT_NUMBER: case OS64_PAGE_INPUT_RANGE:
+        return as == OS64_PAGE_AS_NUMBER;
+    default:
+        return false;
+    }
+}
+
+// The value as its type's number, read as the judge reads it, from the
+// sanitized value (a range's is never empty).
+static int64_t value_number(os64_page_state_t *state, const os64_html_node_t *node, os64_page_input_t input,
+                            double *number, bool *converted)
+{
+    const char *value;
+    size_t len;
+    int64_t status = os64_page_node_value(state, node, &value, &len);
+    if (status < 0)
+        return status;
+    *converted = len != 0 && p_input_number(input, value, number);
+    return 0;
+}
+
+int64_t os64_page_node_value_as(os64_page_state_t *state, const os64_html_node_t *node, os64_page_as_t as,
+                                double *number, bool *applies)
+{
+    if (number == NULL || applies == NULL || !input_node(node))
+        return -OS64_PAGE_REASON_WRONG_KIND;
+    *number = __builtin_nan("");
+    *applies = false;
+    os64_page_input_t input = p_input_type(node);
+    double got = 0;
+    bool converted = false;
+    int64_t status = value_number(state, node, input, &got, &converted);
+    if (status < 0)
+        return status;
+    *applies = as_applies(input, as);
+    if (!*applies || !converted)
+        return 0;
+    if (as == OS64_PAGE_AS_DATE && input == OS64_PAGE_INPUT_MONTH) {
+        int64_t months = (int64_t)got, whole = months / 12 - (months % 12 < 0);
+        got = (double)days_from_civil(1970 + whole, (int32_t)(months - whole * 12 + 1), 1) * 86400000.0;
+    }
+    *number = got;
+    return 0;
+}
+
+static int64_t set_spelled(os64_page_state_t *state, const os64_html_node_t *node, os64_page_input_t input,
+                           double number, bool as_date)
+{
+    char text[32];
+    if (number != number || !p_input_spell(input, number, as_date, text))
+        text[0] = '\0';
+    return os64_page_node_set_value(state, node, text, os64_strlen(text));
+}
+
+int64_t os64_page_node_set_value_as(os64_page_state_t *state, const os64_html_node_t *node, os64_page_as_t as,
+                                    double number, bool *applies)
+{
+    // Infinite: equal to itself, as NaN is not, and not finite.
+    if (applies == NULL || !input_node(node) || (number == number && number - number != 0))
+        return -OS64_PAGE_REASON_WRONG_KIND;
+    *applies = false;
+    double ignored = 0;
+    bool converted = false;
+    os64_page_input_t input = p_input_type(node);
+    // Read first, as the getter reads it: a node not of the state's is
+    // refused before `applies` says anything of it.
+    int64_t status = value_number(state, node, input, &ignored, &converted);
+    if (status < 0)
+        return status;
+    *applies = as_applies(input, as);
+    return *applies ? set_spelled(state, node, input, number, as == OS64_PAGE_AS_DATE) : 0;
+}
+
+int64_t os64_page_node_step(os64_page_state_t *state, const os64_html_node_t *node, int32_t n, bool down,
+                            bool *applies)
+{
+    if (applies == NULL || !input_node(node))
+        return -OS64_PAGE_REASON_WRONG_KIND;
+    *applies = false;
+    os64_page_input_t input = p_input_type(node);
+    double value = 0;
+    bool converted = false;
+    int64_t status = value_number(state, node, input, &value, &converted);
+    if (status < 0)
+        return status;
+    PLimits limits;
+    p_input_limits(node, input, &limits);
+    *applies = as_applies(input, OS64_PAGE_AS_NUMBER) && !limits.any;
+    double stepped = 0;
+    if (!*applies || !p_step_by(value, converted, &limits, down ? -(int64_t)n : n, &stepped))
+        return 0;
+    return set_spelled(state, node, input, stepped, false);
 }
 
 // ── The sanitizers ──────────────────────────────────────────────────────

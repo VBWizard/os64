@@ -391,58 +391,35 @@ static bool pattern_mismatch(const os64_html_node_t *n, os64_page_input_t input,
 
 // rangeUnderflow, rangeOverflow and stepMismatch (HTML's min, max and step
 // attributes), for the types they apply to, read as numbers (value.c's
-// p_input_number): a value below a min that converts, above a max that
-// does, or off the grid its step draws from its step base. A range's min
-// and max default to 0 and 100, and its max is never below its min. A time
-// whose max is below its min wraps
-// past midnight, and is out of range only between the two. `step=any`
-// draws no grid; a step that is no positive number is the type's default.
+// p_input_number and p_input_limits): a value below a min that converts,
+// above a max that does, or off the grid its step draws from its step
+// base. A time whose max is below its min wraps past midnight, and is out
+// of range only between the two.
 static uint32_t range_flags(const os64_html_node_t *n, os64_page_input_t input, const char *value, size_t len)
 {
     double number = 0;
     if (len == 0 || !p_input_number(input, value, &number))
         return 0;
+    PLimits limits;
+    p_input_limits(n, input, &limits);
+    // A range's max below its min is its min: the sanitizer puts the
+    // value at the min, which no slider can move below, so judging it
+    // above the max refused every submission. Nor is that pinned value
+    // snapped to a step, so no step judges it.
+    if (limits.pinned)
+        return 0;
     uint32_t flags = 0;
-    double min = 0, max = 0;
-    bool min_spelled = p_input_number(input, p_attr(n, "min"), &min);
-    bool has_min = min_spelled, has_max = p_input_number(input, p_attr(n, "max"), &max);
-    if (input == OS64_PAGE_INPUT_RANGE) {
-        if (!has_min) { min = 0; has_min = true; }
-        if (!has_max) { max = 100; has_max = true; }
-        // A max below the min is the min, as Blink makes it: the
-        // sanitizer puts the value at the min, which no slider can move
-        // below, so judging it above the max refused every submission. Nor
-        // is that pinned value snapped to a step, so no step judges it.
-        if (max < min) {
-            max = min;
-            return flags;
-        }
-    }
-    if (input == OS64_PAGE_INPUT_TIME && has_min && has_max && max < min) {
-        if (number < min && number > max)
+    if (input == OS64_PAGE_INPUT_TIME && limits.has_min && limits.has_max && limits.max < limits.min) {
+        if (number < limits.min && number > limits.max)
             flags |= OS64_PAGE_VALIDITY_UNDERFLOW | OS64_PAGE_VALIDITY_OVERFLOW;
     } else {
-        if (has_min && number < min)
+        if (limits.has_min && number < limits.min)
             flags |= OS64_PAGE_VALIDITY_UNDERFLOW;
-        if (has_max && number > max)
+        if (limits.has_max && number > limits.max)
             flags |= OS64_PAGE_VALIDITY_OVERFLOW;
     }
-    const char *step_text = p_attr(n, "step");
-    if (step_text != NULL && os64_streq_nocase(step_text, "any"))
-        return flags;
-    double step = 0, base = 0, fallback = 1;
-    uint32_t scale = 1;
-    p_input_step(input, &fallback, &scale, &base);
-    if (!p_number_parse(step_text, false, &step) || step <= 0)
-        step = fallback;
-    // The step base: the min attribute's number, else the value
-    // attribute's, else the type's default.
-    double from = 0;
-    if (min_spelled)
-        base = min;
-    else if (p_input_number(input, p_attr(n, "value"), &from))
-        base = from;
-    if (!p_step_aligned(number, base, step, scale, input == OS64_PAGE_INPUT_RANGE))
+    if (!limits.any &&
+        !p_step_aligned(number, limits.base, limits.step, limits.scale, input == OS64_PAGE_INPUT_RANGE))
         flags |= OS64_PAGE_VALIDITY_STEP;
     return flags;
 }

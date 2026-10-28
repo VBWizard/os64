@@ -73,6 +73,7 @@ static char *modern_chain_shape(DomFixture *f)
         "document.doctype,document.implementation,document.implementation.createHTMLDocument('')];"
         "var row=/(^constructor$|_NODE$|^DOCUMENT_POSITION_|^onscroll$|^onresize$|^oninvalid$|^scrollingElement$"
         "|^defaultView$|^(willValidate|validity|validationMessage|checkValidity|reportValidity|setCustomValidity)$"
+        "|^(valueAsNumber|valueAsDate|stepUp|stepDown)$"
         "|^onerror$|^getRootNode$|^wholeText$|^splitText$|^selectionStart$|^selectionEnd$|^selectionDirection$"
         "|^setSelectionRange$|^select$|^setRangeText$|^content$|^styleSheets$"
         "|^(accept|alt|autocomplete|defaultChecked|defaultValue|dirName|disabled|formAction|formEnctype|formMethod"
@@ -531,6 +532,46 @@ static void dom_modern_cases(void)
         /* a value a script sets is never bad input */
         "var n=el('input',{type:'number'});n.value='abc';assert(n.value===''&&!n.validity.badInput,'badInput');",
         "modern-on-validity");
+    /* 0f's P5: the value as a number, libpage's conversions. The binding's
+     * part: the JavaScript values, the errors and their order, and the
+     * Date read with the getTime taken before any page ran. */
+    dom_script(&f, MODERN_ASSERT
+        "function el(t,a){var e=document.createElement(t);for(var k in a)e.setAttribute(k,a[k]);return e}"
+        "function throws(f,name){try{f()}catch(x){return x.name===name}return false}"
+        "var d=el('input',{type:'date'});d.value='2019-12-10';"
+        "assert(d.valueAsNumber===1575936000000,'a date as a number');"
+        "var v=d.valueAsDate;assert(v instanceof Date&&v.getTime()===1575936000000&&v!==d.valueAsDate,'a new Date each read');"
+        "d.valueAsNumber=0;assert(d.value==='1970-01-01','set as a number');"
+        "d.valueAsDate=new Date(86400000);assert(d.value==='1970-01-02','set as a Date');"
+        "d.valueAsDate=null;assert(d.value===''&&d.valueAsDate===null&&Number.isNaN(d.valueAsNumber),'null empties it');"
+        "d.value='2020-01-01';d.valueAsDate=undefined;assert(d.value==='','undefined is null');"
+        "d.value='275760-12-31';assert(d.valueAsDate===null,'past a Date: null, not an invalid Date');"
+        "assert(throws(function(){d.valueAsDate={}},'TypeError'),'no Date: TypeError');"
+        "assert(throws(function(){d.valueAsDate=5},'TypeError'),'a number is no Date');"
+        "Date.prototype.getTime=function(){return 0};d.valueAsDate=new Date(172800000);"
+        "assert(d.value==='1970-01-03','the engine own getTime');"
+        "var m=el('input',{type:'month'});m.valueAsNumber='599';assert(m.value==='2019-12','a string converted first');"
+        "assert(m.valueAsDate.toISOString()==='2019-12-01T00:00:00.000Z','a month as its first midnight');"
+        "var t=el('input',{type:'datetime-local'});assert(t.valueAsDate===null,'no Date for a local date and time');"
+        "assert(throws(function(){t.valueAsDate=new Date(0)},'InvalidStateError'),'nor set as one');"
+        "var c=el('input',{type:'checkbox'});assert(Number.isNaN(c.valueAsNumber)&&c.valueAsDate===null,'not a number');"
+        "assert(throws(function(){c.valueAsNumber=5},'InvalidStateError'),'set where it does not apply');"
+        "assert(throws(function(){c.valueAsNumber=Infinity},'TypeError'),'infinity before applying');"
+        "assert(throws(function(){c.valueAsDate={}},'InvalidStateError'),'applying before the Date');"
+        "assert(throws(function(){c.valueAsDate=5},'TypeError'),'no object: WebIDL first');"
+        "var n=el('input',{type:'number'});n.valueAsNumber=NaN;assert(n.value==='','NaN empties it');"
+        "assert(throws(function(){n.valueAsNumber=-Infinity},'TypeError'),'infinity refused');"
+        "n.stepUp();assert(n.value==='1','stepUp');n.stepDown(3);assert(n.value==='-2','stepDown(n)');"
+        "n.stepUp(4294967298);assert(n.value==='0','ToInt32 wraps n');"
+        "n.stepUp(undefined);assert(n.value==='1','undefined is 1');"
+        "n.setAttribute('step','any');assert(throws(function(){n.stepUp()},'InvalidStateError'),'step any');"
+        "assert(throws(function(){c.stepDown()},'InvalidStateError'),'a checkbox steps not');"
+        "var p=HTMLInputElement.prototype;"
+        "assert(p.stepUp.name==='stepUp'&&p.stepUp.length===0&&p.stepDown.name==='stepDown','operations named');"
+        "assert(throws(function(){p.stepUp.call(el('div'))},'TypeError'),'the brand is checked');"
+        "assert(throws(function(){Object.getOwnPropertyDescriptor(p,'valueAsNumber').get.call(el('textarea'))},"
+        "'TypeError'),'an input alone');",
+        "modern-on-value-as");
     dom_script(&f, MODERN_ASSERT
         "function el(t,a){var e=document.createElement(t);for(var k in a)e.setAttribute(k,a[k]);return e}"
         /* checkValidity and reportValidity fire invalid: cancelable, not bubbling, trusted */

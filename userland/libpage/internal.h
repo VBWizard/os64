@@ -332,6 +332,38 @@ const char *p_range_value(PArena *arena, const os64_html_node_t *node,
 bool p_input_number(os64_page_input_t input, const char *s, double *out);
 // The type's default step, step scale factor and default step base.
 void p_input_step(os64_page_input_t input, double *step, uint32_t *scale, double *base);
+// What an input's min, max and step attributes say (HTML § 4.10.5.3.7-8),
+// read by p_input_number: the min and max that convert; a range's 0 and
+// 100 where it has none, and its max made its min when below it (`pinned`,
+// as Blink makes it); the step in the type's units, its default where the
+// attribute is no positive number, and `any` for step=any, which draws no
+// grid; the scale; and the step base: the min attribute's number, else
+// the value attribute's, else the type's default.
+typedef struct {
+    double min, max, step, base;
+    uint32_t scale;
+    bool has_min, has_max, pinned, any;
+} PLimits;
+void p_input_limits(const os64_html_node_t *n, os64_page_input_t input, PLimits *out);
+// HTML's "convert a number to a string" for the type (and, `as_date`, its
+// "convert a Date object to a string", which differs from it for a month
+// alone: a time value rather than a count of months), into `out`: false
+// for a number the type cannot spell, a date before year 1 or after 275760
+// (p_input_number's last; Blink's is 275760-09-13). A date, a local date and
+// time, a month and a week round to the nearest millisecond or month, and
+// a time takes the floor of its place in the day, as Blink does.
+bool p_input_spell(os64_page_input_t input, double number, bool as_date, char out[32]);
+// stepUp(count), or stepDown(-count) (HTML § 4.10.5.4) from `value` (0
+// when the value did not convert, `valid` false), in decimal over each
+// double's shortest spelling (range.c): the number to set, or false for
+// the steps that return. A value off the grid moves onto it, which is one
+// of the steps, as Blink and Gecko count it; the result is clamped onto
+// the grid within min and max; and a step that would move a value that
+// converted against the sign of `count` changes nothing (the spec's step
+// 10, read by the signed count as Blink and Gecko read it, where the spec
+// names the method, so stepDown(-1) moves up; and skipped for a value that
+// did not convert, as Blink does and WPT has it).
+bool p_step_by(double value, bool valid, const PLimits *limits, int64_t count, double *out);
 // Whether `value` is `base` plus a whole number of `step` times `scale`,
 // in decimal over each double's shortest spelling (range.c's arithmetic),
 // the scale multiplied there too; or, when `held` (a range's value, which

@@ -4314,6 +4314,63 @@ range's max below its min and its pinned value's step, a range's grid
 point held as a double and only a range's, a bound's long time fraction,
 and a number's bound as read.
 
+### 0f's P5, as built — 2026-10-28
+
+HTMLInputElement's value as a number: `valueAsNumber`, `valueAsDate`,
+`stepUp(n)` and `stepDown(n)` (HTML § 4.10.5.4), over P4b's conversions.
+
+- **One reader of min, max and step** (libpage `value.c`'s
+  `p_input_limits`): the validity judge's `range_flags` and the steps read
+  the same numbers, a range's defaults and its pinned max among them.
+- **A number spelled for its type** (`p_input_spell`), Blink's rules: a
+  date, a local date and time, a month and a week round to the nearest
+  millisecond (or month), a time takes the floor of its place in the day,
+  exact for any double (2.7343337071894478e26 is 10:54:10.944); a week is
+  the ISO week holding the day; years 1 to 275760, the years a value's
+  number is read through, and anything else is the empty value (Blink's
+  last day is 275760-09-13). A month's Date is its first midnight.
+- **The steps** (`range.c`'s `p_step_by`), in exact decimal over each
+  double's shortest spelling, as WPT's 1.2 − 0.3 = 0.9 needs. Rulings, the
+  engines over the spec's text where they agree and WPT with them: an
+  off-grid value's move onto the grid is one of the n steps (Blink and
+  Gecko); the guard against moving the wrong way reads the signed count,
+  so `stepDown(-1)` moves up (both engines; the spec names the method);
+  and a value that did not convert skips that guard (Blink, and WPT's
+  `input-stepdown-02`). Where the engines part — Blink checks the count
+  left after the snap — the spec and Gecko are followed: `stepDown()` on
+  4 with min 5 and step 2 leaves 4.
+- **The binding** (`controls.c`): `valueAsNumber` converts first, then
+  refuses infinity (TypeError), then a type it does not apply to
+  (InvalidStateError), NaN emptying the value; `valueAsDate` takes
+  WebIDL's `object?` first (undefined is null, any other primitive a
+  TypeError), then whether it applies, then a Date's time value through
+  the `getTime` taken before any page ran (`d_intrinsic`, now shared with
+  the validity row's RegExp), which refuses any other object. A value
+  past a Date's range reads as null, not an invalid Date. `stepUp` and
+  `stepDown` take `n` by ToInt32, and refuse `step=any` as having no
+  allowed value step.
+
+**Numbers.** WPT: `the-input-element` +235, all `[required]`, 1,168
+passing; every case in the phase's oracle passes but
+`datetime-local-valueasdate.html`, which reaches its input by named
+access. Nothing new or lost in `constraints` (895) or `html/dom` (6,374);
+with the switch off no required line passes. Hosts, 0 failed: libpage
+254,352 (75 value-as cases); DOM 17,802 and 116,116. Read cold once: two
+code findings (`undefined` and a primitive given to `valueAsDate`), one
+edge (an invalid Date for late 275760), and four of text, all fixed.
+Mutants (`tools/test_interfaces_mutants.py`, its P5 group): 28, each
+caught — a time's exactness and its negative fraction, a day rounded and
+floored, the last year spelled, a week's year and weekday, a month as a
+count and as a Date, which types take a Date, NaN and infinity, the snap
+as a step, the guard both ways, the max's grid clamp, no grid between
+the limits, a carry across words, `step=any`, stepDown's sign, and the
+binding's getTime, its order of errors, undefined, null, a Date past the
+range, a number not a Date, and `n`'s default.
+Two rules have no mutant a test can see: a spelled year below 1 (the
+value sanitizer empties it either way), and the min's clamp onto a grid
+it is off (only a range's default min can be, and its sanitizer
+re-snaps). P4b's group was re-anchored onto `p_input_limits`.
+
 ### Slice 6a, XML foundation as built — 2026-10-25
 
 The standalone `libxml` event parser is implemented in Quinn's SVG worktree.
