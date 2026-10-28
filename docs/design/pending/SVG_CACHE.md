@@ -1,10 +1,9 @@
 # SVG raster-cache foundation
 
 2026-10-27. This 6c increment implements owned raster value keys and a bounded
-cache in `libsvg`. It follows [radial gradients](SVG_RADIAL.md). Yonder does
-not call these APIs in this increment; connecting the inline and image
-painting paths is the next cut. There is no visible rendering change or P5
-installation for this foundation.
+cache in `libsvg`. It follows [radial gradients](SVG_RADIAL.md). The library foundation is connected to inline and image painting by
+[the Yonder cache integration](SVG_CACHE_YONDER.md), which owns its bounded
+cache and provides the consumer tests and hardware gallery.
 
 ## Value boundary
 
@@ -85,8 +84,8 @@ but must preserve cancellation and discard failed output. A cache-store failure
 does not invalidate a successful uncached render. The browser integration must
 own a bounded cache, keep old retained bytes in the shared admission total,
 and use this sequence for both inline SVG and isolated image documents.
-Navigation/close cleanup, visible mutation/zoom/dark-state invalidation and
-cache counters need consumer tests in that cut. The public stats layout grows
+The [consumer tests](SVG_CACHE_YONDER.md) cover navigation/close cleanup,
+mutation/zoom/media variants, memory pressure and counters. The public stats layout grows
 with owned key/cache counts, so delivery must rebuild dependent consumers as
 part of the normal matching binary/library cohort.
 
@@ -117,6 +116,6 @@ ASAN_OPTIONS=detect_leaks=1 python3 tools/test_svg_core.py --output /tmp/svg-cac
 make -C userland svg-library
 ```
 
-No browser or P5 speedup is claimed here. Browser-facing raster-cache adoption,
-corpus-led memory/latency measurements and the remaining static image route
+Browser-facing adoption is recorded in [SVG_CACHE_YONDER.md](SVG_CACHE_YONDER.md).
+Corpus-led memory/latency measurements and the remaining static image route
 acceptance gates remain in 6c; broader static graphics remain in 6d.

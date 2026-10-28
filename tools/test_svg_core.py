@@ -88,6 +88,7 @@ def main():
     if args.paint:
         inputs.add(ROOT/'tools/test_svg_cache.inc')
     if args.yonder:
+        inputs.add(ROOT/'tools/test_yonder_svg_cache.inc')
         inputs.update([ROOT/'tools/test_yonder_host.c', ROOT/'tools/test_yonder_host.sh', ROOT/'tools/test_yonder_svg_use.inc', ROOT/'tools/test_yonder_svg_viewports.inc', ROOT/'tools/test_yonder_svg_clips.inc', ROOT/'tools/test_yonder_svg_bounds.inc', ROOT/'tools/test_yonder_svg_document.inc', ROOT/'tools/test_yonder_svg_gradients.inc', ROOT/'tools/test_yonder_svg_radial.inc', ROOT/'tools/test_svg_gradient_sampler.inc'])
         for directory in ('abi/include', 'tools', 'userland/apps/yonder',
                           'userland/libflow', 'userland/libhtml', 'userland/libxml', 'userland/libpage',

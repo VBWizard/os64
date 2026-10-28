@@ -117,13 +117,15 @@ static void picture_svg_window_cases(void)
     px=stand_in_shot();
     check((px[64*800+250]&0xffffff)==0xff && (px[64*800+260]&0xffffff)==0xffffff,
           "SVG image rerasterizes at 400 percent");
-    os64_free(px);check(g.page.svg_bytes==0,"SVG image painting returns its complete pixel/geometry ledger");
+    os64_free(px);check(g.page.svg_bytes==yonder_svg_cache_stats(g.page.svg_cache).owned_bytes,"SVG image painting retains only the accounted cache");
     yonder_svg_pixels_t refused;
+    yonder_svg_cache_trim(g.page.svg_cache);
+    size_t retained=g.page.svg_bytes;
     g.page.svg_bytes=YONDER_SVG_MEMORY_MAX;
     check(!svg_picture_pixels(&g.page.pics[0],(os64_gui_rect_t){0,0,256,128},&refused) &&
           !refused.pixels && g.page.svg_bytes==YONDER_SVG_MEMORY_MAX,
           "SVG image exhausted render ledger refuses without stealing another owner's bytes");
-    g.page.svg_bytes=0;
+    g.page.svg_bytes=retained;
     probe_drop();
     picture_svg_arrive("<!doctype html><style>body{margin:0;background:white}"
         "img{display:block;width:128px;height:128px;object-fit:contain}</style>"

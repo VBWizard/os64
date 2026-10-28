@@ -67,7 +67,8 @@ Output is limited to 16,384 pixels on either axis and 8,388,608 pixels total,
 then admitted against the shared byte cap. It allocates the visible crop using
 the full viewport's map. Native SVG and geometry limits apply in addition.
 There is no scene/path cache or asynchronous cancellation integration. A dirty
-paint prepares and renders again, synchronously. These caps bound admitted
+paint prepares again synchronously, then [raster reuse](SVG_CACHE_YONDER.md)
+can bypass geometry and raster work for matching resolved values. These caps bound admitted
 work; they are not a demonstrated frame-time guarantee for arbitrary pages.
 
 ## Explicit limits

@@ -509,6 +509,14 @@ measured performance or a complete audit. If 6a shows that precision, port
 maintenance or responsiveness make the selected backend unattractive, compare
 alternatives against the same fixtures before expanding implementation scope.
 
+## Yonder raster-cache integration — 2026-10-28
+
+[SVG_CACHE_YONDER.md](SVG_CACHE_YONDER.md) connects the owned value-key cache
+to inline SVG, image and background painting. Matching resolved scenes reuse
+pixels, with cache retention inside the existing shared geometry/output ledger.
+Preparation remains synchronous and fresh. Corpus-led latency/fidelity gates
+remain in 6c; this does not add a frame loop or broaden the graphics profile.
+
 ## Related design and implementation references
 
 - [Modern Web campaign](MODERN_WEB.md) and [slice briefs](MODERN_WEB_BRIEFS.md).

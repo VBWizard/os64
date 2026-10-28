@@ -5523,6 +5523,70 @@ static uint32_t *stand_in_shot(void) {
 }
 #include "test_yonder_svg_images.inc"
 
+static void svg_cache_window_cases(void)
+{
+    probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
+        "<svg width=64 height=64><rect id=shape width=64 height=64 fill='red'/></svg>"
+        "<script>document.getElementById('shape').setAttribute('fill','blue')</script>", true);
+    uint32_t *cold = stand_in_shot(), *warm = stand_in_shot();
+    yonder_svg_cache_stats_t stats = yonder_svg_cache_stats(g.page.svg_cache);
+    check(!os64_memcmp(cold,warm,800u*600u*4) && stats.raster.hits > 0 &&
+          stats.rasterizations == 1,"SVG cache: window repaint reuses identical owned pixels");
+    os64_free(warm);
+    while (yonder_scripts_pending(g.page.scripts)) script_turn();
+    warm = stand_in_shot();
+    check((cold[16*800+16]&0xffffff)==0xff0000 &&
+          (warm[16*800+16]&0xffffff)==0xff &&
+          yonder_svg_cache_stats(g.page.svg_cache).rasterizations == 2,
+          "SVG cache: mutation resolves fresh values before reuse");
+    os64_free(cold); os64_free(warm);
+    stats = yonder_svg_cache_stats(g.page.svg_cache);
+    check(g.page.svg_bytes == stats.owned_bytes && stats.raster.entries == 2,
+          "SVG cache: old and new variants remain inside the shared ledger");
+    void *scratch=NULL;
+    size_t needed=YONDER_SVG_MEMORY_MAX-g.page.svg_bytes+1;
+    check(svg_allocate(&g.page,needed,&scratch)==OS64_GEOMETRY_OK && scratch,
+          "SVG cache: raster scratch can reclaim retained variants at the shared cap");
+    stats=yonder_svg_cache_stats(g.page.svg_cache);
+    check(stats.raster.entries==0 && stats.raster.evictions==2 &&
+          g.page.svg_bytes==stats.owned_bytes+needed,
+          "SVG cache: pressure evicts entries without losing memory accounting");
+    svg_free(&g.page,scratch,needed);
+    warm=stand_in_shot();
+    check((warm[16*800+16]&0xffffff)==0xff &&
+          yonder_svg_cache_stats(g.page.svg_cache).rasterizations==3,
+          "SVG cache: painting recovers after eviction");
+    os64_free(warm);
+    probe_drop();
+    check(!g.page.svg_cache && !g.page.svg_bytes,"SVG cache: page teardown releases ownership");
+
+    const char *xml="<svg xmlns='http://www.w3.org/2000/svg' width='64' height='32'>"
+        "<style>rect{fill:red}@media(prefers-color-scheme:dark){rect{fill:blue}}</style>"
+        "<rect width='64' height='32'/></svg>";
+    picture_svg_arrive("<!doctype html><style>body{margin:0}img{display:block}</style>"
+        "<img src=file:///svg-image.svg>",xml);
+    bool old_dark=s_dark;
+    s_dark=false;
+    yonder_svg_pixels_t image={0};
+    check(svg_picture_pixels(&g.page.pics[0],(os64_gui_rect_t){0,0,64,32},&image) &&
+          image.pixels[16*64+32]==0xffff0000,"SVG cache: image starts with its light media values");
+    svg_picture_pixels_free(&image);
+    s_dark=true;
+    check(svg_picture_pixels(&g.page.pics[0],(os64_gui_rect_t){0,0,64,32},&image) &&
+          image.pixels[16*64+32]==0xff0000ff,"SVG cache: image dark media gets fresh pixels");
+    svg_picture_pixels_free(&image);
+    stats=yonder_svg_cache_stats(g.page.svg_cache);
+    s_dark=false;
+    check(svg_picture_pixels(&g.page.pics[0],(os64_gui_rect_t){0,0,64,32},&image) &&
+          image.pixels[16*64+32]==0xffff0000 &&
+          yonder_svg_cache_stats(g.page.svg_cache).rasterizations==stats.rasterizations &&
+          yonder_svg_cache_stats(g.page.svg_cache).raster.hits==stats.raster.hits+1,
+          "SVG cache: restoring image media reuses the matching earlier variant");
+    svg_picture_pixels_free(&image);
+    s_dark=old_dark;
+    probe_drop();
+}
+
 static void svg_gradient_window_cases(void)
 {
     probe_page(
@@ -5543,7 +5607,7 @@ static void svg_gradient_window_cases(void)
     check((px[16 * 800 + 16] & 0xffffff) == 0x4242ff && (px[48 * 800 + 16] & 0xffffff) == 0x4242ff,
           "SVG gradient: stop mutation repaints both consumers");
     os64_free(px);
-    check(g.page.svg_bytes == 0, "SVG gradients return the geometry/pixel ledger");
+    check(g.page.svg_bytes == yonder_svg_cache_stats(g.page.svg_cache).owned_bytes, "SVG gradients retain only the accounted raster cache");
     probe_drop();
     const char *xml = "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='32'>"
                       "<linearGradient id='g'><stop stop-color='red'/><stop offset='1' "
@@ -5579,7 +5643,7 @@ static void svg_radial_window_cases(void)
     check(px[16 * 800 + 16] == px[48 * 800 + 16] && px[16 * 800 + 16] != original,
           "SVG radial: focal-point mutation repaints both consumers");
     os64_free(px);
-    check(g.page.svg_bytes == 0, "SVG radial returns the geometry/pixel ledger");
+    check(g.page.svg_bytes == yonder_svg_cache_stats(g.page.svg_cache).owned_bytes, "SVG radial retains only the accounted raster cache");
     probe_drop();
     const char *xml = "<svg xmlns='http://www.w3.org/2000/svg' width='64' height='32'>"
                       "<radialGradient id='g' fx='.25' fy='.5'><stop stop-color='red'/>"
@@ -5608,7 +5672,7 @@ static void svg_window_cases(void)
     dash_pixels=stand_in_shot();
     check((dash_pixels[16*800+10]&0xffffffu)==0xffffff &&
         (dash_pixels[16*800+14]&0xffffffu)==0xff0000,"SVG dashes: script offset mutation moves the gaps");
-    check(g.page.svg_bytes==0,"SVG dashes: repaint releases its geometry and pixels");
+    check(g.page.svg_bytes==yonder_svg_cache_stats(g.page.svg_cache).owned_bytes,"SVG dashes: repaint releases temporary geometry and pixels");
     os64_free(dash_pixels);probe_drop();
 
     probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
@@ -5618,7 +5682,7 @@ static void svg_window_cases(void)
     uint32_t edge=px[8*800+8]&0xffffffu,overlap=px[24*800+24]&0xffffffu;
     check(edge==overlap && (edge>>16)==255 && (edge&255)>=126 && (edge&255)<=129,
         "SVG window: root opacity applies once after children overlap");
-    check(g.page.svg_bytes==0 && g.page.svg_peak>0,"SVG window: render/destination ledger returns to zero");
+    check(g.page.svg_bytes==yonder_svg_cache_stats(g.page.svg_cache).owned_bytes && g.page.svg_peak>0,"SVG window: transient render allocations return to the cache baseline");
     os64_free(px);probe_drop();
 
     const struct { const char *wrapper, *root, *child; unsigned channel; } opacity_cases[]={
@@ -5700,7 +5764,7 @@ static void svg_window_cases(void)
     px=stand_in_shot();
     check((px[16*800+48]&0xffffffu)==0xe87925 && (px[16*800+10]&0xffffffu)==0xffffff,
         "SVG shapes: script changes geometry and paint through the live cascade");
-    check(g.page.svg_bytes==0,"SVG shapes: mutation leaves no SVG allocation live");
+    check(g.page.svg_bytes==yonder_svg_cache_stats(g.page.svg_cache).owned_bytes,"SVG shapes: mutation retains only the accounted cache");
     os64_free(px);probe_drop();
 
     probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
@@ -5717,7 +5781,7 @@ static void svg_window_cases(void)
     px=stand_in_shot();
     check((px[8*800+24]&0xffffffu)==0x2091de && (px[72*800+24]&0xffffffu)==0x338363,
         "SVG use: source mutation repaints both roots and host mutation stays local");
-    check(g.page.svg_bytes==0,"SVG use: cross-root mutation leaves no SVG allocation live");
+    check(g.page.svg_bytes==yonder_svg_cache_stats(g.page.svg_cache).owned_bytes,"SVG use: cross-root mutation retains only the accounted cache");
     os64_free(px);probe_drop();
 
     probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
@@ -5732,7 +5796,7 @@ static void svg_window_cases(void)
     px=stand_in_shot();
     check((px[16*800+40]&0xffffffu)==0x2091de && (px[16*800+52]&0xffffffu)==0xffffff,
         "SVG viewports: width mutation changes the frame and its clip together");
-    check(g.page.svg_bytes==0,"SVG viewports: resized symbol leaves no SVG allocation live");
+    check(g.page.svg_bytes==yonder_svg_cache_stats(g.page.svg_cache).owned_bytes,"SVG viewports: resized symbol retains only the accounted cache");
     os64_free(px);probe_drop();
 
     probe_page("<!doctype html><style>body{margin:0;background:white}svg{display:block}</style>"
@@ -5748,7 +5812,7 @@ static void svg_window_cases(void)
     px=stand_in_shot();
     check((px[16*800+40]&0xffffffu)==0x2091de && (px[80*800+40]&0xffffffu)==0x338363,
         "SVG clips: source geometry mutation repaints both clipped roots");
-    check(g.page.svg_bytes==0,"SVG clips: shared clip mutation leaves no SVG allocation live");
+    check(g.page.svg_bytes==yonder_svg_cache_stats(g.page.svg_cache).owned_bytes,"SVG clips: shared clip mutation retains only the accounted cache");
     os64_free(px);probe_drop();
 
 
@@ -10353,6 +10417,7 @@ int main(void)
     stand_in_paint_cases();
     svg_gradient_window_cases();
     svg_radial_window_cases();
+    svg_cache_window_cases();
     svg_window_cases();
     picture_svg_window_cases();
     covered_link_cases();
