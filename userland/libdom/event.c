@@ -176,6 +176,7 @@ static void first_report(os64_dom_t *dom, JSContext *ctx, JSValueConst error)
     char text[OS64_JS_MESSAGE_CAP + 1];
     d_error_text(dom, ctx, error, text, sizeof(text));
     out->diagnostic_truncated = os64_strcopy(out->message, sizeof(out->message), text) >= sizeof(out->message);
+    out->diagnostic_truncated |= d_error_stack(ctx, error, out->stack_trace, sizeof(out->stack_trace));
 }
 
 /* An exception the binding caught itself: the first is kept for the task's

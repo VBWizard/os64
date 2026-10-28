@@ -83,7 +83,7 @@ mutants=[
  ('impl-windowless-handler-compile','event','!d_window_document(dom, entry->node))\n        return JS_NULL;','false)\n        return JS_NULL;'),
  ('impl-windowless-script-marked','window','} else if (d_connected(script)) {\n            (void)d_script_mark(dom, script);','} else if (false) {\n            (void)d_script_mark(dom, script);'),
  ('impl-windowless-link','window','if (d_window_document(dom, node)) d_navigate(dom, OS64_DOM_NAVIGATE_FOLLOW','if (true) d_navigate(dom, OS64_DOM_NAVIGATE_FOLLOW'),
- ('impl-windowless-submit','window','if (!d_window_document(dom, form)) return 1;','(void)0;'),
+ ('impl-windowless-submit','window','if (!d_window_document(dom, form) || !d_connected(form)) return 1;','if (!d_connected(form)) return 1;'),
  ('impl-windowless-notify','window','if (dom->options.activate != NULL && d_window_document(dom, node))','if (dom->options.activate != NULL)'),
  ('impl-windowless-write','window','        if (windowless(dom, self)) return d_error(ctx, "InvalidStateError", WRITE_UNOPENED);\n        return document_write','        return document_write'),
  ('impl-windowless-location','window','    if (windowless(dom, self))\n        return magic & D_SET','    if (((void)self, false))\n        return magic & D_SET'),

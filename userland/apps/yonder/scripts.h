@@ -222,6 +222,21 @@ bool yonder_scripts_alive(const yonder_scripts_t *scripts);
 // source name (OS64_JS_SOURCE_NAME_CAP) may cut short; NULL when the task
 // was an inline script, an event or a timer. Good until the host is freed.
 const char *yonder_scripts_task_address(const yonder_scripts_t *scripts);
+// A failure as its FAILED line says it: `message`, then where the first
+// frame of its stack that names a place is (libdom's os64_dom_stack_frame):
+// `TypeError: x is undefined, at f 12:5`. A place in `own`, the failing
+// task's script's address (NULL for an inline script, an event or a
+// timer), is its line and column; in another script, that script's
+// address before them; in one of the page's classic inline scripts,
+// `inline`; and anywhere else, the engine's own name for it. A script's
+// own code and an anonymous function have no name there. `scripts`, the
+// page's host, says which script a classic script's file is, and may be
+// NULL where only modules, which are compiled under their address, can
+// have failed.
+// `message` alone when the stack names no place, which a DOMException's
+// and a thrown primitive's never do; cut short at `cap`.
+void yonder_scripts_failure(const yonder_scripts_t *scripts, const char *own, const char *message,
+                            const char *stack, char *out, size_t cap);
 // How long the engine took to evaluate the script the last task ran
 // (os64_js_run, compiling it included), in microseconds; -1 when the last
 // task was an event or a timer, or ran no script.
