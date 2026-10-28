@@ -41,6 +41,7 @@ static int node_prototype_kind(const os64_html_node_t *node)
         if (node->tag == OS64_HTML_TAG_FIELDSET) return D_PROTO_FIELDSET;
         if (node->tag == OS64_HTML_TAG_LEGEND) return D_PROTO_LEGEND;
         if (node->tag == OS64_HTML_TAG_OUTPUT) return D_PROTO_OUTPUT;
+        if (node->tag == OS64_HTML_TAG_STYLE) return D_PROTO_STYLE;
         return D_PROTO_HTML_ELEMENT;
     }
     if (node->ns == OS64_HTML_NS_SVG) return D_PROTO_SVG;

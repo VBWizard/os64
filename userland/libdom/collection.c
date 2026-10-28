@@ -73,6 +73,7 @@ static bool matches(const DQuery *query, const os64_html_node_t *node)
         return os64_page_node_option_selected(query->dom->state, node, &on) == 0 && on;
     }
     if (query->kind == D_QUERY_LABELS) return d_label_control(node) == query->owner;
+    if (query->kind == D_QUERY_SHEETS) return os64_page_names_sheet(node);
     if (query->kind != D_QUERY_GENERIC && !d_classic_match(query->owner != NULL ? query->owner : query->root, node, query->kind)) return false;
     if (query->named != NULL && !d_named_match(node, query->named)) return false;
     if (query->name == NULL || os64_strcmp(query->name, "*") == 0) return true;
@@ -244,6 +245,14 @@ static JSValue named_item(DQuery *query, JSContext *ctx, const char *name, bool 
     return d_wrap(query->dom, ctx, query->nodes[first]);
 }
 
+/* A collection's `index`th entry as script sees it: the node, or for a
+ * StyleSheetList the node's CSSStyleSheet. */
+static JSValue entry_at(DQuery *query, JSContext *ctx, size_t index)
+{
+    return query->kind == D_QUERY_SHEETS ? d_sheet(query->dom, ctx, query->nodes[index])
+                                         : d_wrap(query->dom, ctx, query->nodes[index]);
+}
+
 static JSValue collection_method(JSContext *ctx, JSValueConst self, int argc,
                                  JSValueConst *argv, int magic, JSValue *data)
 {
@@ -266,7 +275,7 @@ static JSValue collection_method(JSContext *ctx, JSValueConst self, int argc,
         return argc < 1 ? JS_ThrowTypeError(ctx, "Missing collection index") : JS_EXCEPTION;
     if (!refresh(query, ctx)) return JS_EXCEPTION;
     if (magic == 0) return JS_NewFloat64(ctx, (double)query->count);
-    return index < query->count ? d_wrap(dom, ctx, query->nodes[index]) : JS_NULL;
+    return index < query->count ? entry_at(query, ctx, index) : JS_NULL;
 }
 
 static DQuery *query_receiver(JSContext *ctx, JSValueConst object)
@@ -337,7 +346,7 @@ static int own_property(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst
         return 1;
     }
     if (numeric) {
-        value = d_wrap(query->dom, ctx, query->nodes[index]);
+        value = entry_at(query, ctx, index);
         if (JS_IsException(value)) return -1;
     }
     /* An options collection's indices are writable: it has an indexed
@@ -784,4 +793,42 @@ int d_form_collections_install(os64_dom_t *dom, JSContext *ctx, JSValueConst glo
             return -1;
     }
     return 0;
+}
+
+/* ── A document's style sheets: StyleSheetList (CSSOM § 6.2.3) ────────── */
+
+JSValue d_style_sheets(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *document)
+{
+    if (!d_context(dom, ctx, OS64_JS_ABI_ID)) return JS_EXCEPTION;
+    DValue *entry = d_find(dom, document);
+    if (entry == NULL) return JS_ThrowTypeError(ctx, "Missing node wrapper");
+    if (entry->style_sheets != NULL) return JS_DupValue(ctx, entry->style_sheets->entry->value);
+    JSValue value = d_special_collection(dom, ctx, document, D_QUERY_SHEETS, NULL);
+    if (JS_IsException(value)) return value;
+    DQuery *query = JS_GetOpaque(value, dom->collection_class);
+    /* Its entries are reached by index alone, as a NodeList's are. */
+    query->node_list = true;
+    if (JS_SetPrototype(ctx, value, dom->sheet_list_prototype->value) < 0) {
+        JS_FreeValue(ctx, value);
+        return JS_EXCEPTION;
+    }
+    entry->style_sheets = query;
+    return value;
+}
+
+int d_sheet_list_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
+{
+    /* StyleSheetList.prototype: `length` and item() as a collection's,
+     * iterable by its indices, and no names. */
+    JSValue prototype = JS_NewObject(ctx);
+    if (JS_IsException(prototype)) return -1;
+    dom->sheet_list_prototype = d_retain(dom, ctx, prototype);
+    if (dom->sheet_list_prototype == NULL ||
+        d_accessor(dom, ctx, prototype, "length", collection_method, 0, false) < 0 ||
+        d_method(dom, ctx, prototype, "item", collection_method, 1, 1) < 0 || d_iterable(ctx, prototype, false) < 0)
+        return -1;
+    JSValue interface = d_interface_new(ctx, "StyleSheetList", 0, NULL, prototype, JS_UNDEFINED);
+    return JS_IsException(interface) ||
+           JS_DefinePropertyValueStr(ctx, global, "StyleSheetList", interface,
+                                     JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0 ? -1 : 0;
 }

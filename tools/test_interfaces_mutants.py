@@ -53,6 +53,7 @@ CONTROLS_C = 'userland/libdom/controls.c'
 WINDOW_C = 'userland/libdom/window.c'
 FORMS_C = 'userland/libdom/forms.c'
 RESOLVE_C = 'userland/libpage/resolve.c'
+SHEETS_C = 'userland/libdom/sheets.c'
 UI_CONTROLS_C = 'userland/libos64/ui_controls.c'
 DOM = 'tools/test_dom_host.sh'
 PAGE = 'tools/test_libpage_host.sh'
@@ -375,6 +376,28 @@ mutants = [
      '        if (d_form_owner(submitter) != node && false)\n', (DOM,)),
     ('detached-form-submits', WINDOW_C, '    if (!d_window_document(dom, form) || !d_connected(form)) return 1;',
      '    if (!d_window_document(dom, form)) return 1;', (DOM,)),
+    # The page's style sheets: document.styleSheets, a sheet, a node's sheet.
+    ('sheets-match-anything', COLLECTION_C, '    if (query->kind == D_QUERY_SHEETS) return os64_page_names_sheet(node);',
+     '    if (query->kind == D_QUERY_SHEETS) return true;', (DOM,)),
+    ('sheets-are-nodes', COLLECTION_C, '    return query->kind == D_QUERY_SHEETS ? d_sheet(',
+     '    return false ? d_sheet(', (DOM,)),
+    ('sheet-made-each-time', SHEETS_C, '    if (owner->sheet != NULL) return JS_DupValue(ctx, owner->sheet->value);',
+     '    if (false) return JS_DupValue(ctx, owner->sheet->value);', (DOM,)),
+    ('sheet-list-made-each-time', COLLECTION_C,
+     '    if (entry->style_sheets != NULL) return JS_DupValue(ctx, entry->style_sheets->entry->value);',
+     '    if (false) return JS_DupValue(ctx, entry->style_sheets->entry->value);', (DOM,)),
+    ('sheet-list-has-names', COLLECTION_C,
+     "    /* Its entries are reached by index alone, as a NodeList's are. */\n    query->node_list = true;",
+     "    /* Its entries are reached by index alone, as a NodeList's are. */", (DOM,)),
+    ('removed-sheet-keeps-owner', SHEETS_C,
+     '    case S_OWNER_NODE: return associated(node) ? d_wrap(dom, ctx, node) : JS_NULL;',
+     '    case S_OWNER_NODE: return d_wrap(dom, ctx, node);', (DOM,)),
+    ('detached-node-has-sheet', SHEETS_C, '    return root->kind == OS64_HTML_DOCUMENT;',
+     '    return root->kind == OS64_HTML_DOCUMENT || true;', (DOM,)),
+    ('empty-title-is-a-title', SHEETS_C, "    return attr != NULL && attr->value[0] != '\\0' ? JS_NewString",
+     '    return attr != NULL ? JS_NewString', (DOM,)),
+    ('sheet-href-unresolved', SHEETS_C, '        ? JS_NewString(ctx, absolute) : JS_NewString(ctx, attr->value);',
+     '        ? JS_NewString(ctx, attr->value) : JS_NewString(ctx, absolute);', (DOM,)),
     # the node row: an element's names
     ('names-swapped', MIXIN_C, "    const char *name = magic == E_LOCAL_NAME ? self->name : magic == E_PREFIX ? self->prefix",
      "    const char *name = magic == E_PREFIX ? self->name : magic == E_LOCAL_NAME ? self->prefix", (DOM,)),

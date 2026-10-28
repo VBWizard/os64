@@ -467,6 +467,9 @@ typedef struct {
     const char *media;
 } os64_page_sheet_t;
 
+// Whether `node` names a sheet by the rule above, as its tree stands now,
+// its `href` left unresolved: what a script's document.styleSheets lists.
+bool os64_page_names_sheet(const os64_html_node_t *node);
 int32_t os64_page_nsheets(const os64_page_t *page);
 const os64_page_sheet_t *os64_page_sheet(const os64_page_t *page, int32_t i);
 // The sheets `doc` names as its tree stands now, by the rule above and in
