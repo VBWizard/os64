@@ -33,6 +33,6 @@
     ],
     "reused_shared_libraries": "Source and build configuration unchanged from tested cache integration cohort"
   },
-  "hardware_acceptance": "pending",
+  "hardware_acceptance": "P5: Rust logo displays after installing the branch build (2026-10-28)",
   "source_sha256": "4ddf873cccf72ef7c9cbdcc09c0069c33792de57a89490f02924fd5dce41ebe5"
 }
