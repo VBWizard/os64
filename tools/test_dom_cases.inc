@@ -494,7 +494,7 @@ static void dom_review_property_cases(void)
         "const input=document.createElement('input'),area=document.createElement('textarea'),select=document.createElement('select'),button=document.createElement('button');"
         "assert('value' in input&&'value' in area&&'value' in select&&'value' in button);"
         "assert('checked' in input&&!('checked' in area)&&'selectedIndex' in select&&!('selectedIndex' in input));"
-        "assert(Object.getPrototypeOf(Object.getPrototypeOf(input))===Object.getPrototypeOf(body));"
+        "assert(Object.getPrototypeOf(Object.getPrototypeOf(input))===Object.getPrototypeOf(Object.getPrototypeOf(body)));"
         "assert(Object.getPrototypeOf(text)!==Object.getPrototypeOf(comment));"
         "assert(Object.getPrototypeOf(Object.getPrototypeOf(text))===Object.getPrototypeOf(Object.getPrototypeOf(comment)));"
         "assert(Object.getPrototypeOf(input.cloneNode())===Object.getPrototypeOf(input));"
@@ -521,7 +521,9 @@ static void dom_budget_cases(void)
     for(int mode=0;mode<3;mode++){
         DomFixture f=fixture_base(mode==1?65536:0,mode==2?4096:0,0);
         os64_dom_options_t options=os64_dom_default_options();
-        if(mode==0) options.max_bytes=65536;
+        /* Room for the binding's own installation, and less than the
+         * 100000 bytes the script then asks for. */
+        if(mode==0) options.max_bytes=131072;
         os64_js_outcome_t outcome;
         f.binding=os64_dom_create(f.runtime,f.document,f.state,&options,&outcome);
         if(!fixture_ready(&f))continue;

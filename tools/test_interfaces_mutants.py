@@ -62,6 +62,8 @@ ACTIVATE_C = 'userland/libpage/activate.c'
 SCRIPTS_C = 'userland/apps/yonder/scripts.c'
 VALUE_C = 'userland/libpage/value.c'
 RANGE_C = 'userland/libpage/range.c'
+ELEMENTS_C = 'userland/libdom/elements.c'
+INTERNAL_H = 'userland/libdom/internal.h'
 UI_CONTROLS_C = 'userland/libos64/ui_controls.c'
 DOM = 'tools/test_dom_host.sh'
 PAGE = 'tools/test_libpage_host.sh'
@@ -77,8 +79,8 @@ mutants = [
      '    if (node->kind == OS64_HTML_TEXT) return D_PROTO_CHARACTER_DATA;', (DOM,)),
     ('svg-is-element', NODE_C, '    if (node->ns == OS64_HTML_NS_SVG) return D_PROTO_SVG;',
      '    if (node->ns == OS64_HTML_NS_SVG) return D_PROTO_ELEMENT;', (DOM,)),
-    ('option-shares-htmlelement', NODE_C, '        if (node->tag == OS64_HTML_TAG_OPTION) return D_PROTO_OPTION;',
-     '        if (node->tag == OS64_HTML_TAG_OPTION) return D_PROTO_HTML_ELEMENT;', (DOM,)),
+    ('option-shares-htmlelement', NODE_C, '[OS64_HTML_TAG_OPTION] = D_PROTO_OPTION,',
+     '[OS64_HTML_TAG_OPTION] = D_PROTO_HTML_ELEMENT,', (DOM,)),
     ('text-inherits-node', NODE_C, '    case D_PROTO_TEXT: case D_PROTO_COMMENT: return D_PROTO_CHARACTER_DATA;',
      '    case D_PROTO_TEXT: case D_PROTO_COMMENT: return D_PROTO_NODE;', (DOM,)),
     ('text-not-constructed', CLASSIC_C, '            : proto == D_PROTO_TEXT || proto == D_PROTO_COMMENT',
@@ -164,8 +166,8 @@ mutants = [
     ('title-on-element', CLASSIC_C,
      'd_accessor(dom,ctx,dom->prototypes[D_PROTO_HTML_ELEMENT]->value,"title",classic,C_TITLE,true)',
      'd_accessor(dom,ctx,el,"title",classic,C_TITLE,true)', (DOM,)),
-    ('template-shares-htmlelement', NODE_C, '        if (node->tag == OS64_HTML_TAG_TEMPLATE) return D_PROTO_TEMPLATE;',
-     '        if (node->tag == OS64_HTML_TAG_TEMPLATE) return D_PROTO_HTML_ELEMENT;', (DOM,)),
+    ('template-shares-htmlelement', NODE_C, '[OS64_HTML_TAG_TEMPLATE] = D_PROTO_TEMPLATE,',
+     '[OS64_HTML_TAG_TEMPLATE] = D_PROTO_HTML_ELEMENT,', (DOM,)),
     ('content-is-template', MIXIN_C, '    return d_wrap(dom, ctx, self->template_contents);',
      '    return d_wrap(dom, ctx, (os64_html_node_t *)self);', (DOM,)),
     ('value-keeps-selection', STATE_C, '    if (changed) {\n        edit->range_start = edit->range_end = utf16_units(text, value_len);',
@@ -449,8 +451,8 @@ mutants = [
     ('autocomplete-hidden-on', CONTROLS_C, '    if (count == 1 && !hidden && ',
      '    if (count == 1 && (!hidden || true) && ', (DOM,)),
     ('image-width-any-type', CONTROLS_C,
-     '        return image_input(node) ? reflection_get(dom, ctx, node, row) : JS_NewUint32(ctx, 0);',
-     '        return image_input(node) || true ? reflection_get(dom, ctx, node, row) : JS_NewUint32(ctx, 0);', (DOM,)),
+     '        return image_input(node) ? d_reflection_get(dom, ctx, node, row) : JS_NewUint32(ctx, 0);',
+     '        return image_input(node) || true ? d_reflection_get(dom, ctx, node, row) : JS_NewUint32(ctx, 0);', (DOM,)),
     # P3a. indeterminate
     ('click-keeps-indeterminate', WINDOW_C,
      '        if (status >= 0 && checkbox) status = os64_page_node_set_indeterminate(dom->state, node, false);',
@@ -761,6 +763,41 @@ mutants = [
     ('date-read-as-number', CONTROLS_C, '            if (as == OS64_PAGE_AS_NUMBER) return JS_NewFloat64(ctx, number);',
      '            return JS_NewFloat64(ctx, number);', (DOM,)),
     ('n-defaults-zero', CONTROLS_C, '        int32_t n = 1;', '        int32_t n = 0;', (DOM,)),
+    # P6a. the element kinds, and their reflections
+    ('kinds-in-32-bits', INTERNAL_H, '#define D_KIND(kind) ((uint64_t)1 << (kind))',
+     '#define D_KIND(kind) ((uint64_t)(uint32_t)(1u << ((kind) & 31)))', (DOM,)),
+    ('unknown-name-is-htmlelement', NODE_C,
+     '            return custom_element_name(node->name) ? D_PROTO_HTML_ELEMENT : D_PROTO_UNKNOWN;',
+     '            return custom_element_name(node->name) || true ? D_PROTO_HTML_ELEMENT : D_PROTO_UNKNOWN;', (DOM,)),
+    ('reserved-names-custom', NODE_C, '    for (size_t i = 0; hyphen && i < sizeof(kReserved)',
+     '    for (size_t i = 0; false && hyphen && i < sizeof(kReserved)', (DOM,)),
+    ('h6-unmapped', NODE_C, '    [OS64_HTML_TAG_H6] = D_PROTO_HEADING,', '   ', (DOM,)),
+    ('listing-unmapped', NODE_C, ' [OS64_HTML_TAG_LISTING] = D_PROTO_PRE,', '', (DOM,)),
+    ('span-unclamped', CONTROLS_C,
+     '        return JS_NewUint32(ctx, (uint32_t)(value < least ? least : value > most ? most : value));',
+     '        (void)most;\n        return JS_NewUint32(ctx, (uint32_t)(value < least ? least : value));', (DOM,)),
+    ('row-span-from-one', CONTROLS_C, '        int64_t least = row->kind == K_SPAN ? 1 : 0,',
+     '        int64_t least = row->kind == K_SPAN ? 1 : 1,', (DOM,)),
+    ('long-unsigned', MIXIN_C, '    if (negative) value = -value;\n', '    (void)negative;\n', (DOM,)),
+    ('long-overflow-kept', MIXIN_C, '    if (value > INT32_MAX) return false;\n', '', (DOM,)),
+    ('null-as-null', CONTROLS_C, '    if (row->kind == K_STRING_NULL_EMPTY && JS_IsNull(value)) {',
+     '    if (false && JS_IsNull(value)) {', (DOM,)),
+    ('base-keeps-the-fragment', CONTROLS_C, '    const char *text = attr != NULL ? attr->value : "";',
+     '    if (attr == NULL) return JS_NewString(ctx, own);\n    const char *text = attr->value;', (DOM,)),
+    ('area-href-without-the-switch', MIXIN_C,
+     '        {"href", R_URL, true, D_KIND(D_PROTO_ANCHOR) | D_KIND(D_PROTO_LINK)},',
+     '        {"href", R_URL, true, D_KIND(D_PROTO_ANCHOR) | D_KIND(D_PROTO_LINK) | D_KIND(D_PROTO_AREA)},', (DOM,)),
+    ('brand-unchecked', ELEMENTS_C,
+     '    if (D_KIND(d_node_kind(node)) != own) return JS_ThrowTypeError(ctx, "Illegal invocation");',
+     '    (void)own;', (DOM,)),
+    ('canvas-width-zero', ELEMENTS_C, '    NUMBER(D_PROTO_CANVAS, "width", "width", K_UNSIGNED, 300),',
+     '    NUMBER(D_PROTO_CANVAS, "width", "width", K_UNSIGNED, 0),', (DOM,)),
+    ('scope-a-string', ELEMENTS_C, '    {"scope", "scope", K_ENUM,', '    {"scope", "scope", K_STRING,', (DOM,)),
+    ('title-text-unset', ELEMENTS_C, '    JSValue result = d_content_set(dom, ctx, node, D_TEXT_CONTENT, text);',
+     '    JSValue result = JS_UNDEFINED;\n    (void)d_content_set;', (DOM,)),
+    ('window-handlers-off-the-body', ELEMENTS_C,
+     '    JSValueConst body = dom->prototypes[D_PROTO_BODY]->value;',
+     '    JSValueConst body = dom->prototypes[D_PROTO_HTML_ELEMENT]->value;', (DOM,)),
 ]
 
 caught, missed, unbuilt = [], [], []

@@ -74,6 +74,8 @@ static char *modern_chain_shape(DomFixture *f)
         "var row=/(^constructor$|_NODE$|^DOCUMENT_POSITION_|^onscroll$|^onresize$|^oninvalid$|^scrollingElement$"
         "|^defaultView$|^(willValidate|validity|validationMessage|checkValidity|reportValidity|setCustomValidity)$"
         "|^(valueAsNumber|valueAsDate|stepUp|stepDown)$"
+        "|^(text|link|vLink|aLink|bgColor|background|onpopstate|onhashchange|ononline|onoffline|onlanguagechange"
+        "|onmessage|onmessageerror|onunhandledrejection|onrejectionhandled)$"
         "|^onerror$|^getRootNode$|^wholeText$|^splitText$|^selectionStart$|^selectionEnd$|^selectionDirection$"
         "|^setSelectionRange$|^select$|^setRangeText$|^content$|^styleSheets$"
         "|^(accept|alt|autocomplete|defaultChecked|defaultValue|dirName|disabled|formAction|formEnctype|formMethod"
@@ -123,7 +125,8 @@ static void dom_modern_cases(void)
         "modern-on-style-member");
     dom_script(&f, MODERN_ASSERT
         "function tag(o){return Object.prototype.toString.call(o)}"
-        "assert(tag(document.body)==='[object HTMLElement]'&&tag(document)==='[object Document]');"
+        "assert(tag(document.body)==='[object HTMLBodyElement]'&&tag(document)==='[object Document]');"
+        "assert(tag(document.createElement('section'))==='[object HTMLElement]');"
         "assert(tag(document.createElement('input'))==='[object HTMLInputElement]');"
         "assert(tag(document.createTextNode('t'))==='[object Text]'&&tag(document.createComment('c'))==='[object Comment]');"
         "var holder=document.createElement('div');holder.innerHTML='<svg></svg>';"
@@ -572,6 +575,48 @@ static void dom_modern_cases(void)
         "assert(throws(function(){Object.getOwnPropertyDescriptor(p,'valueAsNumber').get.call(el('textarea'))},"
         "'TypeError'),'an input alone');",
         "modern-on-value-as");
+    /* 0f's P6a: the element kinds whose members are reflections. */
+    dom_script(&f, MODERN_ASSERT
+        "function el(t,a){var e=document.createElement(t);for(var k in a)e.setAttribute(k,a[k]);return e}"
+        "function throws(f,name){try{f()}catch(x){return x.name===name}return false}"
+        "function kind(t,I){var e=el(t);return e instanceof I&&e.constructor===I}"
+        "assert(kind('h1',HTMLHeadingElement)&&kind('h6',HTMLHeadingElement)&&kind('ins',HTMLModElement)"
+        "&&kind('del',HTMLModElement)&&kind('q',HTMLQuoteElement)&&kind('blockquote',HTMLQuoteElement),'shared kinds');"
+        "assert(kind('listing',HTMLPreElement)&&kind('xmp',HTMLPreElement)&&kind('thead',HTMLTableSectionElement)"
+        "&&kind('th',HTMLTableCellElement)&&kind('colgroup',HTMLTableColElement)&&kind('dir',HTMLDirectoryElement),"
+        "'HTML\\'s mapping');"
+        "assert(kind('foo',HTMLUnknownElement)&&kind('applet',HTMLUnknownElement)&&kind('blink',HTMLUnknownElement),"
+        "'unknown names');"
+        "assert(el('x-foo').constructor===HTMLElement&&el('section').constructor===HTMLElement"
+        "&&el('font-face').constructor===HTMLUnknownElement,'a custom element name is HTMLElement\\'s');"
+        "assert(Object.getPrototypeOf(HTMLUnknownElement)===HTMLElement&&document.head instanceof HTMLHeadElement"
+        "&&document.documentElement instanceof HTMLHtmlElement,'the tree\\'s own');"
+        "var td=el('td',{colspan:'0',rowspan:'70000'});assert(td.colSpan===1&&td.rowSpan===65534,'clamped');"
+        "td.setAttribute('colspan','2000');td.setAttribute('rowspan','0');assert(td.colSpan===1000&&td.rowSpan===0,'ends');"
+        "td.setAttribute('colspan','x');assert(td.colSpan===1,'a default');td.colSpan=5;"
+        "assert(td.getAttribute('colspan')==='5','set as unsigned');"
+        "var ol=el('ol');assert(ol.start===1,'a long\\'s default');ol.setAttribute('start','-3');"
+        "assert(ol.start===-3,'a negative long');ol.start=7;assert(ol.getAttribute('start')==='7','set');"
+        "ol.setAttribute('start','99999999999');assert(ol.start===1,'past a long: the default');"
+        "ol.setAttribute('start','2147483648');assert(ol.start===1,'one past a long');"
+        "ol.setAttribute('start','-2147483648');assert(ol.start===-2147483648,'a long\\'s least');"
+        "assert(el('canvas').width===300&&el('canvas').height===150,'a canvas\\'s defaults');"
+        "var b=el('body');b.bgColor=null;assert(b.getAttribute('bgcolor')==='','null as empty');"
+        "var hr=el('hr');hr.color=null;assert(hr.getAttribute('color')==='null','null as null');"
+        "assert(el('td',{scope:'ROW'}).scope==='row'&&el('td',{scope:'x'}).scope==='','an enumeration');"
+        "assert(el('area',{referrerpolicy:'Origin'}).referrerPolicy==='origin','a referrer policy');"
+        "assert(el('area',{href:'HTTPS://example.test/a'}).href==='https://example.test/a','area\\'s href');"
+        "assert(el('base').href===document.URL,'a base without href: the document\\'s URL');"
+        "assert(el('meta',{'http-equiv':'refresh'}).httpEquiv==='refresh'&&el('font',{color:'red'}).color==='red',"
+        "'renamed attributes');"
+        "var t=el('title');t.text='a<b';assert(t.text==='a<b'&&t.firstChild.data==='a<b','a title\\'s text');"
+        "var align=Object.getOwnPropertyDescriptor(HTMLDivElement.prototype,'align').get;"
+        "assert(throws(function(){align.call(el('p'))},'TypeError'),'a row\\'s other interface is no brand');"
+        "assert(throws(function(){align.call(el('span'))},'TypeError'),'nor an interface without it');"
+        "var h=function(){};document.body.onpopstate=h;assert(window.onpopstate===h,'a body\\'s handler is window\\'s');"
+        "window.onpopstate=null;assert(Object.prototype.hasOwnProperty.call(HTMLBodyElement.prototype,'onmessage'),"
+        "'WindowEventHandlers on the body');",
+        "modern-on-elements");
     dom_script(&f, MODERN_ASSERT
         "function el(t,a){var e=document.createElement(t);for(var k in a)e.setAttribute(k,a[k]);return e}"
         /* checkValidity and reportValidity fire invalid: cancelable, not bubbling, trusted */
@@ -883,7 +928,11 @@ static void dom_modern_cases(void)
         /* 0f's P3a's controls' members; their name and value are every page's */
         "var ci=document.createElement('input');"
         "assert(!('formAction' in ci)&&!('labels' in ci)&&!('indeterminate' in ci)&&!('form' in ci)&&"
-        "'name' in ci&&'value' in ci);",
+        "'name' in ci&&'value' in ci);"
+        /* 0f's P6a's element kinds' members; an anchor's href is every page's */
+        "assert(!('href' in document.createElement('area'))&&!('colSpan' in document.createElement('td'))&&"
+        "!('text' in document.createElement('title'))&&!('onpopstate' in document.body)&&"
+        "'href' in document.createElement('a'));",
         "modern-off-absent");
 
     bool exact = on != NULL && off != NULL;

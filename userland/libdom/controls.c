@@ -11,7 +11,8 @@
  * enumerated one, read as its canonical keyword or a default; and the
  * integers, each with its own default and its own answer to a value out of
  * range. kReflections is those rows, one per member and interface, and one
- * accessor reads them all.
+ * accessor reads them all. The rules themselves, d_reflection_get and
+ * d_reflection_set, read elements.c's rows too.
  *
  * Beside them, the members that are not a plain attribute: textarea's
  * defaultValue (its child text) and textLength; input's indeterminate (a
@@ -25,36 +26,21 @@
  *
  * One row of the Modern Web table, naming nothing of window's. */
 
-enum { K_STRING, K_URL, K_FORM_ACTION, K_BOOLEAN, K_ENUM, K_LIMITED_LONG, K_UNSIGNED, K_LIMITED_UNSIGNED,
-       K_UNSIGNED_FALLBACK };
-
-#define IN (1u << D_PROTO_INPUT)
-#define TA (1u << D_PROTO_TEXTAREA)
-#define SE (1u << D_PROTO_SELECT)
-#define BU (1u << D_PROTO_BUTTON)
-#define FO (1u << D_PROTO_FORM)
-#define LA (1u << D_PROTO_LABEL)
-#define FS (1u << D_PROTO_FIELDSET)
-#define LE (1u << D_PROTO_LEGEND)
-#define OU (1u << D_PROTO_OUTPUT)
+#define IN D_KIND(D_PROTO_INPUT)
+#define TA D_KIND(D_PROTO_TEXTAREA)
+#define SE D_KIND(D_PROTO_SELECT)
+#define BU D_KIND(D_PROTO_BUTTON)
+#define FO D_KIND(D_PROTO_FORM)
+#define LA D_KIND(D_PROTO_LABEL)
+#define FS D_KIND(D_PROTO_FIELDSET)
+#define LE D_KIND(D_PROTO_LEGEND)
+#define OU D_KIND(D_PROTO_OUTPUT)
 
 static const char *const kEnctypes[] = {"application/x-www-form-urlencoded", "multipart/form-data", "text/plain",
                                         NULL};
 /* formmethod's keywords are a form's method's, on an input as on a button. */
 static const char *const kMethods[] = {"get", "post", "dialog", NULL};
 static const char *const kAutocomplete[] = {"on", "off", NULL};
-
-typedef struct {
-    const char *property, *attribute;
-    uint8_t kind;
-    unsigned on;
-    /* An enumerated attribute's keywords, and what it reads as missing and
-     * as a value that is none of them. */
-    const char *const *keywords;
-    const char *missing, *invalid;
-    /* An integer's default. */
-    uint32_t number;
-} DReflection;
 
 static const DReflection kReflections[] = {
     {"accept", "accept", K_STRING, IN, NULL, NULL, NULL, 0},
@@ -114,7 +100,7 @@ static bool html(const os64_html_node_t *node, os64_html_tag_t tag)
 
 /* The interfaces of `kReflections`' masks a node is one of: a member
  * called on anything else is a TypeError, as WebIDL's brand check is. */
-static unsigned control_kind(const os64_html_node_t *node)
+static uint64_t control_kind(const os64_html_node_t *node)
 {
     return html(node, OS64_HTML_TAG_INPUT) ? IN : html(node, OS64_HTML_TAG_TEXTAREA) ? TA :
            html(node, OS64_HTML_TAG_SELECT) ? SE : html(node, OS64_HTML_TAG_BUTTON) ? BU :
@@ -174,13 +160,31 @@ static JSValue url_value(os64_dom_t *dom, JSContext *ctx, const char *text)
     return result;
 }
 
-static JSValue reflection_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
-                              const DReflection *row)
+/* base's href (HTML § 4.2.3): the attribute, "" when it is missing,
+ * resolved against the document's fallback base URL, its own URL, not
+ * through a base (it is the base); so a missing one reads that URL without
+ * its fragment, as resolving "" drops it. As written when it does not
+ * resolve. */
+static JSValue base_url_value(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
+                              const os64_html_attr_t *attr)
+{
+    const char *own = d_window_document(dom, node) && dom->url != NULL ? dom->url : "about:blank";
+    const char *text = attr != NULL ? attr->value : "";
+    char *absolute = d_alloc(dom, OS64_DOM_URL_MAX);
+    if (absolute == NULL) return d_error(ctx, "QuotaExceededError", "DOM address quota exceeded");
+    JSValue result = os64_page_resolve_in(NULL, own, text, absolute, OS64_DOM_URL_MAX)
+        ? JS_NewString(ctx, absolute) : JS_NewString(ctx, text);
+    d_free(dom, absolute);
+    return result;
+}
+
+JSValue d_reflection_get(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, const DReflection *row)
 {
     const os64_html_attr_t *attr = os64_html_attr(node, row->attribute);
     switch (row->kind) {
     case K_BOOLEAN: return JS_NewBool(ctx, attr != NULL);
     case K_URL: return attr != NULL ? url_value(dom, ctx, attr->value) : JS_NewString(ctx, "");
+    case K_BASE_URL: return base_url_value(dom, ctx, node, attr);
     case K_FORM_ACTION:
         /* formAction, and a form's action, read the document's URL when
          * the attribute is missing or empty. */
@@ -199,18 +203,30 @@ static JSValue reflection_get(os64_dom_t *dom, JSContext *ctx, const os64_html_n
         int64_t value = attr != NULL ? non_negative(attr->value) : -1;
         return JS_NewInt32(ctx, value >= 0 && value <= INT32_MAX ? (int32_t)value : -1);
     }
+    case K_LONG: {
+        int32_t value = (int32_t)row->number;
+        if (attr != NULL) (void)d_parse_integer(attr->value, &value);
+        return JS_NewInt32(ctx, value);
+    }
     case K_UNSIGNED: case K_LIMITED_UNSIGNED: case K_UNSIGNED_FALLBACK: {
         int64_t value = attr != NULL ? non_negative(attr->value) : -1;
         int64_t least = row->kind == K_UNSIGNED ? 0 : 1;
         return JS_NewUint32(ctx, value >= least && value <= INT32_MAX ? (uint32_t)value : row->number);
     }
+    case K_SPAN: case K_ROW_SPAN: {
+        /* Clamped to the range: a number below or past it is its end, one
+         * that does not parse the default. */
+        int64_t value = attr != NULL ? non_negative(attr->value) : -1;
+        int64_t least = row->kind == K_SPAN ? 1 : 0, most = row->kind == K_SPAN ? 1000 : 65534;
+        if (value < 0) return JS_NewUint32(ctx, row->number);
+        return JS_NewUint32(ctx, (uint32_t)(value < least ? least : value > most ? most : value));
+    }
     default: return JS_NewString(ctx, attr != NULL ? attr->value : "");
     }
 }
 
-/* Each setter converts its value before it reads anything of the tree. */
-static JSValue reflection_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node,
-                              const DReflection *row, JSValueConst value)
+JSValue d_reflection_set(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node, const DReflection *row,
+                         JSValueConst value)
 {
     if (row->kind == K_BOOLEAN) {
         int on = JS_ToBool(ctx, value);
@@ -224,14 +240,29 @@ static JSValue reflection_set(os64_dom_t *dom, JSContext *ctx, const os64_html_n
         if (number < 0) return d_error(ctx, "IndexSizeError", "The value must not be negative");
         return set_number(dom, ctx, node, row->attribute, (uint32_t)number);
     }
-    if (row->kind == K_UNSIGNED || row->kind == K_LIMITED_UNSIGNED || row->kind == K_UNSIGNED_FALLBACK) {
+    if (row->kind == K_LONG) {
+        int32_t number;
+        if (JS_ToInt32(ctx, &number, value) < 0) return JS_EXCEPTION;
+        char digits[16];
+        os64_snprintf(digits, sizeof(digits), "%d", number);
+        int64_t status = d_set_attr(dom, node, row->attribute, digits, os64_strlen(digits), false);
+        return status < 0 ? d_html_error(ctx, status) : JS_UNDEFINED;
+    }
+    /* A span's clamp is its reading's alone: it is set as any unsigned
+     * long is. */
+    if (row->kind == K_UNSIGNED || row->kind == K_LIMITED_UNSIGNED || row->kind == K_UNSIGNED_FALLBACK ||
+        row->kind == K_SPAN || row->kind == K_ROW_SPAN) {
         uint32_t number;
         if (JS_ToUint32(ctx, &number, value) < 0) return JS_EXCEPTION;
         if (number == 0 && row->kind == K_LIMITED_UNSIGNED)
             return d_error(ctx, "IndexSizeError", "The value must not be zero");
-        uint32_t least = row->kind == K_UNSIGNED ? 0 : 1;
+        uint32_t least = row->kind == K_LIMITED_UNSIGNED || row->kind == K_UNSIGNED_FALLBACK ? 1 : 0;
         return set_number(dom, ctx, node, row->attribute,
                           number >= least && number <= INT32_MAX ? number : row->number);
+    }
+    if (row->kind == K_STRING_NULL_EMPTY && JS_IsNull(value)) {
+        int64_t status = d_set_attr(dom, node, row->attribute, "", 0, false);
+        return status < 0 ? d_html_error(ctx, status) : JS_UNDEFINED;
     }
     DString text = {0};
     if (!d_string(dom, ctx, value, &text)) return JS_EXCEPTION;
@@ -323,8 +354,7 @@ static JSValue autocomplete_value(os64_dom_t *dom, JSContext *ctx, const os64_ht
 
 /* ── The members that are not plain reflections ──────────────────────── */
 
-/* A textarea's child text content: its Text children's data, in order. */
-static JSValue child_text(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
+JSValue d_child_text(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node)
 {
     size_t size = 0;
     for (const os64_html_node_t *child = node->first_child; child != NULL; child = child->next)
@@ -397,16 +427,16 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
     bool set = (magic & D_SET) != 0;
     magic &= ~D_SET;
     JSValueConst value = argc > 0 ? argv[0] : JS_UNDEFINED;
-    unsigned kind = control_kind(node);
+    uint64_t kind = control_kind(node);
     if (magic < M_TEXT_DEFAULT) {
         const DReflection *row = &kReflections[magic];
         if ((row->on & kind) == 0) return JS_ThrowTypeError(ctx, "Illegal invocation");
-        return set ? reflection_set(dom, ctx, node, row, value) : reflection_get(dom, ctx, node, row);
+        return set ? d_reflection_set(dom, ctx, node, row, value) : d_reflection_get(dom, ctx, node, row);
     }
     switch (magic) {
     case M_TEXT_DEFAULT: {
         if (kind != TA) return JS_ThrowTypeError(ctx, "Illegal invocation");
-        if (!set) return child_text(dom, ctx, node);
+        if (!set) return d_child_text(dom, ctx, node);
         /* String replace all: textContent's setter, with the value a
          * string first (null is "null" here, and "" there). */
         JSValue text = JS_ToString(ctx, value);
@@ -437,7 +467,7 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
         if ((kind & (IN | TA | SE)) == 0) return JS_ThrowTypeError(ctx, "Illegal invocation");
         if (!set) return autocomplete_value(dom, ctx, node);
         static const DReflection row = {"autocomplete", "autocomplete", K_STRING, IN | TA | SE, NULL, NULL, NULL, 0};
-        return reflection_set(dom, ctx, node, &row, value);
+        return d_reflection_set(dom, ctx, node, &row, value);
     }
     case M_WIDTH: case M_HEIGHT: {
         /* An image button's dimensions as its attributes give them, as an
@@ -449,8 +479,8 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
             {"height", "height", K_UNSIGNED, IN, NULL, NULL, NULL, 0},
         };
         const DReflection *row = &rows[magic == M_HEIGHT];
-        if (set) return reflection_set(dom, ctx, node, row, value);
-        return image_input(node) ? reflection_get(dom, ctx, node, row) : JS_NewUint32(ctx, 0);
+        if (set) return d_reflection_set(dom, ctx, node, row, value);
+        return image_input(node) ? d_reflection_get(dom, ctx, node, row) : JS_NewUint32(ctx, 0);
     }
     case M_AS_NUMBER: case M_AS_DATE: {
         if (kind != IN) return JS_ThrowTypeError(ctx, "Illegal invocation");
@@ -528,7 +558,7 @@ int d_controls_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
     dom->date_get_time = d_intrinsic(dom, ctx, date_prototype, "getTime");
     JS_FreeValue(ctx, date_prototype);
     if (dom->date_get_time == NULL) return -1;
-    static const struct { const char *name; int magic; bool writable; unsigned on; } kMembers[] = {
+    static const struct { const char *name; int magic; bool writable; uint64_t on; } kMembers[] = {
         {"defaultValue", M_TEXT_DEFAULT, true, TA}, {"textLength", M_TEXT_LENGTH, false, TA},
         {"indeterminate", M_INDETERMINATE, true, IN}, {"autocomplete", M_AUTOCOMPLETE, true, IN | TA | SE},
         {"width", M_WIDTH, true, IN}, {"height", M_HEIGHT, true, IN},
@@ -539,7 +569,7 @@ int d_controls_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
                                 D_PROTO_LABEL, D_PROTO_FIELDSET, D_PROTO_LEGEND, D_PROTO_OUTPUT};
     for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
         JSValueConst prototype = dom->prototypes[kinds[k]]->value;
-        unsigned mask = 1u << kinds[k];
+        uint64_t mask = D_KIND(kinds[k]);
         for (size_t i = 0; i < sizeof(kReflections) / sizeof(kReflections[0]); i++)
             if ((kReflections[i].on & mask) &&
                 d_accessor(dom, ctx, prototype, kReflections[i].property, control_member, (int)i, true) < 0)

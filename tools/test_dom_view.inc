@@ -471,6 +471,9 @@ static void dom_view_history_cases(void)
         "var mine={x:1};history.replaceState(mine,'');assert(history.state!==mine&&history.state.x===1,'a fresh copy');"
         "assert(location.href==='http://view.test/dir/page.html?q=1#start','no address: the same one');"
         "history.pushState(null,'','other.html#frag');assert(location.href==='http://view.test/dir/other.html#frag'&&history.state===null);"
+        /* a base without href is the document's URL, resolved from "": no
+         * fragment (0f's P6a) */
+        "assert(document.createElement('base').href==='http://view.test/dir/other.html');"
         "history.pushState(2,'','?x=1');assert(location.search==='?x=1'&&location.pathname==='/dir/other.html'&&history.state===2);"
         "history.pushState(undefined,'');assert(history.state===null,'undefined is null');"
         "history.pushState([undefined],'');assert(history.state[0]===null,'in an array undefined is null');"

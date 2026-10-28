@@ -32,7 +32,16 @@ static const DModernRow kModern[] = {
                            "HTMLOptGroupElement", "HTMLTemplateElement", "HTMLButtonElement",
                            "HTMLImageElement", "HTMLScriptElement", "HTMLAnchorElement",
                            "HTMLLinkElement", "HTMLLabelElement", "HTMLFieldSetElement",
-                           "HTMLLegendElement", "HTMLOutputElement", "HTMLStyleElement", NULL},
+                           "HTMLLegendElement", "HTMLOutputElement", "HTMLStyleElement",
+                           "HTMLMetaElement", "HTMLCanvasElement", "HTMLUnknownElement", "HTMLTimeElement",
+                           "HTMLDivElement", "HTMLBodyElement", "HTMLOListElement", "HTMLHeadElement",
+                           "HTMLDataElement", "HTMLLIElement", "HTMLAreaElement", "HTMLBaseElement",
+                           "HTMLMapElement", "HTMLModElement", "HTMLQuoteElement", "HTMLTableCellElement",
+                           "HTMLTableColElement", "HTMLTableElement", "HTMLTableRowElement",
+                           "HTMLTableSectionElement", "HTMLUListElement", "HTMLBRElement", "HTMLDListElement",
+                           "HTMLDirectoryElement", "HTMLFontElement", "HTMLHRElement", "HTMLHeadingElement",
+                           "HTMLHtmlElement", "HTMLMenuElement", "HTMLParagraphElement", "HTMLPreElement",
+                           "HTMLSpanElement", "HTMLTableCaptionElement", "HTMLTitleElement", NULL},
      d_interfaces_install},
     /* After the interfaces row, whose HTMLElement its interface inherits. */
     {(const char *const[]){"HTMLIFrameElement", NULL}, d_frames_install},
@@ -96,6 +105,9 @@ static const DModernRow kModern[] = {
     /* 0f's P3a: the controls' reflections and state, members of the
      * interfaces row's control prototypes and none of window's. */
     {(const char *const[]){NULL}, d_controls_install},
+    /* 0f's P6a: the element kinds whose members are reflections, members
+     * of the interfaces row's prototypes and none of window's. */
+    {(const char *const[]){NULL}, d_elements_install},
     /* 0f's P3b: a form's controls collection and RadioNodeList, over the
      * interfaces row's HTMLCollection and NodeList; and the form's,
      * label's, fieldset's, legend's and output's own members. */

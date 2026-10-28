@@ -15,7 +15,68 @@ DValue *d_find(os64_dom_t *dom, const os64_html_node_t *node)
     return NULL;
 }
 
-static int node_prototype_kind(const os64_html_node_t *node)
+/* HTML's element interface for a tag libhtml names (§ 3.2.3.1), as the
+ * binding's kinds; 0 (Node's, which no element is) for HTMLElement's,
+ * whether HTML gives the name that interface or one the binding does not
+ * have. The obsolete names HTML gives HTMLUnknownElement are UNKNOWN, and
+ * so are menuitem, and math and svg in HTML's namespace, which HTML gives
+ * no interface and which are no custom element names. */
+static const uint8_t kTagKinds[OS64_HTML_TAG_COUNT] = {
+    [OS64_HTML_TAG_INPUT] = D_PROTO_INPUT, [OS64_HTML_TAG_TEXTAREA] = D_PROTO_TEXTAREA,
+    [OS64_HTML_TAG_SELECT] = D_PROTO_SELECT, [OS64_HTML_TAG_BUTTON] = D_PROTO_BUTTON,
+    [OS64_HTML_TAG_FORM] = D_PROTO_FORM, [OS64_HTML_TAG_IMG] = D_PROTO_IMAGE,
+    [OS64_HTML_TAG_SCRIPT] = D_PROTO_SCRIPT, [OS64_HTML_TAG_A] = D_PROTO_ANCHOR,
+    [OS64_HTML_TAG_LINK] = D_PROTO_LINK, [OS64_HTML_TAG_IFRAME] = D_PROTO_IFRAME,
+    [OS64_HTML_TAG_OPTION] = D_PROTO_OPTION, [OS64_HTML_TAG_OPTGROUP] = D_PROTO_OPTGROUP,
+    [OS64_HTML_TAG_TEMPLATE] = D_PROTO_TEMPLATE, [OS64_HTML_TAG_LABEL] = D_PROTO_LABEL,
+    [OS64_HTML_TAG_FIELDSET] = D_PROTO_FIELDSET, [OS64_HTML_TAG_LEGEND] = D_PROTO_LEGEND,
+    [OS64_HTML_TAG_OUTPUT] = D_PROTO_OUTPUT, [OS64_HTML_TAG_STYLE] = D_PROTO_STYLE,
+    [OS64_HTML_TAG_META] = D_PROTO_META, [OS64_HTML_TAG_CANVAS] = D_PROTO_CANVAS,
+    [OS64_HTML_TAG_TIME] = D_PROTO_TIME, [OS64_HTML_TAG_DIV] = D_PROTO_DIV, [OS64_HTML_TAG_BODY] = D_PROTO_BODY,
+    [OS64_HTML_TAG_OL] = D_PROTO_OLIST, [OS64_HTML_TAG_UL] = D_PROTO_ULIST, [OS64_HTML_TAG_DL] = D_PROTO_DLIST,
+    [OS64_HTML_TAG_LI] = D_PROTO_LI, [OS64_HTML_TAG_HEAD] = D_PROTO_HEAD, [OS64_HTML_TAG_DATA] = D_PROTO_DATA,
+    [OS64_HTML_TAG_AREA] = D_PROTO_AREA, [OS64_HTML_TAG_BASE] = D_PROTO_BASE, [OS64_HTML_TAG_MAP] = D_PROTO_MAP,
+    [OS64_HTML_TAG_INS] = D_PROTO_MOD, [OS64_HTML_TAG_DEL] = D_PROTO_MOD,
+    [OS64_HTML_TAG_Q] = D_PROTO_QUOTE, [OS64_HTML_TAG_BLOCKQUOTE] = D_PROTO_QUOTE,
+    [OS64_HTML_TAG_TD] = D_PROTO_TABLE_CELL, [OS64_HTML_TAG_TH] = D_PROTO_TABLE_CELL,
+    [OS64_HTML_TAG_COL] = D_PROTO_TABLE_COL, [OS64_HTML_TAG_COLGROUP] = D_PROTO_TABLE_COL,
+    [OS64_HTML_TAG_TABLE] = D_PROTO_TABLE, [OS64_HTML_TAG_TR] = D_PROTO_TABLE_ROW,
+    [OS64_HTML_TAG_THEAD] = D_PROTO_TABLE_SECTION, [OS64_HTML_TAG_TBODY] = D_PROTO_TABLE_SECTION,
+    [OS64_HTML_TAG_TFOOT] = D_PROTO_TABLE_SECTION, [OS64_HTML_TAG_CAPTION] = D_PROTO_TABLE_CAPTION,
+    [OS64_HTML_TAG_BR] = D_PROTO_BR, [OS64_HTML_TAG_DIR] = D_PROTO_DIRECTORY, [OS64_HTML_TAG_FONT] = D_PROTO_FONT,
+    [OS64_HTML_TAG_HR] = D_PROTO_HR, [OS64_HTML_TAG_H1] = D_PROTO_HEADING, [OS64_HTML_TAG_H2] = D_PROTO_HEADING,
+    [OS64_HTML_TAG_H3] = D_PROTO_HEADING, [OS64_HTML_TAG_H4] = D_PROTO_HEADING, [OS64_HTML_TAG_H5] = D_PROTO_HEADING,
+    [OS64_HTML_TAG_H6] = D_PROTO_HEADING, [OS64_HTML_TAG_HTML] = D_PROTO_HTML, [OS64_HTML_TAG_MENU] = D_PROTO_MENU,
+    [OS64_HTML_TAG_P] = D_PROTO_PARAGRAPH, [OS64_HTML_TAG_PRE] = D_PROTO_PRE, [OS64_HTML_TAG_LISTING] = D_PROTO_PRE,
+    [OS64_HTML_TAG_XMP] = D_PROTO_PRE, [OS64_HTML_TAG_SPAN] = D_PROTO_SPAN, [OS64_HTML_TAG_TITLE] = D_PROTO_TITLE,
+    [OS64_HTML_TAG_APPLET] = D_PROTO_UNKNOWN, [OS64_HTML_TAG_BGSOUND] = D_PROTO_UNKNOWN,
+    [OS64_HTML_TAG_ISINDEX] = D_PROTO_UNKNOWN, [OS64_HTML_TAG_KEYGEN] = D_PROTO_UNKNOWN,
+    [OS64_HTML_TAG_MENUITEM] = D_PROTO_UNKNOWN, [OS64_HTML_TAG_MATH] = D_PROTO_UNKNOWN,
+    [OS64_HTML_TAG_SVG] = D_PROTO_UNKNOWN,
+};
+
+/* A valid custom element name (HTML § 4.13.2): a lowercase ASCII letter,
+ * then name characters with a hyphen among them, and none of the names
+ * SVG and MathML already use. A byte past ASCII is taken as one of the
+ * name characters, which nearly every code point past ASCII is. */
+static bool custom_element_name(const char *name)
+{
+    static const char *const kReserved[] = {"annotation-xml", "color-profile", "font-face", "font-face-src",
+                                            "font-face-uri", "font-face-format", "font-face-name", "missing-glyph"};
+    if (name == NULL || name[0] < 'a' || name[0] > 'z') return false;
+    bool hyphen = false;
+    for (const unsigned char *c = (const unsigned char *)name; *c != '\0'; c++) {
+        hyphen = hyphen || *c == '-';
+        if (!(*c >= 0x80 || (*c >= 'a' && *c <= 'z') || (*c >= '0' && *c <= '9') || *c == '-' || *c == '.' ||
+              *c == '_'))
+            return false;
+    }
+    for (size_t i = 0; hyphen && i < sizeof(kReserved) / sizeof(kReserved[0]); i++)
+        if (os64_streq(name, kReserved[i])) return false;
+    return hyphen;
+}
+
+int d_node_kind(const os64_html_node_t *node)
 {
     if (node->kind == OS64_HTML_DOCUMENT) return D_PROTO_DOCUMENT;
     if (node->kind == OS64_HTML_FRAGMENT) return D_PROTO_FRAGMENT;
@@ -24,25 +85,12 @@ static int node_prototype_kind(const os64_html_node_t *node)
     if (node->kind == OS64_HTML_DOCTYPE) return D_PROTO_DOCTYPE;
     if (node->kind != OS64_HTML_ELEMENT) return D_PROTO_NODE;
     if (node->ns == OS64_HTML_NS_HTML) {
-        if (node->tag == OS64_HTML_TAG_INPUT) return D_PROTO_INPUT;
-        if (node->tag == OS64_HTML_TAG_TEXTAREA) return D_PROTO_TEXTAREA;
-        if (node->tag == OS64_HTML_TAG_SELECT) return D_PROTO_SELECT;
-        if (node->tag == OS64_HTML_TAG_BUTTON) return D_PROTO_BUTTON;
-        if (node->tag == OS64_HTML_TAG_FORM) return D_PROTO_FORM;
-        if (node->tag == OS64_HTML_TAG_IMG) return D_PROTO_IMAGE;
-        if (node->tag == OS64_HTML_TAG_SCRIPT) return D_PROTO_SCRIPT;
-        if (node->tag == OS64_HTML_TAG_A) return D_PROTO_ANCHOR;
-        if (node->tag == OS64_HTML_TAG_LINK) return D_PROTO_LINK;
-        if (node->tag == OS64_HTML_TAG_IFRAME) return D_PROTO_IFRAME;
-        if (node->tag == OS64_HTML_TAG_OPTION) return D_PROTO_OPTION;
-        if (node->tag == OS64_HTML_TAG_OPTGROUP) return D_PROTO_OPTGROUP;
-        if (node->tag == OS64_HTML_TAG_TEMPLATE) return D_PROTO_TEMPLATE;
-        if (node->tag == OS64_HTML_TAG_LABEL) return D_PROTO_LABEL;
-        if (node->tag == OS64_HTML_TAG_FIELDSET) return D_PROTO_FIELDSET;
-        if (node->tag == OS64_HTML_TAG_LEGEND) return D_PROTO_LEGEND;
-        if (node->tag == OS64_HTML_TAG_OUTPUT) return D_PROTO_OUTPUT;
-        if (node->tag == OS64_HTML_TAG_STYLE) return D_PROTO_STYLE;
-        return D_PROTO_HTML_ELEMENT;
+        /* A name libhtml does not know is HTML's to judge: a custom
+         * element's is HTMLElement's, any other HTMLUnknownElement's. */
+        if (node->tag == OS64_HTML_TAG_UNKNOWN)
+            return custom_element_name(node->name) ? D_PROTO_HTML_ELEMENT : D_PROTO_UNKNOWN;
+        int kind = node->tag < OS64_HTML_TAG_COUNT ? kTagKinds[node->tag] : 0;
+        return kind != 0 ? kind : D_PROTO_HTML_ELEMENT;
     }
     if (node->ns == OS64_HTML_NS_SVG) return D_PROTO_SVG;
     return D_PROTO_ELEMENT;
@@ -57,7 +105,7 @@ static DValue *wrapper_prepare(os64_dom_t *dom, JSContext *ctx,
     DValue *entry = d_alloc(dom, sizeof(*entry));
     if (entry == NULL) { d_error(ctx, "QuotaExceededError", "DOM wrapper quota exceeded"); return NULL; }
     JSValue value = JS_NewObjectProtoClass(ctx, JS_IsObject(prototype) ? prototype :
-        dom->prototypes[node_prototype_kind(node)]->value, dom->node_class);
+        dom->prototypes[d_node_kind(node)]->value, dom->node_class);
     if (JS_IsException(value)) { d_free(dom, entry); return NULL; }
     entry->value = value;
     entry->next = dom->values;
@@ -562,46 +610,44 @@ static JSValue method(JSContext *ctx, JSValueConst self, int argc,
     return value;
 }
 
-static unsigned property_prototypes(int magic)
+static uint64_t property_prototypes(int magic)
 {
     switch (magic) {
     case D_CHILDREN: case D_CHILD_ELEMENT_COUNT: case D_FIRST_ELEMENT: case D_LAST_ELEMENT:
-        return (1u << D_PROTO_DOCUMENT) | (1u << D_PROTO_ELEMENT) | (1u << D_PROTO_FRAGMENT);
+        return D_KIND(D_PROTO_DOCUMENT) | D_KIND(D_PROTO_ELEMENT) | D_KIND(D_PROTO_FRAGMENT);
     case D_PREV_ELEMENT: case D_NEXT_ELEMENT:
-        return (1u << D_PROTO_ELEMENT) | (1u << D_PROTO_CHARACTER_DATA);
+        return D_KIND(D_PROTO_ELEMENT) | D_KIND(D_PROTO_CHARACTER_DATA);
     case D_TAG: case D_ID: case D_CLASS: case D_INNER_HTML: case D_OUTER_HTML:
-        return 1u << D_PROTO_ELEMENT;
+        return D_KIND(D_PROTO_ELEMENT);
     case D_DOCUMENT_ELEMENT: case D_HEAD: case D_BODY:
-        return 1u << D_PROTO_DOCUMENT;
+        return D_KIND(D_PROTO_DOCUMENT);
     case D_DATA:
-        return 1u << D_PROTO_CHARACTER_DATA;
+        return D_KIND(D_PROTO_CHARACTER_DATA);
     case D_VALUE:
-        return (1u << D_PROTO_INPUT) | (1u << D_PROTO_TEXTAREA) |
-            (1u << D_PROTO_SELECT) | (1u << D_PROTO_BUTTON);
+        return D_KIND(D_PROTO_INPUT) | D_KIND(D_PROTO_TEXTAREA) | D_KIND(D_PROTO_SELECT) | D_KIND(D_PROTO_BUTTON);
     case D_CHECKED:
-        return 1u << D_PROTO_INPUT;
+        return D_KIND(D_PROTO_INPUT);
     case D_SELECTED_INDEX:
-        return 1u << D_PROTO_SELECT;
+        return D_KIND(D_PROTO_SELECT);
     case D_CONTROL_TYPE:
-        return (1u << D_PROTO_INPUT) | (1u << D_PROTO_TEXTAREA) |
-            (1u << D_PROTO_SELECT) | (1u << D_PROTO_BUTTON);
+        return D_KIND(D_PROTO_INPUT) | D_KIND(D_PROTO_TEXTAREA) | D_KIND(D_PROTO_SELECT) | D_KIND(D_PROTO_BUTTON);
     default:
-        return 1u << D_PROTO_NODE;
+        return D_KIND(D_PROTO_NODE);
     }
 }
 
-static unsigned method_prototypes(int magic)
+static uint64_t method_prototypes(int magic)
 {
     switch (magic) {
-    case D_GET_ID: return (1u << D_PROTO_DOCUMENT) | (1u << D_PROTO_FRAGMENT);
-    case D_GET_TAG: return (1u << D_PROTO_DOCUMENT) | (1u << D_PROTO_ELEMENT);
+    case D_GET_ID: return D_KIND(D_PROTO_DOCUMENT) | D_KIND(D_PROTO_FRAGMENT);
+    case D_GET_TAG: return D_KIND(D_PROTO_DOCUMENT) | D_KIND(D_PROTO_ELEMENT);
     case D_QUERY_ONE: case D_QUERY_ALL:
-        return (1u << D_PROTO_DOCUMENT) | (1u << D_PROTO_ELEMENT) | (1u << D_PROTO_FRAGMENT);
+        return D_KIND(D_PROTO_DOCUMENT) | D_KIND(D_PROTO_ELEMENT) | D_KIND(D_PROTO_FRAGMENT);
     case D_CREATE_ELEMENT: case D_CREATE_TEXT: case D_CREATE_COMMENT: case D_CREATE_FRAGMENT:
-        return 1u << D_PROTO_DOCUMENT;
+        return D_KIND(D_PROTO_DOCUMENT);
     case D_GET_ATTR: case D_SET_ATTR: case D_REMOVE_ATTR: case D_HAS_ATTR:
-        return 1u << D_PROTO_ELEMENT;
-    default: return 1u << D_PROTO_NODE;
+        return D_KIND(D_PROTO_ELEMENT);
+    default: return D_KIND(D_PROTO_NODE);
     }
 }
 
@@ -662,11 +708,11 @@ int d_node_install(os64_dom_t *dom, JSContext *ctx)
     for (int kind = 0; kind < D_PROTO_COUNT; kind++) {
         JSValueConst prototype = dom->prototypes[kind]->value;
         for (size_t i = 0; i < sizeof(properties) / sizeof(properties[0]); i++)
-            if ((property_prototypes(properties[i].magic) & (1u << kind)) != 0 &&
+            if ((property_prototypes(properties[i].magic) & D_KIND(kind)) != 0 &&
                 d_accessor(dom, ctx, prototype, properties[i].name, property,
                            properties[i].magic, properties[i].writable) < 0) return -1;
         for (size_t i = 0; i < sizeof(methods) / sizeof(methods[0]); i++)
-            if ((method_prototypes(methods[i].magic) & (1u << kind)) != 0 &&
+            if ((method_prototypes(methods[i].magic) & D_KIND(kind)) != 0 &&
                 d_method(dom, ctx, prototype, methods[i].name, method, methods[i].argc, methods[i].magic) < 0) return -1;
     }
     return d_geometry_install(dom, ctx);

@@ -227,6 +227,9 @@ setrequestheader-bogus-value.htm	XMLHttpRequest: setRequestHeader() value argume
 # window.onerror. Each fails with the switch off.
 thrown-error-in-events.html	errors thrown in XMLHttpRequest's load event (using addEventListener) goes to window.onerror
 thrown-error-in-events.html	errors thrown in XMLHttpRequest's load event (using onload) goes to window.onerror
+# 0f's P6a (MODERN_WEB.md § 0f's P6a, as built): a base's href, which a
+# page sets. Fails with the switch off.
+open-url-base-inserted.htm	XMLHttpRequest: open() resolving URLs - insert <base>
 [excluded]
 [passing]
 XMLHttpRequest-withCredentials.any.html	can also be set in OPEN state
@@ -406,6 +409,7 @@ open-send-during-abort.htm	XMLHttpRequest: open() during abort()
 open-send-open.htm	XMLHttpRequest: open() - send() - open()
 open-sync-open-send.htm	XMLHttpRequest: open() (sync) - send() - open()
 open-url-base-inserted-after-open.htm	XMLHttpRequest: open() resolving URLs - insert <base> after open()
+open-url-base-inserted.htm	XMLHttpRequest: open() resolving URLs - insert <base>
 open-url-base.htm	XMLHttpRequest: open() resolving URLs - <base>
 open-url-fragment.htm	XMLHttpRequest: open() resolving URLs - fragment identifier
 open-user-password-non-same-origin.htm	XMLHttpRequest: open() - user/pass argument and non same-origin URL doesn't throw

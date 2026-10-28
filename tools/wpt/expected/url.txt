@@ -4226,6 +4226,9 @@ urlsearchparams-constructor.any.html	URLSearchParams constructor, FormData.
 # not serialize. Each fails with the switch off.
 historical.any.html	URL: no structured serialize/deserialize support
 historical.any.html	URLSearchParams: no structured serialize/deserialize support
+# 0f's P6a (MODERN_WEB.md § 0f's P6a, as built): an area's href. Fails
+# with the switch off.
+url-setters-a-area.window.html?exclude=(file|javascript|mailto)	<area>: Setting <https://example.net>.search = ''
 [excluded]
 [passing]
 IdnaTestV2-removed.any.html	Loading data…
@@ -8091,6 +8094,7 @@ url-searchparams.any.html	URL.searchParams getter
 url-searchparams.any.html	URL.searchParams setter, invalid values
 url-searchparams.any.html	URL.searchParams updating, clearing
 url-setters-a-area.window.html?exclude=(file|javascript|mailto)	<a>: Setting <https://example.net>.search = ''
+url-setters-a-area.window.html?exclude=(file|javascript|mailto)	<area>: Setting <https://example.net>.search = ''
 url-setters-a-area.window.html?exclude=(file|javascript|mailto)	Loading data…
 url-setters-a-area.window.html?include=file	Loading data…
 url-setters-a-area.window.html?include=javascript	Loading data…

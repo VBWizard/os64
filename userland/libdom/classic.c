@@ -615,6 +615,22 @@ int d_interfaces_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global)
         {"HTMLLinkElement", D_PROTO_LINK}, {"HTMLLabelElement", D_PROTO_LABEL},
         {"HTMLFieldSetElement", D_PROTO_FIELDSET}, {"HTMLLegendElement", D_PROTO_LEGEND},
         {"HTMLOutputElement", D_PROTO_OUTPUT}, {"HTMLStyleElement", D_PROTO_STYLE},
+        {"HTMLMetaElement", D_PROTO_META}, {"HTMLCanvasElement", D_PROTO_CANVAS},
+        {"HTMLUnknownElement", D_PROTO_UNKNOWN}, {"HTMLTimeElement", D_PROTO_TIME},
+        {"HTMLDivElement", D_PROTO_DIV}, {"HTMLBodyElement", D_PROTO_BODY},
+        {"HTMLOListElement", D_PROTO_OLIST}, {"HTMLHeadElement", D_PROTO_HEAD},
+        {"HTMLDataElement", D_PROTO_DATA}, {"HTMLLIElement", D_PROTO_LI}, {"HTMLAreaElement", D_PROTO_AREA},
+        {"HTMLBaseElement", D_PROTO_BASE}, {"HTMLMapElement", D_PROTO_MAP}, {"HTMLModElement", D_PROTO_MOD},
+        {"HTMLQuoteElement", D_PROTO_QUOTE}, {"HTMLTableCellElement", D_PROTO_TABLE_CELL},
+        {"HTMLTableColElement", D_PROTO_TABLE_COL}, {"HTMLTableElement", D_PROTO_TABLE},
+        {"HTMLTableRowElement", D_PROTO_TABLE_ROW}, {"HTMLTableSectionElement", D_PROTO_TABLE_SECTION},
+        {"HTMLUListElement", D_PROTO_ULIST}, {"HTMLBRElement", D_PROTO_BR}, {"HTMLDListElement", D_PROTO_DLIST},
+        {"HTMLDirectoryElement", D_PROTO_DIRECTORY}, {"HTMLFontElement", D_PROTO_FONT},
+        {"HTMLHRElement", D_PROTO_HR}, {"HTMLHeadingElement", D_PROTO_HEADING},
+        {"HTMLHtmlElement", D_PROTO_HTML}, {"HTMLMenuElement", D_PROTO_MENU},
+        {"HTMLParagraphElement", D_PROTO_PARAGRAPH}, {"HTMLPreElement", D_PROTO_PRE},
+        {"HTMLSpanElement", D_PROTO_SPAN}, {"HTMLTableCaptionElement", D_PROTO_TABLE_CAPTION},
+        {"HTMLTitleElement", D_PROTO_TITLE},
     };
     /* HTMLIFrameElement's is the frames row's (frames.c), with its members:
      * IFRAME.md's HTMLIFrameElement is one row. */

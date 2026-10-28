@@ -28,6 +28,8 @@ LIBDOM_SRCS += libdom/options.c
 LIBDOM_SRCS += libdom/selection.c
 # 0f P3a: the controls' reflections, form owner and labels.
 LIBDOM_SRCS += libdom/controls.c
+# 0f P6a: the element kinds whose members are reflections.
+LIBDOM_SRCS += libdom/elements.c
 # 0f P3b: the form's, label's, fieldset's, legend's and output's own members.
 LIBDOM_SRCS += libdom/forms.c
 # 0f P4: constraint validation.
