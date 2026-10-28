@@ -62,5 +62,5 @@
       "bin/yonder"
     ]
   },
-  "hardware_acceptance": "pending"
+  "hardware_acceptance": "P5: Debian SVG icons and Rust logo verified; both pages display correctly (2026-10-28)"
 }
