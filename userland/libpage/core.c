@@ -482,12 +482,12 @@ static void pressing(const os64_html_node_t *n, os64_page_element_t element,
     *resets = input == OS64_PAGE_INPUT_RESET;
 }
 
-// THE TEXT-LIKE INPUT TYPES, named once because two different rules name
-// this same set and neither derives from the other: what BLOCKS IMPLICIT
-// SUBMISSION (§4.10.21.3) and where `readonly` APPLIES at all (§4.10.5.1)
-// are the same list in the standard today. Written down once so a change to
-// one does not silently leave the other holding an old list; that they
-// coincide is a fact about the list, not about the rules.
+// THE TEXT-LIKE INPUT TYPES, named once because more than one of the
+// standard's rules names this same set and none derives from another: what
+// BLOCKS IMPLICIT SUBMISSION (§4.10.21.3) and where `readonly` APPLIES at
+// all (§4.10.5.1) among them. Written down once so a change to one rule
+// does not silently leave another holding an old list; that they coincide
+// is a fact about the list, not about the rules.
 bool p_text_like_input(os64_page_input_t input)
 {
     switch (input) {

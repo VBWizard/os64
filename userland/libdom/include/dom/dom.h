@@ -656,8 +656,9 @@ os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node
  * whose event nobody cancelled is reported (OS64_DOM_ACTIVATE_REPORT).
  * `valid` false means the host submits nothing. With the Modern Web switch
  * off, or with validation skipped, it is true and no task runs (`ran`
- * false): the model judges the submission alone. Owner thread, between
- * tasks. */
+ * false): with the switch off the model judges the submission alone, and
+ * a submission novalidate or formnovalidate skips is judged by nobody.
+ * Owner thread, between tasks. */
 os64_js_status_t os64_dom_form_validate(os64_dom_t *dom, const os64_html_node_t *form,
                                         const os64_html_node_t *submitter, bool *valid, bool *ran,
                                         os64_js_outcome_t *outcome);

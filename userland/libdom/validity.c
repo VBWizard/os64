@@ -57,8 +57,9 @@ static bool submittable(const os64_html_node_t *node)
 typedef struct {
     os64_dom_t *dom;
     JSContext *ctx;
-    /* An exception the matching could not swallow (the task's deadline):
-     * it stays pending, and the judge's answer is not used. */
+    /* An exception the matching leaves pending, and the judge's answer is
+     * not used: one it could not swallow (the task's deadline), or the
+     * binding's own QuotaExceededError, which is the page's to catch. */
     bool failed;
 } Matching;
 

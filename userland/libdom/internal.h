@@ -18,7 +18,8 @@ typedef struct DListener DListener;
 typedef struct DTimer DTimer;
 /* A link in a chain of nodes on the C stack: the elements being clicked
  * (window.c's click) and the forms being submitted (window.c's submit,
- * validity.c's os64_dom_form_validate). */
+ * validity.c's os64_dom_form_validate, and a host's submit event at a form
+ * in os64_dom_dispatch). */
 struct DClicking {
     const os64_html_node_t *node;
     const struct DClicking *next;

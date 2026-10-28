@@ -59,6 +59,7 @@ SHEETS_C = 'userland/libdom/sheets.c'
 VALIDITY_C = 'userland/libdom/validity.c'
 SUBMIT_C = 'userland/libpage/submit.c'
 ACTIVATE_C = 'userland/libpage/activate.c'
+SCRIPTS_C = 'userland/apps/yonder/scripts.c'
 UI_CONTROLS_C = 'userland/libos64/ui_controls.c'
 DOM = 'tools/test_dom_host.sh'
 PAGE = 'tools/test_libpage_host.sh'
@@ -570,6 +571,14 @@ mutants = [
      '    os64_page_verdict_t verdict = validated && false ? os64_page_activate_validated(', (SCRIPTS,)),
     ('submission-reentered', WINDOW_C, '        if (at->node == form) return 1;',
      '        if (at->node == form && false) return 1;', (DOM,)),
+    ('onsubmit-page-unvalidated', SCRIPTS_C,
+     '        if ((handler_types(s) & (os64_dom_handler_bit("invalid") | os64_dom_handler_bit("submit"))) == 0)',
+     '        if ((handler_types(s) & os64_dom_handler_bit("invalid")) == 0)', (SCRIPTS,)),
+    ('person-submit-event-reentered', EVENT_C, '    if (submitting) dom->submitting = &self;',
+     '    if (submitting && false) dom->submitting = &self;', (SCRIPTS,)),
+    ('single-select-placeholder-ignored', SUBMIT_C,
+     '        return one_line && index == 0 && first != NULL',
+     '        return false && one_line && index == 0 && first != NULL', (PAGE, DOM)),
     ('host-submission-reentered', VALIDITY_C,
      '    dom->submitting = &self;\n    int result = d_form_validate(dom, ctx, form, true);',
      '    (void)self;\n    int result = d_form_validate(dom, ctx, form, true);', (SCRIPTS,)),

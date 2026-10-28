@@ -266,7 +266,7 @@ char *p_child_text_into(PArena *arena, const os64_html_node_t *node, size_t *len
 bool p_nonnegative(const char *text, uint64_t *value);
 // Whether the select display size is one, using HTML integer parsing.
 bool p_select_one_line(const os64_page_control_t *control);
-// The text-like input types (core.c says why one list serves two rules).
+// The text-like input types (core.c says why one list serves several rules).
 bool p_text_like_input(os64_page_input_t input);
 // The select's list of options in tree order, excluding the subtrees the
 // HTML list-of-options algorithm skips. NULL starts or ends the walk.

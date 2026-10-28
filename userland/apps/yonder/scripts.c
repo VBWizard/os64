@@ -1445,7 +1445,10 @@ bool yonder_scripts_form_validate(yonder_scripts_t *s, const os64_html_node_t *f
         return false;
     s->written = 0;
     if (s->dom == NULL) {
-        if ((handler_types(s) & os64_dom_handler_bit("invalid")) == 0)
+        // A page all handlers makes its runtime for an invalid handler, and
+        // for a submit handler too: HTML fires submit only at a valid form,
+        // so the page validates before that handler runs.
+        if ((handler_types(s) & (os64_dom_handler_bit("invalid") | os64_dom_handler_bit("submit"))) == 0)
             return false;
         if (!ensure_runtime(s, out)) {
             retire(s);

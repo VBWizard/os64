@@ -189,8 +189,8 @@ os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *scripts, const os64_h
 bool yonder_scripts_listens(yonder_scripts_t *scripts, const char *type);
 // A person's submission of `form` by `submitter`, validated by the page as
 // os64_dom_form_validate does, before its submit event. A page whose script
-// never ran makes its runtime here if an element carries an oninvalid
-// attribute; a page with no runtime otherwise leaves `valid` true, and the
+// never ran makes its runtime here if an element carries an oninvalid or an
+// onsubmit attribute; a page with no runtime otherwise leaves `valid` true, and the
 // model's own validation in the submission decides. True when a task ran
 // (or the runtime it needed could not be made), and `outcome` says how.
 bool yonder_scripts_form_validate(yonder_scripts_t *scripts, const os64_html_node_t *form,

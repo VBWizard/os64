@@ -180,14 +180,21 @@ static bool select_missing(os64_page_state_t *state, const os64_html_node_t *sel
     uint64_t size = 0;
     if (!p_nonnegative(p_attr(select, "size"), &size))
         size = 0;
-    bool one_line = !p_has_attr(select, "multiple") && size <= 1;
-    int32_t i = 0;
+    bool multiple = p_has_attr(select, "multiple");
+    bool one_line = !multiple && size <= 1;
+    if (!multiple) {
+        // One pick at most, read once: asking it of each option walks the
+        // list per option, and a page may read validity per keystroke.
+        int32_t index = -1;
+        if (os64_page_node_selected_index(state, select, &index) < 0 || index < 0)
+            return true;
+        const os64_html_node_t *first = os64_page_option_next(select, NULL);
+        return one_line && index == 0 && first != NULL && first->parent == select && option_value_empty(first);
+    }
     for (const os64_html_node_t *at = os64_page_option_next(select, NULL); at != NULL;
-         at = os64_page_option_next(select, at), i++) {
+         at = os64_page_option_next(select, at)) {
         bool on = false;
-        if (os64_page_node_option_selected(state, at, &on) < 0 || !on)
-            continue;
-        if (!(one_line && i == 0 && at->parent == select && option_value_empty(at)))
+        if (os64_page_node_option_selected(state, at, &on) >= 0 && on)
             return false;
     }
     return true;

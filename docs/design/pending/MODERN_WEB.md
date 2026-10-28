@@ -4229,9 +4229,9 @@ with no `validity` it threw on every press.
   directories; `dom/nodes`' 14 and `dom/events`' 1 new passes are P3b's
   and the style sheets', recorded now. With the switch off no required
   line passes.
-- **Hosts**, 0 failed: DOM 17,856 and 115,883; the scripted page 8,559;
+- **Hosts**, 0 failed: DOM 17,856 and 115,883; the scripted page 8,565;
   yonder 2,028; libpage 254,233; libjs's runtime 1,285 and 6,115.
-- **Mutants** (`tools/test_interfaces_mutants.py`, its P4a group): 57,
+- **Mutants** (`tools/test_interfaces_mutants.py`, its P4a group): 60,
   each caught — the judge (an unnamed radio, a group's tick, readonly's
   bar both ways and a select's, a fieldset's legend, mutability for a
   field and not a box, an email list and a label, a URL's scheme and host,
@@ -4247,7 +4247,9 @@ with no `validity` it threw on every press.
   one whole; setCustomValidity; a form's own controls; the report;
   formnovalidate both in the binding and for the host; submit() and
   requestSubmit(); no submission inside a form's own, in the binding and
-  for the host; oninvalid); and yonder (a button and Enter validated, and
+  for the host, its validation and its submit event; oninvalid); and
+  yonder (an onsubmit attribute alone validated before it runs; a button
+  and Enter validated, and
   not again by the model, the report's focus and sentence, the refusal's
   sentence). `tools/test_yonder_loop_mutants.py`'s two that this moved are
   re-anchored, and caught.

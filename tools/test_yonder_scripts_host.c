@@ -2641,6 +2641,25 @@ static void input_validation(void) {
     button_clicked(again->w,again); inputs_run();
     check(probe_text_is("log","invalid 1"),"validation: no submission inside a person's submission's validation");
     probe_drop();
+    /* Nor inside its submit event: a listener's requestSubmit() is no
+     * second submission. */
+    probe_page("<form action=/send><input name=q value=v><button id=go>Go</button></form><p id=log>-</p>"
+        "<script>var n=0;document.forms[0].addEventListener('submit',function(){n++;"
+        "document.getElementById('log').textContent='submit '+n;document.forms[0].requestSubmit()});</script>",true);
+    script_turn();
+    FormWidget *twice=probe_field("go");
+    button_clicked(twice->w,twice); inputs_run();
+    check(probe_text_is("log","submit 1"),"validation: no submission inside a person's submit event");
+    probe_drop();
+    /* A page all handlers, with only an onsubmit: validated before the
+     * handler, which an invalid form never runs. */
+    probe_page("<form action=/send onsubmit=\"document.getElementById('log').textContent='submitted'\">"
+        "<input id=need name=q required><button id=go>Go</button></form><p id=log>-</p>",true);
+    FormWidget *handlers=probe_field("go");
+    button_clicked(handlers->w,handlers); inputs_run();
+    check(probe_text_is("log","-") && status_says("Please fill out this field."),
+          "validation: an onsubmit attribute alone is validated before, and not run for an invalid form");
+    probe_drop();
     probe_page("<form action=/send><input id=need name=n required><button id=go>Go</button></form>",false);
     FormWidget *go=probe_field("go"),*need=probe_field("need");
     button_clicked(go->w,go); inputs_run();

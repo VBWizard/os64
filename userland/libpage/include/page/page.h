@@ -656,7 +656,8 @@ enum {
 // 4.10.5.3.6), so the caller matches it: 1 when `value` (UTF-8, `len`
 // bytes) matches the whole of `pattern`, 0 when it does not, -1 when the
 // pattern does not compile, which HTML judges as no constraint. A NULL
-// matcher judges no pattern, as a submission's validation does.
+// matcher judges no pattern, as the model's own validation of a
+// submission does (os64_page_activate).
 typedef int (*os64_page_pattern_t)(void *opaque, const char *pattern, const char *value, size_t len);
 // willValidate: whether the node is a candidate for constraint validation —
 // an input, textarea, select or button not barred (a type that is not a

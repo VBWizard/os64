@@ -948,8 +948,16 @@ os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node
         *outcome = changed;
         return outcome->status;
     }
+    /* A person's submit at a form: the form is being submitted (window.c's
+     * submit's flag), so a submission its listener asks of it does nothing,
+     * rather than send it a second time beside the person's. */
+    bool submitting = node != NULL && node->kind == OS64_HTML_ELEMENT && node->ns == OS64_HTML_NS_HTML &&
+        node->tag == OS64_HTML_TAG_FORM && os64_strcmp(ev->type, "submit") == 0;
+    struct DClicking self = {node, dom->submitting};
+    if (submitting) dom->submitting = &self;
     if (os64_dom_listens(dom, ev->type))
         d_host_dispatch(dom, node, NULL, ev->type, host_event, (void *)ev, prevented, outcome);
+    if (submitting) dom->submitting = self.next;
     if (changed.status != OS64_JS_OK) {
         d_outcome_fold(&changed, outcome);
         *outcome = changed;
