@@ -230,7 +230,7 @@ static PStep steps[] = {
     {"I3", "a required radio group needs one ticked", false},
     {"I4", "a required select needs a real option", false},
     {"I5", "readonly bars a control from validation", false},
-    {"I9", "readonly bars nothing where readonly does not apply", false},
+    {"I9", "readonly bars an input of any type, applying or not", false},
     {"I6", "disabled bars a control from validation", false},
     {"I7", "maxlength applies to what a person typed", false},
     {"I8", "validation runs before the method is looked at", false},

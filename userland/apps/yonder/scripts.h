@@ -187,6 +187,18 @@ os64_js_status_t yonder_scripts_dispatch(yonder_scripts_t *scripts, const os64_h
 // on<type> attribute in the document names it, looked at once per tree
 // version.
 bool yonder_scripts_listens(yonder_scripts_t *scripts, const char *type);
+// A person's submission of `form` by `submitter`, validated by the page as
+// os64_dom_form_validate does, before its submit event. A page whose script
+// never ran makes its runtime here if an element carries an oninvalid
+// attribute; a page with no runtime otherwise leaves `valid` true, and the
+// model's own validation in the submission decides. True when a task ran
+// (or the runtime it needed could not be made), and `outcome` says how.
+bool yonder_scripts_form_validate(yonder_scripts_t *scripts, const os64_html_node_t *form,
+                                  const os64_html_node_t *submitter, bool *valid, os64_js_outcome_t *outcome);
+// The sentence the page's last report gave for `node`
+// (os64_dom_report_message); false when it was not of `node`.
+bool yonder_scripts_report_message(const yonder_scripts_t *scripts, const os64_html_node_t *node, char *out,
+                                   size_t cap);
 // The last thing the page's scripts said on the status line, kept so the
 // page's arrival, which writes the status line, can say it again. NULL when
 // nothing was said.

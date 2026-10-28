@@ -807,3 +807,14 @@ count, and it holds only the unrefused half. Both probes pass with the
 series: 1,270 target-core and 6,100 instrumented checks, zero failures,
 zero live allocations. `tools/test_js_prepare.py` passes. The export
 count is unchanged.
+
+Patch 0014 (after 0013) confines the `v` flag's ClassSetCharacter rules
+to a class's atoms and a class string's. The runtime suite's case
+compiles and matches, with `v`, a pattern holding a slash, hyphens and
+doubled punctuators outside any class, and a class string with an
+escaped hyphen; five classes and class strings that break the rules
+still throw. Without the patch the first and last checks fail (two
+failures in the target-core probe, which ends the run); with it both
+probes pass: 1,285 target-core
+and 6,115 instrumented checks, zero failures, zero live allocations.
+`tools/test_js_prepare.py` passes. The export count is unchanged.

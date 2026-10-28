@@ -75,7 +75,11 @@ typedef enum {
 typedef enum {
     OS64_DOM_ACTIVATE_FOCUS = 1,
     OS64_DOM_ACTIVATE_BLUR,
-    OS64_DOM_ACTIVATE_RESET     /* a form whose reset event was not cancelled */
+    OS64_DOM_ACTIVATE_RESET,    /* a form whose reset event was not cancelled */
+    /* A control whose constraint problem is reported to the person
+     * (reportValidity, or a submission constraint validation stopped):
+     * focus it and say os64_dom_report_message's sentence. */
+    OS64_DOM_ACTIVATE_REPORT
 } os64_dom_activation_t;
 
 typedef struct {
@@ -643,6 +647,25 @@ size_t os64_dom_registry_count(const os64_dom_t *dom);
 os64_js_status_t os64_dom_dispatch(os64_dom_t *dom, const os64_html_node_t *node,
                                    const os64_dom_event_t *event, bool *prevented,
                                    os64_js_outcome_t *outcome);
+/* A person's submission of `form`, by `submitter` (a submit button, or NULL
+ * for none), as one task: HTML's interactive constraint validation (§
+ * 4.10.21.3, the form submission algorithm), which the host asks BEFORE it
+ * fires submit. Unless
+ * the submitter's formnovalidate or the form's novalidate says not to, each
+ * invalid control the form owns gets an `invalid` event, and the first
+ * whose event nobody cancelled is reported (OS64_DOM_ACTIVATE_REPORT).
+ * `valid` false means the host submits nothing. With the Modern Web switch
+ * off, or with validation skipped, it is true and no task runs (`ran`
+ * false): the model judges the submission alone. Owner thread, between
+ * tasks. */
+os64_js_status_t os64_dom_form_validate(os64_dom_t *dom, const os64_html_node_t *form,
+                                        const os64_html_node_t *submitter, bool *valid, bool *ran,
+                                        os64_js_outcome_t *outcome);
+/* The sentence the last report (OS64_DOM_ACTIVATE_REPORT) gave for `node`,
+ * into `out` (truncated to `cap`, terminated): the control's validation
+ * message, judged with the page's engine, which a pattern needs. False,
+ * and `out` empty, when the last report was not of `node`. */
+bool os64_dom_report_message(const os64_dom_t *dom, const os64_html_node_t *node, char *out, size_t cap);
 /* HTML's readiness steps as the host's dispatches make them: DOMContentLoaded
  * at `doc`'s document node moves LOADING to INTERACTIVE, and load at window
  * (node NULL) moves either to COMPLETE; anything else leaves `now` as it is.
@@ -673,12 +696,12 @@ bool os64_dom_listens(os64_dom_t *dom, const char *type);
  * It needs no runtime, so a host can ask before making one. It knows no
  * binding, so it names the Modern Web arc's types whatever the switch
  * says; os64_dom_listens counts them only with the switch on. */
-uint32_t os64_dom_handler_attributes(const os64_html_document_t *doc);
+uint64_t os64_dom_handler_attributes(const os64_html_document_t *doc);
 /* The bit for `type` in that mask; 0 for a type no attribute can name
  * (DOMContentLoaded; readystatechange, visibilitychange and
  * prerenderingchange, whose handlers are the document's IDL properties
  * alone; or one outside the types os64_dom_listens counts). */
-uint32_t os64_dom_handler_bit(const char *type);
+uint64_t os64_dom_handler_bit(const char *type);
 
 /* TIMERS, in the host's clock (options.now_ms). next answers the earliest due
  * time, or UINT64_MAX with none. fire runs AT MOST ONE timer due at or before

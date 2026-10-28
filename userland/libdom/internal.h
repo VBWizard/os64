@@ -49,7 +49,8 @@ int d_proto_parent(int kind);
  * binding fires at window for a script's failures (report.c);
  * readystatechange, which the binding fires itself (document.c); message
  * and messageerror, which a posted message's task fires at window
- * (message.c); and online, offline, languagechange, visibilitychange and
+ * (message.c); invalid, which constraint validation fires at a control
+ * (validity.c); and online, offline, languagechange, visibilitychange and
  * prerenderingchange, whose handlers exist though nothing here ever fires
  * them (browsing.c and document.c say why). A script may listen for any
  * other type. The handler
@@ -68,7 +69,7 @@ enum {
     D_EVENT_LANGUAGECHANGE, D_EVENT_ERROR, D_EVENT_UNHANDLEDREJECTION,
     D_EVENT_REJECTIONHANDLED, D_EVENT_READYSTATECHANGE, D_EVENT_VISIBILITYCHANGE,
     D_EVENT_PRERENDERINGCHANGE, D_EVENT_DOM_CONTENT_LOADED, D_EVENT_MESSAGE, D_EVENT_MESSAGEERROR,
-    D_EVENT_COUNT
+    D_EVENT_INVALID, D_EVENT_COUNT
 };
 /* A wrapper, or another engine value the binding holds strongly. A node's
  * wrapper also carries the node's listener list, in the order listeners and
@@ -93,6 +94,9 @@ struct DValue {
      * `link`'s CSSStyleSheet, made once (sheets.c). */
     DQuery *style_sheets;
     DValue *sheet;
+    /* A control's, fieldset's or output's ValidityState, made once
+     * ([SameObject], validity.c). */
+    DValue *validity;
     /* A form's RadioNodeLists, one a name, each made once
      * (d_radio_list), as browsers answer `form.r === form.r`. */
     DQuery *radio_lists;
@@ -230,6 +234,14 @@ struct os64_dom {
     /* StyleSheetList's prototype (collection.c) and CSSStyleSheet's
      * (sheets.c); NULL with the modern switch off. */
     DValue *sheet_list_prototype, *sheet_prototype;
+    /* Constraint validation (validity.c): ValidityState's prototype; the
+     * RegExp constructor and RegExp.prototype.exec, taken before any page
+     * ran, which judge a control's pattern; and the control last reported
+     * to the person, with its message, which the host reads after the
+     * task (os64_dom_report_message). NULL with the modern switch off. */
+    DValue *validity_prototype, *regexp, *regexp_exec;
+    const os64_html_node_t *reported;
+    char reported_message[256];
     /* The window's Selection (selection.c), the one getSelection answers;
      * NULL with the modern switch off. */
     DValue *selection;
@@ -257,7 +269,7 @@ struct os64_dom {
     /* Listener and timer callbacks are the registry's other two lists. */
     size_t listeners_held, timers_held;
     uint32_t listen_counts[D_EVENT_COUNT];
-    uint32_t attribute_mask;
+    uint64_t attribute_mask;
     uint64_t attribute_version;
     bool attribute_scanned;
     unsigned dispatching;
@@ -1103,6 +1115,15 @@ JSValue d_sheet(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *node);
 /* document.styleSheets, StyleSheet, CSSStyleSheet and LinkStyle's `sheet`
  * (sheets.c): one row of the Modern Web table. */
 int d_sheets_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
+/* A form's constraint validation (HTML § 4.10.20.2, validity.c): every
+ * invalid control it owns gets an `invalid` event, and when `report` the
+ * first whose event nobody cancelled is reported to the person. 1 valid,
+ * 0 invalid, -1 with an exception pending. With the modern switch off a
+ * form is valid here, and the model's own judge (libpage) is the only one. */
+int d_form_validate(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form, bool report);
+/* ValidityState, the controls' constraint validation members and the
+ * form's, and oninvalid (validity.c): one row of the Modern Web table. */
+int d_validity_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);
 /* The form's, label's, fieldset's, legend's and output's own members
  * (forms.c, 0f's P3b). */
 int d_forms_install(os64_dom_t *dom, JSContext *ctx, JSValueConst global);

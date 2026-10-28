@@ -7260,7 +7260,8 @@ static void forms_flush(void)
 
 // Sends a form: the button pressed (CONTROL) or Enter in a field (IMPLICIT).
 // libpage decides what goes and where; libway judges it; an INVALID
-// refusal puts the focus on the control that failed. `kind` is how the
+// refusal puts the focus on the control that failed and its validation
+// message on the status line. `kind` is how the
 // reply comes: a new way, or a refresh when a script sends the form before
 // its page has completely loaded (navigation_perform). `by` is whether a
 // person sent it or the page's script did.
@@ -7284,8 +7285,20 @@ static void form_send_as(int32_t control, os64_page_activation_t how, NavKind ki
         // scripts the sentence is why nothing happened.
         bool scripts_own_it = scripts_live() && (request.reason == OS64_PAGE_REASON_NO_FORM ||
                                                  request.reason == OS64_PAGE_REASON_NO_SUBMISSION);
+        const os64_page_control_t *invalid = request.reason == OS64_PAGE_REASON_INVALID
+            ? os64_page_control(page_model(&g.page), request.control) : NULL;
+        char sentence[256];
+        uint32_t flags = 0;
         if (reason_refuses(request.reason))
             say_failed(g.page.diag, "form refused", os64_page_reason_name(request.reason));
+        else if (invalid != NULL &&
+                 os64_page_node_validity(os64_page_shared_state(page_model(&g.page)), invalid->node, NULL, NULL,
+                                         &flags) >= 0 &&
+                 os64_page_node_validation_message(os64_page_shared_state(page_model(&g.page)), invalid->node,
+                                                   flags, sentence, sizeof(sentence)) >= 0 &&
+                 sentence[0] != '\0')
+            // The control's own sentence, as the page's report says it.
+            status_rest(sentence);
         else if (!scripts_own_it)
             status_rest(os64_page_reason_name(request.reason));
         FormWidget *failed = request.reason == OS64_PAGE_REASON_INVALID
@@ -8630,6 +8643,14 @@ static void asks_perform(yonder_scripts_t *host, const os64_html_document_t *doc
                 os64_ui_set_focus(&g.ui, fw->w);
             } else if (fw != NULL && g.ui.focus == fw->w && g.asks[i].what == OS64_DOM_ACTIVATE_BLUR) {
                 os64_ui_set_focus(&g.ui, &g.view);
+            } else if (g.asks[i].what == OS64_DOM_ACTIVATE_REPORT) {
+                // A control's constraint problem, reported as a refused
+                // submission is: the control focused, its sentence said.
+                char said[256];
+                if (fw != NULL && !fw->w->hidden)
+                    os64_ui_set_focus(&g.ui, fw->w);
+                if (yonder_scripts_report_message(host, g.asks[i].node, said, sizeof(said)) && said[0] != '\0')
+                    status_rest(said);
             }
         }
         os64_html_release(g.asks[i].doc, g.asks[i].node);
@@ -9825,6 +9846,38 @@ static const os64_html_node_t *control_form(int32_t control)
     return f != NULL ? f->node : NULL;
 }
 
+// A person's submission from `control` (a button pressed, Enter in a
+// field), validated by the page's scripts before its submit event (HTML §
+// 4.10.21.3): false when it is invalid, and then the first problem whose
+// invalid event nobody cancelled is reported.
+// Only a submission that will happen is validated, by the submitter libpage
+// would take; without scripts the model's validation in form_send is the
+// whole of it.
+static bool page_validates(int32_t control, os64_page_activation_t how)
+{
+    yonder_scripts_t *host = g.page.scripts;
+    if (!scripts_live())
+        return true;
+    forms_flush();
+    const os64_page_t *page = page_model(&g.page);
+    os64_page_what_t what = {how, control, 0, 0};
+    int32_t submitter = -1;
+    const os64_html_node_t *form = control_form(control);
+    if (form == NULL || !os64_page_submitter(page, what, &submitter))
+        return true;
+    const os64_page_control_t *by = os64_page_control(page, submitter);
+    const os64_html_document_t *doc = page_doc(&g.page);
+    os64_js_outcome_t out;
+    bool valid = true;
+    int64_t began = task_begin(host);
+    if (yonder_scripts_form_validate(host, form, by != NULL ? by->node : NULL, &valid, &out)) {
+        task_said(host, true, "invalid", &out, began);
+        if (script_rebuild())
+            asks_perform(host, doc, true);
+    }
+    return valid;
+}
+
 // A text control's value as its editor holds it, for `change`.
 static bool editor_text(const os64_html_node_t *node, const char **text, size_t *len)
 {
@@ -9934,7 +9987,17 @@ static void inputs_run(void)
                 break;
             bool resets = c->resets, submits = c->submits;
             const char *type = resets ? "reset" : "submit";
-            if ((!resets && !submits) || plain_event(type, true, true, control_form(control)))
+            if (!resets && !submits)
+                break;
+            if (submits) {
+                if (!page_validates(control, OS64_PAGE_ACTIVATE_CONTROL))
+                    break;
+                // The invalid events' listeners may have rebuilt the page.
+                control = os64_page_control_for(page_model(&g.page), in.node);
+                if (control < 0)
+                    break;
+            }
+            if (plain_event(type, true, true, control_form(control)))
                 break;
             // The listeners may have rebuilt the page: the button is found
             // again, and is gone if they took it away.
@@ -9948,6 +10011,9 @@ static void inputs_run(void)
         }
         case IN_IMPLICIT:
             change_if_edited(in.node);
+            control = os64_page_control_for(page_model(&g.page), in.node);
+            if (!page_validates(control, OS64_PAGE_ACTIVATE_IMPLICIT))
+                break;
             control = os64_page_control_for(page_model(&g.page), in.node);
             if (!plain_event("submit", true, true, control_form(control)))
                 form_send(os64_page_control_for(page_model(&g.page), in.node), OS64_PAGE_ACTIVATE_IMPLICIT);

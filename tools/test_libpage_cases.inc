@@ -1098,16 +1098,15 @@ static void family_i(void)
                         "<input type=submit></form>",
                 .index = 1,
                 .url = "http://host/s?q="});
-    // A `readonly` spelled on a tick means nothing, so it cannot excuse one
-    // from a rule either: the bar applies only where the attribute does.
+    // A `readonly` spelled on a tick bars it too, though it cannot stop the
+    // tick changing: an input's readonly bars it whatever its type, as
+    // browsers do (WPT's form-validation-willValidate).
     run((PCase){.steps = "I9",
-                .name = "I: readonly on a tick bars nothing",
+                .name = "I: readonly on a tick bars it too",
                 .html = "<form action=/s><input type=checkbox name=a required readonly>"
                         "<input type=submit></form>",
                 .index = 1,
-                .verdict = OS64_PAGE_NOTHING,
-                .reason = OS64_PAGE_REASON_INVALID,
-                .check_reason = true});
+                .url = "http://host/s?"});
     run((PCase){.steps = "I6",
                 .name = "I: disabled bars it too (and sends nothing)",
                 .html = "<form action=/s><input name=q required disabled>"

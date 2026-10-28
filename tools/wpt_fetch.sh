@@ -81,6 +81,7 @@ WPT_DIRS=(
     html/semantics/forms/the-fieldset-element
     html/semantics/forms/the-legend-element
     html/semantics/forms/the-output-element
+    html/semantics/forms/constraints
     html/infrastructure/common-dom-interfaces/collections
 )
 

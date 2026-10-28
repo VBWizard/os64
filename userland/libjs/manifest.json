@@ -144,6 +144,11 @@
       "path": "patches/0013-set-prototype-refused-shape.patch",
       "sha256": "7a92f028e9e4c43e0ab3c39e49c6f681fe608b8da0c3ec600aa58ddc98768727",
       "reason": "Give back the reference JS_SetPrototypeInternal takes on the new prototype when the object's shape copy is refused for memory; upstream returned -1 holding it, so the prototype was never freed and the runtime's teardown found it on its object list."
+    },
+    {
+      "path": "patches/0014-regexp-unicode-sets-outside-class.patch",
+      "sha256": "6562e5f7e2b97d31e6c0b1fa250e3d26f18d550e3e51b70b4e982304e30d4b8b",
+      "reason": "Apply the v flag's ClassSetCharacter rules (no unescaped ( ) [ ] { } / - |, no doubled punctuator) only to a class's atoms and a class string's; upstream applied them to every atom outside a class too, so a v-flag RegExp of `a/b` or `a-b` threw, and with it every HTML pattern holding a slash or a hyphen."
     }
   ],
   "configuration_scope": "Atomics-disabled, stack-checked target engine and complete standalone embedding interface; slice review/merge and runner integration are tracked in JAVASCRIPT_TASKS.md"

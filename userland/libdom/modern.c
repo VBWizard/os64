@@ -101,6 +101,9 @@ static const DModernRow kModern[] = {
      * label's, fieldset's, legend's and output's own members. */
     {(const char *const[]){"HTMLFormControlsCollection", "RadioNodeList", NULL}, d_form_collections_install},
     {(const char *const[]){NULL}, d_forms_install},
+    /* 0f's P4: constraint validation, members of the interfaces row's
+     * control and form prototypes, and ValidityState and oninvalid. */
+    {(const char *const[]){"ValidityState", "oninvalid", NULL}, d_validity_install},
     /* The page's style sheets: StyleSheetList, StyleSheet and
      * CSSStyleSheet, document.styleSheets, and a link's and a style's
      * `sheet` (sheets.c), after the interfaces row's HTMLStyleElement. */

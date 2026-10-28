@@ -575,12 +575,32 @@ time.html	min  attribute on default value check
 time.html	min attribute support on input element
 time.html	step attribute on default value check
 time.html	step attribute support on input element
+# 0f's P4a (MODERN_WEB.md § 0f's P4a, as built): constraint validation. Each
+# fails with the switch off; the passes not listed pass either way.
+button.html	the element is barred from constraint validation
+email.html	Email address validity
+email.html	valid value is a set of valid email addresses separated by a single ','
+hidden.html	input type=hidden is barred from constraint validation
+input-checkvalidity.html	Forms
+input-setcustomvalidity.html	input setCustomValidity is correct
+input-validationmessage.html	Forms
+input-validity.html	Forms
+input-willvalidate.html	Forms
+radio-disconnected-group-owner.html	Disconnected document fragments can serve as radio group containers.
+radio-disconnected-group-owner.html	Disconnected radio buttons can serve as radio group containers.
+radio-disconnected-group-owner.html	Disconnected radio buttons should be contained by their tree root.
+radio-disconnected-group-owner.html	Non-HTML elements in disconnected trees can serve as radio group containers.
+radio-disconnected-group-owner.html	Removed elements are moved into separate radio groups.
+radio-multiple-selected.html	Form should be valid since one of the radio elements is checked
+radio.html	Radio buttons in an orphan tree should make a group
+reset.html	the element is barred from constraint validation
 [excluded]
 [passing]
 button.html	clicking on button should not change its indeterminate IDL attribute
 button.html	clicking on button should not reset other form fields
 button.html	clicking on button should not submit a form
 button.html	clicking on button should not unchecked radio buttons
+button.html	the element is barred from constraint validation
 checkable-active-onblur-with-click.html	Wait for load
 checkbox-click-events.html	a checkbox input emits click, input, change events in order after synthetic click
 checkbox-click-events.html	checkbox input respects cancel behavior on synthetic clicks
@@ -778,20 +798,25 @@ default-type.html	text should be recognized as a valid input type (HTML)
 default-type.html	time should be recognized as a valid input type (HTML)
 default-type.html	url should be recognized as a valid input type (HTML)
 default-type.html	week should be recognized as a valid input type (HTML)
+email.html	Email address validity
 email.html	When the multiple attribute is removed, the user agent must run the value sanitization algorithm
 email.html	When the multiple attribute is set, the user agent must run the value sanitization algorithm
 email.html	multiple_email has the multiple attribute
 email.html	run the value sanitization algorithm after setting a new value
 email.html	single_email doesn't have the multiple attribute
+email.html	valid value is a set of valid email addresses separated by a single ','
 email.html	value should be sanitized: strip line breaks
 hidden.html	Setting value changes the current value for hidden
 hidden.html	Value returns the current value for hidden
+hidden.html	input type=hidden is barred from constraint validation
+input-checkvalidity.html	Forms
 input-height.html	Forms
 input-labels.html	Forms
 input-seconds-leading-zeroes.html	Expected digits unchanged in round-trip of 2000-01-01T12:30:00.003
 input-seconds-leading-zeroes.html	Expected digits unchanged in round-trip of 2000-01-01T12:30:00.04
 input-seconds-leading-zeroes.html	Expected digits unchanged in round-trip of 2000-01-01T12:30:00.5
 input-seconds-leading-zeroes.html	Expected digits unchanged in round-trip of 2000-01-01T12:30:01
+input-setcustomvalidity.html	input setCustomValidity is correct
 input-type-button.html	default behavior
 input-type-button.html	empty value attribute
 input-type-button.html	immutable element has no activation behavior.
@@ -804,6 +829,8 @@ input-type-checkbox.html	default checkbox has no checkedness state
 input-type-checkbox.html	default/on: on getting, if the element has a value attribute, it must return that attribute's value; otherwise, it must return the string 'on'
 input-type-checkbox.html	on getting, if the element has a value attribute, it must return that attribute's value
 input-type-checkbox.html	on setting, a checkbox's indeterminate state must be set to the new value and returns the last value it was set to
+input-validationmessage.html	Forms
+input-validity.html	Forms
 input-value-dirty-flag.html	Input checked/defaultChecked dirty checkedness semantics
 input-value-dirty-flag.html	Input type defaults to 'text' on the property despite no attribute
 input-value-dirty-flag.html	Input value/defaultValue dirty value flag semantics
@@ -822,6 +849,7 @@ input-valueasnumber.html	valueAsNumber setter on type range (actual valueAsNumbe
 input-valueasnumber.html	valueAsNumber setter on type time (actual valueAsNumber: 86340000, expected value: 23:59)
 input-valueasnumber.html	valueAsNumber setter on type week (actual valueAsNumber: -20217600000, expected value: 1969-W20)
 input-width.html	Forms
+input-willvalidate.html	Forms
 maxlength.html	Assigning negative integer throws IndexSizeError
 maxlength.html	Assigning non-numeric to maxlength sets maxlength to 0
 maxlength.html	Negative maxlength is always -1
@@ -890,6 +918,11 @@ radio-click-events.html	checked radio input emits only click event on click
 radio-click-events.html	radio input emits click, input, change events in order after synthetic click
 radio-click-events.html	radio input synthetic click respects cancelling behaviour
 radio-disconnected-group-owner.html	Appending input radio input into a disconnect form should update the other radio inputs in the same radio group.
+radio-disconnected-group-owner.html	Disconnected document fragments can serve as radio group containers.
+radio-disconnected-group-owner.html	Disconnected radio buttons can serve as radio group containers.
+radio-disconnected-group-owner.html	Disconnected radio buttons should be contained by their tree root.
+radio-disconnected-group-owner.html	Non-HTML elements in disconnected trees can serve as radio group containers.
+radio-disconnected-group-owner.html	Removed elements are moved into separate radio groups.
 radio-form-owner.html	Adding checked radio button to a form updates radio buttons in same group
 radio-groupname-case.html	Among names like blah1, everything must be checkable at the same time
 radio-groupname-case.html	Among names like paSSfield-killroyß, everything must be checkable at the same time
@@ -899,6 +932,8 @@ radio-groupname-case.html	Among names like åωk, everything must be checkable a
 radio-groupname-case.html	Among names like ΣΣ, everything must be checkable at the same time
 radio-groupname-case.html	Among names like глупый, everything must be checkable at the same time
 radio-input-cancel.html	radio input cancel behavior reverts state
+radio-multiple-selected.html	Form should be valid since one of the radio elements is checked
+radio.html	Radio buttons in an orphan tree should make a group
 radio.html	Radio buttons in different groups (because they are not in the same tree) do not affect each other's checkedness
 radio.html	Radio buttons in different groups (because they have different form owners or no form owner) do not affect each other's checkedness
 radio.html	Radio buttons in different groups (because they have different name attribute values, or no name attribute) do not affect each other's checkedness
@@ -935,6 +970,7 @@ range.html	range type support on input element
 range.html	the value is set to max when a larger value than max attribute is given
 range.html	the value is set to min when a smaller value than min attribute is given
 required_attribute.html	required attribute support on input element
+reset.html	the element is barred from constraint validation
 search_input.html	placeholder attribute support on input element
 search_input.html	search type support on input element
 selection-weekmonth.html	Input element programmatic selection support

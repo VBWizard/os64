@@ -2584,6 +2584,48 @@ static void input_script_buttons(void) {
     check(status_says("belongs to no form"),"input: without scripts, a formless button says why it did nothing");
     probe_drop();
 }
+/* 0f's P4: a person's submission is validated by the page before its
+ * submit event: invalid at each invalid control, the first nobody handled
+ * reported (focused, its sentence on the status line), and no submit; a
+ * pattern is judged with the engine's; formnovalidate skips it; Enter is
+ * validated as a button is. A page whose scripts do not run is refused by
+ * the model, which says the control's sentence too. */
+static void input_validation(void) {
+    probe_page("<form action=/send><input id=mail name=m type=email required><input id=code name=c pattern=[0-9]+>"
+        "<button id=send>Send</button><button id=raw formnovalidate>Raw</button></form><p id=log>-</p>"
+        "<script>var log=[];function note(n){log.push(n);document.getElementById('log').textContent=log.join('|');}"
+        "document.forms[0].addEventListener('invalid',function(e){note('invalid '+e.target.name)},true);"
+        "document.forms[0].addEventListener('submit',function(e){note('submit');e.preventDefault()});</script>",true);
+    script_turn();
+    FormWidget *send=probe_field("send"),*mail=probe_field("mail"),*code=probe_field("code");
+    button_clicked(send->w,send); inputs_run();
+    check(probe_text_is("log","invalid m") && g.ui.focus==mail->w && status_says("Please fill out this field."),
+          "validation: an invalid form stops before submit, its control focused and its sentence said");
+    FormWidget *raw=probe_field("raw");
+    button_clicked(raw->w,raw); inputs_run();
+    check(probe_text_is("log","invalid m|submit"),"validation: formnovalidate skips it");
+    os64_ui_textfield_set(&g.ui,&mail->u.field,"a@b.example");
+    os64_ui_textfield_set(&g.ui,&code->u.field,"12x");
+    button_clicked(send->w,send); inputs_run();
+    check(probe_text_is("log","invalid m|submit|invalid c") && g.ui.focus==code->w &&
+          status_says("Please match the requested format."),
+          "validation: a pattern, which only the engine judges");
+    os64_ui_textfield_set(&g.ui,&code->u.field,"12");
+    os64_ui_set_focus(&g.ui,code->w); inputs_run();
+    input_key('\r');
+    check(probe_text_is("log","invalid m|submit|invalid c|submit"),"validation: Enter, valid, reaches submit");
+    os64_ui_textfield_set(&g.ui,&mail->u.field,"");
+    os64_ui_set_focus(&g.ui,code->w); inputs_run();
+    input_key('\r');
+    check(probe_text_is("log","invalid m|submit|invalid c|submit|invalid m"),"validation: Enter is validated too");
+    probe_drop();
+    probe_page("<form action=/send><input id=need name=n required><button id=go>Go</button></form>",false);
+    FormWidget *go=probe_field("go"),*need=probe_field("need");
+    button_clicked(go->w,go); inputs_run();
+    check(status_says("Please fill out this field.") && g.ui.focus==need->w,
+          "validation: without scripts the model refuses, and says the control's sentence");
+    probe_drop();
+}
 /* A one-line select is a dropdown (DROPDOWN.md); a select with a size is a
  * listbox. A click opens the list with the options' labels and the
  * disabled one refused; a pick of another option sets the model and fires
@@ -2698,6 +2740,7 @@ static void input_cases(void) {
     input_hover();
     input_forms();
     input_script_buttons();
+    input_validation();
     input_select_dropdown();
 }
 

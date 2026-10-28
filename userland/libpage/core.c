@@ -488,7 +488,7 @@ static void pressing(const os64_html_node_t *n, os64_page_element_t element,
 // are the same list in the standard today. Written down once so a change to
 // one does not silently leave the other holding an old list; that they
 // coincide is a fact about the list, not about the rules.
-static bool text_like_input(os64_page_input_t input)
+bool p_text_like_input(os64_page_input_t input)
 {
     switch (input) {
     case OS64_PAGE_INPUT_TEXT:
@@ -513,18 +513,19 @@ static bool text_like_input(os64_page_input_t input)
 // TYPE and nothing else, so `readonly` does not exempt one.
 static bool blocks_implicit(os64_page_element_t element, os64_page_input_t input)
 {
-    return element == OS64_PAGE_EL_INPUT && text_like_input(input);
+    return element == OS64_PAGE_EL_INPUT && p_text_like_input(input);
 }
 
 // §4.10.20's bars. `readonly` is the surprising one and the reason it is
 // worth writing down: it exempts a control from VALIDATION while leaving it
 // SUBMITTED, because readonly is about who may change a value and not about
-// whether the value counts. It bars only where it applies — a `readonly`
-// spelled on a tick or a list means nothing, so it cannot excuse one from a
-// rule either.
+// whether the value counts. It bars any input it is spelled on, even a type
+// it does not apply to (a tick, a colour, a file), as browsers do and WPT
+// holds them to; a select has no readonly, and its attribute bars nothing.
 static bool barred(const os64_page_control_t *c)
 {
-    return c->disabled || c->readonly || c->has_datalist_ancestor ||
+    bool readonly = c->readonly || (c->element == OS64_PAGE_EL_INPUT && p_has_attr(c->node, "readonly"));
+    return c->disabled || readonly || c->has_datalist_ancestor ||
            c->input == OS64_PAGE_INPUT_HIDDEN || c->resets ||
            c->input == OS64_PAGE_INPUT_BUTTON ||
            (c->element == OS64_PAGE_EL_BUTTON && !c->submits);
@@ -915,7 +916,7 @@ static void add_control(os64_page_t *page, const os64_html_node_t *n, os64_page_
     c->disabled = p_has_attr(n, "disabled") || fieldset_off;
     c->readonly = p_has_attr(n, "readonly") &&
         (c->element == OS64_PAGE_EL_TEXTAREA ||
-         (c->element == OS64_PAGE_EL_INPUT && text_like_input(c->input)));
+         (c->element == OS64_PAGE_EL_INPUT && p_text_like_input(c->input)));
     c->required = p_has_attr(n, "required");
     c->multiple = p_has_attr(n, "multiple");
     c->has_value_attribute = p_has_attr(n, "value");
@@ -1531,7 +1532,7 @@ static bool takes_text(const os64_page_control_t *c)
 {
     return c->element == OS64_PAGE_EL_TEXTAREA ||
            (c->element == OS64_PAGE_EL_INPUT &&
-            (text_like_input(c->input) || c->input == OS64_PAGE_INPUT_RANGE ||
+            (p_text_like_input(c->input) || c->input == OS64_PAGE_INPUT_RANGE ||
              c->input == OS64_PAGE_INPUT_COLOR));
 }
 

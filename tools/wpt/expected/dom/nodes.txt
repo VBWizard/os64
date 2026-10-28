@@ -2274,6 +2274,15 @@ Node-appendChild.html	Appending to a doctype
 Node-appendChild.html	Appending to a leaf node.
 Node-appendChild.html	Appending to a text node
 Node-appendChild.html	WebIDL tests
+Node-baseURI.html	For attributes in elements belonging to document fragments in document, baseURI should be document URL
+Node-baseURI.html	For attributes in elements belonging to document fragments, baseURI should be document URL
+Node-baseURI.html	For attributes in elements belonging to document, baseURI should be document URL
+Node-baseURI.html	For attributes in elements unassigned to document, baseURI should be document URL
+Node-baseURI.html	For attributes unassigned to element, baseURI should be document URL
+Node-baseURI.html	For elements belonging to document fragments in document, baseURI should be document URL
+Node-baseURI.html	For elements belonging to document fragments, baseURI should be document URL
+Node-baseURI.html	For elements belonging to document, baseURI should be document URL
+Node-baseURI.html	For elements unassigned to document, baseURI should be document URL
 Node-childNodes-cache-2.html	Node.childNodes caching bug with replaceChild
 Node-childNodes-cache.html	Node.childNodes caching bug
 Node-childNodes.html	Caching of Node.childNodes
@@ -2312,6 +2321,7 @@ Node-cloneNode.html	createElement(dd)
 Node-cloneNode.html	createElement(details)
 Node-cloneNode.html	createElement(dfn)
 Node-cloneNode.html	createElement(dt)
+Node-cloneNode.html	createElement(fieldset)
 Node-cloneNode.html	createElement(figcaption)
 Node-cloneNode.html	createElement(figure)
 Node-cloneNode.html	createElement(footer)
@@ -2324,6 +2334,8 @@ Node-cloneNode.html	createElement(img)
 Node-cloneNode.html	createElement(input)
 Node-cloneNode.html	createElement(isindex)
 Node-cloneNode.html	createElement(kbd)
+Node-cloneNode.html	createElement(label)
+Node-cloneNode.html	createElement(legend)
 Node-cloneNode.html	createElement(link)
 Node-cloneNode.html	createElement(main)
 Node-cloneNode.html	createElement(mark)
@@ -2334,6 +2346,7 @@ Node-cloneNode.html	createElement(noframes)
 Node-cloneNode.html	createElement(noscript)
 Node-cloneNode.html	createElement(optgroup)
 Node-cloneNode.html	createElement(option)
+Node-cloneNode.html	createElement(output)
 Node-cloneNode.html	createElement(rp)
 Node-cloneNode.html	createElement(rt)
 Node-cloneNode.html	createElement(ruby)
@@ -2345,6 +2358,7 @@ Node-cloneNode.html	createElement(select)
 Node-cloneNode.html	createElement(small)
 Node-cloneNode.html	createElement(spacer)
 Node-cloneNode.html	createElement(strike)
+Node-cloneNode.html	createElement(style)
 Node-cloneNode.html	createElement(sub)
 Node-cloneNode.html	createElement(summary)
 Node-cloneNode.html	createElement(sup)
