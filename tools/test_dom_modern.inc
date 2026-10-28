@@ -376,6 +376,8 @@ static void dom_modern_cases(void)
         "R.value='9';assert(R[1].checked,'set: none of that value changes nothing');"
         "assert(R.r===undefined&&R.namedItem===undefined,'a NodeList, with no names');"
         "assert(E.namedItem('r')===R&&F.r===R&&E.r===R,'one RadioNodeList a name');"
+        "assert(HTMLCollection.prototype.namedItem.call(E,'r')===R[0],"
+        "'HTMLCollection\\'s own namedItem, called on the controls, is the first');"
         /* the form is a legacy platform object: names over builtins, its own names, no redefinition */
         "var K=document.createElement('form');K.innerHTML='<input name=submit><input id=two><input name=submit id=x>';"
         "assert(K.submit instanceof RadioNodeList&&K.two.localName==='input','a control hides the method');"
