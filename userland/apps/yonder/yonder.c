@@ -8077,8 +8077,9 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
         at += 2;
     }
     // The record keeps what the line says of the script, without the
-    // layouts beside it: the same failure is one line however many times
-    // it happens, and the count says how many.
+    // layouts beside it, and with where it failed (yonder_scripts_failure):
+    // the same failure at the same place is one line however many times it
+    // happens, and the count says how many.
     char failure[OS64_JS_MESSAGE_CAP + 64];
     if (was_alive && !yonder_scripts_alive(host)) {
         if (out->status == OS64_JS_LIMIT && out->limit == OS64_JS_LIMIT_EXECUTION)
@@ -8092,7 +8093,9 @@ static void task_said(yonder_scripts_t *host, bool was_alive, const char *what,
         os64_strcopy(failure, sizeof(failure), out->message[0] ? out->message : "error");
     }
     os64_snprintf(line + at, sizeof(line) - at, "Script %s: %s", name, failure);
-    yonder_diag_failed(diag, key, failure);
+    char placed[OS64_JS_MESSAGE_CAP + OS64_DOM_URL_MAX + 128];
+    yonder_scripts_failure(host, address, failure, out->stack_trace, placed, sizeof(placed));
+    yonder_diag_failed(diag, key, placed);
     if (out->source_name[0] != '\0')
         yonder_diag_fact(diag, key, died);
     badge_follow();
