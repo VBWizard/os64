@@ -128,8 +128,11 @@ regressions cover growing/reversed radii at scales from 1e-12 to 1e12, both
 signs of discriminant cancellation, eccentric cone boundaries and genuinely
 uncovered or negative-radius roots. An odd-sized painted rectangle places the
 center exactly on a pixel sample and verifies that its interior remains opaque.
-The painter suite passes with ASan, UBSan and LeakSanitizer enabled. The frozen
-gallery delivery below retains its hardware-tested bytes.
+The painter and full adapter suites pass with ASan, UBSan and LeakSanitizer
+enabled, and freestanding Yonder builds. The [review browser report](../../svg-evidence/radial-review-results.json)
+records the corrected source and 74 expected radial outcomes. The merged
+CSS-wide transform suite also retains all 29 expected browser outcomes.
+The frozen gallery delivery below retains its hardware-tested bytes.
 
 ## Delivery checkpoint
 
