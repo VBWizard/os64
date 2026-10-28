@@ -194,9 +194,9 @@ static bool valid_for(os64_page_input_t input, const char *s)
 // ── A value as a number (HTML's "convert a string to a number") ─────────
 
 // The year itself, not its residue: four digits or more, and none past
-// 275760, the year a Date's range ends in, below the one (about 285616)
-// where a double stops holding every millisecond, which a local date and
-// time's step needs. A later year the value sanitizer keeps does not
+// 275760, the year a Date's range ends in, safely below the one (past
+// 2^53 ms, in the 287,000s) where a double stops holding every
+// millisecond, which a local date and time's step needs. A later year the value sanitizer keeps does not
 // convert, and min, max and step say nothing of it (DEBTS.md § libpage).
 static bool whole_year(const char **at, int32_t *year)
 {
@@ -246,8 +246,10 @@ static bool whole_date(const char **at, int32_t *year, int32_t *month, int32_t *
     return true;
 }
 
-// Milliseconds since midnight: hh:mm, then :ss and up to three digits of
-// its fraction.
+// Milliseconds since midnight: hh:mm, then :ss and its fraction, of any
+// length as HTML's time parser reads one (the first three digits kept): a
+// value is sanitized to three or fewer, but a min, a max or a value
+// attribute may spell more.
 static bool whole_time(const char **at, double *ms)
 {
     const char *s = *at;
@@ -264,6 +266,8 @@ static bool whole_time(const char **at, double *ms)
             if (!digits(&s, 1, 3, &fraction))
                 return false;
             places = (int32_t)(s - start);
+            while (digit(*s))
+                s++;
         }
     }
     while (places++ < 3)

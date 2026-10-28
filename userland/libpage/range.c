@@ -1,5 +1,7 @@
 // Exact decimal grid arithmetic: a range's sanitized value, and every type's
-// stepMismatch (p_step_aligned). Shortest binary64 strings
+// stepMismatch (p_step_aligned, whose scale of at most 604800000 adds nine
+// digits only to the date and time types, whose values are bounded
+// integers of milliseconds and lie far inside the capacity). Shortest binary64 strings
 // need at most 17 significant digits and exponents from -324 through 308.
 // Aligning their coefficients, including a midpoint, fits in 80 base-1e9
 // limbs. Storage and division work are bounded independently of input length.

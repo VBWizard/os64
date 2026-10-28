@@ -1021,6 +1021,12 @@ static void state_validity_range(void)
         /* a year past a Date's does not convert (DEBTS.md § libpage) */
         {"<input type=date max=2030-12-31>", "300000-01-01", 0, NULL},
         {"<input type=range min=150 max=abc>", NULL, 0, NULL},
+        /* a step finer than a double resolves at the value judges nothing */
+        {"<input type=range min=0 max=1e17 step=0.3>", NULL, 0, NULL},
+        /* a range pinned at its min is snapped to no step, nor judged by one */
+        {"<input type=range max=-10 value=0.5>", NULL, 0, NULL},
+        /* a bound's fraction of any length, its first three digits kept */
+        {"<input type=time min=09:00:00.0000>", "08:00", OS64_PAGE_VALIDITY_UNDERFLOW, NULL},
         /* a number's bound said as the number it was read as */
         {"<input type=number min=5px>", "1", OS64_PAGE_VALIDITY_UNDERFLOW, "Value must be greater than or equal to 5."},
         /* a date whose max is below its min does not wrap: one bound is said */
