@@ -99,8 +99,13 @@ cohort. Screenshots show the [initial gardens](../../svg-evidence/yonder-encore-
 The gallery compares two full-size gardens, two small shared views and a
 standalone postcard. Changing the flowers affects the shared views; the postcard
 retains its own apricot flowers. Dark pages change its sky through its private
-media query. Hardware acceptance and corpus-led latency/fidelity measurements
-are separate gates; this slice does not complete 6c or introduce a frame loop.
+media query. Chris accepted the frozen `a947cc19` delivery on the P5 on
+2026-10-28: all three shared views respond to the button, the independent
+postcard retains its flowers, its sky becomes light when dark pages are
+switched off, and zoom passes from 25% through 400%.
+
+Corpus-led latency/fidelity measurements remain a separate gate; this slice
+does not complete 6c or introduce a frame loop.
 
 Reproduce the host checks with:
 

@@ -724,5 +724,12 @@
     "root_fsck": true,
     "home_fsck": true
   },
-  "P5_acceptance": "pending"
+  "P5_acceptance": {
+    "date": "2026-10-28",
+    "tested_commit": "a947cc19",
+    "result": "passed",
+    "shared_gardens": "All three shared views respond to the flower toggle; the independent postcard retains its flowers.",
+    "image_media": "The postcard sky becomes light when dark pages are switched off.",
+    "zoom": "25% through 400% passed."
+  }
 }
