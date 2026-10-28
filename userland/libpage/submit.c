@@ -95,7 +95,8 @@ bool os64_page_submitter(const os64_page_t *page, os64_page_what_t what, int32_t
     const os64_page_control_t *c = os64_page_control(page, what.index);
     os64_page_reason_t reason = OS64_PAGE_REASON_OK;
     *submitter = -1;
-    return what.how != OS64_PAGE_ACTIVATE_FORM && c != NULL && p_submitter(page, c->form, what, submitter, &reason);
+    return (what.how == OS64_PAGE_ACTIVATE_CONTROL || what.how == OS64_PAGE_ACTIVATE_IMPLICIT) && c != NULL &&
+        p_submitter(page, c->form, what, submitter, &reason);
 }
 
 void p_effective(const os64_page_t *page, int32_t form, int32_t submitter,
@@ -276,7 +277,8 @@ static bool email_valid(const char *s, size_t len)
     size_t at = 0;
     while (at < len && s[at] != '@') {
         char c = s[at];
-        if (!ascii_alnum(c) && os64_strchr(".!#$%&'*+/=?^_`{|}~-", c) == NULL)
+        // os64_strchr finds a NUL as the set's own terminator.
+        if (c == '\0' || (!ascii_alnum(c) && os64_strchr(".!#$%&'*+/=?^_`{|}~-", c) == NULL))
             return false;
         at++;
     }
@@ -455,9 +457,11 @@ bool p_validate(const os64_page_t *page, int32_t form, int32_t *control)
         if (c->form != form || c->barred_from_validation)
             continue;
         bool radio_missing = c->input == OS64_PAGE_INPUT_RADIO && !radio_group_ok(page, i);
-        // No pattern is judged here: libpage has no regular expressions,
-        // and a page whose scripts run judged it with the engine's before
-        // the submission reached the model (DEBTS.md § libpage).
+        // No pattern is judged here: libpage has no regular expressions. A
+        // submission the page's scripts validated does not reach this
+        // (os64_page_activate_validated); one they did not (scripts off,
+        // the Modern Web switch off, no runtime yet, an image button) is
+        // judged without its pattern (DEBTS.md § libpage).
         if (judge(page->state, c->node, c->element, c->input, c->value, c->value_len, radio_missing, NULL,
                   NULL) != 0) {
             *control = i;
@@ -520,6 +524,20 @@ int64_t os64_page_node_validity(os64_page_state_t *state, const os64_html_node_t
 // order ValidityState lists them, or its custom message; "" for none. The
 // sentences are plain ASCII, as a status line prints them; a custom
 // message is the page's own UTF-8.
+int64_t os64_page_node_custom_validity(os64_page_state_t *state, const os64_html_node_t *node, const char **message,
+                                       size_t *len)
+{
+    os64_page_element_t element;
+    os64_page_input_t input;
+    bool custom_only;
+    if (message == NULL || len == NULL || !validity_kind(state, node, &element, &input, &custom_only))
+        return -OS64_PAGE_REASON_WRONG_KIND;
+    *message = p_node_custom(state, node, len);
+    if (*message == NULL)
+        *message = "";
+    return 0;
+}
+
 int64_t os64_page_node_validation_message(os64_page_state_t *state, const os64_html_node_t *node, uint32_t flags,
                                           char *out, size_t cap)
 {
@@ -532,7 +550,11 @@ int64_t os64_page_node_validation_message(os64_page_state_t *state, const os64_h
     size_t custom_len = 0;
     const char *custom = p_node_custom(state, node, &custom_len);
     if ((flags & OS64_PAGE_VALIDITY_CUSTOM) && custom != NULL) {
+        // Cut, when it must be, between characters: a continuation byte
+        // starts none.
         size_t n = custom_len < cap - 1 ? custom_len : cap - 1;
+        while (n < custom_len && n > 0 && ((unsigned char)custom[n] & 0xc0) == 0x80)
+            n--;
         os64_memcpy(out, custom, n);
         out[n] = '\0';
         return 0;

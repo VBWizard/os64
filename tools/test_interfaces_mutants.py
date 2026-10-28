@@ -58,6 +58,7 @@ RESOLVE_C = 'userland/libpage/resolve.c'
 SHEETS_C = 'userland/libdom/sheets.c'
 VALIDITY_C = 'userland/libdom/validity.c'
 SUBMIT_C = 'userland/libpage/submit.c'
+ACTIVATE_C = 'userland/libpage/activate.c'
 UI_CONTROLS_C = 'userland/libos64/ui_controls.c'
 DOM = 'tools/test_dom_host.sh'
 PAGE = 'tools/test_libpage_host.sh'
@@ -552,9 +553,26 @@ mutants = [
      '                  NULL) & (OS64_PAGE_VALIDITY_MISSING | OS64_PAGE_VALIDITY_TOO_LONG)) {', (PAGE,)),
     ('message-ignores-custom', SUBMIT_C, '    if ((flags & OS64_PAGE_VALIDITY_CUSTOM) && custom != NULL) {',
      '    if (false && custom != NULL) {', (PAGE, DOM)),
-    ('form-has-a-submitter', SUBMIT_C,
-     '    return what.how != OS64_PAGE_ACTIVATE_FORM && c != NULL && p_submitter(',
-     '    return c != NULL && p_submitter(', (PAGE,)),
+    ('any-ask-has-a-submitter', SUBMIT_C,
+     '    return (what.how == OS64_PAGE_ACTIVATE_CONTROL || what.how == OS64_PAGE_ACTIVATE_IMPLICIT) && c != NULL &&',
+     '    return c != NULL &&', (PAGE,)),
+    ('email-takes-a-nul', SUBMIT_C, "        if (c == '\\0' || (!ascii_alnum(c)", '        if (false || (!ascii_alnum(c)',
+     (PAGE, DOM)),
+    ('custom-sentence-cut-in-a-character', SUBMIT_C,
+     "        while (n < custom_len && n > 0 && ((unsigned char)custom[n] & 0xc0) == 0x80)\n            n--;\n", '',
+     (PAGE,)),
+    ('custom-message-through-a-buffer', VALIDITY_C, '        if (flags & OS64_PAGE_VALIDITY_CUSTOM) {\n            /*',
+     '        if (false) {\n            /*', (DOM,)),
+    ('validated-submission-judged-again', ACTIVATE_C, '    if (what.how == OS64_PAGE_ACTIVATE_FORM || validated)',
+     '    if (what.how == OS64_PAGE_ACTIVATE_FORM || (validated && false))', (PAGE,)),
+    ('model-validates-twice', YONDER_C,
+     '    os64_page_verdict_t verdict = validated ? os64_page_activate_validated(',
+     '    os64_page_verdict_t verdict = validated && false ? os64_page_activate_validated(', (SCRIPTS,)),
+    ('submission-reentered', WINDOW_C, '        if (at->node == form) return 1;',
+     '        if (at->node == form && false) return 1;', (DOM,)),
+    ('host-submission-reentered', VALIDITY_C,
+     '    dom->submitting = &self;\n    int result = d_form_validate(dom, ctx, form, true);',
+     '    (void)self;\n    int result = d_form_validate(dom, ctx, form, true);', (SCRIPTS,)),
     # P4a. the binding: the pattern, ValidityState, the members, invalid
     ('pattern-never-mismatches', VALIDITY_C, '        if (!JS_IsException(found)) result = JS_IsNull(found) ? 0 : 1;',
      '        if (!JS_IsException(found)) result = 1;', (DOM, SCRIPTS)),
@@ -587,8 +605,10 @@ mutants = [
      '    if (false && report_first && unhandled != NULL &&', (SCRIPTS,)),
     ('host-ignores-formnovalidate', VALIDITY_C, '    if (!dom->options.modern || skip) return OS64_JS_OK;',
      '    if (!dom->options.modern || (skip && false)) return OS64_JS_OK;', (SCRIPTS,)),
-    ('submit-unvalidated', WINDOW_C, '    if (event && !novalidate) {', '    if (false && !novalidate) {', (DOM,)),
-    ('submit-method-validates', WINDOW_C, '    if (event && !novalidate) {', '    if (!novalidate) {', (DOM,)),
+    ('submit-unvalidated', WINDOW_C, '    int valid = novalidate ? 1 : d_form_validate(dom, ctx, form, true);',
+     '    int valid = novalidate || true ? 1 : d_form_validate(dom, ctx, form, true);', (DOM,)),
+    ('submit-method-validates', WINDOW_C, '    if (!event) {\n        d_navigate(',
+     '    if (!event && d_form_validate(dom, ctx, form, true) > 0) {\n        d_navigate(', (DOM,)),
     ('formnovalidate-ignored', WINDOW_C,
      '    bool novalidate = (submitter != NULL && os64_html_attr(submitter, "formnovalidate") != NULL) ||',
      '    bool novalidate = false ||', (DOM,)),
@@ -596,10 +616,13 @@ mutants = [
      (DOM,)),
     # P4a. yonder: a person's submission validated, the report, the refusal's sentence
     ('person-submit-unvalidated', YONDER_C,
-     '                if (!page_validates(control, OS64_PAGE_ACTIVATE_CONTROL))\n                    break;',
-     '                if (false)\n                    break;', (SCRIPTS,)),
-    ('enter-unvalidated', YONDER_C, '            if (!page_validates(control, OS64_PAGE_ACTIVATE_IMPLICIT))\n                break;',
-     '            if (false)\n                break;', (SCRIPTS,)),
+     '                if (!page_validates(control, OS64_PAGE_ACTIVATE_CONTROL, &validated))\n                    break;',
+     '                if (false && !page_validates(control, OS64_PAGE_ACTIVATE_CONTROL, &validated))\n'
+     '                    break;', (SCRIPTS,)),
+    ('enter-unvalidated', YONDER_C,
+     '            if (!page_validates(control, OS64_PAGE_ACTIVATE_IMPLICIT, &validated))\n                break;',
+     '            if (false && !page_validates(control, OS64_PAGE_ACTIVATE_IMPLICIT, &validated))\n                break;',
+     (SCRIPTS,)),
     ('report-unfocused', YONDER_C,
      '                if (fw != NULL && !fw->w->hidden)\n                    os64_ui_set_focus(&g.ui, fw->w);\n'
      '                if (yonder_scripts_report_message',

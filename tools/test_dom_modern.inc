@@ -460,6 +460,7 @@ static void dom_modern_cases(void)
         /* the type mismatches */
         "var m=el('input',{type:'email'});m.value='a@b.c';assert(m.validity.valid,'an address');"
         "m.value='abc';assert(m.validity.typeMismatch,'not an address');"
+        "m.value='a\\0b@c.d';assert(m.validity.typeMismatch,'a NUL is no address character');"
         "m.value='a@b.c,d@e.f';assert(m.validity.typeMismatch,'two need multiple');"
         "m.multiple=true;assert(m.validity.valid,'a list');m.value='a@b.c;d@e.f';"
         "assert(m.validity.typeMismatch,'not a list');m.value='a@-b.c';assert(m.validity.typeMismatch,'a label');"
@@ -488,6 +489,11 @@ static void dom_modern_cases(void)
         "c.disabled=true;assert(c.validity.customError&&c.validationMessage===''&&!c.willValidate&&c.checkValidity(),"
         "'disabled: still its flag, but it counts for nothing');"
         "c.disabled=false;c.setCustomValidity('');assert(c.validity.valid,'cleared');"
+        "var long='\\u00e9'.repeat(300);c.setCustomValidity(long);"
+        "assert(c.validationMessage===long,'a long message whole');"
+        "c.setCustomValidity('a\\0b');"
+        "assert(c.validationMessage==='a\\ufffdb','a NUL, which the binding\\'s text never holds, is U+FFFD');"
+        "c.setCustomValidity('');"
         "c.setCustomValidity('Nope');assert(!c.cloneNode().validity.customError,'a clone does not copy it');"
         "var fs=el('fieldset');fs.setCustomValidity('f');"
         "assert(fs.validity.customError&&!fs.willValidate&&fs.checkValidity()&&fs.validationMessage==='',"
@@ -545,6 +551,10 @@ static void dom_modern_cases(void)
         /* requestSubmit: invalid stops the submission before submit */
         "var sent=0;F.addEventListener('submit',function(e){sent++;e.preventDefault()});"
         "F.requestSubmit();assert(sent===0,'invalid: no submit event');"
+        /* a submission an invalid listener asks of its own form does nothing */
+        "var nested=0;var again=function(){nested++;F.requestSubmit()};F.addEventListener('invalid',again,true);"
+        "order=[];F.requestSubmit();F.removeEventListener('invalid',again,true);"
+        "assert(nested===2&&order.length===3&&sent===0,'no submission inside its own validation');"
         "F.noValidate=true;F.requestSubmit();assert(sent===1,'novalidate: submitted');F.noValidate=false;"
         "var fb=el('button',{formnovalidate:''});F.appendChild(fb);F.requestSubmit(fb);"
         "assert(sent===2,'formnovalidate: submitted');"

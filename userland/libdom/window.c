@@ -472,14 +472,23 @@ static int submit(os64_dom_t *dom, JSContext *ctx, const os64_html_node_t *form,
                   const os64_html_node_t *submitter, bool event)
 {
     if (!d_window_document(dom, form) || !d_connected(form)) return 1;
+    if (!event) {
+        d_navigate(dom, OS64_DOM_NAVIGATE_SUBMIT, form, submitter, NULL, 0);
+        return 1;
+    }
+    /* HTML's firing-submission-events flag: a submission asked from inside
+     * this form's own invalid or submit listener does nothing, rather than
+     * validating and firing again until the engine's stack gives out. */
+    for (const struct DClicking *at = dom->submitting; at != NULL; at = at->next)
+        if (at->node == form) return 1;
+    struct DClicking self = {form, dom->submitting};
+    dom->submitting = &self;
     bool novalidate = (submitter != NULL && os64_html_attr(submitter, "formnovalidate") != NULL) ||
         os64_html_attr(form, "novalidate") != NULL;
-    if (event && !novalidate) {
-        int valid = d_form_validate(dom, ctx, form, true);
-        if (valid <= 0) return valid < 0 ? -1 : 1;
-    }
-    int result = event ? fire(dom, ctx, form, "submit", true, true) : 1;
-    if (result > 0) d_navigate(dom, OS64_DOM_NAVIGATE_SUBMIT, form, submitter, NULL, 0);
+    int valid = novalidate ? 1 : d_form_validate(dom, ctx, form, true);
+    int result = valid > 0 ? fire(dom, ctx, form, "submit", true, true) : valid < 0 ? -1 : 1;
+    dom->submitting = self.next;
+    if (valid > 0 && result > 0) d_navigate(dom, OS64_DOM_NAVIGATE_SUBMIT, form, submitter, NULL, 0);
     return result;
 }
 
@@ -538,11 +547,6 @@ static int click_activate(os64_dom_t *dom, JSContext *ctx, const os64_html_node_
     if ((button || input) && type_is(node, "reset", false)) return reset(dom, ctx, form);
     return 1;
 }
-
-struct DClicking {
-    const os64_html_node_t *node;
-    const struct DClicking *next;
-};
 
 /* HTML's click-in-progress flag: an onclick that clicks its own element
  * returns at once instead of recursing until the engine's stack gives out.

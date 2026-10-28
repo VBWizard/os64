@@ -672,9 +672,10 @@ int64_t os64_page_node_will_validate(os64_page_state_t *state, const os64_html_n
 int64_t os64_page_node_validity(os64_page_state_t *state, const os64_html_node_t *node, os64_page_pattern_t matcher,
                                 void *opaque, uint32_t *flags);
 // The sentence for `flags`' first flag in ValidityState's order, or the
-// custom message when CUSTOM is among them, into `out` (truncated to
-// `cap`, terminated); "" for no flags. Plain ASCII apart from a custom
-// message, which is the page's own UTF-8.
+// custom message when CUSTOM is among them, into `out` (cut to `cap`
+// between characters, terminated); "" for no flags. Plain ASCII apart from
+// a custom message, which is the page's own UTF-8 and may hold a NUL that
+// ends it here: os64_page_node_custom_validity has its whole bytes.
 int64_t os64_page_node_validation_message(os64_page_state_t *state, const os64_html_node_t *node, uint32_t flags,
                                           char *out, size_t cap);
 // setCustomValidity: the node's custom message, "" for none, kept until
@@ -683,6 +684,11 @@ int64_t os64_page_node_validation_message(os64_page_state_t *state, const os64_h
 // NO_MEMORY when it cannot be kept, and then the old one stays.
 int64_t os64_page_node_set_custom_validity(os64_page_state_t *state, const os64_html_node_t *node,
                                            const char *utf8, size_t len);
+// The custom message as it was set, all `len` bytes ("" and 0 for none),
+// borrowed until it is set again or the state is freed. WRONG_KIND as
+// will_validate.
+int64_t os64_page_node_custom_validity(os64_page_state_t *state, const os64_html_node_t *node, const char **message,
+                                       size_t *len);
 // A text control's selection (HTML § 4.10.6), by node, in UTF-16 code
 // units of its value: collapsed at 0 until something moves it; at the
 // value's end once a value that differs is set; else where a script, or
@@ -796,11 +802,18 @@ typedef struct {
 // REFUSED.
 os64_page_verdict_t os64_page_activate(const os64_page_t *page, os64_page_what_t what,
                                        os64_page_request_t *out);
+// The same for a submission the page's scripts validated before its submit
+// event (os64_dom_form_validate, or the binding's own submit): HTML
+// validates once, there, so what a submit listener changes after it cannot
+// refuse the submission, and the model does not validate it again.
+os64_page_verdict_t os64_page_activate_validated(const os64_page_t *page, os64_page_what_t what,
+                                                 os64_page_request_t *out);
 void os64_page_request_free(os64_page_request_t *request);
 // The submitter os64_page_activate would take for a button pressed or Enter
 // in a field (its own first question, asked alone): the control's index, -1
 // when the form submits itself. False when the ask would submit nothing,
-// and for OS64_PAGE_ACTIVATE_FORM, which has no submitter. A host that
+// and for any ask but those two (a form submitting itself has no
+// submitter; a link or a refresh is no submission). A host that
 // validates a person's submission before its submit event asks it, so the
 // validation knows the submission is happening and whose it is.
 bool os64_page_submitter(const os64_page_t *page, os64_page_what_t what, int32_t *submitter);

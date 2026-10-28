@@ -16,6 +16,13 @@ typedef struct DValue DValue;
 typedef struct DQuery DQuery;
 typedef struct DListener DListener;
 typedef struct DTimer DTimer;
+/* A link in a chain of nodes on the C stack: the elements being clicked
+ * (window.c's click) and the forms being submitted (window.c's submit,
+ * validity.c's os64_dom_form_validate). */
+struct DClicking {
+    const os64_html_node_t *node;
+    const struct DClicking *next;
+};
 typedef struct DScript DScript;
 typedef struct DRequest DRequest;
 typedef struct DClone DClone;
@@ -294,8 +301,9 @@ struct os64_dom {
     size_t timer_count;
     uint32_t timer_id, timer_nesting;
     /* HTML's click-in-progress flags, one link per element.click() on the
-     * C stack (window.c). */
-    const struct DClicking *clicking;
+     * C stack (window.c); and a form's firing-submission-events flags, one
+     * link per form whose validation or submit event is running. */
+    const struct DClicking *clicking, *submitting;
     DScript *scripts[64];
     char *url;
     DNavigation navigation;

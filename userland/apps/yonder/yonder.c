@@ -7264,13 +7264,16 @@ static void forms_flush(void)
 // message on the status line. `kind` is how the
 // reply comes: a new way, or a refresh when a script sends the form before
 // its page has completely loaded (navigation_perform). `by` is whether a
-// person sent it or the page's script did.
-static void form_send_as(int32_t control, os64_page_activation_t how, NavKind kind, way_initiator_t by)
+// person sent it or the page's script did. `validated`: the page's scripts
+// validated it before its submit event, and the model does not again.
+static void form_send_as(int32_t control, os64_page_activation_t how, NavKind kind, way_initiator_t by,
+                         bool validated)
 {
     forms_flush();
     os64_page_what_t what = {how, control, 0, 0};
     os64_page_request_t request;
-    os64_page_verdict_t verdict = os64_page_activate(page_model(&g.page), what, &request);
+    os64_page_verdict_t verdict = validated ? os64_page_activate_validated(page_model(&g.page), what, &request)
+                                            : os64_page_activate(page_model(&g.page), what, &request);
     if (verdict == OS64_PAGE_NAVIGATE) {
         g.chain = 0;
         request_navigate(&request, kind, WAY_ASK_SEND, g.page.way.url, by, g.page.diag);
@@ -7312,7 +7315,7 @@ static void form_send_as(int32_t control, os64_page_activation_t how, NavKind ki
 // A form a person sent: a button pressed, Enter in a field.
 static void form_send(int32_t control, os64_page_activation_t how)
 {
-    form_send_as(control, how, NAV_GO, WAY_BY_PERSON);
+    form_send_as(control, how, NAV_GO, WAY_BY_PERSON, false);
 }
 
 // The byte offset in a password's value of its `chars`th character, the
@@ -8614,11 +8617,14 @@ static void navigation_perform(const yonder_scripts_t *host, const os64_dom_navi
             NavKind kind = page_navigation_replaces(&g.page) ? NAV_REFRESH : NAV_GO;
             int32_t control = ask->submitter != NULL
                 ? os64_page_control_for(page_model(&g.page), ask->submitter) : -1;
+            // With the Modern Web switch on, the binding validated a
+            // submitter's submission before its submit event (libdom's
+            // window.c), and the model must not judge it again.
             if (control >= 0)
-                form_send_as(control, OS64_PAGE_ACTIVATE_CONTROL, kind, WAY_BY_PAGE);
+                form_send_as(control, OS64_PAGE_ACTIVATE_CONTROL, kind, WAY_BY_PAGE, g.page.modern);
             else
                 form_send_as(os64_page_form_for(page_model(&g.page), ask->node), OS64_PAGE_ACTIVATE_FORM, kind,
-                             WAY_BY_PAGE);
+                             WAY_BY_PAGE, false);
         }
         return;
     case OS64_DOM_NAVIGATE_NONE:
@@ -9851,11 +9857,14 @@ static const os64_html_node_t *control_form(int32_t control)
 // 4.10.21.3): false when it is invalid, and then the first problem whose
 // invalid event nobody cancelled is reported.
 // Only a submission that will happen is validated, by the submitter libpage
-// would take; without scripts the model's validation in form_send is the
-// whole of it.
-static bool page_validates(int32_t control, os64_page_activation_t how)
+// would take. `*validated` says the scripts' task did it and finished, so
+// the model must not judge the submission again after its submit event;
+// without scripts, or with a task that failed, the model's validation in
+// form_send is the whole of it.
+static bool page_validates(int32_t control, os64_page_activation_t how, bool *validated)
 {
     yonder_scripts_t *host = g.page.scripts;
+    *validated = false;
     if (!scripts_live())
         return true;
     forms_flush();
@@ -9871,6 +9880,7 @@ static bool page_validates(int32_t control, os64_page_activation_t how)
     bool valid = true;
     int64_t began = task_begin(host);
     if (yonder_scripts_form_validate(host, form, by != NULL ? by->node : NULL, &valid, &out)) {
+        *validated = out.status == OS64_JS_OK;
         task_said(host, true, "invalid", &out, began);
         if (script_rebuild())
             asks_perform(host, doc, true);
@@ -9989,8 +9999,9 @@ static void inputs_run(void)
             const char *type = resets ? "reset" : "submit";
             if (!resets && !submits)
                 break;
+            bool validated = false;
             if (submits) {
-                if (!page_validates(control, OS64_PAGE_ACTIVATE_CONTROL))
+                if (!page_validates(control, OS64_PAGE_ACTIVATE_CONTROL, &validated))
                     break;
                 // The invalid events' listeners may have rebuilt the page.
                 control = os64_page_control_for(page_model(&g.page), in.node);
@@ -10006,18 +10017,21 @@ static void inputs_run(void)
             if (c != NULL && resets)
                 form_reset(c->form);
             else if (c != NULL)
-                form_send(control, OS64_PAGE_ACTIVATE_CONTROL);
+                form_send_as(control, OS64_PAGE_ACTIVATE_CONTROL, NAV_GO, WAY_BY_PERSON, validated);
             break;
         }
-        case IN_IMPLICIT:
+        case IN_IMPLICIT: {
             change_if_edited(in.node);
             control = os64_page_control_for(page_model(&g.page), in.node);
-            if (!page_validates(control, OS64_PAGE_ACTIVATE_IMPLICIT))
+            bool validated = false;
+            if (!page_validates(control, OS64_PAGE_ACTIVATE_IMPLICIT, &validated))
                 break;
             control = os64_page_control_for(page_model(&g.page), in.node);
             if (!plain_event("submit", true, true, control_form(control)))
-                form_send(os64_page_control_for(page_model(&g.page), in.node), OS64_PAGE_ACTIVATE_IMPLICIT);
+                form_send_as(os64_page_control_for(page_model(&g.page), in.node), OS64_PAGE_ACTIVATE_IMPLICIT, NAV_GO,
+                             WAY_BY_PERSON, validated);
             break;
+        }
         case IN_CHECK: {
             os64_dom_event_t ev = mouse_event("click", true, &in);
             if (page_event(&ev, in.node)) {

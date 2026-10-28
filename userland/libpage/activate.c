@@ -268,7 +268,7 @@ static char *mail_plain(const char *s, size_t len, size_t *out_len)
     return out;
 }
 
-static os64_page_verdict_t submit(const os64_page_t *page, os64_page_what_t what,
+static os64_page_verdict_t submit(const os64_page_t *page, os64_page_what_t what, bool validated,
                                   os64_page_request_t *out)
 {
     int32_t form = -1, submitter = -1;
@@ -290,7 +290,8 @@ static os64_page_verdict_t submit(const os64_page_t *page, os64_page_what_t what
     bool novalidate = false;
     p_effective(page, form, submitter, &action, &out->method, &out->enctype, &novalidate);
     // A form a script sends itself is not validated: the script chose to.
-    if (what.how == OS64_PAGE_ACTIVATE_FORM)
+    // Nor is one the page's scripts validated before its submit event.
+    if (what.how == OS64_PAGE_ACTIVATE_FORM || validated)
         novalidate = true;
 
     // VALIDATION IS ACTED ON BEFORE THE METHOD IS, which is the standard's
@@ -462,8 +463,8 @@ static os64_page_verdict_t submit(const os64_page_t *page, os64_page_what_t what
     return OS64_PAGE_NAVIGATE;
 }
 
-os64_page_verdict_t os64_page_activate(const os64_page_t *page, os64_page_what_t what,
-                                       os64_page_request_t *out)
+static os64_page_verdict_t activate(const os64_page_t *page, os64_page_what_t what, bool validated,
+                                    os64_page_request_t *out)
 {
     if (out == NULL)
         return OS64_PAGE_REFUSED;
@@ -479,5 +480,17 @@ os64_page_verdict_t os64_page_activate(const os64_page_t *page, os64_page_what_t
     // A partial model cannot establish a complete entry list or submitter.
     if (page->incomplete)
         return refuse(out, OS64_PAGE_REASON_NO_MEMORY);
-    return submit(page, what, out);
+    return submit(page, what, validated, out);
+}
+
+os64_page_verdict_t os64_page_activate(const os64_page_t *page, os64_page_what_t what,
+                                       os64_page_request_t *out)
+{
+    return activate(page, what, false, out);
+}
+
+os64_page_verdict_t os64_page_activate_validated(const os64_page_t *page, os64_page_what_t what,
+                                                 os64_page_request_t *out)
+{
+    return activate(page, what, true, out);
 }

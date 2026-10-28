@@ -2619,6 +2619,28 @@ static void input_validation(void) {
     input_key('\r');
     check(probe_text_is("log","invalid m|submit|invalid c|submit|invalid m"),"validation: Enter is validated too");
     probe_drop();
+    /* Validated once, before submit: a submit listener that empties a
+     * required field (the hash-then-clear login) is still sent. */
+    probe_page("<form action=/send><input id=pw name=p required><button id=go>Go</button></form>"
+        "<script>document.forms[0].addEventListener('submit',function(){document.getElementById('pw').value=''});"
+        "</script>",true);
+    script_turn();
+    FormWidget *pw=probe_field("pw"),*go_once=probe_field("go");
+    os64_ui_textfield_set(&g.ui,&pw->u.field,"secret");
+    button_clicked(go_once->w,go_once); inputs_run();
+    check(status_says("background workers") && !status_says("Please fill out this field."),
+          "validation: once, before submit; what a submit listener changes cannot refuse it");
+    probe_drop();
+    /* A submission an invalid listener asks of the form a person is
+     * submitting does nothing: the form is already being submitted. */
+    probe_page("<form action=/send><input name=q required><button id=go>Go</button></form><p id=log>-</p>"
+        "<script>var n=0;document.forms[0].addEventListener('invalid',function(){n++;"
+        "document.getElementById('log').textContent='invalid '+n;document.forms[0].requestSubmit()},true);</script>",true);
+    script_turn();
+    FormWidget *again=probe_field("go");
+    button_clicked(again->w,again); inputs_run();
+    check(probe_text_is("log","invalid 1"),"validation: no submission inside a person's submission's validation");
+    probe_drop();
     probe_page("<form action=/send><input id=need name=n required><button id=go>Go</button></form>",false);
     FormWidget *go=probe_field("go"),*need=probe_field("need");
     button_clicked(go->w,go); inputs_run();

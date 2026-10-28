@@ -340,9 +340,12 @@ placeholder, an unticked box), the typed values (`email` and its lists,
 `url`), `maxlength`/`minlength` on a person's dirty value, a person's
 text a number or date type could not hold, and a custom message.
 `pattern` is the engine's regular expression, so the caller matches it;
-the model's own submission has none, and judges no pattern (a page whose
-script runs judged it before the submission was asked). **Booked**:
-`min`/`max`/`step` (DEBTS.md § libpage).
+the model's own submission has none, and judges no pattern. A
+submission the page's scripts already validated, before its submit event,
+says so (`os64_page_activate_validated`) and is not validated again, as
+HTML validates once; any other (scripts off, the Modern Web switch off,
+no runtime yet, an image button) is validated here without its pattern.
+**Booked**: `min`/`max`/`step`, and that pattern (DEBTS.md § libpage).
 
 **K. The navigation a document declares** (the `refresh` pragma directive
 and its shared declarative refresh steps). One door:

@@ -902,6 +902,30 @@ static void state_validity(void)
     state_expect("validity: cleared, it is sent (the pattern unjudged)",
                  os64_page_activate(page, what, &req) == OS64_PAGE_NAVIGATE);
     os64_page_request_free(&req);
+    os64_page_set_text(page, 0, "", 0);
+    state_expect("validity: invalid again", os64_page_activate(page, what, &req) == OS64_PAGE_NOTHING);
+    os64_page_request_free(&req);
+    state_expect("validity: a submission the scripts validated is not judged again",
+                 os64_page_activate_validated(page, what, &req) == OS64_PAGE_NAVIGATE);
+    os64_page_request_free(&req);
+    /* a long custom message's sentence is cut between characters, and a
+     * NUL in an address is no address character */
+    char long_message[600];
+    for (int k = 0; k < 300; k++) { long_message[2 * k] = (char)0xc3; long_message[2 * k + 1] = (char)0xa9; }
+    char cut[256];
+    uint32_t custom = OS64_PAGE_VALIDITY_CUSTOM;
+    size_t whole = 0;
+    const char *kept = NULL;
+    state_expect("validity: a long message, cut between characters",
+                 os64_page_node_set_custom_validity(state, b->node, long_message, 600) == 0 &&
+                 os64_page_node_validation_message(state, b->node, custom, cut, sizeof(cut)) == 0 &&
+                 strlen(cut) == 254 && os64_page_node_custom_validity(state, b->node, &kept, &whole) == 0 &&
+                 whole == 600 && memcmp(kept, long_message, 600) == 0);
+    os64_page_node_set_custom_validity(state, b->node, "", 0);
+    const os64_page_control_t *mail = os64_page_control(page, 1);
+    state_expect("validity: a NUL in an address",
+                 os64_page_node_set_value(state, mail->node, "a\0b@c.d", 7) == 0 &&
+                 (validity_of(page, 1, NULL) & OS64_PAGE_VALIDITY_TYPE) != 0);
     os64_page_free(page);
     os64_html_document_free(doc);
 
@@ -920,6 +944,9 @@ static void state_validity(void)
                  !os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_IMPLICIT, 4, 0, 0}, &who));
     state_expect("submitter: a form has none",
                  !os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_FORM, 0, 0, 0}, &who));
+    state_expect("submitter: a link or a refresh is no submission",
+                 !os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_LINK, 0, 0, 0}, &who) &&
+                 !os64_page_submitter(page, (os64_page_what_t){OS64_PAGE_ACTIVATE_REFRESH, 0, 0, 0}, &who));
     os64_page_free(page);
     os64_html_document_free(doc);
 

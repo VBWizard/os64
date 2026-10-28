@@ -279,7 +279,7 @@ static void regexp_unicode_sets_cases(void)
     os64_js_outcome_t outcome;
     check(execute_fixture(runtime,
           "if(!new RegExp('^(?:http://a-b.example)$','v').test('http://a-b.example'))throw Error('slash, hyphen');"
-          "if(!/a..b::c/v.test('axxb::c'))throw Error('doubled punctuators outside a class');"
+          "if(!/a::b@@c/v.test('a::b@@c'))throw Error('doubled punctuators outside a class');"
           "if(new RegExp('^(?:a/b)$','v').test('a-b'))throw Error('the slash is a character');", &outcome) == OS64_JS_OK,
           "a v-flag atom outside a class may be a slash, a hyphen or a doubled punctuator");
     static const char *const refused[] = {"/[a-]/v", "/[(]/v", "/[a&&&b]/v", "/[\\q{a/b}]/v", "/[\\q{a::b}]/v"};

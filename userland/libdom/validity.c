@@ -278,6 +278,13 @@ static JSValue control_member(JSContext *ctx, JSValueConst this_value, int argc,
     case M_MESSAGE: {
         int bad = invalid(dom, ctx, node, &flags);
         if (bad <= 0) return bad < 0 ? JS_EXCEPTION : JS_NewString(ctx, "");
+        if (flags & OS64_PAGE_VALIDITY_CUSTOM) {
+            /* The custom message whole, as it was set, however long. */
+            const char *custom = "";
+            size_t length = 0;
+            status = os64_page_node_custom_validity(dom->state, node, &custom, &length);
+            return status < 0 ? d_page_error(ctx, status) : JS_NewStringLen(ctx, custom, length);
+        }
         char message[256];
         status = os64_page_node_validation_message(dom->state, node, flags, message, sizeof(message));
         return status < 0 ? d_page_error(ctx, status) : JS_NewString(ctx, message);
@@ -399,7 +406,12 @@ os64_js_status_t os64_dom_form_validate(os64_dom_t *dom, const os64_html_node_t 
     os64_js_outcome_t access;
     JSContext *ctx = os64_js_context(dom->runtime, OS64_JS_ABI_ID, &access);
     if (ctx == NULL) return d_task_finish(dom, outcome);
+    /* The form is being submitted (window.c's submit's flag): a submission
+     * an invalid listener asks of it does nothing. */
+    struct DClicking self = {form, dom->submitting};
+    dom->submitting = &self;
     int result = d_form_validate(dom, ctx, form, true);
+    dom->submitting = self.next;
     if (result < 0 && JS_HasException(ctx)) {
         /* A runtime that must stop is the task's failure, which task_end
          * reports; the binding's own refusal is the page's error. */

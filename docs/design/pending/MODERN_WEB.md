@@ -4200,7 +4200,12 @@ with no `validity` it threw on every press.
   submit button's `click()` (window.c's `submit`), and a person's button
   and Enter (yonder's `page_validates`, through `os64_dom_form_validate`
   as a task, by the submitter libpage would take, now public as
-  `os64_page_submitter`). A report (ruling 5) is the host's
+  `os64_page_submitter`). It is validated once, as HTML does: what a
+  submit listener changes after it cannot refuse the submission, so the
+  model, told (`os64_page_activate_validated`), does not judge it again;
+  and a form being submitted cannot be submitted again from its own
+  invalid or submit listener (HTML's firing-submission-events flag). A
+  report (ruling 5) is the host's
   (`OS64_DOM_ACTIVATE_REPORT`): the control focused, its sentence on the
   status line; the model's own refusal says the control's sentence too.
 - **libjs patch 0014**: the pinned engine applied the `v` flag's class
@@ -4224,23 +4229,28 @@ with no `validity` it threw on every press.
   directories; `dom/nodes`' 14 and `dom/events`' 1 new passes are P3b's
   and the style sheets', recorded now. With the switch off no required
   line passes.
-- **Hosts**, 0 failed: DOM 17,856 and 115,883; the scripted page 8,553;
-  yonder 2,028; libpage 254,228; libjs's runtime 1,285 and 6,115.
-- **Mutants** (`tools/test_interfaces_mutants.py`, its P4a group): 50,
+- **Hosts**, 0 failed: DOM 17,856 and 115,883; the scripted page 8,559;
+  yonder 2,028; libpage 254,233; libjs's runtime 1,285 and 6,115.
+- **Mutants** (`tools/test_interfaces_mutants.py`, its P4a group): 57,
   each caught — the judge (an unnamed radio, a group's tick, readonly's
   bar both ways and a select's, a fieldset's legend, mutability for a
   field and not a box, an email list and a label, a URL's scheme and host,
   where a pattern applies and an empty value, an email list matched
   address by address, bad input's type, record, person, white space and
-  reset, the custom message kept, judged and said, a submission judging
-  every flag, a form's submitter); the binding (the pattern matched,
+  reset, the custom message kept, judged and said and cut between
+  characters, a NUL in an address, a submission judging every flag and
+  not again once validated, a submitter for a button or Enter alone); the
+  binding (the pattern matched,
   anchored, compiled alone, with `v`; invalid's bubbling and
   cancelability; checkValidity's event; a barred control; ValidityState
-  made once and `valid`; a barred control's message; setCustomValidity;
-  a form's own controls; the report; formnovalidate both in the binding
-  and for the host; submit() and requestSubmit(); oninvalid); and yonder
-  (a button and Enter validated, the report's focus and sentence, the
-  refusal's sentence).
+  made once and `valid`; a barred control's message, and a long custom
+  one whole; setCustomValidity; a form's own controls; the report;
+  formnovalidate both in the binding and for the host; submit() and
+  requestSubmit(); no submission inside a form's own, in the binding and
+  for the host; oninvalid); and yonder (a button and Enter validated, and
+  not again by the model, the report's focus and sentence, the refusal's
+  sentence). `tools/test_yonder_loop_mutants.py`'s two that this moved are
+  re-anchored, and caught.
 
 ### Slice 6a, XML foundation as built — 2026-10-25
 

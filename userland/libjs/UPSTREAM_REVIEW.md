@@ -75,8 +75,10 @@ made (0f's P1b, EventTarget.prototype beneath Node.prototype).
 Patch 0014 confines the `v` flag's ClassSetCharacter rules to where
 ES2024 puts them: a character class's atoms and a class string's
 (`\q{...}`). `get_class_atom` parses the atoms outside a class too, and
-upstream applied both rules there, so a `v` RegExp of `a/b`, `a-b` or
-`a..b` threw "invalid character in class". HTML compiles every input's
+upstream applied both rules there, so a `v` RegExp of `a/b` or `a-b`
+threw "invalid character in class", and one of `a::b` or `a@@b` "invalid
+class set operation" (a `.` outside a class is the term parser's, and
+never reached it). HTML compiles every input's
 `pattern` with `v` (§ 4.10.5.3.6), and libdom's constraint validation
 (0f's P4) found it: `http://www.example.com` would not compile, and a
 pattern that does not compile is no constraint. A class string's atoms
