@@ -158,11 +158,102 @@ static void gradient_review_contracts(void)
     printf("SVG gradient review regressions: %zu inline/image pairs pass\n",
            sizeof(cases) / sizeof(cases[0]));
 }
+static void gradient_transform_contracts(const char *directory)
+{
+    const struct {
+        const char *name, *ancestors, *close, *attributes, *expected;
+    } cases[] = {
+        {"initial", "", "", "gradientTransform='rotate(90)' style='transform:initial'", ""},
+        {"unset", "", "", "gradientTransform='rotate(90)' style='transform:unset'", ""},
+        {"inherit default", "", "", "gradientTransform='rotate(90)' style='transform:inherit'", ""},
+        {"inherit CSS", "<g style='transform:translate(32px,0px)'>", "</g>",
+         "gradientTransform='rotate(90)' style='transform:inherit'", "translate(32 0)"},
+        {"inherit attribute", "<g transform='translate(32 0)'>", "</g>",
+         "style='transform:inherit'", "translate(32 0)"},
+        {"inherit chain", "<g style='transform:translate(32px,0px)'><g style='transform:inherit'>",
+         "</g></g>", "style='transform:inherit'", "translate(32 0)"},
+        {"inherit stops at default", "<g transform='translate(32 0)'><g>", "</g></g>",
+         "style='transform:inherit'", ""},
+        {"inherit parent reset", "<g transform='translate(32 0)' style='transform:initial'>",
+         "</g>", "style='transform:inherit'", ""},
+        {"initial skips malformed attribute", "", "",
+         "gradientTransform='broken' style='transform:initial'", ""},
+        {"none overrides attribute", "", "",
+         "gradientTransform='rotate(90)' style='transform:none'", ""},
+        {"attribute fallback", "", "", "gradientTransform='translate(32 0)'", "translate(32 0)"},
+        {"CSS replaces attribute", "", "",
+         "gradientTransform='rotate(90)' style='transform:translate(32px,0px)'", "translate(32 0)"},
+        {"template reset", "<linearGradient id='base' gradientTransform='rotate(90)'/>", "",
+         "href='#base' style='transform:initial'", ""},
+        {"template inherit uses source parent",
+         "<linearGradient id='base' gradientTransform='rotate(90)'/><g transform='translate(32 "
+         "0)'>",
+         "</g>", "href='#base' style='transform:inherit'", "translate(32 0)"},
+    };
+    const char *tail =
+        "<stop stop-color='red'/><stop offset='1' stop-color='blue'/></linearGradient>";
+    const char *paint = "<rect width='128' height='96' fill='url(#g)'/><rect y='96' width='128' "
+                        "height='32' fill='green'/>";
+    size_t baseline = live, failures = 0;
+    SvgLedger ledger = {.cap = 64 << 20};
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        char body[4096], xml[8192], html[8192], reference[8192], file[1024], name[64];
+        snprintf(body, sizeof(body),
+                 "%s<linearGradient id='g' gradientUnits='userSpaceOnUse' x2='128' %s>%s%s%s",
+                 cases[i].ancestors, cases[i].attributes, tail, cases[i].close, paint);
+        snprintf(xml, sizeof(xml),
+                 "<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'>%s</svg>", body);
+        snprintf(
+            html, sizeof(html),
+            "<!doctype html><body style='margin:0'><svg id='art' width='128' height='128'>%s</svg>",
+            body);
+        snprintf(reference, sizeof(reference),
+                 "<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128'><linearGradient "
+                 "id='g' gradientUnits='userSpaceOnUse' x2='128' gradientTransform='%s'>%s%s</svg>",
+                 cases[i].expected, tail, paint);
+        yonder_svg_document_t *doc = NULL, *ref = NULL;
+        assert(yonder_svg_document_parse(xml, strlen(xml), NULL, NULL, &doc, NULL) == SVG_OK);
+        assert(yonder_svg_document_parse(reference, strlen(reference), NULL, NULL, &ref, NULL) ==
+               SVG_OK);
+        Fixture f = fixture_make(html);
+        yonder_svg_pixels_t actual, inl, expected;
+        svg_status_t status = image_draw(doc, &ledger, &actual);
+        svg_status_t inline_status = draw_fixture(&f, &ledger, &inl, f.box->rect);
+        assert(image_draw(ref, &ledger, &expected) == SVG_OK);
+        bool ok = status == SVG_OK && inline_status == SVG_OK && actual.bytes == expected.bytes &&
+                  inl.bytes == expected.bytes &&
+                  !memcmp(actual.pixels, expected.pixels, expected.bytes) &&
+                  !memcmp(inl.pixels, expected.pixels, expected.bytes);
+        if (!ok) {
+            ++failures;
+            fprintf(stderr, "gradient transform %s: image=%d inline=%d match=%d\n", cases[i].name,
+                    status, inline_status, ok);
+        } else {
+            snprintf(file, sizeof(file), "%s/gradient-transform-%02zu.html", directory, i);
+            FILE *out = fopen(file, "wb");
+            assert(out && fputs(html, out) >= 0 && !fclose(out));
+            snprintf(name, sizeof(name), "gradient-transform-%02zu", i);
+            save_ppm(directory, name, &actual);
+        }
+        os64_geometry_memory_t memory = {&ledger, svg_alloc_test, svg_free_test};
+        yonder_svg_pixels_free(&memory, &actual);
+        yonder_svg_pixels_free(&memory, &inl);
+        yonder_svg_pixels_free(&memory, &expected);
+        fixture_free(&f);
+        yonder_svg_document_free(doc);
+        yonder_svg_document_free(ref);
+        assert(live == baseline && !ledger.live);
+    }
+    assert(!failures);
+    printf("SVG gradient transforms: %zu inline/image/explicit-reference triples pass\n",
+           sizeof(cases) / sizeof(cases[0]));
+}
 static void gradient_cases(const char *directory)
 {
     gradient_sampler_contracts();
     gradient_resource_contracts();
     gradient_review_contracts();
+    gradient_transform_contracts(directory);
     const char *bodies[] = {
         "<linearGradient id='g' ><stop offset='0' stop-color='#e04020'/><stop offset='1' "
         "stop-color='#2040e0'/></linearGradient><rect x='16' y='16' width='96' height='64' "

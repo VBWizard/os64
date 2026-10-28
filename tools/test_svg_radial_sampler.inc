@@ -1,5 +1,55 @@
+static void radial_double_root_contracts(void)
+{
+    const double radii[][2] = {{.5, .2},
+                               {.2, .5},
+                               {.7, .4},
+                               {.4, .7},
+                               {.3344016906625016, .23941596018595857},
+                               {.5230502317000981, .07086288409434749}};
+    const double scales[] = {1e-12, 1, 1e12};
+    svg_gradient_stop_t stops[] = {{0, 0xffff0000}, {1, 0xff0000ff}};
+    os64_geometry_map_t map = {1, 0, 0, 1, 0, 0};
+    for (size_t i = 0; i < sizeof(radii) / sizeof(radii[0]); ++i)
+        for (size_t j = 0; j < sizeof(scales) / sizeof(scales[0]); ++j) {
+            double scale = scales[j];
+            svg_radial_gradient_t g = {.cx = .5 * scale,
+                                       .cy = .5 * scale,
+                                       .fx = .5 * scale,
+                                       .fy = .5 * scale,
+                                       .r = radii[i][0] * scale,
+                                       .fr = radii[i][1] * scale,
+                                       .transform = map,
+                                       .stops = stops,
+                                       .count = 2};
+            svg_radial_sampler_t s;
+            double t;
+            assert(svg_radial_gradient_prepare(&g, &map, NULL, &s) == SVG_OK);
+            assert(svg_radial_gradient_position(&s, g.cx, g.cy, &t));
+            assert(fabs(t + g.fr / (g.r - g.fr)) < 1e-12);
+            uint32_t expected = g.r > g.fr ? 0xffff0000 : 0xff0000ff;
+            assert(svg_radial_gradient_sample(&s, g.cx, g.cy) == expected);
+        }
+    svg_radial_gradient_t g = {
+        .cx = 1, .r = .5, .fr = .2, .transform = map, .stops = stops, .count = 2};
+    svg_radial_sampler_t s;
+    double t;
+    assert(svg_radial_gradient_prepare(&g, &map, NULL, &s) == SVG_OK);
+    double edge = (.4 + 2.0 / 3) * .3 / sqrt(.91);
+    assert(svg_radial_gradient_position(&s, .4, edge, &t));
+    assert(fabs(t - .46 / .91) < 1e-7);
+    assert(svg_radial_gradient_position(&s, .4, edge - 1e-8, &t));
+    assert(!svg_radial_gradient_position(&s, .4, edge + 1e-8, &t) && t == 0);
+    assert(svg_radial_gradient_sample(&s, .4, edge + 1e-8) == 0);
+    // A clearly negative-radius double root remains uncovered.
+    double back = (-1 + 2.0 / 3) * .3 / sqrt(.91);
+    assert(!svg_radial_gradient_position(&s, -1, back, &t));
+    assert(svg_radial_gradient_sample(&s, -1, back) == 0);
+    puts("SVG radial double roots: concentric centers, scales, reversed radii and cone boundary "
+         "pass");
+}
 static void radial_sampler_contracts(void)
 {
+    radial_double_root_contracts();
     svg_gradient_stop_t stops[] = {{0, 0xffff0000}, {1, 0xff0000ff}};
     os64_geometry_map_t map = {1, 0, 0, 1, 0, 0};
     svg_radial_gradient_t g = {.r = 100, .transform = map, .stops = stops, .count = 2};

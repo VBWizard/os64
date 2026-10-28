@@ -105,7 +105,7 @@ Key construction sweeps 191 cancellation points; insertion and hit-copy each
 sweep 69. Allocation failure is tested as physical exhaustion and budget
 refusal. ASan, UBSan and LeakSanitizer remain enabled. The existing core suite
 passes 156,298 checks against the new context/scene lifetimes. The painter
-suite passes 1,829,106 assertions. The freestanding library
+suite passes 1,833,163 assertions. The freestanding library
 build links the new public APIs without a system allocator dependency.
 
 [Cache results](../../svg-evidence/cache-results.json) record test counts,

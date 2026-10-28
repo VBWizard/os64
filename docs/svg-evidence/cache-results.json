@@ -14,13 +14,14 @@
     "read_cancellation_cuts": 69,
     "store_cancellation_cuts": 69
   },
-  "date": "2026-10-27",
+  "date": "2026-10-28",
   "freestanding": {
     "command": "make -C userland svg-library",
     "compiler": "x86_64-elf-gcc (GCC) 14.2.0",
-    "libsvg_sha256": "3cf29846d4852f4a17352128f4e61e3244b850f27a6490f97eaa79e6ede6f588"
+    "libsvg_sha256": "c46f5cf88bddb56dda7082c7e5e3eb3c7aa13a692911a53aa6d2a3b43cf03de8"
   },
   "profile": "SVG raster-cache foundation",
+  "review_regression": "Merged #384 CSS-wide gradient transforms and #385 radial double-root fixes; painter and cache contracts rerun with all three sanitizers.",
   "sanitizers": [
     "ASan",
     "UBSan",
@@ -30,6 +31,7 @@
     "core": {
       "binary_sha256": "a7b1dffc30429c595fdbb28f6977e80e45513dfa8a8e29ccebb37f03c62a0ffb",
       "compiler": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+      "date": "2026-10-27",
       "flags": [
         "-O2",
         "-g",
@@ -514,8 +516,9 @@
       "passed_checks": 156298
     },
     "paint": {
-      "binary_sha256": "c9afe81beee9ff96f210dbc3be5c1cf1697c9b3e0028a725373f468e9bace36c",
+      "binary_sha256": "b4c178121035de425a3821c3d680654f488f79ac4d7ff27b9bba363abbcea51a",
       "compiler": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+      "date": "2026-10-28",
       "flags": [
         "-O2",
         "-g",
@@ -539,8 +542,8 @@
         "tools/test_svg_cache.inc": "9eb098fd9425258d4ad677975d68b38ea4d1f3c2b3c8a1b4fcdc29dd14524a0a",
         "tools/test_svg_core.py": "f6ec5697bb8984c6e06ba35a18e23078bfa16b0a73090dd416d52d657f22f5a7",
         "tools/test_svg_gradient_sampler.inc": "b129ab49aa32843e912779a35cd3ac44f546fc24aafcb3a78c1a236e239ef1b3",
-        "tools/test_svg_paint.c": "b2c6347e5afe8493be2019f829a489cbf0724d5dd053c3ec78eca41fb4208ca6",
-        "tools/test_svg_radial_sampler.inc": "241e647bc842a84ff7afbc3ac86bbc869b3677bb4c620367740bd17bced21f48",
+        "tools/test_svg_paint.c": "54863c6feb78e9f3d7325fa1ef2de5bae42d5ac638dd466edc823769e7d7c1e4",
+        "tools/test_svg_radial_sampler.inc": "dcc6237035e6ab301faaa1985a55d84ccf85520dff3c5271852b96bb857a85d4",
         "userland/libfreetype/port/backend.c": "052848da71c29474131e7a9cd94801f382c07a673417f68e9dca35e42ad9e40f",
         "userland/libfreetype/port/ft2build.h": "262d8890fe0833c686da00b831d8ff73d4f1aaf9929fc183453adc8cb2096d55",
         "userland/libfreetype/port/ftsystem.c": "369b0a4bed429e62260d6c8fe01ec0425c678f207a40582d8b855ecc4bafb570",
@@ -989,7 +992,7 @@
         "userland/libsvg/cache.c": "36053179839fec161087562ac41282a0f7d5e90ccc35b6f3a3f43e7a54fc1cd1",
         "userland/libsvg/core.c": "c4b581fb4d9ef9a9576d2d060e86cc5d41b9471c1981c0343ceeb2956b5c79db",
         "userland/libsvg/geometry.c": "65aa60b844874c8ce46b4e880ee413766234419e6c0eeba33e68b53d78f4a039",
-        "userland/libsvg/gradient.c": "c092c7e99f90e3de0ff65f106dbcb610866b773e4ffc762d3a75b940b9845c8b",
+        "userland/libsvg/gradient.c": "c824f4d14c4dd2e10b514235861bc50fe9918f5da2f42f1126925e28e12bbaaf",
         "userland/libsvg/include/svg/svg.h": "e59c9f31da9ec20f21e02004c1717ac264b28be132dbe5dcf7fce43c821f5680",
         "userland/libsvg/internal.h": "25fdd83d73dc86cb6b95bc1a99507063acaeb77967bb4a58f3454132ef513ffd",
         "userland/libsvg/library.mk": "c51dc50f4958f56ec78cf53cd0374a0e12f66f95603a65c80add598413e6e9c5",
@@ -998,7 +1001,7 @@
         "userland/libsvg/scene.c": "c9263a281b709ffabd134674b59763a5597336d8c8b91901ceb97fd3c1b887f3",
         "userland/libsvg/stroke.c": "60e693bb95a26511323686091acf4024143a41e81b2f0f82bb823c0a6534f3a3"
       },
-      "passed_checks": 1829106
+      "passed_checks": 1833163
     }
   }
 }

@@ -1049,12 +1049,47 @@ static void gradient_scene_contracts(bool radial)
 
 #include "test_svg_cache.inc"
 
+static void radial_center_pixel_contract(void)
+{
+    Ledger l = {0};
+    svg_context_t *c = create(&l);
+    Document d = {0};
+    add(&d, SIZE_MAX, NULL, 0);
+    add(&d, 0, "M0 0H63V63H0Z", 0);
+    svg_gradient_stop_t stops[] = {{0, 0xffff0000}, {1, 0xff0000ff}};
+    svg_radial_gradient_t g = {.cx = .5,
+                               .cy = .5,
+                               .fx = .5,
+                               .fy = .5,
+                               .r = .5,
+                               .fr = .2,
+                               .transform = {1, 0, 0, 1, 0, 0},
+                               .object_bbox = true,
+                               .stops = stops,
+                               .count = 2};
+    d.nodes[1].style.fill = (svg_paint_t){.kind = SVG_PAINT_RADIAL, .radial = &g};
+    svg_scene_t *scene = prepare(c, &d);
+    uint32_t pixels[68 * 64];
+    sentinel(pixels);
+    svg_render_target_t t = target(pixels);
+    svg_render_options_t options = svg_render_options_default(os64_freetype_geometry_v1());
+    CHECK(svg_scene_render(c, scene, &options, &t, NULL) == SVG_OK);
+    // Odd bounds put the gradient center exactly on this pixel's sample.
+    CHECK(pixels[31 * 68 + 31] == 0xffff0000);
+    for (size_t y = 1; y < 62; ++y)
+        for (size_t x = 1; x < 62; ++x)
+            CHECK((pixels[y * 68 + x] >> 24) == 255);
+    padding(pixels);
+    CHECK(svg_scene_release(c, scene) == SVG_OK);
+    CHECK(svg_destroy(c) == SVG_OK && !l.live);
+}
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
     setvbuf(stdout, NULL, _IONBF, 0);
     raster_cache_contracts();
     radial_sampler_contracts();
+    radial_center_pixel_contract();
     gradient_scene_contracts(false);
     gradient_scene_contracts(true);
     clip_contracts(false);
